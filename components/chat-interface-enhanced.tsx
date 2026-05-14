@@ -122,6 +122,7 @@ import {
 import { useTranslations } from "next-intl"
 import { useArtifactPanel } from "@/lib/artifact-panel-context"
 import { ArtifactPanel } from "@/components/chat/ArtifactPanel"
+import { ChatEmptyStateHero } from "@/components/chat/ChatEmptyStateHero"
 import { DocumentPreview, type DocumentPreviewTarget } from "./document-preview"
 import { CodePreview } from "./code-preview"
 import SpotifyResults from "./spotify-results"
@@ -7567,6 +7568,24 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           {isInitial ? (
             <div className="canvas-ambient chat-initial-stage flex flex-1 items-center justify-center">
               <div className="w-full max-w-[860px]">
+                <ChatEmptyStateHero
+                  userName={(currentUserInfo as any)?.name || user?.name || null}
+                  onSelectPrompt={(prompt) => {
+                    setInput(prompt)
+                    requestAnimationFrame(() => {
+                      const el = textareaRef.current as HTMLTextAreaElement | null
+                      if (el) {
+                        try {
+                          el.focus()
+                          const len = el.value.length
+                          el.setSelectionRange(len, len)
+                        } catch {
+                          /* no-op — older Safari throws on setSelectionRange */
+                        }
+                      }
+                    })
+                  }}
+                />
                 <div className="space-y-3">
                   {/*
                     Composer — premium production UI.
@@ -7590,11 +7609,11 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                     className={cn(
                       "composer-surface group/composer relative overflow-hidden rounded-3xl",
                       "bg-background",
-                      "ring-1 ring-black/[0.08] dark:ring-0",
-                      "shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_14px_-4px_rgba(15,23,42,0.06)] dark:shadow-none",
-                      "transition-[border-color,background-color,box-shadow,ring-color] duration-200 ease-out",
-                      "hover:ring-black/[0.12] dark:hover:ring-0",
-                      "focus-within:ring-2 focus-within:ring-foreground/[0.14] dark:focus-within:ring-0",
+                      "ring-1 ring-black/[0.08] dark:ring-1 dark:ring-white/[0.06]",
+                      "shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_14px_-4px_rgba(15,23,42,0.06)] dark:shadow-[0_12px_32px_-12px_rgba(0,0,0,0.42)]",
+                      "transition-[border-color,background-color,box-shadow,ring-color] duration-[var(--duration-base)] ease-[var(--ease-out-smooth)]",
+                      "hover:ring-black/[0.14] dark:hover:ring-white/[0.10]",
+                      "focus-within:ring-2 focus-within:ring-foreground/[0.16] dark:focus-within:ring-2 dark:focus-within:ring-[hsl(var(--accent-violet))]/45",
                     )}
                   >
                     {/* Chips zone — rendered ABOVE the input row, INSIDE
@@ -7747,12 +7766,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                     aria-label={label}
                                     title={label}
                                     className={cn(
-                                      "h-9 w-9 rounded-full p-0 transition-all duration-200",
+                                      "h-9 w-9 rounded-full p-0 transition-all duration-[var(--duration-base)] ease-[var(--ease-out-smooth)]",
                                       "bg-foreground text-background",
-                                      "shadow-[0_1px_2px_rgba(0,0,0,0.06),0_2px_6px_-2px_rgba(0,0,0,0.10)]",
-                                      "hover:bg-foreground/90 hover:shadow-[0_1px_2px_rgba(0,0,0,0.10),0_4px_10px_-3px_rgba(0,0,0,0.18)]",
-                                      "active:scale-[0.96]",
-                                      "disabled:bg-muted disabled:text-muted-foreground/60 disabled:shadow-none disabled:cursor-not-allowed disabled:active:scale-100",
+                                      "shadow-[0_1px_2px_rgba(0,0,0,0.08),0_4px_10px_-2px_rgba(0,0,0,0.12)]",
+                                      "hover:bg-foreground/92 hover:shadow-[0_2px_4px_rgba(0,0,0,0.12),0_8px_16px_-4px_rgba(0,0,0,0.22)] hover:-translate-y-[0.5px]",
+                                      "active:scale-[0.94] active:translate-y-0",
+                                      "disabled:bg-muted disabled:text-muted-foreground/60 disabled:shadow-none disabled:cursor-not-allowed disabled:active:scale-100 disabled:translate-y-0 disabled:hover:translate-y-0",
                                     )}
                                   >
                                     {busy ? (
