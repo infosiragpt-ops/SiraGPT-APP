@@ -1849,6 +1849,30 @@ function getPkgJson() {
   try { pkgJsonCache = require('./document-pkg-json'); } catch { pkgJsonCache = null; }
   return pkgJsonCache;
 }
+let redisCache = null;
+function getRedis() {
+  if (redisCache) return redisCache;
+  try { redisCache = require('./document-redis'); } catch { redisCache = null; }
+  return redisCache;
+}
+let nginxCache = null;
+function getNginx() {
+  if (nginxCache) return nginxCache;
+  try { nginxCache = require('./document-nginx'); } catch { nginxCache = null; }
+  return nginxCache;
+}
+let otelCache = null;
+function getOtel() {
+  if (otelCache) return otelCache;
+  try { otelCache = require('./document-otel'); } catch { otelCache = null; }
+  return otelCache;
+}
+let moduleFederationCache = null;
+function getModuleFederation() {
+  if (moduleFederationCache) return moduleFederationCache;
+  try { moduleFederationCache = require('./document-module-federation'); } catch { moduleFederationCache = null; }
+  return moduleFederationCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -3487,6 +3511,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const sentryBlock = buildSentryBlock(files);
   const natsBlock = buildNatsBlock(files);
   const pkgJsonBlock = buildPkgJsonBlock(files);
+  const redisBlock = buildRedisBlock(files);
+  const nginxBlock = buildNginxBlock(files);
+  const otelBlock = buildOtelBlock(files);
+  const moduleFederationBlock = buildModuleFederationBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -3789,6 +3817,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     sentryBlock,
     natsBlock,
     pkgJsonBlock,
+    redisBlock,
+    nginxBlock,
+    otelBlock,
+    moduleFederationBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -7135,6 +7167,42 @@ function buildPkgJsonBlock(files) {
   return engine.renderPkgJsonBlock(report);
 }
 
+function buildRedisBlock(files) {
+  const engine = getRedis();
+  if (!engine || typeof engine.buildRedisForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildRedisForFiles(list);
+  return engine.renderRedisBlock(report);
+}
+
+function buildNginxBlock(files) {
+  const engine = getNginx();
+  if (!engine || typeof engine.buildNginxForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildNginxForFiles(list);
+  return engine.renderNginxBlock(report);
+}
+
+function buildOtelBlock(files) {
+  const engine = getOtel();
+  if (!engine || typeof engine.buildOtelForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildOtelForFiles(list);
+  return engine.renderOtelBlock(report);
+}
+
+function buildModuleFederationBlock(files) {
+  const engine = getModuleFederation();
+  if (!engine || typeof engine.buildModuleFederationForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildModuleFederationForFiles(list);
+  return engine.renderModuleFederationBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -7592,6 +7660,10 @@ module.exports = {
   buildSentryBlock,
   buildNatsBlock,
   buildPkgJsonBlock,
+  buildRedisBlock,
+  buildNginxBlock,
+  buildOtelBlock,
+  buildModuleFederationBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
