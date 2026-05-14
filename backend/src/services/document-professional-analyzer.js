@@ -1273,6 +1273,30 @@ function getNaturalSchedules() {
   try { naturalSchedulesCache = require('./document-natural-schedules'); } catch { naturalSchedulesCache = null; }
   return naturalSchedulesCache;
 }
+let chatPermalinksCache = null;
+function getChatPermalinks() {
+  if (chatPermalinksCache) return chatPermalinksCache;
+  try { chatPermalinksCache = require('./document-chat-permalinks'); } catch { chatPermalinksCache = null; }
+  return chatPermalinksCache;
+}
+let pmTicketsCache = null;
+function getPmTickets() {
+  if (pmTicketsCache) return pmTicketsCache;
+  try { pmTicketsCache = require('./document-pm-tickets'); } catch { pmTicketsCache = null; }
+  return pmTicketsCache;
+}
+let slaTargetsCache = null;
+function getSlaTargets() {
+  if (slaTargetsCache) return slaTargetsCache;
+  try { slaTargetsCache = require('./document-sla-targets'); } catch { slaTargetsCache = null; }
+  return slaTargetsCache;
+}
+let tldsCache = null;
+function getTlds() {
+  if (tldsCache) return tldsCache;
+  try { tldsCache = require('./document-tlds'); } catch { tldsCache = null; }
+  return tldsCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -2815,6 +2839,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const terraformRefsBlock = buildTerraformRefsBlock(files);
   const helmRefsBlock = buildHelmRefsBlock(files);
   const naturalSchedulesBlock = buildNaturalSchedulesBlock(files);
+  const chatPermalinksBlock = buildChatPermalinksBlock(files);
+  const pmTicketsBlock = buildPmTicketsBlock(files);
+  const slaTargetsBlock = buildSlaTargetsBlock(files);
+  const tldsBlock = buildTldsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -3021,6 +3049,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     terraformRefsBlock,
     helmRefsBlock,
     naturalSchedulesBlock,
+    chatPermalinksBlock,
+    pmTicketsBlock,
+    slaTargetsBlock,
+    tldsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -5503,6 +5535,42 @@ function buildNaturalSchedulesBlock(files) {
   return engine.renderNaturalSchedulesBlock(report);
 }
 
+function buildChatPermalinksBlock(files) {
+  const engine = getChatPermalinks();
+  if (!engine || typeof engine.buildChatPermalinksForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildChatPermalinksForFiles(list);
+  return engine.renderChatPermalinksBlock(report);
+}
+
+function buildPmTicketsBlock(files) {
+  const engine = getPmTickets();
+  if (!engine || typeof engine.buildPmTicketsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildPmTicketsForFiles(list);
+  return engine.renderPmTicketsBlock(report);
+}
+
+function buildSlaTargetsBlock(files) {
+  const engine = getSlaTargets();
+  if (!engine || typeof engine.buildSlaTargetsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildSlaTargetsForFiles(list);
+  return engine.renderSlaTargetsBlock(report);
+}
+
+function buildTldsBlock(files) {
+  const engine = getTlds();
+  if (!engine || typeof engine.buildTldsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildTldsForFiles(list);
+  return engine.renderTldsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -5864,6 +5932,10 @@ module.exports = {
   buildTerraformRefsBlock,
   buildHelmRefsBlock,
   buildNaturalSchedulesBlock,
+  buildChatPermalinksBlock,
+  buildPmTicketsBlock,
+  buildSlaTargetsBlock,
+  buildTldsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
