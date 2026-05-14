@@ -1537,6 +1537,30 @@ function getWebsocketMarkers() {
   try { websocketMarkersCache = require('./document-websocket-markers'); } catch { websocketMarkersCache = null; }
   return websocketMarkersCache;
 }
+let isoDurationsCache = null;
+function getIsoDurations() {
+  if (isoDurationsCache) return isoDurationsCache;
+  try { isoDurationsCache = require('./document-iso-durations'); } catch { isoDurationsCache = null; }
+  return isoDurationsCache;
+}
+let browserSupportCache = null;
+function getBrowserSupport() {
+  if (browserSupportCache) return browserSupportCache;
+  try { browserSupportCache = require('./document-browser-support'); } catch { browserSupportCache = null; }
+  return browserSupportCache;
+}
+let numberBasesCache = null;
+function getNumberBases() {
+  if (numberBasesCache) return numberBasesCache;
+  try { numberBasesCache = require('./document-number-bases'); } catch { numberBasesCache = null; }
+  return numberBasesCache;
+}
+let dmsCoordsCache = null;
+function getDmsCoords() {
+  if (dmsCoordsCache) return dmsCoordsCache;
+  try { dmsCoordsCache = require('./document-dms-coords'); } catch { dmsCoordsCache = null; }
+  return dmsCoordsCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -3123,6 +3147,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const ansiEscapesBlock = buildAnsiEscapesBlock(files);
   const sqlWindowsBlock = buildSqlWindowsBlock(files);
   const websocketMarkersBlock = buildWebsocketMarkersBlock(files);
+  const isoDurationsBlock = buildIsoDurationsBlock(files);
+  const browserSupportBlock = buildBrowserSupportBlock(files);
+  const numberBasesBlock = buildNumberBasesBlock(files);
+  const dmsCoordsBlock = buildDmsCoordsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -3373,6 +3401,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     ansiEscapesBlock,
     sqlWindowsBlock,
     websocketMarkersBlock,
+    isoDurationsBlock,
+    browserSupportBlock,
+    numberBasesBlock,
+    dmsCoordsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -6251,6 +6283,42 @@ function buildWebsocketMarkersBlock(files) {
   return engine.renderWebsocketMarkersBlock(report);
 }
 
+function buildIsoDurationsBlock(files) {
+  const engine = getIsoDurations();
+  if (!engine || typeof engine.buildIsoDurationsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildIsoDurationsForFiles(list);
+  return engine.renderIsoDurationsBlock(report);
+}
+
+function buildBrowserSupportBlock(files) {
+  const engine = getBrowserSupport();
+  if (!engine || typeof engine.buildBrowserSupportForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildBrowserSupportForFiles(list);
+  return engine.renderBrowserSupportBlock(report);
+}
+
+function buildNumberBasesBlock(files) {
+  const engine = getNumberBases();
+  if (!engine || typeof engine.buildNumberBasesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildNumberBasesForFiles(list);
+  return engine.renderNumberBasesBlock(report);
+}
+
+function buildDmsCoordsBlock(files) {
+  const engine = getDmsCoords();
+  if (!engine || typeof engine.buildDmsCoordsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildDmsCoordsForFiles(list);
+  return engine.renderDmsCoordsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -6656,6 +6724,10 @@ module.exports = {
   buildAnsiEscapesBlock,
   buildSqlWindowsBlock,
   buildWebsocketMarkersBlock,
+  buildIsoDurationsBlock,
+  buildBrowserSupportBlock,
+  buildNumberBasesBlock,
+  buildDmsCoordsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
