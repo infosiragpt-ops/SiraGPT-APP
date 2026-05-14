@@ -172,3 +172,6 @@ ios/.build/
 # Capacitor
 capacitor-cordova-ios-plugins/
 capacitor-cordova-android-plugins/
+
+# Bundle size baseline / report (regenerated on demand)
+bundle-size-report.json
