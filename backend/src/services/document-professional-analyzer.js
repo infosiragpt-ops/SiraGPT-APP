@@ -1897,6 +1897,30 @@ function getOauthFlows() {
   try { oauthFlowsCache = require('./document-oauth-flows'); } catch { oauthFlowsCache = null; }
   return oauthFlowsCache;
 }
+let gqlClientsCache = null;
+function getGqlClients() {
+  if (gqlClientsCache) return gqlClientsCache;
+  try { gqlClientsCache = require('./document-gql-clients'); } catch { gqlClientsCache = null; }
+  return gqlClientsCache;
+}
+let webhookSigsCache = null;
+function getWebhookSigs() {
+  if (webhookSigsCache) return webhookSigsCache;
+  try { webhookSigsCache = require('./document-webhook-sigs'); } catch { webhookSigsCache = null; }
+  return webhookSigsCache;
+}
+let bullmqCache = null;
+function getBullmq() {
+  if (bullmqCache) return bullmqCache;
+  try { bullmqCache = require('./document-bullmq'); } catch { bullmqCache = null; }
+  return bullmqCache;
+}
+let webCryptoCache = null;
+function getWebCrypto() {
+  if (webCryptoCache) return webCryptoCache;
+  try { webCryptoCache = require('./document-web-crypto'); } catch { webCryptoCache = null; }
+  return webCryptoCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -3543,6 +3567,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const twilioBlock = buildTwilioBlock(files);
   const awsSdkBlock = buildAwsSdkBlock(files);
   const oauthFlowsBlock = buildOauthFlowsBlock(files);
+  const gqlClientsBlock = buildGqlClientsBlock(files);
+  const webhookSigsBlock = buildWebhookSigsBlock(files);
+  const bullmqBlock = buildBullmqBlock(files);
+  const webCryptoBlock = buildWebCryptoBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -3853,6 +3881,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     twilioBlock,
     awsSdkBlock,
     oauthFlowsBlock,
+    gqlClientsBlock,
+    webhookSigsBlock,
+    bullmqBlock,
+    webCryptoBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -7271,6 +7303,42 @@ function buildOauthFlowsBlock(files) {
   return engine.renderOauthFlowsBlock(report);
 }
 
+function buildGqlClientsBlock(files) {
+  const engine = getGqlClients();
+  if (!engine || typeof engine.buildGqlClientsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildGqlClientsForFiles(list);
+  return engine.renderGqlClientsBlock(report);
+}
+
+function buildWebhookSigsBlock(files) {
+  const engine = getWebhookSigs();
+  if (!engine || typeof engine.buildWebhookSigsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildWebhookSigsForFiles(list);
+  return engine.renderWebhookSigsBlock(report);
+}
+
+function buildBullmqBlock(files) {
+  const engine = getBullmq();
+  if (!engine || typeof engine.buildBullmqForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildBullmqForFiles(list);
+  return engine.renderBullmqBlock(report);
+}
+
+function buildWebCryptoBlock(files) {
+  const engine = getWebCrypto();
+  if (!engine || typeof engine.buildWebCryptoForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildWebCryptoForFiles(list);
+  return engine.renderWebCryptoBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -7736,6 +7804,10 @@ module.exports = {
   buildTwilioBlock,
   buildAwsSdkBlock,
   buildOauthFlowsBlock,
+  buildGqlClientsBlock,
+  buildWebhookSigsBlock,
+  buildBullmqBlock,
+  buildWebCryptoBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
