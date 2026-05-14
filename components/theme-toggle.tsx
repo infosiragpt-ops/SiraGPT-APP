@@ -24,9 +24,10 @@ export function ThemeToggle({ className }: ThemeToggleProps) {
           aria-label="Cambiar tema"
           title="Cambiar tema"
           className={cn(
-            "relative h-11 w-11 rounded-full text-muted-foreground transition-all duration-200",
+            "relative h-11 w-11 rounded-full text-muted-foreground transition-all duration-fast ease-smooth",
             "hover:bg-foreground/[0.06] hover:text-foreground",
             "active:scale-[0.96]",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-offset-1 focus-visible:ring-offset-background",
             className,
           )}
         >

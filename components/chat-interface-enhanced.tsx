@@ -7507,7 +7507,11 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   <Sidebar>
                     <AppSidebar />
                   </Sidebar>
-                  <SidebarTrigger className="chat-header-icon-btn rounded-full">
+                  <SidebarTrigger
+                    className="chat-header-icon-btn rounded-full"
+                    aria-label="Abrir el menú lateral"
+                    title="Abrir el menú lateral"
+                  >
                     <Menu className="h-6 w-6" />
                   </SidebarTrigger>
                 </div>
@@ -7539,7 +7543,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                     variant="ghost"
                     size="icon"
                     onClick={handleCompleteShare}
-                    title="Share complete chat"
+                    title="Compartir conversación completa"
+                    aria-label="Compartir conversación completa"
                     className="chat-header-icon-btn chat-share-action h-11 w-11 rounded-full"
                   >
                     <Share className="h-5 w-5" />
