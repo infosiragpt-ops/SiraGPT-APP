@@ -107,7 +107,7 @@ import SpeechToTextComponent from "./speech-to-text-component"
 import TextToSpeechComponent from "./text-to-speech-component"
 import MusicGenerationComponent from "./MusicGenerationComponent"
 import { agenticSearchService, type AgenticEvent, type AgenticSource } from "@/lib/agentic-search-service"
-import { agentTaskService, reduceEvent, initialAgentState, type AgentTaskState } from "@/lib/agent-task-service"
+import { agentTaskService, normalizeAgentTaskErrorMessage, reduceEvent, initialAgentState, type AgentTaskState } from "@/lib/agent-task-service"
 import VideoGenerationComponent from "./VideoGenerationComponent"
 import UpgradeModal from "./UpgradeModal"
 import { IconProvider } from "./icon-provider"
@@ -7301,16 +7301,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           state = { ...state, done: true, error: 'aborted' };
           updateBubble(state);
         } else {
-          const rawMessage = String(err?.message || 'Agent task failed');
-          // Friendlier remap for known infra failures so the red box
-          // explains *why* instead of dumping a stack trace.
-          const friendly = /redis|redis_url/i.test(rawMessage)
-            ? 'Runtime agentico no disponible: Redis no está activo.'
-            : /idle_timeout|AgentTaskIdleTimeoutError/i.test(rawMessage)
-              ? 'El asistente dejó de enviar actualizaciones. Reintenta el pedido.'
-              : /empty_stream|AgentTaskEmptyStreamError/i.test(rawMessage)
-                ? 'El asistente cerró la respuesta sin generar texto. Reintenta.'
-                : rawMessage;
+          const friendly = normalizeAgentTaskErrorMessage(err);
           state = { ...state, done: true, error: friendly };
           updateBubble(state);
         }

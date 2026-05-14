@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
-import { initialAgentState, reduceEvent } from "../lib/agent-task-service"
+import { initialAgentState, normalizeAgentTaskErrorMessage, reduceEvent } from "../lib/agent-task-service"
 
 describe("agent-task-service · reducer", () => {
   it("keeps tool events under their matching step", () => {
@@ -55,5 +55,23 @@ describe("agent-task-service · reducer", () => {
     assert.equal(state.steps.length, 1)
     assert.equal(state.steps[0].id, "s-late")
     assert.equal(state.steps[0].toolCalls[0].tool, "python_exec")
+  })
+})
+
+describe("agent-task-service · error messages", () => {
+  it("maps browser network fetch failures to an actionable backend restart message", () => {
+    const message = normalizeAgentTaskErrorMessage(new TypeError("Failed to fetch"))
+
+    assert.equal(
+      message,
+      "El backend se reinició o se perdió la conexión durante la tarea. Reintenta.",
+    )
+  })
+
+  it("keeps known stream failures user-facing", () => {
+    assert.equal(
+      normalizeAgentTaskErrorMessage(new Error("idle_timeout")),
+      "El asistente dejó de enviar actualizaciones. Reintenta el pedido.",
+    )
   })
 })

@@ -127,6 +127,23 @@ export class AgentTaskEmptyStreamError extends Error {
   }
 }
 
+export function normalizeAgentTaskErrorMessage(err: unknown): string {
+  const raw = String((err as any)?.message || err || "Agent task failed")
+  if (/failed to fetch|networkerror|load failed|fetch failed/i.test(raw)) {
+    return "El backend se reinició o se perdió la conexión durante la tarea. Reintenta."
+  }
+  if (/redis|redis_url/i.test(raw)) {
+    return "Runtime agentico no disponible: Redis no está activo."
+  }
+  if (/idle_timeout|AgentTaskIdleTimeoutError/i.test(raw)) {
+    return "El asistente dejó de enviar actualizaciones. Reintenta el pedido."
+  }
+  if (/empty_stream|AgentTaskEmptyStreamError/i.test(raw)) {
+    return "El asistente cerró la respuesta sin generar texto. Reintenta."
+  }
+  return raw
+}
+
 function authHeader(): Record<string, string> {
   const token = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null
   return token ? { Authorization: `Bearer ${token}` } : {}
