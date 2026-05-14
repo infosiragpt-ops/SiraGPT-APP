@@ -1825,6 +1825,30 @@ function getCssAnim() {
   try { cssAnimCache = require('./document-css-anim'); } catch { cssAnimCache = null; }
   return cssAnimCache;
 }
+let storybookCache = null;
+function getStorybook() {
+  if (storybookCache) return storybookCache;
+  try { storybookCache = require('./document-storybook'); } catch { storybookCache = null; }
+  return storybookCache;
+}
+let sentryCache = null;
+function getSentry() {
+  if (sentryCache) return sentryCache;
+  try { sentryCache = require('./document-sentry'); } catch { sentryCache = null; }
+  return sentryCache;
+}
+let natsCache = null;
+function getNats() {
+  if (natsCache) return natsCache;
+  try { natsCache = require('./document-nats'); } catch { natsCache = null; }
+  return natsCache;
+}
+let pkgJsonCache = null;
+function getPkgJson() {
+  if (pkgJsonCache) return pkgJsonCache;
+  try { pkgJsonCache = require('./document-pkg-json'); } catch { pkgJsonCache = null; }
+  return pkgJsonCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -3459,6 +3483,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const openapiSecurityBlock = buildOpenapiSecurityBlock(files);
   const k8sResourcesBlock = buildK8sResourcesBlock(files);
   const cssAnimBlock = buildCssAnimBlock(files);
+  const storybookBlock = buildStorybookBlock(files);
+  const sentryBlock = buildSentryBlock(files);
+  const natsBlock = buildNatsBlock(files);
+  const pkgJsonBlock = buildPkgJsonBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -3757,6 +3785,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     openapiSecurityBlock,
     k8sResourcesBlock,
     cssAnimBlock,
+    storybookBlock,
+    sentryBlock,
+    natsBlock,
+    pkgJsonBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -7067,6 +7099,42 @@ function buildCssAnimBlock(files) {
   return engine.renderCssAnimBlock(report);
 }
 
+function buildStorybookBlock(files) {
+  const engine = getStorybook();
+  if (!engine || typeof engine.buildStorybookForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildStorybookForFiles(list);
+  return engine.renderStorybookBlock(report);
+}
+
+function buildSentryBlock(files) {
+  const engine = getSentry();
+  if (!engine || typeof engine.buildSentryForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildSentryForFiles(list);
+  return engine.renderSentryBlock(report);
+}
+
+function buildNatsBlock(files) {
+  const engine = getNats();
+  if (!engine || typeof engine.buildNatsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildNatsForFiles(list);
+  return engine.renderNatsBlock(report);
+}
+
+function buildPkgJsonBlock(files) {
+  const engine = getPkgJson();
+  if (!engine || typeof engine.buildPkgJsonForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildPkgJsonForFiles(list);
+  return engine.renderPkgJsonBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -7520,6 +7588,10 @@ module.exports = {
   buildOpenapiSecurityBlock,
   buildK8sResourcesBlock,
   buildCssAnimBlock,
+  buildStorybookBlock,
+  buildSentryBlock,
+  buildNatsBlock,
+  buildPkgJsonBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
