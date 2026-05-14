@@ -1009,6 +1009,30 @@ function getApiKeys() {
   try { apiKeysCache = require('./document-api-keys'); } catch { apiKeysCache = null; }
   return apiKeysCache;
 }
+let httpMethodsCache = null;
+function getHttpMethods() {
+  if (httpMethodsCache) return httpMethodsCache;
+  try { httpMethodsCache = require('./document-http-methods'); } catch { httpMethodsCache = null; }
+  return httpMethodsCache;
+}
+let containerRefsCache = null;
+function getContainerRefs() {
+  if (containerRefsCache) return containerRefsCache;
+  try { containerRefsCache = require('./document-container-refs'); } catch { containerRefsCache = null; }
+  return containerRefsCache;
+}
+let k8sRefsCache = null;
+function getK8sRefs() {
+  if (k8sRefsCache) return k8sRefsCache;
+  try { k8sRefsCache = require('./document-k8s-refs'); } catch { k8sRefsCache = null; }
+  return k8sRefsCache;
+}
+let metricsCache = null;
+function getMetrics() {
+  if (metricsCache) return metricsCache;
+  try { metricsCache = require('./document-metrics'); } catch { metricsCache = null; }
+  return metricsCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -2507,6 +2531,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const creditCardsBlock = buildCreditCardsBlock(files);
   const ssnPiiBlock = buildSsnPiiBlock(files);
   const apiKeysBlock = buildApiKeysBlock(files);
+  const httpMethodsBlock = buildHttpMethodsBlock(files);
+  const containerRefsBlock = buildContainerRefsBlock(files);
+  const k8sRefsBlock = buildK8sRefsBlock(files);
+  const metricsBlock = buildMetricsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -2669,6 +2697,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     creditCardsBlock,
     ssnPiiBlock,
     apiKeysBlock,
+    httpMethodsBlock,
+    containerRefsBlock,
+    k8sRefsBlock,
+    metricsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -4751,6 +4783,46 @@ function buildApiKeysBlock(files) {
   return engine.renderApiKeysBlock(report);
 }
 
+/** HTTP methods census block — aggregate counts of GET/POST/PUT/PATCH/DELETE. */
+function buildHttpMethodsBlock(files) {
+  const engine = getHttpMethods();
+  if (!engine || typeof engine.buildHttpMethodsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildHttpMethodsForFiles(list);
+  return engine.renderHttpMethodsBlock(report);
+}
+
+/** Container refs block — registry/digest/plain image:tag references. */
+function buildContainerRefsBlock(files) {
+  const engine = getContainerRefs();
+  if (!engine || typeof engine.buildContainerRefsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildContainerRefsForFiles(list);
+  return engine.renderContainerRefsBlock(report);
+}
+
+/** K8s refs block — apiVersion/kind/namespace/kubectl command refs. */
+function buildK8sRefsBlock(files) {
+  const engine = getK8sRefs();
+  if (!engine || typeof engine.buildK8sRefsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildK8sRefsForFiles(list);
+  return engine.renderK8sRefsBlock(report);
+}
+
+/** Metrics block — Prometheus-style metric names with type classification. */
+function buildMetricsBlock(files) {
+  const engine = getMetrics();
+  if (!engine || typeof engine.buildMetricsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildMetricsForFiles(list);
+  return engine.renderMetricsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -5068,6 +5140,10 @@ module.exports = {
   buildCreditCardsBlock,
   buildSsnPiiBlock,
   buildApiKeysBlock,
+  buildHttpMethodsBlock,
+  buildContainerRefsBlock,
+  buildK8sRefsBlock,
+  buildMetricsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
