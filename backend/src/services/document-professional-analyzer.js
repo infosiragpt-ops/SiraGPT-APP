@@ -1081,6 +1081,30 @@ function getCloudArns() {
   try { cloudArnsCache = require('./document-cloud-arns'); } catch { cloudArnsCache = null; }
   return cloudArnsCache;
 }
+let mlModelsCache = null;
+function getMlModels() {
+  if (mlModelsCache) return mlModelsCache;
+  try { mlModelsCache = require('./document-ml-models'); } catch { mlModelsCache = null; }
+  return mlModelsCache;
+}
+let dbConnStringsCache = null;
+function getDbConnStrings() {
+  if (dbConnStringsCache) return dbConnStringsCache;
+  try { dbConnStringsCache = require('./document-db-conn-strings'); } catch { dbConnStringsCache = null; }
+  return dbConnStringsCache;
+}
+let graphqlOpsCache = null;
+function getGraphqlOps() {
+  if (graphqlOpsCache) return graphqlOpsCache;
+  try { graphqlOpsCache = require('./document-graphql-ops'); } catch { graphqlOpsCache = null; }
+  return graphqlOpsCache;
+}
+let grpcRefsCache = null;
+function getGrpcRefs() {
+  if (grpcRefsCache) return grpcRefsCache;
+  try { grpcRefsCache = require('./document-grpc-refs'); } catch { grpcRefsCache = null; }
+  return grpcRefsCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -2591,6 +2615,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const cookieAttrsBlock = buildCookieAttrsBlock(files);
   const otelTraceBlock = buildOtelTraceBlock(files);
   const cloudArnsBlock = buildCloudArnsBlock(files);
+  const mlModelsBlock = buildMlModelsBlock(files);
+  const dbConnStringsBlock = buildDbConnStringsBlock(files);
+  const graphqlOpsBlock = buildGraphqlOpsBlock(files);
+  const grpcRefsBlock = buildGrpcRefsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -2765,6 +2793,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     cookieAttrsBlock,
     otelTraceBlock,
     cloudArnsBlock,
+    mlModelsBlock,
+    dbConnStringsBlock,
+    graphqlOpsBlock,
+    grpcRefsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -4959,6 +4991,42 @@ function buildCloudArnsBlock(files) {
   return engine.renderCloudArnsBlock(report);
 }
 
+function buildMlModelsBlock(files) {
+  const engine = getMlModels();
+  if (!engine || typeof engine.buildMlModelsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildMlModelsForFiles(list);
+  return engine.renderMlModelsBlock(report);
+}
+
+function buildDbConnStringsBlock(files) {
+  const engine = getDbConnStrings();
+  if (!engine || typeof engine.buildDbConnStringsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildDbConnStringsForFiles(list);
+  return engine.renderDbConnStringsBlock(report);
+}
+
+function buildGraphqlOpsBlock(files) {
+  const engine = getGraphqlOps();
+  if (!engine || typeof engine.buildGraphqlOpsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildGraphqlOpsForFiles(list);
+  return engine.renderGraphqlOpsBlock(report);
+}
+
+function buildGrpcRefsBlock(files) {
+  const engine = getGrpcRefs();
+  if (!engine || typeof engine.buildGrpcRefsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildGrpcRefsForFiles(list);
+  return engine.renderGrpcRefsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -5288,6 +5356,10 @@ module.exports = {
   buildCookieAttrsBlock,
   buildOtelTraceBlock,
   buildCloudArnsBlock,
+  buildMlModelsBlock,
+  buildDbConnStringsBlock,
+  buildGraphqlOpsBlock,
+  buildGrpcRefsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
