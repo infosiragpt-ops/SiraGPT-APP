@@ -1153,6 +1153,30 @@ function getI18nKeys() {
   try { i18nKeysCache = require('./document-i18n-keys'); } catch { i18nKeysCache = null; }
   return i18nKeysCache;
 }
+let ciBuildIdsCache = null;
+function getCiBuildIds() {
+  if (ciBuildIdsCache) return ciBuildIdsCache;
+  try { ciBuildIdsCache = require('./document-ci-build-ids'); } catch { ciBuildIdsCache = null; }
+  return ciBuildIdsCache;
+}
+let userAgentsCache = null;
+function getUserAgents() {
+  if (userAgentsCache) return userAgentsCache;
+  try { userAgentsCache = require('./document-user-agents'); } catch { userAgentsCache = null; }
+  return userAgentsCache;
+}
+let cidrRangesCache = null;
+function getCidrRanges() {
+  if (cidrRangesCache) return cidrRangesCache;
+  try { cidrRangesCache = require('./document-cidr-ranges'); } catch { cidrRangesCache = null; }
+  return cidrRangesCache;
+}
+let cacheHeadersCache = null;
+function getCacheHeaders() {
+  if (cacheHeadersCache) return cacheHeadersCache;
+  try { cacheHeadersCache = require('./document-cache-headers'); } catch { cacheHeadersCache = null; }
+  return cacheHeadersCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -2675,6 +2699,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const webVitalsBlock = buildWebVitalsBlock(files);
   const ariaA11yBlock = buildAriaA11yBlock(files);
   const i18nKeysBlock = buildI18nKeysBlock(files);
+  const ciBuildIdsBlock = buildCiBuildIdsBlock(files);
+  const userAgentsBlock = buildUserAgentsBlock(files);
+  const cidrRangesBlock = buildCidrRangesBlock(files);
+  const cacheHeadersBlock = buildCacheHeadersBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -2861,6 +2889,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     webVitalsBlock,
     ariaA11yBlock,
     i18nKeysBlock,
+    ciBuildIdsBlock,
+    userAgentsBlock,
+    cidrRangesBlock,
+    cacheHeadersBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -5163,6 +5195,42 @@ function buildI18nKeysBlock(files) {
   return engine.renderI18nKeysBlock(report);
 }
 
+function buildCiBuildIdsBlock(files) {
+  const engine = getCiBuildIds();
+  if (!engine || typeof engine.buildCiBuildIdsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildCiBuildIdsForFiles(list);
+  return engine.renderCiBuildIdsBlock(report);
+}
+
+function buildUserAgentsBlock(files) {
+  const engine = getUserAgents();
+  if (!engine || typeof engine.buildUserAgentsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildUserAgentsForFiles(list);
+  return engine.renderUserAgentsBlock(report);
+}
+
+function buildCidrRangesBlock(files) {
+  const engine = getCidrRanges();
+  if (!engine || typeof engine.buildCidrRangesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildCidrRangesForFiles(list);
+  return engine.renderCidrRangesBlock(report);
+}
+
+function buildCacheHeadersBlock(files) {
+  const engine = getCacheHeaders();
+  if (!engine || typeof engine.buildCacheHeadersForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildCacheHeadersForFiles(list);
+  return engine.renderCacheHeadersBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -5504,6 +5572,10 @@ module.exports = {
   buildWebVitalsBlock,
   buildAriaA11yBlock,
   buildI18nKeysBlock,
+  buildCiBuildIdsBlock,
+  buildUserAgentsBlock,
+  buildCidrRangesBlock,
+  buildCacheHeadersBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
