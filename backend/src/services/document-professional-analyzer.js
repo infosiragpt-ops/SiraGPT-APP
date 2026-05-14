@@ -1225,6 +1225,30 @@ function getPaymentIds() {
   try { paymentIdsCache = require('./document-payment-ids'); } catch { paymentIdsCache = null; }
   return paymentIdsCache;
 }
+let emailHeadersCache = null;
+function getEmailHeaders() {
+  if (emailHeadersCache) return emailHeadersCache;
+  try { emailHeadersCache = require('./document-email-headers'); } catch { emailHeadersCache = null; }
+  return emailHeadersCache;
+}
+let icalEventsCache = null;
+function getIcalEvents() {
+  if (icalEventsCache) return icalEventsCache;
+  try { icalEventsCache = require('./document-ical-events'); } catch { icalEventsCache = null; }
+  return icalEventsCache;
+}
+let frontmatterCache = null;
+function getFrontmatter() {
+  if (frontmatterCache) return frontmatterCache;
+  try { frontmatterCache = require('./document-frontmatter'); } catch { frontmatterCache = null; }
+  return frontmatterCache;
+}
+let pullQuotesCache = null;
+function getPullQuotes() {
+  if (pullQuotesCache) return pullQuotesCache;
+  try { pullQuotesCache = require('./document-pull-quotes'); } catch { pullQuotesCache = null; }
+  return pullQuotesCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -2759,6 +2783,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const npmRefsBlock = buildNpmRefsBlock(files);
   const correlationIdsBlock = buildCorrelationIdsBlock(files);
   const paymentIdsBlock = buildPaymentIdsBlock(files);
+  const emailHeadersBlock = buildEmailHeadersBlock(files);
+  const icalEventsBlock = buildIcalEventsBlock(files);
+  const frontmatterBlock = buildFrontmatterBlock(files);
+  const pullQuotesBlock = buildPullQuotesBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -2957,6 +2985,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     npmRefsBlock,
     correlationIdsBlock,
     paymentIdsBlock,
+    emailHeadersBlock,
+    icalEventsBlock,
+    frontmatterBlock,
+    pullQuotesBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -5367,6 +5399,42 @@ function buildPaymentIdsBlock(files) {
   return engine.renderPaymentIdsBlock(report);
 }
 
+function buildEmailHeadersBlock(files) {
+  const engine = getEmailHeaders();
+  if (!engine || typeof engine.buildEmailHeadersForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildEmailHeadersForFiles(list);
+  return engine.renderEmailHeadersBlock(report);
+}
+
+function buildIcalEventsBlock(files) {
+  const engine = getIcalEvents();
+  if (!engine || typeof engine.buildIcalEventsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildIcalEventsForFiles(list);
+  return engine.renderIcalEventsBlock(report);
+}
+
+function buildFrontmatterBlock(files) {
+  const engine = getFrontmatter();
+  if (!engine || typeof engine.buildFrontmatterForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildFrontmatterForFiles(list);
+  return engine.renderFrontmatterBlock(report);
+}
+
+function buildPullQuotesBlock(files) {
+  const engine = getPullQuotes();
+  if (!engine || typeof engine.buildPullQuotesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildPullQuotesForFiles(list);
+  return engine.renderPullQuotesBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -5720,6 +5788,10 @@ module.exports = {
   buildNpmRefsBlock,
   buildCorrelationIdsBlock,
   buildPaymentIdsBlock,
+  buildEmailHeadersBlock,
+  buildIcalEventsBlock,
+  buildFrontmatterBlock,
+  buildPullQuotesBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
