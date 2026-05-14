@@ -1024,7 +1024,7 @@ const ActionsDropdown = ({
               <Button
                 variant="ghost"
                 size="sm"
-                aria-label="Attach files & tools"
+                aria-label="Adjuntar archivos y herramientas"
                 className="h-9 w-9 p-0 hover:bg-muted/50 rounded-full flex items-center justify-center"
                 disabled={isMenuDisabled}
               >
@@ -2519,7 +2519,7 @@ const NavbarModelSelector = ({
             <div className="relative">
               <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
-                placeholder="Search models..."
+                placeholder="Buscar modelos…"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="pl-8 h-8 text-sm"
@@ -4107,7 +4107,7 @@ But first, you need to connect your Spotify account securely using the button be
   // Complete chat share functionality
   const handleCompleteShare = async () => {
     if (!currentChat?.id) {
-      toast.error("No chat to share");
+      toast.error("No hay conversación para compartir");
       return;
     }
 
@@ -4116,11 +4116,11 @@ But first, you need to connect your Spotify account securely using the button be
       const baseUrl = process.env.NEXT_PUBLIC_URL || `http://localhost:${process.env.PORT || 3000}`;
       let url = `${baseUrl}/share/${response.shareableLink}`;
       navigator.clipboard.writeText(url);
-      toast.success("Shareable chat link copied!");
+      toast.success("Enlace para compartir copiado");
       setShareUrl(url);
       setShareModalOpen(true);
     } catch (error) {
-      toast.error(`Failed to create chat share link. ${error}`);
+      toast.error(`No se pudo crear el enlace de la conversación. ${error}`);
     }
   };
 
