@@ -126,13 +126,13 @@ function RailButton({
             // heavy when the rail had no container. Icon optical size
             // stays 14-15px via RailButton callers.
             "group/rb inline-flex h-9 w-9 items-center justify-center rounded-lg",
-            "text-muted-foreground/85 transition-all duration-200",
-            "hover:bg-foreground/[0.05] hover:text-foreground",
+            "text-muted-foreground/85 transition-all duration-fast ease-smooth",
+            "hover:bg-foreground/[0.06] hover:text-foreground",
             "active:scale-[0.94]",
-            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-offset-1 focus-visible:ring-offset-background",
             "disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-muted-foreground disabled:active:scale-100",
-            pressed && !destructive && "bg-foreground/[0.07] text-foreground",
-            pressed && destructive && "bg-red-500/10 text-red-500 dark:text-red-400",
+            pressed && !destructive && "bg-foreground/[0.08] text-foreground shadow-[inset_0_0_0_1px_hsl(var(--border))]",
+            pressed && destructive && "bg-red-500/10 text-red-500 dark:text-red-400 shadow-[inset_0_0_0_1px_hsl(0_84%_60%/0.3)]",
             pulse === "success" && "text-emerald-500 dark:text-emerald-400",
             pulse === "error" && "text-red-500 dark:text-red-400",
           )}
