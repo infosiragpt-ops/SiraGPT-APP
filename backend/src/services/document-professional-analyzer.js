@@ -1177,6 +1177,30 @@ function getCacheHeaders() {
   try { cacheHeadersCache = require('./document-cache-headers'); } catch { cacheHeadersCache = null; }
   return cacheHeadersCache;
 }
+let githubRefsCache = null;
+function getGithubRefs() {
+  if (githubRefsCache) return githubRefsCache;
+  try { githubRefsCache = require('./document-github-refs'); } catch { githubRefsCache = null; }
+  return githubRefsCache;
+}
+let apmRefsCache = null;
+function getApmRefs() {
+  if (apmRefsCache) return apmRefsCache;
+  try { apmRefsCache = require('./document-apm-refs'); } catch { apmRefsCache = null; }
+  return apmRefsCache;
+}
+let attackPatternsCache = null;
+function getAttackPatterns() {
+  if (attackPatternsCache) return attackPatternsCache;
+  try { attackPatternsCache = require('./document-attack-patterns'); } catch { attackPatternsCache = null; }
+  return attackPatternsCache;
+}
+let webhookUrlsCache = null;
+function getWebhookUrls() {
+  if (webhookUrlsCache) return webhookUrlsCache;
+  try { webhookUrlsCache = require('./document-webhook-urls'); } catch { webhookUrlsCache = null; }
+  return webhookUrlsCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -2703,6 +2727,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const userAgentsBlock = buildUserAgentsBlock(files);
   const cidrRangesBlock = buildCidrRangesBlock(files);
   const cacheHeadersBlock = buildCacheHeadersBlock(files);
+  const githubRefsBlock = buildGithubRefsBlock(files);
+  const apmRefsBlock = buildApmRefsBlock(files);
+  const attackPatternsBlock = buildAttackPatternsBlock(files);
+  const webhookUrlsBlock = buildWebhookUrlsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -2893,6 +2921,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     userAgentsBlock,
     cidrRangesBlock,
     cacheHeadersBlock,
+    githubRefsBlock,
+    apmRefsBlock,
+    attackPatternsBlock,
+    webhookUrlsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -5231,6 +5263,42 @@ function buildCacheHeadersBlock(files) {
   return engine.renderCacheHeadersBlock(report);
 }
 
+function buildGithubRefsBlock(files) {
+  const engine = getGithubRefs();
+  if (!engine || typeof engine.buildGithubRefsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildGithubRefsForFiles(list);
+  return engine.renderGithubRefsBlock(report);
+}
+
+function buildApmRefsBlock(files) {
+  const engine = getApmRefs();
+  if (!engine || typeof engine.buildApmRefsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildApmRefsForFiles(list);
+  return engine.renderApmRefsBlock(report);
+}
+
+function buildAttackPatternsBlock(files) {
+  const engine = getAttackPatterns();
+  if (!engine || typeof engine.buildAttackPatternsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildAttackPatternsForFiles(list);
+  return engine.renderAttackPatternsBlock(report);
+}
+
+function buildWebhookUrlsBlock(files) {
+  const engine = getWebhookUrls();
+  if (!engine || typeof engine.buildWebhookUrlsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildWebhookUrlsForFiles(list);
+  return engine.renderWebhookUrlsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -5576,6 +5644,10 @@ module.exports = {
   buildUserAgentsBlock,
   buildCidrRangesBlock,
   buildCacheHeadersBlock,
+  buildGithubRefsBlock,
+  buildApmRefsBlock,
+  buildAttackPatternsBlock,
+  buildWebhookUrlsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
