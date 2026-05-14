@@ -185,7 +185,12 @@ export function mergeMessagesPreservingUserContent<TMessage extends ChatMessageL
   // turn but omits the user message that triggered it (race condition,
   // partial backend save, transcription pipeline replacing the turn, etc.).
   // A user message the user already SAW must never disappear from the UI.
-  if (localUsersByOrdinal.length === 0) return enriched;
+  if (localUsersByOrdinal.length === 0) {
+    // No local user messages to re-stitch, but Pass 3 still needs to run
+    // for orphan assistant tail preservation (e.g. seed-assistant-only
+    // chats where the user hasn't typed yet but a stream just finished).
+    return preserveOrphanAssistantMessages(enriched, localMessages);
+  }
 
   const incomingUserIds = new Set<string>();
   const incomingUsers: TMessage[] = [];
@@ -209,7 +214,12 @@ export function mergeMessagesPreservingUserContent<TMessage extends ChatMessageL
     orphans.push({ localIndex: i, message: local });
   }
 
-  if (orphans.length === 0) return enriched;
+  if (orphans.length === 0) {
+    // No orphan users to re-insert, but Pass 3 still applies for the
+    // assistant-tail race (the common case when the server merely lags
+    // on persisting the just-completed assistant turn).
+    return preserveOrphanAssistantMessages(enriched, localMessages);
+  }
 
   // Re-stitch: for each orphan, insert it before the assistant message that
   // immediately follows it in the local order (so the rendered timeline

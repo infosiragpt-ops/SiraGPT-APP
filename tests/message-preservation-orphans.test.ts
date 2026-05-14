@@ -248,3 +248,109 @@ describe("mergeMessagesPreservingUserContent - never drops local user messages",
     assert.equal(userCount, 1)
   })
 })
+
+/**
+ * Pass 1b - regression suite for the "answer flashes for ~2 s then
+ * disappears" bug. After the assistant stream finishes, the client
+ * calls `selectChat()` to refresh from the server. If the backend
+ * hasn't yet persisted the just-completed assistant turn, the server
+ * payload arrives with `content=""` (or omits the message). Without
+ * Pass 1b, the merge replaces the local rich content with the empty
+ * server copy and the bubble vanishes.
+ */
+describe("mergeMessagesPreservingUserContent - assistant content / orphan preservation", () => {
+  it("keeps local assistant content when the server echoes the same turn with empty body", () => {
+    const local = [
+      { id: "msg-user-1", role: "USER", content: "resume el doc" },
+      { id: "msg-ai-1", role: "ASSISTANT", content: "El documento concluye que…" },
+    ]
+    const incoming = [
+      { id: "msg-user-1", role: "USER", content: "resume el doc" },
+      // Server echoes the same id but content is still ""
+      { id: "msg-ai-1", role: "ASSISTANT", content: "" },
+    ]
+    const merged = mergeMessagesPreservingUserContent(incoming, local)
+    assert.equal(merged[1].content, "El documento concluye que…")
+  })
+
+  it("does NOT overwrite valid server assistant content with local stub", () => {
+    const local = [
+      { id: "msg-user-1", role: "USER", content: "ping" },
+      { id: "msg-ai-1", role: "ASSISTANT", content: "" },
+    ]
+    const incoming = [
+      { id: "msg-user-1", role: "USER", content: "ping" },
+      { id: "msg-ai-1", role: "ASSISTANT", content: "Final server answer" },
+    ]
+    const merged = mergeMessagesPreservingUserContent(incoming, local)
+    assert.equal(merged[1].content, "Final server answer")
+  })
+
+  it("preserves rich file metadata on assistant turn when server returns ids only", () => {
+    const local = [
+      { id: "u1", role: "USER", content: "genera grafico" },
+      {
+        id: "a1",
+        role: "ASSISTANT",
+        content: "Listo",
+        files: [{ id: "art_1", name: "chart.png", url: "/blob/x", mimeType: "image/png" }],
+      },
+    ]
+    const incoming = [
+      { id: "u1", role: "USER", content: "genera grafico" },
+      // Server reply only carries the id, not the rich metadata
+      { id: "a1", role: "ASSISTANT", content: "Listo", files: [{ id: "art_1" }] },
+    ]
+    const merged = mergeMessagesPreservingUserContent(incoming, local)
+    assert.deepEqual(merged[1].files, [
+      { id: "art_1", name: "chart.png", url: "/blob/x", mimeType: "image/png" },
+    ])
+  })
+
+  it("Pass 3 - re-appends local orphan assistant tail the server hasn't persisted yet", () => {
+    const local = [
+      { id: "u1", role: "USER", content: "hola" },
+      { id: "a-srv-1", role: "ASSISTANT", content: "Hola, ¿cómo te ayudo?" },
+      { id: "u2", role: "USER", content: "resume el pdf" },
+      { id: "a-tail", role: "ASSISTANT", content: "El documento explica…" },
+    ]
+    const incoming = [
+      { id: "u1", role: "USER", content: "hola" },
+      { id: "a-srv-1", role: "ASSISTANT", content: "Hola, ¿cómo te ayudo?" },
+      { id: "u2", role: "USER", content: "resume el pdf" },
+      // Server hasn't saved a-tail yet
+    ]
+    const merged = mergeMessagesPreservingUserContent(incoming, local)
+    assert.equal(merged.length, 4)
+    assert.equal(merged[3].id, "a-tail")
+    assert.equal(merged[3].content, "El documento explica…")
+  })
+
+  it("Pass 3 does NOT duplicate when server has caught up", () => {
+    const local = [
+      { id: "u1", role: "USER", content: "hola" },
+      { id: "a1", role: "ASSISTANT", content: "Hola" },
+    ]
+    const incoming = [
+      { id: "u1", role: "USER", content: "hola" },
+      { id: "a1", role: "ASSISTANT", content: "Hola" },
+    ]
+    const merged = mergeMessagesPreservingUserContent(incoming, local)
+    assert.equal(merged.length, 2)
+  })
+
+  it("Pass 3 skips empty local assistant stubs (no content, no files)", () => {
+    const local = [
+      { id: "u1", role: "USER", content: "hola" },
+      { id: "a1", role: "ASSISTANT", content: "Hola" },
+      { id: "a-stub", role: "ASSISTANT", content: "" },
+    ]
+    const incoming = [
+      { id: "u1", role: "USER", content: "hola" },
+      { id: "a1", role: "ASSISTANT", content: "Hola" },
+    ]
+    const merged = mergeMessagesPreservingUserContent(incoming, local)
+    // The empty stub is NOT worth preserving — next refresh will surface real content.
+    assert.equal(merged.length, 2)
+  })
+})
