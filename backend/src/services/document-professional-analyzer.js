@@ -889,6 +889,30 @@ function getGeoRegions() {
   try { geoRegionsCache = require('./document-geo-regions'); } catch { geoRegionsCache = null; }
   return geoRegionsCache;
 }
+let trackingCache = null;
+function getTracking() {
+  if (trackingCache) return trackingCache;
+  try { trackingCache = require('./document-tracking'); } catch { trackingCache = null; }
+  return trackingCache;
+}
+let weatherCache = null;
+function getWeather() {
+  if (weatherCache) return weatherCache;
+  try { weatherCache = require('./document-weather'); } catch { weatherCache = null; }
+  return weatherCache;
+}
+let scientificNotationCache = null;
+function getScientificNotation() {
+  if (scientificNotationCache) return scientificNotationCache;
+  try { scientificNotationCache = require('./document-scientific-notation'); } catch { scientificNotationCache = null; }
+  return scientificNotationCache;
+}
+let taxaCache = null;
+function getTaxa() {
+  if (taxaCache) return taxaCache;
+  try { taxaCache = require('./document-taxa'); } catch { taxaCache = null; }
+  return taxaCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -2367,6 +2391,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const ratiosBlock = buildRatiosBlock(files);
   const ordinalsBlock = buildOrdinalsBlock(files);
   const geoRegionsBlock = buildGeoRegionsBlock(files);
+  const trackingBlock = buildTrackingBlock(files);
+  const weatherBlock = buildWeatherBlock(files);
+  const scientificNotationBlock = buildScientificNotationBlock(files);
+  const taxaBlock = buildTaxaBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -2509,6 +2537,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     ratiosBlock,
     ordinalsBlock,
     geoRegionsBlock,
+    trackingBlock,
+    weatherBlock,
+    scientificNotationBlock,
+    taxaBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -4391,6 +4423,46 @@ function buildGeoRegionsBlock(files) {
   return engine.renderGeoRegionsBlock(report);
 }
 
+/** Tracking block — UPS/FedEx/USPS/DHL parcel codes + labeled forms. */
+function buildTrackingBlock(files) {
+  const engine = getTracking();
+  if (!engine || typeof engine.buildTrackingForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildTrackingForFiles(list);
+  return engine.renderTrackingBlock(report);
+}
+
+/** Weather block — temperature/precipitation/wind/humidity/climate terms. */
+function buildWeatherBlock(files) {
+  const engine = getWeather();
+  if (!engine || typeof engine.buildWeatherForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildWeatherForFiles(list);
+  return engine.renderWeatherBlock(report);
+}
+
+/** Scientific notation block — E-notation, ×10^, superscript power-of-ten. */
+function buildScientificNotationBlock(files) {
+  const engine = getScientificNotation();
+  if (!engine || typeof engine.buildScientificNotationForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildScientificNotationForFiles(list);
+  return engine.renderScientificNotationBlock(report);
+}
+
+/** Taxa block — Linnaean binomial nomenclature + family taxa. */
+function buildTaxaBlock(files) {
+  const engine = getTaxa();
+  if (!engine || typeof engine.buildTaxaForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildTaxaForFiles(list);
+  return engine.renderTaxaBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -4688,6 +4760,10 @@ module.exports = {
   buildRatiosBlock,
   buildOrdinalsBlock,
   buildGeoRegionsBlock,
+  buildTrackingBlock,
+  buildWeatherBlock,
+  buildScientificNotationBlock,
+  buildTaxaBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
