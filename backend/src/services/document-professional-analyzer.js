@@ -1321,6 +1321,30 @@ function getTrackingNumbers() {
   try { trackingNumbersCache = require('./document-tracking-numbers'); } catch { trackingNumbersCache = null; }
   return trackingNumbersCache;
 }
+let rateLimitHeadersCache = null;
+function getRateLimitHeaders() {
+  if (rateLimitHeadersCache) return rateLimitHeadersCache;
+  try { rateLimitHeadersCache = require('./document-rate-limit-headers'); } catch { rateLimitHeadersCache = null; }
+  return rateLimitHeadersCache;
+}
+let cryptoWalletsCache = null;
+function getCryptoWallets() {
+  if (cryptoWalletsCache) return cryptoWalletsCache;
+  try { cryptoWalletsCache = require('./document-crypto-wallets'); } catch { cryptoWalletsCache = null; }
+  return cryptoWalletsCache;
+}
+let cveIdsCache = null;
+function getCveIds() {
+  if (cveIdsCache) return cveIdsCache;
+  try { cveIdsCache = require('./document-cve-ids'); } catch { cveIdsCache = null; }
+  return cveIdsCache;
+}
+let mediaTimestampsCache = null;
+function getMediaTimestamps() {
+  if (mediaTimestampsCache) return mediaTimestampsCache;
+  try { mediaTimestampsCache = require('./document-media-timestamps'); } catch { mediaTimestampsCache = null; }
+  return mediaTimestampsCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -2871,6 +2895,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const hardwareSpecsBlock = buildHardwareSpecsBlock(files);
   const bandwidthUnitsBlock = buildBandwidthUnitsBlock(files);
   const trackingNumbersBlock = buildTrackingNumbersBlock(files);
+  const rateLimitHeadersBlock = buildRateLimitHeadersBlock(files);
+  const cryptoWalletsBlock = buildCryptoWalletsBlock(files);
+  const cveIdsBlock = buildCveIdsBlock(files);
+  const mediaTimestampsBlock = buildMediaTimestampsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -3085,6 +3113,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     hardwareSpecsBlock,
     bandwidthUnitsBlock,
     trackingNumbersBlock,
+    rateLimitHeadersBlock,
+    cryptoWalletsBlock,
+    cveIdsBlock,
+    mediaTimestampsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -5639,6 +5671,42 @@ function buildTrackingNumbersBlock(files) {
   return engine.renderTrackingNumbersBlock(report);
 }
 
+function buildRateLimitHeadersBlock(files) {
+  const engine = getRateLimitHeaders();
+  if (!engine || typeof engine.buildRateLimitHeadersForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildRateLimitHeadersForFiles(list);
+  return engine.renderRateLimitHeadersBlock(report);
+}
+
+function buildCryptoWalletsBlock(files) {
+  const engine = getCryptoWallets();
+  if (!engine || typeof engine.buildCryptoWalletsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildCryptoWalletsForFiles(list);
+  return engine.renderCryptoWalletsBlock(report);
+}
+
+function buildCveIdsBlock(files) {
+  const engine = getCveIds();
+  if (!engine || typeof engine.buildCveIdsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildCveIdsForFiles(list);
+  return engine.renderCveIdsBlock(report);
+}
+
+function buildMediaTimestampsBlock(files) {
+  const engine = getMediaTimestamps();
+  if (!engine || typeof engine.buildMediaTimestampsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildMediaTimestampsForFiles(list);
+  return engine.renderMediaTimestampsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -6008,6 +6076,10 @@ module.exports = {
   buildHardwareSpecsBlock,
   buildBandwidthUnitsBlock,
   buildTrackingNumbersBlock,
+  buildRateLimitHeadersBlock,
+  buildCryptoWalletsBlock,
+  buildCveIdsBlock,
+  buildMediaTimestampsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
