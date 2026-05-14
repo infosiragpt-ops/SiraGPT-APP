@@ -1633,6 +1633,30 @@ function getHexPkgs() {
   try { hexPkgsCache = require('./document-hex-pkgs'); } catch { hexPkgsCache = null; }
   return hexPkgsCache;
 }
+let svgPathCmdsCache = null;
+function getSvgPathCmds() {
+  if (svgPathCmdsCache) return svgPathCmdsCache;
+  try { svgPathCmdsCache = require('./document-svg-path-cmds'); } catch { svgPathCmdsCache = null; }
+  return svgPathCmdsCache;
+}
+let geojsonCache = null;
+function getGeojson() {
+  if (geojsonCache) return geojsonCache;
+  try { geojsonCache = require('./document-geojson'); } catch { geojsonCache = null; }
+  return geojsonCache;
+}
+let pwaManifestCache = null;
+function getPwaManifest() {
+  if (pwaManifestCache) return pwaManifestCache;
+  try { pwaManifestCache = require('./document-pwa-manifest'); } catch { pwaManifestCache = null; }
+  return pwaManifestCache;
+}
+let permissionsApiCache = null;
+function getPermissionsApi() {
+  if (permissionsApiCache) return permissionsApiCache;
+  try { permissionsApiCache = require('./document-permissions-api'); } catch { permissionsApiCache = null; }
+  return permissionsApiCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -3235,6 +3259,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const nugetPkgsBlock = buildNugetPkgsBlock(files);
   const gemPkgsBlock = buildGemPkgsBlock(files);
   const hexPkgsBlock = buildHexPkgsBlock(files);
+  const svgPathCmdsBlock = buildSvgPathCmdsBlock(files);
+  const geojsonBlock = buildGeojsonBlock(files);
+  const pwaManifestBlock = buildPwaManifestBlock(files);
+  const permissionsApiBlock = buildPermissionsApiBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -3501,6 +3529,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     nugetPkgsBlock,
     gemPkgsBlock,
     hexPkgsBlock,
+    svgPathCmdsBlock,
+    geojsonBlock,
+    pwaManifestBlock,
+    permissionsApiBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -6523,6 +6555,42 @@ function buildHexPkgsBlock(files) {
   return engine.renderHexPkgsBlock(report);
 }
 
+function buildSvgPathCmdsBlock(files) {
+  const engine = getSvgPathCmds();
+  if (!engine || typeof engine.buildSvgPathCmdsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildSvgPathCmdsForFiles(list);
+  return engine.renderSvgPathCmdsBlock(report);
+}
+
+function buildGeojsonBlock(files) {
+  const engine = getGeojson();
+  if (!engine || typeof engine.buildGeojsonForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildGeojsonForFiles(list);
+  return engine.renderGeojsonBlock(report);
+}
+
+function buildPwaManifestBlock(files) {
+  const engine = getPwaManifest();
+  if (!engine || typeof engine.buildPwaManifestForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildPwaManifestForFiles(list);
+  return engine.renderPwaManifestBlock(report);
+}
+
+function buildPermissionsApiBlock(files) {
+  const engine = getPermissionsApi();
+  if (!engine || typeof engine.buildPermissionsApiForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildPermissionsApiForFiles(list);
+  return engine.renderPermissionsApiBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -6944,6 +7012,10 @@ module.exports = {
   buildNugetPkgsBlock,
   buildGemPkgsBlock,
   buildHexPkgsBlock,
+  buildSvgPathCmdsBlock,
+  buildGeojsonBlock,
+  buildPwaManifestBlock,
+  buildPermissionsApiBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
