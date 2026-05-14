@@ -985,6 +985,30 @@ function getMimeTypes() {
   try { mimeTypesCache = require('./document-mime-types'); } catch { mimeTypesCache = null; }
   return mimeTypesCache;
 }
+let utmParamsCache = null;
+function getUtmParams() {
+  if (utmParamsCache) return utmParamsCache;
+  try { utmParamsCache = require('./document-utm-params'); } catch { utmParamsCache = null; }
+  return utmParamsCache;
+}
+let creditCardsCache = null;
+function getCreditCards() {
+  if (creditCardsCache) return creditCardsCache;
+  try { creditCardsCache = require('./document-credit-cards'); } catch { creditCardsCache = null; }
+  return creditCardsCache;
+}
+let ssnPiiCache = null;
+function getSsnPii() {
+  if (ssnPiiCache) return ssnPiiCache;
+  try { ssnPiiCache = require('./document-ssn-pii'); } catch { ssnPiiCache = null; }
+  return ssnPiiCache;
+}
+let apiKeysCache = null;
+function getApiKeys() {
+  if (apiKeysCache) return apiKeysCache;
+  try { apiKeysCache = require('./document-api-keys'); } catch { apiKeysCache = null; }
+  return apiKeysCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -2479,6 +2503,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const postalCodesBlock = buildPostalCodesBlock(files);
   const addressesBlock = buildAddressesBlock(files);
   const mimeTypesBlock = buildMimeTypesBlock(files);
+  const utmParamsBlock = buildUtmParamsBlock(files);
+  const creditCardsBlock = buildCreditCardsBlock(files);
+  const ssnPiiBlock = buildSsnPiiBlock(files);
+  const apiKeysBlock = buildApiKeysBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -2637,6 +2665,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     postalCodesBlock,
     addressesBlock,
     mimeTypesBlock,
+    utmParamsBlock,
+    creditCardsBlock,
+    ssnPiiBlock,
+    apiKeysBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -4679,6 +4711,46 @@ function buildMimeTypesBlock(files) {
   return engine.renderMimeTypesBlock(report);
 }
 
+/** UTM params block — utm_source/medium/campaign/term/content/id. */
+function buildUtmParamsBlock(files) {
+  const engine = getUtmParams();
+  if (!engine || typeof engine.buildUtmParamsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildUtmParamsForFiles(list);
+  return engine.renderUtmParamsBlock(report);
+}
+
+/** Credit cards block — masked Visa/MC/Amex/Discover/JCB/Diners. */
+function buildCreditCardsBlock(files) {
+  const engine = getCreditCards();
+  if (!engine || typeof engine.buildCreditCardsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildCreditCardsForFiles(list);
+  return engine.renderCreditCardsBlock(report);
+}
+
+/** SSN-style PII block — masked US/MX/ES/CA/UK/BR national IDs. */
+function buildSsnPiiBlock(files) {
+  const engine = getSsnPii();
+  if (!engine || typeof engine.buildSsnPiiForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildSsnPiiForFiles(list);
+  return engine.renderSsnPiiBlock(report);
+}
+
+/** API keys block — masked OpenAI/GitHub/AWS/Stripe/Slack/Bearer/JWT. */
+function buildApiKeysBlock(files) {
+  const engine = getApiKeys();
+  if (!engine || typeof engine.buildApiKeysForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildApiKeysForFiles(list);
+  return engine.renderApiKeysBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -4992,6 +5064,10 @@ module.exports = {
   buildPostalCodesBlock,
   buildAddressesBlock,
   buildMimeTypesBlock,
+  buildUtmParamsBlock,
+  buildCreditCardsBlock,
+  buildSsnPiiBlock,
+  buildApiKeysBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
