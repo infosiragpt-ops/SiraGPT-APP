@@ -1873,6 +1873,30 @@ function getModuleFederation() {
   try { moduleFederationCache = require('./document-module-federation'); } catch { moduleFederationCache = null; }
   return moduleFederationCache;
 }
+let drizzleCache = null;
+function getDrizzle() {
+  if (drizzleCache) return drizzleCache;
+  try { drizzleCache = require('./document-drizzle'); } catch { drizzleCache = null; }
+  return drizzleCache;
+}
+let twilioCache = null;
+function getTwilio() {
+  if (twilioCache) return twilioCache;
+  try { twilioCache = require('./document-twilio'); } catch { twilioCache = null; }
+  return twilioCache;
+}
+let awsSdkCache = null;
+function getAwsSdk() {
+  if (awsSdkCache) return awsSdkCache;
+  try { awsSdkCache = require('./document-aws-sdk'); } catch { awsSdkCache = null; }
+  return awsSdkCache;
+}
+let oauthFlowsCache = null;
+function getOauthFlows() {
+  if (oauthFlowsCache) return oauthFlowsCache;
+  try { oauthFlowsCache = require('./document-oauth-flows'); } catch { oauthFlowsCache = null; }
+  return oauthFlowsCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -3515,6 +3539,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const nginxBlock = buildNginxBlock(files);
   const otelBlock = buildOtelBlock(files);
   const moduleFederationBlock = buildModuleFederationBlock(files);
+  const drizzleBlock = buildDrizzleBlock(files);
+  const twilioBlock = buildTwilioBlock(files);
+  const awsSdkBlock = buildAwsSdkBlock(files);
+  const oauthFlowsBlock = buildOauthFlowsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -3821,6 +3849,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     nginxBlock,
     otelBlock,
     moduleFederationBlock,
+    drizzleBlock,
+    twilioBlock,
+    awsSdkBlock,
+    oauthFlowsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -7203,6 +7235,42 @@ function buildModuleFederationBlock(files) {
   return engine.renderModuleFederationBlock(report);
 }
 
+function buildDrizzleBlock(files) {
+  const engine = getDrizzle();
+  if (!engine || typeof engine.buildDrizzleForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildDrizzleForFiles(list);
+  return engine.renderDrizzleBlock(report);
+}
+
+function buildTwilioBlock(files) {
+  const engine = getTwilio();
+  if (!engine || typeof engine.buildTwilioForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildTwilioForFiles(list);
+  return engine.renderTwilioBlock(report);
+}
+
+function buildAwsSdkBlock(files) {
+  const engine = getAwsSdk();
+  if (!engine || typeof engine.buildAwsSdkForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildAwsSdkForFiles(list);
+  return engine.renderAwsSdkBlock(report);
+}
+
+function buildOauthFlowsBlock(files) {
+  const engine = getOauthFlows();
+  if (!engine || typeof engine.buildOauthFlowsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildOauthFlowsForFiles(list);
+  return engine.renderOauthFlowsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -7664,6 +7732,10 @@ module.exports = {
   buildNginxBlock,
   buildOtelBlock,
   buildModuleFederationBlock,
+  buildDrizzleBlock,
+  buildTwilioBlock,
+  buildAwsSdkBlock,
+  buildOauthFlowsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
