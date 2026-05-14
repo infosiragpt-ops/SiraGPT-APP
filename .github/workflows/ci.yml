@@ -384,6 +384,7 @@ jobs:
       - name: Run Playwright smoke
         id: playwright_smoke
         if: steps.playwright_install.outcome == 'success'
+        timeout-minutes: 8
         continue-on-error: true
         run: npm run test:e2e
 
