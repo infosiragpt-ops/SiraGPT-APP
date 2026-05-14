@@ -1249,6 +1249,30 @@ function getPullQuotes() {
   try { pullQuotesCache = require('./document-pull-quotes'); } catch { pullQuotesCache = null; }
   return pullQuotesCache;
 }
+let ghaStepsCache = null;
+function getGhaSteps() {
+  if (ghaStepsCache) return ghaStepsCache;
+  try { ghaStepsCache = require('./document-gha-steps'); } catch { ghaStepsCache = null; }
+  return ghaStepsCache;
+}
+let terraformRefsCache = null;
+function getTerraformRefs() {
+  if (terraformRefsCache) return terraformRefsCache;
+  try { terraformRefsCache = require('./document-terraform-refs'); } catch { terraformRefsCache = null; }
+  return terraformRefsCache;
+}
+let helmRefsCache = null;
+function getHelmRefs() {
+  if (helmRefsCache) return helmRefsCache;
+  try { helmRefsCache = require('./document-helm-refs'); } catch { helmRefsCache = null; }
+  return helmRefsCache;
+}
+let naturalSchedulesCache = null;
+function getNaturalSchedules() {
+  if (naturalSchedulesCache) return naturalSchedulesCache;
+  try { naturalSchedulesCache = require('./document-natural-schedules'); } catch { naturalSchedulesCache = null; }
+  return naturalSchedulesCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -2787,6 +2811,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const icalEventsBlock = buildIcalEventsBlock(files);
   const frontmatterBlock = buildFrontmatterBlock(files);
   const pullQuotesBlock = buildPullQuotesBlock(files);
+  const ghaStepsBlock = buildGhaStepsBlock(files);
+  const terraformRefsBlock = buildTerraformRefsBlock(files);
+  const helmRefsBlock = buildHelmRefsBlock(files);
+  const naturalSchedulesBlock = buildNaturalSchedulesBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -2989,6 +3017,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     icalEventsBlock,
     frontmatterBlock,
     pullQuotesBlock,
+    ghaStepsBlock,
+    terraformRefsBlock,
+    helmRefsBlock,
+    naturalSchedulesBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -5435,6 +5467,42 @@ function buildPullQuotesBlock(files) {
   return engine.renderPullQuotesBlock(report);
 }
 
+function buildGhaStepsBlock(files) {
+  const engine = getGhaSteps();
+  if (!engine || typeof engine.buildGhaStepsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildGhaStepsForFiles(list);
+  return engine.renderGhaStepsBlock(report);
+}
+
+function buildTerraformRefsBlock(files) {
+  const engine = getTerraformRefs();
+  if (!engine || typeof engine.buildTerraformRefsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildTerraformRefsForFiles(list);
+  return engine.renderTerraformRefsBlock(report);
+}
+
+function buildHelmRefsBlock(files) {
+  const engine = getHelmRefs();
+  if (!engine || typeof engine.buildHelmRefsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildHelmRefsForFiles(list);
+  return engine.renderHelmRefsBlock(report);
+}
+
+function buildNaturalSchedulesBlock(files) {
+  const engine = getNaturalSchedules();
+  if (!engine || typeof engine.buildNaturalSchedulesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildNaturalSchedulesForFiles(list);
+  return engine.renderNaturalSchedulesBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -5792,6 +5860,10 @@ module.exports = {
   buildIcalEventsBlock,
   buildFrontmatterBlock,
   buildPullQuotesBlock,
+  buildGhaStepsBlock,
+  buildTerraformRefsBlock,
+  buildHelmRefsBlock,
+  buildNaturalSchedulesBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
