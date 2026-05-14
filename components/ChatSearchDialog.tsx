@@ -171,7 +171,10 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
         <DialogHeader className="px-6 pt-6 pb-2">
           <DialogTitle className="flex items-center gap-2">
             <Search className="h-5 w-5" />
-            Search Chats
+            Buscar chats
+            <span className="ml-auto inline-flex h-6 items-center rounded-md border border-border/55 bg-muted/40 px-2 font-mono text-[10.5px] font-medium tracking-wide text-muted-foreground">
+              ⌘K
+            </span>
           </DialogTitle>
         </DialogHeader>
 
@@ -180,7 +183,7 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
           <div className="relative">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
-              placeholder="Search chats"
+              placeholder="Buscar en tus chats…"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="pl-10"
@@ -204,14 +207,14 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
                 {searchQuery ? (
                   <>
                     <MessageSquare className="h-12 w-12 mx-auto mb-3 opacity-50" />
-                    <p>No chats found matching "{searchQuery}"</p>
-                    <p className="text-sm mt-1">Try different keywords</p>
+                    <p>No hay chats que coincidan con &quot;{searchQuery}&quot;</p>
+                    <p className="text-sm mt-1">Intenta con otras palabras clave</p>
                   </>
                 ) : (
                   <>
                     <History className="h-12 w-12 mx-auto mb-3 opacity-50" />
-                    <p>No chats yet</p>
-                    <p className="text-sm mt-1">Start a conversation to see it here</p>
+                    <p>Aún no tienes chats</p>
+                    <p className="text-sm mt-1">Empieza una conversación para verla aquí</p>
                   </>
                 )}
               </div>
