@@ -4418,19 +4418,39 @@ But first, you need to connect your Spotify account securely using the button be
           onClick={handleMicClick}
           disabled={isDictationTranscribing}
           aria-label={isDictationTranscribing ? "Transcribiendo dictado" : isRecording ? "Detener dictado" : "Dictar al chat"}
+          aria-pressed={isRecording}
           title={isDictationTranscribing ? "Transcribiendo dictado" : isRecording ? "Detener dictado" : "Dictar al chat"}
           className={cn(
-            "relative h-9 w-9 rounded-full p-0 transition-all duration-200 active:scale-[0.96]",
+            "relative h-9 w-9 rounded-full p-0 transition-all duration-fast ease-smooth active:scale-[0.96]",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
             isRecording
               ? "bg-red-500/10 text-red-500 hover:bg-red-500/15 hover:text-red-600 dark:text-red-400 dark:hover:text-red-300"
               : "text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground",
           )}
         >
+          {/* Active-state halo — two concentric pulses around the icon
+              so the user has unambiguous feedback that the mic is hot.
+              The outer ring uses Tailwind `animate-ping` (decays to
+              transparent) and the inner ring is a static red border so
+              the resting affordance is also tinted, not just animated.
+              Hidden via aria-hidden so screen readers only announce the
+              button label, not the decoration. */}
+          {isRecording && (
+            <>
+              <span
+                aria-hidden
+                className="pointer-events-none absolute inset-0 rounded-full bg-red-500/30 animate-ping"
+              />
+              <span
+                aria-hidden
+                className="pointer-events-none absolute inset-0 rounded-full ring-1 ring-red-500/45"
+              />
+            </>
+          )}
           {isDictationTranscribing ? (
-            <ThinkingIndicator size="sm" className="h-[17px] w-[17px]" />
+            <ThinkingIndicator size="sm" className="h-[17px] w-[17px] relative" />
           ) : isRecording ? (
-            <Square className="h-[14px] w-[14px] fill-current" strokeWidth={0} />
+            <Square className="h-[14px] w-[14px] fill-current relative" strokeWidth={0} />
           ) : (
             <Mic className="h-[17px] w-[17px]" strokeWidth={1.75} />
           )}
@@ -4441,7 +4461,7 @@ But first, you need to connect your Spotify account securely using the button be
           {isDictationTranscribing
             ? "Transcribiendo dictado"
             : isRecording
-            ? "Detener dictado"
+            ? "Escuchando · toca para detener"
             : isSpeechSupported
               ? "Dictar al chat"
               : "Dictado no soportado por este navegador"}
