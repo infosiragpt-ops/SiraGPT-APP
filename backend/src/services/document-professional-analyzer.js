@@ -1105,6 +1105,30 @@ function getGrpcRefs() {
   try { grpcRefsCache = require('./document-grpc-refs'); } catch { grpcRefsCache = null; }
   return grpcRefsCache;
 }
+let stackTracesCache = null;
+function getStackTraces() {
+  if (stackTracesCache) return stackTracesCache;
+  try { stackTracesCache = require('./document-stack-traces'); } catch { stackTracesCache = null; }
+  return stackTracesCache;
+}
+let envNamesCache = null;
+function getEnvNames() {
+  if (envNamesCache) return envNamesCache;
+  try { envNamesCache = require('./document-env-names'); } catch { envNamesCache = null; }
+  return envNamesCache;
+}
+let testBlocksCache = null;
+function getTestBlocks() {
+  if (testBlocksCache) return testBlocksCache;
+  try { testBlocksCache = require('./document-test-blocks'); } catch { testBlocksCache = null; }
+  return testBlocksCache;
+}
+let gitShasCache = null;
+function getGitShas() {
+  if (gitShasCache) return gitShasCache;
+  try { gitShasCache = require('./document-git-shas'); } catch { gitShasCache = null; }
+  return gitShasCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -2619,6 +2643,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const dbConnStringsBlock = buildDbConnStringsBlock(files);
   const graphqlOpsBlock = buildGraphqlOpsBlock(files);
   const grpcRefsBlock = buildGrpcRefsBlock(files);
+  const stackTracesBlock = buildStackTracesBlock(files);
+  const envNamesBlock = buildEnvNamesBlock(files);
+  const testBlocksBlock = buildTestBlocksBlock(files);
+  const gitShasBlock = buildGitShasBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -2797,6 +2825,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     dbConnStringsBlock,
     graphqlOpsBlock,
     grpcRefsBlock,
+    stackTracesBlock,
+    envNamesBlock,
+    testBlocksBlock,
+    gitShasBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -5027,6 +5059,42 @@ function buildGrpcRefsBlock(files) {
   return engine.renderGrpcRefsBlock(report);
 }
 
+function buildStackTracesBlock(files) {
+  const engine = getStackTraces();
+  if (!engine || typeof engine.buildStackTracesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildStackTracesForFiles(list);
+  return engine.renderStackTracesBlock(report);
+}
+
+function buildEnvNamesBlock(files) {
+  const engine = getEnvNames();
+  if (!engine || typeof engine.buildEnvNamesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildEnvNamesForFiles(list);
+  return engine.renderEnvNamesBlock(report);
+}
+
+function buildTestBlocksBlock(files) {
+  const engine = getTestBlocks();
+  if (!engine || typeof engine.buildTestBlocksForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildTestBlocksForFiles(list);
+  return engine.renderTestBlocksBlock(report);
+}
+
+function buildGitShasBlock(files) {
+  const engine = getGitShas();
+  if (!engine || typeof engine.buildGitShasForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildGitShasForFiles(list);
+  return engine.renderGitShasBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -5360,6 +5428,10 @@ module.exports = {
   buildDbConnStringsBlock,
   buildGraphqlOpsBlock,
   buildGrpcRefsBlock,
+  buildStackTracesBlock,
+  buildEnvNamesBlock,
+  buildTestBlocksBlock,
+  buildGitShasBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
