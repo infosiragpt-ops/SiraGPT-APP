@@ -1441,6 +1441,30 @@ function getWikiRefs() {
   try { wikiRefsCache = require('./document-wiki-refs'); } catch { wikiRefsCache = null; }
   return wikiRefsCache;
 }
+let pubmedIdsCache = null;
+function getPubmedIds() {
+  if (pubmedIdsCache) return pubmedIdsCache;
+  try { pubmedIdsCache = require('./document-pubmed-ids'); } catch { pubmedIdsCache = null; }
+  return pubmedIdsCache;
+}
+let serviceAccountsCache = null;
+function getServiceAccounts() {
+  if (serviceAccountsCache) return serviceAccountsCache;
+  try { serviceAccountsCache = require('./document-service-accounts'); } catch { serviceAccountsCache = null; }
+  return serviceAccountsCache;
+}
+let vinNumbersCache = null;
+function getVinNumbers() {
+  if (vinNumbersCache) return vinNumbersCache;
+  try { vinNumbersCache = require('./document-vin-numbers'); } catch { vinNumbersCache = null; }
+  return vinNumbersCache;
+}
+let emojiShortcodesCache = null;
+function getEmojiShortcodes() {
+  if (emojiShortcodesCache) return emojiShortcodesCache;
+  try { emojiShortcodesCache = require('./document-emoji-shortcodes'); } catch { emojiShortcodesCache = null; }
+  return emojiShortcodesCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -3011,6 +3035,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const doiIdsBlock = buildDoiIdsBlock(files);
   const orcidIdsBlock = buildOrcidIdsBlock(files);
   const wikiRefsBlock = buildWikiRefsBlock(files);
+  const pubmedIdsBlock = buildPubmedIdsBlock(files);
+  const serviceAccountsBlock = buildServiceAccountsBlock(files);
+  const vinNumbersBlock = buildVinNumbersBlock(files);
+  const emojiShortcodesBlock = buildEmojiShortcodesBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -3245,6 +3273,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     doiIdsBlock,
     orcidIdsBlock,
     wikiRefsBlock,
+    pubmedIdsBlock,
+    serviceAccountsBlock,
+    vinNumbersBlock,
+    emojiShortcodesBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -5979,6 +6011,42 @@ function buildWikiRefsBlock(files) {
   return engine.renderWikiRefsBlock(report);
 }
 
+function buildPubmedIdsBlock(files) {
+  const engine = getPubmedIds();
+  if (!engine || typeof engine.buildPubmedIdsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildPubmedIdsForFiles(list);
+  return engine.renderPubmedIdsBlock(report);
+}
+
+function buildServiceAccountsBlock(files) {
+  const engine = getServiceAccounts();
+  if (!engine || typeof engine.buildServiceAccountsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildServiceAccountsForFiles(list);
+  return engine.renderServiceAccountsBlock(report);
+}
+
+function buildVinNumbersBlock(files) {
+  const engine = getVinNumbers();
+  if (!engine || typeof engine.buildVinNumbersForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildVinNumbersForFiles(list);
+  return engine.renderVinNumbersBlock(report);
+}
+
+function buildEmojiShortcodesBlock(files) {
+  const engine = getEmojiShortcodes();
+  if (!engine || typeof engine.buildEmojiShortcodesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildEmojiShortcodesForFiles(list);
+  return engine.renderEmojiShortcodesBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -6368,6 +6436,10 @@ module.exports = {
   buildDoiIdsBlock,
   buildOrcidIdsBlock,
   buildWikiRefsBlock,
+  buildPubmedIdsBlock,
+  buildServiceAccountsBlock,
+  buildVinNumbersBlock,
+  buildEmojiShortcodesBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
