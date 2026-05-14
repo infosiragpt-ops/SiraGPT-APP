@@ -1465,6 +1465,30 @@ function getEmojiShortcodes() {
   try { emojiShortcodesCache = require('./document-emoji-shortcodes'); } catch { emojiShortcodesCache = null; }
   return emojiShortcodesCache;
 }
+let bibtexEntriesCache = null;
+function getBibtexEntries() {
+  if (bibtexEntriesCache) return bibtexEntriesCache;
+  try { bibtexEntriesCache = require('./document-bibtex-entries'); } catch { bibtexEntriesCache = null; }
+  return bibtexEntriesCache;
+}
+let latexCommandsCache = null;
+function getLatexCommands() {
+  if (latexCommandsCache) return latexCommandsCache;
+  try { latexCommandsCache = require('./document-latex-commands'); } catch { latexCommandsCache = null; }
+  return latexCommandsCache;
+}
+let progLangsCache = null;
+function getProgLangs() {
+  if (progLangsCache) return progLangsCache;
+  try { progLangsCache = require('./document-prog-langs'); } catch { progLangsCache = null; }
+  return progLangsCache;
+}
+let complianceRefsCache = null;
+function getComplianceRefs() {
+  if (complianceRefsCache) return complianceRefsCache;
+  try { complianceRefsCache = require('./document-compliance-refs'); } catch { complianceRefsCache = null; }
+  return complianceRefsCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -3039,6 +3063,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const serviceAccountsBlock = buildServiceAccountsBlock(files);
   const vinNumbersBlock = buildVinNumbersBlock(files);
   const emojiShortcodesBlock = buildEmojiShortcodesBlock(files);
+  const bibtexEntriesBlock = buildBibtexEntriesBlock(files);
+  const latexCommandsBlock = buildLatexCommandsBlock(files);
+  const progLangsBlock = buildProgLangsBlock(files);
+  const complianceRefsBlock = buildComplianceRefsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -3277,6 +3305,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     serviceAccountsBlock,
     vinNumbersBlock,
     emojiShortcodesBlock,
+    bibtexEntriesBlock,
+    latexCommandsBlock,
+    progLangsBlock,
+    complianceRefsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -6047,6 +6079,42 @@ function buildEmojiShortcodesBlock(files) {
   return engine.renderEmojiShortcodesBlock(report);
 }
 
+function buildBibtexEntriesBlock(files) {
+  const engine = getBibtexEntries();
+  if (!engine || typeof engine.buildBibtexEntriesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildBibtexEntriesForFiles(list);
+  return engine.renderBibtexEntriesBlock(report);
+}
+
+function buildLatexCommandsBlock(files) {
+  const engine = getLatexCommands();
+  if (!engine || typeof engine.buildLatexCommandsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildLatexCommandsForFiles(list);
+  return engine.renderLatexCommandsBlock(report);
+}
+
+function buildProgLangsBlock(files) {
+  const engine = getProgLangs();
+  if (!engine || typeof engine.buildProgLangsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildProgLangsForFiles(list);
+  return engine.renderProgLangsBlock(report);
+}
+
+function buildComplianceRefsBlock(files) {
+  const engine = getComplianceRefs();
+  if (!engine || typeof engine.buildComplianceRefsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildComplianceRefsForFiles(list);
+  return engine.renderComplianceRefsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -6440,6 +6508,10 @@ module.exports = {
   buildServiceAccountsBlock,
   buildVinNumbersBlock,
   buildEmojiShortcodesBlock,
+  buildBibtexEntriesBlock,
+  buildLatexCommandsBlock,
+  buildProgLangsBlock,
+  buildComplianceRefsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
