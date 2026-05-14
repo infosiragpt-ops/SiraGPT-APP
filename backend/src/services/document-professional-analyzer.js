@@ -913,6 +913,30 @@ function getTaxa() {
   try { taxaCache = require('./document-taxa'); } catch { taxaCache = null; }
   return taxaCache;
 }
+let chemistryCache = null;
+function getChemistry() {
+  if (chemistryCache) return chemistryCache;
+  try { chemistryCache = require('./document-chemistry'); } catch { chemistryCache = null; }
+  return chemistryCache;
+}
+let fxRatesCache = null;
+function getFxRates() {
+  if (fxRatesCache) return fxRatesCache;
+  try { fxRatesCache = require('./document-fx-rates'); } catch { fxRatesCache = null; }
+  return fxRatesCache;
+}
+let ibanSwiftCache = null;
+function getIbanSwift() {
+  if (ibanSwiftCache) return ibanSwiftCache;
+  try { ibanSwiftCache = require('./document-iban-swift'); } catch { ibanSwiftCache = null; }
+  return ibanSwiftCache;
+}
+let licensePlatesCache = null;
+function getLicensePlates() {
+  if (licensePlatesCache) return licensePlatesCache;
+  try { licensePlatesCache = require('./document-license-plates'); } catch { licensePlatesCache = null; }
+  return licensePlatesCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -2395,6 +2419,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const weatherBlock = buildWeatherBlock(files);
   const scientificNotationBlock = buildScientificNotationBlock(files);
   const taxaBlock = buildTaxaBlock(files);
+  const chemistryBlock = buildChemistryBlock(files);
+  const fxRatesBlock = buildFxRatesBlock(files);
+  const ibanSwiftBlock = buildIbanSwiftBlock(files);
+  const licensePlatesBlock = buildLicensePlatesBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -2541,6 +2569,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     weatherBlock,
     scientificNotationBlock,
     taxaBlock,
+    chemistryBlock,
+    fxRatesBlock,
+    ibanSwiftBlock,
+    licensePlatesBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -4463,6 +4495,46 @@ function buildTaxaBlock(files) {
   return engine.renderTaxaBlock(report);
 }
 
+/** Chemistry block — molecular formulas + element names. */
+function buildChemistryBlock(files) {
+  const engine = getChemistry();
+  if (!engine || typeof engine.buildChemistryForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildChemistryForFiles(list);
+  return engine.renderChemistryBlock(report);
+}
+
+/** FX rates block — currency pair rates + equation + labeled. */
+function buildFxRatesBlock(files) {
+  const engine = getFxRates();
+  if (!engine || typeof engine.buildFxRatesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildFxRatesForFiles(list);
+  return engine.renderFxRatesBlock(report);
+}
+
+/** IBAN/SWIFT block — international banking codes. */
+function buildIbanSwiftBlock(files) {
+  const engine = getIbanSwift();
+  if (!engine || typeof engine.buildIbanSwiftForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildIbanSwiftForFiles(list);
+  return engine.renderIbanSwiftBlock(report);
+}
+
+/** License plates block — US/UK/MX/ES/labeled vehicle plates. */
+function buildLicensePlatesBlock(files) {
+  const engine = getLicensePlates();
+  if (!engine || typeof engine.buildLicensePlatesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildLicensePlatesForFiles(list);
+  return engine.renderLicensePlatesBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -4764,6 +4836,10 @@ module.exports = {
   buildWeatherBlock,
   buildScientificNotationBlock,
   buildTaxaBlock,
+  buildChemistryBlock,
+  buildFxRatesBlock,
+  buildIbanSwiftBlock,
+  buildLicensePlatesBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
