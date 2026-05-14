@@ -1478,7 +1478,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     } catch (error) {
       console.error("Failed to clear chat:", error)
     }
-  }, [currentChat, token, selectedModel, availableModels])
+  }, [currentChat, token])
 
   const deleteChat = useCallback(
     async (chatId: string) => {
