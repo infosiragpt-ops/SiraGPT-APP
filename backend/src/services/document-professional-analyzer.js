@@ -1561,6 +1561,30 @@ function getDmsCoords() {
   try { dmsCoordsCache = require('./document-dms-coords'); } catch { dmsCoordsCache = null; }
   return dmsCoordsCache;
 }
+let containerRegistriesCache = null;
+function getContainerRegistries() {
+  if (containerRegistriesCache) return containerRegistriesCache;
+  try { containerRegistriesCache = require('./document-container-registries'); } catch { containerRegistriesCache = null; }
+  return containerRegistriesCache;
+}
+let wktGeometryCache = null;
+function getWktGeometry() {
+  if (wktGeometryCache) return wktGeometryCache;
+  try { wktGeometryCache = require('./document-wkt-geometry'); } catch { wktGeometryCache = null; }
+  return wktGeometryCache;
+}
+let mdRefLinksCache = null;
+function getMdRefLinks() {
+  if (mdRefLinksCache) return mdRefLinksCache;
+  try { mdRefLinksCache = require('./document-md-ref-links'); } catch { mdRefLinksCache = null; }
+  return mdRefLinksCache;
+}
+let botTokensCache = null;
+function getBotTokens() {
+  if (botTokensCache) return botTokensCache;
+  try { botTokensCache = require('./document-bot-tokens'); } catch { botTokensCache = null; }
+  return botTokensCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -3151,6 +3175,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const browserSupportBlock = buildBrowserSupportBlock(files);
   const numberBasesBlock = buildNumberBasesBlock(files);
   const dmsCoordsBlock = buildDmsCoordsBlock(files);
+  const containerRegistriesBlock = buildContainerRegistriesBlock(files);
+  const wktGeometryBlock = buildWktGeometryBlock(files);
+  const mdRefLinksBlock = buildMdRefLinksBlock(files);
+  const botTokensBlock = buildBotTokensBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -3405,6 +3433,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     browserSupportBlock,
     numberBasesBlock,
     dmsCoordsBlock,
+    containerRegistriesBlock,
+    wktGeometryBlock,
+    mdRefLinksBlock,
+    botTokensBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -6319,6 +6351,42 @@ function buildDmsCoordsBlock(files) {
   return engine.renderDmsCoordsBlock(report);
 }
 
+function buildContainerRegistriesBlock(files) {
+  const engine = getContainerRegistries();
+  if (!engine || typeof engine.buildContainerRegistriesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildContainerRegistriesForFiles(list);
+  return engine.renderContainerRegistriesBlock(report);
+}
+
+function buildWktGeometryBlock(files) {
+  const engine = getWktGeometry();
+  if (!engine || typeof engine.buildWktGeometryForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildWktGeometryForFiles(list);
+  return engine.renderWktGeometryBlock(report);
+}
+
+function buildMdRefLinksBlock(files) {
+  const engine = getMdRefLinks();
+  if (!engine || typeof engine.buildMdRefLinksForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildMdRefLinksForFiles(list);
+  return engine.renderMdRefLinksBlock(report);
+}
+
+function buildBotTokensBlock(files) {
+  const engine = getBotTokens();
+  if (!engine || typeof engine.buildBotTokensForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildBotTokensForFiles(list);
+  return engine.renderBotTokensBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -6728,6 +6796,10 @@ module.exports = {
   buildBrowserSupportBlock,
   buildNumberBasesBlock,
   buildDmsCoordsBlock,
+  buildContainerRegistriesBlock,
+  buildWktGeometryBlock,
+  buildMdRefLinksBlock,
+  buildBotTokensBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
