@@ -1033,6 +1033,30 @@ function getMetrics() {
   try { metricsCache = require('./document-metrics'); } catch { metricsCache = null; }
   return metricsCache;
 }
+let oauthScopesCache = null;
+function getOauthScopes() {
+  if (oauthScopesCache) return oauthScopesCache;
+  try { oauthScopesCache = require('./document-oauth-scopes'); } catch { oauthScopesCache = null; }
+  return oauthScopesCache;
+}
+let cspDirectivesCache = null;
+function getCspDirectives() {
+  if (cspDirectivesCache) return cspDirectivesCache;
+  try { cspDirectivesCache = require('./document-csp-directives'); } catch { cspDirectivesCache = null; }
+  return cspDirectivesCache;
+}
+let mathOperatorsCache = null;
+function getMathOperators() {
+  if (mathOperatorsCache) return mathOperatorsCache;
+  try { mathOperatorsCache = require('./document-math-operators'); } catch { mathOperatorsCache = null; }
+  return mathOperatorsCache;
+}
+let spdxComplexCache = null;
+function getSpdxComplex() {
+  if (spdxComplexCache) return spdxComplexCache;
+  try { spdxComplexCache = require('./document-spdx-complex'); } catch { spdxComplexCache = null; }
+  return spdxComplexCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -2535,6 +2559,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const containerRefsBlock = buildContainerRefsBlock(files);
   const k8sRefsBlock = buildK8sRefsBlock(files);
   const metricsBlock = buildMetricsBlock(files);
+  const oauthScopesBlock = buildOauthScopesBlock(files);
+  const cspDirectivesBlock = buildCspDirectivesBlock(files);
+  const mathOperatorsBlock = buildMathOperatorsBlock(files);
+  const spdxComplexBlock = buildSpdxComplexBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -2701,6 +2729,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     containerRefsBlock,
     k8sRefsBlock,
     metricsBlock,
+    oauthScopesBlock,
+    cspDirectivesBlock,
+    mathOperatorsBlock,
+    spdxComplexBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -4823,6 +4855,42 @@ function buildMetricsBlock(files) {
   return engine.renderMetricsBlock(report);
 }
 
+function buildOauthScopesBlock(files) {
+  const engine = getOauthScopes();
+  if (!engine || typeof engine.buildOauthScopesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildOauthScopesForFiles(list);
+  return engine.renderOauthScopesBlock(report);
+}
+
+function buildCspDirectivesBlock(files) {
+  const engine = getCspDirectives();
+  if (!engine || typeof engine.buildCspDirectivesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildCspDirectivesForFiles(list);
+  return engine.renderCspDirectivesBlock(report);
+}
+
+function buildMathOperatorsBlock(files) {
+  const engine = getMathOperators();
+  if (!engine || typeof engine.buildMathOperatorsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildMathOperatorsForFiles(list);
+  return engine.renderMathOperatorsBlock(report);
+}
+
+function buildSpdxComplexBlock(files) {
+  const engine = getSpdxComplex();
+  if (!engine || typeof engine.buildSpdxComplexForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildSpdxComplexForFiles(list);
+  return engine.renderSpdxComplexBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -5144,6 +5212,10 @@ module.exports = {
   buildContainerRefsBlock,
   buildK8sRefsBlock,
   buildMetricsBlock,
+  buildOauthScopesBlock,
+  buildCspDirectivesBlock,
+  buildMathOperatorsBlock,
+  buildSpdxComplexBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
