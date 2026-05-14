@@ -100,6 +100,12 @@ export function mergeMessagesPreservingUserContent<TMessage extends ChatMessageL
     if (isUserMessage(message)) localUsersByOrdinal.push(message);
   }
 
+  // Pre-index local assistants by ordinal for Pass 1b (below).
+  const localAssistantsByOrdinal: TMessage[] = [];
+  for (const message of localMessages) {
+    if (message?.role && !isUserMessage(message)) localAssistantsByOrdinal.push(message);
+  }
+
   // Pass 1 - preserve content of user messages that survived the server round-trip.
   // Hardened against the "text shrinks to empty" regression: when looking for
   // a local match we now also try matching by content prefix (recovers across
@@ -108,43 +114,70 @@ export function mergeMessagesPreservingUserContent<TMessage extends ChatMessageL
   // - user input is immutable from the user's POV, so the most-detailed
   // version we ever rendered must survive.
   let userOrdinal = -1;
+  let asstOrdinal = -1;
   const enriched: TMessage[] = incomingMessages.map((incoming) => {
-    if (!isUserMessage(incoming)) return incoming;
+    if (isUserMessage(incoming)) {
+      userOrdinal += 1;
+      let localMatch: TMessage | undefined =
+        (incoming.id ? localById.get(incoming.id) : undefined) ||
+        localUsersByOrdinal[userOrdinal];
 
-    userOrdinal += 1;
-    let localMatch: TMessage | undefined =
-      (incoming.id ? localById.get(incoming.id) : undefined) ||
-      localUsersByOrdinal[userOrdinal];
-
-    // Extra match attempt: same-content user message anywhere in local.
-    // Catches the case where ordinal alignment is off because the server
-    // returned more or fewer user messages than the local snapshot.
-    if (!localMatch) {
-      const incomingText = asText(incoming.content).trim();
-      if (incomingText) {
-        localMatch = localUsersByOrdinal.find(l => sameUserContent(l, incoming));
+      // Extra match attempt: same-content user message anywhere in local.
+      // Catches the case where ordinal alignment is off because the server
+      // returned more or fewer user messages than the local snapshot.
+      if (!localMatch) {
+        const incomingText = asText(incoming.content).trim();
+        if (incomingText) {
+          localMatch = localUsersByOrdinal.find(l => sameUserContent(l, incoming));
+        }
       }
+
+      if (!localMatch) return incoming;
+
+      const next: TMessage = { ...incoming };
+
+      const incomingText = asText(next.content);
+      const localText = asText(localMatch.content);
+      // Defensive: pick the LONGER non-empty content. This prevents the
+      // "text disappears after assistant responds" regression where a
+      // server refresh returned the same user turn with content="" while
+      // local still had the original text.
+      if (hasText(localText) && (!hasText(incomingText) || localText.length > incomingText.length)) {
+        next.content = localText as TMessage['content'];
+      }
+
+      if (shouldPreserveLocalFiles(next.files, localMatch.files)) {
+        next.files = localMatch.files as TMessage['files'];
+      }
+
+      return next;
     }
 
-    if (!localMatch) return incoming;
+    // ── Pass 1b - preserve assistant content / files when the server's
+    // copy is empty (mid-persistence race). Mirrors the user-side
+    // logic above: if local rendered a real answer and the refresh
+    // arrived before the backend finished saving, keep the local
+    // content so the bubble doesn't flash and vanish.
+    if (incoming?.role) {
+      asstOrdinal += 1;
+      const localMatch: TMessage | undefined =
+        (incoming.id ? localById.get(incoming.id) : undefined) ||
+        localAssistantsByOrdinal[asstOrdinal];
+      if (!localMatch) return incoming;
 
-    const next: TMessage = { ...incoming };
-
-    const incomingText = asText(next.content);
-    const localText = asText(localMatch.content);
-    // Defensive: pick the LONGER non-empty content. This prevents the
-    // "text disappears after assistant responds" regression where a
-    // server refresh returned the same user turn with content="" while
-    // local still had the original text.
-    if (hasText(localText) && (!hasText(incomingText) || localText.length > incomingText.length)) {
-      next.content = localText as TMessage['content'];
+      const next: TMessage = { ...incoming };
+      const incomingText = asText(next.content);
+      const localText = asText(localMatch.content);
+      if (hasText(localText) && !hasText(incomingText)) {
+        next.content = localText as TMessage['content'];
+      }
+      if (shouldPreserveLocalFiles(next.files, localMatch.files)) {
+        next.files = localMatch.files as TMessage['files'];
+      }
+      return next;
     }
 
-    if (shouldPreserveLocalFiles(next.files, localMatch.files)) {
-      next.files = localMatch.files as TMessage['files'];
-    }
-
-    return next;
+    return incoming;
   });
 
   // Pass 2 - re-insert any local user message that was DROPPED by the server.
@@ -211,7 +244,10 @@ export function mergeMessagesPreservingUserContent<TMessage extends ChatMessageL
     }
     result.splice(insertIdx, 0, message);
   }
-  return result;
+  // Pass 3 - tail-preserve recent assistant turns. See
+  // preserveOrphanAssistantMessages for the rationale (closes the
+  // "answer flashes then disappears" race after stream completion).
+  return preserveOrphanAssistantMessages(result, localMessages);
 }
 
 export function mergeChatPreservingUserMessages<TChat extends ChatLike>(
@@ -229,4 +265,55 @@ export function mergeChatPreservingUserMessages<TChat extends ChatLike>(
       localChat.messages || [],
     ),
   };
+}
+
+/**
+ * Pass 3 - preserve LOCAL assistant messages the server hasn't echoed
+ * back yet. Closes the "answer flashes then disappears" race:
+ *
+ *   1. Stream completes → optimistic assistant message added locally
+ *   2. selectChat() refreshes from API while the backend is still
+ *      persisting the turn
+ *   3. Server response is missing the freshly-completed assistant turn
+ *   4. Without this pass, the merge silently drops the local message
+ *      and the bubble vanishes from the user's screen
+ *
+ * The orphan match is purely positional: a local assistant turn
+ * counts as orphan when its index is BEYOND the count of assistant
+ * turns the server returned (i.e. "the last one or two we added that
+ * the server hasn't caught up on yet"). We never re-insert older
+ * assistant messages — if the server now lists 5 assistants and local
+ * has 6, only #6 (the orphan tail) is preserved. The next refresh
+ * will then have an authoritative #6 from the server and we'll match
+ * it by id/content, so no duplication.
+ */
+export function preserveOrphanAssistantMessages<TMessage extends ChatMessageLike>(
+  enriched: TMessage[],
+  localMessages: TMessage[],
+): TMessage[] {
+  if (!localMessages.length) return enriched;
+
+  const incomingAssistantCount = enriched.filter(m => m?.role && !isUserMessage(m)).length;
+  const localAssistants: TMessage[] = [];
+  for (const m of localMessages) {
+    if (m?.role && !isUserMessage(m)) localAssistants.push(m);
+  }
+  if (localAssistants.length <= incomingAssistantCount) return enriched;
+
+  const incomingIds = new Set<string>();
+  for (const m of enriched) {
+    if (m?.id && m?.role && !isUserMessage(m)) incomingIds.add(String(m.id));
+  }
+
+  const orphans = localAssistants.slice(incomingAssistantCount).filter((local) => {
+    if (!local) return false;
+    // Skip orphans whose id already exists incoming (paranoid dedupe).
+    if (local.id && incomingIds.has(String(local.id))) return false;
+    // Empty / placeholder messages aren't worth preserving — the next
+    // refresh will surface the real content.
+    return hasText(local.content) || hasFiles(local.files);
+  });
+
+  if (orphans.length === 0) return enriched;
+  return [...enriched, ...orphans];
 }

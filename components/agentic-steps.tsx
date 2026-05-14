@@ -28,6 +28,7 @@ import {
 import type { DocumentPreviewTarget } from "@/components/document-preview"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
+import { ThinkingPlaceholder } from "@/components/thinking-placeholder"
 interface Props {
   state: AgentTaskState
   className?: string
@@ -372,8 +373,28 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview }: Pr
   const canRetry = Boolean(taskId && (state.error || summary.status === "cancelled"))
   const hasDeliverable = (state.artifacts?.length || 0) > 0
   const latestCheckpoint = state.checkpoints?.[state.checkpoints.length - 1]
-  const isLiveActivity = Boolean(!state.done && !state.error)
+
+  // ── Stale-stream guard ───────────────────────────────────────────
+  // A page navigation or a backend crash can leave the persisted
+  // state stuck at `done=false` even after the user's stream visibly
+  // stopped (the composer's Stop button is already disabled on the
+  // client). Without this guard the bubble would keep showing the
+  // "pensando" placeholder forever. We arm a 90 s timer per render
+  // of a live state — if the component is still mounted with
+  // !state.done && !state.error after that, downgrade the local view
+  // to "stale". The persisted JSON is untouched; the next event
+  // delta would re-arm the live view.
+  const [stale, setStale] = React.useState(false)
+  React.useEffect(() => {
+    setStale(false)
+    if (state.done || state.error) return
+    const id = window.setTimeout(() => setStale(true), 90_000)
+    return () => window.clearTimeout(id)
+  }, [state.done, state.error, state.steps.length])
+
+  const isLiveActivity = Boolean(!state.done && !state.error && !stale)
   const isCompletedActivity = Boolean(state.done && !state.error)
+  const isStaleActivity = Boolean(stale && !state.done && !state.error)
 
   const cancelTask = React.useCallback(async () => {
     if (!taskId || cancelling) return
@@ -418,91 +439,61 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview }: Pr
     )
   }
 
-  if (isLiveActivity) {
-    // Live state: a focused, minimal card. We surface only what the
-    // user actually needs while the agent is working — current stage
-    // label, step/tool counters and a single "cancel" affordance.
-    // Past steps are intentionally hidden (per UX decision) so the
-    // chat surface stays clean.
-    const stageLabel = runningTimelineStep
-      ? professionalStepLabel({
-          id: runningTimelineStep.id,
-          label: runningTimelineStep.label,
-          status: "running",
-        } as AgentTaskState["steps"][number])
-      : summary.label
-    const stageDetail = runningTimelineStep?.detail
-      ? sanitizeAgentText(runningTimelineStep.detail)
-      : summary.description
+  if (isStaleActivity) {
+    // Stream went quiet (≥ 90 s) without a done/error event. The
+    // composer's Stop button has long since cleared, so showing the
+    // animated placeholder is a lie. Surface a minimal, recoverable
+    // state instead so the user can retry or move on.
+    return (
+      <div className={cn("my-2 flex flex-wrap items-center gap-2 text-[12.5px] text-muted-foreground", className)}>
+        <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
+        <span>El asistente dejó de responder. Intenta reformular o reintentar.</span>
+        {canCancel && (
+          <button
+            type="button"
+            onClick={cancelTask}
+            disabled={cancelling}
+            className="ml-1 inline-flex h-6 items-center gap-1 rounded-full border border-border/55 px-2 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground disabled:opacity-60"
+            aria-label="Cancelar tarea"
+          >
+            {cancelling ? <ThinkingIndicator size="xs" /> : <Ban className="h-3 w-3" />}
+            Cancelar
+          </button>
+        )}
+      </div>
+    )
+  }
 
+  if (isLiveActivity) {
+    // Live state — simplified per design directive: render ONLY the
+    // 3-bar pensando SVG inline with the rest of the chat. No status
+    // pill, no stage label, no step counters, no inline progress bar.
+    // Past steps and intermediate stage labels are intentionally
+    // suppressed (user wanted the chat surface to stay clean —
+    // identical visual language to a regular streaming text answer).
+    // The Stop affordance at the composer dock is the canonical way
+    // to cancel; we keep a tiny secondary "Cancelar" button only when
+    // the task carries a `taskId` (server-side cancel path).
     return (
       <div
         role="status"
         aria-live="polite"
-        className={cn(
-          "my-2 w-full max-w-2xl rounded-2xl border border-border/60 bg-background/80 p-3 shadow-sm backdrop-blur-sm",
-          className,
-        )}
+        aria-label="Generando respuesta"
+        className={cn("my-1 flex items-center gap-2", className)}
       >
-        <div className="flex items-start gap-3">
-          <div className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted/50">
-            <span aria-hidden="true" className="absolute inset-0 animate-ping rounded-full bg-primary/15" />
-            <span aria-hidden="true" className="absolute inset-0 rounded-full ring-1 ring-primary/40" />
-            <ThinkingIndicator size="sm" className="relative text-primary" />
-          </div>
-
-          <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-            <div className="flex flex-wrap items-center gap-2">
-              <StatusPill status={summary.status} label={summary.label} phase={activePhase} />
-              {state.documentPolicy && state.documentPolicy.mode !== "chat_only" && (
-                <span className="inline-flex items-center gap-1 rounded-full border border-border/60 bg-background px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                  <FileText className="h-3 w-3" />
-                  {state.documentPolicy.format}
-                </span>
-              )}
-            </div>
-
-            <p className="truncate text-sm font-medium text-foreground">{stageLabel}</p>
-            {stageDetail && stageDetail !== stageLabel && (
-              <p className="line-clamp-1 text-xs text-muted-foreground">{stageDetail}</p>
-            )}
-
-            <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-muted/60" aria-hidden="true">
-              <div className="h-full w-1/3 animate-[liveAgentProgress_1.6s_ease-in-out_infinite] rounded-full bg-primary/70" />
-            </div>
-
-            <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
-              <span>{plural(summary.stepCount, "paso", "pasos")}</span>
-              {summary.toolCount > 0 && <span>{plural(summary.toolCount, "herramienta", "herramientas")}</span>}
-              {summary.validationTotal > 0 && (
-                <span>
-                  {summary.validationPassed}/{summary.validationTotal} validaciones
-                </span>
-              )}
-            </div>
-          </div>
-
-          {canCancel && (
-            <button
-              type="button"
-              onClick={cancelTask}
-              disabled={cancelling}
-              className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-border/60 px-2.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60"
-              aria-label="Cancelar tarea agéntica"
-            >
-              {cancelling ? <ThinkingIndicator size="xs" /> : <Ban className="h-3 w-3" />}
-              Cancelar
-            </button>
-          )}
-        </div>
-
-        <style jsx>{`
-          @keyframes liveAgentProgress {
-            0% { transform: translateX(-100%); }
-            50% { transform: translateX(120%); }
-            100% { transform: translateX(280%); }
-          }
-        `}</style>
+        <ThinkingPlaceholder compact />
+        {canCancel && (
+          <button
+            type="button"
+            onClick={cancelTask}
+            disabled={cancelling}
+            className="ml-1 inline-flex h-6 shrink-0 items-center gap-1 rounded-full border border-border/55 px-2 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground disabled:opacity-60"
+            aria-label="Cancelar tarea"
+          >
+            {cancelling ? <ThinkingIndicator size="xs" /> : <Ban className="h-3 w-3" />}
+            Cancelar
+          </button>
+        )}
       </div>
     )
   }

@@ -1658,16 +1658,43 @@ const ActiveOptionsDisplay = ({
                       {longPasteMeta?.title || file.name}
                     </span>
                     {longPasteMeta && !isUploading && !isFailed && (
-                      <button
-                        type="button"
-                        className="mt-0.5 w-fit text-left text-[11px] leading-none text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          restoreLongPasteToInput?.(file, index);
-                        }}
-                      >
-                        Mostrar en el campo de texto ›
-                      </button>
+                      <div className="mt-0.5 flex items-center gap-2 text-[11px] leading-tight text-muted-foreground">
+                        {/* Solid stats so the user can verify the
+                            paste was captured fully — char/word count
+                            + detected content kind. Without these the
+                            chip reads as a blob with no provenance. */}
+                        <span className="tabular-nums">
+                          {Intl.NumberFormat('es').format(longPasteMeta.originalCharCount || 0)} car.
+                        </span>
+                        {longPasteMeta.originalWordCount > 0 && (
+                          <>
+                            <span aria-hidden>·</span>
+                            <span className="tabular-nums">
+                              {Intl.NumberFormat('es').format(longPasteMeta.originalWordCount)} pal.
+                            </span>
+                          </>
+                        )}
+                        {longPasteMeta.contentKind && longPasteMeta.contentKind !== 'prose' && (
+                          <>
+                            <span aria-hidden>·</span>
+                            <span className="uppercase tracking-wider text-[10px]">
+                              {longPasteMeta.contentKind}
+                            </span>
+                          </>
+                        )}
+                        <button
+                          type="button"
+                          className="ml-auto inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 underline-offset-2 hover:bg-muted/60 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            restoreLongPasteToInput?.(file, index);
+                          }}
+                          aria-label="Restaurar el texto al campo del composer"
+                          title="Restaurar al campo de texto"
+                        >
+                          Restaurar ↩
+                        </button>
+                      </div>
                     )}
                     {!isUploading && !isFailed && file.id && !longPasteMeta && (
                       <div className="mt-0.5">

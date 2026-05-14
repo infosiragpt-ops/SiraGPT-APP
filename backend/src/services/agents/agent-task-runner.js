@@ -225,6 +225,24 @@ function wantsSingleParagraphAnswer(request) {
   );
 }
 
+/**
+ * Only emit bullet lists when the user explicitly asked for them.
+ * Spanish triggers: "bullets", "viñetas", "vinetas", "lista", "puntos
+ * clave", "key points", "checklist". Prose is the default — matches
+ * the user-facing directive "análisis de documentos sin viñetas".
+ */
+function wantsBulletList(request) {
+  const value = normalizedKey(request);
+  return (
+    /\bvinetas?\b/.test(value) ||
+    /\bbullets?\b/.test(value) ||
+    /\blistas?\b/.test(value) ||
+    /\bpuntos?\s+(?:clave|principales)\b/.test(value) ||
+    /\bchecklist\b/.test(value) ||
+    /\benumera(?:r|cion)?\b/.test(value)
+  );
+}
+
 function buildAttachmentGroundedFallbackAnswer({ goal, uploadedFileContext, reason = '' }) {
   const cleanedRaw = stripScaffolding(uploadedFileContext);
   const cleaned = normalizeAttachmentFallbackContent(cleanedRaw)
@@ -255,10 +273,18 @@ function buildAttachmentGroundedFallbackAnswer({ goal, uploadedFileContext, reas
     .map((sentence) => sentence.replace(/^[,;:\s]+/, '').replace(/\.{2,}/g, '.').trim())
     .filter(Boolean);
 
-  const executiveSummary = bulletSentences
-    .slice(0, Math.max(3, Math.min(5, bulletSentences.length)))
-    .map((sentence) => `- ${sentence.length > 360 ? `${sentence.slice(0, 360).trim()}...` : sentence}`)
-    .join('\n');
+  // Bullets are now opt-in. Default to prose; only emit list markers
+  // when the user explicitly asks for "viñetas / lista / puntos clave".
+  const allowBullets = wantsBulletList(request);
+  const executiveSummary = allowBullets
+    ? bulletSentences
+        .slice(0, Math.max(3, Math.min(5, bulletSentences.length)))
+        .map((sentence) => `- ${sentence.length > 360 ? `${sentence.slice(0, 360).trim()}...` : sentence}`)
+        .join('\n')
+    : bulletSentences
+        .slice(0, Math.max(3, Math.min(5, bulletSentences.length)))
+        .map((sentence) => sentence.length > 360 ? `${sentence.slice(0, 360).trim()}...` : sentence)
+        .join(' ');
 
   if (wantsSingleParagraphAnswer(request)) {
     const selected = (bulletSentences.length ? bulletSentences : sentences)
@@ -275,15 +301,23 @@ function buildAttachmentGroundedFallbackAnswer({ goal, uploadedFileContext, reas
     const body = sentences.slice(0, Math.max(4, paragraphCount * 2)).join(' ');
     const clippedBody = body.length > 1800 ? `${body.slice(0, 1800).trim()}...` : body;
     if (wantsSummary || wantsRecommendations) {
-      return [
-        '### Análisis del documento adjunto',
-        '',
-        executiveSummary ? `**Resumen ejecutivo**\n${executiveSummary}` : clippedBody,
-        wantsRecommendations
+      // When the user didn't ask for bullets we render the executive
+      // summary as a normal paragraph (`Resumen ejecutivo: prose…`).
+      // Recommendations also become a final prose sentence, not a
+      // list, so the whole answer stays bullet-free unless the user
+      // opts in via wantsBulletList.
+      const heading = '### Análisis del documento adjunto';
+      const summaryBlock = executiveSummary
+        ? allowBullets
+          ? `**Resumen ejecutivo**\n${executiveSummary}`
+          : `**Resumen ejecutivo.** ${executiveSummary}`
+        : clippedBody;
+      const recommendationsBlock = wantsRecommendations
+        ? allowBullets
           ? '\n**Siguiente paso recomendado**\n- Usar estos hallazgos como base y pedirme una matriz, informe Word/PDF o tabla comparativa si necesitas entregable descargable.'
-          : '',
-        note,
-      ].filter(Boolean).join('\n');
+          : '\n**Siguiente paso recomendado.** Usa estos hallazgos como base y pídeme una matriz, informe Word/PDF o tabla comparativa si necesitas un entregable descargable.'
+        : '';
+      return [heading, '', summaryBlock, recommendationsBlock, note].filter(Boolean).join('\n');
     }
     return `${clippedBody}${note}`;
   }
@@ -303,11 +337,16 @@ function buildAttachmentGroundedFallbackAnswer({ goal, uploadedFileContext, reas
     if (group.length === 0) break;
     paragraphs.push(`${connectors[index] || 'Ademas,'} ${group.join(' ')}`);
   }
+  const evidenceBlock = executiveSummary
+    ? allowBullets
+      ? `\n**Evidencia base usada**\n${executiveSummary}`
+      : `\n**Evidencia base usada.** ${executiveSummary}`
+    : '';
   return [
     '### Conclusiones basadas en el documento adjunto',
     '',
     paragraphs.join('\n\n'),
-    executiveSummary ? `\n**Evidencia base usada**\n${executiveSummary}` : '',
+    evidenceBlock,
     note,
   ].filter(Boolean).join('\n');
 }
