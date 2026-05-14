@@ -5919,7 +5919,7 @@ REWRITTEN TEXT:`;
           (file) => !file.type?.startsWith('image/')
         );
         if (hasNonImageFiles) {
-          toast.error("Only image files are allowed for this task.");
+          toast.error("Solo se permiten archivos de imagen para esta tarea.");
           // Note: The optimistic message is already shown. This is a trade-off.
           // A more complex implementation could remove the optimistic message on validation failure.
           return;

@@ -657,7 +657,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
 
     const handleViewFile = async (file: any) => {
         if (!file.id) {
-            toast.error("File ID is missing. Cannot fetch content.");
+            toast.error("Falta el ID del archivo. No se puede obtener el contenido.");
             return;
         }
         setSelectedFile(file);
@@ -669,7 +669,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
             setFileContent(content);
         } catch (error) {
             console.error("Failed to fetch file content:", error);
-            toast.error("Failed to load file content.");
+            toast.error("No se pudo cargar el contenido del archivo.");
             setFileContent("Error: Could not load file content.");
         } finally {
             setIsContentLoading(false);
@@ -863,10 +863,10 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
             // We only need to call editAndRegenerate, which now handles the API call.
             // The files are passed from the original message to be preserved.
             updateMessageInChat(message.id, editedContent, message.files);
-            toast.success("Message updated and regenerating response...");
+            toast.success("Mensaje actualizado, regenerando respuesta…");
             setIsEditing(false);
         } catch (error) {
-            toast.error("Failed to update message.");
+            toast.error("No se pudo actualizar el mensaje.");
         }
     };
 
@@ -984,7 +984,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                     setShowAudioPlayer(false);
                     setCurrentAudio(null);
                     setIsLoadingAudio(false);
-                    toast.error("Audio playback failed");
+                    toast.error("Falló la reproducción del audio");
                 };
 
                 audio.onpause = () => {
