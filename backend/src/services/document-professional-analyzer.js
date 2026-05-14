@@ -1657,6 +1657,30 @@ function getPermissionsApi() {
   try { permissionsApiCache = require('./document-permissions-api'); } catch { permissionsApiCache = null; }
   return permissionsApiCache;
 }
+let serverlessFnsCache = null;
+function getServerlessFns() {
+  if (serverlessFnsCache) return serverlessFnsCache;
+  try { serverlessFnsCache = require('./document-serverless-fns'); } catch { serverlessFnsCache = null; }
+  return serverlessFnsCache;
+}
+let dbMigrationsCache = null;
+function getDbMigrations() {
+  if (dbMigrationsCache) return dbMigrationsCache;
+  try { dbMigrationsCache = require('./document-db-migrations'); } catch { dbMigrationsCache = null; }
+  return dbMigrationsCache;
+}
+let eslintRulesCache = null;
+function getEslintRules() {
+  if (eslintRulesCache) return eslintRulesCache;
+  try { eslintRulesCache = require('./document-eslint-rules'); } catch { eslintRulesCache = null; }
+  return eslintRulesCache;
+}
+let buildToolsCache = null;
+function getBuildTools() {
+  if (buildToolsCache) return buildToolsCache;
+  try { buildToolsCache = require('./document-build-tools'); } catch { buildToolsCache = null; }
+  return buildToolsCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -3263,6 +3287,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const geojsonBlock = buildGeojsonBlock(files);
   const pwaManifestBlock = buildPwaManifestBlock(files);
   const permissionsApiBlock = buildPermissionsApiBlock(files);
+  const serverlessFnsBlock = buildServerlessFnsBlock(files);
+  const dbMigrationsBlock = buildDbMigrationsBlock(files);
+  const eslintRulesBlock = buildEslintRulesBlock(files);
+  const buildToolsBlock = buildBuildToolsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -3533,6 +3561,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     geojsonBlock,
     pwaManifestBlock,
     permissionsApiBlock,
+    serverlessFnsBlock,
+    dbMigrationsBlock,
+    eslintRulesBlock,
+    buildToolsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -6591,6 +6623,42 @@ function buildPermissionsApiBlock(files) {
   return engine.renderPermissionsApiBlock(report);
 }
 
+function buildServerlessFnsBlock(files) {
+  const engine = getServerlessFns();
+  if (!engine || typeof engine.buildServerlessFnsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildServerlessFnsForFiles(list);
+  return engine.renderServerlessFnsBlock(report);
+}
+
+function buildDbMigrationsBlock(files) {
+  const engine = getDbMigrations();
+  if (!engine || typeof engine.buildDbMigrationsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildDbMigrationsForFiles(list);
+  return engine.renderDbMigrationsBlock(report);
+}
+
+function buildEslintRulesBlock(files) {
+  const engine = getEslintRules();
+  if (!engine || typeof engine.buildEslintRulesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildEslintRulesForFiles(list);
+  return engine.renderEslintRulesBlock(report);
+}
+
+function buildBuildToolsBlock(files) {
+  const engine = getBuildTools();
+  if (!engine || typeof engine.buildBuildToolsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildBuildToolsForFiles(list);
+  return engine.renderBuildToolsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -7016,6 +7084,10 @@ module.exports = {
   buildGeojsonBlock,
   buildPwaManifestBlock,
   buildPermissionsApiBlock,
+  buildServerlessFnsBlock,
+  buildDbMigrationsBlock,
+  buildEslintRulesBlock,
+  buildBuildToolsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
