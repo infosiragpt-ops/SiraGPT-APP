@@ -1681,6 +1681,30 @@ function getBuildTools() {
   try { buildToolsCache = require('./document-build-tools'); } catch { buildToolsCache = null; }
   return buildToolsCache;
 }
+let jwtClaimsCache = null;
+function getJwtClaims() {
+  if (jwtClaimsCache) return jwtClaimsCache;
+  try { jwtClaimsCache = require('./document-jwt-claims'); } catch { jwtClaimsCache = null; }
+  return jwtClaimsCache;
+}
+let sriHashesCache = null;
+function getSriHashes() {
+  if (sriHashesCache) return sriHashesCache;
+  try { sriHashesCache = require('./document-sri-hashes'); } catch { sriHashesCache = null; }
+  return sriHashesCache;
+}
+let jsonSchemaCache = null;
+function getJsonSchema() {
+  if (jsonSchemaCache) return jsonSchemaCache;
+  try { jsonSchemaCache = require('./document-json-schema'); } catch { jsonSchemaCache = null; }
+  return jsonSchemaCache;
+}
+let prismaSchemaCache = null;
+function getPrismaSchema() {
+  if (prismaSchemaCache) return prismaSchemaCache;
+  try { prismaSchemaCache = require('./document-prisma-schema'); } catch { prismaSchemaCache = null; }
+  return prismaSchemaCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -3291,6 +3315,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const dbMigrationsBlock = buildDbMigrationsBlock(files);
   const eslintRulesBlock = buildEslintRulesBlock(files);
   const buildToolsBlock = buildBuildToolsBlock(files);
+  const jwtClaimsBlock = buildJwtClaimsBlock(files);
+  const sriHashesBlock = buildSriHashesBlock(files);
+  const jsonSchemaBlock = buildJsonSchemaBlock(files);
+  const prismaSchemaBlock = buildPrismaSchemaBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -3565,6 +3593,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     dbMigrationsBlock,
     eslintRulesBlock,
     buildToolsBlock,
+    jwtClaimsBlock,
+    sriHashesBlock,
+    jsonSchemaBlock,
+    prismaSchemaBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -6659,6 +6691,42 @@ function buildBuildToolsBlock(files) {
   return engine.renderBuildToolsBlock(report);
 }
 
+function buildJwtClaimsBlock(files) {
+  const engine = getJwtClaims();
+  if (!engine || typeof engine.buildJwtClaimsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildJwtClaimsForFiles(list);
+  return engine.renderJwtClaimsBlock(report);
+}
+
+function buildSriHashesBlock(files) {
+  const engine = getSriHashes();
+  if (!engine || typeof engine.buildSriHashesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildSriHashesForFiles(list);
+  return engine.renderSriHashesBlock(report);
+}
+
+function buildJsonSchemaBlock(files) {
+  const engine = getJsonSchema();
+  if (!engine || typeof engine.buildJsonSchemaForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildJsonSchemaForFiles(list);
+  return engine.renderJsonSchemaBlock(report);
+}
+
+function buildPrismaSchemaBlock(files) {
+  const engine = getPrismaSchema();
+  if (!engine || typeof engine.buildPrismaSchemaForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildPrismaSchemaForFiles(list);
+  return engine.renderPrismaSchemaBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -7088,6 +7156,10 @@ module.exports = {
   buildDbMigrationsBlock,
   buildEslintRulesBlock,
   buildBuildToolsBlock,
+  buildJwtClaimsBlock,
+  buildSriHashesBlock,
+  buildJsonSchemaBlock,
+  buildPrismaSchemaBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
