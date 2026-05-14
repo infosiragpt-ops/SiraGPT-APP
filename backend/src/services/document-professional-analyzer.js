@@ -1705,6 +1705,30 @@ function getPrismaSchema() {
   try { prismaSchemaCache = require('./document-prisma-schema'); } catch { prismaSchemaCache = null; }
   return prismaSchemaCache;
 }
+let graphqlFragmentsCache = null;
+function getGraphqlFragments() {
+  if (graphqlFragmentsCache) return graphqlFragmentsCache;
+  try { graphqlFragmentsCache = require('./document-graphql-fragments'); } catch { graphqlFragmentsCache = null; }
+  return graphqlFragmentsCache;
+}
+let cssVarsCache = null;
+function getCssVars() {
+  if (cssVarsCache) return cssVarsCache;
+  try { cssVarsCache = require('./document-css-vars'); } catch { cssVarsCache = null; }
+  return cssVarsCache;
+}
+let composeServicesCache = null;
+function getComposeServices() {
+  if (composeServicesCache) return composeServicesCache;
+  try { composeServicesCache = require('./document-compose-services'); } catch { composeServicesCache = null; }
+  return composeServicesCache;
+}
+let regexFlagsCache = null;
+function getRegexFlags() {
+  if (regexFlagsCache) return regexFlagsCache;
+  try { regexFlagsCache = require('./document-regex-flags'); } catch { regexFlagsCache = null; }
+  return regexFlagsCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -3319,6 +3343,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const sriHashesBlock = buildSriHashesBlock(files);
   const jsonSchemaBlock = buildJsonSchemaBlock(files);
   const prismaSchemaBlock = buildPrismaSchemaBlock(files);
+  const graphqlFragmentsBlock = buildGraphqlFragmentsBlock(files);
+  const cssVarsBlock = buildCssVarsBlock(files);
+  const composeServicesBlock = buildComposeServicesBlock(files);
+  const regexFlagsBlock = buildRegexFlagsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -3597,6 +3625,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     sriHashesBlock,
     jsonSchemaBlock,
     prismaSchemaBlock,
+    graphqlFragmentsBlock,
+    cssVarsBlock,
+    composeServicesBlock,
+    regexFlagsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -6727,6 +6759,42 @@ function buildPrismaSchemaBlock(files) {
   return engine.renderPrismaSchemaBlock(report);
 }
 
+function buildGraphqlFragmentsBlock(files) {
+  const engine = getGraphqlFragments();
+  if (!engine || typeof engine.buildGraphqlFragmentsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildGraphqlFragmentsForFiles(list);
+  return engine.renderGraphqlFragmentsBlock(report);
+}
+
+function buildCssVarsBlock(files) {
+  const engine = getCssVars();
+  if (!engine || typeof engine.buildCssVarsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildCssVarsForFiles(list);
+  return engine.renderCssVarsBlock(report);
+}
+
+function buildComposeServicesBlock(files) {
+  const engine = getComposeServices();
+  if (!engine || typeof engine.buildComposeServicesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildComposeServicesForFiles(list);
+  return engine.renderComposeServicesBlock(report);
+}
+
+function buildRegexFlagsBlock(files) {
+  const engine = getRegexFlags();
+  if (!engine || typeof engine.buildRegexFlagsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildRegexFlagsForFiles(list);
+  return engine.renderRegexFlagsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -7160,6 +7228,10 @@ module.exports = {
   buildSriHashesBlock,
   buildJsonSchemaBlock,
   buildPrismaSchemaBlock,
+  buildGraphqlFragmentsBlock,
+  buildCssVarsBlock,
+  buildComposeServicesBlock,
+  buildRegexFlagsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
