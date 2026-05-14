@@ -25,6 +25,8 @@ describe("resolveAllowedOrigins", () => {
   test("returns the dev localhost fallback when CORS_ORIGINS is empty in development", () => {
     const result = resolveAllowedOrigins({ NODE_ENV: "development" });
     assert.deepEqual(result, DEV_FALLBACK);
+    assert.ok(result.includes("http://localhost:3000"));
+    assert.ok(result.includes("http://127.0.0.1:3000"));
     assert.notEqual(result, DEV_FALLBACK, "must be a copy, not a reference");
   });
 

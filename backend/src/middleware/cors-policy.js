@@ -26,7 +26,12 @@
  *     header in that case.
  */
 
-const DEV_FALLBACK = ['http://localhost:3000', 'http://localhost:3001'];
+const DEV_FALLBACK = [
+  'http://localhost:3000',
+  'http://localhost:3001',
+  'http://127.0.0.1:3000',
+  'http://127.0.0.1:3001',
+];
 
 function resolveAllowedOrigins(env = process.env) {
   const list = String(env.CORS_ORIGINS || '')
