@@ -1801,6 +1801,30 @@ function getStripe() {
   try { stripeCache = require('./document-stripe'); } catch { stripeCache = null; }
   return stripeCache;
 }
+let terraformVarsCache = null;
+function getTerraformVars() {
+  if (terraformVarsCache) return terraformVarsCache;
+  try { terraformVarsCache = require('./document-terraform-vars'); } catch { terraformVarsCache = null; }
+  return terraformVarsCache;
+}
+let openapiSecurityCache = null;
+function getOpenapiSecurity() {
+  if (openapiSecurityCache) return openapiSecurityCache;
+  try { openapiSecurityCache = require('./document-openapi-security'); } catch { openapiSecurityCache = null; }
+  return openapiSecurityCache;
+}
+let k8sResourcesCache = null;
+function getK8sResources() {
+  if (k8sResourcesCache) return k8sResourcesCache;
+  try { k8sResourcesCache = require('./document-k8s-resources'); } catch { k8sResourcesCache = null; }
+  return k8sResourcesCache;
+}
+let cssAnimCache = null;
+function getCssAnim() {
+  if (cssAnimCache) return cssAnimCache;
+  try { cssAnimCache = require('./document-css-anim'); } catch { cssAnimCache = null; }
+  return cssAnimCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -3431,6 +3455,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const vitestBlock = buildVitestBlock(files);
   const mjmlBlock = buildMjmlBlock(files);
   const stripeBlock = buildStripeBlock(files);
+  const terraformVarsBlock = buildTerraformVarsBlock(files);
+  const openapiSecurityBlock = buildOpenapiSecurityBlock(files);
+  const k8sResourcesBlock = buildK8sResourcesBlock(files);
+  const cssAnimBlock = buildCssAnimBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -3725,6 +3753,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     vitestBlock,
     mjmlBlock,
     stripeBlock,
+    terraformVarsBlock,
+    openapiSecurityBlock,
+    k8sResourcesBlock,
+    cssAnimBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -6999,6 +7031,42 @@ function buildStripeBlock(files) {
   return engine.renderStripeBlock(report);
 }
 
+function buildTerraformVarsBlock(files) {
+  const engine = getTerraformVars();
+  if (!engine || typeof engine.buildTerraformVarsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildTerraformVarsForFiles(list);
+  return engine.renderTerraformVarsBlock(report);
+}
+
+function buildOpenapiSecurityBlock(files) {
+  const engine = getOpenapiSecurity();
+  if (!engine || typeof engine.buildOpenapiSecurityForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildOpenapiSecurityForFiles(list);
+  return engine.renderOpenapiSecurityBlock(report);
+}
+
+function buildK8sResourcesBlock(files) {
+  const engine = getK8sResources();
+  if (!engine || typeof engine.buildK8sResourcesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildK8sResourcesForFiles(list);
+  return engine.renderK8sResourcesBlock(report);
+}
+
+function buildCssAnimBlock(files) {
+  const engine = getCssAnim();
+  if (!engine || typeof engine.buildCssAnimForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildCssAnimForFiles(list);
+  return engine.renderCssAnimBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -7448,6 +7516,10 @@ module.exports = {
   buildVitestBlock,
   buildMjmlBlock,
   buildStripeBlock,
+  buildTerraformVarsBlock,
+  buildOpenapiSecurityBlock,
+  buildK8sResourcesBlock,
+  buildCssAnimBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
