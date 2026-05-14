@@ -1201,6 +1201,30 @@ function getWebhookUrls() {
   try { webhookUrlsCache = require('./document-webhook-urls'); } catch { webhookUrlsCache = null; }
   return webhookUrlsCache;
 }
+let sshFingerprintsCache = null;
+function getSshFingerprints() {
+  if (sshFingerprintsCache) return sshFingerprintsCache;
+  try { sshFingerprintsCache = require('./document-ssh-fingerprints'); } catch { sshFingerprintsCache = null; }
+  return sshFingerprintsCache;
+}
+let npmRefsCache = null;
+function getNpmRefs() {
+  if (npmRefsCache) return npmRefsCache;
+  try { npmRefsCache = require('./document-npm-refs'); } catch { npmRefsCache = null; }
+  return npmRefsCache;
+}
+let correlationIdsCache = null;
+function getCorrelationIds() {
+  if (correlationIdsCache) return correlationIdsCache;
+  try { correlationIdsCache = require('./document-correlation-ids'); } catch { correlationIdsCache = null; }
+  return correlationIdsCache;
+}
+let paymentIdsCache = null;
+function getPaymentIds() {
+  if (paymentIdsCache) return paymentIdsCache;
+  try { paymentIdsCache = require('./document-payment-ids'); } catch { paymentIdsCache = null; }
+  return paymentIdsCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -2731,6 +2755,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const apmRefsBlock = buildApmRefsBlock(files);
   const attackPatternsBlock = buildAttackPatternsBlock(files);
   const webhookUrlsBlock = buildWebhookUrlsBlock(files);
+  const sshFingerprintsBlock = buildSshFingerprintsBlock(files);
+  const npmRefsBlock = buildNpmRefsBlock(files);
+  const correlationIdsBlock = buildCorrelationIdsBlock(files);
+  const paymentIdsBlock = buildPaymentIdsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -2925,6 +2953,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     apmRefsBlock,
     attackPatternsBlock,
     webhookUrlsBlock,
+    sshFingerprintsBlock,
+    npmRefsBlock,
+    correlationIdsBlock,
+    paymentIdsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -5299,6 +5331,42 @@ function buildWebhookUrlsBlock(files) {
   return engine.renderWebhookUrlsBlock(report);
 }
 
+function buildSshFingerprintsBlock(files) {
+  const engine = getSshFingerprints();
+  if (!engine || typeof engine.buildSshFingerprintsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildSshFingerprintsForFiles(list);
+  return engine.renderSshFingerprintsBlock(report);
+}
+
+function buildNpmRefsBlock(files) {
+  const engine = getNpmRefs();
+  if (!engine || typeof engine.buildNpmRefsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildNpmRefsForFiles(list);
+  return engine.renderNpmRefsBlock(report);
+}
+
+function buildCorrelationIdsBlock(files) {
+  const engine = getCorrelationIds();
+  if (!engine || typeof engine.buildCorrelationIdsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildCorrelationIdsForFiles(list);
+  return engine.renderCorrelationIdsBlock(report);
+}
+
+function buildPaymentIdsBlock(files) {
+  const engine = getPaymentIds();
+  if (!engine || typeof engine.buildPaymentIdsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildPaymentIdsForFiles(list);
+  return engine.renderPaymentIdsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -5648,6 +5716,10 @@ module.exports = {
   buildApmRefsBlock,
   buildAttackPatternsBlock,
   buildWebhookUrlsBlock,
+  buildSshFingerprintsBlock,
+  buildNpmRefsBlock,
+  buildCorrelationIdsBlock,
+  buildPaymentIdsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
