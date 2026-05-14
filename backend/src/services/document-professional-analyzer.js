@@ -1753,6 +1753,30 @@ function getMswHandlers() {
   try { mswHandlersCache = require('./document-msw-handlers'); } catch { mswHandlersCache = null; }
   return mswHandlersCache;
 }
+let ghWorkflowsCache = null;
+function getGhWorkflows() {
+  if (ghWorkflowsCache) return ghWorkflowsCache;
+  try { ghWorkflowsCache = require('./document-gh-workflows'); } catch { ghWorkflowsCache = null; }
+  return ghWorkflowsCache;
+}
+let jsonLdCache = null;
+function getJsonLd() {
+  if (jsonLdCache) return jsonLdCache;
+  try { jsonLdCache = require('./document-json-ld'); } catch { jsonLdCache = null; }
+  return jsonLdCache;
+}
+let tailwindCache = null;
+function getTailwind() {
+  if (tailwindCache) return tailwindCache;
+  try { tailwindCache = require('./document-tailwind'); } catch { tailwindCache = null; }
+  return tailwindCache;
+}
+let mongoAggCache = null;
+function getMongoAgg() {
+  if (mongoAggCache) return mongoAggCache;
+  try { mongoAggCache = require('./document-mongo-agg'); } catch { mongoAggCache = null; }
+  return mongoAggCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -3375,6 +3399,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const astroBlock = buildAstroBlock(files);
   const e2eTestsBlock = buildE2eTestsBlock(files);
   const mswHandlersBlock = buildMswHandlersBlock(files);
+  const ghWorkflowsBlock = buildGhWorkflowsBlock(files);
+  const jsonLdBlock = buildJsonLdBlock(files);
+  const tailwindBlock = buildTailwindBlock(files);
+  const mongoAggBlock = buildMongoAggBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -3661,6 +3689,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     astroBlock,
     e2eTestsBlock,
     mswHandlersBlock,
+    ghWorkflowsBlock,
+    jsonLdBlock,
+    tailwindBlock,
+    mongoAggBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -6863,6 +6895,42 @@ function buildMswHandlersBlock(files) {
   return engine.renderMswHandlersBlock(report);
 }
 
+function buildGhWorkflowsBlock(files) {
+  const engine = getGhWorkflows();
+  if (!engine || typeof engine.buildGhWorkflowsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildGhWorkflowsForFiles(list);
+  return engine.renderGhWorkflowsBlock(report);
+}
+
+function buildJsonLdBlock(files) {
+  const engine = getJsonLd();
+  if (!engine || typeof engine.buildJsonLdForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildJsonLdForFiles(list);
+  return engine.renderJsonLdBlock(report);
+}
+
+function buildTailwindBlock(files) {
+  const engine = getTailwind();
+  if (!engine || typeof engine.buildTailwindForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildTailwindForFiles(list);
+  return engine.renderTailwindBlock(report);
+}
+
+function buildMongoAggBlock(files) {
+  const engine = getMongoAgg();
+  if (!engine || typeof engine.buildMongoAggForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildMongoAggForFiles(list);
+  return engine.renderMongoAggBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -7304,6 +7372,10 @@ module.exports = {
   buildAstroBlock,
   buildE2eTestsBlock,
   buildMswHandlersBlock,
+  buildGhWorkflowsBlock,
+  buildJsonLdBlock,
+  buildTailwindBlock,
+  buildMongoAggBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
