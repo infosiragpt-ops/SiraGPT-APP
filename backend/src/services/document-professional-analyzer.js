@@ -1057,6 +1057,30 @@ function getSpdxComplex() {
   try { spdxComplexCache = require('./document-spdx-complex'); } catch { spdxComplexCache = null; }
   return spdxComplexCache;
 }
+let featureFlagsCache = null;
+function getFeatureFlags() {
+  if (featureFlagsCache) return featureFlagsCache;
+  try { featureFlagsCache = require('./document-feature-flags'); } catch { featureFlagsCache = null; }
+  return featureFlagsCache;
+}
+let cookieAttrsCache = null;
+function getCookieAttrs() {
+  if (cookieAttrsCache) return cookieAttrsCache;
+  try { cookieAttrsCache = require('./document-cookie-attrs'); } catch { cookieAttrsCache = null; }
+  return cookieAttrsCache;
+}
+let otelTraceCache = null;
+function getOtelTrace() {
+  if (otelTraceCache) return otelTraceCache;
+  try { otelTraceCache = require('./document-otel-trace'); } catch { otelTraceCache = null; }
+  return otelTraceCache;
+}
+let cloudArnsCache = null;
+function getCloudArns() {
+  if (cloudArnsCache) return cloudArnsCache;
+  try { cloudArnsCache = require('./document-cloud-arns'); } catch { cloudArnsCache = null; }
+  return cloudArnsCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -2563,6 +2587,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const cspDirectivesBlock = buildCspDirectivesBlock(files);
   const mathOperatorsBlock = buildMathOperatorsBlock(files);
   const spdxComplexBlock = buildSpdxComplexBlock(files);
+  const featureFlagsBlock = buildFeatureFlagsBlock(files);
+  const cookieAttrsBlock = buildCookieAttrsBlock(files);
+  const otelTraceBlock = buildOtelTraceBlock(files);
+  const cloudArnsBlock = buildCloudArnsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -2733,6 +2761,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     cspDirectivesBlock,
     mathOperatorsBlock,
     spdxComplexBlock,
+    featureFlagsBlock,
+    cookieAttrsBlock,
+    otelTraceBlock,
+    cloudArnsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -4891,6 +4923,42 @@ function buildSpdxComplexBlock(files) {
   return engine.renderSpdxComplexBlock(report);
 }
 
+function buildFeatureFlagsBlock(files) {
+  const engine = getFeatureFlags();
+  if (!engine || typeof engine.buildFeatureFlagsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildFeatureFlagsForFiles(list);
+  return engine.renderFeatureFlagsBlock(report);
+}
+
+function buildCookieAttrsBlock(files) {
+  const engine = getCookieAttrs();
+  if (!engine || typeof engine.buildCookieAttrsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildCookieAttrsForFiles(list);
+  return engine.renderCookieAttrsBlock(report);
+}
+
+function buildOtelTraceBlock(files) {
+  const engine = getOtelTrace();
+  if (!engine || typeof engine.buildOtelTraceForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildOtelTraceForFiles(list);
+  return engine.renderOtelTraceBlock(report);
+}
+
+function buildCloudArnsBlock(files) {
+  const engine = getCloudArns();
+  if (!engine || typeof engine.buildCloudArnsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildCloudArnsForFiles(list);
+  return engine.renderCloudArnsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -5216,6 +5284,10 @@ module.exports = {
   buildCspDirectivesBlock,
   buildMathOperatorsBlock,
   buildSpdxComplexBlock,
+  buildFeatureFlagsBlock,
+  buildCookieAttrsBlock,
+  buildOtelTraceBlock,
+  buildCloudArnsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
