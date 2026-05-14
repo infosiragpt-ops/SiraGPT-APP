@@ -1393,6 +1393,30 @@ function getSaasMetrics() {
   try { saasMetricsCache = require('./document-saas-metrics'); } catch { saasMetricsCache = null; }
   return saasMetricsCache;
 }
+let recipeMeasurementsCache = null;
+function getRecipeMeasurements() {
+  if (recipeMeasurementsCache) return recipeMeasurementsCache;
+  try { recipeMeasurementsCache = require('./document-recipe-measurements'); } catch { recipeMeasurementsCache = null; }
+  return recipeMeasurementsCache;
+}
+let isoLangsCache = null;
+function getIsoLangs() {
+  if (isoLangsCache) return isoLangsCache;
+  try { isoLangsCache = require('./document-iso-langs'); } catch { isoLangsCache = null; }
+  return isoLangsCache;
+}
+let prReviewStatesCache = null;
+function getPrReviewStates() {
+  if (prReviewStatesCache) return prReviewStatesCache;
+  try { prReviewStatesCache = require('./document-pr-review-states'); } catch { prReviewStatesCache = null; }
+  return prReviewStatesCache;
+}
+let pricingTiersCache = null;
+function getPricingTiers() {
+  if (pricingTiersCache) return pricingTiersCache;
+  try { pricingTiersCache = require('./document-pricing-tiers'); } catch { pricingTiersCache = null; }
+  return pricingTiersCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -2955,6 +2979,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const projectCodenamesBlock = buildProjectCodenamesBlock(files);
   const riskLevelsBlock = buildRiskLevelsBlock(files);
   const saasMetricsBlock = buildSaasMetricsBlock(files);
+  const recipeMeasurementsBlock = buildRecipeMeasurementsBlock(files);
+  const isoLangsBlock = buildIsoLangsBlock(files);
+  const prReviewStatesBlock = buildPrReviewStatesBlock(files);
+  const pricingTiersBlock = buildPricingTiersBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -3181,6 +3209,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     projectCodenamesBlock,
     riskLevelsBlock,
     saasMetricsBlock,
+    recipeMeasurementsBlock,
+    isoLangsBlock,
+    prReviewStatesBlock,
+    pricingTiersBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -5843,6 +5875,42 @@ function buildSaasMetricsBlock(files) {
   return engine.renderSaasMetricsBlock(report);
 }
 
+function buildRecipeMeasurementsBlock(files) {
+  const engine = getRecipeMeasurements();
+  if (!engine || typeof engine.buildRecipeMeasurementsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildRecipeMeasurementsForFiles(list);
+  return engine.renderRecipeMeasurementsBlock(report);
+}
+
+function buildIsoLangsBlock(files) {
+  const engine = getIsoLangs();
+  if (!engine || typeof engine.buildIsoLangsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildIsoLangsForFiles(list);
+  return engine.renderIsoLangsBlock(report);
+}
+
+function buildPrReviewStatesBlock(files) {
+  const engine = getPrReviewStates();
+  if (!engine || typeof engine.buildPrReviewStatesForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildPrReviewStatesForFiles(list);
+  return engine.renderPrReviewStatesBlock(report);
+}
+
+function buildPricingTiersBlock(files) {
+  const engine = getPricingTiers();
+  if (!engine || typeof engine.buildPricingTiersForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildPricingTiersForFiles(list);
+  return engine.renderPricingTiersBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -6224,6 +6292,10 @@ module.exports = {
   buildProjectCodenamesBlock,
   buildRiskLevelsBlock,
   buildSaasMetricsBlock,
+  buildRecipeMeasurementsBlock,
+  buildIsoLangsBlock,
+  buildPrReviewStatesBlock,
+  buildPricingTiersBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
