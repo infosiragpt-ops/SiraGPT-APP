@@ -937,6 +937,30 @@ function getLicensePlates() {
   try { licensePlatesCache = require('./document-license-plates'); } catch { licensePlatesCache = null; }
   return licensePlatesCache;
 }
+let legalCitationsCache = null;
+function getLegalCitations() {
+  if (legalCitationsCache) return legalCitationsCache;
+  try { legalCitationsCache = require('./document-legal-citations'); } catch { legalCitationsCache = null; }
+  return legalCitationsCache;
+}
+let socialUrlsCache = null;
+function getSocialUrls() {
+  if (socialUrlsCache) return socialUrlsCache;
+  try { socialUrlsCache = require('./document-social-urls'); } catch { socialUrlsCache = null; }
+  return socialUrlsCache;
+}
+let geneProteinCache = null;
+function getGeneProtein() {
+  if (geneProteinCache) return geneProteinCache;
+  try { geneProteinCache = require('./document-gene-protein'); } catch { geneProteinCache = null; }
+  return geneProteinCache;
+}
+let currencySymbolsCache = null;
+function getCurrencySymbols() {
+  if (currencySymbolsCache) return currencySymbolsCache;
+  try { currencySymbolsCache = require('./document-currency-symbols'); } catch { currencySymbolsCache = null; }
+  return currencySymbolsCache;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -2423,6 +2447,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const fxRatesBlock = buildFxRatesBlock(files);
   const ibanSwiftBlock = buildIbanSwiftBlock(files);
   const licensePlatesBlock = buildLicensePlatesBlock(files);
+  const legalCitationsBlock = buildLegalCitationsBlock(files);
+  const socialUrlsBlock = buildSocialUrlsBlock(files);
+  const geneProteinBlock = buildGeneProteinBlock(files);
+  const currencySymbolsBlock = buildCurrencySymbolsBlock(files);
   const discourseBlock = buildDiscourseBlock(files);
   const sectionRolesBlock = buildSectionRolesBlock(files);
 
@@ -2573,6 +2601,10 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
     fxRatesBlock,
     ibanSwiftBlock,
     licensePlatesBlock,
+    legalCitationsBlock,
+    socialUrlsBlock,
+    geneProteinBlock,
+    currencySymbolsBlock,
     discourseBlock,
     sectionRolesBlock,
     primaryDocType,
@@ -4535,6 +4567,46 @@ function buildLicensePlatesBlock(files) {
   return engine.renderLicensePlatesBlock(report);
 }
 
+/** Legal citations block — Smith v Jones / reporter / USC / CFR / Ley. */
+function buildLegalCitationsBlock(files) {
+  const engine = getLegalCitations();
+  if (!engine || typeof engine.buildLegalCitationsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildLegalCitationsForFiles(list);
+  return engine.renderLegalCitationsBlock(report);
+}
+
+/** Social URLs block — twitter/instagram/linkedin/github/youtube/tiktok handles. */
+function buildSocialUrlsBlock(files) {
+  const engine = getSocialUrls();
+  if (!engine || typeof engine.buildSocialUrlsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildSocialUrlsForFiles(list);
+  return engine.renderSocialUrlsBlock(report);
+}
+
+/** Gene/protein block — HGNC genes + p-proteins + mRNA + ENST + UniProt + rsIDs. */
+function buildGeneProteinBlock(files) {
+  const engine = getGeneProtein();
+  if (!engine || typeof engine.buildGeneProteinForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildGeneProteinForFiles(list);
+  return engine.renderGeneProteinBlock(report);
+}
+
+/** Currency symbols block — standalone €/$/£/¥/₹/₿ without amount. */
+function buildCurrencySymbolsBlock(files) {
+  const engine = getCurrencySymbols();
+  if (!engine || typeof engine.buildCurrencySymbolsForFiles !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  const report = engine.buildCurrencySymbolsForFiles(list);
+  return engine.renderCurrencySymbolsBlock(report);
+}
+
 function buildConsistencyBlock(files) {
   const engine = getConsistencyChecker();
   if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
@@ -4840,6 +4912,10 @@ module.exports = {
   buildFxRatesBlock,
   buildIbanSwiftBlock,
   buildLicensePlatesBlock,
+  buildLegalCitationsBlock,
+  buildSocialUrlsBlock,
+  buildGeneProteinBlock,
+  buildCurrencySymbolsBlock,
   loadAnalysesByFileId,
   pickPrimaryType,
   profileTableColumns,
