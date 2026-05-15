@@ -4,13 +4,19 @@ import * as React from "react"
 import { motion } from "framer-motion"
 import type { LucideIcon } from "lucide-react"
 import {
+  BarChart3,
+  Calculator,
   Code2,
   FileText,
   ImageIcon,
+  Languages,
   Lightbulb,
+  ListChecks,
   PenLine,
+  Presentation,
   Search,
   Sparkles,
+  Table,
 } from "lucide-react"
 
 import { cn } from "@/lib/utils"
@@ -21,7 +27,11 @@ type ExamplePrompt = {
   icon: LucideIcon
 }
 
-const EXAMPLE_PROMPTS: ExamplePrompt[] = [
+// Pool of prompts the hero rotates through. The render code samples
+// 6 from this list per mount so the surface feels alive instead of
+// the same fixed grid every session. Order is stable within a single
+// page view but reshuffles on next mount (new chat / page reload).
+const PROMPT_POOL: ExamplePrompt[] = [
   {
     label: "Resumir un documento",
     prompt: "Adjunta o pega aquí un documento y pídeme un resumen ejecutivo con los puntos clave, recomendaciones y próximos pasos.",
@@ -52,7 +62,48 @@ const EXAMPLE_PROMPTS: ExamplePrompt[] = [
     prompt: "Ayúdame con una lluvia de ideas para ",
     icon: Lightbulb,
   },
+  {
+    label: "Traducir al inglés",
+    prompt: "Traduce el siguiente texto al inglés manteniendo el tono y los matices: ",
+    icon: Languages,
+  },
+  {
+    label: "Comparar opciones",
+    prompt: "Compara estas opciones en una tabla con criterios claros y una recomendación final: ",
+    icon: Table,
+  },
+  {
+    label: "Crear presentación",
+    prompt: "Genera una presentación profesional con 10 diapositivas sobre ",
+    icon: Presentation,
+  },
+  {
+    label: "Analizar datos",
+    prompt: "Analiza estos datos, genera un resumen ejecutivo y propón visualizaciones recomendadas: ",
+    icon: BarChart3,
+  },
+  {
+    label: "Resolver matemáticas",
+    prompt: "Resuelve este problema matemático paso a paso, mostrando el razonamiento: ",
+    icon: Calculator,
+  },
+  {
+    label: "Plan de tareas",
+    prompt: "Convierte esta meta en un plan de tareas accionables con prioridades y fechas: ",
+    icon: ListChecks,
+  },
 ]
+
+function sampleSixPrompts(): ExamplePrompt[] {
+  // Fisher–Yates shuffle for an unbiased sample. Six is the grid
+  // (3 columns × 2 rows on desktop, 2 × 3 on mobile).
+  const a = [...PROMPT_POOL]
+  for (let i = a.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[a[i], a[j]] = [a[j], a[i]]
+  }
+  return a.slice(0, 6)
+}
 
 function pickGreeting(): string {
   const hour = new Date().getHours()
@@ -84,6 +135,11 @@ export function ChatEmptyStateHero({
 }: ChatEmptyStateHeroProps) {
   const greeting = React.useMemo(pickGreeting, [])
   const firstName = React.useMemo(() => pickDisplayName(userName), [userName])
+  // Sample once per mount: stable while the user is reading the hero,
+  // re-randomised when they navigate back. `useMemo` with an empty
+  // dep array gives us per-mount stability without re-rendering on
+  // every keystroke in the composer below.
+  const prompts = React.useMemo(sampleSixPrompts, [])
 
   return (
     <motion.div
@@ -120,7 +176,7 @@ export function ChatEmptyStateHero({
       </p>
 
       <div className="mx-auto grid w-full max-w-2xl grid-cols-2 gap-2 sm:grid-cols-3">
-        {EXAMPLE_PROMPTS.map((item, index) => (
+        {prompts.map((item, index) => (
           <motion.button
             key={item.label}
             type="button"
