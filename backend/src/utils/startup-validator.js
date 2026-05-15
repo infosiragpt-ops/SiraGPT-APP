@@ -110,12 +110,12 @@ function checkApiKeyFormat(key, value, label) {
   }
   // Stripe keys
   if ((key.includes('STRIPE') && key.endsWith('_KEY'))) {
-    if (!/^sk_(test|live)_/.test(value)) {
+    if (!/^(sk|rk)_(test|live)_/.test(value)) {
       issues.push({
         key,
         label: label || key,
         severity: Severity.WARNING,
-        message: `${label || key} format looks unusual. Expected 'sk_test_...' or 'sk_live_...'.`,
+        message: `${label || key} format looks unusual. Expected 'sk_test_...', 'sk_live_...', 'rk_test_...', or 'rk_live_...'.`,
       });
     }
   }

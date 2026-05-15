@@ -187,6 +187,12 @@ describe("payments · Stripe configuration", () => {
     }), true)
   })
 
+  it("accepts restricted Stripe live keys as configured", () => {
+    assert.equal(isStripeConfigured({
+      STRIPE_SECRET_KEY: "rk_live_abc123",
+    }), true)
+  })
+
   it("detects demo/template key as unconfigured", () => {
     assert.equal(isStripeConfigured({
       STRIPE_SECRET_KEY: "sk_test_...",
