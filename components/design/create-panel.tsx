@@ -46,7 +46,7 @@ export function CreatePanel() {
   const [creating, setCreating] = React.useState(false)
 
   async function submit() {
-    if (!name.trim()) { toast.error("Project name required"); return }
+    if (!name.trim()) { toast.error("El nombre del proyecto es obligatorio"); return }
     if (tab === "template") {
       toast.info("Plantillas · próximamente")
       return

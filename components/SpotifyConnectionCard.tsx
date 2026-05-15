@@ -32,10 +32,10 @@ export default function SpotifyConnectionCard() {
       if (response.url) {
         window.location.href = response.url
       } else {
-        toast.error("Could not get Spotify connection URL.")
+        toast.error("No se pudo obtener la URL de conexión con Spotify.")
       }
     } catch (error) {
-      toast.error("Failed to connect to Spotify.")
+      toast.error("No se pudo conectar con Spotify.")
       console.error("Spotify connection error:", error)
     } finally {
       setIsConnecting(false)

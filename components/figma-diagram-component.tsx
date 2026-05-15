@@ -50,10 +50,10 @@ export function FigmaDiagramComponent({
             a.click()
             window.URL.revokeObjectURL(url)
             document.body.removeChild(a)
-            toast.success("Diagram downloaded successfully!")
+            toast.success("Diagrama descargado")
         } catch (error) {
             console.error("Error downloading image:", error)
-            toast.error("Failed to download diagram.")
+            toast.error("No se pudo descargar el diagrama.")
         }
     }
 

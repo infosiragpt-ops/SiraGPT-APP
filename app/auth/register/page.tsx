@@ -42,12 +42,12 @@ export default function RegisterPage() {
     e.preventDefault()
 
     if (formData.password !== formData.confirmPassword) {
-      toast.error("Passwords don't match")
+      toast.error("Las contraseñas no coinciden")
       return
     }
 
     if (formData.password.length < 6) {
-      toast.error("Password must be at least 6 characters")
+      toast.error("La contraseña debe tener al menos 6 caracteres")
       return
     }
 
@@ -56,13 +56,13 @@ export default function RegisterPage() {
     try {
       const success = await register(formData.name, formData.email, formData.password)
       if (success) {
-        toast.success("Account created successfully!")
+        toast.success("Cuenta creada con éxito")
         router.push("/chat")
       } else {
-        toast.error("Registration failed. Please try again.")
+        toast.error("No se pudo crear la cuenta. Inténtalo de nuevo.")
       }
     } catch (error) {
-      toast.error("Registration failed. Please try again.")
+      toast.error("No se pudo crear la cuenta. Inténtalo de nuevo.")
     } finally {
       setIsLoading(false)
     }

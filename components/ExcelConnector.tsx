@@ -319,7 +319,7 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
           }
         } catch (e) {
           console.error("Failed to load workbook JSON", e);
-          toast.error("Failed to load generated spreadsheet");
+          toast.error("No se pudo cargar la hoja de cálculo generada");
         }
       },
       saveAsJson: async () => {
@@ -342,10 +342,10 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
 
           insertChartWithLayout(chartConfig);
           console.log('Chart inserted successfully');
-          toast.success('Chart created successfully');
+          toast.success('Gráfico creado correctamente');
         } catch (e) {
           console.error("Failed to insert chart", e);
-          toast.error("Failed to create chart");
+          toast.error("No se pudo crear el gráfico");
         }
       },
     }));
@@ -358,7 +358,7 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
         }
 
         if (!spreadsheetSaveUrl) {
-          toast.error("Spreadsheet export service is not configured");
+          toast.error("El servicio de exportación de hojas de cálculo no está configurado");
           return;
         }
 
@@ -370,7 +370,7 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
         } as any);
       } catch (e) {
         console.error("Excel download failed", e);
-        toast.error("Failed to download Excel file");
+        toast.error("No se pudo descargar el archivo Excel");
       }
     }, [spreadsheetSaveUrl]);
 

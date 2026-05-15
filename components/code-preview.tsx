@@ -224,10 +224,10 @@ export const CodePreview: React.FC<CodePreviewProps> = ({
       const completeCode = generateCompleteHTML()
       await navigator.clipboard.writeText(completeCode)
       setIsCopied(true)
-      toast.success("Code copied to clipboard!")
+      toast.success("Código copiado al portapapeles")
       setTimeout(() => setIsCopied(false), 2000)
     } catch (error) {
-      toast.error("Failed to copy code")
+      toast.error("No se pudo copiar el código")
     }
   }
 
@@ -243,7 +243,7 @@ export const CodePreview: React.FC<CodePreviewProps> = ({
     a.click()
     document.body.removeChild(a)
     URL.revokeObjectURL(url)
-    toast.success("File downloaded!")
+    toast.success("Archivo descargado")
   }
 
   // Generate optimized single-file project with modern features
@@ -327,7 +327,7 @@ export const CodePreview: React.FC<CodePreviewProps> = ({
     a.click()
     document.body.removeChild(a)
     URL.revokeObjectURL(url)
-    toast.success("Optimized project downloaded with modern features!")
+    toast.success("Proyecto optimizado descargado con funcionalidades modernas")
   }
 
   // Refresh preview
