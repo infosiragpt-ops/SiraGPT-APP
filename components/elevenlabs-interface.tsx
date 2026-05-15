@@ -407,7 +407,7 @@ const { voices, loading: voicesLoading } = useVoices()
                 <Label htmlFor="text-input">Text to Convert</Label>
                 <Textarea
                   id="text-input"
-                  placeholder="Enter the text you want to convert to speech..."
+                  placeholder="Escribe el texto que quieres convertir a voz…"
                   value={text}
                   onChange={(e) => setText(e.target.value)}
                   rows={4}

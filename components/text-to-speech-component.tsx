@@ -706,7 +706,7 @@ const downloadAudio = async () => {
                 <div className="flex-grow space-y-4">
                     <Textarea
                         id="text-input"
-                        placeholder="Enter the text you want to convert to speech..."
+                        placeholder="Escribe el texto que quieres convertir a voz…"
                         value={text}
                         onChange={(e) => setText(e.target.value)}
                         rows={12}

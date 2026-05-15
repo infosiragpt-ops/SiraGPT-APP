@@ -33,17 +33,17 @@ export default function UserSettings() {
 
   const handleChangePassword = async () => {
     if (!passwordData.currentPassword || !passwordData.newPassword) {
-      toast.error('Please fill in all password fields')
+      toast.error('Completa todos los campos de la contraseña')
       return
     }
 
     if (passwordData.newPassword !== passwordData.confirmPassword) {
-      toast.error('New passwords do not match')
+      toast.error('Las contraseñas nuevas no coinciden')
       return
     }
 
     if (passwordData.newPassword.length < 8) {
-      toast.error('New password must be at least 8 characters')
+      toast.error('La nueva contraseña debe tener al menos 8 caracteres')
       return
     }
 
@@ -56,13 +56,13 @@ export default function UserSettings() {
 
       if (response.success) {
         setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' })
-        toast.success('Password updated successfully!')
+        toast.success('Contraseña actualizada')
       } else {
-        toast.error(response.message || 'Failed to update password')
+        toast.error(response.message || 'No se pudo actualizar la contraseña')
       }
     } catch (error: any) {
       console.error('Password update error:', error)
-      toast.error(error.message || 'Failed to update password. Please try again.')
+      toast.error(error.message || 'No se pudo actualizar la contraseña. Inténtalo de nuevo.')
     } finally {
       setLoading(false)
     }
@@ -91,18 +91,18 @@ export default function UserSettings() {
           <div className="space-y-4">
             <h4 className="font-semibold flex items-center gap-2">
               <Key className="h-4 w-4" />
-              Change Password
+              Cambiar contraseña
             </h4>
             <div className="grid gap-4 md:grid-cols-1">
               <div className="space-y-2">
-                <Label htmlFor="current-password">Current Password</Label>
+                <Label htmlFor="current-password">Contraseña actual</Label>
                 <div className="relative">
                   <Input
                     id="current-password"
                     type={showCurrentPassword ? 'text' : 'password'}
                     value={passwordData.currentPassword}
                     onChange={(e) => setPasswordData(prev => ({ ...prev, currentPassword: e.target.value }))}
-                    placeholder="Enter current password"
+                    placeholder="Contraseña actual"
                   />
                   <Button
                     type="button"
@@ -116,14 +116,14 @@ export default function UserSettings() {
                 </div>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="new-password">New Password</Label>
+                <Label htmlFor="new-password">Nueva contraseña</Label>
                 <div className="relative">
                   <Input
                     id="new-password"
                     type={showNewPassword ? 'text' : 'password'}
                     value={passwordData.newPassword}
                     onChange={(e) => setPasswordData(prev => ({ ...prev, newPassword: e.target.value }))}
-                    placeholder="Enter new password (min. 8 characters)"
+                    placeholder="Nueva contraseña (mín. 8 caracteres)"
                   />
                   <Button
                     type="button"
@@ -137,13 +137,13 @@ export default function UserSettings() {
                 </div>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="confirm-password">Confirm New Password</Label>
+                <Label htmlFor="confirm-password">Confirmar contraseña</Label>
                 <Input
                   id="confirm-password"
                   type="password"
                   value={passwordData.confirmPassword}
                   onChange={(e) => setPasswordData(prev => ({ ...prev, confirmPassword: e.target.value }))}
-                  placeholder="Confirm new password"
+                  placeholder="Confirma la nueva contraseña"
                 />
               </div>
             </div>

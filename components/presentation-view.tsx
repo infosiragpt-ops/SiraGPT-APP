@@ -34,11 +34,11 @@ interface PresentationViewProps {
 }
 
 const loadingTitles = [
-    "Generating Slides...",
-    "Designing Layouts...",
-    "Adding Content...",
-    "Finalizing Presentation...",
-    "Almost Ready..."
+    "Generando diapositivas…",
+    "Diseñando los layouts…",
+    "Añadiendo contenido…",
+    "Finalizando la presentación…",
+    "Casi listo…"
 ];
 
 export function PresentationView({ presentation, onClose, isLoading, isVector, colorScheme, category }: PresentationViewProps) {

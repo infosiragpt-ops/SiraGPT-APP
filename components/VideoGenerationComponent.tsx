@@ -344,7 +344,7 @@ export default function VideoGenerationComponent() {
         </CardHeader>
         <CardContent className="space-y-4">
           <Textarea
-            placeholder="Describe your video scene in detail..."
+            placeholder="Describe en detalle la escena de tu video…"
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             rows={4}
@@ -428,7 +428,7 @@ export default function VideoGenerationComponent() {
           <div>
             <Label>Negative Prompt (Optional)</Label>
             <Input
-              placeholder="Things to avoid in the video (e.g., blurry, low quality, text)"
+              placeholder="Qué evitar en el video (p. ej., borroso, baja calidad, texto)"
               value={negativePrompt}
               onChange={(e) => setNegativePrompt(e.target.value)}
               className="mt-1"
