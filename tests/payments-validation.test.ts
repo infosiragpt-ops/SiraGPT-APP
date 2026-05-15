@@ -25,8 +25,8 @@ const PLAN_CREDITS = {
 
 const PLAN_AMOUNTS = {
   PRO: 5.00,
-  PRO_MAX: 15.00,
-  ENTERPRISE: 99.00,
+  PRO_MAX: 20.00,
+  ENTERPRISE: 200.00,
 }
 
 type Plan = "PRO" | "PRO_MAX" | "ENTERPRISE"
@@ -175,8 +175,8 @@ describe("payments · plan validation", () => {
 
   it("returns correct amounts per plan", () => {
     assert.equal(getPlanAmount("PRO"), 5.00)
-    assert.equal(getPlanAmount("PRO_MAX"), 15.00)
-    assert.equal(getPlanAmount("ENTERPRISE"), 99.00)
+    assert.equal(getPlanAmount("PRO_MAX"), 20.00)
+    assert.equal(getPlanAmount("ENTERPRISE"), 200.00)
   })
 })
 
@@ -264,8 +264,8 @@ describe("payments · plan change preview", () => {
     assert.equal(preview.currentPlan, "PRO")
     assert.equal(preview.targetPlan, "PRO_MAX")
     assert.equal(preview.currentAmount, 5.00)
-    assert.equal(preview.targetAmount, 15.00)
-    assert.equal(preview.difference, 10.00)
+    assert.equal(preview.targetAmount, 20.00)
+    assert.equal(preview.difference, 15.00)
     assert(preview.proratedCharge! > 0)
     assert.equal(preview.proratedCredit, 0)
   })

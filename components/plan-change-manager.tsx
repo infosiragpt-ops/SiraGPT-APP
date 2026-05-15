@@ -58,13 +58,13 @@ export default function PlanChangeManager({ currentPlan, onPlanChanged }: PlanCh
     },
     PRO_MAX: {
       name: 'Pro Max', 
-      price: 15,
+      price: 20,
       limit: '1,000,000 tokens/month',
       features: ['Everything in Pro', 'Higher token limits', 'Enhanced rate limits', 'Advanced Models']
     },
     ENTERPRISE: {
       name: 'Enterprise',
-      price: 99,
+      price: 200,
       limit: '10,000,000 tokens/month', 
       features: ['Everything in Pro Max', 'Massive token limits', 'Dedicated Support', 'Custom Integration']
     }

@@ -4004,13 +4004,13 @@ But first, you need to connect your Spotify account securely using the button be
   }, [input, resizeComposerTextarea]);
 
   // Instant upgrade function
-  const instantUpgrade = async (plan: 'BASIC' | 'STANDARD' | 'ENTERPRISE') => {
+  const instantUpgrade = async (plan: 'PRO' | 'PRO_MAX' | 'ENTERPRISE') => {
     try {
       setIsSubscribing(true);
       const planMap: Record<string, { monthlyLimit: number; price?: number }> = {
-        BASIC: { monthlyLimit: 10000, price: 5 },
-        STANDARD: { monthlyLimit: 30000, price: 15 },
-        ENTERPRISE: { monthlyLimit: 0, price: 99 },
+        PRO: { monthlyLimit: 500000, price: 5 },
+        PRO_MAX: { monthlyLimit: 1000000, price: 20 },
+        ENTERPRISE: { monthlyLimit: 10000000, price: 200 },
       };
 
       const payload = {
@@ -4045,9 +4045,9 @@ But first, you need to connect your Spotify account securely using the button be
     } catch (err: any) {
       console.error('instantUpgrade error', err);
       const planMap: Record<string, { monthlyLimit: number }> = {
-        BASIC: { monthlyLimit: 10000 },
-        STANDARD: { monthlyLimit: 30000 },
-        ENTERPRISE: { monthlyLimit: 0 },
+        PRO: { monthlyLimit: 500000 },
+        PRO_MAX: { monthlyLimit: 1000000 },
+        ENTERPRISE: { monthlyLimit: 10000000 },
       };
       const simulatedUser = {
         ...(currentUserInfo || user || {}),

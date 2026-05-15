@@ -96,9 +96,9 @@ class SubscriptionAnalyticsService {
       });
 
       const planRevenue = {
-        BASIC: 5,
-        STANDARD: 15,
-        ENTERPRISE: 99
+        PRO: 5,
+        PRO_MAX: 20,
+        ENTERPRISE: 200
       };
 
       const mrr = activeSubscriptions.reduce((total, user) => {

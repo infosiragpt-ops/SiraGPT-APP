@@ -70,14 +70,14 @@ export default function SubscriptionManager() {
       color: 'from-purple-500 to-pink-500', 
       icon: Sparkles,
       limit: '1,000,000 tokens/month',
-      price: 15,
+      price: 20,
       features: ['Everything in Pro', 'Higher token limits', 'Priority support', 'Advanced Models', 'Enhanced rate limits']
     },
     ENTERPRISE: {
       color: 'from-amber-500 to-orange-500',
       icon: Zap,
       limit: '10,000,000 tokens/month',
-      price: 99,
+      price: 200,
       features: ['Everything in Pro Max', 'Massive token limits', 'Dedicated Support', 'Custom Integration', 'SLA guaranteed']
     }
   }

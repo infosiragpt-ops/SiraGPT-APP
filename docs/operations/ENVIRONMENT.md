@@ -82,9 +82,12 @@ APP_DIR=/root/siraNew/siraGPT scripts/deploy-production.sh
 
 | Variable | Description |
 |----------|-------------|
-| `STRIPE_SECRET_KEY` | Stripe secret key (`sk_live_...` or `sk_test_...`) |
+| `STRIPE_SECRET_KEY` | Stripe secret or restricted key (`sk_live_...`, `rk_live_...`, or test equivalent) |
 | `STRIPE_PUBLISHABLE_KEY` | Stripe publishable key |
 | `STRIPE_WEBHOOK_SECRET` | Stripe webhook signing secret |
+| `STRIPE_PRICE_PRO` | Stripe monthly Price ID for the `PRO` / Go tier |
+| `STRIPE_PRICE_PRO_MAX` | Stripe monthly Price ID for the `PRO_MAX` / Plus tier |
+| `STRIPE_PRICE_ENTERPRISE` | Stripe monthly Price ID for the `ENTERPRISE` / Pro tier |
 | `PAYPAL_CLIENT_ID` | PayPal client ID |
 | `PAYPAL_CLIENT_SECRET` | PayPal client secret |
 | `MERCADOPAGO_ACCESS_TOKEN` | Mercado Pago access token |

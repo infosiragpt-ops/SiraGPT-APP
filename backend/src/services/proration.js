@@ -29,9 +29,9 @@ class ProrationService {
 
       // Plan pricing (in cents)
       const planPricing = {
-        'BASIC': 500,     // $5.00
-        'STANDARD': 1500, // $15.00  
-        'ENTERPRISE': 9900 // $99.00
+        'PRO': 500,        // $5.00
+        'PRO_MAX': 2000,   // $20.00
+        'ENTERPRISE': 20000 // $200.00
       };
 
       const currentPlanPrice = planPricing[user.plan];
@@ -108,9 +108,9 @@ class ProrationService {
 
       // Update database - SET monthlyLimit to plan baseline credits (no accumulation)
       const planLimits = {
-        'BASIC': { monthlyLimit: 10000 },
-        'STANDARD': { monthlyLimit: 30000 },
-        'ENTERPRISE': { monthlyLimit: 100000 }
+        'PRO': { monthlyLimit: 500000 },
+        'PRO_MAX': { monthlyLimit: 1000000 },
+        'ENTERPRISE': { monthlyLimit: 10000000 }
       };
 
       // Get current user data to add to existing limits

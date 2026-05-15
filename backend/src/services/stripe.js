@@ -16,20 +16,20 @@ class StripeService {
     // Define subscription plans
     this.plans = {
       PRO: {
-        name: 'Pro Plan',
+        name: 'Go Plan',
         price: 500, // $5.00 in cents
         credits: 500000,
         features: ['500,000 tokens per month', 'All AI models', 'Priority support', 'Advanced features']
       },
       PRO_MAX: {
-        name: 'Pro Max Plan', 
-        price: 1500, // $15.00 in cents
+        name: 'Plus Plan',
+        price: 2000, // $20.00 in cents
         credits: 1000000,
         features: ['1,000,000 tokens per month', 'All AI models', 'Priority support', 'Advanced features', 'Enhanced rate limits']
       },
       ENTERPRISE: {
-        name: 'Enterprise Plan',
-        price: 9900, // $99.00 in cents
+        name: 'Pro Plan',
+        price: 20000, // $200.00 in cents
         credits: 10000000,
         features: ['10,000,000 tokens per month', 'All features', 'Dedicated support', 'Custom integrations', 'SLA guaranteed']
       }

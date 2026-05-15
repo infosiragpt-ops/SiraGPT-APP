@@ -46,11 +46,20 @@ async function initializeStripeProducts() {
 
 // Helper function to get price ID for a plan
 async function getPriceIdForPlan(plan) {
+  const settingKey = `STRIPE_PRICE_${plan}`;
   const setting = await prisma.systemSettings.findUnique({
-    where: { key: `STRIPE_PRICE_${plan}` }
+    where: { key: settingKey }
   });
   
-  if (!setting) {
+  if (setting?.value) {
+    return setting.value;
+  }
+
+  if (process.env[settingKey]) {
+    return process.env[settingKey];
+  }
+
+  if (!stripeService.isConfigured) {
     // For development/demo mode, return a dummy price ID
     const dummyPriceIds = {
       PRO: 'price_demo_pro',
@@ -61,8 +70,8 @@ async function getPriceIdForPlan(plan) {
     console.warn(`⚠️  No Stripe price ID found for ${plan}. Using dummy ID for development.`);
     return dummyPriceIds[plan] || 'price_demo_fallback';
   }
-  
-  return setting.value;
+
+  throw new Error(`Stripe price ID is not configured for plan: ${plan}`);
 }
 
 module.exports = {
