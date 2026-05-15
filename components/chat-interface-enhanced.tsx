@@ -2288,8 +2288,12 @@ const NavbarModelSelector = ({
     const href = gpt?.shareId
       ? `${window.location.origin}/gpts/share/${gpt.shareId}`
       : `${window.location.origin}/chat?id=${currentChat?.id || ""}`;
-    await navigator.clipboard.writeText(href);
-    toast.success("Enlace copiado");
+    try {
+      await navigator.clipboard.writeText(href);
+      toast.success("Enlace copiado");
+    } catch {
+      toast.error("No se pudo copiar el enlace. Cópialo manualmente.");
+    }
   }, [currentChat?.customGpt, currentChat?.id]);
 
   const selectedGptModel = React.useMemo(() => {
@@ -2483,8 +2487,12 @@ const NavbarModelSelector = ({
   const copyProjectLink = React.useCallback(async () => {
     const projectId = currentChat?.project?.id || currentChat?.projectId;
     if (!projectId) return;
-    await navigator.clipboard.writeText(`${window.location.origin}/projects/${projectId}`);
-    toast.success("Enlace del proyecto copiado");
+    try {
+      await navigator.clipboard.writeText(`${window.location.origin}/projects/${projectId}`);
+      toast.success("Enlace del proyecto copiado");
+    } catch {
+      toast.error("No se pudo copiar el enlace del proyecto. Cópialo manualmente.");
+    }
   }, [currentChat?.project?.id, currentChat?.projectId]);
 
 
@@ -4115,13 +4123,18 @@ But first, you need to connect your Spotify account securely using the button be
     try {
       const response = await apiClient.handleShare(currentChat.id);
       const baseUrl = process.env.NEXT_PUBLIC_URL || `http://localhost:${process.env.PORT || 3000}`;
-      let url = `${baseUrl}/share/${response.shareableLink}`;
-      navigator.clipboard.writeText(url);
-      toast.success("Enlace para compartir copiado");
+      const url = `${baseUrl}/share/${response.shareableLink}`;
+      try {
+        await navigator.clipboard.writeText(url);
+        toast.success("Enlace para compartir copiado");
+      } catch {
+        toast.success("Enlace para compartir creado (no se pudo copiar automáticamente)");
+      }
       setShareUrl(url);
       setShareModalOpen(true);
     } catch (error) {
-      toast.error(`No se pudo crear el enlace de la conversación. ${error}`);
+      const message = error instanceof Error ? error.message : "intenta nuevamente";
+      toast.error(`No se pudo crear el enlace de la conversación: ${message}`);
     }
   };
 
