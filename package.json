@@ -83,8 +83,6 @@
     "@radix-ui/react-toggle-group": "1.1.1",
     "@radix-ui/react-tooltip": "latest",
     "@sentry/browser": "10.51.0",
-    "@splinetool/react-spline": "^4.1.0",
-    "@splinetool/runtime": "^1.10.77",
     "@syncfusion/ej2-base": "^32.1.19",
     "@syncfusion/ej2-react-charts": "^32.1.19",
     "@syncfusion/ej2-react-spreadsheet": "^32.1.19",
