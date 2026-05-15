@@ -1,5 +1,5 @@
 import type React from "react"
-import type { Metadata } from "next"
+import type { Metadata, Viewport } from "next"
 import { GeistSans } from "geist/font/sans"
 import { GeistMono } from "geist/font/mono"
 import "./globals.css"
@@ -18,9 +18,35 @@ import { getLocale, getMessages } from "next-intl/server"
 import { isRTL } from "@/lib/i18n/locales"
 
 export const metadata: Metadata = {
-  title: "Sira Gpt Platform",
-  description: "Multi-LLM AI Platform with Text, Image, Audio & Video Generation",
-  generator: 'v0.dev'
+  title: "Sira GPT — Plataforma de IA Multimodal",
+  description: "Plataforma multi-LLM con generación de texto, imagen, audio y video. GPT-4, Claude, Gemini y más en un solo lugar.",
+  // Sets the apple-mobile-web-app-* meta tags so iOS treats the
+  // installed PWA-style shortcut as a full-screen app, hiding the
+  // Safari chrome and respecting the notch.
+  appleWebApp: {
+    capable: true,
+    title: "Sira GPT",
+    statusBarStyle: "black-translucent",
+  },
+}
+
+// `viewport-fit=cover` is what makes `env(safe-area-inset-*)` resolve
+// to non-zero values on notched iPhones. Without it, the notch eats
+// the top of the header on iOS Safari. `interactiveWidget: "resizes-content"`
+// lets the page resize when the virtual keyboard opens so the composer
+// doesn't slide under the keyboard on Android Chrome.
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 5,
+  minimumScale: 1,
+  userScalable: true,
+  viewportFit: "cover",
+  interactiveWidget: "resizes-content",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
+    { media: "(prefers-color-scheme: dark)", color: "#05070a" },
+  ],
 }
 
 export const dynamic = "force-dynamic"
