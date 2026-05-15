@@ -3,6 +3,7 @@
 import type React from "react"
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react"
 import { apiClient } from "./api"
+import { devLog } from "./dev-log"
 
 interface User {
   id: string
@@ -159,7 +160,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       // Step 3: User ki state ko update karein
       setUser(response.user);
-      console.log("Auth context updated with token for user:", response.user.name);
+      devLog("Auth context updated with token for user:", response.user.name);
       return true;
 
     } catch (error) {
@@ -193,7 +194,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     try {
       const latestUser = await apiClient.getCurrentUser()
-      console.log("Refreshing user in AuthContext:", latestUser)
+      devLog("Refreshing user in AuthContext:", latestUser)
       setUser(latestUser.user)
     } catch (error) {
       console.error("Failed to refresh user:", error)

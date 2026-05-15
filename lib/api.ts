@@ -375,8 +375,6 @@ class ApiClient {
   }
 
   async getChat(id: string) {
-    console.log("Get Chat Working");
-
     return this.request(`/chats/${id}`);
   }
 
@@ -1960,8 +1958,6 @@ class ApiClient {
       ...data,
       timeZone: userTimeZone // <-- Har request ke sath timezone bhejein
     };
-
-    console.log(userTimeZone);
 
     return this.request('/ai/generate-google-services', {
       method: 'POST',
