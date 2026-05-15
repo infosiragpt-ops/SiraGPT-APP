@@ -62,15 +62,21 @@ export default function BillingHistory() {
   const getStatusBadge = (status: string) => {
     const variants: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
       COMPLETED: "default",
-      PENDING: "secondary", 
+      PENDING: "secondary",
       FAILED: "destructive",
       CANCELLED: "outline"
     }
-    
+    const labels: Record<string, string> = {
+      COMPLETED: "Completado",
+      PENDING: "Pendiente",
+      FAILED: "Fallido",
+      CANCELLED: "Cancelado",
+    }
+
     return (
       <Badge variant={variants[status] || "outline"} className="flex items-center gap-1">
         {getStatusIcon(status)}
-        {status}
+        {labels[status] || status}
       </Badge>
     )
   }
@@ -112,14 +118,14 @@ export default function BillingHistory() {
       <CardContent>
         {loading ? (
           <div className="flex items-center justify-center p-8">
-            <div className="animate-pulse">Loading billing history...</div>
+            <div className="animate-pulse">Cargando historial de facturación…</div>
           </div>
         ) : billingData.length === 0 ? (
           <div className="text-center py-8">
             <Receipt className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-            <p className="text-muted-foreground">No billing history found</p>
+            <p className="text-muted-foreground">No hay historial de facturación</p>
             <p className="text-sm text-muted-foreground mt-1">
-              Your payment history will appear here once you make a purchase
+              Tu historial de pagos aparecerá aquí en cuanto realices una compra
             </p>
           </div>
         ) : (
@@ -129,7 +135,7 @@ export default function BillingHistory() {
               <div className="p-4 bg-muted/50 rounded-lg">
                 <div className="flex items-center gap-2 mb-2">
                   <CheckCircle className="h-4 w-4 text-green-500" />
-                  <span className="text-sm font-medium">Total Paid</span>
+                  <span className="text-sm font-medium">Total pagado</span>
                 </div>
                 <p className="text-2xl font-bold">
                   ${billingData
@@ -142,7 +148,7 @@ export default function BillingHistory() {
               <div className="p-4 bg-muted/50 rounded-lg">
                 <div className="flex items-center gap-2 mb-2">
                   <Calendar className="h-4 w-4 text-blue-500" />
-                  <span className="text-sm font-medium">Transactions</span>
+                  <span className="text-sm font-medium">Transacciones</span>
                 </div>
                 <p className="text-2xl font-bold">{billingData.length}</p>
               </div>
@@ -150,7 +156,7 @@ export default function BillingHistory() {
               <div className="p-4 bg-muted/50 rounded-lg">
                 <div className="flex items-center gap-2 mb-2">
                   <CreditCard className="h-4 w-4 text-purple-500" />
-                  <span className="text-sm font-medium">Current Plan</span>
+                  <span className="text-sm font-medium">Plan actual</span>
                 </div>
                 <p className="text-lg font-semibold">{user.plan}</p>
               </div>
@@ -160,19 +166,19 @@ export default function BillingHistory() {
             <div className="border rounded-lg overflow-hidden">
               <div className="px-4 py-3 border-b text-sm font-medium flex items-center justify-between">
                 <div>
-                  Payments
-                  <span className="text-muted-foreground ml-2 text-xs">(internal history)</span>
+                  Pagos
+                  <span className="text-muted-foreground ml-2 text-xs">(historial interno)</span>
                 </div>
               </div>
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Date</TableHead>
-                    <TableHead>Amount</TableHead>
+                    <TableHead>Fecha</TableHead>
+                    <TableHead>Monto</TableHead>
                     <TableHead>Plan</TableHead>
-                    <TableHead>Provider</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Actions</TableHead>
+                    <TableHead>Proveedor</TableHead>
+                    <TableHead>Estado</TableHead>
+                    <TableHead>Acciones</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -214,7 +220,7 @@ export default function BillingHistory() {
                               onClick={() => handleDownloadPaymentInvoice(payment.id)}
                             >
                               <Download className="h-3 w-3 mr-1" />
-                              Invoice
+                              Factura
                             </Button>
                           )}
                     
