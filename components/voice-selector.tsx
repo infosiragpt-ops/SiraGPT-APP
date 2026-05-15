@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Label } from '@/components/ui/label'
 import apiClient from '@/lib/api'
 import { useVoices } from '@/hooks/use-voices'
+import { devLog } from '@/lib/dev-log'
 
 interface Voice {
   voiceId: string
@@ -40,11 +41,11 @@ export default function VoiceSelector({
       <Select 
         value={selectedVoice} 
         onValueChange={(value) => {
-          console.log(`Voice selector - ${label} - Voice selected:`, value)
+          devLog(`Voice selector - ${label} - Voice selected:`, value)
           // Save to localStorage for persistence
           if (typeof window !== 'undefined') {
             localStorage.setItem('selectedVoiceId', value)
-            console.log('Saved voice to localStorage:', value)
+            devLog('Saved voice to localStorage:', value)
           }
           onVoiceChange(value)
         }}

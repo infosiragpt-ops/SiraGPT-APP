@@ -13,6 +13,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { useToast } from '@/hooks/use-toast'
+import { devLog } from '@/lib/dev-log'
 import apiClient from '@/lib/api'
 import VoiceSelector from './voice-selector'
 import {
@@ -91,7 +92,7 @@ const { voices, loading: voicesLoading } = useVoices()
 useEffect(() => {
   if (voices.length > 0 && !selectedVoice) {
     setSelectedVoice(voices[0].voiceId)
-    console.log('Voice controls selected voice:', voices[0].voiceId)
+    devLog('Voice controls selected voice:', voices[0].voiceId)
   }
 }, [voices, selectedVoice])
 
@@ -151,15 +152,15 @@ useEffect(() => {
   const handleSpeechToText = async (audioBlob: Blob) => {
     setIsLoading(true)
     try {
-      console.log('Using ElevenLabs API for speech-to-text')
-      console.log('Audio blob details:', {
+      devLog('Using ElevenLabs API for speech-to-text')
+      devLog('Audio blob details:', {
         size: audioBlob.size,
         type: audioBlob.type
       })
       
       // Create audio file for ElevenLabs API
       const audioFile = new File([audioBlob], 'recording.webm', { type: 'audio/webm' })
-      console.log('Audio file details:', {
+      devLog('Audio file details:', {
         name: audioFile.name,
         size: audioFile.size,
         type: audioFile.type
@@ -188,13 +189,13 @@ useEffect(() => {
 
   const handleTextToSpeech = async (text: string) => {
     if (!text.trim() || !selectedVoice) {
-      console.log("TTS validation failed:", { text: text.trim(), selectedVoice })
+      devLog("TTS validation failed:", { text: text.trim(), selectedVoice })
       return
     }
 
     setIsLoading(true)
     try {
-      console.log("Voice controls TTS request:", { text, voice_id: selectedVoice, voice_settings: voiceSettings })
+      devLog("Voice controls TTS request:", { text, voice_id: selectedVoice, voice_settings: voiceSettings })
       const response = await apiClient.textToSpeech({
         text,
         voice_id: selectedVoice,
@@ -411,7 +412,7 @@ export const useVoiceControls = () => {
         throw new Error("No voice selected for TTS")
       }
 
-      console.log("useVoiceControls TTS request:", { 
+      devLog("useVoiceControls TTS request:", { 
         text: text.substring(0, 50) + '...', 
         voice_id: selectedVoiceId,
         voiceName: voices.find(v => v.voiceId === selectedVoiceId)?.name || 'Unknown',

@@ -13,6 +13,7 @@ import { Progress } from '@/components/ui/progress'
 import { useToast } from '@/hooks/use-toast'
 import apiClient from '@/lib/api'
 import VoiceSelector from './voice-selector'
+import { devLog } from '@/lib/dev-log'
 import {
   Mic,
   Play,
@@ -139,7 +140,7 @@ const { voices, loading: voicesLoading } = useVoices()
   }, [])
 
   const handleTextToSpeech = async () => {
-    console.log("Starting TTS with:", { text, selectedVoice, voiceSettings })
+    devLog("Starting TTS with:", { text, selectedVoice, voiceSettings })
     if (!text.trim()) {
       toast({
         title: "Error",
@@ -158,11 +159,11 @@ const { voices, loading: voicesLoading } = useVoices()
       return
     }
 
-    console.log("Selected voice ID:", selectedVoice)
-    console.log("Available voices:", voices.length)
+    devLog("Selected voice ID:", selectedVoice)
+    devLog("Available voices:", voices.length)
     setIsLoading(true)
     try {
-      console.log('Making TTS request with:', {
+      devLog('Making TTS request with:', {
         text,
         voice_id: selectedVoice,
         voice_settings: voiceSettings
@@ -174,7 +175,7 @@ const { voices, loading: voicesLoading } = useVoices()
         voice_settings: voiceSettings
       })
 
-      console.log('TTS response:', response)
+      devLog('TTS response:', response)
 
       if (response.audio_url) {
         setAudioUrl(response.audio_url)
@@ -396,7 +397,7 @@ const { voices, loading: voicesLoading } = useVoices()
               <VoiceSelector
                 selectedVoice={selectedVoice}
                 onVoiceChange={(value) => {
-                  console.log("ElevenLabs interface - Voice selected:", value)
+                  devLog("ElevenLabs interface - Voice selected:", value)
                   setSelectedVoice(value)
                 }}
                 label="Select Voice"

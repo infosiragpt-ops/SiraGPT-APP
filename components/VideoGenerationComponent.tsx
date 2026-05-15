@@ -256,7 +256,7 @@ export default function VideoGenerationComponent() {
         ? `${apiClient.apiBaseURL}${generatedVideo.download_url}`
         : `${apiClient.apiBaseURL}/video/download/${generatedVideo.filename}`
 
-      console.log('📥 Starting download from:', downloadUrl)
+      // download URL resolved — no log to avoid noise
 
       // Try to fetch the file first to check if it exists
       const response = await fetch(downloadUrl, { method: 'HEAD' })

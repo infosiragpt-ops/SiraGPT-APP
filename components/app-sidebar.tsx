@@ -760,7 +760,7 @@ export function AppSidebar() {
         // We don't call selectChat to avoid navigation
       } catch (refreshError) {
         // If refresh fails, that's okay - optimistic update will handle display
-        console.log('Could not refresh chat, but update was successful')
+        // Chat refresh failed but update succeeded — no log to avoid noise
       }
 
       // Keep optimistic update active - it will persist until natural refresh
