@@ -221,7 +221,7 @@ function StoreCardView({
             {card.title}
           </h3>
           {card.source && isOwner && (onEdit || onDelete) && (
-            <div className="flex shrink-0 items-center gap-1 opacity-0 transition group-hover:opacity-100">
+            <div className="flex shrink-0 items-center gap-1 opacity-100 md:opacity-0 transition md:group-hover:opacity-100">
               {onEdit && (
                 <button
                   type="button"

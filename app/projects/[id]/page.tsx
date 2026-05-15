@@ -604,7 +604,7 @@ function MemorySection({
               <p className="text-xs leading-snug flex-1 text-foreground/85">{m.fact}</p>
               <button
                 onClick={() => onDelete(m.id)}
-                className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground transition-all shrink-0"
+                className="opacity-100 md:opacity-0 md:group-hover:opacity-100 text-muted-foreground hover:text-foreground transition-all shrink-0"
                 aria-label={t("forgetFact")}
               >
                 <X className="h-3 w-3" />
@@ -746,7 +746,7 @@ function FilesSection({
               </div>
               <Button
                 size="icon" variant="ghost"
-                className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
+                className="h-6 w-6 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity"
                 onClick={() => detach(f.id)}
                 aria-label={t("detachFile")}
               >

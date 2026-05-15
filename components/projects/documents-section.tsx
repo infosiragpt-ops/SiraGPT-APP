@@ -121,7 +121,7 @@ export function DocumentsSection({ projectId }: Props) {
               </button>
               <button
                 onClick={() => handleDelete(d.id, d.title)}
-                className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground transition-all shrink-0 mt-0.5"
+                className="opacity-100 md:opacity-0 md:group-hover:opacity-100 text-muted-foreground hover:text-foreground transition-all shrink-0 mt-0.5"
                 aria-label="Eliminar"
               >
                 <Trash2 className="h-3 w-3" />

@@ -1253,7 +1253,8 @@ export function AppSidebar() {
                                       <Button
                                         variant="ghost"
                                         size="sm"
-                                        className="flex h-8 w-8 shrink-0 items-center justify-center p-0 opacity-0 transition-opacity group-hover:opacity-100"
+                                        className="flex h-8 w-8 shrink-0 items-center justify-center p-0 opacity-100 md:opacity-0 transition-opacity md:group-hover:opacity-100"
+                                        aria-label="Acciones del chat"
                                         onClick={(e) => e.stopPropagation()}
                                       >
                                         <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground" />

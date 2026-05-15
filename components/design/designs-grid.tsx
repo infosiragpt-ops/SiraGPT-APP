@@ -191,8 +191,8 @@ function DesignCard({
         </div>
         <button
           onClick={(e) => { e.stopPropagation(); onDelete() }}
-          className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-red-600 transition-all shrink-0"
-          aria-label="Delete"
+          className="opacity-100 md:opacity-0 md:group-hover:opacity-100 text-muted-foreground hover:text-red-600 transition-all shrink-0"
+          aria-label="Eliminar diseño"
         >
           <Trash2 className="h-3.5 w-3.5" />
         </button>
