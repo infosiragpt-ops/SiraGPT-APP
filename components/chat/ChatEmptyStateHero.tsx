@@ -158,7 +158,7 @@ export function ChatEmptyStateHero({
         <span className="text-xs font-medium tracking-wide">Sira GPT</span>
       </div>
 
-      <h1 className="mb-2 text-center text-[28px] font-semibold tracking-[-0.022em] text-foreground sm:text-[34px] md:text-[40px]">
+      <h1 className="mb-2 text-center text-[22px] font-semibold tracking-[-0.022em] text-foreground xs:text-[24px] sm:text-[34px] md:text-[40px] break-words px-2">
         {firstName ? (
           <>
             {greeting},{" "}
@@ -171,11 +171,11 @@ export function ChatEmptyStateHero({
         )}
       </h1>
 
-      <p className="mx-auto mb-8 max-w-md text-center text-[15px] leading-relaxed text-muted-foreground">
+      <p className="mx-auto mb-6 sm:mb-8 max-w-md text-center text-[14px] sm:text-[15px] leading-relaxed text-muted-foreground px-4">
         ¿En qué te puedo ayudar hoy?
       </p>
 
-      <div className="mx-auto grid w-full max-w-2xl grid-cols-2 gap-2 sm:grid-cols-3">
+      <div className="mx-auto grid w-full max-w-2xl grid-cols-2 gap-2 sm:grid-cols-3 px-2">
         {prompts.map((item, index) => (
           <motion.button
             key={item.label}

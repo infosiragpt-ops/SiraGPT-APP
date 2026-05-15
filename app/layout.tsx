@@ -20,6 +20,10 @@ import { isRTL } from "@/lib/i18n/locales"
 export const metadata: Metadata = {
   title: "Sira GPT — Plataforma de IA Multimodal",
   description: "Plataforma multi-LLM con generación de texto, imagen, audio y video. GPT-4, Claude, Gemini y más en un solo lugar.",
+  // Web App Manifest — lets the browser surface the "Install" /
+  // "Add to Home Screen" affordance with our branded icon, name and
+  // launcher shortcuts (Nuevo chat / Biblioteca / Proyectos).
+  manifest: "/manifest.webmanifest",
   // Sets the apple-mobile-web-app-* meta tags so iOS treats the
   // installed PWA-style shortcut as a full-screen app, hiding the
   // Safari chrome and respecting the notch.
@@ -27,6 +31,17 @@ export const metadata: Metadata = {
     capable: true,
     title: "Sira GPT",
     statusBarStyle: "black-translucent",
+  },
+  // Standalone icons. The 180×180 link is the one iOS Home Screen
+  // actually uses; the other sizes flow through the manifest.
+  icons: {
+    icon: [
+      { url: "/icon.svg", type: "image/svg+xml" },
+      { url: "/sira-gpt.png", sizes: "192x192", type: "image/png" },
+    ],
+    apple: [
+      { url: "/sira-gpt.png", sizes: "180x180", type: "image/png" },
+    ],
   },
 }
 
