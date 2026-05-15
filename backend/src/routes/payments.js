@@ -807,16 +807,26 @@ async function handleCheckoutSessionCompleted(session) {
       }
     });
 
-    // Update user subscription - ADD new plan limits to existing monthlyLimit
+    // Update user subscription - ADD new plan limits to existing monthlyLimit.
+    // `monthlyLimit` is `BigInt` in the Prisma schema, so we must coerce
+    // both operands to BigInt before adding. Mixing `BigInt + Number`
+    // throws "Cannot mix BigInt and other types" and silently aborts
+    // the whole handler — leaving the user in FREE despite a paid
+    // checkout. This was the root cause of plans not activating
+    // after a successful Stripe charge.
     const planCredits = {
-      PRO: 500000,
-      PRO_MAX: 1000000,
-      ENTERPRISE: 10000000
+      PRO: 500000n,
+      PRO_MAX: 1000000n,
+      ENTERPRISE: 10000000n,
     };
+    const creditsForPlan = planCredits[plan] ?? 0n;
 
     // Get current user to add to existing limits
     const currentUser = await prisma.user.findUnique({ where: { id: userId } });
-    const newTotalLimit = (currentUser.monthlyLimit || 0) + planCredits[plan];
+    const currentLimit = typeof currentUser?.monthlyLimit === 'bigint'
+      ? currentUser.monthlyLimit
+      : BigInt(currentUser?.monthlyLimit ?? 0);
+    const newTotalLimit = currentLimit + creditsForPlan;
 
     await prisma.user.update({
       where: { id: userId },
@@ -843,8 +853,12 @@ async function handleCheckoutSessionCompleted(session) {
       properties: {
         plan,
         previous_plan: currentUser?.plan || null,
-        monthly_limit: newTotalLimit,
-        added_credits: planCredits[plan],
+        // BigInt cannot be JSON.stringify'd. PostHog properties only
+        // need fits-in-Number precision (credits never exceed 2^53),
+        // so we coerce explicitly here rather than risk a silent
+        // serialization throw inside the analytics client.
+        monthly_limit: Number(newTotalLimit),
+        added_credits: Number(creditsForPlan),
         stripe_session_id: session.id,
         source: 'stripe.checkout.session.completed',
       },
