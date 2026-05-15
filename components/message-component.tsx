@@ -2593,7 +2593,10 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                             </Card>
                         )}
                         {hasContent && !isEditing && (
-                            <div className="mt-1 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                            // On touch (mobile) hover doesn't fire — make
+                            // the row always visible. On desktop keep the
+                            // hover reveal so the chat surface stays clean.
+                            <div className="mt-1 flex items-center gap-1 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
                                 <Button
                                     variant="ghost"
                                     size="icon"
