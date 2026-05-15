@@ -108,6 +108,7 @@ import TextToSpeechComponent from "./text-to-speech-component"
 import MusicGenerationComponent from "./MusicGenerationComponent"
 import { agenticSearchService, type AgenticEvent, type AgenticSource } from "@/lib/agentic-search-service"
 import { agentTaskService, normalizeAgentTaskErrorMessage, reduceEvent, initialAgentState, type AgentTaskState } from "@/lib/agent-task-service"
+import { devLog } from "@/lib/dev-log"
 import VideoGenerationComponent from "./VideoGenerationComponent"
 import UpgradeModal from "./UpgradeModal"
 import { IconProvider } from "./icon-provider"
@@ -3676,7 +3677,7 @@ function ChatInterfaceContent() {
   };
 
   const handleWordConnectorToggle = async () => {
-    console.log("Toggling Word Connector");
+    devLog("Toggling Word Connector");
     const newState = !isWordConnectorActive;
 
     if (newState) {
@@ -3707,7 +3708,7 @@ function ChatInterfaceContent() {
   };
 
   const handleExcelConnectorToggle = async () => {
-    console.log("Toggling Excel Connector");
+    devLog("Toggling Excel Connector");
     const newState = !isExcelConnectorActive;
 
     if (newState) {
@@ -4534,19 +4535,19 @@ But first, you need to connect your Spotify account securely using the button be
     // Use a small delay to ensure previous connector UI is fully closed
     const timer = setTimeout(() => {
       if (currentChat && (currentChat as any).isWordConnectorChat) {
-        console.log('📄 Word Connector chat detected:', currentChat.id);
-        console.log('📄 Has wordContent:', !!(currentChat as any).wordContent);
-        console.log('📄 wordContent length:', (currentChat as any).wordContent?.length);
+        devLog('📄 Word Connector chat detected:', currentChat.id);
+        devLog('📄 Has wordContent:', !!(currentChat as any).wordContent);
+        devLog('📄 wordContent length:', (currentChat as any).wordContent?.length);
 
         setIsWordConnectorActive(true);
 
         // Load existing Word content if available
         if ((currentChat as any).wordContent) {
-          console.log('📄 Attempting to load Word content into editor...');
+          devLog('📄 Attempting to load Word content into editor...');
           // Wait longer for editor to be ready
           setTimeout(() => {
             if (wordConnectorRef.current) {
-              console.log('📄 Ref is ready, updating content...');
+              devLog('📄 Ref is ready, updating content...');
               wordConnectorRef.current?.updateContent((currentChat as any).wordContent);
             } else {
               console.warn('📄 WordConnector ref not ready yet');
@@ -4571,7 +4572,7 @@ But first, you need to connect your Spotify account securely using the button be
   // Listen for "Nuevo chat" button click to reset all states
   React.useEffect(() => {
     const handleResetChatState = () => {
-      console.log('🔄 Resetting all chat states (New Chat clicked)');
+      devLog('🔄 Resetting all chat states (New Chat clicked)');
       resetAllToolsAndConnectors();
       setComputerUseStatus('idle');
       setComputerUseScreenshot(null);
@@ -4589,11 +4590,11 @@ But first, you need to connect your Spotify account securely using the button be
   // Additional effect: Load content when Word Connector becomes active and ref is ready
   React.useEffect(() => {
     if (isWordConnectorActive && currentChat && (currentChat as any).isWordConnectorChat && (currentChat as any).wordContent) {
-      console.log('📄 Word Connector active, checking if ref is ready...');
+      devLog('📄 Word Connector active, checking if ref is ready...');
       // Try loading content when panel becomes active
       const loadContent = () => {
         if (wordConnectorRef.current) {
-          console.log('📄 Loading content into active Word Connector...');
+          devLog('📄 Loading content into active Word Connector...');
           wordConnectorRef.current?.updateContent((currentChat as any).wordContent);
           return true;
         }
@@ -4642,7 +4643,7 @@ But first, you need to connect your Spotify account securely using the button be
 
     const handleExtractionComplete = (event: Event) => {
       const customEvent = event as CustomEvent;
-      console.log('Computer Use extraction completed, refreshing chat...');
+      devLog('Computer Use extraction completed, refreshing chat...');
       // Refresh the current chat to show new messages
       if (currentChat?.id) {
         setTimeout(() => {
@@ -4655,7 +4656,7 @@ But first, you need to connect your Spotify account securely using the button be
       try {
         const data = JSON.parse(event.data);
         if (data.type === 'extraction-completed' && data.data.chatId === currentChat?.id) {
-          console.log('WebSocket: Computer Use extraction completed, refreshing chat...');
+          devLog('WebSocket: Computer Use extraction completed, refreshing chat...');
           setTimeout(() => {
             if (currentChat?.id) {
               selectChat(currentChat.id);
@@ -5638,7 +5639,7 @@ REWRITTEN TEXT:`;
 
         try {
           const parsedResponse = response.data;
-          console.log('Parsed Excel response:', parsedResponse);
+          devLog('Parsed Excel response:', parsedResponse);
 
           // Check if response has both workbook and actions (chart support)
           let workbookData = parsedResponse;
@@ -5648,7 +5649,7 @@ REWRITTEN TEXT:`;
             // New format with chart actions
             workbookData = parsedResponse.workbook;
             chartActions = parsedResponse.actions;
-            console.log('Chart actions detected:', chartActions);
+            devLog('Chart actions detected:', chartActions);
           }
 
           if (excelConnectorRef.current) {
@@ -5814,12 +5815,12 @@ REWRITTEN TEXT:`;
 
         // If no current chat, create a new one first
         if (!chatId) {
-          console.log('Creating new chat for computer use...');
+          devLog('Creating new chat for computer use...');
           const newChat = await createNewChat('computer-use', msg);
           chatId = newChat.id;
 
           // Immediately select the new chat to show it in UI and wait for it to load
-          console.log('Selecting newly created chat:', chatId);
+          devLog('Selecting newly created chat:', chatId);
           await selectChat(chatId ?? '');
 
           // Wait longer for UI to fully update and messages to load
@@ -5831,7 +5832,7 @@ REWRITTEN TEXT:`;
           }, 100);
         }
 
-        console.log('Starting computer use with:', {
+        devLog('Starting computer use with:', {
           task: msg,
           chatId: chatId,
           userId: user?.id
@@ -5840,11 +5841,11 @@ REWRITTEN TEXT:`;
         // Set up listener for extraction completion
         const handleExtractionComplete = (event: Event) => {
           const customEvent = event as CustomEvent;
-          console.log('Computer Use extraction completed, refreshing chat...', customEvent.detail);
+          devLog('Computer Use extraction completed, refreshing chat...', customEvent.detail);
 
           // Force refresh the chat to show new extracted data
           if (chatId) {
-            console.log('Refreshing chat with ID:', chatId);
+            devLog('Refreshing chat with ID:', chatId);
 
             // Multiple refresh attempts to ensure UI updates
             selectChat(chatId);
@@ -5982,7 +5983,7 @@ REWRITTEN TEXT:`;
       }
     } catch (err: any) {
       console.error('Send error', err);
-      console.log('Error details:', {
+      devLog('Error details:', {
         message: err?.message,
         status: err?.status,
         statusCode: err?.statusCode,
@@ -5999,7 +6000,7 @@ REWRITTEN TEXT:`;
       const status = err?.status || err?.statusCode || (err?.response && err.response.status);
       const errorData = err?.errorData;
 
-      console.log('Checking error conditions:', {
+      devLog('Checking error conditions:', {
         status,
         message,
         errorData,
@@ -6013,7 +6014,7 @@ REWRITTEN TEXT:`;
         isMonthlyLimitError(message) ||
         (errorData && isMonthlyLimitError(errorData.error || ''))) {
 
-        console.log('API limit error detected, opening upgrade modal', { status, message, errorData });
+        devLog('API limit error detected, opening upgrade modal', { status, message, errorData });
 
         // Show upgrade modal for API limit errors
         setSubscribeOpen(true);
@@ -6585,7 +6586,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         },
         () => {
           // Stream completed
-          console.log('Web development generation completed');
+          devLog('Web development generation completed');
         },
         (error) => {
           console.error('Web development generation error:', error);

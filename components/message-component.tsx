@@ -997,7 +997,8 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
             }
         } catch (error) {
             // Fallback to browser TTS
-            console.log('ElevenLabs TTS failed, using browser TTS:', error);
+            // ElevenLabs TTS failed → fall back to browser TTS (caught above)
+            void error;
             setIsLoadingAudio(false);
             setShowAudioPlayer(false);
             // Cancel any utterance still queued from a previous
@@ -1175,7 +1176,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                     const handleExpand = () => {
                         const tHead = node.children.find((child: any) => child.tagName === 'thead');
                         const tBody = node.children.find((child: any) => child.tagName === 'tbody');
-                        console.log(children);
+                        // intentionally no-op: children inspection moved to debugger
 
                         const headers = tHead?.children?.[0]?.children?.map(getNodeText).filter((e: string) => e != "\n") ?? [];
                         const data = tBody?.children?.map((tr: any) => tr.children?.map(getNodeText).filter((e: string) => e !== "\n") ?? []) ?? [];
@@ -1450,7 +1451,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                 <GmailConnectionCard
                     onConnect={() => {
                         // Optional: Add any additional handling after connection
-                        console.log('Gmail connection initiated');
+                        // Gmail connection initiated — UI proceeds on the next event
                     }}
                 />
             </div>
@@ -1466,7 +1467,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                 <GoogleServicesConnectionCard
                     onConnectionChange={(isConnected) => {
                         if (isConnected) {
-                            console.log('Google Services connected successfully');
+                            // Google Services connected — UI proceeds on the next event
                         }
                     }}
                 />
