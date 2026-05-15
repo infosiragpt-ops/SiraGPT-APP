@@ -141,6 +141,33 @@ export function normalizeAgentTaskErrorMessage(err: unknown): string {
   if (/empty_stream|AgentTaskEmptyStreamError/i.test(raw)) {
     return "El asistente cerró la respuesta sin generar texto. Reintenta."
   }
+  // ── New friendly maps for common backend failure modes ──────────
+  // 401 / token-related: surface "session expired" instead of a raw
+  // stack trace so the user knows what to do next.
+  if (/\b401\b|unauthorized|invalid[_ -]?token|jwt[_ -]?(expired|invalid)/i.test(raw)) {
+    return "Tu sesión expiró. Inicia sesión de nuevo para continuar."
+  }
+  // 429 / rate-limit: rephrase with the action the user should take.
+  if (/\b429\b|rate[_ -]?limit|too many requests|quota[_ -]?exceeded/i.test(raw)) {
+    return "Has alcanzado el límite del plan. Espera unos minutos o actualiza tu plan."
+  }
+  // 5xx: tell the user it's our side and they can retry.
+  if (/\b50[0-9]\b|internal server error|bad gateway|service unavailable/i.test(raw)) {
+    return "El servidor tuvo un problema. Reintenta en unos segundos."
+  }
+  // Provider-side errors (OpenAI/Anthropic/Gemini) commonly leak
+  // their model name + a vague reason — wrap with a recovery hint.
+  if (/insufficient[_ -]?quota|context[_ -]?length|maximum context length/i.test(raw)) {
+    return "El mensaje superó el contexto del modelo. Acórtalo o divide la consulta."
+  }
+  if (/model.*not.*(?:found|available|exist)|invalid[_ -]?model/i.test(raw)) {
+    return "El modelo seleccionado no está disponible. Cámbialo desde el selector y reintenta."
+  }
+  // Generic "aborted" — the user pressed Stop. Surface a quiet line
+  // instead of "Error: aborted".
+  if (/^aborted$|AbortError|user[_ -]?cancelled/i.test(raw)) {
+    return "Tarea detenida."
+  }
   return raw
 }
 

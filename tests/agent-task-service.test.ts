@@ -74,4 +74,47 @@ describe("agent-task-service · error messages", () => {
       "El asistente dejó de enviar actualizaciones. Reintenta el pedido.",
     )
   })
+
+  it("maps 401 / unauthorized to session-expired copy", () => {
+    assert.equal(
+      normalizeAgentTaskErrorMessage(new Error("Request failed with status code 401")),
+      "Tu sesión expiró. Inicia sesión de nuevo para continuar.",
+    )
+    assert.equal(
+      normalizeAgentTaskErrorMessage(new Error("jwt expired")),
+      "Tu sesión expiró. Inicia sesión de nuevo para continuar.",
+    )
+  })
+
+  it("maps 429 / rate-limit to plan-limit copy", () => {
+    assert.equal(
+      normalizeAgentTaskErrorMessage(new Error("429 Too Many Requests")),
+      "Has alcanzado el límite del plan. Espera unos minutos o actualiza tu plan.",
+    )
+  })
+
+  it("maps 5xx to server-problem copy", () => {
+    assert.equal(
+      normalizeAgentTaskErrorMessage(new Error("502 Bad Gateway")),
+      "El servidor tuvo un problema. Reintenta en unos segundos.",
+    )
+  })
+
+  it("maps context-length and missing-model errors to actionable copy", () => {
+    assert.equal(
+      normalizeAgentTaskErrorMessage(new Error("This model's maximum context length is 8192 tokens")),
+      "El mensaje superó el contexto del modelo. Acórtalo o divide la consulta.",
+    )
+    assert.equal(
+      normalizeAgentTaskErrorMessage(new Error("Model gpt-foo not found")),
+      "El modelo seleccionado no está disponible. Cámbialo desde el selector y reintenta.",
+    )
+  })
+
+  it("downgrades aborted errors to a quiet status line", () => {
+    assert.equal(
+      normalizeAgentTaskErrorMessage(new Error("aborted")),
+      "Tarea detenida.",
+    )
+  })
 })
