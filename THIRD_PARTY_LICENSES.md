@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1430**.
+Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1422**.
 
 > Re-run with `npm run licenses:report` after every dependency change. CI enforces that no GPL/AGPL/LGPL/CDDL/EPL/MPL-1.1/NPOSL family appears via `npm run licenses:check`.
 
@@ -408,7 +408,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `yargs-parser` | 21.1.1 | ISC | [link](https://github.com/yargs/yargs-parser) |
 | `zod-to-json-schema` | 3.25.2 | ISC | [link](https://github.com/StefanTerdell/zod-to-json-schema) |
 
-## MIT (1073)
+## MIT (1066)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -595,7 +595,6 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@shikijs/vscode-textmate` | 10.0.2 | MIT | [link](https://github.com/shikijs/vscode-textmate) |
 | `@simplewebauthn/server` | 11.0.0 | MIT | [link](https://github.com/MasterKale/SimpleWebAuthn) |
 | `@simplewebauthn/types` | 11.0.0 | MIT | [link](https://github.com/MasterKale/SimpleWebAuthn) |
-| `@splinetool/react-spline` | 4.1.0 | MIT |  |
 | `@standard-schema/spec` | 1.1.0 | MIT | [link](https://github.com/standard-schema/standard-schema) |
 | `@standard-schema/utils` | 0.3.0 | MIT | [link](https://github.com/standard-schema/standard-schema) |
 | `@tabby_ai/hijri-converter` | 1.0.5 | MIT |  |
@@ -752,7 +751,6 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `binary-extensions` | 2.3.0 | MIT | [link](https://github.com/sindresorhus/binary-extensions) |
 | `bl` | 4.1.0 | MIT | [link](https://github.com/rvagg/bl) |
 | `bluebird` | 3.4.7 | MIT | [link](https://github.com/petkaantonov/bluebird) |
-| `blurhash` | 2.0.5 | MIT | [link](https://github.com/woltapp/blurhash.git#master) |
 | `bmp-js` | 0.1.0 | MIT | [link](https://github.com/shaozilee/bmp-js) |
 | `body-parser` | 1.20.5, 2.2.2 | MIT | [link](https://github.com/expressjs/body-parser) |
 | `bottleneck` | 2.19.5 | MIT | [link](https://github.com/SGrondin/bottleneck) |
@@ -1026,7 +1024,6 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `lodash` | 4.18.1 | MIT | [link](https://github.com/lodash/lodash) |
 | `lodash-es` | 4.18.1 | MIT | [link](https://github.com/lodash/lodash) |
 | `lodash.camelcase` | 4.3.0 | MIT | [link](https://github.com/lodash/lodash) |
-| `lodash.debounce` | 4.0.8 | MIT | [link](https://github.com/lodash/lodash) |
 | `lodash.defaults` | 4.2.0 | MIT | [link](https://github.com/lodash/lodash) |
 | `lodash.difference` | 4.5.0 | MIT | [link](https://github.com/lodash/lodash) |
 | `lodash.escaperegexp` | 4.1.2 | MIT | [link](https://github.com/lodash/lodash) |
@@ -1164,7 +1161,6 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `officeparser` | 6.1.1 | MIT | [link](https://github.com/harshankur/officeParser) |
 | `ohash` | 2.0.11 | MIT | [link](https://github.com/unjs/ohash) |
 | `oidc-token-hash` | 5.2.0 | MIT | [link](https://github.com/panva/oidc-token-hash) |
-| `on-change` | 4.0.0 | MIT | [link](https://github.com/sindresorhus/on-change) |
 | `on-exit-leak-free` | 2.1.2 | MIT | [link](https://github.com/mcollina/on-exit-or-gc) |
 | `on-finished` | 2.3.0, 2.4.1 | MIT | [link](https://github.com/jshttp/on-finished) |
 | `on-headers` | 1.1.0 | MIT | [link](https://github.com/jshttp/on-headers) |
@@ -1290,7 +1286,6 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `react-is` | 16.13.1, 19.2.5 | MIT | [link](https://github.com/facebook/react) |
 | `react-katex` | 3.1.0 | MIT | [link](https://github.com/talyssonoc/react-katex) |
 | `react-markdown` | 10.1.0 | MIT | [link](https://github.com/remarkjs/react-markdown) |
-| `react-merge-refs` | 2.1.1 | MIT | [link](https://github.com/gregberge/react-merge-refs) |
 | `react-pdf` | 9.2.1 | MIT | [link](https://github.com/wojtekmaj/react-pdf) |
 | `react-plotly.js` | 2.6.0 | MIT | [link](https://github.com/plotly/react-plotly.js) |
 | `react-redux` | 9.2.0 | MIT | [link](https://github.com/reduxjs/react-redux) |
@@ -1343,7 +1338,6 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `safer-buffer` | 2.1.2 | MIT | [link](https://github.com/ChALkeR/safer-buffer) |
 | `scheduler` | 0.23.2 | MIT | [link](https://github.com/facebook/react) |
 | `selderee` | 0.11.0 | MIT | [link](https://github.com/mxxii/selderee) |
-| `semver-compare` | 1.0.0 | MIT | [link](https://github.com/substack/semver-compare) |
 | `send` | 0.19.0, 1.2.1 | MIT | [link](https://github.com/pillarjs/send) |
 | `serve-static` | 1.16.2, 2.2.1 | MIT | [link](https://github.com/expressjs/serve-static) |
 | `setimmediate` | 1.0.5 | MIT | [link](https://github.com/YuzuJS/setImmediate) |
@@ -1398,7 +1392,6 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `thread-stream` | 4.0.0 | MIT | [link](https://github.com/mcollina/thread-stream) |
 | `three` | 0.161.0, 0.184.0 | MIT | [link](https://github.com/mrdoob/three.js) |
 | `throttleit` | 2.1.0 | MIT | [link](https://github.com/sindresorhus/throttleit) |
-| `thumbhash` | 0.1.1 | MIT | [link](https://github.com/evanw/thumbhash) |
 | `tiktoken` | 1.0.22 | MIT | [link](https://github.com/dqbd/tiktoken) |
 | `tiny-inflate` | 1.0.3 | MIT | [link](https://github.com/devongovett/tiny-inflate) |
 | `tiny-invariant` | 1.3.3 | MIT | [link](https://github.com/alexreardon/tiny-invariant) |
@@ -1499,11 +1492,10 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `big-integer` | 1.6.52 | Unlicense | [link](https://github.com/peterolson/BigInteger.js) |
 | `robust-predicates` | 3.0.3 | Unlicense | [link](https://github.com/mourner/robust-predicates) |
 
-## UNKNOWN (3)
+## UNKNOWN (2)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
-| `@splinetool/runtime` | 1.12.87 | UNKNOWN | [link](https://github.com/splinetool/spline) |
 | `buffers` | 0.1.1 | UNKNOWN | [link](https://github.com/substack/node-buffers) |
 | `openwebui-backend` | 1.0.0 | UNKNOWN |  |
 
