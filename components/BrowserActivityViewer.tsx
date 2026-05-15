@@ -186,7 +186,7 @@ const BrowserActivityViewer: React.FC<BrowserActivityViewerProps> = ({ sessionId
             size="sm"
             onClick={handleMinimize}
             className="h-7 px-2"
-            title="Minimize"
+            title="Minimizar"
           >
             <Minimize2 className="h-3 w-3" />
           </Button> */}
@@ -196,7 +196,8 @@ const BrowserActivityViewer: React.FC<BrowserActivityViewerProps> = ({ sessionId
               size="sm"
               onClick={onClose}
               className="h-7 px-2"
-              title="Close"
+              title="Cerrar"
+              aria-label="Cerrar"
             >
               <X className="h-3 w-3" />
             </Button>

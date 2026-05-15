@@ -2171,9 +2171,9 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                         />
                         <DialogFooter>
                             <DialogClose asChild>
-                                <Button variant="outline">Cancel</Button>
+                                <Button variant="outline">Cancelar</Button>
                             </DialogClose>
-                            <Button onClick={sendReply} disabled={!replyBody.trim()}>Send reply</Button>
+                            <Button onClick={sendReply} disabled={!replyBody.trim()}>Enviar respuesta</Button>
                         </DialogFooter>
                     </DialogContent>
                 </Dialog>
@@ -2564,8 +2564,8 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                             className="min-h-[80px]"
                                         />
                                         <div className="flex gap-2 justify-end">
-                                            <Button size="sm" variant="ghost" onClick={() => setIsEditing(false)}>Cancel</Button>
-                                            <Button size="sm" onClick={handleEditSave}>Save</Button>
+                                            <Button size="sm" variant="ghost" onClick={() => setIsEditing(false)}>Cancelar</Button>
+                                            <Button size="sm" onClick={handleEditSave}>Guardar</Button>
                                         </div>
                                     </div>
                                 ) : (
@@ -2587,7 +2587,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                                 toast.error("No se pudo copiar")
                                             })
                                     }}
-                                    title="Copy"
+                                    title="Copiar"
                                 >
                                     <Copy size={14} />
                                 </Button>
@@ -2596,7 +2596,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                     size="icon"
                                     className="h-6 w-6"
                                     onClick={() => setIsEditing(true)}
-                                    title="Edit"
+                                    title="Editar"
                                 >
                                     <Pencil size={14} />
                                 </Button>
