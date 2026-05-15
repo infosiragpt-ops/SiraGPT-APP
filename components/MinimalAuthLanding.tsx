@@ -10,7 +10,7 @@ function PrimumMark() {
     <div className="relative flex h-11 w-11 items-center justify-center rounded-2xl bg-white shadow-[0_18px_45px_-18px_rgba(124,58,237,0.75)] ring-1 ring-purple-200">
       <div className="absolute inset-[3px] rounded-[14px] bg-[linear-gradient(135deg,#7c3aed_0%,#fff_48%,#f97316_100%)] opacity-95" />
       <div className="relative flex h-7 w-7 items-center justify-center rounded-xl bg-white/90 text-[16px] font-black text-slate-950 shadow-inner">
-        P
+        S
       </div>
     </div>
   )
@@ -23,7 +23,7 @@ function AuthActions() {
         href="/auth/login"
         className="inline-flex h-11 items-center justify-center rounded-full border border-purple-200 bg-white px-5 text-[13.5px] font-semibold text-slate-900 shadow-[0_18px_50px_-34px_rgba(15,23,42,0.8)] transition hover:border-purple-300"
       >
-        Login
+        Iniciar sesión
       </Link>
       <Link
         href="/auth/register"
@@ -31,7 +31,7 @@ function AuthActions() {
       >
         <span className="absolute inset-0 bg-[linear-gradient(135deg,#7c3aed_0%,#f97316_100%)]" />
         <span className="absolute inset-y-0 left-0 w-1/2 -translate-x-full bg-white/25 blur-xl transition duration-700 group-hover:translate-x-[240%]" />
-        <span className="relative">Sign Up</span>
+        <span className="relative">Registrarse</span>
       </Link>
     </div>
   )
@@ -88,8 +88,8 @@ export function MinimalAuthLanding() {
             <Link href="/auth" className="flex items-center gap-3">
               <PrimumMark />
               <div>
-                <span className="block text-[21px] font-black tracking-tight text-slate-950">Primum</span>
-                <span className="block text-[10px] font-bold uppercase tracking-[0.26em] text-purple-950/72">AI Platform</span>
+                <span className="block text-[21px] font-black tracking-tight text-slate-950">Sira GPT</span>
+                <span className="block text-[10px] font-bold uppercase tracking-[0.26em] text-purple-950/72">Plataforma IA</span>
               </div>
             </Link>
 
