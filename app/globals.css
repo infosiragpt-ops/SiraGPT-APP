@@ -466,7 +466,11 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   }
 
   .chat-mobile-header {
-    padding: max(0.625rem, env(safe-area-inset-top, 0px)) var(--chat-mobile-gutter) 0;
+    /* Stack safe-area-inset on TOP of base padding so notched
+       iPhones still get a 10px breathing gap below the notch.
+       Using max() would collapse the gap to 0 on notched models
+       (the inset alone was 47-59 px). */
+    padding: calc(0.625rem + env(safe-area-inset-top, 0px)) var(--chat-mobile-gutter) 0;
   }
 
   .chat-header-row,
