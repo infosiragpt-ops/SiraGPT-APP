@@ -227,7 +227,7 @@ async function layoutMetrics(page: Page) {
 test("375px mobile chat keeps header, messages, composer, tools, and chips within the viewport", async ({ page }) => {
   await openMobileChat(page, 375, 667)
 
-  await page.getByRole("button", { name: /attach files & tools/i }).click()
+  await page.getByRole("button", { name: /Adjuntar archivos y herramientas|attach files & tools/i }).click()
   await page.getByRole("menuitem", { name: /Web Search/i }).click()
 
   await page.evaluate(() => {
@@ -278,8 +278,8 @@ test("390px mobile model and tools menus stay inside the viewport", async ({ pag
   expect(modelBox!.height).toBeLessThanOrEqual(844)
   await page.keyboard.press("Escape")
 
-  await page.getByRole("button", { name: /attach files & tools/i }).click()
-  const toolsMenu = page.locator('[role="menu"]').filter({ hasText: "Upload Files" }).first()
+  await page.getByRole("button", { name: /Adjuntar archivos y herramientas|attach files & tools/i }).click()
+  const toolsMenu = page.locator('[role="menu"]').filter({ hasText: /Subir archivos|Upload Files/ }).first()
   await expect(toolsMenu).toBeVisible()
   await expect(toolsMenu.getByText("Gmail", { exact: true })).toBeVisible()
   await expect(toolsMenu.getByText("Google Drive", { exact: true })).toBeVisible()
