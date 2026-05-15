@@ -21,57 +21,57 @@ import { useAuth } from "@/lib/auth-context-integrated"
 import { cn } from "@/lib/utils"
 const adminMenuItems = [
   {
-    title: "Dashboard",
+    title: "Panel",
     icon: BarChart3,
     url: "/admin",
   },
   {
-    title: "Users",
+    title: "Usuarios",
     icon: Users,
     url: "/admin/users",
   },
   {
-    title: "AI Models",
+    title: "Modelos IA",
     icon: Bot,
     url: "/admin/models",
   },
    {
-     title: "Payments",
+     title: "Pagos",
      icon: CreditCard,
      url: "/admin/payments",
    },
    {
-     title: "Invoices",
+     title: "Facturas",
      icon: FileText,
      url: "/admin/invoices",
    },
   {
-    title: "Analytics",
+    title: "Métricas",
     icon: Activity,
     url: "/admin/analytics",
   },
   {
-    title: "Database",
+    title: "Base de datos",
     icon: Database,
     url: "/admin/database",
   },
   {
-    title: "Security",
+    title: "Seguridad",
     icon: Shield,
     url: "/admin/security",
   },
   {
-    title: "Reports",
+    title: "Reportes",
     icon: FileText,
     url: "/admin/reports",
   },
   {
-    title: "Health",
+    title: "Estado",
     icon: Heart,
     url: "/admin/health",
   },
   {
-    title: "Settings",
+    title: "Ajustes",
     icon: Settings,
     url: "/admin/settings",
   },
@@ -111,8 +111,8 @@ export function AdminSidebar() {
             <Shield className="h-4 w-4 text-white" />
           </div>
           <div className="flex flex-col">
-            <span className="text-sm font-semibold">Admin Panel</span>
-            <span className="text-xs text-muted-foreground">Sira Gpt</span>
+            <span className="text-sm font-semibold">Panel de administración</span>
+            <span className="text-xs text-muted-foreground">Sira GPT</span>
            </div>
           </div>
           <SidebarTrigger />

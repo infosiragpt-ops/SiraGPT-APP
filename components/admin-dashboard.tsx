@@ -47,30 +47,30 @@ export function AdminDashboard() {
 
   const stats = [
     {
-      title: "Total Users",
+      title: "Usuarios totales",
       value: analytics.totalUsers.toLocaleString(),
-      change: "+12.5%",
+      change: "+12,5%",
       trend: "up",
       icon: Users,
     },
     {
-      title: "Active Users",
+      title: "Usuarios activos",
       value: analytics.activeUsers.toLocaleString(),
-      change: "+8.2%",
+      change: "+8,2%",
       trend: "up",
       icon: Activity,
     },
     {
-      title: "Total Revenue",
+      title: "Ingresos totales",
       value: `$${analytics.totalRevenue.toLocaleString()}`,
-      change: "+15.3%",
+      change: "+15,3%",
       trend: "up",
       icon: DollarSign,
     },
     {
-      title: "API Calls",
+      title: "Llamadas API",
       value: `${(analytics.totalApiCalls / 1000).toFixed(0)}K`,
-      change: "-2.1%",
+      change: "-2,1%",
       trend: "down",
       icon: Bot,
     },
@@ -83,14 +83,14 @@ export function AdminDashboard() {
           <div className="flex items-center gap-2 sm:gap-3">
             <SidebarTrigger className="md:hidden" />
             <div>
-              <h1 className="text-2xl sm:text-3xl font-bold">Admin Dashboard</h1>
-              <p className="text-muted-foreground text-sm sm:text-base mt-1">Overview of your Sira Gpt platform</p>
+              <h1 className="text-2xl sm:text-3xl font-bold">Panel de administración</h1>
+              <p className="text-muted-foreground text-sm sm:text-base mt-1">Resumen general de tu plataforma Sira GPT</p>
             </div>
           </div>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
           <ThemeToggle />
-          <Button size="sm" className="text-sm">Refresh Data</Button>
+          <Button size="sm" className="text-sm">Refrescar datos</Button>
         </div>
       </div>
 
@@ -118,7 +118,7 @@ export function AdminDashboard() {
                 >
                   {stat.change}
                 </span>
-                <span className="ml-1">from last month</span>
+                <span className="ml-1">vs. mes anterior</span>
               </div>
             </CardContent>
           </Card>
@@ -129,7 +129,7 @@ export function AdminDashboard() {
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         <Card>
           <CardHeader>
-            <CardTitle>Users by Plan</CardTitle>
+            <CardTitle>Usuarios por plan</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="space-y-3">
@@ -160,22 +160,22 @@ export function AdminDashboard() {
 
         <Card>
           <CardHeader>
-            <CardTitle>System Health</CardTitle>
-            <CardDescription>All systems operational</CardDescription>
+            <CardTitle>Estado del sistema</CardTitle>
+            <CardDescription>Todos los servicios operativos</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="space-y-2">
               <div className="flex items-center space-x-2">
                 <div className="h-2 w-2 rounded-full bg-green-500"></div>
-                <span className="text-sm">Database: Connected</span>
+                <span className="text-sm">Base de datos: conectada</span>
               </div>
               <div className="flex items-center space-x-2">
                 <div className="h-2 w-2 rounded-full bg-green-500"></div>
-                <span className="text-sm">API: Operational</span>
+                <span className="text-sm">API: operativa</span>
               </div>
               <div className="flex items-center space-x-2">
                 <div className="h-2 w-2 rounded-full bg-green-500"></div>
-                <span className="text-sm">AI Services: Active</span>
+                <span className="text-sm">Servicios de IA: activos</span>
               </div>
             </div>
           </CardContent>
@@ -183,17 +183,17 @@ export function AdminDashboard() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Quick Actions</CardTitle>
+            <CardTitle>Acciones rápidas</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
             <Button variant="outline" size="sm" className="w-full justify-start">
-              Export User Data
+              Exportar usuarios
             </Button>
             <Button variant="outline" size="sm" className="w-full justify-start">
-              Generate Report
+              Generar reporte
             </Button>
             <Button variant="outline" size="sm" className="w-full justify-start">
-              System Backup
+              Backup del sistema
             </Button>
           </CardContent>
         </Card>
@@ -202,16 +202,16 @@ export function AdminDashboard() {
       {/* Recent Activity */}
       <Card>
         <CardHeader>
-          <CardTitle>Recent Activity</CardTitle>
-          <CardDescription>Latest user actions and system events</CardDescription>
+          <CardTitle>Actividad reciente</CardTitle>
+          <CardDescription>Últimas acciones de usuarios y eventos del sistema</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
             {[
-              { user: "John Doe", action: "Started new chat", time: "2 min ago", status: "active" },
-              { user: "Jane Smith", action: "Upgraded to Pro", time: "5 min ago", status: "success" },
-              { user: "Mike Johnson", action: "API limit reached", time: "10 min ago", status: "warning" },
-              { user: "Sarah Wilson", action: "Account created", time: "15 min ago", status: "success" },
+              { user: "Juan Pérez", action: "Inició nuevo chat", time: "hace 2 min", status: "active" },
+              { user: "Ana Gómez", action: "Mejoró a PRO", time: "hace 5 min", status: "success" },
+              { user: "Miguel Torres", action: "Alcanzó el límite de API", time: "hace 10 min", status: "warning" },
+              { user: "Sofía Ruiz", action: "Cuenta creada", time: "hace 15 min", status: "success" },
             ].map((activity, index) => (
               <div key={index} className="flex items-center gap-3">
                 <div
