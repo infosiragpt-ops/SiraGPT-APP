@@ -537,6 +537,21 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   }
 
   /*
+   * iOS Safari auto-zoom on focus — when an <input> or <textarea>
+   * has font-size < 16px, iOS aggressively zooms in (and then
+   * doesn't zoom back out). The composer is `text-[15px]` for the
+   * desktop typographic rhythm; we bump it to 16px on touch
+   * viewports without retyping every Tailwind class. Also pre-empts
+   * the same trap on every input/textarea in modal dialogs.
+   */
+  input,
+  textarea,
+  select,
+  [contenteditable="true"] {
+    font-size: max(16px, 1em);
+  }
+
+  /*
    * Touch-target expansion — the Apple HIG and WCAG 2.5.5 both
    * recommend ≥ 44 × 44 px for any tappable element on mobile. Many
    * icon buttons in the chat are sized to fit a 28-32px desktop grid;
