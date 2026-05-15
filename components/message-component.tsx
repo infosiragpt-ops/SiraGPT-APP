@@ -792,16 +792,35 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         }
     };
 
-    const ErrorMessage = ({ onRegenerate }: { onRegenerate: (messageId: string) => void }) => (
-        <div className="flex items-center gap-2 text-red-500 py-2 px-4 bg-red-500/10 rounded-md">
-            <AlertCircle className="h-4 w-4" />
-            <p className="text-sm font-medium">An error occurred.</p>
-            <Button onClick={() => onRegenerate(message.id)} variant="ghost" size="sm" className="ml-auto">
-                <RefreshCw className="h-4 w-4 mr-1" />
-                Try again
-            </Button>
-        </div>
-    );
+    const ErrorMessage = ({ onRegenerate }: { onRegenerate: (messageId: string) => void }) => {
+        // The persisted error string (set by chat-context after a failed
+        // generation) is now produced by normalizeAgentTaskErrorMessage,
+        // so it's already user-friendly and Spanish. Display it inline
+        // when present; fall back to a generic line otherwise.
+        const friendly =
+            typeof (message as any).error === "string" && (message as any).error.trim()
+                ? (message as any).error.trim()
+                : "Ocurrió un error al generar la respuesta."
+        return (
+            <div
+                role="alert"
+                className="flex flex-wrap items-center gap-2 rounded-md border border-red-300/50 bg-red-500/10 px-4 py-2 text-red-600 dark:border-red-700/40 dark:text-red-300"
+            >
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                <p className="text-sm font-medium">{friendly}</p>
+                <Button
+                    onClick={() => onRegenerate(message.id)}
+                    variant="ghost"
+                    size="sm"
+                    className="ml-auto hover:bg-red-500/15"
+                    aria-label="Reintentar generación"
+                >
+                    <RefreshCw className="h-4 w-4 mr-1" />
+                    Reintentar
+                </Button>
+            </div>
+        )
+    };
 
 
     const isAssistant = message.role === "ASSISTANT";
