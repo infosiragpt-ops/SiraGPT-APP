@@ -157,6 +157,15 @@ describe("normalizeChatInput · strip-to-empty", () => {
   })
 })
 
+describe("MAX_CHAT_INPUT_CHARS constant", () => {
+  it("is exactly 100,000 (matches backend SIRAGPT_MAX_MESSAGE_CHARS default)", () => {
+    // The frontend cap MUST mirror the backend default so a curl-direct
+    // caller hitting the backend doesn't sneak past a 100k char body.
+    // If this value changes, also update backend/src/routes/chats.js.
+    assert.equal(MAX_CHAT_INPUT_CHARS, 100_000)
+  })
+})
+
 describe("normalizeChatInput · originalLength", () => {
   it("reports the raw string length pre-cleanup", () => {
     const out = normalizeChatInput(`abc${ZWSP}def`)
