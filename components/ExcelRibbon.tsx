@@ -2,6 +2,7 @@
 
 import React, { useState, useRef, useEffect } from "react";
 import { SpreadsheetComponent } from "@syncfusion/ej2-react-spreadsheet";
+import { devLog } from "@/lib/dev-log";
 import {
   Clipboard,
   Scissors,
@@ -753,7 +754,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
         if (typeof spreadsheet.find === 'function') {
           spreadsheet.find();
         } else {
-          console.log("Find functionality");
+          devLog("Find functionality");
         }
       } catch (e) {
         console.error("Find error:", e);
@@ -1671,7 +1672,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
         } else if (spreadsheet.names && Array.isArray(spreadsheet.names)) {
           // If names array exists, we can manage it
           // For now, just log available names
-          console.log("Named ranges:", spreadsheet.names);
+          devLog("Named ranges:", spreadsheet.names);
         }
       } catch (e) {
         console.error("Name Manager error:", e);
@@ -2013,7 +2014,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
                   e.stopPropagation();
                   e.preventDefault();
                   const newState = !showChartsDropdown;
-                  console.log("Charts button clicked, setting state to:", newState);
+                  devLog("Charts button clicked, setting state to:", newState);
                   setShowChartsDropdown(newState);
                 }}
                 className="excel-ribbon-button excel-ribbon-button-large excel-charts-main-button"
