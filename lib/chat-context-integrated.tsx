@@ -434,7 +434,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   // const stopStreaming = useCallback(() => {
   //   if (abortControllerRef.current) {
   //     abortControllerRef.current.abort(); // Fetch request ko abort karein
-  //     console.log("Client-side stream abortion requested.");
+  //     devLog("Client-side stream abortion requested.");
 
   //     // UI state ko immediately update karein
   //     setIsLoading(false);
@@ -463,7 +463,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   // }, [setCurrentChat]);
 
   const stopStreaming = useCallback(() => {
-    console.log("Stop Streaming triggered", { currentStreamId, isStreaming, isLoading });
+    devLog("Stop Streaming triggered", { currentStreamId, isStreaming, isLoading });
 
     // IMMEDIATE UI State Reset - no waiting for API
     setPendingStop(true);
@@ -472,7 +472,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
     // Abort local fetch request immediately
     if (abortControllerRef.current) {
-      console.log("Aborting local fetch request");
+      devLog("Aborting local fetch request");
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
     }
@@ -502,10 +502,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
     // Send stop signal to backend (non-blocking)
     if (currentStreamId) {
-      console.log(`Sending stop signal to backend: ${currentStreamId}`);
+      devLog(`Sending stop signal to backend: ${currentStreamId}`);
       apiClient.stopAIStream(currentStreamId)
         .then(() => {
-          console.log("Backend stop signal sent successfully");
+          devLog("Backend stop signal sent successfully");
         })
         .catch((error) => {
           console.error("Failed to send stop signal to backend:", error);
@@ -585,7 +585,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       try {
         const intent = intentOverride || await aiService.classifyIntent(content, conversationForRouting);
         const professionalPrompt = buildProfessionalCapabilityPrompt(intent, content);
-        console.log('intent', intent);
+        devLog('intent', intent);
 
         if (intent === 'chart') {
           const fileId = normalizedFileIds.length > 0 ? normalizedFileIds[0] : undefined;
@@ -1108,7 +1108,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 isMonthlyLimitError(errorMessage) ||
                 (errorData && isMonthlyLimitError(errorData.error || ''))) {
 
-                console.log('Monthly limit error detected in streaming');
+                devLog('Monthly limit error detected in streaming');
                 triggerUpgradeModal(errorMessage, errorData);
 
                 // Update message with monthly limit error
@@ -1203,7 +1203,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           isMonthlyLimitError(errorMessage) ||
           (errorData && isMonthlyLimitError(errorData.error || ''))) {
 
-          console.log('Monthly limit error detected in catch block');
+          devLog('Monthly limit error detected in catch block');
           triggerUpgradeModal(errorMessage, errorData);
 
           // Update message with monthly limit error
@@ -1366,7 +1366,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
                 if (response.ok) {
                   const result = await response.json();
-                  console.log('Computer Use session started:', result);
+                  devLog('Computer Use session started:', result);
                 } else {
                   console.error('Failed to start Computer Use session:', response.statusText);
                   await handleNewChatWithPlaceholder(newChat, initialContent, '[COMPUTER_USE_ERROR]', uploadedFiles);
@@ -1535,20 +1535,20 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // Get messages that need to be deleted from backend (AI message + all subsequent messages)
     const messagesToDelete = currentChat.messages.slice(targetAiMessageIndex);
 
-    console.log('Regenerating message at index:', targetAiMessageIndex);
-    console.log('Messages before regeneration:', messagesBeforeRegeneration.length);
-    console.log('Messages to delete from backend:', messagesToDelete.length);
-    console.log('Original total messages:', currentChat.messages.length);
+    devLog('Regenerating message at index:', targetAiMessageIndex);
+    devLog('Messages before regeneration:', messagesBeforeRegeneration.length);
+    devLog('Messages to delete from backend:', messagesToDelete.length);
+    devLog('Original total messages:', currentChat.messages.length);
 
     setIsLoading(true);
 
     // STEP 1: Delete messages from backend first
     try {
-      console.log('Deleting messages from backend:', messagesToDelete.map(m => m.id));
+      devLog('Deleting messages from backend:', messagesToDelete.map(m => m.id));
       for (const msg of messagesToDelete) {
         if (msg.id && !msg.id.includes('temp-') && !msg.id.includes('ai-regen-')) {
           await apiClient.clearMessageById(msg.id);
-          console.log('Deleted message from backend:', msg.id);
+          devLog('Deleted message from backend:', msg.id);
         }
       }
     } catch (error) {
@@ -1577,7 +1577,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         ...prev,
         messages: [...messagesBeforeRegeneration, aiMessagePlaceholder]
       };
-      console.log('Setting chat state with messages:', newState.messages.length);
+      devLog('Setting chat state with messages:', newState.messages.length);
       return newState;
     });
 
@@ -1617,14 +1617,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               }
               return msg;
             });
-            console.log('Processing chunk, total messages:', updatedMessages.length);
+            devLog('Processing chunk, total messages:', updatedMessages.length);
             return { ...prevChat, messages: updatedMessages };
           });
         },
         async () => {
           // onClose: Stop loading only if not manually stopped
           if (!controller.signal.aborted && !pendingStop) {
-            console.log('Regeneration completed successfully');
+            devLog('Regeneration completed successfully');
             setIsLoading(false);
             setIsStreaming(false);
             setCurrentStreamId(null);
@@ -1632,7 +1632,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
             // Save the updated chat state to ensure persistence
             try {
-              console.log('Saving regenerated chat state to backend');
+              devLog('Saving regenerated chat state to backend');
               // The backend streaming endpoint should have already saved the new message
               // Refresh immediately to ensure we have the latest state
               if (currentChat?.id) {
@@ -1646,7 +1646,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                   )
                 );
 
-                console.log('Chat refreshed after regeneration, total messages:', freshChat.chat.messages.length);
+                devLog('Chat refreshed after regeneration, total messages:', freshChat.chat.messages.length);
               }
             } catch (error) {
               console.error('Failed to refresh chat after regeneration:', error);
@@ -1667,7 +1667,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               isMonthlyLimitError(errorMessage) ||
               (errorData && isMonthlyLimitError(errorData.error || ''))) {
 
-              console.log('Monthly limit error detected during regeneration');
+              devLog('Monthly limit error detected during regeneration');
               triggerUpgradeModal(errorMessage, errorData);
 
               setCurrentChat((prevChat) => {
@@ -1836,7 +1836,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               isMonthlyLimitError(errorMessage) ||
               (errorData && isMonthlyLimitError(errorData.error || ''))) {
 
-              console.log('Monthly limit error detected during edit and regeneration');
+              devLog('Monthly limit error detected during edit and regeneration');
               triggerUpgradeModal(errorMessage, errorData);
 
               setCurrentChat((prevChat) => {
@@ -1909,18 +1909,18 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   }, [currentChat, isLoading, selectProvider, selectedModel, selectChat, setCurrentChat, setIsLoading, setIsStreaming, setCurrentStreamId]);
 
   const pollVideoStatus = useCallback((operationId: string, messageId: string) => {
-    console.log('🔄 Starting polling for:', operationId);
+    devLog('🔄 Starting polling for:', operationId);
 
     const interval = setInterval(async () => {
       try {
         const statusResponse = await apiClient.getVideoStatus(operationId);
-        console.log('📊 Video status response:', statusResponse);
+        devLog('📊 Video status response:', statusResponse);
 
         // Normalize status casing
         const status = (statusResponse.status || '').toLowerCase();
 
         if (status === 'completed' || status === 'failed') {
-          console.log(' Video processing finished:', status);
+          devLog(' Video processing finished:', status);
           clearInterval(interval);
           setPollingIntervals(prev => {
             const n = new Map(prev);
@@ -1930,7 +1930,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
           //  Force refresh chat from DB to get updated message with video file
           if (currentChat?.id) {
-            console.log('🔄 Refreshing chat to show completed video');
+            devLog('🔄 Refreshing chat to show completed video');
             await selectChat(currentChat.id);
           }
 
@@ -1938,7 +1938,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           setIsLoading(false);
 
         } else {
-          console.log(' Video still processing:', status);
+          devLog(' Video still processing:', status);
           // Optional: show "processing" in UI by updating that one message
           setCurrentChat(prev => {
             if (!prev) return prev;
@@ -1985,7 +1985,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
           const backendBaseUrl = baseUrl.replace('/api', '');
           imageUrl = imageFile.url.startsWith('http') ? imageFile.url : `${backendBaseUrl}${imageFile.url}`;
-          console.log(' Using image from uploadedFiles context:', imageUrl);
+          devLog(' Using image from uploadedFiles context:', imageUrl);
         }
       }
 
@@ -2006,7 +2006,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 imageUrl = `${backendBaseUrl}/uploads/${file.userId}/${file.filename}`;
               }
 
-              console.log('🖼️ Got image URL from API call:', imageUrl);
+              devLog('🖼️ Got image URL from API call:', imageUrl);
               break;
             }
           }
@@ -2022,7 +2022,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       //   files: fileIds
       // });
 
-      console.log('🎬 Calling generateVideo with:', {
+      devLog('🎬 Calling generateVideo with:', {
         prompt,
         aspect_ratio: '16:9',
         chatId: activeChat.id,
@@ -2040,7 +2040,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         model: selectedModel
       });
 
-      console.log(' Video generation response:', videoResponse);
+      devLog(' Video generation response:', videoResponse);
 
       //  Refresh chat to get the updated messages from backend
       await selectChat(activeChat.id);
@@ -2072,7 +2072,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       }
 
       const messageId = targetMessage?.id || videoResponse.operationId;
-      console.log('🎯 Starting polling for operation:', videoResponse.operationId, 'message:', messageId);
+      devLog('🎯 Starting polling for operation:', videoResponse.operationId, 'message:', messageId);
       pollVideoStatus(videoResponse.operationId, messageId);
 
     } catch (error) {
