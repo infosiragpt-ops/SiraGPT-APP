@@ -3,6 +3,8 @@ import { describe, it } from "node:test"
 
 import {
   blobToFile,
+  filesToFileList,
+  logIngest,
   sanitizeHtml,
   validateFile,
   validateBatch,
@@ -158,5 +160,79 @@ describe("validateBatch · count cap", () => {
     assert.equal(result.accepted.length, 10)
     assert.equal(result.rejected.length, 3)
     assert.equal(result.rejected[0].code, "count_exceeded")
+  })
+})
+
+describe("filesToFileList", () => {
+  function makeFile(name: string) {
+    return new File(["x"], name, { type: "image/png" })
+  }
+
+  it("uses DataTransfer when available and returns a real FileList", () => {
+    const files = [makeFile("a.png"), makeFile("b.png")]
+    const list = filesToFileList(files)
+    assert.equal(list.length, 2)
+    assert.equal(list[0].name, "a.png")
+    assert.equal(list[1].name, "b.png")
+    // .item(i) accessor works on both real FileList and the polyfill.
+    assert.equal(list.item(0)?.name, "a.png")
+    assert.equal(list.item(1)?.name, "b.png")
+  })
+
+  it("returns a polyfill with .item() accessor on environments without DataTransfer", () => {
+    // Save + remove the global so the function falls into the polyfill
+    // branch, then restore so other tests keep working.
+    const original = (globalThis as any).DataTransfer
+    delete (globalThis as any).DataTransfer
+    try {
+      const files = [makeFile("a.png"), makeFile("b.png")]
+      const list = filesToFileList(files)
+      assert.equal(list.length, 2)
+      assert.equal(list.item(0)?.name, "a.png")
+      assert.equal(list.item(2), null, "out-of-bounds returns null, not undefined")
+    } finally {
+      ;(globalThis as any).DataTransfer = original
+    }
+  })
+
+  it("handles an empty files array (length 0, .item returns null)", () => {
+    const list = filesToFileList([])
+    assert.equal(list.length, 0)
+    assert.equal(list.item(0), null)
+  })
+})
+
+describe("logIngest · SSR + analytics-hook safety", () => {
+  const ORIGINAL_WINDOW = (globalThis as any).window
+  const ORIGINAL_NODE_ENV = process.env.NODE_ENV
+
+  function restore() {
+    if (ORIGINAL_WINDOW === undefined) delete (globalThis as any).window
+    else (globalThis as any).window = ORIGINAL_WINDOW
+    if (ORIGINAL_NODE_ENV === undefined) delete process.env.NODE_ENV
+    else process.env.NODE_ENV = ORIGINAL_NODE_ENV
+  }
+
+  it("returns undefined silently when window is undefined (SSR)", () => {
+    delete (globalThis as any).window
+    try {
+      assert.doesNotThrow(() =>
+        logIngest({ source: "picker", count: 1, total_bytes: 100 }),
+      )
+    } finally {
+      restore()
+    }
+  })
+
+  it("returns undefined silently in production (analytics hook is a no-op locally)", () => {
+    ;(globalThis as any).window = {}
+    process.env.NODE_ENV = "production"
+    try {
+      assert.doesNotThrow(() =>
+        logIngest({ source: "drop", count: 2, total_bytes: 200 }),
+      )
+    } finally {
+      restore()
+    }
   })
 })
