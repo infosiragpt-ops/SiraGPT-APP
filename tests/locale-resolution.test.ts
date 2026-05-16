@@ -60,6 +60,29 @@ describe("countryCodeFromHeaders", () => {
   it("returns undefined when no country header exists", () => {
     assert.equal(countryCodeFromHeaders({}), undefined)
   })
+
+  it("ignores country values that are too short (< 2 chars after trim)", () => {
+    // ISO 3166 alpha-2 is exactly 2 chars; we reject < 2 as malformed
+    // (X-Forwarded-IP-Country sometimes shows up empty or with a single
+    // char in proxy bugs).
+    assert.equal(countryCodeFromHeaders({ "x-vercel-ip-country": "X" }), undefined)
+    assert.equal(countryCodeFromHeaders({ "x-vercel-ip-country": "" }), undefined)
+    assert.equal(countryCodeFromHeaders({ "x-vercel-ip-country": "  " }), undefined)
+  })
+
+  it("uppercases lowercase country codes from headers", () => {
+    assert.equal(countryCodeFromHeaders({ "x-vercel-ip-country": "es" }), "ES")
+    assert.equal(countryCodeFromHeaders({ "cf-ipcountry": "mx" }), "MX")
+  })
+
+  it("prefers x-vercel-ip-country over later candidates when multiple are set", () => {
+    const headers = {
+      "x-vercel-ip-country": "US",
+      "cf-ipcountry": "MX",
+      "x-country": "BR",
+    }
+    assert.equal(countryCodeFromHeaders(headers), "US")
+  })
 })
 
 describe("localeForCountry", () => {
