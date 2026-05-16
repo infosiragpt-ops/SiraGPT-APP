@@ -1,5 +1,5 @@
 "use client"
-import { BarChart3, Users, Settings, CreditCard, Database, Shield, Activity, FileText, Bot, Heart, LogOut, PanelLeft, ArrowLeft } from "lucide-react"
+import { BarChart3, Users, Settings, CreditCard, Database, Shield, Activity, FileText, Bot, Heart, LogOut, PanelLeft, ArrowLeft, Plug } from "lucide-react"
 import { useRouter, usePathname } from "next/navigation"
 
 import {
@@ -34,6 +34,11 @@ const adminMenuItems = [
     title: "Modelos IA",
     icon: Bot,
     url: "/admin/models",
+  },
+  {
+    title: "Conexiones",
+    icon: Plug,
+    url: "/admin/connections",
   },
    {
      title: "Pagos",
@@ -150,7 +155,7 @@ export function AdminSidebar() {
         </SidebarGroup>
 
         <SidebarGroup>
-          <SidebarGroupLabel>Administration</SidebarGroupLabel>
+          <SidebarGroupLabel>Administración</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               {adminMenuItems.map((item) => (
@@ -181,8 +186,8 @@ export function AdminSidebar() {
               </Avatar>
              {state === "open" && (
                 <div className="flex flex-col items-start">
-                  <span className="text-sm">{user?.name || "Admin User"}</span>
-                  <span className="text-xs text-muted-foreground">Administrator</span>
+                  <span className="text-sm">{user?.name || "Administrador"}</span>
+                  <span className="text-xs text-muted-foreground">Administrador</span>
                 </div>
               )}
             </SidebarMenuButton>
@@ -190,7 +195,7 @@ export function AdminSidebar() {
           <SidebarMenuItem>
             <SidebarMenuButton onClick={handleLogout} className="w-full justify-start text-red-600 cursor-pointer">
               <LogOut className="mr-2 h-4 w-4" />
-                {state === "open" && <span>Logout</span>}
+                {state === "open" && <span>Cerrar sesión</span>}
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>

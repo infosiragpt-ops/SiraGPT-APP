@@ -100,6 +100,39 @@ model AiModel {
   @@map("ai_models")
 }
 
+// Admin-curated upstream API connections used to source AI models.
+// Each row is one base URL + auth combo (e.g. https://api.openai.com/v1
+// with a specific key). The /admin/models view enumerates models
+// surfaced by these connections; chat code routes a model request
+// through the connection that exposes it.
+//
+// `apiKey` is stored as-is for MVP — a future migration will swap
+// the column for an envelope-encrypted blob keyed by a master KEK.
+model AdminConnection {
+  id          String   @id @default(cuid())
+  url         String   // base URL, e.g. https://api.openai.com/v1
+  providerKey String   // "openai" | "anthropic" | "gemini" | "mistral" | "groq" | "openrouter" | "custom"
+  providerLabel String? // human label, e.g. "OpenAI API"
+  apiKey      String?  // bearer token; null = no auth (e.g. local Ollama)
+  authType    String   @default("Bearer") // "Bearer" | "None" | "Custom"
+  apiType     String   @default("chat_completions") // "chat_completions" | "responses" | "embeddings"
+  headers     Json?    // optional extra request headers
+  prefixId    String?  // model name prefix for namespacing
+  modelIds    String[] // empty array = include all from /models endpoint
+  tags        String[]
+  enabled     Boolean  @default(true)
+  // Per-connection sync status (last list-models call)
+  lastSyncedAt DateTime?
+  lastSyncOk   Boolean  @default(false)
+  lastSyncError String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([providerKey])
+  @@index([enabled])
+  @@map("admin_connections")
+}
+
 model Session {
   id        String   @id @default(cuid())
   userId    String

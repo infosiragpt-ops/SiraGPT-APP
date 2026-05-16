@@ -1037,6 +1037,23 @@ class ApiClient {
     return this.request(endpoint);
   }
 
+  // Admin connections — CRUD + test
+  async getAdminConnections() {
+    return this.request('/admin/connections');
+  }
+  async createAdminConnection(payload: any) {
+    return this.request('/admin/connections', { method: 'POST', body: JSON.stringify(payload) });
+  }
+  async updateAdminConnection(id: string, payload: any) {
+    return this.request(`/admin/connections/${id}`, { method: 'PATCH', body: JSON.stringify(payload) });
+  }
+  async deleteAdminConnection(id: string) {
+    return this.request(`/admin/connections/${id}`, { method: 'DELETE' });
+  }
+  async testAdminConnection(id: string) {
+    return this.request(`/admin/connections/${id}/test`, { method: 'POST' });
+  }
+
   // Payment endpoints
   async createStripePayment(data: { plan: string }) {
     return this.request('/payments/stripe', {

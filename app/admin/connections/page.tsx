@@ -1,0 +1,605 @@
+"use client"
+
+/**
+ * /admin/connections — admin-curated upstream AI API connections.
+ *
+ * Each provider (OpenAI, Anthropic, Gemini, ...) groups one or more
+ * base URLs. The admin can:
+ *   - add a connection (URL + auth + extra headers + model allow-list)
+ *   - toggle individual rows on/off
+ *   - test a connection (calls the upstream /models endpoint)
+ *   - edit/delete
+ *
+ * The chat path doesn't read from this table yet — adding a row stages
+ * the config so the swap-from-env follow-up has a real contract. The
+ * page itself is auth-gated by the admin layout above (requireAdmin).
+ */
+
+import { useState, useEffect, useCallback, useMemo } from "react"
+import { Plus, RefreshCw, Eye, EyeOff, Trash2, CheckCircle2, XCircle, Plug, Settings as SettingsIcon, X } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Switch } from "@/components/ui/switch"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Textarea } from "@/components/ui/textarea"
+import { toast } from "sonner"
+import { apiClient } from "@/lib/api"
+
+const KNOWN_URLS = [
+  "https://api.openai.com/v1",
+  "https://api.anthropic.com/v1",
+  "https://generativelanguage.googleapis.com/v1beta/openai",
+  "https://api.mistral.ai/v1",
+  "https://api.groq.com/openai/v1",
+  "https://openrouter.ai/api/v1",
+  "https://api.together.xyz/v1",
+  "https://api.fireworks.ai/inference/v1",
+  "https://api.deepseek.com/v1",
+  "https://api.x.ai/v1",
+]
+
+const PROVIDERS: Array<{ key: string; label: string }> = [
+  { key: "openai", label: "OpenAI API" },
+  { key: "anthropic", label: "Anthropic API" },
+  { key: "gemini", label: "Google Gemini API" },
+  { key: "mistral", label: "Mistral API" },
+  { key: "groq", label: "Groq API" },
+  { key: "openrouter", label: "OpenRouter API" },
+  { key: "together", label: "Together AI API" },
+  { key: "fireworks", label: "Fireworks AI API" },
+  { key: "deepseek", label: "DeepSeek API" },
+  { key: "xai", label: "xAI API" },
+  { key: "custom", label: "Custom API" },
+]
+
+type Connection = {
+  id: string
+  url: string
+  providerKey: string
+  providerLabel: string
+  apiKey: string | null
+  apiKeySet: boolean
+  authType: "Bearer" | "None" | "Custom"
+  apiType: "chat_completions" | "responses" | "embeddings"
+  headers: Record<string, string> | null
+  prefixId: string | null
+  modelIds: string[]
+  tags: string[]
+  enabled: boolean
+  lastSyncedAt: string | null
+  lastSyncOk: boolean
+  lastSyncError: string | null
+}
+
+type ProviderGroup = {
+  providerKey: string
+  providerLabel: string
+  enabled: boolean
+  connections: Connection[]
+}
+
+function inferProviderFromUrl(u: string): string {
+  const lower = (u || "").toLowerCase()
+  if (lower.includes("openai.com")) return "openai"
+  if (lower.includes("anthropic.com")) return "anthropic"
+  if (lower.includes("googleapis.com") || lower.includes("generativelanguage")) return "gemini"
+  if (lower.includes("mistral.ai")) return "mistral"
+  if (lower.includes("groq.com")) return "groq"
+  if (lower.includes("openrouter.ai")) return "openrouter"
+  if (lower.includes("together.xyz") || lower.includes("together.ai")) return "together"
+  if (lower.includes("fireworks.ai")) return "fireworks"
+  if (lower.includes("deepseek.com")) return "deepseek"
+  if (lower.includes("x.ai")) return "xai"
+  return "custom"
+}
+
+export default function AdminConnectionsPage() {
+  const [groups, setGroups] = useState<ProviderGroup[]>([])
+  const [loading, setLoading] = useState(true)
+  const [modalOpen, setModalOpen] = useState(false)
+  const [editing, setEditing] = useState<Connection | null>(null)
+  const [presetProvider, setPresetProvider] = useState<string>("custom")
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const data = await apiClient.getAdminConnections()
+      setGroups((data as any).providers || [])
+    } catch (e: any) {
+      toast.error(`No se pudieron cargar las conexiones: ${e?.message || e}`)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  // Provider groups present in DB + provider keys with zero rows, so
+  // the admin always sees a slot to add for any known provider.
+  const renderedGroups = useMemo(() => {
+    const map = new Map<string, ProviderGroup>()
+    for (const g of groups) map.set(g.providerKey, g)
+    for (const p of PROVIDERS) {
+      if (!map.has(p.key)) {
+        map.set(p.key, { providerKey: p.key, providerLabel: p.label, enabled: false, connections: [] })
+      }
+    }
+    // Order: known providers first in PROVIDERS order, custom last
+    return PROVIDERS.map((p) => map.get(p.key)!).filter(Boolean)
+  }, [groups])
+
+  const openAdd = (providerKey: string) => {
+    setEditing(null)
+    setPresetProvider(providerKey)
+    setModalOpen(true)
+  }
+
+  const openEdit = (c: Connection) => {
+    setEditing(c)
+    setPresetProvider(c.providerKey)
+    setModalOpen(true)
+  }
+
+  const toggle = async (c: Connection, enabled: boolean) => {
+    try {
+      await apiClient.updateAdminConnection(c.id, { enabled })
+      toast.success(enabled ? "Conexión activada" : "Conexión desactivada")
+      load()
+    } catch (e: any) {
+      toast.error(`Error: ${e?.message || e}`)
+    }
+  }
+
+  const remove = async (c: Connection) => {
+    if (!confirm(`Eliminar conexión ${c.url}? Esta acción no se puede deshacer.`)) return
+    try {
+      await apiClient.deleteAdminConnection(c.id)
+      toast.success("Conexión eliminada")
+      load()
+    } catch (e: any) {
+      toast.error(`Error: ${e?.message || e}`)
+    }
+  }
+
+  const testConn = async (c: Connection) => {
+    const t = toast.loading(`Probando ${c.url}…`)
+    try {
+      const r: any = await apiClient.testAdminConnection(c.id)
+      toast.dismiss(t)
+      if (r?.ok) toast.success(`OK — ${r.count} modelo(s) disponibles`)
+      else toast.error(`Falló: ${r?.error || `HTTP ${r?.status}`}`)
+      load()
+    } catch (e: any) {
+      toast.dismiss(t)
+      toast.error(`Error: ${e?.message || e}`)
+    }
+  }
+
+  return (
+    <div className="p-6 space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold flex items-center gap-2">
+            <Plug className="h-6 w-6" /> Conexiones
+          </h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Endpoints upstream que alimentan al panel de Modelos. Activa, desactiva o agrega URLs por proveedor.
+          </p>
+        </div>
+        <Button variant="outline" onClick={load} disabled={loading}>
+          <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
+          Refrescar
+        </Button>
+      </div>
+
+      {loading && groups.length === 0 ? (
+        <div className="text-sm text-muted-foreground">Cargando conexiones…</div>
+      ) : (
+        <div className="space-y-4">
+          {renderedGroups.map((g) => (
+            <Card key={g.providerKey}>
+              <CardHeader className="flex flex-row items-center justify-between pb-2">
+                <CardTitle className="text-lg flex items-center gap-2">
+                  {g.providerLabel}
+                  <Badge variant={g.enabled ? "default" : "secondary"} className="text-xs">
+                    {g.connections.length} conexión{g.connections.length !== 1 ? "es" : ""}
+                  </Badge>
+                </CardTitle>
+                <Switch
+                  checked={g.enabled}
+                  disabled={g.connections.length === 0}
+                  onCheckedChange={async (v) => {
+                    // Bulk toggle all connections in this provider group.
+                    try {
+                      await Promise.all(g.connections.map((c) => apiClient.updateAdminConnection(c.id, { enabled: v })))
+                      toast.success(v ? `Todas las conexiones de ${g.providerLabel} activadas` : `${g.providerLabel} desactivado`)
+                      load()
+                    } catch (e: any) {
+                      toast.error(`Error: ${e?.message || e}`)
+                    }
+                  }}
+                />
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center justify-between text-sm text-muted-foreground border-b pb-2 mb-2">
+                  <span>Manage {g.providerLabel} Connections</span>
+                  <Button variant="ghost" size="sm" onClick={() => openAdd(g.providerKey)}>
+                    <Plus className="h-4 w-4" />
+                  </Button>
+                </div>
+                {g.connections.length === 0 ? (
+                  <div className="text-xs text-muted-foreground py-2">Sin conexiones. Click + para agregar.</div>
+                ) : (
+                  <div className="space-y-2">
+                    {g.connections.map((c) => (
+                      <div key={c.id} className="flex items-center justify-between gap-2 py-1">
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-mono truncate" title={c.url}>{c.url}</div>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            {c.apiKeySet ? (
+                              <Badge variant="outline" className="text-[10px] py-0">key {c.apiKey}</Badge>
+                            ) : (
+                              <Badge variant="outline" className="text-[10px] py-0 text-amber-600">sin api key</Badge>
+                            )}
+                            {c.lastSyncedAt && (
+                              c.lastSyncOk ? (
+                                <Badge variant="outline" className="text-[10px] py-0 text-green-600 flex items-center gap-1">
+                                  <CheckCircle2 className="h-3 w-3" /> sync OK
+                                </Badge>
+                              ) : (
+                                <Badge variant="outline" className="text-[10px] py-0 text-red-600 flex items-center gap-1" title={c.lastSyncError || ""}>
+                                  <XCircle className="h-3 w-3" /> sync fail
+                                </Badge>
+                              )
+                            )}
+                            {c.modelIds.length > 0 && (
+                              <Badge variant="outline" className="text-[10px] py-0">{c.modelIds.length} modelo(s)</Badge>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <Button variant="ghost" size="sm" onClick={() => testConn(c)} title="Probar /models">
+                            <RefreshCw className="h-4 w-4" />
+                          </Button>
+                          <Button variant="ghost" size="sm" onClick={() => openEdit(c)} title="Editar">
+                            <SettingsIcon className="h-4 w-4" />
+                          </Button>
+                          <Button variant="ghost" size="sm" onClick={() => remove(c)} title="Eliminar">
+                            <Trash2 className="h-4 w-4 text-red-600" />
+                          </Button>
+                          <Switch checked={c.enabled} onCheckedChange={(v) => toggle(c, v)} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      <ConnectionDialog
+        open={modalOpen}
+        onOpenChange={setModalOpen}
+        connection={editing}
+        defaultProvider={presetProvider}
+        onSaved={load}
+      />
+    </div>
+  )
+}
+
+function ConnectionDialog({
+  open,
+  onOpenChange,
+  connection,
+  defaultProvider,
+  onSaved,
+}: {
+  open: boolean
+  onOpenChange: (v: boolean) => void
+  connection: Connection | null
+  defaultProvider: string
+  onSaved: () => void
+}) {
+  const isEdit = !!connection
+  const [url, setUrl] = useState("")
+  const [providerKey, setProviderKey] = useState(defaultProvider)
+  const [apiKey, setApiKey] = useState("")
+  const [showKey, setShowKey] = useState(false)
+  const [authType, setAuthType] = useState<"Bearer" | "None" | "Custom">("Bearer")
+  const [apiType, setApiType] = useState<"chat_completions" | "responses" | "embeddings">("chat_completions")
+  const [headersJson, setHeadersJson] = useState("")
+  const [prefixId, setPrefixId] = useState("")
+  const [modelIdsInput, setModelIdsInput] = useState("")
+  const [modelIds, setModelIds] = useState<string[]>([])
+  const [tagsInput, setTagsInput] = useState("")
+  const [tags, setTags] = useState<string[]>([])
+  const [showSuggestions, setShowSuggestions] = useState(false)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (open) {
+      if (connection) {
+        setUrl(connection.url)
+        setProviderKey(connection.providerKey)
+        setApiKey("") // edit: don't show old value, blank = keep
+        setAuthType(connection.authType)
+        setApiType(connection.apiType)
+        setHeadersJson(connection.headers ? JSON.stringify(connection.headers, null, 2) : "")
+        setPrefixId(connection.prefixId || "")
+        setModelIds(connection.modelIds || [])
+        setTags(connection.tags || [])
+      } else {
+        setUrl("")
+        setProviderKey(defaultProvider)
+        setApiKey("")
+        setAuthType("Bearer")
+        setApiType("chat_completions")
+        setHeadersJson("")
+        setPrefixId("")
+        setModelIds([])
+        setTags([])
+      }
+      setModelIdsInput("")
+      setTagsInput("")
+      setShowKey(false)
+      setShowSuggestions(false)
+    }
+  }, [open, connection, defaultProvider])
+
+  const submit = async () => {
+    if (!url.trim()) {
+      toast.error("URL es requerida")
+      return
+    }
+    let headers: any = null
+    if (headersJson.trim()) {
+      try { headers = JSON.parse(headersJson) }
+      catch { toast.error("Headers no es JSON válido"); return }
+    }
+    setSaving(true)
+    try {
+      const payload: any = {
+        url: url.trim(),
+        providerKey,
+        authType,
+        apiType,
+        headers,
+        prefixId: prefixId.trim() || null,
+        modelIds,
+        tags,
+      }
+      if (apiKey) payload.apiKey = apiKey
+      if (isEdit) {
+        await apiClient.updateAdminConnection(connection!.id, payload)
+        toast.success("Conexión actualizada")
+      } else {
+        payload.enabled = true
+        await apiClient.createAdminConnection(payload)
+        toast.success("Conexión creada")
+      }
+      onSaved()
+      onOpenChange(false)
+    } catch (e: any) {
+      toast.error(`Error: ${e?.message || e}`)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-[560px] max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>{isEdit ? "Editar conexión" : "Add Connection"}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-muted-foreground">Connection Type</span>
+            <span>External</span>
+          </div>
+
+          <div className="space-y-1.5 relative">
+            <Label>URL</Label>
+            <div className="flex items-center gap-2">
+              <Input
+                value={url}
+                onChange={(e) => {
+                  setUrl(e.target.value)
+                  const inferred = inferProviderFromUrl(e.target.value)
+                  if (inferred !== "custom" && !isEdit) setProviderKey(inferred)
+                }}
+                onFocus={() => setShowSuggestions(true)}
+                onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
+                placeholder="API Base URL"
+              />
+            </div>
+            {showSuggestions && (
+              <div className="absolute z-50 mt-1 w-full bg-popover border border-border rounded-md shadow-lg max-h-48 overflow-y-auto">
+                {KNOWN_URLS.filter((u) => !url || u.toLowerCase().includes(url.toLowerCase())).map((u) => (
+                  <button
+                    key={u}
+                    type="button"
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-accent block"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      setUrl(u)
+                      const inferred = inferProviderFromUrl(u)
+                      if (inferred !== "custom") setProviderKey(inferred)
+                      setShowSuggestions(false)
+                    }}
+                  >
+                    {u}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Auth</Label>
+            <div className="flex items-center gap-2">
+              <Select value={authType} onValueChange={(v: any) => setAuthType(v)}>
+                <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Bearer">Bearer</SelectItem>
+                  <SelectItem value="None">None</SelectItem>
+                  <SelectItem value="Custom">Custom</SelectItem>
+                </SelectContent>
+              </Select>
+              <div className="relative flex-1">
+                <Input
+                  type={showKey ? "text" : "password"}
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder={isEdit ? (connection?.apiKeySet ? "Dejar vacío para conservar la actual" : "API Key") : "API Key"}
+                  className="pr-9"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowKey(!showKey)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  title={showKey ? "Ocultar" : "Mostrar"}
+                >
+                  {showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Headers</Label>
+            <Textarea
+              value={headersJson}
+              onChange={(e) => setHeadersJson(e.target.value)}
+              placeholder='Enter additional headers in JSON format (e.g. {"X-Custom":"value"})'
+              rows={3}
+              className="font-mono text-xs"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label>Prefix ID</Label>
+              <Input
+                value={prefixId}
+                onChange={(e) => setPrefixId(e.target.value)}
+                placeholder="Prefix ID"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Provider</Label>
+              <Select value={providerKey} onValueChange={setProviderKey}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {PROVIDERS.map((p) => (
+                    <SelectItem key={p.key} value={p.key}>{p.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>API Type</Label>
+            <Select value={apiType} onValueChange={(v: any) => setApiType(v)}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="chat_completions">Chat Completions</SelectItem>
+                <SelectItem value="responses">Responses</SelectItem>
+                <SelectItem value="embeddings">Embeddings</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Model IDs</Label>
+            <div className="text-xs text-muted-foreground">Leave empty to include all models from "/models" endpoint</div>
+            <div className="flex items-center gap-2">
+              <Input
+                value={modelIdsInput}
+                onChange={(e) => setModelIdsInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && modelIdsInput.trim()) {
+                    e.preventDefault()
+                    if (!modelIds.includes(modelIdsInput.trim())) setModelIds([...modelIds, modelIdsInput.trim()])
+                    setModelIdsInput("")
+                  }
+                }}
+                placeholder="Add a model ID"
+              />
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  if (modelIdsInput.trim() && !modelIds.includes(modelIdsInput.trim())) {
+                    setModelIds([...modelIds, modelIdsInput.trim()])
+                    setModelIdsInput("")
+                  }
+                }}
+              >
+                <Plus className="h-4 w-4" />
+              </Button>
+            </div>
+            {modelIds.length > 0 && (
+              <div className="flex flex-wrap gap-1 mt-1">
+                {modelIds.map((m) => (
+                  <Badge key={m} variant="secondary" className="flex items-center gap-1">
+                    {m}
+                    <button onClick={() => setModelIds(modelIds.filter((x) => x !== m))} className="hover:text-red-600">
+                      <X className="h-3 w-3" />
+                    </button>
+                  </Badge>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Tags</Label>
+            <div className="flex items-center gap-2">
+              <Input
+                value={tagsInput}
+                onChange={(e) => setTagsInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && tagsInput.trim()) {
+                    e.preventDefault()
+                    if (!tags.includes(tagsInput.trim())) setTags([...tags, tagsInput.trim()])
+                    setTagsInput("")
+                  }
+                }}
+                placeholder="Add a tag..."
+              />
+            </div>
+            {tags.length > 0 && (
+              <div className="flex flex-wrap gap-1 mt-1">
+                {tags.map((t) => (
+                  <Badge key={t} variant="outline" className="flex items-center gap-1">
+                    {t}
+                    <button onClick={() => setTags(tags.filter((x) => x !== t))} className="hover:text-red-600">
+                      <X className="h-3 w-3" />
+                    </button>
+                  </Badge>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="flex justify-end pt-2">
+            <Button onClick={submit} disabled={saving}>
+              {saving ? "Guardando…" : "Save"}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
