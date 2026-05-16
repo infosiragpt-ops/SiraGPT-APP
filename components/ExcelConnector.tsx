@@ -2,6 +2,7 @@
 
 import React from "react";
 import { Button } from "@/components/ui/button";
+import { devLog } from "@/lib/dev-log";
 import { Download, FileSpreadsheet, X } from "lucide-react";
 import { toast } from "sonner";
 import { ExcelRibbon } from "./ExcelRibbon";
@@ -249,7 +250,7 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
 
     React.useImperativeHandle(ref, () => ({
       loadWorkbook: (workbookJson: object, actions?: any[]) => {
-        console.log('ExcelConnector.loadWorkbook called with:', workbookJson);
+        devLog('ExcelConnector.loadWorkbook called with:', workbookJson);
         try {
           if (!spreadsheetRef.current) {
             console.error('Spreadsheet ref is not initialized');
@@ -277,18 +278,18 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
             ? { Workbook: rawWorkbook }
             : rawWorkbook;
 
-          console.log('Loading workbook with formatted JSON:', formattedJson);
+          devLog('Loading workbook with formatted JSON:', formattedJson);
 
           spreadsheetRef.current.openFromJson(
             { file: formattedJson },
             { onlyValues: false }
           );
 
-          console.log('Workbook loaded successfully');
+          devLog('Workbook loaded successfully');
 
           // Process chart actions if provided
           if (effectiveActions && effectiveActions.length > 0) {
-            console.log('Processing chart actions:', effectiveActions);
+            devLog('Processing chart actions:', effectiveActions);
             chartTimeoutRef.current = setTimeout(() => {
               // Ignore stale async inserts if a newer workbook was loaded.
               if (loadIdRef.current !== currentLoadId) return;
@@ -306,7 +307,7 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
                         id: action.id || `chart_${Date.now()}_${index}`,
                         chartType: action.chartType || 'Column',
                       });
-                      console.log(`✅ Chart ${index + 1} inserted:`, action.chartType, 'for range:', action.range);
+                      devLog(`✅ Chart ${index + 1} inserted:`, action.chartType, 'for range:', action.range);
                     } catch (chartError) {
                       console.error('❌ Error inserting chart:', chartError);
                       toast.error(`Failed to insert chart ${index + 1}`);
@@ -332,7 +333,7 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
         }
       },
       insertChart: (chartConfig: any) => {
-        console.log('Inserting chart with config:', chartConfig);
+        devLog('Inserting chart with config:', chartConfig);
         try {
           if (!spreadsheetRef.current) {
             console.error('Spreadsheet ref is not initialized');
@@ -341,7 +342,7 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
           }
 
           insertChartWithLayout(chartConfig);
-          console.log('Chart inserted successfully');
+          devLog('Chart inserted successfully');
           toast.success('Gráfico creado correctamente');
         } catch (e) {
           console.error("Failed to insert chart", e);
