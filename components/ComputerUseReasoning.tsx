@@ -27,7 +27,7 @@ export const ComputerUseReasoning: React.FC<ComputerUseReasoningProps> = ({
       <div className="flex-1">
         <div className="flex items-center gap-2 mb-1">
           <Bot className="h-4 w-4 text-primary" />
-          <span className="text-sm font-medium">Computer Use Agent</span>
+          <span className="text-sm font-medium">Agente Computer Use</span>
         </div>
         <p className="text-sm text-foreground">{step.text}</p>
         {step.action && (

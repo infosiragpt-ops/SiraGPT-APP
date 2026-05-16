@@ -68,7 +68,7 @@ const ComputerUseInterface: React.FC<ComputerUseInterfaceProps> = ({
           {/* Browser Preview */}
           <Card className="flex flex-col h-full">
             <CardHeader className="pb-3">
-              <CardTitle className="text-lg">Live Browser View</CardTitle>
+              <CardTitle className="text-lg">Vista del navegador en vivo</CardTitle>
             </CardHeader>
             <CardContent className="flex-1 p-0">
               <div className="h-full bg-muted rounded-lg overflow-hidden">
@@ -82,8 +82,8 @@ const ComputerUseInterface: React.FC<ComputerUseInterfaceProps> = ({
                   <div className="h-full flex items-center justify-center text-muted-foreground">
                     <div className="text-center">
                       <Monitor className="h-12 w-12 mx-auto mb-2" />
-                      <p>Browser view will appear here</p>
-                      <p className="text-sm mt-1">Computer Use session will display live screenshots</p>
+                      <p>La vista del navegador aparecerá aquí</p>
+                      <p className="text-sm mt-1">La sesión de Computer Use mostrará capturas en vivo</p>
                     </div>
                   </div>
                 )}
