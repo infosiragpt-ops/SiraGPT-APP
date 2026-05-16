@@ -452,6 +452,7 @@ import {
 } from "@/components/ui/select"
 import { useToast } from '@/hooks/use-toast'
 import apiClient from '@/lib/api'
+import { normalizeChatInput, shouldWarnUser } from '@/lib/chat-input-normalize'
 import VoiceSelector from './voice-selector' // Assume this component is working
 import {
     Play,
@@ -572,7 +573,16 @@ const { voices, loading: voicesLoading } = useVoices()
     }
 
     const handleTextToSpeech = async () => {
-        if (!text.trim() || !selectedVoice || !selectedModel) {
+        const normalized = normalizeChatInput(text)
+        if (shouldWarnUser(normalized)) {
+            toast({
+                title: "Texto recortado",
+                description: `Se excedió el límite (${normalized.originalLength.toLocaleString()} caracteres). Se generará audio para los primeros ${normalized.value.length}.`,
+                variant: "destructive",
+            })
+        }
+        const cleanText = normalized.value.trim()
+        if (!cleanText || !selectedVoice || !selectedModel) {
             toast({ title: "Error", description: "Please enter text, select a voice, and a model.", variant: "destructive" })
             return
         }
@@ -580,7 +590,7 @@ const { voices, loading: voicesLoading } = useVoices()
         setIsLoading(true)
         try {
             const response = await apiClient.textToSpeech({
-                text,
+                text: cleanText,
                 voice_id: selectedVoice,
                 model_id: selectedModel,
                 voice_settings: voiceSettings,
