@@ -314,6 +314,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         return false
       }
     })
+    // addMessage closes over user+token (already in deps); listing the
+    // function would lint-loop since it's recreated per render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, token])
 
   // Load user's chats
@@ -321,6 +324,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     if (user && token) {
       initializeChat()
     }
+    // initializeChat has its own hasInitialized guard so it runs once
+    // per session; listing it would lint-loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, token])
 
   const initializeChat = async () => {
