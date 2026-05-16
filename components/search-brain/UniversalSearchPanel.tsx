@@ -13,6 +13,7 @@ import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { buildApa, buildSynthesis, categoryActionLabel, formatYear } from "@/lib/search-brain-ui"
+import { normalizeChatInput } from "@/lib/chat-input-normalize"
 import { cn } from "@/lib/utils"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
@@ -160,7 +161,8 @@ export function UniversalSearchPanel() {
 
   async function runSearch(e?: React.FormEvent) {
     e?.preventDefault()
-    if (!query.trim() || loading) return
+    const cleanQuery = normalizeChatInput(query).value.trim()
+    if (!cleanQuery || loading) return
     setLoading(true)
     setResponse(null)
     try {
@@ -169,7 +171,7 @@ export function UniversalSearchPanel() {
         credentials: "include",
         headers: authHeaders(),
         body: JSON.stringify({
-          query: query.trim(),
+          query: cleanQuery,
           region,
           categories: categories.length ? categories : undefined,
           maxResults: 18,
