@@ -57,6 +57,11 @@ function AuthCallbackContent() {
     }
 
     handleCallback()
+    // loginWithToken comes from useAuth() and is intentionally NOT in
+    // deps — the callback fires exactly once per searchParams/router
+    // change (i.e. once per auth-callback navigation). Re-firing on
+    // loginWithToken identity change would re-run the redirect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams, router])
 
   return (

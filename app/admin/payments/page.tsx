@@ -16,10 +16,15 @@ export default function PaymentsPage() {
 
   useEffect(() => {
     loadPayments()
+    // loadPayments runs once on mount, defined later in component body.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
     filterPayments()
+    // filterPayments reads payments + statusFilter (already in deps);
+    // function is recreated per render so adding it would lint-loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [payments, statusFilter])
 
   const loadPayments = async () => {
