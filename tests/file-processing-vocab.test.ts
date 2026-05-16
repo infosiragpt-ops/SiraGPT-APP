@@ -109,3 +109,20 @@ test("shouldFireReadyTransition tolerates null/undefined current without firing"
   assert.equal(shouldFireReadyTransition("extracting", null),      false)
   assert.equal(shouldFireReadyTransition("extracting", undefined), false)
 })
+
+test("describeStage falls back to the stage name + neutral tone for unknown stages", () => {
+  // The default branch in the switch — future stages added by the
+  // backend should NOT crash old clients but show the raw stage name
+  // with a neutral tone. Cast to bypass the compile-time exhaustive
+  // check on purpose.
+  const out = describeStage("future_unknown_stage" as any)
+  assert.deepEqual(out, { label: "future_unknown_stage", tone: "neutral" })
+})
+
+test("describeStage('failed') label respects the input prefix even with mixed case + suffix noise", () => {
+  // Robust against backend reasons that carry extra context after a colon.
+  assert.equal(
+    describeStage("failed", "MAGIC_BYTE_MISMATCH: detected=image/jpeg, expected=image/png").label,
+    "Tipo de archivo no permitido",
+  )
+})
