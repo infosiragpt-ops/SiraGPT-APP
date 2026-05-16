@@ -20,6 +20,7 @@ import {
 } from "lucide-react"
 
 import { cn } from "@/lib/utils"
+import { pickDisplayName, pickGreeting, sampleSixFromPool } from "@/lib/hero-presentation"
 
 type ExamplePrompt = {
   label: string
@@ -95,31 +96,7 @@ const PROMPT_POOL: ExamplePrompt[] = [
 ]
 
 function sampleSixPrompts(): ExamplePrompt[] {
-  // Fisher–Yates shuffle for an unbiased sample. Six is the grid
-  // (3 columns × 2 rows on desktop, 2 × 3 on mobile).
-  const a = [...PROMPT_POOL]
-  for (let i = a.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1))
-    ;[a[i], a[j]] = [a[j], a[i]]
-  }
-  return a.slice(0, 6)
-}
-
-function pickGreeting(): string {
-  const hour = new Date().getHours()
-  if (hour < 6) return "Buenas noches"
-  if (hour < 13) return "Buenos días"
-  if (hour < 20) return "Buenas tardes"
-  return "Buenas noches"
-}
-
-function pickDisplayName(userName?: string | null): string | null {
-  if (!userName) return null
-  const trimmed = userName.trim()
-  if (!trimmed) return null
-  const first = trimmed.split(/\s+/)[0]
-  if (!first || first.length > 24) return null
-  return first
+  return sampleSixFromPool(PROMPT_POOL)
 }
 
 interface ChatEmptyStateHeroProps {
