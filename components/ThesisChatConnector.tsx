@@ -72,11 +72,11 @@ const ThesisChatConnector: React.FC<ThesisChatConnectorProps> = ({ onComplete })
       <CardContent className="space-y-4">
         {/* Topics Input */}
         <div className="space-y-3">
-          <label className="text-sm font-medium">Research Topics</label>
+          <label className="text-sm font-medium">Temas de investigación</label>
           {topics.map((topic, index) => (
             <div key={index} className="flex gap-2">
               <Input
-                placeholder={`Topic ${index + 1} (e.g., "Artificial Intelligence in Healthcare")`}
+                placeholder={`Tema ${index + 1} (p. ej., "Inteligencia artificial en la salud")`}
                 value={topic}
                 onChange={(e) => updateTopic(index, e.target.value)}
                 className="flex-1 text-sm"
@@ -102,7 +102,7 @@ const ThesisChatConnector: React.FC<ThesisChatConnectorProps> = ({ onComplete })
               size="sm"
             >
               <Plus className="h-3 w-3 mr-2" />
-              Add Another Topic
+              Añadir otro tema
             </Button>
           )}
         </div>
@@ -115,12 +115,12 @@ const ThesisChatConnector: React.FC<ThesisChatConnectorProps> = ({ onComplete })
           size="sm"
         >
           <Search className="h-4 w-4 mr-2" />
-          Generate Thesis in Chat
+          Generar tesis en el chat
         </Button>
 
         {/* Quick Examples */}
         <div className="space-y-2">
-          <label className="text-xs font-medium text-muted-foreground">Quick Examples:</label>
+          <label className="text-xs font-medium text-muted-foreground">Ejemplos rápidos:</label>
           <div className="grid grid-cols-1 gap-1">
             <Button
               variant="outline"

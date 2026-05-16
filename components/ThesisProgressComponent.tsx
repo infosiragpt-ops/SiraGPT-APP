@@ -115,7 +115,7 @@ const ThesisProgressComponent: React.FC<ThesisProgressComponentProps> = ({
           <CardTitle className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <BookOpen className="h-5 w-5" />
-              <span>Thesis Generation</span>
+              <span>Generación de tesis</span>
             </div>
             <Badge variant={thesisData.status === 'completed' ? 'default' : 'secondary'} className="text-xs">
               {getStatusLabel(thesisData.status)}
@@ -126,7 +126,7 @@ const ThesisProgressComponent: React.FC<ThesisProgressComponentProps> = ({
         <CardContent className="space-y-4">
           {/* Topics */}
           <div className="space-y-2">
-            <p className="text-sm font-medium">Topics:</p>
+            <p className="text-sm font-medium">Temas:</p>
             <div className="flex flex-wrap gap-1">
               {thesisData.topics.map((topic, idx) => (
                 <Badge key={idx} variant="outline" className="text-xs">{topic}</Badge>
@@ -139,7 +139,7 @@ const ThesisProgressComponent: React.FC<ThesisProgressComponentProps> = ({
             <div className="flex justify-between items-center text-sm">
               <span className="flex items-center gap-2">
                 {getStatusIcon(thesisData.status)}
-                Progress
+                Progreso
               </span>
               <span>{thesisData.progress}%</span>
             </div>
@@ -156,12 +156,12 @@ const ThesisProgressComponent: React.FC<ThesisProgressComponentProps> = ({
             <div className="grid grid-cols-2 gap-3">
               {thesisData.sourcesCount !== undefined && (
                 <div className="bg-gray-50 p-3 rounded-lg">
-                  <p className="text-xs text-muted-foreground">Sources Found</p>
+                  <p className="text-xs text-muted-foreground">Fuentes encontradas</p>
                   <p className="text-lg font-bold">{thesisData.sourcesCount}</p>
                 </div>
               )}
               <div className="bg-gray-50 p-3 rounded-lg">
-                <p className="text-xs text-muted-foreground">Topics</p>
+                <p className="text-xs text-muted-foreground">Temas</p>
                 <p className="text-lg font-bold">{thesisData.topics.length}</p>
               </div>
             </div>
@@ -181,8 +181,8 @@ const ThesisProgressComponent: React.FC<ThesisProgressComponentProps> = ({
               <Alert className="bg-green-50 border-green-200">
                 <CheckCircle className="h-4 w-4 text-green-600" />
                 <AlertDescription className="text-green-800 text-sm">
-                  <p className="font-medium mb-1">Thesis generation completed successfully!</p>
-                  <p className="text-xs">Your comprehensive thesis document is ready for download.</p>
+                  <p className="font-medium mb-1">¡Tesis generada con éxito!</p>
+                  <p className="text-xs">Tu documento de tesis completo está listo para descargar.</p>
                 </AlertDescription>
               </Alert>
               
@@ -196,12 +196,12 @@ const ThesisProgressComponent: React.FC<ThesisProgressComponentProps> = ({
                   {isDownloading ? (
                     <>
                       <ThinkingIndicator size="sm" className="mr-2" />
-                      Downloading...
+                      Descargando…
                     </>
                   ) : (
                     <>
                       <Download className="h-4 w-4 mr-2" />
-                      Download (.docx)
+                      Descargar (.docx)
                     </>
                   )}
                 </Button>
@@ -213,7 +213,7 @@ const ThesisProgressComponent: React.FC<ThesisProgressComponentProps> = ({
                     size="sm"
                   >
                     <Eye className="h-4 w-4 mr-2" />
-                    Preview
+                    Vista previa
                   </Button>
                 )}
               </div>
@@ -226,7 +226,7 @@ const ThesisProgressComponent: React.FC<ThesisProgressComponentProps> = ({
               <div className="flex items-center gap-2 text-blue-800">
                 <Clock className="h-4 w-4" />
                 <p className="text-xs font-medium">
-                  This process may take 5-15 minutes depending on topic complexity.
+                  Este proceso puede tardar entre 5 y 15 minutos según la complejidad del tema.
                 </p>
               </div>
             </div>
@@ -238,15 +238,15 @@ const ThesisProgressComponent: React.FC<ThesisProgressComponentProps> = ({
       <Dialog open={showPreview} onOpenChange={setShowPreview}>
         <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Thesis Preview</DialogTitle>
+            <DialogTitle>Vista previa de la tesis</DialogTitle>
             <DialogDescription>
-              Preview of your generated thesis document
+              Vista previa del documento de tesis generado
             </DialogDescription>
           </DialogHeader>
           
           <div className="space-y-4">
             <div className="bg-gray-50 p-4 rounded-lg">
-              <h3 className="font-medium mb-2">Topics Covered:</h3>
+              <h3 className="font-medium mb-2">Temas tratados:</h3>
               <div className="flex flex-wrap gap-1">
                 {thesisData.topics.map((topic, idx) => (
                   <Badge key={idx} variant="outline">{topic}</Badge>
@@ -256,15 +256,15 @@ const ThesisProgressComponent: React.FC<ThesisProgressComponentProps> = ({
             
             {thesisData.documentFilename && (
               <div className="bg-gray-50 p-4 rounded-lg">
-                <h3 className="font-medium mb-2">Document Info:</h3>
-                <p className="text-sm text-gray-600">Filename: {thesisData.documentFilename}</p>
-                <p className="text-sm text-gray-600">Status: Ready for download</p>
+                <h3 className="font-medium mb-2">Información del documento:</h3>
+                <p className="text-sm text-gray-600">Archivo: {thesisData.documentFilename}</p>
+                <p className="text-sm text-gray-600">Estado: listo para descargar</p>
               </div>
             )}
             
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setShowPreview(false)}>
-                Close
+                Cerrar
               </Button>
               <Button onClick={handleDownload} disabled={isDownloading}>
                 {isDownloading ? (
