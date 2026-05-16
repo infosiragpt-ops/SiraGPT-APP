@@ -164,4 +164,24 @@ describe("detectFramework", () => {
   it("returns null when no framework matches", () => {
     assert.equal(detectFramework("plain text only"), null)
   })
+
+  it("identifies 'vanilla' via DOM API usage", () => {
+    // The FRAMEWORK_PATTERNS object is iterated in declaration order;
+    // react/vue/angular come first, vanilla last — so a snippet that
+    // only uses DOM APIs falls through to vanilla.
+    assert.equal(
+      detectFramework("document.getElementById('x').addEventListener('click', fn)"),
+      "vanilla",
+    )
+  })
+
+  it("prefers react over vanilla when both signals are present", () => {
+    // React import wins over DOM-API usage because react is iterated first.
+    assert.equal(
+      detectFramework(
+        "import React from 'react'; document.querySelector('.x')",
+      ),
+      "react",
+    )
+  })
 })
