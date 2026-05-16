@@ -2140,6 +2140,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setIsLoading(false);
     }
+    // pollThesisStatus is defined just below — adding it here would
+    // be a use-before-define. We use the latest closure (recreated
+    // each render is fine for a long-running stream-start handler).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentChat, user, token, selectChat]);
 
   const pollThesisStatus = useCallback((sessionId: string, messageId: string, chatId: string) => {
@@ -2328,6 +2332,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       });
       setPollingIntervals(new Map());
     };
+    // Empty deps array: cleanup must run only on unmount. Listing
+    // pollingIntervals here would re-run cleanup on every map change,
+    // clearing intervals we're actively polling.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Video polling function
