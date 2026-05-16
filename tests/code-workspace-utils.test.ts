@@ -116,6 +116,23 @@ describe("parseCodeBlocks", () => {
     assert.equal(out[0].language, "ts")
     assert.equal(out[1].language, "css")
   })
+
+  it("supports `# path:` first-line style (shell-comment syntax)", () => {
+    // Style 3 alternate: # path: ... for shell / python / yaml blocks
+    // where // would be illegal.
+    const body = "# path: scripts/deploy.sh\necho hello"
+    const out = parseCodeBlocks("```bash\n" + body + "\n```")
+    assert.equal(out[0].path, "scripts/deploy.sh")
+    assert.ok(out[0].content.includes("echo hello"))
+    assert.ok(!out[0].content.includes("# path:"))
+  })
+
+  it("returns content with the trailing newlines trimmed", () => {
+    // The fence parser strips trailing \n+ from .content so callers
+    // don't have to.
+    const out = parseCodeBlocks("```\nhello\n\n\n```")
+    assert.equal(out[0].content, "hello")
+  })
 })
 
 describe("computeLineDiff", () => {
