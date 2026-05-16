@@ -3,6 +3,8 @@ import { describe, it } from "node:test"
 
 import {
   blobToFile,
+  extractFilesFromDataTransfer,
+  extractFromClipboardEvent,
   filesToFileList,
   logIngest,
   sanitizeHtml,
@@ -199,6 +201,96 @@ describe("filesToFileList", () => {
     const list = filesToFileList([])
     assert.equal(list.length, 0)
     assert.equal(list.item(0), null)
+  })
+})
+
+describe("extractFilesFromDataTransfer", () => {
+  function makeFile(name: string, size = 5) {
+    return new File(["x".repeat(size)], name, { type: "image/png", lastModified: 1 })
+  }
+
+  it("returns [] when dt is null", () => {
+    assert.deepEqual(extractFilesFromDataTransfer(null), [])
+  })
+
+  it("reads from .files when populated", () => {
+    const a = makeFile("a.png")
+    const b = makeFile("b.png")
+    const dt = { files: [a, b], items: [] } as unknown as DataTransfer
+    const out = extractFilesFromDataTransfer(dt)
+    assert.equal(out.length, 2)
+    assert.equal(out[0].name, "a.png")
+    assert.equal(out[1].name, "b.png")
+  })
+
+  it("falls back to .items when .files is empty (older Edge / Linux Firefox)", () => {
+    const c = makeFile("c.png")
+    const dt = {
+      files: [],
+      items: [{ kind: "file", getAsFile: () => c }, { kind: "string", getAsFile: () => null }],
+    } as unknown as DataTransfer
+    const out = extractFilesFromDataTransfer(dt)
+    assert.equal(out.length, 1)
+    assert.equal(out[0].name, "c.png")
+  })
+
+  it("de-duplicates files surfaced by BOTH .files and .items", () => {
+    const f = makeFile("dup.png")
+    const dt = {
+      files: [f],
+      items: [{ kind: "file", getAsFile: () => f }],
+    } as unknown as DataTransfer
+    const out = extractFilesFromDataTransfer(dt)
+    assert.equal(out.length, 1)
+  })
+
+  it("ignores items whose kind is not 'file'", () => {
+    const dt = {
+      files: [],
+      items: [
+        { kind: "string", getAsFile: () => null },
+        { kind: "directory", getAsFile: () => null },
+      ],
+    } as unknown as DataTransfer
+    assert.deepEqual(extractFilesFromDataTransfer(dt), [])
+  })
+})
+
+describe("extractFromClipboardEvent", () => {
+  function makeFile(name: string) {
+    return new File(["x"], name, { type: "image/png", lastModified: 1 })
+  }
+
+  it("returns empty result when clipboardData is missing", () => {
+    const result = extractFromClipboardEvent({ clipboardData: null } as any)
+    assert.deepEqual(result, { files: [], text: null, html: null })
+  })
+
+  it("extracts files from items[].getAsFile()", () => {
+    const f = makeFile("paste.png")
+    const event = {
+      clipboardData: {
+        items: [{ kind: "file", getAsFile: () => f, type: "image/png" }],
+        files: [],
+        getData: () => "",
+      },
+    } as any
+    const result = extractFromClipboardEvent(event)
+    assert.equal(result.files.length, 1)
+    assert.equal(result.files[0].name, "paste.png")
+  })
+
+  it("returns plain text alongside files when present in the clipboard", () => {
+    const event = {
+      clipboardData: {
+        items: [],
+        files: [],
+        getData: (mime: string) => (mime === "text/plain" ? "hello world" : ""),
+      },
+    } as any
+    const result = extractFromClipboardEvent(event)
+    assert.equal(result.text, "hello world")
+    assert.equal(result.files.length, 0)
   })
 })
 
