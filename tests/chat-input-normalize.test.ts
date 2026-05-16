@@ -116,4 +116,27 @@ describe("normalizeChatInput · originalLength", () => {
     assert.equal(out.originalLength, 7)
     assert.equal(out.value.length, 6)
   })
+
+  it("does not truncate when zero-width strip brings length under the cap", () => {
+    // 50 k raw chars total; half are ZWSP. After strip, length is 25 k,
+    // well under the 100 k cap, so we should NOT truncate.
+    const half = MAX_CHAT_INPUT_CHARS / 4
+    const raw = (`x${ZWSP}`).repeat(half)
+    const out = normalizeChatInput(raw)
+    assert.equal(out.originalLength, half * 2)
+    assert.equal(out.value.length, half)
+    assert.equal(out.truncated, false)
+    assert.equal(out.changed, true)
+  })
+
+  it("truncates on the POST-strip length, not the original byte count", () => {
+    // Build something that's slightly over the cap AFTER zero-width
+    // strip: cap + 10 real chars + a few ZWSPs we'll strip first.
+    const meaningful = "y".repeat(MAX_CHAT_INPUT_CHARS + 10)
+    const padded = `${ZWSP.repeat(50)}${meaningful}`
+    const out = normalizeChatInput(padded)
+    assert.equal(out.originalLength, padded.length)
+    assert.equal(out.value.length, MAX_CHAT_INPUT_CHARS)
+    assert.equal(out.truncated, true)
+  })
 })

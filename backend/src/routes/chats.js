@@ -301,7 +301,11 @@ router.delete('/:id', authenticateToken, async (req, res) => {
 // backend rejects pastes that bypass the frontend cap (curl-direct
 // callers, replay attacks, broken clients). 100 k chars ≈ 200 KB at
 // UTF-8 worst case, which is well under the Express JSON body limit.
-const MAX_MESSAGE_CONTENT_CHARS = 100_000;
+// Override via SIRAGPT_MAX_MESSAGE_CHARS for tenant-specific tuning.
+const MAX_MESSAGE_CONTENT_CHARS = (() => {
+  const fromEnv = Number(process.env.SIRAGPT_MAX_MESSAGE_CHARS);
+  return Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : 100_000;
+})();
 
 router.post('/:id/messages', [
   body('role').isIn(['USER', 'ASSISTANT']).withMessage('Invalid role'),
