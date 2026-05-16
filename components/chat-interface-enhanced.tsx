@@ -5141,7 +5141,7 @@ But first, you need to connect your Spotify account securely using the button be
       if (text) setInput(prev => prev + text);
       handleAndUploadFiles(filesToFileList(accepted), channel);
     }
-  }, []);
+  }, [handleAndUploadFiles]);
 
   const handleTextareaPaste = React.useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     handleClipboardPaste(e);
@@ -5302,7 +5302,7 @@ But first, you need to connect your Spotify account securely using the button be
     };
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
-  }, []);
+  }, [clampSplitRatio]);
 
   const resetSplitRatio = React.useCallback(() => {
     const next = clampSplitRatio(50);
