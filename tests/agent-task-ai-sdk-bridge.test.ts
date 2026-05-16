@@ -56,4 +56,47 @@ describe("agent task AI SDK bridge", () => {
     assert.ok(bridge.exports.langchain.length > 0)
     assert.ok(bridge.exports.react.length > 0)
   })
+
+  it("agentTaskStateToUiMessage falls back to error when finalText is empty", () => {
+    const state = {
+      ...initialAgentState,
+      finalText: "",
+      error: "Stream closed without done",
+    }
+    const msg = agentTaskStateToUiMessage(state, "task-err")
+    assert.equal((msg.parts[0] as any).text, "Stream closed without done")
+  })
+
+  it("agentTaskStateToUiMessage falls back to last step label when finalText + error are empty", () => {
+    const state = {
+      ...initialAgentState,
+      finalText: "",
+      steps: [
+        { id: "s1", label: "Analizando solicitud", status: "done", toolCalls: [] },
+        { id: "s2", label: "Generando documento", status: "running", toolCalls: [] },
+      ] as any,
+    }
+    const msg = agentTaskStateToUiMessage(state, "task-step")
+    assert.equal((msg.parts[0] as any).text, "Generando documento")
+  })
+
+  it("agentTaskStateToUiMessage falls back to 'Agent task running' when everything is empty", () => {
+    const msg = agentTaskStateToUiMessage(initialAgentState, "task-empty")
+    assert.equal((msg.parts[0] as any).text, "Agent task running")
+  })
+
+  it("agentTaskStateToUiMessage defaults id to meta.taskId when not supplied", () => {
+    const state = {
+      ...initialAgentState,
+      finalText: "ok",
+      meta: { taskId: "task-from-meta", goal: "g", model: "m", tools: [] },
+    } as any
+    const msg = agentTaskStateToUiMessage(state)
+    assert.equal(msg.id, "task-from-meta")
+  })
+
+  it("agentTaskStateToUiMessage uses 'agent-task' when meta + explicit id are both missing", () => {
+    const msg = agentTaskStateToUiMessage(initialAgentState)
+    assert.equal(msg.id, "agent-task")
+  })
 })
