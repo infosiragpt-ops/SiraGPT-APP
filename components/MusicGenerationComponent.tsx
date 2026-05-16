@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
 import { Music, Play, Pause, Download, Volume2, Clock, Sparkles } from "lucide-react"
 import { apiClient } from "@/lib/api"
+import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
 import { toast } from "sonner"
 import { useAuth } from "@/lib/auth-context-integrated"
 
@@ -85,16 +86,24 @@ export default function MusicGenerationComponent() {
   }
 
   const generateMusic = async () => {
-    if (!prompt.trim()) {
+    const normalized = normalizeChatInput(prompt)
+    if (shouldWarnUser(normalized)) {
+      toast.error(
+        `La descripción supera el límite (${normalized.originalLength.toLocaleString()} caracteres). Se recortó.`,
+        { duration: 4500 },
+      )
+    }
+    const cleanPrompt = normalized.value.trim()
+    if (!cleanPrompt) {
       toast.error('Please enter a music description')
       return
     }
 
     setIsGenerating(true)
     try {
-      const fullPrompt = selectedStyle 
-        ? `${selectedStyle} style: ${prompt}` 
-        : prompt
+      const fullPrompt = selectedStyle
+        ? `${selectedStyle} style: ${cleanPrompt}`
+        : cleanPrompt
 
       const response = await apiClient.generateMusic({
         text: fullPrompt,

@@ -29,6 +29,7 @@ import {
   RefreshCw
 } from "lucide-react"
 import { apiClient } from "@/lib/api"
+import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
 import { toast } from "sonner"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
@@ -166,7 +167,15 @@ export default function VideoGenerationComponent() {
   }
 
   const generateVideo = async () => {
-    if (!prompt.trim()) {
+    const normalized = normalizeChatInput(prompt)
+    if (shouldWarnUser(normalized)) {
+      toast.error(
+        `La descripción supera el límite (${normalized.originalLength.toLocaleString()} caracteres). Se recortó.`,
+        { duration: 4500 },
+      )
+    }
+    const cleanPrompt = normalized.value.trim()
+    if (!cleanPrompt) {
       toast.error('Please enter a video description')
       return
     }
@@ -176,10 +185,11 @@ export default function VideoGenerationComponent() {
     setGeneratedVideo(null)
 
     try {
+      const cleanNegative = normalizeChatInput(negativePrompt).value.trim()
       const response = await apiClient.generateVideo({
-        prompt: prompt,
+        prompt: cleanPrompt,
         aspect_ratio: aspectRatio,
-        negative_prompt: negativePrompt.trim() ? negativePrompt : undefined
+        negative_prompt: cleanNegative ? cleanNegative : undefined
       })
 
       if (response.success) {
