@@ -24,6 +24,7 @@ import {
 import { toast } from "sonner"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { apiClient } from "@/lib/api"
+import { devLog } from "@/lib/dev-log"
 import { useRouter } from "next/navigation"
 
 interface User {
@@ -137,8 +138,8 @@ export function SuperAdminDashboard() {
 
   const handleImpersonateUser = async (targetUser: User) => {
     try {
-      console.log('Starting to access user account:', targetUser.email)
-      
+      devLog('Starting to access user account:', targetUser.email)
+
       // Call backend API to get impersonation token
       const response = await apiClient.impersonateUser(targetUser.id)
       

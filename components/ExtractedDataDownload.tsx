@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { getNormalizedApiBaseUrl } from '@/lib/api'
+import { devLog, devWarn } from '@/lib/dev-log'
 
 interface ExtractedDataDownloadProps {
   extractedData: {
@@ -51,13 +52,13 @@ const downloadAsHtml = async () => {
         const result = await response.json();
         if (result.success) {
           htmlContent = result.htmlContent;
-          console.log('✅ Using AI-generated HTML report');
+          devLog('Using AI-generated HTML report');
         } else {
-          console.warn('⚠️ Backend API failed, using fallback');
+          devWarn('Backend API failed, using fallback');
           htmlContent = generateHtmlReport(extractedData);
         }
       } else {
-        console.warn('⚠️ Backend API error, using fallback');
+        devWarn('Backend API error, using fallback');
         htmlContent = generateHtmlReport(extractedData);
       }
     } catch (error) {
