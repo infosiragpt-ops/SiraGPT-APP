@@ -215,10 +215,10 @@ const downloadMusic = async () => {
         </CardHeader>
         <CardContent className="space-y-4">
           <div>
-            <Label htmlFor="music-prompt">Music Prompt</Label>
+            <Label htmlFor="music-prompt">Descripción de la música</Label>
             <Textarea
               id="music-prompt"
-              placeholder="Enter a detailed description of the music you want to generate..."
+              placeholder="Describe en detalle la música que quieres generar…"
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               className="min-h-[100px] mt-2"
@@ -228,7 +228,7 @@ const downloadMusic = async () => {
 
           {/* Suggested Prompts */}
           <div>
-            <Label className="text-sm font-medium">Suggested Prompts</Label>
+            <Label className="text-sm font-medium">Ideas sugeridas</Label>
             <div className="flex flex-wrap gap-2 mt-2">
               {suggestedPrompts.map((suggestion, index) => (
                 <Badge
@@ -246,13 +246,13 @@ const downloadMusic = async () => {
           {/* Music Style Selector */}
           {musicStyles.length > 0 && (
             <div>
-              <Label htmlFor="music-style">Music Style (Optional)</Label>
+              <Label htmlFor="music-style">Estilo musical (opcional)</Label>
               <Select value={selectedStyle} onValueChange={setSelectedStyle}>
                 <SelectTrigger className="mt-2">
-                  <SelectValue placeholder="Select a music style" />
+                  <SelectValue placeholder="Elige un estilo musical" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">No specific style</SelectItem>
+                  <SelectItem value="">Sin estilo específico</SelectItem>
                   {musicStyles.map((style) => (
                     <SelectItem key={style.id} value={style.name}>
                       <div>
@@ -398,7 +398,7 @@ const downloadMusic = async () => {
             {/* Music Info */}
             <div className="grid grid-cols-2 gap-4 text-sm">
               <div>
-                <span className="text-muted-foreground">Duration:</span>
+                <span className="text-muted-foreground">Duración:</span>
                 <div className="font-medium">{generatedMusic.duration}s</div>
               </div>
             </div>

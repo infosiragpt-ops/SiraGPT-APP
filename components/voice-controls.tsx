@@ -130,13 +130,13 @@ useEffect(() => {
       setIsRecording(true)
 
       toast({
-        title: "Recording started",
-        description: "Speak now... (Using ElevenLabs STT)",
+        title: "Grabación iniciada",
+        description: "Habla ahora… (usando ElevenLabs STT)",
       })
     } catch (error) {
       toast({
         title: "Error",
-        description: "Could not access microphone. Please check permissions.",
+        description: "No se pudo acceder al micrófono. Revisa los permisos.",
         variant: "destructive"
       })
     }
@@ -171,15 +171,15 @@ useEffect(() => {
       if (response.text && onTranscription) {
         onTranscription(response.text)
         toast({
-          title: "Success",
-          description: "Audio transcribed successfully with ElevenLabs!",
+          title: "Listo",
+          description: "Audio transcrito correctamente con ElevenLabs",
         })
       }
     } catch (error: any) {
       console.error('ElevenLabs speech-to-text error:', error)
       toast({
         title: "Error",
-        description: error.message || "Failed to transcribe audio",
+        description: error.message || "No se pudo transcribir el audio",
         variant: "destructive"
       })
     } finally {
@@ -216,7 +216,7 @@ useEffect(() => {
       console.error("Voice controls TTS error:", error)
       toast({
         title: "Error",
-        description: error.message || "Failed to generate audio",
+        description: error.message || "No se pudo generar el audio",
         variant: "destructive"
       })
     } finally {
@@ -302,7 +302,7 @@ useEffect(() => {
 
             <div className="space-y-3">
               <div className="space-y-2">
-                <Label>Stability: {voiceSettings.stability.toFixed(1)}</Label>
+                <Label>Estabilidad: {voiceSettings.stability.toFixed(1)}</Label>
                 <Slider
                   value={[voiceSettings.stability]}
                   onValueChange={([value]) =>
@@ -315,7 +315,7 @@ useEffect(() => {
               </div>
 
               <div className="space-y-2">
-                <Label>Similarity: {voiceSettings.similarity_boost.toFixed(1)}</Label>
+                <Label>Similitud: {voiceSettings.similarity_boost.toFixed(1)}</Label>
                 <Slider
                   value={[voiceSettings.similarity_boost]}
                   onValueChange={([value]) =>
