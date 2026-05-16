@@ -19,6 +19,7 @@ import { Download, Sparkles, RefreshCw } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { planService } from "@/lib/plan-service"
+import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 const PlanViewer = dynamic(
@@ -40,12 +41,20 @@ export default function PlanPage() {
   const abortRef = React.useRef<AbortController | null>(null)
 
   async function handleGenerate() {
-    if (!brief.trim() || loading) return
+    const normalized = normalizeChatInput(brief)
+    if (shouldWarnUser(normalized)) {
+      toast.error(
+        `El brief supera el límite (${normalized.originalLength.toLocaleString()} caracteres). Se recortó.`,
+        { duration: 4500 },
+      )
+    }
+    const cleanBrief = normalized.value.trim()
+    if (!cleanBrief || loading) return
     const ctrl = new AbortController()
     abortRef.current = ctrl
     setLoading(true)
     try {
-      const res = await planService.generate(brief.trim(), { signal: ctrl.signal })
+      const res = await planService.generate(cleanBrief, { signal: ctrl.signal })
       setDxf(res.dxf)
       setPlan(res.plan)
     } catch (err: any) {

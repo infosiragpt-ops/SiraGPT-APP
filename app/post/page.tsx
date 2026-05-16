@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
+import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
 const API_ROOT = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
 
 const NETWORKS = [
@@ -104,7 +105,15 @@ export default function PostPage() {
   }
 
   async function schedule() {
-    if (!prompt.trim()) return toast.error("Escribe la idea del post")
+    const normalized = normalizeChatInput(prompt)
+    if (shouldWarnUser(normalized)) {
+      toast.error(
+        `La idea supera el límite (${normalized.originalLength.toLocaleString()} caracteres). Se recortó.`,
+        { duration: 4500 },
+      )
+    }
+    const cleanPrompt = normalized.value.trim()
+    if (!cleanPrompt) return toast.error("Escribe la idea del post")
     if (platforms.length === 0) return toast.error("Selecciona al menos una red social")
     setSaving(true)
     try {
@@ -112,7 +121,7 @@ export default function PostPage() {
         method: "POST",
         credentials: "include",
         headers: authHeaders(),
-        body: JSON.stringify({ prompt, paletteName, days, startDate, platforms, referenceImages }),
+        body: JSON.stringify({ prompt: cleanPrompt, paletteName, days, startDate, platforms, referenceImages }),
       })
       const json = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(json?.error || `HTTP ${res.status}`)
