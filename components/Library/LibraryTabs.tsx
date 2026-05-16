@@ -328,7 +328,7 @@ const MediaLibrary: React.FC = () => {
             setCurrentPage(data.currentPage);
             setTotalPages(data.totalPages || 1);
         } catch (err: any) {
-            setError(err.message || 'Failed to fetch media items');
+            setError(err.message || 'No se pudieron cargar los archivos');
         } finally {
             setLoading(false);
         }
@@ -368,11 +368,11 @@ const MediaLibrary: React.FC = () => {
     return (
         <div className="container mx-auto p-4">
             <Head>
-                <title>Media Library</title>
+                <title>Biblioteca de archivos</title>
             </Head>
             <div className="flex items-center gap-3 mb-6">
                 <SidebarTrigger className="md:hidden" />
-                <h1 className="text-3xl font-bold text-gray-800 dark:text-white">Your Media Library</h1>
+                <h1 className="text-3xl font-bold text-gray-800 dark:text-white">Tu biblioteca de archivos</h1>
             </div>
             <div className="flex border-b border-gray-200 mb-6">
                 <button
@@ -380,14 +380,14 @@ const MediaLibrary: React.FC = () => {
                     className={`py-2 px-4 text-lg font-medium ${filterType === 'all' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-600 hover:text-gray-800'
                         } focus:outline-none transition-colors duration-200`}
                 >
-                    All
+                    Todos
                 </button>
                 <button
                     onClick={() => handleTabChange('image')}
                     className={`py-2 px-4 text-lg font-medium ${filterType === 'image' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-600 hover:text-gray-800'
                         } focus:outline-none transition-colors duration-200`}
                 >
-                    Images
+                    Imágenes
                 </button>
                 <button
                     onClick={() => handleTabChange('video')}
@@ -398,7 +398,7 @@ const MediaLibrary: React.FC = () => {
                 </button>
             </div>
 
-            {loading && <p className="text-gray-600 text-center py-10">Loading media...</p>}
+            {loading && <p className="text-gray-600 text-center py-10">Cargando archivos…</p>}
             {error && <p className="text-red-500 text-center py-10">Error: {error}</p>}
 
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
@@ -413,7 +413,7 @@ const MediaLibrary: React.FC = () => {
                             {item.type === 'image' && (
                                 <img
                                     src={item.url || '/placeholder.png'}
-                                    alt={item.prompt || 'Generated Image'}
+                                    alt={item.prompt || 'Imagen generada'}
                                     onError={(e) => {
                                         (e.currentTarget as HTMLImageElement).src = '/placeholder.svg';
                                     }}
@@ -486,7 +486,7 @@ const MediaLibrary: React.FC = () => {
                 >
                     Previous
                 </button>
-                <span className="text-xl font-medium text-gray-700">Page {currentPage} of {totalPages}</span>
+                <span className="text-xl font-medium text-gray-700">Página {currentPage} de {totalPages}</span>
                 <button
                     onClick={handleNextPage}
                     disabled={currentPage >= totalPages || loading}
@@ -510,7 +510,7 @@ const MediaLibrary: React.FC = () => {
                             {selectedMedia.type === 'image' && selectedMedia.url && (
                                 <img
                                     src={selectedMedia.url}
-                                    alt={selectedMedia.prompt || 'Generated Image'}
+                                    alt={selectedMedia.prompt || 'Imagen generada'}
                                     className="max-w-full max-h-[calc(90vh-8rem)] object-contain mx-auto"
                                 />
                             )}
@@ -521,7 +521,7 @@ const MediaLibrary: React.FC = () => {
                                     src={`${process.env.NEXT_PUBLIC_API_URL}${selectedMedia.video_url}`}
                                     className="max-w-full max-h-[calc(90vh-8rem)] object-contain mx-auto bg-black rounded-md"
                                 >
-                                    Your browser does not support the video tag.
+                                    Tu navegador no admite la etiqueta de video.
                                 </video>
                             )}
                             {selectedMedia.type === 'video' && selectedMedia.status === 'processing' && (
@@ -540,7 +540,7 @@ const MediaLibrary: React.FC = () => {
                                         download={selectedMedia.filename || `generated-${selectedMedia.type}-${selectedMedia.messageId}.${selectedMedia.type === 'image' ? 'png' : 'mp4'}`}
                                         className="mt-4 inline-block bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg text-md font-medium transition-colors duration-200"
                                     >
-                                        Download {selectedMedia.type === 'image' ? 'Image' : 'Video'}
+                                        Descargar {selectedMedia.type === 'image' ? 'imagen' : 'video'}
                                     </a>
                                 )}
                             </div>
@@ -555,7 +555,7 @@ const MediaLibrary: React.FC = () => {
                         <button
                             onClick={closeMediaModal}
                             className="absolute top-3 right-3 text-white text-2xl font-bold bg-gray-700 bg-opacity-80 hover:bg-opacity-100 rounded-full w-10 h-10 flex items-center justify-center z-10 transition"
-                            aria-label="Close"
+                            aria-label="Cerrar"
                         >
                             &times;
                         </button>
@@ -565,7 +565,7 @@ const MediaLibrary: React.FC = () => {
                             {selectedMedia.type === 'image' && selectedMedia.url && (
                                 <img
                                     src={selectedMedia.url}
-                                    alt={selectedMedia.prompt || 'Generated Image'}
+                                    alt={selectedMedia.prompt || 'Imagen generada'}
                                     className="max-w-full max-h-[calc(90vh-10rem)] object-contain mx-auto rounded-lg"
                                 />
                             )}
@@ -578,14 +578,14 @@ const MediaLibrary: React.FC = () => {
                                     src={`${process.env.NEXT_PUBLIC_API_URL}${selectedMedia.video_url}`}
                                     className="max-w-full max-h-[calc(90vh-10rem)] object-contain mx-auto bg-black rounded-lg"
                                 >
-                                    Your browser does not support the video tag.
+                                    Tu navegador no admite la etiqueta de video.
                                 </video>
                             )}
 
                             {/* Processing Placeholder */}
                             {selectedMedia.type === 'video' && selectedMedia.status === 'processing' && (
                                 <div className="max-w-full max-h-[calc(90vh-10rem)] bg-blue-100 text-blue-700 flex items-center justify-center rounded-lg text-center p-4 animate-pulse">
-                                    <span>Video Processing...<br />(Please check back later)</span>
+                                    <span>Procesando el video…<br />(Vuelve más tarde)</span>
                                 </div>
                             )}
 
@@ -605,7 +605,7 @@ const MediaLibrary: React.FC = () => {
                                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.8} stroke="currentColor" className="w-5 h-5">
                                             <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 15.75v2.25A2.25 2.25 0 006.75 20.25h10.5a2.25 2.25 0 002.25-2.25v-2.25M12 3v12m0 0l-3.75-3.75M12 15l3.75-3.75" />
                                         </svg>
-                                        Download {selectedMedia.type === 'image' ? 'Image' : 'Video'}
+                                        Descargar {selectedMedia.type === 'image' ? 'imagen' : 'video'}
                                     </a>
                                 )}
                             </div>
