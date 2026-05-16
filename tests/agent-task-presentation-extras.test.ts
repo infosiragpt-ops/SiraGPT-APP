@@ -212,4 +212,33 @@ describe("summarizeAgentActivity · status precedence", () => {
     assert.equal(s.validationTotal, 3)
     assert.equal(s.validationPassed, 2)
   })
+
+  it("'repairing' status fires when the latest repair is not yet completed", () => {
+    const state = emptyState() as any
+    state.repairs = [
+      { attempt: 1, status: "completed" },
+      { attempt: 2, status: "running" }, // latest = still in flight
+    ]
+    const s = summarizeAgentActivity(state)
+    assert.equal(s.status, "repairing")
+  })
+
+  it("'repairing' does NOT fire when the latest repair is completed", () => {
+    const state = emptyState() as any
+    state.repairs = [
+      { attempt: 1, status: "completed" },
+      { attempt: 2, status: "completed" },
+    ]
+    const s = summarizeAgentActivity(state)
+    // No other status drivers -> idle.
+    assert.equal(s.status, "idle")
+  })
+
+  it("'verifying' fires when qualityGates exist AND a step is still running", () => {
+    const state = emptyState() as any
+    state.qualityGates = [{ passed: true }]
+    state.steps = [{ id: "s1", status: "running", toolCalls: [] }]
+    const s = summarizeAgentActivity(state)
+    assert.equal(s.status, "verifying")
+  })
 })
