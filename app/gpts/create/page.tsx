@@ -140,6 +140,10 @@ export default function CreateGPTPage() {
       setIsEditMode(true)
       loadGPTForEdit(editId)
     }
+    // loadGPTForEdit is defined below in the component body, so adding
+    // it to deps would lint-loop. Intent: re-fetch only when the
+    // URL-bound editId changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editId])
 
   useEffect(() => {

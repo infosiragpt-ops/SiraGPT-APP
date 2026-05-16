@@ -67,6 +67,11 @@ function ProfileContent() {
     if (user) {
       fetchSubscriptionData()
     }
+    // fetchSubscriptionData closes over only `user` (read above) — we
+    // intentionally re-fetch only when the user identity changes. The
+    // function itself is re-created on every render, so listing it in
+    // deps would lint-loop without improving correctness.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user])
 
   const fetchSubscriptionData = async () => {
