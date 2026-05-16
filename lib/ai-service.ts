@@ -1,6 +1,8 @@
 
 "use client"
 
+import { devLog } from "./dev-log"
+
 export interface IntentAnalysis {
   type: "search_tracks" | "search_artists" | "search_playlists" | "get_recommendations" | "general"
   query: string
@@ -672,7 +674,7 @@ Respond with only one word.
       if (!response.ok) throw new Error(`API error: ${response.statusText}`);
       const data = await response.json();
       const intent = data.choices[0].message.content.toLowerCase().trim();
-      console.log('intent FROM OPEN AI', intent);
+      devLog('intent FROM OPEN AI', intent);
 
       if (VALID_CHAT_INTENTS.includes(intent as ChatIntent)) {
         return normalizeRoutingIntent(intent as ChatIntent);
