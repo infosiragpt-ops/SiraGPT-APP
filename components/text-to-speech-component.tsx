@@ -697,7 +697,7 @@ const downloadAudio = async () => {
     return (
         <div className="max-w-7xl mx-auto p-6 space-y-6 relative pb-32">
             <div className="flex justify-between items-center">
-                <h1 className="text-2xl font-semibold">Text to Speech</h1>
+                <h1 className="text-2xl font-semibold">Texto a voz</h1>
 
             </div>
 
@@ -740,14 +740,14 @@ const downloadAudio = async () => {
                 <div className="w-full md:w-[350px] flex-shrink-0 space-y-2">
                     <Tabs defaultValue="settings" className="w-full">
                         <TabsList>
-                            <TabsTrigger value="settings">Settings</TabsTrigger>
+                            <TabsTrigger value="settings">Ajustes</TabsTrigger>
                             {/* <TabsTrigger value="history">History</TabsTrigger> */}
                         </TabsList>
                         <TabsContent value="settings" className="p-1">
                             <Card className="border-none shadow-none">
                                 <CardContent className="space-y-5 pt-6">
                                     <div className="space-y-2">
-                                        <Label>Voice</Label>
+                                        <Label>Voz</Label>
                                         <VoiceSelector selectedVoice={selectedVoice} onVoiceChange={setSelectedVoice} />
                                     </div>
                                     <div className="space-y-2">
@@ -769,22 +769,22 @@ const downloadAudio = async () => {
                                     {/* --- Sliders and Speaker Boost --- */}
                                     {/* Stability */}
                                     <div className="space-y-2">
-                                        <div className="flex justify-between"><Label>Stability</Label><span>{voiceSettings.stability.toFixed(2)}</span></div>
+                                        <div className="flex justify-between"><Label>Estabilidad</Label><span>{voiceSettings.stability.toFixed(2)}</span></div>
                                         <Slider value={[voiceSettings.stability]} onValueChange={([v]) => setVoiceSettings(p => ({ ...p, stability: v }))} max={1} step={0.01} />
                                     </div>
                                     {/* Similarity */}
                                     <div className="space-y-2">
-                                        <div className="flex justify-between"><Label>Similarity</Label><span>{voiceSettings.similarity_boost.toFixed(2)}</span></div>
+                                        <div className="flex justify-between"><Label>Similitud</Label><span>{voiceSettings.similarity_boost.toFixed(2)}</span></div>
                                         <Slider value={[voiceSettings.similarity_boost]} onValueChange={([v]) => setVoiceSettings(p => ({ ...p, similarity_boost: v }))} max={1} step={0.01} />
                                     </div>
                                     {/* Style Exaggeration */}
                                     <div className="space-y-2">
-                                        <div className="flex justify-between"><Label>Style Exaggeration</Label><span>{voiceSettings.style.toFixed(2)}</span></div>
+                                        <div className="flex justify-between"><Label>Énfasis de estilo</Label><span>{voiceSettings.style.toFixed(2)}</span></div>
                                         <Slider value={[voiceSettings.style]} onValueChange={([v]) => setVoiceSettings(p => ({ ...p, style: v }))} max={1} step={0.01} />
                                     </div>
                                     {/* Speaker Boost */}
                                     <div className="flex items-center justify-between pt-2">
-                                        <Label htmlFor="speaker-boost" className="font-semibold">Speaker boost</Label>
+                                        <Label htmlFor="speaker-boost" className="font-semibold">Refuerzo del hablante</Label>
                                         <Switch
                                             id="speaker-boost"
                                             checked={voiceSettings.use_speaker_boost}
@@ -823,7 +823,7 @@ const downloadAudio = async () => {
 
                             <div className="flex items-center gap-2">
                                 <Button variant="ghost" size="icon" onClick={downloadAudio}><Download className="h-4 w-4" /></Button>
-                                <Button variant="outline" size="sm" onClick={handleShare}><Share2 className="h-4 w-4 mr-2" />Share</Button>
+                                <Button variant="outline" size="sm" onClick={handleShare}><Share2 className="h-4 w-4 mr-2" />Compartir</Button>
                             </div>
                         </div>
                     </div>
