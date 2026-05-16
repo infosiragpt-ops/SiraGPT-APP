@@ -28,6 +28,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
+import { normalizeChatInput } from "@/lib/chat-input-normalize"
 import {
   githubCodexService,
   type GitHubCodexActionFailureAnalysisResult,
@@ -228,7 +229,7 @@ export default function CodexPage() {
   }, [branch, context?.branch, repo])
 
   const searchRepository = React.useCallback(async () => {
-    const cleanQuery = ragQuery.trim()
+    const cleanQuery = normalizeChatInput(ragQuery).value.trim()
     if (!cleanQuery) {
       toast.error("Escribe una pregunta para buscar en el repo")
       return
