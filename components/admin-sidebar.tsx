@@ -100,8 +100,8 @@ export function AdminSidebar() {
     <Sidebar className="border-r border-border/40" collapsible="icon">
         <SidebarHeader
         className={cn(
-          "border-b border-border/40 transition-all",
-          state === "open" ? "p-4" : "p-2"
+          "border-b border-border/40 transition-all flex-shrink-0",
+          state === "open" ? "p-3" : "p-2"
         )}
       >
         {/* When sidebar is open - show full layout */}
@@ -134,7 +134,7 @@ export function AdminSidebar() {
         </div>
       </SidebarHeader>
 
-      <SidebarContent className="px-2">
+      <SidebarContent className="px-2 overflow-y-auto">
         {/* Back-to-app escape hatch — admin panel has no top-bar, so without
             this button users get stuck inside /admin with no way out. */}
         <SidebarGroup>
@@ -176,7 +176,7 @@ export function AdminSidebar() {
         </SidebarGroup>
       </SidebarContent>
 
-      <SidebarFooter className="border-t border-border/40 p-2">
+      <SidebarFooter className="border-t border-border/40 p-2 flex-shrink-0">
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton className="w-full justify-start">

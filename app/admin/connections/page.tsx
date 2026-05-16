@@ -120,19 +120,19 @@ export default function AdminConnectionsPage() {
     load()
   }, [load])
 
-  // Provider groups present in DB + provider keys with zero rows, so
-  // the admin always sees a slot to add for any known provider.
+  // Only render providers that actually have at least one connection.
+  // Empty-provider cards add noise — adding a new connection goes
+  // through the global "+ Agregar conexión" button instead.
   const renderedGroups = useMemo(() => {
-    const map = new Map<string, ProviderGroup>()
-    for (const g of groups) map.set(g.providerKey, g)
-    for (const p of PROVIDERS) {
-      if (!map.has(p.key)) {
-        map.set(p.key, { providerKey: p.key, providerLabel: p.label, enabled: false, connections: [] })
-      }
-    }
-    // Order: known providers first in PROVIDERS order, custom last
-    return PROVIDERS.map((p) => map.get(p.key)!).filter(Boolean)
+    const present = groups.filter((g) => g.connections.length > 0)
+    const order = new Map(PROVIDERS.map((p, i) => [p.key, i]))
+    return present.sort((a, b) => (order.get(a.providerKey) ?? 999) - (order.get(b.providerKey) ?? 999))
   }, [groups])
+
+  const disabledConnections = useMemo(
+    () => groups.flatMap((g) => g.connections.filter((c) => !c.enabled)),
+    [groups]
+  )
 
   const openAdd = (providerKey: string) => {
     setEditing(null)
@@ -181,44 +181,79 @@ export default function AdminConnectionsPage() {
     }
   }
 
+  const removeAllDisabled = async () => {
+    if (disabledConnections.length === 0) return
+    if (!confirm(`Eliminar ${disabledConnections.length} conexión(es) desactivada(s)? Esta acción no se puede deshacer.`)) return
+    try {
+      await Promise.all(disabledConnections.map((c) => apiClient.deleteAdminConnection(c.id)))
+      toast.success(`${disabledConnections.length} conexión(es) eliminada(s)`)
+      load()
+    } catch (e: any) {
+      toast.error(`Error: ${e?.message || e}`)
+    }
+  }
+
   return (
     <div className="p-6 space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-semibold flex items-center gap-2">
             <Plug className="h-6 w-6" /> Conexiones
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Endpoints upstream que alimentan al panel de Modelos. Activa, desactiva o agrega URLs por proveedor.
+            API keys de proveedores. Lo que actives aquí aparece en Modelos IA.
           </p>
         </div>
-        <Button variant="outline" onClick={load} disabled={loading}>
-          <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
-          Refrescar
-        </Button>
+        <div className="flex items-center gap-2 flex-wrap">
+          {disabledConnections.length > 0 && (
+            <Button variant="outline" onClick={removeAllDisabled} className="text-red-600 hover:text-red-700">
+              <Trash2 className="h-4 w-4 mr-2" />
+              Eliminar desactivadas ({disabledConnections.length})
+            </Button>
+          )}
+          <Button variant="outline" onClick={load} disabled={loading}>
+            <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
+            Refrescar
+          </Button>
+          <Button onClick={() => openAdd("openai")}>
+            <Plus className="h-4 w-4 mr-2" />
+            Agregar conexión
+          </Button>
+        </div>
       </div>
 
       {loading && groups.length === 0 ? (
         <div className="text-sm text-muted-foreground">Cargando conexiones…</div>
+      ) : renderedGroups.length === 0 ? (
+        <Card>
+          <CardContent className="py-12 text-center">
+            <Plug className="h-10 w-10 mx-auto text-muted-foreground mb-3" />
+            <p className="text-sm text-muted-foreground mb-4">
+              No hay conexiones configuradas todavía.
+            </p>
+            <Button onClick={() => openAdd("openai")}>
+              <Plus className="h-4 w-4 mr-2" />
+              Agregar la primera
+            </Button>
+          </CardContent>
+        </Card>
       ) : (
-        <div className="space-y-4">
+        <div className="space-y-3">
           {renderedGroups.map((g) => (
             <Card key={g.providerKey}>
-              <CardHeader className="flex flex-row items-center justify-between pb-2">
-                <CardTitle className="text-lg flex items-center gap-2">
+              <CardHeader className="flex flex-row items-center justify-between py-3">
+                <CardTitle className="text-base flex items-center gap-2">
                   {g.providerLabel}
-                  <Badge variant={g.enabled ? "default" : "secondary"} className="text-xs">
-                    {g.connections.length} conexión{g.connections.length !== 1 ? "es" : ""}
+                  <Badge variant={g.enabled ? "default" : "secondary"} className="text-xs font-normal">
+                    {g.connections.length}
                   </Badge>
                 </CardTitle>
                 <Switch
                   checked={g.enabled}
-                  disabled={g.connections.length === 0}
                   onCheckedChange={async (v) => {
-                    // Bulk toggle all connections in this provider group.
                     try {
                       await Promise.all(g.connections.map((c) => apiClient.updateAdminConnection(c.id, { enabled: v })))
-                      toast.success(v ? `Todas las conexiones de ${g.providerLabel} activadas` : `${g.providerLabel} desactivado`)
+                      toast.success(v ? `${g.providerLabel} activado` : `${g.providerLabel} desactivado`)
                       load()
                     } catch (e: any) {
                       toast.error(`Error: ${e?.message || e}`)
@@ -226,59 +261,49 @@ export default function AdminConnectionsPage() {
                   }}
                 />
               </CardHeader>
-              <CardContent>
-                <div className="flex items-center justify-between text-sm text-muted-foreground border-b pb-2 mb-2">
-                  <span>Manage {g.providerLabel} Connections</span>
-                  <Button variant="ghost" size="sm" onClick={() => openAdd(g.providerKey)}>
-                    <Plus className="h-4 w-4" />
-                  </Button>
-                </div>
-                {g.connections.length === 0 ? (
-                  <div className="text-xs text-muted-foreground py-2">Sin conexiones. Click + para agregar.</div>
-                ) : (
-                  <div className="space-y-2">
-                    {g.connections.map((c) => (
-                      <div key={c.id} className="flex items-center justify-between gap-2 py-1">
-                        <div className="flex-1 min-w-0">
-                          <div className="text-sm font-mono truncate" title={c.url}>{c.url}</div>
-                          <div className="flex items-center gap-2 mt-0.5">
-                            {c.apiKeySet ? (
-                              <Badge variant="outline" className="text-[10px] py-0">key {c.apiKey}</Badge>
+              <CardContent className="pt-0 pb-3">
+                <div className="space-y-1.5">
+                  {g.connections.map((c) => (
+                    <div key={c.id} className="flex items-center justify-between gap-2 py-1.5 px-2 -mx-2 rounded hover:bg-accent/40">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-mono truncate" title={c.url}>{c.url}</div>
+                        <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                          {c.apiKeySet ? (
+                            <Badge variant="outline" className="text-[10px] py-0 font-mono">{c.apiKey}</Badge>
+                          ) : (
+                            <Badge variant="outline" className="text-[10px] py-0 text-amber-600">sin api key</Badge>
+                          )}
+                          {c.lastSyncedAt && (
+                            c.lastSyncOk ? (
+                              <Badge variant="outline" className="text-[10px] py-0 text-green-600 flex items-center gap-1">
+                                <CheckCircle2 className="h-3 w-3" /> OK
+                              </Badge>
                             ) : (
-                              <Badge variant="outline" className="text-[10px] py-0 text-amber-600">sin api key</Badge>
-                            )}
-                            {c.lastSyncedAt && (
-                              c.lastSyncOk ? (
-                                <Badge variant="outline" className="text-[10px] py-0 text-green-600 flex items-center gap-1">
-                                  <CheckCircle2 className="h-3 w-3" /> sync OK
-                                </Badge>
-                              ) : (
-                                <Badge variant="outline" className="text-[10px] py-0 text-red-600 flex items-center gap-1" title={c.lastSyncError || ""}>
-                                  <XCircle className="h-3 w-3" /> sync fail
-                                </Badge>
-                              )
-                            )}
-                            {c.modelIds.length > 0 && (
-                              <Badge variant="outline" className="text-[10px] py-0">{c.modelIds.length} modelo(s)</Badge>
-                            )}
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-1 shrink-0">
-                          <Button variant="ghost" size="sm" onClick={() => testConn(c)} title="Probar /models">
-                            <RefreshCw className="h-4 w-4" />
-                          </Button>
-                          <Button variant="ghost" size="sm" onClick={() => openEdit(c)} title="Editar">
-                            <SettingsIcon className="h-4 w-4" />
-                          </Button>
-                          <Button variant="ghost" size="sm" onClick={() => remove(c)} title="Eliminar">
-                            <Trash2 className="h-4 w-4 text-red-600" />
-                          </Button>
-                          <Switch checked={c.enabled} onCheckedChange={(v) => toggle(c, v)} />
+                              <Badge variant="outline" className="text-[10px] py-0 text-red-600 flex items-center gap-1" title={c.lastSyncError || ""}>
+                                <XCircle className="h-3 w-3" /> fail
+                              </Badge>
+                            )
+                          )}
+                          {c.modelIds.length > 0 && (
+                            <Badge variant="outline" className="text-[10px] py-0">{c.modelIds.length} modelo(s)</Badge>
+                          )}
                         </div>
                       </div>
-                    ))}
-                  </div>
-                )}
+                      <div className="flex items-center gap-1 shrink-0">
+                        <Button variant="ghost" size="sm" onClick={() => testConn(c)} title="Probar /models">
+                          <RefreshCw className="h-4 w-4" />
+                        </Button>
+                        <Button variant="ghost" size="sm" onClick={() => openEdit(c)} title="Editar">
+                          <SettingsIcon className="h-4 w-4" />
+                        </Button>
+                        <Button variant="ghost" size="sm" onClick={() => remove(c)} title="Eliminar">
+                          <Trash2 className="h-4 w-4 text-red-600" />
+                        </Button>
+                        <Switch checked={c.enabled} onCheckedChange={(v) => toggle(c, v)} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </CardContent>
             </Card>
           ))}
