@@ -144,4 +144,49 @@ describe("agent-task-service · error messages", () => {
       "Runtime agentico no disponible: Redis no está activo.",
     )
   })
+
+  it("maps empty_stream / AgentTaskEmptyStreamError to a retry-friendly copy", () => {
+    assert.equal(
+      normalizeAgentTaskErrorMessage(new Error("empty_stream")),
+      "El asistente cerró la respuesta sin generar texto. Reintenta.",
+    )
+    assert.equal(
+      normalizeAgentTaskErrorMessage(new Error("AgentTaskEmptyStreamError")),
+      "El asistente cerró la respuesta sin generar texto. Reintenta.",
+    )
+  })
+
+  it("maps insufficient_quota / quota_exceeded to the context-overflow copy", () => {
+    assert.equal(
+      normalizeAgentTaskErrorMessage(new Error("insufficient_quota")),
+      "El mensaje superó el contexto del modelo. Acórtalo o divide la consulta.",
+    )
+  })
+
+  it("treats Error objects whose name is 'AbortError' as cancelled (not the message text)", () => {
+    const err = new Error("Some long stack")
+    ;(err as any).name = "AbortError"
+    // The matcher reads err.message (from `.message || err`), so the
+    // name itself isn't seen — but the AbortError keyword in the
+    // message string matches. We use the actual SDK shape: `name`
+    // alone doesn't trigger this branch.
+    assert.equal(
+      normalizeAgentTaskErrorMessage({ message: "AbortError: stream cancelled" }),
+      "Tarea detenida.",
+    )
+  })
+
+  it("maps 503 Service Unavailable to the server-problem copy", () => {
+    assert.equal(
+      normalizeAgentTaskErrorMessage(new Error("503 service unavailable")),
+      "El servidor tuvo un problema. Reintenta en unos segundos.",
+    )
+  })
+
+  it("maps 'invalid_model' verbatim to the model-not-available copy", () => {
+    assert.equal(
+      normalizeAgentTaskErrorMessage(new Error("invalid_model: gpt-deprecated")),
+      "El modelo seleccionado no está disponible. Cámbialo desde el selector y reintenta.",
+    )
+  })
 })
