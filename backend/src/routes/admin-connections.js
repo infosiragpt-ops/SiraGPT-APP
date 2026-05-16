@@ -20,9 +20,43 @@ const express = require('express');
 const { body, validationResult } = require('express-validator');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 const prisma = require('../config/database');
+const { encrypt, decrypt } = require('../utils/encryption');
+const { applyAdminConnections } = require('../services/admin-connections-bridge');
 
 const router = express.Router();
 router.use(authenticateToken, requireAdmin);
+
+// Refresh the bridge after a write. Fire-and-forget — the response
+// has already gone out; logging the failure is enough.
+function refreshBridge() {
+  applyAdminConnections().catch((e) =>
+    console.error('[admin-connections] bridge refresh failed:', e.message)
+  );
+}
+
+// API keys are stored encrypted at rest. The `enc:v1:` prefix is a
+// version marker so future format changes (e.g. switching to GCM or
+// rotating keys) can coexist with already-encrypted rows. The prefix
+// also acts as a discriminator against legacy plaintext rows — real
+// provider keys start with `sk-`, `sk-ant-`, etc., never `enc:v1:`.
+const KEY_PREFIX = 'enc:v1:';
+
+function encryptKey(plain) {
+  if (!plain || typeof plain !== 'string') return null;
+  if (plain.startsWith(KEY_PREFIX)) return plain; // idempotent
+  return KEY_PREFIX + encrypt(plain);
+}
+
+function decryptKey(stored) {
+  if (!stored || typeof stored !== 'string') return null;
+  if (!stored.startsWith(KEY_PREFIX)) return stored; // legacy plaintext
+  try {
+    return decrypt(stored.slice(KEY_PREFIX.length));
+  } catch (err) {
+    console.error('[admin-connections] decryptKey failed:', err.message);
+    return null;
+  }
+}
 
 // Known provider keys — used to normalise UI grouping. The "custom"
 // catch-all lets admins point at anything OpenAI-compatible (e.g.
@@ -57,14 +91,15 @@ const DEFAULT_PROVIDER_LABELS = {
 
 /** Mask sensitive fields before returning a connection row to the client. */
 function shapeConnection(c, { revealKey = false } = {}) {
+  const plain = decryptKey(c.apiKey);
   return {
     id: c.id,
     url: c.url,
     providerKey: c.providerKey,
     providerLabel: c.providerLabel || DEFAULT_PROVIDER_LABELS[c.providerKey] || c.providerKey,
     apiKey: revealKey
-      ? c.apiKey
-      : (c.apiKey ? `${c.apiKey.slice(0, 4)}…${c.apiKey.slice(-4)}` : null),
+      ? plain
+      : (plain ? `${plain.slice(0, 4)}…${plain.slice(-4)}` : null),
     apiKeySet: !!c.apiKey,
     authType: c.authType,
     apiType: c.apiType,
@@ -137,7 +172,7 @@ router.post(
           url: req.body.url.trim(),
           providerKey: safeProvider,
           providerLabel: req.body.providerLabel || DEFAULT_PROVIDER_LABELS[safeProvider] || null,
-          apiKey: req.body.apiKey || null,
+          apiKey: encryptKey(req.body.apiKey || null),
           authType: req.body.authType || 'Bearer',
           apiType: req.body.apiType || 'chat_completions',
           headers: req.body.headers || null,
@@ -148,6 +183,7 @@ router.post(
         },
       });
       res.status(201).json(shapeConnection(created));
+      refreshBridge();
     } catch (err) {
       console.error('[admin-connections] create failed:', err);
       res.status(500).json({ error: err.message });
@@ -166,6 +202,7 @@ router.patch('/:id', async (req, res) => {
     }
     // Empty string apiKey means "do not change". Use `null` to clear.
     if (data.apiKey === '') delete data.apiKey;
+    else if ('apiKey' in data) data.apiKey = encryptKey(data.apiKey);
     if (data.providerKey) {
       const lc = String(data.providerKey).toLowerCase().trim();
       data.providerKey = KNOWN_PROVIDERS.has(lc) ? lc : 'custom';
@@ -175,6 +212,7 @@ router.patch('/:id', async (req, res) => {
       data,
     });
     res.json(shapeConnection(updated));
+    refreshBridge();
   } catch (err) {
     if (err.code === 'P2025') {
       return res.status(404).json({ error: 'Connection not found' });
@@ -189,6 +227,7 @@ router.delete('/:id', async (req, res) => {
   try {
     await prisma.adminConnection.delete({ where: { id: req.params.id } });
     res.json({ deleted: true });
+    refreshBridge();
   } catch (err) {
     if (err.code === 'P2025') return res.status(404).json({ error: 'Connection not found' });
     console.error('[admin-connections] delete failed:', err);
@@ -208,7 +247,8 @@ router.post('/:id/test', async (req, res) => {
     const baseUrl = conn.url.replace(/\/+$/, '');
     const target = `${baseUrl}/models`;
     const headers = { 'Accept': 'application/json' };
-    if (conn.authType === 'Bearer' && conn.apiKey) headers['Authorization'] = `Bearer ${conn.apiKey}`;
+    const plainKey = decryptKey(conn.apiKey);
+    if (conn.authType === 'Bearer' && plainKey) headers['Authorization'] = `Bearer ${plainKey}`;
     if (conn.headers && typeof conn.headers === 'object') Object.assign(headers, conn.headers);
 
     const r = await fetch(target, { method: 'GET', headers, signal: AbortSignal.timeout(15_000) });

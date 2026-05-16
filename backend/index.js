@@ -666,6 +666,18 @@ function startServer() {
     recoverAgentTasksAfterBoot({ logger });
     startAgentTaskWorker();
 
+    // Apply any admin-curated provider keys (panel /admin/connections)
+    // by overriding the corresponding process.env vars in this worker.
+    // Fire-and-forget — DB may not be ready instantly; the catch logs.
+    (async () => {
+        try {
+            const { applyAdminConnections } = require('./src/services/admin-connections-bridge');
+            await applyAdminConnections();
+        } catch (err) {
+            logger.warn({ err: err.message }, 'admin_connections_bridge_boot_failed');
+        }
+    })();
+
     // Initialize WebSocket server for Computer Use
     initializeWebSocketServer(server);
 
