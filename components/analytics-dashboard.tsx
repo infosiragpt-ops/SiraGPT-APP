@@ -87,7 +87,7 @@ export default function AnalyticsDashboard({ isAdmin }: AnalyticsDashboardProps)
     return (
       <Card>
         <CardContent className="flex items-center justify-center py-8">
-          <p className="text-muted-foreground">Admin access required to view analytics</p>
+          <p className="text-muted-foreground">Se requiere acceso de administrador para ver las métricas</p>
         </CardContent>
       </Card>
     )
@@ -98,19 +98,19 @@ export default function AnalyticsDashboard({ isAdmin }: AnalyticsDashboardProps)
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-bold">Subscription Analytics</h2>
-          <p className="text-muted-foreground">Revenue, conversions, and subscription metrics</p>
+          <h2 className="text-2xl font-bold">Métricas de suscripciones</h2>
+          <p className="text-muted-foreground">Ingresos, conversiones y métricas de suscripción</p>
         </div>
-        
+
         <div className="flex items-center gap-2">
-          <select 
-            value={period} 
+          <select
+            value={period}
             onChange={(e) => setPeriod(e.target.value)}
             className="px-3 py-1 border rounded text-sm"
           >
-            <option value="7d">Last 7 days</option>
-            <option value="30d">Last 30 days</option>
-            <option value="90d">Last 90 days</option>
+            <option value="7d">Últimos 7 días</option>
+            <option value="30d">Últimos 30 días</option>
+            <option value="90d">Últimos 90 días</option>
           </select>
           
           <Button 
@@ -132,7 +132,7 @@ export default function AnalyticsDashboard({ isAdmin }: AnalyticsDashboardProps)
         <Card>
           <CardContent className="flex items-center justify-center py-12">
             <ThinkingIndicator size="lg" className="mr-2" />
-            <span>Loading analytics...</span>
+            <span>Cargando métricas…</span>
           </CardContent>
         </Card>
       ) : analytics ? (
@@ -141,52 +141,52 @@ export default function AnalyticsDashboard({ isAdmin }: AnalyticsDashboardProps)
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Monthly Recurring Revenue</CardTitle>
+                <CardTitle className="text-sm font-medium">Ingresos recurrentes mensuales</CardTitle>
                 <DollarSign className="h-4 w-4 text-muted-foreground" />
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">{formatCurrency(analytics.revenue.mrr)}</div>
                 <p className="text-xs text-muted-foreground">
-                  {formatCurrency(analytics.revenue.averageRevenuePerUser)} per user
+                  {formatCurrency(analytics.revenue.averageRevenuePerUser)} por usuario
                 </p>
               </CardContent>
             </Card>
 
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Active Subscriptions</CardTitle>
+                <CardTitle className="text-sm font-medium">Suscripciones activas</CardTitle>
                 <Users className="h-4 w-4 text-muted-foreground" />
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">{analytics.subscriptions.active}</div>
                 <p className="text-xs text-muted-foreground">
-                  {analytics.subscriptions.netGrowth >= 0 ? '+' : ''}{analytics.subscriptions.netGrowth} this period
+                  {analytics.subscriptions.netGrowth >= 0 ? '+' : ''}{analytics.subscriptions.netGrowth} en este periodo
                 </p>
               </CardContent>
             </Card>
 
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Conversion Rate</CardTitle>
+                <CardTitle className="text-sm font-medium">Tasa de conversión</CardTitle>
                 <TrendingUp className="h-4 w-4 text-muted-foreground" />
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">{analytics.conversions.conversionRate}%</div>
                 <p className="text-xs text-muted-foreground">
-                  {analytics.conversions.conversions} of {analytics.conversions.freeUsers} free users
+                  {analytics.conversions.conversions} de {analytics.conversions.freeUsers} usuarios Free
                 </p>
               </CardContent>
             </Card>
 
             <Card>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Retention Rate</CardTitle>
+                <CardTitle className="text-sm font-medium">Tasa de retención</CardTitle>
                 <BarChart3 className="h-4 w-4 text-muted-foreground" />
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold">{analytics.churn.retentionRate}%</div>
                 <p className="text-xs text-muted-foreground">
-                  {analytics.churn.churnedCustomers} churned this period
+                  {analytics.churn.churnedCustomers} cancelaciones en este periodo
                 </p>
               </CardContent>
             </Card>
@@ -196,9 +196,9 @@ export default function AnalyticsDashboard({ isAdmin }: AnalyticsDashboardProps)
           <div className="grid gap-6 md:grid-cols-2">
             <Card>
               <CardHeader>
-                <CardTitle>Revenue by Plan</CardTitle>
+                <CardTitle>Ingresos por plan</CardTitle>
                 <CardDescription>
-                  Total revenue: {formatCurrency(analytics.revenue.totalRevenue)}
+                  Ingresos totales: {formatCurrency(analytics.revenue.totalRevenue)}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -216,9 +216,9 @@ export default function AnalyticsDashboard({ isAdmin }: AnalyticsDashboardProps)
 
             <Card>
               <CardHeader>
-                <CardTitle>Plan Distribution</CardTitle>
+                <CardTitle>Distribución por plan</CardTitle>
                 <CardDescription>
-                  Active subscription breakdown
+                  Desglose de suscripciones activas
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -240,26 +240,26 @@ export default function AnalyticsDashboard({ isAdmin }: AnalyticsDashboardProps)
           {/* Conversion Metrics */}
           <Card>
             <CardHeader>
-              <CardTitle>Conversion Insights</CardTitle>
+              <CardTitle>Insights de conversión</CardTitle>
               <CardDescription>
-                How users convert from free to paid plans
+                Cómo se convierten los usuarios de gratuitos a planes de pago
               </CardDescription>
             </CardHeader>
             <CardContent>
               <div className="grid gap-4 md:grid-cols-3">
                 <div className="text-center p-4 border rounded-lg">
                   <div className="text-2xl font-bold text-blue-600">{analytics.conversions.freeUsers}</div>
-                  <p className="text-sm text-muted-foreground">Free Users</p>
+                  <p className="text-sm text-muted-foreground">Usuarios Free</p>
                 </div>
                 <div className="text-center p-4 border rounded-lg">
                   <div className="text-2xl font-bold text-green-600">{analytics.conversions.conversions}</div>
-                  <p className="text-sm text-muted-foreground">Conversions</p>
+                  <p className="text-sm text-muted-foreground">Conversiones</p>
                 </div>
                 <div className="text-center p-4 border rounded-lg">
                   <div className="text-2xl font-bold text-purple-600">
-                    {Math.round(analytics.conversions.averageDaysToConvert)}d
+                    {Math.round(analytics.conversions.averageDaysToConvert)} d
                   </div>
-                  <p className="text-sm text-muted-foreground">Avg. Time to Convert</p>
+                  <p className="text-sm text-muted-foreground">Tiempo promedio para convertir</p>
                 </div>
               </div>
             </CardContent>
@@ -268,30 +268,30 @@ export default function AnalyticsDashboard({ isAdmin }: AnalyticsDashboardProps)
           {/* Churn Analysis */}
           <Card>
             <CardHeader>
-              <CardTitle>Churn & Lifetime Value</CardTitle>
+              <CardTitle>Cancelaciones y valor por cliente</CardTitle>
               <CardDescription>
-                Customer retention and value metrics
+                Retención y valor del cliente
               </CardDescription>
             </CardHeader>
             <CardContent>
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
                   <div className="flex justify-between">
-                    <span className="text-sm">Churn Rate</span>
+                    <span className="text-sm">Tasa de cancelación</span>
                     <span className="font-medium">{analytics.churn.churnRate}%</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-sm">Retention Rate</span>
+                    <span className="text-sm">Tasa de retención</span>
                     <span className="font-medium">{analytics.churn.retentionRate}%</span>
                   </div>
                 </div>
                 <div className="space-y-2">
                   <div className="flex justify-between">
-                    <span className="text-sm">Customer Lifetime Value</span>
+                    <span className="text-sm">Valor de vida del cliente</span>
                     <span className="font-medium">{formatCurrency(analytics.churn.lifetimeValue)}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-sm">Churned Customers</span>
+                    <span className="text-sm">Clientes cancelados</span>
                     <span className="font-medium">{analytics.churn.churnedCustomers}</span>
                   </div>
                 </div>
@@ -302,7 +302,7 @@ export default function AnalyticsDashboard({ isAdmin }: AnalyticsDashboardProps)
       ) : (
         <Card>
           <CardContent className="flex items-center justify-center py-8">
-            <p className="text-muted-foreground">No analytics data available</p>
+            <p className="text-muted-foreground">No hay métricas disponibles</p>
           </CardContent>
         </Card>
       )}
