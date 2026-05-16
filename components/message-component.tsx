@@ -1951,6 +1951,10 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         // Sync local state when payload changes
         useEffect(() => {
             setEmails(initialEmails);
+            // initialEmails is derived from gmailEntry above; including
+            // it in deps would re-fire on every parent render with the
+            // same data (array identity changes per render).
+            // eslint-disable-next-line react-hooks/exhaustive-deps
         }, [gmailEntry, gmailEntry?.emails?.length]);
 
         if (!gmailEntry) return null;

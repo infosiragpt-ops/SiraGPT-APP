@@ -216,6 +216,10 @@ export const CodePreview: React.FC<CodePreviewProps> = ({
         URL.revokeObjectURL(url)
       }
     }
+    // generateCompleteHTML reads only htmlCode/cssCode/jsCode/combinedCode
+    // (already in deps); recreated each render so listing it would
+    // lint-loop without changing behaviour.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [htmlCode, cssCode, jsCode, combinedCode, previewKey])
 
   // Copy complete code to clipboard
