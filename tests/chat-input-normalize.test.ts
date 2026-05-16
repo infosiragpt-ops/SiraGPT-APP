@@ -110,6 +110,53 @@ describe("normalizeChatInput · length cap", () => {
   })
 })
 
+describe("normalizeChatInput · multibyte (emoji + CJK)", () => {
+  it("preserves emoji and CJK characters unchanged", () => {
+    const text = "Hola, 你好, مرحبا 🌍🚀"
+    const out = normalizeChatInput(text)
+    assert.equal(out.value, text)
+    assert.equal(out.changed, false)
+  })
+
+  it("counts emoji surrogate-pair length in originalLength (JS string length)", () => {
+    // 🌍 is one code point but two UTF-16 code units (length === 2).
+    const out = normalizeChatInput("🌍🚀")
+    assert.equal(out.originalLength, 4) // 2 emojis × 2 surrogates each
+  })
+
+  it("strips only the zero-width chars inside an emoji-laden paste", () => {
+    const text = `Hola${ZWSP}🌍${ZWNJ}mundo${BOM}`
+    const out = normalizeChatInput(text)
+    assert.equal(out.value, "Hola🌍mundo")
+    assert.equal(out.changed, true)
+  })
+})
+
+describe("normalizeChatInput · strip-to-empty", () => {
+  it("returns empty value when the input is only zero-width chars", () => {
+    const out = normalizeChatInput(`${ZWSP}${ZWNJ}${ZWJ}${BOM}${WJ}`)
+    assert.equal(out.value, "")
+    assert.equal(out.changed, true)
+    assert.equal(out.truncated, false)
+  })
+
+  it("returns empty value when input is only NUL + controls", () => {
+    const out = normalizeChatInput(
+      `${NUL}${String.fromCharCode(0x01)}${String.fromCharCode(0x7f)}`,
+    )
+    assert.equal(out.value, "")
+    assert.equal(out.changed, true)
+  })
+
+  it("preserves only the legitimate whitespace when mixed with controls", () => {
+    const out = normalizeChatInput(
+      `\t${String.fromCharCode(0x01)}\n${String.fromCharCode(0x07)}\r`,
+    )
+    assert.equal(out.value, "\t\n\r")
+    assert.equal(out.changed, true)
+  })
+})
+
 describe("normalizeChatInput · originalLength", () => {
   it("reports the raw string length pre-cleanup", () => {
     const out = normalizeChatInput(`abc${ZWSP}def`)
