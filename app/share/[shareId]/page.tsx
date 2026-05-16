@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { apiClient } from '@/lib/api';
+import { devLog } from '@/lib/dev-log';
 import { toast } from 'sonner';
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
@@ -25,27 +26,27 @@ export default function SharedChatPage() {
 
             // Prevent duplicate save operations
             if (saveInProgress.current || saved) {
-                console.log('Save operation already in progress or completed');
+                devLog('Save operation already in progress or completed');
                 return;
             }
 
             saveInProgress.current = true;
 
             try {
-                console.log('Starting shared chat save process...');
+                devLog('Starting shared chat save process...');
                 // Get shared chat data
                 const data = await apiClient.shareChatIdLink(shareId as string);
-                console.log('Shared chat data:', data);
+                devLog('Shared chat data:', data);
 
                 // Automatically save to user's account
                 const response = await apiClient.saveSharedContent('complete', data, data.chat?.title);
                 if (response.success) {
-                    console.log('Shared conversation automatically saved to account, chatId:', response.chatId);
+                    devLog('Shared conversation automatically saved to account, chatId:', response.chatId);
                     setSaved(true);
                     toast.success('Shared conversation saved to your account!');
                     // Small delay to ensure toast is shown before redirect
                     setTimeout(() => {
-                        console.log('Redirecting to /chat...');
+                        devLog('Redirecting to /chat...');
                         router.push('/chat');
                         localStorage.setItem('currentChatId', response.chatId);
                     }, 500);

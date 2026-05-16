@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useMemo, useRef, useEffect } from 'react'
+import { devLog } from '@/lib/dev-log'
 
 // Debounce hook for performance optimization
 export function useDebounce<T>(value: T, delay: number): T {
@@ -97,7 +98,7 @@ export function usePerformanceMonitor(componentName: string) {
     renderTime.current = currentTime
 
     if (renderCount.current % 10 === 0) {
-      console.log(`${componentName}: ${renderCount.current} renders, last render took ${timeSinceLastRender.toFixed(2)}ms`)
+      devLog(`${componentName}: ${renderCount.current} renders, last render took ${timeSinceLastRender.toFixed(2)}ms`)
     }
   })
 }

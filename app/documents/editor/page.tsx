@@ -17,7 +17,7 @@ export default function EditorPage() {
                 onClose={handleClose}
                 selectedModel="gpt-4" // Default/Placeholder
                 selectProvider="openai" // Default/Placeholder
-                onGenerateContent={(content) => console.log('Generate:', content)}
+                onGenerateContent={() => undefined}
                 isFullPage={true}
             />
         </div>
