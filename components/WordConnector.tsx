@@ -1087,7 +1087,7 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                                             className="h-9 w-9 p-0 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-full"
                                             onClick={() => editor.chain().focus().undo().run()}
                                             disabled={!editor.can().undo()}
-                                            title="Undo"
+                                            title="Deshacer"
                                         >
                                             <RotateCcw className="h-5 w-5 text-zinc-700 dark:text-zinc-300" />
                                         </Button>
@@ -1097,7 +1097,7 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                                             className="h-9 w-9 p-0 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-full"
                                             onClick={() => editor.chain().focus().redo().run()}
                                             disabled={!editor.can().redo()}
-                                            title="Redo"
+                                            title="Rehacer"
                                         >
                                             <RotateCw className="h-5 w-5 text-zinc-700 dark:text-zinc-300" />
                                         </Button>
@@ -1113,26 +1113,26 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                                                     className="h-9 px-3 min-w-[130px] justify-between bg-white dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 rounded"
                                                 >
                                                     <span className="text-sm font-normal text-zinc-700 dark:text-zinc-300">
-                                                        {editor.isActive('heading', { level: 1 }) ? 'Heading 1' :
-                                                            editor.isActive('heading', { level: 2 }) ? 'Heading 2' :
-                                                                editor.isActive('heading', { level: 3 }) ? 'Heading 3' :
-                                                                    'Normal Text'}
+                                                        {editor.isActive('heading', { level: 1 }) ? 'Título 1' :
+                                                            editor.isActive('heading', { level: 2 }) ? 'Título 2' :
+                                                                editor.isActive('heading', { level: 3 }) ? 'Título 3' :
+                                                                    'Texto normal'}
                                                     </span>
                                                     <ChevronDown className="h-3.5 w-3.5 ml-2 text-zinc-500" />
                                                 </Button>
                                             </DropdownMenuTrigger>
                                             <DropdownMenuContent className="w-40">
                                                 <DropdownMenuItem onClick={() => editor.chain().focus().setParagraph().run()}>
-                                                    <span className="text-sm">Normal Text</span>
+                                                    <span className="text-sm">Texto normal</span>
                                                 </DropdownMenuItem>
                                                 <DropdownMenuItem onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}>
-                                                    <span className="text-2xl font-bold">Heading 1</span>
+                                                    <span className="text-2xl font-bold">Título 1</span>
                                                 </DropdownMenuItem>
                                                 <DropdownMenuItem onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}>
-                                                    <span className="text-xl font-bold">Heading 2</span>
+                                                    <span className="text-xl font-bold">Título 2</span>
                                                 </DropdownMenuItem>
                                                 <DropdownMenuItem onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}>
-                                                    <span className="text-lg font-bold">Heading 3</span>
+                                                    <span className="text-lg font-bold">Título 3</span>
                                                 </DropdownMenuItem>
                                             </DropdownMenuContent>
                                         </DropdownMenu>
@@ -1204,7 +1204,7 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                                             size="sm"
                                             className={`h-9 w-9 p-0 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded ${editor.isActive('bold') ? 'bg-blue-100 dark:bg-blue-900/30 border border-blue-300 dark:border-blue-700' : ''}`}
                                             onClick={() => editor.chain().focus().toggleBold().run()}
-                                            title="Bold"
+                                            title="Negrita"
                                         >
                                             <Bold className="h-5 w-5 text-zinc-700 dark:text-zinc-300" />
                                         </Button>
@@ -1213,7 +1213,7 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                                             size="sm"
                                             className={`h-9 w-9 p-0 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded ${editor.isActive('italic') ? 'bg-blue-100 dark:bg-blue-900/30 border border-blue-300 dark:border-blue-700' : ''}`}
                                             onClick={() => editor.chain().focus().toggleItalic().run()}
-                                            title="Italic"
+                                            title="Cursiva"
                                         >
                                             <Italic className="h-5 w-5 text-zinc-700 dark:text-zinc-300" />
                                         </Button>
@@ -1222,7 +1222,7 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                                             size="sm"
                                             className={`h-9 w-9 p-0 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded ${editor.isActive('underline') ? 'bg-blue-100 dark:bg-blue-900/30 border border-blue-300 dark:border-blue-700' : ''}`}
                                             onClick={() => editor.chain().focus().toggleUnderline().run()}
-                                            title="Underline"
+                                            title="Subrayado"
                                         >
                                             <UnderlineIcon className="h-5 w-5 text-zinc-700 dark:text-zinc-300" />
                                         </Button>
@@ -1231,7 +1231,7 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
                                             size="sm"
                                             className={`h-9 w-9 p-0 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded ${editor.isActive('strike') ? 'bg-blue-100 dark:bg-blue-900/30 border border-blue-300 dark:border-blue-700' : ''}`}
                                             onClick={() => editor.chain().focus().toggleStrike().run()}
-                                            title="Strikethrough"
+                                            title="Tachado"
                                         >
                                             <Strikethrough className="h-5 w-5 text-zinc-700 dark:text-zinc-300" />
                                         </Button>
