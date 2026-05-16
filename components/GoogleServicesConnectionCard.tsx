@@ -56,7 +56,6 @@ export default function GoogleServicesConnectionCard({ onConnectionChange }: Goo
         try {
             setIsConnecting(true);
             const token = localStorage.getItem('auth-token');
-            console.log('handleConnect', token);
 
             if (!token) {
                 toast({

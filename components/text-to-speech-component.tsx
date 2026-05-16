@@ -561,9 +561,7 @@ const { voices, loading: voicesLoading } = useVoices()
 
             setModels(availableModels);
             if (availableModels.length > 0) {
-                // Parameter 'm' ko type 'Model' de di gayi hai
                 const defaultModel = availableModels.find((m: Model) => m.modelId === 'eleven_multilingual_v2') || availableModels[0];
-                console.log(defaultModel)
                 setSelectedModel(defaultModel.modelId);
             }
         } catch (error) {
