@@ -1304,6 +1304,11 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                 ...commonProps,
                 code: CodeBlock,
             };
+          // ESLint flags these as "outer scope" deps because MessageContent
+          // is defined inside MessageComponent; in practice both isStreaming
+          // (prop) and CodeBlock (memoized child component) DO trigger a
+          // re-render and need to invalidate the memo. Keep deps explicit.
+          // eslint-disable-next-line react-hooks/exhaustive-deps
         }, [isStreaming, CodeBlock]);
 
         if (message.role === 'ASSISTANT' && (content === '[GENERATING_IMAGE]' || content === '[PROCESSING_GMAIL]' || content === '[PROCESSING_CALENDAR_ACTION]' || content === '[PROCESSING_DRIVE_ACTION]' || content === '[GENERATING_PPT]' || content === '[GENERATING_VECTOR_PPT]' || content === '[THESIS_GENERATING]' || content.startsWith('[THESIS_GENERATING]'))) {
