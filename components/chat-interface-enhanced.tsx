@@ -4871,6 +4871,11 @@ But first, you need to connect your Spotify account securely using the button be
     const dt = new DataTransfer();
     dt.items.add(failedFile.file);
     handleAndUploadFiles(dt.files, failedFile.sourceChannel || 'retry');
+    // handleAndUploadFiles is recreated each render and wrapping it in
+    // useCallback would cascade across the file. setUploadedFiles is a
+    // stable setter. Empty deps means "use the latest closure" — fine
+    // for an event handler invoked on user click.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Drag and Drop event handlers with drag counter to prevent flickering
