@@ -252,7 +252,6 @@ export default function UsersPage() {
     try {
       // Build payload only with fields that changed to avoid accidental overwrites
       const payload: any = {}
-      console.log(form)
       if (String(form.name ?? "") !== String(editingUser.name ?? "")) {
         payload.name = form.name
       }

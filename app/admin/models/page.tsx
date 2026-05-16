@@ -31,6 +31,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { toast } from "sonner"
 import { IconProvider } from "@/components/icon-provider"
 import { resolveModelIconName } from "@/lib/model-icons"
+import { devLog } from "@/lib/dev-log"
 
 interface AIModel {
   id: string
@@ -203,8 +204,8 @@ export default function ModelsPage() {
       
       if (data.success) {
         toast.success(`Successfully fetched ${data.count} models from providers`)
-        console.log('Fetched models:', data.models)
-        console.log('Provider breakdown:', data.providers)
+        devLog('Fetched models:', data.models)
+        devLog('Provider breakdown:', data.providers)
       } else {
         toast.error(data.error || 'Failed to fetch models')
       }
