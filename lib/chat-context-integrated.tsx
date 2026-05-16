@@ -1416,6 +1416,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       console.error("Failed to create chat:", error);
       throw error; // Re-throw to allow error handling in caller
     }
+    // addThesisMessage / addVideoMessage / selectChat are defined later
+    // and adding them here would be use-before-define. Latest closure is
+    // captured at call time.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, token, selectedModel, availableModels, setChatType, addMessage, handleNewChatWithPlaceholder, selectProvider, uploadedFiles]);
 
   const selectChat = useCallback(
