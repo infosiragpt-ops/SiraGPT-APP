@@ -36,6 +36,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { projectsService, type Project } from "@/lib/projects-service"
+import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
 
 interface Props {
   open: boolean
@@ -64,11 +65,20 @@ export function CreateProjectDialog({ open, onOpenChange, onCreated }: Props) {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!canSubmit) return
+    const cleanName = normalizeChatInput(name).value.trim()
+    const normalizedDesc = normalizeChatInput(description)
+    if (shouldWarnUser(normalizedDesc)) {
+      toast.error(
+        `La descripción supera el límite (${normalizedDesc.originalLength.toLocaleString()} caracteres). Se recortó.`,
+        { duration: 4500 },
+      )
+    }
+    const cleanDesc = normalizedDesc.value.trim()
     setSubmitting(true)
     try {
       const project = await projectsService.create({
-        name: name.trim(),
-        description: description.trim() || undefined,
+        name: cleanName,
+        description: cleanDesc || undefined,
       })
       onCreated?.(project)
       onOpenChange(false)
