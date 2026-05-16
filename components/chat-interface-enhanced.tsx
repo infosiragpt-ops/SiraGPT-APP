@@ -6778,7 +6778,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     setUploadedFiles(next.files || []);
     const t = setTimeout(() => { handleSendRef.current(); }, 0);
     return () => clearTimeout(t);
-  }, [isLoading, isGeneratingImage, isGeneratingVideo, isGeneratingWebDev, isStreaming, isProcessingGmail, isProcessingGoogleServices, isProcessingSpotify, isGeneratingWord, isGeneratingExcel, isRewriting]);
+  }, [isLoading, isGeneratingImage, isGeneratingVideo, isGeneratingWebDev, isStreaming, isProcessingGmail, isProcessingGoogleServices, isProcessingSpotify, isGeneratingWord, isGeneratingExcel, isRewriting, setUploadedFiles]);
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {

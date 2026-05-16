@@ -6,7 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint --max-warnings 78",
+    "lint": "next lint --max-warnings 77",
     "lint:count": "next lint 2>&1 | grep -c 'Warning:' || true",
     "clean": "rm -rf .next .test-dist .playwright-cli output test-results",
     "clean:all": "npm run clean && rm -rf node_modules backend/node_modules",
