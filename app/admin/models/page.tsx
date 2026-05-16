@@ -107,6 +107,11 @@ export default function ModelsPage() {
 
   useEffect(() => {
     loadInitialData()
+    // loadInitialData is defined below in the component body, so adding
+    // it to deps would lint-loop. Intent is "load once on mount", and
+    // loadInitialData closes over no changing state, so an empty deps
+    // array is the right shape.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const loadInitialData = async () => {
