@@ -124,6 +124,19 @@ describe("parseCodeFromContent", () => {
     assert.equal(out.hasWebCode, true)
     assert.ok(out.combinedCode && out.combinedCode.includes("<!DOCTYPE html>"))
   })
+
+  it("extracts a complete HTML document embedded inside a Python block", () => {
+    // Non-web-block path: extractCompleteHtmlFromText pulls a full
+    // doc out of a triple-quoted Python string.
+    const py = [
+      'def render():',
+      '    return """<!DOCTYPE html><html><head></head><body>hi</body></html>"""',
+    ].join('\n')
+    const message = "```python\n" + py + "\n```"
+    const out = parseCodeFromContent(message)
+    assert.equal(out.hasNonWebCode, true)
+    assert.ok(out.combinedCode && out.combinedCode.includes("<!DOCTYPE html>"))
+  })
 })
 
 describe("combineWebCode", () => {
