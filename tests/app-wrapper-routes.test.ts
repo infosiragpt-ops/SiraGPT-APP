@@ -23,6 +23,30 @@ describe("needsChatContext", () => {
   it("disables chat context on the landing page", () => {
     assert.equal(needsChatContext("/"), false)
   })
+
+  it("treats exact-match and trailing-slash forms identically", () => {
+    // matchesPrefix is "exact path OR startsWith prefix/" — the
+    // trailing slash form must also enable chat context.
+    assert.equal(needsChatContext("/chat/"), true)
+    assert.equal(needsChatContext("/projects/"), true)
+  })
+
+  it("does NOT enable chat context for paths that merely START with a chat prefix string", () => {
+    // /chatroom is not a chat page even though it starts with "chat"
+    // (the matcher requires "/" or end-of-string after the prefix).
+    assert.equal(needsChatContext("/chatroom"), false)
+    assert.equal(needsChatContext("/codexish"), false)
+  })
+
+  it("enables chat context on every documented prefix", () => {
+    for (const path of [
+      "/chat", "/gpts", "/parafraseo", "/projects", "/design",
+      "/codex", "/code", "/plan", "/profile", "/library",
+      "/billing", "/settings", "/thesis", "/documents",
+    ]) {
+      assert.equal(needsChatContext(path), true, `expected ${path} -> true`)
+    }
+  })
 })
 
 describe("needsSidebar", () => {
