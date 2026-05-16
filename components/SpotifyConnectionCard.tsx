@@ -48,10 +48,10 @@ export default function SpotifyConnectionCard() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <CheckCircle className="h-6 w-6 text-green-500" />
-            <span>Connected to Spotify</span>
+            <span>Conectado con Spotify</span>
           </CardTitle>
           <CardDescription>
-            Your Spotify account is successfully connected. You can now use Spotify features in the chat.
+            Tu cuenta de Spotify está conectada correctamente. Ya puedes usar las funciones de Spotify en el chat.
           </CardDescription>
         </CardHeader>
       </Card>
@@ -61,19 +61,19 @@ export default function SpotifyConnectionCard() {
   return (
     <Card className="w-full max-w-md">
       <CardHeader>
-        <CardTitle>Connect to Spotify</CardTitle>
+        <CardTitle>Conectar con Spotify</CardTitle>
         <CardDescription>
-          Connect your Spotify account to allow the AI to search for songs, manage playlists, and more.
+          Conecta tu cuenta de Spotify para que la IA pueda buscar canciones, gestionar playlists y más.
         </CardDescription>
       </CardHeader>
       <CardContent>
         <p className="text-sm text-muted-foreground">
-          By connecting, you agree to grant this application permission to access your Spotify data.
+          Al conectar, aceptas dar permiso a esta aplicación para acceder a tus datos de Spotify.
         </p>
       </CardContent>
       <CardFooter>
         <Button onClick={handleConnect} disabled={isConnecting}>
-          {isConnecting ? "Connecting..." : "Connect to Spotify"}
+          {isConnecting ? "Conectando…" : "Conectar con Spotify"}
         </Button>
       </CardFooter>
     </Card>

@@ -190,8 +190,8 @@ export default function GoogleServicesConnectionCard({ onConnectionChange }: Goo
                             </CardTitle>
                             <CardDescription className="text-sm mt-1">
                                 {isConnected
-                                    ? 'Connected - Manage your calendar and files with AI'
-                                    : 'Connect to access your calendar and files'}
+                                    ? 'Conectado — gestiona tu calendario y archivos con IA'
+                                    : 'Conecta para acceder a tu calendario y archivos'}
                             </CardDescription>
                         </div>
                     </div>
@@ -209,15 +209,15 @@ export default function GoogleServicesConnectionCard({ onConnectionChange }: Goo
                     <div className="flex items-start gap-2">
                         <Calendar className="h-4 w-4 text-blue-600 dark:text-blue-400 mt-0.5 flex-shrink-0" />
                         <div>
-                            <p className="font-medium">Calendar Management</p>
-                            <p className="text-xs text-muted-foreground">View, create, and manage events</p>
+                            <p className="font-medium">Gestión del calendario</p>
+                            <p className="text-xs text-muted-foreground">Ver, crear y gestionar eventos</p>
                         </div>
                     </div>
                     <div className="flex items-start gap-2">
                         <FolderOpen className="h-4 w-4 text-green-600 dark:text-green-400 mt-0.5 flex-shrink-0" />
                         <div>
-                            <p className="font-medium">File Access</p>
-                            <p className="text-xs text-muted-foreground">Search and manage your documents</p>
+                            <p className="font-medium">Acceso a archivos</p>
+                            <p className="text-xs text-muted-foreground">Buscar y gestionar tus documentos</p>
                         </div>
                     </div>
                 </div>
@@ -227,13 +227,13 @@ export default function GoogleServicesConnectionCard({ onConnectionChange }: Goo
                     <div className="bg-muted/50 rounded-lg p-3 space-y-2">
                         <p className="text-sm font-medium flex items-center gap-2">
                             <AlertCircle className="h-4 w-4" />
-                            Try asking:
+                            Prueba a pedirle:
                         </p>
                         <div className="space-y-1 text-xs text-muted-foreground">
-                            <p>• "Show my meetings for tomorrow"</p>
-                            <p>• "Create a meeting with team on Friday at 3 PM"</p>
-                            <p>• "List my recent documents"</p>
-                            <p>• "Find files about project Alpha"</p>
+                            <p>• &quot;Muestra mis reuniones de mañana&quot;</p>
+                            <p>• &quot;Crea una reunión con el equipo el viernes a las 15:00&quot;</p>
+                            <p>• &quot;Lista mis documentos recientes&quot;</p>
+                            <p>• &quot;Busca archivos sobre el proyecto Alpha&quot;</p>
                         </div>
                     </div>
                 )}
@@ -248,7 +248,7 @@ export default function GoogleServicesConnectionCard({ onConnectionChange }: Goo
                             size="sm"
                         >
                             <XCircle className="h-4 w-4 mr-2" />
-                            Disconnect
+                            Desconectar
                         </Button>
                     ) : (
                         <Button
@@ -260,7 +260,7 @@ export default function GoogleServicesConnectionCard({ onConnectionChange }: Goo
                             {isConnecting ? (
                                 <>
                                     <ThinkingIndicator size="sm" className="mr-2" />
-                                    Connecting...
+                                    Conectando…
                                 </>
                             ) : (
                                 <>
@@ -268,7 +268,7 @@ export default function GoogleServicesConnectionCard({ onConnectionChange }: Goo
                                         <Calendar className="h-4 w-4" />
                                         <FolderOpen className="h-4 w-4" />
                                     </div>
-                                    Connect Google Services
+                                    Conectar Google Services
                                 </>
                             )}
                         </Button>
@@ -277,7 +277,7 @@ export default function GoogleServicesConnectionCard({ onConnectionChange }: Goo
 
                 {/* Security Note */}
                 <p className="text-xs text-muted-foreground text-center pt-2 border-t">
-                    🔒 Your data is secure. We only access what you explicitly authorize.
+                    🔒 Tus datos están seguros. Solo accedemos a lo que autorices explícitamente.
                 </p>
             </CardContent>
         </Card>
