@@ -53,6 +53,7 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 import { apiClient } from "@/lib/api"
+import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { useChat } from "@/lib/chat-context-integrated"
 import { useCodeWorkspace } from "@/lib/code-workspace-context"
@@ -197,7 +198,14 @@ export function AICodeChatPanel() {
 
   const sendPrompt = React.useCallback(
     async (prompt: string) => {
-      const text = prompt.trim()
+      const normalized = normalizeChatInput(prompt)
+      if (shouldWarnUser(normalized)) {
+        toast.error(
+          `El mensaje supera el límite (${normalized.originalLength.toLocaleString()} caracteres). Se recortó.`,
+          { duration: 4500 },
+        )
+      }
+      const text = normalized.value.trim()
       if (!text || busy) return
       if (!user || !token) {
         toast.error("Inicia sesión para usar el chat de código.")
