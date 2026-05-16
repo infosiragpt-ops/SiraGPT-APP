@@ -216,7 +216,7 @@ export function SuperAdminDashboard() {
       <div className="flex h-screen items-center justify-center">
         <div className="text-center">
           <Shield className="h-16 w-16 text-red-500 mx-auto mb-4" />
-          <h1 className="text-2xl font-bold mb-2">Access Denied</h1>
+          <h1 className="text-2xl font-bold mb-2">Acceso denegado</h1>
           <p className="text-muted-foreground">You don't have super admin privileges.</p>
         </div>
       </div>
@@ -274,7 +274,7 @@ export function SuperAdminDashboard() {
           
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Free Users</CardTitle>
+              <CardTitle className="text-sm font-medium">Usuarios Free</CardTitle>
               <Users className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
@@ -284,7 +284,7 @@ export function SuperAdminDashboard() {
           
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Pro Users</CardTitle>
+              <CardTitle className="text-sm font-medium">Usuarios Pro</CardTitle>
               <Users className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
@@ -294,7 +294,7 @@ export function SuperAdminDashboard() {
           
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Enterprise Users</CardTitle>
+              <CardTitle className="text-sm font-medium">Usuarios Enterprise</CardTitle>
               <Users className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
@@ -306,16 +306,16 @@ export function SuperAdminDashboard() {
         {/* Filters */}
         <Card className="mb-6">
           <CardHeader>
-            <CardTitle>User Management</CardTitle>
-            <CardDescription>Search and filter users, then access their accounts</CardDescription>
+            <CardTitle>Gestión de usuarios</CardTitle>
+            <CardDescription>Busca y filtra usuarios, luego accede a sus cuentas</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="flex flex-col md:flex-row gap-4">
               <div className="flex-1">
-                <Label htmlFor="search">Search Users</Label>
+                <Label htmlFor="search">Buscar usuarios</Label>
                 <Input
                   id="search"
-                  placeholder="Search by name or email..."
+                  placeholder="Buscar por nombre o email…"
                   value={searchTerm}
                   onChange={(e) => {
                     setSearchTerm(e.target.value)
@@ -324,11 +324,11 @@ export function SuperAdminDashboard() {
                 />
               </div>
               <div className="w-full md:w-48">
-                <Label htmlFor="plan-filter">Filter by Plan</Label>
+                <Label htmlFor="plan-filter">Filtrar por plan</Label>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button variant="outline" className="w-full justify-between">
-                      {planFilter === "ALL" ? "All Plans" : planFilter}
+                      {planFilter === "ALL" ? "Todos los planes" : planFilter}
                       <ChevronDown className="h-4 w-4 opacity-50" />
                     </Button>
                   </DropdownMenuTrigger>
@@ -337,7 +337,7 @@ export function SuperAdminDashboard() {
                       setPlanFilter("ALL")
                       setCurrentPage(1)
                     }}>
-                      All Plans
+                      Todos los planes
                     </DropdownMenuItem>
                     <DropdownMenuItem onClick={() => {
                       setPlanFilter("FREE")
@@ -376,26 +376,26 @@ export function SuperAdminDashboard() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>User</TableHead>
+                  <TableHead>Usuario</TableHead>
                   <TableHead>Email</TableHead>
                   <TableHead>Plan</TableHead>
-                  <TableHead>Role</TableHead>
-                  <TableHead>API Usage</TableHead>
-                  <TableHead>Joined</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
+                  <TableHead>Rol</TableHead>
+                  <TableHead>Uso API</TableHead>
+                  <TableHead>Registro</TableHead>
+                  <TableHead className="text-right">Acciones</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {isLoading ? (
                   <TableRow>
                     <TableCell colSpan={7} className="text-center py-8">
-                      Loading users...
+                      Cargando usuarios…
                     </TableCell>
                   </TableRow>
                 ) : users.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={7} className="text-center py-8">
-                      No users found
+                      No se encontraron usuarios
                     </TableCell>
                   </TableRow>
                 ) : (
@@ -412,7 +412,7 @@ export function SuperAdminDashboard() {
                         {user.isAdmin ? (
                           <Badge variant="destructive">Admin</Badge>
                         ) : (
-                          <Badge variant="secondary">User</Badge>
+                          <Badge variant="secondary">Usuario</Badge>
                         )}
                       </TableCell>
                       <TableCell>
@@ -435,7 +435,7 @@ export function SuperAdminDashboard() {
                               className="text-blue-600 focus:text-blue-600"
                             >
                               <UserCheck className="h-4 w-4 mr-2" />
-                              Access Account
+                              Acceder a la cuenta
                             </DropdownMenuItem>
                             <DropdownMenuItem>
                               <Eye className="h-4 w-4 mr-2" />
@@ -456,7 +456,7 @@ export function SuperAdminDashboard() {
         {!isLoading && totalPages > 1 && (
           <div className="mt-6 flex items-center justify-between">
             <div className="text-sm text-muted-foreground">
-              Showing {((currentPage - 1) * usersPerPage) + 1} to {Math.min(currentPage * usersPerPage, totalUsers)} of {totalUsers} users
+              Mostrando {((currentPage - 1) * usersPerPage) + 1} – {Math.min(currentPage * usersPerPage, totalUsers)} de {totalUsers} usuarios
             </div>
             <div className="flex items-center gap-2">
               <Button
