@@ -117,4 +117,31 @@ describe("agent-task-service · error messages", () => {
       "Tarea detenida.",
     )
   })
+
+  it("handles undefined / null / empty input without throwing", () => {
+    assert.equal(normalizeAgentTaskErrorMessage(undefined), "Agent task failed")
+    assert.equal(normalizeAgentTaskErrorMessage(null), "Agent task failed")
+    assert.equal(normalizeAgentTaskErrorMessage(""), "Agent task failed")
+    // Plain object without a .message — String(err) → "[object Object]"
+    // falls through unchanged because no friendly rule matches it.
+    assert.equal(normalizeAgentTaskErrorMessage({} as any), "[object Object]")
+  })
+
+  it("passes through unknown error strings verbatim", () => {
+    assert.equal(
+      normalizeAgentTaskErrorMessage(new Error("OCR pipeline could not detect text")),
+      "OCR pipeline could not detect text",
+    )
+  })
+
+  it("is case-insensitive for the friendly-remap patterns", () => {
+    assert.equal(
+      normalizeAgentTaskErrorMessage(new Error("FAILED TO FETCH")),
+      "El backend se reinició o se perdió la conexión durante la tarea. Reintenta.",
+    )
+    assert.equal(
+      normalizeAgentTaskErrorMessage(new Error("REDIS connection refused")),
+      "Runtime agentico no disponible: Redis no está activo.",
+    )
+  })
 })
