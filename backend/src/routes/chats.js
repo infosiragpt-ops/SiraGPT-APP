@@ -297,9 +297,20 @@ router.delete('/:id', authenticateToken, async (req, res) => {
 });
 
 // Add message to chat
+// Mirrors MAX_CHAT_INPUT_CHARS in lib/chat-input-normalize.ts so the
+// backend rejects pastes that bypass the frontend cap (curl-direct
+// callers, replay attacks, broken clients). 100 k chars ≈ 200 KB at
+// UTF-8 worst case, which is well under the Express JSON body limit.
+const MAX_MESSAGE_CONTENT_CHARS = 100_000;
+
 router.post('/:id/messages', [
   body('role').isIn(['USER', 'ASSISTANT']).withMessage('Invalid role'),
-  body('content').trim().isLength({ min: 1 }).withMessage('Content is required'),
+  body('content')
+    .trim()
+    .isLength({ min: 1 })
+    .withMessage('Content is required')
+    .isLength({ max: MAX_MESSAGE_CONTENT_CHARS })
+    .withMessage(`Content exceeds ${MAX_MESSAGE_CONTENT_CHARS} characters`),
   body('tokens').optional().isInt({ min: 0 }),
   body('files').optional().isArray()
 ], authenticateToken, async (req, res) => {
