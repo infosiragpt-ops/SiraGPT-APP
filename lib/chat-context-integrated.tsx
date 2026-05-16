@@ -1921,6 +1921,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       setCurrentChat(prev => prev ? { ...prev, messages: currentChat.messages } : null);
       toast.error("No se pudo regenerar la respuesta.");
     }
+    // pendingStop is a boolean state read inside the regen loop; the
+    // latest closure is captured at call time, so listing it would
+    // re-create the callback on every keystroke that flips the flag.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentChat, isLoading, selectProvider, selectedModel, selectChat, setCurrentChat, setIsLoading, setIsStreaming, setCurrentStreamId]);
 
   const pollVideoStatus = useCallback((operationId: string, messageId: string) => {
