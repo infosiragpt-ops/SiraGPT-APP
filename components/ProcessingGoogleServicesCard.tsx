@@ -36,6 +36,10 @@ const ProcessingGoogleServicesCard: React.FC<ProcessingGoogleServicesCardProps> 
             });
         }, 2500);
         return () => clearInterval(interval);
+        // `messages` is defined in the render closure but its contents
+        // are static per action — listing it in deps would lint-loop
+        // since the object identity changes every render.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [action]);
 
     return (
