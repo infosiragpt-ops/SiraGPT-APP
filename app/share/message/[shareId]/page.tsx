@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { apiClient } from '@/lib/api';
+import { devLog } from '@/lib/dev-log';
 import { toast } from 'sonner';
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
@@ -17,10 +18,10 @@ export default function SharedMessagePage() {
 
     useEffect(() => {
         const loadAndSaveSharedMessage = async () => {
-            console.log('SharedMessagePage useEffect triggered, shareId:', shareId);
+            devLog('SharedMessagePage useEffect triggered, shareId:', shareId);
 
             if (!shareId) {
-                console.log('No shareId provided');
+                devLog('No shareId provided');
                 setError('Invalid share link');
                 setLoading(false);
                 return;
@@ -28,34 +29,34 @@ export default function SharedMessagePage() {
 
             // Prevent duplicate save operations
             if (saveInProgress.current || saved) {
-                console.log('Save operation already in progress or completed', {
+                devLog('Save operation already in progress or completed', {
                     saveInProgress: saveInProgress.current,
                     saved: saved
                 });
                 return;
             }
 
-            console.log('Starting save operation...');
+            devLog('Starting save operation...');
             saveInProgress.current = true;
 
             try {
-                console.log('Starting shared message save process for shareId:', shareId);
+                devLog('Starting shared message save process for shareId:', shareId);
                 // Get shared message data
                 const data = await apiClient.shareMessageIdLink(shareId as string);
-                console.log('Shared message data received:', data);
+                devLog('Shared message data received:', data);
 
                 // Automatically save to user's account
-                console.log('Calling saveSharedContent...');
+                devLog('Calling saveSharedContent...');
                 const response = await apiClient.saveSharedContent('message', data, data.chatTitle || 'Shared Message');
-                console.log('saveSharedContent response:', response);
+                devLog('saveSharedContent response:', response);
 
                 if (response.success) {
-                    console.log('Shared message automatically saved to account, chatId:', response.chatId);
+                    devLog('Shared message automatically saved to account, chatId:', response.chatId);
                     setSaved(true);
                     toast.success('Shared message saved to your account!');
                     // Small delay to ensure toast is shown before redirect
                     setTimeout(() => {
-                        console.log('Redirecting to /chat...');
+                        devLog('Redirecting to /chat...');
                         router.push('/chat');
                         localStorage.setItem('currentChatId', response.chatId);
                     }, 500);
