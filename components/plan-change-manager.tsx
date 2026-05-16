@@ -53,20 +53,20 @@ export default function PlanChangeManager({ currentPlan, onPlanChanged }: PlanCh
     PRO: {
       name: 'Pro',
       price: 5,
-      limit: '500,000 tokens/month',
-      features: ['All AI models', 'Priority support', 'Advanced features']
+      limit: '500.000 tokens/mes',
+      features: ['Todos los modelos de IA', 'Soporte prioritario', 'Funciones avanzadas']
     },
     PRO_MAX: {
-      name: 'Pro Max', 
+      name: 'Pro Max',
       price: 20,
-      limit: '1,000,000 tokens/month',
-      features: ['Everything in Pro', 'Higher token limits', 'Enhanced rate limits', 'Advanced Models']
+      limit: '1.000.000 tokens/mes',
+      features: ['Todo lo de Pro', 'Mayor límite de tokens', 'Límites de uso ampliados', 'Modelos avanzados']
     },
     ENTERPRISE: {
       name: 'Enterprise',
       price: 200,
-      limit: '10,000,000 tokens/month', 
-      features: ['Everything in Pro Max', 'Massive token limits', 'Dedicated Support', 'Custom Integration']
+      limit: '10.000.000 tokens/mes',
+      features: ['Todo lo de Pro Max', 'Límites masivos de tokens', 'Soporte dedicado', 'Integración a medida']
     }
   }
 
@@ -143,7 +143,7 @@ export default function PlanChangeManager({ currentPlan, onPlanChanged }: PlanCh
       {/* Plan Selection */}
       <div>
         <div className="text-center mb-8">
-          <h3 className="text-2xl font-bold mb-2">Choose Your New Plan</h3>
+          <h3 className="text-2xl font-bold mb-2">Elige tu nuevo plan</h3>
           <p className="text-muted-foreground">
             Select a plan below to see instant proration calculations
           </p>
@@ -225,7 +225,7 @@ export default function PlanChangeManager({ currentPlan, onPlanChanged }: PlanCh
           <div className="text-center mb-6">
             <div className="inline-flex items-center gap-2 bg-white dark:bg-gray-800 px-4 py-2 rounded-full border shadow-sm mb-4">
               <Calculator className="h-5 w-5 text-blue-500" />
-              <span className="font-semibold">Billing Preview</span>
+              <span className="font-semibold">Vista previa de cobro</span>
               {loading && <ThinkingIndicator size="sm" className="text-blue-500" />}
             </div>
             <p className="text-muted-foreground">
@@ -239,8 +239,8 @@ export default function PlanChangeManager({ currentPlan, onPlanChanged }: PlanCh
                 <ThinkingIndicator size="xl" className="text-blue-500" />
                 <div className="absolute inset-0 h-12 w-12 rounded-full bg-blue-500/20 animate-pulse" />
               </div>
-              <span className="text-lg font-medium">Calculating proration...</span>
-              <span className="text-sm text-muted-foreground">This will just take a moment</span>
+              <span className="text-lg font-medium">Calculando el prorrateo…</span>
+              <span className="text-sm text-muted-foreground">Esto tardará solo un momento</span>
             </div>
           ) : preview ? (
             <div className="space-y-6">
@@ -251,7 +251,7 @@ export default function PlanChangeManager({ currentPlan, onPlanChanged }: PlanCh
                     <div className="w-12 h-12 bg-gray-100 dark:bg-gray-700 rounded-full flex items-center justify-center mx-auto mb-3">
                       <Calendar className="h-6 w-6 text-gray-600" />
                     </div>
-                    <p className="text-sm text-muted-foreground mb-1">Current Plan</p>
+                    <p className="text-sm text-muted-foreground mb-1">Plan actual</p>
                     <p className="text-xl font-bold">{preview.currentPlan}</p>
                     <p className="text-lg text-muted-foreground">{formatCurrency(preview.currentPlanPrice)}/month</p>
                   </div>
@@ -262,7 +262,7 @@ export default function PlanChangeManager({ currentPlan, onPlanChanged }: PlanCh
                     <div className="w-12 h-12 bg-blue-100 dark:bg-blue-900 rounded-full flex items-center justify-center mx-auto mb-3">
                       <Sparkles className="h-6 w-6 text-blue-600" />
                     </div>
-                    <p className="text-sm text-muted-foreground mb-1">New Plan</p>
+                    <p className="text-sm text-muted-foreground mb-1">Nuevo plan</p>
                     <p className="text-xl font-bold text-blue-600">{preview.newPlan}</p>
                     <p className="text-lg text-blue-600">{formatCurrency(preview.newPlanPrice)}/month</p>
                   </div>
@@ -279,22 +279,22 @@ export default function PlanChangeManager({ currentPlan, onPlanChanged }: PlanCh
                 
                 <div className="space-y-4">
                   <div className="flex justify-between items-center py-2">
-                    <span className="text-muted-foreground">Billing period days remaining</span>
+                    <span className="text-muted-foreground">Días restantes del periodo</span>
                     <span className="font-semibold">{preview.remainingDays} of {preview.totalPeriodDays} days</span>
                   </div>
                   
                   <div className="flex justify-between items-center py-2 border-t">
-                    <span className="text-muted-foreground">Unused amount (current plan)</span>
+                    <span className="text-muted-foreground">Monto no usado (plan actual)</span>
                     <span className="font-semibold text-green-600">-{formatCurrency(preview.unusedAmount)}</span>
                   </div>
                   
                   <div className="flex justify-between items-center py-2 border-t">
-                    <span className="text-muted-foreground">Prorated amount (new plan)</span>
+                    <span className="text-muted-foreground">Monto prorrateado (nuevo plan)</span>
                     <span className="font-semibold text-blue-600">+{formatCurrency(preview.newPlanProrated)}</span>
                   </div>
 
                   <div className="flex justify-between items-center py-3 border-t-2 border-gray-300 dark:border-gray-600">
-                    <span className="text-lg font-bold">Net amount due today</span>
+                    <span className="text-lg font-bold">Monto a cobrar hoy</span>
                     <span className={`text-xl font-bold ${preview.netAmount >= 0 ? 'text-red-600' : 'text-green-600'}`}>
                       {preview.netAmount >= 0 ? '+' : ''}{formatCurrency(preview.netAmount)}
                     </span>
@@ -305,8 +305,8 @@ export default function PlanChangeManager({ currentPlan, onPlanChanged }: PlanCh
                       <div className="flex items-start gap-3">
                         <Info className="h-5 w-5 text-green-600 mt-0.5 flex-shrink-0" />
                         <div className="text-sm text-green-700 dark:text-green-300">
-                          <p className="font-medium">Credit Applied</p>
-                          <p>You'll receive a credit of {formatCurrency(Math.abs(preview.netAmount))} that will be applied to future invoices.</p>
+                          <p className="font-medium">Crédito aplicado</p>
+                          <p>Recibirás un crédito de {formatCurrency(Math.abs(preview.netAmount))} que se aplicará a futuras facturas.</p>
                         </div>
                       </div>
                     </div>
@@ -330,7 +330,7 @@ export default function PlanChangeManager({ currentPlan, onPlanChanged }: PlanCh
                       className="form-radio mt-1 h-4 w-4 text-blue-600"
                     />
                     <div>
-                      <p className="font-semibold">Immediately</p>
+                      <p className="font-semibold">Inmediato</p>
                       <p className="text-sm text-muted-foreground">
                         Change plan now with prorated billing calculated above
                       </p>
@@ -345,7 +345,7 @@ export default function PlanChangeManager({ currentPlan, onPlanChanged }: PlanCh
                       className="form-radio mt-1 h-4 w-4 text-blue-600"
                     />
                     <div>
-                      <p className="font-semibold">Next billing cycle</p>
+                      <p className="font-semibold">Próximo ciclo de cobro</p>
                       <p className="text-sm text-muted-foreground">
                         Change on {new Date(preview.currentPeriodEnd).toLocaleDateString()} - no immediate charges
                       </p>
