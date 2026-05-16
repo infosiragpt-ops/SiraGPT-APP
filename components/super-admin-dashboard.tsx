@@ -70,10 +70,16 @@ export function SuperAdminDashboard() {
 
   useEffect(() => {
     fetchUsers()
+    // fetchUsers reads only currentPage / searchTerm / planFilter (in
+    // deps); the function is recreated per render so adding it would
+    // lint-loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentPage, searchTerm, planFilter])
 
   useEffect(() => {
     fetchUserStats()
+    // fetchUserStats runs once on mount, no captured changing state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const fetchUsers = async () => {

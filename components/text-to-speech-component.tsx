@@ -526,6 +526,9 @@ const { voices, loading: voicesLoading } = useVoices()
             loadModels()
             dataLoaded.current.models = true;
         }
+        // loadModels is the load-once-on-mount pattern with a guard ref
+        // so it never re-fires; listing it in deps would lint-loop.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
 
     // Effect to handle audio player time updates
