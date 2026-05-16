@@ -26,6 +26,24 @@ export default function LoginPage() {
   const { login, user } = useAuth()
   const router = useRouter()
 
+  // Surface the `?error=…` query the auth/callback page may pass on
+  // a failed OAuth round-trip ("La sesión es inválida o expiró",
+  // "Error de autenticación", etc.) so the user gets a clear toast
+  // explaining why they're back on the login form instead of /chat.
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const params = new URLSearchParams(window.location.search)
+    const errorMsg = params.get("error")
+    if (errorMsg) {
+      toast.error(errorMsg)
+      // Clean the URL so a refresh doesn't re-toast the same error
+      params.delete("error")
+      const cleaned = params.toString()
+      const target = window.location.pathname + (cleaned ? `?${cleaned}` : "")
+      window.history.replaceState(null, "", target)
+    }
+  }, [])
+
   const handleBack = () => {
     if (window.history.length > 1) {
       router.back()
@@ -48,7 +66,6 @@ export default function LoginPage() {
 
     try {
       const success = await login(email, password)
-      console.log("Login success:", success);
       if (success) {
         toast.success(t("signIn"))
         // Explicit redirect — don't rely solely on the useEffect that
@@ -62,7 +79,6 @@ export default function LoginPage() {
         toast.error(t("invalidCreds"))
       }
     } catch (error) {
-      console.log("Login failed.", error);
       toast.error(t("invalidCreds"))
     } finally {
       setIsLoading(false)
