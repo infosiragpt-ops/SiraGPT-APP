@@ -25,6 +25,9 @@ export default function ProcessingGmailCard() {
     } else {
       setDone(true);
     }
+    // stages.length is a constant in this component (defined in module
+    // scope) — adding it would be noise without changing behaviour.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stage]);
 
   const colorMap = [

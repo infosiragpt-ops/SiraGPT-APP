@@ -111,6 +111,10 @@ function PaymentSuccessContent() {
     }
 
     verifyPayment()
+    // refreshUser comes from useAuth() and is intentionally NOT in deps —
+    // verifyPayment fires once per session and only needs the latest
+    // refresh closure, not a re-fire on identity change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, toast])
 
   const handleContinue = () => {
