@@ -18,8 +18,31 @@ import { getLocale, getMessages } from "next-intl/server"
 import { isRTL } from "@/lib/i18n/locales"
 
 export const metadata: Metadata = {
-  title: "Sira GPT — Plataforma de IA Multimodal",
+  metadataBase: new URL("https://siragpt.com"),
+  title: {
+    default: "Sira GPT — Plataforma de IA Multimodal",
+    template: "%s · Sira GPT",
+  },
   description: "Plataforma multi-LLM con generación de texto, imagen, audio y video. GPT-4, Claude, Gemini y más en un solo lugar.",
+  keywords: ["IA", "ChatGPT", "Claude", "Gemini", "generación de imágenes", "asistente IA", "plataforma IA", "productividad"],
+  authors: [{ name: "Sira GPT" }],
+  creator: "Sira GPT",
+  // OG tags so Slack / WhatsApp / Twitter previews show a branded
+  // card instead of a generic Next.js placeholder.
+  openGraph: {
+    type: "website",
+    locale: "es_ES",
+    siteName: "Sira GPT",
+    title: "Sira GPT — Plataforma de IA Multimodal",
+    description: "GPT-4, Claude, Gemini y más en un solo lugar. Chatea, genera imágenes, analiza documentos.",
+    images: [{ url: "/sira-gpt.png", width: 1200, height: 630, alt: "Sira GPT" }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Sira GPT — Plataforma de IA Multimodal",
+    description: "GPT-4, Claude, Gemini y más en un solo lugar.",
+    images: ["/sira-gpt.png"],
+  },
   // Web App Manifest — lets the browser surface the "Install" /
   // "Add to Home Screen" affordance with our branded icon, name and
   // launcher shortcuts (Nuevo chat / Biblioteca / Proyectos).
