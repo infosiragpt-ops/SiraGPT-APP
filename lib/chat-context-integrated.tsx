@@ -1255,6 +1255,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         setCurrentStreamId(null);
       }
     },
+    // bg / pendingStop / selectChat / selectProvider are intentionally
+    // omitted — they're either refs, secondary helpers, or recreated
+    // per render. The hook is scoped to the user-facing inputs
+    // (chat, auth, model, files) that matter for the send action.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [currentChat, user, token, selectedModel, uploadedFiles]
   );
   const handleNewChatWithPlaceholder = useCallback(async (newChat: Chat, initialContent: string, placeholderContent: string, uploadedFiles: any[]) => {
