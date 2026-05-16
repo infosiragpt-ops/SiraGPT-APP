@@ -1076,6 +1076,10 @@ function PdfRenderer({ a }: { a: AttachmentLike }) {
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
+    // goToPage is defined elsewhere in the component but reads the
+    // latest numPages/activePage from these deps — the function
+    // identity is recreated per render, listing it would lint-loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [numPages, activePage])
 
   if (err) return <ErrorState error={err} hint="Si el archivo está cifrado o protegido, descárgalo y ábrelo en un visor PDF nativo." />

@@ -52,6 +52,10 @@ function ArtifactCard({ artefact }: { artefact: ArtifactFile }) {
   const srcDoc = React.useMemo(() => buildShellHtml(artefact.jsx), [artefact.jsx])
   const storageScope = React.useMemo(
     () => artifactStorageScope(artefact),
+    // artefact.title + artefact.jsx fully identify the storage scope —
+    // listing the full artefact object would re-fire on every prop
+    // identity change without changing the scope value.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [artefact.title, artefact.jsx]
   )
 
