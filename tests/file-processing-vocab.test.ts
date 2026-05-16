@@ -17,6 +17,19 @@ test("TERMINAL_STAGES contains exactly the two terminal stages", () => {
   assert.equal(TERMINAL_STAGES.size, 2)
 })
 
+test("isTerminalStage is case-sensitive and rejects look-alikes", () => {
+  // Set lookup is case-sensitive; only the literal lowercase stage
+  // strings qualify. Pin so a future "normalize before lookup" PR
+  // surfaces here.
+  assert.equal(isTerminalStage("ready"),                true)
+  assert.equal(isTerminalStage("failed"),               true)
+  assert.equal(isTerminalStage("READY" as any),         false)
+  assert.equal(isTerminalStage("Failed" as any),        false)
+  assert.equal(isTerminalStage("undefined" as any),     false)
+  assert.equal(isTerminalStage("done" as any),          false)
+})
+
+
 test("isTerminalStage matches the TERMINAL_STAGES set", () => {
   assert.equal(isTerminalStage("ready"), true)
   assert.equal(isTerminalStage("failed"), true)
