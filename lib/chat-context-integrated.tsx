@@ -2083,7 +2083,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       setIsLoading(false);
       setUploadedFiles([]); // Clear uploaded files after processing
     }
-  }, [currentChat, user, token, selectedModel, uploadedFiles, selectChat, pollVideoStatus]);
+    // `token` intentionally omitted — apiClient reads the latest auth
+    // token at call time, so adding it here only triggers unnecessary
+    // re-creations of this callback on token refresh.
+  }, [currentChat, user, selectedModel, uploadedFiles, selectChat, pollVideoStatus]);
 
   const addThesisMessage = useCallback(async (topics: string[], chat?: any) => {
     const activeChat = chat || currentChat;
