@@ -12,6 +12,7 @@
   },
   "include": [
     "../tests/**/*.test.ts",
+    "../types/**/*.d.ts",
     "../lib/i18n/locales.ts",
     "../lib/i18n/locale-resolution.ts",
     "../lib/auth.ts",
