@@ -489,19 +489,19 @@ const downloadAsHtml = async () => {
           <div className="flex-1 min-w-0 space-y-3">
             <div>
               <div className="flex items-center gap-2 mb-1">
-                <h4 className="font-semibold text-base">Computer Use Extraction Report</h4>
+                <h4 className="font-semibold text-base">Reporte de extracción de Computer Use</h4>
                 <Badge variant="secondary" className="text-xs font-medium">
-                  HTML Report
+                  Reporte HTML
                 </Badge>
               </div>
               <p className="text-xs text-muted-foreground font-medium mb-2">
-                Generated: {new Date(extractedData.timestamp).toLocaleString()}
+                Generado: {new Date(extractedData.timestamp).toLocaleString()}
               </p>
               <p className="text-sm text-muted-foreground mb-2">
-                <strong>Query:</strong> {extractedData.userQuery}
+                <strong>Consulta:</strong> {extractedData.userQuery}
               </p>
               <p className="text-sm text-muted-foreground">
-                <strong>Source:</strong> {extractedData.title}
+                <strong>Fuente:</strong> {extractedData.title}
               </p>
             </div>
 
@@ -513,7 +513,7 @@ const downloadAsHtml = async () => {
                 className="h-9 px-4 font-medium hover:bg-primary/10"
               >
                 <Download className="h-4 w-4 mr-2" />
-                Download HTML
+                Descargar HTML
               </Button>
 
               <Button
@@ -523,7 +523,7 @@ const downloadAsHtml = async () => {
                 className="h-9 px-4 font-medium shadow-sm hover:shadow-md"
               >
                 <ExternalLink className="h-4 w-4 mr-2" />
-                View Source
+                Ver fuente
               </Button>
             </div>
           </div>
