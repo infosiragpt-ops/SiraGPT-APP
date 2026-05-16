@@ -109,6 +109,7 @@ import MusicGenerationComponent from "./MusicGenerationComponent"
 import { agenticSearchService, type AgenticEvent, type AgenticSource } from "@/lib/agentic-search-service"
 import { agentTaskService, normalizeAgentTaskErrorMessage, reduceEvent, initialAgentState, type AgentTaskState } from "@/lib/agent-task-service"
 import { devLog } from "@/lib/dev-log"
+import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
 import VideoGenerationComponent from "./VideoGenerationComponent"
 import UpgradeModal from "./UpgradeModal"
 import { IconProvider } from "./icon-provider"
@@ -5354,7 +5355,16 @@ But first, you need to connect your Spotify account securely using the button be
 
   const handleSend = async () => {
     let composerFiles = uploadedFilesRef.current.length > 0 ? [...uploadedFilesRef.current] : [...uploadedFiles];
-    const rawMsg = input.trim();
+    // Normalize before trim so zero-width chars don't sneak past the
+    // "is it empty?" check, and so we can warn on catastrophic pastes.
+    const normalized = normalizeChatInput(input);
+    if (shouldWarnUser(normalized)) {
+      toast.error(
+        `El mensaje supera el límite (${normalized.originalLength.toLocaleString()} caracteres). Se recortó al máximo permitido.`,
+        { duration: 4500 },
+      );
+    }
+    const rawMsg = normalized.value.trim();
     if (!rawMsg && composerFiles.length === 0) return;
 
     if (composerFiles.some(isComposerFileUploadPending)) {
