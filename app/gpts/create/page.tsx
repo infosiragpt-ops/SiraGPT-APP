@@ -45,6 +45,7 @@ import { useAuth } from "@/lib/auth-context-integrated"
 import { useChat } from "@/lib/chat-context-integrated"
 import { toast } from "sonner"
 import { gptsService, type CustomGPT } from "@/lib/gpts-service"
+import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 // Categories - matching the GPTs page
@@ -259,15 +260,29 @@ export default function CreateGPTPage() {
 
     setIsSaving(true)
     try {
+      // Normalize every free-text field before persistence. The
+      // instructions field in particular tends to be a long paste and
+      // benefits from the same zero-width / NUL / U+2028-9 strip the
+      // chat composer uses; toast on truncation so the user knows the
+      // saved GPT may have less detail than they pasted.
+      const normalizedInstr = normalizeChatInput(formData.instructions)
+      if (shouldWarnUser(normalizedInstr)) {
+        toast.error(
+          `Las instrucciones superan el límite (${normalizedInstr.originalLength.toLocaleString()} caracteres). Se recortaron.`,
+          { duration: 4500 },
+        )
+      }
       const gptData = {
-        name: formData.name.trim(),
-        description: formData.description.trim(),
-        instructions: formData.instructions.trim(),
-        greetingMessage: formData.greetingMessage.trim() || undefined,
+        name: normalizeChatInput(formData.name).value.trim(),
+        description: normalizeChatInput(formData.description).value.trim(),
+        instructions: normalizedInstr.value.trim(),
+        greetingMessage: normalizeChatInput(formData.greetingMessage).value.trim() || undefined,
         modelName: formData.modelName,
         temperature: formData.temperature,
         maxTokens: formData.maxTokens || undefined,
-        conversationStarters: formData.conversationStarters.filter(s => s.trim()),
+        conversationStarters: formData.conversationStarters
+          .map(s => normalizeChatInput(s).value.trim())
+          .filter(s => s),
         visibility: formData.visibility,
         category: formData.category || undefined,
         capabilities: formData.capabilities,
