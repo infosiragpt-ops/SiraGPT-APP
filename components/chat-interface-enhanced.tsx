@@ -4584,6 +4584,11 @@ But first, you need to connect your Spotify account securely using the button be
     }, 150);
 
     return () => clearTimeout(timer);
+    // Listing the full `currentChat` would re-fire this on every
+    // message append; setChatType is a stable setter. The connector-
+    // detect logic runs once per chat-id and shouldn't re-mount the
+    // Word/Excel editors on each turn.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentChat?.id, closeAllToolsAndConnectors]);
 
 
