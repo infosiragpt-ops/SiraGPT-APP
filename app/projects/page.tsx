@@ -60,6 +60,7 @@ import { cn } from "@/lib/utils"
 import { CreateProjectDialog } from "@/components/projects/create-project-dialog"
 import { getVisibleProjects, removeProjectFromList, upsertProjectList } from "@/lib/projects-logic"
 import { projectsService, type Project, type ProjectSort } from "@/lib/projects-service"
+import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
 
 const SORTS: ProjectSort[] = ["activity", "edited", "created"]
 
@@ -379,11 +380,20 @@ function EditProjectDialog({
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!project || !canSubmit) return
+    const cleanName = normalizeChatInput(name).value.trim()
+    const normalizedDesc = normalizeChatInput(description)
+    if (shouldWarnUser(normalizedDesc)) {
+      toast.error(
+        `La descripción supera el límite (${normalizedDesc.originalLength.toLocaleString()} caracteres). Se recortó.`,
+        { duration: 4500 },
+      )
+    }
+    const cleanDesc = normalizedDesc.value.trim()
     setSubmitting(true)
     try {
       const updated = await projectsService.update(project.id, {
-        name: name.trim(),
-        description: description.trim() || null,
+        name: cleanName,
+        description: cleanDesc || null,
       })
       onSaved(updated)
       toast.success("Proyecto actualizado")
