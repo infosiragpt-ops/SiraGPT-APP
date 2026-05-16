@@ -64,7 +64,11 @@ export default function SharedChatPage() {
         };
 
         loadAndSaveSharedChat();
-    }, []); // Remove shareId and router from dependencies to prevent re-runs
+        // Run once on mount only — re-running on shareId / router /
+        // saved changes would re-execute the save flow (which mutates
+        // the user's chat list) and possibly duplicate the chat.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
 
 

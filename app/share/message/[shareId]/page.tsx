@@ -75,7 +75,11 @@ export default function SharedMessagePage() {
         };
 
         loadAndSaveSharedMessage();
-    }, []); // Remove shareId and router from dependencies to prevent re-runs
+        // Run once on mount only — re-running on shareId / router /
+        // saved changes would re-execute the save flow (duplicates
+        // the saved message on the user's account).
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
 
 
