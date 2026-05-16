@@ -12,9 +12,15 @@ WORKDIR /app
 
 RUN apk add --no-cache wget
 
-# Install all deps (including devDependencies) for hot-reload
+# Install all deps (including devDependencies) for hot-reload.
+# `npm install --legacy-peer-deps` is used instead of `npm ci` because
+# the lockfile drifts frequently (deps added without re-locking). The
+# install step is tolerant enough to build the image even when the
+# lockfile is mid-update. The real fix is regenerating package-lock
+# whenever package.json changes, but until that's enforced we keep
+# this step resilient so the container can boot.
 COPY package.json package-lock.json ./
-RUN npm ci --prefer-offline --no-audit --no-fund
+RUN npm install --no-audit --no-fund --legacy-peer-deps
 
 EXPOSE 3000
 

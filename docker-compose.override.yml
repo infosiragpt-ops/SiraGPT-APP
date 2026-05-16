@@ -36,10 +36,16 @@ services:
       - ./app:/app/app
       - ./components:/app/components
       - ./lib:/app/lib
+      - ./hooks:/app/hooks
+      - ./messages:/app/messages
+      - ./styles:/app/styles
+      - ./types:/app/types
       - ./public:/app/public
       - ./next.config.mjs:/app/next.config.mjs
       - ./tailwind.config.ts:/app/tailwind.config.ts
       - ./tsconfig.json:/app/tsconfig.json
+      - ./postcss.config.mjs:/app/postcss.config.mjs
+      - ./components.json:/app/components.json
     environment:
       NODE_ENV: development
     ports:
