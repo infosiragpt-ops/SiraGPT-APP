@@ -59,6 +59,10 @@ export default function AnalyticsDashboard({ isAdmin }: AnalyticsDashboardProps)
     if (isAdmin) {
       fetchAnalytics()
     }
+    // fetchAnalytics reads only isAdmin + period (already in deps) and
+    // is redefined each render — adding it to deps would lint-loop
+    // without changing semantics.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdmin, period])
 
   const fetchAnalytics = async () => {

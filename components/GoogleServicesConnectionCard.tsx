@@ -20,6 +20,10 @@ export default function GoogleServicesConnectionCard({ onConnectionChange }: Goo
     // Check connection status on mount
     useEffect(() => {
         checkConnectionStatus();
+        // checkConnectionStatus is defined later in the component body
+        // and only reads stable refs (localStorage / setters). Empty
+        // deps array = run once on mount.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     const checkConnectionStatus = async () => {
