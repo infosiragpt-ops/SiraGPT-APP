@@ -3395,6 +3395,10 @@ function ChatInterfaceContent() {
   // Scroll to bottom only when the chat is changed
   React.useEffect(() => {
     scrollToBottom();
+    // scrollToBottom is a stable ref that scrolls the Virtuoso viewport;
+    // intentionally scoped to fire on chat-id change only, not on
+    // function-identity change (would re-scroll on every render).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentChat?.id]);
 
   // Virtualization: hand Virtuoso the existing Radix scroll viewport so
