@@ -3550,7 +3550,7 @@ function ChatInterfaceContent() {
     if (clearReasoning) clearReasoning();
     setComputerUseStatus('idle');
     setComputerUseScreenshot(null);
-  }, [closeAllToolsAndConnectors, setChatType, clearReasoning]);
+  }, [closeAllToolsAndConnectors, setChatType, clearReasoning, setUploadedFiles]);
 
   const markImageGenerationStopped = React.useCallback(() => {
     setCurrentChat(prevChat => {
@@ -3629,7 +3629,7 @@ function ChatInterfaceContent() {
         });
       }
     }
-  }, [computerUseReasoning, currentChat, isComputerUseActive]);
+  }, [computerUseReasoning, currentChat, isComputerUseActive, setCurrentChat]);
 
 
   const handleGmailToggle = () => {
@@ -4532,7 +4532,7 @@ But first, you need to connect your Spotify account securely using the button be
       clearReasoning();
     }
     prevChatIdRef.current = currentChat?.id;
-  }, [currentChat?.id, clearReasoning, closeAllToolsAndConnectors]); // Only trigger when chat ID changes
+  }, [currentChat?.id, clearReasoning, closeAllToolsAndConnectors, setChatType]); // Only trigger when chat ID changes
 
 
   React.useEffect(() => {
