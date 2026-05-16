@@ -17,10 +17,13 @@
  * — production errors are usually worth surfacing.
  */
 
-const isDev =
-  typeof process !== "undefined" && process.env?.NODE_ENV !== "production"
-
-function debugFlagOn(): boolean {
+// Exported so tests can call it directly with their own
+// environment-stub patterns. In production the bundler tree-shakes
+// `process.env.NODE_ENV` to the literal string at build time, so
+// reading it on every call costs effectively nothing.
+export function debugFlagOn(): boolean {
+  const isDev =
+    typeof process !== "undefined" && process.env?.NODE_ENV !== "production"
   if (isDev) return true
   if (typeof window === "undefined") return false
   try {
