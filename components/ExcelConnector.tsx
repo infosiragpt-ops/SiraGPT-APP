@@ -227,7 +227,7 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
           // toast.error('Failed to insert chart');
         }
       }, 100); // Small delay to ensure sheet is ready
-    }, [getUsedRowIndex, getUsedColumnIndex, parseSheetAndRange, setActiveSheetIndex, getSheetIndexByName]);
+    }, [getUsedRowIndex, parseSheetAndRange, setActiveSheetIndex, getSheetIndexByName]);
 
     const spreadsheetSaveUrl = React.useMemo(() => {
       return (
