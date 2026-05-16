@@ -421,11 +421,11 @@ const { voices, loading: voicesLoading } = useVoices()
               <Card className="p-4">
                 <div className="flex items-center gap-2 mb-3">
                   <Settings className="w-4 h-4" />
-                  <Label>Voice Settings</Label>
+                  <Label>Ajustes de voz</Label>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label>Stability: {voiceSettings.stability}</Label>
+                    <Label>Estabilidad: {voiceSettings.stability}</Label>
                     <Slider
                       value={[voiceSettings.stability]}
                       onValueChange={([value]) =>
@@ -437,7 +437,7 @@ const { voices, loading: voicesLoading } = useVoices()
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label>Similarity: {voiceSettings.similarity_boost}</Label>
+                    <Label>Similitud: {voiceSettings.similarity_boost}</Label>
                     <Slider
                       value={[voiceSettings.similarity_boost]}
                       onValueChange={([value]) =>
@@ -485,11 +485,11 @@ const { voices, loading: voicesLoading } = useVoices()
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <FileAudio className="w-5 h-5 text-green-600" />
-                      <span className="font-medium text-green-800 dark:text-green-200">Generated Audio</span>
+                      <span className="font-medium text-green-800 dark:text-green-200">Audio generado</span>
                       {isPlaying && (
                         <div className="flex items-center gap-1 text-green-600">
                           <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-                          <span className="text-xs">Playing</span>
+                          <span className="text-xs">Reproduciendo</span>
                         </div>
                       )}
                     </div>
@@ -639,7 +639,7 @@ const { voices, loading: voicesLoading } = useVoices()
                 <Card className="p-4">
                   <div className="flex items-center justify-center space-x-2">
                     <ThinkingIndicator size="md" />
-                    <span>Transcribing audio...</span>
+                    <span>Transcribiendo audio…</span>
                   </div>
                   <Progress value={undefined} className="mt-2" />
                 </Card>
@@ -648,7 +648,7 @@ const { voices, loading: voicesLoading } = useVoices()
               {transcribedText && (
                 <Card className="p-4">
                   <div className="space-y-2">
-                    <Label>Transcribed Text</Label>
+                    <Label>Texto transcrito</Label>
                     <Textarea
                       value={transcribedText}
                       onChange={(e) => setTranscribedText(e.target.value)}
