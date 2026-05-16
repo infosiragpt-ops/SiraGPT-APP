@@ -4626,6 +4626,10 @@ But first, you need to connect your Spotify account securely using the button be
         return () => clearTimeout(timer);
       }
     }
+    // `currentChat` itself is intentionally NOT in deps — re-firing on
+    // every message append would re-load the Word doc, which loses the
+    // user's in-flight edits.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isWordConnectorActive, currentChat?.id]);
 
   React.useEffect(() => {
