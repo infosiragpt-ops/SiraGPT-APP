@@ -35,6 +35,25 @@ describe("pickLocaleFromAcceptLanguage", () => {
     assert.equal(pickLocaleFromAcceptLanguage("*,fr;q=0.9", SUPPORTED), "fr")
   })
 
+  it("strips leading whitespace inside Accept-Language entries", () => {
+    // Many browsers send "en-US,en;q=0.9,es;q=0.8" but proxies sometimes
+    // add extra whitespace. Verify entries with leading whitespace are
+    // still parsed correctly.
+    const out = pickLocaleFromAcceptLanguage("  en-US , es ", ["en", "es"])
+    assert.equal(out, "en")
+  })
+
+  it("handles q-values with multiple decimal places", () => {
+    // RFC 9110 says q-values are 0..1 with up to 3 decimals; we should
+    // parse all common precision levels without dropping entries.
+    const out = pickLocaleFromAcceptLanguage(
+      "fr;q=0.123,en;q=0.456,es;q=0.7",
+      ["en", "es", "fr"],
+    )
+    // es wins (0.7 > 0.456 > 0.123)
+    assert.equal(out, "es")
+  })
+
   it("returns undefined when nothing matches", () => {
     assert.equal(pickLocaleFromAcceptLanguage("it,ja,zh", SUPPORTED), undefined)
   })
