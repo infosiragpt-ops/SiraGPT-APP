@@ -55,30 +55,30 @@ export default function SubscriptionManager() {
     FREE: {
       color: 'from-gray-500 to-gray-600',
       icon: Users,
-      limit: '3 calls/month',
+      limit: '3 llamadas/mes',
       price: 0,
-      features: ['Basic AI Chat', 'Community Support']
+      features: ['Chat IA básico', 'Soporte de la comunidad']
     },
     PRO: {
       color: 'from-blue-500 to-cyan-500',
       icon: Crown,
-      limit: '500,000 tokens/month',
+      limit: '500.000 tokens/mes',
       price: 5,
-      features: ['All AI models', 'Priority support', 'Advanced features', 'Enhanced rate limits']
+      features: ['Todos los modelos de IA', 'Soporte prioritario', 'Funciones avanzadas', 'Límites de uso ampliados']
     },
     PRO_MAX: {
-      color: 'from-purple-500 to-pink-500', 
+      color: 'from-purple-500 to-pink-500',
       icon: Sparkles,
-      limit: '1,000,000 tokens/month',
+      limit: '1.000.000 tokens/mes',
       price: 20,
-      features: ['Everything in Pro', 'Higher token limits', 'Priority support', 'Advanced Models', 'Enhanced rate limits']
+      features: ['Todo lo de Pro', 'Mayor límite de tokens', 'Soporte prioritario', 'Modelos avanzados', 'Límites de uso ampliados']
     },
     ENTERPRISE: {
       color: 'from-amber-500 to-orange-500',
       icon: Zap,
-      limit: '10,000,000 tokens/month',
+      limit: '10.000.000 tokens/mes',
       price: 200,
-      features: ['Everything in Pro Max', 'Massive token limits', 'Dedicated Support', 'Custom Integration', 'SLA guaranteed']
+      features: ['Todo lo de Pro Max', 'Límites masivos de tokens', 'Soporte dedicado', 'Integración a medida', 'SLA garantizado']
     }
   }
 
@@ -250,14 +250,14 @@ export default function SubscriptionManager() {
           {/* Usage Progress */}
           <div>
             <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-medium">{currentPlan === 'FREE' ? 'API Calls This Month' : 'Token Usage This Month'}</span>
+              <span className="text-sm font-medium">{currentPlan === 'FREE' ? 'Llamadas API este mes' : 'Uso de tokens este mes'}</span>
               <span className="text-sm text-muted-foreground">
                 {usedAmount.toLocaleString()}/{totalLimit.toLocaleString()}
               </span>
             </div>
             <Progress value={usagePercentage} className="h-2" />
             <p className="text-xs text-muted-foreground mt-1">
-              {remainingAmount.toLocaleString()} {currentPlan === 'FREE' ? 'calls' : 'tokens'} remaining
+              Quedan {remainingAmount.toLocaleString()} {currentPlan === 'FREE' ? 'llamadas' : 'tokens'}
             </p>
           </div>
 
@@ -267,7 +267,7 @@ export default function SubscriptionManager() {
           <div>
             <h4 className="font-semibold mb-3 flex items-center">
               <CheckCircle className="h-4 w-4 mr-2" />
-              Plan Features
+              Funciones del plan
             </h4>
             <div className="grid gap-2">
               {currentPlanInfo?.features.map((feature, index) => (
@@ -288,7 +288,7 @@ export default function SubscriptionManager() {
                   <div className="flex items-center space-x-3 p-3 bg-muted/50 rounded-lg">
                     <Calendar className="h-5 w-5 text-muted-foreground" />
                     <div>
-                      <p className="text-sm font-medium">Next Billing</p>
+                      <p className="text-sm font-medium">Próximo cobro</p>
                       <p className="text-xs text-muted-foreground">
                         {new Date(subscriptionData.currentPeriodEnd).toLocaleDateString()}
                       </p>
@@ -299,7 +299,7 @@ export default function SubscriptionManager() {
                 <div className="flex items-center space-x-3 p-3 bg-muted/50 rounded-lg">
                   <CreditCard className="h-5 w-5 text-muted-foreground" />
                   <div>
-                    <p className="text-sm font-medium">Payment Method</p>
+                    <p className="text-sm font-medium">Método de pago</p>
                     <p className="text-xs text-muted-foreground">
                       Stripe
                     </p>
@@ -317,7 +317,7 @@ export default function SubscriptionManager() {
           <CardHeader>
             <CardTitle className="flex items-center">
               <Settings className="h-5 w-5 mr-2" />
-              Subscription Management
+              Gestión de suscripción
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -326,40 +326,40 @@ export default function SubscriptionManager() {
                 <AlertTriangle className="h-5 w-5 text-amber-600 mt-0.5" />
                 <div className="flex-1">
                   <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
-                    Subscription Ending
+                    Suscripción por terminar
                   </p>
                   <p className="text-xs text-amber-700 dark:text-amber-300 mt-1">
-                    Your subscription will end on {subscriptionData.currentPeriodEnd ? new Date(subscriptionData.currentPeriodEnd).toLocaleDateString() : 'the next billing date'}. 
-                    You can reactivate it anytime before then.
+                    Tu suscripción terminará el {subscriptionData.currentPeriodEnd ? new Date(subscriptionData.currentPeriodEnd).toLocaleDateString() : 'próximo cobro'}.
+                    Puedes reactivarla en cualquier momento antes de esa fecha.
                   </p>
-                  <Button 
-                    size="sm" 
-                    variant="outline" 
+                  <Button
+                    size="sm"
+                    variant="outline"
                     className="mt-3"
                     onClick={handleReactivateSubscription}
                     disabled={actionLoading === 'reactivate'}
                   >
                     {actionLoading === 'reactivate' && <RefreshCw className="h-3 w-3 mr-2 animate-spin" />}
-                    Reactivate Subscription
+                    Reactivar suscripción
                   </Button>
                 </div>
               </div>
             ) : (
               <div className="flex items-center justify-between p-4 border rounded-lg">
                 <div>
-                  <p className="font-medium">Cancel Subscription</p>
+                  <p className="font-medium">Cancelar suscripción</p>
                   <p className="text-sm text-muted-foreground">
-                    You'll keep access until your current period ends
+                    Mantendrás el acceso hasta que termine el periodo actual
                   </p>
                 </div>
-                <Button 
-                  variant="outline" 
+                <Button
+                  variant="outline"
                   size="sm"
                   onClick={handleCancelSubscription}
                   disabled={actionLoading === 'cancel'}
                 >
                   {actionLoading === 'cancel' && <RefreshCw className="h-3 w-3 mr-2 animate-spin" />}
-                  Cancel
+                  Cancelar
                 </Button>
               </div>
             )}
@@ -436,22 +436,22 @@ export default function SubscriptionManager() {
         <CardHeader>
           <CardTitle className="flex items-center">
             <TrendingUp className="h-5 w-5 mr-2" />
-            Usage Analytics
+            Métricas de uso
           </CardTitle>
         </CardHeader>
         <CardContent>
           <div className="grid gap-4 md:grid-cols-3">
             <div className="text-center p-4 bg-muted/50 rounded-lg">
               <p className="text-2xl font-bold">{usedAmount.toLocaleString()}</p>
-              <p className="text-sm text-muted-foreground">{currentPlan === 'FREE' ? 'Calls' : 'Tokens'} Used This Month</p>
+              <p className="text-sm text-muted-foreground">{currentPlan === 'FREE' ? 'Llamadas' : 'Tokens'} usadas este mes</p>
             </div>
             <div className="text-center p-4 bg-muted/50 rounded-lg">
               <p className="text-2xl font-bold">{remainingAmount.toLocaleString()}</p>
-              <p className="text-sm text-muted-foreground">{currentPlan === 'FREE' ? 'Calls' : 'Tokens'} Remaining</p>
+              <p className="text-sm text-muted-foreground">{currentPlan === 'FREE' ? 'Llamadas' : 'Tokens'} restantes</p>
             </div>
             <div className="text-center p-4 bg-muted/50 rounded-lg">
               <p className="text-2xl font-bold">{Math.round(usagePercentage)}%</p>
-              <p className="text-sm text-muted-foreground">Usage This Month</p>
+              <p className="text-sm text-muted-foreground">Uso este mes</p>
             </div>
           </div>
         </CardContent>
@@ -472,10 +472,10 @@ export default function SubscriptionManager() {
                   </div>
                   <div>
                     <h2 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-                      Change Your Plan
+                      Cambia tu plan
                     </h2>
                     <p className="text-muted-foreground mt-1">
-                      Upgrade or downgrade with instant proration calculations
+                      Mejora o reduce tu plan con cálculos de prorrateo al instante
                     </p>
                   </div>
                 </div>
