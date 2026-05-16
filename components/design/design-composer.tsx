@@ -43,6 +43,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { cn } from "@/lib/utils"
 import type { DesignQualityReport } from "@/lib/design-service"
+import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 // ─── Models API + curation ────────────────────────────────────────────────
@@ -164,7 +165,14 @@ export function DesignComposer({
   }, [featured, modelId, models])
 
   function submit() {
-    const text = value.trim()
+    const normalized = normalizeChatInput(value)
+    if (shouldWarnUser(normalized)) {
+      toast.error(
+        `La instrucción supera el límite (${normalized.originalLength.toLocaleString()} caracteres). Se recortó.`,
+        { duration: 4500 },
+      )
+    }
+    const text = normalized.value.trim()
     if (!text || running || disabled) return
     setValue("")
     onSend({ instruction: text, model: modelId, effort })
