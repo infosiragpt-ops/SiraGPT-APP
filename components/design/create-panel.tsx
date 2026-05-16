@@ -27,6 +27,7 @@ import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import {
   designService, type DesignKind, type DesignFidelity,
 } from "@/lib/design-service"
+import { normalizeChatInput } from "@/lib/chat-input-normalize"
 
 type TabKey = "prototype" | "slide_deck" | "template" | "other"
 
@@ -46,7 +47,8 @@ export function CreatePanel() {
   const [creating, setCreating] = React.useState(false)
 
   async function submit() {
-    if (!name.trim()) { toast.error("El nombre del proyecto es obligatorio"); return }
+    const cleanName = normalizeChatInput(name).value.trim()
+    if (!cleanName) { toast.error("El nombre del proyecto es obligatorio"); return }
     if (tab === "template") {
       toast.info("Plantillas · próximamente")
       return
@@ -58,7 +60,7 @@ export function CreatePanel() {
         tab === "slide_deck" ? "slide_deck" :
         "other"
       const design = await designService.create({
-        name: name.trim(),
+        name: cleanName,
         kind,
         fidelity: kind === "prototype" ? fidelity : undefined,
         speakerNotes: kind === "slide_deck" ? speakerNotes : undefined,
