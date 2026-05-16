@@ -16,22 +16,20 @@ function AuthCallbackContent() {
       const error = searchParams.get('error')
 
       if (error) {
-        router.push('/auth/login?error=Authentication failed')
+        router.push('/auth/login?error=' + encodeURIComponent('Error de autenticación'))
         return
       }
 
       if (token) {
         // Store token and redirect
         localStorage.setItem('auth-token', token)
-        console.log("token ", token);
 
         const loginSuccess = await loginWithToken(token);
 
         if (loginSuccess) {
-
           router.replace('/chat');
         } else {
-          router.replace('/auth/login?error=Session is invalid or expired');
+          router.replace('/auth/login?error=' + encodeURIComponent('La sesión es inválida o expiró'));
         }
         // try {
         //   // Verify token by getting user info
@@ -65,7 +63,7 @@ function AuthCallbackContent() {
     <div className="min-h-screen flex items-center justify-center">
       <div className="text-center">
         <ThinkingIndicator size="lg" className="mx-auto mb-4" />
-        <p>Completing authentication...</p>
+        <p>Completando autenticación…</p>
       </div>
     </div>
   )
@@ -78,7 +76,7 @@ export default function AuthCallback() {
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center">
           <ThinkingIndicator size="lg" className="mx-auto mb-4" />
-          <p>Loading...</p>
+          <p>Cargando…</p>
         </div>
       </div>
     }>
