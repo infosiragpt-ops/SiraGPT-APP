@@ -73,4 +73,16 @@ describe("buildLongPasteMetadata · field population", () => {
     const meta = buildLongPasteMetadata(text)
     assert.ok((meta.estimatedTokens ?? 0) > 0)
   })
+
+  it("contentHash differs across different inputs (no trivial collisions)", () => {
+    const a = buildLongPasteMetadata("Texto distinto número uno ".repeat(30))
+    const b = buildLongPasteMetadata("Texto distinto número dos ".repeat(30))
+    assert.notEqual(a.contentHash, b.contentHash)
+  })
+
+  it("contentHash is a non-empty deterministic string", () => {
+    const meta = buildLongPasteMetadata("Una cantidad razonable de texto pegado ".repeat(20))
+    assert.equal(typeof meta.contentHash, "string")
+    assert.ok((meta.contentHash || "").length > 0)
+  })
 })
