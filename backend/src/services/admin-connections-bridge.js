@@ -41,6 +41,34 @@ const PROVIDER_ENV_MAP = Object.freeze({
   fireworks: 'FIREWORKS_API_KEY',
 });
 
+// providerKey (lowercase, panel form) → provider value in AiModel.provider column
+const PROVIDER_CATALOG_MAP = Object.freeze({
+  openai: 'OpenAI',
+  anthropic: 'Anthropic',
+  gemini: 'Gemini',
+  mistral: 'Mistral',
+  groq: 'Groq',
+  openrouter: 'OpenRouter',
+  deepseek: 'DeepSeek',
+  xai: 'xAI',
+  together: 'Together',
+  fireworks: 'Fireworks',
+});
+
+// providerKey → { url, authHeader: (key) => headers }
+const PROVIDER_PROBE = Object.freeze({
+  openai:     { url: 'https://api.openai.com/v1/models',                            auth: (k) => ({ Authorization: `Bearer ${k}` }) },
+  anthropic:  { url: 'https://api.anthropic.com/v1/models',                         auth: (k) => ({ 'x-api-key': k, 'anthropic-version': '2023-06-01' }) },
+  gemini:     { url: 'https://generativelanguage.googleapis.com/v1beta/openai/models', auth: (k) => ({ Authorization: `Bearer ${k}` }) },
+  mistral:    { url: 'https://api.mistral.ai/v1/models',                            auth: (k) => ({ Authorization: `Bearer ${k}` }) },
+  groq:       { url: 'https://api.groq.com/openai/v1/models',                       auth: (k) => ({ Authorization: `Bearer ${k}` }) },
+  openrouter: { url: 'https://openrouter.ai/api/v1/auth/key',                       auth: (k) => ({ Authorization: `Bearer ${k}` }) }, // /auth/key requires valid user
+  deepseek:   { url: 'https://api.deepseek.com/v1/models',                          auth: (k) => ({ Authorization: `Bearer ${k}` }) },
+  xai:        { url: 'https://api.x.ai/v1/models',                                  auth: (k) => ({ Authorization: `Bearer ${k}` }) },
+  together:   { url: 'https://api.together.xyz/v1/models',                          auth: (k) => ({ Authorization: `Bearer ${k}` }) },
+  fireworks:  { url: 'https://api.fireworks.ai/inference/v1/models',                auth: (k) => ({ Authorization: `Bearer ${k}` }) },
+});
+
 const KEY_PREFIX = 'enc:v1:';
 
 function unwrap(stored) {
@@ -114,6 +142,14 @@ async function applyAdminConnections() {
         restored.join(',') || 'none'
       );
     }
+
+    // Fire-and-forget catalog reconciliation: probe each candidate
+    // provider and toggle AiModel.isActive so the chat UI only shows
+    // models whose upstream actually responds. Failures are isolated
+    // per provider — one bad key never blocks the others.
+    await reconcileCatalog().catch((e) =>
+      console.error('[admin-connections-bridge] reconcileCatalog failed:', e.message)
+    );
   } catch (err) {
     console.error('[admin-connections-bridge] applyAdminConnections failed:', err.message);
   } finally {
@@ -121,4 +157,85 @@ async function applyAdminConnections() {
   }
 }
 
-module.exports = { applyAdminConnections, PROVIDER_ENV_MAP };
+async function probeKey(providerKey, apiKey) {
+  const spec = PROVIDER_PROBE[providerKey];
+  if (!spec || !apiKey) return false;
+  try {
+    const res = await fetch(spec.url, {
+      method: 'GET',
+      headers: { Accept: 'application/json', ...spec.auth(apiKey) },
+      signal: AbortSignal.timeout(8000),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * For each provider whose env var is set (either from .env or from a
+ * panel row), probe the upstream /models endpoint. Toggle AiModel
+ * rows for that provider so the catalog reflects reality. Providers
+ * with no key configured stay in their current state — we never
+ * delete user-curated catalog state, just enable/disable.
+ *
+ * Updates the connection row's lastSyncedAt/lastSyncOk so the panel
+ * can show a green/red dot per connection without an extra round-trip.
+ */
+async function reconcileCatalog() {
+  const prisma = require('../config/database');
+  const results = {};
+  for (const [providerKey, envVar] of Object.entries(PROVIDER_ENV_MAP)) {
+    const key = process.env[envVar];
+    if (!key) {
+      results[providerKey] = { healthy: false, reason: 'no_key' };
+      continue;
+    }
+    results[providerKey] = { healthy: await probeKey(providerKey, key), reason: 'probed' };
+  }
+
+  // Update AiModel.isActive for each provider. Map to the catalog
+  // form (e.g. 'openai' → 'OpenAI'). Skip providers without a key,
+  // unless they had a row that just got disabled (then deactivate).
+  const summary = [];
+  for (const [providerKey, { healthy, reason }] of Object.entries(results)) {
+    const catalogProvider = PROVIDER_CATALOG_MAP[providerKey];
+    if (!catalogProvider) continue;
+    if (reason === 'no_key') {
+      // Deactivate so the chat UI doesn't show models with no upstream.
+      const { count } = await prisma.aiModel.updateMany({
+        where: { provider: catalogProvider, isActive: true },
+        data: { isActive: false },
+      });
+      if (count) summary.push(`${providerKey}:deactivated(${count})`);
+      continue;
+    }
+    const { count } = await prisma.aiModel.updateMany({
+      where: { provider: catalogProvider, isActive: !healthy },
+      data: { isActive: healthy },
+    });
+    if (count) summary.push(`${providerKey}:${healthy ? 'activated' : 'deactivated'}(${count})`);
+  }
+
+  // Mirror to admin_connections rows so the panel sees the health.
+  const conns = await prisma.adminConnection.findMany({ select: { id: true, providerKey: true } });
+  for (const c of conns) {
+    const r = results[c.providerKey];
+    if (!r) continue;
+    await prisma.adminConnection.update({
+      where: { id: c.id },
+      data: {
+        lastSyncedAt: new Date(),
+        lastSyncOk: !!r.healthy,
+        lastSyncError: r.healthy ? null : (r.reason === 'no_key' ? 'no key configured' : 'upstream probe failed'),
+      },
+    }).catch(() => {});
+  }
+
+  if (summary.length) {
+    console.log('[admin-connections-bridge] reconcile:', summary.join(' '));
+  }
+  return results;
+}
+
+module.exports = { applyAdminConnections, reconcileCatalog, PROVIDER_ENV_MAP, PROVIDER_CATALOG_MAP };

@@ -12,6 +12,13 @@ export function getNormalizedApiBaseUrl(): string {
 
 const API_BASE_URL = getNormalizedApiBaseUrl()
 
+/** Login/register must not send a stale Bearer token or treat 401 as "refresh session". */
+function isCredentialHandshake(endpoint: string, method: string): boolean {
+  if (method !== "POST") return false
+  const pathOnly = (endpoint.split("?")[0] || "").replace(/\/$/, "")
+  return pathOnly === "/auth/login" || pathOnly === "/auth/register"
+}
+
 type AIStreamOptions = {
   onReplace?: (content: string) => void
 }
@@ -77,8 +84,10 @@ class ApiClient {
     // backend dedup to work).
     const headers = new Headers(sanitizeFetchHeaders(options.headers as any));
 
-    if (this.token) {
-      headers.set('Authorization', `Bearer ${this.token}`);
+    const method = String((options.method || "GET")).toUpperCase()
+
+    if (this.token && !isCredentialHandshake(endpoint, method)) {
+      headers.set("Authorization", `Bearer ${this.token}`)
     }
 
     // Only set Content-Type for non-FormData requests
@@ -90,7 +99,6 @@ class ApiClient {
     // only when the caller didn't supply one. crypto.randomUUID is
     // baseline in Node 18+ / Chrome 92+ / Safari 15.4+; the
     // existence check covers older environments without crashing.
-    const method = String((options.method || 'GET')).toUpperCase();
     const isMutating = method === 'POST' || method === 'PUT' || method === 'PATCH';
     if (isMutating && !headers.has('Idempotency-Key') && !headers.has('idempotency-key')) {
       const cryptoObj = (typeof globalThis !== 'undefined' ? (globalThis as any).crypto : null);
@@ -155,7 +163,11 @@ class ApiClient {
         // 4xx — client error, don't retry (except 401 with refresh)
         if (response.status >= 400 && response.status < 500) {
           // 401 — attempt token refresh once before failing
-          if (response.status === 401 && this.token) {
+          if (
+            response.status === 401 &&
+            this.token &&
+            !isCredentialHandshake(endpoint, method)
+          ) {
             const refreshed = await this._tryRefresh();
             if (refreshed) {
               // Update Authorization header with new token
@@ -1052,6 +1064,9 @@ class ApiClient {
   }
   async testAdminConnection(id: string) {
     return this.request(`/admin/connections/${id}/test`, { method: 'POST' });
+  }
+  async healthCheckAdminConnections() {
+    return this.request('/admin/connections/health-check', { method: 'POST' });
   }
 
   // Payment endpoints

@@ -181,6 +181,27 @@ export default function AdminConnectionsPage() {
     }
   }
 
+  const healthCheckAll = async () => {
+    const t = toast.loading("Probando todas las conexiones…")
+    try {
+      const r: any = await apiClient.healthCheckAdminConnections()
+      toast.dismiss(t)
+      const results = r?.results || {}
+      const healthy = Object.entries(results).filter(([_, v]: any) => v?.healthy).map(([k]) => k)
+      const unhealthy = Object.entries(results).filter(([_, v]: any) => v && !v.healthy && v.reason !== "no_key").map(([k]) => k)
+      const noKey = Object.entries(results).filter(([_, v]: any) => v?.reason === "no_key").map(([k]) => k)
+      const parts: string[] = []
+      if (healthy.length) parts.push(`✓ ${healthy.join(", ")}`)
+      if (unhealthy.length) parts.push(`✗ ${unhealthy.join(", ")}`)
+      if (noKey.length) parts.push(`sin clave: ${noKey.join(", ")}`)
+      toast.success(parts.join(" · ") || "Sin proveedores configurados")
+      load()
+    } catch (e: any) {
+      toast.dismiss(t)
+      toast.error(`Error: ${e?.message || e}`)
+    }
+  }
+
   const removeAllDisabled = async () => {
     if (disabledConnections.length === 0) return
     if (!confirm(`Eliminar ${disabledConnections.length} conexión(es) desactivada(s)? Esta acción no se puede deshacer.`)) return
@@ -211,6 +232,10 @@ export default function AdminConnectionsPage() {
               Eliminar desactivadas ({disabledConnections.length})
             </Button>
           )}
+          <Button variant="outline" onClick={healthCheckAll}>
+            <RefreshCw className="h-4 w-4 mr-2" />
+            Probar todas
+          </Button>
           <Button variant="outline" onClick={load} disabled={loading}>
             <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
             Refrescar

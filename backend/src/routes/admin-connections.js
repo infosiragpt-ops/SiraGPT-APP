@@ -21,7 +21,7 @@ const { body, validationResult } = require('express-validator');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 const prisma = require('../config/database');
 const { encrypt, decrypt } = require('../utils/encryption');
-const { applyAdminConnections } = require('../services/admin-connections-bridge');
+const { applyAdminConnections, reconcileCatalog } = require('../services/admin-connections-bridge');
 
 const router = express.Router();
 router.use(authenticateToken, requireAdmin);
@@ -232,6 +232,20 @@ router.delete('/:id', async (req, res) => {
     if (err.code === 'P2025') return res.status(404).json({ error: 'Connection not found' });
     console.error('[admin-connections] delete failed:', err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── POST /api/admin/connections/health-check ───────────────────────
+// Runs reconcileCatalog: probes every configured provider key, updates
+// AiModel.isActive en masse, and writes lastSyncOk on each row. The
+// panel calls this from the "Probar todas" button.
+router.post('/health-check', async (req, res) => {
+  try {
+    const results = await reconcileCatalog();
+    res.json({ ok: true, results });
+  } catch (err) {
+    console.error('[admin-connections] health-check failed:', err);
+    res.status(500).json({ ok: false, error: err.message });
   }
 });
 
