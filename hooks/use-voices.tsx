@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { apiClient } from '@/lib/api'
+import { devLog } from '@/lib/dev-log'
 
 interface Voice {
   voiceId: string
@@ -26,7 +27,7 @@ const loadVoicesOnce = async () => {
 
   isLoading = true
   try {
-    console.log('Loading voices (one time only)...')
+    devLog('Loading voices (one time only)...')
     const response = await apiClient.getVoices()
     globalVoices = response.voices || []
     hasLoaded = true
@@ -34,7 +35,7 @@ const loadVoicesOnce = async () => {
     // Notify all listeners
     listeners.forEach(listener => listener(globalVoices))
     
-    console.log('Voices loaded successfully:', globalVoices.length)
+    devLog('Voices loaded successfully:', globalVoices.length)
     return globalVoices
   } catch (error) {
     console.error('Failed to load voices:', error)

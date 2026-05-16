@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback } from 'react'
 import { toast } from 'sonner'
 import { getNormalizedApiBaseUrl } from '@/lib/api'
+import { devLog } from '@/lib/dev-log'
 
 interface ReasoningStep {
   text: string
@@ -86,7 +87,7 @@ export const useComputerUse = (): ComputerUseHookReturn => {
         setScreenshot(data.data.finalScreenshot)
         if (data.data.extractedData) {
           setExtractedData(data.data.extractedData)
-          console.log('Extracted data received:', data.data.extractedData)
+          devLog('Extracted data received:', data.data.extractedData)
         }
         if (data.data.finalUrl) {
           setFinalUrl(data.data.finalUrl)
@@ -109,7 +110,7 @@ export const useComputerUse = (): ComputerUseHookReturn => {
 
       case 'extraction-completed':
         // Handle extraction completion broadcast from backend
-        console.log('Extraction completed event received');
+        devLog('Extraction completed event received');
         setTimeout(() => {
           window.dispatchEvent(new CustomEvent('computer-use-extraction-complete', {
             detail: { chatId: data.data.chatId }
@@ -129,7 +130,7 @@ export const useComputerUse = (): ComputerUseHookReturn => {
         break
 
       default:
-        console.log('Unknown message type:', data.type)
+        devLog('Unknown message type:', data.type)
     }
   }, [addReasoningStep])
 
@@ -152,7 +153,7 @@ export const useComputerUse = (): ComputerUseHookReturn => {
 
     const tryConnect = (url: string) => {
       tried++
-      console.log(`Attempting WebSocket connection to ${url}`)
+      devLog(`Attempting WebSocket connection to ${url}`)
       const ws = new WebSocket(url)
       let opened = false
 
@@ -171,7 +172,7 @@ export const useComputerUse = (): ComputerUseHookReturn => {
         if (typeof window !== 'undefined') {
           (window as any).computerUseWebSocket = ws
         }
-        console.log('Computer Use WebSocket connected to', url)
+        devLog('Computer Use WebSocket connected to', url)
         ws.send(JSON.stringify({ type: 'join-session', sessionId, token }))
       }
 
@@ -189,7 +190,7 @@ export const useComputerUse = (): ComputerUseHookReturn => {
         if (!opened && tried < candidateWsUrls.length) {
           tryConnect(candidateWsUrls[tried])
         } else {
-          console.log('Computer Use WebSocket disconnected')
+          devLog('Computer Use WebSocket disconnected')
           if (!connected) {
             toast.error('Unable to connect to Computer Use server. Make sure backend is running on port 5000.')
           }
