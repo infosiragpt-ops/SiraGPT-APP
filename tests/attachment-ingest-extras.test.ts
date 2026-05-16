@@ -292,6 +292,22 @@ describe("extractFromClipboardEvent", () => {
     assert.equal(result.text, "hello world")
     assert.equal(result.files.length, 0)
   })
+
+  it("returns sanitized HTML only when includeHtml=true (opt-in)", () => {
+    const event = {
+      clipboardData: {
+        items: [],
+        files: [],
+        getData: (mime: string) => (mime === "text/html" ? "<p>hi<script>x</script></p>" : ""),
+      },
+    } as any
+    const off = extractFromClipboardEvent(event)
+    assert.equal(off.html, null, "html should be null when includeHtml is unset")
+
+    const on = extractFromClipboardEvent(event, { includeHtml: true })
+    assert.ok(on.html?.includes("<p>"))
+    assert.equal(on.html?.includes("<script"), false, "script tags should be stripped")
+  })
 })
 
 describe("logIngest · SSR + analytics-hook safety", () => {
