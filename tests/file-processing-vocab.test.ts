@@ -72,6 +72,20 @@ test("friendlyFailureLabel is case-insensitive on the prefix match", () => {
   assert.equal(friendlyFailureLabel("RAG_INDEXING: 503 service"), "Error al indexar el documento")
 })
 
+test("friendlyFailureLabel maps db_create_failed prefix", () => {
+  // Previously only exercised indirectly via describeStage('failed'),
+  // now pinned on the raw helper.
+  assert.equal(friendlyFailureLabel("db_create_failed: connection refused"), "No se pudo registrar el archivo")
+  assert.equal(friendlyFailureLabel("DB_CREATE_FAILED: ECONNRESET"),         "No se pudo registrar el archivo")
+})
+
+test("friendlyFailureLabel returns the generic fallback for nullish / whitespace input", () => {
+  assert.equal(friendlyFailureLabel(null),      "Error de procesamiento")
+  assert.equal(friendlyFailureLabel(undefined), "Error de procesamiento")
+  assert.equal(friendlyFailureLabel(""),        "Error de procesamiento")
+  assert.equal(friendlyFailureLabel("   "),     "Error de procesamiento")
+})
+
 test("shouldFireReadyTransition fires on a real non-ready → ready edge", () => {
   assert.equal(shouldFireReadyTransition("uploaded",   "ready"), true)
   assert.equal(shouldFireReadyTransition("validating", "ready"), true)
