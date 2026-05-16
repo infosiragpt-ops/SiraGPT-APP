@@ -10,6 +10,7 @@ import { mergeChatPreservingUserMessages } from "./message-preservation"
 import { toast } from "sonner"
 import { useBackgroundStreams } from "./background-streams-context"
 import { save as savePending, clear as clearPending, retryAll } from "./pending-messages"
+import { devLog } from "./dev-log"
 
 // Helper function to check if error is related to monthly API limit
 const isMonthlyLimitError = (errorMessage: string) => {
@@ -330,13 +331,13 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       const modelsResponse = await apiClient.getAIModels(
         chatType.toString().toUpperCase() as 'TEXT' | 'IMAGE'
       )
-      console.log("modelsResponse", modelsResponse);
+      devLog("modelsResponse", modelsResponse);
 
       setAvailableModels(modelsResponse.models)
 
       // Set default model
       if (modelsResponse.models.length > 0 && !selectedModel) {
-        console.log("SETSELECT MODEL", modelsResponse.models[0]);
+        devLog("default model selected:", modelsResponse.models[0]);
 
         setSelectedModel(modelsResponse.models[0].name)
         setSelectedProivder(modelsResponse.models[0].provider)
@@ -352,23 +353,21 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const loadModelsForType = async () => {
-      // Agar setup hi mukammal nahi hua to kuch na karein
+      // Skip until the initial setup is complete.
       if (!hasInitialized) return;
 
-      console.log(`>>> CHAT TYPE BADAL GAYA! Naye models fetch kar raha hoon: ${chatType.toUpperCase()}`);
+      devLog(`chat type changed, fetching models for: ${chatType.toUpperCase()}`);
 
       try {
         const modelsResponse = await apiClient.getAIModels(
           chatType.toString().toUpperCase() as 'TEXT' | 'IMAGE'
-
-
         );
 
         if (modelsResponse.models && modelsResponse.models.length > 0) {
           setAvailableModels(modelsResponse.models);
-          console.log(`>>> ${modelsResponse.models.length} models load ho gaye.`, modelsResponse.models);
+          devLog(`${modelsResponse.models.length} models loaded.`, modelsResponse.models);
 
-          // Pehla model by default select karein
+          // Select the first model by default.
           setSelectedModel(modelsResponse.models[0].name);
           setSelectedProivder(modelsResponse.models[0].provider);
         } else {
