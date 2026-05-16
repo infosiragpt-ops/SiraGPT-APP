@@ -125,9 +125,9 @@ function PaymentSuccessContent() {
           <CardContent className="pt-6">
             <div className="flex flex-col items-center space-y-4">
               <ThinkingIndicator size="lg" className="text-blue-600" />
-              <h2 className="text-xl font-semibold">Verifying Payment...</h2>
+              <h2 className="text-xl font-semibold">Verificando pago…</h2>
               <p className="text-sm text-muted-foreground text-center">
-                Please wait while we confirm your payment.
+                Espera mientras confirmamos tu pago.
               </p>
             </div>
           </CardContent>
@@ -150,10 +150,10 @@ function PaymentSuccessContent() {
                   <CheckCircle className="h-12 w-12 text-white" />
                 </div>
                 <h1 className="text-4xl font-bold bg-gradient-to-r from-green-600 to-emerald-600 bg-clip-text text-transparent mb-2">
-                  Welcome to {sessionInfo.plan}!
+                  ¡Te damos la bienvenida a {sessionInfo.plan}!
                 </h1>
                 <p className="text-lg text-muted-foreground">
-                  Your subscription has been activated successfully
+                  Tu suscripción se activó correctamente
                 </p>
               </div>
 
@@ -166,25 +166,25 @@ function PaymentSuccessContent() {
                       <div className="flex items-center space-x-3">
                         {currentPlanInfo?.icon && <currentPlanInfo.icon className="h-8 w-8" />}
                         <div>
-                          <CardTitle className="text-2xl">{sessionInfo.plan} Plan</CardTitle>
-                          <p className="text-muted-foreground">Active subscription</p>
+                          <CardTitle className="text-2xl">Plan {sessionInfo.plan}</CardTitle>
+                          <p className="text-muted-foreground">Suscripción activa</p>
                         </div>
                       </div>
                       <Badge className={`${currentPlanInfo?.badge} text-white`}>
-                        Active
+                        Activa
                       </Badge>
                     </div>
                   </CardHeader>
                   <CardContent className="space-y-6">
                     <div className="flex items-center justify-between p-4 bg-muted/50 rounded-lg">
-                      <span className="font-medium">Monthly Limit</span>
+                      <span className="font-medium">Límite mensual</span>
                       <span className="text-lg font-bold">{currentPlanInfo?.limit}</span>
                     </div>
 
                     <div>
                       <h4 className="font-semibold mb-3 flex items-center">
                         <Sparkles className="h-4 w-4 mr-2" />
-                        What's Included
+                        Qué incluye
                       </h4>
                       <div className="space-y-2">
                         {currentPlanInfo?.features.map((feature, index) => (
@@ -200,15 +200,15 @@ function PaymentSuccessContent() {
 
                     <div className="grid grid-cols-2 gap-4 text-sm">
                       <div>
-                        <p className="text-muted-foreground">Amount Paid</p>
+                        <p className="text-muted-foreground">Importe pagado</p>
                         <p className="font-semibold">${sessionInfo.amount}</p>
                       </div>
                       <div>
-                        <p className="text-muted-foreground">Next Billing</p>
+                        <p className="text-muted-foreground">Próximo cobro</p>
                         <p className="font-semibold">
                           {subscriptionInfo?.nextBilling ?
                             new Date(subscriptionInfo.nextBilling).toLocaleDateString() :
-                            'Monthly'
+                            'Mensual'
                           }
                         </p>
                       </div>
@@ -222,13 +222,13 @@ function PaymentSuccessContent() {
                     <CardHeader>
                       <CardTitle className="flex items-center">
                         <ArrowRight className="h-5 w-5 mr-2" />
-                        Get Started
+                        Empezar
                       </CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-4">
                       <Button onClick={handleContinue} className="w-full" size="lg">
                         <Sparkles className="h-4 w-4 mr-2" />
-                        Start Creating with AI
+                        Empezar a crear con IA
                       </Button>
 
                       <div className="grid grid-cols-2 gap-3">
@@ -238,7 +238,7 @@ function PaymentSuccessContent() {
                           className="flex-col h-auto py-4"
                         >
                           <Users className="h-5 w-5 mb-1" />
-                          <span className="text-xs">View Profile</span>
+                          <span className="text-xs">Ver perfil</span>
                         </Button>
 
                         <Button
@@ -247,7 +247,7 @@ function PaymentSuccessContent() {
                           className="flex-col h-auto py-4"
                         >
                           <Crown className="h-5 w-5 mb-1" />
-                          <span className="text-xs">Explore GPTs</span>
+                          <span className="text-xs">Explorar GPTs</span>
                         </Button>
                       </div>
                     </CardContent>
@@ -258,26 +258,26 @@ function PaymentSuccessContent() {
                     <CardHeader>
                       <CardTitle className="flex items-center">
                         <Settings className="h-5 w-5 mr-2" />
-                        Manage Subscription
+                        Gestionar suscripción
                       </CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-3">
                       <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
                         <div className="flex items-center">
                           <Calendar className="h-4 w-4 mr-2 text-muted-foreground" />
-                          <span className="text-sm">Status</span>
+                          <span className="text-sm">Estado</span>
                         </div>
                         <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">
-                          Active
+                          Activa
                         </Badge>
                       </div>
 
                       <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
                         <div className="flex items-center">
                           <CreditCard className="h-4 w-4 mr-2 text-muted-foreground" />
-                          <span className="text-sm">Billing</span>
+                          <span className="text-sm">Facturación</span>
                         </div>
-                        <span className="text-sm font-medium">Monthly</span>
+                        <span className="text-sm font-medium">Mensual</span>
                       </div>
 
                       <Button
@@ -286,7 +286,7 @@ function PaymentSuccessContent() {
                         className="w-full"
                         onClick={() => router.push('/profile?tab=subscription')}
                       >
-                        Manage Billing & Usage
+                        Gestionar facturación y uso
                       </Button>
                     </CardContent>
                   </Card>
@@ -294,19 +294,19 @@ function PaymentSuccessContent() {
                   {/* Payment Receipt */}
                   <Card>
                     <CardHeader>
-                      <CardTitle className="text-sm">Payment Receipt</CardTitle>
+                      <CardTitle className="text-sm">Comprobante de pago</CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-2 text-xs text-muted-foreground">
                       <div className="flex justify-between">
-                        <span>Transaction ID:</span>
+                        <span>ID de transacción:</span>
                         <span className="font-mono">{sessionInfo.sessionId.slice(-8)}</span>
                       </div>
                       <div className="flex justify-between">
-                        <span>Payment Date:</span>
+                        <span>Fecha de pago:</span>
                         <span>{new Date().toLocaleDateString()}</span>
                       </div>
                       <div className="flex justify-between">
-                        <span>Method:</span>
+                        <span>Método:</span>
                         <span>Stripe</span>
                       </div>
                     </CardContent>
@@ -320,27 +320,27 @@ function PaymentSuccessContent() {
               <div className="inline-flex items-center justify-center w-24 h-24 rounded-full bg-gradient-to-br from-red-400 to-red-500 mb-6">
                 <XCircle className="h-12 w-12 text-white" />
               </div>
-              <h1 className="text-3xl font-bold text-red-600 mb-4">Payment Failed</h1>
+              <h1 className="text-3xl font-bold text-red-600 mb-4">Pago fallido</h1>
               <Card>
                 <CardContent className="pt-6">
                   <p className="text-muted-foreground mb-6">
-                    There was an issue processing your payment. Don't worry, you haven't been charged.
+                    Hubo un problema al procesar tu pago. Tranquilo, no se realizó ningún cargo.
                   </p>
                   {!sessionId && (
                     <p className="text-sm text-red-600 mb-6">
-                      No session ID found. This may be an invalid payment link.
+                      No se encontró el ID de sesión. Puede que el enlace de pago no sea válido.
                     </p>
                   )}
                   <div className="space-y-3">
                     <Button onClick={() => router.push('/chat')} className="w-full">
-                      Try Again
+                      Reintentar
                     </Button>
                     <Button
                       variant="outline"
                       onClick={() => router.push('/profile')}
                       className="w-full"
                     >
-                      Go to Profile
+                      Ir al perfil
                     </Button>
                   </div>
                 </CardContent>
