@@ -125,6 +125,24 @@ describe("parseCodeFromContent", () => {
     assert.ok(out.combinedCode && out.combinedCode.includes("<!DOCTYPE html>"))
   })
 
+  it("populates result.files entries with detected filenames + language", () => {
+    const message = "```ts\n// path: src/utils.ts\nexport const x = 1\n```"
+    const out = parseCodeFromContent(message)
+    assert.ok(out.files.length >= 1)
+    const f = out.files[0]
+    assert.equal(f.language, "ts")
+    // The filename should include the path hint somewhere.
+    assert.ok(f.name)
+  })
+
+  it("generates a default filename when no path hint exists", () => {
+    const message = "```python\ndef hi():\n  pass\n```"
+    const out = parseCodeFromContent(message)
+    assert.equal(out.files.length, 1)
+    assert.equal(out.files[0].language, "python")
+    assert.ok(out.files[0].name)
+  })
+
   it("extracts a complete HTML document embedded inside a Python block", () => {
     // Non-web-block path: extractCompleteHtmlFromText pulls a full
     // doc out of a triple-quoted Python string.
