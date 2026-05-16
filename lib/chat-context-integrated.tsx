@@ -1905,7 +1905,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       abortControllerRef.current = null;
       // Revert UI state on failure
       setCurrentChat(prev => prev ? { ...prev, messages: currentChat.messages } : null);
-      toast.error("Failed to regenerate response.");
+      toast.error("No se pudo regenerar la respuesta.");
     }
   }, [currentChat, isLoading, selectProvider, selectedModel, selectChat, setCurrentChat, setIsLoading, setIsStreaming, setCurrentStreamId]);
 
