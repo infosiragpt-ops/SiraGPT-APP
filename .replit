@@ -5,7 +5,7 @@ modules = ["nodejs-20", "postgresql-16"]
 # Express app is expected to run elsewhere (Railway/Fly/Render in
 # production); locally the frontend talks to it via
 # NEXT_PUBLIC_API_URL.
-run = "npm run dev"
+run = "ALLOW_REPLIT_PREVIEW=1 npm run dev -- -H 0.0.0.0 -p 3000"
 entrypoint = "package.json"
 hidden = [".next", "node_modules", ".test-dist", ".playwright-cli", "output", "test-results"]
 

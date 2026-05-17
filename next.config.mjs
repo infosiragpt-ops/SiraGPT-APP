@@ -4,6 +4,10 @@ import createNextIntlPlugin from 'next-intl/plugin'
 // and merges the per-locale message bundle with the English fallback).
 const withNextIntl = createNextIntlPlugin('./lib/i18n/request.ts')
 
+// Replit Preview renders the dev server inside a cross-origin iframe.
+// Keep frame blocking everywhere else, but allow that explicit dev mode.
+const allowReplitPreview = process.env.ALLOW_REPLIT_PREVIEW === '1'
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   // Standalone output produces a self-contained build at .next/standalone/
@@ -41,10 +45,12 @@ const nextConfig = {
       {
         source: '/(.*)',
         headers: [
-          {
-            key: 'X-Frame-Options',
-            value: 'DENY',
-          },
+          ...(allowReplitPreview ? [] : [
+            {
+              key: 'X-Frame-Options',
+              value: 'DENY',
+            },
+          ]),
           {
             key: 'X-Content-Type-Options',
             value: 'nosniff',
