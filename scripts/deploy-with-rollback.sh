@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# ──────────────────────────────────────────────────────────────
+# siraGPT — Production Deploy with Auto-Rollback
+# ──────────────────────────────────────────────────────────────
+# Wraps scripts/deploy-production.sh. Captures the current HEAD
+# before deploying so that if the deploy fails (build error,
+# /health timeout, OAuth redirect mismatch, etc.) we revert the
+# working tree, rebuild the frontend, and restart PM2 to the
+# previous known-good commit BEFORE returning a non-zero exit.
+#
+# The DB is dumped first via backup-db.sh — non-destructive
+# (pg_dump + gzip), gives us a restore point if a future
+# migration corrupts data. Failure to back up does NOT block
+# the deploy (logged but tolerated) because requiring it would
+# turn a transient pg_dump glitch into an outage trigger.
+#
+# Exit codes:
+#   0 — deploy succeeded and is live
+#   1 — deploy failed, rollback succeeded, prod restored
+#   2 — deploy failed AND rollback failed (manual intervention)
+# ──────────────────────────────────────────────────────────────
+
+set -Eeuo pipefail
+
+APP_DIR="${APP_DIR:-/root/siraNew/siraGPT}"
+COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
+FRONTEND_SERVICE="${FRONTEND_SERVICE:-frontend}"
+PM2_APP="${PM2_APP:-sira-api-backend}"
+API_HEALTH_URL="${API_HEALTH_URL:-https://api.siragpt.com/health}"
+BACKUP_DIR="${BACKUP_DIR:-/root/siragpt-backups/postgres}"
+
+log() { printf '[deploy-with-rollback] %s\n' "$*"; }
+err() { printf '[deploy-with-rollback] ERROR: %s\n' "$*" >&2; }
+
+cd "$APP_DIR"
+
+PREV_SHA="$(git rev-parse HEAD)"
+log "Pre-deploy SHA: ${PREV_SHA}"
+
+# Pre-deploy DB backup. Non-fatal — we want a snapshot in case
+# the new code introduces a destructive migration, but a flaky
+# pg_dump shouldn't take down the deploy itself.
+if [[ -x scripts/backup-db.sh ]]; then
+  log "Running pre-deploy DB backup to ${BACKUP_DIR}"
+  if ! scripts/backup-db.sh "${BACKUP_DIR}"; then
+    err "Backup failed but continuing (backup is non-fatal). Investigate post-deploy."
+  fi
+else
+  err "scripts/backup-db.sh not found or not executable — skipping pre-deploy backup"
+fi
+
+# Run the deploy. If it succeeds, we're done.
+if scripts/deploy-production.sh; then
+  log "✅ Deploy successful at $(git rev-parse --short HEAD)"
+  exit 0
+fi
+
+# ─── Rollback path ────────────────────────────────────────────
+DEPLOY_EXIT=$?
+err "Deploy failed (exit ${DEPLOY_EXIT}). Rolling back to ${PREV_SHA}"
+
+# 1. Reset working tree to the pre-deploy commit.
+if ! git reset --hard "${PREV_SHA}"; then
+  err "git reset --hard ${PREV_SHA} FAILED — manual intervention required"
+  exit 2
+fi
+
+# 2. Rebuild + restart frontend from the rolled-back code.
+if ! docker compose -f "${COMPOSE_FILE}" build "${FRONTEND_SERVICE}"; then
+  err "Frontend rebuild during rollback FAILED — manual intervention required"
+  exit 2
+fi
+if ! docker compose -f "${COMPOSE_FILE}" up -d --no-deps "${FRONTEND_SERVICE}"; then
+  err "Frontend restart during rollback FAILED — manual intervention required"
+  exit 2
+fi
+
+# 3. Restart backend PM2 process so it re-reads any env changes.
+if ! pm2 restart "${PM2_APP}" --update-env; then
+  err "PM2 restart during rollback FAILED — manual intervention required"
+  exit 2
+fi
+
+# 4. Verify the rolled-back stack is healthy.
+sleep 5
+for i in $(seq 1 20); do
+  if curl -sSf -o /dev/null "${API_HEALTH_URL}"; then
+    log "✅ Rollback successful — production restored to ${PREV_SHA:0:7}"
+    exit 1   # deploy itself failed, signal that to the caller
+  fi
+  sleep 2
+done
+
+err "🔥 ROLLBACK HEALTH CHECK FAILED — manual intervention required"
+err "Working tree is at ${PREV_SHA} but ${API_HEALTH_URL} is not responding"
+exit 2
