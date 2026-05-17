@@ -479,9 +479,6 @@ export function classifyIntentFastPath(prompt: string): ChatIntent | null {
 
 // Enhanced AI Service
 export class AIService {
-  private apiKey: string = process.env.NEXT_PUBLIC_OPENAI_API_KEY || ""
-
-
   async analyzeIntent(prompt: string): Promise<ChatIntent> {
     return classifyIntentFastPath(prompt) || 'text'
   }
