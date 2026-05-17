@@ -54,6 +54,12 @@ services:
     command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
     volumes:
       - redis_data:/data
+    # Bound to 127.0.0.1 only — the backend runs on the host under PM2
+    # (not in this compose), so it reaches Redis via localhost:6379.
+    # Internal Docker network access still works for any future
+    # in-compose service.
+    ports:
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
