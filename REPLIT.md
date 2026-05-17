@@ -7,7 +7,19 @@ Replit URL: **https://replit.com/@JorgeCarrera4/SiraGPT-Enhancer**
 
 ---
 
-## 🚀 First-time copy into Replit (paste-and-run)
+## 🚀 First-time copy into Replit — pick the path that suits you
+
+### Path A — one-click browser import (easiest, 10 seconds)
+
+While signed into Replit, open:
+
+> **<https://replit.com/github/SiraGPT-ORg/siraGPT>**
+
+Replit imports the repo, reads `.replit` + `replit.nix`, and shows the
+**Run** button. Click it and the dev server boots. No terminal commands
+needed.
+
+### Path B — paste-and-run inside the Replit terminal
 
 Open the Replit terminal (`~/workspace$`) and paste **this one line**:
 
@@ -16,14 +28,18 @@ curl -fsSL https://raw.githubusercontent.com/SiraGPT-ORg/siraGPT/main/scripts/re
 ```
 
 It runs `git clone`-equivalent + `npm ci` + `prisma generate`, seeds
-`.env` from `.env.example`, and prints the next steps. After it
-finishes the file tree appears in the IDE and the **Run** button
-executes the Next.js dev server.
+`.env` from `.env.example`, and prints the next steps. Equivalent to
+Path A but driven from a shell.
 
-If you prefer the IDE button: **Replit IDE → Version Control →
-Connect with Git → paste `https://github.com/SiraGPT-ORg/siraGPT`**.
-That works too but takes you through several screens; the one-liner
-is the same thing in one step.
+### Path C — let me push from my machine
+
+If you'd rather not touch Replit at all, share a Replit
+personal-access token (from
+<https://replit.com/account#personal-access-tokens>, Read+Write scope).
+Then I can run `git remote add replit <token-url>` and
+`./scripts/push-all.sh main` from this terminal — code lands in your
+repl with zero clicks on your end. The token only stays in this
+session and never gets committed.
 
 ---
 
