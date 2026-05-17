@@ -1,0 +1,84 @@
+name: Emergency · diagnose+fix backend
+
+# Manual recovery tool. Captures recent backend logs, optionally
+# removes REDIS_URL from .env if the redis-session change is crashing
+# the process, and restarts PM2. The whole thing is idempotent and
+# never touches the database or git state.
+on:
+  workflow_dispatch:
+    inputs:
+      remove_redis_url:
+        description: 'Strip REDIS_URL from .env before restart (rollback redis-session change)'
+        type: boolean
+        default: true
+
+concurrency:
+  group: emergency-fix
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    name: SSH · diagnose + optional rollback
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+
+    steps:
+      - name: Run diagnosis on VPS
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          timeout: 60s
+          command_timeout: 5m
+          script_stop: false
+          script: |
+            set +e
+            cd /root/siraNew/siraGPT
+
+            echo "=== PM2 list ==="
+            pm2 list | grep -E "name|sira-api"
+
+            echo ""
+            echo "=== Last 60 lines of error log ==="
+            tail -60 /root/.pm2/logs/sira-api-backend-error.log
+
+            echo ""
+            echo "=== Last 40 lines of stdout ==="
+            tail -40 /root/.pm2/logs/sira-api-backend-out.log
+
+            echo ""
+            echo "=== REDIS_URL currently in .env? ==="
+            grep -c '^REDIS_URL=' .env || true
+
+            if [[ "${{ inputs.remove_redis_url }}" == "true" ]]; then
+              echo ""
+              echo "=== Removing REDIS_URL from .env (rollback) ==="
+              sed -i '/^REDIS_URL=/d' .env
+              sed -i '/^# Added by setup-redis-prod.sh/d' .env
+              echo "REDIS_URL count after removal:"
+              grep -c '^REDIS_URL=' .env || echo "0 (removed)"
+
+              echo ""
+              echo "=== Restarting PM2 backend ==="
+              pm2 restart sira-api-backend --update-env
+
+              echo ""
+              echo "=== Wait 5s and poll /health ==="
+              sleep 5
+              for i in $(seq 1 20); do
+                if curl -sSf -o /dev/null https://api.siragpt.com/health; then
+                  echo "✓ Backend healthy after ${i}s"
+                  echo "--- /health body ---"
+                  curl -s https://api.siragpt.com/health | head -c 400
+                  echo ""
+                  exit 0
+                fi
+                sleep 2
+              done
+              echo "✗ Backend STILL unhealthy after 40s"
+              echo "--- newer error log ---"
+              tail -30 /root/.pm2/logs/sira-api-backend-error.log
+              exit 1
+            fi
