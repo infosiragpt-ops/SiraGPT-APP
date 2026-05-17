@@ -30,6 +30,13 @@ err() { printf '[setup-redis-prod] ERROR: %s\n' "$*" >&2; }
 
 cd "${APP_DIR}"
 
+# 0. Install backend deps. connect-redis lives in backend/package.json but
+# deploy-production.sh historically skipped `npm install`, so the dep is
+# not on disk yet. Adding it here guards the script against a stale
+# node_modules tree.
+log "Installing backend production deps (idempotent)…"
+(cd backend && npm install --omit=dev --no-audit --no-fund)
+
 # 1. Recreate Redis container with new port mapping. Volume is preserved.
 log "Recreating redis container (volume preserved)…"
 docker compose -f "${COMPOSE_FILE}" up -d --no-deps --force-recreate redis

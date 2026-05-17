@@ -83,6 +83,16 @@ log "Updating $BRANCH from origin"
 git fetch origin "$BRANCH"
 git pull --ff-only origin "$BRANCH"
 
+# Backend deps. The backend runs under PM2 on the host (not inside
+# Docker), so new dependencies in backend/package.json aren't picked up
+# unless we install them here. Without this step, adding a runtime dep
+# (e.g. connect-redis) causes the backend to crash-loop on next restart
+# with MODULE_NOT_FOUND. `npm install --omit=dev` is used (not `npm ci`)
+# because the project historically allows lockfile drift; switch to
+# `npm ci --omit=dev` once that's been audited.
+log "Installing backend production dependencies"
+(cd backend && npm install --omit=dev --no-audit --no-fund)
+
 log "Building frontend Docker image with NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL"
 docker compose -f "$COMPOSE_FILE" build "$FRONTEND_SERVICE"
 
