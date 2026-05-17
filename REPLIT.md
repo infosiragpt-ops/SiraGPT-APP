@@ -7,12 +7,33 @@ Replit URL: **https://replit.com/@JorgeCarrera4/SiraGPT-Enhancer**
 
 ---
 
+## 🚀 First-time copy into Replit (paste-and-run)
+
+Open the Replit terminal (`~/workspace$`) and paste **this one line**:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/SiraGPT-ORg/siraGPT/main/scripts/replit-bootstrap.sh | bash
+```
+
+It runs `git clone`-equivalent + `npm ci` + `prisma generate`, seeds
+`.env` from `.env.example`, and prints the next steps. After it
+finishes the file tree appears in the IDE and the **Run** button
+executes the Next.js dev server.
+
+If you prefer the IDE button: **Replit IDE → Version Control →
+Connect with Git → paste `https://github.com/SiraGPT-ORg/siraGPT`**.
+That works too but takes you through several screens; the one-liner
+is the same thing in one step.
+
+---
+
 ## What's wired up
 
 | File                                | Purpose                                                                |
 | ----------------------------------- | ---------------------------------------------------------------------- |
 | `.replit`                           | Tells Replit which language modules to load and which command to run.  |
 | `replit.nix`                        | System dependencies (Node 20, Tesseract for OCR, libvips for `sharp`). |
+| `scripts/replit-bootstrap.sh`       | The one-liner above. Clones from GitHub + `npm ci` + Prisma + seeds .env. |
 | `scripts/push-all.sh`               | Local helper: pushes the current branch to **GitHub + Replit** in parallel. |
 | `.github/workflows/replit-sync.yml` | CI mirror — every commit on `main` is force-pushed to Replit.          |
 
