@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1422**.
+Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1423**.
 
 > Re-run with `npm run licenses:report` after every dependency change. CI enforces that no GPL/AGPL/LGPL/CDDL/EPL/MPL-1.1/NPOSL family appears via `npm run licenses:check`.
 
@@ -408,7 +408,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `yargs-parser` | 21.1.1 | ISC | [link](https://github.com/yargs/yargs-parser) |
 | `zod-to-json-schema` | 3.25.2 | ISC | [link](https://github.com/StefanTerdell/zod-to-json-schema) |
 
-## MIT (1066)
+## MIT (1067)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -803,6 +803,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `concat-map` | 0.0.1 | MIT | [link](https://github.com/substack/node-concat-map) |
 | `concat-stream` | 2.0.0 | MIT | [link](https://github.com/maxogden/concat-stream) |
 | `confbox` | 0.1.8, 0.2.4 | MIT | [link](https://github.com/unjs/confbox) |
+| `connect-redis` | 7.1.1 | MIT | [link](https://github.com/tj/connect-redis) |
 | `consola` | 3.4.2 | MIT | [link](https://github.com/unjs/consola) |
 | `content-disposition` | 0.5.4, 1.1.0 | MIT | [link](https://github.com/jshttp/content-disposition) |
 | `content-type` | 1.0.5 | MIT | [link](https://github.com/jshttp/content-type) |
