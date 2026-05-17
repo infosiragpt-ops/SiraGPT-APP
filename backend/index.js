@@ -318,13 +318,29 @@ app.use(cookieParser());
 // BigInt serialization middleware
 app.use(bigintSerializerMiddleware);
 
-// Session configuration for Google OAuth
-app.use(session({
+// Session configuration for Google OAuth. With REDIS_URL set, sessions
+// persist across PM2 restarts and survive multi-instance scaling.
+// Without it, fall back to the in-process memory store (dev/CI only —
+// in prod this drops every user's session on each backend reload).
+const sessionConfig = {
     secret: process.env.SESSION_SECRET || 'your-session-secret',
     resave: false,
     saveUninitialized: false,
-    cookie: { secure: process.env.NODE_ENV === 'production' }
-}));
+    cookie: { secure: process.env.NODE_ENV === 'production' },
+};
+if (process.env.REDIS_URL) {
+    const RedisStore = require('connect-redis').default;
+    const Redis = require('ioredis');
+    const redisClient = new Redis(process.env.REDIS_URL, {
+        maxRetriesPerRequest: 3,
+        enableReadyCheck: true,
+    });
+    redisClient.on('error', (err) => {
+        console.error('[session-store] Redis error:', err.message);
+    });
+    sessionConfig.store = new RedisStore({ client: redisClient, prefix: 'siragpt:sess:' });
+}
+app.use(session(sessionConfig));
 
 // Passport middleware
 app.use(passport.initialize());

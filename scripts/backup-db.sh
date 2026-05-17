@@ -20,6 +20,19 @@
 
 set -euo pipefail
 
+# Source the project .env if present so POSTGRES_USER / POSTGRES_PASSWORD
+# / POSTGRES_DB pick up the deployed values. Without this, the defaults
+# below fell back to user "postgres" which doesn't exist on the VPS —
+# its Postgres container was initialised with user "myuser".
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+if [[ -f "${PROJECT_ROOT}/.env" ]]; then
+    set -a
+    # shellcheck disable=SC1091
+    source "${PROJECT_ROOT}/.env"
+    set +a
+fi
+
 # ─── Config ─────────────────────────────────────────────────
 BACKUP_DIR="${1:-./backups/postgres}"
 RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-30}"
