@@ -1,0 +1,36 @@
+modules = ["nodejs-20", "postgresql-16"]
+
+# Default `Run` button: starts the Next.js dev server on Replit's
+# external port (mapped from localhost:3000 below). The backend
+# Express app is expected to run elsewhere (Railway/Fly/Render in
+# production); locally the frontend talks to it via
+# NEXT_PUBLIC_API_URL.
+run = "npm run dev"
+entrypoint = "package.json"
+hidden = [".next", "node_modules", ".test-dist", ".playwright-cli", "output", "test-results"]
+
+[nix]
+channel = "stable-25_05"
+
+[deployment]
+deploymentTarget = "cloudrun"
+build = "npm run build"
+run = "npm start"
+
+[[ports]]
+localPort = 3000
+externalPort = 80
+
+[[ports]]
+localPort = 5000
+externalPort = 5000
+
+[gitHubImport]
+requiredFiles = [".replit", "replit.nix", "package.json"]
+
+[languages.typescript]
+pattern = "**/{*.ts,*.tsx}"
+syntax = "typescript"
+
+[unitTest]
+language = "nodejs"
