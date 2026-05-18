@@ -949,6 +949,35 @@ function getVisualMediaManifests() {
       scopes: ["files.write"],
       data_classes: ["public","internal"],
     },
+    create_raci_matrix: {
+      name: "create_raci_matrix",
+      purpose: "Generate a RACI (Responsible/Accountable/Consulted/Informed) responsibility assignment matrix as an SVG with tasks as rows and roles/people as columns. Use for project governance, hand-off planning, role clarification, or any task-vs-stakeholder mapping.",
+      inputs: {
+        type: "object", required: ["title","roles","rows"],
+        properties: {
+          title: { type: "string" },
+          subtitle: { type: "string" },
+          roles: { type: "array", items: { type: "string" }, description: "2-8 role/person column headers." },
+          rows: { type: "array", items: { type: "object" }, description: "1-20 rows: { task, assignments: ['R'|'A'|'C'|'I'|'', ...] (one per role, in order)." },
+          theme: { type: "string", enum: ["professional","modern","minimal","corporate"] },
+        },
+      },
+      outputs: { type: "object", properties: { ok: { type: "boolean" }, downloadUrl: { type: "string" }, id: { type: "string" }, filename: { type: "string" }, roles: { type: "integer" }, rows: { type: "integer" }, tally: { type: "object" } } },
+      allowed_formats: ["svg"],
+      forbidden_formats: [],
+      expected_errors: [
+        { code: "empty_roles", description: "roles array is empty.", repair_hint: "Provide at least one role column." },
+        { code: "empty_rows", description: "rows array is empty.", repair_hint: "Provide at least one task row." },
+      ],
+      acceptance_tests: ["returns ok:true for a 3-role x 4-row RACI grid with at least one R+A pair"],
+      usage_limits: { timeout_ms_default: 15000, timeout_ms_max: 60000, max_calls_per_task: 5, requires_auth: false, requires_network: false },
+      examples_positive: [{ when: "user wants a deploy pipeline RACI", call: { title: "Deploy Pipeline", roles: ["DevOps","Eng","PM","Security"], rows: [{ task: "Approve release", assignments: ["I","C","A","C"] }, { task: "Run smoke tests", assignments: ["R","R","I",""] }] } }],
+      examples_negative: [{ when: "user wants a priority/triage view of tasks", why: "use create_eisenhower_matrix for urgency x importance instead." }],
+      recovery_policy: { on_timeout: "Return ok:false.", on_error: "Surface the error.", max_retries: 1 },
+      side_effect_level: "local-fs",
+      scopes: ["files.write"],
+      data_classes: ["public","internal"],
+    },
     create_eisenhower_matrix: {
       name: "create_eisenhower_matrix",
       purpose: "Generate an Eisenhower urgency/importance matrix as a 2x2 SVG (Do / Schedule / Delegate / Eliminate). Use for task prioritization, sprint triage, executive decision queues, or any urgent-vs-important categorisation.",
@@ -1110,6 +1139,125 @@ function getDocIntelManifests() {
 // Add visual media manifests to the built-in collection at startup
 Object.assign(BUILTIN_MANIFESTS, getVisualMediaManifests());
 Object.assign(BUILTIN_MANIFESTS, getDocIntelManifests());
+Object.assign(BUILTIN_MANIFESTS, getCoworkManifests());
+
+function getCoworkManifests() {
+  return {
+    deep_analyze: {
+      name: "deep_analyze",
+      purpose: "Deep professional document analysis: domain detection, entity extraction, risk assessment, quality scoring, structure mapping, auto-tagging.",
+      inputs: {
+        type: "object",
+        required: ["text"],
+        properties: {
+          text: { type: "string", description: "Document text to analyze." },
+          fileName: { type: "string", description: "Filename hint." },
+          mimeType: { type: "string", description: "MIME type hint." },
+        },
+      },
+      outputs: { type: "object", properties: { ok: { type: "boolean" }, domain: { type: "object" }, quality: { type: "object" }, risks: { type: "object" } } },
+      allowed_formats: [],
+      forbidden_formats: [],
+      expected_errors: [
+        { code: "empty_text", description: "text parameter is empty.", repair_hint: "Provide non-empty text." },
+      ],
+      acceptance_tests: ["returns ok:true with domain, quality, risks for any non-empty text"],
+      usage_limits: { timeout_ms_default: 15000, timeout_ms_max: 60000, max_calls_per_task: 10, requires_auth: true, requires_network: false },
+      examples_positive: [{ when: "user uploads a legal contract", call: { text: "Contrato de...", fileName: "contrato.pdf" } }],
+      examples_negative: [{ when: "user wants basic text extraction", why: "use docintel_analyze for structural extraction." }],
+      recovery_policy: { on_timeout: "Return ok:false.", on_error: "Surface the error.", max_retries: 1 },
+      side_effect_level: "none",
+      sandbox_required: false,
+      audit_policy: "every-call",
+      scopes: ["files.read"],
+      data_classes: ["internal", "confidential"],
+    },
+    auto_file: {
+      name: "auto_file",
+      purpose: "Auto-ingest pasted/dropped content as a virtual document with format detection, RAG indexing, and deep analysis.",
+      inputs: {
+        type: "object",
+        required: ["content"],
+        properties: {
+          content: { type: "string", description: "Content to auto-file." },
+          fileName: { type: "string", description: "Filename override." },
+        },
+      },
+      outputs: { type: "object", properties: { ok: { type: "boolean" }, autoFiled: { type: "boolean" }, fileId: { type: "string" } } },
+      allowed_formats: [],
+      forbidden_formats: [],
+      expected_errors: [
+        { code: "too_short", description: "Content below 200 chars.", repair_hint: "Provide longer content." },
+      ],
+      acceptance_tests: ["returns autoFiled:true for structured content >= 200 chars"],
+      usage_limits: { timeout_ms_default: 30000, timeout_ms_max: 120000, max_calls_per_task: 15, requires_auth: true, requires_network: false },
+      examples_positive: [{ when: "user pastes a JSON dataset", call: { content: '{"items":[1,2,3]}...' } }],
+      examples_negative: [{ when: "user sends a short chat message", why: "short messages don't need auto-filing." }],
+      recovery_policy: { on_timeout: "Return ok:false.", on_error: "Surface the error.", max_retries: 0 },
+      side_effect_level: "local-fs",
+      sandbox_required: false,
+      audit_policy: "every-call",
+      scopes: ["files.write", "rag.write"],
+      data_classes: ["internal"],
+    },
+    memory_recall: {
+      name: "memory_recall",
+      purpose: "Recall facts from active memory (long-term + short-term) by relevance query.",
+      inputs: {
+        type: "object",
+        required: ["query"],
+        properties: {
+          query: { type: "string", description: "Search query." },
+          limit: { type: "integer", minimum: 1, maximum: 20 },
+        },
+      },
+      outputs: { type: "object", properties: { ok: { type: "boolean" }, facts: { type: "array" } } },
+      allowed_formats: [],
+      forbidden_formats: [],
+      expected_errors: [
+        { code: "no_query", description: "query parameter is empty.", repair_hint: "Provide a search query." },
+      ],
+      acceptance_tests: ["returns ok:true with facts[] (possibly empty) for authenticated user"],
+      usage_limits: { timeout_ms_default: 2000, timeout_ms_max: 10000, max_calls_per_task: 20, requires_auth: true, requires_network: false },
+      examples_positive: [{ when: "agent needs user preferences", call: { query: "programming language preference" } }],
+      examples_negative: [{ when: "user asks about document content", why: "use rag_retrieve or docintel_retrieve instead." }],
+      recovery_policy: { on_timeout: "Return ok:false.", on_error: "Surface the error.", max_retries: 0 },
+      side_effect_level: "none",
+      sandbox_required: false,
+      audit_policy: "every-call",
+      scopes: ["memory.read"],
+      data_classes: ["internal"],
+    },
+    compare_documents: {
+      name: "compare_documents",
+      purpose: "Compare 2+ documents for shared entities, contradictions, complementary insights, cross-references, alignment scoring.",
+      inputs: {
+        type: "object",
+        required: ["documents"],
+        properties: {
+          documents: { type: "array", items: { type: "object", properties: { id: { type: "string" }, name: { type: "string" }, text: { type: "string" } } } },
+          query: { type: "string", description: "Focus area for comparison." },
+        },
+      },
+      outputs: { type: "object", properties: { ok: { type: "boolean" }, contradictions: { type: "array" }, alignmentScore: { type: "number" } } },
+      allowed_formats: [],
+      forbidden_formats: [],
+      expected_errors: [
+        { code: "too_few_docs", description: "Less than 2 documents provided.", repair_hint: "Provide at least 2 documents." },
+      ],
+      acceptance_tests: ["returns ok:true with comparison results for 2+ documents"],
+      usage_limits: { timeout_ms_default: 30000, timeout_ms_max: 120000, max_calls_per_task: 5, requires_auth: true, requires_network: false },
+      examples_positive: [{ when: "user asks to compare two contracts", call: { documents: [{ id: "a", text: "..." }, { id: "b", text: "..." }] } }],
+      examples_negative: [{ when: "user asks about a single document", why: "use deep_analyze or docintel_analyze." }],
+      recovery_policy: { on_timeout: "Return ok:false.", on_error: "Surface the error.", max_retries: 1 },
+      side_effect_level: "none",
+      sandbox_required: false,
+      audit_policy: "every-call",
+      scopes: ["files.read"],
+      data_classes: ["internal", "confidential"],
+    },
+  };
+}
 
 /**
  * Validate every built-in manifest against the schema. Runs once

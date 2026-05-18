@@ -3183,6 +3183,219 @@ const createEisenhowerMatrix = {
   },
 };
 
+// ─────────────────────────────────────────────────────────────────────────
+// Tool 14: create_raci_matrix
+// ─────────────────────────────────────────────────────────────────────────
+
+const createRaciMatrix = {
+  name: 'create_raci_matrix',
+  description: 'Generate a RACI Responsibility Assignment Matrix as an SVG file: tasks (rows) × roles/people (columns), with each cell marked R (Responsible), A (Accountable), C (Consulted), I (Informed), or blank. Use for project governance, role clarification, hand-off planning, or any task-vs-stakeholder responsibility map.',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string', description: 'Matrix title (e.g. "Deploy Pipeline RACI").' },
+      subtitle: { type: 'string', description: 'Optional context line (e.g. team, project, period).' },
+      roles: { type: 'array', items: { type: 'string' }, description: 'Column headers — roles or people (2-8 items).' },
+      rows: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            task: { type: 'string', description: 'Task / activity / deliverable.' },
+            assignments: {
+              type: 'array',
+              items: { type: 'string', enum: ['R', 'A', 'C', 'I', 'r', 'a', 'c', 'i', ''] },
+              description: 'One assignment letter per role (R/A/C/I or empty), in the same order as roles[].',
+            },
+          },
+          required: ['task', 'assignments'],
+        },
+        description: '1-20 task rows.',
+      },
+      theme: { type: 'string', enum: ['professional', 'modern', 'minimal', 'corporate'], description: 'Visual theme. Default: "professional".' },
+    },
+    required: ['title', 'roles', 'rows'],
+    additionalProperties: false,
+  },
+  async execute({ title, subtitle = '', roles = [], rows = [], theme = 'professional' }, ctx = {}) {
+    emitEvent(ctx, 'tool_call', { tool: 'create_raci_matrix', preview: title });
+
+    try {
+      if (!Array.isArray(roles) || roles.length === 0) {
+        return { ok: false, error: 'roles array is empty' };
+      }
+      if (!Array.isArray(rows) || rows.length === 0) {
+        return { ok: false, error: 'rows array is empty' };
+      }
+
+      const themes = {
+        professional: {
+          bg: '#FAFBFC', card: '#FFFFFF', text: '#1E293B', muted: '#64748B', border: '#E2E8F0', accent: '#2563EB', altRow: '#F8FAFC', taskCol: '#F1F5F9',
+          R: { fill: '#10B981', label: '#FFFFFF' },
+          A: { fill: '#2563EB', label: '#FFFFFF' },
+          C: { fill: '#F59E0B', label: '#FFFFFF' },
+          I: { fill: '#94A3B8', label: '#FFFFFF' },
+        },
+        modern: {
+          bg: '#0B1121', card: '#1E293B', text: '#F1F5F9', muted: '#94A3B8', border: '#334155', accent: '#818CF8', altRow: '#162033', taskCol: '#0F172A',
+          R: { fill: '#34D399', label: '#0F172A' },
+          A: { fill: '#60A5FA', label: '#0F172A' },
+          C: { fill: '#FBBF24', label: '#0F172A' },
+          I: { fill: '#94A3B8', label: '#0F172A' },
+        },
+        minimal: {
+          bg: '#FFFFFF', card: '#FFFFFF', text: '#0F172A', muted: '#64748B', border: '#CBD5E1', accent: '#0F172A', altRow: '#F8FAFC', taskCol: '#F1F5F9',
+          R: { fill: '#0F172A', label: '#FFFFFF' },
+          A: { fill: '#475569', label: '#FFFFFF' },
+          C: { fill: '#94A3B8', label: '#FFFFFF' },
+          I: { fill: '#CBD5E1', label: '#0F172A' },
+        },
+        corporate: {
+          bg: '#F8FAFC', card: '#FFFFFF', text: '#0F172A', muted: '#475569', border: '#CBD5E1', accent: '#1E40AF', altRow: '#F1F5F9', taskCol: '#E8F0FE',
+          R: { fill: '#0F9D58', label: '#FFFFFF' },
+          A: { fill: '#1A73E8', label: '#FFFFFF' },
+          C: { fill: '#F9AB00', label: '#FFFFFF' },
+          I: { fill: '#5F6368', label: '#FFFFFF' },
+        },
+      };
+      const t = themes[theme] || themes.professional;
+
+      const safeTitle = xmlEscape(String(title).slice(0, 120));
+      const safeSubtitle = xmlEscape(String(subtitle || '').slice(0, 140));
+      // Caps prevent absurd outputs while keeping the canonical use cases.
+      const roleList = roles.slice(0, 8).map(r => xmlEscape(String(r || '').slice(0, 24)));
+      const rowList = rows.slice(0, 20);
+
+      const taskColW = 240;
+      const roleColW = Math.max(70, Math.min(120, 720 / Math.max(roleList.length, 1)));
+      const rowH = 40;
+      const headerH = safeSubtitle ? 108 : 86;
+      const colHeaderH = 56;
+      const legendH = 36;
+      const pad = 24;
+      const W = pad * 2 + taskColW + roleList.length * roleColW;
+      const H = headerH + pad + colHeaderH + rowList.length * rowH + legendH + pad + 12;
+
+      // Count assignment types for the result summary
+      const tally = { R: 0, A: 0, C: 0, I: 0 };
+
+      let body = `<rect width="${W}" height="${H}" fill="${t.bg}" rx="12"/>`;
+      body += `<rect x="0" y="0" width="${W}" height="${headerH}" fill="${t.accent}"/>`;
+      body += `<text x="${W / 2}" y="40" text-anchor="middle" font-family="Georgia, serif" font-size="22" font-weight="bold" fill="#fff">${safeTitle}</text>`;
+      body += `<text x="${W / 2}" y="62" text-anchor="middle" font-family="Arial" font-size="12" fill="#fff" opacity="0.85">${roleList.length} roles · ${rowList.length} tareas</text>`;
+      if (safeSubtitle) {
+        body += `<text x="${W / 2}" y="86" text-anchor="middle" font-family="Arial" font-size="13" fill="#fff" opacity="0.92">${safeSubtitle}</text>`;
+      }
+
+      // Column headers
+      const tableY = headerH + pad;
+      const tableX = pad;
+      body += `<rect x="${tableX}" y="${tableY}" width="${taskColW}" height="${colHeaderH}" fill="${t.taskCol}" stroke="${t.border}" stroke-width="1" rx="8"/>`;
+      body += `<text x="${tableX + 16}" y="${tableY + colHeaderH / 2 + 5}" font-family="Arial" font-size="13" font-weight="bold" fill="${t.muted}">TAREA / ACTIVIDAD</text>`;
+
+      roleList.forEach((role, ri) => {
+        const rx = tableX + taskColW + ri * roleColW;
+        body += `<rect x="${rx}" y="${tableY}" width="${roleColW}" height="${colHeaderH}" fill="${t.card}" stroke="${t.border}" stroke-width="1" rx="8"/>`;
+        body += `<text x="${rx + roleColW / 2}" y="${tableY + colHeaderH / 2 + 5}" text-anchor="middle" font-family="Arial" font-size="13" font-weight="bold" fill="${t.text}">${role}</text>`;
+      });
+
+      // Rows
+      rowList.forEach((row, idx) => {
+        const ry = tableY + colHeaderH + idx * rowH;
+        const isAlt = idx % 2 === 1;
+        const rowBg = isAlt ? t.altRow : t.card;
+        const safeTask = xmlEscape(String(row.task || '').slice(0, 64));
+        // Task cell
+        body += `<rect x="${tableX}" y="${ry}" width="${taskColW}" height="${rowH}" fill="${rowBg}" stroke="${t.border}" stroke-width="0.5"/>`;
+        body += `<text x="${tableX + 16}" y="${ry + rowH / 2 + 5}" font-family="Arial" font-size="13" font-weight="600" fill="${t.text}">${safeTask}</text>`;
+        // Assignment cells
+        const assignments = Array.isArray(row.assignments) ? row.assignments : [];
+        roleList.forEach((_, ri) => {
+          const rx = tableX + taskColW + ri * roleColW;
+          body += `<rect x="${rx}" y="${ry}" width="${roleColW}" height="${rowH}" fill="${rowBg}" stroke="${t.border}" stroke-width="0.5"/>`;
+          const raw = String(assignments[ri] || '').trim().toUpperCase();
+          if (raw === 'R' || raw === 'A' || raw === 'C' || raw === 'I') {
+            const pal = t[raw];
+            tally[raw] += 1;
+            const cx = rx + roleColW / 2;
+            const cy = ry + rowH / 2;
+            // Pill background — slightly smaller than cell to feel breathable
+            body += `<rect x="${cx - 14}" y="${cy - 12}" width="28" height="24" rx="12" fill="${pal.fill}"/>`;
+            body += `<text x="${cx}" y="${cy + 5}" text-anchor="middle" font-family="Arial" font-size="14" font-weight="bold" fill="${pal.label}">${raw}</text>`;
+          }
+          // empty cell: nothing to draw beyond the cell background
+        });
+      });
+
+      // Outer table border
+      const tableH = colHeaderH + rowList.length * rowH;
+      body += `<rect x="${tableX}" y="${tableY}" width="${taskColW + roleList.length * roleColW}" height="${tableH}" fill="none" stroke="${t.border}" stroke-width="1" rx="8"/>`;
+
+      // Legend strip
+      const legendY = tableY + tableH + 8;
+      const legendEntries = [
+        { k: 'R', label: 'Responsible — ejecuta' },
+        { k: 'A', label: 'Accountable — responde por el resultado' },
+        { k: 'C', label: 'Consulted — aporta input' },
+        { k: 'I', label: 'Informed — se le informa' },
+      ];
+      let lx = tableX;
+      legendEntries.forEach((entry) => {
+        const pal = t[entry.k];
+        body += `<rect x="${lx}" y="${legendY}" width="22" height="22" rx="11" fill="${pal.fill}"/>`;
+        body += `<text x="${lx + 11}" y="${legendY + 16}" text-anchor="middle" font-family="Arial" font-size="12" font-weight="bold" fill="${pal.label}">${entry.k}</text>`;
+        body += `<text x="${lx + 30}" y="${legendY + 16}" font-family="Arial" font-size="11" fill="${t.muted}">${xmlEscape(entry.label)}</text>`;
+        lx += 30 + entry.label.length * 5.8 + 14;
+      });
+
+      const svg = svgDocument({
+        width: W,
+        height: H,
+        title: safeTitle,
+        description: `RACI matrix: ${safeTitle}`,
+        body,
+      });
+
+      const buffer = Buffer.from(svg, 'utf8');
+      const filename = `raci_${crypto.randomBytes(4).toString('hex')}.svg`;
+      const artifact = finalizeArtifact({ filename, buffer, mime: EXTENSION_TO_MIME.svg, ctx });
+
+      emitEvent(ctx, 'file_artifact', {
+        artifact: {
+          id: artifact.id,
+          filename: artifact.filename,
+          format: 'svg',
+          mime: 'image/svg+xml',
+          sizeBytes: artifact.sizeBytes,
+          downloadUrl: artifact.downloadUrl,
+        },
+      });
+
+      emitEvent(ctx, 'tool_output', {
+        tool: 'create_raci_matrix',
+        ok: true,
+        preview: `RACI listo: ${artifact.filename} (${roleList.length}×${rowList.length}, R:${tally.R} A:${tally.A} C:${tally.C} I:${tally.I}, ${Math.round(artifact.sizeBytes / 1024)} KB)`,
+      });
+
+      return {
+        ok: true,
+        id: artifact.id,
+        filename: artifact.filename,
+        sizeBytes: artifact.sizeBytes,
+        downloadUrl: artifact.downloadUrl,
+        title,
+        roles: roleList.length,
+        rows: rowList.length,
+        tally,
+      };
+    } catch (err) {
+      const msg = err?.message || String(err);
+      emitEvent(ctx, 'tool_output', { tool: 'create_raci_matrix', ok: false, preview: `Error: ${msg}` });
+      return { ok: false, error: msg };
+    }
+  },
+};
+
 // ── All visual/media tools for the agent ──────────────────────────────
 
 const VISUAL_MEDIA_TOOLS = [
@@ -3199,6 +3412,7 @@ const VISUAL_MEDIA_TOOLS = [
   createProcessFlow,
   createSwotAnalysis,
   createEisenhowerMatrix,
+  createRaciMatrix,
 ];
 
 // Internal helpers exposed for unit testing — NOT part of the public agent

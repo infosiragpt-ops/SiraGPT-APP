@@ -653,8 +653,8 @@ test('create_dashboard_html: no charts', async () => {
 
 // ── Tool metadata ────────────────────────────────────────────────
 
-test('all 13 tools have valid metadata', () => {
-  assert.equal(VISUAL_MEDIA_TOOLS.length, 13);
+test('all 14 tools have valid metadata', () => {
+  assert.equal(VISUAL_MEDIA_TOOLS.length, 14);
   for (const t of VISUAL_MEDIA_TOOLS) {
     assert.ok(t.name);
     assert.ok(t.description);
@@ -1090,6 +1090,161 @@ test('create_eisenhower_matrix: layout — Schedule top-left, Do top-right, Elim
   assert.ok(idxSched > 0 && idxDo > idxSched, 'Schedule (top-left) drawn before Do (top-right)');
   assert.ok(idxDo > 0 && idxElim > idxDo, 'Do (top-right) drawn before Eliminate (bottom-left)');
   assert.ok(idxElim > 0 && idxDel > idxElim, 'Eliminate (bottom-left) drawn before Delegate (bottom-right)');
+});
+
+// ── create_raci_matrix ───────────────────────────────────────────
+
+test('create_raci_matrix: standard 4-role × 3-task grid', async () => {
+  const rm = tool('create_raci_matrix');
+  assert.ok(rm);
+  const r = await rm.execute({
+    title: 'Deploy Pipeline RACI',
+    subtitle: 'SiraGPT — 2026 Q2',
+    roles: ['DevOps', 'Engineering', 'PM', 'Security'],
+    rows: [
+      { task: 'Approve release', assignments: ['I', 'C', 'A', 'C'] },
+      { task: 'Run smoke tests', assignments: ['R', 'R', 'I', ''] },
+      { task: 'Sign-off compliance', assignments: ['', 'I', 'C', 'A'] },
+    ],
+    theme: 'professional',
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.ok(r.filename?.endsWith('.svg'));
+  assert.equal(r.roles, 4);
+  assert.equal(r.rows, 3);
+  // Tally counts: R=2, A=2, C=3, I=3
+  assert.equal(r.tally.R, 2);
+  assert.equal(r.tally.A, 2);
+  assert.equal(r.tally.C, 3);
+  assert.equal(r.tally.I, 3);
+  const fp = assertArtifact(r);
+  const c = fs.readFileSync(fp, 'utf8');
+  assert.ok(c.startsWith('<svg'));
+  assert.ok(c.includes('Deploy Pipeline RACI'));
+  assert.ok(c.includes('SiraGPT'));
+  assert.ok(c.includes('DevOps'));
+  assert.ok(c.includes('Approve release'));
+  assert.ok(c.includes('TAREA / ACTIVIDAD'));
+  // Legend rendered
+  assert.ok(c.includes('Responsible'));
+  assert.ok(c.includes('Accountable'));
+  assert.ok(c.includes('Consulted'));
+  assert.ok(c.includes('Informed'));
+});
+
+test('create_raci_matrix: empty roles fails', async () => {
+  const r = await tool('create_raci_matrix').execute({
+    title: 'No roles',
+    roles: [],
+    rows: [{ task: 'x', assignments: [] }],
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /roles.*empty/i);
+});
+
+test('create_raci_matrix: empty rows fails', async () => {
+  const r = await tool('create_raci_matrix').execute({
+    title: 'No rows',
+    roles: ['A', 'B'],
+    rows: [],
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /rows.*empty/i);
+});
+
+test('create_raci_matrix: lowercase r/a/c/i normalises to uppercase', async () => {
+  const r = await tool('create_raci_matrix').execute({
+    title: 'Case norm',
+    roles: ['X', 'Y'],
+    rows: [{ task: 't1', assignments: ['r', 'a'] }],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.tally.R, 1);
+  assert.equal(r.tally.A, 1);
+});
+
+test('create_raci_matrix: invalid assignment letters render as blank', async () => {
+  const r = await tool('create_raci_matrix').execute({
+    title: 'Bad letters',
+    roles: ['X', 'Y', 'Z'],
+    rows: [{ task: 't', assignments: ['R', 'Z', 'X'] }],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  // Only R counts; Z and X are not valid RACI letters and stay blank.
+  assert.equal(r.tally.R, 1);
+  assert.equal(r.tally.A, 0);
+  assert.equal(r.tally.C, 0);
+  assert.equal(r.tally.I, 0);
+});
+
+test('create_raci_matrix: caps roles at 8 and rows at 20', async () => {
+  const r = await tool('create_raci_matrix').execute({
+    title: 'Caps',
+    roles: Array.from({ length: 12 }, (_, i) => `Role ${i + 1}`),
+    rows: Array.from({ length: 30 }, (_, i) => ({ task: `Task ${i + 1}`, assignments: ['R', 'A', 'C', 'I'] })),
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.roles, 8, 'roles capped at 8');
+  assert.equal(r.rows, 20, 'rows capped at 20');
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.includes('Role 8'));
+  assert.equal(svg.includes('Role 9'), false);
+  assert.ok(svg.includes('Task 20'));
+  assert.equal(svg.includes('Task 21'), false);
+});
+
+test('create_raci_matrix: xml-escapes role and task content', async () => {
+  const r = await tool('create_raci_matrix').execute({
+    title: 'XSS guard',
+    roles: ['<script>evil</script>', 'Safe'],
+    rows: [{ task: '"injected" task', assignments: ['R', 'A'] }],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.equal(svg.includes('<script>evil</script>'), false);
+  assert.ok(svg.includes('&lt;script&gt;'));
+  assert.ok(svg.includes('&quot;injected&quot;'));
+});
+
+test('create_raci_matrix: supports all four themes', async () => {
+  for (const theme of ['professional', 'modern', 'minimal', 'corporate']) {
+    const r = await tool('create_raci_matrix').execute({
+      title: `Theme ${theme}`,
+      roles: ['A', 'B'],
+      rows: [{ task: 't', assignments: ['R', 'A'] }],
+      theme,
+    }, fakeCtx());
+    assert.equal(r.ok, true, `theme ${theme} should succeed`);
+    const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+    assert.ok(svg.startsWith('<svg'));
+  }
+});
+
+test('create_raci_matrix: emits tool_call and file_artifact events', async () => {
+  const ctx = fakeCtx();
+  await tool('create_raci_matrix').execute({
+    title: 'Events',
+    roles: ['A'],
+    rows: [{ task: 't', assignments: ['R'] }],
+  }, ctx);
+  const types = ctx._events.map(e => e.type);
+  assert.ok(types.includes('tool_call'));
+  assert.ok(types.includes('file_artifact'));
+  assert.ok(types.includes('tool_output'));
+});
+
+test('create_raci_matrix: mismatched assignment-array length is tolerated (extra cells blank)', async () => {
+  const r = await tool('create_raci_matrix').execute({
+    title: 'Short assignments',
+    roles: ['A', 'B', 'C', 'D'],
+    // Only 2 of 4 assignments provided — the other 2 columns should render as blank cells.
+    rows: [{ task: 't', assignments: ['R', 'A'] }],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.tally.R, 1);
+  assert.equal(r.tally.A, 1);
+  assert.equal(r.tally.C, 0);
+  assert.equal(r.tally.I, 0);
 });
 
 // ── Cleanup ──────────────────────────────────────────────────────
