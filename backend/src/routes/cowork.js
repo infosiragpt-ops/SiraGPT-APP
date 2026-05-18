@@ -9,8 +9,13 @@ const activeMemory = require('../services/active-memory');
 const sessionManager = require('../services/session-manager');
 const skillsRegistry = require('../services/skills-registry');
 const coworkEngine = require('../services/cowork-engine');
+const coworkHealth = require('../services/cowork-health');
+const { createProgressStream, writeSSE, STAGES } = require('../services/cowork-progress-stream');
+const { rateLimitMiddleware, getEndpointLimiter } = require('../services/rate-limiter');
 
 const router = express.Router();
+
+const coworkRateLimit = rateLimitMiddleware({ windowMs: 60000, maxRequests: 30 });
 
 router.post('/auto-file', authenticateToken, async (req, res) => {
   try {
@@ -343,7 +348,7 @@ router.get('/skills/recommend', optionalAuth, (req, res) => {
   }
 });
 
-router.post('/enrich', authenticateToken, async (req, res) => {
+router.post('/enrich', authenticateToken, coworkRateLimit, async (req, res) => {
   try {
     const { content, chatId, model } = req.body;
     if (!content || typeof content !== 'string') {
@@ -357,6 +362,101 @@ router.post('/enrich', authenticateToken, async (req, res) => {
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/health', optionalAuth, async (req, res) => {
+  try {
+    const userId = req.user?.id || null;
+    const report = await coworkHealth.runFullHealthCheck(userId);
+    const status = report.ok ? 200 : report.status === 'degraded' ? 200 : 503;
+    res.status(status).json(report);
+  } catch (err) {
+    res.status(503).json({ status: 'unhealthy', error: err.message });
+  }
+});
+
+router.get('/health/ready', async (req, res) => {
+  try {
+    const report = await coworkHealth.runReadinessCheck();
+    res.status(report.ok ? 200 : 503).json(report);
+  } catch (err) {
+    res.status(503).json({ status: 'not_ready', error: err.message });
+  }
+});
+
+router.get('/health/live', (req, res) => {
+  const report = coworkHealth.runLivenessCheck();
+  res.json(report);
+});
+
+router.post('/analyze-stream', authenticateToken, coworkRateLimit, async (req, res) => {
+  try {
+    const { text, fileName, mimeType } = req.body;
+    if (!text || typeof text !== 'string') {
+      return res.status(400).json({ error: 'text is required' });
+    }
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+
+    const userId = req.user.id;
+    const progress = createProgressStream();
+    writeSSE(res, progress);
+    progress.start();
+
+    try {
+      progress.advance(STAGES.DETECTING_FORMAT, { format: autoFileBridge.detectContentType(text).format });
+
+      progress.advance(STAGES.ANALYZING_DOMAIN);
+      const domain = deepDocumentAnalyzer.detectDomain(text, fileName || '', mimeType || '');
+
+      progress.advance(STAGES.EXTRACTING_ENTITIES);
+      const entities = deepDocumentAnalyzer.extractEntities(text);
+
+      progress.advance(STAGES.ASSESSING_RISKS, { entityCount: entities.length });
+      const risks = deepDocumentAnalyzer.assessRisks(text, domain.primary, entities);
+
+      progress.advance(STAGES.COMPUTING_QUALITY);
+      const quality = deepDocumentAnalyzer.computeQualityMetrics(text, domain.primary, entities, risks);
+
+      progress.advance(STAGES.BUILDING_STRUCTURE);
+      const structure = deepDocumentAnalyzer.extractStructure(text);
+
+      progress.advance(STAGES.FINALIZING);
+
+      const result = {
+        ok: true,
+        domain,
+        entities: entities.map(e => ({
+          type: e.type,
+          value: e.sensitivity === 'critical' ? e.redacted : e.value,
+          sensitivity: e.sensitivity,
+        })),
+        piiSummary: {
+          total: entities.length,
+          critical: entities.filter(e => e.sensitivity === 'critical').length,
+          high: entities.filter(e => e.sensitivity === 'high').length,
+        },
+        risks,
+        quality,
+        structure,
+        autoTags: deepDocumentAnalyzer.generateAutoTags(text, domain, entities, []),
+        summary: deepDocumentAnalyzer.buildAnalysisSummary
+          ? `Domain: ${domain.primary} | Quality: ${quality.grade} (${quality.overall}/100) | Risk: ${risks.severity}`
+          : '',
+      };
+
+      progress.complete(result);
+    } catch (analysisErr) {
+      progress.fail(analysisErr.message);
+    }
+  } catch (err) {
+    if (!res.headersSent) {
+      res.status(500).json({ error: err.message });
+    }
   }
 });
 

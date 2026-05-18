@@ -1193,6 +1193,207 @@ const docintelCompare = {
   },
 };
 
+// ─── Cowork Agent Tools ──────────────────────────────────────────────────
+
+let _deepDocAnalyzer;
+function getDeepDocAnalyzer() {
+  if (!_deepDocAnalyzer) _deepDocAnalyzer = require('../deep-document-analyzer');
+  return _deepDocAnalyzer;
+}
+
+let _autoFileBridge;
+function getAutoFileBridge() {
+  if (!_autoFileBridge) _autoFileBridge = require('../auto-file-bridge');
+  return _autoFileBridge;
+}
+
+let _activeMemory;
+function getActiveMemory() {
+  if (!_activeMemory) _activeMemory = require('../active-memory');
+  return _activeMemory;
+}
+
+let _comparisonEngine;
+function getComparisonEngine() {
+  if (!_comparisonEngine) _comparisonEngine = require('../document-comparison-engine');
+  return _comparisonEngine;
+}
+
+const deepAnalyze = {
+  name: 'deep_analyze',
+  description: 'Perform deep professional document analysis: domain detection (legal/financial/academic/medical/technical/business), entity extraction (PII, money, dates, IPs), risk assessment, quality scoring (A-F grade), structure mapping, auto-tagging. Use for professional-grade document analysis beyond basic text extraction.',
+  parameters: {
+    type: 'object',
+    properties: {
+      text: { type: 'string', description: 'Document text to analyze.' },
+      fileName: { type: 'string', description: 'Optional filename for domain hints.' },
+      mimeType: { type: 'string', description: 'Optional MIME type.' },
+    },
+    required: ['text'],
+    additionalProperties: false,
+  },
+  async execute({ text, fileName = '', mimeType = '' } = {}, ctx = {}) {
+    if (!text || typeof text !== 'string') {
+      return { ok: false, error: 'deep_analyze requires non-empty "text"' };
+    }
+    ctx.onEvent?.({ type: 'tool_call', tool: 'deep_analyze', preview: previewText(text, 120) });
+    try {
+      const analyzer = getDeepDocAnalyzer();
+      const result = await analyzer.analyzeDeep(text, {
+        userId: ctx.userId,
+        fileName,
+        mimeType,
+      });
+      ctx.onEvent?.({ type: 'tool_output', tool: 'deep_analyze', ok: true, preview: `Domain: ${result.domain.primary}, Quality: ${result.quality.grade}, Risk: ${result.risks.severity}` });
+      return {
+        ok: true,
+        domain: result.domain,
+        quality: result.quality,
+        risks: result.risks,
+        piiSummary: result.piiSummary,
+        structure: result.structure,
+        keyPhrases: result.keyPhrases.slice(0, 10),
+        autoTags: result.autoTags,
+        summary: result.summary,
+        _preview: `Domain: ${result.domain.primary} | Quality: ${result.quality.grade} (${result.quality.overall}/100) | Risk: ${result.risks.severity} | PII: ${result.piiSummary.total}`,
+      };
+    } catch (err) {
+      ctx.onEvent?.({ type: 'tool_output', tool: 'deep_analyze', ok: false, preview: `Error: ${err.message}` });
+      return { ok: false, error: err.message };
+    }
+  },
+};
+
+const autoFile = {
+  name: 'auto_file',
+  description: 'Automatically ingest pasted/dropped content as a virtual document with format detection, RAG indexing, and deep analysis. Use when the user pastes code, data, logs, JSON, CSV, or any structured content that should be treated as a document.',
+  parameters: {
+    type: 'object',
+    properties: {
+      content: { type: 'string', description: 'Content to auto-file.' },
+      fileName: { type: 'string', description: 'Optional filename override.' },
+    },
+    required: ['content'],
+    additionalProperties: false,
+  },
+  async execute({ content, fileName } = {}, ctx = {}) {
+    if (!content || typeof content !== 'string') {
+      return { ok: false, error: 'auto_file requires non-empty "content"' };
+    }
+    const bridge = getAutoFileBridge();
+    if (!bridge.shouldAutoFile(content)) {
+      return { ok: false, error: 'Content too short or too long for auto-filing', _preview: 'Content not eligible for auto-filing' };
+    }
+    ctx.onEvent?.({ type: 'tool_call', tool: 'auto_file', preview: `${content.length} chars` });
+    try {
+      const result = await bridge.ingestPastedContent(ctx.userId, content, { fileName });
+      ctx.onEvent?.({ type: 'tool_output', tool: 'auto_file', ok: result.autoFiled, preview: result.autoFiled ? `Filed as ${result.fileName}` : 'Auto-file failed' });
+      return result;
+    } catch (err) {
+      ctx.onEvent?.({ type: 'tool_output', tool: 'auto_file', ok: false, preview: `Error: ${err.message}` });
+      return { ok: false, error: err.message };
+    }
+  },
+};
+
+const memoryRecall = {
+  name: 'memory_recall',
+  description: 'Recall facts from the active memory system. Searches long-term and short-term memory by relevance. Use when you need user preferences, past context, or persistent facts about the user.',
+  parameters: {
+    type: 'object',
+    properties: {
+      query: { type: 'string', description: 'Search query for memory recall.' },
+      limit: { type: 'integer', minimum: 1, maximum: 20, description: 'Max results.' },
+    },
+    required: ['query'],
+    additionalProperties: false,
+  },
+  async execute({ query, limit } = {}, ctx = {}) {
+    if (!query || typeof query !== 'string') {
+      return { ok: false, error: 'memory_recall requires a "query"' };
+    }
+    const safeLimit = clampInt(limit, { min: 1, max: 20, defaultValue: 5 });
+    ctx.onEvent?.({ type: 'tool_call', tool: 'memory_recall', preview: previewText(query, 120) });
+    try {
+      const memory = getActiveMemory();
+      const results = memory.recall(ctx.userId, query, { limit: safeLimit });
+      ctx.onEvent?.({ type: 'tool_output', tool: 'memory_recall', ok: true, preview: `${results.length} memory match(es)` });
+      return {
+        ok: true,
+        facts: results.map(r => ({
+          fact: r.fact,
+          tier: r.tier,
+          category: r.category,
+          strength: r.strength,
+          score: r.score,
+        })),
+        _preview: `${results.length} memory fact(s) recalled`,
+      };
+    } catch (err) {
+      ctx.onEvent?.({ type: 'tool_output', tool: 'memory_recall', ok: false, preview: `Error: ${err.message}` });
+      return { ok: false, error: err.message };
+    }
+  },
+};
+
+const compareDocuments = {
+  name: 'compare_documents',
+  description: 'Compare 2+ documents for shared entities, contradictions, complementary insights, and cross-references. Returns alignment score, comparison matrix, and synthesis. Use when the user asks comparar, diferencias, similitudes between multiple documents.',
+  parameters: {
+    type: 'object',
+    properties: {
+      documents: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            name: { type: 'string' },
+            text: { type: 'string' },
+          },
+        },
+        description: 'Array of documents with id, name, text fields.',
+      },
+      query: { type: 'string', description: 'Optional focus area for comparison.' },
+    },
+    required: ['documents'],
+    additionalProperties: false,
+  },
+  async execute({ documents = [], query = '' } = {}, ctx = {}) {
+    if (!Array.isArray(documents) || documents.length < 2) {
+      return { ok: false, error: 'compare_documents requires at least 2 documents' };
+    }
+    ctx.onEvent?.({ type: 'tool_call', tool: 'compare_documents', preview: `${documents.length} docs` });
+    try {
+      const engine = getComparisonEngine();
+
+      const enrichedDocs = await Promise.all(documents.map(async doc => {
+        if (doc.entities || doc.domain || doc.quality) return doc;
+        try {
+          const analyzer = getDeepDocAnalyzer();
+          const analysis = await analyzer.analyzeDeep(doc.text || '', {
+            userId: ctx.userId,
+            fileName: doc.name,
+          });
+          return { ...doc, entities: analysis.entities, domain: analysis.domain.primary, quality: analysis.quality, structure: analysis.structure, risks: analysis.risks };
+        } catch (_e) {
+          return doc;
+        }
+      }));
+
+      const result = engine.compareDocuments(enrichedDocs, { query });
+      ctx.onEvent?.({ type: 'tool_output', tool: 'compare_documents', ok: result.ok, preview: `${result.contradictions?.length || 0} contradictions, alignment ${Math.round((result.alignmentScore || 0) * 100)}%` });
+      return {
+        ...result,
+        _preview: `${documents.length} docs compared | ${result.contradictions?.length || 0} contradictions | alignment: ${Math.round((result.alignmentScore || 0) * 100)}%`,
+      };
+    } catch (err) {
+      ctx.onEvent?.({ type: 'tool_output', tool: 'compare_documents', ok: false, preview: `Error: ${err.message}` });
+      return { ok: false, error: err.message };
+    }
+  },
+};
+
 // ─── Tool 6: verify_artifact (self-supervision) ─────────────────────────
 //
 // Reads an artifact the agent just created back from disk and returns
@@ -1519,6 +1720,10 @@ function buildTaskTools() {
     docintelRetrieve,
     docintelExtractTables,
     docintelCompare,
+    deepAnalyze,
+    autoFile,
+    memoryRecall,
+    compareDocuments,
     verifyArtifact,
     runTests,
     // Visual & media generation tools
@@ -1574,6 +1779,10 @@ module.exports = {
     docintelRetrieve,
     docintelExtractTables,
     docintelCompare,
+    deepAnalyze,
+    autoFile,
+    memoryRecall,
+    compareDocuments,
     verifyArtifact,
     runTests,
     previewText,

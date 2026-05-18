@@ -444,6 +444,7 @@ module.exports = {
   assessRisks,
   computeQualityMetrics,
   generateAutoTags,
+  buildAnalysisSummary,
   DOMAIN_RULES,
   ENTITY_PATTERNS,
 };

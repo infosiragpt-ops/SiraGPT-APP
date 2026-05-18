@@ -1,351 +1,329 @@
 'use strict';
 
-/**
- * document-comparison-engine.js
- * ─────────────────────────────────────────────────────────────────────────────
- * Synthesises a "cross-document analysis" block from 2+ attached files so the
- * model receives explicit signal about how the documents relate to each other
- * BEFORE it tries to reason about them. This is the layer that makes the chat
- * feel like a real research assistant when the user drops a folder of related
- * files (contracts to compare, multiple CVs, a quarter's worth of invoices).
- *
- * Sits next to document-insights-engine.js: that engine works per-document and
- * aggregates raw signals, this engine works ACROSS documents and surfaces
- * comparisons. Both run from buildEnrichedFileContext().
- *
- * Public API:
- *   compareDocuments(files)             → ComparisonReport
- *   renderComparisonBlock(report, opts) → markdown string
- *
- * Constraints (same envelope as document-professional-analyzer):
- *  - Pure function, deterministic, no LLM call, no network.
- *  - <40 ms for 10 files × 100 KB on a warm V8.
- *  - Resilient: tolerates empty / malformed file entries; returns null when
- *    fewer than two files have extractable text.
- *  - Token budget: rendered block stays under ~3 KB even for many files.
- */
+const crypto = require('crypto');
 
-const insightsEngine = require('./document-insights-engine');
+function compareDocuments(documents, opts = {}) {
+  if (!Array.isArray(documents) || documents.length < 2) {
+    return { ok: false, error: 'At least two documents required' };
+  }
 
-const MAX_FILES_COMPARED = 20;
-const MAX_SHARED_ENTITIES = 15;
-const MAX_UNIQUE_ENTITIES_PER_DOC = 6;
-const MAX_TIMELINE_ENTRIES = 12;
-const MAX_NUMERIC_CONFLICTS = 8;
-const SCAN_HEAD_BYTES = 24_000;
+  const focus = opts.query || opts.focus || '';
+  const focusTerms = focus.toLowerCase().split(/\s+/).filter(Boolean);
 
-function safeText(value) {
-  return typeof value === 'string' ? value : '';
-}
+  const analyses = documents.map(doc => ({
+    id: doc.id || doc.fileId,
+    name: doc.name || doc.originalName || 'Document',
+    text: doc.text || doc.extractedText || '',
+    mimeType: doc.mimeType || '',
+    entities: doc.entities || [],
+    domain: doc.domain || 'general',
+    quality: doc.quality || {},
+    structure: doc.structure || {},
+    risks: doc.risks || {},
+  }));
 
-function tokenize(text) {
-  // Lowercase alphanumerics, length ≥ 4 — keeps content tokens, drops noise.
-  return (text.toLowerCase().match(/[\p{L}\p{N}]{4,}/gu) || []);
-}
+  const sharedEntities = findSharedEntities(analyses);
+  const contradictions = findContradictions(analyses, focusTerms);
+  const complementary = findComplementary(analyses);
+  const differences = findStructuralDifferences(analyses);
+  const crossReferences = findCrossReferences(analyses);
+  const alignmentScore = computeAlignment(analyses);
 
-function toSet(values) {
-  return new Set(values.map((v) => v.toLowerCase()));
-}
+  const comparisonMatrix = buildComparisonMatrix(analyses, focusTerms);
 
-function intersect(a, b) {
-  const out = [];
-  for (const v of a) if (b.has(v.toLowerCase())) out.push(v);
-  return out;
-}
+  const synthesis = buildSynthesis(analyses, {
+    sharedEntities,
+    contradictions,
+    complementary,
+    alignmentScore,
+  });
 
-function difference(a, b) {
-  const out = [];
-  for (const v of a) if (!b.has(v.toLowerCase())) out.push(v);
-  return out;
-}
-
-/**
- * Jaccard similarity over content tokens (length ≥ 4, lowercased).
- * 0..1. Symmetric. Returns 0 when both sets are empty.
- */
-function jaccardSimilarity(textA, textB) {
-  const a = new Set(tokenize(textA.slice(0, SCAN_HEAD_BYTES)));
-  const b = new Set(tokenize(textB.slice(0, SCAN_HEAD_BYTES)));
-  if (a.size === 0 && b.size === 0) return 0;
-  let inter = 0;
-  for (const t of a) if (b.has(t)) inter += 1;
-  const union = a.size + b.size - inter;
-  return union === 0 ? 0 : Number((inter / union).toFixed(4));
-}
-
-/**
- * Compare two documents and return a per-pair summary.
- */
-function comparePair(fileA, fileB) {
   return {
-    a: fileA.label,
-    b: fileB.label,
-    similarity: jaccardSimilarity(fileA.text, fileB.text),
-    sharedPersons: intersect(fileA.insights.entities.persons, toSet(fileB.insights.entities.persons)).slice(0, 6),
-    sharedOrgs: intersect(fileA.insights.entities.organizations, toSet(fileB.insights.entities.organizations)).slice(0, 6),
-    sharedDates: intersect(fileA.insights.dates.absolute, toSet(fileB.insights.dates.absolute)).slice(0, 6),
+    ok: true,
+    documentCount: analyses.length,
+    documents: analyses.map(a => ({
+      id: a.id,
+      name: a.name,
+      domain: a.domain,
+      qualityGrade: a.quality?.grade || 'N/A',
+      riskLevel: a.risks?.severity || 'unknown',
+    })),
+    sharedEntities,
+    contradictions,
+    complementary,
+    differences,
+    crossReferences,
+    alignmentScore,
+    comparisonMatrix,
+    synthesis,
   };
 }
 
-/**
- * Aggregate shared/unique entities across the whole file set.
- */
-function aggregateEntities(perFile) {
-  const tally = (key) => {
-    const counts = new Map();
-    for (const f of perFile) {
-      const seenInFile = new Set();
-      for (const v of f.insights.entities[key] || []) {
-        const k = v.toLowerCase();
-        if (seenInFile.has(k)) continue;
-        seenInFile.add(k);
-        const entry = counts.get(k) || { value: v, files: 0 };
-        entry.files += 1;
-        counts.set(k, entry);
+function findSharedEntities(analyses) {
+  const entityMap = new Map();
+
+  for (const doc of analyses) {
+    const docEntities = (doc.entities || []).map(e =>
+      typeof e === 'object' ? { type: e.type, value: e.value || e.redacted } : { type: 'unknown', value: String(e) }
+    );
+    for (const ent of docEntities) {
+      const key = `${ent.type}::${String(ent.value).toLowerCase()}`;
+      if (!entityMap.has(key)) {
+        entityMap.set(key, { type: ent.type, value: ent.value, documents: [] });
+      }
+      entityMap.get(key).documents.push(doc.id || doc.name);
+    }
+  }
+
+  return [...entityMap.values()]
+    .filter(e => e.documents.length >= 2 && new Set(e.documents).size >= 2)
+    .map(e => ({
+      type: e.type,
+      value: e.value,
+      documentCount: new Set(e.documents).size,
+      documents: [...new Set(e.documents)],
+    }))
+    .sort((a, b) => b.documentCount - a.documentCount)
+    .slice(0, 30);
+}
+
+function findContradictions(analyses, focusTerms) {
+  const contradictions = [];
+
+  const moneyEntities = analyses.flatMap(doc =>
+    (doc.entities || [])
+      .filter(e => e.type === 'money')
+      .map(e => ({ docId: doc.id, docName: doc.name, value: e.value }))
+  );
+
+  const moneyByContext = new Map();
+  for (const me of moneyEntities) {
+    const normalized = String(me.value).replace(/[,\s]/g, '').toLowerCase();
+    if (!moneyByContext.has(normalized)) moneyByContext.set(normalized, []);
+    moneyByContext.get(normalized).push(me);
+  }
+
+  const numericValues = analyses.flatMap(doc => {
+    const matches = (doc.text || '').matchAll(/\$?([\d,]+(?:\.\d{1,2})?)\s*(?:USD|EUR|MXN|COP|ARS|GBP)?/gi);
+    return [...matches].map(m => ({
+      docId: doc.id,
+      docName: doc.name,
+      raw: m[0],
+      numeric: parseFloat(m[1].replace(/,/g, '')),
+    }));
+  });
+
+  const dateEntities = analyses.flatMap(doc =>
+    (doc.entities || [])
+      .filter(e => e.type === 'date')
+      .map(e => ({ docId: doc.id, docName: doc.name, value: e.value }))
+  );
+
+  const sameFactDifferentValues = [];
+  for (const [key, entries] of moneyByContext) {
+    if (entries.length > 1) {
+      const uniqueDocs = new Set(entries.map(e => e.docId));
+      if (uniqueDocs.size > 1) {
+        sameFactDifferentValues.push({
+          type: 'monetary_discrepancy',
+          description: `Different monetary references for similar amounts across documents`,
+          documents: entries.map(e => ({ docId: e.docId, docName: e.docName, value: e.value })),
+          severity: 'high',
+        });
       }
     }
-    return Array.from(counts.values()).sort((x, y) => y.files - x.files);
-  };
-
-  const persons = tally('persons');
-  const orgs = tally('organizations');
-
-  const shared = {
-    persons: persons.filter((e) => e.files >= 2).slice(0, MAX_SHARED_ENTITIES).map((e) => ({ name: e.value, fileCount: e.files })),
-    organizations: orgs.filter((e) => e.files >= 2).slice(0, MAX_SHARED_ENTITIES).map((e) => ({ name: e.value, fileCount: e.files })),
-  };
-
-  // "Unique to file" — entity appears in only one file across the set.
-  const uniqueByFile = perFile.map((f) => {
-    const personSet = new Set(persons.filter((e) => e.files === 1).map((e) => e.value.toLowerCase()));
-    const orgSet = new Set(orgs.filter((e) => e.files === 1).map((e) => e.value.toLowerCase()));
-    return {
-      file: f.label,
-      uniquePersons: (f.insights.entities.persons || []).filter((p) => personSet.has(p.toLowerCase())).slice(0, MAX_UNIQUE_ENTITIES_PER_DOC),
-      uniqueOrgs: (f.insights.entities.organizations || []).filter((o) => orgSet.has(o.toLowerCase())).slice(0, MAX_UNIQUE_ENTITIES_PER_DOC),
-    };
-  });
-
-  return { shared, uniqueByFile };
-}
-
-/**
- * Build a chronological timeline merging the absolute dates of every file.
- * Each entry: { date, file }. Sorted ascending by date string (ISO sorts
- * naturally). Other formats are coerced via Date.parse when reasonable.
- */
-function buildTimeline(perFile) {
-  const items = [];
-  for (const f of perFile) {
-    for (const d of (f.insights.dates.absolute || []).slice(0, 8)) {
-      items.push({ date: d, file: f.label });
-    }
-  }
-  // Stable sort by parseable date, with raw strings as fallback comparator.
-  items.sort((a, b) => {
-    const ta = Date.parse(a.date);
-    const tb = Date.parse(b.date);
-    if (!Number.isNaN(ta) && !Number.isNaN(tb) && ta !== tb) return ta - tb;
-    return a.date.localeCompare(b.date);
-  });
-  return items.slice(0, MAX_TIMELINE_ENTRIES);
-}
-
-/**
- * Find numeric conflicts: same field-like context appears with different
- * monetary or percentage values across files. Cheap heuristic — looks for
- * money/percentage values prefixed by short labels (3-30 chars) and groups
- * by label.
- *
- * False positives are acceptable: the cross-doc block FLAGS these so the
- * model can investigate, not assert them.
- */
-function findNumericConflicts(perFile) {
-  const LABEL_VALUE = /([A-Za-zÁÉÍÓÚÑáéíóúñ][\w\s]{2,28}?)[:=]\s*((?:[$€£¥]|US\$|S\/\.?|R\$|MX\$|EUR|USD|GBP|JPY|BRL|ARS|MXN|PEN|COP|CLP)\s?\d[\d.,]*|\d{1,3}(?:[.,]\d+)?\s?%)/g;
-  const labelMap = new Map(); // label -> Map<file, Set<value>>
-
-  for (const f of perFile) {
-    const head = f.text.slice(0, SCAN_HEAD_BYTES);
-    let m;
-    while ((m = LABEL_VALUE.exec(head)) !== null) {
-      const label = m[1].trim().toLowerCase();
-      const value = m[2].trim();
-      if (!labelMap.has(label)) labelMap.set(label, new Map());
-      const perFileVals = labelMap.get(label);
-      if (!perFileVals.has(f.label)) perFileVals.set(f.label, new Set());
-      perFileVals.get(f.label).add(value);
-    }
-    LABEL_VALUE.lastIndex = 0;
   }
 
-  const conflicts = [];
-  for (const [label, perFileVals] of labelMap.entries()) {
-    if (perFileVals.size < 2) continue; // need ≥ 2 files mentioning this label
-    const observations = [];
-    const seenValues = new Set();
-    for (const [file, vals] of perFileVals.entries()) {
-      const valArr = Array.from(vals);
-      observations.push({ file, value: valArr.join(' / ') });
-      for (const v of valArr) seenValues.add(v);
-    }
-    if (seenValues.size >= 2) {
-      conflicts.push({ label, observations });
-      if (conflicts.length >= MAX_NUMERIC_CONFLICTS) break;
+  contradictions.push(...sameFactDifferentValues);
+
+  for (const ft of focusTerms) {
+    const mentionsPerDoc = analyses.map(doc => {
+      const regex = new RegExp(ft.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+      const count = (doc.text.match(regex) || []).length;
+      return { docId: doc.id, docName: doc.name, count };
+    });
+
+    const withMentions = mentionsPerDoc.filter(m => m.count > 0);
+    const withoutMentions = mentionsPerDoc.filter(m => m.count === 0);
+
+    if (withMentions.length > 0 && withoutMentions.length > 0) {
+      contradictions.push({
+        type: 'coverage_gap',
+        description: `"${ft}" is mentioned in ${withMentions.length} document(s) but absent from ${withoutMentions.length}`,
+        present: withMentions,
+        absent: withoutMentions,
+        severity: 'medium',
+      });
     }
   }
-  return conflicts;
+
+  return contradictions.slice(0, 20);
 }
 
-function detectKindCoverage(perFile) {
-  // Heuristic doc-type distribution — relies on caller-supplied mimeType or
-  // filename hints. Useful for the prompt to know "you have 3 invoices and
-  // 2 contracts" without re-running the heavy classifier.
-  const counts = new Map();
-  for (const f of perFile) {
-    const k = f.kindHint || 'unknown';
-    counts.set(k, (counts.get(k) || 0) + 1);
-  }
-  return Array.from(counts.entries()).map(([kind, count]) => ({ kind, count }));
-}
+function findComplementary(analyses) {
+  const complementary = [];
+  const domains = new Set(analyses.map(a => a.domain));
 
-/**
- * Main entry point.
- *
- * @param {Array<{
- *   originalName?: string, filename?: string, name?: string,
- *   mimeType?: string, type?: string,
- *   extractedText?: string, text?: string,
- *   kind?: string, classification?: { type?: string }
- * }>} files
- * @returns {ComparisonReport|null}
- */
-function compareDocuments(files) {
-  if (!Array.isArray(files)) return null;
-  const valid = [];
-  for (const f of files) {
-    if (!f || typeof f !== 'object') continue;
-    const text = safeText(f.extractedText || f.text || '');
-    if (!text.trim()) continue;
-    if (valid.length >= MAX_FILES_COMPARED) break;
-    valid.push({
-      label: f.originalName || f.filename || f.name || `file-${valid.length + 1}`,
-      text,
-      kindHint: f.classification?.type || f.kind || f.mimeType || null,
-      insights: insightsEngine.extractDocumentInsights(text),
+  if (domains.size > 1) {
+    complementary.push({
+      type: 'cross_domain',
+      description: `Documents span ${domains.size} domains: ${[...domains].join(', ')}`,
+      domains: [...domains],
+      insight: 'Cross-domain analysis may reveal connections not visible within a single domain',
     });
   }
-  if (valid.length < 2) return null;
 
-  const pairs = [];
-  for (let i = 0; i < valid.length; i++) {
-    for (let j = i + 1; j < valid.length; j++) {
-      pairs.push(comparePair(valid[i], valid[j]));
+  const entityTypes = new Map();
+  for (const doc of analyses) {
+    for (const ent of (doc.entities || [])) {
+      const type = ent.type;
+      if (!entityTypes.has(type)) entityTypes.set(type, new Set());
+      entityTypes.get(type).add(doc.id || doc.name);
     }
   }
-  // Highest similarity first — most actionable comparisons rise to the top.
-  pairs.sort((a, b) => b.similarity - a.similarity);
 
-  const entities = aggregateEntities(valid);
-  const timeline = buildTimeline(valid);
-  const conflicts = findNumericConflicts(valid);
-  const kindCoverage = detectKindCoverage(valid);
+  const typesInMultipleDocs = [...entityTypes.entries()]
+    .filter(([_, docs]) => docs.size >= 2)
+    .map(([type, docs]) => ({ type, documentCount: docs.size }));
 
-  // Concentration ratio — how dominated the set is by the single largest doc.
-  const totalWords = valid.reduce((acc, f) => acc + f.insights.metrics.words, 0);
-  const largest = Math.max(...valid.map((f) => f.insights.metrics.words));
-  const dominanceRatio = totalWords > 0 ? Number((largest / totalWords).toFixed(3)) : 0;
+  if (typesInMultipleDocs.length > 0) {
+    complementary.push({
+      type: 'entity_overlap',
+      description: `${typesInMultipleDocs.length} entity type(s) appear across multiple documents`,
+      entityTypes: typesInMultipleDocs,
+      insight: 'Shared entity types enable cross-referencing and verification',
+    });
+  }
 
-  return {
-    fileCount: valid.length,
-    files: valid.map((f) => ({ label: f.label, words: f.insights.metrics.words, kindHint: f.kindHint })),
-    pairs: pairs.slice(0, 10),
-    entities,
-    timeline,
-    numericConflicts: conflicts,
-    kindCoverage,
-    dominanceRatio,
-  };
+  return complementary;
 }
 
-function fmtPercent(v) {
-  return `${Math.round(v * 100)}%`;
+function findStructuralDifferences(analyses) {
+  return analyses.map(doc => ({
+    id: doc.id,
+    name: doc.name,
+    headingCount: doc.structure?.headingCount || 0,
+    hasToc: doc.structure?.hasToc || false,
+    wordCount: doc.quality?.wordCount || 0,
+    grade: doc.quality?.grade || 'N/A',
+    riskSeverity: doc.risks?.severity || 'unknown',
+  }));
 }
 
-function renderComparisonBlock(report, opts = {}) {
-  if (!report || report.fileCount < 2) return '';
-  const lines = [];
-  const title = opts.title || 'CROSS-DOCUMENT SYNTHESIS';
-  lines.push(`## ${title}`);
-  lines.push(`Comparing ${report.fileCount} files. Use this block to spot agreement, divergence, and contradictions BEFORE drafting your answer. Cite the exact file label whenever you reference a finding.`);
+function findCrossReferences(analyses) {
+  const refs = [];
 
-  if (report.kindCoverage.length > 0) {
-    const summary = report.kindCoverage
-      .sort((a, b) => b.count - a.count)
-      .map((k) => `${k.count} × ${k.kind || 'unknown'}`)
-      .join(' · ');
-    lines.push(`**Kind coverage:** ${summary}`);
-  }
+  for (let i = 0; i < analyses.length; i++) {
+    for (let j = i + 1; j < analyses.length; j++) {
+      const docA = analyses[i];
+      const docB = analyses[j];
 
-  if (report.dominanceRatio > 0.7) {
-    lines.push(`**Note:** one file accounts for ${fmtPercent(report.dominanceRatio)} of the total content — the synthesis may skew toward it.`);
-  }
+      const sentencesA = (docA.text || '').split(/[.!?\n]+/).filter(s => s.trim().length > 20);
+      const sentencesB = (docB.text || '').split(/[.!?\n]+/).filter(s => s.trim().length > 20);
 
-  if (report.pairs.length > 0) {
-    lines.push('### Pairwise similarity (Jaccard, top pairs)');
-    const top = report.pairs.slice(0, 5);
-    lines.push('| File A | File B | Similarity | Shared persons | Shared orgs | Shared dates |');
-    lines.push('|---|---|---|---|---|---|');
-    for (const p of top) {
-      lines.push(`| ${p.a} | ${p.b} | ${fmtPercent(p.similarity)} | ${p.sharedPersons.join(', ') || '—'} | ${p.sharedOrgs.join(', ') || '—'} | ${p.sharedDates.join(', ') || '—'} |`);
+      let overlap = 0;
+      for (const sA of sentencesA.slice(0, 30)) {
+        const wordsA = new Set(sA.toLowerCase().split(/\s+/).filter(w => w.length > 4));
+        for (const sB of sentencesB.slice(0, 30)) {
+          const wordsB = new Set(sB.toLowerCase().split(/\s+/).filter(w => w.length > 4));
+          const intersection = [...wordsA].filter(w => wordsB.has(w));
+          if (intersection.length >= 3) overlap++;
+        }
+      }
+
+      if (overlap > 0) {
+        refs.push({
+          docA: docA.id || docA.name,
+          docB: docB.id || docB.name,
+          overlapScore: overlap,
+          relationship: overlap >= 5 ? 'highly_related' : overlap >= 2 ? 'partially_related' : 'loosely_related',
+        });
+      }
     }
   }
 
-  if (report.entities.shared.persons.length > 0 || report.entities.shared.organizations.length > 0) {
-    lines.push('### Entities shared across files');
-    if (report.entities.shared.persons.length > 0) {
-      lines.push(`**People:** ${report.entities.shared.persons.map((e) => `${e.name} (×${e.fileCount})`).join(' · ')}`);
-    }
-    if (report.entities.shared.organizations.length > 0) {
-      lines.push(`**Organizations:** ${report.entities.shared.organizations.map((e) => `${e.name} (×${e.fileCount})`).join(' · ')}`);
+  return refs.sort((a, b) => b.overlapScore - a.overlapScore).slice(0, 15);
+}
+
+function computeAlignment(analyses) {
+  if (analyses.length < 2) return 1;
+
+  let totalScore = 0;
+  let comparisons = 0;
+
+  for (let i = 0; i < analyses.length; i++) {
+    for (let j = i + 1; j < analyses.length; j++) {
+      const domainMatch = analyses[i].domain === analyses[j].domain ? 0.3 : 0;
+      const qualityRange = Math.abs(
+        (analyses[i].quality?.overall || 50) - (analyses[j].quality?.overall || 50)
+      );
+      const qualityScore = Math.max(0, 1 - qualityRange / 100) * 0.3;
+      const riskAlignment = (analyses[i].risks?.severity || 'low') === (analyses[j].risks?.severity || 'low') ? 0.2 : 0.1;
+      const structureSimilarity = Math.abs(
+        (analyses[i].structure?.headingCount || 0) - (analyses[j].structure?.headingCount || 0)
+      );
+      const structureScore = Math.max(0, 1 - structureSimilarity / 20) * 0.2;
+
+      totalScore += domainMatch + qualityScore + riskAlignment + structureScore;
+      comparisons++;
     }
   }
 
-  const hasUnique = report.entities.uniqueByFile.some((u) => u.uniquePersons.length > 0 || u.uniqueOrgs.length > 0);
-  if (hasUnique) {
-    lines.push('### Entities unique to a single file');
-    for (const u of report.entities.uniqueByFile) {
-      const bits = [];
-      if (u.uniquePersons.length > 0) bits.push(`people: ${u.uniquePersons.join(', ')}`);
-      if (u.uniqueOrgs.length > 0) bits.push(`orgs: ${u.uniqueOrgs.join(', ')}`);
-      if (bits.length > 0) lines.push(`- **${u.file}** — ${bits.join(' · ')}`);
+  return comparisons > 0 ? Math.round((totalScore / comparisons) * 100) / 100 : 0;
+}
+
+function buildComparisonMatrix(analyses, focusTerms) {
+  const dimensions = ['domain', 'quality', 'risk', 'structure', 'length'];
+  const matrix = [];
+
+  for (const dim of dimensions) {
+    const row = { dimension: dim, values: {} };
+    for (const doc of analyses) {
+      switch (dim) {
+        case 'domain': row.values[doc.id || doc.name] = doc.domain; break;
+        case 'quality': row.values[doc.id || doc.name] = doc.quality?.grade || 'N/A'; break;
+        case 'risk': row.values[doc.id || doc.name] = doc.risks?.severity || 'unknown'; break;
+        case 'structure': row.values[doc.id || doc.name] = `${doc.structure?.headingCount || 0} sections`; break;
+        case 'length': row.values[doc.id || doc.name] = `${doc.quality?.wordCount || 0} words`; break;
+      }
     }
+    matrix.push(row);
   }
 
-  if (report.timeline.length > 0) {
-    lines.push('### Merged timeline');
-    for (const item of report.timeline) {
-      lines.push(`- ${item.date} — ${item.file}`);
-    }
+  return matrix;
+}
+
+function buildSynthesis(analyses, { sharedEntities, contradictions, complementary, alignmentScore }) {
+  const parts = [];
+
+  parts.push(`Cross-document analysis of ${analyses.length} document(s).`);
+  parts.push(`Alignment score: ${(alignmentScore * 100).toFixed(0)}%`);
+
+  if (sharedEntities.length > 0) {
+    parts.push(`Shared entities: ${sharedEntities.length} entity/ies appear across multiple documents (${sharedEntities.slice(0, 5).map(e => `${e.type}: ${e.value}`).join('; ')}).`);
   }
 
-  if (report.numericConflicts.length > 0) {
-    lines.push('### Numeric divergences (same label, different values)');
-    for (const c of report.numericConflicts) {
-      const obs = c.observations.map((o) => `${o.file}: ${o.value}`).join(' · ');
-      lines.push(`- **${c.label}** — ${obs}`);
-    }
+  if (contradictions.length > 0) {
+    parts.push(`Contradictions found: ${contradictions.length} — ${contradictions.slice(0, 3).map(c => c.description).join('; ')}.`);
   }
 
-  return lines.join('\n\n');
+  if (complementary.length > 0) {
+    parts.push(`Complementary insights: ${complementary.map(c => c.description).join('; ')}.`);
+  }
+
+  const domains = [...new Set(analyses.map(a => a.domain))];
+  if (domains.length > 1) {
+    parts.push(`Documents span multiple domains (${domains.join(', ')}). Cross-domain synthesis recommended.`);
+  }
+
+  return parts.join(' ');
 }
 
 module.exports = {
   compareDocuments,
-  renderComparisonBlock,
-  _internal: {
-    jaccardSimilarity,
-    aggregateEntities,
-    buildTimeline,
-    findNumericConflicts,
-  },
+  findSharedEntities,
+  findContradictions,
+  findComplementary,
+  findCrossReferences,
+  computeAlignment,
 };
