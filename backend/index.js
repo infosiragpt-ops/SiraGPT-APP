@@ -135,6 +135,7 @@ const artifactRoutes = require('./src/routes/artifact');
 const enterpriseRoutes = require('./src/routes/enterprise');
 const socialPostsRoutes = require('./src/routes/social-posts');
 const githubCodexRoutes = require('./src/routes/github-codex');
+const coworkRoutes = require('./src/routes/cowork');
 const scheduler = require('./src/services/scheduler/scheduler');
 const { runAgent } = require('./src/services/agents/agent-entry');
 const { recoverAgentTasksAfterBoot } = require('./src/services/agents/agent-task-boot-recovery');
@@ -587,6 +588,7 @@ app.use('/api/artifact', artifactRoutes);
 app.use('/api/enterprise', enterpriseRoutes);
 app.use('/api/social-posts', socialPostsRoutes);
 app.use('/api/codex/github', githubCodexRoutes);
+app.use('/api/cowork', coworkRoutes);
 
 // Passkey (WebAuthn) endpoints. Disabled until the operator sets
 // WEBAUTHN_RP_ID + WEBAUTHN_ORIGIN AND flips

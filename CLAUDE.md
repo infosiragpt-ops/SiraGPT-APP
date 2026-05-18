@@ -147,6 +147,76 @@ npm run type-check     # TSC completo
 - `backend/src/services/document-intent-analyzer.js` — **NEW**: per-doc + cross-doc intent analysis
 - `backend/tests/document-intent-analyzer.test.js` — **NEW**: 29 tests for intent analysis
 
+## Cowork System (completed ✅)
+### Auto-File Bridge
+- **File**: `backend/src/services/auto-file-bridge.js`
+- Auto-converts pasted/dropped content (≥200 chars) into analyzable document objects
+- Detects format: JSON, CSV, XML, HTML, YAML, Markdown, SQL, Python, JS/TS, Shell, Log
+- Ingests into Prisma DB + Document Intelligence + RAG indexing pipeline
+- Cross-document intent analysis auto-triggered for batch uploads
+- **API**: `POST /api/cowork/auto-file`, `POST /api/cowork/auto-file/batch`, `GET /api/cowork/auto-files`
+
+### Deep Document Analyzer
+- **File**: `backend/src/services/deep-document-analyzer.js`
+- Domain detection: legal, financial, academic, medical, technical, business (keyword scoring)
+- Entity extraction: email, phone, URL, date, money, percentage, IP, SSN, credit card, DOI, IBAN
+- PII sensitivity levels: critical, high, medium, low (auto-redaction for critical)
+- Structure extraction: markdown + numbered headings, TOC detection
+- Risk assessment: domain-specific (data exposure, PII density, legal clauses, financial amounts, infrastructure exposure)
+- Quality metrics: readability, completeness, coherence, domain relevance, risk score, information density → letter grade (A-F)
+- Auto-tagging: domain + entity types + key phrases
+- **API**: `POST /api/cowork/analyze-deep`, `POST /api/cowork/analyze-deep/file/:fileId`
+
+### Active Memory
+- **File**: `backend/src/services/active-memory.js`
+- Two-tier memory: short-term + long-term
+- Auto-promotion: short-term → long-term after 3+ accesses or strength ≥ 0.8
+- Auto-demotion: long-term → short-term when access count = 0 and strength < 0.3
+- Content-hash deduplication
+- Semantic recall with weighted scoring (relevance, recency, strength, access, tier)
+- Memory prompt builder for system prompt injection
+- TTL-based expiration with stale entry cleanup
+- **API**: `POST /api/cowork/memory`, `POST /api/cowork/memory/recall`, `GET /api/cowork/memory`, `DELETE /api/cowork/memory`, `POST /api/cowork/memory/promote/:entryId`
+
+### Session Manager
+- **File**: `backend/src/services/session-manager.js`
+- In-memory multi-session management per user
+- Session CRUD: create, get, list, archive, reset
+- Message history with cursor-based pagination
+- Session spawning (child inherits recent context from parent)
+- Cross-session message forwarding
+- Session compaction (keep head + tail, drop middle)
+- Auto-cleanup of expired sessions (TTL 24h default)
+- **API**: `POST /api/cowork/sessions`, `GET /api/cowork/sessions`, `GET /api/cowork/sessions/:id`, `POST /api/cowork/sessions/:id/messages`, `GET /api/cowork/sessions/:id/history`, `POST /api/cowork/sessions/:id/spawn`, `POST /api/cowork/sessions/:id/compact`, `POST /api/cowork/sessions/:id/reset`, `POST /api/cowork/sessions/:id/send`
+
+### Skills Registry
+- **File**: `backend/src/services/skills-registry.js`
+- 14 built-in skills across 7 categories (information, document, generation, code, data, agentic, conversational)
+- Declarative skill descriptors: tools, prerequisites, side effects, idempotency, acceptance, cost, clearance
+- Intent-based skill recommendation with weighted scoring
+- Prerequisite verification against runtime context
+- Category + tag indexing with query search
+- Dynamic registration/unregistration
+- **API**: `GET /api/cowork/skills`, `GET /api/cowork/skills/recommend`
+
+### Cowork Engine
+- **File**: `backend/src/services/cowork-engine.js`
+- Orchestrates all cowork subsystems into a unified experience
+- Builds cowork system prompt with: auto-file instructions, deep analysis directives, active memory, skills catalog
+- Processes incoming messages: auto-file detection, memory fact extraction, auto-promotion
+- Enriches AI requests: auto-file ingestion + deep analysis + memory prompt injection
+- **API**: `POST /api/cowork/enrich`
+- **Integration**: Auto-injected into `/api/ai/generate` system prompt
+
+### Integration in AI Generate Route
+- `backend/src/routes/ai.js` — cowork system prompt + auto-file + deep analysis injected into every chat turn
+- Structured content ≥200 chars without attached files auto-filed as virtual documents
+- Deep analysis results (domain, quality, risk, PII) injected into system prompt
+- Active memory facts included in every turn
+
+### Test Files
+- `backend/tests/cowork-system.test.js` — 83 tests for all cowork modules
+
 ## Next Improvement Areas
 1. **Document pipeline** — add more generator formats (EPUB, RTF, ODT)
 2. **Service health probes** — endpoint health monitoring

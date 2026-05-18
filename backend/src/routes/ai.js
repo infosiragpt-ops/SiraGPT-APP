@@ -47,6 +47,8 @@ const {
 const { buildSemanticIntentAnalysis } = require('../services/agents/semantic-intent-router');
 const ciraEngine = require('../services/sira/engine');
 const postResponseBrainHook = require('../services/sira/post-response-brain-hook');
+const coworkEngine = require('../services/cowork-engine');
+const activeMemory = require('../services/active-memory');
 const router = express.Router();
 const cookie = require('cookie');
 const crypto = require('crypto');
@@ -2403,7 +2405,43 @@ router.post(
       } catch (contractErr) {
         console.warn('[ai] universal/enterprise task contract unavailable (continuing without):', contractErr.message || contractErr);
       }
-      const systemInstruction = { role: 'system', content: promptBundle.system + universalContractBlock + enterpriseExecutionBlock + memoryBlock + feedbackBlock + evidenceBlock + documentEnrichmentBlock };
+
+      let coworkBlock = '';
+      let autoFileContext = null;
+      if (userId) {
+        try {
+          const coworkPrompt = coworkEngine.buildCoworkSystemPrompt(userId, {
+            chatId: canPersist ? chatId : null,
+            model: actualModel,
+          });
+          if (coworkPrompt) coworkBlock = `\n\n${coworkPrompt}`;
+
+          if (prompt && prompt.length >= 200 && !processedFiles.length) {
+            const autoFileBridge = require('../services/auto-file-bridge');
+            if (autoFileBridge.shouldAutoFile(prompt) && autoFileBridge.isStructuredContent(prompt)) {
+              autoFileContext = await autoFileBridge.ingestPastedContent(userId, prompt);
+              if (autoFileContext?.autoFiled) {
+                coworkBlock += `\n\n## AUTO-FILED CONTENT\nThe user's pasted content was automatically filed as document "${autoFileContext.fileName}" (format: ${autoFileContext.format}, ${autoFileContext.charCount} chars, ${autoFileContext.lineCount} lines). Analyze it professionally as a document, not just raw text.`;
+                try {
+                  const deepDocAnalyzer = require('../services/deep-document-analyzer');
+                  const deepAnalysis = await deepDocAnalyzer.analyzeDeep(prompt, {
+                    userId,
+                    fileName: autoFileContext.fileName,
+                    mimeType: autoFileContext.mime,
+                  });
+                  if (deepAnalysis) {
+                    coworkBlock += `\n\n### Deep Analysis\nDomain: ${deepAnalysis.domain.primary} (confidence: ${Math.round(deepAnalysis.domain.confidence * 100)}%)\nQuality: ${deepAnalysis.quality.grade} (${deepAnalysis.quality.overall}/100)\nRisk: ${deepAnalysis.risks.severity} (${deepAnalysis.risks.items.length} factors)\nPII: ${deepAnalysis.piiSummary.total} entities (${deepAnalysis.piiSummary.critical} critical)\nStructure: ${deepAnalysis.structure.headingCount} sections\nTags: ${deepAnalysis.autoTags.slice(0, 8).join(', ')}`;
+                  }
+                } catch (_deepErr) { /* non-fatal */ }
+              }
+            }
+          }
+        } catch (coworkErr) {
+          console.warn('[ai] cowork enrichment failed (continuing without):', coworkErr.message);
+        }
+      }
+
+      const systemInstruction = { role: 'system', content: promptBundle.system + universalContractBlock + enterpriseExecutionBlock + memoryBlock + feedbackBlock + evidenceBlock + documentEnrichmentBlock + coworkBlock };
       console.log(`📝 system prompt built: intent=${promptBundle.intent} lang=${promptBundle.language} chars=${systemInstruction.content.length} profile=${userProfile ? 'yes' : 'no'} memory=${memoryBlock ? 'yes' : 'no'} feedback=${feedbackBlock ? 'yes' : 'no'} rag=${operationalRagContext?.active ? 'yes' : 'no'} contract=${universalTaskContract?.pipeline || 'none'} graph=${enterpriseExecutionGraph?.graph_id || 'none'} cira=${ciraRuntimeBundle?.envelope?.request_id || 'none'} docEnrichment=${documentEnrichment ? `${documentEnrichment.primaryDocType}/${documentEnrichment.perFileProfile.length}` : 'none'}`);
 
       // ✅ IMPROVED: Get previous chat history with proper image handling
