@@ -142,6 +142,8 @@ import {
   getLongPasteMetadata,
   shouldCompilePastedTextAsDocument,
 } from "@/lib/long-paste"
+import { usePasteCapture } from "@/components/paste-preview-overlay"
+import type { PasteCaptureResult, PasteCaptureAction } from "@/lib/paste-capture"
 import { useVisualViewportCssVars } from "@/hooks/use-visual-viewport-css-vars"
 
 const resolveUploadFileId = (file: any): string | null => {
@@ -3278,6 +3280,21 @@ function ChatInterfaceContent() {
   const uploadedFilesRef = React.useRef<any[]>([]);
   React.useEffect(() => { uploadedFilesRef.current = uploadedFiles; }, [uploadedFiles]);
 
+  const handlePasteCaptureActionRef = React.useRef<(action: PasteCaptureAction, result: PasteCaptureResult) => void>(() => {})
+
+  const handlePasteCaptureAction = React.useCallback(
+    (action: PasteCaptureAction, result: PasteCaptureResult) => {
+      handlePasteCaptureActionRef.current(action, result)
+    },
+    []
+  )
+
+  const pasteCapture = usePasteCapture(handlePasteCaptureAction);
+  const pasteCapturePendingRef = React.useRef<PasteCaptureResult | null>(null);
+  React.useEffect(() => {
+    pasteCapturePendingRef.current = pasteCapture.captureResult;
+  }, [pasteCapture.captureResult]);
+
   const waitForComposerUploads = React.useCallback(async (initialFiles: any[], timeoutMs = 30000) => {
     const startedAt = Date.now();
     const fingerprints = new Set(initialFiles.map(getComposerFileFingerprint).filter(Boolean));
@@ -4878,6 +4895,34 @@ But first, you need to connect your Spotify account securely using the button be
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  React.useEffect(() => {
+    handlePasteCaptureActionRef.current = (action: PasteCaptureAction, result: PasteCaptureResult) => {
+      if (action === "attach_document") {
+        const documentFile = createLongPasteDocumentFile(result.normalizedText);
+        const { accepted, rejected } = validateBatch([documentFile], {
+          existingCount: uploadedFilesRef.current.length,
+        });
+        if (rejected.length > 0) {
+          rejected.forEach(r => toast.error(r.reason));
+          return;
+        }
+        logIngest({
+          source: 'paste-long-text',
+          count: accepted.length,
+          total_bytes: accepted.reduce((s, f) => s + f.size, 0),
+          rejected_count: rejected.length,
+          rejected_codes: rejected.map(r => r.code),
+          had_text: true,
+        });
+        handleAndUploadFiles(filesToFileList(accepted), 'paste-long-text');
+        toast.success('Texto largo adjuntado como documento.');
+      } else if (action === "insert_text") {
+        setInput(prev => prev ? `${prev}\n\n${result.normalizedText}` : result.normalizedText);
+        window.setTimeout(() => textareaRef.current?.focus(), 0);
+      }
+    };
+  });
+
   // Drag and Drop event handlers with drag counter to prevent flickering
   const dragCounter = React.useRef(0);
 
@@ -5091,24 +5136,7 @@ But first, you need to connect your Spotify account securely using the button be
       const pastedText = (text && text.trim()) ? text : htmlFallbackText;
       if (pastedText && shouldCompilePastedTextAsDocument(pastedText)) {
         e.preventDefault();
-        const documentFile = createLongPasteDocumentFile(pastedText);
-        const { accepted, rejected } = validateBatch([documentFile], {
-          existingCount: uploadedFilesRef.current.length,
-        });
-        if (rejected.length > 0) {
-          rejected.forEach(r => toast.error(r.reason));
-          return;
-        }
-        logIngest({
-          source: 'paste-long-text',
-          count: accepted.length,
-          total_bytes: accepted.reduce((s, f) => s + f.size, 0),
-          rejected_count: rejected.length,
-          rejected_codes: rejected.map(r => r.code),
-          had_text: true,
-        });
-        handleAndUploadFiles(filesToFileList(accepted), 'paste-long-text');
-        toast.success('Texto largo adjuntado como documento.');
+        pasteCapture.capture(pastedText);
         return;
       }
       // HTML-only paste (rare — usually browsers attach text/plain too).
@@ -7735,7 +7763,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                     })
                   }}
                 />
-                <div className="space-y-3">
+                  <div className="space-y-3">
                   {/*
                     Composer — premium production UI.
                     In DARK mode, inherits `composer-surface` from globals.css
@@ -7754,15 +7782,18 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                     the same surface so the user sees one coherent input
                     area, not stacked floating elements above the bar.
                   */}
-                  <div
-                    className={cn(
-                      "composer-surface group/composer relative overflow-hidden rounded-3xl",
-                      "bg-background",
-                      "ring-1 ring-black/[0.08] dark:ring-1 dark:ring-white/[0.06]",
-                      "shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_14px_-4px_rgba(15,23,42,0.06)] dark:shadow-[0_12px_32px_-12px_rgba(0,0,0,0.42)]",
-                      "transition-[border-color,background-color,box-shadow,ring-color] duration-base ease-smooth",
-                      "hover:ring-black/[0.14] dark:hover:ring-white/[0.10]",
-                      "focus-within:ring-2 focus-within:ring-foreground/[0.16] dark:focus-within:ring-2 dark:focus-within:ring-[hsl(var(--accent-violet))]/45",
+                  <div className="relative">
+                    {pasteCapture.Overlay}
+                    <div
+                      className={cn(
+                        "composer-surface group/composer relative rounded-3xl",
+                        pasteCapture.overlayVisible ? "overflow-visible" : "overflow-hidden",
+                        "bg-background",
+                        "ring-1 ring-black/[0.08] dark:ring-1 dark:ring-white/[0.06]",
+                        "shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_14px_-4px_rgba(15,23,42,0.06)] dark:shadow-[0_12px_32px_-12px_rgba(0,0,0,0.42)]",
+                        "transition-[border-color,background-color,box-shadow,ring-color] duration-base ease-smooth",
+                        "hover:ring-black/[0.14] dark:hover:ring-white/[0.10]",
+                        "focus-within:ring-2 focus-within:ring-foreground/[0.16] dark:focus-within:ring-2 dark:focus-within:ring-[hsl(var(--accent-violet))]/45",
                     )}
                   >
                     {/* Chips zone — rendered ABOVE the input row, INSIDE
@@ -7971,6 +8002,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         <ActiveToolsDisplay {...activeToolsProps} />
                       </div>
                     )}
+                  </div>
                   </div>
 
                   {/* <p className="text-center text-xs text-muted-foreground">
@@ -8198,15 +8230,18 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
                       {/* Same composer as the initial state — chips
                           render INSIDE the same rounded card. */}
-                      <div
-                        className={cn(
-                          "composer-surface group/composer relative overflow-hidden rounded-3xl",
-                          "bg-background",
-                          "ring-1 ring-black/[0.08] dark:ring-1 dark:ring-white/[0.06]",
-                          "shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_14px_-4px_rgba(15,23,42,0.06)] dark:shadow-[0_12px_32px_-12px_rgba(0,0,0,0.42)]",
-                          "transition-[border-color,background-color,box-shadow,ring-color] duration-base ease-smooth",
-                          "hover:ring-black/[0.14] dark:hover:ring-white/[0.10]",
-                          "focus-within:ring-2 focus-within:ring-foreground/[0.16] dark:focus-within:ring-2 dark:focus-within:ring-[hsl(var(--accent-violet))]/45",
+                      <div className="relative">
+                        {pasteCapture.Overlay}
+                        <div
+                          className={cn(
+                            "composer-surface group/composer relative rounded-3xl",
+                            pasteCapture.overlayVisible ? "overflow-visible" : "overflow-hidden",
+                            "bg-background",
+                            "ring-1 ring-black/[0.08] dark:ring-1 dark:ring-white/[0.06]",
+                            "shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_14px_-4px_rgba(15,23,42,0.06)] dark:shadow-[0_12px_32px_-12px_rgba(0,0,0,0.42)]",
+                            "transition-[border-color,background-color,box-shadow,ring-color] duration-base ease-smooth",
+                            "hover:ring-black/[0.14] dark:hover:ring-white/[0.10]",
+                            "focus-within:ring-2 focus-within:ring-foreground/[0.16] dark:focus-within:ring-2 dark:focus-within:ring-[hsl(var(--accent-violet))]/45",
                         )}
                       >
                         <ActiveOptionsDisplay
@@ -8402,6 +8437,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             <ActiveToolsDisplay {...activeToolsProps} />
                           </div>
                         )}
+                      </div>
                       </div>
                     </div>
                   </div>
