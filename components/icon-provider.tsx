@@ -66,9 +66,9 @@ export const iconMap: { [key: string]: IconConfig } = {
 
     // --- Custom PNG Icons (Make sure these paths are correct in your /public/icons folder) ---
     Banana: { type: 'png', imagePath: '/icons/banana.png' }, // Custom example
-    Magic: { type: 'png', imagePath: '/icons/openai.svg', darkFilter: "invert(1)" },       // For GPT-4.1 if not using ChatGPTLogo
+    Magic: { type: 'png', imagePath: '/icons/openai.svg', lightFilter: "none", darkFilter: "invert(1)" },
 
-    ChatGPTLogo: { type: 'png', imagePath: '/icons/openai.svg', darkFilter: "invert(1)" },      // Official ChatGPT/OpenAI Logo
+    ChatGPTLogo: { type: 'png', imagePath: '/icons/openai.svg', lightFilter: "none", darkFilter: "invert(1)" },
     ChatGPTPinkLogo: {
         type: 'png',
         imagePath: '/icons/openai.svg',

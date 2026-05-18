@@ -1165,7 +1165,7 @@ function PdfRenderer({ a }: { a: AttachmentLike }) {
               key={p}
               data-page-num={p}
               ref={el => { pageRefs.current[p] = el }}
-              className="rounded-sm bg-white shadow-md ring-1 ring-border/30"
+              className="rounded-sm bg-white dark:bg-zinc-800 shadow-md ring-1 ring-border/30"
             >
               <PdfPage
                 pageNumber={p}
@@ -1356,7 +1356,7 @@ function HtmlRenderer({ a }: { a: AttachmentLike }) {
       title={a.name}
       srcDoc={html}
       sandbox=""
-      className="h-full w-full bg-white"
+      className="h-full w-full bg-white dark:bg-zinc-900"
     />
   )
 }

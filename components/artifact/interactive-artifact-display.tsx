@@ -153,7 +153,7 @@ function ArtifactCard({ artefact }: { artefact: ArtifactFile }) {
             ref={iframeRef}
             key={reloadKey}
             srcDoc={srcDoc}
-            className="h-full w-full border-0 bg-white"
+            className="h-full w-full border-0 bg-white dark:bg-zinc-900"
             sandbox="allow-scripts"
             title={artefact.title || "artifact"}
           />

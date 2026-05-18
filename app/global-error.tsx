@@ -24,7 +24,16 @@ export default function GlobalError({
   reset: () => void
 }) {
   const [attempts, setAttempts] = useState(0)
+  const [isDark, setIsDark] = useState(false)
   const maxAttempts = 3
+
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-color-scheme: dark)")
+    setIsDark(mq.matches)
+    const handler = (e: MediaQueryListEvent) => setIsDark(e.matches)
+    mq.addEventListener("change", handler)
+    return () => mq.removeEventListener("change", handler)
+  }, [])
 
   // Log immediately — this is the most important diagnostic signal
   useEffect(() => {
@@ -41,6 +50,18 @@ export default function GlobalError({
     reset()
   }, [attempts, reset])
 
+  const bg = isDark ? "#0a0a0f" : "#ffffff"
+  const cardBg = isDark ? "#16161e" : "#ffffff"
+  const cardBorder = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.08)"
+  const cardShadow = isDark ? "0 4px 24px rgba(0,0,0,0.4)" : "0 4px 24px rgba(0,0,0,0.12)"
+  const headingColor = isDark ? "#f4f4f5" : "#18181b"
+  const bodyColor = isDark ? "#a1a1aa" : "#666666"
+  const subColor = isDark ? "#71717a" : "#999999"
+  const btnPrimaryBg = isDark ? "#f4f4f5" : "#000000"
+  const btnPrimaryColor = isDark ? "#18181b" : "#ffffff"
+  const btnOutlineBorder = isDark ? "#3f3f46" : "#dddddd"
+  const btnOutlineColor = isDark ? "#e4e4e7" : "#000000"
+
   return (
     <html>
       <body>
@@ -52,6 +73,8 @@ export default function GlobalError({
             justifyContent: "center",
             padding: "1rem",
             fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+            backgroundColor: bg,
+            color: headingColor,
           }}
         >
           <div
@@ -60,9 +83,10 @@ export default function GlobalError({
               width: "100%",
               padding: "2rem",
               borderRadius: "0.75rem",
-              boxShadow: "0 4px 24px rgba(0,0,0,0.12)",
-              border: "1px solid rgba(0,0,0,0.08)",
+              boxShadow: cardShadow,
+              border: `1px solid ${cardBorder}`,
               textAlign: "center",
+              backgroundColor: cardBg,
             }}
           >
             {/* Icon */}
@@ -82,14 +106,14 @@ export default function GlobalError({
               ⚠️
             </div>
 
-            <h1 style={{ fontSize: "1.25rem", fontWeight: 600, marginBottom: "0.5rem" }}>
+            <h1 style={{ fontSize: "1.25rem", fontWeight: 600, marginBottom: "0.5rem", color: headingColor }}>
               Error cr&iacute;tico
             </h1>
 
             <p
               style={{
                 fontSize: "0.875rem",
-                color: "#666",
+                color: bodyColor,
                 marginBottom: "1rem",
                 lineHeight: 1.5,
               }}
@@ -103,7 +127,7 @@ export default function GlobalError({
               <p
                 style={{
                   fontSize: "0.75rem",
-                  color: "#999",
+                  color: subColor,
                   fontFamily: "monospace",
                   marginBottom: "1rem",
                 }}
@@ -120,8 +144,8 @@ export default function GlobalError({
                     padding: "0.5rem 1rem",
                     borderRadius: "0.375rem",
                     border: "none",
-                    backgroundColor: "#000",
-                    color: "#fff",
+                    backgroundColor: btnPrimaryBg,
+                    color: btnPrimaryColor,
                     fontSize: "0.875rem",
                     cursor: "pointer",
                     fontWeight: 500,
@@ -136,9 +160,9 @@ export default function GlobalError({
                 style={{
                   padding: "0.5rem 1rem",
                   borderRadius: "0.375rem",
-                  border: "1px solid #ddd",
+                  border: `1px solid ${btnOutlineBorder}`,
                   backgroundColor: "transparent",
-                  color: "#000",
+                  color: btnOutlineColor,
                   fontSize: "0.875rem",
                   cursor: "pointer",
                   fontWeight: 500,

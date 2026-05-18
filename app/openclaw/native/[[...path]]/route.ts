@@ -267,13 +267,15 @@ function buildOpenClawModelLogoEnhancer() {
 .siragpt-model-select__button:disabled{cursor:not-allowed;opacity:.55}
 .siragpt-model-select__label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .siragpt-model-select__chevron{position:absolute;right:12px;top:50%;width:7px;height:7px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:translateY(-65%) rotate(45deg);opacity:.62;pointer-events:none}
-.siragpt-model-logo{width:20px;height:20px;min-width:20px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;overflow:hidden;background:#fff;border:1px solid rgba(15,23,42,.08);box-shadow:0 1px 1px rgba(15,23,42,.05)}
+.siragpt-model-logo{width:20px;height:20px;min-width:20px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;overflow:hidden;background:var(--bg-elevated,#fff);border:1px solid var(--border,rgba(15,23,42,.08));box-shadow:0 1px 1px rgba(15,23,42,.05)}
 .siragpt-model-logo img{width:100%;height:100%;object-fit:contain;display:block;padding:2px}
+.siragpt-model-logo img[src*="openai.svg"]{filter:var(--openai-icon-filter,none)}
 .siragpt-model-logo--fallback{background:linear-gradient(135deg,var(--accent,#ff4d4d),var(--bg-hover,#1f2937));color:var(--accent-foreground,#fff);font-size:10px;font-weight:800;letter-spacing:0}
 .siragpt-model-select__menu{position:absolute;z-index:1000;top:calc(100% + 6px);left:0;right:0;min-width:240px;max-height:280px;overflow:auto;padding:6px;border:1px solid var(--border,#e5e5ea);border-radius:var(--radius-lg,12px);background:var(--popover,#fff);color:var(--popover-foreground,var(--text,#3c3c43));box-shadow:var(--shadow-lg,0 18px 42px rgba(15,23,42,.18))}
 .siragpt-model-select__option{width:100%;display:flex;align-items:center;gap:10px;padding:9px 10px;border:0;border-radius:8px;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}
 .siragpt-model-select__option:hover,.siragpt-model-select__option[aria-selected="true"]{background:var(--accent-subtle,color-mix(in srgb,#ff3b3b 12%,transparent))}
 .siragpt-model-select__option[aria-selected="true"]{color:var(--accent,#ff3b3b);font-weight:650}
+@media(prefers-color-scheme:dark){.siragpt-model-logo img[src*="openai.svg"]{filter:invert(1)}.siragpt-model-logo{background:var(--bg-elevated,#1a1a2e)}}
 </style><script>(function(){try{
 var MODEL_LOGOS=[
   {match:["deepseek"],src:"/icons/deepseek.png",name:"DeepSeek"},
@@ -429,6 +431,13 @@ if(document.readyState==="loading"){
 }
 setTimeout(enhanceAll,500);
 setTimeout(enhanceAll,1500);
+function syncDarkMode(){
+var isDark=document.documentElement.classList.contains("dark")||window.matchMedia("(prefers-color-scheme:dark)").matches;
+document.documentElement.style.setProperty("--openai-icon-filter",isDark?"invert(1)":"none");
+}
+syncDarkMode();
+new MutationObserver(syncDarkMode).observe(document.documentElement,{attributes:true,attributeFilter:["class"]});
+window.matchMedia("(prefers-color-scheme:dark)").addEventListener("change",syncDarkMode);
 }catch(e){console.warn("SiraGPT model logo enhancer failed",e);}})();</script>`
 }
 

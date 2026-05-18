@@ -92,6 +92,13 @@ export const CodePreview: React.FC<CodePreviewProps> = ({
             font-feature-settings: 'kern' 1;
         }
         
+        @media (prefers-color-scheme: dark) {
+            body {
+                color: #e4e4e7;
+                background-color: #18181b;
+            }
+        }
+        
         /* Modern responsive utilities */
         .container { max-width: 1200px; margin: 0 auto; padding: 0 1rem; }
         .flex { display: flex; }

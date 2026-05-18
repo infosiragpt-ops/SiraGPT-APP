@@ -482,19 +482,19 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
         )}
 
         {state.kind === "pdf" && (
-          <iframe src={previewUrl} className="h-full w-full bg-white" title={`Vista previa ${filename}`} />
+          <iframe src={previewUrl} className="h-full w-full bg-white dark:bg-zinc-900" title={`Vista previa ${filename}`} />
         )}
 
         {state.kind === "svg" && (
           <div className="flex min-h-full items-center justify-center p-6">
-            <img src={previewUrl} alt={filename} className="max-h-full max-w-full rounded-xl bg-white shadow-sm" />
+            <img src={previewUrl} alt={filename} className="max-h-full max-w-full rounded-xl bg-white dark:bg-zinc-800 shadow-sm" />
           </div>
         )}
 
         {state.kind === "iframeHtml" && (
           <iframe
             srcDoc={state.html}
-            className="h-full w-full border-0 bg-white"
+            className="h-full w-full border-0 bg-white dark:bg-zinc-900"
             title={`Vista previa ${filename}`}
             sandbox=""
           />

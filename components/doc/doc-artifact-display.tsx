@@ -217,14 +217,14 @@ function DocCard({ doc, onDocumentPreview }: { doc: DocFile; onDocumentPreview?:
             <img
               src={sourceUrl}
               alt={doc.title || doc.filename}
-              className="mx-auto max-h-[70vh] w-full bg-white object-contain"
+              className="mx-auto max-h-[70vh] w-full bg-white dark:bg-zinc-900 object-contain"
             />
           ) : hasHtmlPreview ? (
             <iframe
               srcDoc={doc.htmlPreview!}
               // empty sandbox = scripts NOT allowed (preview is read-only)
               sandbox=""
-              className="h-[70vh] w-full border-0 bg-white"
+              className="h-[70vh] w-full border-0 bg-white dark:bg-zinc-900"
               title={doc.title || doc.filename}
             />
           ) : null}

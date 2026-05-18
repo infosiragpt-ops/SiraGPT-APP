@@ -254,7 +254,7 @@ export function PresentationView({ presentation, onClose, isLoading, isVector, c
 
             {/* Slide Content */}
             <div className="flex-1 flex items-center justify-center p-4">
-                <div className="w-full max-w-5xl aspect-video bg-white rounded-lg shadow-2xl overflow-hidden flex flex-col">
+                <div className="w-full max-w-5xl aspect-video bg-white dark:bg-zinc-900 rounded-lg shadow-2xl overflow-hidden flex flex-col">
                     {currentSlide === 0 && titleSlide ? (
                         <div className="h-full flex flex-col justify-center items-center text-center p-8">
                             <h1 className="text-4xl font-bold text-blue-900 mb-3">{titleSlide.title}</h1>

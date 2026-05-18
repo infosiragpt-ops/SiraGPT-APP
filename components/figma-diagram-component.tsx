@@ -147,7 +147,7 @@ export function FigmaDiagramComponent({
                                 e.stopPropagation()
                                 handleDownload()
                             }}
-                            className="h-9 w-9 rounded-full bg-white/90 hover:bg-white text-gray-800 shadow-lg hover:scale-105 transition-transform pointer-events-auto"
+                            className="h-9 w-9 rounded-full bg-white/90 dark:bg-zinc-800/90 hover:bg-white dark:hover:bg-zinc-700 text-gray-800 dark:text-zinc-200 shadow-lg hover:scale-105 transition-transform pointer-events-auto"
                             title="Download Diagram"
                         >
                             <Download className="h-4 w-4" />
@@ -161,7 +161,7 @@ export function FigmaDiagramComponent({
                                 e.stopPropagation()
                                 openMermaidEditor()
                             }}
-                            className="h-9 w-9 rounded-full bg-white/90 hover:bg-white text-gray-800 shadow-lg hover:scale-105 transition-transform pointer-events-auto"
+                            className="h-9 w-9 rounded-full bg-white/90 dark:bg-zinc-800/90 hover:bg-white dark:hover:bg-zinc-700 text-gray-800 dark:text-zinc-200 shadow-lg hover:scale-105 transition-transform pointer-events-auto"
                             title="Edit Diagram"
                         >
                             <Edit className="h-4 w-4" />
@@ -175,7 +175,7 @@ export function FigmaDiagramComponent({
                                 e.stopPropagation()
                                 openInFigma()
                             }}
-                            className="h-9 w-9 rounded-full bg-white/90 hover:bg-white text-gray-800 shadow-lg hover:scale-105 transition-transform pointer-events-auto"
+                            className="h-9 w-9 rounded-full bg-white/90 dark:bg-zinc-800/90 hover:bg-white dark:hover:bg-zinc-700 text-gray-800 dark:text-zinc-200 shadow-lg hover:scale-105 transition-transform pointer-events-auto"
                             title="Open in Figma"
                         >
                             <ExternalLink className="h-4 w-4" />

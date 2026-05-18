@@ -2195,7 +2195,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
                   title="Themes"
                   onClick={() => setShowThemesDropdown(!showThemesDropdown)}
                 >
-                  <div className="border border-gray-400 p-1 flex items-center justify-center font-serif text-lg bg-white relative overflow-hidden" style={{ width: '32px', height: '32px' }}>
+                  <div className="border border-gray-400 dark:border-zinc-600 p-1 flex items-center justify-center font-serif text-lg bg-white dark:bg-zinc-800 relative overflow-hidden" style={{ width: '32px', height: '32px' }}>
                     <div className="absolute inset-x-0 bottom-0 h-1 flex">
                       <div className="flex-1 bg-green-600"></div>
                       <div className="flex-1 bg-yellow-500"></div>
@@ -2325,7 +2325,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
                     className="excel-ribbon-button-horizontal"
                     onClick={() => setShowFontsDropdown(!showFontsDropdown)}
                   >
-                    <div className="w-4 h-4 border border-gray-400 flex items-center justify-center font-bold text-[10px] bg-white">A</div>
+                    <div className="w-4 h-4 border border-gray-400 dark:border-zinc-600 flex items-center justify-center font-bold text-[10px] bg-white dark:bg-zinc-800">A</div>
                     <span className="excel-ribbon-label">Fonts</span>
                     <ChevronDown className="w-2 h-2 ml-1" />
                   </button>
@@ -2527,7 +2527,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
               </button>
 
               {showSheetOptionsDropdown && (
-                <div className="absolute top-full left-0 mt-1 bg-white border border-gray-300 shadow-md z-[1000] p-3 min-w-[200px]">
+                <div className="absolute top-full left-0 mt-1 bg-white dark:bg-zinc-800 border border-gray-300 dark:border-zinc-700 shadow-md z-[1000] p-3 min-w-[200px]">
                   <div className="flex flex-col gap-4">
                     <div className="flex items-center justify-between border-b pb-2">
                       <span className="font-semibold text-xs">Gridlines</span>
@@ -2587,7 +2587,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
               {/* AutoSum with Dropdown */}
               <div className="relative group/menu">
                 <RibbonButton icon={Sigma} label="AutoSum" hasDropdown onClick={() => handleAutoSum("SUM")} />
-                <div className="hidden group-hover/menu:block absolute bg-white border shadow-xl z-50 min-w-[120px] top-full">
+                <div className="hidden group-hover/menu:block absolute bg-white dark:bg-zinc-800 border dark:border-zinc-700 shadow-xl z-50 min-w-[120px] top-full">
                   <button
                     className="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-[11px]"
                     onClick={(e) => {
@@ -2644,7 +2644,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
               {/* Categories (Common Functions) */}
               <div className="relative group/menu">
                 <RibbonButton icon={Database} label="Financial" hasDropdown />
-                <div className="hidden group-hover/menu:block absolute bg-white border shadow-xl z-50 min-w-[120px] top-full">
+                <div className="hidden group-hover/menu:block absolute bg-white dark:bg-zinc-800 border dark:border-zinc-700 shadow-xl z-50 min-w-[120px] top-full">
                   <button className="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-[11px]" onClick={() => insertCategoryFunction('PMT')}>PMT</button>
                   <button className="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-[11px]" onClick={() => insertCategoryFunction('PV')}>PV</button>
                   <button className="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-[11px]" onClick={() => insertCategoryFunction('FV')}>FV</button>
@@ -2655,7 +2655,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
 
               <div className="relative group/menu">
                 <RibbonButton icon={HelpCircle} label="Logical" hasDropdown />
-                <div className="hidden group-hover/menu:block absolute bg-white border shadow-xl z-50 min-w-[120px] top-full">
+                <div className="hidden group-hover/menu:block absolute bg-white dark:bg-zinc-800 border dark:border-zinc-700 shadow-xl z-50 min-w-[120px] top-full">
                   <button className="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-[11px]" onClick={() => insertCategoryFunction('IF')}>IF</button>
                   <button className="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-[11px]" onClick={() => insertCategoryFunction('AND')}>AND</button>
                   <button className="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-[11px]" onClick={() => insertCategoryFunction('OR')}>OR</button>
@@ -2666,7 +2666,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
 
               <div className="relative group/menu">
                 <RibbonButton icon={Type} label="Text" hasDropdown />
-                <div className="hidden group-hover/menu:block absolute bg-white border shadow-xl z-50 min-w-[120px] top-full">
+                <div className="hidden group-hover/menu:block absolute bg-white dark:bg-zinc-800 border dark:border-zinc-700 shadow-xl z-50 min-w-[120px] top-full">
                   <button className="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-[11px]" onClick={() => insertCategoryFunction('CONCATENATE')}>CONCATENATE</button>
                   <button className="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-[11px]" onClick={() => insertCategoryFunction('LEFT')}>LEFT</button>
                   <button className="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-[11px]" onClick={() => insertCategoryFunction('RIGHT')}>RIGHT</button>
@@ -2676,7 +2676,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
               </div>
               <div className="relative group/menu">
                 <RibbonButton icon={Clock} label="Date & Time" hasDropdown />
-                <div className="hidden group-hover/menu:block absolute bg-white border shadow-xl z-50 min-w-[120px] top-full">
+                <div className="hidden group-hover/menu:block absolute bg-white dark:bg-zinc-800 border dark:border-zinc-700 shadow-xl z-50 min-w-[120px] top-full">
                   <button className="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-[11px]" onClick={() => insertCategoryFunction('TODAY')}>TODAY</button>
                   <button className="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-[11px]" onClick={() => insertCategoryFunction('NOW')}>NOW</button>
                   <button className="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-[11px]" onClick={() => insertCategoryFunction('DATE')}>DATE</button>
@@ -2686,7 +2686,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
               </div>
               <div className="relative group/menu">
                 <RibbonButton icon={Search} label="Lookup & Ref" hasDropdown />
-                <div className="hidden group-hover/menu:block absolute bg-white border shadow-xl z-50 min-w-[120px] top-full">
+                <div className="hidden group-hover/menu:block absolute bg-white dark:bg-zinc-800 border dark:border-zinc-700 shadow-xl z-50 min-w-[120px] top-full">
                   <button className="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-[11px]" onClick={() => insertCategoryFunction('VLOOKUP')}>VLOOKUP</button>
                   <button className="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-[11px]" onClick={() => insertCategoryFunction('HLOOKUP')}>HLOOKUP</button>
                   <button className="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-[11px]" onClick={() => insertCategoryFunction('INDEX')}>INDEX</button>
@@ -2696,7 +2696,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
               </div>
               <div className="relative group/menu">
                 <RibbonButton icon={Divide} label="Math & Trig" hasDropdown />
-                <div className="hidden group-hover/menu:block absolute bg-white border shadow-xl z-50 min-w-[120px] top-full">
+                <div className="hidden group-hover/menu:block absolute bg-white dark:bg-zinc-800 border dark:border-zinc-700 shadow-xl z-50 min-w-[120px] top-full">
                   <button className="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-[11px]" onClick={() => insertCategoryFunction('SUM')}>SUM</button>
                   <button className="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-[11px]" onClick={() => insertCategoryFunction('AVERAGE')}>AVERAGE</button>
                   <button className="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-[11px]" onClick={() => insertCategoryFunction('ABS')}>ABS</button>
@@ -2710,10 +2710,10 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
           {/* Names Group */}
           <RibbonGroup title="Names">
             <button className="excel-ribbon-button-large" onClick={handleNameManager}>
-              <div className="w-8 h-8 border-2 border-gray-400 bg-white flex flex-col items-center justify-center gap-0.5">
+              <div className="w-8 h-8 border-2 border-gray-400 dark:border-zinc-600 bg-white dark:bg-zinc-800 flex flex-col items-center justify-center gap-0.5">
                 <div className="w-6 h-1 bg-gray-200"></div>
                 <div className="w-6 h-1 bg-gray-100"></div>
-                <div className="w-6 h-1 bg-white"></div>
+                <div className="w-6 h-1 bg-white dark:bg-zinc-600"></div>
               </div>
               <span className="excel-ribbon-label">Name Manager</span>
             </button>
@@ -2744,7 +2744,7 @@ export function ExcelRibbon({ spreadsheetRef }: ExcelRibbonProps) {
                 <span className="excel-ribbon-label">Calculation</span>
                 <ChevronDown className="excel-ribbon-dropdown-icon" />
               </button>
-              <div className="hidden group-hover/calc:block absolute bg-white border shadow-xl z-50 min-w-[150px] top-full">
+              <div className="hidden group-hover/calc:block absolute bg-white dark:bg-zinc-800 border dark:border-zinc-700 shadow-xl z-50 min-w-[150px] top-full">
                 <button className="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-[11px]" onClick={handleRecalculate}>Calculate Now</button>
                 <button className={`w-full text-left px-3 py-1.5 hover:bg-blue-50 text-[11px] ${calculationMode === "Automatic" ? "bg-blue-100 font-semibold" : ""}`} onClick={() => handleSetCalculationMode("Automatic")}>Automatic</button>
                 <button className={`w-full text-left px-3 py-1.5 hover:bg-blue-50 text-[11px] ${calculationMode === "Manual" ? "bg-blue-100 font-semibold" : ""}`} onClick={() => handleSetCalculationMode("Manual")}>Manual</button>
