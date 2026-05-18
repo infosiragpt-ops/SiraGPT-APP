@@ -653,8 +653,8 @@ test('create_dashboard_html: no charts', async () => {
 
 // ── Tool metadata ────────────────────────────────────────────────
 
-test('all 30 tools have valid metadata', () => {
-  assert.equal(VISUAL_MEDIA_TOOLS.length, 30);
+test('all 31 tools have valid metadata', () => {
+  assert.equal(VISUAL_MEDIA_TOOLS.length, 31);
   for (const t of VISUAL_MEDIA_TOOLS) {
     assert.ok(t.name);
     assert.ok(t.description);
@@ -3519,6 +3519,148 @@ test('create_moscow_chart: emits expected events', async () => {
   await tool('create_moscow_chart').execute({
     title: 'Events',
     mustHave: ['x'],
+  }, ctx);
+  const types = ctx._events.map(e => e.type);
+  assert.ok(types.includes('tool_call'));
+  assert.ok(types.includes('file_artifact'));
+  assert.ok(types.includes('tool_output'));
+});
+
+// ── create_decision_tree ─────────────────────────────────────────
+
+test('create_decision_tree: 3-level eligibility tree', async () => {
+  const dt = tool('create_decision_tree');
+  assert.ok(dt);
+  const r = await dt.execute({
+    title: 'Account eligibility',
+    root: {
+      text: 'Has signed up?',
+      branches: [
+        { label: 'Yes', node: {
+          text: 'Has activated?',
+          branches: [
+            { label: 'Yes', node: { text: 'Pro tier ready', isOutcome: true } },
+            { label: 'No',  node: { text: 'Send onboarding', isOutcome: true } },
+          ],
+        }},
+        { label: 'No',  node: { text: 'Show signup CTA', isOutcome: true } },
+      ],
+    },
+    theme: 'professional',
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.nodes, 5);
+  // 3 leaves are outcomes; 2 are decisions
+  assert.equal(r.outcomes, 3);
+  assert.equal(r.decisions, 2);
+  assert.equal(r.depth, 3);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.startsWith('<svg'));
+  assert.ok(svg.includes('Account eligibility'));
+  assert.ok(svg.includes('Has signed up?'));
+  assert.ok(svg.includes('Pro tier ready'));
+  assert.ok(svg.includes('Show signup CTA'));
+  // Branch label pills
+  assert.ok(svg.includes('Yes'));
+  assert.ok(svg.includes('No'));
+});
+
+test('create_decision_tree: single root with no branches counts as 1 outcome', async () => {
+  const r = await tool('create_decision_tree').execute({
+    title: 'Lonely root',
+    root: { text: 'Just decide', isOutcome: true },
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.nodes, 1);
+  assert.equal(r.outcomes, 1);
+  assert.equal(r.decisions, 0);
+  assert.equal(r.depth, 1);
+});
+
+test('create_decision_tree: missing root fails', async () => {
+  const r = await tool('create_decision_tree').execute({
+    title: 'Empty',
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /root.*missing|invalid/i);
+});
+
+test('create_decision_tree: caps depth at 4 (deeper nodes become outcomes)', async () => {
+  // Build a 6-level deep tree; should be cut to 4 levels.
+  function nest(depth) {
+    if (depth === 0) return { text: 'leaf', isOutcome: true };
+    return { text: `level ${depth}`, branches: [{ label: 'go', node: nest(depth - 1) }] };
+  }
+  const r = await tool('create_decision_tree').execute({
+    title: 'Deep',
+    root: nest(6),
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.depth, 4, 'depth should be clamped to 4');
+});
+
+test('create_decision_tree: caps branches at 4 per node', async () => {
+  const root = {
+    text: 'Pick',
+    branches: Array.from({ length: 7 }, (_, i) => ({
+      label: `b${i + 1}`,
+      node: { text: `O${i + 1}`, isOutcome: true },
+    })),
+  };
+  const r = await tool('create_decision_tree').execute({
+    title: 'Wide',
+    root,
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  // root + 4 outcome leaves = 5 nodes
+  assert.equal(r.nodes, 5);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.includes('O1'));
+  assert.ok(svg.includes('O4'));
+  assert.equal(svg.includes('O5'), false, 'branches beyond the 4-cap should not render');
+});
+
+test('create_decision_tree: xml-escapes node text and branch labels', async () => {
+  const r = await tool('create_decision_tree').execute({
+    title: 'XSS',
+    root: {
+      text: '<script>evil</script>',
+      branches: [
+        { label: '"injected"', node: { text: 'Safe', isOutcome: true } },
+      ],
+    },
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.equal(svg.includes('<script>evil</script>'), false);
+  assert.ok(svg.includes('&lt;script&gt;'));
+  assert.ok(svg.includes('&quot;injected&quot;'));
+});
+
+test('create_decision_tree: supports all four themes', async () => {
+  for (const theme of ['professional', 'modern', 'minimal', 'corporate']) {
+    const r = await tool('create_decision_tree').execute({
+      title: `Theme ${theme}`,
+      root: {
+        text: 'x?',
+        branches: [
+          { label: 'a', node: { text: 'A', isOutcome: true } },
+          { label: 'b', node: { text: 'B', isOutcome: true } },
+        ],
+      },
+      theme,
+    }, fakeCtx());
+    assert.equal(r.ok, true, `theme ${theme} should succeed`);
+    const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+    assert.ok(svg.startsWith('<svg'));
+  }
+});
+
+test('create_decision_tree: emits expected events', async () => {
+  const ctx = fakeCtx();
+  await tool('create_decision_tree').execute({
+    title: 'Events',
+    root: { text: 'x', isOutcome: true },
   }, ctx);
   const types = ctx._events.map(e => e.type);
   assert.ok(types.includes('tool_call'));

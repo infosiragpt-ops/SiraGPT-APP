@@ -949,6 +949,33 @@ function getVisualMediaManifests() {
       scopes: ["files.write"],
       data_classes: ["public","internal"],
     },
+    create_decision_tree: {
+      name: "create_decision_tree",
+      purpose: "Generate a decision tree SVG: top-down branching diagram with a root decision and recursive labelled branches leading to outcome leaves. Use for decision flowcharts, classifier explainability, triage trees, eligibility checks. Supports up to 4 levels and 4 branches per node.",
+      inputs: {
+        type: "object", required: ["title","root"],
+        properties: {
+          title: { type: "string" },
+          subtitle: { type: "string" },
+          root: { type: "object", description: "Recursive node: { text, isOutcome?, branches?: [{ label, node }] }." },
+          theme: { type: "string", enum: ["professional","modern","minimal","corporate"] },
+        },
+      },
+      outputs: { type: "object", properties: { ok: { type: "boolean" }, downloadUrl: { type: "string" }, id: { type: "string" }, filename: { type: "string" }, nodes: { type: "integer" }, outcomes: { type: "integer" }, decisions: { type: "integer" }, depth: { type: "integer" } } },
+      allowed_formats: ["svg"],
+      forbidden_formats: [],
+      expected_errors: [
+        { code: "invalid_root", description: "root node missing or invalid.", repair_hint: "Provide { text, branches? } as root." },
+      ],
+      acceptance_tests: ["returns ok:true for a 3-level decision tree with at least 4 outcome leaves"],
+      usage_limits: { timeout_ms_default: 15000, timeout_ms_max: 60000, max_calls_per_task: 5, requires_auth: false, requires_network: false },
+      examples_positive: [{ when: "user wants an eligibility decision tree", call: { title: "Eligibility", root: { text: "Has signed up?", branches: [{ label: "Yes", node: { text: "Has activated?", branches: [{ label: "Yes", node: { text: "Pro tier", isOutcome: true } }, { label: "No", node: { text: "Onboard", isOutcome: true } }] } }, { label: "No", node: { text: "Show CTA", isOutcome: true } }] } } }],
+      examples_negative: [{ when: "user wants a parent-child organisational hierarchy", why: "use create_organigram — decision trees branch on conditions, organigrams represent reporting structure." }],
+      recovery_policy: { on_timeout: "Return ok:false.", on_error: "Surface the error.", max_retries: 1 },
+      side_effect_level: "local-fs",
+      scopes: ["files.write"],
+      data_classes: ["public","internal"],
+    },
     create_moscow_chart: {
       name: "create_moscow_chart",
       purpose: "Generate a MoSCoW prioritization chart SVG: 4 vertical columns (Must Have / Should Have / Could Have / Won't Have) with feature/task cards in each. Use for agile backlog grooming, MVP scope decisions, requirement triage, release planning.",

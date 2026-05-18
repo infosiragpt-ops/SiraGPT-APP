@@ -37,7 +37,7 @@ npm run type-check     # TSC completo
 5. **Hacer `git pull --rebase` antes de push** para evitar conflictos
 6. **Priorizar:** estabilidad, rendimiento, cobertura de errores, calidad de código
 
-## Visual Tools Inventory (30 tools)
+## Visual Tools Inventory (31 tools)
 | Tool | File | Description |
 |------|------|-------------|
 | generate_image | visual-media-tools.js | SVG/PNG image generation |
@@ -70,6 +70,7 @@ npm run type-check     # TSC completo
 | create_ansoff_matrix | visual-media-tools.js | Ansoff growth-strategy 2x2 SVG (Market × Product → Penetration/Development/Development/Diversification with risk pills, 4 themes) |
 | create_bcg_matrix | visual-media-tools.js | BCG portfolio matrix SVG (Market Share × Growth with revenue-sized bubbles, Stars/Cash Cows/Question Marks/Dogs quadrants, 4 themes) |
 | create_moscow_chart | visual-media-tools.js | MoSCoW prioritization SVG (4 columns Must/Should/Could/Won't Have with feature cards, 4 themes) |
+| create_decision_tree | visual-media-tools.js | Decision tree SVG (top-down branching with up to 4 levels × 4 branches, decision/outcome nodes, labelled edges, 4 themes) |
 
 ## Backend Reliability Utilities
 

@@ -7160,6 +7160,256 @@ const createMoscowChart = {
   },
 };
 
+// ─────────────────────────────────────────────────────────────────────────
+// Tool 31: create_decision_tree
+// ─────────────────────────────────────────────────────────────────────────
+
+const createDecisionTree = {
+  name: 'create_decision_tree',
+  description: 'Generate a decision tree as an SVG file: a top-down branching diagram with a root decision and recursive yes/no/labelled branches leading to outcome leaves. Use for decision flowcharts, classifier explainability, triage trees, eligibility checks, or any branching logic visualisation. Supports up to 4 levels deep and up to 4 branches per node.',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string', description: 'Tree title (e.g. "Account eligibility decision").' },
+      subtitle: { type: 'string', description: 'Optional context line.' },
+      root: {
+        type: 'object',
+        description: 'Root node — has the top-level decision. Recursive { text, isOutcome?, branches?: [{ label, node }] }.',
+      },
+      theme: { type: 'string', enum: ['professional', 'modern', 'minimal', 'corporate'], description: 'Visual theme. Default: "professional".' },
+    },
+    required: ['title', 'root'],
+    additionalProperties: false,
+  },
+  async execute({ title, subtitle = '', root, theme = 'professional' }, ctx = {}) {
+    emitEvent(ctx, 'tool_call', { tool: 'create_decision_tree', preview: title });
+
+    try {
+      if (!root || typeof root !== 'object' || !root.text) {
+        return { ok: false, error: 'root node missing or invalid — provide { text, branches? }' };
+      }
+
+      const themes = {
+        professional: {
+          bg: '#FAFBFC', card: '#FFFFFF', text: '#1E293B', muted: '#64748B', border: '#E2E8F0', accent: '#2563EB',
+          decision: { fill: '#DBEAFE', bar: '#2563EB', label: '#1E3A8A' },
+          outcome:  { fill: '#ECFDF5', bar: '#10B981', label: '#065F46' },
+          edge: '#94A3B8',
+        },
+        modern: {
+          bg: '#0B1121', card: '#1E293B', text: '#F1F5F9', muted: '#94A3B8', border: '#334155', accent: '#818CF8',
+          decision: { fill: '#1E3A8A', bar: '#60A5FA', label: '#BFDBFE' },
+          outcome:  { fill: '#064E3B', bar: '#34D399', label: '#A7F3D0' },
+          edge: '#94A3B8',
+        },
+        minimal: {
+          bg: '#FFFFFF', card: '#FFFFFF', text: '#0F172A', muted: '#64748B', border: '#CBD5E1', accent: '#0F172A',
+          decision: { fill: '#F8FAFC', bar: '#0F172A', label: '#0F172A' },
+          outcome:  { fill: '#F8FAFC', bar: '#475569', label: '#0F172A' },
+          edge: '#94A3B8',
+        },
+        corporate: {
+          bg: '#F8FAFC', card: '#FFFFFF', text: '#0F172A', muted: '#475569', border: '#CBD5E1', accent: '#1E40AF',
+          decision: { fill: '#E8F0FE', bar: '#1A73E8', label: '#0B3D91' },
+          outcome:  { fill: '#E6F4EA', bar: '#0F9D58', label: '#1B5E20' },
+          edge: '#5F6368',
+        },
+      };
+      const t = themes[theme] || themes.professional;
+
+      const safeTitle = xmlEscape(String(title).slice(0, 120));
+      const safeSubtitle = xmlEscape(String(subtitle || '').slice(0, 140));
+      const MAX_DEPTH = 4;
+      const MAX_BRANCHES = 4;
+      const NODE_W = 200;
+      const NODE_H = 60;
+      const V_SPACE = 110;
+      const H_SPACE_MIN = 28;
+
+      // Normalise the tree (recursive): trim each branch's children to
+      // MAX_BRANCHES and stop expanding past MAX_DEPTH (forcing those
+      // nodes to become leaves). Compute leafCount per subtree so we
+      // can later allocate horizontal space proportionally.
+      function normalise(node, depth) {
+        if (!node || typeof node !== 'object') {
+          return { text: '?', isOutcome: true, branches: [], leafCount: 1, depth };
+        }
+        const isAtMaxDepth = depth >= MAX_DEPTH - 1;
+        const rawBranches = Array.isArray(node.branches) ? node.branches.slice(0, MAX_BRANCHES) : [];
+        const isOutcomeFlag = !!node.isOutcome || rawBranches.length === 0 || isAtMaxDepth;
+        const branches = isOutcomeFlag
+          ? []
+          : rawBranches
+            .filter(b => b && typeof b === 'object' && b.node)
+            .map(b => ({
+              label: xmlEscape(String(b.label || '').slice(0, 18)),
+              node: normalise(b.node, depth + 1),
+            }));
+        const leafCount = branches.length === 0
+          ? 1
+          : branches.reduce((s, b) => s + b.node.leafCount, 0);
+        return {
+          text: xmlEscape(String(node.text || '').slice(0, 50)),
+          isOutcome: isOutcomeFlag,
+          branches,
+          leafCount,
+          depth,
+        };
+      }
+      const tree = normalise(root, 0);
+
+      // Position each node: x is the centre of its allocated horizontal
+      // slot (one unit per descendant leaf), y is depth × V_SPACE.
+      // Returns flattened nodes + edges for SVG render.
+      function layout(node, leftX, rightX, depth, nodes, edges, parentCenter) {
+        const centerX = (leftX + rightX) / 2;
+        const y = depth * V_SPACE;
+        nodes.push({ x: centerX, y, node });
+        if (parentCenter) {
+          edges.push({ x1: parentCenter.x, y1: parentCenter.y + NODE_H, x2: centerX, y2: y, label: parentCenter.label });
+        }
+        if (node.branches.length === 0) return;
+        let cursor = leftX;
+        node.branches.forEach((branch) => {
+          const slotW = ((rightX - leftX) * branch.node.leafCount) / node.leafCount;
+          const childLeft = cursor;
+          const childRight = cursor + slotW;
+          layout(branch.node, childLeft, childRight, depth + 1, nodes, edges, {
+            x: centerX, y, label: branch.label,
+          });
+          cursor += slotW;
+        });
+      }
+      const nodes = [];
+      const edges = [];
+      const totalWidth = Math.max(tree.leafCount * (NODE_W + H_SPACE_MIN), NODE_W + 80);
+      layout(tree, 0, totalWidth, 0, nodes, edges, null);
+
+      const headerH = safeSubtitle ? 110 : 86;
+      const pad = 28;
+      // Compute bounding box from positioned nodes
+      const minX = Math.min(...nodes.map(n => n.x - NODE_W / 2));
+      const maxX = Math.max(...nodes.map(n => n.x + NODE_W / 2));
+      const maxDepth = Math.max(...nodes.map(n => n.node.depth));
+      const offsetX = pad - minX;
+      const offsetY = headerH + pad;
+      const W = pad * 2 + (maxX - minX);
+      const H = headerH + pad + (maxDepth * V_SPACE) + NODE_H + pad + 40;
+
+      let body = `<rect width="${W}" height="${H}" fill="${t.bg}" rx="12"/>`;
+      // Header
+      body += `<rect x="0" y="0" width="${W}" height="${headerH}" fill="${t.accent}"/>`;
+      body += `<text x="${W / 2}" y="42" text-anchor="middle" font-family="Georgia, serif" font-size="24" font-weight="bold" fill="#fff">${safeTitle}</text>`;
+      const outcomeCount = nodes.filter(n => n.node.isOutcome).length;
+      const decisionCount = nodes.length - outcomeCount;
+      body += `<text x="${W / 2}" y="66" text-anchor="middle" font-family="Arial" font-size="12" fill="#fff" opacity="0.85">${decisionCount} decisión${decisionCount === 1 ? '' : 'es'} · ${outcomeCount} resultado${outcomeCount === 1 ? '' : 's'} · prof ${maxDepth + 1}</text>`;
+      if (safeSubtitle) {
+        body += `<text x="${W / 2}" y="92" text-anchor="middle" font-family="Arial" font-size="13" fill="#fff" opacity="0.92">${safeSubtitle}</text>`;
+      }
+
+      // Render edges first (so nodes sit on top)
+      edges.forEach((e) => {
+        const x1 = e.x1 + offsetX;
+        const y1 = e.y1 + offsetY;
+        const x2 = e.x2 + offsetX;
+        const y2 = e.y2 + offsetY;
+        // Smooth curve from bottom of parent to top of child (cubic)
+        const midY = (y1 + y2) / 2;
+        const path = `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`;
+        body += `<path d="${path}" stroke="${t.edge}" stroke-width="1.5" fill="none" opacity="0.7"/>`;
+        // Branch label at the midpoint
+        if (e.label) {
+          const labelW = Math.max(40, e.label.length * 6 + 12);
+          body += `<rect x="${(x1 + x2) / 2 - labelW / 2}" y="${midY - 10}" width="${labelW}" height="20" rx="10" fill="${t.card}" stroke="${t.edge}" stroke-width="1"/>`;
+          body += `<text x="${(x1 + x2) / 2}" y="${midY + 4}" text-anchor="middle" font-family="Arial" font-size="11" font-weight="bold" fill="${t.text}">${e.label}</text>`;
+        }
+      });
+
+      // Render nodes
+      nodes.forEach((n) => {
+        const x = n.x + offsetX - NODE_W / 2;
+        const y = n.y + offsetY;
+        const pal = n.node.isOutcome ? t.outcome : t.decision;
+        // Shape: rounded rectangle for decision; squared with strong corners for outcome
+        const rx = n.node.isOutcome ? 14 : 8;
+        body += `<rect x="${x}" y="${y}" width="${NODE_W}" height="${NODE_H}" rx="${rx}" fill="${pal.fill}" stroke="${pal.bar}" stroke-width="${n.node.isOutcome ? 2 : 1.5}" filter="url(#vis-shadow)"/>`;
+        body += `<rect x="${x}" y="${y}" width="6" height="${NODE_H}" rx="3" fill="${pal.bar}"/>`;
+        // Icon
+        const icon = n.node.isOutcome ? '▶' : '?';
+        body += `<text x="${x + 22}" y="${y + NODE_H / 2 + 5}" font-family="Arial" font-size="16" font-weight="bold" fill="${pal.bar}">${icon}</text>`;
+        // Text (wrap to up to 2 lines, ~22 chars per line)
+        const text = n.node.text;
+        let l1 = '';
+        let l2 = '';
+        const words = text.split(' ');
+        for (const w of words) {
+          if ((l1 + ' ' + w).trim().length < 22) l1 = (l1 + ' ' + w).trim();
+          else l2 = (l2 + ' ' + w).trim();
+        }
+        if (l2) {
+          body += `<text x="${x + 38}" y="${y + NODE_H / 2 - 2}" font-family="Arial" font-size="12" font-weight="bold" fill="${pal.label}">${l1}</text>`;
+          body += `<text x="${x + 38}" y="${y + NODE_H / 2 + 14}" font-family="Arial" font-size="11" fill="${pal.label}">${l2}</text>`;
+        } else {
+          body += `<text x="${x + 38}" y="${y + NODE_H / 2 + 5}" font-family="Arial" font-size="13" font-weight="bold" fill="${pal.label}">${l1}</text>`;
+        }
+      });
+
+      // Legend at the bottom
+      const legendY = H - 28;
+      body += `<rect x="${pad}" y="${legendY - 14}" width="14" height="14" rx="3" fill="${t.decision.fill}" stroke="${t.decision.bar}" stroke-width="1.5"/>`;
+      body += `<text x="${pad + 22}" y="${legendY - 3}" font-family="Arial" font-size="11" fill="${t.text}">? Decisión</text>`;
+      body += `<rect x="${pad + 110}" y="${legendY - 14}" width="14" height="14" rx="7" fill="${t.outcome.fill}" stroke="${t.outcome.bar}" stroke-width="2"/>`;
+      body += `<text x="${pad + 132}" y="${legendY - 3}" font-family="Arial" font-size="11" fill="${t.text}">▶ Resultado</text>`;
+
+      const svg = svgDocument({
+        width: W,
+        height: H,
+        title: safeTitle,
+        description: `Decision tree: ${safeTitle}`,
+        body,
+      });
+
+      const buffer = Buffer.from(svg, 'utf8');
+      const filename = `dtree_${crypto.randomBytes(4).toString('hex')}.svg`;
+      const artifact = finalizeArtifact({ filename, buffer, mime: EXTENSION_TO_MIME.svg, ctx });
+
+      emitEvent(ctx, 'file_artifact', {
+        artifact: {
+          id: artifact.id,
+          filename: artifact.filename,
+          format: 'svg',
+          mime: 'image/svg+xml',
+          sizeBytes: artifact.sizeBytes,
+          downloadUrl: artifact.downloadUrl,
+        },
+      });
+
+      emitEvent(ctx, 'tool_output', {
+        tool: 'create_decision_tree',
+        ok: true,
+        preview: `Decision tree: ${artifact.filename} (${nodes.length} nodos · prof ${maxDepth + 1}, ${Math.round(artifact.sizeBytes / 1024)} KB)`,
+      });
+
+      return {
+        ok: true,
+        id: artifact.id,
+        filename: artifact.filename,
+        sizeBytes: artifact.sizeBytes,
+        downloadUrl: artifact.downloadUrl,
+        title,
+        nodes: nodes.length,
+        outcomes: outcomeCount,
+        decisions: decisionCount,
+        depth: maxDepth + 1,
+      };
+    } catch (err) {
+      const msg = err?.message || String(err);
+      emitEvent(ctx, 'tool_output', { tool: 'create_decision_tree', ok: false, preview: `Error: ${msg}` });
+      return { ok: false, error: msg };
+    }
+  },
+};
+
 // ── All visual/media tools for the agent ──────────────────────────────
 
 const VISUAL_MEDIA_TOOLS = [
@@ -7193,6 +7443,7 @@ const VISUAL_MEDIA_TOOLS = [
   createAnsoffMatrix,
   createBcgMatrix,
   createMoscowChart,
+  createDecisionTree,
 ];
 
 // Internal helpers exposed for unit testing — NOT part of the public agent
