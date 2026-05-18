@@ -24,6 +24,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
+    # The PROD_* env vars are pulled from secrets at the JOB level so
+    # appleboy/ssh-action's `envs:` field can forward them. Without
+    # this `env:` block, the secrets are unset in the job environment
+    # and the SSH session sees empty strings.
+    env:
+      PROD_GROQ_API_KEY: ${{ secrets.PROD_GROQ_API_KEY }}
+      PROD_GEMINI_API_KEY: ${{ secrets.PROD_GEMINI_API_KEY }}
+      PROD_DEEPSEEK_API_KEY: ${{ secrets.PROD_DEEPSEEK_API_KEY }}
+      PROD_OPENROUTER_API_KEY: ${{ secrets.PROD_OPENROUTER_API_KEY }}
+      PROD_ANTHROPIC_API_KEY: ${{ secrets.PROD_ANTHROPIC_API_KEY }}
+      PROD_OPENAI_API_KEY: ${{ secrets.PROD_OPENAI_API_KEY }}
+
     steps:
       - name: Sync keys + restart backend
         uses: appleboy/ssh-action@v1.2.0
