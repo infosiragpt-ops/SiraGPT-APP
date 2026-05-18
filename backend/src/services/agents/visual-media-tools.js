@@ -7410,6 +7410,257 @@ const createDecisionTree = {
   },
 };
 
+// ─────────────────────────────────────────────────────────────────────────
+// Tool 32: create_concept_map
+// ─────────────────────────────────────────────────────────────────────────
+
+const createConceptMap = {
+  name: 'create_concept_map',
+  description: 'Generate a concept map as an SVG file: an undirected node-link graph laid out radially with N concept nodes (2-12) and M labelled edges representing semantic relations between them. Use for knowledge maps, taxonomy diagrams, semantic-network visualisations, or any free-form node-link graph. Distinct from create_decision_tree (hierarchical) and create_organigram (parent-child).',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string', description: 'Map title (e.g. "AI agent components").' },
+      subtitle: { type: 'string', description: 'Optional context line.' },
+      nodes: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            id:       { type: 'string', description: 'Unique node identifier.' },
+            label:    { type: 'string', description: 'Display label.' },
+            category: { type: 'string', description: 'Optional category for color grouping.' },
+          },
+          required: ['id', 'label'],
+        },
+        description: '2-12 nodes.',
+      },
+      edges: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            from:  { type: 'string', description: 'Source node id.' },
+            to:    { type: 'string', description: 'Target node id.' },
+            label: { type: 'string', description: 'Optional relation label.' },
+          },
+          required: ['from', 'to'],
+        },
+        description: '0-30 edges between node ids.',
+      },
+      theme: { type: 'string', enum: ['professional', 'modern', 'minimal', 'corporate'], description: 'Visual theme. Default: "professional".' },
+    },
+    required: ['title', 'nodes'],
+    additionalProperties: false,
+  },
+  async execute({ title, subtitle = '', nodes = [], edges = [], theme = 'professional' }, ctx = {}) {
+    emitEvent(ctx, 'tool_call', { tool: 'create_concept_map', preview: title });
+
+    try {
+      if (!Array.isArray(nodes) || nodes.length < 2) {
+        return { ok: false, error: 'concept map requires at least 2 nodes' };
+      }
+      if (nodes.length > 12) {
+        return { ok: false, error: 'concept map supports at most 12 nodes' };
+      }
+      const edgeList = Array.isArray(edges) ? edges.slice(0, 30) : [];
+
+      const themes = {
+        professional: {
+          bg: '#FAFBFC', card: '#FFFFFF', text: '#1E293B', muted: '#64748B', border: '#E2E8F0', accent: '#2563EB',
+          edge: '#94A3B8',
+          palette: ['#2563EB', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#06B6D4', '#84CC16'],
+        },
+        modern: {
+          bg: '#0B1121', card: '#1E293B', text: '#F1F5F9', muted: '#94A3B8', border: '#334155', accent: '#818CF8',
+          edge: '#94A3B8',
+          palette: ['#60A5FA', '#34D399', '#FBBF24', '#F87171', '#A78BFA', '#F472B6', '#22D3EE', '#A3E635'],
+        },
+        minimal: {
+          bg: '#FFFFFF', card: '#FFFFFF', text: '#0F172A', muted: '#64748B', border: '#CBD5E1', accent: '#0F172A',
+          edge: '#94A3B8',
+          palette: ['#0F172A', '#1E293B', '#334155', '#475569', '#64748B', '#94A3B8', '#CBD5E1', '#E2E8F0'],
+        },
+        corporate: {
+          bg: '#F8FAFC', card: '#FFFFFF', text: '#0F172A', muted: '#475569', border: '#CBD5E1', accent: '#1E40AF',
+          edge: '#5F6368',
+          palette: ['#1A73E8', '#0F9D58', '#F9AB00', '#D93025', '#673AB7', '#E91E63', '#039BE5', '#A5D86C'],
+        },
+      };
+      const t = themes[theme] || themes.professional;
+
+      const safeTitle = xmlEscape(String(title).slice(0, 120));
+      const safeSubtitle = xmlEscape(String(subtitle || '').slice(0, 140));
+      const labelMaxChars = 22;
+
+      // Validate node IDs and labels
+      const nodeMap = new Map();
+      const nodeList = nodes.slice(0, 12).map((n, idx) => {
+        const id = String(n.id || `n${idx}`);
+        const node = {
+          id,
+          label: xmlEscape(String(n.label || '').slice(0, labelMaxChars)),
+          category: xmlEscape(String(n.category || '').slice(0, 16)),
+          _idx: idx,
+        };
+        nodeMap.set(id, node);
+        return node;
+      });
+
+      // Determine category-color assignments (one palette colour per distinct category)
+      const categorySeen = new Map();
+      nodeList.forEach((n) => {
+        const cat = n.category || '__default__';
+        if (!categorySeen.has(cat)) categorySeen.set(cat, categorySeen.size);
+        n._color = t.palette[categorySeen.get(cat) % t.palette.length];
+      });
+
+      // Circular layout: place nodes evenly around a circle
+      const headerH = safeSubtitle ? 110 : 86;
+      const pad = 28;
+      const radius = 200;
+      const plotSize = radius * 2 + 120; // padding for labels
+      const legendW = categorySeen.size > 1 ? 200 : 0;
+      const W = pad * 2 + plotSize + (legendW > 0 ? legendW + 24 : 0);
+      const H = headerH + pad + plotSize + pad;
+      const cx = pad + plotSize / 2;
+      const cy = headerH + pad + plotSize / 2;
+      const NODE_R = 38;
+
+      function nodeAngle(idx) {
+        return (-Math.PI / 2) + (2 * Math.PI * idx) / nodeList.length;
+      }
+      nodeList.forEach((n) => {
+        const ang = nodeAngle(n._idx);
+        n._x = cx + Math.cos(ang) * radius;
+        n._y = cy + Math.sin(ang) * radius;
+      });
+
+      let body = `<rect width="${W}" height="${H}" fill="${t.bg}" rx="12"/>`;
+      // Header
+      body += `<rect x="0" y="0" width="${W}" height="${headerH}" fill="${t.accent}"/>`;
+      body += `<text x="${W / 2}" y="42" text-anchor="middle" font-family="Georgia, serif" font-size="24" font-weight="bold" fill="#fff">${safeTitle}</text>`;
+      body += `<text x="${W / 2}" y="66" text-anchor="middle" font-family="Arial" font-size="12" fill="#fff" opacity="0.85">${nodeList.length} concepto${nodeList.length === 1 ? '' : 's'} · ${edgeList.length} relación${edgeList.length === 1 ? '' : 'es'}</text>`;
+      if (safeSubtitle) {
+        body += `<text x="${W / 2}" y="92" text-anchor="middle" font-family="Arial" font-size="13" fill="#fff" opacity="0.92">${safeSubtitle}</text>`;
+      }
+
+      // Render edges first
+      const validEdges = edgeList
+        .filter(e => e && nodeMap.has(String(e.from)) && nodeMap.has(String(e.to)))
+        .map(e => ({
+          from: nodeMap.get(String(e.from)),
+          to:   nodeMap.get(String(e.to)),
+          label: e.label ? xmlEscape(String(e.label).slice(0, 24)) : '',
+        }));
+      validEdges.forEach((e) => {
+        // Calculate edge endpoints just outside the node circles
+        const dx = e.to._x - e.from._x;
+        const dy = e.to._y - e.from._y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < 1) return;
+        const ux = dx / dist;
+        const uy = dy / dist;
+        const x1 = e.from._x + ux * NODE_R;
+        const y1 = e.from._y + uy * NODE_R;
+        const x2 = e.to._x - ux * NODE_R;
+        const y2 = e.to._y - uy * NODE_R;
+        // Slight curve through the centre region for visual breathability
+        const midX = (x1 + x2) / 2 + (cy - (y1 + y2) / 2) * 0.04;
+        const midY = (y1 + y2) / 2 - (cx - (x1 + x2) / 2) * 0.04;
+        body += `<path d="M ${x1} ${y1} Q ${midX} ${midY} ${x2} ${y2}" stroke="${t.edge}" stroke-width="1.5" fill="none" opacity="0.7"/>`;
+        if (e.label) {
+          const labelW = Math.max(40, e.label.length * 6 + 12);
+          body += `<rect x="${midX - labelW / 2}" y="${midY - 10}" width="${labelW}" height="18" rx="9" fill="${t.card}" stroke="${t.edge}" stroke-width="1"/>`;
+          body += `<text x="${midX}" y="${midY + 3}" text-anchor="middle" font-family="Arial" font-size="10" fill="${t.text}">${e.label}</text>`;
+        }
+      });
+
+      // Render nodes
+      nodeList.forEach((n) => {
+        body += `<circle cx="${n._x}" cy="${n._y}" r="${NODE_R}" fill="${n._color}" stroke="${t.card}" stroke-width="3" filter="url(#vis-shadow)"/>`;
+        // Wrap label to 2 lines (~12 chars per line)
+        const words = n.label.split(' ');
+        let l1 = '';
+        let l2 = '';
+        for (const w of words) {
+          if ((l1 + ' ' + w).trim().length < 12) l1 = (l1 + ' ' + w).trim();
+          else l2 = (l2 + ' ' + w).trim();
+        }
+        if (l2) {
+          body += `<text x="${n._x}" y="${n._y - 2}" text-anchor="middle" font-family="Arial" font-size="11" font-weight="bold" fill="#fff">${l1}</text>`;
+          body += `<text x="${n._x}" y="${n._y + 12}" text-anchor="middle" font-family="Arial" font-size="11" font-weight="bold" fill="#fff">${l2}</text>`;
+        } else {
+          body += `<text x="${n._x}" y="${n._y + 4}" text-anchor="middle" font-family="Arial" font-size="12" font-weight="bold" fill="#fff">${l1}</text>`;
+        }
+      });
+
+      // Legend (if multiple categories)
+      if (legendW > 0) {
+        const legendX = cx + plotSize / 2 + 24;
+        let lY = cy - radius;
+        body += `<text x="${legendX}" y="${lY}" font-family="Arial" font-size="13" font-weight="bold" fill="${t.text}">CATEGORÍAS</text>`;
+        lY += 18;
+        const seenLegend = new Set();
+        nodeList.forEach((n) => {
+          const cat = n.category || '__default__';
+          if (seenLegend.has(cat)) return;
+          seenLegend.add(cat);
+          const labelName = n.category || '(sin categoría)';
+          body += `<circle cx="${legendX + 10}" cy="${lY - 4}" r="8" fill="${n._color}"/>`;
+          body += `<text x="${legendX + 24}" y="${lY}" font-family="Arial" font-size="11" fill="${t.text}">${xmlEscape(labelName)}</text>`;
+          lY += 22;
+        });
+      }
+
+      const svg = svgDocument({
+        width: W,
+        height: H,
+        title: safeTitle,
+        description: `Concept map: ${safeTitle}`,
+        body,
+      });
+
+      const buffer = Buffer.from(svg, 'utf8');
+      const filename = `concept_${crypto.randomBytes(4).toString('hex')}.svg`;
+      const artifact = finalizeArtifact({ filename, buffer, mime: EXTENSION_TO_MIME.svg, ctx });
+
+      emitEvent(ctx, 'file_artifact', {
+        artifact: {
+          id: artifact.id,
+          filename: artifact.filename,
+          format: 'svg',
+          mime: 'image/svg+xml',
+          sizeBytes: artifact.sizeBytes,
+          downloadUrl: artifact.downloadUrl,
+        },
+      });
+
+      emitEvent(ctx, 'tool_output', {
+        tool: 'create_concept_map',
+        ok: true,
+        preview: `Concept map: ${artifact.filename} (${nodeList.length} nodos, ${validEdges.length} relaciones · ${Math.round(artifact.sizeBytes / 1024)} KB)`,
+      });
+
+      return {
+        ok: true,
+        id: artifact.id,
+        filename: artifact.filename,
+        sizeBytes: artifact.sizeBytes,
+        downloadUrl: artifact.downloadUrl,
+        title,
+        nodes: nodeList.length,
+        edges: validEdges.length,
+        categories: categorySeen.size,
+      };
+    } catch (err) {
+      const msg = err?.message || String(err);
+      emitEvent(ctx, 'tool_output', { tool: 'create_concept_map', ok: false, preview: `Error: ${msg}` });
+      return { ok: false, error: msg };
+    }
+  },
+};
+
 // ── All visual/media tools for the agent ──────────────────────────────
 
 const VISUAL_MEDIA_TOOLS = [
@@ -7444,6 +7695,7 @@ const VISUAL_MEDIA_TOOLS = [
   createBcgMatrix,
   createMoscowChart,
   createDecisionTree,
+  createConceptMap,
 ];
 
 // Internal helpers exposed for unit testing — NOT part of the public agent

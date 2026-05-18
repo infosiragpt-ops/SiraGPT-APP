@@ -653,8 +653,8 @@ test('create_dashboard_html: no charts', async () => {
 
 // ── Tool metadata ────────────────────────────────────────────────
 
-test('all 31 tools have valid metadata', () => {
-  assert.equal(VISUAL_MEDIA_TOOLS.length, 31);
+test('all 32 tools have valid metadata', () => {
+  assert.equal(VISUAL_MEDIA_TOOLS.length, 32);
   for (const t of VISUAL_MEDIA_TOOLS) {
     assert.ok(t.name);
     assert.ok(t.description);
@@ -3661,6 +3661,143 @@ test('create_decision_tree: emits expected events', async () => {
   await tool('create_decision_tree').execute({
     title: 'Events',
     root: { text: 'x', isOutcome: true },
+  }, ctx);
+  const types = ctx._events.map(e => e.type);
+  assert.ok(types.includes('tool_call'));
+  assert.ok(types.includes('file_artifact'));
+  assert.ok(types.includes('tool_output'));
+});
+
+// ── create_concept_map ───────────────────────────────────────────
+
+test('create_concept_map: 6-node AI components map with 5 edges', async () => {
+  const cm = tool('create_concept_map');
+  assert.ok(cm);
+  const r = await cm.execute({
+    title: 'AI Agent Components',
+    subtitle: 'sirAGPT architecture',
+    nodes: [
+      { id: 'p', label: 'Planner',  category: 'core' },
+      { id: 'e', label: 'Executor', category: 'core' },
+      { id: 'm', label: 'Memory',   category: 'storage' },
+      { id: 'r', label: 'RAG',      category: 'storage' },
+      { id: 't', label: 'Tools',    category: 'integration' },
+      { id: 'o', label: 'Observer', category: 'integration' },
+    ],
+    edges: [
+      { from: 'p', to: 'e', label: 'delegates' },
+      { from: 'e', to: 't', label: 'invokes' },
+      { from: 'e', to: 'm', label: 'writes' },
+      { from: 'p', to: 'r', label: 'queries' },
+      { from: 'o', to: 'e', label: 'watches' },
+    ],
+    theme: 'professional',
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.nodes, 6);
+  assert.equal(r.edges, 5);
+  assert.equal(r.categories, 3);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.startsWith('<svg'));
+  assert.ok(svg.includes('AI Agent Components'));
+  assert.ok(svg.includes('Planner'));
+  assert.ok(svg.includes('Executor'));
+  assert.ok(svg.includes('delegates'));
+  assert.ok(svg.includes('CATEGORÍAS'));
+});
+
+test('create_concept_map: fewer than 2 nodes fails', async () => {
+  const r = await tool('create_concept_map').execute({
+    title: 'Solo',
+    nodes: [{ id: 'a', label: 'A' }],
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /at least 2 nodes/i);
+});
+
+test('create_concept_map: more than 12 nodes fails', async () => {
+  const r = await tool('create_concept_map').execute({
+    title: 'Too many',
+    nodes: Array.from({ length: 15 }, (_, i) => ({ id: `n${i}`, label: `N${i}` })),
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /at most 12 nodes/i);
+});
+
+test('create_concept_map: invalid edge ids are silently dropped', async () => {
+  const r = await tool('create_concept_map').execute({
+    title: 'Mixed',
+    nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }],
+    edges: [
+      { from: 'a', to: 'b', label: 'valid' },
+      { from: 'a', to: 'nonexistent', label: 'invalid' },
+      { from: 'nope', to: 'a', label: 'invalid2' },
+    ],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  // Only the valid a→b edge survives
+  assert.equal(r.edges, 1);
+});
+
+test('create_concept_map: caps edges at 30', async () => {
+  const nodes = [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }];
+  const manyEdges = Array.from({ length: 50 }, (_, i) => ({ from: 'a', to: 'b', label: `e${i}` }));
+  const r = await tool('create_concept_map').execute({
+    title: 'Many edges',
+    nodes,
+    edges: manyEdges,
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.edges, 30, 'edges capped at 30');
+});
+
+test('create_concept_map: no edges still renders (just disconnected nodes)', async () => {
+  const r = await tool('create_concept_map').execute({
+    title: 'Isolated',
+    nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }, { id: 'c', label: 'C' }],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.edges, 0);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.includes('A'));
+  assert.ok(svg.includes('B'));
+});
+
+test('create_concept_map: xml-escapes node labels and edge labels', async () => {
+  const r = await tool('create_concept_map').execute({
+    title: 'XSS',
+    nodes: [
+      { id: '1', label: '<script>x</script>' },
+      { id: '2', label: 'Safe' },
+    ],
+    edges: [{ from: '1', to: '2', label: '"hi"' }],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.equal(svg.includes('<script>x</script>'), false);
+  assert.ok(svg.includes('&lt;script&gt;'));
+  assert.ok(svg.includes('&quot;hi&quot;'));
+});
+
+test('create_concept_map: supports all four themes', async () => {
+  for (const theme of ['professional', 'modern', 'minimal', 'corporate']) {
+    const r = await tool('create_concept_map').execute({
+      title: `Theme ${theme}`,
+      nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }],
+      edges: [{ from: 'a', to: 'b' }],
+      theme,
+    }, fakeCtx());
+    assert.equal(r.ok, true, `theme ${theme} should succeed`);
+    const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+    assert.ok(svg.startsWith('<svg'));
+  }
+});
+
+test('create_concept_map: emits expected events', async () => {
+  const ctx = fakeCtx();
+  await tool('create_concept_map').execute({
+    title: 'Events',
+    nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }],
   }, ctx);
   const types = ctx._events.map(e => e.type);
   assert.ok(types.includes('tool_call'));
