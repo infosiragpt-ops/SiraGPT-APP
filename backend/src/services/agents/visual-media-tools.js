@@ -2968,6 +2968,221 @@ const createSwotAnalysis = {
   },
 };
 
+// ─────────────────────────────────────────────────────────────────────────
+// Tool 13: create_eisenhower_matrix
+// ─────────────────────────────────────────────────────────────────────────
+
+const createEisenhowerMatrix = {
+  name: 'create_eisenhower_matrix',
+  description: 'Generate an Eisenhower urgency/importance matrix as an SVG file: a 2x2 productivity grid (Do / Schedule / Delegate / Eliminate). Use for prioritization, task triage, sprint planning, executive decision-making, or any urgent-vs-important categorisation. Each quadrant lists 1-8 bullet items.',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string', description: 'Matrix title (e.g. "Sprint 14 Triage").' },
+      subtitle: { type: 'string', description: 'Optional context line (e.g. period, owner).' },
+      do: { type: 'array', items: { type: 'string' }, description: 'Urgent AND important — do now (1-8 items).' },
+      schedule: { type: 'array', items: { type: 'string' }, description: 'Important but NOT urgent — schedule (1-8 items).' },
+      delegate: { type: 'array', items: { type: 'string' }, description: 'Urgent but NOT important — delegate (1-8 items).' },
+      eliminate: { type: 'array', items: { type: 'string' }, description: 'Neither urgent NOR important — eliminate (1-8 items).' },
+      theme: { type: 'string', enum: ['professional', 'modern', 'minimal', 'corporate'], description: 'Visual theme. Default: "professional".' },
+    },
+    required: ['title', 'do', 'schedule', 'delegate', 'eliminate'],
+    additionalProperties: false,
+  },
+  async execute({ title, subtitle = '', do: doItems = [], schedule = [], delegate = [], eliminate = [], theme = 'professional' }, ctx = {}) {
+    emitEvent(ctx, 'tool_call', { tool: 'create_eisenhower_matrix', preview: title });
+
+    try {
+      const quadInputs = [doItems, schedule, delegate, eliminate];
+      if (!quadInputs.every(q => Array.isArray(q))) {
+        return { ok: false, error: 'do/schedule/delegate/eliminate must be arrays' };
+      }
+      const totalItems = quadInputs.reduce((s, q) => s + q.length, 0);
+      if (totalItems === 0) {
+        return { ok: false, error: 'all quadrants are empty — provide at least one item' };
+      }
+
+      // Eisenhower colour semantics: red = act now, blue = strategic plan,
+      // amber = delegate, neutral grey = drop. Distinct from SWOT to keep
+      // the two readings independent when both appear in a deck.
+      const themes = {
+        professional: {
+          bg: '#FAFBFC', card: '#FFFFFF', text: '#1E293B', muted: '#64748B', border: '#E2E8F0', accent: '#0F172A', axisText: '#475569',
+          do:        { fill: '#FEE2E2', bar: '#DC2626', label: '#7F1D1D', verb: 'DO' },
+          schedule:  { fill: '#DBEAFE', bar: '#2563EB', label: '#1E3A8A', verb: 'SCHEDULE' },
+          delegate:  { fill: '#FEF3C7', bar: '#D97706', label: '#78350F', verb: 'DELEGATE' },
+          eliminate: { fill: '#F1F5F9', bar: '#64748B', label: '#334155', verb: 'ELIMINATE' },
+        },
+        modern: {
+          bg: '#0B1121', card: '#1E293B', text: '#F1F5F9', muted: '#94A3B8', border: '#334155', accent: '#818CF8', axisText: '#CBD5E1',
+          do:        { fill: '#7F1D1D', bar: '#F87171', label: '#FECACA', verb: 'DO' },
+          schedule:  { fill: '#1E3A8A', bar: '#60A5FA', label: '#BFDBFE', verb: 'SCHEDULE' },
+          delegate:  { fill: '#78350F', bar: '#FBBF24', label: '#FDE68A', verb: 'DELEGATE' },
+          eliminate: { fill: '#334155', bar: '#94A3B8', label: '#E2E8F0', verb: 'ELIMINATE' },
+        },
+        minimal: {
+          bg: '#FFFFFF', card: '#FFFFFF', text: '#0F172A', muted: '#64748B', border: '#CBD5E1', accent: '#0F172A', axisText: '#475569',
+          do:        { fill: '#F8FAFC', bar: '#DC2626', label: '#0F172A', verb: 'DO' },
+          schedule:  { fill: '#F8FAFC', bar: '#2563EB', label: '#0F172A', verb: 'SCHEDULE' },
+          delegate:  { fill: '#F8FAFC', bar: '#D97706', label: '#0F172A', verb: 'DELEGATE' },
+          eliminate: { fill: '#F8FAFC', bar: '#64748B', label: '#0F172A', verb: 'ELIMINATE' },
+        },
+        corporate: {
+          bg: '#F8FAFC', card: '#FFFFFF', text: '#0F172A', muted: '#475569', border: '#CBD5E1', accent: '#1E40AF', axisText: '#334155',
+          do:        { fill: '#FCE8E6', bar: '#D93025', label: '#7C1D14', verb: 'DO' },
+          schedule:  { fill: '#E8F0FE', bar: '#1A73E8', label: '#0B3D91', verb: 'SCHEDULE' },
+          delegate:  { fill: '#FFF8E1', bar: '#F9AB00', label: '#7C4A00', verb: 'DELEGATE' },
+          eliminate: { fill: '#F1F3F4', bar: '#5F6368', label: '#202124', verb: 'ELIMINATE' },
+        },
+      };
+      const t = themes[theme] || themes.professional;
+
+      const safeTitle = xmlEscape(String(title).slice(0, 120));
+      const safeSubtitle = xmlEscape(String(subtitle || '').slice(0, 140));
+      const quadW = 360;
+      const quadGap = 16;
+      const axisGutter = 64;
+      const pad = 28;
+      const headerH = safeSubtitle ? 110 : 88;
+      const quadHeaderH = 60;
+      const lineH = 22;
+      const lineMaxChars = 56;
+      const axisLabelH = 28;
+
+      // Quadrant order matters: visually, Y axis points UP (important on
+      // top) and X axis points RIGHT (urgent on right) — the canonical
+      // Eisenhower layout used in every productivity textbook.
+      const QUADS = [
+        // Top-left: important + NOT urgent → Schedule (Quadrant II)
+        { key: 'schedule',  pal: t.schedule,  items: schedule,  axisX: 'left',  axisY: 'top',    subLabel: 'Important · Not urgent' },
+        // Top-right: important + urgent → Do (Quadrant I)
+        { key: 'do',        pal: t.do,        items: doItems,   axisX: 'right', axisY: 'top',    subLabel: 'Important · Urgent' },
+        // Bottom-left: NOT important + NOT urgent → Eliminate (Quadrant IV)
+        { key: 'eliminate', pal: t.eliminate, items: eliminate, axisX: 'left',  axisY: 'bottom', subLabel: 'Not important · Not urgent' },
+        // Bottom-right: NOT important + urgent → Delegate (Quadrant III)
+        { key: 'delegate',  pal: t.delegate,  items: delegate,  axisX: 'right', axisY: 'bottom', subLabel: 'Not important · Urgent' },
+      ];
+      const trimmed = QUADS.map(q => ({
+        ...q,
+        items: (q.items || []).slice(0, 8).map(it => xmlEscape(String(it || '').slice(0, lineMaxChars))).filter(Boolean),
+      }));
+      const topRowItems = Math.max(trimmed[0].items.length, trimmed[1].items.length, 1);
+      const botRowItems = Math.max(trimmed[2].items.length, trimmed[3].items.length, 1);
+      const topRowH = quadHeaderH + topRowItems * lineH + 28;
+      const botRowH = quadHeaderH + botRowItems * lineH + 28;
+
+      const gridW = quadW * 2 + quadGap;
+      const W = pad * 2 + axisGutter + gridW;
+      const H = headerH + pad + axisLabelH + topRowH + quadGap + botRowH + pad;
+
+      let body = `<rect width="${W}" height="${H}" fill="${t.bg}" rx="12"/>`;
+      // Header band
+      body += `<rect x="0" y="0" width="${W}" height="${headerH}" fill="${t.accent}"/>`;
+      body += `<text x="${W / 2}" y="42" text-anchor="middle" font-family="Georgia, serif" font-size="24" font-weight="bold" fill="#fff">${safeTitle}</text>`;
+      const headerMeta = `${trimmed[1].items.length} DO · ${trimmed[0].items.length} SCHEDULE · ${trimmed[3].items.length} DELEGATE · ${trimmed[2].items.length} ELIMINATE`;
+      body += `<text x="${W / 2}" y="66" text-anchor="middle" font-family="Arial" font-size="12" fill="#fff" opacity="0.85">${headerMeta}</text>`;
+      if (safeSubtitle) {
+        body += `<text x="${W / 2}" y="92" text-anchor="middle" font-family="Arial" font-size="13" fill="#fff" opacity="0.92">${safeSubtitle}</text>`;
+      }
+
+      // X-axis label ("Urgency: Not urgent ← → Urgent")
+      const axisRowY = headerH + pad;
+      const leftQuadX = pad + axisGutter;
+      const rightQuadX = leftQuadX + quadW + quadGap;
+      body += `<text x="${leftQuadX + quadW / 2}" y="${axisRowY + 18}" text-anchor="middle" font-family="Arial" font-size="12" font-weight="bold" fill="${t.axisText}">NOT URGENT</text>`;
+      body += `<text x="${rightQuadX + quadW / 2}" y="${axisRowY + 18}" text-anchor="middle" font-family="Arial" font-size="12" font-weight="bold" fill="${t.axisText}">URGENT</text>`;
+
+      const topY = axisRowY + axisLabelH;
+      const botY = topY + topRowH + quadGap;
+
+      // Y-axis label (vertical text on the left gutter)
+      const yAxisX = pad + axisGutter / 2;
+      body += `<text x="${yAxisX}" y="${topY + topRowH / 2}" text-anchor="middle" font-family="Arial" font-size="12" font-weight="bold" fill="${t.axisText}" transform="rotate(-90, ${yAxisX}, ${topY + topRowH / 2})">IMPORTANT</text>`;
+      body += `<text x="${yAxisX}" y="${botY + botRowH / 2}" text-anchor="middle" font-family="Arial" font-size="12" font-weight="bold" fill="${t.axisText}" transform="rotate(-90, ${yAxisX}, ${botY + botRowH / 2})">NOT IMPORTANT</text>`;
+
+      function drawQuadrant(q, x, y, h) {
+        let out = '';
+        out += `<rect x="${x}" y="${y}" width="${quadW}" height="${h}" rx="10" fill="${q.pal.fill}" stroke="${t.border}" stroke-width="1" filter="url(#vis-shadow)"/>`;
+        out += `<rect x="${x}" y="${y}" width="6" height="${h}" rx="3" fill="${q.pal.bar}"/>`;
+        // Verb pill in top-right of card
+        const pillW = Math.max(78, q.pal.verb.length * 9 + 18);
+        out += `<rect x="${x + quadW - pillW - 14}" y="${y + 14}" width="${pillW}" height="24" rx="12" fill="${q.pal.bar}"/>`;
+        out += `<text x="${x + quadW - pillW / 2 - 14}" y="${y + 30}" text-anchor="middle" font-family="Arial" font-size="12" font-weight="bold" fill="#fff">${xmlEscape(q.pal.verb)}</text>`;
+        // Quadrant sub-label
+        out += `<text x="${x + 22}" y="${y + 28}" font-family="Arial" font-size="13" font-weight="bold" fill="${q.pal.label}">${xmlEscape(q.subLabel)}</text>`;
+        out += `<text x="${x + 22}" y="${y + 46}" font-family="Arial" font-size="11" fill="${t.muted}">${q.items.length} item${q.items.length === 1 ? '' : 's'}</text>`;
+        // Separator
+        out += `<line x1="${x + 16}" y1="${y + quadHeaderH}" x2="${x + quadW - 16}" y2="${y + quadHeaderH}" stroke="${t.border}" stroke-width="1"/>`;
+        // Items
+        if (q.items.length === 0) {
+          out += `<text x="${x + quadW / 2}" y="${y + quadHeaderH + 32}" text-anchor="middle" font-family="Arial" font-size="12" fill="${t.muted}" font-style="italic">— sin elementos —</text>`;
+        } else {
+          q.items.forEach((line, idx) => {
+            const ly = y + quadHeaderH + 22 + idx * lineH;
+            out += `<circle cx="${x + 22}" cy="${ly - 4}" r="3" fill="${q.pal.bar}"/>`;
+            out += `<text x="${x + 32}" y="${ly}" font-family="Arial" font-size="12" fill="${t.text}">${line}</text>`;
+          });
+        }
+        return out;
+      }
+
+      body += drawQuadrant(trimmed[0], leftQuadX,  topY, topRowH);
+      body += drawQuadrant(trimmed[1], rightQuadX, topY, topRowH);
+      body += drawQuadrant(trimmed[2], leftQuadX,  botY, botRowH);
+      body += drawQuadrant(trimmed[3], rightQuadX, botY, botRowH);
+
+      const svg = svgDocument({
+        width: W,
+        height: H,
+        title: safeTitle,
+        description: `Eisenhower matrix: ${safeTitle}`,
+        body,
+      });
+
+      const buffer = Buffer.from(svg, 'utf8');
+      const filename = `eisenhower_${crypto.randomBytes(4).toString('hex')}.svg`;
+      const artifact = finalizeArtifact({ filename, buffer, mime: EXTENSION_TO_MIME.svg, ctx });
+
+      emitEvent(ctx, 'file_artifact', {
+        artifact: {
+          id: artifact.id,
+          filename: artifact.filename,
+          format: 'svg',
+          mime: 'image/svg+xml',
+          sizeBytes: artifact.sizeBytes,
+          downloadUrl: artifact.downloadUrl,
+        },
+      });
+
+      emitEvent(ctx, 'tool_output', {
+        tool: 'create_eisenhower_matrix',
+        ok: true,
+        preview: `Eisenhower listo: ${artifact.filename} (Do:${trimmed[1].items.length} Sch:${trimmed[0].items.length} Del:${trimmed[3].items.length} Elim:${trimmed[2].items.length}, ${Math.round(artifact.sizeBytes / 1024)} KB)`,
+      });
+
+      return {
+        ok: true,
+        id: artifact.id,
+        filename: artifact.filename,
+        sizeBytes: artifact.sizeBytes,
+        downloadUrl: artifact.downloadUrl,
+        title,
+        counts: {
+          do:        trimmed[1].items.length,
+          schedule:  trimmed[0].items.length,
+          delegate:  trimmed[3].items.length,
+          eliminate: trimmed[2].items.length,
+        },
+        total: totalItems,
+      };
+    } catch (err) {
+      const msg = err?.message || String(err);
+      emitEvent(ctx, 'tool_output', { tool: 'create_eisenhower_matrix', ok: false, preview: `Error: ${msg}` });
+      return { ok: false, error: msg };
+    }
+  },
+};
+
 // ── All visual/media tools for the agent ──────────────────────────────
 
 const VISUAL_MEDIA_TOOLS = [
@@ -2983,6 +3198,7 @@ const VISUAL_MEDIA_TOOLS = [
   createComparisonTable,
   createProcessFlow,
   createSwotAnalysis,
+  createEisenhowerMatrix,
 ];
 
 // Internal helpers exposed for unit testing — NOT part of the public agent

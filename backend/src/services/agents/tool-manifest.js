@@ -949,6 +949,37 @@ function getVisualMediaManifests() {
       scopes: ["files.write"],
       data_classes: ["public","internal"],
     },
+    create_eisenhower_matrix: {
+      name: "create_eisenhower_matrix",
+      purpose: "Generate an Eisenhower urgency/importance matrix as a 2x2 SVG (Do / Schedule / Delegate / Eliminate). Use for task prioritization, sprint triage, executive decision queues, or any urgent-vs-important categorisation.",
+      inputs: {
+        type: "object", required: ["title","do","schedule","delegate","eliminate"],
+        properties: {
+          title: { type: "string" },
+          subtitle: { type: "string" },
+          do: { type: "array", items: { type: "string" }, description: "1-8 urgent AND important items." },
+          schedule: { type: "array", items: { type: "string" }, description: "1-8 important but NOT urgent items." },
+          delegate: { type: "array", items: { type: "string" }, description: "1-8 urgent but NOT important items." },
+          eliminate: { type: "array", items: { type: "string" }, description: "1-8 neither urgent NOR important items." },
+          theme: { type: "string", enum: ["professional","modern","minimal","corporate"] },
+        },
+      },
+      outputs: { type: "object", properties: { ok: { type: "boolean" }, downloadUrl: { type: "string" }, id: { type: "string" }, filename: { type: "string" }, counts: { type: "object" }, total: { type: "integer" } } },
+      allowed_formats: ["svg"],
+      forbidden_formats: [],
+      expected_errors: [
+        { code: "empty_quadrants", description: "all four quadrants are empty.", repair_hint: "Provide at least one item in any of do/schedule/delegate/eliminate." },
+        { code: "invalid_input_types", description: "one of do/schedule/delegate/eliminate is not an array.", repair_hint: "Pass arrays of strings for each quadrant." },
+      ],
+      acceptance_tests: ["returns ok:true for an Eisenhower with at least one item in any quadrant"],
+      usage_limits: { timeout_ms_default: 15000, timeout_ms_max: 60000, max_calls_per_task: 5, requires_auth: false, requires_network: false },
+      examples_positive: [{ when: "user wants to triage a backlog by urgency × importance", call: { title: "Sprint 14 Triage", do: ["Fix prod incident"], schedule: ["Migrate auth"], delegate: ["Renew SSL cert"], eliminate: ["Refactor legacy reports"] } }],
+      examples_negative: [{ when: "user wants a probability × impact risk matrix", why: "Eisenhower is urgency × importance; a heatmap chartType is better for probability × impact." }],
+      recovery_policy: { on_timeout: "Return ok:false.", on_error: "Surface the error.", max_retries: 1 },
+      side_effect_level: "local-fs",
+      scopes: ["files.write"],
+      data_classes: ["public","internal"],
+    },
   };
 }
 

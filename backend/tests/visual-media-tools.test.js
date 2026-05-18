@@ -653,8 +653,8 @@ test('create_dashboard_html: no charts', async () => {
 
 // ── Tool metadata ────────────────────────────────────────────────
 
-test('all 12 tools have valid metadata', () => {
-  assert.equal(VISUAL_MEDIA_TOOLS.length, 12);
+test('all 13 tools have valid metadata', () => {
+  assert.equal(VISUAL_MEDIA_TOOLS.length, 13);
   for (const t of VISUAL_MEDIA_TOOLS) {
     assert.ok(t.name);
     assert.ok(t.description);
@@ -905,6 +905,191 @@ test('create_swot_analysis: emits tool_call, file_artifact, and tool_output even
   assert.ok(types.includes('tool_call'));
   assert.ok(types.includes('file_artifact'));
   assert.ok(types.includes('tool_output'));
+});
+
+// ── create_eisenhower_matrix ─────────────────────────────────────
+
+test('create_eisenhower_matrix: full Q1-Q4 with all four quadrants populated', async () => {
+  const em = tool('create_eisenhower_matrix');
+  assert.ok(em);
+  const r = await em.execute({
+    title: 'Sprint 14 Triage',
+    subtitle: 'SiraGPT — week of 2026-05-18',
+    do: ['Fix prod incident', 'Ship hotfix for billing'],
+    schedule: ['Migrate auth to passkeys', 'Refactor RAG cache'],
+    delegate: ['Renew SSL cert', 'Update docs links'],
+    eliminate: ['Old A/B test cleanup'],
+    theme: 'professional',
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.ok(r.filename?.endsWith('.svg'));
+  assert.equal(r.counts.do, 2);
+  assert.equal(r.counts.schedule, 2);
+  assert.equal(r.counts.delegate, 2);
+  assert.equal(r.counts.eliminate, 1);
+  assert.equal(r.total, 7);
+  const fp = assertArtifact(r);
+  const c = fs.readFileSync(fp, 'utf8');
+  assert.ok(c.startsWith('<svg'), 'output should be a well-formed SVG');
+  assert.ok(c.includes('Sprint 14 Triage'));
+  assert.ok(c.includes('SiraGPT'), 'subtitle should render');
+  // Verbs on the action pills
+  assert.ok(c.includes('DO'));
+  assert.ok(c.includes('SCHEDULE'));
+  assert.ok(c.includes('DELEGATE'));
+  assert.ok(c.includes('ELIMINATE'));
+  // Axis labels
+  assert.ok(c.includes('URGENT'));
+  assert.ok(c.includes('NOT URGENT'));
+  assert.ok(c.includes('IMPORTANT'));
+  assert.ok(c.includes('NOT IMPORTANT'));
+  // Items appear
+  assert.ok(c.includes('Fix prod incident'));
+  assert.ok(c.includes('Migrate auth to passkeys'));
+  assert.ok(c.includes('Renew SSL cert'));
+  assert.ok(c.includes('Old A/B test cleanup'));
+});
+
+test('create_eisenhower_matrix: singleton in DO quadrant, others empty', async () => {
+  const r = await tool('create_eisenhower_matrix').execute({
+    title: 'Single action',
+    do: ['Only urgent + important thing'],
+    schedule: [],
+    delegate: [],
+    eliminate: [],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.total, 1);
+  assert.equal(r.counts.do, 1);
+  assert.equal(r.counts.schedule, 0);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.includes('Only urgent + important thing'));
+  assert.ok(svg.includes('— sin elementos —'));
+});
+
+test('create_eisenhower_matrix: all empty quadrants fails', async () => {
+  const r = await tool('create_eisenhower_matrix').execute({
+    title: 'Empty',
+    do: [], schedule: [], delegate: [], eliminate: [],
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /empty|provide at least/i);
+});
+
+test('create_eisenhower_matrix: non-array input fails fast', async () => {
+  const r = await tool('create_eisenhower_matrix').execute({
+    title: 'Bad input',
+    do: 'should be array',
+    schedule: [],
+    delegate: [],
+    eliminate: [],
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /must be arrays/i);
+});
+
+test('create_eisenhower_matrix: caps items at 8 per quadrant', async () => {
+  const tenItems = Array.from({ length: 10 }, (_, i) => `Task ${i + 1}`);
+  const r = await tool('create_eisenhower_matrix').execute({
+    title: 'Overflow guard',
+    do: tenItems,
+    schedule: ['s1'],
+    delegate: ['d1'],
+    eliminate: ['e1'],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.counts.do, 8, 'should cap at 8 items');
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.includes('Task 1'));
+  assert.ok(svg.includes('Task 8'));
+  assert.equal(svg.includes('Task 9'), false);
+  assert.equal(svg.includes('Task 10'), false);
+});
+
+test('create_eisenhower_matrix: long item text is truncated', async () => {
+  const longItem = 'B'.repeat(200);
+  const r = await tool('create_eisenhower_matrix').execute({
+    title: 'Truncation',
+    do: [longItem],
+    schedule: [], delegate: [], eliminate: [],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.equal(svg.includes('B'.repeat(57)), false, 'should not render 57+ B in a row');
+});
+
+test('create_eisenhower_matrix: xml-escapes item content (prevents SVG injection)', async () => {
+  const r = await tool('create_eisenhower_matrix').execute({
+    title: 'XSS guard',
+    do: ['<script>alert(1)</script>'],
+    schedule: ['"injected"'],
+    delegate: ['&amp;already'],
+    eliminate: ['<img onerror=x>'],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.equal(svg.includes('<script>alert(1)</script>'), false);
+  assert.ok(svg.includes('&lt;script&gt;'));
+  assert.ok(svg.includes('&quot;injected&quot;'));
+});
+
+test('create_eisenhower_matrix: supports all four themes', async () => {
+  for (const theme of ['professional', 'modern', 'minimal', 'corporate']) {
+    const r = await tool('create_eisenhower_matrix').execute({
+      title: `Theme ${theme}`,
+      do: ['d'], schedule: ['s'], delegate: ['de'], eliminate: ['el'],
+      theme,
+    }, fakeCtx());
+    assert.equal(r.ok, true, `theme ${theme} should succeed`);
+    const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+    assert.ok(svg.startsWith('<svg'), `theme ${theme} should yield valid SVG`);
+  }
+});
+
+test('create_eisenhower_matrix: unknown theme falls back to professional', async () => {
+  const r = await tool('create_eisenhower_matrix').execute({
+    title: 'Unknown theme',
+    do: ['x'], schedule: [], delegate: [], eliminate: [],
+    theme: 'rainbow-unicorn',
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+});
+
+test('create_eisenhower_matrix: emits tool_call, file_artifact, and tool_output events', async () => {
+  const ctx = fakeCtx();
+  await tool('create_eisenhower_matrix').execute({
+    title: 'Events',
+    do: ['x'], schedule: [], delegate: [], eliminate: [],
+  }, ctx);
+  const types = ctx._events.map(e => e.type);
+  assert.ok(types.includes('tool_call'));
+  assert.ok(types.includes('file_artifact'));
+  assert.ok(types.includes('tool_output'));
+});
+
+test('create_eisenhower_matrix: layout — Schedule top-left, Do top-right, Eliminate bottom-left, Delegate bottom-right', async () => {
+  // Verify the canonical Eisenhower layout: importance increases UP,
+  // urgency increases RIGHT. A reader should be able to find each
+  // quadrant by position alone.
+  const r = await tool('create_eisenhower_matrix').execute({
+    title: 'Layout check',
+    do: ['DO_ITEM'],
+    schedule: ['SCHED_ITEM'],
+    delegate: ['DEL_ITEM'],
+    eliminate: ['ELIM_ITEM'],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  // Schedule item renders BEFORE Do item in source order (Schedule
+  // is the top-left quadrant, drawn first). Then Do (top-right),
+  // then Eliminate (bottom-left), then Delegate (bottom-right).
+  const idxSched = svg.indexOf('SCHED_ITEM');
+  const idxDo    = svg.indexOf('DO_ITEM');
+  const idxElim  = svg.indexOf('ELIM_ITEM');
+  const idxDel   = svg.indexOf('DEL_ITEM');
+  assert.ok(idxSched > 0 && idxDo > idxSched, 'Schedule (top-left) drawn before Do (top-right)');
+  assert.ok(idxDo > 0 && idxElim > idxDo, 'Do (top-right) drawn before Eliminate (bottom-left)');
+  assert.ok(idxElim > 0 && idxDel > idxElim, 'Eliminate (bottom-left) drawn before Delegate (bottom-right)');
 });
 
 // ── Cleanup ──────────────────────────────────────────────────────

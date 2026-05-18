@@ -37,7 +37,7 @@ npm run type-check     # TSC completo
 5. **Hacer `git pull --rebase` antes de push** para evitar conflictos
 6. **Priorizar:** estabilidad, rendimiento, cobertura de errores, calidad de código
 
-## Visual Tools Inventory (12 tools)
+## Visual Tools Inventory (13 tools)
 | Tool | File | Description |
 |------|------|-------------|
 | generate_image | visual-media-tools.js | SVG/PNG image generation |
@@ -52,6 +52,7 @@ npm run type-check     # TSC completo
 | create_timeline | visual-media-tools.js | Timeline visualization |
 | create_kanban_board | visual-media-tools.js | Kanban board SVG |
 | create_swot_analysis | visual-media-tools.js | SWOT 2x2 matrix SVG (Strengths/Weaknesses/Opportunities/Threats, 4 themes) |
+| create_eisenhower_matrix | visual-media-tools.js | Eisenhower urgency×importance 2x2 SVG (Do/Schedule/Delegate/Eliminate, 4 themes, axis labels) |
 
 ## Backend Reliability Utilities
 
