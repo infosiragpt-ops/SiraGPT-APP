@@ -315,11 +315,17 @@ export function AICodeChatPanel() {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border/60 px-3">
-        <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+      <div className="flex h-10 shrink-0 items-center justify-between gap-2 border-b border-border/60 px-3">
+        <div className="flex shrink-0 items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
           <Sparkles className="h-3.5 w-3.5 text-sky-500" />
-          <span>Chat de código</span>
+          <span>Cursor Chat</span>
         </div>
+        <span
+          className="min-w-0 truncate text-[10.5px] font-mono text-muted-foreground/90"
+          title={activePath ?? undefined}
+        >
+          {activeFileLabel}
+        </span>
       </div>
 
       <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto p-3">

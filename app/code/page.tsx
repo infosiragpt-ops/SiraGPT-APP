@@ -3,8 +3,8 @@
 /**
  * /code — Cursor-inspired AI coding workspace.
  *
- * Layout: file tree on the left, multi-tab editor in the middle,
- * AI chat panel on the right. The whole page is a single client
+ * Layout: activity bar + explorer (left), editor + terminal (center),
+ * Cursor Chat panel on the right. The whole page is a single client
  * component so the workspace state stays mounted while the user
  * navigates within it; the inner pieces are lazy-loaded so the
  * route shell paints fast and the editor chunk only ships when
