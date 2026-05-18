@@ -34,9 +34,6 @@ import {
   AudioLines,
   RefreshCw,
   Check,
-  Zap,
-  Brain,
-  Crown,
   PanelLeftOpen,
   GripVertical,
   Info,
@@ -2200,26 +2197,10 @@ const NavbarModelSelector = ({
   const selectedModelData = availableModels.find((m: any) => m.name === selectedModel);
   const [searchQuery, setSearchQuery] = React.useState("");
 
-  // ALL hooks MUST be declared before any early return. Keeping the
-  // `useState(recents)` + `useCallback` + `useEffect` below the chat-
-  // type / custom-GPT branches caused "Rendered fewer hooks than
-  // expected" crashes whenever the caller switched chat types (hooks
-  // ran 1 time vs 4 times between renders → React invariant violation).
-  const RECENTS_KEY = "sira:model-recents";
-  const [recents, setRecents] = React.useState<string[]>([]);
-  const refreshRecents = React.useCallback(() => {
-    if (typeof window === "undefined") return;
-    try { setRecents(JSON.parse(localStorage.getItem(RECENTS_KEY) || "[]")); } catch { setRecents([]); }
-  }, []);
-  React.useEffect(() => { refreshRecents(); }, [refreshRecents]);
+  // Keep the call sites intact for model changes, but the picker no
+  // longer surfaces a separate "recent models" section.
   const recordRecent = (modelName: string) => {
-    if (typeof window === "undefined") return;
-    try {
-      const cur: string[] = JSON.parse(localStorage.getItem(RECENTS_KEY) || "[]");
-      const next = [modelName, ...cur.filter(n => n !== modelName)].slice(0, 3);
-      localStorage.setItem(RECENTS_KEY, JSON.stringify(next));
-      setRecents(next);
-    } catch {}
+    void modelName;
   };
 
   const pickModelForTier = React.useCallback((tier: "instant" | "thinking") => {
@@ -2994,23 +2975,6 @@ const NavbarModelSelector = ({
     );
   }
 
-  // Tier inference — derives a one-glance capability tag + ES subtitle
-  // from the model name, so the picker reads like ChatGPT's tiered
-  // selector (Instant / Thinking / Pro) instead of an opaque flat list.
-  const inferTier = (model: any): { label: string; hint: string; icon: typeof Zap } => {
-    const n = String(model?.name || model?.displayName || "").toLowerCase();
-    if (/(opus|o1\b|o3\b|o4\b|\br1\b|reason|think|deepseek-r)/.test(n)) {
-      return { label: "Thinking", hint: "Para razonamiento profundo", icon: Brain };
-    }
-    if (/(mini|fast|flash|haiku|lite|nano|8b|7b|turbo|gemma)/.test(n)) {
-      return { label: "Instant", hint: "Rápido para chats cotidianos", icon: Zap };
-    }
-    if (/(\bpro\b|ultra|max|405b|70b|sonnet)/.test(n)) {
-      return { label: "Pro", hint: "Máxima capacidad", icon: Crown };
-    }
-    return { label: "", hint: "Equilibrado", icon: Bot };
-  };
-
   // Stable provider order. Unknown providers fall to the end alphabetically.
   const providerOrder = ["OpenAI", "Anthropic", "Google", "Gemini", "DeepSeek", "xAI", "Groq", "OpenRouter"];
   const groupByProvider = (models: any[]): Array<[string, any[]]> => {
@@ -3035,11 +2999,6 @@ const NavbarModelSelector = ({
     model.provider?.toLowerCase().includes(searchQuery.toLowerCase())
   );
   const grouped = groupByProvider(filteredModels);
-  const recentModels = !searchQuery
-    ? recents
-        .map(n => filteredModels.find((m: any) => m.name === n))
-        .filter(Boolean) as any[]
-    : [];
 
   const onPick = (model: any) => {
     setSelectedModel(model.name);
@@ -3059,40 +3018,28 @@ const NavbarModelSelector = ({
   };
 
   // ModelRow — single picker entry. Active state = subtle bg + Check on
-  // the right; tier chip on the right of the name when not "Balanced".
+  // the right; rows stay one-line and restrained for fast scanning.
   const ModelRow = ({ model }: { model: any }) => {
-    const tier = inferTier(model);
     const isSelected = model.name === selectedModel;
-    const TierIcon = tier.icon;
     const iconName = resolveModelIconName(model);
+    const label = model.displayName || model.name;
     return (
       <DropdownMenuItem
         onSelect={() => onPick(model)}
         className={cn(
-          "group/row flex items-center gap-2.5 rounded-md px-2 py-1.5 cursor-pointer",
-          "focus:bg-muted/60 data-[highlighted]:bg-muted/60",
-          isSelected && "bg-muted/40",
+          "group/row flex min-h-10 items-center gap-3 rounded-lg px-2.5 py-2 cursor-pointer",
+          "text-foreground/90 focus:bg-muted/45 data-[highlighted]:bg-muted/45",
+          isSelected && "bg-muted/35 text-foreground",
         )}
       >
-        <IconProvider name={iconName} className="h-5 w-5 shrink-0" />
-        <div className="flex min-w-0 flex-1 flex-col">
-          <div className="flex items-center gap-1.5">
-            <span className="truncate text-[13px] font-semibold leading-tight">
-              {model.displayName || model.name}
-            </span>
-            {tier.label && (
-              <span className="inline-flex shrink-0 items-center gap-0.5 rounded-full border border-border/50 bg-muted/40 px-1.5 py-[1px] text-[9.5px] font-semibold uppercase tracking-wider text-muted-foreground/85">
-                <TierIcon className="h-2.5 w-2.5" strokeWidth={2.5} />
-                {tier.label}
-              </span>
-            )}
-          </div>
-          <span className="truncate text-[11px] leading-tight text-muted-foreground/85">
-            {tier.hint}
-          </span>
-        </div>
+        <span className="chat-model-icon inline-flex h-5 w-5 shrink-0 items-center justify-center">
+          <IconProvider name={iconName} size={20} />
+        </span>
+        <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium leading-5 tracking-[-0.005em]">
+          {label}
+        </span>
         {isSelected && (
-          <Check className="h-4 w-4 shrink-0 text-foreground/85" strokeWidth={2.5} />
+          <Check className="h-4 w-4 shrink-0 text-foreground/80" strokeWidth={2.25} />
         )}
       </DropdownMenuItem>
     );
@@ -3102,7 +3049,6 @@ const NavbarModelSelector = ({
   return (
     <DropdownMenu onOpenChange={(open) => {
       if (!open) setSearchQuery("");
-      if (open) refreshRecents();
     }}>
       {/* Model selector trigger — h-10, medium weight, subtle surface.
           The always-on red dot was removed: it was a dead indicator
@@ -3121,8 +3067,12 @@ const NavbarModelSelector = ({
           "data-[state=open]:bg-muted/55 data-[state=open]:border-border/50",
         )}
       >
-        {selectedModelData && <IconProvider name={resolveModelIconName(selectedModelData)} className="h-4 w-4 shrink-0" />}
-        <span className="chat-model-label max-w-[180px] truncate">{selectedModelData?.displayName || selectedModel}</span>
+        {selectedModelData && (
+          <span className="chat-model-icon inline-flex h-4 w-4 shrink-0 items-center justify-center">
+            <IconProvider name={resolveModelIconName(selectedModelData)} size={16} />
+          </span>
+        )}
+        <span className="chat-model-label max-w-[180px] truncate font-medium">{selectedModelData?.displayName || selectedModel}</span>
         <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-55 transition-transform duration-200 group-data-[state=open]/model:rotate-180" strokeWidth={2} />
       </DropdownMenuTrigger>
 
@@ -3131,10 +3081,10 @@ const NavbarModelSelector = ({
           <div className="relative">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/70" />
             <Input
-              placeholder="Buscar modelos…"
+              placeholder="Buscar modelos"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="h-8 border-border/50 bg-background pl-8 text-[13px]"
+              className="h-8 rounded-lg border-border/45 bg-background pl-8 text-[13px] shadow-none focus-visible:border-border/70 focus-visible:ring-1 focus-visible:ring-border/60 focus-visible:ring-offset-0"
               autoFocus
               onClick={(e) => e.stopPropagation()}
               onKeyDown={(e) => e.stopPropagation()}
@@ -3143,29 +3093,13 @@ const NavbarModelSelector = ({
         </div>
 
         <ScrollArea className="chat-model-menu-scroll h-[min(70dvh,440px)]">
-          {/* Recents — only shown when no search query is active. */}
-          {recentModels.length > 0 && (
-            <div className="px-1.5 pt-2">
-              <div className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-                Recientes
-              </div>
-              <div className="flex flex-col gap-0.5">
-                {recentModels.map((m: any) => (
-                  <ModelRow key={`recent-${m.name}`} model={m} />
-                ))}
-              </div>
-              <div className="mx-2 my-2 border-t border-border/40" />
-            </div>
-          )}
-
           {/* Provider-grouped sections. */}
           {grouped.length > 0 ? (
-            <div className="px-1.5 pb-2">
+            <div className="px-1.5 py-2">
               {grouped.map(([provider, models]) => (
-                <div key={provider} className="mt-2 first:mt-0">
-                  <div className="flex items-center gap-1.5 px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+                <div key={provider} className="mt-3 first:mt-0">
+                  <div className="flex items-center px-2 pb-1.5 text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground/55">
                     <span>{provider}</span>
-                    <span className="text-muted-foreground/40">· {models.length}</span>
                   </div>
                   <div className="flex flex-col gap-0.5">
                     {models.map((m: any) => (

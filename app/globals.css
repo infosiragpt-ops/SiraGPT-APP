@@ -445,6 +445,22 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   height: min(calc(var(--chat-viewport-height, 100dvh) - 7.5rem), 440px);
 }
 
+.chat-model-icon {
+  color: hsl(var(--foreground) / 0.72);
+}
+
+.chat-model-icon :is(svg, img) {
+  opacity: 0.82;
+}
+
+.chat-model-icon img {
+  filter: grayscale(1) contrast(1.05) !important;
+}
+
+.dark .chat-model-icon img {
+  filter: grayscale(1) invert(1) contrast(0.92) !important;
+}
+
 .chat-mobile-connectors-list {
   border-block: 1px solid hsl(var(--border) / 0.55);
   margin-block: 0.25rem;

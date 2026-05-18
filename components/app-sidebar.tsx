@@ -859,7 +859,7 @@ export function AppSidebar() {
               <img
                 src="/sira-gpt.png"
                 alt="Icon"
-                className="h-10 w-10  brightness-0 dark:brightness-0 dark:invert"
+                className="h-10 w-10 rounded-lg object-contain"
               />
 
             </div>

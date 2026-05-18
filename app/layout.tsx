@@ -59,11 +59,11 @@ export const metadata: Metadata = {
   // actually uses; the other sizes flow through the manifest.
   icons: {
     icon: [
-      { url: "/icon.svg", type: "image/svg+xml" },
-      { url: "/sira-gpt.png", sizes: "192x192", type: "image/png" },
+      { url: "/sira-gpt-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/sira-gpt-512.png", sizes: "512x512", type: "image/png" },
     ],
     apple: [
-      { url: "/sira-gpt.png", sizes: "180x180", type: "image/png" },
+      { url: "/sira-gpt-180.png", sizes: "180x180", type: "image/png" },
     ],
   },
 }

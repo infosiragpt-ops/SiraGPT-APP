@@ -79,7 +79,7 @@ export const iconMap: { [key: string]: IconConfig } = {
     GrokLogo: { type: 'png', imagePath: '/icons/grok.png', preserveColor: true },            // Official Grok/xAI Logo
     OpenRouterLogo: { type: 'png', imagePath: '/icons/openrouter.png', preserveColor: true }, // Official OpenRouter Logo
     GeminiLogo: { type: 'png', imagePath: '/icons/gemini.svg', preserveColor: true },        // Official Gemini/Google AI Logo
-    ClaudeLogo: { type: 'png', imagePath: '/icons/claude.svg', preserveColor: true },        // Official Claude/Anthropic Logo
+    ClaudeLogo: { type: 'png', imagePath: '/icons/claude.png', preserveColor: true },        // Official Claude/Anthropic Logo
     KimiLogo: { type: 'png', imagePath: '/icons/kimi.png', preserveColor: true },
     ZaiLogo: { type: 'png', imagePath: '/icons/z-ai.svg', preserveColor: true },
     SeedreamLogo: { type: 'svg', component: Palette },
@@ -118,6 +118,8 @@ export const IconProvider = ({ name, size = 24, ...props }: IconProviderProps) =
                     width={size}
                     height={size}
                     style={{
+                        width: "100%",
+                        height: "100%",
                         objectFit: "contain",
                         filter,
                     }}

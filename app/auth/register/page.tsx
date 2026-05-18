@@ -80,13 +80,13 @@ export default function RegisterPage() {
       <Card className="w-full max-w-md border-neutral-200 bg-white text-neutral-950 shadow-[0_24px_64px_-16px_rgba(0,0,0,0.18)] dark:border-white/15 dark:bg-zinc-950 dark:text-zinc-50 dark:shadow-[0_28px_70px_-18px_rgba(0,0,0,0.75)]">
         <CardHeader className="text-center">
           <div className="mb-4 flex justify-center">
-            <div className="flex h-14 w-14 items-center justify-center rounded-2xl border-2 border-neutral-900 bg-neutral-900 dark:border-white dark:bg-white">
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-neutral-200 bg-white dark:border-white/15 dark:bg-white">
               <Image
                 src="/sira-gpt.png"
                 alt=""
                 width={40}
                 height={40}
-                className="brightness-0 invert dark:brightness-100 dark:invert-0"
+                className="rounded-lg object-contain"
               />
             </div>
           </div>

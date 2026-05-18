@@ -811,7 +811,7 @@ const GitHubMCPVisual = ({ color }: { color: string }) => (
         animate={{ opacity: [0.4, 0.9, 0.4], scale: [1, 1.06, 1] }}
         transition={{ duration: 2.8, repeat: Infinity, ease: "easeInOut" }}
       />
-      <img src="/sira-gpt.png" alt="" className="relative z-[1] h-12 w-12 brightness-0 invert" />
+      <img src="/sira-gpt.png" alt="" className="relative z-[1] h-12 w-12 rounded-lg object-contain" />
     </motion.div>
   </div>
 )

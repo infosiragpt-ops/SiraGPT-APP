@@ -103,13 +103,13 @@ export default function LoginPage() {
       <Card className="w-full max-w-md border-neutral-200 bg-white text-neutral-950 shadow-[0_24px_64px_-16px_rgba(0,0,0,0.18)]">
         <CardHeader className="text-center">
           <div className="mb-4 flex justify-center">
-            <div className="flex h-14 w-14 items-center justify-center rounded-2xl border-2 border-neutral-900 bg-neutral-900">
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-neutral-200 bg-white">
               <Image
                 src="/sira-gpt.png"
                 alt=""
                 width={40}
                 height={40}
-                className="brightness-0 invert"
+                className="rounded-lg object-contain"
               />
             </div>
           </div>

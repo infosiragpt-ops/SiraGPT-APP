@@ -13,28 +13,28 @@
   "categories": ["productivity", "utilities", "education"],
   "icons": [
     {
-      "src": "/sira-gpt.png",
+      "src": "/sira-gpt-192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/sira-gpt.png",
+      "src": "/sira-gpt-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/sira-gpt.png",
+      "src": "/sira-gpt-192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "maskable"
     },
     {
-      "src": "/icon.svg",
-      "sizes": "any",
-      "type": "image/svg+xml",
-      "purpose": "any"
+      "src": "/sira-gpt-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
     }
   ],
   "shortcuts": [
@@ -43,21 +43,21 @@
       "short_name": "Chat",
       "description": "Abrir el chat para empezar una conversación",
       "url": "/chat",
-      "icons": [{ "src": "/sira-gpt.png", "sizes": "192x192" }]
+      "icons": [{ "src": "/sira-gpt-192.png", "sizes": "192x192" }]
     },
     {
       "name": "Biblioteca",
       "short_name": "Biblioteca",
       "description": "Ver imágenes y documentos generados",
       "url": "/library",
-      "icons": [{ "src": "/sira-gpt.png", "sizes": "192x192" }]
+      "icons": [{ "src": "/sira-gpt-192.png", "sizes": "192x192" }]
     },
     {
       "name": "Proyectos",
       "short_name": "Proyectos",
       "description": "Gestionar tus proyectos",
       "url": "/projects",
-      "icons": [{ "src": "/sira-gpt.png", "sizes": "192x192" }]
+      "icons": [{ "src": "/sira-gpt-192.png", "sizes": "192x192" }]
     }
   ],
   "prefer_related_applications": false

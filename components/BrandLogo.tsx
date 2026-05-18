@@ -13,12 +13,12 @@ export function BrandLogo() {
         <motion.img
           src="/sira-gpt.png"
           alt="Sira GPT"
-          className="h-10 w-10 brightness-0 dark:invert will-change-transform"
+          className="h-10 w-10 rounded-lg object-contain will-change-transform"
           whileHover={{
             rotate: 360,
             scale: 1.08,
             filter:
-              "brightness(0) drop-shadow(0 0 12px rgba(99,102,241,0.55)) drop-shadow(0 0 2px rgba(139,92,246,0.35))",
+              "drop-shadow(0 0 12px rgba(99,102,241,0.55)) drop-shadow(0 0 2px rgba(139,92,246,0.35))",
           }}
           transition={{
             rotate: { duration: 0.9, ease: [0.22, 1, 0.36, 1] },
