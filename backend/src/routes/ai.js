@@ -3358,7 +3358,7 @@ router.post(
 
     } catch (error) {
       console.error('Image generation error:', error);
-      res.status(500).json({ error: error.message || 'Image generation failed' });
+      res.status(500).json({ error: sanitizeErrorForUser(error) });
     }
   }
 );
@@ -3812,7 +3812,7 @@ router.post(
       }
       console.error('Image generation error:', error);
       if (!res.headersSent) {
-        res.status(500).json({ error: error.message || 'Image generation failed' });
+        res.status(500).json({ error: sanitizeErrorForUser(error) });
       }
     }
   }
@@ -4092,7 +4092,7 @@ router.post(
 
     } catch (error) {
       console.error('🚨 Video generation error:', error);
-      res.status(500).json({ error: error.message || 'Video generation failed' });
+      res.status(500).json({ error: sanitizeErrorForUser(error) });
     }
   }
 );
@@ -4513,7 +4513,7 @@ router.post(
 
     } catch (error) {
       console.error('❌ Vector PPT generation error:', error);
-      res.status(500).json({ error: error.message || 'Vector PPT generation failed' });
+      res.status(500).json({ error: sanitizeErrorForUser(error) });
     }
   }
 );
@@ -4629,7 +4629,7 @@ router.post(
 
     } catch (error) {
       console.error('❌ PPT generation error:', error);
-      res.status(500).json({ error: error.message || 'PPT generation failed' });
+      res.status(500).json({ error: sanitizeErrorForUser(error) });
     }
   }
 );
@@ -5111,7 +5111,7 @@ Process the user's request naturally and perform the necessary Gmail operations.
       }
 
       res.status(500).json({
-        error: error.message || 'Gmail AI generation failed'
+        error: sanitizeErrorForUser(error)
       });
     }
   }
@@ -5415,12 +5415,13 @@ Every element should feel intentionally designed, polished, and premium. The use
     } catch (error) {
       console.error('❌ Web development generation error:', error);
 
-      // Check if headers were already sent (streaming started)
+      const sanitizedError = sanitizeErrorForUser(error);
+
       if (!res.headersSent) {
-        res.status(500).json({ error: error.message || 'Web development generation failed' });
+        res.status(500).json({ error: sanitizedError });
       } else {
         try {
-          res.write(`data: ${JSON.stringify({ error: error.message || 'AI generation failed' })}\n\n`);
+          res.write(`data: ${JSON.stringify({ error: sanitizedError })}\n\n`);
         } catch (writeError) {
           console.error('Failed to write error to stream:', writeError);
         }
@@ -5681,7 +5682,7 @@ But first, you need to connect your Google Calendar & Drive account securely usi
         });
       }
 
-      res.status(500).json({ error: error.message || 'Google Services AI generation failed' });
+      res.status(500).json({ error: sanitizeErrorForUser(error) });
     }
   }
 );
@@ -5808,7 +5809,7 @@ router.post(
 
     } catch (error) {
       console.error('Chart generation error:', error);
-      res.status(500).json({ error: error.message || 'Chart generation failed' });
+      res.status(500).json({ error: sanitizeErrorForUser(error) });
     }
   }
 );
@@ -6003,7 +6004,7 @@ Generate the workbook based on the user's request.`;
       console.error('❌ Excel Workbook generation error:', error);
 
       return res.status(500).json({
-        error: error.message || 'Excel Workbook generation failed'
+        error: sanitizeErrorForUser(error)
       });
     }
   }

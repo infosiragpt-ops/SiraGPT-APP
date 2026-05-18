@@ -490,7 +490,11 @@ router.post(
       try { res.end(); } catch { /* already closed */ }
     } catch (error) {
       console.error('[search/web] agentic pipeline error:', error);
-      send({ type: 'error', error: error.message || 'agentic search failed' });
+      const msg = String(error?.message || error || 'agentic search failed');
+      let friendly = 'Hubo un problema con la búsqueda. Por favor intenta de nuevo.';
+      if (/429|rate.?limit|too many/i.test(msg)) friendly = 'El servidor está procesando muchas solicitudes. Intenta de nuevo en unos segundos.';
+      else if (/timeout|timed.?out|ETIMEDOUT/i.test(msg)) friendly = 'La búsqueda tardó demasiado. Intenta de nuevo.';
+      send({ type: 'error', error: friendly });
       try { res.end(); } catch { /* already closed */ }
     }
   }

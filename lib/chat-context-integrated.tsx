@@ -22,6 +22,40 @@ const isMonthlyLimitError = (errorMessage: string) => {
     (lowerMessage.includes('monthly') && lowerMessage.includes('limit'));
 };
 
+const normalizeChatError = (raw: string): string => {
+  if (/does not support image/i.test(raw)) {
+    return "El modelo seleccionado no admite imágenes. Intenta con un modelo compatible con visión o adjunta documentos en lugar de imágenes."
+  }
+  if (/cannot read.*image/i.test(raw)) {
+    return "No se pudieron procesar las imágenes adjuntas con este modelo. Intenta con un modelo compatible con visión."
+  }
+  if (/image input/i.test(raw)) {
+    return "El modelo no soporta entrada de imagen. Intenta con un modelo compatible con visión o adjunta documentos en lugar de imágenes."
+  }
+  if (/content.*policy|safety/i.test(raw)) {
+    return "La solicitud no pudo ser procesada debido a las políticas de contenido."
+  }
+  if (/context.*(window|length|token|exceed)/i.test(raw)) {
+    return "El mensaje es demasiado largo para el modelo seleccionado. Intenta reducir el contenido o usar un modelo con mayor capacidad de contexto."
+  }
+  if (/quota|billing|payment|subscription/i.test(raw)) {
+    return "Se alcanzó el límite de uso del proveedor. Intenta más tarde o usa un modelo diferente."
+  }
+  if (/429|rate.?limit|too many/i.test(raw)) {
+    return "El servidor está procesando muchas solicitudes. Intenta de nuevo en unos segundos."
+  }
+  if (/auth|api.?key|401|403|invalid.*key/i.test(raw)) {
+    return "Error de configuración del servicio. Por favor contacta al administrador."
+  }
+  if (/timeout|timed.?out|ETIMEDOUT/i.test(raw)) {
+    return "La solicitud tardó demasiado. Intenta de nuevo."
+  }
+  if (/failed to fetch|network|ECONN|ETIMEDOUT|ENOTFOUND/i.test(raw)) {
+    return "No se pudo conectar con el modelo. Verifica tu conexión e intenta de nuevo."
+  }
+  return raw
+};
+
 // Helper function to trigger upgrade modal
 const triggerUpgradeModal = (errorMessage: string, errorData?: any) => {
   if (typeof window !== 'undefined') {
@@ -1159,7 +1193,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                     if (!prevChat) return prevChat;
                     const newMessages = prevChat.messages.map((msg) => {
                       if (msg.id === aiMessagePlaceholder.id) {
-                        return { ...msg, content: "", error: error.message || "An error occurred." };
+                        return { ...msg, content: "", error: normalizeChatError(error.message || "An error occurred.") };
                       }
                       return msg;
                     });
@@ -1238,7 +1272,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             if (!prevChat) return prevChat;
             const newMessages = prevChat.messages.map((msg) => {
               if (msg.id === aiMessagePlaceholder.id) {
-                return { ...msg, content: "", error: error.message || "An error occurred." };
+                return { ...msg, content: "", error: normalizeChatError(error.message || "An error occurred.") };
               }
               return msg;
             });
@@ -1709,7 +1743,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 if (!prevChat) return prevChat;
                 const errorMessages = prevChat.messages.map((msg) => {
                   if (msg.id === aiMessagePlaceholder.id) {
-                    return { ...msg, content: "", error: error.message || "An error occurred during regeneration." };
+                    return { ...msg, content: "", error: normalizeChatError(error.message || "An error occurred during regeneration.") };
                   }
                   return msg;
                 });
@@ -1878,7 +1912,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 if (!prevChat) return prevChat;
                 const errorMessages = prevChat.messages.map((msg) => {
                   if (msg.id === aiMessagePlaceholder.id) {
-                    return { ...msg, content: "", error: error.message || "An error occurred during regeneration." };
+                    return { ...msg, content: "", error: normalizeChatError(error.message || "An error occurred during regeneration.") };
                   }
                   return msg;
                 });

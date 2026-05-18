@@ -345,11 +345,22 @@ ${prompt}
         } catch (error) {
             console.error('❌ Word Document generation error:', error);
 
+            const sanitizedError = typeof aiService.modelSupportsVision === 'function'
+                ? (function() {
+                    const msg = String(error?.message || error || 'Word Document generation failed');
+                    if (/does not support image/i.test(msg)) return 'El modelo no admite imágenes en este contexto.';
+                    if (/content.*policy|safety/i.test(msg)) return 'La solicitud no pudo ser procesada debido a las políticas de contenido.';
+                    if (/429|rate.?limit|too many/i.test(msg)) return 'El servidor está procesando muchas solicitudes. Intenta de nuevo en unos segundos.';
+                    if (/timeout|timed.?out|ETIMEDOUT/i.test(msg)) return 'La solicitud tardó demasiado. Intenta de nuevo.';
+                    return 'Hubo un problema procesando tu solicitud. Por favor intenta de nuevo.';
+                })()
+                : 'Hubo un problema procesando tu solicitud. Por favor intenta de nuevo.';
+
             if (!res.headersSent) {
-                res.status(500).json({ error: error.message || 'Word Document generation failed' });
+                res.status(500).json({ error: sanitizedError });
             } else {
                 try {
-                    res.write(`data: ${JSON.stringify({ error: error.message || 'Word Document generation failed' })}\n\n`);
+                    res.write(`data: ${JSON.stringify({ error: sanitizedError })}\n\n`);
                 } catch (writeError) {
                     console.error('Failed to write error to stream:', writeError);
                 }
