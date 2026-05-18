@@ -240,6 +240,29 @@ npm run type-check     # TSC completo
 ### Test Files
 - `backend/tests/cowork-system.test.js` — 83 tests for all cowork modules
 
+## Scientific Search + Research Agent (Manus-like) — added 2026-05-18
+
+### `src/services/scientific-search.js`
+Unified search over 7 open scientific-paper APIs. arXiv / OpenAlex / CrossRef / Europe PMC work key-less; Semantic Scholar / PubMed (NCBI) / CORE accept optional free keys for higher rate limits. Each provider returns a canonical Paper shape `{ source, doi, title, abstract, authors, year, venue, citations, openAccess, pdfUrl, htmlUrl }`. The unified `search(query, opts)` fans out in parallel with per-provider timeouts, dedupes by DOI/title, and returns ranked papers + a `providers` list + per-provider `errors`. Polite User-Agent uses `SIRAGPT_RESEARCH_EMAIL` env var when set.
+- Route: `POST /api/scientific-search` + `GET /api/scientific-search/providers`
+- 24 unit tests with mocked fetch.
+
+### `src/services/research-agent.js`
+Autonomous "Manus-like" loop: given a topic, runs planner → searcher (scientific-search) → browser (Playwright headless) → vision (OpenAI gpt-4o-mini reading screenshots) → decision (continue/refine/finalise) → synthesiser cycle. Degrades to text-only when Playwright/chromium isn't installed. Emits SSE events `phase` / `paper` / `page` / `finding` / `decision` / `report` so the UI can stream progress in real time.
+- Route: `POST /api/research-agent/run` (one-shot) + `POST /api/research-agent/stream` (SSE)
+- Depth config: `quick` (3 steps, 2 pages) / `standard` (6 steps, 4 pages) / `deep` (9 steps, 6 pages)
+- 15 unit tests.
+
+### Free API keys (optional — `.env.local`)
+- `SIRAGPT_RESEARCH_EMAIL` — any email; sets polite UA for OpenAlex/CrossRef/PubMed
+- `SEMANTIC_SCHOLAR_API_KEY` — free at https://www.semanticscholar.org/product/api
+- `NCBI_API_KEY` — free at https://www.ncbi.nlm.nih.gov/account/ → API Key Management
+- `CORE_API_KEY` — free at https://core.ac.uk/services/api
+- `RESEARCH_VISION_MODEL` — override the vision model (default `gpt-4o-mini`)
+
+### Slash command `/goal` in chat
+The chat composer (`components/chat-interface-enhanced.tsx`) detects a leading `/` and shows a `SlashCommandMenu` listing `/goal` (chain research-agent until findings converge), `/research` (one-shot scientific search), `/summarize` (placeholder). Typing the slash + Enter routes the message to the corresponding backend endpoint via SSE, with toast progress; the final report is copied to clipboard so the user can paste it back into the conversation.
+
 ## Next Improvement Areas
 1. **Document pipeline** — add more generator formats (EPUB, RTF, ODT)
 2. **Service health probes** — endpoint health monitoring

@@ -110,6 +110,8 @@ const figmaRoutes = require('./src/routes/figma');
 const { router: computerUseRoutes, initializeWebSocketServer } = require('./src/routes/computer-use');
 const thesisRoutes = require('./src/routes/thesis');
 const researchRoutes = require('./src/routes/research');
+const scientificSearchRoutes = require('./src/routes/scientific-search');
+const researchAgentRoutes = require('./src/routes/research-agent');
 const ragRoutes = require('./src/routes/rag');
 const agentRoutes = require('./src/routes/agent');
 const agentTaskRoutes = require('./src/routes/agent-task');
@@ -561,6 +563,8 @@ app.use('/api/figma', figmaRoutes);
 app.use('/api/computer-use', computerUseRoutes);
 app.use('/api/thesis', thesisRoutes);
 app.use('/api/research', researchRoutes);
+app.use('/api/scientific-search', scientificSearchRoutes);
+app.use('/api/research-agent', researchAgentRoutes);
 app.use('/api/rag', ragRoutes);
 // Idempotency is scoped to the surfaces that mutate durable state
 // at real cost (LLM tokens, sandbox compute, queued workers): agent

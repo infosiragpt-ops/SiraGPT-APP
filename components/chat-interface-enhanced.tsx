@@ -59,6 +59,7 @@ import { ThemeToggle } from "@/components/theme-toggle"
 import WhatsAppButton from "@/components/WhatsAppButton"
 import { PremiumCardIcon } from "@/components/icons/premium-card-icon"
 import UnifiedDocumentViewer, { type AttachmentLike } from "@/components/viewers/UnifiedDocumentViewer"
+import { SlashCommandMenu, detectSlashFilter, parseSlashPrefix } from "@/components/SlashCommandMenu"
 import { FileProcessingBadge } from "@/components/file-processing-badge"
 import {
   extractFilesFromDataTransfer,
@@ -3947,8 +3948,29 @@ But first, you need to connect your Spotify account securely using the button be
   const chatComposerDockRef = React.useRef<HTMLDivElement>(null);
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
 
+  // Slash-command menu state. Tracks whether the menu is open and what filter
+  // string the user has typed after the leading "/". The menu auto-opens
+  // whenever the input starts with "/" and stays open while the user is still
+  // typing the command name.
+  const [slashMenuOpen, setSlashMenuOpen] = React.useState(false);
+  const [slashMenuFilter, setSlashMenuFilter] = React.useState("");
+
   React.useEffect(() => {
     inputRef.current = input;
+  }, [input]);
+
+  // Sync the slash menu's open state + filter with the live input value so
+  // that pasting "/goal" or deleting the leading "/" toggles the menu
+  // immediately (not only via handleTextareaChange, which can miss
+  // programmatic setInput updates).
+  React.useEffect(() => {
+    const filter = detectSlashFilter(input);
+    if (filter === null) {
+      setSlashMenuOpen(false);
+    } else {
+      setSlashMenuOpen(true);
+      setSlashMenuFilter(filter);
+    }
   }, [input]);
 
   const detectedLinks = React.useMemo(() => extractDetectedLinks(input), [input]);
@@ -5399,6 +5421,121 @@ But first, you need to connect your Spotify account securely using the button be
     isComputerUseActive,
   ]);
 
+  // ── Slash-command dispatcher ───────────────────────────────────────────
+  // Routes parsed slash commands (/goal, /research) to dedicated backends.
+  // Streams progress events via SSE and shows the result in a toast (with a
+  // link to copy the full markdown report into the next chat reply).
+  //
+  // Important: this function does NOT post the user's message into the
+  // chat history — slash commands are meta-actions, not regular messages.
+  // The result IS surfaced through toast + a final notification with
+  // the markdown body so the user can paste it back into the conversation.
+  const runSlashCommand = React.useCallback(async (slash: { command: string; remainder: string }) => {
+    const query = slash.remainder.trim();
+    if (!query) {
+      toast.info(`Add a query after /${slash.command} (e.g. /${slash.command} latest progress in X)`);
+      return;
+    }
+    const token = (typeof window !== "undefined" ? localStorage.getItem("token") : null) || "";
+
+    if (slash.command === "goal" || slash.command === "research") {
+      const endpoint = slash.command === "goal" ? "/api/research-agent/stream" : "/api/scientific-search";
+      const isStream = slash.command === "goal";
+
+      const toastId = toast.loading(
+        slash.command === "goal"
+          ? `🎯 Goal agent activado — buscando papers...`
+          : `🔬 Buscando "${query}" en arXiv/PubMed/OpenAlex/CrossRef/Europe PMC...`,
+        { duration: Infinity },
+      );
+
+      try {
+        const apiBase = (typeof window !== "undefined" && (window as any).NEXT_PUBLIC_API_URL) ||
+          (process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api");
+        const url = apiBase.replace(/\/$/, "") + endpoint.replace(/^\/api/, "");
+
+        if (!isStream) {
+          // /research → one-shot POST
+          const res = await fetch(url, {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+            body: JSON.stringify({ query }),
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const data = await res.json();
+          toast.success(`📚 ${data.count || 0} papers · ${data.providers?.length || 0} sources`, {
+            id: toastId,
+            duration: 6000,
+            description: data.papers?.slice(0, 3).map((p: any) => `• ${p.title}`).join("\n") || "",
+          });
+        } else {
+          // /goal → SSE stream the agent phases
+          const res = await fetch(url, {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+            body: JSON.stringify({ query, depth: "standard" }),
+          });
+          if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder();
+          let buf = "";
+          let papersSeen = 0;
+          let findingsSeen = 0;
+          let pagesSeen = 0;
+          let lastReport: any = null;
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+            // SSE frames separated by blank line
+            const frames = buf.split("\n\n");
+            buf = frames.pop() || "";
+            for (const frame of frames) {
+              const m = frame.match(/^data:\s*(.*)$/m);
+              if (!m) continue;
+              try {
+                const evt = JSON.parse(m[1]);
+                if (evt.type === "paper") papersSeen++;
+                if (evt.type === "finding") findingsSeen++;
+                if (evt.type === "page") pagesSeen++;
+                if (evt.type === "phase") {
+                  toast.loading(`🎯 ${evt.phase}: ${evt.label} · ${papersSeen} papers · ${pagesSeen} pages · ${findingsSeen} findings`, { id: toastId });
+                }
+                if (evt.type === "report") lastReport = evt.report;
+              } catch { /* malformed frame */ }
+            }
+          }
+          if (lastReport) {
+            toast.success(`✅ Goal completado — ${lastReport.stats.findingsExtracted} findings · ${lastReport.stats.papersFound} papers`, {
+              id: toastId,
+              duration: 8000,
+              description: "Reporte copiado al portapapeles — pégalo en el chat para discutirlo.",
+            });
+            try {
+              await navigator.clipboard.writeText(lastReport.report);
+            } catch { /* clipboard denied */ }
+          } else {
+            toast.error(`⚠️ Goal terminado sin reporte`, { id: toastId });
+          }
+        }
+      } catch (err: any) {
+        toast.error(`/${slash.command} failed: ${err?.message || err}`, { id: toastId, duration: 6000 });
+      }
+      return;
+    }
+
+    if (slash.command === "summarize") {
+      toast.info(`/summarize "${query.slice(0, 80)}..."`);
+      // Future: route to a summarization endpoint with current chat + attachments
+      return;
+    }
+
+    toast.error(`Comando desconocido: /${slash.command}`);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleSend = async () => {
     let composerFiles = uploadedFilesRef.current.length > 0 ? [...uploadedFilesRef.current] : [...uploadedFiles];
     // Normalize before trim so zero-width chars don't sneak past the
@@ -5412,6 +5549,22 @@ But first, you need to connect your Spotify account securely using the button be
     }
     const rawMsg = normalized.value.trim();
     if (!rawMsg && composerFiles.length === 0) return;
+
+    // ── Slash-command intercept ────────────────────────────────────────
+    // When the message starts with /goal or /research (or any other known
+    // slash command), bypass the normal chat flow and dispatch to the
+    // dedicated backend route. The result is shown via toast + posted
+    // back as an assistant message into the conversation when complete.
+    const slash = parseSlashPrefix(rawMsg);
+    if (slash) {
+      setInput("");
+      try {
+        await runSlashCommand(slash);
+      } catch (err: any) {
+        toast.error(`Slash command failed: ${err?.message || err}`);
+      }
+      return;
+    }
 
     if (composerFiles.some(isComposerFileUploadPending)) {
       toast.info("Terminando de adjuntar el documento...", { duration: 1800 });
@@ -7784,6 +7937,24 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   */}
                   <div className="relative">
                     {pasteCapture.Overlay}
+                    {/* Slash-command menu — appears when the input starts with "/" */}
+                    <SlashCommandMenu
+                      open={slashMenuOpen}
+                      filter={slashMenuFilter}
+                      onCommandPick={(cmd) => {
+                        setInput(cmd.insert);
+                        setSlashMenuOpen(false);
+                        window.setTimeout(() => {
+                          const el = textareaRef.current;
+                          if (el) {
+                            const len = cmd.insert.length;
+                            el.focus();
+                            try { el.setSelectionRange(len, len); } catch { /* old Safari */ }
+                          }
+                        }, 0);
+                      }}
+                      onClose={() => setSlashMenuOpen(false)}
+                    />
                     <div
                       className={cn(
                         "composer-surface group/composer relative rounded-3xl",
