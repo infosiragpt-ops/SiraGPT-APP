@@ -653,8 +653,8 @@ test('create_dashboard_html: no charts', async () => {
 
 // ── Tool metadata ────────────────────────────────────────────────
 
-test('all 14 tools have valid metadata', () => {
-  assert.equal(VISUAL_MEDIA_TOOLS.length, 14);
+test('all 15 tools have valid metadata', () => {
+  assert.equal(VISUAL_MEDIA_TOOLS.length, 15);
   for (const t of VISUAL_MEDIA_TOOLS) {
     assert.ok(t.name);
     assert.ok(t.description);
@@ -1245,6 +1245,163 @@ test('create_raci_matrix: mismatched assignment-array length is tolerated (extra
   assert.equal(r.tally.A, 1);
   assert.equal(r.tally.C, 0);
   assert.equal(r.tally.I, 0);
+});
+
+// ── create_business_model_canvas ─────────────────────────────────
+
+test('create_business_model_canvas: full 9-block canvas', async () => {
+  const bmc = tool('create_business_model_canvas');
+  assert.ok(bmc);
+  const r = await bmc.execute({
+    title: 'SiraGPT BMC 2026',
+    subtitle: 'AI platform — LATAM',
+    keyPartners: ['OpenAI', 'Hostinger VPS'],
+    keyActivities: ['Modelo training', 'Producto dev'],
+    keyResources: ['Equipo senior', 'Marca SiraGPT'],
+    valuePropositions: ['Chat AI español-first', 'Análisis de documentos pro'],
+    customerRelationships: ['Self-service', 'Soporte premium'],
+    channels: ['Web app', 'Mobile app'],
+    customerSegments: ['Profesionales LATAM', 'PYMES'],
+    costStructure: ['LLM API costs', 'Infra cloud'],
+    revenueStreams: ['Subscripción Pro', 'Tier Enterprise'],
+    theme: 'professional',
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.ok(r.filename?.endsWith('.svg'));
+  assert.equal(r.total, 18);
+  assert.equal(r.counts.keyPartners, 2);
+  assert.equal(r.counts.valuePropositions, 2);
+  assert.equal(r.counts.revenueStreams, 2);
+  const fp = assertArtifact(r);
+  const c = fs.readFileSync(fp, 'utf8');
+  assert.ok(c.startsWith('<svg'));
+  assert.ok(c.includes('SiraGPT BMC 2026'));
+  assert.ok(c.includes('AI platform'));
+  assert.ok(c.includes('KEY PARTNERS'));
+  assert.ok(c.includes('KEY ACTIVITIES'));
+  assert.ok(c.includes('KEY RESOURCES'));
+  assert.ok(c.includes('VALUE PROPOSITIONS'));
+  assert.ok(c.includes('CUSTOMER RELATIONSHIPS'));
+  assert.ok(c.includes('CHANNELS'));
+  assert.ok(c.includes('CUSTOMER SEGMENTS'));
+  assert.ok(c.includes('COST STRUCTURE'));
+  assert.ok(c.includes('REVENUE STREAMS'));
+  assert.ok(c.includes('OpenAI'));
+  assert.ok(c.includes('Subscripción Pro'));
+});
+
+test('create_business_model_canvas: partial canvas with only Value Prop populated', async () => {
+  const r = await tool('create_business_model_canvas').execute({
+    title: 'Lean BMC',
+    valuePropositions: ['Just the value prop'],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.total, 1);
+  assert.equal(r.counts.valuePropositions, 1);
+  assert.equal(r.counts.keyPartners, 0);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.includes('Just the value prop'));
+  // Empty blocks render as "vacío" placeholder
+  assert.ok(svg.includes('— vacío —'));
+});
+
+test('create_business_model_canvas: empty canvas fails', async () => {
+  const r = await tool('create_business_model_canvas').execute({
+    title: 'Empty BMC',
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /empty|provide at least/i);
+});
+
+test('create_business_model_canvas: non-array block fails fast', async () => {
+  const r = await tool('create_business_model_canvas').execute({
+    title: 'Bad input',
+    keyPartners: 'should be array',
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /must be arrays/i);
+});
+
+test('create_business_model_canvas: caps items at 8 per block', async () => {
+  const tenItems = Array.from({ length: 10 }, (_, i) => `Item ${i + 1}`);
+  const r = await tool('create_business_model_canvas').execute({
+    title: 'Overflow guard',
+    valuePropositions: tenItems,
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.counts.valuePropositions, 8, 'should cap at 8 items');
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.includes('Item 1'));
+  assert.ok(svg.includes('Item 8'));
+  assert.equal(svg.includes('Item 9'), false);
+  assert.equal(svg.includes('Item 10'), false);
+});
+
+test('create_business_model_canvas: long item text is truncated', async () => {
+  const longItem = 'C'.repeat(200);
+  const r = await tool('create_business_model_canvas').execute({
+    title: 'Truncation',
+    valuePropositions: [longItem],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  // BMC's per-line cap is 38 chars; 39+ of any single char should not appear.
+  assert.equal(svg.includes('C'.repeat(39)), false, 'should not render 39+ C in a row');
+});
+
+test('create_business_model_canvas: xml-escapes block content', async () => {
+  const r = await tool('create_business_model_canvas').execute({
+    title: 'XSS guard',
+    valuePropositions: ['<script>evil</script>'],
+    keyPartners: ['"injected"'],
+    revenueStreams: ['<img onerror=x>'],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.equal(svg.includes('<script>evil</script>'), false);
+  assert.ok(svg.includes('&lt;script&gt;'));
+  assert.ok(svg.includes('&quot;injected&quot;'));
+});
+
+test('create_business_model_canvas: supports all four themes', async () => {
+  for (const theme of ['professional', 'modern', 'minimal', 'corporate']) {
+    const r = await tool('create_business_model_canvas').execute({
+      title: `Theme ${theme}`,
+      valuePropositions: ['vp'],
+      customerSegments: ['cs'],
+      revenueStreams: ['rs'],
+      theme,
+    }, fakeCtx());
+    assert.equal(r.ok, true, `theme ${theme} should succeed`);
+    const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+    assert.ok(svg.startsWith('<svg'));
+  }
+});
+
+test('create_business_model_canvas: emits expected events', async () => {
+  const ctx = fakeCtx();
+  await tool('create_business_model_canvas').execute({
+    title: 'Events',
+    valuePropositions: ['vp'],
+  }, ctx);
+  const types = ctx._events.map(e => e.type);
+  assert.ok(types.includes('tool_call'));
+  assert.ok(types.includes('file_artifact'));
+  assert.ok(types.includes('tool_output'));
+});
+
+test('create_business_model_canvas: counts object exposes all 9 block sizes', async () => {
+  const r = await tool('create_business_model_canvas').execute({
+    title: 'Counts shape',
+    valuePropositions: ['vp'],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  // The counts object MUST include all 9 keys, even for empty blocks
+  // — consumers downstream rely on this for dashboards.
+  for (const k of ['keyPartners', 'keyActivities', 'keyResources', 'valuePropositions', 'customerRelationships', 'channels', 'customerSegments', 'costStructure', 'revenueStreams']) {
+    assert.ok(Object.prototype.hasOwnProperty.call(r.counts, k), `counts.${k} should be present`);
+    assert.equal(typeof r.counts[k], 'number');
+  }
 });
 
 // ── Cleanup ──────────────────────────────────────────────────────
