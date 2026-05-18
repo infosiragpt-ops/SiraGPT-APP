@@ -38,6 +38,15 @@ const modelsToSeed = [
     { name: 'deepseek-v4-flash', displayName: 'DeepSeek V4 Flash', provider: 'DeepSeek', type: 'TEXT', icon: 'DeepseekLogo', description: 'DeepSeek direct API fast V4 model. Official API id: deepseek-v4-flash.', isActive: true },
     { name: 'deepseek-v4-pro', displayName: 'DeepSeek V4 Pro', provider: 'DeepSeek', type: 'TEXT', icon: 'DeepseekLogo', description: 'DeepSeek direct API V4 Pro model for complex tasks. Official API id: deepseek-v4-pro.', isActive: true },
 
+    // --- Anthropic Claude (via Direct API) ---
+    { name: 'claude-opus-4-7', displayName: 'Claude Opus 4.7', provider: 'Anthropic', type: 'TEXT', icon: 'ClaudeLogo', description: 'Anthropic Claude Opus 4.7 — flagship reasoning and writing model.', isActive: true },
+    { name: 'claude-sonnet-4-6', displayName: 'Claude Sonnet 4.6', provider: 'Anthropic', type: 'TEXT', icon: 'ClaudeLogo', description: 'Anthropic Claude Sonnet 4.6 — balanced speed and intelligence with 1M context.', isActive: true },
+    { name: 'claude-haiku-4-5', displayName: 'Claude Haiku 4.5', provider: 'Anthropic', type: 'TEXT', icon: 'ClaudeLogo', description: 'Anthropic Claude Haiku 4.5 — fast and cost-efficient for everyday tasks.', isActive: true },
+
+    // --- Groq (Llama 3 family, fast inference) ---
+    { name: 'llama-3.3-70b-versatile', displayName: 'Llama 3.3 70B (Groq)', provider: 'Groq', type: 'TEXT', icon: 'MetaLogo', description: 'Meta Llama 3.3 70B served by Groq with extremely low latency.', isActive: true },
+    { name: 'llama-3.1-70b-versatile', displayName: 'Llama 3.1 70B (Groq)', provider: 'Groq', type: 'TEXT', icon: 'MetaLogo', description: 'Meta Llama 3.1 70B on Groq — fast general-purpose chat and reasoning.', isActive: true },
+
     // ================================== //
     // ====== IMAGE GENERATION MODELS ====== //
     // ================================== //

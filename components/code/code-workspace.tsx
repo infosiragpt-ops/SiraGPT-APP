@@ -3,26 +3,27 @@
 /**
  * CodeWorkspace — Cursor-inspired shell for /code.
  *
- * Current layout (chat on the left, editor on the right — the
- * conversation drives the work; the editor is the artifact):
+ * Layout (matches Cursor's strict frame):
  *
  *   ┌────────────────────────────────────────────────────────────┐
  *   │ TitleBar — "Cursor" branding · breadcrumb · palette        │
- *   ├──────────────────────────┬─────────────────────────────────┤
- *   │ Cursor Chat (collapsible)│ Editor (tabs + Monaco)          │
- *   │                          │ ┌─────────────────────────────┐ │
- *   │                          │ │ Terminal (toggle, ⌘J)       │ │
- *   │                          │ └─────────────────────────────┘ │
- *   └──────────────────────────┴─────────────────────────────────┘
+ *   ├──┬───────────────┬─────────────────────────┬───────────────┤
+ *   │A │ Primary panel │ Editor (tabs + Monaco)  │ Cursor Chat   │
+ *   │c │  (Files /     │                         │ (collapsible) │
+ *   │t │   Search /    │ ┌─────────────────────┐ │               │
+ *   │  │   placeholders│ │ Terminal (toggle)   │ │               │
+ *   │  │   …)          │ └─────────────────────┘ │               │
+ *   ├──┴───────────────┴─────────────────────────┴───────────────┤
+ *   │ StatusBar                                                  │
+ *   └────────────────────────────────────────────────────────────┘
  *
  * The shell stays layout-only. Real state continues to live in
  * CodeWorkspaceProvider and per-panel components.
  */
 
 import * as React from "react"
-import { AlertTriangle, ChevronRight, Command as CommandIcon, Download, FolderTree } from "lucide-react"
+import { AlertTriangle, ChevronRight, Command as CommandIcon, Construction, Download, FolderTree } from "lucide-react"
 import Image from "next/image"
-import { type ImperativePanelHandle } from "react-resizable-panels"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -33,6 +34,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { type ImperativePanelHandle } from "react-resizable-panels"
+
 import {
   ResizableHandle,
   ResizablePanel,
@@ -48,10 +51,16 @@ import {
   workspaceExportFilename,
 } from "@/lib/code-workspace-utils"
 
+import { ActivityBar, type ActivityId } from "./activity-bar"
 import { AICodeChatPanel } from "./ai-code-chat-panel"
 import { EditorPanel } from "./editor-panel"
+import { FileTreePanel } from "./file-tree-panel"
+import { SearchPanel } from "./search-panel"
+import { StatusBar } from "./status-bar"
 import { TerminalPanel } from "./terminal-panel"
 
+const SIDEBAR_DEFAULT_SIZE = 18
+const SIDEBAR_MIN_SIZE = 12
 const CHAT_DEFAULT_SIZE = 30
 const CHAT_MIN_SIZE = 22
 const TERMINAL_DEFAULT_SIZE = 32
@@ -77,12 +86,33 @@ export function CodeWorkspace() {
     workspaceSource,
   } = useCodeWorkspace()
 
+  const [activity, setActivity] = React.useState<ActivityId>("files")
+  const [sidebarOpen, setSidebarOpen] = React.useState(true)
   const [chatOpen, setChatOpen] = React.useState(true)
   const [terminalOpen, setTerminalOpen] = React.useState(false)
   const [paletteOpen, setPaletteOpen] = React.useState(false)
   const [paletteQuery, setPaletteQuery] = React.useState("")
 
+  const sidebarRef = React.useRef<ImperativePanelHandle>(null)
   const chatRef = React.useRef<ImperativePanelHandle>(null)
+
+  const handleActivityChange = React.useCallback((id: ActivityId) => {
+    setActivity(id)
+    setSidebarOpen(true)
+    sidebarRef.current?.expand()
+  }, [])
+
+  const toggleSidebar = React.useCallback(() => {
+    setSidebarOpen((prev) => {
+      const next = !prev
+      const panel = sidebarRef.current
+      if (panel) {
+        if (next) panel.expand()
+        else panel.collapse()
+      }
+      return next
+    })
+  }, [])
 
   const toggleChat = React.useCallback(() => {
     setChatOpen((prev) => {
@@ -116,7 +146,14 @@ export function CodeWorkspace() {
   React.useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const isMod = e.metaKey || e.ctrlKey
-      if (!isMod) return
+      if (!isMod) {
+        // Ctrl+` (no modifier) → toggle terminal in addition to ⌘J.
+        if (e.key === "`" && (e.metaKey || e.ctrlKey)) {
+          e.preventDefault()
+          toggleTerminal()
+        }
+        return
+      }
       const key = e.key.toLowerCase()
       if (e.shiftKey && key === "p") {
         e.preventDefault()
@@ -125,6 +162,7 @@ export function CodeWorkspace() {
         return
       }
       if (key === "p" && !e.shiftKey) {
+        // ⌘P → quick file open (palette pre-filtered to files).
         e.preventDefault()
         setPaletteQuery("open ")
         setPaletteOpen(true)
@@ -148,14 +186,24 @@ export function CodeWorkspace() {
         openComposer()
         return
       }
-      if (key === "j" || key === "`") {
+      if (key === "j") {
+        e.preventDefault()
+        toggleTerminal()
+        return
+      }
+      if (key === "b") {
+        e.preventDefault()
+        toggleSidebar()
+        return
+      }
+      if (key === "`") {
         e.preventDefault()
         toggleTerminal()
       }
     }
     window.addEventListener("keydown", handler)
     return () => window.removeEventListener("keydown", handler)
-  }, [focusChat, openComposer, toggleTerminal])
+  }, [focusChat, openComposer, toggleSidebar, toggleTerminal])
 
   const commands = React.useMemo<PaletteCommand[]>(() => {
     const fileItems: PaletteCommand[] = Object.keys(files).map((path) => ({
@@ -214,6 +262,13 @@ export function CodeWorkspace() {
         run: toggleTerminal,
       },
       {
+        id: "toggle-sidebar",
+        label: sidebarOpen ? "Ocultar barra primaria" : "Mostrar barra primaria",
+        keywords: "sidebar toggle",
+        hint: "⌘B",
+        run: toggleSidebar,
+      },
+      {
         id: "reset",
         label: "Restaurar ejemplo",
         keywords: "reset starter",
@@ -231,7 +286,9 @@ export function CodeWorkspace() {
     openComposer,
     openFile,
     resetWorkspace,
+    sidebarOpen,
     terminalOpen,
+    toggleSidebar,
     toggleTerminal,
   ])
 
@@ -251,46 +308,73 @@ export function CodeWorkspace() {
       />
 
       <div className="min-h-0 flex-1">
-        <ResizablePanelGroup direction="horizontal" className="h-full">
-          <ResizablePanel
-            ref={chatRef}
-            collapsible
-            collapsedSize={0}
-            defaultSize={CHAT_DEFAULT_SIZE}
-            minSize={CHAT_MIN_SIZE}
-            maxSize={50}
-            onCollapse={() => setChatOpen(false)}
-            onExpand={() => setChatOpen(true)}
-            className="min-w-0"
-          >
-            <AICodeChatPanel />
-          </ResizablePanel>
+        <div className="flex h-full min-h-0">
+          <ActivityBar
+            activity={activity}
+            onActivityChange={handleActivityChange}
+            chatOpen={chatOpen}
+            onToggleChat={toggleChat}
+            onComposer={openComposer}
+          />
 
-          <ResizableHandle withHandle />
-          <ResizablePanel defaultSize={70} minSize={40}>
-            <ResizablePanelGroup direction="vertical">
+          <div className="min-w-0 flex-1">
+            <ResizablePanelGroup direction="horizontal" className="h-full">
               <ResizablePanel
-                defaultSize={terminalOpen ? 100 - TERMINAL_DEFAULT_SIZE : 100}
-                minSize={30}
+                ref={sidebarRef}
+                collapsible
+                collapsedSize={0}
+                defaultSize={SIDEBAR_DEFAULT_SIZE}
+                minSize={SIDEBAR_MIN_SIZE}
+                maxSize={32}
+                onCollapse={() => setSidebarOpen(false)}
+                onExpand={() => setSidebarOpen(true)}
+                className="min-w-0"
               >
-                <EditorPanel />
+                <PrimarySidebar activity={activity} />
               </ResizablePanel>
-              {terminalOpen ? (
-                <>
-                  <ResizableHandle withHandle />
-                  <ResizablePanel
-                    defaultSize={TERMINAL_DEFAULT_SIZE}
-                    minSize={TERMINAL_MIN_SIZE}
-                    maxSize={70}
-                  >
-                    <TerminalPanel open={terminalOpen} onClose={() => setTerminalOpen(false)} />
+              <ResizableHandle withHandle />
+
+              <ResizablePanel defaultSize={52} minSize={32}>
+                <ResizablePanelGroup direction="vertical">
+                  <ResizablePanel defaultSize={terminalOpen ? 100 - TERMINAL_DEFAULT_SIZE : 100} minSize={30}>
+                    <EditorPanel />
                   </ResizablePanel>
-                </>
-              ) : null}
+                  {terminalOpen ? (
+                    <>
+                      <ResizableHandle withHandle />
+                      <ResizablePanel defaultSize={TERMINAL_DEFAULT_SIZE} minSize={TERMINAL_MIN_SIZE} maxSize={70}>
+                        <TerminalPanel open={terminalOpen} onClose={() => setTerminalOpen(false)} />
+                      </ResizablePanel>
+                    </>
+                  ) : null}
+                </ResizablePanelGroup>
+              </ResizablePanel>
+
+              <ResizableHandle withHandle />
+              <ResizablePanel
+                ref={chatRef}
+                collapsible
+                collapsedSize={0}
+                defaultSize={CHAT_DEFAULT_SIZE}
+                minSize={CHAT_MIN_SIZE}
+                maxSize={50}
+                onCollapse={() => setChatOpen(false)}
+                onExpand={() => setChatOpen(true)}
+                className="min-w-0"
+              >
+                <AICodeChatPanel />
+              </ResizablePanel>
             </ResizablePanelGroup>
-          </ResizablePanel>
-        </ResizablePanelGroup>
+          </div>
+        </div>
       </div>
+
+      <StatusBar
+        terminalOpen={terminalOpen}
+        onToggleTerminal={toggleTerminal}
+        chatOpen={chatOpen}
+        onToggleChat={toggleChat}
+      />
 
       <Dialog
         open={paletteOpen}
@@ -347,11 +431,64 @@ export function CodeWorkspace() {
               )}
             </div>
             <p className="mt-3 text-[11px] text-muted-foreground">
-              Atajos: ⌘P abre archivos · ⌘⇧P paleta · ⌘K editar con IA · ⌘L Cursor Chat · ⌘I Composer · ⌘J terminal.
+              Atajos: ⌘P abre archivos · ⌘⇧P paleta · ⌘K editar con IA · ⌘L Cursor Chat · ⌘I Composer · ⌘J terminal · ⌘B barra lateral.
             </p>
           </div>
         </DialogContent>
       </Dialog>
+    </div>
+  )
+}
+
+function PrimarySidebar({ activity }: { activity: ActivityId }) {
+  switch (activity) {
+    case "files":
+      return <FileTreePanel />
+    case "search":
+      return <SearchPanel />
+    case "scm":
+      return (
+        <PlaceholderActivity
+          title="Control de origen"
+          description="Pronto: estado git, diffs por archivo y commit asistido por IA."
+        />
+      )
+    case "run":
+      return (
+        <PlaceholderActivity
+          title="Ejecutar y depurar"
+          description="Pronto: configuración de tareas y ejecución sandbox del archivo activo."
+        />
+      )
+    case "extensions":
+      return (
+        <PlaceholderActivity
+          title="Extensiones"
+          description="Pronto: cargar reglas, snippets y modelos personalizados para este workspace."
+        />
+      )
+    case "settings":
+      return (
+        <PlaceholderActivity
+          title="Ajustes del workspace"
+          description="Pronto: tema del editor, atajos, modelos por defecto y preferencias de Composer."
+        />
+      )
+    default:
+      return null
+  }
+}
+
+function PlaceholderActivity({ title, description }: { title: string; description: string }) {
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <header className="flex h-8 shrink-0 items-center justify-between border-b border-border/60 px-3 text-[11px] uppercase tracking-wider text-muted-foreground">
+        {title}
+      </header>
+      <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+        <Construction className="h-8 w-8 text-muted-foreground" strokeWidth={1.4} />
+        <p className="text-[12.5px] leading-relaxed text-muted-foreground">{description}</p>
+      </div>
     </div>
   )
 }

@@ -168,6 +168,19 @@ export function AICodeChatPanel() {
     })
   }, [registerChatFocusHandler])
 
+  // The shell's "Composer" button (⌘I) emits a window event so this
+  // panel can switch into the multi-step "build" mode and focus the
+  // input without coupling shell ↔ panel through props.
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const handler = () => {
+      setComposerMode("build")
+      window.requestAnimationFrame(() => inputRef.current?.focus())
+    }
+    window.addEventListener("siragpt:code-composer-mode", handler)
+    return () => window.removeEventListener("siragpt:code-composer-mode", handler)
+  }, [])
+
   // Auto-scroll on new content while the user is at the bottom — if
   // they scrolled up to read history, leave them alone.
   React.useEffect(() => {

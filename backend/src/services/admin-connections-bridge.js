@@ -210,11 +210,18 @@ async function reconcileCatalog() {
       if (count) summary.push(`${providerKey}:deactivated(${count})`);
       continue;
     }
+    // If the key is configured, keep the catalog visible to users even
+    // when the probe fails — keys can be transiently throttled or
+    // rotation-in-flight, and forcibly hiding the picker entries makes
+    // the chat appear broken. The downstream call-site will surface
+    // the upstream error if the key truly is invalid. We only deactivate
+    // when no_key is set (handled above) so admins can disable a
+    // provider explicitly by unsetting its env var.
     const { count } = await prisma.aiModel.updateMany({
-      where: { provider: catalogProvider, isActive: !healthy },
-      data: { isActive: healthy },
+      where: { provider: catalogProvider, isActive: false },
+      data: { isActive: true },
     });
-    if (count) summary.push(`${providerKey}:${healthy ? 'activated' : 'deactivated'}(${count})`);
+    if (count) summary.push(`${providerKey}:activated(${count}, probe=${healthy ? 'ok' : 'failed'})`);
   }
 
   // Mirror to admin_connections rows so the panel sees the health.

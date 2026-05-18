@@ -108,10 +108,16 @@ function ActiveFolderHydrator() {
 function CodeWorkspaceSkeleton() {
   return (
     <div className="flex h-screen min-w-0 flex-col overflow-hidden bg-background text-foreground">
-      <div className="flex h-11 shrink-0 items-center gap-3 border-b border-border/60 px-4">
-        <div className="h-6 w-32 rounded bg-muted/50 animate-pulse" />
+      <div className="flex h-8 shrink-0 items-center gap-3 border-b border-border/60 px-3">
+        <div className="h-4 w-16 rounded bg-muted/50 animate-pulse" />
+        <div className="ml-auto h-5 w-[260px] rounded border border-border/60 bg-muted/30 animate-pulse" />
       </div>
-      <div className="grid min-h-0 flex-1 grid-cols-[220px_1fr_360px]">
+      <div className="grid min-h-0 flex-1 grid-cols-[44px_220px_1fr_360px]">
+        <div className="flex flex-col items-center gap-3 border-r border-border/60 py-3">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="h-7 w-7 rounded-md bg-muted/40 animate-pulse" />
+          ))}
+        </div>
         <div className="border-r border-border/60 p-3 space-y-2">
           {Array.from({ length: 8 }).map((_, i) => (
             <div key={i} className="h-5 w-full rounded bg-muted/40 animate-pulse" />
@@ -136,6 +142,7 @@ function CodeWorkspaceSkeleton() {
           ))}
         </div>
       </div>
+      <div className="h-6 shrink-0 border-t border-border/60 bg-primary/95" />
     </div>
   )
 }

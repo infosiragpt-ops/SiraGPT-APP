@@ -813,7 +813,7 @@ class ApiClient {
                 if (jsonData.recovered) {
                   console.warn('[ai-stream] recovered from provider error:', jsonData.error);
                 } else {
-                  onError(new Error(jsonData.error));
+                  onError(new Error(sanitizeStreamError(jsonData.error)));
                 }
               }
             } catch (e) {
