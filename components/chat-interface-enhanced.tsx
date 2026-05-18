@@ -7897,25 +7897,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
           {isInitial ? (
             <div className="canvas-ambient chat-initial-stage flex flex-1 items-center justify-center">
-              <div className="w-full max-w-[860px]">
-                <ChatEmptyStateHero
-                  userName={(currentUserInfo as any)?.name || user?.name || null}
-                  onSelectPrompt={(prompt) => {
-                    setInput(prompt)
-                    requestAnimationFrame(() => {
-                      const el = textareaRef.current as HTMLTextAreaElement | null
-                      if (el) {
-                        try {
-                          el.focus()
-                          const len = el.value.length
-                          el.setSelectionRange(len, len)
-                        } catch {
-                          /* no-op — older Safari throws on setSelectionRange */
-                        }
-                      }
-                    })
-                  }}
-                />
+              <div className="w-full max-w-[860px] px-4">
                   <div className="space-y-3">
                   {/*
                     Composer — premium production UI.

@@ -188,9 +188,42 @@ function compactSession(sessionId, opts = {}) {
   const session = sessions.get(sessionId);
   if (!session) return null;
 
+  const total = session.messages.length;
+
+  if (opts.model && total > 2) {
+    try {
+      const { compactContext } = require('./sira/context-compactor');
+      const messages = session.messages.map(m => ({
+        role: m.role === 'user' ? 'user' : 'assistant',
+        content: m.content || '',
+      }));
+      const result = compactContext({
+        messages,
+        model: opts.model,
+        ragChunks: [],
+        memoryGists: [],
+      });
+      if (result && Array.isArray(result.messages)) {
+        const kept = result.messages;
+        const dropped = total - kept.length;
+        session.messages = session.messages.filter((m, i) => {
+          if (i < 2 || i >= total - 6) return true;
+          return kept.some(km => (km.content || '').slice(0, 80) === (m.content || '').slice(0, 80));
+        });
+        if (opts.summary) session.summary = opts.summary;
+        return {
+          compacted: true,
+          keptMessages: session.messages.length,
+          droppedMessages: dropped,
+          newTokenEstimate: result.stats?.total_tokens || 0,
+          pipeline: 'context-compactor',
+        };
+      }
+    } catch (_e) { /* fallback to naive trim */ }
+  }
+
   const keepFirst = opts.keepFirst || 2;
   const keepLast = opts.keepLast || 6;
-  const total = session.messages.length;
 
   if (total <= keepFirst + keepLast) {
     return { compacted: false, reason: 'session_too_short' };
@@ -213,6 +246,7 @@ function compactSession(sessionId, opts = {}) {
     keptMessages: kept.length,
     droppedMessages: dropped,
     newTokenEstimate: kept.reduce((acc, m) => acc + (m.tokens || 0), 0),
+    pipeline: 'naive-trim',
   };
 }
 

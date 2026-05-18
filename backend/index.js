@@ -293,6 +293,7 @@ app.use('/api/auth', authLimiter);
 app.use('/api/agent', expensiveLimiter);
 app.use('/api/rag', expensiveLimiter);
 app.use('/api/document-ai', expensiveLimiter);
+app.use('/api/ai/generate', expensiveLimiter);
 app.use('/api/', apiLimiter);
 
 // Idempotency runs AFTER rate-limit (so a flood of replays still
