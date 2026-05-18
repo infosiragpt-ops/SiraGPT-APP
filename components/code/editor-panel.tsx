@@ -1,26 +1,19 @@
 "use client"
 
 /**
- * EditorPanel — middle column. Tabs across the top, content area
- * underneath. The actual code editor is loaded lazily because the
- * underlying library is heavy and the rest of the workspace should
+ * EditorPanel — middle column. URL pill + tabs across the top, code
+ * surface underneath. The actual code editor is loaded lazily because
+ * the underlying library is heavy and the rest of the workspace should
  * be usable while it hydrates. We default to a textarea with mono
  * styling as a no-dependency fallback so the page always renders.
- *
- * The "preview" toggle on HTML/SVG files reuses the same iframe
- * pattern as ArtifactPanel without dragging in the chat side of the
- * app, since the chat artifact context lives elsewhere.
  */
 
 import * as React from "react"
-import { AlertCircle, ExternalLink, FileCode2, FilePlus2, Globe2, RefreshCw, RotateCcw, Save } from "lucide-react"
+import { FileCode2, FilePlus2, RotateCcw } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { useCodeWorkspace } from "@/lib/code-workspace-context"
-import type { CodeFile, CodeFiles } from "@/lib/code-workspace-utils"
-
-const PREVIEW_LANGUAGES = new Set(["html", "htm", "svg"])
 
 export function EditorPanel() {
   const {
@@ -32,9 +25,19 @@ export function EditorPanel() {
     createFile,
     resetWorkspace,
     saveFileToWorkspace,
-    workspaceSource,
   } = useCodeWorkspace()
-  const [savedPing, setSavedPing] = React.useState(false)
+  // Current page URL shown as a browser-style address in the tab bar.
+  // Reads `window.location.href` after mount (SSR-safe) and refreshes
+  // on `popstate` so it tracks back/forward navigation without a full
+  // route remount. We never write to it — it's purely a display.
+  const [pageUrl, setPageUrl] = React.useState<string>("")
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const sync = () => setPageUrl(window.location.href)
+    sync()
+    window.addEventListener("popstate", sync)
+    return () => window.removeEventListener("popstate", sync)
+  }, [])
 
   const activeFile = activePath ? files[activePath] : null
   const sortedPaths = React.useMemo(
@@ -50,15 +53,12 @@ export function EditorPanel() {
     [activeFile, updateFile],
   )
 
-  const flashSaved = React.useCallback(() => {
-    setSavedPing(true)
-    window.setTimeout(() => setSavedPing(false), 800)
-  }, [])
-
+  // Cmd/Ctrl+S still flushes the active file to disk via the keyboard
+  // handler below — the visible Save button was removed, but persisting
+  // on-demand is cheap to keep and matches user muscle memory.
   const handleSave = React.useCallback(async () => {
-    const ok = await saveFileToWorkspace(activeFile?.path)
-    if (ok) flashSaved()
-  }, [activeFile?.path, flashSaved, saveFileToWorkspace])
+    await saveFileToWorkspace(activeFile?.path)
+  }, [activeFile?.path, saveFileToWorkspace])
 
   const handleCreateFile = React.useCallback(() => {
     if (typeof window === "undefined") return
@@ -94,9 +94,15 @@ export function EditorPanel() {
     <div className="flex h-full min-h-0 flex-col bg-background">
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border/60 px-2">
         <div className="flex min-w-0 flex-1 items-center gap-2">
-          <span className="shrink-0 px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-            Archivos
-          </span>
+          <div
+            className="flex h-7 min-w-0 max-w-[260px] shrink-0 items-center gap-1.5 rounded-full border border-border/70 bg-muted/30 px-2.5 text-[11px] text-muted-foreground"
+            title={pageUrl || "URL del workspace"}
+          >
+            <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-500" />
+            <span className="truncate font-mono">
+              {pageUrl || "http://localhost:3000/code"}
+            </span>
+          </div>
           <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
             {sortedPaths.length === 0 ? (
               <span className="px-2 text-xs text-muted-foreground">Sin archivos</span>
@@ -133,24 +139,10 @@ export function EditorPanel() {
           >
             <RotateCcw className="h-3.5 w-3.5" />
           </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 gap-1.5 text-xs text-muted-foreground"
-            onClick={() => void handleSave()}
-            title={
-              workspaceSource.kind === "local-folder"
-                ? `Guardar en ${workspaceSource.name} (Cmd/Ctrl+S)`
-                : "Guardar workspace local (Cmd/Ctrl+S)"
-            }
-          >
-            <Save className="h-3.5 w-3.5" />
-            {savedPing ? "Guardado" : "Guardar"}
-          </Button>
         </div>
       </div>
       <div className="flex min-h-0 flex-1">
-        <div className="min-w-[320px] flex-[1.05] border-r border-border/60">
+        <div className="min-w-0 flex-1">
           {!activeFile ? (
             <EmptyState />
           ) : (
@@ -162,11 +154,6 @@ export function EditorPanel() {
             />
           )}
         </div>
-        <VirtualBrowserPanel
-          files={files}
-          activePath={activePath}
-          onOpenFile={setActiveTab}
-        />
       </div>
     </div>
   )
@@ -270,172 +257,6 @@ function CodeArea(props: CodeAreaProps) {
 
   if (MonacoComponent) return <MonacoComponent {...props} />
   return <TextareaCodeArea {...props} />
-}
-
-function VirtualBrowserPanel({
-  files,
-  activePath,
-  onOpenFile,
-}: {
-  files: CodeFiles
-  activePath: string | null
-  onOpenFile: (path: string) => void
-}) {
-  const [refreshKey, setRefreshKey] = React.useState(0)
-  const previewFile = React.useMemo(
-    () => selectPreviewFile(files, activePath),
-    [activePath, files],
-  )
-  const document = React.useMemo(
-    () => (previewFile ? buildPreviewDocument(previewFile, files) : ""),
-    [files, previewFile],
-  )
-  const updatedAt = previewFile?.updatedAt ?? 0
-  const address = previewFile ? `sira://workspace/${previewFile.path}` : "sira://workspace"
-
-  return (
-    <section className="flex min-w-[360px] flex-1 flex-col bg-zinc-50/70" aria-label="Navegador virtual">
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border/60 bg-background px-2">
-        <div className="flex items-center gap-1.5 px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-          <Globe2 className="h-3.5 w-3.5 text-sky-500" />
-          Navegador virtual
-        </div>
-        <div className="flex min-w-0 flex-1 items-center gap-2 rounded-full border border-border/70 bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
-          <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />
-          <span className="truncate font-mono">{address}</span>
-        </div>
-        {previewFile ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7 text-muted-foreground hover:text-foreground"
-            onClick={() => onOpenFile(previewFile.path)}
-            title={`Editar ${previewFile.path}`}
-            aria-label={`Editar ${previewFile.path}`}
-          >
-            <ExternalLink className="h-3.5 w-3.5" />
-          </Button>
-        ) : null}
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7 text-muted-foreground hover:text-foreground"
-          onClick={() => setRefreshKey((v) => v + 1)}
-          title="Recargar vista"
-          aria-label="Recargar vista"
-        >
-          <RefreshCw className="h-3.5 w-3.5" />
-        </Button>
-      </div>
-      <div className="min-h-0 flex-1 p-3">
-        <div className="h-full overflow-hidden rounded-xl border border-border/70 bg-white dark:bg-card shadow-sm">
-          {previewFile ? (
-            <iframe
-              key={`${previewFile.path}-${updatedAt}-${refreshKey}`}
-              title={`Navegador virtual: ${previewFile.path}`}
-              sandbox="allow-scripts allow-forms allow-modals"
-              className="h-full w-full bg-white dark:bg-card"
-              srcDoc={document}
-            />
-          ) : (
-            <VirtualBrowserEmpty />
-          )}
-        </div>
-      </div>
-    </section>
-  )
-}
-
-function VirtualBrowserEmpty() {
-  return (
-    <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
-      <div className="max-w-xs">
-        <AlertCircle className="mx-auto mb-3 h-6 w-6 opacity-60" />
-        <p>No hay ningún archivo HTML o SVG para previsualizar.</p>
-        <p className="mt-1 text-xs">Crea `index.html` desde el chat para ver la web aquí.</p>
-      </div>
-    </div>
-  )
-}
-
-function selectPreviewFile(files: CodeFiles, activePath: string | null): CodeFile | null {
-  const active = activePath ? files[activePath] : null
-  if (active && PREVIEW_LANGUAGES.has(active.language)) return active
-  if (files["index.html"]) return files["index.html"]
-  return Object.values(files).find((file) => PREVIEW_LANGUAGES.has(file.language)) ?? null
-}
-
-function buildPreviewDocument(file: CodeFile, files: CodeFiles): string {
-  if (file.language === "svg") {
-    return `<!DOCTYPE html><html><head><meta charset="utf-8" />\n<style>html,body{margin:0;min-height:100%;display:grid;place-items:center;background:#fff;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}body{padding:24px}svg{max-width:100%;max-height:100%;height:auto}</style></head><body>${file.content}</body></html>`
-  }
-
-  const trimmed = file.content.trimStart()
-  const html = /^<!doctype/i.test(trimmed) || /^<html[\s>]/i.test(trimmed)
-    ? file.content
-    : `<!DOCTYPE html><html><head><meta charset="utf-8" /></head><body style="margin:0;padding:0">${file.content}</body></html>`
-
-  return inlineWorkspaceAssets(html, file.path, files)
-}
-
-function inlineWorkspaceAssets(html: string, htmlPath: string, files: CodeFiles): string {
-  const withStyles = html.replace(
-    /<link\b([^>]*?)rel=(["'])stylesheet\2([^>]*?)>/gi,
-    (match, before: string, quote: string, after: string) => {
-      const attrs = `${before} ${after}`
-      const href = readHtmlAttribute(attrs, "href")
-      if (!href) return match
-      const asset = resolveWorkspaceAsset(href, htmlPath, files)
-      if (!asset) return match
-      return `<style data-siragpt-src="${escapeHtml(asset.path)}">\n${asset.content}\n</style>`
-    },
-  )
-
-  return withStyles.replace(
-    /<script\b([^>]*?)src=(["'])(.*?)\2([^>]*)>\s*<\/script>/gi,
-    (match, before: string, _quote: string, src: string, after: string) => {
-      const asset = resolveWorkspaceAsset(src, htmlPath, files)
-      if (!asset) return match
-      const attrs = `${before} ${after}`.replace(/\s+src=(["']).*?\1/i, "")
-      return `<script${attrs} data-siragpt-src="${escapeHtml(asset.path)}">\n${asset.content}\n</script>`
-    },
-  )
-}
-
-function readHtmlAttribute(attrs: string, name: string): string | null {
-  const pattern = new RegExp(`${name}\\s*=\\s*([\"'])(.*?)\\1`, "i")
-  return attrs.match(pattern)?.[2] ?? null
-}
-
-function resolveWorkspaceAsset(source: string, fromPath: string, files: CodeFiles): CodeFile | null {
-  if (!source || /^[a-z][a-z0-9+.-]*:/i.test(source) || source.startsWith("//")) return null
-  const cleanSource = source.split("#")[0].split("?")[0].replace(/^\.?\//, "")
-  const fromDir = fromPath.includes("/") ? fromPath.slice(0, fromPath.lastIndexOf("/") + 1) : ""
-  const candidates = [
-    cleanSource,
-    `${fromDir}${cleanSource}`.replace(/\/+/g, "/"),
-  ]
-  for (const candidate of candidates) {
-    const normalized = normalizeRelativePath(candidate)
-    if (files[normalized]) return files[normalized]
-  }
-  return null
-}
-
-function normalizeRelativePath(path: string): string {
-  const parts: string[] = []
-  for (const part of path.split("/")) {
-    if (!part || part === ".") continue
-    if (part === "..") parts.pop()
-    else parts.push(part)
-  }
-  return parts.join("/")
-}
-
-function escapeHtml(value: string): string {
-  return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;")
 }
 
 function EmptyState() {
