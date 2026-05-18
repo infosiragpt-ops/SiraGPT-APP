@@ -694,3 +694,50 @@ test('cache: SIRAGPT_ANALYZER_CACHE=0 disables caching entirely', async () => {
     else process.env.SIRAGPT_ANALYZER_CACHE = prev;
   }
 });
+
+// ──────────────────────────────────────────────────────────────────────────
+// getAnalyzerHealthSnapshot.cache + clearAnalyzerCache — ops surface
+// ──────────────────────────────────────────────────────────────────────────
+
+test('health snapshot: includes cache stats sub-object', async () => {
+  const cache = require('../src/services/document-analyzer-cache');
+  cache.reset();
+  analyzer._internal.resetAnalyzerBreakers();
+  const file = {
+    id: 'doc-cache-1',
+    originalName: 'sample.txt',
+    mimeType: 'text/plain',
+    extractedText: 'A sample for cache testing.',
+  };
+  // First call → misses; second → hits.
+  await analyzer.buildEnrichedFileContext({ prisma: null, processedFiles: [file] });
+  await analyzer.buildEnrichedFileContext({ prisma: null, processedFiles: [file] });
+  const snap = analyzer.getAnalyzerHealthSnapshot();
+  assert.ok(snap.cache, 'snapshot.cache must be present');
+  assert.ok(snap.cache.size > 0, `snapshot.cache.size ${snap.cache.size} should be > 0`);
+  assert.ok(snap.cache.hits > 0, `snapshot.cache.hits ${snap.cache.hits} should be > 0`);
+  assert.ok(snap.cache.ratio > 0);
+  assert.ok(snap.cache.ratio <= 1);
+});
+
+test('clearAnalyzerCache: wipes cache and returns pre-clear stats', async () => {
+  const cache = require('../src/services/document-analyzer-cache');
+  cache.reset();
+  analyzer._internal.resetAnalyzerBreakers();
+  // Prime the cache.
+  const file = {
+    id: 'doc-cache-2',
+    originalName: 'primer.txt',
+    mimeType: 'text/plain',
+    extractedText: 'Some content to populate the analyzer cache.',
+  };
+  await analyzer.buildEnrichedFileContext({ prisma: null, processedFiles: [file] });
+  const sizeBefore = cache.stats().size;
+  assert.ok(sizeBefore > 0, 'cache must have entries before clearing');
+  const result = analyzer.clearAnalyzerCache();
+  assert.equal(result.cleared, true);
+  assert.ok(result.before, 'before snapshot must be returned');
+  assert.equal(result.before.size, sizeBefore);
+  // After clear, cache must be empty.
+  assert.equal(cache.stats().size, 0);
+});

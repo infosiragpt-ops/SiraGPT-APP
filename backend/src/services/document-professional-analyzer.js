@@ -182,9 +182,17 @@ function getAnalyzerHealthSnapshot() {
       degraded.push({ name, consecutiveFailures: entry.consecutiveFailures });
     }
   }
+  // Cache stats — surfaced so ops can verify hit ratio in prod. Falls
+  // back to a zero snapshot if the cache module isn't available.
+  let cache = null;
+  const cacheModule = _getAnalyzerCache();
+  if (cacheModule && typeof cacheModule.stats === 'function') {
+    try { cache = cacheModule.stats(); } catch { cache = null; }
+  }
   return {
     openBreakers: open,
     degradedAnalyzers: degraded,
+    cache,
     config: {
       breakerThreshold: ANALYZER_BREAKER_THRESHOLD,
       breakerCooldownMs: ANALYZER_BREAKER_COOLDOWN_MS,
@@ -194,6 +202,19 @@ function getAnalyzerHealthSnapshot() {
     },
     capturedAt: now,
   };
+}
+
+// Operational helper — wipes the analyzer cache. Used by admin endpoint
+// after rolling out new analyzer code that should invalidate cached
+// output. Returns the pre-clear stats so the admin sees what was wiped.
+function clearAnalyzerCache() {
+  const cacheModule = _getAnalyzerCache();
+  if (!cacheModule || typeof cacheModule.reset !== 'function') {
+    return { cleared: false, reason: 'cache_unavailable' };
+  }
+  const before = (typeof cacheModule.stats === 'function') ? cacheModule.stats() : null;
+  cacheModule.reset();
+  return { cleared: true, before };
 }
 
 // Lazy require — keeps the cache module optional. If it's missing or
@@ -7919,6 +7940,7 @@ module.exports = {
   createAnalyzerTelemetry,
   summarizeAnalyzerTelemetry,
   getAnalyzerHealthSnapshot,
+  clearAnalyzerCache,
   buildInsightsBlock,
   buildQualityBlock,
   buildEvidenceMapBlock,

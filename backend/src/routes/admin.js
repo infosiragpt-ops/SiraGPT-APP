@@ -704,6 +704,7 @@ router.get('/stats', async (req, res) => {
 // Analyzer pipeline health — lists currently open breakers and degraded
 // analyzers along with the breaker config. Useful for ops to see whether
 // a recently-shipped regex regression is being short-circuited in prod.
+// Also includes cache stats (size/hits/misses/ratio).
 router.get('/analyzer/health', (_req, res) => {
   try {
     const documentProfessionalAnalyzer = require('../services/document-professional-analyzer');
@@ -712,6 +713,25 @@ router.get('/analyzer/health', (_req, res) => {
   } catch (err) {
     console.error('[admin/analyzer-health] failed:', err && err.message ? err.message : err);
     res.status(500).json({ error: 'Failed to capture analyzer health snapshot' });
+  }
+});
+
+// Analyzer cache invalidation — wipes the in-process content-hash cache
+// for the document-enrichment pipeline. Use after rolling out new
+// analyzer logic that should produce different output for the same
+// input (otherwise cached responses keep the old behaviour until they
+// LRU-evict naturally).
+router.post('/analyzer/cache/clear', (_req, res) => {
+  try {
+    const documentProfessionalAnalyzer = require('../services/document-professional-analyzer');
+    const result = documentProfessionalAnalyzer.clearAnalyzerCache();
+    if (!result.cleared) {
+      return res.status(503).json({ error: 'Cache module unavailable', reason: result.reason });
+    }
+    res.json({ ok: true, cleared: true, before: result.before });
+  } catch (err) {
+    console.error('[admin/analyzer-cache-clear] failed:', err && err.message ? err.message : err);
+    res.status(500).json({ error: 'Failed to clear analyzer cache' });
   }
 });
 
