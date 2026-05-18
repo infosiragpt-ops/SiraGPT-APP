@@ -121,12 +121,19 @@ const formatSidebarChatTitle = (value: unknown) => {
     .trim()
 }
 
+/** Cursor-style nav chrome: neutral icons, quiet hover, no per-item rainbow colors. */
+const NAV_ROW =
+  "group/nav h-8 w-full justify-start gap-2.5 rounded-md px-2.5 text-[13px] font-normal text-muted-foreground transition-colors duration-150 hover:bg-muted/50 hover:text-foreground"
+const NAV_ROW_ACTIVE =
+  "bg-muted/80 text-foreground shadow-none"
+const NAV_ICON = "h-[15px] w-[15px] shrink-0 stroke-[1.75]"
+
 type SidebarNavItemProps = {
   href: string
   label: React.ReactNode
   tooltip: React.ReactNode
   icon: React.ComponentType<{ className?: string }>
-  iconClassName: string
+  iconClassName?: string
   active: boolean
   pending: boolean
   sidebarState: "open" | "closed"
@@ -161,13 +168,7 @@ function SidebarNavItem({
         <SidebarMenuButton
           asChild
           isActive={active}
-          className={cn(
-            "group/nav w-full justify-start h-9 px-3 rounded-lg",
-            "transition-[background-color,color,box-shadow] duration-fast ease-smooth",
-            "hover:bg-muted/45",
-            active && "bg-accent text-accent-foreground shadow-[inset_2px_0_0_0_hsl(var(--accent-violet)/0.65)] dark:shadow-[inset_2px_0_0_0_hsl(var(--accent-violet)/0.7)]",
-            pending && "opacity-70"
-          )}
+          className={cn(NAV_ROW, active && NAV_ROW_ACTIVE, pending && "opacity-60")}
           variant="default"
         >
           <Link
@@ -175,7 +176,7 @@ function SidebarNavItem({
             prefetch
             scroll={false}
             aria-current={active ? "page" : undefined}
-            className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-1"
+            className="focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border focus-visible:ring-offset-0"
             onPointerDown={markIntent}
             onKeyDown={(event) => {
               if (event.key === "Enter" || event.key === " ") {
@@ -189,10 +190,14 @@ function SidebarNavItem({
               onNavigate?.()
             }}
           >
-            <Icon className={cn("h-4 w-4 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]", iconClassName)} />
-            <span className="group-data-[state=closed]:hidden -ml-0.2 transition-colors duration-200 group-hover/nav:text-primary">
-              {label}
-            </span>
+            <Icon
+              className={cn(
+                NAV_ICON,
+                active ? "text-foreground" : "text-muted-foreground",
+                iconClassName,
+              )}
+            />
+            <span className="group-data-[state=closed]:hidden truncate">{label}</span>
           </Link>
         </SidebarMenuButton>
       </TooltipTrigger>
@@ -839,58 +844,49 @@ export function AppSidebar() {
   const isOnCodePage = activePathname.startsWith('/code')
 
   return (
-    <Sidebar className="border-r border-border/40 w-64" collapsible="icon">
+    <Sidebar className="w-[248px] border-r border-border/50 bg-sidebar" collapsible="icon">
       <SidebarHeader
         className={cn(
-          "border-b border-border/40 transition-all",
-          state === "open" ? "p-4" : "p-2"
+          "border-b border-border/50 transition-all",
+          state === "open" ? "px-3 py-2.5" : "p-2"
         )}
       >
-        {/* Jab sidebar open ho to yeh layout dikhega */}
         <div
           className={cn(
-            "flex items-center justify-between",
-            state === "closed" && "hidden"
+            "flex items-center justify-between gap-2",
+            state === "closed" && "hidden",
           )}
         >
-          <div className="flex items-center gap-2">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg  ">
-
-              <img
-                src="/sira-gpt.png"
-                alt="Icon"
-                className="h-10 w-10 rounded-lg object-contain"
-              />
-
-            </div>
-            <div className="flex flex-col leading-tight">
-              <span className="text-sm font-semibold tracking-tight">Sira GPT</span>
-              <span className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground/70 mt-0.5">AI Platform</span>
-            </div>
+          <div className="flex min-w-0 items-center gap-2.5">
+            <img
+              src="/sira-gpt.png"
+              alt=""
+              className="h-7 w-7 shrink-0 rounded-md object-contain"
+            />
+            <span className="truncate text-[13px] font-medium tracking-tight text-foreground">
+              SiraGPT
+            </span>
           </div>
-          <div className="flex items-center gap-1">
-            {/* <NotificationCenter /> */} {/* Commented out to stop repeated API calls */}
-            <SidebarTrigger
-              aria-label="Ocultar barra lateral"
-              title="Ocultar barra lateral"
-              className="h-8 w-8 rounded-full border border-border/60 bg-background text-muted-foreground shadow-none transition-colors hover:border-border hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0"
-            >
-              <PanelLeft className="h-4 w-4" />
-            </SidebarTrigger>
-          </div>
+          <SidebarTrigger
+            aria-label="Ocultar barra lateral"
+            title="Ocultar barra lateral"
+            className="h-7 w-7 shrink-0 text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+          >
+            <PanelLeft className="h-4 w-4" />
+          </SidebarTrigger>
         </div>
         {/* Jab sidebar close ho to sirf yeh logo dikhega (hover effect ke saath) */}
         <div className={cn("relative", state === "open" && "hidden")}>
-          <div
-            className="group flex h-8 w-8 cursor-pointer items-center justify-center rounded-full border border-border/60 bg-background text-muted-foreground transition-colors hover:border-border hover:bg-muted hover:text-foreground"
+          <button
+            type="button"
+            className="group flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
             onClick={toggleSidebar}
-            role="button"
             aria-label="Mostrar barra lateral"
             title="Mostrar barra lateral"
           >
             <Bot className="h-4 w-4 transition-opacity group-hover:opacity-0" />
             <PanelLeft className="absolute h-4 w-4 opacity-0 transition-opacity group-hover:opacity-100" />
-          </div>
+          </button>
         </div>
       </SidebarHeader>
 
@@ -898,26 +894,24 @@ export function AppSidebar() {
       <div
         className={cn(
           "transition-all flex flex-col ",
-          state === "open" ? "p-4 pt-2 pl-2" : "p-2"
+          state === "open" ? "space-y-0.5 px-2 py-2" : "p-2"
         )}
       >
         <TooltipProvider>
-          {/* Shared pattern for nav items — the `group` enables
-              hover-coordinated transforms on the icon and color fade on
-              the label without spreading timing logic across children:
-              - row: bg-muted/40 on hover with rounded-lg (150ms)
-              - icon: scale 1.15 + -translateY(1px) on hover (200ms ease-out), scale 0.95 on active for press feedback
-              - label: color fade to primary on hover */}
           <Tooltip delayDuration={300}>
             <TooltipTrigger asChild>
               <button
                 onPointerDown={markNewChatIntent}
                 onClick={handleNewChat}
                 data-sidebar="menu-button"
-                className="group/nav peer/menu-button flex w-full items-center gap-2 overflow-hidden rounded-md p-2 text-left text-sm outline-none ring-sidebar-ring transition-[width,height,padding] focus-visible:ring-2 disabled:pointer-events-none disabled:opacity-50 group-has-[[data-sidebar=menu-action]]/menu-item:pr-8 aria-disabled:pointer-events-none aria-disabled:opacity-50 group-data-[collapsible=icon]:!size-8 group-data-[collapsible=icon]:!p-2 [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 bg-sidebar-accent text-sidebar-accent-foreground hover:bg-sidebar-accent/80 active:bg-sidebar-accent/60 disabled:opacity-50"
+                className={cn(
+                  NAV_ROW,
+                  "font-medium text-foreground",
+                  "group-data-[collapsible=icon]:!size-8 group-data-[collapsible=icon]:!p-2",
+                )}
               >
-                <PenSquare className="h-4 w-4 text-indigo-500 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]" />
-                <span className="group-data-[state=closed]:hidden -ml-0.2 text-sidebar-accent-foreground">{t("newChat")}</span>
+                <PenSquare className={cn(NAV_ICON, "text-foreground")} />
+                <span className="group-data-[state=closed]:hidden truncate">{t("newChat")}</span>
               </button>
             </TooltipTrigger>
             <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
@@ -932,7 +926,7 @@ export function AppSidebar() {
                   key={gpt.id}
                   type="button"
                   onClick={() => startPinnedGptChat(gpt.id)}
-                  className="group/nav flex h-8 w-full items-center gap-2 rounded-lg px-3 text-left text-sm text-muted-foreground transition-colors duration-150 hover:bg-muted/40 hover:text-foreground"
+                  className={cn(NAV_ROW, "h-8")}
                   title={gpt.name}
                 >
                   {gpt.iconUrl ? (
@@ -945,7 +939,7 @@ export function AppSidebar() {
                       </span>
                     )
                   ) : (
-                    <Sparkles className="h-4 w-4 text-purple-500" />
+                    <Sparkles className={cn(NAV_ICON, "text-muted-foreground")} />
                   )}
                   <span className="min-w-0 truncate">{gpt.name}</span>
                 </button>
@@ -964,11 +958,11 @@ export function AppSidebar() {
                     handleSearchClick()
                   }
                 }}
-                className="group/nav w-full justify-start h-9 px-3 rounded-lg transition-colors duration-150 hover:bg-muted/40"
+                className={cn(NAV_ROW, "group-data-[collapsible=icon]:!size-8 group-data-[collapsible=icon]:!p-2")}
                 variant="default"
               >
-                <Search className="h-4 w-4 text-sky-500 transition-transform duration-200 ease-out group-hover/nav:scale-[1.15] group-hover/nav:-translate-y-[1px] group-active/nav:scale-[0.95]" />
-                <span className="group-data-[state=closed]:hidden -ml-0.2 transition-colors duration-200 group-hover/nav:text-primary">{t("searchChats")}</span>
+                <Search className={cn(NAV_ICON, "text-muted-foreground")} />
+                <span className="group-data-[state=closed]:hidden truncate">{t("searchChats")}</span>
               </SidebarMenuButton>
             </TooltipTrigger>
             <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
@@ -981,7 +975,6 @@ export function AppSidebar() {
             label={t("library")}
             tooltip={t("library")}
             icon={Images}
-            iconClassName="text-amber-500"
             active={isOnLibraryPage}
             pending={isPendingRoute("/library")}
             sidebarState={state}
@@ -995,7 +988,6 @@ export function AppSidebar() {
             label={t("gpts")}
             tooltip={t("gpts")}
             icon={LayoutGrid}
-            iconClassName="text-emerald-500"
             active={isOnGPTsPage}
             pending={isPendingRoute("/gpts")}
             sidebarState={state}
@@ -1009,7 +1001,6 @@ export function AppSidebar() {
             label="Parafraseo"
             tooltip="Parafraseo"
             icon={Sparkles}
-            iconClassName="text-teal-500"
             active={isOnParaphrasePage}
             pending={isPendingRoute("/parafraseo")}
             sidebarState={state}
@@ -1028,7 +1019,6 @@ export function AppSidebar() {
             label={t("projects")}
             tooltip={t("projects")}
             icon={FolderKanban}
-            iconClassName="text-rose-500"
             active={isOnProjectsPage}
             pending={isPendingRoute("/projects")}
             sidebarState={state}
@@ -1047,7 +1037,6 @@ export function AppSidebar() {
             label={t("design")}
             tooltip={t("design")}
             icon={Palette}
-            iconClassName="text-fuchsia-500"
             active={isOnDesignPage}
             pending={isPendingRoute("/design")}
             sidebarState={state}
@@ -1067,7 +1056,6 @@ export function AppSidebar() {
             label={t("code")}
             tooltip={t("code")}
             icon={Code2}
-            iconClassName="text-emerald-500"
             active={isOnCodePage}
             pending={isPendingRoute("/code")}
             sidebarState={state}
