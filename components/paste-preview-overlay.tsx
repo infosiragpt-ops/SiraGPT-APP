@@ -45,10 +45,16 @@ export function PastePreviewOverlay({ result, onAction, visible }: PastePreviewO
     result.suggestedAction
   )
   const [dismissed, setDismissed] = React.useState(false)
+  const confirmRef = React.useRef<HTMLButtonElement>(null)
 
   React.useEffect(() => {
     if (visible && !dismissed) {
-      requestAnimationFrame(() => setAnimateIn(true))
+      requestAnimationFrame(() => {
+        setAnimateIn(true)
+        setTimeout(() => {
+          if (confirmRef.current) confirmRef.current.focus()
+        }, 260)
+      })
     }
   }, [visible, dismissed])
 
@@ -58,6 +64,30 @@ export function PastePreviewOverlay({ result, onAction, visible }: PastePreviewO
     setAnimateOut(false)
   }, [result])
 
+  React.useEffect(() => {
+    if (!visible || dismissed) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault()
+        e.stopPropagation()
+        handleAction("cancel")
+      }
+      if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault()
+        e.stopPropagation()
+        handleAction(selectedAction)
+      }
+      if (e.key === "Tab") {
+        e.preventDefault()
+        setSelectedAction(prev =>
+          prev === "attach_document" ? "insert_text" : "attach_document"
+        )
+      }
+    }
+    window.addEventListener("keydown", onKey, true)
+    return () => window.removeEventListener("keydown", onKey, true)
+  })
+
   const handleAction = React.useCallback(
     (action: PasteCaptureAction) => {
       setAnimateOut(true)
@@ -65,7 +95,7 @@ export function PastePreviewOverlay({ result, onAction, visible }: PastePreviewO
       setTimeout(() => {
         setDismissed(true)
         onAction(action, result)
-      }, 250)
+      }, 220)
     },
     [onAction, result]
   )
@@ -103,7 +133,7 @@ export function PastePreviewOverlay({ result, onAction, visible }: PastePreviewO
     <div
       className={cn(
         "pointer-events-auto absolute inset-x-0 bottom-full z-50 mb-2 px-2",
-        "transition-all duration-250 ease-[cubic-bezier(0.16,1,0.3,1)]",
+        "transition-all duration-220 ease-[cubic-bezier(0.16,1,0.3,1)]",
         animateIn && !animateOut
           ? "opacity-100 translate-y-0"
           : "opacity-0 translate-y-3",
@@ -119,7 +149,6 @@ export function PastePreviewOverlay({ result, onAction, visible }: PastePreviewO
         )}
       >
         <div className="p-4">
-          {/* Header row: icon + title + badges */}
           <div className="mb-3 flex items-start gap-3">
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-muted/80 text-lg">
               {kindIcon}
@@ -160,7 +189,8 @@ export function PastePreviewOverlay({ result, onAction, visible }: PastePreviewO
               type="button"
               onClick={() => handleAction("cancel")}
               className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground/70 transition-colors hover:bg-muted/80 hover:text-foreground"
-              aria-label="Cancelar"
+              aria-label="Cancelar (Esc)"
+              title="Cancelar (Esc)"
             >
               <svg
                 width="14"
@@ -176,8 +206,17 @@ export function PastePreviewOverlay({ result, onAction, visible }: PastePreviewO
             </button>
           </div>
 
-          {/* Preview area */}
           <div className="mb-3 overflow-hidden rounded-xl border border-border/50 bg-muted/30">
+            <div className="flex items-center justify-between border-b border-border/30 px-3 py-1">
+              <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
+                Vista previa
+              </span>
+              {suggestedFilename && (
+                <span className="max-w-[180px] truncate text-[10px] text-muted-foreground/50">
+                  {suggestedFilename}
+                </span>
+              )}
+            </div>
             <pre
               className={cn(
                 "max-h-28 overflow-hidden px-3 py-2.5 text-[12px] leading-[1.55]",
@@ -192,7 +231,6 @@ export function PastePreviewOverlay({ result, onAction, visible }: PastePreviewO
             </pre>
           </div>
 
-          {/* Stats grid */}
           <div className="mb-3 flex flex-wrap gap-1.5">
             <StatPill label="Car." value={formatNumber(charCount)} />
             {wordCount > 0 && <StatPill label="Pal." value={formatNumber(wordCount)} />}
@@ -204,20 +242,16 @@ export function PastePreviewOverlay({ result, onAction, visible }: PastePreviewO
             )}
             {estimatedPages > 1 && <StatPill label="~Págs." value={estimatedPages} />}
             {structuralScore >= 2 && (
-              <StatPill
-                label="Estructura"
-                value={`${structuralScore}/7`}
-              />
+              <StatPill label="Estructura" value={`${structuralScore}/7`} />
             )}
           </div>
 
-          {/* Action selection */}
           <div className="mb-3 flex gap-2">
             <button
               type="button"
               onClick={() => setSelectedAction("attach_document")}
               className={cn(
-                "flex-1 rounded-xl px-3 py-2.5 text-center transition-all duration-200",
+                "flex-1 rounded-xl px-3 py-2.5 text-left transition-all duration-200",
                 "border",
                 selectedAction === "attach_document"
                   ? "border-foreground/20 bg-foreground/[0.06] text-foreground shadow-sm dark:border-foreground/30 dark:bg-foreground/[0.08]"
@@ -235,7 +269,7 @@ export function PastePreviewOverlay({ result, onAction, visible }: PastePreviewO
               type="button"
               onClick={() => setSelectedAction("insert_text")}
               className={cn(
-                "flex-1 rounded-xl px-3 py-2.5 text-center transition-all duration-200",
+                "flex-1 rounded-xl px-3 py-2.5 text-left transition-all duration-200",
                 "border",
                 selectedAction === "insert_text"
                   ? "border-foreground/20 bg-foreground/[0.06] text-foreground shadow-sm dark:border-foreground/30 dark:bg-foreground/[0.08]"
@@ -251,9 +285,9 @@ export function PastePreviewOverlay({ result, onAction, visible }: PastePreviewO
             </button>
           </div>
 
-          {/* Confirm button + processing time */}
           <div className="flex items-center gap-3">
             <Button
+              ref={confirmRef}
               onClick={() => handleAction(selectedAction)}
               className={cn(
                 "flex-1 h-10 rounded-xl text-[13px] font-semibold",
@@ -267,9 +301,14 @@ export function PastePreviewOverlay({ result, onAction, visible }: PastePreviewO
                 ? "Adjuntar documento"
                 : "Insertar texto"}
             </Button>
-            <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/50">
-              {processingMs < 1 ? "<1ms" : `${Math.round(processingMs)}ms`}
-            </span>
+            <div className="flex shrink-0 flex-col items-end gap-0.5">
+              <span className="text-[10px] tabular-nums text-muted-foreground/50">
+                {processingMs < 1 ? "<1ms" : `${Math.round(processingMs)}ms`}
+              </span>
+              <span className="text-[9px] text-muted-foreground/40">
+                Enter · Esc · Tab
+              </span>
+            </div>
           </div>
         </div>
       </div>
