@@ -329,12 +329,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [currentStreamId, setCurrentStreamId] = useState<string | null>(null);
   const [pendingStop, setPendingStop] = useState(false);
 
-  const abortControllerRef = useRef<AbortController | null>(null); // ✅ AbortController ref
+  const abortControllerRef = useRef<AbortController | null>(null);
   const chatsRef = useRef<Chat[]>([])
+  const isStreamingRef = useRef(false)
 
-  useEffect(() => {
-    chatsRef.current = chats
-  }, [chats])
+  useEffect(() => { chatsRef.current = chats }, [chats])
+  useEffect(() => { isStreamingRef.current = isStreaming }, [isStreaming])
 
   // Retry pending messages when the user logs back in
   useEffect(() => {
@@ -1130,12 +1130,29 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 setIsStreaming(false);
                 setCurrentStreamId(null);
                 abortControllerRef.current = null;
-                // Delay selectChat to give the backend time to persist
-                // the assistant message (especially important for document
-                // uploads where file I/O adds 1-3s after [DONE]).
-                setTimeout(() => {
-                  selectChat(activeChat.id).catch(() => {});
-                }, 2000);
+                // After the stream ends, fetch the persisted chat so we can
+                // swap optimistic IDs for server IDs. We retry up to 3 times
+                // with a delay because the backend may still be persisting
+                // (document uploads add 1-3s after [DONE]).
+                const syncIds = async (attempt = 1) => {
+                  if (isStreamingRef.current) return;
+                  try {
+                    const resp = await apiClient.getChat(activeChat.id);
+                    const serverChat = resp.chat;
+                    setCurrentChat(prev => {
+                      if (!prev || prev.id !== activeChat.id || isStreamingRef.current) return prev;
+                      const merged = mergeChatPreservingUserMessages(serverChat, prev);
+                      // If the merge preserved all local content (same
+                      // message count), the IDs are synced — we're done.
+                      return merged;
+                    });
+                  } catch {
+                    if (attempt < 3) {
+                      setTimeout(() => syncIds(attempt + 1), 2000 * attempt);
+                    }
+                  }
+                };
+                setTimeout(() => syncIds(), 2000);
               }
             },
             (error) => {
@@ -1239,6 +1256,28 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       } catch (error: any) {
         console.error("Failed to start AI stream:", error);
 
+        // If the stream already completed successfully (onClose was called),
+        // don't wipe the content the user can already see.
+        if (!isStreamingRef.current && aiMessagePlaceholder) {
+          const alreadyHasContent = (() => {
+            let hasContent = false;
+            setCurrentChat(prev => {
+              if (!prev) return prev;
+              const msg = prev.messages?.find((m: any) => m.id === aiMessagePlaceholder.id);
+              hasContent = !!(msg?.content && typeof msg.content === 'string' && msg.content.trim().length > 10);
+              return prev;
+            });
+            return hasContent;
+          })();
+          if (alreadyHasContent) {
+            // Stream completed, this is a post-DONE socket error. Leave the content alone.
+            setIsLoading(false);
+            setIsStreaming(false);
+            setCurrentStreamId(null);
+            return;
+          }
+        }
+
         // Check for monthly API limit errors
         const errorMessage = error?.message || '';
         const status = (error as any)?.status || (error as any)?.statusCode;
@@ -1251,7 +1290,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           devLog('Monthly limit error detected in catch block');
           triggerUpgradeModal(errorMessage, errorData);
 
-          // Update message with monthly limit error
           setCurrentChat((prevChat) => {
             if (!prevChat) return prevChat;
             const newMessages = prevChat.messages.map((msg) => {
@@ -1272,11 +1310,13 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             return { ...prevChat, messages: newMessages };
           });
         } else {
-          // Handle other errors normally
+          // Handle other errors normally — only if placeholder doesn't already have real content
           setCurrentChat((prevChat) => {
             if (!prevChat) return prevChat;
             const newMessages = prevChat.messages.map((msg) => {
               if (msg.id === aiMessagePlaceholder.id) {
+                const existing = typeof msg.content === 'string' ? msg.content.trim() : '';
+                if (existing.length > 10) return msg; // Keep streamed content
                 return { ...msg, content: "", error: normalizeChatError(error.message || "An error occurred.") };
               }
               return msg;
@@ -1462,6 +1502,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
   const selectChat = useCallback(
     async (chatId: string) => {
+      // Block selectChat during active streaming — the content the user
+      // is watching on screen is more up-to-date than anything the API
+      // can return, and a fetch here would race the DB write.
+      if (isStreamingRef.current) return;
+
       const cachedChat = chatsRef.current.find(chat => chat?.id === chatId)
       if (cachedChat) {
         setCurrentChat(prev => {
@@ -1478,6 +1523,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         setCurrentChat(prev => {
           if (!prev || prev.id !== chatId) return mergeChatPreservingUserMessages(chat, prev)
 
+          // Re-check streaming in case it started while the API call was in flight
+          if (isStreamingRef.current) return prev;
+
+          // NEVER overwrite a local chat that has more assistant content
+          // than the server returned — the backend may not have persisted
+          // the last turn yet (common with document uploads).
           const prevAssistantContent = prev.messages
             ?.filter((m: any) => m?.role?.toUpperCase() !== 'USER' && m?.content)
             .reduce((sum: number, m: any) => sum + (typeof m.content === 'string' ? m.content.length : 0), 0) || 0
@@ -1485,7 +1536,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             .filter((m: any) => m?.role?.toUpperCase() !== 'USER' && m?.content)
             .reduce((sum: number, m: any) => sum + (typeof m.content === 'string' ? m.content.length : 0), 0) || 0
 
-          if (prevAssistantContent > serverAssistantContent + 50) {
+          if (prevAssistantContent > serverAssistantContent) {
             return prev
           }
 
@@ -1508,8 +1559,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         setUploadedFiles([])
       } catch (error) {
         console.error("Failed to load chat:", error)
-      } finally {
-
       }
     },
     [],
@@ -1693,26 +1742,30 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             setCurrentStreamId(null);
             abortControllerRef.current = null;
 
-            // Save the updated chat state to ensure persistence
-            try {
-              devLog('Saving regenerated chat state to backend');
-              // The backend streaming endpoint should have already saved the new message
-              // Refresh immediately to ensure we have the latest state
-              if (currentChat?.id) {
-                const freshChat = await apiClient.getChat(currentChat.id);
-                setCurrentChat(prev => mergeChatPreservingUserMessages(freshChat.chat, prev));
-
-                // Also update the chat in the chats list to keep sidebar in sync
-                setChats(prevChats =>
-                  prevChats.filter(chat => chat && chat.id).map(chat =>
-                    chat.id === currentChat.id ? mergeChatPreservingUserMessages(freshChat.chat, chat) : chat
-                  )
-                );
-
-                devLog('Chat refreshed after regeneration, total messages:', freshChat.chat.messages.length);
-              }
-            } catch (error) {
-              console.error('Failed to refresh chat after regeneration:', error);
+            // Delayed ID sync — same pattern as addMessage onClose.
+            // The backend may still be persisting the regenerated turn.
+            const regenChatId = currentChat?.id;
+            if (regenChatId) {
+              const syncIds = async (attempt = 1) => {
+                if (isStreamingRef.current) return;
+                try {
+                  const freshChat = await apiClient.getChat(regenChatId);
+                  setCurrentChat(prev => {
+                    if (!prev || prev.id !== regenChatId || isStreamingRef.current) return prev;
+                    return mergeChatPreservingUserMessages(freshChat.chat, prev);
+                  });
+                  setChats(prevChats =>
+                    prevChats.filter(chat => chat && chat.id).map(chat =>
+                      chat.id === regenChatId ? mergeChatPreservingUserMessages(freshChat.chat, chat) : chat
+                    )
+                  );
+                } catch {
+                  if (attempt < 3) {
+                    setTimeout(() => syncIds(attempt + 1), 2000 * attempt);
+                  }
+                }
+              };
+              setTimeout(() => syncIds(), 2000);
             }
           }
         },
@@ -1882,7 +1935,29 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             setIsStreaming(false);
             setCurrentStreamId(null);
             abortControllerRef.current = null;
-            await selectChat(currentChat.id); // Refresh chat from DB
+
+            // Delayed ID sync — same pattern as addMessage/regenerateMessage onClose.
+            const editChatId = currentChat.id;
+            const syncIds = async (attempt = 1) => {
+              if (isStreamingRef.current) return;
+              try {
+                const freshChat = await apiClient.getChat(editChatId);
+                setCurrentChat(prev => {
+                  if (!prev || prev.id !== editChatId || isStreamingRef.current) return prev;
+                  return mergeChatPreservingUserMessages(freshChat.chat, prev);
+                });
+                setChats(prevChats =>
+                  prevChats.filter(chat => chat && chat.id).map(chat =>
+                    chat.id === editChatId ? mergeChatPreservingUserMessages(freshChat.chat, chat) : chat
+                  )
+                );
+              } catch {
+                if (attempt < 3) {
+                  setTimeout(() => syncIds(attempt + 1), 2000 * attempt);
+                }
+              }
+            };
+            setTimeout(() => syncIds(), 2000);
           }
         },
         (error: any) => {
