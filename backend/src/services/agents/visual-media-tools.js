@@ -7880,6 +7880,257 @@ const createMindmapRadial = {
   },
 };
 
+// ─────────────────────────────────────────────────────────────────────────
+// Tool 34: create_swimlane_diagram
+// ─────────────────────────────────────────────────────────────────────────
+
+const createSwimlaneDiagram = {
+  name: 'create_swimlane_diagram',
+  description: 'Generate a BPM swimlane diagram as an SVG file: a grid of N actor/role lanes (rows) × M sequential stages (columns). Each task is placed in a specific (lane, stage) cell, and adjacent tasks connect with arrows showing handoffs. Distinct from create_raci_matrix (task × role table) and create_process_flow (linear single-actor flow) — swimlane shows how a process flows across multiple actors AND stages.',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string', description: 'Diagram title (e.g. "Customer onboarding").' },
+      subtitle: { type: 'string', description: 'Optional context line.' },
+      lanes: { type: 'array', items: { type: 'string' }, description: '2-6 lane labels (actors/roles).' },
+      stages: { type: 'array', items: { type: 'string' }, description: '2-7 stage labels (time progression).' },
+      tasks: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            label: { type: 'string', description: 'Task label.' },
+            lane:  { type: 'integer', description: 'Lane index (0-based, in the order of lanes[]).' },
+            stage: { type: 'integer', description: 'Stage index (0-based, in the order of stages[]).' },
+            color: { type: 'string', description: 'Optional hex color override.' },
+          },
+          required: ['label', 'lane', 'stage'],
+        },
+        description: '1-30 tasks placed across lanes × stages.',
+      },
+      showHandoffs: { type: 'boolean', description: 'Draw arrows between consecutive tasks (by stage order). Default: true.' },
+      theme: { type: 'string', enum: ['professional', 'modern', 'minimal', 'corporate'], description: 'Visual theme. Default: "professional".' },
+    },
+    required: ['title', 'lanes', 'stages', 'tasks'],
+    additionalProperties: false,
+  },
+  async execute({ title, subtitle = '', lanes = [], stages = [], tasks = [], showHandoffs = true, theme = 'professional' }, ctx = {}) {
+    emitEvent(ctx, 'tool_call', { tool: 'create_swimlane_diagram', preview: title });
+
+    try {
+      if (!Array.isArray(lanes) || lanes.length === 0) {
+        return { ok: false, error: 'lanes array is empty' };
+      }
+      if (lanes.length < 2) {
+        return { ok: false, error: 'swimlane requires at least 2 lanes' };
+      }
+      if (!Array.isArray(stages) || stages.length === 0) {
+        return { ok: false, error: 'stages array is empty' };
+      }
+      if (stages.length < 2) {
+        return { ok: false, error: 'swimlane requires at least 2 stages' };
+      }
+      if (!Array.isArray(tasks) || tasks.length === 0) {
+        return { ok: false, error: 'tasks array is empty' };
+      }
+
+      const themes = {
+        professional: {
+          bg: '#FAFBFC', card: '#FFFFFF', text: '#1E293B', muted: '#64748B', border: '#E2E8F0', accent: '#2563EB',
+          stageBand: '#F1F5F9', laneAlt: '#F8FAFC',
+          palette: ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899'],
+          arrow: '#94A3B8',
+        },
+        modern: {
+          bg: '#0B1121', card: '#1E293B', text: '#F1F5F9', muted: '#94A3B8', border: '#334155', accent: '#818CF8',
+          stageBand: '#162033', laneAlt: '#0F172A',
+          palette: ['#60A5FA', '#34D399', '#FBBF24', '#F87171', '#A78BFA', '#F472B6'],
+          arrow: '#94A3B8',
+        },
+        minimal: {
+          bg: '#FFFFFF', card: '#FFFFFF', text: '#0F172A', muted: '#64748B', border: '#CBD5E1', accent: '#0F172A',
+          stageBand: '#F1F5F9', laneAlt: '#F8FAFC',
+          palette: ['#0F172A', '#1E293B', '#334155', '#475569', '#64748B', '#94A3B8'],
+          arrow: '#94A3B8',
+        },
+        corporate: {
+          bg: '#F8FAFC', card: '#FFFFFF', text: '#0F172A', muted: '#475569', border: '#CBD5E1', accent: '#1E40AF',
+          stageBand: '#E8F0FE', laneAlt: '#F1F5F9',
+          palette: ['#1A73E8', '#0F9D58', '#F9AB00', '#D93025', '#673AB7', '#E91E63'],
+          arrow: '#5F6368',
+        },
+      };
+      const t = themes[theme] || themes.professional;
+
+      const safeTitle = xmlEscape(String(title).slice(0, 120));
+      const safeSubtitle = xmlEscape(String(subtitle || '').slice(0, 140));
+      const laneList = lanes.slice(0, 6).map(l => xmlEscape(String(l || '').slice(0, 24)));
+      const stageList = stages.slice(0, 7).map(s => xmlEscape(String(s || '').slice(0, 24)));
+      const validTasks = tasks
+        .slice(0, 30)
+        .map((t, i) => ({
+          label: xmlEscape(String(t.label || '').slice(0, 28)),
+          lane: Math.max(0, Math.min(laneList.length - 1, Math.round(Number(t.lane) || 0))),
+          stage: Math.max(0, Math.min(stageList.length - 1, Math.round(Number(t.stage) || 0))),
+          color: t.color && /^#[0-9A-Fa-f]{6}$/.test(t.color) ? t.color : null,
+          _idx: i,
+        }))
+        .filter(t => t.label);
+
+      const laneLabelW = 140;
+      const stageColW = 180;
+      const stageBandH = 50;
+      const laneH = 100;
+      const pad = 28;
+      const headerH = safeSubtitle ? 110 : 86;
+      const W = pad * 2 + laneLabelW + stageColW * stageList.length;
+      const H = headerH + pad + stageBandH + laneH * laneList.length + pad;
+
+      let body = `<rect width="${W}" height="${H}" fill="${t.bg}" rx="12"/>`;
+      // Header
+      body += `<rect x="0" y="0" width="${W}" height="${headerH}" fill="${t.accent}"/>`;
+      body += `<text x="${W / 2}" y="42" text-anchor="middle" font-family="Georgia, serif" font-size="24" font-weight="bold" fill="#fff">${safeTitle}</text>`;
+      body += `<text x="${W / 2}" y="66" text-anchor="middle" font-family="Arial" font-size="12" fill="#fff" opacity="0.85">${laneList.length} actores × ${stageList.length} etapas · ${validTasks.length} tareas</text>`;
+      if (safeSubtitle) {
+        body += `<text x="${W / 2}" y="92" text-anchor="middle" font-family="Arial" font-size="13" fill="#fff" opacity="0.92">${safeSubtitle}</text>`;
+      }
+
+      // Stage band (top)
+      const bandY = headerH + pad;
+      const gridX = pad + laneLabelW;
+      body += `<rect x="${gridX}" y="${bandY}" width="${stageColW * stageList.length}" height="${stageBandH}" fill="${t.stageBand}" stroke="${t.border}" stroke-width="1"/>`;
+      stageList.forEach((label, i) => {
+        const x = gridX + i * stageColW;
+        body += `<line x1="${x}" y1="${bandY}" x2="${x}" y2="${bandY + stageBandH}" stroke="${t.border}" stroke-width="1"/>`;
+        body += `<text x="${x + stageColW / 2}" y="${bandY + 22}" text-anchor="middle" font-family="Arial" font-size="11" font-weight="bold" fill="${t.muted}">ETAPA ${i + 1}</text>`;
+        body += `<text x="${x + stageColW / 2}" y="${bandY + 38}" text-anchor="middle" font-family="Arial" font-size="13" font-weight="bold" fill="${t.text}">${label}</text>`;
+      });
+
+      // Lane labels + lane backgrounds
+      const lanesY = bandY + stageBandH;
+      laneList.forEach((label, i) => {
+        const ly = lanesY + i * laneH;
+        const isAlt = i % 2 === 1;
+        // Lane label cell
+        const laneColor = t.palette[i % t.palette.length];
+        body += `<rect x="${pad}" y="${ly}" width="${laneLabelW}" height="${laneH}" fill="${laneColor}" opacity="0.12" stroke="${t.border}" stroke-width="0.5"/>`;
+        body += `<rect x="${pad}" y="${ly}" width="6" height="${laneH}" fill="${laneColor}"/>`;
+        body += `<text x="${pad + 18}" y="${ly + laneH / 2 - 4}" font-family="Arial" font-size="13" font-weight="bold" fill="${t.text}">${label}</text>`;
+        body += `<text x="${pad + 18}" y="${ly + laneH / 2 + 14}" font-family="Arial" font-size="10" fill="${t.muted}">ACTOR ${i + 1}</text>`;
+        // Lane grid (cells)
+        body += `<rect x="${gridX}" y="${ly}" width="${stageColW * stageList.length}" height="${laneH}" fill="${isAlt ? t.laneAlt : t.card}" stroke="${t.border}" stroke-width="0.5"/>`;
+        // Vertical column separators within the lane
+        stageList.forEach((_, si) => {
+          if (si > 0) {
+            const sx = gridX + si * stageColW;
+            body += `<line x1="${sx}" y1="${ly}" x2="${sx}" y2="${ly + laneH}" stroke="${t.border}" stroke-width="0.5" stroke-dasharray="3,3"/>`;
+          }
+        });
+      });
+
+      // Task positions for handoff arrows
+      const taskRects = validTasks.map((task) => {
+        const x = gridX + task.stage * stageColW;
+        const y = lanesY + task.lane * laneH;
+        // Task card sized so it fits within cell with padding
+        const tx = x + 16;
+        const ty = y + 18;
+        const tw = stageColW - 32;
+        const th = laneH - 36;
+        const color = task.color || t.palette[task.lane % t.palette.length];
+        return { task, x: tx, y: ty, w: tw, h: th, color };
+      });
+
+      // Handoff arrows (sorted by stage so they show natural flow)
+      if (showHandoffs && taskRects.length >= 2) {
+        const sortedRects = [...taskRects].sort((a, b) => {
+          if (a.task.stage !== b.task.stage) return a.task.stage - b.task.stage;
+          return a.task.lane - b.task.lane;
+        });
+        for (let i = 0; i < sortedRects.length - 1; i++) {
+          const a = sortedRects[i];
+          const b = sortedRects[i + 1];
+          if (a.task.stage === b.task.stage) continue; // same column — not a handoff
+          const ax = a.x + a.w;
+          const ay = a.y + a.h / 2;
+          const bx = b.x;
+          const by = b.y + b.h / 2;
+          // Smooth curve from (ax, ay) to (bx, by)
+          const midX = (ax + bx) / 2;
+          body += `<path d="M ${ax} ${ay} C ${midX} ${ay}, ${midX} ${by}, ${bx} ${by}" fill="none" stroke="${t.arrow}" stroke-width="1.5" opacity="0.6"/>`;
+          // Arrowhead at b
+          body += `<polygon points="${bx - 6},${by - 4} ${bx},${by} ${bx - 6},${by + 4}" fill="${t.arrow}" opacity="0.7"/>`;
+        }
+      }
+
+      // Task cards (rendered on top of arrows)
+      taskRects.forEach(({ task, x, y, w, h, color }) => {
+        body += `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="8" fill="${t.card}" stroke="${color}" stroke-width="2" filter="url(#vis-shadow)"/>`;
+        body += `<rect x="${x}" y="${y}" width="4" height="${h}" rx="2" fill="${color}"/>`;
+        // Wrap label to 2 lines at ~18 chars
+        const words = task.label.split(' ');
+        let l1 = '';
+        let l2 = '';
+        for (const w of words) {
+          if ((l1 + ' ' + w).trim().length < 18) l1 = (l1 + ' ' + w).trim();
+          else l2 = (l2 + ' ' + w).trim();
+        }
+        if (l2) {
+          body += `<text x="${x + 14}" y="${y + h / 2 - 4}" font-family="Arial" font-size="12" font-weight="bold" fill="${t.text}">${l1}</text>`;
+          body += `<text x="${x + 14}" y="${y + h / 2 + 12}" font-family="Arial" font-size="11" fill="${t.muted}">${l2}</text>`;
+        } else {
+          body += `<text x="${x + 14}" y="${y + h / 2 + 5}" font-family="Arial" font-size="13" font-weight="bold" fill="${t.text}">${l1}</text>`;
+        }
+      });
+
+      const svg = svgDocument({
+        width: W,
+        height: H,
+        title: safeTitle,
+        description: `Swimlane diagram: ${safeTitle}`,
+        body,
+      });
+
+      const buffer = Buffer.from(svg, 'utf8');
+      const filename = `swimlane_${crypto.randomBytes(4).toString('hex')}.svg`;
+      const artifact = finalizeArtifact({ filename, buffer, mime: EXTENSION_TO_MIME.svg, ctx });
+
+      emitEvent(ctx, 'file_artifact', {
+        artifact: {
+          id: artifact.id,
+          filename: artifact.filename,
+          format: 'svg',
+          mime: 'image/svg+xml',
+          sizeBytes: artifact.sizeBytes,
+          downloadUrl: artifact.downloadUrl,
+        },
+      });
+
+      emitEvent(ctx, 'tool_output', {
+        tool: 'create_swimlane_diagram',
+        ok: true,
+        preview: `Swimlane: ${artifact.filename} (${laneList.length}×${stageList.length} grid, ${validTasks.length} tareas, ${Math.round(artifact.sizeBytes / 1024)} KB)`,
+      });
+
+      return {
+        ok: true,
+        id: artifact.id,
+        filename: artifact.filename,
+        sizeBytes: artifact.sizeBytes,
+        downloadUrl: artifact.downloadUrl,
+        title,
+        lanes: laneList.length,
+        stages: stageList.length,
+        tasks: validTasks.length,
+      };
+    } catch (err) {
+      const msg = err?.message || String(err);
+      emitEvent(ctx, 'tool_output', { tool: 'create_swimlane_diagram', ok: false, preview: `Error: ${msg}` });
+      return { ok: false, error: msg };
+    }
+  },
+};
+
 // ── All visual/media tools for the agent ──────────────────────────────
 
 const VISUAL_MEDIA_TOOLS = [
@@ -7916,6 +8167,7 @@ const VISUAL_MEDIA_TOOLS = [
   createDecisionTree,
   createConceptMap,
   createMindmapRadial,
+  createSwimlaneDiagram,
 ];
 
 // Internal helpers exposed for unit testing — NOT part of the public agent

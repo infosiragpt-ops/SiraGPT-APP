@@ -653,8 +653,8 @@ test('create_dashboard_html: no charts', async () => {
 
 // ── Tool metadata ────────────────────────────────────────────────
 
-test('all 33 tools have valid metadata', () => {
-  assert.equal(VISUAL_MEDIA_TOOLS.length, 33);
+test('all 34 tools have valid metadata', () => {
+  assert.equal(VISUAL_MEDIA_TOOLS.length, 34);
   for (const t of VISUAL_MEDIA_TOOLS) {
     assert.ok(t.name);
     assert.ok(t.description);
@@ -3938,6 +3938,173 @@ test('create_mindmap_radial: emits expected events', async () => {
     title: 'Events',
     centralTopic: 'Root',
     branches: [{ label: 'A' }, { label: 'B' }],
+  }, ctx);
+  const types = ctx._events.map(e => e.type);
+  assert.ok(types.includes('tool_call'));
+  assert.ok(types.includes('file_artifact'));
+  assert.ok(types.includes('tool_output'));
+});
+
+// ── create_swimlane_diagram ──────────────────────────────────────
+
+test('create_swimlane_diagram: 3-actor onboarding process with handoffs', async () => {
+  const sw = tool('create_swimlane_diagram');
+  assert.ok(sw);
+  const r = await sw.execute({
+    title: 'Customer onboarding',
+    subtitle: 'SiraGPT funnel',
+    lanes: ['Customer', 'Sales', 'Engineering'],
+    stages: ['Sign up', 'Activate', 'Use', 'Renew'],
+    tasks: [
+      { label: 'Fill signup form', lane: 0, stage: 0 },
+      { label: 'Verify lead',      lane: 1, stage: 0 },
+      { label: 'Provision instance', lane: 2, stage: 1 },
+      { label: 'Run demo',         lane: 1, stage: 1 },
+      { label: 'Daily use',        lane: 0, stage: 2 },
+      { label: 'Renewal notice',   lane: 1, stage: 3 },
+    ],
+    theme: 'professional',
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.lanes, 3);
+  assert.equal(r.stages, 4);
+  assert.equal(r.tasks, 6);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.startsWith('<svg'));
+  assert.ok(svg.includes('Customer onboarding'));
+  assert.ok(svg.includes('Customer'));
+  assert.ok(svg.includes('Engineering'));
+  assert.ok(svg.includes('Sign up'));
+  assert.ok(svg.includes('Renew'));
+  assert.ok(svg.includes('Fill signup form'));
+  // Task label gets wrapped to 2 lines for long strings (~18 chars/line),
+  // so check the individual halves rather than the full string.
+  assert.ok(svg.includes('Provision') && svg.includes('instance'));
+});
+
+test('create_swimlane_diagram: empty lanes fails', async () => {
+  const r = await tool('create_swimlane_diagram').execute({
+    title: 'No lanes',
+    lanes: [],
+    stages: ['A', 'B'],
+    tasks: [{ label: 'x', lane: 0, stage: 0 }],
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /lanes.*empty/i);
+});
+
+test('create_swimlane_diagram: single lane fails (need >= 2)', async () => {
+  const r = await tool('create_swimlane_diagram').execute({
+    title: 'One lane',
+    lanes: ['A'],
+    stages: ['1', '2'],
+    tasks: [{ label: 'x', lane: 0, stage: 0 }],
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /at least 2 lanes/i);
+});
+
+test('create_swimlane_diagram: single stage fails (need >= 2)', async () => {
+  const r = await tool('create_swimlane_diagram').execute({
+    title: 'One stage',
+    lanes: ['A', 'B'],
+    stages: ['only'],
+    tasks: [{ label: 'x', lane: 0, stage: 0 }],
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /at least 2 stages/i);
+});
+
+test('create_swimlane_diagram: empty tasks fails', async () => {
+  const r = await tool('create_swimlane_diagram').execute({
+    title: 'No tasks',
+    lanes: ['A', 'B'],
+    stages: ['1', '2'],
+    tasks: [],
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /tasks.*empty/i);
+});
+
+test('create_swimlane_diagram: out-of-range lane/stage clamped to valid range', async () => {
+  const r = await tool('create_swimlane_diagram').execute({
+    title: 'OOR',
+    lanes: ['A', 'B'],
+    stages: ['S1', 'S2'],
+    tasks: [
+      { label: 't', lane: 99, stage: 99 },  // both out of range
+      { label: 'u', lane: -5, stage: -3 },  // both negative
+    ],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.tasks, 2);
+});
+
+test('create_swimlane_diagram: caps lanes at 6 and stages at 7', async () => {
+  const r = await tool('create_swimlane_diagram').execute({
+    title: 'Overflow',
+    lanes: Array.from({ length: 10 }, (_, i) => `L${i + 1}`),
+    stages: Array.from({ length: 12 }, (_, i) => `S${i + 1}`),
+    tasks: [{ label: 'x', lane: 0, stage: 0 }],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.lanes, 6);
+  assert.equal(r.stages, 7);
+});
+
+test('create_swimlane_diagram: showHandoffs=false hides arrows', async () => {
+  const r = await tool('create_swimlane_diagram').execute({
+    title: 'No arrows',
+    lanes: ['A', 'B'],
+    stages: ['1', '2'],
+    tasks: [
+      { label: 't1', lane: 0, stage: 0 },
+      { label: 't2', lane: 1, stage: 1 },
+    ],
+    showHandoffs: false,
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  // No polygon-shaped arrowheads should be rendered
+  assert.equal(/polygon points="[\d.-]+,[\d.-]+ [\d.-]+,[\d.-]+ [\d.-]+,[\d.-]+"/.test(svg.split('<rect')[0]), false);
+});
+
+test('create_swimlane_diagram: xml-escapes content', async () => {
+  const r = await tool('create_swimlane_diagram').execute({
+    title: 'XSS',
+    lanes: ['<script>x</script>', 'Safe'],
+    stages: ['1', '2'],
+    tasks: [{ label: '"injected"', lane: 0, stage: 0 }],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.equal(svg.includes('<script>x</script>'), false);
+  assert.ok(svg.includes('&lt;script&gt;'));
+  assert.ok(svg.includes('&quot;injected&quot;'));
+});
+
+test('create_swimlane_diagram: supports all four themes', async () => {
+  for (const theme of ['professional', 'modern', 'minimal', 'corporate']) {
+    const r = await tool('create_swimlane_diagram').execute({
+      title: `Theme ${theme}`,
+      lanes: ['A', 'B'],
+      stages: ['1', '2'],
+      tasks: [{ label: 'x', lane: 0, stage: 0 }],
+      theme,
+    }, fakeCtx());
+    assert.equal(r.ok, true, `theme ${theme} should succeed`);
+    const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+    assert.ok(svg.startsWith('<svg'));
+  }
+});
+
+test('create_swimlane_diagram: emits expected events', async () => {
+  const ctx = fakeCtx();
+  await tool('create_swimlane_diagram').execute({
+    title: 'Events',
+    lanes: ['A', 'B'],
+    stages: ['1', '2'],
+    tasks: [{ label: 'x', lane: 0, stage: 0 }],
   }, ctx);
   const types = ctx._events.map(e => e.type);
   assert.ok(types.includes('tool_call'));
