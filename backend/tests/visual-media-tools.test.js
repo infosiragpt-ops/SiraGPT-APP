@@ -653,8 +653,8 @@ test('create_dashboard_html: no charts', async () => {
 
 // ── Tool metadata ────────────────────────────────────────────────
 
-test('all 25 tools have valid metadata', () => {
-  assert.equal(VISUAL_MEDIA_TOOLS.length, 25);
+test('all 26 tools have valid metadata', () => {
+  assert.equal(VISUAL_MEDIA_TOOLS.length, 26);
   for (const t of VISUAL_MEDIA_TOOLS) {
     assert.ok(t.name);
     assert.ok(t.description);
@@ -2862,6 +2862,140 @@ test('create_empathy_map: emits expected events', async () => {
     title: 'Events',
     persona: 'P',
     says: ['x'],
+  }, ctx);
+  const types = ctx._events.map(e => e.type);
+  assert.ok(types.includes('tool_call'));
+  assert.ok(types.includes('file_artifact'));
+  assert.ok(types.includes('tool_output'));
+});
+
+// ── create_lean_canvas ───────────────────────────────────────────
+
+test('create_lean_canvas: full 9-block startup canvas', async () => {
+  const lc = tool('create_lean_canvas');
+  assert.ok(lc);
+  const r = await lc.execute({
+    title: 'SiraGPT Lean Canvas',
+    subtitle: 'Iteración 3 — May 2026',
+    problem: ['LLM API en español caro', 'Pipeline genérico no funciona'],
+    customerSegments: ['PYMES LATAM', 'Equipos legales pequeños'],
+    uniqueValueProposition: ['AI análisis-documentos español-first', 'Costo predictible'],
+    solution: ['Pipeline determinístico', 'Cache local'],
+    unfairAdvantage: ['Datos de entrenamiento LATAM', 'Marca SiraGPT'],
+    channels: ['Web app', 'Referrals'],
+    revenueStreams: ['Subscripción Pro $49/mes', 'Tier Enterprise'],
+    costStructure: ['LLM API', 'Cloud infra', 'Soporte'],
+    keyMetrics: ['MRR', 'Activación 7-día'],
+    theme: 'professional',
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.total, 19);
+  assert.equal(r.counts.problem, 2);
+  assert.equal(r.counts.uniqueValueProposition, 2);
+  assert.equal(r.counts.unfairAdvantage, 2);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.startsWith('<svg'));
+  assert.ok(svg.includes('SiraGPT Lean Canvas'));
+  assert.ok(svg.includes('PROBLEM'));
+  assert.ok(svg.includes('SOLUTION'));
+  assert.ok(svg.includes('UNIQUE VALUE PROPOSITION'));
+  assert.ok(svg.includes('UNFAIR ADVANTAGE'));
+  assert.ok(svg.includes('CHANNELS'));
+  assert.ok(svg.includes('CUSTOMER SEGMENTS'));
+  assert.ok(svg.includes('COST STRUCTURE'));
+  assert.ok(svg.includes('REVENUE STREAMS'));
+  assert.ok(svg.includes('KEY METRICS'));
+  assert.ok(svg.includes('LLM API en español caro'));
+  assert.ok(svg.includes('Marca SiraGPT'));
+});
+
+test('create_lean_canvas: partial canvas with only Problem populated', async () => {
+  const r = await tool('create_lean_canvas').execute({
+    title: 'Lean MVP',
+    problem: ['Just the problem'],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.total, 1);
+  assert.equal(r.counts.problem, 1);
+  assert.equal(r.counts.customerSegments, 0);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.includes('Just the problem'));
+  assert.ok(svg.includes('— vacío —'));
+});
+
+test('create_lean_canvas: empty canvas fails', async () => {
+  const r = await tool('create_lean_canvas').execute({
+    title: 'Empty',
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /empty|provide at least/i);
+});
+
+test('create_lean_canvas: non-array block fails fast', async () => {
+  const r = await tool('create_lean_canvas').execute({
+    title: 'Bad',
+    problem: 'should be array',
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /must be arrays/i);
+});
+
+test('create_lean_canvas: caps items at 8 per block', async () => {
+  const ten = Array.from({ length: 10 }, (_, i) => `Item ${i + 1}`);
+  const r = await tool('create_lean_canvas').execute({
+    title: 'Overflow',
+    problem: ten,
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.counts.problem, 8);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.includes('Item 8'));
+  assert.equal(svg.includes('Item 9'), false);
+});
+
+test('create_lean_canvas: xml-escapes content', async () => {
+  const r = await tool('create_lean_canvas').execute({
+    title: 'XSS',
+    problem: ['<script>evil</script>'],
+    uniqueValueProposition: ['"injected"'],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.equal(svg.includes('<script>evil</script>'), false);
+  assert.ok(svg.includes('&lt;script&gt;'));
+  assert.ok(svg.includes('&quot;injected&quot;'));
+});
+
+test('create_lean_canvas: supports all four themes', async () => {
+  for (const theme of ['professional', 'modern', 'minimal', 'corporate']) {
+    const r = await tool('create_lean_canvas').execute({
+      title: `Theme ${theme}`,
+      problem: ['p'],
+      theme,
+    }, fakeCtx());
+    assert.equal(r.ok, true, `theme ${theme} should succeed`);
+    const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+    assert.ok(svg.startsWith('<svg'));
+  }
+});
+
+test('create_lean_canvas: counts object exposes all 9 block sizes', async () => {
+  const r = await tool('create_lean_canvas').execute({
+    title: 'Counts',
+    problem: ['p'],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  for (const k of ['problem', 'customerSegments', 'uniqueValueProposition', 'solution', 'unfairAdvantage', 'channels', 'revenueStreams', 'costStructure', 'keyMetrics']) {
+    assert.ok(Object.prototype.hasOwnProperty.call(r.counts, k), `counts.${k} should be present`);
+    assert.equal(typeof r.counts[k], 'number');
+  }
+});
+
+test('create_lean_canvas: emits expected events', async () => {
+  const ctx = fakeCtx();
+  await tool('create_lean_canvas').execute({
+    title: 'Events',
+    problem: ['x'],
   }, ctx);
   const types = ctx._events.map(e => e.type);
   assert.ok(types.includes('tool_call'));

@@ -5987,6 +5987,236 @@ const createEmpathyMap = {
   },
 };
 
+// ─────────────────────────────────────────────────────────────────────────
+// Tool 26: create_lean_canvas
+// ─────────────────────────────────────────────────────────────────────────
+
+const createLeanCanvas = {
+  name: 'create_lean_canvas',
+  description: "Generate Ash Maurya's Lean Canvas as an SVG file: a 9-block startup-focused alternative to the Business Model Canvas (Problem, Customer Segments, Unique Value Proposition, Solution, Unfair Advantage, Channels, Revenue Streams, Cost Structure, Key Metrics). Use for startup pitches, MVP planning, customer-discovery loops, or any seed-stage business modeling. Each block accepts 1-8 bullet items.",
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string', description: 'Canvas title (e.g. "SiraGPT Lean Canvas").' },
+      subtitle: { type: 'string', description: 'Optional context line (e.g. iteration, period).' },
+      problem:             { type: 'array', items: { type: 'string' }, description: '1-3 top problems the customer has (1-8 items).' },
+      customerSegments:    { type: 'array', items: { type: 'string' }, description: 'Target customers / users / early adopters (1-8 items).' },
+      uniqueValueProposition: { type: 'array', items: { type: 'string' }, description: 'Single, clear, compelling message that turns visitors into customers (1-8 items).' },
+      solution:            { type: 'array', items: { type: 'string' }, description: '1-3 simple solutions to each top problem (1-8 items).' },
+      unfairAdvantage:     { type: 'array', items: { type: 'string' }, description: "What can't be easily copied or bought (1-8 items)." },
+      channels:            { type: 'array', items: { type: 'string' }, description: 'How customers reach your product (1-8 items).' },
+      revenueStreams:      { type: 'array', items: { type: 'string' }, description: 'Revenue model / lifetime value / margins (1-8 items).' },
+      costStructure:       { type: 'array', items: { type: 'string' }, description: 'Customer acquisition costs, distribution, hosting, people (1-8 items).' },
+      keyMetrics:          { type: 'array', items: { type: 'string' }, description: 'Key activities you measure (1-8 items).' },
+      theme: { type: 'string', enum: ['professional', 'modern', 'minimal', 'corporate'], description: 'Visual theme. Default: "professional".' },
+    },
+    required: ['title'],
+    additionalProperties: false,
+  },
+  async execute({
+    title,
+    subtitle = '',
+    problem = [],
+    customerSegments = [],
+    uniqueValueProposition = [],
+    solution = [],
+    unfairAdvantage = [],
+    channels = [],
+    revenueStreams = [],
+    costStructure = [],
+    keyMetrics = [],
+    theme = 'professional',
+  }, ctx = {}) {
+    emitEvent(ctx, 'tool_call', { tool: 'create_lean_canvas', preview: title });
+
+    try {
+      const all = [problem, customerSegments, uniqueValueProposition, solution, unfairAdvantage, channels, revenueStreams, costStructure, keyMetrics];
+      if (!all.every(a => Array.isArray(a))) {
+        return { ok: false, error: 'all 9 block inputs must be arrays of strings' };
+      }
+      const totalItems = all.reduce((s, a) => s + a.length, 0);
+      if (totalItems === 0) {
+        return { ok: false, error: 'all 9 blocks are empty — provide at least one item' };
+      }
+
+      const themes = {
+        professional: {
+          bg: '#FAFBFC', card: '#FFFFFF', text: '#1E293B', muted: '#64748B', border: '#E2E8F0', accent: '#7C3AED',
+          // Each Lean Canvas block has a recognised colour family in startup decks
+          problem:  '#EF4444', segments: '#10B981', uvp: '#7C3AED', solution: '#3B82F6', unfair: '#F59E0B',
+          channels: '#F97316', revenue: '#16A34A', cost: '#64748B', metrics: '#06B6D4',
+        },
+        modern: {
+          bg: '#0B1121', card: '#1E293B', text: '#F1F5F9', muted: '#94A3B8', border: '#334155', accent: '#A78BFA',
+          problem: '#F87171', segments: '#34D399', uvp: '#A78BFA', solution: '#60A5FA', unfair: '#FBBF24',
+          channels: '#FB923C', revenue: '#4ADE80', cost: '#94A3B8', metrics: '#22D3EE',
+        },
+        minimal: {
+          bg: '#FFFFFF', card: '#FFFFFF', text: '#0F172A', muted: '#64748B', border: '#CBD5E1', accent: '#0F172A',
+          problem: '#0F172A', segments: '#0F172A', uvp: '#0F172A', solution: '#0F172A', unfair: '#0F172A',
+          channels: '#0F172A', revenue: '#0F172A', cost: '#0F172A', metrics: '#0F172A',
+        },
+        corporate: {
+          bg: '#F8FAFC', card: '#FFFFFF', text: '#0F172A', muted: '#475569', border: '#CBD5E1', accent: '#673AB7',
+          problem: '#D93025', segments: '#0F9D58', uvp: '#673AB7', solution: '#1A73E8', unfair: '#F9AB00',
+          channels: '#E8710A', revenue: '#137333', cost: '#5F6368', metrics: '#039BE5',
+        },
+      };
+      const t = themes[theme] || themes.professional;
+
+      // Canonical Lean Canvas layout: 5 equal-width columns up top, 2 equal
+      // halves at the bottom. Problem / UVP / Customer Segments span both
+      // top rows (tall blocks); Solution/KeyMetrics and UVP-extra/Channels
+      // stack vertically (short blocks). Unfair Advantage sits on top-right
+      // adjacent to Customer Segments.
+      // Standard Lean Canvas slots:
+      //   col1 (tall) = Problem (with Existing alternatives below)
+      //   col2 = Solution (top) / Key Metrics (bottom)
+      //   col3 (tall) = UVP
+      //   col4 = Unfair Advantage (top) / Channels (bottom)
+      //   col5 (tall) = Customer Segments
+      //   bottom row = Cost Structure | Revenue Streams
+      const cellW = 224;
+      const halfH = 142;
+      const tallH = halfH * 2 + 6;
+      const bottomH = 132;
+      const gap = 6;
+      const pad = 24;
+      const headerH = subtitle ? 110 : 86;
+      const W = pad * 2 + cellW * 5 + gap * 4;
+      const H = headerH + pad + tallH + gap + bottomH + pad;
+
+      const safeTitle = xmlEscape(String(title).slice(0, 120));
+      const safeSubtitle = xmlEscape(String(subtitle || '').slice(0, 140));
+      const lineH = 16;
+      const lineMaxChars = 38;
+      const itemsCapPerBlock = 8;
+      function fmt(items) {
+        return (items || []).slice(0, itemsCapPerBlock).map(s => xmlEscape(String(s || '').slice(0, lineMaxChars))).filter(Boolean);
+      }
+
+      const blocks = {
+        problem:  { label: 'PROBLEM',                items: fmt(problem) },
+        solution: { label: 'SOLUTION',               items: fmt(solution) },
+        metrics:  { label: 'KEY METRICS',            items: fmt(keyMetrics) },
+        uvp:      { label: 'UNIQUE VALUE PROPOSITION', items: fmt(uniqueValueProposition) },
+        unfair:   { label: 'UNFAIR ADVANTAGE',       items: fmt(unfairAdvantage) },
+        channels: { label: 'CHANNELS',               items: fmt(channels) },
+        segments: { label: 'CUSTOMER SEGMENTS',      items: fmt(customerSegments) },
+        cost:     { label: 'COST STRUCTURE',         items: fmt(costStructure) },
+        revenue:  { label: 'REVENUE STREAMS',        items: fmt(revenueStreams) },
+      };
+
+      let body = `<rect width="${W}" height="${H}" fill="${t.bg}" rx="12"/>`;
+      // Header (purple/violet accent — distinguishes Lean Canvas from BMC at a glance)
+      body += `<rect x="0" y="0" width="${W}" height="${headerH}" fill="${t.accent}"/>`;
+      body += `<text x="${W / 2}" y="42" text-anchor="middle" font-family="Georgia, serif" font-size="24" font-weight="bold" fill="#fff">${safeTitle}</text>`;
+      body += `<text x="${W / 2}" y="66" text-anchor="middle" font-family="Arial" font-size="12" fill="#fff" opacity="0.85">${totalItems} ítems across 9 blocks · Lean Canvas</text>`;
+      if (safeSubtitle) {
+        body += `<text x="${W / 2}" y="92" text-anchor="middle" font-family="Arial" font-size="13" fill="#fff" opacity="0.92">${safeSubtitle}</text>`;
+      }
+
+      function drawBlock(block, color, x, y, w, h, blockMaxLines = 8) {
+        let out = '';
+        out += `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="8" fill="${t.card}" stroke="${t.border}" stroke-width="1" filter="url(#vis-shadow)"/>`;
+        out += `<rect x="${x}" y="${y}" width="${w}" height="4" rx="2" fill="${color}"/>`;
+        out += `<text x="${x + 12}" y="${y + 24}" font-family="Arial" font-size="11" font-weight="bold" fill="${color}">${xmlEscape(block.label)}</text>`;
+        out += `<text x="${x + w - 12}" y="${y + 24}" text-anchor="end" font-family="Arial" font-size="10" fill="${t.muted}">${block.items.length}</text>`;
+        const lines = block.items.slice(0, blockMaxLines);
+        if (lines.length === 0) {
+          out += `<text x="${x + w / 2}" y="${y + h / 2 + 4}" text-anchor="middle" font-family="Arial" font-size="11" fill="${t.muted}" font-style="italic">— vacío —</text>`;
+        } else {
+          lines.forEach((line, idx) => {
+            const ly = y + 44 + idx * lineH;
+            if (ly > y + h - 10) return;
+            out += `<circle cx="${x + 16}" cy="${ly - 4}" r="2.5" fill="${color}"/>`;
+            out += `<text x="${x + 24}" y="${ly}" font-family="Arial" font-size="10.5" fill="${t.text}">${line}</text>`;
+          });
+        }
+        return out;
+      }
+
+      const topY = headerH + pad;
+      const col1X = pad;
+      const col2X = col1X + cellW + gap;
+      const col3X = col2X + cellW + gap;
+      const col4X = col3X + cellW + gap;
+      const col5X = col4X + cellW + gap;
+
+      // Top section
+      body += drawBlock(blocks.problem,  t.problem,  col1X, topY, cellW, tallH);
+      body += drawBlock(blocks.solution, t.solution, col2X, topY, cellW, halfH);
+      body += drawBlock(blocks.metrics,  t.metrics,  col2X, topY + halfH + gap, cellW, halfH);
+      body += drawBlock(blocks.uvp,      t.uvp,      col3X, topY, cellW, tallH);
+      body += drawBlock(blocks.unfair,   t.unfair,   col4X, topY, cellW, halfH);
+      body += drawBlock(blocks.channels, t.channels, col4X, topY + halfH + gap, cellW, halfH);
+      body += drawBlock(blocks.segments, t.segments, col5X, topY, cellW, tallH);
+
+      // Bottom section: Cost (left half), Revenue (right half)
+      const botY = topY + tallH + gap;
+      const halfW = (W - pad * 2 - gap) / 2;
+      body += drawBlock(blocks.cost,    t.cost,    pad,                 botY, halfW, bottomH, 6);
+      body += drawBlock(blocks.revenue, t.revenue, pad + halfW + gap,   botY, halfW, bottomH, 6);
+
+      const svg = svgDocument({
+        width: W,
+        height: H,
+        title: safeTitle,
+        description: `Lean Canvas: ${safeTitle}`,
+        body,
+      });
+
+      const buffer = Buffer.from(svg, 'utf8');
+      const filename = `lean_${crypto.randomBytes(4).toString('hex')}.svg`;
+      const artifact = finalizeArtifact({ filename, buffer, mime: EXTENSION_TO_MIME.svg, ctx });
+
+      emitEvent(ctx, 'file_artifact', {
+        artifact: {
+          id: artifact.id,
+          filename: artifact.filename,
+          format: 'svg',
+          mime: 'image/svg+xml',
+          sizeBytes: artifact.sizeBytes,
+          downloadUrl: artifact.downloadUrl,
+        },
+      });
+
+      const counts = {
+        problem: blocks.problem.items.length,
+        customerSegments: blocks.segments.items.length,
+        uniqueValueProposition: blocks.uvp.items.length,
+        solution: blocks.solution.items.length,
+        unfairAdvantage: blocks.unfair.items.length,
+        channels: blocks.channels.items.length,
+        revenueStreams: blocks.revenue.items.length,
+        costStructure: blocks.cost.items.length,
+        keyMetrics: blocks.metrics.items.length,
+      };
+
+      emitEvent(ctx, 'tool_output', {
+        tool: 'create_lean_canvas',
+        ok: true,
+        preview: `Lean Canvas: ${artifact.filename} (${totalItems} ítems en 9 bloques, ${Math.round(artifact.sizeBytes / 1024)} KB)`,
+      });
+
+      return {
+        ok: true,
+        id: artifact.id,
+        filename: artifact.filename,
+        sizeBytes: artifact.sizeBytes,
+        downloadUrl: artifact.downloadUrl,
+        title,
+        counts,
+        total: totalItems,
+      };
+    } catch (err) {
+      const msg = err?.message || String(err);
+      emitEvent(ctx, 'tool_output', { tool: 'create_lean_canvas', ok: false, preview: `Error: ${msg}` });
+      return { ok: false, error: msg };
+    }
+  },
+};
+
 // ── All visual/media tools for the agent ──────────────────────────────
 
 const VISUAL_MEDIA_TOOLS = [
@@ -6015,6 +6245,7 @@ const VISUAL_MEDIA_TOOLS = [
   createUserJourneyMap,
   createOkrDashboard,
   createEmpathyMap,
+  createLeanCanvas,
 ];
 
 // Internal helpers exposed for unit testing — NOT part of the public agent
