@@ -1,0 +1,112 @@
+name: Sync provider API keys to VPS
+
+# Updates .env on the VPS with API keys stored as GitHub secrets.
+# Only keys present as PROD_<NAME> secrets are touched — others are
+# left as-is. Idempotent: for each key, either replaces the existing
+# line in .env or appends a new one.
+#
+# Secrets read (set via `gh secret set PROD_<NAME>` from .env.local):
+#   PROD_GROQ_API_KEY, PROD_GEMINI_API_KEY, PROD_DEEPSEEK_API_KEY,
+#   PROD_OPENROUTER_API_KEY, PROD_ANTHROPIC_API_KEY, PROD_OPENAI_API_KEY
+#
+# The script never prints key values — only the var names being
+# updated and whether they were added or replaced.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: sync-provider-keys
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: SSH · update .env + restart PM2
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Sync keys + restart backend
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          timeout: 60s
+          command_timeout: 4m
+          script_stop: true
+          envs: PROD_GROQ_API_KEY,PROD_GEMINI_API_KEY,PROD_DEEPSEEK_API_KEY,PROD_OPENROUTER_API_KEY,PROD_ANTHROPIC_API_KEY,PROD_OPENAI_API_KEY
+          script: |
+            set -e
+            ENV_FILE=/root/siraNew/siraGPT/.env
+            [[ -f "$ENV_FILE" ]] || { echo "Missing $ENV_FILE"; exit 1; }
+
+            upsert_env_var() {
+              local var_name="$1"
+              local value="$2"
+              if [[ -z "$value" ]]; then
+                echo "  skip $var_name (secret empty/unset)"
+                return
+              fi
+              # Write the value to a temp file so it never appears on a
+              # command line / process list.
+              local tmpval
+              tmpval=$(mktemp)
+              chmod 600 "$tmpval"
+              printf '%s' "$value" > "$tmpval"
+              if grep -qE "^${var_name}=" "$ENV_FILE"; then
+                # Replace existing line. Use python with stdin so the
+                # value never enters the sed/awk argv.
+                python3 - "$ENV_FILE" "$var_name" "$tmpval" <<'PY'
+            import sys, pathlib
+            env_path, var, valpath = sys.argv[1:4]
+            value = pathlib.Path(valpath).read_text()
+            lines = pathlib.Path(env_path).read_text().splitlines()
+            out = []
+            for line in lines:
+                if line.startswith(var + '='):
+                    out.append(f'{var}={value}')
+                else:
+                    out.append(line)
+            pathlib.Path(env_path).write_text('\n'.join(out) + '\n')
+            PY
+                echo "  replaced $var_name in $ENV_FILE"
+              else
+                # Append using printf (value from file, not args).
+                {
+                  printf '%s=' "$var_name"
+                  cat "$tmpval"
+                  printf '\n'
+                } >> "$ENV_FILE"
+                echo "  added $var_name to $ENV_FILE"
+              fi
+              rm -f "$tmpval"
+            }
+
+            echo "=== Syncing provider keys ==="
+            upsert_env_var GROQ_API_KEY       "$PROD_GROQ_API_KEY"
+            upsert_env_var GEMINI_API_KEY     "$PROD_GEMINI_API_KEY"
+            upsert_env_var DEEPSEEK_API_KEY   "$PROD_DEEPSEEK_API_KEY"
+            upsert_env_var OPENROUTER_API_KEY "$PROD_OPENROUTER_API_KEY"
+            upsert_env_var ANTHROPIC_API_KEY  "$PROD_ANTHROPIC_API_KEY"
+            upsert_env_var OPENAI_API_KEY     "$PROD_OPENAI_API_KEY"
+
+            echo ""
+            echo "=== Restarting PM2 backend ==="
+            pm2 restart sira-api-backend --update-env
+
+            echo ""
+            echo "=== Wait for /health and report providers ==="
+            sleep 5
+            for i in $(seq 1 30); do
+              if curl -sSf -o /dev/null https://api.siragpt.com/health; then
+                echo "✓ Backend healthy"
+                curl -s https://api.siragpt.com/health \
+                  | python3 -c "import json,sys; d=json.load(sys.stdin); mp=[c for c in d['checks'] if c['name']=='model_providers'][0]; import pprint; pprint.pprint(mp['details'])"
+                exit 0
+              fi
+              sleep 2
+            done
+            echo "✗ Backend unhealthy after 60s"
+            tail -30 /root/.pm2/logs/sira-api-backend-error.log
+            exit 1
