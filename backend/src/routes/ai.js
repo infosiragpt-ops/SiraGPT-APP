@@ -1129,6 +1129,20 @@ router.post(
             prisma,
             processedFiles,
           });
+          // Surface per-block telemetry as a single structured log line so
+          // operators can grep for `[ai/enrichment]` and see which analyzer
+          // failed or stalled on a given chat turn. Cheap to emit (one line
+          // per chat with attachments) and silent when telemetry is OFF.
+          if (documentEnrichment?.analyzerTelemetry) {
+            const t = documentEnrichment.analyzerTelemetry;
+            if (t.failCount > 0 || (t.slowBlocks && t.slowBlocks.length > 0)) {
+              const failNames = (t.failures || []).map((f) => f.name).slice(0, 5).join(',');
+              const slowNames = (t.slowBlocks || []).map((s) => `${s.name}=${s.elapsedMs}ms`).slice(0, 5).join(',');
+              console.warn(`[ai/enrichment] blocks=${t.blockCount} ok=${t.okCount} fail=${t.failCount} totalMs=${t.totalElapsedMs} failures=[${failNames}] slow=[${slowNames}]`);
+            } else if (process.env.SIRAGPT_ANALYZER_LOG === '1') {
+              console.log(`[ai/enrichment] blocks=${t.blockCount} ok=${t.okCount} totalMs=${t.totalElapsedMs}`);
+            }
+          }
           if (
             documentEnrichment?.profileBlock
             || documentEnrichment?.directiveBlock
