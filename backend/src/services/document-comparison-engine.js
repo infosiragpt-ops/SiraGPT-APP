@@ -319,8 +319,58 @@ function buildSynthesis(analyses, { sharedEntities, contradictions, complementar
   return parts.join(' ');
 }
 
+function renderComparisonBlock(report) {
+  if (!report || !report.ok) return '';
+
+  const lines = [];
+  lines.push('## Cross-Document Comparison');
+  lines.push(`**Documents:** ${report.documentCount}`);
+  lines.push(`**Alignment:** ${Math.round((report.alignmentScore || 0) * 100)}%`);
+
+  if (report.sharedEntities && report.sharedEntities.length > 0) {
+    lines.push('');
+    lines.push('### Shared Entities');
+    for (const ent of report.sharedEntities.slice(0, 10)) {
+      lines.push(`- **${ent.type}**: ${ent.value} (${ent.documentCount} docs)`);
+    }
+  }
+
+  if (report.contradictions && report.contradictions.length > 0) {
+    lines.push('');
+    lines.push('### Contradictions');
+    for (const c of report.contradictions.slice(0, 8)) {
+      lines.push(`- [${c.severity}] ${c.description}`);
+    }
+  }
+
+  if (report.complementary && report.complementary.length > 0) {
+    lines.push('');
+    lines.push('### Complementary Insights');
+    for (const comp of report.complementary) {
+      lines.push(`- ${comp.description}`);
+    }
+  }
+
+  if (report.crossReferences && report.crossReferences.length > 0) {
+    lines.push('');
+    lines.push('### Cross-References');
+    for (const ref of report.crossReferences.slice(0, 8)) {
+      lines.push(`- ${ref.docA} ↔ ${ref.docB}: ${ref.relationship} (overlap: ${ref.overlapScore})`);
+    }
+  }
+
+  if (report.synthesis) {
+    lines.push('');
+    lines.push('### Synthesis');
+    lines.push(report.synthesis);
+  }
+
+  return lines.join('\n');
+}
+
 module.exports = {
   compareDocuments,
+  renderComparisonBlock,
   findSharedEntities,
   findContradictions,
   findComplementary,
