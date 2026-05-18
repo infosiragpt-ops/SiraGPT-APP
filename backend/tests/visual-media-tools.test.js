@@ -653,8 +653,8 @@ test('create_dashboard_html: no charts', async () => {
 
 // ── Tool metadata ────────────────────────────────────────────────
 
-test('all 22 tools have valid metadata', () => {
-  assert.equal(VISUAL_MEDIA_TOOLS.length, 22);
+test('all 23 tools have valid metadata', () => {
+  assert.equal(VISUAL_MEDIA_TOOLS.length, 23);
   for (const t of VISUAL_MEDIA_TOOLS) {
     assert.ok(t.name);
     assert.ok(t.description);
@@ -2441,6 +2441,142 @@ test('create_radar_chart: emits expected events', async () => {
     title: 'Events',
     axes: ['A','B','C'],
     series: [{ name: 'S', values: [1, 2, 3] }],
+  }, ctx);
+  const types = ctx._events.map(e => e.type);
+  assert.ok(types.includes('tool_call'));
+  assert.ok(types.includes('file_artifact'));
+  assert.ok(types.includes('tool_output'));
+});
+
+// ── create_user_journey_map ──────────────────────────────────────
+
+test('create_user_journey_map: 4-stage onboarding journey', async () => {
+  const uj = tool('create_user_journey_map');
+  assert.ok(uj);
+  const r = await uj.execute({
+    title: 'SiraGPT onboarding journey',
+    subtitle: 'New SMB customer',
+    stages: [
+      { name: 'Awareness', emotion: 3, touchpoints: ['Google ad', 'Blog post'], actions: ['Search "AI español"'], thoughts: ['¿Funciona en español?'], painPoints: ['Demasiadas opciones'], opportunities: ['SEO content'] },
+      { name: 'Signup', emotion: 4, touchpoints: ['Landing page'], actions: ['Create account'], painPoints: ['Pide tarjeta'], opportunities: ['Try without card'] },
+      { name: 'Activation', emotion: 2, touchpoints: ['Dashboard'], actions: ['Upload doc'], painPoints: ['Errores'], opportunities: ['Better onboarding'] },
+      { name: 'Retention', emotion: 5, touchpoints: ['Email digest'], actions: ['Daily use'], opportunities: ['Referral program'] },
+    ],
+    theme: 'professional',
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.stages, 4);
+  assert.equal(r.lanes, 5);
+  // Avg emotion = (3+4+2+5)/4 = 3.5
+  assert.equal(r.avgEmotion, 3.5);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.startsWith('<svg'));
+  assert.ok(svg.includes('SiraGPT onboarding journey'));
+  assert.ok(svg.includes('EMOCIÓN'));
+  assert.ok(svg.includes('TOUCHPOINTS'));
+  assert.ok(svg.includes('USER ACTIONS'));
+  assert.ok(svg.includes('THOUGHTS'));
+  assert.ok(svg.includes('PAIN POINTS'));
+  assert.ok(svg.includes('OPPORTUNITIES'));
+  assert.ok(svg.includes('Awareness'));
+  assert.ok(svg.includes('Retention'));
+  assert.ok(svg.includes('Google ad'));
+});
+
+test('create_user_journey_map: empty stages fails', async () => {
+  const r = await tool('create_user_journey_map').execute({
+    title: 'Empty',
+    stages: [],
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /stages.*empty/i);
+});
+
+test('create_user_journey_map: single stage fails (need >= 2)', async () => {
+  const r = await tool('create_user_journey_map').execute({
+    title: 'One',
+    stages: [{ name: 'Only', emotion: 3 }],
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /at least 2/i);
+});
+
+test('create_user_journey_map: caps stages at 8', async () => {
+  const tenStages = Array.from({ length: 10 }, (_, i) => ({ name: `S${i + 1}`, emotion: 3 }));
+  const r = await tool('create_user_journey_map').execute({
+    title: 'Overflow',
+    stages: tenStages,
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.stages, 8);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.includes('S1'));
+  assert.ok(svg.includes('S8'));
+  assert.equal(svg.includes('S9'), false);
+});
+
+test('create_user_journey_map: emotion is clamped to [1, 5]', async () => {
+  const r = await tool('create_user_journey_map').execute({
+    title: 'Clamp',
+    stages: [
+      { name: 'A', emotion: 99 },
+      { name: 'B', emotion: -5 },
+      { name: 'C', emotion: undefined },
+    ],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  // Avg = (5 + 1 + 3) / 3 = 3.0 (undefined defaults to 3)
+  assert.equal(r.avgEmotion, 3);
+});
+
+test('create_user_journey_map: lanes with empty items show "—" placeholder', async () => {
+  const r = await tool('create_user_journey_map').execute({
+    title: 'Sparse',
+    stages: [
+      { name: 'A', emotion: 3 },
+      { name: 'B', emotion: 4 },
+    ],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  // All lanes are empty → 10 dash placeholders (2 stages × 5 lanes)
+  const dashCount = (svg.match(/>—</g) || []).length;
+  assert.ok(dashCount >= 10, `expected at least 10 placeholders, got ${dashCount}`);
+});
+
+test('create_user_journey_map: xml-escapes content', async () => {
+  const r = await tool('create_user_journey_map').execute({
+    title: 'XSS',
+    stages: [
+      { name: '<script>x</script>', emotion: 3, actions: ['"injected"'] },
+      { name: 'Safe', emotion: 4 },
+    ],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.equal(svg.includes('<script>x</script>'), false);
+  assert.ok(svg.includes('&lt;script&gt;'));
+  assert.ok(svg.includes('&quot;injected&quot;'));
+});
+
+test('create_user_journey_map: supports all four themes', async () => {
+  for (const theme of ['professional', 'modern', 'minimal', 'corporate']) {
+    const r = await tool('create_user_journey_map').execute({
+      title: `Theme ${theme}`,
+      stages: [{ name: 'A', emotion: 3 }, { name: 'B', emotion: 4 }],
+      theme,
+    }, fakeCtx());
+    assert.equal(r.ok, true, `theme ${theme} should succeed`);
+    const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+    assert.ok(svg.startsWith('<svg'));
+  }
+});
+
+test('create_user_journey_map: emits expected events', async () => {
+  const ctx = fakeCtx();
+  await tool('create_user_journey_map').execute({
+    title: 'Events',
+    stages: [{ name: 'A', emotion: 3 }, { name: 'B', emotion: 4 }],
   }, ctx);
   const types = ctx._events.map(e => e.type);
   assert.ok(types.includes('tool_call'));

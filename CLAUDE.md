@@ -37,7 +37,7 @@ npm run type-check     # TSC completo
 5. **Hacer `git pull --rebase` antes de push** para evitar conflictos
 6. **Priorizar:** estabilidad, rendimiento, cobertura de errores, calidad de código
 
-## Visual Tools Inventory (22 tools)
+## Visual Tools Inventory (23 tools)
 | Tool | File | Description |
 |------|------|-------------|
 | generate_image | visual-media-tools.js | SVG/PNG image generation |
@@ -62,6 +62,7 @@ npm run type-check     # TSC completo
 | create_value_proposition_canvas | visual-media-tools.js | Strategyzer VPC SVG (Customer Profile + Value Map halves, 6 sub-sections, FIT bridge, 4 themes) |
 | create_pestel_analysis | visual-media-tools.js | PESTEL macro-environmental SVG (6 dimensions in 3×2 grid, letter badges, color-coded per axis, 4 themes) |
 | create_radar_chart | visual-media-tools.js | Radar/spider chart SVG (3-8 axes, 1-4 polygon series, configurable rings, axis tick labels, 4 themes) |
+| create_user_journey_map | visual-media-tools.js | UX customer journey map SVG (stages × 5 lanes, top emotion curve with emojis, 4 themes) |
 
 ## Backend Reliability Utilities
 

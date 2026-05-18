@@ -5211,6 +5211,241 @@ const createRadarChart = {
   },
 };
 
+// ─────────────────────────────────────────────────────────────────────────
+// Tool 23: create_user_journey_map
+// ─────────────────────────────────────────────────────────────────────────
+
+const createUserJourneyMap = {
+  name: 'create_user_journey_map',
+  description: 'Generate a customer/user journey map as an SVG file: N stages (columns) × multiple lanes (Touchpoints, Actions, Thoughts, Pain Points, Opportunities) plus an emotion curve plotted at the top connecting per-stage emotion scores (1-5). Use for UX research, customer-experience reviews, onboarding redesigns, or service-blueprint sketches.',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string', description: 'Journey title (e.g. "First-time buyer journey").' },
+      subtitle: { type: 'string', description: 'Optional persona / context line.' },
+      stages: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            name:          { type: 'string', description: 'Stage label (e.g. "Awareness", "Onboarding", "Activation").' },
+            touchpoints:   { type: 'array', items: { type: 'string' }, description: 'Channels / surfaces the user encounters in this stage.' },
+            actions:       { type: 'array', items: { type: 'string' }, description: 'What the user actively does in this stage.' },
+            thoughts:      { type: 'array', items: { type: 'string' }, description: 'Internal monologue / questions / doubts.' },
+            painPoints:    { type: 'array', items: { type: 'string' }, description: 'Frustrations / blockers in this stage.' },
+            opportunities: { type: 'array', items: { type: 'string' }, description: 'Improvement opportunities for the team.' },
+            emotion:       { type: 'number', minimum: 1, maximum: 5, description: 'Emotion score 1 (very sad) to 5 (delighted). Plotted on the top curve.' },
+          },
+          required: ['name'],
+        },
+        description: '3-8 ordered stages.',
+      },
+      theme: { type: 'string', enum: ['professional', 'modern', 'minimal', 'corporate'], description: 'Visual theme. Default: "professional".' },
+    },
+    required: ['title', 'stages'],
+    additionalProperties: false,
+  },
+  async execute({ title, subtitle = '', stages = [], theme = 'professional' }, ctx = {}) {
+    emitEvent(ctx, 'tool_call', { tool: 'create_user_journey_map', preview: title });
+
+    try {
+      if (!Array.isArray(stages) || stages.length === 0) {
+        return { ok: false, error: 'stages array is empty' };
+      }
+      if (stages.length < 2) {
+        return { ok: false, error: 'journey map requires at least 2 stages' };
+      }
+
+      const themes = {
+        professional: {
+          bg: '#FAFBFC', card: '#FFFFFF', text: '#1E293B', muted: '#64748B', border: '#E2E8F0', accent: '#2563EB',
+          touchpoints: '#0EA5E9', actions: '#10B981', thoughts: '#8B5CF6', painPoints: '#EF4444', opportunities: '#F59E0B',
+          emotionCurve: '#2563EB', emotionGrid: '#E2E8F0',
+        },
+        modern: {
+          bg: '#0B1121', card: '#1E293B', text: '#F1F5F9', muted: '#94A3B8', border: '#334155', accent: '#818CF8',
+          touchpoints: '#38BDF8', actions: '#34D399', thoughts: '#A78BFA', painPoints: '#F87171', opportunities: '#FBBF24',
+          emotionCurve: '#818CF8', emotionGrid: '#334155',
+        },
+        minimal: {
+          bg: '#FFFFFF', card: '#FFFFFF', text: '#0F172A', muted: '#64748B', border: '#CBD5E1', accent: '#0F172A',
+          touchpoints: '#0F172A', actions: '#475569', thoughts: '#94A3B8', painPoints: '#0F172A', opportunities: '#475569',
+          emotionCurve: '#0F172A', emotionGrid: '#E2E8F0',
+        },
+        corporate: {
+          bg: '#F8FAFC', card: '#FFFFFF', text: '#0F172A', muted: '#475569', border: '#CBD5E1', accent: '#1E40AF',
+          touchpoints: '#039BE5', actions: '#0F9D58', thoughts: '#673AB7', painPoints: '#D93025', opportunities: '#F9AB00',
+          emotionCurve: '#1A73E8', emotionGrid: '#CBD5E1',
+        },
+      };
+      const t = themes[theme] || themes.professional;
+
+      const safeTitle = xmlEscape(String(title).slice(0, 120));
+      const safeSubtitle = xmlEscape(String(subtitle || '').slice(0, 140));
+      const stageList = stages.slice(0, 8);
+      const n = stageList.length;
+      const lineMaxChars = 28;
+
+      function fmtList(items) {
+        return (Array.isArray(items) ? items : []).slice(0, 5)
+          .map(s => xmlEscape(String(s || '').slice(0, lineMaxChars)))
+          .filter(Boolean);
+      }
+
+      const stageData = stageList.map((s, i) => ({
+        name:          xmlEscape(String(s.name || `Stage ${i + 1}`).slice(0, 32)),
+        touchpoints:   fmtList(s.touchpoints),
+        actions:       fmtList(s.actions),
+        thoughts:      fmtList(s.thoughts),
+        painPoints:    fmtList(s.painPoints),
+        opportunities: fmtList(s.opportunities),
+        emotion:       Math.max(1, Math.min(5, Number(s.emotion) || 3)),
+      }));
+
+      const LANES = [
+        { key: 'touchpoints',   label: 'TOUCHPOINTS',    color: t.touchpoints },
+        { key: 'actions',       label: 'USER ACTIONS',   color: t.actions },
+        { key: 'thoughts',      label: 'THOUGHTS',       color: t.thoughts },
+        { key: 'painPoints',    label: 'PAIN POINTS',    color: t.painPoints },
+        { key: 'opportunities', label: 'OPPORTUNITIES',  color: t.opportunities },
+      ];
+
+      const stageColW = 220;
+      const laneLabelW = 130;
+      const laneH = 130;
+      const emotionH = 130;
+      const pad = 24;
+      const headerH = safeSubtitle ? 110 : 86;
+      const stageBandH = 50;
+      const W = pad * 2 + laneLabelW + stageColW * n;
+      const H = headerH + pad + emotionH + stageBandH + laneH * LANES.length + pad + 20;
+
+      let body = `<rect width="${W}" height="${H}" fill="${t.bg}" rx="12"/>`;
+      // Header
+      body += `<rect x="0" y="0" width="${W}" height="${headerH}" fill="${t.accent}"/>`;
+      body += `<text x="${W / 2}" y="42" text-anchor="middle" font-family="Georgia, serif" font-size="24" font-weight="bold" fill="#fff">${safeTitle}</text>`;
+      body += `<text x="${W / 2}" y="66" text-anchor="middle" font-family="Arial" font-size="12" fill="#fff" opacity="0.85">${n} etapas · journey map</text>`;
+      if (safeSubtitle) {
+        body += `<text x="${W / 2}" y="92" text-anchor="middle" font-family="Arial" font-size="13" fill="#fff" opacity="0.92">${safeSubtitle}</text>`;
+      }
+
+      // ── Emotion curve ──
+      const emoY = headerH + pad;
+      // 5 horizontal grid lines (1..5)
+      for (let lvl = 1; lvl <= 5; lvl++) {
+        const y = emoY + emotionH - ((lvl - 1) / 4) * (emotionH - 20) - 10;
+        body += `<line x1="${pad + laneLabelW}" y1="${y}" x2="${W - pad}" y2="${y}" stroke="${t.emotionGrid}" stroke-width="${lvl === 3 ? 1 : 0.5}" stroke-dasharray="${lvl === 3 ? '4,4' : ''}"/>`;
+      }
+      body += `<text x="${pad + 8}" y="${emoY + 20}" font-family="Arial" font-size="11" font-weight="bold" fill="${t.text}">EMOCIÓN</text>`;
+      // Emotion-axis emoji legend
+      body += `<text x="${pad + 8}" y="${emoY + 36}" font-family="Arial" font-size="14">😀</text>`;
+      body += `<text x="${pad + 8}" y="${emoY + emotionH - 10}" font-family="Arial" font-size="14">😞</text>`;
+
+      // Emotion curve through stage emotions
+      const emotionPoints = stageData.map((s, i) => {
+        const x = pad + laneLabelW + (i + 0.5) * stageColW;
+        const y = emoY + emotionH - ((s.emotion - 1) / 4) * (emotionH - 20) - 10;
+        return { x, y };
+      });
+      if (emotionPoints.length >= 2) {
+        const pathParts = emotionPoints.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`);
+        body += `<path d="${pathParts.join(' ')}" fill="none" stroke="${t.emotionCurve}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>`;
+      }
+      emotionPoints.forEach((p, i) => {
+        const emoji = stageData[i].emotion >= 4 ? '😀' : (stageData[i].emotion >= 3 ? '🙂' : (stageData[i].emotion >= 2 ? '😕' : '😞'));
+        body += `<circle cx="${p.x}" cy="${p.y}" r="14" fill="${t.card}" stroke="${t.emotionCurve}" stroke-width="2"/>`;
+        body += `<text x="${p.x}" y="${p.y + 5}" text-anchor="middle" font-family="Arial" font-size="14">${emoji}</text>`;
+      });
+
+      // ── Stage band ──
+      const stageY = emoY + emotionH;
+      body += `<rect x="${pad + laneLabelW}" y="${stageY}" width="${stageColW * n}" height="${stageBandH}" fill="${t.accent}" opacity="0.92"/>`;
+      stageData.forEach((s, i) => {
+        const sx = pad + laneLabelW + i * stageColW;
+        body += `<line x1="${sx}" y1="${stageY}" x2="${sx}" y2="${stageY + stageBandH}" stroke="#fff" stroke-width="1" opacity="0.4"/>`;
+        body += `<text x="${sx + stageColW / 2}" y="${stageY + 22}" text-anchor="middle" font-family="Arial" font-size="13" font-weight="bold" fill="#fff">${s.name}</text>`;
+        body += `<text x="${sx + stageColW / 2}" y="${stageY + 38}" text-anchor="middle" font-family="Arial" font-size="10" fill="#fff" opacity="0.8">stage ${i + 1}</text>`;
+      });
+
+      // ── Lanes ──
+      const laneStartY = stageY + stageBandH;
+      LANES.forEach((lane, lIdx) => {
+        const ly = laneStartY + lIdx * laneH;
+        const isAlt = lIdx % 2 === 1;
+        // Lane label cell
+        body += `<rect x="${pad}" y="${ly}" width="${laneLabelW}" height="${laneH}" fill="${lane.color}" opacity="0.15" stroke="${t.border}" stroke-width="0.5"/>`;
+        body += `<rect x="${pad}" y="${ly}" width="6" height="${laneH}" fill="${lane.color}"/>`;
+        body += `<text x="${pad + 16}" y="${ly + laneH / 2 - 4}" font-family="Arial" font-size="11" font-weight="bold" fill="${t.text}">${xmlEscape(lane.label)}</text>`;
+
+        // Each stage column for this lane
+        stageData.forEach((stage, sIdx) => {
+          const sx = pad + laneLabelW + sIdx * stageColW;
+          body += `<rect x="${sx}" y="${ly}" width="${stageColW}" height="${laneH}" fill="${isAlt ? t.bg : t.card}" stroke="${t.border}" stroke-width="0.5"/>`;
+          const items = stage[lane.key] || [];
+          if (items.length === 0) {
+            body += `<text x="${sx + stageColW / 2}" y="${ly + laneH / 2 + 4}" text-anchor="middle" font-family="Arial" font-size="10" fill="${t.muted}" font-style="italic">—</text>`;
+          } else {
+            items.slice(0, 5).forEach((line, idx) => {
+              const lyText = ly + 18 + idx * 20;
+              if (lyText > ly + laneH - 6) return;
+              body += `<circle cx="${sx + 14}" cy="${lyText - 4}" r="2.5" fill="${lane.color}"/>`;
+              body += `<text x="${sx + 22}" y="${lyText}" font-family="Arial" font-size="11" fill="${t.text}">${line}</text>`;
+            });
+          }
+        });
+      });
+
+      const svg = svgDocument({
+        width: W,
+        height: H,
+        title: safeTitle,
+        description: `User journey map: ${safeTitle}`,
+        body,
+      });
+
+      const buffer = Buffer.from(svg, 'utf8');
+      const filename = `journey_${crypto.randomBytes(4).toString('hex')}.svg`;
+      const artifact = finalizeArtifact({ filename, buffer, mime: EXTENSION_TO_MIME.svg, ctx });
+
+      emitEvent(ctx, 'file_artifact', {
+        artifact: {
+          id: artifact.id,
+          filename: artifact.filename,
+          format: 'svg',
+          mime: 'image/svg+xml',
+          sizeBytes: artifact.sizeBytes,
+          downloadUrl: artifact.downloadUrl,
+        },
+      });
+
+      // Average emotion across stages
+      const avgEmotion = stageData.reduce((s, x) => s + x.emotion, 0) / n;
+
+      emitEvent(ctx, 'tool_output', {
+        tool: 'create_user_journey_map',
+        ok: true,
+        preview: `Journey listo: ${artifact.filename} (${n} etapas · emoción avg ${avgEmotion.toFixed(1)}/5, ${Math.round(artifact.sizeBytes / 1024)} KB)`,
+      });
+
+      return {
+        ok: true,
+        id: artifact.id,
+        filename: artifact.filename,
+        sizeBytes: artifact.sizeBytes,
+        downloadUrl: artifact.downloadUrl,
+        title,
+        stages: n,
+        lanes: LANES.length,
+        avgEmotion: Number(avgEmotion.toFixed(2)),
+      };
+    } catch (err) {
+      const msg = err?.message || String(err);
+      emitEvent(ctx, 'tool_output', { tool: 'create_user_journey_map', ok: false, preview: `Error: ${msg}` });
+      return { ok: false, error: msg };
+    }
+  },
+};
+
 // ── All visual/media tools for the agent ──────────────────────────────
 
 const VISUAL_MEDIA_TOOLS = [
@@ -5236,6 +5471,7 @@ const VISUAL_MEDIA_TOOLS = [
   createValuePropositionCanvas,
   createPestelAnalysis,
   createRadarChart,
+  createUserJourneyMap,
 ];
 
 // Internal helpers exposed for unit testing — NOT part of the public agent
