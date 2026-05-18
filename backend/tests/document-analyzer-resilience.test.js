@@ -436,3 +436,78 @@ test('deadline: skipped entries are summarised separately from failures', () => 
   assert.equal(summary.skippedCount, 2);
   assert.ok(summary.deadlineMs > 0);
 });
+
+// ──────────────────────────────────────────────────────────────────────────
+// Per-file isolation — bad file alongside good file must not corrupt the
+// good file's enrichment. The classification + per-file-profile phase
+// historically threw out of the whole pipeline if a single file had a
+// malformed shape.
+// ──────────────────────────────────────────────────────────────────────────
+
+test('per-file isolation: malformed file alongside good file — good file still enriched', async () => {
+  analyzer._internal.resetAnalyzerBreakers();
+  const originalWarn = console.warn;
+  console.warn = () => {};
+  try {
+    const malformed = { id: 'bad-1', originalName: null, mimeType: undefined };
+    const good = {
+      id: 'good-1',
+      originalName: 'contract.txt',
+      mimeType: 'text/plain',
+      extractedText: 'Master Services Agreement dated 2026-05-18. Total: $5,000.',
+    };
+    const out = await analyzer.buildEnrichedFileContext({
+      prisma: null,
+      processedFiles: [malformed, good],
+    });
+    assert.ok(out.profileBlock.length > 0, 'good file must still produce a profile block');
+    assert.ok(typeof out.primaryDocType === 'string' && out.primaryDocType.length > 0);
+    assert.equal(out.perFileProfile.length, 2);
+    assert.equal(out.analyzerTelemetry.blockCount, 312, 'all analyzer blocks must still run');
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+test('per-file isolation: file with extractedText getter that throws', async () => {
+  analyzer._internal.resetAnalyzerBreakers();
+  const originalWarn = console.warn;
+  console.warn = () => {};
+  try {
+    const exploding = {
+      id: 'explode',
+      originalName: 'explode.txt',
+      mimeType: 'text/plain',
+      get extractedText() { throw new Error('storage layer crashed'); },
+    };
+    const good = {
+      id: 'good-2',
+      originalName: 'plain.txt',
+      mimeType: 'text/plain',
+      extractedText: 'A short document for parsing.',
+    };
+    // Must not throw out of `buildEnrichedFileContext`.
+    const out = await analyzer.buildEnrichedFileContext({
+      prisma: null,
+      processedFiles: [exploding, good],
+    });
+    // The good file's classification + profile MUST land. The exploding
+    // file falls back to general_document with empty profile.
+    assert.equal(out.perFileProfile.length, 2);
+    assert.ok(out.profileBlock.length > 0);
+    // We don't pin the exact primaryDocType here — what matters is the
+    // pipeline didn't throw and the structured output is well-formed.
+    assert.equal(typeof out.primaryDocType, 'string');
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+test('per-file isolation: empty processedFiles still produces zero-state shape', async () => {
+  analyzer._internal.resetAnalyzerBreakers();
+  const out = await analyzer.buildEnrichedFileContext({ prisma: null, processedFiles: [] });
+  assert.equal(out.profileBlock, '');
+  assert.equal(out.directiveBlock, '');
+  assert.deepEqual(out.perFileProfile, []);
+  assert.equal(out.analyzerTelemetry, null);
+});

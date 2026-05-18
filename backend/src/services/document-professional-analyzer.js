@@ -3426,22 +3426,43 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   }
 
   const fileIds = files.map((f) => f && f.id).filter((id) => typeof id === 'string' && id);
-  const hydratedById = await loadAnalysesByFileId(prisma, fileIds);
+  // `loadAnalysesByFileId` is already defensive (catches inside) but we
+  // wrap once more so any unexpected Prisma error degrades to "no
+  // hydrated metadata" instead of throwing out of the whole enrichment.
+  let hydratedById = new Map();
+  try {
+    hydratedById = await loadAnalysesByFileId(prisma, fileIds);
+  } catch (hydrErr) {
+    console.warn('[analyzer/hydration] failed (continuing without hydration):', hydrErr && hydrErr.message ? hydrErr.message : hydrErr);
+  }
 
   const classifications = [];
   const profiles = [];
 
+  // Per-file isolation — a single malformed file (e.g. extractedText
+  // throwing in a getter, exotic mimeType triggering a regex panic in
+  // `detectDocumentType`) must not poison the per-block phase for OTHER
+  // attached files. We give every file an independent try/catch and fall
+  // back to a `general_document` classification + empty profile when its
+  // own classification path explodes.
   for (const file of files) {
     if (!file) continue;
-    const hydrated = (file.id && hydratedById.get(file.id)) || null;
-    const text = String(file.extractedText || '');
-    const classification = detectDocumentType(file, text);
-    classifications.push(classification);
-    profiles.push({
-      fileId: file.id || null,
-      classification,
-      profile: buildPerFileProfile({ file, classification, hydrated }),
-    });
+    try {
+      const hydrated = (file.id && hydratedById.get(file.id)) || null;
+      const text = String(file.extractedText || '');
+      const classification = detectDocumentType(file, text);
+      classifications.push(classification);
+      profiles.push({
+        fileId: file.id || null,
+        classification,
+        profile: buildPerFileProfile({ file, classification, hydrated }),
+      });
+    } catch (fileErr) {
+      const fallback = { type: 'general_document', confidence: 'low', score: 0, signals: [] };
+      classifications.push(fallback);
+      profiles.push({ fileId: (file && file.id) || null, classification: fallback, profile: '' });
+      console.warn(`[analyzer/file] classification failed for file=${(file && (file.id || file.originalName)) || 'unknown'}: ${fileErr && fileErr.message ? fileErr.message : fileErr}`);
+    }
   }
 
   const primaryDocType = pickPrimaryType(classifications);
