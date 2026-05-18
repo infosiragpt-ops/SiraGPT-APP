@@ -8,11 +8,11 @@
  *   ┌────────────────────────────────────────────────────────────┐
  *   │ TitleBar — "Cursor" branding · breadcrumb · palette        │
  *   ├──┬───────────────┬─────────────────────────┬───────────────┤
- *   │A │ Primary panel │ Editor (tabs + Monaco)  │ Cursor Chat   │
- *   │c │  (Files /     │                         │ (collapsible) │
- *   │t │   Search /    │ ┌─────────────────────┐ │               │
- *   │  │   placeholders│ │ Terminal (toggle)   │ │               │
- *   │  │   …)          │ └─────────────────────┘ │               │
+ *   │A │ Primary panel │ Cursor Chat   │ Editor (tabs + Monaco)  │
+ *   │c │  (Files /     │ (collapsible) │                         │
+ *   │t │   Search /    │               │ ┌─────────────────────┐ │
+ *   │  │   placeholders│               │ │ Terminal (toggle)   │ │
+ *   │  │   …)          │               │ └─────────────────────┘ │
  *   ├──┴───────────────┴─────────────────────────┴───────────────┤
  *   │ StatusBar                                                  │
  *   └────────────────────────────────────────────────────────────┘
@@ -334,6 +334,21 @@ export function CodeWorkspace() {
               </ResizablePanel>
               <ResizableHandle withHandle />
 
+              <ResizablePanel
+                ref={chatRef}
+                collapsible
+                collapsedSize={0}
+                defaultSize={CHAT_DEFAULT_SIZE}
+                minSize={CHAT_MIN_SIZE}
+                maxSize={50}
+                onCollapse={() => setChatOpen(false)}
+                onExpand={() => setChatOpen(true)}
+                className="min-w-0"
+              >
+                <AICodeChatPanel />
+              </ResizablePanel>
+              <ResizableHandle withHandle />
+
               <ResizablePanel defaultSize={52} minSize={32}>
                 <ResizablePanelGroup direction="vertical">
                   <ResizablePanel defaultSize={terminalOpen ? 100 - TERMINAL_DEFAULT_SIZE : 100} minSize={30}>
@@ -348,21 +363,6 @@ export function CodeWorkspace() {
                     </>
                   ) : null}
                 </ResizablePanelGroup>
-              </ResizablePanel>
-
-              <ResizableHandle withHandle />
-              <ResizablePanel
-                ref={chatRef}
-                collapsible
-                collapsedSize={0}
-                defaultSize={CHAT_DEFAULT_SIZE}
-                minSize={CHAT_MIN_SIZE}
-                maxSize={50}
-                onCollapse={() => setChatOpen(false)}
-                onExpand={() => setChatOpen(true)}
-                className="min-w-0"
-              >
-                <AICodeChatPanel />
               </ResizablePanel>
             </ResizablePanelGroup>
           </div>

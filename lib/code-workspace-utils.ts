@@ -246,7 +246,7 @@ export function defaultStarterFiles(): CodeFile[] {
         "Este es un workspace inspirado en Cursor para programar con IA.",
         "",
         "- Edita archivos en el centro.",
-        "- Pide cambios al chat de IA a la derecha; cuando devuelva código,",
+        "- Pide cambios al chat de IA a la izquierda; cuando devuelva código,",
         "  podrás aplicarlo a un archivo y revisar el diff antes de aceptar.",
         "- Usa `index.html` para previsualizar HTML directamente.",
         "",

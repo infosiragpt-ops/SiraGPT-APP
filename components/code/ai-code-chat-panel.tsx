@@ -1,7 +1,7 @@
 "use client"
 
 /**
- * AICodeChatPanel — right column of the /code workspace. A focused
+ * AICodeChatPanel — coding chat column for the /code workspace. A focused
  * coding chat that:
  *
  *   - Sends the user's prompt to the existing AI streaming endpoint

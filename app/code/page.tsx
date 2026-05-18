@@ -3,8 +3,8 @@
 /**
  * /code — Cursor-inspired AI coding workspace.
  *
- * Layout: activity bar + explorer (left), editor + terminal (center),
- * Cursor Chat panel on the right. The whole page is a single client
+ * Layout: activity bar + explorer (left), Cursor Chat panel, then
+ * editor + terminal. The whole page is a single client
  * component so the workspace state stays mounted while the user
  * navigates within it; the inner pieces are lazy-loaded so the
  * route shell paints fast and the editor chunk only ships when
@@ -112,7 +112,7 @@ function CodeWorkspaceSkeleton() {
         <div className="h-4 w-16 rounded bg-muted/50 animate-pulse" />
         <div className="ml-auto h-5 w-[260px] rounded border border-border/60 bg-muted/30 animate-pulse" />
       </div>
-      <div className="grid min-h-0 flex-1 grid-cols-[44px_220px_1fr_360px]">
+      <div className="grid min-h-0 flex-1 grid-cols-[44px_220px_360px_1fr]">
         <div className="flex flex-col items-center gap-3 border-r border-border/60 py-3">
           {Array.from({ length: 6 }).map((_, i) => (
             <div key={i} className="h-7 w-7 rounded-md bg-muted/40 animate-pulse" />
@@ -121,6 +121,12 @@ function CodeWorkspaceSkeleton() {
         <div className="border-r border-border/60 p-3 space-y-2">
           {Array.from({ length: 8 }).map((_, i) => (
             <div key={i} className="h-5 w-full rounded bg-muted/40 animate-pulse" />
+          ))}
+        </div>
+        <div className="border-r border-border/60 p-3 space-y-3">
+          <div className="h-7 w-32 rounded-full bg-muted/40 animate-pulse" />
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="h-16 rounded-lg bg-muted/30 animate-pulse" />
           ))}
         </div>
         <div className="flex min-w-0 flex-col">
@@ -134,12 +140,6 @@ function CodeWorkspaceSkeleton() {
               <div key={i} className="h-3 rounded bg-muted/30 animate-pulse" style={{ width: `${30 + ((i * 7) % 60)}%` }} />
             ))}
           </div>
-        </div>
-        <div className="border-l border-border/60 p-3 space-y-3">
-          <div className="h-7 w-32 rounded-full bg-muted/40 animate-pulse" />
-          {Array.from({ length: 6 }).map((_, i) => (
-            <div key={i} className="h-16 rounded-lg bg-muted/30 animate-pulse" />
-          ))}
         </div>
       </div>
       <div className="h-6 shrink-0 border-t border-border/60 bg-primary/95" />
