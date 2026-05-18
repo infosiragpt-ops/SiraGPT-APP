@@ -701,6 +701,20 @@ router.get('/stats', async (req, res) => {
   }
 });
 
+// Analyzer pipeline health — lists currently open breakers and degraded
+// analyzers along with the breaker config. Useful for ops to see whether
+// a recently-shipped regex regression is being short-circuited in prod.
+router.get('/analyzer/health', (_req, res) => {
+  try {
+    const documentProfessionalAnalyzer = require('../services/document-professional-analyzer');
+    const snapshot = documentProfessionalAnalyzer.getAnalyzerHealthSnapshot();
+    res.json(snapshot);
+  } catch (err) {
+    console.error('[admin/analyzer-health] failed:', err && err.message ? err.message : err);
+    res.status(500).json({ error: 'Failed to capture analyzer health snapshot' });
+  }
+});
+
 module.exports = router;
 // Stripe invoices (admin)
 router.get('/stripe/invoices', async (req, res) => {

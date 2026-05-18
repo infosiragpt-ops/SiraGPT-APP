@@ -511,3 +511,62 @@ test('per-file isolation: empty processedFiles still produces zero-state shape',
   assert.deepEqual(out.perFileProfile, []);
   assert.equal(out.analyzerTelemetry, null);
 });
+
+// ──────────────────────────────────────────────────────────────────────────
+// getAnalyzerHealthSnapshot — operational visibility for ops/admin
+// ──────────────────────────────────────────────────────────────────────────
+
+test('health snapshot: clean state has empty open + degraded lists', () => {
+  analyzer._internal.resetAnalyzerBreakers();
+  const snap = analyzer.getAnalyzerHealthSnapshot();
+  assert.deepEqual(snap.openBreakers, []);
+  assert.deepEqual(snap.degradedAnalyzers, []);
+  assert.equal(typeof snap.config.breakerThreshold, 'number');
+  assert.equal(typeof snap.config.breakerCooldownMs, 'number');
+  assert.equal(typeof snap.capturedAt, 'number');
+});
+
+test('health snapshot: degraded analyzer (failures below threshold)', () => {
+  const originalWarn = console.warn;
+  console.warn = () => {};
+  try {
+    analyzer._internal.resetAnalyzerBreakers();
+    const threshold = analyzer._internal.ANALYZER_BREAKER_THRESHOLD;
+    const t = analyzer.createAnalyzerTelemetry();
+    // (threshold - 2) failures — not enough to trip, should appear as degraded.
+    for (let i = 0; i < threshold - 2; i += 1) {
+      analyzer.runAnalyzerSafe('flaky', () => { throw new Error('e'); }, t);
+    }
+    const snap = analyzer.getAnalyzerHealthSnapshot();
+    assert.equal(snap.openBreakers.length, 0);
+    assert.equal(snap.degradedAnalyzers.length, 1);
+    assert.equal(snap.degradedAnalyzers[0].name, 'flaky');
+    assert.equal(snap.degradedAnalyzers[0].consecutiveFailures, threshold - 2);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+test('health snapshot: open breaker with cooldown details', () => {
+  const originalWarn = console.warn;
+  console.warn = () => {};
+  try {
+    analyzer._internal.resetAnalyzerBreakers();
+    const threshold = analyzer._internal.ANALYZER_BREAKER_THRESHOLD;
+    const cooldown = analyzer._internal.ANALYZER_BREAKER_COOLDOWN_MS;
+    const t = analyzer.createAnalyzerTelemetry();
+    for (let i = 0; i < threshold; i += 1) {
+      analyzer.runAnalyzerSafe('trip-me', () => { throw new Error('e'); }, t);
+    }
+    const snap = analyzer.getAnalyzerHealthSnapshot();
+    assert.equal(snap.openBreakers.length, 1);
+    const entry = snap.openBreakers[0];
+    assert.equal(entry.name, 'trip-me');
+    assert.equal(entry.consecutiveFailures, threshold);
+    assert.ok(entry.cooldownMsRemaining > 0);
+    assert.ok(entry.cooldownMsRemaining <= cooldown);
+    assert.equal(entry.closesAt - entry.opensAt, cooldown);
+  } finally {
+    console.warn = originalWarn;
+  }
+});

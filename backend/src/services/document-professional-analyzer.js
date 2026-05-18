@@ -160,6 +160,42 @@ function _resetAnalyzerBreakers() {
   _breakerState.clear();
 }
 
+// Operational helper — snapshot of the analyzer breaker state. Intended
+// for admin endpoints + structured logs. Lists every analyzer that has
+// either accumulated consecutive failures OR is currently in an open
+// breaker window. Output is deterministic and safe to expose to ops.
+function getAnalyzerHealthSnapshot() {
+  const now = Date.now();
+  const open = [];
+  const degraded = [];
+  for (const [name, entry] of _breakerState.entries()) {
+    const stillOpen = entry.openUntil && entry.openUntil > now;
+    if (stillOpen) {
+      open.push({
+        name,
+        consecutiveFailures: entry.consecutiveFailures,
+        opensAt: entry.openUntil - ANALYZER_BREAKER_COOLDOWN_MS,
+        closesAt: entry.openUntil,
+        cooldownMsRemaining: Math.max(0, entry.openUntil - now),
+      });
+    } else if (entry.consecutiveFailures > 0) {
+      degraded.push({ name, consecutiveFailures: entry.consecutiveFailures });
+    }
+  }
+  return {
+    openBreakers: open,
+    degradedAnalyzers: degraded,
+    config: {
+      breakerThreshold: ANALYZER_BREAKER_THRESHOLD,
+      breakerCooldownMs: ANALYZER_BREAKER_COOLDOWN_MS,
+      slowMs: ANALYZER_SLOW_THRESHOLD_MS,
+      largeChars: ANALYZER_LARGE_THRESHOLD_CHARS,
+      deadlineMs: ANALYZER_DEADLINE_MS,
+    },
+    capturedAt: now,
+  };
+}
+
 function runAnalyzerSafe(name, fn, telemetry) {
   // Deadline guard — pipeline-level wall-clock budget. Once exceeded,
   // remaining analyzers short-circuit. The chat continues with whatever
@@ -7805,6 +7841,7 @@ module.exports = {
   runAnalyzerSafe,
   createAnalyzerTelemetry,
   summarizeAnalyzerTelemetry,
+  getAnalyzerHealthSnapshot,
   buildInsightsBlock,
   buildQualityBlock,
   buildEvidenceMapBlock,
