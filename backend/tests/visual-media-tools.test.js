@@ -653,8 +653,8 @@ test('create_dashboard_html: no charts', async () => {
 
 // ── Tool metadata ────────────────────────────────────────────────
 
-test('all 24 tools have valid metadata', () => {
-  assert.equal(VISUAL_MEDIA_TOOLS.length, 24);
+test('all 25 tools have valid metadata', () => {
+  assert.equal(VISUAL_MEDIA_TOOLS.length, 25);
   for (const t of VISUAL_MEDIA_TOOLS) {
     assert.ok(t.name);
     assert.ok(t.description);
@@ -2739,6 +2739,129 @@ test('create_okr_dashboard: emits expected events', async () => {
   await tool('create_okr_dashboard').execute({
     title: 'Events',
     objectives: [{ title: 'O', keyResults: [{ label: 'k', current: 5, target: 10 }] }],
+  }, ctx);
+  const types = ctx._events.map(e => e.type);
+  assert.ok(types.includes('tool_call'));
+  assert.ok(types.includes('file_artifact'));
+  assert.ok(types.includes('tool_output'));
+});
+
+// ── create_empathy_map ───────────────────────────────────────────
+
+test('create_empathy_map: full 4-quadrant + pains/gains', async () => {
+  const em = tool('create_empathy_map');
+  assert.ok(em);
+  const r = await em.execute({
+    title: 'SMB power user',
+    persona: 'Carla, COO en PYME LATAM',
+    says: ['¿Funciona en español?', '¿Cuánto cuesta al mes?'],
+    thinks: ['¿Vale el costo?', '¿Es confiable?'],
+    does: ['Compara 3 vendors', 'Pide demos'],
+    feels: ['Cauta', 'Curiosa'],
+    pains: ['Demasiados vendors', 'Falta tiempo para evaluar'],
+    gains: ['Ahorro de tiempo', 'Insights accionables'],
+    theme: 'professional',
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.total, 12);
+  assert.equal(r.counts.says, 2);
+  assert.equal(r.counts.pains, 2);
+  assert.equal(r.counts.gains, 2);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.startsWith('<svg'));
+  assert.ok(svg.includes('SMB power user'));
+  assert.ok(svg.includes('Carla'));
+  assert.ok(svg.includes('SAYS'));
+  assert.ok(svg.includes('THINKS'));
+  assert.ok(svg.includes('DOES'));
+  assert.ok(svg.includes('FEELS'));
+  assert.ok(svg.includes('PAINS'));
+  assert.ok(svg.includes('GAINS'));
+  assert.ok(svg.includes('¿Funciona en español?'));
+});
+
+test('create_empathy_map: only Says populated, no pains/gains strip', async () => {
+  const r = await tool('create_empathy_map').execute({
+    title: 'Lean empathy',
+    persona: 'Ana',
+    says: ['Solo dijo esto'],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.total, 1);
+  assert.equal(r.counts.says, 1);
+  assert.equal(r.counts.pains, 0);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  // Empty quadrants render "vacío" placeholder
+  assert.ok(svg.includes('— vacío —'));
+  // Pains / Gains strips should NOT render when both are empty
+  assert.equal(svg.includes('PAINS'), false);
+  assert.equal(svg.includes('GAINS'), false);
+});
+
+test('create_empathy_map: empty empathy map fails', async () => {
+  const r = await tool('create_empathy_map').execute({
+    title: 'Empty',
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /empty|provide at least/i);
+});
+
+test('create_empathy_map: non-array quadrant fails fast', async () => {
+  const r = await tool('create_empathy_map').execute({
+    title: 'Bad',
+    says: 'should be array',
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /must be arrays/i);
+});
+
+test('create_empathy_map: caps items at 6 per quadrant', async () => {
+  const eight = Array.from({ length: 8 }, (_, i) => `Item ${i + 1}`);
+  const r = await tool('create_empathy_map').execute({
+    title: 'Overflow',
+    persona: 'X',
+    says: eight,
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.counts.says, 6);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.includes('Item 6'));
+  assert.equal(svg.includes('Item 7'), false);
+});
+
+test('create_empathy_map: xml-escapes content', async () => {
+  const r = await tool('create_empathy_map').execute({
+    title: 'XSS',
+    persona: '<script>x</script>',
+    says: ['"injected"'],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.equal(svg.includes('<script>x</script>'), false);
+  assert.ok(svg.includes('&lt;script&gt;'));
+  assert.ok(svg.includes('&quot;injected&quot;'));
+});
+
+test('create_empathy_map: supports all four themes', async () => {
+  for (const theme of ['professional', 'modern', 'minimal', 'corporate']) {
+    const r = await tool('create_empathy_map').execute({
+      title: `Theme ${theme}`,
+      persona: 'P',
+      says: ['s'],
+      theme,
+    }, fakeCtx());
+    assert.equal(r.ok, true, `theme ${theme} should succeed`);
+    const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+    assert.ok(svg.startsWith('<svg'));
+  }
+});
+
+test('create_empathy_map: emits expected events', async () => {
+  const ctx = fakeCtx();
+  await tool('create_empathy_map').execute({
+    title: 'Events',
+    persona: 'P',
+    says: ['x'],
   }, ctx);
   const types = ctx._events.map(e => e.type);
   assert.ok(types.includes('tool_call'));

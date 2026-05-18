@@ -5728,6 +5728,265 @@ const createOkrDashboard = {
   },
 };
 
+// ─────────────────────────────────────────────────────────────────────────
+// Tool 25: create_empathy_map
+// ─────────────────────────────────────────────────────────────────────────
+
+const createEmpathyMap = {
+  name: 'create_empathy_map',
+  description: 'Generate an Empathy Map as an SVG file: a persona at the centre + 4 canonical quadrants (Says, Thinks, Does, Feels) + optional Pains and Gains strips at the bottom. Use for design thinking workshops, persona research, UX kickoffs, or product-discovery interviews. Each quadrant accepts 1-6 bullet items.',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string', description: 'Map title (e.g. "SiraGPT — SMB power user").' },
+      persona: { type: 'string', description: 'Persona name or short description shown at the centre.' },
+      says:    { type: 'array', items: { type: 'string' }, description: 'Direct quotes / verbalisations.' },
+      thinks:  { type: 'array', items: { type: 'string' }, description: 'Internal monologue / preoccupations.' },
+      does:    { type: 'array', items: { type: 'string' }, description: 'Observed behaviours / actions.' },
+      feels:   { type: 'array', items: { type: 'string' }, description: 'Emotional states / moods.' },
+      pains:   { type: 'array', items: { type: 'string' }, description: 'Optional pains strip at the bottom (frustrations, blockers).' },
+      gains:   { type: 'array', items: { type: 'string' }, description: 'Optional gains strip at the bottom (aspirations, rewards).' },
+      theme: { type: 'string', enum: ['professional', 'modern', 'minimal', 'corporate'], description: 'Visual theme. Default: "professional".' },
+    },
+    required: ['title'],
+    additionalProperties: false,
+  },
+  async execute({
+    title,
+    persona = '',
+    says = [],
+    thinks = [],
+    does = [],
+    feels = [],
+    pains = [],
+    gains = [],
+    theme = 'professional',
+  }, ctx = {}) {
+    emitEvent(ctx, 'tool_call', { tool: 'create_empathy_map', preview: title });
+
+    try {
+      const all = [says, thinks, does, feels, pains, gains];
+      if (!all.every(a => Array.isArray(a))) {
+        return { ok: false, error: 'all quadrant inputs (says/thinks/does/feels/pains/gains) must be arrays of strings' };
+      }
+      const totalItems = all.reduce((s, a) => s + a.length, 0);
+      if (totalItems === 0) {
+        return { ok: false, error: 'all quadrants are empty — provide at least one item' };
+      }
+
+      const themes = {
+        professional: {
+          bg: '#FAFBFC', card: '#FFFFFF', text: '#1E293B', muted: '#64748B', border: '#E2E8F0', accent: '#2563EB',
+          // Each empathy zone has a recognised colour family
+          says:   { fill: '#DBEAFE', bar: '#2563EB', label: '#1E3A8A', icon: '💬' },
+          thinks: { fill: '#EDE9FE', bar: '#7C3AED', label: '#4C1D95', icon: '💭' },
+          does:   { fill: '#ECFDF5', bar: '#10B981', label: '#065F46', icon: '🦶' },
+          feels:  { fill: '#FEE2E2', bar: '#EF4444', label: '#7F1D1D', icon: '❤️' },
+          pains:  { fill: '#FEF3C7', bar: '#F59E0B', label: '#78350F' },
+          gains:  { fill: '#ECFDF5', bar: '#10B981', label: '#065F46' },
+        },
+        modern: {
+          bg: '#0B1121', card: '#1E293B', text: '#F1F5F9', muted: '#94A3B8', border: '#334155', accent: '#818CF8',
+          says:   { fill: '#1E3A8A', bar: '#60A5FA', label: '#BFDBFE', icon: '💬' },
+          thinks: { fill: '#4C1D95', bar: '#A78BFA', label: '#DDD6FE', icon: '💭' },
+          does:   { fill: '#064E3B', bar: '#34D399', label: '#A7F3D0', icon: '🦶' },
+          feels:  { fill: '#7F1D1D', bar: '#F87171', label: '#FECACA', icon: '❤️' },
+          pains:  { fill: '#78350F', bar: '#FBBF24', label: '#FDE68A' },
+          gains:  { fill: '#064E3B', bar: '#34D399', label: '#A7F3D0' },
+        },
+        minimal: {
+          bg: '#FFFFFF', card: '#FFFFFF', text: '#0F172A', muted: '#64748B', border: '#CBD5E1', accent: '#0F172A',
+          says:   { fill: '#F8FAFC', bar: '#0F172A', label: '#0F172A', icon: '💬' },
+          thinks: { fill: '#F8FAFC', bar: '#475569', label: '#0F172A', icon: '💭' },
+          does:   { fill: '#F8FAFC', bar: '#475569', label: '#0F172A', icon: '🦶' },
+          feels:  { fill: '#F8FAFC', bar: '#0F172A', label: '#0F172A', icon: '❤️' },
+          pains:  { fill: '#F8FAFC', bar: '#475569', label: '#0F172A' },
+          gains:  { fill: '#F8FAFC', bar: '#475569', label: '#0F172A' },
+        },
+        corporate: {
+          bg: '#F8FAFC', card: '#FFFFFF', text: '#0F172A', muted: '#475569', border: '#CBD5E1', accent: '#1E40AF',
+          says:   { fill: '#E8F0FE', bar: '#1A73E8', label: '#0B3D91', icon: '💬' },
+          thinks: { fill: '#F3E8FD', bar: '#673AB7', label: '#3A1A6E', icon: '💭' },
+          does:   { fill: '#E6F4EA', bar: '#0F9D58', label: '#1B5E20', icon: '🦶' },
+          feels:  { fill: '#FCE8E6', bar: '#D93025', label: '#7C1D14', icon: '❤️' },
+          pains:  { fill: '#FFF8E1', bar: '#F9AB00', label: '#7C4A00' },
+          gains:  { fill: '#E6F4EA', bar: '#0F9D58', label: '#1B5E20' },
+        },
+      };
+      const t = themes[theme] || themes.professional;
+
+      const safeTitle = xmlEscape(String(title).slice(0, 120));
+      const safePersona = xmlEscape(String(persona || 'Persona').slice(0, 60));
+      const hasPains = pains.length > 0;
+      const hasGains = gains.length > 0;
+      const showStrip = hasPains || hasGains;
+
+      const quadW = 360;
+      const quadH = 240;
+      const gap = 6;
+      const pad = 28;
+      const centerR = 60; // central persona badge radius
+      const headerH = 86;
+      const stripH = showStrip ? 130 : 0;
+      const W = pad * 2 + quadW * 2 + gap;
+      const H = headerH + pad + quadH * 2 + gap + (showStrip ? gap + stripH : 0) + pad;
+      const lineMaxChars = 38;
+
+      function fmt(items) {
+        return (items || []).slice(0, 6).map(s => xmlEscape(String(s || '').slice(0, lineMaxChars))).filter(Boolean);
+      }
+
+      const QUADS = {
+        says:   { pal: t.says,   label: 'SAYS',   items: fmt(says) },
+        thinks: { pal: t.thinks, label: 'THINKS', items: fmt(thinks) },
+        does:   { pal: t.does,   label: 'DOES',   items: fmt(does) },
+        feels:  { pal: t.feels,  label: 'FEELS',  items: fmt(feels) },
+      };
+
+      let body = `<rect width="${W}" height="${H}" fill="${t.bg}" rx="12"/>`;
+      // Header
+      body += `<rect x="0" y="0" width="${W}" height="${headerH}" fill="${t.accent}"/>`;
+      body += `<text x="${W / 2}" y="42" text-anchor="middle" font-family="Georgia, serif" font-size="24" font-weight="bold" fill="#fff">${safeTitle}</text>`;
+      const stripsTxt = (hasPains ? ` · Pains:${pains.length}` : '') + (hasGains ? ` · Gains:${gains.length}` : '');
+      body += `<text x="${W / 2}" y="66" text-anchor="middle" font-family="Arial" font-size="12" fill="#fff" opacity="0.85">${totalItems} ítems${stripsTxt}</text>`;
+
+      // Quadrants
+      const topY = headerH + pad;
+      const leftX = pad;
+      const rightX = pad + quadW + gap;
+      const botY = topY + quadH + gap;
+
+      function drawQuad(q, x, y, w, h) {
+        let out = '';
+        out += `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="10" fill="${q.pal.fill}" stroke="${t.border}" stroke-width="1" filter="url(#vis-shadow)"/>`;
+        out += `<rect x="${x}" y="${y}" width="6" height="${h}" rx="3" fill="${q.pal.bar}"/>`;
+        // Icon + label
+        const iconLeft = x + 22;
+        out += `<text x="${iconLeft}" y="${y + 32}" font-family="Arial" font-size="22">${q.pal.icon}</text>`;
+        out += `<text x="${iconLeft + 36}" y="${y + 30}" font-family="Arial" font-size="14" font-weight="bold" fill="${q.pal.label}">${q.label}</text>`;
+        out += `<text x="${x + w - 22}" y="${y + 30}" text-anchor="end" font-family="Arial" font-size="10" fill="${t.muted}">${q.items.length}</text>`;
+        // Separator
+        out += `<line x1="${x + 16}" y1="${y + 46}" x2="${x + w - 16}" y2="${y + 46}" stroke="${t.border}" stroke-width="1"/>`;
+        // Items
+        if (q.items.length === 0) {
+          out += `<text x="${x + w / 2}" y="${y + h / 2 + 6}" text-anchor="middle" font-family="Arial" font-size="11" fill="${t.muted}" font-style="italic">— vacío —</text>`;
+        } else {
+          q.items.forEach((line, idx) => {
+            const ly = y + 70 + idx * 22;
+            if (ly > y + h - 10) return;
+            out += `<circle cx="${x + 22}" cy="${ly - 4}" r="2.5" fill="${q.pal.bar}"/>`;
+            out += `<text x="${x + 30}" y="${ly}" font-family="Arial" font-size="12" fill="${t.text}">${line}</text>`;
+          });
+        }
+        return out;
+      }
+
+      body += drawQuad(QUADS.says,   leftX,  topY, quadW, quadH);
+      body += drawQuad(QUADS.thinks, rightX, topY, quadW, quadH);
+      body += drawQuad(QUADS.does,   leftX,  botY, quadW, quadH);
+      body += drawQuad(QUADS.feels,  rightX, botY, quadW, quadH);
+
+      // Central persona badge (drawn on top of quadrants)
+      const cx = pad + quadW + gap / 2;
+      const cy = topY + quadH + gap / 2;
+      body += `<circle cx="${cx}" cy="${cy}" r="${centerR + 6}" fill="${t.bg}"/>`;
+      body += `<circle cx="${cx}" cy="${cy}" r="${centerR}" fill="${t.accent}" stroke="#fff" stroke-width="3"/>`;
+      body += `<text x="${cx}" y="${cy - 8}" text-anchor="middle" font-family="Arial" font-size="14" font-weight="bold" fill="#fff" opacity="0.85">PERSONA</text>`;
+      body += `<text x="${cx}" y="${cy + 12}" text-anchor="middle" font-family="Arial" font-size="13" font-weight="bold" fill="#fff">${safePersona.slice(0, 28)}</text>`;
+      if (safePersona.length > 28) {
+        body += `<text x="${cx}" y="${cy + 28}" text-anchor="middle" font-family="Arial" font-size="11" fill="#fff" opacity="0.85">${safePersona.slice(28, 56)}</text>`;
+      }
+
+      // ── Optional Pains / Gains strips ──
+      if (showStrip) {
+        const stripY = botY + quadH + gap;
+        if (hasPains) {
+          const stripW = hasGains ? (W - pad * 2 - gap) / 2 : (W - pad * 2);
+          const stripX = pad;
+          const pq = { pal: t.pains, label: '✖ PAINS', items: fmt(pains) };
+          body += `<rect x="${stripX}" y="${stripY}" width="${stripW}" height="${stripH}" rx="10" fill="${pq.pal.fill}" stroke="${t.border}" stroke-width="1" filter="url(#vis-shadow)"/>`;
+          body += `<rect x="${stripX}" y="${stripY}" width="6" height="${stripH}" rx="3" fill="${pq.pal.bar}"/>`;
+          body += `<text x="${stripX + 22}" y="${stripY + 26}" font-family="Arial" font-size="14" font-weight="bold" fill="${pq.pal.label}">${pq.label}</text>`;
+          pq.items.slice(0, 6).forEach((line, idx) => {
+            const ly = stripY + 50 + idx * 18;
+            if (ly > stripY + stripH - 10) return;
+            body += `<circle cx="${stripX + 22}" cy="${ly - 4}" r="2.5" fill="${pq.pal.bar}"/>`;
+            body += `<text x="${stripX + 30}" y="${ly}" font-family="Arial" font-size="11" fill="${t.text}">${line}</text>`;
+          });
+        }
+        if (hasGains) {
+          const stripW = hasPains ? (W - pad * 2 - gap) / 2 : (W - pad * 2);
+          const stripX = hasPains ? pad + stripW + gap : pad;
+          const gq = { pal: t.gains, label: '✓ GAINS', items: fmt(gains) };
+          body += `<rect x="${stripX}" y="${stripY}" width="${stripW}" height="${stripH}" rx="10" fill="${gq.pal.fill}" stroke="${t.border}" stroke-width="1" filter="url(#vis-shadow)"/>`;
+          body += `<rect x="${stripX}" y="${stripY}" width="6" height="${stripH}" rx="3" fill="${gq.pal.bar}"/>`;
+          body += `<text x="${stripX + 22}" y="${stripY + 26}" font-family="Arial" font-size="14" font-weight="bold" fill="${gq.pal.label}">${gq.label}</text>`;
+          gq.items.slice(0, 6).forEach((line, idx) => {
+            const ly = stripY + 50 + idx * 18;
+            if (ly > stripY + stripH - 10) return;
+            body += `<circle cx="${stripX + 22}" cy="${ly - 4}" r="2.5" fill="${gq.pal.bar}"/>`;
+            body += `<text x="${stripX + 30}" y="${ly}" font-family="Arial" font-size="11" fill="${t.text}">${line}</text>`;
+          });
+        }
+      }
+
+      const svg = svgDocument({
+        width: W,
+        height: H,
+        title: safeTitle,
+        description: `Empathy map: ${safeTitle}`,
+        body,
+      });
+
+      const buffer = Buffer.from(svg, 'utf8');
+      const filename = `empathy_${crypto.randomBytes(4).toString('hex')}.svg`;
+      const artifact = finalizeArtifact({ filename, buffer, mime: EXTENSION_TO_MIME.svg, ctx });
+
+      emitEvent(ctx, 'file_artifact', {
+        artifact: {
+          id: artifact.id,
+          filename: artifact.filename,
+          format: 'svg',
+          mime: 'image/svg+xml',
+          sizeBytes: artifact.sizeBytes,
+          downloadUrl: artifact.downloadUrl,
+        },
+      });
+
+      const counts = {
+        says: QUADS.says.items.length,
+        thinks: QUADS.thinks.items.length,
+        does: QUADS.does.items.length,
+        feels: QUADS.feels.items.length,
+        pains: fmt(pains).length,
+        gains: fmt(gains).length,
+      };
+
+      emitEvent(ctx, 'tool_output', {
+        tool: 'create_empathy_map',
+        ok: true,
+        preview: `Empathy listo: ${artifact.filename} (${totalItems} ítems · ${Math.round(artifact.sizeBytes / 1024)} KB)`,
+      });
+
+      return {
+        ok: true,
+        id: artifact.id,
+        filename: artifact.filename,
+        sizeBytes: artifact.sizeBytes,
+        downloadUrl: artifact.downloadUrl,
+        title,
+        persona,
+        counts,
+        total: totalItems,
+      };
+    } catch (err) {
+      const msg = err?.message || String(err);
+      emitEvent(ctx, 'tool_output', { tool: 'create_empathy_map', ok: false, preview: `Error: ${msg}` });
+      return { ok: false, error: msg };
+    }
+  },
+};
+
 // ── All visual/media tools for the agent ──────────────────────────────
 
 const VISUAL_MEDIA_TOOLS = [
@@ -5755,6 +6014,7 @@ const VISUAL_MEDIA_TOOLS = [
   createRadarChart,
   createUserJourneyMap,
   createOkrDashboard,
+  createEmpathyMap,
 ];
 
 // Internal helpers exposed for unit testing — NOT part of the public agent

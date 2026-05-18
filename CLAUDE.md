@@ -37,7 +37,7 @@ npm run type-check     # TSC completo
 5. **Hacer `git pull --rebase` antes de push** para evitar conflictos
 6. **Priorizar:** estabilidad, rendimiento, cobertura de errores, calidad de código
 
-## Visual Tools Inventory (24 tools)
+## Visual Tools Inventory (25 tools)
 | Tool | File | Description |
 |------|------|-------------|
 | generate_image | visual-media-tools.js | SVG/PNG image generation |
@@ -64,6 +64,7 @@ npm run type-check     # TSC completo
 | create_radar_chart | visual-media-tools.js | Radar/spider chart SVG (3-8 axes, 1-4 polygon series, configurable rings, axis tick labels, 4 themes) |
 | create_user_journey_map | visual-media-tools.js | UX customer journey map SVG (stages × 5 lanes, top emotion curve with emojis, 4 themes) |
 | create_okr_dashboard | visual-media-tools.js | OKR dashboard SVG (objective cards with KR progress bars, red/amber/green status, 4 themes) |
+| create_empathy_map | visual-media-tools.js | Design-thinking empathy map SVG (persona centre + Says/Thinks/Does/Feels quadrants + optional Pains/Gains strips, 4 themes) |
 
 ## Backend Reliability Utilities
 
