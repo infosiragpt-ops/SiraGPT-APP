@@ -4533,6 +4533,234 @@ const createFunnelDiagram = {
   },
 };
 
+// ─────────────────────────────────────────────────────────────────────────
+// Tool 20: create_value_proposition_canvas
+// ─────────────────────────────────────────────────────────────────────────
+
+const createValuePropositionCanvas = {
+  name: 'create_value_proposition_canvas',
+  description: "Generate Strategyzer's Value Proposition Canvas as an SVG file: a circular Customer Profile (Customer Jobs / Pains / Gains) on the left + a square Value Map (Products & Services / Pain Relievers / Gain Creators) on the right. Use for product-market-fit work, persona-to-product mapping, value design, or any complement to a Business Model Canvas. Each of the 6 sub-sections accepts 1-6 bullet items.",
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string', description: 'Canvas title (e.g. "SiraGPT VPC — SMB segment").' },
+      subtitle: { type: 'string', description: 'Optional context line (e.g. segment, period).' },
+      // Customer Profile (circle, left)
+      customerJobs:     { type: 'array', items: { type: 'string' }, description: 'Functional/social/emotional tasks the customer is trying to get done (1-6 items).' },
+      pains:            { type: 'array', items: { type: 'string' }, description: 'Bad outcomes, risks, obstacles BEFORE/DURING/AFTER the job (1-6 items).' },
+      gains:            { type: 'array', items: { type: 'string' }, description: 'Desired outcomes, benefits, aspirations (1-6 items).' },
+      // Value Map (square, right)
+      productsServices: { type: 'array', items: { type: 'string' }, description: 'List of products / services that make up your value proposition (1-6 items).' },
+      painRelievers:    { type: 'array', items: { type: 'string' }, description: 'How your products kill specific customer pains (1-6 items).' },
+      gainCreators:     { type: 'array', items: { type: 'string' }, description: 'How your products create specific customer gains (1-6 items).' },
+      theme: { type: 'string', enum: ['professional', 'modern', 'minimal', 'corporate'], description: 'Visual theme. Default: "professional".' },
+    },
+    required: ['title'],
+    additionalProperties: false,
+  },
+  async execute({
+    title,
+    subtitle = '',
+    customerJobs = [],
+    pains = [],
+    gains = [],
+    productsServices = [],
+    painRelievers = [],
+    gainCreators = [],
+    theme = 'professional',
+  }, ctx = {}) {
+    emitEvent(ctx, 'tool_call', { tool: 'create_value_proposition_canvas', preview: title });
+
+    try {
+      const allSections = [customerJobs, pains, gains, productsServices, painRelievers, gainCreators];
+      if (!allSections.every(s => Array.isArray(s))) {
+        return { ok: false, error: 'all 6 section inputs must be arrays of strings' };
+      }
+      const totalItems = allSections.reduce((s, sec) => s + sec.length, 0);
+      if (totalItems === 0) {
+        return { ok: false, error: 'all 6 sections are empty — provide at least one item' };
+      }
+
+      const themes = {
+        professional: {
+          bg: '#FAFBFC', card: '#FFFFFF', text: '#1E293B', muted: '#64748B', border: '#E2E8F0', accent: '#2563EB',
+          customerSide:  '#0EA5E9', // sky — outside-in
+          valueSide:     '#10B981', // emerald — inside-out
+          jobs:    '#3B82F6', pains: '#EF4444', gains: '#10B981',
+          products:'#0EA5E9', painR: '#F59E0B', gainC: '#84CC16',
+        },
+        modern: {
+          bg: '#0B1121', card: '#1E293B', text: '#F1F5F9', muted: '#94A3B8', border: '#334155', accent: '#818CF8',
+          customerSide: '#38BDF8', valueSide: '#34D399',
+          jobs: '#60A5FA', pains: '#F87171', gains: '#34D399',
+          products: '#38BDF8', painR: '#FBBF24', gainC: '#A3E635',
+        },
+        minimal: {
+          bg: '#FFFFFF', card: '#FFFFFF', text: '#0F172A', muted: '#64748B', border: '#CBD5E1', accent: '#0F172A',
+          customerSide: '#0F172A', valueSide: '#0F172A',
+          jobs: '#0F172A', pains: '#0F172A', gains: '#0F172A',
+          products: '#0F172A', painR: '#0F172A', gainC: '#0F172A',
+        },
+        corporate: {
+          bg: '#F8FAFC', card: '#FFFFFF', text: '#0F172A', muted: '#475569', border: '#CBD5E1', accent: '#1E40AF',
+          customerSide: '#039BE5', valueSide: '#0F9D58',
+          jobs: '#1A73E8', pains: '#D93025', gains: '#0F9D58',
+          products: '#039BE5', painR: '#F9AB00', gainC: '#A5D86C',
+        },
+      };
+      const t = themes[theme] || themes.professional;
+
+      const safeTitle = xmlEscape(String(title).slice(0, 120));
+      const safeSubtitle = xmlEscape(String(subtitle || '').slice(0, 140));
+      const headerH = safeSubtitle ? 110 : 86;
+      const pad = 28;
+      const sideGap = 36;
+      const sideW = 380;
+      // sideH sized so each of the 3 sub-sections has ~155 px after
+      // the header band — enough to fit 6 bullet items at 18px spacing
+      // (header 38px + 6 × 18 = 146 < 155 budget).
+      const sideH = 525;
+      const W = pad * 2 + sideW * 2 + sideGap;
+      const H = headerH + pad + sideH + 60 + pad;
+      const lineMaxChars = 36;
+
+      function fmt(items) {
+        return (items || []).slice(0, 6).map(s => xmlEscape(String(s || '').slice(0, lineMaxChars))).filter(Boolean);
+      }
+      const blocks = {
+        jobs:     fmt(customerJobs),
+        pains:    fmt(pains),
+        gains:    fmt(gains),
+        products: fmt(productsServices),
+        painR:    fmt(painRelievers),
+        gainC:    fmt(gainCreators),
+      };
+
+      // Header
+      let body = `<rect width="${W}" height="${H}" fill="${t.bg}" rx="12"/>`;
+      body += `<rect x="0" y="0" width="${W}" height="${headerH}" fill="${t.accent}"/>`;
+      body += `<text x="${W / 2}" y="42" text-anchor="middle" font-family="Georgia, serif" font-size="24" font-weight="bold" fill="#fff">${safeTitle}</text>`;
+      body += `<text x="${W / 2}" y="66" text-anchor="middle" font-family="Arial" font-size="12" fill="#fff" opacity="0.85">${totalItems} ítems · 6 secciones</text>`;
+      if (safeSubtitle) {
+        body += `<text x="${W / 2}" y="92" text-anchor="middle" font-family="Arial" font-size="13" fill="#fff" opacity="0.92">${safeSubtitle}</text>`;
+      }
+
+      // Side labels (FIT badge bridge between the two halves)
+      const sideY = headerH + pad;
+      const leftCx = pad + sideW / 2;
+      const rightCx = pad + sideW + sideGap + sideW / 2;
+
+      // Connecting "FIT" arrow between halves
+      const fitY = sideY + 24;
+      body += `<line x1="${pad + sideW + 8}" y1="${fitY}" x2="${pad + sideW + sideGap - 8}" y2="${fitY}" stroke="${t.muted}" stroke-width="2" stroke-dasharray="4,4" opacity="0.5"/>`;
+      body += `<rect x="${pad + sideW - 4}" y="${fitY - 14}" width="${sideGap + 8}" height="28" rx="14" fill="${t.accent}"/>`;
+      body += `<text x="${(pad + sideW) + sideGap / 2}" y="${fitY + 5}" text-anchor="middle" font-family="Arial" font-size="12" font-weight="bold" fill="#fff">FIT ⇄</text>`;
+
+      // ── LEFT: Customer Profile (rounded square that hosts a circle motif) ──
+      // We draw a CARD with a circular accent to honour the canonical
+      // VPC visual without sacrificing readability inside actual segments.
+      body += `<rect x="${pad}" y="${sideY}" width="${sideW}" height="${sideH}" rx="${sideW / 2}" fill="${t.card}" stroke="${t.customerSide}" stroke-width="2" filter="url(#vis-shadow)"/>`;
+      body += `<text x="${leftCx}" y="${sideY + 28}" text-anchor="middle" font-family="Arial" font-size="14" font-weight="bold" fill="${t.customerSide}">CUSTOMER PROFILE</text>`;
+      body += `<text x="${leftCx}" y="${sideY + 46}" text-anchor="middle" font-family="Arial" font-size="11" fill="${t.muted}">outside-in</text>`;
+
+      // ── RIGHT: Value Map (square) ──
+      body += `<rect x="${pad + sideW + sideGap}" y="${sideY}" width="${sideW}" height="${sideH}" rx="14" fill="${t.card}" stroke="${t.valueSide}" stroke-width="2" filter="url(#vis-shadow)"/>`;
+      body += `<text x="${rightCx}" y="${sideY + 28}" text-anchor="middle" font-family="Arial" font-size="14" font-weight="bold" fill="${t.valueSide}">VALUE MAP</text>`;
+      body += `<text x="${rightCx}" y="${sideY + 46}" text-anchor="middle" font-family="Arial" font-size="11" fill="${t.muted}">inside-out</text>`;
+
+      // Each side has 3 sub-sections stacked vertically.
+      // Sub-section rendering
+      function drawSubSection({ x, y, w, h, label, items, color }) {
+        let out = '';
+        out += `<line x1="${x + 16}" y1="${y}" x2="${x + w - 16}" y2="${y}" stroke="${t.border}" stroke-width="1"/>`;
+        out += `<rect x="${x + 16}" y="${y + 8}" width="${(label.length * 7) + 22}" height="22" rx="11" fill="${color}"/>`;
+        out += `<text x="${x + 27}" y="${y + 23}" font-family="Arial" font-size="11" font-weight="bold" fill="#fff">${xmlEscape(label)}</text>`;
+        out += `<text x="${x + w - 22}" y="${y + 23}" text-anchor="end" font-family="Arial" font-size="10" fill="${t.muted}">${items.length}</text>`;
+        const inner = items.slice(0, 6);
+        if (inner.length === 0) {
+          out += `<text x="${x + w / 2}" y="${y + h / 2 + 4}" text-anchor="middle" font-family="Arial" font-size="11" fill="${t.muted}" font-style="italic">— vacío —</text>`;
+        } else {
+          inner.forEach((line, idx) => {
+            const ly = y + 46 + idx * 18;
+            if (ly > y + h - 10) return;
+            out += `<circle cx="${x + 22}" cy="${ly - 4}" r="2.5" fill="${color}"/>`;
+            out += `<text x="${x + 30}" y="${ly}" font-family="Arial" font-size="11" fill="${t.text}">${line}</text>`;
+          });
+        }
+        return out;
+      }
+
+      const subStart = sideY + 60;
+      const subH = (sideH - 60 - 8) / 3;
+      // LEFT side: Jobs (top), Pains, Gains
+      body += drawSubSection({ x: pad,        y: subStart,             w: sideW, h: subH, label: 'Customer Jobs', items: blocks.jobs,  color: t.jobs });
+      body += drawSubSection({ x: pad,        y: subStart + subH,      w: sideW, h: subH, label: 'Pains',          items: blocks.pains, color: t.pains });
+      body += drawSubSection({ x: pad,        y: subStart + subH * 2,  w: sideW, h: subH, label: 'Gains',          items: blocks.gains, color: t.gains });
+      // RIGHT side: Products & Services (top), Pain Relievers, Gain Creators
+      body += drawSubSection({ x: pad + sideW + sideGap, y: subStart,             w: sideW, h: subH, label: 'Products & Services', items: blocks.products, color: t.products });
+      body += drawSubSection({ x: pad + sideW + sideGap, y: subStart + subH,      w: sideW, h: subH, label: 'Pain Relievers',      items: blocks.painR,    color: t.painR });
+      body += drawSubSection({ x: pad + sideW + sideGap, y: subStart + subH * 2,  w: sideW, h: subH, label: 'Gain Creators',       items: blocks.gainC,    color: t.gainC });
+
+      // Bottom: legend / fit-guidance
+      const legendY = sideY + sideH + 14;
+      body += `<text x="${pad}" y="${legendY + 14}" font-family="Arial" font-size="11" fill="${t.muted}">PROBLEM ← CUSTOMER PROFILE describes who you serve · VALUE MAP describes how you serve them → SOLUTION</text>`;
+
+      const svg = svgDocument({
+        width: W,
+        height: H,
+        title: safeTitle,
+        description: `Value Proposition Canvas: ${safeTitle}`,
+        body,
+      });
+
+      const buffer = Buffer.from(svg, 'utf8');
+      const filename = `vpc_${crypto.randomBytes(4).toString('hex')}.svg`;
+      const artifact = finalizeArtifact({ filename, buffer, mime: EXTENSION_TO_MIME.svg, ctx });
+
+      emitEvent(ctx, 'file_artifact', {
+        artifact: {
+          id: artifact.id,
+          filename: artifact.filename,
+          format: 'svg',
+          mime: 'image/svg+xml',
+          sizeBytes: artifact.sizeBytes,
+          downloadUrl: artifact.downloadUrl,
+        },
+      });
+
+      const counts = {
+        customerJobs: blocks.jobs.length,
+        pains: blocks.pains.length,
+        gains: blocks.gains.length,
+        productsServices: blocks.products.length,
+        painRelievers: blocks.painR.length,
+        gainCreators: blocks.gainC.length,
+      };
+
+      emitEvent(ctx, 'tool_output', {
+        tool: 'create_value_proposition_canvas',
+        ok: true,
+        preview: `VPC listo: ${artifact.filename} (${totalItems} ítems · ${Math.round(artifact.sizeBytes / 1024)} KB)`,
+      });
+
+      return {
+        ok: true,
+        id: artifact.id,
+        filename: artifact.filename,
+        sizeBytes: artifact.sizeBytes,
+        downloadUrl: artifact.downloadUrl,
+        title,
+        counts,
+        total: totalItems,
+      };
+    } catch (err) {
+      const msg = err?.message || String(err);
+      emitEvent(ctx, 'tool_output', { tool: 'create_value_proposition_canvas', ok: false, preview: `Error: ${msg}` });
+      return { ok: false, error: msg };
+    }
+  },
+};
+
 // ── All visual/media tools for the agent ──────────────────────────────
 
 const VISUAL_MEDIA_TOOLS = [
@@ -4555,6 +4783,7 @@ const VISUAL_MEDIA_TOOLS = [
   createPortersFiveForces,
   createRiskMatrix,
   createFunnelDiagram,
+  createValuePropositionCanvas,
 ];
 
 // Internal helpers exposed for unit testing — NOT part of the public agent

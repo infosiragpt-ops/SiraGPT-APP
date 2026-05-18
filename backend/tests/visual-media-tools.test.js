@@ -653,8 +653,8 @@ test('create_dashboard_html: no charts', async () => {
 
 // ── Tool metadata ────────────────────────────────────────────────
 
-test('all 19 tools have valid metadata', () => {
-  assert.equal(VISUAL_MEDIA_TOOLS.length, 19);
+test('all 20 tools have valid metadata', () => {
+  assert.equal(VISUAL_MEDIA_TOOLS.length, 20);
   for (const t of VISUAL_MEDIA_TOOLS) {
     assert.ok(t.name);
     assert.ok(t.description);
@@ -2014,6 +2014,142 @@ test('create_funnel_diagram: emits expected events', async () => {
   await tool('create_funnel_diagram').execute({
     title: 'Events',
     stages: [{ label: 'A', value: 100 }, { label: 'B', value: 50 }],
+  }, ctx);
+  const types = ctx._events.map(e => e.type);
+  assert.ok(types.includes('tool_call'));
+  assert.ok(types.includes('file_artifact'));
+  assert.ok(types.includes('tool_output'));
+});
+
+// ── create_value_proposition_canvas ──────────────────────────────
+
+test('create_value_proposition_canvas: full 6-section canvas', async () => {
+  const vpc = tool('create_value_proposition_canvas');
+  assert.ok(vpc);
+  const r = await vpc.execute({
+    title: 'SiraGPT VPC',
+    subtitle: 'SMB segment LATAM',
+    customerJobs: ['Analizar documentos legales', 'Generar reportes rápido'],
+    pains: ['LLM API costos altos', 'Resultados inconsistentes en español'],
+    gains: ['Insights accionables', 'Tiempo ahorrado'],
+    productsServices: ['Chat AI español-first', 'Pipeline de documentos pro'],
+    painRelievers: ['Cache local', 'Validación deterministica'],
+    gainCreators: ['Análisis profesional sin LLM', 'Plantillas españolas'],
+    theme: 'professional',
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.ok(r.filename?.endsWith('.svg'));
+  assert.equal(r.total, 12);
+  assert.equal(r.counts.customerJobs, 2);
+  assert.equal(r.counts.pains, 2);
+  assert.equal(r.counts.gainCreators, 2);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.startsWith('<svg'));
+  assert.ok(svg.includes('SiraGPT VPC'));
+  assert.ok(svg.includes('CUSTOMER PROFILE'));
+  assert.ok(svg.includes('VALUE MAP'));
+  assert.ok(svg.includes('Customer Jobs'));
+  assert.ok(svg.includes('Pains'));
+  assert.ok(svg.includes('Gains'));
+  assert.ok(svg.includes('Products &amp; Services') || svg.includes('Products & Services'));
+  assert.ok(svg.includes('Pain Relievers'));
+  assert.ok(svg.includes('Gain Creators'));
+  assert.ok(svg.includes('FIT'));
+  // Items appear
+  assert.ok(svg.includes('Analizar documentos'));
+  assert.ok(svg.includes('Cache local'));
+});
+
+test('create_value_proposition_canvas: partial canvas with only Customer Jobs', async () => {
+  const r = await tool('create_value_proposition_canvas').execute({
+    title: 'Lean VPC',
+    customerJobs: ['Just the customer job'],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.total, 1);
+  assert.equal(r.counts.customerJobs, 1);
+  assert.equal(r.counts.pains, 0);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.includes('Just the customer job'));
+  // Other sections render "vacío" placeholder
+  assert.ok(svg.includes('— vacío —'));
+});
+
+test('create_value_proposition_canvas: empty canvas fails', async () => {
+  const r = await tool('create_value_proposition_canvas').execute({
+    title: 'Empty',
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /empty|provide at least/i);
+});
+
+test('create_value_proposition_canvas: non-array section fails fast', async () => {
+  const r = await tool('create_value_proposition_canvas').execute({
+    title: 'Bad input',
+    customerJobs: 'should be array',
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /must be arrays/i);
+});
+
+test('create_value_proposition_canvas: caps items at 6 per section', async () => {
+  const eightItems = Array.from({ length: 8 }, (_, i) => `Item ${i + 1}`);
+  const r = await tool('create_value_proposition_canvas').execute({
+    title: 'Overflow',
+    customerJobs: eightItems,
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.counts.customerJobs, 6, 'should cap at 6 items');
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.includes('Item 1'));
+  assert.ok(svg.includes('Item 6'));
+  assert.equal(svg.includes('Item 7'), false);
+});
+
+test('create_value_proposition_canvas: xml-escapes content', async () => {
+  const r = await tool('create_value_proposition_canvas').execute({
+    title: 'XSS',
+    customerJobs: ['<script>evil</script>'],
+    productsServices: ['"injected"'],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.equal(svg.includes('<script>evil</script>'), false);
+  assert.ok(svg.includes('&lt;script&gt;'));
+  assert.ok(svg.includes('&quot;injected&quot;'));
+});
+
+test('create_value_proposition_canvas: supports all four themes', async () => {
+  for (const theme of ['professional', 'modern', 'minimal', 'corporate']) {
+    const r = await tool('create_value_proposition_canvas').execute({
+      title: `Theme ${theme}`,
+      customerJobs: ['j'],
+      productsServices: ['p'],
+      theme,
+    }, fakeCtx());
+    assert.equal(r.ok, true, `theme ${theme} should succeed`);
+    const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+    assert.ok(svg.startsWith('<svg'));
+  }
+});
+
+test('create_value_proposition_canvas: counts object exposes all 6 section sizes', async () => {
+  const r = await tool('create_value_proposition_canvas').execute({
+    title: 'Counts shape',
+    customerJobs: ['j'],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  for (const k of ['customerJobs', 'pains', 'gains', 'productsServices', 'painRelievers', 'gainCreators']) {
+    assert.ok(Object.prototype.hasOwnProperty.call(r.counts, k), `counts.${k} should be present`);
+    assert.equal(typeof r.counts[k], 'number');
+  }
+});
+
+test('create_value_proposition_canvas: emits expected events', async () => {
+  const ctx = fakeCtx();
+  await tool('create_value_proposition_canvas').execute({
+    title: 'Events',
+    customerJobs: ['x'],
   }, ctx);
   const types = ctx._events.map(e => e.type);
   assert.ok(types.includes('tool_call'));
