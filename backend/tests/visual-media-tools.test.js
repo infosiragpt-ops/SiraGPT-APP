@@ -653,8 +653,8 @@ test('create_dashboard_html: no charts', async () => {
 
 // ── Tool metadata ────────────────────────────────────────────────
 
-test('all 16 tools have valid metadata', () => {
-  assert.equal(VISUAL_MEDIA_TOOLS.length, 16);
+test('all 17 tools have valid metadata', () => {
+  assert.equal(VISUAL_MEDIA_TOOLS.length, 17);
   for (const t of VISUAL_MEDIA_TOOLS) {
     assert.ok(t.name);
     assert.ok(t.description);
@@ -1547,6 +1547,147 @@ test('create_pyramid_diagram: emits expected events', async () => {
   await tool('create_pyramid_diagram').execute({
     title: 'Events',
     levels: [{ label: 'A' }, { label: 'B' }],
+  }, ctx);
+  const types = ctx._events.map(e => e.type);
+  assert.ok(types.includes('tool_call'));
+  assert.ok(types.includes('file_artifact'));
+  assert.ok(types.includes('tool_output'));
+});
+
+// ── create_porters_five_forces ───────────────────────────────────
+
+test("create_porters_five_forces: full Porter's analysis", async () => {
+  const pf = tool('create_porters_five_forces');
+  assert.ok(pf);
+  const r = await pf.execute({
+    title: 'AI Chat Platforms — Five Forces',
+    subtitle: 'LATAM 2026',
+    rivalry: { items: ['OpenAI', 'Anthropic', 'Google'], intensity: 'high' },
+    newEntrants: { items: ['Open-source LLM forks', 'Cloud-native startups'], intensity: 'medium' },
+    substitutes: { items: ['Traditional BPO', 'In-house ML teams'], intensity: 'low' },
+    suppliers: { items: ['NVIDIA (GPUs)', 'OpenAI API'], intensity: 'high' },
+    buyers: { items: ['Enterprise CIOs', 'SMB self-service'], intensity: 'medium' },
+    theme: 'professional',
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.ok(r.filename?.endsWith('.svg'));
+  assert.equal(r.counts.rivalry, 3);
+  assert.equal(r.counts.newEntrants, 2);
+  assert.equal(r.counts.substitutes, 2);
+  assert.equal(r.counts.suppliers, 2);
+  assert.equal(r.counts.buyers, 2);
+  assert.equal(r.total, 11);
+  const c = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(c.startsWith('<svg'));
+  assert.ok(c.includes('AI Chat Platforms'));
+  assert.ok(c.includes('LATAM 2026'));
+  assert.ok(c.includes('INDUSTRY RIVALRY'));
+  assert.ok(c.includes('THREAT OF NEW ENTRANTS'));
+  assert.ok(c.includes('THREAT OF SUBSTITUTES'));
+  assert.ok(c.includes('BARGAINING POWER OF SUPPLIERS'));
+  assert.ok(c.includes('BARGAINING POWER OF BUYERS'));
+  assert.ok(c.includes('OpenAI'));
+  assert.ok(c.includes('NVIDIA'));
+  // Intensity pills rendered
+  assert.ok(c.includes('HIGH'));
+  assert.ok(c.includes('MEDIUM'));
+  assert.ok(c.includes('LOW'));
+});
+
+test("create_porters_five_forces: only one force populated still succeeds", async () => {
+  const r = await tool('create_porters_five_forces').execute({
+    title: 'Sparse',
+    rivalry: { items: ['Some rivalry note'] },
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.total, 1);
+  assert.equal(r.counts.rivalry, 1);
+  assert.equal(r.counts.newEntrants, 0);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  // Empty forces render a "sin elementos" placeholder
+  assert.ok(svg.includes('— sin elementos —'));
+});
+
+test("create_porters_five_forces: all empty fails", async () => {
+  const r = await tool('create_porters_five_forces').execute({
+    title: 'Empty',
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /empty|provide at least/i);
+});
+
+test("create_porters_five_forces: non-object force coerces to empty (no crash)", async () => {
+  const r = await tool('create_porters_five_forces').execute({
+    title: 'Malformed',
+    rivalry: 'should be object',
+    newEntrants: { items: ['ok'] },
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  // Malformed rivalry treated as empty; only newEntrants contributes
+  assert.equal(r.counts.rivalry, 0);
+  assert.equal(r.counts.newEntrants, 1);
+});
+
+test("create_porters_five_forces: caps items at 6 per force", async () => {
+  const tenItems = Array.from({ length: 10 }, (_, i) => `Item ${i + 1}`);
+  const r = await tool('create_porters_five_forces').execute({
+    title: 'Overflow',
+    rivalry: { items: tenItems, intensity: 'high' },
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.includes('Item 1'));
+  assert.ok(svg.includes('Item 6'));
+  // Item 7+ should NOT appear (capped at 6)
+  assert.equal(svg.includes('Item 7'), false);
+});
+
+test("create_porters_five_forces: invalid intensity is ignored (no pill rendered)", async () => {
+  const r = await tool('create_porters_five_forces').execute({
+    title: 'Bad intensity',
+    rivalry: { items: ['x'], intensity: 'rainbow' },
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  // None of HIGH/MEDIUM/LOW should appear since the intensity was invalid
+  assert.equal(svg.includes('>HIGH<'), false);
+  assert.equal(svg.includes('>MEDIUM<'), false);
+  assert.equal(svg.includes('>LOW<'), false);
+  // The invalid value also shouldn't leak verbatim into the SVG
+  assert.equal(svg.toUpperCase().includes('>RAINBOW<'), false);
+});
+
+test("create_porters_five_forces: xml-escapes force content", async () => {
+  const r = await tool('create_porters_five_forces').execute({
+    title: 'XSS',
+    rivalry: { items: ['<script>alert(1)</script>'] },
+    buyers: { items: ['"injected"'] },
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.equal(svg.includes('<script>alert(1)</script>'), false);
+  assert.ok(svg.includes('&lt;script&gt;'));
+  assert.ok(svg.includes('&quot;injected&quot;'));
+});
+
+test("create_porters_five_forces: supports all four themes", async () => {
+  for (const theme of ['professional', 'modern', 'minimal', 'corporate']) {
+    const r = await tool('create_porters_five_forces').execute({
+      title: `Theme ${theme}`,
+      rivalry: { items: ['x'] },
+      theme,
+    }, fakeCtx());
+    assert.equal(r.ok, true, `theme ${theme} should succeed`);
+    const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+    assert.ok(svg.startsWith('<svg'));
+  }
+});
+
+test("create_porters_five_forces: emits expected events", async () => {
+  const ctx = fakeCtx();
+  await tool('create_porters_five_forces').execute({
+    title: 'Events',
+    rivalry: { items: ['x'] },
   }, ctx);
   const types = ctx._events.map(e => e.type);
   assert.ok(types.includes('tool_call'));

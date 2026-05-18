@@ -1381,11 +1381,44 @@ const compareDocuments = {
         }
       }));
 
-      const result = engine.compareDocuments(enrichedDocs, { query });
-      ctx.onEvent?.({ type: 'tool_output', tool: 'compare_documents', ok: result.ok, preview: `${result.contradictions?.length || 0} contradictions, alignment ${Math.round((result.alignmentScore || 0) * 100)}%` });
+      // The comparison engine returns a rich ComparisonReport with
+      // pairs / entities / timeline / numericConflicts. Map it to the
+      // agent-facing shape (alignment / contradictions / synthesis) so
+      // downstream prompts keep their UX while the engine internals
+      // stay untouched.
+      const engineResult = engine.compareDocuments(enrichedDocs);
+      if (!engineResult) {
+        ctx.onEvent?.({ type: 'tool_output', tool: 'compare_documents', ok: false, preview: 'Insufficient comparable documents.' });
+        return { ok: false, error: 'compareDocuments returned null — need ≥ 2 documents with extractable text' };
+      }
+      // alignment ≈ mean pairwise similarity (0..1)
+      const pairs = Array.isArray(engineResult.pairs) ? engineResult.pairs : [];
+      const alignmentScore = pairs.length
+        ? pairs.reduce((s, p) => s + (Number(p.similarity) || 0), 0) / pairs.length
+        : 0;
+      // contradictions ≈ numericConflicts mapped to a uniform shape
+      const contradictions = (engineResult.numericConflicts || []).map(c => ({
+        label: c.label,
+        description: `Numeric divergence in "${c.label}": ${(c.observations || []).map(o => `${o.file}=${o.value}`).join(' vs ')}`,
+        observations: c.observations || [],
+      }));
+      const synthesis = engine.renderComparisonBlock(engineResult);
+      const result = {
+        ok: true,
+        documentCount: engineResult.fileCount,
+        alignmentScore,
+        contradictions,
+        synthesis,
+        sharedEntities: engineResult.entities?.shared || { persons: [], organizations: [] },
+        uniqueByFile: engineResult.entities?.uniqueByFile || [],
+        timeline: engineResult.timeline || [],
+        dominanceRatio: engineResult.dominanceRatio || 0,
+        _engineReport: engineResult,
+      };
+      ctx.onEvent?.({ type: 'tool_output', tool: 'compare_documents', ok: true, preview: `${contradictions.length} contradictions, alignment ${Math.round(alignmentScore * 100)}%` });
       return {
         ...result,
-        _preview: `${documents.length} docs compared | ${result.contradictions?.length || 0} contradictions | alignment: ${Math.round((result.alignmentScore || 0) * 100)}%`,
+        _preview: `${documents.length} docs compared | ${contradictions.length} contradictions | alignment: ${Math.round(alignmentScore * 100)}%`,
       };
     } catch (err) {
       ctx.onEvent?.({ type: 'tool_output', tool: 'compare_documents', ok: false, preview: `Error: ${err.message}` });

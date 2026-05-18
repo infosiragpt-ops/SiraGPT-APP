@@ -3827,6 +3827,237 @@ const createPyramidDiagram = {
   },
 };
 
+// ─────────────────────────────────────────────────────────────────────────
+// Tool 17: create_porters_five_forces
+// ─────────────────────────────────────────────────────────────────────────
+
+const createPortersFiveForces = {
+  name: 'create_porters_five_forces',
+  description: "Generate Porter's Five Forces industry-structure analysis as an SVG file: Industry Rivalry at the centre surrounded by Threat of New Entrants (top), Threat of Substitutes (bottom), Bargaining Power of Suppliers (left), and Bargaining Power of Buyers (right). Each force accepts 1-6 bullet items and an optional intensity (low/medium/high). Use for industry analysis, market positioning, strategic planning, or competitive deep-dives.",
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string', description: 'Analysis title (e.g. "AI Chat Platforms — Five Forces").' },
+      subtitle: { type: 'string', description: 'Optional context line (e.g. market, period).' },
+      rivalry:      { type: 'object', description: 'Industry Rivalry (centre). { items: [], intensity?: "low"|"medium"|"high" }' },
+      newEntrants:  { type: 'object', description: 'Threat of New Entrants (top). { items: [], intensity?: "low"|"medium"|"high" }' },
+      substitutes:  { type: 'object', description: 'Threat of Substitutes (bottom). { items: [], intensity?: "low"|"medium"|"high" }' },
+      suppliers:    { type: 'object', description: 'Bargaining Power of Suppliers (left). { items: [], intensity?: "low"|"medium"|"high" }' },
+      buyers:       { type: 'object', description: 'Bargaining Power of Buyers (right). { items: [], intensity?: "low"|"medium"|"high" }' },
+      theme: { type: 'string', enum: ['professional', 'modern', 'minimal', 'corporate'], description: 'Visual theme. Default: "professional".' },
+    },
+    required: ['title'],
+    additionalProperties: false,
+  },
+  async execute({
+    title,
+    subtitle = '',
+    rivalry = {},
+    newEntrants = {},
+    substitutes = {},
+    suppliers = {},
+    buyers = {},
+    theme = 'professional',
+  }, ctx = {}) {
+    emitEvent(ctx, 'tool_call', { tool: 'create_porters_five_forces', preview: title });
+
+    try {
+      const forces = [rivalry, newEntrants, substitutes, suppliers, buyers];
+      // Coerce missing inputs to empty objects without throwing — the
+      // canonical use case provides at least Rivalry but agents may
+      // start with a sparse skeleton and fill blocks iteratively.
+      const normalisedForces = forces.map(f => (f && typeof f === 'object' && !Array.isArray(f)) ? f : {});
+      const totalItems = normalisedForces.reduce((s, f) => s + ((Array.isArray(f.items) ? f.items.length : 0)), 0);
+      if (totalItems === 0) {
+        return { ok: false, error: 'all five forces are empty — provide at least one item in any force' };
+      }
+
+      const themes = {
+        professional: {
+          bg: '#FAFBFC', card: '#FFFFFF', text: '#1E293B', muted: '#64748B', border: '#E2E8F0', accent: '#2563EB',
+          center:      { fill: '#FEE2E2', bar: '#DC2626', label: '#7F1D1D' },
+          newEntrants: { fill: '#FEF3C7', bar: '#D97706', label: '#78350F' },
+          substitutes: { fill: '#DBEAFE', bar: '#2563EB', label: '#1E3A8A' },
+          suppliers:   { fill: '#ECFDF5', bar: '#10B981', label: '#065F46' },
+          buyers:      { fill: '#EDE9FE', bar: '#7C3AED', label: '#4C1D95' },
+          intensityLow: '#10B981', intensityMed: '#F59E0B', intensityHigh: '#EF4444',
+        },
+        modern: {
+          bg: '#0B1121', card: '#1E293B', text: '#F1F5F9', muted: '#94A3B8', border: '#334155', accent: '#818CF8',
+          center:      { fill: '#7F1D1D', bar: '#F87171', label: '#FECACA' },
+          newEntrants: { fill: '#78350F', bar: '#FBBF24', label: '#FDE68A' },
+          substitutes: { fill: '#1E3A8A', bar: '#60A5FA', label: '#BFDBFE' },
+          suppliers:   { fill: '#064E3B', bar: '#34D399', label: '#A7F3D0' },
+          buyers:      { fill: '#4C1D95', bar: '#A78BFA', label: '#DDD6FE' },
+          intensityLow: '#34D399', intensityMed: '#FBBF24', intensityHigh: '#F87171',
+        },
+        minimal: {
+          bg: '#FFFFFF', card: '#FFFFFF', text: '#0F172A', muted: '#64748B', border: '#CBD5E1', accent: '#0F172A',
+          center:      { fill: '#F8FAFC', bar: '#0F172A', label: '#0F172A' },
+          newEntrants: { fill: '#F8FAFC', bar: '#475569', label: '#0F172A' },
+          substitutes: { fill: '#F8FAFC', bar: '#475569', label: '#0F172A' },
+          suppliers:   { fill: '#F8FAFC', bar: '#475569', label: '#0F172A' },
+          buyers:      { fill: '#F8FAFC', bar: '#475569', label: '#0F172A' },
+          intensityLow: '#10B981', intensityMed: '#F59E0B', intensityHigh: '#EF4444',
+        },
+        corporate: {
+          bg: '#F8FAFC', card: '#FFFFFF', text: '#0F172A', muted: '#475569', border: '#CBD5E1', accent: '#1E40AF',
+          center:      { fill: '#FCE8E6', bar: '#D93025', label: '#7C1D14' },
+          newEntrants: { fill: '#FFF8E1', bar: '#F9AB00', label: '#7C4A00' },
+          substitutes: { fill: '#E8F0FE', bar: '#1A73E8', label: '#0B3D91' },
+          suppliers:   { fill: '#E6F4EA', bar: '#0F9D58', label: '#1B5E20' },
+          buyers:      { fill: '#F3E8FD', bar: '#673AB7', label: '#3A1A6E' },
+          intensityLow: '#0F9D58', intensityMed: '#F9AB00', intensityHigh: '#D93025',
+        },
+      };
+      const t = themes[theme] || themes.professional;
+
+      const safeTitle = xmlEscape(String(title).slice(0, 120));
+      const safeSubtitle = xmlEscape(String(subtitle || '').slice(0, 140));
+      const cellW = 260;
+      const cellH = 180;
+      const gap = 24;
+      const pad = 24;
+      const headerH = safeSubtitle ? 110 : 86;
+      const W = pad * 2 + cellW * 3 + gap * 2;
+      const H = headerH + pad + cellH * 3 + gap * 2 + pad;
+
+      function clipItem(s) { return xmlEscape(String(s || '').slice(0, 48)); }
+      function intensityColor(level) {
+        const lv = String(level || '').trim().toLowerCase();
+        if (lv === 'high') return t.intensityHigh;
+        if (lv === 'medium') return t.intensityMed;
+        if (lv === 'low') return t.intensityLow;
+        return null;
+      }
+
+      function drawForce(force, pal, label, x, y, w, h, isCenter = false) {
+        let out = '';
+        out += `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="12" fill="${pal.fill}" stroke="${t.border}" stroke-width="${isCenter ? 2 : 1}" filter="url(#vis-shadow)"/>`;
+        out += `<rect x="${x}" y="${y}" width="6" height="${h}" rx="3" fill="${pal.bar}"/>`;
+        out += `<text x="${x + 18}" y="${y + 26}" font-family="Arial" font-size="13" font-weight="bold" fill="${pal.label}">${xmlEscape(label)}</text>`;
+
+        // Intensity pill (right side)
+        const ic = intensityColor(force.intensity);
+        if (ic) {
+          const intText = String(force.intensity).toUpperCase();
+          const pillW = Math.max(56, intText.length * 8 + 12);
+          out += `<rect x="${x + w - pillW - 12}" y="${y + 14}" width="${pillW}" height="22" rx="11" fill="${ic}"/>`;
+          out += `<text x="${x + w - pillW / 2 - 12}" y="${y + 29}" text-anchor="middle" font-family="Arial" font-size="11" font-weight="bold" fill="#fff">${xmlEscape(intText)}</text>`;
+        }
+
+        // Separator
+        out += `<line x1="${x + 16}" y1="${y + 44}" x2="${x + w - 16}" y2="${y + 44}" stroke="${t.border}" stroke-width="1"/>`;
+
+        const items = Array.isArray(force.items) ? force.items : [];
+        const itemList = items.slice(0, 6).map(clipItem).filter(Boolean);
+        if (itemList.length === 0) {
+          out += `<text x="${x + w / 2}" y="${y + h / 2 + 10}" text-anchor="middle" font-family="Arial" font-size="12" fill="${t.muted}" font-style="italic">— sin elementos —</text>`;
+        } else {
+          itemList.forEach((line, idx) => {
+            const ly = y + 60 + idx * 18;
+            if (ly > y + h - 12) return;
+            out += `<circle cx="${x + 18}" cy="${ly - 4}" r="2.5" fill="${pal.bar}"/>`;
+            out += `<text x="${x + 26}" y="${ly}" font-family="Arial" font-size="11" fill="${t.text}">${line}</text>`;
+          });
+        }
+        return out;
+      }
+
+      // Layout: 3x3 grid, only the 5 force cells used (cross pattern)
+      // [ . ][NE ][ . ]
+      // [Sup][Riv][Buy]
+      // [ . ][Sub][ . ]
+      const baseY = headerH + pad;
+      const col0X = pad;
+      const col1X = col0X + cellW + gap;
+      const col2X = col1X + cellW + gap;
+      const row0Y = baseY;
+      const row1Y = baseY + cellH + gap;
+      const row2Y = row1Y + cellH + gap;
+
+      let body = `<rect width="${W}" height="${H}" fill="${t.bg}" rx="12"/>`;
+      body += `<rect x="0" y="0" width="${W}" height="${headerH}" fill="${t.accent}"/>`;
+      body += `<text x="${W / 2}" y="42" text-anchor="middle" font-family="Georgia, serif" font-size="24" font-weight="bold" fill="#fff">${safeTitle}</text>`;
+      body += `<text x="${W / 2}" y="66" text-anchor="middle" font-family="Arial" font-size="12" fill="#fff" opacity="0.85">5 forces · ${totalItems} ítems</text>`;
+      if (safeSubtitle) {
+        body += `<text x="${W / 2}" y="92" text-anchor="middle" font-family="Arial" font-size="13" fill="#fff" opacity="0.92">${safeSubtitle}</text>`;
+      }
+
+      // Connector lines from centre to each surrounding force
+      const cx = col1X + cellW / 2;
+      const cy = row1Y + cellH / 2;
+      // Top connector
+      body += `<line x1="${cx}" y1="${row1Y}" x2="${cx}" y2="${row0Y + cellH}" stroke="${t.border}" stroke-width="2" stroke-dasharray="4,4" opacity="0.5"/>`;
+      // Bottom
+      body += `<line x1="${cx}" y1="${row1Y + cellH}" x2="${cx}" y2="${row2Y}" stroke="${t.border}" stroke-width="2" stroke-dasharray="4,4" opacity="0.5"/>`;
+      // Left
+      body += `<line x1="${col1X}" y1="${cy}" x2="${col0X + cellW}" y2="${cy}" stroke="${t.border}" stroke-width="2" stroke-dasharray="4,4" opacity="0.5"/>`;
+      // Right
+      body += `<line x1="${col1X + cellW}" y1="${cy}" x2="${col2X}" y2="${cy}" stroke="${t.border}" stroke-width="2" stroke-dasharray="4,4" opacity="0.5"/>`;
+
+      // Forces
+      body += drawForce(normalisedForces[1], t.newEntrants, 'THREAT OF NEW ENTRANTS', col1X, row0Y, cellW, cellH);
+      body += drawForce(normalisedForces[3], t.suppliers,   'BARGAINING POWER OF SUPPLIERS', col0X, row1Y, cellW, cellH);
+      body += drawForce(normalisedForces[0], t.center,      'INDUSTRY RIVALRY', col1X, row1Y, cellW, cellH, true);
+      body += drawForce(normalisedForces[4], t.buyers,      'BARGAINING POWER OF BUYERS', col2X, row1Y, cellW, cellH);
+      body += drawForce(normalisedForces[2], t.substitutes, 'THREAT OF SUBSTITUTES', col1X, row2Y, cellW, cellH);
+
+      const svg = svgDocument({
+        width: W,
+        height: H,
+        title: safeTitle,
+        description: `Porter's Five Forces: ${safeTitle}`,
+        body,
+      });
+
+      const buffer = Buffer.from(svg, 'utf8');
+      const filename = `porters_${crypto.randomBytes(4).toString('hex')}.svg`;
+      const artifact = finalizeArtifact({ filename, buffer, mime: EXTENSION_TO_MIME.svg, ctx });
+
+      emitEvent(ctx, 'file_artifact', {
+        artifact: {
+          id: artifact.id,
+          filename: artifact.filename,
+          format: 'svg',
+          mime: 'image/svg+xml',
+          sizeBytes: artifact.sizeBytes,
+          downloadUrl: artifact.downloadUrl,
+        },
+      });
+
+      const counts = {
+        rivalry:      Array.isArray(normalisedForces[0].items) ? normalisedForces[0].items.length : 0,
+        newEntrants:  Array.isArray(normalisedForces[1].items) ? normalisedForces[1].items.length : 0,
+        substitutes:  Array.isArray(normalisedForces[2].items) ? normalisedForces[2].items.length : 0,
+        suppliers:    Array.isArray(normalisedForces[3].items) ? normalisedForces[3].items.length : 0,
+        buyers:       Array.isArray(normalisedForces[4].items) ? normalisedForces[4].items.length : 0,
+      };
+
+      emitEvent(ctx, 'tool_output', {
+        tool: 'create_porters_five_forces',
+        ok: true,
+        preview: `5 Forces: ${artifact.filename} (Riv:${counts.rivalry} NE:${counts.newEntrants} Sub:${counts.substitutes} Sup:${counts.suppliers} Buy:${counts.buyers}, ${Math.round(artifact.sizeBytes / 1024)} KB)`,
+      });
+
+      return {
+        ok: true,
+        id: artifact.id,
+        filename: artifact.filename,
+        sizeBytes: artifact.sizeBytes,
+        downloadUrl: artifact.downloadUrl,
+        title,
+        counts,
+        total: totalItems,
+      };
+    } catch (err) {
+      const msg = err?.message || String(err);
+      emitEvent(ctx, 'tool_output', { tool: 'create_porters_five_forces', ok: false, preview: `Error: ${msg}` });
+      return { ok: false, error: msg };
+    }
+  },
+};
+
 // ── All visual/media tools for the agent ──────────────────────────────
 
 const VISUAL_MEDIA_TOOLS = [
@@ -3846,6 +4077,7 @@ const VISUAL_MEDIA_TOOLS = [
   createRaciMatrix,
   createBusinessModelCanvas,
   createPyramidDiagram,
+  createPortersFiveForces,
 ];
 
 // Internal helpers exposed for unit testing — NOT part of the public agent
