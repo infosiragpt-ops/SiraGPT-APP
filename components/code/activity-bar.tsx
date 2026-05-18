@@ -1,8 +1,8 @@
 "use client"
 
 import * as React from "react"
+import Image from "next/image"
 import {
-  FolderTree,
   GitBranch,
   MessageSquare,
   Play,
@@ -26,8 +26,22 @@ type ActivityBarProps = {
   onComposer: () => void
 }
 
+function SiraActivityLogo({ className }: { className?: string }) {
+  return (
+    <span className={cn("flex items-center justify-center", className)} aria-hidden="true">
+      <Image
+        src="/sira-gpt.png"
+        alt=""
+        width={18}
+        height={18}
+        className="h-[18px] w-[18px] rounded-[4px] object-contain"
+      />
+    </span>
+  )
+}
+
 const ITEMS: { id: ActivityId; label: string; icon: React.ElementType }[] = [
-  { id: "files", label: "Explorador", icon: FolderTree },
+  { id: "files", label: "Explorador", icon: SiraActivityLogo },
   { id: "search", label: "Buscar", icon: Search },
   { id: "scm", label: "Control de origen", icon: GitBranch },
   { id: "run", label: "Ejecutar", icon: Play },
