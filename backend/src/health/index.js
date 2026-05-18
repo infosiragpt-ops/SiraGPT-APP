@@ -16,6 +16,8 @@ const {
   createSyntheticPingProbe,
   SyntheticPingSampler,
 } = require('./probes/synthetic-ping');
+const { ProbeScheduler, DEFAULT_INTERVAL_MS } = require('./probe-scheduler');
+const { computeSLO, aggregateRegistry } = require('./slo-aggregator');
 
 module.exports = {
   ...probe,
@@ -26,4 +28,8 @@ module.exports = {
   createOpenAIProbe,
   createSyntheticPingProbe,
   SyntheticPingSampler,
+  ProbeScheduler,
+  DEFAULT_INTERVAL_MS,
+  computeSLO,
+  aggregateRegistry,
 };
