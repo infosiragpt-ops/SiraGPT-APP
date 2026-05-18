@@ -653,8 +653,8 @@ test('create_dashboard_html: no charts', async () => {
 
 // ── Tool metadata ────────────────────────────────────────────────
 
-test('all 21 tools have valid metadata', () => {
-  assert.equal(VISUAL_MEDIA_TOOLS.length, 21);
+test('all 22 tools have valid metadata', () => {
+  assert.equal(VISUAL_MEDIA_TOOLS.length, 22);
   for (const t of VISUAL_MEDIA_TOOLS) {
     assert.ok(t.name);
     assert.ok(t.description);
@@ -2279,6 +2279,168 @@ test('create_pestel_analysis: emits expected events', async () => {
   await tool('create_pestel_analysis').execute({
     title: 'Events',
     political: ['x'],
+  }, ctx);
+  const types = ctx._events.map(e => e.type);
+  assert.ok(types.includes('tool_call'));
+  assert.ok(types.includes('file_artifact'));
+  assert.ok(types.includes('tool_output'));
+});
+
+// ── create_radar_chart ───────────────────────────────────────────
+
+test('create_radar_chart: 5-axis 2-series vendor benchmark', async () => {
+  const rc = tool('create_radar_chart');
+  assert.ok(rc);
+  const r = await rc.execute({
+    title: 'Vendor Scorecard',
+    subtitle: 'Q2 2026 evaluation',
+    axes: ['Price', 'Docs', 'API', 'Support', 'Uptime'],
+    series: [
+      { name: 'Vendor A', values: [4, 5, 4, 3, 5] },
+      { name: 'Vendor B', values: [5, 3, 4, 4, 4] },
+    ],
+    theme: 'professional',
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.axes, 5);
+  assert.equal(r.series, 2);
+  assert.equal(r.max, 5);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.startsWith('<svg'));
+  assert.ok(svg.includes('Vendor Scorecard'));
+  assert.ok(svg.includes('Vendor A'));
+  assert.ok(svg.includes('Vendor B'));
+  assert.ok(svg.includes('Price'));
+  assert.ok(svg.includes('Uptime'));
+  // Should contain polygon elements (one per ring + one per series)
+  const polygonCount = (svg.match(/<polygon /g) || []).length;
+  assert.ok(polygonCount >= 7, `expected at least 7 polygons (5 grid rings + 2 series), got ${polygonCount}`);
+});
+
+test('create_radar_chart: auto-detects max from values', async () => {
+  const r = await tool('create_radar_chart').execute({
+    title: 'Auto-max',
+    axes: ['A', 'B', 'C'],
+    series: [{ name: 'S', values: [3, 7, 5] }],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.max, 7);
+});
+
+test('create_radar_chart: explicit max overrides auto-detect', async () => {
+  const r = await tool('create_radar_chart').execute({
+    title: 'Explicit',
+    axes: ['A', 'B', 'C'],
+    series: [{ name: 'S', values: [1, 2, 3] }],
+    max: 10,
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.max, 10);
+});
+
+test('create_radar_chart: fewer than 3 axes fails', async () => {
+  const r = await tool('create_radar_chart').execute({
+    title: 'Too few',
+    axes: ['A', 'B'],
+    series: [{ name: 'S', values: [1, 2] }],
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /at least 3 axes/i);
+});
+
+test('create_radar_chart: more than 8 axes fails', async () => {
+  const r = await tool('create_radar_chart').execute({
+    title: 'Too many',
+    axes: ['A','B','C','D','E','F','G','H','I'],
+    series: [{ name: 'S', values: [1,2,3,4,5,6,7,8,9] }],
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /at most 8 axes/i);
+});
+
+test('create_radar_chart: empty series fails', async () => {
+  const r = await tool('create_radar_chart').execute({
+    title: 'No series',
+    axes: ['A','B','C'],
+    series: [],
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /series.*empty/i);
+});
+
+test('create_radar_chart: caps series at 4', async () => {
+  const sixSeries = Array.from({ length: 6 }, (_, i) => ({ name: `S${i+1}`, values: [3,3,3] }));
+  const r = await tool('create_radar_chart').execute({
+    title: 'Many',
+    axes: ['A','B','C'],
+    series: sixSeries,
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.series, 4);
+});
+
+test('create_radar_chart: NaN / missing values render as 0', async () => {
+  const r = await tool('create_radar_chart').execute({
+    title: 'Bad values',
+    axes: ['A','B','C'],
+    series: [{ name: 'S', values: [NaN, null, 3] }],
+    max: 10,
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.startsWith('<svg'));
+  // No literal NaN should appear
+  assert.equal(svg.includes('NaN'), false);
+});
+
+test('create_radar_chart: xml-escapes labels', async () => {
+  const r = await tool('create_radar_chart').execute({
+    title: 'XSS',
+    axes: ['<script>x</script>', 'Safe', 'Other'],
+    series: [{ name: '"injected"', values: [1, 2, 3] }],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.equal(svg.includes('<script>x</script>'), false);
+  assert.ok(svg.includes('&lt;script&gt;'));
+  assert.ok(svg.includes('&quot;injected&quot;'));
+});
+
+test('create_radar_chart: supports all four themes', async () => {
+  for (const theme of ['professional', 'modern', 'minimal', 'corporate']) {
+    const r = await tool('create_radar_chart').execute({
+      title: `Theme ${theme}`,
+      axes: ['A','B','C'],
+      series: [{ name: 'S', values: [1, 2, 3] }],
+      theme,
+    }, fakeCtx());
+    assert.equal(r.ok, true, `theme ${theme} should succeed`);
+    const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+    assert.ok(svg.startsWith('<svg'));
+  }
+});
+
+test('create_radar_chart: per-series color override', async () => {
+  const r = await tool('create_radar_chart').execute({
+    title: 'Custom',
+    axes: ['A','B','C'],
+    series: [
+      { name: 'A', values: [1, 2, 3], color: '#FF00FF' },
+      { name: 'B', values: [2, 3, 1], color: '#00FFFF' },
+    ],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.toUpperCase().includes('#FF00FF'));
+  assert.ok(svg.toUpperCase().includes('#00FFFF'));
+});
+
+test('create_radar_chart: emits expected events', async () => {
+  const ctx = fakeCtx();
+  await tool('create_radar_chart').execute({
+    title: 'Events',
+    axes: ['A','B','C'],
+    series: [{ name: 'S', values: [1, 2, 3] }],
   }, ctx);
   const types = ctx._events.map(e => e.type);
   assert.ok(types.includes('tool_call'));

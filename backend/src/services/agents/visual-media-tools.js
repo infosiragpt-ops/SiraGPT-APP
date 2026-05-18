@@ -4964,6 +4964,253 @@ const createPestelAnalysis = {
   },
 };
 
+// ─────────────────────────────────────────────────────────────────────────
+// Tool 22: create_radar_chart
+// ─────────────────────────────────────────────────────────────────────────
+
+const createRadarChart = {
+  name: 'create_radar_chart',
+  description: 'Generate a radar (spider) chart as an SVG file: N axes (3-8) radiating from a centre point, with one or more data series plotted as semi-transparent polygons over the grid. Use for vendor/competitor benchmarking, skill matrices, performance reviews, feature scorecards, or any N-dimensional comparison. Distinct from the create_chart subtypes — this is a dedicated radar with multi-series support.',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string', description: 'Chart title (e.g. "Vendor scorecard").' },
+      subtitle: { type: 'string', description: 'Optional context line.' },
+      axes: { type: 'array', items: { type: 'string' }, description: '3-8 axis labels (e.g. ["Price", "Support", "API", "Docs", "Uptime"]).' },
+      series: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            name:   { type: 'string', description: 'Series name.' },
+            values: { type: 'array', items: { type: 'number' }, description: 'One value per axis (in the same order as axes). 0..max.' },
+            color:  { type: 'string', description: 'Optional hex color override.' },
+          },
+          required: ['name', 'values'],
+        },
+        description: '1-4 data series.',
+      },
+      max: { type: 'number', description: 'Max scale value (axes go 0..max). Default: auto from data.' },
+      rings: { type: 'integer', minimum: 2, maximum: 8, description: 'Number of concentric grid rings. Default: 5.' },
+      theme: { type: 'string', enum: ['professional', 'modern', 'minimal', 'corporate'], description: 'Visual theme. Default: "professional".' },
+    },
+    required: ['title', 'axes', 'series'],
+    additionalProperties: false,
+  },
+  async execute({ title, subtitle = '', axes = [], series = [], max, rings = 5, theme = 'professional' }, ctx = {}) {
+    emitEvent(ctx, 'tool_call', { tool: 'create_radar_chart', preview: title });
+
+    try {
+      if (!Array.isArray(axes) || axes.length < 3) {
+        return { ok: false, error: 'radar chart requires at least 3 axes' };
+      }
+      if (axes.length > 8) {
+        return { ok: false, error: 'radar chart supports at most 8 axes' };
+      }
+      if (!Array.isArray(series) || series.length === 0) {
+        return { ok: false, error: 'series array is empty' };
+      }
+
+      const themes = {
+        professional: {
+          bg: '#FAFBFC', card: '#FFFFFF', text: '#1E293B', muted: '#64748B', border: '#E2E8F0', accent: '#2563EB',
+          grid: '#E2E8F0', axis: '#94A3B8',
+          palette: ['#2563EB', '#10B981', '#F59E0B', '#EF4444'],
+        },
+        modern: {
+          bg: '#0B1121', card: '#1E293B', text: '#F1F5F9', muted: '#94A3B8', border: '#334155', accent: '#818CF8',
+          grid: '#334155', axis: '#64748B',
+          palette: ['#60A5FA', '#34D399', '#FBBF24', '#F87171'],
+        },
+        minimal: {
+          bg: '#FFFFFF', card: '#FFFFFF', text: '#0F172A', muted: '#64748B', border: '#CBD5E1', accent: '#0F172A',
+          grid: '#E2E8F0', axis: '#94A3B8',
+          palette: ['#0F172A', '#475569', '#94A3B8', '#CBD5E1'],
+        },
+        corporate: {
+          bg: '#F8FAFC', card: '#FFFFFF', text: '#0F172A', muted: '#475569', border: '#CBD5E1', accent: '#1E40AF',
+          grid: '#CBD5E1', axis: '#5F6368',
+          palette: ['#1A73E8', '#0F9D58', '#F9AB00', '#D93025'],
+        },
+      };
+      const t = themes[theme] || themes.professional;
+
+      const safeTitle = xmlEscape(String(title).slice(0, 120));
+      const safeSubtitle = xmlEscape(String(subtitle || '').slice(0, 140));
+      const axisLabels = axes.slice(0, 8).map(a => xmlEscape(String(a || '').slice(0, 24)));
+      const n = axisLabels.length;
+      const seriesList = series.slice(0, 4);
+      const ringCount = Math.max(2, Math.min(8, Math.round(Number(rings) || 5)));
+
+      // Auto-detect max if not provided
+      let dataMax = 0;
+      seriesList.forEach(s => {
+        if (Array.isArray(s.values)) {
+          s.values.forEach(v => {
+            const num = Number(v);
+            if (Number.isFinite(num) && num > dataMax) dataMax = num;
+          });
+        }
+      });
+      const scaleMax = Number.isFinite(Number(max)) && Number(max) > 0
+        ? Number(max)
+        : (dataMax > 0 ? dataMax : 1);
+
+      const headerH = safeSubtitle ? 110 : 86;
+      const pad = 28;
+      const legendH = 32 + seriesList.length * 22;
+      const radius = 200;
+      const plotSize = radius * 2 + 100; // extra for axis labels
+      const W = pad * 2 + plotSize + 240; // extra for legend
+      const H = headerH + pad + plotSize + legendH + pad;
+
+      const cx = pad + plotSize / 2;
+      const cy = headerH + pad + plotSize / 2;
+
+      // Axis angles. Start from top (-90°) and go clockwise.
+      function axisAngle(i) {
+        return (-Math.PI / 2) + (2 * Math.PI * i) / n;
+      }
+      function pointOnAxis(i, magnitude /* 0..1 */) {
+        const ang = axisAngle(i);
+        return {
+          x: cx + Math.cos(ang) * radius * magnitude,
+          y: cy + Math.sin(ang) * radius * magnitude,
+        };
+      }
+
+      let body = `<rect width="${W}" height="${H}" fill="${t.bg}" rx="12"/>`;
+      // Header
+      body += `<rect x="0" y="0" width="${W}" height="${headerH}" fill="${t.accent}"/>`;
+      body += `<text x="${W / 2}" y="42" text-anchor="middle" font-family="Georgia, serif" font-size="24" font-weight="bold" fill="#fff">${safeTitle}</text>`;
+      body += `<text x="${W / 2}" y="66" text-anchor="middle" font-family="Arial" font-size="12" fill="#fff" opacity="0.85">${n} ejes · ${seriesList.length} serie${seriesList.length === 1 ? '' : 's'} · max ${scaleMax}</text>`;
+      if (safeSubtitle) {
+        body += `<text x="${W / 2}" y="92" text-anchor="middle" font-family="Arial" font-size="13" fill="#fff" opacity="0.92">${safeSubtitle}</text>`;
+      }
+
+      // Concentric grid rings (polygonal — matches the axes count)
+      for (let r = 1; r <= ringCount; r++) {
+        const mag = r / ringCount;
+        const points = [];
+        for (let i = 0; i < n; i++) {
+          const p = pointOnAxis(i, mag);
+          points.push(`${p.x},${p.y}`);
+        }
+        body += `<polygon points="${points.join(' ')}" fill="none" stroke="${t.grid}" stroke-width="1" opacity="${0.5 + (r / ringCount) * 0.25}"/>`;
+        // Tick label on the right-pointing axis (axis 0 may be top — pick a representative axis for ring labels)
+        // Use the topmost axis at index 0
+        if (r === ringCount || r === Math.ceil(ringCount / 2)) {
+          const tickValue = (scaleMax * mag).toFixed(scaleMax >= 10 ? 0 : 1);
+          const tickPoint = pointOnAxis(0, mag);
+          body += `<text x="${tickPoint.x + 4}" y="${tickPoint.y + 3}" font-family="Arial" font-size="9" fill="${t.muted}">${tickValue}</text>`;
+        }
+      }
+
+      // Axes
+      for (let i = 0; i < n; i++) {
+        const p = pointOnAxis(i, 1);
+        body += `<line x1="${cx}" y1="${cy}" x2="${p.x}" y2="${p.y}" stroke="${t.axis}" stroke-width="1.5"/>`;
+        // Axis label outside the polygon
+        const labelP = pointOnAxis(i, 1.18);
+        // text-anchor based on position
+        let anchor = 'middle';
+        if (labelP.x < cx - 10) anchor = 'end';
+        else if (labelP.x > cx + 10) anchor = 'start';
+        body += `<text x="${labelP.x}" y="${labelP.y + 4}" text-anchor="${anchor}" font-family="Arial" font-size="12" font-weight="bold" fill="${t.text}">${axisLabels[i]}</text>`;
+      }
+
+      // Series polygons (back to front, semi-transparent fills)
+      seriesList.forEach((s, sIdx) => {
+        const color = s.color && /^#[0-9A-Fa-f]{6}$/.test(s.color)
+          ? s.color
+          : t.palette[sIdx % t.palette.length];
+        const vals = Array.isArray(s.values) ? s.values : [];
+        const points = [];
+        const dots = [];
+        for (let i = 0; i < n; i++) {
+          const raw = Number(vals[i]);
+          const v = Number.isFinite(raw) ? Math.max(0, raw) : 0;
+          const mag = scaleMax > 0 ? Math.min(1, v / scaleMax) : 0;
+          const p = pointOnAxis(i, mag);
+          points.push(`${p.x},${p.y}`);
+          dots.push({ x: p.x, y: p.y, v });
+        }
+        body += `<polygon points="${points.join(' ')}" fill="${color}" fill-opacity="0.22" stroke="${color}" stroke-width="2.5"/>`;
+        dots.forEach(d => {
+          body += `<circle cx="${d.x}" cy="${d.y}" r="4" fill="${color}" stroke="#fff" stroke-width="1.5"/>`;
+        });
+      });
+
+      // Legend (right side)
+      const legendX = cx + radius + 60;
+      let lY = cy - radius;
+      body += `<text x="${legendX}" y="${lY}" font-family="Arial" font-size="13" font-weight="bold" fill="${t.text}">SERIES</text>`;
+      lY += 18;
+      seriesList.forEach((s, sIdx) => {
+        const color = s.color && /^#[0-9A-Fa-f]{6}$/.test(s.color)
+          ? s.color
+          : t.palette[sIdx % t.palette.length];
+        const safeName = xmlEscape(String(s.name || `Serie ${sIdx + 1}`).slice(0, 32));
+        body += `<rect x="${legendX}" y="${lY - 10}" width="14" height="14" rx="3" fill="${color}" fill-opacity="0.6" stroke="${color}" stroke-width="1.5"/>`;
+        body += `<text x="${legendX + 22}" y="${lY}" font-family="Arial" font-size="12" fill="${t.text}">${safeName}</text>`;
+        // Sum the values to show a tiny "total"
+        const sum = (Array.isArray(s.values) ? s.values : [])
+          .map(v => Number(v))
+          .filter(Number.isFinite)
+          .reduce((acc, v) => acc + v, 0);
+        const avg = (s.values && s.values.length) ? (sum / s.values.length) : 0;
+        body += `<text x="${legendX + 22}" y="${lY + 14}" font-family="Arial" font-size="10" fill="${t.muted}">avg ${avg.toFixed(1)}</text>`;
+        lY += 36;
+      });
+
+      const svg = svgDocument({
+        width: W,
+        height: H,
+        title: safeTitle,
+        description: `Radar chart: ${safeTitle}`,
+        body,
+      });
+
+      const buffer = Buffer.from(svg, 'utf8');
+      const filename = `radar_${crypto.randomBytes(4).toString('hex')}.svg`;
+      const artifact = finalizeArtifact({ filename, buffer, mime: EXTENSION_TO_MIME.svg, ctx });
+
+      emitEvent(ctx, 'file_artifact', {
+        artifact: {
+          id: artifact.id,
+          filename: artifact.filename,
+          format: 'svg',
+          mime: 'image/svg+xml',
+          sizeBytes: artifact.sizeBytes,
+          downloadUrl: artifact.downloadUrl,
+        },
+      });
+
+      emitEvent(ctx, 'tool_output', {
+        tool: 'create_radar_chart',
+        ok: true,
+        preview: `Radar listo: ${artifact.filename} (${n} ejes, ${seriesList.length} series, ${Math.round(artifact.sizeBytes / 1024)} KB)`,
+      });
+
+      return {
+        ok: true,
+        id: artifact.id,
+        filename: artifact.filename,
+        sizeBytes: artifact.sizeBytes,
+        downloadUrl: artifact.downloadUrl,
+        title,
+        axes: n,
+        series: seriesList.length,
+        max: scaleMax,
+      };
+    } catch (err) {
+      const msg = err?.message || String(err);
+      emitEvent(ctx, 'tool_output', { tool: 'create_radar_chart', ok: false, preview: `Error: ${msg}` });
+      return { ok: false, error: msg };
+    }
+  },
+};
+
 // ── All visual/media tools for the agent ──────────────────────────────
 
 const VISUAL_MEDIA_TOOLS = [
@@ -4988,6 +5235,7 @@ const VISUAL_MEDIA_TOOLS = [
   createFunnelDiagram,
   createValuePropositionCanvas,
   createPestelAnalysis,
+  createRadarChart,
 ];
 
 // Internal helpers exposed for unit testing — NOT part of the public agent
