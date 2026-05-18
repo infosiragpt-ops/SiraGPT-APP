@@ -2770,6 +2770,204 @@ const createProcessFlow = {
   },
 };
 
+// ─────────────────────────────────────────────────────────────────────────
+// Tool 12: create_swot_analysis
+// ─────────────────────────────────────────────────────────────────────────
+
+const createSwotAnalysis = {
+  name: 'create_swot_analysis',
+  description: 'Generate a SWOT analysis as an SVG file: a 2x2 strategic matrix with Strengths (internal positive), Weaknesses (internal negative), Opportunities (external positive), and Threats (external negative). Use for business strategy, market analysis, product reviews, competitive positioning, or any situational analysis. Each quadrant lists 1-8 bullet points.',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string', description: 'SWOT title (e.g. "Q1 2026 Product Review").' },
+      subtitle: { type: 'string', description: 'Optional context line (e.g. brand, market, period).' },
+      strengths: { type: 'array', items: { type: 'string' }, description: 'Internal positive factors (1-8 items).' },
+      weaknesses: { type: 'array', items: { type: 'string' }, description: 'Internal negative factors (1-8 items).' },
+      opportunities: { type: 'array', items: { type: 'string' }, description: 'External positive factors (1-8 items).' },
+      threats: { type: 'array', items: { type: 'string' }, description: 'External negative factors (1-8 items).' },
+      theme: { type: 'string', enum: ['professional', 'modern', 'minimal', 'corporate'], description: 'Visual theme. Default: "professional".' },
+    },
+    required: ['title', 'strengths', 'weaknesses', 'opportunities', 'threats'],
+    additionalProperties: false,
+  },
+  async execute({ title, subtitle = '', strengths = [], weaknesses = [], opportunities = [], threats = [], theme = 'professional' }, ctx = {}) {
+    emitEvent(ctx, 'tool_call', { tool: 'create_swot_analysis', preview: title });
+
+    try {
+      const quadInputs = [strengths, weaknesses, opportunities, threats];
+      if (!quadInputs.every(q => Array.isArray(q))) {
+        return { ok: false, error: 'strengths/weaknesses/opportunities/threats must be arrays' };
+      }
+      const totalItems = quadInputs.reduce((s, q) => s + q.length, 0);
+      if (totalItems === 0) {
+        return { ok: false, error: 'all quadrants are empty — provide at least one item' };
+      }
+
+      // Quadrant palettes encode meaning: green/blue for positive,
+      // amber/red for negative; left column internal, right column external.
+      const themes = {
+        professional: {
+          bg: '#FAFBFC', card: '#FFFFFF', text: '#1E293B', muted: '#64748B', border: '#E2E8F0', accent: '#2563EB',
+          strengths:     { fill: '#ECFDF5', bar: '#10B981', label: '#065F46' },
+          weaknesses:    { fill: '#FEF3C7', bar: '#F59E0B', label: '#92400E' },
+          opportunities: { fill: '#EFF6FF', bar: '#3B82F6', label: '#1E40AF' },
+          threats:       { fill: '#FEE2E2', bar: '#EF4444', label: '#991B1B' },
+        },
+        modern: {
+          bg: '#0B1121', card: '#1E293B', text: '#F1F5F9', muted: '#94A3B8', border: '#334155', accent: '#818CF8',
+          strengths:     { fill: '#064E3B', bar: '#34D399', label: '#A7F3D0' },
+          weaknesses:    { fill: '#78350F', bar: '#FBBF24', label: '#FDE68A' },
+          opportunities: { fill: '#1E3A8A', bar: '#60A5FA', label: '#BFDBFE' },
+          threats:       { fill: '#7F1D1D', bar: '#F87171', label: '#FECACA' },
+        },
+        minimal: {
+          bg: '#FFFFFF', card: '#FFFFFF', text: '#0F172A', muted: '#64748B', border: '#CBD5E1', accent: '#0F172A',
+          strengths:     { fill: '#F1F5F9', bar: '#10B981', label: '#0F172A' },
+          weaknesses:    { fill: '#F1F5F9', bar: '#F59E0B', label: '#0F172A' },
+          opportunities: { fill: '#F1F5F9', bar: '#3B82F6', label: '#0F172A' },
+          threats:       { fill: '#F1F5F9', bar: '#EF4444', label: '#0F172A' },
+        },
+        corporate: {
+          bg: '#F8FAFC', card: '#FFFFFF', text: '#0F172A', muted: '#475569', border: '#CBD5E1', accent: '#1E40AF',
+          strengths:     { fill: '#E6F4EA', bar: '#0F9D58', label: '#1B5E20' },
+          weaknesses:    { fill: '#FFF8E1', bar: '#F9AB00', label: '#7C4A00' },
+          opportunities: { fill: '#E8F0FE', bar: '#1A73E8', label: '#0B3D91' },
+          threats:       { fill: '#FCE8E6', bar: '#D93025', label: '#7C1D14' },
+        },
+      };
+      const t = themes[theme] || themes.professional;
+
+      // Layout: header + 2x2 grid. Quadrant height grows with bullet count
+      // so neither column gets clipped when one side has more items.
+      const safeTitle = xmlEscape(String(title).slice(0, 120));
+      const safeSubtitle = xmlEscape(String(subtitle || '').slice(0, 140));
+      const quadW = 360;
+      const quadGap = 16;
+      const pad = 28;
+      const headerH = safeSubtitle ? 110 : 88;
+      const quadHeaderH = 56;
+      const lineH = 22;
+      const lineMaxChars = 56;
+
+      const QUADS = [
+        { key: 'strengths',     pal: t.strengths,     label: 'STRENGTHS',     subLabel: 'Internal · Positive', items: strengths,     icon: '+' },
+        { key: 'weaknesses',    pal: t.weaknesses,    label: 'WEAKNESSES',    subLabel: 'Internal · Negative', items: weaknesses,    icon: '−' },
+        { key: 'opportunities', pal: t.opportunities, label: 'OPPORTUNITIES', subLabel: 'External · Positive', items: opportunities, icon: '↑' },
+        { key: 'threats',       pal: t.threats,       label: 'THREATS',       subLabel: 'External · Negative', items: threats,       icon: '!' },
+      ];
+      // Trim each quadrant + line lengths.
+      const trimmed = QUADS.map(q => ({
+        ...q,
+        items: (q.items || []).slice(0, 8).map(it => xmlEscape(String(it || '').slice(0, lineMaxChars))).filter(Boolean),
+      }));
+      const topRowItems = Math.max(trimmed[0].items.length, trimmed[1].items.length, 1);
+      const botRowItems = Math.max(trimmed[2].items.length, trimmed[3].items.length, 1);
+      const topRowH = quadHeaderH + topRowItems * lineH + 28;
+      const botRowH = quadHeaderH + botRowItems * lineH + 28;
+
+      const W = pad * 2 + quadW * 2 + quadGap;
+      const H = headerH + pad + topRowH + quadGap + botRowH + pad;
+
+      let body = `<rect width="${W}" height="${H}" fill="${t.bg}" rx="12"/>`;
+      // Header band
+      body += `<rect x="0" y="0" width="${W}" height="${headerH}" fill="${t.accent}"/>`;
+      body += `<text x="${W / 2}" y="42" text-anchor="middle" font-family="Georgia, serif" font-size="24" font-weight="bold" fill="#fff">${safeTitle}</text>`;
+      const headerMeta = `${trimmed[0].items.length} S · ${trimmed[1].items.length} W · ${trimmed[2].items.length} O · ${trimmed[3].items.length} T`;
+      body += `<text x="${W / 2}" y="66" text-anchor="middle" font-family="Arial" font-size="12" fill="#fff" opacity="0.85">${headerMeta}</text>`;
+      if (safeSubtitle) {
+        body += `<text x="${W / 2}" y="92" text-anchor="middle" font-family="Arial" font-size="13" fill="#fff" opacity="0.92">${safeSubtitle}</text>`;
+      }
+
+      function drawQuadrant(q, x, y, h) {
+        let out = '';
+        // Card
+        out += `<rect x="${x}" y="${y}" width="${quadW}" height="${h}" rx="10" fill="${q.pal.fill}" stroke="${t.border}" stroke-width="1" filter="url(#vis-shadow)"/>`;
+        // Color bar
+        out += `<rect x="${x}" y="${y}" width="6" height="${h}" rx="3" fill="${q.pal.bar}"/>`;
+        // Icon circle
+        out += `<circle cx="${x + 32}" cy="${y + 28}" r="14" fill="${q.pal.bar}"/>`;
+        out += `<text x="${x + 32}" y="${y + 33}" text-anchor="middle" font-family="Arial" font-size="16" font-weight="bold" fill="#fff">${xmlEscape(q.icon)}</text>`;
+        // Label
+        out += `<text x="${x + 56}" y="${y + 26}" font-family="Arial" font-size="15" font-weight="bold" fill="${q.pal.label}">${q.label}</text>`;
+        out += `<text x="${x + 56}" y="${y + 44}" font-family="Arial" font-size="11" fill="${t.muted}">${q.subLabel}</text>`;
+        // Separator
+        out += `<line x1="${x + 16}" y1="${y + quadHeaderH}" x2="${x + quadW - 16}" y2="${y + quadHeaderH}" stroke="${t.border}" stroke-width="1"/>`;
+        // Items
+        if (q.items.length === 0) {
+          out += `<text x="${x + quadW / 2}" y="${y + quadHeaderH + 32}" text-anchor="middle" font-family="Arial" font-size="12" fill="${t.muted}" font-style="italic">— sin elementos —</text>`;
+        } else {
+          q.items.forEach((line, idx) => {
+            const ly = y + quadHeaderH + 22 + idx * lineH;
+            out += `<circle cx="${x + 22}" cy="${ly - 4}" r="3" fill="${q.pal.bar}"/>`;
+            out += `<text x="${x + 32}" y="${ly}" font-family="Arial" font-size="12" fill="${t.text}">${line}</text>`;
+          });
+        }
+        return out;
+      }
+
+      const topY = headerH + pad;
+      const leftX = pad;
+      const rightX = pad + quadW + quadGap;
+      const botY = topY + topRowH + quadGap;
+
+      body += drawQuadrant(trimmed[0], leftX,  topY, topRowH);
+      body += drawQuadrant(trimmed[1], rightX, topY, topRowH);
+      body += drawQuadrant(trimmed[2], leftX,  botY, botRowH);
+      body += drawQuadrant(trimmed[3], rightX, botY, botRowH);
+
+      const svg = svgDocument({
+        width: W,
+        height: H,
+        title: safeTitle,
+        description: `SWOT analysis: ${safeTitle}`,
+        body,
+      });
+
+      const buffer = Buffer.from(svg, 'utf8');
+      const filename = `swot_${crypto.randomBytes(4).toString('hex')}.svg`;
+      const artifact = finalizeArtifact({ filename, buffer, mime: EXTENSION_TO_MIME.svg, ctx });
+
+      emitEvent(ctx, 'file_artifact', {
+        artifact: {
+          id: artifact.id,
+          filename: artifact.filename,
+          format: 'svg',
+          mime: 'image/svg+xml',
+          sizeBytes: artifact.sizeBytes,
+          downloadUrl: artifact.downloadUrl,
+        },
+      });
+
+      emitEvent(ctx, 'tool_output', {
+        tool: 'create_swot_analysis',
+        ok: true,
+        preview: `SWOT listo: ${artifact.filename} (S:${trimmed[0].items.length} W:${trimmed[1].items.length} O:${trimmed[2].items.length} T:${trimmed[3].items.length}, ${Math.round(artifact.sizeBytes / 1024)} KB)`,
+      });
+
+      return {
+        ok: true,
+        id: artifact.id,
+        filename: artifact.filename,
+        sizeBytes: artifact.sizeBytes,
+        downloadUrl: artifact.downloadUrl,
+        title,
+        counts: {
+          strengths:     trimmed[0].items.length,
+          weaknesses:    trimmed[1].items.length,
+          opportunities: trimmed[2].items.length,
+          threats:       trimmed[3].items.length,
+        },
+        total: totalItems,
+      };
+    } catch (err) {
+      const msg = err?.message || String(err);
+      emitEvent(ctx, 'tool_output', { tool: 'create_swot_analysis', ok: false, preview: `Error: ${msg}` });
+      return { ok: false, error: msg };
+    }
+  },
+};
+
 // ── All visual/media tools for the agent ──────────────────────────────
 
 const VISUAL_MEDIA_TOOLS = [
@@ -2784,6 +2982,7 @@ const VISUAL_MEDIA_TOOLS = [
   createKanbanBoard,
   createComparisonTable,
   createProcessFlow,
+  createSwotAnalysis,
 ];
 
 // Internal helpers exposed for unit testing — NOT part of the public agent

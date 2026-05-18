@@ -653,8 +653,8 @@ test('create_dashboard_html: no charts', async () => {
 
 // ── Tool metadata ────────────────────────────────────────────────
 
-test('all 11 tools have valid metadata', () => {
-  assert.equal(VISUAL_MEDIA_TOOLS.length, 11);
+test('all 12 tools have valid metadata', () => {
+  assert.equal(VISUAL_MEDIA_TOOLS.length, 12);
   for (const t of VISUAL_MEDIA_TOOLS) {
     assert.ok(t.name);
     assert.ok(t.description);
@@ -745,6 +745,166 @@ test('create_chart: empty dataset still produces a valid SVG', async () => {
   assert.equal(r.ok, true);
   const svg = fs.readFileSync(assertArtifact(r), 'utf8');
   assert.ok(svg.includes('<svg'));
+});
+
+// ── create_swot_analysis ─────────────────────────────────────────
+
+test('create_swot_analysis: full 2x2 SWOT with all quadrants populated', async () => {
+  const sw = tool('create_swot_analysis');
+  assert.ok(sw);
+  const r = await sw.execute({
+    title: 'Q1 2026 Product Review',
+    subtitle: 'SiraGPT — mercado LatAm',
+    strengths: ['Marca reconocida', 'Equipo senior', 'Producto maduro'],
+    weaknesses: ['Onboarding lento', 'Documentación incompleta'],
+    opportunities: ['Expansión a Brasil', 'Integraciones MCP', 'Tier enterprise'],
+    threats: ['Competencia OpenAI', 'Cambios regulatorios'],
+    theme: 'professional',
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.ok(r.filename?.endsWith('.svg'));
+  assert.equal(r.counts.strengths, 3);
+  assert.equal(r.counts.weaknesses, 2);
+  assert.equal(r.counts.opportunities, 3);
+  assert.equal(r.counts.threats, 2);
+  assert.equal(r.total, 10);
+  const fp = assertArtifact(r);
+  const c = fs.readFileSync(fp, 'utf8');
+  assert.ok(c.startsWith('<svg'), 'output should be a well-formed SVG');
+  assert.ok(c.includes('Q1 2026 Product Review'));
+  assert.ok(c.includes('SiraGPT'), 'subtitle should render');
+  assert.ok(c.includes('STRENGTHS'));
+  assert.ok(c.includes('WEAKNESSES'));
+  assert.ok(c.includes('OPPORTUNITIES'));
+  assert.ok(c.includes('THREATS'));
+  assert.ok(c.includes('Marca reconocida'));
+  assert.ok(c.includes('Onboarding lento'));
+  assert.ok(c.includes('Expansión a Brasil'));
+  assert.ok(c.includes('Competencia OpenAI'));
+});
+
+test('create_swot_analysis: succeeds with one quadrant populated, others empty', async () => {
+  const r = await tool('create_swot_analysis').execute({
+    title: 'Lean SWOT',
+    strengths: ['Solo item de S'],
+    weaknesses: [],
+    opportunities: [],
+    threats: [],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.total, 1);
+  assert.equal(r.counts.strengths, 1);
+  assert.equal(r.counts.weaknesses, 0);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.includes('Solo item de S'));
+  // Empty quadrants render a "sin elementos" placeholder, not real items.
+  assert.ok(svg.includes('— sin elementos —'));
+});
+
+test('create_swot_analysis: all empty quadrants fails', async () => {
+  const r = await tool('create_swot_analysis').execute({
+    title: 'Empty',
+    strengths: [], weaknesses: [], opportunities: [], threats: [],
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /empty|provide at least/i);
+});
+
+test('create_swot_analysis: non-array input fails fast', async () => {
+  const r = await tool('create_swot_analysis').execute({
+    title: 'Bad input',
+    strengths: 'should be array',
+    weaknesses: [],
+    opportunities: [],
+    threats: [],
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /must be arrays/i);
+});
+
+test('create_swot_analysis: caps items at 8 per quadrant', async () => {
+  const tenItems = Array.from({ length: 10 }, (_, i) => `Item ${i + 1}`);
+  const r = await tool('create_swot_analysis').execute({
+    title: 'Overflow guard',
+    strengths: tenItems,
+    weaknesses: ['W1'],
+    opportunities: ['O1'],
+    threats: ['T1'],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.counts.strengths, 8, 'should cap at 8 items');
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.includes('Item 1'));
+  assert.ok(svg.includes('Item 8'));
+  // Items 9 and 10 should NOT appear (trimmed past the 8-item cap)
+  assert.equal(svg.includes('Item 9'), false);
+  assert.equal(svg.includes('Item 10'), false);
+});
+
+test('create_swot_analysis: long item text is truncated, not overflowed', async () => {
+  const longItem = 'A'.repeat(200);
+  const r = await tool('create_swot_analysis').execute({
+    title: 'Truncation',
+    strengths: [longItem],
+    weaknesses: [], opportunities: [], threats: [],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  // 200 A's get truncated to lineMaxChars (56) before rendering.
+  assert.equal(svg.includes('A'.repeat(57)), false, 'should not render 57+ A in a row');
+});
+
+test('create_swot_analysis: xml-escapes item content (prevents SVG injection)', async () => {
+  const r = await tool('create_swot_analysis').execute({
+    title: 'XSS guard',
+    strengths: ['<script>alert(1)</script>'],
+    weaknesses: ['"injected"'],
+    opportunities: ['&amp;already'],
+    threats: ['<img onerror=x>'],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  // Raw < or > from user input must be escaped; the only allowed unescaped
+  // < / > are the ones we emit ourselves as SVG element delimiters.
+  assert.equal(svg.includes('<script>alert(1)</script>'), false);
+  assert.ok(svg.includes('&lt;script&gt;'));
+  assert.ok(svg.includes('&quot;injected&quot;'));
+});
+
+test('create_swot_analysis: supports all four themes', async () => {
+  for (const theme of ['professional', 'modern', 'minimal', 'corporate']) {
+    const r = await tool('create_swot_analysis').execute({
+      title: `Theme ${theme}`,
+      strengths: ['S'], weaknesses: ['W'], opportunities: ['O'], threats: ['T'],
+      theme,
+    }, fakeCtx());
+    assert.equal(r.ok, true, `theme ${theme} should succeed`);
+    const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+    assert.ok(svg.startsWith('<svg'), `theme ${theme} should yield valid SVG`);
+  }
+});
+
+test('create_swot_analysis: unknown theme falls back to professional', async () => {
+  const r = await tool('create_swot_analysis').execute({
+    title: 'Unknown theme',
+    strengths: ['x'], weaknesses: [], opportunities: [], threats: [],
+    theme: 'rainbow-unicorn',
+  }, fakeCtx());
+  // The schema's enum doesn't strictly block invalid themes at this layer;
+  // the implementation defensively falls back instead of crashing.
+  assert.equal(r.ok, true);
+});
+
+test('create_swot_analysis: emits tool_call, file_artifact, and tool_output events', async () => {
+  const ctx = fakeCtx();
+  await tool('create_swot_analysis').execute({
+    title: 'Events',
+    strengths: ['s1'], weaknesses: [], opportunities: [], threats: [],
+  }, ctx);
+  const types = ctx._events.map(e => e.type);
+  assert.ok(types.includes('tool_call'));
+  assert.ok(types.includes('file_artifact'));
+  assert.ok(types.includes('tool_output'));
 });
 
 // ── Cleanup ──────────────────────────────────────────────────────

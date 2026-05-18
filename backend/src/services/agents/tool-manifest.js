@@ -918,6 +918,37 @@ function getVisualMediaManifests() {
       scopes: ["files.write"],
       data_classes: ["public","internal"],
     },
+    create_swot_analysis: {
+      name: "create_swot_analysis",
+      purpose: "Generate a SWOT analysis as a 2x2 SVG matrix (Strengths/Weaknesses internal, Opportunities/Threats external). Use for business strategy reviews, market positioning, product retrospectives, or competitive analyses.",
+      inputs: {
+        type: "object", required: ["title","strengths","weaknesses","opportunities","threats"],
+        properties: {
+          title: { type: "string" },
+          subtitle: { type: "string" },
+          strengths: { type: "array", items: { type: "string" }, description: "1-8 internal positive factors." },
+          weaknesses: { type: "array", items: { type: "string" }, description: "1-8 internal negative factors." },
+          opportunities: { type: "array", items: { type: "string" }, description: "1-8 external positive factors." },
+          threats: { type: "array", items: { type: "string" }, description: "1-8 external negative factors." },
+          theme: { type: "string", enum: ["professional","modern","minimal","corporate"] },
+        },
+      },
+      outputs: { type: "object", properties: { ok: { type: "boolean" }, downloadUrl: { type: "string" }, id: { type: "string" }, filename: { type: "string" }, counts: { type: "object" }, total: { type: "integer" } } },
+      allowed_formats: ["svg"],
+      forbidden_formats: [],
+      expected_errors: [
+        { code: "empty_quadrants", description: "all four quadrants are empty.", repair_hint: "Provide at least one item in any of strengths/weaknesses/opportunities/threats." },
+        { code: "invalid_input_types", description: "one of strengths/weaknesses/opportunities/threats is not an array.", repair_hint: "Pass arrays of strings for each quadrant." },
+      ],
+      acceptance_tests: ["returns ok:true for a SWOT with at least one item in any quadrant"],
+      usage_limits: { timeout_ms_default: 15000, timeout_ms_max: 60000, max_calls_per_task: 5, requires_auth: false, requires_network: false },
+      examples_positive: [{ when: "user wants a SWOT for a product launch", call: { title: "Launch SWOT", strengths: ["Strong brand"], weaknesses: ["Limited inventory"], opportunities: ["New market segment"], threats: ["Competitor pricing"] } }],
+      examples_negative: [{ when: "user wants a PESTEL or Porter's Five Forces analysis", why: "use create_infographic_svg with the appropriate section layout instead." }],
+      recovery_policy: { on_timeout: "Return ok:false.", on_error: "Surface the error.", max_retries: 1 },
+      side_effect_level: "local-fs",
+      scopes: ["files.write"],
+      data_classes: ["public","internal"],
+    },
   };
 }
 
