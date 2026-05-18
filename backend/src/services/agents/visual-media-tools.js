@@ -4058,6 +4058,261 @@ const createPortersFiveForces = {
   },
 };
 
+// ─────────────────────────────────────────────────────────────────────────
+// Tool 18: create_risk_matrix
+// ─────────────────────────────────────────────────────────────────────────
+
+const createRiskMatrix = {
+  name: 'create_risk_matrix',
+  description: 'Generate a probability × impact risk matrix as an SVG file: an N×N heatmap (3×3, 4×4 or 5×5) with risk score colors (green→yellow→orange→red) and individual risks plotted as labelled markers in the appropriate cell. Use for risk registers, project risk reviews, safety/compliance docs, or operational risk dashboards. Each risk has a label, probability (1-N), impact (1-N), and optional category.',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string', description: 'Matrix title (e.g. "Q2 Project Risk Register").' },
+      subtitle: { type: 'string', description: 'Optional context line.' },
+      size: { type: 'integer', enum: [3, 4, 5], description: 'Grid size N×N. Default: 5.' },
+      risks: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            label: { type: 'string', description: 'Short risk label.' },
+            probability: { type: 'integer', minimum: 1, description: 'Likelihood, 1 (rare) to size (almost certain).' },
+            impact: { type: 'integer', minimum: 1, description: 'Severity, 1 (minimal) to size (catastrophic).' },
+            category: { type: 'string', description: 'Optional category (e.g. "tech", "legal", "operational").' },
+          },
+          required: ['label', 'probability', 'impact'],
+        },
+        description: '1-20 risks plotted in the matrix.',
+      },
+      theme: { type: 'string', enum: ['professional', 'modern', 'minimal', 'corporate'], description: 'Visual theme. Default: "professional".' },
+    },
+    required: ['title', 'risks'],
+    additionalProperties: false,
+  },
+  async execute({ title, subtitle = '', size = 5, risks = [], theme = 'professional' }, ctx = {}) {
+    emitEvent(ctx, 'tool_call', { tool: 'create_risk_matrix', preview: title });
+
+    try {
+      if (!Array.isArray(risks) || risks.length === 0) {
+        return { ok: false, error: 'risks array is empty' };
+      }
+      const n = [3, 4, 5].includes(size) ? size : 5;
+
+      // Risk score = probability × impact. We color cells on a green→red
+      // gradient by their normalised score so the visual matches the
+      // shared meaning across industries.
+      const themes = {
+        professional: {
+          bg: '#FAFBFC', card: '#FFFFFF', text: '#1E293B', muted: '#64748B', border: '#E2E8F0', accent: '#2563EB',
+          // Heat scale: low (1/16 of max) → high (max). 5 stops.
+          heat: ['#10B981', '#84CC16', '#EAB308', '#F97316', '#EF4444'],
+          marker: '#0F172A', markerText: '#FFFFFF',
+        },
+        modern: {
+          bg: '#0B1121', card: '#1E293B', text: '#F1F5F9', muted: '#94A3B8', border: '#334155', accent: '#818CF8',
+          heat: ['#064E3B', '#365314', '#78350F', '#7C2D12', '#7F1D1D'],
+          marker: '#F1F5F9', markerText: '#0F172A',
+        },
+        minimal: {
+          bg: '#FFFFFF', card: '#FFFFFF', text: '#0F172A', muted: '#64748B', border: '#CBD5E1', accent: '#0F172A',
+          heat: ['#F8FAFC', '#E2E8F0', '#CBD5E1', '#94A3B8', '#475569'],
+          marker: '#0F172A', markerText: '#FFFFFF',
+        },
+        corporate: {
+          bg: '#F8FAFC', card: '#FFFFFF', text: '#0F172A', muted: '#475569', border: '#CBD5E1', accent: '#1E40AF',
+          heat: ['#0F9D58', '#A5D86C', '#F9AB00', '#E8710A', '#D93025'],
+          marker: '#202124', markerText: '#FFFFFF',
+        },
+      };
+      const t = themes[theme] || themes.professional;
+
+      const safeTitle = xmlEscape(String(title).slice(0, 120));
+      const safeSubtitle = xmlEscape(String(subtitle || '').slice(0, 140));
+      const cellSize = 100;
+      const axisLabelW = 56;
+      const axisLabelH = 36;
+      const pad = 28;
+      const headerH = safeSubtitle ? 110 : 86;
+      const legendH = 56;
+      const gridW = cellSize * n;
+      const gridH = cellSize * n;
+      const W = pad * 2 + axisLabelW + gridW + 200; // extra for risk legend on right
+      const H = headerH + pad + gridH + axisLabelH + legendH + pad;
+
+      // Score → heat index: divide score range into the palette length.
+      // For size=5: max score = 25; bands of 5 = palette[0..4].
+      const maxScore = n * n;
+      function heatColor(score) {
+        const pct = score / maxScore;
+        const idx = Math.min(t.heat.length - 1, Math.floor(pct * t.heat.length));
+        return t.heat[idx];
+      }
+      // For "risk level" badge text
+      function riskLevel(score) {
+        const pct = score / maxScore;
+        if (pct >= 0.7) return 'CRITICAL';
+        if (pct >= 0.4) return 'HIGH';
+        if (pct >= 0.2) return 'MEDIUM';
+        return 'LOW';
+      }
+
+      // Header
+      let body = `<rect width="${W}" height="${H}" fill="${t.bg}" rx="12"/>`;
+      body += `<rect x="0" y="0" width="${W}" height="${headerH}" fill="${t.accent}"/>`;
+      body += `<text x="${W / 2}" y="42" text-anchor="middle" font-family="Georgia, serif" font-size="24" font-weight="bold" fill="#fff">${safeTitle}</text>`;
+      body += `<text x="${W / 2}" y="66" text-anchor="middle" font-family="Arial" font-size="12" fill="#fff" opacity="0.85">${n}×${n} grid · ${risks.length} riesgos</text>`;
+      if (safeSubtitle) {
+        body += `<text x="${W / 2}" y="92" text-anchor="middle" font-family="Arial" font-size="13" fill="#fff" opacity="0.92">${safeSubtitle}</text>`;
+      }
+
+      const gridX = pad + axisLabelW;
+      const gridY = headerH + pad;
+
+      // Heatmap cells
+      // Convention: row 0 = highest impact (top), col 0 = lowest probability (left).
+      // Score = probability × impact (both 1..n).
+      for (let r = 0; r < n; r++) {
+        for (let c = 0; c < n; c++) {
+          const impact = n - r;
+          const probability = c + 1;
+          const score = probability * impact;
+          const x = gridX + c * cellSize;
+          const y = gridY + r * cellSize;
+          body += `<rect x="${x}" y="${y}" width="${cellSize}" height="${cellSize}" fill="${heatColor(score)}" stroke="${t.border}" stroke-width="1" opacity="0.92"/>`;
+          // Score number in the corner
+          body += `<text x="${x + cellSize - 8}" y="${y + 16}" text-anchor="end" font-family="Arial" font-size="10" fill="${t.text}" opacity="0.65">${score}</text>`;
+        }
+      }
+
+      // X axis labels (probability)
+      for (let c = 0; c < n; c++) {
+        const x = gridX + c * cellSize + cellSize / 2;
+        body += `<text x="${x}" y="${gridY + gridH + 22}" text-anchor="middle" font-family="Arial" font-size="11" font-weight="bold" fill="${t.muted}">${c + 1}</text>`;
+      }
+      body += `<text x="${gridX + gridW / 2}" y="${gridY + gridH + 36}" text-anchor="middle" font-family="Arial" font-size="11" fill="${t.muted}">PROBABILIDAD →</text>`;
+
+      // Y axis labels (impact, top = highest)
+      for (let r = 0; r < n; r++) {
+        const y = gridY + r * cellSize + cellSize / 2 + 4;
+        const impact = n - r;
+        body += `<text x="${gridX - 8}" y="${y}" text-anchor="end" font-family="Arial" font-size="11" font-weight="bold" fill="${t.muted}">${impact}</text>`;
+      }
+      body += `<text x="${pad + 8}" y="${gridY + gridH / 2}" text-anchor="middle" font-family="Arial" font-size="11" fill="${t.muted}" transform="rotate(-90, ${pad + 8}, ${gridY + gridH / 2})">↑ IMPACTO</text>`;
+
+      // Plot risks. Multiple risks in the same cell stack vertically.
+      const cellOccupants = new Map(); // key: "r,c" → array of risk indices
+      const plottedRisks = risks.slice(0, 20).map((risk, idx) => {
+        const p = Math.max(1, Math.min(n, Math.round(Number(risk.probability) || 1)));
+        const i = Math.max(1, Math.min(n, Math.round(Number(risk.impact) || 1)));
+        const c = p - 1;
+        const r = n - i;
+        const key = `${r},${c}`;
+        if (!cellOccupants.has(key)) cellOccupants.set(key, []);
+        cellOccupants.get(key).push(idx);
+        return { ...risk, _p: p, _i: i, _r: r, _c: c, _score: p * i, _id: idx + 1 };
+      });
+
+      plottedRisks.forEach((risk) => {
+        const cellOccupantList = cellOccupants.get(`${risk._r},${risk._c}`) || [];
+        const subIdx = cellOccupantList.indexOf(risk._id - 1);
+        const subTotal = cellOccupantList.length;
+        const x = gridX + risk._c * cellSize + 30;
+        const stackY = gridY + risk._r * cellSize + 36 + subIdx * 22;
+        // Marker circle with number
+        body += `<circle cx="${x}" cy="${stackY}" r="11" fill="${t.marker}" stroke="#fff" stroke-width="1.5"/>`;
+        body += `<text x="${x}" y="${stackY + 4}" text-anchor="middle" font-family="Arial" font-size="11" font-weight="bold" fill="${t.markerText}">${risk._id}</text>`;
+        // (Within-cell overflow is intentionally just clipped — labels live in the legend.)
+        if (subTotal > 3 && subIdx === 3) {
+          body += `<text x="${x + 16}" y="${stackY + 4}" font-family="Arial" font-size="9" fill="${t.text}">+${subTotal - 3}</text>`;
+        }
+      });
+
+      // Risk legend on the right
+      const legendX = gridX + gridW + 24;
+      let lY = gridY + 8;
+      body += `<text x="${legendX}" y="${lY}" font-family="Arial" font-size="13" font-weight="bold" fill="${t.text}">RIESGOS</text>`;
+      lY += 18;
+      plottedRisks.slice(0, 14).forEach((risk) => {
+        const label = xmlEscape(String(risk.label || '').slice(0, 32));
+        const cat = risk.category ? ` · ${xmlEscape(String(risk.category).slice(0, 14))}` : '';
+        const level = riskLevel(risk._score);
+        const levelColor = heatColor(risk._score);
+        body += `<circle cx="${legendX + 8}" cy="${lY - 4}" r="9" fill="${t.marker}" stroke="#fff" stroke-width="1"/>`;
+        body += `<text x="${legendX + 8}" y="${lY - 1}" text-anchor="middle" font-family="Arial" font-size="9" font-weight="bold" fill="${t.markerText}">${risk._id}</text>`;
+        body += `<text x="${legendX + 22}" y="${lY}" font-family="Arial" font-size="11" fill="${t.text}">${label}${cat}</text>`;
+        body += `<rect x="${legendX + 22}" y="${lY + 4}" width="${level.length * 7 + 8}" height="14" rx="7" fill="${levelColor}"/>`;
+        body += `<text x="${legendX + 26 + (level.length * 7) / 2}" y="${lY + 14}" text-anchor="middle" font-family="Arial" font-size="9" font-weight="bold" fill="#fff">${level}</text>`;
+        lY += 28;
+      });
+      if (plottedRisks.length > 14) {
+        body += `<text x="${legendX}" y="${lY + 4}" font-family="Arial" font-size="10" fill="${t.muted}" font-style="italic">+ ${plottedRisks.length - 14} más</text>`;
+      }
+
+      // Heat legend (bottom strip)
+      const heatLegendY = gridY + gridH + axisLabelH + 14;
+      const heatLegendW = 320;
+      const heatLegendX = gridX;
+      const heatBandW = heatLegendW / t.heat.length;
+      body += `<text x="${heatLegendX}" y="${heatLegendY - 4}" font-family="Arial" font-size="11" font-weight="bold" fill="${t.text}">NIVEL DE RIESGO</text>`;
+      t.heat.forEach((color, idx) => {
+        const x = heatLegendX + idx * heatBandW;
+        body += `<rect x="${x}" y="${heatLegendY}" width="${heatBandW}" height="14" fill="${color}"/>`;
+      });
+      body += `<text x="${heatLegendX}" y="${heatLegendY + 30}" font-family="Arial" font-size="10" fill="${t.muted}">bajo</text>`;
+      body += `<text x="${heatLegendX + heatLegendW}" y="${heatLegendY + 30}" text-anchor="end" font-family="Arial" font-size="10" fill="${t.muted}">crítico</text>`;
+
+      const svg = svgDocument({
+        width: W,
+        height: H,
+        title: safeTitle,
+        description: `Risk matrix: ${safeTitle}`,
+        body,
+      });
+
+      const buffer = Buffer.from(svg, 'utf8');
+      const filename = `riskmatrix_${crypto.randomBytes(4).toString('hex')}.svg`;
+      const artifact = finalizeArtifact({ filename, buffer, mime: EXTENSION_TO_MIME.svg, ctx });
+
+      emitEvent(ctx, 'file_artifact', {
+        artifact: {
+          id: artifact.id,
+          filename: artifact.filename,
+          format: 'svg',
+          mime: 'image/svg+xml',
+          sizeBytes: artifact.sizeBytes,
+          downloadUrl: artifact.downloadUrl,
+        },
+      });
+
+      const tally = { LOW: 0, MEDIUM: 0, HIGH: 0, CRITICAL: 0 };
+      plottedRisks.forEach((r) => { tally[riskLevel(r._score)] += 1; });
+
+      emitEvent(ctx, 'tool_output', {
+        tool: 'create_risk_matrix',
+        ok: true,
+        preview: `Matriz riesgo: ${artifact.filename} (${n}×${n}, ${plottedRisks.length} riesgos · L:${tally.LOW} M:${tally.MEDIUM} H:${tally.HIGH} C:${tally.CRITICAL}, ${Math.round(artifact.sizeBytes / 1024)} KB)`,
+      });
+
+      return {
+        ok: true,
+        id: artifact.id,
+        filename: artifact.filename,
+        sizeBytes: artifact.sizeBytes,
+        downloadUrl: artifact.downloadUrl,
+        title,
+        size: n,
+        risks: plottedRisks.length,
+        tally,
+      };
+    } catch (err) {
+      const msg = err?.message || String(err);
+      emitEvent(ctx, 'tool_output', { tool: 'create_risk_matrix', ok: false, preview: `Error: ${msg}` });
+      return { ok: false, error: msg };
+    }
+  },
+};
+
 // ── All visual/media tools for the agent ──────────────────────────────
 
 const VISUAL_MEDIA_TOOLS = [
@@ -4078,6 +4333,7 @@ const VISUAL_MEDIA_TOOLS = [
   createBusinessModelCanvas,
   createPyramidDiagram,
   createPortersFiveForces,
+  createRiskMatrix,
 ];
 
 // Internal helpers exposed for unit testing — NOT part of the public agent

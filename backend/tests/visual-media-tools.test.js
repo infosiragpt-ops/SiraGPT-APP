@@ -653,8 +653,8 @@ test('create_dashboard_html: no charts', async () => {
 
 // ── Tool metadata ────────────────────────────────────────────────
 
-test('all 17 tools have valid metadata', () => {
-  assert.equal(VISUAL_MEDIA_TOOLS.length, 17);
+test('all 18 tools have valid metadata', () => {
+  assert.equal(VISUAL_MEDIA_TOOLS.length, 18);
   for (const t of VISUAL_MEDIA_TOOLS) {
     assert.ok(t.name);
     assert.ok(t.description);
@@ -1688,6 +1688,162 @@ test("create_porters_five_forces: emits expected events", async () => {
   await tool('create_porters_five_forces').execute({
     title: 'Events',
     rivalry: { items: ['x'] },
+  }, ctx);
+  const types = ctx._events.map(e => e.type);
+  assert.ok(types.includes('tool_call'));
+  assert.ok(types.includes('file_artifact'));
+  assert.ok(types.includes('tool_output'));
+});
+
+// ── create_risk_matrix ───────────────────────────────────────────
+
+test('create_risk_matrix: 5x5 with 4 risks plotted', async () => {
+  const rm = tool('create_risk_matrix');
+  assert.ok(rm);
+  const r = await rm.execute({
+    title: 'Q2 Project Risk Register',
+    subtitle: 'SiraGPT Platform — 2026',
+    risks: [
+      { label: 'Vendor delay', probability: 4, impact: 5, category: 'operational' },
+      { label: 'Regulatory change', probability: 2, impact: 5, category: 'legal' },
+      { label: 'Talent attrition', probability: 3, impact: 3, category: 'people' },
+      { label: 'Cost overrun', probability: 4, impact: 4, category: 'financial' },
+    ],
+    theme: 'professional',
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.size, 5);
+  assert.equal(r.risks, 4);
+  // Risk bands (score/25): CRITICAL ≥ 70%, HIGH ≥ 40%, MEDIUM ≥ 20%, else LOW.
+  // Vendor delay 20 → 80% → CRITICAL.
+  // Cost overrun 16 → 64% → HIGH.
+  // Regulatory change 10 → 40% → HIGH (boundary inclusive).
+  // Talent attrition 9 → 36% → MEDIUM.
+  assert.equal(r.tally.CRITICAL, 1);
+  assert.equal(r.tally.HIGH, 2);
+  assert.equal(r.tally.MEDIUM, 1);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.startsWith('<svg'));
+  assert.ok(svg.includes('Q2 Project Risk Register'));
+  assert.ok(svg.includes('PROBABILIDAD'));
+  assert.ok(svg.includes('IMPACTO'));
+  assert.ok(svg.includes('Vendor delay'));
+  assert.ok(svg.includes('Regulatory change'));
+  assert.ok(svg.includes('CRITICAL'));
+  assert.ok(svg.includes('HIGH'));
+  assert.ok(svg.includes('MEDIUM'));
+  assert.ok(svg.includes('NIVEL DE RIESGO'));
+});
+
+test('create_risk_matrix: 3x3 grid', async () => {
+  const r = await tool('create_risk_matrix').execute({
+    title: 'Compact',
+    size: 3,
+    risks: [
+      { label: 'Risk A', probability: 1, impact: 1 },
+      { label: 'Risk B', probability: 3, impact: 3 },
+    ],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.size, 3);
+  // Risk B: 9/9 = 100% → CRITICAL; Risk A: 1/9 = 11% → LOW
+  assert.equal(r.tally.CRITICAL, 1);
+  assert.equal(r.tally.LOW, 1);
+});
+
+test('create_risk_matrix: empty risks fails', async () => {
+  const r = await tool('create_risk_matrix').execute({
+    title: 'Empty',
+    risks: [],
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /risks.*empty/i);
+});
+
+test('create_risk_matrix: clamps probability/impact to [1, size]', async () => {
+  const r = await tool('create_risk_matrix').execute({
+    title: 'Out of range',
+    risks: [
+      { label: 'Too high', probability: 99, impact: 99 },
+      { label: 'Too low', probability: -5, impact: 0 },
+    ],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  // Both should still plot — clamped to 5,5 and 1,1 respectively
+  assert.equal(r.tally.CRITICAL, 1);
+  assert.equal(r.tally.LOW, 1);
+});
+
+test('create_risk_matrix: caps risks at 20 plotted', async () => {
+  const manyRisks = Array.from({ length: 30 }, (_, i) => ({
+    label: `Risk ${i + 1}`,
+    probability: ((i % 5) + 1),
+    impact: ((i % 5) + 1),
+  }));
+  const r = await tool('create_risk_matrix').execute({
+    title: 'Overflow',
+    risks: manyRisks,
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.risks, 20, 'plot count capped at 20');
+});
+
+test('create_risk_matrix: invalid size falls back to 5', async () => {
+  const r = await tool('create_risk_matrix').execute({
+    title: 'Bad size',
+    size: 7,
+    risks: [{ label: 'x', probability: 1, impact: 1 }],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.size, 5);
+});
+
+test('create_risk_matrix: xml-escapes risk labels', async () => {
+  const r = await tool('create_risk_matrix').execute({
+    title: 'XSS',
+    risks: [{ label: '<script>alert(1)</script>', probability: 3, impact: 3 }],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.equal(svg.includes('<script>alert(1)</script>'), false);
+  assert.ok(svg.includes('&lt;script&gt;'));
+});
+
+test('create_risk_matrix: multiple risks in the same cell stack vertically', async () => {
+  const r = await tool('create_risk_matrix').execute({
+    title: 'Stacked',
+    risks: [
+      { label: 'R1', probability: 3, impact: 3 },
+      { label: 'R2', probability: 3, impact: 3 },
+      { label: 'R3', probability: 3, impact: 3 },
+      { label: 'R4', probability: 3, impact: 3 },
+      { label: 'R5', probability: 3, impact: 3 },
+    ],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  // All 5 risks plotted; overflow indicator '+2' for risks beyond the 3-stack limit
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.includes('+2'));
+});
+
+test('create_risk_matrix: supports all four themes', async () => {
+  for (const theme of ['professional', 'modern', 'minimal', 'corporate']) {
+    const r = await tool('create_risk_matrix').execute({
+      title: `Theme ${theme}`,
+      risks: [{ label: 'x', probability: 2, impact: 3 }],
+      theme,
+    }, fakeCtx());
+    assert.equal(r.ok, true, `theme ${theme} should succeed`);
+    const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+    assert.ok(svg.startsWith('<svg'));
+  }
+});
+
+test('create_risk_matrix: emits expected events', async () => {
+  const ctx = fakeCtx();
+  await tool('create_risk_matrix').execute({
+    title: 'Events',
+    risks: [{ label: 'x', probability: 2, impact: 3 }],
   }, ctx);
   const types = ctx._events.map(e => e.type);
   assert.ok(types.includes('tool_call'));
