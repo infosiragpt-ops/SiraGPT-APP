@@ -12,6 +12,22 @@ export function getNormalizedApiBaseUrl(): string {
 
 const API_BASE_URL = getNormalizedApiBaseUrl()
 
+function sanitizeStreamError(raw: string): string {
+  if (/does not support image/i.test(raw)) {
+    return "El modelo seleccionado no admite imágenes. Intenta con un modelo compatible con visión o adjunta documentos en lugar de imágenes."
+  }
+  if (/cannot read.*image/i.test(raw)) {
+    return "No se pudieron procesar las imágenes adjuntas con este modelo. Intenta con un modelo compatible con visión."
+  }
+  if (/image input/i.test(raw)) {
+    return "El modelo no soporta entrada de imagen. Intenta con un modelo compatible con visión o adjunta documentos en lugar de imágenes."
+  }
+  if (/content.*policy|safety/i.test(raw)) {
+    return "La solicitud no pudo ser procesada debido a las políticas de contenido."
+  }
+  return raw
+}
+
 /** Login/register must not send a stale Bearer token or treat 401 as "refresh session". */
 function isCredentialHandshake(endpoint: string, method: string): boolean {
   if (method !== "POST") return false
