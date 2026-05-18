@@ -33,12 +33,20 @@ jobs:
           script_stop: true
           script: |
             set -e
-            cd /root/siraNew/siraGPT/backend
+            cd /root/siraNew/siraGPT
             echo "=== Pre-seed model count ==="
             docker exec siragpt-db-1 psql -U myuser -d siraGPTNew \
               -tAc "SELECT COUNT(*) FROM ai_models" 2>&1
             echo ""
-            echo "=== Running seed ==="
+            echo "=== Running seed (with .env loaded) ==="
+            # PM2 starts the backend with the root .env loaded; the seed
+            # script must do the same so prisma can resolve
+            # PRISMA_DATABASE_URL.
+            set -a
+            # shellcheck disable=SC1091
+            source /root/siraNew/siraGPT/.env
+            set +a
+            cd backend
             node prisma/seed.js
             echo ""
             echo "=== Post-seed model count ==="
