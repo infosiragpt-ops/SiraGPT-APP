@@ -6694,6 +6694,264 @@ const createAnsoffMatrix = {
   },
 };
 
+// ─────────────────────────────────────────────────────────────────────────
+// Tool 29: create_bcg_matrix
+// ─────────────────────────────────────────────────────────────────────────
+
+const createBcgMatrix = {
+  name: 'create_bcg_matrix',
+  description: 'Generate a BCG (Boston Consulting Group) portfolio matrix as an SVG file: Market Share (X axis) × Market Growth (Y axis), with each product/SBU plotted as a bubble in one of 4 canonical quadrants — Stars (high growth, high share), Cash Cows (low growth, high share), Question Marks (high growth, low share), Dogs (low growth, low share). Bubble size encodes revenue. Use for product portfolio reviews, investment allocation decisions, or strategic divestment analyses.',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string', description: 'Matrix title (e.g. "SiraGPT product portfolio 2026").' },
+      subtitle: { type: 'string', description: 'Optional context line.' },
+      products: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            name:         { type: 'string', description: 'Product / SBU name.' },
+            marketShare:  { type: 'number', description: 'Market share 0-2 (relative to competitor; 1 = parity, >1 = leader).' },
+            marketGrowth: { type: 'number', description: 'Market growth % per year (typically 0-30%).' },
+            revenue:      { type: 'number', description: 'Optional revenue used to scale bubble size.' },
+          },
+          required: ['name', 'marketShare', 'marketGrowth'],
+        },
+        description: '1-20 products plotted in the matrix.',
+      },
+      growthThreshold: { type: 'number', description: 'Y-axis split between high/low growth. Default: 10 (10%).' },
+      shareThreshold:  { type: 'number', description: 'X-axis split between high/low share. Default: 1.0 (parity with competitor).' },
+      theme: { type: 'string', enum: ['professional', 'modern', 'minimal', 'corporate'], description: 'Visual theme. Default: "professional".' },
+    },
+    required: ['title', 'products'],
+    additionalProperties: false,
+  },
+  async execute({ title, subtitle = '', products = [], growthThreshold, shareThreshold, theme = 'professional' }, ctx = {}) {
+    emitEvent(ctx, 'tool_call', { tool: 'create_bcg_matrix', preview: title });
+
+    try {
+      if (!Array.isArray(products) || products.length === 0) {
+        return { ok: false, error: 'products array is empty' };
+      }
+
+      const themes = {
+        professional: {
+          bg: '#FAFBFC', card: '#FFFFFF', text: '#1E293B', muted: '#64748B', border: '#E2E8F0', accent: '#2563EB', axisText: '#475569',
+          star:     { fill: '#FEF3C7', bar: '#F59E0B', icon: '⭐', label: 'STARS' },
+          cashCow:  { fill: '#ECFDF5', bar: '#10B981', icon: '🐄', label: 'CASH COWS' },
+          question: { fill: '#DBEAFE', bar: '#2563EB', icon: '❓', label: 'QUESTION MARKS' },
+          dog:      { fill: '#FEE2E2', bar: '#EF4444', icon: '🐕', label: 'DOGS' },
+        },
+        modern: {
+          bg: '#0B1121', card: '#1E293B', text: '#F1F5F9', muted: '#94A3B8', border: '#334155', accent: '#818CF8', axisText: '#CBD5E1',
+          star:     { fill: '#78350F', bar: '#FBBF24', icon: '⭐', label: 'STARS' },
+          cashCow:  { fill: '#064E3B', bar: '#34D399', icon: '🐄', label: 'CASH COWS' },
+          question: { fill: '#1E3A8A', bar: '#60A5FA', icon: '❓', label: 'QUESTION MARKS' },
+          dog:      { fill: '#7F1D1D', bar: '#F87171', icon: '🐕', label: 'DOGS' },
+        },
+        minimal: {
+          bg: '#FFFFFF', card: '#FFFFFF', text: '#0F172A', muted: '#64748B', border: '#CBD5E1', accent: '#0F172A', axisText: '#475569',
+          star:     { fill: '#F8FAFC', bar: '#F59E0B', icon: '⭐', label: 'STARS' },
+          cashCow:  { fill: '#F8FAFC', bar: '#10B981', icon: '🐄', label: 'CASH COWS' },
+          question: { fill: '#F8FAFC', bar: '#2563EB', icon: '❓', label: 'QUESTION MARKS' },
+          dog:      { fill: '#F8FAFC', bar: '#EF4444', icon: '🐕', label: 'DOGS' },
+        },
+        corporate: {
+          bg: '#F8FAFC', card: '#FFFFFF', text: '#0F172A', muted: '#475569', border: '#CBD5E1', accent: '#1E40AF', axisText: '#334155',
+          star:     { fill: '#FFF8E1', bar: '#F9AB00', icon: '⭐', label: 'STARS' },
+          cashCow:  { fill: '#E6F4EA', bar: '#0F9D58', icon: '🐄', label: 'CASH COWS' },
+          question: { fill: '#E8F0FE', bar: '#1A73E8', icon: '❓', label: 'QUESTION MARKS' },
+          dog:      { fill: '#FCE8E6', bar: '#D93025', icon: '🐕', label: 'DOGS' },
+        },
+      };
+      const t = themes[theme] || themes.professional;
+
+      const safeTitle = xmlEscape(String(title).slice(0, 120));
+      const safeSubtitle = xmlEscape(String(subtitle || '').slice(0, 140));
+      const growthSplit = Number.isFinite(Number(growthThreshold)) ? Number(growthThreshold) : 10;
+      const shareSplit = Number.isFinite(Number(shareThreshold)) ? Number(shareThreshold) : 1.0;
+      const productList = products.slice(0, 20);
+
+      const pad = 28;
+      const headerH = safeSubtitle ? 110 : 86;
+      const axisGutter = 60;
+      const gridSize = 560;
+      const legendW = 240;
+      const W = pad * 2 + axisGutter + gridSize + legendW + 24;
+      const H = headerH + pad + gridSize + 60 + pad;
+
+      const gridX = pad + axisGutter;
+      const gridY = headerH + pad;
+      const halfW = gridSize / 2;
+      const halfH = gridSize / 2;
+      const cx = gridX + halfW;
+      const cy = gridY + halfH;
+
+      let body = `<rect width="${W}" height="${H}" fill="${t.bg}" rx="12"/>`;
+      // Header
+      body += `<rect x="0" y="0" width="${W}" height="${headerH}" fill="${t.accent}"/>`;
+      body += `<text x="${W / 2}" y="42" text-anchor="middle" font-family="Georgia, serif" font-size="24" font-weight="bold" fill="#fff">${safeTitle}</text>`;
+      body += `<text x="${W / 2}" y="66" text-anchor="middle" font-family="Arial" font-size="12" fill="#fff" opacity="0.85">${productList.length} productos · BCG portfolio matrix</text>`;
+      if (safeSubtitle) {
+        body += `<text x="${W / 2}" y="92" text-anchor="middle" font-family="Arial" font-size="13" fill="#fff" opacity="0.92">${safeSubtitle}</text>`;
+      }
+
+      // Quadrant backgrounds (BCG convention: high growth top, high share LEFT
+      // — but most modern BCG renderings put high share on the RIGHT.
+      // We'll use the modern convention: high share = right, high growth = top.
+      //  Q1 top-right    = STARS         (high growth, high share)
+      //  Q2 top-left     = QUESTION MARKS (high growth, low share)
+      //  Q3 bottom-right = CASH COWS     (low growth, high share)
+      //  Q4 bottom-left  = DOGS          (low growth, low share)
+      body += `<rect x="${gridX}" y="${gridY}" width="${halfW}" height="${halfH}" fill="${t.question.fill}" stroke="${t.border}" stroke-width="1"/>`;
+      body += `<rect x="${cx}" y="${gridY}" width="${halfW}" height="${halfH}" fill="${t.star.fill}" stroke="${t.border}" stroke-width="1"/>`;
+      body += `<rect x="${gridX}" y="${cy}" width="${halfW}" height="${halfH}" fill="${t.dog.fill}" stroke="${t.border}" stroke-width="1"/>`;
+      body += `<rect x="${cx}" y="${cy}" width="${halfW}" height="${halfH}" fill="${t.cashCow.fill}" stroke="${t.border}" stroke-width="1"/>`;
+
+      // Quadrant labels
+      body += `<text x="${gridX + halfW / 2}" y="${gridY + 24}" text-anchor="middle" font-family="Arial" font-size="14" font-weight="bold" fill="${t.question.bar}">${xmlEscape(t.question.icon + ' ' + t.question.label)}</text>`;
+      body += `<text x="${cx + halfW / 2}" y="${gridY + 24}" text-anchor="middle" font-family="Arial" font-size="14" font-weight="bold" fill="${t.star.bar}">${xmlEscape(t.star.icon + ' ' + t.star.label)}</text>`;
+      body += `<text x="${gridX + halfW / 2}" y="${cy + 24}" text-anchor="middle" font-family="Arial" font-size="14" font-weight="bold" fill="${t.dog.bar}">${xmlEscape(t.dog.icon + ' ' + t.dog.label)}</text>`;
+      body += `<text x="${cx + halfW / 2}" y="${cy + 24}" text-anchor="middle" font-family="Arial" font-size="14" font-weight="bold" fill="${t.cashCow.bar}">${xmlEscape(t.cashCow.icon + ' ' + t.cashCow.label)}</text>`;
+
+      // Plot products as bubbles
+      // marketShare range: 0..2 → x in gridX..gridX+gridSize (clamped)
+      // marketGrowth range: 0..30 → y inverted (higher growth → top); clamped
+      // revenue → bubble radius (8..36)
+      const maxRevenue = productList.reduce((max, p) => {
+        const r = Number(p.revenue);
+        return Number.isFinite(r) && r > max ? r : max;
+      }, 1);
+      const SHARE_MAX = Math.max(2, shareSplit * 2);
+      const GROWTH_MAX = Math.max(20, growthSplit * 2);
+      function shareToX(s) {
+        const clamped = Math.max(0, Math.min(SHARE_MAX, Number(s) || 0));
+        return gridX + (clamped / SHARE_MAX) * gridSize;
+      }
+      function growthToY(g) {
+        const clamped = Math.max(0, Math.min(GROWTH_MAX, Number(g) || 0));
+        return gridY + gridSize - (clamped / GROWTH_MAX) * gridSize;
+      }
+      function classifyProduct(p) {
+        const g = Number(p.marketGrowth) || 0;
+        const s = Number(p.marketShare) || 0;
+        if (g >= growthSplit && s >= shareSplit) return 'star';
+        if (g >= growthSplit && s < shareSplit) return 'question';
+        if (g < growthSplit && s >= shareSplit) return 'cashCow';
+        return 'dog';
+      }
+
+      const classified = productList.map((p, idx) => {
+        const cls = classifyProduct(p);
+        return {
+          ...p,
+          _cls: cls,
+          _x: shareToX(p.marketShare),
+          _y: growthToY(p.marketGrowth),
+          _r: Number.isFinite(Number(p.revenue))
+            ? Math.max(10, Math.min(36, 10 + (Number(p.revenue) / maxRevenue) * 26))
+            : 16,
+          _idx: idx + 1,
+        };
+      });
+
+      // Draw bubbles
+      classified.forEach((p) => {
+        const pal = t[p._cls];
+        body += `<circle cx="${p._x}" cy="${p._y}" r="${p._r}" fill="${pal.bar}" fill-opacity="0.7" stroke="${pal.bar}" stroke-width="2"/>`;
+        body += `<text x="${p._x}" y="${p._y + 5}" text-anchor="middle" font-family="Arial" font-size="13" font-weight="bold" fill="#fff">${p._idx}</text>`;
+      });
+
+      // Axis lines on top of quadrants
+      body += `<line x1="${cx}" y1="${gridY}" x2="${cx}" y2="${gridY + gridSize}" stroke="${t.axisText}" stroke-width="2" stroke-dasharray="6,4" opacity="0.5"/>`;
+      body += `<line x1="${gridX}" y1="${cy}" x2="${gridX + gridSize}" y2="${cy}" stroke="${t.axisText}" stroke-width="2" stroke-dasharray="6,4" opacity="0.5"/>`;
+
+      // Axis labels
+      body += `<text x="${gridX + gridSize / 2}" y="${gridY + gridSize + 24}" text-anchor="middle" font-family="Arial" font-size="11" font-weight="bold" fill="${t.muted}">RELATIVE MARKET SHARE  →  (high = right)</text>`;
+      body += `<text x="${pad + 16}" y="${gridY + gridSize / 2}" text-anchor="middle" font-family="Arial" font-size="11" font-weight="bold" fill="${t.muted}" transform="rotate(-90, ${pad + 16}, ${gridY + gridSize / 2})">↑ MARKET GROWTH RATE (%)</text>`;
+      // Tick numbers
+      body += `<text x="${gridX}" y="${gridY + gridSize + 42}" font-family="Arial" font-size="10" fill="${t.muted}">0</text>`;
+      body += `<text x="${cx}" y="${gridY + gridSize + 42}" text-anchor="middle" font-family="Arial" font-size="10" font-weight="bold" fill="${t.accent}">${shareSplit}× (parity)</text>`;
+      body += `<text x="${gridX + gridSize}" y="${gridY + gridSize + 42}" text-anchor="end" font-family="Arial" font-size="10" fill="${t.muted}">${SHARE_MAX}×</text>`;
+      body += `<text x="${gridX - 8}" y="${gridY + gridSize}" text-anchor="end" font-family="Arial" font-size="10" fill="${t.muted}">0%</text>`;
+      body += `<text x="${gridX - 8}" y="${cy + 4}" text-anchor="end" font-family="Arial" font-size="10" font-weight="bold" fill="${t.accent}">${growthSplit}%</text>`;
+      body += `<text x="${gridX - 8}" y="${gridY + 4}" text-anchor="end" font-family="Arial" font-size="10" fill="${t.muted}">${GROWTH_MAX}%</text>`;
+
+      // Legend on the right
+      const legendX = gridX + gridSize + 24;
+      let lY = gridY + 8;
+      body += `<text x="${legendX}" y="${lY}" font-family="Arial" font-size="13" font-weight="bold" fill="${t.text}">PORTFOLIO</text>`;
+      lY += 18;
+      classified.slice(0, 14).forEach((p) => {
+        const pal = t[p._cls];
+        body += `<circle cx="${legendX + 10}" cy="${lY - 4}" r="10" fill="${pal.bar}" fill-opacity="0.7"/>`;
+        body += `<text x="${legendX + 10}" y="${lY - 1}" text-anchor="middle" font-family="Arial" font-size="10" font-weight="bold" fill="#fff">${p._idx}</text>`;
+        const name = xmlEscape(String(p.name || '').slice(0, 22));
+        body += `<text x="${legendX + 24}" y="${lY}" font-family="Arial" font-size="11" font-weight="600" fill="${t.text}">${name}</text>`;
+        const revText = Number.isFinite(Number(p.revenue)) ? ` · $${Number(p.revenue).toLocaleString('en-US')}` : '';
+        body += `<text x="${legendX + 24}" y="${lY + 14}" font-family="Arial" font-size="9" fill="${t.muted}">share ${p.marketShare}× · growth ${p.marketGrowth}%${revText}</text>`;
+        lY += 30;
+      });
+      if (classified.length > 14) {
+        body += `<text x="${legendX}" y="${lY + 4}" font-family="Arial" font-size="10" fill="${t.muted}" font-style="italic">+ ${classified.length - 14} más</text>`;
+      }
+
+      const svg = svgDocument({
+        width: W,
+        height: H,
+        title: safeTitle,
+        description: `BCG matrix: ${safeTitle}`,
+        body,
+      });
+
+      const buffer = Buffer.from(svg, 'utf8');
+      const filename = `bcg_${crypto.randomBytes(4).toString('hex')}.svg`;
+      const artifact = finalizeArtifact({ filename, buffer, mime: EXTENSION_TO_MIME.svg, ctx });
+
+      emitEvent(ctx, 'file_artifact', {
+        artifact: {
+          id: artifact.id,
+          filename: artifact.filename,
+          format: 'svg',
+          mime: 'image/svg+xml',
+          sizeBytes: artifact.sizeBytes,
+          downloadUrl: artifact.downloadUrl,
+        },
+      });
+
+      const tally = { stars: 0, cashCows: 0, questionMarks: 0, dogs: 0 };
+      classified.forEach((p) => {
+        if (p._cls === 'star') tally.stars += 1;
+        else if (p._cls === 'cashCow') tally.cashCows += 1;
+        else if (p._cls === 'question') tally.questionMarks += 1;
+        else tally.dogs += 1;
+      });
+
+      emitEvent(ctx, 'tool_output', {
+        tool: 'create_bcg_matrix',
+        ok: true,
+        preview: `BCG listo: ${artifact.filename} (⭐:${tally.stars} 🐄:${tally.cashCows} ❓:${tally.questionMarks} 🐕:${tally.dogs}, ${Math.round(artifact.sizeBytes / 1024)} KB)`,
+      });
+
+      return {
+        ok: true,
+        id: artifact.id,
+        filename: artifact.filename,
+        sizeBytes: artifact.sizeBytes,
+        downloadUrl: artifact.downloadUrl,
+        title,
+        products: classified.length,
+        tally,
+      };
+    } catch (err) {
+      const msg = err?.message || String(err);
+      emitEvent(ctx, 'tool_output', { tool: 'create_bcg_matrix', ok: false, preview: `Error: ${msg}` });
+      return { ok: false, error: msg };
+    }
+  },
+};
+
 // ── All visual/media tools for the agent ──────────────────────────────
 
 const VISUAL_MEDIA_TOOLS = [
@@ -6725,6 +6983,7 @@ const VISUAL_MEDIA_TOOLS = [
   createLeanCanvas,
   createBalancedScorecard,
   createAnsoffMatrix,
+  createBcgMatrix,
 ];
 
 // Internal helpers exposed for unit testing — NOT part of the public agent

@@ -653,8 +653,8 @@ test('create_dashboard_html: no charts', async () => {
 
 // ── Tool metadata ────────────────────────────────────────────────
 
-test('all 28 tools have valid metadata', () => {
-  assert.equal(VISUAL_MEDIA_TOOLS.length, 28);
+test('all 29 tools have valid metadata', () => {
+  assert.equal(VISUAL_MEDIA_TOOLS.length, 29);
   for (const t of VISUAL_MEDIA_TOOLS) {
     assert.ok(t.name);
     assert.ok(t.description);
@@ -3278,6 +3278,133 @@ test('create_ansoff_matrix: emits expected events', async () => {
   await tool('create_ansoff_matrix').execute({
     title: 'Events',
     marketPenetration: ['x'],
+  }, ctx);
+  const types = ctx._events.map(e => e.type);
+  assert.ok(types.includes('tool_call'));
+  assert.ok(types.includes('file_artifact'));
+  assert.ok(types.includes('tool_output'));
+});
+
+// ── create_bcg_matrix ────────────────────────────────────────────
+
+test('create_bcg_matrix: full portfolio with all 4 quadrants', async () => {
+  const bcg = tool('create_bcg_matrix');
+  assert.ok(bcg);
+  const r = await bcg.execute({
+    title: 'SiraGPT 2026 portfolio',
+    products: [
+      // Star: high share, high growth
+      { name: 'Pro tier',  marketShare: 1.8, marketGrowth: 22, revenue: 5_000_000 },
+      // Cash cow: high share, low growth
+      { name: 'Legacy',    marketShare: 1.5, marketGrowth: 4,  revenue: 8_000_000 },
+      // Question mark: low share, high growth
+      { name: 'Mobile',    marketShare: 0.4, marketGrowth: 28, revenue: 200_000 },
+      // Dog: low share, low growth
+      { name: 'Free tier', marketShare: 0.3, marketGrowth: 3,  revenue: 50_000 },
+    ],
+    theme: 'professional',
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.products, 4);
+  assert.equal(r.tally.stars, 1);
+  assert.equal(r.tally.cashCows, 1);
+  assert.equal(r.tally.questionMarks, 1);
+  assert.equal(r.tally.dogs, 1);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.startsWith('<svg'));
+  assert.ok(svg.includes('SiraGPT 2026 portfolio'));
+  assert.ok(svg.includes('STARS'));
+  assert.ok(svg.includes('CASH COWS'));
+  assert.ok(svg.includes('QUESTION MARKS'));
+  assert.ok(svg.includes('DOGS'));
+  assert.ok(svg.includes('Pro tier'));
+  assert.ok(svg.includes('Mobile'));
+  // Axis labels
+  assert.ok(svg.includes('RELATIVE MARKET SHARE'));
+  assert.ok(svg.includes('MARKET GROWTH RATE'));
+});
+
+test('create_bcg_matrix: custom thresholds reshape the quadrants', async () => {
+  const r = await tool('create_bcg_matrix').execute({
+    title: 'Aggressive thresholds',
+    growthThreshold: 5,    // anything ≥ 5% is "high growth"
+    shareThreshold: 0.5,   // anything ≥ 0.5 share is "high share"
+    products: [
+      { name: 'A', marketShare: 0.6, marketGrowth: 6 }, // Star with default thresholds it'd be a dog
+    ],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  // With custom thresholds, this product lands in the Star quadrant
+  assert.equal(r.tally.stars, 1);
+  assert.equal(r.tally.dogs, 0);
+});
+
+test('create_bcg_matrix: empty products fails', async () => {
+  const r = await tool('create_bcg_matrix').execute({
+    title: 'Empty',
+    products: [],
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /products.*empty/i);
+});
+
+test('create_bcg_matrix: caps products at 20', async () => {
+  const many = Array.from({ length: 30 }, (_, i) => ({
+    name: `Prod ${i + 1}`,
+    marketShare: (i % 4) * 0.5,
+    marketGrowth: (i % 4) * 10,
+  }));
+  const r = await tool('create_bcg_matrix').execute({
+    title: 'Overflow',
+    products: many,
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.products, 20);
+});
+
+test('create_bcg_matrix: out-of-range share/growth clamped (no SVG overflow)', async () => {
+  const r = await tool('create_bcg_matrix').execute({
+    title: 'Clamp',
+    products: [
+      { name: 'Huge', marketShare: 99, marketGrowth: 500 },
+      { name: 'Tiny', marketShare: -5, marketGrowth: -10 },
+    ],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  // Huge → Star (high/high), Tiny → Dog (low/low)
+  assert.equal(r.tally.stars, 1);
+  assert.equal(r.tally.dogs, 1);
+});
+
+test('create_bcg_matrix: xml-escapes product names', async () => {
+  const r = await tool('create_bcg_matrix').execute({
+    title: 'XSS',
+    products: [{ name: '<script>alert(1)</script>', marketShare: 1.5, marketGrowth: 15 }],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.equal(svg.includes('<script>alert(1)</script>'), false);
+  assert.ok(svg.includes('&lt;script&gt;'));
+});
+
+test('create_bcg_matrix: supports all four themes', async () => {
+  for (const theme of ['professional', 'modern', 'minimal', 'corporate']) {
+    const r = await tool('create_bcg_matrix').execute({
+      title: `Theme ${theme}`,
+      products: [{ name: 'X', marketShare: 1, marketGrowth: 10 }],
+      theme,
+    }, fakeCtx());
+    assert.equal(r.ok, true, `theme ${theme} should succeed`);
+    const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+    assert.ok(svg.startsWith('<svg'));
+  }
+});
+
+test('create_bcg_matrix: emits expected events', async () => {
+  const ctx = fakeCtx();
+  await tool('create_bcg_matrix').execute({
+    title: 'Events',
+    products: [{ name: 'X', marketShare: 1, marketGrowth: 10 }],
   }, ctx);
   const types = ctx._events.map(e => e.type);
   assert.ok(types.includes('tool_call'));
