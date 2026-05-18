@@ -37,7 +37,7 @@ npm run type-check     # TSC completo
 5. **Hacer `git pull --rebase` antes de push** para evitar conflictos
 6. **Priorizar:** estabilidad, rendimiento, cobertura de errores, calidad de código
 
-## Visual Tools Inventory (15 tools)
+## Visual Tools Inventory (16 tools)
 | Tool | File | Description |
 |------|------|-------------|
 | generate_image | visual-media-tools.js | SVG/PNG image generation |
@@ -55,6 +55,7 @@ npm run type-check     # TSC completo
 | create_eisenhower_matrix | visual-media-tools.js | Eisenhower urgency×importance 2x2 SVG (Do/Schedule/Delegate/Eliminate, 4 themes, axis labels) |
 | create_raci_matrix | visual-media-tools.js | RACI responsibility assignment matrix SVG (tasks × roles grid, R/A/C/I pills, legend, 4 themes) |
 | create_business_model_canvas | visual-media-tools.js | Osterwalder 9-block BMC SVG (KP/KA/KR/VP/CR/Ch/CS top + Cost/Revenue bottom, 4 themes) |
+| create_pyramid_diagram | visual-media-tools.js | Hierarchical pyramid SVG (2-8 levels, optional inverted, per-level descriptions + side labels, 4 themes) |
 
 ## Backend Reliability Utilities
 

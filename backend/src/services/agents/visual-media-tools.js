@@ -3621,6 +3621,212 @@ const createBusinessModelCanvas = {
   },
 };
 
+// ─────────────────────────────────────────────────────────────────────────
+// Tool 16: create_pyramid_diagram
+// ─────────────────────────────────────────────────────────────────────────
+
+const createPyramidDiagram = {
+  name: 'create_pyramid_diagram',
+  description: 'Generate a hierarchical pyramid diagram as an SVG file: N stacked triangular layers from base (widest) to apex (narrowest), each with a label and optional description. Use for Maslow hierarchies, KPI cascades, learning levels (Bloom), organizational tiers, or any hierarchical/foundational concept. Supports 2-8 levels, inverted orientation, and 4 themes.',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string', description: 'Pyramid title (e.g. "Maslow Hierarchy of Needs").' },
+      subtitle: { type: 'string', description: 'Optional context line.' },
+      levels: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            label: { type: 'string', description: 'Level label (short).' },
+            description: { type: 'string', description: 'Optional 1-line description for the level.' },
+            color: { type: 'string', description: 'Optional hex color override (e.g. "#3B82F6").' },
+          },
+          required: ['label'],
+        },
+        description: '2-8 levels ordered FROM TOP (apex) TO BOTTOM (base). The first item is the narrowest layer.',
+      },
+      inverted: { type: 'boolean', description: 'When true, draw an inverted pyramid (widest at top). Default: false.' },
+      theme: { type: 'string', enum: ['professional', 'modern', 'minimal', 'corporate'], description: 'Visual theme. Default: "professional".' },
+    },
+    required: ['title', 'levels'],
+    additionalProperties: false,
+  },
+  async execute({ title, subtitle = '', levels = [], inverted = false, theme = 'professional' }, ctx = {}) {
+    emitEvent(ctx, 'tool_call', { tool: 'create_pyramid_diagram', preview: title });
+
+    try {
+      if (!Array.isArray(levels) || levels.length === 0) {
+        return { ok: false, error: 'levels array is empty' };
+      }
+      if (levels.length < 2) {
+        return { ok: false, error: 'pyramid requires at least 2 levels' };
+      }
+
+      const themes = {
+        professional: {
+          bg: '#FAFBFC', accent: '#2563EB', text: '#1E293B', muted: '#64748B', border: '#E2E8F0', label: '#FFFFFF',
+          // Gradient from apex (cool/aspirational) to base (warm/fundamental)
+          palette: ['#7C3AED', '#2563EB', '#0EA5E9', '#10B981', '#F59E0B', '#F97316', '#EF4444', '#7F1D1D'],
+        },
+        modern: {
+          bg: '#0B1121', accent: '#818CF8', text: '#F1F5F9', muted: '#94A3B8', border: '#334155', label: '#0F172A',
+          palette: ['#A78BFA', '#60A5FA', '#38BDF8', '#34D399', '#FBBF24', '#FB923C', '#F87171', '#FCA5A5'],
+        },
+        minimal: {
+          bg: '#FFFFFF', accent: '#0F172A', text: '#0F172A', muted: '#64748B', border: '#CBD5E1', label: '#FFFFFF',
+          palette: ['#0F172A', '#1E293B', '#334155', '#475569', '#64748B', '#94A3B8', '#CBD5E1', '#E2E8F0'],
+        },
+        corporate: {
+          bg: '#F8FAFC', accent: '#1E40AF', text: '#0F172A', muted: '#475569', border: '#CBD5E1', label: '#FFFFFF',
+          palette: ['#673AB7', '#1A73E8', '#039BE5', '#0F9D58', '#F9AB00', '#E8710A', '#D93025', '#5F6368'],
+        },
+      };
+      const t = themes[theme] || themes.professional;
+
+      const safeTitle = xmlEscape(String(title).slice(0, 120));
+      const safeSubtitle = xmlEscape(String(subtitle || '').slice(0, 140));
+      const levelList = levels.slice(0, 8);
+      const n = levelList.length;
+
+      // Pyramid geometry: apex at top (or bottom if inverted), each layer
+      // is a trapezoid (or the apex triangle). Height is divided equally
+      // among layers; width grows linearly from the apex.
+      const apexW = 80;
+      const baseW = 540;
+      const layerH = 76;
+      const pyramidH = n * layerH;
+      const headerH = safeSubtitle ? 110 : 86;
+      const pad = 28;
+      const descCol = 240; // right-side column for level descriptions
+      const W = pad * 2 + baseW + 32 + descCol;
+      const H = headerH + pad + pyramidH + pad;
+
+      let body = `<rect width="${W}" height="${H}" fill="${t.bg}" rx="12"/>`;
+      body += `<rect x="0" y="0" width="${W}" height="${headerH}" fill="${t.accent}"/>`;
+      body += `<text x="${W / 2}" y="42" text-anchor="middle" font-family="Georgia, serif" font-size="24" font-weight="bold" fill="#fff">${safeTitle}</text>`;
+      const orientLabel = inverted ? 'invertida · base arriba' : 'apex arriba · base abajo';
+      body += `<text x="${W / 2}" y="66" text-anchor="middle" font-family="Arial" font-size="12" fill="#fff" opacity="0.85">${n} niveles · ${orientLabel}</text>`;
+      if (safeSubtitle) {
+        body += `<text x="${W / 2}" y="92" text-anchor="middle" font-family="Arial" font-size="13" fill="#fff" opacity="0.92">${safeSubtitle}</text>`;
+      }
+
+      const cx = pad + baseW / 2;
+      const topY = headerH + pad;
+
+      // Build each layer as a trapezoid. We compute the top-width and
+      // bottom-width for layer i based on its position in the pyramid.
+      // Layer 0 is at the TOP unless `inverted` is true (then layer 0 is bottom).
+      function layerWidth(idx) {
+        // Standard pyramid: apex (idx=0) = apexW, base (idx=n-1) = baseW.
+        // Linear interpolation.
+        const tFactor = n === 1 ? 1 : idx / (n - 1);
+        return apexW + (baseW - apexW) * tFactor;
+      }
+
+      levelList.forEach((level, i) => {
+        // For inverted, flip the visual position by reversing the index.
+        const visualIdx = inverted ? n - 1 - i : i;
+        const yTop = topY + visualIdx * layerH;
+        const yBot = yTop + layerH;
+        const topW = layerWidth(i);
+        const botW = i + 1 < n ? layerWidth(i + 1) : layerWidth(i);
+
+        // For an inverted pyramid, swap top/bot widths so the layer visually
+        // matches its position: a wider layer should be at the top.
+        let trapTopW = topW;
+        let trapBotW = botW;
+        if (inverted) {
+          trapTopW = botW;
+          trapBotW = topW;
+        }
+
+        const xTopL = cx - trapTopW / 2;
+        const xTopR = cx + trapTopW / 2;
+        const xBotL = cx - trapBotW / 2;
+        const xBotR = cx + trapBotW / 2;
+
+        const color = level.color && /^#[0-9A-Fa-f]{6}$/.test(level.color)
+          ? level.color
+          : t.palette[i % t.palette.length];
+
+        // Trapezoid path
+        body += `<path d="M ${xTopL} ${yTop} L ${xTopR} ${yTop} L ${xBotR} ${yBot} L ${xBotL} ${yBot} Z" fill="${color}" stroke="${t.border}" stroke-width="1" filter="url(#vis-shadow)"/>`;
+
+        // Layer label (centered)
+        const safeLabel = xmlEscape(String(level.label || '').slice(0, 40));
+        const labelY = yTop + layerH / 2 + 5;
+        body += `<text x="${cx}" y="${labelY}" text-anchor="middle" font-family="Arial" font-size="14" font-weight="bold" fill="${t.label}">${safeLabel}</text>`;
+
+        // Level number bubble on the left
+        const levelNum = inverted ? n - i : i + 1;
+        body += `<circle cx="${pad + 14}" cy="${yTop + layerH / 2}" r="14" fill="${color}" stroke="${t.bg}" stroke-width="3"/>`;
+        body += `<text x="${pad + 14}" y="${yTop + layerH / 2 + 5}" text-anchor="middle" font-family="Arial" font-size="13" font-weight="bold" fill="${t.label}">${levelNum}</text>`;
+
+        // Description on the right side, if provided
+        if (level.description) {
+          const safeDesc = xmlEscape(String(level.description).slice(0, 110));
+          const descX = pad + baseW + 32;
+          // Connector dot + line
+          body += `<circle cx="${cx + trapTopW / 2 + 8}" cy="${(yTop + yBot) / 2}" r="3" fill="${color}"/>`;
+          body += `<line x1="${cx + trapTopW / 2 + 12}" y1="${(yTop + yBot) / 2}" x2="${descX - 8}" y2="${(yTop + yBot) / 2}" stroke="${color}" stroke-width="1.5" opacity="0.5"/>`;
+          // Description text — wrap to up to 2 lines
+          const halfIdx = Math.ceil(safeDesc.length / 2);
+          const cut = safeDesc.lastIndexOf(' ', halfIdx) > 0 ? safeDesc.lastIndexOf(' ', halfIdx) : Math.min(halfIdx, safeDesc.length);
+          const l1 = safeDesc.slice(0, cut);
+          const l2 = safeDesc.slice(cut).trim();
+          body += `<text x="${descX}" y="${(yTop + yBot) / 2 - 4}" font-family="Arial" font-size="11" fill="${t.text}">${l1}</text>`;
+          if (l2) body += `<text x="${descX}" y="${(yTop + yBot) / 2 + 12}" font-family="Arial" font-size="11" fill="${t.muted}">${l2}</text>`;
+        }
+      });
+
+      const svg = svgDocument({
+        width: W,
+        height: H,
+        title: safeTitle,
+        description: `Pyramid diagram: ${safeTitle}`,
+        body,
+      });
+
+      const buffer = Buffer.from(svg, 'utf8');
+      const filename = `pyramid_${crypto.randomBytes(4).toString('hex')}.svg`;
+      const artifact = finalizeArtifact({ filename, buffer, mime: EXTENSION_TO_MIME.svg, ctx });
+
+      emitEvent(ctx, 'file_artifact', {
+        artifact: {
+          id: artifact.id,
+          filename: artifact.filename,
+          format: 'svg',
+          mime: 'image/svg+xml',
+          sizeBytes: artifact.sizeBytes,
+          downloadUrl: artifact.downloadUrl,
+        },
+      });
+
+      emitEvent(ctx, 'tool_output', {
+        tool: 'create_pyramid_diagram',
+        ok: true,
+        preview: `Pirámide lista: ${artifact.filename} (${n} niveles${inverted ? ', invertida' : ''}, ${Math.round(artifact.sizeBytes / 1024)} KB)`,
+      });
+
+      return {
+        ok: true,
+        id: artifact.id,
+        filename: artifact.filename,
+        sizeBytes: artifact.sizeBytes,
+        downloadUrl: artifact.downloadUrl,
+        title,
+        levels: n,
+        inverted,
+      };
+    } catch (err) {
+      const msg = err?.message || String(err);
+      emitEvent(ctx, 'tool_output', { tool: 'create_pyramid_diagram', ok: false, preview: `Error: ${msg}` });
+      return { ok: false, error: msg };
+    }
+  },
+};
+
 // ── All visual/media tools for the agent ──────────────────────────────
 
 const VISUAL_MEDIA_TOOLS = [
@@ -3639,6 +3845,7 @@ const VISUAL_MEDIA_TOOLS = [
   createEisenhowerMatrix,
   createRaciMatrix,
   createBusinessModelCanvas,
+  createPyramidDiagram,
 ];
 
 // Internal helpers exposed for unit testing — NOT part of the public agent

@@ -653,8 +653,8 @@ test('create_dashboard_html: no charts', async () => {
 
 // ── Tool metadata ────────────────────────────────────────────────
 
-test('all 15 tools have valid metadata', () => {
-  assert.equal(VISUAL_MEDIA_TOOLS.length, 15);
+test('all 16 tools have valid metadata', () => {
+  assert.equal(VISUAL_MEDIA_TOOLS.length, 16);
   for (const t of VISUAL_MEDIA_TOOLS) {
     assert.ok(t.name);
     assert.ok(t.description);
@@ -1402,6 +1402,156 @@ test('create_business_model_canvas: counts object exposes all 9 block sizes', as
     assert.ok(Object.prototype.hasOwnProperty.call(r.counts, k), `counts.${k} should be present`);
     assert.equal(typeof r.counts[k], 'number');
   }
+});
+
+// ── create_pyramid_diagram ───────────────────────────────────────
+
+test('create_pyramid_diagram: 5-level Maslow', async () => {
+  const pd = tool('create_pyramid_diagram');
+  assert.ok(pd);
+  const r = await pd.execute({
+    title: 'Maslow Hierarchy of Needs',
+    subtitle: 'Clásico de Abraham Maslow',
+    levels: [
+      { label: 'Self-actualization', description: 'Realizar el potencial personal' },
+      { label: 'Esteem', description: 'Reconocimiento y respeto' },
+      { label: 'Belonging', description: 'Amor, amistad, pertenencia' },
+      { label: 'Safety', description: 'Seguridad física, económica' },
+      { label: 'Physiological', description: 'Necesidades básicas' },
+    ],
+    theme: 'professional',
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.ok(r.filename?.endsWith('.svg'));
+  assert.equal(r.levels, 5);
+  assert.equal(r.inverted, false);
+  const fp = assertArtifact(r);
+  const c = fs.readFileSync(fp, 'utf8');
+  assert.ok(c.startsWith('<svg'));
+  assert.ok(c.includes('Maslow Hierarchy of Needs'));
+  assert.ok(c.includes('Self-actualization'));
+  assert.ok(c.includes('Physiological'));
+  // Descriptions wrap to 2 lines so we check for an inner fragment that
+  // survives the wrap rather than the full string.
+  assert.ok(c.includes('Realizar') && c.includes('potencial'));
+});
+
+test('create_pyramid_diagram: inverted pyramid', async () => {
+  const r = await tool('create_pyramid_diagram').execute({
+    title: 'Inverted',
+    levels: [{ label: 'Top' }, { label: 'Bottom' }],
+    inverted: true,
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.inverted, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.includes('invertida'));
+});
+
+test('create_pyramid_diagram: empty levels fails', async () => {
+  const r = await tool('create_pyramid_diagram').execute({
+    title: 'Empty',
+    levels: [],
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /levels.*empty/i);
+});
+
+test('create_pyramid_diagram: single level fails (need >= 2)', async () => {
+  const r = await tool('create_pyramid_diagram').execute({
+    title: 'One level',
+    levels: [{ label: 'Only one' }],
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /at least 2/i);
+});
+
+test('create_pyramid_diagram: caps levels at 8', async () => {
+  const tenLevels = Array.from({ length: 10 }, (_, i) => ({ label: `Level ${i + 1}` }));
+  const r = await tool('create_pyramid_diagram').execute({
+    title: 'Too many',
+    levels: tenLevels,
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.levels, 8, 'should cap at 8 levels');
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.includes('Level 1'));
+  assert.ok(svg.includes('Level 8'));
+  assert.equal(svg.includes('Level 9'), false);
+});
+
+test('create_pyramid_diagram: per-level color override is respected', async () => {
+  const r = await tool('create_pyramid_diagram').execute({
+    title: 'Custom colors',
+    levels: [
+      { label: 'Top', color: '#FF00FF' },
+      { label: 'Bottom', color: '#00FFFF' },
+    ],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  // Hex codes are case-insensitive in SVG; both should appear in the output.
+  assert.ok(svg.toUpperCase().includes('#FF00FF'));
+  assert.ok(svg.toUpperCase().includes('#00FFFF'));
+});
+
+test('create_pyramid_diagram: invalid color falls back to theme palette', async () => {
+  const r = await tool('create_pyramid_diagram').execute({
+    title: 'Bad color',
+    levels: [
+      { label: 'Top', color: 'red' },               // not hex
+      { label: 'Bottom', color: '#GGGGGG' },        // invalid hex
+    ],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  // Invalid color must not appear in the SVG verbatim
+  assert.equal(svg.includes('fill="red"'), false);
+  assert.equal(svg.includes('#GGGGGG'), false);
+});
+
+test('create_pyramid_diagram: xml-escapes labels and descriptions', async () => {
+  const r = await tool('create_pyramid_diagram').execute({
+    title: 'XSS',
+    levels: [
+      // Long enough description that "wrap-to-2-lines" still keeps
+      // each escape entity intact within one half.
+      { label: '<script>evil</script>', description: 'the description text only contains safe words' },
+      { label: 'Safe', description: 'no special chars here either' },
+    ],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  // Label was a script tag — must be escaped to &lt;script&gt;, never raw.
+  assert.equal(svg.includes('<script>evil</script>'), false);
+  assert.ok(svg.includes('&lt;script&gt;'));
+  // Description text appears (uppercased or not, with our wrap)
+  assert.ok(svg.includes('description text') || svg.includes('description'));
+});
+
+test('create_pyramid_diagram: supports all four themes', async () => {
+  for (const theme of ['professional', 'modern', 'minimal', 'corporate']) {
+    const r = await tool('create_pyramid_diagram').execute({
+      title: `Theme ${theme}`,
+      levels: [{ label: 'A' }, { label: 'B' }, { label: 'C' }],
+      theme,
+    }, fakeCtx());
+    assert.equal(r.ok, true, `theme ${theme} should succeed`);
+    const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+    assert.ok(svg.startsWith('<svg'));
+  }
+});
+
+test('create_pyramid_diagram: emits expected events', async () => {
+  const ctx = fakeCtx();
+  await tool('create_pyramid_diagram').execute({
+    title: 'Events',
+    levels: [{ label: 'A' }, { label: 'B' }],
+  }, ctx);
+  const types = ctx._events.map(e => e.type);
+  assert.ok(types.includes('tool_call'));
+  assert.ok(types.includes('file_artifact'));
+  assert.ok(types.includes('tool_output'));
 });
 
 // ── Cleanup ──────────────────────────────────────────────────────

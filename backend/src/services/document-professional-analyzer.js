@@ -7381,16 +7381,95 @@ function buildReadabilityBlock(files) {
  * Cross-document comparison block — only emitted when ≥2 files have text.
  * Decorates each file with its classification so the comparison engine can
  * report kind coverage without re-running detectDocumentType.
+ *
+ * The comparison engine returns a render-agnostic structured report so
+ * callers can drive HTML / JSON / prompt-context surfaces from the same
+ * shape; we render to markdown here for prompt injection.
  */
 function buildComparisonBlock(files, profiles) {
   const engine = getComparisonEngine();
   if (!engine || typeof engine.compareDocuments !== 'function') return '';
   const list = Array.isArray(files) ? files : [];
   if (list.length < 2) return '';
-  const decorated = list.map((f, i) => ({ ...f, classification: profiles[i]?.classification || null }));
+  const decorated = list.map((f, i) => ({
+    ...f,
+    text: f.text || f.extractedText || '',
+    classification: profiles[i]?.classification || null,
+  }));
   const report = engine.compareDocuments(decorated);
-  if (!report) return '';
-  return engine.renderComparisonBlock(report);
+  if (!report || report.ok === false) return '';
+  // Use the engine's renderer if it exposes one; otherwise render locally.
+  if (typeof engine.renderComparisonBlock === 'function') {
+    return engine.renderComparisonBlock(report);
+  }
+  return renderComparisonBlockLocal(report);
+}
+
+function renderComparisonBlockLocal(report) {
+  if (!report || typeof report !== 'object') return '';
+  const lines = ['## CROSS-DOCUMENT SYNTHESIS'];
+  if (report.documentCount) {
+    const align = typeof report.alignmentScore === 'number' ? report.alignmentScore.toFixed(2) : 'n/a';
+    lines.push(`_${report.documentCount} documentos · alignment score ${align}_`);
+  }
+  if (Array.isArray(report.documents) && report.documents.length) {
+    lines.push('');
+    lines.push('### Documentos');
+    report.documents.slice(0, 8).forEach((d, i) => {
+      const safeName = String(d?.name || `doc${i + 1}`).slice(0, 80);
+      const domain = d?.domain ? ` · ${d.domain}` : '';
+      const grade = d?.qualityGrade && d.qualityGrade !== 'N/A' ? ` · grade ${d.qualityGrade}` : '';
+      const risk = d?.riskLevel && d.riskLevel !== 'unknown' ? ` · risk ${d.riskLevel}` : '';
+      lines.push(`- ${safeName}${domain}${grade}${risk}`);
+    });
+  }
+  if (Array.isArray(report.sharedEntities) && report.sharedEntities.length) {
+    lines.push('');
+    lines.push('### Entidades compartidas');
+    report.sharedEntities.slice(0, 12).forEach((e) => {
+      if (!e) return;
+      const v = typeof e === 'string' ? e : (e.value || e.entity || e.name || JSON.stringify(e).slice(0, 80));
+      lines.push(`- ${String(v).slice(0, 140)}`);
+    });
+  }
+  if (Array.isArray(report.contradictions) && report.contradictions.length) {
+    lines.push('');
+    lines.push('### Contradicciones detectadas');
+    report.contradictions.slice(0, 8).forEach((c) => {
+      if (!c) return;
+      const desc = c.description || c.summary || (typeof c === 'string' ? c : JSON.stringify(c).slice(0, 160));
+      lines.push(`- ${String(desc).slice(0, 220)}`);
+    });
+  }
+  if (Array.isArray(report.complementary) && report.complementary.length) {
+    lines.push('');
+    lines.push('### Insights complementarios');
+    report.complementary.slice(0, 6).forEach((c) => {
+      if (!c) return;
+      const desc = c.description || c.summary || (typeof c === 'string' ? c : JSON.stringify(c).slice(0, 160));
+      lines.push(`- ${String(desc).slice(0, 220)}`);
+    });
+  }
+  if (Array.isArray(report.crossReferences) && report.crossReferences.length) {
+    lines.push('');
+    lines.push('### Referencias cruzadas');
+    report.crossReferences.slice(0, 6).forEach((c) => {
+      if (!c) return;
+      const desc = c.description || c.summary || (typeof c === 'string' ? c : JSON.stringify(c).slice(0, 160));
+      lines.push(`- ${String(desc).slice(0, 220)}`);
+    });
+  }
+  if (report.synthesis) {
+    const synth = typeof report.synthesis === 'string'
+      ? report.synthesis
+      : (Array.isArray(report.synthesis) ? report.synthesis.join('\n') : JSON.stringify(report.synthesis, null, 2));
+    if (synth.trim()) {
+      lines.push('');
+      lines.push('### Síntesis');
+      lines.push(synth.slice(0, 1600));
+    }
+  }
+  return lines.join('\n');
 }
 
 /**
