@@ -1,0 +1,30 @@
+name: Inspect backend logs
+
+on:
+  workflow_dispatch:
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          timeout: 30s
+          command_timeout: 2m
+          script: |
+            echo "=== /health snapshot ==="
+            curl -s https://api.siragpt.com/health | python3 -c "import json,sys; d=json.load(sys.stdin); checks={c['name']:c['status'] for c in d['checks']}; print(checks)"
+            echo ""
+            echo "=== Last 30 backend errors (recent only) ==="
+            tail -100 /root/.pm2/logs/sira-api-backend-error.log | tail -30
+            echo ""
+            echo "=== Recent /api/ai/generate requests (out log) ==="
+            grep -E "/api/ai/generate|generate.*statusCode" /root/.pm2/logs/sira-api-backend-out.log 2>/dev/null | tail -10
+            echo ""
+            echo "=== PM2 status + uptime ==="
+            pm2 list | grep sira-api
