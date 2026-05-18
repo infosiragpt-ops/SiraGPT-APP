@@ -653,8 +653,8 @@ test('create_dashboard_html: no charts', async () => {
 
 // ── Tool metadata ────────────────────────────────────────────────
 
-test('all 32 tools have valid metadata', () => {
-  assert.equal(VISUAL_MEDIA_TOOLS.length, 32);
+test('all 33 tools have valid metadata', () => {
+  assert.equal(VISUAL_MEDIA_TOOLS.length, 33);
   for (const t of VISUAL_MEDIA_TOOLS) {
     assert.ok(t.name);
     assert.ok(t.description);
@@ -3798,6 +3798,146 @@ test('create_concept_map: emits expected events', async () => {
   await tool('create_concept_map').execute({
     title: 'Events',
     nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }],
+  }, ctx);
+  const types = ctx._events.map(e => e.type);
+  assert.ok(types.includes('tool_call'));
+  assert.ok(types.includes('file_artifact'));
+  assert.ok(types.includes('tool_output'));
+});
+
+// ── create_mindmap_radial ────────────────────────────────────────
+
+test('create_mindmap_radial: 4-branch mindmap with sub-topics', async () => {
+  const mm = tool('create_mindmap_radial');
+  assert.ok(mm);
+  const r = await mm.execute({
+    title: 'Sprint 14 scope',
+    subtitle: 'SiraGPT team',
+    centralTopic: 'Sprint 14',
+    branches: [
+      { label: 'Auth',     children: ['Login', 'OAuth', '2FA'] },
+      { label: 'Billing',  children: ['Stripe', 'Refunds'] },
+      { label: 'Onboard',  children: ['Tour', 'Sample docs'] },
+      { label: 'Docs API', children: ['OpenAPI'] },
+    ],
+    theme: 'professional',
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.branches, 4);
+  assert.equal(r.subtopics, 8);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.startsWith('<svg'));
+  assert.ok(svg.includes('Sprint 14 scope'));
+  assert.ok(svg.includes('Sprint 14'));
+  assert.ok(svg.includes('Auth'));
+  assert.ok(svg.includes('Login'));
+  assert.ok(svg.includes('Stripe'));
+  assert.ok(svg.includes('OpenAPI'));
+});
+
+test('create_mindmap_radial: single branch fails (need >= 2)', async () => {
+  const r = await tool('create_mindmap_radial').execute({
+    title: 'Lonely',
+    centralTopic: 'X',
+    branches: [{ label: 'only' }],
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /at least 2/i);
+});
+
+test('create_mindmap_radial: empty branches fails', async () => {
+  const r = await tool('create_mindmap_radial').execute({
+    title: 'Empty',
+    centralTopic: 'X',
+    branches: [],
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /branches.*empty/i);
+});
+
+test('create_mindmap_radial: caps branches at 8 and children at 5', async () => {
+  const tenBranches = Array.from({ length: 10 }, (_, i) => ({
+    label: `B${i + 1}`,
+    children: Array.from({ length: 7 }, (_, j) => `c${j + 1}`),
+  }));
+  const r = await tool('create_mindmap_radial').execute({
+    title: 'Overflow',
+    centralTopic: 'Root',
+    branches: tenBranches,
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.branches, 8, 'branches cap at 8');
+  // 8 branches × 5 children cap = 40 subtopics
+  assert.equal(r.subtopics, 40);
+});
+
+test('create_mindmap_radial: per-branch color override', async () => {
+  const r = await tool('create_mindmap_radial').execute({
+    title: 'Colors',
+    centralTopic: 'Root',
+    branches: [
+      { label: 'A', color: '#FF00FF' },
+      { label: 'B', color: '#00FFFF' },
+    ],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.toUpperCase().includes('#FF00FF'));
+  assert.ok(svg.toUpperCase().includes('#00FFFF'));
+});
+
+test('create_mindmap_radial: xml-escapes content', async () => {
+  const r = await tool('create_mindmap_radial').execute({
+    title: 'XSS',
+    centralTopic: '<script>x</script>',
+    branches: [
+      { label: '"injected"', children: ['<img onerror=x>'] },
+      { label: 'Safe' },
+    ],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.equal(svg.includes('<script>x</script>'), false);
+  assert.ok(svg.includes('&lt;script&gt;'));
+  assert.ok(svg.includes('&quot;injected&quot;'));
+});
+
+test('create_mindmap_radial: branches without children still render', async () => {
+  const r = await tool('create_mindmap_radial').execute({
+    title: 'No children',
+    centralTopic: 'Root',
+    branches: [
+      { label: 'A' },
+      { label: 'B' },
+      { label: 'C' },
+    ],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.subtopics, 0);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.includes('A'));
+});
+
+test('create_mindmap_radial: supports all four themes', async () => {
+  for (const theme of ['professional', 'modern', 'minimal', 'corporate']) {
+    const r = await tool('create_mindmap_radial').execute({
+      title: `Theme ${theme}`,
+      centralTopic: 'Root',
+      branches: [{ label: 'A' }, { label: 'B' }],
+      theme,
+    }, fakeCtx());
+    assert.equal(r.ok, true, `theme ${theme} should succeed`);
+    const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+    assert.ok(svg.startsWith('<svg'));
+  }
+});
+
+test('create_mindmap_radial: emits expected events', async () => {
+  const ctx = fakeCtx();
+  await tool('create_mindmap_radial').execute({
+    title: 'Events',
+    centralTopic: 'Root',
+    branches: [{ label: 'A' }, { label: 'B' }],
   }, ctx);
   const types = ctx._events.map(e => e.type);
   assert.ok(types.includes('tool_call'));

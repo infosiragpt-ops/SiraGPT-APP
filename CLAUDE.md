@@ -37,7 +37,7 @@ npm run type-check     # TSC completo
 5. **Hacer `git pull --rebase` antes de push** para evitar conflictos
 6. **Priorizar:** estabilidad, rendimiento, cobertura de errores, calidad de código
 
-## Visual Tools Inventory (32 tools)
+## Visual Tools Inventory (33 tools)
 | Tool | File | Description |
 |------|------|-------------|
 | generate_image | visual-media-tools.js | SVG/PNG image generation |
@@ -72,6 +72,7 @@ npm run type-check     # TSC completo
 | create_moscow_chart | visual-media-tools.js | MoSCoW prioritization SVG (4 columns Must/Should/Could/Won't Have with feature cards, 4 themes) |
 | create_decision_tree | visual-media-tools.js | Decision tree SVG (top-down branching with up to 4 levels × 4 branches, decision/outcome nodes, labelled edges, 4 themes) |
 | create_concept_map | visual-media-tools.js | Concept map SVG (2-12 nodes in radial layout + labelled edges + category color groups, 4 themes) |
+| create_mindmap_radial | visual-media-tools.js | Radial hierarchical mindmap SVG (central topic + 2-8 main branches with 0-5 sub-topics fanned, 4 themes) |
 
 ## Backend Reliability Utilities
 

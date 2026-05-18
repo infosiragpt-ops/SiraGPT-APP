@@ -7661,6 +7661,225 @@ const createConceptMap = {
   },
 };
 
+// ─────────────────────────────────────────────────────────────────────────
+// Tool 33: create_mindmap_radial
+// ─────────────────────────────────────────────────────────────────────────
+
+const createMindmapRadial = {
+  name: 'create_mindmap_radial',
+  description: 'Generate a radial mindmap as an SVG file: a central topic with 2-8 main branches radiating outward, each main branch with 0-5 sub-branches. Use for brainstorming, knowledge organization, project planning, content outlines, or any hierarchical-radial visualization. Distinct from create_decision_tree (top-down) and create_concept_map (free graph) — this is the canonical mindmap shape.',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string', description: 'Mindmap title (e.g. "Sprint planning").' },
+      subtitle: { type: 'string', description: 'Optional context line.' },
+      centralTopic: { type: 'string', description: 'Text in the central node (the root topic).' },
+      branches: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            label:    { type: 'string', description: 'Main branch label.' },
+            color:    { type: 'string', description: 'Optional hex color override.' },
+            children: { type: 'array', items: { type: 'string' }, description: '0-5 sub-branch labels.' },
+          },
+          required: ['label'],
+        },
+        description: '2-8 main branches radiating from the centre.',
+      },
+      theme: { type: 'string', enum: ['professional', 'modern', 'minimal', 'corporate'], description: 'Visual theme. Default: "professional".' },
+    },
+    required: ['title', 'centralTopic', 'branches'],
+    additionalProperties: false,
+  },
+  async execute({ title, subtitle = '', centralTopic = '', branches = [], theme = 'professional' }, ctx = {}) {
+    emitEvent(ctx, 'tool_call', { tool: 'create_mindmap_radial', preview: title });
+
+    try {
+      if (!Array.isArray(branches) || branches.length === 0) {
+        return { ok: false, error: 'branches array is empty' };
+      }
+      if (branches.length < 2) {
+        return { ok: false, error: 'mindmap requires at least 2 main branches' };
+      }
+
+      const themes = {
+        professional: {
+          bg: '#FAFBFC', card: '#FFFFFF', text: '#1E293B', muted: '#64748B', border: '#E2E8F0', accent: '#2563EB',
+          centerFill: '#2563EB', centerText: '#FFFFFF',
+          palette: ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#06B6D4', '#84CC16'],
+        },
+        modern: {
+          bg: '#0B1121', card: '#1E293B', text: '#F1F5F9', muted: '#94A3B8', border: '#334155', accent: '#818CF8',
+          centerFill: '#818CF8', centerText: '#0F172A',
+          palette: ['#60A5FA', '#34D399', '#FBBF24', '#F87171', '#A78BFA', '#F472B6', '#22D3EE', '#A3E635'],
+        },
+        minimal: {
+          bg: '#FFFFFF', card: '#FFFFFF', text: '#0F172A', muted: '#64748B', border: '#CBD5E1', accent: '#0F172A',
+          centerFill: '#0F172A', centerText: '#FFFFFF',
+          palette: ['#0F172A', '#1E293B', '#334155', '#475569', '#64748B', '#94A3B8', '#CBD5E1', '#E2E8F0'],
+        },
+        corporate: {
+          bg: '#F8FAFC', card: '#FFFFFF', text: '#0F172A', muted: '#475569', border: '#CBD5E1', accent: '#1E40AF',
+          centerFill: '#1E40AF', centerText: '#FFFFFF',
+          palette: ['#1A73E8', '#0F9D58', '#F9AB00', '#D93025', '#673AB7', '#E91E63', '#039BE5', '#A5D86C'],
+        },
+      };
+      const t = themes[theme] || themes.professional;
+
+      const safeTitle = xmlEscape(String(title).slice(0, 120));
+      const safeSubtitle = xmlEscape(String(subtitle || '').slice(0, 140));
+      const safeCentral = xmlEscape(String(centralTopic || 'Topic').slice(0, 28));
+      const branchList = branches.slice(0, 8).map((b, idx) => ({
+        label: xmlEscape(String(b.label || '').slice(0, 24)),
+        children: (Array.isArray(b.children) ? b.children : []).slice(0, 5).map(c => xmlEscape(String(c || '').slice(0, 22))).filter(Boolean),
+        color: b.color && /^#[0-9A-Fa-f]{6}$/.test(b.color) ? b.color : t.palette[idx % t.palette.length],
+        _idx: idx,
+      }));
+      const n = branchList.length;
+
+      const headerH = safeSubtitle ? 110 : 86;
+      const pad = 28;
+      const centerR = 58;
+      const branchR = radiusAround => 170;
+      const childR = 290;
+      const plotSize = childR * 2 + 220; // padding for child labels
+      const W = pad * 2 + plotSize;
+      const H = headerH + pad + plotSize + pad;
+      const cx = pad + plotSize / 2;
+      const cy = headerH + pad + plotSize / 2;
+
+      function branchAngle(i) {
+        return (-Math.PI / 2) + (2 * Math.PI * i) / n;
+      }
+
+      let body = `<rect width="${W}" height="${H}" fill="${t.bg}" rx="12"/>`;
+      // Header
+      body += `<rect x="0" y="0" width="${W}" height="${headerH}" fill="${t.accent}"/>`;
+      body += `<text x="${W / 2}" y="42" text-anchor="middle" font-family="Georgia, serif" font-size="24" font-weight="bold" fill="#fff">${safeTitle}</text>`;
+      const totalChildren = branchList.reduce((s, b) => s + b.children.length, 0);
+      body += `<text x="${W / 2}" y="66" text-anchor="middle" font-family="Arial" font-size="12" fill="#fff" opacity="0.85">${n} ramas · ${totalChildren} sub-temas</text>`;
+      if (safeSubtitle) {
+        body += `<text x="${W / 2}" y="92" text-anchor="middle" font-family="Arial" font-size="13" fill="#fff" opacity="0.92">${safeSubtitle}</text>`;
+      }
+
+      // Render branches (lines + child fan, before nodes so they sit underneath)
+      branchList.forEach((br) => {
+        const ang = branchAngle(br._idx);
+        const bx = cx + Math.cos(ang) * branchR();
+        const by = cy + Math.sin(ang) * branchR();
+
+        // Trunk line from centre edge to branch node
+        const trunkStartX = cx + Math.cos(ang) * centerR;
+        const trunkStartY = cy + Math.sin(ang) * centerR;
+        body += `<line x1="${trunkStartX}" y1="${trunkStartY}" x2="${bx}" y2="${by}" stroke="${br.color}" stroke-width="3" stroke-linecap="round" opacity="0.8"/>`;
+
+        // Children fan out from branch node
+        if (br.children.length > 0) {
+          // Spread children in a ±35° arc around the branch direction
+          const childSpread = Math.PI / 2.4; // ~75 degrees total
+          const childCount = br.children.length;
+          br.children.forEach((child, idx) => {
+            const offset = childCount === 1 ? 0 : (idx / (childCount - 1) - 0.5) * childSpread;
+            const childAng = ang + offset;
+            const ccx = cx + Math.cos(childAng) * childR;
+            const ccy = cy + Math.sin(childAng) * childR;
+            // Curve from branch node to child
+            const midX = (bx + ccx) / 2;
+            const midY = (by + ccy) / 2;
+            body += `<path d="M ${bx} ${by} Q ${midX} ${midY}, ${ccx} ${ccy}" stroke="${br.color}" stroke-width="2" fill="none" opacity="0.6"/>`;
+            // Child marker
+            const labelW = Math.max(80, child.length * 6.5 + 16);
+            const labelH = 26;
+            body += `<rect x="${ccx - labelW / 2}" y="${ccy - labelH / 2}" width="${labelW}" height="${labelH}" rx="13" fill="${t.card}" stroke="${br.color}" stroke-width="1.5"/>`;
+            body += `<text x="${ccx}" y="${ccy + 5}" text-anchor="middle" font-family="Arial" font-size="11" fill="${t.text}">${child}</text>`;
+          });
+        }
+
+        // Branch node (rendered on top of trunk)
+        const branchNodeR = 36;
+        body += `<circle cx="${bx}" cy="${by}" r="${branchNodeR}" fill="${br.color}" stroke="${t.card}" stroke-width="3" filter="url(#vis-shadow)"/>`;
+        // Branch label (wrap to 2 lines at ~10 chars)
+        const words = br.label.split(' ');
+        let l1 = '';
+        let l2 = '';
+        for (const w of words) {
+          if ((l1 + ' ' + w).trim().length < 10) l1 = (l1 + ' ' + w).trim();
+          else l2 = (l2 + ' ' + w).trim();
+        }
+        if (l2) {
+          body += `<text x="${bx}" y="${by - 2}" text-anchor="middle" font-family="Arial" font-size="11" font-weight="bold" fill="#fff">${l1}</text>`;
+          body += `<text x="${bx}" y="${by + 12}" text-anchor="middle" font-family="Arial" font-size="11" font-weight="bold" fill="#fff">${l2}</text>`;
+        } else {
+          body += `<text x="${bx}" y="${by + 4}" text-anchor="middle" font-family="Arial" font-size="12" font-weight="bold" fill="#fff">${l1}</text>`;
+        }
+      });
+
+      // Render central node on top
+      body += `<circle cx="${cx}" cy="${cy}" r="${centerR}" fill="${t.centerFill}" stroke="${t.card}" stroke-width="4" filter="url(#vis-shadow)"/>`;
+      // Wrap central topic to up to 2 lines
+      const centralWords = safeCentral.split(' ');
+      let cl1 = '';
+      let cl2 = '';
+      for (const w of centralWords) {
+        if ((cl1 + ' ' + w).trim().length < 14) cl1 = (cl1 + ' ' + w).trim();
+        else cl2 = (cl2 + ' ' + w).trim();
+      }
+      if (cl2) {
+        body += `<text x="${cx}" y="${cy - 2}" text-anchor="middle" font-family="Georgia, serif" font-size="14" font-weight="bold" fill="${t.centerText}">${cl1}</text>`;
+        body += `<text x="${cx}" y="${cy + 14}" text-anchor="middle" font-family="Georgia, serif" font-size="14" font-weight="bold" fill="${t.centerText}">${cl2}</text>`;
+      } else {
+        body += `<text x="${cx}" y="${cy + 6}" text-anchor="middle" font-family="Georgia, serif" font-size="15" font-weight="bold" fill="${t.centerText}">${cl1}</text>`;
+      }
+
+      const svg = svgDocument({
+        width: W,
+        height: H,
+        title: safeTitle,
+        description: `Radial mindmap: ${safeTitle}`,
+        body,
+      });
+
+      const buffer = Buffer.from(svg, 'utf8');
+      const filename = `mindmap_${crypto.randomBytes(4).toString('hex')}.svg`;
+      const artifact = finalizeArtifact({ filename, buffer, mime: EXTENSION_TO_MIME.svg, ctx });
+
+      emitEvent(ctx, 'file_artifact', {
+        artifact: {
+          id: artifact.id,
+          filename: artifact.filename,
+          format: 'svg',
+          mime: 'image/svg+xml',
+          sizeBytes: artifact.sizeBytes,
+          downloadUrl: artifact.downloadUrl,
+        },
+      });
+
+      emitEvent(ctx, 'tool_output', {
+        tool: 'create_mindmap_radial',
+        ok: true,
+        preview: `Mindmap: ${artifact.filename} (${n} ramas · ${totalChildren} sub-temas, ${Math.round(artifact.sizeBytes / 1024)} KB)`,
+      });
+
+      return {
+        ok: true,
+        id: artifact.id,
+        filename: artifact.filename,
+        sizeBytes: artifact.sizeBytes,
+        downloadUrl: artifact.downloadUrl,
+        title,
+        centralTopic: safeCentral,
+        branches: n,
+        subtopics: totalChildren,
+      };
+    } catch (err) {
+      const msg = err?.message || String(err);
+      emitEvent(ctx, 'tool_output', { tool: 'create_mindmap_radial', ok: false, preview: `Error: ${msg}` });
+      return { ok: false, error: msg };
+    }
+  },
+};
+
 // ── All visual/media tools for the agent ──────────────────────────────
 
 const VISUAL_MEDIA_TOOLS = [
@@ -7696,6 +7915,7 @@ const VISUAL_MEDIA_TOOLS = [
   createMoscowChart,
   createDecisionTree,
   createConceptMap,
+  createMindmapRadial,
 ];
 
 // Internal helpers exposed for unit testing — NOT part of the public agent
