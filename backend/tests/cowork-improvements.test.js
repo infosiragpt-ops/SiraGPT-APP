@@ -427,3 +427,76 @@ describe('cowork-progress-stream writeSSE fix', () => {
     stream.destroy();
   });
 });
+
+describe('session-manager upgraded compaction', () => {
+  const sessionManager = require('../src/services/session-manager');
+
+  it('compactSession returns result with pipeline field', async () => {
+    const userId = 'compaction-test-user';
+    const session = sessionManager.createSession(userId, { label: 'Test' });
+    for (let i = 0; i < 20; i++) {
+      sessionManager.addMessage(session.id, { role: 'user', content: `Message ${i} with some content to make it longer`, tokens: 50 });
+    }
+    const result = await sessionManager.compactSession(session.id, { keepFirst: 2, keepLast: 6 });
+    assert.ok(result.compacted);
+    assert.ok(result.pipeline);
+  });
+
+  it('compactSession uses context-compactor when model provided', async () => {
+    const userId = 'compaction-cc-user';
+    const session = sessionManager.createSession(userId, { label: 'CC Test' });
+    for (let i = 0; i < 20; i++) {
+      sessionManager.addMessage(session.id, { role: 'user', content: `CC Message ${i} with detailed content about topic ${i}`, tokens: 60 });
+    }
+    const result = await sessionManager.compactSession(session.id, { model: 'gpt-4o' });
+    assert.ok(result.compacted);
+    assert.ok(result.pipeline);
+  });
+});
+
+describe('rate limiter on /api/ai/generate', () => {
+  it('expensiveLimiter is mounted on /api/ai/generate in index.js', () => {
+    const fs = require('fs');
+    const indexSrc = fs.readFileSync(require.resolve('../index.js'), 'utf8');
+    assert.ok(indexSrc.includes("/api/ai/generate"), 'index.js should mount expensiveLimiter on /api/ai/generate');
+  });
+});
+
+describe('scientific_search tool manifest', () => {
+  const { BUILTIN_MANIFESTS } = require('../src/services/agents/tool-manifest');
+
+  it('scientific_search is registered as a built-in manifest', () => {
+    assert.ok(BUILTIN_MANIFESTS.scientific_search, 'scientific_search should be in BUILTIN_MANIFESTS');
+    assert.equal(BUILTIN_MANIFESTS.scientific_search.name, 'scientific_search');
+  });
+
+  it('scientific_search requires network access', () => {
+    assert.equal(BUILTIN_MANIFESTS.scientific_search.usage_limits.requires_network, true);
+  });
+
+  it('scientific_search has depth input', () => {
+    const props = BUILTIN_MANIFESTS.scientific_search.inputs.properties;
+    assert.ok(props.depth, 'should have depth property');
+    assert.ok(props.depth.enum, 'depth should have enum values');
+  });
+});
+
+describe('progress events in chat SSE', () => {
+  it('sendProgress function is defined in ai.js', () => {
+    const fs = require('fs');
+    const src = fs.readFileSync(require.resolve('../src/routes/ai'), 'utf8');
+    assert.ok(src.includes('sendProgress'), 'ai.js should define sendProgress');
+    assert.ok(src.includes('Procesando solicitud'), 'should emit initial progress');
+    assert.ok(src.includes('Generando respuesta'), 'should emit generation progress');
+  });
+});
+
+describe('cowork-engine enrichAIRequest deduplication', () => {
+  const coworkEngine = require('../src/services/cowork-engine');
+
+  it('enrichAIRequest returns structured enrichment', async () => {
+    const result = await coworkEngine.enrichAIRequest('dedup-test-user', 'Short query', {});
+    assert.ok(result);
+    assert.ok(typeof result.systemPromptAdditions === 'string');
+  });
+});

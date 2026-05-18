@@ -1767,6 +1767,41 @@ function getSkillAdapterManifests() {
 }
 Object.assign(BUILTIN_MANIFESTS, getSkillAdapterManifests());
 
+function getResearchManifests() {
+  return {
+    scientific_search: {
+      name: "scientific_search",
+      purpose: "Search open scientific paper APIs (arXiv, OpenAlex, CrossRef, Europe PMC, Semantic Scholar, PubMed, CORE) for peer-reviewed research papers on a topic.",
+      inputs: {
+        type: "object",
+        required: ["query"],
+        properties: {
+          query: { type: "string", description: "Search query for scientific papers." },
+          depth: { type: "string", enum: ["quick", "standard", "deep"], description: "Search depth: quick (3 steps), standard (6 steps), deep (9 steps)." },
+          providers: { type: "array", items: { type: "string" }, description: "Subset of providers to search (arxiv, openalex, crossref, europe_pmc, semantic_scholar, pubmed, core)." },
+        },
+      },
+      outputs: { type: "object", properties: { ok: { type: "boolean" }, papers: { type: "array" }, total: { type: "integer" } } },
+      allowed_formats: [],
+      forbidden_formats: [],
+      expected_errors: [
+        { code: "no_query", description: "query parameter is empty.", repair_hint: "Provide a search query." },
+      ],
+      acceptance_tests: ["returns ok:true with papers[] for any non-empty query"],
+      usage_limits: { timeout_ms_default: 30000, timeout_ms_max: 120000, max_calls_per_task: 5, requires_auth: true, requires_network: true },
+      examples_positive: [{ when: "user asks about quantum computing research", call: { query: "quantum computing error correction 2024" } }],
+      examples_negative: [{ when: "user wants a simple chat answer", why: "use conversational_answer or self_rag_answer instead." }],
+      recovery_policy: { on_timeout: "Return ok:false.", on_error: "Surface the error.", max_retries: 1 },
+      side_effect_level: "network",
+      sandbox_required: false,
+      audit_policy: "every-call",
+      scopes: ["research.read"],
+      data_classes: ["public"],
+    },
+  };
+}
+Object.assign(BUILTIN_MANIFESTS, getResearchManifests());
+
 function getCoworkManifests() {
   return {
     deep_analyze: {

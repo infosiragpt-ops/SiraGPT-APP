@@ -184,7 +184,7 @@ function spawnSession(parentSessionId, userId, opts = {}) {
   return child;
 }
 
-function compactSession(sessionId, opts = {}) {
+async function compactSession(sessionId, opts = {}) {
   const session = sessions.get(sessionId);
   if (!session) return null;
 
@@ -197,7 +197,7 @@ function compactSession(sessionId, opts = {}) {
         role: m.role === 'user' ? 'user' : 'assistant',
         content: m.content || '',
       }));
-      const result = compactContext({
+      const result = await compactContext({
         messages,
         model: opts.model,
         ragChunks: [],

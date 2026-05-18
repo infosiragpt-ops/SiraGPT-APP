@@ -2776,7 +2776,19 @@ router.post(
       // refusal or error so the user never sees a blank reply.
       let artifactHandled = false;
       if (artifactGenerator.isArtifactRequest(prompt)) {
+        let breakerFailed = false;
         try {
+          try {
+            const { getBreaker } = require('../services/circuit-breaker');
+            const breaker = getBreaker('openai:artifact');
+            if (breaker && breaker.state === 'OPEN') {
+              breakerFailed = true;
+              console.warn('[artifact] circuit breaker OPEN — falling through to text response');
+            }
+          } catch (_cbErr) { /* no breaker configured */ }
+
+          if (breakerFailed) throw new Error('circuit_open');
+
           const imageDataUrls = [];
           for (const f of processedFiles) {
             if (!f || !f.mimeType || !f.mimeType.startsWith('image/')) continue;
