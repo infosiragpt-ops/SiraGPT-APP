@@ -63,6 +63,18 @@ const MAX_INSIGHTS_BLOCK_CHARS = Number.parseInt(process.env.SIRAGPT_DOC_INSIGHT
 // warrants a look. Char threshold flags analyzers that dominate the budget.
 const ANALYZER_SLOW_THRESHOLD_MS = Number.parseInt(process.env.SIRAGPT_ANALYZER_SLOW_MS || '250', 10);
 const ANALYZER_LARGE_THRESHOLD_CHARS = Number.parseInt(process.env.SIRAGPT_ANALYZER_LARGE_CHARS || '4000', 10);
+// Default total wall-clock budget for the analyzer pipeline. Once exceeded,
+// remaining analyzers are skipped (no work done, telemetry records the
+// skip). Bounds tail latency even when many analyzers are slow on a
+// hostile payload. Set to 0 (disabled) or a high value to opt out.
+const ANALYZER_DEADLINE_MS = Number.parseInt(process.env.SIRAGPT_ANALYZER_DEADLINE_MS || '2500', 10);
+// Circuit-breaker tuning — when an analyzer fails this many times in a row,
+// we trip its breaker and short-circuit its calls for the cooldown window.
+// Cooldown is intentionally short (default 60 s) because most analyzer
+// failures are payload-specific, not module-wide; a brief skip lets prod
+// avoid burning latency while the broken regex remains in code.
+const ANALYZER_BREAKER_THRESHOLD = Number.parseInt(process.env.SIRAGPT_ANALYZER_BREAKER_THRESHOLD || '5', 10);
+const ANALYZER_BREAKER_COOLDOWN_MS = Number.parseInt(process.env.SIRAGPT_ANALYZER_BREAKER_COOLDOWN_MS || '60000', 10);
 
 // ──────────────────────────────────────────────────────────────────────────
 // Resilient analyzer runner
@@ -77,14 +89,22 @@ const ANALYZER_LARGE_THRESHOLD_CHARS = Number.parseInt(process.env.SIRAGPT_ANALY
 // The runner also records per-block timings and failure reasons so we can
 // surface telemetry to operators. Telemetry is opt-in (a `null` telemetry
 // arg disables collection) and adds < 100 µs of overhead per block.
-function createAnalyzerTelemetry({ slowMs = ANALYZER_SLOW_THRESHOLD_MS, largeChars = ANALYZER_LARGE_THRESHOLD_CHARS } = {}) {
+function createAnalyzerTelemetry({
+  slowMs = ANALYZER_SLOW_THRESHOLD_MS,
+  largeChars = ANALYZER_LARGE_THRESHOLD_CHARS,
+  deadlineMs = ANALYZER_DEADLINE_MS,
+} = {}) {
   return {
     entries: [],
     failures: [],
     slow: [],
     large: [],
+    skipped: [],   // entries skipped because the wall-clock deadline elapsed
+    breakerOpen: [], // entries short-circuited by an open breaker
     slowMs,
     largeChars,
+    deadlineMs,
+    deadlineAt: deadlineMs > 0 ? Date.now() + deadlineMs : 0,
     startedAt: Date.now(),
   };
 }
@@ -94,7 +114,72 @@ function _analyzerClock() {
   return Date.now();
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// Per-analyzer circuit breaker
+// ──────────────────────────────────────────────────────────────────────────
+// Process-lifetime state map: { [name]: { consecutiveFailures, openUntil } }.
+// Lives at module scope on purpose — a breaker tripped on one chat turn
+// stays tripped across subsequent turns until the cooldown elapses. This
+// is what lets a single broken analyzer in prod stop burning latency on
+// every request instead of being re-attempted forever.
+const _breakerState = new Map();
+
+function _breakerKey(name) { return String(name); }
+
+function _breakerIsOpen(name, now) {
+  const entry = _breakerState.get(_breakerKey(name));
+  if (!entry) return false;
+  if (entry.openUntil && entry.openUntil > now) return true;
+  // Cooldown elapsed — auto half-open: clear state so the next call goes
+  // through and either resets or re-trips the breaker based on outcome.
+  if (entry.openUntil && entry.openUntil <= now) {
+    _breakerState.delete(_breakerKey(name));
+  }
+  return false;
+}
+
+function _breakerRecordSuccess(name) {
+  // Success wipes any prior failure count so transient errors don't
+  // accumulate forever. Done in-place to keep object identity stable.
+  const key = _breakerKey(name);
+  if (_breakerState.has(key)) _breakerState.delete(key);
+}
+
+function _breakerRecordFailure(name) {
+  const key = _breakerKey(name);
+  const entry = _breakerState.get(key) || { consecutiveFailures: 0, openUntil: 0 };
+  entry.consecutiveFailures += 1;
+  if (entry.consecutiveFailures >= ANALYZER_BREAKER_THRESHOLD) {
+    entry.openUntil = Date.now() + ANALYZER_BREAKER_COOLDOWN_MS;
+  }
+  _breakerState.set(key, entry);
+}
+
+// Test-only helper — clears all breaker state. Exported via `_internal`.
+function _resetAnalyzerBreakers() {
+  _breakerState.clear();
+}
+
 function runAnalyzerSafe(name, fn, telemetry) {
+  // Deadline guard — pipeline-level wall-clock budget. Once exceeded,
+  // remaining analyzers short-circuit. The chat continues with whatever
+  // blocks finished in time.
+  if (telemetry && telemetry.deadlineAt && Date.now() > telemetry.deadlineAt) {
+    telemetry.entries.push({ name, ok: false, elapsedMs: 0, skipped: 'deadline' });
+    telemetry.skipped.push({ name, reason: 'deadline' });
+    return '';
+  }
+  // Breaker guard — per-analyzer state. Short-circuits without invoking
+  // the builder at all when the breaker is open.
+  const now = Date.now();
+  if (_breakerIsOpen(name, now)) {
+    if (telemetry) {
+      telemetry.entries.push({ name, ok: false, elapsedMs: 0, skipped: 'breaker_open' });
+      telemetry.breakerOpen.push({ name });
+    }
+    return '';
+  }
+
   const start = _analyzerClock();
   try {
     const result = fn();
@@ -105,6 +190,7 @@ function runAnalyzerSafe(name, fn, telemetry) {
       if (elapsedMs > telemetry.slowMs) telemetry.slow.push({ name, elapsedMs });
       if (out.length > telemetry.largeChars) telemetry.large.push({ name, chars: out.length });
     }
+    _breakerRecordSuccess(name);
     return out;
   } catch (err) {
     const elapsedMs = Math.max(0, _analyzerClock() - start);
@@ -113,6 +199,7 @@ function runAnalyzerSafe(name, fn, telemetry) {
       telemetry.entries.push({ name, ok: false, elapsedMs, error: message });
       telemetry.failures.push({ name, error: message });
     }
+    _breakerRecordFailure(name);
     try { console.warn(`[analyzer/fail] ${name}: ${message}`); } catch {}
     return '';
   }
@@ -122,10 +209,13 @@ function summarizeAnalyzerTelemetry(telemetry) {
   if (!telemetry || !Array.isArray(telemetry.entries) || telemetry.entries.length === 0) return null;
   let okCount = 0;
   let failCount = 0;
+  let skippedCount = 0;
   let totalChars = 0;
   let totalElapsedMs = 0;
   for (const e of telemetry.entries) {
-    if (e.ok) okCount += 1; else failCount += 1;
+    if (e.ok) okCount += 1;
+    else if (e.skipped) skippedCount += 1;
+    else failCount += 1;
     totalChars += e.chars || 0;
     totalElapsedMs += e.elapsedMs || 0;
   }
@@ -139,12 +229,17 @@ function summarizeAnalyzerTelemetry(telemetry) {
     blockCount: telemetry.entries.length,
     okCount,
     failCount,
+    skippedCount,
     totalChars,
     totalElapsedMs: Math.round(totalElapsedMs * 1000) / 1000,
     slowest,
     failures: telemetry.failures.slice(0, 10),
     slowBlocks: telemetry.slow.slice(0, 10).map((e) => ({ name: e.name, elapsedMs: Math.round(e.elapsedMs * 1000) / 1000 })),
     largeBlocks: telemetry.large.slice(0, 10),
+    skipped: (telemetry.skipped || []).slice(0, 10),
+    breakerOpen: (telemetry.breakerOpen || []).slice(0, 10),
+    deadlineMs: telemetry.deadlineMs || 0,
+    deadlineExceeded: telemetry.deadlineAt > 0 && Date.now() > telemetry.deadlineAt,
     durationMs: Date.now() - telemetry.startedAt,
   };
 }
@@ -8010,6 +8105,9 @@ module.exports = {
     classifyColumnType,
     parseNumericCell,
     detectTotalsRow,
+    resetAnalyzerBreakers: _resetAnalyzerBreakers,
+    ANALYZER_BREAKER_THRESHOLD,
+    ANALYZER_BREAKER_COOLDOWN_MS,
     formatTableProfileFooter,
   },
 };

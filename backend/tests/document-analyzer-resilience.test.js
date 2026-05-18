@@ -266,11 +266,12 @@ test('isolation: one builder throws — the other 299 still run', () => {
   const originalWarn = console.warn;
   console.warn = () => {};
   try {
+    analyzer._internal.resetAnalyzerBreakers();
     const t = analyzer.createAnalyzerTelemetry();
     const blocks = {};
     const N = 300;
     for (let i = 0; i < N; i += 1) {
-      const name = `block-${i}`;
+      const name = `iso-block-${i}`;
       const builder = i === 47
         ? () => { throw new Error('regex catastrophic backtracking'); }
         : () => `content-${i}`;
@@ -279,11 +280,159 @@ test('isolation: one builder throws — the other 299 still run', () => {
     let okBlocks = 0;
     for (const v of Object.values(blocks)) if (v) okBlocks += 1;
     assert.equal(okBlocks, N - 1, 'all blocks except the throwing one should have content');
-    assert.equal(blocks['block-47'], '');
+    assert.equal(blocks['iso-block-47'], '');
     const summary = analyzer.summarizeAnalyzerTelemetry(t);
     assert.equal(summary.failCount, 1);
-    assert.equal(summary.failures[0].name, 'block-47');
+    assert.equal(summary.failures[0].name, 'iso-block-47');
   } finally {
     console.warn = originalWarn;
   }
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// Circuit breaker — trips after N consecutive failures, cools down, recovers
+// ──────────────────────────────────────────────────────────────────────────
+
+test('breaker: trips after threshold consecutive failures', () => {
+  const originalWarn = console.warn;
+  console.warn = () => {};
+  try {
+    analyzer._internal.resetAnalyzerBreakers();
+    const threshold = analyzer._internal.ANALYZER_BREAKER_THRESHOLD;
+    const t = analyzer.createAnalyzerTelemetry();
+    // Failures 1..threshold all invoke the builder.
+    for (let i = 0; i < threshold; i += 1) {
+      analyzer.runAnalyzerSafe('breaker-test', () => { throw new Error('regex'); }, t);
+    }
+    let invocations = 0;
+    const out = analyzer.runAnalyzerSafe('breaker-test', () => { invocations += 1; return 'should-not-run'; }, t);
+    assert.equal(out, '');
+    assert.equal(invocations, 0, 'breaker must short-circuit before invoking builder');
+    const summary = analyzer.summarizeAnalyzerTelemetry(t);
+    assert.ok(summary.breakerOpen.length >= 1);
+    assert.equal(summary.breakerOpen[0].name, 'breaker-test');
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+test('breaker: reset clears state and analyzer can run again', () => {
+  const originalWarn = console.warn;
+  console.warn = () => {};
+  try {
+    analyzer._internal.resetAnalyzerBreakers();
+    const threshold = analyzer._internal.ANALYZER_BREAKER_THRESHOLD;
+    const t = analyzer.createAnalyzerTelemetry();
+    for (let i = 0; i < threshold; i += 1) {
+      analyzer.runAnalyzerSafe('reset-test', () => { throw new Error('e'); }, t);
+    }
+    // Breaker should now be open
+    const blocked = analyzer.runAnalyzerSafe('reset-test', () => 'noop', t);
+    assert.equal(blocked, '');
+    // After reset, the analyzer runs again
+    analyzer._internal.resetAnalyzerBreakers();
+    const out = analyzer.runAnalyzerSafe('reset-test', () => 'recovered', t);
+    assert.equal(out, 'recovered');
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+test('breaker: success resets the consecutive-failure counter', () => {
+  const originalWarn = console.warn;
+  console.warn = () => {};
+  try {
+    analyzer._internal.resetAnalyzerBreakers();
+    const threshold = analyzer._internal.ANALYZER_BREAKER_THRESHOLD;
+    const t = analyzer.createAnalyzerTelemetry();
+    // (threshold - 1) failures, then a success — should not trip.
+    for (let i = 0; i < threshold - 1; i += 1) {
+      analyzer.runAnalyzerSafe('flapper', () => { throw new Error('e'); }, t);
+    }
+    analyzer.runAnalyzerSafe('flapper', () => 'ok', t);
+    // Now (threshold - 1) more failures must NOT yet trip (counter was reset)
+    for (let i = 0; i < threshold - 1; i += 1) {
+      analyzer.runAnalyzerSafe('flapper', () => { throw new Error('e'); }, t);
+    }
+    let invocations = 0;
+    analyzer.runAnalyzerSafe('flapper', () => { invocations += 1; return 'check'; }, t);
+    assert.equal(invocations, 1, 'breaker must NOT be open after success-reset');
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+test('breaker: per-name isolation — one tripped breaker does not block others', () => {
+  const originalWarn = console.warn;
+  console.warn = () => {};
+  try {
+    analyzer._internal.resetAnalyzerBreakers();
+    const threshold = analyzer._internal.ANALYZER_BREAKER_THRESHOLD;
+    const t = analyzer.createAnalyzerTelemetry();
+    for (let i = 0; i < threshold; i += 1) {
+      analyzer.runAnalyzerSafe('iso-breaker', () => { throw new Error('e'); }, t);
+    }
+    // 'iso-breaker' open, 'iso-clean' must still run.
+    const a1 = analyzer.runAnalyzerSafe('iso-breaker', () => 'should-not-run', t);
+    const a2 = analyzer.runAnalyzerSafe('iso-clean', () => 'still-fine', t);
+    assert.equal(a1, '');
+    assert.equal(a2, 'still-fine');
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// Deadline guard — wall-clock pipeline budget
+// ──────────────────────────────────────────────────────────────────────────
+
+test('deadline: skips analyzers after wall-clock budget exceeded', () => {
+  analyzer._internal.resetAnalyzerBreakers();
+  // 30 ms total budget; first analyzer burns 50 ms.
+  const t = analyzer.createAnalyzerTelemetry({ deadlineMs: 30 });
+  analyzer.runAnalyzerSafe('first', () => {
+    const end = Date.now() + 50;
+    while (Date.now() < end) { /* burn */ }
+    return 'done';
+  }, t);
+  let invocations = 0;
+  analyzer.runAnalyzerSafe('second', () => { invocations += 1; return 'skipped?'; }, t);
+  analyzer.runAnalyzerSafe('third', () => { invocations += 1; return 'skipped?'; }, t);
+  assert.equal(invocations, 0, 'second + third must be skipped after deadline');
+  const summary = analyzer.summarizeAnalyzerTelemetry(t);
+  assert.equal(summary.skippedCount, 2);
+  assert.equal(summary.deadlineExceeded, true);
+  assert.equal(summary.skipped[0].reason, 'deadline');
+});
+
+test('deadline: disabled when deadlineMs=0 — all analyzers run', () => {
+  analyzer._internal.resetAnalyzerBreakers();
+  const t = analyzer.createAnalyzerTelemetry({ deadlineMs: 0 });
+  analyzer.runAnalyzerSafe('first', () => {
+    const end = Date.now() + 20;
+    while (Date.now() < end) {}
+    return 'done';
+  }, t);
+  let invocations = 0;
+  analyzer.runAnalyzerSafe('second', () => { invocations += 1; return 'ran'; }, t);
+  assert.equal(invocations, 1, 'no deadline means second analyzer runs even after first was slow');
+  const summary = analyzer.summarizeAnalyzerTelemetry(t);
+  assert.equal(summary.skippedCount, 0);
+  assert.equal(summary.deadlineExceeded, false);
+});
+
+test('deadline: skipped entries are summarised separately from failures', () => {
+  analyzer._internal.resetAnalyzerBreakers();
+  const t = analyzer.createAnalyzerTelemetry({ deadlineMs: 1 });
+  analyzer.runAnalyzerSafe('first', () => {
+    const end = Date.now() + 5;
+    while (Date.now() < end) {}
+    return 'a';
+  }, t);
+  analyzer.runAnalyzerSafe('second', () => 'b', t);
+  analyzer.runAnalyzerSafe('third', () => 'c', t);
+  const summary = analyzer.summarizeAnalyzerTelemetry(t);
+  assert.equal(summary.failCount, 0, 'deadline skip is not a failure');
+  assert.equal(summary.skippedCount, 2);
+  assert.ok(summary.deadlineMs > 0);
 });
