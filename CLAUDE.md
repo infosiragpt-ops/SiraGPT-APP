@@ -37,7 +37,7 @@ npm run type-check     # TSC completo
 5. **Hacer `git pull --rebase` antes de push** para evitar conflictos
 6. **Priorizar:** estabilidad, rendimiento, cobertura de errores, calidad de código
 
-## Visual Tools Inventory (27 tools)
+## Visual Tools Inventory (28 tools)
 | Tool | File | Description |
 |------|------|-------------|
 | generate_image | visual-media-tools.js | SVG/PNG image generation |
@@ -67,6 +67,7 @@ npm run type-check     # TSC completo
 | create_empathy_map | visual-media-tools.js | Design-thinking empathy map SVG (persona centre + Says/Thinks/Does/Feels quadrants + optional Pains/Gains strips, 4 themes) |
 | create_lean_canvas | visual-media-tools.js | Ash Maurya Lean Canvas SVG (9 startup-focused blocks — Problem/UVP/UnfairAdvantage/Solution/Channels/Segments/Cost/Revenue/Metrics, 4 themes) |
 | create_balanced_scorecard | visual-media-tools.js | Kaplan-Norton Balanced Scorecard SVG (4 perspective bands Financial/Customer/Internal/L&G + cause-effect arrow + status pills, 4 themes) |
+| create_ansoff_matrix | visual-media-tools.js | Ansoff growth-strategy 2x2 SVG (Market × Product → Penetration/Development/Development/Diversification with risk pills, 4 themes) |
 
 ## Backend Reliability Utilities
 

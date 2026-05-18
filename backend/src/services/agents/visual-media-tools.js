@@ -6468,6 +6468,232 @@ const createBalancedScorecard = {
   },
 };
 
+// ─────────────────────────────────────────────────────────────────────────
+// Tool 28: create_ansoff_matrix
+// ─────────────────────────────────────────────────────────────────────────
+
+const createAnsoffMatrix = {
+  name: 'create_ansoff_matrix',
+  description: 'Generate an Ansoff growth-strategy matrix as an SVG file: a 2×2 grid with Market axis (existing vs new) and Product axis (existing vs new), producing 4 canonical growth strategies — Market Penetration (low risk), Market Development (medium risk), Product Development (medium risk), and Diversification (high risk). Each quadrant accepts 1-8 strategic initiatives. Use for growth-strategy reviews, expansion planning, or risk-balanced portfolio sweeps.',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string', description: 'Matrix title (e.g. "2026-2027 Growth strategy").' },
+      subtitle: { type: 'string', description: 'Optional context line.' },
+      marketPenetration:  { type: 'array', items: { type: 'string' }, description: 'Existing product × existing market initiatives (low risk).' },
+      marketDevelopment:  { type: 'array', items: { type: 'string' }, description: 'Existing product × new market initiatives (medium risk).' },
+      productDevelopment: { type: 'array', items: { type: 'string' }, description: 'New product × existing market initiatives (medium risk).' },
+      diversification:    { type: 'array', items: { type: 'string' }, description: 'New product × new market initiatives (high risk).' },
+      theme: { type: 'string', enum: ['professional', 'modern', 'minimal', 'corporate'], description: 'Visual theme. Default: "professional".' },
+    },
+    required: ['title'],
+    additionalProperties: false,
+  },
+  async execute({
+    title,
+    subtitle = '',
+    marketPenetration = [],
+    marketDevelopment = [],
+    productDevelopment = [],
+    diversification = [],
+    theme = 'professional',
+  }, ctx = {}) {
+    emitEvent(ctx, 'tool_call', { tool: 'create_ansoff_matrix', preview: title });
+
+    try {
+      const quadInputs = [marketPenetration, marketDevelopment, productDevelopment, diversification];
+      if (!quadInputs.every(q => Array.isArray(q))) {
+        return { ok: false, error: 'marketPenetration / marketDevelopment / productDevelopment / diversification must be arrays' };
+      }
+      const totalItems = quadInputs.reduce((s, q) => s + q.length, 0);
+      if (totalItems === 0) {
+        return { ok: false, error: 'all 4 strategies are empty — provide at least one initiative' };
+      }
+
+      const themes = {
+        professional: {
+          bg: '#FAFBFC', card: '#FFFFFF', text: '#1E293B', muted: '#64748B', border: '#E2E8F0', accent: '#2563EB', axisText: '#475569',
+          // Colour by risk: green (low) → amber (medium) → red (high)
+          mp: { fill: '#ECFDF5', bar: '#10B981', label: '#065F46', risk: 'LOW' },
+          md: { fill: '#FEF3C7', bar: '#F59E0B', label: '#78350F', risk: 'MEDIUM' },
+          pd: { fill: '#FEF3C7', bar: '#F59E0B', label: '#78350F', risk: 'MEDIUM' },
+          dv: { fill: '#FEE2E2', bar: '#EF4444', label: '#7F1D1D', risk: 'HIGH' },
+        },
+        modern: {
+          bg: '#0B1121', card: '#1E293B', text: '#F1F5F9', muted: '#94A3B8', border: '#334155', accent: '#818CF8', axisText: '#CBD5E1',
+          mp: { fill: '#064E3B', bar: '#34D399', label: '#A7F3D0', risk: 'LOW' },
+          md: { fill: '#78350F', bar: '#FBBF24', label: '#FDE68A', risk: 'MEDIUM' },
+          pd: { fill: '#78350F', bar: '#FBBF24', label: '#FDE68A', risk: 'MEDIUM' },
+          dv: { fill: '#7F1D1D', bar: '#F87171', label: '#FECACA', risk: 'HIGH' },
+        },
+        minimal: {
+          bg: '#FFFFFF', card: '#FFFFFF', text: '#0F172A', muted: '#64748B', border: '#CBD5E1', accent: '#0F172A', axisText: '#475569',
+          mp: { fill: '#F1F5F9', bar: '#10B981', label: '#0F172A', risk: 'LOW' },
+          md: { fill: '#F1F5F9', bar: '#F59E0B', label: '#0F172A', risk: 'MEDIUM' },
+          pd: { fill: '#F1F5F9', bar: '#F59E0B', label: '#0F172A', risk: 'MEDIUM' },
+          dv: { fill: '#F1F5F9', bar: '#EF4444', label: '#0F172A', risk: 'HIGH' },
+        },
+        corporate: {
+          bg: '#F8FAFC', card: '#FFFFFF', text: '#0F172A', muted: '#475569', border: '#CBD5E1', accent: '#1E40AF', axisText: '#334155',
+          mp: { fill: '#E6F4EA', bar: '#0F9D58', label: '#1B5E20', risk: 'LOW' },
+          md: { fill: '#FFF8E1', bar: '#F9AB00', label: '#7C4A00', risk: 'MEDIUM' },
+          pd: { fill: '#FFF8E1', bar: '#F9AB00', label: '#7C4A00', risk: 'MEDIUM' },
+          dv: { fill: '#FCE8E6', bar: '#D93025', label: '#7C1D14', risk: 'HIGH' },
+        },
+      };
+      const t = themes[theme] || themes.professional;
+
+      const safeTitle = xmlEscape(String(title).slice(0, 120));
+      const safeSubtitle = xmlEscape(String(subtitle || '').slice(0, 140));
+      const quadW = 360;
+      const quadGap = 16;
+      const axisGutter = 64;
+      const pad = 28;
+      const headerH = safeSubtitle ? 110 : 86;
+      const quadHeaderH = 70;
+      const lineH = 22;
+      const lineMaxChars = 56;
+      const axisLabelH = 28;
+
+      // Canonical Ansoff layout:
+      //   top row    = Existing Product  (low column gap)
+      //   bottom row = New Product
+      //   left col   = Existing Market
+      //   right col  = New Market
+      //
+      //   top-left      = Market Penetration  (existing P × existing M)
+      //   top-right     = Market Development  (existing P × new M)
+      //   bottom-left   = Product Development (new P × existing M)
+      //   bottom-right  = Diversification     (new P × new M)
+      const QUADS = [
+        { key: 'mp', pal: t.mp, items: marketPenetration,  label: 'MARKET PENETRATION',  subLabel: 'Existing market · Existing product' },
+        { key: 'md', pal: t.md, items: marketDevelopment,  label: 'MARKET DEVELOPMENT',  subLabel: 'New market · Existing product' },
+        { key: 'pd', pal: t.pd, items: productDevelopment, label: 'PRODUCT DEVELOPMENT', subLabel: 'Existing market · New product' },
+        { key: 'dv', pal: t.dv, items: diversification,    label: 'DIVERSIFICATION',     subLabel: 'New market · New product' },
+      ];
+      const trimmed = QUADS.map(q => ({
+        ...q,
+        items: (q.items || []).slice(0, 8).map(it => xmlEscape(String(it || '').slice(0, lineMaxChars))).filter(Boolean),
+      }));
+      const topRowItems = Math.max(trimmed[0].items.length, trimmed[1].items.length, 1);
+      const botRowItems = Math.max(trimmed[2].items.length, trimmed[3].items.length, 1);
+      const topRowH = quadHeaderH + topRowItems * lineH + 28;
+      const botRowH = quadHeaderH + botRowItems * lineH + 28;
+
+      const gridW = quadW * 2 + quadGap;
+      const W = pad * 2 + axisGutter + gridW;
+      const H = headerH + pad + axisLabelH + topRowH + quadGap + botRowH + pad;
+
+      let body = `<rect width="${W}" height="${H}" fill="${t.bg}" rx="12"/>`;
+      // Header
+      body += `<rect x="0" y="0" width="${W}" height="${headerH}" fill="${t.accent}"/>`;
+      body += `<text x="${W / 2}" y="42" text-anchor="middle" font-family="Georgia, serif" font-size="24" font-weight="bold" fill="#fff">${safeTitle}</text>`;
+      const headerMeta = `MP:${trimmed[0].items.length} · MD:${trimmed[1].items.length} · PD:${trimmed[2].items.length} · DV:${trimmed[3].items.length}`;
+      body += `<text x="${W / 2}" y="66" text-anchor="middle" font-family="Arial" font-size="12" fill="#fff" opacity="0.85">${headerMeta}</text>`;
+      if (safeSubtitle) {
+        body += `<text x="${W / 2}" y="92" text-anchor="middle" font-family="Arial" font-size="13" fill="#fff" opacity="0.92">${safeSubtitle}</text>`;
+      }
+
+      // X-axis labels — Market axis
+      const axisRowY = headerH + pad;
+      const leftQuadX = pad + axisGutter;
+      const rightQuadX = leftQuadX + quadW + quadGap;
+      body += `<text x="${leftQuadX + quadW / 2}" y="${axisRowY + 18}" text-anchor="middle" font-family="Arial" font-size="12" font-weight="bold" fill="${t.axisText}">EXISTING MARKET</text>`;
+      body += `<text x="${rightQuadX + quadW / 2}" y="${axisRowY + 18}" text-anchor="middle" font-family="Arial" font-size="12" font-weight="bold" fill="${t.axisText}">NEW MARKET</text>`;
+
+      const topY = axisRowY + axisLabelH;
+      const botY = topY + topRowH + quadGap;
+
+      // Y-axis label (vertical text on the left gutter)
+      const yAxisX = pad + axisGutter / 2;
+      body += `<text x="${yAxisX}" y="${topY + topRowH / 2}" text-anchor="middle" font-family="Arial" font-size="12" font-weight="bold" fill="${t.axisText}" transform="rotate(-90, ${yAxisX}, ${topY + topRowH / 2})">EXISTING PRODUCT</text>`;
+      body += `<text x="${yAxisX}" y="${botY + botRowH / 2}" text-anchor="middle" font-family="Arial" font-size="12" font-weight="bold" fill="${t.axisText}" transform="rotate(-90, ${yAxisX}, ${botY + botRowH / 2})">NEW PRODUCT</text>`;
+
+      function drawQuad(q, x, y, h) {
+        let out = '';
+        out += `<rect x="${x}" y="${y}" width="${quadW}" height="${h}" rx="10" fill="${q.pal.fill}" stroke="${t.border}" stroke-width="1" filter="url(#vis-shadow)"/>`;
+        out += `<rect x="${x}" y="${y}" width="6" height="${h}" rx="3" fill="${q.pal.bar}"/>`;
+        // Risk pill in top-right
+        const riskPillW = Math.max(70, q.pal.risk.length * 8 + 22);
+        out += `<rect x="${x + quadW - riskPillW - 14}" y="${y + 14}" width="${riskPillW}" height="22" rx="11" fill="${q.pal.bar}"/>`;
+        out += `<text x="${x + quadW - riskPillW / 2 - 14}" y="${y + 29}" text-anchor="middle" font-family="Arial" font-size="11" font-weight="bold" fill="#fff">${q.pal.risk} RISK</text>`;
+        // Title
+        out += `<text x="${x + 22}" y="${y + 28}" font-family="Arial" font-size="14" font-weight="bold" fill="${q.pal.label}">${xmlEscape(q.label)}</text>`;
+        // Sub-label
+        out += `<text x="${x + 22}" y="${y + 48}" font-family="Arial" font-size="11" fill="${t.muted}">${xmlEscape(q.subLabel)}</text>`;
+        out += `<text x="${x + 22}" y="${y + 62}" font-family="Arial" font-size="11" fill="${t.muted}">${q.items.length} initiative${q.items.length === 1 ? '' : 's'}</text>`;
+        // Separator
+        out += `<line x1="${x + 16}" y1="${y + quadHeaderH}" x2="${x + quadW - 16}" y2="${y + quadHeaderH}" stroke="${t.border}" stroke-width="1"/>`;
+        // Items
+        if (q.items.length === 0) {
+          out += `<text x="${x + quadW / 2}" y="${y + quadHeaderH + 32}" text-anchor="middle" font-family="Arial" font-size="12" fill="${t.muted}" font-style="italic">— sin iniciativas —</text>`;
+        } else {
+          q.items.forEach((line, idx) => {
+            const ly = y + quadHeaderH + 22 + idx * lineH;
+            out += `<circle cx="${x + 22}" cy="${ly - 4}" r="3" fill="${q.pal.bar}"/>`;
+            out += `<text x="${x + 32}" y="${ly}" font-family="Arial" font-size="12" fill="${t.text}">${line}</text>`;
+          });
+        }
+        return out;
+      }
+
+      body += drawQuad(trimmed[0], leftQuadX,  topY, topRowH);
+      body += drawQuad(trimmed[1], rightQuadX, topY, topRowH);
+      body += drawQuad(trimmed[2], leftQuadX,  botY, botRowH);
+      body += drawQuad(trimmed[3], rightQuadX, botY, botRowH);
+
+      const svg = svgDocument({
+        width: W,
+        height: H,
+        title: safeTitle,
+        description: `Ansoff matrix: ${safeTitle}`,
+        body,
+      });
+
+      const buffer = Buffer.from(svg, 'utf8');
+      const filename = `ansoff_${crypto.randomBytes(4).toString('hex')}.svg`;
+      const artifact = finalizeArtifact({ filename, buffer, mime: EXTENSION_TO_MIME.svg, ctx });
+
+      emitEvent(ctx, 'file_artifact', {
+        artifact: {
+          id: artifact.id,
+          filename: artifact.filename,
+          format: 'svg',
+          mime: 'image/svg+xml',
+          sizeBytes: artifact.sizeBytes,
+          downloadUrl: artifact.downloadUrl,
+        },
+      });
+
+      emitEvent(ctx, 'tool_output', {
+        tool: 'create_ansoff_matrix',
+        ok: true,
+        preview: `Ansoff listo: ${artifact.filename} (${totalItems} iniciativas · ${Math.round(artifact.sizeBytes / 1024)} KB)`,
+      });
+
+      return {
+        ok: true,
+        id: artifact.id,
+        filename: artifact.filename,
+        sizeBytes: artifact.sizeBytes,
+        downloadUrl: artifact.downloadUrl,
+        title,
+        counts: {
+          marketPenetration:  trimmed[0].items.length,
+          marketDevelopment:  trimmed[1].items.length,
+          productDevelopment: trimmed[2].items.length,
+          diversification:    trimmed[3].items.length,
+        },
+        total: totalItems,
+      };
+    } catch (err) {
+      const msg = err?.message || String(err);
+      emitEvent(ctx, 'tool_output', { tool: 'create_ansoff_matrix', ok: false, preview: `Error: ${msg}` });
+      return { ok: false, error: msg };
+    }
+  },
+};
+
 // ── All visual/media tools for the agent ──────────────────────────────
 
 const VISUAL_MEDIA_TOOLS = [
@@ -6498,6 +6724,7 @@ const VISUAL_MEDIA_TOOLS = [
   createEmpathyMap,
   createLeanCanvas,
   createBalancedScorecard,
+  createAnsoffMatrix,
 ];
 
 // Internal helpers exposed for unit testing — NOT part of the public agent

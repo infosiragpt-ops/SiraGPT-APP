@@ -653,8 +653,8 @@ test('create_dashboard_html: no charts', async () => {
 
 // ── Tool metadata ────────────────────────────────────────────────
 
-test('all 27 tools have valid metadata', () => {
-  assert.equal(VISUAL_MEDIA_TOOLS.length, 27);
+test('all 28 tools have valid metadata', () => {
+  assert.equal(VISUAL_MEDIA_TOOLS.length, 28);
   for (const t of VISUAL_MEDIA_TOOLS) {
     assert.ok(t.name);
     assert.ok(t.description);
@@ -3139,6 +3139,145 @@ test('create_balanced_scorecard: emits expected events', async () => {
   await tool('create_balanced_scorecard').execute({
     title: 'Events',
     financial: [{ objective: 'o' }],
+  }, ctx);
+  const types = ctx._events.map(e => e.type);
+  assert.ok(types.includes('tool_call'));
+  assert.ok(types.includes('file_artifact'));
+  assert.ok(types.includes('tool_output'));
+});
+
+// ── create_ansoff_matrix ─────────────────────────────────────────
+
+test('create_ansoff_matrix: full 4-quadrant growth strategy', async () => {
+  const am = tool('create_ansoff_matrix');
+  assert.ok(am);
+  const r = await am.execute({
+    title: '2027 Growth strategy',
+    subtitle: 'SiraGPT',
+    marketPenetration: ['Upsell Pro tier', 'Reduce churn -2%'],
+    marketDevelopment: ['Expand to Brasil', 'Open BR market segment'],
+    productDevelopment: ['AI generative video', 'Voice features'],
+    diversification: ['Launch Enterprise GovCloud'],
+    theme: 'professional',
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.total, 7);
+  assert.equal(r.counts.marketPenetration, 2);
+  assert.equal(r.counts.diversification, 1);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.startsWith('<svg'));
+  assert.ok(svg.includes('2027 Growth strategy'));
+  assert.ok(svg.includes('MARKET PENETRATION'));
+  assert.ok(svg.includes('MARKET DEVELOPMENT'));
+  assert.ok(svg.includes('PRODUCT DEVELOPMENT'));
+  assert.ok(svg.includes('DIVERSIFICATION'));
+  assert.ok(svg.includes('EXISTING MARKET'));
+  assert.ok(svg.includes('NEW MARKET'));
+  assert.ok(svg.includes('EXISTING PRODUCT'));
+  assert.ok(svg.includes('NEW PRODUCT'));
+  // Risk pills (LOW, MEDIUM × 2, HIGH)
+  assert.ok(svg.includes('LOW RISK'));
+  assert.ok(svg.includes('MEDIUM RISK'));
+  assert.ok(svg.includes('HIGH RISK'));
+});
+
+test('create_ansoff_matrix: only Diversification populated', async () => {
+  const r = await tool('create_ansoff_matrix').execute({
+    title: 'Aggressive',
+    diversification: ['New product in new market'],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.total, 1);
+  assert.equal(r.counts.diversification, 1);
+  assert.equal(r.counts.marketPenetration, 0);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.includes('New product in new market'));
+  assert.ok(svg.includes('— sin iniciativas —'));
+});
+
+test('create_ansoff_matrix: empty matrix fails', async () => {
+  const r = await tool('create_ansoff_matrix').execute({
+    title: 'Empty',
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /empty|provide at least/i);
+});
+
+test('create_ansoff_matrix: non-array quadrant fails fast', async () => {
+  const r = await tool('create_ansoff_matrix').execute({
+    title: 'Bad',
+    marketPenetration: 'should be array',
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /must be arrays/i);
+});
+
+test('create_ansoff_matrix: caps initiatives at 8 per quadrant', async () => {
+  const ten = Array.from({ length: 10 }, (_, i) => `Init ${i + 1}`);
+  const r = await tool('create_ansoff_matrix').execute({
+    title: 'Overflow',
+    marketPenetration: ten,
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.counts.marketPenetration, 8);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.includes('Init 8'));
+  assert.equal(svg.includes('Init 9'), false);
+});
+
+test('create_ansoff_matrix: xml-escapes content', async () => {
+  const r = await tool('create_ansoff_matrix').execute({
+    title: 'XSS',
+    marketPenetration: ['<script>evil</script>'],
+    diversification: ['"injected"'],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.equal(svg.includes('<script>evil</script>'), false);
+  assert.ok(svg.includes('&lt;script&gt;'));
+  assert.ok(svg.includes('&quot;injected&quot;'));
+});
+
+test('create_ansoff_matrix: supports all four themes', async () => {
+  for (const theme of ['professional', 'modern', 'minimal', 'corporate']) {
+    const r = await tool('create_ansoff_matrix').execute({
+      title: `Theme ${theme}`,
+      marketPenetration: ['mp'],
+      theme,
+    }, fakeCtx());
+    assert.equal(r.ok, true, `theme ${theme} should succeed`);
+    const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+    assert.ok(svg.startsWith('<svg'));
+  }
+});
+
+test('create_ansoff_matrix: layout — MP top-left, MD top-right, PD bottom-left, DV bottom-right', async () => {
+  // Verify the canonical Ansoff layout: existing market on left (existing × new),
+  // existing product on top (existing × new).
+  const r = await tool('create_ansoff_matrix').execute({
+    title: 'Layout',
+    marketPenetration: ['MP_ITEM'],
+    marketDevelopment: ['MD_ITEM'],
+    productDevelopment: ['PD_ITEM'],
+    diversification: ['DV_ITEM'],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  // Source order: MP (top-left) → MD (top-right) → PD (bottom-left) → DV (bottom-right)
+  const idxMP = svg.indexOf('MP_ITEM');
+  const idxMD = svg.indexOf('MD_ITEM');
+  const idxPD = svg.indexOf('PD_ITEM');
+  const idxDV = svg.indexOf('DV_ITEM');
+  assert.ok(idxMP > 0 && idxMD > idxMP, 'MP (top-left) before MD (top-right)');
+  assert.ok(idxMD > 0 && idxPD > idxMD, 'MD (top-right) before PD (bottom-left)');
+  assert.ok(idxPD > 0 && idxDV > idxPD, 'PD (bottom-left) before DV (bottom-right)');
+});
+
+test('create_ansoff_matrix: emits expected events', async () => {
+  const ctx = fakeCtx();
+  await tool('create_ansoff_matrix').execute({
+    title: 'Events',
+    marketPenetration: ['x'],
   }, ctx);
   const types = ctx._events.map(e => e.type);
   assert.ok(types.includes('tool_call'));
