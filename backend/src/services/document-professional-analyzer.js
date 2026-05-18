@@ -196,7 +196,65 @@ function getAnalyzerHealthSnapshot() {
   };
 }
 
-function runAnalyzerSafe(name, fn, telemetry) {
+// Lazy require — keeps the cache module optional. If it's missing or
+// fails to load, the runner gracefully degrades to "no cache" mode.
+let _analyzerCacheCache = null;
+function _getAnalyzerCache() {
+  if (_analyzerCacheCache !== null) return _analyzerCacheCache || null;
+  try {
+    _analyzerCacheCache = require('./document-analyzer-cache');
+  } catch {
+    _analyzerCacheCache = false;
+  }
+  return _analyzerCacheCache || null;
+}
+
+// Computes a stable hash that uniquely identifies a `processedFiles`
+// set for analyzers whose output is a pure function of `files`. We
+// include `originalName + mimeType + extractedText` for each file in
+// declared order. Two chat turns that attach the SAME files produce
+// the same key → cache hit. Changing order, adding, removing, or
+// editing any file → cache miss.
+function _computeFilesCacheKey(files) {
+  if (!Array.isArray(files) || files.length === 0) return null;
+  const cache = _getAnalyzerCache();
+  if (!cache || typeof cache.computeHash !== 'function') return null;
+  try {
+    const parts = [];
+    for (const f of files) {
+      if (!f) { parts.push('|||'); continue; }
+      parts.push([
+        typeof f.originalName === 'string' ? f.originalName : '',
+        typeof f.mimeType === 'string' ? f.mimeType : '',
+        typeof f.extractedText === 'string' ? f.extractedText : '',
+      ].join(''));
+    }
+    return cache.computeHash(parts.join(''));
+  } catch {
+    return null;
+  }
+}
+
+function runAnalyzerSafe(name, fn, telemetry, cacheKey) {
+  // Cache fast-path — when the caller passes a stable content hash for
+  // the pipeline run, look up the previously computed output before
+  // doing any work. The cache stores ONLY successful string results
+  // (errors / breaker skips / deadline skips are never cached).
+  if (cacheKey) {
+    const cache = _getAnalyzerCache();
+    if (cache && typeof cache.get === 'function') {
+      const key = cache.makeKey(name, cacheKey);
+      const cached = cache.get(key);
+      if (typeof cached === 'string') {
+        if (telemetry) {
+          telemetry.entries.push({ name, ok: true, elapsedMs: 0, chars: cached.length, cached: true });
+          if (!telemetry.cacheHits) telemetry.cacheHits = [];
+          telemetry.cacheHits.push({ name });
+        }
+        return cached;
+      }
+    }
+  }
   // Deadline guard — pipeline-level wall-clock budget. Once exceeded,
   // remaining analyzers short-circuit. The chat continues with whatever
   // blocks finished in time.
@@ -227,6 +285,15 @@ function runAnalyzerSafe(name, fn, telemetry) {
       if (out.length > telemetry.largeChars) telemetry.large.push({ name, chars: out.length });
     }
     _breakerRecordSuccess(name);
+    // Cache write — only successful string results, only when a key was
+    // supplied. Errors / skips / breaker hits are never cached so a
+    // transient failure doesn't poison subsequent turns.
+    if (cacheKey) {
+      const cache = _getAnalyzerCache();
+      if (cache && typeof cache.set === 'function') {
+        cache.set(cache.makeKey(name, cacheKey), out);
+      }
+    }
     return out;
   } catch (err) {
     const elapsedMs = Math.max(0, _analyzerClock() - start);
@@ -3508,322 +3575,332 @@ async function buildEnrichedFileContext({ prisma = null, processedFiles = [] } =
   const analyzerTelemetry = process.env.SIRAGPT_ANALYZER_TELEMETRY === '0'
     ? null
     : createAnalyzerTelemetry();
+  // Content-hash cache key — derived from each file's identity + body so
+  // that re-attaching the same file across chat turns short-circuits the
+  // ~310 deterministic analyzers via `document-analyzer-cache`. We only
+  // pass this key to analyzers whose output is a pure function of
+  // `files` (i.e. NOT profileBlock/directiveBlock/comparisonBlock/qualityBlock
+  // which depend on hydrated DB state or cross-file profiles). Opt out via
+  // `SIRAGPT_ANALYZER_CACHE=0`.
+  const cacheKey = process.env.SIRAGPT_ANALYZER_CACHE === '0'
+    ? null
+    : _computeFilesCacheKey(files);
   const profileBlock = runAnalyzerSafe('profileBlock', () => renderProfileBlock(profiles), analyzerTelemetry);
   const directiveBlock = runAnalyzerSafe('directiveBlock', () => renderDirectiveBlock(primaryDocType, classifications.length), analyzerTelemetry);
-  const insightsBlock = runAnalyzerSafe('insightsBlock', () => buildInsightsBlock(files), analyzerTelemetry);
+  const insightsBlock = runAnalyzerSafe('insightsBlock', () => buildInsightsBlock(files), analyzerTelemetry, cacheKey);
   // Comparison only fires when 2+ files have extractable text. Glossary fires
   // for any file count. PII detector also fires for any file count and is the
   // most security-sensitive — surfaces upfront so the model gets a safety
   // frame before it sees the raw extracted text downstream.
   const comparisonBlock = runAnalyzerSafe('comparisonBlock', () => buildComparisonBlock(files, profiles), analyzerTelemetry);
-  const glossaryBlock = runAnalyzerSafe('glossaryBlock', () => buildGlossaryBlock(files), analyzerTelemetry);
-  const piiSafetyBlock = runAnalyzerSafe('piiSafetyBlock', () => buildPiiSafetyBlock(files), analyzerTelemetry);
-  const consistencyBlock = runAnalyzerSafe('consistencyBlock', () => buildConsistencyBlock(files), analyzerTelemetry);
-  const outlineBlock = runAnalyzerSafe('outlineBlock', () => buildOutlineBlock(files), analyzerTelemetry);
-  const readabilityBlock = runAnalyzerSafe('readabilityBlock', () => buildReadabilityBlock(files), analyzerTelemetry);
+  const glossaryBlock = runAnalyzerSafe('glossaryBlock', () => buildGlossaryBlock(files), analyzerTelemetry, cacheKey);
+  const piiSafetyBlock = runAnalyzerSafe('piiSafetyBlock', () => buildPiiSafetyBlock(files), analyzerTelemetry, cacheKey);
+  const consistencyBlock = runAnalyzerSafe('consistencyBlock', () => buildConsistencyBlock(files), analyzerTelemetry, cacheKey);
+  const outlineBlock = runAnalyzerSafe('outlineBlock', () => buildOutlineBlock(files), analyzerTelemetry, cacheKey);
+  const readabilityBlock = runAnalyzerSafe('readabilityBlock', () => buildReadabilityBlock(files), analyzerTelemetry, cacheKey);
   const qualityBlock = runAnalyzerSafe('qualityBlock', () => buildQualityBlock(files, profiles), analyzerTelemetry);
-  const evidenceMapBlock = runAnalyzerSafe('evidenceMapBlock', () => buildEvidenceMapBlock(files), analyzerTelemetry);
-  const deepAnalysisBlock = runAnalyzerSafe('deepAnalysisBlock', () => buildDeepAnalysisBlock(files), analyzerTelemetry);
-  const quotesBlock = runAnalyzerSafe('quotesBlock', () => buildQuotesBlock(files), analyzerTelemetry);
-  const numericCoherenceBlock = runAnalyzerSafe('numericCoherenceBlock', () => buildNumericCoherenceBlock(files), analyzerTelemetry);
-  const temporalTimelineBlock = runAnalyzerSafe('temporalTimelineBlock', () => buildTemporalTimelineBlock(files), analyzerTelemetry);
-  const actionDashboardBlock = runAnalyzerSafe('actionDashboardBlock', () => buildActionDashboardBlock(files), analyzerTelemetry);
-  const audienceToneBlock = runAnalyzerSafe('audienceToneBlock', () => buildAudienceToneBlock(files), analyzerTelemetry);
-  const semanticGraphBlock = runAnalyzerSafe('semanticGraphBlock', () => buildSemanticGraphBlock(files), analyzerTelemetry);
-  const kpisBlock = runAnalyzerSafe('kpisBlock', () => buildKpisBlock(files), analyzerTelemetry);
-  const riskRegisterBlock = runAnalyzerSafe('riskRegisterBlock', () => buildRiskRegisterBlock(files), analyzerTelemetry);
-  const factDensityBlock = runAnalyzerSafe('factDensityBlock', () => buildFactDensityBlock(files), analyzerTelemetry);
-  const relationshipsBlock = runAnalyzerSafe('relationshipsBlock', () => buildRelationshipsBlock(files), analyzerTelemetry);
-  const sectionSimilarityBlock = runAnalyzerSafe('sectionSimilarityBlock', () => buildSectionSimilarityBlock(files), analyzerTelemetry);
-  const numericStatisticsBlock = runAnalyzerSafe('numericStatisticsBlock', () => buildNumericStatisticsBlock(files), analyzerTelemetry);
-  const qualityGradeBlock = runAnalyzerSafe('qualityGradeBlock', () => buildQualityGradeBlock(files), analyzerTelemetry);
-  const titlesBlock = runAnalyzerSafe('titlesBlock', () => buildTitlesBlock(files), analyzerTelemetry);
-  const tldrBlock = runAnalyzerSafe('tldrBlock', () => buildTldrBlock(files), analyzerTelemetry);
-  const sentimentBlock = runAnalyzerSafe('sentimentBlock', () => buildSentimentBlock(files), analyzerTelemetry);
-  const keyPhrasesBlock = runAnalyzerSafe('keyPhrasesBlock', () => buildKeyPhrasesBlock(files), analyzerTelemetry);
-  const obligationsBlock = runAnalyzerSafe('obligationsBlock', () => buildObligationsBlock(files), analyzerTelemetry);
-  const scopeExclusionsBlock = runAnalyzerSafe('scopeExclusionsBlock', () => buildScopeExclusionsBlock(files), analyzerTelemetry);
-  const stakeholderMapBlock = runAnalyzerSafe('stakeholderMapBlock', () => buildStakeholderMapBlock(files), analyzerTelemetry);
-  const jurisdictionBlock = runAnalyzerSafe('jurisdictionBlock', () => buildJurisdictionBlock(files), analyzerTelemetry);
-  const definitionsBlock = runAnalyzerSafe('definitionsBlock', () => buildDefinitionsBlock(files), analyzerTelemetry);
-  const crossReferenceBlock = runAnalyzerSafe('crossReferenceBlock', () => buildCrossReferenceBlock(files), analyzerTelemetry);
-  const pricingBlock = runAnalyzerSafe('pricingBlock', () => buildPricingBlock(files), analyzerTelemetry);
-  const metadataBlock = runAnalyzerSafe('metadataBlock', () => buildMetadataBlock(files), analyzerTelemetry);
-  const complianceBlock = runAnalyzerSafe('complianceBlock', () => buildComplianceBlock(files), analyzerTelemetry);
-  const warrantiesBlock = runAnalyzerSafe('warrantiesBlock', () => buildWarrantiesBlock(files), analyzerTelemetry);
-  const disputeResolutionBlock = runAnalyzerSafe('disputeResolutionBlock', () => buildDisputeResolutionBlock(files), analyzerTelemetry);
-  const indemnificationBlock = runAnalyzerSafe('indemnificationBlock', () => buildIndemnificationBlock(files), analyzerTelemetry);
-  const acronymsBlock = runAnalyzerSafe('acronymsBlock', () => buildAcronymsBlock(files), analyzerTelemetry);
-  const temporalExpressionsBlock = runAnalyzerSafe('temporalExpressionsBlock', () => buildTemporalExpressionsBlock(files), analyzerTelemetry);
-  const crossNumericBlock = runAnalyzerSafe('crossNumericBlock', () => buildCrossNumericBlock(files), analyzerTelemetry);
-  const signatureBlocksBlock = runAnalyzerSafe('signatureBlocksBlock', () => buildSignatureBlocksBlock(files), analyzerTelemetry);
-  const qaPairsBlock = runAnalyzerSafe('qaPairsBlock', () => buildQaPairsBlock(files), analyzerTelemetry);
-  const hypothesesBlock = runAnalyzerSafe('hypothesesBlock', () => buildHypothesesBlock(files), analyzerTelemetry);
-  const recommendationsBlock = runAnalyzerSafe('recommendationsBlock', () => buildRecommendationsBlock(files), analyzerTelemetry);
-  const assumptionsBlock = runAnalyzerSafe('assumptionsBlock', () => buildAssumptionsBlock(files), analyzerTelemetry);
-  const conditionalClausesBlock = runAnalyzerSafe('conditionalClausesBlock', () => buildConditionalClausesBlock(files), analyzerTelemetry);
-  const counterArgumentsBlock = runAnalyzerSafe('counterArgumentsBlock', () => buildCounterArgumentsBlock(files), analyzerTelemetry);
-  const callsToActionBlock = runAnalyzerSafe('callsToActionBlock', () => buildCallsToActionBlock(files), analyzerTelemetry);
-  const disclosuresBlock = runAnalyzerSafe('disclosuresBlock', () => buildDisclosuresBlock(files), analyzerTelemetry);
-  const factVsOpinionBlock = runAnalyzerSafe('factVsOpinionBlock', () => buildFactVsOpinionBlock(files), analyzerTelemetry);
-  const scenariosBlock = runAnalyzerSafe('scenariosBlock', () => buildScenariosBlock(files), analyzerTelemetry);
-  const benchmarksBlock = runAnalyzerSafe('benchmarksBlock', () => buildBenchmarksBlock(files), analyzerTelemetry);
-  const goalsTargetsBlock = runAnalyzerSafe('goalsTargetsBlock', () => buildGoalsTargetsBlock(files), analyzerTelemetry);
-  const slaTermsBlock = runAnalyzerSafe('slaTermsBlock', () => buildSLATermsBlock(files), analyzerTelemetry);
-  const dataClassificationBlock = runAnalyzerSafe('dataClassificationBlock', () => buildDataClassificationBlock(files), analyzerTelemetry);
-  const approvalWorkflowBlock = runAnalyzerSafe('approvalWorkflowBlock', () => buildApprovalWorkflowBlock(files), analyzerTelemetry);
-  const executiveSummaryBlock = runAnalyzerSafe('executiveSummaryBlock', () => buildExecutiveSummaryBlock(files), analyzerTelemetry);
-  const urlsBlock = runAnalyzerSafe('urlsBlock', () => buildUrlsBlock(files), analyzerTelemetry);
-  const contactsBlock = runAnalyzerSafe('contactsBlock', () => buildContactsBlock(files), analyzerTelemetry);
-  const footnotesBlock = runAnalyzerSafe('footnotesBlock', () => buildFootnotesBlock(files), analyzerTelemetry);
-  const tablesBlock = runAnalyzerSafe('tablesBlock', () => buildTablesBlock(files), analyzerTelemetry);
-  const codeBlocksBlock = runAnalyzerSafe('codeBlocksBlock', () => buildCodeBlocksBlock(files), analyzerTelemetry);
-  const figureRefsBlock = runAnalyzerSafe('figureRefsBlock', () => buildFigureRefsBlock(files), analyzerTelemetry);
-  const checklistsBlock = runAnalyzerSafe('checklistsBlock', () => buildChecklistsBlock(files), analyzerTelemetry);
-  const identifiersBlock = runAnalyzerSafe('identifiersBlock', () => buildIdentifiersBlock(files), analyzerTelemetry);
-  const bulletListsBlock = runAnalyzerSafe('bulletListsBlock', () => buildBulletListsBlock(files), analyzerTelemetry);
-  const mermaidBlock = runAnalyzerSafe('mermaidBlock', () => buildMermaidBlock(files), analyzerTelemetry);
-  const prioritiesBlock = runAnalyzerSafe('prioritiesBlock', () => buildPrioritiesBlock(files), analyzerTelemetry);
-  const ownershipBlock = runAnalyzerSafe('ownershipBlock', () => buildOwnershipBlock(files), analyzerTelemetry);
-  const timestampsBlock = runAnalyzerSafe('timestampsBlock', () => buildTimestampsBlock(files), analyzerTelemetry);
-  const statusBlock = runAnalyzerSafe('statusBlock', () => buildStatusBlock(files), analyzerTelemetry);
-  const acceptanceCriteriaBlock = runAnalyzerSafe('acceptanceCriteriaBlock', () => buildAcceptanceCriteriaBlock(files), analyzerTelemetry);
-  const apiEndpointsBlock = runAnalyzerSafe('apiEndpointsBlock', () => buildApiEndpointsBlock(files), analyzerTelemetry);
-  const envVarsBlock = runAnalyzerSafe('envVarsBlock', () => buildEnvVarsBlock(files), analyzerTelemetry);
-  const sqlBlock = runAnalyzerSafe('sqlBlock', () => buildSqlBlock(files), analyzerTelemetry);
-  const filePathsBlock = runAnalyzerSafe('filePathsBlock', () => buildFilePathsBlock(files), analyzerTelemetry);
-  const cronBlock = runAnalyzerSafe('cronBlock', () => buildCronBlock(files), analyzerTelemetry);
-  const licensesBlock = runAnalyzerSafe('licensesBlock', () => buildLicensesBlock(files), analyzerTelemetry);
-  const dependenciesBlock = runAnalyzerSafe('dependenciesBlock', () => buildDependenciesBlock(files), analyzerTelemetry);
-  const riskMatrixBlock = runAnalyzerSafe('riskMatrixBlock', () => buildRiskMatrixBlock(files), analyzerTelemetry);
-  const versionsBlock = runAnalyzerSafe('versionsBlock', () => buildVersionsBlock(files), analyzerTelemetry);
-  const decisionRecordsBlock = runAnalyzerSafe('decisionRecordsBlock', () => buildDecisionRecordsBlock(files), analyzerTelemetry);
-  const domainsBlock = runAnalyzerSafe('domainsBlock', () => buildDomainsBlock(files), analyzerTelemetry);
-  const currencyBlock = runAnalyzerSafe('currencyBlock', () => buildCurrencyBlock(files), analyzerTelemetry);
-  const percentagesBlock = runAnalyzerSafe('percentagesBlock', () => buildPercentagesBlock(files), analyzerTelemetry);
-  const citationsBlock = runAnalyzerSafe('citationsBlock', () => buildCitationsBlock(files), analyzerTelemetry);
-  const colorsBlock = runAnalyzerSafe('colorsBlock', () => buildColorsBlock(files), analyzerTelemetry);
-  const coordinatesBlock = runAnalyzerSafe('coordinatesBlock', () => buildCoordinatesBlock(files), analyzerTelemetry);
-  const trademarkBlock = runAnalyzerSafe('trademarkBlock', () => buildTrademarkBlock(files), analyzerTelemetry);
-  const hashtagsBlock = runAnalyzerSafe('hashtagsBlock', () => buildHashtagsBlock(files), analyzerTelemetry);
-  const sectionLabelsBlock = runAnalyzerSafe('sectionLabelsBlock', () => buildSectionLabelsBlock(files), analyzerTelemetry);
-  const signoffsBlock = runAnalyzerSafe('signoffsBlock', () => buildSignoffsBlock(files), analyzerTelemetry);
-  const hashesBlock = runAnalyzerSafe('hashesBlock', () => buildHashesBlock(files), analyzerTelemetry);
-  const couponsBlock = runAnalyzerSafe('couponsBlock', () => buildCouponsBlock(files), analyzerTelemetry);
-  const fileSizesBlock = runAnalyzerSafe('fileSizesBlock', () => buildFileSizesBlock(files), analyzerTelemetry);
-  const vcsRefsBlock = runAnalyzerSafe('vcsRefsBlock', () => buildVcsRefsBlock(files), analyzerTelemetry);
-  const standardsBlock = runAnalyzerSafe('standardsBlock', () => buildStandardsBlock(files), analyzerTelemetry);
-  const networkBlock = runAnalyzerSafe('networkBlock', () => buildNetworkBlock(files), analyzerTelemetry);
-  const httpStatusBlock = runAnalyzerSafe('httpStatusBlock', () => buildHttpStatusBlock(files), analyzerTelemetry);
-  const timezonesBlock = runAnalyzerSafe('timezonesBlock', () => buildTimezonesBlock(files), analyzerTelemetry);
-  const mathBlock = runAnalyzerSafe('mathBlock', () => buildMathBlock(files), analyzerTelemetry);
-  const booleanBlock = runAnalyzerSafe('booleanBlock', () => buildBooleanBlock(files), analyzerTelemetry);
-  const tocBlock = runAnalyzerSafe('tocBlock', () => buildTocBlock(files), analyzerTelemetry);
-  const htmlAttrsBlock = runAnalyzerSafe('htmlAttrsBlock', () => buildHtmlAttrsBlock(files), analyzerTelemetry);
-  const blockquotesBlock = runAnalyzerSafe('blockquotesBlock', () => buildBlockquotesBlock(files), analyzerTelemetry);
-  const definitionListsBlock = runAnalyzerSafe('definitionListsBlock', () => buildDefinitionListsBlock(files), analyzerTelemetry);
-  const todosBlock = runAnalyzerSafe('todosBlock', () => buildTodosBlock(files), analyzerTelemetry);
-  const imagesBlock = runAnalyzerSafe('imagesBlock', () => buildImagesBlock(files), analyzerTelemetry);
-  const mediaBlock = runAnalyzerSafe('mediaBlock', () => buildMediaBlock(files), analyzerTelemetry);
-  const languageRatioBlock = runAnalyzerSafe('languageRatioBlock', () => buildLanguageRatioBlock(files), analyzerTelemetry);
-  const regexPatternsBlock = runAnalyzerSafe('regexPatternsBlock', () => buildRegexPatternsBlock(files), analyzerTelemetry);
-  const fileExtensionsBlock = runAnalyzerSafe('fileExtensionsBlock', () => buildFileExtensionsBlock(files), analyzerTelemetry);
-  const codeDefsBlock = runAnalyzerSafe('codeDefsBlock', () => buildCodeDefsBlock(files), analyzerTelemetry);
-  const tonePolarityBlock = runAnalyzerSafe('tonePolarityBlock', () => buildTonePolarityBlock(files), analyzerTelemetry);
-  const quantifiersBlock = runAnalyzerSafe('quantifiersBlock', () => buildQuantifiersBlock(files), analyzerTelemetry);
-  const modalsBlock = runAnalyzerSafe('modalsBlock', () => buildModalsBlock(files), analyzerTelemetry);
-  const negationBlock = runAnalyzerSafe('negationBlock', () => buildNegationBlock(files), analyzerTelemetry);
-  const readingTimeBlock = runAnalyzerSafe('readingTimeBlock', () => buildReadingTimeBlock(files), analyzerTelemetry);
-  const attributionsBlock = runAnalyzerSafe('attributionsBlock', () => buildAttributionsBlock(files), analyzerTelemetry);
-  const comparativesBlock = runAnalyzerSafe('comparativesBlock', () => buildComparativesBlock(files), analyzerTelemetry);
-  const causalBlock = runAnalyzerSafe('causalBlock', () => buildCausalBlock(files), analyzerTelemetry);
-  const concessionBlock = runAnalyzerSafe('concessionBlock', () => buildConcessionBlock(files), analyzerTelemetry);
-  const hedgingBlock = runAnalyzerSafe('hedgingBlock', () => buildHedgingBlock(files), analyzerTelemetry);
-  const intensifiersBlock = runAnalyzerSafe('intensifiersBlock', () => buildIntensifiersBlock(files), analyzerTelemetry);
-  const reportingBlock = runAnalyzerSafe('reportingBlock', () => buildReportingBlock(files), analyzerTelemetry);
-  const examplesBlock = runAnalyzerSafe('examplesBlock', () => buildExamplesBlock(files), analyzerTelemetry);
-  const approximationsBlock = runAnalyzerSafe('approximationsBlock', () => buildApproximationsBlock(files), analyzerTelemetry);
-  const questionsBlock = runAnalyzerSafe('questionsBlock', () => buildQuestionsBlock(files), analyzerTelemetry);
-  const imperativesBlock = runAnalyzerSafe('imperativesBlock', () => buildImperativesBlock(files), analyzerTelemetry);
-  const inTextDefinitionsBlock = runAnalyzerSafe('inTextDefinitionsBlock', () => buildInTextDefinitionsBlock(files), analyzerTelemetry);
-  const fiscalYearBlock = runAnalyzerSafe('fiscalYearBlock', () => buildFiscalYearBlock(files), analyzerTelemetry);
-  const ratiosBlock = runAnalyzerSafe('ratiosBlock', () => buildRatiosBlock(files), analyzerTelemetry);
-  const ordinalsBlock = runAnalyzerSafe('ordinalsBlock', () => buildOrdinalsBlock(files), analyzerTelemetry);
-  const geoRegionsBlock = runAnalyzerSafe('geoRegionsBlock', () => buildGeoRegionsBlock(files), analyzerTelemetry);
-  const trackingBlock = runAnalyzerSafe('trackingBlock', () => buildTrackingBlock(files), analyzerTelemetry);
-  const weatherBlock = runAnalyzerSafe('weatherBlock', () => buildWeatherBlock(files), analyzerTelemetry);
-  const scientificNotationBlock = runAnalyzerSafe('scientificNotationBlock', () => buildScientificNotationBlock(files), analyzerTelemetry);
-  const taxaBlock = runAnalyzerSafe('taxaBlock', () => buildTaxaBlock(files), analyzerTelemetry);
-  const chemistryBlock = runAnalyzerSafe('chemistryBlock', () => buildChemistryBlock(files), analyzerTelemetry);
-  const fxRatesBlock = runAnalyzerSafe('fxRatesBlock', () => buildFxRatesBlock(files), analyzerTelemetry);
-  const ibanSwiftBlock = runAnalyzerSafe('ibanSwiftBlock', () => buildIbanSwiftBlock(files), analyzerTelemetry);
-  const licensePlatesBlock = runAnalyzerSafe('licensePlatesBlock', () => buildLicensePlatesBlock(files), analyzerTelemetry);
-  const legalCitationsBlock = runAnalyzerSafe('legalCitationsBlock', () => buildLegalCitationsBlock(files), analyzerTelemetry);
-  const socialUrlsBlock = runAnalyzerSafe('socialUrlsBlock', () => buildSocialUrlsBlock(files), analyzerTelemetry);
-  const geneProteinBlock = runAnalyzerSafe('geneProteinBlock', () => buildGeneProteinBlock(files), analyzerTelemetry);
-  const currencySymbolsBlock = runAnalyzerSafe('currencySymbolsBlock', () => buildCurrencySymbolsBlock(files), analyzerTelemetry);
-  const phoneCodesBlock = runAnalyzerSafe('phoneCodesBlock', () => buildPhoneCodesBlock(files), analyzerTelemetry);
-  const postalCodesBlock = runAnalyzerSafe('postalCodesBlock', () => buildPostalCodesBlock(files), analyzerTelemetry);
-  const addressesBlock = runAnalyzerSafe('addressesBlock', () => buildAddressesBlock(files), analyzerTelemetry);
-  const mimeTypesBlock = runAnalyzerSafe('mimeTypesBlock', () => buildMimeTypesBlock(files), analyzerTelemetry);
-  const utmParamsBlock = runAnalyzerSafe('utmParamsBlock', () => buildUtmParamsBlock(files), analyzerTelemetry);
-  const creditCardsBlock = runAnalyzerSafe('creditCardsBlock', () => buildCreditCardsBlock(files), analyzerTelemetry);
-  const ssnPiiBlock = runAnalyzerSafe('ssnPiiBlock', () => buildSsnPiiBlock(files), analyzerTelemetry);
-  const apiKeysBlock = runAnalyzerSafe('apiKeysBlock', () => buildApiKeysBlock(files), analyzerTelemetry);
-  const httpMethodsBlock = runAnalyzerSafe('httpMethodsBlock', () => buildHttpMethodsBlock(files), analyzerTelemetry);
-  const containerRefsBlock = runAnalyzerSafe('containerRefsBlock', () => buildContainerRefsBlock(files), analyzerTelemetry);
-  const k8sRefsBlock = runAnalyzerSafe('k8sRefsBlock', () => buildK8sRefsBlock(files), analyzerTelemetry);
-  const metricsBlock = runAnalyzerSafe('metricsBlock', () => buildMetricsBlock(files), analyzerTelemetry);
-  const oauthScopesBlock = runAnalyzerSafe('oauthScopesBlock', () => buildOauthScopesBlock(files), analyzerTelemetry);
-  const cspDirectivesBlock = runAnalyzerSafe('cspDirectivesBlock', () => buildCspDirectivesBlock(files), analyzerTelemetry);
-  const mathOperatorsBlock = runAnalyzerSafe('mathOperatorsBlock', () => buildMathOperatorsBlock(files), analyzerTelemetry);
-  const spdxComplexBlock = runAnalyzerSafe('spdxComplexBlock', () => buildSpdxComplexBlock(files), analyzerTelemetry);
-  const featureFlagsBlock = runAnalyzerSafe('featureFlagsBlock', () => buildFeatureFlagsBlock(files), analyzerTelemetry);
-  const cookieAttrsBlock = runAnalyzerSafe('cookieAttrsBlock', () => buildCookieAttrsBlock(files), analyzerTelemetry);
-  const otelTraceBlock = runAnalyzerSafe('otelTraceBlock', () => buildOtelTraceBlock(files), analyzerTelemetry);
-  const cloudArnsBlock = runAnalyzerSafe('cloudArnsBlock', () => buildCloudArnsBlock(files), analyzerTelemetry);
-  const mlModelsBlock = runAnalyzerSafe('mlModelsBlock', () => buildMlModelsBlock(files), analyzerTelemetry);
-  const dbConnStringsBlock = runAnalyzerSafe('dbConnStringsBlock', () => buildDbConnStringsBlock(files), analyzerTelemetry);
-  const graphqlOpsBlock = runAnalyzerSafe('graphqlOpsBlock', () => buildGraphqlOpsBlock(files), analyzerTelemetry);
-  const grpcRefsBlock = runAnalyzerSafe('grpcRefsBlock', () => buildGrpcRefsBlock(files), analyzerTelemetry);
-  const stackTracesBlock = runAnalyzerSafe('stackTracesBlock', () => buildStackTracesBlock(files), analyzerTelemetry);
-  const envNamesBlock = runAnalyzerSafe('envNamesBlock', () => buildEnvNamesBlock(files), analyzerTelemetry);
-  const testBlocksBlock = runAnalyzerSafe('testBlocksBlock', () => buildTestBlocksBlock(files), analyzerTelemetry);
-  const gitShasBlock = runAnalyzerSafe('gitShasBlock', () => buildGitShasBlock(files), analyzerTelemetry);
-  const cloudStorageBlock = runAnalyzerSafe('cloudStorageBlock', () => buildCloudStorageBlock(files), analyzerTelemetry);
-  const webVitalsBlock = runAnalyzerSafe('webVitalsBlock', () => buildWebVitalsBlock(files), analyzerTelemetry);
-  const ariaA11yBlock = runAnalyzerSafe('ariaA11yBlock', () => buildAriaA11yBlock(files), analyzerTelemetry);
-  const i18nKeysBlock = runAnalyzerSafe('i18nKeysBlock', () => buildI18nKeysBlock(files), analyzerTelemetry);
-  const ciBuildIdsBlock = runAnalyzerSafe('ciBuildIdsBlock', () => buildCiBuildIdsBlock(files), analyzerTelemetry);
-  const userAgentsBlock = runAnalyzerSafe('userAgentsBlock', () => buildUserAgentsBlock(files), analyzerTelemetry);
-  const cidrRangesBlock = runAnalyzerSafe('cidrRangesBlock', () => buildCidrRangesBlock(files), analyzerTelemetry);
-  const cacheHeadersBlock = runAnalyzerSafe('cacheHeadersBlock', () => buildCacheHeadersBlock(files), analyzerTelemetry);
-  const githubRefsBlock = runAnalyzerSafe('githubRefsBlock', () => buildGithubRefsBlock(files), analyzerTelemetry);
-  const apmRefsBlock = runAnalyzerSafe('apmRefsBlock', () => buildApmRefsBlock(files), analyzerTelemetry);
-  const attackPatternsBlock = runAnalyzerSafe('attackPatternsBlock', () => buildAttackPatternsBlock(files), analyzerTelemetry);
-  const webhookUrlsBlock = runAnalyzerSafe('webhookUrlsBlock', () => buildWebhookUrlsBlock(files), analyzerTelemetry);
-  const sshFingerprintsBlock = runAnalyzerSafe('sshFingerprintsBlock', () => buildSshFingerprintsBlock(files), analyzerTelemetry);
-  const npmRefsBlock = runAnalyzerSafe('npmRefsBlock', () => buildNpmRefsBlock(files), analyzerTelemetry);
-  const correlationIdsBlock = runAnalyzerSafe('correlationIdsBlock', () => buildCorrelationIdsBlock(files), analyzerTelemetry);
-  const paymentIdsBlock = runAnalyzerSafe('paymentIdsBlock', () => buildPaymentIdsBlock(files), analyzerTelemetry);
-  const emailHeadersBlock = runAnalyzerSafe('emailHeadersBlock', () => buildEmailHeadersBlock(files), analyzerTelemetry);
-  const icalEventsBlock = runAnalyzerSafe('icalEventsBlock', () => buildIcalEventsBlock(files), analyzerTelemetry);
-  const frontmatterBlock = runAnalyzerSafe('frontmatterBlock', () => buildFrontmatterBlock(files), analyzerTelemetry);
-  const pullQuotesBlock = runAnalyzerSafe('pullQuotesBlock', () => buildPullQuotesBlock(files), analyzerTelemetry);
-  const ghaStepsBlock = runAnalyzerSafe('ghaStepsBlock', () => buildGhaStepsBlock(files), analyzerTelemetry);
-  const terraformRefsBlock = runAnalyzerSafe('terraformRefsBlock', () => buildTerraformRefsBlock(files), analyzerTelemetry);
-  const helmRefsBlock = runAnalyzerSafe('helmRefsBlock', () => buildHelmRefsBlock(files), analyzerTelemetry);
-  const naturalSchedulesBlock = runAnalyzerSafe('naturalSchedulesBlock', () => buildNaturalSchedulesBlock(files), analyzerTelemetry);
-  const chatPermalinksBlock = runAnalyzerSafe('chatPermalinksBlock', () => buildChatPermalinksBlock(files), analyzerTelemetry);
-  const pmTicketsBlock = runAnalyzerSafe('pmTicketsBlock', () => buildPmTicketsBlock(files), analyzerTelemetry);
-  const slaTargetsBlock = runAnalyzerSafe('slaTargetsBlock', () => buildSlaTargetsBlock(files), analyzerTelemetry);
-  const tldsBlock = runAnalyzerSafe('tldsBlock', () => buildTldsBlock(files), analyzerTelemetry);
-  const stockTickersBlock = runAnalyzerSafe('stockTickersBlock', () => buildStockTickersBlock(files), analyzerTelemetry);
-  const hardwareSpecsBlock = runAnalyzerSafe('hardwareSpecsBlock', () => buildHardwareSpecsBlock(files), analyzerTelemetry);
-  const bandwidthUnitsBlock = runAnalyzerSafe('bandwidthUnitsBlock', () => buildBandwidthUnitsBlock(files), analyzerTelemetry);
-  const trackingNumbersBlock = runAnalyzerSafe('trackingNumbersBlock', () => buildTrackingNumbersBlock(files), analyzerTelemetry);
-  const rateLimitHeadersBlock = runAnalyzerSafe('rateLimitHeadersBlock', () => buildRateLimitHeadersBlock(files), analyzerTelemetry);
-  const cryptoWalletsBlock = runAnalyzerSafe('cryptoWalletsBlock', () => buildCryptoWalletsBlock(files), analyzerTelemetry);
-  const cveIdsBlock = runAnalyzerSafe('cveIdsBlock', () => buildCveIdsBlock(files), analyzerTelemetry);
-  const mediaTimestampsBlock = runAnalyzerSafe('mediaTimestampsBlock', () => buildMediaTimestampsBlock(files), analyzerTelemetry);
-  const linuxSignalsBlock = runAnalyzerSafe('linuxSignalsBlock', () => buildLinuxSignalsBlock(files), analyzerTelemetry);
-  const exitCodesBlock = runAnalyzerSafe('exitCodesBlock', () => buildExitCodesBlock(files), analyzerTelemetry);
-  const networkPortsBlock = runAnalyzerSafe('networkPortsBlock', () => buildNetworkPortsBlock(files), analyzerTelemetry);
-  const linuxDistrosBlock = runAnalyzerSafe('linuxDistrosBlock', () => buildLinuxDistrosBlock(files), analyzerTelemetry);
-  const lifecyclePhasesBlock = runAnalyzerSafe('lifecyclePhasesBlock', () => buildLifecyclePhasesBlock(files), analyzerTelemetry);
-  const projectCodenamesBlock = runAnalyzerSafe('projectCodenamesBlock', () => buildProjectCodenamesBlock(files), analyzerTelemetry);
-  const riskLevelsBlock = runAnalyzerSafe('riskLevelsBlock', () => buildRiskLevelsBlock(files), analyzerTelemetry);
-  const saasMetricsBlock = runAnalyzerSafe('saasMetricsBlock', () => buildSaasMetricsBlock(files), analyzerTelemetry);
-  const recipeMeasurementsBlock = runAnalyzerSafe('recipeMeasurementsBlock', () => buildRecipeMeasurementsBlock(files), analyzerTelemetry);
-  const isoLangsBlock = runAnalyzerSafe('isoLangsBlock', () => buildIsoLangsBlock(files), analyzerTelemetry);
-  const prReviewStatesBlock = runAnalyzerSafe('prReviewStatesBlock', () => buildPrReviewStatesBlock(files), analyzerTelemetry);
-  const pricingTiersBlock = runAnalyzerSafe('pricingTiersBlock', () => buildPricingTiersBlock(files), analyzerTelemetry);
-  const arxivIdsBlock = runAnalyzerSafe('arxivIdsBlock', () => buildArxivIdsBlock(files), analyzerTelemetry);
-  const doiIdsBlock = runAnalyzerSafe('doiIdsBlock', () => buildDoiIdsBlock(files), analyzerTelemetry);
-  const orcidIdsBlock = runAnalyzerSafe('orcidIdsBlock', () => buildOrcidIdsBlock(files), analyzerTelemetry);
-  const wikiRefsBlock = runAnalyzerSafe('wikiRefsBlock', () => buildWikiRefsBlock(files), analyzerTelemetry);
-  const pubmedIdsBlock = runAnalyzerSafe('pubmedIdsBlock', () => buildPubmedIdsBlock(files), analyzerTelemetry);
-  const serviceAccountsBlock = runAnalyzerSafe('serviceAccountsBlock', () => buildServiceAccountsBlock(files), analyzerTelemetry);
-  const vinNumbersBlock = runAnalyzerSafe('vinNumbersBlock', () => buildVinNumbersBlock(files), analyzerTelemetry);
-  const emojiShortcodesBlock = runAnalyzerSafe('emojiShortcodesBlock', () => buildEmojiShortcodesBlock(files), analyzerTelemetry);
-  const bibtexEntriesBlock = runAnalyzerSafe('bibtexEntriesBlock', () => buildBibtexEntriesBlock(files), analyzerTelemetry);
-  const latexCommandsBlock = runAnalyzerSafe('latexCommandsBlock', () => buildLatexCommandsBlock(files), analyzerTelemetry);
-  const progLangsBlock = runAnalyzerSafe('progLangsBlock', () => buildProgLangsBlock(files), analyzerTelemetry);
-  const complianceRefsBlock = runAnalyzerSafe('complianceRefsBlock', () => buildComplianceRefsBlock(files), analyzerTelemetry);
-  const tlsCiphersBlock = runAnalyzerSafe('tlsCiphersBlock', () => buildTlsCiphersBlock(files), analyzerTelemetry);
-  const dnsRecordsBlock = runAnalyzerSafe('dnsRecordsBlock', () => buildDnsRecordsBlock(files), analyzerTelemetry);
-  const emailAuthBlock = runAnalyzerSafe('emailAuthBlock', () => buildEmailAuthBlock(files), analyzerTelemetry);
-  const openapiKeysBlock = runAnalyzerSafe('openapiKeysBlock', () => buildOpenapiKeysBlock(files), analyzerTelemetry);
-  const kafkaRefsBlock = runAnalyzerSafe('kafkaRefsBlock', () => buildKafkaRefsBlock(files), analyzerTelemetry);
-  const ansiEscapesBlock = runAnalyzerSafe('ansiEscapesBlock', () => buildAnsiEscapesBlock(files), analyzerTelemetry);
-  const sqlWindowsBlock = runAnalyzerSafe('sqlWindowsBlock', () => buildSqlWindowsBlock(files), analyzerTelemetry);
-  const websocketMarkersBlock = runAnalyzerSafe('websocketMarkersBlock', () => buildWebsocketMarkersBlock(files), analyzerTelemetry);
-  const isoDurationsBlock = runAnalyzerSafe('isoDurationsBlock', () => buildIsoDurationsBlock(files), analyzerTelemetry);
-  const browserSupportBlock = runAnalyzerSafe('browserSupportBlock', () => buildBrowserSupportBlock(files), analyzerTelemetry);
-  const numberBasesBlock = runAnalyzerSafe('numberBasesBlock', () => buildNumberBasesBlock(files), analyzerTelemetry);
-  const dmsCoordsBlock = runAnalyzerSafe('dmsCoordsBlock', () => buildDmsCoordsBlock(files), analyzerTelemetry);
-  const containerRegistriesBlock = runAnalyzerSafe('containerRegistriesBlock', () => buildContainerRegistriesBlock(files), analyzerTelemetry);
-  const wktGeometryBlock = runAnalyzerSafe('wktGeometryBlock', () => buildWktGeometryBlock(files), analyzerTelemetry);
-  const mdRefLinksBlock = runAnalyzerSafe('mdRefLinksBlock', () => buildMdRefLinksBlock(files), analyzerTelemetry);
-  const botTokensBlock = runAnalyzerSafe('botTokensBlock', () => buildBotTokensBlock(files), analyzerTelemetry);
-  const cargoPackagesBlock = runAnalyzerSafe('cargoPackagesBlock', () => buildCargoPackagesBlock(files), analyzerTelemetry);
-  const goModulesBlock = runAnalyzerSafe('goModulesBlock', () => buildGoModulesBlock(files), analyzerTelemetry);
-  const mavenCoordsBlock = runAnalyzerSafe('mavenCoordsBlock', () => buildMavenCoordsBlock(files), analyzerTelemetry);
-  const pipReqsBlock = runAnalyzerSafe('pipReqsBlock', () => buildPipReqsBlock(files), analyzerTelemetry);
-  const composerPkgsBlock = runAnalyzerSafe('composerPkgsBlock', () => buildComposerPkgsBlock(files), analyzerTelemetry);
-  const nugetPkgsBlock = runAnalyzerSafe('nugetPkgsBlock', () => buildNugetPkgsBlock(files), analyzerTelemetry);
-  const gemPkgsBlock = runAnalyzerSafe('gemPkgsBlock', () => buildGemPkgsBlock(files), analyzerTelemetry);
-  const hexPkgsBlock = runAnalyzerSafe('hexPkgsBlock', () => buildHexPkgsBlock(files), analyzerTelemetry);
-  const svgPathCmdsBlock = runAnalyzerSafe('svgPathCmdsBlock', () => buildSvgPathCmdsBlock(files), analyzerTelemetry);
-  const geojsonBlock = runAnalyzerSafe('geojsonBlock', () => buildGeojsonBlock(files), analyzerTelemetry);
-  const pwaManifestBlock = runAnalyzerSafe('pwaManifestBlock', () => buildPwaManifestBlock(files), analyzerTelemetry);
-  const permissionsApiBlock = runAnalyzerSafe('permissionsApiBlock', () => buildPermissionsApiBlock(files), analyzerTelemetry);
-  const serverlessFnsBlock = runAnalyzerSafe('serverlessFnsBlock', () => buildServerlessFnsBlock(files), analyzerTelemetry);
-  const dbMigrationsBlock = runAnalyzerSafe('dbMigrationsBlock', () => buildDbMigrationsBlock(files), analyzerTelemetry);
-  const eslintRulesBlock = runAnalyzerSafe('eslintRulesBlock', () => buildEslintRulesBlock(files), analyzerTelemetry);
-  const buildToolsBlock = runAnalyzerSafe('buildToolsBlock', () => buildBuildToolsBlock(files), analyzerTelemetry);
-  const jwtClaimsBlock = runAnalyzerSafe('jwtClaimsBlock', () => buildJwtClaimsBlock(files), analyzerTelemetry);
-  const sriHashesBlock = runAnalyzerSafe('sriHashesBlock', () => buildSriHashesBlock(files), analyzerTelemetry);
-  const jsonSchemaBlock = runAnalyzerSafe('jsonSchemaBlock', () => buildJsonSchemaBlock(files), analyzerTelemetry);
-  const prismaSchemaBlock = runAnalyzerSafe('prismaSchemaBlock', () => buildPrismaSchemaBlock(files), analyzerTelemetry);
-  const graphqlFragmentsBlock = runAnalyzerSafe('graphqlFragmentsBlock', () => buildGraphqlFragmentsBlock(files), analyzerTelemetry);
-  const cssVarsBlock = runAnalyzerSafe('cssVarsBlock', () => buildCssVarsBlock(files), analyzerTelemetry);
-  const composeServicesBlock = runAnalyzerSafe('composeServicesBlock', () => buildComposeServicesBlock(files), analyzerTelemetry);
-  const regexFlagsBlock = runAnalyzerSafe('regexFlagsBlock', () => buildRegexFlagsBlock(files), analyzerTelemetry);
-  const vueSfcBlock = runAnalyzerSafe('vueSfcBlock', () => buildVueSfcBlock(files), analyzerTelemetry);
-  const astroBlock = runAnalyzerSafe('astroBlock', () => buildAstroBlock(files), analyzerTelemetry);
-  const e2eTestsBlock = runAnalyzerSafe('e2eTestsBlock', () => buildE2eTestsBlock(files), analyzerTelemetry);
-  const mswHandlersBlock = runAnalyzerSafe('mswHandlersBlock', () => buildMswHandlersBlock(files), analyzerTelemetry);
-  const ghWorkflowsBlock = runAnalyzerSafe('ghWorkflowsBlock', () => buildGhWorkflowsBlock(files), analyzerTelemetry);
-  const jsonLdBlock = runAnalyzerSafe('jsonLdBlock', () => buildJsonLdBlock(files), analyzerTelemetry);
-  const tailwindBlock = runAnalyzerSafe('tailwindBlock', () => buildTailwindBlock(files), analyzerTelemetry);
-  const mongoAggBlock = runAnalyzerSafe('mongoAggBlock', () => buildMongoAggBlock(files), analyzerTelemetry);
-  const helmBlock = runAnalyzerSafe('helmBlock', () => buildHelmBlock(files), analyzerTelemetry);
-  const vitestBlock = runAnalyzerSafe('vitestBlock', () => buildVitestBlock(files), analyzerTelemetry);
-  const mjmlBlock = runAnalyzerSafe('mjmlBlock', () => buildMjmlBlock(files), analyzerTelemetry);
-  const stripeBlock = runAnalyzerSafe('stripeBlock', () => buildStripeBlock(files), analyzerTelemetry);
-  const terraformVarsBlock = runAnalyzerSafe('terraformVarsBlock', () => buildTerraformVarsBlock(files), analyzerTelemetry);
-  const openapiSecurityBlock = runAnalyzerSafe('openapiSecurityBlock', () => buildOpenapiSecurityBlock(files), analyzerTelemetry);
-  const k8sResourcesBlock = runAnalyzerSafe('k8sResourcesBlock', () => buildK8sResourcesBlock(files), analyzerTelemetry);
-  const cssAnimBlock = runAnalyzerSafe('cssAnimBlock', () => buildCssAnimBlock(files), analyzerTelemetry);
-  const storybookBlock = runAnalyzerSafe('storybookBlock', () => buildStorybookBlock(files), analyzerTelemetry);
-  const sentryBlock = runAnalyzerSafe('sentryBlock', () => buildSentryBlock(files), analyzerTelemetry);
-  const natsBlock = runAnalyzerSafe('natsBlock', () => buildNatsBlock(files), analyzerTelemetry);
-  const pkgJsonBlock = runAnalyzerSafe('pkgJsonBlock', () => buildPkgJsonBlock(files), analyzerTelemetry);
-  const redisBlock = runAnalyzerSafe('redisBlock', () => buildRedisBlock(files), analyzerTelemetry);
-  const nginxBlock = runAnalyzerSafe('nginxBlock', () => buildNginxBlock(files), analyzerTelemetry);
-  const otelBlock = runAnalyzerSafe('otelBlock', () => buildOtelBlock(files), analyzerTelemetry);
-  const moduleFederationBlock = runAnalyzerSafe('moduleFederationBlock', () => buildModuleFederationBlock(files), analyzerTelemetry);
-  const drizzleBlock = runAnalyzerSafe('drizzleBlock', () => buildDrizzleBlock(files), analyzerTelemetry);
-  const twilioBlock = runAnalyzerSafe('twilioBlock', () => buildTwilioBlock(files), analyzerTelemetry);
-  const awsSdkBlock = runAnalyzerSafe('awsSdkBlock', () => buildAwsSdkBlock(files), analyzerTelemetry);
-  const oauthFlowsBlock = runAnalyzerSafe('oauthFlowsBlock', () => buildOauthFlowsBlock(files), analyzerTelemetry);
-  const gqlClientsBlock = runAnalyzerSafe('gqlClientsBlock', () => buildGqlClientsBlock(files), analyzerTelemetry);
-  const webhookSigsBlock = runAnalyzerSafe('webhookSigsBlock', () => buildWebhookSigsBlock(files), analyzerTelemetry);
-  const bullmqBlock = runAnalyzerSafe('bullmqBlock', () => buildBullmqBlock(files), analyzerTelemetry);
-  const webCryptoBlock = runAnalyzerSafe('webCryptoBlock', () => buildWebCryptoBlock(files), analyzerTelemetry);
-  const discourseBlock = runAnalyzerSafe('discourseBlock', () => buildDiscourseBlock(files), analyzerTelemetry);
-  const sectionRolesBlock = runAnalyzerSafe('sectionRolesBlock', () => buildSectionRolesBlock(files), analyzerTelemetry);
+  const evidenceMapBlock = runAnalyzerSafe('evidenceMapBlock', () => buildEvidenceMapBlock(files), analyzerTelemetry, cacheKey);
+  const deepAnalysisBlock = runAnalyzerSafe('deepAnalysisBlock', () => buildDeepAnalysisBlock(files), analyzerTelemetry, cacheKey);
+  const quotesBlock = runAnalyzerSafe('quotesBlock', () => buildQuotesBlock(files), analyzerTelemetry, cacheKey);
+  const numericCoherenceBlock = runAnalyzerSafe('numericCoherenceBlock', () => buildNumericCoherenceBlock(files), analyzerTelemetry, cacheKey);
+  const temporalTimelineBlock = runAnalyzerSafe('temporalTimelineBlock', () => buildTemporalTimelineBlock(files), analyzerTelemetry, cacheKey);
+  const actionDashboardBlock = runAnalyzerSafe('actionDashboardBlock', () => buildActionDashboardBlock(files), analyzerTelemetry, cacheKey);
+  const audienceToneBlock = runAnalyzerSafe('audienceToneBlock', () => buildAudienceToneBlock(files), analyzerTelemetry, cacheKey);
+  const semanticGraphBlock = runAnalyzerSafe('semanticGraphBlock', () => buildSemanticGraphBlock(files), analyzerTelemetry, cacheKey);
+  const kpisBlock = runAnalyzerSafe('kpisBlock', () => buildKpisBlock(files), analyzerTelemetry, cacheKey);
+  const riskRegisterBlock = runAnalyzerSafe('riskRegisterBlock', () => buildRiskRegisterBlock(files), analyzerTelemetry, cacheKey);
+  const factDensityBlock = runAnalyzerSafe('factDensityBlock', () => buildFactDensityBlock(files), analyzerTelemetry, cacheKey);
+  const relationshipsBlock = runAnalyzerSafe('relationshipsBlock', () => buildRelationshipsBlock(files), analyzerTelemetry, cacheKey);
+  const sectionSimilarityBlock = runAnalyzerSafe('sectionSimilarityBlock', () => buildSectionSimilarityBlock(files), analyzerTelemetry, cacheKey);
+  const numericStatisticsBlock = runAnalyzerSafe('numericStatisticsBlock', () => buildNumericStatisticsBlock(files), analyzerTelemetry, cacheKey);
+  const qualityGradeBlock = runAnalyzerSafe('qualityGradeBlock', () => buildQualityGradeBlock(files), analyzerTelemetry, cacheKey);
+  const titlesBlock = runAnalyzerSafe('titlesBlock', () => buildTitlesBlock(files), analyzerTelemetry, cacheKey);
+  const tldrBlock = runAnalyzerSafe('tldrBlock', () => buildTldrBlock(files), analyzerTelemetry, cacheKey);
+  const sentimentBlock = runAnalyzerSafe('sentimentBlock', () => buildSentimentBlock(files), analyzerTelemetry, cacheKey);
+  const keyPhrasesBlock = runAnalyzerSafe('keyPhrasesBlock', () => buildKeyPhrasesBlock(files), analyzerTelemetry, cacheKey);
+  const obligationsBlock = runAnalyzerSafe('obligationsBlock', () => buildObligationsBlock(files), analyzerTelemetry, cacheKey);
+  const scopeExclusionsBlock = runAnalyzerSafe('scopeExclusionsBlock', () => buildScopeExclusionsBlock(files), analyzerTelemetry, cacheKey);
+  const stakeholderMapBlock = runAnalyzerSafe('stakeholderMapBlock', () => buildStakeholderMapBlock(files), analyzerTelemetry, cacheKey);
+  const jurisdictionBlock = runAnalyzerSafe('jurisdictionBlock', () => buildJurisdictionBlock(files), analyzerTelemetry, cacheKey);
+  const definitionsBlock = runAnalyzerSafe('definitionsBlock', () => buildDefinitionsBlock(files), analyzerTelemetry, cacheKey);
+  const crossReferenceBlock = runAnalyzerSafe('crossReferenceBlock', () => buildCrossReferenceBlock(files), analyzerTelemetry, cacheKey);
+  const pricingBlock = runAnalyzerSafe('pricingBlock', () => buildPricingBlock(files), analyzerTelemetry, cacheKey);
+  const metadataBlock = runAnalyzerSafe('metadataBlock', () => buildMetadataBlock(files), analyzerTelemetry, cacheKey);
+  const complianceBlock = runAnalyzerSafe('complianceBlock', () => buildComplianceBlock(files), analyzerTelemetry, cacheKey);
+  const warrantiesBlock = runAnalyzerSafe('warrantiesBlock', () => buildWarrantiesBlock(files), analyzerTelemetry, cacheKey);
+  const disputeResolutionBlock = runAnalyzerSafe('disputeResolutionBlock', () => buildDisputeResolutionBlock(files), analyzerTelemetry, cacheKey);
+  const indemnificationBlock = runAnalyzerSafe('indemnificationBlock', () => buildIndemnificationBlock(files), analyzerTelemetry, cacheKey);
+  const acronymsBlock = runAnalyzerSafe('acronymsBlock', () => buildAcronymsBlock(files), analyzerTelemetry, cacheKey);
+  const temporalExpressionsBlock = runAnalyzerSafe('temporalExpressionsBlock', () => buildTemporalExpressionsBlock(files), analyzerTelemetry, cacheKey);
+  const crossNumericBlock = runAnalyzerSafe('crossNumericBlock', () => buildCrossNumericBlock(files), analyzerTelemetry, cacheKey);
+  const signatureBlocksBlock = runAnalyzerSafe('signatureBlocksBlock', () => buildSignatureBlocksBlock(files), analyzerTelemetry, cacheKey);
+  const qaPairsBlock = runAnalyzerSafe('qaPairsBlock', () => buildQaPairsBlock(files), analyzerTelemetry, cacheKey);
+  const hypothesesBlock = runAnalyzerSafe('hypothesesBlock', () => buildHypothesesBlock(files), analyzerTelemetry, cacheKey);
+  const recommendationsBlock = runAnalyzerSafe('recommendationsBlock', () => buildRecommendationsBlock(files), analyzerTelemetry, cacheKey);
+  const assumptionsBlock = runAnalyzerSafe('assumptionsBlock', () => buildAssumptionsBlock(files), analyzerTelemetry, cacheKey);
+  const conditionalClausesBlock = runAnalyzerSafe('conditionalClausesBlock', () => buildConditionalClausesBlock(files), analyzerTelemetry, cacheKey);
+  const counterArgumentsBlock = runAnalyzerSafe('counterArgumentsBlock', () => buildCounterArgumentsBlock(files), analyzerTelemetry, cacheKey);
+  const callsToActionBlock = runAnalyzerSafe('callsToActionBlock', () => buildCallsToActionBlock(files), analyzerTelemetry, cacheKey);
+  const disclosuresBlock = runAnalyzerSafe('disclosuresBlock', () => buildDisclosuresBlock(files), analyzerTelemetry, cacheKey);
+  const factVsOpinionBlock = runAnalyzerSafe('factVsOpinionBlock', () => buildFactVsOpinionBlock(files), analyzerTelemetry, cacheKey);
+  const scenariosBlock = runAnalyzerSafe('scenariosBlock', () => buildScenariosBlock(files), analyzerTelemetry, cacheKey);
+  const benchmarksBlock = runAnalyzerSafe('benchmarksBlock', () => buildBenchmarksBlock(files), analyzerTelemetry, cacheKey);
+  const goalsTargetsBlock = runAnalyzerSafe('goalsTargetsBlock', () => buildGoalsTargetsBlock(files), analyzerTelemetry, cacheKey);
+  const slaTermsBlock = runAnalyzerSafe('slaTermsBlock', () => buildSLATermsBlock(files), analyzerTelemetry, cacheKey);
+  const dataClassificationBlock = runAnalyzerSafe('dataClassificationBlock', () => buildDataClassificationBlock(files), analyzerTelemetry, cacheKey);
+  const approvalWorkflowBlock = runAnalyzerSafe('approvalWorkflowBlock', () => buildApprovalWorkflowBlock(files), analyzerTelemetry, cacheKey);
+  const executiveSummaryBlock = runAnalyzerSafe('executiveSummaryBlock', () => buildExecutiveSummaryBlock(files), analyzerTelemetry, cacheKey);
+  const urlsBlock = runAnalyzerSafe('urlsBlock', () => buildUrlsBlock(files), analyzerTelemetry, cacheKey);
+  const contactsBlock = runAnalyzerSafe('contactsBlock', () => buildContactsBlock(files), analyzerTelemetry, cacheKey);
+  const footnotesBlock = runAnalyzerSafe('footnotesBlock', () => buildFootnotesBlock(files), analyzerTelemetry, cacheKey);
+  const tablesBlock = runAnalyzerSafe('tablesBlock', () => buildTablesBlock(files), analyzerTelemetry, cacheKey);
+  const codeBlocksBlock = runAnalyzerSafe('codeBlocksBlock', () => buildCodeBlocksBlock(files), analyzerTelemetry, cacheKey);
+  const figureRefsBlock = runAnalyzerSafe('figureRefsBlock', () => buildFigureRefsBlock(files), analyzerTelemetry, cacheKey);
+  const checklistsBlock = runAnalyzerSafe('checklistsBlock', () => buildChecklistsBlock(files), analyzerTelemetry, cacheKey);
+  const identifiersBlock = runAnalyzerSafe('identifiersBlock', () => buildIdentifiersBlock(files), analyzerTelemetry, cacheKey);
+  const bulletListsBlock = runAnalyzerSafe('bulletListsBlock', () => buildBulletListsBlock(files), analyzerTelemetry, cacheKey);
+  const mermaidBlock = runAnalyzerSafe('mermaidBlock', () => buildMermaidBlock(files), analyzerTelemetry, cacheKey);
+  const prioritiesBlock = runAnalyzerSafe('prioritiesBlock', () => buildPrioritiesBlock(files), analyzerTelemetry, cacheKey);
+  const ownershipBlock = runAnalyzerSafe('ownershipBlock', () => buildOwnershipBlock(files), analyzerTelemetry, cacheKey);
+  const timestampsBlock = runAnalyzerSafe('timestampsBlock', () => buildTimestampsBlock(files), analyzerTelemetry, cacheKey);
+  const statusBlock = runAnalyzerSafe('statusBlock', () => buildStatusBlock(files), analyzerTelemetry, cacheKey);
+  const acceptanceCriteriaBlock = runAnalyzerSafe('acceptanceCriteriaBlock', () => buildAcceptanceCriteriaBlock(files), analyzerTelemetry, cacheKey);
+  const apiEndpointsBlock = runAnalyzerSafe('apiEndpointsBlock', () => buildApiEndpointsBlock(files), analyzerTelemetry, cacheKey);
+  const envVarsBlock = runAnalyzerSafe('envVarsBlock', () => buildEnvVarsBlock(files), analyzerTelemetry, cacheKey);
+  const sqlBlock = runAnalyzerSafe('sqlBlock', () => buildSqlBlock(files), analyzerTelemetry, cacheKey);
+  const filePathsBlock = runAnalyzerSafe('filePathsBlock', () => buildFilePathsBlock(files), analyzerTelemetry, cacheKey);
+  const cronBlock = runAnalyzerSafe('cronBlock', () => buildCronBlock(files), analyzerTelemetry, cacheKey);
+  const licensesBlock = runAnalyzerSafe('licensesBlock', () => buildLicensesBlock(files), analyzerTelemetry, cacheKey);
+  const dependenciesBlock = runAnalyzerSafe('dependenciesBlock', () => buildDependenciesBlock(files), analyzerTelemetry, cacheKey);
+  const riskMatrixBlock = runAnalyzerSafe('riskMatrixBlock', () => buildRiskMatrixBlock(files), analyzerTelemetry, cacheKey);
+  const versionsBlock = runAnalyzerSafe('versionsBlock', () => buildVersionsBlock(files), analyzerTelemetry, cacheKey);
+  const decisionRecordsBlock = runAnalyzerSafe('decisionRecordsBlock', () => buildDecisionRecordsBlock(files), analyzerTelemetry, cacheKey);
+  const domainsBlock = runAnalyzerSafe('domainsBlock', () => buildDomainsBlock(files), analyzerTelemetry, cacheKey);
+  const currencyBlock = runAnalyzerSafe('currencyBlock', () => buildCurrencyBlock(files), analyzerTelemetry, cacheKey);
+  const percentagesBlock = runAnalyzerSafe('percentagesBlock', () => buildPercentagesBlock(files), analyzerTelemetry, cacheKey);
+  const citationsBlock = runAnalyzerSafe('citationsBlock', () => buildCitationsBlock(files), analyzerTelemetry, cacheKey);
+  const colorsBlock = runAnalyzerSafe('colorsBlock', () => buildColorsBlock(files), analyzerTelemetry, cacheKey);
+  const coordinatesBlock = runAnalyzerSafe('coordinatesBlock', () => buildCoordinatesBlock(files), analyzerTelemetry, cacheKey);
+  const trademarkBlock = runAnalyzerSafe('trademarkBlock', () => buildTrademarkBlock(files), analyzerTelemetry, cacheKey);
+  const hashtagsBlock = runAnalyzerSafe('hashtagsBlock', () => buildHashtagsBlock(files), analyzerTelemetry, cacheKey);
+  const sectionLabelsBlock = runAnalyzerSafe('sectionLabelsBlock', () => buildSectionLabelsBlock(files), analyzerTelemetry, cacheKey);
+  const signoffsBlock = runAnalyzerSafe('signoffsBlock', () => buildSignoffsBlock(files), analyzerTelemetry, cacheKey);
+  const hashesBlock = runAnalyzerSafe('hashesBlock', () => buildHashesBlock(files), analyzerTelemetry, cacheKey);
+  const couponsBlock = runAnalyzerSafe('couponsBlock', () => buildCouponsBlock(files), analyzerTelemetry, cacheKey);
+  const fileSizesBlock = runAnalyzerSafe('fileSizesBlock', () => buildFileSizesBlock(files), analyzerTelemetry, cacheKey);
+  const vcsRefsBlock = runAnalyzerSafe('vcsRefsBlock', () => buildVcsRefsBlock(files), analyzerTelemetry, cacheKey);
+  const standardsBlock = runAnalyzerSafe('standardsBlock', () => buildStandardsBlock(files), analyzerTelemetry, cacheKey);
+  const networkBlock = runAnalyzerSafe('networkBlock', () => buildNetworkBlock(files), analyzerTelemetry, cacheKey);
+  const httpStatusBlock = runAnalyzerSafe('httpStatusBlock', () => buildHttpStatusBlock(files), analyzerTelemetry, cacheKey);
+  const timezonesBlock = runAnalyzerSafe('timezonesBlock', () => buildTimezonesBlock(files), analyzerTelemetry, cacheKey);
+  const mathBlock = runAnalyzerSafe('mathBlock', () => buildMathBlock(files), analyzerTelemetry, cacheKey);
+  const booleanBlock = runAnalyzerSafe('booleanBlock', () => buildBooleanBlock(files), analyzerTelemetry, cacheKey);
+  const tocBlock = runAnalyzerSafe('tocBlock', () => buildTocBlock(files), analyzerTelemetry, cacheKey);
+  const htmlAttrsBlock = runAnalyzerSafe('htmlAttrsBlock', () => buildHtmlAttrsBlock(files), analyzerTelemetry, cacheKey);
+  const blockquotesBlock = runAnalyzerSafe('blockquotesBlock', () => buildBlockquotesBlock(files), analyzerTelemetry, cacheKey);
+  const definitionListsBlock = runAnalyzerSafe('definitionListsBlock', () => buildDefinitionListsBlock(files), analyzerTelemetry, cacheKey);
+  const todosBlock = runAnalyzerSafe('todosBlock', () => buildTodosBlock(files), analyzerTelemetry, cacheKey);
+  const imagesBlock = runAnalyzerSafe('imagesBlock', () => buildImagesBlock(files), analyzerTelemetry, cacheKey);
+  const mediaBlock = runAnalyzerSafe('mediaBlock', () => buildMediaBlock(files), analyzerTelemetry, cacheKey);
+  const languageRatioBlock = runAnalyzerSafe('languageRatioBlock', () => buildLanguageRatioBlock(files), analyzerTelemetry, cacheKey);
+  const regexPatternsBlock = runAnalyzerSafe('regexPatternsBlock', () => buildRegexPatternsBlock(files), analyzerTelemetry, cacheKey);
+  const fileExtensionsBlock = runAnalyzerSafe('fileExtensionsBlock', () => buildFileExtensionsBlock(files), analyzerTelemetry, cacheKey);
+  const codeDefsBlock = runAnalyzerSafe('codeDefsBlock', () => buildCodeDefsBlock(files), analyzerTelemetry, cacheKey);
+  const tonePolarityBlock = runAnalyzerSafe('tonePolarityBlock', () => buildTonePolarityBlock(files), analyzerTelemetry, cacheKey);
+  const quantifiersBlock = runAnalyzerSafe('quantifiersBlock', () => buildQuantifiersBlock(files), analyzerTelemetry, cacheKey);
+  const modalsBlock = runAnalyzerSafe('modalsBlock', () => buildModalsBlock(files), analyzerTelemetry, cacheKey);
+  const negationBlock = runAnalyzerSafe('negationBlock', () => buildNegationBlock(files), analyzerTelemetry, cacheKey);
+  const readingTimeBlock = runAnalyzerSafe('readingTimeBlock', () => buildReadingTimeBlock(files), analyzerTelemetry, cacheKey);
+  const attributionsBlock = runAnalyzerSafe('attributionsBlock', () => buildAttributionsBlock(files), analyzerTelemetry, cacheKey);
+  const comparativesBlock = runAnalyzerSafe('comparativesBlock', () => buildComparativesBlock(files), analyzerTelemetry, cacheKey);
+  const causalBlock = runAnalyzerSafe('causalBlock', () => buildCausalBlock(files), analyzerTelemetry, cacheKey);
+  const concessionBlock = runAnalyzerSafe('concessionBlock', () => buildConcessionBlock(files), analyzerTelemetry, cacheKey);
+  const hedgingBlock = runAnalyzerSafe('hedgingBlock', () => buildHedgingBlock(files), analyzerTelemetry, cacheKey);
+  const intensifiersBlock = runAnalyzerSafe('intensifiersBlock', () => buildIntensifiersBlock(files), analyzerTelemetry, cacheKey);
+  const reportingBlock = runAnalyzerSafe('reportingBlock', () => buildReportingBlock(files), analyzerTelemetry, cacheKey);
+  const examplesBlock = runAnalyzerSafe('examplesBlock', () => buildExamplesBlock(files), analyzerTelemetry, cacheKey);
+  const approximationsBlock = runAnalyzerSafe('approximationsBlock', () => buildApproximationsBlock(files), analyzerTelemetry, cacheKey);
+  const questionsBlock = runAnalyzerSafe('questionsBlock', () => buildQuestionsBlock(files), analyzerTelemetry, cacheKey);
+  const imperativesBlock = runAnalyzerSafe('imperativesBlock', () => buildImperativesBlock(files), analyzerTelemetry, cacheKey);
+  const inTextDefinitionsBlock = runAnalyzerSafe('inTextDefinitionsBlock', () => buildInTextDefinitionsBlock(files), analyzerTelemetry, cacheKey);
+  const fiscalYearBlock = runAnalyzerSafe('fiscalYearBlock', () => buildFiscalYearBlock(files), analyzerTelemetry, cacheKey);
+  const ratiosBlock = runAnalyzerSafe('ratiosBlock', () => buildRatiosBlock(files), analyzerTelemetry, cacheKey);
+  const ordinalsBlock = runAnalyzerSafe('ordinalsBlock', () => buildOrdinalsBlock(files), analyzerTelemetry, cacheKey);
+  const geoRegionsBlock = runAnalyzerSafe('geoRegionsBlock', () => buildGeoRegionsBlock(files), analyzerTelemetry, cacheKey);
+  const trackingBlock = runAnalyzerSafe('trackingBlock', () => buildTrackingBlock(files), analyzerTelemetry, cacheKey);
+  const weatherBlock = runAnalyzerSafe('weatherBlock', () => buildWeatherBlock(files), analyzerTelemetry, cacheKey);
+  const scientificNotationBlock = runAnalyzerSafe('scientificNotationBlock', () => buildScientificNotationBlock(files), analyzerTelemetry, cacheKey);
+  const taxaBlock = runAnalyzerSafe('taxaBlock', () => buildTaxaBlock(files), analyzerTelemetry, cacheKey);
+  const chemistryBlock = runAnalyzerSafe('chemistryBlock', () => buildChemistryBlock(files), analyzerTelemetry, cacheKey);
+  const fxRatesBlock = runAnalyzerSafe('fxRatesBlock', () => buildFxRatesBlock(files), analyzerTelemetry, cacheKey);
+  const ibanSwiftBlock = runAnalyzerSafe('ibanSwiftBlock', () => buildIbanSwiftBlock(files), analyzerTelemetry, cacheKey);
+  const licensePlatesBlock = runAnalyzerSafe('licensePlatesBlock', () => buildLicensePlatesBlock(files), analyzerTelemetry, cacheKey);
+  const legalCitationsBlock = runAnalyzerSafe('legalCitationsBlock', () => buildLegalCitationsBlock(files), analyzerTelemetry, cacheKey);
+  const socialUrlsBlock = runAnalyzerSafe('socialUrlsBlock', () => buildSocialUrlsBlock(files), analyzerTelemetry, cacheKey);
+  const geneProteinBlock = runAnalyzerSafe('geneProteinBlock', () => buildGeneProteinBlock(files), analyzerTelemetry, cacheKey);
+  const currencySymbolsBlock = runAnalyzerSafe('currencySymbolsBlock', () => buildCurrencySymbolsBlock(files), analyzerTelemetry, cacheKey);
+  const phoneCodesBlock = runAnalyzerSafe('phoneCodesBlock', () => buildPhoneCodesBlock(files), analyzerTelemetry, cacheKey);
+  const postalCodesBlock = runAnalyzerSafe('postalCodesBlock', () => buildPostalCodesBlock(files), analyzerTelemetry, cacheKey);
+  const addressesBlock = runAnalyzerSafe('addressesBlock', () => buildAddressesBlock(files), analyzerTelemetry, cacheKey);
+  const mimeTypesBlock = runAnalyzerSafe('mimeTypesBlock', () => buildMimeTypesBlock(files), analyzerTelemetry, cacheKey);
+  const utmParamsBlock = runAnalyzerSafe('utmParamsBlock', () => buildUtmParamsBlock(files), analyzerTelemetry, cacheKey);
+  const creditCardsBlock = runAnalyzerSafe('creditCardsBlock', () => buildCreditCardsBlock(files), analyzerTelemetry, cacheKey);
+  const ssnPiiBlock = runAnalyzerSafe('ssnPiiBlock', () => buildSsnPiiBlock(files), analyzerTelemetry, cacheKey);
+  const apiKeysBlock = runAnalyzerSafe('apiKeysBlock', () => buildApiKeysBlock(files), analyzerTelemetry, cacheKey);
+  const httpMethodsBlock = runAnalyzerSafe('httpMethodsBlock', () => buildHttpMethodsBlock(files), analyzerTelemetry, cacheKey);
+  const containerRefsBlock = runAnalyzerSafe('containerRefsBlock', () => buildContainerRefsBlock(files), analyzerTelemetry, cacheKey);
+  const k8sRefsBlock = runAnalyzerSafe('k8sRefsBlock', () => buildK8sRefsBlock(files), analyzerTelemetry, cacheKey);
+  const metricsBlock = runAnalyzerSafe('metricsBlock', () => buildMetricsBlock(files), analyzerTelemetry, cacheKey);
+  const oauthScopesBlock = runAnalyzerSafe('oauthScopesBlock', () => buildOauthScopesBlock(files), analyzerTelemetry, cacheKey);
+  const cspDirectivesBlock = runAnalyzerSafe('cspDirectivesBlock', () => buildCspDirectivesBlock(files), analyzerTelemetry, cacheKey);
+  const mathOperatorsBlock = runAnalyzerSafe('mathOperatorsBlock', () => buildMathOperatorsBlock(files), analyzerTelemetry, cacheKey);
+  const spdxComplexBlock = runAnalyzerSafe('spdxComplexBlock', () => buildSpdxComplexBlock(files), analyzerTelemetry, cacheKey);
+  const featureFlagsBlock = runAnalyzerSafe('featureFlagsBlock', () => buildFeatureFlagsBlock(files), analyzerTelemetry, cacheKey);
+  const cookieAttrsBlock = runAnalyzerSafe('cookieAttrsBlock', () => buildCookieAttrsBlock(files), analyzerTelemetry, cacheKey);
+  const otelTraceBlock = runAnalyzerSafe('otelTraceBlock', () => buildOtelTraceBlock(files), analyzerTelemetry, cacheKey);
+  const cloudArnsBlock = runAnalyzerSafe('cloudArnsBlock', () => buildCloudArnsBlock(files), analyzerTelemetry, cacheKey);
+  const mlModelsBlock = runAnalyzerSafe('mlModelsBlock', () => buildMlModelsBlock(files), analyzerTelemetry, cacheKey);
+  const dbConnStringsBlock = runAnalyzerSafe('dbConnStringsBlock', () => buildDbConnStringsBlock(files), analyzerTelemetry, cacheKey);
+  const graphqlOpsBlock = runAnalyzerSafe('graphqlOpsBlock', () => buildGraphqlOpsBlock(files), analyzerTelemetry, cacheKey);
+  const grpcRefsBlock = runAnalyzerSafe('grpcRefsBlock', () => buildGrpcRefsBlock(files), analyzerTelemetry, cacheKey);
+  const stackTracesBlock = runAnalyzerSafe('stackTracesBlock', () => buildStackTracesBlock(files), analyzerTelemetry, cacheKey);
+  const envNamesBlock = runAnalyzerSafe('envNamesBlock', () => buildEnvNamesBlock(files), analyzerTelemetry, cacheKey);
+  const testBlocksBlock = runAnalyzerSafe('testBlocksBlock', () => buildTestBlocksBlock(files), analyzerTelemetry, cacheKey);
+  const gitShasBlock = runAnalyzerSafe('gitShasBlock', () => buildGitShasBlock(files), analyzerTelemetry, cacheKey);
+  const cloudStorageBlock = runAnalyzerSafe('cloudStorageBlock', () => buildCloudStorageBlock(files), analyzerTelemetry, cacheKey);
+  const webVitalsBlock = runAnalyzerSafe('webVitalsBlock', () => buildWebVitalsBlock(files), analyzerTelemetry, cacheKey);
+  const ariaA11yBlock = runAnalyzerSafe('ariaA11yBlock', () => buildAriaA11yBlock(files), analyzerTelemetry, cacheKey);
+  const i18nKeysBlock = runAnalyzerSafe('i18nKeysBlock', () => buildI18nKeysBlock(files), analyzerTelemetry, cacheKey);
+  const ciBuildIdsBlock = runAnalyzerSafe('ciBuildIdsBlock', () => buildCiBuildIdsBlock(files), analyzerTelemetry, cacheKey);
+  const userAgentsBlock = runAnalyzerSafe('userAgentsBlock', () => buildUserAgentsBlock(files), analyzerTelemetry, cacheKey);
+  const cidrRangesBlock = runAnalyzerSafe('cidrRangesBlock', () => buildCidrRangesBlock(files), analyzerTelemetry, cacheKey);
+  const cacheHeadersBlock = runAnalyzerSafe('cacheHeadersBlock', () => buildCacheHeadersBlock(files), analyzerTelemetry, cacheKey);
+  const githubRefsBlock = runAnalyzerSafe('githubRefsBlock', () => buildGithubRefsBlock(files), analyzerTelemetry, cacheKey);
+  const apmRefsBlock = runAnalyzerSafe('apmRefsBlock', () => buildApmRefsBlock(files), analyzerTelemetry, cacheKey);
+  const attackPatternsBlock = runAnalyzerSafe('attackPatternsBlock', () => buildAttackPatternsBlock(files), analyzerTelemetry, cacheKey);
+  const webhookUrlsBlock = runAnalyzerSafe('webhookUrlsBlock', () => buildWebhookUrlsBlock(files), analyzerTelemetry, cacheKey);
+  const sshFingerprintsBlock = runAnalyzerSafe('sshFingerprintsBlock', () => buildSshFingerprintsBlock(files), analyzerTelemetry, cacheKey);
+  const npmRefsBlock = runAnalyzerSafe('npmRefsBlock', () => buildNpmRefsBlock(files), analyzerTelemetry, cacheKey);
+  const correlationIdsBlock = runAnalyzerSafe('correlationIdsBlock', () => buildCorrelationIdsBlock(files), analyzerTelemetry, cacheKey);
+  const paymentIdsBlock = runAnalyzerSafe('paymentIdsBlock', () => buildPaymentIdsBlock(files), analyzerTelemetry, cacheKey);
+  const emailHeadersBlock = runAnalyzerSafe('emailHeadersBlock', () => buildEmailHeadersBlock(files), analyzerTelemetry, cacheKey);
+  const icalEventsBlock = runAnalyzerSafe('icalEventsBlock', () => buildIcalEventsBlock(files), analyzerTelemetry, cacheKey);
+  const frontmatterBlock = runAnalyzerSafe('frontmatterBlock', () => buildFrontmatterBlock(files), analyzerTelemetry, cacheKey);
+  const pullQuotesBlock = runAnalyzerSafe('pullQuotesBlock', () => buildPullQuotesBlock(files), analyzerTelemetry, cacheKey);
+  const ghaStepsBlock = runAnalyzerSafe('ghaStepsBlock', () => buildGhaStepsBlock(files), analyzerTelemetry, cacheKey);
+  const terraformRefsBlock = runAnalyzerSafe('terraformRefsBlock', () => buildTerraformRefsBlock(files), analyzerTelemetry, cacheKey);
+  const helmRefsBlock = runAnalyzerSafe('helmRefsBlock', () => buildHelmRefsBlock(files), analyzerTelemetry, cacheKey);
+  const naturalSchedulesBlock = runAnalyzerSafe('naturalSchedulesBlock', () => buildNaturalSchedulesBlock(files), analyzerTelemetry, cacheKey);
+  const chatPermalinksBlock = runAnalyzerSafe('chatPermalinksBlock', () => buildChatPermalinksBlock(files), analyzerTelemetry, cacheKey);
+  const pmTicketsBlock = runAnalyzerSafe('pmTicketsBlock', () => buildPmTicketsBlock(files), analyzerTelemetry, cacheKey);
+  const slaTargetsBlock = runAnalyzerSafe('slaTargetsBlock', () => buildSlaTargetsBlock(files), analyzerTelemetry, cacheKey);
+  const tldsBlock = runAnalyzerSafe('tldsBlock', () => buildTldsBlock(files), analyzerTelemetry, cacheKey);
+  const stockTickersBlock = runAnalyzerSafe('stockTickersBlock', () => buildStockTickersBlock(files), analyzerTelemetry, cacheKey);
+  const hardwareSpecsBlock = runAnalyzerSafe('hardwareSpecsBlock', () => buildHardwareSpecsBlock(files), analyzerTelemetry, cacheKey);
+  const bandwidthUnitsBlock = runAnalyzerSafe('bandwidthUnitsBlock', () => buildBandwidthUnitsBlock(files), analyzerTelemetry, cacheKey);
+  const trackingNumbersBlock = runAnalyzerSafe('trackingNumbersBlock', () => buildTrackingNumbersBlock(files), analyzerTelemetry, cacheKey);
+  const rateLimitHeadersBlock = runAnalyzerSafe('rateLimitHeadersBlock', () => buildRateLimitHeadersBlock(files), analyzerTelemetry, cacheKey);
+  const cryptoWalletsBlock = runAnalyzerSafe('cryptoWalletsBlock', () => buildCryptoWalletsBlock(files), analyzerTelemetry, cacheKey);
+  const cveIdsBlock = runAnalyzerSafe('cveIdsBlock', () => buildCveIdsBlock(files), analyzerTelemetry, cacheKey);
+  const mediaTimestampsBlock = runAnalyzerSafe('mediaTimestampsBlock', () => buildMediaTimestampsBlock(files), analyzerTelemetry, cacheKey);
+  const linuxSignalsBlock = runAnalyzerSafe('linuxSignalsBlock', () => buildLinuxSignalsBlock(files), analyzerTelemetry, cacheKey);
+  const exitCodesBlock = runAnalyzerSafe('exitCodesBlock', () => buildExitCodesBlock(files), analyzerTelemetry, cacheKey);
+  const networkPortsBlock = runAnalyzerSafe('networkPortsBlock', () => buildNetworkPortsBlock(files), analyzerTelemetry, cacheKey);
+  const linuxDistrosBlock = runAnalyzerSafe('linuxDistrosBlock', () => buildLinuxDistrosBlock(files), analyzerTelemetry, cacheKey);
+  const lifecyclePhasesBlock = runAnalyzerSafe('lifecyclePhasesBlock', () => buildLifecyclePhasesBlock(files), analyzerTelemetry, cacheKey);
+  const projectCodenamesBlock = runAnalyzerSafe('projectCodenamesBlock', () => buildProjectCodenamesBlock(files), analyzerTelemetry, cacheKey);
+  const riskLevelsBlock = runAnalyzerSafe('riskLevelsBlock', () => buildRiskLevelsBlock(files), analyzerTelemetry, cacheKey);
+  const saasMetricsBlock = runAnalyzerSafe('saasMetricsBlock', () => buildSaasMetricsBlock(files), analyzerTelemetry, cacheKey);
+  const recipeMeasurementsBlock = runAnalyzerSafe('recipeMeasurementsBlock', () => buildRecipeMeasurementsBlock(files), analyzerTelemetry, cacheKey);
+  const isoLangsBlock = runAnalyzerSafe('isoLangsBlock', () => buildIsoLangsBlock(files), analyzerTelemetry, cacheKey);
+  const prReviewStatesBlock = runAnalyzerSafe('prReviewStatesBlock', () => buildPrReviewStatesBlock(files), analyzerTelemetry, cacheKey);
+  const pricingTiersBlock = runAnalyzerSafe('pricingTiersBlock', () => buildPricingTiersBlock(files), analyzerTelemetry, cacheKey);
+  const arxivIdsBlock = runAnalyzerSafe('arxivIdsBlock', () => buildArxivIdsBlock(files), analyzerTelemetry, cacheKey);
+  const doiIdsBlock = runAnalyzerSafe('doiIdsBlock', () => buildDoiIdsBlock(files), analyzerTelemetry, cacheKey);
+  const orcidIdsBlock = runAnalyzerSafe('orcidIdsBlock', () => buildOrcidIdsBlock(files), analyzerTelemetry, cacheKey);
+  const wikiRefsBlock = runAnalyzerSafe('wikiRefsBlock', () => buildWikiRefsBlock(files), analyzerTelemetry, cacheKey);
+  const pubmedIdsBlock = runAnalyzerSafe('pubmedIdsBlock', () => buildPubmedIdsBlock(files), analyzerTelemetry, cacheKey);
+  const serviceAccountsBlock = runAnalyzerSafe('serviceAccountsBlock', () => buildServiceAccountsBlock(files), analyzerTelemetry, cacheKey);
+  const vinNumbersBlock = runAnalyzerSafe('vinNumbersBlock', () => buildVinNumbersBlock(files), analyzerTelemetry, cacheKey);
+  const emojiShortcodesBlock = runAnalyzerSafe('emojiShortcodesBlock', () => buildEmojiShortcodesBlock(files), analyzerTelemetry, cacheKey);
+  const bibtexEntriesBlock = runAnalyzerSafe('bibtexEntriesBlock', () => buildBibtexEntriesBlock(files), analyzerTelemetry, cacheKey);
+  const latexCommandsBlock = runAnalyzerSafe('latexCommandsBlock', () => buildLatexCommandsBlock(files), analyzerTelemetry, cacheKey);
+  const progLangsBlock = runAnalyzerSafe('progLangsBlock', () => buildProgLangsBlock(files), analyzerTelemetry, cacheKey);
+  const complianceRefsBlock = runAnalyzerSafe('complianceRefsBlock', () => buildComplianceRefsBlock(files), analyzerTelemetry, cacheKey);
+  const tlsCiphersBlock = runAnalyzerSafe('tlsCiphersBlock', () => buildTlsCiphersBlock(files), analyzerTelemetry, cacheKey);
+  const dnsRecordsBlock = runAnalyzerSafe('dnsRecordsBlock', () => buildDnsRecordsBlock(files), analyzerTelemetry, cacheKey);
+  const emailAuthBlock = runAnalyzerSafe('emailAuthBlock', () => buildEmailAuthBlock(files), analyzerTelemetry, cacheKey);
+  const openapiKeysBlock = runAnalyzerSafe('openapiKeysBlock', () => buildOpenapiKeysBlock(files), analyzerTelemetry, cacheKey);
+  const kafkaRefsBlock = runAnalyzerSafe('kafkaRefsBlock', () => buildKafkaRefsBlock(files), analyzerTelemetry, cacheKey);
+  const ansiEscapesBlock = runAnalyzerSafe('ansiEscapesBlock', () => buildAnsiEscapesBlock(files), analyzerTelemetry, cacheKey);
+  const sqlWindowsBlock = runAnalyzerSafe('sqlWindowsBlock', () => buildSqlWindowsBlock(files), analyzerTelemetry, cacheKey);
+  const websocketMarkersBlock = runAnalyzerSafe('websocketMarkersBlock', () => buildWebsocketMarkersBlock(files), analyzerTelemetry, cacheKey);
+  const isoDurationsBlock = runAnalyzerSafe('isoDurationsBlock', () => buildIsoDurationsBlock(files), analyzerTelemetry, cacheKey);
+  const browserSupportBlock = runAnalyzerSafe('browserSupportBlock', () => buildBrowserSupportBlock(files), analyzerTelemetry, cacheKey);
+  const numberBasesBlock = runAnalyzerSafe('numberBasesBlock', () => buildNumberBasesBlock(files), analyzerTelemetry, cacheKey);
+  const dmsCoordsBlock = runAnalyzerSafe('dmsCoordsBlock', () => buildDmsCoordsBlock(files), analyzerTelemetry, cacheKey);
+  const containerRegistriesBlock = runAnalyzerSafe('containerRegistriesBlock', () => buildContainerRegistriesBlock(files), analyzerTelemetry, cacheKey);
+  const wktGeometryBlock = runAnalyzerSafe('wktGeometryBlock', () => buildWktGeometryBlock(files), analyzerTelemetry, cacheKey);
+  const mdRefLinksBlock = runAnalyzerSafe('mdRefLinksBlock', () => buildMdRefLinksBlock(files), analyzerTelemetry, cacheKey);
+  const botTokensBlock = runAnalyzerSafe('botTokensBlock', () => buildBotTokensBlock(files), analyzerTelemetry, cacheKey);
+  const cargoPackagesBlock = runAnalyzerSafe('cargoPackagesBlock', () => buildCargoPackagesBlock(files), analyzerTelemetry, cacheKey);
+  const goModulesBlock = runAnalyzerSafe('goModulesBlock', () => buildGoModulesBlock(files), analyzerTelemetry, cacheKey);
+  const mavenCoordsBlock = runAnalyzerSafe('mavenCoordsBlock', () => buildMavenCoordsBlock(files), analyzerTelemetry, cacheKey);
+  const pipReqsBlock = runAnalyzerSafe('pipReqsBlock', () => buildPipReqsBlock(files), analyzerTelemetry, cacheKey);
+  const composerPkgsBlock = runAnalyzerSafe('composerPkgsBlock', () => buildComposerPkgsBlock(files), analyzerTelemetry, cacheKey);
+  const nugetPkgsBlock = runAnalyzerSafe('nugetPkgsBlock', () => buildNugetPkgsBlock(files), analyzerTelemetry, cacheKey);
+  const gemPkgsBlock = runAnalyzerSafe('gemPkgsBlock', () => buildGemPkgsBlock(files), analyzerTelemetry, cacheKey);
+  const hexPkgsBlock = runAnalyzerSafe('hexPkgsBlock', () => buildHexPkgsBlock(files), analyzerTelemetry, cacheKey);
+  const svgPathCmdsBlock = runAnalyzerSafe('svgPathCmdsBlock', () => buildSvgPathCmdsBlock(files), analyzerTelemetry, cacheKey);
+  const geojsonBlock = runAnalyzerSafe('geojsonBlock', () => buildGeojsonBlock(files), analyzerTelemetry, cacheKey);
+  const pwaManifestBlock = runAnalyzerSafe('pwaManifestBlock', () => buildPwaManifestBlock(files), analyzerTelemetry, cacheKey);
+  const permissionsApiBlock = runAnalyzerSafe('permissionsApiBlock', () => buildPermissionsApiBlock(files), analyzerTelemetry, cacheKey);
+  const serverlessFnsBlock = runAnalyzerSafe('serverlessFnsBlock', () => buildServerlessFnsBlock(files), analyzerTelemetry, cacheKey);
+  const dbMigrationsBlock = runAnalyzerSafe('dbMigrationsBlock', () => buildDbMigrationsBlock(files), analyzerTelemetry, cacheKey);
+  const eslintRulesBlock = runAnalyzerSafe('eslintRulesBlock', () => buildEslintRulesBlock(files), analyzerTelemetry, cacheKey);
+  const buildToolsBlock = runAnalyzerSafe('buildToolsBlock', () => buildBuildToolsBlock(files), analyzerTelemetry, cacheKey);
+  const jwtClaimsBlock = runAnalyzerSafe('jwtClaimsBlock', () => buildJwtClaimsBlock(files), analyzerTelemetry, cacheKey);
+  const sriHashesBlock = runAnalyzerSafe('sriHashesBlock', () => buildSriHashesBlock(files), analyzerTelemetry, cacheKey);
+  const jsonSchemaBlock = runAnalyzerSafe('jsonSchemaBlock', () => buildJsonSchemaBlock(files), analyzerTelemetry, cacheKey);
+  const prismaSchemaBlock = runAnalyzerSafe('prismaSchemaBlock', () => buildPrismaSchemaBlock(files), analyzerTelemetry, cacheKey);
+  const graphqlFragmentsBlock = runAnalyzerSafe('graphqlFragmentsBlock', () => buildGraphqlFragmentsBlock(files), analyzerTelemetry, cacheKey);
+  const cssVarsBlock = runAnalyzerSafe('cssVarsBlock', () => buildCssVarsBlock(files), analyzerTelemetry, cacheKey);
+  const composeServicesBlock = runAnalyzerSafe('composeServicesBlock', () => buildComposeServicesBlock(files), analyzerTelemetry, cacheKey);
+  const regexFlagsBlock = runAnalyzerSafe('regexFlagsBlock', () => buildRegexFlagsBlock(files), analyzerTelemetry, cacheKey);
+  const vueSfcBlock = runAnalyzerSafe('vueSfcBlock', () => buildVueSfcBlock(files), analyzerTelemetry, cacheKey);
+  const astroBlock = runAnalyzerSafe('astroBlock', () => buildAstroBlock(files), analyzerTelemetry, cacheKey);
+  const e2eTestsBlock = runAnalyzerSafe('e2eTestsBlock', () => buildE2eTestsBlock(files), analyzerTelemetry, cacheKey);
+  const mswHandlersBlock = runAnalyzerSafe('mswHandlersBlock', () => buildMswHandlersBlock(files), analyzerTelemetry, cacheKey);
+  const ghWorkflowsBlock = runAnalyzerSafe('ghWorkflowsBlock', () => buildGhWorkflowsBlock(files), analyzerTelemetry, cacheKey);
+  const jsonLdBlock = runAnalyzerSafe('jsonLdBlock', () => buildJsonLdBlock(files), analyzerTelemetry, cacheKey);
+  const tailwindBlock = runAnalyzerSafe('tailwindBlock', () => buildTailwindBlock(files), analyzerTelemetry, cacheKey);
+  const mongoAggBlock = runAnalyzerSafe('mongoAggBlock', () => buildMongoAggBlock(files), analyzerTelemetry, cacheKey);
+  const helmBlock = runAnalyzerSafe('helmBlock', () => buildHelmBlock(files), analyzerTelemetry, cacheKey);
+  const vitestBlock = runAnalyzerSafe('vitestBlock', () => buildVitestBlock(files), analyzerTelemetry, cacheKey);
+  const mjmlBlock = runAnalyzerSafe('mjmlBlock', () => buildMjmlBlock(files), analyzerTelemetry, cacheKey);
+  const stripeBlock = runAnalyzerSafe('stripeBlock', () => buildStripeBlock(files), analyzerTelemetry, cacheKey);
+  const terraformVarsBlock = runAnalyzerSafe('terraformVarsBlock', () => buildTerraformVarsBlock(files), analyzerTelemetry, cacheKey);
+  const openapiSecurityBlock = runAnalyzerSafe('openapiSecurityBlock', () => buildOpenapiSecurityBlock(files), analyzerTelemetry, cacheKey);
+  const k8sResourcesBlock = runAnalyzerSafe('k8sResourcesBlock', () => buildK8sResourcesBlock(files), analyzerTelemetry, cacheKey);
+  const cssAnimBlock = runAnalyzerSafe('cssAnimBlock', () => buildCssAnimBlock(files), analyzerTelemetry, cacheKey);
+  const storybookBlock = runAnalyzerSafe('storybookBlock', () => buildStorybookBlock(files), analyzerTelemetry, cacheKey);
+  const sentryBlock = runAnalyzerSafe('sentryBlock', () => buildSentryBlock(files), analyzerTelemetry, cacheKey);
+  const natsBlock = runAnalyzerSafe('natsBlock', () => buildNatsBlock(files), analyzerTelemetry, cacheKey);
+  const pkgJsonBlock = runAnalyzerSafe('pkgJsonBlock', () => buildPkgJsonBlock(files), analyzerTelemetry, cacheKey);
+  const redisBlock = runAnalyzerSafe('redisBlock', () => buildRedisBlock(files), analyzerTelemetry, cacheKey);
+  const nginxBlock = runAnalyzerSafe('nginxBlock', () => buildNginxBlock(files), analyzerTelemetry, cacheKey);
+  const otelBlock = runAnalyzerSafe('otelBlock', () => buildOtelBlock(files), analyzerTelemetry, cacheKey);
+  const moduleFederationBlock = runAnalyzerSafe('moduleFederationBlock', () => buildModuleFederationBlock(files), analyzerTelemetry, cacheKey);
+  const drizzleBlock = runAnalyzerSafe('drizzleBlock', () => buildDrizzleBlock(files), analyzerTelemetry, cacheKey);
+  const twilioBlock = runAnalyzerSafe('twilioBlock', () => buildTwilioBlock(files), analyzerTelemetry, cacheKey);
+  const awsSdkBlock = runAnalyzerSafe('awsSdkBlock', () => buildAwsSdkBlock(files), analyzerTelemetry, cacheKey);
+  const oauthFlowsBlock = runAnalyzerSafe('oauthFlowsBlock', () => buildOauthFlowsBlock(files), analyzerTelemetry, cacheKey);
+  const gqlClientsBlock = runAnalyzerSafe('gqlClientsBlock', () => buildGqlClientsBlock(files), analyzerTelemetry, cacheKey);
+  const webhookSigsBlock = runAnalyzerSafe('webhookSigsBlock', () => buildWebhookSigsBlock(files), analyzerTelemetry, cacheKey);
+  const bullmqBlock = runAnalyzerSafe('bullmqBlock', () => buildBullmqBlock(files), analyzerTelemetry, cacheKey);
+  const webCryptoBlock = runAnalyzerSafe('webCryptoBlock', () => buildWebCryptoBlock(files), analyzerTelemetry, cacheKey);
+  const discourseBlock = runAnalyzerSafe('discourseBlock', () => buildDiscourseBlock(files), analyzerTelemetry, cacheKey);
+  const sectionRolesBlock = runAnalyzerSafe('sectionRolesBlock', () => buildSectionRolesBlock(files), analyzerTelemetry, cacheKey);
 
   return {
     profileBlock,

@@ -570,3 +570,127 @@ test('health snapshot: open breaker with cooldown details', () => {
     console.warn = originalWarn;
   }
 });
+
+// ──────────────────────────────────────────────────────────────────────────
+// Content-hash cache integration — cacheKey wires runAnalyzerSafe into
+// `document-analyzer-cache` so re-attached files short-circuit.
+// ──────────────────────────────────────────────────────────────────────────
+
+test('cache: same cacheKey twice returns cached value, builder runs once', () => {
+  const cache = require('../src/services/document-analyzer-cache');
+  cache.reset();
+  analyzer._internal.resetAnalyzerBreakers();
+  const t = analyzer.createAnalyzerTelemetry();
+  let builds = 0;
+  const out1 = analyzer.runAnalyzerSafe('cached-block', () => { builds += 1; return 'hello'; }, t, 'key-A');
+  const out2 = analyzer.runAnalyzerSafe('cached-block', () => { builds += 1; return 'hello'; }, t, 'key-A');
+  assert.equal(out1, 'hello');
+  assert.equal(out2, 'hello');
+  assert.equal(builds, 1, 'builder must only run on the first call');
+  // Second telemetry entry has `cached: true` flag.
+  const entries = t.entries.filter((e) => e.name === 'cached-block');
+  assert.equal(entries.length, 2);
+  assert.equal(entries[0].cached, undefined);
+  assert.equal(entries[1].cached, true);
+});
+
+test('cache: different cacheKey forces a re-build', () => {
+  const cache = require('../src/services/document-analyzer-cache');
+  cache.reset();
+  analyzer._internal.resetAnalyzerBreakers();
+  let builds = 0;
+  analyzer.runAnalyzerSafe('keyed', () => { builds += 1; return 'A'; }, null, 'k-A');
+  analyzer.runAnalyzerSafe('keyed', () => { builds += 1; return 'B'; }, null, 'k-B');
+  assert.equal(builds, 2);
+});
+
+test('cache: no cacheKey arg means no caching', () => {
+  const cache = require('../src/services/document-analyzer-cache');
+  cache.reset();
+  analyzer._internal.resetAnalyzerBreakers();
+  let builds = 0;
+  analyzer.runAnalyzerSafe('noncached', () => { builds += 1; return 'X'; }, null);
+  analyzer.runAnalyzerSafe('noncached', () => { builds += 1; return 'X'; }, null);
+  assert.equal(builds, 2);
+  const stats = cache.stats();
+  assert.equal(stats.size, 0, 'cache must remain empty when no key is provided');
+});
+
+test('cache: errors are never cached (transient failures retried next turn)', () => {
+  const cache = require('../src/services/document-analyzer-cache');
+  cache.reset();
+  analyzer._internal.resetAnalyzerBreakers();
+  const originalWarn = console.warn;
+  console.warn = () => {};
+  try {
+    let builds = 0;
+    const fn = () => { builds += 1; if (builds === 1) throw new Error('transient'); return 'recovered'; };
+    const out1 = analyzer.runAnalyzerSafe('flaky-cached', fn, null, 'k-flaky');
+    const out2 = analyzer.runAnalyzerSafe('flaky-cached', fn, null, 'k-flaky');
+    assert.equal(out1, '', 'first call failed → empty output, NOT cached');
+    assert.equal(out2, 'recovered', 'second call succeeded — builder ran again');
+    assert.equal(builds, 2);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+test('cache: buildEnrichedFileContext second turn with same file hits cache', async () => {
+  const cache = require('../src/services/document-analyzer-cache');
+  cache.reset();
+  analyzer._internal.resetAnalyzerBreakers();
+  const file = {
+    id: 'doc-A',
+    originalName: 'paper.txt',
+    mimeType: 'text/plain',
+    extractedText: 'Research paper on cache-coherence protocols. Date: 2026-05-18.',
+  };
+  const t0 = Date.now();
+  const a1 = await analyzer.buildEnrichedFileContext({ prisma: null, processedFiles: [file] });
+  const elapsed1 = Date.now() - t0;
+  const t1 = Date.now();
+  const a2 = await analyzer.buildEnrichedFileContext({ prisma: null, processedFiles: [file] });
+  const elapsed2 = Date.now() - t1;
+  // Sanity — both runs produce all 312 blocks.
+  assert.equal(a1.analyzerTelemetry.blockCount, 312);
+  assert.equal(a2.analyzerTelemetry.blockCount, 312);
+  // Cache hits show up in the second telemetry summary.
+  // We don't assert raw timing to avoid CI flakes, but cache size must
+  // have grown after the first call, and the second call's totalElapsedMs
+  // should be substantially smaller than the first.
+  const stats = cache.stats();
+  assert.ok(stats.size > 100, `cache size ${stats.size} should exceed 100 entries`);
+  assert.ok(stats.hits > 0, `expected cache hits on second turn, got ${stats.hits}`);
+  // Output is byte-equal for cached blocks.
+  assert.equal(a1.insightsBlock, a2.insightsBlock);
+  assert.equal(a1.piiSafetyBlock, a2.piiSafetyBlock);
+  assert.equal(a1.glossaryBlock, a2.glossaryBlock);
+  // Timing: second turn should be at least 5× faster (very conservative).
+  // In practice it's 50-100× — this guard catches regressions where the
+  // cache was accidentally bypassed.
+  assert.ok(elapsed2 * 5 < elapsed1 + 50, `expected 2nd turn (${elapsed2}ms) to be much faster than 1st (${elapsed1}ms)`);
+});
+
+test('cache: SIRAGPT_ANALYZER_CACHE=0 disables caching entirely', async () => {
+  const cache = require('../src/services/document-analyzer-cache');
+  cache.reset();
+  analyzer._internal.resetAnalyzerBreakers();
+  const prev = process.env.SIRAGPT_ANALYZER_CACHE;
+  process.env.SIRAGPT_ANALYZER_CACHE = '0';
+  try {
+    const file = {
+      id: 'doc-B',
+      originalName: 'short.txt',
+      mimeType: 'text/plain',
+      extractedText: 'A short sample.',
+    };
+    await analyzer.buildEnrichedFileContext({ prisma: null, processedFiles: [file] });
+    await analyzer.buildEnrichedFileContext({ prisma: null, processedFiles: [file] });
+    const stats = cache.stats();
+    assert.equal(stats.size, 0, 'cache must remain empty when SIRAGPT_ANALYZER_CACHE=0');
+    assert.equal(stats.hits, 0);
+  } finally {
+    if (prev === undefined) delete process.env.SIRAGPT_ANALYZER_CACHE;
+    else process.env.SIRAGPT_ANALYZER_CACHE = prev;
+  }
+});
