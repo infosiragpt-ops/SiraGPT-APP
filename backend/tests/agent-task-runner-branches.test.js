@@ -156,7 +156,7 @@ test('buildAttachmentGroundedFallbackAnswer: emits a "Conclusiones" section when
     reason: 'rate limit reached',
   });
   assert.ok(out.includes('Conclusiones'), 'should label the answer with "Conclusiones"');
-  assert.ok(out.includes('runtime principal'), 'should include the operative note');
+  assert.doesNotMatch(out, /Nota operativa|runtime principal|respuesta segura/i);
 });
 
 test('buildAttachmentGroundedFallbackAnswer: summary mode returns an executive bullet list', () => {

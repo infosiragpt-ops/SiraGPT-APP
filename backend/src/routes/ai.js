@@ -49,6 +49,7 @@ const ciraEngine = require('../services/sira/engine');
 const postResponseBrainHook = require('../services/sira/post-response-brain-hook');
 const coworkEngine = require('../services/cowork-engine');
 const activeMemory = require('../services/active-memory');
+const chatAttachmentRecovery = require('../services/chat-attachment-recovery');
 const router = express.Router();
 const cookie = require('cookie');
 const crypto = require('crypto');
@@ -930,6 +931,7 @@ router.post(
       // ✅ Process attached files
       let processedFiles = [];
       let openaiFiles = [];
+      let uploadedFileContextForTurn = '';
       if (isAuth && files && files.length > 0) {
         processedFiles = await Promise.all(
           files.map(async (fileRef) => {
@@ -940,6 +942,18 @@ router.post(
             return processedFile;
           })
         ).then(results => results.filter(Boolean));
+
+        if (processedFiles.length > 0) {
+          try {
+            processedFiles = await chatAttachmentRecovery.refreshProcessedFileExtracts(prisma, processedFiles);
+            uploadedFileContextForTurn = await chatAttachmentRecovery.buildChatUploadedFileContext(
+              prisma,
+              { userId, processedFiles, prompt },
+            );
+          } catch (attachCtxErr) {
+            console.warn('[ai] uploaded file context build failed (continuing with raw extracts):', attachCtxErr.message);
+          }
+        }
       }
 
       // ✅ NEW: Check if chat is associated with a custom GPT OR a Project.
@@ -2628,10 +2642,11 @@ router.post(
 
       let finalPrompt = prompt;
       if (processedFiles.length > 0) {
-        const fileContext = processedFiles.map(f => {
-          const content = f.extractedText || 'Binary file - content not available';
-          return `File: ${f.name}\nContent: ${content}`;
-        }).join('\n\n');
+        const fileContext = uploadedFileContextForTurn
+          || processedFiles.map(f => {
+            const content = f.extractedText || 'Binary file - content not available';
+            return `File: ${f.name}\nContent: ${content}`;
+          }).join('\n\n');
 
         // ✅ Check if there are any image files that might contain math
         const hasImageFiles = processedFiles.some(f => f.mimeType && f.mimeType.startsWith('image/'));
@@ -2648,7 +2663,11 @@ router.post(
         const fileContextTokens = usageService.calculateTextTokens(fileContext, actualModel);
 
         let truncatedFileContext = fileContext;
-        if (operationalRag.shouldCompactFilePrompt(fileContextTokens, Boolean(operationalRagContext?.contextBlock))) {
+        const preserveFullSpreadsheetContext = chatAttachmentRecovery.wantsBibliographyAnswer(prompt);
+        if (
+          !preserveFullSpreadsheetContext
+          && operationalRag.shouldCompactFilePrompt(fileContextTokens, Boolean(operationalRagContext?.contextBlock))
+        ) {
           const manifest = processedFiles.map(f => {
             const chars = typeof f.extractedText === 'string' ? f.extractedText.length : 0;
             return `- ${f.name || f.originalName || f.id}: ${f.mimeType || f.type || 'unknown'}; ${chars} extracted characters`;
@@ -2821,6 +2840,38 @@ router.post(
           qualityGuard: true,
           skipDoneSentinel: true,
         });
+
+        if (
+          processedFiles.length > 0
+          && userId
+          && chatAttachmentRecovery.shouldRecoverAttachmentResponse({
+            prompt,
+            response: fullResponseContent,
+            processedFiles,
+          })
+        ) {
+          try {
+            const recovered = await chatAttachmentRecovery.recoverChatAttachmentResponse({
+              prisma,
+              userId,
+              prompt,
+              processedFiles,
+              uploadedFileContext: uploadedFileContextForTurn,
+              reason: 'chat_attachment_recovery',
+            });
+            const cleanRecovered = (recovered || '').trim();
+            if (cleanRecovered && cleanRecovered.length >= 40) {
+              if (!res.writableEnded) {
+                res.write(`data: ${JSON.stringify({ replace: true, content: cleanRecovered })}\n\n`);
+              }
+              fullResponseContent = cleanRecovered;
+              console.log(`[ai] attachment recovery applied (${cleanRecovered.length} chars)`);
+            }
+          } catch (recoveryErr) {
+            console.warn('[ai] attachment recovery failed:', recoveryErr.message);
+          }
+        }
+
         if (cacheHandle) cacheHandle.complete();
         }
 
@@ -2872,7 +2923,35 @@ router.post(
           return;
         }
         console.error('AI Service stream failed in route:', apiError.message);
-        throw apiError;
+
+        if (processedFiles.length > 0 && userId) {
+          try {
+            const recovered = await chatAttachmentRecovery.recoverChatAttachmentResponse({
+              prisma,
+              userId,
+              prompt,
+              processedFiles,
+              uploadedFileContext: uploadedFileContextForTurn,
+              reason: apiError?.message || 'stream_failed',
+            });
+            const cleanRecovered = (recovered || '').trim();
+            if (cleanRecovered.length >= 40) {
+              fullResponseContent = cleanRecovered;
+              if (!res.writableEnded) {
+                res.write(`data: ${JSON.stringify({ replace: true, content: cleanRecovered })}\n\n`);
+              }
+              console.log(`[ai] attachment recovery after stream error (${cleanRecovered.length} chars)`);
+            } else {
+              throw apiError;
+            }
+          } catch (recoveryErr) {
+            if (recoveryErr === apiError) throw apiError;
+            console.warn('[ai] attachment recovery after stream error failed:', recoveryErr.message);
+            throw apiError;
+          }
+        } else {
+          throw apiError;
+        }
       }
 
       const tokens = fullResponseContent.length + prompt.length;

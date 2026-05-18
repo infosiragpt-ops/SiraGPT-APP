@@ -134,7 +134,7 @@ function italics(text) {
  */
 function referenceEntry(src) {
   const authors = formatAuthorsForReference(src.authors || []);
-  const year = src.year ? `(${src.year})` : '(n.d.)';
+  const year = src.year ? `(${src.year}).` : '(n.d.).';
   const title = src.title ? `${src.title}${src.title.endsWith('.') ? '' : '.'}` : '(Untitled).';
   const venue = src.container ? italics(src.container) : null;
 

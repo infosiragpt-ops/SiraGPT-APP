@@ -112,6 +112,19 @@ const EXTENSION_TO_MIMES = new Map([
   ['mpg', new Set(['video/mpeg'])],
 ]);
 
+const CANONICAL_EXTENSION_MIME = new Map([
+  ['docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+  ['xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+  ['pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'],
+]);
+
+const GENERIC_ARCHIVE_OR_BROWSER_MIMES = new Set([
+  'application/octet-stream',
+  'application/zip',
+  'application/x-zip',
+  'application/x-zip-compressed',
+]);
+
 const ACTIVE_CONTENT_MIMES = new Set([
   'text/html',
   'text/xml',
@@ -148,6 +161,24 @@ function mimeMatchesExtension(mime, extension) {
   if (!ext || !normalized) return false;
   const accepted = EXTENSION_TO_MIMES.get(ext);
   return Boolean(accepted && accepted.has(normalized));
+}
+
+function canonicalMimeForAcceptedExtension(extension, declaredMime, detectedMime) {
+  const ext = String(extension || '').toLowerCase();
+  const canonical = CANONICAL_EXTENSION_MIME.get(ext);
+  if (!canonical) return null;
+
+  const declared = normalizeMime(declaredMime);
+  const detected = normalizeMime(detectedMime);
+  if (
+    GENERIC_ARCHIVE_OR_BROWSER_MIMES.has(declared) ||
+    GENERIC_ARCHIVE_OR_BROWSER_MIMES.has(detected) ||
+    detected === canonical ||
+    declared === canonical
+  ) {
+    return canonical;
+  }
+  return null;
 }
 
 function isDeclaredUploadAllowed(file = {}) {
@@ -234,7 +265,8 @@ function validateUploadPolicy({
     };
   }
 
-  if (detectionSource === 'magic-bytes' && !ALLOWED_MIMES.has(detected)) {
+  const detectedMatchesAllowedExtension = ext && EXTENSION_TO_MIMES.has(ext) && mimeMatchesExtension(detected, ext);
+  if (detectionSource === 'magic-bytes' && !ALLOWED_MIMES.has(detected) && !detectedMatchesAllowedExtension) {
     return {
       ok: false,
       code: 'detected_type_not_allowed',
@@ -287,7 +319,8 @@ function validateUploadPolicy({
     }
   }
 
-  const normalizedMime = detectionSource === 'magic-bytes' && detected ? detected : declared;
+  const extensionCanonicalMime = canonicalMimeForAcceptedExtension(ext, declared, detected);
+  const normalizedMime = extensionCanonicalMime || (detectionSource === 'magic-bytes' && detected ? detected : declared);
   return {
     ok: true,
     code: 'accepted',
@@ -308,6 +341,7 @@ module.exports = {
   DEFAULT_MAX_UPLOAD_MB,
   EXECUTABLE_EXTENSIONS,
   EXTENSION_TO_MIMES,
+  canonicalMimeForAcceptedExtension,
   extensionFromName,
   isActiveContentMime,
   isDeclaredUploadAllowed,

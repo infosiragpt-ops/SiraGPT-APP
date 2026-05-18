@@ -52,6 +52,69 @@ test('buildAttachmentGroundedFallbackAnswer prefers document findings over inter
   assert.doesNotMatch(answer, /docintel_retrieve|busqueda semantica general|Título del articulo/);
 });
 
+test('parseSpreadsheetCitationRows reads fileProcessor Excel tab-separated blocks', () => {
+  clearAgentModules();
+  const { parseSpreadsheetCitationRows, buildBibliographyFallbackAnswer } = require('../src/services/agents/agent-task-runner');
+  const ctx = [
+    'Excel workbook — 1 sheet(s): Hoja1',
+    '',
+    'Sheet: Hoja1',
+    'Columns (3): Título del articulo | Autores | Año de publicacion',
+    'Total data rows: 2',
+    '---',
+    'Sucesión intestada y herederos\tGarcía López, M.\t2021',
+    'Derecho sucesorio comparado\tPérez, A. & Ruiz, B.\t2019',
+  ].join('\n');
+
+  const sources = parseSpreadsheetCitationRows(ctx);
+  assert.equal(sources.length, 2);
+
+  const answer = buildBibliographyFallbackAnswer({
+    goal: 'cita la bibliografia en apa 7ma edicion',
+    uploadedFileContext: ctx,
+  });
+  assert.match(answer, /Referencias \(APA 7\)/);
+  assert.match(answer, /García López, M\. \(2021\)\./);
+  assert.match(answer, /Pérez, A\., & Ruiz, B\. \(2019\)\./);
+  assert.match(answer, /Sucesión intestada y herederos/);
+});
+
+test('buildBibliographyFallbackAnswer formats APA references from spreadsheet rows', () => {
+  clearAgentModules();
+  const { buildBibliographyFallbackAnswer } = require('../src/services/agents/agent-task-runner');
+  const ctx = [
+    '### Archivo adjunto 1: base_sucesion.xlsx',
+    'tipo: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    '',
+    '| Título del articulo | Autores | Año de publicacion |',
+    '| Sucesión intestada y herederos | García López, M. | 2021 |',
+    '| Derecho sucesorio comparado | Pérez, A. & Ruiz, B. | 2019 |',
+  ].join('\n');
+
+  const answer = buildBibliographyFallbackAnswer({
+    goal: 'dame la bibliografia en apa 7ma edición porfavor',
+    uploadedFileContext: ctx,
+  });
+
+  assert.match(answer, /Referencias \(APA 7\)/);
+  assert.match(answer, /Sucesión intestada y herederos/);
+  assert.match(answer, /Derecho sucesorio comparado/);
+  assert.doesNotMatch(answer, /Nota operativa|runtime principal|respuesta segura/i);
+});
+
+test('buildAttachmentUnavailableFallbackAnswer: bibliography request without rows is actionable', () => {
+  clearAgentModules();
+  const { buildAttachmentUnavailableFallbackAnswer } = require('../src/services/agents/agent-task-runner');
+  const answer = buildAttachmentUnavailableFallbackAnswer({
+    goal: 'dame la bibliografia en apa 7',
+    uploadedFileContext: '',
+  });
+
+  assert.match(answer, /bibliografía en APA 7/i);
+  assert.match(answer, /Título.*Autor/i);
+  assert.doesNotMatch(answer, /Nota operativa|runtime principal|respuesta segura/i);
+});
+
 test('buildAttachmentGroundedFallbackAnswer respects one-paragraph XLSX summaries', () => {
   clearAgentModules();
   const { buildAttachmentGroundedFallbackAnswer } = require('../src/services/agents/agent-task-runner');

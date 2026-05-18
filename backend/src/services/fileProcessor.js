@@ -3,6 +3,7 @@ const pdf = require('pdf-parse');
 const MEMORY_SAFE_MAX_BYTES = Number.parseInt(process.env.SIRAGPT_MEMORY_SAFE_MAX_BYTES || String(150 * 1024 * 1024), 10); // 150 MB
 const sharp = require('sharp');
 const fs = require('fs').promises;
+const path = require('path');
 const ocrEngine = require('./ocr-engine');
 const { readXlsxFile, selectWorkbookWorksheets, worksheetRows } = require('./xlsx-safe-workbook');
 
@@ -31,10 +32,45 @@ const STREAMING_PDF_MAX_CHARS = Number.parseInt(
   10
 );
 
+const GENERIC_UPLOAD_MIMES = new Set([
+  '',
+  'application/octet-stream',
+  'application/zip',
+  'application/x-zip',
+  'application/x-zip-compressed',
+]);
+
+const EXTENSION_MIME_HINTS = new Map([
+  ['.doc', 'application/msword'],
+  ['.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+  ['.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+  ['.ppt', 'application/vnd.ms-powerpoint'],
+  ['.pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'],
+  ['.csv', 'text/csv'],
+  ['.tsv', 'text/tab-separated-values'],
+  ['.txt', 'text/plain'],
+  ['.md', 'text/markdown'],
+  ['.markdown', 'text/markdown'],
+  ['.json', 'application/json'],
+  ['.xml', 'application/xml'],
+  ['.html', 'text/html'],
+  ['.htm', 'text/html'],
+  ['.rtf', 'application/rtf'],
+]);
+
+function resolveProcessMimeType(file = {}) {
+  const declared = String(file.mimetype || file.mimeType || '').split(';')[0].trim().toLowerCase();
+  const ext = path.extname(String(file.originalname || file.originalName || file.filename || file.path || '')).toLowerCase();
+  const hinted = EXTENSION_MIME_HINTS.get(ext);
+  if (hinted && GENERIC_UPLOAD_MIMES.has(declared)) return hinted;
+  return declared;
+}
+
 class FileProcessor {
   async processFile(file) {
     try {
       const { mimetype, path: filePath, originalname, size } = file;
+      const effectiveMimeType = resolveProcessMimeType(file);
 
       // ── Memory-safe guard for large files ──
       // Files > MEMORY_SAFE_MAX_BYTES could OOM the process. For PDFs,
@@ -44,7 +80,7 @@ class FileProcessor {
       const fileSize = typeof size === 'number' ? size : 0;
       const isLargeFile = fileSize > MEMORY_SAFE_MAX_BYTES;
 
-      if (isLargeFile && (mimetype === 'application/pdf')) {
+      if (isLargeFile && (effectiveMimeType === 'application/pdf')) {
         console.warn(
           `[mem-safe] Large PDF (${(fileSize / 1024 / 1024).toFixed(1)} MB) — ` +
           `using streaming extraction. Set SIRAGPT_MEMORY_SAFE_MAX_BYTES to adjust.`
@@ -59,7 +95,7 @@ class FileProcessor {
             success: true,
             extractedText: streaming.text,
             ocr: streaming.ocr,
-            fileInfo: { name: originalname, type: mimetype, size: fileSize },
+            fileInfo: { name: originalname, type: effectiveMimeType || mimetype, size: fileSize },
             memSafe: true,
             memSafeNote:
               `Large PDF streamed (${streaming.pageCount} pages, ` +
@@ -86,9 +122,9 @@ class FileProcessor {
       let extractedText = '';
       let ocr = ocrEngine.skipped('not_ocr_applicable').ocr;
 
-      console.log(`Processing file: ${originalname}, type: ${mimetype}, path: ${filePath}`);
+      console.log(`Processing file: ${originalname}, type: ${mimetype}${effectiveMimeType !== mimetype ? ` -> ${effectiveMimeType}` : ''}, path: ${filePath}`);
 
-      switch (mimetype) {
+      switch (effectiveMimeType) {
         case 'application/pdf':
           {
             const result = await this.processPDF(filePath, { detailed: true });
@@ -131,7 +167,7 @@ class FileProcessor {
         case 'image/heic':
         case 'image/heif':
           {
-            const result = await this.processImage(filePath, { detailed: true, mimeType: mimetype });
+            const result = await this.processImage(filePath, { detailed: true, mimeType: effectiveMimeType || mimetype });
             extractedText = result.extractedText;
             ocr = result.ocr;
           }
@@ -144,7 +180,7 @@ class FileProcessor {
 
         default:
           console.log(`Unsupported file type: ${mimetype}`);
-          extractedText = `File "${originalname}" uploaded successfully. Content type: ${mimetype}`;
+          extractedText = `File "${originalname}" uploaded successfully. Content type: ${effectiveMimeType || mimetype}`;
       }
 
       console.log(`File processing complete for ${originalname}: ${String(extractedText || '').length} characters extracted`);
@@ -155,7 +191,7 @@ class FileProcessor {
         ocr,
         fileInfo: {
           name: originalname,
-          type: mimetype,
+          type: effectiveMimeType || mimetype,
           size: file.size
         }
       };
@@ -622,3 +658,4 @@ class FileProcessor {
 }
 
 module.exports = new FileProcessor();
+module.exports.resolveProcessMimeType = resolveProcessMimeType;

@@ -250,5 +250,5 @@ test('buildAttachmentGroundedFallbackAnswer: returns professional document answe
   assert.match(answer, /Resumen ejecutivo/);
   assert.match(answer, /vacunacion comunitaria/);
   assert.match(answer, /Siguiente paso recomendado/);
-  assert.match(answer, /nunca queda sin respuesta/);
+  assert.doesNotMatch(answer, /Nota operativa|runtime principal|respuesta segura/i);
 });

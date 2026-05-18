@@ -47,6 +47,15 @@ function hasUsefulText(value) {
   return ocrEngine.hasUsefulText(value);
 }
 
+function looksLikeUnsupportedExtractionPlaceholder(value) {
+  const text = String(value || '').trim();
+  return /^File\s+"[^"]+"\s+uploaded successfully\.\s+Content type:\s+application\/(?:octet-stream|zip|x-zip|x-zip-compressed)\.?$/i.test(text);
+}
+
+function hasProcessableStoredText(value) {
+  return hasUsefulText(value) && !looksLikeUnsupportedExtractionPlaceholder(value);
+}
+
 function safeJson(value, fallback = null) {
   if (value == null) return fallback;
   if (typeof value === 'object') return value;
@@ -492,7 +501,7 @@ function buildSummary(file = {}, text = '', chunks = [], tables = []) {
 }
 
 async function reprocessIfNeeded(prisma, file) {
-  if (hasUsefulText(file?.extractedText) || !file?.path || !fs.existsSync(file.path)) {
+  if (hasProcessableStoredText(file?.extractedText) || !file?.path || !fs.existsSync(file.path)) {
     return { file, result: null };
   }
   try {

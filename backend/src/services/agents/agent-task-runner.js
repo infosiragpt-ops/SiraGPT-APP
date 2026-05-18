@@ -47,6 +47,7 @@ const {
   countUsefulWords,
   stripScaffolding,
 } = require('./attachment-context-guard');
+const apa7 = require('../marco-teorico/apa7');
 
 const prisma = (() => {
   try { return require('../../config/database'); } catch { return null; }
@@ -201,19 +202,218 @@ function looksLikeEmptyOrWeakFinalAnswer(text) {
   );
 }
 
-function sanitizeAttachmentFallbackReason(reason) {
-  const value = String(reason || '').toLowerCase();
-  if (!value) return '';
-  if (/quota|billing|payment|rate.?limit|too many requests|429/.test(value)) {
-    return 'el proveedor principal alcanzó un límite temporal';
+function wantsBibliographyAnswer(request) {
+  const value = normalizedKey(request);
+  return /\b(bibliograf|referenc|citas?|apa|vancouver|harvard|chicago|mla|formato bibliograf)/.test(value);
+}
+
+function detectApaEditionLabel(request) {
+  const value = normalizedKey(request);
+  if (/\b(7ma|7 th|septima|séptima|apa\s*7)\b/.test(value) || /\bapa\s*7\b/.test(value)) return 'APA 7';
+  return 'APA';
+}
+
+function mapSpreadsheetCitationColumns(headerCells) {
+  const columnMap = { title: -1, authors: -1, year: -1, venue: -1, doi: -1 };
+  headerCells.forEach((label, columnIndex) => {
+    const key = normalizedKey(label);
+    if (columnMap.title < 0 && /titulo|articulo|referenc|obra|nombre|tema|estudio|fuente/.test(key)) columnMap.title = columnIndex;
+    if (columnMap.authors < 0 && /autor|investigador|escritor/.test(key)) columnMap.authors = columnIndex;
+    if (columnMap.year < 0 && /(ano|anio|year|fecha|publicacion|publicado)/.test(key)) columnMap.year = columnIndex;
+    if (columnMap.venue < 0 && /(revista|journal|fuente|medio|editorial)/.test(key)) columnMap.venue = columnIndex;
+    if (columnMap.doi < 0 && /doi/.test(key)) columnMap.doi = columnIndex;
+  });
+  if (columnMap.title < 0 && headerCells.length >= 2) {
+    columnMap.title = 0;
+    columnMap.authors = headerCells.length > 1 ? 1 : -1;
+    columnMap.year = headerCells.length > 2 ? 2 : -1;
   }
-  if (/api[_ -]?key|authentication|unauthorized|forbidden|not configured|no est[aá] configurado/.test(value)) {
-    return 'el runtime principal no estuvo disponible';
+  return columnMap;
+}
+
+function splitSpreadsheetCells(line) {
+  const trimmed = String(line || '').trim().replace(/\*{1,3}/g, '');
+  if (!trimmed) return [];
+  if (trimmed.includes('\t')) return trimmed.split('\t').map((cell) => cell.trim());
+  if (trimmed.includes('|')) return trimmed.split(/\s*\|\s*/).map((cell) => cell.trim()).filter(Boolean);
+  return [trimmed];
+}
+
+function normalizeAuthorInitials(value) {
+  const tokens = String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  return tokens.map((token) => {
+    if (/^[A-ZÁÉÍÓÚÜÑ]\.?$/u.test(token)) {
+      return token.endsWith('.') ? token : `${token}.`;
+    }
+    return token;
+  }).join(' ');
+}
+
+function parseCitationAuthorName(display) {
+  const cleaned = String(display || '').replace(/\s+/g, ' ').trim();
+  if (!cleaned) return null;
+  const inverted = cleaned.match(/^(.+?),\s*(.+)$/);
+  if (inverted) {
+    const family = inverted[1].trim();
+    const given = normalizeAuthorInitials(inverted[2]);
+    if (family && given) return { family, given, display: cleaned };
   }
-  if (/timeout|timed out|etimedout|socket|econn|network|dns|enotfound|eai_again/.test(value)) {
-    return 'el runtime principal tardó demasiado en responder';
+  return { ...apa7.splitName(cleaned), display: cleaned };
+}
+
+function parseCitationAuthors(authorsRaw) {
+  const raw = String(authorsRaw || '').replace(/\s+/g, ' ').trim();
+  if (!raw) return [{ family: 'Autor desconocido', given: null, display: 'Autor desconocido' }];
+
+  const normalized = raw
+    .replace(/\s+(?:and|y)\s+/gi, ' & ')
+    .replace(/([A-ZÁÉÍÓÚÜÑ]\.)\s*,\s*(?=[^,;&]+,\s*[A-ZÁÉÍÓÚÜÑ]\.?)/gu, '$1 & ');
+
+  const parts = normalized
+    .split(/\s*(?:;|&)\s*/u)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  const authors = (parts.length ? parts : [normalized])
+    .map(parseCitationAuthorName)
+    .filter(Boolean);
+
+  return authors.length
+    ? authors
+    : [{ family: 'Autor desconocido', given: null, display: 'Autor desconocido' }];
+}
+
+function citationSourcesFromTabularData(headerCells, dataRows) {
+  const columnMap = mapSpreadsheetCitationColumns(headerCells);
+  const pickCell = (cells, index) => (index >= 0 ? String(cells[index] || '').trim() : '');
+  const sources = [];
+
+  for (const cells of dataRows) {
+    if (!Array.isArray(cells) || !cells.some(Boolean)) continue;
+    const title = pickCell(cells, columnMap.title >= 0 ? columnMap.title : 0);
+    const authorsRaw = pickCell(cells, columnMap.authors);
+    const yearCell = pickCell(cells, columnMap.year);
+    const venue = pickCell(cells, columnMap.venue);
+    const doiCell = pickCell(cells, columnMap.doi);
+    if (!title || title.length < 4) continue;
+    if (/^(n|no|titulo|autores|ano|anio|resultados|referencia)$/.test(normalizedKey(title))) continue;
+
+    const yearMatch = yearCell.match(/\b(19|20)\d{2}\b/) || title.match(/\b(19|20)\d{2}\b/);
+    const authors = parseCitationAuthors(authorsRaw);
+
+    const doiMatch = doiCell.match(/\b10\.\d{4,9}\/[^\s|]+/i);
+    sources.push({
+      title: title.replace(/\s*\(\s*(19|20)\d{2}\s*\)\s*$/, '').trim(),
+      authors,
+      year: yearMatch ? Number(yearMatch[0]) : null,
+      container: venue || null,
+      doi: doiMatch ? doiMatch[0] : null,
+      url: doiMatch ? `https://doi.org/${doiMatch[0]}` : null,
+    });
   }
-  return 'el runtime principal no completó la solicitud';
+  return sources;
+}
+
+function dedupeCitationSources(sources) {
+  const seen = new Set();
+  return sources.filter((source) => {
+    const key = normalizedKey(`${source.title}|${source.authors?.[0]?.display || ''}|${source.year || ''}`);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function parseMarkdownPipeCitationRows(rawText) {
+  const lines = String(rawText || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith('|') && line.endsWith('|'));
+  if (lines.length < 2) return [];
+
+  const rows = lines
+    .map((line) => line.slice(1, -1).split('|').map((cell) => cell.trim().replace(/\*{1,3}/g, '')))
+    .filter((cells) => cells.some(Boolean))
+    .filter((cells) => !cells.every((cell) => /^:?-{2,}:?$/.test(cell)));
+
+  let headerIndex = -1;
+  for (let index = 0; index < Math.min(rows.length, 6); index += 1) {
+    const headerKey = normalizedKey(rows[index].join(' '));
+    if (/titulo|autor|ano|anio|year|referenc|articulo|publicacion|doi|revista|journal/.test(headerKey)) {
+      headerIndex = index;
+      break;
+    }
+  }
+
+  const headerCells = headerIndex >= 0 ? rows[headerIndex] : rows[0];
+  const dataRows = headerIndex >= 0 ? rows.slice(headerIndex + 1) : rows.slice(1);
+  return citationSourcesFromTabularData(headerCells, dataRows);
+}
+
+function parseFileProcessorExcelCitationRows(rawText) {
+  const text = String(rawText || '');
+  if (!/Columns\s*\(\d+\):/i.test(text)) return [];
+
+  const sources = [];
+  const sheetBlocks = text.split(/(?=^Sheet:\s)/im).filter((block) => /Columns\s*\(\d+\):/i.test(block));
+  for (const block of sheetBlocks) {
+    const colMatch = block.match(/^Columns\s*\(\d+\):\s*(.+)$/im);
+    if (!colMatch) continue;
+
+    const headerCells = splitSpreadsheetCells(colMatch[1]);
+    const separatorIndex = block.search(/^---\s*$/m);
+    const dataSection = separatorIndex >= 0 ? block.slice(separatorIndex) : block;
+    const dataRows = dataSection
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .filter((line) => !/^---$/.test(line))
+      .filter((line) => !/^Sheet:/i.test(line))
+      .filter((line) => !/^Columns\s*\(/i.test(line))
+      .filter((line) => !/^Total data rows:/i.test(line))
+      .filter((line) => !/^\(empty\)$/i.test(line))
+      .filter((line) => !line.startsWith('... ['))
+      .filter((line) => !/^Excel workbook/i.test(line))
+      .map((line) => splitSpreadsheetCells(line))
+      .filter((cells) => cells.some((cell) => cell.length > 0));
+
+    sources.push(...citationSourcesFromTabularData(headerCells, dataRows));
+  }
+  return sources;
+}
+
+function parseSpreadsheetCitationRows(rawText) {
+  const markdownSources = parseMarkdownPipeCitationRows(rawText);
+  const excelSources = parseFileProcessorExcelCitationRows(rawText);
+  return dedupeCitationSources([...markdownSources, ...excelSources]);
+}
+
+function buildBibliographyFallbackAnswer({ goal, uploadedFileContext }) {
+  if (!wantsBibliographyAnswer(goal)) return '';
+  const sources = parseSpreadsheetCitationRows(uploadedFileContext);
+  if (sources.length === 0) return '';
+
+  const edition = detectApaEditionLabel(goal);
+  const references = apa7.referenceList(sources);
+  return [
+    `### Referencias (${edition})`,
+    '',
+    `Formateé **${sources.length}** entrada${sources.length === 1 ? '' : 's'} a partir de las filas legibles de tu archivo. Revísalas antes de entregar: autores, año y revista pueden requerir un ajuste manual si la hoja estaba incompleta.`,
+    '',
+    references,
+  ].join('\n');
+}
+
+function resolveAttachmentFallbackMarkdown({ goal, uploadedFileContext, reason = '' }) {
+  return (
+    buildBibliographyFallbackAnswer({ goal, uploadedFileContext })
+    || buildAttachmentGroundedFallbackAnswer({ goal, uploadedFileContext, reason })
+    || buildAttachmentUnavailableFallbackAnswer({ goal, uploadedFileContext })
+  );
 }
 
 function wantsSingleParagraphAnswer(request) {
@@ -244,13 +444,17 @@ function wantsBulletList(request) {
 }
 
 function buildAttachmentGroundedFallbackAnswer({ goal, uploadedFileContext, reason = '' }) {
+  void reason;
+  const request = String(goal || '');
+  const bibliographyAnswer = buildBibliographyFallbackAnswer({ goal: request, uploadedFileContext });
+  if (bibliographyAnswer) return bibliographyAnswer;
+
   const cleanedRaw = stripScaffolding(uploadedFileContext);
   const cleaned = normalizeAttachmentFallbackContent(cleanedRaw)
     .replace(/\s+/g, ' ')
     .trim();
-  if (!cleaned || countUsefulWords(cleaned) < 30) return '';
-
-  const request = String(goal || '');
+  const minUsefulWords = wantsBibliographyAnswer(request) ? 8 : 30;
+  if (!cleaned || countUsefulWords(cleaned) < minUsefulWords) return '';
   const requestedParagraphs = Math.max(
     1,
     Math.min(6, Number((request.match(/\b(\d{1,2})\s+p[aá]rrafos?\b/i) || [])[1]) || 0)
@@ -263,11 +467,6 @@ function buildAttachmentGroundedFallbackAnswer({ goal, uploadedFileContext, reas
   if (sentences.length === 0) {
     return cleaned.slice(0, 1600);
   }
-
-  const publicReason = sanitizeAttachmentFallbackReason(reason);
-  const note = publicReason
-    ? `\n\n> Nota operativa: respondí con el análisis documental local porque ${publicReason}. Así el chat nunca queda sin respuesta cuando el runtime principal falla.`
-    : '';
 
   const bulletSentences = selectAttachmentSentences(sentences, request, 8)
     .map((sentence) => sentence.replace(/^[,;:\s]+/, '').replace(/\.{2,}/g, '.').trim())
@@ -291,10 +490,7 @@ function buildAttachmentGroundedFallbackAnswer({ goal, uploadedFileContext, reas
       .slice(0, Math.max(3, Math.min(5, bulletSentences.length || sentences.length)));
     const paragraph = selected.join(' ').replace(/\s+/g, ' ').trim();
     const clipped = paragraph.length > 1800 ? `${paragraph.slice(0, 1800).trim()}...` : paragraph;
-    const inlineNote = publicReason
-      ? ` Respondí con análisis documental local porque ${publicReason}.`
-      : '';
-    return `${clipped}${inlineNote}`;
+    return clipped;
   }
 
   if (!wantsConclusions) {
@@ -317,9 +513,9 @@ function buildAttachmentGroundedFallbackAnswer({ goal, uploadedFileContext, reas
           ? '\n**Siguiente paso recomendado**\n- Usar estos hallazgos como base y pedirme una matriz, informe Word/PDF o tabla comparativa si necesitas entregable descargable.'
           : '\n**Siguiente paso recomendado.** Usa estos hallazgos como base y pídeme una matriz, informe Word/PDF o tabla comparativa si necesitas un entregable descargable.'
         : '';
-      return [heading, '', summaryBlock, recommendationsBlock, note].filter(Boolean).join('\n');
+      return [heading, '', summaryBlock, recommendationsBlock].filter(Boolean).join('\n');
     }
-    return `${clippedBody}${note}`;
+    return clippedBody;
   }
 
   const connectors = [
@@ -347,22 +543,39 @@ function buildAttachmentGroundedFallbackAnswer({ goal, uploadedFileContext, reas
     '',
     paragraphs.join('\n\n'),
     evidenceBlock,
-    note,
   ].filter(Boolean).join('\n');
 }
 
-function buildAttachmentUnavailableFallbackAnswer({ reason = '' } = {}) {
-  const publicReason = sanitizeAttachmentFallbackReason(reason);
+function buildAttachmentUnavailableFallbackAnswer({ goal = '', uploadedFileContext = '' } = {}) {
+  const request = String(goal || '');
+  if (wantsBibliographyAnswer(request)) {
+    const partialRows = parseSpreadsheetCitationRows(uploadedFileContext);
+    if (partialRows.length === 0) {
+      return [
+        'No pude leer bien las referencias de tu archivo para armar la bibliografía.',
+        '',
+        '**Para generar la bibliografía en APA 7:**',
+        '1. Usa una hoja con columnas claras: **Título**, **Autor(es)**, **Año** (y revista o DOI si los tienes).',
+        '2. Vuelve a subir el `.xlsx` original (no una captura ni un PDF exportado).',
+        '3. O pega aquí 3–5 referencias en texto y formateo el resto con el mismo estilo.',
+        '',
+        'Si el chat no respondió al primer intento, **envía el mensaje otra vez** en unos segundos.',
+      ].join('\n');
+    }
+  }
+
+  const mentionsExcel = /excel|xlsx|hoja|spreadsheet|tabla/.test(normalizedKey(`${request} ${uploadedFileContext}`));
   return [
-    'Recibí el archivo adjunto, pero todavía no tengo texto legible suficiente para responder con precisión.',
+    'Recibí tu archivo, pero no encontré texto suficiente para responder con precisión.',
     '',
-    '**Para resolverlo rápido:**',
-    '- Si es un PDF escaneado o una imagen, sube una versión más nítida o con OCR.',
-    '- Si es Word/Excel/PDF con texto, vuelve a subir el archivo original.',
-    '- También puedes pegar aquí el fragmento clave y lo analizo de inmediato.',
-    publicReason
-      ? `\n> Nota operativa: activé una respuesta segura porque ${publicReason}; preferí pedir material legible antes que inventar contenido.`
-      : '',
+    '**Qué puedes hacer ahora:**',
+    mentionsExcel
+      ? '- En Excel, confirma que la hoja correcta tiene datos en celdas (no solo formato o imágenes) y vuelve a subir el `.xlsx`.'
+      : '- Si es un PDF escaneado o una imagen, sube una versión más nítida o con OCR.',
+    '- Si es Word, Excel o PDF con texto seleccionable, vuelve a subir el archivo original.',
+    '- También puedes pegar aquí el fragmento clave y lo trabajo de inmediato.',
+    '',
+    'Si fue un fallo momentáneo del servicio, **reintenta el mismo mensaje** en unos segundos.',
   ].filter(Boolean).join('\n');
 }
 
@@ -1070,6 +1283,41 @@ async function runAgentTaskJob(payload = {}, job = null) {
       userText: displayGoal || goal,
     });
     if (attachmentStats.isThin) {
+      const thinBibliographyFallback = buildBibliographyFallbackAnswer({
+        goal: displayGoal || goal,
+        uploadedFileContext,
+      });
+      if (thinBibliographyFallback) {
+        documentPolicy = {
+          ...(documentPolicy || {}),
+          mode: 'chat_only',
+          autoGenerate: false,
+          reason: 'Bibliografía generada desde filas legibles del adjunto.',
+          thresholds: {
+            ...(documentPolicy?.thresholds || {}),
+            attachmentFallback: true,
+            thinContextWords: attachmentStats.usefulWords,
+            fileCount: files.length,
+          },
+        };
+        task.documentPolicy = documentPolicy;
+        emit({ type: 'document_policy', policy: documentPolicy });
+        stepIdCounter = 1;
+        emit({ type: 'step_start', id: 's1', label: 'Formateando referencias', icon: 'file-text' });
+        emit({ type: 'step_done', id: 's1', ok: true });
+        return finishDeterministicTask({
+          finalMarkdown: thinBibliographyFallback,
+          stoppedReason: 'attachment_bibliography_fallback',
+          steps: 1,
+          artifactsList: [],
+          metadata: {
+            attachmentFallback: true,
+            bibliographyRows: parseSpreadsheetCitationRows(uploadedFileContext).length,
+            sourceFileIds: files,
+          },
+        });
+      }
+
       documentPolicy = {
         ...(documentPolicy || {}),
         mode: 'chat_only',
@@ -1180,21 +1428,24 @@ async function runAgentTaskJob(payload = {}, job = null) {
     }
 
     if (!openai && hasAttachedFiles) {
-      const fallbackMarkdown = buildAttachmentGroundedFallbackAnswer({
+      const recoveredMarkdown = buildBibliographyFallbackAnswer({
         goal: displayGoal || goal,
         uploadedFileContext,
-        reason: 'el proveedor principal no está configurado',
+      }) || buildAttachmentGroundedFallbackAnswer({
+        goal: displayGoal || goal,
+        uploadedFileContext,
       });
-      const finalFallbackMarkdown = fallbackMarkdown || buildAttachmentUnavailableFallbackAnswer({
-        reason: 'el proveedor principal no está configurado',
+      const finalFallbackMarkdown = recoveredMarkdown || buildAttachmentUnavailableFallbackAnswer({
+        goal: displayGoal || goal,
+        uploadedFileContext,
       });
       documentPolicy = {
         ...(documentPolicy || {}),
         mode: 'chat_only',
         autoGenerate: false,
-        reason: fallbackMarkdown
-          ? 'Respuesta documental local generada sin proveedor LLM configurado.'
-          : 'Respuesta segura por adjunto sin texto legible suficiente.',
+        reason: recoveredMarkdown
+          ? 'Respuesta generada desde el contenido del adjunto.'
+          : 'Adjunto sin texto legible suficiente; se pidió material al usuario.',
         thresholds: {
           ...(documentPolicy?.thresholds || {}),
           attachmentFallback: true,
@@ -1206,19 +1457,19 @@ async function runAgentTaskJob(payload = {}, job = null) {
       emit({ type: 'document_policy', policy: documentPolicy });
       stepIdCounter = 1;
       emit({ type: 'step_start', id: 's1', label: 'Analizando documento adjunto', icon: 'file-text' });
-      emit({ type: 'step_done', id: 's1', ok: Boolean(fallbackMarkdown) });
+      emit({ type: 'step_done', id: 's1', ok: Boolean(recoveredMarkdown) });
       emit({
         type: 'quality_gate',
         gate: 'attachment_local_fallback',
-        label: fallbackMarkdown ? 'Respuesta documental garantizada' : 'Adjunto requiere texto legible',
-        passed: Boolean(fallbackMarkdown),
-        summary: fallbackMarkdown
-          ? 'Se generó una respuesta desde el texto extraído del archivo sin depender del proveedor externo.'
-          : 'Se devolvió una respuesta clara en vez de dejar el chat sin salida.',
+        label: recoveredMarkdown ? 'Respuesta desde el adjunto' : 'Adjunto requiere más contenido',
+        passed: Boolean(recoveredMarkdown),
+        summary: recoveredMarkdown
+          ? 'Se generó la respuesta usando el texto extraído del archivo.'
+          : 'Se indicó al usuario cómo aportar contenido legible.',
       });
       return finishDeterministicTask({
         finalMarkdown: finalFallbackMarkdown,
-        stoppedReason: fallbackMarkdown ? 'attachment_local_fallback' : 'attachment_unreadable_fallback',
+        stoppedReason: recoveredMarkdown ? 'attachment_local_fallback' : 'attachment_unreadable_fallback',
         steps: 1,
         artifactsList: [],
         metadata: {
@@ -1375,25 +1626,29 @@ async function runAgentTaskJob(payload = {}, job = null) {
       looksLikeMissingAttachmentAnswer(finalMarkdown)
     );
     if (attachmentFinalNeedsRecovery) {
-      const fallbackMarkdown = buildAttachmentGroundedFallbackAnswer({
+      const recoveredMarkdown = buildBibliographyFallbackAnswer({
         goal: displayGoal || goal,
         uploadedFileContext,
-        reason: result.stoppedReason || 'el runtime principal no entregó una respuesta final útil',
+      }) || buildAttachmentGroundedFallbackAnswer({
+        goal: displayGoal || goal,
+        uploadedFileContext,
+        reason: result.stoppedReason,
       });
-      const finalFallbackMarkdown = fallbackMarkdown || buildAttachmentUnavailableFallbackAnswer({
-        reason: result.stoppedReason || 'el runtime principal no entregó una respuesta final útil',
+      const finalFallbackMarkdown = recoveredMarkdown || buildAttachmentUnavailableFallbackAnswer({
+        goal: displayGoal || goal,
+        uploadedFileContext,
       });
       finalMarkdown = finalFallbackMarkdown;
-      stoppedReason = fallbackMarkdown
+      stoppedReason = recoveredMarkdown
         ? 'attachment_empty_response_recovery'
         : 'attachment_unreadable_empty_response_recovery';
       documentPolicy = {
         ...(documentPolicy || {}),
         mode: 'chat_only',
         autoGenerate: false,
-        reason: fallbackMarkdown
-          ? 'Respuesta documental local generada porque el runtime terminó sin texto final útil.'
-          : 'Respuesta segura porque el runtime terminó sin texto final útil y no hubo texto legible suficiente.',
+        reason: recoveredMarkdown
+          ? 'Respuesta generada desde el contenido del adjunto.'
+          : 'Sin texto legible suficiente en el adjunto.',
         thresholds: {
           ...(documentPolicy?.thresholds || {}),
           attachmentFallback: true,
@@ -1406,26 +1661,26 @@ async function runAgentTaskJob(payload = {}, job = null) {
       emit({
         type: 'repair_attempt',
         attempt: 1,
-        status: fallbackMarkdown ? 'recovered' : 'degraded',
-        message: fallbackMarkdown
-          ? 'El runtime terminó sin una respuesta útil; se recuperó usando el texto extraído del documento.'
-          : 'El runtime terminó sin una respuesta útil; se devolvió una salida clara para pedir un archivo legible.',
+        status: recoveredMarkdown ? 'recovered' : 'degraded',
+        message: recoveredMarkdown
+          ? 'Recuperé la respuesta usando el contenido de tu archivo.'
+          : 'No hubía suficiente texto en el adjunto; te indico cómo continuar.',
       });
       if (stepIdCounter === 0) {
         stepIdCounter = 1;
         currentStepId = 's1';
         emit({ type: 'step_start', id: currentStepId, label: 'Recuperando respuesta desde el documento', icon: 'file-text' });
-        emit({ type: 'step_done', id: currentStepId, ok: Boolean(fallbackMarkdown) });
+        emit({ type: 'step_done', id: currentStepId, ok: Boolean(recoveredMarkdown) });
         currentStepId = null;
       }
       emit({
         type: 'quality_gate',
         gate: 'attachment_empty_response_recovery',
-        label: fallbackMarkdown ? 'Respuesta documental recuperada' : 'Salida segura sin contenido legible',
-        passed: Boolean(fallbackMarkdown),
-        summary: fallbackMarkdown
-          ? 'Se usó el texto extraído del adjunto para evitar una tarea completada sin respuesta.'
-          : 'Se evitó una tarea completada en silencio y se explicó cómo aportar contenido legible.',
+        label: recoveredMarkdown ? 'Respuesta recuperada' : 'Se necesita más contenido',
+        passed: Boolean(recoveredMarkdown),
+        summary: recoveredMarkdown
+          ? 'Se usó el texto del adjunto para completar la respuesta.'
+          : 'Se explicó cómo aportar contenido legible en lugar de dejar el chat vacío.',
       });
     }
     documentPolicy = buildDocumentDeliveryPolicy({
@@ -1554,21 +1809,25 @@ async function runAgentTaskJob(payload = {}, job = null) {
     return { taskId, status, artifacts: artifacts.length };
   } catch (err) {
     if (!controller.signal.aborted && hasAttachedFiles) {
-      const fallbackMarkdown = buildAttachmentGroundedFallbackAnswer({
+      const recoveredMarkdown = buildBibliographyFallbackAnswer({
         goal: displayGoal || goal,
         uploadedFileContext,
-        reason: err?.message || 'el runtime principal falló',
+      }) || buildAttachmentGroundedFallbackAnswer({
+        goal: displayGoal || goal,
+        uploadedFileContext,
+        reason: err?.message,
       });
-      const finalFallbackMarkdown = fallbackMarkdown || buildAttachmentUnavailableFallbackAnswer({
-        reason: err?.message || 'el runtime principal falló',
+      const finalFallbackMarkdown = recoveredMarkdown || buildAttachmentUnavailableFallbackAnswer({
+        goal: displayGoal || goal,
+        uploadedFileContext,
       });
       documentPolicy = {
         ...(documentPolicy || {}),
         mode: 'chat_only',
         autoGenerate: false,
-        reason: fallbackMarkdown
-          ? 'Fallback documental local tras fallo del runtime principal.'
-          : 'Respuesta segura tras fallo del runtime y adjunto sin texto legible suficiente.',
+        reason: recoveredMarkdown
+          ? 'Respuesta generada desde el contenido del adjunto.'
+          : 'Servicio interrumpido y adjunto sin texto legible suficiente.',
         thresholds: {
           ...(documentPolicy?.thresholds || {}),
           attachmentFallback: true,
@@ -1581,30 +1840,30 @@ async function runAgentTaskJob(payload = {}, job = null) {
       emit({
         type: 'repair_attempt',
         attempt: 1,
-        status: fallbackMarkdown ? 'recovered' : 'degraded',
-        message: fallbackMarkdown
-          ? 'El runtime principal falló; se recuperó la respuesta usando el texto extraído del documento.'
-          : 'El runtime principal falló y el adjunto no aportó texto suficiente; se devolvió una salida accionable.',
+        status: recoveredMarkdown ? 'recovered' : 'degraded',
+        message: recoveredMarkdown
+          ? 'Recuperé la respuesta usando el contenido de tu archivo.'
+          : 'El servicio falló y el adjunto no tenía texto suficiente; te indico los siguientes pasos.',
       });
       if (!currentStepId) {
         stepIdCounter += 1;
         currentStepId = `s${stepIdCounter}`;
         emit({ type: 'step_start', id: currentStepId, label: 'Recuperando respuesta desde el documento', icon: 'file-text' });
       }
-      emit({ type: 'step_done', id: currentStepId, ok: Boolean(fallbackMarkdown) });
+      emit({ type: 'step_done', id: currentStepId, ok: Boolean(recoveredMarkdown) });
       currentStepId = null;
       emit({
         type: 'quality_gate',
         gate: 'attachment_runtime_recovery',
-        label: fallbackMarkdown ? 'Recuperación documental' : 'Salida segura sin contenido legible',
-        passed: Boolean(fallbackMarkdown),
-        summary: fallbackMarkdown
-          ? 'La tarea terminó con una respuesta basada en el adjunto aunque falló el proveedor principal.'
-          : 'La tarea terminó con instrucciones claras en vez de un silencio o error opaco.',
+        label: recoveredMarkdown ? 'Recuperación desde adjunto' : 'Se necesita más contenido',
+        passed: Boolean(recoveredMarkdown),
+        summary: recoveredMarkdown
+          ? 'La respuesta se completó con el texto del adjunto.'
+          : 'Se dieron instrucciones claras en lugar de un error opaco.',
       });
       return finishDeterministicTask({
         finalMarkdown: finalFallbackMarkdown,
-        stoppedReason: fallbackMarkdown ? 'attachment_runtime_recovery' : 'attachment_unreadable_recovery',
+        stoppedReason: recoveredMarkdown ? 'attachment_runtime_recovery' : 'attachment_unreadable_recovery',
         steps: Math.max(1, stepIdCounter),
         artifactsList: [],
         metadata: {
@@ -1752,4 +2011,9 @@ module.exports = {
   classifyTaskError,
   normalizeAgentRuntimeModel,
   buildAttachmentGroundedFallbackAnswer,
+  buildBibliographyFallbackAnswer,
+  buildAttachmentUnavailableFallbackAnswer,
+  parseSpreadsheetCitationRows,
+  parseCitationAuthors,
+  resolveAttachmentFallbackMarkdown,
 };

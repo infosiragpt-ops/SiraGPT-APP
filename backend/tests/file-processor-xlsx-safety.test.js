@@ -79,3 +79,32 @@ test('processExcel handles empty workbooks without a truncation marker', async (
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
+
+test('processFile reads xlsx content even when browser reports a generic MIME', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'siragpt-xlsx-generic-mime-'));
+  const filePath = path.join(dir, 'base_sucesion_intestada_seleccionados.xlsx');
+  try {
+    const workbook = createWorkbook();
+    addRowsWorksheet(workbook, 'Referencias', [
+      ['Título del articulo', 'Autores', 'Año de publicacion'],
+      ['Sucesión intestada y herederos', 'García López, M.', 2021],
+    ]);
+    await fs.writeFile(filePath, await writeWorkbookBuffer(workbook));
+
+    for (const mimetype of ['application/zip', 'application/octet-stream']) {
+      const result = await fileProcessor.processFile({
+        path: filePath,
+        originalname: 'base_sucesion_intestada_seleccionados.xlsx',
+        mimetype,
+        size: 2048,
+      });
+
+      assert.equal(result.success, true);
+      assert.equal(result.fileInfo.type, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      assert.match(result.extractedText, /Sheet: Referencias/);
+      assert.match(result.extractedText, /Sucesión intestada y herederos/);
+    }
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});

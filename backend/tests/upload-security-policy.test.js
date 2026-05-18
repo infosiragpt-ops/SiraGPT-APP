@@ -26,6 +26,31 @@ test('upload policy accepts extension fallback for octet-stream browser uploads'
   assert.equal(result.mimeType, 'application/pdf');
 });
 
+test('upload policy canonicalizes xlsx browser/zip uploads for extraction', () => {
+  const zipDetected = validateUploadPolicy({
+    originalName: 'base_sucesion_intestada_seleccionados.xlsx',
+    declaredMime: 'application/octet-stream',
+    detectedMime: 'application/zip',
+    detectionSource: 'magic-bytes',
+    size: 2048,
+  });
+
+  assert.equal(zipDetected.ok, true);
+  assert.equal(zipDetected.detectedMime, 'application/zip');
+  assert.equal(zipDetected.mimeType, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+
+  const noMagic = validateUploadPolicy({
+    originalName: 'base_sucesion_intestada_seleccionados.xlsx',
+    declaredMime: 'application/octet-stream',
+    detectedMime: 'application/octet-stream',
+    detectionSource: 'fallback',
+    size: 2048,
+  });
+
+  assert.equal(noMagic.ok, true);
+  assert.equal(noMagic.mimeType, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+});
+
 test('upload policy accepts harmless repeated dots in basename', () => {
   const result = validateUploadPolicy({
     originalName: 'Captura de pantalla 2026-01-01 a la(s) 5.20.33 p. m..png',
