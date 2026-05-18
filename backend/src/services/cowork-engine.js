@@ -6,6 +6,8 @@ const activeMemory = require('./active-memory');
 const sessionManager = require('./session-manager');
 const skillsRegistry = require('./skills-registry');
 
+const MAX_COWORK_BLOCK_CHARS = Number.parseInt(process.env.SIRAGPT_COWORK_BLOCK_MAX_CHARS || '4000', 10);
+
 function buildCoworkSystemPrompt(userId, opts = {}) {
   const parts = [];
 
@@ -85,7 +87,11 @@ function buildCoworkSystemPrompt(userId, opts = {}) {
     parts.push('');
   }
 
-  return parts.join('\n');
+  const result = parts.join('\n');
+  if (result.length > MAX_COWORK_BLOCK_CHARS) {
+    return result.slice(0, MAX_COWORK_BLOCK_CHARS - 3) + '...';
+  }
+  return result;
 }
 
 function processIncomingMessage(userId, content, opts = {}) {
@@ -98,19 +104,22 @@ function processIncomingMessage(userId, content, opts = {}) {
   enrichedContent.autoFile = autoFileResult;
 
   if (userId && content) {
-    const memoryFacts = extractMemoryFacts(content);
-    for (const fact of memoryFacts) {
-      activeMemory.createMemoryEntry(userId, fact, {
-        source: 'user_message',
-        category: 'conversation',
-        confidence: 0.6,
-        strength: 0.2,
-      });
+    try {
+      const memoryFacts = extractMemoryFacts(content);
+      for (const fact of memoryFacts) {
+        activeMemory.createMemoryEntry(userId, fact, {
+          source: 'user_message',
+          category: 'conversation',
+          confidence: 0.6,
+          strength: 0.2,
+        });
+      }
+      enrichedContent.memoryOps = { factsExtracted: memoryFacts.length };
+      activeMemory.autoPromote(userId);
+      activeMemory.expireStale();
+    } catch (_memErr) {
+      enrichedContent.memoryOps = { factsExtracted: 0 };
     }
-    enrichedContent.memoryOps = { factsExtracted: memoryFacts.length };
-
-    activeMemory.autoPromote(userId);
-    activeMemory.expireStale();
   }
 
   return enrichedContent;
@@ -146,8 +155,12 @@ async function enrichAIRequest(userId, content, opts = {}) {
 
   let autoFileResult = null;
   if (enriched.autoFile.shouldAutoFile && userId) {
-    autoFileResult = await autoFileBridge.ingestPastedContent(userId, content);
-    enriched.autoFileResult = autoFileResult;
+    try {
+      autoFileResult = await autoFileBridge.ingestPastedContent(userId, content);
+      enriched.autoFileResult = autoFileResult;
+    } catch (_fileErr) {
+      enriched.autoFileResult = null;
+    }
   }
 
   const memoryPrompt = userId ? activeMemory.buildMemoryPrompt(userId, { limit: 12 }) : '';

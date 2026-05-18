@@ -344,6 +344,103 @@ describe('cowork-progress-stream writeSSE fix', () => {
   });
 });
 
+describe('skill-tool-adapter', () => {
+  const { resolveToolNames, getSkillManifests, recommendToolsForIntent, TOOL_ALIASES } = require('../src/services/skill-tool-adapter');
+
+  it('resolves abstract tool names to concrete tools', () => {
+    const resolved = resolveToolNames(['deep_document_analyzer', 'rag_retrieve', 'code_sandbox']);
+    assert.ok(resolved.includes('deep_analyze'));
+    assert.ok(resolved.includes('rag_retrieve'));
+    assert.ok(resolved.includes('python_exec'));
+  });
+
+  it('returns empty for unknown tools', () => {
+    const resolved = resolveToolNames(['nonexistent_tool_xyz']);
+    assert.equal(resolved.length, 0);
+  });
+
+  it('returns empty for non-array input', () => {
+    const resolved = resolveToolNames('not-array');
+    assert.equal(resolved.length, 0);
+  });
+
+  it('generates skill manifests for all registered skills', () => {
+    const manifests = getSkillManifests();
+    const keys = Object.keys(manifests);
+    assert.ok(keys.length >= 10, `expected >= 10 skill manifests, got ${keys.length}`);
+    for (const key of keys) {
+      assert.ok(key.startsWith('skill_'), `manifest key should start with skill_: ${key}`);
+      assert.ok(manifests[key]._skillMeta, `manifest should have _skillMeta: ${key}`);
+    }
+  });
+
+  it('each skill manifest has valid manifest fields', () => {
+    const manifests = getSkillManifests();
+    for (const [name, m] of Object.entries(manifests)) {
+      assert.ok(m.name, `${name} missing name`);
+      assert.ok(m.purpose, `${name} missing purpose`);
+      assert.ok(m.inputs, `${name} missing inputs`);
+      assert.ok(m.outputs, `${name} missing outputs`);
+      assert.ok(Array.isArray(m.allowed_formats), `${name} missing allowed_formats`);
+      assert.ok(Array.isArray(m.expected_errors), `${name} missing expected_errors`);
+      assert.ok(m.usage_limits, `${name} missing usage_limits`);
+    }
+  });
+
+  it('maps skill clearance to manifest scopes', () => {
+    const manifests = getSkillManifests();
+    const enterpriseSkill = Object.values(manifests).find(m => m._skillMeta?.clearance === 'enterprise');
+    if (enterpriseSkill) {
+      assert.ok(enterpriseSkill.scopes.includes('enterprise'));
+    }
+  });
+
+  it('recommendToolsForIntent returns concrete tools', () => {
+    const result = recommendToolsForIntent('analyze this legal contract', {
+      hasDocuments: true,
+      needsAnalysis: true,
+    });
+    assert.ok(Array.isArray(result.recommendedSkills));
+    assert.ok(Array.isArray(result.concreteTools));
+  });
+
+  it('TOOL_ALIASES maps to valid concrete tools', () => {
+    assert.equal(TOOL_ALIASES['deep_document_analyzer'], 'deep_analyze');
+    assert.equal(TOOL_ALIASES['code_sandbox'], 'python_exec');
+    assert.equal(TOOL_ALIASES['active_memory'], 'memory_recall');
+    assert.equal(TOOL_ALIASES['document_comparison'], 'compare_documents');
+  });
+});
+
+describe('active-memory background cleanup', () => {
+  const activeMemory = require('../src/services/active-memory');
+
+  it('has startCleanup and stopCleanup functions', () => {
+    assert.ok(typeof activeMemory.startCleanup === 'function');
+    assert.ok(typeof activeMemory.stopCleanup === 'function');
+  });
+
+  it('stopCleanup does not throw', () => {
+    activeMemory.stopCleanup();
+    activeMemory.startCleanup();
+  });
+});
+
+describe('cowork-engine error handling', () => {
+  const coworkEngine = require('../src/services/cowork-engine');
+
+  it('enrichAIRequest handles autoFile failure gracefully', async () => {
+    const result = await coworkEngine.enrichAIRequest('test-error-user', 'Short message', {});
+    assert.ok(result);
+    assert.ok(result.systemPromptAdditions !== undefined);
+  });
+
+  it('processIncomingMessage handles memory errors gracefully', () => {
+    const result = coworkEngine.processIncomingMessage('test-error-user', 'I prefer Python for backend development', {});
+    assert.ok(result);
+  });
+});
+
 describe('cowork-engine deepAnalysisPrompt fix', () => {
   const coworkEngine = require('../src/services/cowork-engine');
 

@@ -315,6 +315,24 @@ function expireStale() {
   return { expired };
 }
 
+const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
+let cleanupTimer = null;
+
+function startCleanup() {
+  if (cleanupTimer) return;
+  cleanupTimer = setInterval(() => { expireStale(); }, CLEANUP_INTERVAL_MS);
+  if (cleanupTimer.unref) cleanupTimer.unref();
+}
+
+function stopCleanup() {
+  if (cleanupTimer) {
+    clearInterval(cleanupTimer);
+    cleanupTimer = null;
+  }
+}
+
+startCleanup();
+
 module.exports = {
   createMemoryEntry,
   recall,
@@ -328,6 +346,8 @@ module.exports = {
   clearUserMemory,
   getStats,
   expireStale,
+  startCleanup,
+  stopCleanup,
   PROMOTION_THRESHOLD,
   DEMOTION_THRESHOLD,
 };

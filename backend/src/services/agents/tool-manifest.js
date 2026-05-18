@@ -1756,6 +1756,17 @@ Object.assign(BUILTIN_MANIFESTS, getVisualMediaManifests());
 Object.assign(BUILTIN_MANIFESTS, getDocIntelManifests());
 Object.assign(BUILTIN_MANIFESTS, getCoworkManifests());
 
+let _skillAdapterCache = null;
+function getSkillAdapterManifests() {
+  if (_skillAdapterCache) return _skillAdapterCache;
+  try {
+    const { getSkillManifests } = require('../skill-tool-adapter');
+    _skillAdapterCache = getSkillManifests();
+  } catch (_e) { _skillAdapterCache = {}; }
+  return _skillAdapterCache;
+}
+Object.assign(BUILTIN_MANIFESTS, getSkillAdapterManifests());
+
 function getCoworkManifests() {
   return {
     deep_analyze: {

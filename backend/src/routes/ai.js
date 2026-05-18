@@ -601,6 +601,53 @@ function isImageMime(mimeType) {
   return typeof mimeType === 'string' && mimeType.toLowerCase().startsWith('image/');
 }
 
+function routeSupportsVision(provider, model) {
+  try {
+    if (typeof aiService.modelSupportsVision === 'function') {
+      return aiService.modelSupportsVision(provider, model);
+    }
+  } catch { /* fallback to inline check */ }
+  const p = String(provider || '').toLowerCase();
+  const m = String(model || '').toLowerCase();
+  if (p === 'deepseek') return false;
+  if (p === 'gemini') return /^gemini/.test(m);
+  if (p === 'openai') return /(gpt-4o|gpt-4\.1|gpt-5|o3|o4|vision)/.test(m);
+  if (p === 'openrouter') return /(gpt-4o|gpt-4\.1|gpt-5|gemini|claude|qwen.*vl|vision|llava|pixtral)/.test(m);
+  return false;
+}
+
+function sanitizeErrorForUser(error) {
+  const msg = String(error?.message || error || 'AI generation failed');
+  if (/does not support image/i.test(msg)) {
+    return 'El modelo seleccionado no admite imágenes. Intenta con un modelo compatible con visión o adjunta documentos en lugar de imágenes.';
+  }
+  if (/cannot read.*image/i.test(msg)) {
+    return 'No se pudieron procesar las imágenes adjuntas con este modelo. Intenta con un modelo compatible con visión.';
+  }
+  if (/image input/i.test(msg)) {
+    return 'El modelo no soporta entrada de imagen. Intenta con un modelo compatible con visión o adjunta documentos en lugar de imágenes.';
+  }
+  if (/content.*policy|safety/i.test(msg)) {
+    return 'La solicitud no pudo ser procesada debido a las políticas de contenido del proveedor.';
+  }
+  if (/context.*(window|length|token|exceed)/i.test(msg)) {
+    return 'El mensaje es demasiado largo para el modelo seleccionado. Intenta reducir el contenido o usar un modelo con mayor capacidad de contexto.';
+  }
+  if (/quota|billing|payment|subscription/i.test(msg)) {
+    return 'Se alcanzó el límite de uso del proveedor. Intenta más tarde o usa un modelo diferente.';
+  }
+  if (/429|rate.?limit|too many/i.test(msg)) {
+    return 'El servidor está procesando muchas solicitudes. Intenta de nuevo en unos segundos.';
+  }
+  if (/auth|api.?key|401|403|invalid.*key/i.test(msg)) {
+    return 'Error de configuración del servicio. Por favor contacta al administrador.';
+  }
+  if (/timeout|timed.?out|ETIMEDOUT/i.test(msg)) {
+    return 'La solicitud tardó demasiado. Intenta de nuevo.';
+  }
+  return 'Hubo un problema procesando tu solicitud. Por favor intenta de nuevo.';
+}
+
 function toProcessedFile(file) {
   if (!file) return null;
   const attachmentKind = isImageMime(file.mimeType) ? 'image' : 'document';
@@ -2441,7 +2488,27 @@ router.post(
         }
       }
 
-      const systemInstruction = { role: 'system', content: promptBundle.system + universalContractBlock + enterpriseExecutionBlock + memoryBlock + feedbackBlock + evidenceBlock + documentEnrichmentBlock + coworkBlock };
+      let fidelityBlock = '';
+      if (canPersist && chatId) {
+        try {
+          const lastAssistant = await prisma.message.findFirst({
+            where: { chatId, role: 'ASSISTANT' },
+            orderBy: { timestamp: 'desc' },
+            select: { content: true, files: true },
+          });
+          if (lastAssistant?.content && lastAssistant.files) {
+            const prevFiles = JSON.parse(lastAssistant.files || '[]');
+            if (Array.isArray(prevFiles) && prevFiles.length > 0) {
+              const audit = documentResponseFidelity.auditChatResponse(lastAssistant.content, prevFiles);
+              if (audit.note && (audit.unsupported > 0 || audit.contradicted > 0)) {
+                fidelityBlock = `\n\n## PREVIOUS RESPONSE FIDELITY WARNING\nYour last answer contained ${audit.unsupported} unsupported and ${audit.contradicted} contradicted claims. Re-verify numbers, dates, and entity names against the source documents before asserting them.`;
+              }
+            }
+          }
+        } catch (_fidErr) { /* non-fatal */ }
+      }
+
+      const systemInstruction = { role: 'system', content: promptBundle.system + universalContractBlock + enterpriseExecutionBlock + memoryBlock + feedbackBlock + evidenceBlock + documentEnrichmentBlock + coworkBlock + fidelityBlock };
       console.log(`📝 system prompt built: intent=${promptBundle.intent} lang=${promptBundle.language} chars=${systemInstruction.content.length} profile=${userProfile ? 'yes' : 'no'} memory=${memoryBlock ? 'yes' : 'no'} feedback=${feedbackBlock ? 'yes' : 'no'} rag=${operationalRagContext?.active ? 'yes' : 'no'} contract=${universalTaskContract?.pipeline || 'none'} graph=${enterpriseExecutionGraph?.graph_id || 'none'} cira=${ciraRuntimeBundle?.envelope?.request_id || 'none'} docEnrichment=${documentEnrichment ? `${documentEnrichment.primaryDocType}/${documentEnrichment.perFileProfile.length}` : 'none'}`);
 
       // ✅ IMPROVED: Get previous chat history with proper image handling
@@ -2487,11 +2554,11 @@ router.post(
             !(isImageMime(f.mimeType) || isImageMime(f.type) || f?.type === 'image')
           );
 
-          if (imageFiles.length > 0) {
-            // ✅ Build content array for messages with images
+          const canVision = routeSupportsVision(actualProvider, actualModel);
+
+          if (imageFiles.length > 0 && canVision) {
             let textContent = m.content;
 
-            // ✅ Add LaTeX formatting instruction for historical images with potential math content
             if (m.role === 'USER' && imageFiles.length > 0) {
               textContent += '\n\nIMPORTANT: If the uploaded image(s) contain mathematical equations, formulas, or expressions, ' +
                 'please transcribe and format them using proper LaTeX syntax. Use single dollar signs ($...$) for inline math ' +
@@ -2502,7 +2569,6 @@ router.post(
               { type: 'text', text: textContent }
             ];
 
-            // Add images in proper vision format
             for (const imgFile of imageFiles) {
               try {
                 const imagePath = imgFile.path;
@@ -2527,7 +2593,6 @@ router.post(
               }
             }
 
-            // Add text context for non-image files
             if (nonImageFiles.length > 0) {
               const textContext = nonImageFiles.map(f => {
                 const content = f.extractedText || 'Binary file - content not available';
@@ -2542,14 +2607,15 @@ router.post(
               content: contentArray
             });
           } else {
-            // ✅ Regular text message (no images)
             let messageContent = m.content;
 
-            if (currentTurnHasNonImageFiles && historicalImageFiles.length > 0) {
+            if (imageFiles.length > 0 && !canVision) {
+              const imageNames = imageFiles.map(f => f.name || f.originalName || 'imagen').join(', ');
+              messageContent += `\n\n[${imageFiles.length} imagen(es) adjunta(s): ${imageNames}. Este modelo no soporta entrada de imagen; las imágenes no se pudieron procesar visualmente.]`;
+            } else if (currentTurnHasNonImageFiles && historicalImageFiles.length > 0) {
               messageContent += `\n\n[${historicalImageFiles.length} previous image attachment(s) omitted because the current user turn has document attachments. Do not use those previous visuals unless explicitly requested.]`;
             }
 
-            // Add context for non-image files
             if (nonImageFiles.length > 0) {
               const fileContext = nonImageFiles.map(f => {
                 const content = f.extractedText || 'Binary file - content not available';
@@ -2741,6 +2807,14 @@ router.post(
       }
       try {
         if (!artifactHandled) {
+        const filesForVision = routeSupportsVision(actualProvider, actualModel)
+          ? processedFiles
+          : processedFiles.filter(f => !isImageMime(f.mimeType));
+        if (filesForVision.length < processedFiles.length) {
+          const skippedImages = processedFiles.filter(f => isImageMime(f.mimeType));
+          const imageNames = skippedImages.map(f => f.name || f.originalName || 'imagen').join(', ');
+          console.log(`[vision] Stripping ${skippedImages.length} image(s) for non-vision model ${actualProvider}:${actualModel}: ${imageNames}`);
+        }
         fullResponseContent = await aiService.generateStream({
           provider: actualProvider,
           model: actualModel,
@@ -2748,7 +2822,7 @@ router.post(
           res,
           signal,
           temperature: actualTemperature,
-          files: processedFiles,
+          files: filesForVision,
           language: langResolution.language,
           userPrompt: prompt,
           qualityGuard: true,
@@ -3027,14 +3101,13 @@ router.post(
     } catch (error) {
       console.error('AI generation error:', error);
 
-      // ✅ Check if headers were already sent (streaming started)
+      const sanitizedError = sanitizeErrorForUser(error);
+
       if (!res.headersSent) {
-        // Headers not sent yet, safe to send error response
-        res.status(500).json({ error: error.message || 'AI generation failed' });
+        res.status(500).json({ error: sanitizedError });
       } else {
-        // Headers already sent (streaming started), send error via SSE format
         try {
-          res.write(`data: ${JSON.stringify({ error: error.message || 'AI generation failed' })}\n\n`);
+          res.write(`data: ${JSON.stringify({ error: sanitizedError })}\n\n`);
         } catch (writeError) {
           console.error('Failed to write error to stream:', writeError);
         }
