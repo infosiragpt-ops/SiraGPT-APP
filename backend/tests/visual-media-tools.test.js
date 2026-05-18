@@ -653,8 +653,8 @@ test('create_dashboard_html: no charts', async () => {
 
 // ── Tool metadata ────────────────────────────────────────────────
 
-test('all 23 tools have valid metadata', () => {
-  assert.equal(VISUAL_MEDIA_TOOLS.length, 23);
+test('all 24 tools have valid metadata', () => {
+  assert.equal(VISUAL_MEDIA_TOOLS.length, 24);
   for (const t of VISUAL_MEDIA_TOOLS) {
     assert.ok(t.name);
     assert.ok(t.description);
@@ -2577,6 +2577,168 @@ test('create_user_journey_map: emits expected events', async () => {
   await tool('create_user_journey_map').execute({
     title: 'Events',
     stages: [{ name: 'A', emotion: 3 }, { name: 'B', emotion: 4 }],
+  }, ctx);
+  const types = ctx._events.map(e => e.type);
+  assert.ok(types.includes('tool_call'));
+  assert.ok(types.includes('file_artifact'));
+  assert.ok(types.includes('tool_output'));
+});
+
+// ── create_okr_dashboard ─────────────────────────────────────────
+
+test('create_okr_dashboard: 2-objective dashboard with progress bars', async () => {
+  const okr = tool('create_okr_dashboard');
+  assert.ok(okr);
+  const r = await okr.execute({
+    title: 'Q2 2026 OKRs',
+    subtitle: 'SiraGPT team',
+    objectives: [
+      {
+        title: 'Grow LATAM MRR',
+        owner: 'Sales',
+        keyResults: [
+          { label: 'MRR LATAM',            current: 35,  target: 50,  unit: 'K$' },
+          { label: 'Países LATAM activos', current: 4,   target: 6 },
+          { label: 'NRR LATAM',            current: 110, target: 115, unit: '%' },
+        ],
+      },
+      {
+        title: 'Mejorar activación',
+        owner: 'Product',
+        keyResults: [
+          { label: 'Día-7 retention', current: 28, target: 45, unit: '%' },
+          { label: 'Tiempo a primer valor', current: 8, target: 4, unit: 'min' },
+        ],
+      },
+    ],
+    theme: 'professional',
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.objectives, 2);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.startsWith('<svg'));
+  assert.ok(svg.includes('Q2 2026 OKRs'));
+  assert.ok(svg.includes('Grow LATAM MRR'));
+  assert.ok(svg.includes('Mejorar activación'));
+  assert.ok(svg.includes('KR1'));
+  assert.ok(svg.includes('OBJETIVO 1'));
+  assert.ok(svg.includes('OBJETIVO 2'));
+  // Status pills
+  assert.ok(svg.includes('ON TRACK') || svg.includes('AT RISK') || svg.includes('BEHIND'));
+});
+
+test('create_okr_dashboard: status thresholds (red < 33%, amber < 67%, green >= 67%)', async () => {
+  const r = await tool('create_okr_dashboard').execute({
+    title: 'Thresholds',
+    objectives: [
+      // 80% → green / ON TRACK
+      { title: 'Green', keyResults: [{ label: 'a', current: 80, target: 100 }] },
+      // 50% → amber / AT RISK
+      { title: 'Amber', keyResults: [{ label: 'b', current: 50, target: 100 }] },
+      // 10% → red / BEHIND
+      { title: 'Red',   keyResults: [{ label: 'c', current: 10, target: 100 }] },
+    ],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.tally.onTrack, 1);
+  assert.equal(r.tally.atRisk, 1);
+  assert.equal(r.tally.behind, 1);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.includes('ON TRACK'));
+  assert.ok(svg.includes('AT RISK'));
+  assert.ok(svg.includes('BEHIND'));
+});
+
+test('create_okr_dashboard: empty objectives fails', async () => {
+  const r = await tool('create_okr_dashboard').execute({
+    title: 'Empty',
+    objectives: [],
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /objectives.*empty/i);
+});
+
+test('create_okr_dashboard: caps objectives at 6 and KRs at 5', async () => {
+  const objs = Array.from({ length: 8 }, (_, i) => ({
+    title: `O${i + 1}`,
+    keyResults: Array.from({ length: 7 }, (_, k) => ({ label: `kr${k + 1}`, current: k, target: 10 })),
+  }));
+  const r = await tool('create_okr_dashboard').execute({
+    title: 'Overflow',
+    objectives: objs,
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.objectives, 6, 'objective cap at 6');
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  // 5 KRs per cap
+  assert.ok(svg.includes('KR5'));
+  // KR6 from any obj should NOT appear
+  assert.equal(svg.includes('KR6'), false);
+});
+
+test('create_okr_dashboard: progress clamped to [0, 100]%', async () => {
+  const r = await tool('create_okr_dashboard').execute({
+    title: 'Clamp',
+    objectives: [
+      // Beyond target → should clamp at 100%
+      { title: 'Over', keyResults: [{ label: 'over', current: 200, target: 100 }] },
+      // Negative current → should clamp at 0%
+      { title: 'Under', keyResults: [{ label: 'under', current: -50, target: 100 }] },
+    ],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  // 100% pill rendered for first obj, 0% for second
+  assert.ok(svg.includes('100%'));
+  assert.ok(svg.includes('0%'));
+});
+
+test('create_okr_dashboard: target=0 with current=0 treated as 100% (not NaN)', async () => {
+  const r = await tool('create_okr_dashboard').execute({
+    title: 'Zero target',
+    objectives: [
+      { title: 'Zero', keyResults: [{ label: 'kr', current: 0, target: 0 }] },
+    ],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.equal(svg.includes('NaN'), false);
+  // 0/0 case is treated as 100% (the only sensible interpretation)
+  assert.ok(svg.includes('100%'));
+});
+
+test('create_okr_dashboard: xml-escapes content', async () => {
+  const r = await tool('create_okr_dashboard').execute({
+    title: 'XSS',
+    objectives: [
+      { title: '<script>x</script>', keyResults: [{ label: '"injected"', current: 5, target: 10 }] },
+    ],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.equal(svg.includes('<script>x</script>'), false);
+  assert.ok(svg.includes('&lt;script&gt;'));
+  assert.ok(svg.includes('&quot;injected&quot;'));
+});
+
+test('create_okr_dashboard: supports all four themes', async () => {
+  for (const theme of ['professional', 'modern', 'minimal', 'corporate']) {
+    const r = await tool('create_okr_dashboard').execute({
+      title: `Theme ${theme}`,
+      objectives: [{ title: 'O', keyResults: [{ label: 'k', current: 5, target: 10 }] }],
+      theme,
+    }, fakeCtx());
+    assert.equal(r.ok, true, `theme ${theme} should succeed`);
+    const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+    assert.ok(svg.startsWith('<svg'));
+  }
+});
+
+test('create_okr_dashboard: emits expected events', async () => {
+  const ctx = fakeCtx();
+  await tool('create_okr_dashboard').execute({
+    title: 'Events',
+    objectives: [{ title: 'O', keyResults: [{ label: 'k', current: 5, target: 10 }] }],
   }, ctx);
   const types = ctx._events.map(e => e.type);
   assert.ok(types.includes('tool_call'));

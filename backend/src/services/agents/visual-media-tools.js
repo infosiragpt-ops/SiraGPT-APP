@@ -5446,6 +5446,288 @@ const createUserJourneyMap = {
   },
 };
 
+// ─────────────────────────────────────────────────────────────────────────
+// Tool 24: create_okr_dashboard
+// ─────────────────────────────────────────────────────────────────────────
+
+const createOkrDashboard = {
+  name: 'create_okr_dashboard',
+  description: 'Generate an OKR (Objectives & Key Results) dashboard as an SVG file: N Objective cards (1-6) each with 1-5 Key Result rows showing progress bars, current vs target values, and color-coded status (red/amber/green). Use for quarterly OKR reviews, team status reports, strategy execution dashboards, or any goal-tracking summary.',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string', description: 'Dashboard title (e.g. "Q2 2026 OKRs").' },
+      subtitle: { type: 'string', description: 'Optional context line (e.g. team, period, owner).' },
+      objectives: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            title: { type: 'string', description: 'Objective title.' },
+            owner: { type: 'string', description: 'Optional owner / team.' },
+            keyResults: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  label:   { type: 'string', description: 'KR description (what success looks like).' },
+                  current: { type: 'number', description: 'Current value.' },
+                  target:  { type: 'number', description: 'Target value to reach.' },
+                  unit:    { type: 'string', description: 'Optional unit (e.g. "%", "users", "$M").' },
+                },
+                required: ['label', 'current', 'target'],
+              },
+              description: '1-5 key results per objective.',
+            },
+          },
+          required: ['title', 'keyResults'],
+        },
+        description: '1-6 objectives.',
+      },
+      theme: { type: 'string', enum: ['professional', 'modern', 'minimal', 'corporate'], description: 'Visual theme. Default: "professional".' },
+    },
+    required: ['title', 'objectives'],
+    additionalProperties: false,
+  },
+  async execute({ title, subtitle = '', objectives = [], theme = 'professional' }, ctx = {}) {
+    emitEvent(ctx, 'tool_call', { tool: 'create_okr_dashboard', preview: title });
+
+    try {
+      if (!Array.isArray(objectives) || objectives.length === 0) {
+        return { ok: false, error: 'objectives array is empty' };
+      }
+
+      const themes = {
+        professional: {
+          bg: '#FAFBFC', card: '#FFFFFF', text: '#1E293B', muted: '#64748B', border: '#E2E8F0', accent: '#2563EB',
+          // Status thresholds: red < 33, amber 33-67, green > 67
+          red: '#EF4444', amber: '#F59E0B', green: '#10B981',
+          barBg: '#F1F5F9',
+        },
+        modern: {
+          bg: '#0B1121', card: '#1E293B', text: '#F1F5F9', muted: '#94A3B8', border: '#334155', accent: '#818CF8',
+          red: '#F87171', amber: '#FBBF24', green: '#34D399',
+          barBg: '#334155',
+        },
+        minimal: {
+          bg: '#FFFFFF', card: '#FFFFFF', text: '#0F172A', muted: '#64748B', border: '#CBD5E1', accent: '#0F172A',
+          red: '#0F172A', amber: '#475569', green: '#0F172A',
+          barBg: '#F1F5F9',
+        },
+        corporate: {
+          bg: '#F8FAFC', card: '#FFFFFF', text: '#0F172A', muted: '#475569', border: '#CBD5E1', accent: '#1E40AF',
+          red: '#D93025', amber: '#F9AB00', green: '#0F9D58',
+          barBg: '#F1F5F9',
+        },
+      };
+      const t = themes[theme] || themes.professional;
+
+      const safeTitle = xmlEscape(String(title).slice(0, 120));
+      const safeSubtitle = xmlEscape(String(subtitle || '').slice(0, 140));
+      const objList = objectives.slice(0, 6);
+
+      function statusColor(pct) {
+        if (pct >= 0.67) return t.green;
+        if (pct >= 0.33) return t.amber;
+        return t.red;
+      }
+      function statusLabel(pct) {
+        if (pct >= 0.67) return 'ON TRACK';
+        if (pct >= 0.33) return 'AT RISK';
+        return 'BEHIND';
+      }
+      function fmtNumber(n) {
+        if (!Number.isFinite(n)) return '0';
+        if (Math.abs(n) >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+        if (Math.abs(n) >= 1000) return `${(n / 1000).toFixed(1)}K`;
+        if (Number.isInteger(n)) return String(n);
+        return n.toFixed(1);
+      }
+
+      // Pre-compute progress for each objective
+      const objData = objList.map(obj => {
+        const krs = (Array.isArray(obj.keyResults) ? obj.keyResults : []).slice(0, 5).map(kr => {
+          // Avoid `|| 0` / `|| 1` so legit zero values aren't coerced
+          // — distinguishing target=0 (degenerate but meaningful) from
+          // target=undefined matters for the 0/0 → 100% rule below.
+          const rawCurrent = Number(kr.current);
+          const rawTarget = Number(kr.target);
+          const current = Number.isFinite(rawCurrent) ? rawCurrent : 0;
+          const target = Number.isFinite(rawTarget) ? rawTarget : 0;
+          // Progress relative to target. Target=0 → treat as 100% if current also 0, else 0.
+          let pct = 0;
+          if (target > 0) pct = Math.max(0, Math.min(1, current / target));
+          else if (target === 0 && current === 0) pct = 1;
+          return {
+            label: xmlEscape(String(kr.label || '').slice(0, 80)),
+            current,
+            target,
+            unit: xmlEscape(String(kr.unit || '').slice(0, 8)),
+            pct,
+          };
+        });
+        const objPct = krs.length > 0 ? krs.reduce((s, k) => s + k.pct, 0) / krs.length : 0;
+        return {
+          title: xmlEscape(String(obj.title || '').slice(0, 80)),
+          owner: xmlEscape(String(obj.owner || '').slice(0, 36)),
+          krs,
+          pct: objPct,
+        };
+      });
+
+      // Layout: cards in a 2-column grid (or 1 column when only 1 objective).
+      const cardW = 540;
+      const cardGap = 16;
+      const cols = Math.min(2, objList.length);
+      const rows = Math.ceil(objList.length / cols);
+      const pad = 28;
+      const headerH = safeSubtitle ? 110 : 86;
+
+      const krRowH = 50;
+      // Card height = obj header + KR rows + footer
+      function cardHeight(obj) {
+        return 76 + Math.max(1, obj.krs.length) * krRowH + 24;
+      }
+      // Compute per-row heights so cards in the same row align
+      const rowHeights = [];
+      for (let r = 0; r < rows; r++) {
+        let maxH = 0;
+        for (let c = 0; c < cols; c++) {
+          const idx = r * cols + c;
+          if (idx < objData.length) {
+            const h = cardHeight(objData[idx]);
+            if (h > maxH) maxH = h;
+          }
+        }
+        rowHeights.push(maxH);
+      }
+      const totalCardsH = rowHeights.reduce((s, h) => s + h, 0) + (rows - 1) * cardGap;
+
+      const W = pad * 2 + cardW * cols + cardGap * (cols - 1);
+      const H = headerH + pad + totalCardsH + pad;
+
+      let body = `<rect width="${W}" height="${H}" fill="${t.bg}" rx="12"/>`;
+      // Header
+      body += `<rect x="0" y="0" width="${W}" height="${headerH}" fill="${t.accent}"/>`;
+      body += `<text x="${W / 2}" y="42" text-anchor="middle" font-family="Georgia, serif" font-size="24" font-weight="bold" fill="#fff">${safeTitle}</text>`;
+      // Overall avg progress
+      const overallPct = objData.length > 0 ? objData.reduce((s, o) => s + o.pct, 0) / objData.length : 0;
+      body += `<text x="${W / 2}" y="66" text-anchor="middle" font-family="Arial" font-size="12" fill="#fff" opacity="0.85">${objList.length} objetivos · ${(overallPct * 100).toFixed(0)}% progreso global</text>`;
+      if (safeSubtitle) {
+        body += `<text x="${W / 2}" y="92" text-anchor="middle" font-family="Arial" font-size="13" fill="#fff" opacity="0.92">${safeSubtitle}</text>`;
+      }
+
+      // Cards
+      let cardY = headerH + pad;
+      objData.forEach((obj, idx) => {
+        const c = idx % cols;
+        const r = Math.floor(idx / cols);
+        const x = pad + c * (cardW + cardGap);
+        // Position by accumulated row heights
+        let y = headerH + pad;
+        for (let i = 0; i < r; i++) y += rowHeights[i] + cardGap;
+        const h = rowHeights[r];
+        const objColor = statusColor(obj.pct);
+
+        // Card
+        body += `<rect x="${x}" y="${y}" width="${cardW}" height="${h}" rx="10" fill="${t.card}" stroke="${t.border}" stroke-width="1" filter="url(#vis-shadow)"/>`;
+        body += `<rect x="${x}" y="${y}" width="6" height="${h}" rx="3" fill="${objColor}"/>`;
+
+        // Objective header
+        body += `<text x="${x + 22}" y="${y + 28}" font-family="Arial" font-size="11" font-weight="bold" fill="${t.muted}">OBJETIVO ${idx + 1}</text>`;
+        body += `<text x="${x + 22}" y="${y + 50}" font-family="Arial" font-size="15" font-weight="bold" fill="${t.text}">${obj.title}</text>`;
+        if (obj.owner) {
+          body += `<text x="${x + 22}" y="${y + 68}" font-family="Arial" font-size="11" fill="${t.muted}">${obj.owner}</text>`;
+        }
+        // Big progress pill at right
+        const pctText = `${(obj.pct * 100).toFixed(0)}%`;
+        const statusText = statusLabel(obj.pct);
+        body += `<rect x="${x + cardW - 130}" y="${y + 18}" width="116" height="38" rx="8" fill="${objColor}"/>`;
+        body += `<text x="${x + cardW - 72}" y="${y + 38}" text-anchor="middle" font-family="Arial" font-size="18" font-weight="bold" fill="#fff">${pctText}</text>`;
+        body += `<text x="${x + cardW - 72}" y="${y + 52}" text-anchor="middle" font-family="Arial" font-size="9" font-weight="bold" fill="#fff" opacity="0.85">${statusText}</text>`;
+
+        // KR rows
+        const krBase = y + 76;
+        if (obj.krs.length === 0) {
+          body += `<text x="${x + cardW / 2}" y="${krBase + krRowH / 2 + 4}" text-anchor="middle" font-family="Arial" font-size="12" fill="${t.muted}" font-style="italic">— sin key results —</text>`;
+        } else {
+          obj.krs.forEach((kr, krIdx) => {
+            const ky = krBase + krIdx * krRowH;
+            const krColor = statusColor(kr.pct);
+            // KR label
+            body += `<text x="${x + 22}" y="${ky + 16}" font-family="Arial" font-size="12" font-weight="600" fill="${t.text}">KR${krIdx + 1}: ${kr.label}</text>`;
+            // Progress bar bg
+            const barX = x + 22;
+            const barY = ky + 24;
+            const barW = cardW - 180;
+            const barH = 12;
+            body += `<rect x="${barX}" y="${barY}" width="${barW}" height="${barH}" rx="6" fill="${t.barBg}"/>`;
+            // Progress bar fill
+            const fillW = barW * kr.pct;
+            body += `<rect x="${barX}" y="${barY}" width="${fillW}" height="${barH}" rx="6" fill="${krColor}"/>`;
+            // Current/target text
+            const valueText = `${fmtNumber(kr.current)} / ${fmtNumber(kr.target)}${kr.unit ? ' ' + kr.unit : ''}`;
+            body += `<text x="${x + cardW - 22}" y="${ky + 16}" text-anchor="end" font-family="Arial" font-size="11" font-weight="bold" fill="${t.text}">${valueText}</text>`;
+            body += `<text x="${x + cardW - 22}" y="${barY + 9}" text-anchor="end" font-family="Arial" font-size="10" fill="${krColor}" font-weight="bold">${(kr.pct * 100).toFixed(0)}%</text>`;
+          });
+        }
+      });
+
+      const svg = svgDocument({
+        width: W,
+        height: H,
+        title: safeTitle,
+        description: `OKR dashboard: ${safeTitle}`,
+        body,
+      });
+
+      const buffer = Buffer.from(svg, 'utf8');
+      const filename = `okr_${crypto.randomBytes(4).toString('hex')}.svg`;
+      const artifact = finalizeArtifact({ filename, buffer, mime: EXTENSION_TO_MIME.svg, ctx });
+
+      emitEvent(ctx, 'file_artifact', {
+        artifact: {
+          id: artifact.id,
+          filename: artifact.filename,
+          format: 'svg',
+          mime: 'image/svg+xml',
+          sizeBytes: artifact.sizeBytes,
+          downloadUrl: artifact.downloadUrl,
+        },
+      });
+
+      const tally = { onTrack: 0, atRisk: 0, behind: 0 };
+      objData.forEach(o => {
+        if (o.pct >= 0.67) tally.onTrack += 1;
+        else if (o.pct >= 0.33) tally.atRisk += 1;
+        else tally.behind += 1;
+      });
+
+      emitEvent(ctx, 'tool_output', {
+        tool: 'create_okr_dashboard',
+        ok: true,
+        preview: `OKR dashboard: ${artifact.filename} (${objList.length} obj · ${(overallPct * 100).toFixed(0)}% · ${Math.round(artifact.sizeBytes / 1024)} KB)`,
+      });
+
+      return {
+        ok: true,
+        id: artifact.id,
+        filename: artifact.filename,
+        sizeBytes: artifact.sizeBytes,
+        downloadUrl: artifact.downloadUrl,
+        title,
+        objectives: objList.length,
+        overallPct: Number((overallPct * 100).toFixed(1)),
+        tally,
+      };
+    } catch (err) {
+      const msg = err?.message || String(err);
+      emitEvent(ctx, 'tool_output', { tool: 'create_okr_dashboard', ok: false, preview: `Error: ${msg}` });
+      return { ok: false, error: msg };
+    }
+  },
+};
+
 // ── All visual/media tools for the agent ──────────────────────────────
 
 const VISUAL_MEDIA_TOOLS = [
@@ -5472,6 +5754,7 @@ const VISUAL_MEDIA_TOOLS = [
   createPestelAnalysis,
   createRadarChart,
   createUserJourneyMap,
+  createOkrDashboard,
 ];
 
 // Internal helpers exposed for unit testing — NOT part of the public agent

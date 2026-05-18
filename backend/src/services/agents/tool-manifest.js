@@ -949,6 +949,33 @@ function getVisualMediaManifests() {
       scopes: ["files.write"],
       data_classes: ["public","internal"],
     },
+    create_okr_dashboard: {
+      name: "create_okr_dashboard",
+      purpose: "Generate an OKR (Objectives & Key Results) dashboard SVG with N objective cards each containing 1-5 key results with progress bars and red/amber/green status. Use for quarterly OKR reviews, team status reports, strategy-execution dashboards.",
+      inputs: {
+        type: "object", required: ["title","objectives"],
+        properties: {
+          title: { type: "string" },
+          subtitle: { type: "string" },
+          objectives: { type: "array", items: { type: "object" }, description: "1-6 objectives: { title, owner?, keyResults: [{ label, current, target, unit? }] }." },
+          theme: { type: "string", enum: ["professional","modern","minimal","corporate"] },
+        },
+      },
+      outputs: { type: "object", properties: { ok: { type: "boolean" }, downloadUrl: { type: "string" }, id: { type: "string" }, filename: { type: "string" }, objectives: { type: "integer" }, overallPct: { type: "number" }, tally: { type: "object" } } },
+      allowed_formats: ["svg"],
+      forbidden_formats: [],
+      expected_errors: [
+        { code: "empty_objectives", description: "objectives array is empty.", repair_hint: "Provide at least one objective with its key results." },
+      ],
+      acceptance_tests: ["returns ok:true for a 3-objective Q2 OKR dashboard with 3-5 KRs each"],
+      usage_limits: { timeout_ms_default: 15000, timeout_ms_max: 60000, max_calls_per_task: 5, requires_auth: false, requires_network: false },
+      examples_positive: [{ when: "user wants a Q2 OKR review", call: { title: "Q2 OKRs", objectives: [{ title: "Grow LATAM MRR", keyResults: [{ label: "MRR LATAM", current: 22, target: 50, unit: "K$" }] }] } }],
+      examples_negative: [{ when: "user wants a KPI dashboard without targets", why: "use create_dashboard_html — OKR requires explicit current/target pairs for progress." }],
+      recovery_policy: { on_timeout: "Return ok:false.", on_error: "Surface the error.", max_retries: 1 },
+      side_effect_level: "local-fs",
+      scopes: ["files.write"],
+      data_classes: ["public","internal"],
+    },
     create_user_journey_map: {
       name: "create_user_journey_map",
       purpose: "Generate a customer / user journey map SVG with N stage columns × 5 standard lanes (Touchpoints, Actions, Thoughts, Pain Points, Opportunities) plus an emotion curve plotted on top. Use for UX research, customer-experience reviews, onboarding redesigns, service blueprints.",
