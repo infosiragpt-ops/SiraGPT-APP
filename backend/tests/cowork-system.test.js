@@ -425,7 +425,7 @@ describe('session-manager', () => {
     assert.equal(child.parentId, parent.id);
   });
 
-  it('compacts session', () => {
+  it('compacts session', async () => {
     const session = sessionManager.createSession(testUserId, { label: 'Compact Test' });
     for (let i = 0; i < 15; i++) {
       sessionManager.addMessage(session.id, {
@@ -434,7 +434,7 @@ describe('session-manager', () => {
         tokens: 3,
       });
     }
-    const result = sessionManager.compactSession(session.id, { keepFirst: 2, keepLast: 4 });
+    const result = await sessionManager.compactSession(session.id, { keepFirst: 2, keepLast: 4 });
     assert.ok(result.compacted);
     assert.ok(result.droppedMessages > 0);
   });

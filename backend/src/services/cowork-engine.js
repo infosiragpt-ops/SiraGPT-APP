@@ -173,27 +173,39 @@ async function enrichAIRequest(userId, content, opts = {}) {
   let deepAnalysisPrompt = '';
   if (autoFileResult?.autoFiled) {
     try {
-      const analysis = await deepDocumentAnalyzer.analyzeDeep(content, {
-        userId,
+      const analysisPipeline = require('./analysis-pipeline');
+      const proResult = analysisPipeline.runAnalysisPipeline(content, {
         fileName: autoFileResult.fileName,
         mimeType: autoFileResult.mime,
       });
-      enriched.deepAnalysis = analysis;
-      if (analysis) {
-        const parts = [];
-        parts.push('### Deep Analysis');
-        parts.push(`Domain: ${analysis.domain.primary} (confidence: ${Math.round(analysis.domain.confidence * 100)}%)`);
-        parts.push(`Quality: ${analysis.quality.grade} (${analysis.quality.overall}/100)`);
-        parts.push(`Risk: ${analysis.risks.severity} (${analysis.risks.items.length} factors)`);
-        parts.push(`PII: ${analysis.piiSummary.total} entities (${analysis.piiSummary.critical} critical)`);
-        parts.push(`Structure: ${analysis.structure.headingCount} sections`);
-        if (analysis.autoTags.length > 0) {
-          parts.push(`Tags: ${analysis.autoTags.slice(0, 8).join(', ')}`);
-        }
-        deepAnalysisPrompt = parts.join('\n');
+      enriched.deepAnalysis = proResult;
+      if (proResult && proResult.ok) {
+        deepAnalysisPrompt = analysisPipeline.buildAnalysisSystemPrompt(proResult);
       }
     } catch (_e) {
-      enriched.deepAnalysis = null;
+      try {
+        const analysis = await deepDocumentAnalyzer.analyzeDeep(content, {
+          userId,
+          fileName: autoFileResult.fileName,
+          mimeType: autoFileResult.mime,
+        });
+        enriched.deepAnalysis = analysis;
+        if (analysis) {
+          const parts = [];
+          parts.push('### Deep Analysis');
+          parts.push(`Domain: ${analysis.domain.primary} (confidence: ${Math.round(analysis.domain.confidence * 100)}%)`);
+          parts.push(`Quality: ${analysis.quality.grade} (${analysis.quality.overall}/100)`);
+          parts.push(`Risk: ${analysis.risks.severity} (${analysis.risks.items.length} factors)`);
+          parts.push(`PII: ${analysis.piiSummary.total} entities (${analysis.piiSummary.critical} critical)`);
+          parts.push(`Structure: ${analysis.structure.headingCount} sections`);
+          if (analysis.autoTags.length > 0) {
+            parts.push(`Tags: ${analysis.autoTags.slice(0, 8).join(', ')}`);
+          }
+          deepAnalysisPrompt = parts.join('\n');
+        }
+      } catch (_e2) {
+        enriched.deepAnalysis = null;
+      }
     }
   }
 

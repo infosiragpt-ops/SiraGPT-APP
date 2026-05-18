@@ -931,7 +931,6 @@ router.post(
       let processedFiles = [];
       let openaiFiles = [];
       if (isAuth && files && files.length > 0) {
-        if (typeof sendProgress === 'function') sendProgress('Cargando archivos', 5);
         processedFiles = await Promise.all(
           files.map(async (fileRef) => {
             const processedFile = await loadUserFile(fileRef, userId);
@@ -1041,7 +1040,6 @@ router.post(
       // Injects the 10 absolute rules, language policy, intent-specialized
       // context, the user's personalization, and the custom GPT persona
       // (when applicable) into the system message for THIS turn.
-      if (typeof sendProgress === 'function') sendProgress('Construyendo contexto', 10);
       const promptBundle = masterPrompt.buildSystemPrompt({
         language: langResolution.language,
         userMessage: prompt,
@@ -1058,7 +1056,6 @@ router.post(
       // key on) and for fresh users whose memory is still empty.
       let memoryBlock = '';
       if (userId) {
-        if (typeof sendProgress === 'function') sendProgress('Recuperando memoria', 15);
         try {
           const recalled = await longTermMemory.recallFacts(userId, prompt, 5);
           memoryBlock = longTermMemory.buildMemoryBlock(recalled);
@@ -1093,7 +1090,6 @@ router.post(
       // prompt receives compact, cited evidence snippets.
       let operationalRagContext = null;
       if (userId) {
-        if (typeof sendProgress === 'function') sendProgress('Buscando documentos relevantes', 20);
         try {
           operationalRagContext = await operationalRag.buildRuntimeContext({
             rag,
@@ -1127,7 +1123,6 @@ router.post(
       // <20 ms to the chat path on a warm DB. Never throws.
       let documentEnrichment = null;
       let documentEnrichmentBlock = '';
-      if (typeof sendProgress === 'function') sendProgress('Analizando documentos', 25);
       if (processedFiles.length > 0) {
         try {
           documentEnrichment = await documentProfessionalAnalyzer.buildEnrichedFileContext({
@@ -2469,51 +2464,31 @@ router.post(
           if (coworkPrompt) coworkBlock = `\n\n${coworkPrompt}`;
 
           if (prompt && prompt.length >= 200 && !processedFiles.length) {
-            try {
-              const enrichment = await coworkEngine.enrichAIRequest(userId, prompt, {
-                chatId: canPersist ? chatId : null,
-                model: actualModel,
-              });
-              if (enrichment.autoFileResult?.autoFiled) {
-                autoFileContext = enrichment.autoFileResult;
-                coworkBlock += `\n\n## AUTO-FILED CONTENT\nThe user's pasted content was automatically filed as document "${enrichment.autoFileResult.fileName}" (format: ${enrichment.autoFileResult.format}, ${enrichment.autoFileResult.charCount} chars, ${enrichment.autoFileResult.lineCount} lines). Analyze it professionally as a document, not just raw text.`;
+            const autoFileBridge = require('../services/auto-file-bridge');
+            if (autoFileBridge.shouldAutoFile(prompt) && autoFileBridge.isStructuredContent(prompt)) {
+              autoFileContext = await autoFileBridge.ingestPastedContent(userId, prompt);
+              if (autoFileContext?.autoFiled) {
+                coworkBlock += `\n\n## AUTO-FILED CONTENT\nThe user's pasted content was automatically filed as document "${autoFileContext.fileName}" (format: ${autoFileContext.format}, ${autoFileContext.charCount} chars, ${autoFileContext.lineCount} lines). Analyze it professionally as a document, not just raw text.`;
+                try {
+                  const deepDocAnalyzer = require('../services/deep-document-analyzer');
+                  const deepAnalysis = await deepDocAnalyzer.analyzeDeep(prompt, {
+                    userId,
+                    fileName: autoFileContext.fileName,
+                    mimeType: autoFileContext.mime,
+                  });
+                  if (deepAnalysis) {
+                    coworkBlock += `\n\n### Deep Analysis\nDomain: ${deepAnalysis.domain.primary} (confidence: ${Math.round(deepAnalysis.domain.confidence * 100)}%)\nQuality: ${deepAnalysis.quality.grade} (${deepAnalysis.quality.overall}/100)\nRisk: ${deepAnalysis.risks.severity} (${deepAnalysis.risks.items.length} factors)\nPII: ${deepAnalysis.piiSummary.total} entities (${deepAnalysis.piiSummary.critical} critical)\nStructure: ${deepAnalysis.structure.headingCount} sections\nTags: ${deepAnalysis.autoTags.slice(0, 8).join(', ')}`;
+                  }
+                } catch (_deepErr) { /* non-fatal */ }
               }
-              if (enrichment.deepAnalysis) {
-                const da = enrichment.deepAnalysis;
-                coworkBlock += `\n\n### Deep Analysis\nDomain: ${da.domain.primary} (confidence: ${Math.round(da.domain.confidence * 100)}%)\nQuality: ${da.quality.grade} (${da.quality.overall}/100)\nRisk: ${da.risks.severity} (${da.risks.items.length} factors)\nPII: ${da.piiSummary.total} entities (${da.piiSummary.critical} critical)\nStructure: ${da.structure.headingCount} sections\nTags: ${da.autoTags.slice(0, 8).join(', ')}`;
-              }
-              if (enrichment.systemPromptAdditions) {
-                coworkBlock += enrichment.systemPromptAdditions;
-              }
-            } catch (_enrichErr) { /* non-fatal — fall through to cowork block */ }
+            }
           }
         } catch (coworkErr) {
           console.warn('[ai] cowork enrichment failed (continuing without):', coworkErr.message);
         }
       }
 
-      let fidelityBlock = '';
-      if (canPersist && chatId) {
-        try {
-          const lastAssistant = await prisma.message.findFirst({
-            where: { chatId, role: 'ASSISTANT' },
-            orderBy: { timestamp: 'desc' },
-            select: { content: true, files: true },
-          });
-          if (lastAssistant?.content && lastAssistant.files) {
-            const prevFiles = JSON.parse(lastAssistant.files || '[]');
-            if (Array.isArray(prevFiles) && prevFiles.length > 0) {
-              const audit = documentResponseFidelity.auditChatResponse(lastAssistant.content, prevFiles);
-              if (audit.note && (audit.unsupported > 0 || audit.contradicted > 0)) {
-                fidelityBlock = `\n\n## PREVIOUS RESPONSE FIDELITY WARNING\nYour last answer contained ${audit.unsupported} unsupported and ${audit.contradicted} contradicted claims. Re-verify numbers, dates, and entity names against the source documents before asserting them.`;
-              }
-            }
-          }
-        } catch (_fidErr) { /* non-fatal */ }
-      }
-
-      if (typeof sendProgress === 'function') sendProgress('Preparando respuesta', 35);
-      const systemInstruction = { role: 'system', content: promptBundle.system + universalContractBlock + enterpriseExecutionBlock + memoryBlock + feedbackBlock + evidenceBlock + documentEnrichmentBlock + coworkBlock + fidelityBlock };
+      const systemInstruction = { role: 'system', content: promptBundle.system + universalContractBlock + enterpriseExecutionBlock + memoryBlock + feedbackBlock + evidenceBlock + documentEnrichmentBlock + coworkBlock };
       console.log(`📝 system prompt built: intent=${promptBundle.intent} lang=${promptBundle.language} chars=${systemInstruction.content.length} profile=${userProfile ? 'yes' : 'no'} memory=${memoryBlock ? 'yes' : 'no'} feedback=${feedbackBlock ? 'yes' : 'no'} rag=${operationalRagContext?.active ? 'yes' : 'no'} contract=${universalTaskContract?.pipeline || 'none'} graph=${enterpriseExecutionGraph?.graph_id || 'none'} cira=${ciraRuntimeBundle?.envelope?.request_id || 'none'} docEnrichment=${documentEnrichment ? `${documentEnrichment.primaryDocType}/${documentEnrichment.perFileProfile.length}` : 'none'}`);
 
       // ✅ IMPROVED: Get previous chat history with proper image handling
@@ -2719,14 +2694,6 @@ router.post(
       res.setHeader('X-Accel-Buffering', 'no');
       res.flushHeaders();
 
-      const sendProgress = (label, pct) => {
-        try {
-          res.write(`data: ${JSON.stringify({ type: 'stage', label, pct })}\n\n`);
-        } catch (_pe) { /* client disconnected */ }
-      };
-
-      sendProgress('Procesando solicitud', 2);
-
       // SSE comment heartbeat — surfaces silently-dropped client
       // connections (NAT timeouts, mobile handoffs, sleeping clients)
       // via a write() failure rather than waiting on the kernel's TCP
@@ -2776,19 +2743,7 @@ router.post(
       // refusal or error so the user never sees a blank reply.
       let artifactHandled = false;
       if (artifactGenerator.isArtifactRequest(prompt)) {
-        let breakerFailed = false;
         try {
-          try {
-            const { getBreaker } = require('../services/circuit-breaker');
-            const breaker = getBreaker('openai:artifact');
-            if (breaker && breaker.state === 'OPEN') {
-              breakerFailed = true;
-              console.warn('[artifact] circuit breaker OPEN — falling through to text response');
-            }
-          } catch (_cbErr) { /* no breaker configured */ }
-
-          if (breakerFailed) throw new Error('circuit_open');
-
           const imageDataUrls = [];
           for (const f of processedFiles) {
             if (!f || !f.mimeType || !f.mimeType.startsWith('image/')) continue;
@@ -2840,7 +2795,6 @@ router.post(
           const imageNames = skippedImages.map(f => f.name || f.originalName || 'imagen').join(', ');
           console.log(`[vision] Stripping ${skippedImages.length} image(s) for non-vision model ${actualProvider}:${actualModel}: ${imageNames}`);
         }
-        if (typeof sendProgress === 'function') sendProgress('Generando respuesta', 40);
         fullResponseContent = await aiService.generateStream({
           provider: actualProvider,
           model: actualModel,
@@ -3384,7 +3338,7 @@ router.post(
 
     } catch (error) {
       console.error('Image generation error:', error);
-      res.status(500).json({ error: sanitizeErrorForUser(error) });
+      res.status(500).json({ error: error.message || 'Image generation failed' });
     }
   }
 );
@@ -3838,7 +3792,7 @@ router.post(
       }
       console.error('Image generation error:', error);
       if (!res.headersSent) {
-        res.status(500).json({ error: sanitizeErrorForUser(error) });
+        res.status(500).json({ error: error.message || 'Image generation failed' });
       }
     }
   }
@@ -4118,7 +4072,7 @@ router.post(
 
     } catch (error) {
       console.error('🚨 Video generation error:', error);
-      res.status(500).json({ error: sanitizeErrorForUser(error) });
+      res.status(500).json({ error: error.message || 'Video generation failed' });
     }
   }
 );
@@ -4539,7 +4493,7 @@ router.post(
 
     } catch (error) {
       console.error('❌ Vector PPT generation error:', error);
-      res.status(500).json({ error: sanitizeErrorForUser(error) });
+      res.status(500).json({ error: error.message || 'Vector PPT generation failed' });
     }
   }
 );
@@ -4655,7 +4609,7 @@ router.post(
 
     } catch (error) {
       console.error('❌ PPT generation error:', error);
-      res.status(500).json({ error: sanitizeErrorForUser(error) });
+      res.status(500).json({ error: error.message || 'PPT generation failed' });
     }
   }
 );
@@ -5137,7 +5091,7 @@ Process the user's request naturally and perform the necessary Gmail operations.
       }
 
       res.status(500).json({
-        error: sanitizeErrorForUser(error)
+        error: error.message || 'Gmail AI generation failed'
       });
     }
   }
@@ -5441,13 +5395,12 @@ Every element should feel intentionally designed, polished, and premium. The use
     } catch (error) {
       console.error('❌ Web development generation error:', error);
 
-      const sanitizedError = sanitizeErrorForUser(error);
-
+      // Check if headers were already sent (streaming started)
       if (!res.headersSent) {
-        res.status(500).json({ error: sanitizedError });
+        res.status(500).json({ error: error.message || 'Web development generation failed' });
       } else {
         try {
-          res.write(`data: ${JSON.stringify({ error: sanitizedError })}\n\n`);
+          res.write(`data: ${JSON.stringify({ error: error.message || 'AI generation failed' })}\n\n`);
         } catch (writeError) {
           console.error('Failed to write error to stream:', writeError);
         }
@@ -5708,7 +5661,7 @@ But first, you need to connect your Google Calendar & Drive account securely usi
         });
       }
 
-      res.status(500).json({ error: sanitizeErrorForUser(error) });
+      res.status(500).json({ error: error.message || 'Google Services AI generation failed' });
     }
   }
 );
@@ -5835,7 +5788,7 @@ router.post(
 
     } catch (error) {
       console.error('Chart generation error:', error);
-      res.status(500).json({ error: sanitizeErrorForUser(error) });
+      res.status(500).json({ error: error.message || 'Chart generation failed' });
     }
   }
 );
@@ -6030,7 +5983,7 @@ Generate the workbook based on the user's request.`;
       console.error('❌ Excel Workbook generation error:', error);
 
       return res.status(500).json({
-        error: sanitizeErrorForUser(error)
+        error: error.message || 'Excel Workbook generation failed'
       });
     }
   }

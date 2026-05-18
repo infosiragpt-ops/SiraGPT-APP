@@ -462,4 +462,99 @@ router.post('/analyze-stream', authenticateToken, coworkRateLimit, async (req, r
   }
 });
 
+const analysisPipeline = require('../services/analysis-pipeline');
+
+router.post('/analyze-pro', authenticateToken, analyzeDeepRateLimit, async (req, res) => {
+  try {
+    const { text, fileName, mimeType, documents } = req.body;
+    if (documents && Array.isArray(documents) && documents.length >= 2) {
+      const result = analysisPipeline.runMultiDocumentAnalysis(documents);
+      res.json(result);
+      return;
+    }
+    if (!text || typeof text !== 'string') {
+      return res.status(400).json({ error: 'text or documents array is required' });
+    }
+    const result = analysisPipeline.runAnalysisPipeline(text, { fileName, mimeType });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/analyze-pro/stream', authenticateToken, analyzeDeepRateLimit, async (req, res) => {
+  try {
+    const { text, fileName, mimeType } = req.body;
+    if (!text || typeof text !== 'string') {
+      return res.status(400).json({ error: 'text is required' });
+    }
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+
+    const userId = req.user.id;
+    const { STAGES: S, STAGE_LABELS: L } = analysisPipeline;
+    const send = (stage, data) => {
+      try {
+        res.write(`data: ${JSON.stringify({ type: 'stage', stage, label: L[stage] || stage, ...data })}\n\n`);
+      } catch (_e) { /* client disconnected */ }
+    };
+
+    send(S.DETECTING_FORMAT, { format: analysisPipeline.smartPaste.detectContentType(text).format });
+    send(S.DETECTING_DOMAIN, {});
+    const domain = analysisPipeline.professionalAnalyzer.detectDomain(text, fileName, mimeType);
+    send(S.EXTRACTING_ENTITIES, {});
+    const entities = analysisPipeline.professionalAnalyzer.extractEntities(text);
+    send(S.BUILDING_STRUCTURE, { entityCount: entities.length });
+    const structure = analysisPipeline.professionalAnalyzer.extractStructure(text);
+    send(S.ASSESSING_RISKS, { headings: structure.headings.length });
+    const risks = analysisPipeline.professionalAnalyzer.assessRisks(text, domain.primary, entities);
+    send(S.COMPUTING_QUALITY, { riskCount: risks.items.length, severity: risks.severity });
+    const quality = analysisPipeline.professionalAnalyzer.computeQualityMetrics(text, domain.primary, entities, risks);
+    send(S.BUILDING_DIMENSIONS, { grade: quality.grade, overall: quality.overall });
+    const dimensions = analysisPipeline.professionalAnalyzer.buildDimensionReport(text, domain.primary, entities, structure);
+    send(S.MAPPING_RISKS, { dimensionCount: dimensions.length });
+    const riskMapping = analysisPipeline.professionalAnalyzer.buildRiskMapping(text, domain.primary, entities, risks);
+    send(S.BUILDING_REPORT, { coverage: riskMapping.coveragePercent });
+    const autoTags = analysisPipeline.professionalAnalyzer.generateAutoTags(text, domain.primary, entities, structure);
+
+    const result = {
+      ok: true,
+      format: analysisPipeline.professionalAnalyzer.detectFormat(text),
+      domain,
+      entities: entities.map(e => ({
+        type: e.type,
+        value: e.sensitivity === 'critical' ? (e.value.slice(0, 3) + '****') : e.value,
+        sensitivity: e.sensitivity,
+        pii: e.pii,
+      })),
+      piiSummary: {
+        total: entities.filter(e => e.pii).length,
+        critical: entities.filter(e => e.sensitivity === 'critical').length,
+        high: entities.filter(e => e.sensitivity === 'high').length,
+      },
+      structure: {
+        headingCount: structure.headings.length,
+        hasToc: structure.hasToc,
+        wordCount: structure.wordCount,
+      },
+      risks,
+      quality,
+      dimensions,
+      riskMapping,
+      autoTags,
+    };
+
+    send(S.COMPLETE, {});
+    res.write(`data: ${JSON.stringify({ type: 'result', ...result })}\n\n`);
+    res.end();
+  } catch (err) {
+    if (!res.headersSent) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+});
+
 module.exports = router;
