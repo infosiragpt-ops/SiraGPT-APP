@@ -4313,6 +4313,226 @@ const createRiskMatrix = {
   },
 };
 
+// ─────────────────────────────────────────────────────────────────────────
+// Tool 19: create_funnel_diagram
+// ─────────────────────────────────────────────────────────────────────────
+
+const createFunnelDiagram = {
+  name: 'create_funnel_diagram',
+  description: 'Generate a conversion funnel diagram as an SVG file: N vertical trapezoidal stages with per-stage count + automatic conversion-rate from previous stage + drop-off indicators on the side. Use for sales pipelines, marketing conversion analyses, onboarding flows, signup funnels, or any sequential filter. Distinct from chartType:funnel (which is a generic chart) — this is a dedicated funnel with stage labels, % conversion, and drop-off arrows.',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string', description: 'Funnel title (e.g. "Q2 Signup Funnel").' },
+      subtitle: { type: 'string', description: 'Optional context line.' },
+      stages: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            label: { type: 'string', description: 'Stage name (e.g. "Visitors", "Signups", "Activated").' },
+            value: { type: 'number', description: 'Count at this stage (e.g. 10000, 500, 50).' },
+            description: { type: 'string', description: 'Optional 1-line description.' },
+            color: { type: 'string', description: 'Optional hex color override.' },
+          },
+          required: ['label', 'value'],
+        },
+        description: '2-8 ordered stages from top (widest) to bottom (narrowest).',
+      },
+      showConversion: { type: 'boolean', description: 'Show per-stage conversion-from-previous %. Default: true.' },
+      showDropoff: { type: 'boolean', description: 'Show drop-off arrows + absolute losses on the right. Default: true.' },
+      theme: { type: 'string', enum: ['professional', 'modern', 'minimal', 'corporate'], description: 'Visual theme. Default: "professional".' },
+    },
+    required: ['title', 'stages'],
+    additionalProperties: false,
+  },
+  async execute({ title, subtitle = '', stages = [], showConversion = true, showDropoff = true, theme = 'professional' }, ctx = {}) {
+    emitEvent(ctx, 'tool_call', { tool: 'create_funnel_diagram', preview: title });
+
+    try {
+      if (!Array.isArray(stages) || stages.length === 0) {
+        return { ok: false, error: 'stages array is empty' };
+      }
+      if (stages.length < 2) {
+        return { ok: false, error: 'funnel requires at least 2 stages' };
+      }
+
+      const themes = {
+        professional: {
+          bg: '#FAFBFC', card: '#FFFFFF', text: '#1E293B', muted: '#64748B', border: '#E2E8F0', accent: '#2563EB',
+          // Stage colors transition from cool top (lots of traffic) to warm bottom (precious conversions)
+          palette: ['#3B82F6', '#06B6D4', '#10B981', '#84CC16', '#EAB308', '#F59E0B', '#F97316', '#EF4444'],
+          dropoff: '#94A3B8', conversion: '#10B981',
+        },
+        modern: {
+          bg: '#0B1121', card: '#1E293B', text: '#F1F5F9', muted: '#94A3B8', border: '#334155', accent: '#818CF8',
+          palette: ['#60A5FA', '#22D3EE', '#34D399', '#A3E635', '#FBBF24', '#FB923C', '#F87171', '#F472B6'],
+          dropoff: '#94A3B8', conversion: '#34D399',
+        },
+        minimal: {
+          bg: '#FFFFFF', card: '#FFFFFF', text: '#0F172A', muted: '#64748B', border: '#CBD5E1', accent: '#0F172A',
+          palette: ['#0F172A', '#1E293B', '#334155', '#475569', '#64748B', '#94A3B8', '#CBD5E1', '#E2E8F0'],
+          dropoff: '#94A3B8', conversion: '#10B981',
+        },
+        corporate: {
+          bg: '#F8FAFC', card: '#FFFFFF', text: '#0F172A', muted: '#475569', border: '#CBD5E1', accent: '#1E40AF',
+          palette: ['#1A73E8', '#039BE5', '#0F9D58', '#A5D86C', '#F9AB00', '#E8710A', '#D93025', '#9C27B0'],
+          dropoff: '#5F6368', conversion: '#0F9D58',
+        },
+      };
+      const t = themes[theme] || themes.professional;
+
+      const safeTitle = xmlEscape(String(title).slice(0, 120));
+      const safeSubtitle = xmlEscape(String(subtitle || '').slice(0, 140));
+      const stageList = stages.slice(0, 8);
+      const n = stageList.length;
+
+      // Validate values: use Math.max with 0 to avoid negative widths
+      const values = stageList.map(s => Math.max(0, Number(s.value) || 0));
+      const topValue = values[0] || 1;
+      // Stage widths are linear with value/topValue. Cap min width so labels
+      // remain readable even when the bottom stage is tiny.
+      const maxStageW = 520;
+      const minStageW = 110;
+      function stageWidth(value) {
+        const pct = value / topValue;
+        return Math.max(minStageW, maxStageW * pct);
+      }
+
+      const stageH = 76;
+      const stageGap = 8;
+      const sideAnnotationW = 200;
+      const pad = 28;
+      const headerH = safeSubtitle ? 110 : 86;
+      const W = pad * 2 + maxStageW + (showDropoff ? sideAnnotationW : 0);
+      const H = headerH + pad + n * (stageH + stageGap) + pad + 20;
+
+      let body = `<rect width="${W}" height="${H}" fill="${t.bg}" rx="12"/>`;
+      // Header
+      body += `<rect x="0" y="0" width="${W}" height="${headerH}" fill="${t.accent}"/>`;
+      body += `<text x="${W / 2}" y="42" text-anchor="middle" font-family="Georgia, serif" font-size="24" font-weight="bold" fill="#fff">${safeTitle}</text>`;
+      const totalConversion = topValue > 0 ? ((values[n - 1] / topValue) * 100).toFixed(1) : '0.0';
+      body += `<text x="${W / 2}" y="66" text-anchor="middle" font-family="Arial" font-size="12" fill="#fff" opacity="0.85">${n} etapas · ${totalConversion}% end-to-end</text>`;
+      if (safeSubtitle) {
+        body += `<text x="${W / 2}" y="92" text-anchor="middle" font-family="Arial" font-size="13" fill="#fff" opacity="0.92">${safeSubtitle}</text>`;
+      }
+
+      const cx = pad + maxStageW / 2;
+      const baseY = headerH + pad;
+
+      // Format large numbers with separators (e.g. 10,000)
+      function fmtNum(n) {
+        if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+        if (n >= 10_000) return `${(n / 1000).toFixed(0)}K`;
+        if (n >= 1000) return `${Math.round(n).toLocaleString('en-US')}`;
+        return String(Math.round(n));
+      }
+
+      stageList.forEach((stage, i) => {
+        const value = values[i];
+        const sy = baseY + i * (stageH + stageGap);
+        const topW = stageWidth(value);
+        const nextValue = i + 1 < n ? values[i + 1] : value;
+        const botW = stageWidth(nextValue);
+        // Stage as trapezoid (top wider than bottom)
+        const xTopL = cx - topW / 2;
+        const xTopR = cx + topW / 2;
+        const xBotL = cx - botW / 2;
+        const xBotR = cx + botW / 2;
+        const color = stage.color && /^#[0-9A-Fa-f]{6}$/.test(stage.color)
+          ? stage.color
+          : t.palette[i % t.palette.length];
+
+        body += `<path d="M ${xTopL} ${sy} L ${xTopR} ${sy} L ${xBotR} ${sy + stageH} L ${xBotL} ${sy + stageH} Z" fill="${color}" stroke="${t.border}" stroke-width="1" filter="url(#vis-shadow)"/>`;
+
+        // Label (centred)
+        const safeLabel = xmlEscape(String(stage.label || '').slice(0, 30));
+        body += `<text x="${cx}" y="${sy + stageH / 2 - 4}" text-anchor="middle" font-family="Arial" font-size="15" font-weight="bold" fill="#fff">${safeLabel}</text>`;
+        // Count
+        body += `<text x="${cx}" y="${sy + stageH / 2 + 16}" text-anchor="middle" font-family="Arial" font-size="13" fill="#fff" opacity="0.95">${fmtNum(value)}</text>`;
+        // Optional description
+        if (stage.description) {
+          const safeDesc = xmlEscape(String(stage.description).slice(0, 60));
+          body += `<text x="${cx}" y="${sy + stageH - 8}" text-anchor="middle" font-family="Arial" font-size="10" fill="#fff" opacity="0.85">${safeDesc}</text>`;
+        }
+
+        // Conversion-from-previous on the left
+        if (showConversion && i > 0) {
+          const prevValue = values[i - 1] || 1;
+          const conversionPct = prevValue > 0 ? (value / prevValue) * 100 : 0;
+          const convLabel = `${conversionPct.toFixed(1)}%`;
+          // Pill above the stage's top edge, on the left
+          const pillX = pad + 6;
+          const pillY = sy - 12;
+          body += `<rect x="${pillX}" y="${pillY}" width="68" height="22" rx="11" fill="${t.conversion}" stroke="${t.bg}" stroke-width="1.5"/>`;
+          body += `<text x="${pillX + 34}" y="${pillY + 15}" text-anchor="middle" font-family="Arial" font-size="11" font-weight="bold" fill="#fff">${convLabel}</text>`;
+        }
+
+        // Drop-off on the right
+        if (showDropoff && i > 0) {
+          const prevValue = values[i - 1] || 0;
+          const dropAbs = Math.max(0, prevValue - value);
+          const dropPct = prevValue > 0 ? (dropAbs / prevValue) * 100 : 0;
+          const aX = pad + maxStageW + 14;
+          // Drop-off marker — only render when there's actual drop
+          if (dropAbs > 0) {
+            body += `<text x="${aX}" y="${sy + 14}" font-family="Arial" font-size="11" font-weight="bold" fill="${t.dropoff}">↓ ${fmtNum(dropAbs)}</text>`;
+            body += `<text x="${aX}" y="${sy + 30}" font-family="Arial" font-size="10" fill="${t.muted}">−${dropPct.toFixed(1)}%</text>`;
+          } else {
+            body += `<text x="${aX}" y="${sy + 14}" font-family="Arial" font-size="11" fill="${t.muted}">—</text>`;
+          }
+        }
+      });
+
+      const svg = svgDocument({
+        width: W,
+        height: H,
+        title: safeTitle,
+        description: `Conversion funnel: ${safeTitle}`,
+        body,
+      });
+
+      const buffer = Buffer.from(svg, 'utf8');
+      const filename = `funnel_${crypto.randomBytes(4).toString('hex')}.svg`;
+      const artifact = finalizeArtifact({ filename, buffer, mime: EXTENSION_TO_MIME.svg, ctx });
+
+      emitEvent(ctx, 'file_artifact', {
+        artifact: {
+          id: artifact.id,
+          filename: artifact.filename,
+          format: 'svg',
+          mime: 'image/svg+xml',
+          sizeBytes: artifact.sizeBytes,
+          downloadUrl: artifact.downloadUrl,
+        },
+      });
+
+      emitEvent(ctx, 'tool_output', {
+        tool: 'create_funnel_diagram',
+        ok: true,
+        preview: `Embudo listo: ${artifact.filename} (${n} etapas, conversión total ${totalConversion}%, ${Math.round(artifact.sizeBytes / 1024)} KB)`,
+      });
+
+      return {
+        ok: true,
+        id: artifact.id,
+        filename: artifact.filename,
+        sizeBytes: artifact.sizeBytes,
+        downloadUrl: artifact.downloadUrl,
+        title,
+        stages: n,
+        topValue,
+        endValue: values[n - 1],
+        totalConversionPct: Number(totalConversion),
+      };
+    } catch (err) {
+      const msg = err?.message || String(err);
+      emitEvent(ctx, 'tool_output', { tool: 'create_funnel_diagram', ok: false, preview: `Error: ${msg}` });
+      return { ok: false, error: msg };
+    }
+  },
+};
+
 // ── All visual/media tools for the agent ──────────────────────────────
 
 const VISUAL_MEDIA_TOOLS = [
@@ -4334,6 +4554,7 @@ const VISUAL_MEDIA_TOOLS = [
   createPyramidDiagram,
   createPortersFiveForces,
   createRiskMatrix,
+  createFunnelDiagram,
 ];
 
 // Internal helpers exposed for unit testing — NOT part of the public agent

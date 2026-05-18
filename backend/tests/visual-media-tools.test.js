@@ -653,8 +653,8 @@ test('create_dashboard_html: no charts', async () => {
 
 // ── Tool metadata ────────────────────────────────────────────────
 
-test('all 18 tools have valid metadata', () => {
-  assert.equal(VISUAL_MEDIA_TOOLS.length, 18);
+test('all 19 tools have valid metadata', () => {
+  assert.equal(VISUAL_MEDIA_TOOLS.length, 19);
   for (const t of VISUAL_MEDIA_TOOLS) {
     assert.ok(t.name);
     assert.ok(t.description);
@@ -1844,6 +1844,176 @@ test('create_risk_matrix: emits expected events', async () => {
   await tool('create_risk_matrix').execute({
     title: 'Events',
     risks: [{ label: 'x', probability: 2, impact: 3 }],
+  }, ctx);
+  const types = ctx._events.map(e => e.type);
+  assert.ok(types.includes('tool_call'));
+  assert.ok(types.includes('file_artifact'));
+  assert.ok(types.includes('tool_output'));
+});
+
+// ── create_funnel_diagram ────────────────────────────────────────
+
+test('create_funnel_diagram: 4-stage signup funnel', async () => {
+  const fd = tool('create_funnel_diagram');
+  assert.ok(fd);
+  const r = await fd.execute({
+    title: 'Q2 Signup Funnel',
+    subtitle: 'SiraGPT — 2026',
+    stages: [
+      { label: 'Visitors',  value: 10000, description: 'organic + paid traffic' },
+      { label: 'Signed up', value: 1200,  description: 'created account' },
+      { label: 'Activated', value: 520,   description: 'completed first task' },
+      { label: 'Paying',    value: 96,    description: 'converted to Pro' },
+    ],
+    theme: 'professional',
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.stages, 4);
+  assert.equal(r.topValue, 10000);
+  assert.equal(r.endValue, 96);
+  // 96 / 10000 = 0.96%
+  assert.ok(Math.abs(r.totalConversionPct - 1.0) < 0.5, `total conversion ≈ 0.96%, got ${r.totalConversionPct}`);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.startsWith('<svg'));
+  assert.ok(svg.includes('Q2 Signup Funnel'));
+  assert.ok(svg.includes('Visitors'));
+  assert.ok(svg.includes('Paying'));
+  // Counts formatted (10K, 1,200, 520, 96)
+  assert.ok(svg.includes('10K') || svg.includes('10,000'));
+  // Conversion pills appear (e.g. 12.0% from Visitors → Signed up)
+  assert.ok(/12\.\d%/.test(svg));
+});
+
+test('create_funnel_diagram: empty stages fails', async () => {
+  const r = await tool('create_funnel_diagram').execute({
+    title: 'Empty',
+    stages: [],
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /stages.*empty/i);
+});
+
+test('create_funnel_diagram: single stage fails (need >= 2)', async () => {
+  const r = await tool('create_funnel_diagram').execute({
+    title: 'One',
+    stages: [{ label: 'Only', value: 100 }],
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /at least 2/i);
+});
+
+test('create_funnel_diagram: caps stages at 8', async () => {
+  const tenStages = Array.from({ length: 10 }, (_, i) => ({ label: `Stage ${i + 1}`, value: 1000 - i * 50 }));
+  const r = await tool('create_funnel_diagram').execute({
+    title: 'Overflow',
+    stages: tenStages,
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.stages, 8);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.includes('Stage 1'));
+  assert.ok(svg.includes('Stage 8'));
+  assert.equal(svg.includes('Stage 9'), false);
+});
+
+test('create_funnel_diagram: showConversion=false hides per-stage conversion pills', async () => {
+  // Use values where the end-to-end conversion (rendered in the header
+  // line) differs from the per-stage conversion (which we want hidden).
+  const r = await tool('create_funnel_diagram').execute({
+    title: 'No conversion',
+    stages: [
+      { label: 'A', value: 1000 },
+      { label: 'B', value: 750 },
+      { label: 'C', value: 500 },
+    ],
+    showConversion: false,
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  // Per-stage conversion pill: A→B = 75.0% (not the same as the end-to-end
+  // 50.0% rendered in the header). Hidden when showConversion=false.
+  assert.equal(/75\.\d%/.test(svg), false, 'per-stage 75% pill should be hidden');
+  // The end-to-end 50% in the header is intentional — keep it.
+  assert.ok(svg.includes('50.0%'));
+});
+
+test('create_funnel_diagram: showDropoff=false hides drop-off side annotations', async () => {
+  const r = await tool('create_funnel_diagram').execute({
+    title: 'No dropoff',
+    stages: [
+      { label: 'A', value: 1000 },
+      { label: 'B', value: 500 },
+    ],
+    showDropoff: false,
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  // No "↓ N" drop-off arrow should appear
+  assert.equal(svg.includes('↓'), false);
+});
+
+test('create_funnel_diagram: zero values clamp without crash', async () => {
+  const r = await tool('create_funnel_diagram').execute({
+    title: 'Zero edge',
+    stages: [
+      { label: 'A', value: 100 },
+      { label: 'B', value: 0 },
+      { label: 'C', value: 0 },
+    ],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.endValue, 0);
+  // 0/100 → 0%
+  assert.equal(r.totalConversionPct, 0);
+});
+
+test('create_funnel_diagram: per-stage color override', async () => {
+  const r = await tool('create_funnel_diagram').execute({
+    title: 'Custom',
+    stages: [
+      { label: 'A', value: 100, color: '#FF00FF' },
+      { label: 'B', value: 50,  color: '#00FFFF' },
+    ],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.toUpperCase().includes('#FF00FF'));
+  assert.ok(svg.toUpperCase().includes('#00FFFF'));
+});
+
+test('create_funnel_diagram: xml-escapes labels and descriptions', async () => {
+  const r = await tool('create_funnel_diagram').execute({
+    title: 'XSS',
+    stages: [
+      { label: '<script>x</script>', value: 100 },
+      { label: 'Safe', value: 50, description: '"quoted"' },
+    ],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.equal(svg.includes('<script>x</script>'), false);
+  assert.ok(svg.includes('&lt;script&gt;'));
+  assert.ok(svg.includes('&quot;quoted&quot;'));
+});
+
+test('create_funnel_diagram: supports all four themes', async () => {
+  for (const theme of ['professional', 'modern', 'minimal', 'corporate']) {
+    const r = await tool('create_funnel_diagram').execute({
+      title: `Theme ${theme}`,
+      stages: [{ label: 'A', value: 100 }, { label: 'B', value: 50 }],
+      theme,
+    }, fakeCtx());
+    assert.equal(r.ok, true, `theme ${theme} should succeed`);
+    const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+    assert.ok(svg.startsWith('<svg'));
+  }
+});
+
+test('create_funnel_diagram: emits expected events', async () => {
+  const ctx = fakeCtx();
+  await tool('create_funnel_diagram').execute({
+    title: 'Events',
+    stages: [{ label: 'A', value: 100 }, { label: 'B', value: 50 }],
   }, ctx);
   const types = ctx._events.map(e => e.type);
   assert.ok(types.includes('tool_call'));

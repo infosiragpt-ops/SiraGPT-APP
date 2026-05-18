@@ -37,7 +37,7 @@ npm run type-check     # TSC completo
 5. **Hacer `git pull --rebase` antes de push** para evitar conflictos
 6. **Priorizar:** estabilidad, rendimiento, cobertura de errores, calidad de código
 
-## Visual Tools Inventory (18 tools)
+## Visual Tools Inventory (19 tools)
 | Tool | File | Description |
 |------|------|-------------|
 | generate_image | visual-media-tools.js | SVG/PNG image generation |
@@ -58,6 +58,7 @@ npm run type-check     # TSC completo
 | create_pyramid_diagram | visual-media-tools.js | Hierarchical pyramid SVG (2-8 levels, optional inverted, per-level descriptions + side labels, 4 themes) |
 | create_porters_five_forces | visual-media-tools.js | Porter's Five Forces SVG (Rivalry centre + 4 surrounding forces, optional intensity pills, 4 themes) |
 | create_risk_matrix | visual-media-tools.js | Probability × impact risk matrix SVG (3/4/5 grid, heatmap cells, plotted risk markers, side legend, 4 themes) |
+| create_funnel_diagram | visual-media-tools.js | Conversion funnel SVG (2-8 stages, auto conversion %, drop-off arrows, per-stage colors, 4 themes) |
 
 ## Backend Reliability Utilities
 
