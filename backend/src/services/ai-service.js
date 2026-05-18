@@ -372,15 +372,23 @@ class AIService {
                         }
                     }
 
-                    lastMessage.content = contentArray;
-
                     if (contentArray.some(part => part.type === 'image_url')) {
                         const visionRuntime = selectVisionRuntime(provider, model);
                         if (visionRuntime.switched) {
                             console.log(`[vision] Routing image turn through vision-capable runtime: ${provider}:${model} -> ${visionRuntime.provider}:${visionRuntime.model}`);
                             provider = visionRuntime.provider;
                             model = visionRuntime.model;
+                            lastMessage.content = contentArray;
+                        } else {
+                            const imageCount = contentArray.filter(p => p.type === 'image_url').length;
+                            const imageNames = imageFiles.map(f => f.name || f.originalName || 'imagen').join(', ');
+                            console.warn(`[vision] No vision-capable model available for ${provider}:${model} — stripping ${imageCount} image(s) from message`);
+                            const textPart = contentArray.find(p => p.type === 'text');
+                            const notice = `\n\n[El usuario adjuntó ${imageCount} imagen(es): ${imageNames}. Este modelo no soporta entrada de imagen, por lo que las imágenes no pudieron ser procesadas. Responde basándote en el texto disponible.]`;
+                            lastMessage.content = (textPart?.text || '') + notice;
                         }
+                    } else {
+                        lastMessage.content = contentArray;
                     }
                 }
             }
@@ -1141,5 +1149,6 @@ service.__test = {
     modelSupportsVision,
     selectVisionRuntime,
 };
+service.modelSupportsVision = modelSupportsVision;
 
 module.exports = service;
