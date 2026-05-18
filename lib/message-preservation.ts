@@ -154,10 +154,12 @@ export function mergeMessagesPreservingUserContent<TMessage extends ChatMessageL
     }
 
     // ── Pass 1b - preserve assistant content / files when the server's
-    // copy is empty (mid-persistence race). Mirrors the user-side
-    // logic above: if local rendered a real answer and the refresh
-    // arrived before the backend finished saving, keep the local
-    // content so the bubble doesn't flash and vanish.
+    // copy is empty or shorter (mid-persistence race). Mirrors the
+    // user-side logic above: if local rendered a real answer and the
+    // refresh arrived before the backend finished saving, keep the
+    // local content so the bubble doesn't flash and vanish. Also
+    // guards against partial saves where the server returns a
+    // truncated version of the assistant message.
     if (incoming?.role) {
       asstOrdinal += 1;
       const localMatch: TMessage | undefined =
@@ -168,7 +170,7 @@ export function mergeMessagesPreservingUserContent<TMessage extends ChatMessageL
       const next: TMessage = { ...incoming };
       const incomingText = asText(next.content);
       const localText = asText(localMatch.content);
-      if (hasText(localText) && !hasText(incomingText)) {
+      if (hasText(localText) && (!hasText(incomingText) || localText.length > incomingText.length)) {
         next.content = localText as TMessage['content'];
       }
       if (shouldPreserveLocalFiles(next.files, localMatch.files)) {
@@ -308,6 +310,33 @@ export function preserveOrphanAssistantMessages<TMessage extends ChatMessageLike
   for (const m of localMessages) {
     if (m?.role && !isUserMessage(m)) localAssistants.push(m);
   }
+
+  // Pass 3a: If the server returned the same number of assistant messages
+  // but one of them has significantly less content than the local version,
+  // graft the richer local content into the enriched list. This catches
+  // the race where the backend saved a partial/stub assistant message
+  // (e.g. just the first few tokens) while the client has the full stream.
+  if (localAssistants.length === incomingAssistantCount && incomingAssistantCount > 0) {
+    const incomingAssistants = enriched.filter(m => m?.role && !isUserMessage(m));
+    let patched = false;
+    const patchedEnriched = enriched.map((m) => {
+      if (!m?.role || isUserMessage(m)) return m;
+      const idx = incomingAssistants.indexOf(m);
+      if (idx === -1) return m;
+      const localVersion = localAssistants[idx];
+      if (!localVersion) return m;
+      const incomingText = asText(m.content);
+      const localText = asText(localVersion.content);
+      // If the local version has substantially more content, use it.
+      if (hasText(localText) && (!hasText(incomingText) || localText.length > incomingText.length + 20)) {
+        patched = true;
+        return { ...m, content: localText as TMessage['content'] };
+      }
+      return m;
+    });
+    if (patched) return patchedEnriched;
+  }
+
   if (localAssistants.length <= incomingAssistantCount) return enriched;
 
   const incomingIds = new Set<string>();

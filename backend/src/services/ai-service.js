@@ -303,7 +303,7 @@ class AIService {
      * @param {Array<object>} options.files - Uploaded files ka array (optional)
      * @returns {Promise<string>} - Poora generate kiya hua content
      */
-    async generateStream({ provider, model, messages, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true, temperature = 0.55 }) {
+    async generateStream({ provider, model, messages, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true, temperature = 0.55, skipDoneSentinel = false }) {
         let fullResponseContent = '';
         let hasStreamedAnyContent = false;
         const normalizedTemperature = normalizeTemperature(temperature);
@@ -579,9 +579,13 @@ class AIService {
         } finally {
             clearInterval(heartbeat);
             // Signal end-of-stream so the client can cleanly close its
-            // reader and unblock the composer. Swallow write errors — the
-            // socket may already be gone if the client aborted.
-            try { res.write(`data: [DONE]\n\n`); } catch { /* socket gone */ }
+            // reader and unblock the composer. When skipDoneSentinel is
+            // set the caller (route handler) writes [DONE] after DB
+            // persistence so the client doesn't race a selectChat before
+            // the assistant message is committed.
+            if (!skipDoneSentinel) {
+              try { res.write(`data: [DONE]\n\n`); } catch { /* socket gone */ }
+            }
         }
     }
 

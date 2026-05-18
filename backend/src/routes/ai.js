@@ -2774,7 +2774,6 @@ router.post(
             // sees immediate feedback, then the artifact block.
             res.write(`data: ${JSON.stringify({ content: intro })}\n\n`);
             res.write(`data: ${JSON.stringify({ content: `\n\n${artifactGenerator.wrapArtifact(art)}` })}\n\n`);
-            res.write(`data: [DONE]\n\n`);
             fullResponseContent = wrapped;
             artifactHandled = true;
             if (cacheHandle) cacheHandle.complete();
@@ -2806,6 +2805,7 @@ router.post(
           language: langResolution.language,
           userPrompt: prompt,
           qualityGuard: true,
+          skipDoneSentinel: true,
         });
         if (cacheHandle) cacheHandle.complete();
         }
@@ -3076,6 +3076,16 @@ router.post(
           finalContent = fullResponseContent || finalContent;
         }
         await saveChatAndTrackUsage(null, null, prompt, finalContent, tokens, actualModel, processedFiles, [], regenerate);
+      }
+
+      // ── Send [DONE] AFTER persistence ──────────────────────────
+      // The client's onClose callback triggers selectChat (API fetch)
+      // upon receiving [DONE]. If we send [DONE] before the DB write
+      // completes, the API returns a chat without the new assistant
+      // message and the merge overwrites the locally streamed content.
+      // Moving [DONE] after saveChatAndTrackUsage eliminates the race.
+      if (!res.writableEnded) {
+        try { res.write('data: [DONE]\n\n'); } catch { /* socket gone */ }
       }
 
     } catch (error) {

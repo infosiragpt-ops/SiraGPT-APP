@@ -1130,7 +1130,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 setIsStreaming(false);
                 setCurrentStreamId(null);
                 abortControllerRef.current = null;
-                await selectChat(activeChat.id); // Refetch chat to get permanent IDs
+                // Delay selectChat to give the backend time to persist
+                // the assistant message (especially important for document
+                // uploads where file I/O adds 1-3s after [DONE]).
+                setTimeout(() => {
+                  selectChat(activeChat.id).catch(() => {});
+                }, 2000);
               }
             },
             (error) => {
@@ -1437,7 +1442,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               await addMessage(initialContent, initialFiles, newChat, false, options?.initialIntent);
               break;
           }
-          await selectChat(newChat.id);
         } catch (error) {
           console.error(`${type} processing failed during chat creation:`, error);
           throw error;
@@ -1471,27 +1475,37 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       try {
         const response = await apiClient.getChat(chatId)
         const chat = response.chat
-        setCurrentChat(prev => mergeChatPreservingUserMessages(chat, prev))
+        setCurrentChat(prev => {
+          if (!prev || prev.id !== chatId) return mergeChatPreservingUserMessages(chat, prev)
 
-        // Update the chats list to ensure consistency and add new chat if needed
+          const prevAssistantContent = prev.messages
+            ?.filter((m: any) => m?.role?.toUpperCase() !== 'USER' && m?.content)
+            .reduce((sum: number, m: any) => sum + (typeof m.content === 'string' ? m.content.length : 0), 0) || 0
+          const serverAssistantContent = (chat.messages || [])
+            .filter((m: any) => m?.role?.toUpperCase() !== 'USER' && m?.content)
+            .reduce((sum: number, m: any) => sum + (typeof m.content === 'string' ? m.content.length : 0), 0) || 0
+
+          if (prevAssistantContent > serverAssistantContent + 50) {
+            return prev
+          }
+
+          return mergeChatPreservingUserMessages(chat, prev)
+        })
+
         setChats((prev) => {
-          // Check if chat already exists
           const existingIndex = prev.findIndex(c => c && c.id === chatId)
           if (existingIndex >= 0) {
-            // Update existing chat
             return prev.filter(c => c && c.id).map((c) =>
               c.id === chatId ? mergeChatPreservingUserMessages(chat, c) : c
             )
           } else {
-            // Add new chat at the beginning
             return [chat, ...prev]
           }
         })
 
-        // Store the current chat ID in localStorage
         localStorage.setItem('currentChatId', chatId)
 
-        setUploadedFiles([]) // Clear uploaded files when switching chats
+        setUploadedFiles([])
       } catch (error) {
         console.error("Failed to load chat:", error)
       } finally {
