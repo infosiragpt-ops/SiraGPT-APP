@@ -50,55 +50,9 @@ jobs:
           envs: PROD_GROQ_API_KEY,PROD_GEMINI_API_KEY,PROD_DEEPSEEK_API_KEY,PROD_OPENROUTER_API_KEY,PROD_ANTHROPIC_API_KEY,PROD_OPENAI_API_KEY
           script: |
             set -e
-            echo "=== Syncing provider keys via python (handles special chars) ==="
-            python3 <<'PYEOF'
-            import os
-            import pathlib
-
-            env_path = pathlib.Path('/root/siraNew/siraGPT/.env')
-            keys = ['GROQ_API_KEY', 'GEMINI_API_KEY', 'DEEPSEEK_API_KEY',
-                    'OPENROUTER_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY']
-
-            # Read current .env. Skip if file is missing.
-            if not env_path.is_file():
-                print(f'ERROR: {env_path} not found')
-                raise SystemExit(2)
-
-            original_lines = env_path.read_text().splitlines()
-            out_lines = []
-            seen = set()
-
-            for line in original_lines:
-                replaced = False
-                for k in keys:
-                    if line.startswith(k + '='):
-                        val = os.environ.get('PROD_' + k, '')
-                        if val:
-                            out_lines.append(f'{k}={val}')
-                            seen.add(k)
-                            print(f'  replaced {k}')
-                        else:
-                            out_lines.append(line)
-                            print(f'  skip {k} (secret empty)')
-                            seen.add(k)
-                        replaced = True
-                        break
-                if not replaced:
-                    out_lines.append(line)
-
-            for k in keys:
-                if k in seen:
-                    continue
-                val = os.environ.get('PROD_' + k, '')
-                if val:
-                    out_lines.append(f'{k}={val}')
-                    print(f'  appended {k}')
-                else:
-                    print(f'  skip {k} (not present, secret empty)')
-
-            env_path.write_text('\n'.join(out_lines) + '\n')
-            print('OK env file updated')
-            PYEOF
+            cd /root/siraNew/siraGPT
+            echo "=== Syncing provider keys via scripts/sync-env-keys.py ==="
+            python3 scripts/sync-env-keys.py /root/siraNew/siraGPT/.env
 
             echo ""
             echo "=== Restarting PM2 backend ==="
