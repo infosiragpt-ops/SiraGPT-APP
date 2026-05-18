@@ -44,6 +44,13 @@ const { buildCitationFrame } = require("./citation-frame");
 const { createNoOpEvents } = require("./turn-events");
 const { validateScope: validateMemoryScope } = require("./memory-store");
 
+let _activeMemoryCache = null;
+function getActiveMemory() {
+  if (_activeMemoryCache) return _activeMemoryCache;
+  try { _activeMemoryCache = require("../active-memory"); } catch { _activeMemoryCache = null; }
+  return _activeMemoryCache;
+}
+
 const defaultChatTurnQueue = createSessionActorQueue();
 
 async function handleChatTurn({
@@ -376,11 +383,18 @@ async function handleChatTurnUnlocked({
   let historyForEngine = history;
   if (Array.isArray(history) && history.length > 0) {
     const _compactStartedAt = Date.now();
+    let memoryGistsForCompaction = [];
+    try {
+      const activeMemory = getActiveMemory();
+      if (activeMemory && userId) {
+        memoryGistsForCompaction = activeMemory.recall(userId, null, { limit: 12 });
+      }
+    } catch (_memErr) { /* non-fatal — compact without gists */ }
     compaction = await compactContext({
       messages: history,
       model: selectedModel.modelId,
       ragChunks: [],
-      memoryGists: [],
+      memoryGists: memoryGistsForCompaction,
     }).catch(() => null);
     siraMetrics.recordStageDuration("context_compaction", Date.now() - _compactStartedAt);
     if (compaction && Array.isArray(compaction.messages)) {

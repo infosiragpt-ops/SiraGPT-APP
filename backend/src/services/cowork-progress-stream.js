@@ -170,7 +170,13 @@ function createProgressStream(opts = {}) {
 }
 
 function writeSSE(res, stream) {
-  if (res.writableEnded || res.headersSent === false) return;
+  if (res.writableEnded) return;
+  if (!res.headersSent) {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+  }
 
   function onStage(event) {
     if (res.writableEnded) return;

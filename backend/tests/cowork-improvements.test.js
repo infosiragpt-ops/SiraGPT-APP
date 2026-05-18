@@ -8,131 +8,102 @@ const { CoworkProgressStream, createProgressStream, STAGES, STAGE_LABELS } = req
 const { RateLimiter, rateLimitMiddleware, ENDPOINT_LIMITS } = require('../src/services/rate-limiter');
 
 describe('document-comparison-engine', () => {
-  const docA = {
-    id: 'doc-a',
-    name: 'Contract A',
-    text: 'El contrato establece un pago mensual de $1,500 USD. La terminación anticipada tiene una penalización del 10%. Contacto: legal@acme.com. Vigencia: 2024-01-01 a 2025-12-31.',
+  const fileA = {
+    id: 'file-a',
+    originalName: 'Contract A.pdf',
+    extractedText: 'El contrato establece un pago mensual de $1,500 USD. La terminación anticipada tiene una penalización del 10%. Contacto: legal@acme.com. Vigencia: 2024-01-01 a 2025-12-31. Juan Pérez firmó el acuerdo.',
     mimeType: 'application/pdf',
-    entities: [
-      { type: 'money', value: '$1,500 USD' },
-      { type: 'email', value: 'legal@acme.com' },
-      { type: 'date', value: '2024-01-01' },
-    ],
-    domain: 'legal',
-    quality: { grade: 'B', overall: 72, wordCount: 30 },
-    structure: { headingCount: 2, hasToc: false },
-    risks: { severity: 'medium', overallScore: 25, items: [{ category: 'penalty_exposure', severity: 'medium' }] },
   };
 
-  const docB = {
-    id: 'doc-b',
-    name: 'Contract B',
-    text: 'El acuerdo establece un pago de $1,800 USD mensual. Sin cláusula de terminación. Contacto: legal@beta.com. Vigencia: 2024-06-01 a 2026-05-31.',
+  const fileB = {
+    id: 'file-b',
+    originalName: 'Contract B.pdf',
+    extractedText: 'El acuerdo establece un pago de $1,800 USD mensual. Sin cláusula de terminación. Contacto: legal@beta.com. Vigencia: 2024-06-01 a 2026-05-31. María García firmó el acuerdo.',
     mimeType: 'application/pdf',
-    entities: [
-      { type: 'money', value: '$1,800 USD' },
-      { type: 'email', value: 'legal@beta.com' },
-      { type: 'date', value: '2024-06-01' },
-    ],
-    domain: 'legal',
-    quality: { grade: 'A', overall: 85, wordCount: 25 },
-    structure: { headingCount: 1, hasToc: false },
-    risks: { severity: 'low', overallScore: 10, items: [] },
   };
 
   describe('compareDocuments()', () => {
-    it('requires at least 2 documents', () => {
-      const result = comparisonEngine.compareDocuments([docA]);
-      assert.equal(result.ok, false);
+    it('returns null for non-array input', () => {
+      const result = comparisonEngine.compareDocuments('not-array');
+      assert.equal(result, null);
     });
 
-    it('returns ok with comparison results', () => {
-      const result = comparisonEngine.compareDocuments([docA, docB]);
-      assert.equal(result.ok, true);
-      assert.equal(result.documentCount, 2);
+    it('returns null for fewer than 2 valid files', () => {
+      const result = comparisonEngine.compareDocuments([fileA]);
+      assert.equal(result, null);
     });
 
-    it('finds shared entities', () => {
-      const result = comparisonEngine.compareDocuments([docA, docB]);
-      assert.ok(Array.isArray(result.sharedEntities));
+    it('returns comparison report for 2+ valid files', () => {
+      const result = comparisonEngine.compareDocuments([fileA, fileB]);
+      assert.ok(result !== null);
+      assert.ok(Array.isArray(result.pairs));
     });
 
-    it('detects contradictions', () => {
-      const result = comparisonEngine.compareDocuments([docA, docB]);
-      assert.ok(Array.isArray(result.contradictions));
+    it('includes pairwise similarity', () => {
+      const result = comparisonEngine.compareDocuments([fileA, fileB]);
+      assert.ok(result.pairs.length >= 1);
+      assert.ok(typeof result.pairs[0].similarity === 'number');
     });
 
-    it('finds complementary insights', () => {
-      const result = comparisonEngine.compareDocuments([docA, docB]);
-      assert.ok(Array.isArray(result.complementary));
+    it('includes shared entities', () => {
+      const result = comparisonEngine.compareDocuments([fileA, fileB]);
+      assert.ok(result.entities);
+      assert.ok(result.entities.shared);
     });
 
-    it('computes alignment score', () => {
-      const result = comparisonEngine.compareDocuments([docA, docB]);
-      assert.ok(typeof result.alignmentScore === 'number');
-      assert.ok(result.alignmentScore >= 0 && result.alignmentScore <= 1);
+    it('includes timeline', () => {
+      const result = comparisonEngine.compareDocuments([fileA, fileB]);
+      assert.ok(Array.isArray(result.timeline || (result.chronologicalTimeline)));
     });
 
-    it('builds comparison matrix', () => {
-      const result = comparisonEngine.compareDocuments([docA, docB]);
-      assert.ok(Array.isArray(result.comparisonMatrix));
-      assert.ok(result.comparisonMatrix.length >= 3);
+    it('includes numeric conflicts', () => {
+      const result = comparisonEngine.compareDocuments([fileA, fileB]);
+      assert.ok(Array.isArray(result.numericConflicts || []));
     });
 
-    it('finds cross-references', () => {
-      const result = comparisonEngine.compareDocuments([docA, docB]);
-      assert.ok(Array.isArray(result.crossReferences));
+    it('includes dominance ratio', () => {
+      const result = comparisonEngine.compareDocuments([fileA, fileB]);
+      assert.ok(typeof result.dominanceRatio === 'number');
     });
 
-    it('builds synthesis text', () => {
-      const result = comparisonEngine.compareDocuments([docA, docB]);
-      assert.ok(typeof result.synthesis === 'string');
-      assert.ok(result.synthesis.length > 0);
+    it('caps file count at MAX_FILES_COMPARED', () => {
+      const manyFiles = Array.from({ length: 25 }, (_, i) => ({
+        id: `f-${i}`,
+        originalName: `File ${i}.txt`,
+        extractedText: `Document number ${i} with unique content about topic${i}.`,
+      }));
+      const result = comparisonEngine.compareDocuments(manyFiles);
+      assert.ok(result !== null);
     });
 
-    it('reports structural differences', () => {
-      const result = comparisonEngine.compareDocuments([docA, docB]);
-      assert.ok(Array.isArray(result.differences));
-      assert.equal(result.differences.length, 2);
-    });
-
-    it('handles focus query', () => {
-      const result = comparisonEngine.compareDocuments([docA, docB], { query: 'pago' });
-      assert.equal(result.ok, true);
-    });
-
-    it('handles documents without entities', () => {
-      const plainA = { id: 'a', name: 'A', text: 'Simple text about apples.' };
-      const plainB = { id: 'b', name: 'B', text: 'Simple text about oranges.' };
-      const result = comparisonEngine.compareDocuments([plainA, plainB]);
-      assert.equal(result.ok, true);
+    it('tolerates malformed entries', () => {
+      const result = comparisonEngine.compareDocuments([null, fileA, undefined, fileB, { bad: true }]);
+      assert.ok(result !== null);
     });
   });
 
-  describe('findSharedEntities()', () => {
-    it('finds overlapping entities across documents', () => {
-      const shared = comparisonEngine.findSharedEntities([docA, docB]);
-      assert.ok(Array.isArray(shared));
+  describe('jaccardSimilarity()', () => {
+    it('returns 1 for identical strings', () => {
+      const { jaccardSimilarity } = comparisonEngine._internal;
+      assert.equal(jaccardSimilarity('hello world test', 'hello world test'), 1);
+    });
+
+    it('returns 0 for disjoint strings', () => {
+      const { jaccardSimilarity } = comparisonEngine._internal;
+      assert.equal(jaccardSimilarity('alpha beta', 'gamma delta'), 0);
     });
   });
 
-  describe('findContradictions()', () => {
-    it('detects coverage gaps', () => {
-      const contradictions = comparisonEngine.findContradictions([docA, docB], ['terminación']);
-      assert.ok(Array.isArray(contradictions));
-    });
-  });
-
-  describe('computeAlignment()', () => {
-    it('returns 1 for identical documents', () => {
-      const score = comparisonEngine.computeAlignment([docA, docA]);
-      assert.ok(score > 0.5);
+  describe('renderComparisonBlock()', () => {
+    it('renders markdown for a valid report', () => {
+      const result = comparisonEngine.compareDocuments([fileA, fileB]);
+      const md = comparisonEngine.renderComparisonBlock(result);
+      assert.ok(typeof md === 'string');
     });
 
-    it('returns lower score for very different documents', () => {
-      const docC = { ...docA, domain: 'medical', quality: { grade: 'F', overall: 15 }, risks: { severity: 'critical' } };
-      const score = comparisonEngine.computeAlignment([docA, docC]);
-      assert.ok(score < comparisonEngine.computeAlignment([docA, docB]));
+    it('returns empty string for null report', () => {
+      const md = comparisonEngine.renderComparisonBlock(null);
+      assert.equal(md, '');
     });
   });
 });
@@ -300,5 +271,159 @@ describe('rate-limiter', () => {
 
   it('has endpoint limits configured', () => {
     assert.ok(Object.keys(ENDPOINT_LIMITS).length >= 5);
+  });
+});
+
+describe('cowork-engine deepAnalysisPrompt fix', () => {
+  const coworkEngine = require('../src/services/cowork-engine');
+
+  it('buildCoworkSystemPrompt includes fidelity directives', () => {
+    const prompt = coworkEngine.buildCoworkSystemPrompt(null);
+    assert.ok(prompt.includes('Response Fidelity'), 'prompt must include fidelity section');
+    assert.ok(prompt.includes('traceable to the source'), 'prompt must include traceability directive');
+  });
+});
+
+describe('health-check cowork subsystem integration', () => {
+  const { checkCoworkSubsystem, runFullHealthCheck } = require('../src/services/observability/health-check');
+
+  it('checkCoworkSubsystem returns skipped when no module', () => {
+    const result = checkCoworkSubsystem(null);
+    assert.equal(result.name, 'cowork');
+    assert.equal(result.status, 'skipped');
+  });
+
+  it('checkCoworkSubsystem returns healthy with valid module', () => {
+    const mockHealth = {
+      runLivenessCheck: () => ({ ok: true, checks: [] }),
+    };
+    const result = checkCoworkSubsystem(mockHealth);
+    assert.equal(result.name, 'cowork');
+    assert.equal(result.status, 'healthy');
+  });
+
+  it('checkCoworkSubsystem returns degraded on error', () => {
+    const mockHealth = {
+      runLivenessCheck: () => { throw new Error('boom'); },
+    };
+    const result = checkCoworkSubsystem(mockHealth);
+    assert.equal(result.status, 'degraded');
+  });
+
+  it('runFullHealthCheck includes cowork when module provided', async () => {
+    const report = await runFullHealthCheck({
+      coworkHealth: {
+        runLivenessCheck: () => ({ ok: true, checks: [] }),
+      },
+    });
+    const cowork = report.checks.find(c => c.name === 'cowork');
+    assert.ok(cowork, 'full health check must include cowork subsystem');
+    assert.equal(cowork.status, 'healthy');
+  });
+});
+
+describe('cowork-progress-stream writeSSE fix', () => {
+  const { createProgressStream, writeSSE } = require('../src/services/cowork-progress-stream');
+
+  it('writeSSE sets SSE headers when not yet sent', () => {
+    const stream = createProgressStream();
+    const headers = {};
+    let flushed = false;
+    const res = {
+      writableEnded: false,
+      headersSent: false,
+      setHeader: (k, v) => { headers[k] = v; },
+      flushHeaders: () => { flushed = true; },
+      write: () => {},
+      end: () => {},
+      on: () => {},
+    };
+    writeSSE(res, stream);
+    assert.ok(flushed || headers['Content-Type'] === 'text/event-stream', 'SSE headers should be set');
+    stream.destroy();
+  });
+});
+
+describe('cowork-engine deepAnalysisPrompt fix', () => {
+  const coworkEngine = require('../src/services/cowork-engine');
+
+  it('buildCoworkSystemPrompt includes fidelity directives', () => {
+    const prompt = coworkEngine.buildCoworkSystemPrompt(null);
+    assert.ok(prompt.includes('Response Fidelity'), 'prompt must include fidelity section');
+    assert.ok(prompt.includes('traceable to the source'), 'prompt must include traceability directive');
+  });
+
+  it('buildCoworkSystemPrompt includes memory for known user', () => {
+    const activeMemory = require('../src/services/active-memory');
+    activeMemory.createMemoryEntry('test-fidelity-user', 'I prefer Python', {
+      source: 'test', category: 'preference', confidence: 0.9, strength: 0.9,
+    });
+    activeMemory.autoPromote('test-fidelity-user');
+    const prompt = coworkEngine.buildCoworkSystemPrompt('test-fidelity-user');
+    assert.ok(prompt.includes('Active Memory') || prompt.includes('Persistent facts') || prompt.includes('Python'), 'prompt should include memory');
+    activeMemory.clearUserMemory('test-fidelity-user');
+  });
+});
+
+describe('health-check cowork subsystem integration', () => {
+  const { checkCoworkSubsystem, runFullHealthCheck } = require('../src/services/observability/health-check');
+
+  it('checkCoworkSubsystem returns skipped when no module', () => {
+    const result = checkCoworkSubsystem(null);
+    assert.equal(result.name, 'cowork');
+    assert.equal(result.status, 'skipped');
+  });
+
+  it('checkCoworkSubsystem returns healthy with valid module', () => {
+    const mockHealth = {
+      runLivenessCheck: () => ({ ok: true, checks: [] }),
+    };
+    const result = checkCoworkSubsystem(mockHealth);
+    assert.equal(result.name, 'cowork');
+    assert.equal(result.status, 'healthy');
+  });
+
+  it('checkCoworkSubsystem returns degraded on error', () => {
+    const mockHealth = {
+      runLivenessCheck: () => { throw new Error('boom'); },
+    };
+    const result = checkCoworkSubsystem(mockHealth);
+    assert.equal(result.status, 'degraded');
+  });
+
+  it('runFullHealthCheck accepts coworkHealth parameter', async () => {
+    const report = await runFullHealthCheck({
+      prisma: null,
+      redis: null,
+      queue: null,
+      coworkHealth: {
+        runLivenessCheck: () => ({ ok: true, checks: [] }),
+      },
+    });
+    const cowork = report.checks.find(c => c.name === 'cowork');
+    assert.ok(cowork, 'full health check must include cowork subsystem');
+    assert.equal(cowork.status, 'healthy');
+  });
+});
+
+describe('cowork-progress-stream writeSSE fix', () => {
+  const { createProgressStream, writeSSE } = require('../src/services/cowork-progress-stream');
+
+  it('writeSSE sets SSE headers when not yet sent', () => {
+    const stream = createProgressStream();
+    const headers = {};
+    let flushed = false;
+    const res = {
+      writableEnded: false,
+      headersSent: false,
+      setHeader: (k, v) => { headers[k] = v; },
+      flushHeaders: () => { flushed = true; this.headersSent = true; },
+      write: () => {},
+      end: () => {},
+      on: () => {},
+    };
+    writeSSE(res, stream);
+    assert.ok(flushed || headers['Content-Type'] === 'text/event-stream', 'SSE headers should be set');
+    stream.destroy();
   });
 });

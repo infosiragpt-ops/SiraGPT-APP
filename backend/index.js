@@ -425,6 +425,8 @@ const {
     reportToHttpStatus,
 } = require('./src/services/observability/health-check');
 
+const coworkHealth = require('./src/services/cowork-health');
+
 // ── Health-check result cache ──────────────────────────────
 // Prevents /health and /health/ready from hammering the DB on
 // every request when monitoring systems poll aggressively.
@@ -500,6 +502,7 @@ app.get('/health', async (_req, res) => {
         sentry: getSentryStatus(),
         langfuse: getLangfuseStatus(),
         posthog: getPostHogStatus(),
+        coworkHealth,
     }));
     res.status(reportToHttpStatus(report)).json(report);
 });

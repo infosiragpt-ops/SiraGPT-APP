@@ -288,6 +288,29 @@ function checkCircuitBreakers(breakers = {}) {
   };
 }
 
+function checkCoworkSubsystem(coworkHealth) {
+  if (!coworkHealth || typeof coworkHealth.runLivenessCheck !== "function") {
+    return { name: "cowork", status: "skipped", critical: false, latency_ms: 0, details: { reason: "no_cowork_health_module" } };
+  }
+  const start = Date.now();
+  try {
+    const liveness = coworkHealth.runLivenessCheck();
+    return {
+      name: "cowork",
+      status: liveness.ok ? "healthy" : "degraded",
+      critical: false,
+      latency_ms: Date.now() - start,
+      details: { ok: liveness.ok, subsystems: liveness.checks ? liveness.checks.length : 0 },
+    };
+  } catch (err) {
+    return {
+      name: "cowork", status: "degraded", critical: false,
+      latency_ms: Date.now() - start,
+      error: err && err.message ? String(err.message).slice(0, 200) : "unknown",
+    };
+  }
+}
+
 // ── Composite probes ───────────────────────────────────────────────
 
 function runLivenessCheck() {
@@ -308,7 +331,7 @@ async function runReadinessCheck({ prisma, redis, queue } = {}) {
   return composeStatus(checks);
 }
 
-async function runFullHealthCheck({ prisma, redis, queue, telemetry, sentry, langfuse, posthog, circuitBreakers } = {}) {
+async function runFullHealthCheck({ prisma, redis, queue, telemetry, sentry, langfuse, posthog, circuitBreakers, coworkHealth } = {}) {
   const checks = await Promise.all([
     checkDatabase(prisma),
     checkRedis(redis),
@@ -321,6 +344,9 @@ async function runFullHealthCheck({ prisma, redis, queue, telemetry, sentry, lan
   checks.push(checkLangfuse(langfuse));
   checks.push(checkPostHog(posthog));
   checks.push(checkCircuitBreakers(circuitBreakers));
+  if (coworkHealth) {
+    checks.push(checkCoworkSubsystem(coworkHealth));
+  }
   return composeStatus(checks);
 }
 
@@ -363,6 +389,7 @@ module.exports = {
   checkLangfuse,
   checkPostHog,
   checkCircuitBreakers,
+  checkCoworkSubsystem,
   runLivenessCheck,
   runReadinessCheck,
   runFullHealthCheck,

@@ -48,6 +48,14 @@ function buildCoworkSystemPrompt(userId, opts = {}) {
   parts.push('- Compact session history when context grows too long');
   parts.push('');
 
+  parts.push('### Response Fidelity');
+  parts.push('When responding about attached or auto-filed documents:');
+  parts.push('- Every number, date, and named entity in your response MUST be traceable to the source document');
+  parts.push('- Do NOT fabricate amounts, dates, or entity names that are not in the source');
+  parts.push('- If you are uncertain whether a fact appears in the source, hedge explicitly ("according to the document...", "the data suggests...")');
+  parts.push('- Contradictions between documents should be flagged, not silently resolved');
+  parts.push('');
+
   if (userId) {
     const memoryContext = activeMemory.getMemoryContext(userId, { limit: 15 });
     if (memoryContext.longTermFacts.length > 0 || memoryContext.shortTermFacts.length > 0) {
@@ -149,7 +157,7 @@ async function enrichAIRequest(userId, content, opts = {}) {
     model: opts.model,
   });
 
-  const deepAnalysisPrompt = '';
+  let deepAnalysisPrompt = '';
   if (autoFileResult?.autoFiled) {
     try {
       const analysis = await deepDocumentAnalyzer.analyzeDeep(content, {
@@ -158,6 +166,19 @@ async function enrichAIRequest(userId, content, opts = {}) {
         mimeType: autoFileResult.mime,
       });
       enriched.deepAnalysis = analysis;
+      if (analysis) {
+        const parts = [];
+        parts.push('### Deep Analysis');
+        parts.push(`Domain: ${analysis.domain.primary} (confidence: ${Math.round(analysis.domain.confidence * 100)}%)`);
+        parts.push(`Quality: ${analysis.quality.grade} (${analysis.quality.overall}/100)`);
+        parts.push(`Risk: ${analysis.risks.severity} (${analysis.risks.items.length} factors)`);
+        parts.push(`PII: ${analysis.piiSummary.total} entities (${analysis.piiSummary.critical} critical)`);
+        parts.push(`Structure: ${analysis.structure.headingCount} sections`);
+        if (analysis.autoTags.length > 0) {
+          parts.push(`Tags: ${analysis.autoTags.slice(0, 8).join(', ')}`);
+        }
+        deepAnalysisPrompt = parts.join('\n');
+      }
     } catch (_e) {
       enriched.deepAnalysis = null;
     }

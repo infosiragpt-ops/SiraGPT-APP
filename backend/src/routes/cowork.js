@@ -11,13 +11,15 @@ const skillsRegistry = require('../services/skills-registry');
 const coworkEngine = require('../services/cowork-engine');
 const coworkHealth = require('../services/cowork-health');
 const { createProgressStream, writeSSE, STAGES } = require('../services/cowork-progress-stream');
-const { rateLimitMiddleware, getEndpointLimiter } = require('../services/rate-limiter');
+const { rateLimitMiddleware } = require('../services/rate-limiter');
 
 const router = express.Router();
 
 const coworkRateLimit = rateLimitMiddleware({ windowMs: 60000, maxRequests: 30 });
+const analyzeDeepRateLimit = rateLimitMiddleware({ windowMs: 60000, maxRequests: 20 });
+const memoryRateLimit = rateLimitMiddleware({ windowMs: 60000, maxRequests: 60 });
 
-router.post('/auto-file', authenticateToken, async (req, res) => {
+router.post('/auto-file', authenticateToken, coworkRateLimit, async (req, res) => {
   try {
     const { content, fileName } = req.body;
     if (!content || typeof content !== 'string') {
@@ -31,7 +33,7 @@ router.post('/auto-file', authenticateToken, async (req, res) => {
   }
 });
 
-router.post('/auto-file/batch', authenticateToken, async (req, res) => {
+router.post('/auto-file/batch', authenticateToken, coworkRateLimit, async (req, res) => {
   try {
     const { files } = req.body;
     if (!Array.isArray(files) || files.length === 0) {
@@ -55,7 +57,7 @@ router.get('/auto-files', authenticateToken, async (req, res) => {
   }
 });
 
-router.post('/analyze-deep', authenticateToken, async (req, res) => {
+router.post('/analyze-deep', authenticateToken, analyzeDeepRateLimit, async (req, res) => {
   try {
     const { text, fileName, mimeType } = req.body;
     if (!text || typeof text !== 'string') {
@@ -73,7 +75,7 @@ router.post('/analyze-deep', authenticateToken, async (req, res) => {
   }
 });
 
-router.post('/analyze-deep/file/:fileId', authenticateToken, async (req, res) => {
+router.post('/analyze-deep/file/:fileId', authenticateToken, analyzeDeepRateLimit, async (req, res) => {
   try {
     const { fileId } = req.params;
     const prisma = require('../config/database');
@@ -94,7 +96,7 @@ router.post('/analyze-deep/file/:fileId', authenticateToken, async (req, res) =>
   }
 });
 
-router.post('/memory', authenticateToken, async (req, res) => {
+router.post('/memory', authenticateToken, memoryRateLimit, async (req, res) => {
   try {
     const { fact, category, tags, confidence, source } = req.body;
     if (!fact || typeof fact !== 'string') {
@@ -113,7 +115,7 @@ router.post('/memory', authenticateToken, async (req, res) => {
   }
 });
 
-router.post('/memory/recall', authenticateToken, async (req, res) => {
+router.post('/memory/recall', authenticateToken, memoryRateLimit, async (req, res) => {
   try {
     const { query, limit, tier, category } = req.body;
     const userId = req.user.id;
@@ -151,7 +153,7 @@ router.delete('/memory', authenticateToken, async (req, res) => {
   }
 });
 
-router.post('/memory/promote/:entryId', authenticateToken, async (req, res) => {
+router.post('/memory/promote/:entryId', authenticateToken, memoryRateLimit, async (req, res) => {
   try {
     const entry = activeMemory.promoteToLongTerm(req.params.entryId);
     if (!entry) return res.status(404).json({ error: 'entry not found' });
@@ -161,7 +163,7 @@ router.post('/memory/promote/:entryId', authenticateToken, async (req, res) => {
   }
 });
 
-router.post('/sessions', authenticateToken, async (req, res) => {
+router.post('/sessions', authenticateToken, coworkRateLimit, async (req, res) => {
   try {
     const { label, model, provider, tags, metadata } = req.body;
     const userId = req.user.id;
@@ -204,7 +206,7 @@ router.get('/sessions/:sessionId', authenticateToken, async (req, res) => {
   }
 });
 
-router.post('/sessions/:sessionId/messages', authenticateToken, async (req, res) => {
+router.post('/sessions/:sessionId/messages', authenticateToken, coworkRateLimit, async (req, res) => {
   try {
     const { role, content, tokens, metadata } = req.body;
     const session = sessionManager.getSession(req.params.sessionId);
@@ -240,7 +242,7 @@ router.get('/sessions/:sessionId/history', authenticateToken, async (req, res) =
   }
 });
 
-router.post('/sessions/:sessionId/spawn', authenticateToken, async (req, res) => {
+router.post('/sessions/:sessionId/spawn', authenticateToken, coworkRateLimit, async (req, res) => {
   try {
     const { label, model, provider, metadata } = req.body;
     const session = sessionManager.getSession(req.params.sessionId);
@@ -259,7 +261,7 @@ router.post('/sessions/:sessionId/spawn', authenticateToken, async (req, res) =>
   }
 });
 
-router.post('/sessions/:sessionId/compact', authenticateToken, async (req, res) => {
+router.post('/sessions/:sessionId/compact', authenticateToken, coworkRateLimit, async (req, res) => {
   try {
     const { summary, keepFirst, keepLast } = req.body;
     const session = sessionManager.getSession(req.params.sessionId);
@@ -277,7 +279,7 @@ router.post('/sessions/:sessionId/compact', authenticateToken, async (req, res) 
   }
 });
 
-router.post('/sessions/:sessionId/reset', authenticateToken, async (req, res) => {
+router.post('/sessions/:sessionId/reset', authenticateToken, coworkRateLimit, async (req, res) => {
   try {
     const session = sessionManager.getSession(req.params.sessionId);
     if (!session || session.userId !== req.user.id) {
@@ -290,7 +292,7 @@ router.post('/sessions/:sessionId/reset', authenticateToken, async (req, res) =>
   }
 });
 
-router.post('/sessions/:sessionId/send', authenticateToken, async (req, res) => {
+router.post('/sessions/:sessionId/send', authenticateToken, coworkRateLimit, async (req, res) => {
   try {
     const { targetSessionId, content, role } = req.body;
     if (!targetSessionId || !content) {
