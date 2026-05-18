@@ -43,7 +43,7 @@ const CATALOG = [
     supports_structured_outputs: true, supports_streaming: true,
     supports_caching: true,
     languages: ["en", "es", "fr", "de", "pt", "it", "ja", "zh", "ko", "ar"],
-    plans: ["PRO", "ENTERPRISE"],
+    plans: ["FREE", "PRO", "ENTERPRISE"],
   },
   {
     id: "gpt-5-mini", provider: "openai", family: "gpt-5",
@@ -73,7 +73,7 @@ const CATALOG = [
     supports_structured_outputs: true, supports_streaming: true,
     supports_caching: true,
     languages: ["en", "es", "fr", "de", "pt", "it", "ja", "zh", "ko", "ar"],
-    plans: ["PRO", "ENTERPRISE"],
+    plans: ["FREE", "PRO", "ENTERPRISE"],
   },
   {
     id: "gemini-2.5-flash", provider: "google", family: "gemini-2.5",
