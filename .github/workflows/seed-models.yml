@@ -34,6 +34,10 @@ jobs:
           script: |
             set -e
             cd /root/siraNew/siraGPT
+            echo "=== git pull (so seed.js is the latest) ==="
+            git fetch origin main
+            git pull --ff-only origin main
+            echo ""
             echo "=== Pre-seed model count ==="
             docker exec siragpt-db-1 psql -U myuser -d siraGPTNew \
               -tAc "SELECT COUNT(*) FROM ai_models" 2>&1
