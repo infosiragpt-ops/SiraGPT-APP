@@ -6217,6 +6217,257 @@ const createLeanCanvas = {
   },
 };
 
+// ─────────────────────────────────────────────────────────────────────────
+// Tool 27: create_balanced_scorecard
+// ─────────────────────────────────────────────────────────────────────────
+
+const createBalancedScorecard = {
+  name: 'create_balanced_scorecard',
+  description: "Generate Kaplan-Norton's Balanced Scorecard as an SVG file: 4 horizontal perspective bands (Financial top → Customer → Internal Process → Learning & Growth bottom) with strategic objectives in each, plus an optional cause-effect arrow on the left showing how lower perspectives drive upper ones. Use for strategy execution dashboards, performance management reviews, or aligning operational metrics to financial outcomes.",
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string', description: 'Scorecard title (e.g. "Q2 2026 Balanced Scorecard").' },
+      subtitle: { type: 'string', description: 'Optional context line.' },
+      financial:        { type: 'array', items: { type: 'object' }, description: '1-6 financial-perspective objectives: { objective, measure?, target?, current?, status?: "ahead"|"on_track"|"at_risk"|"behind" }.' },
+      customer:         { type: 'array', items: { type: 'object' }, description: '1-6 customer-perspective objectives (same shape).' },
+      internalProcess:  { type: 'array', items: { type: 'object' }, description: '1-6 internal-process-perspective objectives (same shape).' },
+      learningGrowth:   { type: 'array', items: { type: 'object' }, description: '1-6 learning-&-growth-perspective objectives (same shape).' },
+      theme: { type: 'string', enum: ['professional', 'modern', 'minimal', 'corporate'], description: 'Visual theme. Default: "professional".' },
+    },
+    required: ['title'],
+    additionalProperties: false,
+  },
+  async execute({
+    title,
+    subtitle = '',
+    financial = [],
+    customer = [],
+    internalProcess = [],
+    learningGrowth = [],
+    theme = 'professional',
+  }, ctx = {}) {
+    emitEvent(ctx, 'tool_call', { tool: 'create_balanced_scorecard', preview: title });
+
+    try {
+      const all = [financial, customer, internalProcess, learningGrowth];
+      if (!all.every(a => Array.isArray(a))) {
+        return { ok: false, error: 'all 4 perspective inputs must be arrays of objectives' };
+      }
+      const totalItems = all.reduce((s, a) => s + a.length, 0);
+      if (totalItems === 0) {
+        return { ok: false, error: 'all 4 perspectives are empty — provide at least one objective' };
+      }
+
+      const themes = {
+        professional: {
+          bg: '#FAFBFC', card: '#FFFFFF', text: '#1E293B', muted: '#64748B', border: '#E2E8F0', accent: '#2563EB',
+          // Each perspective has a recognised colour family in BSC literature
+          financial:       { fill: '#DBEAFE', bar: '#2563EB', label: '#1E3A8A' },
+          customer:        { fill: '#FEF3C7', bar: '#F59E0B', label: '#78350F' },
+          internalProcess: { fill: '#ECFDF5', bar: '#10B981', label: '#065F46' },
+          learningGrowth:  { fill: '#EDE9FE', bar: '#7C3AED', label: '#4C1D95' },
+          ahead: '#10B981', onTrack: '#22C55E', atRisk: '#F59E0B', behind: '#EF4444',
+        },
+        modern: {
+          bg: '#0B1121', card: '#1E293B', text: '#F1F5F9', muted: '#94A3B8', border: '#334155', accent: '#818CF8',
+          financial:       { fill: '#1E3A8A', bar: '#60A5FA', label: '#BFDBFE' },
+          customer:        { fill: '#78350F', bar: '#FBBF24', label: '#FDE68A' },
+          internalProcess: { fill: '#064E3B', bar: '#34D399', label: '#A7F3D0' },
+          learningGrowth:  { fill: '#4C1D95', bar: '#A78BFA', label: '#DDD6FE' },
+          ahead: '#34D399', onTrack: '#4ADE80', atRisk: '#FBBF24', behind: '#F87171',
+        },
+        minimal: {
+          bg: '#FFFFFF', card: '#FFFFFF', text: '#0F172A', muted: '#64748B', border: '#CBD5E1', accent: '#0F172A',
+          financial:       { fill: '#F8FAFC', bar: '#0F172A', label: '#0F172A' },
+          customer:        { fill: '#F8FAFC', bar: '#475569', label: '#0F172A' },
+          internalProcess: { fill: '#F8FAFC', bar: '#475569', label: '#0F172A' },
+          learningGrowth:  { fill: '#F8FAFC', bar: '#0F172A', label: '#0F172A' },
+          ahead: '#10B981', onTrack: '#22C55E', atRisk: '#F59E0B', behind: '#EF4444',
+        },
+        corporate: {
+          bg: '#F8FAFC', card: '#FFFFFF', text: '#0F172A', muted: '#475569', border: '#CBD5E1', accent: '#1E40AF',
+          financial:       { fill: '#E8F0FE', bar: '#1A73E8', label: '#0B3D91' },
+          customer:        { fill: '#FFF8E1', bar: '#F9AB00', label: '#7C4A00' },
+          internalProcess: { fill: '#E6F4EA', bar: '#0F9D58', label: '#1B5E20' },
+          learningGrowth:  { fill: '#F3E8FD', bar: '#673AB7', label: '#3A1A6E' },
+          ahead: '#0F9D58', onTrack: '#34A853', atRisk: '#F9AB00', behind: '#D93025',
+        },
+      };
+      const t = themes[theme] || themes.professional;
+
+      const safeTitle = xmlEscape(String(title).slice(0, 120));
+      const safeSubtitle = xmlEscape(String(subtitle || '').slice(0, 140));
+      const lineMaxChars = 38;
+
+      function fmtObj(obj) {
+        return {
+          objective: xmlEscape(String(obj.objective || '').slice(0, lineMaxChars)),
+          measure: obj.measure ? xmlEscape(String(obj.measure).slice(0, 32)) : '',
+          target: obj.target,
+          current: obj.current,
+          status: ['ahead', 'on_track', 'at_risk', 'behind'].includes(String(obj.status)) ? String(obj.status) : null,
+        };
+      }
+      function fmtList(items) {
+        return (items || []).slice(0, 6).map(fmtObj).filter(o => o.objective);
+      }
+
+      const BANDS = [
+        { key: 'financial',       pal: t.financial,       label: 'FINANCIAL',          subLabel: '¿Qué esperan los stakeholders?', items: fmtList(financial) },
+        { key: 'customer',        pal: t.customer,        label: 'CUSTOMER',           subLabel: '¿Cómo nos ven los clientes?',   items: fmtList(customer) },
+        { key: 'internalProcess', pal: t.internalProcess, label: 'INTERNAL PROCESS',   subLabel: '¿En qué procesos sobresalir?',  items: fmtList(internalProcess) },
+        { key: 'learningGrowth',  pal: t.learningGrowth,  label: 'LEARNING & GROWTH',  subLabel: '¿Cómo mantener cambio y mejora?',items: fmtList(learningGrowth) },
+      ];
+
+      const bandH = 160;
+      const headerH = safeSubtitle ? 110 : 86;
+      const causalArrowW = 56;
+      const labelW = 200;
+      const pad = 24;
+      const W = pad * 2 + causalArrowW + labelW + 720;
+      const H = headerH + pad + bandH * 4 + 12 + pad;
+
+      let body = `<rect width="${W}" height="${H}" fill="${t.bg}" rx="12"/>`;
+      // Header
+      body += `<rect x="0" y="0" width="${W}" height="${headerH}" fill="${t.accent}"/>`;
+      body += `<text x="${W / 2}" y="42" text-anchor="middle" font-family="Georgia, serif" font-size="24" font-weight="bold" fill="#fff">${safeTitle}</text>`;
+      body += `<text x="${W / 2}" y="66" text-anchor="middle" font-family="Arial" font-size="12" fill="#fff" opacity="0.85">${totalItems} objetivos · 4 perspectivas</text>`;
+      if (safeSubtitle) {
+        body += `<text x="${W / 2}" y="92" text-anchor="middle" font-family="Arial" font-size="13" fill="#fff" opacity="0.92">${safeSubtitle}</text>`;
+      }
+
+      const topY = headerH + pad;
+
+      // ── Cause-effect arrow on the left (pointing up — value cascades upward) ──
+      const arrowX = pad + 8;
+      const arrowYTop = topY + 20;
+      const arrowYBottom = topY + bandH * 4 - 20;
+      body += `<line x1="${arrowX + causalArrowW / 2 - 8}" y1="${arrowYBottom}" x2="${arrowX + causalArrowW / 2 - 8}" y2="${arrowYTop}" stroke="${t.accent}" stroke-width="3" opacity="0.7"/>`;
+      // Arrowhead
+      body += `<polygon points="${arrowX + causalArrowW / 2 - 16},${arrowYTop + 8} ${arrowX + causalArrowW / 2 - 8},${arrowYTop} ${arrowX + causalArrowW / 2},${arrowYTop + 8}" fill="${t.accent}" opacity="0.85"/>`;
+      // Arrow tail label (rotated text on the side)
+      const arrowMid = (arrowYTop + arrowYBottom) / 2;
+      body += `<text x="${arrowX + causalArrowW / 2 + 6}" y="${arrowMid}" text-anchor="middle" font-family="Arial" font-size="10" font-weight="bold" fill="${t.muted}" transform="rotate(-90, ${arrowX + causalArrowW / 2 + 6}, ${arrowMid})">CAUSA → EFECTO</text>`;
+
+      // Bands
+      BANDS.forEach((band, i) => {
+        const y = topY + i * bandH;
+        // Label cell (left side, after arrow)
+        const labelX = pad + causalArrowW;
+        body += `<rect x="${labelX}" y="${y}" width="${labelW}" height="${bandH - 6}" rx="10" fill="${band.pal.fill}" stroke="${t.border}" stroke-width="1"/>`;
+        body += `<rect x="${labelX}" y="${y}" width="6" height="${bandH - 6}" rx="3" fill="${band.pal.bar}"/>`;
+        body += `<text x="${labelX + 18}" y="${y + 30}" font-family="Arial" font-size="13" font-weight="bold" fill="${band.pal.label}">${xmlEscape(band.label)}</text>`;
+        // Sub-label (wrap to up to 2 lines)
+        const subWords = band.subLabel.split(' ');
+        let line1 = '';
+        let line2 = '';
+        for (const w of subWords) {
+          if ((line1 + ' ' + w).trim().length < 28) line1 = (line1 + ' ' + w).trim();
+          else line2 = (line2 + ' ' + w).trim();
+        }
+        body += `<text x="${labelX + 18}" y="${y + 50}" font-family="Arial" font-size="10" fill="${t.muted}">${xmlEscape(line1)}</text>`;
+        if (line2) body += `<text x="${labelX + 18}" y="${y + 64}" font-family="Arial" font-size="10" fill="${t.muted}">${xmlEscape(line2)}</text>`;
+        // Count badge
+        body += `<circle cx="${labelX + labelW - 24}" cy="${y + 30}" r="14" fill="${band.pal.bar}"/>`;
+        body += `<text x="${labelX + labelW - 24}" y="${y + 35}" text-anchor="middle" font-family="Arial" font-size="13" font-weight="bold" fill="#fff">${band.items.length}</text>`;
+
+        // Objective chips (right of label cell)
+        const chipsAreaX = labelX + labelW + 12;
+        const chipsAreaW = W - chipsAreaX - pad;
+        if (band.items.length === 0) {
+          body += `<text x="${chipsAreaX + chipsAreaW / 2}" y="${y + bandH / 2}" text-anchor="middle" font-family="Arial" font-size="12" fill="${t.muted}" font-style="italic">— sin objetivos —</text>`;
+        } else {
+          // Lay out chips in up to 2 rows × up to 3 cols
+          const chipW = 220;
+          const chipH = 64;
+          const chipGap = 8;
+          const cols = 3;
+          band.items.slice(0, 6).forEach((obj, idx) => {
+            const col = idx % cols;
+            const row = Math.floor(idx / cols);
+            const cx = chipsAreaX + col * (chipW + chipGap);
+            const cy = y + 16 + row * (chipH + chipGap);
+            const statusCol = obj.status === 'ahead' ? t.ahead
+                             : obj.status === 'on_track' ? t.onTrack
+                             : obj.status === 'at_risk' ? t.atRisk
+                             : obj.status === 'behind' ? t.behind
+                             : null;
+            body += `<rect x="${cx}" y="${cy}" width="${chipW}" height="${chipH}" rx="6" fill="${t.card}" stroke="${t.border}" stroke-width="1" filter="url(#vis-shadow)"/>`;
+            body += `<rect x="${cx}" y="${cy}" width="4" height="${chipH}" rx="2" fill="${band.pal.bar}"/>`;
+            body += `<text x="${cx + 12}" y="${cy + 18}" font-family="Arial" font-size="11" font-weight="bold" fill="${t.text}">${obj.objective}</text>`;
+            if (obj.measure) {
+              body += `<text x="${cx + 12}" y="${cy + 34}" font-family="Arial" font-size="9" fill="${t.muted}">📏 ${obj.measure}</text>`;
+            }
+            if (obj.target !== undefined || obj.current !== undefined) {
+              const cur = obj.current !== undefined ? obj.current : '';
+              const tgt = obj.target !== undefined ? obj.target : '';
+              body += `<text x="${cx + 12}" y="${cy + 48}" font-family="Arial" font-size="9" fill="${t.text}">${cur} / ${tgt}</text>`;
+            }
+            if (statusCol) {
+              const sLabel = obj.status.replace('_', ' ').toUpperCase();
+              const pillW = sLabel.length * 5.4 + 14;
+              body += `<rect x="${cx + chipW - pillW - 8}" y="${cy + 8}" width="${pillW}" height="14" rx="7" fill="${statusCol}"/>`;
+              body += `<text x="${cx + chipW - 8 - pillW / 2}" y="${cy + 18}" text-anchor="middle" font-family="Arial" font-size="8" font-weight="bold" fill="#fff">${sLabel}</text>`;
+            }
+          });
+        }
+      });
+
+      const svg = svgDocument({
+        width: W,
+        height: H,
+        title: safeTitle,
+        description: `Balanced Scorecard: ${safeTitle}`,
+        body,
+      });
+
+      const buffer = Buffer.from(svg, 'utf8');
+      const filename = `bsc_${crypto.randomBytes(4).toString('hex')}.svg`;
+      const artifact = finalizeArtifact({ filename, buffer, mime: EXTENSION_TO_MIME.svg, ctx });
+
+      emitEvent(ctx, 'file_artifact', {
+        artifact: {
+          id: artifact.id,
+          filename: artifact.filename,
+          format: 'svg',
+          mime: 'image/svg+xml',
+          sizeBytes: artifact.sizeBytes,
+          downloadUrl: artifact.downloadUrl,
+        },
+      });
+
+      const counts = {
+        financial: BANDS[0].items.length,
+        customer: BANDS[1].items.length,
+        internalProcess: BANDS[2].items.length,
+        learningGrowth: BANDS[3].items.length,
+      };
+
+      emitEvent(ctx, 'tool_output', {
+        tool: 'create_balanced_scorecard',
+        ok: true,
+        preview: `BSC listo: ${artifact.filename} (${totalItems} objetivos · 4 perspectivas · ${Math.round(artifact.sizeBytes / 1024)} KB)`,
+      });
+
+      return {
+        ok: true,
+        id: artifact.id,
+        filename: artifact.filename,
+        sizeBytes: artifact.sizeBytes,
+        downloadUrl: artifact.downloadUrl,
+        title,
+        counts,
+        total: totalItems,
+      };
+    } catch (err) {
+      const msg = err?.message || String(err);
+      emitEvent(ctx, 'tool_output', { tool: 'create_balanced_scorecard', ok: false, preview: `Error: ${msg}` });
+      return { ok: false, error: msg };
+    }
+  },
+};
+
 // ── All visual/media tools for the agent ──────────────────────────────
 
 const VISUAL_MEDIA_TOOLS = [
@@ -6246,6 +6497,7 @@ const VISUAL_MEDIA_TOOLS = [
   createOkrDashboard,
   createEmpathyMap,
   createLeanCanvas,
+  createBalancedScorecard,
 ];
 
 // Internal helpers exposed for unit testing — NOT part of the public agent

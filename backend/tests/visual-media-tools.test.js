@@ -653,8 +653,8 @@ test('create_dashboard_html: no charts', async () => {
 
 // ── Tool metadata ────────────────────────────────────────────────
 
-test('all 26 tools have valid metadata', () => {
-  assert.equal(VISUAL_MEDIA_TOOLS.length, 26);
+test('all 27 tools have valid metadata', () => {
+  assert.equal(VISUAL_MEDIA_TOOLS.length, 27);
   for (const t of VISUAL_MEDIA_TOOLS) {
     assert.ok(t.name);
     assert.ok(t.description);
@@ -2996,6 +2996,149 @@ test('create_lean_canvas: emits expected events', async () => {
   await tool('create_lean_canvas').execute({
     title: 'Events',
     problem: ['x'],
+  }, ctx);
+  const types = ctx._events.map(e => e.type);
+  assert.ok(types.includes('tool_call'));
+  assert.ok(types.includes('file_artifact'));
+  assert.ok(types.includes('tool_output'));
+});
+
+// ── create_balanced_scorecard ────────────────────────────────────
+
+test('create_balanced_scorecard: 4-perspective full BSC', async () => {
+  const bsc = tool('create_balanced_scorecard');
+  assert.ok(bsc);
+  const r = await bsc.execute({
+    title: 'Q2 2026 BSC',
+    subtitle: 'SiraGPT corporate',
+    financial: [
+      { objective: 'Grow MRR LATAM', measure: 'MRR USD', target: 100, current: 70, status: 'on_track' },
+      { objective: 'Reduce CAC', measure: 'CAC USD', target: 200, current: 280, status: 'at_risk' },
+    ],
+    customer: [
+      { objective: 'Improve NPS', target: 50, current: 38, status: 'at_risk' },
+    ],
+    internalProcess: [
+      { objective: 'Speed up onboarding', measure: 'Days to first value', target: 1, current: 3, status: 'behind' },
+    ],
+    learningGrowth: [
+      { objective: 'Upskill engineers', measure: 'Trainings/q', target: 4, current: 5, status: 'ahead' },
+    ],
+    theme: 'professional',
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.total, 5);
+  assert.equal(r.counts.financial, 2);
+  assert.equal(r.counts.customer, 1);
+  assert.equal(r.counts.internalProcess, 1);
+  assert.equal(r.counts.learningGrowth, 1);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.startsWith('<svg'));
+  assert.ok(svg.includes('Q2 2026 BSC'));
+  assert.ok(svg.includes('FINANCIAL'));
+  assert.ok(svg.includes('CUSTOMER'));
+  assert.ok(svg.includes('INTERNAL PROCESS'));
+  assert.ok(svg.includes('LEARNING &amp; GROWTH') || svg.includes('LEARNING & GROWTH'));
+  assert.ok(svg.includes('Grow MRR LATAM'));
+  assert.ok(svg.includes('Upskill engineers'));
+  // Status pills
+  assert.ok(svg.includes('ON TRACK'));
+  assert.ok(svg.includes('AT RISK'));
+  assert.ok(svg.includes('BEHIND'));
+  assert.ok(svg.includes('AHEAD'));
+  // Cause-effect arrow label
+  assert.ok(svg.includes('CAUSA'));
+});
+
+test('create_balanced_scorecard: only Financial populated', async () => {
+  const r = await tool('create_balanced_scorecard').execute({
+    title: 'Solo Financial',
+    financial: [{ objective: 'Solo objective' }],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.total, 1);
+  assert.equal(r.counts.financial, 1);
+  assert.equal(r.counts.customer, 0);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.includes('Solo objective'));
+  // Empty bands render "sin objetivos" placeholder
+  assert.ok(svg.includes('— sin objetivos —'));
+});
+
+test('create_balanced_scorecard: empty BSC fails', async () => {
+  const r = await tool('create_balanced_scorecard').execute({
+    title: 'Empty',
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /empty|provide at least/i);
+});
+
+test('create_balanced_scorecard: non-array perspective fails fast', async () => {
+  const r = await tool('create_balanced_scorecard').execute({
+    title: 'Bad',
+    financial: 'should be array',
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /must be arrays/i);
+});
+
+test('create_balanced_scorecard: caps objectives at 6 per perspective', async () => {
+  const eight = Array.from({ length: 8 }, (_, i) => ({ objective: `Obj ${i + 1}` }));
+  const r = await tool('create_balanced_scorecard').execute({
+    title: 'Overflow',
+    financial: eight,
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.counts.financial, 6);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.includes('Obj 6'));
+  assert.equal(svg.includes('Obj 7'), false);
+});
+
+test('create_balanced_scorecard: invalid status ignored (no pill rendered)', async () => {
+  const r = await tool('create_balanced_scorecard').execute({
+    title: 'Bad status',
+    financial: [{ objective: 'x', status: 'rainbow' }],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  // None of the valid status labels should appear
+  assert.equal(svg.includes('AHEAD'), false);
+  assert.equal(svg.includes('ON TRACK'), false);
+  assert.equal(svg.includes('AT RISK'), false);
+  assert.equal(svg.includes('BEHIND'), false);
+});
+
+test('create_balanced_scorecard: xml-escapes objective content', async () => {
+  const r = await tool('create_balanced_scorecard').execute({
+    title: 'XSS',
+    financial: [{ objective: '<script>evil</script>', measure: '"injected"' }],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.equal(svg.includes('<script>evil</script>'), false);
+  assert.ok(svg.includes('&lt;script&gt;'));
+  assert.ok(svg.includes('&quot;injected&quot;'));
+});
+
+test('create_balanced_scorecard: supports all four themes', async () => {
+  for (const theme of ['professional', 'modern', 'minimal', 'corporate']) {
+    const r = await tool('create_balanced_scorecard').execute({
+      title: `Theme ${theme}`,
+      financial: [{ objective: 'o' }],
+      theme,
+    }, fakeCtx());
+    assert.equal(r.ok, true, `theme ${theme} should succeed`);
+    const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+    assert.ok(svg.startsWith('<svg'));
+  }
+});
+
+test('create_balanced_scorecard: emits expected events', async () => {
+  const ctx = fakeCtx();
+  await tool('create_balanced_scorecard').execute({
+    title: 'Events',
+    financial: [{ objective: 'o' }],
   }, ctx);
   const types = ctx._events.map(e => e.type);
   assert.ok(types.includes('tool_call'));
