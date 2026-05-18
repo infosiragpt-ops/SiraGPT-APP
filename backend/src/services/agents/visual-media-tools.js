@@ -6952,6 +6952,214 @@ const createBcgMatrix = {
   },
 };
 
+// ─────────────────────────────────────────────────────────────────────────
+// Tool 30: create_moscow_chart
+// ─────────────────────────────────────────────────────────────────────────
+
+const createMoscowChart = {
+  name: 'create_moscow_chart',
+  description: 'Generate a MoSCoW prioritization chart as an SVG file: 4 vertical columns categorising features / tasks by priority — Must Have, Should Have, Could Have, Won\'t Have (this time). Each column accepts 1-10 items. Use for agile backlog grooming, MVP scope decisions, requirement triage, or release planning.',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string', description: 'Chart title (e.g. "MVP backlog — Sprint 14").' },
+      subtitle: { type: 'string', description: 'Optional context line (e.g. release, team).' },
+      mustHave:   { type: 'array', items: { type: 'string' }, description: 'Critical items required for the release to succeed (1-10).' },
+      shouldHave: { type: 'array', items: { type: 'string' }, description: 'Important items but not critical for launch (1-10).' },
+      couldHave:  { type: 'array', items: { type: 'string' }, description: 'Nice-to-have items that improve the release if time permits (1-10).' },
+      wontHave:   { type: 'array', items: { type: 'string' }, description: 'Items explicitly excluded from this release (1-10).' },
+      theme: { type: 'string', enum: ['professional', 'modern', 'minimal', 'corporate'], description: 'Visual theme. Default: "professional".' },
+    },
+    required: ['title'],
+    additionalProperties: false,
+  },
+  async execute({ title, subtitle = '', mustHave = [], shouldHave = [], couldHave = [], wontHave = [], theme = 'professional' }, ctx = {}) {
+    emitEvent(ctx, 'tool_call', { tool: 'create_moscow_chart', preview: title });
+
+    try {
+      const all = [mustHave, shouldHave, couldHave, wontHave];
+      if (!all.every(a => Array.isArray(a))) {
+        return { ok: false, error: 'mustHave / shouldHave / couldHave / wontHave must be arrays' };
+      }
+      const totalItems = all.reduce((s, a) => s + a.length, 0);
+      if (totalItems === 0) {
+        return { ok: false, error: 'all 4 priority buckets are empty — provide at least one item' };
+      }
+
+      const themes = {
+        professional: {
+          bg: '#FAFBFC', card: '#FFFFFF', text: '#1E293B', muted: '#64748B', border: '#E2E8F0', accent: '#2563EB',
+          // Standard MoSCoW colour scheme (priority decreases red → amber → blue → grey)
+          must:   { fill: '#FEE2E2', bar: '#DC2626', label: '#7F1D1D' },
+          should: { fill: '#FEF3C7', bar: '#F59E0B', label: '#78350F' },
+          could:  { fill: '#DBEAFE', bar: '#2563EB', label: '#1E3A8A' },
+          wont:   { fill: '#F1F5F9', bar: '#64748B', label: '#334155' },
+        },
+        modern: {
+          bg: '#0B1121', card: '#1E293B', text: '#F1F5F9', muted: '#94A3B8', border: '#334155', accent: '#818CF8',
+          must:   { fill: '#7F1D1D', bar: '#F87171', label: '#FECACA' },
+          should: { fill: '#78350F', bar: '#FBBF24', label: '#FDE68A' },
+          could:  { fill: '#1E3A8A', bar: '#60A5FA', label: '#BFDBFE' },
+          wont:   { fill: '#334155', bar: '#94A3B8', label: '#E2E8F0' },
+        },
+        minimal: {
+          bg: '#FFFFFF', card: '#FFFFFF', text: '#0F172A', muted: '#64748B', border: '#CBD5E1', accent: '#0F172A',
+          must:   { fill: '#F8FAFC', bar: '#0F172A', label: '#0F172A' },
+          should: { fill: '#F8FAFC', bar: '#475569', label: '#0F172A' },
+          could:  { fill: '#F8FAFC', bar: '#475569', label: '#0F172A' },
+          wont:   { fill: '#F8FAFC', bar: '#94A3B8', label: '#0F172A' },
+        },
+        corporate: {
+          bg: '#F8FAFC', card: '#FFFFFF', text: '#0F172A', muted: '#475569', border: '#CBD5E1', accent: '#1E40AF',
+          must:   { fill: '#FCE8E6', bar: '#D93025', label: '#7C1D14' },
+          should: { fill: '#FFF8E1', bar: '#F9AB00', label: '#7C4A00' },
+          could:  { fill: '#E8F0FE', bar: '#1A73E8', label: '#0B3D91' },
+          wont:   { fill: '#F1F3F4', bar: '#5F6368', label: '#202124' },
+        },
+      };
+      const t = themes[theme] || themes.professional;
+
+      const safeTitle = xmlEscape(String(title).slice(0, 120));
+      const safeSubtitle = xmlEscape(String(subtitle || '').slice(0, 140));
+
+      const COLUMNS = [
+        { key: 'must',   pal: t.must,   label: 'MUST HAVE',   subLabel: 'Critical · sin esto el release falla',         items: mustHave },
+        { key: 'should', pal: t.should, label: 'SHOULD HAVE', subLabel: 'Importante · pero no crítico para launch',     items: shouldHave },
+        { key: 'could',  pal: t.could,  label: 'COULD HAVE',  subLabel: 'Mejora si hay tiempo · prescindible',          items: couldHave },
+        { key: 'wont',   pal: t.wont,   label: 'WON\'T HAVE', subLabel: 'Out of scope this release · revisar después',  items: wontHave },
+      ];
+
+      const colW = 260;
+      const colGap = 12;
+      const cardH = 50;
+      const cardGap = 8;
+      const colHeaderH = 80;
+      const pad = 28;
+      const headerH = safeSubtitle ? 110 : 86;
+      const lineMaxChars = 40;
+
+      const formatted = COLUMNS.map(c => ({
+        ...c,
+        items: (c.items || []).slice(0, 10).map(x => xmlEscape(String(x || '').slice(0, lineMaxChars))).filter(Boolean),
+      }));
+      const maxItems = Math.max(...formatted.map(c => c.items.length), 1);
+      const colInnerH = colHeaderH + maxItems * (cardH + cardGap) + 16;
+      const W = pad * 2 + 4 * colW + 3 * colGap;
+      const H = headerH + pad + colInnerH + pad;
+
+      let body = `<rect width="${W}" height="${H}" fill="${t.bg}" rx="12"/>`;
+      // Header
+      body += `<rect x="0" y="0" width="${W}" height="${headerH}" fill="${t.accent}"/>`;
+      body += `<text x="${W / 2}" y="42" text-anchor="middle" font-family="Georgia, serif" font-size="24" font-weight="bold" fill="#fff">${safeTitle}</text>`;
+      const headerMeta = `M:${formatted[0].items.length} · S:${formatted[1].items.length} · C:${formatted[2].items.length} · W:${formatted[3].items.length}`;
+      body += `<text x="${W / 2}" y="66" text-anchor="middle" font-family="Arial" font-size="12" fill="#fff" opacity="0.85">${headerMeta}</text>`;
+      if (safeSubtitle) {
+        body += `<text x="${W / 2}" y="92" text-anchor="middle" font-family="Arial" font-size="13" fill="#fff" opacity="0.92">${safeSubtitle}</text>`;
+      }
+
+      // Columns
+      const topY = headerH + pad;
+      formatted.forEach((col, ci) => {
+        const cx = pad + ci * (colW + colGap);
+        // Column background
+        body += `<rect x="${cx}" y="${topY}" width="${colW}" height="${colInnerH}" rx="10" fill="${t.card}" stroke="${t.border}" stroke-width="1" filter="url(#vis-shadow)"/>`;
+        // Column header (color-coded)
+        body += `<rect x="${cx}" y="${topY}" width="${colW}" height="${colHeaderH}" rx="10" fill="${col.pal.fill}"/>`;
+        body += `<rect x="${cx}" y="${topY + colHeaderH - 3}" width="${colW}" height="3" fill="${col.pal.bar}"/>`;
+        // Big M/S/C/W letter
+        body += `<circle cx="${cx + 26}" cy="${topY + 30}" r="18" fill="${col.pal.bar}"/>`;
+        body += `<text x="${cx + 26}" y="${topY + 37}" text-anchor="middle" font-family="Georgia, serif" font-size="20" font-weight="bold" fill="#fff">${col.label[0]}</text>`;
+        // Label + sublabel
+        body += `<text x="${cx + 52}" y="${topY + 30}" font-family="Arial" font-size="14" font-weight="bold" fill="${col.pal.label}">${xmlEscape(col.label)}</text>`;
+        // Sub-label wrap
+        const subWords = col.subLabel.split(' ');
+        let line1 = '';
+        let line2 = '';
+        for (const w of subWords) {
+          if ((line1 + ' ' + w).trim().length < 30) line1 = (line1 + ' ' + w).trim();
+          else line2 = (line2 + ' ' + w).trim();
+        }
+        body += `<text x="${cx + 52}" y="${topY + 46}" font-family="Arial" font-size="10" fill="${t.muted}">${xmlEscape(line1)}</text>`;
+        if (line2) body += `<text x="${cx + 52}" y="${topY + 60}" font-family="Arial" font-size="10" fill="${t.muted}">${xmlEscape(line2)}</text>`;
+        // Count badge top-right
+        body += `<text x="${cx + colW - 16}" y="${topY + 30}" text-anchor="end" font-family="Arial" font-size="14" font-weight="bold" fill="${col.pal.bar}">${col.items.length}</text>`;
+
+        // Cards
+        if (col.items.length === 0) {
+          body += `<text x="${cx + colW / 2}" y="${topY + colHeaderH + 40}" text-anchor="middle" font-family="Arial" font-size="11" fill="${t.muted}" font-style="italic">— sin items —</text>`;
+        } else {
+          col.items.forEach((line, idx) => {
+            const ky = topY + colHeaderH + 12 + idx * (cardH + cardGap);
+            const kx = cx + 10;
+            const kW = colW - 20;
+            body += `<rect x="${kx}" y="${ky}" width="${kW}" height="${cardH}" rx="6" fill="${t.card}" stroke="${t.border}" stroke-width="1"/>`;
+            body += `<rect x="${kx}" y="${ky}" width="4" height="${cardH}" rx="2" fill="${col.pal.bar}"/>`;
+            // Title (wrap to up to 2 lines if needed)
+            const words = line.split(' ');
+            let l1 = '';
+            let l2 = '';
+            for (const w of words) {
+              if ((l1 + ' ' + w).trim().length < 32) l1 = (l1 + ' ' + w).trim();
+              else l2 = (l2 + ' ' + w).trim();
+            }
+            body += `<text x="${kx + 14}" y="${ky + 22}" font-family="Arial" font-size="12" font-weight="600" fill="${t.text}">${l1}</text>`;
+            if (l2) body += `<text x="${kx + 14}" y="${ky + 38}" font-family="Arial" font-size="11" fill="${t.muted}">${l2}</text>`;
+          });
+        }
+      });
+
+      const svg = svgDocument({
+        width: W,
+        height: H,
+        title: safeTitle,
+        description: `MoSCoW chart: ${safeTitle}`,
+        body,
+      });
+
+      const buffer = Buffer.from(svg, 'utf8');
+      const filename = `moscow_${crypto.randomBytes(4).toString('hex')}.svg`;
+      const artifact = finalizeArtifact({ filename, buffer, mime: EXTENSION_TO_MIME.svg, ctx });
+
+      emitEvent(ctx, 'file_artifact', {
+        artifact: {
+          id: artifact.id,
+          filename: artifact.filename,
+          format: 'svg',
+          mime: 'image/svg+xml',
+          sizeBytes: artifact.sizeBytes,
+          downloadUrl: artifact.downloadUrl,
+        },
+      });
+
+      emitEvent(ctx, 'tool_output', {
+        tool: 'create_moscow_chart',
+        ok: true,
+        preview: `MoSCoW listo: ${artifact.filename} (${totalItems} items, ${Math.round(artifact.sizeBytes / 1024)} KB)`,
+      });
+
+      return {
+        ok: true,
+        id: artifact.id,
+        filename: artifact.filename,
+        sizeBytes: artifact.sizeBytes,
+        downloadUrl: artifact.downloadUrl,
+        title,
+        counts: {
+          mustHave:   formatted[0].items.length,
+          shouldHave: formatted[1].items.length,
+          couldHave:  formatted[2].items.length,
+          wontHave:   formatted[3].items.length,
+        },
+        total: totalItems,
+      };
+    } catch (err) {
+      const msg = err?.message || String(err);
+      emitEvent(ctx, 'tool_output', { tool: 'create_moscow_chart', ok: false, preview: `Error: ${msg}` });
+      return { ok: false, error: msg };
+    }
+  },
+};
+
 // ── All visual/media tools for the agent ──────────────────────────────
 
 const VISUAL_MEDIA_TOOLS = [
@@ -6984,6 +7192,7 @@ const VISUAL_MEDIA_TOOLS = [
   createBalancedScorecard,
   createAnsoffMatrix,
   createBcgMatrix,
+  createMoscowChart,
 ];
 
 // Internal helpers exposed for unit testing — NOT part of the public agent

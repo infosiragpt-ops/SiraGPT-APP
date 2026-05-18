@@ -653,8 +653,8 @@ test('create_dashboard_html: no charts', async () => {
 
 // ── Tool metadata ────────────────────────────────────────────────
 
-test('all 29 tools have valid metadata', () => {
-  assert.equal(VISUAL_MEDIA_TOOLS.length, 29);
+test('all 30 tools have valid metadata', () => {
+  assert.equal(VISUAL_MEDIA_TOOLS.length, 30);
   for (const t of VISUAL_MEDIA_TOOLS) {
     assert.ok(t.name);
     assert.ok(t.description);
@@ -3405,6 +3405,120 @@ test('create_bcg_matrix: emits expected events', async () => {
   await tool('create_bcg_matrix').execute({
     title: 'Events',
     products: [{ name: 'X', marketShare: 1, marketGrowth: 10 }],
+  }, ctx);
+  const types = ctx._events.map(e => e.type);
+  assert.ok(types.includes('tool_call'));
+  assert.ok(types.includes('file_artifact'));
+  assert.ok(types.includes('tool_output'));
+});
+
+// ── create_moscow_chart ──────────────────────────────────────────
+
+test('create_moscow_chart: full 4-column MoSCoW', async () => {
+  const mc = tool('create_moscow_chart');
+  assert.ok(mc);
+  const r = await mc.execute({
+    title: 'MVP Sprint 14',
+    subtitle: 'SiraGPT MVP scope',
+    mustHave: ['Auth + login', 'Document upload', 'Chat AI core'],
+    shouldHave: ['Email verification', 'Password reset', '2FA optional'],
+    couldHave: ['Dark mode', 'Export to PDF'],
+    wontHave: ['Native mobile apps', 'Plugins marketplace'],
+    theme: 'professional',
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.total, 10);
+  assert.equal(r.counts.mustHave, 3);
+  assert.equal(r.counts.shouldHave, 3);
+  assert.equal(r.counts.couldHave, 2);
+  assert.equal(r.counts.wontHave, 2);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.startsWith('<svg'));
+  assert.ok(svg.includes('MVP Sprint 14'));
+  assert.ok(svg.includes('MUST HAVE'));
+  assert.ok(svg.includes('SHOULD HAVE'));
+  assert.ok(svg.includes('COULD HAVE'));
+  assert.ok(svg.includes("WON'T HAVE") || svg.includes("WON&#39;T HAVE"));
+  assert.ok(svg.includes('Auth + login') || svg.includes('Auth + login'));
+  assert.ok(svg.includes('Dark mode'));
+});
+
+test('create_moscow_chart: only Must Have populated', async () => {
+  const r = await tool('create_moscow_chart').execute({
+    title: 'Lean MVP',
+    mustHave: ['Just the critical bit'],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.total, 1);
+  assert.equal(r.counts.mustHave, 1);
+  assert.equal(r.counts.shouldHave, 0);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.includes('Just the critical bit'));
+  // Empty columns render "sin items" placeholder
+  assert.ok(svg.includes('— sin items —'));
+});
+
+test('create_moscow_chart: empty fails', async () => {
+  const r = await tool('create_moscow_chart').execute({
+    title: 'Empty',
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /empty|provide at least/i);
+});
+
+test('create_moscow_chart: non-array bucket fails fast', async () => {
+  const r = await tool('create_moscow_chart').execute({
+    title: 'Bad',
+    mustHave: 'should be array',
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /must be arrays/i);
+});
+
+test('create_moscow_chart: caps items at 10 per column', async () => {
+  const fifteen = Array.from({ length: 15 }, (_, i) => `Item ${i + 1}`);
+  const r = await tool('create_moscow_chart').execute({
+    title: 'Overflow',
+    mustHave: fifteen,
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.counts.mustHave, 10);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.includes('Item 10'));
+  assert.equal(svg.includes('Item 11'), false);
+});
+
+test('create_moscow_chart: xml-escapes content', async () => {
+  const r = await tool('create_moscow_chart').execute({
+    title: 'XSS',
+    mustHave: ['<script>evil</script>'],
+    wontHave: ['"injected"'],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.equal(svg.includes('<script>evil</script>'), false);
+  assert.ok(svg.includes('&lt;script&gt;'));
+  assert.ok(svg.includes('&quot;injected&quot;'));
+});
+
+test('create_moscow_chart: supports all four themes', async () => {
+  for (const theme of ['professional', 'modern', 'minimal', 'corporate']) {
+    const r = await tool('create_moscow_chart').execute({
+      title: `Theme ${theme}`,
+      mustHave: ['m'],
+      theme,
+    }, fakeCtx());
+    assert.equal(r.ok, true, `theme ${theme} should succeed`);
+    const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+    assert.ok(svg.startsWith('<svg'));
+  }
+});
+
+test('create_moscow_chart: emits expected events', async () => {
+  const ctx = fakeCtx();
+  await tool('create_moscow_chart').execute({
+    title: 'Events',
+    mustHave: ['x'],
   }, ctx);
   const types = ctx._events.map(e => e.type);
   assert.ok(types.includes('tool_call'));
