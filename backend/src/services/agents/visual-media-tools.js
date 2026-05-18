@@ -4761,6 +4761,209 @@ const createValuePropositionCanvas = {
   },
 };
 
+// ─────────────────────────────────────────────────────────────────────────
+// Tool 21: create_pestel_analysis
+// ─────────────────────────────────────────────────────────────────────────
+
+const createPestelAnalysis = {
+  name: 'create_pestel_analysis',
+  description: 'Generate a PESTEL macro-environmental analysis as an SVG file: 6 sections (Political, Economic, Social, Technological, Environmental, Legal) laid out in a 3×2 grid. Use for strategic external scans, market entry analyses, regulatory landscape reviews, or any macro-environmental sweep. Each section accepts 1-6 bullet items.',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string', description: 'Analysis title (e.g. "LATAM AI market — PESTEL").' },
+      subtitle: { type: 'string', description: 'Optional context line (e.g. region, period).' },
+      political:      { type: 'array', items: { type: 'string' }, description: 'Government policies, political stability, tax, trade restrictions (1-6 items).' },
+      economic:       { type: 'array', items: { type: 'string' }, description: 'GDP, inflation, interest rates, exchange rates, growth trends (1-6 items).' },
+      social:         { type: 'array', items: { type: 'string' }, description: 'Demographics, culture, lifestyles, education, social trends (1-6 items).' },
+      technological:  { type: 'array', items: { type: 'string' }, description: 'Innovation rate, automation, R&D, tech adoption (1-6 items).' },
+      environmental:  { type: 'array', items: { type: 'string' }, description: 'Climate, sustainability, ESG pressure, resource scarcity (1-6 items).' },
+      legal:          { type: 'array', items: { type: 'string' }, description: 'Regulations, employment law, consumer protection, IP (1-6 items).' },
+      theme: { type: 'string', enum: ['professional', 'modern', 'minimal', 'corporate'], description: 'Visual theme. Default: "professional".' },
+    },
+    required: ['title'],
+    additionalProperties: false,
+  },
+  async execute({
+    title,
+    subtitle = '',
+    political = [],
+    economic = [],
+    social = [],
+    technological = [],
+    environmental = [],
+    legal = [],
+    theme = 'professional',
+  }, ctx = {}) {
+    emitEvent(ctx, 'tool_call', { tool: 'create_pestel_analysis', preview: title });
+
+    try {
+      const allSections = [political, economic, social, technological, environmental, legal];
+      if (!allSections.every(s => Array.isArray(s))) {
+        return { ok: false, error: 'all 6 section inputs must be arrays of strings' };
+      }
+      const totalItems = allSections.reduce((s, sec) => s + sec.length, 0);
+      if (totalItems === 0) {
+        return { ok: false, error: 'all 6 sections are empty — provide at least one item' };
+      }
+
+      const themes = {
+        professional: {
+          bg: '#FAFBFC', card: '#FFFFFF', text: '#1E293B', muted: '#64748B', border: '#E2E8F0', accent: '#2563EB',
+          // Each PESTEL dimension has a recognised colour family in strategy decks
+          P: { bar: '#DC2626', fill: '#FEE2E2', label: '#7F1D1D', letter: 'P' }, // Political — red
+          E: { bar: '#F59E0B', fill: '#FEF3C7', label: '#78350F', letter: 'E' }, // Economic — amber
+          S: { bar: '#8B5CF6', fill: '#EDE9FE', label: '#4C1D95', letter: 'S' }, // Social — violet
+          T: { bar: '#2563EB', fill: '#DBEAFE', label: '#1E3A8A', letter: 'T' }, // Technological — blue
+          V: { bar: '#10B981', fill: '#ECFDF5', label: '#065F46', letter: 'E' }, // Environmental — green (V to avoid duplicate key)
+          L: { bar: '#64748B', fill: '#F1F5F9', label: '#334155', letter: 'L' }, // Legal — slate
+        },
+        modern: {
+          bg: '#0B1121', card: '#1E293B', text: '#F1F5F9', muted: '#94A3B8', border: '#334155', accent: '#818CF8',
+          P: { bar: '#F87171', fill: '#7F1D1D', label: '#FECACA', letter: 'P' },
+          E: { bar: '#FBBF24', fill: '#78350F', label: '#FDE68A', letter: 'E' },
+          S: { bar: '#A78BFA', fill: '#4C1D95', label: '#DDD6FE', letter: 'S' },
+          T: { bar: '#60A5FA', fill: '#1E3A8A', label: '#BFDBFE', letter: 'T' },
+          V: { bar: '#34D399', fill: '#064E3B', label: '#A7F3D0', letter: 'E' },
+          L: { bar: '#94A3B8', fill: '#334155', label: '#E2E8F0', letter: 'L' },
+        },
+        minimal: {
+          bg: '#FFFFFF', card: '#FFFFFF', text: '#0F172A', muted: '#64748B', border: '#CBD5E1', accent: '#0F172A',
+          P: { bar: '#0F172A', fill: '#F8FAFC', label: '#0F172A', letter: 'P' },
+          E: { bar: '#0F172A', fill: '#F8FAFC', label: '#0F172A', letter: 'E' },
+          S: { bar: '#0F172A', fill: '#F8FAFC', label: '#0F172A', letter: 'S' },
+          T: { bar: '#0F172A', fill: '#F8FAFC', label: '#0F172A', letter: 'T' },
+          V: { bar: '#0F172A', fill: '#F8FAFC', label: '#0F172A', letter: 'E' },
+          L: { bar: '#0F172A', fill: '#F8FAFC', label: '#0F172A', letter: 'L' },
+        },
+        corporate: {
+          bg: '#F8FAFC', card: '#FFFFFF', text: '#0F172A', muted: '#475569', border: '#CBD5E1', accent: '#1E40AF',
+          P: { bar: '#D93025', fill: '#FCE8E6', label: '#7C1D14', letter: 'P' },
+          E: { bar: '#F9AB00', fill: '#FFF8E1', label: '#7C4A00', letter: 'E' },
+          S: { bar: '#673AB7', fill: '#F3E8FD', label: '#3A1A6E', letter: 'S' },
+          T: { bar: '#1A73E8', fill: '#E8F0FE', label: '#0B3D91', letter: 'T' },
+          V: { bar: '#0F9D58', fill: '#E6F4EA', label: '#1B5E20', letter: 'E' },
+          L: { bar: '#5F6368', fill: '#F1F3F4', label: '#202124', letter: 'L' },
+        },
+      };
+      const t = themes[theme] || themes.professional;
+
+      const safeTitle = xmlEscape(String(title).slice(0, 120));
+      const safeSubtitle = xmlEscape(String(subtitle || '').slice(0, 140));
+      const cellW = 280;
+      const cellH = 240;
+      const gap = 12;
+      const pad = 28;
+      const headerH = safeSubtitle ? 110 : 86;
+      const W = pad * 2 + cellW * 3 + gap * 2;
+      const H = headerH + pad + cellH * 2 + gap + pad;
+      const lineMaxChars = 36;
+
+      function fmt(items) {
+        return (items || []).slice(0, 6).map(s => xmlEscape(String(s || '').slice(0, lineMaxChars))).filter(Boolean);
+      }
+
+      const SECTIONS = [
+        { key: 'P', pal: t.P, fullName: 'POLITICAL',      items: fmt(political),     col: 0, row: 0 },
+        { key: 'E', pal: t.E, fullName: 'ECONOMIC',       items: fmt(economic),      col: 1, row: 0 },
+        { key: 'S', pal: t.S, fullName: 'SOCIAL',         items: fmt(social),        col: 2, row: 0 },
+        { key: 'T', pal: t.T, fullName: 'TECHNOLOGICAL', items: fmt(technological), col: 0, row: 1 },
+        { key: 'V', pal: t.V, fullName: 'ENVIRONMENTAL', items: fmt(environmental), col: 1, row: 1 },
+        { key: 'L', pal: t.L, fullName: 'LEGAL',          items: fmt(legal),         col: 2, row: 1 },
+      ];
+
+      let body = `<rect width="${W}" height="${H}" fill="${t.bg}" rx="12"/>`;
+      // Header
+      body += `<rect x="0" y="0" width="${W}" height="${headerH}" fill="${t.accent}"/>`;
+      body += `<text x="${W / 2}" y="42" text-anchor="middle" font-family="Georgia, serif" font-size="24" font-weight="bold" fill="#fff">${safeTitle}</text>`;
+      body += `<text x="${W / 2}" y="66" text-anchor="middle" font-family="Arial" font-size="12" fill="#fff" opacity="0.85">${totalItems} ítems · PESTEL 6 dimensiones</text>`;
+      if (safeSubtitle) {
+        body += `<text x="${W / 2}" y="92" text-anchor="middle" font-family="Arial" font-size="13" fill="#fff" opacity="0.92">${safeSubtitle}</text>`;
+      }
+
+      const topY = headerH + pad;
+      SECTIONS.forEach((section) => {
+        const x = pad + section.col * (cellW + gap);
+        const y = topY + section.row * (cellH + gap);
+        // Card
+        body += `<rect x="${x}" y="${y}" width="${cellW}" height="${cellH}" rx="10" fill="${section.pal.fill}" stroke="${t.border}" stroke-width="1" filter="url(#vis-shadow)"/>`;
+        body += `<rect x="${x}" y="${y}" width="6" height="${cellH}" rx="3" fill="${section.pal.bar}"/>`;
+        // Letter badge (big)
+        body += `<circle cx="${x + 36}" cy="${y + 36}" r="18" fill="${section.pal.bar}"/>`;
+        body += `<text x="${x + 36}" y="${y + 43}" text-anchor="middle" font-family="Georgia, serif" font-size="20" font-weight="bold" fill="#fff">${xmlEscape(section.pal.letter)}</text>`;
+        // Full name
+        body += `<text x="${x + 64}" y="${y + 30}" font-family="Arial" font-size="13" font-weight="bold" fill="${section.pal.label}">${xmlEscape(section.fullName)}</text>`;
+        body += `<text x="${x + 64}" y="${y + 48}" font-family="Arial" font-size="11" fill="${t.muted}">${section.items.length} factor${section.items.length === 1 ? '' : 'es'}</text>`;
+        // Separator
+        body += `<line x1="${x + 16}" y1="${y + 66}" x2="${x + cellW - 16}" y2="${y + 66}" stroke="${t.border}" stroke-width="1"/>`;
+        // Items
+        if (section.items.length === 0) {
+          body += `<text x="${x + cellW / 2}" y="${y + cellH / 2 + 20}" text-anchor="middle" font-family="Arial" font-size="12" fill="${t.muted}" font-style="italic">— sin elementos —</text>`;
+        } else {
+          section.items.slice(0, 6).forEach((line, idx) => {
+            const ly = y + 88 + idx * 22;
+            body += `<circle cx="${x + 22}" cy="${ly - 4}" r="2.5" fill="${section.pal.bar}"/>`;
+            body += `<text x="${x + 30}" y="${ly}" font-family="Arial" font-size="11" fill="${t.text}">${line}</text>`;
+          });
+        }
+      });
+
+      const svg = svgDocument({
+        width: W,
+        height: H,
+        title: safeTitle,
+        description: `PESTEL analysis: ${safeTitle}`,
+        body,
+      });
+
+      const buffer = Buffer.from(svg, 'utf8');
+      const filename = `pestel_${crypto.randomBytes(4).toString('hex')}.svg`;
+      const artifact = finalizeArtifact({ filename, buffer, mime: EXTENSION_TO_MIME.svg, ctx });
+
+      emitEvent(ctx, 'file_artifact', {
+        artifact: {
+          id: artifact.id,
+          filename: artifact.filename,
+          format: 'svg',
+          mime: 'image/svg+xml',
+          sizeBytes: artifact.sizeBytes,
+          downloadUrl: artifact.downloadUrl,
+        },
+      });
+
+      const counts = {
+        political: SECTIONS[0].items.length,
+        economic: SECTIONS[1].items.length,
+        social: SECTIONS[2].items.length,
+        technological: SECTIONS[3].items.length,
+        environmental: SECTIONS[4].items.length,
+        legal: SECTIONS[5].items.length,
+      };
+
+      emitEvent(ctx, 'tool_output', {
+        tool: 'create_pestel_analysis',
+        ok: true,
+        preview: `PESTEL listo: ${artifact.filename} (${totalItems} factores · ${Math.round(artifact.sizeBytes / 1024)} KB)`,
+      });
+
+      return {
+        ok: true,
+        id: artifact.id,
+        filename: artifact.filename,
+        sizeBytes: artifact.sizeBytes,
+        downloadUrl: artifact.downloadUrl,
+        title,
+        counts,
+        total: totalItems,
+      };
+    } catch (err) {
+      const msg = err?.message || String(err);
+      emitEvent(ctx, 'tool_output', { tool: 'create_pestel_analysis', ok: false, preview: `Error: ${msg}` });
+      return { ok: false, error: msg };
+    }
+  },
+};
+
 // ── All visual/media tools for the agent ──────────────────────────────
 
 const VISUAL_MEDIA_TOOLS = [
@@ -4784,6 +4987,7 @@ const VISUAL_MEDIA_TOOLS = [
   createRiskMatrix,
   createFunnelDiagram,
   createValuePropositionCanvas,
+  createPestelAnalysis,
 ];
 
 // Internal helpers exposed for unit testing — NOT part of the public agent

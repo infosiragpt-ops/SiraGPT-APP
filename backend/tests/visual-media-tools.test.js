@@ -653,8 +653,8 @@ test('create_dashboard_html: no charts', async () => {
 
 // ── Tool metadata ────────────────────────────────────────────────
 
-test('all 20 tools have valid metadata', () => {
-  assert.equal(VISUAL_MEDIA_TOOLS.length, 20);
+test('all 21 tools have valid metadata', () => {
+  assert.equal(VISUAL_MEDIA_TOOLS.length, 21);
   for (const t of VISUAL_MEDIA_TOOLS) {
     assert.ok(t.name);
     assert.ok(t.description);
@@ -2150,6 +2150,135 @@ test('create_value_proposition_canvas: emits expected events', async () => {
   await tool('create_value_proposition_canvas').execute({
     title: 'Events',
     customerJobs: ['x'],
+  }, ctx);
+  const types = ctx._events.map(e => e.type);
+  assert.ok(types.includes('tool_call'));
+  assert.ok(types.includes('file_artifact'));
+  assert.ok(types.includes('tool_output'));
+});
+
+// ── create_pestel_analysis ───────────────────────────────────────
+
+test('create_pestel_analysis: full 6-section analysis', async () => {
+  const pa = tool('create_pestel_analysis');
+  assert.ok(pa);
+  const r = await pa.execute({
+    title: 'LATAM AI PESTEL',
+    subtitle: 'Mercado 2026',
+    political: ['Data protection laws', 'AI governance frameworks'],
+    economic: ['USD volatility', 'Inflation 8%'],
+    social: ['Digital adoption rise', 'Remote work norm'],
+    technological: ['LLM adoption', '5G rollout'],
+    environmental: ['ESG pressure', 'Renewable energy'],
+    legal: ['GDPR-equivalent laws', 'Labor reform'],
+    theme: 'professional',
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.total, 12);
+  assert.equal(r.counts.political, 2);
+  assert.equal(r.counts.economic, 2);
+  assert.equal(r.counts.legal, 2);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.startsWith('<svg'));
+  assert.ok(svg.includes('LATAM AI PESTEL'));
+  assert.ok(svg.includes('POLITICAL'));
+  assert.ok(svg.includes('ECONOMIC'));
+  assert.ok(svg.includes('SOCIAL'));
+  assert.ok(svg.includes('TECHNOLOGICAL'));
+  assert.ok(svg.includes('ENVIRONMENTAL'));
+  assert.ok(svg.includes('LEGAL'));
+  assert.ok(svg.includes('Data protection laws'));
+  assert.ok(svg.includes('USD volatility'));
+});
+
+test('create_pestel_analysis: only Technological populated', async () => {
+  const r = await tool('create_pestel_analysis').execute({
+    title: 'Tech-only',
+    technological: ['Solo LLM trend'],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.total, 1);
+  assert.equal(r.counts.technological, 1);
+  assert.equal(r.counts.political, 0);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.includes('Solo LLM trend'));
+  assert.ok(svg.includes('— sin elementos —'));
+});
+
+test('create_pestel_analysis: empty fails', async () => {
+  const r = await tool('create_pestel_analysis').execute({
+    title: 'Empty',
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /empty|provide at least/i);
+});
+
+test('create_pestel_analysis: non-array section fails fast', async () => {
+  const r = await tool('create_pestel_analysis').execute({
+    title: 'Bad',
+    political: 'should be array',
+  }, fakeCtx());
+  assert.equal(r.ok, false);
+  assert.match(r.error || '', /must be arrays/i);
+});
+
+test('create_pestel_analysis: caps items at 6 per section', async () => {
+  const eightItems = Array.from({ length: 8 }, (_, i) => `Item ${i + 1}`);
+  const r = await tool('create_pestel_analysis').execute({
+    title: 'Overflow',
+    political: eightItems,
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  assert.equal(r.counts.political, 6);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.ok(svg.includes('Item 6'));
+  assert.equal(svg.includes('Item 7'), false);
+});
+
+test('create_pestel_analysis: xml-escapes content', async () => {
+  const r = await tool('create_pestel_analysis').execute({
+    title: 'XSS',
+    political: ['<script>evil</script>'],
+    legal: ['"injected"'],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+  assert.equal(svg.includes('<script>evil</script>'), false);
+  assert.ok(svg.includes('&lt;script&gt;'));
+  assert.ok(svg.includes('&quot;injected&quot;'));
+});
+
+test('create_pestel_analysis: supports all four themes', async () => {
+  for (const theme of ['professional', 'modern', 'minimal', 'corporate']) {
+    const r = await tool('create_pestel_analysis').execute({
+      title: `Theme ${theme}`,
+      political: ['p'],
+      economic: ['e'],
+      theme,
+    }, fakeCtx());
+    assert.equal(r.ok, true, `theme ${theme} should succeed`);
+    const svg = fs.readFileSync(assertArtifact(r), 'utf8');
+    assert.ok(svg.startsWith('<svg'));
+  }
+});
+
+test('create_pestel_analysis: counts object exposes all 6 section sizes', async () => {
+  const r = await tool('create_pestel_analysis').execute({
+    title: 'Counts',
+    political: ['p'],
+  }, fakeCtx());
+  assert.equal(r.ok, true);
+  for (const k of ['political', 'economic', 'social', 'technological', 'environmental', 'legal']) {
+    assert.ok(Object.prototype.hasOwnProperty.call(r.counts, k), `counts.${k} should be present`);
+    assert.equal(typeof r.counts[k], 'number');
+  }
+});
+
+test('create_pestel_analysis: emits expected events', async () => {
+  const ctx = fakeCtx();
+  await tool('create_pestel_analysis').execute({
+    title: 'Events',
+    political: ['x'],
   }, ctx);
   const types = ctx._events.map(e => e.type);
   assert.ok(types.includes('tool_call'));
