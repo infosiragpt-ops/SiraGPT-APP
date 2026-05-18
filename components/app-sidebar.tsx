@@ -123,10 +123,10 @@ const formatSidebarChatTitle = (value: unknown) => {
 
 /** Cursor-style nav chrome: neutral icons, quiet hover, no per-item rainbow colors. */
 const NAV_ROW =
-  "group/nav h-8 w-full justify-start gap-2.5 rounded-md px-2.5 text-[13px] font-normal text-muted-foreground transition-colors duration-150 hover:bg-muted/50 hover:text-foreground"
+  "group/nav flex h-9 w-full items-center justify-start gap-2.5 rounded-lg px-2.5 text-left text-[13px] font-normal leading-none text-muted-foreground transition-colors duration-150 hover:bg-foreground/[0.045] hover:text-foreground"
 const NAV_ROW_ACTIVE =
-  "bg-muted/80 text-foreground shadow-none"
-const NAV_ICON = "h-[15px] w-[15px] shrink-0 stroke-[1.75]"
+  "bg-foreground/[0.065] text-foreground ring-1 ring-border/40 shadow-none"
+const NAV_ICON = "h-4 w-4 shrink-0 stroke-[1.85]"
 
 type SidebarNavItemProps = {
   href: string
@@ -844,11 +844,11 @@ export function AppSidebar() {
   const isOnCodePage = activePathname.startsWith('/code')
 
   return (
-    <Sidebar className="w-[248px] border-r border-border/50 bg-sidebar" collapsible="icon">
+    <Sidebar className="w-[--sidebar-width] border-r border-border/40 bg-sidebar" collapsible="icon">
       <SidebarHeader
         className={cn(
-          "border-b border-border/50 transition-all",
-          state === "open" ? "px-3 py-2.5" : "p-2"
+          "border-b border-border/40 bg-sidebar/95 transition-all",
+          state === "open" ? "px-2.5 py-2" : "p-2"
         )}
       >
         <div
@@ -861,9 +861,9 @@ export function AppSidebar() {
             <img
               src="/sira-gpt.png"
               alt=""
-              className="h-7 w-7 shrink-0 rounded-md object-contain"
+              className="h-7 w-7 shrink-0 rounded-lg object-contain ring-1 ring-border/40"
             />
-            <span className="truncate text-[13px] font-medium tracking-tight text-foreground">
+            <span className="truncate text-sm font-semibold tracking-normal text-foreground">
               SiraGPT
             </span>
           </div>
@@ -875,7 +875,7 @@ export function AppSidebar() {
             <PanelLeft className="h-4 w-4" />
           </SidebarTrigger>
         </div>
-        {/* Jab sidebar close ho to sirf yeh logo dikhega (hover effect ke saath) */}
+        {/* Collapsed state keeps a single, predictable affordance. */}
         <div className={cn("relative", state === "open" && "hidden")}>
           <button
             type="button"
@@ -893,14 +893,15 @@ export function AppSidebar() {
       {/* New Chat, Search, and Library buttons */}
       <div
         className={cn(
-          "transition-all flex flex-col ",
-          state === "open" ? "space-y-0.5 px-2 py-2" : "p-2"
+          "flex flex-col transition-all",
+          state === "open" ? "gap-0.5 px-2 py-2" : "p-2"
         )}
       >
         <TooltipProvider>
           <Tooltip delayDuration={300}>
             <TooltipTrigger asChild>
               <button
+                type="button"
                 onPointerDown={markNewChatIntent}
                 onClick={handleNewChat}
                 data-sidebar="menu-button"
