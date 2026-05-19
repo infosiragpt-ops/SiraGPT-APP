@@ -4,6 +4,67 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and improvement cycles follow a sequential number with the date the work landed.
 
+## [0.3.1 / backend 1.2.1] — Cycles 101-110 milestone — 2026-05-19
+
+First decade past the centenarian. PATCH bumps only (root
+`0.3.0 → 0.3.1`, backend `1.2.0 → 1.2.1`) — cycles 101-110 deepened
+org tenancy, communications and lifecycle polish with no public API
+breaks. See `docs/cycles/CYCLE_110.md` for the milestone narrative.
+
+### Added
+- **Cycle 110 — milestone consolidation**: `docs/cycles/CYCLE_110.md`
+  marker doc + CHANGELOG cycles 101-110 sweep + PATCH version bump to
+  `0.3.1 / 1.2.1`.
+- **Cycle 109 — bulk invite + members CSV**: bulk-invite endpoint
+  accepting a list of emails with per-row validation + partial
+  success; members list exportable as CSV for admin offboarding/audit.
+- **Cycle 108 — org member plan caps + /limits endpoint**: per-plan
+  member caps enforced at invite-time; new `/limits` endpoint exposes
+  current org quotas and usage in a single call.
+- **Cycle 107 — email prefs + retry queue**: per-user notification
+  preferences (categories opt-in/out) and a retry queue for transient
+  SMTP failures with backoff + DLQ.
+- **Cycle 106 — removal + ownership transfer emails**: dedicated
+  templates for removal-from-org and ownership-transfer events with
+  auditable context.
+- **Cycle 105 — org member email notifications**: invites, accepts
+  and role changes trigger templated email notifications to affected
+  members + org admins.
+- **Cycle 104 — webhook secret grace + inactive API key sweeps**:
+  rotated webhook secrets accept the previous secret during a grace
+  window; inactive API keys auto-disabled after a configurable idle
+  period.
+- **Cycle 103 — webhook secret rotate + v2 algorithm**: rotate
+  endpoint plus stronger v2 HMAC signing algorithm for outbound
+  webhooks.
+- **Cycle 102 — OTel user attrs + budget hard enforce**: user/org IDs
+  propagated as OTel span attributes; budget thresholds now hard-stop
+  AI calls instead of soft-warning.
+- **Cycle 101 — ApiKey sweep + usedScopes**: periodic sweep tracking
+  the set of scopes actually exercised by each API key (`usedScopes`),
+  surfacing over-permissioned keys.
+
+### Changed
+- Lint ratchet held at `--max-warnings 45` across cycles 101-110.
+- Root `package.json` version `0.3.0 → 0.3.1` (PATCH).
+- Backend `package.json` version `1.2.0 → 1.2.1` (PATCH).
+- Outbound webhook signatures default to v2 HMAC (cycle 103).
+- Budget enforcement is now hard-stop instead of soft-warn (cycle 102).
+
+### Fixed
+- Over-permissioned API keys are now visible via `usedScopes` (cycle 101).
+- Transient SMTP failures no longer drop notifications — retried with
+  backoff and DLQ (cycle 107).
+- Inactive API keys no longer linger indefinitely (cycle 104).
+
+### Security
+- API keys auto-disabled after configurable idle period (cycle 104).
+- Webhook secret rotation with grace window prevents delivery gaps
+  while preserving rotation hygiene (cycles 103, 104).
+- Stronger v2 HMAC algorithm for webhook signing (cycle 103).
+- Budget hard-stop prevents runaway AI spend (cycle 102).
+- OTel user attribution improves forensic traceability (cycle 102).
+
 ## [0.3.0 / backend 1.2.0] — Cycles 91-100 CENTENARIAN milestone — 2026-05-19
 
 Centenarian marker — **100 continuous improvement cycles**. MINOR
