@@ -37,6 +37,9 @@ const TRIGGERS = Object.freeze([
   'payment.received',
   'file.uploaded',
   'agent.task.completed',
+  'org.invitation.created',
+  'org.invitation.accepted',
+  'org.invitation.revoked',
 ]);
 
 const KNOWN_SET = new Set(TRIGGERS);

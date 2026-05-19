@@ -7,6 +7,8 @@
  *   GET    /api/orgs/me                                 — list caller's orgs
  *   POST   /api/orgs/:id/invite                         — invite by email (ADMIN+); returns magic-link
  *   POST   /api/orgs/invitation/:token/accept           — redeem invite (authenticated)
+ *   GET    /api/orgs/:id/invitations                    — list pending invitations (ADMIN+)
+ *   DELETE /api/orgs/:id/invitations/:token             — revoke invitation (ADMIN+)
  *   GET    /api/orgs/:id/members                        — list members (any member)
  *   POST   /api/orgs/:id/members/:userId/role           — change role (ADMIN+; cannot demote last OWNER)
  *   POST   /api/orgs/:id/transfer-ownership             — hand OWNER role to another MEMBER+ (OWNER only)
@@ -209,6 +211,17 @@ router.post('/invitation/:token/accept', authenticateToken, async (req, res) => 
       req,
     });
 
+    // Fire trigger-registry webhook (fire-and-forget). The org-scoped
+    // fan-out picks up the `orgId` in the payload so team webhooks /
+    // Slack channels receive the event.
+    triggers.publish('org.invitation.accepted', {
+      orgId: invite.orgId,
+      invitationId: invite.id,
+      email: invite.email,
+      role: invite.role,
+      acceptedByUserId: userId,
+    }, userId).catch(() => {});
+
     res.json({
       ok: true,
       organization: serializeOrg(invite.organization),
@@ -261,6 +274,15 @@ router.post('/:id/invite', authenticateToken, async (req, res) => {
       req,
     });
 
+    triggers.publish('org.invitation.created', {
+      orgId,
+      invitationId: invite.id,
+      email,
+      role,
+      invitedByUserId: userId,
+      expiresAt: invite.expiresAt.toISOString(),
+    }, userId).catch(() => {});
+
     // Build the magic link. The frontend "Accept invite" page will
     // POST to /api/orgs/invitation/:token/accept once the user is
     // signed in. We deliberately do NOT send an actual email here —
@@ -282,6 +304,112 @@ router.post('/:id/invite', authenticateToken, async (req, res) => {
     if (err && err.status) return res.status(err.status).json({ error: err.message });
     console.error('[orgs] invite failed:', err.message);
     res.status(500).json({ error: 'failed to create invitation' });
+  }
+});
+
+// ─── GET /api/orgs/:id/invitations (ADMIN+) ─────────────────────────
+// Lists pending (not yet accepted, not expired) invitations for the
+// org. Each row carries a `daysUntilExpiry` convenience field so the
+// dashboard can render a "expires in N days" badge without doing the
+// date math client-side.
+router.get('/:id/invitations', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  try {
+    const membership = await assertMembership(prisma, orgId, userId, 'ADMIN');
+    if (!canManageMembers(membership.role)) {
+      return res.status(403).json({ error: 'insufficient role to list invitations' });
+    }
+
+    const now = new Date();
+    const rows = await prisma.orgInvitation.findMany({
+      where: {
+        orgId,
+        acceptedAt: null,
+        expiresAt: { gt: now },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        email: true,
+        role: true,
+        createdAt: true,
+        expiresAt: true,
+      },
+    });
+
+    const items = rows.map((r) => {
+      const expiresAtMs = r.expiresAt instanceof Date ? r.expiresAt.getTime() : new Date(r.expiresAt).getTime();
+      const daysUntilExpiry = Math.max(0, Math.ceil((expiresAtMs - now.getTime()) / (24 * 60 * 60 * 1000)));
+      return {
+        id: r.id,
+        email: r.email,
+        role: r.role,
+        createdAt: r.createdAt instanceof Date ? r.createdAt.toISOString() : r.createdAt,
+        expiresAt: r.expiresAt instanceof Date ? r.expiresAt.toISOString() : r.expiresAt,
+        daysUntilExpiry,
+      };
+    });
+
+    res.json({ items });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] list invitations failed:', err.message);
+    res.status(500).json({ error: 'failed to list invitations' });
+  }
+});
+
+// ─── DELETE /api/orgs/:id/invitations/:token (ADMIN+) ───────────────
+// Revoke a pending invitation. The token in the URL is the magic-link
+// token (same one the invitee would POST to /accept). Already-accepted
+// invitations cannot be revoked (409); unknown tokens return 404.
+router.delete('/:id/invitations/:token', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  const token = req.params.token;
+  if (!token || token.length < 16) return res.status(400).json({ error: 'invalid token' });
+
+  try {
+    const membership = await assertMembership(prisma, orgId, userId, 'ADMIN');
+    if (!canManageMembers(membership.role)) {
+      return res.status(403).json({ error: 'insufficient role to revoke invitations' });
+    }
+
+    const invite = await prisma.orgInvitation.findUnique({
+      where: { token },
+      select: { id: true, orgId: true, email: true, role: true, acceptedAt: true },
+    });
+    if (!invite || invite.orgId !== orgId) {
+      return res.status(404).json({ error: 'invitation not found' });
+    }
+    if (invite.acceptedAt) {
+      return res.status(409).json({ error: 'invitation already accepted; cannot revoke' });
+    }
+
+    await prisma.orgInvitation.delete({ where: { id: invite.id } });
+
+    void writeAuditLog(prisma, {
+      action: 'org_invite_revoke',
+      userId,
+      resource: 'organization',
+      resourceId: orgId,
+      before: { invitationId: invite.id, email: invite.email, role: invite.role },
+      req,
+    });
+
+    triggers.publish('org.invitation.revoked', {
+      orgId,
+      invitationId: invite.id,
+      email: invite.email,
+      role: invite.role,
+      revokedByUserId: userId,
+    }, userId).catch(() => {});
+
+    res.json({ ok: true });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] revoke invitation failed:', err.message);
+    res.status(500).json({ error: 'failed to revoke invitation' });
   }
 });
 
