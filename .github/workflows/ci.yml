@@ -40,7 +40,9 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
-          cache-dependency-path: package-lock.json
+          cache-dependency-path: |
+            package-lock.json
+            backend/package-lock.json
 
       - name: Install dependencies
         run: npm ci --prefer-offline --no-audit --no-fund
@@ -51,6 +53,20 @@ jobs:
       # local full-repo test runs.
       - name: Install backend dependencies for root tests
         run: npm ci --prefix backend --prefer-offline --no-audit --no-fund
+
+      # Prisma engine cache — keyed on schema. Restoring avoids re-downloading
+      # the platform-specific query engine binaries on every run.
+      - name: Cache Prisma engines
+        uses: actions/cache@v4
+        with:
+          path: |
+            backend/node_modules/.prisma
+            backend/node_modules/@prisma/engines
+            ~/.cache/prisma
+          key: prisma-${{ runner.os }}-${{ hashFiles('backend/prisma/schema.prisma') }}-${{ hashFiles('backend/package-lock.json') }}
+          restore-keys: |
+            prisma-${{ runner.os }}-${{ hashFiles('backend/prisma/schema.prisma') }}-
+            prisma-${{ runner.os }}-
 
       - name: Generate backend Prisma client for root tests
         run: npm --prefix backend exec -- prisma generate --schema backend/prisma/schema.prisma
@@ -99,7 +115,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .next/cache
-          key: nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ github.ref_name }}
+          # Source-aware key: invalidate the cache when either deps or
+          # frontend source change, so `next build` reuses module-graph
+          # hits as often as safely possible.
+          key: nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('app/**/*.{ts,tsx,js,jsx}', 'components/**/*.{ts,tsx,js,jsx}', 'lib/**/*.{ts,tsx,js,jsx}', 'next.config.mjs', 'tailwind.config.js', 'postcss.config.mjs') }}
           restore-keys: |
             nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-
             nextjs-${{ runner.os }}-
@@ -129,9 +148,18 @@ jobs:
   # against a real Postgres service container.
   # ───────────────────────────────────────────────────────────────────
   backend:
-    name: Backend · prisma + boot smoke test
+    name: Backend · prisma + boot smoke test (shard ${{ matrix.shard }}/${{ matrix.total }})
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      # Sharded test execution — round-robin over the explicit test-file list
+      # so each runner gets ~1/N of the suite. `fail-fast: false` lets us see
+      # failures from every shard in a single run instead of cancelling on
+      # the first red shard.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+        total: [4]
     defaults:
       run:
         working-directory: backend
@@ -212,6 +240,20 @@ jobs:
       - name: Install dependencies
         run: npm ci --prefer-offline --no-audit --no-fund
 
+      # Prisma engine cache — keyed on the schema. Avoids re-downloading
+      # the query-engine + introspection-engine binaries each run.
+      - name: Cache Prisma engines
+        uses: actions/cache@v4
+        with:
+          path: |
+            backend/node_modules/.prisma
+            backend/node_modules/@prisma/engines
+            ~/.cache/prisma
+          key: prisma-${{ runner.os }}-${{ hashFiles('backend/prisma/schema.prisma') }}-${{ hashFiles('backend/package-lock.json') }}
+          restore-keys: |
+            prisma-${{ runner.os }}-${{ hashFiles('backend/prisma/schema.prisma') }}-
+            prisma-${{ runner.os }}-
+
       - name: Prisma · generate client
         run: npx prisma generate
 
@@ -222,10 +264,38 @@ jobs:
       - name: Prisma · push schema to Postgres service
         run: npx prisma db push --accept-data-loss --skip-generate
 
-      - name: Agentic runtime tests
-        run: node --test tests/agentic-frameworks.test.js tests/document-delivery-policy.test.js tests/agent-task-durable-events.test.js tests/agent-task-queue.test.js tests/admin-queues.test.js tests/github-codex-connector.test.js tests/mcp-tool-registry.test.js tests/tool-schema-export.test.js tests/openapi-contracts.test.js tests/http-codex.test.js tests/http-upload.test.js tests/http-agent-task.test.js tests/agent-task-document-fallback.test.js tests/enterprise-auth-boundaries.test.js tests/thesis-file-auth.test.js tests/document-service-security.test.js tests/upload-static-access.test.js tests/scheduler.test.js tests/context-window.test.js tests/sentry-observability.test.js tests/otel-observability.test.js tests/langfuse-config.test.js tests/posthog-config.test.js tests/file-processing-status.test.js tests/math-render-validator.test.js tests/pdf-render-validator.test.js tests/mime-type-validator.test.js tests/upload-security-policy.test.js tests/preview-html-sanitizer.test.js tests/pptx-package-validator.test.js tests/xlsx-workbook-validator.test.js tests/xlsx-safe-workbook.test.js tests/preview-screenshot-validator.test.js tests/canonical-document-ast.test.js tests/self-repair-engine.test.js tests/sira-request-id.test.js tests/sira-pipeline-errors.test.js tests/sira-health-and-metrics.test.js tests/sira-http-integration.test.js tests/sira-context-compactor.test.js tests/sira-llm-instrumentation.test.js tests/sira-citation-frame.test.js tests/sira-chat-modes.test.js tests/sira-memory-store.test.js tests/sira-project-workspace.test.js tests/sira-model-adapter-instrumentation.test.js tests/sira-chat-controller-modes-projects.test.js tests/sira-chat-controller-context.test.js tests/sira-memory-store-adapters.test.js tests/sira-chat-controller-citations.test.js tests/sira-pipeline-errors-migration.test.js tests/sira-turn-events.test.js tests/sira-chat-controller-events.test.js tests/sira-chat-controller-memory.test.js tests/sira-sse-route.test.js tests/sira-production-wiring.test.js tests/sira-model-adapter-migration.test.js tests/sira-stage-duration.test.js tests/sira-hybrid-retrieval-migration.test.js tests/sira-mkErr-migrations-bulk.test.js tests/auth-integration.test.js tests/long-term-memory-lifecycle.test.js tests/agents-providers.test.js tests/sandbox-local-and-router.test.js tests/document-summarizer.test.js tests/anthropic-citations.test.js tests/contextual-chunking.test.js tests/rag-service.contextual.test.js tests/cohere-rerank.test.js tests/query-decomposer.test.js tests/nli-faithfulness.test.js tests/vision-doc-parser.test.js tests/rag-service.cohere-rerank.test.js tests/fileprocessor-vision-fallback.test.js tests/deep-ask.test.js tests/sira-cortex-orchestrator.test.js tests/sira-speculative-router.test.js tests/sira-semantic-tool-cache.test.js tests/sira-parallel-fanout.test.js tests/sira-cortex-engine.test.js tests/document-professional-analyzer.test.js tests/document-insights-engine.test.js tests/document-comparison-engine.test.js tests/document-glossary-extractor.test.js tests/document-pii-detector.test.js tests/document-consistency-checker.test.js tests/document-outline-generator.test.js tests/document-readability-analyzer.test.js tests/document-analysis-quality-scorer.test.js tests/answer-validator.test.js tests/hallucination-scanner.test.js tests/tool-error-classifier.test.js tests/memory-promotion-lifecycle.test.js tests/plan-critic.test.js tests/confidence-calibrator.test.js tests/goal-decomposer.test.js tests/cross-signal-coherence.test.js tests/cortex-pipeline-orchestrator.test.js tests/adaptive-retry-strategy.test.js tests/prompt-injection-defenses-v2.test.js tests/agent-skill-registry.test.js tests/semantic-deduplicator.test.js tests/post-response-brain-hook.test.js tests/sse-structured-events.test.js tests/memory-promotion-applier.test.js tests/code-interpreter-sandbox.test.js tests/vision-deep-analyzer.test.js tests/document-deep-analyzer.test.js tests/sira-generators-index.test.js tests/document-claim-attribution.test.js tests/document-quote-extractor.test.js tests/document-discourse-mapper.test.js tests/document-section-classifier.test.js tests/probe-scheduler.test.js tests/slo-aggregator.test.js tests/sliding-window-rate-limiter.test.js
+      # Shard execution — round-robin slice of the full backend suite.
+      # Coverage is collected on shard 1 only (single source of truth for
+      # the lcov report); other shards run plain `node --test` for speed.
+      - name: Backend tests (shard ${{ matrix.shard }}/${{ matrix.total }}) with coverage
+        if: matrix.shard == 1
+        run: npx c8 --reporter=text-summary --reporter=lcov --reporter=json-summary --check-coverage --lines 60 --functions 60 --branches 50 --statements 60 bash scripts/test-shard.sh ${{ matrix.shard }} ${{ matrix.total }}
 
+      - name: Backend tests (shard ${{ matrix.shard }}/${{ matrix.total }})
+        if: matrix.shard != 1
+        run: bash scripts/test-shard.sh ${{ matrix.shard }} ${{ matrix.total }}
+
+      - name: Upload coverage report
+        if: matrix.shard == 1 && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage-lcov
+          path: |
+            backend/coverage/lcov.info
+            backend/coverage/coverage-summary.json
+          retention-days: 14
+          if-no-files-found: ignore
+
+      # Legacy explicit-list step (kept commented for fast rollback if
+      # sharding misbehaves). To restore, remove the two sharded steps
+      # above and uncomment the block below.
+      # - name: Agentic runtime tests
+      #   run: node --test tests/agentic-frameworks.test.js tests/document-delivery-policy.test.js tests/agent-task-durable-events.test.js tests/agent-task-queue.test.js tests/admin-queues.test.js tests/github-codex-connector.test.js tests/mcp-tool-registry.test.js tests/tool-schema-export.test.js tests/openapi-contracts.test.js tests/http-codex.test.js tests/http-upload.test.js tests/http-agent-task.test.js tests/agent-task-document-fallback.test.js tests/enterprise-auth-boundaries.test.js tests/thesis-file-auth.test.js tests/document-service-security.test.js tests/upload-static-access.test.js tests/scheduler.test.js tests/context-window.test.js tests/sentry-observability.test.js tests/otel-observability.test.js tests/langfuse-config.test.js tests/posthog-config.test.js tests/file-processing-status.test.js tests/math-render-validator.test.js tests/pdf-render-validator.test.js tests/mime-type-validator.test.js tests/upload-security-policy.test.js tests/preview-html-sanitizer.test.js tests/pptx-package-validator.test.js tests/xlsx-workbook-validator.test.js tests/xlsx-safe-workbook.test.js tests/preview-screenshot-validator.test.js tests/canonical-document-ast.test.js tests/self-repair-engine.test.js tests/sira-request-id.test.js tests/sira-pipeline-errors.test.js tests/sira-health-and-metrics.test.js tests/sira-http-integration.test.js tests/sira-context-compactor.test.js tests/sira-llm-instrumentation.test.js tests/sira-citation-frame.test.js tests/sira-chat-modes.test.js tests/sira-memory-store.test.js tests/sira-project-workspace.test.js tests/sira-model-adapter-instrumentation.test.js tests/sira-chat-controller-modes-projects.test.js tests/sira-chat-controller-context.test.js tests/sira-memory-store-adapters.test.js tests/sira-chat-controller-citations.test.js tests/sira-pipeline-errors-migration.test.js tests/sira-turn-events.test.js tests/sira-chat-controller-events.test.js tests/sira-chat-controller-memory.test.js tests/sira-sse-route.test.js tests/sira-production-wiring.test.js tests/sira-model-adapter-migration.test.js tests/sira-stage-duration.test.js tests/sira-hybrid-retrieval-migration.test.js tests/sira-mkErr-migrations-bulk.test.js tests/auth-integration.test.js tests/long-term-memory-lifecycle.test.js tests/agents-providers.test.js tests/sandbox-local-and-router.test.js tests/document-summarizer.test.js tests/anthropic-citations.test.js tests/contextual-chunking.test.js tests/rag-service.contextual.test.js tests/cohere-rerank.test.js tests/query-decomposer.test.js tests/nli-faithfulness.test.js tests/vision-doc-parser.test.js tests/rag-service.cohere-rerank.test.js tests/fileprocessor-vision-fallback.test.js tests/deep-ask.test.js tests/sira-cortex-orchestrator.test.js tests/sira-speculative-router.test.js tests/sira-semantic-tool-cache.test.js tests/sira-parallel-fanout.test.js tests/sira-cortex-engine.test.js tests/document-professional-analyzer.test.js tests/document-insights-engine.test.js tests/document-comparison-engine.test.js tests/document-glossary-extractor.test.js tests/document-pii-detector.test.js tests/document-consistency-checker.test.js tests/document-outline-generator.test.js tests/document-readability-analyzer.test.js tests/document-analysis-quality-scorer.test.js tests/answer-validator.test.js tests/hallucination-scanner.test.js tests/tool-error-classifier.test.js tests/memory-promotion-lifecycle.test.js tests/plan-critic.test.js tests/confidence-calibrator.test.js tests/goal-decomposer.test.js tests/cross-signal-coherence.test.js tests/cortex-pipeline-orchestrator.test.js tests/adaptive-retry-strategy.test.js tests/prompt-injection-defenses-v2.test.js tests/agent-skill-registry.test.js tests/semantic-deduplicator.test.js tests/post-response-brain-hook.test.js tests/sse-structured-events.test.js tests/memory-promotion-applier.test.js tests/code-interpreter-sandbox.test.js tests/vision-deep-analyzer.test.js tests/document-deep-analyzer.test.js tests/sira-generators-index.test.js tests/document-claim-attribution.test.js tests/document-quote-extractor.test.js tests/document-discourse-mapper.test.js tests/document-section-classifier.test.js tests/probe-scheduler.test.js tests/slo-aggregator.test.js tests/sliding-window-rate-limiter.test.js
+
+      # Boot smoke test runs once (shard 1) — the same Express app behaves
+      # identically across shards, so we don't need 4x the runtime here.
       - name: Boot server and verify /health
+        if: matrix.shard == 1
         run: |
           set -euo pipefail
           node index.js > server.log 2>&1 &

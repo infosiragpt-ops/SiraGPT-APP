@@ -1,1 +1,8 @@
+#!/usr/bin/env sh
+# Pre-commit pipeline (delegated to lint-staged):
+#   1. scripts/check-secrets.sh  — regex sweep for AWS/OpenAI/Anthropic/Stripe/GitHub/PEM keys
+#   2. next lint --fix           — ESLint on changed .ts/.tsx/.js/.jsx (ratchet: 97 warnings max)
+#   3. tsc --noEmit              — project-wide type-check (run once if any .ts/.tsx is staged)
+#
+# To bypass intentionally: `git commit --no-verify`. Don't make a habit of it.
 npx lint-staged
