@@ -80,6 +80,14 @@ model User {
   // `POST /api/users/me/phone/verify` (ratchet 45, Task 1).
   phoneVerifiedAt DateTime?
 
+  // SMS 2FA opt-in flag — when true AND phoneVerifiedAt is non-null, the
+  // /api/auth/login handler returns a 202 partial-session response that
+  // forces the user through /api/auth/2fa/sms/verify before a full JWT is
+  // issued (ratchet 45, 2FA opt-in cycle). Defaults to false so legacy
+  // users retain the cycle-0 login behaviour until they opt in via
+  // `PATCH /api/users/me/2fa`.
+  twoFactorEnabled Boolean @default(false)
+
   // Relations
   chats                   Chat[]
   payments                Payment[]

@@ -95,6 +95,7 @@ const {
   getGoogleGmailCallbackURL,
   getGoogleServicesCallbackURL,
 } = require('../config/oauth-url-policy');
+const twoFASms = require('../services/two-fa-sms');
 
 const router = express.Router();
 
@@ -765,6 +766,52 @@ router.post('/login', loginRateLimit, validateBody(LoginRequestSchema, { codePre
     }
     // Successful credential check — clear lockout counter.
     defaultLockout.recordSuccess(email);
+
+    // ─── SMS 2FA gate (ratchet 45) ────────────────────────────
+    // When the user has opted in (User.twoFactorEnabled) AND has a
+    // verified phone on file, do NOT mint a session JWT yet. Instead
+    // mint a TwoFAChallenge row, send the OTP, and respond 202 with
+    // { twoFactorRequired: true, challengeId }. The FE then submits
+    // POST /api/auth/2fa/sms/verify to redeem a full JWT. Falls back
+    // to the legacy flow (full JWT immediately) when 2FA is not
+    // enabled so cycle-0 callers are unaffected.
+    if (user.twoFactorEnabled && user.phoneVerifiedAt && user.phone
+      && twoFASms.isValidPhone(user.phone)) {
+      try {
+        const { challengeId, code, expiresAt } = await twoFASms.createSmsChallenge(
+          prisma,
+          user,
+          user.phone,
+        );
+        const smsResult = await twoFASms.sendSms(user.phone, code);
+        void writeAuditLog(prisma, {
+          req,
+          action: 'login_2fa_required',
+          resource: 'user',
+          resourceId: user.id,
+          userId: user.id,
+          actorName: user.email,
+          metadata: {
+            phoneMasked: user.phone.replace(/.(?=.{4})/g, '*'),
+            smsSent: Boolean(smsResult.sent),
+            smsReason: smsResult.reason || null,
+          },
+        });
+        const body202 = {
+          twoFactorRequired: true,
+          challengeId,
+          expiresAt: expiresAt.toISOString(),
+          smsSent: Boolean(smsResult.sent),
+        };
+        if (!smsResult.sent && smsResult.reason) {
+          body202.smsSkippedReason = smsResult.reason;
+        }
+        return res.status(202).json(body202);
+      } catch (e) {
+        console.error('[auth/login] 2fa challenge mint failed:', e?.message || e);
+        return res.status(500).json({ error: 'Failed to issue 2FA challenge' });
+      }
+    }
 
     // Create session — embed admin / super-admin claims so the
     // rate-limit bypass + admin route guards can read them without
@@ -1496,8 +1543,6 @@ router.post('/resend-verification', authenticateToken, resendVerificationRateLim
 // Both endpoints are rate-limited per IP+contact / IP+challengeId via
 // the shared auth-rate-limit middleware so distributed brute-force
 // is bounded by the 5-attempts-per-row cap inside the service layer.
-const twoFASms = require('../services/two-fa-sms');
-
 const twoFASmsChallengeRateLimit = makeAuthRateLimit({
   name: '2fa-sms-challenge',
   limit: 5,

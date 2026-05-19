@@ -1457,6 +1457,68 @@ router.post(
   },
 );
 
+// ────────────────────────────────────────────────────────────
+// Ratchet 45 — 2FA opt-in toggle.
+//
+// PATCH /api/users/me/2fa { enabled: bool }
+//   → Updates User.twoFactorEnabled. Gated on phoneVerifiedAt being
+//     non-null (a user with no verified phone can't be challenged
+//     with SMS, so opting in would lock them out). Audit-logged.
+// ────────────────────────────────────────────────────────────
+router.patch(
+  '/me/2fa',
+  authenticateToken,
+  [body('enabled').isBoolean().withMessage('enabled must be boolean')],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+      const enabled = Boolean(req.body.enabled);
+
+      // Require a verified phone on file before allowing opt-in so the
+      // user can actually complete a future SMS challenge. Opt-out is
+      // always allowed even without a phone.
+      if (enabled) {
+        const current = await prisma.user.findUnique({
+          where: { id: req.user.id },
+          select: { phoneVerifiedAt: true },
+        });
+        if (!current || !current.phoneVerifiedAt) {
+          return res.status(400).json({
+            error: 'phone must be verified before enabling 2FA',
+            code: 'phone_not_verified',
+          });
+        }
+      }
+
+      const updated = await prisma.user.update({
+        where: { id: req.user.id },
+        data: { twoFactorEnabled: enabled },
+        select: { id: true, twoFactorEnabled: true, phoneVerifiedAt: true },
+      });
+
+      void writeAuditLog(prisma, {
+        req,
+        action: enabled ? 'two_factor_enabled' : 'two_factor_disabled',
+        resource: 'user',
+        resourceId: req.user.id,
+        userId: req.user.id,
+        metadata: { enabled },
+      });
+
+      return res.json({
+        ok: true,
+        twoFactorEnabled: updated.twoFactorEnabled,
+      });
+    } catch (error) {
+      console.error('2FA toggle error:', error);
+      return res.status(500).json({ error: 'Failed to update 2FA setting' });
+    }
+  },
+);
+
 module.exports = router;
 // Test-only internals (ratchet 45)
 module.exports.INTERNAL = {
