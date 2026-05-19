@@ -43,7 +43,8 @@ const {
   roleAtLeast,
 } = require('../services/orgs-service');
 const { defaultSteps, computeProgress } = require('../services/org-onboarding');
-const { responseCache } = require('../middleware/response-cache');
+const { responseCache, invalidate: invalidateResponseCache } = require('../middleware/response-cache');
+const costTracker = require('../services/ai/cost-tracker');
 const { parseOrgSettingsPatch } = require('../schemas/orgs');
 
 const router = express.Router();
@@ -59,6 +60,32 @@ const ONBOARDING_PROGRESS_CACHE = responseCache({
   ttlMs: 30_000,
   namespace: 'org-onboarding-progress',
 });
+
+// Members-list cache (cycle 45). The members table is read on every
+// dashboard mount / sidebar refresh and rarely mutates; a 15 s TTL
+// keeps the list snappy without making membership changes feel stale.
+// Key already varies by orgId (path) + userId, so each viewer gets
+// their own entry. Mutating endpoints (invite-accept, role-change,
+// transfer-ownership, leave, remove-member) call
+// `invalidateMembersCache(orgId)` after success to drop every cached
+// view for that org across all users.
+const MEMBERS_CACHE_NAMESPACE = 'org-members';
+const MEMBERS_CACHE = responseCache({
+  ttlMs: 15_000,
+  namespace: MEMBERS_CACHE_NAMESPACE,
+});
+
+function invalidateMembersCache(orgId) {
+  if (!orgId) return 0;
+  // The path segment `/orgs/:id/members` is what uniquely identifies
+  // the cached members listing — match on that so we don't accidentally
+  // evict the audit-log or settings cache that may share a namespace
+  // suffix in the future.
+  return invalidateResponseCache({
+    namespace: MEMBERS_CACHE_NAMESPACE,
+    contains: `/orgs/${orgId}/members`,
+  });
+}
 
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
@@ -228,6 +255,9 @@ router.post('/invitation/:token/accept', authenticateToken, async (req, res) => 
       role: invite.role,
       acceptedByUserId: userId,
     }, userId).catch(() => {});
+
+    // New membership row → drop cached member listings for this org.
+    invalidateMembersCache(invite.orgId);
 
     res.json({
       ok: true,
@@ -422,7 +452,7 @@ router.delete('/:id/invitations/:token', authenticateToken, async (req, res) => 
 });
 
 // ─── GET /api/orgs/:id/members ──────────────────────────────────────
-router.get('/:id/members', authenticateToken, async (req, res) => {
+router.get('/:id/members', authenticateToken, MEMBERS_CACHE, async (req, res) => {
   const userId = req.user.id;
   const orgId = req.params.id;
   try {
@@ -498,6 +528,10 @@ router.post('/:id/members/:userId/role', authenticateToken, async (req, res) => 
       req,
     });
 
+    // Role changed — drop cached member listings so callers see the
+    // new role on next fetch instead of waiting for TTL.
+    invalidateMembersCache(orgId);
+
     res.json({ id: updated.id, role: updated.role });
   } catch (err) {
     if (err && err.status) return res.status(err.status).json({ error: err.message });
@@ -569,6 +603,9 @@ async function transferOwnershipHandler(req, res, deps = { prisma, writeAuditLog
       req,
     });
 
+    // Owner + target roles both flipped — drop members cache.
+    invalidateMembersCache(orgId);
+
     res.json({
       ok: true,
       ownerId: result.updatedOrg.ownerId,
@@ -624,6 +661,9 @@ async function leaveOrgHandler(req, res, deps = { prisma, writeAuditLog }) {
       metadata: { orgId },
       req,
     });
+
+    // Membership removed — invalidate cached views.
+    invalidateMembersCache(orgId);
 
     res.json({ ok: true });
   } catch (err) {
@@ -681,6 +721,9 @@ router.delete('/:id/members/:userId', authenticateToken, async (req, res) => {
       metadata: { orgId },
       req,
     });
+
+    // Member removed — drop cached listings.
+    invalidateMembersCache(orgId);
 
     res.json({ ok: true });
   } catch (err) {
@@ -1612,6 +1655,102 @@ async function patchOrgSettingsHandler(req, res, deps = { prisma, writeAuditLog 
 router.get('/:id/settings', authenticateToken, (req, res) => getOrgSettingsHandler(req, res));
 router.patch('/:id/settings', authenticateToken, (req, res) => patchOrgSettingsHandler(req, res));
 
+// ─── GET /api/orgs/:id/usage-trend (cycle 45) ───────────────────────
+// Returns a 30-day daily breakdown of AI cost / token / request usage
+// for the organisation. Aggregated from the in-memory cost-tracker by
+// filtering on the set of current org members. Any member can read
+// the trend — billing dashboards need it for all roles.
+//
+// Response shape:
+//   { orgId, from, to, days: [{ date: 'YYYY-MM-DD', tokens, costUSD, requests }] }
+//
+// `days` is always exactly 30 entries (UTC days, oldest → newest);
+// missing days yield zeroed rows so chart widgets don't need to gap-fill.
+function utcDayKey(d) {
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function startOfUtcDay(d) {
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0, 0));
+}
+
+async function usageTrendHandler(req, res, deps = { prisma, costTracker }) {
+  const db = deps.prisma || prisma;
+  const tracker = deps.costTracker || costTracker;
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  try {
+    await assertMembership(db, orgId, userId, 'VIEWER');
+
+    // 30-day window ending at end-of-today (UTC); inclusive of today so
+    // partial-day usage shows up in real time.
+    const now = new Date();
+    const todayStart = startOfUtcDay(now);
+    const windowStart = new Date(todayStart.getTime() - 29 * 24 * 60 * 60 * 1000);
+    const windowEnd = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000 - 1);
+
+    // Fetch member ids — only userIds currently in the org. Removed
+    // members' historical usage is intentionally excluded (matches the
+    // existing billing summary semantics).
+    const memberships = await db.orgMembership.findMany({
+      where: { orgId },
+      select: { userId: true },
+    });
+    const memberIds = new Set(memberships.map((m) => String(m.userId)));
+
+    // Seed empty buckets so the response always has 30 rows.
+    const buckets = new Map();
+    for (let i = 0; i < 30; i += 1) {
+      const dayStart = new Date(windowStart.getTime() + i * 24 * 60 * 60 * 1000);
+      buckets.set(utcDayKey(dayStart), { tokens: 0, costUSD: 0, requests: 0 });
+    }
+
+    if (memberIds.size > 0 && typeof tracker.report === 'function') {
+      const result = tracker.report({
+        from: windowStart.toISOString(),
+        to: windowEnd.toISOString(),
+        includeRecords: true,
+      });
+      const records = Array.isArray(result?.records) ? result.records : [];
+      for (const r of records) {
+        if (!r || !memberIds.has(String(r.userId))) continue;
+        const ts = new Date(r.ts);
+        if (Number.isNaN(ts.getTime())) continue;
+        const key = utcDayKey(ts);
+        const bucket = buckets.get(key);
+        if (!bucket) continue;
+        bucket.tokens += (Number(r.inputTokens) || 0) + (Number(r.outputTokens) || 0);
+        bucket.costUSD = Math.round((bucket.costUSD + (Number(r.costUSD) || 0)) * 1_000_000) / 1_000_000;
+        bucket.requests += 1;
+      }
+    }
+
+    const days = [];
+    for (let i = 0; i < 30; i += 1) {
+      const dayStart = new Date(windowStart.getTime() + i * 24 * 60 * 60 * 1000);
+      const key = utcDayKey(dayStart);
+      const b = buckets.get(key) || { tokens: 0, costUSD: 0, requests: 0 };
+      days.push({ date: key, tokens: b.tokens, costUSD: b.costUSD, requests: b.requests });
+    }
+
+    res.json({
+      orgId,
+      from: windowStart.toISOString(),
+      to: windowEnd.toISOString(),
+      days,
+    });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] usage-trend failed:', err.message);
+    res.status(500).json({ error: 'failed to load usage trend' });
+  }
+}
+
+router.get('/:id/usage-trend', authenticateToken, (req, res) => usageTrendHandler(req, res));
+
 // Expose constants for tests/inspection.
 router.__roleAtLeast = roleAtLeast;
 router.__handlers = {
@@ -1622,7 +1761,9 @@ router.__handlers = {
   getOrgSettings: getOrgSettingsHandler,
   patchOrgSettings: patchOrgSettingsHandler,
   streamOrgEvents: streamOrgEventsHandler,
+  usageTrend: usageTrendHandler,
 };
+router.__invalidateMembersCache = invalidateMembersCache;
 router.__sseConfig = SSE_EVENTS;
 router.__settingsHelpers = { sanitizeSettings, mergeSettings };
 router.__billing = {

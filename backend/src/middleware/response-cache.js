@@ -262,12 +262,62 @@ function clearCache(cache) {
   c.clear();
 }
 
+/**
+ * invalidate — delete entries whose key matches a predicate / substring.
+ *
+ * Useful after a state-changing endpoint (e.g. POST that mutates a row
+ * a GET endpoint reads) to evict every cache entry that referenced the
+ * affected resource. Because the key encodes namespace + userId + path,
+ * a single mutation can affect multiple users — pass either a substring
+ * that uniquely identifies the affected path/orgId, or a predicate
+ * `(key) => boolean` for full control.
+ *
+ *   invalidate({ namespace: 'org-members', contains: orgId })
+ *   invalidate((key) => key.includes(`/orgs/${orgId}/`))
+ *
+ * Returns the number of entries removed. Safe to call when cache is
+ * empty. Never throws.
+ */
+function invalidate(matcher, cache) {
+  const c = cache || globalLRU;
+  if (!c || !c.map) return 0;
+  let predicate;
+  if (typeof matcher === 'function') {
+    predicate = matcher;
+  } else if (matcher && typeof matcher === 'object') {
+    const { namespace = null, contains = null } = matcher;
+    predicate = (key) => {
+      if (namespace && !key.startsWith(`${namespace}::`)) return false;
+      if (contains && !key.includes(contains)) return false;
+      return true;
+    };
+  } else if (typeof matcher === 'string') {
+    const needle = matcher;
+    predicate = (key) => key.includes(needle);
+  } else {
+    return 0;
+  }
+  let removed = 0;
+  // Snapshot keys first so we don't mutate while iterating.
+  const keys = Array.from(c.map.keys());
+  for (const k of keys) {
+    let match = false;
+    try { match = !!predicate(k); } catch (_) { match = false; }
+    if (match) {
+      c.map.delete(k);
+      removed += 1;
+    }
+  }
+  return removed;
+}
+
 module.exports = {
   responseCache,
   LRUCache,
   globalLRU,
   getStats,
   clearCache,
+  invalidate,
   DEFAULT_MAX_ENTRIES,
   DEFAULT_TTL_MS,
   DEFAULT_MAX_ENTRY_BYTES,
