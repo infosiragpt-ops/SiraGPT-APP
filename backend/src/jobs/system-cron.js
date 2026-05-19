@@ -30,6 +30,10 @@ const HARD_DELETE_SCHEDULE = process.env.SYSTEM_CRON_HARD_DELETE_SCHEDULE || '0 
 // it runs after the hard-delete pass (the cascade can drop apiUsage rows
 // owned by deleted users; the prune handles everything else).
 const APIUSAGE_PRUNE_SCHEDULE = process.env.SYSTEM_CRON_APIUSAGE_PRUNE_SCHEDULE || '30 3 * * *';
+// Session sweep — runs hourly (top of the hour) because `expiresAt` is
+// a hard boundary and we don't want expired tokens lingering for a full
+// day. See docs/data-retention.md (Session section).
+const SESSION_SWEEP_SCHEDULE = process.env.SYSTEM_CRON_SESSION_SWEEP_SCHEDULE || '0 * * * *';
 
 let _state = null;
 
@@ -128,6 +132,30 @@ function start(opts = {}) {
     { scheduled: false, timezone: 'UTC' },
   );
   tasks.push({ name: 'prune-api-usage', schedule: APIUSAGE_PRUNE_SCHEDULE, task: apiUsagePruneTask });
+
+  let sessionSweepRunning = false;
+  const sessionSweepTask = cron.schedule(
+    SESSION_SWEEP_SCHEDULE,
+    async () => {
+      if (sessionSweepRunning) {
+        logger.warn?.('[system-cron] skip sweep-expired-sessions — previous run still active');
+        return;
+      }
+      sessionSweepRunning = true;
+      try {
+        // eslint-disable-next-line global-require
+        const job = require('./sweep-expired-sessions');
+        const res = await job.run({ logger });
+        logger.info?.(`[system-cron] sweep-expired-sessions done: ${JSON.stringify(res)}`);
+      } catch (err) {
+        logger.error?.(`[system-cron] sweep-expired-sessions failed: ${err && err.message}`);
+      } finally {
+        sessionSweepRunning = false;
+      }
+    },
+    { scheduled: false, timezone: 'UTC' },
+  );
+  tasks.push({ name: 'sweep-expired-sessions', schedule: SESSION_SWEEP_SCHEDULE, task: sessionSweepTask });
 
   for (const t of tasks) {
     try { t.task.start(); } catch (err) {

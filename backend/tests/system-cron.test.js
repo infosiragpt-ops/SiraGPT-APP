@@ -52,7 +52,7 @@ describe('system-cron', () => {
     assert.deepEqual(s.tasks, []);
   });
 
-  test('start() — registers both jobs with UTC schedules when enabled', () => {
+  test('start() — registers all jobs with UTC schedules when enabled', () => {
     process.env.NODE_ENV = 'production';
     process.env.SYSTEM_CRON_ENABLED = 'true';
     const mod = freshLoad();
@@ -62,12 +62,22 @@ describe('system-cron', () => {
     try {
       assert.equal(res.enabled, true);
       const names = res.tasks.map((t) => t.name).sort();
-      assert.deepEqual(names, ['hard-delete-deleted-users', 'scrub-deleted-user-content']);
-      // Default schedules — scrub @ 02:30 UTC, hard-delete @ 03:00 UTC.
+      assert.deepEqual(names, [
+        'hard-delete-deleted-users',
+        'prune-api-usage',
+        'scrub-deleted-user-content',
+        'sweep-expired-sessions',
+      ]);
+      // Default schedules — scrub @ 02:30 UTC, hard-delete @ 03:00 UTC,
+      // prune-api-usage @ 03:30 UTC, sweep-expired-sessions hourly.
       const scrub = res.tasks.find((t) => t.name === 'scrub-deleted-user-content');
       const hard = res.tasks.find((t) => t.name === 'hard-delete-deleted-users');
+      const prune = res.tasks.find((t) => t.name === 'prune-api-usage');
+      const sweep = res.tasks.find((t) => t.name === 'sweep-expired-sessions');
       assert.equal(scrub.schedule, '30 2 * * *');
       assert.equal(hard.schedule, '0 3 * * *');
+      assert.equal(prune.schedule, '30 3 * * *');
+      assert.equal(sweep.schedule, '0 * * * *');
     } finally {
       mod.stop();
     }
