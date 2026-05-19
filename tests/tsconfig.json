@@ -29,7 +29,13 @@
     "../lib/xlsx-client.ts",
     "../lib/sse-client.ts",
     "../lib/sentry-config.ts",
-    "../lib/retry-after-fetch.ts"
+    "../lib/retry-after-fetch.ts",
+    "../lib/deep-links.ts",
+    "../lib/native/share.ts",
+    "../lib/native/clipboard.ts",
+    "../lib/native/storage.ts",
+    "../lib/native/haptics.ts",
+    "../lib/notifications/push.ts"
   ],
   "exclude": [
     "../tests/lib"

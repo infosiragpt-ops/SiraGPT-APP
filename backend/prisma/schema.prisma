@@ -76,9 +76,27 @@ model User {
   agentTasks          AgentTask[]
   generatedArtifacts  GeneratedArtifact[]
   documentAnalyses    DocumentAnalysis[]
+  pushSubscriptions   PushSubscription[]
 
   @@index([deletedAt])
   @@map("users")
+}
+
+model PushSubscription {
+  id         String   @id @default(cuid())
+  userId     String
+  token      String   @unique
+  platform   String // 'ios' | 'android' | 'web'
+  endpoint   String?
+  p256dh     String?
+  auth       String?
+  createdAt  DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("push_subscriptions")
 }
 
 model AiModel {
