@@ -3254,6 +3254,67 @@ function serializeAnnouncement(row) {
   };
 }
 
+/**
+ * Fire-and-forget bulk email broadcast for a `critical`-severity org
+ * announcement (ratchet 45, Task 2). Loads every member of the org,
+ * filters by the per-user `announcements` opt-out from email
+ * preferences, then sends one message per opted-in member. Errors on
+ * individual sends are swallowed so a single bad inbox doesn't poison
+ * the whole broadcast. Returns the count of attempted/sent messages
+ * for tests + audit-log consumers (exposed via `router.__announcements`).
+ */
+async function broadcastCriticalAnnouncement(db, orgId, created, content) {
+  const emailService = require('../services/email');
+  const emailPrefs = require('../services/email-preferences');
+  if (!emailService.isConfigured || !emailService.isConfigured()) {
+    return { attempted: 0, sent: 0, optedOut: 0 };
+  }
+  let members = [];
+  let org = null;
+  try {
+    [members, org] = await Promise.all([
+      db.orgMembership.findMany({
+        where: { orgId },
+        include: { user: { select: { id: true, email: true, name: true } } },
+      }),
+      db.organization.findUnique({
+        where: { id: orgId },
+        select: { id: true, name: true, slug: true },
+      }).catch(() => null),
+    ]);
+  } catch (err) {
+    console.error('[orgs] announcement broadcast load failed:', err?.message || err);
+    return { attempted: 0, sent: 0, optedOut: 0 };
+  }
+  const orgRow = org || { id: orgId };
+  const announcement = {
+    id: created.id,
+    title: content.title,
+    body: content.body,
+    severity: 'critical',
+  };
+  let attempted = 0;
+  let sent = 0;
+  let optedOut = 0;
+  for (const m of members) {
+    const u = m && m.user;
+    if (!u || !u.email) continue;
+    let optIn = true;
+    try {
+      optIn = await emailPrefs.shouldSendEmail(db, u.id, 'announcements');
+    } catch (_) {
+      optIn = true;
+    }
+    if (!optIn) { optedOut += 1; continue; }
+    attempted += 1;
+    try {
+      const ok = await emailService.sendOrgAnnouncement(u, orgRow, announcement);
+      if (ok) sent += 1;
+    } catch (_) { /* per-recipient errors swallowed */ }
+  }
+  return { attempted, sent, optedOut };
+}
+
 // POST /api/orgs/:id/announcements (ADMIN+)
 router.post('/:id/announcements', authenticateToken, async (req, res) => {
   const userId = req.user.id;
@@ -3310,6 +3371,30 @@ router.post('/:id/announcements', authenticateToken, async (req, res) => {
       metadata: { orgId },
       req,
     });
+
+    // Ratchet 45, Task 1 — fan out a Zapier-style trigger so org
+    // webhooks + Slack integrations receive the announcement. Fire-
+    // and-forget; failures must not block the response.
+    triggers.publish('org.announcement.created', {
+      orgId,
+      announcementId: created.id,
+      title,
+      severity,
+      createdById: userId,
+      expiresAt: expiresAt ? expiresAt.toISOString() : null,
+    }, userId).catch(() => {});
+
+    // Ratchet 45, Task 2 — critical announcements also email every
+    // member of the org (respecting the per-user `announcements`
+    // opt-out from email-preferences). Strictly fire-and-forget so a
+    // slow SMTP path can't delay the 201; the broadcast runs on the
+    // event loop after the response is sent.
+    if (severity === 'critical') {
+      setImmediate(() => {
+        broadcastCriticalAnnouncement(prisma, orgId, created, { title, body: text })
+          .catch((err) => console.error('[orgs] announcement broadcast failed:', err?.message || err));
+      });
+    }
 
     res.status(201).json({ announcement: serializeAnnouncement(created) });
   } catch (err) {
@@ -3419,6 +3504,7 @@ router.__announcements = {
   ANNOUNCEMENT_TITLE_MAX,
   ANNOUNCEMENT_BODY_MAX,
   serializeAnnouncement,
+  broadcastCriticalAnnouncement,
 };
 
 module.exports = router;

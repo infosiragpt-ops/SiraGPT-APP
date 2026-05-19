@@ -106,7 +106,11 @@ const realTriggers = require('../src/services/trigger-registry');
 const triggersMock = {
   TRIGGERS: realTriggers.TRIGGERS,
   isKnownTrigger: realTriggers.isKnownTrigger,
-  publish: async () => ({ dispatched: 0, deduped: false, errors: [] }),
+  _calls: [],
+  publish: async (event, payload, userId) => {
+    triggersMock._calls.push({ event, payload, userId });
+    return { dispatched: 0, deduped: false, errors: [] };
+  },
   publishDebounced: async () => {},
   resetForTests: realTriggers.resetForTests,
 };
@@ -151,6 +155,7 @@ function resetState({ role = 'ADMIN' } = {}) {
   prismaState.announcements = [];
   prismaState._seq = 0;
   auditMock._calls.length = 0;
+  triggersMock._calls.length = 0;
   authMock._user = { id: 'u-admin', email: 'admin@example.com' };
 }
 
@@ -173,6 +178,12 @@ describe('POST /api/orgs/:id/announcements', () => {
     assert.equal(prismaState.announcements.length, 1);
     assert.equal(auditMock._calls.length, 1);
     assert.equal(auditMock._calls[0].action, 'org_announcement_create');
+    // Ratchet 45 Task 1 — trigger fires
+    assert.equal(triggersMock._calls.length, 1);
+    assert.equal(triggersMock._calls[0].event, 'org.announcement.created');
+    assert.equal(triggersMock._calls[0].payload.orgId, 'org-1');
+    assert.equal(triggersMock._calls[0].payload.severity, 'info');
+    assert.equal(triggersMock._calls[0].userId, 'u-admin');
   });
 
   test('accepts severity warn/critical and expiresAt', async () => {
@@ -345,5 +356,169 @@ describe('DELETE /api/orgs/:id/announcements/:announcementId', () => {
       urlPath: '/api/orgs/org-1/announcements/a-v',
     });
     assert.equal(res.status, 403);
+  });
+});
+
+// ── Ratchet 45 Task 1 — trigger ───────────────────────────────────
+describe('org.announcement.created trigger', () => {
+  beforeEach(() => resetState());
+
+  test('is part of the canonical TRIGGERS allow-list', () => {
+    assert.ok(realTriggers.TRIGGERS.includes('org.announcement.created'));
+    assert.equal(realTriggers.isKnownTrigger('org.announcement.created'), true);
+  });
+
+  test('publishes trigger with severity and announcementId on create', async () => {
+    const future = new Date(Date.now() + 86_400_000).toISOString();
+    const res = await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-1/announcements',
+      body: { title: 'Outage', body: 'API degraded', severity: 'critical', expiresAt: future },
+    });
+    assert.equal(res.status, 201);
+    assert.equal(triggersMock._calls.length, 1);
+    const call = triggersMock._calls[0];
+    assert.equal(call.event, 'org.announcement.created');
+    assert.equal(call.payload.orgId, 'org-1');
+    assert.equal(call.payload.severity, 'critical');
+    assert.equal(call.payload.announcementId, res.body.announcement.id);
+    assert.ok(call.payload.expiresAt);
+  });
+
+  test('does NOT publish trigger when validation fails', async () => {
+    const res = await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-1/announcements',
+      body: { title: '', body: 'b' },
+    });
+    assert.equal(res.status, 400);
+    assert.equal(triggersMock._calls.length, 0);
+  });
+});
+
+// ── Ratchet 45 Task 2 — critical announcement bulk email ──────────
+describe('broadcastCriticalAnnouncement (Task 2)', () => {
+  const { broadcastCriticalAnnouncement } = orgsRouter.__announcements;
+
+  function makeDb({ members, settingsByUser = {} }) {
+    return {
+      orgMembership: {
+        findMany: async () => members,
+      },
+      organization: {
+        findUnique: async () => ({ id: 'org-1', name: 'Acme', slug: 'acme' }),
+      },
+      user: {
+        findUnique: async ({ where, select }) => {
+          void select;
+          const s = settingsByUser[where.id];
+          return s !== undefined ? { settings: s } : null;
+        },
+      },
+    };
+  }
+
+  function makeEmailService({ configured = true } = {}) {
+    const sent = [];
+    return {
+      sent,
+      isConfigured: () => configured,
+      sendOrgAnnouncement: async (user, org, announcement) => {
+        sent.push({ to: user.email, org: org.id, title: announcement.title });
+        return true;
+      },
+    };
+  }
+
+  test('returns zero counts when SMTP not configured (no DB hit)', async () => {
+    const emailService = makeEmailService({ configured: false });
+    require.cache[path.resolve(__dirname, '../src/services/email.js')] = {
+      id: 'email', filename: 'email', loaded: true, exports: emailService,
+    };
+    const db = makeDb({ members: [{ user: { id: 'u1', email: 'u1@x.com', name: 'u1' } }] });
+    const res = await broadcastCriticalAnnouncement(db, 'org-1',
+      { id: 'a1' }, { title: 't', body: 'b' });
+    assert.deepEqual(res, { attempted: 0, sent: 0, optedOut: 0 });
+    assert.equal(emailService.sent.length, 0);
+  });
+
+  test('sends to every member that has not opted out', async () => {
+    const emailService = makeEmailService();
+    require.cache[path.resolve(__dirname, '../src/services/email.js')] = {
+      id: 'email', filename: 'email', loaded: true, exports: emailService,
+    };
+    const db = makeDb({
+      members: [
+        { user: { id: 'u1', email: 'u1@x.com', name: 'u1' } },
+        { user: { id: 'u2', email: 'u2@x.com', name: 'u2' } },
+        { user: { id: 'u3', email: 'u3@x.com', name: 'u3' } },
+      ],
+      settingsByUser: {
+        // u1 opted out of announcements
+        u1: { notifications: { announcements: false } },
+        // u2 opted in explicitly
+        u2: { notifications: { announcements: true } },
+        // u3 default opt-in (no settings)
+        u3: null,
+      },
+    });
+    const res = await broadcastCriticalAnnouncement(db, 'org-1',
+      { id: 'a1' }, { title: 'Outage', body: 'API down' });
+    assert.equal(res.optedOut, 1);
+    assert.equal(res.attempted, 2);
+    assert.equal(res.sent, 2);
+    assert.equal(emailService.sent.length, 2);
+    const tos = emailService.sent.map((s) => s.to).sort();
+    assert.deepEqual(tos, ['u2@x.com', 'u3@x.com']);
+  });
+
+  test('skips members without an email and tolerates per-send failures', async () => {
+    const emailService = {
+      sent: [],
+      isConfigured: () => true,
+      sendOrgAnnouncement: async (user) => {
+        if (user.email === 'boom@x.com') throw new Error('SMTP nope');
+        emailService.sent.push(user.email);
+        return true;
+      },
+    };
+    require.cache[path.resolve(__dirname, '../src/services/email.js')] = {
+      id: 'email', filename: 'email', loaded: true, exports: emailService,
+    };
+    const db = makeDb({
+      members: [
+        { user: { id: 'u1', email: '', name: 'no-mail' } },
+        { user: { id: 'u2', email: 'boom@x.com', name: 'boom' } },
+        { user: { id: 'u3', email: 'ok@x.com', name: 'ok' } },
+      ],
+    });
+    const res = await broadcastCriticalAnnouncement(db, 'org-1',
+      { id: 'a1' }, { title: 'x', body: 'y' });
+    // u1 skipped (no email), u2 throws, u3 succeeds
+    assert.equal(res.attempted, 2);
+    assert.equal(res.sent, 1);
+    assert.deepEqual(emailService.sent, ['ok@x.com']);
+  });
+});
+
+// ── Ratchet 45 Task 2 — email-preferences category ────────────────
+describe('email-preferences announcements category', () => {
+  const emailPrefs = require('../src/services/email-preferences');
+
+  test('exposes announcements as a valid category', () => {
+    assert.ok(emailPrefs.VALID_CATEGORIES.includes('announcements'));
+  });
+
+  test('isOptedOut respects explicit false for announcements', () => {
+    assert.equal(emailPrefs.isOptedOut({ announcements: false }, 'announcements'), true);
+    assert.equal(emailPrefs.isOptedOut({ announcements: true }, 'announcements'), false);
+    assert.equal(emailPrefs.isOptedOut({}, 'announcements'), false);
+  });
+
+  test('mergeNotificationsPatch accepts announcements patch', () => {
+    const merged = emailPrefs.mergeNotificationsPatch({}, { announcements: false });
+    assert.equal(merged.announcements, false);
+    const cleared = emailPrefs.mergeNotificationsPatch(merged, { announcements: null });
+    assert.equal(Object.prototype.hasOwnProperty.call(cleared, 'announcements'), false);
   });
 });

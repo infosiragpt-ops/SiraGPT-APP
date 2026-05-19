@@ -40,6 +40,7 @@ const TRIGGERS = Object.freeze([
   'org.invitation.created',
   'org.invitation.accepted',
   'org.invitation.revoked',
+  'org.announcement.created',
 ]);
 
 const KNOWN_SET = new Set(TRIGGERS);

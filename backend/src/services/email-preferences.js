@@ -14,6 +14,7 @@
  *   removal        — `sendOrgRemoval`
  *   ownership      — `sendOwnershipTransfer`
  *   billing        — payment failure / subscription / renewal mails
+ *   announcements  — org-wide announcement broadcasts (critical severity)
  *
  * Verification + invitation acceptance flows are "critical" — they are
  * gated by this helper but ALSO enqueued into the failed-email retry
@@ -30,6 +31,7 @@ const VALID_CATEGORIES = Object.freeze([
   'removal',
   'ownership',
   'billing',
+  'announcements',
 ]);
 
 /**
