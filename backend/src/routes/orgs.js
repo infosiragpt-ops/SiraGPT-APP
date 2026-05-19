@@ -6,6 +6,8 @@
  *   POST   /api/orgs                                    — create org (creator becomes OWNER)
  *   GET    /api/orgs/me                                 — list caller's orgs
  *   POST   /api/orgs/:id/invite                         — invite by email (ADMIN+); returns magic-link
+ *   POST   /api/orgs/:id/members/bulk-invite            — bulk-invite up to 50 emails (ADMIN+; ratchet 45)
+ *   GET    /api/orgs/:id/members.csv                    — RFC4180 CSV export of roster (ADMIN+; ratchet 45)
  *   POST   /api/orgs/invitation/:token/accept           — redeem invite (authenticated)
  *   GET    /api/orgs/:id/invitations                    — list pending invitations (ADMIN+)
  *   DELETE /api/orgs/:id/invitations/:token             — revoke invitation (ADMIN+)
@@ -572,6 +574,270 @@ router.delete('/:id/invitations/:token', authenticateToken, async (req, res) => 
     if (err && err.status) return res.status(err.status).json({ error: err.message });
     console.error('[orgs] revoke invitation failed:', err.message);
     res.status(500).json({ error: 'failed to revoke invitation' });
+  }
+});
+
+// ─── POST /api/orgs/:id/members/bulk-invite (ADMIN+) ────────────────
+// Ratchet 45 — accept up to BULK_INVITE_MAX emails in a single call and
+// mint an OrgInvitation per address. Each entry is processed in order
+// and classified into one of three buckets:
+//   - invited[]: { email, role, token, invitationId, magicLink, expiresAt }
+//   - skipped[]: { email, reason }   // already-member | pending-invite | duplicate-in-request
+//   - errors[]:  { email, error }    // invalid-email | quota-exceeded | unexpected
+// Plan member-cap is enforced incrementally so we don't blow past the
+// limit mid-batch: as soon as (currentMembers + pendingInvites + invited.length)
+// would reach the cap, the remaining addresses bucket into errors with
+// `quota-exceeded`. ENTERPRISE skips the cap check (Infinity).
+const BULK_INVITE_MAX = 50;
+
+router.post('/:id/members/bulk-invite', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  const rawEmails = Array.isArray(req.body?.emails) ? req.body.emails : null;
+  const role = typeof req.body?.role === 'string' ? req.body.role.toUpperCase() : 'MEMBER';
+
+  if (!rawEmails || rawEmails.length === 0) {
+    return res.status(400).json({ error: 'emails[] is required' });
+  }
+  if (rawEmails.length > BULK_INVITE_MAX) {
+    return res.status(400).json({ error: `too many emails (max ${BULK_INVITE_MAX} per call)` });
+  }
+  if (!isValidRole(role) || role === 'OWNER') {
+    return res.status(400).json({ error: 'invalid role (cannot invite as OWNER)' });
+  }
+
+  try {
+    const membership = await assertMembership(prisma, orgId, userId, 'ADMIN');
+    if (!canManageMembers(membership.role)) {
+      return res.status(403).json({ error: 'insufficient role to invite' });
+    }
+
+    const plan = membership.organization?.billingPlan || 'FREE';
+    const cap = memberCapForPlan(plan);
+
+    // Normalise + dedupe within the request body.
+    const seen = new Set();
+    const invited = [];
+    const skipped = [];
+    const errors = [];
+    const normalised = []; // [{ original, email }]
+    for (const raw of rawEmails) {
+      const original = raw;
+      if (typeof raw !== 'string') {
+        errors.push({ email: String(raw ?? ''), error: 'invalid-email' });
+        continue;
+      }
+      const email = raw.trim().toLowerCase();
+      if (!email || !email.includes('@')) {
+        errors.push({ email: original, error: 'invalid-email' });
+        continue;
+      }
+      if (seen.has(email)) {
+        skipped.push({ email, reason: 'duplicate-in-request' });
+        continue;
+      }
+      seen.add(email);
+      normalised.push({ original, email });
+    }
+
+    // Snapshot current usage so we can enforce the plan cap as we go.
+    const now = new Date();
+    const [memberCount, pendingInvites] = await Promise.all([
+      prisma.orgMembership.count({ where: { orgId } }),
+      prisma.orgInvitation.count({
+        where: { orgId, acceptedAt: null, expiresAt: { gt: now } },
+      }),
+    ]);
+    let usedSlots = memberCount + pendingInvites;
+
+    // Look up existing members + pending invites for the candidate emails
+    // in two queries so we don't N+1 the DB per address.
+    const candidateEmails = normalised.map((n) => n.email);
+    const [existingMembers, existingInvites] = candidateEmails.length
+      ? await Promise.all([
+          prisma.user.findMany({
+            where: { email: { in: candidateEmails } },
+            select: { id: true, email: true },
+          }).then((users) =>
+            users.length
+              ? prisma.orgMembership.findMany({
+                  where: { orgId, userId: { in: users.map((u) => u.id) } },
+                  select: { userId: true, user: { select: { email: true } } },
+                })
+              : [],
+          ),
+          prisma.orgInvitation.findMany({
+            where: {
+              orgId,
+              email: { in: candidateEmails },
+              acceptedAt: null,
+              expiresAt: { gt: now },
+            },
+            select: { email: true },
+          }),
+        ])
+      : [[], []];
+
+    const memberEmails = new Set(
+      existingMembers.map((m) => (m.user?.email || '').toLowerCase()).filter(Boolean),
+    );
+    const pendingEmails = new Set(
+      existingInvites.map((i) => (i.email || '').toLowerCase()),
+    );
+
+    const appBase = process.env.APP_BASE_URL || process.env.FRONTEND_URL || '';
+
+    for (const { email } of normalised) {
+      if (memberEmails.has(email)) {
+        skipped.push({ email, reason: 'already-member' });
+        continue;
+      }
+      if (pendingEmails.has(email)) {
+        skipped.push({ email, reason: 'pending-invite' });
+        continue;
+      }
+      if (Number.isFinite(cap) && usedSlots >= cap) {
+        errors.push({ email, error: 'quota-exceeded' });
+        continue;
+      }
+
+      try {
+        const token = generateInviteToken();
+        const expiresAt = new Date(Date.now() + INVITE_TTL_MS);
+        const invite = await prisma.orgInvitation.create({
+          data: { orgId, email, role, token, invitedBy: userId, expiresAt },
+        });
+        usedSlots += 1;
+        // Block subsequent duplicates from racing into the loop again.
+        pendingEmails.add(email);
+
+        const magicLink = appBase
+          ? `${appBase.replace(/\/$/, '')}/orgs/invitation/${token}`
+          : `/orgs/invitation/${token}`;
+
+        invited.push({
+          email,
+          role,
+          token,
+          invitationId: invite.id,
+          magicLink,
+          expiresAt: invite.expiresAt instanceof Date
+            ? invite.expiresAt.toISOString()
+            : new Date(invite.expiresAt).toISOString(),
+        });
+
+        void writeAuditLog(prisma, {
+          action: 'org_invite_create',
+          userId,
+          resource: 'organization',
+          resourceId: orgId,
+          metadata: { orgId, invitationId: invite.id, email, role, bulk: true },
+          req,
+        });
+
+        triggers.publish('org.invitation.created', {
+          orgId,
+          invitationId: invite.id,
+          email,
+          role,
+          invitedByUserId: userId,
+          expiresAt: invite.expiresAt instanceof Date
+            ? invite.expiresAt.toISOString()
+            : new Date(invite.expiresAt).toISOString(),
+        }, userId).catch(() => {});
+      } catch (innerErr) {
+        console.error('[orgs] bulk-invite single failed:', innerErr.message);
+        errors.push({ email, error: 'unexpected' });
+      }
+    }
+
+    res.status(207).json({ invited, skipped, errors });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] bulk-invite failed:', err.message);
+    res.status(500).json({ error: 'failed to bulk-invite' });
+  }
+});
+
+// ─── GET /api/orgs/:id/members.csv (ADMIN+) ─────────────────────────
+// Ratchet 45 — exports the current membership roster as RFC4180 CSV
+// for HR/compliance imports. Columns: userId, email, name, role,
+// joinedAt, lastActiveAt. `lastActiveAt` is read from the related User
+// row (the OrgMembership table itself does not track activity). Null
+// `lastActiveAt` renders as an empty field. Quoting follows the same
+// rules as the audit-log CSV exporter: wrap in double quotes when the
+// value contains ", \r, \n, or , and double internal quotes.
+const MEMBERS_CSV_COLUMNS = ['userId', 'email', 'name', 'role', 'joinedAt', 'lastActiveAt'];
+
+function membersCsvEscape(value) {
+  if (value === null || value === undefined) return '';
+  let s;
+  if (value instanceof Date) s = value.toISOString();
+  else s = String(value);
+  if (/[",\r\n]/.test(s)) {
+    s = `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
+}
+
+function membersToCsv(rows) {
+  const header = MEMBERS_CSV_COLUMNS.join(',');
+  const lines = [header];
+  for (const row of rows) {
+    const cells = MEMBERS_CSV_COLUMNS.map((col) => membersCsvEscape(row?.[col]));
+    lines.push(cells.join(','));
+  }
+  return lines.join('\r\n') + '\r\n';
+}
+
+router.get('/:id/members.csv', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  try {
+    const membership = await assertMembership(prisma, orgId, userId, 'ADMIN');
+    if (!canManageMembers(membership.role)) {
+      return res.status(403).json({ error: 'insufficient role to export members' });
+    }
+
+    const rows = await prisma.orgMembership.findMany({
+      where: { orgId },
+      orderBy: { createdAt: 'asc' },
+      include: {
+        user: { select: { id: true, email: true, name: true, lastActiveAt: true } },
+      },
+    });
+
+    const items = rows.map((m) => ({
+      userId: m.user?.id || m.userId,
+      email: m.user?.email || '',
+      name: m.user?.name || '',
+      role: m.role,
+      joinedAt: m.createdAt instanceof Date ? m.createdAt.toISOString() : m.createdAt,
+      lastActiveAt: m.user?.lastActiveAt instanceof Date
+        ? m.user.lastActiveAt.toISOString()
+        : (m.user?.lastActiveAt || ''),
+    }));
+
+    void writeAuditLog(prisma, {
+      action: 'org_members_export',
+      userId,
+      resource: 'organization',
+      resourceId: orgId,
+      metadata: { orgId, format: 'csv', count: items.length },
+      req,
+    });
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="org-${orgId}-members-${Date.now()}.csv"`,
+    );
+    res.write(membersToCsv(items));
+    res.end();
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] members.csv export failed:', err.message);
+    res.status(500).json({ error: 'failed to export members' });
   }
 });
 
@@ -2762,3 +3028,9 @@ router.__billing = {
 };
 
 module.exports = router;
+module.exports.INTERNAL_MEMBERS_CSV = {
+  membersToCsv,
+  membersCsvEscape,
+  MEMBERS_CSV_COLUMNS,
+  BULK_INVITE_MAX,
+};
