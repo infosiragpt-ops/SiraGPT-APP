@@ -697,6 +697,12 @@ app.use('/api/webhooks', webhooksRoutes);
 app.use('/api/integrations/slack', slackIntegrationRoutes);
 app.use('/api/telemetry', telemetryRoutes);
 
+// Dev-only Sentry smoke-test endpoint. The router itself rejects
+// production traffic with a 404. Mounted unconditionally so tests can
+// hit it without env-var dancing.
+const { buildDevSentryRouter } = require('./src/routes/dev-sentry');
+app.use('/api/__dev', buildDevSentryRouter());
+
 // Passkey (WebAuthn) endpoints. Disabled until the operator sets
 // WEBAUTHN_RP_ID + WEBAUTHN_ORIGIN AND flips
 // WEBAUTHN_ENDPOINTS_ENABLED=true. Until then the router responds

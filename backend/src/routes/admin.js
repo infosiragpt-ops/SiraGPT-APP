@@ -846,6 +846,111 @@ function probeProviders(env) {
   };
 }
 
+// ── AI provider boot status ─────────────────────────────────────────────
+// Attempts to *construct* the provider SDK client (no network call) to
+// verify the constructor and credentials don't throw at boot. This is a
+// stronger signal than "key is set" — a malformed key or a missing peer
+// dep is surfaced here.
+function probeProviderBoot(env) {
+  const out = {};
+  const tryBoot = (name, fn) => {
+    try {
+      const client = fn();
+      out[name] = { status: client ? 'booted' : 'unconfigured' };
+    } catch (err) {
+      out[name] = { status: 'error', error: err.message || String(err) };
+    }
+  };
+
+  tryBoot('openai', () => {
+    if (!env.OPENAI_API_KEY) return null;
+    const OpenAI = require('openai');
+    return new OpenAI({ apiKey: env.OPENAI_API_KEY });
+  });
+  tryBoot('anthropic', () => {
+    if (!env.ANTHROPIC_API_KEY) return null;
+    let Anthropic;
+    try { Anthropic = require('@anthropic-ai/sdk'); } catch (_) { return null; }
+    return new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
+  });
+  tryBoot('groq', () => {
+    if (!env.GROQ_API_KEY) return null;
+    let Groq;
+    try { Groq = require('groq-sdk'); } catch (_) { return null; }
+    return new Groq({ apiKey: env.GROQ_API_KEY });
+  });
+  tryBoot('gemini', () => {
+    if (!env.GEMINI_API_KEY) return null;
+    let GoogleGenerativeAI;
+    try {
+      ({ GoogleGenerativeAI } = require('@google/generative-ai'));
+    } catch (_) { return null; }
+    return new GoogleGenerativeAI(env.GEMINI_API_KEY);
+  });
+  tryBoot('deepseek', () => {
+    if (!env.DEEPSEEK_API_KEY) return null;
+    // DeepSeek uses the OpenAI SDK with a custom baseURL.
+    const OpenAI = require('openai');
+    return new OpenAI({ apiKey: env.DEEPSEEK_API_KEY, baseURL: 'https://api.deepseek.com' });
+  });
+  return out;
+}
+
+// ── BullMQ workers ───────────────────────────────────────────────────────
+async function probeBullmqWorkers(env, queueModule) {
+  if (!env.REDIS_URL) return { status: 'unconfigured' };
+  try {
+    const mod = queueModule || require('../services/agents/agent-task-queue');
+    if (typeof mod.getQueueHealth !== 'function') {
+      return { status: 'unconfigured', reason: 'queue module missing getQueueHealth' };
+    }
+    const health = await withTimeout(mod.getQueueHealth(), PROBE_TIMEOUT_MS, 'bullmq-health');
+    return {
+      status: 'up',
+      queue: health.queue,
+      counts: health.counts,
+    };
+  } catch (err) {
+    return { status: 'down', error: err.message || String(err) };
+  }
+}
+
+// ── Scheduler ────────────────────────────────────────────────────────────
+function probeScheduler(schedulerModule) {
+  try {
+    const mod = schedulerModule || require('../services/scheduler/scheduler');
+    const active = mod._active && typeof mod._active.size === 'number' ? mod._active.size : 0;
+    const jobs = typeof mod.listJobs === 'function' ? mod.listJobs({}) : [];
+    return {
+      status: active > 0 || jobs.length === 0 ? 'up' : 'idle',
+      activeCronTasks: active,
+      registeredJobs: Array.isArray(jobs) ? jobs.length : 0,
+    };
+  } catch (err) {
+    return { status: 'down', error: err.message || String(err) };
+  }
+}
+
+// ── WebSocket server ─────────────────────────────────────────────────────
+function probeWebsocket(socketModule) {
+  try {
+    const mod = socketModule || require('../services/realtime/socket-server');
+    if (typeof mod.getRealtimeState !== 'function') {
+      return { status: 'unconfigured' };
+    }
+    const state = mod.getRealtimeState();
+    if (!state || !state.wss) return { status: 'down', reason: 'not_initialised' };
+    const userClients = state.userIndex ? state.userIndex.size : 0;
+    return {
+      status: 'up',
+      path: mod.WS_PATH,
+      connectedUsers: userClients,
+    };
+  } catch (err) {
+    return { status: 'down', error: err.message || String(err) };
+  }
+}
+
 function deriveOverall(services) {
   const critical = [services.postgres, services.redis, services.stripe, services.smtp];
   // Treat 'down' as degrading and postgres-down as fully down (DB is hard
@@ -855,15 +960,37 @@ function deriveOverall(services) {
   return 'healthy';
 }
 
-async function collectServiceHealth({ prismaClient, env, stripeSvc, emailSvc }) {
-  const [postgres, redis, stripe, smtp] = await Promise.all([
+async function collectServiceHealth({
+  prismaClient,
+  env,
+  stripeSvc,
+  emailSvc,
+  queueModule,
+  schedulerModule,
+  socketModule,
+}) {
+  const [postgres, redis, stripe, smtp, bullmq] = await Promise.all([
     probePostgres(prismaClient),
     probeRedis(env),
     probeStripe(stripeSvc),
     probeSmtp(emailSvc),
+    probeBullmqWorkers(env, queueModule),
   ]);
   const providers = probeProviders(env);
-  const services = { postgres, redis, stripe, smtp, providers };
+  const providerBoot = probeProviderBoot(env);
+  const scheduler = probeScheduler(schedulerModule);
+  const websocket = probeWebsocket(socketModule);
+  const services = {
+    postgres,
+    redis,
+    stripe,
+    smtp,
+    providers,
+    providerBoot,
+    bullmq,
+    scheduler,
+    websocket,
+  };
   return {
     timestamp: new Date().toISOString(),
     overall: deriveOverall(services),
@@ -909,11 +1036,17 @@ router.get('/cost-report', requireSuperAdmin, async (req, res) => {
 router.get('/health/services', requireSuperAdmin, async (_req, res) => {
   try {
     const emailService = (() => { try { return require('../services/email'); } catch (_) { return null; } })();
+    const queueModule = (() => { try { return require('../services/agents/agent-task-queue'); } catch (_) { return null; } })();
+    const schedulerModule = (() => { try { return require('../services/scheduler/scheduler'); } catch (_) { return null; } })();
+    const socketModule = (() => { try { return require('../services/realtime/socket-server'); } catch (_) { return null; } })();
     const snapshot = await collectServiceHealth({
       prismaClient: prisma,
       env: process.env,
       stripeSvc: stripeService,
       emailSvc: emailService,
+      queueModule,
+      schedulerModule,
+      socketModule,
     });
     res.json(snapshot);
   } catch (err) {
@@ -1343,6 +1476,10 @@ module.exports.INTERNAL = {
   probeStripe,
   probeSmtp,
   probeProviders,
+  probeProviderBoot,
+  probeBullmqWorkers,
+  probeScheduler,
+  probeWebsocket,
   deriveOverall,
   withTimeout,
   PROBE_TIMEOUT_MS,
