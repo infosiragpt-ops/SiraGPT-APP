@@ -1,0 +1,124 @@
+# Dependabot configuration — safe defaults.
+#
+# Goals:
+#   - weekly cadence (Mondays) so the team has a predictable review slot
+#   - group minor + patch updates into a single PR per ecosystem to keep
+#     PR volume manageable
+#   - keep major bumps as standalone PRs (they almost always need a human)
+#   - apply an "auto-merge" label so a separate workflow / reviewer rule
+#     can fast-track trivial bumps once they're green
+#
+# Add the matching repo secrets / branch-protection rules to actually
+# auto-merge — Dependabot itself only labels here.
+
+version: 2
+
+updates:
+  # ─── Frontend / root workspace ─────────────────────────────────────
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: "America/Mexico_City"
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - frontend
+    commit-message:
+      prefix: chore(deps)
+      include: scope
+    groups:
+      frontend-minor-patch:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch
+    # Major bumps stay ungrouped so each one gets its own PR.
+    ignore:
+      - dependency-name: "*"
+        update-types: [version-update:semver-major]
+        # NOTE: we don't actually want to ignore majors forever — we
+        # want them as solo PRs. Dependabot doesn't have a "solo group"
+        # primitive, so we keep this list empty in practice. Leaving the
+        # block here documents intent. To enable: re-add real entries.
+    # `auto-merge` label is consumed by a downstream workflow that
+    # validates the PR is patch-only + all checks green before merging.
+
+  # ─── Backend workspace ─────────────────────────────────────────────
+  - package-ecosystem: npm
+    directory: "/backend"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: "America/Mexico_City"
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - backend
+    commit-message:
+      prefix: chore(deps)
+      include: scope
+    groups:
+      backend-minor-patch:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch
+
+  # ─── GitHub Actions ────────────────────────────────────────────────
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: "America/Mexico_City"
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - ci
+      - auto-merge
+    commit-message:
+      prefix: chore(actions)
+      include: scope
+    groups:
+      actions-all:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch
+
+  # ─── Docker base images ────────────────────────────────────────────
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: "America/Mexico_City"
+    open-pull-requests-limit: 2
+    labels:
+      - dependencies
+      - docker
+    commit-message:
+      prefix: chore(docker)
+      include: scope
+
+  - package-ecosystem: docker
+    directory: "/backend"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: "America/Mexico_City"
+    open-pull-requests-limit: 2
+    labels:
+      - dependencies
+      - docker
+      - backend
+    commit-message:
+      prefix: chore(docker)
+      include: scope

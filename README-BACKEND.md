@@ -274,3 +274,48 @@ node backend/scripts/load-test.js --connections 100 --duration 30
 Output includes a live histogram plus a stable summary (`p50`, `p95`, `p99`, `req/s`, `non2xx`, `timeouts`) per target.
 
 > Run against a **test** instance — these targets hit Prisma + the AI model registry. Do not point at production.
+
+## Test Coverage
+
+The backend test suite is instrumented with [c8](https://github.com/bcoe/c8).
+A `test:coverage` script runs the same `node --test` battery as `npm test`
+under c8 and writes reports under `backend/coverage/`:
+
+```bash
+# From backend/
+npm run test:coverage
+
+# Reports written:
+#   coverage/lcov.info             (CI artifact)
+#   coverage/coverage-summary.json (CI artifact, also consumed by tooling)
+#   stdout                          text-summary lines
+```
+
+### Soft coverage ratchet
+
+`test:coverage` enforces a **soft** threshold that mirrors CI:
+
+| Metric     | Threshold |
+|------------|-----------|
+| Lines      | 60%       |
+| Functions  | 60%       |
+| Branches   | 50%       |
+| Statements | 60%       |
+
+These numbers sit slightly below the current measured baseline so the
+gate catches regressions without nagging the team on every PR. **Raise
+them as the baseline improves** — the goal is the ratchet only ever
+moves up. To re-baseline:
+
+1. Run `npm run test:coverage` locally and inspect
+   `backend/coverage/coverage-summary.json`.
+2. If every metric is comfortably (≥ 5 pp) above its threshold, bump
+   the `--lines / --functions / --branches / --statements` flags in
+   the `test:coverage` script **and** the matching block in
+   `.github/workflows/ci.yml` (`Backend tests (shard 1) with coverage`).
+3. Commit the bump on its own — it's a CI-policy change, not a feature.
+
+A breaking threshold in CI surfaces as a failed `Backend tests (shard 1)
+with coverage` step; locally it surfaces as a non-zero exit from
+`npm run test:coverage`. In both cases the c8 output shows which file
+dragged the metric down.

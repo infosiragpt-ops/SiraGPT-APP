@@ -548,3 +548,95 @@ jobs:
             exit 1
           fi
           echo "✓ all required checks passed"
+
+  # ───────────────────────────────────────────────────────────────────
+  # NOTIFY ON FAILURE — Slack alert when any required job fails
+  # ───────────────────────────────────────────────────────────────────
+  # Uses the same SLACK_WEBHOOK_URL repo secret as the deploy workflow
+  # (cycle 25). Posts commit metadata + the first 10 lines of the
+  # failing job log digest so on-call can triage without leaving Slack.
+  #
+  # Decoupled from `ci` (the required check) so a Slack outage cannot
+  # block merges. Runs only when an upstream job failed.
+  notify-on-failure:
+    name: Notify · Slack on failure
+    needs: [frontend, backend, docker, licenses, security-audit, e2e]
+    runs-on: ubuntu-latest
+    if: failure()
+    timeout-minutes: 3
+    steps:
+      - name: Checkout (shallow)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Build failure digest
+        id: digest
+        run: |
+          set -euo pipefail
+          {
+            echo "SUMMARY<<EOF"
+            echo "frontend:        ${{ needs.frontend.result }}"
+            echo "backend:         ${{ needs.backend.result }}"
+            echo "licenses:        ${{ needs.licenses.result }}"
+            echo "security-audit:  ${{ needs.security-audit.result }}"
+            echo "docker:          ${{ needs.docker.result }}"
+            echo "e2e:             ${{ needs.e2e.result }}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          # First 10 lines of the latest commit message act as a stand-in
+          # for "failing log" — the actual job logs aren't accessible from
+          # another job without the GH API, and posting the commit message
+          # gives reviewers enough context to click through to the run.
+          {
+            echo "COMMIT_BODY<<EOF"
+            git log -1 --pretty=format:'%B' | head -n 10
+            echo ""
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Post to Slack
+        if: env.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          set -euo pipefail
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          PAYLOAD=$(cat <<JSON
+          {
+            "text": ":rotating_light: CI failed on \`${{ github.ref_name }}\` — ${{ github.repository }}",
+            "blocks": [
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": ":rotating_light: *CI failed* on \`${{ github.ref_name }}\` (${{ github.repository }})\n<${RUN_URL}|Open run> · commit \`${{ github.sha }}\` by ${{ github.actor }}"
+                }
+              },
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "*Job results:*\n\`\`\`${{ steps.digest.outputs.SUMMARY }}\`\`\`"
+                }
+              },
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "*Commit message (first 10 lines):*\n\`\`\`${{ steps.digest.outputs.COMMIT_BODY }}\`\`\`"
+                }
+              }
+            ]
+          }
+          JSON
+          )
+          curl -sS -X POST -H 'Content-Type: application/json' \
+            --data "${PAYLOAD}" "${SLACK_WEBHOOK_URL}" \
+            || echo "::warning::Slack notification failed (non-fatal)"
+
+      - name: Note missing webhook
+        if: env.SLACK_WEBHOOK_URL == ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: echo "::warning::SLACK_WEBHOOK_URL secret not configured; skipping Slack alert."
