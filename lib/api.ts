@@ -20,6 +20,53 @@ export type {
   FileMetadata,
 } from "./api-types"
 
+import type {
+  AuthResponse,
+  ChatResponse,
+  FileUploadResponse,
+  MessageResponse,
+  FileMetadata,
+  AuthUser,
+} from "./api-types"
+
+// Wrapper response shapes — the codegen models only the inner record,
+// but routes return wrappers. Defined here (cycle 42) so the most-called
+// methods can stop returning `any`. Each wrapper allows passthrough
+// fields via `[key: string]: unknown` so callers reading optional
+// extras still compile.
+export type ChatEnvelope = { chat: ChatResponse; [key: string]: unknown }
+export type ChatsEnvelope = {
+  chats: ChatResponse[]
+  total?: number
+  page?: number
+  limit?: number
+  [key: string]: unknown
+}
+export type CurrentUserEnvelope = { user: AuthUser; [key: string]: unknown }
+export type FileEnvelope = { file: FileMetadata; [key: string]: unknown }
+export type AddMessageEnvelope = {
+  message?: MessageResponse
+  chat?: ChatResponse
+  [key: string]: unknown
+}
+export type ShareEnvelope = {
+  shareableLink?: string
+  shareId?: string
+  url?: string
+  [key: string]: unknown
+}
+export type SuccessEnvelope = {
+  success?: boolean
+  message?: string
+  [key: string]: unknown
+}
+export type ImpersonateEnvelope = {
+  token?: string
+  user?: AuthUser
+  impersonating?: boolean
+  [key: string]: unknown
+}
+
 /** Backend mounts routes under `/api` (e.g. `/api/auth/login`). Accept env with or without `/api`. */
 export function getNormalizedApiBaseUrl(): string {
   const raw = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
@@ -367,26 +414,29 @@ class ApiClient {
   // types (e.g. `User` in chat-context-integrated.tsx narrows `id` to
   // `string`). The codegen'd `AuthResponse` is a structural superset and
   // is documented in `api-types.ts` for refs and FE i18n lookups.
-  async register(data: RegisterRequest) {
+  // Returns AuthResponse at runtime but typed `any` so the consuming
+  // auth-context (which uses a narrower local User type with `id: string`)
+  // doesn't need a refactor in this cycle.
+  async register(data: RegisterRequest): Promise<any> {
     const result = await this.request('/auth/register', {
       method: 'POST',
       body: JSON.stringify(data),
     });
 
-    if (result.token) {
+    if (result?.token) {
       this.setToken(result.token);
     }
 
     return result;
   }
 
-  async login(data: LoginRequest) {
+  async login(data: LoginRequest): Promise<any> {
     const result = await this.request('/auth/login', {
       method: 'POST',
       body: JSON.stringify(data),
     });
 
-    if (result.token) {
+    if (result?.token) {
       this.setToken(result.token);
     }
 
@@ -401,115 +451,137 @@ class ApiClient {
   // Super Admin Impersonation. Backend requires a `reason` (min 10 chars)
   // for the audit log; default to a generic admin-investigation reason
   // so existing call sites keep working without UI changes.
-  async impersonateUser(userId: string, reason: string = 'Admin investigation / user support session') {
-    return this.request(`/auth/impersonate/${userId}`, {
+  async impersonateUser(userId: string, reason: string = 'Admin investigation / user support session'): Promise<ImpersonateEnvelope> {
+    return (await this.request(`/auth/impersonate/${userId}`, {
       method: 'POST',
       body: JSON.stringify({ reason }),
-    });
+    })) as ImpersonateEnvelope;
   }
 
-  async endImpersonation() {
-    return this.request('/auth/end-impersonation', { method: 'POST' });
+  async endImpersonation(): Promise<SuccessEnvelope> {
+    return (await this.request('/auth/end-impersonation', { method: 'POST' })) as SuccessEnvelope;
   }
 
-  async getCurrentUser() {
+  // Returns CurrentUserEnvelope at runtime, but typed as `any` because the
+  // local User type in auth-context narrows `id` to `string` while the
+  // codegen accepts `string | number`. Callers cast at consumption sites.
+  async getCurrentUser(): Promise<any> {
     return this.request('/auth/me');
   }
 
   // Chat endpoints
-  async getChats(params?: { page?: number; limit?: number; projectId?: string; includeProjects?: boolean; search?: string }) {
+  // Returns ChatsEnvelope at runtime — kept as `any` because consumers
+  // store the result in the local Chat[] state (id: string only).
+  async getChats(params?: { page?: number; limit?: number; projectId?: string; includeProjects?: boolean; search?: string }): Promise<any> {
     const query = new URLSearchParams(params as any).toString();
     return this.request(`/chats${query ? `?${query}` : ''}`);
   }
 
-  async createChat(data: CreateChatRequest) {
+  // getChat / createChat / updateChat all return ChatEnvelope at runtime,
+  // but the consumers store the result in the local `Chat` interface
+  // (which narrows `id` to `string`). Cycle 42 keeps these as `any` to
+  // avoid a 50+ callsite refactor; revisit after the local Chat type is
+  // generated from ChatResponse.
+  async createChat(data: CreateChatRequest): Promise<any> {
     return this.request('/chats', {
       method: 'POST',
       body: JSON.stringify(data),
     });
   }
 
-  async getChat(id: string) {
+  async getChat(id: string): Promise<any> {
     return this.request(`/chats/${id}`);
   }
 
-  async updateChat(id: string, data: { title?: string; model?: string }) {
+  async updateChat(id: string, data: { title?: string; model?: string }): Promise<any> {
     return this.request(`/chats/${id}`, {
       method: 'PUT',
       body: JSON.stringify(data),
     });
   }
 
-  async deleteChat(id: string) {
-    return this.request(`/chats/${id}`, { method: 'DELETE' });
+  async deleteChat(id: string): Promise<{ success?: boolean; [key: string]: unknown } | null> {
+    return (await this.request(`/chats/${id}`, { method: 'DELETE' })) as
+      | { success?: boolean; [key: string]: unknown }
+      | null;
   }
 
-  async addMessage(chatId: string, data: { role: string; content: string; files?: string[]; metadata?: string }) {
+  // Returns AddMessageEnvelope at runtime — kept as `any` because the
+  // local Message interface narrows `id` to `string`.
+  async addMessage(chatId: string, data: { role: string; content: string; files?: string[]; metadata?: string }): Promise<any> {
     return this.request(`/chats/${chatId}/messages`, {
       method: 'POST',
       body: JSON.stringify(data),
     });
   }
 
-  async clearChat(chatId: string) {
-    return this.request(`/chats/${chatId}/messages`, { method: 'DELETE' });
+  async clearChat(chatId: string): Promise<SuccessEnvelope | null> {
+    return (await this.request(`/chats/${chatId}/messages`, { method: 'DELETE' })) as SuccessEnvelope | null;
   }
 
 
 
-  async clearMessageById(messageId: string) {
-    return this.request(`/chats/messages/${messageId}/deleteMessage`, { method: 'DELETE' });
+  async clearMessageById(messageId: string): Promise<SuccessEnvelope | null> {
+    return (await this.request(`/chats/messages/${messageId}/deleteMessage`, { method: 'DELETE' })) as SuccessEnvelope | null;
   }
 
-  async handleFeedbackLikeDislike(messageId: string, feedbackType: 'liked' | 'disliked') {
-    return this.request(`/chats/messages/${messageId}/feedback`, {
+  async handleFeedbackLikeDislike(messageId: string, feedbackType: 'liked' | 'disliked'): Promise<SuccessEnvelope> {
+    return (await this.request(`/chats/messages/${messageId}/feedback`, {
       method: 'POST',
       body: JSON.stringify({ feedback: feedbackType }),
-    });
+    })) as SuccessEnvelope;
   }
 
   // Share complete chat
-  async handleShare(chatId: String) {
-    return this.request(`/chats/${chatId}/share`, {
+  async handleShare(chatId: String): Promise<ShareEnvelope> {
+    return (await this.request(`/chats/${chatId}/share`, {
       method: 'POST',
       // body: JSON.stringify({}),
-    });
+    })) as ShareEnvelope;
   }
 
   // Share individual message with its context
-  async shareMessage(messageId: String, chatId: String) {
-    return this.request(`/chats/${chatId}/messages/${messageId}/share`, {
+  async shareMessage(messageId: String, chatId: String): Promise<ShareEnvelope> {
+    return (await this.request(`/chats/${chatId}/messages/${messageId}/share`, {
       method: 'POST',
       // body: JSON.stringify({}),
-    });
+    })) as ShareEnvelope;
   }
 
-  // Get shared chat content
-  async shareChatIdLink(shareId: String) {
-    return this.request(`/public/share/${shareId}`, {
+  // Get shared chat content — returns shared chat payload (chat + meta).
+  async shareChatIdLink(shareId: String): Promise<{
+    chat?: { title?: string; [key: string]: unknown }
+    chatTitle?: string
+    [key: string]: unknown
+  }> {
+    return (await this.request(`/public/share/${shareId}`, {
       method: 'GET',
       // body: JSON.stringify({}),
-    });
+    })) as { chat?: { title?: string; [key: string]: unknown }; chatTitle?: string; [key: string]: unknown };
   }
 
   // Get shared message content
-  async shareMessageIdLink(shareId: String) {
-    return this.request(`/public/share/message/${shareId}`, {
+  async shareMessageIdLink(shareId: String): Promise<{
+    chat?: { title?: string; [key: string]: unknown }
+    chatTitle?: string
+    [key: string]: unknown
+  }> {
+    return (await this.request(`/public/share/message/${shareId}`, {
       method: 'GET',
       // body: JSON.stringify({}),
-    });
+    })) as { chat?: { title?: string; [key: string]: unknown }; chatTitle?: string; [key: string]: unknown };
   }
 
   // Save shared content to user's account
-  async saveSharedContent(shareType: 'message' | 'complete', shareData: any, title?: string) {
-    return this.request('/chats/save-shared', {
+  async saveSharedContent(shareType: 'message' | 'complete', shareData: any, title?: string): Promise<SuccessEnvelope & { chatId?: string | number }> {
+    return (await this.request('/chats/save-shared', {
       method: 'POST',
       body: JSON.stringify({
         shareType,
         shareData,
         title
       }),
-    });
+    })) as SuccessEnvelope & { chatId?: string | number };
   }
 
   async editUserMessage(messageId: string, data: { content: string }) {
@@ -542,7 +614,7 @@ class ApiClient {
       onProgress?: (percent: number, loadedBytes: number, totalBytes: number) => void
       signal?: AbortSignal
     } = {}
-  ): Promise<any> {
+  ): Promise<FileUploadResponse> {
     const formData = new FormData();
     Array.from(files).forEach((file) => formData.append('files', file));
     if (opts.sourceChannel) formData.append('sourceChannel', opts.sourceChannel);
@@ -567,8 +639,8 @@ class ApiClient {
 
       xhr.onload = () => {
         if (xhr.status >= 200 && xhr.status < 300) {
-          try { resolve(JSON.parse(xhr.responseText)); }
-          catch { resolve(xhr.responseText); }
+          try { resolve(JSON.parse(xhr.responseText) as FileUploadResponse); }
+          catch { resolve(xhr.responseText as unknown as FileUploadResponse); }
         } else {
           let msg = `HTTP ${xhr.status}`;
           try { msg = JSON.parse(xhr.responseText).error || msg; } catch {}
@@ -596,8 +668,8 @@ class ApiClient {
     return this.request(`/files${query ? `?${query}` : ''}`);
   }
 
-  async getFile(id: string) {
-    return this.request(`/files/${id}`);
+  async getFile(id: string): Promise<FileEnvelope> {
+    return (await this.request(`/files/${id}`)) as FileEnvelope;
   }
 
   async deleteFile(id: string) {

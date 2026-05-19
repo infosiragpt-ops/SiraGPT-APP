@@ -28,7 +28,8 @@ function putHeader(target: HeaderRecord, key: unknown, value: unknown) {
 }
 
 function putEntries(target: HeaderRecord, entries: Iterable<unknown>) {
-  for (const entry of entries) {
+  const list = Array.from(entries)
+  for (const entry of list) {
     if (!entry || typeof (entry as any)[Symbol.iterator] !== 'function') continue
     const pair = Array.from(entry as Iterable<unknown>)
     if (pair.length < 2) continue
@@ -57,7 +58,7 @@ export function sanitizeFetchHeaders(headers: HeadersInit | Record<PropertyKey, 
   }
 
   if (typeof (headers as any)[Symbol.iterator] === 'function') {
-    putEntries(sanitized, headers as Iterable<unknown>)
+    putEntries(sanitized, headers as unknown as Iterable<unknown>)
     return sanitized
   }
 

@@ -58,7 +58,7 @@ export default function SharedMessagePage() {
                     setTimeout(() => {
                         devLog('Redirecting to /chat...');
                         router.push('/chat');
-                        localStorage.setItem('currentChatId', response.chatId);
+                        localStorage.setItem('currentChatId', String(response.chatId));
                     }, 500);
                 } else {
                     console.error('Failed to save shared message:', response);
