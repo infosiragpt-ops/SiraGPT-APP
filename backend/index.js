@@ -32,6 +32,18 @@ process.on('unhandledRejection', (reason, promise) => {
         reason instanceof Error
             ? `${reason.name}: ${reason.message}${reason.stack ? '\n' + reason.stack : ''}`
             : String(reason);
+    // Transient Redis errors (Upstash quota, connection blips, etc.)
+    // surface here from BullMQ internals. Log as warning and keep
+    // serving — the worker will retry once Redis recovers.
+    let isTransientRedis = false;
+    try {
+        const { isTransientRedisError } = require('./src/services/agents/redis-resilience');
+        isTransientRedis = isTransientRedisError(reason);
+    } catch (_) { /* module not loaded yet — fall through to FATAL path */ }
+    if (isTransientRedis) {
+        console.warn('[redis] swallowed transient rejection:', reasonStr);
+        return;
+    }
     console.error('[FATAL] unhandledRejection:', reasonStr);
     // In production, log and continue (let PM2/Docker restart if
     // the process becomes unhealthy). In development, exit hard.

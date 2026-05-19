@@ -3,7 +3,7 @@
 // event on the connection AND as a rejected promise on any in-flight
 // command — without listeners, those rejections crash the Node process.
 
-const TRANSIENT_REDIS_ERROR_RE = /(connection is closed|connection lost|connection reset|read econn|write econn|stream isn'?t writeable|enotfound|etimedout|econnrefused|ENOTCONN|EPIPE|reply error: loading|reconnecting)/i;
+const TRANSIENT_REDIS_ERROR_RE = /(connection is closed|connection lost|connection reset|read econn|write econn|stream isn'?t writeable|enotfound|etimedout|econnrefused|ENOTCONN|EPIPE|reply error: loading|reconnecting|max requests limit exceeded|max daily request limit|max commands per second|quota exceeded|rate limit exceeded|max payload size exceeded|max concurrent connections|max database size|max memory)/i;
 
 function isTransientRedisError(err) {
   if (!err) return false;
