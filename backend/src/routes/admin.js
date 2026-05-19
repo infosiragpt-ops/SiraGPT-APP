@@ -1304,6 +1304,159 @@ router.get('/stats/ai-models', requireSuperAdmin, async (req, res) => {
   }
 });
 
+// ── System summary (super-admin only) ──────────────────────────────────
+// Aggregates the most-watched dashboards into a single response so the
+// on-call dashboard / status page can render in one round-trip:
+//   - overall: 'green' | 'amber' | 'red' (derived from service health)
+//   - services: postgres / redis / smtp / stripe statuses
+//   - crons: stale job count (system-cron jobs whose lastRun is older
+//            than 2x their interval — best-effort, never throws)
+//   - users: active-in-last-7-days
+//   - orgs:  total Organization rows
+//   - mrr:   estimated USD MRR from active subscriptions
+//   - alerts: count of alerts currently inside the dedup window
+//
+// All sub-calls are guarded individually — if any one fails we still
+// return the rest so the dashboard never goes blank.
+async function buildSystemSummary({
+  prismaClient = prisma,
+  env = process.env,
+  stripeSvc = stripeService,
+  emailSvc = null,
+  queueModule = null,
+  schedulerModule = null,
+  socketModule = null,
+  systemCronModule = null,
+  alertingModule = null,
+  nowMs = Date.now(),
+} = {}) {
+  const settle = (p, fallback) =>
+    Promise.resolve()
+      .then(() => p)
+      .catch(() => fallback);
+
+  const emailSvcResolved = emailSvc || (() => {
+    try { return require('../services/email'); } catch { return null; }
+  })();
+  const queueModuleResolved = queueModule || (() => {
+    try { return require('../services/agents/agent-task-queue'); } catch { return null; }
+  })();
+  const schedulerModuleResolved = schedulerModule || (() => {
+    try { return require('../services/scheduler/scheduler'); } catch { return null; }
+  })();
+  const socketModuleResolved = socketModule || (() => {
+    try { return require('../services/realtime/socket-server'); } catch { return null; }
+  })();
+  const systemCronModuleResolved = systemCronModule || (() => {
+    try { return require('../jobs/system-cron'); } catch { return null; }
+  })();
+  const alertingModuleResolved = alertingModule || (() => {
+    try { return require('../services/alerting'); } catch { return null; }
+  })();
+
+  // Service health snapshot — reused so we surface the same numbers as
+  // /api/admin/health/services without a second round-trip.
+  const healthSnap = await settle(
+    collectServiceHealth({
+      prismaClient,
+      env,
+      stripeSvc,
+      emailSvc: emailSvcResolved,
+      queueModule: queueModuleResolved,
+      schedulerModule: schedulerModuleResolved,
+      socketModule: socketModuleResolved,
+      systemCronModule: systemCronModuleResolved,
+    }),
+    { overall: 'down', services: {} },
+  );
+
+  const services = {
+    postgres: healthSnap.services?.postgres?.status || 'unknown',
+    redis: healthSnap.services?.redis?.status || 'unknown',
+    smtp: healthSnap.services?.smtp?.status || 'unknown',
+    stripe: healthSnap.services?.stripe?.status || 'unknown',
+  };
+
+  // Map health-services overall (healthy/degraded/down) to traffic-light.
+  const overall = healthSnap.overall === 'healthy' ? 'green'
+    : healthSnap.overall === 'degraded' ? 'amber'
+    : 'red';
+
+  // Stale crons — a job is "stale" when its declared interval has elapsed
+  // since lastRun by more than 2x (best-effort: jobs without lastRun or
+  // intervalMs are skipped, never counted as stale).
+  let staleCronCount = 0;
+  try {
+    const sysCron = healthSnap.services?.systemCron;
+    const jobs = Array.isArray(sysCron?.jobs) ? sysCron.jobs : [];
+    for (const j of jobs) {
+      if (!j) continue;
+      const lastRun = j.lastRun ? new Date(j.lastRun).getTime() : null;
+      const interval = Number(j.intervalMs);
+      if (!lastRun || !Number.isFinite(interval) || interval <= 0) continue;
+      if ((nowMs - lastRun) > 2 * interval) staleCronCount += 1;
+    }
+  } catch { /* never throw */ }
+
+  // Users active in last 7 days — bounded by aggregator's `updatedAt`
+  // signal (same heuristic the admin dashboard already uses).
+  const sevenDaysAgo = new Date(nowMs - 7 * 24 * 60 * 60 * 1000);
+  const activeUsers7d = await settle(
+    prismaClient.user.count({
+      where: {
+        updatedAt: { gte: sevenDaysAgo },
+        isSuperAdmin: false,
+        deletedAt: null,
+      },
+    }),
+    null,
+  );
+
+  // Orgs total
+  const orgsTotal = await settle(
+    prismaClient.organization?.count?.() ?? Promise.resolve(null),
+    null,
+  );
+
+  // MRR proxy — reuse the aggregator's plan-weighted active-sub count so
+  // we report the same number the analytics dashboard does.
+  let mrrUsd = null;
+  try {
+    const userStats = await adminStats.aggregateUserStats(prismaClient, {});
+    mrrUsd = userStats?.mrrProxyUsd ?? null;
+  } catch { /* leave null */ }
+
+  // Active alerts — count of titles inside the dedup window.
+  let activeAlerts = 0;
+  try {
+    if (alertingModuleResolved && typeof alertingModuleResolved.getActiveAlerts === 'function') {
+      const snap = alertingModuleResolved.getActiveAlerts({ now: nowMs });
+      activeAlerts = snap?.count || 0;
+    }
+  } catch { /* leave 0 */ }
+
+  return {
+    timestamp: new Date(nowMs).toISOString(),
+    overall,
+    services,
+    crons: { stale: staleCronCount },
+    users: { active7d: activeUsers7d },
+    orgs: { total: orgsTotal },
+    mrr: { estimatedUsd: mrrUsd },
+    alerts: { active: activeAlerts },
+  };
+}
+
+router.get('/system-summary', requireSuperAdmin, async (_req, res) => {
+  try {
+    const summary = await buildSystemSummary({});
+    res.json(summary);
+  } catch (err) {
+    console.error('[admin/system-summary] failed:', err && err.message ? err.message : err);
+    res.status(500).json({ error: 'Failed to build system summary' });
+  }
+});
+
 router.get('/health/services', requireSuperAdmin, async (_req, res) => {
   try {
     const emailService = (() => { try { return require('../services/email'); } catch (_) { return null; } })();
@@ -1904,6 +2057,7 @@ module.exports.metricsHandler = metricsHandler;
 module.exports.INTERNAL_CSV = { auditLogsToCsv, csvEscape, AUDIT_CSV_COLUMNS };
 module.exports.INTERNAL = {
   collectServiceHealth,
+  buildSystemSummary,
   probePostgres,
   probeRedis,
   probeStripe,

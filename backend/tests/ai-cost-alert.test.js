@@ -110,7 +110,7 @@ test('maybeCheck swallows errors from getRecords', async () => {
     getRecords: () => { throw new Error('boom'); },
     alerting: alertingDouble,
   });
-  assert.deepEqual(r, { user: null, org: null });
+  assert.deepEqual(r, { user: null, org: null, orgBudget: null });
   assert.equal(alertingDouble.sent.length, 0);
 });
 
@@ -119,5 +119,126 @@ test('maybeCheck returns null verdicts when no scope provided', async () => {
     getRecords: () => [],
     alerting: alertingDouble,
   });
-  assert.deepEqual(r, { user: null, org: null });
+  assert.deepEqual(r, { user: null, org: null, orgBudget: null });
+});
+
+// ── Cost budget alerts (org-level cap) ────────────────────────────────
+
+test('normalizeBudget rejects bad input and defaults warnThresholdPct to 80', () => {
+  assert.equal(costAlert.normalizeBudget(null), null);
+  assert.equal(costAlert.normalizeBudget({}), null);
+  assert.equal(costAlert.normalizeBudget({ monthlyCapUSD: 0 }), null);
+  assert.equal(costAlert.normalizeBudget({ monthlyCapUSD: -5 }), null);
+  const n = costAlert.normalizeBudget({ monthlyCapUSD: 100 });
+  assert.equal(n.monthlyCapUSD, 100);
+  assert.equal(n.warnThresholdPct, 80);
+  assert.equal(n.warnAtUSD, 80);
+  // pct override
+  const n2 = costAlert.normalizeBudget({ monthlyCapUSD: 200, warnThresholdPct: 50 });
+  assert.equal(n2.warnAtUSD, 100);
+  // pct out of range falls back to default
+  const n3 = costAlert.normalizeBudget({ monthlyCapUSD: 100, warnThresholdPct: 999 });
+  assert.equal(n3.warnThresholdPct, 80);
+});
+
+test('_sumMonthToDate only counts current-month records for member set', () => {
+  const now = Date.parse('2026-05-19T12:00:00Z');
+  const records = [
+    { userId: 'm1', costUSD: 3, ts: '2026-05-01T00:00:00Z' },
+    { userId: 'm2', costUSD: 4, ts: '2026-05-10T00:00:00Z' },
+    // previous month → excluded
+    { userId: 'm1', costUSD: 100, ts: '2026-04-30T00:00:00Z' },
+    // non-member → excluded
+    { userId: 'stranger', costUSD: 999, ts: '2026-05-15T00:00:00Z' },
+  ];
+  const total = costAlert._sumMonthToDate(records, new Set(['m1', 'm2']), now);
+  assert.equal(total, 7);
+});
+
+test('checkOrgBudget returns null when no budget configured', async () => {
+  const r = await costAlert.checkOrgBudget({
+    orgId: 'org1',
+    memberIds: ['m1'],
+    budget: null,
+    getRecords: () => [],
+    alerting: alertingDouble,
+  });
+  assert.equal(r, null);
+  assert.equal(alertingDouble.sent.length, 0);
+});
+
+test('checkOrgBudget does NOT fire below warn threshold', async () => {
+  const now = Date.parse('2026-05-19T12:00:00Z');
+  const records = [
+    { userId: 'm1', costUSD: 10, ts: '2026-05-10T00:00:00Z' },
+  ];
+  const r = await costAlert.checkOrgBudget({
+    orgId: 'org1',
+    memberIds: ['m1'],
+    budget: { monthlyCapUSD: 100 }, // warn at 80
+    getRecords: () => records,
+    alerting: alertingDouble,
+    nowMs: now,
+  });
+  assert.ok(r);
+  assert.equal(r.fired, false);
+  assert.equal(alertingDouble.sent.length, 0);
+});
+
+test('checkOrgBudget fires warn at threshold (default 80%)', async () => {
+  const now = Date.parse('2026-05-19T12:00:00Z');
+  const records = [
+    { userId: 'm1', costUSD: 50, ts: '2026-05-05T00:00:00Z' },
+    { userId: 'm2', costUSD: 35, ts: '2026-05-12T00:00:00Z' },
+  ];
+  const r = await costAlert.checkOrgBudget({
+    orgId: 'org1',
+    memberIds: ['m1', 'm2'],
+    budget: { monthlyCapUSD: 100 },
+    getRecords: () => records,
+    alerting: alertingDouble,
+    nowMs: now,
+  });
+  assert.ok(r.fired);
+  assert.equal(r.severity, 'warn');
+  assert.equal(r.overCap, false);
+  assert.equal(alertingDouble.sent.length, 1);
+  assert.match(alertingDouble.sent[0].title, /^org_budget_warn:org1$/);
+  assert.equal(alertingDouble.sent[0].context.scope, 'org_budget');
+});
+
+test('checkOrgBudget fires error severity when MTD spend exceeds cap', async () => {
+  const now = Date.parse('2026-05-19T12:00:00Z');
+  const records = [
+    { userId: 'm1', costUSD: 150, ts: '2026-05-05T00:00:00Z' },
+  ];
+  const r = await costAlert.checkOrgBudget({
+    orgId: 'org1',
+    memberIds: ['m1'],
+    budget: { monthlyCapUSD: 100, warnThresholdPct: 80 },
+    getRecords: () => records,
+    alerting: alertingDouble,
+    nowMs: now,
+  });
+  assert.ok(r.fired);
+  assert.equal(r.overCap, true);
+  assert.equal(r.severity, 'error');
+  assert.match(alertingDouble.sent[0].title, /^org_budget_exceeded:org1$/);
+});
+
+test('maybeCheck wires orgBudget when budget supplied alongside orgId', async () => {
+  const now = Date.parse('2026-05-19T12:00:00Z');
+  const records = [
+    { userId: 'm1', costUSD: 90, ts: '2026-05-10T00:00:00Z' },
+  ];
+  const r = await costAlert.maybeCheck({
+    orgId: 'org1',
+    memberIds: ['m1'],
+    budget: { monthlyCapUSD: 100 },
+    getRecords: () => records,
+    alerting: alertingDouble,
+    nowMs: now,
+  });
+  assert.ok(r.orgBudget && r.orgBudget.fired);
+  assert.equal(r.org, null); // ratio path didn't trip
 });

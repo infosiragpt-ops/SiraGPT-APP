@@ -28,6 +28,7 @@
 const COST_ALERT_DOLLAR_THRESHOLD = 10;
 const COST_ALERT_RATIO = 2;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_WARN_THRESHOLD_PCT = 80;
 
 function _startOfUtcDay(ms) {
   const d = new Date(ms);
@@ -141,6 +142,124 @@ async function checkOrg({ orgId, memberIds, getRecords, alerting } = {}) {
 }
 
 /**
+ * Sum month-to-date USD spend across a set of member ids from the
+ * tracker's in-memory records. Month is computed in UTC.
+ *
+ * @param {Array<{ts:string, userId:string, costUSD:number}>} records
+ * @param {Set<string>} memberSet
+ * @param {number} [nowMs]
+ */
+function _sumMonthToDate(records, memberSet, nowMs = Date.now()) {
+  if (!Array.isArray(records) || records.length === 0) return 0;
+  const now = new Date(nowMs);
+  const monthStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
+  let total = 0;
+  for (const r of records) {
+    if (!r) continue;
+    if (!memberSet.has(String(r.userId))) continue;
+    const t = new Date(r.ts).getTime();
+    if (!Number.isFinite(t) || t < monthStart) continue;
+    const cost = Number(r.costUSD) || 0;
+    if (cost > 0) total += cost;
+  }
+  return _round6(total);
+}
+
+/**
+ * Normalise an org budget object (typically read from `Organization.settings.budget`).
+ * Returns `null` when no usable cap is configured.
+ *
+ * Shape: { monthlyCapUSD: number, warnThresholdPct?: number }
+ */
+function normalizeBudget(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const cap = Number(raw.monthlyCapUSD);
+  if (!Number.isFinite(cap) || cap <= 0) return null;
+  let pct = Number(raw.warnThresholdPct);
+  if (!Number.isFinite(pct) || pct <= 0 || pct > 100) pct = DEFAULT_WARN_THRESHOLD_PCT;
+  return {
+    monthlyCapUSD: _round6(cap),
+    warnThresholdPct: pct,
+    warnAtUSD: _round6(cap * (pct / 100)),
+  };
+}
+
+/**
+ * checkOrgBudget — month-to-date cap enforcement for an organization.
+ * Fires a cycle-32 alert when MTD spend across `memberIds` crosses the
+ * warn threshold (defaults to 80% of cap) and again when it exceeds the
+ * full cap. Dedup is provided by the alerting layer via stable titles.
+ *
+ * @param {object} opts
+ * @param {string}   opts.orgId
+ * @param {string[]} opts.memberIds
+ * @param {object}   opts.budget       `{ monthlyCapUSD, warnThresholdPct? }`
+ * @param {Function} opts.getRecords   tracker snapshot getter
+ * @param {object}   opts.alerting     cycle 32 alerting service
+ * @param {number}   [opts.nowMs]      injected clock (tests)
+ */
+async function checkOrgBudget({ orgId, memberIds, budget, getRecords, alerting, nowMs } = {}) {
+  if (!orgId || !Array.isArray(memberIds) || memberIds.length === 0) return null;
+  if (typeof getRecords !== 'function' || !alerting) return null;
+  const norm = normalizeBudget(budget);
+  if (!norm) return null;
+  let records;
+  try { records = getRecords(); } catch { return null; }
+  const memberSet = new Set(memberIds.map((m) => String(m)));
+  const usedThisMonthUSD = _sumMonthToDate(
+    Array.isArray(records) ? records : [],
+    memberSet,
+    nowMs,
+  );
+  if (usedThisMonthUSD < norm.warnAtUSD) {
+    return {
+      orgId,
+      usedThisMonthUSD,
+      ...norm,
+      fired: false,
+    };
+  }
+  const overCap = usedThisMonthUSD >= norm.monthlyCapUSD;
+  const severity = overCap ? 'error' : 'warn';
+  // Stable titles → alerting dedups within its window so a sampling-hook
+  // can call this on every nth request without flooding the channel.
+  const title = overCap
+    ? `org_budget_exceeded:${orgId}`
+    : `org_budget_warn:${orgId}`;
+  const pctOfCap = norm.monthlyCapUSD > 0
+    ? _round6(usedThisMonthUSD / norm.monthlyCapUSD)
+    : 0;
+  try {
+    await alerting.sendAlert({
+      title,
+      message: `Org ${orgId} has used $${usedThisMonthUSD.toFixed(2)} of $${norm.monthlyCapUSD.toFixed(2)} ` +
+        `month-to-date (${Math.round(pctOfCap * 100)}% of cap; warn at ${norm.warnThresholdPct}%).`,
+      severity,
+      context: {
+        scope: 'org_budget',
+        orgId,
+        memberCount: memberSet.size,
+        usedThisMonthUSD,
+        monthlyCapUSD: norm.monthlyCapUSD,
+        warnThresholdPct: norm.warnThresholdPct,
+        warnAtUSD: norm.warnAtUSD,
+        pctOfCap,
+        overCap,
+      },
+    });
+  } catch { /* alerting never throws — defensive */ }
+  return {
+    orgId,
+    usedThisMonthUSD,
+    ...norm,
+    pctOfCap,
+    overCap,
+    fired: true,
+    severity,
+  };
+}
+
+/**
  * Combined entrypoint used by the cost-tracker sampling hook.
  * Always returns a plain object (never throws) describing what was
  * checked and which (if any) verdict tripped.
@@ -151,12 +270,14 @@ async function checkOrg({ orgId, memberIds, getRecords, alerting } = {}) {
  * @param {string[]} [opts.memberIds]   required if orgId is set
  * @param {Function} opts.getRecords    returns the tracker's record snapshot
  * @param {object}   opts.alerting      cycle 32 alerting service
+ * @param {object}   [opts.budget]      org budget config (triggers checkOrgBudget)
  */
 async function maybeCheck(opts = {}) {
-  const out = { user: null, org: null };
+  const out = { user: null, org: null, orgBudget: null };
   try {
     if (opts.userId) out.user = await checkUser(opts);
     if (opts.orgId) out.org = await checkOrg(opts);
+    if (opts.orgId && opts.budget) out.orgBudget = await checkOrgBudget(opts);
   } catch { /* never throw */ }
   return out;
 }
@@ -165,8 +286,12 @@ module.exports = {
   maybeCheck,
   checkUser,
   checkOrg,
+  checkOrgBudget,
+  normalizeBudget,
   summarize,
   evaluate,
   COST_ALERT_DOLLAR_THRESHOLD,
   COST_ALERT_RATIO,
+  DEFAULT_WARN_THRESHOLD_PCT,
+  _sumMonthToDate,
 };

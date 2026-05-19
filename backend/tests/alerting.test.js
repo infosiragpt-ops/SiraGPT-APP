@@ -114,6 +114,29 @@ describe('alerting — domain helpers', () => {
   });
 });
 
+describe('alerting — getActiveAlerts', () => {
+  test('returns empty snapshot when no alerts have fired', () => {
+    const snap = alerting.getActiveAlerts();
+    assert.equal(snap.count, 0);
+    assert.deepEqual(snap.items, []);
+  });
+
+  test('counts alerts inside the dedup window and ignores old ones', async () => {
+    alerting.registerChannel(() => ({ ok: true }));
+    await alerting.sendAlert({ title: 'fresh-1', severity: 'warn' });
+    await alerting.sendAlert({ title: 'fresh-2', severity: 'error' });
+    const snap = alerting.getActiveAlerts();
+    assert.equal(snap.count, 2);
+    const titles = snap.items.map((i) => i.title).sort();
+    assert.deepEqual(titles, ['fresh-1', 'fresh-2']);
+
+    // Pretend a lot of time has passed → both alerts should fall out.
+    const future = Date.now() + 10 * 60 * 1000;
+    const old = alerting.getActiveAlerts({ now: future, windowMs: 60_000 });
+    assert.equal(old.count, 0);
+  });
+});
+
 describe('alerting — attachCircuitBreaker', () => {
   test('only fires on transitions to OPEN', async () => {
     const seen = [];

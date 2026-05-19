@@ -185,6 +185,28 @@ function registerChannel(fn) {
   };
 }
 
+/**
+ * getActiveAlerts — snapshot of alerts whose dedup entry is still within
+ * the active window. Useful for the system-summary dashboard so on-call
+ * sees a number of "currently firing" alerts at a glance.
+ *
+ * Returns `{ count, items: [{ title, lastSentAt, count, suppressedCount }] }`.
+ */
+function getActiveAlerts({ now = _now(), windowMs = _dedupWindowMs } = {}) {
+  const items = [];
+  for (const [title, entry] of _dedupCache) {
+    if (!entry || typeof entry.lastSentAt !== 'number') continue;
+    if ((now - entry.lastSentAt) > windowMs) continue;
+    items.push({
+      title,
+      lastSentAt: new Date(entry.lastSentAt).toISOString(),
+      count: entry.count || 1,
+    });
+  }
+  items.sort((a, b) => (b.lastSentAt > a.lastSentAt ? 1 : -1));
+  return { count: items.length, windowMs, items };
+}
+
 function _resetForTests() {
   _dedupCache.clear();
   _customChannels.length = 0;
@@ -270,5 +292,6 @@ module.exports = {
   notifyHigh5xxRate,
   notifyFrontendError,
   attachCircuitBreaker,
+  getActiveAlerts,
   _resetForTests,
 };
