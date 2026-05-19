@@ -4,6 +4,70 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and improvement cycles follow a sequential number with the date the work landed.
 
+## [0.3.0 / backend 1.2.0] — Cycles 91-100 CENTENARIAN milestone — 2026-05-19
+
+Centenarian marker — **100 continuous improvement cycles**. MINOR
+version bumps to celebrate the milestone (root `0.2.5 → 0.3.0`, backend
+`1.1.5 → 1.2.0`). Cycles 91-100 closed the auth + tenancy + cost +
+observability story with no public API breaks. See
+`docs/cycles/CYCLE_100.md` for the milestone narrative.
+
+### Added
+- **Cycle 100 — CENTENARIAN milestone consolidation**:
+  `docs/cycles/CYCLE_100.md` marker doc + CHANGELOG cycles 91-100 sweep
+  + MINOR version bump to `0.3.0 / 1.2.0`.
+- **Cycle 99 — cost 13-month archive + 3-layer report**: `CostUsageDaily`
+  trimmed to a rolling 13-month window with older months archived;
+  unified three-layer report (snapshot + summary + trend) under
+  `/admin/system-report`.
+- **Cycle 98 — CostUsageDaily persistence + merged reports**: daily
+  cost rollups persisted in `CostUsageDaily` instead of recomputed;
+  admin cost/usage reports merged into a single response shape.
+- **Cycle 97 — webhook DLQ + system-snapshot**: failed webhook
+  deliveries land in a dead-letter queue with replay endpoint;
+  `/admin/system-snapshot` returns a point-in-time JSON capture of
+  platform state.
+- **Cycle 96 — SSO domain claim + verify-email rate limit**: orgs can
+  claim email domains for SSO routing (DNS TXT verified);
+  `verify-email` and `resend` endpoints rate-limited per IP + per email.
+- **Cycle 95 — system-summary + budget alerts**: `/admin/system-summary`
+  aggregates orgs, users, jobs, RPS, cost in one call; per-org budget
+  alerts when monthly spend crosses configured thresholds.
+- **Cycle 94 — verif token sweep + emailVerified /me**: scheduled
+  cleanup of expired/used verification tokens; `/me` returns
+  `emailVerified` so the UI can gate features.
+- **Cycle 93 — email verification flow**: signed verification tokens,
+  `POST /auth/verify-email`, resend cooldown, and `emailVerified`
+  timestamp on the User record.
+- **Cycle 92 — cost forecast + cron stale alerts**: linear projection
+  of monthly AI spend from rolling daily usage; cron heartbeat tracker
+  flags jobs missing their expected cadence.
+- **Cycle 91 — API key rotate + webhook health**: `POST /api-keys/:id/rotate`
+  issues a new secret keeping id and scopes; webhook health endpoint
+  surfaces success/failure rates per subscriber.
+
+### Changed
+- Lint ratchet held at `--max-warnings 45` across cycles 91-100.
+- Root `package.json` version `0.2.5 → 0.3.0` (MINOR for milestone).
+- Backend `package.json` version `1.1.5 → 1.2.0` (MINOR for milestone).
+- Admin cost/usage reports merged into a single response shape (cycle 98).
+
+### Fixed
+- Cron jobs that miss their cadence are now detected and alerted (cycle 92).
+- Cost rollups no longer recomputed on every report request (cycle 98).
+- Stability fixes carried in feature cycles. See individual cycle
+  entries for specifics.
+
+### Security
+- Email verification tokens with signed payloads + expiry sweep (cycles 93, 94).
+- Per-IP + per-email rate limit on `verify-email` + `resend` (cycle 96).
+- SSO domain claim with DNS TXT verification (cycle 96).
+- API key rotation without losing id/scopes (cycle 91).
+- Webhook DLQ prevents silent failure of outbound deliveries (cycle 97).
+
+### Removed
+- `CostUsageDaily` rows older than 13 months trimmed to archive (cycle 99).
+
 ## [0.2.5 / backend 1.1.5] — Cycles 81-90 milestone — 2026-05-19
 
 Ninth-decade marker. Patch bumps only (root `0.2.4 → 0.2.5`, backend
