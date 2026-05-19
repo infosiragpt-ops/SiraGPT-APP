@@ -55,6 +55,24 @@ A comprehensive AI platform supporting multiple LLM APIs with text, image, audio
 6. **Open your browser**
    Navigate to [http://localhost:3000](http://localhost:3000)
 
+### One-command dev orchestration
+
+For a fully-orchestrated local environment (Postgres + Redis via docker-compose,
+prisma migrations, seed, frontend, backend) use the helper scripts:
+
+\`\`\`bash
+# Boot everything (Ctrl-C to stop both dev servers cleanly)
+./scripts/dev-up.sh
+
+# Tear everything down (stops compose services and frees ports 3000/5000)
+./scripts/dev-down.sh
+\`\`\`
+
+`dev-up.sh` waits for Postgres to be healthy before running `prisma migrate dev`,
+then launches the Next.js dev server and the Express backend in parallel with a
+shared `SIGINT` trap. `dev-down.sh` stops docker-compose services and kills any
+orphan node processes still bound to ports 3000 / 5000.
+
 ## Demo Credentials
 
 - **Admin User**: admin@example.com / password
