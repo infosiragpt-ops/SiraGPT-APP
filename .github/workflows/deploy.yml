@@ -161,6 +161,58 @@ jobs:
             chmod +x scripts/deploy-with-rollback.sh
             ./scripts/deploy-with-rollback.sh || true
 
+  # ── Source map upload (cycle 52, opt-in) ───────────────────
+  # Uploads frontend + backend source maps to Sentry so production
+  # stack traces resolve to original source. Only runs when the
+  # SENTRY_AUTH_TOKEN repository secret is configured — without it
+  # the whole job is skipped, so this is a no-op until ops opts in.
+  # See docs/sentry-sourcemaps.md.
+  sourcemaps:
+    name: Upload source maps to Sentry
+    needs: [deploy]
+    if: |
+      always() &&
+      needs.deploy.result == 'success' &&
+      vars.SOURCE_MAP_UPLOAD == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    env:
+      SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+      SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+      SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+      SENTRY_RELEASE: ${{ github.sha }}
+    steps:
+      - name: Guard — require SENTRY_AUTH_TOKEN
+        run: |
+          if [[ -z "${SENTRY_AUTH_TOKEN}" ]]; then
+            echo "::notice::SENTRY_AUTH_TOKEN not set — skipping source map upload"
+            exit 0
+          fi
+
+      - uses: actions/checkout@v4
+        if: env.SENTRY_AUTH_TOKEN != ''
+
+      - name: Setup Node
+        if: env.SENTRY_AUTH_TOKEN != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install @sentry/cli
+        if: env.SENTRY_AUTH_TOKEN != ''
+        run: npm install -g @sentry/cli@2
+
+      - name: Build (frontend) to generate source maps
+        if: env.SENTRY_AUTH_TOKEN != ''
+        env:
+          GENERATE_SOURCEMAP: 'true'
+        run: npm ci --no-audit --no-fund && npm run build
+
+      - name: Upload source maps
+        if: env.SENTRY_AUTH_TOKEN != ''
+        run: ./scripts/upload-sentry-sourcemaps.sh
+
   notify:
     name: Slack notification
     needs: [deploy, post-check]
