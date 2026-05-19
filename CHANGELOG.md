@@ -4,6 +4,55 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and improvement cycles follow a sequential number with the date the work landed.
 
+## [0.3.3 / backend 1.2.3] — Cycles 121-130 milestone — 2026-05-19
+
+Third decade past the centenarian. PATCH bumps only (root
+`0.3.2 → 0.3.3`, backend `1.2.2 → 1.2.3`) — cycles 121-130 turned
+org-internal broadcast and user-level inbox plumbing into first-class
+subsystems with no public API breaks. See `docs/cycles/CYCLE_130.md`
+for the milestone narrative.
+
+### Added
+- **Cycle 130 — milestone consolidation**: `docs/cycles/CYCLE_130.md`
+  marker doc + CHANGELOG cycles 121-130 sweep + PATCH version bump to
+  `0.3.3 / 1.2.3`.
+- **Cycle 129 — notification sweep + webpush critical**: cron sweep
+  archives notifications past their `expiresAt`; `critical`-severity
+  notifications additionally trigger web push delivery to subscribed
+  devices (best-effort, isolated from inbox write).
+- **Cycle 128 — user notifications inbox**: per-user `Notification`
+  model + inbox endpoints (`GET /me/notifications`, mark-read,
+  mark-all-read), decoupled from announcement reads so direct/system
+  notifications share the surface.
+- **Cycle 127 — announcement /reads + /unread**:
+  `GET /org/announcements/:id/reads` (admin view of read receipts)
+  and `GET /org/announcements/unread` (current user's unread list).
+- **Cycle 126 — announcement reads + ack trigger**:
+  `OrgAnnouncementRead` junction table tracking per-user read receipts;
+  `org.announcement.ack` webhook trigger emitted on mark-read.
+- **Cycle 125 — announcement pagination + PUT**: cursor pagination on
+  the announcement listing; `PUT /org/announcements/:id` for full
+  updates (alongside existing PATCH for partial fields).
+- **Cycle 124 — accept-needs-verif fix + announcement sweep**: fix
+  for the invite-accept path requiring email verification before
+  membership; expired announcements swept by cron and archived
+  without losing the audit trail.
+- **Cycle 123 — announcement trigger + critical bulk email**:
+  announcement publish emits `org.announcement.published` webhook;
+  `critical` severity announcements fan out via batched, rate-limited
+  bulk email to all org members.
+- **Cycle 122 — OrgAnnouncement model + endpoints**: new Prisma
+  model (title, body, severity, `scheduledAt`, `expiresAt`) + CRUD
+  endpoints under `/org/announcements`.
+- **Cycle 121 — pagination audit + sessions**: repo-wide listing
+  audit for missing cursor pagination; sessions listing converted to
+  cursor pagination so admin UIs never hit unbounded result sets.
+
+### Changed
+- Root `package.json` `0.3.2 → 0.3.3` and `backend/package.json`
+  `1.2.2 → 1.2.3` (PATCH; no public API breaks).
+- Lint ratchet held at `--max-warnings 45` (unchanged since cycle 60).
+
 ## [0.3.2 / backend 1.2.2] — Cycles 111-120 milestone — 2026-05-19
 
 Second decade past the centenarian. PATCH bumps only (root
