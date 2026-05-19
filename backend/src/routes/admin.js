@@ -867,6 +867,41 @@ async function collectServiceHealth({ prismaClient, env, stripeSvc, emailSvc }) 
   };
 }
 
+// ── Cost report (super-admin only) ──────────────────────────────────────
+// Aggregates per-user / per-model AI costs over a date range. Backed by
+// the in-process services/ai/cost-tracker; for production-grade durability
+// install a `setPersistHook` writer at boot that flushes records into a
+// Postgres `ai_cost_log` table.
+router.get('/cost-report', requireSuperAdmin, async (req, res) => {
+  try {
+    const costTracker = require('../services/ai/cost-tracker');
+    const { from, to, userId } = req.query || {};
+    const fromDate = from ? new Date(String(from)) : null;
+    const toDate = to ? new Date(String(to)) : null;
+    if (from && Number.isNaN(fromDate.getTime())) {
+      return res.status(400).json({ error: "Invalid 'from' date" });
+    }
+    if (to && Number.isNaN(toDate.getTime())) {
+      return res.status(400).json({ error: "Invalid 'to' date" });
+    }
+    const includeRecords = req.query.includeRecords !== '0' && req.query.includeRecords !== 'false';
+    const report = costTracker.report({
+      from: fromDate,
+      to: toDate,
+      userId: userId || null,
+      includeRecords,
+    });
+    return res.json({
+      ok: true,
+      filters: { from: from || null, to: to || null, userId: userId || null },
+      ...report,
+    });
+  } catch (err) {
+    console.error('[admin/cost-report] failed:', err && err.message ? err.message : err);
+    return res.status(500).json({ error: 'Failed to build cost report' });
+  }
+});
+
 router.get('/health/services', requireSuperAdmin, async (_req, res) => {
   try {
     const emailService = (() => { try { return require('../services/email'); } catch (_) { return null; } })();

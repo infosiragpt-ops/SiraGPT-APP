@@ -24,6 +24,8 @@ const {
   shouldRepairDesign,
 } = require('../services/design-generator');
 const rag = require('../services/rag-service');
+const costTracker = require('../services/ai/cost-tracker');
+const anomalyDetector = require('../services/ai/anomaly-detector');
 const operationalRag = require('../services/rag/operational-runtime');
 const documentProfessionalAnalyzer = require('../services/document-professional-analyzer');
 const documentResponseFidelity = require('../services/document-response-fidelity');
@@ -357,6 +359,7 @@ router.post(
     const customInstruction = String(req.body.customInstruction || '').trim();
     const model = 'deepseek-v4-pro';
 
+    const __paraphraseStartedAt = Date.now();
     try {
       const openai = createProviderClient('DeepSeek');
       const completion = await openai.chat.completions.create({
@@ -373,6 +376,20 @@ router.post(
       if (!output) return res.status(502).json({ error: 'DeepSeek returned an empty paraphrase.' });
 
       const totalTokens = completion.usage?.total_tokens || Math.ceil((text.length + output.length) / 4);
+      // Fire-and-forget cost tracking — never blocks or throws into the response.
+      try {
+        const inputTokens = completion.usage?.prompt_tokens || Math.ceil(text.length / 4);
+        const outputTokens = completion.usage?.completion_tokens || Math.ceil(output.length / 4);
+        costTracker.track({
+          userId: req.user?.id,
+          model,
+          provider: 'DeepSeek',
+          inputTokens,
+          outputTokens,
+          latencyMs: Date.now() - __paraphraseStartedAt,
+        });
+        anomalyDetector.record(req.user?.id, totalTokens);
+      } catch { /* never let observability break a happy-path response */ }
       try {
         await usageService.recordUsage(req.user.id, model, totalTokens, totalTokens * 0.001);
       } catch (usageErr) {
@@ -6094,6 +6111,7 @@ Generate the workbook based on the user's request.`;
       const openai = createProviderClient(provider);
 
       // Generate response without streaming
+      const __excelGenStartedAt = Date.now();
       const completion = await openai.chat.completions.create({
         model: model,
         messages: messages,
@@ -6105,6 +6123,21 @@ Generate the workbook based on the user's request.`;
       if (!fullResponseContent.trim()) {
         return res.status(500).json({ error: 'Empty response from AI model' });
       }
+
+      // Fire-and-forget cost + anomaly tracking; never blocks the response.
+      try {
+        const inTok = completion.usage?.prompt_tokens || 0;
+        const outTok = completion.usage?.completion_tokens || 0;
+        costTracker.track({
+          userId: req.user?.id,
+          model,
+          provider,
+          inputTokens: inTok,
+          outputTokens: outTok,
+          latencyMs: Date.now() - __excelGenStartedAt,
+        });
+        anomalyDetector.record(req.user?.id, (inTok + outTok) || 0);
+      } catch { /* never let observability break a happy-path response */ }
 
       // Clean response content (remove markdown code blocks if present)
       let cleanedContent = fullResponseContent.trim()
