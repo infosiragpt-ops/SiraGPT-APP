@@ -1,6 +1,25 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
+
+// Lazy/safe enforce-org-quota middleware. Wrapped in a try/catch so a
+// crash in the middleware module (e.g. prisma model missing in dev) can
+// never break the AI generate flow — falls back to a pass-through. The
+// middleware itself is also fail-open; this is defence in depth.
+let _enforceOrgQuotaMw = null;
+function enforceOrgQuotaSafe(req, res, next) {
+  try {
+    if (!_enforceOrgQuotaMw) {
+      // eslint-disable-next-line global-require
+      const { enforceOrgQuota } = require('../middleware/enforce-org-quota');
+      _enforceOrgQuotaMw = enforceOrgQuota();
+    }
+    return _enforceOrgQuotaMw(req, res, next);
+  } catch (err) {
+    try { console.warn('[ai/generate] enforce-org-quota load/run failed:', err && err.message); } catch (_) {}
+    return next();
+  }
+}
 const prisma = require('../config/database');
 const { tryConsumePlanQuota } = require('../services/plan-quota');
 const aiService = require('../services/ai-service');
@@ -883,6 +902,7 @@ router.post(
     body('files').optional().isArray(),
   ],
   authenticateToken,
+  enforceOrgQuotaSafe,
   async (req, res) => {
     const controller = new AbortController();
     const signal = controller.signal;

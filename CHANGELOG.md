@@ -4,6 +4,23 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and improvement cycles follow a sequential number with the date the work landed.
 
+## [Cycle 35] — 2026-05-19
+
+### Added
+- `src/jobs/system-cron.js` — internal cron registry wired into `backend/index.js`. Runs `scrub-deleted-user-content` daily at 02:30 UTC and `hard-delete-deleted-users` daily at 03:00 UTC (cycles 14 + 29 finally wired). Disabled in `NODE_ENV=test` and honoured by `SYSTEM_CRON_ENABLED=false`. Tests: `backend/tests/system-cron.test.js`.
+- `/api/push` routes (cycle 22) now auto-mounted in `backend/index.js`.
+
+### Changed
+- `/api/ai/generate` now invokes `enforceOrgQuotaSafe` (lazy require + try/catch wrapper) so an org-scoped request gets quota-checked / increments the org counter / supports refund(). Personal usage path is unchanged (middleware is a no-op without org context).
+- Lint ratchet `next lint --max-warnings 56 → 50` (-6). Fixed legitimate `react-hooks/exhaustive-deps` warning in `components/elevenlabs-interface.tsx` by capturing the audio ref at effect-setup time (React-recommended pattern).
+
+### Deferred
+- `failover-policy.resolveWithFallback` (cycle 28) is **not yet** wired into the streaming inner loop in `/api/ai/generate`. Doing so safely requires teaching the fallback flow how to share SSE state between providers and how to mid-stream restart a partial response — too high-risk to land in a cleanup cycle. Tracked for a focused cycle.
+
+### Verified
+- `lastActiveAt` field exists (`prisma/schema.prisma` line 58) and is written via the write-behind cache in `middleware/auth.js`.
+- Query-dedup (`utils/query-dedup.js`) is consumed by `middleware/auth.js` on authenticated lookups.
+
 ## [Cycle 20] — 2026-05-19
 
 ### Added

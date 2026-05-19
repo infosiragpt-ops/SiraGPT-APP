@@ -129,11 +129,17 @@ const { voices, loading: voicesLoading } = useVoices()
     }
   }, [audioUrl])
 
-  // Cleanup on component unmount
+  // Cleanup on component unmount.
+  // Capture the ref node at effect-setup time so the cleanup uses the
+  // exact same DOM element the effect was bound to. This silences the
+  // react-hooks/exhaustive-deps "ref value will likely have changed"
+  // warning and is the React-recommended pattern for refs to React-
+  // rendered nodes.
   useEffect(() => {
+    const audio = audioRef.current
     return () => {
-      if (audioRef.current) {
-        audioRef.current.pause()
+      if (audio) {
+        audio.pause()
         setIsPlaying(false)
       }
     }

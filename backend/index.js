@@ -150,6 +150,7 @@ const artifactRoutes = require('./src/routes/artifact');
 const enterpriseRoutes = require('./src/routes/enterprise');
 const socialPostsRoutes = require('./src/routes/social-posts');
 const githubCodexRoutes = require('./src/routes/github-codex');
+const pushRoutes = require('./src/routes/push');
 const coworkRoutes = require('./src/routes/cowork');
 const webhooksRoutes = require('./src/routes/webhooks');
 const slackIntegrationRoutes = require('./src/routes/integrations/slack');
@@ -690,6 +691,7 @@ app.use('/api/artifact', artifactRoutes);
 app.use('/api/enterprise', enterpriseRoutes);
 app.use('/api/social-posts', socialPostsRoutes);
 app.use('/api/codex/github', githubCodexRoutes);
+app.use('/api/push', pushRoutes);
 app.use('/api/cowork', coworkRoutes);
 app.use('/api/webhooks', webhooksRoutes);
 app.use('/api/integrations/slack', slackIntegrationRoutes);
@@ -797,6 +799,19 @@ function startServer() {
     const { classifyTaskError } = require('./src/services/agents/agent-task-runner');
     scheduler.setJobClassifier(classifyTaskError);
     scheduler.start();
+
+    // System cron — daily GDPR housekeeping (scrub @ 02:30 UTC,
+    // hard-delete @ 03:00 UTC). Disabled in NODE_ENV=test or when
+    // SYSTEM_CRON_ENABLED=false. Failures are isolated to the cron.
+    try {
+        const systemCron = require('./src/jobs/system-cron');
+        systemCron.start({ logger });
+        shutdownRegistry.register('system_cron_stop', () => {
+            try { systemCron.stop(); } catch {}
+        }, 5000);
+    } catch (err) {
+        logger.warn({ err: err && err.message }, 'system_cron_init_failed');
+    }
 
     // ── Centralized graceful shutdown ──────────────────────────────
     // Each step has its own 5s timeout budget; the overall registry
