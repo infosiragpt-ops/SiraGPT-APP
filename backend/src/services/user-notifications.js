@@ -38,8 +38,9 @@ async function createNotification(prisma, args) {
   const message = clampStr(args?.message || '', 4000) || '';
   const severity = VALID_SEVERITIES.has(args?.severity) ? args.severity : 'info';
   const metadata = args?.metadata && typeof args.metadata === 'object' ? args.metadata : null;
+  let row;
   try {
-    return await prisma.notification.create({
+    row = await prisma.notification.create({
       data: { userId, type, title, message, severity, metadata },
     });
   } catch (err) {
@@ -47,6 +48,24 @@ async function createNotification(prisma, args) {
     console.warn('[user-notifications] create failed:', err?.message || err);
     return null;
   }
+
+  // Ratchet 45, Task 2 — fan critical notifications out to the user's
+  // web-push subscriptions (cycle 22). Best-effort: any failure here
+  // must not affect the inbox-row that we just persisted.
+  if (row && severity === 'critical') {
+    try {
+      // eslint-disable-next-line global-require
+      const webpush = require('./webpush-delivery');
+      // Fire-and-forget — do NOT await, the row is what the caller cares
+      // about. Errors are swallowed inside maybeDeliver.
+      Promise.resolve(webpush.maybeDeliver(prisma, row)).catch(() => { /* noop */ });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn('[user-notifications] webpush dispatch failed:', err?.message || err);
+    }
+  }
+
+  return row;
 }
 
 /**

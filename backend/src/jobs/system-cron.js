@@ -78,6 +78,11 @@ const INACTIVE_API_KEY_SWEEP_SCHEDULE = process.env.SYSTEM_CRON_INACTIVE_API_KEY
 // SystemSettings `failed_email_retry:*` rows and re-attempts delivery
 // up to MAX_ATTEMPTS times before dropping.
 const FAILED_EMAIL_RETRY_SCHEDULE = process.env.SYSTEM_CRON_FAILED_EMAIL_RETRY_SCHEDULE || '0 6 * * *';
+// Ratchet 45 — Notification inbox retention sweep. Default 04:45 UTC,
+// piggy-backing on the ApiKey expiry slot (independent tables, cheap
+// deleteMany — they can co-fire). Hard-deletes rows that are
+// (read AND readAt < now-30d) OR (unread AND createdAt < now-90d).
+const NOTIFICATION_SWEEP_SCHEDULE = process.env.SYSTEM_CRON_NOTIFICATION_SWEEP_SCHEDULE || '45 4 * * *';
 
 let _state = null;
 
@@ -522,6 +527,45 @@ function start(opts = {}) {
     { scheduled: false, timezone: 'UTC' },
   );
   tasks.push({ name: 'sweep-inactive-api-keys', schedule: INACTIVE_API_KEY_SWEEP_SCHEDULE, task: inactiveApiKeySweepTask, meta: inactiveApiKeySweepMeta });
+
+  // Ratchet 45 — Notification inbox retention sweep.
+  let notificationSweepRunning = false;
+  const notificationSweepMeta = {};
+  const notificationSweepTask = cron.schedule(
+    NOTIFICATION_SWEEP_SCHEDULE,
+    async () => {
+      if (notificationSweepRunning) {
+        logger.warn?.('[system-cron] skip sweep-old-notifications — previous run still active');
+        return;
+      }
+      notificationSweepRunning = true;
+      const finish = recordRun(notificationSweepMeta);
+      let runErr = null;
+      try {
+        // eslint-disable-next-line global-require
+        const job = require('./sweep-old-notifications');
+        const runWithRetry = wrapWithRetry(() => job.run({ logger }), {
+          onRetry: ({ attempt, delayMs, reason }) =>
+            logger.warn?.(`[system-cron] sweep-old-notifications retry ${attempt} in ${delayMs}ms (${reason})`),
+        });
+        const res = await runWithRetry();
+        logger.info?.(`[system-cron] sweep-old-notifications done: ${JSON.stringify(res)}`);
+      } catch (err) {
+        runErr = err;
+        logger.error?.(`[system-cron] sweep-old-notifications failed: ${err && err.message}`);
+      } finally {
+        notificationSweepRunning = false;
+        finish(runErr);
+      }
+    },
+    { scheduled: false, timezone: 'UTC' },
+  );
+  tasks.push({
+    name: 'sweep-old-notifications',
+    schedule: NOTIFICATION_SWEEP_SCHEDULE,
+    task: notificationSweepTask,
+    meta: notificationSweepMeta,
+  });
 
   // Ratchet 45 — failed-email retry queue drain (06:00 UTC).
   let failedEmailRetryRunning = false;
