@@ -7,6 +7,7 @@ const stripeService = require('../services/stripe');
 const { getPriceIdForPlan } = require('../utils/stripe-setup');
 const usageMonitor = require('../services/usage-monitor');
 const emailService = require('../services/email');
+const { writeAuditLog } = require('../utils/audit-log');
 
 // Helper: coerce a value to BigInt safely. Stripe + Prisma return
 // monthlyLimit/usage as BigInt in some code paths and Number in
@@ -777,6 +778,23 @@ router.post(
       } catch (auditErr) {
         console.error('[SUPER_ADMIN_AUDIT] failed to persist event:', auditErr.message);
       }
+
+      void writeAuditLog(prisma, {
+        req,
+        action: 'payment_instant',
+        resource: 'payment',
+        resourceId: userIdToUpdate,
+        userId: req.user.id,
+        actorName: req.user.email,
+        before: { plan: dbUser.plan, monthlyLimit: String(currentLimit) },
+        after: { plan, monthlyLimit: String(newMonthlyLimit) },
+        metadata: {
+          targetUserId: userIdToUpdate,
+          targetEmail: dbUser.email,
+          addedCredits: String(add),
+          reason: reason || null,
+        },
+      });
 
       return res.json({ user: serializeBigIntFields(updated) });
     } catch (error) {

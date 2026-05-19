@@ -54,6 +54,10 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // GDPR soft-delete tombstone. When non-null the account is in the
+  // 30-day grace window before the hard-delete cron purges it.
+  deletedAt DateTime?
+
   // Relations
   chats               Chat[]
   payments            Payment[]
@@ -73,6 +77,7 @@ model User {
   generatedArtifacts  GeneratedArtifact[]
   documentAnalyses    DocumentAnalysis[]
 
+  @@index([deletedAt])
   @@map("users")
 }
 
@@ -216,11 +221,17 @@ model Message {
   metadata  Json? // Store message metadata (like Gmail connection requirements)
   feedback  String?
 
+  // Soft-delete tombstone — mirrors Chat.deletedAt so GDPR delete can
+  // cascade without losing chat shape (foreign-key cascade still works
+  // on hard purge from the cron).
+  deletedAt DateTime?
+
   // Relations
   chat               Chat                @relation(fields: [chatId], references: [id], onDelete: Cascade)
   generatedArtifacts GeneratedArtifact[]
 
   @@index([chatId, timestamp])
+  @@index([chatId, deletedAt])
   @@map("messages")
 }
 
@@ -349,9 +360,14 @@ model File {
   projectId String?
   project   Project? @relation("ProjectFiles", fields: [projectId], references: [id], onDelete: SetNull)
 
+  // Soft-delete tombstone for GDPR / "Trash" workflows. Hard purge
+  // happens via the daily cron after a 30-day grace window.
+  deletedAt DateTime?
+
   @@index([userId, createdAt])
   @@index([customGptId])
   @@index([projectId])
+  @@index([userId, deletedAt])
   @@map("files")
 }
 
@@ -665,8 +681,13 @@ model CustomGpt {
   createdAt  DateTime      @default(now())
   updatedAt  DateTime      @updatedAt
 
+  // Soft-delete tombstone — owner-driven GDPR deletes hide the GPT
+  // from the creator dashboard without cascading on shared chats.
+  deletedAt DateTime?
+
   @@index([creatorId, updatedAt])
   @@index([visibility, isFeatured])
+  @@index([creatorId, deletedAt])
   @@map("custom_gpts")
 }
 
@@ -710,7 +731,12 @@ model Project {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Soft-delete tombstone. The Project list view should filter on
+  // `deletedAt: null` via the prisma-soft-delete helper.
+  deletedAt DateTime?
+
   @@index([userId, updatedAt])
+  @@index([userId, deletedAt])
   @@map("projects")
 }
 

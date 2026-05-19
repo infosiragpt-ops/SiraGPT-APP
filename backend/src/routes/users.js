@@ -3,8 +3,30 @@ const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
 const prisma = require('../config/database');
 const bcrypt = require('bcryptjs');
+const archiver = require('archiver');
+const { cascadeSoftDeleteForUser } = require('../utils/prisma-soft-delete');
+const { writeAuditLog } = require('../utils/audit-log');
 
 const router = express.Router();
+
+// ────────────────────────────────────────────────────────────
+// Per-user rate limiter for the GDPR export endpoint. In-process Map
+// is enough for single-instance deploys; for the multi-instance case
+// promote to the existing rate-limit-store (Redis) when REDIS_URL is
+// configured. Same shape as the impersonation limiter in auth.js so
+// the patterns stay consistent.
+// ────────────────────────────────────────────────────────────
+const EXPORT_WINDOW_MS = 30 * 60 * 1000; // 30 minutes
+const exportAttempts = new Map(); // userId → last timestamp (ms)
+function takeExportSlot(userId) {
+  const now = Date.now();
+  const last = exportAttempts.get(userId) || 0;
+  if (now - last < EXPORT_WINDOW_MS) {
+    return { ok: false, retryAfterMs: EXPORT_WINDOW_MS - (now - last) };
+  }
+  exportAttempts.set(userId, now);
+  return { ok: true };
+}
 
 // Get current user profile
 router.get('/profile', authenticateToken, async (req, res) => {
@@ -469,5 +491,275 @@ function deepMerge(target, source) {
   }
   return out;
 }
+
+// ────────────────────────────────────────────────────────────
+// GDPR data export — `GET /api/users/me/export`
+//
+// Streams a ZIP archive with profile.json + chats.json + files.json +
+// payments.json + README.txt so the user can download a portable
+// snapshot of every piece of personal data we hold. Uses `archiver` in
+// ZIP mode and pipes directly to the response so large accounts don't
+// have to be materialised in memory.
+//
+// Rate-limited at 1 request per 30 minutes per user (see
+// `takeExportSlot` at the top of this file). Every call (allowed +
+// denied) is audited.
+// ────────────────────────────────────────────────────────────
+router.get('/me/export', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const slot = takeExportSlot(userId);
+  if (!slot.ok) {
+    const retryAfterSec = Math.max(1, Math.ceil(slot.retryAfterMs / 1000));
+    res.set('Retry-After', String(retryAfterSec));
+    void writeAuditLog(prisma, {
+      req,
+      action: 'user_export_rate_limited',
+      resource: 'user',
+      resourceId: userId,
+      metadata: { retryAfterMs: slot.retryAfterMs },
+    });
+    return res.status(429).json({
+      error: 'Export is rate-limited to 1 request every 30 minutes.',
+      retryAfterMs: slot.retryAfterMs,
+    });
+  }
+
+  try {
+    // Pull every row up-front. We keep this synchronous-ish because the
+    // archive layout wants a stable index — streaming row-by-row from
+    // Prisma would require server cursors we don't currently expose.
+    // Large accounts (10k+ chats) should still fit comfortably; the
+    // memory pressure that motivated streaming is the ZIP payload, not
+    // the JSON model rows themselves.
+    const [user, chats, files, payments] = await Promise.all([
+      prisma.user.findUnique({
+        where: { id: userId },
+        select: {
+          id: true, email: true, name: true, avatar: true, plan: true,
+          isAdmin: true, isSuperAdmin: true,
+          apiUsage: true, monthlyCallLimit: true, monthlyLimit: true,
+          subscriptionStatus: true, subscriptionEndDate: true,
+          locale: true, preferredTone: true, customInstructions: true,
+          settings: true, createdAt: true, updatedAt: true, deletedAt: true,
+          // password intentionally omitted
+        },
+      }),
+      prisma.chat.findMany({
+        where: { userId },
+        orderBy: { createdAt: 'asc' },
+        include: {
+          messages: {
+            orderBy: { timestamp: 'asc' },
+            select: { id: true, role: true, content: true, timestamp: true, tokens: true, feedback: true, metadata: true, deletedAt: true },
+          },
+        },
+      }),
+      prisma.file.findMany({
+        where: { userId },
+        select: {
+          id: true, filename: true, originalName: true, mimeType: true, size: true,
+          createdAt: true, processingStage: true, processingError: true, deletedAt: true,
+        },
+        orderBy: { createdAt: 'asc' },
+      }),
+      prisma.payment.findMany({
+        where: { userId },
+        orderBy: { createdAt: 'asc' },
+      }),
+    ]);
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="siragpt-export-${userId}-${Date.now()}.zip"`,
+    );
+
+    const archive = archiver('zip', { zlib: { level: 9 } });
+    archive.on('warning', (err) => {
+      console.warn('[export] archiver warning:', err?.message || err);
+    });
+    archive.on('error', (err) => {
+      console.error('[export] archiver error:', err);
+      // Headers are already sent — destroy the response so the client
+      // sees a truncated ZIP instead of a misleading 500 body.
+      try { res.destroy(err); } catch (_) { /* noop */ }
+    });
+    archive.pipe(res);
+
+    // BigInt-safe JSON — Prisma surfaces BigInt for `tokens` /
+    // `apiUsage` etc., and JSON.stringify chokes on those without a
+    // replacer. Round-trip via the BigInt-aware replacer so the export
+    // is valid JSON the user can `jq` on.
+    const bigintSafe = (_k, v) => (typeof v === 'bigint' ? v.toString() : v);
+    const toJson = (obj) => JSON.stringify(obj, bigintSafe, 2);
+
+    archive.append(toJson(user || {}), { name: 'profile.json' });
+    archive.append(toJson({ count: chats.length, chats }), { name: 'chats.json' });
+    archive.append(toJson({ count: files.length, files }), { name: 'files.json' });
+    archive.append(toJson({ count: payments.length, payments }), { name: 'payments.json' });
+    archive.append(
+      [
+        'siraGPT — Personal data export',
+        '================================',
+        '',
+        `User ID:    ${userId}`,
+        `Exported:   ${new Date().toISOString()}`,
+        '',
+        'Files in this archive:',
+        '  • profile.json   — your user record (password hash omitted)',
+        '  • chats.json     — every chat you created with its full message',
+        '                     history (role, content, timestamp, feedback)',
+        '  • files.json     — metadata for every file you uploaded',
+        '                     (filenames, mime type, size, processing state).',
+        '                     Raw file contents are NOT included in this',
+        '                     export — request them separately if you need',
+        '                     them, or use the per-file download links in',
+        '                     the app.',
+        '  • payments.json  — every payment / subscription transaction',
+        '                     (status, plan, provider, Stripe identifiers).',
+        '',
+        'Schema notes:',
+        '  • Timestamps are ISO 8601 (UTC).',
+        '  • BigInt fields (tokens, monthly limits) are serialised as',
+        '    strings to stay valid JSON.',
+        '  • `deletedAt` is the soft-delete tombstone — non-null rows',
+        '    are pending hard deletion in the 30-day GDPR grace window.',
+        '',
+        'Need help? Contact privacy@siragpt.io.',
+        '',
+      ].join('\n'),
+      { name: 'README.txt' },
+    );
+
+    void writeAuditLog(prisma, {
+      req,
+      action: 'user_export',
+      resource: 'user',
+      resourceId: userId,
+      metadata: {
+        chatCount: chats.length,
+        fileCount: files.length,
+        paymentCount: payments.length,
+      },
+    });
+
+    await archive.finalize();
+  } catch (error) {
+    console.error('GDPR export error:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to export data' });
+    } else {
+      try { res.destroy(error); } catch (_) { /* noop */ }
+    }
+  }
+});
+
+// ────────────────────────────────────────────────────────────
+// GDPR data delete — `POST /api/users/me/delete`
+//
+// Soft-deletes the user + cascades soft-delete to every owned chat /
+// message / file / project / customGpt. The hard-delete cron
+// (`backend/src/jobs/hard-delete-deleted-users.js`) purges the row 30
+// days later.
+//
+// Body shape: { password: string, confirm?: 'DELETE' }
+// `confirm` is optional but recommended — the FE can require it to
+// prevent fat-finger deletes.
+// ────────────────────────────────────────────────────────────
+router.post(
+  '/me/delete',
+  authenticateToken,
+  [
+    body('password').isString().isLength({ min: 1, max: 256 })
+      .withMessage('Password confirmation required'),
+    body('confirm').optional().isString(),
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      const { password } = req.body;
+      const userId = req.user.id;
+
+      // Fetch with password so we can verify it before doing anything
+      // destructive. The middleware-attached `req.user` may omit the
+      // hash depending on the select.
+      const user = await prisma.user.findUnique({ where: { id: userId } });
+      if (!user) return res.status(404).json({ error: 'User not found' });
+      if (user.deletedAt) {
+        return res.status(409).json({ error: 'Account already scheduled for deletion', deletedAt: user.deletedAt });
+      }
+
+      const ok = await bcrypt.compare(password, user.password || '');
+      if (!ok) {
+        void writeAuditLog(prisma, {
+          req,
+          action: 'user_delete_failed',
+          resource: 'user',
+          resourceId: userId,
+          metadata: { reason: 'invalid_password' },
+        });
+        return res.status(401).json({ error: 'Invalid password' });
+      }
+
+      const deletedAt = new Date();
+      await prisma.user.update({ where: { id: userId }, data: { deletedAt } });
+      const cascade = await cascadeSoftDeleteForUser(prisma, userId);
+
+      // Revoke active sessions so the soft-deleted user is immediately
+      // logged out across devices.
+      try {
+        await prisma.session.deleteMany({ where: { userId } });
+      } catch (sessErr) {
+        console.warn('[delete] could not revoke sessions:', sessErr?.message || sessErr);
+      }
+
+      // Best-effort confirmation email — no-op when SMTP isn't
+      // configured. Lazy-required so test envs without nodemailer
+      // configured don't pay the boot cost.
+      try {
+        const emailService = require('../services/email');
+        if (emailService && typeof emailService.isConfigured === 'function' && emailService.isConfigured()) {
+          if (emailService.transporter && typeof emailService.transporter.sendMail === 'function') {
+            await emailService.transporter.sendMail({
+              from: `"siraGPT" <${process.env.SMTP_USER}>`,
+              to: user.email,
+              subject: 'Your siraGPT account has been scheduled for deletion',
+              text: [
+                `Hi ${user.name || 'there'},`,
+                '',
+                'We received a request to delete your siraGPT account.',
+                `It will be permanently removed on ${new Date(deletedAt.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)}.`,
+                '',
+                'If this was a mistake, contact privacy@siragpt.io within the next 30 days to restore your account.',
+              ].join('\n'),
+            });
+          }
+        }
+      } catch (emailErr) {
+        console.warn('[delete] confirmation email failed:', emailErr?.message || emailErr);
+      }
+
+      console.warn(`[GDPR_AUDIT] user_delete user=${user.email} id=${userId} cascade=${JSON.stringify(cascade)}`);
+      void writeAuditLog(prisma, {
+        req,
+        action: 'user_delete',
+        resource: 'user',
+        resourceId: userId,
+        before: { deletedAt: null },
+        after: { deletedAt },
+        metadata: { cascade },
+      });
+
+      res.json({ ok: true, deletedAt, cascade });
+    } catch (error) {
+      console.error('GDPR delete error:', error);
+      res.status(500).json({ error: 'Failed to delete account' });
+    }
+  },
+);
 
 module.exports = router;

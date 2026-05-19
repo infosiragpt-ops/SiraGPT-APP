@@ -5,6 +5,7 @@ const { body, validationResult } = require('express-validator');
 const prisma = require('../config/database');
 const { authenticateToken } = require('../middleware/auth');
 const { makeAuthRateLimit } = require('../middleware/rate-limit-auth');
+const { writeAuditLog } = require('../utils/audit-log');
 
 // JWT audience / issuer — included in every signed token and verified
 // where we hand-decode (e.g. /end-impersonation). Allows future
@@ -622,12 +623,27 @@ router.post('/login', loginRateLimit, [
     });
 
     if (!user) {
+      void writeAuditLog(prisma, {
+        req,
+        action: 'login_failed',
+        resource: 'user',
+        actorName: email,
+        metadata: { reason: 'unknown_email' },
+      });
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
     // Check password
     const isValidPassword = await bcrypt.compare(password, user.password);
     if (!isValidPassword) {
+      void writeAuditLog(prisma, {
+        req,
+        action: 'login_failed',
+        resource: 'user',
+        resourceId: user.id,
+        actorName: email,
+        metadata: { reason: 'bad_password' },
+      });
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
@@ -662,6 +678,15 @@ router.post('/login', loginRateLimit, [
     });
 
     const serializedUser = serializeUser(userWithoutPassword);
+    void writeAuditLog(prisma, {
+      req,
+      action: 'login',
+      resource: 'user',
+      resourceId: user.id,
+      userId: user.id,
+      actorName: user.email,
+      metadata: { isAdmin: Boolean(user.isAdmin), isSuperAdmin: Boolean(user.isSuperAdmin) },
+    });
     res.json({
       user: serializedUser,
       token
@@ -833,6 +858,15 @@ router.post('/impersonate/:userId', authenticateToken, async (req, res) => {
     console.warn(
       `[SUPER_ADMIN_AUDIT] impersonate_granted admin=${req.user.email} target=${targetUser.email} reason=${JSON.stringify(reason)} ttl=30m`
     );
+    void writeAuditLog(prisma, {
+      req,
+      action: 'impersonate',
+      resource: 'user',
+      resourceId: targetUser.id,
+      userId: req.user.id,
+      actorName: req.user.email,
+      metadata: { targetEmail: targetUser.email, reason, ttlMs: IMPERSONATE_TTL_MS },
+    });
 
     res.json({
       token: impersonationToken,
