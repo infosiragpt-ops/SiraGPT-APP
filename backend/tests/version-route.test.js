@@ -49,6 +49,8 @@ test('/api/version returns the expected shape', async () => {
     assert.ok(Number.isFinite(Date.parse(json.buildTime)));
     // Cache-Control is no-store so canary restarts surface immediately.
     assert.equal(res.headers['cache-control'], 'no-store');
+    // featureFlags must always be an array (possibly empty).
+    assert.ok(Array.isArray(json.featureFlags));
   } finally {
     server.close();
   }
@@ -60,4 +62,37 @@ test('/api/version VERSION_INFO is frozen and stable across calls', async () => 
   // Same object reference on re-require (Node module cache).
   const again = require('../src/routes/version').VERSION_INFO;
   assert.strictEqual(VERSION_INFO, again);
+});
+
+// The two tests below mutate process.env and bust the require cache to
+// re-evaluate the module under different env values. They run last on
+// purpose so the cached `versionRouter` captured at file load remains
+// strict-equal to the live module export for the stability test above.
+
+test('/api/version surfaces NEXT_PUBLIC_FEATURE_FLAGS as a parsed array', async () => {
+  const prev = process.env.NEXT_PUBLIC_FEATURE_FLAGS;
+  process.env.NEXT_PUBLIC_FEATURE_FLAGS = ' flag_a, flag_b ,, flag_c ';
+  const modPath = require.resolve('../src/routes/version');
+  delete require.cache[modPath];
+  try {
+    const fresh = require('../src/routes/version');
+    assert.deepEqual(fresh.VERSION_INFO.featureFlags, ['flag_a', 'flag_b', 'flag_c']);
+    assert.ok(Object.isFrozen(fresh.VERSION_INFO.featureFlags));
+  } finally {
+    if (prev === undefined) delete process.env.NEXT_PUBLIC_FEATURE_FLAGS;
+    else process.env.NEXT_PUBLIC_FEATURE_FLAGS = prev;
+  }
+});
+
+test('/api/version featureFlags defaults to [] when env is unset', async () => {
+  const prev = process.env.NEXT_PUBLIC_FEATURE_FLAGS;
+  delete process.env.NEXT_PUBLIC_FEATURE_FLAGS;
+  const modPath = require.resolve('../src/routes/version');
+  delete require.cache[modPath];
+  try {
+    const fresh = require('../src/routes/version');
+    assert.deepEqual(fresh.VERSION_INFO.featureFlags, []);
+  } finally {
+    if (prev !== undefined) process.env.NEXT_PUBLIC_FEATURE_FLAGS = prev;
+  }
 });

@@ -1213,6 +1213,13 @@ model AuditLog {
   createdAt    DateTime @default(now())
 
   @@index([actorType, actorId, createdAt])
+  // audit-query DSL `byUser` filters on `actorId` alone (no actorType
+  // predicate) — the composite (actorType, actorId, createdAt) above
+  // can't be used as a prefix in that case, so we add a dedicated
+  // (actorId, createdAt) covering index. byAction → (action, createdAt)
+  // and byResource → (resourceType, resourceId, createdAt) are already
+  // covered above.
+  @@index([actorId, createdAt])
   @@index([resourceType, resourceId, createdAt])
   @@index([action, createdAt])
   @@index([createdAt])

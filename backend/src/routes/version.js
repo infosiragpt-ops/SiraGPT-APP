@@ -28,6 +28,19 @@ const router = express.Router();
 const BUILD_TIME = new Date().toISOString();
 const NODE_VERSION = process.version;
 
+function resolveFeatureFlags() {
+  // Comma-separated list in NEXT_PUBLIC_FEATURE_FLAGS — surfaces enabled
+  // client-side feature flags to the status page / debug widget so
+  // operators can confirm which flags are live on a given build without
+  // poking at the frontend bundle. Empty / missing → [].
+  const raw = process.env.NEXT_PUBLIC_FEATURE_FLAGS;
+  if (!raw || typeof raw !== 'string') return [];
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
 function readJson(file) {
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -81,6 +94,7 @@ const VERSION_INFO = Object.freeze({
   commit: resolveCommit(),
   buildTime: BUILD_TIME,
   node: NODE_VERSION,
+  featureFlags: Object.freeze(resolveFeatureFlags()),
 });
 
 router.get('/', (_req, res) => {
