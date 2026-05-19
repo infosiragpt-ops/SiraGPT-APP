@@ -4,6 +4,77 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and improvement cycles follow a sequential number with the date the work landed.
 
+## [0.3.2 / backend 1.2.2] — Cycles 111-120 milestone — 2026-05-19
+
+Second decade past the centenarian. PATCH bumps only (root
+`0.3.1 → 0.3.2`, backend `1.2.1 → 1.2.2`) — cycles 111-120 hardened
+rate-limiting, webhooks and API-key lifecycle plus org observability
+with no public API breaks. See `docs/cycles/CYCLE_120.md` for the
+milestone narrative.
+
+### Added
+- **Cycle 120 — milestone consolidation**: `docs/cycles/CYCLE_120.md`
+  marker doc + CHANGELOG cycles 111-120 sweep + PATCH version bump to
+  `0.3.2 / 1.2.2`.
+- **Cycle 119 — webhook pagination + toggle**: cursor pagination on
+  the webhook listing plus per-webhook enable/disable toggle without
+  losing configuration or delivery history.
+- **Cycle 118 — API keys pagination + search**: cursor pagination +
+  name search on the API keys listing so admin UIs scale to large
+  fleets.
+- **Cycle 117 — webhook user cap + org stats**: per-user webhook
+  quota enforced at create-time; new `/org/stats` endpoint summarises
+  members, API keys, webhooks, sessions and recent activity.
+- **Cycle 116 — revoke-all sessions + password audit**: single
+  endpoint to revoke all of a user's active sessions; password
+  change/reset events recorded in the audit trail with source IP and
+  user-agent.
+- **Cycle 115 — forecast alerts + webhook latency**: cost/usage
+  forecaster emits alerts when projected month-end spend exceeds
+  budget; webhook delivery latency captured per attempt and surfaced
+  in the health endpoint.
+- **Cycle 114 — trigger unknown guard + endpoint usage**: webhook
+  trigger emission validates events against the registered catalogue
+  and refuses unknown events; per-endpoint usage counters expose
+  hot/cold routes.
+- **Cycle 113 — payload-size + ApiKey soft-delete**: explicit
+  per-route payload size guard with friendly 413 responses; ApiKey
+  deletion is soft (tombstone + `deletedAt`) preserving audit linkage.
+- **Cycle 112 — webhook glob events + nonce replay**: webhook
+  subscriptions accept glob event patterns; inbound webhook receivers
+  persist nonces and reject replays within the freshness window.
+- **Cycle 111 — per-key rate limit + audit sampling**: per-API-key
+  RPS budget on top of the existing per-IP limiter; configurable
+  audit log sampling rate.
+
+### Changed
+- Lint ratchet held at `--max-warnings 45` across cycles 111-120.
+- Root `package.json` version `0.3.1 → 0.3.2` (PATCH).
+- Backend `package.json` version `1.2.1 → 1.2.2` (PATCH).
+- Outbound webhook subscriptions support glob event patterns (cycle 112).
+- ApiKey deletion semantics changed to soft-delete with tombstone
+  (cycle 113) — listings exclude tombstones by default.
+
+### Fixed
+- Webhook replay attacks within the signature freshness window
+  rejected via persisted nonce store (cycle 112).
+- Unknown webhook trigger events no longer silently emit — explicit
+  guard refuses them (cycle 114).
+- Webhook delivery latency was previously invisible; now captured
+  per attempt (cycle 115).
+
+### Security
+- Per-API-key RPS limit prevents single-key abuse (cycle 111).
+- Webhook nonce replay defence (cycle 112).
+- Per-route payload-size guard prevents oversized-body DoS (cycle 113).
+- Webhook trigger unknown-event guard prevents typo-driven event
+  injection (cycle 114).
+- Revoke-all sessions endpoint enables incident response (cycle 116).
+- Password change/reset events now in audit trail with IP + UA
+  (cycle 116).
+- Per-user webhook cap prevents quota exhaustion by a single user
+  (cycle 117).
+
 ## [0.3.1 / backend 1.2.1] — Cycles 101-110 milestone — 2026-05-19
 
 First decade past the centenarian. PATCH bumps only (root
