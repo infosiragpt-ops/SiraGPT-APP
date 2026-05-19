@@ -70,9 +70,21 @@ function parseList(raw, fallback) {
  * actionable telemetry instead of a mystery white page.
  */
 function resolveCspConfig(env = process.env) {
+  // CSP_STRICT=true switches to enforced mode with a tightened
+  // directive set (no 'unsafe-eval', frame-ancestors 'none',
+  // upgrade-insecure-requests). reportOnly defaults to FALSE in strict
+  // mode unless the operator explicitly opts back into report-only.
+  // CSP_USE_NONCE=true enables per-request nonces for script-src/style-src
+  // (see `buildCspDirectivesWithNonce`).
+  const strict = parseBoolean(env.CSP_STRICT, false);
+  const useNonce = parseBoolean(env.CSP_USE_NONCE, false);
+  const reportOnlyDefault = strict ? false : true;
   return {
     enabled: parseBoolean(env.CSP_ENABLED, true),
-    reportOnly: parseBoolean(env.CSP_REPORT_ONLY, true),
+    reportOnly: parseBoolean(env.CSP_REPORT_ONLY, reportOnlyDefault),
+    strict,
+    useNonce,
+    upgradeInsecure: parseBoolean(env.CSP_UPGRADE_INSECURE, strict),
     reportUri: String(env.CSP_REPORT_URI || '').trim() || null,
     directives: {
       connectSrc: parseList(env.CSP_CONNECT_SRC, DEFAULT_CONNECT_SRC),
@@ -80,10 +92,16 @@ function resolveCspConfig(env = process.env) {
       frameSrc: parseList(env.CSP_FRAME_SRC, DEFAULT_FRAME_SRC),
       imgSrc: parseList(env.CSP_IMG_SRC, DEFAULT_IMG_SRC),
       objectSrc: parseList(env.CSP_OBJECT_SRC, DEFAULT_OBJECT_SRC),
-      scriptSrc: parseList(env.CSP_SCRIPT_SRC, DEFAULT_SCRIPT_SRC),
+      scriptSrc: parseList(
+        env.CSP_SCRIPT_SRC,
+        strict ? ["'self'", "'unsafe-inline'"] : DEFAULT_SCRIPT_SRC
+      ),
       styleSrc: parseList(env.CSP_STYLE_SRC, DEFAULT_STYLE_SRC),
       baseUri: parseList(env.CSP_BASE_URI, DEFAULT_BASE_URI),
-      frameAncestors: parseList(env.CSP_FRAME_ANCESTORS, DEFAULT_FRAME_ANCESTORS),
+      frameAncestors: parseList(
+        env.CSP_FRAME_ANCESTORS,
+        strict ? ["'none'"] : DEFAULT_FRAME_ANCESTORS
+      ),
       formAction: parseList(env.CSP_FORM_ACTION, DEFAULT_FORM_ACTION),
       workerSrc: parseList(env.CSP_WORKER_SRC, DEFAULT_WORKER_SRC),
     },
@@ -128,12 +146,53 @@ function buildCspDirectives(config) {
     // when paired with a Reporting-Endpoints header set elsewhere.
     out.reportUri = [config.reportUri];
   }
+  if (config.upgradeInsecure) {
+    // helmet expects an empty array to emit a flag directive
+    out.upgradeInsecureRequests = [];
+  }
   return out;
+}
+
+/**
+ * cspNonceMiddleware — generates a per-request crypto nonce and
+ * exposes it on `res.locals.cspNonce` so views can attach it to
+ * `<script nonce="…">` / `<style nonce="…">` tags. Pair with
+ * `buildCspDirectivesWithNonce` to bind the directives to the value.
+ */
+function cspNonceMiddleware() {
+  const crypto = require('crypto');
+  return function cspNonce(req, res, next) {
+    res.locals.cspNonce = crypto.randomBytes(16).toString('base64');
+    next();
+  };
+}
+
+/**
+ * buildCspDirectivesWithNonce — like `buildCspDirectives` but appends
+ * the per-request nonce token to script-src/style-src. Returns a
+ * function helmet can call per-request (helmet supports function
+ * values for directives).
+ */
+function buildCspDirectivesWithNonce(config) {
+  const base = buildCspDirectives(config);
+  return {
+    ...base,
+    scriptSrc: [
+      ...base.scriptSrc,
+      (req, res) => `'nonce-${res.locals.cspNonce}'`,
+    ],
+    styleSrc: [
+      ...base.styleSrc,
+      (req, res) => `'nonce-${res.locals.cspNonce}'`,
+    ],
+  };
 }
 
 module.exports = {
   resolveCspConfig,
   buildCspDirectives,
+  buildCspDirectivesWithNonce,
+  cspNonceMiddleware,
   DEFAULT_CONNECT_SRC,
   DEFAULT_FONT_SRC,
   DEFAULT_IMG_SRC,

@@ -77,6 +77,7 @@ router.put('/profile', [
 
     if (name) updateData.name = name;
     if (typeof avatar === 'string') updateData.avatar = avatar;
+    let previousEmail = null;
     if (email) {
       // Check if email is already taken by another user
       const existingUser = await prisma.user.findFirst({
@@ -90,7 +91,10 @@ router.put('/profile', [
         return res.status(400).json({ error: 'Email already in use' });
       }
 
-      updateData.email = email;
+      if (email !== req.user.email) {
+        previousEmail = req.user.email;
+        updateData.email = email;
+      }
     }
 
     const user = await prisma.user.update({
@@ -109,6 +113,21 @@ router.put('/profile', [
         updatedAt: true
       }
     });
+
+    if (previousEmail) {
+      // Granular audit event for email change — distinct from generic
+      // profile_update so SIEM rules can alert on this independently.
+      void writeAuditLog(prisma, {
+        req,
+        action: 'email_changed',
+        resource: 'user',
+        resourceId: req.user.id,
+        userId: req.user.id,
+        actorName: previousEmail,
+        before: { email: previousEmail },
+        after: { email: user.email },
+      });
+    }
 
     res.json({ user });
   } catch (error) {
@@ -152,6 +171,17 @@ router.put('/password', [
     await prisma.user.update({
       where: { id: req.user.id },
       data: { password: hashedPassword }
+    });
+
+    // Granular audit event — password changes are a phishing /
+    // takeover indicator and benefit from a dedicated action label.
+    void writeAuditLog(prisma, {
+      req,
+      action: 'password_changed',
+      resource: 'user',
+      resourceId: req.user.id,
+      userId: req.user.id,
+      actorName: req.user.email,
     });
 
     res.json({ message: 'Password updated successfully' });

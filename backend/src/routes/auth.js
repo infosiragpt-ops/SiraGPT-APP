@@ -6,6 +6,9 @@ const prisma = require('../config/database');
 const { authenticateToken } = require('../middleware/auth');
 const { makeAuthRateLimit } = require('../middleware/rate-limit-auth');
 const { writeAuditLog } = require('../utils/audit-log');
+const { csrfTokenRoute } = require('../middleware/csrf');
+const { defaultLockout } = require('../utils/login-lockout');
+const { computeFingerprint } = require('../utils/session-fingerprint');
 
 // JWT audience / issuer — included in every signed token and verified
 // where we hand-decode (e.g. /end-impersonation). Allows future
@@ -75,6 +78,12 @@ const {
 } = require('../config/oauth-url-policy');
 
 const router = express.Router();
+
+// CSRF token endpoint — clients fetch this once after login (or on
+// app boot for cookie-authenticated sessions) and echo the returned
+// token in the X-CSRF-Token header on state-mutating requests. See
+// `middleware/csrf.js` for the double-submit-cookie design notes.
+router.get('/csrf-token', csrfTokenRoute);
 const googleIntegrationsConfigured = Boolean(
   process.env.GOOGLE_CLIENT_ID &&
   process.env.GOOGLE_CLIENT_SECRET
@@ -617,35 +626,78 @@ router.post('/login', loginRateLimit, [
 
     const { email, password } = req.body;
 
+    // Account-level lockout — distinct from the per-IP rate limit so
+    // distributed credential-stuffing (one attempt per IP) still hits
+    // a cap. See utils/login-lockout.js for the rolling window.
+    const lockState = defaultLockout.isLocked(email);
+    if (lockState.locked) {
+      const retryAfterSec = Math.max(1, Math.ceil(lockState.retryAfterMs / 1000));
+      res.set('Retry-After', String(retryAfterSec));
+      void writeAuditLog(prisma, {
+        req,
+        action: 'account_locked',
+        resource: 'user',
+        actorName: email,
+        metadata: { reason: 'too_many_failures', attempts: lockState.attempts },
+      });
+      return res.status(423).json({
+        error: 'Account temporarily locked. Try again later.',
+        retryAfterMs: lockState.retryAfterMs,
+      });
+    }
+
     // Find user
     const user = await prisma.user.findUnique({
       where: { email }
     });
 
     if (!user) {
+      const after = defaultLockout.recordFailure(email);
       void writeAuditLog(prisma, {
         req,
         action: 'login_failed',
         resource: 'user',
         actorName: email,
-        metadata: { reason: 'unknown_email' },
+        metadata: { reason: 'unknown_email', attempts: after.attempts },
       });
+      if (after.locked) {
+        void writeAuditLog(prisma, {
+          req,
+          action: 'account_locked',
+          resource: 'user',
+          actorName: email,
+          metadata: { reason: 'failure_threshold', attempts: after.attempts },
+        });
+      }
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
     // Check password
     const isValidPassword = await bcrypt.compare(password, user.password);
     if (!isValidPassword) {
+      const after = defaultLockout.recordFailure(email);
       void writeAuditLog(prisma, {
         req,
         action: 'login_failed',
         resource: 'user',
         resourceId: user.id,
         actorName: email,
-        metadata: { reason: 'bad_password' },
+        metadata: { reason: 'bad_password', attempts: after.attempts },
       });
+      if (after.locked) {
+        void writeAuditLog(prisma, {
+          req,
+          action: 'account_locked',
+          resource: 'user',
+          resourceId: user.id,
+          actorName: email,
+          metadata: { reason: 'failure_threshold', attempts: after.attempts },
+        });
+      }
       return res.status(401).json({ error: 'Invalid credentials' });
     }
+    // Successful credential check — clear lockout counter.
+    defaultLockout.recordSuccess(email);
 
     // Create session — embed admin / super-admin claims so the
     // rate-limit bypass + admin route guards can read them without
@@ -659,13 +711,31 @@ router.post('/login', loginRateLimit, [
 
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
-    await prisma.session.create({
-      data: {
-        userId: user.id,
-        token,
-        expiresAt
+    // Bind the session to the issuing client's IP-class + UA hash so
+    // a leaked token can't be replayed from a different network /
+    // browser. See utils/session-fingerprint.js for the reduce-to-/24
+    // tolerance for mobile networks.
+    const fingerprint = computeFingerprint(req);
+    try {
+      await prisma.session.create({
+        data: {
+          userId: user.id,
+          token,
+          expiresAt,
+          fingerprint,
+        }
+      });
+    } catch (e) {
+      // Fallback for environments where the schema hasn't been
+      // migrated yet (the fingerprint column was added in cycle 17).
+      if (e && /fingerprint/i.test(String(e.message))) {
+        await prisma.session.create({
+          data: { userId: user.id, token, expiresAt }
+        });
+      } else {
+        throw e;
       }
-    });
+    }
 
     // Remove password from response
     const { password: _, ...userWithoutPassword } = user;
@@ -744,20 +814,38 @@ router.post('/refresh', authenticateToken, async (req, res) => {
 
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
-    // Update session
-    await prisma.session.update({
-      where: { token: req.token },
-      data: {
-        token: newToken,
-        expiresAt
+    // Update session — re-bind fingerprint to the refreshing client
+    // so subsequent verifications track the current network/UA.
+    const refreshedFp = computeFingerprint(req);
+    try {
+      await prisma.session.update({
+        where: { token: req.token },
+        data: { token: newToken, expiresAt, fingerprint: refreshedFp }
+      });
+    } catch (e) {
+      if (e && /fingerprint/i.test(String(e.message))) {
+        await prisma.session.update({
+          where: { token: req.token },
+          data: { token: newToken, expiresAt }
+        });
+      } else {
+        throw e;
       }
-    });
+    }
 
     res.cookie('token', newToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
       maxAge: 7 * 24 * 60 * 60 * 1000
+    });
+
+    void writeAuditLog(prisma, {
+      req,
+      action: 'token_refresh',
+      resource: 'session',
+      userId: req.user.id,
+      actorName: req.user.email,
     });
 
     res.json({ token: newToken });

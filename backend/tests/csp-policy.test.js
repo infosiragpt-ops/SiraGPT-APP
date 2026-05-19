@@ -115,3 +115,53 @@ describe("buildCspDirectives", () => {
     assert.deepEqual(directives.objectSrc, ["'none'"]);
   });
 });
+
+describe("strict mode (CSP_STRICT=true)", () => {
+  test("strict mode flips reportOnly to false by default (enforcement)", () => {
+    const cfg = resolveCspConfig({ CSP_STRICT: 'true' });
+    assert.equal(cfg.strict, true);
+    assert.equal(cfg.reportOnly, false);
+  });
+
+  test("strict mode drops 'unsafe-eval' from script-src by default", () => {
+    const cfg = resolveCspConfig({ CSP_STRICT: 'true' });
+    assert.ok(!cfg.directives.scriptSrc.includes("'unsafe-eval'"));
+  });
+
+  test("strict mode locks frame-ancestors to 'none' by default", () => {
+    const cfg = resolveCspConfig({ CSP_STRICT: 'true' });
+    assert.deepEqual(cfg.directives.frameAncestors, ["'none'"]);
+  });
+
+  test("strict mode enables upgrade-insecure-requests", () => {
+    const directives = buildCspDirectives(resolveCspConfig({ CSP_STRICT: 'true' }));
+    assert.deepEqual(directives.upgradeInsecureRequests, []);
+  });
+
+  test("operator can still opt back into report-only with explicit override", () => {
+    const cfg = resolveCspConfig({ CSP_STRICT: 'true', CSP_REPORT_ONLY: 'true' });
+    assert.equal(cfg.reportOnly, true);
+  });
+});
+
+const { buildCspDirectivesWithNonce, cspNonceMiddleware } = require("../src/middleware/csp-policy");
+
+describe("CSP nonce support", () => {
+  test("cspNonceMiddleware sets res.locals.cspNonce", () => {
+    const mw = cspNonceMiddleware();
+    const res = { locals: {} };
+    let called = false;
+    mw({}, res, () => { called = true; });
+    assert.equal(called, true);
+    assert.equal(typeof res.locals.cspNonce, 'string');
+    assert.ok(res.locals.cspNonce.length > 0);
+  });
+
+  test("buildCspDirectivesWithNonce appends per-request nonce fns", () => {
+    const directives = buildCspDirectivesWithNonce(resolveCspConfig({ CSP_USE_NONCE: 'true' }));
+    const nonceFn = directives.scriptSrc[directives.scriptSrc.length - 1];
+    assert.equal(typeof nonceFn, 'function');
+    const out = nonceFn({}, { locals: { cspNonce: 'abc123' } });
+    assert.equal(out, "'nonce-abc123'");
+  });
+});

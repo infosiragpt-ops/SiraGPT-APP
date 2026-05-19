@@ -139,11 +139,15 @@ model AdminConnection {
 }
 
 model Session {
-  id        String   @id @default(cuid())
-  userId    String
-  token     String   @unique
-  expiresAt DateTime
-  createdAt DateTime @default(now())
+  id          String   @id @default(cuid())
+  userId      String
+  token       String   @unique
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+  // fingerprint: hex sha256(IP-class || User-Agent) recorded at login,
+  // compared on each request so a leaked token can't be replayed from
+  // a different network or browser. See utils/session-fingerprint.js.
+  fingerprint String?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
