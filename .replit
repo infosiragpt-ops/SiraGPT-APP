@@ -34,3 +34,6 @@ syntax = "typescript"
 
 [unitTest]
 language = "nodejs"
+
+[agent]
+expertMode = true
