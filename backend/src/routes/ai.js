@@ -20,6 +20,26 @@ function enforceOrgQuotaSafe(req, res, next) {
     return next();
   }
 }
+
+// Lazy/safe enforce-org-rate-limit middleware. Same fail-open contract
+// as enforceOrgQuotaSafe: a broken module or runtime error never breaks
+// the AI generate flow. Mounted AFTER enforceOrgQuotaSafe so the quota
+// middleware can populate `req.orgContext` and we avoid a duplicate
+// org-lookup DB hit per request.
+let _enforceOrgRateLimitMw = null;
+function enforceOrgRateLimitSafe(req, res, next) {
+  try {
+    if (!_enforceOrgRateLimitMw) {
+      // eslint-disable-next-line global-require
+      const { enforceOrgRateLimit } = require('../middleware/enforce-org-rate-limit');
+      _enforceOrgRateLimitMw = enforceOrgRateLimit();
+    }
+    return _enforceOrgRateLimitMw(req, res, next);
+  } catch (err) {
+    try { console.warn('[ai/generate] enforce-org-rate-limit load/run failed:', err && err.message); } catch (_) {}
+    return next();
+  }
+}
 const prisma = require('../config/database');
 const { tryConsumePlanQuota } = require('../services/plan-quota');
 const aiService = require('../services/ai-service');
@@ -941,6 +961,7 @@ router.post(
   ],
   authenticateToken,
   enforceOrgQuotaSafe,
+  enforceOrgRateLimitSafe,
   async (req, res) => {
     const controller = new AbortController();
     const signal = controller.signal;

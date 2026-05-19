@@ -131,4 +131,90 @@ describe('otel-spans with a stub tracer provider', () => {
     assert.ok(!('attempt' in spans[0].attrs));
     assert.ok(!('httpStatus' in spans[0].attrs));
   });
+
+  test('withSpan uses caller-provided name and tracer', async () => {
+    const out = await otelSpans.withSpan(
+      'custom.unit',
+      { foo: 'bar' },
+      async () => 'value',
+      '@siragpt/custom',
+    );
+    assert.equal(out, 'value');
+    assert.equal(spans[0].name, 'custom.unit');
+    assert.equal(spans[0].attrs.foo, 'bar');
+    assert.equal(spans[0].status.code, api.SpanStatusCode.OK);
+  });
+
+  test('httpSpanMiddleware wraps req in http.{METHOD}.{route} span and records status', (t, done) => {
+    const EventEmitter = require('node:events');
+    const mw = otelSpans.httpSpanMiddleware();
+
+    const req = {
+      method: 'get',
+      originalUrl: '/api/widgets/123?x=1',
+      baseUrl: '/api/widgets',
+      path: '/123',
+      route: { path: '/api/widgets/:id' },
+      headers: { 'user-agent': 'jest-agent' },
+      id: 'req-1',
+    };
+    const res = new EventEmitter();
+    res.statusCode = 0;
+
+    mw(req, res, () => {
+      // Simulate handler completing successfully.
+      res.statusCode = 201;
+      res.emit('finish');
+      try {
+        assert.equal(spans.length, 1);
+        assert.equal(spans[0].name, 'http.GET./api/widgets/:id');
+        assert.equal(spans[0].attrs['http.method'], 'GET');
+        assert.equal(spans[0].attrs['http.route'], '/api/widgets/:id');
+        assert.equal(spans[0].attrs['http.status_code'], 201);
+        assert.equal(spans[0].attrs['http.request_id'], 'req-1');
+        assert.equal(spans[0].attrs['http.user_agent'], 'jest-agent');
+        assert.equal(spans[0].status.code, api.SpanStatusCode.OK);
+        assert.ok(spans[0].ended);
+        done();
+      } catch (err) { done(err); }
+    });
+  });
+
+  test('httpSpanMiddleware marks ERROR on 5xx', (t, done) => {
+    const EventEmitter = require('node:events');
+    const mw = otelSpans.httpSpanMiddleware({ routePath: '/api/forced' });
+    const req = { method: 'POST', originalUrl: '/api/forced', headers: {} };
+    const res = new EventEmitter();
+    res.statusCode = 0;
+
+    mw(req, res, () => {
+      res.statusCode = 503;
+      res.emit('close');
+      try {
+        assert.equal(spans[0].name, 'http.POST./api/forced');
+        assert.equal(spans[0].attrs['http.status_code'], 503);
+        assert.equal(spans[0].status.code, api.SpanStatusCode.ERROR);
+        done();
+      } catch (err) { done(err); }
+    });
+  });
+
+  test('httpSpanMiddleware ends span exactly once across finish + close', (t, done) => {
+    const EventEmitter = require('node:events');
+    const mw = otelSpans.httpSpanMiddleware();
+    const req = { method: 'GET', originalUrl: '/x', path: '/x', headers: {} };
+    const res = new EventEmitter();
+    res.statusCode = 200;
+
+    mw(req, res, () => {
+      res.emit('finish');
+      res.emit('close');
+      try {
+        assert.equal(spans.length, 1);
+        // ended flag is boolean; ensure we don't double-end (no throw).
+        assert.equal(spans[0].ended, true);
+        done();
+      } catch (err) { done(err); }
+    });
+  });
 });

@@ -22,6 +22,26 @@ const documentIntentAnalyzer = require('../services/document-intent-analyzer');
 
 const router = express.Router();
 
+// Lazy/safe enforce-org-rate-limit middleware for file uploads. Mirrors
+// the wrapper in routes/ai.js: any failure to load or run the underlying
+// middleware degrades to a pass-through so a misconfigured Redis store
+// or missing prisma model can never block legitimate uploads. The
+// middleware itself is also fail-open; this is defence in depth.
+let _enforceOrgRateLimitMw = null;
+function enforceOrgRateLimitSafe(req, res, next) {
+  try {
+    if (!_enforceOrgRateLimitMw) {
+      // eslint-disable-next-line global-require
+      const { enforceOrgRateLimit } = require('../middleware/enforce-org-rate-limit');
+      _enforceOrgRateLimitMw = enforceOrgRateLimit();
+    }
+    return _enforceOrgRateLimitMw(req, res, next);
+  } catch (err) {
+    try { console.warn('[files/upload] enforce-org-rate-limit load/run failed:', err && err.message); } catch (_) {}
+    return next();
+  }
+}
+
 // Initialize OpenAI client
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
@@ -263,7 +283,7 @@ async function processFilesInParallel(files, userId, prismaClient) {
 }
 
 // Upload files — parallel batch processing
-router.post('/upload', authenticateToken, upload.array('files', 50), async (req, res) => {
+router.post('/upload', authenticateToken, upload.array('files', 50), enforceOrgRateLimitSafe, async (req, res) => {
   try {
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: 'No files uploaded' });
