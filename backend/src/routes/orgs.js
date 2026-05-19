@@ -16,6 +16,9 @@
  *   DELETE /api/orgs/:id/members/:userId                — remove member (ADMIN+ or self)
  *   POST   /api/orgs/:id/chats/:chatId/share            — share a chat into the org
  *   GET    /api/orgs/:id/chats                          — list chats shared into the org
+ *   GET    /api/orgs/:id/audit-logs                     — org-scoped audit feed (ADMIN+; cycle 66)
+ *   GET    /api/orgs/:id/settings                       — read per-org settings (member; cycle 66)
+ *   PATCH  /api/orgs/:id/settings                       — merge per-org settings (ADMIN+; cycle 66)
  *
  * Every state-changing route writes an AuditLog row via the shared
  * `writeAuditLog` helper (fire-and-forget).
@@ -1220,12 +1223,149 @@ router.get('/:id/billing', authenticateToken, async (req, res) => {
   }
 });
 
+// ─── Audit logs (cycle 66) ──────────────────────────────────────────
+// Member-facing audit log feed scoped to a single org. Mirrors the
+// super-admin endpoint in routes/admin.js but locks the org filter to
+// the path parameter so a member of org A cannot peek at org B's
+// trail by passing ?orgId=... . Pagination + action / actor / date
+// filters are still honoured. ADMIN+ only — the audit trail can leak
+// member emails (in metadata), invitation tokens, etc.
+async function listOrgAuditLogsHandler(req, res, deps = { prisma }) {
+  const db = deps.prisma || prisma;
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  try {
+    const membership = await assertMembership(db, orgId, userId, 'ADMIN');
+    if (!canManageMembers(membership.role)) {
+      return res.status(403).json({ error: 'insufficient role to view audit logs' });
+    }
+    const { query: auditQuery } = require('../services/audit-query');
+    let q = auditQuery(db).byOrg(orgId);
+    if (req.query.userId) q = q.byUser(String(req.query.userId));
+    if (req.query.action) q = q.byAction(String(req.query.action));
+    if (req.query.resource) {
+      q = q.byResource(
+        String(req.query.resource),
+        req.query.resourceId ? String(req.query.resourceId) : null,
+      );
+    }
+    if (req.query.from || req.query.to) {
+      q = q.byDate(req.query.from || null, req.query.to || null);
+    }
+    if (req.query.page) q = q.page(req.query.page);
+    if (req.query.limit) q = q.limit(req.query.limit);
+    const result = await q.run();
+    res.json(result);
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] audit-logs failed:', err.message);
+    res.status(500).json({ error: 'failed to query audit logs' });
+  }
+}
+
+router.get('/:id/audit-logs', authenticateToken, (req, res) => listOrgAuditLogsHandler(req, res));
+
+// ─── Settings (cycle 66) ────────────────────────────────────────────
+// Per-org JSON settings bag. Read is open to any member; write is
+// ADMIN+ and performs a shallow merge so callers can PATCH a single
+// key without round-tripping the full object. Every write produces an
+// audit log row carrying the merged before/after for compliance.
+
+function sanitizeSettings(input) {
+  if (input == null) return {};
+  if (typeof input !== 'object' || Array.isArray(input)) return null;
+  return input;
+}
+
+function mergeSettings(current, patch) {
+  const base = current && typeof current === 'object' && !Array.isArray(current) ? current : {};
+  const out = { ...base };
+  for (const [k, v] of Object.entries(patch)) {
+    if (v === null) {
+      delete out[k]; // explicit null = remove key
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
+async function getOrgSettingsHandler(req, res, deps = { prisma }) {
+  const db = deps.prisma || prisma;
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  try {
+    await assertMembership(db, orgId, userId, 'VIEWER');
+    const org = await db.organization.findUnique({
+      where: { id: orgId },
+      select: { settings: true },
+    });
+    if (!org) return res.status(404).json({ error: 'organization not found' });
+    res.json({ settings: org.settings && typeof org.settings === 'object' ? org.settings : {} });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] get settings failed:', err.message);
+    res.status(500).json({ error: 'failed to load settings' });
+  }
+}
+
+async function patchOrgSettingsHandler(req, res, deps = { prisma, writeAuditLog }) {
+  const db = deps.prisma || prisma;
+  const audit = deps.writeAuditLog || writeAuditLog;
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  const patch = sanitizeSettings(req.body?.settings ?? req.body);
+  if (patch === null) {
+    return res.status(400).json({ error: 'settings must be a JSON object' });
+  }
+  try {
+    const membership = await assertMembership(db, orgId, userId, 'ADMIN');
+    if (!canManageMembers(membership.role)) {
+      return res.status(403).json({ error: 'insufficient role to update settings' });
+    }
+    const existing = await db.organization.findUnique({
+      where: { id: orgId },
+      select: { settings: true },
+    });
+    if (!existing) return res.status(404).json({ error: 'organization not found' });
+    const before = existing.settings && typeof existing.settings === 'object' ? existing.settings : {};
+    const merged = mergeSettings(before, patch);
+    const updated = await db.organization.update({
+      where: { id: orgId },
+      data: { settings: merged },
+      select: { settings: true },
+    });
+    void audit(db, {
+      action: 'org_settings_update',
+      userId,
+      resource: 'organization',
+      resourceId: orgId,
+      before,
+      after: updated.settings || {},
+      metadata: { orgId },
+      req,
+    });
+    res.json({ settings: updated.settings || {} });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] patch settings failed:', err.message);
+    res.status(500).json({ error: 'failed to update settings' });
+  }
+}
+
+router.get('/:id/settings', authenticateToken, (req, res) => getOrgSettingsHandler(req, res));
+router.patch('/:id/settings', authenticateToken, (req, res) => patchOrgSettingsHandler(req, res));
+
 // Expose constants for tests/inspection.
 router.__roleAtLeast = roleAtLeast;
 router.__handlers = {
   transferOwnership: transferOwnershipHandler,
   leaveOrg: leaveOrgHandler,
+  listOrgAuditLogs: listOrgAuditLogsHandler,
+  getOrgSettings: getOrgSettingsHandler,
+  patchOrgSettings: patchOrgSettingsHandler,
 };
+router.__settingsHelpers = { sanitizeSettings, mergeSettings };
 router.__billing = {
   PLAN_QUOTAS,
   PLAN_MRR_USD,

@@ -1283,6 +1283,7 @@ model Organization {
   monthlyQuota   BigInt   @default(10000)
   usedThisMonth  BigInt   @default(0)
   quotaResetAt   DateTime @default(now())
+  settings       Json?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
