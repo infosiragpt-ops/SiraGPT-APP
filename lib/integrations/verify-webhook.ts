@@ -4,7 +4,16 @@
 // request body and ships the result in the `X-SiraGPT-Signature`
 // header using the canonical Stripe-style format:
 //
-//   X-SiraGPT-Signature: t=<unix-seconds>,v1=<hex-hmac-sha256>
+//   X-SiraGPT-Signature: t=<unix-seconds>,v1=<hex-hmac-sha256>[,v2=<hex-hmac-sha256>]
+//
+// Ratchet 45 (Task 2) added an additional `v2=` segment for forwards
+// compatibility. v2 is HMAC-SHA256 over `v2:${timestamp}.${body}` (a
+// domain-separated variant of v1 that cannot be spoofed by replaying
+// a v1 digest as v2). During the transition window the backend emits
+// BOTH segments and this verifier accepts a payload as valid if EITHER
+// segment verifies. New integrations should bind to v2; existing
+// integrations on v1 keep working until v1 is retired in a future
+// cycle.
 //
 // This module gives downstream consumers a single drop-in helper to
 // verify those events without taking a runtime dependency on the
@@ -42,6 +51,8 @@ export interface ParsedSignatureHeader {
   timestamp: number | null;
   /** Hex digest from the `v1=` segment, or null when missing. */
   v1: string | null;
+  /** Hex digest from the `v2=` segment (ratchet 45 Task 2), or null when missing. */
+  v2: string | null;
 }
 
 /**
@@ -49,7 +60,7 @@ export interface ParsedSignatureHeader {
  * Tolerant of surrounding whitespace and segment order.
  */
 export function parseSignatureHeader(header: string | null | undefined): ParsedSignatureHeader {
-  const out: ParsedSignatureHeader = { timestamp: null, v1: null };
+  const out: ParsedSignatureHeader = { timestamp: null, v1: null, v2: null };
   if (!header || typeof header !== "string") return out;
   for (const segment of header.split(",")) {
     const eq = segment.indexOf("=");
@@ -61,6 +72,8 @@ export function parseSignatureHeader(header: string | null | undefined): ParsedS
       if (Number.isFinite(n)) out.timestamp = n;
     } else if (k === "v1") {
       out.v1 = v;
+    } else if (k === "v2") {
+      out.v2 = v;
     }
   }
   return out;
@@ -107,7 +120,9 @@ export function verifyHmacSignature(
   if (body == null) return false;
 
   const parsed = parseSignatureHeader(header);
-  if (parsed.timestamp == null || parsed.v1 == null) return false;
+  if (parsed.timestamp == null) return false;
+  // Need at least one digest segment to verify against.
+  if (parsed.v1 == null && parsed.v2 == null) return false;
 
   const toleranceSeconds = Number.isFinite(opts.toleranceSeconds as number)
     ? Math.max(0, Math.floor(opts.toleranceSeconds as number))
@@ -117,8 +132,20 @@ export function verifyHmacSignature(
   if (skewSeconds > toleranceSeconds) return false;
 
   const bodyStr = Buffer.isBuffer(body) ? body.toString("utf8") : String(body);
-  const base = `${parsed.timestamp}.${bodyStr}`;
-  const expected = createHmac("sha256", secret).update(base).digest("hex");
-
-  return constantTimeHexEqual(expected, parsed.v1);
+  // v1 base: `${t}.${body}`. v2 base: `v2:${t}.${body}` (domain-
+  // separated so a v1 digest cannot be replayed in a v2 slot).
+  let matched = false;
+  if (parsed.v1 != null) {
+    const exp = createHmac("sha256", secret)
+      .update(`${parsed.timestamp}.${bodyStr}`)
+      .digest("hex");
+    if (constantTimeHexEqual(exp, parsed.v1)) matched = true;
+  }
+  if (parsed.v2 != null) {
+    const exp = createHmac("sha256", secret)
+      .update(`v2:${parsed.timestamp}.${bodyStr}`)
+      .digest("hex");
+    if (constantTimeHexEqual(exp, parsed.v2)) matched = true;
+  }
+  return matched;
 }

@@ -9,12 +9,80 @@ test.beforeEach(() => dispatcher.resetStore({ size: 100 }));
 
 test('signPayload + verifySignature roundtrip', () => {
   const sig = dispatcher.signPayload('s3cret', { hello: 'world' }, 1700000000);
-  assert.match(sig, /^t=1700000000,v1=[0-9a-f]{64}$/);
+  // ratchet 45 task 2: outbound header carries BOTH v1 and v2 segments.
+  assert.match(sig, /^t=1700000000,v1=[0-9a-f]{64},v2=[0-9a-f]{64}$/);
   const ok = dispatcher.verifySignature('s3cret', { hello: 'world' }, sig, {
     now: 1700000000,
     toleranceSeconds: 60,
   });
   assert.equal(ok, true);
+});
+
+// ── ratchet 45 task 2: dual v1/v2 algorithm ─────────────────────────
+test('signPayload includeV2:false still emits v1-only for legacy mode', () => {
+  const sig = dispatcher.signPayload('s', 'body', 1700000000, { includeV2: false });
+  assert.match(sig, /^t=1700000000,v1=[0-9a-f]{64}$/);
+  assert.equal(sig.includes('v2='), false);
+});
+
+test('verifySignature accepts a v1-only header (legacy consumers)', () => {
+  const sig = dispatcher.signPayload('s', 'body', 1700000000, { includeV2: false });
+  const ok = dispatcher.verifySignature('s', 'body', sig, {
+    now: 1700000000, toleranceSeconds: 60,
+  });
+  assert.equal(ok, true);
+});
+
+test('verifySignature accepts a v2-only header (new consumers)', () => {
+  // Hand-craft a v2-only header to simulate a consumer that strips v1.
+  const crypto = require('crypto');
+  const ts = 1700000000;
+  const v2 = crypto.createHmac('sha256', 's').update(`v2:${ts}.body`).digest('hex');
+  const header = `t=${ts},v2=${v2}`;
+  const ok = dispatcher.verifySignature('s', 'body', header, {
+    now: ts, toleranceSeconds: 60,
+  });
+  assert.equal(ok, true);
+});
+
+test('verifySignature rejects v1 digest replayed in v2 slot (domain sep)', () => {
+  const crypto = require('crypto');
+  const ts = 1700000000;
+  const v1 = crypto.createHmac('sha256', 's').update(`${ts}.body`).digest('hex');
+  // Place the v1 digest in the v2 slot — must fail because v2 uses a
+  // distinct, domain-separated base string.
+  const header = `t=${ts},v2=${v1}`;
+  const ok = dispatcher.verifySignature('s', 'body', header, {
+    now: ts, toleranceSeconds: 60,
+  });
+  assert.equal(ok, false);
+});
+
+// ── ratchet 45 task 1: rotate-secret grace window verification ──────
+test('verifySignature accepts EITHER current or previous secret (rotation grace)', () => {
+  const sigOld = dispatcher.signPayload('old', 'body', 1700000000);
+  const sigNew = dispatcher.signPayload('new', 'body', 1700000000);
+  // Caller (e.g. inbound webhook handler) passes both secrets during
+  // the grace window. Either signature must verify.
+  assert.equal(
+    dispatcher.verifySignature(['new', 'old'], 'body', sigOld, {
+      now: 1700000000, toleranceSeconds: 60,
+    }),
+    true,
+  );
+  assert.equal(
+    dispatcher.verifySignature(['new', 'old'], 'body', sigNew, {
+      now: 1700000000, toleranceSeconds: 60,
+    }),
+    true,
+  );
+  // A foreign secret must still reject.
+  assert.equal(
+    dispatcher.verifySignature(['new', 'old'], 'body', dispatcher.signPayload('other', 'body', 1700000000), {
+      now: 1700000000, toleranceSeconds: 60,
+    }),
+    false,
+  );
 });
 
 test('verifySignature rejects stale or wrong secret', () => {

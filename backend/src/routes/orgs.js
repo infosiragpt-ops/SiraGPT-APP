@@ -998,6 +998,90 @@ router.delete('/:id/webhooks/:endpointId', authenticateToken, async (req, res) =
   }
 });
 
+// ─── POST /api/orgs/:id/webhooks/:endpointId/rotate-secret (ADMIN+) ──
+// Ratchet 45 (Task 1) — mint a fresh HMAC secret for an existing
+// WebhookEndpoint. The freshly-minted secret is returned EXACTLY ONCE
+// in the response (just like create + the API-key rotate flow above).
+// The previous secret is parked in `previousSecret` until
+// `previousSecretExpiresAt`, which defaults to now + WEBHOOK_SECRET_-
+// GRACE_HOURS (env, default 24h; clamped to 0..168h). During that
+// window the dispatcher's verifier accepts EITHER the new or the old
+// secret, so receivers can roll their stored secret without dropped
+// deliveries. Setting WEBHOOK_SECRET_GRACE_HOURS=0 disables the grace
+// window (immediate cutover).
+function parseWebhookGraceHours(input) {
+  const raw = input ?? process.env.WEBHOOK_SECRET_GRACE_HOURS;
+  if (raw === undefined || raw === null || raw === '') return 24;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return 24;
+  return Math.min(n, 168);
+}
+
+router.post('/:id/webhooks/:endpointId/rotate-secret', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  const endpointId = req.params.endpointId;
+
+  try {
+    const membership = await assertMembership(prisma, orgId, userId, 'ADMIN');
+    if (!canManageMembers(membership.role)) {
+      return res.status(403).json({ error: 'insufficient role to rotate webhook secret' });
+    }
+
+    const existing = await prisma.webhookEndpoint.findFirst({
+      where: { id: endpointId, organizationId: orgId },
+    });
+    if (!existing) return res.status(404).json({ error: 'endpoint not found' });
+
+    const graceHours = parseWebhookGraceHours(req.body?.graceHours);
+    const newSecret = genWebhookSecret();
+    const previousSecretExpiresAt = graceHours > 0
+      ? new Date(Date.now() + graceHours * 3600 * 1000)
+      : null;
+
+    const updated = await prisma.webhookEndpoint.update({
+      where: { id: existing.id },
+      data: {
+        secret: newSecret,
+        previousSecret: graceHours > 0 ? existing.secret : null,
+        previousSecretExpiresAt,
+      },
+    });
+
+    void writeAuditLog(prisma, {
+      action: 'org_webhook_rotate_secret',
+      userId,
+      resource: 'organization',
+      resourceId: orgId,
+      before: { endpointId: existing.id, prefix: redactWebhookSecret(existing.secret) },
+      after: {
+        endpointId: existing.id,
+        prefix: redactWebhookSecret(updated.secret),
+        graceHours,
+        previousSecretExpiresAt: previousSecretExpiresAt
+          ? previousSecretExpiresAt.toISOString()
+          : null,
+      },
+      metadata: { orgId },
+      req,
+    });
+
+    res.status(200).json({
+      endpoint: serializeOrgWebhook(updated, { includeSecret: true }),
+      grace: previousSecretExpiresAt
+        ? {
+            hours: graceHours,
+            previousSecretExpiresAt: previousSecretExpiresAt.toISOString(),
+          }
+        : null,
+    });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] rotate webhook secret failed:', err.message);
+    res.status(500).json({ error: 'failed to rotate webhook secret' });
+  }
+});
+
 // ─── API keys (ratchet 45, org-scoped) ──────────────────────────────
 // Bearer tokens for programmatic access. Created by an ADMIN+ member;
 // the full plaintext is returned exactly once. List + delete are

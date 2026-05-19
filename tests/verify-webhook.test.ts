@@ -69,6 +69,36 @@ describe("verifyHmacSignature (consumer-side SiraGPT webhook verifier)", () => {
     assert.equal(parsed.v1, "deadbeef");
   });
 
+  // ── ratchet 45 task 2: v2 algorithm ───────────────────────────────
+  it("accepts a v2-only signature (HMAC over `v2:${t}.${body}`)", () => {
+    const secret = "whsec_test_v2_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const body = "hello-v2";
+    const ts = Math.floor(Date.now() / 1000);
+    const v2 = createHmac("sha256", secret).update(`v2:${ts}.${body}`).digest("hex");
+    const header = `t=${ts},v2=${v2}`;
+    assert.equal(verifyHmacSignature(body, header, secret), true);
+  });
+
+  it("accepts the dual `v1=..,v2=..` header emitted during transition", () => {
+    const secret = "whsec_test_dual_bbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const body = "dual-body";
+    const ts = Math.floor(Date.now() / 1000);
+    const v1 = createHmac("sha256", secret).update(`${ts}.${body}`).digest("hex");
+    const v2 = createHmac("sha256", secret).update(`v2:${ts}.${body}`).digest("hex");
+    const header = `t=${ts},v1=${v1},v2=${v2}`;
+    assert.equal(verifyHmacSignature(body, header, secret), true);
+  });
+
+  it("rejects a v1 digest placed in the v2 slot (domain separation)", () => {
+    const secret = "whsec_test_sep_cccccccccccccccccccccccccccc";
+    const body = "x";
+    const ts = Math.floor(Date.now() / 1000);
+    const v1 = createHmac("sha256", secret).update(`${ts}.${body}`).digest("hex");
+    // Replay v1 digest into the v2 segment (no v1 segment at all).
+    const header = `t=${ts},v2=${v1}`;
+    assert.equal(verifyHmacSignature(body, header, secret), false);
+  });
+
   it("verifies bodies passed as Buffer (raw bytes) identically to strings", () => {
     const secret = "whsec_test_dddddddddddddddddddddddddddddddd";
     const body = Buffer.from("✓ unicode body", "utf8");

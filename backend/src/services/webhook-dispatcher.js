@@ -81,21 +81,53 @@ function canonicalPayload(payload) {
   return JSON.stringify(payload);
 }
 
-function signPayload(secret, payload, timestamp = Math.floor(Date.now() / 1000)) {
+// ── Signing algorithms ──────────────────────────────────────────────
+// v1 — HMAC-SHA256 over `${timestamp}.${body}` (original, Stripe-style).
+// v2 — HMAC-SHA256 over `${timestamp}.${body}` as well, but emitted in
+//      its own header segment so we can rotate the digest construction
+//      independently in a future cycle without breaking v1 consumers.
+//      For ratchet 45 (Task 2) v2 uses the same base string as v1 — the
+//      goal of the v2 segment in this cycle is to exercise the
+//      multi-version negotiation path end-to-end (emit both → consumers
+//      can opt into v2 → in a future cycle we change v2's base string
+//      with a known-safe migration). The outbound header during
+//      transition therefore carries BOTH `v1=` and `v2=` segments so
+//      legacy and new consumers both verify successfully.
+function v1Digest(secret, timestamp, body) {
+  return crypto.createHmac('sha256', secret).update(`${timestamp}.${body}`).digest('hex');
+}
+function v2Digest(secret, timestamp, body) {
+  // Distinct from v1 by domain-separating with a version tag in the
+  // base string. Consumers that bind to v2 explicitly cannot be fooled
+  // by a v1 signature replay with the same body.
+  return crypto.createHmac('sha256', secret).update(`v2:${timestamp}.${body}`).digest('hex');
+}
+
+function signPayload(secret, payload, timestamp = Math.floor(Date.now() / 1000), opts = {}) {
   if (!secret) throw new Error('webhook secret required');
   const body = canonicalPayload(payload);
-  const base = `${timestamp}.${body}`;
-  const sig = crypto.createHmac('sha256', secret).update(base).digest('hex');
-  return `t=${timestamp},v1=${sig}`;
+  const v1 = v1Digest(secret, timestamp, body);
+  if (opts && opts.includeV2 === false) {
+    return `t=${timestamp},v1=${v1}`;
+  }
+  const v2 = v2Digest(secret, timestamp, body);
+  // During the transition we emit both algorithms so a downstream that
+  // upgrades to v2 (or stays on v1) verifies cleanly. Order is stable
+  // (`t,v1,v2`) so log scrapers / tests can match on a regex.
+  return `t=${timestamp},v1=${v1},v2=${v2}`;
 }
 
 function parseHeader(header) {
-  const out = { t: null, v1: null };
+  const out = { t: null, v1: null, v2: null };
   if (!header || typeof header !== 'string') return out;
   for (const segment of header.split(',')) {
-    const [k, v] = segment.trim().split('=');
+    const eq = segment.indexOf('=');
+    if (eq <= 0) continue;
+    const k = segment.slice(0, eq).trim();
+    const v = segment.slice(eq + 1).trim();
     if (k === 't') out.t = Number(v);
     else if (k === 'v1') out.v1 = v;
+    else if (k === 'v2') out.v2 = v;
   }
   return out;
 }
@@ -110,18 +142,33 @@ function timingSafeEqualHex(a, b) {
   }
 }
 
+// `secret` may be a single string OR an array of strings (current +
+// previous during a rotate-secret grace window — see Task 1). Returns
+// true if the header verifies against ANY of the supplied secrets
+// using EITHER v1 or v2. Constant-time comparison runs for every
+// candidate so we don't leak which secret matched.
 function verifySignature(secret, payload, header, opts = {}) {
   if (!secret) return false;
+  const secrets = Array.isArray(secret) ? secret.filter(Boolean) : [secret];
+  if (secrets.length === 0) return false;
   const tolerance = opts.toleranceSeconds ?? DEFAULT_TIMESTAMP_TOLERANCE_S;
   const now = opts.now ?? Math.floor(Date.now() / 1000);
   const parsed = parseHeader(header);
-  if (!parsed.t || !parsed.v1) return false;
+  if (!parsed.t) return false;
   if (Math.abs(now - parsed.t) > tolerance) return false;
-  const expected = crypto
-    .createHmac('sha256', secret)
-    .update(`${parsed.t}.${canonicalPayload(payload)}`)
-    .digest('hex');
-  return timingSafeEqualHex(expected, parsed.v1);
+  const body = canonicalPayload(payload);
+  let matched = false;
+  for (const s of secrets) {
+    if (parsed.v1) {
+      const exp = v1Digest(s, parsed.t, body);
+      if (timingSafeEqualHex(exp, parsed.v1)) matched = true;
+    }
+    if (parsed.v2) {
+      const exp = v2Digest(s, parsed.t, body);
+      if (timingSafeEqualHex(exp, parsed.v2)) matched = true;
+    }
+  }
+  return matched;
 }
 
 async function defaultDeliver({ url, body, headers, timeoutMs }) {

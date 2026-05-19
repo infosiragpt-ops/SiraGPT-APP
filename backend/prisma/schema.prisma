@@ -356,6 +356,13 @@ model WebhookEndpoint {
   url            String
   events         String[]
   secret         String
+  // Ratchet 45 (Task 1): rotate-secret grace window. When an operator
+  // rotates the HMAC secret, the prior value is parked here until
+  // `previousSecretExpiresAt` so downstream consumers have a window to
+  // roll their stored secret without dropped deliveries. Both fields
+  // are cleared on the next rotation (or by GC sweeping expired rows).
+  previousSecret           String?
+  previousSecretExpiresAt  DateTime?
   isActive       Boolean   @default(true)
   createdAt      DateTime  @default(now())
   lastDeliveryAt DateTime?
