@@ -34,6 +34,8 @@ const documentService = require('../services/document-service');
 const langPolicy = require('../services/language-policy');
 const masterPrompt = require('../services/master-prompt');
 const streamCache = require('../services/stream-cache');
+const streamResume = require('../services/ai/stream-resume');
+const promptInjectionDetector = require('../services/ai/prompt-injection-detector');
 const longTermMemory = require('../services/long-term-memory');
 const artifactGenerator = require('../services/artifacts/artifact-generator');
 const {
@@ -978,6 +980,51 @@ router.post(
       const isAuth = !!req.user;
       const userId = isAuth ? req.user.id : null;
       const canPersist = isAuth && !!chatId;
+
+      // ─── Prompt-injection preflight (warn-only) ────────────────────
+      // Heuristic detector for "ignore previous instructions" / DAN /
+      // role-hijack attempts on the user prompt. We log + emit a metric
+      // (siragpt_prompt_injection_suspected_total) but do NOT block — the
+      // model side is already hardened against most patterns and the
+      // false-positive rate on translation / writing requests is non-zero.
+      try {
+        const injectionVerdict = promptInjectionDetector.detect(prompt);
+        if (injectionVerdict.detected) {
+          promptInjectionDetector.recordSuspicion(injectionVerdict, { route: 'ai_generate' });
+          console.warn('[ai/generate] prompt_injection_suspected', JSON.stringify({
+            user_id: userId || null,
+            chat_id: chatId || null,
+            confidence: injectionVerdict.confidence,
+            patterns: injectionVerdict.patterns,
+          }));
+        }
+      } catch (injErr) {
+        // never break the request path on detector errors
+        try { console.warn('[ai/generate] prompt-injection detector failed:', injErr && injErr.message); } catch (_) {}
+      }
+
+      // ─── SSE resumption preflight ──────────────────────────────────
+      // If the client sends `Last-Event-ID: <streamId>:<position>` we
+      // open the existing resume record so already-sent chunks can be
+      // replayed below (after flushHeaders). On a fresh request we mint
+      // a new streamId and surface it via the X-Stream-Id header so the
+      // client can store + replay on reconnect.
+      let resumeSession = null;
+      let resumeReplayPosition = 0;
+      try {
+        const lastEventHeader = req.get && req.get('Last-Event-ID');
+        const parsed = lastEventHeader ? streamResume.parseLastEventId(lastEventHeader) : null;
+        if (parsed && parsed.streamId) {
+          resumeSession = await streamResume.open({ streamId: parsed.streamId });
+          resumeReplayPosition = Math.min(parsed.position, resumeSession.record.chunks.length);
+        } else {
+          resumeSession = await streamResume.open({});
+        }
+        try { res.setHeader('X-Stream-Id', resumeSession.streamId); } catch { /* noop */ }
+      } catch (resumeErr) {
+        try { console.warn('[ai/generate] stream-resume open failed:', resumeErr && resumeErr.message); } catch (_) {}
+        resumeSession = null;
+      }
 
       // ─── Language policy ──────────────────────────────────────────
       // Resolves the response language for THIS turn under a strict
@@ -2934,6 +2981,43 @@ router.post(
         };
       }
 
+      // ─── SSE resume capture + replay ───────────────────────────────
+      // Mirror every `data:` frame into the resume record so a future
+      // reconnect with `Last-Event-ID` can replay the already-sent
+      // chunks. Replay happens HERE (post-flushHeaders) so the client
+      // sees the missing tail of the prior stream before new tokens.
+      if (resumeSession && resumeSession.streamId) {
+        const sid = resumeSession.streamId;
+        // Replay missing chunks
+        try {
+          const missing = resumeSession.record.chunks.slice(resumeReplayPosition);
+          for (let i = 0; i < missing.length; i += 1) {
+            const chunk = missing[i];
+            res.write(`id: ${sid}:${resumeReplayPosition + i + 1}\n`);
+            res.write(`data: ${JSON.stringify({ content: chunk, _resumed: true })}\n\n`);
+          }
+        } catch (replayErr) {
+          try { console.warn('[ai/generate] resume replay failed:', replayErr && replayErr.message); } catch (_) {}
+        }
+        // Wrap res.write to capture future content frames into resume store
+        const prevWrite = res.write.bind(res);
+        res.write = (payload, ...rest) => {
+          if (typeof payload === 'string' && payload.startsWith('data:')) {
+            try {
+              const raw = payload.slice(5).trim();
+              if (raw && raw !== '[DONE]') {
+                const obj = JSON.parse(raw);
+                if (obj && typeof obj.content === 'string' && !obj._resumed) {
+                  // fire-and-forget — never block the write path
+                  streamResume.append(sid, obj.content).catch(() => {});
+                }
+              }
+            } catch { /* non-JSON SSE frame — ignore */ }
+          }
+          return prevWrite(payload, ...rest);
+        };
+      }
+
       let fullResponseContent = '';
       // ─── Artifact branch ───────────────────────────────────────────
       // If the user asked "grafica / visualiza / anima / plot / draw",
@@ -3427,6 +3511,17 @@ router.post(
         streamControllers.delete(streamId);
         console.log(`Stream unregistered for ID: ${streamId}`);
       }
+
+      // ─── Mark resume session terminal ─────────────────────────────
+      // Fire-and-forget — never block the response. If the stream ended
+      // gracefully, mark complete so reconnects don't reopen new
+      // upstream calls. If we hit a fatal error before [DONE], leave
+      // chunks intact for one TTL window so the client can recover.
+      try {
+        if (resumeSession && resumeSession.streamId) {
+          streamResume.complete(resumeSession.streamId).catch(() => {});
+        }
+      } catch (_) { /* never throw from finally */ }
 
       // ✅ Only end response if not already ended
       if (!res.writableEnded) {
