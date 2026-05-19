@@ -137,14 +137,31 @@ router.post('/endpoints', authenticateToken, async (req, res) => {
   }
 });
 
+// Ratchet 45 (Task 1) — paginated. Supports ?page=&limit= with
+// default limit=50, max=200. Response shape mirrors the cycle 118
+// api-keys listing: `{ items, total, page, pages, endpoints }`. The
+// legacy `endpoints` field is preserved for back-compat with older
+// clients (the redacted-secret view is unchanged).
 router.get('/endpoints', authenticateToken, async (req, res) => {
   try {
+    const rawLimit = Number.parseInt(req.query.limit, 10);
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0
+      ? Math.min(rawLimit, 200)
+      : 50;
+    const rawPage = Number.parseInt(req.query.page, 10);
+    const page = Number.isFinite(rawPage) && rawPage > 0 ? rawPage : 1;
+
+    const where = { userId: req.user.id };
+    const total = await prisma.webhookEndpoint.count({ where });
+    const pages = total === 0 ? 0 : Math.ceil(total / limit);
     const rows = await prisma.webhookEndpoint.findMany({
-      where: { userId: req.user.id },
+      where,
       orderBy: { createdAt: 'desc' },
-      take: 200,
+      skip: (page - 1) * limit,
+      take: limit,
     });
-    res.json({ endpoints: rows.map((r) => serializeEndpoint(r)) });
+    const items = rows.map((r) => serializeEndpoint(r));
+    res.json({ items, total, page, pages, endpoints: items });
   } catch (err) {
     console.error('[webhooks] list endpoints failed:', err.message);
     res.status(500).json({ error: 'failed to list endpoints' });

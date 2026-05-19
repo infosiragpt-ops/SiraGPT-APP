@@ -1408,17 +1408,34 @@ function validateWebhookEvents(events) {
 }
 
 // ─── GET /api/orgs/:id/webhooks ─────────────────────────────────────
+// Ratchet 45 (Task 1) — paginated. Supports ?page=&limit= with default
+// limit=50, max=200. Response shape mirrors the api-keys listing:
+// `{ items, total, page, pages, endpoints }`. The legacy `endpoints`
+// field is preserved for back-compat with older clients.
 router.get('/:id/webhooks', authenticateToken, async (req, res) => {
   const userId = req.user.id;
   const orgId = req.params.id;
   try {
     await assertMembership(prisma, orgId, userId, 'MEMBER');
+
+    const rawLimit = Number.parseInt(req.query.limit, 10);
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0
+      ? Math.min(rawLimit, 200)
+      : 50;
+    const rawPage = Number.parseInt(req.query.page, 10);
+    const page = Number.isFinite(rawPage) && rawPage > 0 ? rawPage : 1;
+
+    const where = { organizationId: orgId };
+    const total = await prisma.webhookEndpoint.count({ where });
+    const pages = total === 0 ? 0 : Math.ceil(total / limit);
     const rows = await prisma.webhookEndpoint.findMany({
-      where: { organizationId: orgId },
+      where,
       orderBy: { createdAt: 'desc' },
-      take: 200,
+      skip: (page - 1) * limit,
+      take: limit,
     });
-    res.json({ endpoints: rows.map((r) => serializeOrgWebhook(r)) });
+    const items = rows.map((r) => serializeOrgWebhook(r));
+    res.json({ items, total, page, pages, endpoints: items });
   } catch (err) {
     if (err && err.status) return res.status(err.status).json({ error: err.message });
     console.error('[orgs] list webhooks failed:', err.message);
@@ -1578,6 +1595,52 @@ router.post('/:id/webhooks/:endpointId/rotate-secret', authenticateToken, async 
     if (err && err.status) return res.status(err.status).json({ error: err.message });
     console.error('[orgs] rotate webhook secret failed:', err.message);
     res.status(500).json({ error: 'failed to rotate webhook secret' });
+  }
+});
+
+// ─── POST /api/orgs/:id/webhooks/:endpointId/toggle (ADMIN+) ────────
+// Ratchet 45 (Task 2) — flip `isActive` on an org-scoped WebhookEndpoint.
+// The cycle 65 schema already carries `isActive`; this route just
+// inverts the current value so admins can pause/resume deliveries
+// without rotating secrets or recreating the endpoint. Audit logged.
+router.post('/:id/webhooks/:endpointId/toggle', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  const endpointId = req.params.endpointId;
+
+  try {
+    const membership = await assertMembership(prisma, orgId, userId, 'ADMIN');
+    if (!canManageMembers(membership.role)) {
+      return res.status(403).json({ error: 'insufficient role to toggle webhook' });
+    }
+
+    const existing = await prisma.webhookEndpoint.findFirst({
+      where: { id: endpointId, organizationId: orgId },
+    });
+    if (!existing) return res.status(404).json({ error: 'endpoint not found' });
+
+    const nextActive = !existing.isActive;
+    const updated = await prisma.webhookEndpoint.update({
+      where: { id: existing.id },
+      data: { isActive: nextActive },
+    });
+
+    void writeAuditLog(prisma, {
+      action: 'org_webhook_toggle',
+      userId,
+      resource: 'organization',
+      resourceId: orgId,
+      before: { endpointId: existing.id, isActive: existing.isActive },
+      after: { endpointId: existing.id, isActive: updated.isActive },
+      metadata: { orgId },
+      req,
+    });
+
+    res.json({ endpoint: serializeOrgWebhook(updated) });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] toggle webhook failed:', err.message);
+    res.status(500).json({ error: 'failed to toggle webhook' });
   }
 });
 
