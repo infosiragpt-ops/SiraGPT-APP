@@ -7,7 +7,24 @@ const bcrypt = require('bcryptjs');
 const archiver = require('archiver');
 const { cascadeSoftDeleteForUser } = require('../utils/prisma-soft-delete');
 const { writeAuditLog } = require('../utils/audit-log');
+const { parseUA } = require('../utils/session-info');
 const rateLimitStore = require('../middleware/rate-limit-store');
+
+// Hash the caller IP with a per-process salt so audit rows are
+// linkable across events without storing the raw client address.
+// Salt prefers `AUDIT_IP_HASH_SALT`; falls back to `JWT_SECRET` so
+// production always has a non-empty salt. Truncated to 16 hex chars
+// (64 bits) — enough entropy to correlate, too narrow to brute-force
+// back to the original /32 without targeted intent.
+function hashIpForAudit(ip) {
+  if (!ip || typeof ip !== 'string') return null;
+  const salt = process.env.AUDIT_IP_HASH_SALT || process.env.JWT_SECRET || 'siragpt-audit';
+  return crypto
+    .createHash('sha256')
+    .update(`${salt}|${ip}`)
+    .digest('hex')
+    .slice(0, 16);
+}
 const {
   contentDispositionHeader,
   safeDownloadFilename,
@@ -364,13 +381,32 @@ router.put('/password', [
 
     // Granular audit event — password changes are a phishing /
     // takeover indicator and benefit from a dedicated action label.
+    // Cycle 17 partially wired the row; ratchet 45 extends metadata
+    // with requestId (best-effort, also written by writeAuditLog from
+    // req), a salted IP hash (NEVER the raw IP), and a parsed UA so
+    // SIEM rules can pivot on browser/os/device without re-running a
+    // UA parser at query time.
+    const rawIp = req.ip
+      || req.headers['x-forwarded-for']
+      || req.socket?.remoteAddress
+      || null;
+    const requestId = req.requestId
+      || req.headers['x-request-id']
+      || null;
+    // NOTE: we intentionally do NOT pass `req` here so the audit-log
+    // helper does not stamp the raw `ip` / `ua` into metadata — for
+    // this sensitive event we want a hashed IP and a parsed UA only.
     void writeAuditLog(prisma, {
-      req,
       action: 'password_changed',
       resource: 'user',
       resourceId: req.user.id,
       userId: req.user.id,
       actorName: req.user.email,
+      metadata: {
+        requestId: requestId ? String(requestId) : null,
+        ipHash: hashIpForAudit(rawIp ? String(rawIp) : null),
+        ua: parseUA(req.headers['user-agent'] || null),
+      },
     });
 
     res.json({ message: 'Password updated successfully' });

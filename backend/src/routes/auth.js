@@ -1223,6 +1223,35 @@ router.delete('/sessions/:id', authenticateToken, async (req, res) => {
   }
 });
 
+// POST /api/auth/sessions/revoke-all — revoke every active session for
+// the calling user EXCEPT the one bound to the current request token.
+// Returned `count` is the number of rows deleted (0 when the caller is
+// already on their only active session). Writes a single audit-log
+// event `sessions_revoked_all` with the count in metadata so SIEM can
+// alert on mass-revocations (a common post-compromise reaction).
+router.post('/sessions/revoke-all', authenticateToken, async (req, res) => {
+  try {
+    const result = await prisma.session.deleteMany({
+      where: { userId: req.user.id, NOT: { token: req.token } },
+    });
+    const count = (result && typeof result.count === 'number') ? result.count : 0;
+
+    void writeAuditLog(prisma, {
+      req,
+      action: 'sessions_revoked_all',
+      resource: 'session',
+      userId: req.user.id,
+      actorName: req.user.email,
+      metadata: { count },
+    });
+
+    res.json({ ok: true, count });
+  } catch (err) {
+    console.error('[auth/sessions/revoke-all] failed:', err && err.message ? err.message : err);
+    res.status(500).json({ error: 'Failed to revoke sessions' });
+  }
+});
+
 // ─── SSO scaffold (ratchet 45) ──────────────────────────────────────
 // Two public endpoints that resolve an org by slug and *would* hand off
 // to the configured SAML/OIDC provider. The handshake itself is not
