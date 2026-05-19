@@ -22,6 +22,7 @@ export function ImageModal({ isOpen, onClose, imageUrl, altText }: ImageModalPro
                 className="relative max-w-full max-h-full flex items-center justify-center outline-none"
                 onClick={(e) => e.stopPropagation()}
             >
+                {/* eslint-disable-next-line @next/next/no-img-element -- modal renders arbitrary upstream image URLs (uploads / mermaid.ink / data URIs); project uses images.unoptimized=true. */}
                 <img
                     src={imageUrl}
                     alt={altText}

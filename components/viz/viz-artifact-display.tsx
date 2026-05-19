@@ -144,6 +144,7 @@ function VizCard({ viz }: { viz: VizFile }) {
     switch (viz.format) {
       case "matplotlib":
         return viz.imageUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element -- matplotlib output is a data: URL produced by the python sandbox.
           <img
             src={viz.imageUrl}
             alt={viz.title || "chart"}

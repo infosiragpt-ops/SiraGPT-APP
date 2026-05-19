@@ -1,12 +1,13 @@
 "use client"
 
+import * as React from "react"
 import { Card } from "@/components/ui/card"
 
 interface SpotifyResultsProps {
     data: any
 }
 
-export default function SpotifyResults({ data }: SpotifyResultsProps) {
+function SpotifyResultsImpl({ data }: SpotifyResultsProps) {
     if (!data) return null
 
     const openSpotifyLink = (url: string) => {
@@ -36,6 +37,7 @@ export default function SpotifyResults({ data }: SpotifyResultsProps) {
                     >
                         <div className="flex items-start gap-3">
                             {track.album && track.album.images && track.album.images.length > 0 && track.album.images[0]?.url && (
+                                // eslint-disable-next-line @next/next/no-img-element -- Spotify CDN URL not in next/image allowlist; project ships with images.unoptimized=true so <img> is equivalent.
                                 <img
                                     src={track.album.images[0].url || "/placeholder.svg"}
                                     alt={track.name || "Track"}
@@ -76,6 +78,7 @@ export default function SpotifyResults({ data }: SpotifyResultsProps) {
                     >
                         <div className="flex items-start gap-3">
                             {artist.images && Array.isArray(artist.images) && artist.images.length > 0 && artist.images[0]?.url && (
+                                // eslint-disable-next-line @next/next/no-img-element -- Spotify CDN URL not allowlisted; project uses images.unoptimized=true.
                                 <img
                                     src={artist.images[0].url || "/placeholder.svg"}
                                     alt={artist.name || "Artist"}
@@ -116,6 +119,7 @@ export default function SpotifyResults({ data }: SpotifyResultsProps) {
                                 Array.isArray(playlist.images) &&
                                 playlist.images.length > 0 &&
                                 playlist.images[0]?.url && (
+                                    // eslint-disable-next-line @next/next/no-img-element -- Spotify CDN URL not allowlisted; project uses images.unoptimized=true.
                                     <img
                                         src={playlist.images[0].url || "/placeholder.svg"}
                                         alt={playlist.name || "Playlist"}
@@ -135,3 +139,10 @@ export default function SpotifyResults({ data }: SpotifyResultsProps) {
 
     return null
 }
+
+// Memoized — Spotify result objects are stable per message; without
+// memo this component re-renders on every parent re-render even when
+// `data` didn't change (MessageComponent itself is memo'd but this
+// child sits inside an inline JSX expression).
+const SpotifyResults = React.memo(SpotifyResultsImpl)
+export default SpotifyResults

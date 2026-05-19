@@ -921,6 +921,7 @@ function ImageRenderer({ a }: { a: AttachmentLike }) {
       onDoubleClick={onDoubleClick}
       style={{ cursor }}
     >
+      {/* eslint-disable-next-line @next/next/no-img-element -- viewer accepts arbitrary attachment URLs (uploads, blob:, data:); we already use raw <img> for zoom/pan transforms. */}
       <img
         src={src}
         alt={a.name}
@@ -1699,6 +1700,7 @@ function PptxRenderer({ a }: { a: AttachmentLike }) {
             {slide.images.length > 0 && (
               <div className="mt-4 flex flex-wrap gap-3">
                 {slide.images.map((src, i) => (
+                  // eslint-disable-next-line @next/next/no-img-element -- slide images come from in-memory PPTX extraction (blob: / data: URLs).
                   <img key={i} src={src} alt="" className="max-h-48 max-w-full rounded-md border border-border/40" />
                 ))}
               </div>

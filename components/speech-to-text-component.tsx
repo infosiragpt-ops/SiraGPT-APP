@@ -119,11 +119,16 @@ export default function SpeechToTextComponent() {
         }
     }, [audioUrl])
 
-    // Cleanup on component unmount
+    // Cleanup on component unmount.
+    // Capture the audio element at effect-creation time — React warns
+    // (exhaustive-deps) that ref values read inside cleanup may have
+    // changed by the time cleanup runs. Capturing locally avoids that
+    // class of bug and silences the lint rule.
     useEffect(() => {
+        const audio = audioRef.current
         return () => {
-            if (audioRef.current) {
-                audioRef.current.pause()
+            if (audio) {
+                audio.pause()
                 setIsPlaying(false)
             }
         }

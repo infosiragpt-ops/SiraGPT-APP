@@ -5,8 +5,17 @@ import { ExternalLink, Edit, Copy, Check, ZoomIn, Download } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { toast } from "sonner"
-import mermaid from "mermaid"
+// Mermaid is ~600KB. Load it on demand only when we actually need to
+// render a diagram client-side (image fallback path doesn't need it).
 import { ImageModal } from "@/components/ui/image-modal"
+
+let _mermaidPromise: Promise<typeof import("mermaid").default> | null = null
+function loadMermaid() {
+    if (!_mermaidPromise) {
+        _mermaidPromise = import("mermaid").then((m) => m.default)
+    }
+    return _mermaidPromise
+}
 
 interface FigmaDiagramProps {
     mermaidCode?: string
@@ -57,19 +66,27 @@ export function FigmaDiagramComponent({
         }
     }
 
-    // Initialize Mermaid only once
+    // Initialize Mermaid only once — and only on the client, lazily.
     React.useEffect(() => {
-        mermaid.initialize({
-            startOnLoad: false, // We'll render manually
-            theme: 'default',
-            securityLevel: 'loose',
-            flowchart: {
-                useMaxWidth: true,
-                htmlLabels: true,
-                curve: 'basis'
-            }
-        })
-    }, [])
+        let cancelled = false
+        // Only pay the mermaid chunk cost when we don't have an
+        // image URL ready to render (image path bypasses mermaid).
+        if (imageUrl) return
+        loadMermaid().then((mermaid) => {
+            if (cancelled) return
+            mermaid.initialize({
+                startOnLoad: false, // We'll render manually
+                theme: 'default',
+                securityLevel: 'loose',
+                flowchart: {
+                    useMaxWidth: true,
+                    htmlLabels: true,
+                    curve: 'basis'
+                }
+            })
+        }).catch(() => { /* mermaid optional */ })
+        return () => { cancelled = true }
+    }, [imageUrl])
 
     // Try to render Mermaid if code is available, but prefer image
     React.useEffect(() => {
@@ -86,6 +103,7 @@ export function FigmaDiagramComponent({
             const renderMermaid = async () => {
                 try {
                     setIsLoading(true)
+                    const mermaid = await loadMermaid()
                     const uniqueId = `mermaid-diagram-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
                     const { svg } = await mermaid.render(uniqueId, mermaidCode)
                     setMermaidSvg(svg)
@@ -195,6 +213,7 @@ export function FigmaDiagramComponent({
                                 onClick={() => setIsModalOpen(true)}
                                 className="w-full flex justify-center cursor-zoom-in hover:opacity-95 transition-opacity"
                             >
+                                {/* eslint-disable-next-line @next/next/no-img-element -- diagram URL comes from mermaid.ink or user backend; project uses images.unoptimized=true. */}
                                 <img
                                     src={imageUrl}
                                     alt="Flowchart Diagram"
@@ -231,8 +250,14 @@ export function FigmaDiagramComponent({
 }
 
 // Component to display Figma diagram from message files
-export function FigmaDiagramDisplay({ files }: { files: any[] }) {
-    const figmaFile = files.find(f => f.type === 'figma')
+// Memoized — `files` array reference is stable per message so we can
+// skip re-rendering the (heavy) FigmaDiagramComponent on unrelated
+// parent updates.
+function FigmaDiagramDisplayImpl({ files }: { files: any[] }) {
+    const figmaFile = React.useMemo(
+        () => (Array.isArray(files) ? files.find(f => f?.type === 'figma') : null),
+        [files]
+    )
 
     if (!figmaFile) return null
 
@@ -246,3 +271,5 @@ export function FigmaDiagramDisplay({ files }: { files: any[] }) {
         />
     )
 }
+
+export const FigmaDiagramDisplay = React.memo(FigmaDiagramDisplayImpl)
