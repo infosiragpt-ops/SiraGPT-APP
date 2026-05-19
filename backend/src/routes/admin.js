@@ -1508,15 +1508,7 @@ router.post('/webhooks/retry-failed', requireSuperAdmin, async (req, res) => {
 // GET /api/admin/audit-logs?userId=&action=&resource=&resourceId=&from=&to=&page=&limit=
 router.get('/audit-logs', requireSuperAdmin, async (req, res) => {
   try {
-    const { query: auditQuery } = require('../services/audit-query');
-    let q = auditQuery(prisma);
-    if (req.query.userId) q = q.byUser(String(req.query.userId));
-    if (req.query.action) q = q.byAction(String(req.query.action));
-    if (req.query.resource) q = q.byResource(String(req.query.resource), req.query.resourceId ? String(req.query.resourceId) : null);
-    if (req.query.from || req.query.to) q = q.byDate(req.query.from || null, req.query.to || null);
-    if (req.query.page) q = q.page(req.query.page);
-    if (req.query.limit) q = q.limit(req.query.limit);
-    const result = await q.run();
+    const result = await runAuditLogQuery(req);
     res.json(result);
   } catch (err) {
     console.error('[admin/audit-logs] failed:', err && err.message ? err.message : err);
@@ -1524,8 +1516,80 @@ router.get('/audit-logs', requireSuperAdmin, async (req, res) => {
   }
 });
 
+// ── Audit log CSV export ───────────────────────────────────────────────────
+// GET /api/admin/audit-logs.csv — same query DSL as /audit-logs but
+// streams a text/csv response for compliance / SIEM ingestion. Quoting
+// follows RFC4180: any field containing ", \r, \n, or , is wrapped in
+// double quotes with inner quotes doubled. JSON columns (`before`,
+// `after`, `metadata`) are serialised inline.
+router.get('/audit-logs.csv', requireSuperAdmin, async (req, res) => {
+  try {
+    // Force a generous default + cap so a CSV export doesn't degenerate
+    // into a tiny paginated slice. Callers can still pass ?limit=.
+    if (!req.query.limit) req.query.limit = '500';
+    const result = await runAuditLogQuery(req);
+    const items = Array.isArray(result.items) ? result.items : [];
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="audit-logs-${Date.now()}.csv"`,
+    );
+    res.write(auditLogsToCsv(items));
+    res.end();
+  } catch (err) {
+    console.error('[admin/audit-logs.csv] failed:', err && err.message ? err.message : err);
+    res.status(500).json({ error: 'Failed to export audit logs' });
+  }
+});
+
+async function runAuditLogQuery(req) {
+  const { query: auditQuery } = require('../services/audit-query');
+  let q = auditQuery(prisma);
+  if (req.query.userId) q = q.byUser(String(req.query.userId));
+  if (req.query.action) q = q.byAction(String(req.query.action));
+  if (req.query.resource) q = q.byResource(String(req.query.resource), req.query.resourceId ? String(req.query.resourceId) : null);
+  if (req.query.from || req.query.to) q = q.byDate(req.query.from || null, req.query.to || null);
+  if (req.query.page) q = q.page(req.query.page);
+  if (req.query.limit) q = q.limit(req.query.limit);
+  return q.run();
+}
+
+const AUDIT_CSV_COLUMNS = [
+  'id', 'createdAt', 'actorId', 'actorName', 'action',
+  'resourceType', 'resourceId', 'ip', 'userAgent',
+  'before', 'after', 'metadata',
+];
+
+function csvEscape(value) {
+  if (value === null || value === undefined) return '';
+  let s;
+  if (value instanceof Date) s = value.toISOString();
+  else if (typeof value === 'object') {
+    try { s = JSON.stringify(value); } catch (_) { s = String(value); }
+  } else {
+    s = String(value);
+  }
+  // RFC4180: wrap in quotes if it contains quote, comma, CR, or LF.
+  if (/[",\r\n]/.test(s)) {
+    s = `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
+}
+
+function auditLogsToCsv(items) {
+  const header = AUDIT_CSV_COLUMNS.join(',');
+  const lines = [header];
+  for (const row of items) {
+    const cells = AUDIT_CSV_COLUMNS.map((col) => csvEscape(row?.[col]));
+    lines.push(cells.join(','));
+  }
+  // Trailing newline for POSIX-friendly tools.
+  return lines.join('\r\n') + '\r\n';
+}
+
 module.exports = router;
 module.exports.metricsHandler = metricsHandler;
+module.exports.INTERNAL_CSV = { auditLogsToCsv, csvEscape, AUDIT_CSV_COLUMNS };
 module.exports.INTERNAL = {
   collectServiceHealth,
   probePostgres,

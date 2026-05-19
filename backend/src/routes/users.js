@@ -63,13 +63,37 @@ router.get('/profile', authenticateToken, async (req, res) => {
   }
 });
 
+// Strip HTML tags + control chars from free-text profile fields so a
+// pasted `<script>` / `<img onerror=...>` never round-trips through a
+// downstream renderer. Conservative: removes any tag-looking token and
+// trims whitespace; we do NOT try to be a full HTML sanitizer here
+// because these columns never carry markup by design.
+function stripHtml(input) {
+  if (typeof input !== 'string') return input;
+  // Remove tags (<...>) and HTML entities that decode to angle brackets.
+  // Also strip null bytes / control chars except tab/newline.
+  return input
+    .replace(/<\/?[^>]+>/g, '')
+    .replace(/&lt;|&gt;|&#x?\d+;?/gi, '')
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
+    .trim();
+}
+
 // Update user profile
 router.put('/profile', [
-  body('name').optional().trim().isLength({ min: 2 }).withMessage('Name must be at least 2 characters'),
+  body('name').optional().isString().trim().isLength({ min: 2, max: 100 })
+    .withMessage('Name must be 2-100 characters'),
   body('email').optional().isEmail().normalizeEmail().withMessage('Valid email required'),
   // Accept data URLs (client-encoded avatar) or remote URLs up to ~2MB
   // base64. Rejects anything non-string to keep the Prisma update safe.
   body('avatar').optional().isString().isLength({ max: 3_000_000 }),
+  body('customInstructions').optional({ nullable: true }).isString().isLength({ max: 4000 })
+    .withMessage('customInstructions max 4000 chars'),
+  body('preferredTone').optional({ nullable: true }).isString().isLength({ max: 50 })
+    .withMessage('preferredTone max 50 chars'),
+  body('locale').optional({ nullable: true }).isString().isLength({ max: 5 })
+    .withMessage('locale max 5 chars'),
 ], authenticateToken, async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -77,11 +101,26 @@ router.put('/profile', [
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const { name, email, avatar } = req.body;
+    const { name, email, avatar, customInstructions, preferredTone, locale } = req.body;
     const updateData = {};
 
-    if (name) updateData.name = name;
+    if (name) updateData.name = stripHtml(name).slice(0, 100);
     if (typeof avatar === 'string') updateData.avatar = avatar;
+    if (customInstructions !== undefined) {
+      updateData.customInstructions = customInstructions === null
+        ? null
+        : stripHtml(String(customInstructions)).slice(0, 4000);
+    }
+    if (preferredTone !== undefined) {
+      updateData.preferredTone = preferredTone === null
+        ? null
+        : stripHtml(String(preferredTone)).slice(0, 50);
+    }
+    if (locale !== undefined) {
+      updateData.locale = locale === null
+        ? null
+        : stripHtml(String(locale)).slice(0, 5);
+    }
     let previousEmail = null;
     if (email) {
       // Check if email is already taken by another user
