@@ -72,6 +72,37 @@ const STEPS = [
       return { completed };
     },
   },
+  {
+    // Checks whether the org owner has explicitly accepted the latest
+    // Terms of Service. Probes PolicyAcceptance for the latest version
+    // record keyed by the owner. Fail-soft when the table / relation
+    // is missing (e.g. mocked prisma in tests).
+    id: 'accept_legal',
+    label: 'Accept latest Terms of Service',
+    async getProgress({ prisma, ownerId }) {
+      if (!ownerId || !prisma?.policyAcceptance?.findFirst) return { completed: false };
+      const record = await prisma.policyAcceptance.findFirst({
+        where: { userId: ownerId, document: 'terms-of-service', version: 'latest' },
+      });
+      return { completed: Boolean(record) };
+    },
+  },
+  {
+    // Placeholder for the 2FA enrollment step. The full flow lives in
+    // user-security (cycle TBD); for the onboarding checklist we just
+    // peek at the owner's `settings.twoFactorEnabled` flag.
+    id: 'enable_2fa',
+    label: 'Enable two-factor authentication',
+    async getProgress({ prisma, ownerId }) {
+      if (!ownerId || !prisma?.user?.findUnique) return { completed: false };
+      const user = await prisma.user.findUnique({
+        where: { id: ownerId },
+        select: { settings: true },
+      });
+      const completed = Boolean(user?.settings?.twoFactorEnabled === true);
+      return { completed };
+    },
+  },
 ];
 
 /**

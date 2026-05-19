@@ -198,6 +198,65 @@ registerGauge('siragpt_nodejs_memory_bytes', {
   labels: ['type'],
 });
 
+// ── AI streaming usage metrics (cycle 46) ─────────────────────────────
+// Wired from the /api/ai/generate streaming `usage` event so we can
+// observe per-model / per-provider token consumption, dollar spend,
+// and end-to-end latency from the SSE response trailer.
+registerCounter('siragpt_ai_tokens_total', {
+  help: 'Total AI tokens accounted via streaming usage trailer, labelled by model, provider, and kind (input|output)',
+  labels: ['model', 'provider', 'kind'],
+});
+registerCounter('siragpt_ai_request_cost_usd_total', {
+  help: 'Total AI request cost in USD, labelled by model and provider',
+  labels: ['model', 'provider'],
+});
+registerHistogram('siragpt_ai_request_duration_seconds', {
+  help: 'AI streaming request end-to-end duration in seconds, labelled by model and provider',
+  labels: ['model', 'provider'],
+  buckets: [0.1, 0.5, 1, 2, 5, 10, 20, 30, 60, 120],
+});
+
+/**
+ * Record a single AI streaming usage sample from the /generate
+ * stream end handler. All arguments are best-effort: non-finite or
+ * missing values are coerced to safe defaults so instrumentation
+ * NEVER breaks the request path.
+ *
+ * @param {object} opts
+ * @param {string} opts.model
+ * @param {string} opts.provider
+ * @param {number} opts.inputTokens
+ * @param {number} opts.outputTokens
+ * @param {number} opts.costUSD
+ * @param {number} opts.durationSeconds
+ */
+function recordAIStreamUsage(opts) {
+  try {
+    const {
+      model,
+      provider,
+      inputTokens = 0,
+      outputTokens = 0,
+      costUSD = 0,
+      durationSeconds = 0,
+    } = opts || {};
+    const labelBase = {
+      model: String(model || 'unknown'),
+      provider: String(provider || 'unknown'),
+    };
+    const inTok = Number.isFinite(inputTokens) ? Math.max(0, inputTokens) : 0;
+    const outTok = Number.isFinite(outputTokens) ? Math.max(0, outputTokens) : 0;
+    if (inTok > 0) counter('siragpt_ai_tokens_total', { ...labelBase, kind: 'input' }, inTok);
+    if (outTok > 0) counter('siragpt_ai_tokens_total', { ...labelBase, kind: 'output' }, outTok);
+    const cost = Number.isFinite(costUSD) ? Math.max(0, costUSD) : 0;
+    if (cost > 0) counter('siragpt_ai_request_cost_usd_total', labelBase, cost);
+    const dur = Number.isFinite(durationSeconds) ? Math.max(0, durationSeconds) : 0;
+    if (dur > 0) observe('siragpt_ai_request_duration_seconds', labelBase, dur);
+  } catch {
+    // never throw from instrumentation
+  }
+}
+
 // ── Helpers that snapshot live state into the registry ───────────────────
 
 const CB_STATE_VALUE = { CLOSED: 0, HALF_OPEN: 1, OPEN: 2 };
@@ -271,6 +330,7 @@ module.exports = {
   decActiveGuards,
   getActiveGuards,
   recordAnalyzerCacheStats,
+  recordAIStreamUsage,
   refreshProcessMetrics,
   _reset,
   _clearRegistry,

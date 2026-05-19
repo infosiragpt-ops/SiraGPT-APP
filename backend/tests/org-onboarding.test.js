@@ -28,13 +28,34 @@ describe('defaultSteps', () => {
 });
 
 describe('computeProgress', () => {
-  function makePrisma({ memberCount = 1, plan = 'FREE', stripeCustomerId = null, chats = 0, integrations = 0, userName = '' } = {}) {
+  function makePrisma({
+    memberCount = 1,
+    plan = 'FREE',
+    stripeCustomerId = null,
+    chats = 0,
+    integrations = 0,
+    userName = '',
+    acceptedLegal = false,
+    twoFactorEnabled = false,
+  } = {}) {
     return {
       orgMembership: { async count() { return memberCount; } },
       organization: { async findUnique() { return { billingPlan: plan, stripeCustomerId, ownerId: 'o1' }; } },
       orgChat: { async count() { return chats; } },
       orgIntegration: { async count() { return integrations; } },
-      user: { async findUnique() { return { name: userName, email: 'x@y.z' }; } },
+      user: {
+        async findUnique({ select } = {}) {
+          if (select && select.settings) {
+            return { settings: { twoFactorEnabled } };
+          }
+          return { name: userName, email: 'x@y.z', settings: { twoFactorEnabled } };
+        },
+      },
+      policyAcceptance: {
+        async findFirst() {
+          return acceptedLegal ? { id: 'pa1', document: 'terms-of-service', version: 'latest' } : null;
+        },
+      },
     };
   }
 
@@ -52,6 +73,8 @@ describe('computeProgress', () => {
       chats: 2,
       integrations: 1,
       userName: 'Jorge',
+      acceptedLegal: true,
+      twoFactorEnabled: true,
     });
     const r = await computeProgress({ prisma, orgId: 'org1', ownerId: 'u1' });
     const byId = Object.fromEntries(r.steps.map((s) => [s.id, s.completed]));
@@ -60,7 +83,44 @@ describe('computeProgress', () => {
     assert.equal(byId.share_first_chat, true);
     assert.equal(byId.connect_integration, true);
     assert.equal(byId.set_owner_profile, true);
+    assert.equal(byId.accept_legal, true);
+    assert.equal(byId.enable_2fa, true);
     assert.equal(r.completedCount, STEPS.length);
+  });
+
+  test('accept_legal stays false when no PolicyAcceptance row exists', async () => {
+    const prisma = makePrisma({ userName: 'Jorge', acceptedLegal: false });
+    const r = await computeProgress({ prisma, orgId: 'org1', ownerId: 'u1' });
+    const step = r.steps.find((s) => s.id === 'accept_legal');
+    assert.equal(step.completed, false);
+  });
+
+  test('accept_legal flips true when PolicyAcceptance exists for terms-of-service@latest', async () => {
+    const prisma = makePrisma({ userName: 'Jorge', acceptedLegal: true });
+    const r = await computeProgress({ prisma, orgId: 'org1', ownerId: 'u1' });
+    const step = r.steps.find((s) => s.id === 'accept_legal');
+    assert.equal(step.completed, true);
+  });
+
+  test('enable_2fa stays false when owner has no settings.twoFactorEnabled', async () => {
+    const prisma = makePrisma({ userName: 'Jorge', twoFactorEnabled: false });
+    const r = await computeProgress({ prisma, orgId: 'org1', ownerId: 'u1' });
+    const step = r.steps.find((s) => s.id === 'enable_2fa');
+    assert.equal(step.completed, false);
+  });
+
+  test('enable_2fa flips true when owner.settings.twoFactorEnabled === true', async () => {
+    const prisma = makePrisma({ userName: 'Jorge', twoFactorEnabled: true });
+    const r = await computeProgress({ prisma, orgId: 'org1', ownerId: 'u1' });
+    const step = r.steps.find((s) => s.id === 'enable_2fa');
+    assert.equal(step.completed, true);
+  });
+
+  test('STEPS includes the two new onboarding steps (accept_legal + enable_2fa)', () => {
+    const ids = STEPS.map((s) => s.id);
+    assert.ok(ids.includes('accept_legal'));
+    assert.ok(ids.includes('enable_2fa'));
+    assert.equal(STEPS.length, 7);
   });
 
   test('keeps all incomplete on a fresh org', async () => {

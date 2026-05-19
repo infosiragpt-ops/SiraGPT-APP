@@ -937,6 +937,11 @@ router.post(
     const controller = new AbortController();
     const signal = controller.signal;
     const { streamId } = req.body;
+    // Wall-clock anchor for the end-to-end streaming duration metric
+    // (siragpt_ai_request_duration_seconds). Sampled at handler entry
+    // so retries, preflight, model dispatch and the actual stream are
+    // all counted toward the same observation.
+    const __generateStartedAt = Date.now();
     // SSE heartbeat handle. Allocated after flushHeaders, cleared in
     // the outer finally so a long upstream pause (e.g. tool call,
     // model thinking) plus a silently-dropped client TCP connection
@@ -3362,6 +3367,24 @@ router.post(
             costUSD,
           };
           res.write(`data: ${JSON.stringify(usagePayload)}\n\n`);
+
+          // ── Prometheus wiring (cycle 46) ─────────────────────────
+          // Increment per-model / per-provider token counters, cost
+          // counter, and end-to-end latency histogram. Defensive
+          // require so a missing metrics module never breaks /generate.
+          try {
+            const metrics = require('../utils/metrics');
+            metrics.recordAIStreamUsage({
+              model: actualModel,
+              provider: (typeof actualProvider === 'string' && actualProvider) ? actualProvider : provider,
+              inputTokens: inTokens,
+              outputTokens: outTokens,
+              costUSD,
+              durationSeconds: (Date.now() - __generateStartedAt) / 1000,
+            });
+          } catch (metricsErr) {
+            console.warn('[ai/generate] metrics record failed:', metricsErr && metricsErr.message);
+          }
         }
       } catch (usageErr) {
         console.warn('[ai/generate] usage trailer write failed:', usageErr && usageErr.message);
