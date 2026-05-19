@@ -154,12 +154,36 @@ app.set('trust proxy', 1)
 // directive shape and the CSP_* env knobs.
 const { resolveCspConfig, buildCspDirectives } = require('./src/middleware/csp-policy');
 const cspConfig = resolveCspConfig(process.env);
-app.use(helmet({
-    crossOriginResourcePolicy: { policy: "cross-origin" },
-    contentSecurityPolicy: cspConfig.enabled ? {
+// In development we skip CSP entirely to avoid breaking Next.js HMR /
+// inline runtime that injects scripts on every reload. In production we
+// honor the configured CSP (still report-only by default — see
+// csp-policy.js). HSTS is opt-in to production because the dev server
+// runs over plain http://localhost. frameguard 'deny' on top of the
+// frame-ancestors CSP directive protects browsers that still honor the
+// legacy X-Frame-Options header.
+const isProduction = process.env.NODE_ENV === 'production';
+const cspMiddlewareConfig = (() => {
+    if (!cspConfig.enabled) return false;
+    if (!isProduction && process.env.CSP_ENABLED !== '1' && process.env.CSP_ENABLED !== 'true') {
+        // dev / test: skip CSP so HMR + Next.js eval'd chunks keep working
+        return false;
+    }
+    return {
         directives: buildCspDirectives(cspConfig),
         reportOnly: cspConfig.reportOnly,
+    };
+})();
+app.use(helmet({
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+    contentSecurityPolicy: cspMiddlewareConfig,
+    frameguard: { action: 'deny' },
+    hidePoweredBy: true,
+    hsts: isProduction ? {
+        maxAge: 31536000,
+        includeSubDomains: true,
+        preload: true,
     } : false,
+    referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
 }));
 
 // Idempotency — Stripe-style replay support for POST/PUT/PATCH.

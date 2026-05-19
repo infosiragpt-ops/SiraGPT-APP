@@ -4,6 +4,61 @@ const jwt = require('jsonwebtoken');
 const { body, validationResult } = require('express-validator');
 const prisma = require('../config/database');
 const { authenticateToken } = require('../middleware/auth');
+const { makeAuthRateLimit } = require('../middleware/rate-limit-auth');
+
+// JWT audience / issuer — included in every signed token and verified
+// where we hand-decode (e.g. /end-impersonation). Allows future
+// multi-service deploys (worker, scheduler) to reject tokens not minted
+// by the API. Configurable via env so staging vs production can use
+// different identifiers and a leaked token from one env doesn't pass
+// verification in the other.
+//
+// TODO(security): refresh-token rotation. Today we re-sign a JWT with
+// the same 7d TTL on /refresh; a stolen long-lived token is replayable
+// for its full window. Migrating to short-lived access tokens (15m) +
+// rotating opaque refresh tokens persisted in the Session table is the
+// correct fix but is non-trivial — every authenticated client needs to
+// learn the new refresh contract. Tracked for a dedicated cycle.
+const JWT_ISSUER = process.env.JWT_ISSUER || 'siragpt-api';
+const JWT_AUDIENCE = process.env.JWT_AUDIENCE || 'siragpt-clients';
+const JWT_ACCESS_TTL = process.env.JWT_ACCESS_TTL || '7d';
+
+// Rate limiters scoped per sensitive endpoint. See rate-limit-auth.js
+// for the sliding-window semantics and Redis/in-memory fallback. We
+// build these once at module load so the closures share state across
+// requests.
+const loginRateLimit = makeAuthRateLimit({
+  name: 'login',
+  limit: 5,
+  windowMs: 60 * 1000, // 1 min
+  keyBy: 'ip+email',
+});
+const registerRateLimit = makeAuthRateLimit({
+  name: 'register',
+  limit: 3,
+  windowMs: 60 * 1000, // 1 min
+  keyBy: 'ip',
+});
+const forgotPasswordRateLimit = makeAuthRateLimit({
+  name: 'forgot-password',
+  limit: 3,
+  windowMs: 15 * 60 * 1000, // 15 min
+  keyBy: 'ip+email',
+});
+
+function signSessionToken(payload, opts = {}) {
+  // Fail fast at boot if the secret is missing — refuse to sign rather
+  // than producing tokens with an empty secret (which `jsonwebtoken`
+  // happily accepts and which would then be forgeable trivially).
+  if (!process.env.JWT_SECRET) {
+    throw new Error('JWT_SECRET is not configured');
+  }
+  return jwt.sign(payload, process.env.JWT_SECRET, {
+    expiresIn: opts.expiresIn || JWT_ACCESS_TTL,
+    audience: opts.audience || JWT_AUDIENCE,
+    issuer: opts.issuer || JWT_ISSUER,
+  });
+}
 const passport = require('../config/passport');
 const { OAuth2Client } = require('google-auth-library');
 const { serializeUser } = require('../utils/bigint-serializer');
@@ -95,12 +150,14 @@ router.get('/google/callback',
   async (req, res) => {
     try {
       console.log('🟡 General Google OAuth callback triggered (NOT Gmail-specific)');
-      // Create session token
-      const token = jwt.sign(
-        { userId: req.user.id },
-        process.env.JWT_SECRET,
-        { expiresIn: '7d' }
-      );
+      // Create session token — include admin claims so the rate-limit
+      // bypass + admin guards stay consistent with email/password
+      // logins. aud/iss/expiry added by signSessionToken().
+      const token = signSessionToken({
+        userId: req.user.id,
+        isAdmin: Boolean(req.user.isAdmin),
+        isSuperAdmin: Boolean(req.user.isSuperAdmin),
+      });
 
       const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
@@ -443,10 +500,28 @@ router.get('/google-services/status', authenticateToken, async (req, res) => {
 });
 
 // Register
-router.post('/register', [
-  body('name').trim().isLength({ min: 2 }).withMessage('Name must be at least 2 characters'),
-  body('email').isEmail().normalizeEmail().withMessage('Valid email required'),
-  body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters')
+router.post('/register', registerRateLimit, [
+  // Name: 2..100 chars, strip HTML tags / control chars. We keep
+  // accents + unicode letters because the user base is multilingual.
+  body('name')
+    .trim()
+    .isLength({ min: 2, max: 100 }).withMessage('Name must be between 2 and 100 characters')
+    .customSanitizer((v) => String(v).replace(/<[^>]*>/g, '').slice(0, 100)),
+  // Email: RFC max length is 254. normalizeEmail collapses gmail dots
+  // + plus tags so + tricks can't bypass uniqueness.
+  body('email')
+    .isEmail({ allow_utf8_local_part: true }).withMessage('Valid email required')
+    .isLength({ max: 254 }).withMessage('Email is too long')
+    .normalizeEmail(),
+  // Password: 8..128, at least one letter AND one number. Stronger
+  // than the previous min:6/no-complexity rule but still permissive
+  // enough that legacy users don't trip the gate on /login (login
+  // intentionally uses notEmpty() so existing weak passwords keep
+  // working until reset).
+  body('password')
+    .isLength({ min: 8, max: 128 }).withMessage('Password must be 8-128 characters')
+    .matches(/[A-Za-z]/).withMessage('Password must contain at least one letter')
+    .matches(/[0-9]/).withMessage('Password must contain at least one number'),
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -484,12 +559,13 @@ router.post('/register', [
 
     // Create session — embed isSuperAdmin claim so the rate-limit
     // bypass + downstream policy checks can use it without a DB
-    // lookup on the hot path.
-    const token = jwt.sign(
-      { userId: user.id, isAdmin: Boolean(user.isAdmin), isSuperAdmin: Boolean(user.isSuperAdmin) },
-      process.env.JWT_SECRET,
-      { expiresIn: '7d' }
-    );
+    // lookup on the hot path. aud/iss claims are added centrally via
+    // signSessionToken().
+    const token = signSessionToken({
+      userId: user.id,
+      isAdmin: Boolean(user.isAdmin),
+      isSuperAdmin: Boolean(user.isSuperAdmin),
+    });
 
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
@@ -522,9 +598,15 @@ router.post('/register', [
 });
 
 // Login
-router.post('/login', [
-  body('email').isEmail().normalizeEmail(),
-  body('password').notEmpty()
+router.post('/login', loginRateLimit, [
+  body('email')
+    .isEmail({ allow_utf8_local_part: true }).withMessage('Valid email required')
+    .isLength({ max: 254 }).withMessage('Email is too long')
+    .normalizeEmail(),
+  // Intentionally lenient on min/max here: legacy users may have weak
+  // passwords from before the register tightening landed. We still
+  // bound the upper length so a bcrypt.compare bomb can't be sent.
+  body('password').isString().isLength({ min: 1, max: 256 }),
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -551,12 +633,13 @@ router.post('/login', [
 
     // Create session — embed admin / super-admin claims so the
     // rate-limit bypass + admin route guards can read them without
-    // hitting the DB on every authenticated request.
-    const token = jwt.sign(
-      { userId: user.id, isAdmin: Boolean(user.isAdmin), isSuperAdmin: Boolean(user.isSuperAdmin) },
-      process.env.JWT_SECRET,
-      { expiresIn: '7d' }
-    );
+    // hitting the DB on every authenticated request. aud/iss claims
+    // added centrally via signSessionToken().
+    const token = signSessionToken({
+      userId: user.id,
+      isAdmin: Boolean(user.isAdmin),
+      isSuperAdmin: Boolean(user.isSuperAdmin),
+    });
 
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
@@ -617,14 +700,22 @@ router.post('/logout', authenticateToken, async (req, res) => {
 });
 
 // Refresh token
+//
+// TODO(security): implement refresh-token rotation. Currently this
+// re-signs a long-lived (7d) access token whenever the client asks.
+// A stolen token can be refreshed indefinitely until the original
+// session row is deleted. Migrating to short-lived (15m) access +
+// rotating opaque refresh tokens stored in Session is the correct
+// fix but requires coordinated FE+BE changes; tracked separately.
 router.post('/refresh', authenticateToken, async (req, res) => {
   try {
-    // Create new token
-    const newToken = jwt.sign(
-      { userId: req.user.id },
-      process.env.JWT_SECRET,
-      { expiresIn: '7d' }
-    );
+    // Create new token — re-embed admin claims so the rate-limit
+    // bypass continues to apply across refreshes.
+    const newToken = signSessionToken({
+      userId: req.user.id,
+      isAdmin: Boolean(req.user.isAdmin),
+      isSuperAdmin: Boolean(req.user.isSuperAdmin),
+    });
 
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
@@ -703,6 +794,8 @@ router.post('/impersonate/:userId', authenticateToken, async (req, res) => {
     const rate = recordImpersonationAttempt(req.user.id, userId);
     if (!rate.ok) {
       console.warn(`[SUPER_ADMIN_AUDIT] impersonate_rate_limited admin=${req.user.email} target=${userId}`);
+      const retryAfterSec = Math.max(1, Math.ceil(rate.retryAfterMs / 1000));
+      res.set('Retry-After', String(retryAfterSec));
       return res.status(429).json({
         error: 'Too many impersonations for this target. Try again later.',
         retryAfterMs: rate.retryAfterMs,
@@ -718,13 +811,12 @@ router.post('/impersonate/:userId', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Cannot impersonate other super admins' });
     }
 
-    const impersonationToken = jwt.sign(
+    const impersonationToken = signSessionToken(
       {
         userId: targetUser.id,
         impersonatedBy: req.user.id,
         isImpersonation: true,
       },
-      process.env.JWT_SECRET,
       { expiresIn: '30m' }
     );
 
@@ -779,11 +871,11 @@ router.post('/end-impersonation', authenticateToken, async (req, res) => {
     });
 
     // Create new session for super admin
-    const newToken = jwt.sign(
-      { userId: superAdmin.id },
-      process.env.JWT_SECRET,
-      { expiresIn: '7d' }
-    );
+    const newToken = signSessionToken({
+      userId: superAdmin.id,
+      isAdmin: Boolean(superAdmin.isAdmin),
+      isSuperAdmin: Boolean(superAdmin.isSuperAdmin),
+    });
 
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
