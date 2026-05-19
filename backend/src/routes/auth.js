@@ -813,6 +813,38 @@ router.post('/login', loginRateLimit, validateBody(LoginRequestSchema, { codePre
       }
     }
 
+    // ─── TOTP 2FA gate (ratchet 45) ────────────────────────────
+    // When the user has enrolled TOTP (totpEnabled = true) but has NOT
+    // opted into SMS 2FA (twoFactorEnabled = false), we still refuse to
+    // mint a full session JWT until they prove possession of the
+    // authenticator app. The client receives a partial-session token
+    // and submits POST /api/auth/2fa/totp/verify { code } to redeem the
+    // full token. SMS-enabled users keep the SMS-only flow above (TOTP
+    // is treated as the secondary lever there — out of scope for this
+    // cycle).
+    if (user.totpEnabled && !user.twoFactorEnabled) {
+      try {
+        const partial = await mintPartialSession(user.id);
+        void writeAuditLog(prisma, {
+          req,
+          action: 'login_totp_required',
+          resource: 'user',
+          resourceId: user.id,
+          userId: user.id,
+          actorName: user.email,
+        });
+        return res.status(202).json({
+          twoFactorRequired: true,
+          method: 'totp',
+          partialToken: partial.token,
+          expiresAt: partial.expiresAt.toISOString(),
+        });
+      } catch (e) {
+        console.error('[auth/login] partial-session mint failed:', e?.message || e);
+        return res.status(500).json({ error: 'Failed to issue TOTP challenge' });
+      }
+    }
+
     // Create session — embed admin / super-admin claims so the
     // rate-limit bypass + admin route guards can read them without
     // hitting the DB on every authenticated request. aud/iss claims
@@ -1749,7 +1781,152 @@ router.post(
   },
 );
 
+// ─── TOTP login bridge (ratchet 45) ─────────────────────────────────
+// A partial-session token is a 32-byte hex string persisted in
+// PartialSession with a 5-minute TTL. It is NOT a JWT — the
+// /api/auth/2fa/totp/verify handler looks it up by token, checks
+// expiresAt + consumedAt, marks it consumed atomically, and only
+// then mints a full session JWT for the bound userId.
+const PARTIAL_SESSION_TTL_MS = 5 * 60 * 1000;
+
+async function mintPartialSession(userId) {
+  const { randomBytes } = require('node:crypto');
+  const token = randomBytes(32).toString('hex');
+  const expiresAt = new Date(Date.now() + PARTIAL_SESSION_TTL_MS);
+  await prisma.partialSession.create({
+    data: { token, userId, expiresAt },
+  });
+  return { token, expiresAt };
+}
+
+const totpVerifyRateLimit = makeAuthRateLimit({
+  name: '2fa-totp-verify',
+  limit: 10,
+  windowMs: 15 * 60 * 1000,
+  keyBy: 'ip',
+});
+
+router.post(
+  '/2fa/totp/verify',
+  totpVerifyRateLimit,
+  [
+    body('code').isString().matches(/^\d{6}$/).withMessage('code must be a 6-digit string'),
+    body('partialToken').isString().isLength({ min: 32, max: 256 }),
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+      const { code, partialToken } = req.body;
+
+      const row = await prisma.partialSession.findUnique({
+        where: { token: partialToken },
+      });
+      if (!row) {
+        return res.status(404).json({ error: 'partial session not found' });
+      }
+      if (row.consumedAt) {
+        return res.status(409).json({ error: 'partial session already used' });
+      }
+      if (row.expiresAt.getTime() < Date.now()) {
+        return res.status(410).json({ error: 'partial session expired' });
+      }
+
+      const user = await prisma.user.findUnique({ where: { id: row.userId } });
+      if (!user || !user.totpSecret || !user.totpEnabled) {
+        return res.status(400).json({ error: 'TOTP not enabled for user' });
+      }
+
+      // Reuse the same envelope decoder the users router uses. Lazy
+      // require() avoids circular module loads when this file is
+      // pulled in by the tests' require cache.
+      const { INTERNAL } = require('./users');
+      const secret = INTERNAL.decryptTotpSecret(user.totpSecret);
+      if (!secret) {
+        return res.status(500).json({ error: 'Stored TOTP secret is unreadable' });
+      }
+
+      const { verifyTotp } = require('../services/auth/totp');
+      const ok = verifyTotp(String(code), secret, { window: 1 });
+      if (!ok) {
+        void writeAuditLog(prisma, {
+          req,
+          action: 'login_totp_failed',
+          resource: 'user',
+          resourceId: user.id,
+          userId: user.id,
+          actorName: user.email,
+        });
+        return res.status(401).json({ error: 'Invalid TOTP code', code: 'totp_invalid' });
+      }
+
+      // Atomically consume the partial session. If another concurrent
+      // verify already flipped it we treat that as 409 — defence-in-
+      // depth against double-spend should a client retry.
+      const consumed = await prisma.partialSession.updateMany({
+        where: { token: partialToken, consumedAt: null },
+        data: { consumedAt: new Date() },
+      });
+      if (!consumed || (typeof consumed.count === 'number' && consumed.count === 0)) {
+        return res.status(409).json({ error: 'partial session already used' });
+      }
+
+      // Mint the full session JWT — mirrors the email/password path.
+      const token = signSessionToken({
+        userId: user.id,
+        isAdmin: Boolean(user.isAdmin),
+        isSuperAdmin: Boolean(user.isSuperAdmin),
+      });
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      const fingerprint = computeFingerprint(req);
+      try {
+        await prisma.session.create({
+          data: { userId: user.id, token, expiresAt, fingerprint },
+        });
+      } catch (e) {
+        if (e && /fingerprint/i.test(String(e.message))) {
+          await prisma.session.create({ data: { userId: user.id, token, expiresAt } });
+        } else {
+          throw e;
+        }
+      }
+
+      const { password: _pw, ...userWithoutPassword } = user;
+      const serializedUser = serializeUser(userWithoutPassword);
+
+      void writeAuditLog(prisma, {
+        req,
+        action: 'login_totp_verified',
+        resource: 'user',
+        resourceId: user.id,
+        userId: user.id,
+        actorName: user.email,
+      });
+
+      res.cookie('token', token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 7 * 24 * 60 * 60 * 1000,
+      });
+      const csrfToken = issueCsrfToken(res);
+
+      return res.json({
+        ok: true,
+        user: serializedUser,
+        token,
+        csrfToken,
+      });
+    } catch (error) {
+      console.error('[auth/2fa/totp/verify] failed:', error?.message || error);
+      return res.status(500).json({ error: 'Failed to verify TOTP code' });
+    }
+  },
+);
+
 // Expose helpers for unit tests (mirrors the SSO __ssoHelpers pattern).
-router.__twoFAHelpers = { twoFASms };
+router.__twoFAHelpers = { twoFASms, mintPartialSession, PARTIAL_SESSION_TTL_MS };
 
 module.exports = router;

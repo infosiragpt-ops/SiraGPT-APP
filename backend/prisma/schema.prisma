@@ -126,6 +126,7 @@ model User {
   emailVerificationTokens EmailVerificationToken[]
   phoneVerifications      PhoneVerification[]
   twoFAChallenges         TwoFAChallenge[]
+  partialSessions         PartialSession[]
 
   // Organization / team membership — multi-tenant scaffolding (cycle 27).
   // A user can belong to multiple organizations with different roles.
@@ -1605,4 +1606,31 @@ model TwoFAChallenge {
   @@index([userId])
   @@index([lookup])
   @@map("two_fa_challenges")
+}
+
+// Partial session bridge (ratchet 45, TOTP login gate).
+//
+// When the login handler determines the user must complete a TOTP
+// challenge (totpEnabled = true and twoFactorEnabled = false), it
+// mints a short-lived (5 minute) opaque token persisted here instead
+// of issuing a full session JWT. The client echoes the token back to
+// `POST /api/auth/2fa/totp/verify` together with the 6-digit code; on
+// success the row is consumed and a real Session + JWT are minted.
+//
+// Single-use semantics: `consumedAt` is set the first time the token
+// is redeemed and subsequent lookups are rejected. The expiresAt
+// column lets a sweeper GC stale rows without a separate scheduler.
+model PartialSession {
+  id         String    @id @default(cuid())
+  token      String    @unique
+  userId     String
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("partial_sessions")
 }
