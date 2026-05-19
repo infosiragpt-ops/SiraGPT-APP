@@ -417,7 +417,8 @@ describe('user journey · webhook + Slack notifications', () => {
     const payload = { event: 'chat.created', chatId: 'c1' };
     const ts = Math.floor(Date.now() / 1000);
     const sig = dispatcher.signPayload(secret, payload, ts);
-    assert.match(sig, /^t=\d+,v1=[a-f0-9]+$/);
+    // Header now also carries n=<nonce> (cycle 112) and v2=<hex> (cycle 103).
+    assert.match(sig, /^t=\d+,n=[a-f0-9]+,v1=[a-f0-9]+,v2=[a-f0-9]+$/);
 
     assert.equal(dispatcher.verifySignature(secret, payload, sig), true);
     assert.equal(dispatcher.verifySignature('wrong', payload, sig), false);

@@ -1252,6 +1252,211 @@ router.post(
   },
 );
 
+// ────────────────────────────────────────────────────────────
+// Ratchet 45, Task 1 — Phone verification.
+//
+// PUT  /api/users/me/phone          { phone }
+//   → mints a 6-digit OTP, hashes it (bcrypt) into a fresh
+//     PhoneVerification row, fans the plaintext to the user via
+//     Twilio SMS, and returns expiresAt + a generic success body.
+//     Rate-limited to 1 send / minute / user via rateLimitStore.consume.
+//
+// POST /api/users/me/phone/verify   { code }
+//   → matches the 6-digit code against the most recent active row,
+//     enforces MAX_VERIFY_ATTEMPTS=5 per row, on success sets
+//     User.phone + User.phoneVerifiedAt and marks the row consumed.
+//
+// SMS sender uses TWILIO_FROM_NUMBER or TWILIO_MESSAGING_SERVICE_SID;
+// gracefully degrades to a "skipped" reason when Twilio isn't
+// configured so dev/test envs still get a 200 response.
+// ────────────────────────────────────────────────────────────
+const phoneVerification = require('../services/phone-verification');
+
+const PHONE_RESEND_WINDOW_MS = 60 * 1000; // 1 minute
+const PHONE_RESEND_LIMIT = 1;
+
+router.put(
+  '/me/phone',
+  authenticateToken,
+  [
+    body('phone')
+      .isString()
+      .trim()
+      .isLength({ min: 9, max: 16 })
+      .withMessage('phone required'),
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+      const { phone } = req.body;
+      if (!phoneVerification.isValidPhone(phone)) {
+        return res.status(400).json({
+          error: 'phone must be E.164 (e.g. +14155551234)',
+        });
+      }
+
+      // 1 send per minute per user. Rate-limit is intentionally keyed
+      // on userId (not IP) so a roaming user on changing networks
+      // still gets the cooldown they expect.
+      const key = `phone-verify-send:${req.user.id}`;
+      let allowed = true;
+      let retryAfterMs = 0;
+      try {
+        const result = await rateLimitStore.consume(
+          key,
+          PHONE_RESEND_LIMIT,
+          PHONE_RESEND_WINDOW_MS,
+        );
+        if (!result.allowed) {
+          allowed = false;
+          retryAfterMs = Math.max(0, result.resetAt.getTime() - Date.now());
+        }
+      } catch (_err) {
+        // Store unavailable — fail open so legitimate verification
+        // requests still succeed. The 1/min cap is a soft guard, not
+        // a security boundary (the per-row 5-attempt cap below is).
+      }
+      if (!allowed) {
+        const retryAfterSec = Math.max(1, Math.ceil(retryAfterMs / 1000));
+        res.set('Retry-After', String(retryAfterSec));
+        return res.status(429).json({
+          error: 'Please wait before requesting a new verification code.',
+          retryAfterMs,
+        });
+      }
+
+      const { code, expiresAt } = await phoneVerification.createPhoneChallenge(
+        prisma,
+        req.user.id,
+        phone,
+      );
+
+      const smsResult = await phoneVerification.sendSms(phone, code);
+
+      // Granular audit event — we DO NOT include the plaintext code.
+      void writeAuditLog(prisma, {
+        req,
+        action: 'phone_verification_sent',
+        resource: 'user',
+        resourceId: req.user.id,
+        userId: req.user.id,
+        metadata: {
+          phoneMasked: phone.replace(/.(?=.{4})/g, '*'),
+          smsSent: Boolean(smsResult.sent),
+          smsReason: smsResult.reason || null,
+        },
+      });
+
+      const responseBody = {
+        ok: true,
+        expiresAt: expiresAt.toISOString(),
+        smsSent: Boolean(smsResult.sent),
+      };
+      // Surface the skip reason (no-twilio-env, no-twilio-lib, etc.) so
+      // dev clients understand why no SMS arrived. Never include the
+      // plaintext code here.
+      if (!smsResult.sent && smsResult.reason) {
+        responseBody.smsSkippedReason = smsResult.reason;
+      }
+      return res.json(responseBody);
+    } catch (error) {
+      if (error?.code === 'invalid_phone') {
+        return res.status(400).json({
+          error: 'phone must be E.164 (e.g. +14155551234)',
+        });
+      }
+      console.error('Phone verification send error:', error);
+      return res.status(500).json({ error: 'Failed to send verification code' });
+    }
+  },
+);
+
+router.post(
+  '/me/phone/verify',
+  authenticateToken,
+  [
+    body('code')
+      .isString()
+      .trim()
+      .isLength({ min: 6, max: 6 })
+      .withMessage('6-digit code required'),
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+      const { code } = req.body;
+      const result = await phoneVerification.verifyPhoneChallenge(
+        prisma,
+        req.user.id,
+        code,
+      );
+
+      if (result.ok) {
+        void writeAuditLog(prisma, {
+          req,
+          action: 'phone_verified',
+          resource: 'user',
+          resourceId: req.user.id,
+          userId: req.user.id,
+          metadata: {
+            phoneMasked: result.phone
+              ? result.phone.replace(/.(?=.{4})/g, '*')
+              : null,
+          },
+        });
+        return res.json({
+          ok: true,
+          phoneVerifiedAt: result.verifiedAt instanceof Date
+            ? result.verifiedAt.toISOString()
+            : new Date().toISOString(),
+        });
+      }
+
+      // Map service-layer status codes onto HTTP responses. We DO NOT
+      // leak per-row attempt counts to unauthenticated callers, but
+      // authenticated users can see how many tries remain.
+      switch (result.code) {
+        case 'invalid_input':
+          return res.status(400).json({ error: 'code must be 6 digits' });
+        case 'not_found':
+          return res.status(404).json({ error: 'No active verification code' });
+        case 'expired':
+          return res.status(410).json({ error: 'Verification code expired' });
+        case 'too_many_attempts':
+          void writeAuditLog(prisma, {
+            req,
+            action: 'phone_verification_locked',
+            resource: 'user',
+            resourceId: req.user.id,
+            userId: req.user.id,
+            metadata: { attempts: result.attempts },
+          });
+          return res.status(429).json({
+            error: 'Too many attempts. Request a new code.',
+            attempts: result.attempts,
+          });
+        case 'invalid_code':
+          return res.status(400).json({
+            error: 'Invalid verification code',
+            attempts: result.attempts,
+            remaining: result.remaining,
+          });
+        default:
+          return res.status(400).json({ error: 'Verification failed' });
+      }
+    } catch (error) {
+      console.error('Phone verification verify error:', error);
+      return res.status(500).json({ error: 'Failed to verify code' });
+    }
+  },
+);
+
 module.exports = router;
 // Test-only internals (ratchet 45)
 module.exports.INTERNAL = {

@@ -75,6 +75,11 @@ model User {
   // through Twilio. Nullable: users without a phone simply skip SMS.
   phone String?
 
+  // Phone verification — non-null once the user has redeemed a 6-digit
+  // SMS code issued by `PUT /api/users/me/phone` and accepted by
+  // `POST /api/users/me/phone/verify` (ratchet 45, Task 1).
+  phoneVerifiedAt DateTime?
+
   // Relations
   chats                   Chat[]
   payments                Payment[]
@@ -101,6 +106,7 @@ model User {
   policyAcceptances       PolicyAcceptance[]
   apiKeys                 ApiKey[]
   emailVerificationTokens EmailVerificationToken[]
+  phoneVerifications      PhoneVerification[]
 
   // Organization / team membership — multi-tenant scaffolding (cycle 27).
   // A user can belong to multiple organizations with different roles.
@@ -1520,4 +1526,27 @@ model EmailVerificationToken {
 
   @@index([userId])
   @@map("email_verification_tokens")
+}
+
+// Phone-verification challenge (ratchet 45, Task 1).
+//
+// Holds the bcrypt-hashed 6-digit SMS code issued by
+// `PUT /api/users/me/phone`. Single-use, TTL 10 minutes (override with
+// `PHONE_VERIFICATION_TTL_MS`), at most 5 verify attempts per row
+// before it's invalidated. The plaintext code is never persisted — we
+// only keep its hash so a DB leak doesn't expose live OTPs.
+model PhoneVerification {
+  id         String    @id @default(cuid())
+  userId     String
+  phone      String
+  codeHash   String
+  expiresAt  DateTime
+  attempts   Int       @default(0)
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("phone_verifications")
 }
