@@ -920,12 +920,112 @@ async function getAnalysisForFile(prisma, { userId, fileId } = {}) {
   return serializeAnalysis(analysis, analysis?.chunks || [], analysis?.tables || []);
 }
 
+/**
+ * Compare two or more documents and return a comparison report with:
+ *  - per-document summary + evidence for the query
+ *  - shared / distinct terms between pairs
+ *  - per-document table count
+ */
+async function compareDocuments(prisma, { userId, fileIds = [], query = '', limit = 5 } = {}) {
+  if (!prisma?.file || !userId || !Array.isArray(fileIds) || fileIds.length < 2) {
+    return { documents: [], comparisons: [] };
+  }
+
+  const documents = [];
+  for (const fileId of fileIds) {
+    let file = null;
+    try {
+      file = await prisma.file.findFirst({ where: { id: fileId, userId } });
+    } catch (_) { file = null; }
+    if (!file) continue;
+
+    const text = cleanText(file.extractedText || '');
+    const chunks = buildChunks(file, text);
+    const tables = await buildTables(file, text);
+
+    // Best-effort: persist analysis so retrieveEvidence sees stored chunks.
+    try {
+      await analyzeFile(prisma, { userId, fileId: file.id, fileRecord: file, force: true });
+    } catch (_) { /* persistence is optional in tests/mocks */ }
+
+    let evidence = [];
+    try {
+      const res = await retrieveEvidence(prisma, {
+        userId,
+        fileId: file.id,
+        query: query || file.originalName || file.filename || 'documento',
+        limit,
+      });
+      evidence = res.evidence || [];
+    } catch (_) { evidence = []; }
+
+    // Fallback: when no query/evidence match, surface the first chunk as
+    // a deterministic representative so callers always have at least one
+    // anchor per document.
+    if (!evidence.length && chunks.length) {
+      evidence = chunks.slice(0, 1).map((c) => ({ ...c, relevanceScore: 0, matchedTerms: [] }));
+    }
+
+    documents.push({
+      fileId: file.id,
+      originalName: file.originalName || file.filename || 'documento',
+      mimeType: file.mimeType || null,
+      summary: buildSummary(file, text, chunks, tables),
+      chunkCount: chunks.length,
+      tableCount: tables.length,
+      evidence,
+    });
+  }
+
+  // Pairwise comparisons — shared significant terms + simple deltas.
+  const STOP = new Set([
+    'para', 'como', 'este', 'esta', 'esto', 'con', 'por', 'que', 'del',
+    'las', 'los', 'una', 'uno', 'mas', 'pero', 'sino', 'todo', 'entre', 'sobre',
+    'cada', 'años', 'tiene', 'puede', 'hasta', 'desde', 'donde',
+    'the', 'this', 'that', 'with', 'from', 'have', 'which', 'their', 'about',
+  ]);
+  function termsOf(text) {
+    return new Set(
+      (String(text || '').toLowerCase().match(/[a-záéíóúñ]{5,}/g) || [])
+        .filter((t) => !STOP.has(t))
+    );
+  }
+
+  const comparisons = [];
+  for (let i = 0; i < documents.length; i++) {
+    for (let j = i + 1; j < documents.length; j++) {
+      const a = documents[i];
+      const b = documents[j];
+      const aTerms = termsOf(documents[i].summary + ' ' + (documents[i].evidence.map((e) => e.text).join(' ')));
+      const bTerms = termsOf(documents[j].summary + ' ' + (documents[j].evidence.map((e) => e.text).join(' ')));
+      const shared = [...aTerms].filter((t) => bTerms.has(t));
+      const onlyA = [...aTerms].filter((t) => !bTerms.has(t));
+      const onlyB = [...bTerms].filter((t) => !aTerms.has(t));
+      comparisons.push({
+        fileA: a.fileId,
+        fileB: b.fileId,
+        sharedTerms: shared.slice(0, 30),
+        onlyInA: onlyA.slice(0, 30),
+        onlyInB: onlyB.slice(0, 30),
+        deltas: {
+          chunkCount: a.chunkCount - b.chunkCount,
+          tableCount: a.tableCount - b.tableCount,
+        },
+      });
+    }
+  }
+
+  return { documents, comparisons };
+}
+
 module.exports = {
   analyzeFile,
   getAnalysisForFile,
   retrieveEvidence,
   buildChunks,
   buildTables,
+  buildSummary,
+  compareDocuments,
   hasUsefulText,
   cleanText,
   inferCounts,
