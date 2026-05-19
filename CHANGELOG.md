@@ -4,6 +4,63 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and improvement cycles follow a sequential number with the date the work landed.
 
+## [0.2.5 / backend 1.1.5] — Cycles 81-90 milestone — 2026-05-19
+
+Ninth-decade marker. Patch bumps only (root `0.2.4 → 0.2.5`, backend
+`1.1.4 → 1.1.5`) — cycles 81-90 focused on settings hardening, export
+integrity, cost observability and SSO scaffolding with no public API
+breaks. See `docs/cycles/CYCLE_90.md` for the milestone narrative.
+
+### Added
+- **Cycle 90 — milestone consolidation**: `docs/cycles/CYCLE_90.md`
+  marker doc + CHANGELOG cycles 81-90 sweep + version bump to
+  `0.2.5 / 1.1.5`.
+- **Cycle 89 — requireScope + API key counter**: `requireScope`
+  middleware enforces per-route scope clearance; per-API-key invocation
+  counter for rate + usage analytics.
+- **Cycle 88 — API keys org-scoped + bearer fallthrough**: API keys
+  carry `orgId` and scope authorization; bearer auth falls through to
+  API key when JWT absent.
+- **Cycle 87 — SSO scaffold + cost-tracker edges**: SAML and OIDC route
+  stubs returning 501 Not Implemented; cost-tracker edge cases
+  (negative duration, zero tokens, missing model) hardened.
+- **Cycle 86 — AI cost alerts + SSE metrics**: threshold-based AI cost
+  alert notifier; SSE channel metrics (open/close/heartbeat) surfaced.
+- **Cycle 85 — members cache + usage-trend**: short-TTL cache for member
+  rosters; `usage-trend` endpoint exposes per-org trend deltas.
+- **Cycle 84 — maintenance metric + locale drift detector**:
+  maintenance-mode short-circuits emit metric; locale drift detector
+  flags missing/extra keys across translation bundles.
+- **Cycle 83 — GDPR export metrics + SearchPanel retry**: counters and
+  histograms for GDPR export jobs; SearchPanel UI gains retry on
+  transient failure.
+- **Cycle 82 — export integrity SHA-256 + CSRF in login/register**:
+  exports emit SHA-256 manifest for tamper detection; CSRF tokens
+  enforced on login + register flows.
+- **Cycle 81 — zod settings + member activity**: strict zod schema
+  validation for org settings JSON; per-member activity feed surfacing
+  recent actions.
+
+### Changed
+- Lint ratchet held at `--max-warnings 45` across cycles 81-90.
+- Root `package.json` version `0.2.4 → 0.2.5`.
+- Backend `package.json` version `1.1.4 → 1.1.5`.
+
+### Fixed
+- Cost-tracker edge cases hardened (cycle 87).
+- Stability fixes carried in feature cycles. See individual cycle
+  entries for specifics.
+
+### Security
+- CSRF tokens on login + register (cycle 82).
+- Export integrity SHA-256 manifests (cycle 82).
+- Zod schema validation on org settings (cycle 81).
+- API key org-scoping + scope-based authorization (cycles 88, 89).
+- SSO scaffolding stubs returning 501 until promoted (cycle 87).
+
+### Removed
+- None in cycles 81-90.
+
 ## [0.2.4 / backend 1.1.4] — Cycles 71-80 milestone — 2026-05-19
 
 Eighth-decade marker. Patch bumps only (root `0.2.3 → 0.2.4`, backend
