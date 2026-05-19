@@ -17,6 +17,7 @@
  *   POST   /api/orgs/:id/chats/:chatId/share            — share a chat into the org
  *   GET    /api/orgs/:id/chats                          — list chats shared into the org
  *   GET    /api/orgs/:id/audit-logs                     — org-scoped audit feed (ADMIN+; cycle 66)
+ *   GET    /api/orgs/:id/members/:userId/activity       — recent audit rows for a single member (ADMIN+; cycle 78)
  *   GET    /api/orgs/:id/events                         — live SSE tail of audit feed (ADMIN+; cycle 78)
  *   GET    /api/orgs/:id/settings                       — read per-org settings (member; cycle 66)
  *   PATCH  /api/orgs/:id/settings                       — merge per-org settings (ADMIN+; cycle 66)
@@ -43,6 +44,7 @@ const {
 } = require('../services/orgs-service');
 const { defaultSteps, computeProgress } = require('../services/org-onboarding');
 const { responseCache } = require('../middleware/response-cache');
+const { parseOrgSettingsPatch } = require('../schemas/orgs');
 
 const router = express.Router();
 
@@ -1278,6 +1280,57 @@ async function listOrgAuditLogsHandler(req, res, deps = { prisma }) {
 
 router.get('/:id/audit-logs', authenticateToken, (req, res) => listOrgAuditLogsHandler(req, res));
 
+// ─── GET /api/orgs/:id/members/:userId/activity (cycle 78) ──────────
+// Recent audit-log rows scoped to (this org, this member). Useful for
+// compliance ("show me everything user X did inside org Y in the last
+// 50 events") and for debugging access incidents. ADMIN+ only — the
+// rows can leak invitation tokens, billing snapshots, etc.
+async function listMemberActivityHandler(req, res, deps = { prisma }) {
+  const db = deps.prisma || prisma;
+  const callerId = req.user.id;
+  const orgId = req.params.id;
+  const memberId = req.params.userId;
+  if (!memberId || typeof memberId !== 'string') {
+    return res.status(400).json({ error: 'userId is required' });
+  }
+  try {
+    // Caller must be ADMIN+ of *this* org. We deliberately do NOT
+    // require the target user to currently be a member — a removed
+    // member's history is precisely what an admin needs for compliance.
+    const membership = await assertMembership(db, orgId, callerId, 'ADMIN');
+    if (!canManageMembers(membership.role)) {
+      return res.status(403).json({ error: 'insufficient role to view member activity' });
+    }
+    const { query: auditQuery } = require('../services/audit-query');
+    // Hard ceiling of 50 — the endpoint is meant for a quick activity
+    // strip, not deep pagination. Use the org-wide audit-logs endpoint
+    // for full pagination + filters.
+    const result = await auditQuery(db)
+      .byOrg(orgId)
+      .byUser(memberId)
+      .limit(50)
+      .order('desc')
+      .run();
+    res.json({
+      userId: memberId,
+      orgId,
+      items: Array.isArray(result?.items) ? result.items : [],
+      total: typeof result?.total === 'number' ? result.total : 0,
+      limit: 50,
+    });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] member activity failed:', err.message);
+    res.status(500).json({ error: 'failed to query member activity' });
+  }
+}
+
+router.get(
+  '/:id/members/:userId/activity',
+  authenticateToken,
+  (req, res) => listMemberActivityHandler(req, res),
+);
+
 // ─── GET /api/orgs/:id/events (ADMIN+, SSE) ─────────────────────────
 // Live tail of audit events for the org. Mechanics:
 //   - On connect, emits a `ready` event followed by a backfill of any
@@ -1501,6 +1554,24 @@ async function patchOrgSettingsHandler(req, res, deps = { prisma, writeAuditLog 
   if (patch === null) {
     return res.status(400).json({ error: 'settings must be a JSON object' });
   }
+  // Zod shape-check on the known keys. Unknown keys are tolerated for
+  // forward-compat but are surfaced as `warnings` on the response so the
+  // FE / ops know when callers are sending undeclared fields. A failed
+  // parse on a *known* key (e.g. `responseStyle: 'verbose'`) is a hard
+  // 400 — that's the whole point of the schema.
+  const parsed = parseOrgSettingsPatch(patch);
+  if (parsed.error) {
+    return res.status(400).json({
+      error: parsed.error.message,
+      issues: parsed.error.issues || undefined,
+    });
+  }
+  const warnings = parsed.warnings;
+  if (warnings.length) {
+    // Log once per PATCH for observability — bounded by the unknown-key
+    // count which is tiny in practice.
+    console.warn('[orgs] settings patch had unknown keys:', warnings.join(','));
+  }
   try {
     const membership = await assertMembership(db, orgId, userId, 'ADMIN');
     if (!canManageMembers(membership.role)) {
@@ -1528,7 +1599,9 @@ async function patchOrgSettingsHandler(req, res, deps = { prisma, writeAuditLog 
       metadata: { orgId },
       req,
     });
-    res.json({ settings: updated.settings || {} });
+    const responseBody = { settings: updated.settings || {} };
+    if (warnings.length) responseBody.warnings = warnings;
+    res.json(responseBody);
   } catch (err) {
     if (err && err.status) return res.status(err.status).json({ error: err.message });
     console.error('[orgs] patch settings failed:', err.message);
@@ -1545,6 +1618,7 @@ router.__handlers = {
   transferOwnership: transferOwnershipHandler,
   leaveOrg: leaveOrgHandler,
   listOrgAuditLogs: listOrgAuditLogsHandler,
+  listMemberActivity: listMemberActivityHandler,
   getOrgSettings: getOrgSettingsHandler,
   patchOrgSettings: patchOrgSettingsHandler,
   streamOrgEvents: streamOrgEventsHandler,

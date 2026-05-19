@@ -13,10 +13,12 @@ const orgsRouter = require('../src/routes/orgs');
 
 const {
   listOrgAuditLogs,
+  listMemberActivity,
   getOrgSettings,
   patchOrgSettings,
 } = orgsRouter.__handlers;
 const { sanitizeSettings, mergeSettings } = orgsRouter.__settingsHelpers;
+const { parseOrgSettingsPatch } = require('../src/schemas/orgs');
 
 function makeRes() {
   let status = 200;
@@ -294,5 +296,147 @@ test('patch settings: rejects non-object payload (400)', async () => {
   const req = { user: { id: 'a1' }, params: { id: 'o1' }, body: { settings: [1, 2, 3] } };
   const res = makeRes();
   await patchOrgSettings(req, res, { prisma, writeAuditLog });
+  assert.equal(res._status, 400);
+});
+
+// ─── zod schema validation (cycle 78) ───────────────────────────────
+
+test('parseOrgSettingsPatch: accepts known keys with valid shape', () => {
+  const r = parseOrgSettingsPatch({
+    defaultModel: 'opus-4-7',
+    responseStyle: 'concise',
+    branding: { primaryColor: '#0af', logoUrl: 'https://x.test/logo.png' },
+    features: { betaCowork: true, betaAgents: false },
+  });
+  assert.equal(r.error, null);
+  assert.deepEqual(r.warnings, []);
+  assert.equal(r.value.defaultModel, 'opus-4-7');
+});
+
+test('parseOrgSettingsPatch: rejects unknown enum value for responseStyle', () => {
+  const r = parseOrgSettingsPatch({ responseStyle: 'verbose' });
+  assert.ok(r.error, 'expected error');
+  assert.ok(Array.isArray(r.error.issues));
+  assert.ok(r.error.issues.some((i) => i.path === 'responseStyle'));
+});
+
+test('parseOrgSettingsPatch: rejects malformed branding.primaryColor', () => {
+  const r = parseOrgSettingsPatch({ branding: { primaryColor: 'not-a-color' } });
+  assert.ok(r.error);
+  assert.ok(r.error.issues.some((i) => i.path.startsWith('branding')));
+});
+
+test('parseOrgSettingsPatch: rejects non-bool features.betaCowork', () => {
+  const r = parseOrgSettingsPatch({ features: { betaCowork: 'yes' } });
+  assert.ok(r.error);
+  assert.ok(r.error.issues.some((i) => i.path.startsWith('features')));
+});
+
+test('parseOrgSettingsPatch: unknown top-level keys pass through as warnings', () => {
+  const r = parseOrgSettingsPatch({ defaultModel: 'sonnet', futureFlag: 1, anotherUnknown: 'x' });
+  assert.equal(r.error, null);
+  assert.deepEqual(r.warnings.sort(), ['anotherUnknown', 'futureFlag']);
+  assert.equal(r.value.futureFlag, 1);
+});
+
+test('parseOrgSettingsPatch: explicit null for known keys is honoured (delete semantics)', () => {
+  const r = parseOrgSettingsPatch({ defaultModel: null, branding: null });
+  assert.equal(r.error, null);
+  assert.equal(r.value.defaultModel, null);
+  assert.equal(r.value.branding, null);
+});
+
+test('parseOrgSettingsPatch: rejects array / primitive payloads', () => {
+  assert.ok(parseOrgSettingsPatch(null).error);
+  assert.ok(parseOrgSettingsPatch([1, 2]).error);
+  assert.ok(parseOrgSettingsPatch('hi').error);
+});
+
+test('patch settings: zod 400 on invalid known key (responseStyle)', async () => {
+  const { prisma, writeAuditLog, audits } = makeFakePrisma({
+    members: { 'o1:a1': { role: 'ADMIN' } },
+    orgs: { o1: { id: 'o1', settings: {} } },
+  });
+  const req = {
+    user: { id: 'a1' },
+    params: { id: 'o1' },
+    body: { settings: { responseStyle: 'verbose' } },
+  };
+  const res = makeRes();
+  await patchOrgSettings(req, res, { prisma, writeAuditLog });
+  assert.equal(res._status, 400);
+  assert.equal(audits.length, 0);
+  assert.ok(Array.isArray(res._body.issues));
+});
+
+test('patch settings: zod allows unknown keys + returns warnings array', async () => {
+  const { prisma, writeAuditLog } = makeFakePrisma({
+    members: { 'o1:a1': { role: 'ADMIN' } },
+    orgs: { o1: { id: 'o1', settings: {} } },
+  });
+  const req = {
+    user: { id: 'a1' },
+    params: { id: 'o1' },
+    body: { settings: { defaultModel: 'opus-4-7', experimentalFlag: true } },
+  };
+  const res = makeRes();
+  await patchOrgSettings(req, res, { prisma, writeAuditLog });
+  assert.equal(res._status, 200);
+  assert.equal(res._body.settings.defaultModel, 'opus-4-7');
+  assert.equal(res._body.settings.experimentalFlag, true);
+  assert.deepEqual(res._body.warnings, ['experimentalFlag']);
+});
+
+// ─── listMemberActivity (cycle 78) ──────────────────────────────────
+
+test('member activity: ADMIN gets last 50 rows scoped to org + user', async () => {
+  const { prisma } = makeFakePrisma({
+    members: { 'o1:admin1': { role: 'ADMIN' } },
+    auditRows: [
+      { id: 'a1', action: 'org_invite_create', actorId: 'u9', metadata: { orgId: 'o1' } },
+      { id: 'a2', action: 'org_settings_update', actorId: 'u9', metadata: { orgId: 'o1' } },
+      { id: 'a3', action: 'org_invite_create', actorId: 'other', metadata: { orgId: 'o1' } },
+      { id: 'a4', action: 'org_invite_create', actorId: 'u9', metadata: { orgId: 'o2' } },
+    ],
+  });
+  const req = { user: { id: 'admin1' }, params: { id: 'o1', userId: 'u9' }, query: {} };
+  const res = makeRes();
+  await listMemberActivity(req, res, { prisma });
+  assert.equal(res._status, 200);
+  assert.equal(res._body.userId, 'u9');
+  assert.equal(res._body.orgId, 'o1');
+  assert.equal(res._body.limit, 50);
+  assert.equal(res._body.items.length, 2);
+  // The query must combine byOrg + byUser filters.
+  const call = prisma._auditCalls[0];
+  assert.equal(call.where.actorId, 'u9');
+  assert.deepEqual(call.where.metadata, { path: ['orgId'], equals: 'o1' });
+});
+
+test('member activity: MEMBER rejected (403)', async () => {
+  const { prisma } = makeFakePrisma({
+    members: { 'o1:m1': { role: 'MEMBER' } },
+  });
+  const req = { user: { id: 'm1' }, params: { id: 'o1', userId: 'u9' }, query: {} };
+  const res = makeRes();
+  await listMemberActivity(req, res, { prisma });
+  assert.equal(res._status, 403);
+});
+
+test('member activity: non-member caller 404', async () => {
+  const { prisma } = makeFakePrisma({ members: {} });
+  const req = { user: { id: 'ghost' }, params: { id: 'o1', userId: 'u9' }, query: {} };
+  const res = makeRes();
+  await listMemberActivity(req, res, { prisma });
+  assert.equal(res._status, 404);
+});
+
+test('member activity: empty userId param → 400', async () => {
+  const { prisma } = makeFakePrisma({
+    members: { 'o1:admin1': { role: 'ADMIN' } },
+  });
+  const req = { user: { id: 'admin1' }, params: { id: 'o1', userId: '' }, query: {} };
+  const res = makeRes();
+  await listMemberActivity(req, res, { prisma });
   assert.equal(res._status, 400);
 });

@@ -12,10 +12,12 @@ const auth = require('./auth');
 const chats = require('./chats');
 const files = require('./files');
 const payments = require('./payments');
+const orgs = require('./orgs');
 
 module.exports = {
   ...auth,
   ...chats,
   ...files,
   ...payments,
+  ...orgs,
 };
