@@ -35,7 +35,8 @@
     "../lib/native/clipboard.ts",
     "../lib/native/storage.ts",
     "../lib/native/haptics.ts",
-    "../lib/notifications/push.ts"
+    "../lib/notifications/push.ts",
+    "../lib/integrations/verify-webhook.ts"
   ],
   "exclude": [
     "../tests/lib"
