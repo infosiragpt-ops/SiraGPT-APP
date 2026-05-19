@@ -54,9 +54,16 @@ function normalizePublicBackendBaseUrl(value) {
 }
 
 function inferBackendUrlFromFrontend(env = process.env) {
-  const host = frontendHostname(env);
-  if (host === 'siragpt.com') return 'https://api.siragpt.com';
-  return '';
+  // Single-container deployment: the Express backend lives on the same
+  // public origin as Next.js and is reached via the /api/* rewrite — there
+  // is no separate api.* subdomain. Always anchor OAuth callbacks to the
+  // frontend origin so Google's redirect_uri matches a URL that actually
+  // resolves to our app.
+  const parsed = parseUrl(
+    env.FRONTEND_URL || env.PUBLIC_FRONTEND_URL || env.NEXT_PUBLIC_URL || ''
+  );
+  if (!parsed) return '';
+  return `${parsed.protocol}//${parsed.host}`;
 }
 
 function isFrontendHostCallback(urlValue, env = process.env) {
@@ -130,7 +137,10 @@ function resolvePublicBackendUrl(env = process.env) {
   }
 
   if (inferred) return inferred;
-  return isProduction(env) ? 'https://api.siragpt.com' : 'http://localhost:5000';
+  // Last-resort fallback for environments that haven't set FRONTEND_URL.
+  // In production we still default to the public siragpt.com origin (single
+  // container), not a non-existent api.* subdomain.
+  return isProduction(env) ? 'https://siragpt.com' : 'http://localhost:5000';
 }
 
 function buildCallbackUrl(env, explicitEnvKey, callbackPath) {
