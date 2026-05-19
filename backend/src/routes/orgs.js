@@ -21,6 +21,7 @@
  *   GET    /api/orgs/:id/events                         — live SSE tail of audit feed (ADMIN+; cycle 78)
  *   GET    /api/orgs/:id/settings                       — read per-org settings (member; cycle 66)
  *   PATCH  /api/orgs/:id/settings                       — merge per-org settings (ADMIN+; cycle 66)
+ *   GET    /api/orgs/:id/limits                         — plan caps + member/quota usage (member; ratchet 45)
  *
  * Every state-changing route writes an AuditLog row via the shared
  * `writeAuditLog` helper (fire-and-forget).
@@ -259,6 +260,29 @@ router.post('/invitation/:token/accept', authenticateToken, async (req, res) => 
       }
     }
 
+    // Ratchet 45 — re-check the member-count cap on accept. Catches
+    // the race where multiple invites were minted under PRO and the
+    // org has since been downgraded to FREE, or where several invitees
+    // accept concurrently. Already-a-member shortcuts the check.
+    const alreadyMember = await prisma.orgMembership.findUnique({
+      where: { orgId_userId: { orgId: invite.orgId, userId } },
+    });
+    if (!alreadyMember) {
+      const plan = invite.organization?.billingPlan || 'FREE';
+      const cap = memberCapForPlan(plan);
+      if (Number.isFinite(cap)) {
+        const memberCount = await prisma.orgMembership.count({ where: { orgId: invite.orgId } });
+        if (memberCount >= cap) {
+          return res.status(402).json({
+            error: 'member quota exceeded for current plan',
+            plan,
+            cap,
+            used: memberCount,
+          });
+        }
+      }
+    }
+
     const membership = await prisma.$transaction(async (tx) => {
       const existing = await tx.orgMembership.findUnique({
         where: { orgId_userId: { orgId: invite.orgId, userId } },
@@ -362,6 +386,31 @@ router.post('/:id/invite', authenticateToken, async (req, res) => {
     const membership = await assertMembership(prisma, orgId, userId, 'ADMIN');
     if (!canManageMembers(membership.role)) {
       return res.status(403).json({ error: 'insufficient role to invite' });
+    }
+
+    // Ratchet 45 — member-count quota per billing plan. Count current
+    // members + pending (not yet accepted, not expired) invitations so
+    // an admin can't sidestep the cap by spamming invites. ENTERPRISE
+    // is unlimited (Infinity). Returns 402 Payment Required with the
+    // plan + cap so the FE can prompt for an upgrade.
+    const plan = membership.organization?.billingPlan || 'FREE';
+    const cap = memberCapForPlan(plan);
+    if (Number.isFinite(cap)) {
+      const now = new Date();
+      const [memberCount, pendingInvites] = await Promise.all([
+        prisma.orgMembership.count({ where: { orgId } }),
+        prisma.orgInvitation.count({
+          where: { orgId, acceptedAt: null, expiresAt: { gt: now } },
+        }),
+      ]);
+      if (memberCount + pendingInvites >= cap) {
+        return res.status(402).json({
+          error: 'member quota exceeded for current plan',
+          plan,
+          cap,
+          used: memberCount + pendingInvites,
+        });
+      }
     }
 
     const token = generateInviteToken();
@@ -1699,8 +1748,32 @@ const PLAN_MRR_USD = Object.freeze({
   ENTERPRISE: 499,
 });
 
+// Plan → maximum org member count (ratchet 45). FREE tops out at 3 so
+// hobby orgs can't silently become full teams; ENTERPRISE is unlimited
+// (represented as null in API responses, +Infinity for arithmetic).
+// `/api/orgs/:id/invite` and the invitation-accept route both check
+// `(currentMembers + pendingInvites)` against this cap and return 402
+// Payment Required when an invite would push the org over.
+const PLAN_MEMBER_CAPS = Object.freeze({
+  FREE: 3,
+  PRO: 10,
+  PRO_MAX: 50,
+  ENTERPRISE: Infinity,
+});
+
 function quotaForPlan(plan) {
   return PLAN_QUOTAS[plan] ?? PLAN_QUOTAS.FREE;
+}
+
+function memberCapForPlan(plan) {
+  const cap = PLAN_MEMBER_CAPS[plan];
+  return typeof cap === 'number' ? cap : PLAN_MEMBER_CAPS.FREE;
+}
+
+// Serializer for the API: Infinity is not valid JSON, so represent
+// "no cap" as null. Finite numbers are passed through verbatim.
+function serializeMemberCap(cap) {
+  return Number.isFinite(cap) ? cap : null;
 }
 
 function mrrForPlan(plan) {
@@ -1832,6 +1905,57 @@ router.get('/:id/billing', authenticateToken, async (req, res) => {
     if (err && err.status) return res.status(err.status).json({ error: err.message });
     console.error('[orgs] billing summary failed:', err.message);
     res.status(500).json({ error: 'failed to load billing summary' });
+  }
+});
+
+// ─── GET /api/orgs/:id/limits (any member; ratchet 45) ──────────────
+// Aggregated quota/usage snapshot the dashboard renders next to the
+// "Upgrade" CTA. Returns the plan, current member-count usage + cap,
+// and the monthly request quota usage + cap. ENTERPRISE returns
+// `cap: null` for unlimited tiers (Infinity is not valid JSON).
+router.get('/:id/limits', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  try {
+    await assertMembership(prisma, orgId, userId, 'VIEWER');
+    const org = await prisma.organization.findUnique({
+      where: { id: orgId },
+      select: {
+        billingPlan: true,
+        monthlyQuota: true,
+        usedThisMonth: true,
+      },
+    });
+    if (!org) return res.status(404).json({ error: 'organization not found' });
+
+    const plan = org.billingPlan || 'FREE';
+    const now = new Date();
+    const [memberCount, pendingInvites] = await Promise.all([
+      prisma.orgMembership.count({ where: { orgId } }),
+      prisma.orgInvitation.count({
+        where: { orgId, acceptedAt: null, expiresAt: { gt: now } },
+      }),
+    ]);
+    const cap = memberCapForPlan(plan);
+
+    res.json({
+      plan,
+      members: {
+        used: memberCount + pendingInvites,
+        active: memberCount,
+        pending: pendingInvites,
+        cap: serializeMemberCap(cap),
+      },
+      monthlyQuota: {
+        used: toBigIntString(org.usedThisMonth),
+        cap: toBigIntString(org.monthlyQuota),
+        percentUsed: computePercentUsed(org.usedThisMonth, org.monthlyQuota),
+      },
+    });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] limits summary failed:', err.message);
+    res.status(500).json({ error: 'failed to load limits' });
   }
 });
 
