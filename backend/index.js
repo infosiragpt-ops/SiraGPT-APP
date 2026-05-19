@@ -109,6 +109,7 @@ const gmailRoutes = require('./src/routes/gmail');
 const spotifyRoutes = require('./src/routes/spotify');
 const figmaRoutes = require('./src/routes/figma');
 const { router: computerUseRoutes, initializeWebSocketServer } = require('./src/routes/computer-use');
+const { initRealtimeServer, closeRealtimeServer } = require('./src/services/realtime/socket-server');
 const thesisRoutes = require('./src/routes/thesis');
 const researchRoutes = require('./src/routes/research');
 const scientificSearchRoutes = require('./src/routes/scientific-search');
@@ -750,6 +751,15 @@ function startServer() {
     // Initialize WebSocket server for Computer Use
     initializeWebSocketServer(server);
 
+    // Initialize realtime WebSocket scaffolding (presence, typing, cursor)
+    // Lives on a separate path (`/ws/realtime`) so it can't collide with
+    // the computer-use socket above.
+    try {
+      initRealtimeServer(server, { logger });
+    } catch (err) {
+      logger.warn({ err: err.message }, 'realtime_socket_init_failed');
+    }
+
     // Wire scheduler → agent: register the invoker so cron/webhook jobs
     // can run the agent without the scheduler module importing the agent
     // layer (which would circular-require via the skills registry).
@@ -764,6 +774,7 @@ function startServer() {
     async function shutdown(signal) {
         logger.info({ signal }, 'shutdown_initiated');
         try { scheduler.stop?.(); } catch {}
+        try { closeRealtimeServer(); } catch {}
         await Promise.allSettled([
             closeAgentTaskWorker(),
             closeAgentTaskQueue(),
