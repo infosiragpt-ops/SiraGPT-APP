@@ -4,6 +4,56 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and improvement cycles follow a sequential number with the date the work landed.
 
+## [0.2.2 / backend 1.1.2] — Cycles 51-60 milestone — 2026-05-19
+
+Sixth-decade marker. Patch bumps only (root `0.2.1 → 0.2.2`, backend
+`1.1.1 → 1.1.2`) — cycles 51-60 were security hardening, observability,
+and admin UX with no public API breaks. See `docs/cycles/CYCLE_60.md`
+for the milestone narrative.
+
+### Added
+- **Cycle 60 — milestone consolidation**: `docs/cycles/CYCLE_60.md`
+  marker doc + CHANGELOG cycles 51-60 sweep + version bump to
+  `0.2.2 / 1.1.2`.
+- **Cycle 59 — search filters**: advanced FTS filter params (date range,
+  type, owner, tag) across documents + chats + artifacts.
+- **Cycle 58 — bookmark folders**: nested folder model + drag-reorder API
+  + per-folder ACLs.
+- **Cycle 57 — AI metrics Prometheus**: `ai_*` counters/histograms
+  (tokens, latency, cost, failover trips) exported on `/metrics`.
+- **Cycle 56 — rotate-secret**: `scripts/rotate-jwt-secret.js` +
+  `/api/admin/security/rotate-secret` with dual-key grace window.
+- **Cycle 55 — webhook verifier**: HMAC `X-Sira-Signature` + timestamp
+  skew check + replay nonce cache for all inbound webhooks.
+- **Cycle 54 — audit CSV**: `/api/admin/audit/export.csv` streaming
+  exporter with column allow-list and row-level redaction.
+- **Cycle 53 — MTD trend endpoints**: month-to-date aggregations for
+  `agentTaskTrend`, `signupTrend`, `uploadTrend` admin charts.
+- **Cycle 52 — CORS validation**: strict origin allow-list with regex +
+  wildcard subdomain support and explicit deny logging.
+- **Cycle 51 — CSRF strict**: double-submit cookie hardened to
+  `SameSite=Strict` + per-session token rotation + state-changing
+  method enforcement on all `/api/*` mutating routes.
+
+### Changed
+- Lint ratchet tightened `49 → 45` across cycles 51-60.
+- Root `package.json` version `0.2.1 → 0.2.2`.
+- Backend `package.json` version `1.1.1 → 1.1.2`.
+
+### Fixed
+- Stability fixes carried in feature cycles. See individual cycle entries
+  for specifics (no standalone fix-only cycle in this band).
+
+### Security
+- CSRF strict-mode enforcement (cycle 51).
+- CORS origin validation + deny logging (cycle 52).
+- Webhook HMAC verifier with replay protection (cycle 55).
+- JWT secret rotation with dual-key grace window (cycle 56).
+- Audit log CSV export with row-level redaction (cycle 54).
+
+### Removed
+- None in cycles 51-60.
+
 ## [0.2.1 / backend 1.1.1] — Cycles 41-50 milestone — 2026-05-19
 
 Half-century marker. Patch bumps only (root `0.2.0 → 0.2.1`, backend
