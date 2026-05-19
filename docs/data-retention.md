@@ -47,9 +47,15 @@ ships in `main` and what privacy / GDPR responses should cite.
 ### ApiUsage
 - Per-call rows are kept for **90 days** to support cost dashboards and
   abuse investigations.
-- After 90 days the detailed rows are summarised into the daily /
-  monthly aggregation tables and the source rows are dropped. The
-  aggregates are kept indefinitely for billing reconciliation.
+- After 90 days the detailed rows are folded into monthly summaries by
+  the `prune-api-usage` cron (default 03:30 UTC, configurable via
+  `SYSTEM_CRON_APIUSAGE_PRUNE_SCHEDULE`) and the source rows are
+  dropped. Summaries are keyed by `(yearMonth, userId, model)` and
+  store `calls`, `tokens` (string-encoded BigInt), and `cost`. They
+  are persisted as JSON blobs in `SystemSettings` under the key prefix
+  `apiusage:summary:` — kept indefinitely for billing reconciliation.
+  Operators can later migrate to a dedicated aggregation table by
+  passing a custom `summaryStore` to the job.
 
 ### Files
 - File rows have no independent retention policy — they live and die

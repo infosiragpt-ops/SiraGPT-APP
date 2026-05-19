@@ -26,6 +26,10 @@
 
 const SCRUB_SCHEDULE = process.env.SYSTEM_CRON_SCRUB_SCHEDULE || '30 2 * * *';
 const HARD_DELETE_SCHEDULE = process.env.SYSTEM_CRON_HARD_DELETE_SCHEDULE || '0 3 * * *';
+// ApiUsage 90-day retention (docs/data-retention.md). Default 03:30 UTC so
+// it runs after the hard-delete pass (the cascade can drop apiUsage rows
+// owned by deleted users; the prune handles everything else).
+const APIUSAGE_PRUNE_SCHEDULE = process.env.SYSTEM_CRON_APIUSAGE_PRUNE_SCHEDULE || '30 3 * * *';
 
 let _state = null;
 
@@ -54,6 +58,7 @@ function start(opts = {}) {
   const tasks = [];
   let scrubRunning = false;
   let hardDeleteRunning = false;
+  let apiUsagePruneRunning = false;
 
   const scrubTask = cron.schedule(
     SCRUB_SCHEDULE,
@@ -100,6 +105,29 @@ function start(opts = {}) {
     { scheduled: false, timezone: 'UTC' },
   );
   tasks.push({ name: 'hard-delete-deleted-users', schedule: HARD_DELETE_SCHEDULE, task: hardDeleteTask });
+
+  const apiUsagePruneTask = cron.schedule(
+    APIUSAGE_PRUNE_SCHEDULE,
+    async () => {
+      if (apiUsagePruneRunning) {
+        logger.warn?.('[system-cron] skip prune-api-usage — previous run still active');
+        return;
+      }
+      apiUsagePruneRunning = true;
+      try {
+        // eslint-disable-next-line global-require
+        const job = require('./prune-api-usage');
+        const res = await job.run({ logger });
+        logger.info?.(`[system-cron] prune-api-usage done: ${JSON.stringify(res)}`);
+      } catch (err) {
+        logger.error?.(`[system-cron] prune-api-usage failed: ${err && err.message}`);
+      } finally {
+        apiUsagePruneRunning = false;
+      }
+    },
+    { scheduled: false, timezone: 'UTC' },
+  );
+  tasks.push({ name: 'prune-api-usage', schedule: APIUSAGE_PRUNE_SCHEDULE, task: apiUsagePruneTask });
 
   for (const t of tasks) {
     try { t.task.start(); } catch (err) {

@@ -185,6 +185,10 @@ registerCounter('siragpt_gdpr_content_scrubbed_total', {
   help: 'Total messages + files redacted by the GDPR content scrub job (cycle 29)',
   labels: ['kind'],
 });
+registerCounter('siragpt_apiusage_pruned_total', {
+  help: 'Total ApiUsage records pruned (kind=row) or summaries upserted (kind=summary) by the 90-day retention job',
+  labels: ['kind'],
+});
 registerCounter('siragpt_analyzer_cache_misses_total', {
   help: 'Document professional analyzer in-process cache misses',
   labels: [],
