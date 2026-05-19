@@ -2112,4 +2112,142 @@ class ApiClient {
 }
 
 export const apiClient = new ApiClient(API_BASE_URL);
+
+// -----------------------------------------------------------------------------
+// SWR-style cache for static-ish data (user profile, model list, plan info).
+//
+// Why parallel to existing methods, not a replacement:
+//   - Existing call sites assume each call returns fresh data; reordering
+//     reads to a cached promise could surface stale data in flows that
+//     depend on side effects (e.g. just-saved profile changes).
+//   - `apiClient.swr.*` is an opt-in surface for new code that wants
+//     stale-while-revalidate semantics without breaking anything else.
+//
+// Semantics:
+//   - Returns the cached value immediately if present (fresh or stale).
+//   - In parallel kicks off a background revalidate when stale or on
+//     window focus.
+//   - Two-tier: in-memory (per-tab, instant) + sessionStorage (per-tab,
+//     survives navigation but not full window close — matches OWASP
+//     guidance for not persisting auth-bearing state to localStorage).
+// -----------------------------------------------------------------------------
+
+type SWREntry<T> = { value: T; storedAt: number };
+type SWRFetcher<T> = () => Promise<T>;
+
+const SWR_FRESH_MS = 30_000;    // value is fresh for 30s
+const SWR_STALE_MS = 5 * 60_000; // stale but usable up to 5m
+const SWR_NAMESPACE = 'sira:swr:v1';
+
+class SWRCache {
+  private mem = new Map<string, SWREntry<unknown>>();
+  private inflight = new Map<string, Promise<unknown>>();
+  private listeners: Set<(key: string) => void> = new Set();
+  private focusBound = false;
+
+  private storageKey(key: string): string {
+    return `${SWR_NAMESPACE}:${key}`;
+  }
+
+  private readSession<T>(key: string): SWREntry<T> | null {
+    if (typeof window === 'undefined' || !window.sessionStorage) return null;
+    try {
+      const raw = window.sessionStorage.getItem(this.storageKey(key));
+      if (!raw) return null;
+      return JSON.parse(raw) as SWREntry<T>;
+    } catch {
+      return null;
+    }
+  }
+
+  private writeSession<T>(key: string, entry: SWREntry<T>): void {
+    if (typeof window === 'undefined' || !window.sessionStorage) return;
+    try {
+      window.sessionStorage.setItem(this.storageKey(key), JSON.stringify(entry));
+    } catch {
+      // Quota / private mode — silently degrade to in-memory only.
+    }
+  }
+
+  private bindFocusOnce(): void {
+    if (this.focusBound || typeof window === 'undefined') return;
+    this.focusBound = true;
+    window.addEventListener('focus', () => {
+      // Revalidate every entry that's older than the fresh threshold.
+      const now = Date.now();
+      this.mem.forEach((entry, key) => {
+        if (now - entry.storedAt > SWR_FRESH_MS) {
+          this.listeners.forEach((l) => l(key));
+        }
+      });
+    });
+  }
+
+  get<T>(key: string): SWREntry<T> | null {
+    if (this.mem.has(key)) return this.mem.get(key) as SWREntry<T>;
+    const fromSession = this.readSession<T>(key);
+    if (fromSession) this.mem.set(key, fromSession);
+    return fromSession;
+  }
+
+  set<T>(key: string, value: T): void {
+    const entry: SWREntry<T> = { value, storedAt: Date.now() };
+    this.mem.set(key, entry);
+    this.writeSession(key, entry);
+  }
+
+  invalidate(key: string): void {
+    this.mem.delete(key);
+    if (typeof window !== 'undefined' && window.sessionStorage) {
+      try { window.sessionStorage.removeItem(this.storageKey(key)); } catch { /* noop */ }
+    }
+  }
+
+  async fetch<T>(key: string, fetcher: SWRFetcher<T>): Promise<T> {
+    this.bindFocusOnce();
+    const cached = this.get<T>(key);
+    const now = Date.now();
+    if (cached && now - cached.storedAt < SWR_FRESH_MS) {
+      // Fresh — return immediately, no revalidation needed.
+      return cached.value;
+    }
+    if (cached && now - cached.storedAt < SWR_STALE_MS) {
+      // Stale-but-usable: return cached value AND kick off background revalidate.
+      if (!this.inflight.has(key)) {
+        const p = fetcher()
+          .then((v) => { this.set(key, v); return v; })
+          .catch(() => cached.value)
+          .finally(() => { this.inflight.delete(key); });
+        this.inflight.set(key, p);
+      }
+      return cached.value;
+    }
+    // Cold / fully expired: dedupe concurrent callers on the inflight promise.
+    let inflight = this.inflight.get(key) as Promise<T> | undefined;
+    if (!inflight) {
+      inflight = fetcher()
+        .then((v) => { this.set(key, v); return v; })
+        .finally(() => { this.inflight.delete(key); });
+      this.inflight.set(key, inflight);
+    }
+    return inflight;
+  }
+}
+
+const swrCache = new SWRCache();
+
+// Augment apiClient with an `swr` surface. Add new entries here as the
+// caller list grows — keep existing methods untouched.
+type SWRSurface = {
+  getModels: () => Promise<unknown>;
+  invalidate: (key: string) => void;
+  _cache: SWRCache;
+};
+(apiClient as unknown as { swr: SWRSurface }).swr = {
+  getModels: () => swrCache.fetch('models', () => apiClient.getModels()),
+  invalidate: (key: string) => swrCache.invalidate(key),
+  _cache: swrCache,
+};
+
+export { swrCache };
 export default apiClient;

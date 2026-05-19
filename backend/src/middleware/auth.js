@@ -2,6 +2,35 @@ const jwt = require('jsonwebtoken');
 const prisma = require('../config/database');
 const { computeFingerprint, compareFingerprints } = require('../utils/session-fingerprint');
 const { writeAuditLog } = require('../utils/audit-log');
+const { createQueryDedup } = require('../utils/query-dedup');
+const { createWriteBehindCache } = require('../services/write-behind-cache');
+
+// Hot-path read coalescing: two requests for the same session token
+// within 50ms share the Prisma lookup. Reduces DB load when a SPA
+// fires several concurrent authenticated calls.
+const sessionDedup = createQueryDedup({ ttlMs: 50, maxEntries: 5000 });
+
+// Write-behind queue for high-cardinality writes that fire on every
+// authenticated request (lastActiveAt). Singleton — wired once per
+// process. Disabled via WRITE_BEHIND_DISABLED for emergency rollback.
+let _writeBehind = null;
+function getWriteBehindCache() {
+  if (_writeBehind) return _writeBehind;
+  if (String(process.env.WRITE_BEHIND_DISABLED || '').toLowerCase() === 'true') return null;
+  _writeBehind = createWriteBehindCache({
+    prisma,
+    flushIntervalMs: 5000,
+    flushThreshold: 100,
+    onError: (stage, err) => {
+      // Keep noise low in production but surface in dev/test.
+      if (process.env.NODE_ENV !== 'production') {
+        // eslint-disable-next-line no-console
+        console.warn(`[write-behind:${stage}]`, err && err.message);
+      }
+    },
+  });
+  return _writeBehind;
+}
 
 const authenticateToken = async (req, res, next) => {
   try {
@@ -14,11 +43,14 @@ const authenticateToken = async (req, res, next) => {
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    // Check if session exists and is valid
-    const session = await prisma.session.findUnique({
-      where: { token },
-      include: { user: true }
-    });
+    // Check if session exists and is valid. Coalesce concurrent
+    // identical lookups within a 50ms window so the SPA's burst of
+    // authenticated calls only generates one DB roundtrip.
+    const session = await sessionDedup.wrap(
+      'session',
+      { where: { token }, include: { user: true } },
+      () => prisma.session.findUnique({ where: { token }, include: { user: true } })
+    );
 
     if (!session) {
       return res.status(401).json({ error: 'Invalid or expired token' });
@@ -69,6 +101,18 @@ const authenticateToken = async (req, res, next) => {
     req.user = session.user;
     req.token = token;
     req.session = session;
+
+    // Write-behind: update lastActiveAt without hitting Postgres on
+    // every request. The cache flushes every 5s or at 100 pending
+    // writes. If the field isn't on the model (legacy DB without the
+    // migration) the flush silently drops it. See write-behind-cache.js.
+    try {
+      const wbc = getWriteBehindCache();
+      if (wbc && session.user && session.user.id) {
+        wbc.queueWrite('user', { id: session.user.id }, { lastActiveAt: new Date() });
+      }
+    } catch (_) { /* never block auth on telemetry */ }
+
     next();
   } catch (error) {
     if (error && error.name === 'TokenExpiredError') {
@@ -101,5 +145,8 @@ const requireSuperAdmin = (req, res, next) => {
 module.exports = {
   authenticateToken,
   requireAdmin,
-  requireSuperAdmin
+  requireSuperAdmin,
+  // Exported for tests + graceful shutdown wiring.
+  __sessionDedup: sessionDedup,
+  __getWriteBehindCache: getWriteBehindCache,
 };

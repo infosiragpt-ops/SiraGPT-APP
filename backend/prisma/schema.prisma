@@ -51,6 +51,12 @@ model User {
   // that need to be queryable (locale, tone) live in their own columns.
   settings Json?
 
+  // Last activity timestamp — written via the write-behind cache from
+  // every authenticated request. Used by /api/admin/stats/users to
+  // distinguish active vs dormant accounts. Nullable so existing rows
+  // are unaffected by the migration.
+  lastActiveAt DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
