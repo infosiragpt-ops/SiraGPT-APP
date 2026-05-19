@@ -57,6 +57,13 @@ cp .env.example .env.local   # edit API keys
 - [Changelog](CHANGELOG.md)
 - [Contributing](CONTRIBUTING.md)
 
+## Community & policies
+
+- [Security policy](SECURITY.md) — how to report vulnerabilities + SLA
+- [Code of conduct](CODE_OF_CONDUCT.md) — Contributor Covenant v2.1 (español)
+- [Issue templates](.github/ISSUE_TEMPLATE/) — bug report, feature request, security redirect
+- [Pull request template](.github/PULL_REQUEST_TEMPLATE.md)
+
 ## License
 
 MIT — see [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).

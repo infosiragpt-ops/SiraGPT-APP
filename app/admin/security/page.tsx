@@ -165,7 +165,7 @@ export default function SecurityPage() {
               <Input
                 id="master-key"
                 type={showApiKey ? "text" : "password"}
-                value="sk-1234567890abcdef1234567890abcdef"
+                value="EXAMPLE_PLACEHOLDER_KEY_DO_NOT_USE"
                 readOnly
               />
               <Button variant="outline" size="icon" onClick={() => setShowApiKey(!showApiKey)}>
