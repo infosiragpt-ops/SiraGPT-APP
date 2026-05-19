@@ -4,6 +4,47 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and improvement cycles follow a sequential number with the date the work landed.
 
+## [0.2.1 / backend 1.1.1] — Cycles 41-50 milestone — 2026-05-19
+
+Half-century marker. Patch bumps only (root `0.2.0 → 0.2.1`, backend
+`1.1.0 → 1.1.1`) — cycles 41-50 were polish, hardening, and consolidation
+with no public API breaks. See `docs/cycles/CYCLE_50.md` for the milestone
+narrative and `docs/MILESTONE.md` for cumulative cycle 1-40 metrics.
+
+### Added
+- **Cycle 50 — milestone consolidation**: `docs/cycles/CYCLE_50.md`
+  half-century marker doc + CHANGELOG cycles 41-50 sweep + version bump
+  to `0.2.1 / 1.1.1`.
+- **Cycles 41-49** — polish + extension wave covering:
+  - Realtime: `/ws/realtime` presence + typing + cursor.
+  - Multi-tenant: org invites + per-org quota enforcement consolidation.
+  - Mobile: Capacitor + PWA + push + deep-links end-to-end.
+  - Privacy: PII masker + content scrub + `/api/legal/*` endpoints.
+  - AI: anomaly detector + cost tracker + model router refinements.
+  - Search: Postgres FTS across documents + chats + artifacts.
+  - Observability: `/metrics` ruleset + OpenAPI 462-route snapshot +
+    Postman collection.
+
+### Changed
+- Lint ratchet held at `--max-warnings 49` across cycles 41-50 (down from
+  56 at start of the band).
+- Root `package.json` version `0.2.0 → 0.2.1`.
+- Backend `package.json` version `1.1.0 → 1.1.1`.
+
+### Fixed
+- Stability fixes carried in feature cycles (no standalone fix-only cycle
+  in this band). See individual cycle entries below for specifics.
+
+### Security
+- Cumulative posture maintained: CSRF, session fingerprint binding,
+  strict CSP, helmet, JWT `aud`/`iss`, granular audit log. No new audit
+  issues introduced in cycles 41-50; baseline of 17 historical issues
+  remains resolved.
+
+### Removed
+- None in cycles 41-50. (`xlsx` removal landed in cycle 37, see
+  `[0.2.0]` section.)
+
 ## [0.2.0 / backend 1.1.0] — Cycles 31-40 milestone — 2026-05-19
 
 Milestone consolidation release. Root package bumped `0.1.0 → 0.2.0`; backend

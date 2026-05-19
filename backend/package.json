@@ -1,6 +1,6 @@
 {
   "name": "openwebui-backend",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Complete backend for OpenWebUI platform",
   "main": "index.js",
   "prisma": {
