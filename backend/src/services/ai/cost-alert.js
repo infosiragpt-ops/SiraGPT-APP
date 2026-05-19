@@ -260,6 +260,125 @@ async function checkOrgBudget({ orgId, memberIds, budget, getRecords, alerting, 
 }
 
 /**
+ * checkForecastBudget — projected month-end overshoot detector.
+ *
+ * Pulls the org's month-end projected total from the cycle-92 cost-
+ * forecast module and compares it against the configured monthly cap:
+ *
+ *   - projectedTotal > budget * 2   → fire `error` alert
+ *   - projectedTotal > budget * 1.5 → fire `warn`  alert
+ *   - otherwise                     → no alert
+ *
+ * Dedup is delegated to the alerting layer via stable titles
+ * (`org_budget_forecast_{warn|error}:{orgId}`). Safe to call from the
+ * same sampling hook that drives `checkOrgBudget` — never throws.
+ *
+ * @param {object} opts
+ * @param {string}   opts.orgId
+ * @param {string[]} opts.memberIds
+ * @param {object}   opts.budget        `{ monthlyCapUSD, warnThresholdPct? }`
+ * @param {Function} opts.getRecords    tracker snapshot getter
+ * @param {object}   opts.alerting      cycle 32 alerting service
+ * @param {object}   [opts.forecaster]  injectable forecast module (tests)
+ * @param {Date}     [opts.now]         injected clock (tests)
+ * @param {number}   [opts.windowDays]
+ */
+async function checkForecastBudget(opts = {}) {
+  const { orgId, memberIds, budget, getRecords, alerting } = opts;
+  if (!orgId || !Array.isArray(memberIds) || memberIds.length === 0) return null;
+  if (typeof getRecords !== 'function' || !alerting) return null;
+  const norm = normalizeBudget(budget);
+  if (!norm) return null;
+
+  let records;
+  try { records = getRecords(); } catch { return null; }
+  if (!Array.isArray(records)) records = [];
+  const memberSet = new Set(memberIds.map((m) => String(m)));
+  const scoped = records.filter((r) => r && memberSet.has(String(r.userId)));
+
+  let forecaster = opts.forecaster;
+  if (!forecaster) {
+    try { forecaster = require('./cost-forecast'); } catch { return null; }
+  }
+  let projectedTotal = 0;
+  let confidence = 0;
+  let monthToDate = 0;
+  try {
+    const series = forecaster.buildDailySeries(scoped, {
+      now: opts.now,
+      windowDays: opts.windowDays,
+    });
+    const forecast = forecaster.forecastFromSeries(series, { now: opts.now });
+    projectedTotal = Number(forecast.projectedTotal) || 0;
+    confidence = Number(forecast.confidence) || 0;
+    monthToDate = Number(forecast.monthToDate) || 0;
+  } catch { return null; }
+
+  const errorAt = norm.monthlyCapUSD * 2;
+  const warnAt = norm.monthlyCapUSD * 1.5;
+  let severity = null;
+  let title = null;
+  if (projectedTotal > errorAt) {
+    severity = 'error';
+    title = `org_budget_forecast_error:${orgId}`;
+  } else if (projectedTotal > warnAt) {
+    severity = 'warn';
+    title = `org_budget_forecast_warn:${orgId}`;
+  }
+
+  const pctOfCap = norm.monthlyCapUSD > 0
+    ? _round6(projectedTotal / norm.monthlyCapUSD)
+    : 0;
+
+  if (!severity) {
+    return {
+      orgId,
+      projectedTotal: _round6(projectedTotal),
+      monthlyCapUSD: norm.monthlyCapUSD,
+      pctOfCap,
+      confidence: _round6(confidence),
+      monthToDate: _round6(monthToDate),
+      fired: false,
+    };
+  }
+
+  try {
+    await alerting.sendAlert({
+      title,
+      message: `Org ${orgId} projected month-end spend $${projectedTotal.toFixed(2)} ` +
+        `vs cap $${norm.monthlyCapUSD.toFixed(2)} ` +
+        `(${Math.round(pctOfCap * 100)}% of cap, MTD $${monthToDate.toFixed(2)}).`,
+      severity,
+      context: {
+        scope: 'org_budget_forecast',
+        orgId,
+        memberCount: memberSet.size,
+        projectedTotal: _round6(projectedTotal),
+        monthlyCapUSD: norm.monthlyCapUSD,
+        warnAtUSD: _round6(warnAt),
+        errorAtUSD: _round6(errorAt),
+        pctOfCap,
+        confidence: _round6(confidence),
+        monthToDate: _round6(monthToDate),
+      },
+    });
+  } catch { /* alerting never throws — defensive */ }
+
+  return {
+    orgId,
+    projectedTotal: _round6(projectedTotal),
+    monthlyCapUSD: norm.monthlyCapUSD,
+    warnAtUSD: _round6(warnAt),
+    errorAtUSD: _round6(errorAt),
+    pctOfCap,
+    confidence: _round6(confidence),
+    monthToDate: _round6(monthToDate),
+    severity,
+    fired: true,
+  };
+}
+
+/**
  * Combined entrypoint used by the cost-tracker sampling hook.
  * Always returns a plain object (never throws) describing what was
  * checked and which (if any) verdict tripped.
@@ -273,11 +392,12 @@ async function checkOrgBudget({ orgId, memberIds, budget, getRecords, alerting, 
  * @param {object}   [opts.budget]      org budget config (triggers checkOrgBudget)
  */
 async function maybeCheck(opts = {}) {
-  const out = { user: null, org: null, orgBudget: null };
+  const out = { user: null, org: null, orgBudget: null, orgBudgetForecast: null };
   try {
     if (opts.userId) out.user = await checkUser(opts);
     if (opts.orgId) out.org = await checkOrg(opts);
     if (opts.orgId && opts.budget) out.orgBudget = await checkOrgBudget(opts);
+    if (opts.orgId && opts.budget) out.orgBudgetForecast = await checkForecastBudget(opts);
   } catch { /* never throw */ }
   return out;
 }
@@ -287,6 +407,7 @@ module.exports = {
   checkUser,
   checkOrg,
   checkOrgBudget,
+  checkForecastBudget,
   normalizeBudget,
   summarize,
   evaluate,

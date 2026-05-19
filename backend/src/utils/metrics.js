@@ -253,6 +253,18 @@ registerGauge('siragpt_org_events_active_subscribers', {
   labels: [],
 });
 
+// ── Webhook delivery metrics (ratchet 45) ───────────────────────────
+// Observed once per outbound HTTP attempt from webhook-dispatcher, with
+// `event` (e.g. `task.completed`) and `ok` (`true` for 2xx/3xx, `false`
+// otherwise — including timeouts and aborts) labels. Buckets span the
+// dispatcher's configured request timeout (10s) with headroom for the
+// retry-with-backoff overall envelope.
+registerHistogram('siragpt_webhook_delivery_duration_seconds', {
+  help: 'Webhook outbound HTTP attempt latency in seconds, labelled by event and ok flag',
+  labels: ['event', 'ok'],
+  buckets: [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30],
+});
+
 // ── Maintenance-mode metrics (cycle 72) ─────────────────────────────
 // Incremented from the maintenance-mode middleware whenever a request
 // is short-circuited with HTTP 503 because the global maintenance flag

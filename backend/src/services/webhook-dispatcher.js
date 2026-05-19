@@ -24,6 +24,20 @@
 
 const crypto = require('crypto');
 const { withRetry } = require('../utils/retry-with-backoff');
+// Optional metrics registry — observing latency is best-effort; never
+// let an instrumentation hiccup break delivery.
+let _metrics = null;
+try { _metrics = require('../utils/metrics'); } catch (_e) { _metrics = null; }
+function _observeDeliveryDuration(event, ok, durationSeconds) {
+  if (!_metrics || typeof _metrics.observe !== 'function') return;
+  try {
+    _metrics.observe(
+      'siragpt_webhook_delivery_duration_seconds',
+      { event: String(event || 'unknown'), ok: ok ? 'true' : 'false' },
+      Math.max(0, Number(durationSeconds) || 0),
+    );
+  } catch { /* swallow */ }
+}
 // Optional OTel span helper — falls back to a direct call if the
 // module / SDK aren't present.
 let _otelSpans = null;
@@ -331,7 +345,15 @@ async function dispatch(opts = {}) {
         const res = await withWebhookDeliverySpan(
           { url, event, attempt: entry.attempts, deliveryId: id },
           async (span) => {
-            const r = await deliverFn({ url, body, headers: finalHeaders, timeoutMs });
+            const attemptStartMs = now();
+            let r;
+            try {
+              r = await deliverFn({ url, body, headers: finalHeaders, timeoutMs });
+            } catch (e) {
+              _observeDeliveryDuration(event, false, (now() - attemptStartMs) / 1000);
+              throw e;
+            }
+            _observeDeliveryDuration(event, !!(r && r.ok), (now() - attemptStartMs) / 1000);
             try {
               if (span && typeof span.setAttributes === 'function') {
                 span.setAttributes({ httpStatus: r.status, ok: !!r.ok });

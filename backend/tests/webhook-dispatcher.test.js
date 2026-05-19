@@ -418,3 +418,42 @@ test('createNonceCache evicts oldest entries past maxSize', () => {
   // Adding 'c' evicted the oldest ('a') → fresh again.
   assert.equal(cache.seenOrRemember('a', 1700000000, 60), false);
 });
+
+// ── ratchet 45 task 2: delivery latency histogram ───────────────────
+test('dispatch observes siragpt_webhook_delivery_duration_seconds per attempt (ok=true)', async () => {
+  const metrics = require('../src/utils/metrics');
+  metrics._reset();
+  const r = await dispatcher.dispatch({
+    url: 'https://example.test/hook',
+    event: 'task.completed',
+    payload: { id: 'p1' },
+    deliverFn: async () => ({ status: 200, ok: true }),
+    maxRetries: 0,
+  });
+  assert.equal(r.status, 'delivered');
+  const text = metrics.renderText();
+  assert.match(text, /siragpt_webhook_delivery_duration_seconds_count\{event="task\.completed",ok="true"\} 1/);
+});
+
+test('dispatch records ok=false samples on retry attempts', async () => {
+  const metrics = require('../src/utils/metrics');
+  metrics._reset();
+  let calls = 0;
+  await dispatcher.dispatch({
+    url: 'https://example.test/hook',
+    event: 'task.failed',
+    payload: { id: 'p2' },
+    deliverFn: async () => {
+      calls += 1;
+      if (calls < 2) return { status: 500, ok: false };
+      return { status: 200, ok: true };
+    },
+    maxRetries: 2,
+    baseDelayMs: 1,
+    maxDelayMs: 2,
+  });
+  const text = metrics.renderText();
+  // One false sample (first attempt 500) and one true sample (recovery).
+  assert.match(text, /siragpt_webhook_delivery_duration_seconds_count\{event="task\.failed",ok="false"\} 1/);
+  assert.match(text, /siragpt_webhook_delivery_duration_seconds_count\{event="task\.failed",ok="true"\} 1/);
+});

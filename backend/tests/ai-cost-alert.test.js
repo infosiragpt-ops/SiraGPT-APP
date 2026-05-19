@@ -110,7 +110,7 @@ test('maybeCheck swallows errors from getRecords', async () => {
     getRecords: () => { throw new Error('boom'); },
     alerting: alertingDouble,
   });
-  assert.deepEqual(r, { user: null, org: null, orgBudget: null });
+  assert.deepEqual(r, { user: null, org: null, orgBudget: null, orgBudgetForecast: null });
   assert.equal(alertingDouble.sent.length, 0);
 });
 
@@ -119,7 +119,7 @@ test('maybeCheck returns null verdicts when no scope provided', async () => {
     getRecords: () => [],
     alerting: alertingDouble,
   });
-  assert.deepEqual(r, { user: null, org: null, orgBudget: null });
+  assert.deepEqual(r, { user: null, org: null, orgBudget: null, orgBudgetForecast: null });
 });
 
 // ── Cost budget alerts (org-level cap) ────────────────────────────────
@@ -241,4 +241,97 @@ test('maybeCheck wires orgBudget when budget supplied alongside orgId', async ()
   });
   assert.ok(r.orgBudget && r.orgBudget.fired);
   assert.equal(r.org, null); // ratio path didn't trip
+});
+
+// ── Forecast budget alerts (ratchet 45) ───────────────────────────────
+
+function makeForecaster(projectedTotal) {
+  return {
+    buildDailySeries: () => [{ day: '2026-05-01', costUSD: projectedTotal }],
+    forecastFromSeries: () => ({
+      projectedTotal,
+      monthToDate: projectedTotal / 2,
+      confidence: 0.9,
+      daysRemaining: 10,
+      trendDirection: 'up',
+      averageDailyCost: 1,
+      slope: 0.1,
+      sampleSize: 1,
+    }),
+  };
+}
+
+test('checkForecastBudget does NOT fire when projected ≤ 1.5x cap', async () => {
+  const r = await costAlert.checkForecastBudget({
+    orgId: 'org1',
+    memberIds: ['m1'],
+    budget: { monthlyCapUSD: 100 },
+    getRecords: () => [{ userId: 'm1', costUSD: 10, ts: new Date().toISOString() }],
+    alerting: alertingDouble,
+    forecaster: makeForecaster(120), // 1.2x cap
+  });
+  assert.equal(r.fired, false);
+  assert.equal(alertingDouble.sent.length, 0);
+});
+
+test('checkForecastBudget fires warn when projected > 1.5x cap', async () => {
+  const r = await costAlert.checkForecastBudget({
+    orgId: 'org1',
+    memberIds: ['m1'],
+    budget: { monthlyCapUSD: 100 },
+    getRecords: () => [{ userId: 'm1', costUSD: 10, ts: new Date().toISOString() }],
+    alerting: alertingDouble,
+    forecaster: makeForecaster(170), // 1.7x cap
+  });
+  assert.ok(r.fired);
+  assert.equal(r.severity, 'warn');
+  assert.equal(alertingDouble.sent.length, 1);
+  assert.equal(alertingDouble.sent[0].severity, 'warn');
+  assert.match(alertingDouble.sent[0].title, /^org_budget_forecast_warn:org1$/);
+  assert.equal(alertingDouble.sent[0].context.scope, 'org_budget_forecast');
+});
+
+test('checkForecastBudget fires error when projected > 2x cap', async () => {
+  const r = await costAlert.checkForecastBudget({
+    orgId: 'org1',
+    memberIds: ['m1'],
+    budget: { monthlyCapUSD: 100 },
+    getRecords: () => [{ userId: 'm1', costUSD: 10, ts: new Date().toISOString() }],
+    alerting: alertingDouble,
+    forecaster: makeForecaster(250), // 2.5x cap
+  });
+  assert.ok(r.fired);
+  assert.equal(r.severity, 'error');
+  assert.equal(alertingDouble.sent[0].severity, 'error');
+  assert.match(alertingDouble.sent[0].title, /^org_budget_forecast_error:org1$/);
+});
+
+test('checkForecastBudget returns null without orgId/budget', async () => {
+  const r1 = await costAlert.checkForecastBudget({
+    orgId: 'org1',
+    memberIds: ['m1'],
+    getRecords: () => [],
+    alerting: alertingDouble,
+  });
+  assert.equal(r1, null);
+  const r2 = await costAlert.checkForecastBudget({
+    memberIds: ['m1'],
+    budget: { monthlyCapUSD: 100 },
+    getRecords: () => [],
+    alerting: alertingDouble,
+  });
+  assert.equal(r2, null);
+});
+
+test('maybeCheck wires orgBudgetForecast when budget + forecaster trip', async () => {
+  const r = await costAlert.maybeCheck({
+    orgId: 'org1',
+    memberIds: ['m1'],
+    budget: { monthlyCapUSD: 100 },
+    getRecords: () => [{ userId: 'm1', costUSD: 1, ts: new Date().toISOString() }],
+    alerting: alertingDouble,
+    forecaster: makeForecaster(300),
+  });
+  assert.ok(r.orgBudgetForecast && r.orgBudgetForecast.fired);
+  assert.equal(r.orgBudgetForecast.severity, 'error');
 });
