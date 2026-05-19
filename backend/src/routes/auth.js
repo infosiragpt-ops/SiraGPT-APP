@@ -96,6 +96,10 @@ const {
   getGoogleServicesCallbackURL,
 } = require('../config/oauth-url-policy');
 const twoFASms = require('../services/two-fa-sms');
+const {
+  orgRequiresTwoFactor,
+  userHasTwoFactor,
+} = require('../services/orgs-service');
 
 const router = express.Router();
 
@@ -766,6 +770,41 @@ router.post('/login', loginRateLimit, validateBody(LoginRequestSchema, { codePre
     }
     // Successful credential check — clear lockout counter.
     defaultLockout.recordSuccess(email);
+
+    // ─── Org-level 2FA enforcement (ratchet 45) ───────────────
+    // When the user belongs to an org with settings.security.requireTwoFactor
+    // enabled and has not enrolled either SMS or TOTP, refuse to mint a
+    // session. The SMS/TOTP gates below already handle users who *have*
+    // enrolled 2FA — this gate fires when the user has none at all.
+    if (!userHasTwoFactor(user) && prisma.orgMembership?.findMany) {
+      try {
+        const memberships = await prisma.orgMembership.findMany({
+          where: { userId: user.id },
+          include: { organization: { select: { id: true, slug: true, settings: true } } },
+        });
+        const blocking = memberships.find((m) => orgRequiresTwoFactor(m.organization));
+        if (blocking) {
+          void writeAuditLog(prisma, {
+            req,
+            action: 'login_blocked_org_2fa',
+            resource: 'user',
+            resourceId: user.id,
+            userId: user.id,
+            actorName: user.email,
+            metadata: { orgId: blocking.organization.id },
+          });
+          return res.status(403).json({
+            error: 'organization requires two-factor authentication',
+            code: 'org_requires_2fa',
+            orgId: blocking.organization.id,
+          });
+        }
+      } catch (e) {
+        console.error('[auth/login] org-2fa check failed:', e?.message || e);
+        // Fail open on transient DB errors to avoid locking everyone out —
+        // the per-route enforce hook still blocks org-scoped fetches.
+      }
+    }
 
     // ─── SMS 2FA gate (ratchet 45) ────────────────────────────
     // When the user has opted in (User.twoFactorEnabled) AND has a

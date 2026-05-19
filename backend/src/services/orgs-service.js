@@ -67,11 +67,59 @@ function isValidRole(role) {
 }
 
 /**
+ * Returns true when the org's settings.security.requireTwoFactor flag
+ * is enabled. Tolerant to missing/null/object-shape so callers can
+ * pass any `organization` row.
+ */
+function orgRequiresTwoFactor(org) {
+  if (!org || typeof org !== 'object') return false;
+  const settings = org.settings && typeof org.settings === 'object' && !Array.isArray(org.settings)
+    ? org.settings
+    : null;
+  if (!settings) return false;
+  const security = settings.security && typeof settings.security === 'object' && !Array.isArray(settings.security)
+    ? settings.security
+    : null;
+  if (!security) return false;
+  return security.requireTwoFactor === true;
+}
+
+/**
+ * Returns true when the user has any 2FA factor enabled — either SMS
+ * (twoFactorEnabled + verified phone) or TOTP (totpEnabled). OWNER /
+ * ADMIN role does NOT bypass; the org explicitly opted into the
+ * requirement and OWNERS can lift it via POST /api/orgs/:id/security.
+ */
+function userHasTwoFactor(user) {
+  if (!user || typeof user !== 'object') return false;
+  const smsOn = Boolean(user.twoFactorEnabled)
+    && user.phoneVerifiedAt != null
+    && typeof user.phone === 'string'
+    && user.phone.trim().length > 0;
+  const totpOn = Boolean(user.totpEnabled);
+  return smsOn || totpOn;
+}
+
+/**
+ * Throws a 403 `org_requires_2fa` error when the org demands 2FA and
+ * the user has not enrolled. No-op otherwise. The thrown error carries
+ * a `code` so handlers can echo it as the response error code.
+ */
+function assertOrgTwoFactor(org, user) {
+  if (!orgRequiresTwoFactor(org)) return;
+  if (userHasTwoFactor(user)) return;
+  const e = new Error('organization requires two-factor authentication');
+  e.status = 403;
+  e.code = 'org_requires_2fa';
+  throw e;
+}
+
+/**
  * Confirm `userId` has an active membership on `orgId`. Returns the
  * row when found; throws an Error with `.status` (404/403) otherwise
  * so callers can `res.status(err.status).json(...)`.
  */
-async function assertMembership(prisma, orgId, userId, minRole = 'VIEWER') {
+async function assertMembership(prisma, orgId, userId, minRole = 'VIEWER', opts = {}) {
   if (!prisma?.orgMembership?.findUnique) {
     const e = new Error('prisma client unavailable');
     e.status = 500;
@@ -90,6 +138,15 @@ async function assertMembership(prisma, orgId, userId, minRole = 'VIEWER') {
     const e = new Error(`requires role ${minRole}+`);
     e.status = 403;
     throw e;
+  }
+  // Org-level 2FA enforcement (ratchet 45). Callers may opt-in by
+  // passing the authenticated user object; when the org's policy demands
+  // 2FA and the user lacks an enrolled factor we throw a 403 with code
+  // `org_requires_2fa`. The check is skipped silently when no user is
+  // provided to preserve back-compat with handlers that pre-date the
+  // policy field.
+  if (opts && opts.user) {
+    assertOrgTwoFactor(row.organization, opts.user);
   }
   return row;
 }
@@ -121,4 +178,7 @@ module.exports = {
   isValidRole,
   assertMembership,
   uniqueSlug,
+  orgRequiresTwoFactor,
+  userHasTwoFactor,
+  assertOrgTwoFactor,
 };

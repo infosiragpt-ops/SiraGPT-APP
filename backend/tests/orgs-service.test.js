@@ -61,6 +61,31 @@ test('isValidRole: accepts only enum members', () => {
   assert.equal(orgs.isValidRole(null), false);
 });
 
+// ─── org-level 2FA policy ───────────────────────────────────────────
+test('orgRequiresTwoFactor: reads nested security flag defensively', () => {
+  assert.equal(orgs.orgRequiresTwoFactor({ settings: { security: { requireTwoFactor: true } } }), true);
+  assert.equal(orgs.orgRequiresTwoFactor({ settings: { security: { requireTwoFactor: false } } }), false);
+  assert.equal(orgs.orgRequiresTwoFactor({ settings: null }), false);
+  assert.equal(orgs.orgRequiresTwoFactor({ settings: [] }), false);
+});
+
+test('userHasTwoFactor: accepts verified SMS or TOTP only', () => {
+  assert.equal(orgs.userHasTwoFactor({ totpEnabled: true }), true);
+  assert.equal(orgs.userHasTwoFactor({ twoFactorEnabled: true, phoneVerifiedAt: new Date(), phone: '+14155550100' }), true);
+  assert.equal(orgs.userHasTwoFactor({ twoFactorEnabled: true, phoneVerifiedAt: new Date(), phone: '   ' }), false);
+  assert.equal(orgs.userHasTwoFactor({ twoFactorEnabled: true, phone: '+14155550100' }), false);
+  assert.equal(orgs.userHasTwoFactor({}), false);
+});
+
+test('assertOrgTwoFactor: blocks users without an enrolled factor', () => {
+  const org = { settings: { security: { requireTwoFactor: true } } };
+  assert.doesNotThrow(() => orgs.assertOrgTwoFactor(org, { totpEnabled: true }));
+  assert.throws(
+    () => orgs.assertOrgTwoFactor(org, { totpEnabled: false }),
+    (err) => err.status === 403 && err.code === 'org_requires_2fa',
+  );
+});
+
 // ─── assertMembership ────────────────────────────────────────────────
 test('assertMembership: returns row when member', async () => {
   const prismaStub = {
@@ -92,6 +117,24 @@ test('assertMembership: 403 when role too low', async () => {
     () => orgs.assertMembership(prismaStub, 'o1', 'u1', 'ADMIN'),
     (err) => err.status === 403,
   );
+});
+
+test('assertMembership: enforces org 2FA policy when user context is provided', async () => {
+  const prismaStub = {
+    orgMembership: {
+      findUnique: async () => ({
+        id: 'm1',
+        role: 'ADMIN',
+        organization: { id: 'o1', settings: { security: { requireTwoFactor: true } } },
+      }),
+    },
+  };
+  await assert.rejects(
+    () => orgs.assertMembership(prismaStub, 'o1', 'u1', 'VIEWER', { user: { id: 'u1' } }),
+    (err) => err.status === 403 && err.code === 'org_requires_2fa',
+  );
+  const row = await orgs.assertMembership(prismaStub, 'o1', 'u1', 'VIEWER', { user: { id: 'u1', totpEnabled: true } });
+  assert.equal(row.role, 'ADMIN');
 });
 
 // ─── uniqueSlug ──────────────────────────────────────────────────────

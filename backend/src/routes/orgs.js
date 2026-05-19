@@ -44,6 +44,9 @@ const {
   canShareToOrg,
   isValidRole,
   roleAtLeast,
+  orgRequiresTwoFactor,
+  userHasTwoFactor,
+  assertOrgTwoFactor,
 } = require('../services/orgs-service');
 const { defaultSteps, computeProgress } = require('../services/org-onboarding');
 const { responseCache, invalidate: invalidateResponseCache } = require('../middleware/response-cache');
@@ -159,7 +162,7 @@ router.get('/:id/onboarding-progress', authenticateToken, ONBOARDING_PROGRESS_CA
   try {
     // Caller must be a member of the org (any role). `assertMembership`
     // throws with err.status on non-member / forbidden.
-    await assertMembership(prisma, orgId, userId);
+    await assertMembership(prisma, orgId, userId, 'VIEWER', { user: req.user });
 
     const org = await prisma.organization.findUnique({
       where: { id: orgId },
@@ -172,7 +175,11 @@ router.get('/:id/onboarding-progress', authenticateToken, ONBOARDING_PROGRESS_CA
     });
     res.json(progress);
   } catch (err) {
-    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    if (err && err.status) {
+      const body = { error: err.message };
+      if (err.code) body.code = err.code;
+      return res.status(err.status).json(body);
+    }
     console.error('[orgs] onboarding-progress failed:', err.message);
     res.status(500).json({ error: 'failed to compute onboarding progress' });
   }
@@ -2785,7 +2792,7 @@ async function getOrgSettingsHandler(req, res, deps = { prisma }) {
   const userId = req.user.id;
   const orgId = req.params.id;
   try {
-    await assertMembership(db, orgId, userId, 'VIEWER');
+    await assertMembership(db, orgId, userId, 'VIEWER', { user: req.user });
     const org = await db.organization.findUnique({
       where: { id: orgId },
       select: { settings: true },
@@ -2793,7 +2800,11 @@ async function getOrgSettingsHandler(req, res, deps = { prisma }) {
     if (!org) return res.status(404).json({ error: 'organization not found' });
     res.json({ settings: org.settings && typeof org.settings === 'object' ? org.settings : {} });
   } catch (err) {
-    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    if (err && err.status) {
+      const body = { error: err.message };
+      if (err.code) body.code = err.code;
+      return res.status(err.status).json(body);
+    }
     console.error('[orgs] get settings failed:', err.message);
     res.status(500).json({ error: 'failed to load settings' });
   }
@@ -2827,7 +2838,7 @@ async function patchOrgSettingsHandler(req, res, deps = { prisma, writeAuditLog 
     console.warn('[orgs] settings patch had unknown keys:', warnings.join(','));
   }
   try {
-    const membership = await assertMembership(db, orgId, userId, 'ADMIN');
+    const membership = await assertMembership(db, orgId, userId, 'ADMIN', { user: req.user });
     if (!canManageMembers(membership.role)) {
       return res.status(403).json({ error: 'insufficient role to update settings' });
     }
@@ -2857,7 +2868,11 @@ async function patchOrgSettingsHandler(req, res, deps = { prisma, writeAuditLog 
     if (warnings.length) responseBody.warnings = warnings;
     res.json(responseBody);
   } catch (err) {
-    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    if (err && err.status) {
+      const body = { error: err.message };
+      if (err.code) body.code = err.code;
+      return res.status(err.status).json(body);
+    }
     console.error('[orgs] patch settings failed:', err.message);
     res.status(500).json({ error: 'failed to update settings' });
   }
@@ -2865,6 +2880,73 @@ async function patchOrgSettingsHandler(req, res, deps = { prisma, writeAuditLog 
 
 router.get('/:id/settings', authenticateToken, (req, res) => getOrgSettingsHandler(req, res));
 router.patch('/:id/settings', authenticateToken, (req, res) => patchOrgSettingsHandler(req, res));
+
+// ─── Security policy (ratchet 45) ───────────────────────────────────
+// POST /api/orgs/:id/security — OWNER-only. Toggles the org-level 2FA
+// enforcement flag, persisted under `settings.security.requireTwoFactor`.
+// When enabled, members without an enrolled SMS or TOTP factor are
+// blocked from creating sessions or fetching org-scoped data — they
+// receive a 403 with error code `org_requires_2fa` so the FE can route
+// them to the 2FA enrolment flow before retrying.
+//
+// Body: { requireTwoFactor: boolean }
+async function postOrgSecurityHandler(req, res, deps = { prisma, writeAuditLog }) {
+  const db = deps.prisma || prisma;
+  const audit = deps.writeAuditLog || writeAuditLog;
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  const body = req.body || {};
+  if (typeof body.requireTwoFactor !== 'boolean') {
+    return res.status(400).json({ error: 'requireTwoFactor must be a boolean' });
+  }
+  try {
+    const caller = await assertMembership(db, orgId, userId, 'OWNER');
+    if (caller.role !== 'OWNER') {
+      return res.status(403).json({ error: 'only OWNER can change security policy' });
+    }
+    const existing = await db.organization.findUnique({
+      where: { id: orgId },
+      select: { settings: true },
+    });
+    if (!existing) return res.status(404).json({ error: 'organization not found' });
+    const before = existing.settings && typeof existing.settings === 'object' && !Array.isArray(existing.settings)
+      ? existing.settings
+      : {};
+    const security = before.security && typeof before.security === 'object' && !Array.isArray(before.security)
+      ? before.security
+      : {};
+    const nextSecurity = { ...security, requireTwoFactor: body.requireTwoFactor };
+    const merged = { ...before, security: nextSecurity };
+    const updated = await db.organization.update({
+      where: { id: orgId },
+      data: { settings: merged },
+      select: { settings: true },
+    });
+    void audit(db, {
+      action: 'org_security_update',
+      userId,
+      resource: 'organization',
+      resourceId: orgId,
+      before: { security },
+      after: { security: nextSecurity },
+      metadata: { orgId, requireTwoFactor: body.requireTwoFactor },
+      req,
+    });
+    res.json({
+      security: (updated.settings && updated.settings.security) || nextSecurity,
+    });
+  } catch (err) {
+    if (err && err.status) {
+      const body = { error: err.message };
+      if (err.code) body.code = err.code;
+      return res.status(err.status).json(body);
+    }
+    console.error('[orgs] post security failed:', err.message);
+    res.status(500).json({ error: 'failed to update security policy' });
+  }
+}
+
+router.post('/:id/security', authenticateToken, (req, res) => postOrgSecurityHandler(req, res));
 
 // ─── GET /api/orgs/:id/usage-trend (cycle 45) ───────────────────────
 // Returns a 30-day daily breakdown of AI cost / token / request usage
@@ -3833,6 +3915,7 @@ router.__handlers = {
   listMemberActivity: listMemberActivityHandler,
   getOrgSettings: getOrgSettingsHandler,
   patchOrgSettings: patchOrgSettingsHandler,
+  postOrgSecurity: postOrgSecurityHandler,
   streamOrgEvents: streamOrgEventsHandler,
   usageTrend: usageTrendHandler,
 };
