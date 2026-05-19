@@ -59,4 +59,4 @@ cp .env.example .env.local   # edit API keys
 
 ## License
 
-MIT — see [LICENSE](LICENSE) and [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
+MIT — see [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
