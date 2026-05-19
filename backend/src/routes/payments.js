@@ -8,6 +8,7 @@ const { getPriceIdForPlan } = require('../utils/stripe-setup');
 const usageMonitor = require('../services/usage-monitor');
 const emailService = require('../services/email');
 const { writeAuditLog } = require('../utils/audit-log');
+const triggers = require('../services/trigger-registry');
 
 // Helper: coerce a value to BigInt safely. Stripe + Prisma return
 // monthlyLimit/usage as BigInt in some code paths and Number in
@@ -989,7 +990,16 @@ async function handleInvoicePaymentSucceeded(invoice) {
     });
 
     console.log(`Invoice payment succeeded for user ${user.id}`);
-    
+
+    // Fan out to user-owned webhooks + Slack (best-effort).
+    triggers.publish('payment.succeeded', {
+      invoiceId: invoice.id,
+      amount: Number(invoice.amount_paid) / 100,
+      currency: invoice.currency,
+    }, user.id).catch((err) => {
+      console.warn('[payments] trigger payment.succeeded failed:', err?.message || err);
+    });
+
   } catch (error) {
     console.error('Error handling invoice payment succeeded:', error);
   }
@@ -1067,7 +1077,15 @@ async function handleInvoicePaymentFailed(invoice) {
     });
 
     console.log(`Invoice payment failed for user ${user.id}`);
-    
+
+    triggers.publish('payment.failed', {
+      invoiceId: invoice.id,
+      amount: amountDue,
+      reason: invoice.last_finalization_error?.message || 'Payment declined',
+    }, user.id).catch((err) => {
+      console.warn('[payments] trigger payment.failed failed:', err?.message || err);
+    });
+
   } catch (error) {
     console.error('Error handling invoice payment failed:', error);
   }

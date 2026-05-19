@@ -79,6 +79,8 @@ model User {
   pushSubscriptions   PushSubscription[]
   savedSearches       SavedSearch[]
   bookmarks           Bookmark[]
+  webhookEndpoints    WebhookEndpoint[]
+  slackIntegrations   SlackIntegration[]
 
   @@index([deletedAt])
   @@map("users")
@@ -301,6 +303,48 @@ model Bookmark {
   @@unique([userId, messageId])
   @@index([userId, createdAt])
   @@map("bookmarks")
+}
+
+// User-managed outbound webhook subscriptions. Each row is one
+// {url, events[], secret} triple that the trigger registry fans out
+// to when a matching event is published. The secret is the HMAC key
+// the recipient uses to verify the signature header.
+model WebhookEndpoint {
+  id             String    @id @default(cuid())
+  userId         String
+  url            String
+  events         String[]
+  secret         String
+  isActive       Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+  lastDeliveryAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([userId, isActive])
+  @@map("webhook_endpoints")
+}
+
+// Per-user Slack Incoming Webhook configuration. The webhookUrl is
+// encrypted at rest (AES-256-GCM, see services/slack-integration.js).
+// `isEnabled` gates whether trigger-registry fires Slack notifications
+// for this user — flipped off after the test ping until the user opts
+// in explicitly.
+model SlackIntegration {
+  id           String    @id @default(cuid())
+  userId       String
+  webhookUrl   String    @db.Text
+  channelName  String?
+  isEnabled    Boolean   @default(false)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  lastEventAt  DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("slack_integrations")
 }
 
 model AgentTask {

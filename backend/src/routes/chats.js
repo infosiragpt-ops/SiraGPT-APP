@@ -9,6 +9,8 @@ const streamCache = require('../services/stream-cache');
 const { buildChatListWhere, parseBoolean, parsePositiveInt } = require('../services/chat-scope');
 const feedbackLedger = require('../services/agents/feedback-ledger');
 const rag = require('../services/rag-service');
+const chatExport = require('../services/chat-export');
+const triggers = require('../services/trigger-registry');
 
 const router = express.Router();
 
@@ -174,6 +176,15 @@ router.post('/', [
     });
 
     res.status(201).json({ chat });
+    // Fire-and-forget trigger publish; never block response.
+    triggers.publish('chat.created', {
+      chatId: chat.id,
+      title: chat.title,
+      model: chat.model,
+      projectId: chat.projectId || null,
+    }, req.user.id).catch((err) => {
+      console.warn('[chats] trigger chat.created failed:', err?.message || err);
+    });
   } catch (error) {
     console.error('Create chat error:', error);
     res.status(500).json({ error: 'Failed to create chat' });
@@ -261,6 +272,52 @@ router.get('/:id', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Get chat error:', error);
     res.status(500).json({ error: 'Failed to fetch chat' });
+  }
+});
+
+// Export chat — Markdown / HTML / JSON / PDF.
+// Honors soft-delete + ownership. Format defaults to md.
+router.get('/:id/export', authenticateToken, async (req, res) => {
+  try {
+    const format = String(req.query.format || 'md').toLowerCase();
+    if (!chatExport.FORMATS.includes(format)) {
+      return res.status(400).json({ error: 'invalid format', allowed: chatExport.FORMATS });
+    }
+
+    const chat = await prisma.chat.findFirst({
+      where: { id: req.params.id, userId: req.user.id, deletedAt: null },
+      include: {
+        messages: {
+          where: { deletedAt: null },
+          orderBy: { timestamp: 'asc' },
+        },
+      },
+    });
+
+    if (!chat) return res.status(404).json({ error: 'Chat not found' });
+
+    // BigInt-safe: drop tokens via serializeChat is overkill — handle in renderers.
+    const serializable = serializeChat(chat);
+
+    const filename = chatExport.filenameFor(serializable, format);
+    res.setHeader('Content-Type', chatExport.contentTypeFor(format));
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+    if (format === 'md') return res.send(chatExport.buildMarkdown(serializable));
+    if (format === 'html') return res.send(chatExport.buildHtml(serializable));
+    if (format === 'json') return res.send(chatExport.buildJson(serializable));
+    if (format === 'pdf') {
+      const stream = chatExport.buildPdfStream(serializable);
+      stream.on('error', (err) => {
+        console.error('[chats/export] pdf stream error:', err.message);
+        if (!res.headersSent) res.status(500).json({ error: 'pdf generation failed' });
+      });
+      return stream.pipe(res);
+    }
+    return res.status(400).json({ error: 'unsupported format' });
+  } catch (error) {
+    console.error('Export chat error:', error);
+    if (!res.headersSent) res.status(500).json({ error: 'Failed to export chat' });
   }
 });
 
@@ -412,9 +469,38 @@ router.post('/:id/messages', [
     }
 
     res.status(201).json({ message });
+
+    // Trigger chat.message_sent — debounced 1s per chat in the registry
+    // so a rapid stream of partial saves doesn't spam subscribers.
+    triggers.publishDebounced('chat.message_sent', {
+      chatId: req.params.id,
+      messageId: message.id,
+      role: message.role,
+      contentLength: typeof content === 'string' ? content.length : 0,
+    }, req.user.id, { dedupeKey: `msg:${req.params.id}`, delayMs: 1000 }).catch((err) => {
+      console.warn('[chats] trigger chat.message_sent failed:', err?.message || err);
+    });
   } catch (error) {
     console.error('Create message error:', error);
     res.status(500).json({ error: 'Failed to create message' });
+  }
+});
+
+// Archive a chat — fires chat.archived trigger.
+router.post('/:id/archive', authenticateToken, async (req, res) => {
+  try {
+    const updated = await prisma.chat.updateMany({
+      where: { id: req.params.id, userId: req.user.id, deletedAt: null },
+      data: { isArchived: true, updatedAt: new Date() },
+    });
+    if (updated.count === 0) return res.status(404).json({ error: 'Chat not found' });
+    res.json({ ok: true });
+    triggers.publish('chat.archived', { chatId: req.params.id }, req.user.id).catch((err) => {
+      console.warn('[chats] trigger chat.archived failed:', err?.message || err);
+    });
+  } catch (error) {
+    console.error('Archive chat error:', error);
+    res.status(500).json({ error: 'Failed to archive chat' });
   }
 });
 
