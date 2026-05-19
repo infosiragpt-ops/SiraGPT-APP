@@ -1241,4 +1241,88 @@ router.get('/sso/:orgSlug/callback', async (req, res) => {
 // Test surface — let route tests poke the helpers without a live DB.
 router.__ssoHelpers = { redactSsoConfigForPublic, resolveOrgForSso };
 
+// ─── Email verification (ratchet 45) ───────────────────────────────
+// Two endpoints: the magic-link redeemer (public, GET) and the resend
+// endpoint (authenticated, POST). Both reuse services/email-verification.js
+// so the org-invitation accept flow can mint tokens through the same
+// helper.
+
+const {
+  createVerificationToken,
+  redeemVerificationToken,
+} = require('../services/email-verification');
+const emailService = require('../services/email');
+
+// Resend is rate-limited per user so a malicious client can't spam an
+// inbox. 3 per 15 min lines up with the password-reset limiter.
+const resendVerificationRateLimit = makeAuthRateLimit({
+  name: 'resend-verification',
+  limit: 3,
+  windowMs: 15 * 60 * 1000,
+  keyBy: 'ip+email',
+});
+
+// GET /api/auth/verify-email/:token — public. Sets emailVerifiedAt = now
+// when the token is valid + unconsumed + unexpired.
+router.get('/verify-email/:token', async (req, res) => {
+  const token = String(req.params.token || '');
+  if (!token || token.length < 16) {
+    return res.status(400).json({ error: 'invalid token' });
+  }
+  try {
+    const result = await redeemVerificationToken(prisma, token);
+    if (result.ok) {
+      void writeAuditLog(prisma, {
+        req,
+        action: 'email_verified',
+        resource: 'user',
+        resourceId: result.userId,
+        userId: result.userId,
+      });
+      return res.json({ ok: true, userId: result.userId });
+    }
+    switch (result.code) {
+      case 'expired':
+        return res.status(410).json({ error: 'verification token expired' });
+      case 'already_used':
+        return res.status(409).json({ error: 'verification token already used' });
+      case 'not_found':
+      default:
+        return res.status(404).json({ error: 'verification token not found' });
+    }
+  } catch (err) {
+    console.error('[auth/verify-email] failed:', err && err.message ? err.message : err);
+    return res.status(500).json({ error: 'failed to verify email' });
+  }
+});
+
+// POST /api/auth/resend-verification — authenticated. Mints a fresh
+// token + emails it. No-ops with 200 if the user is already verified
+// so the FE can be naive about state.
+router.post('/resend-verification', authenticateToken, resendVerificationRateLimit, async (req, res) => {
+  try {
+    const user = req.user;
+    if (user.emailVerifiedAt) {
+      return res.json({ ok: true, alreadyVerified: true });
+    }
+    const { token, expiresAt } = await createVerificationToken(prisma, user.id);
+    await emailService.sendEmailVerification(
+      { name: user.name, email: user.email },
+      token,
+    );
+    void writeAuditLog(prisma, {
+      req,
+      action: 'verification_resent',
+      resource: 'user',
+      resourceId: user.id,
+      userId: user.id,
+      actorName: user.email,
+    });
+    res.json({ ok: true, expiresAt });
+  } catch (err) {
+    console.error('[auth/resend-verification] failed:', err && err.message ? err.message : err);
+    res.status(500).json({ error: 'failed to send verification email' });
+  }
+});
+
 module.exports = router;

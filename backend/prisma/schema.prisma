@@ -64,6 +64,12 @@ model User {
   // 30-day grace window before the hard-delete cron purges it.
   deletedAt DateTime?
 
+  // Email verification — non-null once the user has clicked the
+  // magic link from `EmailVerificationToken`. Org invitations (cycle
+  // 27) gate full membership acceptance on this column being set so
+  // a freshly-invited stranger can't slip past identity checks.
+  emailVerifiedAt DateTime?
+
   // Relations
   chats               Chat[]
   payments            Payment[]
@@ -89,6 +95,7 @@ model User {
   slackIntegrations   SlackIntegration[]
   policyAcceptances   PolicyAcceptance[]
   apiKeys             ApiKey[]
+  emailVerificationTokens EmailVerificationToken[]
 
   // Organization / team membership — multi-tenant scaffolding (cycle 27).
   // A user can belong to multiple organizations with different roles.
@@ -1377,4 +1384,25 @@ model OrgInvitation {
   @@index([orgId, email])
   @@index([email])
   @@map("org_invitations")
+}
+
+// Email verification token (ratchet 45).
+//
+// Short-lived magic-link tokens. The verify-email endpoint looks up
+// a row by `token`, checks it is unread + unexpired, sets
+// `User.emailVerifiedAt`, and marks the row consumed. Resend mints
+// a new row — previous unconsumed rows for the same user are left
+// alone but expire on their own clock.
+model EmailVerificationToken {
+  id        String    @id @default(cuid())
+  userId    String
+  token     String    @unique
+  expiresAt DateTime
+  consumedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("email_verification_tokens")
 }

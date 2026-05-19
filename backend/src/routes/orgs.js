@@ -221,6 +221,40 @@ router.post('/invitation/:token/accept', authenticateToken, async (req, res) => 
       return res.status(403).json({ error: 'invitation email mismatch' });
     }
 
+    // Ratchet 45 — gate full membership acceptance on a verified
+    // email. If the inviter typed a fresh address into the invite
+    // form and that user signed up with the same address, we still
+    // want a proof-of-control step before the user can read shared
+    // org chats / files. We mint a fresh verification token, send the
+    // magic link, and return `needs_verification` so the FE can show
+    // a "check your inbox" screen. The invitation row is left as
+    // pending (not accepted) so the same token can be redeemed again
+    // after verification succeeds.
+    if (!req.user.emailVerifiedAt) {
+      try {
+        const { createVerificationToken } = require('../services/email-verification');
+        const emailService = require('../services/email');
+        const { token: vToken, expiresAt } = await createVerificationToken(prisma, userId);
+        // Fire-and-forget — SMTP failures must not block the API
+        // response. The FE will offer a "resend" affordance.
+        Promise.resolve(
+          emailService.sendEmailVerification(
+            { name: req.user.name, email: req.user.email },
+            vToken,
+          ),
+        ).catch(() => {});
+        return res.status(202).json({
+          ok: false,
+          needs_verification: true,
+          expiresAt,
+          message: 'Email verification required before joining the organization',
+        });
+      } catch (verifyErr) {
+        console.error('[orgs] verification mint failed:', verifyErr && verifyErr.message ? verifyErr.message : verifyErr);
+        return res.status(500).json({ error: 'failed to start email verification' });
+      }
+    }
+
     const membership = await prisma.$transaction(async (tx) => {
       const existing = await tx.orgMembership.findUnique({
         where: { orgId_userId: { orgId: invite.orgId, userId } },
