@@ -66,31 +66,42 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       return this.props.fallback(error, this.reset)
     }
 
-    return (
-      <div className="my-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm">
-        <div className="flex items-start gap-2">
-          <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5 text-destructive" />
-          <div className="flex-1 min-w-0">
-            <div className="font-medium text-destructive">
-              No se pudo renderizar este contenido
-            </div>
-            <div className="mt-0.5 text-xs text-muted-foreground break-words">
-              {error.message || "Error desconocido"}
-            </div>
-          </div>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={this.reset}
-            className="h-7 px-2 text-xs shrink-0"
-          >
-            <RotateCcw className="h-3 w-3 mr-1" />
-            Reintentar
-          </Button>
-        </div>
-      </div>
-    )
+    // In production, hide raw error.message — it can leak internal
+     // implementation details (stack frames, library internals, PII
+     // baked into thrown strings). In dev we surface it verbatim so
+     // engineers can debug without opening devtools. The test suite
+     // depends on the dev path emitting error.message, so we keep
+     // that branch stable. Next.js sets NODE_ENV at build time.
+     const isProd = typeof process !== "undefined" && process.env?.NODE_ENV === "production"
+     const detail = isProd
+       ? "Ha ocurrido un error inesperado. Por favor recarga la página."
+       : (error.message || "Error desconocido")
+
+     return (
+       <div className="my-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm">
+         <div className="flex items-start gap-2">
+           <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5 text-destructive" />
+           <div className="flex-1 min-w-0">
+             <div className="font-medium text-destructive">
+               No se pudo renderizar este contenido
+             </div>
+             <div className="mt-0.5 text-xs text-muted-foreground break-words">
+               {detail}
+             </div>
+           </div>
+           <Button
+             type="button"
+             variant="ghost"
+             size="sm"
+             onClick={this.reset}
+             className="h-7 px-2 text-xs shrink-0"
+           >
+             <RotateCcw className="h-3 w-3 mr-1" />
+             Reintentar
+           </Button>
+         </div>
+       </div>
+     )
   }
 }
 

@@ -645,30 +645,51 @@ test('cache: buildEnrichedFileContext second turn with same file hits cache', as
     mimeType: 'text/plain',
     extractedText: 'Research paper on cache-coherence protocols. Date: 2026-05-18.',
   };
-  const t0 = Date.now();
   const a1 = await analyzer.buildEnrichedFileContext({ prisma: null, processedFiles: [file] });
-  const elapsed1 = Date.now() - t0;
-  const t1 = Date.now();
+  // Snapshot cache stats after the first turn — this is the baseline
+  // we'll compare against. The second turn must produce additional
+  // hits (cache was consulted and answered) and must NOT increase
+  // misses by the same amount (i.e. analyzers re-running from scratch).
+  const statsAfterFirst = {
+    size: cache.stats().size,
+    hits: cache.stats().hits,
+    misses: cache.stats().misses,
+  };
   const a2 = await analyzer.buildEnrichedFileContext({ prisma: null, processedFiles: [file] });
-  const elapsed2 = Date.now() - t1;
+  const statsAfterSecond = cache.stats();
   // Sanity — both runs produce all 312 blocks.
   assert.equal(a1.analyzerTelemetry.blockCount, 312);
   assert.equal(a2.analyzerTelemetry.blockCount, 312);
-  // Cache hits show up in the second telemetry summary.
-  // We don't assert raw timing to avoid CI flakes, but cache size must
-  // have grown after the first call, and the second call's totalElapsedMs
-  // should be substantially smaller than the first.
-  const stats = cache.stats();
-  assert.ok(stats.size > 100, `cache size ${stats.size} should exceed 100 entries`);
-  assert.ok(stats.hits > 0, `expected cache hits on second turn, got ${stats.hits}`);
-  // Output is byte-equal for cached blocks.
+  // First turn populated the cache.
+  assert.ok(statsAfterFirst.size > 100, `cache size ${statsAfterFirst.size} should exceed 100 entries after first turn`);
+  // Behavioral assertion (deterministic, no timing):
+  // The second turn MUST register cache hits — this is the only way
+  // to know caching worked. Each cached analyzer call on the 2nd turn
+  // produces a hit instead of a miss.
+  const hitsDelta = statsAfterSecond.hits - statsAfterFirst.hits;
+  const missesDelta = statsAfterSecond.misses - statsAfterFirst.misses;
+  assert.ok(
+    hitsDelta > 100,
+    `expected second turn to register >100 cache hits, got ${hitsDelta} (hits before=${statsAfterFirst.hits}, after=${statsAfterSecond.hits})`,
+  );
+  // And the cache should not have grown materially — the same keys
+  // should be answering. A small delta (≤5%) tolerates non-memoized
+  // helpers that legitimately allocate per-turn.
+  const sizeGrowth = statsAfterSecond.size - statsAfterFirst.size;
+  assert.ok(
+    sizeGrowth <= Math.max(5, Math.floor(statsAfterFirst.size * 0.05)),
+    `cache should not balloon on 2nd turn: grew by ${sizeGrowth} (from ${statsAfterFirst.size} → ${statsAfterSecond.size})`,
+  );
+  // Hits should dominate misses on the second turn (cache is doing work).
+  assert.ok(
+    hitsDelta > missesDelta,
+    `expected hits (${hitsDelta}) > misses (${missesDelta}) on 2nd turn`,
+  );
+  // Output is byte-equal for cached blocks — proves cache returns
+  // the same value rather than re-computing a structurally-identical one.
   assert.equal(a1.insightsBlock, a2.insightsBlock);
   assert.equal(a1.piiSafetyBlock, a2.piiSafetyBlock);
   assert.equal(a1.glossaryBlock, a2.glossaryBlock);
-  // Timing: second turn should be at least 5× faster (very conservative).
-  // In practice it's 50-100× — this guard catches regressions where the
-  // cache was accidentally bypassed.
-  assert.ok(elapsed2 * 5 < elapsed1 + 50, `expected 2nd turn (${elapsed2}ms) to be much faster than 1st (${elapsed1}ms)`);
 });
 
 test('cache: SIRAGPT_ANALYZER_CACHE=0 disables caching entirely', async () => {

@@ -646,47 +646,21 @@ const { buildWebAuthnRouter } = require('./src/routes/webauthn');
 app.use('/api/webauthn', buildWebAuthnRouter());
 
 
-// Error handling middleware
-app.use((err, req, res, next) => {
-    // Use the request-bound logger so the error correlates with the
-    // request id already emitted in the access log. Falls back to the
-    // module-level logger if pino-http didn't run for some reason
-    // (e.g. error thrown before middleware chain attached).
-    const log = req.log || logger;
-    log.error(
-        { err, status: err.status || 500 },
-        'request_failed',
-    );
-    captureSentryException(err, {
-        req,
-        tags: {
-            surface: 'express_error_handler',
-            status: err.status || 500,
-        },
-    });
-
-    if (err.type === 'entity.too.large') {
-        return res.status(413).json({ error: 'File too large' });
-    }
-
-    if (err instanceof multer.MulterError || /^Tipo no permitido:/i.test(err.message || '')) {
-        return res.status(400).json({
-            error: err.message || 'Upload validation failed',
-            code: err.code || 'upload_validation_failed',
-        });
-    }
-
-    res.status(err.status || 500).json({
-        error: process.env.NODE_ENV === 'production'
-            ? 'Internal server error'
-            : err.message
-    });
-});
-
-// 404 handler
+// 404 handler — must come before the global error handler so unmatched
+// routes flow through here, not into the error path.
 app.use('*', (req, res) => {
     res.status(404).json({ error: 'Route not found' });
 });
+
+// Centralized error handling — single source of truth for shaping
+// 4xx/5xx responses (Prisma, Stripe, ZodError, ValidationError,
+// MulterError, payload-too-large). Always last middleware so any
+// error thrown anywhere in the chain ends up here. The handler
+// emits a one-line JSON record (reqId + err name/message/stack≤2KB)
+// in addition to pino's structured log so the request-logger pipeline
+// sees errored requests too.
+const { globalErrorHandler: buildGlobalErrorHandler } = require('./src/middleware/error-handler');
+app.use(buildGlobalErrorHandler({ logger, captureException: captureSentryException }));
 
 function startServer() {
     prisma.connectDatabase();

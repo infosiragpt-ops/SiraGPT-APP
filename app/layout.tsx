@@ -12,6 +12,7 @@ import { SettingsProvider } from "@/lib/settings-context"
 import { SyncfusionBannerRemover } from "@/components/SyncfusionBannerRemover"
 import { GlobalDropRedirector } from "@/components/GlobalDropRedirector"
 import { SentryClientInit } from "@/components/sentry-client-init"
+import { ErrorBoundary } from "@/components/error-boundary"
 import { PostHogClientInit } from "@/components/posthog-client-init"
 import { NextIntlClientProvider } from "next-intl"
 import { getLocale, getMessages } from "next-intl/server"
@@ -125,7 +126,9 @@ export default async function RootLayout({
             <AuthProvider>
               <SettingsProvider>
                 <AppWrapper>
-                  {children}
+                  <ErrorBoundary label="root:app">
+                    {children}
+                  </ErrorBoundary>
                 </AppWrapper>
                 <GlobalDropRedirector />
                 <Toaster />

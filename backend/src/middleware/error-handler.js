@@ -145,6 +145,73 @@ function validateRequest(req, _res, next) {
   return next(createValidationError(result.array()));
 }
 
+// Map well-known third-party error classes to (status, code, message).
+// Returns null if the error is not a known type. The mapping is
+// conservative: only error shapes we have actually observed in
+// production get a special status — everything else falls through
+// to the generic 500 / err.status path so we don't silently mask
+// novel errors with stale mappings.
+function classifyKnownError(err) {
+  if (!err || typeof err !== 'object') return null;
+  const name = err.name || '';
+  const code = err.code || '';
+  // ZodError — schema validation. ZodError instances always have an
+  // `issues` array. Surface the first issue's path + message.
+  if (name === 'ZodError' && Array.isArray(err.issues)) {
+    const first = err.issues[0] || {};
+    const field = Array.isArray(first.path) && first.path.length ? first.path.join('.') : 'request';
+    const message = `${field}: ${first.message || 'Invalid value'}`;
+    return { statusCode: 400, code: 'validation_failed', error: 'Validation failed', message };
+  }
+  // express-validator + custom ValidationError class.
+  if (name === 'ValidationError') {
+    return { statusCode: 400, code: 'validation_failed', error: 'Validation failed', message: err.message || 'Validation failed' };
+  }
+  // Prisma — distinguish known request errors from unknown engine crashes.
+  // Codes: https://www.prisma.io/docs/reference/api-reference/error-reference
+  if (name === 'PrismaClientKnownRequestError') {
+    if (code === 'P2002') return { statusCode: 409, code: 'unique_constraint_violation', error: 'Conflict', message: 'Resource already exists' };
+    if (code === 'P2025') return { statusCode: 404, code: 'not_found', error: 'Not found', message: 'Resource not found' };
+    if (code === 'P2003') return { statusCode: 409, code: 'foreign_key_violation', error: 'Conflict', message: 'Referenced resource missing' };
+    if (code === 'P2000' || code === 'P2001') return { statusCode: 400, code: 'invalid_input', error: 'Bad request', message: 'Invalid input for database operation' };
+    return { statusCode: 400, code: 'database_error', error: 'Bad request', message: 'Database request failed' };
+  }
+  if (name === 'PrismaClientValidationError') {
+    return { statusCode: 400, code: 'database_validation_error', error: 'Validation failed', message: 'Invalid data for database operation' };
+  }
+  if (name === 'PrismaClientInitializationError' || name === 'PrismaClientRustPanicError') {
+    return { statusCode: 503, code: 'database_unavailable', error: 'Service unavailable', message: 'Database temporarily unavailable' };
+  }
+  // Stripe — every Stripe error subclasses StripeError and exposes `type`.
+  // Status codes follow Stripe's HTTP semantics.
+  if (name === 'StripeCardError' || err.type === 'StripeCardError') {
+    return { statusCode: 402, code: 'card_declined', error: 'Payment required', message: err.message || 'Card declined' };
+  }
+  if (name === 'StripeInvalidRequestError' || err.type === 'StripeInvalidRequestError') {
+    return { statusCode: 400, code: 'stripe_invalid_request', error: 'Bad request', message: err.message || 'Invalid payment request' };
+  }
+  if (name === 'StripeAuthenticationError' || err.type === 'StripeAuthenticationError') {
+    return { statusCode: 401, code: 'stripe_authentication_error', error: 'Unauthorized', message: 'Payment provider authentication failed' };
+  }
+  if (name === 'StripeRateLimitError' || err.type === 'StripeRateLimitError') {
+    return { statusCode: 429, code: 'stripe_rate_limit', error: 'Too many requests', message: 'Payment provider rate limit exceeded' };
+  }
+  if (name === 'StripeConnectionError' || err.type === 'StripeConnectionError'
+      || name === 'StripeAPIError' || err.type === 'StripeAPIError') {
+    return { statusCode: 503, code: 'stripe_unavailable', error: 'Service unavailable', message: 'Payment provider temporarily unavailable' };
+  }
+  return null;
+}
+
+// Cap the stack to 2 KB so a runaway recursion or compiled regex
+// frame can't blow up the log line.
+function truncateStack(stack) {
+  if (!stack || typeof stack !== 'string') return '';
+  const MAX = 2048;
+  if (stack.length <= MAX) return stack;
+  return `${stack.slice(0, MAX - 14)}…[truncated]`;
+}
+
 function errorToResponse(err, req, { exposeStack = false } = {}) {
   if (err?.type === 'entity.too.large') {
     return {
@@ -173,32 +240,40 @@ function errorToResponse(err, req, { exposeStack = false } = {}) {
     };
   }
 
-  const statusCode = toStatusCode(err?.status || err?.statusCode, 500);
+  // Try known-error classification first (ZodError, Prisma, Stripe,
+  // ValidationError). If a match is found and the original error
+  // didn't already carry a status, use the classified status.
+  const classified = classifyKnownError(err);
+  const rawStatus = err?.status || err?.statusCode || (classified && classified.statusCode);
+  const statusCode = toStatusCode(rawStatus, 500);
   const production = process.env.NODE_ENV === 'production';
-  const expose = err?.expose === true || statusCode < 500;
+  const expose = err?.expose === true || statusCode < 500 || Boolean(classified);
+  const baseMessage = (classified && classified.message) || err?.message || statusMessage(statusCode);
   const safeMessage = production && statusCode >= 500 && !expose
     ? 'Internal server error'
-    : err?.message || statusMessage(statusCode);
+    : baseMessage;
+  const reqId = getRequestId(req);
   const body = {
     ok: false,
-    error: err?.error || safeMessage,
+    error: err?.error || (classified && classified.error) || safeMessage,
     message: safeMessage,
-    ...(err?.code ? { code: err.code } : {}),
+    ...(err?.code || (classified && classified.code) ? { code: err?.code || classified.code } : {}),
     ...(Array.isArray(err?.errors) ? { errors: sanitizeValidationErrors(err.errors) } : {}),
     ...(err?.details ? { details: err.details } : {}),
-    ...(getRequestId(req) ? { requestId: getRequestId(req) } : {}),
-    ...(exposeStack && err?.stack ? { stack: err.stack } : {}),
+    ...(reqId ? { requestId: reqId, reqId } : {}),
+    ...(exposeStack && err?.stack ? { stack: truncateStack(err.stack) } : {}),
   };
   return { statusCode, body };
 }
 
-function globalErrorHandler({ logger = defaultLogger, captureException = null } = {}) {
+function globalErrorHandler({ logger = defaultLogger, captureException = null, stdout = null } = {}) {
   return (err, req, res, next) => {
     if (res.headersSent) return next(err);
 
     const { statusCode, body } = errorToResponse(err, req, {
       exposeStack: process.env.NODE_ENV !== 'production',
     });
+    const reqId = getRequestId(req);
     const log = req.log || logger;
     const level = statusCode >= 500 ? 'error' : 'warn';
     log[level](
@@ -208,6 +283,29 @@ function globalErrorHandler({ logger = defaultLogger, captureException = null } 
       },
       'request_failed',
     );
+
+    // Also emit a single-line JSON record matching request-logger's
+    // format so the access-log pipeline picks it up. This is the
+    // canonical machine-readable error event: it always includes
+    // reqId (set by the request logger upstream), err.name, err.message,
+    // and stack truncated to 2 KB. Falls back to stdout but is
+    // injectable for tests.
+    try {
+      const errPayload = {
+        ts: new Date().toISOString(),
+        level: 'error',
+        method: req.method || '',
+        path: (req.originalUrl || req.url || '').split('?')[0],
+        status: statusCode,
+        reqId: reqId || '',
+        errName: err && err.name ? String(err.name) : 'Error',
+        errMessage: err && err.message ? String(err.message).slice(0, 1024) : '',
+        errStack: truncateStack(err && err.stack),
+      };
+      const out = typeof stdout === 'function' ? stdout : (line) => process.stdout.write(line);
+      out(`${JSON.stringify(errPayload)}\n`);
+    } catch { /* never throw from the error handler */ }
+
     res.locals.errorResponseLogged = true;
 
     if (typeof captureException === 'function') {
@@ -233,6 +331,7 @@ function notFoundHandler(req, res) {
 }
 
 module.exports = {
+  classifyKnownError,
   createHttpError,
   createValidationError,
   errorToResponse,
@@ -241,5 +340,6 @@ module.exports = {
   notFoundHandler,
   sanitizeValidationErrors,
   standardizeErrorResponses,
+  truncateStack,
   validateRequest,
 };
