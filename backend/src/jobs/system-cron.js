@@ -64,6 +64,23 @@ function start(opts = {}) {
   let hardDeleteRunning = false;
   let apiUsagePruneRunning = false;
 
+  // Per-job telemetry (lastRun / lastDuration). Each entry pushed into
+  // `tasks` carries its own `meta` object; the handler stamps timings
+  // around every invocation so `/api/admin/health/services` can surface
+  // them without coupling to cron internals.
+  function recordRun(meta) {
+    const startedAt = Date.now();
+    return (err) => {
+      const endedAt = Date.now();
+      meta.lastRun = new Date(startedAt).toISOString();
+      meta.lastDuration = endedAt - startedAt;
+      meta.lastStatus = err ? 'error' : 'ok';
+      if (err) meta.lastError = err && err.message ? err.message : String(err);
+      else delete meta.lastError;
+    };
+  }
+
+  const scrubMeta = {};
   const scrubTask = cron.schedule(
     SCRUB_SCHEDULE,
     async () => {
@@ -72,21 +89,26 @@ function start(opts = {}) {
         return;
       }
       scrubRunning = true;
+      const finish = recordRun(scrubMeta);
+      let runErr = null;
       try {
         // eslint-disable-next-line global-require
         const job = require('./scrub-deleted-user-content');
         const res = await job.run({ logger });
         logger.info?.(`[system-cron] scrub-deleted-user-content done: ${JSON.stringify(res)}`);
       } catch (err) {
+        runErr = err;
         logger.error?.(`[system-cron] scrub-deleted-user-content failed: ${err && err.message}`);
       } finally {
         scrubRunning = false;
+        finish(runErr);
       }
     },
     { scheduled: false, timezone: 'UTC' },
   );
-  tasks.push({ name: 'scrub-deleted-user-content', schedule: SCRUB_SCHEDULE, task: scrubTask });
+  tasks.push({ name: 'scrub-deleted-user-content', schedule: SCRUB_SCHEDULE, task: scrubTask, meta: scrubMeta });
 
+  const hardDeleteMeta = {};
   const hardDeleteTask = cron.schedule(
     HARD_DELETE_SCHEDULE,
     async () => {
@@ -95,21 +117,26 @@ function start(opts = {}) {
         return;
       }
       hardDeleteRunning = true;
+      const finish = recordRun(hardDeleteMeta);
+      let runErr = null;
       try {
         // eslint-disable-next-line global-require
         const job = require('./hard-delete-deleted-users');
         const res = await job.run({ logger });
         logger.info?.(`[system-cron] hard-delete-deleted-users done: ${JSON.stringify(res)}`);
       } catch (err) {
+        runErr = err;
         logger.error?.(`[system-cron] hard-delete-deleted-users failed: ${err && err.message}`);
       } finally {
         hardDeleteRunning = false;
+        finish(runErr);
       }
     },
     { scheduled: false, timezone: 'UTC' },
   );
-  tasks.push({ name: 'hard-delete-deleted-users', schedule: HARD_DELETE_SCHEDULE, task: hardDeleteTask });
+  tasks.push({ name: 'hard-delete-deleted-users', schedule: HARD_DELETE_SCHEDULE, task: hardDeleteTask, meta: hardDeleteMeta });
 
+  const apiUsagePruneMeta = {};
   const apiUsagePruneTask = cron.schedule(
     APIUSAGE_PRUNE_SCHEDULE,
     async () => {
@@ -118,22 +145,27 @@ function start(opts = {}) {
         return;
       }
       apiUsagePruneRunning = true;
+      const finish = recordRun(apiUsagePruneMeta);
+      let runErr = null;
       try {
         // eslint-disable-next-line global-require
         const job = require('./prune-api-usage');
         const res = await job.run({ logger });
         logger.info?.(`[system-cron] prune-api-usage done: ${JSON.stringify(res)}`);
       } catch (err) {
+        runErr = err;
         logger.error?.(`[system-cron] prune-api-usage failed: ${err && err.message}`);
       } finally {
         apiUsagePruneRunning = false;
+        finish(runErr);
       }
     },
     { scheduled: false, timezone: 'UTC' },
   );
-  tasks.push({ name: 'prune-api-usage', schedule: APIUSAGE_PRUNE_SCHEDULE, task: apiUsagePruneTask });
+  tasks.push({ name: 'prune-api-usage', schedule: APIUSAGE_PRUNE_SCHEDULE, task: apiUsagePruneTask, meta: apiUsagePruneMeta });
 
   let sessionSweepRunning = false;
+  const sessionSweepMeta = {};
   const sessionSweepTask = cron.schedule(
     SESSION_SWEEP_SCHEDULE,
     async () => {
@@ -142,20 +174,24 @@ function start(opts = {}) {
         return;
       }
       sessionSweepRunning = true;
+      const finish = recordRun(sessionSweepMeta);
+      let runErr = null;
       try {
         // eslint-disable-next-line global-require
         const job = require('./sweep-expired-sessions');
         const res = await job.run({ logger });
         logger.info?.(`[system-cron] sweep-expired-sessions done: ${JSON.stringify(res)}`);
       } catch (err) {
+        runErr = err;
         logger.error?.(`[system-cron] sweep-expired-sessions failed: ${err && err.message}`);
       } finally {
         sessionSweepRunning = false;
+        finish(runErr);
       }
     },
     { scheduled: false, timezone: 'UTC' },
   );
-  tasks.push({ name: 'sweep-expired-sessions', schedule: SESSION_SWEEP_SCHEDULE, task: sessionSweepTask });
+  tasks.push({ name: 'sweep-expired-sessions', schedule: SESSION_SWEEP_SCHEDULE, task: sessionSweepTask, meta: sessionSweepMeta });
 
   for (const t of tasks) {
     try { t.task.start(); } catch (err) {
@@ -178,9 +214,34 @@ function stop() {
 
 function status() {
   if (!_state) return { enabled: false, tasks: [] };
+  // Lazy-require cron-expression so the health probe can compute the
+  // next deadline from each task's schedule. Parse failures are swallowed
+  // (nextRun = null) so the probe never blocks the health endpoint.
+  let cronExpr = null;
+  try { cronExpr = require('../utils/cron-expression'); } catch (_) { /* optional */ }
+  const now = new Date();
   return {
     enabled: true,
-    tasks: _state.tasks.map((t) => ({ name: t.name, schedule: t.schedule })),
+    tasks: _state.tasks.map((t) => {
+      const meta = t.meta || {};
+      let nextRun = null;
+      if (cronExpr && typeof cronExpr.parseCron === 'function') {
+        try {
+          const parsed = cronExpr.parseCron(t.schedule);
+          const next = cronExpr.nextRun(parsed, now);
+          if (next instanceof Date) nextRun = next.toISOString();
+        } catch (_) { /* malformed schedule — leave nextRun null */ }
+      }
+      return {
+        name: t.name,
+        schedule: t.schedule,
+        lastRun: meta.lastRun || null,
+        lastDuration: typeof meta.lastDuration === 'number' ? meta.lastDuration : null,
+        lastStatus: meta.lastStatus || null,
+        lastError: meta.lastError || null,
+        nextRun,
+      };
+    }),
   };
 }
 

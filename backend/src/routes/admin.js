@@ -1017,6 +1017,29 @@ function deriveOverall(services) {
   return 'healthy';
 }
 
+// System cron probe — surfaces the registered jobs from
+// `jobs/system-cron.js` (cycle 14/29 GDPR housekeeping, etc.) so ops can
+// confirm the scheduler is running and see lastRun / lastDuration /
+// nextRun per job without SSH-ing into the box. Caller can override the
+// module (e.g. tests inject a fake) via `systemCronModule`.
+function probeSystemCron(systemCronModule) {
+  try {
+    let mod = systemCronModule;
+    if (!mod) {
+      // eslint-disable-next-line global-require
+      mod = require('../jobs/system-cron');
+    }
+    const snap = (typeof mod.status === 'function' ? mod.status() : null) || { enabled: false, tasks: [] };
+    return {
+      status: snap.enabled ? 'up' : 'disabled',
+      enabled: Boolean(snap.enabled),
+      jobs: Array.isArray(snap.tasks) ? snap.tasks : [],
+    };
+  } catch (err) {
+    return { status: 'down', error: err && err.message ? err.message : String(err), jobs: [] };
+  }
+}
+
 async function collectServiceHealth({
   prismaClient,
   env,
@@ -1025,6 +1048,7 @@ async function collectServiceHealth({
   queueModule,
   schedulerModule,
   socketModule,
+  systemCronModule,
 }) {
   const [postgres, redis, stripe, smtp, bullmq] = await Promise.all([
     probePostgres(prismaClient),
@@ -1037,6 +1061,7 @@ async function collectServiceHealth({
   const providerBoot = probeProviderBoot(env);
   const scheduler = probeScheduler(schedulerModule);
   const websocket = probeWebsocket(socketModule);
+  const systemCron = probeSystemCron(systemCronModule);
   const services = {
     postgres,
     redis,
@@ -1047,6 +1072,7 @@ async function collectServiceHealth({
     bullmq,
     scheduler,
     websocket,
+    systemCron,
   };
   return {
     timestamp: new Date().toISOString(),
@@ -1601,6 +1627,7 @@ module.exports.INTERNAL = {
   probeBullmqWorkers,
   probeScheduler,
   probeWebsocket,
+  probeSystemCron,
   deriveOverall,
   withTimeout,
   PROBE_TIMEOUT_MS,

@@ -32,8 +32,21 @@ const {
   roleAtLeast,
 } = require('../services/orgs-service');
 const { defaultSteps, computeProgress } = require('../services/org-onboarding');
+const { responseCache } = require('../middleware/response-cache');
 
 const router = express.Router();
+
+// Response cache for the onboarding-progress endpoint (cycle 10 wiring).
+// Dashboard widgets refresh frequently; the underlying handler issues 7+
+// prisma queries (one per step probe) so caching at 30 s TTL keeps the
+// Postgres pressure bounded without making the checklist feel stale.
+// Key already varies by request path (which contains the orgId) and by
+// authenticated user, so members of different orgs / different users
+// within the same org each get their own isolated entries.
+const ONBOARDING_PROGRESS_CACHE = responseCache({
+  ttlMs: 30_000,
+  namespace: 'org-onboarding-progress',
+});
 
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
@@ -97,7 +110,7 @@ router.post('/', authenticateToken, async (req, res) => {
 // Returns the live onboarding checklist (member count, billing config,
 // chats shared, etc.) so the dashboard can render a progress bar
 // without polling several endpoints individually.
-router.get('/:id/onboarding-progress', authenticateToken, async (req, res) => {
+router.get('/:id/onboarding-progress', authenticateToken, ONBOARDING_PROGRESS_CACHE, async (req, res) => {
   const userId = req.user.id;
   const orgId = req.params.id;
   try {

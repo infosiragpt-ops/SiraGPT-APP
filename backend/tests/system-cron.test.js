@@ -52,6 +52,34 @@ describe('system-cron', () => {
     assert.deepEqual(s.tasks, []);
   });
 
+  test('status() — exposes lastRun/lastDuration/nextRun fields per job', () => {
+    process.env.NODE_ENV = 'production';
+    process.env.SYSTEM_CRON_ENABLED = 'true';
+    const mod = freshLoad();
+    const logger = { warn() {}, info() {}, error() {} };
+    mod.start({ logger });
+    try {
+      const snap = mod.status();
+      assert.equal(snap.enabled, true);
+      assert.ok(Array.isArray(snap.tasks) && snap.tasks.length >= 4);
+      for (const t of snap.tasks) {
+        assert.ok(typeof t.name === 'string');
+        assert.ok(typeof t.schedule === 'string');
+        // Telemetry slots exist (null until the job has actually run).
+        assert.ok(Object.prototype.hasOwnProperty.call(t, 'lastRun'));
+        assert.ok(Object.prototype.hasOwnProperty.call(t, 'lastDuration'));
+        assert.ok(Object.prototype.hasOwnProperty.call(t, 'nextRun'));
+        // nextRun is computable for the static UTC schedules we register.
+        assert.ok(t.nextRun === null || typeof t.nextRun === 'string');
+        if (typeof t.nextRun === 'string') {
+          assert.ok(!Number.isNaN(Date.parse(t.nextRun)));
+        }
+      }
+    } finally {
+      mod.stop();
+    }
+  });
+
   test('start() — registers all jobs with UTC schedules when enabled', () => {
     process.env.NODE_ENV = 'production';
     process.env.SYSTEM_CRON_ENABLED = 'true';

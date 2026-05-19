@@ -200,6 +200,41 @@ test('collectServiceHealth marks overall as down when postgres is down', async (
   assert.equal(snapshot.services.postgres.status, 'down');
 });
 
+test('collectServiceHealth surfaces systemCron snapshot under services.systemCron', async () => {
+  const fakeCron = {
+    status() {
+      return {
+        enabled: true,
+        tasks: [
+          {
+            name: 'fake-job',
+            schedule: '0 * * * *',
+            lastRun: '2026-05-19T10:00:00.000Z',
+            lastDuration: 42,
+            lastStatus: 'ok',
+            lastError: null,
+            nextRun: '2026-05-19T11:00:00.000Z',
+          },
+        ],
+      };
+    },
+  };
+  const snapshot = await collectServiceHealth({
+    prismaClient: { $queryRaw: async () => [{ ok: 1 }] },
+    env: {},
+    stripeSvc: { isConfigured: false },
+    emailSvc: { isConfigured: () => false },
+    systemCronModule: fakeCron,
+  });
+  assert.ok(snapshot.services.systemCron, 'systemCron block present');
+  assert.equal(snapshot.services.systemCron.status, 'up');
+  assert.equal(snapshot.services.systemCron.enabled, true);
+  assert.ok(Array.isArray(snapshot.services.systemCron.jobs));
+  assert.equal(snapshot.services.systemCron.jobs[0].name, 'fake-job');
+  assert.equal(snapshot.services.systemCron.jobs[0].lastDuration, 42);
+  assert.equal(snapshot.services.systemCron.jobs[0].nextRun, '2026-05-19T11:00:00.000Z');
+});
+
 test('collectServiceHealth marks overall as degraded when stripe is down', async () => {
   const snapshot = await collectServiceHealth({
     prismaClient: { $queryRaw: async () => [{ ok: 1 }] },
