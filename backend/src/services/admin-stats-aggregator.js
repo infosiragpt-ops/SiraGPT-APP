@@ -54,25 +54,76 @@ function percentile(sorted, p) {
   return sorted[idx];
 }
 
+/**
+ * Build the last-7-days signup trend as `[{ date: 'YYYY-MM-DD', count: n }]`.
+ * Always returns exactly 7 entries — days with no signups appear with
+ * `count: 0` so the UI can render a continuous bar chart without
+ * client-side gap-filling.
+ */
+function _buildSignupTrend(rows, now = new Date()) {
+  // Normalise to UTC midnight so the buckets line up regardless of the
+  // server timezone — admin dashboards should not skew by host tz.
+  const todayUtc = new Date(Date.UTC(
+    now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()
+  ));
+  const buckets = new Map();
+  for (let i = 6; i >= 0; i -= 1) {
+    const d = new Date(todayUtc.getTime() - i * 24 * 60 * 60 * 1000);
+    buckets.set(d.toISOString().slice(0, 10), 0);
+  }
+  for (const r of rows || []) {
+    const created = r && r.createdAt ? new Date(r.createdAt) : null;
+    if (!created || Number.isNaN(created.getTime())) continue;
+    const key = created.toISOString().slice(0, 10);
+    if (buckets.has(key)) buckets.set(key, buckets.get(key) + 1);
+  }
+  return Array.from(buckets.entries()).map(([date, count]) => ({ date, count }));
+}
+
 async function aggregateUserStats(prisma, range) {
   const { from, to } = parseRange(range);
 
-  const [newUsers, activeUsers, churnedUsers, activeSubs] = await Promise.all([
-    prisma.user.count({
-      where: { createdAt: { gte: from, lte: to }, isSuperAdmin: false },
-    }),
-    prisma.user.count({
-      where: { updatedAt: { gte: from, lte: to }, isSuperAdmin: false, deletedAt: null },
-    }),
-    prisma.user.count({
-      where: { deletedAt: { gte: from, lte: to }, isSuperAdmin: false },
-    }),
-    prisma.user.groupBy({
-      by: ['plan'],
-      where: { subscriptionStatus: 'active', isSuperAdmin: false, deletedAt: null },
-      _count: { plan: true },
-    }),
-  ]);
+  // Fixed window for the signup trend — last 7 days, independent of the
+  // caller's `range`. We surface both: the rolling 30d aggregates *and*
+  // the short-term trendline that admins actually look at every morning.
+  const now = new Date();
+  const trendFrom = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
+      - 6 * 24 * 60 * 60 * 1000
+  );
+
+  const [newUsers, activeUsers, churnedUsers, activeSubs, planBreakdown, signupRows] =
+    await Promise.all([
+      prisma.user.count({
+        where: { createdAt: { gte: from, lte: to }, isSuperAdmin: false },
+      }),
+      prisma.user.count({
+        where: { updatedAt: { gte: from, lte: to }, isSuperAdmin: false, deletedAt: null },
+      }),
+      prisma.user.count({
+        where: { deletedAt: { gte: from, lte: to }, isSuperAdmin: false },
+      }),
+      prisma.user.groupBy({
+        by: ['plan'],
+        where: { subscriptionStatus: 'active', isSuperAdmin: false, deletedAt: null },
+        _count: { plan: true },
+      }),
+      // Per-plan headcount across *all* non-deleted users (not just
+      // active subscriptions). This gives the admin a sense of how the
+      // total user base is distributed between tiers, including FREE.
+      prisma.user.groupBy({
+        by: ['plan'],
+        where: { isSuperAdmin: false, deletedAt: null },
+        _count: { plan: true },
+      }),
+      prisma.user.findMany({
+        where: { createdAt: { gte: trendFrom }, isSuperAdmin: false },
+        select: { createdAt: true },
+        // Defensive cap — even on a 1k-signups/day product we'd only get
+        // 7k rows, but keep the safety net so we never page admin DB.
+        take: 50000,
+      }),
+    ]);
 
   let mrrProxy = 0;
   const subsByPlan = {};
@@ -83,12 +134,26 @@ async function aggregateUserStats(prisma, range) {
     mrrProxy += (PLAN_MRR_USD[planKey] || 0) * count;
   }
 
+  // Always emit every known plan key, even when count is 0, so the UI
+  // can render a stable bar chart without "missing tier" surprises.
+  const breakdownByPlan = { FREE: 0, PRO: 0, PRO_MAX: 0, ENTERPRISE: 0 };
+  for (const row of planBreakdown || []) {
+    const planKey = row.plan;
+    const count = row._count?.plan || 0;
+    if (planKey in breakdownByPlan) breakdownByPlan[planKey] = count;
+    else breakdownByPlan[planKey] = count; // unknown plan → surface it too
+  }
+
+  const signupTrend = _buildSignupTrend(signupRows, now);
+
   return {
     range: { from: from.toISOString(), to: to.toISOString() },
     newUsers,
     activeUsers,
     churnedUsers,
     activeSubscriptions: subsByPlan,
+    breakdownByPlan,
+    signupTrend,
     mrrProxyUsd: Math.round(mrrProxy * 100) / 100,
   };
 }

@@ -47,6 +47,7 @@ test('safeNumber handles bigint, null and garbage', () => {
 
 // ── user stats ─────────────────────────────────────────────────────────────
 test('aggregateUserStats computes counts + MRR proxy', async () => {
+  let groupByCalls = 0;
   const prisma = {
     user: {
       count: async ({ where }) => {
@@ -55,10 +56,28 @@ test('aggregateUserStats computes counts + MRR proxy', async () => {
         if (where.updatedAt) return 50;
         return 0;
       },
-      groupBy: async () => [
-        { plan: 'PRO', _count: { plan: 4 } },
-        { plan: 'PRO_MAX', _count: { plan: 2 } },
-        { plan: 'FREE', _count: { plan: 100 } },
+      groupBy: async ({ where }) => {
+        groupByCalls += 1;
+        // Active-subscriptions call uses subscriptionStatus filter
+        if (where.subscriptionStatus === 'active') {
+          return [
+            { plan: 'PRO', _count: { plan: 4 } },
+            { plan: 'PRO_MAX', _count: { plan: 2 } },
+            { plan: 'FREE', _count: { plan: 100 } },
+          ];
+        }
+        // Overall plan breakdown
+        return [
+          { plan: 'FREE', _count: { plan: 200 } },
+          { plan: 'PRO', _count: { plan: 30 } },
+          { plan: 'PRO_MAX', _count: { plan: 5 } },
+          { plan: 'ENTERPRISE', _count: { plan: 1 } },
+        ];
+      },
+      findMany: async () => [
+        { createdAt: new Date() },
+        { createdAt: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+        { createdAt: new Date(Date.now() - 24 * 60 * 60 * 1000) },
       ],
     },
   };
@@ -71,6 +90,39 @@ test('aggregateUserStats computes counts + MRR proxy', async () => {
     stats.mrrProxyUsd,
     Math.round((PLAN_MRR_USD.PRO * 4 + PLAN_MRR_USD.PRO_MAX * 2) * 100) / 100
   );
+  assert.equal(groupByCalls, 2);
+  // breakdownByPlan includes every known tier, even when count is 0
+  assert.deepEqual(stats.breakdownByPlan, {
+    FREE: 200, PRO: 30, PRO_MAX: 5, ENTERPRISE: 1,
+  });
+  // signupTrend covers exactly 7 days, sums to 3, today/yesterday non-zero
+  assert.equal(stats.signupTrend.length, 7);
+  const total = stats.signupTrend.reduce((acc, r) => acc + r.count, 0);
+  assert.equal(total, 3);
+  // dates are ISO YYYY-MM-DD strings, sorted ascending
+  for (let i = 1; i < stats.signupTrend.length; i += 1) {
+    assert.ok(stats.signupTrend[i].date > stats.signupTrend[i - 1].date);
+  }
+});
+
+test('aggregateUserStats fills empty plans with zero counts', async () => {
+  const prisma = {
+    user: {
+      count: async () => 0,
+      groupBy: async ({ where }) => {
+        if (where.subscriptionStatus === 'active') return [];
+        // only FREE has users → PRO/PRO_MAX/ENTERPRISE must default to 0
+        return [{ plan: 'FREE', _count: { plan: 5 } }];
+      },
+      findMany: async () => [],
+    },
+  };
+  const stats = await aggregateUserStats(prisma, {});
+  assert.deepEqual(stats.breakdownByPlan, {
+    FREE: 5, PRO: 0, PRO_MAX: 0, ENTERPRISE: 0,
+  });
+  assert.equal(stats.signupTrend.length, 7);
+  assert.ok(stats.signupTrend.every((r) => r.count === 0));
 });
 
 // ── usage stats ────────────────────────────────────────────────────────────

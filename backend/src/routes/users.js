@@ -6,26 +6,31 @@ const bcrypt = require('bcryptjs');
 const archiver = require('archiver');
 const { cascadeSoftDeleteForUser } = require('../utils/prisma-soft-delete');
 const { writeAuditLog } = require('../utils/audit-log');
+const rateLimitStore = require('../middleware/rate-limit-store');
 
 const router = express.Router();
 
 // ────────────────────────────────────────────────────────────
-// Per-user rate limiter for the GDPR export endpoint. In-process Map
-// is enough for single-instance deploys; for the multi-instance case
-// promote to the existing rate-limit-store (Redis) when REDIS_URL is
-// configured. Same shape as the impersonation limiter in auth.js so
-// the patterns stay consistent.
+// Per-user rate limiter for the GDPR export endpoint. Backed by the
+// shared rate-limit-store.consume() (cycle 2) so the cap works across
+// multiple backend replicas via Redis; falls back to an in-process
+// sliding window when Redis is unreachable.
 // ────────────────────────────────────────────────────────────
 const EXPORT_WINDOW_MS = 30 * 60 * 1000; // 30 minutes
-const exportAttempts = new Map(); // userId → last timestamp (ms)
-function takeExportSlot(userId) {
-  const now = Date.now();
-  const last = exportAttempts.get(userId) || 0;
-  if (now - last < EXPORT_WINDOW_MS) {
-    return { ok: false, retryAfterMs: EXPORT_WINDOW_MS - (now - last) };
+const EXPORT_LIMIT = 1; // 1 export per window per user
+async function takeExportSlot(userId) {
+  const key = `user-export:${userId}`;
+  try {
+    const result = await rateLimitStore.consume(key, EXPORT_LIMIT, EXPORT_WINDOW_MS);
+    if (result.allowed) return { ok: true };
+    const retryAfterMs = Math.max(0, result.resetAt.getTime() - Date.now());
+    return { ok: false, retryAfterMs };
+  } catch (_err) {
+    // If the store throws unexpectedly, fail open — exports stay
+    // available; the 1/30min cap is a soft guard, not a security
+    // boundary, and the audit log still records every attempt.
+    return { ok: true };
   }
-  exportAttempts.set(userId, now);
-  return { ok: true };
 }
 
 // Get current user profile
@@ -548,7 +553,7 @@ router.get('/me/export', authenticateToken, async (req, res) => {
     try { piiMasker = require('../utils/pii-mask'); }
     catch (_) { piiMasker = null; }
   }
-  const slot = takeExportSlot(userId);
+  const slot = await takeExportSlot(userId);
   if (!slot.ok) {
     const retryAfterSec = Math.max(1, Math.ceil(slot.retryAfterMs / 1000));
     res.set('Retry-After', String(retryAfterSec));
