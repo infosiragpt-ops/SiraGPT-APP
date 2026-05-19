@@ -33,6 +33,105 @@ async function takeExportSlot(userId) {
   }
 }
 
+// ────────────────────────────────────────────────────────────
+// Per-user QUARTERLY export quota (ratchet 45, task 2).
+// Layered on top of the 1/30min soft limit: each user may run
+// at most `EXPORT_QUARTERLY_LIMIT` GDPR exports per calendar
+// quarter. Counters live in `SystemSettings` keyed by
+// `user-export-quarter:{userId}:{year}-Q{n}` so we don't need a
+// new Prisma model. Returns the same key shape regardless of
+// whether the bucket exists yet (counter starts at 0).
+// ────────────────────────────────────────────────────────────
+const EXPORT_QUARTERLY_LIMIT = 10;
+
+function quarterKeyForDate(date = new Date()) {
+  const y = date.getUTCFullYear();
+  const q = Math.floor(date.getUTCMonth() / 3) + 1; // 1..4
+  return { year: y, quarter: q, label: `${y}-Q${q}` };
+}
+
+function quarterEndsAt(year, quarter) {
+  // End of quarter (UTC) = first day of the next quarter.
+  const nextQuarterStartMonth = quarter * 3; // 0-indexed: Q1→3 (Apr), Q4→12 (Jan next year)
+  if (nextQuarterStartMonth >= 12) {
+    return new Date(Date.UTC(year + 1, 0, 1, 0, 0, 0, 0));
+  }
+  return new Date(Date.UTC(year, nextQuarterStartMonth, 1, 0, 0, 0, 0));
+}
+
+function quarterSettingsKey(userId, qInfo) {
+  return `user-export-quarter:${userId}:${qInfo.label}`;
+}
+
+async function readQuarterCount(prisma, userId, qInfo) {
+  if (!prisma || !prisma.systemSettings) return 0;
+  try {
+    const row = await prisma.systemSettings.findUnique({
+      where: { key: quarterSettingsKey(userId, qInfo) },
+    });
+    if (!row || !row.value) return 0;
+    try {
+      const parsed = JSON.parse(row.value);
+      const n = parsed && Number.isFinite(parsed.count) ? parsed.count : 0;
+      return n >= 0 ? n : 0;
+    } catch (_err) {
+      return 0;
+    }
+  } catch (_err) {
+    return 0;
+  }
+}
+
+async function incrementQuarterCount(prisma, userId, qInfo) {
+  if (!prisma || !prisma.systemSettings) return;
+  const key = quarterSettingsKey(userId, qInfo);
+  try {
+    const current = await readQuarterCount(prisma, userId, qInfo);
+    const next = current + 1;
+    const value = JSON.stringify({
+      userId,
+      quarter: qInfo.label,
+      count: next,
+      updatedAt: new Date().toISOString(),
+    });
+    await prisma.systemSettings.upsert({
+      where: { key },
+      create: { key, value },
+      update: { value },
+    });
+  } catch (err) {
+    // Failing open — losing a count is preferable to denying a
+    // legitimate export. The 30min soft limit still applies.
+    console.warn('[user-export] quarterly-counter increment failed:', err?.message || err);
+  }
+}
+
+/**
+ * Returns { ok: true } when the user is still under their quarterly
+ * cap, else { ok: false, used, limit, resetAt } with HTTP-friendly
+ * fields for the 429 response body.
+ */
+async function checkQuarterlyExportQuota(prisma, userId) {
+  const qInfo = quarterKeyForDate();
+  const used = await readQuarterCount(prisma, userId, qInfo);
+  if (used < EXPORT_QUARTERLY_LIMIT) {
+    return { ok: true, used, limit: EXPORT_QUARTERLY_LIMIT, quarter: qInfo.label };
+  }
+  const resetAt = quarterEndsAt(qInfo.year, qInfo.quarter);
+  return {
+    ok: false,
+    used,
+    limit: EXPORT_QUARTERLY_LIMIT,
+    quarter: qInfo.label,
+    resetAt,
+  };
+}
+
+async function recordQuarterlyExport(prisma, userId) {
+  const qInfo = quarterKeyForDate();
+  await incrementQuarterCount(prisma, userId, qInfo);
+}
+
 // Get current user profile
 router.get('/profile', authenticateToken, async (req, res) => {
   try {
@@ -592,6 +691,37 @@ router.get('/me/export', authenticateToken, async (req, res) => {
     try { piiMasker = require('../utils/pii-mask'); }
     catch (_) { piiMasker = null; }
   }
+  // Hard quarterly cap (10 exports per calendar quarter) — checked
+  // BEFORE the 30-minute soft slot so a quota-denied request doesn't
+  // burn the user's short-term window.
+  const quota = await checkQuarterlyExportQuota(prisma, userId);
+  if (!quota.ok) {
+    const retryAfterSec = Math.max(
+      1,
+      Math.ceil((quota.resetAt.getTime() - Date.now()) / 1000),
+    );
+    res.set('Retry-After', String(retryAfterSec));
+    void writeAuditLog(prisma, {
+      req,
+      action: 'user_export_quota_exceeded',
+      resource: 'user',
+      resourceId: userId,
+      metadata: {
+        used: quota.used,
+        limit: quota.limit,
+        quarter: quota.quarter,
+        resetAt: quota.resetAt.toISOString(),
+      },
+    });
+    return res.status(429).json({
+      error: `Export quota exceeded: ${quota.limit} per quarter.`,
+      used: quota.used,
+      limit: quota.limit,
+      quarter: quota.quarter,
+      resetAt: quota.resetAt.toISOString(),
+    });
+  }
+
   const slot = await takeExportSlot(userId);
   if (!slot.ok) {
     const retryAfterSec = Math.max(1, Math.ceil(slot.retryAfterMs / 1000));
@@ -746,8 +876,15 @@ router.get('/me/export', authenticateToken, async (req, res) => {
         fileCount: files.length,
         paymentCount: payments.length,
         redactPII,
+        quarter: quota.quarter,
+        quarterUsedBefore: quota.used,
       },
     });
+
+    // Increment the quarterly counter only after the export has been
+    // accepted + audited. We don't await — losing a count is preferable
+    // to delaying the archive stream.
+    void recordQuarterlyExport(prisma, userId);
 
     await archive.finalize();
   } catch (error) {
@@ -869,3 +1006,14 @@ router.post(
 );
 
 module.exports = router;
+// Test-only internals (ratchet 45)
+module.exports.INTERNAL = {
+  EXPORT_QUARTERLY_LIMIT,
+  quarterKeyForDate,
+  quarterEndsAt,
+  quarterSettingsKey,
+  readQuarterCount,
+  incrementQuarterCount,
+  checkQuarterlyExportQuota,
+  recordQuarterlyExport,
+};

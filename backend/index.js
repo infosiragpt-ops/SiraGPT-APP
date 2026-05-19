@@ -454,6 +454,15 @@ app.use(redMetricsMiddleware);
 // run after request-id/otel context (set above) so the matched route
 // is available on res.on('finish').
 app.use(sloTracker.middleware());
+
+// ── Maintenance-mode middleware (ratchet 45) ────────────────────
+// Reads SystemSettings.maintenance_mode and short-circuits every
+// request with 503 when enabled. /health/* and /api/admin/* are
+// bypassed so probes + super-admin toggle keep working.
+const maintenanceMode = require('./src/middleware/maintenance-mode');
+maintenanceMode.setPrisma(prisma);
+app.use(maintenanceMode.maintenanceMiddleware({ prisma }));
+
 if (process.env.NODE_ENV !== 'production') {
     app.use(morgan('dev'));
 }

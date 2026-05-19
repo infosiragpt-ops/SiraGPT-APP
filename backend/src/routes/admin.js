@@ -778,6 +778,62 @@ router.post('/maintenance/clear-cache', requireSuperAdmin, async (req, res) => {
   res.json({ ok: true, counts, errors: Object.keys(errors).length ? errors : undefined });
 });
 
+// ── Maintenance mode toggle (ratchet 45, super-admin) ───────────────────
+// GET  /api/admin/maintenance/mode → current state
+// POST /api/admin/maintenance/mode → { enabled: boolean, message?: string }
+//   Writes the flag to SystemSettings (key=maintenance_mode) and busts
+//   the in-process middleware cache so the change takes effect on the
+//   writing replica immediately; other replicas pick it up within the
+//   maintenance-mode middleware TTL (5s).
+const maintenanceMode = require('../middleware/maintenance-mode');
+
+router.get('/maintenance/mode', requireSuperAdmin, async (_req, res) => {
+  try {
+    const state = await maintenanceMode.getMaintenanceState(prisma);
+    res.json({
+      enabled: Boolean(state && state.enabled),
+      message: (state && state.message) || null,
+      since: (state && state.since) || null,
+    });
+  } catch (err) {
+    console.error('[admin/maintenance/mode GET] failed:', err?.message || err);
+    res.status(500).json({ error: 'Failed to read maintenance state' });
+  }
+});
+
+router.post('/maintenance/mode', requireSuperAdmin, async (req, res) => {
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  if (typeof body.enabled !== 'boolean') {
+    return res.status(400).json({ error: '`enabled` (boolean) is required' });
+  }
+  if (body.message != null && typeof body.message !== 'string') {
+    return res.status(400).json({ error: '`message` must be a string when provided' });
+  }
+  if (typeof body.message === 'string' && body.message.length > 500) {
+    return res.status(400).json({ error: '`message` must be 500 chars or fewer' });
+  }
+  try {
+    const before = await maintenanceMode.getMaintenanceState(prisma);
+    const next = await maintenanceMode.writeMaintenanceState(prisma, {
+      enabled: body.enabled,
+      message: body.message || null,
+    });
+    void writeAuditLog(prisma, {
+      req,
+      actorType: 'admin',
+      action: 'maintenance_mode_set',
+      resource: 'maintenance',
+      resourceId: 'mode',
+      before: before || { enabled: false },
+      after: next,
+    });
+    res.json({ ok: true, ...next });
+  } catch (err) {
+    console.error('[admin/maintenance/mode POST] failed:', err?.message || err);
+    res.status(500).json({ error: 'Failed to update maintenance state' });
+  }
+});
+
 // Analyzer cache invalidation — wipes the in-process content-hash cache
 // for the document-enrichment pipeline. Use after rolling out new
 // analyzer logic that should produce different output for the same
