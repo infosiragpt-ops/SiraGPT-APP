@@ -686,6 +686,56 @@ async function transferOwnershipHandler(req, res, deps = { prisma, writeAuditLog
       return { demoted, promoted, updatedOrg };
     });
 
+    // Fire-and-forget ownership-transfer notifications. Sends one
+    // email to the demoted previous owner and one to the promoted
+    // new owner. Records a single `transferEmailSent` audit flag —
+    // true when at least one email was handed off to the transporter.
+    let transferEmailSent = false;
+    try {
+      const emailService = require('../services/email');
+      if (
+        emailService.isConfigured
+        && emailService.isConfigured()
+        && typeof emailService.sendOwnershipTransfer === 'function'
+      ) {
+        const [previousOwner, newOwner, orgRow] = await Promise.all([
+          db.user.findUnique({
+            where: { id: callerId },
+            select: { id: true, email: true, name: true },
+          }).catch(() => null),
+          db.user.findUnique({
+            where: { id: newOwnerId },
+            select: { id: true, email: true, name: true },
+          }).catch(() => null),
+          db.organization.findUnique({
+            where: { id: orgId },
+            select: { id: true, name: true, slug: true },
+          }).catch(() => null),
+        ]);
+        const orgSafe = orgRow || { id: orgId };
+        if (previousOwner && previousOwner.email) {
+          Promise.resolve(
+            emailService.sendOwnershipTransfer(previousOwner, orgSafe, {
+              role: 'previousOwner',
+              previousOwner,
+              newOwner,
+            }),
+          ).catch(() => {});
+          transferEmailSent = true;
+        }
+        if (newOwner && newOwner.email) {
+          Promise.resolve(
+            emailService.sendOwnershipTransfer(newOwner, orgSafe, {
+              role: 'newOwner',
+              previousOwner,
+              newOwner,
+            }),
+          ).catch(() => {});
+          transferEmailSent = true;
+        }
+      }
+    } catch (_) { /* ignore */ }
+
     void audit(db, {
       action: 'org_ownership_transfer',
       userId: callerId,
@@ -693,7 +743,7 @@ async function transferOwnershipHandler(req, res, deps = { prisma, writeAuditLog
       resourceId: orgId,
       before: { ownerId: callerId, targetRole: previousTargetRole },
       after: { ownerId: newOwnerId, previousOwnerRole: 'ADMIN' },
-      metadata: { orgId },
+      metadata: { orgId, transferEmailSent },
       req,
     });
 
@@ -806,13 +856,50 @@ router.delete('/:id/members/:userId', authenticateToken, async (req, res) => {
       where: { orgId_userId: { orgId, userId: targetUserId } },
     });
 
+    // Fire-and-forget removal notification — only emitted for admin
+    // removals (not self-leave) and when SMTP is configured. Resolves
+    // the `removalEmailSent` audit flag synchronously so the audit
+    // row records whether the user was notified.
+    let removalEmailSent = false;
+    if (!isSelf) {
+      try {
+        const emailService = require('../services/email');
+        if (emailService.isConfigured && emailService.isConfigured()) {
+          const [targetUser, orgRow, removedBy] = await Promise.all([
+            prisma.user.findUnique({
+              where: { id: targetUserId },
+              select: { id: true, email: true, name: true },
+            }).catch(() => null),
+            prisma.organization.findUnique({
+              where: { id: orgId },
+              select: { id: true, name: true, slug: true },
+            }).catch(() => null),
+            prisma.user.findUnique({
+              where: { id: callerId },
+              select: { id: true, email: true, name: true },
+            }).catch(() => null),
+          ]);
+          if (targetUser && targetUser.email && typeof emailService.sendOrgRemoval === 'function') {
+            Promise.resolve(
+              emailService.sendOrgRemoval(
+                targetUser,
+                orgRow || { id: orgId },
+                removedBy || { id: callerId },
+              ),
+            ).catch(() => {});
+            removalEmailSent = true;
+          }
+        }
+      } catch (_) { /* ignore */ }
+    }
+
     void writeAuditLog(prisma, {
       action: isSelf ? 'org_member_leave' : 'org_member_remove',
       userId: callerId,
       resource: 'organization',
       resourceId: orgId,
       before: { userId: targetUserId, role: target.role },
-      metadata: { orgId },
+      metadata: { orgId, removalEmailSent },
       req,
     });
 
