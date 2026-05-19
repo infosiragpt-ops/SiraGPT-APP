@@ -34,7 +34,9 @@ const authMock = {
 const prismaState = {
   membership: { id: 'm1', orgId: 'org-1', userId: 'u-admin', role: 'ADMIN' },
   announcements: [],
+  reads: [],
   _seq: 0,
+  _readSeq: 0,
 };
 
 const prismaMock = {
@@ -121,6 +123,44 @@ const prismaMock = {
       return removed;
     },
   },
+  orgAnnouncementRead: {
+    findUnique: async ({ where }) => {
+      const { announcementId, userId } = where.announcementId_userId || {};
+      return prismaState.reads.find(
+        (r) => r.announcementId === announcementId && r.userId === userId,
+      ) || null;
+    },
+    findMany: async ({ where, select }) => {
+      void select;
+      const ids = where && where.announcementId && Array.isArray(where.announcementId.in)
+        ? new Set(where.announcementId.in)
+        : null;
+      return prismaState.reads.filter((r) => {
+        if (where && where.userId && r.userId !== where.userId) return false;
+        if (ids && !ids.has(r.announcementId)) return false;
+        return true;
+      });
+    },
+    create: async ({ data }) => {
+      const dup = prismaState.reads.find(
+        (r) => r.announcementId === data.announcementId && r.userId === data.userId,
+      );
+      if (dup) {
+        const err = new Error('Unique constraint failed');
+        err.code = 'P2002';
+        throw err;
+      }
+      prismaState._readSeq += 1;
+      const row = {
+        id: `read-${prismaState._readSeq}`,
+        announcementId: data.announcementId,
+        userId: data.userId,
+        readAt: new Date(),
+      };
+      prismaState.reads.push(row);
+      return row;
+    },
+  },
 };
 
 const auditMock = {
@@ -179,7 +219,9 @@ function callRoute({ method, urlPath, body }) {
 function resetState({ role = 'ADMIN' } = {}) {
   prismaState.membership = { id: 'm1', orgId: 'org-1', userId: 'u-admin', role };
   prismaState.announcements = [];
+  prismaState.reads = [];
   prismaState._seq = 0;
+  prismaState._readSeq = 0;
   auditMock._calls.length = 0;
   triggersMock._calls.length = 0;
   authMock._user = { id: 'u-admin', email: 'admin@example.com' };
@@ -747,5 +789,157 @@ describe('email-preferences announcements category', () => {
     assert.equal(merged.announcements, false);
     const cleared = emailPrefs.mergeNotificationsPatch(merged, { announcements: null });
     assert.equal(Object.prototype.hasOwnProperty.call(cleared, 'announcements'), false);
+  });
+});
+
+// ── Ratchet 45 — POST /:id/announcements/:announcementId/ack ──────
+describe('POST /api/orgs/:id/announcements/:announcementId/ack', () => {
+  beforeEach(() => resetState());
+
+  function seedOne(id = 'a-ack', over = {}) {
+    const row = {
+      id,
+      orgId: 'org-1',
+      title: 't',
+      body: 'b',
+      severity: 'info',
+      createdById: 'u-admin',
+      expiresAt: null,
+      createdAt: new Date(),
+      ...over,
+    };
+    prismaState.announcements.push(row);
+    return row;
+  }
+
+  test('records a read receipt and fires trigger (201)', async () => {
+    seedOne();
+    const res = await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-1/announcements/a-ack/ack',
+    });
+    assert.equal(res.status, 201);
+    assert.equal(res.body.ok, true);
+    assert.equal(res.body.alreadyAcked, false);
+    assert.ok(res.body.readAt);
+    assert.equal(prismaState.reads.length, 1);
+    assert.equal(prismaState.reads[0].announcementId, 'a-ack');
+    assert.equal(prismaState.reads[0].userId, 'u-admin');
+    // Trigger fired with expected payload.
+    const ackCalls = triggersMock._calls.filter((c) => c.event === 'org.announcement.acknowledged');
+    assert.equal(ackCalls.length, 1);
+    assert.deepEqual(ackCalls[0].payload, {
+      orgId: 'org-1',
+      announcementId: 'a-ack',
+      userId: 'u-admin',
+    });
+    assert.equal(ackCalls[0].userId, 'u-admin');
+  });
+
+  test('idempotent: second ack returns 200 alreadyAcked=true and does NOT re-fire trigger', async () => {
+    seedOne();
+    const first = await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-1/announcements/a-ack/ack',
+    });
+    assert.equal(first.status, 201);
+    const second = await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-1/announcements/a-ack/ack',
+    });
+    assert.equal(second.status, 200);
+    assert.equal(second.body.alreadyAcked, true);
+    assert.equal(prismaState.reads.length, 1);
+    const ackCalls = triggersMock._calls.filter((c) => c.event === 'org.announcement.acknowledged');
+    assert.equal(ackCalls.length, 1);
+  });
+
+  test('VIEWER (any member) can ack (201)', async () => {
+    prismaState.membership.role = 'VIEWER';
+    seedOne();
+    const res = await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-1/announcements/a-ack/ack',
+    });
+    assert.equal(res.status, 201);
+  });
+
+  test('non-member returns 404', async () => {
+    seedOne();
+    const res = await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-2/announcements/a-ack/ack',
+    });
+    assert.equal(res.status, 404);
+  });
+
+  test('unknown announcement id returns 404', async () => {
+    const res = await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-1/announcements/missing/ack',
+    });
+    assert.equal(res.status, 404);
+  });
+
+  test('cannot ack announcement from another org (404)', async () => {
+    seedOne('a-foreign', { orgId: 'org-other' });
+    const res = await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-1/announcements/a-foreign/ack',
+    });
+    assert.equal(res.status, 404);
+    assert.equal(prismaState.reads.length, 0);
+  });
+});
+
+// ── Ratchet 45 — GET exposes acknowledgedByCurrentUser ────────────
+describe('GET acknowledgedByCurrentUser flag', () => {
+  beforeEach(() => resetState());
+
+  test('returns false for items the current user has not acked', async () => {
+    prismaState.announcements.push({
+      id: 'a1', orgId: 'org-1', title: 't', body: 'b', severity: 'info',
+      createdById: 'u-admin', expiresAt: null, createdAt: new Date(),
+    });
+    const res = await callRoute({ method: 'GET', urlPath: '/api/orgs/org-1/announcements' });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.items[0].acknowledgedByCurrentUser, false);
+  });
+
+  test('returns true after the current user acks', async () => {
+    prismaState.announcements.push({
+      id: 'a1', orgId: 'org-1', title: 't', body: 'b', severity: 'info',
+      createdById: 'u-admin', expiresAt: null, createdAt: new Date(),
+    });
+    const ack = await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-1/announcements/a1/ack',
+    });
+    assert.equal(ack.status, 201);
+    const res = await callRoute({ method: 'GET', urlPath: '/api/orgs/org-1/announcements' });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.items[0].acknowledgedByCurrentUser, true);
+  });
+
+  test('flag is per-user — another user`s ack does not flip it', async () => {
+    prismaState.announcements.push({
+      id: 'a1', orgId: 'org-1', title: 't', body: 'b', severity: 'info',
+      createdById: 'u-admin', expiresAt: null, createdAt: new Date(),
+    });
+    // Seed a read receipt for a DIFFERENT user.
+    prismaState.reads.push({
+      id: 'r-other', announcementId: 'a1', userId: 'u-other', readAt: new Date(),
+    });
+    const res = await callRoute({ method: 'GET', urlPath: '/api/orgs/org-1/announcements' });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.items[0].acknowledgedByCurrentUser, false);
+  });
+});
+
+// ── Ratchet 45 — org.announcement.acknowledged trigger ────────────
+describe('org.announcement.acknowledged trigger', () => {
+  test('is part of the canonical TRIGGERS allow-list', () => {
+    assert.ok(realTriggers.TRIGGERS.includes('org.announcement.acknowledged'));
+    assert.equal(realTriggers.isKnownTrigger('org.announcement.acknowledged'), true);
   });
 });

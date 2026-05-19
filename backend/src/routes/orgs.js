@@ -3436,11 +3436,107 @@ router.get('/:id/announcements', authenticateToken, async (req, res) => {
       take: limit,
     });
 
-    res.json({ items: rows.map(serializeAnnouncement), total, page, pages });
+    // Ratchet 45 — per-user read acknowledgements. Join against
+    // OrgAnnouncementRead for the requesting user so each item exposes
+    // `acknowledgedByCurrentUser`. Falls back to `false` when the
+    // table/model isn't available (older test fakes).
+    let ackedIds = new Set();
+    if (rows.length && prisma.orgAnnouncementRead && typeof prisma.orgAnnouncementRead.findMany === 'function') {
+      try {
+        const reads = await prisma.orgAnnouncementRead.findMany({
+          where: { userId, announcementId: { in: rows.map((r) => r.id) } },
+          select: { announcementId: true },
+        });
+        ackedIds = new Set(reads.map((r) => r.announcementId));
+      } catch (_) { /* swallow — degrade to all-false */ }
+    }
+
+    const items = rows.map((row) => ({
+      ...serializeAnnouncement(row),
+      acknowledgedByCurrentUser: ackedIds.has(row.id),
+    }));
+    res.json({ items, total, page, pages });
   } catch (err) {
     if (err && err.status) return res.status(err.status).json({ error: err.message });
     console.error('[orgs] list announcements failed:', err.message);
     res.status(500).json({ error: 'failed to list announcements' });
+  }
+});
+
+// POST /api/orgs/:id/announcements/:announcementId/ack — any member.
+// Ratchet 45 — records a per-user read receipt and fires the
+// `org.announcement.acknowledged` trigger. Idempotent: repeat acks
+// from the same user return the existing receipt and do NOT re-fire
+// the trigger so webhooks don't see duplicates.
+router.post('/:id/announcements/:announcementId/ack', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  const announcementId = req.params.announcementId;
+  if (!announcementId) return res.status(400).json({ error: 'invalid announcementId' });
+
+  try {
+    await assertMembership(prisma, orgId, userId, 'VIEWER');
+
+    const existing = await prisma.orgAnnouncement.findUnique({
+      where: { id: announcementId },
+      select: { id: true, orgId: true },
+    });
+    if (!existing || existing.orgId !== orgId) {
+      return res.status(404).json({ error: 'announcement not found' });
+    }
+
+    // Idempotency — look for an existing read receipt before insert.
+    let alreadyAcked = false;
+    let receipt = null;
+    if (prisma.orgAnnouncementRead && typeof prisma.orgAnnouncementRead.findUnique === 'function') {
+      try {
+        receipt = await prisma.orgAnnouncementRead.findUnique({
+          where: { announcementId_userId: { announcementId, userId } },
+        });
+        if (receipt) alreadyAcked = true;
+      } catch (_) { /* fall through to create */ }
+    }
+
+    if (!receipt) {
+      try {
+        receipt = await prisma.orgAnnouncementRead.create({
+          data: { announcementId, userId },
+        });
+      } catch (err) {
+        // Unique-constraint race → treat as already-acked.
+        if (err && (err.code === 'P2002' || /unique/i.test(err.message || ''))) {
+          alreadyAcked = true;
+          if (prisma.orgAnnouncementRead && typeof prisma.orgAnnouncementRead.findUnique === 'function') {
+            receipt = await prisma.orgAnnouncementRead.findUnique({
+              where: { announcementId_userId: { announcementId, userId } },
+            }).catch(() => null);
+          }
+        } else {
+          throw err;
+        }
+      }
+    }
+
+    // Fire-and-forget trigger only on first ack to avoid webhook spam.
+    if (!alreadyAcked) {
+      triggers.publish('org.announcement.acknowledged', {
+        orgId,
+        announcementId,
+        userId,
+      }, userId).catch(() => {});
+    }
+
+    res.status(alreadyAcked ? 200 : 201).json({
+      ok: true,
+      alreadyAcked,
+      readAt: receipt && receipt.readAt
+        ? (receipt.readAt instanceof Date ? receipt.readAt.toISOString() : receipt.readAt)
+        : new Date().toISOString(),
+    });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] ack announcement failed:', err.message);
+    res.status(500).json({ error: 'failed to acknowledge announcement' });
   }
 });
 

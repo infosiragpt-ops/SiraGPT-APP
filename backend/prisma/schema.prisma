@@ -105,6 +105,7 @@ model User {
   organizationMemberships OrgMembership[]
   sentOrgInvitations      OrgInvitation[] @relation("OrgInvitationInviter")
   createdOrgAnnouncements OrgAnnouncement[] @relation("OrgAnnouncementCreator")
+  announcementReads       OrgAnnouncementRead[]
 
   @@index([deletedAt])
   @@map("users")
@@ -1467,11 +1468,32 @@ model OrgAnnouncement {
 
   organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
   createdBy    User         @relation("OrgAnnouncementCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  reads        OrgAnnouncementRead[]
 
   @@index([orgId, createdAt])
   @@index([orgId, expiresAt])
   @@index([createdById])
   @@map("org_announcements")
+}
+
+// Ratchet 45 — per-user read receipts for org announcements.
+//
+// One row per (announcementId, userId) the first time a member
+// acknowledges they read an announcement. The GET feed joins against
+// this table for the requesting user to expose
+// `acknowledgedByCurrentUser` on each item.
+model OrgAnnouncementRead {
+  id             String   @id @default(cuid())
+  announcementId String
+  userId         String
+  readAt         DateTime @default(now())
+
+  announcement OrgAnnouncement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([announcementId, userId])
+  @@index([userId])
+  @@map("org_announcement_reads")
 }
 
 // Email verification token (ratchet 45).
