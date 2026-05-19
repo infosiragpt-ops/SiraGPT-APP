@@ -1763,6 +1763,9 @@ router.post('/:id/api-keys', authenticateToken, async (req, res) => {
 });
 
 // ─── GET /api/orgs/:id/api-keys (ADMIN+) ────────────────────────────
+// Supports ?page= (1-based) & ?limit= (default 50, max 200) and ?q=
+// for filtering by name (case-insensitive contains) or exact prefix
+// match. The two filters are combinable with pagination.
 router.get('/:id/api-keys', authenticateToken, async (req, res) => {
   const userId = req.user.id;
   const orgId = req.params.id;
@@ -1771,15 +1774,42 @@ router.get('/:id/api-keys', authenticateToken, async (req, res) => {
     if (!canManageMembers(membership.role)) {
       return res.status(403).json({ error: 'insufficient role to list api keys' });
     }
+
+    const rawLimit = Number.parseInt(req.query.limit, 10);
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0
+      ? Math.min(rawLimit, 200)
+      : 50;
+    const rawPage = Number.parseInt(req.query.page, 10);
+    const page = Number.isFinite(rawPage) && rawPage > 0 ? rawPage : 1;
+
+    const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+
     // Ratchet 45 (TrueDelete) — hide soft-deleted (tombstoned) keys from
     // the org-facing list. Admins who need to see purged keys hit the
     // dedicated admin endpoint.
+    const baseWhere = { organizationId: orgId, deletedAt: null };
+    const where = q
+      ? {
+          ...baseWhere,
+          OR: [
+            { name: { contains: q, mode: 'insensitive' } },
+            { prefix: q },
+          ],
+        }
+      : baseWhere;
+
+    const total = await prisma.apiKey.count({ where });
+    const pages = total === 0 ? 0 : Math.ceil(total / limit);
     const rows = await prisma.apiKey.findMany({
-      where: { organizationId: orgId, deletedAt: null },
+      where,
       orderBy: { createdAt: 'desc' },
-      take: 200,
+      skip: (page - 1) * limit,
+      take: limit,
     });
-    res.json({ apiKeys: rows.map((r) => apiKeysService.redactKey(r)) });
+    const items = rows.map((r) => apiKeysService.redactKey(r));
+    // Keep the legacy `apiKeys` field for back-compat with older clients
+    // while exposing the new {items,total,page,pages} shape.
+    res.json({ items, total, page, pages, apiKeys: items });
   } catch (err) {
     if (err && err.status) return res.status(err.status).json({ error: err.message });
     console.error('[orgs] list api keys failed:', err.message);

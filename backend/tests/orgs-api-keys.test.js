@@ -38,6 +38,32 @@ const prismaState = {
 };
 
 let nextId = 0;
+
+function matchApiKeyWhere(row, where) {
+  if (!where) return true;
+  if (where.organizationId && row.organizationId !== where.organizationId) return false;
+  if (Object.prototype.hasOwnProperty.call(where, 'deletedAt')) {
+    if (where.deletedAt === null && row.deletedAt) return false;
+  }
+  if (Array.isArray(where.OR)) {
+    const ok = where.OR.some((cond) => {
+      if (cond.name && typeof cond.name === 'object' && 'contains' in cond.name) {
+        const needle = cond.name.mode === 'insensitive'
+          ? String(cond.name.contains).toLowerCase()
+          : String(cond.name.contains);
+        const hay = cond.name.mode === 'insensitive'
+          ? String(row.name || '').toLowerCase()
+          : String(row.name || '');
+        return hay.includes(needle);
+      }
+      if (typeof cond.prefix === 'string') return row.prefix === cond.prefix;
+      return false;
+    });
+    if (!ok) return false;
+  }
+  return true;
+}
+
 const prismaMock = {
   orgMembership: {
     findUnique: async ({ where }) => {
@@ -71,18 +97,17 @@ const prismaMock = {
         return true;
       }) || null;
     },
-    findMany: async ({ where, orderBy, take }) => {
-      void orderBy; void take;
-      return prismaState.apiKeys.filter((r) => {
-        if (where?.organizationId && r.organizationId !== where.organizationId) return false;
-        // Ratchet 45 (TrueDelete) — the org-facing list filters out
-        // tombstoned rows. We mirror that in the mock so the test
-        // accurately reflects what the FE sees.
-        if (Object.prototype.hasOwnProperty.call(where || {}, 'deletedAt')) {
-          if (where.deletedAt === null && r.deletedAt) return false;
-        }
-        return true;
-      });
+    findMany: async ({ where, orderBy, take, skip }) => {
+      void orderBy;
+      const filtered = prismaState.apiKeys.filter((r) => matchApiKeyWhere(r, where));
+      // Stable order desc by createdAt (insertion order is ascending).
+      filtered.sort((a, b) => (b.createdAt?.getTime?.() || 0) - (a.createdAt?.getTime?.() || 0));
+      const offset = Number.isFinite(skip) ? skip : 0;
+      const end = Number.isFinite(take) ? offset + take : undefined;
+      return filtered.slice(offset, end);
+    },
+    count: async ({ where }) => {
+      return prismaState.apiKeys.filter((r) => matchApiKeyWhere(r, where)).length;
     },
     update: async ({ where, data }) => {
       const row = prismaState.apiKeys.find((r) => r.id === where.id);
@@ -270,6 +295,108 @@ describe('GET /api/orgs/:id/api-keys', () => {
     prismaState.membership.role = 'VIEWER';
     const res = await callRoute({ method: 'GET', urlPath: '/api/orgs/org-1/api-keys' });
     assert.equal(res.status, 403);
+  });
+
+  test('paginates with ?page= and ?limit= and reports total/pages', async () => {
+    for (let i = 0; i < 5; i++) {
+      // eslint-disable-next-line no-await-in-loop
+      await callRoute({
+        method: 'POST',
+        urlPath: '/api/orgs/org-1/api-keys',
+        body: { name: `k${i}` },
+      });
+    }
+    const page1 = await callRoute({
+      method: 'GET',
+      urlPath: '/api/orgs/org-1/api-keys?page=1&limit=2',
+    });
+    assert.equal(page1.status, 200);
+    assert.equal(page1.body.total, 5);
+    assert.equal(page1.body.page, 1);
+    assert.equal(page1.body.pages, 3);
+    assert.equal(page1.body.items.length, 2);
+
+    const page3 = await callRoute({
+      method: 'GET',
+      urlPath: '/api/orgs/org-1/api-keys?page=3&limit=2',
+    });
+    assert.equal(page3.status, 200);
+    assert.equal(page3.body.items.length, 1);
+
+    // Out-of-range page returns an empty page (not an error).
+    const page99 = await callRoute({
+      method: 'GET',
+      urlPath: '/api/orgs/org-1/api-keys?page=99&limit=2',
+    });
+    assert.equal(page99.status, 200);
+    assert.equal(page99.body.items.length, 0);
+    assert.equal(page99.body.total, 5);
+  });
+
+  test('caps ?limit= at 200 and defaults to 50 when invalid', async () => {
+    await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-1/api-keys',
+      body: { name: 'only' },
+    });
+    const huge = await callRoute({
+      method: 'GET',
+      urlPath: '/api/orgs/org-1/api-keys?limit=99999',
+    });
+    assert.equal(huge.status, 200);
+    assert.equal(huge.body.total, 1);
+    // Default limit when invalid: 50; cap when too large: 200. Either
+    // way the single row comes back without error.
+    assert.equal(huge.body.items.length, 1);
+
+    const bogus = await callRoute({
+      method: 'GET',
+      urlPath: '/api/orgs/org-1/api-keys?limit=abc&page=-2',
+    });
+    assert.equal(bogus.status, 200);
+    assert.equal(bogus.body.page, 1);
+  });
+
+  test('?q= filters by name (case-insensitive contains)', async () => {
+    await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-1/api-keys',
+      body: { name: 'CI Bot Prod' },
+    });
+    await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-1/api-keys',
+      body: { name: 'Staging worker' },
+    });
+    const res = await callRoute({
+      method: 'GET',
+      urlPath: '/api/orgs/org-1/api-keys?q=bot',
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.total, 1);
+    assert.equal(res.body.items[0].name, 'CI Bot Prod');
+  });
+
+  test('?q= matches an exact prefix and is combinable with pagination', async () => {
+    const a = await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-1/api-keys',
+      body: { name: 'alpha' },
+    });
+    await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-1/api-keys',
+      body: { name: 'beta' },
+    });
+    const prefix = a.body.apiKey.prefix;
+    const res = await callRoute({
+      method: 'GET',
+      urlPath: `/api/orgs/org-1/api-keys?q=${encodeURIComponent(prefix)}&page=1&limit=10`,
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.total, 1);
+    assert.equal(res.body.items[0].prefix, prefix);
+    assert.equal(res.body.page, 1);
   });
 });
 
