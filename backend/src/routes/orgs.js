@@ -270,12 +270,34 @@ router.post('/invitation/:token/accept', authenticateToken, async (req, res) => 
       return created;
     });
 
+    // Fire-and-forget welcome email. No-op when SMTP is unconfigured;
+    // the boolean result feeds into the audit log so operators can
+    // tell whether the user actually received the welcome message.
+    let welcomeEmailSent = false;
+    try {
+      const emailService = require('../services/email');
+      if (emailService.isConfigured && emailService.isConfigured()) {
+        Promise.resolve(
+          emailService.sendOrgWelcome(
+            { name: req.user.name, email: req.user.email },
+            invite.organization,
+          ),
+        ).catch(() => {});
+        welcomeEmailSent = true;
+      }
+    } catch (_) { /* ignore */ }
+
     void writeAuditLog(prisma, {
       action: 'org_invite_accept',
       userId,
       resource: 'organization',
       resourceId: invite.orgId,
-      metadata: { orgId: invite.orgId, invitationId: invite.id, role: invite.role },
+      metadata: {
+        orgId: invite.orgId,
+        invitationId: invite.id,
+        role: invite.role,
+        welcomeEmailSent,
+      },
       req,
     });
 
@@ -546,19 +568,57 @@ router.post('/:id/members/:userId/role', authenticateToken, async (req, res) => 
       }
     }
 
+    // Snapshot the previous role BEFORE update — needed by the
+    // notification email and audit-log change record below.
+    const previousRole = target.role;
+
     const updated = await prisma.orgMembership.update({
       where: { orgId_userId: { orgId, userId: targetUserId } },
       data: { role: newRole },
     });
+
+    // Fire-and-forget role-change notification. Only attempts to send
+    // when SMTP is configured AND the role actually changed. Resolves
+    // the audit-log `roleChangeEmailSent` boolean synchronously so the
+    // audit row records whether the user was notified.
+    let roleChangeEmailSent = false;
+    if (previousRole !== newRole) {
+      try {
+        const emailService = require('../services/email');
+        if (emailService.isConfigured && emailService.isConfigured()) {
+          const [targetUser, orgRow] = await Promise.all([
+            prisma.user.findUnique({
+              where: { id: targetUserId },
+              select: { id: true, email: true, name: true },
+            }).catch(() => null),
+            prisma.organization.findUnique({
+              where: { id: orgId },
+              select: { id: true, name: true, slug: true },
+            }).catch(() => null),
+          ]);
+          if (targetUser && targetUser.email) {
+            Promise.resolve(
+              emailService.sendRoleChangeNotification(
+                targetUser,
+                orgRow || { id: orgId },
+                previousRole,
+                newRole,
+              ),
+            ).catch(() => {});
+            roleChangeEmailSent = true;
+          }
+        }
+      } catch (_) { /* ignore */ }
+    }
 
     void writeAuditLog(prisma, {
       action: 'org_member_role_change',
       userId: callerId,
       resource: 'organization',
       resourceId: orgId,
-      before: { userId: targetUserId, role: target.role },
+      before: { userId: targetUserId, role: previousRole },
       after: { userId: targetUserId, role: newRole },
-      metadata: { orgId },
+      metadata: { orgId, roleChangeEmailSent },
       req,
     });
 
