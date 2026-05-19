@@ -9,6 +9,8 @@
  *   POST   /api/orgs/invitation/:token/accept           — redeem invite (authenticated)
  *   GET    /api/orgs/:id/members                        — list members (any member)
  *   POST   /api/orgs/:id/members/:userId/role           — change role (ADMIN+; cannot demote last OWNER)
+ *   POST   /api/orgs/:id/transfer-ownership             — hand OWNER role to another MEMBER+ (OWNER only)
+ *   POST   /api/orgs/:id/leave                          — self-leave convenience (refuses last OWNER)
  *   DELETE /api/orgs/:id/members/:userId                — remove member (ADMIN+ or self)
  *   POST   /api/orgs/:id/chats/:chatId/share            — share a chat into the org
  *   GET    /api/orgs/:id/chats                          — list chats shared into the org
@@ -366,6 +368,133 @@ router.post('/:id/members/:userId/role', authenticateToken, async (req, res) => 
     res.status(500).json({ error: 'failed to change role' });
   }
 });
+
+// ─── POST /api/orgs/:id/transfer-ownership (OWNER only) ─────────────
+// Hands the OWNER role to another existing MEMBER+ of the org. The
+// previous OWNER is demoted to ADMIN so they retain management rights
+// without leaving the org rudderless. The whole swap runs inside a
+// single prisma.$transaction so we never observe a state with zero or
+// two owners.
+async function transferOwnershipHandler(req, res, deps = { prisma, writeAuditLog }) {
+  const db = deps.prisma || prisma;
+  const audit = deps.writeAuditLog || writeAuditLog;
+  const callerId = req.user.id;
+  const orgId = req.params.id;
+  const newOwnerId = typeof req.body?.newOwnerId === 'string' ? req.body.newOwnerId.trim() : '';
+  if (!newOwnerId) return res.status(400).json({ error: 'newOwnerId is required' });
+  if (newOwnerId === callerId) {
+    return res.status(400).json({ error: 'newOwnerId must differ from the current OWNER' });
+  }
+
+  try {
+    const caller = await assertMembership(db, orgId, callerId, 'OWNER');
+    if (caller.role !== 'OWNER') {
+      return res.status(403).json({ error: 'only OWNER can transfer ownership' });
+    }
+
+    const target = await db.orgMembership.findUnique({
+      where: { orgId_userId: { orgId, userId: newOwnerId } },
+    });
+    if (!target) {
+      return res.status(404).json({ error: 'target user is not a member of this organization' });
+    }
+    if (!roleAtLeast(target.role, 'MEMBER')) {
+      return res.status(400).json({ error: 'newOwnerId must be at least a MEMBER of the org' });
+    }
+    const previousTargetRole = target.role;
+
+    const result = await db.$transaction(async (tx) => {
+      // Demote current owner to ADMIN first so the unique role
+      // semantics (single OWNER per org) are never violated mid-tx.
+      const demoted = await tx.orgMembership.update({
+        where: { orgId_userId: { orgId, userId: callerId } },
+        data: { role: 'ADMIN' },
+      });
+      const promoted = await tx.orgMembership.update({
+        where: { orgId_userId: { orgId, userId: newOwnerId } },
+        data: { role: 'OWNER' },
+      });
+      const updatedOrg = await tx.organization.update({
+        where: { id: orgId },
+        data: { ownerId: newOwnerId },
+      });
+      return { demoted, promoted, updatedOrg };
+    });
+
+    void audit(db, {
+      action: 'org_ownership_transfer',
+      userId: callerId,
+      resource: 'organization',
+      resourceId: orgId,
+      before: { ownerId: callerId, targetRole: previousTargetRole },
+      after: { ownerId: newOwnerId, previousOwnerRole: 'ADMIN' },
+      req,
+    });
+
+    res.json({
+      ok: true,
+      ownerId: result.updatedOrg.ownerId,
+      previousOwnerId: callerId,
+      previousOwnerRole: result.demoted.role,
+      newOwnerRole: result.promoted.role,
+      previousTargetRole,
+    });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] transfer-ownership failed:', err.message);
+    res.status(500).json({ error: 'failed to transfer ownership' });
+  }
+}
+
+router.post('/:id/transfer-ownership', authenticateToken, (req, res) => transferOwnershipHandler(req, res));
+
+// ─── POST /api/orgs/:id/leave ───────────────────────────────────────
+// Convenience self-leave endpoint. Mirrors DELETE /members/:userId
+// for the self-leave case but reads naturally from the client side
+// ("leave org") and refuses to strand the org without an OWNER
+// (returns 409 with `reason: 'last_owner'`).
+async function leaveOrgHandler(req, res, deps = { prisma, writeAuditLog }) {
+  const db = deps.prisma || prisma;
+  const audit = deps.writeAuditLog || writeAuditLog;
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  try {
+    const membership = await assertMembership(db, orgId, userId, 'VIEWER');
+
+    if (membership.role === 'OWNER') {
+      const ownerCount = await db.orgMembership.count({
+        where: { orgId, role: 'OWNER' },
+      });
+      if (ownerCount <= 1) {
+        return res.status(409).json({
+          error: 'cannot leave: you are the last OWNER',
+          reason: 'last_owner',
+        });
+      }
+    }
+
+    await db.orgMembership.delete({
+      where: { orgId_userId: { orgId, userId } },
+    });
+
+    void audit(db, {
+      action: 'org_member_leave',
+      userId,
+      resource: 'organization',
+      resourceId: orgId,
+      before: { userId, role: membership.role },
+      req,
+    });
+
+    res.json({ ok: true });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] leave failed:', err.message);
+    res.status(500).json({ error: 'failed to leave organization' });
+  }
+}
+
+router.post('/:id/leave', authenticateToken, (req, res) => leaveOrgHandler(req, res));
 
 // ─── DELETE /api/orgs/:id/members/:userId ───────────────────────────
 router.delete('/:id/members/:userId', authenticateToken, async (req, res) => {
@@ -965,6 +1094,10 @@ router.get('/:id/billing', authenticateToken, async (req, res) => {
 
 // Expose constants for tests/inspection.
 router.__roleAtLeast = roleAtLeast;
+router.__handlers = {
+  transferOwnership: transferOwnershipHandler,
+  leaveOrg: leaveOrgHandler,
+};
 router.__billing = {
   PLAN_QUOTAS,
   PLAN_MRR_USD,
