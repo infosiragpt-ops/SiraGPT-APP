@@ -68,15 +68,20 @@ const nextConfig = {
   },
 
   // Single-container deployment: Express backend runs alongside Next.js on
-  // the same Replit Autoscale instance, bound to 127.0.0.1:5000 (never
-  // exposed externally). Every browser-visible /api/* call is proxied
-  // through Next.js so the public domain is the only ingress. Returning
-  // an array uses Next.js's `afterFiles` semantics — filesystem routes
-  // match first, so Next.js-owned API endpoints (/api/ready, /api/health,
-  // …) keep being served by Next.js and only unmatched /api/* paths fall
-  // through to Express.
+  // the same Replit Autoscale instance, bound to 127.0.0.1:5050 (never
+  // exposed externally — port chosen to avoid Replit's PORT=5000 injection).
+  // Every browser-visible /api/* call is proxied through Next.js so the
+  // public domain is the only ingress. Returning an array uses Next.js's
+  // `afterFiles` semantics — filesystem routes match first, so Next.js-owned
+  // API endpoints (/api/ready, /api/health, …) keep being served by Next.js
+  // and only unmatched /api/* paths fall through to Express.
+  //
+  // NOTE: Next.js standalone bakes the rewrites() result into the build
+  // artefact, so BACKEND_INTERNAL_URL must be set at BUILD time (not just
+  // runtime) for overrides to take effect. The fallback below must therefore
+  // match scripts/start-all.js's BACKEND_PORT default (5050).
   async rewrites() {
-    const backendBase = process.env.BACKEND_INTERNAL_URL || 'http://127.0.0.1:5000'
+    const backendBase = process.env.BACKEND_INTERNAL_URL || 'http://127.0.0.1:5050'
     return [
       {
         source: '/api/:path*',
