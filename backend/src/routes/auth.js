@@ -1806,11 +1806,19 @@ const totpVerifyRateLimit = makeAuthRateLimit({
   keyBy: 'ip',
 });
 
+// A code is "TOTP-shaped" when it's a 6-digit string. Anything else is
+// treated as a recovery-code candidate (ratchet 45, Task 2). Both
+// branches feed through the same partial-session consumption pipeline.
+function _isTotpShaped(code) {
+  return typeof code === 'string' && /^\d{6}$/.test(code);
+}
+
 router.post(
   '/2fa/totp/verify',
   totpVerifyRateLimit,
   [
-    body('code').isString().matches(/^\d{6}$/).withMessage('code must be a 6-digit string'),
+    body('code').isString().isLength({ min: 6, max: 64 })
+      .withMessage('code must be a 6-digit code or a recovery code'),
     body('partialToken').isString().isLength({ min: 32, max: 256 }),
   ],
   async (req, res) => {
@@ -1843,13 +1851,43 @@ router.post(
       // require() avoids circular module loads when this file is
       // pulled in by the tests' require cache.
       const { INTERNAL } = require('./users');
-      const secret = INTERNAL.decryptTotpSecret(user.totpSecret);
-      if (!secret) {
-        return res.status(500).json({ error: 'Stored TOTP secret is unreadable' });
+
+      // Two acceptance paths (ratchet 45 / Task 2):
+      //   1) 6-digit TOTP code — verified against the encrypted seed.
+      //   2) Recovery code — matched (and consumed) against the
+      //      hashed `totpRecoveryCodes` array on the user row.
+      let ok = false;
+      let usedRecovery = false;
+      let updatedRecoveryCodes = null;
+
+      if (_isTotpShaped(code)) {
+        const secret = INTERNAL.decryptTotpSecret(user.totpSecret);
+        if (!secret) {
+          return res.status(500).json({ error: 'Stored TOTP secret is unreadable' });
+        }
+        const { verifyTotp } = require('../services/auth/totp');
+        ok = verifyTotp(String(code), secret, { window: 1 });
+      } else {
+        // Recovery-code branch.
+        const stored = Array.isArray(user.totpRecoveryCodes) ? user.totpRecoveryCodes : [];
+        if (stored.length === 0) {
+          return res.status(401).json({ error: 'Invalid TOTP code', code: 'totp_invalid' });
+        }
+        const candidateHash = INTERNAL.hashRecoveryCode(String(code));
+        const idx = stored.findIndex(
+          (entry) => entry && entry.hash === candidateHash && !entry.usedAt,
+        );
+        if (idx >= 0) {
+          ok = true;
+          usedRecovery = true;
+          updatedRecoveryCodes = stored.map((entry, i) =>
+            i === idx
+              ? { ...entry, usedAt: new Date().toISOString() }
+              : entry,
+          );
+        }
       }
 
-      const { verifyTotp } = require('../services/auth/totp');
-      const ok = verifyTotp(String(code), secret, { window: 1 });
       if (!ok) {
         void writeAuditLog(prisma, {
           req,
@@ -1871,6 +1909,22 @@ router.post(
       });
       if (!consumed || (typeof consumed.count === 'number' && consumed.count === 0)) {
         return res.status(409).json({ error: 'partial session already used' });
+      }
+
+      // If the user redeemed via a recovery code, mark that entry as
+      // used now that the partial session is locked in. The update is
+      // best-effort — a failure here doesn't block the JWT mint, but
+      // it does emit a warning so ops sees re-usable recovery codes.
+      if (usedRecovery && updatedRecoveryCodes) {
+        try {
+          await prisma.user.update({
+            where: { id: user.id },
+            data: { totpRecoveryCodes: updatedRecoveryCodes },
+            select: { id: true },
+          });
+        } catch (err) {
+          console.warn('[auth/2fa/totp/verify] failed to mark recovery code used:', err?.message || err);
+        }
       }
 
       // Mint the full session JWT — mirrors the email/password path.
@@ -1898,11 +1952,12 @@ router.post(
 
       void writeAuditLog(prisma, {
         req,
-        action: 'login_totp_verified',
+        action: usedRecovery ? 'login_totp_recovery_used' : 'login_totp_verified',
         resource: 'user',
         resourceId: user.id,
         userId: user.id,
         actorName: user.email,
+        metadata: usedRecovery ? { method: 'recovery_code' } : undefined,
       });
 
       res.cookie('token', token, {

@@ -1631,6 +1631,111 @@ router.post(
   },
 );
 
+// ────────────────────────────────────────────────────────────
+// Ratchet 45 (Task 2) — TOTP recovery codes.
+//
+// POST /api/users/me/2fa/totp/recovery-codes
+//   → Generates 10 fresh single-use 16-char recovery codes. Returns
+//     the plaintext codes ONCE in the response body. Stores them
+//     hashed as `[{ hash, usedAt: null }]` on `User.totpRecoveryCodes`.
+//     Any previous codes are replaced (regeneration invalidates the
+//     old set). Requires totpEnabled = true (TOTP must be activated
+//     before recovery codes can be issued).
+//
+// Recovery codes are accepted as an alternative to the 6-digit TOTP
+// code at POST /api/auth/2fa/totp/verify — the redemption logic lives
+// next to that handler so both code paths share the same atomic
+// single-use semantics. The hash format here is shared with that
+// handler via the helpers in INTERNAL.
+// ────────────────────────────────────────────────────────────
+
+const RECOVERY_CODE_COUNT = 10;
+const RECOVERY_CODE_LENGTH = 16;
+// Crockford-style base32 alphabet (no 0/O/1/I/L) — keeps the codes
+// transcribable from a paper printout without ambiguity.
+const RECOVERY_CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+
+function generateRecoveryCode() {
+  const bytes = crypto.randomBytes(RECOVERY_CODE_LENGTH);
+  let out = '';
+  for (let i = 0; i < RECOVERY_CODE_LENGTH; i += 1) {
+    out += RECOVERY_CODE_ALPHABET[bytes[i] % RECOVERY_CODE_ALPHABET.length];
+  }
+  return out;
+}
+
+// Normalise to upper-case alphanumerics so users can transcribe the
+// codes with hyphens / spaces / lower-case without rejection.
+function normaliseRecoveryCode(raw) {
+  if (typeof raw !== 'string') return '';
+  return raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+function hashRecoveryCode(plain) {
+  const salt = process.env.TOTP_RECOVERY_SALT || process.env.JWT_SECRET || 'siragpt-totp-recovery';
+  return crypto
+    .createHash('sha256')
+    .update(`${salt}|${normaliseRecoveryCode(plain)}`)
+    .digest('hex');
+}
+
+function generateRecoveryCodeSet(n = RECOVERY_CODE_COUNT) {
+  const plaintext = [];
+  const stored = [];
+  for (let i = 0; i < n; i += 1) {
+    const code = generateRecoveryCode();
+    plaintext.push(code);
+    stored.push({ hash: hashRecoveryCode(code), usedAt: null });
+  }
+  return { plaintext, stored };
+}
+
+router.post(
+  '/me/2fa/totp/recovery-codes',
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const current = await prisma.user.findUnique({
+        where: { id: req.user.id },
+        select: { totpEnabled: true },
+      });
+      if (!current) return res.status(404).json({ error: 'User not found' });
+      if (!current.totpEnabled) {
+        return res.status(409).json({
+          error: 'TOTP must be enabled before generating recovery codes',
+          code: 'totp_not_enabled',
+        });
+      }
+
+      const { plaintext, stored } = generateRecoveryCodeSet();
+
+      await prisma.user.update({
+        where: { id: req.user.id },
+        data: { totpRecoveryCodes: stored },
+        select: { id: true },
+      });
+
+      void writeAuditLog(prisma, {
+        req,
+        action: 'totp_recovery_codes_generated',
+        resource: 'user',
+        resourceId: req.user.id,
+        userId: req.user.id,
+        metadata: { count: plaintext.length },
+      });
+
+      return res.json({
+        recoveryCodes: plaintext,
+        count: plaintext.length,
+        message: 'Store these codes somewhere safe — they are shown only once.',
+      });
+    } catch (error) {
+      console.error('TOTP recovery codes error:', error);
+      return res.status(500).json({ error: 'Failed to generate recovery codes' });
+    }
+  },
+);
+
 router.post(
   '/me/2fa/totp/verify',
   authenticateToken,
@@ -1700,6 +1805,12 @@ module.exports.INTERNAL = {
   encryptTotpSecret,
   decryptTotpSecret,
   buildOtpauthUri,
+  generateRecoveryCode,
+  generateRecoveryCodeSet,
+  normaliseRecoveryCode,
+  hashRecoveryCode,
+  RECOVERY_CODE_COUNT,
+  RECOVERY_CODE_LENGTH,
   incrementQuarterCount,
   checkQuarterlyExportQuota,
   recordQuarterlyExport,

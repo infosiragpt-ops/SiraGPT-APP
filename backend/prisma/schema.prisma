@@ -97,6 +97,13 @@ model User {
   // rows keep working.
   totpSecret  String?
   totpEnabled Boolean @default(false)
+  // Ratchet 45 — TOTP recovery codes (Task 2). 10 single-use 16-char
+  // codes are generated when the user calls
+  // POST /api/users/me/2fa/totp/recovery-codes (totpEnabled required).
+  // Stored hashed as `[{ hash, usedAt? }]`; the plaintext is returned
+  // ONCE at generation time. Recovery codes are accepted as an
+  // alternative to the 6-digit code at POST /api/auth/2fa/totp/verify.
+  totpRecoveryCodes Json?
 
   // Relations
   chats                   Chat[]

@@ -100,6 +100,7 @@ describe('system-cron', () => {
         'scrub-deleted-user-content',
         'sweep-expired-announcements',
         'sweep-expired-api-keys',
+        'sweep-expired-partial-sessions',
         'sweep-expired-sessions',
         'sweep-expired-verification-tokens',
         'sweep-inactive-api-keys',

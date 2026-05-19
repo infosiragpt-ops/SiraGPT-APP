@@ -83,6 +83,12 @@ const FAILED_EMAIL_RETRY_SCHEDULE = process.env.SYSTEM_CRON_FAILED_EMAIL_RETRY_S
 // deleteMany — they can co-fire). Hard-deletes rows that are
 // (read AND readAt < now-30d) OR (unread AND createdAt < now-90d).
 const NOTIFICATION_SWEEP_SCHEDULE = process.env.SYSTEM_CRON_NOTIFICATION_SWEEP_SCHEDULE || '45 4 * * *';
+// Ratchet 45 — PartialSession (TOTP/SMS handoff) retention sweep.
+// PartialSession rows have a 5-minute TTL and are single-use; this
+// sweep hard-deletes expired rows plus consumed rows older than 1h.
+// Default `5 * * * *` (every hour at :05) — sits 5 minutes after the
+// session sweep at :00 so the two hourly passes don't co-fire.
+const PARTIAL_SESSION_SWEEP_SCHEDULE = process.env.SYSTEM_CRON_PARTIAL_SESSION_SWEEP_SCHEDULE || '5 * * * *';
 
 let _state = null;
 
@@ -604,6 +610,45 @@ function start(opts = {}) {
     schedule: FAILED_EMAIL_RETRY_SCHEDULE,
     task: failedEmailRetryTask,
     meta: failedEmailRetryMeta,
+  });
+
+  // Ratchet 45 — PartialSession expiry sweep (hourly).
+  let partialSessionSweepRunning = false;
+  const partialSessionSweepMeta = {};
+  const partialSessionSweepTask = cron.schedule(
+    PARTIAL_SESSION_SWEEP_SCHEDULE,
+    async () => {
+      if (partialSessionSweepRunning) {
+        logger.warn?.('[system-cron] skip sweep-expired-partial-sessions — previous run still active');
+        return;
+      }
+      partialSessionSweepRunning = true;
+      const finish = recordRun(partialSessionSweepMeta);
+      let runErr = null;
+      try {
+        // eslint-disable-next-line global-require
+        const job = require('./sweep-expired-partial-sessions');
+        const runWithRetry = wrapWithRetry(() => job.run({ logger }), {
+          onRetry: ({ attempt, delayMs, reason }) =>
+            logger.warn?.(`[system-cron] sweep-expired-partial-sessions retry ${attempt} in ${delayMs}ms (${reason})`),
+        });
+        const res = await runWithRetry();
+        logger.info?.(`[system-cron] sweep-expired-partial-sessions done: ${JSON.stringify(res)}`);
+      } catch (err) {
+        runErr = err;
+        logger.error?.(`[system-cron] sweep-expired-partial-sessions failed: ${err && err.message}`);
+      } finally {
+        partialSessionSweepRunning = false;
+        finish(runErr);
+      }
+    },
+    { scheduled: false, timezone: 'UTC' },
+  );
+  tasks.push({
+    name: 'sweep-expired-partial-sessions',
+    schedule: PARTIAL_SESSION_SWEEP_SCHEDULE,
+    task: partialSessionSweepTask,
+    meta: partialSessionSweepMeta,
   });
 
   for (const t of tasks) {
