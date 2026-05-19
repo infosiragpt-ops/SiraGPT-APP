@@ -4,8 +4,11 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
+    "build": "npm run build:backend && NEXT_OUTPUT=standalone NODE_ENV=production next build && npm run postbuild:slim",
+    "build:backend": "cd backend && npm install --omit=dev --no-audit --no-fund && npx prisma generate",
+    "postbuild:slim": "node scripts/postbuild-slim.js",
+    "start": "node scripts/start-all.js",
+    "start:next-only": "next start",
     "lint": "next lint --max-warnings 45",
     "lint:count": "next lint 2>&1 | grep -c 'Warning:' || true",
     "clean": "rm -rf .next .test-dist .playwright-cli output test-results",
