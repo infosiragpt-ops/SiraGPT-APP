@@ -1794,6 +1794,131 @@ router.post(
   },
 );
 
+// ────────────────────────────────────────────────────────────
+// Ratchet 45 — 2FA disable endpoints.
+//
+// Disabling a second factor is sensitive (it lowers the account's
+// security posture), so we require either the user's current password
+// in the request body OR a "recently authenticated" session (session
+// row created within the last 5 minutes). The latter accommodates SSO /
+// passwordless users for whom we don't have a password to verify.
+//
+// DELETE /api/users/me/2fa/totp — clears totpSecret + totpRecoveryCodes
+//   and flips totpEnabled to false. Audit-logged.
+// DELETE /api/users/me/2fa/sms  — clears twoFactorEnabled and
+//   phoneVerifiedAt. `phone` column intentionally retained so the user
+//   doesn't lose their number on disable. Audit-logged.
+// ────────────────────────────────────────────────────────────
+
+const RECENT_AUTH_WINDOW_MS = 5 * 60 * 1000;
+
+async function assertRecentAuthOrPassword(req, res) {
+  // Path A — recent session: createdAt within the trailing 5 minutes.
+  const sessionCreatedAt = req.session && req.session.createdAt
+    ? new Date(req.session.createdAt)
+    : null;
+  if (sessionCreatedAt && !Number.isNaN(sessionCreatedAt.getTime())) {
+    const ageMs = Date.now() - sessionCreatedAt.getTime();
+    if (ageMs >= 0 && ageMs <= RECENT_AUTH_WINDOW_MS) {
+      return true;
+    }
+  }
+
+  // Path B — current password supplied in body.
+  const currentPassword = req.body && typeof req.body.currentPassword === 'string'
+    ? req.body.currentPassword
+    : '';
+  if (!currentPassword) {
+    res.status(403).json({
+      error: 'recent authentication required',
+      code: 'reauth_required',
+    });
+    return false;
+  }
+
+  const row = await prisma.user.findUnique({
+    where: { id: req.user.id },
+    select: { password: true },
+  });
+  if (!row || !row.password) {
+    res.status(403).json({
+      error: 'recent authentication required',
+      code: 'reauth_required',
+    });
+    return false;
+  }
+  const ok = await bcrypt.compare(currentPassword, row.password);
+  if (!ok) {
+    res.status(403).json({
+      error: 'current password is incorrect',
+      code: 'invalid_password',
+    });
+    return false;
+  }
+  return true;
+}
+
+router.delete('/me/2fa/totp', authenticateToken, async (req, res) => {
+  try {
+    const okAuth = await assertRecentAuthOrPassword(req, res);
+    if (!okAuth) return;
+
+    await prisma.user.update({
+      where: { id: req.user.id },
+      data: {
+        totpEnabled: false,
+        totpSecret: null,
+        totpRecoveryCodes: null,
+      },
+      select: { id: true },
+    });
+
+    void writeAuditLog(prisma, {
+      req,
+      action: 'totp_disabled',
+      resource: 'user',
+      resourceId: req.user.id,
+      userId: req.user.id,
+    });
+
+    return res.json({ ok: true, totpEnabled: false });
+  } catch (error) {
+    console.error('TOTP disable error:', error);
+    return res.status(500).json({ error: 'Failed to disable TOTP' });
+  }
+});
+
+router.delete('/me/2fa/sms', authenticateToken, async (req, res) => {
+  try {
+    const okAuth = await assertRecentAuthOrPassword(req, res);
+    if (!okAuth) return;
+
+    await prisma.user.update({
+      where: { id: req.user.id },
+      data: {
+        twoFactorEnabled: false,
+        phoneVerifiedAt: null,
+        // `phone` intentionally retained — user can re-verify later
+        // without re-entering the number.
+      },
+      select: { id: true },
+    });
+
+    void writeAuditLog(prisma, {
+      req,
+      action: 'two_factor_sms_disabled',
+      resource: 'user',
+      resourceId: req.user.id,
+      userId: req.user.id,
+    });
+
+    return res.json({ ok: true, twoFactorEnabled: false });
+  } catch (error) {
+    console.error('SMS 2FA disable error:', error);
+    return res.status(500).json({ error: 'Failed to disable SMS 2FA' });
+  }
+});
+
 module.exports = router;
 // Test-only internals (ratchet 45)
 module.exports.INTERNAL = {
@@ -1815,4 +1940,6 @@ module.exports.INTERNAL = {
   checkQuarterlyExportQuota,
   recordQuarterlyExport,
   buildExportArchive,
+  RECENT_AUTH_WINDOW_MS,
+  assertRecentAuthOrPassword,
 };

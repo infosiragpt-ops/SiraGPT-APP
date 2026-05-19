@@ -928,7 +928,26 @@ router.get('/me', authenticateToken, async (req, res) => {
     // the existing timestamp field stays the source of truth. Adding a
     // new top-level field is backward compatible.
     const emailVerified = serializedUser != null && serializedUser.emailVerifiedAt != null;
-    res.json({ user: serializedUser, emailVerified });
+    // Ratchet 45 — surface 2FA status + remaining-recovery-codes count so
+    // the settings UI can show "X codes left" without an extra round-trip.
+    // We never echo back the hashed codes themselves; only the count of
+    // entries with `usedAt == null` is exposed.
+    const totpEnabled = Boolean(req.user.totpEnabled);
+    const twoFactorEnabled = Boolean(req.user.twoFactorEnabled);
+    const recoveryCodes = Array.isArray(req.user.totpRecoveryCodes)
+      ? req.user.totpRecoveryCodes
+      : [];
+    const totpRecoveryCodesRemaining = recoveryCodes.reduce(
+      (n, entry) => (entry && entry.usedAt == null ? n + 1 : n),
+      0,
+    );
+    res.json({
+      user: serializedUser,
+      emailVerified,
+      totpEnabled,
+      twoFactorEnabled,
+      totpRecoveryCodesRemaining,
+    });
   } catch (error) {
     console.error('Get user error:', error);
     res.status(500).json({ error: 'Failed to get user' });
