@@ -136,6 +136,31 @@ The Grafana dashboard `siragpt-slo` (provisioned from
 4. **LLM cost** — cache hit rate vs $/1k requests (sourced from
    Langfuse via the recorder in `services/observability/llm-cost.js`).
 
+## Per-endpoint tracker (in-process)
+
+In addition to the Prometheus burn-rate rules, the backend keeps an
+in-process tracker (`backend/src/services/slo-tracker.js`) that
+records per-endpoint counters every request and exposes them through
+the shared `/metrics` registry. It is intentionally cheap — no
+percentile state, just bucketed counters — and is used for fast SLO
+attainment checks without a Prometheus round-trip.
+
+Counters exposed:
+
+- `siragpt_slo_requests_total{route}` — total requests per route.
+- `siragpt_slo_requests_under_500ms_total{route}` — fast bucket
+  (99.5 % target).
+- `siragpt_slo_requests_under_2s_total{route}` — acceptable bucket
+  (99 % target).
+- `siragpt_slo_errors_total{route}` — 5xx counter (≤ 1 % target).
+- `siragpt_slo_available_total{route}` — non-5xx counter (99.9 %
+  availability target).
+- `siragpt_slo_endpoint_meets_target{route,objective}` — gauge (0/1)
+  per objective, useful for at-a-glance dashboards.
+
+Static targets are exposed by `slo-tracker.slos()` and match the
+table above; this layer is purely the SLI counter sink.
+
 ## Review cadence
 
 - SLO targets reviewed every quarter by the Platform team.

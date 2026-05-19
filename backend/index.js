@@ -149,6 +149,10 @@ const { runAgent } = require('./src/services/agents/agent-entry');
 const { recoverAgentTasksAfterBoot } = require('./src/services/agents/agent-task-boot-recovery');
 const { startAgentTaskWorker, closeAgentTaskWorker } = require('./src/services/agents/agent-task-worker');
 const { closeAgentTaskQueue } = require('./src/services/agents/agent-task-queue');
+const alerting = require('./src/services/alerting');
+const sloTracker = require('./src/services/slo-tracker');
+const shutdownRegistry = require('./src/utils/shutdown');
+const telemetryRoutes = require('./src/routes/telemetry');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -435,6 +439,11 @@ app.use(otelRequestContextMiddleware);
 // observation per response.
 const { redMetricsMiddleware } = require('./src/middleware/red-metrics');
 app.use(redMetricsMiddleware);
+
+// SLO tracker — records per-endpoint counters used by /metrics. Must
+// run after request-id/otel context (set above) so the matched route
+// is available on res.on('finish').
+app.use(sloTracker.middleware());
 if (process.env.NODE_ENV !== 'production') {
     app.use(morgan('dev'));
 }
@@ -675,6 +684,7 @@ app.use('/api/codex/github', githubCodexRoutes);
 app.use('/api/cowork', coworkRoutes);
 app.use('/api/webhooks', webhooksRoutes);
 app.use('/api/integrations/slack', slackIntegrationRoutes);
+app.use('/api/telemetry', telemetryRoutes);
 
 // Passkey (WebAuthn) endpoints. Disabled until the operator sets
 // WEBAUTHN_RP_ID + WEBAUTHN_ORIGIN AND flips
@@ -779,25 +789,144 @@ function startServer() {
     scheduler.setJobClassifier(classifyTaskError);
     scheduler.start();
 
-    async function shutdown(signal) {
-        logger.info({ signal }, 'shutdown_initiated');
-        try { scheduler.stop?.(); } catch {}
+    // ── Centralized graceful shutdown ──────────────────────────────
+    // Each step has its own 5s timeout budget; the overall registry
+    // enforces a 30s hard ceiling. Registration order matters: hooks
+    // execute in reverse-LIFO, so `http_server_close` (registered
+    // FIRST) runs LAST (after dependants are torn down).
+    shutdownRegistry.configure({ logger });
+
+    // 7. Last to register → first to run: stop accepting new connections.
+    shutdownRegistry.register('http_server_close', () => new Promise((resolve) => {
+        try { server.close(() => resolve()); } catch { resolve(); }
+    }), 5000);
+
+    // 6. Drain in-flight requests (best-effort, 5s budget per step;
+    //    requests still in flight after the global 30s deadline are
+    //    abandoned by the parent timeout).
+    shutdownRegistry.register('drain_inflight_requests', async () => {
+        // Express has no built-in inflight counter; we rely on
+        // server.close() above to wait for keep-alive to drain. This
+        // hook exists for symmetry + future write-behind/queue flush.
+        await new Promise((r) => setTimeout(r, 250));
+    }, 5000);
+
+    // 5. Flush write-behind caches (cycle 31). Best-effort: tolerate
+    //    missing modules so a partial deploy doesn't hang shutdown.
+    shutdownRegistry.register('write_behind_cache_flush', async () => {
+        try {
+            const wb = require('./src/services/cache/write-behind');
+            if (wb && typeof wb.flushAll === 'function') await wb.flushAll();
+        } catch { /* module not present — skip */ }
+    }, 5000);
+
+    // 4. Close realtime WS server (cycle 24).
+    shutdownRegistry.register('realtime_ws_close', () => {
         try { closeRealtimeServer(); } catch {}
+    }, 5000);
+
+    // 3. Close BullMQ workers + queue.
+    shutdownRegistry.register('bullmq_workers_close', async () => {
+        await Promise.allSettled([closeAgentTaskWorker(), closeAgentTaskQueue()]);
+    }, 5000);
+
+    // 2. Disconnect Prisma.
+    shutdownRegistry.register('prisma_disconnect', async () => {
+        try { if (typeof prisma.$disconnect === 'function') await prisma.$disconnect(); } catch {}
+    }, 5000);
+
+    // 1. Disconnect Redis (lazy health client + any others we own).
+    shutdownRegistry.register('redis_disconnect', async () => {
+        const c = (typeof getHealthRedisClient === 'function') ? getHealthRedisClient() : null;
+        if (c && typeof c.quit === 'function') {
+            try { await c.quit(); } catch {}
+        }
+    }, 5000);
+
+    // Observability flush (telemetry exporters) — runs alongside DB/Redis
+    // disconnect to recover any in-flight events.
+    shutdownRegistry.register('observability_flush', async () => {
         await Promise.allSettled([
-            closeAgentTaskWorker(),
-            closeAgentTaskQueue(),
-            new Promise((resolve) => server.close(resolve)),
             shutdownOpenTelemetry(),
-            // Drain any in-flight langfuse events; safe no-op if disabled.
             shutdownLangfuse(),
-            // Drain any in-flight posthog events; safe no-op if disabled.
             shutdownPostHog(),
         ]);
+    }, 5000);
+
+    // Scheduler stop — registered last (first to run) so cron jobs
+    // can't enqueue new work during shutdown.
+    shutdownRegistry.register('scheduler_stop', () => {
+        try { scheduler.stop?.(); } catch {}
+    }, 5000);
+
+    async function shutdown(signal) {
+        logger.info({ signal }, 'shutdown_signal_received');
+        try {
+            await shutdownRegistry.shutdown(signal);
+        } catch (err) {
+            logger.error({ err: err && err.message }, 'shutdown_registry_failure');
+        }
         process.exit(0);
     }
 
     process.once('SIGTERM', () => { void shutdown('SIGTERM'); });
     process.once('SIGINT', () => { void shutdown('SIGINT'); });
+
+    // ── Alerting configuration ─────────────────────────────────────
+    alerting.configure({ logger });
+
+    // Memory monitor: every 30s, alert when heapUsed > 80% of heapTotal.
+    // Dedup at the alerting layer ensures a sustained high-memory state
+    // produces one Slack message per 5min, not 10.
+    const memInterval = setInterval(() => {
+        try {
+            const m = process.memoryUsage();
+            if (!m.heapTotal) return;
+            const pct = (m.heapUsed / m.heapTotal) * 100;
+            if (pct > 80) {
+                Promise.resolve().then(() => alerting.notifyHighMemory(pct, {
+                    heapUsedMb: Math.round(m.heapUsed / 1024 / 1024),
+                    heapTotalMb: Math.round(m.heapTotal / 1024 / 1024),
+                    rssMb: Math.round(m.rss / 1024 / 1024),
+                })).catch(() => {});
+            }
+        } catch { /* never throw from monitor */ }
+    }, 30_000);
+    if (typeof memInterval.unref === 'function') memInterval.unref();
+
+    // 5xx rate monitor: count successes vs 5xx over a sliding 1-minute
+    // window and alert when the error rate exceeds 5%. We sample
+    // every 60s; minimum 20 requests in the window to avoid false
+    // positives from low-traffic dev environments.
+    let _http5xxWindow = [];
+    app.use((req, res, next) => {
+        res.on('finish', () => {
+            try {
+                const t = Date.now();
+                _http5xxWindow.push({ t, err: res.statusCode >= 500 && res.statusCode < 600 });
+                if (_http5xxWindow.length > 5000) _http5xxWindow.splice(0, _http5xxWindow.length - 5000);
+            } catch { /* ignore */ }
+        });
+        next();
+    });
+    const errInterval = setInterval(() => {
+        try {
+            const cutoff = Date.now() - 60_000;
+            _http5xxWindow = _http5xxWindow.filter((e) => e.t >= cutoff);
+            const total = _http5xxWindow.length;
+            if (total < 20) return;
+            const errs = _http5xxWindow.reduce((a, e) => a + (e.err ? 1 : 0), 0);
+            const ratePct = (errs / total) * 100;
+            if (ratePct > 5) {
+                Promise.resolve().then(() => alerting.notifyHigh5xxRate(ratePct, {
+                    windowSize: total,
+                    errors: errs,
+                })).catch(() => {});
+            }
+        } catch { /* never throw */ }
+    }, 60_000);
+    if (typeof errInterval.unref === 'function') errInterval.unref();
+
     return server;
 }
 
