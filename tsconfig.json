@@ -43,6 +43,7 @@
     "artifacts",
     "tests",
     ".test-dist",
-    "vitest.config.ts"
+    "vitest.config.ts",
+    "packages"
   ]
 }
