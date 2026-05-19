@@ -16,6 +16,8 @@
     "test:e2e": "playwright test",
     "test:e2e:install": "playwright install chromium",
     "test:all": "npm test && vitest run",
+    "eval:mythos": "node scripts/run-mythos-preview-evals.js",
+    "eval:mythos:json": "node scripts/run-mythos-preview-evals.js --json",
     "prepare": "husky",
     "mobile:sync": "cap sync",
     "mobile:open:android": "cap open android",
