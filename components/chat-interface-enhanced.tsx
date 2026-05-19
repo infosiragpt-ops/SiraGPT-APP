@@ -111,6 +111,7 @@ import { devLog } from "@/lib/dev-log"
 import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
 import VideoGenerationComponent from "./VideoGenerationComponent"
 import UpgradeModal from "./UpgradeModal"
+import KeyboardShortcutsModal from "./KeyboardShortcutsModal"
 import { IconProvider } from "./icon-provider"
 import { AppSidebar } from "./app-sidebar"
 import GoogleServicesConnectionCard from "./GoogleServicesConnectionCard"
@@ -3864,6 +3865,26 @@ But first, you need to connect your Spotify account securely using the button be
   }, [openSearchActivityPanel]);
   const [shareModalOpen, setShareModalOpen] = React.useState(false);
   const [shareUrl, setShareUrl] = React.useState<string | null>(null);
+  const [shortcutsOpen, setShortcutsOpen] = React.useState(false);
+
+  // Global Cmd/Ctrl + / opens the keyboard shortcuts help modal. We attach
+  // at the window level so it works regardless of which child has focus,
+  // and skip when the user is mid-IME composition or inside a
+  // contenteditable that should claim the slash key.
+  React.useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const isAccel = e.metaKey || e.ctrlKey;
+      if (!isAccel) return;
+      if (e.key !== "/" && e.key !== "?") return;
+      // Avoid stealing the chord while typing inside a textarea where the
+      // user might want a literal "/" — but only if no modifier is held.
+      // (Here both modifiers are required, so we always toggle.)
+      e.preventDefault();
+      setShortcutsOpen((v) => !v);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // Helper function to check if error is related to monthly API limit
   const isMonthlyLimitError = React.useCallback((errorMessage: string) => {
@@ -7764,6 +7785,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   open={subscribeOpen}
                   onOpenChange={setSubscribeOpen}
                   user={currentUserInfo || user}
+                />
+                <KeyboardShortcutsModal
+                  open={shortcutsOpen}
+                  onOpenChange={setShortcutsOpen}
                 />
                 {/* Share conversation modal */}
                 <Dialog open={shareModalOpen} onOpenChange={setShareModalOpen}>

@@ -105,6 +105,8 @@ export function SlashCommandMenu({ open, filter, onCommandPick, onClose }: Slash
     <div
       role="listbox"
       aria-label="Slash commands"
+      aria-activedescendant={visible[activeIdx] ? `slash-cmd-${visible[activeIdx].id}` : undefined}
+      tabIndex={-1}
       className="absolute bottom-full mb-2 left-2 right-2 max-w-md rounded-xl border border-border/60 bg-popover/95 shadow-xl backdrop-blur z-50 overflow-hidden"
     >
       <div className="px-3 py-2 text-[11px] uppercase tracking-wider text-muted-foreground border-b border-border/40">
@@ -114,6 +116,7 @@ export function SlashCommandMenu({ open, filter, onCommandPick, onClose }: Slash
         {visible.map((cmd, idx) => (
           <button
             key={cmd.id}
+            id={`slash-cmd-${cmd.id}`}
             type="button"
             role="option"
             aria-selected={idx === activeIdx}

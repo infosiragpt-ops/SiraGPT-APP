@@ -13,12 +13,85 @@
  * code widths here — the outer wrapper handles size.
  */
 
-import React, { useMemo, useState } from "react"
+import React, { useMemo, useState, useEffect, useRef } from "react"
 import {
   RefreshCw, FileCode, Download, ExternalLink, X, Eye, Check, Clipboard,
 } from "lucide-react"
 import { useArtifactPanel } from "@/lib/artifact-panel-context"
 import { ShikiCodeView } from "@/components/ui/shiki-code-view"
+
+/**
+ * Focus-trap + body-scroll-lock helper for the mobile drawer. Saves the
+ * previously focused element on mount, moves focus into the panel,
+ * keeps Tab within the panel while open on small screens, and restores
+ * focus on unmount. Body scroll is locked while the panel is mounted on
+ * mobile so the underlying chat doesn't bleed through.
+ */
+function useDialogA11y(
+  containerRef: React.RefObject<HTMLDivElement | null>,
+  onClose: () => void,
+) {
+  useEffect(() => {
+    const previouslyFocused = (typeof document !== "undefined"
+      ? (document.activeElement as HTMLElement | null)
+      : null)
+
+    // Move focus into the panel (first focusable, else the container itself)
+    const node = containerRef.current
+    if (node) {
+      const focusable = node.querySelector<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      )
+      ;(focusable ?? node).focus({ preventScroll: true })
+    }
+
+    // Lock body scroll (mobile drawer behavior)
+    const prevOverflow = typeof document !== "undefined" ? document.body.style.overflow : ""
+    if (typeof document !== "undefined") {
+      document.body.style.overflow = "hidden"
+    }
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation()
+        onClose()
+        return
+      }
+      if (e.key === "Tab" && node) {
+        const focusables = Array.from(
+          node.querySelectorAll<HTMLElement>(
+            'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+          ),
+        ).filter((el) => !el.hasAttribute("data-focus-skip"))
+        if (focusables.length === 0) return
+        const first = focusables[0]
+        const last = focusables[focusables.length - 1]
+        const active = document.activeElement as HTMLElement | null
+        if (e.shiftKey && active === first) {
+          e.preventDefault()
+          last.focus()
+        } else if (!e.shiftKey && active === last) {
+          e.preventDefault()
+          first.focus()
+        }
+      }
+    }
+    window.addEventListener("keydown", onKey, true)
+
+    return () => {
+      window.removeEventListener("keydown", onKey, true)
+      if (typeof document !== "undefined") {
+        document.body.style.overflow = prevOverflow
+      }
+      if (previouslyFocused && typeof previouslyFocused.focus === "function") {
+        try { previouslyFocused.focus({ preventScroll: true }) } catch { /* noop */ }
+      }
+    }
+    // We intentionally only run this on mount/unmount — containerRef / onClose
+    // identity is stable enough for the lifetime of one open instance.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+}
 
 function toFullDocument(code: string, language: string): string {
   if (language === "svg") {
@@ -33,17 +106,31 @@ function toFullDocument(code: string, language: string): string {
 
 export function ArtifactPanel() {
   const { active, close, setView } = useArtifactPanel()
+  if (!active) return null
+  return <ArtifactPanelMounted close={close} setView={setView} active={active} />
+}
+
+function ArtifactPanelMounted({
+  active,
+  close,
+  setView,
+}: {
+  active: NonNullable<ReturnType<typeof useArtifactPanel>["active"]>
+  close: () => void
+  setView: (v: "preview" | "code") => void
+}) {
   const [generation, setGeneration] = useState(0)
-  const { code = "", language = "", title = "", view = "preview" } = active || {}
+  const { code = "", language = "", title = "", view = "preview" } = active
   const lang = (language || "").toLowerCase()
   const isMermaid = lang === "mermaid"
+  const panelRef = useRef<HTMLDivElement | null>(null)
+
+  useDialogA11y(panelRef, close)
 
   const srcDoc = useMemo(() => {
     if (isMermaid) return ""
     return toFullDocument(code, lang)
   }, [code, lang, isMermaid])
-
-  if (!active) return null
 
   const fileName = sanitizeFilename(title || "artefacto") + (isMermaid ? ".svg" : ".html")
 
@@ -89,7 +176,24 @@ export function ArtifactPanel() {
     // resizable split assigns it on small viewports. Desktop (sm+):
     // restore the inline split-pane behavior — the parent's
     // resizable divider continues to control width.
-    <div className="fixed inset-0 z-40 flex h-full w-full min-w-0 flex-col bg-white dark:bg-zinc-900 border-l border-border/60 sm:relative sm:inset-auto sm:z-auto">
+    <>
+      {/* Mobile backdrop — tap to close. Hidden on desktop where the
+          split-pane handles layout instead of an overlay. */}
+      <div
+        aria-hidden="true"
+        data-focus-skip="true"
+        onClick={close}
+        className="fixed inset-0 z-30 bg-black/40 backdrop-blur-[1px] sm:hidden"
+      />
+    <div
+      ref={panelRef}
+      role="dialog"
+      aria-modal="true"
+      aria-label={title || "Panel de artefacto"}
+      tabIndex={-1}
+      data-open="true"
+      className="fixed inset-0 z-40 flex h-full w-full min-w-0 flex-col bg-white dark:bg-zinc-900 border-l border-border/60 transition-transform duration-200 ease-out translate-x-full data-[open=true]:translate-x-0 sm:relative sm:inset-auto sm:z-auto sm:translate-x-0 sm:transition-none"
+    >
       {/* Header */}
       <div className="flex items-center justify-between gap-3 border-b border-border/60 px-4 py-2.5 bg-white dark:bg-zinc-900">
         <div className="flex items-center gap-2 min-w-0">
@@ -118,7 +222,7 @@ export function ArtifactPanel() {
           <IconButton label="Reiniciar" onClick={onReset}><RefreshCw className="h-3.5 w-3.5" /></IconButton>
           <IconButton label="Descargar" onClick={onDownload}><Download className="h-3.5 w-3.5" /></IconButton>
           <IconButton label="Abrir en nueva pestaña" onClick={onOpenNewTab}><ExternalLink className="h-3.5 w-3.5" /></IconButton>
-          <IconButton label="Cerrar" onClick={close}><X className="h-4 w-4" /></IconButton>
+          <IconButton label="Cerrar" onClick={close} large><X className="h-4 w-4" /></IconButton>
         </div>
       </div>
 
@@ -149,16 +253,23 @@ export function ArtifactPanel() {
         )}
       </div>
     </div>
+    </>
   )
 }
 
-function IconButton({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
+function IconButton({ label, onClick, children, large = false }: { label: string; onClick: () => void; children: React.ReactNode; large?: boolean }) {
+  // `large` enlarges the touch target on mobile (h-10 w-10) while keeping
+  // the compact desktop size (h-8 w-8). Used for the close button so it
+  // meets the 44px touch-target guideline on small screens.
+  const sizeClass = large
+    ? "h-10 w-10 sm:h-8 sm:w-8"
+    : "h-8 w-8"
   return (
     <button
       onClick={onClick}
       title={label}
       aria-label={label}
-      className="grid h-8 w-8 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+      className={`grid ${sizeClass} place-items-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50`}
     >
       {children}
     </button>
