@@ -24,9 +24,14 @@ const {
 } = require('../src/services/openapi/route-scanner');
 
 const BACKEND_ROOT = path.resolve(__dirname, '..');
+const REPO_ROOT = path.resolve(BACKEND_ROOT, '..');
 const ROUTES_DIR = path.join(BACKEND_ROOT, 'src', 'routes');
 const INDEX_FILE = path.join(BACKEND_ROOT, 'index.js');
 const OUTPUT_FILE = path.join(BACKEND_ROOT, 'openapi.json');
+// Mirror copy under the repo-level `docs/` folder so external tooling
+// (Postman imports, the docs site, contract tests in tests/) can pick
+// up the spec without a backend-relative path traversal.
+const DOCS_OUTPUT_FILE = path.join(REPO_ROOT, 'docs', 'openapi.json');
 
 function generate() {
   const indexSource = fs.readFileSync(INDEX_FILE, 'utf8');
@@ -77,7 +82,8 @@ async function main() {
 
   if (checkMode) {
     const current = fs.existsSync(OUTPUT_FILE) ? fs.readFileSync(OUTPUT_FILE, 'utf8') : '';
-    if (current !== serialized) {
+    const docsCurrent = fs.existsSync(DOCS_OUTPUT_FILE) ? fs.readFileSync(DOCS_OUTPUT_FILE, 'utf8') : '';
+    if (current !== serialized || docsCurrent !== serialized) {
       // eslint-disable-next-line no-console
       console.error('[openapi] openapi.json is stale; run scripts/generate-openapi.js');
       process.exit(1);
@@ -88,6 +94,16 @@ async function main() {
   }
 
   fs.writeFileSync(OUTPUT_FILE, serialized);
+  try {
+    fs.mkdirSync(path.dirname(DOCS_OUTPUT_FILE), { recursive: true });
+    fs.writeFileSync(DOCS_OUTPUT_FILE, serialized);
+  } catch (err) {
+    // Mirror failure shouldn't break the primary write — log and
+    // continue. Operators can investigate why the docs/ directory
+    // isn't writable separately.
+    // eslint-disable-next-line no-console
+    console.warn(`[openapi] could not write docs/openapi.json: ${err.message}`);
+  }
   // eslint-disable-next-line no-console
   console.log(`[openapi] wrote ${path.relative(BACKEND_ROOT, OUTPUT_FILE)} (${resolved.length} routes)`);
 

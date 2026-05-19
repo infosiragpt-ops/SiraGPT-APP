@@ -143,6 +143,78 @@ The backend provides comprehensive analytics including:
 - Payment status monitoring
 - System performance metrics
 
+## API Documentation (OpenAPI 3.1)
+
+The backend ships an auto-generated OpenAPI 3.1 specification covering
+all `/api/*` route families (auth, chats, files, payments, ai, admin,
+cowork, scientific-search, research-agent, and more).
+
+### Regenerating the spec
+
+```bash
+cd backend
+npm run generate:openapi         # writes backend/openapi.json + docs/openapi.json
+npm run generate:openapi:check   # CI-friendly stale check (exits 1 if drift)
+```
+
+The scanner (`backend/scripts/generate-openapi.js`) is purely
+AST-based — it does not need to boot the server, hit the database,
+or contact Redis. Adding a new route file under `backend/src/routes/`
+and mounting it in `backend/index.js` is enough; the next
+`generate:openapi` run will pick it up. Tag grouping follows the
+route file basename (e.g. `cowork.js` ⇒ tag `cowork`).
+
+### Browsing the spec — Swagger UI
+
+Interactive Swagger UI is mounted at two paths:
+
+- `GET /api-docs` — original path, kept for backward compatibility
+- `GET /api/docs` — alias under the `/api` tree (preferred for new clients)
+
+Both surfaces are env-gated:
+
+- **Default ON** in non-production (`NODE_ENV !== 'production'`).
+- **Default OFF** in production. Operators can flip it on per-deploy
+  with `API_DOCS_ENABLED=true` (typically paired with a basic-auth
+  reverse-proxy block or super-admin subdomain). When disabled, both
+  paths respond with HTTP 404 and a JSON hint pointing at the env
+  var to enable.
+- The raw JSON spec is also exposed at `GET /api-docs/openapi.json`
+  and `GET /api/docs/openapi.json` for Postman imports and codegen.
+
+### Contract tests
+
+`backend/tests/api-contract.test.js` (25 assertions) verifies that:
+
+- The generated spec is a valid OpenAPI 3.1 document.
+- The headline tag groups (`auth`, `chats`, `files`, `payments`,
+  `ai`, `admin`, `cowork`, `scientific-search`, `research-agent`)
+  are present.
+- More than 95% of documented endpoints resolve back to a real
+  route declaration in `backend/src/routes/`.
+- ~18 high-traffic endpoints (login, register, upload, ai/generate,
+  payments webhook, cowork.*, scientific-search, research-agent) are
+  individually present.
+- The `/api/docs` env-gate behaves correctly across `NODE_ENV` and
+  `API_DOCS_ENABLED` combinations.
+
+Run with: `node --test tests/api-contract.test.js` (also included in
+the default `npm test` set).
+
+## Health, metrics & observability
+
+- `GET /api/admin/health` — service health probes (DB, Redis, queue,
+  OpenAI), super-admin scope.
+- `GET /api/admin/analyzer/health` — document analyzer pipeline
+  health (per-block telemetry, circuit-breaker state, deadlines).
+- `GET /metrics` — Prometheus exposition (localhost OR super-admin token).
+- `GET /internal/metrics` — same payload on a dedicated internal
+  path so ops can allow-list it through the ingress separately from
+  the public mount.
+- See `docs/observability.md` and `docs/slo.md` for the full
+  OpenTelemetry / Sentry / Langfuse / PostHog setup, dashboards,
+  and the SLO catalogue.
+
 ## Demo Credentials
 
 After running `npm run db:setup`, you can use:

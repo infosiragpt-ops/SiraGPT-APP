@@ -594,6 +594,10 @@ app.get('/internal/metrics', renderPromMetrics);
 // and docs/api-docs.md for the operator runbook.
 const { buildApiDocsRouter } = require('./src/routes/api-docs');
 app.use('/api-docs', buildApiDocsRouter());
+// Alias under /api/docs — same env-gate, same Swagger UI. Kept as a
+// separate router instance so the two surfaces are independently
+// observable in access logs / metrics (one router per mount point).
+app.use('/api/docs', buildApiDocsRouter());
 
 // API Routes
 app.use('/api/auth', authRoutes);
