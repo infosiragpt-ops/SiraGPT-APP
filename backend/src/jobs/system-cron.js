@@ -50,6 +50,10 @@ const EVT_SWEEP_SCHEDULE = process.env.SYSTEM_CRON_EVT_SWEEP_SCHEDULE || '30 4 *
 // table. Default 05:00 UTC so it runs after every other retention job;
 // reports older than 24h are served from this table.
 const COST_FLUSH_SCHEDULE = process.env.SYSTEM_CRON_COST_FLUSH_SCHEDULE || '0 5 * * *';
+// Ratchet 45 — archive CostUsageDaily rows older than 13 months into
+// SystemSettings `cost_archive:YYYY-MM-<userId>` blobs and delete the
+// daily rows. Default 05:30 UTC so it runs right after the daily flush.
+const COST_ARCHIVE_SCHEDULE = process.env.SYSTEM_CRON_COST_ARCHIVE_SCHEDULE || '30 5 * * *';
 
 let _state = null;
 
@@ -324,6 +328,40 @@ function start(opts = {}) {
     { scheduled: false, timezone: 'UTC' },
   );
   tasks.push({ name: 'cost-tracker-flush', schedule: COST_FLUSH_SCHEDULE, task: costFlushTask, meta: costFlushMeta });
+
+  // Ratchet 45 — 13-month archive of CostUsageDaily into SystemSettings.
+  let costArchiveRunning = false;
+  const costArchiveMeta = {};
+  const costArchiveTask = cron.schedule(
+    COST_ARCHIVE_SCHEDULE,
+    async () => {
+      if (costArchiveRunning) {
+        logger.warn?.('[system-cron] skip cost-tracker-archive — previous run still active');
+        return;
+      }
+      costArchiveRunning = true;
+      const finish = recordRun(costArchiveMeta);
+      let runErr = null;
+      try {
+        // eslint-disable-next-line global-require
+        const costTracker = require('../services/ai/cost-tracker');
+        const runWithRetry = wrapWithRetry(() => costTracker.archiveOldDaily(), {
+          onRetry: ({ attempt, delayMs, reason }) =>
+            logger.warn?.(`[system-cron] cost-tracker-archive retry ${attempt} in ${delayMs}ms (${reason})`),
+        });
+        const res = await runWithRetry();
+        logger.info?.(`[system-cron] cost-tracker-archive done: ${JSON.stringify(res)}`);
+      } catch (err) {
+        runErr = err;
+        logger.error?.(`[system-cron] cost-tracker-archive failed: ${err && err.message}`);
+      } finally {
+        costArchiveRunning = false;
+        finish(runErr);
+      }
+    },
+    { scheduled: false, timezone: 'UTC' },
+  );
+  tasks.push({ name: 'cost-tracker-archive', schedule: COST_ARCHIVE_SCHEDULE, task: costArchiveTask, meta: costArchiveMeta });
 
   for (const t of tasks) {
     try { t.task.start(); } catch (err) {

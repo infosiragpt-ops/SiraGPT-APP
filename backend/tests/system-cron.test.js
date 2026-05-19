@@ -92,6 +92,7 @@ describe('system-cron', () => {
       const names = res.tasks.map((t) => t.name).sort();
       assert.deepEqual(names, [
         'archive-audit-logs',
+        'cost-tracker-archive',
         'cost-tracker-flush',
         'hard-delete-deleted-users',
         'prune-api-usage',
@@ -115,6 +116,8 @@ describe('system-cron', () => {
       assert.equal(archive.schedule, '0 4 * * *');
       assert.equal(sweep.schedule, '0 * * * *');
       assert.equal(evt.schedule, '30 4 * * *');
+      const costArchive = res.tasks.find((t) => t.name === 'cost-tracker-archive');
+      assert.equal(costArchive.schedule, '30 5 * * *');
     } finally {
       mod.stop();
     }

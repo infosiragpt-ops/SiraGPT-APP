@@ -1162,31 +1162,58 @@ router.get('/cost-report', requireSuperAdmin, async (req, res) => {
       includeRecords,
     });
 
-    // Ratchet 45 — persistent backfill. When `from` is older than 24h the
-    // in-memory log can't be trusted (bounded + lost on restart), so we
-    // pull the rolled-up rows from `CostUsageDaily` (flushed by the
-    // 05:00 UTC cron) and merge them on top of the in-memory window.
-    // Recent (<24h) reports remain in-memory only.
+    // Ratchet 45 — three-layer cost report.
+    //   1. archive  (SystemSettings cost_archive:* — rows ≥ 13 months old)
+    //   2. persisted (CostUsageDaily — rows < 13 months and ≥ 24h old)
+    //   3. recent   (in-memory cost-tracker — last 24h)
+    // Each layer covers a disjoint window so we never double-count.
     const RECENT_WINDOW_MS = 24 * 60 * 60 * 1000;
     const cutoff = Date.now() - RECENT_WINDOW_MS;
+    // 13-month boundary for the archive cut.
+    const ARCHIVE_MONTHS = costTracker.ARCHIVE_RETENTION_MONTHS || 13;
+    const archiveBoundary = new Date();
+    archiveBoundary.setUTCDate(1);
+    archiveBoundary.setUTCHours(0, 0, 0, 0);
+    archiveBoundary.setUTCMonth(archiveBoundary.getUTCMonth() - ARCHIVE_MONTHS);
     if (fromDate && fromDate.getTime() < cutoff) {
-      // The persisted query covers [from, min(to, now-24h)] so we don't
-      // double-count rows that are still in-memory. The in-memory report
-      // already covers the full [from, to] window — to avoid overlap we
-      // recompute the in-memory side with `from = now - 24h`.
-      const persisted = await costTracker.loadDailyReport({
-        from: fromDate,
-        to: toDate ? new Date(Math.min(toDate.getTime(), cutoff)) : new Date(cutoff),
-        userId: userId || null,
-        prisma,
-      });
+      // Recent in-memory layer (always last 24h).
       const recent = costTracker.report({
         from: new Date(cutoff),
         to: toDate,
         userId: userId || null,
         includeRecords,
       });
-      report = costTracker.mergeReports(persisted, recent);
+      // Persisted CostUsageDaily layer covers [max(from, archiveBoundary),
+      // min(to, now-24h)].
+      const persistedFrom = fromDate.getTime() < archiveBoundary.getTime()
+        ? archiveBoundary
+        : fromDate;
+      const persistedTo = toDate
+        ? new Date(Math.min(toDate.getTime(), cutoff))
+        : new Date(cutoff);
+      const persisted = persistedFrom.getTime() <= persistedTo.getTime()
+        ? await costTracker.loadDailyReport({
+            from: persistedFrom,
+            to: persistedTo,
+            userId: userId || null,
+            prisma,
+          })
+        : null;
+      let merged = persisted ? costTracker.mergeReports(persisted, recent) : recent;
+      // Archive layer when the requested window predates the 13-month cut.
+      if (fromDate.getTime() < archiveBoundary.getTime()) {
+        const archiveTo = toDate && toDate.getTime() < archiveBoundary.getTime()
+          ? toDate
+          : new Date(archiveBoundary.getTime() - 1);
+        const archived = await costTracker.loadArchivedReport({
+          from: fromDate,
+          to: archiveTo,
+          userId: userId || null,
+          prisma,
+        });
+        merged = costTracker.mergeReports(archived, merged);
+      }
+      report = merged;
     }
 
     // Cycle 45: optional org-level aggregation. When `?groupBy=org` is

@@ -629,6 +629,266 @@ function mergeReports(persisted, recent) {
   };
 }
 
+// ── 13-month retention archive (ratchet 45) ─────────────────────────────
+//
+// `CostUsageDaily` grows linearly with traffic. After 13 months the daily
+// granularity is no longer useful for finance dashboards — they only ever
+// query rolled-up totals. `archiveOldDaily()` collapses old rows into a
+// per-(month, userId) JSON blob stored in `SystemSettings` under key
+// `cost_archive:YYYY-MM-<userId>` and then deletes the daily rows.
+//
+// Archive payload shape:
+//   {
+//     month: 'YYYY-MM',
+//     userId,
+//     costUSD, inputTokens, outputTokens, requests,
+//     perModel: [{ model, provider, costUSD, inputTokens, outputTokens, requests }],
+//     archivedAt: ISO timestamp,
+//   }
+//
+// The cron in `system-cron.js` invokes this once a day at 05:30 UTC (right
+// after `flushDaily` at 05:00). The function is idempotent — if an archive
+// row for a (month,userId) already exists we merge the new rows into it
+// before deleting them.
+
+const ARCHIVE_RETENTION_MONTHS = Number.parseInt(
+  process.env.AI_COST_ARCHIVE_RETENTION_MONTHS || '13',
+  10,
+);
+const ARCHIVE_KEY_PREFIX = 'cost_archive:';
+
+function _archiveKey(monthKeyStr, userId) {
+  return `${ARCHIVE_KEY_PREFIX}${monthKeyStr}-${userId || ''}`;
+}
+
+function _archiveCutoff(now = new Date(), months = ARCHIVE_RETENTION_MONTHS) {
+  const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  d.setUTCMonth(d.getUTCMonth() - months);
+  return d;
+}
+
+function _safeParseArchive(value) {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch (_) { return null; }
+}
+
+function _mergeArchiveEntry(prev, row) {
+  const base = prev || {
+    month: null,
+    userId: row.userId || '',
+    costUSD: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    requests: 0,
+    perModel: [],
+  };
+  base.costUSD = round6((base.costUSD || 0) + (Number(row.costUSD) || 0));
+  base.inputTokens = (Number(base.inputTokens) || 0) + Number(row.inputTokens || 0);
+  base.outputTokens = (Number(base.outputTokens) || 0) + Number(row.outputTokens || 0);
+  base.requests = (Number(base.requests) || 0) + (Number(row.requests) || 0);
+  const modelKey = `${row.model || 'unknown'}::${row.provider || ''}`;
+  const list = Array.isArray(base.perModel) ? base.perModel : [];
+  let m = list.find((x) => `${x.model || 'unknown'}::${x.provider || ''}` === modelKey);
+  if (!m) {
+    m = {
+      model: row.model || 'unknown',
+      provider: row.provider || '',
+      costUSD: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      requests: 0,
+    };
+    list.push(m);
+  }
+  m.costUSD = round6((m.costUSD || 0) + (Number(row.costUSD) || 0));
+  m.inputTokens = (Number(m.inputTokens) || 0) + Number(row.inputTokens || 0);
+  m.outputTokens = (Number(m.outputTokens) || 0) + Number(row.outputTokens || 0);
+  m.requests = (Number(m.requests) || 0) + (Number(row.requests) || 0);
+  base.perModel = list;
+  return base;
+}
+
+/**
+ * Aggregate CostUsageDaily rows older than `retentionMonths` months into
+ * SystemSettings `cost_archive:YYYY-MM-<userId>` entries and delete the
+ * source rows. Returns `{ scanned, archivedKeys, deleted, errors }`.
+ *
+ * Never throws — DB errors are swallowed and warn-logged. Safe to call
+ * repeatedly: existing archive entries are merged additively.
+ */
+async function archiveOldDaily(opts = {}) {
+  const prisma = opts.prisma || (() => {
+    try { return require('../../config/database'); } catch (_) { return null; }
+  })();
+  const empty = { scanned: 0, archivedKeys: 0, deleted: 0, errors: 0 };
+  if (!prisma || !prisma.costUsageDaily || typeof prisma.costUsageDaily.findMany !== 'function'
+      || !prisma.systemSettings || typeof prisma.systemSettings.upsert !== 'function'
+      || typeof prisma.costUsageDaily.deleteMany !== 'function') {
+    maybeWarn(new Error('archiveOldDaily: required prisma models unavailable'));
+    return { ...empty, errors: 1 };
+  }
+  const months = Number.isFinite(opts.retentionMonths) && opts.retentionMonths > 0
+    ? opts.retentionMonths
+    : ARCHIVE_RETENTION_MONTHS;
+  const now = opts.now instanceof Date ? opts.now : new Date();
+  const cutoff = _archiveCutoff(now, months);
+  let rows;
+  try {
+    rows = await prisma.costUsageDaily.findMany({ where: { date: { lt: cutoff } } });
+  } catch (err) {
+    maybeWarn(err);
+    return { ...empty, errors: 1 };
+  }
+  if (!rows.length) return empty;
+
+  // Group rows by (month, userId).
+  const byKey = new Map();
+  for (const r of rows) {
+    const mk = monthKey(r.date);
+    const uid = r.userId || '';
+    const k = _archiveKey(mk, uid);
+    let entry = byKey.get(k);
+    if (!entry) {
+      entry = { key: k, month: mk, userId: uid, rows: [] };
+      byKey.set(k, entry);
+    }
+    entry.rows.push(r);
+  }
+
+  let archivedKeys = 0;
+  let errors = 0;
+  for (const entry of byKey.values()) {
+    try {
+      let existing = null;
+      try {
+        const found = await prisma.systemSettings.findUnique({ where: { key: entry.key } });
+        existing = _safeParseArchive(found && found.value);
+      } catch (_) { /* findUnique optional — upsert handles create */ }
+      let merged = existing || null;
+      for (const r of entry.rows) {
+        merged = _mergeArchiveEntry(merged, r);
+      }
+      merged.month = entry.month;
+      merged.userId = entry.userId;
+      merged.archivedAt = new Date().toISOString();
+      const value = JSON.stringify(merged);
+      await prisma.systemSettings.upsert({
+        where: { key: entry.key },
+        create: { key: entry.key, value },
+        update: { value },
+      });
+      archivedKeys += 1;
+    } catch (err) {
+      errors += 1;
+      maybeWarn(err);
+    }
+  }
+
+  // Only delete the source rows after archive upserts succeeded. If any
+  // upserts failed we leave all rows in place so the next cron tick retries.
+  let deleted = 0;
+  if (errors === 0) {
+    try {
+      const res = await prisma.costUsageDaily.deleteMany({ where: { date: { lt: cutoff } } });
+      deleted = (res && typeof res.count === 'number') ? res.count : rows.length;
+    } catch (err) {
+      errors += 1;
+      maybeWarn(err);
+    }
+  }
+  return { scanned: rows.length, archivedKeys, deleted, errors };
+}
+
+/**
+ * Load an aggregated report from the SystemSettings archive for ranges
+ * older than the 13-month retention. Scans keys matching `cost_archive:*`
+ * and folds matching months into the standard report envelope.
+ *
+ * Filters: `from` / `to` (Date|string) clip to whole months; `userId`
+ * restricts to a single user's archive entries.
+ *
+ * Never throws — DB errors return an empty envelope.
+ */
+async function loadArchivedReport({
+  from = null,
+  to = null,
+  userId = null,
+  prisma = null,
+} = {}) {
+  const empty = {
+    totals: { records: 0, costUSD: 0, inputTokens: 0, outputTokens: 0 },
+    perUser: [],
+    perModel: [],
+    records: [],
+  };
+  const client = prisma || (() => {
+    try { return require('../../config/database'); } catch (_) { return null; }
+  })();
+  if (!client || !client.systemSettings || typeof client.systemSettings.findMany !== 'function') {
+    return empty;
+  }
+  const fromMonth = from ? monthKey(new Date(from)) : null;
+  const toMonth = to ? monthKey(new Date(to)) : null;
+  const wantUid = userId == null ? null : String(userId);
+
+  let rows;
+  try {
+    rows = await client.systemSettings.findMany({
+      where: { key: { startsWith: ARCHIVE_KEY_PREFIX } },
+    });
+  } catch (err) {
+    maybeWarn(err);
+    return empty;
+  }
+  const totals = { records: 0, costUSD: 0, inputTokens: 0, outputTokens: 0 };
+  const perUser = new Map();
+  const perModel = new Map();
+  for (const row of rows || []) {
+    const parsed = _safeParseArchive(row.value);
+    if (!parsed || !parsed.month) continue;
+    if (fromMonth && parsed.month < fromMonth) continue;
+    if (toMonth && parsed.month > toMonth) continue;
+    if (wantUid != null && String(parsed.userId || '') !== wantUid) continue;
+    const inT = Number(parsed.inputTokens) || 0;
+    const outT = Number(parsed.outputTokens) || 0;
+    const cost = Number(parsed.costUSD) || 0;
+    const reqs = Number(parsed.requests) || 0;
+    totals.records += reqs;
+    totals.costUSD = round6(totals.costUSD + cost);
+    totals.inputTokens += inT;
+    totals.outputTokens += outT;
+    const uid = parsed.userId || 'anonymous';
+    let u = perUser.get(uid);
+    if (!u) {
+      u = { userId: uid, costUSD: 0, inputTokens: 0, outputTokens: 0, requests: 0 };
+      perUser.set(uid, u);
+    }
+    u.costUSD = round6(u.costUSD + cost);
+    u.inputTokens += inT;
+    u.outputTokens += outT;
+    u.requests += reqs;
+    for (const m of Array.isArray(parsed.perModel) ? parsed.perModel : []) {
+      const mk = m.model || 'unknown';
+      let mm = perModel.get(mk);
+      if (!mm) {
+        mm = { model: mk, costUSD: 0, requests: 0 };
+        perModel.set(mk, mm);
+      }
+      mm.costUSD = round6(mm.costUSD + (Number(m.costUSD) || 0));
+      mm.requests += Number(m.requests) || 0;
+    }
+  }
+  return {
+    totals,
+    perUser: [...perUser.values()].sort((a, b) => b.costUSD - a.costUSD),
+    perModel: [...perModel.values()].sort((a, b) => b.costUSD - a.costUSD),
+    records: [],
+  };
+}
+
 module.exports = {
   track,
   report,
@@ -641,7 +901,11 @@ module.exports = {
   aggregateDaily,
   flushDaily,
   loadDailyReport,
+  loadArchivedReport,
+  archiveOldDaily,
   mergeReports,
+  ARCHIVE_KEY_PREFIX,
+  ARCHIVE_RETENTION_MONTHS,
   _reset,
   _peekRecords,
 };

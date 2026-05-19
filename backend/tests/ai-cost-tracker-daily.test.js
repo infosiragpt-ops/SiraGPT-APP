@@ -174,6 +174,191 @@ test('loadDailyReport returns empty envelope when prisma is missing', async () =
   assert.deepEqual(r.perUser, []);
 });
 
+function makePrismaWithArchive() {
+  const stub = makePrismaStub();
+  const settings = new Map();
+  stub.systemSettings = {
+    async findUnique({ where }) {
+      const row = settings.get(where.key);
+      return row || null;
+    },
+    async upsert({ where, create, update }) {
+      const existing = settings.get(where.key);
+      if (!existing) {
+        settings.set(where.key, { ...create });
+        return create;
+      }
+      Object.assign(existing, update);
+      return existing;
+    },
+    async findMany({ where = {} } = {}) {
+      const out = [];
+      const startsWith = where.key && where.key.startsWith;
+      for (const r of settings.values()) {
+        if (startsWith && !r.key.startsWith(startsWith)) continue;
+        out.push(r);
+      }
+      return out;
+    },
+  };
+  // Extend findMany to support `date.lt` filter used by archiveOldDaily.
+  const origFindMany = stub.costUsageDaily.findMany;
+  stub.costUsageDaily.findMany = async ({ where = {} } = {}) => {
+    if (where.date && where.date.lt) {
+      const out = [];
+      for (const r of stub.rows.values()) {
+        if (r.date < where.date.lt) out.push(r);
+      }
+      return out;
+    }
+    return origFindMany({ where });
+  };
+  stub.costUsageDaily.deleteMany = async ({ where = {} } = {}) => {
+    let count = 0;
+    for (const [k, r] of [...stub.rows.entries()]) {
+      if (where.date && where.date.lt && !(r.date < where.date.lt)) continue;
+      stub.rows.delete(k);
+      count += 1;
+    }
+    return { count };
+  };
+  stub._settings = settings;
+  return stub;
+}
+
+test('archiveOldDaily folds rows >13 months into SystemSettings and deletes them', async () => {
+  const stub = makePrismaWithArchive();
+  // Seed: one row 14 months old, one row 3 months old.
+  const now = new Date('2026-05-19T00:00:00Z');
+  const oldDate = new Date('2025-03-10T00:00:00Z'); // ~14 months old
+  const recentDate = new Date('2026-02-10T00:00:00Z'); // ~3 months old
+  await stub.costUsageDaily.upsert({
+    where: { cost_usage_daily_unique: { date: oldDate, userId: 'u1', model: 'm', provider: 'p', organizationId: '' } },
+    create: { date: oldDate, userId: 'u1', model: 'm', provider: 'p', organizationId: '', inputTokens: 100n, outputTokens: 50n, costUSD: 1.5, requests: 3 },
+    update: {},
+  });
+  await stub.costUsageDaily.upsert({
+    where: { cost_usage_daily_unique: { date: oldDate, userId: 'u1', model: 'm2', provider: 'p', organizationId: '' } },
+    create: { date: oldDate, userId: 'u1', model: 'm2', provider: 'p', organizationId: '', inputTokens: 10n, outputTokens: 5n, costUSD: 0.5, requests: 1 },
+    update: {},
+  });
+  await stub.costUsageDaily.upsert({
+    where: { cost_usage_daily_unique: { date: recentDate, userId: 'u1', model: 'm', provider: 'p', organizationId: '' } },
+    create: { date: recentDate, userId: 'u1', model: 'm', provider: 'p', organizationId: '', inputTokens: 99n, outputTokens: 0n, costUSD: 2, requests: 7 },
+    update: {},
+  });
+  const res = await ct.archiveOldDaily({ prisma: stub, now });
+  assert.equal(res.scanned, 2);
+  assert.equal(res.archivedKeys, 1);
+  assert.equal(res.deleted, 2);
+  assert.equal(res.errors, 0);
+  // Only the recent row should remain.
+  assert.equal(stub.rows.size, 1);
+  // Archive entry exists with the expected key + merged totals.
+  const key = `${ct.ARCHIVE_KEY_PREFIX}2025-03-u1`;
+  const entry = JSON.parse(stub._settings.get(key).value);
+  assert.equal(entry.month, '2025-03');
+  assert.equal(entry.userId, 'u1');
+  assert.equal(entry.requests, 4);
+  assert.equal(entry.costUSD, 2);
+  assert.equal(entry.perModel.length, 2);
+});
+
+test('archiveOldDaily is idempotent — re-running merges additively', async () => {
+  const stub = makePrismaWithArchive();
+  const now = new Date('2026-05-19T00:00:00Z');
+  const oldDate = new Date('2025-03-10T00:00:00Z');
+  await stub.costUsageDaily.upsert({
+    where: { cost_usage_daily_unique: { date: oldDate, userId: 'u1', model: 'm', provider: '', organizationId: '' } },
+    create: { date: oldDate, userId: 'u1', model: 'm', provider: '', organizationId: '', inputTokens: 100n, outputTokens: 0n, costUSD: 1, requests: 1 },
+    update: {},
+  });
+  await ct.archiveOldDaily({ prisma: stub, now });
+  // Insert another old row in the same (month,user) and re-run.
+  await stub.costUsageDaily.upsert({
+    where: { cost_usage_daily_unique: { date: oldDate, userId: 'u1', model: 'm', provider: '', organizationId: '' } },
+    create: { date: oldDate, userId: 'u1', model: 'm', provider: '', organizationId: '', inputTokens: 50n, outputTokens: 0n, costUSD: 0.5, requests: 1 },
+    update: {},
+  });
+  await ct.archiveOldDaily({ prisma: stub, now });
+  const key = `${ct.ARCHIVE_KEY_PREFIX}2025-03-u1`;
+  const entry = JSON.parse(stub._settings.get(key).value);
+  assert.equal(entry.requests, 2);
+  assert.equal(entry.costUSD, 1.5);
+});
+
+test('archiveOldDaily preserves rows when archive upsert fails', async () => {
+  const stub = makePrismaWithArchive();
+  const now = new Date('2026-05-19T00:00:00Z');
+  const oldDate = new Date('2025-03-10T00:00:00Z');
+  await stub.costUsageDaily.upsert({
+    where: { cost_usage_daily_unique: { date: oldDate, userId: 'u1', model: 'm', provider: '', organizationId: '' } },
+    create: { date: oldDate, userId: 'u1', model: 'm', provider: '', organizationId: '', inputTokens: 1n, outputTokens: 0n, costUSD: 0.1, requests: 1 },
+    update: {},
+  });
+  stub.systemSettings.upsert = async () => { throw new Error('db down'); };
+  const res = await ct.archiveOldDaily({ prisma: stub, now });
+  assert.equal(res.errors, 1);
+  assert.equal(res.deleted, 0);
+  assert.equal(stub.rows.size, 1);
+});
+
+test('archiveOldDaily returns errors envelope when prisma is unavailable', async () => {
+  const res = await ct.archiveOldDaily({ prisma: {} });
+  assert.equal(res.errors, 1);
+});
+
+test('loadArchivedReport reads SystemSettings cost_archive:* entries', async () => {
+  const stub = makePrismaWithArchive();
+  stub._settings.set(`${ct.ARCHIVE_KEY_PREFIX}2025-01-u1`, {
+    key: `${ct.ARCHIVE_KEY_PREFIX}2025-01-u1`,
+    value: JSON.stringify({
+      month: '2025-01', userId: 'u1', costUSD: 2.5, inputTokens: 1000, outputTokens: 500, requests: 10,
+      perModel: [{ model: 'm', costUSD: 2.5, requests: 10 }],
+    }),
+  });
+  stub._settings.set(`${ct.ARCHIVE_KEY_PREFIX}2025-02-u2`, {
+    key: `${ct.ARCHIVE_KEY_PREFIX}2025-02-u2`,
+    value: JSON.stringify({
+      month: '2025-02', userId: 'u2', costUSD: 1.0, inputTokens: 200, outputTokens: 50, requests: 4,
+      perModel: [{ model: 'm', costUSD: 1.0, requests: 4 }],
+    }),
+  });
+  const r = await ct.loadArchivedReport({ from: new Date('2025-01-01'), to: new Date('2025-12-31'), prisma: stub });
+  assert.equal(r.totals.records, 14);
+  assert.equal(r.totals.costUSD, 3.5);
+  assert.equal(r.perUser.length, 2);
+  // Filter by userId.
+  const ru1 = await ct.loadArchivedReport({ userId: 'u1', prisma: stub });
+  assert.equal(ru1.perUser.length, 1);
+  assert.equal(ru1.perUser[0].userId, 'u1');
+});
+
+test('loadArchivedReport filters by month range (from/to)', async () => {
+  const stub = makePrismaWithArchive();
+  stub._settings.set(`${ct.ARCHIVE_KEY_PREFIX}2024-12-u1`, {
+    key: `${ct.ARCHIVE_KEY_PREFIX}2024-12-u1`,
+    value: JSON.stringify({ month: '2024-12', userId: 'u1', costUSD: 1, requests: 1, perModel: [] }),
+  });
+  stub._settings.set(`${ct.ARCHIVE_KEY_PREFIX}2025-06-u1`, {
+    key: `${ct.ARCHIVE_KEY_PREFIX}2025-06-u1`,
+    value: JSON.stringify({ month: '2025-06', userId: 'u1', costUSD: 2, requests: 2, perModel: [] }),
+  });
+  const r = await ct.loadArchivedReport({ from: new Date('2025-01-01'), prisma: stub });
+  assert.equal(r.totals.requests || r.totals.records, 2);
+  assert.equal(r.perUser[0].costUSD, 2);
+});
+
+test('loadArchivedReport ignores malformed archive payloads', async () => {
+  const stub = makePrismaWithArchive();
+  stub._settings.set(`${ct.ARCHIVE_KEY_PREFIX}bad`, {
+    key: `${ct.ARCHIVE_KEY_PREFIX}bad`,
+    value: 'not-json',
+  });
+  const r = await ct.loadArchivedReport({ prisma: stub });
+  assert.equal(r.totals.records, 0);
+});
+
 test('mergeReports sums totals + per-user + per-model without dropping data', () => {
   const persisted = {
     totals: { records: 5, costUSD: 1.5, inputTokens: 100, outputTokens: 50 },
