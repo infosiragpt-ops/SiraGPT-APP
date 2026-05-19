@@ -1114,6 +1114,10 @@ async function handleInvoicePaymentFailed(invoice) {
       invoiceId: invoice.id,
       amount: amountDue,
       reason: invoice.last_finalization_error?.message || 'Payment declined',
+      // Inbox row already created inline above — skip the trigger-
+      // registry's auto-inbox handler so the user doesn't see a
+      // duplicate notification.
+      skipInbox: true,
     }, user.id).catch((err) => {
       console.warn('[payments] trigger payment.failed failed:', err?.message || err);
     });

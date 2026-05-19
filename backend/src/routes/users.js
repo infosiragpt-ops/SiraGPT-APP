@@ -664,6 +664,54 @@ router.patch('/me/settings', authenticateToken, async (req, res) => {
 });
 
 // ────────────────────────────────────────────────────────────
+// Ratchet 45 — User notifications inbox.
+//
+// GET    /api/users/me/notifications        — paginated list
+//        Query params: ?filter=unread|read|all&limit=25&cursor=<id>
+// POST   /api/users/me/notifications/:id/read     — mark one read
+// POST   /api/users/me/notifications/read-all     — mark all read
+//
+// Notifications are auto-created by the trigger-registry for events
+// listed in `services/user-notifications.js#handleTriggerEvent`.
+// ────────────────────────────────────────────────────────────
+const userNotifications = require('../services/user-notifications');
+
+router.get('/me/notifications', authenticateToken, async (req, res) => {
+  try {
+    const result = await userNotifications.listNotifications(prisma, req.user.id, {
+      filter: req.query.filter,
+      limit: req.query.limit,
+      cursor: req.query.cursor,
+    });
+    res.json(result);
+  } catch (error) {
+    console.error('List notifications error:', error);
+    res.status(500).json({ error: 'Failed to fetch notifications' });
+  }
+});
+
+router.post('/me/notifications/:id/read', authenticateToken, async (req, res) => {
+  try {
+    const ok = await userNotifications.markRead(prisma, req.user.id, req.params.id);
+    if (!ok) return res.status(404).json({ error: 'notification not found' });
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('Mark notification read error:', error);
+    res.status(500).json({ error: 'Failed to mark notification read' });
+  }
+});
+
+router.post('/me/notifications/read-all', authenticateToken, async (req, res) => {
+  try {
+    const updated = await userNotifications.markAllRead(prisma, req.user.id);
+    res.json({ ok: true, updated });
+  } catch (error) {
+    console.error('Mark all notifications read error:', error);
+    res.status(500).json({ error: 'Failed to mark notifications read' });
+  }
+});
+
+// ────────────────────────────────────────────────────────────
 // Sessions — trusted-device list for Settings → Security.
 // Includes the current session with a flag so the UI can show
 // "This device" + "Other devices" and wire logout-all.

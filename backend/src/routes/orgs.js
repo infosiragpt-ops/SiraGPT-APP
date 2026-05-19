@@ -964,6 +964,18 @@ router.post('/:id/members/:userId/role', authenticateToken, async (req, res) => 
     // new role on next fetch instead of waiting for TTL.
     invalidateMembersCache(orgId);
 
+    // Ratchet 45, Task 1 — fan out trigger so inbox + webhooks +
+    // Slack receive the role change. Fire-and-forget.
+    if (previousRole !== newRole) {
+      triggers.publish('org.member.role_changed', {
+        orgId,
+        targetUserId,
+        previousRole,
+        newRole,
+        changedByUserId: callerId,
+      }, callerId).catch(() => {});
+    }
+
     res.json({ id: updated.id, role: updated.role });
   } catch (err) {
     if (err && err.status) return res.status(err.status).json({ error: err.message });

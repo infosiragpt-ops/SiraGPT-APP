@@ -42,6 +42,7 @@ const TRIGGERS = Object.freeze([
   'org.invitation.revoked',
   'org.announcement.created',
   'org.announcement.acknowledged',
+  'org.member.role_changed',
 ]);
 
 const KNOWN_SET = new Set(TRIGGERS);
@@ -243,6 +244,24 @@ async function publish(event, payload, userId, opts = {}) {
 
   let dispatched = 0;
   const errors = [];
+
+  // --- 0. In-app notification inbox (ratchet 45, Task 1)
+  // Persist a Notification row for events that surface in the user
+  // inbox UI. Best-effort: failures must not abort webhook/Slack
+  // fan-out. Lazy-required so test envs that stub the registry don't
+  // pull in Prisma.
+  try {
+    const prismaForInbox = getPrisma();
+    if (prismaForInbox) {
+      // eslint-disable-next-line global-require
+      const notifier = require('./user-notifications');
+      // Fire-and-forget — we surface errors as `errors[]` entries but
+      // never throw out of publish().
+      await notifier.handleTriggerEvent(prismaForInbox, event, payload, userId);
+    }
+  } catch (err) {
+    errors.push({ stage: 'user-notifications', message: err?.message || String(err) });
+  }
 
   // --- 1. Fan out to WebhookEndpoints (user + org scopes)
   //
