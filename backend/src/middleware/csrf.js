@@ -87,7 +87,12 @@ function csrfTokenRoute(req, res) {
   const cookieOpts = {
     httpOnly: false, // client JS must be able to read it
     secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
+    // CSRF tokens are issued by the SPA on demand and validated via
+    // double-submit on same-origin XHR/fetch. They never need to survive
+    // a top-level cross-site navigation (the SPA simply re-fetches a
+    // fresh token on load), so 'strict' is safe and tightens CSRF
+    // defense-in-depth against same-site stripping attacks.
+    sameSite: 'strict',
     path: '/',
     maxAge: 24 * 60 * 60 * 1000,
   };

@@ -44,12 +44,49 @@ const PROD_FALLBACK = [
   'http://localhost:3000',
 ];
 
+/**
+ * Validate that each entry in the resolved allowlist is either the wildcard
+ * `*` or a parseable absolute origin (scheme + host, no path/query). Throws
+ * a descriptive Error at boot if any value is malformed so misconfiguration
+ * fails loudly instead of silently producing an unreachable allowlist.
+ */
+function validateAllowedOrigins(list) {
+  for (const entry of list) {
+    if (entry === '*') continue;
+    let parsed;
+    try {
+      parsed = new URL(entry);
+    } catch (err) {
+      throw new Error(
+        `[cors-policy] Invalid CORS_ORIGINS entry "${entry}": not a parseable URL (${err.message}). `
+        + 'Expected form: https://example.com (no trailing path/query).'
+      );
+    }
+    if (!parsed.protocol || !parsed.host) {
+      throw new Error(
+        `[cors-policy] Invalid CORS_ORIGINS entry "${entry}": missing scheme or host.`
+      );
+    }
+    if (!/^https?:$/.test(parsed.protocol)) {
+      throw new Error(
+        `[cors-policy] Invalid CORS_ORIGINS entry "${entry}": only http:// or https:// allowed, got "${parsed.protocol}".`
+      );
+    }
+    if (parsed.pathname && parsed.pathname !== '/' && parsed.pathname !== '') {
+      throw new Error(
+        `[cors-policy] Invalid CORS_ORIGINS entry "${entry}": must be bare origin without path (got pathname "${parsed.pathname}").`
+      );
+    }
+  }
+  return list;
+}
+
 function resolveAllowedOrigins(env = process.env) {
   const list = String(env.CORS_ORIGINS || '')
     .split(',')
     .map((origin) => origin.trim())
     .filter(Boolean);
-  if (list.length > 0) return list;
+  if (list.length > 0) return validateAllowedOrigins(list);
   if (env.NODE_ENV === 'production') {
     // eslint-disable-next-line no-console
     console.warn(
@@ -75,4 +112,4 @@ function makeOriginCallback(allowed) {
   };
 }
 
-module.exports = { resolveAllowedOrigins, makeOriginCallback, DEV_FALLBACK };
+module.exports = { resolveAllowedOrigins, makeOriginCallback, validateAllowedOrigins, DEV_FALLBACK };

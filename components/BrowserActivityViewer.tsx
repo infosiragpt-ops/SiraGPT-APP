@@ -218,6 +218,7 @@ const BrowserActivityViewer: React.FC<BrowserActivityViewerProps> = ({ sessionId
           <div className="relative w-full h-full">
             {/* Screenshot Display */}
             <div className="relative w-full h-full bg-black/5 flex items-center justify-center">
+              {/* eslint-disable-next-line @next/next/no-img-element -- dynamic blob/data URI screenshot stream; next/image cannot optimize ephemeral remote screenshots */}
               <img
                 src={currentImageUrl}
                 alt="Browser Screenshot"
@@ -286,6 +287,7 @@ const BrowserActivityViewer: React.FC<BrowserActivityViewerProps> = ({ sessionId
                     }}
                     className="flex-shrink-0 w-20 h-12 border rounded overflow-hidden hover:border-primary transition"
                   >
+                    {/* eslint-disable-next-line @next/next/no-img-element -- thumbnail of dynamic screenshot URL; remote ephemeral URLs not whitelistable in next.config images domains */}
                     <img
                       src={screenshotUrl}
                       alt={screenshot.source}

@@ -73,6 +73,7 @@ const ComputerUseInterface: React.FC<ComputerUseInterfaceProps> = ({
             <CardContent className="flex-1 p-0">
               <div className="h-full bg-muted rounded-lg overflow-hidden">
                 {screenshot ? (
+                  // eslint-disable-next-line @next/next/no-img-element -- live computer-use screenshot stream (data URI from remote browser); next/image not applicable to ephemeral frames
                   <img
                     src={screenshot}
                     alt="Computer Use Screenshot"

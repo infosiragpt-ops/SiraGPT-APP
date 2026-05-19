@@ -11,6 +11,7 @@ const assert = require("node:assert/strict");
 const {
   resolveAllowedOrigins,
   makeOriginCallback,
+  validateAllowedOrigins,
   DEV_FALLBACK,
 } = require("../src/middleware/cors-policy");
 
@@ -30,9 +31,13 @@ describe("resolveAllowedOrigins", () => {
     assert.notEqual(result, DEV_FALLBACK, "must be a copy, not a reference");
   });
 
-  test("returns an empty list in production when CORS_ORIGINS is empty (fail closed)", () => {
+  test("returns the prod fallback origins when CORS_ORIGINS is empty in production (with WARN)", () => {
     const result = resolveAllowedOrigins({ NODE_ENV: "production" });
-    assert.deepEqual(result, []);
+    // PROD_FALLBACK was introduced cycle 9; the previous fail-closed
+    // behaviour is replaced by safe-default origins + a loud WARN.
+    assert.ok(Array.isArray(result));
+    assert.ok(result.length > 0);
+    assert.ok(result.some((o) => o.startsWith("https://siragpt")));
   });
 
   test("respects CORS_ORIGINS in production", () => {
@@ -48,6 +53,41 @@ describe("resolveAllowedOrigins", () => {
       CORS_ORIGINS: "   , https://a.com,, , https://b.com",
     });
     assert.deepEqual(result, ["https://a.com", "https://b.com"]);
+  });
+});
+
+describe("validateAllowedOrigins", () => {
+  test("accepts well-formed http/https origins and wildcard", () => {
+    const list = ["https://a.com", "http://localhost:3000", "*"];
+    assert.deepEqual(validateAllowedOrigins(list), list);
+  });
+
+  test("throws on garbage non-URL entry", () => {
+    assert.throws(
+      () => validateAllowedOrigins(["not a url"]),
+      /Invalid CORS_ORIGINS entry/
+    );
+  });
+
+  test("throws on disallowed protocol", () => {
+    assert.throws(
+      () => validateAllowedOrigins(["ftp://files.example.com"]),
+      /only http:\/\/ or https:\/\/ allowed/
+    );
+  });
+
+  test("throws when origin contains a path", () => {
+    assert.throws(
+      () => validateAllowedOrigins(["https://a.com/app"]),
+      /must be bare origin without path/
+    );
+  });
+
+  test("resolveAllowedOrigins propagates validation error", () => {
+    assert.throws(
+      () => resolveAllowedOrigins({ CORS_ORIGINS: "https://ok.com, garbage" }),
+      /Invalid CORS_ORIGINS entry "garbage"/
+    );
   });
 });
 

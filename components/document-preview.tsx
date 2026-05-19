@@ -487,6 +487,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
 
         {state.kind === "svg" && (
           <div className="flex min-h-full items-center justify-center p-6">
+            {/* eslint-disable-next-line @next/next/no-img-element -- SVG preview from blob URL (user-generated artifact); next/image cannot fetch blob: URIs */}
             <img src={previewUrl} alt={filename} className="max-h-full max-w-full rounded-xl bg-white dark:bg-zinc-800 shadow-sm" />
           </div>
         )}
