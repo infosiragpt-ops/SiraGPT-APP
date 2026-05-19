@@ -154,6 +154,40 @@ test('middleware fails open when prisma is unavailable', async () => {
   assert.equal(called, true);
 });
 
+test('middleware increments siragpt_maintenance_blocked_total when blocking', async () => {
+  maintenanceMode.invalidateMaintenanceCache();
+  const metrics = require('../src/utils/metrics');
+  metrics._reset();
+  const prisma = makeFakePrisma({
+    enabled: true,
+    message: 'Backup in progress',
+    since: '2026-05-18T10:00:00.000Z',
+  });
+  const mw = maintenanceMode.maintenanceMiddleware({ prisma });
+  const res1 = makeRes();
+  await mw({ path: '/api/chats' }, res1, () => {});
+  const res2 = makeRes();
+  await mw({ path: '/api/chats' }, res2, () => {});
+  const res3 = makeRes();
+  await mw({ path: '/api/files' }, res3, () => {});
+  const text = metrics.renderText();
+  assert.match(text, /siragpt_maintenance_blocked_total\{route="\/api\/chats"\} 2/);
+  assert.match(text, /siragpt_maintenance_blocked_total\{route="\/api\/files"\} 1/);
+});
+
+test('middleware does NOT increment counter on bypassed paths', async () => {
+  maintenanceMode.invalidateMaintenanceCache();
+  const metrics = require('../src/utils/metrics');
+  metrics._reset();
+  const prisma = makeFakePrisma({ enabled: true, message: 'Down', since: null });
+  const mw = maintenanceMode.maintenanceMiddleware({ prisma });
+  const res = makeRes();
+  await mw({ path: '/health/live' }, res, () => {});
+  const text = metrics.renderText();
+  // No labelled series should exist; empty counter renders as "<name> 0".
+  assert.match(text, /siragpt_maintenance_blocked_total 0/);
+});
+
 test('uses fallback message when state.message is empty', async () => {
   maintenanceMode.invalidateMaintenanceCache();
   const prisma = makeFakePrisma({ enabled: true, message: null, since: null });

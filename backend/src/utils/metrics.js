@@ -241,6 +241,16 @@ registerCounter('siragpt_gdpr_exports_total', {
   labels: ['redactPII'],
 });
 
+// ── Maintenance-mode metrics (cycle 72) ─────────────────────────────
+// Incremented from the maintenance-mode middleware whenever a request
+// is short-circuited with HTTP 503 because the global maintenance flag
+// is enabled. The `route` label captures `req.path` so dashboards can
+// see which routes were being hit during a maintenance window.
+registerCounter('siragpt_maintenance_blocked_total', {
+  help: 'Total requests short-circuited with HTTP 503 by the maintenance-mode middleware, labelled by route',
+  labels: ['route'],
+});
+
 /**
  * Record a single GDPR export sample from the /api/users/me/export
  * handler. All arguments are best-effort: non-finite or missing values

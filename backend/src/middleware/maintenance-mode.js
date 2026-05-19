@@ -96,6 +96,16 @@ function maintenanceMiddleware(opts = {}) {
       const state = await getMaintenanceState(prisma);
       if (!state || !state.enabled) return next();
 
+      // Best-effort metric: count blocked requests per route. Never let
+      // instrumentation throw inside the middleware.
+      try {
+        // eslint-disable-next-line global-require
+        const metrics = require('../utils/metrics');
+        metrics.counter('siragpt_maintenance_blocked_total', { route: reqPath || 'unknown' }, 1);
+      } catch {
+        /* never throw from instrumentation */
+      }
+
       res.set('Retry-After', '60');
       return res.status(503).json({
         error: 'maintenance',
