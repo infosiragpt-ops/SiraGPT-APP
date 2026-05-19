@@ -1,0 +1,86 @@
+name: DB backup · pg_dump → S3
+
+# Runs daily at 03:00 UTC. SSHes to the VPS, executes
+# backend/scripts/backup-db.sh which produces a gzipped dump in
+# /root/siraNew/siraGPT/backups/, then uploads it to S3-compatible
+# storage configured via the BACKUP_* secrets.
+#
+# Manual replay: trigger via the Actions tab (workflow_dispatch).
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+# Only one backup run at a time — avoids racing on the same retention
+# window and double-writing to S3.
+concurrency:
+  group: db-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    name: pg_dump → gzip → S3
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Run backup on VPS and upload to S3
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          timeout: 60s
+          command_timeout: 15m
+          envs: BACKUP_BUCKET,BACKUP_ACCESS_KEY_ID,BACKUP_SECRET_ACCESS_KEY,BACKUP_S3_ENDPOINT,BACKUP_S3_REGION
+          script: |
+            set -euo pipefail
+            cd /root/siraNew/siraGPT
+
+            # Source the prod env so $DATABASE_URL is available.
+            if [[ -f backend/.env ]]; then
+              # shellcheck disable=SC1091
+              set -a; . backend/.env; set +a
+            fi
+
+            # 1. Run the backup script. Produces a fresh .sql.gz under ./backups/.
+            bash backend/scripts/backup-db.sh
+
+            # 2. Pick the newest backup file we just produced and upload it.
+            LATEST="$(ls -1t backups/siraGPT_*.sql.gz 2>/dev/null | head -n 1 || true)"
+            if [[ -z "${LATEST}" ]]; then
+              echo "::error::No backup file produced — aborting upload." >&2
+              exit 1
+            fi
+            echo "Uploading ${LATEST} to s3://${BACKUP_BUCKET}/"
+
+            # 3. Upload via aws CLI (works for AWS S3 and S3-compatible
+            #    targets like Backblaze B2, R2, MinIO, etc.). Endpoint /
+            #    region are optional and only set when provided.
+            if ! command -v aws >/dev/null 2>&1; then
+              echo "Installing awscli…"
+              apt-get update -y && apt-get install -y --no-install-recommends awscli
+            fi
+
+            export AWS_ACCESS_KEY_ID="${BACKUP_ACCESS_KEY_ID}"
+            export AWS_SECRET_ACCESS_KEY="${BACKUP_SECRET_ACCESS_KEY}"
+            AWS_ARGS=()
+            if [[ -n "${BACKUP_S3_ENDPOINT:-}" ]]; then
+              AWS_ARGS+=(--endpoint-url "${BACKUP_S3_ENDPOINT}")
+            fi
+            if [[ -n "${BACKUP_S3_REGION:-}" ]]; then
+              AWS_ARGS+=(--region "${BACKUP_S3_REGION}")
+            fi
+
+            aws "${AWS_ARGS[@]}" s3 cp "${LATEST}" "s3://${BACKUP_BUCKET}/$(basename "${LATEST}")" \
+              --only-show-errors
+
+            echo "Backup uploaded: $(basename "${LATEST}")"
+        env:
+          # These are passed THROUGH to the remote shell via the `envs:`
+          # field above. They never appear in logs.
+          BACKUP_BUCKET: ${{ secrets.BACKUP_BUCKET }}
+          BACKUP_ACCESS_KEY_ID: ${{ secrets.BACKUP_ACCESS_KEY_ID }}
+          BACKUP_SECRET_ACCESS_KEY: ${{ secrets.BACKUP_SECRET_ACCESS_KEY }}
+          BACKUP_S3_ENDPOINT: ${{ secrets.BACKUP_S3_ENDPOINT }}
+          BACKUP_S3_REGION: ${{ secrets.BACKUP_S3_REGION }}

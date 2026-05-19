@@ -248,3 +248,29 @@ npx prisma generate
 - Verify Stripe webhook endpoints
 - Check API keys are correct
 - Monitor webhook logs in Stripe dashboard
+## Load Testing
+
+The `backend/scripts/load-test.js` script drives [autocannon](https://github.com/mcollina/autocannon) against a local instance.
+
+```bash
+# Install dev dep (already in package.json devDependencies)
+npm i
+
+# Default — 50 connections × 10s against all read targets:
+node backend/scripts/load-test.js --url http://localhost:5000
+
+# Single endpoint:
+node backend/scripts/load-test.js --target providers
+node backend/scripts/load-test.js --target models
+
+# Auth flow (requires valid creds):
+node backend/scripts/load-test.js --target login \
+  --email demo@example.com --password demo123
+
+# Tune connections / duration:
+node backend/scripts/load-test.js --connections 100 --duration 30
+```
+
+Output includes a live histogram plus a stable summary (`p50`, `p95`, `p99`, `req/s`, `non2xx`, `timeouts`) per target.
+
+> Run against a **test** instance — these targets hit Prisma + the AI model registry. Do not point at production.
