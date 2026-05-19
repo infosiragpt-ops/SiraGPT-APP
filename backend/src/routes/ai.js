@@ -26,6 +26,7 @@ const {
 const rag = require('../services/rag-service');
 const costTracker = require('../services/ai/cost-tracker');
 const anomalyDetector = require('../services/ai/anomaly-detector');
+const tokenBudget = require('../services/ai/token-budget');
 const operationalRag = require('../services/rag/operational-runtime');
 const documentProfessionalAnalyzer = require('../services/document-professional-analyzer');
 const documentResponseFidelity = require('../services/document-response-fidelity');
@@ -2791,16 +2792,60 @@ router.post(
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
       res.setHeader('X-Accel-Buffering', 'no');
+      // Surface the actual model selected for this turn so clients (and
+      // observability) can record fallback usage. Header is set BEFORE
+      // flushHeaders so it travels with the SSE response.
+      try { res.setHeader('X-Model-Actual', String(actualModel || '')); } catch { /* noop */ }
       res.flushHeaders();
 
-      // SSE comment heartbeat — surfaces silently-dropped client
-      // connections (NAT timeouts, mobile handoffs, sleeping clients)
-      // via a write() failure rather than waiting on the kernel's TCP
-      // keepalive (minutes by default). Matches the cadence used in
-      // /generate-webdev. Cleared in the outer finally below.
+      // ─── Token-budget pre-flight (best-effort, fail-open) ─────────
+      // Estimates input tokens vs the model's context window and the
+      // user's remaining monthly quota. On overflow we surface a 413-style
+      // SSE error event with a suggested smaller-context model; on
+      // quota exhaustion a 402-style error event. Pre-flight failures
+      // never block traffic — they log and continue.
+      try {
+        const verdict = await tokenBudget.preflight({
+          userId,
+          model: actualModel,
+          prompt,
+          contextMessages: messages,
+          usageService,
+          prisma,
+        });
+        if (verdict && verdict.ok === false) {
+          const payload = {
+            type: 'error',
+            code: verdict.reason || 'preflight_failed',
+            status: verdict.status,
+            estimatedInputTokens: verdict.estimatedInputTokens,
+            estimatedCostUSD: verdict.estimatedCostUSD,
+            contextWindow: verdict.contextWindow,
+            suggestedModel: verdict.suggestedModel || null,
+            remainingQuota: verdict.remainingQuota ?? null,
+            breakdown: verdict.breakdown || null,
+          };
+          try { res.write(`data: ${JSON.stringify(payload)}\n\n`); } catch { /* socket gone */ }
+          try { res.write('event: close\ndata: end\n\n'); } catch { /* socket gone */ }
+          try { res.write('data: [DONE]\n\n'); } catch { /* socket gone */ }
+          if (!res.writableEnded) res.end();
+          return;
+        }
+      } catch (preflightErr) {
+        console.warn('[ai/generate] token-budget preflight failed (open):', preflightErr && preflightErr.message);
+      }
+
+      // SSE comment + JSON heartbeat — the comment line covers strict
+      // SSE proxies that drop unknown event types, the JSON `heartbeat`
+      // event lets the client surface "still working" in the UI and
+      // notice silently-dropped connections via a write() failure
+      // rather than waiting on the kernel's TCP keepalive (minutes by
+      // default). Matches the cadence used in /generate-webdev. Cleared
+      // in the outer finally below.
       keepAlive = setInterval(() => {
         try {
           res.write(`: ping ${Date.now()}\n\n`);
+          res.write(`data: ${JSON.stringify({ type: 'heartbeat', at: Date.now() })}\n\n`);
         } catch {
           // Socket already closed — close handler will fire and abort.
         }
@@ -3247,6 +3292,31 @@ router.post(
         await saveChatAndTrackUsage(null, null, prompt, finalContent, tokens, actualModel, processedFiles, [], regenerate);
       }
 
+      // ── Emit a final `usage` event so the client can show tokens /
+      // cost for this turn and we have a structured trailer for SSE
+      // observability. Best-effort: any error is swallowed.
+      try {
+        if (!res.writableEnded) {
+          const finalForUsage = (typeof finalContent === 'string' && finalContent) ? finalContent : fullResponseContent;
+          const inTokens = usageService.calculateTextTokens(prompt || '', actualModel);
+          const outTokens = usageService.calculateTextTokens(finalForUsage || '', actualModel);
+          let costUSD = 0;
+          try {
+            const c = tokenBudget.estimateCost(actualModel, inTokens, outTokens);
+            costUSD = c.totalUSD;
+          } catch { /* pricing unknown */ }
+          const usagePayload = {
+            type: 'usage',
+            model: actualModel,
+            tokens: { in: inTokens, out: outTokens, total: inTokens + outTokens },
+            costUSD,
+          };
+          res.write(`data: ${JSON.stringify(usagePayload)}\n\n`);
+        }
+      } catch (usageErr) {
+        console.warn('[ai/generate] usage trailer write failed:', usageErr && usageErr.message);
+      }
+
       // ── Send [DONE] AFTER persistence ──────────────────────────
       // The client's onClose callback triggers selectChat (API fetch)
       // upon receiving [DONE]. If we send [DONE] before the DB write
@@ -3266,7 +3336,9 @@ router.post(
         res.status(500).json({ error: sanitizedError });
       } else {
         try {
-          res.write(`data: ${JSON.stringify({ error: sanitizedError })}\n\n`);
+          const code = (error && (error.code || error.name)) || 'stream_error';
+          res.write(`data: ${JSON.stringify({ type: 'error', code, error: sanitizedError })}\n\n`);
+          res.write('event: close\ndata: end\n\n');
         } catch (writeError) {
           console.error('Failed to write error to stream:', writeError);
         }
