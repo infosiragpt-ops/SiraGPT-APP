@@ -7,6 +7,15 @@ require('dotenv').config();
 const { initAgentSystem } = require('./src/services/agents/agent-system');
 initAgentSystem();
 
+// ── Config validation (cycle 34) ───────────────────────────
+// Validates required env vars per-environment (dev/staging/prod)
+// and warns on common cross-field misconfigurations such as
+// NODE_ENV=production with DATABASE_URL pointing to localhost.
+// Runs BEFORE any service init so a misconfigured prod boot
+// fails fast with a clear error.
+const { validateConfigOrExit } = require('./src/utils/config-validator');
+validateConfigOrExit(process.env);
+
 // ── Startup validation ─────────────────────────────────────
 // Catches placeholder secrets, missing required env vars, and
 // dangerous configurations before the server accepts traffic.
