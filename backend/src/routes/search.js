@@ -500,4 +500,183 @@ router.post(
   }
 );
 
+/**
+ * Full-text search across the authenticated user's own chats /
+ * messages. Backed by the Postgres tsvector column on Message.content
+ * (see migration 20260519040000_add_message_fts) and a GIN index for
+ * cheap ranking.
+ *
+ *   GET /api/search?q=…&limit=20&lang=spanish
+ *
+ * Returns ranked hits with chat context:
+ *   {
+ *     query, lang, total, results: [
+ *       { messageId, chatId, chatTitle, role, snippet, timestamp, rank }
+ *     ]
+ *   }
+ *
+ * Soft-deleted chats / messages are filtered out. Hits are scoped to
+ * the calling user via the Chat.userId join — no cross-user leakage.
+ *
+ * `lang` accepts a Postgres `regconfig` name. We allowlist a handful
+ * to prevent regconfig injection through a string interpolation; any
+ * unknown value falls back to `spanish`.
+ */
+const FTS_ALLOWED_LANGS = new Set([
+  'spanish', 'english', 'simple', 'portuguese', 'french', 'german', 'italian',
+]);
+
+router.get('/', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const rawQ = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+  if (!rawQ) return res.status(400).json({ error: 'q is required' });
+
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
+  const lang = FTS_ALLOWED_LANGS.has(String(req.query.lang || '').toLowerCase())
+    ? String(req.query.lang).toLowerCase()
+    : 'spanish';
+
+  // websearch_to_tsquery handles user-typed input (quoted phrases,
+  // OR, NOT) without throwing on stray punctuation the way
+  // to_tsquery would. headline() builds a short snippet with the
+  // match highlighted.
+  try {
+    const rows = await prisma.$queryRawUnsafe(
+      `
+      SELECT m."id"                                          AS "messageId",
+             m."chatId"                                      AS "chatId",
+             c."title"                                       AS "chatTitle",
+             m."role"                                        AS "role",
+             m."timestamp"                                   AS "timestamp",
+             ts_rank(m."content_tsv", websearch_to_tsquery($1::regconfig, $2)) AS "rank",
+             ts_headline($1::regconfig, m."content",
+                         websearch_to_tsquery($1::regconfig, $2),
+                         'MaxFragments=2, MaxWords=18, MinWords=4, StartSel=<mark>, StopSel=</mark>')
+                                                             AS "snippet"
+        FROM "messages" m
+        JOIN "chats"    c ON c."id" = m."chatId"
+       WHERE c."userId"    = $3
+         AND c."deletedAt" IS NULL
+         AND m."deletedAt" IS NULL
+         AND m."content_tsv" @@ websearch_to_tsquery($1::regconfig, $2)
+       ORDER BY "rank" DESC, m."timestamp" DESC
+       LIMIT $4
+      `,
+      lang,
+      rawQ,
+      userId,
+      limit,
+    );
+
+    // BigInt safety + ISO timestamps for the wire.
+    const results = rows.map((r) => ({
+      messageId: r.messageId,
+      chatId: r.chatId,
+      chatTitle: r.chatTitle,
+      role: r.role,
+      snippet: r.snippet,
+      timestamp: r.timestamp instanceof Date ? r.timestamp.toISOString() : r.timestamp,
+      rank: Number(r.rank) || 0,
+    }));
+
+    res.json({ query: rawQ, lang, total: results.length, results });
+  } catch (err) {
+    // TODO(FTS): if Postgres FTS is unavailable (e.g. SQLite dev),
+    // fall back to ILIKE with proper escaping. Today we just surface
+    // the error so the schema mismatch is visible.
+    console.error('[search] FTS query failed:', err.message);
+
+    // Defensive fallback: LIKE with escaped wildcards. Useful while
+    // the FTS migration hasn't landed in a particular environment.
+    try {
+      const escaped = rawQ.replace(/\\/g, '\\\\').replace(/[%_]/g, '\\$&');
+      const like = `%${escaped}%`;
+      const rows = await prisma.message.findMany({
+        where: {
+          deletedAt: null,
+          content: { contains: rawQ, mode: 'insensitive' },
+          chat: { userId, deletedAt: null },
+        },
+        orderBy: { timestamp: 'desc' },
+        take: limit,
+        include: { chat: { select: { id: true, title: true } } },
+      });
+      const results = rows.map((m) => ({
+        messageId: m.id,
+        chatId: m.chatId,
+        chatTitle: m.chat?.title || '',
+        role: m.role,
+        snippet: (m.content || '').slice(0, 240),
+        timestamp: m.timestamp instanceof Date ? m.timestamp.toISOString() : m.timestamp,
+        rank: 0,
+      }));
+      // unused but documents the intent of the escape pass.
+      void like;
+      return res.json({ query: rawQ, lang, total: results.length, results, fallback: 'like' });
+    } catch (fallbackErr) {
+      console.error('[search] LIKE fallback failed:', fallbackErr.message);
+      return res.status(500).json({ error: 'search failed' });
+    }
+  }
+});
+
+/**
+ * Saved searches — small CRUD on the user's named queries.
+ *
+ *   POST   /api/search/saved   { name, query, filters? }
+ *   GET    /api/search/saved
+ *   DELETE /api/search/saved/:id
+ */
+router.post('/saved', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+  const query = typeof req.body?.query === 'string' ? req.body.query.trim() : '';
+  const filters = req.body?.filters ?? null;
+  if (!name) return res.status(400).json({ error: 'name is required' });
+  if (!query) return res.status(400).json({ error: 'query is required' });
+  if (name.length > 120) return res.status(400).json({ error: 'name too long' });
+  if (query.length > 2000) return res.status(400).json({ error: 'query too long' });
+
+  try {
+    const row = await prisma.savedSearch.create({
+      data: { userId, name, query, filters: filters || undefined },
+    });
+    res.status(201).json(row);
+  } catch (err) {
+    console.error('[search/saved] create failed:', err.message);
+    res.status(500).json({ error: 'failed to save search' });
+  }
+});
+
+router.get('/saved', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  try {
+    const rows = await prisma.savedSearch.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+    });
+    res.json({ items: rows });
+  } catch (err) {
+    console.error('[search/saved] list failed:', err.message);
+    res.status(500).json({ error: 'failed to list saved searches' });
+  }
+});
+
+router.delete('/saved/:id', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const id = req.params.id;
+  try {
+    const existing = await prisma.savedSearch.findUnique({ where: { id } });
+    if (!existing || existing.userId !== userId) {
+      return res.status(404).json({ error: 'not found' });
+    }
+    await prisma.savedSearch.delete({ where: { id } });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[search/saved] delete failed:', err.message);
+    res.status(500).json({ error: 'failed to delete saved search' });
+  }
+});
+
 module.exports = router;
