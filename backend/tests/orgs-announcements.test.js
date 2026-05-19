@@ -88,6 +88,32 @@ const prismaMock = {
       const row = prismaState.announcements.find((r) => r.id === where.id);
       return row || null;
     },
+    count: async ({ where } = {}) => {
+      const now = Date.now();
+      return prismaState.announcements.filter((r) => {
+        if (where && where.orgId && r.orgId !== where.orgId) return false;
+        if (where && where.OR) {
+          const allowNull = where.OR.some((c) => c.expiresAt === null);
+          const gtClause = where.OR.find((c) => c.expiresAt && c.expiresAt.gt);
+          const gtMs = gtClause
+            ? gtClause.expiresAt.gt instanceof Date
+              ? gtClause.expiresAt.gt.getTime()
+              : now
+            : null;
+          if (r.expiresAt === null) return allowNull;
+          if (gtMs !== null && r.expiresAt.getTime() > gtMs) return true;
+          return false;
+        }
+        return true;
+      }).length;
+    },
+    update: async ({ where, data }) => {
+      const idx = prismaState.announcements.findIndex((r) => r.id === where.id);
+      if (idx === -1) throw new Error('not found');
+      const merged = { ...prismaState.announcements[idx], ...data };
+      prismaState.announcements[idx] = merged;
+      return merged;
+    },
     delete: async ({ where }) => {
       const idx = prismaState.announcements.findIndex((r) => r.id === where.id);
       if (idx === -1) throw new Error('not found');
@@ -300,6 +326,207 @@ describe('GET /api/orgs/:id/announcements', () => {
 
   test('non-member returns 404', async () => {
     const res = await callRoute({ method: 'GET', urlPath: '/api/orgs/org-2/announcements' });
+    assert.equal(res.status, 404);
+  });
+
+  // Ratchet 45 Task 1 — pagination contract
+  test('returns paginated shape {items,total,page,pages} with defaults', async () => {
+    prismaState.announcements.push({
+      id: 'a1', orgId: 'org-1', title: 'A', body: 'b', severity: 'info',
+      createdById: 'u-admin', expiresAt: null, createdAt: new Date(),
+    });
+    const res = await callRoute({ method: 'GET', urlPath: '/api/orgs/org-1/announcements' });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.total, 1);
+    assert.equal(res.body.page, 1);
+    assert.equal(res.body.pages, 1);
+    assert.equal(res.body.items.length, 1);
+  });
+
+  test('honors ?page= and ?limit= and caps limit at 100', async () => {
+    const now = Date.now();
+    for (let i = 0; i < 5; i++) {
+      prismaState.announcements.push({
+        id: `a${i}`, orgId: 'org-1', title: `t${i}`, body: 'b', severity: 'info',
+        createdById: 'u-admin', expiresAt: null, createdAt: new Date(now + i),
+      });
+    }
+    const res = await callRoute({
+      method: 'GET',
+      urlPath: '/api/orgs/org-1/announcements?page=2&limit=2',
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.total, 5);
+    assert.equal(res.body.page, 2);
+    assert.equal(res.body.pages, 3);
+
+    const capped = await callRoute({
+      method: 'GET',
+      urlPath: '/api/orgs/org-1/announcements?limit=9999',
+    });
+    assert.equal(capped.status, 200);
+    // limit was capped at 100 → pages still 1 for 5 items
+    assert.equal(capped.body.pages, 1);
+  });
+
+  test('empty list returns pages=0', async () => {
+    const res = await callRoute({ method: 'GET', urlPath: '/api/orgs/org-1/announcements' });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.total, 0);
+    assert.equal(res.body.pages, 0);
+  });
+});
+
+// ── PUT /api/orgs/:id/announcements/:announcementId (Task 2) ──────
+describe('PUT /api/orgs/:id/announcements/:announcementId', () => {
+  beforeEach(() => resetState());
+
+  function seedOne(over = {}) {
+    const row = {
+      id: 'a-upd',
+      orgId: 'org-1',
+      title: 'orig title',
+      body: 'orig body',
+      severity: 'info',
+      createdById: 'u-admin',
+      expiresAt: null,
+      createdAt: new Date(),
+      ...over,
+    };
+    prismaState.announcements.push(row);
+    return row;
+  }
+
+  test('updates title, body, severity, expiresAt and writes audit log', async () => {
+    seedOne();
+    const future = new Date(Date.now() + 86_400_000).toISOString();
+    const res = await callRoute({
+      method: 'PUT',
+      urlPath: '/api/orgs/org-1/announcements/a-upd',
+      body: { title: 'new', body: 'new body', severity: 'critical', expiresAt: future },
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.announcement.title, 'new');
+    assert.equal(res.body.announcement.body, 'new body');
+    assert.equal(res.body.announcement.severity, 'critical');
+    assert.ok(res.body.announcement.expiresAt);
+    assert.equal(auditMock._calls.length, 1);
+    assert.equal(auditMock._calls[0].action, 'org_announcement_update');
+    assert.equal(auditMock._calls[0].before.title, 'orig title');
+    assert.equal(auditMock._calls[0].after.title, 'new');
+  });
+
+  test('partial update only changes provided fields', async () => {
+    seedOne();
+    const res = await callRoute({
+      method: 'PUT',
+      urlPath: '/api/orgs/org-1/announcements/a-upd',
+      body: { severity: 'warn' },
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.announcement.severity, 'warn');
+    assert.equal(res.body.announcement.title, 'orig title');
+    assert.equal(res.body.announcement.body, 'orig body');
+  });
+
+  test('expiresAt: null clears the field', async () => {
+    seedOne({ expiresAt: new Date(Date.now() + 86_400_000) });
+    const res = await callRoute({
+      method: 'PUT',
+      urlPath: '/api/orgs/org-1/announcements/a-upd',
+      body: { expiresAt: null },
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.announcement.expiresAt, null);
+  });
+
+  test('rejects invalid severity (400)', async () => {
+    seedOne();
+    const res = await callRoute({
+      method: 'PUT',
+      urlPath: '/api/orgs/org-1/announcements/a-upd',
+      body: { severity: 'panic' },
+    });
+    assert.equal(res.status, 400);
+  });
+
+  test('rejects empty title (400)', async () => {
+    seedOne();
+    const res = await callRoute({
+      method: 'PUT',
+      urlPath: '/api/orgs/org-1/announcements/a-upd',
+      body: { title: '   ' },
+    });
+    assert.equal(res.status, 400);
+  });
+
+  test('rejects past expiresAt (400)', async () => {
+    seedOne();
+    const res = await callRoute({
+      method: 'PUT',
+      urlPath: '/api/orgs/org-1/announcements/a-upd',
+      body: { expiresAt: new Date(Date.now() - 1000).toISOString() },
+    });
+    assert.equal(res.status, 400);
+  });
+
+  test('empty body returns 400 (no fields to update)', async () => {
+    seedOne();
+    const res = await callRoute({
+      method: 'PUT',
+      urlPath: '/api/orgs/org-1/announcements/a-upd',
+      body: {},
+    });
+    assert.equal(res.status, 400);
+  });
+
+  test('unknown id returns 404', async () => {
+    const res = await callRoute({
+      method: 'PUT',
+      urlPath: '/api/orgs/org-1/announcements/missing',
+      body: { title: 'x' },
+    });
+    assert.equal(res.status, 404);
+  });
+
+  test('cannot update announcement from another org (404)', async () => {
+    seedOne({ id: 'a-foreign', orgId: 'org-other' });
+    const res = await callRoute({
+      method: 'PUT',
+      urlPath: '/api/orgs/org-1/announcements/a-foreign',
+      body: { title: 'x' },
+    });
+    assert.equal(res.status, 404);
+  });
+
+  test('VIEWER cannot update (403)', async () => {
+    prismaState.membership.role = 'VIEWER';
+    seedOne();
+    const res = await callRoute({
+      method: 'PUT',
+      urlPath: '/api/orgs/org-1/announcements/a-upd',
+      body: { title: 'new' },
+    });
+    assert.equal(res.status, 403);
+  });
+
+  test('MEMBER cannot update (403)', async () => {
+    prismaState.membership.role = 'MEMBER';
+    seedOne();
+    const res = await callRoute({
+      method: 'PUT',
+      urlPath: '/api/orgs/org-1/announcements/a-upd',
+      body: { title: 'new' },
+    });
+    assert.equal(res.status, 403);
+  });
+
+  test('non-member returns 404', async () => {
+    const res = await callRoute({
+      method: 'PUT',
+      urlPath: '/api/orgs/org-2/announcements/whatever',
+      body: { title: 'x' },
+    });
     assert.equal(res.status, 404);
   });
 });

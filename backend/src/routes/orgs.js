@@ -3405,26 +3405,144 @@ router.post('/:id/announcements', authenticateToken, async (req, res) => {
 });
 
 // GET /api/orgs/:id/announcements — any member, only non-expired rows.
+// Ratchet 45 (Task 1) — paginated. Supports ?page=&limit= with default
+// limit=20, max=100. Response shape: `{ items, total, page, pages }`.
 router.get('/:id/announcements', authenticateToken, async (req, res) => {
   const userId = req.user.id;
   const orgId = req.params.id;
   try {
     await assertMembership(prisma, orgId, userId, 'VIEWER');
 
+    const rawLimit = Number.parseInt(req.query.limit, 10);
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0
+      ? Math.min(rawLimit, 100)
+      : 20;
+    const rawPage = Number.parseInt(req.query.page, 10);
+    const page = Number.isFinite(rawPage) && rawPage > 0 ? rawPage : 1;
+
     const now = new Date();
+    const where = {
+      orgId,
+      OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+    };
+    const total = typeof prisma.orgAnnouncement.count === 'function'
+      ? await prisma.orgAnnouncement.count({ where })
+      : (await prisma.orgAnnouncement.findMany({ where })).length;
+    const pages = total === 0 ? 0 : Math.ceil(total / limit);
     const rows = await prisma.orgAnnouncement.findMany({
-      where: {
-        orgId,
-        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
-      },
+      where,
       orderBy: { createdAt: 'desc' },
+      skip: (page - 1) * limit,
+      take: limit,
     });
 
-    res.json({ items: rows.map(serializeAnnouncement) });
+    res.json({ items: rows.map(serializeAnnouncement), total, page, pages });
   } catch (err) {
     if (err && err.status) return res.status(err.status).json({ error: err.message });
     console.error('[orgs] list announcements failed:', err.message);
     res.status(500).json({ error: 'failed to list announcements' });
+  }
+});
+
+// PUT /api/orgs/:id/announcements/:announcementId (ADMIN+)
+// Ratchet 45 (Task 2) — update title/body/severity/expiresAt. Audited.
+router.put('/:id/announcements/:announcementId', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  const announcementId = req.params.announcementId;
+  if (!announcementId) return res.status(400).json({ error: 'invalid announcementId' });
+
+  try {
+    const membership = await assertMembership(prisma, orgId, userId, 'ADMIN');
+    if (!canManageMembers(membership.role)) {
+      return res.status(403).json({ error: 'insufficient role to update announcements' });
+    }
+
+    const existing = await prisma.orgAnnouncement.findUnique({
+      where: { id: announcementId },
+    });
+    if (!existing || existing.orgId !== orgId) {
+      return res.status(404).json({ error: 'announcement not found' });
+    }
+
+    const body = req.body || {};
+    const data = {};
+
+    if (body.title !== undefined) {
+      const title = typeof body.title === 'string' ? body.title.trim() : '';
+      if (!title || title.length > ANNOUNCEMENT_TITLE_MAX) {
+        return res.status(400).json({ error: 'invalid title' });
+      }
+      data.title = title;
+    }
+
+    if (body.body !== undefined) {
+      const text = typeof body.body === 'string' ? body.body.trim() : '';
+      if (!text || text.length > ANNOUNCEMENT_BODY_MAX) {
+        return res.status(400).json({ error: 'invalid body' });
+      }
+      data.body = text;
+    }
+
+    if (body.severity !== undefined) {
+      if (typeof body.severity !== 'string' || !ANNOUNCEMENT_SEVERITIES.has(body.severity)) {
+        return res.status(400).json({ error: 'invalid severity' });
+      }
+      data.severity = body.severity;
+    }
+
+    if (body.expiresAt !== undefined) {
+      if (body.expiresAt === null || body.expiresAt === '') {
+        data.expiresAt = null;
+      } else {
+        const parsed = new Date(body.expiresAt);
+        if (Number.isNaN(parsed.getTime())) {
+          return res.status(400).json({ error: 'invalid expiresAt' });
+        }
+        if (parsed.getTime() <= Date.now()) {
+          return res.status(400).json({ error: 'expiresAt must be in the future' });
+        }
+        data.expiresAt = parsed;
+      }
+    }
+
+    if (Object.keys(data).length === 0) {
+      return res.status(400).json({ error: 'no fields to update' });
+    }
+
+    const updated = await prisma.orgAnnouncement.update({
+      where: { id: existing.id },
+      data,
+    });
+
+    void writeAuditLog(prisma, {
+      action: 'org_announcement_update',
+      userId,
+      resource: 'organization',
+      resourceId: orgId,
+      before: {
+        announcementId: existing.id,
+        title: existing.title,
+        body: existing.body,
+        severity: existing.severity,
+        expiresAt: existing.expiresAt,
+      },
+      after: {
+        announcementId: updated.id,
+        title: updated.title,
+        body: updated.body,
+        severity: updated.severity,
+        expiresAt: updated.expiresAt,
+      },
+      metadata: { orgId },
+      req,
+    });
+
+    res.json({ announcement: serializeAnnouncement(updated) });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] update announcement failed:', err.message);
+    res.status(500).json({ error: 'failed to update announcement' });
   }
 });
 
