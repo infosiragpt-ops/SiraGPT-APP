@@ -151,19 +151,43 @@ async function publish(event, payload, userId, opts = {}) {
   let dispatched = 0;
   const errors = [];
 
-  // --- 1. Fan out to WebhookEndpoints
+  // --- 1. Fan out to WebhookEndpoints (user + org scopes)
+  //
+  // Cycle 45: in addition to the per-user fan-out, we also fan out to
+  // org-scoped endpoints when the publishing payload carries an `orgId`
+  // (or `organizationId`). Endpoints already targeting the same row by
+  // id are de-duplicated so an admin who created an endpoint as
+  // {userId, orgId} doesn't receive it twice.
   const prisma = getPrisma();
   const dispatcher = getDispatcher();
-  let endpoints = [];
-  if (prisma && prisma.webhookEndpoint && userId) {
-    try {
-      endpoints = await prisma.webhookEndpoint.findMany({
-        where: { userId, isActive: true },
-      });
-    } catch (err) {
-      errors.push({ stage: 'prisma.webhookEndpoint.findMany', message: err?.message || String(err) });
+  const orgId = payload && typeof payload === 'object'
+    ? (payload.orgId || payload.organizationId || null)
+    : null;
+
+  const endpointsById = new Map();
+  if (prisma && prisma.webhookEndpoint) {
+    if (userId) {
+      try {
+        const rows = await prisma.webhookEndpoint.findMany({
+          where: { userId, isActive: true },
+        });
+        for (const r of rows) endpointsById.set(r.id, r);
+      } catch (err) {
+        errors.push({ stage: 'prisma.webhookEndpoint.findMany', message: err?.message || String(err) });
+      }
+    }
+    if (orgId) {
+      try {
+        const rows = await prisma.webhookEndpoint.findMany({
+          where: { organizationId: orgId, isActive: true },
+        });
+        for (const r of rows) if (!endpointsById.has(r.id)) endpointsById.set(r.id, r);
+      } catch (err) {
+        errors.push({ stage: 'prisma.webhookEndpoint.findMany.org', message: err?.message || String(err) });
+      }
     }
   }
+  const endpoints = [...endpointsById.values()];
 
   for (const ep of endpoints) {
     const events = Array.isArray(ep.events) ? ep.events : [];
@@ -173,7 +197,7 @@ async function publish(event, payload, userId, opts = {}) {
       const result = await dispatcher.dispatch({
         url: ep.url,
         event,
-        payload: { event, userId, data: payload, ts: now },
+        payload: { event, userId, orgId: ep.organizationId || orgId || null, data: payload, ts: now },
         secret: ep.secret,
       });
       dispatched += 1;

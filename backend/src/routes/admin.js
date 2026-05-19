@@ -1089,7 +1089,7 @@ async function collectServiceHealth({
 router.get('/cost-report', requireSuperAdmin, async (req, res) => {
   try {
     const costTracker = require('../services/ai/cost-tracker');
-    const { from, to, userId } = req.query || {};
+    const { from, to, userId, groupBy } = req.query || {};
     const fromDate = from ? new Date(String(from)) : null;
     const toDate = to ? new Date(String(to)) : null;
     if (from && Number.isNaN(fromDate.getTime())) {
@@ -1105,10 +1105,46 @@ router.get('/cost-report', requireSuperAdmin, async (req, res) => {
       userId: userId || null,
       includeRecords,
     });
+
+    // Cycle 45: optional org-level aggregation. When `?groupBy=org` is
+    // passed we join the per-user totals through OrgMembership to roll
+    // tokens + cost up to each Organization. A user belonging to N orgs
+    // is counted once per org (the typical SaaS billing model: each org
+    // sees the spend of its own members). Users with no memberships are
+    // grouped under the synthetic "__unaffiliated__" bucket so callers
+    // can still account for 100% of the cost.
+    let perOrg = null;
+    if (String(groupBy || '').toLowerCase() === 'org') {
+      const { aggregatePerOrg } = require('../services/ai/cost-report-aggregator');
+      const userIds = report.perUser.map((u) => u.userId).filter((id) => id && id !== 'anonymous');
+      let memberships = [];
+      if (userIds.length > 0) {
+        try {
+          memberships = await prisma.orgMembership.findMany({
+            where: { userId: { in: userIds } },
+            select: {
+              userId: true,
+              orgId: true,
+              organization: { select: { id: true, name: true, slug: true } },
+            },
+          });
+        } catch (err) {
+          console.error('[admin/cost-report] org join failed:', err && err.message ? err.message : err);
+        }
+      }
+      perOrg = aggregatePerOrg(report.perUser, memberships);
+    }
+
     return res.json({
       ok: true,
-      filters: { from: from || null, to: to || null, userId: userId || null },
+      filters: {
+        from: from || null,
+        to: to || null,
+        userId: userId || null,
+        groupBy: groupBy || null,
+      },
       ...report,
+      ...(perOrg ? { perOrg } : {}),
     });
   } catch (err) {
     console.error('[admin/cost-report] failed:', err && err.message ? err.message : err);

@@ -18,9 +18,11 @@
  */
 
 const express = require('express');
+const crypto = require('crypto');
 const { authenticateToken } = require('../middleware/auth');
 const { writeAuditLog } = require('../utils/audit-log');
 const prisma = require('../config/database');
+const triggers = require('../services/trigger-registry');
 const {
   slugify,
   uniqueSlug,
@@ -504,6 +506,146 @@ router.get('/:id/chats', authenticateToken, async (req, res) => {
     if (err && err.status) return res.status(err.status).json({ error: err.message });
     console.error('[orgs] list org chats failed:', err.message);
     res.status(500).json({ error: 'failed to list org chats' });
+  }
+});
+
+// ─── Per-org webhook endpoints (cycle 45) ──────────────────────────
+// Org-scoped variant of /api/webhooks/endpoints. The trigger registry
+// fans out to these endpoints when the publishing payload carries an
+// `orgId` matching this org. Listing redacts secrets; create returns
+// the secret once. Member+ can list/create; Admin+ can delete.
+
+function genWebhookSecret() {
+  return 'whk_' + crypto.randomBytes(24).toString('hex');
+}
+
+function redactWebhookSecret(secret) {
+  if (!secret || typeof secret !== 'string') return null;
+  if (secret.length < 12) return '••••';
+  return `${secret.slice(0, 8)}…${secret.slice(-4)}`;
+}
+
+function serializeOrgWebhook(ep, { includeSecret = false } = {}) {
+  return {
+    id: ep.id,
+    organizationId: ep.organizationId,
+    userId: ep.userId,
+    url: ep.url,
+    events: Array.isArray(ep.events) ? ep.events : [],
+    secret: includeSecret ? ep.secret : redactWebhookSecret(ep.secret),
+    isActive: ep.isActive,
+    createdAt: ep.createdAt instanceof Date ? ep.createdAt.toISOString() : ep.createdAt,
+    lastDeliveryAt: ep.lastDeliveryAt
+      ? (ep.lastDeliveryAt instanceof Date ? ep.lastDeliveryAt.toISOString() : ep.lastDeliveryAt)
+      : null,
+  };
+}
+
+function validateWebhookUrl(url) {
+  if (typeof url !== 'string' || !url) return 'url required';
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return 'url must be http(s)';
+    return null;
+  } catch {
+    return 'url is not a valid URL';
+  }
+}
+
+function validateWebhookEvents(events) {
+  if (!Array.isArray(events) || events.length === 0) return 'events must be a non-empty array';
+  for (const e of events) {
+    if (typeof e !== 'string') return 'events must be strings';
+    if (e !== '*' && !triggers.isKnownTrigger(e)) return `unknown event: ${e}`;
+  }
+  return null;
+}
+
+// ─── GET /api/orgs/:id/webhooks ─────────────────────────────────────
+router.get('/:id/webhooks', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  try {
+    await assertMembership(prisma, orgId, userId, 'MEMBER');
+    const rows = await prisma.webhookEndpoint.findMany({
+      where: { organizationId: orgId },
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+    });
+    res.json({ endpoints: rows.map((r) => serializeOrgWebhook(r)) });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] list webhooks failed:', err.message);
+    res.status(500).json({ error: 'failed to list webhooks' });
+  }
+});
+
+// ─── POST /api/orgs/:id/webhooks (MEMBER+) ──────────────────────────
+router.post('/:id/webhooks', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  const { url, events } = req.body || {};
+  const urlErr = validateWebhookUrl(url);
+  if (urlErr) return res.status(400).json({ error: urlErr });
+  const eventsErr = validateWebhookEvents(events);
+  if (eventsErr) return res.status(400).json({ error: eventsErr });
+
+  try {
+    await assertMembership(prisma, orgId, userId, 'MEMBER');
+    const secret = genWebhookSecret();
+    const endpoint = await prisma.webhookEndpoint.create({
+      data: {
+        userId,
+        organizationId: orgId,
+        url,
+        events,
+        secret,
+        isActive: true,
+      },
+    });
+    void writeAuditLog(prisma, {
+      action: 'org_webhook_create',
+      userId,
+      resource: 'organization',
+      resourceId: orgId,
+      after: { endpointId: endpoint.id, url, events },
+      req,
+    });
+    res.status(201).json({ endpoint: serializeOrgWebhook(endpoint, { includeSecret: true }) });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] create webhook failed:', err.message);
+    res.status(500).json({ error: 'failed to create webhook' });
+  }
+});
+
+// ─── DELETE /api/orgs/:id/webhooks/:endpointId (ADMIN+) ─────────────
+router.delete('/:id/webhooks/:endpointId', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  const endpointId = req.params.endpointId;
+  try {
+    const membership = await assertMembership(prisma, orgId, userId, 'ADMIN');
+    if (!canManageMembers(membership.role)) {
+      return res.status(403).json({ error: 'insufficient role to delete webhook' });
+    }
+    const deleted = await prisma.webhookEndpoint.deleteMany({
+      where: { id: endpointId, organizationId: orgId },
+    });
+    if (deleted.count === 0) return res.status(404).json({ error: 'endpoint not found' });
+    void writeAuditLog(prisma, {
+      action: 'org_webhook_delete',
+      userId,
+      resource: 'organization',
+      resourceId: orgId,
+      before: { endpointId },
+      req,
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] delete webhook failed:', err.message);
+    res.status(500).json({ error: 'failed to delete webhook' });
   }
 });
 

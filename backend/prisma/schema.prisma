@@ -341,6 +341,10 @@ model Bookmark {
 model WebhookEndpoint {
   id             String    @id @default(cuid())
   userId         String
+  // Optional org scope. When set, this endpoint participates in org-level
+  // fan-out (publish payloads carrying `orgId`). userId still records the
+  // creator for audit / quota attribution. Cycle 45 added per-org webhooks.
+  organizationId String?
   url            String
   events         String[]
   secret         String
@@ -348,10 +352,12 @@ model WebhookEndpoint {
   createdAt      DateTime  @default(now())
   lastDeliveryAt DateTime?
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@index([userId, createdAt])
   @@index([userId, isActive])
+  @@index([organizationId, isActive])
   @@map("webhook_endpoints")
 }
 
@@ -1281,6 +1287,7 @@ model Organization {
   memberships OrgMembership[]
   invitations OrgInvitation[]
   chats       Chat[]
+  webhookEndpoints WebhookEndpoint[]
 
   @@index([ownerId])
   @@index([slug])
