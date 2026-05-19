@@ -302,6 +302,40 @@ app.use('/api/', apiLimiter);
 // further down — so the body-hash check can read req.body which
 // requires express.json to have parsed it first.
 
+// Structured request logger — one JSON line per response. Mounted
+// BEFORE body-parser so even malformed-body responses are logged. Also
+// generates `req.id` if no upstream middleware set it.
+const requestLogger = require('./src/middleware/request-logger');
+app.use(requestLogger);
+
+// HTTP metrics middleware — records siragpt_http_requests_total and
+// siragpt_http_request_duration_seconds for every request except
+// /metrics itself (to avoid scrape-induced cardinality).
+const siraMetrics = require('./src/utils/metrics');
+app.use((req, res, next) => {
+    if (req.path === '/metrics') return next();
+    const startNs = process.hrtime.bigint();
+    res.on('finish', () => {
+        try {
+            const route = (req.route && req.route.path)
+                || (req.baseUrl ? `${req.baseUrl}${req.route ? req.route.path : ''}` : '')
+                || req.path
+                || 'unmatched';
+            const durSeconds = Number(process.hrtime.bigint() - startNs) / 1e9;
+            siraMetrics.counter('siragpt_http_requests_total', {
+                method: req.method,
+                route,
+                status: String(res.statusCode),
+            });
+            siraMetrics.observe('siragpt_http_request_duration_seconds', {
+                method: req.method,
+                route,
+            }, durSeconds);
+        } catch { /* never throw from instrumentation */ }
+    });
+    next();
+});
+
 // Body parsing middleware
 app.use(compression({
     filter: (req, res) => {
@@ -546,6 +580,11 @@ app.use('/api/payments', paymentRoutes);
 app.use('/api/admin/queues', adminQueuesRoutes);
 app.use('/api/admin/connections', adminConnectionsRoutes);
 app.use('/api/admin', adminRoutes);
+// Top-level Prometheus metrics endpoint. Gate (localhost OR super-admin)
+// is implemented inside the handler — see backend/src/routes/admin.js.
+if (typeof adminRoutes.metricsHandler === 'function') {
+    app.get('/metrics', adminRoutes.metricsHandler);
+}
 app.use('/api/users', userRoutes);
 app.use('/api/public', publicRoutes);
 app.use('/api/download', downloadRoutes);

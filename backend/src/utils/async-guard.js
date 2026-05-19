@@ -343,6 +343,15 @@ class AsyncGuard {
     const controller = new AbortController();
     const deadline = Date.now() + timeoutMs;
 
+    // Optional metrics hook — soft-require so this module remains
+    // independent of the metrics registry. If metrics.js is loaded we
+    // track the live guard count via inc/dec around settle.
+    let _metrics = null;
+    try { _metrics = require('./metrics'); } catch { _metrics = null; }
+    if (_metrics && typeof _metrics.incActiveGuards === 'function') {
+      try { _metrics.incActiveGuards(); } catch { /* never throw */ }
+    }
+
     const token = new GuardToken({
       id,
       label,
@@ -350,6 +359,11 @@ class AsyncGuard {
       timeoutMs,
       deadline,
       cleanup: opts.cleanup || null,
+      onSettle: () => {
+        if (_metrics && typeof _metrics.decActiveGuards === 'function') {
+          try { _metrics.decActiveGuards(); } catch { /* never throw */ }
+        }
+      },
     });
 
     return token;

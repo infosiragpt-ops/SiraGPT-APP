@@ -196,3 +196,71 @@ For metrics, hit `curl localhost:3001/internal/metrics`. For logs,
 | `backend/tests/red-metrics.test.js`               | RED middleware: counters, histogram, aborts  |
 | `backend/tests/sira-health-and-metrics.test.js`   | Sira pipeline metric families end-to-end     |
 | `backend/tests/sentry-observability.test.js`      | Sentry init + capture wiring                 |
+| `backend/tests/metrics-registry.test.js`          | `utils/metrics.js` counter/gauge/histogram + helpers |
+| `backend/tests/request-logger.test.js`            | Structured request logger middleware         |
+
+## Health + Prometheus endpoints
+
+The backend now ships three top-level observability endpoints:
+
+| Endpoint                          | Auth                              | Purpose                                                                 |
+|-----------------------------------|-----------------------------------|-------------------------------------------------------------------------|
+| `GET /api/admin/analyzer/health`  | admin token                       | Snapshot of the document analyzer pipeline (open breakers, degraded analyzers, in-process cache hit/miss stats, config) — see `services/document-professional-analyzer.js#getAnalyzerHealthSnapshot`. |
+| `GET /api/admin/health/services`  | super-admin token                 | Liveness probe of external dependencies (Postgres, Redis, Stripe, SMTP, AI providers). Each probe is bounded at 2 s so one dead dependency does not mask the rest. |
+| `GET /metrics`                    | localhost OR super-admin token    | Prometheus text-exposition exporter. Localhost callers (Prometheus sidecar) bypass auth; remote callers must present a super-admin token. The handler lives in `routes/admin.js#metricsHandler` and is mounted at the top level from `index.js`. |
+
+### `/metrics` series
+
+| Family                                         | Type      | Labels                  | Source                                  |
+|------------------------------------------------|-----------|-------------------------|-----------------------------------------|
+| `siragpt_http_requests_total`                  | counter   | method, route, status   | HTTP middleware in `index.js`           |
+| `siragpt_http_request_duration_seconds_*`      | histogram | method, route + le      | HTTP middleware in `index.js`           |
+| `siragpt_circuit_breaker_state`                | gauge     | name                    | `utils/circuit-breaker.js` → `metrics.trackCircuitBreaker` (0=closed, 1=half_open, 2=open) |
+| `siragpt_async_guards_active`                  | gauge     | —                       | `utils/async-guard.js` register/settle  |
+| `siragpt_analyzer_cache_hits_total`            | counter   | —                       | Delta-sampled from analyzer health snapshot on each `/metrics` scrape |
+| `siragpt_analyzer_cache_misses_total`          | counter   | —                       | Same                                    |
+| `siragpt_process_uptime_seconds`               | gauge     | —                       | `process.uptime()`                      |
+| `siragpt_nodejs_memory_bytes`                  | gauge     | type=rss/heapUsed/heapTotal/external | `process.memoryUsage()`        |
+
+Legacy series (`http_requests_total`, `agent_task_*`, `se_agent_*`) keep
+flowing through `services/agents/metrics.js` and remain exposed on
+`/internal/metrics` and `/api/se-agents/metrics`.
+
+### Sample Grafana / PromQL queries
+
+```promql
+# Request rate per route (5-minute window)
+sum by (route) (rate(siragpt_http_requests_total[5m]))
+
+# Error rate (5xx) per route
+sum by (route) (rate(siragpt_http_requests_total{status=~"5.."}[5m]))
+  / sum by (route) (rate(siragpt_http_requests_total[5m]))
+
+# p95 latency per route
+histogram_quantile(0.95,
+  sum by (route, le) (rate(siragpt_http_request_duration_seconds_bucket[5m])))
+
+# Currently-open circuit breakers
+siragpt_circuit_breaker_state == 2
+
+# Analyzer cache hit ratio
+rate(siragpt_analyzer_cache_hits_total[5m])
+  / (rate(siragpt_analyzer_cache_hits_total[5m]) + rate(siragpt_analyzer_cache_misses_total[5m]))
+
+# Heap utilisation
+siragpt_nodejs_memory_bytes{type="heapUsed"}
+  / siragpt_nodejs_memory_bytes{type="heapTotal"}
+```
+
+## Request logger
+
+`backend/src/middleware/request-logger.js` is wired in `index.js`
+BEFORE `express.json()` so even malformed-body responses are logged. It
+emits one JSON line per response:
+
+```json
+{"ts":"2026-05-19T12:00:00Z","level":"info","method":"GET","path":"/api/x","status":200,"durMs":12,"userId":"abc","reqId":"uuid","ip":"1.2.3.4","ua":"Mozilla/..."}
+```
+
+If `req.id` is unset upstream (e.g. before pino-http), the middleware
+mints one via `crypto.randomUUID()` so every log line is correlatable.

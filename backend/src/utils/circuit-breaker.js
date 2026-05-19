@@ -123,6 +123,17 @@ class CircuitBreaker extends EventEmitter {
     this[kSuccesses] = new RollingCounter(0);
     this[kCallCount] = 0;
     this[kNextAttempt] = 0;
+
+    // Optional metrics hook — soft-require so circuit-breaker.js stays
+    // free of utility-tier dependencies in tests / cold-start. If the
+    // metrics module is present, register this breaker so state changes
+    // are mirrored into siragpt_circuit_breaker_state.
+    try {
+      const metrics = require('./metrics');
+      if (metrics && typeof metrics.trackCircuitBreaker === 'function') {
+        metrics.trackCircuitBreaker(this);
+      }
+    } catch { /* metrics is optional */ }
   }
 
   // ── Public API ────────────────────────────────────────────────────────

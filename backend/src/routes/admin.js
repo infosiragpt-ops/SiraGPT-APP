@@ -882,7 +882,76 @@ router.get('/health/services', requireSuperAdmin, async (_req, res) => {
   }
 });
 
+// ── Prometheus /metrics exporter ─────────────────────────────────────────
+// Exposed at the top-level `/metrics` path (mounted from index.js) — NOT
+// behind `/api/admin/*` so Prometheus scrapers do not need the cookie
+// jar / auth header dance. Gate: localhost callers always allowed (so a
+// local Prometheus sidecar can scrape without credentials); remote
+// callers must present a super-admin token.
+//
+// We deliberately do not put this on the `adminRoutes` router (which
+// applies `authenticateToken, requireAdmin` to everything) — a local
+// scraper has no token to present.
+const _siraMetrics = require('../utils/metrics');
+let _analyzerCachePrev = { hits: 0, misses: 0 };
+
+function _isLocalhost(req) {
+  const ip = (req.ip || (req.socket && req.socket.remoteAddress) || '').toString();
+  if (!ip) return false;
+  if (ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1') return true;
+  if (ip.startsWith('::ffff:127.')) return true;
+  return false;
+}
+
+async function metricsHandler(req, res) {
+  // Auth gate: localhost OR super-admin via existing middleware chain.
+  if (!_isLocalhost(req)) {
+    // Replay the auth+admin chain manually so the gate is the same as
+    // /api/admin/health/services. Each middleware short-circuits with
+    // its own res.status() on failure.
+    const _runChain = (mws) => new Promise((resolve, reject) => {
+      let i = 0;
+      const step = (err) => {
+        if (err) return reject(err);
+        if (res.headersSent) return resolve(false);
+        if (i >= mws.length) return resolve(true);
+        const mw = mws[i++];
+        try { mw(req, res, step); } catch (e) { reject(e); }
+      };
+      step();
+    });
+    try {
+      const ok = await _runChain([authenticateToken, requireAdmin, requireSuperAdmin]);
+      if (!ok || res.headersSent) return;
+    } catch (err) {
+      if (!res.headersSent) {
+        return res.status(500).json({ error: 'metrics auth failed', detail: err.message });
+      }
+      return;
+    }
+  }
+
+  // Refresh dynamic gauges before rendering.
+  try { _siraMetrics.refreshProcessMetrics(); } catch { /* noop */ }
+  try {
+    const documentProfessionalAnalyzer = require('../services/document-professional-analyzer');
+    const snap = documentProfessionalAnalyzer.getAnalyzerHealthSnapshot();
+    if (snap && snap.cache) {
+      _analyzerCachePrev = _siraMetrics.recordAnalyzerCacheStats(
+        _analyzerCachePrev.hits,
+        _analyzerCachePrev.misses,
+        snap.cache,
+      );
+    }
+  } catch { /* analyzer optional */ }
+
+  const body = _siraMetrics.renderText();
+  res.setHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
+  res.status(200).send(body);
+}
+
 module.exports = router;
+module.exports.metricsHandler = metricsHandler;
 module.exports.INTERNAL = {
   collectServiceHealth,
   probePostgres,
