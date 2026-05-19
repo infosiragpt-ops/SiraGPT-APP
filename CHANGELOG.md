@@ -4,6 +4,58 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and improvement cycles follow a sequential number with the date the work landed.
 
+## [0.2.4 / backend 1.1.4] — Cycles 71-80 milestone — 2026-05-19
+
+Eighth-decade marker. Patch bumps only (root `0.2.3 → 0.2.4`, backend
+`1.1.3 → 1.1.4`) — cycles 71-80 focused on org lifecycle, billing and
+governance surface with no public API breaks. See
+`docs/cycles/CYCLE_80.md` for the milestone narrative.
+
+### Added
+- **Cycle 80 — milestone consolidation**: `docs/cycles/CYCLE_80.md`
+  marker doc + CHANGELOG cycles 71-80 sweep + version bump to
+  `0.2.4 / 1.1.4`.
+- **Cycle 79 — metadata.orgId augment + SSE events**: request metadata
+  augmented with resolved `orgId` for every authenticated request; SSE
+  event envelope carries org scope for downstream consumers.
+- **Cycle 78 — org audit feed + settings JSON**: per-org audit feed
+  endpoint with cursor pagination; freeform settings JSON blob per org
+  with schema validation.
+- **Cycle 77 — invitation lifecycle hooks**: pre/post hooks for invite
+  create/accept/revoke with audit + Slack notification fan-out.
+- **Cycle 76 — ownership transfer + leave**: atomic ownership transfer
+  with at-least-one-owner invariant; member leave flow with re-assignment.
+- **Cycle 75 — org billing upgrade + summary**: upgrade flow endpoint
+  with plan transitions and prorated handling; per-org billing summary.
+- **Cycle 74 — top-models + org Slack**: `top-models` analytics endpoint
+  ranking model usage per org; per-org Slack webhook notifier for
+  high-signal events.
+- **Cycle 73 — audit archive + role-gated flags**: older AuditLog rows
+  archived to cold table; feature flag toggles guarded by role clearance.
+- **Cycle 72 — maintenance mode + quarterly export**: global maintenance
+  flag short-circuits writes with friendly 503; quarterly export job
+  dumps aggregated usage to long-term storage.
+- **Cycle 71 — job-utils retry**: shared retry helper for scheduled jobs
+  with exponential backoff + jitter and audit-logged final failures.
+
+### Changed
+- Lint ratchet held at `--max-warnings 45` across cycles 71-80.
+- Root `package.json` version `0.2.3 → 0.2.4`.
+- Backend `package.json` version `1.1.3 → 1.1.4`.
+
+### Fixed
+- Stability fixes carried in feature cycles. See individual cycle entries
+  for specifics (no standalone fix-only cycle in this band).
+
+### Security
+- Role-gated feature flag toggles (cycle 73).
+- Ownership-transfer invariant guard (cycle 76).
+- Invitation lifecycle hooks with audit fan-out (cycle 77).
+- Org settings JSON schema validation (cycle 78).
+
+### Removed
+- None in cycles 71-80.
+
 ## [0.2.3 / backend 1.1.3] — Cycles 61-70 milestone — 2026-05-19
 
 Seventh-decade marker. Patch bumps only (root `0.2.2 → 0.2.3`, backend
