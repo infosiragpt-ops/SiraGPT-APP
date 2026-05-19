@@ -250,6 +250,163 @@ async function cmdLogs(args) {
   }
 }
 
+// ─── admin-only commands (cycle 45) ──────────────────────────────────────────
+function adminBase(args) {
+  return args.flags.base || process.env.SIRAGPT_BASE_URL || 'http://localhost:5000';
+}
+
+function adminToken() {
+  const t = process.env.SIRAGPT_ADMIN_TOKEN;
+  if (!t) {
+    console.error(color.red('Missing SIRAGPT_ADMIN_TOKEN env var (required for admin commands).'));
+    process.exit(2);
+  }
+  return t;
+}
+
+function adminHeaders(extra = {}) {
+  return {
+    Accept: 'application/json',
+    Authorization: `Bearer ${adminToken()}`,
+    ...extra,
+  };
+}
+
+function exitNonOk(r) {
+  if (!r.ok) {
+    console.log(color.red(`✗ HTTP ${r.status}`));
+    console.log(JSON.stringify(r.body, null, 2));
+    process.exit(1);
+  }
+}
+
+async function cmdAudit(args) {
+  const userId = args._[0];
+  if (!userId) {
+    console.error('Usage: cli.js audit <userId> [--limit N] [--action A] [--from D] [--to D]');
+    process.exit(2);
+  }
+  const base = adminBase(args);
+  const params = new URLSearchParams({ userId });
+  if (args.flags.limit) params.set('limit', String(args.flags.limit));
+  if (args.flags.action) params.set('action', String(args.flags.action));
+  if (args.flags.from) params.set('from', String(args.flags.from));
+  if (args.flags.to) params.set('to', String(args.flags.to));
+  const url = `${base.replace(/\/+$/, '')}/api/admin/audit-logs?${params.toString()}`;
+  console.log(color.dim(`→ GET ${url}`));
+  const r = await fetchJson(url, { headers: adminHeaders() });
+  exitNonOk(r);
+  const items = r.body?.items || [];
+  console.log(color.bold(`\n${items.length} entries (total ${r.body?.total ?? '?'}):`));
+  for (const row of items) {
+    const when = row.createdAt ? color.dim(new Date(row.createdAt).toISOString()) : '';
+    const who = color.cyan(row.actorName || row.actorId || '?');
+    const act = color.yellow(row.action);
+    const res = row.resourceType ? color.magenta(`${row.resourceType}${row.resourceId ? `:${row.resourceId}` : ''}`) : '';
+    console.log(`  ${when}  ${who}  ${act}  ${res}`);
+  }
+}
+
+async function cmdFailoverStatus(args) {
+  const base = adminBase(args);
+  // Try a few likely endpoints; surface first one that responds.
+  const candidates = [
+    '/api/admin/failover/status',
+    '/api/admin/failover-events',
+    '/api/admin/providers/failover',
+  ];
+  for (const path of candidates) {
+    const url = `${base.replace(/\/+$/, '')}${path}`;
+    const r = await fetchJson(url, { headers: adminHeaders() });
+    if (r.ok) {
+      console.log(color.bold(`GET ${url}`));
+      console.log(JSON.stringify(r.body, null, 2));
+      return;
+    }
+    if (r.status !== 404 && r.status !== 0) {
+      console.log(color.bold(`GET ${url}`));
+      exitNonOk(r);
+      return;
+    }
+  }
+  console.log(color.yellow('No failover endpoint responded (tried admin/failover/{status,events} and providers/failover).'));
+  process.exit(1);
+}
+
+async function cmdRefund(args) {
+  const userId = args._[0];
+  const amount = Number(args._[1]);
+  if (!userId || !Number.isFinite(amount) || amount <= 0) {
+    console.error('Usage: cli.js refund <userId> <positiveAmount>');
+    console.error('  Note: amount is the *positive* number of credits to refund; we call grant-credits with a negative reason tag.');
+    process.exit(2);
+  }
+  const base = adminBase(args);
+  // grant-credits route expects positive credits; we attach a `reason: refund` marker.
+  const url = `${base.replace(/\/+$/, '')}/api/admin/users/${encodeURIComponent(userId)}/grant-credits`;
+  console.log(color.dim(`→ POST ${url} credits=${-amount} (refund)`));
+  const r = await fetchJson(url, {
+    method: 'POST',
+    headers: adminHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ credits: amount, reason: `refund_via_cli:${process.env.USER || 'unknown'}`, refund: true }),
+  });
+  exitNonOk(r);
+  console.log(color.green('✓ refund recorded'));
+  console.log(JSON.stringify(r.body, null, 2));
+}
+
+async function cmdQueueRetry(args) {
+  const name = args._[0];
+  if (!name) {
+    console.error('Usage: cli.js queue-retry <queueName>');
+    process.exit(2);
+  }
+  const base = adminBase(args);
+  const url = `${base.replace(/\/+$/, '')}/api/admin/queues/${encodeURIComponent(name)}/retry-failed`;
+  console.log(color.dim(`→ POST ${url}`));
+  const r = await fetchJson(url, {
+    method: 'POST',
+    headers: adminHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({}),
+  });
+  exitNonOk(r);
+  console.log(color.green(`✓ retried ${r.body?.retried ?? '?'} / ${r.body?.totalFailed ?? '?'} failed jobs`));
+}
+
+async function cmdScrubNow(args) {
+  const userId = args._[0];
+  if (!userId) {
+    console.error('Usage: cli.js scrub-now <userId>');
+    process.exit(2);
+  }
+  const base = adminBase(args);
+  // Try a known/likely scrub endpoint; harmless if 404 — we just report.
+  const candidates = [
+    `/api/admin/users/${encodeURIComponent(userId)}/scrub`,
+    `/api/admin/scrub/${encodeURIComponent(userId)}`,
+  ];
+  for (const path of candidates) {
+    const url = `${base.replace(/\/+$/, '')}${path}`;
+    const r = await fetchJson(url, {
+      method: 'POST',
+      headers: adminHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({}),
+    });
+    if (r.ok) {
+      console.log(color.green(`✓ scrub triggered (${url})`));
+      console.log(JSON.stringify(r.body, null, 2));
+      return;
+    }
+    if (r.status !== 404 && r.status !== 0) {
+      console.log(color.bold(`POST ${url}`));
+      exitNonOk(r);
+      return;
+    }
+  }
+  console.log(color.yellow('No scrub endpoint accepted the request — wire `/api/admin/users/:id/scrub` to enable this command.'));
+  process.exit(1);
+}
+
 function printHelp() {
   console.log(`siraGPT dev CLI
 
@@ -261,9 +418,18 @@ Commands:
   logs [--tail N] [--grep RX] [--file PATH]
                                   tail recent backend logs (falls back to pm2)
 
+Admin (require SIRAGPT_ADMIN_TOKEN env var):
+  audit <userId> [--limit N] [--action A] [--from D] [--to D]
+                                  print recent audit-log entries for a user
+  failover-status                 print current provider failover events
+  refund <userId> <amount>        refund credits (grant-credits with refund flag)
+  queue-retry <queueName>         retry all failed jobs in queue
+  scrub-now <userId>              manually trigger PII scrub for one user
+
 Environment:
-  SIRAGPT_BASE_URL    default base URL (else http://localhost:5000)
-  SIRAGPT_TOKEN       bearer token for shadow-prompt
+  SIRAGPT_BASE_URL          default base URL (else http://localhost:5000)
+  SIRAGPT_TOKEN             bearer token for shadow-prompt
+  SIRAGPT_ADMIN_TOKEN       bearer token (super-admin) for the admin commands
 `);
 }
 
@@ -286,6 +452,16 @@ async function main() {
       return cmdShadowPrompt(args);
     case 'logs':
       return cmdLogs(args);
+    case 'audit':
+      return cmdAudit(args);
+    case 'failover-status':
+      return cmdFailoverStatus(args);
+    case 'refund':
+      return cmdRefund(args);
+    case 'queue-retry':
+      return cmdQueueRetry(args);
+    case 'scrub-now':
+      return cmdScrubNow(args);
     default:
       console.error(color.red(`Unknown command: ${cmd}`));
       printHelp();

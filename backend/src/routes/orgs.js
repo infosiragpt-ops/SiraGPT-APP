@@ -31,6 +31,7 @@ const {
   isValidRole,
   roleAtLeast,
 } = require('../services/orgs-service');
+const { defaultSteps, computeProgress } = require('../services/org-onboarding');
 
 const router = express.Router();
 
@@ -83,10 +84,41 @@ router.post('/', authenticateToken, async (req, res) => {
       req,
     });
 
-    res.status(201).json(serializeOrg(org));
+    const payload = serializeOrg(org);
+    payload.onboardingSteps = defaultSteps();
+    res.status(201).json(payload);
   } catch (err) {
     console.error('[orgs] create failed:', err.message);
     res.status(500).json({ error: 'failed to create organization' });
+  }
+});
+
+// ─── GET /api/orgs/:id/onboarding-progress ──────────────────────────
+// Returns the live onboarding checklist (member count, billing config,
+// chats shared, etc.) so the dashboard can render a progress bar
+// without polling several endpoints individually.
+router.get('/:id/onboarding-progress', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  try {
+    // Caller must be a member of the org (any role). `assertMembership`
+    // throws with err.status on non-member / forbidden.
+    await assertMembership(prisma, orgId, userId);
+
+    const org = await prisma.organization.findUnique({
+      where: { id: orgId },
+      select: { ownerId: true },
+    });
+    const progress = await computeProgress({
+      prisma,
+      orgId,
+      ownerId: org?.ownerId || null,
+    });
+    res.json(progress);
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] onboarding-progress failed:', err.message);
+    res.status(500).json({ error: 'failed to compute onboarding progress' });
   }
 });
 

@@ -1314,6 +1314,26 @@ router.post('/webhooks/retry-failed', requireSuperAdmin, async (req, res) => {
   }
 });
 
+// ── Audit log query DSL endpoint ───────────────────────────────────────────
+// GET /api/admin/audit-logs?userId=&action=&resource=&resourceId=&from=&to=&page=&limit=
+router.get('/audit-logs', requireSuperAdmin, async (req, res) => {
+  try {
+    const { query: auditQuery } = require('../services/audit-query');
+    let q = auditQuery(prisma);
+    if (req.query.userId) q = q.byUser(String(req.query.userId));
+    if (req.query.action) q = q.byAction(String(req.query.action));
+    if (req.query.resource) q = q.byResource(String(req.query.resource), req.query.resourceId ? String(req.query.resourceId) : null);
+    if (req.query.from || req.query.to) q = q.byDate(req.query.from || null, req.query.to || null);
+    if (req.query.page) q = q.page(req.query.page);
+    if (req.query.limit) q = q.limit(req.query.limit);
+    const result = await q.run();
+    res.json(result);
+  } catch (err) {
+    console.error('[admin/audit-logs] failed:', err && err.message ? err.message : err);
+    res.status(500).json({ error: 'Failed to query audit logs' });
+  }
+});
+
 module.exports = router;
 module.exports.metricsHandler = metricsHandler;
 module.exports.INTERNAL = {
