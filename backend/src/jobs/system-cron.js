@@ -7,6 +7,7 @@
  *
  *   02:30 UTC  scrub-deleted-user-content   (cycle 29)
  *   03:00 UTC  hard-delete-deleted-users    (cycle 14, runs after scrub)
+ *   04:30 UTC  sweep-expired-verification-tokens (30d retention)
  *
  * The 30-minute gap gives scrub time to finish before hard-delete
  * starts, so the audit logs and PII redaction are persisted before
@@ -41,6 +42,10 @@ const SESSION_SWEEP_SCHEDULE = process.env.SYSTEM_CRON_SESSION_SWEEP_SCHEDULE ||
 // prune-api-usage (03:30) — the archive picks up any cascade-emitted
 // audit events from the same nightly window.
 const AUDIT_ARCHIVE_SCHEDULE = process.env.SYSTEM_CRON_AUDIT_ARCHIVE_SCHEDULE || '0 4 * * *';
+// EmailVerificationToken 30-day retention. Default 04:30 UTC so it runs
+// after the audit archive (04:00) — the cascade from any user deletions
+// has already been picked up by then.
+const EVT_SWEEP_SCHEDULE = process.env.SYSTEM_CRON_EVT_SWEEP_SCHEDULE || '30 4 * * *';
 
 let _state = null;
 
@@ -248,6 +253,39 @@ function start(opts = {}) {
     { scheduled: false, timezone: 'UTC' },
   );
   tasks.push({ name: 'sweep-expired-sessions', schedule: SESSION_SWEEP_SCHEDULE, task: sessionSweepTask, meta: sessionSweepMeta });
+
+  let evtSweepRunning = false;
+  const evtSweepMeta = {};
+  const evtSweepTask = cron.schedule(
+    EVT_SWEEP_SCHEDULE,
+    async () => {
+      if (evtSweepRunning) {
+        logger.warn?.('[system-cron] skip sweep-expired-verification-tokens — previous run still active');
+        return;
+      }
+      evtSweepRunning = true;
+      const finish = recordRun(evtSweepMeta);
+      let runErr = null;
+      try {
+        // eslint-disable-next-line global-require
+        const job = require('./sweep-expired-verification-tokens');
+        const runWithRetry = wrapWithRetry(() => job.run({ logger }), {
+          onRetry: ({ attempt, delayMs, reason }) =>
+            logger.warn?.(`[system-cron] sweep-expired-verification-tokens retry ${attempt} in ${delayMs}ms (${reason})`),
+        });
+        const res = await runWithRetry();
+        logger.info?.(`[system-cron] sweep-expired-verification-tokens done: ${JSON.stringify(res)}`);
+      } catch (err) {
+        runErr = err;
+        logger.error?.(`[system-cron] sweep-expired-verification-tokens failed: ${err && err.message}`);
+      } finally {
+        evtSweepRunning = false;
+        finish(runErr);
+      }
+    },
+    { scheduled: false, timezone: 'UTC' },
+  );
+  tasks.push({ name: 'sweep-expired-verification-tokens', schedule: EVT_SWEEP_SCHEDULE, task: evtSweepTask, meta: evtSweepMeta });
 
   for (const t of tasks) {
     try { t.task.start(); } catch (err) {

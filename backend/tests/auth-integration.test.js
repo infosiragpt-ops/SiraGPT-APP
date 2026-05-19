@@ -292,6 +292,20 @@ describe('auth · me endpoint', () => {
     assert.equal(res.body.user.email, testUser.email);
     assert.equal(res.body.user.plan, 'PRO');
     assert.equal(res.body.user.password, undefined);
+    // Convenience boolean derived from emailVerifiedAt. The mocked user
+    // above has no emailVerifiedAt set, so the flag should be false.
+    assert.equal(res.body.emailVerified, false);
+  });
+
+  it('exposes emailVerified=true when emailVerifiedAt is set', async () => {
+    store.users[0].emailVerifiedAt = new Date('2026-01-01T00:00:00Z');
+
+    const res = await request(app)
+      .get('/api/auth/me')
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+
+    assert.equal(res.body.emailVerified, true);
   });
 
   it('rejects request without token', async () => {

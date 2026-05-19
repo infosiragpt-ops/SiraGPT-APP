@@ -793,7 +793,11 @@ router.get('/me', authenticateToken, async (req, res) => {
   try {
     const { password: _, ...userWithoutPassword } = req.user;
     const serializedUser = serializeUser(userWithoutPassword);
-    res.json({ user: serializedUser });
+    // Convenience boolean for clients — derived from emailVerifiedAt so
+    // the existing timestamp field stays the source of truth. Adding a
+    // new top-level field is backward compatible.
+    const emailVerified = serializedUser != null && serializedUser.emailVerifiedAt != null;
+    res.json({ user: serializedUser, emailVerified });
   } catch (error) {
     console.error('Get user error:', error);
     res.status(500).json({ error: 'Failed to get user' });
