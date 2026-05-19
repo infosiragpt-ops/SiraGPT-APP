@@ -16,7 +16,68 @@
  * for each authenticated API-key request that passes through the
  * middleware (regardless of whether the scope check passes). Counter
  * increments are best-effort and never throw.
+ *
+ * Ratchet 45 — also samples successful requireScope() calls (1-in-50
+ * by default) and fire-and-forget updates `ApiKey.usedScopes` with a
+ * per-scope `{ count, lastUsedAt }` aggregate. The sampler keeps DB
+ * load negligible while still surfacing "which scopes does this key
+ * actually use?" for ops/audit.
  */
+
+const USED_SCOPE_SAMPLE_RATE = (() => {
+  const raw = Number.parseInt(process.env.SIRAGPT_USED_SCOPE_SAMPLE_RATE || '50', 10);
+  return Number.isFinite(raw) && raw > 0 ? raw : 50;
+})();
+// Per-process counter so the 1-in-N sampling is deterministic across
+// requests served by the same worker. Reset is exposed for tests.
+let _sampleCounter = 0;
+function _shouldSample() {
+  _sampleCounter += 1;
+  return _sampleCounter % USED_SCOPE_SAMPLE_RATE === 0;
+}
+function _resetSampleCounterForTests() { _sampleCounter = 0; }
+
+let _prismaRef = null;
+function _getPrisma() {
+  if (_prismaRef !== null) return _prismaRef;
+  try {
+    // eslint-disable-next-line global-require
+    _prismaRef = require('../config/database');
+  } catch (_err) {
+    _prismaRef = false;
+  }
+  return _prismaRef;
+}
+
+/**
+ * Fire-and-forget per-scope last-used aggregate. Reads the current
+ * `usedScopes` JSON, bumps the entry for `scope`, writes it back. Errors
+ * are swallowed — this must never block the request.
+ */
+function _recordScopeUsage(prisma, keyId, scope) {
+  if (!prisma || !keyId || !scope) return;
+  Promise.resolve()
+    .then(async () => {
+      const row = await prisma.apiKey.findUnique({
+        where: { id: keyId },
+        select: { usedScopes: true },
+      });
+      const current = (row && row.usedScopes && typeof row.usedScopes === 'object')
+        ? { ...row.usedScopes }
+        : {};
+      const prev = current[scope] && typeof current[scope] === 'object' ? current[scope] : {};
+      const prevCount = Number.isFinite(prev.count) ? prev.count : 0;
+      current[scope] = {
+        count: prevCount + USED_SCOPE_SAMPLE_RATE, // upscale to approximate true total
+        lastUsedAt: new Date().toISOString(),
+      };
+      await prisma.apiKey.update({
+        where: { id: keyId },
+        data: { usedScopes: current },
+      });
+    })
+    .catch(() => { /* never break the request */ });
+}
 
 let _metrics = null;
 function getMetrics() {
@@ -78,8 +139,22 @@ function requireScope(needed) {
         required: needed,
       });
     }
+
+    // Sampled per-scope last-used aggregate. Fire-and-forget.
+    if (apiKey.id && _shouldSample()) {
+      const prisma = _getPrisma();
+      if (prisma && prisma.apiKey && typeof prisma.apiKey.update === 'function') {
+        _recordScopeUsage(prisma, apiKey.id, needed);
+      }
+    }
+
     return next();
   };
 }
 
-module.exports = { requireScope, hasScope };
+module.exports = {
+  requireScope,
+  hasScope,
+  _resetSampleCounterForTests,
+  USED_SCOPE_SAMPLE_RATE,
+};

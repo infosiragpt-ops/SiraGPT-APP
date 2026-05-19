@@ -46,6 +46,10 @@ const AUDIT_ARCHIVE_SCHEDULE = process.env.SYSTEM_CRON_AUDIT_ARCHIVE_SCHEDULE ||
 // after the audit archive (04:00) — the cascade from any user deletions
 // has already been picked up by then.
 const EVT_SWEEP_SCHEDULE = process.env.SYSTEM_CRON_EVT_SWEEP_SCHEDULE || '30 4 * * *';
+// Ratchet 45 — ApiKey expiry sweep. Default 04:45 UTC, right after the
+// EVT sweep (04:30). Hard-deletes rows whose `expiresAt` is in the past
+// (auth middleware already rejects them; no need to keep the rows).
+const API_KEY_SWEEP_SCHEDULE = process.env.SYSTEM_CRON_API_KEY_SWEEP_SCHEDULE || '45 4 * * *';
 // Ratchet 45 — flush in-process cost-tracker into the CostUsageDaily
 // table. Default 05:00 UTC so it runs after every other retention job;
 // reports older than 24h are served from this table.
@@ -294,6 +298,40 @@ function start(opts = {}) {
     { scheduled: false, timezone: 'UTC' },
   );
   tasks.push({ name: 'sweep-expired-verification-tokens', schedule: EVT_SWEEP_SCHEDULE, task: evtSweepTask, meta: evtSweepMeta });
+
+  // Ratchet 45 — ApiKey expiry sweep.
+  let apiKeySweepRunning = false;
+  const apiKeySweepMeta = {};
+  const apiKeySweepTask = cron.schedule(
+    API_KEY_SWEEP_SCHEDULE,
+    async () => {
+      if (apiKeySweepRunning) {
+        logger.warn?.('[system-cron] skip sweep-expired-api-keys — previous run still active');
+        return;
+      }
+      apiKeySweepRunning = true;
+      const finish = recordRun(apiKeySweepMeta);
+      let runErr = null;
+      try {
+        // eslint-disable-next-line global-require
+        const job = require('./sweep-expired-api-keys');
+        const runWithRetry = wrapWithRetry(() => job.run({ logger }), {
+          onRetry: ({ attempt, delayMs, reason }) =>
+            logger.warn?.(`[system-cron] sweep-expired-api-keys retry ${attempt} in ${delayMs}ms (${reason})`),
+        });
+        const res = await runWithRetry();
+        logger.info?.(`[system-cron] sweep-expired-api-keys done: ${JSON.stringify(res)}`);
+      } catch (err) {
+        runErr = err;
+        logger.error?.(`[system-cron] sweep-expired-api-keys failed: ${err && err.message}`);
+      } finally {
+        apiKeySweepRunning = false;
+        finish(runErr);
+      }
+    },
+    { scheduled: false, timezone: 'UTC' },
+  );
+  tasks.push({ name: 'sweep-expired-api-keys', schedule: API_KEY_SWEEP_SCHEDULE, task: apiKeySweepTask, meta: apiKeySweepMeta });
 
   // Ratchet 45 — persist AI cost-tracker into CostUsageDaily.
   let costFlushRunning = false;

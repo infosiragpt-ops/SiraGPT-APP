@@ -1263,6 +1263,10 @@ model ApiKey {
   lastUsedAt     DateTime?
   expiresAt      DateTime?
   createdAt      DateTime  @default(now())
+  // Ratchet 45 — per-scope last-used aggregate populated by a sampled
+  // (1-in-50) fire-and-forget update from requireScope(). Shape:
+  // { "<scope>": { count: number, lastUsedAt: ISOString } }
+  usedScopes     Json?
 
   organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
