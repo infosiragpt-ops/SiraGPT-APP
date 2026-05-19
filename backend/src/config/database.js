@@ -40,6 +40,31 @@ const prisma = new PrismaClient({
 // Log pool config at startup for observability
 console.log(`📊 Database pool: min=${POOL_MIN} max=${POOL_MAX} timeout=${POOL_TIMEOUT_MS}ms`);
 
+// ── OTel: wrap $transaction in a `db.transaction` span ──────────────
+// Defensive: if `@opentelemetry/api` or otel-spans isn't available the
+// wrapper is a pass-through. Never break boot when OTel isn't wired.
+try {
+  // eslint-disable-next-line global-require
+  const { withDbTransactionSpan } = require('../utils/otel-spans');
+  if (typeof prisma.$transaction === 'function' && typeof withDbTransactionSpan === 'function') {
+    const originalTx = prisma.$transaction.bind(prisma);
+    prisma.$transaction = function tracedTransaction(arg, opts) {
+      const isBatch = Array.isArray(arg);
+      return withDbTransactionSpan(
+        {
+          db: 'postgresql',
+          operation: 'transaction',
+          batch: isBatch,
+          batchSize: isBatch ? arg.length : undefined,
+        },
+        () => originalTx(arg, opts),
+      );
+    };
+  }
+} catch (_e) {
+  // otel-spans not loadable — leave $transaction untouched.
+}
+
 /**
  * Attempts to connect to PostgreSQL with exponential backoff retry.
  *

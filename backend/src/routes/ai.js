@@ -48,6 +48,12 @@ const rag = require('../services/rag-service');
 const costTracker = require('../services/ai/cost-tracker');
 const anomalyDetector = require('../services/ai/anomaly-detector');
 const tokenBudget = require('../services/ai/token-budget');
+// OTel span helpers — degrade to direct call when OTel isn't configured.
+let _otelSpans = null;
+try { _otelSpans = require('../utils/otel-spans'); } catch (_e) { _otelSpans = null; }
+const withAIGenerateSpan = (_otelSpans && _otelSpans.withAIGenerateSpan)
+  ? _otelSpans.withAIGenerateSpan
+  : (_attrs, fn) => fn();
 const operationalRag = require('../services/rag/operational-runtime');
 const documentProfessionalAnalyzer = require('../services/document-professional-analyzer');
 const documentResponseFidelity = require('../services/document-response-fidelity');
@@ -3077,19 +3083,43 @@ router.post(
           const imageNames = skippedImages.map(f => f.name || f.originalName || 'imagen').join(', ');
           console.log(`[vision] Stripping ${skippedImages.length} image(s) for non-vision model ${actualProvider}:${actualModel}: ${imageNames}`);
         }
-        fullResponseContent = await aiService.generateStream({
-          provider: actualProvider,
-          model: actualModel,
-          messages,
-          res,
-          signal,
-          temperature: actualTemperature,
-          files: filesForVision,
-          language: langResolution.language,
-          userPrompt: prompt,
-          qualityGuard: true,
-          skipDoneSentinel: true,
-        });
+        const __aiSpanStartedAt = Date.now();
+        fullResponseContent = await withAIGenerateSpan(
+          {
+            model: actualModel,
+            provider: actualProvider,
+          },
+          async (span) => {
+            const out = await aiService.generateStream({
+              provider: actualProvider,
+              model: actualModel,
+              messages,
+              res,
+              signal,
+              temperature: actualTemperature,
+              files: filesForVision,
+              language: langResolution.language,
+              userPrompt: prompt,
+              qualityGuard: true,
+              skipDoneSentinel: true,
+            });
+            // Annotate the span with tokensIn / tokensOut now that we
+            // have a final completion. Best-effort: failures don't
+            // surface to the caller.
+            try {
+              if (span && typeof span.setAttributes === 'function') {
+                const tokensIn = usageService.calculateTextTokens(prompt || '', actualModel);
+                const tokensOut = usageService.calculateTextTokens(out || '', actualModel);
+                span.setAttributes({
+                  tokensIn,
+                  tokensOut,
+                  durationMs: Date.now() - __aiSpanStartedAt,
+                });
+              }
+            } catch (_e) { /* swallow */ }
+            return out;
+          },
+        );
 
         if (
           processedFiles.length > 0

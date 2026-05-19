@@ -24,6 +24,13 @@
 
 const crypto = require('crypto');
 const { withRetry } = require('../utils/retry-with-backoff');
+// Optional OTel span helper — falls back to a direct call if the
+// module / SDK aren't present.
+let _otelSpans = null;
+try { _otelSpans = require('../utils/otel-spans'); } catch (_e) { _otelSpans = null; }
+const withWebhookDeliverySpan = (_otelSpans && _otelSpans.withWebhookDeliverySpan)
+  ? _otelSpans.withWebhookDeliverySpan
+  : (_attrs, fn) => fn();
 
 const SIGNATURE_HEADER = 'X-SiraGPT-Signature';
 const DEFAULT_BUFFER_SIZE = 2048;
@@ -164,7 +171,18 @@ async function dispatch({
       async () => {
         entry.attempts += 1;
         entry.lastAttemptAt = new Date().toISOString();
-        const res = await deliverFn({ url, body, headers: finalHeaders, timeoutMs });
+        const res = await withWebhookDeliverySpan(
+          { url, event, attempt: entry.attempts, deliveryId: id },
+          async (span) => {
+            const r = await deliverFn({ url, body, headers: finalHeaders, timeoutMs });
+            try {
+              if (span && typeof span.setAttributes === 'function') {
+                span.setAttributes({ httpStatus: r.status, ok: !!r.ok });
+              }
+            } catch (_e) { /* swallow */ }
+            return r;
+          },
+        );
         entry.httpStatus = res.status;
         if (!res.ok) {
           const err = new Error(`webhook_http_${res.status}`);
