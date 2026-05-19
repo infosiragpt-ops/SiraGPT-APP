@@ -1475,4 +1475,236 @@ router.post('/resend-verification', authenticateToken, resendVerificationRateLim
   }
 });
 
+// ─── SMS-based 2FA login scaffold (ratchet 45, cycle 131) ─────────
+// Two endpoints that scaffold the SMS second-factor on top of the
+// `TwoFAChallenge` Prisma model. The login flow itself (binding a
+// partial session → final JWT only after a verified code) is left
+// for the next cycle — these endpoints expose the challenge
+// lifecycle so the FE can wire the UI in parallel.
+//
+//   POST /api/auth/2fa/sms/challenge { phone | email | sessionToken }
+//     → resolves the contact to a User, mints a 6-digit OTP, fans it
+//       out via Twilio. Returns { challengeId, expiresAt } so the
+//       client can submit /verify without re-sending the contact.
+//
+//   POST /api/auth/2fa/sms/verify { challengeId, code }
+//     → matches the code against the row; on success returns a
+//       fresh JWT bound to the resolved User. Falls back to a
+//       generic 400 on unknown / expired / bad-code so a passive
+//       observer can't enumerate which contacts are registered.
+//
+// Both endpoints are rate-limited per IP+contact / IP+challengeId via
+// the shared auth-rate-limit middleware so distributed brute-force
+// is bounded by the 5-attempts-per-row cap inside the service layer.
+const twoFASms = require('../services/two-fa-sms');
+
+const twoFASmsChallengeRateLimit = makeAuthRateLimit({
+  name: '2fa-sms-challenge',
+  limit: 5,
+  windowMs: 15 * 60 * 1000, // 15 min
+  keyBy: 'ip+email',
+});
+const twoFASmsVerifyRateLimit = makeAuthRateLimit({
+  name: '2fa-sms-verify',
+  limit: 10,
+  windowMs: 15 * 60 * 1000, // 15 min
+  keyBy: 'ip',
+});
+
+router.post(
+  '/2fa/sms/challenge',
+  twoFASmsChallengeRateLimit,
+  [
+    body('phone').optional().isString().trim().isLength({ min: 9, max: 16 }),
+    body('email').optional().isString().trim().isLength({ max: 254 }),
+    body('sessionToken').optional().isString().isLength({ min: 16, max: 1024 }),
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+      const { phone, email, sessionToken } = req.body || {};
+      if (!phone && !email && !sessionToken) {
+        return res.status(400).json({
+          error: 'phone, email, or sessionToken required',
+        });
+      }
+
+      const user = await twoFASms.resolveUser(prisma, { phone, email, sessionToken });
+
+      // Always return a 200-shaped body even when the user lookup
+      // fails — opaque expiresAt + opaque challengeId — so an
+      // attacker can't enumerate "is this email registered?" by
+      // poking the endpoint. We DO NOT mint a row in that case.
+      if (!user || !user.phone || !twoFASms.isValidPhone(user.phone)) {
+        // Audit the miss without leaking which contact field tripped.
+        void writeAuditLog(prisma, {
+          req,
+          action: '2fa_sms_challenge_miss',
+          resource: 'user',
+          metadata: { hasPhone: Boolean(phone), hasEmail: Boolean(email) },
+        });
+        return res.json({
+          ok: true,
+          challengeId: twoFASms.mintChallengeId(),
+          expiresAt: new Date(Date.now() + twoFASms.ttlMs()).toISOString(),
+          smsSent: false,
+          smsSkippedReason: 'unknown-contact',
+        });
+      }
+
+      const { challengeId, code, expiresAt } = await twoFASms.createSmsChallenge(
+        prisma,
+        user,
+        user.phone,
+      );
+
+      const smsResult = await twoFASms.sendSms(user.phone, code);
+
+      void writeAuditLog(prisma, {
+        req,
+        action: '2fa_sms_challenge_sent',
+        resource: 'user',
+        resourceId: user.id,
+        userId: user.id,
+        metadata: {
+          phoneMasked: user.phone.replace(/.(?=.{4})/g, '*'),
+          smsSent: Boolean(smsResult.sent),
+          smsReason: smsResult.reason || null,
+        },
+      });
+
+      const body = {
+        ok: true,
+        challengeId,
+        expiresAt: expiresAt.toISOString(),
+        smsSent: Boolean(smsResult.sent),
+      };
+      if (!smsResult.sent && smsResult.reason) {
+        body.smsSkippedReason = smsResult.reason;
+      }
+      return res.json(body);
+    } catch (error) {
+      if (error?.code === 'invalid_phone' || error?.code === 'unknown_contact') {
+        return res.status(400).json({ error: 'invalid contact for 2FA' });
+      }
+      console.error('[auth/2fa/sms/challenge] failed:', error?.message || error);
+      return res.status(500).json({ error: 'Failed to issue 2FA challenge' });
+    }
+  },
+);
+
+router.post(
+  '/2fa/sms/verify',
+  twoFASmsVerifyRateLimit,
+  [
+    body('challengeId').isString().trim().isLength({ min: 16, max: 128 }),
+    body('code').isString().trim().isLength({ min: 6, max: 6 }),
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+      const { challengeId, code } = req.body;
+      const result = await twoFASms.verifyChallenge(prisma, challengeId, code);
+
+      if (!result.ok) {
+        switch (result.code) {
+          case 'invalid_input':
+            return res.status(400).json({ error: 'challengeId or code malformed' });
+          case 'not_found':
+            return res.status(404).json({ error: 'No active 2FA challenge' });
+          case 'expired':
+            return res.status(410).json({ error: '2FA challenge expired' });
+          case 'too_many_attempts':
+            void writeAuditLog(prisma, {
+              req,
+              action: '2fa_sms_locked',
+              resource: 'user',
+              metadata: { attempts: result.attempts },
+            });
+            return res.status(429).json({
+              error: 'Too many attempts. Request a new code.',
+              attempts: result.attempts,
+            });
+          case 'invalid_code':
+            return res.status(400).json({
+              error: 'Invalid verification code',
+              attempts: result.attempts,
+              remaining: result.remaining,
+            });
+          default:
+            return res.status(400).json({ error: '2FA verification failed' });
+        }
+      }
+
+      // Success — mint a full session JWT for the resolved user. Mirrors
+      // the email/password /login handler so downstream middleware sees
+      // an identical token shape. The partial-session model that would
+      // gate this behind an earlier login step lands next cycle.
+      const user = await prisma.user.findUnique({ where: { id: result.userId } });
+      if (!user) {
+        // The row's user disappeared between challenge mint and verify.
+        return res.status(404).json({ error: 'User no longer exists' });
+      }
+
+      const token = signSessionToken({
+        userId: user.id,
+        isAdmin: Boolean(user.isAdmin),
+        isSuperAdmin: Boolean(user.isSuperAdmin),
+      });
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      const fingerprint = computeFingerprint(req);
+      try {
+        await prisma.session.create({
+          data: { userId: user.id, token, expiresAt, fingerprint },
+        });
+      } catch (e) {
+        if (e && /fingerprint/i.test(String(e.message))) {
+          await prisma.session.create({ data: { userId: user.id, token, expiresAt } });
+        } else {
+          throw e;
+        }
+      }
+
+      const { password: _pw, ...userWithoutPassword } = user;
+      const serializedUser = serializeUser(userWithoutPassword);
+
+      void writeAuditLog(prisma, {
+        req,
+        action: '2fa_sms_verified',
+        resource: 'user',
+        resourceId: user.id,
+        userId: user.id,
+        actorName: user.email,
+      });
+
+      res.cookie('token', token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 7 * 24 * 60 * 60 * 1000,
+      });
+      const csrfToken = issueCsrfToken(res);
+
+      return res.json({
+        ok: true,
+        user: serializedUser,
+        token,
+        csrfToken,
+      });
+    } catch (error) {
+      console.error('[auth/2fa/sms/verify] failed:', error?.message || error);
+      return res.status(500).json({ error: 'Failed to verify 2FA challenge' });
+    }
+  },
+);
+
+// Expose helpers for unit tests (mirrors the SSO __ssoHelpers pattern).
+router.__twoFAHelpers = { twoFASms };
+
 module.exports = router;

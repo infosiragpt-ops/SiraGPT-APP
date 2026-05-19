@@ -107,6 +107,7 @@ model User {
   apiKeys                 ApiKey[]
   emailVerificationTokens EmailVerificationToken[]
   phoneVerifications      PhoneVerification[]
+  twoFAChallenges         TwoFAChallenge[]
 
   // Organization / team membership — multi-tenant scaffolding (cycle 27).
   // A user can belong to multiple organizations with different roles.
@@ -1549,4 +1550,41 @@ model PhoneVerification {
 
   @@index([userId])
   @@map("phone_verifications")
+}
+
+// SMS-based 2FA login challenge (ratchet 45, cycle 131).
+//
+// Holds the bcrypt-hashed 6-digit OTP issued by
+// `POST /api/auth/2fa/sms/challenge`. Unlike `PhoneVerification` this
+// row is meant for the LOGIN flow (so it can be issued without an
+// authenticated session) and is keyed by an opaque `challengeId` that
+// the client echoes back on `POST /api/auth/2fa/sms/verify`. Single-use,
+// TTL 5 minutes (override with `TWOFA_SMS_TTL_MS`), at most 5 verify
+// attempts per row before it's invalidated. The plaintext code is
+// never persisted — we only keep its hash so a DB leak doesn't expose
+// live OTPs. The `lookup` column stores a SHA-256 of the contact value
+// (email or E.164 phone) so attacker-controlled enumeration of "does
+// this email have 2FA?" still requires guessing the hash.
+//
+// Login-flow integration (binding to a partial session, gating the
+// final JWT) is intentionally left for the next cycle — this model
+// scaffolds the challenge lifecycle only.
+model TwoFAChallenge {
+  id          String    @id @default(cuid())
+  challengeId String    @unique
+  userId      String?
+  channel     String    // 'sms'  — leaves room for 'totp' / 'email' later
+  destination String    // E.164 phone or email used to deliver the OTP
+  lookup      String    // SHA-256 of normalized destination for safer indexing
+  codeHash    String
+  expiresAt   DateTime
+  attempts    Int       @default(0)
+  consumedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([lookup])
+  @@map("two_fa_challenges")
 }
