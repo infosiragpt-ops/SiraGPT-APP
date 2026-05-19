@@ -130,3 +130,44 @@ describe('AuditQuery — run()', () => {
     assert.ok(new AuditQuery(null) instanceof AuditQuery);
   });
 });
+
+describe('AuditQuery — byOrg() org scoping', () => {
+  test('byOrg sets metadata JSON path filter', () => {
+    const where = query(null).byOrg('org_42').toWhere();
+    assert.deepEqual(where.metadata, { path: ['orgId'], equals: 'org_42' });
+  });
+
+  test('byOrg is a no-op for empty / non-string input', () => {
+    assert.equal(query(null).byOrg('').toWhere().metadata, undefined);
+    assert.equal(query(null).byOrg(null).toWhere().metadata, undefined);
+    assert.equal(query(null).byOrg(123).toWhere().metadata, undefined);
+  });
+
+  test('byOrg composes with other filters', () => {
+    const where = query(null)
+      .byUser('u1')
+      .byAction('grant_credits')
+      .byOrg('org_42')
+      .toWhere();
+    assert.equal(where.actorId, 'u1');
+    assert.equal(where.action, 'grant_credits');
+    assert.deepEqual(where.metadata, { path: ['orgId'], equals: 'org_42' });
+  });
+
+  test('byOrg flows into prisma findMany where clause', async () => {
+    const { prisma, capture } = makePrismaCapture([{ id: 'a1' }]);
+    await query(prisma).byOrg('org_42').run();
+    assert.deepEqual(capture.findMany.where.metadata, {
+      path: ['orgId'],
+      equals: 'org_42',
+    });
+  });
+
+  test('builder purity holds for byOrg', () => {
+    const a = query(null);
+    const b = a.byOrg('org_42');
+    assert.notEqual(a, b);
+    assert.equal(a.toJSON().orgId, null);
+    assert.equal(b.toJSON().orgId, 'org_42');
+  });
+});

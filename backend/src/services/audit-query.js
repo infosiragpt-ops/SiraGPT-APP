@@ -50,6 +50,7 @@ class AuditQuery {
       action: state.action ?? null,
       resourceType: state.resourceType ?? null,
       resourceId: state.resourceId ?? null,
+      orgId: state.orgId ?? null,
       from: state.from ?? null,
       to: state.to ?? null,
       limit: state.limit ?? DEFAULT_LIMIT,
@@ -78,6 +79,19 @@ class AuditQuery {
       resourceType,
       resourceId: resourceId && typeof resourceId === 'string' ? resourceId : null,
     });
+  }
+
+  /**
+   * Filter by organisation id. The `AuditLog` model has no dedicated
+   * `orgId` column today — writers stash it inside the JSON `metadata`
+   * payload (see `utils/audit-log.js`). We therefore translate the
+   * filter into a Prisma JSON predicate: `metadata: { path: ['orgId'],
+   * equals: <id> }`. Returns a no-op for falsy / non-string input so
+   * callers can chain `byOrg(req.query.orgId)` without pre-validating.
+   */
+  byOrg(orgId) {
+    if (!orgId || typeof orgId !== 'string') return this;
+    return this._clone({ orgId });
   }
 
   byDate(from, to) {
@@ -109,6 +123,13 @@ class AuditQuery {
     if (s.action) where.action = s.action;
     if (s.resourceType) where.resourceType = s.resourceType;
     if (s.resourceId) where.resourceId = s.resourceId;
+    if (s.orgId) {
+      // metadata is `Json?` — Prisma JSON path filter. The writer stores
+      // `metadata.orgId` as a plain string, so `equals` is the correct
+      // operator. We keep this isolated under `where.metadata` so it
+      // composes with any future JSON predicates added by callers.
+      where.metadata = { path: ['orgId'], equals: s.orgId };
+    }
     if (s.from || s.to) {
       where.createdAt = {};
       if (s.from) where.createdAt.gte = s.from;

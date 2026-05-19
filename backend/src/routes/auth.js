@@ -1029,4 +1029,129 @@ router.post('/end-impersonation', authenticateToken, async (req, res) => {
   }
 });
 
+// ── Active session management ──────────────────────────────────────────────
+// GET  /api/auth/sessions       — list this user's active sessions
+// DELETE /api/auth/sessions/:id — revoke a specific session (not current)
+//
+// The Session model has no dedicated ip/ua columns today, so we surface
+// whatever the audit-log writer stashed under `metadata` for the closest
+// preceding `login` / `token_refresh` event of the same user (best-effort).
+// When that lookup yields nothing the IP/UA fields are simply null — the
+// endpoint MUST not throw on missing telemetry.
+const { maskIp, parseUA } = require('../utils/session-info');
+
+router.get('/sessions', authenticateToken, async (req, res) => {
+  try {
+    const now = new Date();
+    const sessions = await prisma.session.findMany({
+      where: { userId: req.user.id, expiresAt: { gt: now } },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, token: true, createdAt: true, expiresAt: true },
+    });
+
+    // Best-effort enrichment: pull recent login/refresh audit rows for
+    // this user so we can attribute ip/ua to each session by createdAt
+    // proximity. Audit-log reads may fail (table missing in narrow test
+    // mocks) — degrade silently.
+    let auditRows = [];
+    try {
+      if (prisma.auditLog && typeof prisma.auditLog.findMany === 'function') {
+        auditRows = await prisma.auditLog.findMany({
+          where: {
+            actorId: req.user.id,
+            action: { in: ['login', 'token_refresh', 'register'] },
+          },
+          orderBy: { createdAt: 'desc' },
+          take: 50,
+          select: { createdAt: true, metadata: true },
+        });
+      }
+    } catch (_) { /* ignore — enrichment is optional */ }
+
+    function pickAuditFor(createdAt) {
+      // Closest audit row at-or-before the session's createdAt within
+      // a 30-minute window. Falls back to the session's own ip/ua from
+      // the active request when the session matches `req.token`.
+      const ts = createdAt instanceof Date ? createdAt.getTime() : 0;
+      let best = null;
+      let bestDelta = Infinity;
+      for (const r of auditRows) {
+        const rt = r.createdAt instanceof Date ? r.createdAt.getTime() : 0;
+        const delta = Math.abs(rt - ts);
+        if (delta < bestDelta && delta < 30 * 60 * 1000) {
+          bestDelta = delta;
+          best = r;
+        }
+      }
+      return best && best.metadata && typeof best.metadata === 'object'
+        ? best.metadata
+        : null;
+    }
+
+    const currentReqMeta = {
+      ip: req.ip || req.headers['x-forwarded-for'] || req.socket?.remoteAddress || null,
+      ua: req.headers['user-agent'] || null,
+    };
+
+    const items = sessions.map((s) => {
+      const isCurrent = s.token === req.token;
+      const meta = pickAuditFor(s.createdAt) || (isCurrent ? currentReqMeta : null) || {};
+      return {
+        id: s.id,
+        createdAt: s.createdAt,
+        expiresAt: s.expiresAt,
+        ip: maskIp(meta.ip || null),
+        ua: parseUA(meta.ua || null),
+        current: isCurrent,
+      };
+    });
+
+    res.json({ sessions: items });
+  } catch (err) {
+    console.error('[auth/sessions] list failed:', err && err.message ? err.message : err);
+    res.status(500).json({ error: 'Failed to list sessions' });
+  }
+});
+
+router.delete('/sessions/:id', authenticateToken, async (req, res) => {
+  try {
+    const id = String(req.params.id || '');
+    if (!id) return res.status(400).json({ error: 'session id required' });
+
+    const target = await prisma.session.findUnique({
+      where: { id },
+      select: { id: true, userId: true, token: true },
+    });
+    if (!target || target.userId !== req.user.id) {
+      // Don't disclose existence of another user's session — same
+      // status code as a genuine 404 keeps enumeration noisy.
+      return res.status(404).json({ error: 'Session not found' });
+    }
+    if (target.token === req.token) {
+      // Refuse to nuke the active session via this endpoint — that's
+      // what /logout is for and avoids a confusing "Suddenly logged out"
+      // surprise after a misclick in the sessions UI.
+      return res.status(400).json({
+        error: 'Cannot revoke the current session; use /api/auth/logout instead',
+        reason: 'is_current',
+      });
+    }
+
+    await prisma.session.delete({ where: { id } });
+    void writeAuditLog(prisma, {
+      req,
+      action: 'session_revoked',
+      resource: 'session',
+      resourceId: id,
+      userId: req.user.id,
+      actorName: req.user.email,
+    });
+
+    res.json({ ok: true, id });
+  } catch (err) {
+    console.error('[auth/sessions/:id] revoke failed:', err && err.message ? err.message : err);
+    res.status(500).json({ error: 'Failed to revoke session' });
+  }
+});
+
 module.exports = router;
