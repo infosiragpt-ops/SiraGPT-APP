@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 
 import {
   constantTimeHexEqual,
+  createNonceCache,
   parseSignatureHeader,
   verifyHmacSignature,
 } from "../lib/integrations/verify-webhook";
@@ -97,6 +98,50 @@ describe("verifyHmacSignature (consumer-side SiraGPT webhook verifier)", () => {
     // Replay v1 digest into the v2 segment (no v1 segment at all).
     const header = `t=${ts},v2=${v1}`;
     assert.equal(verifyHmacSignature(body, header, secret), false);
+  });
+
+  // ── ratchet 45 task 2: per-delivery nonce + replay LRU ────────────
+  it("accepts a v2 signature bound to an n= nonce segment", () => {
+    const secret = "whsec_test_nonce_aaaaaaaaaaaaaaaaaaaaaaaa";
+    const body = "nonce-body";
+    const ts = Math.floor(Date.now() / 1000);
+    const nonce = "deadbeefcafebabedeadbeefcafebabe";
+    const v2 = createHmac("sha256", secret).update(`v2:${ts}.${nonce}.${body}`).digest("hex");
+    const header = `t=${ts},n=${nonce},v2=${v2}`;
+    assert.equal(verifyHmacSignature(body, header, secret), true);
+  });
+
+  it("rejects a replayed nonce within the tolerance window when a cache is passed", () => {
+    const secret = "whsec_test_replay_bbbbbbbbbbbbbbbbbbbbbbbb";
+    const body = "replay-body";
+    const ts = Math.floor(Date.now() / 1000);
+    const nonce = "11112222333344445555666677778888";
+    const v2 = createHmac("sha256", secret).update(`v2:${ts}.${nonce}.${body}`).digest("hex");
+    const header = `t=${ts},n=${nonce},v2=${v2}`;
+    const cache = createNonceCache();
+    assert.equal(verifyHmacSignature(body, header, secret, { nonceCache: cache }), true);
+    assert.equal(verifyHmacSignature(body, header, secret, { nonceCache: cache }), false);
+    // Without a cache, the same header still verifies — replay protection is opt-in.
+    assert.equal(verifyHmacSignature(body, header, secret), true);
+  });
+
+  it("rejects v2 when nonce is tampered (signature mismatch)", () => {
+    const secret = "whsec_test_tamper_cccccccccccccccccccccccc";
+    const body = "x";
+    const ts = Math.floor(Date.now() / 1000);
+    const nonce = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const v2 = createHmac("sha256", secret).update(`v2:${ts}.${nonce}.${body}`).digest("hex");
+    // Swap the nonce in the header but keep the original digest.
+    const header = `t=${ts},n=${"b".repeat(32)},v2=${v2}`;
+    assert.equal(verifyHmacSignature(body, header, secret), false);
+  });
+
+  it("parseSignatureHeader extracts the n= segment", () => {
+    const parsed = parseSignatureHeader("t=42,n=abc123,v1=ff,v2=ee");
+    assert.equal(parsed.timestamp, 42);
+    assert.equal(parsed.nonce, "abc123");
+    assert.equal(parsed.v1, "ff");
+    assert.equal(parsed.v2, "ee");
   });
 
   it("verifies bodies passed as Buffer (raw bytes) identically to strings", () => {

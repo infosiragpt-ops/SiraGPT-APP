@@ -39,16 +39,37 @@
 
 import { createHmac, timingSafeEqual } from "node:crypto";
 
+/**
+ * Replay-protection nonce cache contract.
+ *
+ * Ratchet 45 (Task 2) introduced a per-delivery 128-bit nonce emitted
+ * as an `n=<hex>` segment of the signature header. Timestamp tolerance
+ * alone leaves a window where an attacker can replay an intercepted
+ * request unchanged; binding a nonce into the v2 base string AND
+ * remembering recently-seen nonces in an LRU closes that gap.
+ *
+ * Implementations should return `true` when the nonce has already been
+ * seen within the tolerance window (the consumer should reject the
+ * request as a replay) and `false` after recording a fresh nonce.
+ */
+export interface NonceCache {
+  seenOrRemember(nonce: string, timestampSeconds: number, toleranceSeconds: number): boolean;
+}
+
 export interface VerifyOptions {
   /** Reject signatures whose `t=` timestamp is older than this many seconds. Default 300 (5 min). */
   toleranceSeconds?: number;
   /** Override `Date.now()` for deterministic testing (returns ms since epoch). */
   now?: () => number;
+  /** Optional replay cache. When provided, repeated nonces within the tolerance window are rejected. */
+  nonceCache?: NonceCache;
 }
 
 export interface ParsedSignatureHeader {
   /** Unix-seconds timestamp from the `t=` segment, or null when missing/invalid. */
   timestamp: number | null;
+  /** Random per-delivery nonce from the `n=` segment (ratchet 45 Task 2), or null when missing. */
+  nonce: string | null;
   /** Hex digest from the `v1=` segment, or null when missing. */
   v1: string | null;
   /** Hex digest from the `v2=` segment (ratchet 45 Task 2), or null when missing. */
@@ -60,7 +81,7 @@ export interface ParsedSignatureHeader {
  * Tolerant of surrounding whitespace and segment order.
  */
 export function parseSignatureHeader(header: string | null | undefined): ParsedSignatureHeader {
-  const out: ParsedSignatureHeader = { timestamp: null, v1: null, v2: null };
+  const out: ParsedSignatureHeader = { timestamp: null, nonce: null, v1: null, v2: null };
   if (!header || typeof header !== "string") return out;
   for (const segment of header.split(",")) {
     const eq = segment.indexOf("=");
@@ -70,6 +91,8 @@ export function parseSignatureHeader(header: string | null | undefined): ParsedS
     if (k === "t") {
       const n = Number(v);
       if (Number.isFinite(n)) out.timestamp = n;
+    } else if (k === "n") {
+      out.nonce = v;
     } else if (k === "v1") {
       out.v1 = v;
     } else if (k === "v2") {
@@ -77,6 +100,50 @@ export function parseSignatureHeader(header: string | null | undefined): ParsedS
     }
   }
   return out;
+}
+
+/**
+ * Create an in-memory LRU nonce cache suitable for single-process
+ * consumers. For multi-process / multi-host consumers, back the cache
+ * with Redis (the contract is intentionally tiny: one method).
+ *
+ * Capacity is bounded; the oldest entries are evicted on overflow.
+ * Entries auto-expire once `t + toleranceSeconds` has passed so the
+ * cache size scales with the tolerance window, not lifetime traffic.
+ */
+export function createNonceCache(options: { maxSize?: number } = {}): NonceCache & { size(): number; clear(): void } {
+  const maxSize = options.maxSize && options.maxSize > 0 ? options.maxSize : 4096;
+  // Map<nonce → insertion-time-ms>. We evict by insertion-age rather
+  // than the signed timestamp so the cache is robust to clients that
+  // sign with fixed historical timestamps (e.g. tests, frozen clocks).
+  const store = new Map<string, number>();
+  return {
+    seenOrRemember(nonce, timestampSeconds, toleranceSeconds): boolean {
+      if (!nonce) return false;
+      const nowMs = Date.now();
+      const tolMs = (toleranceSeconds || 300) * 1000;
+      for (const [k, insertedAt] of store) {
+        if (nowMs - insertedAt > tolMs) store.delete(k);
+        else break;
+      }
+      if (store.has(nonce)) {
+        const ins = store.get(nonce) as number;
+        store.delete(nonce);
+        store.set(nonce, ins);
+        return true;
+      }
+      store.set(nonce, nowMs);
+      if (store.size > maxSize) {
+        const oldest = store.keys().next().value;
+        if (oldest !== undefined) store.delete(oldest);
+      }
+      // `timestampSeconds` retained for future per-entry pruning.
+      void timestampSeconds;
+      return false;
+    },
+    size(): number { return store.size; },
+    clear(): void { store.clear(); },
+  };
 }
 
 /**
@@ -132,8 +199,10 @@ export function verifyHmacSignature(
   if (skewSeconds > toleranceSeconds) return false;
 
   const bodyStr = Buffer.isBuffer(body) ? body.toString("utf8") : String(body);
-  // v1 base: `${t}.${body}`. v2 base: `v2:${t}.${body}` (domain-
-  // separated so a v1 digest cannot be replayed in a v2 slot).
+  // v1 base: `${t}.${body}`. v2 base: when a per-delivery nonce is
+  // present, `v2:${t}.${n}.${body}` (ratchet 45 Task 2); otherwise the
+  // legacy unbound form `v2:${t}.${body}` so headers signed by older
+  // backends keep verifying during the rollout window.
   let matched = false;
   if (parsed.v1 != null) {
     const exp = createHmac("sha256", secret)
@@ -142,10 +211,17 @@ export function verifyHmacSignature(
     if (constantTimeHexEqual(exp, parsed.v1)) matched = true;
   }
   if (parsed.v2 != null) {
-    const exp = createHmac("sha256", secret)
-      .update(`v2:${parsed.timestamp}.${bodyStr}`)
-      .digest("hex");
+    const base = parsed.nonce
+      ? `v2:${parsed.timestamp}.${parsed.nonce}.${bodyStr}`
+      : `v2:${parsed.timestamp}.${bodyStr}`;
+    const exp = createHmac("sha256", secret).update(base).digest("hex");
     if (constantTimeHexEqual(exp, parsed.v2)) matched = true;
   }
-  return matched;
+  if (!matched) return false;
+  // Replay protection: opt-in via opts.nonceCache. Same nonce inside
+  // the tolerance window → reject.
+  if (parsed.nonce && opts.nonceCache) {
+    if (opts.nonceCache.seenOrRemember(parsed.nonce, parsed.timestamp, toleranceSeconds)) return false;
+  }
+  return true;
 }

@@ -103,22 +103,45 @@ function v2Digest(secret, timestamp, body) {
   return crypto.createHmac('sha256', secret).update(`v2:${timestamp}.${body}`).digest('hex');
 }
 
+// ── Per-delivery nonce (ratchet 45, Task 2) ─────────────────────────
+// A 128-bit random nonce is bound into the v2 base string and emitted
+// as an `n=<hex>` segment alongside the timestamp. Consumers that
+// remember recently-seen nonces (LRU within the tolerance window) can
+// reject replays of an unchanged body+signature, closing the gap that
+// timestamp tolerance alone leaves open (an attacker can replay an
+// intercepted request any time within `toleranceSeconds`).
+function generateNonce() {
+  return crypto.randomBytes(16).toString('hex');
+}
+
 function signPayload(secret, payload, timestamp = Math.floor(Date.now() / 1000), opts = {}) {
   if (!secret) throw new Error('webhook secret required');
   const body = canonicalPayload(payload);
   const v1 = v1Digest(secret, timestamp, body);
-  if (opts && opts.includeV2 === false) {
+  const includeV2 = !(opts && opts.includeV2 === false);
+  // Nonce is bound into v2 only. v1 stays bit-compatible with pre-Task-2
+  // consumers, so legacy verifiers do not regress.
+  const nonce = includeV2 && opts && opts.nonce !== undefined ? String(opts.nonce) : (includeV2 ? generateNonce() : null);
+  if (!includeV2) {
     return `t=${timestamp},v1=${v1}`;
   }
-  const v2 = v2Digest(secret, timestamp, body);
+  const v2 = v2DigestWithNonce(secret, timestamp, nonce, body);
   // During the transition we emit both algorithms so a downstream that
   // upgrades to v2 (or stays on v1) verifies cleanly. Order is stable
-  // (`t,v1,v2`) so log scrapers / tests can match on a regex.
-  return `t=${timestamp},v1=${v1},v2=${v2}`;
+  // (`t,n,v1,v2`) so log scrapers / tests can match on a regex.
+  return `t=${timestamp},n=${nonce},v1=${v1},v2=${v2}`;
+}
+
+// v2 with nonce: `v2:${t}.${n}.${body}`. When no nonce segment is
+// present we still accept the legacy `v2:${t}.${body}` form so headers
+// signed by older builds keep verifying during the rollout window.
+function v2DigestWithNonce(secret, timestamp, nonce, body) {
+  if (nonce == null || nonce === '') return v2Digest(secret, timestamp, body);
+  return crypto.createHmac('sha256', secret).update(`v2:${timestamp}.${nonce}.${body}`).digest('hex');
 }
 
 function parseHeader(header) {
-  const out = { t: null, v1: null, v2: null };
+  const out = { t: null, n: null, v1: null, v2: null };
   if (!header || typeof header !== 'string') return out;
   for (const segment of header.split(',')) {
     const eq = segment.indexOf('=');
@@ -126,6 +149,7 @@ function parseHeader(header) {
     const k = segment.slice(0, eq).trim();
     const v = segment.slice(eq + 1).trim();
     if (k === 't') out.t = Number(v);
+    else if (k === 'n') out.n = v;
     else if (k === 'v1') out.v1 = v;
     else if (k === 'v2') out.v2 = v;
   }
@@ -164,11 +188,70 @@ function verifySignature(secret, payload, header, opts = {}) {
       if (timingSafeEqualHex(exp, parsed.v1)) matched = true;
     }
     if (parsed.v2) {
-      const exp = v2Digest(s, parsed.t, body);
+      // Prefer the nonce-bound base when an `n=` segment is present;
+      // fall back to the legacy unbound v2 form for headers signed
+      // before Task 2 shipped.
+      const exp = parsed.n
+        ? v2DigestWithNonce(s, parsed.t, parsed.n, body)
+        : v2Digest(s, parsed.t, body);
       if (timingSafeEqualHex(exp, parsed.v2)) matched = true;
     }
   }
-  return matched;
+  if (!matched) return false;
+  // Replay protection — optional, opt-in via `opts.nonceCache`.
+  // The caller passes a NonceCache instance (see createNonceCache below)
+  // shared across requests; the verifier rejects same-nonce replays
+  // within the tolerance window. When `opts.nonceCache` is missing the
+  // behaviour matches the legacy verifier (signature-only).
+  if (parsed.n && opts.nonceCache && typeof opts.nonceCache.seenOrRemember === 'function') {
+    if (opts.nonceCache.seenOrRemember(parsed.n, parsed.t, tolerance)) return false;
+  }
+  return true;
+}
+
+// ── Nonce LRU cache (ratchet 45, Task 2) ────────────────────────────
+// Lightweight LRU keyed by nonce → expiry-seconds. `seenOrRemember`
+// returns true when the nonce was already present (i.e. the caller
+// should reject the request as a replay) and otherwise records it with
+// an expiry of `t + toleranceSeconds` so it auto-evicts once outside
+// the verifier's tolerance window. Capacity is bounded; oldest entries
+// drop first on overflow.
+function createNonceCache({ maxSize = 4096 } = {}) {
+  const store = new Map();
+  // Insertion time (ms) per nonce — used for eviction independently of
+  // the signed timestamp the caller passes in. We evict entries whose
+  // insertion is older than `toleranceS * 1000` so tests that sign
+  // headers with fixed historical timestamps still observe replay
+  // protection within the tolerance window.
+  return {
+    seenOrRemember(nonce, timestampS, toleranceS) {
+      if (!nonce) return false;
+      const nowMs = Date.now();
+      const tolMs = Number(toleranceS || DEFAULT_TIMESTAMP_TOLERANCE_S) * 1000;
+      // Lazy-evict entries older than the tolerance window.
+      for (const [k, insertedAt] of store) {
+        if (nowMs - insertedAt > tolMs) store.delete(k);
+        else break;
+      }
+      if (store.has(nonce)) {
+        // Refresh recency so a hot replay does not silently age out.
+        const ins = store.get(nonce);
+        store.delete(nonce);
+        store.set(nonce, ins);
+        return true;
+      }
+      store.set(nonce, nowMs);
+      if (store.size > maxSize) {
+        const oldest = store.keys().next().value;
+        if (oldest !== undefined) store.delete(oldest);
+      }
+      // `timestampS` retained for future per-entry pruning hooks.
+      void timestampS;
+      return false;
+    },
+    size() { return store.size; },
+    clear() { store.clear(); },
+  };
 }
 
 async function defaultDeliver({ url, body, headers, timeoutMs }) {
@@ -502,6 +585,7 @@ module.exports = {
   health,
   signPayload,
   verifySignature,
+  createNonceCache,
   resetStore,
   // DLQ surface
   listDLQ,

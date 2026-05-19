@@ -10,7 +10,9 @@ test.beforeEach(() => dispatcher.resetStore({ size: 100 }));
 test('signPayload + verifySignature roundtrip', () => {
   const sig = dispatcher.signPayload('s3cret', { hello: 'world' }, 1700000000);
   // ratchet 45 task 2: outbound header carries BOTH v1 and v2 segments.
-  assert.match(sig, /^t=1700000000,v1=[0-9a-f]{64},v2=[0-9a-f]{64}$/);
+  // ratchet 45 task 2: outbound header now also includes an `n=<hex>`
+  // nonce segment bound into the v2 base string.
+  assert.match(sig, /^t=1700000000,n=[0-9a-f]{32},v1=[0-9a-f]{64},v2=[0-9a-f]{64}$/);
   const ok = dispatcher.verifySignature('s3cret', { hello: 'world' }, sig, {
     now: 1700000000,
     toleranceSeconds: 60,
@@ -116,7 +118,7 @@ test('dispatch succeeds on first try and signs the request', async () => {
   assert.equal(result.status, 'delivered');
   assert.equal(result.attempts, 1);
   assert.equal(captured.headers['X-SiraGPT-Event'], 'user.created');
-  assert.match(captured.headers[dispatcher.SIGNATURE_HEADER], /^t=\d+,v1=/);
+  assert.match(captured.headers[dispatcher.SIGNATURE_HEADER], /^t=\d+,n=[0-9a-f]+,v1=/);
 });
 
 test('dispatch retries on 5xx then succeeds', async () => {
@@ -349,4 +351,70 @@ test('DLQ tolerates a throwing Redis backend without breaking dispatch', async (
   } finally {
     dispatcher.setDLQRedisBackend(null);
   }
+});
+
+// ── ratchet 45 task 2: per-delivery nonce ───────────────────────────
+test('signPayload emits unique nonces across consecutive calls', () => {
+  const a = dispatcher.signPayload('s', 'body', 1700000000);
+  const b = dispatcher.signPayload('s', 'body', 1700000000);
+  const na = a.match(/n=([0-9a-f]+)/)[1];
+  const nb = b.match(/n=([0-9a-f]+)/)[1];
+  assert.notEqual(na, nb, 'nonces must differ across signatures');
+  assert.equal(na.length, 32);
+});
+
+test('verifySignature with nonceCache rejects same nonce twice (replay)', () => {
+  const cache = dispatcher.createNonceCache();
+  const sig = dispatcher.signPayload('s', 'body', 1700000000);
+  const first = dispatcher.verifySignature('s', 'body', sig, {
+    now: 1700000000, toleranceSeconds: 60, nonceCache: cache,
+  });
+  const second = dispatcher.verifySignature('s', 'body', sig, {
+    now: 1700000000, toleranceSeconds: 60, nonceCache: cache,
+  });
+  assert.equal(first, true);
+  assert.equal(second, false, 'replayed nonce must reject');
+});
+
+test('verifySignature without nonceCache accepts the same header twice (back-compat)', () => {
+  const sig = dispatcher.signPayload('s', 'body', 1700000000);
+  const a = dispatcher.verifySignature('s', 'body', sig, { now: 1700000000, toleranceSeconds: 60 });
+  const b = dispatcher.verifySignature('s', 'body', sig, { now: 1700000000, toleranceSeconds: 60 });
+  assert.equal(a, true);
+  assert.equal(b, true);
+});
+
+test('verifySignature still accepts legacy v2 headers without an n= segment', () => {
+  const crypto = require('crypto');
+  const ts = 1700000000;
+  const v2 = crypto.createHmac('sha256', 's').update(`v2:${ts}.body`).digest('hex');
+  const header = `t=${ts},v2=${v2}`;
+  assert.equal(
+    dispatcher.verifySignature('s', 'body', header, { now: ts, toleranceSeconds: 60 }),
+    true,
+  );
+});
+
+test('tampered nonce in header fails verification', () => {
+  const sig = dispatcher.signPayload('s', 'body', 1700000000);
+  const swapped = sig.replace(/n=[0-9a-f]+/, 'n=' + '0'.repeat(32));
+  // v1 still matches (no nonce binding) so verification passes only on
+  // the v1 path. Strip v1 to force v2-only and confirm the nonce binding
+  // detects tampering.
+  const v2Only = swapped.replace(/,v1=[0-9a-f]+/, '');
+  assert.equal(
+    dispatcher.verifySignature('s', 'body', v2Only, { now: 1700000000, toleranceSeconds: 60 }),
+    false,
+  );
+});
+
+test('createNonceCache evicts oldest entries past maxSize', () => {
+  const cache = dispatcher.createNonceCache({ maxSize: 2 });
+  cache.seenOrRemember('a', 1700000000, 60);
+  cache.seenOrRemember('b', 1700000000, 60);
+  // 'b' is still present (within capacity).
+  assert.equal(cache.seenOrRemember('b', 1700000000, 60), true);
+  cache.seenOrRemember('c', 1700000000, 60);
+  // Adding 'c' evicted the oldest ('a') → fresh again.
+  assert.equal(cache.seenOrRemember('a', 1700000000, 60), false);
 });

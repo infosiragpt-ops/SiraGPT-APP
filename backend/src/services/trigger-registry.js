@@ -47,6 +47,51 @@ const KNOWN_SET = new Set(TRIGGERS);
 const DEFAULT_IDEMPOTENCY_TTL_MS = 60_000;
 const DEFAULT_LRU_SIZE = 512;
 
+// ── Event glob matcher (ratchet 45, Task 1) ──────────────────────────
+// WebhookEndpoint.events entries may be:
+//   - the literal '*' (subscribe to everything — legacy behaviour)
+//   - an exact event name (e.g. 'org.invitation.created')
+//   - a glob with '*' wildcards matching any run of non-dot OR dot
+//     characters between dots, e.g. 'org.invitation.*' matches all
+//     three lifecycle events but NOT 'org.member.created'.
+//     'chat.*' matches 'chat.created' / 'chat.message_sent' / etc.
+//     '*.created' matches every '*.created' tail.
+// A trailing '.**' (double-star) explicitly allows multi-segment tails
+// — kept for forwards compatibility but currently equivalent to '.*'
+// because all known triggers have a single segment after the prefix.
+//
+// Compiled regexes are cached per pattern to keep the per-publish hot
+// path allocation-free for repeated subscribers.
+const _globCache = new Map();
+function _compileGlob(pattern) {
+  if (_globCache.has(pattern)) return _globCache.get(pattern);
+  // Escape regex metacharacters except '*', then translate '*' tokens.
+  // Sequence order matters: handle '**' before single '*'.
+  const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(
+    '^' + escaped.replace(/\*\*/g, '::DOUBLESTAR::').replace(/\*/g, '[^.]*').replace(/::DOUBLESTAR::/g, '.*') + '$',
+  );
+  _globCache.set(pattern, re);
+  return re;
+}
+
+function eventMatches(pattern, event) {
+  if (typeof pattern !== 'string' || typeof event !== 'string') return false;
+  if (pattern === '*' || pattern === '**') return true;
+  if (pattern === event) return true;
+  // Fast-reject: no glob char → must be an exact match (already failed).
+  if (!pattern.includes('*')) return false;
+  return _compileGlob(pattern).test(event);
+}
+
+function endpointMatchesEvent(endpoint, event) {
+  const events = Array.isArray(endpoint && endpoint.events) ? endpoint.events : [];
+  for (const p of events) {
+    if (eventMatches(p, event)) return true;
+  }
+  return false;
+}
+
 let prismaRef = null;
 function getPrisma() {
   if (prismaRef) return prismaRef;
@@ -193,8 +238,7 @@ async function publish(event, payload, userId, opts = {}) {
   const endpoints = [...endpointsById.values()];
 
   for (const ep of endpoints) {
-    const events = Array.isArray(ep.events) ? ep.events : [];
-    if (!events.includes(event) && !events.includes('*')) continue;
+    if (!endpointMatchesEvent(ep, event)) continue;
     if (!dispatcher || typeof dispatcher.dispatch !== 'function') break;
     try {
       const result = await dispatcher.dispatch({
@@ -286,4 +330,6 @@ module.exports = {
   __setSlackSender,
   // exposed for tests
   _eventHash: eventHash,
+  eventMatches,
+  endpointMatchesEvent,
 };

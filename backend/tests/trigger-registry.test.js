@@ -118,6 +118,51 @@ describe('trigger-registry · publishDebounced', () => {
   });
 });
 
+describe('trigger-registry · event glob matcher (ratchet 45 Task 1)', () => {
+  beforeEach(() => triggers.resetForTests());
+
+  test('eventMatches handles literal, single-star and double-star patterns', () => {
+    assert.equal(triggers.eventMatches('chat.created', 'chat.created'), true);
+    assert.equal(triggers.eventMatches('chat.created', 'chat.archived'), false);
+    assert.equal(triggers.eventMatches('*', 'anything.here'), true);
+    assert.equal(triggers.eventMatches('**', 'a.b.c'), true);
+    // Single-star tail matches one segment.
+    assert.equal(triggers.eventMatches('org.invitation.*', 'org.invitation.created'), true);
+    assert.equal(triggers.eventMatches('org.invitation.*', 'org.invitation.accepted'), true);
+    assert.equal(triggers.eventMatches('org.invitation.*', 'org.invitation.revoked'), true);
+    // Negative: different prefix must not match.
+    assert.equal(triggers.eventMatches('org.invitation.*', 'org.member.created'), false);
+    // Negative: '.*' is single-segment only.
+    assert.equal(triggers.eventMatches('org.invitation.*', 'org.invitation.created.extra'), false);
+    // Prefix wildcard.
+    assert.equal(triggers.eventMatches('*.created', 'chat.created'), true);
+    assert.equal(triggers.eventMatches('*.created', 'payment.succeeded'), false);
+    // Bad inputs return false instead of throwing.
+    assert.equal(triggers.eventMatches(null, 'x'), false);
+    assert.equal(triggers.eventMatches('x', null), false);
+  });
+
+  test('publish fans out via wildcard subscription org.invitation.*', async () => {
+    const calls = [];
+    triggers.__setPrisma(buildFakePrisma({
+      endpoints: [
+        { id: 'e1', url: 'https://a/x', events: ['org.invitation.*'], secret: 's', isActive: true },
+        { id: 'e2', url: 'https://b/x', events: ['org.member.*'], secret: 's', isActive: true },
+      ],
+    }));
+    triggers.__setDispatcher({
+      dispatch: async (opts) => { calls.push(opts.event); return { status: 'delivered' }; },
+    });
+    triggers.__setSlackSender(null);
+
+    const r1 = await triggers.publish('org.invitation.created', { id: 'i1' }, 'u1');
+    const r2 = await triggers.publish('org.invitation.accepted', { id: 'i2' }, 'u1');
+    const r3 = await triggers.publish('org.invitation.revoked', { id: 'i3' }, 'u1');
+    assert.deepEqual(calls, ['org.invitation.created', 'org.invitation.accepted', 'org.invitation.revoked']);
+    assert.equal(r1.dispatched + r2.dispatched + r3.dispatched, 3);
+  });
+});
+
 describe('trigger-registry · _eventHash', () => {
   test('is deterministic for the same input', () => {
     const a = triggers._eventHash('chat.created', 'u1', { id: 1 });
