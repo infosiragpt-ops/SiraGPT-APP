@@ -104,6 +104,7 @@ model User {
   ownedOrganizations      Organization[]  @relation("OrganizationOwner")
   organizationMemberships OrgMembership[]
   sentOrgInvitations      OrgInvitation[] @relation("OrgInvitationInviter")
+  createdOrgAnnouncements OrgAnnouncement[] @relation("OrgAnnouncementCreator")
 
   @@index([deletedAt])
   @@map("users")
@@ -1389,6 +1390,7 @@ model Organization {
   webhookEndpoints  WebhookEndpoint[]
   slackIntegrations SlackIntegration[]
   apiKeys           ApiKey[]
+  announcements     OrgAnnouncement[]
 
   @@index([ownerId])
   @@index([slug])
@@ -1439,6 +1441,37 @@ model OrgInvitation {
   @@index([orgId, email])
   @@index([email])
   @@map("org_invitations")
+}
+
+// Org-wide announcements (ratchet 45).
+//
+// ADMIN+ members can publish banner-style announcements to every
+// member of the organization. Rows can carry an optional
+// `expiresAt` after which the GET feed hides them, and a severity
+// level so the UI can choose styling.
+enum OrgAnnouncementSeverity {
+  info
+  warn
+  critical
+}
+
+model OrgAnnouncement {
+  id          String                  @id @default(cuid())
+  orgId       String
+  title       String
+  body        String
+  createdById String
+  severity    OrgAnnouncementSeverity @default(info)
+  createdAt   DateTime                @default(now())
+  expiresAt   DateTime?
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  createdBy    User         @relation("OrgAnnouncementCreator", fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([orgId, createdAt])
+  @@index([orgId, expiresAt])
+  @@index([createdById])
+  @@map("org_announcements")
 }
 
 // Email verification token (ratchet 45).

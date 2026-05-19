@@ -3228,6 +3228,162 @@ async function configureOrgSsoDomainsHandler(req, res, deps = { prisma, writeAud
 
 router.post('/:id/sso/domains', authenticateToken, (req, res) => configureOrgSsoDomainsHandler(req, res));
 
+// ─── Org-wide announcements (ratchet 45) ────────────────────────────
+// ADMIN+ members can broadcast banner-style messages to every member
+// of the org. The GET feed is open to any member of the org and only
+// returns non-expired rows.
+const ANNOUNCEMENT_SEVERITIES = new Set(['info', 'warn', 'critical']);
+const ANNOUNCEMENT_TITLE_MAX = 200;
+const ANNOUNCEMENT_BODY_MAX = 10_000;
+
+function serializeAnnouncement(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    orgId: row.orgId,
+    title: row.title,
+    body: row.body,
+    severity: row.severity,
+    createdById: row.createdById,
+    createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt,
+    expiresAt: row.expiresAt
+      ? row.expiresAt instanceof Date
+        ? row.expiresAt.toISOString()
+        : row.expiresAt
+      : null,
+  };
+}
+
+// POST /api/orgs/:id/announcements (ADMIN+)
+router.post('/:id/announcements', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  try {
+    const membership = await assertMembership(prisma, orgId, userId, 'ADMIN');
+    if (!canManageMembers(membership.role)) {
+      return res.status(403).json({ error: 'insufficient role to create announcements' });
+    }
+
+    const body = req.body || {};
+    const title = typeof body.title === 'string' ? body.title.trim() : '';
+    const text = typeof body.body === 'string' ? body.body.trim() : '';
+    const severity = typeof body.severity === 'string' ? body.severity : 'info';
+    if (!title || title.length > ANNOUNCEMENT_TITLE_MAX) {
+      return res.status(400).json({ error: 'invalid title' });
+    }
+    if (!text || text.length > ANNOUNCEMENT_BODY_MAX) {
+      return res.status(400).json({ error: 'invalid body' });
+    }
+    if (!ANNOUNCEMENT_SEVERITIES.has(severity)) {
+      return res.status(400).json({ error: 'invalid severity' });
+    }
+
+    let expiresAt = null;
+    if (body.expiresAt !== undefined && body.expiresAt !== null && body.expiresAt !== '') {
+      const parsed = new Date(body.expiresAt);
+      if (Number.isNaN(parsed.getTime())) {
+        return res.status(400).json({ error: 'invalid expiresAt' });
+      }
+      if (parsed.getTime() <= Date.now()) {
+        return res.status(400).json({ error: 'expiresAt must be in the future' });
+      }
+      expiresAt = parsed;
+    }
+
+    const created = await prisma.orgAnnouncement.create({
+      data: {
+        orgId,
+        title,
+        body: text,
+        severity,
+        createdById: userId,
+        expiresAt,
+      },
+    });
+
+    void writeAuditLog(prisma, {
+      action: 'org_announcement_create',
+      userId,
+      resource: 'organization',
+      resourceId: orgId,
+      after: { announcementId: created.id, title, severity, expiresAt },
+      metadata: { orgId },
+      req,
+    });
+
+    res.status(201).json({ announcement: serializeAnnouncement(created) });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] create announcement failed:', err.message);
+    res.status(500).json({ error: 'failed to create announcement' });
+  }
+});
+
+// GET /api/orgs/:id/announcements — any member, only non-expired rows.
+router.get('/:id/announcements', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  try {
+    await assertMembership(prisma, orgId, userId, 'VIEWER');
+
+    const now = new Date();
+    const rows = await prisma.orgAnnouncement.findMany({
+      where: {
+        orgId,
+        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    res.json({ items: rows.map(serializeAnnouncement) });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] list announcements failed:', err.message);
+    res.status(500).json({ error: 'failed to list announcements' });
+  }
+});
+
+// DELETE /api/orgs/:id/announcements/:announcementId (ADMIN+)
+router.delete('/:id/announcements/:announcementId', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  const announcementId = req.params.announcementId;
+  if (!announcementId) return res.status(400).json({ error: 'invalid announcementId' });
+
+  try {
+    const membership = await assertMembership(prisma, orgId, userId, 'ADMIN');
+    if (!canManageMembers(membership.role)) {
+      return res.status(403).json({ error: 'insufficient role to delete announcements' });
+    }
+
+    const existing = await prisma.orgAnnouncement.findUnique({
+      where: { id: announcementId },
+      select: { id: true, orgId: true, title: true, severity: true },
+    });
+    if (!existing || existing.orgId !== orgId) {
+      return res.status(404).json({ error: 'announcement not found' });
+    }
+
+    await prisma.orgAnnouncement.delete({ where: { id: existing.id } });
+
+    void writeAuditLog(prisma, {
+      action: 'org_announcement_delete',
+      userId,
+      resource: 'organization',
+      resourceId: orgId,
+      before: { announcementId: existing.id, title: existing.title, severity: existing.severity },
+      metadata: { orgId },
+      req,
+    });
+
+    res.json({ ok: true });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] delete announcement failed:', err.message);
+    res.status(500).json({ error: 'failed to delete announcement' });
+  }
+});
+
 // Expose constants for tests/inspection.
 router.__roleAtLeast = roleAtLeast;
 router.__handlers = {
@@ -3256,6 +3412,13 @@ router.__billing = {
   firstOfNextMonth,
   computePercentUsed,
   toBigIntString,
+};
+
+router.__announcements = {
+  ANNOUNCEMENT_SEVERITIES,
+  ANNOUNCEMENT_TITLE_MAX,
+  ANNOUNCEMENT_BODY_MAX,
+  serializeAnnouncement,
 };
 
 module.exports = router;
