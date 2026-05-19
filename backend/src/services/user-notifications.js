@@ -63,6 +63,19 @@ async function createNotification(prisma, args) {
       // eslint-disable-next-line no-console
       console.warn('[user-notifications] webpush dispatch failed:', err?.message || err);
     }
+
+    // Ratchet 45 — also try SMS via Twilio when the user opted-in by
+    // setting `User.phone` and Twilio env is configured. The bridge
+    // short-circuits gracefully when twilio isn't installed or env is
+    // missing, so this is a true no-op in dev environments.
+    try {
+      // eslint-disable-next-line global-require
+      const sms = require('./sms-delivery');
+      Promise.resolve(sms.maybeDeliver(prisma, row)).catch(() => { /* noop */ });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn('[user-notifications] sms dispatch failed:', err?.message || err);
+    }
   }
 
   return row;

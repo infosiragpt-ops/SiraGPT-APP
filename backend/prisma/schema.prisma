@@ -70,6 +70,11 @@ model User {
   // a freshly-invited stranger can't slip past identity checks.
   emailVerifiedAt DateTime?
 
+  // SMS opt-in — E.164 phone number used by the SMS-delivery bridge
+  // (ratchet 45) to fan out `severity === 'critical'` notifications
+  // through Twilio. Nullable: users without a phone simply skip SMS.
+  phone String?
+
   // Relations
   chats                   Chat[]
   payments                Payment[]
