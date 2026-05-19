@@ -234,14 +234,18 @@ router.post('/invitation/:token/accept', authenticateToken, async (req, res) => 
       try {
         const { createVerificationToken } = require('../services/email-verification');
         const emailService = require('../services/email');
+        const retryQueue = require('../services/failed-email-retry');
         const { token: vToken, expiresAt } = await createVerificationToken(prisma, userId);
         // Fire-and-forget — SMTP failures must not block the API
-        // response. The FE will offer a "resend" affordance.
-        Promise.resolve(
-          emailService.sendEmailVerification(
-            { name: req.user.name, email: req.user.email },
-            vToken,
-          ),
+        // response. The FE will offer a "resend" affordance. Failed
+        // sends are queued for the 06:00 UTC retry cron (critical
+        // email per ratchet 45).
+        const userArg = { name: req.user.name, email: req.user.email };
+        retryQueue.enqueueIfFailed(
+          prisma,
+          'verification',
+          { user: userArg, token: vToken },
+          Promise.resolve(emailService.sendEmailVerification(userArg, vToken)),
         ).catch(() => {});
         return res.status(202).json({
           ok: false,
@@ -270,18 +274,33 @@ router.post('/invitation/:token/accept', authenticateToken, async (req, res) => 
       return created;
     });
 
-    // Fire-and-forget welcome email. No-op when SMTP is unconfigured;
-    // the boolean result feeds into the audit log so operators can
-    // tell whether the user actually received the welcome message.
+    // Fire-and-forget welcome email. No-op when SMTP is unconfigured
+    // or when the user has opted out of `invitations` notifications.
+    // Failures are persisted into the failed-email retry queue so a
+    // transient SMTP outage doesn't silently break onboarding —
+    // critical email per ratchet 45. The boolean result feeds into the
+    // audit log so operators can tell whether the user actually
+    // received the welcome message.
     let welcomeEmailSent = false;
     try {
       const emailService = require('../services/email');
-      if (emailService.isConfigured && emailService.isConfigured()) {
-        Promise.resolve(
-          emailService.sendOrgWelcome(
-            { name: req.user.name, email: req.user.email },
-            invite.organization,
-          ),
+      const emailPrefs = require('../services/email-preferences');
+      const retryQueue = require('../services/failed-email-retry');
+      const optIn = await emailPrefs.shouldSendEmail(prisma, userId, 'invitations');
+      if (
+        optIn
+        && emailService.isConfigured
+        && emailService.isConfigured()
+      ) {
+        const userArg = { name: req.user.name, email: req.user.email };
+        const orgArg = invite.organization;
+        // enqueueIfFailed swallows the promise — keeps the route fire-
+        // and-forget but persists a retry row on rejection.
+        retryQueue.enqueueIfFailed(
+          prisma,
+          'invitation',
+          { user: userArg, org: orgArg },
+          Promise.resolve(emailService.sendOrgWelcome(userArg, orgArg)),
         ).catch(() => {});
         welcomeEmailSent = true;
       }
@@ -585,6 +604,7 @@ router.post('/:id/members/:userId/role', authenticateToken, async (req, res) => 
     if (previousRole !== newRole) {
       try {
         const emailService = require('../services/email');
+        const emailPrefs = require('../services/email-preferences');
         if (emailService.isConfigured && emailService.isConfigured()) {
           const [targetUser, orgRow] = await Promise.all([
             prisma.user.findUnique({
@@ -596,7 +616,10 @@ router.post('/:id/members/:userId/role', authenticateToken, async (req, res) => 
               select: { id: true, name: true, slug: true },
             }).catch(() => null),
           ]);
-          if (targetUser && targetUser.email) {
+          const optIn = targetUser
+            ? await emailPrefs.shouldSendEmail(prisma, targetUser.id, 'role_changes')
+            : false;
+          if (targetUser && targetUser.email && optIn) {
             Promise.resolve(
               emailService.sendRoleChangeNotification(
                 targetUser,
@@ -713,7 +736,12 @@ async function transferOwnershipHandler(req, res, deps = { prisma, writeAuditLog
           }).catch(() => null),
         ]);
         const orgSafe = orgRow || { id: orgId };
-        if (previousOwner && previousOwner.email) {
+        const emailPrefs = require('../services/email-preferences');
+        const [prevOptIn, newOptIn] = await Promise.all([
+          previousOwner ? emailPrefs.shouldSendEmail(db, previousOwner.id, 'ownership') : false,
+          newOwner ? emailPrefs.shouldSendEmail(db, newOwner.id, 'ownership') : false,
+        ]);
+        if (previousOwner && previousOwner.email && prevOptIn) {
           Promise.resolve(
             emailService.sendOwnershipTransfer(previousOwner, orgSafe, {
               role: 'previousOwner',
@@ -723,7 +751,7 @@ async function transferOwnershipHandler(req, res, deps = { prisma, writeAuditLog
           ).catch(() => {});
           transferEmailSent = true;
         }
-        if (newOwner && newOwner.email) {
+        if (newOwner && newOwner.email && newOptIn) {
           Promise.resolve(
             emailService.sendOwnershipTransfer(newOwner, orgSafe, {
               role: 'newOwner',
@@ -879,7 +907,16 @@ router.delete('/:id/members/:userId', authenticateToken, async (req, res) => {
               select: { id: true, email: true, name: true },
             }).catch(() => null),
           ]);
-          if (targetUser && targetUser.email && typeof emailService.sendOrgRemoval === 'function') {
+          const emailPrefs = require('../services/email-preferences');
+          const optIn = targetUser
+            ? await emailPrefs.shouldSendEmail(prisma, targetUser.id, 'removal')
+            : false;
+          if (
+            targetUser
+            && targetUser.email
+            && optIn
+            && typeof emailService.sendOrgRemoval === 'function'
+          ) {
             Promise.resolve(
               emailService.sendOrgRemoval(
                 targetUser,

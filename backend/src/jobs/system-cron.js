@@ -67,6 +67,12 @@ const WEBHOOK_SECRET_GRACE_SCHEDULE = process.env.SYSTEM_CRON_WEBHOOK_SECRET_GRA
 // older than the inactivity threshold (default 180d). Default 05:45
 // UTC, right after the cost-archive (05:30).
 const INACTIVE_API_KEY_SWEEP_SCHEDULE = process.env.SYSTEM_CRON_INACTIVE_API_KEY_SWEEP_SCHEDULE || '45 5 * * *';
+// Ratchet 45 — drain the failed-email retry queue (critical emails:
+// org-invitation welcome + verification magic link). Default 06:00
+// UTC so it runs after every retention/cleanup pass; each pass walks
+// SystemSettings `failed_email_retry:*` rows and re-attempts delivery
+// up to MAX_ATTEMPTS times before dropping.
+const FAILED_EMAIL_RETRY_SCHEDULE = process.env.SYSTEM_CRON_FAILED_EMAIL_RETRY_SCHEDULE || '0 6 * * *';
 
 let _state = null;
 
@@ -477,6 +483,45 @@ function start(opts = {}) {
     { scheduled: false, timezone: 'UTC' },
   );
   tasks.push({ name: 'sweep-inactive-api-keys', schedule: INACTIVE_API_KEY_SWEEP_SCHEDULE, task: inactiveApiKeySweepTask, meta: inactiveApiKeySweepMeta });
+
+  // Ratchet 45 — failed-email retry queue drain (06:00 UTC).
+  let failedEmailRetryRunning = false;
+  const failedEmailRetryMeta = {};
+  const failedEmailRetryTask = cron.schedule(
+    FAILED_EMAIL_RETRY_SCHEDULE,
+    async () => {
+      if (failedEmailRetryRunning) {
+        logger.warn?.('[system-cron] skip failed-email-retry — previous run still active');
+        return;
+      }
+      failedEmailRetryRunning = true;
+      const finish = recordRun(failedEmailRetryMeta);
+      let runErr = null;
+      try {
+        // eslint-disable-next-line global-require
+        const job = require('../services/failed-email-retry');
+        const runWithRetry = wrapWithRetry(() => job.run({ logger }), {
+          onRetry: ({ attempt, delayMs, reason }) =>
+            logger.warn?.(`[system-cron] failed-email-retry retry ${attempt} in ${delayMs}ms (${reason})`),
+        });
+        const res = await runWithRetry();
+        logger.info?.(`[system-cron] failed-email-retry done: ${JSON.stringify(res)}`);
+      } catch (err) {
+        runErr = err;
+        logger.error?.(`[system-cron] failed-email-retry failed: ${err && err.message}`);
+      } finally {
+        failedEmailRetryRunning = false;
+        finish(runErr);
+      }
+    },
+    { scheduled: false, timezone: 'UTC' },
+  );
+  tasks.push({
+    name: 'failed-email-retry',
+    schedule: FAILED_EMAIL_RETRY_SCHEDULE,
+    task: failedEmailRetryTask,
+    meta: failedEmailRetryMeta,
+  });
 
   for (const t of tasks) {
     try { t.task.start(); } catch (err) {

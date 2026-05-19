@@ -1397,10 +1397,20 @@ router.post('/resend-verification', authenticateToken, resendVerificationRateLim
       return res.json({ ok: true, alreadyVerified: true });
     }
     const { token, expiresAt } = await createVerificationToken(prisma, user.id);
-    await emailService.sendEmailVerification(
-      { name: user.name, email: user.email },
-      token,
-    );
+    const userArg = { name: user.name, email: user.email };
+    // Ratchet 45 — critical email: persist into the failed-email retry
+    // queue if the SMTP transport throws. We still await so the FE can
+    // surface an immediate 500 on the first try, but the retry queue
+    // gives the 06:00 UTC cron a second + third chance to deliver.
+    try {
+      await emailService.sendEmailVerification(userArg, token);
+    } catch (sendErr) {
+      try {
+        const retryQueue = require('../services/failed-email-retry');
+        await retryQueue.enqueue(prisma, 'verification', { user: userArg, token });
+      } catch (_) { /* queue persistence best-effort */ }
+      throw sendErr;
+    }
     void writeAuditLog(prisma, {
       req,
       action: 'verification_resent',

@@ -1047,14 +1047,23 @@ async function handleInvoicePaymentFailed(invoice) {
     // and 500 the Stripe webhook (which would cause Stripe to retry
     // forever and double-create notifications).
     try {
-      if (typeof emailService.isConfigured === 'function'
-          ? emailService.isConfigured()
-          : emailService.isConfigured) {
-        await emailService.sendPaymentFailureAlert(user, {
-          amount: amountDue,
-          currency: invoice.currency,
-          nextRetry: 'Within 24 hours',
-        });
+      const configured = typeof emailService.isConfigured === 'function'
+        ? emailService.isConfigured()
+        : emailService.isConfigured;
+      if (configured) {
+        // Ratchet 45 — honour User.settings.notifications.billing
+        // opt-out. shouldSendEmail degrades gracefully on DB errors
+        // (returns true) so we never silently drop a billing email
+        // because Prisma hiccupped.
+        const emailPrefs = require('../services/email-preferences');
+        const optIn = await emailPrefs.shouldSendEmail(prisma, user.id, 'billing');
+        if (optIn) {
+          await emailService.sendPaymentFailureAlert(user, {
+            amount: amountDue,
+            currency: invoice.currency,
+            nextRetry: 'Within 24 hours',
+          });
+        }
       }
     } catch (mailErr) {
       console.error('Payment failure email dispatch failed (non-fatal):', mailErr.message);

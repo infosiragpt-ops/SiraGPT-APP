@@ -554,6 +554,76 @@ router.put('/settings', authenticateToken, async (req, res) => {
 });
 
 // ────────────────────────────────────────────────────────────
+// Ratchet 45 — narrow PATCH endpoint for email-notification opt-outs.
+//
+// PATCH /api/users/me/settings
+//   body: { notifications: { invitations?: bool, role_changes?: bool,
+//                            removal?: bool, ownership?: bool,
+//                            billing?: bool } }
+//
+// The general PUT /settings handler above accepts any subtree, so a
+// caller *could* update notifications through it. This dedicated PATCH
+// route exists so the FE can update opt-outs without round-tripping
+// the entire settings JSON, and so unknown notifications keys are
+// rejected at the boundary (mergeNotificationsPatch only retains the
+// VALID_CATEGORIES). Returns the merged notifications blob so the UI
+// can re-render without re-fetching /settings.
+// ────────────────────────────────────────────────────────────
+const {
+  extractNotifications,
+  mergeNotificationsPatch,
+  VALID_CATEGORIES: NOTIF_CATEGORIES,
+} = require('../services/email-preferences');
+
+router.patch('/me/settings', authenticateToken, async (req, res) => {
+  try {
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const patch = body.notifications;
+    if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
+      return res.status(400).json({
+        error: 'body.notifications object required',
+        categories: NOTIF_CATEGORIES,
+      });
+    }
+    // Reject patches that carry zero known keys so the FE gets clear
+    // 400 feedback instead of a silent no-op.
+    const known = Object.keys(patch).filter((k) => NOTIF_CATEGORIES.includes(k));
+    if (known.length === 0) {
+      return res.status(400).json({
+        error: 'no known notification categories in patch',
+        categories: NOTIF_CATEGORIES,
+      });
+    }
+    const current = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { settings: true },
+    });
+    const settingsObj = (current?.settings && typeof current.settings === 'object')
+      ? current.settings
+      : {};
+    const mergedNotifications = mergeNotificationsPatch(
+      extractNotifications(settingsObj),
+      patch,
+    );
+    const mergedSettings = { ...settingsObj, notifications: mergedNotifications };
+
+    const updated = await prisma.user.update({
+      where: { id: req.user.id },
+      data: { settings: mergedSettings },
+      select: { settings: true },
+    });
+
+    res.json({
+      notifications: extractNotifications(updated.settings),
+      categories: NOTIF_CATEGORIES,
+    });
+  } catch (error) {
+    console.error('Update notification settings error:', error);
+    res.status(500).json({ error: 'Failed to update notification settings' });
+  }
+});
+
+// ────────────────────────────────────────────────────────────
 // Sessions — trusted-device list for Settings → Security.
 // Includes the current session with a flag so the UI can show
 // "This device" + "Other devices" and wire logout-all.
