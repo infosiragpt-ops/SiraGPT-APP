@@ -437,16 +437,23 @@ router.get('/verify-session', authenticateToken, async (req, res) => {
           }
         });
 
-        // Update user subscription - ADD new plan limits to existing monthlyLimit
+        // Update user subscription - ADD new plan limits to existing monthlyLimit.
+        // `monthlyLimit` is BigInt in Prisma — coerce both operands to BigInt
+        // before adding. Mixing BigInt+Number throws and silently aborts the
+        // handler, leaving the user on FREE after a successful charge.
         const planCredits = {
-          PRO: 500000,
-          PRO_MAX: 1000000,
-          ENTERPRISE: 10000000
+          PRO: 500000n,
+          PRO_MAX: 1000000n,
+          ENTERPRISE: 10000000n,
         };
+        const creditsForPlan = planCredits[payment.plan] ?? 0n;
 
         // Get current user to add to existing limits
         const currentUser = await prisma.user.findUnique({ where: { id: req.user.id } });
-        const newTotalLimit = (currentUser.monthlyLimit || 0) + planCredits[payment.plan];
+        const currentLimit = typeof currentUser?.monthlyLimit === 'bigint'
+          ? currentUser.monthlyLimit
+          : BigInt(currentUser?.monthlyLimit ?? 0);
+        const newTotalLimit = currentLimit + creditsForPlan;
 
         const updatedUser = await prisma.user.update({
           where: { id: req.user.id },
@@ -475,16 +482,21 @@ router.get('/verify-session', authenticateToken, async (req, res) => {
           data: { status: 'COMPLETED' }
         });
 
-        // Update user subscription - ADD new plan limits to existing monthlyLimit
+        // Update user subscription - ADD new plan limits to existing monthlyLimit.
+        // BigInt-safe: see comment in the Stripe branch above for context.
         const planCredits = {
-          PRO: 500000,
-          PRO_MAX: 1000000,
-          ENTERPRISE: 10000000
+          PRO: 500000n,
+          PRO_MAX: 1000000n,
+          ENTERPRISE: 10000000n,
         };
+        const creditsForPlan = planCredits[payment.plan] ?? 0n;
 
         // Get current user to add to existing limits
         const currentUser = await prisma.user.findUnique({ where: { id: req.user.id } });
-        const newTotalLimit = (currentUser.monthlyLimit || 0) + planCredits[payment.plan];
+        const currentLimit = typeof currentUser?.monthlyLimit === 'bigint'
+          ? currentUser.monthlyLimit
+          : BigInt(currentUser?.monthlyLimit ?? 0);
+        const newTotalLimit = currentLimit + creditsForPlan;
 
         const updatedUser = await prisma.user.update({
           where: { id: req.user.id },

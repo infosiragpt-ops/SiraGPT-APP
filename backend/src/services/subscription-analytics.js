@@ -376,9 +376,15 @@ class SubscriptionAnalyticsService {
         }
       });
 
-      const heavyUsers = allPaidUsers.filter(user => 
-        user.apiUsage >= (user.monthlyLimit * 0.8)
-      ).length;
+      // BigInt-safe: `apiUsage` and `monthlyLimit` are Prisma BigInt fields.
+      // `BigInt * 0.8` (float) throws "Cannot mix BigInt and other types",
+      // so coerce to Number for the 80% threshold check. Precision loss is
+      // irrelevant for an analytics warning band.
+      const heavyUsers = allPaidUsers.filter(user => {
+        const used = typeof user.apiUsage === 'bigint' ? Number(user.apiUsage) : Number(user.apiUsage || 0);
+        const limit = typeof user.monthlyLimit === 'bigint' ? Number(user.monthlyLimit) : Number(user.monthlyLimit || 0);
+        return limit > 0 && used >= limit * 0.8;
+      }).length;
 
       // Usage trends
       const usageTrends = await this.getUsageTrends(dateFilter);

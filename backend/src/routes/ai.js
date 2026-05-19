@@ -380,6 +380,36 @@ router.post(
     const model = 'deepseek-v4-pro';
 
     const __paraphraseStartedAt = Date.now();
+
+    // ─── Token-budget pre-flight (best-effort, fail-open) ─────────
+    // Mirrors the /generate preflight: estimate input tokens vs the model's
+    // context window and the user's remaining monthly quota. On overflow or
+    // quota exhaustion we surface a structured 413/402 JSON response so the
+    // client can swap models. Pre-flight errors never block traffic.
+    try {
+      const verdict = await tokenBudget.preflight({
+        userId: req.user?.id,
+        model,
+        prompt: text,
+        contextMessages: [],
+        usageService,
+        prisma,
+      });
+      if (verdict && verdict.ok === false) {
+        return res.status(verdict.status || 413).json({
+          error: verdict.reason || 'preflight_failed',
+          code: verdict.reason || 'preflight_failed',
+          estimatedInputTokens: verdict.estimatedInputTokens,
+          estimatedCostUSD: verdict.estimatedCostUSD,
+          contextWindow: verdict.contextWindow,
+          suggestedModel: verdict.suggestedModel || null,
+          remainingQuota: verdict.remainingQuota ?? null,
+        });
+      }
+    } catch (preflightErr) {
+      console.warn('[paraphrase] token-budget preflight failed (open):', preflightErr && preflightErr.message);
+    }
+
     try {
       const openai = createProviderClient('DeepSeek');
       const completion = await openai.chat.completions.create({
