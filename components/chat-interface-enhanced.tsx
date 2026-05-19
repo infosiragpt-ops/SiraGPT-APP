@@ -57,6 +57,11 @@ import WhatsAppButton from "@/components/WhatsAppButton"
 import { PremiumCardIcon } from "@/components/icons/premium-card-icon"
 import UnifiedDocumentViewer, { type AttachmentLike } from "@/components/viewers/UnifiedDocumentViewer"
 import { SlashCommandMenu, detectSlashFilter, parseSlashPrefix } from "@/components/SlashCommandMenu"
+import {
+  ImageAspectRatioMark,
+  SelectedTextDisplay,
+  LinkContextDisplay,
+} from "@/components/chat/ComposerInlineDisplays"
 import { FileProcessingBadge } from "@/components/file-processing-badge"
 import { LongOperationIndicator } from "@/components/chat/LongOperationIndicator"
 import {
@@ -260,32 +265,9 @@ const IMAGE_ASPECT_RATIO_OPTIONS: Array<{ value: ImageAspectRatio; label: string
   { value: "16:9", label: "Panorámico", ratio: "16:9" },
 ]
 
-function ImageAspectRatioMark({
-  ratio,
-  selected = false,
-  className,
-}: {
-  ratio: ImageAspectRatio
-  selected?: boolean
-  className?: string
-}) {
-  const [width, height] = ratio.split(":").map(Number)
-  const landscape = width > height
-  const portrait = height > width
-
-  return (
-    <span
-      aria-hidden="true"
-      className={cn(
-        "relative inline-flex shrink-0 items-center justify-center rounded-[4px] border border-current/75 bg-background/70",
-        landscape ? "h-3 w-5" : portrait ? "h-5 w-3" : "h-4 w-4",
-        className
-      )}
-    >
-      <span className={cn("h-1.5 w-1.5 rounded-full", selected ? "bg-current" : "bg-current/60")} />
-    </span>
-  )
-}
+// `ImageAspectRatioMark` was extracted to
+// `components/chat/ComposerInlineDisplays.tsx` to keep this file
+// scannable. It is imported at the top and used unchanged below.
 
 function clampImageGenerationCount(value: number): ImageGenerationCount {
   return Math.min(2, Math.max(1, value)) as ImageGenerationCount
@@ -694,78 +676,9 @@ function SearchActivityPanel({ activity, onClose }: { activity: SearchActivitySt
 }
 
 // Selected Text Display Component
-const SelectedTextDisplay = ({ text, onClear }: { text: string | null; onClear: () => void; }) => {
-  if (!text) return null;
-  return (
-    <div className="px-3 pt-3">
-      <div className="relative rounded-lg border bg-muted/30 p-3">
-        <div className="text-xs font-semibold mb-1 text-muted-foreground">AI Rewrite</div>
-        <p className="text-sm pr-8 max-h-24 overflow-y-auto">{text}</p>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="absolute top-1 right-1 h-6 w-6 p-0 rounded-full"
-          onClick={onClear}
-        >
-          <X className="h-4 w-4" />
-        </Button>
-      </div>
-    </div>
-  );
-};
-
-const LinkContextDisplay = ({
-  links,
-  removeLink,
-  isWebSearchActive,
-  setIsWebSearchActive,
-}: {
-  links: DetectedLink[];
-  removeLink: (link: DetectedLink) => void;
-  isWebSearchActive: boolean;
-  setIsWebSearchActive: (value: boolean) => void;
-}) => {
-  if (links.length === 0) return null;
-
-  return (
-    <div className="px-3 pt-3">
-      <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-sky-200/70 bg-sky-50/55 px-2.5 py-2 dark:border-sky-500/20 dark:bg-sky-950/20">
-        {links.map((link) => (
-          <div
-            key={link.url}
-            className="group/link-chip flex min-w-0 max-w-[220px] items-center gap-1.5 rounded-full border border-sky-200 bg-background/90 px-2 py-1 text-xs text-sky-800 shadow-sm dark:border-sky-500/25 dark:bg-background/70 dark:text-sky-200"
-            title={link.url}
-          >
-            <Link2 className="h-3.5 w-3.5 shrink-0" />
-            <span className="min-w-0 truncate font-medium">{link.host}</span>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-4 w-4 shrink-0 rounded-full p-0 text-sky-700/75 hover:bg-sky-100 hover:text-sky-900 dark:text-sky-200/75 dark:hover:bg-sky-900/40 dark:hover:text-sky-100"
-              onClick={() => removeLink(link)}
-              aria-label={`Quitar enlace ${link.host}`}
-              title="Quitar enlace"
-            >
-              <X className="h-3 w-3" />
-            </Button>
-          </div>
-        ))}
-        {!isWebSearchActive && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => setIsWebSearchActive(true)}
-            className="h-7 rounded-full px-2 text-xs text-sky-800 hover:bg-sky-100 dark:text-sky-200 dark:hover:bg-sky-900/40"
-          >
-            <Globe className="mr-1.5 h-3.5 w-3.5" />
-            Búsqueda web
-          </Button>
-        )}
-      </div>
-    </div>
-  );
-};
+// `SelectedTextDisplay` and `LinkContextDisplay` were extracted to
+// `components/chat/ComposerInlineDisplays.tsx`. They are imported at
+// the top of this file and used below with the exact same prop shape.
 
 
 // Enhanced Actions Dropdown Component

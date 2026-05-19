@@ -31,7 +31,21 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   PhaseTimeline, type PhaseKey, type PhaseState,
 } from "@/components/marco-teorico/phase-timeline"
-import { SourceChart } from "@/components/marco-teorico/source-chart"
+import dynamic from "next/dynamic"
+import { Skeleton } from "@/components/ui/skeleton"
+
+// SourceChart pulls in recharts (>150KB minified). It's a secondary
+// visualization only relevant after a generation produces sources, so
+// we defer its bundle until the page mounts on the client. SSR off so
+// recharts (which touches `window` via its ResponsiveContainer) never
+// runs on the server.
+const SourceChart = dynamic(
+  () => import("@/components/marco-teorico/source-chart").then((m) => m.SourceChart),
+  {
+    ssr: false,
+    loading: () => <Skeleton className="h-[160px] w-full" />,
+  },
+)
 import { SourceCard } from "@/components/marco-teorico/source-card"
 
 import { projectsService, type ProjectDetail } from "@/lib/projects-service"

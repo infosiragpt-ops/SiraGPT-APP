@@ -14,6 +14,7 @@ import { GlobalDropRedirector } from "@/components/GlobalDropRedirector"
 import { SentryClientInit } from "@/components/sentry-client-init"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { PostHogClientInit } from "@/components/posthog-client-init"
+import { WebVitalsReporter } from "./web-vitals"
 import { NextIntlClientProvider } from "next-intl"
 import { getLocale, getMessages } from "next-intl/server"
 import { isRTL } from "@/lib/i18n/locales"
@@ -110,16 +111,18 @@ export default async function RootLayout({
       } as React.CSSProperties}
     >
       <head>
-        <link
-          rel="stylesheet"
-          href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css"
-          integrity="sha384-n8MVd4RsNIU0tAv4ct0nTaAbDJwPJzDEaqSD1odI+WdtXRGWt2kTvGFasHpSy3SV"
-          crossOrigin="anonymous"
-        />
+        {/*
+          KaTeX CSS is already bundled via `import 'katex/dist/katex.min.css'`
+          at the top of this file, which Next.js inlines/serves from
+          `_next/static`. We previously also referenced a CDN copy here,
+          which doubled the request and re-painted equations on
+          stylesheet swap. The bundled copy is sufficient.
+        */}
       </head>
       <body className={GeistSans.className}>
         <SentryClientInit />
         <PostHogClientInit />
+        <WebVitalsReporter />
         <SyncfusionBannerRemover />
         <NextIntlClientProvider locale={locale} messages={messages}>
           <ThemeProvider attribute="class" defaultTheme="light" enableSystem disableTransitionOnChange>

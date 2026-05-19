@@ -28,7 +28,25 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { cn } from "@/lib/utils"
-import { TiptapEditor } from "@/components/editor/tiptap-editor"
+import dynamic from "next/dynamic"
+import { Skeleton } from "@/components/ui/skeleton"
+
+// The Tiptap rich-text editor adds ~150KB+ of vendor JS (prosemirror,
+// codemirror, extensions). Only this page mounts it, so we defer the
+// chunk until the route boots. SSR is disabled — Tiptap's editor needs
+// a DOM and is hydration-incompatible with the empty server output.
+const TiptapEditor = dynamic(
+  () => import("@/components/editor/tiptap-editor").then((m) => m.TiptapEditor),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex h-full w-full flex-col gap-3 p-6">
+        <Skeleton className="h-8 w-2/3" />
+        <Skeleton className="h-[60vh] w-full" />
+      </div>
+    ),
+  },
+)
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import {
   projectDocumentsService, type ProjectDocument,
