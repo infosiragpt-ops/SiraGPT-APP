@@ -649,6 +649,164 @@ router.delete('/:id/webhooks/:endpointId', authenticateToken, async (req, res) =
   }
 });
 
+// ─── Slack integration (cycle 45, org-scoped) ───────────────────────
+// Mirrors the per-user endpoints under /api/integrations/slack but
+// scopes the SlackIntegration row to the organization. Trigger-registry
+// prefers the org-scoped integration when the publish payload carries
+// an orgId so org events land in the team channel.
+const slack = require('../services/slack-integration');
+
+function isSlackWebhookUrl(url) {
+  if (typeof url !== 'string' || !url) return false;
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'https:') return false;
+    return u.hostname === 'hooks.slack.com' || u.hostname.endsWith('.slack.com');
+  } catch { return false; }
+}
+
+function serializeOrgSlack(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    organizationId: row.organizationId || null,
+    channelName: row.channelName || null,
+    isEnabled: !!row.isEnabled,
+    createdAt: row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt,
+    lastEventAt: row.lastEventAt
+      ? (row.lastEventAt instanceof Date ? row.lastEventAt.toISOString() : row.lastEventAt)
+      : null,
+    webhookUrl: row.webhookUrl ? 'https://hooks.slack.com/services/•••' : null,
+  };
+}
+
+// GET  /api/orgs/:id/slack — fetch org Slack integration (any member)
+router.get('/:id/slack', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  try {
+    await assertMembership(prisma, orgId, userId, 'MEMBER');
+    const row = await prisma.slackIntegration.findFirst({
+      where: { organizationId: orgId },
+    });
+    res.json({ slack: serializeOrgSlack(row) });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] get slack failed:', err.message);
+    res.status(500).json({ error: 'failed to load Slack config' });
+  }
+});
+
+// POST /api/orgs/:id/slack — connect/update org Slack integration (ADMIN+)
+router.post('/:id/slack', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  const { webhookUrl, channelName = null, isEnabled = true } = req.body || {};
+  if (!isSlackWebhookUrl(webhookUrl)) {
+    return res.status(400).json({ error: 'webhookUrl must be a valid https://hooks.slack.com URL' });
+  }
+  try {
+    const membership = await assertMembership(prisma, orgId, userId, 'ADMIN');
+    if (!canManageMembers(membership.role)) {
+      return res.status(403).json({ error: 'insufficient role to configure Slack' });
+    }
+    const encrypted = slack.encryptToken(webhookUrl);
+    const existing = await prisma.slackIntegration.findFirst({
+      where: { organizationId: orgId },
+    });
+    let row;
+    if (existing) {
+      row = await prisma.slackIntegration.update({
+        where: { id: existing.id },
+        data: { webhookUrl: encrypted, channelName, isEnabled: !!isEnabled },
+      });
+    } else {
+      row = await prisma.slackIntegration.create({
+        data: {
+          userId,
+          organizationId: orgId,
+          webhookUrl: encrypted,
+          channelName,
+          isEnabled: !!isEnabled,
+        },
+      });
+    }
+    void writeAuditLog(prisma, {
+      action: 'org_slack_connect',
+      userId,
+      resource: 'organization',
+      resourceId: orgId,
+      after: { slackId: row.id, channelName, isEnabled: !!isEnabled },
+      req,
+    });
+    res.status(201).json({ slack: serializeOrgSlack(row) });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] connect slack failed:', err.message);
+    res.status(500).json({ error: 'failed to connect Slack' });
+  }
+});
+
+// POST /api/orgs/:id/slack/test — send a test ping (ADMIN+)
+router.post('/:id/slack/test', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  try {
+    const membership = await assertMembership(prisma, orgId, userId, 'ADMIN');
+    if (!canManageMembers(membership.role)) {
+      return res.status(403).json({ error: 'insufficient role to test Slack' });
+    }
+    const existing = await prisma.slackIntegration.findFirst({
+      where: { organizationId: orgId },
+    });
+    if (!existing) return res.status(404).json({ error: 'no Slack integration configured' });
+    const decrypted = slack.decryptToken(existing.webhookUrl);
+    if (!decrypted) return res.status(500).json({ error: 'failed to decrypt stored webhook' });
+    const out = await slack.sendEventNotification({
+      webhookUrl: decrypted,
+      event: 'orgs.slack.test',
+      userId,
+      payload: { orgId, message: 'SiraGPT org Slack integration test ping.' },
+    });
+    if (out.ok && existing.id) {
+      prisma.slackIntegration.update({
+        where: { id: existing.id },
+        data: { lastEventAt: new Date() },
+      }).catch(() => {});
+    }
+    res.json({ ok: out.ok, status: out.status });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] test slack failed:', err.message);
+    res.status(500).json({ error: 'failed to test Slack' });
+  }
+});
+
+// DELETE /api/orgs/:id/slack — remove org Slack integration (ADMIN+)
+router.delete('/:id/slack', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  try {
+    const membership = await assertMembership(prisma, orgId, userId, 'ADMIN');
+    if (!canManageMembers(membership.role)) {
+      return res.status(403).json({ error: 'insufficient role to delete Slack config' });
+    }
+    await prisma.slackIntegration.deleteMany({ where: { organizationId: orgId } });
+    void writeAuditLog(prisma, {
+      action: 'org_slack_delete',
+      userId,
+      resource: 'organization',
+      resourceId: orgId,
+      req,
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] delete slack failed:', err.message);
+    res.status(500).json({ error: 'failed to delete Slack config' });
+  }
+});
+
 // Expose constants for tests/inspection.
 router.__roleAtLeast = roleAtLeast;
 

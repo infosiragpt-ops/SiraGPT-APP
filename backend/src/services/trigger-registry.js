@@ -216,11 +216,24 @@ async function publish(event, payload, userId, opts = {}) {
   }
 
   // --- 2. Slack integration (best-effort, opt-in)
-  if (prisma && prisma.slackIntegration && userId) {
+  //
+  // Cycle 45: prefer the org-scoped Slack integration when the payload
+  // carries an orgId — org-wide notifications should land in the team
+  // channel, not in the publishing user's DM webhook. Falls back to the
+  // per-user integration when no org integration exists.
+  if (prisma && prisma.slackIntegration) {
     try {
-      const slack = await prisma.slackIntegration.findFirst({
-        where: { userId, isEnabled: true },
-      });
+      let slack = null;
+      if (orgId) {
+        slack = await prisma.slackIntegration.findFirst({
+          where: { organizationId: orgId, isEnabled: true },
+        });
+      }
+      if (!slack && userId) {
+        slack = await prisma.slackIntegration.findFirst({
+          where: { userId, isEnabled: true },
+        });
+      }
       if (slack && slack.webhookUrl) {
         const slackSender = getSlackSender();
         if (slackSender && typeof slackSender.sendEventNotification === 'function') {

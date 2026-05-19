@@ -141,6 +141,7 @@ function track(opts) {
       latencyMs = 0,
       ts = null,
       costUSD = null,
+      error = false,
     } = opts || {};
     const timestamp = ts instanceof Date ? ts : new Date(ts || Date.now());
     const safeIn = Math.max(0, Number(inputTokens) || 0);
@@ -157,6 +158,7 @@ function track(opts) {
       outputTokens: safeOut,
       costUSD: computedCost,
       latencyMs: Math.max(0, Number(latencyMs) || 0),
+      error: !!error,
     };
     state.records.push(record);
     trimIfNeeded();
@@ -230,6 +232,57 @@ function report({ from = null, to = null, userId = null, includeRecords = true }
   };
 }
 
+/**
+ * topModels — per-model aggregation suitable for admin dashboards.
+ * Returns rows sorted by request count desc:
+ *   [{ model, provider, requests, totalTokens, totalCostUSD,
+ *      avgLatencyMs, errorRate }]
+ * `errorRate` is the fraction (0..1) of records that recorded an error.
+ * When no records track the optional `error` flag the rate is 0.
+ */
+function topModels({ from = null, to = null, limit = 10 } = {}) {
+  const fromMs = from ? new Date(from).getTime() : 0;
+  const toMs = to ? new Date(to).getTime() : Number.MAX_SAFE_INTEGER;
+  const safeLimit = Math.max(1, Math.min(1000, Number(limit) || 10));
+  const perModel = new Map();
+  for (const r of state.records) {
+    const t = new Date(r.ts).getTime();
+    if (t < fromMs || t > toMs) continue;
+    const key = `${r.model || 'unknown'}::${r.provider || 'unknown'}`;
+    let row = perModel.get(key);
+    if (!row) {
+      row = {
+        model: r.model || 'unknown',
+        provider: r.provider || 'unknown',
+        requests: 0,
+        totalTokens: 0,
+        totalCostUSD: 0,
+        _latencySum: 0,
+        _errors: 0,
+      };
+      perModel.set(key, row);
+    }
+    row.requests += 1;
+    row.totalTokens += (r.inputTokens || 0) + (r.outputTokens || 0);
+    row.totalCostUSD = round6(row.totalCostUSD + (r.costUSD || 0));
+    row._latencySum += r.latencyMs || 0;
+    if (r.error) row._errors += 1;
+  }
+  const rows = [...perModel.values()]
+    .map((row) => ({
+      model: row.model,
+      provider: row.provider,
+      requests: row.requests,
+      totalTokens: row.totalTokens,
+      totalCostUSD: row.totalCostUSD,
+      avgLatencyMs: row.requests > 0 ? Math.round(row._latencySum / row.requests) : 0,
+      errorRate: row.requests > 0 ? Math.round((row._errors / row.requests) * 10000) / 10000 : 0,
+    }))
+    .sort((a, b) => b.requests - a.requests)
+    .slice(0, safeLimit);
+  return rows;
+}
+
 /** monthlyCostForUser — quick lookup used by quota / anomaly detector. */
 function monthlyCostForUser(userId, date = new Date()) {
   const mk = monthKey(date);
@@ -260,6 +313,7 @@ function _peekRecords() {
 module.exports = {
   track,
   report,
+  topModels,
   monthlyCostForUser,
   setPersistHook,
   computeCostUSD,

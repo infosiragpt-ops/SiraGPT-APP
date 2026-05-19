@@ -367,18 +367,21 @@ model WebhookEndpoint {
 // for this user — flipped off after the test ping until the user opts
 // in explicitly.
 model SlackIntegration {
-  id           String    @id @default(cuid())
-  userId       String
-  webhookUrl   String    @db.Text
-  channelName  String?
-  isEnabled    Boolean   @default(false)
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
-  lastEventAt  DateTime?
+  id             String    @id @default(cuid())
+  userId         String
+  organizationId String?
+  webhookUrl     String    @db.Text
+  channelName    String?
+  isEnabled      Boolean   @default(false)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  lastEventAt    DateTime?
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+  @@index([organizationId, isEnabled])
   @@map("slack_integrations")
 }
 
@@ -1287,7 +1290,8 @@ model Organization {
   memberships OrgMembership[]
   invitations OrgInvitation[]
   chats       Chat[]
-  webhookEndpoints WebhookEndpoint[]
+  webhookEndpoints  WebhookEndpoint[]
+  slackIntegrations SlackIntegration[]
 
   @@index([ownerId])
   @@index([slug])

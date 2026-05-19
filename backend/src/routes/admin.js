@@ -1208,6 +1208,45 @@ router.get('/cost-report', requireSuperAdmin, async (req, res) => {
   }
 });
 
+// ── Top AI models (super-admin only) ────────────────────────────────────
+// Cycle 45 — aggregates the in-process cost-tracker records into a
+// per-model leaderboard suitable for the admin "API usage analytics"
+// dashboard. Sorted by request count desc; `limit` capped at 1000.
+//   GET /api/admin/stats/ai-models?from=&to=&limit=10
+router.get('/stats/ai-models', requireSuperAdmin, async (req, res) => {
+  try {
+    const costTracker = require('../services/ai/cost-tracker');
+    const { from, to, limit } = req.query || {};
+    const fromDate = from ? new Date(String(from)) : null;
+    const toDate = to ? new Date(String(to)) : null;
+    if (from && Number.isNaN(fromDate.getTime())) {
+      return res.status(400).json({ error: "Invalid 'from' date" });
+    }
+    if (to && Number.isNaN(toDate.getTime())) {
+      return res.status(400).json({ error: "Invalid 'to' date" });
+    }
+    const parsedLimit = limit != null ? Number.parseInt(String(limit), 10) : 10;
+    const safeLimit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : 10;
+    const rows = costTracker.topModels({
+      from: fromDate,
+      to: toDate,
+      limit: safeLimit,
+    });
+    return res.json({
+      ok: true,
+      filters: {
+        from: from || null,
+        to: to || null,
+        limit: safeLimit,
+      },
+      models: rows,
+    });
+  } catch (err) {
+    console.error('[admin/stats/ai-models] failed:', err && err.message ? err.message : err);
+    return res.status(500).json({ error: 'Failed to build AI models report' });
+  }
+});
+
 router.get('/health/services', requireSuperAdmin, async (_req, res) => {
   try {
     const emailService = (() => { try { return require('../services/email'); } catch (_) { return null; } })();
