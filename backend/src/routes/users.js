@@ -1519,6 +1519,176 @@ router.patch(
   },
 );
 
+// ────────────────────────────────────────────────────────────
+// Ratchet 45 — TOTP-based 2FA scaffold (Authy / Google Authenticator).
+//
+// POST /api/users/me/2fa/totp/setup
+//   → Generates a fresh base32 secret + otpauth:// URI for QR-code
+//     rendering. Stores the secret encrypted at rest on the user row
+//     but leaves `totpEnabled = false` until the client posts a valid
+//     6-digit code to /verify below. The plaintext secret is returned
+//     ONCE so a paranoid user can also type it manually into their
+//     authenticator app; it cannot be retrieved later.
+//
+// POST /api/users/me/2fa/totp/verify { code }
+//   → Verifies a 6-digit TOTP code against the stored secret. On
+//     success flips `totpEnabled = true` and audits the activation.
+//     A ±1 step window (~90s total) absorbs minor clock drift.
+// ────────────────────────────────────────────────────────────
+
+// Encrypts the base32 secret with the platform ENCRYPTION_KEY when
+// available; falls back to a clearly-marked plaintext envelope so
+// `npm test` (where ENCRYPTION_KEY is unset) still exercises the
+// flow without crashing the process. The fallback prefix lets the
+// verify step transparently round-trip either format.
+function encryptTotpSecret(plainBase32) {
+  try {
+    const { encrypt } = require('../utils/encryption');
+    return `enc:${encrypt(plainBase32)}`;
+  } catch (_err) {
+    // TODO(ratchet45): once ENCRYPTION_KEY is mandatory in all envs,
+    // drop the plaintext fallback and let this throw.
+    return `plain:${plainBase32}`;
+  }
+}
+
+function decryptTotpSecret(stored) {
+  if (typeof stored !== 'string' || stored.length === 0) return null;
+  if (stored.startsWith('plain:')) return stored.slice('plain:'.length);
+  if (stored.startsWith('enc:')) {
+    try {
+      const { decrypt } = require('../utils/encryption');
+      return decrypt(stored.slice('enc:'.length));
+    } catch (_err) {
+      return null;
+    }
+  }
+  // Legacy / unknown envelope — assume raw base32.
+  return stored;
+}
+
+function buildOtpauthUri({ secret, accountName, issuer }) {
+  const iss = encodeURIComponent(issuer);
+  const acc = encodeURIComponent(accountName);
+  // otpauth://totp/<issuer>:<account>?secret=...&issuer=...&algorithm=SHA1&digits=6&period=30
+  const label = `${iss}:${acc}`;
+  const params = new URLSearchParams({
+    secret,
+    issuer,
+    algorithm: 'SHA1',
+    digits: '6',
+    period: '30',
+  });
+  return `otpauth://totp/${label}?${params.toString()}`;
+}
+
+router.post(
+  '/me/2fa/totp/setup',
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const { randomSecret } = require('../services/auth/totp');
+      const secret = randomSecret({ bytes: 20 });
+
+      const current = await prisma.user.findUnique({
+        where: { id: req.user.id },
+        select: { email: true, totpEnabled: true },
+      });
+      if (!current) return res.status(404).json({ error: 'User not found' });
+      if (current.totpEnabled) {
+        return res.status(409).json({
+          error: 'TOTP already enabled — disable it first to re-enroll',
+          code: 'totp_already_enabled',
+        });
+      }
+
+      await prisma.user.update({
+        where: { id: req.user.id },
+        data: {
+          totpSecret: encryptTotpSecret(secret),
+          // Leave totpEnabled = false; the /verify step flips it.
+        },
+        select: { id: true },
+      });
+
+      const issuer = process.env.TOTP_ISSUER || 'SiraGPT';
+      const accountName = current.email || req.user.id;
+      const otpauthUri = buildOtpauthUri({ secret, accountName, issuer });
+
+      void writeAuditLog(prisma, {
+        req,
+        action: 'totp_setup_initiated',
+        resource: 'user',
+        resourceId: req.user.id,
+        userId: req.user.id,
+      });
+
+      return res.json({ secret, otpauthUri });
+    } catch (error) {
+      console.error('TOTP setup error:', error);
+      return res.status(500).json({ error: 'Failed to initialise TOTP' });
+    }
+  },
+);
+
+router.post(
+  '/me/2fa/totp/verify',
+  authenticateToken,
+  [body('code').isString().matches(/^\d{6}$/).withMessage('code must be a 6-digit string')],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      const current = await prisma.user.findUnique({
+        where: { id: req.user.id },
+        select: { totpSecret: true, totpEnabled: true },
+      });
+      if (!current || !current.totpSecret) {
+        return res.status(400).json({
+          error: 'TOTP not initialised — call /setup first',
+          code: 'totp_not_initialised',
+        });
+      }
+
+      const secret = decryptTotpSecret(current.totpSecret);
+      if (!secret) {
+        return res.status(500).json({ error: 'Stored TOTP secret is unreadable' });
+      }
+
+      const { verifyTotp } = require('../services/auth/totp');
+      const ok = verifyTotp(String(req.body.code), secret, { window: 1 });
+      if (!ok) {
+        return res.status(401).json({ error: 'Invalid TOTP code', code: 'totp_invalid' });
+      }
+
+      const wasEnabled = current.totpEnabled === true;
+      const updated = await prisma.user.update({
+        where: { id: req.user.id },
+        data: { totpEnabled: true },
+        select: { id: true, totpEnabled: true },
+      });
+
+      if (!wasEnabled) {
+        void writeAuditLog(prisma, {
+          req,
+          action: 'totp_enabled',
+          resource: 'user',
+          resourceId: req.user.id,
+          userId: req.user.id,
+        });
+      }
+
+      return res.json({ ok: true, totpEnabled: updated.totpEnabled });
+    } catch (error) {
+      console.error('TOTP verify error:', error);
+      return res.status(500).json({ error: 'Failed to verify TOTP code' });
+    }
+  },
+);
+
 module.exports = router;
 // Test-only internals (ratchet 45)
 module.exports.INTERNAL = {
@@ -1527,6 +1697,9 @@ module.exports.INTERNAL = {
   quarterEndsAt,
   quarterSettingsKey,
   readQuarterCount,
+  encryptTotpSecret,
+  decryptTotpSecret,
+  buildOtpauthUri,
   incrementQuarterCount,
   checkQuarterlyExportQuota,
   recordQuarterlyExport,

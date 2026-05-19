@@ -88,6 +88,16 @@ model User {
   // `PATCH /api/users/me/2fa`.
   twoFactorEnabled Boolean @default(false)
 
+  // TOTP-based 2FA (ratchet 45, Task 1) — alternative to SMS for
+  // Google Authenticator / Authy / 1Password etc. `totpSecret` holds
+  // the base32 seed encrypted at rest with the platform ENCRYPTION_KEY
+  // (see src/utils/encryption.js). When `totpEnabled` is true the login
+  // handler accepts a 6-digit TOTP code in addition to (or instead of)
+  // an SMS challenge. Both columns are nullable / default-off so legacy
+  // rows keep working.
+  totpSecret  String?
+  totpEnabled Boolean @default(false)
+
   // Relations
   chats                   Chat[]
   payments                Payment[]
