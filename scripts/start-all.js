@@ -22,7 +22,10 @@ const path = require("node:path");
 
 const ROOT = path.resolve(__dirname, "..");
 const BACKEND_DIR = path.join(ROOT, "backend");
-const BACKEND_PORT = Number(process.env.BACKEND_PORT || 5000);
+// Backend listens on a high internal-only port so it never collides
+// with the public port Replit injects via PORT (autoscale sets PORT=5000,
+// which would clobber the backend if it also defaulted to 5000).
+const BACKEND_PORT = Number(process.env.BACKEND_PORT || 5050);
 const BACKEND_HOST = process.env.BACKEND_HOST || "127.0.0.1";
 const FRONTEND_PORT = Number(process.env.PORT || 3000);
 const BACKEND_READY_TIMEOUT_MS = Number(process.env.BACKEND_READY_TIMEOUT_MS || 120_000);
