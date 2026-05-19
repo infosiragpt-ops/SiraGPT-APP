@@ -114,4 +114,78 @@ describe('system-cron', () => {
       mod.stop();
     }
   });
+
+  test('status() — flags stale jobs and fires alert via cycle 32 alerting', () => {
+    process.env.NODE_ENV = 'production';
+    process.env.SYSTEM_CRON_ENABLED = 'true';
+    const mod = freshLoad();
+    // Swap in a fake alerting channel so we can observe the alert
+    // without touching Slack/PagerDuty.
+    const alerting = require('../src/services/alerting');
+    alerting._resetForTests();
+    const fired = [];
+    alerting.registerChannel((p) => { fired.push(p); return { ok: true }; });
+    mod._resetStaleAlertsForTests();
+    mod.start({ logger: { warn() {}, info() {}, error() {} } });
+    try {
+      // Manually stamp lastRun on the hourly sweep job 5 hours ago.
+      // Threshold = interval(60min) × 3 = 180min → 5h is well past it.
+      const sweep = require('../src/jobs/system-cron');
+      const state = sweep.status();
+      const sweepTask = state.tasks.find((t) => t.name === 'sweep-expired-sessions');
+      assert.ok(sweepTask, 'sweep job present');
+      // Reach into the running state to set meta.lastRun. We expose this
+      // through the live tasks array via a small back-channel: status()
+      // is a projection, but the meta object is shared by reference.
+      const live = require('../src/jobs/system-cron');
+      // Use start()'s returned state via re-call — start() is idempotent.
+      const running = live.start({ logger: { warn() {}, info() {}, error() {} } });
+      const liveSweep = running.tasks.find((t) => t.name === 'sweep-expired-sessions');
+      liveSweep.meta.lastRun = new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString();
+      const snap = live.status();
+      const sweepSnap = snap.tasks.find((t) => t.name === 'sweep-expired-sessions');
+      assert.equal(sweepSnap.stale, true, 'should be flagged stale');
+      assert.ok(sweepSnap.staleBy > 0);
+      // Allow the fire-and-forget alert promise to flush.
+      return new Promise((resolve) => setImmediate(() => {
+        assert.ok(fired.some((p) => p.title === 'system_cron_stale:sweep-expired-sessions'), 'alert fired');
+        resolve();
+      }));
+    } finally {
+      mod.stop();
+    }
+  });
+
+  test('status() — does not flag stale when lastRun is fresh', () => {
+    process.env.NODE_ENV = 'production';
+    process.env.SYSTEM_CRON_ENABLED = 'true';
+    const mod = freshLoad();
+    const running = mod.start({ logger: { warn() {}, info() {}, error() {} } });
+    try {
+      const sweep = running.tasks.find((t) => t.name === 'sweep-expired-sessions');
+      sweep.meta.lastRun = new Date(Date.now() - 5 * 60 * 1000).toISOString(); // 5min ago
+      const snap = mod.status();
+      const s = snap.tasks.find((t) => t.name === 'sweep-expired-sessions');
+      assert.equal(s.stale, false);
+    } finally {
+      mod.stop();
+    }
+  });
+
+  test('status() — never-run jobs are not flagged stale', () => {
+    process.env.NODE_ENV = 'production';
+    process.env.SYSTEM_CRON_ENABLED = 'true';
+    const mod = freshLoad();
+    mod.start({ logger: { warn() {}, info() {}, error() {} } });
+    try {
+      const snap = mod.status();
+      for (const t of snap.tasks) {
+        // Fresh start → no lastRun → not stale.
+        assert.equal(t.lastRun, null);
+        assert.equal(t.stale, false);
+      }
+    } finally {
+      mod.stop();
+    }
+  });
 });

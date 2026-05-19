@@ -1208,6 +1208,63 @@ router.get('/cost-report', requireSuperAdmin, async (req, res) => {
   }
 });
 
+// ── Cost forecast (super-admin only) ────────────────────────────────────
+// Ratchet 45 — linear-regression projection of AI spend for the current
+// month. Surfaces per-user + per-org forecasts so finance can flag
+// runaway trends before billing closes. Backed by the same in-process
+// cost-tracker as /cost-report; install a persist hook at boot for
+// production-grade durability.
+//   GET /api/admin/cost-forecast?windowDays=14
+router.get('/cost-forecast', requireSuperAdmin, async (req, res) => {
+  try {
+    const costTracker = require('../services/ai/cost-tracker');
+    const costForecast = require('../services/ai/cost-forecast');
+    const windowDays = Number.parseInt(String(req.query.windowDays || ''), 10);
+    const safeWindow = Number.isFinite(windowDays) && windowDays > 0
+      ? Math.min(60, windowDays)
+      : costForecast.FORECAST_WINDOW_DAYS;
+
+    // Pull membership rows once so we can roll user forecasts up to orgs
+    // without a per-user N+1. Records are already in-memory; the only
+    // I/O is this single join.
+    let memberships = [];
+    try {
+      const records = typeof costTracker._peekRecords === 'function' ? costTracker._peekRecords() : [];
+      const ids = new Set();
+      for (const r of records) {
+        if (r && r.userId) ids.add(String(r.userId));
+      }
+      if (ids.size > 0) {
+        memberships = await prisma.orgMembership.findMany({
+          where: { userId: { in: [...ids] } },
+          select: {
+            userId: true,
+            orgId: true,
+            organization: { select: { id: true, name: true, slug: true } },
+          },
+        });
+      }
+    } catch (err) {
+      console.error('[admin/cost-forecast] org join failed:', err && err.message ? err.message : err);
+    }
+
+    const forecast = costForecast.forecastAll({
+      tracker: costTracker,
+      memberships,
+      windowDays: safeWindow,
+    });
+
+    return res.json({
+      ok: true,
+      windowDays: safeWindow,
+      ...forecast,
+    });
+  } catch (err) {
+    console.error('[admin/cost-forecast] failed:', err && err.message ? err.message : err);
+    return res.status(500).json({ error: 'Failed to build cost forecast' });
+  }
+});
+
 // ── Top AI models (super-admin only) ────────────────────────────────────
 // Cycle 45 — aggregates the in-process cost-tracker records into a
 // per-model leaderboard suitable for the admin "API usage analytics"

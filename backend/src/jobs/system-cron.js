@@ -268,6 +268,36 @@ function stop() {
   _state = null;
 }
 
+// Track titles we've already alerted on this status() pass so a single
+// snapshot doesn't double-fire (the cycle 32 alerting layer also dedups
+// by title, but that's a 5-minute window — this avoids duplicate POSTs
+// when status() is hit by multiple health probes in the same tick).
+const _staleAlertSent = new Map(); // name → lastAlertAt (ms)
+const STALE_ALERT_COOLDOWN_MS = 10 * 60 * 1000; // 10 min between re-alerts per job
+
+function _stalenessMultiplier() {
+  const v = Number.parseInt(process.env.SYSTEM_CRON_STALE_MULTIPLIER || '3', 10);
+  return Number.isFinite(v) && v > 0 ? v : 3;
+}
+
+/**
+ * Compute the schedule interval in ms from a parsed cron expression by
+ * sampling the gap between two consecutive runs starting at `from`.
+ * Returns `null` when the gap can't be determined (e.g. malformed expr).
+ */
+function _scheduleIntervalMs(cronExpr, schedule, from) {
+  try {
+    const parsed = cronExpr.parseCron(schedule);
+    const a = cronExpr.nextRun(parsed, from);
+    const b = cronExpr.nextRun(parsed, a);
+    if (a instanceof Date && b instanceof Date) {
+      const delta = b.getTime() - a.getTime();
+      return delta > 0 ? delta : null;
+    }
+  } catch (_) { /* malformed — caller handles null */ }
+  return null;
+}
+
 function status() {
   if (!_state) return { enabled: false, tasks: [] };
   // Lazy-require cron-expression so the health probe can compute the
@@ -275,19 +305,70 @@ function status() {
   // (nextRun = null) so the probe never blocks the health endpoint.
   let cronExpr = null;
   try { cronExpr = require('../utils/cron-expression'); } catch (_) { /* optional */ }
+  // Lazy-require alerting (cycle 32) so test envs without the alerting
+  // module wired up don't blow up the probe.
+  let alerting = null;
+  try { alerting = require('../services/alerting'); } catch (_) { /* optional */ }
+
   const now = new Date();
+  const multiplier = _stalenessMultiplier();
   return {
     enabled: true,
     tasks: _state.tasks.map((t) => {
       const meta = t.meta || {};
       let nextRun = null;
+      let intervalMs = null;
       if (cronExpr && typeof cronExpr.parseCron === 'function') {
         try {
           const parsed = cronExpr.parseCron(t.schedule);
           const next = cronExpr.nextRun(parsed, now);
           if (next instanceof Date) nextRun = next.toISOString();
         } catch (_) { /* malformed schedule — leave nextRun null */ }
+        intervalMs = _scheduleIntervalMs(cronExpr, t.schedule, now);
       }
+
+      // Staleness check — only when we know lastRun *and* can compute
+      // the schedule interval. A job that's never run is not "stale",
+      // it's just freshly registered.
+      let stale = false;
+      let staleBy = null;
+      if (meta.lastRun && intervalMs) {
+        const lastMs = Date.parse(meta.lastRun);
+        if (Number.isFinite(lastMs)) {
+          const ageMs = now.getTime() - lastMs;
+          const threshold = intervalMs * multiplier;
+          if (ageMs > threshold) {
+            stale = true;
+            staleBy = ageMs - threshold;
+            // Fire-and-forget alert via cycle 32 alerting. Cooldown
+            // suppresses repeats within STALE_ALERT_COOLDOWN_MS.
+            if (alerting && typeof alerting.sendAlert === 'function') {
+              const last = _staleAlertSent.get(t.name) || 0;
+              if (now.getTime() - last >= STALE_ALERT_COOLDOWN_MS) {
+                _staleAlertSent.set(t.name, now.getTime());
+                try {
+                  Promise.resolve(alerting.sendAlert({
+                    title: `system_cron_stale:${t.name}`,
+                    message: `Cron "${t.name}" lastRun is ${Math.round(ageMs / 60000)}m old `
+                      + `(threshold ${Math.round(threshold / 60000)}m = interval × ${multiplier})`,
+                    severity: 'error',
+                    context: {
+                      job: t.name,
+                      schedule: t.schedule,
+                      lastRun: meta.lastRun,
+                      ageMs,
+                      intervalMs,
+                      thresholdMs: threshold,
+                      multiplier,
+                    },
+                  })).catch(() => { /* never throw from probe */ });
+                } catch (_) { /* never throw */ }
+              }
+            }
+          }
+        }
+      }
+
       return {
         name: t.name,
         schedule: t.schedule,
@@ -296,9 +377,16 @@ function status() {
         lastStatus: meta.lastStatus || null,
         lastError: meta.lastError || null,
         nextRun,
+        intervalMs,
+        stale,
+        staleBy,
       };
     }),
   };
 }
 
-module.exports = { start, stop, status, isEnabled };
+function _resetStaleAlertsForTests() {
+  _staleAlertSent.clear();
+}
+
+module.exports = { start, stop, status, isEnabled, _resetStaleAlertsForTests };
