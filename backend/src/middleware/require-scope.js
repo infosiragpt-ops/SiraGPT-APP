@@ -1,0 +1,85 @@
+'use strict';
+
+/**
+ * require-scope.js — Cycle 88 API-key scope enforcement.
+ *
+ * Returns an Express middleware that ensures the authenticated API key
+ * carries the `needed` scope (or the wildcard `*`). JWT-authenticated
+ * sessions (req.authMethod !== 'api_key') bypass the check entirely —
+ * preserving existing behaviour for the browser SPA.
+ *
+ * Common scope conventions: 'read', 'write', 'admin', plus colon-
+ * namespaced fine-grained scopes such as 'ai:generate', 'files:write',
+ * 'chats:read'. The wildcard '*' grants all scopes.
+ *
+ * Also increments the `siragpt_api_key_requests_total{prefix}` counter
+ * for each authenticated API-key request that passes through the
+ * middleware (regardless of whether the scope check passes). Counter
+ * increments are best-effort and never throw.
+ */
+
+let _metrics = null;
+function getMetrics() {
+  if (_metrics !== null) return _metrics;
+  try {
+    // Lazy require so test environments without metrics keep working.
+    // eslint-disable-next-line global-require
+    _metrics = require('../utils/metrics');
+    if (_metrics && typeof _metrics.registerCounter === 'function') {
+      _metrics.registerCounter('siragpt_api_key_requests_total', {
+        help: 'Total authenticated requests served using an API key, labelled by key prefix',
+        labels: ['prefix'],
+      });
+    }
+  } catch (_err) {
+    _metrics = false;
+  }
+  return _metrics;
+}
+
+function trackApiKeyRequest(prefix) {
+  const m = getMetrics();
+  if (!m || typeof m.counter !== 'function') return;
+  try {
+    m.counter('siragpt_api_key_requests_total', { prefix: prefix || 'unknown' }, 1);
+  } catch (_err) {
+    /* never break the request on metrics */
+  }
+}
+
+function hasScope(scopes, needed) {
+  if (!Array.isArray(scopes) || scopes.length === 0) return false;
+  if (scopes.includes('*')) return true;
+  if (scopes.includes(needed)) return true;
+  // Allow a colon-namespace wildcard such as 'ai:*' covering 'ai:generate'.
+  const colon = needed.indexOf(':');
+  if (colon > 0) {
+    const ns = needed.slice(0, colon) + ':*';
+    if (scopes.includes(ns)) return true;
+  }
+  return false;
+}
+
+function requireScope(needed) {
+  if (typeof needed !== 'string' || !needed) {
+    throw new TypeError('requireScope(needed): needed must be a non-empty string');
+  }
+  return function requireScopeMiddleware(req, res, next) {
+    // JWT (or anonymous) sessions bypass scope enforcement entirely.
+    if (req.authMethod !== 'api_key') return next();
+
+    const apiKey = req.apiKey || {};
+    trackApiKeyRequest(apiKey.prefix);
+
+    if (!hasScope(apiKey.scopes, needed)) {
+      return res.status(403).json({
+        error: 'insufficient_scope',
+        message: `API key is missing required scope '${needed}'`,
+        required: needed,
+      });
+    }
+    return next();
+  };
+}
+
+module.exports = { requireScope, hasScope };

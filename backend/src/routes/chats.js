@@ -1,6 +1,7 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
+const { requireScope } = require('../middleware/require-scope');
 const prisma = require('../config/database');
 const OpenAI = require('openai');
 const { v4: uuidv4 } = require('uuid');
@@ -57,7 +58,7 @@ router.get('/:chatId/pending-stream', authenticateToken, async (req, res) => {
 });
 
 // Get user's chats
-router.get('/', authenticateToken, async (req, res) => {
+router.get('/', authenticateToken, requireScope('chats:read'), async (req, res) => {
   try {
     const page = parsePositiveInt(req.query.page, 1, { min: 1, max: 10000 });
     const limit = parsePositiveInt(req.query.limit, 20, { min: 1, max: 100 });

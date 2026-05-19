@@ -1,6 +1,7 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
+const { requireScope } = require('../middleware/require-scope');
 
 // Lazy/safe enforce-org-quota middleware. Wrapped in a try/catch so a
 // crash in the middleware module (e.g. prisma model missing in dev) can
@@ -960,6 +961,7 @@ router.post(
     body('files').optional().isArray(),
   ],
   authenticateToken,
+  requireScope('ai:generate'),
   enforceOrgQuotaSafe,
   enforceOrgRateLimitSafe,
   async (req, res) => {

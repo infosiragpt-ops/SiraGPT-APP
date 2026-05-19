@@ -1,6 +1,7 @@
 const express = require('express');
 const fsSync = require('fs');
 const { authenticateToken } = require('../middleware/auth');
+const { requireScope } = require('../middleware/require-scope');
 const upload = require('../middleware/upload');
 const fileProcessingStatus = require('../services/file-processing-status');
 const fileProcessor = require('../services/fileProcessor');
@@ -283,7 +284,7 @@ async function processFilesInParallel(files, userId, prismaClient) {
 }
 
 // Upload files — parallel batch processing
-router.post('/upload', authenticateToken, upload.array('files', 50), enforceOrgRateLimitSafe, async (req, res) => {
+router.post('/upload', authenticateToken, requireScope('files:write'), upload.array('files', 50), enforceOrgRateLimitSafe, async (req, res) => {
   try {
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: 'No files uploaded' });
