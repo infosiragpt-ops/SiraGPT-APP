@@ -18,11 +18,13 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
+const { responseCache } = require('../middleware/response-cache');
 const scientificSearch = require('../services/scientific-search');
 
 const router = express.Router();
 
-router.get('/providers', (req, res) => {
+// Provider list rarely changes — cache for 5 min to avoid recomputing env probes.
+router.get('/providers', responseCache({ ttlMs: 5 * 60_000, namespace: 'sci-providers' }), (req, res) => {
   res.json({
     providers: scientificSearch.PROVIDERS,
     keysConfigured: {

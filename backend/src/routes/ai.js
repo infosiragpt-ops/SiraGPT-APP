@@ -9,6 +9,7 @@ const usageService = require("../services/usage-service");
 const contextWindow = require("../services/context-window");
 const { optionalAuth } = require('../middleware/optionalAuth');
 const { trackAnonUsage } = require('../middleware/trackAnonUsage');
+const { responseCache } = require('../middleware/response-cache');
 const googleMCPService = require('../services/google-mcp');
 const documentService = require('../services/document-service');
 const langPolicy = require('../services/language-policy');
@@ -394,7 +395,7 @@ router.post(
 );
 
 // ✅ Get available AI models
-router.get('/models', optionalAuth, async (req, res) => {
+router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace: 'ai-models' }), async (req, res) => {
   try {
     const { type } = req.query; // Query se 'type' hasil karein (e.g., ?type=TEXT)
 

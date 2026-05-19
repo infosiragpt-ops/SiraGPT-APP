@@ -10,6 +10,7 @@ const axios = require('axios');
 const { serializeUser, serializeBigIntFields } = require('../utils/bigint-serializer');
 const modelSyncService = require('../services/model-sync-service');
 const modelSyncScheduler = require('../services/model-sync-scheduler');
+const { responseCache } = require('../middleware/response-cache');
 
 // Apply admin middleware to all routes
 router.use(authenticateToken, requireAdmin);
@@ -705,7 +706,7 @@ router.get('/stats', async (req, res) => {
 // analyzers along with the breaker config. Useful for ops to see whether
 // a recently-shipped regex regression is being short-circuited in prod.
 // Also includes cache stats (size/hits/misses/ratio).
-router.get('/analyzer/health', (_req, res) => {
+router.get('/analyzer/health', responseCache({ ttlMs: 60_000, namespace: 'analyzer-health' }), (_req, res) => {
   try {
     const documentProfessionalAnalyzer = require('../services/document-professional-analyzer');
     const snapshot = documentProfessionalAnalyzer.getAnalyzerHealthSnapshot();

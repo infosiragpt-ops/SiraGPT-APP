@@ -59,6 +59,14 @@ const MAX_INSIGHTS_BLOCK_CHARS = Number.parseInt(process.env.SIRAGPT_DOC_INSIGHT
 
 // Slow-block warning threshold — analyzers slower than this on a single
 // chat path log a `[analyzer/slow]` line so operators can spot regressions.
+// TODO(worker-pool): heavy regex/text passes (esp. on large documents) are
+// candidates for off-main-thread execution via `src/utils/worker-pool.js` →
+// `workers/heavy-analysis.worker.js`. The pool is wired and tested but not yet
+// dispatched from here; once the heavy step is refactored into a pure
+// function (input → output, no Prisma/no IO), call
+// `getSharedPool().run('document-analyze', { ... })` and await the result
+// to free up the event loop for HTTP traffic.
+//
 // Most regex-based analyzers complete in single-digit ms; anything > 250 ms
 // warrants a look. Char threshold flags analyzers that dominate the budget.
 const ANALYZER_SLOW_THRESHOLD_MS = Number.parseInt(process.env.SIRAGPT_ANALYZER_SLOW_MS || '250', 10);

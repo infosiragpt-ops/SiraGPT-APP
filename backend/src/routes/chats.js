@@ -183,6 +183,39 @@ router.post('/', [
 // Get specific chat with messages
 router.get('/:id', authenticateToken, async (req, res) => {
   try {
+    // ETag short-circuit: compute a cheap fingerprint from chat metadata
+    // (latest message timestamp + message count) before pulling the full
+    // payload. If If-None-Match matches, return 304 immediately.
+    try {
+      const fingerprintRow = await prisma.chat.findFirst({
+        where: { id: req.params.id, userId: req.user.id },
+        select: {
+          id: true,
+          updatedAt: true,
+          _count: { select: { messages: true } },
+          messages: {
+            orderBy: { timestamp: 'desc' },
+            take: 1,
+            select: { timestamp: true },
+          },
+        },
+      });
+      if (fingerprintRow) {
+        const latestTs = fingerprintRow.messages[0]?.timestamp
+          ? new Date(fingerprintRow.messages[0].timestamp).getTime()
+          : new Date(fingerprintRow.updatedAt || 0).getTime();
+        const count = fingerprintRow._count?.messages || 0;
+        const etag = `W/"chat-${fingerprintRow.id}-${count}-${latestTs}"`;
+        res.setHeader('ETag', etag);
+        const ifNoneMatch = req.headers['if-none-match'];
+        if (ifNoneMatch && ifNoneMatch === etag) {
+          return res.status(304).end();
+        }
+      }
+    } catch (e) {
+      // Fingerprint failure is non-fatal — fall through to full read.
+    }
+
     const chat = await prisma.chat.findFirst({
       where: {
         id: req.params.id,
