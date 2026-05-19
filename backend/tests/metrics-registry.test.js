@@ -228,6 +228,71 @@ describe('metrics registry — analyzer cache delta', () => {
   });
 });
 
+describe('metrics registry — coverage gaps', () => {
+  beforeEach(resetAll);
+
+  test('histogram bucket boundary: value equal to threshold counts in that bucket', () => {
+    // Exact-equality on `le` is a known boundary case (le="1" includes 1).
+    metrics.registerHistogram('test_boundary', { help: 'h', buckets: [1, 2] });
+    metrics.observe('test_boundary', {}, 1);
+    metrics.observe('test_boundary', {}, 2);
+    const txt = metrics.renderText();
+    assert.match(txt, /test_boundary_bucket\{le="1"\} 1/);
+    assert.match(txt, /test_boundary_bucket\{le="2"\} 2/);
+    assert.match(txt, /test_boundary_bucket\{le="\+Inf"\} 2/);
+    assert.match(txt, /test_boundary_sum 3/);
+  });
+
+  test('gauge increment-then-decrement via repeated sets reflects last write', () => {
+    // Gauges only support set semantics — verify the "increment" workflow
+    // (read+1, set) and "decrement" (read-1, set) both render cleanly.
+    metrics.registerGauge('test_gauge_inc', { help: 'h' });
+    metrics.gauge('test_gauge_inc', {}, 1);
+    metrics.gauge('test_gauge_inc', {}, 2); // increment
+    metrics.gauge('test_gauge_inc', {}, 1); // decrement
+    const txt = metrics.renderText();
+    assert.match(txt, /test_gauge_inc 1/);
+  });
+
+  test('_reset clears all series but preserves registrations', () => {
+    metrics.registerCounter('test_persist_ctr', { help: 'h' });
+    metrics.counter('test_persist_ctr', {}, 5);
+    metrics._reset();
+    const txt = metrics.renderText();
+    // Registration is preserved → counter still rendered with default 0.
+    assert.match(txt, /# TYPE test_persist_ctr counter/);
+    assert.match(txt, /test_persist_ctr 0/);
+    // Subsequent counter() still works on the same registration.
+    metrics.counter('test_persist_ctr', {}, 3);
+    assert.match(metrics.renderText(), /test_persist_ctr 3/);
+  });
+
+  test('observe() is a no-op for an unregistered histogram name', () => {
+    metrics.observe('nope_histogram', {}, 1);
+    const txt = metrics.renderText();
+    assert.doesNotMatch(txt, /nope_histogram/);
+  });
+
+  test('histogram buckets are de-duplicated and sorted on registration', () => {
+    metrics.registerHistogram('test_dedup', {
+      help: 'h',
+      // Intentionally unsorted, with duplicate and non-finite entries.
+      buckets: [5, 1, 1, NaN, 'foo', 2.5],
+    });
+    metrics.observe('test_dedup', {}, 1.5);
+    const txt = metrics.renderText();
+    // 1 (≥1.5? no), 2.5 (≥1.5 yes), 5 (yes) — order ascending, no dupes.
+    const buckets = txt.match(/test_dedup_bucket\{le="[^"]+"\}/g) || [];
+    // Expected: le="1", le="2.5", le="5", le="+Inf"
+    assert.deepEqual(buckets, [
+      'test_dedup_bucket{le="1"}',
+      'test_dedup_bucket{le="2.5"}',
+      'test_dedup_bucket{le="5"}',
+      'test_dedup_bucket{le="+Inf"}',
+    ]);
+  });
+});
+
 describe('metrics registry — process snapshot', () => {
   beforeEach(resetAll);
 

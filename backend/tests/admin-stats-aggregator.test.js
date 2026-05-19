@@ -163,6 +163,30 @@ test('aggregateUsageStats sums tokens/cost by model+provider and ranks users', a
   assert.equal(usage.byProviderTokens.Anthropic, 500);
   assert.equal(usage.topUsers.length, 2);
   assert.equal(usage.topUsers[0].email, 'a@b.com');
+  // MTD fields are always present, even if cost-tracker is empty.
+  assert.equal(typeof usage.currentMonthToDateCost, 'number');
+  assert.equal(typeof usage.currentMonthToDateTokens, 'number');
+});
+
+test('aggregateUsageStats surfaces month-to-date totals from cost-tracker', async () => {
+  const costTracker = require('../src/services/ai/cost-tracker');
+  costTracker._reset();
+  // Two requests this month — verifies tracker → aggregator wiring.
+  costTracker.track({
+    userId: 'u1', model: 'gpt-4o', inputTokens: 100, outputTokens: 50, costUSD: 1.25,
+  });
+  costTracker.track({
+    userId: 'u2', model: 'claude-3', inputTokens: 200, outputTokens: 25, costUSD: 0.5,
+  });
+  const prisma = {
+    apiUsage: { groupBy: async () => [] },
+    aiModel: { findMany: async () => [] },
+    user: { findMany: async () => [] },
+  };
+  const usage = await aggregateUsageStats(prisma, {});
+  assert.equal(usage.currentMonthToDateCost, 1.75);
+  assert.equal(usage.currentMonthToDateTokens, 375);
+  costTracker._reset();
 });
 
 // ── file stats ─────────────────────────────────────────────────────────────
@@ -174,12 +198,41 @@ test('aggregateFileStats reports total + per-mime breakdown', async () => {
         { mimeType: 'text/plain', _count: { mimeType: 1 }, _sum: { size: 256 } },
       ],
       aggregate: async () => ({ _count: { _all: 4 }, _sum: { size: 1280 } }),
+      findMany: async () => [
+        { createdAt: new Date(), size: 1000 },
+        { createdAt: new Date(Date.now() - 24 * 60 * 60 * 1000), size: 500 },
+        { createdAt: new Date(Date.now() - 24 * 60 * 60 * 1000), size: 250 },
+      ],
     },
   };
   const stats = await aggregateFileStats(prisma, {});
   assert.equal(stats.filesUploaded, 4);
   assert.equal(stats.totalBytes, 1280);
   assert.equal(stats.byMime[0].mimeType, 'application/pdf');
+  // uploadTrend: exactly 7 entries, sums match input
+  assert.equal(stats.uploadTrend.length, 7);
+  const totalCount = stats.uploadTrend.reduce((acc, r) => acc + r.count, 0);
+  const totalBytes = stats.uploadTrend.reduce((acc, r) => acc + r.totalBytes, 0);
+  assert.equal(totalCount, 3);
+  assert.equal(totalBytes, 1750);
+  // dates are ISO YYYY-MM-DD strings, sorted ascending
+  for (let i = 1; i < stats.uploadTrend.length; i += 1) {
+    assert.ok(stats.uploadTrend[i].date > stats.uploadTrend[i - 1].date);
+    assert.ok('totalBytes' in stats.uploadTrend[i]);
+  }
+});
+
+test('aggregateFileStats uploadTrend is all zeros when no files', async () => {
+  const prisma = {
+    file: {
+      groupBy: async () => [],
+      aggregate: async () => ({ _count: { _all: 0 }, _sum: { size: 0 } }),
+      findMany: async () => [],
+    },
+  };
+  const stats = await aggregateFileStats(prisma, {});
+  assert.equal(stats.uploadTrend.length, 7);
+  assert.ok(stats.uploadTrend.every((r) => r.count === 0 && r.totalBytes === 0));
 });
 
 // ── agent stats ────────────────────────────────────────────────────────────

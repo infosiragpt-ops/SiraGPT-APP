@@ -80,6 +80,37 @@ function _buildSignupTrend(rows, now = new Date()) {
   return Array.from(buckets.entries()).map(([date, count]) => ({ date, count }));
 }
 
+/**
+ * Build the last-7-days upload trend as
+ * `[{ date: 'YYYY-MM-DD', count, totalBytes }]`. Mirrors `_buildSignupTrend`
+ * but additionally sums per-day bytes so the admin dashboard can render both
+ * a count bar chart and a storage-growth line in one pass.
+ */
+function _buildUploadTrend(rows, now = new Date()) {
+  const todayUtc = new Date(Date.UTC(
+    now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()
+  ));
+  const buckets = new Map();
+  for (let i = 6; i >= 0; i -= 1) {
+    const d = new Date(todayUtc.getTime() - i * 24 * 60 * 60 * 1000);
+    buckets.set(d.toISOString().slice(0, 10), { count: 0, totalBytes: 0 });
+  }
+  for (const r of rows || []) {
+    const created = r && r.createdAt ? new Date(r.createdAt) : null;
+    if (!created || Number.isNaN(created.getTime())) continue;
+    const key = created.toISOString().slice(0, 10);
+    const slot = buckets.get(key);
+    if (!slot) continue;
+    slot.count += 1;
+    slot.totalBytes += safeNumber(r.size);
+  }
+  return Array.from(buckets.entries()).map(([date, v]) => ({
+    date,
+    count: v.count,
+    totalBytes: v.totalBytes,
+  }));
+}
+
 async function aggregateUserStats(prisma, range) {
   const { from, to } = parseRange(range);
 
@@ -223,6 +254,28 @@ async function aggregateUsageStats(prisma, range) {
     cost: Math.round(safeNumber(row._sum?.cost) * 1e6) / 1e6,
   }));
 
+  // Month-to-date aggregate from the in-process cost-tracker. Lazy-require
+  // so this module stays loadable in tests that stub Prisma without the
+  // tracker side-effects (and so a tracker fault never breaks the admin
+  // dashboard — we swallow errors and report zeros).
+  let currentMonthToDateCost = 0;
+  let currentMonthToDateTokens = 0;
+  try {
+    // eslint-disable-next-line global-require
+    const costTracker = require('./ai/cost-tracker');
+    const now = new Date();
+    const monthStart = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)
+    );
+    const mtd = costTracker.report({ from: monthStart, to: now, includeRecords: false });
+    currentMonthToDateCost = Math.round(safeNumber(mtd?.totals?.costUSD) * 1e6) / 1e6;
+    currentMonthToDateTokens =
+      safeNumber(mtd?.totals?.inputTokens) + safeNumber(mtd?.totals?.outputTokens);
+  } catch {
+    // never throw — admin dashboard must keep rendering even if the
+    // in-process tracker is unavailable.
+  }
+
   return {
     range: { from: from.toISOString(), to: to.toISOString() },
     totalTokens,
@@ -233,13 +286,23 @@ async function aggregateUsageStats(prisma, range) {
     ),
     byModel: byModelOut,
     topUsers,
+    currentMonthToDateCost,
+    currentMonthToDateTokens,
   };
 }
 
 async function aggregateFileStats(prisma, range) {
   const { from, to } = parseRange(range);
 
-  const [byMime, totals] = await Promise.all([
+  // Fixed window for the upload trend — last 7 days, independent of the
+  // caller's `range`. Mirrors signupTrend in aggregateUserStats.
+  const now = new Date();
+  const trendFrom = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
+      - 6 * 24 * 60 * 60 * 1000
+  );
+
+  const [byMime, totals, uploadRows] = await Promise.all([
     prisma.file.groupBy({
       by: ['mimeType'],
       where: { createdAt: { gte: from, lte: to } },
@@ -251,6 +314,12 @@ async function aggregateFileStats(prisma, range) {
       _count: { _all: true },
       _sum: { size: true },
     }),
+    prisma.file.findMany({
+      where: { createdAt: { gte: trendFrom } },
+      select: { createdAt: true, size: true },
+      // Defensive cap — even at 10k uploads/day we'd only see 70k rows.
+      take: 50000,
+    }),
   ]);
 
   const byMimeOut = byMime
@@ -261,11 +330,14 @@ async function aggregateFileStats(prisma, range) {
     }))
     .sort((a, b) => b.bytes - a.bytes);
 
+  const uploadTrend = _buildUploadTrend(uploadRows, now);
+
   return {
     range: { from: from.toISOString(), to: to.toISOString() },
     filesUploaded: totals._count?._all || 0,
     totalBytes: safeNumber(totals._sum?.size),
     byMime: byMimeOut,
+    uploadTrend,
   };
 }
 
