@@ -1,5 +1,64 @@
 # Changelog
 
+All notable changes to this project are documented in this file.
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and improvement cycles follow a sequential number with the date the work landed.
+
+## [Cycle 20] — 2026-05-19
+
+### Added
+- E2E happy-path smoke (`e2e/happy-path.spec.ts`) — register → chat → logout, fully `page.route('/api/**')`-mocked so it runs without a backend.
+- Vitest snapshot tests for critical UI: `LongOperationIndicator` (5 s + 35 s elapsed states), `KeyboardShortcutsModal` (open + closed), `ErrorBoundary` (default fallback).
+- Property-based tests with `fast-check` covering `utils/bigint-serializer.js` (round-trip + recursive walk), `services/rag/bm25.js` (non-negative scores, monotonicity in TF, single-doc match) and `utils/session-fingerprint.js` (determinism, discrimination, /24 collapse).
+
+### Changed
+- `playwright_smoke` CI step now runs with `--reporter=list` and uploads `playwright-report/` as an artifact on failure (7-day retention).
+
+## [Cycle 19] — 2026-05-19
+
+### Added
+- Zod schemas + `validate` middleware + AI response contracts with codegen pipeline.
+
+## [Cycle 18] — 2026-05-19
+
+### Added
+- Hybrid retrieval (vector + BM25) with MMR diversify, cost tracker, anomaly detector.
+
+## [Cycle 17] — 2026-05-19
+
+### Added
+- CSRF protection, session fingerprint binding, strict CSP, and granular audit log entries.
+
+## [Cycle 16] — 2026-05-19
+
+### Added
+- Developer-experience tooling: dev scripts, AsyncLocalStorage-backed structured logger, feature-flags scaffold.
+
+## [Cycle 15] — 2026-05-19
+
+### Added
+- Operations test suites: chaos suite, SSE memory-leak test, autocannon load profile, nightly DB backup workflow.
+
+## [Cycle 14] — 2026-05-19
+
+### Added
+- Data lifecycle: soft-delete framework, GDPR export/delete endpoints, audit log wiring across mutators.
+
+## [Cycle 13] — 2026-05-19
+
+### Changed
+- CI: dependency caching, 4-shard backend tests, c8 coverage reports, secret-scan pre-commit hook.
+
+## [Cycle 12] — 2026-05-19
+
+### Added
+- API documentation mirror (`openapi.json`), Swagger UI at `/api/docs`, contract tests.
+
+## [Cycle 11] — 2026-05-19
+
+### Added
+- Infrastructure: i18n locale toggle, service-worker scaffold, analytics event taxonomy.
+
 ## [Unreleased] — Production Hardening Sprint (2026-05-04)
 
 ### 🧪 Frontend Testing (Vitest)

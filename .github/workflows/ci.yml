@@ -456,7 +456,19 @@ jobs:
         if: steps.playwright_install.outcome == 'success'
         timeout-minutes: 8
         continue-on-error: true
-        run: npm run test:e2e
+        run: npm run test:e2e -- --reporter=list
+
+      # Upload the HTML report only when the smoke step actually failed,
+      # so green runs don't pay the artifact tax. Retention is short — these
+      # are debug artifacts, not release deliverables.
+      - name: Upload Playwright report on failure
+        if: always() && steps.playwright_smoke.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Report Playwright smoke status
         if: always()
