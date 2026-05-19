@@ -181,3 +181,104 @@ test('health p95 reflects observed durations', async () => {
   // p95 of {5,15} (nearest-rank) is 15.
   assert.ok(h.p95DurationMs > 0, `expected p95 > 0, got ${h.p95DurationMs}`);
 });
+
+// ── DLQ (ratchet 45) ────────────────────────────────────────────────
+test('dlq receives a delivery when retries are exhausted', async () => {
+  await dispatcher.dispatch({
+    url: 'https://example.com/h', event: 'evt', payload: { a: 1 },
+    deliverFn: async () => ({ status: 500, ok: false }),
+    maxRetries: 1, baseDelayMs: 1, maxDelayMs: 2,
+  });
+  const items = dispatcher.listDLQ({});
+  assert.equal(items.length, 1);
+  assert.equal(items[0].event, 'evt');
+  assert.equal(items[0].url, 'https://example.com/h');
+  assert.ok(items[0].attempts >= 1);
+  assert.ok(items[0].error);
+  assert.ok(items[0].failedAt);
+});
+
+test('dlq does not receive successful deliveries', async () => {
+  await dispatcher.dispatch({
+    url: 'u', event: 'ok', payload: {},
+    deliverFn: async () => ({ status: 200, ok: true }), maxRetries: 0,
+  });
+  assert.equal(dispatcher.listDLQ({}).length, 0);
+});
+
+test('retryDLQItem re-dispatches and removes on success', async () => {
+  await dispatcher.dispatch({
+    url: 'u', event: 'evt', payload: { x: 1 },
+    deliverFn: async () => ({ status: 500, ok: false }),
+    maxRetries: 0, baseDelayMs: 1,
+  });
+  const [item] = dispatcher.listDLQ({});
+  assert.ok(item, 'expected DLQ item');
+
+  const result = await dispatcher.retryDLQItem(item.id, {
+    deliverFn: async () => ({ status: 200, ok: true }),
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.result.status, 'delivered');
+  assert.equal(dispatcher.listDLQ({}).length, 0, 'DLQ should be empty after success');
+});
+
+test('retryDLQItem keeps item when redelivery fails', async () => {
+  await dispatcher.dispatch({
+    url: 'u', event: 'evt', payload: {},
+    deliverFn: async () => ({ status: 500, ok: false }),
+    maxRetries: 0, baseDelayMs: 1,
+  });
+  const [item] = dispatcher.listDLQ({});
+  const result = await dispatcher.retryDLQItem(item.id, {
+    deliverFn: async () => ({ status: 500, ok: false }),
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.result.status, 'failed');
+  // Manual replay sets _fromDLQ so we don't re-push (would duplicate).
+  assert.equal(dispatcher.listDLQ({}).length, 1);
+});
+
+test('retryDLQItem returns not_found for unknown id', async () => {
+  const result = await dispatcher.retryDLQItem('nope');
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'not_found');
+});
+
+test('DLQ mirrors to Redis backend when configured (best-effort)', async () => {
+  const calls = [];
+  dispatcher.setDLQRedisBackend({
+    lpush: async (k, v) => { calls.push({ op: 'lpush', k, v }); return 1; },
+    ltrim: async (k, a, b) => { calls.push({ op: 'ltrim', k, a, b }); return 'OK'; },
+    lrem: async (k, c, v) => { calls.push({ op: 'lrem', k, c, v }); return 1; },
+  });
+  try {
+    await dispatcher.dispatch({
+      url: 'u', event: 'evt', payload: {},
+      deliverFn: async () => ({ status: 500, ok: false }),
+      maxRetries: 0, baseDelayMs: 1,
+    });
+    // Give the best-effort .then() a chance to run.
+    await new Promise((r) => setImmediate(r));
+    assert.ok(calls.some((c) => c.op === 'lpush'), 'lpush should fire');
+    assert.equal(dispatcher.dlqStats().redisBacked, true);
+  } finally {
+    dispatcher.setDLQRedisBackend(null);
+  }
+});
+
+test('DLQ tolerates a throwing Redis backend without breaking dispatch', async () => {
+  dispatcher.setDLQRedisBackend({
+    lpush: () => { throw new Error('boom'); },
+  });
+  try {
+    await dispatcher.dispatch({
+      url: 'u', event: 'evt', payload: {},
+      deliverFn: async () => ({ status: 500, ok: false }),
+      maxRetries: 0, baseDelayMs: 1,
+    });
+    assert.equal(dispatcher.listDLQ({}).length, 1);
+  } finally {
+    dispatcher.setDLQRedisBackend(null);
+  }
+});

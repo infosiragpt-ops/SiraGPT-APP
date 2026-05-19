@@ -1457,6 +1457,70 @@ router.get('/system-summary', requireSuperAdmin, async (_req, res) => {
   }
 });
 
+// ── System snapshot (ratchet 45, super-admin) ──────────────────────────
+// Single roll-up for ops audit / debug. Combines:
+//   - summary       : buildSystemSummary() (overall, services, mrr, ...)
+//   - health        : collectServiceHealth() (full probe detail)
+//   - queues        : agent-task-queue counts (when Redis is configured)
+//   - cron          : system-cron status() (jobs, lastRun, nextRun, ...)
+//   - webhooks      : dispatcher.health() + dlqStats()
+// Every sub-call is settled independently so a single failure doesn't
+// blank the page — failed sections come back as `{ error: '...' }`.
+router.get('/system-snapshot', requireSuperAdmin, async (_req, res) => {
+  const settle = async (label, fn) => {
+    try { return await fn(); }
+    catch (err) {
+      return { error: err && err.message ? err.message : String(err), section: label };
+    }
+  };
+
+  const emailService = (() => { try { return require('../services/email'); } catch { return null; } })();
+  const queueModule = (() => { try { return require('../services/agents/agent-task-queue'); } catch { return null; } })();
+  const schedulerModule = (() => { try { return require('../services/scheduler/scheduler'); } catch { return null; } })();
+  const socketModule = (() => { try { return require('../services/realtime/socket-server'); } catch { return null; } })();
+  const systemCronModule = (() => { try { return require('../jobs/system-cron'); } catch { return null; } })();
+
+  const [summary, health, queues, cron, webhooks] = await Promise.all([
+    settle('summary', () => buildSystemSummary({})),
+    settle('health', () => collectServiceHealth({
+      prismaClient: prisma,
+      env: process.env,
+      stripeSvc: stripeService,
+      emailSvc: emailService,
+      queueModule,
+      schedulerModule,
+      socketModule,
+      systemCronModule,
+    })),
+    settle('queues', async () => {
+      if (!queueModule) return { enabled: false, reason: 'queue_module_missing' };
+      if (!process.env.REDIS_URL) return { enabled: false, reason: 'redis_url_unset' };
+      const h = await queueModule.getQueueHealth();
+      return { enabled: true, queues: [{ name: h.queue, counts: h.counts }] };
+    }),
+    settle('cron', async () => {
+      if (!systemCronModule || typeof systemCronModule.status !== 'function') {
+        return { enabled: false, reason: 'system_cron_missing' };
+      }
+      return systemCronModule.status();
+    }),
+    settle('webhooks', async () => ({
+      health: webhookDispatcher.health(),
+      deliveryStats: webhookDispatcher.stats(),
+      dlq: webhookDispatcher.dlqStats(),
+    })),
+  ]);
+
+  res.json({
+    generatedAt: new Date().toISOString(),
+    summary,
+    health,
+    queues,
+    cron,
+    webhooks,
+  });
+});
+
 router.get('/health/services', requireSuperAdmin, async (_req, res) => {
   try {
     const emailService = (() => { try { return require('../services/email'); } catch (_) { return null; } })();
@@ -1951,6 +2015,48 @@ router.get('/webhooks/health', requireSuperAdmin, (req, res) => {
   } catch (err) {
     console.error('[admin/webhooks/health] failed:', err && err.message ? err.message : err);
     res.status(500).json({ error: 'Failed to compute webhook health' });
+  }
+});
+
+// ── Webhook DLQ (ratchet 45) ────────────────────────────────────────────
+// Cycle 21 retries inline; once retries are exhausted the delivery is
+// pushed to a dead-letter queue so operators can inspect payload + error
+// + attempts and trigger a manual re-dispatch.
+//   GET  /api/admin/webhooks/dlq                  → list failed deliveries
+//   POST /api/admin/webhooks/dlq/:id/retry        → re-dispatch one item
+router.get('/webhooks/dlq', requireSuperAdmin, (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 100, 500);
+    const event = req.query.event ? String(req.query.event) : null;
+    const items = webhookDispatcher.listDLQ({ limit, event });
+    res.json({ items, stats: webhookDispatcher.dlqStats() });
+  } catch (err) {
+    console.error('[admin/webhooks/dlq] failed:', err && err.message ? err.message : err);
+    res.status(500).json({ error: 'Failed to list webhook DLQ' });
+  }
+});
+
+router.post('/webhooks/dlq/:id/retry', requireSuperAdmin, async (req, res) => {
+  try {
+    const result = await webhookDispatcher.retryDLQItem(req.params.id, {
+      secret: req.body?.secret || process.env.WEBHOOK_SECRET,
+    });
+    if (!result?.ok && result?.reason === 'not_found') {
+      return res.status(404).json({ error: 'DLQ item not found' });
+    }
+    void writeAuditLog(prisma, {
+      actorType: 'admin',
+      actorId: req.user?.id || null,
+      actorName: req.user?.email || null,
+      resourceType: 'webhook_dlq',
+      resourceId: req.params.id,
+      action: 'retry',
+      after: { status: result?.result?.status || 'unknown' },
+    });
+    res.json(result);
+  } catch (err) {
+    console.error('[admin/webhooks/dlq/retry] failed:', err && err.message ? err.message : err);
+    res.status(500).json({ error: 'Failed to retry DLQ item' });
   }
 });
 

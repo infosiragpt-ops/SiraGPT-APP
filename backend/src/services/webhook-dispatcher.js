@@ -41,10 +41,29 @@ let deliveries = []; // ring buffer of attempt records
 let bufferSize = DEFAULT_BUFFER_SIZE;
 let nextId = 1;
 
-function resetStore({ size = DEFAULT_BUFFER_SIZE } = {}) {
+// ── Dead-letter queue (cycle 21 retries → DLQ on exhaustion) ──────
+// Failed deliveries (after `maxRetries` exhausted) are pushed here so
+// operators can inspect payload + error + attempts and re-dispatch.
+// Backed by an in-memory ring buffer; if a Redis client is registered
+// via `setDLQRedisBackend` (cycle 31 pattern) entries are also mirrored
+// there so they survive process restarts. Redis writes are best-effort
+// and never block dispatch.
+const DEFAULT_DLQ_SIZE = 1024;
+const DLQ_REDIS_KEY = 'siragpt:webhooks:dlq';
+let dlq = [];
+let dlqSize = DEFAULT_DLQ_SIZE;
+let dlqRedis = null; // optional ioredis-like client { lpush, lrange, ltrim, lrem, del }
+
+function setDLQRedisBackend(client) {
+  dlqRedis = client || null;
+}
+
+function resetStore({ size = DEFAULT_BUFFER_SIZE, dlqRingSize = DEFAULT_DLQ_SIZE } = {}) {
   deliveries = [];
   bufferSize = size;
   nextId = 1;
+  dlq = [];
+  dlqSize = dlqRingSize;
 }
 
 function recordAttempt(entry) {
@@ -121,19 +140,20 @@ async function defaultDeliver({ url, body, headers, timeoutMs }) {
   }
 }
 
-async function dispatch({
-  url,
-  event,
-  payload,
-  secret,
-  headers = {},
-  timeoutMs = DEFAULT_TIMEOUT_MS,
-  maxRetries = 3,
-  baseDelayMs = 250,
-  maxDelayMs = 5_000,
-  deliverFn = defaultDeliver,
-  now = Date.now,
-} = {}) {
+async function dispatch(opts = {}) {
+  const {
+    url,
+    event,
+    payload,
+    secret,
+    headers = {},
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+    maxRetries = 3,
+    baseDelayMs = 250,
+    maxDelayMs = 5_000,
+    deliverFn = defaultDeliver,
+    now = Date.now,
+  } = opts;
   if (!url || typeof url !== 'string') throw new Error('webhook url required');
   if (!event || typeof event !== 'string') throw new Error('webhook event required');
   const id = String(nextId++);
@@ -212,8 +232,90 @@ async function dispatch({
     entry.status = 'failed';
     entry.lastError = err && err.message ? err.message : String(err);
     entry.durationMs = Math.max(0, now() - startedAtMs);
+    // Push to DLQ — retries are exhausted at this point. Skip when the
+    // caller passed `maxRetries: 0` AND this is itself a DLQ replay
+    // (we detect that via `opts._fromDLQ`) to avoid loops on manual
+    // re-dispatch.
+    if (!opts._fromDLQ) {
+      pushToDLQ({
+        id,
+        url,
+        event,
+        payload: body,
+        attempts: entry.attempts,
+        error: entry.lastError,
+        httpStatus: entry.httpStatus,
+        createdAt: entry.createdAt,
+        failedAt: new Date(now()).toISOString(),
+      });
+    }
     return { id, status: entry.status, attempts: entry.attempts, error: entry.lastError };
   }
+}
+
+function pushToDLQ(item) {
+  dlq.push(item);
+  if (dlq.length > dlqSize) dlq.splice(0, dlq.length - dlqSize);
+  // Best-effort Redis mirror — never let a backend failure break dispatch.
+  if (dlqRedis && typeof dlqRedis.lpush === 'function') {
+    try {
+      const p = dlqRedis.lpush(DLQ_REDIS_KEY, JSON.stringify(item));
+      if (p && typeof p.then === 'function') {
+        p.then(() => {
+          if (typeof dlqRedis.ltrim === 'function') {
+            return dlqRedis.ltrim(DLQ_REDIS_KEY, 0, dlqSize - 1);
+          }
+          return null;
+        }).catch(() => { /* swallow */ });
+      }
+    } catch { /* swallow */ }
+  }
+  return item;
+}
+
+function listDLQ({ limit = 100, event = null } = {}) {
+  let out = dlq.slice();
+  if (event) out = out.filter((d) => d.event === event);
+  out.sort((a, b) => new Date(b.failedAt) - new Date(a.failedAt));
+  return out.slice(0, limit);
+}
+
+function getDLQItem(id) {
+  return dlq.find((d) => String(d.id) === String(id)) || null;
+}
+
+function removeDLQItem(id) {
+  const idx = dlq.findIndex((d) => String(d.id) === String(id));
+  if (idx === -1) return false;
+  const [removed] = dlq.splice(idx, 1);
+  if (dlqRedis && typeof dlqRedis.lrem === 'function' && removed) {
+    try {
+      const p = dlqRedis.lrem(DLQ_REDIS_KEY, 0, JSON.stringify(removed));
+      if (p && typeof p.then === 'function') p.then(() => null).catch(() => null);
+    } catch { /* swallow */ }
+  }
+  return true;
+}
+
+function dlqStats() {
+  return { total: dlq.length, bufferSize: dlqSize, redisBacked: Boolean(dlqRedis) };
+}
+
+async function retryDLQItem(id, opts = {}) {
+  const item = getDLQItem(id);
+  if (!item) return { ok: false, reason: 'not_found' };
+  const result = await dispatch({
+    url: item.url,
+    event: item.event,
+    payload: item.payload,
+    secret: opts.secret,
+    timeoutMs: opts.timeoutMs,
+    maxRetries: opts.maxRetries ?? 0,
+    deliverFn: opts.deliverFn,
+    _fromDLQ: true,
+  });
+  if (result.status === 'delivered') removeDLQItem(id);
+  return { ok: true, result };
 }
 
 async function retry(id, opts = {}) {
@@ -354,4 +456,12 @@ module.exports = {
   signPayload,
   verifySignature,
   resetStore,
+  // DLQ surface
+  listDLQ,
+  getDLQItem,
+  removeDLQItem,
+  retryDLQItem,
+  dlqStats,
+  setDLQRedisBackend,
+  DLQ_REDIS_KEY,
 };
