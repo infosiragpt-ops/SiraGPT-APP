@@ -1284,6 +1284,8 @@ model Organization {
   usedThisMonth  BigInt   @default(0)
   quotaResetAt   DateTime @default(now())
   settings       Json?
+  ssoConfig      Json?
+  ssoEnabled     Boolean  @default(false)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 

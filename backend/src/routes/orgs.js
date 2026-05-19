@@ -1775,6 +1775,167 @@ async function usageTrendHandler(req, res, deps = { prisma, costTracker }) {
 
 router.get('/:id/usage-trend', authenticateToken, (req, res) => usageTrendHandler(req, res));
 
+// ─── SSO scaffold (ratchet 45) ──────────────────────────────────────
+// Minimal data-model + endpoints for org-level SAML/OIDC SSO. The actual
+// SAML / OIDC handshake is **not** implemented yet — these handlers only
+// persist the provider configuration on the org row and return 501 from
+// the login / callback endpoints (registered in routes/auth.js) so the
+// FE can wire its config UI and integration tests can assert the
+// contract without a real IdP.
+//
+// Body shape (POST /api/orgs/:id/sso):
+//   {
+//     provider:    'saml' | 'oidc',
+//     entryPoint:  string  (SAML SSO URL or OIDC authorize URL),
+//     issuer:      string  (SP entityId / OIDC client_id),
+//     callbackUrl: string  (absolute https URL we'll register with IdP),
+//     cert?:       string  (PEM-encoded x509 — SAML),
+//     clientSecret?: string (OIDC),
+//     audience?:   string,
+//     enabled?:    boolean (defaults to current value or false),
+//   }
+//
+// Validation here is shape-only; the contents are stored verbatim as a
+// JSON bag so we can add provider-specific knobs later without another
+// migration. Owners only.
+
+const SSO_PROVIDERS = Object.freeze(['saml', 'oidc']);
+
+function sanitizeSsoConfig(input) {
+  if (input == null || typeof input !== 'object' || Array.isArray(input)) {
+    const e = new Error('sso config must be a JSON object');
+    e.status = 400;
+    throw e;
+  }
+  const provider = typeof input.provider === 'string' ? input.provider.trim().toLowerCase() : '';
+  if (!SSO_PROVIDERS.includes(provider)) {
+    const e = new Error(`provider must be one of ${SSO_PROVIDERS.join(',')}`);
+    e.status = 400;
+    throw e;
+  }
+  const requireStr = (key, max = 2048) => {
+    const v = input[key];
+    if (typeof v !== 'string' || !v.trim()) {
+      const e = new Error(`${key} is required`);
+      e.status = 400;
+      throw e;
+    }
+    if (v.length > max) {
+      const e = new Error(`${key} too long`);
+      e.status = 400;
+      throw e;
+    }
+    return v.trim();
+  };
+  const optStr = (key, max = 16384) => {
+    const v = input[key];
+    if (v == null) return undefined;
+    if (typeof v !== 'string') {
+      const e = new Error(`${key} must be a string`);
+      e.status = 400;
+      throw e;
+    }
+    if (v.length > max) {
+      const e = new Error(`${key} too long`);
+      e.status = 400;
+      throw e;
+    }
+    return v.trim();
+  };
+  const entryPoint = requireStr('entryPoint');
+  const issuer = requireStr('issuer', 512);
+  const callbackUrl = requireStr('callbackUrl');
+  if (!/^https?:\/\//i.test(entryPoint) || !/^https?:\/\//i.test(callbackUrl)) {
+    const e = new Error('entryPoint and callbackUrl must be http(s) URLs');
+    e.status = 400;
+    throw e;
+  }
+  const config = {
+    provider,
+    entryPoint,
+    issuer,
+    callbackUrl,
+  };
+  const cert = optStr('cert');
+  if (cert !== undefined) config.cert = cert;
+  const clientSecret = optStr('clientSecret', 1024);
+  if (clientSecret !== undefined) config.clientSecret = clientSecret;
+  const audience = optStr('audience', 512);
+  if (audience !== undefined) config.audience = audience;
+  return config;
+}
+
+function redactSsoConfig(config) {
+  if (!config || typeof config !== 'object') return null;
+  const out = { ...config };
+  if (typeof out.clientSecret === 'string' && out.clientSecret.length > 0) {
+    out.clientSecret = '***redacted***';
+  }
+  if (typeof out.cert === 'string' && out.cert.length > 0) {
+    // Surface only the first/last few chars so admins can confirm the
+    // right cert is installed without exposing it wholesale on every read.
+    out.cert = `${out.cert.slice(0, 32)}…${out.cert.slice(-32)}`;
+  }
+  return out;
+}
+
+async function configureOrgSsoHandler(req, res, deps = { prisma, writeAuditLog }) {
+  const db = deps.prisma || prisma;
+  const audit = deps.writeAuditLog || writeAuditLog;
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  try {
+    const membership = await assertMembership(db, orgId, userId, 'OWNER');
+    if (membership.role !== 'OWNER') {
+      return res.status(403).json({ error: 'only the OWNER can configure SSO' });
+    }
+    let config;
+    try {
+      config = sanitizeSsoConfig(req.body);
+    } catch (e) {
+      if (e && e.status) return res.status(e.status).json({ error: e.message });
+      throw e;
+    }
+    const enabled = typeof req.body?.enabled === 'boolean' ? req.body.enabled : undefined;
+    const existing = await db.organization.findUnique({
+      where: { id: orgId },
+      select: { ssoConfig: true, ssoEnabled: true },
+    });
+    if (!existing) return res.status(404).json({ error: 'organization not found' });
+    const nextEnabled = enabled == null ? !!existing.ssoEnabled : enabled;
+    const updated = await db.organization.update({
+      where: { id: orgId },
+      data: { ssoConfig: config, ssoEnabled: nextEnabled },
+      select: { ssoConfig: true, ssoEnabled: true },
+    });
+    void audit(db, {
+      action: 'org_sso_configure',
+      userId,
+      resource: 'organization',
+      resourceId: orgId,
+      before: { ssoConfigured: !!existing.ssoConfig, ssoEnabled: !!existing.ssoEnabled },
+      after: { ssoConfigured: !!updated.ssoConfig, ssoEnabled: !!updated.ssoEnabled, provider: config.provider },
+      metadata: { orgId, provider: config.provider },
+      req,
+    });
+    // Scaffold only — flag the response so callers/tests know the
+    // handshake itself is not implemented yet.
+    res.status(501).json({
+      ok: true,
+      implemented: false,
+      message: 'SSO configuration stored; SAML/OIDC handshake not implemented',
+      ssoEnabled: !!updated.ssoEnabled,
+      ssoConfig: redactSsoConfig(updated.ssoConfig),
+    });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] configure sso failed:', err.message);
+    res.status(500).json({ error: 'failed to configure sso' });
+  }
+}
+
+router.post('/:id/sso', authenticateToken, (req, res) => configureOrgSsoHandler(req, res));
+
 // Expose constants for tests/inspection.
 router.__roleAtLeast = roleAtLeast;
 router.__handlers = {
@@ -1790,6 +1951,8 @@ router.__handlers = {
 router.__invalidateMembersCache = invalidateMembersCache;
 router.__sseConfig = SSE_EVENTS;
 router.__settingsHelpers = { sanitizeSettings, mergeSettings };
+router.__ssoHelpers = { sanitizeSsoConfig, redactSsoConfig, SSO_PROVIDERS };
+router.__handlers.configureOrgSso = configureOrgSsoHandler;
 router.__billing = {
   PLAN_QUOTAS,
   PLAN_MRR_USD,

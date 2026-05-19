@@ -1167,4 +1167,78 @@ router.delete('/sessions/:id', authenticateToken, async (req, res) => {
   }
 });
 
+// ─── SSO scaffold (ratchet 45) ──────────────────────────────────────
+// Two public endpoints that resolve an org by slug and *would* hand off
+// to the configured SAML/OIDC provider. The handshake itself is not
+// implemented yet — both endpoints return 501 with the redacted config
+// so the FE can wire its "Continue with SSO" button and integration
+// tests can assert the contract before the real implementation lands.
+//
+//   GET /api/auth/sso/:orgSlug/login     — redirect target placeholder
+//   GET /api/auth/sso/:orgSlug/callback  — IdP callback placeholder
+//
+// When the integration ships the login route should 302 to
+// `org.ssoConfig.entryPoint` with the provider-specific query params,
+// and the callback should validate the SAML response / OIDC code and
+// mint a Sira session for the matched user.
+
+function redactSsoConfigForPublic(config) {
+  if (!config || typeof config !== 'object') return null;
+  return {
+    provider: config.provider || null,
+    entryPoint: config.entryPoint || null,
+    issuer: config.issuer || null,
+    callbackUrl: config.callbackUrl || null,
+    audience: config.audience || null,
+    // never expose cert/clientSecret on a public endpoint
+  };
+}
+
+async function resolveOrgForSso(slug) {
+  if (!slug || typeof slug !== 'string') return null;
+  try {
+    const row = await prisma.organization.findUnique({
+      where: { slug: slug.trim().toLowerCase() },
+      select: { id: true, slug: true, ssoConfig: true, ssoEnabled: true },
+    });
+    return row || null;
+  } catch (err) {
+    console.error('[auth/sso] lookup failed:', err && err.message ? err.message : err);
+    return null;
+  }
+}
+
+router.get('/sso/:orgSlug/login', async (req, res) => {
+  const org = await resolveOrgForSso(req.params.orgSlug);
+  if (!org) return res.status(404).json({ error: 'organization not found' });
+  if (!org.ssoEnabled || !org.ssoConfig) {
+    return res.status(400).json({ error: 'SSO is not enabled for this organization' });
+  }
+  return res.status(501).json({
+    ok: false,
+    implemented: false,
+    message: 'SSO login redirect not implemented',
+    orgSlug: org.slug,
+    config: redactSsoConfigForPublic(org.ssoConfig),
+  });
+});
+
+router.get('/sso/:orgSlug/callback', async (req, res) => {
+  const org = await resolveOrgForSso(req.params.orgSlug);
+  if (!org) return res.status(404).json({ error: 'organization not found' });
+  if (!org.ssoEnabled || !org.ssoConfig) {
+    return res.status(400).json({ error: 'SSO is not enabled for this organization' });
+  }
+  return res.status(501).json({
+    ok: false,
+    implemented: false,
+    message: 'SSO callback handler not implemented',
+    orgSlug: org.slug,
+    receivedParams: Object.keys(req.query || {}),
+  });
+});
+
+// Test surface — let route tests poke the helpers without a live DB.
+router.__ssoHelpers = { redactSsoConfigForPublic, resolveOrgForSso };
+
 module.exports = router;
