@@ -1,10 +1,34 @@
 const nodemailer = require('nodemailer');
 
+// Lazy PII-mask require — keeps module load light, defers the cost
+// until we actually log a body preview.
+let _piiMask = null;
+function _maskBody(text) {
+  try {
+    if (!_piiMask) _piiMask = require('../utils/pii-mask');
+    if (typeof text !== 'string') return text;
+    return _piiMask.mask(text);
+  } catch (_) {
+    return text;
+  }
+}
+
 class EmailService {
   constructor() {
     this.transporter = null;
     this._configured = false;
     this.initialize();
+  }
+
+  /**
+   * Internal helper for log lines that include a sent-message body
+   * preview. Always runs the text through the PII masker before
+   * emitting. Off by default — gated behind EMAIL_DEBUG_LOG_BODY.
+   */
+  _logSentBody(label, body) {
+    if (process.env.EMAIL_DEBUG_LOG_BODY !== '1') return;
+    const masked = _maskBody(String(body || '')).slice(0, 2000);
+    console.log(`[email-body] ${label}: ${masked}`);
   }
 
   initialize() {

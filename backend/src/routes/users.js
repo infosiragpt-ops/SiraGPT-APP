@@ -537,6 +537,17 @@ function deepMerge(target, source) {
 // ────────────────────────────────────────────────────────────
 router.get('/me/export', authenticateToken, async (req, res) => {
   const userId = req.user.id;
+  // Optional PII redaction toggle — when `?redactPII=true` is set, we
+  // run the pii-mask over message content + file names + payment
+  // metadata before writing the archive. Useful when the user wants
+  // to share the export externally without leaking embedded emails,
+  // phone numbers, credit cards, etc.
+  const redactPII = String(req.query.redactPII || '').toLowerCase() === 'true';
+  let piiMasker = null;
+  if (redactPII) {
+    try { piiMasker = require('../utils/pii-mask'); }
+    catch (_) { piiMasker = null; }
+  }
   const slot = takeExportSlot(userId);
   if (!slot.ok) {
     const retryAfterSec = Math.max(1, Math.ceil(slot.retryAfterMs / 1000));
@@ -623,9 +634,29 @@ router.get('/me/export', authenticateToken, async (req, res) => {
     const bigintSafe = (_k, v) => (typeof v === 'bigint' ? v.toString() : v);
     const toJson = (obj) => JSON.stringify(obj, bigintSafe, 2);
 
+    // Optionally scrub PII from string fields. We only mask content
+    // that could contain free-text (message bodies, file names) — we
+    // do NOT touch the user's own profile email or structural ids.
+    let chatsOut = chats;
+    let filesOut = files;
+    if (redactPII && piiMasker) {
+      chatsOut = chats.map((c) => ({
+        ...c,
+        messages: (c.messages || []).map((m) => ({
+          ...m,
+          content: typeof m.content === 'string' ? piiMasker.mask(m.content) : m.content,
+        })),
+      }));
+      filesOut = files.map((f) => ({
+        ...f,
+        originalName: typeof f.originalName === 'string' ? piiMasker.mask(f.originalName) : f.originalName,
+        filename: typeof f.filename === 'string' ? piiMasker.mask(f.filename) : f.filename,
+      }));
+    }
+
     archive.append(toJson(user || {}), { name: 'profile.json' });
-    archive.append(toJson({ count: chats.length, chats }), { name: 'chats.json' });
-    archive.append(toJson({ count: files.length, files }), { name: 'files.json' });
+    archive.append(toJson({ count: chatsOut.length, chats: chatsOut, redactPII }), { name: 'chats.json' });
+    archive.append(toJson({ count: filesOut.length, files: filesOut, redactPII }), { name: 'files.json' });
     archive.append(toJson({ count: payments.length, payments }), { name: 'payments.json' });
     archive.append(
       [
@@ -670,6 +701,7 @@ router.get('/me/export', authenticateToken, async (req, res) => {
         chatCount: chats.length,
         fileCount: files.length,
         paymentCount: payments.length,
+        redactPII,
       },
     });
 

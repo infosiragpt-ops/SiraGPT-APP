@@ -61,9 +61,28 @@ function _emit(logger, payload) {
  * @param {Function} [opts.now] - clock (defaults to Date.now)
  * @returns Express middleware (req, res, next)
  */
+// Lazy PII-mask require — only loaded when body logging is enabled,
+// keeping the hot path free of an extra require + regex compile.
+let _piiMask = null;
+function _maskForLog(text) {
+  if (typeof text !== 'string' || text.length === 0) return text;
+  try {
+    if (!_piiMask) _piiMask = require('../utils/pii-mask');
+    return _piiMask.mask(text);
+  } catch (_) {
+    return text;
+  }
+}
+
 function buildRequestLogger(opts = {}) {
   const logger = typeof opts.logger === 'function' ? opts.logger : null;
   const now = typeof opts.now === 'function' ? opts.now : () => Date.now();
+  // Body logging is OFF by default. When the operator opts in via env
+  // (SIRAGPT_LOG_REQUEST_BODY=1) we run the body through the PII mask
+  // before emitting it to logs.
+  const logBody = typeof opts.logBody === 'boolean'
+    ? opts.logBody
+    : process.env.SIRAGPT_LOG_REQUEST_BODY === '1';
 
   return function requestLogger(req, res, next) {
     const start = now();
@@ -89,6 +108,12 @@ function buildRequestLogger(opts = {}) {
         ip: _clientIp(req),
         ua: (req.headers && req.headers['user-agent']) ? String(req.headers['user-agent']) : '',
       };
+      if (logBody && req.body) {
+        try {
+          const raw = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
+          payload.body = _maskForLog(raw).slice(0, 4000);
+        } catch { /* swallow */ }
+      }
       _emit(logger, payload);
     }
 

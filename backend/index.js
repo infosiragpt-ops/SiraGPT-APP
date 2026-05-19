@@ -96,6 +96,7 @@ const adminRoutes = require('./src/routes/admin');
 const adminQueuesRoutes = require('./src/routes/admin-queues');
 const adminConnectionsRoutes = require('./src/routes/admin-connections');
 const userRoutes = require('./src/routes/users');
+const legalRoutes = require('./src/routes/legal');
 const publicRoutes = require('./src/routes/public');
 const downloadRoutes = require('./src/routes/download');
 const elevenlabsRoutes = require('./src/routes/elevenlabs');
@@ -619,6 +620,7 @@ if (typeof adminRoutes.metricsHandler === 'function') {
     app.get('/metrics', adminRoutes.metricsHandler);
 }
 app.use('/api/users', userRoutes);
+app.use('/api/legal', legalRoutes);
 app.use('/api/public', publicRoutes);
 app.use('/api/download', downloadRoutes);
 app.use('/api/elevenlabs', elevenlabsRoutes);

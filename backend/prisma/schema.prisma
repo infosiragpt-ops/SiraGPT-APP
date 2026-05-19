@@ -81,6 +81,7 @@ model User {
   bookmarks           Bookmark[]
   webhookEndpoints    WebhookEndpoint[]
   slackIntegrations   SlackIntegration[]
+  policyAcceptances   PolicyAcceptance[]
 
   // Organization / team membership — multi-tenant scaffolding (cycle 27).
   // A user can belong to multiple organizations with different roles.
@@ -1160,6 +1161,31 @@ model SchedulerRun {
 //   - before / after: full or partial snapshots of the resource
 //   - diff: computed shallow diff of changed keys (for fast filter)
 //   - metadata: free-form context (ip, userAgent, requestId, reason)
+// Record of a user accepting a versioned legal document (Privacy
+// Policy, Terms of Service, etc.). One row per (user, document, version)
+// — re-acceptance of the same version is idempotent, but acceptance of
+// a new version creates a new row so we keep the full history.
+//
+// Persisted IP + UA give us evidence of WHO accepted WHAT and FROM WHERE,
+// which is what regulators ask for in a GDPR/CCPA audit. The audit_log
+// table also gets a row per acceptance for the cross-resource trail.
+model PolicyAcceptance {
+  id         String   @id @default(cuid())
+  userId     String
+  document   String   // 'privacy-policy' | 'terms-of-service' | …
+  version    String
+  ip         String?
+  ua         String?
+  acceptedAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, document, version])
+  @@index([userId, document])
+  @@index([document, version])
+  @@map("policy_acceptance")
+}
+
 model AuditLog {
   id           String   @id @default(cuid())
   actorType    String

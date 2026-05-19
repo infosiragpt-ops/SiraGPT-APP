@@ -302,6 +302,17 @@ function globalErrorHandler({ logger = defaultLogger, captureException = null, s
         errMessage: err && err.message ? String(err.message).slice(0, 1024) : '',
         errStack: truncateStack(err && err.stack),
       };
+      // Lazily include a PII-masked body preview when the operator has
+      // explicitly enabled body logging. Off by default — we never log
+      // raw request bodies. The lazy require keeps the hot path free
+      // of the regex compile in the common case.
+      if (process.env.SIRAGPT_LOG_REQUEST_BODY === '1' && req && req.body) {
+        try {
+          const { mask } = require('../utils/pii-mask');
+          const raw = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
+          errPayload.body = mask(raw).slice(0, 4000);
+        } catch { /* swallow */ }
+      }
       const out = typeof stdout === 'function' ? stdout : (line) => process.stdout.write(line);
       out(`${JSON.stringify(errPayload)}\n`);
     } catch { /* never throw from the error handler */ }
