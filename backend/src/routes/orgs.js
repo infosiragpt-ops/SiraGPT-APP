@@ -3463,6 +3463,135 @@ router.get('/:id/announcements', authenticateToken, async (req, res) => {
   }
 });
 
+// GET /api/orgs/:id/announcements/unread — any member.
+// Ratchet 45 (Task 2) — returns non-expired announcements for the org
+// that the requesting user has NOT yet acknowledged. Used by the UI
+// badge / inbox. Newest-first. No pagination — callers should keep the
+// unread list small by acking; we cap the response at 100 items.
+router.get('/:id/announcements/unread', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  try {
+    await assertMembership(prisma, orgId, userId, 'VIEWER');
+
+    const now = new Date();
+    const where = {
+      orgId,
+      OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+    };
+    const rows = await prisma.orgAnnouncement.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+    });
+
+    let ackedIds = new Set();
+    if (rows.length && prisma.orgAnnouncementRead && typeof prisma.orgAnnouncementRead.findMany === 'function') {
+      try {
+        const reads = await prisma.orgAnnouncementRead.findMany({
+          where: { userId, announcementId: { in: rows.map((r) => r.id) } },
+          select: { announcementId: true },
+        });
+        ackedIds = new Set(reads.map((r) => r.announcementId));
+      } catch (_) { /* degrade — treat all as unread */ }
+    }
+
+    const items = rows
+      .filter((row) => !ackedIds.has(row.id))
+      .slice(0, 100)
+      .map((row) => serializeAnnouncement(row));
+    res.json({ items, total: items.length });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] list unread announcements failed:', err.message);
+    res.status(500).json({ error: 'failed to list unread announcements' });
+  }
+});
+
+// GET /api/orgs/:id/announcements/:announcementId/reads (ADMIN+)
+// Ratchet 45 (Task 1) — returns per-announcement read statistics:
+// `{ announcementId, readCount, totalMembers, percentRead, readers }`.
+// `readers` is the array of `{ userId, email, readAt }` for members who
+// have acknowledged. `percentRead` is an integer 0..100.
+router.get('/:id/announcements/:announcementId/reads', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  const announcementId = req.params.announcementId;
+  if (!announcementId) return res.status(400).json({ error: 'invalid announcementId' });
+
+  try {
+    const membership = await assertMembership(prisma, orgId, userId, 'ADMIN');
+    if (!canManageMembers(membership.role)) {
+      return res.status(403).json({ error: 'insufficient role to read announcement stats' });
+    }
+
+    const existing = await prisma.orgAnnouncement.findUnique({
+      where: { id: announcementId },
+      select: { id: true, orgId: true },
+    });
+    if (!existing || existing.orgId !== orgId) {
+      return res.status(404).json({ error: 'announcement not found' });
+    }
+
+    // Total member count for the org.
+    let totalMembers = 0;
+    if (typeof prisma.orgMembership.count === 'function') {
+      try {
+        totalMembers = await prisma.orgMembership.count({ where: { orgId } });
+      } catch (_) { totalMembers = 0; }
+    }
+    if (!totalMembers && typeof prisma.orgMembership.findMany === 'function') {
+      try {
+        const ms = await prisma.orgMembership.findMany({ where: { orgId }, select: { id: true } });
+        totalMembers = Array.isArray(ms) ? ms.length : 0;
+      } catch (_) { /* leave as 0 */ }
+    }
+
+    // Load read receipts (with user email for the readers list).
+    let reads = [];
+    if (prisma.orgAnnouncementRead && typeof prisma.orgAnnouncementRead.findMany === 'function') {
+      try {
+        reads = await prisma.orgAnnouncementRead.findMany({
+          where: { announcementId },
+          include: { user: { select: { id: true, email: true } } },
+        });
+      } catch (_) {
+        // Fall back to plain findMany (no join) if `include` not supported.
+        try {
+          reads = await prisma.orgAnnouncementRead.findMany({ where: { announcementId } });
+        } catch (_) { reads = []; }
+      }
+    }
+    if (!Array.isArray(reads)) reads = [];
+
+    const readers = reads.map((r) => {
+      const u = r && r.user;
+      return {
+        userId: r.userId,
+        email: u && u.email ? u.email : null,
+        readAt: r.readAt instanceof Date
+          ? r.readAt.toISOString()
+          : (r.readAt || null),
+      };
+    });
+    const readCount = readers.length;
+    const percentRead = totalMembers > 0
+      ? Math.round((readCount / totalMembers) * 100)
+      : 0;
+
+    res.json({
+      announcementId,
+      readCount,
+      totalMembers,
+      percentRead,
+      readers,
+    });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] read announcement stats failed:', err.message);
+    res.status(500).json({ error: 'failed to load announcement reads' });
+  }
+});
+
 // POST /api/orgs/:id/announcements/:announcementId/ack — any member.
 // Ratchet 45 — records a per-user read receipt and fires the
 // `org.announcement.acknowledged` trigger. Idempotent: repeat acks

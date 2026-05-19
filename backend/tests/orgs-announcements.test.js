@@ -35,6 +35,9 @@ const prismaState = {
   membership: { id: 'm1', orgId: 'org-1', userId: 'u-admin', role: 'ADMIN' },
   announcements: [],
   reads: [],
+  // Ratchet 45 — additional org members used by the reads-stats endpoint.
+  members: [],
+  users: [],
   _seq: 0,
   _readSeq: 0,
 };
@@ -47,6 +50,12 @@ const prismaMock = {
       if (userId !== prismaState.membership.userId) return null;
       return { ...prismaState.membership, organization: { id: orgId } };
     },
+    count: async ({ where } = {}) => prismaState.members.filter(
+      (m) => !where || !where.orgId || m.orgId === where.orgId,
+    ).length,
+    findMany: async ({ where } = {}) => prismaState.members.filter(
+      (m) => !where || !where.orgId || m.orgId === where.orgId,
+    ),
   },
   orgAnnouncement: {
     create: async ({ data }) => {
@@ -130,16 +139,27 @@ const prismaMock = {
         (r) => r.announcementId === announcementId && r.userId === userId,
       ) || null;
     },
-    findMany: async ({ where, select }) => {
+    findMany: async ({ where, select, include } = {}) => {
       void select;
       const ids = where && where.announcementId && Array.isArray(where.announcementId.in)
         ? new Set(where.announcementId.in)
         : null;
-      return prismaState.reads.filter((r) => {
+      const singleId = where && typeof where.announcementId === 'string'
+        ? where.announcementId
+        : null;
+      const rows = prismaState.reads.filter((r) => {
         if (where && where.userId && r.userId !== where.userId) return false;
         if (ids && !ids.has(r.announcementId)) return false;
+        if (singleId && r.announcementId !== singleId) return false;
         return true;
       });
+      if (include && include.user) {
+        return rows.map((r) => ({
+          ...r,
+          user: prismaState.users.find((u) => u.id === r.userId) || null,
+        }));
+      }
+      return rows;
     },
     create: async ({ data }) => {
       const dup = prismaState.reads.find(
@@ -220,6 +240,8 @@ function resetState({ role = 'ADMIN' } = {}) {
   prismaState.membership = { id: 'm1', orgId: 'org-1', userId: 'u-admin', role };
   prismaState.announcements = [];
   prismaState.reads = [];
+  prismaState.members = [];
+  prismaState.users = [];
   prismaState._seq = 0;
   prismaState._readSeq = 0;
   auditMock._calls.length = 0;
@@ -941,5 +963,229 @@ describe('org.announcement.acknowledged trigger', () => {
   test('is part of the canonical TRIGGERS allow-list', () => {
     assert.ok(realTriggers.TRIGGERS.includes('org.announcement.acknowledged'));
     assert.equal(realTriggers.isKnownTrigger('org.announcement.acknowledged'), true);
+  });
+});
+
+// ── Ratchet 45 Task 1 — GET /:id/announcements/:announcementId/reads
+describe('GET /api/orgs/:id/announcements/:announcementId/reads', () => {
+  beforeEach(() => resetState());
+
+  function seedAnn(id = 'a-r', over = {}) {
+    const row = {
+      id,
+      orgId: 'org-1',
+      title: 't', body: 'b', severity: 'info',
+      createdById: 'u-admin', expiresAt: null, createdAt: new Date(),
+      ...over,
+    };
+    prismaState.announcements.push(row);
+    return row;
+  }
+
+  test('returns read stats with readers list (ADMIN)', async () => {
+    seedAnn();
+    prismaState.members = [
+      { id: 'm1', orgId: 'org-1', userId: 'u-admin', role: 'ADMIN' },
+      { id: 'm2', orgId: 'org-1', userId: 'u-2', role: 'MEMBER' },
+      { id: 'm3', orgId: 'org-1', userId: 'u-3', role: 'MEMBER' },
+      { id: 'm4', orgId: 'org-1', userId: 'u-4', role: 'VIEWER' },
+    ];
+    prismaState.users = [
+      { id: 'u-admin', email: 'admin@example.com' },
+      { id: 'u-2', email: 'two@example.com' },
+      { id: 'u-3', email: 'three@example.com' },
+      { id: 'u-4', email: 'four@example.com' },
+    ];
+    prismaState.reads.push(
+      { id: 'r1', announcementId: 'a-r', userId: 'u-2', readAt: new Date('2026-01-01T00:00:00Z') },
+      { id: 'r2', announcementId: 'a-r', userId: 'u-3', readAt: new Date('2026-01-02T00:00:00Z') },
+    );
+
+    const res = await callRoute({
+      method: 'GET',
+      urlPath: '/api/orgs/org-1/announcements/a-r/reads',
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.announcementId, 'a-r');
+    assert.equal(res.body.readCount, 2);
+    assert.equal(res.body.totalMembers, 4);
+    assert.equal(res.body.percentRead, 50);
+    assert.equal(res.body.readers.length, 2);
+    const byUser = Object.fromEntries(res.body.readers.map((r) => [r.userId, r]));
+    assert.equal(byUser['u-2'].email, 'two@example.com');
+    assert.equal(byUser['u-3'].email, 'three@example.com');
+    assert.ok(byUser['u-2'].readAt);
+  });
+
+  test('percentRead = 0 when there are no members', async () => {
+    seedAnn();
+    const res = await callRoute({
+      method: 'GET',
+      urlPath: '/api/orgs/org-1/announcements/a-r/reads',
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.totalMembers, 0);
+    assert.equal(res.body.percentRead, 0);
+    assert.deepEqual(res.body.readers, []);
+  });
+
+  test('rounds percentRead to the nearest integer', async () => {
+    seedAnn();
+    prismaState.members = [
+      { id: 'm1', orgId: 'org-1', userId: 'u-1', role: 'MEMBER' },
+      { id: 'm2', orgId: 'org-1', userId: 'u-2', role: 'MEMBER' },
+      { id: 'm3', orgId: 'org-1', userId: 'u-3', role: 'MEMBER' },
+    ];
+    prismaState.users = [
+      { id: 'u-1', email: 'u1@x.com' },
+      { id: 'u-2', email: 'u2@x.com' },
+      { id: 'u-3', email: 'u3@x.com' },
+    ];
+    prismaState.reads.push({ id: 'r1', announcementId: 'a-r', userId: 'u-1', readAt: new Date() });
+    const res = await callRoute({
+      method: 'GET',
+      urlPath: '/api/orgs/org-1/announcements/a-r/reads',
+    });
+    assert.equal(res.status, 200);
+    // 1/3 → 33
+    assert.equal(res.body.percentRead, 33);
+  });
+
+  test('unknown id returns 404', async () => {
+    const res = await callRoute({
+      method: 'GET',
+      urlPath: '/api/orgs/org-1/announcements/missing/reads',
+    });
+    assert.equal(res.status, 404);
+  });
+
+  test('cannot read stats for another org (404)', async () => {
+    seedAnn('a-foreign', { orgId: 'org-other' });
+    const res = await callRoute({
+      method: 'GET',
+      urlPath: '/api/orgs/org-1/announcements/a-foreign/reads',
+    });
+    assert.equal(res.status, 404);
+  });
+
+  test('VIEWER cannot read stats (403)', async () => {
+    prismaState.membership.role = 'VIEWER';
+    seedAnn();
+    const res = await callRoute({
+      method: 'GET',
+      urlPath: '/api/orgs/org-1/announcements/a-r/reads',
+    });
+    assert.equal(res.status, 403);
+  });
+
+  test('MEMBER cannot read stats (403)', async () => {
+    prismaState.membership.role = 'MEMBER';
+    seedAnn();
+    const res = await callRoute({
+      method: 'GET',
+      urlPath: '/api/orgs/org-1/announcements/a-r/reads',
+    });
+    assert.equal(res.status, 403);
+  });
+
+  test('non-member returns 404', async () => {
+    const res = await callRoute({
+      method: 'GET',
+      urlPath: '/api/orgs/org-2/announcements/a-r/reads',
+    });
+    assert.equal(res.status, 404);
+  });
+});
+
+// ── Ratchet 45 Task 2 — GET /:id/announcements/unread ─────────────
+describe('GET /api/orgs/:id/announcements/unread', () => {
+  beforeEach(() => resetState());
+
+  test('returns only non-expired, unacked announcements newest-first', async () => {
+    const now = Date.now();
+    prismaState.announcements.push(
+      { id: 'a-old', orgId: 'org-1', title: 'old', body: 'b', severity: 'info',
+        createdById: 'u-admin', expiresAt: null, createdAt: new Date(now - 60_000) },
+      { id: 'a-new', orgId: 'org-1', title: 'new', body: 'b', severity: 'info',
+        createdById: 'u-admin', expiresAt: null, createdAt: new Date(now) },
+      { id: 'a-exp', orgId: 'org-1', title: 'exp', body: 'b', severity: 'info',
+        createdById: 'u-admin', expiresAt: new Date(now - 1000), createdAt: new Date(now - 120_000) },
+    );
+    const res = await callRoute({
+      method: 'GET',
+      urlPath: '/api/orgs/org-1/announcements/unread',
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.items.length, 2);
+    assert.equal(res.body.items[0].id, 'a-new');
+    assert.equal(res.body.items[1].id, 'a-old');
+    assert.equal(res.body.total, 2);
+  });
+
+  test('excludes announcements the current user has acked', async () => {
+    prismaState.announcements.push(
+      { id: 'a1', orgId: 'org-1', title: 't1', body: 'b', severity: 'info',
+        createdById: 'u-admin', expiresAt: null, createdAt: new Date() },
+      { id: 'a2', orgId: 'org-1', title: 't2', body: 'b', severity: 'info',
+        createdById: 'u-admin', expiresAt: null, createdAt: new Date() },
+    );
+    prismaState.reads.push({
+      id: 'r1', announcementId: 'a1', userId: 'u-admin', readAt: new Date(),
+    });
+    const res = await callRoute({
+      method: 'GET',
+      urlPath: '/api/orgs/org-1/announcements/unread',
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.items.length, 1);
+    assert.equal(res.body.items[0].id, 'a2');
+  });
+
+  test('feed is per-user — another user`s ack does not hide it', async () => {
+    prismaState.announcements.push({
+      id: 'a1', orgId: 'org-1', title: 't', body: 'b', severity: 'info',
+      createdById: 'u-admin', expiresAt: null, createdAt: new Date(),
+    });
+    prismaState.reads.push({
+      id: 'r-other', announcementId: 'a1', userId: 'u-other', readAt: new Date(),
+    });
+    const res = await callRoute({
+      method: 'GET',
+      urlPath: '/api/orgs/org-1/announcements/unread',
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.items.length, 1);
+  });
+
+  test('empty list when nothing to ack', async () => {
+    const res = await callRoute({
+      method: 'GET',
+      urlPath: '/api/orgs/org-1/announcements/unread',
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.body.items, []);
+    assert.equal(res.body.total, 0);
+  });
+
+  test('VIEWER (any member) can read the feed', async () => {
+    prismaState.membership.role = 'VIEWER';
+    prismaState.announcements.push({
+      id: 'a1', orgId: 'org-1', title: 't', body: 'b', severity: 'info',
+      createdById: 'u-admin', expiresAt: null, createdAt: new Date(),
+    });
+    const res = await callRoute({
+      method: 'GET',
+      urlPath: '/api/orgs/org-1/announcements/unread',
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.items.length, 1);
+  });
+
+  test('non-member returns 404', async () => {
+    const res = await callRoute({
+      method: 'GET',
+      urlPath: '/api/orgs/org-2/announcements/unread',
+    });
+    assert.equal(res.status, 404);
   });
 });
