@@ -69,7 +69,7 @@
 //     const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null)
 //     const fileInputRef = useRef<HTMLInputElement | null>(null)
 
-//     // YEH सुनिश्चित करने के लिए REF hai कि VOICES सिर्फ एक बार लोड हों
+//     // Ensure the voices ref only loads once
 //     const voicesLoaded = useRef(false);
 
 

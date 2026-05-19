@@ -56,6 +56,7 @@ cp .env.example .env.local   # edit API keys
 - [Backend README](README-BACKEND.md)
 - [Changelog](CHANGELOG.md)
 - [Contributing](CONTRIBUTING.md)
+- [Contributors](CONTRIBUTORS.md) — auto-generated from `git shortlog`
 
 ## Community & policies
 
