@@ -4,6 +4,75 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and improvement cycles follow a sequential number with the date the work landed.
 
+## [0.2.0 / backend 1.1.0] — Cycles 31-40 milestone — 2026-05-19
+
+Milestone consolidation release. Root package bumped `0.1.0 → 0.2.0`; backend
+bumped `1.0.0 → 1.1.0`. Minor bumps only — no public API breaks.
+See `docs/MILESTONE.md` for cumulative metrics across cycles 1-40.
+
+### Added
+- **Cycle 40 — milestone consolidation**: `docs/MILESTONE.md` cumulative metrics,
+  comprehensive CHANGELOG sweep, CONTRIBUTING.md patterns section.
+- **Cycle 39 — frontend perf**: dynamic editors split + chat-interface split +
+  asset trim + Web Vitals reporting (`435f4e09`).
+- **Cycle 38 — test curation**: 15 curated test files + perf budget gate,
+  3 doc-intelligence failures fixed (`bbdb82f2`).
+- **Cycle 36 — deploy hardening**: pre-check + post-check + blue-green scaffold +
+  config validator + migration safety (`fdd7aec0`).
+- **Cycle 35 — system cron + push routes**: `src/jobs/system-cron.js` wired
+  (scrub-deleted-user-content @ 02:30 UTC, hard-delete-deleted-users @ 03:00 UTC);
+  `/api/push` mounted (`40b310e3`).
+- **Cycle 34 — integration suite**: consolidated user+org+webhook journey
+  suite (`566742a3`).
+- **Cycle 33 — ops**: alerting + shutdown registry + SLO tracker + telemetry
+  error endpoint (`e7c5f8d1`).
+- **Cycle 32 — cache layer**: write-behind + query dedup + AI response cache +
+  SWR (`7749c240`).
+- **Cycle 31 — privacy / GDPR**: PII masker + GDPR export redact + content scrub +
+  legal endpoints (`2c3eaf26`).
+- **Cycle 30 — AI failover**: failover policy + model router + token budget +
+  SSE improvements (`62e69819`). NB: `resolveWithFallback` not yet wired into
+  streaming inner loop — tracked separately.
+
+### Changed
+- **Cycle 35**: `/api/ai/generate` now invokes `enforceOrgQuotaSafe` (lazy require
+  + try/catch wrapper) for org-scoped requests. Personal usage path unchanged.
+- **Cycle 35**: Lint ratchet `--max-warnings 56 → 50` (-6). Captured
+  `react-hooks/exhaustive-deps` ref in `components/elevenlabs-interface.tsx`.
+- **Cycle 37 → 31-32**: Lint ratchet successive tightenings; lib/ `any` cleanup
+  (`6d3116cf`).
+- **Cycle 38**: TypeScript build perf — exclude generated artifacts; xlsx
+  bibliography path replaced with exceljs.
+
+### Fixed
+- **Cycle 38**: 3 doc-intelligence test failures (parser timing + classifier
+  edge cases).
+- **Cycle 35**: `lastActiveAt` write path verified through write-behind cache in
+  `middleware/auth.js`; query-dedup confirmed consumed on auth lookups.
+
+### Security
+- **Cycle 37 — xlsx removal**: `chore(deps): replace xlsx with exceljs (security)
+  + safe minor bumps` (`74006d09`). Eliminates the unmaintained `xlsx`
+  (CVE-affected: prototype pollution + ReDoS) from the dependency tree. Bibliography
+  attachments now use `exceljs`.
+- **Cycle 37 — audit fix**: `npm audit fix` non-breaking — 14 vulnerabilities
+  resolved (`e19cbeda`).
+- **Cycle 31 — PII / GDPR**: structured PII masker invoked on GDPR export,
+  content scrub on hard delete, legal endpoints (`/api/legal/*`) for ToS / DPA /
+  privacy.
+- **Cycle 17 → 31 — security hardening cumulative**: CSRF, session fingerprint
+  binding, strict CSP, granular audit log, helmet, JWT aud/iss validation.
+
+### Deprecated / Removed
+- **`xlsx` (SheetJS community build)** — removed in cycle 37. Replaced with
+  `exceljs`. Any downstream code that still `require('xlsx')` will fail loudly
+  — migrate to `lib/xlsx-compat` or use exceljs directly.
+
+### Deferred
+- `failover-policy.resolveWithFallback` (cycle 30) still not wired into the
+  streaming inner loop in `/api/ai/generate` — needs SSE-state-sharing across
+  providers and mid-stream restart. Tracked for a focused cycle.
+
 ## [Cycle 35] — 2026-05-19
 
 ### Added
