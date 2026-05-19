@@ -6,7 +6,7 @@ const prisma = require('../config/database');
 const { authenticateToken } = require('../middleware/auth');
 const { makeAuthRateLimit } = require('../middleware/rate-limit-auth');
 const { writeAuditLog } = require('../utils/audit-log');
-const { csrfTokenRoute } = require('../middleware/csrf');
+const { csrfTokenRoute, issueCsrfToken } = require('../middleware/csrf');
 const { defaultLockout } = require('../utils/login-lockout');
 const { computeFingerprint } = require('../utils/session-fingerprint');
 const {
@@ -605,9 +605,16 @@ router.post('/register', registerRateLimit, validateBody(RegisterRequestSchema, 
       maxAge: 7 * 24 * 60 * 60 * 1000
     });
 
+    // Mint a fresh CSRF token alongside the session cookie so SPAs
+    // can skip the dedicated /api/csrf-token roundtrip (ratchet 45,
+    // task 2). The token still rotates on every call — `issueCsrfToken`
+    // resets both the public + secret cookies with brand-new randomness.
+    const csrfToken = issueCsrfToken(res);
+
     res.status(201).json({
       user: userWithoutPassword,
-      token
+      token,
+      csrfToken,
     });
   } catch (error) {
     console.error('Registration error:', error);
@@ -765,9 +772,15 @@ router.post('/login', loginRateLimit, validateBody(LoginRequestSchema, { codePre
       actorName: user.email,
       metadata: { isAdmin: Boolean(user.isAdmin), isSuperAdmin: Boolean(user.isSuperAdmin) },
     });
+    // Mint a fresh CSRF token alongside the session cookie so SPAs
+    // can skip the dedicated /api/csrf-token roundtrip (ratchet 45,
+    // task 2). Token rotates on every login.
+    const csrfToken = issueCsrfToken(res);
+
     res.json({
       user: serializedUser,
-      token
+      token,
+      csrfToken,
     });
   } catch (error) {
     console.error('Login error:', error);

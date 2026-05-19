@@ -77,11 +77,18 @@ function hasBearerAuth(req) {
 }
 
 /**
- * Route handler: GET /api/csrf-token — issues a fresh token pair and
- * returns the public token in the JSON body so SPA clients can attach
- * it to subsequent state-mutating calls.
+ * Issues a fresh CSRF token pair on the response (sets both the public
+ * `csrf_token` cookie + the httpOnly `_csrf_secret` cookie) and returns
+ * the public token so callers can attach it to JSON response bodies.
+ *
+ * Used by:
+ *   • `csrfTokenRoute` — the explicit GET /api/csrf-token endpoint.
+ *   • `/api/auth/login` + `/api/auth/register` (ratchet 45, task 2) so
+ *     SPA clients receive the token in the same roundtrip and can skip
+ *     the dedicated fetch. Token still rotates because every call to
+ *     this helper generates a brand-new random value.
  */
-function csrfTokenRoute(req, res) {
+function issueCsrfToken(res) {
   const token = generateToken();
   const secret = hashToken(token);
   const cookieOpts = {
@@ -99,6 +106,16 @@ function csrfTokenRoute(req, res) {
   const secretOpts = { ...cookieOpts, httpOnly: true };
   res.cookie(TOKEN_COOKIE, token, cookieOpts);
   res.cookie(SECRET_COOKIE, secret, secretOpts);
+  return token;
+}
+
+/**
+ * Route handler: GET /api/csrf-token — issues a fresh token pair and
+ * returns the public token in the JSON body so SPA clients can attach
+ * it to subsequent state-mutating calls.
+ */
+function csrfTokenRoute(req, res) {
+  const token = issueCsrfToken(res);
   res.json({ csrfToken: token });
 }
 
@@ -145,6 +162,7 @@ function requireCsrf(req, res, next) {
 
 module.exports = {
   csrfTokenRoute,
+  issueCsrfToken,
   requireCsrf,
   hashToken,
   generateToken,

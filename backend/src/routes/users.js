@@ -1,5 +1,6 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
+const crypto = require('crypto');
 const { authenticateToken } = require('../middleware/auth');
 const prisma = require('../config/database');
 const bcrypt = require('bcryptjs');
@@ -125,6 +126,47 @@ async function checkQuarterlyExportQuota(prisma, userId) {
     quarter: qInfo.label,
     resetAt,
   };
+}
+
+/**
+ * Builds an integrity-checked ZIP for a GDPR export. Returns the ZIP
+ * buffer, the SHA-256 of the buffer, and the manifest object that was
+ * embedded inside (`manifest.json`). Pure I/O-free function for tests
+ * — the route handler wraps DB fetching + audit logging around it.
+ */
+async function buildExportArchive({ userId, exportedAt, redactPII, entries }) {
+  const sha256 = (input) =>
+    crypto.createHash('sha256').update(input).digest('hex');
+
+  const manifest = {
+    userId,
+    exportedAt,
+    redactPII: Boolean(redactPII),
+    algorithm: 'sha256',
+    files: entries.map((e) => {
+      const buf = Buffer.from(e.content, 'utf8');
+      return { name: e.name, size: buf.length, sha256: sha256(buf) };
+    }),
+  };
+  const fullEntries = entries.concat([
+    { name: 'manifest.json', content: JSON.stringify(manifest, null, 2) },
+  ]);
+
+  const archive = archiver('zip', { zlib: { level: 9 } });
+  const chunks = [];
+  archive.on('data', (chunk) => chunks.push(chunk));
+  const finalized = new Promise((resolve, reject) => {
+    archive.on('end', resolve);
+    archive.on('error', reject);
+  });
+  for (const entry of fullEntries) {
+    archive.append(entry.content, { name: entry.name });
+  }
+  await archive.finalize();
+  await finalized;
+
+  const zipBuf = Buffer.concat(chunks);
+  return { zipBuf, zipSha256: sha256(zipBuf), manifest };
 }
 
 async function recordQuarterlyExport(prisma, userId) {
@@ -783,24 +825,6 @@ router.get('/me/export', authenticateToken, async (req, res) => {
       }),
     ]);
 
-    res.setHeader('Content-Type', 'application/zip');
-    res.setHeader(
-      'Content-Disposition',
-      `attachment; filename="siragpt-export-${userId}-${Date.now()}.zip"`,
-    );
-
-    const archive = archiver('zip', { zlib: { level: 9 } });
-    archive.on('warning', (err) => {
-      console.warn('[export] archiver warning:', err?.message || err);
-    });
-    archive.on('error', (err) => {
-      console.error('[export] archiver error:', err);
-      // Headers are already sent — destroy the response so the client
-      // sees a truncated ZIP instead of a misleading 500 body.
-      try { res.destroy(err); } catch (_) { /* noop */ }
-    });
-    archive.pipe(res);
-
     // BigInt-safe JSON — Prisma surfaces BigInt for `tokens` /
     // `apiUsage` etc., and JSON.stringify chokes on those without a
     // replacer. Round-trip via the BigInt-aware replacer so the export
@@ -828,43 +852,75 @@ router.get('/me/export', authenticateToken, async (req, res) => {
       }));
     }
 
-    archive.append(toJson(user || {}), { name: 'profile.json' });
-    archive.append(toJson({ count: chatsOut.length, chats: chatsOut, redactPII }), { name: 'chats.json' });
-    archive.append(toJson({ count: filesOut.length, files: filesOut, redactPII }), { name: 'files.json' });
-    archive.append(toJson({ count: payments.length, payments }), { name: 'payments.json' });
-    archive.append(
-      [
-        'siraGPT — Personal data export',
-        '================================',
-        '',
-        `User ID:    ${userId}`,
-        `Exported:   ${new Date().toISOString()}`,
-        '',
-        'Files in this archive:',
-        '  • profile.json   — your user record (password hash omitted)',
-        '  • chats.json     — every chat you created with its full message',
-        '                     history (role, content, timestamp, feedback)',
-        '  • files.json     — metadata for every file you uploaded',
-        '                     (filenames, mime type, size, processing state).',
-        '                     Raw file contents are NOT included in this',
-        '                     export — request them separately if you need',
-        '                     them, or use the per-file download links in',
-        '                     the app.',
-        '  • payments.json  — every payment / subscription transaction',
-        '                     (status, plan, provider, Stripe identifiers).',
-        '',
-        'Schema notes:',
-        '  • Timestamps are ISO 8601 (UTC).',
-        '  • BigInt fields (tokens, monthly limits) are serialised as',
-        '    strings to stay valid JSON.',
-        '  • `deletedAt` is the soft-delete tombstone — non-null rows',
-        '    are pending hard deletion in the 30-day GDPR grace window.',
-        '',
-        'Need help? Contact privacy@siragpt.io.',
-        '',
-      ].join('\n'),
-      { name: 'README.txt' },
+    // Build the per-file entry list FIRST so we can compute each
+    // payload's SHA-256 and embed a manifest.json before sealing the
+    // archive. Order matters only for human readability — manifest
+    // last, after every other entry, so the manifest hashes are
+    // consistent with what landed on disk.
+    const exportedAt = new Date().toISOString();
+    const entries = [
+      { name: 'profile.json', content: toJson(user || {}) },
+      { name: 'chats.json', content: toJson({ count: chatsOut.length, chats: chatsOut, redactPII }) },
+      { name: 'files.json', content: toJson({ count: filesOut.length, files: filesOut, redactPII }) },
+      { name: 'payments.json', content: toJson({ count: payments.length, payments }) },
+      {
+        name: 'README.txt',
+        content: [
+          'siraGPT — Personal data export',
+          '================================',
+          '',
+          `User ID:    ${userId}`,
+          `Exported:   ${exportedAt}`,
+          '',
+          'Files in this archive:',
+          '  • profile.json   — your user record (password hash omitted)',
+          '  • chats.json     — every chat you created with its full message',
+          '                     history (role, content, timestamp, feedback)',
+          '  • files.json     — metadata for every file you uploaded',
+          '                     (filenames, mime type, size, processing state).',
+          '                     Raw file contents are NOT included in this',
+          '                     export — request them separately if you need',
+          '                     them, or use the per-file download links in',
+          '                     the app.',
+          '  • payments.json  — every payment / subscription transaction',
+          '                     (status, plan, provider, Stripe identifiers).',
+          '  • manifest.json  — SHA-256 of every other file in this archive',
+          '                     for integrity verification. The outer ZIP',
+          '                     SHA-256 is also returned in the',
+          '                     `X-Content-SHA256` response header.',
+          '',
+          'Schema notes:',
+          '  • Timestamps are ISO 8601 (UTC).',
+          '  • BigInt fields (tokens, monthly limits) are serialised as',
+          '    strings to stay valid JSON.',
+          '  • `deletedAt` is the soft-delete tombstone — non-null rows',
+          '    are pending hard deletion in the 30-day GDPR grace window.',
+          '',
+          'Need help? Contact privacy@siragpt.io.',
+          '',
+        ].join('\n'),
+      },
+    ];
+
+    // Buffer the ZIP in-memory so we can hash the final bytes and set
+    // `X-Content-SHA256` BEFORE flushing. The per-user 1/30min limit
+    // already caps the worst case to a single archive in flight, and
+    // every entry here is JSON metadata (no embedded blobs), so the
+    // memory footprint is well within typical request budgets.
+    const { zipBuf, zipSha256: zipSha } = await buildExportArchive({
+      userId,
+      exportedAt,
+      redactPII,
+      entries,
+    });
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="siragpt-export-${userId}-${Date.now()}.zip"`,
     );
+    res.setHeader('Content-Length', String(zipBuf.length));
+    res.setHeader('X-Content-SHA256', zipSha);
 
     void writeAuditLog(prisma, {
       req,
@@ -878,15 +934,17 @@ router.get('/me/export', authenticateToken, async (req, res) => {
         redactPII,
         quarter: quota.quarter,
         quarterUsedBefore: quota.used,
+        zipSha256: zipSha,
+        zipBytes: zipBuf.length,
       },
     });
 
     // Increment the quarterly counter only after the export has been
     // accepted + audited. We don't await — losing a count is preferable
-    // to delaying the archive stream.
+    // to delaying the response.
     void recordQuarterlyExport(prisma, userId);
 
-    await archive.finalize();
+    res.end(zipBuf);
   } catch (error) {
     console.error('GDPR export error:', error);
     if (!res.headersSent) {
@@ -1016,4 +1074,5 @@ module.exports.INTERNAL = {
   incrementQuarterCount,
   checkQuarterlyExportQuota,
   recordQuarterlyExport,
+  buildExportArchive,
 };
