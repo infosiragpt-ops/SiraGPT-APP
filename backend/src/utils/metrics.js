@@ -241,6 +241,18 @@ registerCounter('siragpt_gdpr_exports_total', {
   labels: ['redactPII'],
 });
 
+// ── Org-events SSE metrics (cycle 79) ───────────────────────────────
+// Wired from the GET /api/orgs/:id/events SSE handler so dashboards can
+// observe live-tail subscriber counts and total events streamed.
+registerCounter('siragpt_org_events_streamed_total', {
+  help: 'Total org-audit SSE events streamed to subscribers, labelled by orgId',
+  labels: ['orgId'],
+});
+registerGauge('siragpt_org_events_active_subscribers', {
+  help: 'Active subscribers currently connected to /api/orgs/:id/events SSE feeds',
+  labels: [],
+});
+
 // ── Maintenance-mode metrics (cycle 72) ─────────────────────────────
 // Incremented from the maintenance-mode middleware whenever a request
 // is short-circuited with HTTP 503 because the global maintenance flag

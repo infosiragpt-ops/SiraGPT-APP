@@ -1397,6 +1397,11 @@ const SSE_EVENTS = Object.freeze({
   HEARTBEAT_MS: 15_000,
 });
 
+// Process-wide active-subscriber counter for the /api/orgs/:id/events
+// SSE feed. Mirrored into the siragpt_org_events_active_subscribers
+// gauge on every open/close so /metrics reflects live state.
+let _activeOrgEventsSubscribers = 0;
+
 async function streamOrgEventsHandler(req, res, deps = {}) {
   const db = deps.prisma || prisma;
   const cfg = { ...SSE_EVENTS, ...(deps.config || {}) };
@@ -1451,12 +1456,28 @@ async function streamOrgEventsHandler(req, res, deps = {}) {
   const startedAt = Date.now();
   let closed = false;
 
+  // Subscriber gauge + per-org event counter (cycle 79). All metric
+  // updates are defensive — instrumentation never breaks the SSE path.
+  let metrics = null;
+  let subscribed = false;
+  try {
+    metrics = require('../utils/metrics');
+    _activeOrgEventsSubscribers += 1;
+    metrics.gauge('siragpt_org_events_active_subscribers', {}, _activeOrgEventsSubscribers);
+    subscribed = true;
+  } catch { /* metrics module unavailable — skip */ }
+
   const close = (reason) => {
     if (closed) return;
     closed = true;
     if (heartbeatTimer) clearInterval(heartbeatTimer);
     if (pollTimer) clearTimeout(pollTimer);
     if (deadlineTimer) clearTimeout(deadlineTimer);
+    if (subscribed && metrics) {
+      subscribed = false;
+      _activeOrgEventsSubscribers = Math.max(0, _activeOrgEventsSubscribers - 1);
+      try { metrics.gauge('siragpt_org_events_active_subscribers', {}, _activeOrgEventsSubscribers); } catch {}
+    }
     send('done', { reason, delivered });
     try { res.end(); } catch { /* ignore */ }
   };
@@ -1501,6 +1522,9 @@ async function streamOrgEventsHandler(req, res, deps = {}) {
         });
         if (!ok) { close('write_failed'); return; }
         delivered += 1;
+        if (metrics) {
+          try { metrics.counter('siragpt_org_events_streamed_total', { orgId }, 1); } catch {}
+        }
         if (rowAt) cursor = rowAt;
         if (delivered >= cfg.MAX_EVENTS) { close('max_events'); return; }
       }

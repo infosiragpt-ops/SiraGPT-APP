@@ -73,12 +73,17 @@ function computeCostUSD({ model, inputTokens, outputTokens }) {
 }
 
 const MAX_RECORDS = Number.parseInt(process.env.AI_COST_TRACKER_MAX_RECORDS || '50000', 10);
+const COST_ALERT_SAMPLE_EVERY = Math.max(
+  1,
+  Number.parseInt(process.env.AI_COST_ALERT_SAMPLE_EVERY || '100', 10),
+);
 
 const state = {
   records: [],                 // bounded log
   monthly: new Map(),          // `${yyyy-mm}` → Map<userId, agg>
   onPersist: null,
   lastWarnAt: 0,
+  sampleCounter: 0,            // round-robin counter for cost-alert sampling
 };
 
 function monthKey(date) {
@@ -166,6 +171,27 @@ function track(opts) {
     if (typeof state.onPersist === 'function') {
       // Caller hook — wrap in try so persistence failures never propagate.
       try { state.onPersist(record); } catch (persistErr) { maybeWarn(persistErr); }
+    }
+    // Sample-based cost-alert check: every Nth record we ask the
+    // cost-alert detector to look at this user's spend. Lazy-require
+    // avoids a circular dependency at module-load time.
+    state.sampleCounter += 1;
+    if (state.sampleCounter >= COST_ALERT_SAMPLE_EVERY) {
+      state.sampleCounter = 0;
+      if (record.userId) {
+        try {
+          const costAlert = require('./cost-alert');
+          const alerting = require('../alerting');
+          // Fire-and-forget — never await, never throw.
+          Promise.resolve()
+            .then(() => costAlert.maybeCheck({
+              userId: record.userId,
+              getRecords: _peekRecords,
+              alerting,
+            }))
+            .catch(() => {});
+        } catch (alertErr) { maybeWarn(alertErr); }
+      }
     }
     return record;
   } catch (err) {
@@ -304,6 +330,7 @@ function _reset() {
   state.monthly.clear();
   state.onPersist = null;
   state.lastWarnAt = 0;
+  state.sampleCounter = 0;
 }
 
 function _peekRecords() {
