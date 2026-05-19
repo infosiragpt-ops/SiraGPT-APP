@@ -32,8 +32,21 @@ export function DocumentsSection({ projectId }: Props) {
   const [loading, setLoading] = React.useState(true)
   const [creating, setCreating] = React.useState(false)
 
-  const reload = React.useCallback(async () => {
+  /**
+   * Incremental reload. Pass `{ scope: "file" }` after a single-doc
+   * edit so we can later wire a server-side delta endpoint without
+   * touching every caller. For now `scope: "file"` and `scope: "tree"`
+   * fall back to the same full-list refresh as `scope: "all"`, but
+   * the call-site contract is in place. Default is "all" to preserve
+   * current behavior.
+   */
+  const reload = React.useCallback(async (
+    opts: { scope?: "file" | "tree" | "all" } = {}
+  ) => {
+    const _scope = opts.scope || "all"
     try {
+      // TODO(perf): when projectDocumentsService gains a delta API,
+      // branch on `_scope === "file"` to fetch only the affected row.
       setDocs(await projectDocumentsService.list(projectId))
     } catch (err: any) {
       toast.error(err?.message || "Error al listar documentos")
@@ -42,7 +55,7 @@ export function DocumentsSection({ projectId }: Props) {
     }
   }, [projectId])
 
-  React.useEffect(() => { reload() }, [reload])
+  React.useEffect(() => { reload({ scope: "all" }) }, [reload])
 
   async function createNew() {
     if (creating) return

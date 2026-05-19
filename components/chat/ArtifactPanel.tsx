@@ -84,7 +84,12 @@ export function ArtifactPanel() {
   }
 
   return (
-    <div className="flex h-full w-full min-w-0 flex-col bg-white dark:bg-zinc-900 border-l border-border/60">
+    // Mobile: full-screen drawer overlay (fixed inset-0, z-40) so the
+    // panel doesn't get squeezed into the unusable 30% width that the
+    // resizable split assigns it on small viewports. Desktop (sm+):
+    // restore the inline split-pane behavior — the parent's
+    // resizable divider continues to control width.
+    <div className="fixed inset-0 z-40 flex h-full w-full min-w-0 flex-col bg-white dark:bg-zinc-900 border-l border-border/60 sm:relative sm:inset-auto sm:z-auto">
       {/* Header */}
       <div className="flex items-center justify-between gap-3 border-b border-border/60 px-4 py-2.5 bg-white dark:bg-zinc-900">
         <div className="flex items-center gap-2 min-w-0">

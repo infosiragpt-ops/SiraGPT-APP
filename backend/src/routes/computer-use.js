@@ -1832,7 +1832,7 @@ async function executeActionWithSelector(page, action) {
 
 //       case 'type':
 //         await page.waitForSelector(selector, { state: 'visible', timeout: 5000 });
-//         // .fill() function .type() se tez aur behtar hai
+//         // La función .fill() es más rápida y mejor que .type()
 //         await page.fill(selector, action.text);
 //         // Agar text ke baad Enter dabana hai (form submit karne ke liye)
 //         await page.press(selector, 'Enter');

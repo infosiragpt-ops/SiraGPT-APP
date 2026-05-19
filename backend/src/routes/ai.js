@@ -172,6 +172,32 @@ function createProviderClient(provider) {
   });
 }
 
+// One-shot boot-time provider-key audit. Logs a single WARN for each
+// missing key so operators see at a glance which providers will 503.
+// Models from unconfigured providers are also hidden from /api/ai/models
+// (see the filter inside that route handler below).
+(function auditProviderKeys() {
+  const checks = [
+    { name: 'OpenAI', envKey: 'OPENAI_API_KEY' },
+    { name: 'Anthropic', envKey: 'ANTHROPIC_API_KEY' },
+    { name: 'Groq', envKey: 'GROQ_API_KEY' },
+    {
+      name: 'Gemini',
+      present: !!(process.env.GOOGLE_GENERATIVE_AI_API_KEY || process.env.GEMINI_API_KEY),
+      envKey: 'GOOGLE_GENERATIVE_AI_API_KEY (or GEMINI_API_KEY)',
+    },
+    { name: 'DeepSeek', envKey: 'DEEPSEEK_API_KEY' },
+    { name: 'OpenRouter', envKey: 'OPENROUTER_API_KEY' },
+  ];
+  const missing = checks.filter((c) => (c.present === undefined ? !process.env[c.envKey] : !c.present));
+  if (missing.length > 0) {
+    console.warn(
+      `⚠️  [ai] Missing provider API keys: ${missing.map((m) => `${m.name} (${m.envKey})`).join(', ')}. `
+      + 'Requests to these providers will be hidden from /api/ai/models and return 503 if invoked directly.'
+    );
+  }
+})();
+
 /**
  * Resolve a provider client with automatic failover via the
  * provider-registry. Falls back to createProviderClient() if
@@ -455,6 +481,28 @@ router.get('/models', optionalAuth, async (req, res) => {
       const catalogEntry = modelRouter.getModel(m.name);
       if (!catalogEntry) return true;
       return catalogEntry.plans.includes(userPlan);
+    });
+
+    // Provider key gating — hide models whose provider has no API key set.
+    // Avoids dead options in the picker that would 503 the second they're
+    // chosen. Mapping is conservative: only providers with a well-known
+    // single env var get gated. Unknown providers pass through unchanged.
+    const providerEnvKey = {
+      OpenAI: 'OPENAI_API_KEY',
+      Anthropic: 'ANTHROPIC_API_KEY',
+      Groq: 'GROQ_API_KEY',
+      Gemini: 'GOOGLE_GENERATIVE_AI_API_KEY',
+      DeepSeek: 'DEEPSEEK_API_KEY',
+      OpenRouter: 'OPENROUTER_API_KEY',
+    };
+    models = models.filter((m) => {
+      const envKey = providerEnvKey[m.provider];
+      if (!envKey) return true;
+      // Gemini's key is sometimes under GEMINI_API_KEY too — accept either.
+      if (m.provider === 'Gemini') {
+        return !!(process.env.GOOGLE_GENERATIVE_AI_API_KEY || process.env.GEMINI_API_KEY);
+      }
+      return !!process.env[envKey];
     });
 
     res.json({ models });
@@ -3071,7 +3119,17 @@ router.post(
                 filename: safeFilename,
                 originalName: filename,
                 mimeType: mime.lookup(safeFilename) || 'application/octet-stream',
-                size: 0, // Placeholder
+                // Compute initial size from the in-memory content so the
+                // row is never created with size=0. A definitive size is
+                // re-read from disk a few lines below via fs.stat() (which
+                // also accounts for renderer-side formatting), but seeding
+                // a real value here keeps the DB consistent if that update
+                // ever fails. Buffer.byteLength gives the UTF-8 byte count
+                // even when chatContent is a string.
+                size: Buffer.byteLength(
+                  typeof chatContent === 'string' ? chatContent : String(chatContent ?? ''),
+                  'utf8'
+                ),
                 path: filePath,
               },
             });

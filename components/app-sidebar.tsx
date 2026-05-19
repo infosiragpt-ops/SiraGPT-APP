@@ -450,7 +450,7 @@ export function AppSidebar() {
   ) => {
     setter((current) => {
       const next = updater(Array.isArray(current) ? current : [])
-      try { localStorage.setItem(key, JSON.stringify(next)) } catch {}
+      try { localStorage.setItem(key, JSON.stringify(next)) } catch (err) { console.debug('storage unavailable', err) }
       return next
     })
   }, [])
@@ -482,7 +482,7 @@ export function AppSidebar() {
       const next = { ...(current || {}) }
       if (folder) next[chat.id] = folder
       else delete next[chat.id]
-      try { localStorage.setItem("sira:chat-folders", JSON.stringify(next)) } catch {}
+      try { localStorage.setItem("sira:chat-folders", JSON.stringify(next)) } catch (err) { console.debug('storage unavailable', err) }
       return next
     })
     toast.success(folder ? `Movido a ${folder}` : "Chat quitado de carpeta")
@@ -548,7 +548,7 @@ export function AppSidebar() {
           title: scheduleTarget.title,
         },
       }
-      try { localStorage.setItem("sira:scheduled-chats", JSON.stringify(next)) } catch {}
+      try { localStorage.setItem("sira:scheduled-chats", JSON.stringify(next)) } catch (err) { console.debug('storage unavailable', err) }
       return next
     })
     setScheduleTarget(null)

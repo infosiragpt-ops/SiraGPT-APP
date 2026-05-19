@@ -3,14 +3,14 @@ const nodemailer = require('nodemailer');
 class EmailService {
   constructor() {
     this.transporter = null;
-    this.isConfigured = false;
+    this._configured = false;
     this.initialize();
   }
 
   initialize() {
     try {
       if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
-        this.transporter = nodemailer.createTransport({ // Fixed: was createTransporter
+        this.transporter = nodemailer.createTransport({
           host: process.env.SMTP_HOST,
           port: parseInt(process.env.SMTP_PORT) || 587,
           secure: false,
@@ -19,11 +19,18 @@ class EmailService {
             pass: process.env.SMTP_PASS
           }
         });
-        
-        this.isConfigured = true;
+
+        this._configured = true;
         console.log('✅ Email service configured');
       } else {
-        console.log('⚠️ Email service not configured - email notifications disabled');
+        // Single, loud WARN at boot so the operator sees it once.
+        // All send* methods below are no-ops while unconfigured, so
+        // fire-and-forget call sites never throw.
+        console.warn(
+          '⚠️  Email service not configured (missing SMTP_HOST / SMTP_USER / SMTP_PASS). '
+          + 'Email-bound flows (verification, password reset, payment failure alerts) will no-op. '
+          + 'Set SMTP_* env vars to enable.'
+        );
       }
     } catch (error) {
       console.error('❌ Email service initialization failed:', error);
@@ -31,10 +38,21 @@ class EmailService {
   }
 
   /**
+   * Returns true when SMTP is configured and the transporter is live.
+   * Callers in auth flows (verification / password reset) should check
+   * this and return a friendly 503 rather than silently dropping the
+   * email. Other flows (notifications, fire-and-forget) can just call
+   * send* methods directly — they no-op when unconfigured.
+   */
+  isConfigured() {
+    return this._configured === true;
+  }
+
+  /**
    * Send usage alert email
    */
   async sendUsageAlert(user, alertData) {
-    if (!this.isConfigured) return;
+    if (!this.isConfigured()) return;
 
     try {
       const { type, threshold, usage } = alertData;
@@ -100,7 +118,7 @@ class EmailService {
    * Send payment failure notification
    */
   async sendPaymentFailureAlert(user, paymentData) {
-    if (!this.isConfigured) return;
+    if (!this.isConfigured()) return;
 
     try {
       const subject = `Payment Failed - Action Required`;
@@ -159,7 +177,7 @@ class EmailService {
    * Send subscription ending notification
    */
   async sendSubscriptionEndingAlert(user, endDate) {
-    if (!this.isConfigured) return;
+    if (!this.isConfigured()) return;
 
     try {
       const subject = `Your subscription ends in 3 days`;
@@ -214,7 +232,7 @@ class EmailService {
    * Send welcome email after successful subscription
    */
   async sendWelcomeEmail(user) {
-    if (!this.isConfigured) return;
+    if (!this.isConfigured()) return;
 
     try {
       const subject = `Welcome to ${user.plan} plan! 🎉`;
@@ -270,7 +288,7 @@ class EmailService {
    * Send subscription confirmation email
    */
   async sendSubscriptionConfirmation(email, data) {
-    if (!this.isConfigured) return;
+    if (!this.isConfigured()) return;
 
     try {
       const { userName, plan, expirationDate, billingCycle } = data;
@@ -329,7 +347,7 @@ class EmailService {
    * Send renewal confirmation email
    */
   async sendRenewalConfirmation(email, data) {
-    if (!this.isConfigured) return;
+    if (!this.isConfigured()) return;
 
     try {
       const { userName, plan, newExpirationDate, billingCycle } = data;
@@ -381,7 +399,7 @@ class EmailService {
    * Send payment failure notification
    */
   async sendPaymentFailureNotification(email, data) {
-    if (!this.isConfigured) return;
+    if (!this.isConfigured()) return;
 
     try {
       const { userName, plan, failureReason, retryDate } = data;
@@ -440,7 +458,7 @@ class EmailService {
    * Send subscription downgrade notification
    */
   async sendSubscriptionDowngrade(email, data) {
-    if (!this.isConfigured) return;
+    if (!this.isConfigured()) return;
 
     try {
       const { userName, previousPlan, reason } = data;

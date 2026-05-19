@@ -320,8 +320,8 @@ Query:`;
                 fileId: fileId,
                 alt: 'media',
             });
-            // Ye sirf text-based files ke liye behtar kaam karega
-            return typeof res.data === 'string' ? res.data.substring(0, 4000) : "File ka content text format mein nahi hai.";
+            // Solo funciona correctamente con archivos basados en texto.
+            return typeof res.data === 'string' ? res.data.substring(0, 4000) : "El contenido del archivo no está en formato de texto.";
         } catch (error) {
             console.error("File content hasil karne mein error:", error);
             return "File ka content hasil karne mein error aayi.";
@@ -425,7 +425,7 @@ Query:`;
                 type: "function",
                 function: {
                     name: "summarize_file",
-                    description: "Ek specific file ID de kar uske content ka khulasa (summary) banao. Yeh text-based files ke liye behtareen hai.",
+                    description: "Genera un resumen del contenido de un archivo a partir de su ID. Funciona mejor con archivos de texto.",
                     parameters: {
                         type: "object",
                         properties: {
@@ -453,7 +453,7 @@ Query:`;
                 type: "function",
                 function: {
                     name: "get_file_content",
-                    description: "Ek specific file ID de kar uske andar ka raw content parho (text files ke liye behtareen).",
+                    description: "Lee el contenido en bruto de un archivo a partir de su ID (recomendado para archivos de texto).",
                     parameters: {
                         type: "object",
                         properties: {

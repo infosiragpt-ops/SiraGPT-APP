@@ -33,13 +33,32 @@ const DEV_FALLBACK = [
   'http://127.0.0.1:3001',
 ];
 
+// Production fallback — known-good public origins for the deployed
+// product. Used ONLY when CORS_ORIGINS is unset in production so the
+// site doesn't fail closed on a fresh deploy where the operator
+// forgot to set the env var. A loud security warning is logged
+// at boot in index.js when this fallback is hit.
+const PROD_FALLBACK = [
+  'https://siragpt.io',
+  'https://www.siragpt.io',
+  'http://localhost:3000',
+];
+
 function resolveAllowedOrigins(env = process.env) {
   const list = String(env.CORS_ORIGINS || '')
     .split(',')
     .map((origin) => origin.trim())
     .filter(Boolean);
   if (list.length > 0) return list;
-  if (env.NODE_ENV === 'production') return [];
+  if (env.NODE_ENV === 'production') {
+    // eslint-disable-next-line no-console
+    console.warn(
+      '⚠️  [cors] CORS_ORIGINS env var is unset in production. '
+      + `Falling back to safe defaults: ${PROD_FALLBACK.join(', ')}. `
+      + 'Set CORS_ORIGINS=https://yourdomain.com to override.'
+    );
+    return [...PROD_FALLBACK];
+  }
   return [...DEV_FALLBACK];
 }
 

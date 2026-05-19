@@ -651,58 +651,102 @@ router.post('/refresh', authenticateToken, async (req, res) => {
   }
 });
 
-// Super Admin Impersonation - Allow super admin to access any user account
+// Super Admin Impersonation — hardened.
+//
+// SECURITY:
+//   - Token TTL reduced from 24h to 30m so a leaked impersonation
+//     cookie has a much smaller blast radius.
+//   - Caller must provide `reason` (>= 10 chars) so the audit row
+//     answers "why did admin X log in as user Y".
+//   - Per-target rate limit: max 3 impersonations / hour, keyed
+//     on `${adminId}:${targetUserId}`. Mitigates abuse without
+//     blocking legitimate "admin needs to reproduce a bug" flows.
+//   - Every successful + denied attempt is logged with the
+//     `[SUPER_ADMIN_AUDIT]` tag for grep / SIEM ingestion.
+//
+// The rate-limit map lives in-process. For multi-instance deploys
+// promote this to the existing rate-limit-store (Redis) when
+// REDIS_URL is configured.
+const IMPERSONATE_LIMIT = 3;
+const IMPERSONATE_WINDOW_MS = 60 * 60 * 1000;
+const impersonateAttempts = new Map(); // key: `${adminId}:${targetId}` → number[] (timestamps)
+const IMPERSONATE_TTL_MS = 30 * 60 * 1000;
+
+function recordImpersonationAttempt(adminId, targetId) {
+  const key = `${adminId}:${targetId}`;
+  const now = Date.now();
+  const arr = (impersonateAttempts.get(key) || []).filter((t) => now - t < IMPERSONATE_WINDOW_MS);
+  if (arr.length >= IMPERSONATE_LIMIT) {
+    return { ok: false, retryAfterMs: IMPERSONATE_WINDOW_MS - (now - arr[0]) };
+  }
+  arr.push(now);
+  impersonateAttempts.set(key, arr);
+  return { ok: true };
+}
+
 router.post('/impersonate/:userId', authenticateToken, async (req, res) => {
   try {
-    // Check if current user is super admin
     if (!req.user.isSuperAdmin) {
+      console.warn(`[SUPER_ADMIN_AUDIT] impersonate_denied non_admin=${req.user.email} target=${req.params.userId}`);
       return res.status(403).json({ error: 'Super admin access required' });
+    }
+
+    const reason = String((req.body && req.body.reason) || '').trim();
+    if (reason.length < 10) {
+      return res.status(400).json({
+        error: 'Impersonation reason required (min 10 chars) for the audit log',
+      });
     }
 
     const { userId } = req.params;
 
-    // Find target user
-    const targetUser = await prisma.user.findUnique({
-      where: { id: userId }
-    });
+    const rate = recordImpersonationAttempt(req.user.id, userId);
+    if (!rate.ok) {
+      console.warn(`[SUPER_ADMIN_AUDIT] impersonate_rate_limited admin=${req.user.email} target=${userId}`);
+      return res.status(429).json({
+        error: 'Too many impersonations for this target. Try again later.',
+        retryAfterMs: rate.retryAfterMs,
+      });
+    }
 
+    const targetUser = await prisma.user.findUnique({ where: { id: userId } });
     if (!targetUser) {
       return res.status(404).json({ error: 'User not found' });
     }
-
-    // Don't allow impersonating other super admins
     if (targetUser.isSuperAdmin) {
+      console.warn(`[SUPER_ADMIN_AUDIT] impersonate_denied_super_admin admin=${req.user.email} target=${targetUser.email}`);
       return res.status(403).json({ error: 'Cannot impersonate other super admins' });
     }
 
-    // Create impersonation token
     const impersonationToken = jwt.sign(
-      { 
+      {
         userId: targetUser.id,
         impersonatedBy: req.user.id,
-        isImpersonation: true
+        isImpersonation: true,
       },
       process.env.JWT_SECRET,
-      { expiresIn: '24h' } // Shorter expiry for impersonation
+      { expiresIn: '30m' }
     );
 
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    const expiresAt = new Date(Date.now() + IMPERSONATE_TTL_MS);
 
-    // Create impersonation session
     await prisma.session.create({
       data: {
         userId: targetUser.id,
         token: impersonationToken,
-        expiresAt
-      }
+        expiresAt,
+      },
     });
 
-    console.log(`Super admin ${req.user.email} impersonating user ${targetUser.email}`);
+    console.warn(
+      `[SUPER_ADMIN_AUDIT] impersonate_granted admin=${req.user.email} target=${targetUser.email} reason=${JSON.stringify(reason)} ttl=30m`
+    );
 
     res.json({
       token: impersonationToken,
       user: serializeUser(targetUser),
-      impersonatedBy: req.user.id
+      impersonatedBy: req.user.id,
+      expiresAt,
     });
   } catch (error) {
     console.error('Impersonation error:', error);

@@ -3,9 +3,23 @@ const Stripe = require('stripe');
 class StripeService {
   constructor() {
     this.isConfigured = !!process.env.STRIPE_SECRET_KEY && process.env.STRIPE_SECRET_KEY !== 'sk_test_...';
-    
+    this.demoAllowed = process.env.NODE_ENV !== 'production'
+      && process.env.ALLOW_STRIPE_DEMO === 'true';
+
     if (!this.isConfigured) {
-      console.warn('⚠️  Stripe not configured - using demo mode. Set STRIPE_SECRET_KEY in .env for real payments.');
+      if (process.env.NODE_ENV === 'production') {
+        // Loud, single boot warning. Operators need to see this in
+        // PM2 logs immediately — running prod without Stripe means
+        // every checkout attempt will 503 below.
+        console.error(
+          '🚨 [stripe] STRIPE_SECRET_KEY is NOT set in production. '
+          + 'All payment endpoints will return 503. Set STRIPE_SECRET_KEY now.'
+        );
+      } else if (this.demoAllowed) {
+        console.warn('⚠️  Stripe not configured — DEMO mode enabled (ALLOW_STRIPE_DEMO=true). Do NOT use in production.');
+      } else {
+        console.warn('⚠️  Stripe not configured. Set STRIPE_SECRET_KEY in .env for real payments, or ALLOW_STRIPE_DEMO=true for local demo simulation.');
+      }
       this.stripe = null;
     } else {
       this.stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {

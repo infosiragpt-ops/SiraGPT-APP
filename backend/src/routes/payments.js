@@ -6,7 +6,23 @@ const prisma = require('../config/database');
 const stripeService = require('../services/stripe');
 const { getPriceIdForPlan } = require('../utils/stripe-setup');
 const usageMonitor = require('../services/usage-monitor');
-// const emailService = require('../services/email'); // Commented out temporarily
+const emailService = require('../services/email');
+
+// Helper: coerce a value to BigInt safely. Stripe + Prisma return
+// monthlyLimit/usage as BigInt in some code paths and Number in
+// others. Mixing the two in arithmetic throws
+// "Cannot mix BigInt and other types" which silently aborts the
+// webhook handler.
+function toBigIntSafe(value, fallback = 0n) {
+  if (value === null || value === undefined) return fallback;
+  if (typeof value === 'bigint') return value;
+  try {
+    if (typeof value === 'number' && !Number.isFinite(value)) return fallback;
+    return BigInt(Math.trunc(Number(value)));
+  } catch {
+    return fallback;
+  }
+}
 const prorationService = require('../services/proration');
 const subscriptionAnalyticsService = require('../services/subscription-analytics');
 const { serializeBigIntFields } = require('../utils/bigint-serializer');
@@ -671,57 +687,98 @@ router.get('/invoice/:paymentId', authenticateToken, async (req, res) => {
 });
 
 // Instant (demo) subscription - frontend calls /api/payments/instant
+//
+// SECURITY: This endpoint can grant any caller a paid plan. It is
+// locked behind THREE gates:
+//   1. The caller must be a super admin (`req.user.isSuperAdmin`).
+//   2. The env flag `ALLOW_INSTANT_SUBSCRIPTION=true` must be set.
+//   3. Every successful call is recorded in `subscriptionEvent` and
+//      logged with the `[SUPER_ADMIN_AUDIT]` tag for grep-ability.
+// Without (1) AND (2) the endpoint returns 403/404 — the legacy
+// "any authenticated user can self-upgrade" behavior is gone.
 router.post(
   '/instant',
   authenticateToken,
   [
-    // optional validators: monthlyLimit if provided must be integer
     body('plan')
       .isIn(['PRO', 'PRO_MAX', 'ENTERPRISE'])
       .withMessage('Invalid plan (allowed: PRO, PRO_MAX, ENTERPRISE)'),
     body('monthlyLimit').optional().isInt({ min: 0 }).withMessage('monthlyLimit must be an integer >= 0'),
+    body('targetUserId').optional().isString(),
+    body('reason').optional().isString(),
   ],
   async (req, res) => {
     try {
+      // Gate 1: super-admin only.
+      if (!req.user?.isSuperAdmin) {
+        return res.status(403).json({ error: 'Super admin access required' });
+      }
+
+      // Gate 2: env flag must be on (default-off in production).
+      if (process.env.ALLOW_INSTANT_SUBSCRIPTION !== 'true') {
+        return res.status(404).json({
+          error: 'Instant subscription endpoint disabled. Set ALLOW_INSTANT_SUBSCRIPTION=true to enable.',
+        });
+      }
+
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const { plan, monthlyLimit } = req.body;
+      const { plan, monthlyLimit, targetUserId, reason } = req.body;
+      const userIdToUpdate = targetUserId || req.user.id;
 
-      // Default plan credits (used when monthlyLimit isn't supplied)
       const planCredits = {
-        PRO: 500000,
-        PRO_MAX: 1000000,
-        ENTERPRISE: 10000000,
+        PRO: 500000n,
+        PRO_MAX: 1000000n,
+        ENTERPRISE: 10000000n,
       };
-
       const add = typeof monthlyLimit !== 'undefined' && monthlyLimit !== null
-        ? Number(monthlyLimit)
-        : (planCredits[plan] || 0);
+        ? toBigIntSafe(monthlyLimit)
+        : (planCredits[plan] || 0n);
 
-      // Load current user
-      const dbUser = await prisma.user.findUnique({ where: { id: req.user.id } });
+      const dbUser = await prisma.user.findUnique({ where: { id: userIdToUpdate } });
       if (!dbUser) {
         return res.status(404).json({ error: 'User not found' });
       }
 
-      // Append credits to existing monthlyLimit
-      const newMonthlyLimit = (dbUser.monthlyLimit ?? 0) + add;
+      const currentLimit = toBigIntSafe(dbUser.monthlyLimit);
+      const newMonthlyLimit = currentLimit + add;
 
       const updated = await prisma.user.update({
-        where: { id: req.user.id },
+        where: { id: userIdToUpdate },
         data: {
           plan,
           monthlyLimit: newMonthlyLimit,
-          // If you use monthlyCallLimit only for free users, keep this 0 for paid plans
           monthlyCallLimit: 0,
         },
       });
 
-      // Return updated user (omit sensitive fields if needed)
-      return res.json({ user: updated });
+      // Audit trail — persist + structured log so ops can grep.
+      console.warn(
+        `[SUPER_ADMIN_AUDIT] instant_subscription admin=${req.user.email} target=${dbUser.email} plan=${plan} added=${add} reason=${JSON.stringify(reason || 'n/a')}`
+      );
+      try {
+        await prisma.subscriptionEvent.create({
+          data: {
+            userId: userIdToUpdate,
+            eventType: 'admin_instant_grant',
+            newPlan: plan,
+            eventData: serializeBigIntFields({
+              adminId: req.user.id,
+              adminEmail: req.user.email,
+              addedCredits: add,
+              newMonthlyLimit,
+              reason: reason || null,
+            }),
+          },
+        });
+      } catch (auditErr) {
+        console.error('[SUPER_ADMIN_AUDIT] failed to persist event:', auditErr.message);
+      }
+
+      return res.json({ user: serializeBigIntFields(updated) });
     } catch (error) {
       console.error('Instant subscription error:', error);
       return res.status(500).json({ error: 'Failed to apply instant subscription' });
@@ -942,14 +999,26 @@ async function handleInvoicePaymentFailed(invoice) {
       }
     });
 
-    // Send payment failure email
-    // await emailService.sendPaymentFailureAlert(user, {
-    //   amount: invoice.amount_due / 100,
-    //   currency: invoice.currency,
-    //   nextRetry: 'Within 24 hours'
-    // }); // Commented out temporarily
-    
     const amountDue = Number(invoice.amount_due) / 100;
+
+    // Send payment failure email — fire-and-forget but with a guard.
+    // emailService.isConfigured short-circuits when SMTP is unset; we
+    // still try/catch so a transient SMTP failure can never bubble up
+    // and 500 the Stripe webhook (which would cause Stripe to retry
+    // forever and double-create notifications).
+    try {
+      if (typeof emailService.isConfigured === 'function'
+          ? emailService.isConfigured()
+          : emailService.isConfigured) {
+        await emailService.sendPaymentFailureAlert(user, {
+          amount: amountDue,
+          currency: invoice.currency,
+          nextRetry: 'Within 24 hours',
+        });
+      }
+    } catch (mailErr) {
+      console.error('Payment failure email dispatch failed (non-fatal):', mailErr.message);
+    }
 
     // Create in-app notification
     await prisma.notification.create({

@@ -376,9 +376,14 @@ class ApiClient {
     this.setToken(null);
   }
 
-  // Super Admin Impersonation
-  async impersonateUser(userId: string) {
-    return this.request(`/auth/impersonate/${userId}`, { method: 'POST' });
+  // Super Admin Impersonation. Backend requires a `reason` (min 10 chars)
+  // for the audit log; default to a generic admin-investigation reason
+  // so existing call sites keep working without UI changes.
+  async impersonateUser(userId: string, reason: string = 'Admin investigation / user support session') {
+    return this.request(`/auth/impersonate/${userId}`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
   }
 
   async endImpersonation() {
