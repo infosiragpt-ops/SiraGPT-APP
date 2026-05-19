@@ -27,7 +27,13 @@ const BACKEND_DIR = path.join(ROOT, "backend");
 // which would clobber the backend if it also defaulted to 5000).
 const BACKEND_PORT = Number(process.env.BACKEND_PORT || 5050);
 const BACKEND_HOST = process.env.BACKEND_HOST || "127.0.0.1";
-const FRONTEND_PORT = Number(process.env.PORT || 3000);
+// Frontend must bind to the port declared in .replit's deploy config
+// (localPort=3000 → externalPort=80). Replit Autoscale also injects
+// PORT=5000 into the container, which we deliberately ignore — using
+// it here would leave port 3000 closed and Autoscale would mark the
+// deployment as failed ("required port was never opened, expected port 3000").
+// FRONTEND_PORT is overridable for local dev only.
+const FRONTEND_PORT = Number(process.env.FRONTEND_PORT || 3000);
 const BACKEND_READY_TIMEOUT_MS = Number(process.env.BACKEND_READY_TIMEOUT_MS || 120_000);
 
 let backend = null;
