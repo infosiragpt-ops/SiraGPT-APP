@@ -381,6 +381,10 @@ export const ExcelConnector = React.forwardRef<ExcelConnectorRef, ExcelConnector
             two ghost icon-only buttons right (Descargar, Cerrar). */}
         <div className="flex items-center justify-between p-3 border-b border-border/40">
           <div className="flex items-center gap-2">
+            {/* Static 20×20 PNG icon — next/image adds runtime cost
+                and a layout-shift wrapper for what is effectively a
+                glyph. Keeping the plain <img>. */}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src="/icons/Excel.png" alt="Excel" className="h-5 w-5" />
             <h3 className="font-semibold text-sm text-foreground">Excel File</h3>
           </div>

@@ -624,6 +624,14 @@ app.use('/api-docs', buildApiDocsRouter());
 // observable in access logs / metrics (one router per mount point).
 app.use('/api/docs', buildApiDocsRouter());
 
+// ── /api/version ────────────────────────────────────────────────
+// Small public probe returning frontend + backend semver, the git
+// commit (env-injected or `git rev-parse` fallback), boot wall-clock
+// and the node runtime. Mounted ABOVE the rate-limited /api/ block
+// because it predates /api/auth/etc. and is intentionally cheap.
+const versionRouter = require('./src/routes/version');
+app.use('/api/version', versionRouter);
+
 // API Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/chats', chatRoutes);

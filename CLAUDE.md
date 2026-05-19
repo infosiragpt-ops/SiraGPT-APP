@@ -24,7 +24,7 @@ SiraGPT es una plataforma AI full-stack (Next.js 14 + Express.js) con sistema mu
 npm run dev            # Next.js dev server (puerto 3000)
 npm run build          # Next.js build
 npm test               # Tests backend (Node --test) - ~2900 tests
-npm run lint           # ESLint (ratchet: max-warnings 97)
+npm run lint           # ESLint (ratchet: max-warnings 49)
 npx tsc --noEmit --skipLibCheck   # TypeScript check
 npm run type-check     # TSC completo
 ```
