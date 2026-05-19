@@ -24,7 +24,11 @@
 export type AnalyticsEvent =
   | "chat.message_sent"
   | "chat.file_uploaded"
+  | "chat.file_upload_completed"
   | "model.selected"
+  | "slash_command.used"
+  | "theme.toggled"
+  | "language.toggled"
   | "plan.upgrade_started"
   | "error.client_boundary"
   | "error.route"
@@ -65,12 +69,64 @@ function client(): PostHogLike | null {
  */
 export function track(event: AnalyticsEvent, properties?: AnalyticsProperties): void {
   const ph = client()
-  if (!ph) return
+  if (!ph) {
+    // Dev convenience: when PostHog isn't loaded we still want to see
+    // events while developing. Production with no key stays silent.
+    if (typeof window !== "undefined" && process.env.NODE_ENV !== "production") {
+      try {
+        // eslint-disable-next-line no-console
+        console.debug("[analytics]", event, properties ?? {})
+      } catch {
+        /* ignore */
+      }
+    }
+    return
+  }
   try {
     ph.capture(event, properties)
   } catch {
     // Analytics failure is never user-facing.
   }
+}
+
+/* ------------------------------------------------------------------ *
+ * Typed helpers for the events this codebase fires.
+ *
+ * Components should prefer these over `track(...)` directly so the
+ * property shape stays consistent across call sites. Each helper is a
+ * one-liner around `track()` and tolerates a missing PostHog.
+ * ------------------------------------------------------------------ */
+
+export function trackFileUploadCompleted(payload: {
+  count: number
+  totalBytes: number
+  mime?: string
+}): void {
+  track("chat.file_upload_completed", {
+    count: payload.count,
+    totalBytes: payload.totalBytes,
+    mime: payload.mime,
+  })
+}
+
+export function trackModelSelected(model: string, source?: string): void {
+  track("model.selected", { model, source })
+}
+
+export function trackSlashCommand(command: string, payload?: AnalyticsProperties): void {
+  track("slash_command.used", { command, ...(payload ?? {}) })
+}
+
+export function trackThemeToggled(theme: "light" | "dark" | "system"): void {
+  track("theme.toggled", { theme })
+}
+
+export function trackLanguageToggled(locale: string): void {
+  track("language.toggled", { locale })
+}
+
+export function trackErrorBoundary(label: string, message?: string): void {
+  track("error.client_boundary", { label, message })
 }
 
 /**
