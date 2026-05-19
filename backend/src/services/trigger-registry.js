@@ -108,6 +108,35 @@ function getDispatcher() {
 }
 function __setDispatcher(d) { dispatcherRef = d; }
 
+// ── Unknown-event metric (ratchet 45, Task 1) ────────────────────────
+// publish() rejects events that aren't in TRIGGERS to keep the fan-out
+// surface tight; each rejection bumps siragpt_unknown_trigger_total{event}
+// so ops can spot typos or stale call sites. Metric module load is
+// best-effort — test environments without it keep working.
+let _metricsRef = null;
+function _getMetrics() {
+  if (_metricsRef !== null) return _metricsRef;
+  try {
+    // eslint-disable-next-line global-require
+    const m = require('../utils/metrics');
+    if (m && typeof m.registerCounter === 'function') {
+      m.registerCounter('siragpt_unknown_trigger_total', {
+        help: 'Total publish() calls rejected because the event is not in the TRIGGERS allow-list',
+        labels: ['event'],
+      });
+    }
+    _metricsRef = m;
+  } catch { _metricsRef = false; }
+  return _metricsRef;
+}
+
+function _trackUnknownTrigger(event) {
+  const m = _getMetrics();
+  if (!m || typeof m.counter !== 'function') return;
+  try { m.counter('siragpt_unknown_trigger_total', { event: String(event || 'unknown') }, 1); }
+  catch { /* never break the publisher */ }
+}
+
 let slackSenderRef = null;
 function getSlackSender() {
   if (slackSenderRef) return slackSenderRef;
@@ -189,6 +218,20 @@ async function fire(dedupeKey) {
 // ---------------- main publish ----------------
 async function publish(event, payload, userId, opts = {}) {
   if (typeof event !== 'string' || !event) throw new Error('event required');
+  // Ratchet 45, Task 1 — reject events that aren't in the canonical
+  // TRIGGERS allow-list. Strict mode (default) throws so callers learn
+  // about typos immediately; opt-in lenient mode (`opts.allowUnknown`)
+  // emits a console.warn + no-op so legacy call sites don't blow up
+  // during rollout. Both paths bump siragpt_unknown_trigger_total.
+  if (!KNOWN_SET.has(event)) {
+    _trackUnknownTrigger(event);
+    if (opts && opts.allowUnknown) {
+      // eslint-disable-next-line no-console
+      console.warn(`[trigger-registry] dropping unknown event: ${event}`);
+      return { dispatched: 0, deduped: false, errors: [], unknown: true };
+    }
+    throw new Error(`unknown trigger event: ${event}`);
+  }
   const ttlMs = Number(opts.idempotencyTtlMs) > 0 ? Number(opts.idempotencyTtlMs) : DEFAULT_IDEMPOTENCY_TTL_MS;
   const now = Date.now();
   const hash = eventHash(event, userId, payload);
@@ -317,6 +360,7 @@ function resetForTests() {
   prismaRef = null;
   dispatcherRef = null;
   slackSenderRef = null;
+  _metricsRef = null;
 }
 
 module.exports = {

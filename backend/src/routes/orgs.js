@@ -1843,6 +1843,40 @@ router.post('/:id/api-keys/:keyId/rotate', authenticateToken, async (req, res) =
   }
 });
 
+// ─── GET /api/orgs/:id/api-keys/:keyId/usage (ADMIN+, ratchet 45) ───
+// Surfaces the sampled per-scope + per-endpoint usage aggregates that
+// requireScope() populates fire-and-forget. Counts are upscaled
+// approximations (1-in-50 sampler), not exact totals. Returns 404 when
+// the key isn't part of this org or has been soft-deleted.
+router.get('/:id/api-keys/:keyId/usage', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  const keyId = req.params.keyId;
+  try {
+    const membership = await assertMembership(prisma, orgId, userId, 'ADMIN');
+    if (!canManageMembers(membership.role)) {
+      return res.status(403).json({ error: 'insufficient role to read api key usage' });
+    }
+    const row = await prisma.apiKey.findFirst({
+      where: { id: keyId, organizationId: orgId, deletedAt: null },
+      select: { id: true, prefix: true, name: true, usedScopes: true, usedEndpoints: true, lastUsedAt: true },
+    });
+    if (!row) return res.status(404).json({ error: 'api key not found' });
+    res.json({
+      apiKeyId: row.id,
+      prefix: row.prefix,
+      name: row.name,
+      lastUsedAt: row.lastUsedAt,
+      usedScopes: row.usedScopes && typeof row.usedScopes === 'object' ? row.usedScopes : {},
+      usedEndpoints: row.usedEndpoints && typeof row.usedEndpoints === 'object' ? row.usedEndpoints : {},
+    });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] api key usage failed:', err.message);
+    res.status(500).json({ error: 'failed to load api key usage' });
+  }
+});
+
 // ─── Slack integration (cycle 45, org-scoped) ───────────────────────
 // Mirrors the per-user endpoints under /api/integrations/slack but
 // scopes the SlackIntegration row to the organization. Trigger-registry

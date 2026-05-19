@@ -1274,6 +1274,10 @@ model ApiKey {
   // (1-in-50) fire-and-forget update from requireScope(). Shape:
   // { "<scope>": { count: number, lastUsedAt: ISOString } }
   usedScopes     Json?
+  // Ratchet 45 (Task 2) — sibling histogram populated by the same
+  // requireScope() sampler keyed by the Express-matched route template.
+  // Shape: { "<METHOD> <pathPattern>": count }
+  usedEndpoints  Json?
   // Ratchet 45 — optional per-key override of the plan-derived default
   // (env SIRAGPT_API_KEY_DEFAULT_RPM, fallback 60). Requests per minute;
   // null means "use the plan default for the owning user/org".

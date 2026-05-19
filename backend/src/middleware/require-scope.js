@@ -22,6 +22,13 @@
  * per-scope `{ count, lastUsedAt }` aggregate. The sampler keeps DB
  * load negligible while still surfacing "which scopes does this key
  * actually use?" for ops/audit.
+ *
+ * Ratchet 45 (Task 2) — the same sampler also populates a sibling
+ * `usedEndpoints` JSON shaped as `{ "<METHOD> <pathPattern>": count }`
+ * so operators can see *which routes* a given API key actually exercises
+ * (and which scopes are tied to which routes). The path pattern is the
+ * Express-matched route template (e.g. `/api/orgs/:id/api-keys`) — never
+ * the raw URL — so cardinality stays bounded.
  */
 
 const USED_SCOPE_SAMPLE_RATE = (() => {
@@ -54,13 +61,13 @@ function _getPrisma() {
  * `usedScopes` JSON, bumps the entry for `scope`, writes it back. Errors
  * are swallowed — this must never block the request.
  */
-function _recordScopeUsage(prisma, keyId, scope) {
+function _recordScopeUsage(prisma, keyId, scope, endpointKey) {
   if (!prisma || !keyId || !scope) return;
   Promise.resolve()
     .then(async () => {
       const row = await prisma.apiKey.findUnique({
         where: { id: keyId },
-        select: { usedScopes: true },
+        select: { usedScopes: true, usedEndpoints: true },
       });
       const current = (row && row.usedScopes && typeof row.usedScopes === 'object')
         ? { ...row.usedScopes }
@@ -71,12 +78,39 @@ function _recordScopeUsage(prisma, keyId, scope) {
         count: prevCount + USED_SCOPE_SAMPLE_RATE, // upscale to approximate true total
         lastUsedAt: new Date().toISOString(),
       };
+
+      // Ratchet 45 (Task 2) — same sampler, sibling histogram keyed by
+      // "METHOD pathPattern". Skipped if the route template isn't
+      // available (middleware-level reject before route match) to keep
+      // the JSON shape predictable for readers.
+      const data = { usedScopes: current };
+      if (endpointKey) {
+        const endpoints = (row && row.usedEndpoints && typeof row.usedEndpoints === 'object')
+          ? { ...row.usedEndpoints }
+          : {};
+        const prevEpCount = Number.isFinite(endpoints[endpointKey]) ? endpoints[endpointKey] : 0;
+        endpoints[endpointKey] = prevEpCount + USED_SCOPE_SAMPLE_RATE; // same upscale
+        data.usedEndpoints = endpoints;
+      }
+
       await prisma.apiKey.update({
         where: { id: keyId },
-        data: { usedScopes: current },
+        data,
       });
     })
     .catch(() => { /* never break the request */ });
+}
+
+// Best-effort, low-cardinality endpoint label — Express's matched route
+// template (never the raw URL). Returns null when no route matched yet.
+function _endpointKey(req) {
+  if (!req) return null;
+  const matched = req.route && req.route.path;
+  if (!matched) return null;
+  const base = req.baseUrl || '';
+  const path = `${base}${matched}` || matched;
+  const method = (req.method || 'GET').toUpperCase();
+  return `${method} ${path}`;
 }
 
 let _metrics = null;
@@ -144,7 +178,7 @@ function requireScope(needed) {
     if (apiKey.id && _shouldSample()) {
       const prisma = _getPrisma();
       if (prisma && prisma.apiKey && typeof prisma.apiKey.update === 'function') {
-        _recordScopeUsage(prisma, apiKey.id, needed);
+        _recordScopeUsage(prisma, apiKey.id, needed, _endpointKey(req));
       }
     }
 

@@ -44,8 +44,10 @@ require.cache[dbPath] = { id: dbPath, filename: dbPath, loaded: true, exports: f
 delete require.cache[mwPath];
 const { requireScope, _resetSampleCounterForTests, USED_SCOPE_SAMPLE_RATE } = require(mwPath);
 
-function buildReq({ scopes, id = 'ak_1', prefix = 'sk_test' } = {}) {
-  return { authMethod: 'api_key', apiKey: { id, prefix, scopes } };
+function buildReq({ scopes, id = 'ak_1', prefix = 'sk_test', route, method = 'GET', baseUrl = '' } = {}) {
+  const req = { authMethod: 'api_key', apiKey: { id, prefix, scopes }, method, baseUrl };
+  if (route) req.route = { path: route };
+  return req;
 }
 function buildRes() {
   return {
@@ -115,6 +117,36 @@ describe('requireScope · sampled usedScopes tracking', () => {
     const merged = fakePrisma._updateCalls[1].data.usedScopes;
     assert.equal(merged['ai:generate'].count, USED_SCOPE_SAMPLE_RATE);
     assert.equal(merged['chats:read'].count, USED_SCOPE_SAMPLE_RATE);
+  });
+
+  test('also populates usedEndpoints when req.route is available (Task 2)', async () => {
+    const mw = requireScope('ai:generate');
+    const req = buildReq({
+      scopes: ['*'],
+      id: 'ak_ep',
+      method: 'POST',
+      baseUrl: '/api/ai',
+      route: '/generate',
+    });
+    for (let i = 0; i < USED_SCOPE_SAMPLE_RATE; i += 1) {
+      mw(req, buildRes(), () => {});
+    }
+    await tick(); await tick();
+    assert.equal(fakePrisma._updateCalls.length, 1);
+    const data = fakePrisma._updateCalls[0].data;
+    assert.ok(data.usedEndpoints, 'usedEndpoints should be set');
+    assert.equal(data.usedEndpoints['POST /api/ai/generate'], USED_SCOPE_SAMPLE_RATE);
+  });
+
+  test('omits usedEndpoints when req.route is unavailable', async () => {
+    const mw = requireScope('ai:generate');
+    const req = buildReq({ scopes: ['*'], id: 'ak_no_route' }); // no route
+    for (let i = 0; i < USED_SCOPE_SAMPLE_RATE; i += 1) {
+      mw(req, buildRes(), () => {});
+    }
+    await tick(); await tick();
+    assert.equal(fakePrisma._updateCalls.length, 1);
+    assert.equal(fakePrisma._updateCalls[0].data.usedEndpoints, undefined);
   });
 
   test('skips tracking when apiKey.id is missing (defensive)', async () => {

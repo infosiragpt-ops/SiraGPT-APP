@@ -163,6 +163,53 @@ describe('trigger-registry · event glob matcher (ratchet 45 Task 1)', () => {
   });
 });
 
+describe('trigger-registry · unknown events (ratchet 45)', () => {
+  beforeEach(() => triggers.resetForTests());
+
+  test('throws on unknown event by default', async () => {
+    triggers.__setPrisma(buildFakePrisma());
+    triggers.__setDispatcher({ dispatch: async () => ({ status: 'delivered' }) });
+    triggers.__setSlackSender(null);
+    await assert.rejects(
+      triggers.publish('not.a.real.event', { x: 1 }, 'u1'),
+      /unknown trigger event/,
+    );
+  });
+
+  test('lenient mode warns + no-ops + sets unknown flag', async () => {
+    let dispatched = 0;
+    triggers.__setPrisma(buildFakePrisma({
+      endpoints: [{ id: 'e1', url: 'https://a/x', events: ['*'], secret: 's', isActive: true }],
+    }));
+    triggers.__setDispatcher({ dispatch: async () => { dispatched++; return { status: 'delivered' }; } });
+    triggers.__setSlackSender(null);
+    const orig = console.warn;
+    let warned = false;
+    console.warn = () => { warned = true; };
+    try {
+      const r = await triggers.publish('still.unknown', { x: 1 }, 'u1', { allowUnknown: true });
+      assert.equal(r.unknown, true);
+      assert.equal(r.dispatched, 0);
+      assert.equal(dispatched, 0);
+      assert.equal(warned, true);
+    } finally {
+      console.warn = orig;
+    }
+  });
+
+  test('known events still dispatch normally', async () => {
+    let dispatched = 0;
+    triggers.__setPrisma(buildFakePrisma({
+      endpoints: [{ id: 'e1', url: 'https://a/x', events: ['*'], secret: 's', isActive: true }],
+    }));
+    triggers.__setDispatcher({ dispatch: async () => { dispatched++; return { status: 'delivered' }; } });
+    triggers.__setSlackSender(null);
+    const r = await triggers.publish('chat.created', { x: 1 }, 'u1');
+    assert.equal(r.dispatched, 1);
+    assert.equal(dispatched, 1);
+  });
+});
+
 describe('trigger-registry · _eventHash', () => {
   test('is deterministic for the same input', () => {
     const a = triggers._eventHash('chat.created', 'u1', { id: 1 });
