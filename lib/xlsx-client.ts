@@ -7,6 +7,7 @@ type ExcelJSWorksheet = {
   addRows(rows: unknown[][]): void
   columns: Array<{ width: number }>
   getRow(n: number): { font: { bold: boolean } }
+  getCell(address: string): { value: unknown }
   // exceljs uses Iterable-like API; consumers may iterate rows/columns dynamically
   eachRow?(callback: (row: unknown, rowNumber: number) => void): void
   rowCount?: number
@@ -22,6 +23,7 @@ type ExcelJSWorkbook = {
     writeBuffer(): Promise<ArrayBuffer>
   }
   addWorksheet(name: string): ExcelJSWorksheet
+  getWorksheet(nameOrId?: string | number): ExcelJSWorksheet | undefined
 }
 
 type ExcelJSNamespace = {

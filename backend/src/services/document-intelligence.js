@@ -288,11 +288,11 @@ function tableToMarkdown(columns, rows) {
   return [header, sep, ...body].join('\n');
 }
 
-function extractSpreadsheetTables(file = {}, extractedText = '') {
+async function extractSpreadsheetTables(file = {}, extractedText = '') {
   if (!isSpreadsheet(file)) return [];
   if (!extractedText && file.path && fs.existsSync(file.path)) {
     try {
-      const workbookText = readXlsxToText(file.path);
+      const workbookText = await readXlsxToText(file.path);
       if (workbookText) {
         return extractSpreadsheetTables(file, workbookText);
       }
@@ -332,25 +332,64 @@ function extractSpreadsheetTables(file = {}, extractedText = '') {
   }).filter((table) => table.columns.length > 0);
 }
 
-function readXlsxToText(filePath) {
-  const XLSX = require('xlsx');
-  const workbook = XLSX.readFile(filePath, { type: 'file', cellDates: false, raw: true });
+function cellToText(value) {
+  if (value == null) return '';
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === 'object') {
+    // ExcelJS rich-text / hyperlink / formula objects
+    if (typeof value.text === 'string') return value.text;
+    if (Array.isArray(value.richText)) {
+      return value.richText.map((piece) => piece?.text ?? '').join('');
+    }
+    if ('result' in value) return cellToText(value.result);
+    if ('hyperlink' in value) return String(value.hyperlink || '');
+    if ('formula' in value) return String(value.formula || '');
+  }
+  return String(value);
+}
+
+async function readXlsxToText(filePath) {
+  const ExcelJS = require('exceljs');
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.readFile(filePath);
   const parts = [];
-  for (let i = 0; i < workbook.SheetNames.length; i++) {
-    const sheetName = workbook.SheetNames[i];
-    const sheet = workbook.Sheets[sheetName];
-    const json = XLSX.utils.sheet_to_json(sheet, { defval: '' });
-    const columns = json.length > 0 ? Object.keys(json[0]) : [];
+  workbook.eachSheet((sheet) => {
+    const sheetName = sheet.name;
+    const rows = [];
+    sheet.eachRow({ includeEmpty: false }, (row) => {
+      const values = [];
+      // row.values is 1-indexed in ExcelJS
+      const raw = Array.isArray(row.values) ? row.values.slice(1) : [];
+      for (const value of raw) values.push(cellToText(value));
+      rows.push(values);
+    });
+    if (!rows.length) {
+      const lines = [];
+      lines.push(`Sheet: ${sheetName}`);
+      lines.push(`Columns (0): `);
+      lines.push(`Total data rows: 0`);
+      lines.push('---');
+      parts.push(lines.join('\n'));
+      return;
+    }
+    const headerRow = rows[0];
+    const dataRows = rows.slice(1);
+    // Truncate trailing empty header cells
+    let lastCol = headerRow.length;
+    while (lastCol > 0 && !headerRow[lastCol - 1]) lastCol -= 1;
+    const columns = headerRow.slice(0, lastCol).map((value) => (value == null ? '' : String(value)));
     const lines = [];
     lines.push(`Sheet: ${sheetName}`);
     lines.push(`Columns (${columns.length}): ${columns.join('|')}`);
-    lines.push(`Total data rows: ${json.length}`);
+    lines.push(`Total data rows: ${dataRows.length}`);
     lines.push('---');
-    for (const row of json) {
-      lines.push(columns.map((col) => String(row[col] ?? '')).join('\t'));
+    for (const row of dataRows) {
+      const padded = [];
+      for (let i = 0; i < columns.length; i++) padded.push(row[i] == null ? '' : String(row[i]));
+      lines.push(padded.join('\t'));
     }
     parts.push(lines.join('\n'));
-  }
+  });
   return parts.join('\n\n');
 }
 
@@ -422,8 +461,8 @@ function extractCsvTable(file = {}, text = '') {
   }];
 }
 
-function buildTables(file = {}, extractedText = '') {
-  const spreadsheetTables = extractSpreadsheetTables(file, extractedText).filter((table) => table.columns.length > 0);
+async function buildTables(file = {}, extractedText = '') {
+  const spreadsheetTables = (await extractSpreadsheetTables(file, extractedText)).filter((table) => table.columns.length > 0);
   const csvTables = extractCsvTable(file, extractedText);
   const markdownTables = extractMarkdownTables(extractedText);
   return [...spreadsheetTables, ...csvTables, ...markdownTables]
@@ -581,7 +620,7 @@ async function analyzeFile(prisma, {
   const ocr = extractionResult?.ocr || reprocessed.result?.ocr || null;
   const text = cleanText(file.extractedText || '');
   const chunks = buildChunks(file, text);
-  const tables = buildTables(file, text);
+  const tables = await buildTables(file, text);
   const counts = inferCounts(file, text);
   const warnings = buildWarnings({ file, text, ocr, tables });
   const textCoverage = buildCoverage({ file, text, chunks, tables, ocr });

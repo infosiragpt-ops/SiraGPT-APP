@@ -3,9 +3,20 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const XLSX = require('xlsx');
+const ExcelJS = require('exceljs');
 
 const documentIntelligence = require('../src/services/document-intelligence');
+
+async function writeXlsx(filePath, sheetName, rows) {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet(sheetName);
+  if (rows.length) {
+    const columns = Object.keys(rows[0]);
+    sheet.addRow(columns);
+    for (const row of rows) sheet.addRow(columns.map((col) => row[col]));
+  }
+  await workbook.xlsx.writeFile(filePath);
+}
 
 test('DocumentIntelligence chunks DOCX-style markdown by section headings', () => {
   const text = [
@@ -29,18 +40,15 @@ test('DocumentIntelligence chunks DOCX-style markdown by section headings', () =
   assert.ok(chunks.some((chunk) => chunk.sectionTitle === 'Hallazgos'));
 });
 
-test('DocumentIntelligence extracts normalized XLSX tables with row preview', () => {
+test('DocumentIntelligence extracts normalized XLSX tables with row preview', async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'siragpt-docintel-'));
   const xlsxPath = path.join(tmpDir, 'negocios.xlsx');
-  const workbook = XLSX.utils.book_new();
-  const sheet = XLSX.utils.json_to_sheet([
+  await writeXlsx(xlsxPath, 'KPIs', [
     { Mes: 'Ene', Ventas: 1200, Costos: 700 },
     { Mes: 'Feb', Ventas: 1400, Costos: 810 },
   ]);
-  XLSX.utils.book_append_sheet(workbook, sheet, 'KPIs');
-  XLSX.writeFile(workbook, xlsxPath);
 
-  const tables = documentIntelligence.buildTables({
+  const tables = await documentIntelligence.buildTables({
     originalName: 'negocios.xlsx',
     mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     path: xlsxPath,
@@ -53,7 +61,7 @@ test('DocumentIntelligence extracts normalized XLSX tables with row preview', ()
   assert.equal(tables[0].preview[0].Mes, 'Ene');
 });
 
-test('DocumentIntelligence detects markdown tables in extracted DOCX/PDF text', () => {
+test('DocumentIntelligence detects markdown tables in extracted DOCX/PDF text', async () => {
   const text = [
     '# Matriz',
     '| Categoria | Resultado |',
@@ -62,7 +70,7 @@ test('DocumentIntelligence detects markdown tables in extracted DOCX/PDF text', 
     '| Riesgo | Medio |',
   ].join('\n');
 
-  const tables = documentIntelligence.buildTables({
+  const tables = await documentIntelligence.buildTables({
     originalName: 'matriz.docx',
     mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   }, text);

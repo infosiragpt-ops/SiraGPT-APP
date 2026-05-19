@@ -3,9 +3,20 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const XLSX = require('xlsx');
+const ExcelJS = require('exceljs');
 
 const documentIntelligence = require('../src/services/document-intelligence');
+
+async function writeXlsx(filePath, sheetName, rows) {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet(sheetName);
+  if (rows.length) {
+    const columns = Object.keys(rows[0]);
+    sheet.addRow(columns);
+    for (const row of rows) sheet.addRow(columns.map((col) => row[col]));
+  }
+  await workbook.xlsx.writeFile(filePath);
+}
 
 function createPrismaMock(files) {
   const analyses = new Map();
@@ -78,16 +89,13 @@ test('DocumentIntelligence reprocesses generic xlsx placeholder text from stored
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'siragpt-docintel-placeholder-'));
   const xlsxPath = path.join(tmpDir, 'base_sucesion_intestada_seleccionados.xlsx');
   try {
-    const workbook = XLSX.utils.book_new();
-    const sheet = XLSX.utils.json_to_sheet([
+    await writeXlsx(xlsxPath, 'Referencias', [
       {
         'Título del articulo': 'Sucesión intestada y herederos',
         Autores: 'García López, M.',
         'Año de publicacion': 2021,
       },
     ]);
-    XLSX.utils.book_append_sheet(workbook, sheet, 'Referencias');
-    XLSX.writeFile(workbook, xlsxPath);
 
     const prisma = createPrismaMock([
       {
