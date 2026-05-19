@@ -1112,9 +1112,27 @@ const { maskIp, parseUA } = require('../utils/session-info');
 router.get('/sessions', authenticateToken, async (req, res) => {
   try {
     const now = new Date();
+    // Pagination: ?page= (default 1) / ?limit= (default 20, capped at 100).
+    // Garbage input collapses to the defaults rather than 400-ing so the
+    // sessions UI keeps working when a stale query string is hanging around.
+    const SESSIONS_DEFAULT_LIMIT = 20;
+    const SESSIONS_MAX_LIMIT = 100;
+    const rawPage = parseInt(req.query.page, 10);
+    const rawLimit = parseInt(req.query.limit, 10);
+    const page = Number.isFinite(rawPage) && rawPage > 0 ? rawPage : 1;
+    const limit = Math.min(
+      SESSIONS_MAX_LIMIT,
+      Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : SESSIONS_DEFAULT_LIMIT,
+    );
+    const where = { userId: req.user.id, expiresAt: { gt: now } };
+    const total = typeof prisma.session.count === 'function'
+      ? await prisma.session.count({ where })
+      : null;
     const sessions = await prisma.session.findMany({
-      where: { userId: req.user.id, expiresAt: { gt: now } },
+      where,
       orderBy: { createdAt: 'desc' },
+      skip: (page - 1) * limit,
+      take: limit,
       select: { id: true, token: true, createdAt: true, expiresAt: true },
     });
 
@@ -1175,7 +1193,9 @@ router.get('/sessions', authenticateToken, async (req, res) => {
       };
     });
 
-    res.json({ sessions: items });
+    const safeTotal = typeof total === 'number' ? total : items.length;
+    const pages = limit > 0 ? Math.max(1, Math.ceil(safeTotal / limit)) : 1;
+    res.json({ sessions: items, total: safeTotal, page, pages, limit });
   } catch (err) {
     console.error('[auth/sessions] list failed:', err && err.message ? err.message : err);
     res.status(500).json({ error: 'Failed to list sessions' });

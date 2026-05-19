@@ -129,6 +129,27 @@ describe('AuditQuery — run()', () => {
     assert.equal(typeof AuditQuery, 'function');
     assert.ok(new AuditQuery(null) instanceof AuditQuery);
   });
+
+  test('run() returns {items,total,page,pages,limit} with pages computed', async () => {
+    const prisma = {
+      auditLog: {
+        async findMany() { return [{ id: 'a1' }, { id: 'a2' }]; },
+        async count() { return 47; },
+      },
+    };
+    const r = await query(prisma).limit(10).page(2).run();
+    assert.equal(r.total, 47);
+    assert.equal(r.page, 2);
+    assert.equal(r.limit, 10);
+    assert.equal(r.pages, 5); // ceil(47/10)
+  });
+
+  test('run() returns pages=1 when prisma is missing', async () => {
+    const r = await query(null).limit(20).page(3).run();
+    assert.equal(r.pages, 1);
+    assert.equal(r.page, 3);
+    assert.equal(r.limit, 20);
+  });
 });
 
 describe('AuditQuery — byOrg() org scoping', () => {

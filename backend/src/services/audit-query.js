@@ -144,43 +144,50 @@ class AuditQuery {
   }
 
   /**
-   * Execute the query and return `{ items, total, page, limit }`.
+   * Execute the query and return `{ items, total, page, pages, limit }`.
+   * `pages` is the total number of pages (ceil(total/limit), min 1) so
+   * the admin UI can render a pager without a second round-trip.
    * If the prisma client doesn't have an auditLog model, returns an
    * empty result instead of throwing.
    */
   async run() {
+    const limit = this._state.limit;
+    const page = this._state.page;
     if (
       !this._prisma ||
       !this._prisma.auditLog ||
       typeof this._prisma.auditLog.findMany !== 'function'
     ) {
-      return { items: [], total: 0, page: this._state.page, limit: this._state.limit };
+      return { items: [], total: 0, page, pages: 1, limit };
     }
     const where = this.toWhere();
-    const skip = (this._state.page - 1) * this._state.limit;
+    const skip = (page - 1) * limit;
     try {
       const [items, total] = await Promise.all([
         this._prisma.auditLog.findMany({
           where,
           orderBy: { createdAt: this._state.order },
           skip,
-          take: this._state.limit,
+          take: limit,
         }),
         typeof this._prisma.auditLog.count === 'function'
           ? this._prisma.auditLog.count({ where })
           : Promise.resolve(null),
       ]);
+      const safeTotal = typeof total === 'number' ? total : items.length;
+      const pages = limit > 0 ? Math.max(1, Math.ceil(safeTotal / limit)) : 1;
       return {
         items,
-        total: typeof total === 'number' ? total : items.length,
-        page: this._state.page,
-        limit: this._state.limit,
+        total: safeTotal,
+        page,
+        pages,
+        limit,
       };
     } catch (err) {
       // Read failures must not 500 the entire admin dashboard.
       // eslint-disable-next-line no-console
       console.error('[audit-query] run failed:', err?.message || err);
-      return { items: [], total: 0, page: this._state.page, limit: this._state.limit, error: 'query_failed' };
+      return { items: [], total: 0, page, pages: 1, limit, error: 'query_failed' };
     }
   }
 }
