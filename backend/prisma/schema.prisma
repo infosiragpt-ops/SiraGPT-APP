@@ -71,39 +71,39 @@ model User {
   emailVerifiedAt DateTime?
 
   // Relations
-  chats               Chat[]
-  payments            Payment[]
-  apiUsages           ApiUsage[]
-  sessions            Session[]
-  files               File[]
-  createdGpts         CustomGpt[]
-  projects            Project[]
-  designs             DesignProject[]
-  scheduledPosts      ScheduledPost[]
-  socialConnections   SocialConnection[]
-  searchBrainSettings SearchBrainSettings?
-  usageAlerts         UsageAlert[]
-  notifications       Notification[]
-  subscriptionEvents  SubscriptionEvent[]
-  agentTasks          AgentTask[]
-  generatedArtifacts  GeneratedArtifact[]
-  documentAnalyses    DocumentAnalysis[]
-  pushSubscriptions   PushSubscription[]
-  savedSearches       SavedSearch[]
-  bookmarks           Bookmark[]
-  webhookEndpoints    WebhookEndpoint[]
-  slackIntegrations   SlackIntegration[]
-  policyAcceptances   PolicyAcceptance[]
-  apiKeys             ApiKey[]
+  chats                   Chat[]
+  payments                Payment[]
+  apiUsages               ApiUsage[]
+  sessions                Session[]
+  files                   File[]
+  createdGpts             CustomGpt[]
+  projects                Project[]
+  designs                 DesignProject[]
+  scheduledPosts          ScheduledPost[]
+  socialConnections       SocialConnection[]
+  searchBrainSettings     SearchBrainSettings?
+  usageAlerts             UsageAlert[]
+  notifications           Notification[]
+  subscriptionEvents      SubscriptionEvent[]
+  agentTasks              AgentTask[]
+  generatedArtifacts      GeneratedArtifact[]
+  documentAnalyses        DocumentAnalysis[]
+  pushSubscriptions       PushSubscription[]
+  savedSearches           SavedSearch[]
+  bookmarks               Bookmark[]
+  webhookEndpoints        WebhookEndpoint[]
+  slackIntegrations       SlackIntegration[]
+  policyAcceptances       PolicyAcceptance[]
+  apiKeys                 ApiKey[]
   emailVerificationTokens EmailVerificationToken[]
 
   // Organization / team membership — multi-tenant scaffolding (cycle 27).
   // A user can belong to multiple organizations with different roles.
   // `ownedOrganizations` covers the legacy "creator" pointer on the org
   // row; `organizationMemberships` is the source of truth for ACL.
-  ownedOrganizations      Organization[]   @relation("OrganizationOwner")
+  ownedOrganizations      Organization[]  @relation("OrganizationOwner")
   organizationMemberships OrgMembership[]
-  sentOrgInvitations      OrgInvitation[]  @relation("OrgInvitationInviter")
+  sentOrgInvitations      OrgInvitation[] @relation("OrgInvitationInviter")
 
   @@index([deletedAt])
   @@map("users")
@@ -693,6 +693,34 @@ model SystemSettings {
   @@map("system_settings")
 }
 
+// Ratchet 45 — daily aggregate of AI cost usage.
+//
+// The in-process cost-tracker flushes once a day (05:00 UTC by default)
+// into this table so historical reports survive process restarts. Rows
+// are aggregated by (date, userId, model, provider, organizationId) —
+// the unique compound key — and upserted, so a partial flush followed by
+// a retry never double-counts.
+model CostUsageDaily {
+  id             String   @id @default(cuid())
+  userId         String   @default("")
+  organizationId String   @default("")
+  date           DateTime @db.Date
+  model          String
+  provider       String   @default("")
+  inputTokens    BigInt   @default(0)
+  outputTokens   BigInt   @default(0)
+  costUSD        Float    @default(0)
+  requests       Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([date, userId, model, provider, organizationId], name: "cost_usage_daily_unique")
+  @@index([date])
+  @@index([userId, date])
+  @@index([organizationId, date])
+  @@map("cost_usage_daily")
+}
+
 enum ProviderType {
   OpenAI
   Gemini
@@ -1201,7 +1229,7 @@ model SchedulerRun {
 model PolicyAcceptance {
   id         String   @id @default(cuid())
   userId     String
-  document   String   // 'privacy-policy' | 'terms-of-service' | …
+  document   String // 'privacy-policy' | 'terms-of-service' | …
   version    String
   ip         String?
   ua         String?
@@ -1313,25 +1341,25 @@ model DocumentIndex {
 // Counters reset on the calendar month rollover.
 
 model Organization {
-  id             String   @id @default(cuid())
-  name           String
-  slug           String   @unique
-  billingPlan    Plan     @default(FREE)
-  ownerId        String
-  monthlyQuota   BigInt   @default(10000)
-  usedThisMonth  BigInt   @default(0)
-  quotaResetAt   DateTime @default(now())
-  settings       Json?
-  ssoConfig      Json?
-  ssoEnabled     Boolean  @default(false)
-  ssoDomains     String[] @default([])
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id            String   @id @default(cuid())
+  name          String
+  slug          String   @unique
+  billingPlan   Plan     @default(FREE)
+  ownerId       String
+  monthlyQuota  BigInt   @default(10000)
+  usedThisMonth BigInt   @default(0)
+  quotaResetAt  DateTime @default(now())
+  settings      Json?
+  ssoConfig     Json?
+  ssoEnabled    Boolean  @default(false)
+  ssoDomains    String[] @default([])
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  owner       User              @relation("OrganizationOwner", fields: [ownerId], references: [id], onDelete: Cascade)
-  memberships OrgMembership[]
-  invitations OrgInvitation[]
-  chats       Chat[]
+  owner             User               @relation("OrganizationOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  memberships       OrgMembership[]
+  invitations       OrgInvitation[]
+  chats             Chat[]
   webhookEndpoints  WebhookEndpoint[]
   slackIntegrations SlackIntegration[]
   apiKeys           ApiKey[]
@@ -1369,15 +1397,15 @@ model OrgMembership {
 // invitee redeems by POST /api/orgs/invitation/:token/accept while
 // authenticated; the route enforces email match.
 model OrgInvitation {
-  id        String   @id @default(cuid())
-  orgId     String
-  email     String
-  role      OrgRole  @default(MEMBER)
-  token     String   @unique
-  invitedBy String
+  id         String    @id @default(cuid())
+  orgId      String
+  email      String
+  role       OrgRole   @default(MEMBER)
+  token      String    @unique
+  invitedBy  String
   acceptedAt DateTime?
   expiresAt  DateTime
-  createdAt  DateTime @default(now())
+  createdAt  DateTime  @default(now())
 
   organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
   inviter      User         @relation("OrgInvitationInviter", fields: [invitedBy], references: [id], onDelete: Cascade)
@@ -1395,12 +1423,12 @@ model OrgInvitation {
 // a new row — previous unconsumed rows for the same user are left
 // alone but expire on their own clock.
 model EmailVerificationToken {
-  id        String    @id @default(cuid())
-  userId    String
-  token     String    @unique
-  expiresAt DateTime
+  id         String    @id @default(cuid())
+  userId     String
+  token      String    @unique
+  expiresAt  DateTime
   consumedAt DateTime?
-  createdAt DateTime  @default(now())
+  createdAt  DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

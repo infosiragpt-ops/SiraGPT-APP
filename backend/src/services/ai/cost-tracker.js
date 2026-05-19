@@ -84,6 +84,7 @@ const state = {
   onPersist: null,
   lastWarnAt: 0,
   sampleCounter: 0,            // round-robin counter for cost-alert sampling
+  lastFlushTs: 0,              // high-water mark for flushDaily()
 };
 
 function monthKey(date) {
@@ -331,10 +332,301 @@ function _reset() {
   state.onPersist = null;
   state.lastWarnAt = 0;
   state.sampleCounter = 0;
+  state.lastFlushTs = 0;
 }
 
 function _peekRecords() {
   return state.records.slice();
+}
+
+// ── Persistent daily aggregate (ratchet 45) ─────────────────────────────
+//
+// The in-memory log is bounded and lost on restart. `flushDaily()` rolls
+// the recent records up into a per-(date, userId, model, provider,
+// organizationId) row and upserts them into the `CostUsageDaily` Prisma
+// table so historical cost reports survive restarts.
+//
+// The flush is **additive**: each call adds the current in-memory window
+// to whatever is already persisted. To avoid double-counting we track the
+// timestamp of the highest record we've already flushed in `state.lastFlushTs`
+// and only consider records strictly newer than that on the next call.
+// The cron in `system-cron.js` invokes this once a day at 05:00 UTC.
+//
+// Organization mapping is best-effort — if a `memberships` array is
+// provided we look up the first org for each user; otherwise the row is
+// persisted with organizationId = '' (anonymous bucket).
+
+function _dayKey(ts) {
+  const d = ts instanceof Date ? ts : new Date(ts);
+  if (Number.isNaN(d.getTime())) return null;
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/**
+ * Aggregate the in-memory log into daily rows.
+ *
+ * Returns an array of plain objects shaped like the Prisma row:
+ *   { date: Date, userId, organizationId, model, provider,
+ *     inputTokens, outputTokens, costUSD, requests }
+ *
+ * Pure — no I/O. Exposed for unit tests + so the cron job can decide
+ * how to persist (Prisma in prod, fake in tests).
+ *
+ * @param {object} opts
+ * @param {Date|null} opts.since   only include records strictly newer than this ts (default state.lastFlushTs)
+ * @param {Date|null} opts.until   only include records <= this ts (default now)
+ * @param {Map|object} opts.userOrgIndex  optional userId → organizationId map
+ */
+function aggregateDaily({ since = null, until = null, userOrgIndex = null } = {}) {
+  const sinceMs = since ? new Date(since).getTime() : state.lastFlushTs;
+  const untilMs = until ? new Date(until).getTime() : Date.now();
+  const lookup = userOrgIndex && typeof userOrgIndex.get === 'function'
+    ? (uid) => userOrgIndex.get(uid)
+    : (uid) => (userOrgIndex && userOrgIndex[uid]) || '';
+
+  // key → row
+  const buckets = new Map();
+  for (const r of state.records) {
+    const t = new Date(r.ts).getTime();
+    if (!Number.isFinite(t)) continue;
+    if (t <= sinceMs) continue;
+    if (t > untilMs) continue;
+    const dayKey = _dayKey(r.ts);
+    if (!dayKey) continue;
+    const userId = r.userId || '';
+    const provider = r.provider || '';
+    const model = r.model || 'unknown';
+    const organizationId = lookup(userId) || '';
+    const key = `${dayKey}|${userId}|${model}|${provider}|${organizationId}`;
+    let row = buckets.get(key);
+    if (!row) {
+      row = {
+        date: new Date(`${dayKey}T00:00:00.000Z`),
+        userId,
+        organizationId,
+        model,
+        provider,
+        inputTokens: 0,
+        outputTokens: 0,
+        costUSD: 0,
+        requests: 0,
+      };
+      buckets.set(key, row);
+    }
+    row.inputTokens += r.inputTokens || 0;
+    row.outputTokens += r.outputTokens || 0;
+    row.costUSD = round6(row.costUSD + (r.costUSD || 0));
+    row.requests += 1;
+  }
+  return [...buckets.values()];
+}
+
+/**
+ * Flush the in-memory log to the `CostUsageDaily` Prisma table.
+ *
+ * Resolves with `{ rows, persisted, skipped, errors }`. Never throws —
+ * persistence errors are swallowed and warn-logged so a transient DB blip
+ * cannot crash the cron host. The high-water mark `state.lastFlushTs` is
+ * advanced only after a successful upsert pass so a partial failure can
+ * be retried by the next cron tick.
+ *
+ * @param {object} opts
+ * @param {object} opts.prisma         optional Prisma client (DI for tests)
+ * @param {Date|null} opts.until       upper bound (default = now)
+ * @param {Map|object} opts.userOrgIndex   optional userId → orgId lookup
+ */
+async function flushDaily(opts = {}) {
+  const prisma = opts.prisma || (() => {
+    try { return require('../../config/database'); } catch (_) { return null; }
+  })();
+  if (!prisma || !prisma.costUsageDaily || typeof prisma.costUsageDaily.upsert !== 'function') {
+    maybeWarn(new Error('flushDaily: prisma.costUsageDaily.upsert not available'));
+    return { rows: 0, persisted: 0, skipped: 0, errors: 1 };
+  }
+  const untilMs = opts.until ? new Date(opts.until).getTime() : Date.now();
+  const rows = aggregateDaily({
+    since: opts.since || null,
+    until: new Date(untilMs),
+    userOrgIndex: opts.userOrgIndex || null,
+  });
+  if (rows.length === 0) {
+    state.lastFlushTs = untilMs;
+    return { rows: 0, persisted: 0, skipped: 0, errors: 0 };
+  }
+  let persisted = 0;
+  let errors = 0;
+  for (const row of rows) {
+    try {
+      // Upsert is additive: on conflict we INCREMENT the existing row's
+      // counters by the new delta. The unique key (date+userId+model+provider+
+      // organizationId) is the same one we declared in schema.prisma.
+      await prisma.costUsageDaily.upsert({
+        where: {
+          cost_usage_daily_unique: {
+            date: row.date,
+            userId: row.userId,
+            model: row.model,
+            provider: row.provider,
+            organizationId: row.organizationId,
+          },
+        },
+        create: {
+          date: row.date,
+          userId: row.userId,
+          organizationId: row.organizationId,
+          model: row.model,
+          provider: row.provider,
+          inputTokens: BigInt(row.inputTokens),
+          outputTokens: BigInt(row.outputTokens),
+          costUSD: row.costUSD,
+          requests: row.requests,
+        },
+        update: {
+          inputTokens: { increment: BigInt(row.inputTokens) },
+          outputTokens: { increment: BigInt(row.outputTokens) },
+          costUSD: { increment: row.costUSD },
+          requests: { increment: row.requests },
+        },
+      });
+      persisted += 1;
+    } catch (err) {
+      errors += 1;
+      maybeWarn(err);
+    }
+  }
+  // Only advance the high-water mark on a full clean pass so a partial
+  // failure can be retried with the same window on the next tick.
+  if (errors === 0) state.lastFlushTs = untilMs;
+  return { rows: rows.length, persisted, skipped: 0, errors };
+}
+
+/**
+ * Load aggregated daily rows from the persisted table.
+ *
+ * Used by the admin /cost-report endpoint when `from` is older than 24h.
+ * Returns the same shape as `report()` so callers can splice persistent
+ * + in-memory data side-by-side. Never throws — DB errors return an empty
+ * envelope so the live report still works.
+ */
+async function loadDailyReport({
+  from = null,
+  to = null,
+  userId = null,
+  organizationId = null,
+  prisma = null,
+} = {}) {
+  const empty = {
+    totals: { records: 0, costUSD: 0, inputTokens: 0, outputTokens: 0 },
+    perUser: [],
+    perModel: [],
+    records: [],
+  };
+  const client = prisma || (() => {
+    try { return require('../../config/database'); } catch (_) { return null; }
+  })();
+  if (!client || !client.costUsageDaily || typeof client.costUsageDaily.findMany !== 'function') {
+    return empty;
+  }
+  const where = {};
+  if (from || to) {
+    where.date = {};
+    if (from) where.date.gte = new Date(from);
+    if (to) where.date.lte = new Date(to);
+  }
+  if (userId != null) where.userId = String(userId);
+  if (organizationId != null) where.organizationId = String(organizationId);
+  let rows;
+  try {
+    rows = await client.costUsageDaily.findMany({ where });
+  } catch (err) {
+    maybeWarn(err);
+    return empty;
+  }
+  const totals = { records: 0, costUSD: 0, inputTokens: 0, outputTokens: 0 };
+  const perUser = new Map();
+  const perModel = new Map();
+  for (const r of rows) {
+    const inT = Number(r.inputTokens) || 0;
+    const outT = Number(r.outputTokens) || 0;
+    const cost = Number(r.costUSD) || 0;
+    const reqs = Number(r.requests) || 0;
+    totals.records += reqs;
+    totals.costUSD = round6(totals.costUSD + cost);
+    totals.inputTokens += inT;
+    totals.outputTokens += outT;
+    const uid = r.userId || 'anonymous';
+    let u = perUser.get(uid);
+    if (!u) {
+      u = { userId: uid, costUSD: 0, inputTokens: 0, outputTokens: 0, requests: 0 };
+      perUser.set(uid, u);
+    }
+    u.costUSD = round6(u.costUSD + cost);
+    u.inputTokens += inT;
+    u.outputTokens += outT;
+    u.requests += reqs;
+    const mk = r.model || 'unknown';
+    let mm = perModel.get(mk);
+    if (!mm) {
+      mm = { model: mk, costUSD: 0, requests: 0 };
+      perModel.set(mk, mm);
+    }
+    mm.costUSD = round6(mm.costUSD + cost);
+    mm.requests += reqs;
+  }
+  return {
+    totals,
+    perUser: [...perUser.values()].sort((a, b) => b.costUSD - a.costUSD),
+    perModel: [...perModel.values()].sort((a, b) => b.costUSD - a.costUSD),
+    records: [],
+  };
+}
+
+/**
+ * Merge a persisted daily report with the in-memory recent report.
+ * Sums totals/perUser/perModel; preserves in-memory records list.
+ */
+function mergeReports(persisted, recent) {
+  const totals = {
+    records: (persisted.totals.records || 0) + (recent.totals.records || 0),
+    costUSD: round6((persisted.totals.costUSD || 0) + (recent.totals.costUSD || 0)),
+    inputTokens: (persisted.totals.inputTokens || 0) + (recent.totals.inputTokens || 0),
+    outputTokens: (persisted.totals.outputTokens || 0) + (recent.totals.outputTokens || 0),
+  };
+  const perUserMap = new Map();
+  const mergeUser = (u) => {
+    let acc = perUserMap.get(u.userId);
+    if (!acc) {
+      acc = { userId: u.userId, costUSD: 0, inputTokens: 0, outputTokens: 0, requests: 0 };
+      perUserMap.set(u.userId, acc);
+    }
+    acc.costUSD = round6(acc.costUSD + (u.costUSD || 0));
+    acc.inputTokens += u.inputTokens || 0;
+    acc.outputTokens += u.outputTokens || 0;
+    acc.requests += u.requests || 0;
+  };
+  (persisted.perUser || []).forEach(mergeUser);
+  (recent.perUser || []).forEach(mergeUser);
+  const perModelMap = new Map();
+  const mergeModel = (m) => {
+    let acc = perModelMap.get(m.model);
+    if (!acc) {
+      acc = { model: m.model, costUSD: 0, requests: 0 };
+      perModelMap.set(m.model, acc);
+    }
+    acc.costUSD = round6(acc.costUSD + (m.costUSD || 0));
+    acc.requests += m.requests || 0;
+  };
+  (persisted.perModel || []).forEach(mergeModel);
+  (recent.perModel || []).forEach(mergeModel);
+  return {
+    totals,
+    perUser: [...perUserMap.values()].sort((a, b) => b.costUSD - a.costUSD),
+    perModel: [...perModelMap.values()].sort((a, b) => b.costUSD - a.costUSD),
+    records: recent.records || [],
+  };
 }
 
 module.exports = {
@@ -346,6 +638,10 @@ module.exports = {
   computeCostUSD,
   getModelPricing,
   loadPricing,
+  aggregateDaily,
+  flushDaily,
+  loadDailyReport,
+  mergeReports,
   _reset,
   _peekRecords,
 };

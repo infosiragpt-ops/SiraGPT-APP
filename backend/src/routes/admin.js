@@ -1155,12 +1155,39 @@ router.get('/cost-report', requireSuperAdmin, async (req, res) => {
       return res.status(400).json({ error: "Invalid 'to' date" });
     }
     const includeRecords = req.query.includeRecords !== '0' && req.query.includeRecords !== 'false';
-    const report = costTracker.report({
+    let report = costTracker.report({
       from: fromDate,
       to: toDate,
       userId: userId || null,
       includeRecords,
     });
+
+    // Ratchet 45 — persistent backfill. When `from` is older than 24h the
+    // in-memory log can't be trusted (bounded + lost on restart), so we
+    // pull the rolled-up rows from `CostUsageDaily` (flushed by the
+    // 05:00 UTC cron) and merge them on top of the in-memory window.
+    // Recent (<24h) reports remain in-memory only.
+    const RECENT_WINDOW_MS = 24 * 60 * 60 * 1000;
+    const cutoff = Date.now() - RECENT_WINDOW_MS;
+    if (fromDate && fromDate.getTime() < cutoff) {
+      // The persisted query covers [from, min(to, now-24h)] so we don't
+      // double-count rows that are still in-memory. The in-memory report
+      // already covers the full [from, to] window — to avoid overlap we
+      // recompute the in-memory side with `from = now - 24h`.
+      const persisted = await costTracker.loadDailyReport({
+        from: fromDate,
+        to: toDate ? new Date(Math.min(toDate.getTime(), cutoff)) : new Date(cutoff),
+        userId: userId || null,
+        prisma,
+      });
+      const recent = costTracker.report({
+        from: new Date(cutoff),
+        to: toDate,
+        userId: userId || null,
+        includeRecords,
+      });
+      report = costTracker.mergeReports(persisted, recent);
+    }
 
     // Cycle 45: optional org-level aggregation. When `?groupBy=org` is
     // passed we join the per-user totals through OrgMembership to roll

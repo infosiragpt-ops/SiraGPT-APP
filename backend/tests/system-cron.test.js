@@ -92,6 +92,7 @@ describe('system-cron', () => {
       const names = res.tasks.map((t) => t.name).sort();
       assert.deepEqual(names, [
         'archive-audit-logs',
+        'cost-tracker-flush',
         'hard-delete-deleted-users',
         'prune-api-usage',
         'scrub-deleted-user-content',

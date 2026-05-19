@@ -46,6 +46,10 @@ const AUDIT_ARCHIVE_SCHEDULE = process.env.SYSTEM_CRON_AUDIT_ARCHIVE_SCHEDULE ||
 // after the audit archive (04:00) — the cascade from any user deletions
 // has already been picked up by then.
 const EVT_SWEEP_SCHEDULE = process.env.SYSTEM_CRON_EVT_SWEEP_SCHEDULE || '30 4 * * *';
+// Ratchet 45 — flush in-process cost-tracker into the CostUsageDaily
+// table. Default 05:00 UTC so it runs after every other retention job;
+// reports older than 24h are served from this table.
+const COST_FLUSH_SCHEDULE = process.env.SYSTEM_CRON_COST_FLUSH_SCHEDULE || '0 5 * * *';
 
 let _state = null;
 
@@ -286,6 +290,40 @@ function start(opts = {}) {
     { scheduled: false, timezone: 'UTC' },
   );
   tasks.push({ name: 'sweep-expired-verification-tokens', schedule: EVT_SWEEP_SCHEDULE, task: evtSweepTask, meta: evtSweepMeta });
+
+  // Ratchet 45 — persist AI cost-tracker into CostUsageDaily.
+  let costFlushRunning = false;
+  const costFlushMeta = {};
+  const costFlushTask = cron.schedule(
+    COST_FLUSH_SCHEDULE,
+    async () => {
+      if (costFlushRunning) {
+        logger.warn?.('[system-cron] skip cost-tracker-flush — previous run still active');
+        return;
+      }
+      costFlushRunning = true;
+      const finish = recordRun(costFlushMeta);
+      let runErr = null;
+      try {
+        // eslint-disable-next-line global-require
+        const costTracker = require('../services/ai/cost-tracker');
+        const runWithRetry = wrapWithRetry(() => costTracker.flushDaily(), {
+          onRetry: ({ attempt, delayMs, reason }) =>
+            logger.warn?.(`[system-cron] cost-tracker-flush retry ${attempt} in ${delayMs}ms (${reason})`),
+        });
+        const res = await runWithRetry();
+        logger.info?.(`[system-cron] cost-tracker-flush done: ${JSON.stringify(res)}`);
+      } catch (err) {
+        runErr = err;
+        logger.error?.(`[system-cron] cost-tracker-flush failed: ${err && err.message}`);
+      } finally {
+        costFlushRunning = false;
+        finish(runErr);
+      }
+    },
+    { scheduled: false, timezone: 'UTC' },
+  );
+  tasks.push({ name: 'cost-tracker-flush', schedule: COST_FLUSH_SCHEDULE, task: costFlushTask, meta: costFlushMeta });
 
   for (const t of tasks) {
     try { t.task.start(); } catch (err) {
