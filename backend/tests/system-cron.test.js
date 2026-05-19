@@ -91,20 +91,24 @@ describe('system-cron', () => {
       assert.equal(res.enabled, true);
       const names = res.tasks.map((t) => t.name).sort();
       assert.deepEqual(names, [
+        'archive-audit-logs',
         'hard-delete-deleted-users',
         'prune-api-usage',
         'scrub-deleted-user-content',
         'sweep-expired-sessions',
       ]);
       // Default schedules — scrub @ 02:30 UTC, hard-delete @ 03:00 UTC,
-      // prune-api-usage @ 03:30 UTC, sweep-expired-sessions hourly.
+      // prune-api-usage @ 03:30 UTC, archive-audit-logs @ 04:00 UTC,
+      // sweep-expired-sessions hourly.
       const scrub = res.tasks.find((t) => t.name === 'scrub-deleted-user-content');
       const hard = res.tasks.find((t) => t.name === 'hard-delete-deleted-users');
       const prune = res.tasks.find((t) => t.name === 'prune-api-usage');
+      const archive = res.tasks.find((t) => t.name === 'archive-audit-logs');
       const sweep = res.tasks.find((t) => t.name === 'sweep-expired-sessions');
       assert.equal(scrub.schedule, '30 2 * * *');
       assert.equal(hard.schedule, '0 3 * * *');
       assert.equal(prune.schedule, '30 3 * * *');
+      assert.equal(archive.schedule, '0 4 * * *');
       assert.equal(sweep.schedule, '0 * * * *');
     } finally {
       mod.stop();

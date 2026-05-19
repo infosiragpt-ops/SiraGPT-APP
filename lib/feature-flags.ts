@@ -46,6 +46,50 @@ function readLocalStorageFlags(): string[] {
   }
 }
 
+/**
+ * Parse the role-gate manifest from `NEXT_PUBLIC_ROLE_GATED_FLAGS`.
+ *
+ * The env var is a comma-separated list of `flag:role` pairs, e.g.
+ * `experimental-ui:admin,beta-export:editor`. Each entry adds a
+ * required role to that flag — a flag with no entry has no role gate
+ * and behaves like a plain on/off flag. Flag names and roles are
+ * normalised to lowercase + trimmed; duplicate roles are deduped.
+ */
+function readRoleGates(): Map<string, Set<string>> {
+  const map = new Map<string, Set<string>>();
+  const raw = typeof process !== 'undefined' && process.env
+    ? process.env.NEXT_PUBLIC_ROLE_GATED_FLAGS
+    : undefined;
+  if (!raw) return map;
+  for (const entry of raw.split(',')) {
+    const pair = entry.trim();
+    if (!pair) continue;
+    const idx = pair.indexOf(':');
+    if (idx <= 0 || idx === pair.length - 1) continue;
+    const flag = pair.slice(0, idx).trim().toLowerCase();
+    const role = pair.slice(idx + 1).trim().toLowerCase();
+    if (!flag || !role) continue;
+    if (!map.has(flag)) map.set(flag, new Set<string>());
+    map.get(flag)!.add(role);
+  }
+  return map;
+}
+
+function normaliseUserRoles(user: unknown): Set<string> {
+  const out = new Set<string>();
+  if (!user || typeof user !== 'object') return out;
+  const u = user as Record<string, unknown>;
+  const candidates: unknown[] = [];
+  if (typeof u.role === 'string') candidates.push(u.role);
+  if (Array.isArray(u.roles)) candidates.push(...u.roles);
+  for (const c of candidates) {
+    if (typeof c === 'string' && c.trim().length > 0) {
+      out.add(c.trim().toLowerCase());
+    }
+  }
+  return out;
+}
+
 function collectEnabled(): Set<string> {
   const merged = new Set<string>();
   for (const entry of readEnvFlags()) merged.add(entry);
@@ -61,6 +105,35 @@ export const flags = {
   isEnabled(name: string): boolean {
     if (typeof name !== 'string' || name.length === 0) return false;
     return collectEnabled().has(name.trim().toLowerCase());
+  },
+
+  /**
+   * Returns true when the named flag is enabled AND the given user
+   * satisfies the role gate declared in `NEXT_PUBLIC_ROLE_GATED_FLAGS`.
+   *
+   * Behaviour:
+   *  - If the flag is not enabled at all (env / localStorage), returns
+   *    false — role membership is irrelevant.
+   *  - If the flag is enabled but has no role gate declared, returns
+   *    true for any user (including `null`).
+   *  - If the flag has a role gate, the user must carry at least one
+   *    of the listed roles (matched case-insensitively against either
+   *    `user.role` or `user.roles[]`).
+   *
+   * The role-gate env is read on every call so role changes propagate
+   * immediately in dev / SSR; the cost is trivial (small comma-list).
+   */
+  isEnabledForUser(name: string, user: unknown): boolean {
+    if (!this.isEnabled(name)) return false;
+    const gates = readRoleGates();
+    const required = gates.get(name.trim().toLowerCase());
+    if (!required || required.size === 0) return true;
+    const userRoles = normaliseUserRoles(user);
+    if (userRoles.size === 0) return false;
+    for (const r of userRoles) {
+      if (required.has(r)) return true;
+    }
+    return false;
   },
 
   /**

@@ -36,6 +36,11 @@ const APIUSAGE_PRUNE_SCHEDULE = process.env.SYSTEM_CRON_APIUSAGE_PRUNE_SCHEDULE 
 // a hard boundary and we don't want expired tokens lingering for a full
 // day. See docs/data-retention.md (Session section).
 const SESSION_SWEEP_SCHEDULE = process.env.SYSTEM_CRON_SESSION_SWEEP_SCHEDULE || '0 * * * *';
+// AuditLog 1-year online retention (docs/data-retention.md). Default
+// 04:00 UTC so it runs after scrub (02:30) / hard-delete (03:00) /
+// prune-api-usage (03:30) — the archive picks up any cascade-emitted
+// audit events from the same nightly window.
+const AUDIT_ARCHIVE_SCHEDULE = process.env.SYSTEM_CRON_AUDIT_ARCHIVE_SCHEDULE || '0 4 * * *';
 
 let _state = null;
 
@@ -177,6 +182,39 @@ function start(opts = {}) {
     { scheduled: false, timezone: 'UTC' },
   );
   tasks.push({ name: 'prune-api-usage', schedule: APIUSAGE_PRUNE_SCHEDULE, task: apiUsagePruneTask, meta: apiUsagePruneMeta });
+
+  let auditArchiveRunning = false;
+  const auditArchiveMeta = {};
+  const auditArchiveTask = cron.schedule(
+    AUDIT_ARCHIVE_SCHEDULE,
+    async () => {
+      if (auditArchiveRunning) {
+        logger.warn?.('[system-cron] skip archive-audit-logs — previous run still active');
+        return;
+      }
+      auditArchiveRunning = true;
+      const finish = recordRun(auditArchiveMeta);
+      let runErr = null;
+      try {
+        // eslint-disable-next-line global-require
+        const job = require('./archive-audit-logs');
+        const runWithRetry = wrapWithRetry(() => job.run({ logger }), {
+          onRetry: ({ attempt, delayMs, reason }) =>
+            logger.warn?.(`[system-cron] archive-audit-logs retry ${attempt} in ${delayMs}ms (${reason})`),
+        });
+        const res = await runWithRetry();
+        logger.info?.(`[system-cron] archive-audit-logs done: ${JSON.stringify(res)}`);
+      } catch (err) {
+        runErr = err;
+        logger.error?.(`[system-cron] archive-audit-logs failed: ${err && err.message}`);
+      } finally {
+        auditArchiveRunning = false;
+        finish(runErr);
+      }
+    },
+    { scheduled: false, timezone: 'UTC' },
+  );
+  tasks.push({ name: 'archive-audit-logs', schedule: AUDIT_ARCHIVE_SCHEDULE, task: auditArchiveTask, meta: auditArchiveMeta });
 
   let sessionSweepRunning = false;
   const sessionSweepMeta = {};
