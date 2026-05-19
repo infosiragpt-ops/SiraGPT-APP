@@ -9,6 +9,14 @@ const { writeAuditLog } = require('../utils/audit-log');
 const { csrfTokenRoute } = require('../middleware/csrf');
 const { defaultLockout } = require('../utils/login-lockout');
 const { computeFingerprint } = require('../utils/session-fingerprint');
+const {
+  validateBody,
+  formatExpressValidatorErrors,
+} = require('../middleware/validate');
+const {
+  LoginRequestSchema,
+  RegisterRequestSchema,
+} = require('../schemas/auth');
 
 // JWT audience / issuer — included in every signed token and verified
 // where we hand-decode (e.g. /end-impersonation). Allows future
@@ -510,7 +518,7 @@ router.get('/google-services/status', authenticateToken, async (req, res) => {
 });
 
 // Register
-router.post('/register', registerRateLimit, [
+router.post('/register', registerRateLimit, validateBody(RegisterRequestSchema, { codePrefix: 'auth' }), [
   // Name: 2..100 chars, strip HTML tags / control chars. We keep
   // accents + unicode letters because the user base is multilingual.
   body('name')
@@ -536,7 +544,7 @@ router.post('/register', registerRateLimit, [
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
+      return res.status(400).json({ ...formatExpressValidatorErrors(errors.array(), { codePrefix: 'auth' }), errors: errors.array() });
     }
 
     const { name, email, password } = req.body;
@@ -608,7 +616,7 @@ router.post('/register', registerRateLimit, [
 });
 
 // Login
-router.post('/login', loginRateLimit, [
+router.post('/login', loginRateLimit, validateBody(LoginRequestSchema, { codePrefix: 'auth' }), [
   body('email')
     .isEmail({ allow_utf8_local_part: true }).withMessage('Valid email required')
     .isLength({ max: 254 }).withMessage('Email is too long')
@@ -621,7 +629,7 @@ router.post('/login', loginRateLimit, [
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
+      return res.status(400).json({ ...formatExpressValidatorErrors(errors.array(), { codePrefix: 'auth' }), errors: errors.array() });
     }
 
     const { email, password } = req.body;

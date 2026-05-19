@@ -1,6 +1,24 @@
 // Frontend API client for backend integration
 import { streamSseJson } from "./sse-client"
 import { sanitizeFetchHeaders } from "./fetch-sanitize"
+// Codegen'd from backend/src/schemas/* — DO NOT edit by hand. Regenerate
+// with `node backend/scripts/generate-api-types.js` whenever schemas change.
+import type {
+  CreateChatRequest,
+  LoginRequest,
+  RegisterRequest,
+  CreatePaymentRequest,
+} from "./api-types"
+// Re-export response types so app code can reference them without depending
+// on the codegen path directly.
+export type {
+  AuthResponse,
+  ChatResponse,
+  FileUploadResponse,
+  PaymentResponse,
+  MessageResponse,
+  FileMetadata,
+} from "./api-types"
 
 /** Backend mounts routes under `/api` (e.g. `/api/auth/login`). Accept env with or without `/api`. */
 export function getNormalizedApiBaseUrl(): string {
@@ -345,7 +363,11 @@ class ApiClient {
   }
 
   // Auth endpoints
-  async register(data: { name: string; email: string; password: string }) {
+  // NOTE: return type kept loose for backward-compatibility with consumer
+  // types (e.g. `User` in chat-context-integrated.tsx narrows `id` to
+  // `string`). The codegen'd `AuthResponse` is a structural superset and
+  // is documented in `api-types.ts` for refs and FE i18n lookups.
+  async register(data: RegisterRequest) {
     const result = await this.request('/auth/register', {
       method: 'POST',
       body: JSON.stringify(data),
@@ -358,7 +380,7 @@ class ApiClient {
     return result;
   }
 
-  async login(data: { email: string; password: string }) {
+  async login(data: LoginRequest) {
     const result = await this.request('/auth/login', {
       method: 'POST',
       body: JSON.stringify(data),
@@ -400,7 +422,7 @@ class ApiClient {
     return this.request(`/chats${query ? `?${query}` : ''}`);
   }
 
-  async createChat(data: { title: string; model: string; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; projectId?: string }) {
+  async createChat(data: CreateChatRequest) {
     return this.request('/chats', {
       method: 'POST',
       body: JSON.stringify(data),
@@ -1154,14 +1176,14 @@ class ApiClient {
     });
   }
 
-  async createPayPalPayment(data: { plan: string }) {
+  async createPayPalPayment(data: Pick<CreatePaymentRequest, 'plan'>) {
     return this.request('/payments/paypal', {
       method: 'POST',
       body: JSON.stringify(data),
     });
   }
 
-  async createMercadoPagoPayment(data: { plan: string }) {
+  async createMercadoPagoPayment(data: Pick<CreatePaymentRequest, 'plan'>) {
     return this.request('/payments/mercadopago', {
       method: 'POST',
       body: JSON.stringify(data),
