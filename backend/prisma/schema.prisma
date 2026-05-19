@@ -1324,6 +1324,7 @@ model Organization {
   settings       Json?
   ssoConfig      Json?
   ssoEnabled     Boolean  @default(false)
+  ssoDomains     String[] @default([])
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 

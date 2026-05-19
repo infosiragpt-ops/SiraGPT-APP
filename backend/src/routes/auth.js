@@ -57,6 +57,17 @@ const forgotPasswordRateLimit = makeAuthRateLimit({
   windowMs: 15 * 60 * 1000, // 15 min
   keyBy: 'ip+email',
 });
+// Cycle 93 added GET /verify-email/:token (token redemption). The
+// token check is short-circuited on length but a brute-force attacker
+// could still grind through opaque 256-bit guesses; cap to 30/15min
+// per IP to make that hopeless without locking out legitimate clicks
+// from shared NATs.
+const verifyEmailRateLimit = makeAuthRateLimit({
+  name: 'verify-email',
+  limit: 30,
+  windowMs: 15 * 60 * 1000,
+  keyBy: 'ip',
+});
 
 function signSessionToken(payload, opts = {}) {
   // Fail fast at boot if the secret is missing — refuse to sign rather
@@ -549,6 +560,21 @@ router.post('/register', registerRateLimit, validateBody(RegisterRequestSchema, 
 
     const { name, email, password } = req.body;
 
+    // SSO domain claim (ratchet 45) — same gate as /login: if the
+    // email domain belongs to an SSO-enabled org we refuse to create
+    // a password-backed account and steer the user to the IdP.
+    const ssoOrg = await resolveOrgBySsoDomain(email);
+    if (ssoOrg) {
+      return res.status(501).json({
+        ok: false,
+        ssoRequired: true,
+        implemented: false,
+        message: 'password registration disabled — use SSO for this organization',
+        orgSlug: ssoOrg.slug,
+        ssoLoginUrl: `/api/auth/sso/${ssoOrg.slug}/login`,
+      });
+    }
+
     // Check if user exists
     const existingUser = await prisma.user.findUnique({
       where: { email }
@@ -640,6 +666,32 @@ router.post('/login', loginRateLimit, validateBody(LoginRequestSchema, { codePre
     }
 
     const { email, password } = req.body;
+
+    // SSO domain claim (ratchet 45) — if any org has claimed the
+    // user's email domain AND ssoEnabled = true, bounce them at the
+    // password handler so password auth can't be used to bypass the
+    // org's IdP. The actual redirect target (501) is the SSO scaffold
+    // route; see `GET /api/auth/sso/:orgSlug/login`. Once the real
+    // SAML/OIDC handshake ships this becomes a 302.
+    const ssoOrg = await resolveOrgBySsoDomain(email);
+    if (ssoOrg) {
+      void writeAuditLog(prisma, {
+        req,
+        action: 'login_sso_required',
+        resource: 'organization',
+        resourceId: ssoOrg.id,
+        actorName: email,
+        metadata: { orgSlug: ssoOrg.slug },
+      });
+      return res.status(501).json({
+        ok: false,
+        ssoRequired: true,
+        implemented: false,
+        message: 'password login disabled — use SSO for this organization',
+        orgSlug: ssoOrg.slug,
+        ssoLoginUrl: `/api/auth/sso/${ssoOrg.slug}/login`,
+      });
+    }
 
     // Account-level lockout — distinct from the per-IP rate limit so
     // distributed credential-stuffing (one attempt per IP) still hits
@@ -1242,8 +1294,43 @@ router.get('/sso/:orgSlug/callback', async (req, res) => {
   });
 });
 
+// Resolve an org claiming `email`'s domain for SSO. Returns null if
+// no org has that domain in `ssoDomains` **and** `ssoEnabled = true`.
+// Used by /login + /register to short-circuit password auth to the
+// SSO redirect (currently the 501 scaffold).
+function extractEmailDomain(email) {
+  if (typeof email !== 'string') return null;
+  const at = email.lastIndexOf('@');
+  if (at < 0 || at === email.length - 1) return null;
+  const d = email.slice(at + 1).trim().toLowerCase();
+  return d || null;
+}
+
+async function resolveOrgBySsoDomain(email, deps = { prisma }) {
+  const db = deps.prisma || prisma;
+  const domain = extractEmailDomain(email);
+  if (!domain) return null;
+  try {
+    const row = await db.organization.findFirst({
+      where: { ssoEnabled: true, ssoDomains: { has: domain } },
+      select: { id: true, slug: true, ssoEnabled: true },
+    });
+    return row || null;
+  } catch (err) {
+    // Fail-open: if the lookup itself blows up we'd rather let the
+    // user attempt password auth than lock them out of the product.
+    console.error('[auth/sso] domain lookup failed:', err && err.message ? err.message : err);
+    return null;
+  }
+}
+
 // Test surface — let route tests poke the helpers without a live DB.
-router.__ssoHelpers = { redactSsoConfigForPublic, resolveOrgForSso };
+router.__ssoHelpers = {
+  redactSsoConfigForPublic,
+  resolveOrgForSso,
+  extractEmailDomain,
+  resolveOrgBySsoDomain,
+};
 
 // ─── Email verification (ratchet 45) ───────────────────────────────
 // Two endpoints: the magic-link redeemer (public, GET) and the resend
@@ -1268,7 +1355,7 @@ const resendVerificationRateLimit = makeAuthRateLimit({
 
 // GET /api/auth/verify-email/:token — public. Sets emailVerifiedAt = now
 // when the token is valid + unconsumed + unexpired.
-router.get('/verify-email/:token', async (req, res) => {
+router.get('/verify-email/:token', verifyEmailRateLimit, async (req, res) => {
   const token = String(req.params.token || '');
   if (!token || token.length < 16) {
     return res.status(400).json({ error: 'invalid token' });

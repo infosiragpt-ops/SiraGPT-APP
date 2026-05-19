@@ -2222,6 +2222,123 @@ async function configureOrgSsoHandler(req, res, deps = { prisma, writeAuditLog }
 
 router.post('/:id/sso', authenticateToken, (req, res) => configureOrgSsoHandler(req, res));
 
+// ─── SSO domain claim (ratchet 45) ──────────────────────────────────
+// Owners can register/unregister email domains that route to this org's
+// SSO. At login time, if the user's email domain matches a claimed
+// domain on an org with `ssoEnabled = true`, the password handler
+// short-circuits with a 501 SSO-redirect placeholder (the actual
+// SAML/OIDC handshake still ships in a later ratchet).
+//
+// Body shape (POST /api/orgs/:id/sso/domains):
+//   {
+//     add?:    string[]   // domains to add (e.g. ["acme.com"])
+//     remove?: string[]   // domains to remove
+//   }
+// Domains are lowercased + stripped of any leading "@" or scheme.
+// At least one of `add` / `remove` must be a non-empty array.
+
+const SSO_DOMAIN_RE = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
+const MAX_SSO_DOMAINS = 32;
+
+function normalizeSsoDomain(input) {
+  if (typeof input !== 'string') return null;
+  let s = input.trim().toLowerCase();
+  if (!s) return null;
+  // Strip leading "@" (so "@acme.com" works) and any scheme/path the
+  // caller might paste from an IdP config screen.
+  s = s.replace(/^@+/, '');
+  s = s.replace(/^https?:\/\//, '');
+  s = s.split('/')[0];
+  s = s.split(':')[0]; // drop port if any
+  if (!SSO_DOMAIN_RE.test(s)) return null;
+  return s;
+}
+
+function sanitizeSsoDomainList(input, field) {
+  if (input == null) return [];
+  if (!Array.isArray(input)) {
+    const e = new Error(`${field} must be an array of domain strings`);
+    e.status = 400;
+    throw e;
+  }
+  const out = [];
+  for (const raw of input) {
+    const norm = normalizeSsoDomain(raw);
+    if (!norm) {
+      const e = new Error(`${field}: invalid domain "${String(raw).slice(0, 64)}"`);
+      e.status = 400;
+      throw e;
+    }
+    if (!out.includes(norm)) out.push(norm);
+  }
+  return out;
+}
+
+async function configureOrgSsoDomainsHandler(req, res, deps = { prisma, writeAuditLog }) {
+  const db = deps.prisma || prisma;
+  const audit = deps.writeAuditLog || writeAuditLog;
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  try {
+    const membership = await assertMembership(db, orgId, userId, 'OWNER');
+    if (membership.role !== 'OWNER') {
+      return res.status(403).json({ error: 'only the OWNER can manage SSO domains' });
+    }
+    let toAdd;
+    let toRemove;
+    try {
+      toAdd = sanitizeSsoDomainList(req.body?.add, 'add');
+      toRemove = sanitizeSsoDomainList(req.body?.remove, 'remove');
+    } catch (e) {
+      if (e && e.status) return res.status(e.status).json({ error: e.message });
+      throw e;
+    }
+    if (toAdd.length === 0 && toRemove.length === 0) {
+      return res.status(400).json({ error: 'provide at least one domain to add or remove' });
+    }
+    const existing = await db.organization.findUnique({
+      where: { id: orgId },
+      select: { ssoDomains: true },
+    });
+    if (!existing) return res.status(404).json({ error: 'organization not found' });
+    const before = Array.isArray(existing.ssoDomains) ? existing.ssoDomains.slice() : [];
+    const removeSet = new Set(toRemove);
+    const next = before.filter((d) => !removeSet.has(d));
+    for (const d of toAdd) {
+      if (!next.includes(d)) next.push(d);
+    }
+    if (next.length > MAX_SSO_DOMAINS) {
+      return res.status(400).json({ error: `at most ${MAX_SSO_DOMAINS} SSO domains allowed` });
+    }
+    const updated = await db.organization.update({
+      where: { id: orgId },
+      data: { ssoDomains: next },
+      select: { ssoDomains: true, ssoEnabled: true },
+    });
+    void audit(db, {
+      action: 'org_sso_domains_update',
+      userId,
+      resource: 'organization',
+      resourceId: orgId,
+      before: { ssoDomains: before },
+      after: { ssoDomains: updated.ssoDomains },
+      metadata: { orgId, added: toAdd, removed: toRemove },
+      req,
+    });
+    res.json({
+      ok: true,
+      ssoEnabled: !!updated.ssoEnabled,
+      ssoDomains: updated.ssoDomains,
+    });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] sso domains update failed:', err.message);
+    res.status(500).json({ error: 'failed to update SSO domains' });
+  }
+}
+
+router.post('/:id/sso/domains', authenticateToken, (req, res) => configureOrgSsoDomainsHandler(req, res));
+
 // Expose constants for tests/inspection.
 router.__roleAtLeast = roleAtLeast;
 router.__handlers = {
@@ -2238,7 +2355,9 @@ router.__invalidateMembersCache = invalidateMembersCache;
 router.__sseConfig = SSE_EVENTS;
 router.__settingsHelpers = { sanitizeSettings, mergeSettings };
 router.__ssoHelpers = { sanitizeSsoConfig, redactSsoConfig, SSO_PROVIDERS };
+router.__ssoDomainHelpers = { normalizeSsoDomain, sanitizeSsoDomainList, MAX_SSO_DOMAINS };
 router.__handlers.configureOrgSso = configureOrgSsoHandler;
+router.__handlers.configureOrgSsoDomains = configureOrgSsoDomainsHandler;
 router.__billing = {
   PLAN_QUOTAS,
   PLAN_MRR_USD,
