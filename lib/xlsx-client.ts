@@ -1,31 +1,67 @@
 "use client"
 
+// Minimal subset of the ExcelJS Workbook API we actually use. The library has
+// extensive typings but we only need this surface — keeping the boundary tight.
+type ExcelJSWorksheet = {
+  name: string
+  addRows(rows: unknown[][]): void
+  columns: Array<{ width: number }>
+  getRow(n: number): { font: { bold: boolean } }
+  // exceljs uses Iterable-like API; consumers may iterate rows/columns dynamically
+  eachRow?(callback: (row: unknown, rowNumber: number) => void): void
+  rowCount?: number
+  columnCount?: number
+}
+
+type ExcelJSWorkbook = {
+  creator: string
+  created: Date
+  worksheets: ExcelJSWorksheet[]
+  xlsx: {
+    load(buffer: ArrayBuffer): Promise<void>
+    writeBuffer(): Promise<ArrayBuffer>
+  }
+  addWorksheet(name: string): ExcelJSWorksheet
+}
+
 type ExcelJSNamespace = {
-  Workbook: new () => any
+  Workbook: new () => ExcelJSWorkbook
 }
 
 let excelJSPromise: Promise<ExcelJSNamespace> | null = null
 
 async function loadExcelJS(): Promise<ExcelJSNamespace> {
   if (!excelJSPromise) {
-    excelJSPromise = import("exceljs").then((mod: any) => (mod.default || mod) as ExcelJSNamespace)
+    excelJSPromise = import("exceljs").then((mod: unknown) => {
+      const m = mod as { default?: ExcelJSNamespace } & ExcelJSNamespace
+      return (m.default || m) as ExcelJSNamespace
+    })
   }
   return excelJSPromise
 }
 
-export function xlsxCellToText(cell: any): string {
+type XlsxCellLike = {
+  text?: unknown
+  result?: unknown
+  formula?: unknown
+  richText?: Array<{ text?: unknown }>
+}
+
+export function xlsxCellToText(cell: unknown): string {
   if (cell == null) return ""
   if (cell instanceof Date) return cell.toISOString()
   if (typeof cell !== "object") return String(cell)
-  if (cell.text != null) return String(cell.text)
-  if (cell.result != null) return xlsxCellToText(cell.result)
-  if (Array.isArray(cell.richText)) return cell.richText.map((part: any) => part?.text || "").join("")
-  if (cell.formula) return String(cell.result ?? `=${cell.formula}`)
+  const c = cell as XlsxCellLike
+  if (c.text != null) return String(c.text)
+  if (c.result != null) return xlsxCellToText(c.result)
+  if (Array.isArray(c.richText)) return c.richText.map((part) => part?.text == null ? "" : String(part.text)).join("")
+  if (c.formula) return String(c.result ?? `=${String(c.formula)}`)
   return String(cell)
 }
 
-export function xlsxRowToValues(row: any, maxColumns = 80): string[] {
-  const values = Array.isArray(row?.values) ? row.values.slice(1, maxColumns + 1) : []
+export function xlsxRowToValues(row: unknown, maxColumns = 80): string[] {
+  const r = row as { values?: unknown[] } | null | undefined
+  const values = Array.isArray(r?.values) ? r!.values!.slice(1, maxColumns + 1) : []
   return values.map(xlsxCellToText)
 }
 

@@ -85,7 +85,7 @@ export type LocalWorkspaceImport = {
 
 export function canOpenLocalDirectory(): boolean {
   if (typeof window === "undefined") return false
-  return typeof (window as any).showDirectoryPicker === "function"
+  return typeof (window as unknown as { showDirectoryPicker?: unknown }).showDirectoryPicker === "function"
 }
 
 export function hasLinkedLocalFolder(): boolean {
@@ -101,7 +101,7 @@ export async function openLocalDirectoryWorkspace(): Promise<LocalWorkspaceImpor
     throw new Error("El selector de carpetas solo está disponible en el navegador.")
   }
 
-  const picker = (window as any).showDirectoryPicker
+  const picker = (window as unknown as { showDirectoryPicker?: (opts?: { id?: string; mode?: string; startIn?: string }) => Promise<DirectoryHandleLike> }).showDirectoryPicker
   if (typeof picker !== "function") {
     throw new Error("Tu navegador no permite abrir carpetas locales. Usa Chrome o Edge para editar una carpeta del escritorio.")
   }

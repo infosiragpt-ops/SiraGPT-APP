@@ -19,18 +19,19 @@ const isAssistantImageUrl = (message: RenderPolicyMessage) => {
     )
 }
 
-const isImageAttachment = (file: any) => {
-  const mimeType = String(file?.mimeType || file?.contentType || "").toLowerCase()
-  const name = String(file?.originalName || file?.name || file?.filename || "").toLowerCase()
+const isImageAttachment = (file: unknown) => {
+  const f = (file ?? {}) as Record<string, unknown>
+  const mimeType = String(f.mimeType || f.contentType || "").toLowerCase()
+  const name = String(f.originalName || f.name || f.filename || "").toLowerCase()
   const extension = name.includes(".") ? name.split(".").pop() || "" : ""
-  return file?.type === "image"
+  return f.type === "image"
     || mimeType.startsWith("image/")
     || ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "avif", "heic", "heif"].includes(extension)
 }
 
 export function isImageOnlyMessageForRender(
   message: RenderPolicyMessage,
-  parsedFiles: any[] = [],
+  parsedFiles: unknown[] = [],
 ) {
   if (isAssistantImageUrl(message)) return true
   if (!Array.isArray(parsedFiles) || !parsedFiles.some(isImageAttachment)) return false
