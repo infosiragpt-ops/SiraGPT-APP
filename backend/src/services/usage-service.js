@@ -49,25 +49,25 @@ const usageService = {
     // },
 
      calculateTextTokens(text, modelName = "gpt-3.5-turbo") {
-        // YAHAN PAR TABDEELI HAI
+        // Cambio aplicado en esta sección
         let modelForTiktoken;
 
         if (modelName.includes('/')) {
             modelForTiktoken = 'gpt-4';
         } else {
-            // Agar yeh normal OpenAI model hai, to usko waise hi istemal karen.
+            // Si es un modelo OpenAI estándar, usarlo tal cual.
             modelForTiktoken = modelName;
         }
 
         try {
-            // Ab hum hamesha ek valid model name istemal kar rahe hain.
+            // En este punto siempre se usa un nombre de modelo válido.
             const enc = encoding_for_model(modelForTiktoken);
             const tokens = enc.encode(text);
             enc.free(); // cleanup
             return tokens.length;
         } catch (err) {
-            // Agar phir bhi koi error aaye (e.g., naya OpenAI model jo tiktoken mein nahi hai),
-            // to fallback istemal karen.
+            // Si aun así ocurre un error (p. ej. un nuevo modelo de OpenAI
+            // que tiktoken todavía no conoce), usar el cálculo de respaldo.
             console.warn(`Tiktoken model '${modelForTiktoken}' (from '${modelName}') not found. Using fallback calculation.`);
             // fallback to rough estimate
             return Math.ceil(text.length / 4);

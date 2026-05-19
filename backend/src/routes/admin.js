@@ -735,7 +735,165 @@ router.post('/analyzer/cache/clear', (_req, res) => {
   }
 });
 
+// ── Service health probes (super-admin only) ────────────────────────────────
+// Lightweight liveness probes for external dependencies. Each probe is
+// budgeted with a 2-second timeout and reports its own status independently
+// so that one dead dependency does not mask the rest. Provider keys are
+// reported as `configured: true/false` without making real API calls
+// (those are expensive and would burn quota on every health check).
+const PROBE_TIMEOUT_MS = 2000;
+
+function withTimeout(promise, ms, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+async function probePostgres(prismaClient) {
+  const t0 = Date.now();
+  try {
+    await withTimeout(prismaClient.$queryRaw`SELECT 1`, PROBE_TIMEOUT_MS, 'postgres');
+    return { status: 'up', latencyMs: Date.now() - t0 };
+  } catch (err) {
+    return { status: 'down', latencyMs: Date.now() - t0, error: err.message || String(err) };
+  }
+}
+
+async function probeRedis(env) {
+  if (!env.REDIS_URL) {
+    return { status: 'unconfigured', latencyMs: 0 };
+  }
+  const t0 = Date.now();
+  let client;
+  try {
+    const IORedis = require('ioredis');
+    client = new IORedis(env.REDIS_URL, {
+      lazyConnect: true,
+      enableOfflineQueue: false,
+      maxRetriesPerRequest: 1,
+      connectTimeout: PROBE_TIMEOUT_MS,
+    });
+    await withTimeout(client.connect(), PROBE_TIMEOUT_MS, 'redis-connect');
+    await withTimeout(client.ping(), PROBE_TIMEOUT_MS, 'redis-ping');
+    return { status: 'up', latencyMs: Date.now() - t0 };
+  } catch (err) {
+    return { status: 'down', latencyMs: Date.now() - t0, error: err.message || String(err) };
+  } finally {
+    if (client) {
+      try { await client.quit(); } catch (_) { try { client.disconnect(); } catch (_) { /* ignore */ } }
+    }
+  }
+}
+
+async function probeStripe(stripeSvc) {
+  if (!stripeSvc || !stripeSvc.isConfigured) {
+    return { status: 'unconfigured', latencyMs: 0 };
+  }
+  const t0 = Date.now();
+  try {
+    await withTimeout(
+      stripeSvc.ping ? stripeSvc.ping() : stripeSvc.stripe.products.list({ limit: 1 }),
+      PROBE_TIMEOUT_MS,
+      'stripe'
+    );
+    return { status: 'up', latencyMs: Date.now() - t0 };
+  } catch (err) {
+    return { status: 'down', latencyMs: Date.now() - t0, error: err.message || String(err) };
+  }
+}
+
+async function probeSmtp(emailSvc) {
+  if (!emailSvc) return { status: 'unconfigured', latencyMs: 0 };
+  if (typeof emailSvc.isConfigured === 'function' && !emailSvc.isConfigured()) {
+    return { status: 'unconfigured', latencyMs: 0 };
+  }
+  if (typeof emailSvc.isConfigured !== 'function' && emailSvc.isConfigured !== true) {
+    return { status: 'unconfigured', latencyMs: 0 };
+  }
+  const t0 = Date.now();
+  try {
+    if (typeof emailSvc.verify === 'function') {
+      await withTimeout(emailSvc.verify(), PROBE_TIMEOUT_MS, 'smtp-verify');
+    } else if (emailSvc.transporter && typeof emailSvc.transporter.verify === 'function') {
+      await withTimeout(
+        new Promise((resolve, reject) => emailSvc.transporter.verify((err, ok) => (err ? reject(err) : resolve(ok)))),
+        PROBE_TIMEOUT_MS,
+        'smtp-verify'
+      );
+    }
+    return { status: 'up', latencyMs: Date.now() - t0 };
+  } catch (err) {
+    return { status: 'down', latencyMs: Date.now() - t0, error: err.message || String(err) };
+  }
+}
+
+function probeProviders(env) {
+  // We deliberately do NOT call provider endpoints — health checks must
+  // be cheap. Reporting that the key is set is the most useful signal.
+  return {
+    openai:   { status: env.OPENAI_API_KEY    ? 'configured' : 'unconfigured' },
+    anthropic:{ status: env.ANTHROPIC_API_KEY ? 'configured' : 'unconfigured' },
+    groq:     { status: env.GROQ_API_KEY      ? 'configured' : 'unconfigured' },
+    gemini:   { status: env.GEMINI_API_KEY    ? 'configured' : 'unconfigured' },
+    deepseek: { status: env.DEEPSEEK_API_KEY  ? 'configured' : 'unconfigured' },
+  };
+}
+
+function deriveOverall(services) {
+  const critical = [services.postgres, services.redis, services.stripe, services.smtp];
+  // Treat 'down' as degrading and postgres-down as fully down (DB is hard
+  // requirement). Other 'down' statuses → degraded.
+  if (services.postgres.status === 'down') return 'down';
+  if (critical.some((s) => s.status === 'down')) return 'degraded';
+  return 'healthy';
+}
+
+async function collectServiceHealth({ prismaClient, env, stripeSvc, emailSvc }) {
+  const [postgres, redis, stripe, smtp] = await Promise.all([
+    probePostgres(prismaClient),
+    probeRedis(env),
+    probeStripe(stripeSvc),
+    probeSmtp(emailSvc),
+  ]);
+  const providers = probeProviders(env);
+  const services = { postgres, redis, stripe, smtp, providers };
+  return {
+    timestamp: new Date().toISOString(),
+    overall: deriveOverall(services),
+    services,
+  };
+}
+
+router.get('/health/services', requireSuperAdmin, async (_req, res) => {
+  try {
+    const emailService = (() => { try { return require('../services/email'); } catch (_) { return null; } })();
+    const snapshot = await collectServiceHealth({
+      prismaClient: prisma,
+      env: process.env,
+      stripeSvc: stripeService,
+      emailSvc: emailService,
+    });
+    res.json(snapshot);
+  } catch (err) {
+    console.error('[admin/health/services] failed:', err && err.message ? err.message : err);
+    res.status(500).json({ error: 'Failed to capture service health snapshot' });
+  }
+});
+
 module.exports = router;
+module.exports.INTERNAL = {
+  collectServiceHealth,
+  probePostgres,
+  probeRedis,
+  probeStripe,
+  probeSmtp,
+  probeProviders,
+  deriveOverall,
+  withTimeout,
+  PROBE_TIMEOUT_MS,
+};
 // Stripe invoices (admin)
 router.get('/stripe/invoices', async (req, res) => {
   try {

@@ -25,14 +25,14 @@ function parseAndFindFile(jsonString, type) {
  */
 router.get('/images', authenticateToken, async (req, res) => {
     try {
-        const userId = req.user.id; // Authentication middleware se userId mil raha hai
+        const userId = req.user.id; // userId proviene del middleware de autenticación
         console.log(`[DEBUG - Backend] Attempting to fetch images for userId: ${userId}`);
         const userImageMessages = await prisma.message.findMany({
             where: {
                 chat: {
-                    userId: userId, // User ke chats se messages filter karein
+                    userId: userId, // Filtrar mensajes pertenecientes a los chats del usuario
                 },
-                role: 'ASSISTANT', // Sirf ASSISTANT messages (jo generation ke results hain)
+                role: 'ASSISTANT', // Únicamente mensajes ASSISTANT (resultados de generación)
                 // files: {
                 //     string_contains: '"type":"image"',
                 // },
@@ -44,12 +44,12 @@ router.get('/images', authenticateToken, async (req, res) => {
                 timestamp: true,
                 chat: {
                     select: {
-                        title: true, // Chat ka title bhi show karne ke liye
+                        title: true, // Incluir también el título del chat para mostrarlo
                     },
                 },
             },
             orderBy: {
-                timestamp: 'desc', // Latest images pehle dikhenge
+                timestamp: 'desc', // Las imágenes más recientes aparecen primero
             },
             // You might want to add pagination here for large number of images
             // take: 20,
@@ -69,9 +69,9 @@ router.get('/images', authenticateToken, async (req, res) => {
                         chatTitle: msg.chat?.title || 'Unknown Chat',
                     };
                 }
-                return null; // Invalid entries ko discard kar dein
+                return null; // Descartar entradas inválidas
             })
-            .filter(Boolean); // null entries ko array se hata dein
+            .filter(Boolean); // Eliminar entradas nulas del arreglo
         console.log(userImageMessages.length);
 
         res.json(images);
@@ -100,7 +100,7 @@ router.get('/videos', authenticateToken, async (req, res) => {
                 },
                 role: 'ASSISTANT',
                 // files: {
-                //  string_contains: '"type":"video"', // 'string_contains' deprecated hai, 'contains' istemal karein
+                //  string_contains: '"type":"video"', // 'string_contains' está obsoleto; usar 'contains'
                 // },
             },
             select: {
@@ -146,10 +146,10 @@ router.get('/videos', authenticateToken, async (req, res) => {
     }
 });
 
-// Media Library se images aur videos fetch karne ke liye endpoint
+// Endpoint para obtener imágenes y videos desde la Media Library
 router.get('/media-library', authenticateToken, async (req, res) => {
     const userId = req.user.id;
-    const { page = 1, limit = 20, type } = req.query; // Pagination aur filtering ke liye
+    const { page = 1, limit = 20, type } = req.query; // Para paginación y filtrado
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const take = parseInt(limit);
 
@@ -161,7 +161,7 @@ router.get('/media-library', authenticateToken, async (req, res) => {
                 },
                 role: 'ASSISTANT', // Typically, generated media comes from ASSISTANT
                 files: {
-                    not: null, // Yeh database column 'files' ka NULL na hone ki check hai
+                    not: null, // Verifica que la columna 'files' de la base de datos no sea NULL
                 },
             },
             orderBy: {
@@ -169,7 +169,7 @@ router.get('/media-library', authenticateToken, async (req, res) => {
             },
             // Pagination only applied here. Filtering for specific types will be done in JS.
             skip: skip,
-            take: take + 1, // Ek extra item fetch karein ye dekhne ke liye ki next page hai ya nahi
+            take: take + 1, // Solicitar un elemento adicional para determinar si existe una página siguiente
             select: {
                 id: true,
                 content: true,

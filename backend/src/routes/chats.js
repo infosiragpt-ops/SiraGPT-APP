@@ -561,7 +561,7 @@ router.post('/messages/:messageId/feedback', [
     const { messageId } = req.params;
     const { feedback } = req.body;
 
-    // Pehle verify karein ke message user ke chat ka hissa hai
+    // Primero verificar que el mensaje pertenezca a un chat del usuario
     const message = await prisma.message.findUnique({
       where: { id: messageId },
       select: {
@@ -582,7 +582,7 @@ router.post('/messages/:messageId/feedback', [
       return res.status(404).json({ error: 'Message not found or access denied' });
     }
 
-    // Ab feedback update karein
+    // Actualizar el feedback
     const updatedMessage = await prisma.message.update({
       where: { id: messageId },
       data: { feedback },
@@ -668,7 +668,7 @@ router.post('/:chatId/share', authenticateToken, async (req, res) => {
   try {
     const { chatId } = req.params;
 
-    // Check karein ke chat user ka hai
+    // Verificar que el chat pertenezca al usuario
     const chat = await prisma.chat.findFirst({
       where: { id: chatId, userId: req.user.id }
     });
@@ -677,7 +677,7 @@ router.post('/:chatId/share', authenticateToken, async (req, res) => {
     }
 
     let shareId = chat.shareId;
-    // Agar pehle se share nahi hai, to ek naya unique ID banayein
+    // Si aún no existe un shareId, generar uno nuevo único
     if (!shareId) {
       shareId = uuidv4();
       await prisma.chat.update({
@@ -767,7 +767,7 @@ router.post('/:chatId/messages/:messageId/share', authenticateToken, async (req,
 
 
 
-// --- Edit a User's Message (Naya aur Behtar Version) ---
+// --- Editar el mensaje de un usuario (versión mejorada) ---
 router.put('/messages/:messageId', authenticateToken, async (req, res) => {
   try {
     const { messageId } = req.params;
@@ -776,9 +776,9 @@ router.put('/messages/:messageId', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: "Content cannot be empty." });
     }
 
-    // Transaction shuru karein taake saare operations ek saath hon ya koi na ho
+    // Iniciar una transacción para que todas las operaciones se apliquen atómicamente
     const result = await prisma.$transaction(async (tx) => {
-      // Step 1: Message dhoondein aur verify karein ke user ka hai
+      // Paso 1: Localizar el mensaje y verificar que pertenezca al usuario
       const messageToEdit = await tx.message.findFirst({
         where: {
           id: messageId,
@@ -788,27 +788,27 @@ router.put('/messages/:messageId', authenticateToken, async (req, res) => {
       });
 
       if (!messageToEdit) {
-        // Agar message nahi milta to transaction ko rollback karne ke liye error throw karein
+        // Si el mensaje no existe, lanzar un error para forzar el rollback de la transacción
         throw new Error("Message not found or you can't edit it.");
       }
 
-      // Step 2: Is message ke baad wale saare messages ko delete karein
+      // Paso 2: Eliminar todos los mensajes posteriores a éste
       await tx.message.deleteMany({
         where: {
           chatId: messageToEdit.chatId,
           timestamp: {
-            gt: messageToEdit.timestamp // 'gt' matlab 'greater than'
+            gt: messageToEdit.timestamp // 'gt' significa 'greater than' (mayor que)
           }
         }
       });
 
-      // Step 3: Original message ko naye content se update karein
+      // Paso 3: Actualizar el mensaje original con el nuevo contenido
       const updatedMessage = await tx.message.update({
         where: { id: messageId },
         data: { content: content.trim() }
       });
 
-      // Step 4: Chat ka 'updatedAt' timestamp bhi update karein
+      // Paso 4: Actualizar también el timestamp 'updatedAt' del chat
       await tx.chat.update({
         where: { id: messageToEdit.chatId },
         data: { updatedAt: new Date() }
@@ -817,7 +817,7 @@ router.put('/messages/:messageId', authenticateToken, async (req, res) => {
       return updatedMessage;
     });
 
-    // Transaction kamyab hone par naya message wapas bhejein
+    // Si la transacción se completa con éxito, devolver el mensaje actualizado
     res.json({ message: result });
 
   } catch (error) {

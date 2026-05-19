@@ -25,7 +25,9 @@ interface UpgradeModalProps {
   user?: any
   /**
    * Called when user clicks subscribe. If provided, must accept plan and return a Promise.
-   * If omitted, modal will POST /api/payments/instant itself.
+   * If omitted, modal initiates the standard Stripe Checkout flow via
+   * apiClient.createStripePayment (the legacy /api/payments/instant endpoint
+   * is super-admin-only and is no longer called from non-admin UI paths).
    */
   onSubscribe?: (plan: Exclude<Plan, "FREE">) => Promise<void>
   isSubscribing?: boolean

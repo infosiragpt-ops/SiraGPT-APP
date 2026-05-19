@@ -1152,7 +1152,9 @@ async function handleSubscriptionDeleted(subscription) {
       where: { id: user.id },
       data: {
         plan: 'FREE',
-         monthlyLimit: 1000,
+        // `monthlyLimit` is `BigInt` in the Prisma schema — use a BigInt
+        // literal so Prisma doesn't coerce a JS number and risk overflow.
+        monthlyLimit: 1000n,
         monthlyCallLimit: 3,
         subscriptionStatus: 'canceled',
         subscriptionEndDate: toDateFromUnix(subscription.ended_at)

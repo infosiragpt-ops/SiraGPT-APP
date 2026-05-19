@@ -128,7 +128,7 @@ class CustomComputerUseAgent {
   //       };
   //     }
   //   }
-  // CustomComputerUseAgent class ke andar, purane function ki jagah yeh naya function daalein
+  // Dentro de la clase CustomComputerUseAgent, reemplazar la función anterior con esta nueva
 
   async analyzeDomAndPlan(task, simplifiedDom, currentUrl) {
     const prompt = `You are an expert web automation agent. Your task is to: "${task}".
@@ -168,7 +168,7 @@ Choose the best element from the list and determine the next action to complete 
         messages: [{ role: "user", content: prompt }],
         max_tokens: 400,
         temperature: 0.1,
-        response_format: { type: "json_object" }, // Yeh response ko hamesha JSON mein dega
+        response_format: { type: "json_object" }, // Fuerza siempre una respuesta en formato JSON
       });
 
       const content = JSON.parse(response.choices[0].message.content);
@@ -300,10 +300,10 @@ router.use(authenticateToken);
 
 
 
-// Yeh function page se zaroori elements nikal kar unhein label dega
+// Esta función extrae los elementos relevantes de la página y los etiqueta
 async function getSimplifiedDom(page) {
   return await page.evaluate(() => {
-    // Sirf woh elements select karein jin par user action le sakta hai
+    // Seleccionar únicamente los elementos sobre los que el usuario puede actuar
     const interactiveElements = Array.from(
       document.querySelectorAll('a, button, input, [role="button"], [role="link"], textarea, select')
     );
@@ -312,11 +312,11 @@ async function getSimplifiedDom(page) {
     let elementCounter = 1;
 
     interactiveElements.forEach(el => {
-      // Sirf dikhai dene wale (visible) elements ko shamil karein
+      // Incluir únicamente los elementos visibles
       if (!el.offsetParent || el.offsetWidth === 0 || el.offsetHeight === 0) return;
 
       const uniqueId = `ai-element-${elementCounter++}`;
-      el.setAttribute('data-ai-id', uniqueId); // Element ko ek temporary ID dein
+      el.setAttribute('data-ai-id', uniqueId); // Asignar un ID temporal al elemento
 
       const elementInfo = {
         id: uniqueId,
@@ -539,7 +539,7 @@ async function getScreenshot(page) {
 //     });
 //   }
 // }
-// Purane customComputerUseLoop ko is naye code se badal dein
+// Reemplazar el antiguo customComputerUseLoop con esta nueva implementación
 // Extract relevant webpage content based on user query
 async function extractWebpageContent(page, userQuery, currentUrl) {
   try {
@@ -744,14 +744,14 @@ async function customComputerUseLoop(sessionId, browser, page, agent, task) {
       stepCount++;
       const session = activeSessions.get(sessionId);
       if (!session || session.status !== 'running') {
-        console.log(`Session ${sessionId} ruka hua hai ya mojood nahi.`);
+        console.log(`Session ${sessionId} está detenida o no existe.`);
         break;
       }
 
-      // Page ke load hone ka intezar karein
-      await page.waitForLoadState('networkidle', { timeout: 7000 }).catch(() => console.log("Page idle nahi hua, lekin aage barh rahe hain."));
+      // Esperar a que la página termine de cargar
+      await page.waitForLoadState('networkidle', { timeout: 7000 }).catch(() => console.log("La página no alcanzó estado idle, continuando de todas formas."));
 
-      // 1. Screenshot sirf frontend ke liye lein
+      // 1. Capturar el screenshot únicamente para el frontend
       const screenshotBytes = await getScreenshot(page);
       const screenshotBase64 = screenshotBytes.toString('base64');
       broadcastToSession(sessionId, {
@@ -759,17 +759,17 @@ async function customComputerUseLoop(sessionId, browser, page, agent, task) {
         data: { image: `data:image/png;base64,${screenshotBase64}`, step: stepCount }
       });
 
-      // 2. AI ke liye Screenshot ke bajaye Simplified DOM hasil karein
+      // 2. Obtener un DOM simplificado para la IA, en lugar del screenshot
       const simplifiedDom = await getSimplifiedDom(page);
 
-      // Agar page par koi interactive elements nahi, to thora intezar karein ya refresh karein
+      // Si la página no contiene elementos interactivos, esperar brevemente o refrescar
       if (simplifiedDom.length === 0) {
-        console.log("Koi interactive elements nahi mile. 2 second intezar kar rahe hain.");
+        console.log("No se encontraron elementos interactivos. Esperando 2 segundos.");
         await page.waitForTimeout(2000);
-        continue; // Loop ka agla step shuru karein
+        continue; // Iniciar el siguiente paso del bucle
       }
 
-      // 3. AI ko DOM bhej kar agla action poochein (Naya function call)
+      // 3. Enviar el DOM a la IA y solicitar la siguiente acción
       const currentUrl = page.url();
       const response = await agent.analyzeDomAndPlan(task, simplifiedDom, currentUrl);
 
@@ -782,9 +782,9 @@ async function customComputerUseLoop(sessionId, browser, page, agent, task) {
         }
       });
 
-      // Task complete ho gaya to loop rokein
+      // Si la tarea está completa, detener el bucle
       if (response.completed || response.action?.type === 'completed') {
-        console.log('Task mukammal ho gaya!');
+        console.log('¡Tarea completada!');
 
         // Extract webpage content before completing
         const currentUrl = page.url();
@@ -859,16 +859,16 @@ async function customComputerUseLoop(sessionId, browser, page, agent, task) {
         break;
       }
 
-      // 4. Naye function se action anjam dein
+      // 4. Ejecutar la acción mediante la nueva función
       if (response.action && response.action.selector) {
         await executeActionWithSelector(page, response.action);
       } else {
-        console.log('AI ne koi valid selector nahi diya. Dobara koshish kar rahe hain.');
-        await page.waitForTimeout(1000); // Thora wait karein
+        console.log('La IA no devolvió un selector válido. Reintentando.');
+        await page.waitForTimeout(1000); // Pequeña espera
       }
 
       if (stepCount >= maxSteps) {
-        console.log('Max steps tak pahunch gaye. Loop rok rahe hain.');
+        console.log('Se alcanzó el número máximo de pasos. Deteniendo el bucle.');
 
         // Extract content even when max steps reached
         const currentUrl = page.url();
@@ -909,7 +909,7 @@ async function customComputerUseLoop(sessionId, browser, page, agent, task) {
       }
     }
   } catch (error) {
-    console.error('Computer use loop mein error:', error);
+    console.error('Error en el bucle de Computer Use:', error);
     broadcastToSession(sessionId, { type: 'error', data: { error: error.message } });
   }
 }
@@ -1758,26 +1758,26 @@ function generateFallbackHtml(extractedData, originalQuery) {
 //   }
 // }
 
-// Purane executeActionWithSelector function ki jagah yeh poora naya function daalein
+// Reemplazar por completo el antiguo executeActionWithSelector con esta nueva versión
 
 async function executeActionWithSelector(page, action) {
   console.log(`Executing action with selector:`, action);
   const selector = `[data-ai-id="${action.selector.replace('#', '')}"]`;
 
   try {
-    // 1. Element ko dhoondein aur uske load hone ka intezar karein
+    // 1. Localizar el elemento y esperar a que esté listo
     const elementHandle = await page.waitForSelector(selector, { state: 'attached', timeout: 10000 });
 
     if (!elementHandle) {
-      console.error(`Element with selector ${selector} nahi mila.`);
+      console.error(`No se encontró el elemento con selector ${selector}.`);
       return;
     }
 
-    // 2. Element ko scroll karke screen par samne layein
+    // 2. Hacer scroll hasta que el elemento sea visible
     await elementHandle.scrollIntoViewIfNeeded();
 
-    // 3. Page ko settle hone ke liye thora waqt dein (buhat zaroori)
-    await page.waitForTimeout(500); // Aadha second ka intezar
+    // 3. Conceder unos milisegundos para que la página se estabilice (importante)
+    await page.waitForTimeout(500); // Medio segundo de espera
 
     // 4. Execute action with proper error handling
     switch (action.type) {
@@ -1796,35 +1796,35 @@ async function executeActionWithSelector(page, action) {
 
       case 'type':
         await elementHandle.fill(action.text);
-        // Form submit karne ke liye Enter press karein
+        // Presionar Enter para enviar el formulario
         await elementHandle.press('Enter');
         break;
     }
   } catch (error) {
-    console.error(`Action anjam dene mein error: ${error.message}`);
-    // Frontend ko error ke bare mein batayein taake woh dobara koshish kar sake
+    console.error(`Error al ejecutar la acción: ${error.message}`);
+    // Notificar al frontend para que pueda reintentar
     const session = activeSessions.get(page.sessionId);
     if (session) {
       broadcastToSession(page.sessionId, {
         type: 'reasoning',
         data: {
-          reasoning: `Error: Element '${action.selector}' par click nahi ho saka. Shayad woh chupa hua hai. Dobara koshish kar raha hoon.`,
+          reasoning: `Error: no se pudo hacer click en el elemento '${action.selector}'. Posiblemente esté oculto. Reintentando.`,
           action: 'error'
         }
       });
     }
   }
 }
-// Is naye function ko apne code mein add karein
+// Agregar esta nueva función al código
 // async function executeActionWithSelector(page, action) {
 //   console.log(`Executing action with selector:`, action);
-//   // Element ko uske temporary attribute se dhoondein
+//   // Localizar el elemento por su atributo temporal
 //   const selector = `[data-ai-id="${action.selector.replace('#', '')}"]`;
 
 //   try {
 //     switch (action.type) {
 //       case 'click':
-//         // click karne se pehle element ke load hone ka intezar karein
+//         // Esperar a que el elemento esté listo antes de hacer click
 //         await page.waitForSelector(selector, { state: 'visible', timeout: 5000 });
 //         // await page.click(selector);
 //         await page.click(selector, { force: true });
@@ -1834,14 +1834,14 @@ async function executeActionWithSelector(page, action) {
 //         await page.waitForSelector(selector, { state: 'visible', timeout: 5000 });
 //         // La función .fill() es más rápida y mejor que .type()
 //         await page.fill(selector, action.text);
-//         // Agar text ke baad Enter dabana hai (form submit karne ke liye)
+//         // Si tras escribir hay que enviar el formulario, presionar Enter
 //         await page.press(selector, 'Enter');
 //         break;
 //     }
 //   } catch (error) {
-//     console.error(`Action anjam dene mein error: ${error.message}`);
-//     // Agar error aye to frontend ko batayein
-//     broadcastToSession(page.sessionId, { // page.sessionId ko set karna hoga
+//     console.error(`Error al ejecutar la acción: ${error.message}`);
+//     // Si hay un error, notificar al frontend
+//     broadcastToSession(page.sessionId, { // Es necesario establecer page.sessionId
 //       type: 'reasoning',
 //       data: {
 //         reasoning: `Error executing action: Could not find element with selector ${action.selector}. Retrying.`,
@@ -2211,11 +2211,11 @@ router.post('/chat-integration', async (req, res) => {
     console.log('Session stored:', activeSessions.get(computeSessionId));
 
     // Start computer use session
-    console.log("CHECKING ENV VAR:", process.env.BASE_URL); // Yeh line add karein
+    console.log("CHECKING ENV VAR:", process.env.BASE_URL); // Línea agregada para depuración
 
     const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
 
-    console.log("USING THIS URL FOR FETCH:", baseUrl); // Yeh line bhi add karein
+    console.log("USING THIS URL FOR FETCH:", baseUrl); // Línea agregada para depuración
     const startResponse = await fetch(`${baseUrl}/api/computer-use/start`, {
       method: 'POST',
       headers: {

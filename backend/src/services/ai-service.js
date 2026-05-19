@@ -179,9 +179,9 @@ function getFallbackMessage(language) {
 class AIService {
 
     /**
-     * Provider ke naam ke hisab se sahi configured AI client return karta hai.
-     * @param {string} provider - Provider ka naam (e.g., "OpenAI", "Gemini", "OpenRouter")
-     * @returns {OpenAI} - OpenAI client ka instance
+     * Devuelve el cliente de IA correctamente configurado según el nombre del proveedor.
+     * @param {string} provider - Nombre del proveedor (p. ej. "OpenAI", "Gemini", "OpenRouter")
+     * @returns {OpenAI} - Instancia del cliente de OpenAI
      */
     getClient(provider) {
         // Route every provider through the shared keep-alive fetch so we
@@ -216,7 +216,7 @@ class AIService {
             });
         }
 
-        // Default provider OpenAI hai
+        // Proveedor por defecto: OpenAI
         return new OpenAI({
             ...baseOpts,
             apiKey: process.env.OPENAI_API_KEY,
@@ -294,14 +294,14 @@ class AIService {
     }
 
     /**
-     * AI se response generate karta hai aur client ko stream karta hai.
-     * @param {object} options - Options ka object
-     * @param {string} options.provider - Istemaal hone wala provider
-     * @param {string} options.model - Istemaal hone wala model
-     * @param {Array<object>} options.messages - AI ko bhejne ke liye messages ka array
-     * @param {import('express').Response} options.res - Express response object jis par stream likha jayega
-     * @param {Array<object>} options.files - Uploaded files ka array (optional)
-     * @returns {Promise<string>} - Poora generate kiya hua content
+     * Genera la respuesta de la IA y la envía al cliente mediante streaming.
+     * @param {object} options - Objeto de opciones
+     * @param {string} options.provider - Proveedor a utilizar
+     * @param {string} options.model - Modelo a utilizar
+     * @param {Array<object>} options.messages - Array de mensajes a enviar a la IA
+     * @param {import('express').Response} options.res - Objeto Express response sobre el que se hará el streaming
+     * @param {Array<object>} options.files - Array de archivos subidos (opcional)
+     * @returns {Promise<string>} - Contenido completo generado
      */
     async generateStream({ provider, model, messages, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true, temperature = 0.55, skipDoneSentinel = false }) {
         let fullResponseContent = '';

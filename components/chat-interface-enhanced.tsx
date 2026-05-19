@@ -3990,8 +3990,21 @@ But first, you need to connect your Spotify account securely using the button be
     resizeComposerTextarea();
   }, [input, resizeComposerTextarea]);
 
-  // Instant upgrade function
+  // Instant upgrade function — restringido a super-admins.
+  // Para usuarios normales el endpoint devuelve 403, así que evitamos el
+  // round-trip y dirigimos al flujo estándar de Stripe Checkout abriendo el
+  // UpgradeModal (que internamente llama a apiClient.createStripePayment).
   const instantUpgrade = async (plan: 'PRO' | 'PRO_MAX' | 'ENTERPRISE') => {
+    const authedUser: any = currentUserInfo || user;
+    const isSuperAdmin =
+      authedUser?.isSuperAdmin === true || authedUser?.role === 'SUPER_ADMIN';
+
+    if (!isSuperAdmin) {
+      // No emitir la petición — abrir el modal estándar de upgrade.
+      setSubscribeOpen(true);
+      return;
+    }
+
     try {
       setIsSubscribing(true);
       const planMap: Record<string, { monthlyLimit: number; price?: number }> = {
@@ -4016,14 +4029,7 @@ But first, you need to connect your Spotify account securely using the button be
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         console.warn('instantUpgrade backend failed:', body);
-        const simulatedUser = {
-          ...(currentUserInfo || user || {}),
-          plan,
-          monthlyLimit: payload.monthlyLimit,
-        };
-        setCurrentUserInfo(simulatedUser);
-        toast.success('Subscribed (UI only). Backend update not available — implement /api/payments/instant to persist.');
-        setSubscribeOpen(false);
+        toast.error('No se pudo aplicar la actualización instantánea.');
         return;
       }
 
@@ -4031,18 +4037,7 @@ But first, you need to connect your Spotify account securely using the button be
       setSubscribeOpen(false);
     } catch (err: any) {
       console.error('instantUpgrade error', err);
-      const planMap: Record<string, { monthlyLimit: number }> = {
-        PRO: { monthlyLimit: 500000 },
-        PRO_MAX: { monthlyLimit: 1000000 },
-        ENTERPRISE: { monthlyLimit: 10000000 },
-      };
-      const simulatedUser = {
-        ...(currentUserInfo || user || {}),
-        plan,
-        monthlyLimit: planMap[plan].monthlyLimit,
-      };
-      setCurrentUserInfo(simulatedUser);
-      toast.success('Subscribed (UI only). Backend update not available.');
+      toast.error('Error al aplicar la actualización instantánea.');
     } finally {
       setIsSubscribing(false);
     }

@@ -70,7 +70,7 @@ class GoogleMCPService {
 
             const events = res.data.items;
             if (!events || events.length === 0) {
-                return 'Agle 7 dino mein aapke calendar par koi events nahi hain.';
+                return 'No tiene eventos en su calendario para los próximos 7 días.';
             }
 
 
@@ -103,8 +103,8 @@ class GoogleMCPService {
 
 
         } catch (error) {
-            console.error("Calendar events list karne mein error: ", error);
-            return "Calendar events hasil karne mein error aayi.";
+            console.error("Error al listar los eventos del calendario: ", error);
+            return "Ocurrió un error al obtener los eventos del calendario.";
         }
     }
     async updateCalendarEvent(apiClient, { eventId, summary, description, startTime, endTime }, timeZone, chatId) {
@@ -117,17 +117,17 @@ class GoogleMCPService {
                 }
             }
             if (!eventId) {
-                return "Event ID nahi di gayi. Pehle events list karein aur phir ID batayein.";
+                return "No se proporcionó el Event ID. Primero liste los eventos y luego indique el ID.";
             }
             const calendar = apiClient.calendar;
 
-            // Pehle event ki mojooda details hasil karein
+            // Primero obtener los detalles existentes del evento
             const existingEvent = await calendar.events.get({
                 calendarId: 'primary',
                 eventId: eventId,
             });
 
-            // Sirf woh cheezein update karein jo user ne di hain
+            // Actualizar únicamente los campos proporcionados por el usuario
             const eventPatch = {
                 summary: summary || existingEvent.data.summary,
                 description: description || existingEvent.data.description,
@@ -147,11 +147,11 @@ class GoogleMCPService {
                 resource: eventPatch,
             });
 
-            return `Event '${res.data.summary}' kamyabi se update ho gaya hai.`;
+            return `El evento '${res.data.summary}' se actualizó correctamente.`;
 
         } catch (error) {
-            console.error("Calendar event update karne mein error: ", error.message);
-            return "Event update karne mein error aayi. Shayad Event ID ghalat hai.";
+            console.error("Error al actualizar el evento del calendario: ", error.message);
+            return "Ocurrió un error al actualizar el evento. Es posible que el Event ID sea incorrecto.";
         }
     }
     async deleteCalendarEvent(apiClient, { eventId }, chatId) {
@@ -164,21 +164,21 @@ class GoogleMCPService {
                 }
             }
             if (!eventId) {
-                return "Event ID nahi di gayi. Pehle events list karein aur phir ID batayein.";
+                return "No se proporcionó el Event ID. Primero liste los eventos y luego indique el ID.";
             }
             const calendar = apiClient.calendar;
             await calendar.events.delete({
                 calendarId: 'primary',
                 eventId: eventId,
             });
-            return ` Event ID ${eventId} wala event kamyabi se delete ho gaya hai.`;
+            return `El evento con Event ID ${eventId} se eliminó correctamente.`;
         } catch (error) {
-            console.error("Calendar event delete karne mein error: ", error.message);
-            return "Event delete karne mein error aayi.";
+            console.error("Error al eliminar el evento del calendario: ", error.message);
+            return "Ocurrió un error al eliminar el evento.";
         }
     }
 
-    // b. Google Calendar: Naya event banana
+    // b. Google Calendar: crear un nuevo evento
     async createCalendarEvent(apiClient, { summary, description, startTime, endTime }, timeZone) {
         try {
             const calendar = apiClient.calendar;
@@ -190,19 +190,19 @@ class GoogleMCPService {
             };
 
             const res = await calendar.events.insert({ calendarId: 'primary', resource: event });
-            return `Event kamyabi se ban gaya hai. Event ka naam hai: '${res.data.summary}'`;
+            return `El evento se creó correctamente. Nombre del evento: '${res.data.summary}'`;
         } catch (error) {
-            console.error("Calendar event banane mein error: ", error);
-            return "Event banane mein error aayi. Time format ISO 8601 hona chahiye (maslan, 2025-12-31T14:00:00).";
+            console.error("Error al crear el evento del calendario: ", error);
+            return "Ocurrió un error al crear el evento. El formato de hora debe ser ISO 8601 (por ejemplo, 2025-12-31T14:00:00).";
         }
     }
 
-    // c. Google Drive: Files list karna
+    // c. Google Drive: listar archivos
     async listDriveFiles(apiClient, { query }) {
         try {
             const drive = apiClient.drive;
 
-            const conversionPrompt = `User ki is natural language query ko Google Drive API search query mein badlo. Sirf query string return karo, koi extra text nahi.
+            const conversionPrompt = `Convierta la siguiente consulta del usuario en lenguaje natural en una query de búsqueda de la API de Google Drive. Devuelva únicamente la cadena de la query, sin texto adicional.
 
 User Query: "${query}"
 
@@ -234,12 +234,12 @@ Query:`;
             });
             const files = res.data.files;
             if (!files || files.length === 0) {
-                return "Aapke Google Drive mein is search ke mutabiq koi files nahi mili.";
+                return "No se encontraron archivos en su Google Drive que coincidan con esta búsqueda.";
             }
             return JSON.stringify(files);
         } catch (error) {
-            console.error("Drive files list karne mein error: ", error);
-            return "Drive se files hasil karne mein error aayi.";
+            console.error("Error al listar los archivos de Drive: ", error);
+            return "Ocurrió un error al obtener los archivos desde Drive.";
         }
     }
 
@@ -259,17 +259,17 @@ Query:`;
                 media: media,
                 fields: 'id, webViewLink',
             });
-            return `Google Doc "${title}" kamyabi se ban gaya hai. Link: ${res.data.webViewLink}`;
+            return `El Google Doc "${title}" se creó correctamente. Link: ${res.data.webViewLink}`;
         } catch (error) {
-            console.error("Google Doc banane mein error: ", error);
-            return "Google Doc banane mein error aayi.";
+            console.error("Error al crear el Google Doc: ", error);
+            return "Ocurrió un error al crear el Google Doc.";
         }
     }
 
     async summarizeFile(apiClient, { fileId }) {
         try {
             const drive = apiClient.drive;
-            // Pehle file ka content hasil karein
+            // Primero obtener el contenido del archivo
             const res = await drive.files.get({
                 fileId: fileId,
                 alt: 'media',
@@ -278,10 +278,10 @@ Query:`;
             const fileContent = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
 
             if (fileContent.length < 50) {
-                return "File ka content summary ke liye bahut chota hai.";
+                return "El contenido del archivo es demasiado breve para generar un resumen.";
             }
 
-            // Ab AI se summary banwayein
+            // Pedir a la IA que genere el resumen
             const summaryResponse = await this.openai.chat.completions.create({
                 model: "gpt-4o-mini",
                 messages: [
@@ -291,10 +291,10 @@ Query:`;
                 temperature: 0.3,
             });
 
-            return `File ki summary:\n\n${summaryResponse.choices[0].message.content}`;
+            return `Resumen del archivo:\n\n${summaryResponse.choices[0].message.content}`;
         } catch (error) {
-            console.error("File summarize karne mein error:", error);
-            return "File ko summarize karne mein error aayi. Ho sakta hai yeh file type support na karti ho.";
+            console.error("Error al resumir el archivo:", error);
+            return "Ocurrió un error al resumir el archivo. Es posible que el tipo de archivo no esté soportado.";
         }
     }
 
@@ -307,12 +307,12 @@ Query:`;
             });
             return JSON.stringify(res.data);
         } catch (error) {
-            console.error("File details hasil karne mein error:", error);
-            return "File ki details hasil karne mein error aayi.";
+            console.error("Error al obtener los detalles del archivo:", error);
+            return "Ocurrió un error al obtener los detalles del archivo.";
         }
     }
 
-    // d. Google Drive: File ka content hasil karna (Text files ke liye)
+    // d. Google Drive: obtener el contenido del archivo (para archivos de texto)
     async getFileContent(apiClient, { fileId }) {
         try {
             const drive = apiClient.drive;
@@ -323,41 +323,41 @@ Query:`;
             // Solo funciona correctamente con archivos basados en texto.
             return typeof res.data === 'string' ? res.data.substring(0, 4000) : "El contenido del archivo no está en formato de texto.";
         } catch (error) {
-            console.error("File content hasil karne mein error:", error);
-            return "File ka content hasil karne mein error aayi.";
+            console.error("Error al obtener el contenido del archivo:", error);
+            return "Ocurrió un error al obtener el contenido del archivo.";
         }
     }
     async processRequest(chatHistory, tokens, timeZone, chatId) {
         console.log('timeZone', timeZone);
 
-        // 1. Google API clients ko initialize karein
+        // 1. Inicializar los clientes de las APIs de Google
         const googleAPIClient = this._getGoogleAPIClient(tokens);
         const today = new Date().toLocaleString('en-US', { timeZone: timeZone });
         const systemMessage = `You are a helpful assistant. The user's current date and time is ${today} in their local timezone (${timeZone}). When a user asks to create an event with relative times like 'tomorrow at 5pm', you must calculate the exact ISO 8601 timestamp based on this date and timezone. CRITICAL: When the user asks to update or delete an event after you have listed events, you MUST use the 'id' of the event from the list. Do not make up an ID. Look at the previous tool call result for the correct event 'id'. IMPORTANT: You must detect the user's language from their prompt and ALWAYS respond in that same language.`;
-        // 2. OpenAI ko batayein ke aapke paas konse tools/functions hain
+        // 2. Indicar a OpenAI qué herramientas/funciones están disponibles
         const tools = [
             {
                 type: "function",
                 function: {
                     name: "list_calendar_events",
-                    description: "User ke Google Calendar se anay walay events ki list hasil karo (default agle 7 din).",
+                    description: "Obtiene la lista de los próximos eventos del Google Calendar del usuario (por defecto los próximos 7 días).",
                 },
             },
             {
                 type: "function",
                 function: {
                     name: "update_calendar_event",
-                    description: "Pehle se mojood calendar event ko uski Event ID ke zariye update karo. Agar user kisi event ka zikr kare jo abhi list kiya gaya hai (maslan, 'isko update karo'), to pichle list_calendar_events call se ID istemal karo. Agar Event ID wazeh na ho, to pehle list_calendar_events function ka istemal karke user ko events dikhao aur us se sahi Event ID poocho, phir is function ko call karo.",
+                    description: "Actualiza un evento existente del calendario mediante su Event ID. Si el usuario hace referencia a un evento recién listado (por ejemplo, 'actualízalo'), reutilice el ID de la llamada previa a list_calendar_events. Si el Event ID no está claro, primero invoque list_calendar_events para mostrar los eventos al usuario, solicítele el Event ID correcto y luego llame a esta función.",
                     parameters: {
                         type: "object",
                         properties: {
-                            eventId: { type: "string", description: "Jis event ko update karna hai uski unique ID." },
-                            summary: { type: "string", description: "Event ka naya title (optional)." },
-                            description: { type: "string", description: "Event ki nayi tafseelat (optional)." },
-                            startTime: { type: "string", description: "Event ka naya shuru hone ka waqt (optional)." },
-                            endTime: { type: "string", description: "Event ka naya khatam hone ka waqt (optional)." },
+                            eventId: { type: "string", description: "ID único del evento que se desea actualizar." },
+                            summary: { type: "string", description: "Nuevo título del evento (opcional)." },
+                            description: { type: "string", description: "Nueva descripción del evento (opcional)." },
+                            startTime: { type: "string", description: "Nueva hora de inicio del evento (opcional)." },
+                            endTime: { type: "string", description: "Nueva hora de fin del evento (opcional)." },
                         },
-                        required: ["eventId"], // Sirf eventId laazmi hai
+                        required: ["eventId"], // Únicamente eventId es obligatorio
                     },
                 },
             },
@@ -365,11 +365,11 @@ Query:`;
                 type: "function",
                 function: {
                     name: "delete_calendar_event",
-                    description: "Ek event ko uski Event ID ke zariye delete karo. Agar user kisi event ka zikr kare jo abhi list kiya gaya hai (maslan, 'isay delete kardo'), to pichle list_calendar_events call se ID istemal karo. Agar user ne Event ID nahi di, to pehle list_calendar_events function ka istemal karke user ko events dikhao aur us se sahi Event ID poocho, phir is function ko call karo.",
+                    description: "Elimina un evento mediante su Event ID. Si el usuario hace referencia a un evento recién listado (por ejemplo, 'elimínalo'), reutilice el ID de la llamada previa a list_calendar_events. Si el usuario no indicó el Event ID, primero invoque list_calendar_events para mostrar los eventos al usuario, solicítele el Event ID correcto y luego llame a esta función.",
                     parameters: {
                         type: "object",
                         properties: {
-                            eventId: { type: "string", description: "Jis event ko delete karna hai uski unique ID." },
+                            eventId: { type: "string", description: "ID único del evento que se desea eliminar." },
                         },
                         required: ["eventId"],
                     },
@@ -379,14 +379,14 @@ Query:`;
                 type: "function",
                 function: {
                     name: "create_calendar_event",
-                    description: "User ke Google Calendar mein ek naya event ya meeting banao.",
+                    description: "Crea un nuevo evento o reunión en el Google Calendar del usuario.",
                     parameters: {
                         type: "object",
                         properties: {
-                            summary: { type: "string", description: "Event ka title." },
-                            description: { type: "string", description: "Event ki tafseelat." },
-                            startTime: { type: "string", description: "Event shuru hone ka waqt ISO 8601 format mein." },
-                            endTime: { type: "string", description: "Event khatam hone ka waqt ISO 8601 format mein." },
+                            summary: { type: "string", description: "Título del evento." },
+                            description: { type: "string", description: "Descripción del evento." },
+                            startTime: { type: "string", description: "Hora de inicio del evento en formato ISO 8601." },
+                            endTime: { type: "string", description: "Hora de fin del evento en formato ISO 8601." },
                         },
                         required: ["summary", "startTime", "endTime"],
                     },
@@ -396,11 +396,11 @@ Query:`;
                 type: "function",
                 function: {
                     name: "list_drive_files",
-                    description: "User ke Google Drive se files ya folders ko unki natural language query ke zariye search karo. Maslan, 'find my reports from last week'.",
+                    description: "Busca archivos o carpetas en el Google Drive del usuario a partir de una consulta en lenguaje natural. Por ejemplo, 'find my reports from last week'.",
                     parameters: {
                         type: "object",
                         properties: {
-                            query: { type: "string", description: "User ki natural language search query, maslan 'marketing presentations' ya 'PDFs shared by hamza'." },
+                            query: { type: "string", description: "Consulta en lenguaje natural del usuario, por ejemplo 'marketing presentations' o 'PDFs shared by hamza'." },
                         },
                         required: ["query"],
                     },
@@ -410,12 +410,12 @@ Query:`;
                 type: "function",
                 function: {
                     name: "create_google_doc",
-                    description: "Google Drive mein ek naya Google Doc banao.",
+                    description: "Crea un nuevo Google Doc en Google Drive.",
                     parameters: {
                         type: "object",
                         properties: {
-                            title: { type: "string", description: "Document ka title." },
-                            content: { type: "string", description: "Document ka shuruaati content." },
+                            title: { type: "string", description: "Título del documento." },
+                            content: { type: "string", description: "Contenido inicial del documento." },
                         },
                         required: ["title", "content"],
                     },
@@ -429,7 +429,7 @@ Query:`;
                     parameters: {
                         type: "object",
                         properties: {
-                            fileId: { type: "string", description: "Jis file ko summarize karna hai uski ID." },
+                            fileId: { type: "string", description: "ID del archivo que se desea resumir." },
                         },
                         required: ["fileId"],
                     },
@@ -439,11 +439,11 @@ Query:`;
                 type: "function",
                 function: {
                     name: "get_file_details",
-                    description: "Ek specific file ID de kar uski tafseelat (metadata) hasil karo.",
+                    description: "Obtiene los detalles (metadata) de un archivo a partir de su ID.",
                     parameters: {
                         type: "object",
                         properties: {
-                            fileId: { type: "string", description: "Jis file ki details chahiye uski ID." },
+                            fileId: { type: "string", description: "ID del archivo cuyos detalles se desean obtener." },
                         },
                         required: ["fileId"],
                     },
@@ -457,7 +457,7 @@ Query:`;
                     parameters: {
                         type: "object",
                         properties: {
-                            fileId: { type: "string", description: "Jis file ko parhna hai uski ID." },
+                            fileId: { type: "string", description: "ID del archivo que se desea leer." },
                         },
                         required: ["fileId"],
                     },
@@ -478,7 +478,7 @@ Query:`;
         ];
 
         try {
-            // 3. Pehli AI Call: Faisla karne ke liye ke konsa tool istemal karna hai
+            // 3. Primera llamada a la IA: decidir qué herramienta utilizar
             const initialResponse = await this.openai.chat.completions.create({
                 model: "gpt-4o",
                 messages: messages,
@@ -489,9 +489,9 @@ Query:`;
             const responseMessage = initialResponse.choices[0].message;
             const toolCalls = responseMessage.tool_calls;
 
-            // 4. Agar AI ne tool istemal karne ka faisla kiya
+            // 4. Si la IA decidió invocar una herramienta
             if (toolCalls) {
-                messages.push(responseMessage); // Conversation history mein AI ka jawab shamil karein
+                messages.push(responseMessage); // Agregar la respuesta de la IA al historial de la conversación
 
                 for (const toolCall of toolCalls) {
                     console.log('toolCall', toolCall);
@@ -500,7 +500,7 @@ Query:`;
                     const functionArgs = JSON.parse(toolCall.function.arguments);
                     let functionResult;
 
-                    // 5. Sahi function ko call karein
+                    // 5. Invocar la función correspondiente
                     switch (functionName) {
                         case "list_calendar_events":
                             functionResult = await this.listCalendarEvents(googleAPIClient, chatId);
@@ -533,7 +533,7 @@ Query:`;
                             functionResult = "Unknown function called.";
                     }
 
-                    // 6. Tool ka result conversation history mein shamil karein
+                    // 6. Agregar el resultado de la herramienta al historial de la conversación
                     messages.push({
                         tool_call_id: toolCall.id,
                         role: "tool",
@@ -542,7 +542,7 @@ Query:`;
                     });
                 }
 
-                // 7. Doosri AI Call: Final, insani jawab banane ke liye
+                // 7. Segunda llamada a la IA: generar la respuesta final en lenguaje natural
                 const finalResponse = await this.openai.chat.completions.create({
                     model: "gpt-4o",
                     messages: messages,
@@ -551,13 +551,13 @@ Query:`;
                 return { success: true, content: finalResponse.choices[0].message.content };
 
             } else {
-                // Agar koi tool istemal nahi hua, to seedha AI ka jawab bhej dein
+                // Si no se utilizó ninguna herramienta, devolver directamente la respuesta de la IA
                 return { success: true, content: responseMessage.content };
             }
         } catch (error) {
             console.error('OpenAI Function Calling error:', error);
             if (error.message?.includes('invalid_grant')) {
-                throw new Error('Aapka Google connection expire ho gaya hai. Dobara connect karein.');
+                throw new Error('Su conexión con Google ha expirado. Vuelva a conectarse.');
             }
             throw error;
         }
