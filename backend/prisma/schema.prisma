@@ -82,6 +82,14 @@ model User {
   webhookEndpoints    WebhookEndpoint[]
   slackIntegrations   SlackIntegration[]
 
+  // Organization / team membership — multi-tenant scaffolding (cycle 27).
+  // A user can belong to multiple organizations with different roles.
+  // `ownedOrganizations` covers the legacy "creator" pointer on the org
+  // row; `organizationMemberships` is the source of truth for ACL.
+  ownedOrganizations      Organization[]   @relation("OrganizationOwner")
+  organizationMemberships OrgMembership[]
+  sentOrgInvitations      OrgInvitation[]  @relation("OrgInvitationInviter")
+
   @@index([deletedAt])
   @@map("users")
 }
@@ -223,6 +231,13 @@ model Chat {
   projectId String?
   project   Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
 
+  // Organization sharing (cycle 27). When non-null, members of the
+  // organization with at least VIEWER role can see this chat. The
+  // chat owner remains `userId`; sharing does not transfer ownership.
+  organizationId String?
+  sharedAt       DateTime?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
   // Relations
   user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
   messages           Message[]
@@ -233,6 +248,7 @@ model Chat {
   @@index([userId, updatedAt])
   @@index([customGptId])
   @@index([projectId])
+  @@index([organizationId, sharedAt])
   @@map("chats")
 }
 
@@ -1190,4 +1206,84 @@ model DocumentIndex {
   @@index([createdAt])
   @@index([hierarchyRootId])
   @@map("document_index")
+}
+
+// ─── Organizations / Teams (cycle 27) ───────────────────────────────
+//
+// Multi-tenant scaffolding. An Organization is a workspace owned by
+// one user (`ownerId`) and joined by N users via `OrgMembership` rows.
+// `slug` is a URL-friendly handle (unique). `billingPlan` mirrors the
+// per-user `Plan` enum but at org level so a team can subscribe to
+// PRO/ENTERPRISE collectively.
+//
+// `monthlyQuota` / `usedThisMonth` track AI request budget when a user
+// acts "on behalf of" an organization (see middleware/enforce-org-quota.js).
+// Counters reset on the calendar month rollover.
+
+model Organization {
+  id             String   @id @default(cuid())
+  name           String
+  slug           String   @unique
+  billingPlan    Plan     @default(FREE)
+  ownerId        String
+  monthlyQuota   BigInt   @default(10000)
+  usedThisMonth  BigInt   @default(0)
+  quotaResetAt   DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  owner       User              @relation("OrganizationOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  memberships OrgMembership[]
+  invitations OrgInvitation[]
+  chats       Chat[]
+
+  @@index([ownerId])
+  @@index([slug])
+  @@map("organizations")
+}
+
+enum OrgRole {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+model OrgMembership {
+  id        String   @id @default(cuid())
+  orgId     String
+  userId    String
+  role      OrgRole  @default(MEMBER)
+  createdAt DateTime @default(now())
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, userId])
+  @@index([userId])
+  @@index([orgId, role])
+  @@map("org_memberships")
+}
+
+// Pending email invitations into an organization. The token is a
+// cryptographically-strong random string sent via magic link. The
+// invitee redeems by POST /api/orgs/invitation/:token/accept while
+// authenticated; the route enforces email match.
+model OrgInvitation {
+  id        String   @id @default(cuid())
+  orgId     String
+  email     String
+  role      OrgRole  @default(MEMBER)
+  token     String   @unique
+  invitedBy String
+  acceptedAt DateTime?
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  inviter      User         @relation("OrgInvitationInviter", fields: [invitedBy], references: [id], onDelete: Cascade)
+
+  @@index([orgId, email])
+  @@index([email])
+  @@map("org_invitations")
 }

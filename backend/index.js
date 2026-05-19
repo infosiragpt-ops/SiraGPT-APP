@@ -101,6 +101,7 @@ const downloadRoutes = require('./src/routes/download');
 const elevenlabsRoutes = require('./src/routes/elevenlabs');
 const searchRoutes = require('./src/routes/search');
 const bookmarksRoutes = require('./src/routes/bookmarks');
+const orgsRoutes = require('./src/routes/orgs');
 const videoRoutes = require('./src/routes/video');
 const gptsRoutes = require('./src/routes/gpts');
 const libraryRoutes = require('./src/routes/library');
@@ -625,6 +626,7 @@ app.use('/api/video', videoRoutes);
 app.use('/api/search', searchAgenticRoutes);
 app.use('/api/search', searchRoutes);
 app.use('/api/bookmarks', bookmarksRoutes);
+app.use('/api/orgs', orgsRoutes);
 app.use('/api/search-brain', searchBrainRoutes);
 app.use('/api/search-brain/universal', searchBrainUniversalRoutes);
 app.use('/api/gpts', gptsRoutes); // Add GPTs API routes

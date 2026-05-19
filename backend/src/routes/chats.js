@@ -1119,4 +1119,66 @@ router.put('/:id/word-content', [
   }
 });
 
+// ─── POST /api/chats/:id/share-to-org ───────────────────────────────
+// Share a chat into an organization workspace. Caller must own the
+// chat AND be at least MEMBER of the target organization. Lazy-load
+// orgs-service so the test harness can stub it.
+router.post('/:id/share-to-org', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const chatId = req.params.id;
+  const orgId = typeof req.body?.organizationId === 'string' ? req.body.organizationId : '';
+  if (!orgId) return res.status(400).json({ error: 'organizationId is required' });
+
+  let orgsService;
+  let writeAuditLog;
+  try {
+    // eslint-disable-next-line global-require
+    orgsService = require('../services/orgs-service');
+    // eslint-disable-next-line global-require
+    ({ writeAuditLog } = require('../utils/audit-log'));
+  } catch (e) {
+    console.error('[chats] share-to-org module load failed:', e.message);
+    return res.status(500).json({ error: 'service unavailable' });
+  }
+
+  try {
+    const membership = await orgsService.assertMembership(prisma, orgId, userId, 'MEMBER');
+    if (!orgsService.canShareToOrg(membership.role)) {
+      return res.status(403).json({ error: 'insufficient role to share' });
+    }
+
+    const chat = await prisma.chat.findFirst({
+      where: { id: chatId, userId, deletedAt: null },
+      select: { id: true, organizationId: true },
+    });
+    if (!chat) return res.status(404).json({ error: 'chat not found' });
+
+    const updated = await prisma.chat.update({
+      where: { id: chatId },
+      data: { organizationId: orgId, sharedAt: new Date() },
+      select: { id: true, organizationId: true, sharedAt: true },
+    });
+
+    void writeAuditLog(prisma, {
+      action: 'chat_share_to_org',
+      userId,
+      resource: 'chat',
+      resourceId: chatId,
+      before: { organizationId: chat.organizationId },
+      after: { organizationId: orgId },
+      req,
+    });
+
+    res.json({
+      id: updated.id,
+      organizationId: updated.organizationId,
+      sharedAt: updated.sharedAt instanceof Date ? updated.sharedAt.toISOString() : updated.sharedAt,
+    });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[chats] share-to-org failed:', err.message);
+    res.status(500).json({ error: 'failed to share chat' });
+  }
+});
+
 module.exports = router;
