@@ -807,7 +807,173 @@ router.delete('/:id/slack', authenticateToken, async (req, res) => {
   }
 });
 
+// ─── Billing (cycle 46) ─────────────────────────────────────────────
+// Plan → monthly quota mapping. Kept here (rather than in
+// orgs-service) so it lives next to the upgrade endpoint that
+// applies it. Values are *requests* per calendar month.
+const PLAN_QUOTAS = Object.freeze({
+  FREE: 50_000,
+  PRO: 500_000,
+  PRO_MAX: 1_000_000,
+  ENTERPRISE: 10_000_000,
+});
+
+// MRR estimate in USD per plan. Used by the billing summary endpoint
+// so the dashboard can render a rough revenue line without round-
+// tripping to Stripe. Treat as informational only.
+const PLAN_MRR_USD = Object.freeze({
+  FREE: 0,
+  PRO: 29,
+  PRO_MAX: 99,
+  ENTERPRISE: 499,
+});
+
+function quotaForPlan(plan) {
+  return PLAN_QUOTAS[plan] ?? PLAN_QUOTAS.FREE;
+}
+
+function mrrForPlan(plan) {
+  return PLAN_MRR_USD[plan] ?? 0;
+}
+
+function isUpgradablePlan(plan) {
+  return plan === 'PRO' || plan === 'PRO_MAX' || plan === 'ENTERPRISE';
+}
+
+// First day of the NEXT calendar month at 00:00:00 UTC. Used to
+// schedule the quota reset so usage windows align with billing
+// cycles.
+function firstOfNextMonth(now = new Date()) {
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1, 0, 0, 0, 0));
+}
+
+function toBigIntString(v) {
+  if (v == null) return '0';
+  return typeof v === 'bigint' ? v.toString() : String(v);
+}
+
+function computePercentUsed(used, quota) {
+  const u = typeof used === 'bigint' ? Number(used) : Number(used || 0);
+  const q = typeof quota === 'bigint' ? Number(quota) : Number(quota || 0);
+  if (!q || q <= 0) return 0;
+  const pct = (u / q) * 100;
+  if (!Number.isFinite(pct)) return 0;
+  // Clamp + round to 2 decimals to keep the dashboard tidy.
+  return Math.max(0, Math.min(100, Math.round(pct * 100) / 100));
+}
+
+// ─── POST /api/orgs/:id/billing/upgrade (OWNER only) ────────────────
+router.post('/:id/billing/upgrade', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  const plan = typeof req.body?.plan === 'string' ? req.body.plan.toUpperCase() : '';
+
+  if (!isUpgradablePlan(plan)) {
+    return res.status(400).json({ error: 'plan must be PRO, PRO_MAX, or ENTERPRISE' });
+  }
+
+  try {
+    const membership = await assertMembership(prisma, orgId, userId, 'OWNER');
+    if (membership.role !== 'OWNER') {
+      return res.status(403).json({ error: 'only OWNER can change the billing plan' });
+    }
+
+    const existing = await prisma.organization.findUnique({
+      where: { id: orgId },
+      select: { id: true, billingPlan: true, monthlyQuota: true },
+    });
+    if (!existing) return res.status(404).json({ error: 'organization not found' });
+
+    const newQuota = quotaForPlan(plan);
+    const resetAt = firstOfNextMonth(new Date());
+
+    const updated = await prisma.organization.update({
+      where: { id: orgId },
+      data: {
+        billingPlan: plan,
+        monthlyQuota: BigInt(newQuota),
+        usedThisMonth: BigInt(0),
+        quotaResetAt: resetAt,
+      },
+    });
+
+    void writeAuditLog(prisma, {
+      action: 'org_billing_upgrade',
+      userId,
+      resource: 'organization',
+      resourceId: orgId,
+      before: {
+        billingPlan: existing.billingPlan,
+        monthlyQuota: toBigIntString(existing.monthlyQuota),
+      },
+      after: {
+        billingPlan: updated.billingPlan,
+        monthlyQuota: toBigIntString(updated.monthlyQuota),
+        quotaResetAt: resetAt.toISOString(),
+      },
+      req,
+    });
+
+    res.json({
+      ok: true,
+      plan: updated.billingPlan,
+      monthlyQuota: toBigIntString(updated.monthlyQuota),
+      usedThisMonth: toBigIntString(updated.usedThisMonth),
+      quotaResetAt: resetAt.toISOString(),
+      mrrEstimate: mrrForPlan(updated.billingPlan),
+    });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] billing upgrade failed:', err.message);
+    res.status(500).json({ error: 'failed to upgrade plan' });
+  }
+});
+
+// ─── GET /api/orgs/:id/billing (any member) ─────────────────────────
+router.get('/:id/billing', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  try {
+    await assertMembership(prisma, orgId, userId, 'VIEWER');
+    const org = await prisma.organization.findUnique({
+      where: { id: orgId },
+      select: {
+        billingPlan: true,
+        monthlyQuota: true,
+        usedThisMonth: true,
+        quotaResetAt: true,
+      },
+    });
+    if (!org) return res.status(404).json({ error: 'organization not found' });
+
+    res.json({
+      plan: org.billingPlan,
+      monthlyQuota: toBigIntString(org.monthlyQuota),
+      usedThisMonth: toBigIntString(org.usedThisMonth),
+      percentUsed: computePercentUsed(org.usedThisMonth, org.monthlyQuota),
+      resetAt: org.quotaResetAt instanceof Date
+        ? org.quotaResetAt.toISOString()
+        : org.quotaResetAt,
+      mrrEstimate: mrrForPlan(org.billingPlan),
+    });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] billing summary failed:', err.message);
+    res.status(500).json({ error: 'failed to load billing summary' });
+  }
+});
+
 // Expose constants for tests/inspection.
 router.__roleAtLeast = roleAtLeast;
+router.__billing = {
+  PLAN_QUOTAS,
+  PLAN_MRR_USD,
+  quotaForPlan,
+  mrrForPlan,
+  isUpgradablePlan,
+  firstOfNextMonth,
+  computePercentUsed,
+  toBigIntString,
+};
 
 module.exports = router;
