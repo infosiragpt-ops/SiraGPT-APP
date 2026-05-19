@@ -11,91 +11,91 @@ datasource db {
 }
 
 model User {
-  id           String   @id @default(cuid())
-  email        String   @unique
-  name         String
-  password     String
-  avatar       String?
-  googleId     String?  @unique
-  plan         Plan     @default(FREE)
-  isAdmin      Boolean  @default(false)
-  isSuperAdmin Boolean  @default(false)  // Super admin can impersonate any user
-  apiUsage     BigInt      @default(0)
-  monthlyCallLimit BigInt  @default(3)        // NEW: counts number of generate calls / month
-  monthlyLimit BigInt      @default(1000) 
-  
+  id               String  @id @default(cuid())
+  email            String  @unique
+  name             String
+  password         String
+  avatar           String?
+  googleId         String? @unique
+  plan             Plan    @default(FREE)
+  isAdmin          Boolean @default(false)
+  isSuperAdmin     Boolean @default(false) // Super admin can impersonate any user
+  apiUsage         BigInt  @default(0)
+  monthlyCallLimit BigInt  @default(3) // NEW: counts number of generate calls / month
+  monthlyLimit     BigInt  @default(1000)
+
   // Gmail Integration
-  gmailTokens  String?  // Store encrypted Gmail OAuth tokens as JSON
-  
+  gmailTokens String? // Store encrypted Gmail OAuth tokens as JSON
+
   // Google Services Integration (Calendar & Drive)
-  googleServicesTokens String?  // Store encrypted Google OAuth tokens for Calendar & Drive as JSON
+  googleServicesTokens String? // Store encrypted Google OAuth tokens for Calendar & Drive as JSON
 
   // Spotify Integration
   spotifyTokens String? // Store encrypted Spotify OAuth tokens as JSON
-  
+
   // Stripe Integration Fields
-  stripeCustomerId     String?  @unique
-  stripeSubscriptionId String?  @unique
-  subscriptionStatus   String?  // active, inactive, canceled, past_due
+  stripeCustomerId     String?   @unique
+  stripeSubscriptionId String?   @unique
+  subscriptionStatus   String? // active, inactive, canceled, past_due
   subscriptionEndDate  DateTime?
 
   // Personalization — injected into the master system prompt per turn so
   // every LLM call hears the user's voice (not just their chat history).
-  locale              String?  // ISO 639-1, e.g. "es", "en". Null → auto-detect from message.
-  preferredTone       String?  // e.g. "casual", "formal", "technical", "pedagogical"
-  customInstructions  String?  @db.Text  // free-form "what should the assistant know about you"
+  locale             String? // ISO 639-1, e.g. "es", "en". Null → auto-detect from message.
+  preferredTone      String? // e.g. "casual", "formal", "technical", "pedagogical"
+  customInstructions String? @db.Text // free-form "what should the assistant know about you"
 
   // Flexible settings bag — stores the full settings tree from /settings
   // (theme, accent, density, font size, notification prefs, app toggles,
   // etc.). JSON lets us evolve the shape without migrations. Controls
   // that need to be queryable (locale, tone) live in their own columns.
-  settings            Json?
+  settings Json?
 
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // Relations
-  chats     Chat[]
-  payments  Payment[]
-  apiUsages ApiUsage[]
-  sessions  Session[]
-  files     File[]
-  createdGpts CustomGpt[]
-  projects    Project[]
-  designs     DesignProject[]
-  scheduledPosts ScheduledPost[]
-  socialConnections SocialConnection[]
+  chats               Chat[]
+  payments            Payment[]
+  apiUsages           ApiUsage[]
+  sessions            Session[]
+  files               File[]
+  createdGpts         CustomGpt[]
+  projects            Project[]
+  designs             DesignProject[]
+  scheduledPosts      ScheduledPost[]
+  socialConnections   SocialConnection[]
   searchBrainSettings SearchBrainSettings?
-  usageAlerts UsageAlert[]
-  notifications Notification[]
-  subscriptionEvents SubscriptionEvent[]
-  agentTasks AgentTask[]
-  generatedArtifacts GeneratedArtifact[]
-  documentAnalyses DocumentAnalysis[]
+  usageAlerts         UsageAlert[]
+  notifications       Notification[]
+  subscriptionEvents  SubscriptionEvent[]
+  agentTasks          AgentTask[]
+  generatedArtifacts  GeneratedArtifact[]
+  documentAnalyses    DocumentAnalysis[]
 
   @@map("users")
 }
 
 model AiModel {
-  id          String   @id @default(cuid())
-  name        String   @unique
+  id          String    @id @default(cuid())
+  name        String    @unique
   displayName String
   provider    String
   description String?
   apiKey      String?
-  type        ModelType    @default(TEXT) // <-- NAYA: Model ki type (TEXT/IMAGE)
-  icon        String? 
-  isActive    Boolean  @default(true)
-  
+  type        ModelType @default(TEXT) // <-- NAYA: Model ki type (TEXT/IMAGE)
+  icon        String?
+  isActive    Boolean   @default(true)
+
   // Auto-sync tracking fields
-  lastSynced   DateTime?
-  syncSource   String?   @default("manual") // "api", "manual", "scheduled"
-  contextLength Int?     // Model's context window size
-  pricing      Json?     // Provider pricing information
-  tags         String[]  // Model tags/categories
-  
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  lastSynced    DateTime?
+  syncSource    String?   @default("manual") // "api", "manual", "scheduled"
+  contextLength Int? // Model's context window size
+  pricing       Json? // Provider pricing information
+  tags          String[] // Model tags/categories
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@map("ai_models")
 }
@@ -109,24 +109,24 @@ model AiModel {
 // `apiKey` is stored as-is for MVP — a future migration will swap
 // the column for an envelope-encrypted blob keyed by a master KEK.
 model AdminConnection {
-  id          String   @id @default(cuid())
-  url         String   // base URL, e.g. https://api.openai.com/v1
-  providerKey String   // "openai" | "anthropic" | "gemini" | "mistral" | "groq" | "openrouter" | "custom"
+  id            String    @id @default(cuid())
+  url           String // base URL, e.g. https://api.openai.com/v1
+  providerKey   String // "openai" | "anthropic" | "gemini" | "mistral" | "groq" | "openrouter" | "custom"
   providerLabel String? // human label, e.g. "OpenAI API"
-  apiKey      String?  // bearer token; null = no auth (e.g. local Ollama)
-  authType    String   @default("Bearer") // "Bearer" | "None" | "Custom"
-  apiType     String   @default("chat_completions") // "chat_completions" | "responses" | "embeddings"
-  headers     Json?    // optional extra request headers
-  prefixId    String?  // model name prefix for namespacing
-  modelIds    String[] // empty array = include all from /models endpoint
-  tags        String[]
-  enabled     Boolean  @default(true)
+  apiKey        String? // bearer token; null = no auth (e.g. local Ollama)
+  authType      String    @default("Bearer") // "Bearer" | "None" | "Custom"
+  apiType       String    @default("chat_completions") // "chat_completions" | "responses" | "embeddings"
+  headers       Json? // optional extra request headers
+  prefixId      String? // model name prefix for namespacing
+  modelIds      String[] // empty array = include all from /models endpoint
+  tags          String[]
+  enabled       Boolean   @default(true)
   // Per-connection sync status (last list-models call)
-  lastSyncedAt DateTime?
-  lastSyncOk   Boolean  @default(false)
+  lastSyncedAt  DateTime?
+  lastSyncOk    Boolean   @default(false)
   lastSyncError String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   @@index([providerKey])
   @@index([enabled])
@@ -142,6 +142,8 @@ model Session {
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@index([userId])
+  @@index([expiresAt])
   @@map("sessions")
 }
 
@@ -153,9 +155,8 @@ model Chat {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-
-  isShared   Boolean   @default(false)
-  shareId    String?   @unique
+  isShared Boolean @default(false)
+  shareId  String? @unique
 
   // Lifecycle flags driven from the Settings → Data controls section.
   // `isArchived` hides the chat from the main list without deleting it;
@@ -170,17 +171,17 @@ model Chat {
   // the model's default language. ISO 639-1 (es, en, pt, fr, …).
   preferredResponseLanguage String?
 
-  googleCalendarContext Json?      // NEW: Store recent Google Calendar event IDs for context
+  googleCalendarContext Json? // NEW: Store recent Google Calendar event IDs for context
 
   // Word Connector Integration
-  isWordConnectorChat Boolean @default(false)  // Track if this chat is for Word Connector
-  wordContent         String? @db.Text         // Store the full Word document HTML content
+  isWordConnectorChat Boolean @default(false) // Track if this chat is for Word Connector
+  wordContent         String? @db.Text // Store the full Word document HTML content
 
   // Excel Connector Integration
   isExcelConnectorChat Boolean @default(false) // Track if this chat is for Excel Connector
-  excelContent         Json?                   // Store the workbook JSON (Syncfusion openFromJson compatible)
+  excelContent         Json? // Store the workbook JSON (Syncfusion openFromJson compatible)
 
-// GPT Integration
+  // GPT Integration
   customGptId String?
   customGpt   CustomGpt? @relation(fields: [customGptId], references: [id], onDelete: SetNull)
 
@@ -188,17 +189,19 @@ model Chat {
   // injects the project's instructions + attached file contents into
   // the system prompt so a chat inside a project answers with that
   // context baked in.
-  projectId   String?
-  project     Project?   @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
 
   // Relations
-  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  messages Message[]
-  sharedMessages MessageShare[] @relation("SharedMessages")
-  agentTasks AgentTask[]
+  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages           Message[]
+  sharedMessages     MessageShare[]      @relation("SharedMessages")
+  agentTasks         AgentTask[]
   generatedArtifacts GeneratedArtifact[]
 
   @@index([userId, updatedAt])
+  @@index([customGptId])
+  @@index([projectId])
   @@map("chats")
 }
 
@@ -209,12 +212,12 @@ model Message {
   content   String      @db.Text
   tokens    BigInt?
   timestamp DateTime    @default(now())
-  files     Json?       // Store file references
-  metadata  Json?       // Store message metadata (like Gmail connection requirements)
-  feedback  String? 
+  files     Json? // Store file references
+  metadata  Json? // Store message metadata (like Gmail connection requirements)
+  feedback  String?
 
   // Relations
-  chat Chat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  chat               Chat                @relation(fields: [chatId], references: [id], onDelete: Cascade)
   generatedArtifacts GeneratedArtifact[]
 
   @@index([chatId, timestamp])
@@ -222,29 +225,30 @@ model Message {
 }
 
 model AgentTask {
-  id             String   @id @default(cuid())
+  id             String    @id @default(cuid())
   userId         String
   chatId         String?
-  jobId          String?  @unique
-  status         String   @default("queued")
-  goal           String   @db.Text
+  jobId          String?   @unique
+  status         String    @default("queued")
+  goal           String    @db.Text
   model          String?
   traceId        String?
   documentPolicy Json?
   state          Json?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
   completedAt    DateTime?
   cancelledAt    DateTime?
   failedAt       DateTime?
 
-  user      User @relation(fields: [userId], references: [id], onDelete: Cascade)
-  chat      Chat? @relation(fields: [chatId], references: [id], onDelete: SetNull)
+  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chat      Chat?               @relation(fields: [chatId], references: [id], onDelete: SetNull)
   events    AgentTaskEvent[]
   artifacts GeneratedArtifact[]
 
   @@index([userId, updatedAt])
   @@index([status, updatedAt])
+  @@index([chatId])
   @@map("agent_tasks")
 }
 
@@ -278,10 +282,10 @@ model GeneratedArtifact {
   validation  Json?
   createdAt   DateTime @default(now())
 
-  user    User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user    User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   task    AgentTask? @relation(fields: [taskId], references: [id], onDelete: SetNull)
-  chat    Chat? @relation(fields: [chatId], references: [id], onDelete: SetNull)
-  message Message? @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  chat    Chat?      @relation(fields: [chatId], references: [id], onDelete: SetNull)
+  message Message?   @relation(fields: [messageId], references: [id], onDelete: SetNull)
 
   @@index([userId, createdAt])
   @@index([taskId, createdAt])
@@ -289,30 +293,32 @@ model GeneratedArtifact {
 }
 
 model MessageShare {
-  id                  String   @id @default(cuid())
-  messageId           String   // The original message that was shared
-  chatId              String   // The chat this message belongs to
-  userMessageId       String   // The user message in the pair
-  assistantMessageId  String   // The assistant message in the pair
-  sharedAt            DateTime @default(now())
+  id                 String   @id @default(cuid())
+  messageId          String // The original message that was shared
+  chatId             String // The chat this message belongs to
+  userMessageId      String // The user message in the pair
+  assistantMessageId String // The assistant message in the pair
+  sharedAt           DateTime @default(now())
 
   // Relations
   chat Chat @relation("SharedMessages", fields: [chatId], references: [id], onDelete: Cascade)
 
+  @@index([messageId])
+  @@index([chatId])
   @@map("message_shares")
 }
 
 model File {
-  id          String   @id @default(cuid())
-  userId      String
-  filename    String
-  originalName String
-  mimeType    String
-  size        Int
-  path        String
-  extractedText String? @db.Text
-  openaiFileId String? // OpenAI Files API ID
-  createdAt   DateTime @default(now())
+  id            String   @id @default(cuid())
+  userId        String
+  filename      String
+  originalName  String
+  mimeType      String
+  size          Int
+  path          String
+  extractedText String?  @db.Text
+  openaiFileId  String? // OpenAI Files API ID
+  createdAt     DateTime @default(now())
 
   // Processing state machine — written by the upload pipeline and the
   // RAG indexer. Stages, in order: uploaded → validating → extracting
@@ -321,55 +327,57 @@ model File {
   // surfaces the current stage / error in the attachment chip so the
   // chat never sits on a silent spinner when the pipeline stalls.
   // Nullable to keep legacy rows queryable without a backfill.
-  processingStage     String?
-  processingError     String?
-  processingStageAt   DateTime?
+  processingStage   String?
+  processingError   String?
+  processingStageAt DateTime?
 
   // Relations
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   documentAnalysis DocumentAnalysis?
-  documentChunks DocumentChunk[]
-  documentTables DocumentTable[]
-  documentNodes  DocumentNode[]
+  documentChunks   DocumentChunk[]
+  documentTables   DocumentTable[]
+  documentNodes    DocumentNode[]
 
   customGptId String?
-  customGpt   CustomGpt? @relation("GptKnowledgeFiles", fields: [customGptId], references: [id],onDelete: SetNull)
+  customGpt   CustomGpt? @relation("GptKnowledgeFiles", fields: [customGptId], references: [id], onDelete: SetNull)
 
   // Files attached to a Project. Same pattern as GPT knowledge files:
   // a File can belong to a Project (its extractedText is injected into
   // chats that run inside that project) or stand alone (uploaded to a
   // regular chat). SetNull on delete preserves the File row if the
   // project is removed — the user can reattach it elsewhere.
-  projectId   String?
-  project     Project?   @relation("ProjectFiles", fields: [projectId], references: [id], onDelete: SetNull)
+  projectId String?
+  project   Project? @relation("ProjectFiles", fields: [projectId], references: [id], onDelete: SetNull)
 
   @@index([userId, createdAt])
+  @@index([customGptId])
+  @@index([projectId])
   @@map("files")
 }
 
 model DocumentAnalysis {
-  id          String   @id @default(cuid())
-  userId      String
-  fileId      String   @unique
-  status      String   @default("pending")
-  language    String?
-  mimeType    String?
-  pageCount   Int?
-  sheetCount  Int?
-  slideCount  Int?
-  charCount   Int      @default(0)
-  chunkCount  Int      @default(0)
-  tableCount  Int      @default(0)
-  summary     String?  @db.Text
+  id           String   @id @default(cuid())
+  userId       String
+  fileId       String   @unique
+  status       String   @default("pending")
+  language     String?
+  mimeType     String?
+  pageCount    Int?
+  sheetCount   Int?
+  slideCount   Int?
+  charCount    Int      @default(0)
+  chunkCount   Int      @default(0)
+  tableCount   Int      @default(0)
+  summary      String?  @db.Text
   textCoverage Json?
-  ocr         Json?
-  warnings    Json?
-  metadata    Json?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  ocr          Json?
+  warnings     Json?
+  metadata     Json?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
-  file   File @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  user   User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  file   File            @relation(fields: [fileId], references: [id], onDelete: Cascade)
   chunks DocumentChunk[]
   tables DocumentTable[]
   nodes  DocumentNode[]
@@ -433,19 +441,19 @@ model DocumentTable {
 // services/rag/hierarchical-chunker.js for queries that need
 // either pinpoint recall or whole-document overview.
 model DocumentNode {
-  id          String   @id
-  fileId      String
-  analysisId  String?
-  parentId    String?
-  level       Int
-  role        String   // 'root' | 'section' | 'paragraph' | …
-  heading     String?
-  text        String   @default("") @db.Text
-  summary     String   @default("") @db.Text
-  embedding   Json?    // float[] stored as JSON for portability
-  metadata    Json?
-  ordinal     Int      @default(0)
-  createdAt   DateTime @default(now())
+  id         String   @id
+  fileId     String
+  analysisId String?
+  parentId   String?
+  level      Int
+  role       String // 'root' | 'section' | 'paragraph' | …
+  heading    String?
+  text       String   @default("") @db.Text
+  summary    String   @default("") @db.Text
+  embedding  Json? // float[] stored as JSON for portability
+  metadata   Json?
+  ordinal    Int      @default(0)
+  createdAt  DateTime @default(now())
 
   file     File              @relation(fields: [fileId], references: [id], onDelete: Cascade)
   analysis DocumentAnalysis? @relation(fields: [analysisId], references: [id], onDelete: SetNull)
@@ -460,28 +468,30 @@ model DocumentNode {
 }
 
 model Payment {
-  id          String        @id @default(cuid())
-  userId      String
-  amount      Float
-  currency    String        @default("USD")
-  status      PaymentStatus @default(PENDING)
-  plan        Plan
-  provider    PaymentProvider
-  providerId  String?       // External payment ID (Stripe session ID, PayPal order ID, etc.)
-  
+  id         String          @id @default(cuid())
+  userId     String
+  amount     Float
+  currency   String          @default("USD")
+  status     PaymentStatus   @default(PENDING)
+  plan       Plan
+  provider   PaymentProvider
+  providerId String? // External payment ID (Stripe session ID, PayPal order ID, etc.)
+
   // Stripe specific fields
-  stripeSessionId      String?  @unique
+  stripeSessionId      String? @unique
   stripeSubscriptionId String?
   stripeCustomerId     String?
   stripePriceId        String?
-  
-  metadata    Json?
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+
+  metadata  Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // Relations
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
   @@map("payments")
 }
 
@@ -496,6 +506,8 @@ model ApiUsage {
   // Relations
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@index([userId, timestamp])
+  @@index([model, timestamp])
   @@map("api_usage")
 }
 
@@ -506,6 +518,7 @@ model SystemSettings {
 
   @@map("system_settings")
 }
+
 enum ProviderType {
   OpenAI
   Gemini
@@ -514,6 +527,7 @@ enum ProviderType {
   Groq
   Custom // Mustaqbil ke liye
 }
+
 enum ModelType {
   TEXT
   IMAGE
@@ -547,49 +561,55 @@ enum PaymentProvider {
 model UsageAlert {
   id        String   @id @default(cuid())
   userId    String
-  alertType String   // 'api_usage' | 'call_usage'
-  threshold Float    // 0.8, 0.9, 1.0
+  alertType String // 'api_usage' | 'call_usage'
+  threshold Float // 0.8, 0.9, 1.0
   sentAt    DateTime @default(now())
-  
+
   // Relations
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-  
+
+  @@index([userId, sentAt])
   @@map("usage_alerts")
 }
 
 model Notification {
-  id       String   @id @default(cuid())
-  userId   String
-  type     String   // 'usage_warning', 'payment_failed', 'subscription_ending'
-  title    String
-  message  String   @db.Text
-  severity String   // 'info', 'warning', 'critical'
-  read     Boolean  @default(false)
-  metadata Json?    // Additional data
-  createdAt DateTime @default(now())
+  id        String    @id @default(cuid())
+  userId    String
+  type      String // 'usage_warning', 'payment_failed', 'subscription_ending'
+  title     String
+  message   String    @db.Text
+  severity  String // 'info', 'warning', 'critical'
+  read      Boolean   @default(false)
+  metadata  Json? // Additional data
+  createdAt DateTime  @default(now())
   readAt    DateTime?
-  
+
   // Relations
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-  
+
+  @@index([userId, createdAt])
+  @@index([userId, read])
   @@map("notifications")
 }
 
 model SubscriptionEvent {
-  id              String   @id @default(cuid())
-  userId          String
-  eventType       String   // 'created', 'updated', 'canceled', 'reactivated'
-  previousPlan    String?
-  newPlan         String?
-  eventData       Json?    // Store full event data
-  stripeEventId   String?  @unique
-  processedAt     DateTime @default(now())
-  
+  id            String   @id @default(cuid())
+  userId        String
+  eventType     String // 'created', 'updated', 'canceled', 'reactivated'
+  previousPlan  String?
+  newPlan       String?
+  eventData     Json? // Store full event data
+  stripeEventId String?  @unique
+  processedAt   DateTime @default(now())
+
   // Relations
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-  
+
+  @@index([userId, processedAt])
+  @@index([eventType, processedAt])
   @@map("subscription_events")
 }
+
 model AnonymousUsage {
   id          String   @id @default(cuid())
   anonId      String   @unique
@@ -609,42 +629,44 @@ enum GptVisibility {
 }
 
 model CustomGpt {
-  id          String      @id @default(cuid())
-  creatorId   String
-  creator     User        @relation(fields: [creatorId], references: [id], onDelete: Cascade)
-  
+  id        String @id @default(cuid())
+  creatorId String
+  creator   User   @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+
   // Basic Info
   name        String
-  description String?     @db.Text
-  iconUrl     String?     
-  
+  description String? @db.Text
+  iconUrl     String?
+
   // Behavior Configuration
-  instructions        String      @db.Text
-  greetingMessage     String?     @db.Text
-  
+  instructions    String  @db.Text
+  greetingMessage String? @db.Text
+
   // Model Parameters
-  modelName           String      @default("gpt-3.5-turbo")
-  temperature         Float       @default(0.7)
-  maxTokens           Int?
+  modelName   String @default("gpt-3.5-turbo")
+  temperature Float  @default(0.7)
+  maxTokens   Int?
 
   // Knowledge Files
-  knowledgeFiles      File[]      @relation("GptKnowledgeFiles")
+  knowledgeFiles File[] @relation("GptKnowledgeFiles")
 
   // 🔹 Add this line (reverse relation for Chat)
-  chats               Chat[]
+  chats Chat[]
 
   // Actions
-  actions             Json?
-  conversationStarters Json?      
+  actions              Json?
+  conversationStarters Json?
 
   // Publishing
-  visibility          GptVisibility @default(PRIVATE)
-  shareId             String      @unique @default(cuid())
-  category            String?
-  isFeatured          Boolean     @default(false)
-  createdAt           DateTime    @default(now())
-  updatedAt           DateTime    @updatedAt
+  visibility GptVisibility @default(PRIVATE)
+  shareId    String        @unique @default(cuid())
+  category   String?
+  isFeatured Boolean       @default(false)
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
 
+  @@index([creatorId, updatedAt])
+  @@index([visibility, isFeatured])
   @@map("custom_gpts")
 }
 
@@ -661,35 +683,35 @@ model CustomGpt {
 // the project via Chat.projectId, files via File.projectId, and the
 // ai.js route reads both and injects them into the system prompt.
 model Project {
-  id          String   @id @default(cuid())
-  userId      String
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   name         String
-  description  String?   @db.Text
-  instructions String?   @db.Text   // Optional custom instructions; may be edited any time.
+  description  String? @db.Text
+  instructions String? @db.Text // Optional custom instructions; may be edited any time.
 
   // Optional star / favourite — powers the "starred first" sort the
   // UI offers alongside recent activity.
-  isStarred    Boolean   @default(false)
+  isStarred Boolean @default(false)
 
   // Read-only share — if non-null, /projects/share/<shareId>
   // renders a public snapshot of the project (name, description,
   // file list) without revealing the owner's chats. Toggled via the
   // "share link" control on the detail page.
-  shareId      String?   @unique
+  shareId String? @unique
 
   // Relations — file bucket + chats created inside this project.
-  files       File[]    @relation("ProjectFiles")
-  chats       Chat[]
-  memories    ProjectMemory[]
-  documents   ProjectDocument[]
+  files     File[]            @relation("ProjectFiles")
+  chats     Chat[]
+  memories  ProjectMemory[]
+  documents ProjectDocument[]
 
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  @@map("projects")
   @@index([userId, updatedAt])
+  @@map("projects")
 }
 
 // Project memory — durable facts the assistant should remember across
@@ -706,11 +728,11 @@ model ProjectMemory {
   projectId    String
   project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
   fact         String   @db.Text
-  sourceChatId String?  // optional pointer to the chat this came from
+  sourceChatId String? // optional pointer to the chat this came from
   createdAt    DateTime @default(now())
 
-  @@map("project_memories")
   @@index([projectId, createdAt])
+  @@map("project_memories")
 }
 
 // Project documents — long-form writing surface for each project.
@@ -725,22 +747,22 @@ model ProjectMemory {
 // they type. File is for PDFs/images the user brings in; this is
 // for prose the user writes.
 model ProjectDocument {
-  id         String   @id @default(cuid())
-  projectId  String
-  project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
-  title      String
-  content    String   @db.Text         // Markdown source of truth
+  title   String
+  content String @db.Text // Markdown source of truth
   // Optional scratchpad for editor-specific state (open/closed sections,
   // cursor position, last-view timestamp) without forcing a schema
   // change every time the editor grows a new affordance.
-  meta       Json?
+  meta    Json?
 
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  @@map("project_documents")
   @@index([projectId, updatedAt])
+  @@map("project_documents")
 }
 
 // Design projects — the siraGPT Design studio. Each row is one
@@ -757,40 +779,40 @@ model ProjectDocument {
 // but the UX the user gets from "last stable version" is just the
 // current `html`.
 model DesignProject {
-  id        String   @id @default(cuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  name      String
+  name     String
   // Creation shape: prototype | slide_deck | template | other.
   // Controls what system prompt is selected in the generator and
   // what container the canvas renders in (slides get a 16:9 stage,
   // prototypes get a responsive frame, etc.).
-  kind      String
+  kind     String
   // Prototype-only: "wireframe" or "high" fidelity. Null for other
   // kinds. The wireframe mode tells the generator to use grey
   // placeholders and system-ui type; high-fidelity gives branded
   // palette + serif display type.
-  fidelity  String?
+  fidelity String?
 
   // Optional user-written speaker notes toggle for slide_deck.
   speakerNotes Boolean? @default(false)
 
   // The current canonical HTML document. May be null before the
   // first generation.
-  html      String?   @db.Text
+  html     String? @db.Text
   // Append-only conversation. Shape: [{role, content, at}]. Kept
   // inline rather than in Message rows because chats in design
   // projects aren't part of the user's regular Chat history — they
   // are artifacts of the design iteration and should live with the
   // design.
-  messages  Json?
+  messages Json?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@map("design_projects")
   @@index([userId, updatedAt])
+  @@map("design_projects")
 }
 
 // ─── Marketing — agente de publicación programada ─────────────────────────
@@ -802,37 +824,37 @@ model DesignProject {
 // to the networks is a worker's job (out-of-band), so `status` moves
 // draft → scheduled → publishing → published | failed.
 model ScheduledPost {
-  id           String   @id @default(cuid())
-  userId       String
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   // The user-provided prompt / idea the agent will post about.
-  prompt       String   @db.Text
+  prompt  String  @db.Text
   // Optional caption shown on the social card. When null the UI
   // derives one from the prompt.
-  caption      String?  @db.Text
+  caption String? @db.Text
 
   // Server-generated image URL. Currently a data: URL or a persisted
   // file path — depending on how we stored the OpenAI result.
-  imageUrl     String?  @db.Text
+  imageUrl   String? @db.Text
   // The image model used (`openai/gpt-5.4-image-2` today).
-  imageModel   String?
+  imageModel String?
 
   // Target platforms as a JSON array of strings:
   //   ["facebook", "instagram", "youtube", "tiktok", "linkedin"]
-  platforms    Json
+  platforms Json
 
   // Absolute publish time in UTC. Null = draft, not yet scheduled.
-  scheduledAt  DateTime?
+  scheduledAt DateTime?
 
   // draft | scheduled | publishing | published | failed | cancelled
-  status       String   @default("draft")
+  status String @default("draft")
 
   // Freeform config (filters the composer exposes — color /
   // orientation / animation / price / extra knobs the frontend may
   // add over time). Kept as JSON so we don't have to migrate every
   // time the product grows a new toggle.
-  config       Json?
+  config Json?
 
   // Reference images the user uploaded so the agent grounds its
   // generation on brand assets. Shape: array of { name, dataUrl,
@@ -844,19 +866,19 @@ model ScheduledPost {
   // "Programación automática" flow share one batchId so the UI can
   // group them ("Serie de 10 posts · 24-29 abril"). Null for
   // one-off posts.
-  batchId      String?
+  batchId String?
 
   // Last worker attempt metadata. Populated by the scheduler when it
   // tries to publish. Useful for the UI's "re-try" button.
-  lastError    String?  @db.Text
-  publishedAt  DateTime?
+  lastError   String?   @db.Text
+  publishedAt DateTime?
 
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  @@map("scheduled_posts")
   @@index([userId, scheduledAt])
   @@index([userId, status])
+  @@map("scheduled_posts")
 }
 
 // ─── Marketing — social-account OAuth connections ─────────────────────────
@@ -870,28 +892,28 @@ model ScheduledPost {
 // Tokens are stored raw for now; wire up encryption when the rest of
 // the app (Gmail / Spotify tokens) gets the same treatment.
 model SocialConnection {
-  id           String   @id @default(cuid())
-  userId       String
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  platform     String   // facebook | instagram | youtube | tiktok | linkedin
-  accountId    String?  // platform-side user id / page id
-  accountName  String?  // handle displayed to the user ("@tu_marca")
-  accessToken  String?  @db.Text
-  refreshToken String?  @db.Text
+  platform     String // facebook | instagram | youtube | tiktok | linkedin
+  accountId    String? // platform-side user id / page id
+  accountName  String? // handle displayed to the user ("@tu_marca")
+  accessToken  String?   @db.Text
+  refreshToken String?   @db.Text
   expiresAt    DateTime?
 
   // Profile snapshot the LLM grounds post generation on:
   //   { name, bio, website, industry, recentPosts: [...] }
-  profile      Json?
-  scopes       Json?    // OAuth scopes granted
+  profile Json?
+  scopes  Json? // OAuth scopes granted
 
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([userId, platform])
-  @@map("social_connections")
   @@index([userId])
+  @@map("social_connections")
 }
 
 model UniversalSearchCache {
@@ -913,35 +935,35 @@ model UniversalSearchCache {
 }
 
 model SearchBrainSettings {
-  id          String   @id @default(cuid())
-  userId      String   @unique
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  region      String   @default("global")
-  mode        String   @default("local")
-  userEmail   String?
-  keys        Json     @default("{}")
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  region    String   @default("global")
+  mode      String   @default("local")
+  userEmail String?
+  keys      Json     @default("{}")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@map("search_brain_settings")
 }
 
 model SchedulerJob {
-  id            String    @id
-  name          String
-  schedule      String
-  enabled       Boolean   @default(true)
-  state         String    @default("idle")
-  nextRunAt     DateTime?
-  lastRunAt     DateTime?
-  lastError     String?
-  runCount      Int       @default(0)
-  successCount  Int       @default(0)
-  failureCount  Int       @default(0)
-  lockedBy      String?
-  lockedUntil   DateTime?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id           String    @id
+  name         String
+  schedule     String
+  enabled      Boolean   @default(true)
+  state        String    @default("idle")
+  nextRunAt    DateTime?
+  lastRunAt    DateTime?
+  lastError    String?
+  runCount     Int       @default(0)
+  successCount Int       @default(0)
+  failureCount Int       @default(0)
+  lockedBy     String?
+  lockedUntil  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
   @@index([nextRunAt])
   @@index([state])
@@ -950,14 +972,14 @@ model SchedulerJob {
 }
 
 model SchedulerRun {
-  runId       String    @id
-  jobId       String
-  startedAt   DateTime
-  finishedAt  DateTime?
-  status      String
-  attempt     Int       @default(0)
-  error       String?
-  durationMs  Int?
+  runId      String    @id
+  jobId      String
+  startedAt  DateTime
+  finishedAt DateTime?
+  status     String
+  attempt    Int       @default(0)
+  error      String?
+  durationMs Int?
 
   @@index([jobId])
   @@index([startedAt])

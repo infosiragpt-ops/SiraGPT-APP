@@ -490,7 +490,7 @@ class ApiClient {
     });
   }
 
-  async editUserMessage(messageId: String, data: any) {
+  async editUserMessage(messageId: string, data: { content: string }) {
     return this.request(`/chats/messages/${messageId}`, {
       method: 'PUT',
       body: JSON.stringify(data),

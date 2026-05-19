@@ -904,20 +904,24 @@ router.post('/save-shared', authenticateToken, async (req, res) => {
         messages.push(assistantMsg);
       }
     } else if (shareType === 'complete' && shareData.chat?.messages) {
-      // For complete chat sharing, add all messages
-      for (const msgData of shareData.chat.messages) {
-        const message = await prisma.message.create({
-          data: {
-            chatId: newChat.id,
-            role: msgData.role,
-            content: msgData.content,
-            files: msgData.files,
-            metadata: msgData.metadata,
-            timestamp: new Date()
-          }
-        });
-        messages.push(message);
+      // For complete chat sharing, batch all messages into a single
+      // createMany roundtrip (previously this was a N+1 per-message
+      // create loop). We preserve original ordering by spacing the
+      // timestamps a millisecond apart so the subsequent findUnique
+      // include returns them in deterministic order.
+      const baseTs = Date.now();
+      const rows = shareData.chat.messages.map((msgData, idx) => ({
+        chatId: newChat.id,
+        role: msgData.role,
+        content: msgData.content,
+        files: msgData.files,
+        metadata: msgData.metadata,
+        timestamp: new Date(baseTs + idx),
+      }));
+      if (rows.length > 0) {
+        await prisma.message.createMany({ data: rows });
       }
+      messages = rows;
     }
 
     // Return the new chat with its messages
