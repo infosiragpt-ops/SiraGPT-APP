@@ -228,6 +228,32 @@ describe('metrics registry — analyzer cache delta', () => {
   });
 });
 
+describe('metrics registry — GDPR export', () => {
+  beforeEach(resetAll);
+
+  test('recordGdprExport writes size + duration + counter', () => {
+    metrics.recordGdprExport({
+      zipBytes: 12_345,
+      durationSeconds: 0.42,
+      redactPII: false,
+    });
+    const txt = metrics.renderText();
+    assert.match(txt, /siragpt_gdpr_exports_total\{redactPII="false"\} 1/);
+    assert.match(txt, /siragpt_gdpr_export_size_bytes_count\{redactPII="false"\} 1/);
+    assert.match(txt, /siragpt_gdpr_export_size_bytes_sum\{redactPII="false"\} 12345/);
+    assert.match(txt, /siragpt_gdpr_export_duration_seconds_count\{redactPII="false"\} 1/);
+  });
+
+  test('recordGdprExport tolerates non-finite values without throwing', () => {
+    assert.doesNotThrow(() =>
+      metrics.recordGdprExport({ zipBytes: NaN, durationSeconds: -1, redactPII: true }),
+    );
+    const txt = metrics.renderText();
+    // Counter still increments (one export attempt was recorded).
+    assert.match(txt, /siragpt_gdpr_exports_total\{redactPII="true"\} 1/);
+  });
+});
+
 describe('metrics registry — coverage gaps', () => {
   beforeEach(resetAll);
 

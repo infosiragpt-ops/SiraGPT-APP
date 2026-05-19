@@ -117,4 +117,50 @@ describe('SearchPanel', () => {
     const firstCall = (globalThis.fetch as any).mock.calls[0]
     expect(firstCall[0]).toMatch(/\/api\/search\?q=paella/)
   })
+
+  it('shows a retry button on error and re-fires the fetch when clicked', async () => {
+    // First call fails, second call succeeds — the retry button should
+    // re-issue the last query without the user retyping it.
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ results: [] }),
+      })
+    globalThis.fetch = fetchMock as any
+
+    render(<SearchPanel />)
+    const input = screen.getByLabelText('Search chats') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'paella' } })
+
+    // Debounce + flush rejection.
+    await act(async () => {
+      vi.advanceTimersByTime(350)
+    })
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    // Error state is on screen with a retry control.
+    expect(screen.getByText(/Error al buscar|boom/i)).toBeInTheDocument()
+    const retry = screen.getByRole('button', { name: /retry search/i })
+    expect(retry).toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    // Click retry → second fetch fires with the same debounced query.
+    await act(async () => {
+      fireEvent.click(retry)
+    })
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    const secondCall = fetchMock.mock.calls[1]
+    expect(secondCall[0]).toMatch(/\/api\/search\?q=paella/)
+  })
 })

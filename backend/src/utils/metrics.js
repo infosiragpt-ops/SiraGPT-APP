@@ -220,6 +220,52 @@ registerHistogram('siragpt_ai_request_duration_seconds', {
   buckets: [0.1, 0.5, 1, 2, 5, 10, 20, 30, 60, 120],
 });
 
+// ── GDPR export metrics (ratchet 45) ─────────────────────────────────
+// Wired from the /api/users/me/export route so we can observe per-user
+// export size, build duration, and total throughput from /metrics.
+registerHistogram('siragpt_gdpr_export_size_bytes', {
+  help: 'GDPR export ZIP size in bytes, labelled by redactPII flag',
+  labels: ['redactPII'],
+  buckets: [
+    1_024, 10_240, 102_400, 1_048_576, 5_242_880, 10_485_760,
+    52_428_800, 104_857_600, 524_288_000,
+  ],
+});
+registerHistogram('siragpt_gdpr_export_duration_seconds', {
+  help: 'GDPR export build + serialisation duration in seconds, labelled by redactPII flag',
+  labels: ['redactPII'],
+  buckets: [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60],
+});
+registerCounter('siragpt_gdpr_exports_total', {
+  help: 'Total GDPR exports successfully built, labelled by redactPII flag',
+  labels: ['redactPII'],
+});
+
+/**
+ * Record a single GDPR export sample from the /api/users/me/export
+ * handler. All arguments are best-effort: non-finite or missing values
+ * are coerced to safe defaults so instrumentation NEVER breaks the
+ * export path.
+ *
+ * @param {object} opts
+ * @param {number} opts.zipBytes
+ * @param {number} opts.durationSeconds
+ * @param {boolean} opts.redactPII
+ */
+function recordGdprExport(opts) {
+  try {
+    const { zipBytes = 0, durationSeconds = 0, redactPII = false } = opts || {};
+    const labels = { redactPII: redactPII ? 'true' : 'false' };
+    const bytes = Number.isFinite(zipBytes) ? Math.max(0, zipBytes) : 0;
+    const dur = Number.isFinite(durationSeconds) ? Math.max(0, durationSeconds) : 0;
+    if (bytes > 0) observe('siragpt_gdpr_export_size_bytes', labels, bytes);
+    if (dur > 0) observe('siragpt_gdpr_export_duration_seconds', labels, dur);
+    counter('siragpt_gdpr_exports_total', labels, 1);
+  } catch {
+    // never throw from instrumentation
+  }
+}
+
 /**
  * Record a single AI streaming usage sample from the /generate
  * stream end handler. All arguments are best-effort: non-finite or
@@ -335,6 +381,7 @@ module.exports = {
   getActiveGuards,
   recordAnalyzerCacheStats,
   recordAIStreamUsage,
+  recordGdprExport,
   refreshProcessMetrics,
   _reset,
   _clearRegistry,

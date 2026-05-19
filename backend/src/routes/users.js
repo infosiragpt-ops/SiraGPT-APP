@@ -781,6 +781,7 @@ router.get('/me/export', authenticateToken, async (req, res) => {
     });
   }
 
+  const exportStartedAt = Date.now();
   try {
     // Pull every row up-front. We keep this synchronous-ish because the
     // archive layout wants a stable index — streaming row-by-row from
@@ -943,6 +944,21 @@ router.get('/me/export', authenticateToken, async (req, res) => {
     // accepted + audited. We don't await — losing a count is preferable
     // to delaying the response.
     void recordQuarterlyExport(prisma, userId);
+
+    // ── Prometheus wiring (ratchet 45) ─────────────────────────
+    // Record export size + duration histograms and total counter.
+    // Defensive require so a missing metrics module never breaks
+    // the export path.
+    try {
+      const metrics = require('../utils/metrics');
+      metrics.recordGdprExport({
+        zipBytes: zipBuf.length,
+        durationSeconds: (Date.now() - exportStartedAt) / 1000,
+        redactPII,
+      });
+    } catch (metricsErr) {
+      console.warn('[users/export] metrics record failed:', metricsErr && metricsErr.message);
+    }
 
     res.end(zipBuf);
   } catch (error) {

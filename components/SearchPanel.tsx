@@ -51,6 +51,7 @@ export function SearchPanel({ onClose, initialQuery = "", endpoint = "/api/searc
   const [status, setStatus] = React.useState<Status>("idle")
   const [results, setResults] = React.useState<SearchHit[]>([])
   const [error, setError] = React.useState<string | null>(null)
+  const [retryNonce, setRetryNonce] = React.useState(0)
   const abortRef = React.useRef<AbortController | null>(null)
 
   // 300ms debounce.
@@ -92,7 +93,13 @@ export function SearchPanel({ onClose, initialQuery = "", endpoint = "/api/searc
       })
 
     return () => ac.abort()
-  }, [debounced, endpoint])
+  }, [debounced, endpoint, retryNonce])
+
+  const handleRetry = React.useCallback(() => {
+    // Re-run the effect by bumping a nonce — keeps the last debounced
+    // query intact so the user doesn't have to retype.
+    setRetryNonce((n) => n + 1)
+  }, [])
 
   const handlePick = React.useCallback(
     (hit: SearchHit) => {
@@ -125,7 +132,17 @@ export function SearchPanel({ onClose, initialQuery = "", endpoint = "/api/searc
         {status === "error" && (
           <div className="flex items-start gap-2 text-sm text-destructive p-4">
             <AlertCircle className="h-4 w-4 mt-0.5" />
-            <span>{error || "Error al buscar"}</span>
+            <div className="flex flex-col gap-2">
+              <span>{error || "Error al buscar"}</span>
+              <button
+                type="button"
+                onClick={handleRetry}
+                className="self-start text-xs underline hover:no-underline focus:outline-none"
+                aria-label="Retry search"
+              >
+                Reintentar
+              </button>
+            </div>
           </div>
         )}
         {status === "empty" && (
