@@ -5,6 +5,20 @@ const { writeAuditLog } = require('../utils/audit-log');
 const { createQueryDedup } = require('../utils/query-dedup');
 const { createWriteBehindCache } = require('../services/write-behind-cache');
 const apiKeysService = require('../services/api-keys-service');
+// Ratchet 45 — lazy-loaded so the auth module stays cheap to import in
+// environments (tests) that don't exercise the API-key path.
+let _enforceApiKeyRateLimitMw = null;
+function _getApiKeyRateLimitMw() {
+  if (_enforceApiKeyRateLimitMw) return _enforceApiKeyRateLimitMw;
+  try {
+    // eslint-disable-next-line global-require
+    const { enforceApiKeyRateLimit } = require('./enforce-api-key-rate-limit');
+    _enforceApiKeyRateLimitMw = enforceApiKeyRateLimit();
+  } catch (_err) {
+    _enforceApiKeyRateLimitMw = false;
+  }
+  return _enforceApiKeyRateLimitMw;
+}
 
 // Hot-path read coalescing: two requests for the same session token
 // within 50ms share the Prisma lookup. Reduces DB load when a SPA
@@ -73,6 +87,11 @@ async function tryAuthenticateApiKey(req, res, rawToken) {
       prefix: row.prefix,
       scopes: Array.isArray(row.scopes) ? [...row.scopes] : [],
       organizationId: row.organizationId || null,
+      // Ratchet 45 — per-key override of the plan-derived default RPM.
+      // Null means "use the plan default" (resolved by enforce-api-key-rate-limit).
+      rateLimitPerMinute: Number.isFinite(row.rateLimitPerMinute) && row.rateLimitPerMinute > 0
+        ? row.rateLimitPerMinute
+        : null,
     };
     if (row.organization) {
       req.organization = row.organization;
@@ -107,7 +126,15 @@ const authenticateToken = async (req, res, next) => {
     // sends the error response itself and we must not fall through.
     const handledByApiKey = await tryAuthenticateApiKey(req, res, token);
     if (handledByApiKey) {
-      if (req.user) return next();
+      if (req.user) {
+        // Ratchet 45 — enforce per-key sliding-window rate limit + sampled
+        // api_key_used audit on every authenticated API-key request. The
+        // middleware sends 429 on cap exceeded and fails open on store
+        // errors. Skipped silently if the module fails to load.
+        const rlMw = _getApiKeyRateLimitMw();
+        if (rlMw) return rlMw(req, res, next);
+        return next();
+      }
       return; // response already sent
     }
 
