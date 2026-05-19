@@ -58,6 +58,15 @@ const COST_FLUSH_SCHEDULE = process.env.SYSTEM_CRON_COST_FLUSH_SCHEDULE || '0 5 
 // SystemSettings `cost_archive:YYYY-MM-<userId>` blobs and delete the
 // daily rows. Default 05:30 UTC so it runs right after the daily flush.
 const COST_ARCHIVE_SCHEDULE = process.env.SYSTEM_CRON_COST_ARCHIVE_SCHEDULE || '30 5 * * *';
+// Ratchet 45 (Task 1) — clear elapsed rotate-secret grace windows on
+// WebhookEndpoint rows. Default 05:15 UTC, after the audit archive
+// (04:00) and cost flush (05:00) so we don't contend with the heavier
+// passes. Cheap one-statement updateMany.
+const WEBHOOK_SECRET_GRACE_SCHEDULE = process.env.SYSTEM_CRON_WEBHOOK_SECRET_GRACE_SCHEDULE || '15 5 * * *';
+// Ratchet 45 (Task 2) — hard-delete ApiKey rows whose lastUsedAt is
+// older than the inactivity threshold (default 180d). Default 05:45
+// UTC, right after the cost-archive (05:30).
+const INACTIVE_API_KEY_SWEEP_SCHEDULE = process.env.SYSTEM_CRON_INACTIVE_API_KEY_SWEEP_SCHEDULE || '45 5 * * *';
 
 let _state = null;
 
@@ -400,6 +409,74 @@ function start(opts = {}) {
     { scheduled: false, timezone: 'UTC' },
   );
   tasks.push({ name: 'cost-tracker-archive', schedule: COST_ARCHIVE_SCHEDULE, task: costArchiveTask, meta: costArchiveMeta });
+
+  // Ratchet 45 (Task 1) — WebhookEndpoint grace-secret cleanup.
+  let webhookSecretGraceRunning = false;
+  const webhookSecretGraceMeta = {};
+  const webhookSecretGraceTask = cron.schedule(
+    WEBHOOK_SECRET_GRACE_SCHEDULE,
+    async () => {
+      if (webhookSecretGraceRunning) {
+        logger.warn?.('[system-cron] skip sweep-webhook-secret-grace — previous run still active');
+        return;
+      }
+      webhookSecretGraceRunning = true;
+      const finish = recordRun(webhookSecretGraceMeta);
+      let runErr = null;
+      try {
+        // eslint-disable-next-line global-require
+        const job = require('./sweep-webhook-secret-grace');
+        const runWithRetry = wrapWithRetry(() => job.run({ logger }), {
+          onRetry: ({ attempt, delayMs, reason }) =>
+            logger.warn?.(`[system-cron] sweep-webhook-secret-grace retry ${attempt} in ${delayMs}ms (${reason})`),
+        });
+        const res = await runWithRetry();
+        logger.info?.(`[system-cron] sweep-webhook-secret-grace done: ${JSON.stringify(res)}`);
+      } catch (err) {
+        runErr = err;
+        logger.error?.(`[system-cron] sweep-webhook-secret-grace failed: ${err && err.message}`);
+      } finally {
+        webhookSecretGraceRunning = false;
+        finish(runErr);
+      }
+    },
+    { scheduled: false, timezone: 'UTC' },
+  );
+  tasks.push({ name: 'sweep-webhook-secret-grace', schedule: WEBHOOK_SECRET_GRACE_SCHEDULE, task: webhookSecretGraceTask, meta: webhookSecretGraceMeta });
+
+  // Ratchet 45 (Task 2) — inactive ApiKey cleanup.
+  let inactiveApiKeySweepRunning = false;
+  const inactiveApiKeySweepMeta = {};
+  const inactiveApiKeySweepTask = cron.schedule(
+    INACTIVE_API_KEY_SWEEP_SCHEDULE,
+    async () => {
+      if (inactiveApiKeySweepRunning) {
+        logger.warn?.('[system-cron] skip sweep-inactive-api-keys — previous run still active');
+        return;
+      }
+      inactiveApiKeySweepRunning = true;
+      const finish = recordRun(inactiveApiKeySweepMeta);
+      let runErr = null;
+      try {
+        // eslint-disable-next-line global-require
+        const job = require('./sweep-inactive-api-keys');
+        const runWithRetry = wrapWithRetry(() => job.run({ logger }), {
+          onRetry: ({ attempt, delayMs, reason }) =>
+            logger.warn?.(`[system-cron] sweep-inactive-api-keys retry ${attempt} in ${delayMs}ms (${reason})`),
+        });
+        const res = await runWithRetry();
+        logger.info?.(`[system-cron] sweep-inactive-api-keys done: ${JSON.stringify(res)}`);
+      } catch (err) {
+        runErr = err;
+        logger.error?.(`[system-cron] sweep-inactive-api-keys failed: ${err && err.message}`);
+      } finally {
+        inactiveApiKeySweepRunning = false;
+        finish(runErr);
+      }
+    },
+    { scheduled: false, timezone: 'UTC' },
+  );
+  tasks.push({ name: 'sweep-inactive-api-keys', schedule: INACTIVE_API_KEY_SWEEP_SCHEDULE, task: inactiveApiKeySweepTask, meta: inactiveApiKeySweepMeta });
 
   for (const t of tasks) {
     try { t.task.start(); } catch (err) {

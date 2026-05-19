@@ -97,8 +97,11 @@ describe('system-cron', () => {
         'hard-delete-deleted-users',
         'prune-api-usage',
         'scrub-deleted-user-content',
+        'sweep-expired-api-keys',
         'sweep-expired-sessions',
         'sweep-expired-verification-tokens',
+        'sweep-inactive-api-keys',
+        'sweep-webhook-secret-grace',
       ]);
       // Default schedules — scrub @ 02:30 UTC, hard-delete @ 03:00 UTC,
       // prune-api-usage @ 03:30 UTC, archive-audit-logs @ 04:00 UTC,
