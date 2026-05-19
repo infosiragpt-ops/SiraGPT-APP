@@ -4,6 +4,62 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and improvement cycles follow a sequential number with the date the work landed.
 
+## [0.2.3 / backend 1.1.3] — Cycles 61-70 milestone — 2026-05-19
+
+Seventh-decade marker. Patch bumps only (root `0.2.2 → 0.2.3`, backend
+`1.1.2 → 1.1.3`) — cycles 61-70 were lifecycle hygiene, multi-tenant
+scoping, and OTel depth with no public API breaks. See
+`docs/cycles/CYCLE_70.md` for the milestone narrative.
+
+### Added
+- **Cycle 70 — milestone consolidation**: `docs/cycles/CYCLE_70.md`
+  marker doc + CHANGELOG cycles 61-70 sweep + version bump to
+  `0.2.3 / 1.1.3`.
+- **Cycle 69 — HTTP span middleware + RPS wiring**: central OTel HTTP
+  span middleware wrapping every `/api/*` route with route template,
+  status, duration; per-org RPS gauge wired from middleware.
+- **Cycle 68 — OTel spans + per-org RPS**: extra spans across AI
+  request lifecycle; per-org requests-per-second gauge exported on
+  `/metrics`.
+- **Cycle 67 — SSE resume + prompt-injection detector**: resumable SSE
+  with `Last-Event-ID` replay window; lightweight prompt-injection
+  heuristic detector wired into chat ingress.
+- **Cycle 66 — byOrg audit filter + session list/revoke**: audit query
+  `byOrg` filter with clearance check; admin endpoints to list active
+  sessions per user and revoke individual session tokens.
+- **Cycle 65 — org-scoped webhooks + cost groupBy=org**: webhook
+  signing keys + delivery bound to org; cost endpoint
+  `groupBy=org` aggregation.
+- **Cycle 64 — cron health probe + onboarding cache**:
+  `/api/admin/cron/health` last-run + status per scheduled job;
+  onboarding cache layer for first-load cold paths.
+- **Cycle 63 — AuditLog actorId index + featureFlags**: composite
+  index on `(actorId, createdAt desc)`; feature flag service with
+  per-org overrides and TTL cache.
+- **Cycle 62 — hourly session sweep**: sweep job collapsing idle
+  sessions and evicting expired records from session-manager.
+- **Cycle 61 — ApiUsage prune 90d job**: scheduled cron deleting
+  ApiUsage rows older than 90 days (configurable via
+  `SIRAGPT_APIUSAGE_TTL_DAYS`).
+
+### Changed
+- Lint ratchet held at `--max-warnings 45` across cycles 61-70.
+- Root `package.json` version `0.2.2 → 0.2.3`.
+- Backend `package.json` version `1.1.2 → 1.1.3`.
+
+### Fixed
+- Stability fixes carried in feature cycles. See individual cycle entries
+  for specifics (no standalone fix-only cycle in this band).
+
+### Security
+- Prompt-injection detector wired into chat ingress (cycle 67).
+- byOrg audit filter with clearance check (cycle 66).
+- Org-scoped webhook signing keys + delivery policies (cycle 65).
+- Session list + revoke admin endpoints (cycle 66).
+
+### Removed
+- None in cycles 61-70.
+
 ## [0.2.2 / backend 1.1.2] — Cycles 51-60 milestone — 2026-05-19
 
 Sixth-decade marker. Patch bumps only (root `0.2.1 → 0.2.2`, backend
