@@ -318,6 +318,11 @@ model Bookmark {
   userId    String
   messageId String
   note      String?
+  // Optional grouping label so the UI can render bookmarks into
+  // user-defined folders ("Prompts", "Bugs", …). Free-form string —
+  // no FK to a folders table, so renaming is just an UPDATE and
+  // there's no orphan cleanup. NULL means "uncategorised".
+  folder    String?
   createdAt DateTime @default(now())
 
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -325,6 +330,7 @@ model Bookmark {
 
   @@unique([userId, messageId])
   @@index([userId, createdAt])
+  @@index([userId, folder])
   @@map("bookmarks")
 }
 

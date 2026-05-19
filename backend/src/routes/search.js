@@ -536,13 +536,45 @@ router.get('/', authenticateToken, async (req, res) => {
     ? String(req.query.lang).toLowerCase()
     : 'spanish';
 
+  // Optional filters. Everything is whitelisted/parsed before it
+  // reaches SQL so a hostile querystring can't smuggle expressions
+  // through the $queryRawUnsafe call below — values are still bound
+  // as parameters, not concatenated. Invalid values are rejected with
+  // 400 rather than silently ignored so a typo doesn't return the
+  // unfiltered result set.
+  const chatId = typeof req.query.chatId === 'string' && req.query.chatId.trim().length > 0
+    ? req.query.chatId.trim()
+    : null;
+  const model = typeof req.query.model === 'string' && req.query.model.trim().length > 0
+    ? req.query.model.trim().slice(0, 200)
+    : null;
+
+  function parseDate(raw, field) {
+    if (raw === undefined || raw === null || raw === '') return { ok: true, value: null };
+    const s = String(raw);
+    const d = new Date(s);
+    if (Number.isNaN(d.getTime())) return { ok: false, error: `invalid ${field} date` };
+    return { ok: true, value: d };
+  }
+  const fromParse = parseDate(req.query.from, 'from');
+  const toParse = parseDate(req.query.to, 'to');
+  if (!fromParse.ok) return res.status(400).json({ error: fromParse.error });
+  if (!toParse.ok) return res.status(400).json({ error: toParse.error });
+  const fromDate = fromParse.value;
+  const toDate = toParse.value;
+
   // websearch_to_tsquery handles user-typed input (quoted phrases,
   // OR, NOT) without throwing on stray punctuation the way
   // to_tsquery would. headline() builds a short snippet with the
   // match highlighted.
   try {
-    const rows = await prisma.$queryRawUnsafe(
-      `
+    // Build the WHERE clause incrementally so absent filters never
+    // become "= NULL" no-ops. Param indices stay 1-based and tracked
+    // by `params.length`; the IS NOT NULL guard on the model branch
+    // prevents picking up legacy rows where metadata was stored as a
+    // JSON string with no model key.
+    const params = [lang, rawQ, userId];
+    let sql = `
       SELECT m."id"                                          AS "messageId",
              m."chatId"                                      AS "chatId",
              c."title"                                       AS "chatTitle",
@@ -558,15 +590,34 @@ router.get('/', authenticateToken, async (req, res) => {
        WHERE c."userId"    = $3
          AND c."deletedAt" IS NULL
          AND m."deletedAt" IS NULL
-         AND m."content_tsv" @@ websearch_to_tsquery($1::regconfig, $2)
-       ORDER BY "rank" DESC, m."timestamp" DESC
-       LIMIT $4
-      `,
-      lang,
-      rawQ,
-      userId,
-      limit,
-    );
+         AND m."content_tsv" @@ websearch_to_tsquery($1::regconfig, $2)`;
+
+    if (chatId) {
+      params.push(chatId);
+      sql += `\n         AND m."chatId" = $${params.length}`;
+    }
+    if (fromDate) {
+      params.push(fromDate);
+      sql += `\n         AND m."timestamp" >= $${params.length}`;
+    }
+    if (toDate) {
+      params.push(toDate);
+      sql += `\n         AND m."timestamp" <= $${params.length}`;
+    }
+    if (model) {
+      // metadata is `Json?`. Cast to jsonb defensively — some legacy
+      // rows store it as a stringified JSON literal, in which case
+      // ->>'model' returns NULL and the row is correctly excluded.
+      params.push(model);
+      sql += `\n         AND m."metadata" IS NOT NULL`
+          + `\n         AND (m."metadata"::jsonb)->>'model' = $${params.length}`;
+    }
+
+    params.push(limit);
+    sql += `\n       ORDER BY "rank" DESC, m."timestamp" DESC`
+        + `\n       LIMIT $${params.length}`;
+
+    const rows = await prisma.$queryRawUnsafe(sql, ...params);
 
     // BigInt safety + ISO timestamps for the wire.
     const results = rows.map((r) => ({
@@ -591,12 +642,26 @@ router.get('/', authenticateToken, async (req, res) => {
     try {
       const escaped = rawQ.replace(/\\/g, '\\\\').replace(/[%_]/g, '\\$&');
       const like = `%${escaped}%`;
+      // Mirror the same filter set as the FTS path. The model filter
+      // uses Prisma's JSON `path` predicate, which only matches when
+      // metadata is stored as a JSON object (not a stringified JSON
+      // literal) — same caveat documented in the SQL branch above.
+      const where = {
+        deletedAt: null,
+        content: { contains: rawQ, mode: 'insensitive' },
+        chat: { userId, deletedAt: null },
+      };
+      if (chatId) where.chatId = chatId;
+      if (fromDate || toDate) {
+        where.timestamp = {};
+        if (fromDate) where.timestamp.gte = fromDate;
+        if (toDate) where.timestamp.lte = toDate;
+      }
+      if (model) {
+        where.metadata = { path: ['model'], equals: model };
+      }
       const rows = await prisma.message.findMany({
-        where: {
-          deletedAt: null,
-          content: { contains: rawQ, mode: 'insensitive' },
-          chat: { userId, deletedAt: null },
-        },
+        where,
         orderBy: { timestamp: 'desc' },
         take: limit,
         include: { chat: { select: { id: true, title: true } } },
