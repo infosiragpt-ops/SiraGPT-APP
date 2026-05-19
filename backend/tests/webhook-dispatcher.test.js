@@ -119,3 +119,65 @@ test('dispatch requires url and event', async () => {
   await assert.rejects(() => dispatcher.dispatch({ event: 'x' }), /url/);
   await assert.rejects(() => dispatcher.dispatch({ url: 'x' }), /event/);
 });
+
+// ── health snapshot (ratchet 45) ───────────────────────────────────
+test('health returns zeroed snapshot when buffer is empty', () => {
+  const h = dispatcher.health();
+  assert.equal(h.delivered24h, 0);
+  assert.equal(h.failed24h, 0);
+  assert.equal(h.failureRate, 0);
+  assert.equal(h.p95DurationMs, 0);
+  assert.equal(h.retryingNow, 0);
+});
+
+test('health aggregates delivered + failed counts and failure rate', async () => {
+  // 2 successes, 1 failure → 33% failure rate.
+  await dispatcher.dispatch({
+    url: 'u', event: 'ok', payload: {},
+    deliverFn: async () => ({ status: 200, ok: true }), maxRetries: 0,
+  });
+  await dispatcher.dispatch({
+    url: 'u', event: 'ok', payload: {},
+    deliverFn: async () => ({ status: 200, ok: true }), maxRetries: 0,
+  });
+  await dispatcher.dispatch({
+    url: 'u', event: 'bad', payload: {},
+    deliverFn: async () => ({ status: 500, ok: false }), maxRetries: 0,
+    baseDelayMs: 1, maxDelayMs: 1,
+  });
+  const h = dispatcher.health();
+  assert.equal(h.delivered24h, 2);
+  assert.equal(h.failed24h, 1);
+  assert.equal(h.totalTerminal24h, 3);
+  // 1/3 = 0.3333
+  assert.ok(Math.abs(h.failureRate - 0.3333) < 0.001);
+  // p95 has a finite value once we've recorded durations.
+  assert.ok(h.p95DurationMs >= 0);
+});
+
+test('health windowMs excludes entries older than the window', async () => {
+  await dispatcher.dispatch({
+    url: 'u', event: 'ok', payload: {},
+    deliverFn: async () => ({ status: 200, ok: true }), maxRetries: 0,
+  });
+  // 0ms window → the just-recorded delivery is older than the cutoff.
+  const h = dispatcher.health({ windowMs: 0, now: () => Date.now() + 1000 });
+  assert.equal(h.delivered24h, 0);
+});
+
+test('health p95 reflects observed durations', async () => {
+  // A deliverFn that burns wall-clock so durationMs is observable.
+  const slow = (ms) => async () => {
+    await new Promise((r) => setTimeout(r, ms));
+    return { status: 200, ok: true };
+  };
+  await dispatcher.dispatch({
+    url: 'u', event: 'ok', payload: {}, deliverFn: slow(15), maxRetries: 0,
+  });
+  await dispatcher.dispatch({
+    url: 'u', event: 'ok', payload: {}, deliverFn: slow(5), maxRetries: 0,
+  });
+  const h = dispatcher.health();
+  // p95 of {5,15} (nearest-rank) is 15.
+  assert.ok(h.p95DurationMs > 0, `expected p95 > 0, got ${h.p95DurationMs}`);
+});

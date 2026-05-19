@@ -1104,6 +1104,118 @@ router.delete('/:id/api-keys/:keyId', authenticateToken, async (req, res) => {
   }
 });
 
+// ─── POST /api/orgs/:id/api-keys/:keyId/rotate (ADMIN+) ─────────────
+// Mints a fresh secret for an existing key. The full plaintext is
+// returned exactly once, exactly like creation. The row's tokenHash +
+// prefix are replaced atomically so the previous secret stops
+// authenticating immediately — unless the operator opts into a short
+// grace window via the API_KEY_GRACE_HOURS env var (≤ 168h / 7d). The
+// grace window is implemented by cloning the *old* hash into a new
+// short-lived ApiKey row tagged `<name> (rotated grace)` with the
+// requested expiresAt, so existing callers keep working while they
+// roll out the new token. The grace clone is org/user-scoped exactly
+// like the parent row.
+function parseGraceHours(input) {
+  // Caller override wins; otherwise read env. Anything <= 0 disables
+  // the grace window. Clamp at 168h (one week) to avoid leaving stale
+  // hashes lying around indefinitely.
+  const raw = input ?? process.env.API_KEY_GRACE_HOURS;
+  if (raw === undefined || raw === null || raw === '') return 0;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.min(n, 168);
+}
+
+router.post('/:id/api-keys/:keyId/rotate', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  const keyId = req.params.keyId;
+
+  try {
+    const membership = await assertMembership(prisma, orgId, userId, 'ADMIN');
+    if (!canManageMembers(membership.role)) {
+      return res.status(403).json({ error: 'insufficient role to rotate api keys' });
+    }
+
+    const existing = await prisma.apiKey.findFirst({
+      where: { id: keyId, organizationId: orgId },
+    });
+    if (!existing) return res.status(404).json({ error: 'api key not found' });
+
+    const graceHours = parseGraceHours(req.body?.graceHours);
+    const minted = apiKeysService.generateToken();
+
+    // Snapshot old hash/prefix BEFORE we overwrite the row so we can
+    // optionally seed the grace clone with the original secret.
+    const oldHash = existing.tokenHash;
+    const oldPrefix = existing.prefix;
+
+    // Replace the secret in-place. Keep name, scopes, expiresAt etc.
+    const updated = await prisma.apiKey.update({
+      where: { id: existing.id },
+      data: { prefix: minted.prefix, tokenHash: minted.tokenHash, lastUsedAt: null },
+    });
+
+    let graceRow = null;
+    if (graceHours > 0) {
+      const expiresAt = new Date(Date.now() + graceHours * 3600 * 1000);
+      try {
+        graceRow = await prisma.apiKey.create({
+          data: {
+            name: `${existing.name} (rotated grace)`,
+            prefix: oldPrefix,
+            tokenHash: oldHash,
+            organizationId: existing.organizationId,
+            userId: existing.userId,
+            scopes: Array.isArray(existing.scopes) ? [...existing.scopes] : [],
+            expiresAt,
+          },
+        });
+      } catch (e) {
+        // Grace is best-effort — if the clone insert collides on the
+        // unique(tokenHash) index (extremely unlikely with 240-bit
+        // entropy, but possible if a previous rotation already created
+        // a grace row for the same key) we log and continue. The
+        // rotation itself still succeeds.
+        console.warn('[orgs] api key grace clone failed:', e && e.message);
+      }
+    }
+
+    void writeAuditLog(prisma, {
+      action: 'org_api_key_rotate',
+      userId,
+      resource: 'organization',
+      resourceId: orgId,
+      before: { apiKeyId: existing.id, prefix: oldPrefix },
+      after: {
+        apiKeyId: existing.id,
+        prefix: updated.prefix,
+        graceHours,
+        graceKeyId: graceRow ? graceRow.id : null,
+      },
+      metadata: { orgId },
+      req,
+    });
+
+    res.status(200).json({
+      apiKey: apiKeysService.presentNewKey(updated, minted.token),
+      grace: graceRow
+        ? {
+            apiKeyId: graceRow.id,
+            expiresAt: graceRow.expiresAt instanceof Date
+              ? graceRow.expiresAt.toISOString()
+              : graceRow.expiresAt,
+            hours: graceHours,
+          }
+        : null,
+    });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] rotate api key failed:', err.message);
+    res.status(500).json({ error: 'failed to rotate api key' });
+  }
+});
+
 // ─── Slack integration (cycle 45, org-scoped) ───────────────────────
 // Mirrors the per-user endpoints under /api/integrations/slack but
 // scopes the SlackIntegration row to the organization. Trigger-registry

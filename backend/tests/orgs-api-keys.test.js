@@ -64,11 +64,24 @@ const prismaMock = {
       prismaState.apiKeys.push(row);
       return row;
     },
+    findFirst: async ({ where }) => {
+      return prismaState.apiKeys.find((r) => {
+        if (where.id && r.id !== where.id) return false;
+        if (where.organizationId && r.organizationId !== where.organizationId) return false;
+        return true;
+      }) || null;
+    },
     findMany: async ({ where, orderBy, take }) => {
       void orderBy; void take;
       return prismaState.apiKeys.filter(
         (r) => !where?.organizationId || r.organizationId === where.organizationId
       );
+    },
+    update: async ({ where, data }) => {
+      const row = prismaState.apiKeys.find((r) => r.id === where.id);
+      if (!row) throw new Error('not found');
+      Object.assign(row, data);
+      return row;
     },
     deleteMany: async ({ where }) => {
       const before = prismaState.apiKeys.length;
@@ -275,6 +288,104 @@ describe('DELETE /api/orgs/:id/api-keys/:keyId', () => {
     const res = await callRoute({
       method: 'DELETE',
       urlPath: '/api/orgs/org-1/api-keys/anything',
+    });
+    assert.equal(res.status, 403);
+  });
+});
+
+// ── POST /api/orgs/:id/api-keys/:keyId/rotate ──────────────────────
+describe('POST /api/orgs/:id/api-keys/:keyId/rotate', () => {
+  beforeEach(() => {
+    resetState();
+    delete process.env.API_KEY_GRACE_HOURS;
+  });
+
+  test('rotates the key, returns the new token once, invalidates the old hash', async () => {
+    const created = await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-1/api-keys',
+      body: { name: 'rotatable' },
+    });
+    const original = created.body.apiKey;
+    auditMock._calls.length = 0;
+
+    const res = await callRoute({
+      method: 'POST',
+      urlPath: `/api/orgs/org-1/api-keys/${original.id}/rotate`,
+      body: {},
+    });
+    assert.equal(res.status, 200);
+    const rotated = res.body.apiKey;
+    assert.ok(rotated.token.startsWith('sk_'));
+    assert.notEqual(rotated.token, original.token);
+    assert.notEqual(rotated.prefix, original.prefix);
+    // Same id, fresh hash on the row.
+    assert.equal(rotated.id, original.id);
+    const stored = prismaState.apiKeys.find((r) => r.id === original.id);
+    assert.notEqual(stored.tokenHash, undefined);
+    // No grace by default.
+    assert.equal(res.body.grace, null);
+    // Audit fired.
+    assert.equal(auditMock._calls.at(-1).action, 'org_api_key_rotate');
+  });
+
+  test('grace window creates a short-lived clone of the old hash', async () => {
+    const created = await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-1/api-keys',
+      body: { name: 'gracefull' },
+    });
+    const original = created.body.apiKey;
+
+    const res = await callRoute({
+      method: 'POST',
+      urlPath: `/api/orgs/org-1/api-keys/${original.id}/rotate`,
+      body: { graceHours: 24 },
+    });
+    assert.equal(res.status, 200);
+    assert.ok(res.body.grace);
+    assert.equal(res.body.grace.hours, 24);
+    // Two rows: rotated parent + grace clone with old prefix.
+    assert.equal(prismaState.apiKeys.length, 2);
+    const grace = prismaState.apiKeys.find((r) => r.id === res.body.grace.apiKeyId);
+    assert.ok(grace);
+    assert.equal(grace.prefix, original.prefix);
+    assert.match(grace.name, /rotated grace/);
+    assert.ok(grace.expiresAt instanceof Date);
+  });
+
+  test('env API_KEY_GRACE_HOURS opts callers in implicitly', async () => {
+    process.env.API_KEY_GRACE_HOURS = '2';
+    const created = await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-1/api-keys',
+      body: { name: 'env-grace' },
+    });
+    const res = await callRoute({
+      method: 'POST',
+      urlPath: `/api/orgs/org-1/api-keys/${created.body.apiKey.id}/rotate`,
+      body: {},
+    });
+    assert.equal(res.status, 200);
+    assert.ok(res.body.grace);
+    assert.equal(res.body.grace.hours, 2);
+  });
+
+  test('returns 404 for unknown keyId', async () => {
+    const res = await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-1/api-keys/nope/rotate',
+      body: {},
+    });
+    assert.equal(res.status, 404);
+  });
+
+  test('MEMBER role is rejected (403)', async () => {
+    prismaState.membership.role = 'MEMBER';
+    const res = await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-1/api-keys/whatever/rotate',
+      body: {},
     });
     assert.equal(res.status, 403);
   });

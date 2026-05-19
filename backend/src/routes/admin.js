@@ -1719,6 +1719,31 @@ router.post('/webhooks/deliveries/:id/retry', requireSuperAdmin, async (req, res
   }
 });
 
+// ── Webhook delivery health (ratchet 45, super-admin) ──────────────────────
+// Aggregated view of the in-memory delivery ring buffer. Returns the four
+// signals the admin dashboard cards render: total delivered in the last
+// 24h, failure rate (failed / terminal), p95 delivery wall-clock latency
+// (including retry backoff), and the count of deliveries currently in
+// flight that have already retried at least once.
+//   GET /api/admin/webhooks/health?windowHours=24
+router.get('/webhooks/health', requireSuperAdmin, (req, res) => {
+  try {
+    // Clamp window between 1h and 30d so a typo can't make us scan a
+    // negative or wildly out-of-range range. Default 24h matches the
+    // dashboard contract documented in the route comment.
+    const hoursRaw = Number(req.query.windowHours);
+    const hours = Number.isFinite(hoursRaw) && hoursRaw > 0
+      ? Math.min(hoursRaw, 24 * 30)
+      : 24;
+    const windowMs = hours * 60 * 60 * 1000;
+    const snapshot = webhookDispatcher.health({ windowMs });
+    res.json({ ...snapshot, windowHours: hours });
+  } catch (err) {
+    console.error('[admin/webhooks/health] failed:', err && err.message ? err.message : err);
+    res.status(500).json({ error: 'Failed to compute webhook health' });
+  }
+});
+
 router.post('/webhooks/retry-failed', requireSuperAdmin, async (req, res) => {
   try {
     const result = await webhookDispatcher.retryFailed({

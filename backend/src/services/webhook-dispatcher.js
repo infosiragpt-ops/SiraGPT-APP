@@ -150,6 +150,7 @@ async function dispatch({
     ...headers,
   };
 
+  const startedAtMs = now();
   const entry = {
     id,
     url,
@@ -163,6 +164,12 @@ async function dispatch({
     payload: body,
     signature,
     signed: Boolean(signature),
+    // durationMs is the wall-clock time from first dispatch attempt
+    // until terminal status (delivered OR failed). It includes retry
+    // backoff so it reflects what the caller actually observes; the
+    // health endpoint uses this for p95 latency.
+    durationMs: null,
+    startedAtMs,
   };
   recordAttempt(entry);
 
@@ -199,10 +206,12 @@ async function dispatch({
       }
     );
     entry.status = 'delivered';
+    entry.durationMs = Math.max(0, now() - startedAtMs);
     return { id, status: entry.status, httpStatus: result.status, attempts: entry.attempts };
   } catch (err) {
     entry.status = 'failed';
     entry.lastError = err && err.message ? err.message : String(err);
+    entry.durationMs = Math.max(0, now() - startedAtMs);
     return { id, status: entry.status, attempts: entry.attempts, error: entry.lastError };
   }
 }
@@ -264,6 +273,75 @@ function stats() {
   return { total: deliveries.length, counts, bufferSize };
 }
 
+// ── Percentile helper ───────────────────────────────────────────────
+// Nearest-rank percentile over an unsorted numeric array. Returns 0
+// for an empty input so the health JSON stays well-formed when no
+// deliveries have been recorded yet. We sort a copy (cheap given the
+// ring buffer is bounded at ~2k entries) instead of using an online
+// estimator — exact values are more useful for a small-N admin view.
+function percentile(values, p) {
+  if (!Array.isArray(values) || values.length === 0) return 0;
+  if (!Number.isFinite(p) || p <= 0) return 0;
+  const sorted = values.slice().sort((a, b) => a - b);
+  const rank = Math.ceil((p / 100) * sorted.length);
+  const idx = Math.min(sorted.length - 1, Math.max(0, rank - 1));
+  return sorted[idx];
+}
+
+// ── Health snapshot (ratchet 45) ────────────────────────────────────
+// Aggregates the in-memory ring buffer into the four signals the admin
+// dashboard wants:
+//   - delivered24h   : count of delivered entries in the last 24h
+//   - failed24h      : count of failed entries in the last 24h
+//   - failureRate    : failed / (delivered + failed) in [0, 1]
+//   - p95DurationMs  : 95th percentile of `durationMs` over the same
+//                      window (delivered + failed only — `pending` and
+//                      `retrying` haven't produced a final latency yet)
+//   - retryingNow    : entries currently in flight that have already
+//                      made ≥ 2 attempts (i.e. observed at least one
+//                      failure and are still being retried)
+//
+// `windowMs` defaults to 24h but can be overridden by the route layer
+// (`?windowHours=`) to make this useful for ad-hoc investigations.
+function health({ windowMs = 24 * 60 * 60 * 1000, now = Date.now } = {}) {
+  const cutoff = now() - windowMs;
+  let delivered = 0;
+  let failed = 0;
+  let retrying = 0;
+  const durations = [];
+
+  for (const d of deliveries) {
+    const tsRaw = d.createdAt ? new Date(d.createdAt).getTime() : NaN;
+    const inWindow = Number.isFinite(tsRaw) && tsRaw >= cutoff;
+    // Count "currently retrying" across the whole buffer — these are
+    // by definition still in progress and might be older than the
+    // window but we still want operators to see them.
+    if (d.status === 'pending' && (d.attempts || 0) >= 2) retrying += 1;
+    if (!inWindow) continue;
+    if (d.status === 'delivered') {
+      delivered += 1;
+      if (typeof d.durationMs === 'number') durations.push(d.durationMs);
+    } else if (d.status === 'failed') {
+      failed += 1;
+      if (typeof d.durationMs === 'number') durations.push(d.durationMs);
+    }
+  }
+
+  const total = delivered + failed;
+  return {
+    windowMs,
+    delivered24h: delivered,
+    failed24h: failed,
+    totalTerminal24h: total,
+    failureRate: total === 0 ? 0 : Number((failed / total).toFixed(4)),
+    p95DurationMs: percentile(durations, 95),
+    retryingNow: retrying,
+    bufferSize,
+    bufferUsed: deliveries.length,
+    generatedAt: new Date(now()).toISOString(),
+  };
+}
+
 module.exports = {
   SIGNATURE_HEADER,
   dispatch,
@@ -272,6 +350,7 @@ module.exports = {
   listDeliveries,
   getDelivery,
   stats,
+  health,
   signPayload,
   verifySignature,
   resetStore,
