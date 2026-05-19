@@ -14,8 +14,8 @@ channel = "stable-25_05"
 
 [deployment]
 deploymentTarget = "cloudrun"
-build = "npm run build"
-run = "npm start"
+build = "npm ci --legacy-peer-deps --prefer-offline --no-audit --no-fund && NEXT_OUTPUT=standalone npm run build && rm -rf node_modules backend/node_modules .next/cache"
+run = "node .next/standalone/server.js"
 
 [[ports]]
 localPort = 3000
