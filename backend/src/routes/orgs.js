@@ -1677,8 +1677,11 @@ router.get('/:id/api-keys', authenticateToken, async (req, res) => {
     if (!canManageMembers(membership.role)) {
       return res.status(403).json({ error: 'insufficient role to list api keys' });
     }
+    // Ratchet 45 (TrueDelete) — hide soft-deleted (tombstoned) keys from
+    // the org-facing list. Admins who need to see purged keys hit the
+    // dedicated admin endpoint.
     const rows = await prisma.apiKey.findMany({
-      where: { organizationId: orgId },
+      where: { organizationId: orgId, deletedAt: null },
       orderBy: { createdAt: 'desc' },
       take: 200,
     });
@@ -1700,20 +1703,27 @@ router.delete('/:id/api-keys/:keyId', authenticateToken, async (req, res) => {
     if (!canManageMembers(membership.role)) {
       return res.status(403).json({ error: 'insufficient role to delete api keys' });
     }
-    const deleted = await prisma.apiKey.deleteMany({
-      where: { id: keyId, organizationId: orgId },
+    // Ratchet 45 (TrueDelete) — soft-delete: stamp `deletedAt` instead
+    // of removing the row so audit log / cost rows referencing this key
+    // remain attributable. The auth middleware rejects any key whose
+    // `deletedAt` is set, so revocation is immediate. We scope the
+    // update to (id, organizationId, deletedAt:null) so a double-delete
+    // returns a clean 404 instead of silently no-op'ing.
+    const tombstoned = await prisma.apiKey.updateMany({
+      where: { id: keyId, organizationId: orgId, deletedAt: null },
+      data: { deletedAt: new Date() },
     });
-    if (deleted.count === 0) return res.status(404).json({ error: 'api key not found' });
+    if (tombstoned.count === 0) return res.status(404).json({ error: 'api key not found' });
     void writeAuditLog(prisma, {
       action: 'org_api_key_delete',
       userId,
       resource: 'organization',
       resourceId: orgId,
       before: { apiKeyId: keyId },
-      metadata: { orgId },
+      metadata: { orgId, softDelete: true },
       req,
     });
-    res.json({ ok: true });
+    res.json({ ok: true, softDeleted: true });
   } catch (err) {
     if (err && err.status) return res.status(err.status).json({ error: err.message });
     console.error('[orgs] delete api key failed:', err.message);

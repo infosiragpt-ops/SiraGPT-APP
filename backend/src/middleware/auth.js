@@ -70,6 +70,13 @@ async function tryAuthenticateApiKey(req, res, rawToken) {
       res.status(401).json({ error: 'Invalid API key' });
       return true;
     }
+    // Ratchet 45 (TrueDelete) — soft-deleted rows MUST NOT authenticate.
+    // We surface the same opaque "revoked" error rather than leaking the
+    // distinction between a never-existed key and one we tombstoned.
+    if (row.deletedAt) {
+      res.status(401).json({ error: 'API key revoked' });
+      return true;
+    }
     if (apiKeysService.isExpired(row)) {
       res.status(401).json({ error: 'API key expired' });
       return true;

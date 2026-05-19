@@ -149,6 +149,32 @@ describe('authenticateToken · API key path', () => {
     assert.match(res.body.error, /expired/);
   });
 
+  test('rejects soft-deleted sk_ token with 401 (TrueDelete)', async () => {
+    // Ratchet 45 (TrueDelete) — once `deletedAt` is stamped on a row the
+    // middleware MUST refuse the credential, even if the hash still
+    // matches. We surface the opaque "revoked" message so callers can't
+    // distinguish a tombstoned key from a never-existed one.
+    const minted = apiKeysService.generateToken();
+    prismaState.apiKey = {
+      id: 'k-tombstoned',
+      prefix: minted.prefix,
+      tokenHash: minted.tokenHash,
+      organizationId: null,
+      userId: 'u-1',
+      scopes: [],
+      expiresAt: null,
+      deletedAt: new Date(),
+      user: { id: 'u-1' },
+      organization: null,
+    };
+    const { req, res } = buildReqRes(minted.token);
+    let called = false;
+    await authenticateToken(req, res, () => { called = true; });
+    assert.equal(called, false);
+    assert.equal(res.statusCode, 401);
+    assert.match(res.body.error, /revoked/);
+  });
+
   test('rejects sk_ token with wrong secret (prefix collision)', async () => {
     const minted = apiKeysService.generateToken();
     // Plant a row with the same prefix but a different hash to simulate

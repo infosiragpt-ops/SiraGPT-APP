@@ -73,15 +73,35 @@ const prismaMock = {
     },
     findMany: async ({ where, orderBy, take }) => {
       void orderBy; void take;
-      return prismaState.apiKeys.filter(
-        (r) => !where?.organizationId || r.organizationId === where.organizationId
-      );
+      return prismaState.apiKeys.filter((r) => {
+        if (where?.organizationId && r.organizationId !== where.organizationId) return false;
+        // Ratchet 45 (TrueDelete) — the org-facing list filters out
+        // tombstoned rows. We mirror that in the mock so the test
+        // accurately reflects what the FE sees.
+        if (Object.prototype.hasOwnProperty.call(where || {}, 'deletedAt')) {
+          if (where.deletedAt === null && r.deletedAt) return false;
+        }
+        return true;
+      });
     },
     update: async ({ where, data }) => {
       const row = prismaState.apiKeys.find((r) => r.id === where.id);
       if (!row) throw new Error('not found');
       Object.assign(row, data);
       return row;
+    },
+    updateMany: async ({ where, data }) => {
+      let count = 0;
+      for (const r of prismaState.apiKeys) {
+        if (where.id && r.id !== where.id) continue;
+        if (where.organizationId && r.organizationId !== where.organizationId) continue;
+        if (Object.prototype.hasOwnProperty.call(where, 'deletedAt')) {
+          if (where.deletedAt === null && r.deletedAt) continue;
+        }
+        Object.assign(r, data);
+        count++;
+      }
+      return { count };
     },
     deleteMany: async ({ where }) => {
       const before = prismaState.apiKeys.length;
@@ -271,8 +291,23 @@ describe('DELETE /api/orgs/:id/api-keys/:keyId', () => {
       urlPath: `/api/orgs/org-1/api-keys/${keyId}`,
     });
     assert.equal(del.status, 200);
-    assert.equal(prismaState.apiKeys.length, 0);
+    // Ratchet 45 (TrueDelete) — the row is tombstoned, not removed.
+    assert.equal(prismaState.apiKeys.length, 1);
+    assert.ok(prismaState.apiKeys[0].deletedAt instanceof Date);
+    assert.equal(del.body.softDeleted, true);
     assert.equal(auditMock._calls[0].action, 'org_api_key_delete');
+
+    // The org-facing list MUST hide the tombstoned key.
+    const list = await callRoute({ method: 'GET', urlPath: '/api/orgs/org-1/api-keys' });
+    assert.equal(list.status, 200);
+    assert.equal(list.body.apiKeys.length, 0);
+
+    // A second delete of the same id is a clean 404 (no silent no-op).
+    const again = await callRoute({
+      method: 'DELETE',
+      urlPath: `/api/orgs/org-1/api-keys/${keyId}`,
+    });
+    assert.equal(again.status, 404);
   });
 
   test('returns 404 for unknown keyId', async () => {

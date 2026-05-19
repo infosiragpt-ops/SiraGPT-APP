@@ -2223,6 +2223,84 @@ function auditLogsToCsv(items) {
   return lines.join('\r\n') + '\r\n';
 }
 
+// ─── Ratchet 45 (TrueDelete) ────────────────────────────────────────
+// Admin-only purge for soft-deleted API keys. Hard-deletes rows where
+// `deletedAt` is set, optionally only those tombstoned before a
+// retention cutoff (defaults to "everything that has a tombstone").
+//
+//   POST /api/admin/api-keys/purge
+//   body: { olderThanDays?: number }  // 0 → purge all tombstoned
+//
+// Returns the number of rows hard-deleted. We always emit an audit
+// event so a SUPERADMIN purge is reproducible after the fact.
+router.post('/api-keys/purge', requireSuperAdmin, async (req, res) => {
+  try {
+    const olderThanDays = Number(req.body?.olderThanDays);
+    const where = { deletedAt: { not: null } };
+    if (Number.isFinite(olderThanDays) && olderThanDays > 0) {
+      const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000);
+      where.deletedAt = { not: null, lt: cutoff };
+    }
+
+    // Snapshot ids first so the audit log can record exactly what we
+    // destroyed — `deleteMany` only returns a count.
+    const victims = await prisma.apiKey.findMany({
+      where,
+      select: { id: true, prefix: true, organizationId: true, userId: true },
+      take: 10_000, // hard ceiling to avoid runaway purges
+    });
+    const ids = victims.map((v) => v.id);
+
+    const result = ids.length
+      ? await prisma.apiKey.deleteMany({ where: { id: { in: ids } } })
+      : { count: 0 };
+
+    void writeAuditLog(prisma, {
+      action: 'admin_api_key_purge',
+      userId: req.user?.id,
+      resource: 'api_key',
+      resourceId: null,
+      before: { ids, count: ids.length },
+      metadata: {
+        olderThanDays: Number.isFinite(olderThanDays) ? olderThanDays : null,
+        purged: result.count,
+      },
+      req,
+    });
+
+    res.json({ ok: true, purged: result.count, ids });
+  } catch (err) {
+    console.error('[admin] api-keys purge failed:', err.message);
+    res.status(500).json({ error: 'failed to purge api keys' });
+  }
+});
+
+// ─── Ratchet 45 (TrueDelete) — list tombstoned rows ─────────────────
+// Operators need a way to inspect what would be purged before they
+// pull the trigger.
+router.get('/api-keys/tombstoned', requireSuperAdmin, async (_req, res) => {
+  try {
+    const rows = await prisma.apiKey.findMany({
+      where: { deletedAt: { not: null } },
+      orderBy: { deletedAt: 'desc' },
+      select: {
+        id: true,
+        name: true,
+        prefix: true,
+        organizationId: true,
+        userId: true,
+        deletedAt: true,
+        createdAt: true,
+      },
+      take: 500,
+    });
+    res.json({ apiKeys: rows });
+  } catch (err) {
+    console.error('[admin] api-keys tombstoned list failed:', err.message);
+    res.status(500).json({ error: 'failed to list tombstoned api keys' });
+  }
+});
+
 module.exports = router;
 module.exports.metricsHandler = metricsHandler;
 module.exports.INTERNAL_CSV = { auditLogsToCsv, csvEscape, AUDIT_CSV_COLUMNS };

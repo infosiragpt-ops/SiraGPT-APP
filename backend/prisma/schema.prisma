@@ -1278,6 +1278,12 @@ model ApiKey {
   // (env SIRAGPT_API_KEY_DEFAULT_RPM, fallback 60). Requests per minute;
   // null means "use the plan default for the owning user/org".
   rateLimitPerMinute Int?
+  // Ratchet 45 (TrueDelete) — soft-delete tombstone. When non-null the
+  // key is no longer accepted by the auth middleware, but the row is
+  // preserved so audit/forensics can still attribute past activity.
+  // A dedicated admin purge endpoint hard-deletes rows where
+  // deletedAt is set.
+  deletedAt          DateTime?
 
   organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -1285,6 +1291,7 @@ model ApiKey {
   @@index([prefix])
   @@index([organizationId, createdAt])
   @@index([userId, createdAt])
+  @@index([deletedAt])
   @@map("api_keys")
 }
 
