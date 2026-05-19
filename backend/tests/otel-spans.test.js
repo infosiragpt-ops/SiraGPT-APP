@@ -35,6 +35,22 @@ describe('otel-spans (no SDK / noop tracer)', () => {
     );
   });
 
+  test('hashUserId returns stable 16-hex-char digest, drops empty input', () => {
+    assert.equal(otelSpans.hashUserId(null), null);
+    assert.equal(otelSpans.hashUserId(undefined), null);
+    assert.equal(otelSpans.hashUserId(''), null);
+    const h1 = otelSpans.hashUserId('alice@example.com');
+    const h2 = otelSpans.hashUserId('alice@example.com');
+    const h3 = otelSpans.hashUserId('bob@example.com');
+    assert.equal(typeof h1, 'string');
+    assert.equal(h1.length, 16);
+    assert.match(h1, /^[0-9a-f]{16}$/);
+    assert.equal(h1, h2);
+    assert.notEqual(h1, h3);
+    // Numeric input is coerced to string
+    assert.equal(otelSpans.hashUserId(42), otelSpans.hashUserId('42'));
+  });
+
   test('withWebhookDeliverySpan accepts span arg (noop)', async () => {
     const out = await otelSpans.withWebhookDeliverySpan(
       { url: 'https://x.test', event: 'a.b' },
@@ -197,6 +213,29 @@ describe('otel-spans with a stub tracer provider', () => {
         done();
       } catch (err) { done(err); }
     });
+  });
+
+  test('ai.generate span carries hashed userId / orgId / planTier attrs', async () => {
+    const hash = otelSpans.hashUserId('user-42');
+    assert.equal(typeof hash, 'string');
+    assert.equal(hash.length, 16);
+    await otelSpans.withAIGenerateSpan(
+      {
+        model: 'gpt-4o',
+        provider: 'openai',
+        userId: hash,
+        orgId: 'org-7',
+        planTier: 'PRO',
+      },
+      async () => 'ok',
+    );
+    const s = spans[spans.length - 1];
+    assert.equal(s.name, 'ai.generate');
+    assert.equal(s.attrs.userId, hash);
+    // raw user id never appears in attrs
+    assert.notEqual(s.attrs.userId, 'user-42');
+    assert.equal(s.attrs.orgId, 'org-7');
+    assert.equal(s.attrs.planTier, 'PRO');
   });
 
   test('httpSpanMiddleware ends span exactly once across finish + close', (t, done) => {

@@ -22,8 +22,32 @@
  *   withWebhookDeliverySpan(attrs, fn)
  */
 
+const crypto = require('crypto');
+
 let _otelApi = null;
 let _otelLoaded = false;
+
+/**
+ * Hash a user identifier into a stable, PII-safe attribute value for
+ * traces. Uses SHA-256 truncated to 16 hex chars (64 bits) which gives
+ * ample cardinality for span attributes while staying compact for the
+ * exporter. Returns `null` for empty / non-string input so callers can
+ * skip the attribute via the standard `null → dropped` rule in
+ * `coerceAttrs`.
+ *
+ * @param {string|number|null|undefined} userId
+ * @returns {string|null}
+ */
+function hashUserId(userId) {
+  if (userId == null) return null;
+  const s = String(userId);
+  if (!s) return null;
+  try {
+    return crypto.createHash('sha256').update(s).digest('hex').slice(0, 16);
+  } catch (_e) {
+    return null;
+  }
+}
 
 function loadOtel() {
   if (_otelLoaded) return _otelApi;
@@ -313,5 +337,6 @@ module.exports = {
   withWebhookDeliverySpan,
   withSpan,
   httpSpanMiddleware,
+  hashUserId,
   _resetForTests,
 };

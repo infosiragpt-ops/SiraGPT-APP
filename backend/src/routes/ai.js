@@ -41,6 +41,25 @@ function enforceOrgRateLimitSafe(req, res, next) {
     return next();
   }
 }
+
+// Lazy/safe enforce-org-budget middleware. Hard-blocks /api/ai/generate
+// with HTTP 402 when an org has opted into spend-cap enforcement via
+// `Organization.settings.budget.enforceLimit` AND month-to-date cost
+// has crossed the configured cap. Fail-open like its siblings.
+let _enforceOrgBudgetMw = null;
+function enforceOrgBudgetSafe(req, res, next) {
+  try {
+    if (!_enforceOrgBudgetMw) {
+      // eslint-disable-next-line global-require
+      const { enforceOrgBudget } = require('../middleware/enforce-org-budget');
+      _enforceOrgBudgetMw = enforceOrgBudget();
+    }
+    return _enforceOrgBudgetMw(req, res, next);
+  } catch (err) {
+    try { console.warn('[ai/generate] enforce-org-budget load/run failed:', err && err.message); } catch (_) {}
+    return next();
+  }
+}
 const prisma = require('../config/database');
 const { tryConsumePlanQuota } = require('../services/plan-quota');
 const aiService = require('../services/ai-service');
@@ -75,6 +94,9 @@ try { _otelSpans = require('../utils/otel-spans'); } catch (_e) { _otelSpans = n
 const withAIGenerateSpan = (_otelSpans && _otelSpans.withAIGenerateSpan)
   ? _otelSpans.withAIGenerateSpan
   : (_attrs, fn) => fn();
+const _hashUserIdForSpan = (_otelSpans && _otelSpans.hashUserId)
+  ? _otelSpans.hashUserId
+  : (() => null);
 const operationalRag = require('../services/rag/operational-runtime');
 const documentProfessionalAnalyzer = require('../services/document-professional-analyzer');
 const documentResponseFidelity = require('../services/document-response-fidelity');
@@ -964,6 +986,7 @@ router.post(
   requireScope('ai:generate'),
   enforceOrgQuotaSafe,
   enforceOrgRateLimitSafe,
+  enforceOrgBudgetSafe,
   async (req, res) => {
     const controller = new AbortController();
     const signal = controller.signal;
@@ -3107,10 +3130,21 @@ router.post(
           console.log(`[vision] Stripping ${skippedImages.length} image(s) for non-vision model ${actualProvider}:${actualModel}: ${imageNames}`);
         }
         const __aiSpanStartedAt = Date.now();
+        // Per-user OTel attributes — userId is SHA-256 hashed (16 hex
+        // chars) so the trace never carries raw PII. orgId / planTier
+        // are safe to emit as-is and let dashboards filter by tenant.
+        const __spanUserHash = userId ? _hashUserIdForSpan(userId) : null;
+        const __spanOrgId = (req.orgContext && req.orgContext.orgId)
+          || (req.body && req.body.organizationId)
+          || null;
+        const __spanPlanTier = (req.user && req.user.plan) || null;
         fullResponseContent = await withAIGenerateSpan(
           {
             model: actualModel,
             provider: actualProvider,
+            userId: __spanUserHash,
+            orgId: __spanOrgId,
+            planTier: __spanPlanTier,
           },
           async (span) => {
             const out = await aiService.generateStream({
