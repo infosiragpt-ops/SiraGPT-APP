@@ -964,6 +964,146 @@ router.delete('/:id/webhooks/:endpointId', authenticateToken, async (req, res) =
   }
 });
 
+// ─── API keys (ratchet 45, org-scoped) ──────────────────────────────
+// Bearer tokens for programmatic access. Created by an ADMIN+ member;
+// the full plaintext is returned exactly once. List + delete are
+// gated to the same role. See services/api-keys-service.js.
+const apiKeysService = require('../services/api-keys-service');
+
+function validateApiKeyName(name) {
+  if (typeof name !== 'string') return 'name is required';
+  const trimmed = name.trim();
+  if (!trimmed) return 'name is required';
+  if (trimmed.length > 80) return 'name too long (max 80)';
+  return null;
+}
+
+function validateApiKeyScopes(scopes) {
+  if (scopes === undefined || scopes === null) return { ok: true, value: [] };
+  if (!Array.isArray(scopes)) return { ok: false, error: 'scopes must be an array' };
+  if (scopes.length > 32) return { ok: false, error: 'too many scopes (max 32)' };
+  const out = [];
+  for (const s of scopes) {
+    if (typeof s !== 'string') return { ok: false, error: 'each scope must be a string' };
+    const trimmed = s.trim();
+    if (!trimmed) continue;
+    if (trimmed.length > 64) return { ok: false, error: 'scope too long (max 64)' };
+    if (!/^[a-z0-9:_.-]+$/i.test(trimmed)) return { ok: false, error: 'invalid scope format' };
+    out.push(trimmed);
+  }
+  return { ok: true, value: out };
+}
+
+function validateApiKeyExpiresAt(input) {
+  if (input === undefined || input === null || input === '') return { ok: true, value: null };
+  const d = input instanceof Date ? input : new Date(input);
+  if (Number.isNaN(d.getTime())) return { ok: false, error: 'expiresAt must be a valid date' };
+  if (d.getTime() <= Date.now()) return { ok: false, error: 'expiresAt must be in the future' };
+  return { ok: true, value: d };
+}
+
+// ─── POST /api/orgs/:id/api-keys (ADMIN+) ───────────────────────────
+router.post('/:id/api-keys', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const orgId = req.params.id;
+
+  const nameErr = validateApiKeyName(req.body?.name);
+  if (nameErr) return res.status(400).json({ error: nameErr });
+  const scopesResult = validateApiKeyScopes(req.body?.scopes);
+  if (!scopesResult.ok) return res.status(400).json({ error: scopesResult.error });
+  const expiresResult = validateApiKeyExpiresAt(req.body?.expiresAt);
+  if (!expiresResult.ok) return res.status(400).json({ error: expiresResult.error });
+
+  try {
+    const membership = await assertMembership(prisma, orgId, userId, 'ADMIN');
+    if (!canManageMembers(membership.role)) {
+      return res.status(403).json({ error: 'insufficient role to create api keys' });
+    }
+
+    const minted = apiKeysService.generateToken();
+    const row = await prisma.apiKey.create({
+      data: {
+        name: req.body.name.trim(),
+        prefix: minted.prefix,
+        tokenHash: minted.tokenHash,
+        organizationId: orgId,
+        userId,
+        scopes: scopesResult.value,
+        expiresAt: expiresResult.value,
+      },
+    });
+
+    void writeAuditLog(prisma, {
+      action: 'org_api_key_create',
+      userId,
+      resource: 'organization',
+      resourceId: orgId,
+      after: { apiKeyId: row.id, prefix: row.prefix, scopes: row.scopes },
+      metadata: { orgId },
+      req,
+    });
+
+    res.status(201).json({ apiKey: apiKeysService.presentNewKey(row, minted.token) });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] create api key failed:', err.message);
+    res.status(500).json({ error: 'failed to create api key' });
+  }
+});
+
+// ─── GET /api/orgs/:id/api-keys (ADMIN+) ────────────────────────────
+router.get('/:id/api-keys', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  try {
+    const membership = await assertMembership(prisma, orgId, userId, 'ADMIN');
+    if (!canManageMembers(membership.role)) {
+      return res.status(403).json({ error: 'insufficient role to list api keys' });
+    }
+    const rows = await prisma.apiKey.findMany({
+      where: { organizationId: orgId },
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+    });
+    res.json({ apiKeys: rows.map((r) => apiKeysService.redactKey(r)) });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] list api keys failed:', err.message);
+    res.status(500).json({ error: 'failed to list api keys' });
+  }
+});
+
+// ─── DELETE /api/orgs/:id/api-keys/:keyId (ADMIN+) ──────────────────
+router.delete('/:id/api-keys/:keyId', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  const keyId = req.params.keyId;
+  try {
+    const membership = await assertMembership(prisma, orgId, userId, 'ADMIN');
+    if (!canManageMembers(membership.role)) {
+      return res.status(403).json({ error: 'insufficient role to delete api keys' });
+    }
+    const deleted = await prisma.apiKey.deleteMany({
+      where: { id: keyId, organizationId: orgId },
+    });
+    if (deleted.count === 0) return res.status(404).json({ error: 'api key not found' });
+    void writeAuditLog(prisma, {
+      action: 'org_api_key_delete',
+      userId,
+      resource: 'organization',
+      resourceId: orgId,
+      before: { apiKeyId: keyId },
+      metadata: { orgId },
+      req,
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] delete api key failed:', err.message);
+    res.status(500).json({ error: 'failed to delete api key' });
+  }
+});
+
 // ─── Slack integration (cycle 45, org-scoped) ───────────────────────
 // Mirrors the per-user endpoints under /api/integrations/slack but
 // scopes the SlackIntegration row to the organization. Trigger-registry

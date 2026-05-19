@@ -4,6 +4,7 @@ const { computeFingerprint, compareFingerprints } = require('../utils/session-fi
 const { writeAuditLog } = require('../utils/audit-log');
 const { createQueryDedup } = require('../utils/query-dedup');
 const { createWriteBehindCache } = require('../services/write-behind-cache');
+const apiKeysService = require('../services/api-keys-service');
 
 // Hot-path read coalescing: two requests for the same session token
 // within 50ms share the Prisma lookup. Reduces DB load when a SPA
@@ -32,6 +33,65 @@ function getWriteBehindCache() {
   return _writeBehind;
 }
 
+/**
+ * Authenticate a request via API key (Bearer `sk_…`). Returns true
+ * when the key is valid and `req.user` was populated; false when the
+ * caller should fall through to JWT auth (i.e. the token did not use
+ * the API-key scheme). Sends an error response and returns true when
+ * the scheme matched but the key is invalid/expired — in that case
+ * the JWT path must NOT run.
+ */
+async function tryAuthenticateApiKey(req, res, rawToken) {
+  const parsed = apiKeysService.parseToken(rawToken);
+  if (!parsed) return false; // not our scheme — caller falls back to JWT
+
+  try {
+    const row = await prisma.apiKey.findFirst({
+      where: { prefix: parsed.prefix },
+      include: { user: true, organization: true },
+    });
+
+    const presentedHash = apiKeysService.hashToken(parsed.body);
+    if (!row || row.tokenHash !== presentedHash) {
+      res.status(401).json({ error: 'Invalid API key' });
+      return true;
+    }
+    if (apiKeysService.isExpired(row)) {
+      res.status(401).json({ error: 'API key expired' });
+      return true;
+    }
+    if (!row.user) {
+      // Owner was deleted — defence in depth; FK cascade should make this rare.
+      res.status(401).json({ error: 'Invalid API key' });
+      return true;
+    }
+
+    req.user = row.user;
+    req.token = rawToken;
+    req.apiKey = {
+      id: row.id,
+      prefix: row.prefix,
+      scopes: Array.isArray(row.scopes) ? [...row.scopes] : [],
+      organizationId: row.organizationId || null,
+    };
+    if (row.organization) {
+      req.organization = row.organization;
+    }
+    req.authMethod = 'api_key';
+
+    // Fire-and-forget lastUsedAt update; never block the request on it.
+    void prisma.apiKey
+      .update({ where: { id: row.id }, data: { lastUsedAt: new Date() } })
+      .catch(() => {});
+
+    return true;
+  } catch (err) {
+    console.error('API key auth error:', err && err.message);
+    res.status(500).json({ error: 'auth lookup failed' });
+    return true;
+  }
+}
+
 const authenticateToken = async (req, res, next) => {
   try {
     const authHeader = req.headers['authorization'];
@@ -39,6 +99,16 @@ const authenticateToken = async (req, res, next) => {
 
     if (!token) {
       return res.status(401).json({ error: 'Access token required' });
+    }
+
+    // Bearer API key (sk_…) short-circuits the JWT/session path so a
+    // programmatic caller never needs to mint a session row. When the
+    // token uses our `sk_` scheme but is invalid, tryAuthenticateApiKey
+    // sends the error response itself and we must not fall through.
+    const handledByApiKey = await tryAuthenticateApiKey(req, res, token);
+    if (handledByApiKey) {
+      if (req.user) return next();
+      return; // response already sent
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
@@ -149,4 +219,5 @@ module.exports = {
   // Exported for tests + graceful shutdown wiring.
   __sessionDedup: sessionDedup,
   __getWriteBehindCache: getWriteBehindCache,
+  __tryAuthenticateApiKey: tryAuthenticateApiKey,
 };

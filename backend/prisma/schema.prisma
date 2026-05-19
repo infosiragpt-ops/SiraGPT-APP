@@ -88,6 +88,7 @@ model User {
   webhookEndpoints    WebhookEndpoint[]
   slackIntegrations   SlackIntegration[]
   policyAcceptances   PolicyAcceptance[]
+  apiKeys             ApiKey[]
 
   // Organization / team membership — multi-tenant scaffolding (cycle 27).
   // A user can belong to multiple organizations with different roles.
@@ -1207,6 +1208,36 @@ model PolicyAcceptance {
   @@map("policy_acceptance")
 }
 
+// ─── API Keys (ratchet 45) ──────────────────────────────────────────
+//
+// Org-scoped bearer credentials for programmatic access. Tokens are
+// presented as `sk_<prefix><secret>`; only the SHA-256 hash of the
+// full plaintext (after the `sk_` tag) lives in the DB. The 8-char
+// `prefix` is safe to display — the middleware looks up by prefix,
+// then verifies the hash. `organizationId` is optional: when set, the
+// key acts on behalf of that org and the bearer is treated as the
+// owning `userId` with the org context attached to req.organization.
+model ApiKey {
+  id             String    @id @default(cuid())
+  name           String
+  prefix         String
+  tokenHash      String    @unique
+  organizationId String?
+  userId         String
+  scopes         String[]  @default([])
+  lastUsedAt     DateTime?
+  expiresAt      DateTime?
+  createdAt      DateTime  @default(now())
+
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([prefix])
+  @@index([organizationId, createdAt])
+  @@index([userId, createdAt])
+  @@map("api_keys")
+}
+
 model AuditLog {
   id           String   @id @default(cuid())
   actorType    String
@@ -1295,6 +1326,7 @@ model Organization {
   chats       Chat[]
   webhookEndpoints  WebhookEndpoint[]
   slackIntegrations SlackIntegration[]
+  apiKeys           ApiKey[]
 
   @@index([ownerId])
   @@index([slug])
