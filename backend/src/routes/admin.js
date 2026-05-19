@@ -1174,6 +1174,78 @@ router.get('/health/services', requireSuperAdmin, async (_req, res) => {
   }
 });
 
+// ── Backup verification (super-admin only) ─────────────────────────────
+// Cycle 15 ships a nightly pg_dump (scripts/backup-db.sh) that writes a
+// JSON payload into system_settings(key='last_db_backup') after every
+// successful run. This endpoint reads that row and reports:
+//   - lastBackupAt (ISO timestamp from the backup script)
+//   - sizeMB, sizeBytes (rounded to 2 decimals)
+//   - retained (count of *.sql.gz files still on disk)
+//   - retentionDays (BACKUP_RETENTION_DAYS at the time of last run)
+//   - schedule (cron expression of the nightly job)
+//   - nextBackupAt (computed from `schedule` via cron-expression util)
+//
+// When no row exists (fresh install or backup never ran) we return 200
+// with `lastBackupAt: null` so the admin UI can render a "never run"
+// state — distinct from a 5xx telling the operator something is broken.
+router.get('/backups', requireSuperAdmin, async (_req, res) => {
+  try {
+    const row = await prisma.systemSettings.findUnique({
+      where: { key: 'last_db_backup' },
+    }).catch(() => null);
+
+    if (!row || !row.value) {
+      return res.json({
+        ok: true,
+        lastBackupAt: null,
+        sizeMB: null,
+        sizeBytes: null,
+        retained: null,
+        retentionDays: null,
+        schedule: null,
+        nextBackupAt: null,
+        message: 'No backup metadata recorded yet — has scripts/backup-db.sh ever run?',
+      });
+    }
+
+    let meta = {};
+    try { meta = JSON.parse(row.value); } catch (_) { meta = {}; }
+
+    // Next scheduled run — derive from `schedule` (defaults to nightly
+    // 02:00 UTC, matching the cron entry in ops/cron.d).
+    let nextBackupAt = null;
+    const schedule = meta.schedule || '0 2 * * *';
+    try {
+      const cronExpr = require('../utils/cron-expression');
+      if (cronExpr && typeof cronExpr.parseCron === 'function') {
+        const parsed = cronExpr.parseCron(schedule);
+        const next = cronExpr.nextRun(parsed, new Date());
+        if (next instanceof Date) nextBackupAt = next.toISOString();
+      }
+    } catch (_) { /* leave nextBackupAt null on parse failure */ }
+
+    const sizeBytes = Number(meta.sizeBytes) || 0;
+    const sizeMB = sizeBytes > 0 ? Number((sizeBytes / (1024 * 1024)).toFixed(2)) : (meta.sizeMB ?? null);
+
+    return res.json({
+      ok: true,
+      lastBackupAt: meta.timestamp || null,
+      filename: meta.filename || null,
+      sizeBytes: sizeBytes || null,
+      sizeMB,
+      retained: typeof meta.retained === 'number' ? meta.retained : null,
+      retentionDays: typeof meta.retentionDays === 'number' || typeof meta.retentionDays === 'string'
+        ? Number(meta.retentionDays)
+        : null,
+      schedule,
+      nextBackupAt,
+    });
+  } catch (err) {
+    console.error('[admin/backups] failed:', err && err.message ? err.message : err);
+    return res.status(500).json({ error: 'Failed to read backup metadata' });
+  }
+});
+
 // ── Prometheus /metrics exporter ─────────────────────────────────────────
 // Exposed at the top-level `/metrics` path (mounted from index.js) — NOT
 // behind `/api/admin/*` so Prometheus scrapers do not need the cookie

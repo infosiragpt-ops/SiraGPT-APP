@@ -76,6 +76,7 @@ if ! gzip -t "${BACKUP_DIR}/${FILENAME}" 2>/dev/null; then
 fi
 
 BACKUP_SIZE=$(du -h "${BACKUP_DIR}/${FILENAME}" | cut -f1)
+BACKUP_BYTES=$(wc -c < "${BACKUP_DIR}/${FILENAME}" | tr -d ' ')
 echo "[backup] ✅ Backup complete: ${BACKUP_DIR}/${FILENAME} (${BACKUP_SIZE})"
 
 # ─── Cleanup old backups ────────────────────────────────────
@@ -86,5 +87,36 @@ echo "[backup] ${OLD_COUNT} backup(s) retained"
 
 # ─── Create latest symlink ──────────────────────────────────
 ln -sf "${BACKUP_DIR}/${FILENAME}" "${BACKUP_DIR}/siragpt-latest.sql.gz"
+
+# ─── Record backup metadata into SystemSettings ─────────────
+# Cycle 45: the /api/admin/backups endpoint reads this row to surface
+# last-backup timestamp, size, retention count, and next ETA.
+# Schedule defaults to 02:00 UTC daily (see ops/cron.d/siragpt-backup);
+# override via BACKUP_CRON_SCHEDULE for non-standard installs.
+META_TS=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+META_SCHEDULE="${BACKUP_CRON_SCHEDULE:-0 2 * * *}"
+META_JSON=$(printf '{"timestamp":"%s","sizeBytes":%s,"sizeMB":%s,"filename":"%s","retained":%s,"retentionDays":%s,"schedule":"%s"}' \
+    "${META_TS}" \
+    "${BACKUP_BYTES:-0}" \
+    "$(awk -v b="${BACKUP_BYTES:-0}" 'BEGIN{printf "%.2f", b/1048576}')" \
+    "${FILENAME}" \
+    "${OLD_COUNT:-0}" \
+    "${RETENTION_DAYS}" \
+    "${META_SCHEDULE}")
+
+echo "[backup] Recording metadata into system_settings(key='last_db_backup')..."
+if ! PGPASSWORD="${DB_PASS}" psql \
+    -h "${DB_HOST}" \
+    -p "${DB_PORT}" \
+    -U "${DB_USER}" \
+    -d "${DB_NAME}" \
+    --quiet \
+    --no-psqlrc \
+    -v ON_ERROR_STOP=1 \
+    -v meta="${META_JSON}" \
+    -c "INSERT INTO system_settings (id, key, value) VALUES ('last_db_backup', 'last_db_backup', :'meta') ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;" \
+    >/dev/null 2>&1; then
+    echo "[backup] WARN: failed to record metadata to system_settings (table missing or DB unreachable). Continuing." >&2
+fi
 
 echo "[backup] All done."

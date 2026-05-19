@@ -24,6 +24,8 @@
 
 'use strict';
 
+const { wrapWithRetry } = require('./job-utils');
+
 const SCRUB_SCHEDULE = process.env.SYSTEM_CRON_SCRUB_SCHEDULE || '30 2 * * *';
 const HARD_DELETE_SCHEDULE = process.env.SYSTEM_CRON_HARD_DELETE_SCHEDULE || '0 3 * * *';
 // ApiUsage 90-day retention (docs/data-retention.md). Default 03:30 UTC so
@@ -94,7 +96,11 @@ function start(opts = {}) {
       try {
         // eslint-disable-next-line global-require
         const job = require('./scrub-deleted-user-content');
-        const res = await job.run({ logger });
+        const runWithRetry = wrapWithRetry(() => job.run({ logger }), {
+          onRetry: ({ attempt, delayMs, reason }) =>
+            logger.warn?.(`[system-cron] scrub-deleted-user-content retry ${attempt} in ${delayMs}ms (${reason})`),
+        });
+        const res = await runWithRetry();
         logger.info?.(`[system-cron] scrub-deleted-user-content done: ${JSON.stringify(res)}`);
       } catch (err) {
         runErr = err;
@@ -122,7 +128,11 @@ function start(opts = {}) {
       try {
         // eslint-disable-next-line global-require
         const job = require('./hard-delete-deleted-users');
-        const res = await job.run({ logger });
+        const runWithRetry = wrapWithRetry(() => job.run({ logger }), {
+          onRetry: ({ attempt, delayMs, reason }) =>
+            logger.warn?.(`[system-cron] hard-delete-deleted-users retry ${attempt} in ${delayMs}ms (${reason})`),
+        });
+        const res = await runWithRetry();
         logger.info?.(`[system-cron] hard-delete-deleted-users done: ${JSON.stringify(res)}`);
       } catch (err) {
         runErr = err;
@@ -150,7 +160,11 @@ function start(opts = {}) {
       try {
         // eslint-disable-next-line global-require
         const job = require('./prune-api-usage');
-        const res = await job.run({ logger });
+        const runWithRetry = wrapWithRetry(() => job.run({ logger }), {
+          onRetry: ({ attempt, delayMs, reason }) =>
+            logger.warn?.(`[system-cron] prune-api-usage retry ${attempt} in ${delayMs}ms (${reason})`),
+        });
+        const res = await runWithRetry();
         logger.info?.(`[system-cron] prune-api-usage done: ${JSON.stringify(res)}`);
       } catch (err) {
         runErr = err;
@@ -179,7 +193,11 @@ function start(opts = {}) {
       try {
         // eslint-disable-next-line global-require
         const job = require('./sweep-expired-sessions');
-        const res = await job.run({ logger });
+        const runWithRetry = wrapWithRetry(() => job.run({ logger }), {
+          onRetry: ({ attempt, delayMs, reason }) =>
+            logger.warn?.(`[system-cron] sweep-expired-sessions retry ${attempt} in ${delayMs}ms (${reason})`),
+        });
+        const res = await runWithRetry();
         logger.info?.(`[system-cron] sweep-expired-sessions done: ${JSON.stringify(res)}`);
       } catch (err) {
         runErr = err;
