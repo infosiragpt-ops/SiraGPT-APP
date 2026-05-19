@@ -1581,6 +1581,100 @@ router.post('/:id/webhooks/:endpointId/rotate-secret', authenticateToken, async 
   }
 });
 
+// ─── GET /api/orgs/:id/webhooks/stats (ADMIN+) ──────────────────────
+// Ratchet 45 (Task 2) — per-endpoint delivery stats over the last 24h.
+// Joins the org's WebhookEndpoint rows against the in-memory delivery
+// ring buffer kept by `services/webhook-dispatcher`. For each endpoint
+// we surface:
+//   - url               : the configured target URL
+//   - events            : subscribed event list (or ['*'])
+//   - last24hDelivered  : terminal-success count in the window
+//   - last24hFailed     : terminal-failure count in the window
+//   - p95Ms             : 95th percentile of `durationMs` over both
+//                         delivered + failed entries (0 when no data)
+//
+// Caveat: the dispatcher's store is in-memory + per-process; in a
+// multi-instance deployment this endpoint reflects the LOCAL instance.
+// Once a `WebhookDelivery` Prisma model lands the query swaps to the
+// database without changing the response shape.
+const webhookDispatcherForStats = require('../services/webhook-dispatcher');
+
+function _p95(values) {
+  if (!Array.isArray(values) || values.length === 0) return 0;
+  const sorted = values.slice().sort((a, b) => a - b);
+  const rank = Math.ceil(0.95 * sorted.length);
+  const idx = Math.min(sorted.length - 1, Math.max(0, rank - 1));
+  return sorted[idx];
+}
+
+router.get('/:id/webhooks/stats', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  try {
+    const membership = await assertMembership(prisma, orgId, userId, 'ADMIN');
+    if (!canManageMembers(membership.role)) {
+      return res.status(403).json({ error: 'insufficient role to view webhook stats' });
+    }
+
+    const endpoints = await prisma.webhookEndpoint.findMany({
+      where: { organizationId: orgId },
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+    });
+
+    const windowMs = 24 * 60 * 60 * 1000;
+    const cutoff = Date.now() - windowMs;
+
+    // Pull a large slice of deliveries once; filter per endpoint in
+    // JS. Bounded by the dispatcher's ring buffer (default 2048) so
+    // this is cheap even on a busy instance.
+    let allDeliveries = [];
+    try {
+      allDeliveries = webhookDispatcherForStats.listDeliveries({ limit: 10_000 }) || [];
+    } catch (_e) {
+      allDeliveries = [];
+    }
+
+    const stats = endpoints.map((ep) => {
+      let delivered = 0;
+      let failed = 0;
+      const durations = [];
+      for (const d of allDeliveries) {
+        if (!d || d.url !== ep.url) continue;
+        const t = d.createdAt ? new Date(d.createdAt).getTime() : NaN;
+        if (!Number.isFinite(t) || t < cutoff) continue;
+        if (d.status === 'delivered') {
+          delivered += 1;
+          if (typeof d.durationMs === 'number') durations.push(d.durationMs);
+        } else if (d.status === 'failed') {
+          failed += 1;
+          if (typeof d.durationMs === 'number') durations.push(d.durationMs);
+        }
+      }
+      return {
+        id: ep.id,
+        url: ep.url,
+        events: Array.isArray(ep.events) ? ep.events : [],
+        isActive: ep.isActive,
+        last24hDelivered: delivered,
+        last24hFailed: failed,
+        p95Ms: _p95(durations),
+      };
+    });
+
+    res.json({
+      orgId,
+      windowMs,
+      generatedAt: new Date().toISOString(),
+      endpoints: stats,
+    });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] webhook stats failed:', err.message);
+    res.status(500).json({ error: 'failed to load webhook stats' });
+  }
+});
+
 // ─── API keys (ratchet 45, org-scoped) ──────────────────────────────
 // Bearer tokens for programmatic access. Created by an ADMIN+ member;
 // the full plaintext is returned exactly once. List + delete are

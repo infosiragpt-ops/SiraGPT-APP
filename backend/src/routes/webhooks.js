@@ -21,6 +21,30 @@ const triggers = require('../services/trigger-registry');
 
 const router = express.Router();
 
+// ── Per-user webhook endpoint cap by plan (ratchet 45, Task 1) ──────
+// Caps the number of WebhookEndpoint rows a single user (userId set,
+// organizationId NULL) may keep. Org-scoped endpoints use the org plan
+// cap and are NOT counted here. ENTERPRISE is unlimited (Infinity).
+//
+//   FREE       →  2 endpoints
+//   PRO        → 10 endpoints
+//   PRO_MAX    → 25 endpoints
+//   ENTERPRISE → unlimited
+//
+// On overflow POST /endpoints returns 402 Payment Required with
+// `{ plan, cap, used, error: 'webhook-endpoint-cap-reached' }`.
+const PLAN_USER_WEBHOOK_CAPS = Object.freeze({
+  FREE: 2,
+  PRO: 10,
+  PRO_MAX: 25,
+  ENTERPRISE: Infinity,
+});
+
+function userWebhookCapForPlan(plan) {
+  const cap = PLAN_USER_WEBHOOK_CAPS[plan];
+  return typeof cap === 'number' ? cap : PLAN_USER_WEBHOOK_CAPS.FREE;
+}
+
 function genSecret() {
   return 'whk_' + crypto.randomBytes(24).toString('hex');
 }
@@ -77,6 +101,25 @@ router.post('/endpoints', authenticateToken, async (req, res) => {
   if (eventsErr) return res.status(400).json({ error: eventsErr });
 
   try {
+    // Plan cap — count personal (non-org-scoped) endpoints only. Org
+    // endpoints live on a separate quota tied to the org plan.
+    const plan = (req.user && req.user.plan) || 'FREE';
+    const cap = userWebhookCapForPlan(plan);
+    if (Number.isFinite(cap)) {
+      const used = await prisma.webhookEndpoint.count({
+        where: { userId: req.user.id, organizationId: null },
+      });
+      if (used >= cap) {
+        return res.status(402).json({
+          error: 'webhook-endpoint-cap-reached',
+          plan,
+          cap,
+          used,
+          upgradeRequired: plan === 'FREE' || plan === 'PRO' || plan === 'PRO_MAX',
+        });
+      }
+    }
+
     const secret = genSecret();
     const endpoint = await prisma.webhookEndpoint.create({
       data: {
