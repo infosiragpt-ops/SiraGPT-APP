@@ -20,8 +20,17 @@ const fs = require('fs').promises;
 const path = require('path');
 const OpenAI = require('openai');
 const documentIntentAnalyzer = require('../services/document-intent-analyzer');
+const {
+  contentDispositionHeader,
+  safeDownloadFilename,
+} = require('../middleware/file-response-safety');
 
 const router = express.Router();
+
+function renderPdfFilename(originalName) {
+  const stem = path.basename(String(originalName || 'document'), path.extname(String(originalName || '')));
+  return safeDownloadFilename(`${stem}.pdf`, { fallback: 'document.pdf', extension: '.pdf' });
+}
 
 // Lazy/safe enforce-org-rate-limit middleware for file uploads. Mirrors
 // the wrapper in routes/ai.js: any failure to load or run the underlying
@@ -646,9 +655,8 @@ router.get('/:id/render', authenticateToken, async (req, res) => {
       if (!fsSync.existsSync(file.path)) {
         return res.status(404).json({ error: 'File not found on disk' });
       }
-      const baseName = path.basename(file.originalName, path.extname(file.originalName));
       res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `inline; filename="${baseName}.pdf"`);
+      res.setHeader('Content-Disposition', contentDispositionHeader('inline', renderPdfFilename(file.originalName)));
       res.setHeader('Cache-Control', 'private, max-age=86400');
       res.setHeader('X-Render-Engine', 'native-pdf');
       res.setHeader('X-Render-From-Cache', 'true');
@@ -684,9 +692,8 @@ router.get('/:id/render', authenticateToken, async (req, res) => {
       return res.status(500).json({ error: 'Render failed', detail: err.message });
     }
 
-    const baseName = path.basename(file.originalName, path.extname(file.originalName));
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `inline; filename="${baseName}.pdf"`);
+    res.setHeader('Content-Disposition', contentDispositionHeader('inline', renderPdfFilename(file.originalName)));
     res.setHeader('Cache-Control', 'private, max-age=86400');
     fsSync.createReadStream(pdfPath).pipe(res);
   } catch (error) {

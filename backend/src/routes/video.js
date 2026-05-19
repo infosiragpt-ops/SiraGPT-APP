@@ -600,8 +600,18 @@ const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
 const fs = require('fs');
 const path = require('path');
+const { randomUUID } = require('crypto');
 const { PrismaClient } = require('@prisma/client');
 const { fal } = require('@fal-ai/client');
+const {
+  contentDispositionHeader,
+  parseHttpByteRange,
+  resolveConfinedFile,
+} = require('../middleware/file-response-safety');
+const {
+  normaliseUploadPath,
+  resolveConfinedPath,
+} = require('../middleware/upload-static-access');
 const router = express.Router();
 const prisma = new PrismaClient();
 
@@ -612,10 +622,72 @@ fal.config({
 
 // Store active operations
 const activeOperations = new Map();
+const uploadRoot = process.env.UPLOAD_DIR
+  ? path.resolve(process.env.UPLOAD_DIR)
+  : path.resolve(__dirname, '../../uploads');
+const videosDir = path.join(uploadRoot, 'videos');
+
+function ensureDir(dir) {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+}
+
+function resolveVideoFile(rawFilename) {
+  return resolveConfinedFile(videosDir, rawFilename, { allowedExtensions: ['.mp4'] });
+}
+
+function extractLocalUploadRelativePath(input) {
+  const raw = String(input || '').trim();
+  if (!raw) return null;
+
+  let candidate = raw;
+  try {
+    const parsed = new URL(raw);
+    candidate = parsed.pathname || '';
+  } catch {
+    candidate = raw.split('?')[0];
+  }
+
+  const marker = '/uploads/';
+  const markerIndex = candidate.indexOf(marker);
+  if (markerIndex >= 0) {
+    candidate = candidate.slice(markerIndex + marker.length);
+  }
+
+  candidate = candidate.replace(/^\/+/, '');
+  if (candidate.startsWith('uploads/')) {
+    candidate = candidate.slice('uploads/'.length);
+  }
+
+  return normaliseUploadPath(candidate);
+}
+
+function resolveLocalUploadFile(input) {
+  const relativePath = extractLocalUploadRelativePath(input);
+  if (!relativePath) return null;
+  return resolveConfinedPath(uploadRoot, relativePath);
+}
+
+function streamFile(res, filePath, { status = 200, headers = {}, start, end } = {}) {
+  res.writeHead(status, headers);
+  const stream = Number.isInteger(start) || Number.isInteger(end)
+    ? fs.createReadStream(filePath, { start, end })
+    : fs.createReadStream(filePath);
+  stream.on('error', (err) => {
+    console.error('❌ Media stream error:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Error streaming file' });
+    } else {
+      res.destroy(err);
+    }
+  });
+  stream.pipe(res);
+}
 
 // Helper function to generate operation ID
 function generateOperationId() {
-  return `veo3_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
+  return `veo3_${Date.now()}_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
 }
 
 // Enhanced video generation with Fal.ai
@@ -681,7 +753,7 @@ router.post('/generate', [
 
     try {
       const operationId = generateOperationId();
-      const filename = `video_${Date.now()}_${Math.random().toString(36).substring(2, 11)}.mp4`;
+      const filename = `video_${Date.now()}_${randomUUID().replace(/-/g, '').slice(0, 12)}.mp4`;
 
       // Store operation info
       const operationData = {
@@ -793,15 +865,9 @@ async function generateVideoAsync(operationId, prompt, aspectRatio, duration, ne
           try {
             console.log('📤 Uploading local image to Fal.ai for processing...');
 
-            // Extract the local file path from URL
-            let localImagePath;
-            if (imageUrl.includes('/uploads/')) {
-              // Extract path after /uploads/
-              const pathAfterUploads = imageUrl.split('/uploads/')[1];
-              localImagePath = path.join('uploads', pathAfterUploads);
-            } else {
-              // Direct file path
-              localImagePath = imageUrl;
+            const localImagePath = resolveLocalUploadFile(imageUrl);
+            if (!localImagePath) {
+              throw new Error('Invalid local image path');
             }
 
             console.log('📁 Local image path:', localImagePath);
@@ -923,10 +989,7 @@ async function generateVideoAsync(operationId, prompt, aspectRatio, duration, ne
       }
 
       const videoBuffer = await resp.arrayBuffer();
-      const videosDir = path.join('uploads', 'videos');
-      if (!fs.existsSync(videosDir)) {
-        fs.mkdirSync(videosDir, { recursive: true });
-      }
+      ensureDir(videosDir);
 
       const videoPath = path.join(videosDir, filename);
       fs.writeFileSync(videoPath, Buffer.from(videoBuffer));
@@ -1051,62 +1114,33 @@ router.get('/status/:operationId', authenticateToken, async (req, res) => {
 // Add a download endpoint for proper file downloads
 router.get('/download/:filename', (req, res) => {
   try {
-    const filename = req.params.filename;
-    const filepath = path.join(__dirname, '..', '..', '..', 'uploads', 'videos', filename);
-
-    console.log('📥 Download request for:', filename);
-    console.log('📁 Looking for file at:', filepath);
-
-    if (!fs.existsSync(filepath)) {
-      console.error('❌ File not found at:', filepath);
-
-      // Try alternative path
-      const altPath = path.join('uploads', 'videos', filename);
-      console.log('📁 Trying alternative path:', altPath);
-
-      if (!fs.existsSync(altPath)) {
-        console.error('❌ File not found at alternative path either');
-        return res.status(404).json({ error: 'Video file not found' });
-      } else {
-        // Use alternative path
-        console.log('✅ Found file at alternative path');
-        const stat = fs.statSync(altPath);
-        res.set({
-          'Content-Type': 'video/mp4',
-          'Content-Disposition': `attachment; filename="${filename}"`,
-          'Content-Length': stat.size,
-          'Cache-Control': 'no-cache'
-        });
-
-        const stream = fs.createReadStream(altPath);
-        stream.pipe(res);
-        return;
-      }
+    const resolved = resolveVideoFile(req.params.filename);
+    if (!resolved) {
+      return res.status(400).json({ error: 'Invalid video filename' });
     }
 
-    // File exists at main path
+    console.log('📥 Download request for:', resolved.filename);
+    console.log('📁 Looking for file at:', resolved.filePath);
+
+    if (!fs.existsSync(resolved.filePath)) {
+      return res.status(404).json({ error: 'Video file not found' });
+    }
+
     console.log('✅ File found, starting download');
-    const stat = fs.statSync(filepath);
+    const stat = fs.statSync(resolved.filePath);
+    if (!stat.isFile()) {
+      return res.status(404).json({ error: 'Video file not found' });
+    }
 
     res.set({
       'Content-Type': 'video/mp4',
-      'Content-Disposition': `attachment; filename="${filename}"`,
+      'Content-Disposition': contentDispositionHeader('attachment', resolved.filename),
       'Content-Length': stat.size,
       'Cache-Control': 'no-cache',
       'Access-Control-Allow-Origin': '*'
     });
 
-    // Stream the file
-    const stream = fs.createReadStream(filepath);
-
-    stream.on('error', (err) => {
-      console.error('❌ Stream error:', err);
-      if (!res.headersSent) {
-        res.status(500).json({ error: 'Error streaming file' });
-      }
-    });
-
-    stream.pipe(res);
+    streamFile(res, resolved.filePath, { headers: res.getHeaders() });
 
   } catch (error) {
     console.error('❌ Error downloading video file:', error);
@@ -1117,37 +1151,41 @@ router.get('/download/:filename', (req, res) => {
 // Also update the watch endpoint with better path handling
 router.get('/watch/:filename', (req, res) => {
   try {
-    const filename = req.params.filename;
-    let filepath = path.join(__dirname, '..', '..', '..', 'uploads', 'videos', filename);
-
-    // Check if file exists, if not try alternative path
-    if (!fs.existsSync(filepath)) {
-      filepath = path.join('uploads', 'videos', filename);
-      if (!fs.existsSync(filepath)) {
-        return res.status(404).json({ error: 'Video file not found' });
-      }
+    const resolved = resolveVideoFile(req.params.filename);
+    if (!resolved) {
+      return res.status(400).json({ error: 'Invalid video filename' });
     }
 
-    const stat = fs.statSync(filepath);
+    if (!fs.existsSync(resolved.filePath)) {
+      return res.status(404).json({ error: 'Video file not found' });
+    }
+
+    const stat = fs.statSync(resolved.filePath);
+    if (!stat.isFile()) {
+      return res.status(404).json({ error: 'Video file not found' });
+    }
     const fileSize = stat.size;
-    const range = req.headers.range;
+    const range = parseHttpByteRange(req.headers.range, fileSize);
 
     if (range) {
-      // Support video streaming with range requests
-      const parts = range.replace(/bytes=/, "").split("-");
-      const start = parseInt(parts[0], 10);
-      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-      const chunksize = (end - start) + 1;
-      const file = fs.createReadStream(filepath, { start, end });
+      if (range.error) {
+        res.setHeader('Content-Range', range.contentRange);
+        return res.status(416).json({ error: 'Requested range not satisfiable' });
+      }
+
       const head = {
-        'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+        'Content-Range': range.contentRange,
         'Accept-Ranges': 'bytes',
-        'Content-Length': chunksize,
+        'Content-Length': range.contentLength,
         'Content-Type': 'video/mp4',
         'Cache-Control': 'public, max-age=31536000',
       };
-      res.writeHead(206, head);
-      file.pipe(res);
+      streamFile(res, resolved.filePath, {
+        status: 206,
+        headers: head,
+        start: range.start,
+        end: range.end,
+      });
     } else {
       const head = {
         'Content-Length': fileSize,
@@ -1155,8 +1193,7 @@ router.get('/watch/:filename', (req, res) => {
         'Accept-Ranges': 'bytes',
         'Cache-Control': 'public, max-age=31536000',
       };
-      res.writeHead(200, head);
-      fs.createReadStream(filepath).pipe(res);
+      streamFile(res, resolved.filePath, { headers: head });
     }
 
   } catch (error) {
@@ -1196,7 +1233,7 @@ router.get('/history', authenticateToken, async (req, res) => {
 });
 
 // Cleanup old operations (run periodically)
-setInterval(() => {
+const cleanupInterval = setInterval(() => {
   const now = new Date();
   const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000); // 2 hours
 
@@ -1208,5 +1245,6 @@ setInterval(() => {
     }
   }
 }, 30 * 60 * 1000); // Run every 30 minutes
+cleanupInterval.unref?.();
 
 module.exports = router;

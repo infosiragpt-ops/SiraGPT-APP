@@ -30,8 +30,19 @@ const subscriptionAnalyticsService = require('../services/subscription-analytics
 const { serializeBigIntFields } = require('../utils/bigint-serializer');
 const { capturePostHogEvent } = require('../services/observability/posthog');
 const axios = require('axios');
+const {
+  contentDispositionHeader,
+  safeDownloadFilename,
+} = require('../middleware/file-response-safety');
 
 const router = express.Router();
+
+function invoicePdfFilename(invoice) {
+  return safeDownloadFilename(`invoice-${invoice?.number || invoice?.id || Date.now()}.pdf`, {
+    fallback: 'invoice.pdf',
+    extension: '.pdf',
+  });
+}
 
 // Stripe sometimes returns timestamps as BigInt in newer SDK versions.
 // Multiplying a BigInt by a Number throws "Cannot mix BigInt and other types",
@@ -620,7 +631,7 @@ router.get('/stripe/invoice/:invoiceId', authenticateToken, async (req, res) => 
     if (invoice.invoice_pdf) {
       const response = await axios.get(invoice.invoice_pdf, { responseType: 'stream' });
       res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename=invoice-${invoice.number || invoice.id}.pdf`);
+      res.setHeader('Content-Disposition', contentDispositionHeader('attachment', invoicePdfFilename(invoice)));
       return response.data.pipe(res);
     }
 
@@ -685,7 +696,7 @@ router.get('/invoice/:paymentId', authenticateToken, async (req, res) => {
     if (invoice.invoice_pdf) {
       const response = await axios.get(invoice.invoice_pdf, { responseType: 'stream' });
       res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename=invoice-${invoice.number || invoice.id}.pdf`);
+      res.setHeader('Content-Disposition', contentDispositionHeader('attachment', invoicePdfFilename(invoice)));
       return response.data.pipe(res);
     }
 

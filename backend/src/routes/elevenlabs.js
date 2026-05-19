@@ -4,16 +4,55 @@ const { authenticateToken } = require('../middleware/auth');
 const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
+const { randomUUID } = require('crypto');
 const FormData = require('form-data');
 const { PrismaClient } = require('@prisma/client');
 const { ElevenLabsClient } = require('@elevenlabs/elevenlabs-js');
+const {
+  contentDispositionHeader,
+  resolveConfinedFile,
+} = require('../middleware/file-response-safety');
 
 const router = express.Router();
 const prisma = new PrismaClient();
+const uploadRoot = process.env.UPLOAD_DIR
+  ? path.resolve(process.env.UPLOAD_DIR)
+  : path.resolve(__dirname, '../../uploads');
+const audioDir = path.join(uploadRoot, 'audio');
+
+function ensureDir(dir) {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+}
+
+function audioContentType(filename) {
+  switch (path.extname(filename).toLowerCase()) {
+    case '.wav':
+      return 'audio/wav';
+    case '.m4a':
+    case '.mp4':
+      return 'audio/mp4';
+    case '.webm':
+      return 'audio/webm';
+    case '.ogg':
+      return 'audio/ogg';
+    case '.mp3':
+    case '.mpeg':
+    default:
+      return 'audio/mpeg';
+  }
+}
+
+function generatedAudioFilename(prefix, extension = 'mp3') {
+  return `${prefix}_${Date.now()}_${randomUUID().replace(/-/g, '').slice(0, 12)}.${extension}`;
+}
+
+ensureDir(audioDir);
 
 // Configure multer for audio file uploads
 const upload = multer({
-  dest: 'uploads/audio/',
+  dest: audioDir,
   limits: {
     fileSize: 25 * 1024 * 1024, // 25MB limit
   },
@@ -138,14 +177,9 @@ router.post('/text-to-speech', [
     const audioBuffer = Buffer.concat(chunks);
 
     // Generate unique filename
-    const filename = `tts_${Date.now()}_${Math.random().toString(36).substring(2, 11)}.mp3`;
-    const filepath = path.join('uploads/audio', filename);
-
-    // Ensure directory exists
-    const dir = path.dirname(filepath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
+    const filename = generatedAudioFilename('tts');
+    const filepath = path.join(audioDir, filename);
+    ensureDir(audioDir);
 
     // Save audio file
     fs.writeFileSync(filepath, audioBuffer);
@@ -329,17 +363,34 @@ router.post('/speech-to-text', upload.single('audio'), authenticateToken, async 
 // Serve audio files
 router.get('/audio/:filename', (req, res) => {
   try {
-    const filename = req.params.filename;
-    const filepath = path.join('uploads/audio', filename);
+    const resolved = resolveConfinedFile(audioDir, req.params.filename, {
+      allowedExtensions: ['.mp3', '.mpeg', '.wav', '.m4a', '.mp4', '.webm', '.ogg'],
+    });
+    if (!resolved) {
+      return res.status(400).json({ error: 'Invalid audio filename' });
+    }
 
-    if (!fs.existsSync(filepath)) {
+    if (!fs.existsSync(resolved.filePath)) {
+      return res.status(404).json({ error: 'Audio file not found' });
+    }
+    const stat = fs.statSync(resolved.filePath);
+    if (!stat.isFile()) {
       return res.status(404).json({ error: 'Audio file not found' });
     }
 
-    res.setHeader('Content-Type', 'audio/mpeg');
-    res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+    res.setHeader('Content-Type', audioContentType(resolved.filename));
+    res.setHeader('Content-Disposition', contentDispositionHeader('inline', resolved.filename));
+    res.setHeader('Content-Length', stat.size);
 
-    const stream = fs.createReadStream(filepath);
+    const stream = fs.createReadStream(resolved.filePath);
+    stream.on('error', (err) => {
+      console.error('Error streaming audio file:', err);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Error streaming audio file' });
+      } else {
+        res.destroy(err);
+      }
+    });
     stream.pipe(res);
 
   } catch (error) {
@@ -509,14 +560,9 @@ router.post('/generate-music', [
     const musicBuffer = Buffer.from(audioBuffer);
 
     // Generate unique filename
-    const filename = `music_${Date.now()}_${Math.random().toString(36).substring(2, 11)}.mp3`;
-    const filepath = path.join('uploads/audio', filename);
-
-    // Ensure directory exists
-    const dir = path.dirname(filepath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
+    const filename = generatedAudioFilename('music');
+    const filepath = path.join(audioDir, filename);
+    ensureDir(audioDir);
 
     // Save music file
     fs.writeFileSync(filepath, musicBuffer);

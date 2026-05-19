@@ -8,6 +8,10 @@ const archiver = require('archiver');
 const { cascadeSoftDeleteForUser } = require('../utils/prisma-soft-delete');
 const { writeAuditLog } = require('../utils/audit-log');
 const rateLimitStore = require('../middleware/rate-limit-store');
+const {
+  contentDispositionHeader,
+  safeDownloadFilename,
+} = require('../middleware/file-response-safety');
 
 const router = express.Router();
 
@@ -750,7 +754,16 @@ router.get('/data-export', authenticateToken, async (req, res) => {
       stats: { chatCount: chats.length, fileCount: files.length, messageCount: chats.reduce((a, c) => a + (c.messages?.length || 0), 0) },
     };
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
-    res.setHeader('Content-Disposition', `attachment; filename="siraGPT-export-${Date.now()}.json"`);
+    res.setHeader(
+      'Content-Disposition',
+      contentDispositionHeader(
+        'attachment',
+        safeDownloadFilename(`siraGPT-export-${Date.now()}.json`, {
+          fallback: 'siragpt-export.json',
+          extension: '.json',
+        }),
+      ),
+    );
     res.send(JSON.stringify(payload, null, 2));
   } catch (error) {
     console.error('Data export error:', error);
@@ -988,7 +1001,13 @@ router.get('/me/export', authenticateToken, async (req, res) => {
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader(
       'Content-Disposition',
-      `attachment; filename="siragpt-export-${userId}-${Date.now()}.zip"`,
+      contentDispositionHeader(
+        'attachment',
+        safeDownloadFilename(`siragpt-export-${userId}-${Date.now()}.zip`, {
+          fallback: 'siragpt-export.zip',
+          extension: '.zip',
+        }),
+      ),
     );
     res.setHeader('Content-Length', String(zipBuf.length));
     res.setHeader('X-Content-SHA256', zipSha);

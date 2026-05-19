@@ -41,6 +41,10 @@ const alignWrapper = require('../services/agents/align-wrapper');
 const safetyFilter = require('../services/agents/safety-filter');
 const calibrator = require('../services/agents/response-calibrator');
 const preferenceExport = require('../services/agents/preference-export');
+const {
+  contentDispositionHeader,
+  safeDownloadFilename,
+} = require('../middleware/file-response-safety');
 const evalHarness = require('../services/agents/eval-harness');
 const multiJudge = require('../services/agents/multi-judge');
 const truthfulQa = require('../services/agents/benchmarks/truthful-qa');
@@ -660,9 +664,13 @@ router.get(
     const out = preferenceExport.exportData({
       userId: req.user.id, format, agent, scrubPii, aggressive,
     });
+    const filename = safeDownloadFilename(
+      `preferences-${format}${agent ? '-' + agent : ''}-${req.user.id}.jsonl`,
+      { fallback: 'preferences.jsonl', extension: '.jsonl' },
+    );
     res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
     res.setHeader('Content-Disposition',
-      `attachment; filename="preferences-${format}${agent ? '-' + agent : ''}-${req.user.id}.jsonl"`);
+      contentDispositionHeader('attachment', filename));
     res.setHeader('X-Export-Count', String(out.count));
     res.setHeader('X-PII-Scrubbed', String(out.scrubbed));
     if (out.scrubbed && out.piiHits.length > 0) {

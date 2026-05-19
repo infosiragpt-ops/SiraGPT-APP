@@ -10,8 +10,28 @@ const {
     createWorkbook,
     writeWorkbookBuffer,
 } = require('../services/xlsx-safe-workbook');
+const {
+    contentDispositionHeader,
+    safeDownloadFilename,
+} = require('../middleware/file-response-safety');
 
 const router = express.Router();
+
+function exportFilename(filename, fallback, extension) {
+    return safeDownloadFilename(filename || fallback, { fallback, extension });
+}
+
+function csvCell(value) {
+    let text = value == null ? '' : String(value);
+    if (/^[=+\-@\t\r\n]/.test(text)) {
+        text = `'${text}`;
+    }
+    return `"${text.replace(/"/g, '""')}"`;
+}
+
+function csvRow(values) {
+    return values.map(csvCell).join(',');
+}
 
 // Simple content cleaning for exports
 function cleanContentForExport(text) {
@@ -214,14 +234,14 @@ router.post(
 
             // Generate filename
             const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
-            const finalFilename = filename || `ai-response-${timestamp}.xlsx`;
+            const finalFilename = exportFilename(filename, `ai-response-${timestamp}.xlsx`, '.xlsx');
 
             // Write to buffer
             const excelBuffer = await writeWorkbookBuffer(wb);
 
             // Set headers for file download
             res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-            res.setHeader('Content-Disposition', `attachment; filename="${finalFilename}"`);
+            res.setHeader('Content-Disposition', contentDispositionHeader('attachment', finalFilename));
             res.setHeader('Content-Length', excelBuffer.length);
 
             res.send(excelBuffer);
@@ -273,20 +293,18 @@ router.post(
 
             // Generate CSV content
             const csvRows = [
-                tableData.headers.join(','),
-                ...tableData.rows.map(row =>
-                    row.map(cell => `"${cell.replace(/"/g, '""')}"`).join(',')
-                )
+                csvRow(tableData.headers),
+                ...tableData.rows.map(row => csvRow(row))
             ];
             const csvContent = csvRows.join('\n');
 
             // Generate filename
             const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
-            const finalFilename = filename || `ai-response-${timestamp}.csv`;
+            const finalFilename = exportFilename(filename, `ai-response-${timestamp}.csv`, '.csv');
 
             // Set headers for file download
             res.setHeader('Content-Type', 'text/csv;charset=utf-8');
-            res.setHeader('Content-Disposition', `attachment; filename="${finalFilename}"`);
+            res.setHeader('Content-Disposition', contentDispositionHeader('attachment', finalFilename));
 
             res.send(csvContent);
 
@@ -330,11 +348,11 @@ router.post(
 
             // Generate filename
             const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
-            const finalFilename = filename || `ai-response-${timestamp}.txt`;
+            const finalFilename = exportFilename(filename, `ai-response-${timestamp}.txt`, '.txt');
 
             // Set headers for file download
             res.setHeader('Content-Type', 'text/plain;charset=utf-8');
-            res.setHeader('Content-Disposition', `attachment; filename="${finalFilename}"`);
+            res.setHeader('Content-Disposition', contentDispositionHeader('attachment', finalFilename));
 
             res.send(message.content);
 
@@ -462,11 +480,11 @@ router.post(
 
             // Generate filename
             const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
-            const finalFilename = filename || `ai-response-${timestamp}.docx`;
+            const finalFilename = exportFilename(filename, `ai-response-${timestamp}.docx`, '.docx');
 
             // Set headers for file download
             res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-            res.setHeader('Content-Disposition', `attachment; filename="${finalFilename}"`);
+            res.setHeader('Content-Disposition', contentDispositionHeader('attachment', finalFilename));
             res.setHeader('Content-Length', docBuffer.length);
 
             res.send(docBuffer);
@@ -629,14 +647,14 @@ router.post(
 
             // Generate filename
             const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
-            const finalFilename = filename || `ai-response-${timestamp}.pptx`;
+            const finalFilename = exportFilename(filename, `ai-response-${timestamp}.pptx`, '.pptx');
 
             // Write to buffer
             const pptxBuffer = await pptx.write({ outputType: 'nodebuffer' });
 
             // Set headers for file download
             res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
-            res.setHeader('Content-Disposition', `attachment; filename="${finalFilename}"`);
+            res.setHeader('Content-Disposition', contentDispositionHeader('attachment', finalFilename));
             res.setHeader('Content-Length', pptxBuffer.length);
 
             res.send(pptxBuffer);

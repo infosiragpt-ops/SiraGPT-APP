@@ -15,6 +15,17 @@ const adminStats = require('../services/admin-stats-aggregator');
 const webhookDispatcher = require('../services/webhook-dispatcher');
 const { writeAuditLog } = require('../utils/audit-log');
 const crypto = require('crypto');
+const {
+  contentDispositionHeader,
+  safeDownloadFilename,
+} = require('../middleware/file-response-safety');
+
+function invoicePdfFilename(invoice) {
+  return safeDownloadFilename(`invoice-${invoice?.number || invoice?.id || Date.now()}.pdf`, {
+    fallback: 'invoice.pdf',
+    extension: '.pdf',
+  });
+}
 
 // Apply admin middleware to all routes
 router.use(authenticateToken, requireAdmin);
@@ -2288,7 +2299,7 @@ router.get('/stripe/invoice/:invoiceId', async (req, res) => {
     if (invoice.invoice_pdf) {
       const response = await axios.get(invoice.invoice_pdf, { responseType: 'stream' });
       res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename=invoice-${invoice.number || invoice.id}.pdf`);
+      res.setHeader('Content-Disposition', contentDispositionHeader('attachment', invoicePdfFilename(invoice)));
       return response.data.pipe(res);
     }
 
