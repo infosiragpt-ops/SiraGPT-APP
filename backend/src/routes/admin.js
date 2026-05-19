@@ -11,6 +11,10 @@ const { serializeUser, serializeBigIntFields } = require('../utils/bigint-serial
 const modelSyncService = require('../services/model-sync-service');
 const modelSyncScheduler = require('../services/model-sync-scheduler');
 const { responseCache } = require('../middleware/response-cache');
+const adminStats = require('../services/admin-stats-aggregator');
+const webhookDispatcher = require('../services/webhook-dispatcher');
+const { writeAuditLog } = require('../utils/audit-log');
+const crypto = require('crypto');
 
 // Apply admin middleware to all routes
 router.use(authenticateToken, requireAdmin);
@@ -986,6 +990,330 @@ async function metricsHandler(req, res) {
   res.status(200).send(body);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// CYCLE 21 — Admin aggregation, queue management, user management & webhooks
+// ─────────────────────────────────────────────────────────────────────────────
+
+const STATS_CACHE = responseCache({ ttlMs: 60_000, namespace: 'admin-stats' });
+
+async function _handleStatsRoute(fn, req, res, label) {
+  try {
+    const result = await fn(prisma, { from: req.query.from, to: req.query.to });
+    res.json(result);
+  } catch (err) {
+    if (err instanceof RangeError) {
+      return res.status(400).json({ error: err.message });
+    }
+    console.error(`[admin/stats/${label}] failed:`, err && err.message ? err.message : err);
+    res.status(500).json({ error: `Failed to aggregate ${label} stats` });
+  }
+}
+
+router.get('/stats/users', requireSuperAdmin, STATS_CACHE, (req, res) =>
+  _handleStatsRoute(adminStats.aggregateUserStats, req, res, 'users')
+);
+router.get('/stats/usage', requireSuperAdmin, STATS_CACHE, (req, res) =>
+  _handleStatsRoute(adminStats.aggregateUsageStats, req, res, 'usage')
+);
+router.get('/stats/files', requireSuperAdmin, STATS_CACHE, (req, res) =>
+  _handleStatsRoute(adminStats.aggregateFileStats, req, res, 'files')
+);
+router.get('/stats/agents', requireSuperAdmin, STATS_CACHE, (req, res) =>
+  _handleStatsRoute(adminStats.aggregateAgentStats, req, res, 'agents')
+);
+
+// ── Queue dashboard ─────────────────────────────────────────────────────────
+// The repo already exposes the BullMQ board at /api/admin/queues/board.
+// These JSON endpoints add ergonomic admin-only operations for monitoring
+// dashboards. Errors are surfaced as 503 when Redis is unconfigured so the
+// UI can render an empty-state instead of a 500.
+router.get('/queues', requireSuperAdmin, async (_req, res) => {
+  try {
+    const queueSvc = require('../services/agents/agent-task-queue');
+    if (!process.env.REDIS_URL) {
+      return res.status(503).json({ error: 'Queue subsystem disabled (REDIS_URL unset)', queues: [] });
+    }
+    const health = await queueSvc.getQueueHealth();
+    res.json({ queues: [{ name: health.queue, counts: health.counts }] });
+  } catch (err) {
+    console.error('[admin/queues] failed:', err && err.message ? err.message : err);
+    res.status(500).json({ error: 'Failed to read queue counts' });
+  }
+});
+
+router.post('/queues/:name/retry-failed', requireSuperAdmin, async (req, res) => {
+  try {
+    const queueSvc = require('../services/agents/agent-task-queue');
+    if (!process.env.REDIS_URL) {
+      return res.status(503).json({ error: 'Queue subsystem disabled (REDIS_URL unset)' });
+    }
+    const q = queueSvc.getAgentTaskQueue();
+    if (req.params.name !== queueSvc.getQueueName()) {
+      return res.status(404).json({ error: 'Queue not found' });
+    }
+    const failed = await q.getFailed(0, 999);
+    let retried = 0;
+    for (const job of failed) {
+      try { await job.retry(); retried += 1; } catch (_) { /* skip non-retryable */ }
+    }
+    void writeAuditLog(prisma, {
+      actorType: 'admin',
+      actorId: req.user?.id || null,
+      actorName: req.user?.email || null,
+      resourceType: 'queue',
+      resourceId: req.params.name,
+      action: 'retry_failed',
+      after: { retried, totalFailed: failed.length },
+    });
+    res.json({ ok: true, retried, totalFailed: failed.length });
+  } catch (err) {
+    console.error('[admin/queues/retry-failed] failed:', err && err.message ? err.message : err);
+    res.status(500).json({ error: 'Failed to retry failed jobs' });
+  }
+});
+
+router.delete('/queues/:name/job/:id', requireSuperAdmin, async (req, res) => {
+  try {
+    const queueSvc = require('../services/agents/agent-task-queue');
+    if (!process.env.REDIS_URL) {
+      return res.status(503).json({ error: 'Queue subsystem disabled (REDIS_URL unset)' });
+    }
+    if (req.params.name !== queueSvc.getQueueName()) {
+      return res.status(404).json({ error: 'Queue not found' });
+    }
+    const q = queueSvc.getAgentTaskQueue();
+    const job = await q.getJob(String(req.params.id));
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    await job.remove();
+    void writeAuditLog(prisma, {
+      actorType: 'admin',
+      actorId: req.user?.id || null,
+      actorName: req.user?.email || null,
+      resourceType: 'queue_job',
+      resourceId: req.params.id,
+      action: 'remove',
+      metadata: { queue: req.params.name },
+    });
+    res.json({ ok: true, removed: req.params.id });
+  } catch (err) {
+    console.error('[admin/queues/job/delete] failed:', err && err.message ? err.message : err);
+    res.status(500).json({ error: 'Failed to remove job' });
+  }
+});
+
+// ── User search + management ───────────────────────────────────────────────
+router.get('/users/search', requireSuperAdmin, async (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    const limit = Math.max(1, Math.min(parseInt(req.query.limit, 10) || 20, 100));
+    if (!q) return res.json({ users: [], q, limit });
+
+    const users = await prisma.user.findMany({
+      where: {
+        AND: [
+          { isSuperAdmin: false },
+          {
+            OR: [
+              { email: { contains: q, mode: 'insensitive' } },
+              { name: { contains: q, mode: 'insensitive' } },
+            ],
+          },
+        ],
+      },
+      select: {
+        id: true, email: true, name: true, plan: true, isAdmin: true,
+        createdAt: true, deletedAt: true, subscriptionStatus: true,
+      },
+      take: limit,
+      orderBy: { createdAt: 'desc' },
+    });
+    res.json({ users, q, limit });
+  } catch (err) {
+    console.error('[admin/users/search] failed:', err && err.message ? err.message : err);
+    res.status(500).json({ error: 'Failed to search users' });
+  }
+});
+
+router.get('/users/:id', requireSuperAdmin, async (req, res) => {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.params.id },
+      select: {
+        id: true, email: true, name: true, plan: true, isAdmin: true,
+        isSuperAdmin: true, apiUsage: true, monthlyLimit: true,
+        monthlyCallLimit: true, subscriptionStatus: true, subscriptionEndDate: true,
+        stripeCustomerId: true, locale: true, preferredTone: true,
+        createdAt: true, updatedAt: true, deletedAt: true,
+      },
+    });
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    const [chats, payments, auditLog] = await Promise.all([
+      prisma.chat.findMany({
+        where: { userId: user.id },
+        select: { id: true, title: true, createdAt: true, updatedAt: true },
+        orderBy: { updatedAt: 'desc' },
+        take: 10,
+      }),
+      prisma.payment.findMany({
+        where: { userId: user.id },
+        select: { id: true, amount: true, currency: true, status: true, plan: true, provider: true, createdAt: true },
+        orderBy: { createdAt: 'desc' },
+        take: 20,
+      }),
+      prisma.auditLog.findMany({
+        where: { OR: [{ actorId: user.id }, { resourceType: 'user', resourceId: user.id }] },
+        select: { id: true, action: true, resourceType: true, resourceId: true, createdAt: true, metadata: true },
+        orderBy: { createdAt: 'desc' },
+        take: 25,
+      }).catch(() => []),
+    ]);
+
+    res.json({
+      user: serializeUser(user),
+      chats,
+      payments: serializeBigIntFields(payments),
+      auditLog,
+    });
+  } catch (err) {
+    console.error('[admin/users/:id] failed:', err && err.message ? err.message : err);
+    res.status(500).json({ error: 'Failed to fetch user detail' });
+  }
+});
+
+router.post('/users/:id/reset-password', requireSuperAdmin, async (req, res) => {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.params.id },
+      select: { id: true, email: true, name: true },
+    });
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    const token = crypto.randomBytes(32).toString('hex');
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1h
+
+    // Email service is optional — admins still get the token in the response
+    // so they can hand it to the user out-of-band when SMTP is unconfigured.
+    let emailed = false;
+    try {
+      const emailService = require('../services/email');
+      if (emailService && typeof emailService.isConfigured === 'function' && emailService.isConfigured()) {
+        if (typeof emailService.sendPasswordReset === 'function') {
+          await emailService.sendPasswordReset(user, { token, expiresAt });
+          emailed = true;
+        } else if (emailService.transporter && typeof emailService.transporter.sendMail === 'function') {
+          const base = process.env.FRONTEND_URL || 'http://localhost:3000';
+          await emailService.transporter.sendMail({
+            from: process.env.SMTP_FROM || 'no-reply@siragpt.io',
+            to: user.email,
+            subject: 'Reset your SiraGPT password',
+            text: `A password reset has been requested for your account.\n\nReset link: ${base}/reset-password?token=${token}\n\nThis link expires at ${expiresAt.toISOString()}.\nIf you did not request this, ignore this email.`,
+          });
+          emailed = true;
+        }
+      }
+    } catch (mailErr) {
+      console.error('[admin/users/reset-password] email failed:', mailErr.message);
+    }
+
+    void writeAuditLog(prisma, {
+      actorType: 'admin',
+      actorId: req.user?.id || null,
+      actorName: req.user?.email || null,
+      resourceType: 'user',
+      resourceId: user.id,
+      action: 'reset_password_issued',
+      metadata: { emailed, expiresAt: expiresAt.toISOString(), tokenHash },
+    });
+
+    res.json({ ok: true, emailed, expiresAt, tokenHash });
+  } catch (err) {
+    console.error('[admin/users/reset-password] failed:', err && err.message ? err.message : err);
+    res.status(500).json({ error: 'Failed to issue reset token' });
+  }
+});
+
+router.post('/users/:id/grant-credits', requireSuperAdmin, async (req, res) => {
+  try {
+    const credits = Number(req.body?.credits);
+    if (!Number.isFinite(credits) || credits <= 0) {
+      return res.status(400).json({ error: 'credits must be a positive number' });
+    }
+    const user = await prisma.user.findUnique({
+      where: { id: req.params.id },
+      select: { id: true, email: true, monthlyLimit: true },
+    });
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    const previousLimit = BigInt(user.monthlyLimit || 0);
+    const newLimit = previousLimit + BigInt(Math.floor(credits));
+    const updated = await prisma.user.update({
+      where: { id: user.id },
+      data: { monthlyLimit: newLimit },
+      select: { id: true, email: true, monthlyLimit: true },
+    });
+
+    void writeAuditLog(prisma, {
+      actorType: 'admin',
+      actorId: req.user?.id || null,
+      actorName: req.user?.email || null,
+      resourceType: 'user',
+      resourceId: user.id,
+      action: 'grant_credits',
+      before: { monthlyLimit: previousLimit.toString() },
+      after: { monthlyLimit: newLimit.toString() },
+      metadata: { credits, reason: req.body?.reason || null },
+    });
+
+    res.json({ ok: true, user: serializeUser(updated), granted: credits });
+  } catch (err) {
+    console.error('[admin/users/grant-credits] failed:', err && err.message ? err.message : err);
+    res.status(500).json({ error: 'Failed to grant credits' });
+  }
+});
+
+// ── Webhook delivery monitor ───────────────────────────────────────────────
+router.get('/webhooks/deliveries', requireSuperAdmin, (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 100, 500);
+    const status = req.query.status ? String(req.query.status) : null;
+    const event = req.query.event ? String(req.query.event) : null;
+    const deliveries = webhookDispatcher.listDeliveries({ limit, status, event });
+    res.json({ deliveries, stats: webhookDispatcher.stats() });
+  } catch (err) {
+    console.error('[admin/webhooks] failed:', err && err.message ? err.message : err);
+    res.status(500).json({ error: 'Failed to list webhook deliveries' });
+  }
+});
+
+router.post('/webhooks/deliveries/:id/retry', requireSuperAdmin, async (req, res) => {
+  try {
+    const result = await webhookDispatcher.retry(req.params.id, {
+      secret: req.body?.secret || process.env.WEBHOOK_SECRET,
+    });
+    if (result?.reason === 'not_found') return res.status(404).json({ error: 'Delivery not found' });
+    res.json(result);
+  } catch (err) {
+    console.error('[admin/webhooks/retry] failed:', err && err.message ? err.message : err);
+    res.status(500).json({ error: 'Failed to retry webhook delivery' });
+  }
+});
+
+router.post('/webhooks/retry-failed', requireSuperAdmin, async (req, res) => {
+  try {
+    const result = await webhookDispatcher.retryFailed({
+      limit: Math.min(parseInt(req.body?.limit, 10) || 100, 500),
+      since: req.body?.since || null,
+      secretResolver: () => req.body?.secret || process.env.WEBHOOK_SECRET,
+    });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error('[admin/webhooks/retry-failed] failed:', err && err.message ? err.message : err);
+    res.status(500).json({ error: 'Failed to retry failed webhooks' });
+  }
+});
+
 module.exports = router;
 module.exports.metricsHandler = metricsHandler;
 module.exports.INTERNAL = {
@@ -998,6 +1326,8 @@ module.exports.INTERNAL = {
   deriveOverall,
   withTimeout,
   PROBE_TIMEOUT_MS,
+  adminStats,
+  webhookDispatcher,
 };
 // Stripe invoices (admin)
 router.get('/stripe/invoices', async (req, res) => {
