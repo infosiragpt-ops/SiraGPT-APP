@@ -63,6 +63,7 @@ const prismaMock = {
       state.memberships.push(m);
       return m;
     },
+    count: async ({ where }) => state.memberships.filter((m) => m.orgId === where.orgId).length,
   },
   emailVerificationToken: {
     create: async ({ data }) => {

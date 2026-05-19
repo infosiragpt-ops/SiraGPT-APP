@@ -98,6 +98,7 @@ describe('system-cron', () => {
         'hard-delete-deleted-users',
         'prune-api-usage',
         'scrub-deleted-user-content',
+        'sweep-expired-announcements',
         'sweep-expired-api-keys',
         'sweep-expired-sessions',
         'sweep-expired-verification-tokens',

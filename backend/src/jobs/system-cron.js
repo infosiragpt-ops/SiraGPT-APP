@@ -46,6 +46,11 @@ const AUDIT_ARCHIVE_SCHEDULE = process.env.SYSTEM_CRON_AUDIT_ARCHIVE_SCHEDULE ||
 // after the audit archive (04:00) — the cascade from any user deletions
 // has already been picked up by then.
 const EVT_SWEEP_SCHEDULE = process.env.SYSTEM_CRON_EVT_SWEEP_SCHEDULE || '30 4 * * *';
+// Ratchet 45 — OrgAnnouncement expiry sweep. Default 04:15 UTC, sitting
+// between the audit archive (04:00) and the EVT sweep (04:30). Cheap
+// deleteMany — hard-deletes announcements whose `expiresAt` is in the
+// past (pinned rows with expiresAt = null are left untouched).
+const ANNOUNCEMENT_SWEEP_SCHEDULE = process.env.SYSTEM_CRON_ANNOUNCEMENT_SWEEP_SCHEDULE || '15 4 * * *';
 // Ratchet 45 — ApiKey expiry sweep. Default 04:45 UTC, right after the
 // EVT sweep (04:30). Hard-deletes rows whose `expiresAt` is in the past
 // (auth middleware already rejects them; no need to keep the rows).
@@ -313,6 +318,40 @@ function start(opts = {}) {
     { scheduled: false, timezone: 'UTC' },
   );
   tasks.push({ name: 'sweep-expired-verification-tokens', schedule: EVT_SWEEP_SCHEDULE, task: evtSweepTask, meta: evtSweepMeta });
+
+  // Ratchet 45 — OrgAnnouncement expiry sweep.
+  let announcementSweepRunning = false;
+  const announcementSweepMeta = {};
+  const announcementSweepTask = cron.schedule(
+    ANNOUNCEMENT_SWEEP_SCHEDULE,
+    async () => {
+      if (announcementSweepRunning) {
+        logger.warn?.('[system-cron] skip sweep-expired-announcements — previous run still active');
+        return;
+      }
+      announcementSweepRunning = true;
+      const finish = recordRun(announcementSweepMeta);
+      let runErr = null;
+      try {
+        // eslint-disable-next-line global-require
+        const job = require('./sweep-expired-announcements');
+        const runWithRetry = wrapWithRetry(() => job.run({ logger }), {
+          onRetry: ({ attempt, delayMs, reason }) =>
+            logger.warn?.(`[system-cron] sweep-expired-announcements retry ${attempt} in ${delayMs}ms (${reason})`),
+        });
+        const res = await runWithRetry();
+        logger.info?.(`[system-cron] sweep-expired-announcements done: ${JSON.stringify(res)}`);
+      } catch (err) {
+        runErr = err;
+        logger.error?.(`[system-cron] sweep-expired-announcements failed: ${err && err.message}`);
+      } finally {
+        announcementSweepRunning = false;
+        finish(runErr);
+      }
+    },
+    { scheduled: false, timezone: 'UTC' },
+  );
+  tasks.push({ name: 'sweep-expired-announcements', schedule: ANNOUNCEMENT_SWEEP_SCHEDULE, task: announcementSweepTask, meta: announcementSweepMeta });
 
   // Ratchet 45 — ApiKey expiry sweep.
   let apiKeySweepRunning = false;
