@@ -259,4 +259,60 @@ test('aggregateAgentStats computes success rate + percentiles', async () => {
   assert.ok(stats.successRate > 0.9 && stats.successRate <= 1);
   assert.ok(stats.p50DurationMs > 0);
   assert.ok(stats.p95DurationMs >= stats.p50DurationMs);
+  // Trend is always exactly 7 daily buckets with started/completed/failed.
+  assert.equal(stats.agentTaskTrend.length, 7);
+  for (const row of stats.agentTaskTrend) {
+    assert.ok('started' in row && 'completed' in row && 'failed' in row);
+    assert.match(row.date, /^\d{4}-\d{2}-\d{2}$/);
+  }
+});
+
+test('aggregateAgentStats agentTaskTrend buckets started/completed/failed per day', async () => {
+  // Build a trend dataset where the same Prisma.findMany call returns
+  // rows for *both* the main sample and the trend window.
+  const now = new Date();
+  const today = new Date(Date.UTC(
+    now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()
+  ));
+  const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
+  const twoDaysAgo = new Date(today.getTime() - 2 * 24 * 60 * 60 * 1000);
+  // 3 tasks today: one running, one completed, one failed.
+  // 1 task yesterday: started yesterday, completed today (so 'started'
+  // bumps yesterday's bucket and 'completed' bumps today's).
+  // 1 task two days ago: started + failed same day.
+  const rows = [
+    { status: 'running', createdAt: today, completedAt: null, failedAt: null },
+    { status: 'completed', createdAt: today, completedAt: today, failedAt: null },
+    { status: 'failed', createdAt: today, completedAt: null, failedAt: today },
+    { status: 'completed', createdAt: yesterday, completedAt: today, failedAt: null },
+    { status: 'failed', createdAt: twoDaysAgo, completedAt: null, failedAt: twoDaysAgo },
+  ];
+  const prisma = {
+    agentTask: { findMany: async () => rows },
+  };
+  const stats = await aggregateAgentStats(prisma, {});
+  const trend = stats.agentTaskTrend;
+  const byDate = Object.fromEntries(trend.map((r) => [r.date, r]));
+  const todayKey = today.toISOString().slice(0, 10);
+  const yestKey = yesterday.toISOString().slice(0, 10);
+  const twoKey = twoDaysAgo.toISOString().slice(0, 10);
+  // today: started=3, completed=2 (today's row + yesterday→today), failed=1
+  assert.equal(byDate[todayKey].started, 3);
+  assert.equal(byDate[todayKey].completed, 2);
+  assert.equal(byDate[todayKey].failed, 1);
+  // yesterday: started=1 (the yesterday→today task), no completed here
+  assert.equal(byDate[yestKey].started, 1);
+  assert.equal(byDate[yestKey].completed, 0);
+  // two days ago: started + failed = 1 each
+  assert.equal(byDate[twoKey].started, 1);
+  assert.equal(byDate[twoKey].failed, 1);
+});
+
+test('aggregateAgentStats agentTaskTrend is all zeros when no tasks', async () => {
+  const prisma = { agentTask: { findMany: async () => [] } };
+  const stats = await aggregateAgentStats(prisma, {});
+  assert.equal(stats.agentTaskTrend.length, 7);
+  assert.ok(stats.agentTaskTrend.every(
+    (r) => r.started === 0 && r.completed === 0 && r.failed === 0
+  ));
 });

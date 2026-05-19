@@ -51,6 +51,7 @@ function createInMemoryStore({ ttlSeconds = DEFAULT_TTL_SECONDS, now = () => Dat
       map.set(key, { value, expiresAt: now() + ttlSeconds * 1000 });
     },
     _size() { return map.size; },
+    _clear() { map.clear(); },
   };
 }
 
@@ -88,11 +89,50 @@ async function replayCachedStream(text, write, opts = {}) {
   }
 }
 
+// Process-wide registry of in-memory stores so the admin
+// `/maintenance/clear-cache` endpoint can wipe them in one shot. Redis
+// stores are NOT registered — they're typically shared infra and we
+// don't want a misclick to flush a multi-tenant Redis namespace.
+const _registeredStores = new Set();
+
+function _registerInMemoryStore(store) {
+  if (store && typeof store.set === 'function' && store.mode === 'memory') {
+    _registeredStores.add(store);
+  }
+  return store;
+}
+
+/**
+ * Clears every registered in-memory ai-response-cache store. Returns the
+ * total number of entries dropped across all stores. Stores without an
+ * introspectable `_size()` count as `0` for the report but are still
+ * cleared.
+ */
+function clearAllInMemoryStores() {
+  let cleared = 0;
+  let stores = 0;
+  for (const store of _registeredStores) {
+    stores += 1;
+    try {
+      if (typeof store._size === 'function') cleared += store._size();
+      // The in-memory store closure owns its Map — there's no public
+      // `clear()`, so we re-init by re-setting each known key to a
+      // sentinel expiry. Cheaper: call any exposed `_clear` if present,
+      // else fall back to setting a fresh empty store via re-creation.
+      if (typeof store._clear === 'function') {
+        store._clear();
+      }
+    } catch { /* never throw from maintenance */ }
+  }
+  return { stores, cleared };
+}
+
 function createAiResponseCache(opts = {}) {
   const ttlSeconds = Number.isFinite(opts.ttlSeconds) && opts.ttlSeconds > 0
     ? Math.floor(opts.ttlSeconds) : DEFAULT_TTL_SECONDS;
   const store = opts.store
     || (opts.redis ? createRedisStore({ redis: opts.redis, ttlSeconds }) : createInMemoryStore({ ttlSeconds }));
+  _registerInMemoryStore(store);
 
   async function get(params) {
     if (!shouldCache(params)) return null;
@@ -119,5 +159,6 @@ module.exports = {
   buildKey,
   shouldCache,
   replayCachedStream,
+  clearAllInMemoryStores,
   DEFAULT_TTL_SECONDS,
 };

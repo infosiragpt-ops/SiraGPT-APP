@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const { describe, test } = require('node:test');
 
 const { run, SCRUB_MARKER } = require('../src/jobs/scrub-deleted-user-content');
+const metrics = require('../src/utils/metrics');
 
 function buildPrismaStub() {
   const state = {
@@ -136,6 +137,35 @@ describe('scrub-deleted-user-content', () => {
       logger: { info() {}, warn() {}, error() {} },
     });
     assert.ok(!prisma._state.updatedMessages.find((u) => u.id === 'm-2'));
+  });
+
+  test('increments siragpt_gdpr_content_scrubbed_total with kind=message|file', async () => {
+    metrics._reset();
+    const prisma = buildPrismaStub();
+    await run({
+      prisma,
+      scrubAfterDays: 27,
+      now: new Date('2026-05-19T00:00:00Z'),
+      logger: { info() {}, warn() {}, error() {} },
+    });
+    const txt = metrics.renderText();
+    assert.match(txt, /siragpt_gdpr_content_scrubbed_total\{kind="message"\} 2/);
+    assert.match(txt, /siragpt_gdpr_content_scrubbed_total\{kind="file"\} 1/);
+  });
+
+  test('dry-run does not bump siragpt_gdpr_content_scrubbed_total', async () => {
+    metrics._reset();
+    const prisma = buildPrismaStub();
+    await run({
+      prisma,
+      scrubAfterDays: 27,
+      now: new Date('2026-05-19T00:00:00Z'),
+      dryRun: true,
+      logger: { info() {}, warn() {}, error() {} },
+    });
+    const txt = metrics.renderText();
+    assert.doesNotMatch(txt, /siragpt_gdpr_content_scrubbed_total\{kind="message"\} [1-9]/);
+    assert.doesNotMatch(txt, /siragpt_gdpr_content_scrubbed_total\{kind="file"\} [1-9]/);
   });
 
   test('returns zero when there are no candidates', async () => {

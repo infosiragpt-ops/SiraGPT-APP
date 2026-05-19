@@ -181,6 +181,10 @@ registerCounter('siragpt_analyzer_cache_hits_total', {
   help: 'Document professional analyzer in-process cache hits',
   labels: [],
 });
+registerCounter('siragpt_gdpr_content_scrubbed_total', {
+  help: 'Total messages + files redacted by the GDPR content scrub job (cycle 29)',
+  labels: ['kind'],
+});
 registerCounter('siragpt_analyzer_cache_misses_total', {
   help: 'Document professional analyzer in-process cache misses',
   labels: [],

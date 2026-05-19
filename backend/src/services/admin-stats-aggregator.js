@@ -81,6 +81,51 @@ function _buildSignupTrend(rows, now = new Date()) {
 }
 
 /**
+ * Build the last-7-days agent-task trend as
+ * `[{ date: 'YYYY-MM-DD', started, completed, failed }]`. Mirrors
+ * `_buildSignupTrend` / `_buildUploadTrend` but counts task lifecycle
+ * transitions per day so the admin dashboard can render started vs
+ * finished volumes side by side.
+ *
+ * - `started` is bucketed by `createdAt`
+ * - `completed` is bucketed by `completedAt` (only when present)
+ * - `failed` is bucketed by `failedAt` (fallback: row with status==='failed'
+ *   but no failedAt → bucketed by createdAt so the bar isn't lost)
+ */
+function _buildAgentTaskTrend(rows, now = new Date()) {
+  const todayUtc = new Date(Date.UTC(
+    now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()
+  ));
+  const buckets = new Map();
+  for (let i = 6; i >= 0; i -= 1) {
+    const d = new Date(todayUtc.getTime() - i * 24 * 60 * 60 * 1000);
+    buckets.set(d.toISOString().slice(0, 10), { started: 0, completed: 0, failed: 0 });
+  }
+  const bumpAt = (rawDate, field) => {
+    if (!rawDate) return;
+    const d = new Date(rawDate);
+    if (Number.isNaN(d.getTime())) return;
+    const key = d.toISOString().slice(0, 10);
+    const slot = buckets.get(key);
+    if (slot) slot[field] += 1;
+  };
+  for (const r of rows || []) {
+    bumpAt(r && r.createdAt, 'started');
+    if (r && (r.status === 'completed' || r.status === 'succeeded')) {
+      bumpAt(r.completedAt || r.createdAt, 'completed');
+    } else if (r && (r.status === 'failed' || r.failedAt)) {
+      bumpAt(r.failedAt || r.createdAt, 'failed');
+    }
+  }
+  return Array.from(buckets.entries()).map(([date, v]) => ({
+    date,
+    started: v.started,
+    completed: v.completed,
+    failed: v.failed,
+  }));
+}
+
+/**
  * Build the last-7-days upload trend as
  * `[{ date: 'YYYY-MM-DD', count, totalBytes }]`. Mirrors `_buildSignupTrend`
  * but additionally sums per-day bytes so the admin dashboard can render both
@@ -344,16 +389,40 @@ async function aggregateFileStats(prisma, range) {
 async function aggregateAgentStats(prisma, range) {
   const { from, to } = parseRange(range);
 
+  // Fixed window for the agent-task trend — last 7 days, independent of
+  // the caller's `range`. Mirrors signupTrend / uploadTrend.
+  const now = new Date();
+  const trendFrom = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
+      - 6 * 24 * 60 * 60 * 1000
+  );
+
   // Pull a bounded sample so we can compute durations + success rate.
   // For very large datasets, swap with a raw SQL percentile query — but
   // for the admin dashboard a 5000-row cap is plenty.
   const SAMPLE_CAP = 5000;
-  const tasks = await prisma.agentTask.findMany({
-    where: { createdAt: { gte: from, lte: to } },
-    select: { status: true, createdAt: true, completedAt: true, failedAt: true },
-    take: SAMPLE_CAP,
-    orderBy: { createdAt: 'desc' },
-  });
+  const [tasks, trendRows] = await Promise.all([
+    prisma.agentTask.findMany({
+      where: { createdAt: { gte: from, lte: to } },
+      select: { status: true, createdAt: true, completedAt: true, failedAt: true },
+      take: SAMPLE_CAP,
+      orderBy: { createdAt: 'desc' },
+    }),
+    // Trend rows must include tasks whose `createdAt` falls outside the
+    // trend window but whose `completedAt`/`failedAt` lands inside it,
+    // so we OR across all three timestamps. Defensive cap of 50k rows.
+    prisma.agentTask.findMany({
+      where: {
+        OR: [
+          { createdAt: { gte: trendFrom } },
+          { completedAt: { gte: trendFrom } },
+          { failedAt: { gte: trendFrom } },
+        ],
+      },
+      select: { status: true, createdAt: true, completedAt: true, failedAt: true },
+      take: 50000,
+    }),
+  ]);
 
   let success = 0;
   let failed = 0;
@@ -372,6 +441,8 @@ async function aggregateAgentStats(prisma, range) {
   const total = tasks.length;
   const finished = success + failed;
 
+  const agentTaskTrend = _buildAgentTaskTrend(trendRows, now);
+
   return {
     range: { from: from.toISOString(), to: to.toISOString() },
     sampleSize: total,
@@ -381,6 +452,7 @@ async function aggregateAgentStats(prisma, range) {
     successRate: finished ? Math.round((success / finished) * 1000) / 1000 : 0,
     p50DurationMs: percentile(durations, 50),
     p95DurationMs: percentile(durations, 95),
+    agentTaskTrend,
   };
 }
 

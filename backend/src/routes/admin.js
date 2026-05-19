@@ -721,6 +721,63 @@ router.get('/analyzer/health', responseCache({ ttlMs: 60_000, namespace: 'analyz
   }
 });
 
+// Maintenance — wipe every in-process cache in one shot. Super-admin
+// only. Clears:
+//   - response-cache middleware global LRU (cycle 10)
+//   - ai-response-cache in-memory stores (cycle 31)
+//   - document-professional-analyzer content-hash cache (existing)
+// Each subsystem is wrapped in its own try so a partial failure still
+// clears the rest. Returns per-subsystem counts + the audit-log id.
+router.post('/maintenance/clear-cache', requireSuperAdmin, async (req, res) => {
+  const counts = { responseCache: 0, aiResponseCache: 0, analyzerCache: 0 };
+  const errors = {};
+
+  // 1. Response-cache middleware LRU
+  try {
+    const responseCacheMod = require('../middleware/response-cache');
+    const before = responseCacheMod.globalLRU.size;
+    responseCacheMod.clearCache();
+    counts.responseCache = before;
+  } catch (err) {
+    errors.responseCache = err && err.message ? err.message : String(err);
+  }
+
+  // 2. AI response cache (in-memory stores only — redis-backed stores
+  //    are shared infra and not flushed by this endpoint).
+  try {
+    const aiCache = require('../services/cache/ai-response-cache');
+    const result = aiCache.clearAllInMemoryStores();
+    counts.aiResponseCache = result.cleared;
+  } catch (err) {
+    errors.aiResponseCache = err && err.message ? err.message : String(err);
+  }
+
+  // 3. Document professional analyzer cache
+  try {
+    const documentProfessionalAnalyzer = require('../services/document-professional-analyzer');
+    const result = documentProfessionalAnalyzer.clearAnalyzerCache();
+    if (result.cleared) {
+      counts.analyzerCache = (result.before && Number(result.before.size)) || 0;
+    } else {
+      errors.analyzerCache = result.reason || 'unavailable';
+    }
+  } catch (err) {
+    errors.analyzerCache = err && err.message ? err.message : String(err);
+  }
+
+  void writeAuditLog(prisma, {
+    actorType: 'admin',
+    actorId: req.user?.id || null,
+    actorName: req.user?.email || null,
+    resourceType: 'maintenance',
+    resourceId: 'clear-cache',
+    action: 'clear_cache',
+    after: { counts, errors: Object.keys(errors).length ? errors : undefined },
+  });
+
+  res.json({ ok: true, counts, errors: Object.keys(errors).length ? errors : undefined });
+});
+
 // Analyzer cache invalidation — wipes the in-process content-hash cache
 // for the document-enrichment pipeline. Use after rolling out new
 // analyzer logic that should produce different output for the same

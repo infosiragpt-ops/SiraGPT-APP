@@ -9,6 +9,7 @@ const {
   buildKey,
   shouldCache,
   replayCachedStream,
+  clearAllInMemoryStores,
 } = require('../src/services/cache/ai-response-cache');
 
 test('buildKey returns null when temperature != 0', () => {
@@ -58,4 +59,18 @@ test('replayCachedStream handles empty input', async () => {
   let called = false;
   await replayCachedStream('', async () => { called = true; });
   assert.equal(called, false);
+});
+
+test('clearAllInMemoryStores wipes registered in-memory stores', async () => {
+  const cache = createAiResponseCache({ store: createInMemoryStore({ ttlSeconds: 60 }) });
+  const params = {
+    model: 'gpt-4', systemPrompt: '', userPrompt: 'wipe-me',
+    temperature: 0, cacheResponses: true,
+  };
+  await cache.set(params, { text: 'cached' });
+  assert.deepEqual(await cache.get(params), { text: 'cached' });
+  const result = clearAllInMemoryStores();
+  assert.ok(result.stores >= 1);
+  assert.ok(result.cleared >= 1);
+  assert.equal(await cache.get(params), null);
 });

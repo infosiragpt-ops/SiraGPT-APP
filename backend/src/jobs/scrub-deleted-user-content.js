@@ -28,6 +28,19 @@
 const DEFAULT_SCRUB_DAYS = Number(process.env.GDPR_SCRUB_AFTER_DAYS || 27);
 const SCRUB_MARKER = '[PII scrubbed by GDPR job]';
 
+// Metrics are loaded lazily so this module stays importable in test
+// contexts that stub Prisma without booting the metrics registry.
+function _bumpScrubCounter(kind, delta) {
+  if (!delta) return;
+  try {
+    // eslint-disable-next-line global-require
+    const metrics = require('../utils/metrics');
+    if (metrics && typeof metrics.counter === 'function') {
+      metrics.counter('siragpt_gdpr_content_scrubbed_total', { kind }, delta);
+    }
+  } catch { /* metrics are best-effort */ }
+}
+
 /**
  * @param {{
  *   prisma?: import('@prisma/client').PrismaClient,
@@ -104,6 +117,7 @@ async function run(opts = {}) {
             data: { content: masked, metadata: newMeta },
           });
           totalMessages++;
+          _bumpScrubCounter('message', 1);
         } catch (err) {
           logger.warn(`[scrub-pii] message=${m.id} update failed: ${err?.message || err}`);
         }
@@ -136,6 +150,7 @@ async function run(opts = {}) {
       try {
         await prisma.file.update({ where: { id: f.id }, data });
         totalFiles++;
+        _bumpScrubCounter('file', 1);
       } catch (err) {
         logger.warn(`[scrub-pii] file=${f.id} update failed: ${err?.message || err}`);
       }
