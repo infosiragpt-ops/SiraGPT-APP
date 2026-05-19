@@ -17,6 +17,7 @@
  *   POST   /api/orgs/:id/chats/:chatId/share            — share a chat into the org
  *   GET    /api/orgs/:id/chats                          — list chats shared into the org
  *   GET    /api/orgs/:id/audit-logs                     — org-scoped audit feed (ADMIN+; cycle 66)
+ *   GET    /api/orgs/:id/events                         — live SSE tail of audit feed (ADMIN+; cycle 78)
  *   GET    /api/orgs/:id/settings                       — read per-org settings (member; cycle 66)
  *   PATCH  /api/orgs/:id/settings                       — merge per-org settings (ADMIN+; cycle 66)
  *
@@ -103,6 +104,7 @@ router.post('/', authenticateToken, async (req, res) => {
       resource: 'organization',
       resourceId: org.id,
       after: { name: org.name, slug: org.slug },
+      metadata: { orgId: org.id },
       req,
     });
 
@@ -210,7 +212,7 @@ router.post('/invitation/:token/accept', authenticateToken, async (req, res) => 
       userId,
       resource: 'organization',
       resourceId: invite.orgId,
-      metadata: { invitationId: invite.id, role: invite.role },
+      metadata: { orgId: invite.orgId, invitationId: invite.id, role: invite.role },
       req,
     });
 
@@ -273,7 +275,7 @@ router.post('/:id/invite', authenticateToken, async (req, res) => {
       userId,
       resource: 'organization',
       resourceId: orgId,
-      metadata: { invitationId: invite.id, email, role },
+      metadata: { orgId, invitationId: invite.id, email, role },
       req,
     });
 
@@ -397,6 +399,7 @@ router.delete('/:id/invitations/:token', authenticateToken, async (req, res) => 
       resource: 'organization',
       resourceId: orgId,
       before: { invitationId: invite.id, email: invite.email, role: invite.role },
+      metadata: { orgId },
       req,
     });
 
@@ -489,6 +492,7 @@ router.post('/:id/members/:userId/role', authenticateToken, async (req, res) => 
       resourceId: orgId,
       before: { userId: targetUserId, role: target.role },
       after: { userId: targetUserId, role: newRole },
+      metadata: { orgId },
       req,
     });
 
@@ -559,6 +563,7 @@ async function transferOwnershipHandler(req, res, deps = { prisma, writeAuditLog
       resourceId: orgId,
       before: { ownerId: callerId, targetRole: previousTargetRole },
       after: { ownerId: newOwnerId, previousOwnerRole: 'ADMIN' },
+      metadata: { orgId },
       req,
     });
 
@@ -614,6 +619,7 @@ async function leaveOrgHandler(req, res, deps = { prisma, writeAuditLog }) {
       resource: 'organization',
       resourceId: orgId,
       before: { userId, role: membership.role },
+      metadata: { orgId },
       req,
     });
 
@@ -670,6 +676,7 @@ router.delete('/:id/members/:userId', authenticateToken, async (req, res) => {
       resource: 'organization',
       resourceId: orgId,
       before: { userId: targetUserId, role: target.role },
+      metadata: { orgId },
       req,
     });
 
@@ -713,6 +720,7 @@ router.post('/:id/chats/:chatId/share', authenticateToken, async (req, res) => {
       resource: 'chat',
       resourceId: chatId,
       after: { organizationId: orgId },
+      metadata: { orgId },
       req,
     });
 
@@ -869,6 +877,7 @@ router.post('/:id/webhooks', authenticateToken, async (req, res) => {
       resource: 'organization',
       resourceId: orgId,
       after: { endpointId: endpoint.id, url, events },
+      metadata: { orgId },
       req,
     });
     res.status(201).json({ endpoint: serializeOrgWebhook(endpoint, { includeSecret: true }) });
@@ -899,6 +908,7 @@ router.delete('/:id/webhooks/:endpointId', authenticateToken, async (req, res) =
       resource: 'organization',
       resourceId: orgId,
       before: { endpointId },
+      metadata: { orgId },
       req,
     });
     res.json({ ok: true });
@@ -997,6 +1007,7 @@ router.post('/:id/slack', authenticateToken, async (req, res) => {
       resource: 'organization',
       resourceId: orgId,
       after: { slackId: row.id, channelName, isEnabled: !!isEnabled },
+      metadata: { orgId },
       req,
     });
     res.status(201).json({ slack: serializeOrgSlack(row) });
@@ -1057,6 +1068,7 @@ router.delete('/:id/slack', authenticateToken, async (req, res) => {
       userId,
       resource: 'organization',
       resourceId: orgId,
+      metadata: { orgId },
       req,
     });
     res.json({ ok: true });
@@ -1171,6 +1183,7 @@ router.post('/:id/billing/upgrade', authenticateToken, async (req, res) => {
         monthlyQuota: toBigIntString(updated.monthlyQuota),
         quotaResetAt: resetAt.toISOString(),
       },
+      metadata: { orgId },
       req,
     });
 
@@ -1264,6 +1277,176 @@ async function listOrgAuditLogsHandler(req, res, deps = { prisma }) {
 }
 
 router.get('/:id/audit-logs', authenticateToken, (req, res) => listOrgAuditLogsHandler(req, res));
+
+// ─── GET /api/orgs/:id/events (ADMIN+, SSE) ─────────────────────────
+// Live tail of audit events for the org. Mechanics:
+//   - On connect, emits a `ready` event followed by a backfill of any
+//     audit-log rows from the last 30 s (so a freshly-opened tab still
+//     sees the most recent activity without waiting for the poll).
+//   - Then polls prisma every `POLL_MS` (default 2 s) for rows with a
+//     `createdAt` strictly greater than the cursor.
+//   - Stops automatically after `MAX_DURATION_MS` (60 s) or after
+//     `MAX_EVENTS` (100) audit rows have been delivered — whichever
+//     comes first. Both ceilings keep one open connection from
+//     monopolising a worker.
+//   - Heartbeats every 15 s (`: ping`) so intermediate proxies don't
+//     drop the connection mid-window.
+// The handler is exported so tests can drive it with a fake prisma and
+// a fake `res` without binding the router into Express.
+const SSE_EVENTS = Object.freeze({
+  POLL_MS: 2_000,
+  MAX_DURATION_MS: 60_000,
+  MAX_EVENTS: 100,
+  BACKFILL_WINDOW_MS: 30_000,
+  HEARTBEAT_MS: 15_000,
+});
+
+async function streamOrgEventsHandler(req, res, deps = {}) {
+  const db = deps.prisma || prisma;
+  const cfg = { ...SSE_EVENTS, ...(deps.config || {}) };
+  const userId = req.user.id;
+  const orgId = req.params.id;
+
+  // Membership gate. ADMIN+ only — the audit feed can leak invitation
+  // tokens / emails / before/after snapshots, so we mirror the GET
+  // /audit-logs guard rather than the looser VIEWER membership.
+  try {
+    const membership = await assertMembership(db, orgId, userId, 'ADMIN');
+    if (!canManageMembers(membership.role)) {
+      return res.status(403).json({ error: 'insufficient role to subscribe to events' });
+    }
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    return res.status(500).json({ error: 'failed to verify membership' });
+  }
+
+  // Switch the response into SSE mode. We avoid `res.flushHeaders()` on
+  // mock `res` objects in tests — only call it when present so the
+  // handler is portable.
+  res.statusCode = 200;
+  if (typeof res.setHeader === 'function') {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+  }
+  if (typeof res.flushHeaders === 'function') {
+    try { res.flushHeaders(); } catch { /* mock res — ignore */ }
+  }
+
+  const send = (event, data) => {
+    if (res.writableEnded || res.destroyed) return false;
+    try {
+      res.write(`event: ${event}\n`);
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  // We use the `query` builder so the metadata.orgId filter is built
+  // the same way as the polled REST endpoint (consistency matters when
+  // operators correlate the two).
+  const { query: auditQuery } = require('../services/audit-query');
+
+  let delivered = 0;
+  let cursor = new Date(Date.now() - cfg.BACKFILL_WINDOW_MS);
+  const startedAt = Date.now();
+  let closed = false;
+
+  const close = (reason) => {
+    if (closed) return;
+    closed = true;
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+    if (pollTimer) clearTimeout(pollTimer);
+    if (deadlineTimer) clearTimeout(deadlineTimer);
+    send('done', { reason, delivered });
+    try { res.end(); } catch { /* ignore */ }
+  };
+
+  // Initial handshake — gives the frontend a stable point to detach
+  // "connecting…" UI before any rows actually arrive.
+  send('ready', {
+    orgId,
+    pollMs: cfg.POLL_MS,
+    maxEvents: cfg.MAX_EVENTS,
+    maxDurationMs: cfg.MAX_DURATION_MS,
+  });
+
+  async function poll() {
+    if (closed) return;
+    try {
+      const result = await auditQuery(db)
+        .byOrg(orgId)
+        .byDate(cursor, null)
+        .limit(Math.max(1, cfg.MAX_EVENTS - delivered))
+        .order('asc')
+        .run();
+      const items = Array.isArray(result?.items) ? result.items : [];
+      for (const row of items) {
+        // Skip rows we already emitted (cursor is `>=`, so the boundary
+        // row reappears on every poll until createdAt advances).
+        const rowAt = row.createdAt instanceof Date
+          ? row.createdAt
+          : (row.createdAt ? new Date(row.createdAt) : null);
+        if (rowAt && rowAt.getTime() <= cursor.getTime()) continue;
+        const ok = send('audit', {
+          id: row.id,
+          action: row.action,
+          actorId: row.actorId,
+          actorType: row.actorType,
+          resourceType: row.resourceType,
+          resourceId: row.resourceId,
+          metadata: row.metadata || null,
+          before: row.before || null,
+          after: row.after || null,
+          createdAt: rowAt ? rowAt.toISOString() : null,
+        });
+        if (!ok) { close('write_failed'); return; }
+        delivered += 1;
+        if (rowAt) cursor = rowAt;
+        if (delivered >= cfg.MAX_EVENTS) { close('max_events'); return; }
+      }
+    } catch (err) {
+      send('error', { message: err?.message || 'poll_failed' });
+    }
+    if (closed) return;
+    if (Date.now() - startedAt >= cfg.MAX_DURATION_MS) { close('timeout'); return; }
+    pollTimer = setTimeout(poll, cfg.POLL_MS);
+  }
+
+  // Heartbeat keeps intermediaries from dropping the connection
+  // between actual audit events.
+  const heartbeatTimer = setInterval(() => {
+    if (closed || res.writableEnded) return;
+    try { res.write(': ping\n\n'); } catch { /* ignore */ }
+  }, cfg.HEARTBEAT_MS);
+  if (heartbeatTimer.unref) heartbeatTimer.unref();
+
+  // Hard deadline — guarantees we don't outlive MAX_DURATION_MS even
+  // if the poll loop stalls (e.g. prisma hangs on a slow query).
+  const deadlineTimer = setTimeout(() => close('timeout'), cfg.MAX_DURATION_MS);
+  if (deadlineTimer.unref) deadlineTimer.unref();
+
+  // Client disconnect — release timers promptly.
+  if (req && typeof req.on === 'function') {
+    req.on('close', () => close('client_closed'));
+  }
+
+  let pollTimer = setTimeout(poll, 0);
+  if (pollTimer.unref) pollTimer.unref();
+
+  // For test harnesses that want to await full completion deterministically.
+  return new Promise((resolve) => {
+    const interval = setInterval(() => {
+      if (closed) { clearInterval(interval); resolve(); }
+    }, 5);
+    if (interval.unref) interval.unref();
+  });
+}
+
+router.get('/:id/events', authenticateToken, (req, res) => streamOrgEventsHandler(req, res));
 
 // ─── Settings (cycle 66) ────────────────────────────────────────────
 // Per-org JSON settings bag. Read is open to any member; write is
@@ -1364,7 +1547,9 @@ router.__handlers = {
   listOrgAuditLogs: listOrgAuditLogsHandler,
   getOrgSettings: getOrgSettingsHandler,
   patchOrgSettings: patchOrgSettingsHandler,
+  streamOrgEvents: streamOrgEventsHandler,
 };
+router.__sseConfig = SSE_EVENTS;
 router.__settingsHelpers = { sanitizeSettings, mergeSettings };
 router.__billing = {
   PLAN_QUOTAS,

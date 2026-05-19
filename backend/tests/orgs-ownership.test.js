@@ -102,6 +102,9 @@ test('transfer-ownership: happy path swaps OWNER → ADMIN, MEMBER → OWNER ato
   assert.equal(prisma._audits.length, 1);
   assert.equal(prisma._audits[0].action, 'org_ownership_transfer');
   assert.equal(prisma._audits[0].after.ownerId, 'user2');
+  // cycle 78: org-context audit writers must stamp metadata.orgId so
+  // the audit-query byOrg JSON predicate finds them.
+  assert.equal(prisma._audits[0].metadata?.orgId, 'o1');
 });
 
 test('transfer-ownership: rejects when caller is not OWNER (403)', async () => {
@@ -193,6 +196,7 @@ test('leave: ADMIN can self-leave', async () => {
   assert.equal(res._status, 200);
   assert.equal(res._body.ok, true);
   assert.equal(prisma._audits[0].action, 'org_member_leave');
+  assert.equal(prisma._audits[0].metadata?.orgId, 'o1');
 });
 
 test('leave: 409 last_owner when sole OWNER tries to leave', async () => {

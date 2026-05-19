@@ -1166,6 +1166,7 @@ router.post('/:id/share-to-org', authenticateToken, async (req, res) => {
       resourceId: chatId,
       before: { organizationId: chat.organizationId },
       after: { organizationId: orgId },
+      metadata: { orgId },
       req,
     });
 
