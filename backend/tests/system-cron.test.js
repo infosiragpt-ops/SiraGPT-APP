@@ -106,6 +106,7 @@ describe('system-cron', () => {
         'sweep-expired-sessions',
         'sweep-expired-verification-tokens',
         'sweep-inactive-api-keys',
+        'sweep-old-audit-archives',
         'sweep-old-notifications',
         'sweep-stale-system-settings',
         'sweep-webhook-secret-grace',
