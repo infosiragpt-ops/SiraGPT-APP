@@ -12,7 +12,7 @@
 const assert = require('node:assert');
 const { describe, it } = require('node:test');
 
-const { retryWithBackoff, backoffDelay, retryAfterDelay } = require('../src/channels/retry');
+const { retryWithBackoff, backoffDelay, retryAfterDelay, abortableSleep } = require('../src/channels/retry');
 
 // A fake sleep that records all the waits requested by the retry
 // loop, so tests don't actually pause execution.
@@ -174,6 +174,47 @@ describe('retryWithBackoff', () => {
     assert.equal(out.ok, true);
     // Should have slept ~5ms; allow generous slack on slow CI.
     assert.ok(elapsed >= 4, `expected ≥4ms elapsed, got ${elapsed}`);
+  });
+
+  it('honours an already-aborted signal before the first attempt', async () => {
+    const controller = new AbortController();
+    controller.abort(new Error('caller-cancelled'));
+
+    let calls = 0;
+    await assert.rejects(
+      retryWithBackoff(async () => {
+        calls += 1;
+        return { ok: true, status: 200 };
+      }, { signal: controller.signal }),
+      /caller-cancelled/,
+    );
+    assert.equal(calls, 0);
+  });
+
+  it('cancels the default retry sleep when the signal aborts', async () => {
+    const controller = new AbortController();
+    let calls = 0;
+
+    setTimeout(() => controller.abort(new Error('stop-retrying')), 5);
+    await assert.rejects(
+      retryWithBackoff(async () => {
+        calls += 1;
+        return { ok: false, status: 503 };
+      }, { signal: controller.signal, baseDelayMs: 1_000, jitter: false, maxAttempts: 3 }),
+      /stop-retrying/,
+    );
+    assert.equal(calls, 1);
+  });
+});
+
+describe('abortableSleep', () => {
+  it('rejects promptly on abort', async () => {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(new Error('sleep-cancelled')), 5);
+
+    const started = Date.now();
+    await assert.rejects(abortableSleep(1_000, controller.signal), /sleep-cancelled/);
+    assert.ok(Date.now() - started < 250, 'sleep should not wait for the full delay after abort');
   });
 });
 

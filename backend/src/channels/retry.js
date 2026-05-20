@@ -12,10 +12,12 @@ async function retryWithBackoff(fn, {
   baseDelayMs = 200,
   maxDelayMs = 5_000,
   jitter = true,
-  sleep = (ms) => new Promise(r => setTimeout(r, ms)),
+  sleep = abortableSleep,
+  signal,
 } = {}) {
   let lastErr;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    throwIfAborted(signal);
     try {
       const res = await fn(attempt);
       if (res && res.ok) return res;
@@ -23,11 +25,12 @@ async function retryWithBackoff(fn, {
       if (!retriable || attempt === maxAttempts) return res;
       const wait = retryAfterDelay(res.retryAfterMs, maxDelayMs)
         ?? backoffDelay(attempt, baseDelayMs, maxDelayMs, jitter);
-      await sleep(wait);
+      await sleep(wait, signal);
     } catch (err) {
       lastErr = err;
       if (attempt === maxAttempts) throw err;
-      await sleep(backoffDelay(attempt, baseDelayMs, maxDelayMs, jitter));
+      throwIfAborted(signal);
+      await sleep(backoffDelay(attempt, baseDelayMs, maxDelayMs, jitter), signal);
     }
   }
   if (lastErr) throw lastErr;
@@ -47,4 +50,32 @@ function retryAfterDelay(retryAfterMs, maxDelayMs) {
   return Math.min(delay, maxDelayMs);
 }
 
-module.exports = { retryWithBackoff, backoffDelay, retryAfterDelay };
+function abortError() {
+  const err = new Error('retryWithBackoff aborted');
+  err.name = 'AbortError';
+  return err;
+}
+
+function throwIfAborted(signal) {
+  if (signal?.aborted) {
+    throw signal.reason || abortError();
+  }
+}
+
+function abortableSleep(ms, signal) {
+  throwIfAborted(signal);
+  let onAbort;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, ms);
+    onAbort = () => {
+      clearTimeout(timer);
+      reject(signal.reason || abortError());
+    };
+
+    signal?.addEventListener?.('abort', onAbort, { once: true });
+  }).finally(() => {
+    if (onAbort) signal?.removeEventListener?.('abort', onAbort);
+  });
+}
+
+module.exports = { retryWithBackoff, backoffDelay, retryAfterDelay, abortableSleep };
