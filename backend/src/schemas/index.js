@@ -1,23 +1,123 @@
 'use strict';
 
-/**
- * Barrel export for backend zod schemas.
- *
- * `scripts/generate-api-types.js` walks every named export found here and
- * emits a matching TypeScript type into `lib/api-types.ts`, so anything new
- * must be exported through this file to show up on the FE.
- */
+const { z } = require('zod');
 
-const auth = require('./auth');
-const chats = require('./chats');
-const files = require('./files');
-const payments = require('./payments');
-const orgs = require('./orgs');
+const chatMessageSchema = z.object({
+  role: z.enum(['system', 'user', 'assistant', 'tool']),
+  content: z.string().min(1).max(100000),
+  name: z.string().max(100).optional(),
+  tool_calls: z.array(z.any()).optional(),
+  tool_call_id: z.string().optional(),
+});
+
+const aiGenerateRequestSchema = z.object({
+  messages: z.array(chatMessageSchema).min(1).max(100),
+  temperature: z.number().min(0).max(2).optional(),
+  maxTokens: z.number().int().min(1).max(100000).optional(),
+  stream: z.boolean().optional(),
+  model: z.string().max(200).optional(),
+  taskType: z.enum(['deep_reasoning', 'speed', 'multimodal', 'code', 'embeddings', 'default']).optional(),
+  files: z.array(z.object({
+    id: z.string().uuid().optional(),
+    name: z.string().max(500),
+    mimeType: z.string().max(200).optional(),
+    content: z.string().optional(),
+    url: z.string().url().optional(),
+  })).optional(),
+  cacheBypass: z.boolean().optional(),
+  sessionId: z.string().max(200).optional(),
+  projectId: z.string().uuid().optional(),
+});
+
+const fileUploadSchema = z.object({
+  files: z.array(z.object({
+    fieldname: z.string(),
+    originalname: z.string().max(1000),
+    encoding: z.string(),
+    mimetype: z.string(),
+    size: z.number().max(100 * 1024 * 1024),
+    buffer: z.instanceof(Buffer).optional(),
+  })).min(1).max(50),
+  projectId: z.string().uuid().optional(),
+  metadata: z.record(z.unknown()).optional(),
+});
+
+const promptInjectionPatterns = [
+  /ignore (all |previous )?(instructions?|prompts?|rules?)/i,
+  /forget (everything|all|previous)/i,
+  /system:\s*you are now/i,
+  /new system prompt/i,
+  /\[system\]/i,
+  /<\|im_start\|>/i,
+  /<\|im_end\|>/i,
+  /你是一个/i,
+  /pretend (you are|to be)/i,
+  /act as (if )?(you are|a )/i,
+  / disregard /i,
+  /override/i,
+];
+
+function sanitizeAgainstPromptInjection(text) {
+  if (typeof text !== 'string') return text;
+  let sanitized = text;
+  for (const pattern of promptInjectionPatterns) {
+    if (pattern.test(sanitized)) {
+      sanitized = sanitized.replace(pattern, '[REDACTED]');
+    }
+  }
+  return sanitized;
+}
+
+function sanitizeMessages(messages = []) {
+  return messages.map(m => ({
+    ...m,
+    content: sanitizeAgainstPromptInjection(m.content),
+  }));
+}
+
+const xssPatterns = {
+  script: /<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi,
+  eventHandler: /\bon\w+\s*=/gi,
+  javascriptUrl: /javascript\s*:/gi,
+  dataUri: /data\s*:[^;]*;base64/gi,
+  vbscript: /vbscript\s*:/gi,
+  expressionCss: /expression\s*\(/gi,
+  evalCode: /\beval\s*\(/gi,
+};
+
+function sanitizeAgainstXSS(text) {
+  if (typeof text !== 'string') return text;
+  let sanitized = text;
+  for (const [, pattern] of Object.entries(xssPatterns)) {
+    sanitized = sanitized.replace(pattern, '');
+  }
+  return sanitized
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;');
+}
+
+function validateAndSanitize(schema, data) {
+  const result = schema.safeParse(data);
+  if (!result.success) {
+    const err = new Error('Validation failed');
+    err.status = 400;
+    err.details = result.error.flatten();
+    throw err;
+  }
+  return result.data;
+}
 
 module.exports = {
-  ...auth,
-  ...chats,
-  ...files,
-  ...payments,
-  ...orgs,
+  aiGenerateRequestSchema,
+  chatMessageSchema,
+  fileUploadSchema,
+  promptInjectionPatterns,
+  sanitizeAgainstPromptInjection,
+  sanitizeAgainstXSS,
+  sanitizeMessages,
+  validateAndSanitize,
+  xssPatterns,
 };

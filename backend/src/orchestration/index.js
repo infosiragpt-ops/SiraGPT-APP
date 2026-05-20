@@ -12,4 +12,5 @@ module.exports = {
   ...require('./semantic-cache'),
   ...require('./sse-stream'),
   ...require('./web-search-tools'),
+  ...require('./route-enricher'),
 };

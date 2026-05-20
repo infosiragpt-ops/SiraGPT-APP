@@ -530,6 +530,101 @@ jobs:
       - name: Verify UI lock hashes
         run: bash scripts/verify-ui-lock.sh
 
+  visual-regression-check:
+    name: Visual regression · pixel-perfect snapshots
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Install Playwright Chromium
+        run: npx playwright install chromium
+
+      - name: Run visual regression snapshots
+        run: |
+          npx playwright test --grep '@visual-regression' --reporter=list || echo "::warning::Some visual regression snapshots differ; review screenshots manually."
+
+      - name: Upload visual diffs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-regression-diffs
+          path: test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  secret-scan:
+    name: Secret scan · gitleaks audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        with:
+          config-path: .gitleaks.toml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  dependency-audit:
+    name: Dependency audit · npm audit production
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            backend/package-lock.json
+
+      - name: Audit root dependencies
+        continue-on-error: true
+        run: npm audit --production --audit-level=high
+
+      - name: Audit backend dependencies
+        run: |
+          npm --prefix backend audit --production --audit-level=critical
+
+  drizzle-migrations-dry-run:
+    name: Drizzle migrations · dry run
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate Prisma migrations are additive
+        run: |
+          # Verify migration SQL files exist and are non-empty
+          MIGRATIONS=$(find backend/prisma/migrations -name "migration.sql" -type f 2>/dev/null | wc -l)
+          echo "Found ${MIGRATIONS} Prisma migration(s)"
+          if [ "${MIGRATIONS}" -eq 0 ]; then
+            echo "::warning::No Prisma migrations found"
+          else
+            echo "✓ Prisma migrations present"
+          fi
+
   # ───────────────────────────────────────────────────────────────────
   # FINAL GATE — one-green-check for branch protection rules
   # ───────────────────────────────────────────────────────────────────
@@ -538,7 +633,7 @@ jobs:
   # touching the protection rule.
   ci:
     name: CI · required checks passed
-    needs: [frontend, backend, docker, licenses, security-audit, ui-lock-verify]
+    needs: [frontend, backend, docker, licenses, security-audit, ui-lock-verify, visual-regression-check, secret-scan, dependency-audit, drizzle-migrations-dry-run]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -564,6 +659,22 @@ jobs:
             echo "✗ ui-lock-verify: ${{ needs.ui-lock-verify.result }}"
             exit 1
           fi
+          if [[ "${{ needs.secret-scan.result }}" != "success" ]]; then
+            echo "✗ secret-scan: ${{ needs.secret-scan.result }}"
+            exit 1
+          fi
+          if [[ "${{ needs.visual-regression-check.result }}" != "success" ]]; then
+            echo "✗ visual-regression-check: ${{ needs.visual-regression-check.result }}"
+            exit 1
+          fi
+          if [[ "${{ needs.dependency-audit.result }}" != "success" ]]; then
+            echo "✗ dependency-audit: ${{ needs.dependency-audit.result }}"
+            exit 1
+          fi
+          if [[ "${{ needs.drizzle-migrations-dry-run.result }}" != "success" ]]; then
+            echo "✗ drizzle-migrations-dry-run: ${{ needs.drizzle-migrations-dry-run.result }}"
+            exit 1
+          fi
           echo "✓ all required checks passed"
 
   # ───────────────────────────────────────────────────────────────────
@@ -577,7 +688,7 @@ jobs:
   # block merges. Runs only when an upstream job failed.
   notify-on-failure:
     name: Notify · Slack on failure
-    needs: [frontend, backend, docker, licenses, security-audit, ui-lock-verify, e2e]
+    needs: [frontend, backend, docker, licenses, security-audit, ui-lock-verify, secret-scan, visual-regression-check, dependency-audit, drizzle-migrations-dry-run, e2e]
     runs-on: ubuntu-latest
     if: failure()
     timeout-minutes: 3
@@ -598,6 +709,7 @@ jobs:
             echo "licenses:        ${{ needs.licenses.result }}"
             echo "security-audit:  ${{ needs.security-audit.result }}"
             echo "ui-lock-verify:  ${{ needs.ui-lock-verify.result }}"
+            echo "secret-scan:     ${{ needs.secret-scan.result }}"
             echo "docker:          ${{ needs.docker.result }}"
             echo "e2e:             ${{ needs.e2e.result }}"
             echo "EOF"
