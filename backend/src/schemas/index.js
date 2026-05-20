@@ -43,17 +43,16 @@ const fileUploadSchema = z.object({
 });
 
 const promptInjectionPatterns = [
-  /ignore (all |previous )?(instructions?|prompts?|rules?)/i,
-  /forget (everything|all|previous)/i,
+  /ignore\s+(all\s+)?(previous\s+)?(instructions?|prompts?|rules?)/i,
+  /forget\s+(everything|all|previous)/i,
   /system:\s*you are now/i,
   /new system prompt/i,
   /\[system\]/i,
   /<\|im_start\|>/i,
   /<\|im_end\|>/i,
-  /你是一个/i,
-  /pretend (you are|to be)/i,
+  /pretend\s+(you are|to be)/i,
   /act as (if )?(you are|a )/i,
-  / disregard /i,
+  /disregard/i,
   /override/i,
 ];
 

@@ -389,7 +389,12 @@ describe('LangGraph Orchestrator', () => {
   });
 
   it('createLangGraphOrchestrator run completes without gateway', async () => {
-    const orch = createLangGraphOrchestrator();
+    const stubStore = {
+      put: async () => ({ threadId: 'x', checkpointId: 'y' }),
+      get: async () => null,
+      latest: async () => null,
+    };
+    const orch = createLangGraphOrchestrator({ checkpointStore: stubStore });
     const state = await orch.run({
       threadId: 'test-thread-1',
       input: { prompt: 'hello world' },
