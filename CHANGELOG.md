@@ -4,6 +4,55 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and improvement cycles follow a sequential number with the date the work landed.
 
+## [0.4.2 / backend 1.3.2] — Cycles 161-170 milestone — 2026-05-20
+
+Seventh decade past the centenarian. **PATCH** bumps (root
+`0.4.1 → 0.4.2`, backend `1.3.1 → 1.3.2`) — a small celebratory
+ten-cycle marker. Cycles 161-170 expanded observability metrics, cron
+admin surface, org-transfer governance, audit-log tag indexing and
+CSV export, and org-scoped broadcast notifications. No public API
+breaks. See `docs/cycles/CYCLE_170.md` for the milestone narrative.
+
+### Added
+- **Cycle 170 — milestone consolidation**: `docs/cycles/CYCLE_170.md`
+  marker doc + CHANGELOG cycles 161-170 sweep + PATCH version bump to
+  `0.4.2 / 1.3.2` (small celebratory ten-cycle marker; no public API
+  breaks).
+- **Cycle 169 — org-scoped broadcast notifications**:
+  `POST /orgs/:id/broadcast` fans out a notification to all org
+  members with delivery tracking and per-member dismiss.
+- **Cycle 168 — writeAuditLog tags + 5 critical writers tagged**:
+  `writeAuditLog` accepts `tags: string[]`; 5 critical writers (auth,
+  org-transfer, billing, api-key, webhook) emit structured tags for
+  the new byTags filter.
+- **Cycle 167 — audit-query.byTags filter**: `auditQuery.byTags([...])`
+  filters audit rows by tag intersection; backed by a tag index for
+  fast lookup.
+- **Cycle 166 — org audit-logs CSV export**:
+  `GET /orgs/:id/audit-logs.csv` streams the org audit log as CSV
+  with quota integration from cycle 158.
+- **Cycle 165 — pending transfer sweep + list endpoint**: periodic
+  sweep expires stale pending transfers; admin list endpoint surfaces
+  all pending transfers with filter by org / recipient / state.
+- **Cycle 164 — org transfer approval policy + OrgPendingTransfer**:
+  org ownership transfers require recipient approval;
+  `OrgPendingTransfer` model holds pending state with TTL.
+- **Cycle 163 — cron nextRuns helper + admin extension**: `nextRuns()`
+  helper computes the next N firings per job; admin cron-jobs page
+  surfaces upcoming schedule for forecasting.
+- **Cycle 162 — API key request histogram + active gauge**: per-key
+  request latency histogram + active-keys gauge with labels for org,
+  status, and route family.
+- **Cycle 161 — org members gauge metric**: Prometheus gauge tracking
+  active members per org with periodic refresh, exposed on
+  `/metrics`.
+
+### Changed
+- Root `package.json` `0.4.1 → 0.4.2` and `backend/package.json`
+  `1.3.1 → 1.3.2` (**PATCH**; small celebratory ten-cycle marker; no
+  public API breaks).
+- Lint ratchet held at `--max-warnings 44`.
+
 ## [0.4.1 / backend 1.3.1] — Cycles 151-160 milestone — 2026-05-20
 
 Sixth decade past the centenarian. **PATCH** bumps (root
