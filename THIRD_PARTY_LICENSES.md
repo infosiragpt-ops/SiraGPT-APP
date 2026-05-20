@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1403**.
+Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1438**.
 
 > Re-run with `npm run licenses:report` after every dependency change. CI enforces that no GPL/AGPL/LGPL/CDDL/EPL/MPL-1.1/NPOSL family appears via `npm run licenses:check`.
 
@@ -24,7 +24,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 |---|---|---|---|
 | `json-schema` | 0.4.0 | AFL-2.1 OR BSD-3-Clause | [link](https://github.com/kriszyp/json-schema) |
 
-## Apache-2.0 (167)
+## Apache-2.0 (201)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -34,9 +34,38 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@ai-sdk/provider` | 3.0.8 | Apache-2.0 | [link](https://github.com/vercel/ai) |
 | `@ai-sdk/provider-utils` | 4.0.23 | Apache-2.0 | [link](https://github.com/vercel/ai) |
 | `@ai-sdk/react` | 3.0.170 | Apache-2.0 | [link](https://github.com/vercel/ai) |
+| `@aws-crypto/crc32` | 5.2.0 | Apache-2.0 | [link](https://github.com/aws/aws-sdk-js-crypto-helpers) |
+| `@aws-crypto/crc32c` | 5.2.0 | Apache-2.0 | [link](https://github.com/aws/aws-sdk-js-crypto-helpers) |
+| `@aws-crypto/sha1-browser` | 5.2.0 | Apache-2.0 | [link](https://github.com/aws/aws-sdk-js-crypto-helpers) |
+| `@aws-crypto/sha256-browser` | 5.2.0 | Apache-2.0 | [link](https://github.com/aws/aws-sdk-js-crypto-helpers) |
 | `@aws-crypto/sha256-js` | 5.2.0 | Apache-2.0 | [link](https://github.com/aws/aws-sdk-js-crypto-helpers) |
+| `@aws-crypto/supports-web-crypto` | 5.2.0 | Apache-2.0 | [link](https://github.com/aws/aws-sdk-js-crypto-helpers) |
 | `@aws-crypto/util` | 5.2.0 | Apache-2.0 | [link](https://github.com/aws/aws-sdk-js-crypto-helpers) |
+| `@aws-sdk/client-s3` | 3.1050.0 | Apache-2.0 | [link](https://github.com/aws/aws-sdk-js-v3) |
+| `@aws-sdk/core` | 3.974.12 | Apache-2.0 | [link](https://github.com/aws/aws-sdk-js-v3) |
+| `@aws-sdk/crc64-nvme` | 3.972.8 | Apache-2.0 | [link](https://github.com/aws/aws-sdk-js-v3) |
+| `@aws-sdk/credential-provider-env` | 3.972.38 | Apache-2.0 | [link](https://github.com/aws/aws-sdk-js-v3) |
+| `@aws-sdk/credential-provider-http` | 3.972.40 | Apache-2.0 | [link](https://github.com/aws/aws-sdk-js-v3) |
+| `@aws-sdk/credential-provider-ini` | 3.972.42 | Apache-2.0 | [link](https://github.com/aws/aws-sdk-js-v3) |
+| `@aws-sdk/credential-provider-login` | 3.972.42 | Apache-2.0 | [link](https://github.com/aws/aws-sdk-js-v3) |
+| `@aws-sdk/credential-provider-node` | 3.972.43 | Apache-2.0 | [link](https://github.com/aws/aws-sdk-js-v3) |
+| `@aws-sdk/credential-provider-process` | 3.972.38 | Apache-2.0 | [link](https://github.com/aws/aws-sdk-js-v3) |
+| `@aws-sdk/credential-provider-sso` | 3.972.42 | Apache-2.0 | [link](https://github.com/aws/aws-sdk-js-v3) |
+| `@aws-sdk/credential-provider-web-identity` | 3.972.42 | Apache-2.0 | [link](https://github.com/aws/aws-sdk-js-v3) |
+| `@aws-sdk/middleware-bucket-endpoint` | 3.972.14 | Apache-2.0 | [link](https://github.com/aws/aws-sdk-js-v3) |
+| `@aws-sdk/middleware-expect-continue` | 3.972.12 | Apache-2.0 | [link](https://github.com/aws/aws-sdk-js-v3) |
+| `@aws-sdk/middleware-flexible-checksums` | 3.974.20 | Apache-2.0 | [link](https://github.com/aws/aws-sdk-js-v3) |
+| `@aws-sdk/middleware-location-constraint` | 3.972.10 | Apache-2.0 | [link](https://github.com/aws/aws-sdk-js-v3) |
+| `@aws-sdk/middleware-sdk-s3` | 3.972.41 | Apache-2.0 | [link](https://github.com/aws/aws-sdk-js-v3) |
+| `@aws-sdk/middleware-ssec` | 3.972.10 | Apache-2.0 | [link](https://github.com/aws/aws-sdk-js-v3) |
+| `@aws-sdk/nested-clients` | 3.997.10 | Apache-2.0 | [link](https://github.com/aws/aws-sdk-js-v3) |
+| `@aws-sdk/s3-request-presigner` | 3.1050.0 | Apache-2.0 | [link](https://github.com/aws/aws-sdk-js-v3) |
+| `@aws-sdk/signature-v4-multi-region` | 3.996.27 | Apache-2.0 | [link](https://github.com/aws/aws-sdk-js-v3) |
+| `@aws-sdk/token-providers` | 3.1049.0 | Apache-2.0 | [link](https://github.com/aws/aws-sdk-js-v3) |
 | `@aws-sdk/types` | 3.973.8 | Apache-2.0 | [link](https://github.com/aws/aws-sdk-js-v3) |
+| `@aws-sdk/util-locate-window` | 3.965.5 | Apache-2.0 | [link](https://github.com/aws/aws-sdk-js-v3) |
+| `@aws-sdk/xml-builder` | 3.972.24 | Apache-2.0 | [link](https://github.com/aws/aws-sdk-js-v3) |
+| `@aws/lambda-invoke-store` | 0.2.4 | Apache-2.0 | [link](https://github.com/awslabs/aws-lambda-invoke-store) |
 | `@bufbuild/protobuf` | 2.12.0 | Apache-2.0 AND BSD-3-Clause | [link](https://github.com/bufbuild/protobuf-es) |
 | `@chevrotain/types` | 11.1.2 | Apache-2.0 | [link](https://github.com/Chevrotain/chevrotain) |
 | `@connectrpc/connect` | 2.0.0-rc.3 | Apache-2.0 | [link](https://github.com/connectrpc/connect-es) |
@@ -134,8 +163,13 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@profoundlogic/hogan` | 3.0.4 | Apache-2.0 | [link](https://github.com/ProfoundLogic/hogan.js-ProfoundLogic) |
 | `@puppeteer/browsers` | 2.10.12 | Apache-2.0 | [link](https://github.com/puppeteer/puppeteer.git#main) |
 | `@scarf/scarf` | 1.4.0 | Apache-2.0 | [link](https://github.com/scarf-sh/scarf-js) |
+| `@smithy/core` | 3.24.3 | Apache-2.0 | [link](https://github.com/smithy-lang/smithy-typescript) |
+| `@smithy/credential-provider-imds` | 4.3.3 | Apache-2.0 | [link](https://github.com/smithy-lang/smithy-typescript) |
+| `@smithy/fetch-http-handler` | 5.4.3 | Apache-2.0 | [link](https://github.com/smithy-lang/smithy-typescript) |
 | `@smithy/is-array-buffer` | 2.2.0 | Apache-2.0 | [link](https://github.com/awslabs/smithy-typescript) |
-| `@smithy/types` | 4.14.1 | Apache-2.0 | [link](https://github.com/smithy-lang/smithy-typescript) |
+| `@smithy/node-http-handler` | 4.7.3 | Apache-2.0 | [link](https://github.com/smithy-lang/smithy-typescript) |
+| `@smithy/signature-v4` | 5.4.3 | Apache-2.0 | [link](https://github.com/smithy-lang/smithy-typescript) |
+| `@smithy/types` | 4.14.2 | Apache-2.0 | [link](https://github.com/smithy-lang/smithy-typescript) |
 | `@smithy/util-buffer-from` | 2.2.0 | Apache-2.0 | [link](https://github.com/awslabs/smithy-typescript) |
 | `@smithy/util-utf8` | 2.3.0 | Apache-2.0 | [link](https://github.com/awslabs/smithy-typescript) |
 | `@swc/core` | 1.15.30 | Apache-2.0 | [link](https://github.com/swc-project/swc) |
@@ -395,7 +429,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `yargs-parser` | 21.1.1 | ISC | [link](https://github.com/yargs/yargs-parser) |
 | `zod-to-json-schema` | 3.25.2 | ISC | [link](https://github.com/StefanTerdell/zod-to-json-schema) |
 
-## MIT (1060)
+## MIT (1061)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -442,7 +476,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@jridgewell/trace-mapping` | 0.3.31 | MIT | [link](https://github.com/jridgewell/sourcemaps) |
 | `@js-sdsl/ordered-map` | 4.4.2 | MIT | [link](https://github.com/js-sdsl/js-sdsl) |
 | `@kurkle/color` | 0.3.4 | MIT | [link](https://github.com/kurkle/color) |
-| `@langchain/core` | 1.1.41, 1.1.42 | MIT | [link](https://github.com/langchain-ai/langchainjs) |
+| `@langchain/core` | 1.1.41, 1.1.47 | MIT | [link](https://github.com/langchain-ai/langchainjs) |
 | `@langchain/langgraph` | 1.2.9 | MIT | [link](https://github.com/langchain-ai/langgraphjs) |
 | `@langchain/langgraph-checkpoint` | 1.0.1 | MIT | [link](https://github.com/langchain-ai/langgraphjs) |
 | `@langchain/langgraph-sdk` | 1.8.10 | MIT | [link](https://github.com/langchain-ai/langgraphjs) |
@@ -741,6 +775,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `bmp-js` | 0.1.0 | MIT | [link](https://github.com/shaozilee/bmp-js) |
 | `body-parser` | 1.20.5, 2.2.2 | MIT | [link](https://github.com/expressjs/body-parser) |
 | `bottleneck` | 2.19.5 | MIT | [link](https://github.com/SGrondin/bottleneck) |
+| `bowser` | 2.14.1 | MIT | [link](https://github.com/bowser-js/bowser) |
 | `brace-expansion` | 1.1.14, 2.1.0, 5.0.6 | MIT | [link](https://github.com/juliangruber/brace-expansion) |
 | `braces` | 3.0.3 | MIT | [link](https://github.com/micromatch/braces) |
 | `brotli` | 1.3.3 | MIT | [link](https://github.com/devongovett/brotli.js) |
@@ -885,7 +920,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `fast-glob` | 3.3.3 | MIT | [link](https://github.com/mrmlnc/fast-glob) |
 | `fast-safe-stringify` | 2.1.1 | MIT | [link](https://github.com/davidmarkclements/fast-safe-stringify) |
 | `fast-xml-builder` | 1.2.0 | MIT | [link](https://github.com/NaturalIntelligence/fast-xml-builder) |
-| `fast-xml-parser` | 5.7.2 | MIT | [link](https://github.com/NaturalIntelligence/fast-xml-parser) |
+| `fast-xml-parser` | 5.7.3 | MIT | [link](https://github.com/NaturalIntelligence/fast-xml-parser) |
 | `fault` | 1.0.4 | MIT | [link](https://github.com/wooorm/fault) |
 | `fd-slicer` | 1.1.0 | MIT | [link](https://github.com/andrewrk/node-fd-slicer) |
 | `fdir` | 6.5.0 | MIT | [link](https://github.com/thecodrr/fdir) |
@@ -1265,7 +1300,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `raw-body` | 2.5.3, 3.0.2 | MIT | [link](https://github.com/stream-utils/raw-body) |
 | `rc` | 1.2.8 | BSD-2-Clause OR MIT OR Apache-2.0 | [link](https://github.com/dominictarr/rc) |
 | `rc9` | 2.1.2 | MIT | [link](https://github.com/unjs/rc9) |
-| `react` | 18.3.1, 19.2.5 | MIT | [link](https://github.com/facebook/react) |
+| `react` | 18.3.1, 19.2.6 | MIT | [link](https://github.com/facebook/react) |
 | `react-day-picker` | 9.14.0 | MIT | [link](https://github.com/gpbl/react-day-picker) |
 | `react-dom` | 18.3.1 | MIT | [link](https://github.com/facebook/react) |
 | `react-hook-form` | 7.73.1 | MIT | [link](https://github.com/react-hook-form/react-hook-form) |
@@ -1457,7 +1492,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `yocto-queue` | 1.2.2 | MIT | [link](https://github.com/sindresorhus/yocto-queue) |
 | `zip-stream` | 4.1.1 | MIT | [link](https://github.com/archiverjs/node-zip-stream) |
 | `zlibjs` | 0.3.1 | MIT | [link](https://github.com/imaya/zlib.js) |
-| `zod` | 3.25.76, 4.3.6 | MIT | [link](https://github.com/colinhacks/zod) |
+| `zod` | 3.25.76, 4.3.6, 4.4.3 | MIT | [link](https://github.com/colinhacks/zod) |
 | `zwitch` | 2.0.4 | MIT | [link](https://github.com/wooorm/zwitch) |
 
 ## MPL-2.0 (1)
