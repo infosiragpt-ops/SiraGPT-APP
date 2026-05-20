@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1438**.
+Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1456**.
 
 > Re-run with `npm run licenses:report` after every dependency change. CI enforces that no GPL/AGPL/LGPL/CDDL/EPL/MPL-1.1/NPOSL family appears via `npm run licenses:check`.
 
@@ -24,7 +24,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 |---|---|---|---|
 | `json-schema` | 0.4.0 | AFL-2.1 OR BSD-3-Clause | [link](https://github.com/kriszyp/json-schema) |
 
-## Apache-2.0 (201)
+## Apache-2.0 (203)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -70,6 +70,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@chevrotain/types` | 11.1.2 | Apache-2.0 | [link](https://github.com/Chevrotain/chevrotain) |
 | `@connectrpc/connect` | 2.0.0-rc.3 | Apache-2.0 | [link](https://github.com/connectrpc/connect-es) |
 | `@connectrpc/connect-web` | 2.0.0-rc.3 | Apache-2.0 | [link](https://github.com/connectrpc/connect-es) |
+| `@drizzle-team/brocli` | 0.10.2 | Apache-2.0 | [link](https://github.com/drizzle-team/brocli) |
 | `@google/genai` | 1.28.0 | Apache-2.0 | [link](https://github.com/googleapis/js-genai) |
 | `@google/generative-ai` | 0.24.1 | Apache-2.0 | [link](https://github.com/google/generative-ai-js) |
 | `@grpc/grpc-js` | 1.14.3 | Apache-2.0 | [link](https://github.com/grpc/grpc-node.git#master) |
@@ -196,6 +197,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `didyoumean` | 1.2.2 | Apache-2.0 | [link](https://github.com/dcporter/didyoumean.js) |
 | `docx-preview` | 0.3.7 | Apache-2.0 | [link](https://github.com/VolodymyrBaydalka/docxjs) |
 | `dompurify` | 3.4.1 | MPL-2.0 OR Apache-2.0 | [link](https://github.com/cure53/DOMPurify) |
+| `drizzle-orm` | 0.45.2 | Apache-2.0 | [link](https://github.com/drizzle-team/drizzle-orm) |
 | `ecdsa-sig-formatter` | 1.0.11 | Apache-2.0 | [link](https://github.com/Brightspace/node-ecdsa-sig-formatter) |
 | `ejs` | 3.1.10 | Apache-2.0 | [link](https://github.com/mde/ejs) |
 | `events-universal` | 1.0.1 | Apache-2.0 | [link](https://github.com/holepunchto/events-universal) |
@@ -263,7 +265,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `domelementtype` | 2.3.0 | BSD-2-Clause | [link](https://github.com/fb55/domelementtype) |
 | `domhandler` | 5.0.3 | BSD-2-Clause | [link](https://github.com/fb55/domhandler) |
 | `domutils` | 3.2.2 | BSD-2-Clause | [link](https://github.com/fb55/domutils) |
-| `dotenv` | 16.6.1 | BSD-2-Clause | [link](https://github.com/motdotla/dotenv) |
+| `dotenv` | 16.6.1, 17.4.2 | BSD-2-Clause | [link](https://github.com/motdotla/dotenv) |
 | `duck` | 0.1.12 | BSD | [link](https://github.com/mwilliamson/duck.js) |
 | `duplexer2` | 0.1.4 | BSD-3-Clause | [link](https://github.com/deoxxa/duplexer2) |
 | `entities` | 2.2.0, 4.5.0, 6.0.1, 7.0.1 | BSD-2-Clause | [link](https://github.com/fb55/entities) |
@@ -429,7 +431,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `yargs-parser` | 21.1.1 | ISC | [link](https://github.com/yargs/yargs-parser) |
 | `zod-to-json-schema` | 3.25.2 | ISC | [link](https://github.com/StefanTerdell/zod-to-json-schema) |
 
-## MIT (1061)
+## MIT (1076)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -451,6 +453,9 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@date-fns/tz` | 1.4.1 | MIT | [link](https://github.com/date-fns/tz) |
 | `@e2b/code-interpreter` | 1.5.1 | MIT | [link](https://github.com/e2b-dev/code-interpreter) |
 | `@elevenlabs/elevenlabs-js` | 2.25.1 | MIT | [link](https://github.com/elevenlabs/elevenlabs-js) |
+| `@esbuild-kit/core-utils` | 3.3.2 | MIT | [link](https://github.com/esbuild-kit/core-utils) |
+| `@esbuild-kit/esm-loader` | 2.6.5 | MIT | [link](https://github.com/esbuild-kit/esm-loader) |
+| `@esbuild/darwin-arm64` | 0.18.20, 0.25.12, 0.28.0 | MIT | [link](https://github.com/evanw/esbuild) |
 | `@fal-ai/client` | 1.7.0 | MIT | [link](https://github.com/fal-ai/fal-js) |
 | `@fast-csv/format` | 4.3.5 | MIT | [link](https://github.com/C2FO/fast-csv) |
 | `@fast-csv/parse` | 4.3.6 | MIT | [link](https://github.com/C2FO/fast-csv) |
@@ -493,6 +498,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@monaco-editor/loader` | 1.7.0 | MIT | [link](https://github.com/suren-atoyan/monaco-loader) |
 | `@monaco-editor/react` | 4.7.0 | MIT | [link](https://github.com/suren-atoyan/monaco-react) |
 | `@napi-rs/canvas` | 0.1.100, 0.1.99 | MIT | [link](https://github.com/Brooooooklyn/canvas) |
+| `@neondatabase/serverless` | 1.1.0 | MIT | [link](https://github.com/neondatabase/serverless) |
 | `@next/env` | 14.2.35 | MIT | [link](https://github.com/vercel/next.js) |
 | `@noble/hashes` | 1.8.0 | MIT | [link](https://github.com/paulmillr/noble-hashes) |
 | `@nodable/entities` | 2.1.0 | MIT | [link](https://github.com/nodable/val-parsers) |
@@ -874,6 +880,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `docx` | 8.5.0, 9.5.1 | MIT | [link](https://github.com/dolanmiu/docx) |
 | `docxtemplater` | 3.67.1 | MIT | [link](https://github.com/open-xml-templating/docxtemplater) |
 | `dom-serializer` | 2.0.0 | MIT | [link](https://github.com/cheeriojs/dom-serializer) |
+| `drizzle-kit` | 0.31.10 | MIT | [link](https://github.com/drizzle-team/drizzle-orm) |
 | `dunder-proto` | 1.0.1 | MIT | [link](https://github.com/es-shims/dunder-proto) |
 | `e2b` | 1.13.2 | MIT | [link](https://github.com/e2b-dev/e2b) |
 | `eastasianwidth` | 0.2.0 | MIT | [link](https://github.com/komagata/eastasianwidth) |
@@ -895,6 +902,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `es-object-atoms` | 1.1.1 | MIT | [link](https://github.com/ljharb/es-object-atoms) |
 | `es-set-tostringtag` | 2.1.0 | MIT | [link](https://github.com/es-shims/es-set-tostringtag) |
 | `es-toolkit` | 1.46.0 | MIT | [link](https://github.com/toss/es-toolkit) |
+| `esbuild` | 0.18.20, 0.25.12, 0.28.0 | MIT | [link](https://github.com/evanw/esbuild) |
 | `escalade` | 3.2.0 | MIT | [link](https://github.com/lukeed/escalade) |
 | `escape-html` | 1.0.3 | MIT | [link](https://github.com/component/escape-html) |
 | `escape-string-regexp` | 5.0.0 | MIT | [link](https://github.com/sindresorhus/escape-string-regexp) |
@@ -949,6 +957,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `get-nonce` | 1.0.1 | MIT | [link](https://github.com/theKashey/get-nonce) |
 | `get-proto` | 1.0.1 | MIT | [link](https://github.com/ljharb/get-proto) |
 | `get-stream` | 5.2.0 | MIT | [link](https://github.com/sindresorhus/get-stream) |
+| `get-tsconfig` | 4.14.0 | MIT | [link](https://github.com/privatenumber/get-tsconfig) |
 | `get-uri` | 6.0.5 | MIT | [link](https://github.com/TooTallNate/proxy-agents) |
 | `giget` | 2.0.0 | MIT | [link](https://github.com/unjs/giget) |
 | `github-from-package` | 0.0.0 | MIT | [link](https://github.com/substack/github-from-package) |
@@ -1230,8 +1239,13 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `peberminta` | 0.9.0 | MIT | [link](https://github.com/mxxii/peberminta) |
 | `pend` | 1.2.0 | MIT | [link](https://github.com/andrewrk/node-pend) |
 | `perfect-debounce` | 1.0.0 | MIT | [link](https://github.com/unjs/perfect-debounce) |
-| `pg-protocol` | 1.13.0 | MIT | [link](https://github.com/brianc/node-postgres) |
+| `pg` | 8.21.0 | MIT | [link](https://github.com/brianc/node-postgres) |
+| `pg-cloudflare` | 1.4.0 | MIT | [link](https://github.com/brianc/node-postgres) |
+| `pg-connection-string` | 2.13.0 | MIT | [link](https://github.com/brianc/node-postgres) |
+| `pg-pool` | 3.14.0 | MIT | [link](https://github.com/brianc/node-postgres) |
+| `pg-protocol` | 1.14.0 | MIT | [link](https://github.com/brianc/node-postgres) |
 | `pg-types` | 2.2.0 | MIT | [link](https://github.com/brianc/node-pg-types) |
+| `pgpass` | 1.0.5 | MIT | [link](https://github.com/hoegaarden/pgpass) |
 | `picomatch` | 2.3.2, 4.0.4 | MIT | [link](https://github.com/micromatch/picomatch) |
 | `pify` | 2.3.0 | MIT | [link](https://github.com/sindresorhus/pify) |
 | `pino` | 10.3.1 | MIT | [link](https://github.com/pinojs/pino) |
@@ -1346,6 +1360,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `reselect` | 5.1.1 | MIT | [link](https://github.com/reduxjs/reselect) |
 | `resolve` | 1.22.12 | MIT | [link](https://github.com/browserify/resolve) |
 | `resolve-from` | 4.0.0 | MIT | [link](https://github.com/sindresorhus/resolve-from) |
+| `resolve-pkg-maps` | 1.0.0 | MIT | [link](https://github.com/privatenumber/resolve-pkg-maps) |
 | `restructure` | 3.0.2 | MIT | [link](https://github.com/devongovett/restructure) |
 | `reusify` | 1.1.0 | MIT | [link](https://github.com/mcollina/reusify) |
 | `robots-parser` | 3.0.1 | MIT | [link](https://github.com/samclarke/robots-parser) |
@@ -1376,6 +1391,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `socks-proxy-agent` | 8.0.5 | MIT | [link](https://github.com/TooTallNate/proxy-agents) |
 | `sonic-boom` | 4.2.1 | MIT | [link](https://github.com/pinojs/sonic-boom) |
 | `sonner` | 2.0.7 | MIT | [link](https://github.com/emilkowalski/sonner) |
+| `source-map-support` | 0.5.21 | MIT | [link](https://github.com/evanw/node-source-map-support) |
 | `space-separated-tokens` | 2.0.2 | MIT | [link](https://github.com/wooorm/space-separated-tokens) |
 | `spotify-web-api-node` | 5.0.2 | MIT | [link](https://github.com/thelinmichael/spotify-web-api-node) |
 | `standard-as-callback` | 2.1.0 | MIT | [link](https://github.com/luin/asCallback) |
@@ -1431,6 +1447,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `trough` | 2.2.0 | MIT | [link](https://github.com/wooorm/trough) |
 | `ts-algebra` | 2.0.0 | MIT | [link](https://github.com/ThomasAribart/ts-algebra) |
 | `ts-dedent` | 2.2.0 | MIT | [link](https://github.com/tamino-martinius/node-ts-dedent) |
+| `tsx` | 4.22.3 | MIT | [link](https://github.com/privatenumber/tsx) |
 | `turndown` | 7.2.4 | MIT | [link](https://github.com/mixmark-io/turndown) |
 | `type-is` | 1.6.18, 2.0.1 | MIT | [link](https://github.com/jshttp/type-is) |
 | `typed-query-selector` | 2.12.0 | MIT | [link](https://github.com/g-plane/typed-query-selector) |
@@ -1501,11 +1518,12 @@ Each entry below carries a non-permissive declared license but is permitted with
 |---|---|---|---|
 | `dxf-viewer` | 1.0.47 | MPL-2.0 | [link](https://github.com/vagran/dxf-viewer) |
 
-## Public Domain (2)
+## Public Domain (3)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
 | `big-integer` | 1.6.52 | Unlicense | [link](https://github.com/peterolson/BigInteger.js) |
+| `postgres` | 3.4.9 | Unlicense | [link](https://github.com/porsager/postgres) |
 | `robust-predicates` | 3.0.3 | Unlicense | [link](https://github.com/mourner/robust-predicates) |
 
 ## UNKNOWN (2)
