@@ -131,6 +131,9 @@ export async function retryAll(
         persistAll(all.filter((m) => m.id !== item.id))
         retried++
       } else {
+        const all = getAllRaw()
+        const updated = all.map((m) => (m.id === item.id ? item : m))
+        persistAll(updated)
         stillPending++
       }
     } catch {

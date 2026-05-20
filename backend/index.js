@@ -166,6 +166,7 @@ const pushRoutes = require('./src/routes/push');
 const coworkRoutes = require('./src/routes/cowork');
 const webhooksRoutes = require('./src/routes/webhooks');
 const slackIntegrationRoutes = require('./src/routes/integrations/slack');
+const { authenticateToken, requireAdmin, requireSuperAdmin } = require('./src/middleware/auth');
 const scheduler = require('./src/services/scheduler/scheduler');
 const { runAgent } = require('./src/services/agents/agent-entry');
 const { recoverAgentTasksAfterBoot } = require('./src/services/agents/agent-task-boot-recovery');
@@ -622,7 +623,47 @@ app.get('/health', async (_req, res) => {
 const observabilityMetrics = require('./src/services/agents/metrics');
 require('./src/services/sira/metrics');
 
-function renderPromMetrics(_req, res) {
+function isLocalMetricsCaller(req) {
+    const ip = (req.ip || (req.socket && req.socket.remoteAddress) || '').toString();
+    if (!ip) return false;
+    if (ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1') return true;
+    return ip.startsWith('::ffff:127.');
+}
+
+function runMiddlewareChain(req, res, middlewares) {
+    return new Promise((resolve, reject) => {
+        let index = 0;
+        const step = (err) => {
+            if (err) return reject(err);
+            if (res.headersSent) return resolve(false);
+            if (index >= middlewares.length) return resolve(true);
+            const middleware = middlewares[index++];
+            try {
+                middleware(req, res, step);
+            } catch (error) {
+                reject(error);
+            }
+        };
+        step();
+    });
+}
+
+async function guardMetricsAccess(req, res) {
+    if (isLocalMetricsCaller(req)) return true;
+    try {
+        const allowed = await runMiddlewareChain(req, res, [authenticateToken, requireAdmin, requireSuperAdmin]);
+        return Boolean(allowed) && !res.headersSent;
+    } catch (err) {
+        if (!res.headersSent) {
+            res.status(500).json({ error: 'metrics auth failed', detail: err.message });
+        }
+        return false;
+    }
+}
+
+async function renderPromMetrics(req, res) {
+    const allowed = await guardMetricsAccess(req, res);
+    if (!allowed) return;
     res.setHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
     res.send(observabilityMetrics.renderText());
 }
@@ -662,11 +703,6 @@ app.use('/api/payments', paymentRoutes);
 app.use('/api/admin/queues', adminQueuesRoutes);
 app.use('/api/admin/connections', adminConnectionsRoutes);
 app.use('/api/admin', adminRoutes);
-// Top-level Prometheus metrics endpoint. Gate (localhost OR super-admin)
-// is implemented inside the handler — see backend/src/routes/admin.js.
-if (typeof adminRoutes.metricsHandler === 'function') {
-    app.get('/metrics', adminRoutes.metricsHandler);
-}
 app.use('/api/users', userRoutes);
 app.use('/api/legal', legalRoutes);
 app.use('/api/public', publicRoutes);

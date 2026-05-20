@@ -143,6 +143,7 @@ describe("pending-messages · retryAll", () => {
     assert.equal(result.retried, 0)
     assert.equal(result.stillPending, 1)
     assert.equal(count(), 1)
+    assert.equal(getForChat("chat-1")?.attempts, 1)
   })
 
   it("skips messages that have hit the attempt cap", async () => {

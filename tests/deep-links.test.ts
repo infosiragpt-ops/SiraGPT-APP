@@ -56,6 +56,18 @@ describe("parseDeepLink — custom scheme", () => {
     assert.equal(r!.query.includes("path="), false)
   })
 
+  it("normalizes protocol-relative escape hatch paths", () => {
+    const raw = parseDeepLink("siragpt://?path=//evil.example/x")
+    const encoded = parseDeepLink("siragpt://?path=%2F%2Fevil.example%2Fx")
+
+    assert.ok(raw)
+    assert.ok(encoded)
+    assert.equal(routeToHref(raw!), "/evil.example/x")
+    assert.equal(routeToHref(encoded!), "/evil.example/x")
+    assert.equal(routeToHref(raw!).startsWith("//"), false)
+    assert.equal(routeToHref(encoded!).startsWith("//"), false)
+  })
+
   it("returns null for unknown hosts", () => {
     assert.equal(parseDeepLink("siragpt://totally-unknown/foo"), null)
   })

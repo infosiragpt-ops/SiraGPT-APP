@@ -353,6 +353,46 @@ test('parseOrgSettingsPatch: rejects array / primitive payloads', () => {
   assert.ok(parseOrgSettingsPatch('hi').error);
 });
 
+// ─── ai block (Task 1 + Task 2) ─────────────────────────────────────
+
+test('parseOrgSettingsPatch: accepts ai block with valid provider + model + cost cap', () => {
+  const r = parseOrgSettingsPatch({
+    ai: {
+      preferredProvider: 'Anthropic',
+      preferredModel: 'claude-sonnet-4.5',
+      maxCostPerRequestUSD: 2.5,
+    },
+  });
+  assert.equal(r.error, null);
+  assert.equal(r.value.ai.preferredProvider, 'Anthropic');
+  assert.equal(r.value.ai.preferredModel, 'claude-sonnet-4.5');
+  assert.equal(r.value.ai.maxCostPerRequestUSD, 2.5);
+});
+
+test('parseOrgSettingsPatch: rejects ai.preferredProvider outside allowlist', () => {
+  const r = parseOrgSettingsPatch({ ai: { preferredProvider: 'Bogus' } });
+  assert.ok(r.error);
+  assert.ok(r.error.issues.some((i) => i.path.startsWith('ai')));
+});
+
+test('parseOrgSettingsPatch: rejects ai.maxCostPerRequestUSD <= 0', () => {
+  const zero = parseOrgSettingsPatch({ ai: { maxCostPerRequestUSD: 0 } });
+  assert.ok(zero.error);
+  const neg = parseOrgSettingsPatch({ ai: { maxCostPerRequestUSD: -1 } });
+  assert.ok(neg.error);
+});
+
+test('parseOrgSettingsPatch: rejects ai unknown sub-key (strict)', () => {
+  const r = parseOrgSettingsPatch({ ai: { preferredProvider: 'OpenAI', wat: 1 } });
+  assert.ok(r.error);
+});
+
+test('parseOrgSettingsPatch: ai = null deletes the bag', () => {
+  const r = parseOrgSettingsPatch({ ai: null });
+  assert.equal(r.error, null);
+  assert.equal(r.value.ai, null);
+});
+
 test('patch settings: zod 400 on invalid known key (responseStyle)', async () => {
   const { prisma, writeAuditLog, audits } = makeFakePrisma({
     members: { 'o1:a1': { role: 'ADMIN' } },

@@ -82,10 +82,13 @@ function estimateInputTokens(text, model = 'gpt-4o-mini', usageService = null) {
 
 function contextWindowFor(model) {
     if (!model) return 16_000;
-    const direct = CONTEXT_WINDOWS[model] || CONTEXT_WINDOWS[String(model).toLowerCase()];
+    const raw = String(model);
+    const normalized = raw.toLowerCase();
+    const bare = normalized.includes('/') ? normalized.split('/').pop() : normalized;
+    const direct = CONTEXT_WINDOWS[model] || CONTEXT_WINDOWS[normalized] || CONTEXT_WINDOWS[bare];
     if (direct) return direct;
     // family heuristic
-    const m = String(model).toLowerCase();
+    const m = bare;
     if (m.startsWith('gpt-4')) return 128_000;
     if (m.startsWith('gpt-')) return 16_000;
     if (m.startsWith('claude')) return 200_000;
@@ -96,7 +99,10 @@ function contextWindowFor(model) {
 
 function pricingFor(model) {
     const pricing = loadPricing();
-    const direct = pricing.models && (pricing.models[model] || pricing.models[String(model).toLowerCase()]);
+    const raw = String(model || '');
+    const normalized = raw.toLowerCase();
+    const bare = normalized.includes('/') ? normalized.split('/').pop() : normalized;
+    const direct = pricing.models && (pricing.models[model] || pricing.models[normalized] || pricing.models[bare]);
     if (direct) return direct;
     return pricing._fallback || { input: 1, output: 1 };
 }
@@ -136,6 +142,7 @@ function suggestLongerContextModel(estimatedInputTokens) {
  * @param {object} [args.usageService]            // injected — defaults to require
  * @param {object} [args.prisma]                  // injected — defaults to require
  * @param {number} [args.userMonthlyQuotaUSD]     // optional override
+ * @param {number} [args.maxCostUSD]              // per-request hard cap (org/env override)
  */
 async function preflight(args = {}) {
     const {
@@ -147,6 +154,7 @@ async function preflight(args = {}) {
         usageService = null,
         prisma = null,
         userMonthlyQuotaUSD = null,
+        maxCostUSD = null,
     } = args;
 
     try {
@@ -168,6 +176,25 @@ async function preflight(args = {}) {
                 estimatedCostUSD: cost.totalUSD,
                 contextWindow: window,
                 suggestedModel: suggested,
+                breakdown: { inputTokens, inputUSD: cost.inputUSD, outputTokens, outputUSD: cost.outputUSD },
+            };
+        }
+
+        // Per-request cost cap (env SIRAGPT_MAX_COST_PER_REQUEST_USD,
+        // overridable per org via settings.ai.maxCostPerRequestUSD).
+        // Surface as 402 — payment-required — distinguishing it from the
+        // 413 context overflow and the 402 monthly-quota exhaustion below.
+        const capUSD = _resolveMaxCostUSD(maxCostUSD);
+        if (capUSD != null && cost.totalUSD > capUSD) {
+            return {
+                ok: false,
+                status: 402,
+                reason: 'cost_cap_exceeded',
+                estimatedInputTokens: inputTokens,
+                estimatedOutputTokens: outputTokens,
+                estimatedCostUSD: cost.totalUSD,
+                maxCostUSD: capUSD,
+                contextWindow: window,
                 breakdown: { inputTokens, inputUSD: cost.inputUSD, outputTokens, outputUSD: cost.outputUSD },
             };
         }
@@ -241,6 +268,25 @@ function _safeRequire(mod) {
     try { return require(mod); } catch { return null; }
 }
 
+/**
+ * Resolve the per-request cost cap from (in priority order):
+ *   1. explicit `maxCostUSD` argument (already an org-resolved value)
+ *   2. env `SIRAGPT_MAX_COST_PER_REQUEST_USD`
+ *   3. hard default of $5
+ * Returns `null` only when the caller explicitly passes `0` / negative
+ * to disable the cap (e.g. internal jobs).
+ */
+function _resolveMaxCostUSD(override) {
+    if (override != null) {
+        const n = Number(override);
+        if (!Number.isFinite(n) || n <= 0) return null; // explicit disable
+        return n;
+    }
+    const env = Number(process.env.SIRAGPT_MAX_COST_PER_REQUEST_USD);
+    if (Number.isFinite(env) && env > 0) return env;
+    return 5;
+}
+
 async function _resolveUserQuota({ userId, prisma, userMonthlyQuotaUSD }) {
     const envCap = Number(process.env.USER_MONTHLY_QUOTA_USD || userMonthlyQuotaUSD || 0);
     if (!Number.isFinite(envCap) || envCap <= 0) return null;
@@ -273,5 +319,6 @@ module.exports = {
     pricingFor,
     estimateCost,
     suggestLongerContextModel,
+    _resolveMaxCostUSD,
     _CONTEXT_WINDOWS: CONTEXT_WINDOWS,
 };

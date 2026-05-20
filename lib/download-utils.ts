@@ -29,6 +29,15 @@ function cleanContentForExport(text: string): string {
     .trim();
 }
 
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 // Extract table data from content
 export function detectTableData(content: string): TableData | null {
   const lines = content.split('\n').filter(line => line.trim());
@@ -218,9 +227,9 @@ export function generateHTMLPresentation(content: string, tableData?: TableData)
         slides.push(currentSlide.join('<br>'));
         currentSlide = [];
       }
-      currentSlide.push(`<h2>${line}</h2>`);
+      currentSlide.push(`<h2>${escapeHtml(line)}</h2>`);
     } else {
-      currentSlide.push(line);
+      currentSlide.push(escapeHtml(line));
     }
   });
 
@@ -230,9 +239,9 @@ export function generateHTMLPresentation(content: string, tableData?: TableData)
 
   if (tableData) {
     let tableHTML = '<h2>Data Summary</h2><table border="1" style="border-collapse: collapse; width: 100%;">';
-    tableHTML += '<tr>' + tableData.headers.map(h => `<th style="padding: 8px; background: #f2f2f2;">${h}</th>`).join('') + '</tr>';
+    tableHTML += '<tr>' + tableData.headers.map(h => `<th style="padding: 8px; background: #f2f2f2;">${escapeHtml(h)}</th>`).join('') + '</tr>';
     tableHTML += tableData.rows.map(row =>
-      '<tr>' + row.map(cell => `<td style="padding: 8px;">${cell}</td>`).join('') + '</tr>'
+      '<tr>' + row.map(cell => `<td style="padding: 8px;">${escapeHtml(cell)}</td>`).join('') + '</tr>'
     ).join('');
     tableHTML += '</table>';
     slides.push(tableHTML);

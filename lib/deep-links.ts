@@ -98,7 +98,8 @@ function parseCustomScheme(url: URL, raw: string): DeepLinkRoute | null {
 }
 
 function ensureLeadingSlash(p: string): string {
-  return p.startsWith("/") ? p : `/${p}`
+  const path = p.replace(/^\/+/, "")
+  return `/${path}`
 }
 
 function stripPathParam(query: string): string {

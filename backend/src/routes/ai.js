@@ -452,6 +452,7 @@ router.post(
           code: verdict.reason || 'preflight_failed',
           estimatedInputTokens: verdict.estimatedInputTokens,
           estimatedCostUSD: verdict.estimatedCostUSD,
+          maxCostUSD: verdict.maxCostUSD ?? null,
           contextWindow: verdict.contextWindow,
           suggestedModel: verdict.suggestedModel || null,
           remainingQuota: verdict.remainingQuota ?? null,
@@ -1249,6 +1250,62 @@ router.post(
 
           console.log(`🤖 Using Custom GPT: ${customGpt.name} with model: ${actualModel} via ${actualProvider}`);
         }
+      }
+
+      // ─── Per-org AI preference (Task 1) ─────────────────────────────
+      // When the request runs under an org context, prefer the org's
+      // `settings.ai.preferredProvider` / `preferredModel` over the
+      // user's selected model. CustomGPT-bound chats keep their own
+      // pinned model (the customGpt block above wins) — the org-level
+      // preference is the default for "free-form" turns. Fail-open: a
+      // settings read miss leaves the user's choice intact.
+      let orgAiSettings = null;
+      let orgMaxCostUSDOverride = null;
+      try {
+        // SECURITY: only trust `req.orgContext.orgId` (populated by
+        // `enforceOrgQuotaSafe` after verifying membership). The previous
+        // `req.body.organizationId` fallback allowed any caller to bias
+        // model/provider routing toward an arbitrary org's settings —
+        // broken-access-control. Body-only org context never reaches here.
+        const __orgIdForAi = (req.orgContext && req.orgContext.orgId) || null;
+        if (__orgIdForAi) {
+          const orgRow = await prisma.organization.findUnique({
+            where: { id: __orgIdForAi },
+            select: { settings: true },
+          });
+          const ai = orgRow && orgRow.settings && typeof orgRow.settings === 'object'
+            ? orgRow.settings.ai
+            : null;
+          if (ai && typeof ai === 'object') {
+            orgAiSettings = ai;
+            if (!customGpt) {
+              if (typeof ai.preferredModel === 'string' && ai.preferredModel.trim()) {
+                actualModel = ai.preferredModel.trim();
+              }
+              if (typeof ai.preferredProvider === 'string' && ai.preferredProvider.trim()) {
+                actualProvider = ai.preferredProvider.trim();
+              } else if (typeof ai.preferredModel === 'string' && ai.preferredModel.trim()) {
+                // Re-derive provider from the org-preferred model string
+                // using the same heuristic as the customGpt branch above.
+                const m = actualModel;
+                if (isDirectDeepSeekModel(m)) {
+                  actualProvider = 'DeepSeek';
+                } else if (m.includes('x-ai/') || m.includes('openrouter/') || m.includes('anthropic/') || m.includes('meta-llama/') || m.includes('deepseek/') || m.includes('/gpt-oss') || m.includes('moonshotai/')) {
+                  actualProvider = 'OpenRouter';
+                } else if (m.includes('gemini') || m.includes('imagen')) {
+                  actualProvider = 'Gemini';
+                } else {
+                  actualProvider = 'OpenAI';
+                }
+              }
+            }
+            if (Number.isFinite(Number(ai.maxCostPerRequestUSD)) && Number(ai.maxCostPerRequestUSD) > 0) {
+              orgMaxCostUSDOverride = Number(ai.maxCostPerRequestUSD);
+            }
+          }
+        }
+      } catch (orgAiErr) {
+        console.warn('[ai/generate] org AI preference lookup failed (open):', orgAiErr && orgAiErr.message);
       }
 
       // ✅ Re-initialize OpenAI client with actualProvider
@@ -2966,6 +3023,7 @@ router.post(
           contextMessages: messages,
           usageService,
           prisma,
+          maxCostUSD: orgMaxCostUSDOverride,
         });
         if (verdict && verdict.ok === false) {
           const payload = {
@@ -2974,6 +3032,7 @@ router.post(
             status: verdict.status,
             estimatedInputTokens: verdict.estimatedInputTokens,
             estimatedCostUSD: verdict.estimatedCostUSD,
+            maxCostUSD: verdict.maxCostUSD ?? null,
             contextWindow: verdict.contextWindow,
             suggestedModel: verdict.suggestedModel || null,
             remainingQuota: verdict.remainingQuota ?? null,
@@ -3134,9 +3193,8 @@ router.post(
         // chars) so the trace never carries raw PII. orgId / planTier
         // are safe to emit as-is and let dashboards filter by tenant.
         const __spanUserHash = userId ? _hashUserIdForSpan(userId) : null;
-        const __spanOrgId = (req.orgContext && req.orgContext.orgId)
-          || (req.body && req.body.organizationId)
-          || null;
+        // SECURITY: trace span tag must only reflect verified org context.
+        const __spanOrgId = (req.orgContext && req.orgContext.orgId) || null;
         const __spanPlanTier = (req.user && req.user.plan) || null;
         fullResponseContent = await withAIGenerateSpan(
           {

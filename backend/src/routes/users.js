@@ -65,6 +65,96 @@ async function takeExportSlot(userId) {
 // whether the bucket exists yet (counter starts at 0).
 // ────────────────────────────────────────────────────────────
 const EXPORT_QUARTERLY_LIMIT = 10;
+const EXPORT_QUARTERLY_LIMIT_MAX = 1000;
+
+/**
+ * Resolve the effective quarterly export limit for the current request.
+ * When the request is executing in an organisation context
+ * (`req.orgContext.orgId` populated by `enforce-org-quota` /
+ * `enforce-org-rate-limit`), and that org has
+ * `settings.export.quarterlyLimit` set, use it (clamped to [1, 1000]).
+ * Otherwise fall back to the per-user default (10).
+ *
+ * Defensive — any read failure or missing delegate degrades to the
+ * default. The function returns `{ limit, source, orgId }` so callers
+ * can audit-log which override (if any) was applied.
+ */
+async function resolveExportQuarterlyLimit(prismaClient, req) {
+  // Trust org context only after a membership check. `req.orgContext`
+  // (when set by `enforceOrgQuotaSafe`) is already verified, so use it
+  // as a fast path. Otherwise, accept the org id from header/body but
+  // confirm the caller is a member of that org before honoring its
+  // override. Without this guard any authenticated user could raise
+  // their own export quota by passing an arbitrary org id of an org
+  // configured with a higher `settings.export.quarterlyLimit`.
+  let orgId = req
+    && req.orgContext
+    && typeof req.orgContext.orgId === 'string'
+    && req.orgContext.orgId
+    ? req.orgContext.orgId
+    : null;
+  let orgIdSource = orgId ? 'orgContext' : null;
+  if (!orgId && req) {
+    const header = req.headers && (req.headers['x-org-id'] || req.headers['X-Org-Id']);
+    if (typeof header === 'string' && header.trim()) {
+      orgId = header.trim();
+      orgIdSource = 'header';
+    } else {
+      const bodyOrg = req.body && typeof req.body === 'object' ? req.body.organizationId : null;
+      if (typeof bodyOrg === 'string' && bodyOrg.trim()) {
+        orgId = bodyOrg.trim();
+        orgIdSource = 'body';
+      }
+    }
+  }
+  if (!orgId || !prismaClient?.organization?.findUnique) {
+    return { limit: EXPORT_QUARTERLY_LIMIT, source: 'default', orgId: null };
+  }
+  // Verify membership for any org id that didn't come from a middleware
+  // we already trust. `orgContext` was checked upstream; everything else
+  // must be authorized here.
+  const userId = req && req.user && req.user.id;
+  if (orgIdSource !== 'orgContext') {
+    if (!userId || !prismaClient?.orgMembership?.findUnique) {
+      return { limit: EXPORT_QUARTERLY_LIMIT, source: 'default', orgId: null };
+    }
+    try {
+      const m = await prismaClient.orgMembership.findUnique({
+        where: { orgId_userId: { orgId, userId } },
+      });
+      if (!m) {
+        return { limit: EXPORT_QUARTERLY_LIMIT, source: 'default', orgId: null };
+      }
+    } catch (err) {
+      console.warn('[user-export] org membership check failed:', err && err.message);
+      return { limit: EXPORT_QUARTERLY_LIMIT, source: 'default', orgId: null };
+    }
+  }
+  try {
+    const org = await prismaClient.organization.findUnique({
+      where: { id: orgId },
+      select: { settings: true },
+    });
+    const settings = org && org.settings;
+    if (settings && typeof settings === 'object' && !Array.isArray(settings)) {
+      const xport = settings.export;
+      if (xport && typeof xport === 'object' && !Array.isArray(xport)) {
+        const raw = xport.quarterlyLimit;
+        const num = Number(raw);
+        if (Number.isFinite(num) && num > 0) {
+          const clamped = Math.min(
+            EXPORT_QUARTERLY_LIMIT_MAX,
+            Math.max(1, Math.floor(num)),
+          );
+          return { limit: clamped, source: 'org', orgId };
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[user-export] org limit lookup failed:', err && err.message);
+  }
+  return { limit: EXPORT_QUARTERLY_LIMIT, source: 'default', orgId };
+}
 
 function quarterKeyForDate(date = new Date()) {
   const y = date.getUTCFullYear();
@@ -133,17 +223,20 @@ async function incrementQuarterCount(prisma, userId, qInfo) {
  * cap, else { ok: false, used, limit, resetAt } with HTTP-friendly
  * fields for the 429 response body.
  */
-async function checkQuarterlyExportQuota(prisma, userId) {
+async function checkQuarterlyExportQuota(prisma, userId, limit = EXPORT_QUARTERLY_LIMIT) {
+  const effectiveLimit = Number.isFinite(limit) && limit > 0
+    ? Math.floor(limit)
+    : EXPORT_QUARTERLY_LIMIT;
   const qInfo = quarterKeyForDate();
   const used = await readQuarterCount(prisma, userId, qInfo);
-  if (used < EXPORT_QUARTERLY_LIMIT) {
-    return { ok: true, used, limit: EXPORT_QUARTERLY_LIMIT, quarter: qInfo.label };
+  if (used < effectiveLimit) {
+    return { ok: true, used, limit: effectiveLimit, quarter: qInfo.label };
   }
   const resetAt = quarterEndsAt(qInfo.year, qInfo.quarter);
   return {
     ok: false,
     used,
-    limit: EXPORT_QUARTERLY_LIMIT,
+    limit: effectiveLimit,
     quarter: qInfo.label,
     resetAt,
   };
@@ -900,10 +993,13 @@ router.get('/me/export', authenticateToken, async (req, res) => {
     try { piiMasker = require('../utils/pii-mask'); }
     catch (_) { piiMasker = null; }
   }
-  // Hard quarterly cap (10 exports per calendar quarter) — checked
-  // BEFORE the 30-minute soft slot so a quota-denied request doesn't
-  // burn the user's short-term window.
-  const quota = await checkQuarterlyExportQuota(prisma, userId);
+  // Hard quarterly cap — checked BEFORE the 30-minute soft slot so a
+  // quota-denied request doesn't burn the user's short-term window.
+  // Default is 10 exports per calendar quarter per user; an org can
+  // override via `Organization.settings.export.quarterlyLimit` (ratchet
+  // 44, task 2) when the request runs in an org context.
+  const limitInfo = await resolveExportQuarterlyLimit(prisma, req);
+  const quota = await checkQuarterlyExportQuota(prisma, userId, limitInfo.limit);
   if (!quota.ok) {
     const retryAfterSec = Math.max(
       1,
@@ -918,6 +1014,8 @@ router.get('/me/export', authenticateToken, async (req, res) => {
       metadata: {
         used: quota.used,
         limit: quota.limit,
+        limitSource: limitInfo.source,
+        orgId: limitInfo.orgId,
         quarter: quota.quarter,
         resetAt: quota.resetAt.toISOString(),
       },
@@ -2119,6 +2217,8 @@ module.exports = router;
 // Test-only internals (ratchet 45)
 module.exports.INTERNAL = {
   EXPORT_QUARTERLY_LIMIT,
+  EXPORT_QUARTERLY_LIMIT_MAX,
+  resolveExportQuarterlyLimit,
   quarterKeyForDate,
   quarterEndsAt,
   quarterSettingsKey,

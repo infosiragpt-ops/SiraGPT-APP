@@ -29,3 +29,16 @@ test('keeps a known OpenAI vision model on the selected runtime', () => {
   assert.equal(runtime.model, 'gpt-4o-mini');
   assert.equal(runtime.switched, false);
 });
+
+test('routes Anthropic chat selections through the OpenRouter transport', () => {
+  assert.equal(aiService.__test.normalizeChatProvider('Anthropic', 'claude-sonnet-4.5'), 'OpenRouter');
+  assert.equal(aiService.__test.providerForModel('claude-sonnet-4.5'), 'OpenRouter');
+  assert.equal(
+    aiService.__test.normalizeModelForProvider('OpenRouter', 'claude-sonnet-4.5'),
+    'anthropic/claude-sonnet-4.5',
+  );
+  assert.equal(
+    aiService.__test.normalizeModelForProvider('OpenRouter', 'anthropic/claude-3.5-sonnet'),
+    'anthropic/claude-3.5-sonnet',
+  );
+});
