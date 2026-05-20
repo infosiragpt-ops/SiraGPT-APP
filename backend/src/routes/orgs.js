@@ -17,6 +17,7 @@
  *   POST   /api/orgs/:id/transfer-ownership/request      — request transfer w/ optional approval window (OWNER only; ratchet 44)
  *   POST   /api/orgs/transfer-requests/:id/accept        — new owner accepts pending transfer (ratchet 44)
  *   DELETE /api/orgs/transfer-requests/:id               — current owner cancels pending transfer (ratchet 44)
+ *   GET    /api/orgs/:id/transfer-requests               — list active pending transfers (ADMIN+; ratchet 44)
  *   POST   /api/orgs/:id/leave                          — self-leave convenience (refuses last OWNER)
  *   DELETE /api/orgs/:id/members/:userId                — remove member (ADMIN+ or self)
  *   POST   /api/orgs/:id/chats/:chatId/share            — share a chat into the org
@@ -1454,6 +1455,68 @@ async function cancelTransferHandler(req, res, deps = { prisma, writeAuditLog })
 router.post('/:id/transfer-ownership/request', authenticateToken, (req, res) => requestTransferHandler(req, res));
 router.post('/transfer-requests/:id/accept', authenticateToken, (req, res) => acceptTransferHandler(req, res));
 router.delete('/transfer-requests/:id', authenticateToken, (req, res) => cancelTransferHandler(req, res));
+
+/**
+ * GET /api/orgs/:id/transfer-requests (ADMIN+; ratchet 44 cycle 164).
+ *
+ * Lists every still-active ownership-transfer request for the org —
+ * rows where `acceptedAt IS NULL` AND `expiresAt > now`. The
+ * companion sweep job (`sweep-expired-pending-transfers`) hard-deletes
+ * the expired-and-unaccepted rows nightly at 07:30 UTC, so the
+ * `expiresAt > now` filter doubles as an extra defence in case the
+ * sweep is paused or delayed.
+ *
+ * ADMIN+ because the same role gate guards `/invitations` and the
+ * audit feed — anyone who can manage members deserves to see the
+ * pending ownership swap. Returned rows are deliberately minimal:
+ * id, fromOwnerId, toOwnerId, requestedAt, expiresAt (matching the
+ * shape used by the request handler's response).
+ */
+async function listTransferRequestsHandler(req, res, deps = { prisma }) {
+  const db = deps.prisma || prisma;
+  const callerId = req.user.id;
+  const orgId = req.params.id;
+
+  try {
+    const membership = await assertMembership(db, orgId, callerId, 'ADMIN');
+    if (!canManageMembers(membership.role)) {
+      return res.status(403).json({ error: 'insufficient role to list transfer requests' });
+    }
+
+    const now = new Date();
+    const rows = await db.orgPendingTransfer.findMany({
+      where: {
+        orgId,
+        acceptedAt: null,
+        expiresAt: { gt: now },
+      },
+      orderBy: { requestedAt: 'desc' },
+      select: {
+        id: true,
+        fromOwnerId: true,
+        toOwnerId: true,
+        requestedAt: true,
+        expiresAt: true,
+      },
+    });
+
+    const items = rows.map((r) => ({
+      id: r.id,
+      fromOwnerId: r.fromOwnerId,
+      toOwnerId: r.toOwnerId,
+      requestedAt: r.requestedAt instanceof Date ? r.requestedAt.toISOString() : r.requestedAt,
+      expiresAt: r.expiresAt instanceof Date ? r.expiresAt.toISOString() : r.expiresAt,
+    }));
+
+    res.json({ items });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] list transfer-requests failed:', err.message);
+    res.status(500).json({ error: 'failed to list transfer requests' });
+  }
+}
+
+router.get('/:id/transfer-requests', authenticateToken, (req, res) => listTransferRequestsHandler(req, res));
 
 // ─── POST /api/orgs/:id/leave ───────────────────────────────────────
 // Convenience self-leave endpoint. Mirrors DELETE /members/:userId
@@ -4659,6 +4722,7 @@ router.__handlers = {
   requestTransfer: requestTransferHandler,
   acceptTransfer: acceptTransferHandler,
   cancelTransfer: cancelTransferHandler,
+  listTransferRequests: listTransferRequestsHandler,
   leaveOrg: leaveOrgHandler,
   listOrgAuditLogs: listOrgAuditLogsHandler,
   listMemberActivity: listMemberActivityHandler,
