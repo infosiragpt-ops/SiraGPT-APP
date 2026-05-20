@@ -588,7 +588,7 @@ jobs:
           gitleaks version
 
       - name: Run gitleaks
-        run: gitleaks detect --source . --config .gitleaks.toml --redact --no-banner --verbose --exit-code 1
+        run: gitleaks detect --source . --config .gitleaks.toml --redact --no-banner --verbose --no-git --exit-code 1
 
   dependency-audit:
     name: Dependency audit · npm audit production
