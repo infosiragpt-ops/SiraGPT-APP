@@ -107,6 +107,7 @@ describe('system-cron', () => {
         'sweep-expired-verification-tokens',
         'sweep-inactive-api-keys',
         'sweep-old-notifications',
+        'sweep-stale-system-settings',
         'sweep-webhook-secret-grace',
       ]);
       // Default schedules — scrub @ 02:30 UTC, hard-delete @ 03:00 UTC,

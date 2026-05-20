@@ -99,6 +99,12 @@ const DETECT_IDLE_ORGS_SCHEDULE = process.env.SYSTEM_CRON_DETECT_IDLE_ORGS_SCHED
 // SystemSettings table. Flags users whose User.lastActiveAt is older
 // than 90d (or null) into SystemSettings `user_idle:<userId>`.
 const DETECT_IDLE_USERS_SCHEDULE = process.env.SYSTEM_CRON_DETECT_IDLE_USERS_SCHEDULE || '30 6 * * *';
+// Ratchet 45 — daily SystemSettings drift cleanup. Default 07:00 UTC, runs
+// after the idle-org (06:00) and idle-user (06:30) detectors so the same
+// pass that *writes* fresh flag rows precedes the orphan sweep — we only
+// ever delete rows whose owner has been hard-deleted AND whose embedded
+// timestamp is past retention (180d for *_idle, 730d for apiusage:summary).
+const STALE_SYSTEM_SETTINGS_SCHEDULE = process.env.SYSTEM_CRON_STALE_SYSTEM_SETTINGS_SCHEDULE || '0 7 * * *';
 
 let _state = null;
 
@@ -774,6 +780,45 @@ function start(opts = {}) {
     schedule: DETECT_IDLE_USERS_SCHEDULE,
     task: detectIdleUsersTask,
     meta: detectIdleUsersMeta,
+  });
+
+  // Ratchet 45 — SystemSettings drift cleanup (07:00 UTC).
+  let staleSystemSettingsRunning = false;
+  const staleSystemSettingsMeta = {};
+  const staleSystemSettingsTask = cron.schedule(
+    STALE_SYSTEM_SETTINGS_SCHEDULE,
+    async () => {
+      if (staleSystemSettingsRunning) {
+        logger.warn?.('[system-cron] skip sweep-stale-system-settings — previous run still active');
+        return;
+      }
+      staleSystemSettingsRunning = true;
+      const finish = recordRun(staleSystemSettingsMeta, 'sweep-stale-system-settings');
+      let runErr = null;
+      try {
+        // eslint-disable-next-line global-require
+        const job = require('./sweep-stale-system-settings');
+        const runWithRetry = wrapWithRetry(() => job.run({ logger }), {
+          onRetry: ({ attempt, delayMs, reason }) =>
+            logger.warn?.(`[system-cron] sweep-stale-system-settings retry ${attempt} in ${delayMs}ms (${reason})`),
+        });
+        const res = await runWithRetry();
+        logger.info?.(`[system-cron] sweep-stale-system-settings done: ${JSON.stringify(res)}`);
+      } catch (err) {
+        runErr = err;
+        logger.error?.(`[system-cron] sweep-stale-system-settings failed: ${err && err.message}`);
+      } finally {
+        staleSystemSettingsRunning = false;
+        finish(runErr);
+      }
+    },
+    { scheduled: false, timezone: 'UTC' },
+  );
+  tasks.push({
+    name: 'sweep-stale-system-settings',
+    schedule: STALE_SYSTEM_SETTINGS_SCHEDULE,
+    task: staleSystemSettingsTask,
+    meta: staleSystemSettingsMeta,
   });
 
   for (const t of tasks) {
