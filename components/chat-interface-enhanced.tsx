@@ -3140,6 +3140,7 @@ function ChatInterfaceContent() {
   )
 
   const pasteCapture = usePasteCapture(handlePasteCaptureAction);
+  const capturePastedText = pasteCapture.capture;
   const pasteCapturePendingRef = React.useRef<PasteCaptureResult | null>(null);
   React.useEffect(() => {
     pasteCapturePendingRef.current = pasteCapture.captureResult;
@@ -4616,7 +4617,7 @@ But first, you need to connect your Spotify account securely using the button be
   // File upload logic with instant preview, REAL progress, retry, and
   // source-channel telemetry. All state writes use functional updates
   // so concurrent drops/pastes can't clobber each other.
-  const handleAndUploadFiles = async (
+  const handleAndUploadFiles = React.useCallback(async (
     files: FileList,
     sourceChannel: string = 'picker',
   ) => {
@@ -4755,7 +4756,7 @@ But first, you need to connect your Spotify account securely using the button be
     } finally {
       setIsUploading(false);
     }
-  };
+  }, [chatType, setUploadedFiles]);
 
   /**
    * Retry an upload that previously failed. Reuses the in-memory File
@@ -4774,12 +4775,7 @@ But first, you need to connect your Spotify account securely using the button be
     const dt = new DataTransfer();
     dt.items.add(failedFile.file);
     handleAndUploadFiles(dt.files, failedFile.sourceChannel || 'retry');
-    // handleAndUploadFiles is recreated each render and wrapping it in
-    // useCallback would cascade across the file. setUploadedFiles is a
-    // stable setter. Empty deps means "use the latest closure" — fine
-    // for an event handler invoked on user click.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [handleAndUploadFiles, setUploadedFiles]);
 
   React.useEffect(() => {
     handlePasteCaptureActionRef.current = (action: PasteCaptureAction, result: PasteCaptureResult) => {
@@ -5022,7 +5018,7 @@ But first, you need to connect your Spotify account securely using the button be
       const pastedText = (text && text.trim()) ? text : htmlFallbackText;
       if (pastedText && shouldCompilePastedTextAsDocument(pastedText)) {
         e.preventDefault();
-        pasteCapture.capture(pastedText);
+        capturePastedText(pastedText);
         return;
       }
       // HTML-only paste (rare — usually browsers attach text/plain too).
@@ -5069,7 +5065,7 @@ But first, you need to connect your Spotify account securely using the button be
       if (text) setInput(prev => prev + text);
       handleAndUploadFiles(filesToFileList(accepted), channel);
     }
-  }, [handleAndUploadFiles]);
+  }, [capturePastedText, handleAndUploadFiles]);
 
   const handleTextareaPaste = React.useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     handleClipboardPaste(e);
