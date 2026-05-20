@@ -311,9 +311,17 @@ function escapeLikePattern(raw) {
  * to an empty result when prisma is missing or `$queryRawUnsafe` /
  * `$queryRaw` aren't available (tests, sqlite fallback).
  *
+ * When `opts.orgId` is supplied, an additional predicate is appended
+ * that pins the result set to rows whose `metadata->>'orgId'` equals
+ * the supplied org id. The orgId travels as its own positional
+ * parameter so user input is still never spliced into SQL. This is
+ * what the org-scoped `GET /api/orgs/:id/audit-logs/search` route
+ * uses to mirror the super-admin search without exposing other orgs'
+ * trails.
+ *
  * @param {*} prisma  Prisma client (or stub)
  * @param {string} q  Search text (already validated non-empty by caller)
- * @param {{limit?: number, page?: number}} [opts]
+ * @param {{limit?: number, page?: number, orgId?: string}} [opts]
  */
 async function search(prisma, q, opts = {}) {
   const limit = clampSearchLimit(opts.limit);
@@ -324,24 +332,35 @@ async function search(prisma, q, opts = {}) {
   if (!prisma || typeof q !== 'string' || q.trim().length === 0) return empty;
   if (typeof prisma.$queryRawUnsafe !== 'function') return empty;
 
+  const orgId = typeof opts.orgId === 'string' && opts.orgId.length > 0 ? opts.orgId : null;
   const pattern = `%${escapeLikePattern(q.trim())}%`;
   try {
     // We use `$queryRawUnsafe` with explicit positional parameters so the
     // SQL string itself is static (no interpolation of user input). The
     // table name `AuditLog` is the Prisma default; if a deployment renames
     // it, this query needs to be updated in lockstep.
+    //
+    // Org scoping reuses the `metadata->>'orgId'` JSON path that audit
+    // writers populate (see utils/audit-log.js). When `orgId` is set we
+    // append a third positional placeholder ($4 for itemsSql, $2 for
+    // countSql) so the value can't ever be interpolated into the SQL.
+    const orgPredicate = orgId ? ' AND "metadata"->>\'orgId\' = ' : '';
     const itemsSql =
       'SELECT * FROM "AuditLog" '
-      + 'WHERE "action" ILIKE $1 OR ("metadata")::text ILIKE $1 '
-      + 'ORDER BY "createdAt" DESC '
+      + 'WHERE ("action" ILIKE $1 OR ("metadata")::text ILIKE $1)'
+      + (orgId ? `${orgPredicate}$4` : '')
+      + ' ORDER BY "createdAt" DESC '
       + 'LIMIT $2 OFFSET $3';
     const countSql =
       'SELECT COUNT(*)::int AS count FROM "AuditLog" '
-      + 'WHERE "action" ILIKE $1 OR ("metadata")::text ILIKE $1';
+      + 'WHERE ("action" ILIKE $1 OR ("metadata")::text ILIKE $1)'
+      + (orgId ? `${orgPredicate}$2` : '');
 
+    const itemsParams = orgId ? [pattern, limit, offset, orgId] : [pattern, limit, offset];
+    const countParams = orgId ? [pattern, orgId] : [pattern];
     const [items, countRows] = await Promise.all([
-      prisma.$queryRawUnsafe(itemsSql, pattern, limit, offset),
-      prisma.$queryRawUnsafe(countSql, pattern),
+      prisma.$queryRawUnsafe(itemsSql, ...itemsParams),
+      prisma.$queryRawUnsafe(countSql, ...countParams),
     ]);
 
     const total =

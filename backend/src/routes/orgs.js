@@ -3302,6 +3302,47 @@ async function listOrgAuditLogsHandler(req, res, deps = { prisma }) {
 
 router.get('/:id/audit-logs', authenticateToken, (req, res) => listOrgAuditLogsHandler(req, res));
 
+// ─── GET /api/orgs/:id/audit-logs/search (ADMIN+; ratchet 44) ───────
+// Org-scoped mirror of the super-admin /api/admin/audit-logs/search
+// endpoint. Same ILIKE-over-action+metadata::text predicate, same q ≥ 2
+// chars rule, same default 50 / max 200 page size — but the underlying
+// helper pins the result set to rows whose `metadata->>'orgId'` equals
+// the path parameter so a member of org A cannot peek at org B's trail
+// by passing `?orgId=` (which is simply ignored — only `req.params.id`
+// reaches the SQL).
+async function searchOrgAuditLogsHandler(req, res, deps = { prisma }) {
+  const db = deps.prisma || prisma;
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  try {
+    const membership = await assertMembership(db, orgId, userId, 'ADMIN');
+    if (!canManageMembers(membership.role)) {
+      return res.status(403).json({ error: 'insufficient role to search audit logs' });
+    }
+    const raw = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+    if (raw.length < 2) {
+      return res.status(400).json({ error: 'q must be at least 2 characters' });
+    }
+    const { search: auditSearch } = require('../services/audit-query');
+    const result = await auditSearch(db, raw, {
+      limit: req.query.limit,
+      page: req.query.page,
+      orgId,
+    });
+    return res.json(result);
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] audit-logs/search failed:', err.message);
+    return res.status(500).json({ error: 'failed to search audit logs' });
+  }
+}
+
+router.get(
+  '/:id/audit-logs/search',
+  authenticateToken,
+  (req, res) => searchOrgAuditLogsHandler(req, res),
+);
+
 // ─── GET /api/orgs/:id/audit-logs.csv (ADMIN+; ratchet 44) ──────────
 // Org-scoped variant of the super-admin /api/admin/audit-logs.csv
 // export. Same RFC4180 escaping rules; the org filter is locked to the
@@ -4911,6 +4952,7 @@ router.__handlers = {
   listTransferRequests: listTransferRequestsHandler,
   leaveOrg: leaveOrgHandler,
   listOrgAuditLogs: listOrgAuditLogsHandler,
+  searchOrgAuditLogs: searchOrgAuditLogsHandler,
   exportOrgAuditLogsCsv: exportOrgAuditLogsCsvHandler,
   listMemberActivity: listMemberActivityHandler,
   listOrgActivity: listOrgActivityHandler,
