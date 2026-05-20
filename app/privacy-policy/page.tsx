@@ -1,117 +1,248 @@
 "use client"
 import React from 'react';
 import { motion } from 'framer-motion';
-import { Mail, Building, MapPin } from 'lucide-react';
+import Link from 'next/link';
+
+const SECTIONS = [
+  {
+    title: '1. Introducción',
+    body: (
+      <>
+        En Sira GPT respetamos tu privacidad y tratamos tus datos personales con
+        transparencia. Esta Política de Privacidad explica qué datos recopilamos,
+        para qué los usamos, con quién los compartimos y qué derechos tienes
+        sobre ellos. Al usar Sira GPT en{' '}
+        <a href="https://siragpt.com" className="text-indigo-300 underline">
+          siragpt.com
+        </a>{' '}
+        aceptas las prácticas descritas en este documento.
+      </>
+    ),
+  },
+  {
+    title: '2. Responsable del tratamiento',
+    body: (
+      <>
+        El responsable del tratamiento de tus datos es Sira GPT. Para cualquier
+        consulta sobre privacidad puedes contactarnos en{' '}
+        <a href="mailto:infosiragpt@gmail.com" className="text-indigo-300 underline">
+          infosiragpt@gmail.com
+        </a>
+        .
+      </>
+    ),
+  },
+  {
+    title: '3. Datos que recopilamos',
+    body: (
+      <>
+        Recopilamos los datos mínimos necesarios para prestar el servicio:
+        <ul className="list-disc pl-6 mt-3 space-y-2">
+          <li>
+            <strong>Cuenta:</strong> nombre, correo electrónico y, si te registras
+            con Google, tu identificador y foto pública de perfil.
+          </li>
+          <li>
+            <strong>Contenido del usuario:</strong> los mensajes, archivos,
+            imágenes y proyectos que envías a la plataforma para que el modelo de
+            IA los procese y te devuelva una respuesta.
+          </li>
+          <li>
+            <strong>Datos técnicos:</strong> dirección IP, tipo de navegador,
+            sistema operativo, fechas de acceso y registros de actividad, usados
+            para seguridad, prevención de abuso y diagnóstico.
+          </li>
+          <li>
+            <strong>Datos de facturación (si suscribes un plan):</strong>{' '}
+            procesados por nuestro proveedor de pagos (no almacenamos tu número
+            de tarjeta).
+          </li>
+        </ul>
+      </>
+    ),
+  },
+  {
+    title: '4. Para qué usamos tus datos',
+    body: (
+      <>
+        Tratamos tus datos para:
+        <ul className="list-disc pl-6 mt-3 space-y-2">
+          <li>Crear y mantener tu cuenta y permitirte iniciar sesión.</li>
+          <li>Procesar tus conversaciones con los modelos de IA del catálogo.</li>
+          <li>
+            Facturar y gestionar tu suscripción si tienes un plan de pago.
+          </li>
+          <li>
+            Garantizar la seguridad del servicio, detectar fraudes y abusos, y
+            cumplir obligaciones legales.
+          </li>
+          <li>
+            Mejorar la calidad del servicio (analíticas agregadas y anónimas).
+          </li>
+        </ul>
+      </>
+    ),
+  },
+  {
+    title: '5. Proveedores que procesan tus datos',
+    body: (
+      <>
+        Para prestar el servicio compartimos datos estrictamente necesarios con
+        proveedores que actúan como encargados del tratamiento:
+        <ul className="list-disc pl-6 mt-3 space-y-2">
+          <li>
+            <strong>Modelos de IA:</strong> OpenAI, Google (Gemini), Anthropic,
+            DeepSeek, OpenRouter y otros del catálogo, para procesar el contenido
+            que tú envías al modelo que elijas.
+          </li>
+          <li>
+            <strong>Infraestructura:</strong> Replit (alojamiento y despliegue),
+            Prisma / PostgreSQL (base de datos), Upstash Redis (caché y colas).
+          </li>
+          <li>
+            <strong>Autenticación:</strong> Google OAuth (sólo si usas
+            &quot;Continuar con Google&quot;).
+          </li>
+        </ul>
+        Cada proveedor opera bajo su propia política de privacidad y aplica
+        medidas técnicas y organizativas para proteger tus datos.
+      </>
+    ),
+  },
+  {
+    title: '6. Inicio de sesión con Google',
+    body: (
+      <>
+        Cuando eliges &quot;Continuar con Google&quot; solicitamos únicamente los
+        permisos <strong>perfil básico y correo electrónico</strong>. No leemos,
+        enviamos ni modificamos tus correos, calendarios ni archivos. Las
+        integraciones avanzadas con Gmail, Calendar o Drive son opcionales y se
+        activan por separado desde tu cuenta — sólo entonces te pedimos
+        permisos específicos para esos servicios.
+      </>
+    ),
+  },
+  {
+    title: '7. Conservación',
+    body: (
+      <>
+        Conservamos tus datos mientras mantengas tu cuenta activa. Puedes
+        eliminar tu cuenta en cualquier momento desde la configuración o
+        escribiendo a{' '}
+        <a href="mailto:infosiragpt@gmail.com" className="text-indigo-300 underline">
+          infosiragpt@gmail.com
+        </a>
+        . Tras la eliminación, borramos tus datos en un plazo razonable salvo
+        cuando una ley nos obligue a conservarlos (por ejemplo, registros de
+        facturación).
+      </>
+    ),
+  },
+  {
+    title: '8. Tus derechos',
+    body: (
+      <>
+        Tienes derecho a acceder, rectificar, suprimir, oponerte al tratamiento,
+        limitar el tratamiento y solicitar la portabilidad de tus datos
+        personales. Para ejercerlos escríbenos a{' '}
+        <a href="mailto:infosiragpt@gmail.com" className="text-indigo-300 underline">
+          infosiragpt@gmail.com
+        </a>
+        . Si consideras que no atendimos correctamente tu solicitud, puedes
+        presentar una reclamación ante tu autoridad de protección de datos
+        competente.
+      </>
+    ),
+  },
+  {
+    title: '9. Seguridad',
+    body: (
+      <>
+        Aplicamos medidas técnicas y organizativas razonables para proteger tus
+        datos: cifrado en tránsito (HTTPS/TLS), tokens de sesión firmados,
+        cifrado de credenciales sensibles, controles de acceso, registros de
+        auditoría y monitoreo de seguridad. Ningún sistema en internet es 100 %
+        infalible, pero trabajamos continuamente para mitigar riesgos.
+      </>
+    ),
+  },
+  {
+    title: '10. Cookies',
+    body: (
+      <>
+        Usamos cookies estrictamente necesarias para mantener tu sesión y
+        proteger contra ataques CSRF. No usamos cookies de publicidad de
+        terceros.
+      </>
+    ),
+  },
+  {
+    title: '11. Cambios a esta política',
+    body: (
+      <>
+        Podemos actualizar esta Política de Privacidad para reflejar cambios en
+        el servicio o en la normativa aplicable. Te notificaremos los cambios
+        relevantes mediante el sitio o por correo electrónico. La fecha al pie
+        indica la versión vigente.
+      </>
+    ),
+  },
+  {
+    title: '12. Contacto',
+    body: (
+      <>
+        Para cualquier pregunta sobre esta política o el tratamiento de tus
+        datos personales escríbenos a{' '}
+        <a href="mailto:infosiragpt@gmail.com" className="text-indigo-300 underline">
+          infosiragpt@gmail.com
+        </a>
+        .
+      </>
+    ),
+  },
+];
 
 const PrivacyPolicyPage = () => {
-    return (
-        <div className="min-h-screen bg-gradient-to-b from-black to-gray-950 text-white">
-            <div className="container mx-auto px-6 py-24">
-                <motion.div
-                    initial={{ opacity: 0, y: -50 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.5 }}
-                    className="text-center mb-12"
-                >
-                    <h1 className="text-5xl md:text-7xl font-bold tracking-tight bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">
-                        Privacy Policy
-                    </h1>
-                    <p className="text-lg text-gray-400 mt-4">Last Updated: November 5, 2025</p>
-                </motion.div>
+  return (
+    <div className="min-h-screen bg-gradient-to-b from-black to-gray-950 text-white">
+      <div className="container mx-auto px-6 py-24">
+        <motion.div
+          initial={{ opacity: 0, y: -50 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5 }}
+          className="text-center mb-12"
+        >
+          <h1 className="text-5xl md:text-7xl font-bold tracking-tight bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">
+            Política de Privacidad
+          </h1>
+          <p className="text-lg text-gray-400 mt-4">
+            Última actualización: 20 de mayo de 2026
+          </p>
+        </motion.div>
 
-                <div className="max-w-4xl mx-auto bg-gray-900/50 border border-white/10 p-8 rounded-lg backdrop-blur-sm">
-                    <div className="space-y-8">
-                        <section>
-                            <h2 className="text-2xl font-semibold text-gray-200 mb-4">1. Introduction</h2>
-                            <p className="text-gray-400 leading-relaxed">
-                                Welcome to our application. We are committed to protecting your privacy. This Privacy Policy explains how we collect, use, disclose, and safeguard your information when you use our application. If you do not agree with the terms of this policy, please do not access the application.
-                            </p>
-                        </section>
+        <div className="max-w-4xl mx-auto bg-gray-900/50 border border-white/10 p-8 rounded-lg backdrop-blur-sm">
+          <div className="space-y-8">
+            {SECTIONS.map((s) => (
+              <section key={s.title}>
+                <h2 className="text-2xl font-semibold text-gray-200 mb-4">
+                  {s.title}
+                </h2>
+                <div className="text-gray-400 leading-relaxed">{s.body}</div>
+              </section>
+            ))}
 
-                        <section>
-                            <h2 className="text-2xl font-semibold text-gray-200 mb-4">2. Information We Collect</h2>
-                            <p className="text-gray-400 leading-relaxed">
-                                We may collect personally identifiable information, such as your name and email address, when you register. To provide enhanced features, our application uses a Model Context Protocol (MCP) server to interact with Google services, which may include accessing your Gmail, Google Calendar, and Google Drive data with your permission.
-                            </p>
-                        </section>
-
-                        <section>
-                            <h2 className="text-2xl font-semibold text-gray-200 mb-4">3. How We Use Your Information</h2>
-                            <p className="text-gray-400 leading-relaxed">
-                                We use your information to create and manage your account, provide AI-powered services, and integrate with Google Services to enhance application features. Your data helps us improve our services and communicate with you effectively.
-                            </p>
-                        </section>
-
-                        <section>
-                            <h2 className="text-2xl font-semibold text-gray-200 mb-4">4. Disclosure of Your Information</h2>
-                            <p className="text-gray-400 leading-relaxed">
-                                We do not share, sell, or trade your information with third parties for commercial purposes. Your information may be disclosed to comply with legal obligations, to protect our rights, or with third-party service providers who perform services for us.
-                            </p>
-                        </section>
-
-                        <section>
-                            <h2 className="text-2xl font-semibold text-gray-200 mb-4">5. Data from Google Services</h2>
-                            <div className="text-gray-400 leading-relaxed">
-                                <p>Our application uses an MCP server to interact with Google services. When you grant us permission, we may access:</p>
-                                <ul className="list-disc list-inside mt-2 space-y-1">
-                                    <li><strong>Gmail:</strong> To summarize emails, compose replies, or create tasks. We do not store your emails.</li>
-                                    <li><strong>Google Calendar:</strong> To create events, set reminders, or check your availability. We do not store your calendar data.</li>
-                                    <li><strong>Google Drive:</strong> To find information, summarize documents, or create new files. We only access files you explicitly authorize.</li>
-                                </ul>
-                                <p className="mt-2 text-sm">
-                                    Our use and transfer of information received from Google APIs will adhere to the <a href="https://developers.google.com/terms/api-services-user-data-policy" className="text-indigo-400 hover:underline" target="_blank" rel="noopener noreferrer">Google API Services User Data Policy</a>.
-                                </p>
-                            </div>
-                        </section>
-
-                        <section>
-                            <h2 className="text-2xl font-semibold text-gray-200 mb-4">6. Security of Your Information</h2>
-                            <p className="text-gray-400 leading-relaxed">
-                                We use administrative, technical, and physical security measures to help protect your personal information. While we have taken reasonable steps to secure your data, no security measures are perfect, and no method of data transmission can be guaranteed against interception or misuse.
-                            </p>
-                        </section>
-
-                        <section>
-                            <h2 className="text-2xl font-semibold text-gray-200 mb-4">7. Your Rights and Choices</h2>
-                            <p className="text-gray-400 leading-relaxed">
-                                You may review or change the information in your account or terminate your account at any time by logging into your account settings or contacting us. You can also revoke our access to your Google data through your Google account security settings.
-                            </p>
-                        </section>
-
-                        <section>
-                            <h2 className="text-2xl font-semibold text-gray-200 mb-4">8. Changes to This Privacy Policy</h2>
-                            <p className="text-gray-400 leading-relaxed">
-                                We may update this Privacy Policy from time to time. We will notify you of any changes by posting the new Privacy Policy on this page. You are advised to review this Privacy Policy periodically for any changes.
-                            </p>
-                        </section>
-
-                        <section>
-                            <h2 className="text-2xl font-semibold text-gray-200 mb-4">9. Contact Us</h2>
-                            <div className="bg-gray-800/50 p-6 rounded-lg border border-white/10">
-                                <p className="text-gray-400 leading-relaxed mb-6">
-                                    If you have questions or comments about this Privacy Policy, please contact us at:
-                                </p>
-                                <div className="space-y-4">
-                                    <div className="flex items-center">
-                                        <Mail className="h-5 w-5 text-indigo-400 mr-4" />
-                                        <span className="text-gray-300">infosiragpt@gmail.com</span>
-                                    </div>
-                                    <div className="flex items-center">
-                                        <Building className="h-5 w-5 text-indigo-400 mr-4" />
-                                        <span className="text-gray-300">siragpt.com S.A</span>
-                                    </div>
-                                    <div className="flex items-center">
-                                        <MapPin className="h-5 w-5 text-indigo-400 mr-4" />
-                                        <span className="text-gray-300">San Isidro, Lima, Lima</span>
-                                    </div>
-                                </div>
-                            </div>
-                        </section>
-                    </div>
-                </div>
+            <div className="pt-6 border-t border-white/10 text-sm text-gray-500">
+              ¿Buscas los{' '}
+              <Link href="/terms" className="text-indigo-300 underline">
+                Términos del Servicio
+              </Link>
+              ?
             </div>
+          </div>
         </div>
-    );
+      </div>
+    </div>
+  );
 };
 
 export default PrivacyPolicyPage;
