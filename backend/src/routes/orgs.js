@@ -2015,6 +2015,133 @@ router.get('/:id/api-keys', authenticateToken, async (req, res) => {
   }
 });
 
+// ─── POST /api/orgs/:id/api-keys/bulk-revoke (ADMIN+, ratchet 45) ───
+// Bulk soft-delete up to 50 keys in a single round-trip. Body: { ids:
+// string[] }. Returns { revoked: string[], notFound: string[] } so the
+// caller can reconcile which ids were actually tombstoned vs. were
+// already deleted / belong to another org. We intentionally do NOT
+// fail the whole request when some ids are unknown — partial success
+// is the useful behaviour here (e.g. a stale UI list). Each successful
+// revocation gets its own audit-log entry, matching the single-delete
+// endpoint. Must be declared BEFORE the `:keyId` route so Express
+// doesn't treat "bulk-revoke" as a key id.
+router.post('/:id/api-keys/bulk-revoke', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const orgId = req.params.id;
+
+  const ids = req.body && Array.isArray(req.body.ids) ? req.body.ids : null;
+  if (!ids) return res.status(400).json({ error: 'ids must be an array' });
+  if (ids.length === 0) return res.status(400).json({ error: 'ids must not be empty' });
+  if (ids.length > 50) return res.status(400).json({ error: 'too many ids (max 50)' });
+  for (const id of ids) {
+    if (typeof id !== 'string' || !id) {
+      return res.status(400).json({ error: 'each id must be a non-empty string' });
+    }
+  }
+
+  try {
+    const membership = await assertMembership(prisma, orgId, userId, 'ADMIN');
+    if (!canManageMembers(membership.role)) {
+      return res.status(403).json({ error: 'insufficient role to revoke api keys' });
+    }
+
+    // Dedupe to avoid double-counting when callers pass the same id twice.
+    const uniqueIds = Array.from(new Set(ids));
+    const revoked = [];
+    const notFound = [];
+    for (const keyId of uniqueIds) {
+      // eslint-disable-next-line no-await-in-loop
+      const tombstoned = await prisma.apiKey.updateMany({
+        where: { id: keyId, organizationId: orgId, deletedAt: null },
+        data: { deletedAt: new Date() },
+      });
+      if (tombstoned.count === 0) {
+        notFound.push(keyId);
+        continue;
+      }
+      revoked.push(keyId);
+      void writeAuditLog(prisma, {
+        action: 'org_api_key_delete',
+        userId,
+        resource: 'organization',
+        resourceId: orgId,
+        before: { apiKeyId: keyId },
+        metadata: { orgId, softDelete: true, bulk: true },
+        req,
+      });
+    }
+    res.json({ revoked, notFound });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] bulk revoke api keys failed:', err.message);
+    res.status(500).json({ error: 'failed to bulk revoke api keys' });
+  }
+});
+
+// ─── GET /api/orgs/:id/api-keys.csv (ADMIN+, ratchet 45) ────────────
+// Export all org API keys (including tombstoned) as RFC4180 CSV. The
+// shape mirrors redactKey() minus the unique secret bits — id, name,
+// prefix, scopes (joined with `;`), createdAt, lastUsedAt, expiresAt,
+// isDeleted. Returns the full set in createdAt-desc order without
+// pagination because this is an export, not a paged read.
+function csvEscape(value) {
+  if (value === null || value === undefined) return '';
+  const s = String(value);
+  // RFC4180: wrap in double-quotes when the field contains a quote,
+  // comma, CR or LF; double any embedded quotes.
+  if (/[",\r\n]/.test(s)) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
+}
+
+function toIsoOrEmpty(d) {
+  if (!d) return '';
+  if (d instanceof Date) return d.toISOString();
+  return String(d);
+}
+
+router.get('/:id/api-keys.csv', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  try {
+    const membership = await assertMembership(prisma, orgId, userId, 'ADMIN');
+    if (!canManageMembers(membership.role)) {
+      return res.status(403).json({ error: 'insufficient role to export api keys' });
+    }
+
+    const rows = await prisma.apiKey.findMany({
+      where: { organizationId: orgId },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const header = ['id', 'name', 'prefix', 'scopes', 'createdAt', 'lastUsedAt', 'expiresAt', 'isDeleted'];
+    const lines = [header.join(',')];
+    for (const r of rows) {
+      const scopes = Array.isArray(r.scopes) ? r.scopes.join(';') : '';
+      lines.push([
+        csvEscape(r.id),
+        csvEscape(r.name),
+        csvEscape(r.prefix),
+        csvEscape(scopes),
+        csvEscape(toIsoOrEmpty(r.createdAt)),
+        csvEscape(toIsoOrEmpty(r.lastUsedAt)),
+        csvEscape(toIsoOrEmpty(r.expiresAt)),
+        csvEscape(r.deletedAt ? 'true' : 'false'),
+      ].join(','));
+    }
+    // RFC4180 uses CRLF line endings.
+    const body = lines.join('\r\n') + '\r\n';
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="org-${orgId}-api-keys.csv"`);
+    res.status(200).send(body);
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] export api keys csv failed:', err.message);
+    res.status(500).json({ error: 'failed to export api keys' });
+  }
+});
+
 // ─── DELETE /api/orgs/:id/api-keys/:keyId (ADMIN+) ──────────────────
 router.delete('/:id/api-keys/:keyId', authenticateToken, async (req, res) => {
   const userId = req.user.id;

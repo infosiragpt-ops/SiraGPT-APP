@@ -177,7 +177,7 @@ function callRoute({ method, urlPath, body }) {
             server.close();
             let json = null;
             try { json = buf ? JSON.parse(buf) : null; } catch { /* noop */ }
-            resolve({ status: res.statusCode, body: json });
+            resolve({ status: res.statusCode, body: json, raw: buf, headers: res.headers });
           });
         },
       );
@@ -550,5 +550,225 @@ describe('POST /api/orgs/:id/api-keys/:keyId/rotate', () => {
       body: {},
     });
     assert.equal(res.status, 403);
+  });
+});
+
+// ── POST /api/orgs/:id/api-keys/bulk-revoke ────────────────────────
+describe('POST /api/orgs/:id/api-keys/bulk-revoke', () => {
+  beforeEach(() => resetState());
+
+  async function seedKeys(n) {
+    const ids = [];
+    for (let i = 0; i < n; i++) {
+      // eslint-disable-next-line no-await-in-loop
+      const r = await callRoute({
+        method: 'POST',
+        urlPath: '/api/orgs/org-1/api-keys',
+        body: { name: `bulk-${i}` },
+      });
+      ids.push(r.body.apiKey.id);
+    }
+    return ids;
+  }
+
+  test('soft-deletes the listed ids and returns revoked/notFound split', async () => {
+    const ids = await seedKeys(3);
+    auditMock._calls.length = 0;
+
+    const res = await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-1/api-keys/bulk-revoke',
+      body: { ids: [ids[0], ids[2], 'ghost-id'] },
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.body.revoked.sort(), [ids[0], ids[2]].sort());
+    assert.deepEqual(res.body.notFound, ['ghost-id']);
+
+    // Two tombstones, one untouched.
+    const tombstoned = prismaState.apiKeys.filter((r) => r.deletedAt instanceof Date);
+    assert.equal(tombstoned.length, 2);
+    // Org-facing list hides the tombstoned rows.
+    const list = await callRoute({ method: 'GET', urlPath: '/api/orgs/org-1/api-keys' });
+    assert.equal(list.body.total, 1);
+    // One audit row per successful revocation, with bulk:true metadata.
+    const bulkLogs = auditMock._calls.filter((c) => c.action === 'org_api_key_delete');
+    assert.equal(bulkLogs.length, 2);
+    assert.equal(bulkLogs[0].metadata.bulk, true);
+  });
+
+  test('rejects non-array ids', async () => {
+    const res = await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-1/api-keys/bulk-revoke',
+      body: { ids: 'k1' },
+    });
+    assert.equal(res.status, 400);
+    assert.match(res.body.error, /ids must be an array/);
+  });
+
+  test('rejects empty ids', async () => {
+    const res = await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-1/api-keys/bulk-revoke',
+      body: { ids: [] },
+    });
+    assert.equal(res.status, 400);
+  });
+
+  test('rejects more than 50 ids', async () => {
+    const ids = new Array(51).fill(0).map((_, i) => `k-${i}`);
+    const res = await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-1/api-keys/bulk-revoke',
+      body: { ids },
+    });
+    assert.equal(res.status, 400);
+    assert.match(res.body.error, /max 50/);
+  });
+
+  test('rejects non-string ids', async () => {
+    const res = await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-1/api-keys/bulk-revoke',
+      body: { ids: ['ok', 42] },
+    });
+    assert.equal(res.status, 400);
+  });
+
+  test('treats already-soft-deleted ids as notFound (idempotent)', async () => {
+    const ids = await seedKeys(1);
+    await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-1/api-keys/bulk-revoke',
+      body: { ids: [ids[0]] },
+    });
+    const again = await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-1/api-keys/bulk-revoke',
+      body: { ids: [ids[0]] },
+    });
+    assert.equal(again.status, 200);
+    assert.deepEqual(again.body.revoked, []);
+    assert.deepEqual(again.body.notFound, [ids[0]]);
+  });
+
+  test('dedupes repeated ids in the request', async () => {
+    const ids = await seedKeys(1);
+    const res = await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-1/api-keys/bulk-revoke',
+      body: { ids: [ids[0], ids[0], ids[0]] },
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.body.revoked, [ids[0]]);
+    assert.deepEqual(res.body.notFound, []);
+  });
+
+  test('MEMBER role is rejected (403)', async () => {
+    prismaState.membership.role = 'MEMBER';
+    const res = await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-1/api-keys/bulk-revoke',
+      body: { ids: ['anything'] },
+    });
+    assert.equal(res.status, 403);
+  });
+
+  test('non-member returns 404', async () => {
+    const res = await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-other/api-keys/bulk-revoke',
+      body: { ids: ['anything'] },
+    });
+    assert.equal(res.status, 404);
+  });
+});
+
+// ── GET /api/orgs/:id/api-keys.csv ─────────────────────────────────
+describe('GET /api/orgs/:id/api-keys.csv', () => {
+  beforeEach(() => resetState());
+
+  test('exports all keys (including tombstoned) as RFC4180 CSV', async () => {
+    const a = await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-1/api-keys',
+      body: { name: 'alpha', scopes: ['read', 'write'] },
+    });
+    const b = await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-1/api-keys',
+      body: { name: 'beta, with comma' },
+    });
+    // Tombstone one to confirm it still appears in the export.
+    await callRoute({
+      method: 'DELETE',
+      urlPath: `/api/orgs/org-1/api-keys/${b.body.apiKey.id}`,
+    });
+
+    const res = await callRoute({
+      method: 'GET',
+      urlPath: '/api/orgs/org-1/api-keys.csv',
+    });
+    assert.equal(res.status, 200);
+    assert.match(res.headers['content-type'], /text\/csv/);
+    assert.match(res.headers['content-disposition'], /attachment/);
+    assert.match(res.headers['content-disposition'], /org-1-api-keys\.csv/);
+
+    const lines = res.raw.split('\r\n');
+    // Header + 2 rows + trailing empty (CRLF terminator)
+    assert.equal(lines[0], 'id,name,prefix,scopes,createdAt,lastUsedAt,expiresAt,isDeleted');
+    assert.equal(lines.length, 4);
+    assert.equal(lines[3], '');
+
+    // Row containing a comma must be quoted.
+    const betaLine = lines.find((l) => l.includes('beta'));
+    assert.ok(betaLine.includes('"beta, with comma"'));
+    // Tombstoned row reports isDeleted=true.
+    assert.ok(betaLine.endsWith(',true'));
+
+    // Alpha row reports scopes joined with `;` and isDeleted=false.
+    const alphaLine = lines.find((l) => l.startsWith(a.body.apiKey.id));
+    assert.ok(alphaLine.includes('read;write'));
+    assert.ok(alphaLine.endsWith(',false'));
+  });
+
+  test('quotes fields containing quotes by doubling them', async () => {
+    await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-1/api-keys',
+      body: { name: 'has "quotes" inside' },
+    });
+    const res = await callRoute({
+      method: 'GET',
+      urlPath: '/api/orgs/org-1/api-keys.csv',
+    });
+    assert.equal(res.status, 200);
+    assert.ok(res.raw.includes('"has ""quotes"" inside"'));
+  });
+
+  test('returns header-only CSV when org has no keys', async () => {
+    const res = await callRoute({
+      method: 'GET',
+      urlPath: '/api/orgs/org-1/api-keys.csv',
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.raw, 'id,name,prefix,scopes,createdAt,lastUsedAt,expiresAt,isDeleted\r\n');
+  });
+
+  test('MEMBER role is rejected (403)', async () => {
+    prismaState.membership.role = 'MEMBER';
+    const res = await callRoute({
+      method: 'GET',
+      urlPath: '/api/orgs/org-1/api-keys.csv',
+    });
+    assert.equal(res.status, 403);
+  });
+
+  test('non-member returns 404', async () => {
+    const res = await callRoute({
+      method: 'GET',
+      urlPath: '/api/orgs/org-other/api-keys.csv',
+    });
+    assert.equal(res.status, 404);
   });
 });
