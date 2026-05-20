@@ -1,6 +1,7 @@
 "use client"
 
 import { streamSseJson } from "./sse-client"
+import { getNormalizedApiBaseUrl } from "./api-base-url"
 
 /**
  * agentic-search-service — client adapter for POST /api/search/agentic.
@@ -21,7 +22,7 @@ import { streamSseJson } from "./sse-client"
  * for the union — easier to keep them independent.
  */
 
-const API_ROOT = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
+const API_ROOT = getNormalizedApiBaseUrl()
 
 export interface AgenticSource {
   source: string
