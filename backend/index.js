@@ -87,6 +87,71 @@ const {
 } = require('./src/services/observability/posthog');
 startPostHog();
 
+// ── Internal Orchestration Layer ───────────────────────────────
+// Initialises the LLM Gateway (multi-provider with circuit breakers,
+// semantic caching, Langfuse tracing), memory adapter (pgvector +
+// long-term memory bridge), R2 artifact storage, LangGraph
+// orchestrator, and AI bridge. These are attached to
+// `app.locals.orchestration` so every route can access them.
+// All modules are fail-soft: missing API keys or unavailable deps
+// degrade gracefully rather than crashing the process.
+let _orchestration = null;
+function initOrchestration() {
+    if (_orchestration) return _orchestration;
+    try {
+        const { LLMGateway } = require('./src/orchestration/llm-gateway');
+        const { createLangGraphOrchestrator } = require('./src/orchestration/langgraph-engine');
+        const { createMemoryAdapter } = require('./src/orchestration/memory-adapter');
+        const { createR2ArtifactStorage } = require('./src/orchestration/r2-storage');
+        const { attachSSEStream, createSSEReplayBuffer } = require('./src/orchestration/sse-stream');
+        const { searchFreshContext, needsFreshWebContext } = require('./src/orchestration/web-search-tools');
+        const { createAIBridge } = require('./src/orchestration/ai-bridge');
+
+        const gateway = new LLMGateway();
+        const memory = createMemoryAdapter();
+        const r2 = createR2ArtifactStorage();
+        const sseReplayBuffer = createSSEReplayBuffer();
+
+        const orchestrator = createLangGraphOrchestrator({ gateway });
+
+        const bridge = createAIBridge({
+            gateway,
+            memory,
+            search: { searchFreshContext, needsFreshWebContext },
+            sse: { attachSSEStream, buffer: sseReplayBuffer },
+        });
+
+        _orchestration = {
+            gateway,
+            orchestrator,
+            memory,
+            r2,
+            bridge,
+            sse: { attachSSEStream, createSSEReplayBuffer, buffer: sseReplayBuffer },
+            search: { searchFreshContext, needsFreshWebContext },
+            configured: {
+                gateway: true,
+                r2: r2.enabled,
+                memory: true,
+            },
+        };
+        console.log('[orchestration] LLM Gateway + LangGraph + Memory + R2 + SSE + AI Bridge initialised');
+    } catch (err) {
+        console.warn('[orchestration] initialisation failed (degraded mode):', err.message);
+        _orchestration = {
+            gateway: null,
+            orchestrator: null,
+            memory: null,
+            r2: null,
+            bridge: null,
+            sse: null,
+            search: null,
+            configured: { gateway: false, r2: false, memory: false },
+        };
+    }
+    return _orchestration;
+}
+
 // Patches Express 4.x to forward async rejections to the error
 // handler automatically. Must be required BEFORE the express import.
 require('express-async-errors');
@@ -405,6 +470,11 @@ app.use(compression({
         return compression.filter(req, res);
     }
 }));
+// Payload-size enforcement — rejects oversized requests BEFORE body-parser
+// buffers the bytes. 1 MB JSON, 250 MB multipart (upload-heavy routes).
+// Mounted early so oversized spam never reaches downstream handlers.
+const validatePayloadSize = require('./src/middleware/validate-payload-size');
+app.use(validatePayloadSize({ jsonBytes: 1 * 1024 * 1024, multipartBytes: 250 * 1024 * 1024 }));
 app.use('/api/payments/stripe/webhook', express.raw({ type: 'application/json' }));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
@@ -412,6 +482,14 @@ app.use(cookieParser());
 
 // BigInt serialization middleware
 app.use(bigintSerializerMiddleware);
+
+// ── Attach orchestration layer to app.locals ────────────────────
+// Routes access orchestration via req.app.locals.orchestration.
+// Initialised once at boot; lazy module loading means missing deps
+// won't crash the process (degraded mode logged above).
+const orchestration = initOrchestration();
+app.locals.orchestration = orchestration;
+app.locals.orchestrationInitialised = true;
 
 // Session configuration for Google OAuth. With REDIS_URL set, sessions
 // persist across PM2 restarts and survive multi-instance scaling.
@@ -440,6 +518,32 @@ app.use(session(sessionConfig));
 // Passport middleware
 app.use(passport.initialize());
 app.use(passport.session());
+
+// ── CSRF double-submit protection for cookie-auth routes ──────────
+// Mounted AFTER cookie-parser + session + passport so cookies are
+// readable and user context is available. Bearer-auth requests are
+// auto-bypassed (browsers don't auto-send Authorization cross-origin).
+// Disabled in test env via CSRF_DISABLED=1.
+const { requireCsrf } = require('./src/middleware/csrf');
+app.use('/api/auth', requireCsrf);
+app.use('/api/users', requireCsrf);
+app.use('/api/chats', requireCsrf);
+app.use('/api/files', requireCsrf);
+app.use('/api/projects', requireCsrf);
+app.use('/api/payments', requireCsrf);
+app.use('/api/bookmarks', requireCsrf);
+app.use('/api/orgs', requireCsrf);
+app.use('/api/library', requireCsrf);
+app.use('/api/cowork', requireCsrf);
+app.use('/api/thesis', requireCsrf);
+
+// ── XSS / prompt-injection sanitization ──────────────────────────
+// Recursively strips script tags, event handlers, and javascript: URIs
+// from req.body, req.query and req.params. Runs AFTER body parsing so
+// req.body is populated. Safe methods (GET/HEAD/OPTIONS) skip body
+// sanitization but query/params are still cleaned.
+const xssSanitize = require('./src/middleware/xss-sanitize');
+app.use(xssSanitize);
 
 // Logging
 // Structured JSON logger runs in every environment and auto-attaches
@@ -819,6 +923,11 @@ function startServer() {
             idempotencyEnabled: process.env.IDEMPOTENCY_ENABLED === 'true',
             planQuotasEnabled: process.env.PLAN_QUOTAS_ENFORCED !== 'false',
             corsAllowedOriginsCount: ALLOWED_ORIGINS.length,
+            orchestration: {
+                gateway: orchestration?.configured?.gateway ?? false,
+                r2Storage: orchestration?.configured?.r2 ?? false,
+                memory: orchestration?.configured?.memory ?? false,
+            },
         };
         logger.info(startInfo, 'server_started');
         // Loud warning when production boots without an explicit CORS
@@ -954,11 +1063,16 @@ function startServer() {
     // Observability flush (telemetry exporters) — runs alongside DB/Redis
     // disconnect to recover any in-flight events.
     shutdownRegistry.register('observability_flush', async () => {
-        await Promise.allSettled([
+        const flushers = [
             shutdownOpenTelemetry(),
             shutdownLangfuse(),
             shutdownPostHog(),
-        ]);
+        ];
+        // Flush Langfuse traces from the orchestration gateway tracer too
+        if (orchestration?.gateway?.tracer?.flush) {
+            flushers.push(orchestration.gateway.tracer.flush());
+        }
+        await Promise.allSettled(flushers);
     }, 5000);
 
     // Scheduler stop — registered last (first to run) so cron jobs

@@ -32,6 +32,8 @@ export default defineConfig({
     screenshot: "only-on-failure",
   },
 
+  snapshotDir: "./tests/visual-snapshots",
+
   projects: [
     { name: "chromium", use: { ...devices["Desktop Chrome"] } },
   ],

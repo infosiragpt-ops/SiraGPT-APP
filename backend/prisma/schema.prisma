@@ -157,6 +157,9 @@ model User {
   pendingTransfersFrom    OrgPendingTransfer[]  @relation("OrgPendingTransferFrom")
   pendingTransfersTo      OrgPendingTransfer[]  @relation("OrgPendingTransferTo")
 
+  // User memory relations (orchestration)
+  memories UserMemory[]
+
   @@index([deletedAt])
   @@map("users")
 }
@@ -1727,4 +1730,48 @@ model PartialSession {
   @@index([userId])
   @@index([expiresAt])
   @@map("partial_sessions")
+}
+
+model AgentCheckpoint {
+  threadId           String    @map("thread_id")
+  checkpointId       String    @map("checkpoint_id")
+  parentCheckpointId String?   @map("parent_checkpoint_id")
+  state              Json      @default("{}")
+  metadata           Json      @default("{}")
+  createdAt          DateTime  @default(now()) @map("created_at")
+
+  @@id([threadId, checkpointId])
+  @@index([threadId, createdAt(sort: Desc)])
+  @@map("agent_checkpoints")
+}
+
+model UserMemory {
+  id              String    @id @default(cuid())
+  userId          String    @map("user_id")
+  content         String    @db.Text
+  category        String?
+  importanceScore Float     @default(0) @map("importance_score")
+  lastAccessedAt  DateTime  @default(now()) @map("last_accessed_at")
+  accessCount     Int       @default(0) @map("access_count")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  embeddings UserMemoryEmbedding[]
+
+  @@index([userId, category])
+  @@index([userId, importanceScore(sort: Desc)])
+  @@map("user_memories")
+}
+
+model UserMemoryEmbedding {
+  id         String   @id @default(cuid())
+  memoryId   String   @map("memory_id")
+  embedding  Bytes    @db.ByteA
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  memory UserMemory @relation(fields: [memoryId], references: [id], onDelete: Cascade)
+
+  @@index([memoryId])
+  @@map("user_memory_embeddings")
 }

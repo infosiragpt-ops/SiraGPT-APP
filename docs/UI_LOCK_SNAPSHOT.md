@@ -1,4 +1,6 @@
 # UI Lock Snapshot — 2026-05-20T18:05:27Z
+# Finalized — 2026-05-20T23:00:00Z
+# Base commit: f5bd634d5166b633bf6d634c275ea76790124974 (main)
 
 ## File Tree
 ```

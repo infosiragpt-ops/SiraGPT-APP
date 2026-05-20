@@ -77,6 +77,8 @@ const streamCache = require('../services/stream-cache');
 const streamResume = require('../services/ai/stream-resume');
 const promptInjectionDetector = require('../services/ai/prompt-injection-detector');
 const longTermMemory = require('../services/long-term-memory');
+const { getRouteEnricher } = require('../orchestration/route-enricher');
+const routeEnricher = getRouteEnricher();
 const artifactGenerator = require('../services/artifacts/artifact-generator');
 const {
   streamGeneration: streamDesignGeneration,
@@ -129,6 +131,8 @@ const cookie = require('cookie');
 const crypto = require('crypto');
 const mime = require('mime-types');
 const sharp = require('sharp');
+
+const { enrichWithWebSearch, getTracer, getMemoryAdapter } = require('../orchestration/gateway-adapter');
 
 const { exec } = require('child_process');
 // Dependencies ko file ke top par import karen
@@ -1034,16 +1038,24 @@ router.post(
       const userId = isAuth ? req.user.id : null;
       const canPersist = isAuth && !!chatId;
 
-      // ─── Prompt-injection preflight (warn-only) ────────────────────
+      // ─── Prompt-injection preflight ───────────────────────────
       // Heuristic detector for "ignore previous instructions" / DAN /
-      // role-hijack attempts on the user prompt. We log + emit a metric
-      // (siragpt_prompt_injection_suspected_total) but do NOT block — the
-      // model side is already hardened against most patterns and the
-      // false-positive rate on translation / writing requests is non-zero.
+      // role-hijack attempts on the user prompt. Low/medium-confidence
+      // matches are logged + emitted as a metric (warn-only).
+      // High-confidence matches (≥0.7) BLOCK the request with 400
+      // because the model-side hardening is insufficient against
+      // determined injection attempts.
       try {
         const injectionVerdict = promptInjectionDetector.detect(prompt);
         if (injectionVerdict.detected) {
           promptInjectionDetector.recordSuspicion(injectionVerdict, { route: 'ai_generate' });
+          if (injectionVerdict.confidence >= 0.7) {
+            return res.status(400).json({
+              error: 'Prompt rejected due to security policy',
+              code: 'security.prompt_injection',
+              confidence: injectionVerdict.confidence,
+            });
+          }
           console.warn('[ai/generate] prompt_injection_suspected', JSON.stringify({
             user_id: userId || null,
             chat_id: chatId || null,
@@ -2794,8 +2806,28 @@ router.post(
         }
       }
 
-      const systemInstruction = { role: 'system', content: promptBundle.system + universalContractBlock + enterpriseExecutionBlock + memoryBlock + feedbackBlock + evidenceBlock + documentEnrichmentBlock + coworkBlock };
-      console.log(`📝 system prompt built: intent=${promptBundle.intent} lang=${promptBundle.language} chars=${systemInstruction.content.length} profile=${userProfile ? 'yes' : 'no'} memory=${memoryBlock ? 'yes' : 'no'} feedback=${feedbackBlock ? 'yes' : 'no'} rag=${operationalRagContext?.active ? 'yes' : 'no'} contract=${universalTaskContract?.pipeline || 'none'} graph=${enterpriseExecutionGraph?.graph_id || 'none'} cira=${ciraRuntimeBundle?.envelope?.request_id || 'none'} docEnrichment=${documentEnrichment ? `${documentEnrichment.primaryDocType}/${documentEnrichment.perFileProfile.length}` : 'none'}`);
+      // ── Orchestration enrichment: web search + orchestration memory ──
+      let webSearchBlock = '';
+      let orchMemoryBlock = '';
+      if (typeof prompt === 'string' && prompt.length > 0) {
+        try {
+          const webContext = await enrichWithWebSearch(prompt);
+          if (webContext?.block) {
+            webSearchBlock = webContext.block;
+          }
+        } catch (_wsErr) { /* non-fatal */ }
+
+        if (userId) {
+          try {
+            const memoryAdapter = getMemoryAdapter();
+            const memBlock = await memoryAdapter.buildMemoryPrompt(userId, prompt);
+            if (memBlock) orchMemoryBlock = memBlock;
+          } catch (_memErr) { /* non-fatal */ }
+        }
+      }
+
+      const systemInstruction = { role: 'system', content: promptBundle.system + universalContractBlock + enterpriseExecutionBlock + memoryBlock + orchMemoryBlock + feedbackBlock + evidenceBlock + documentEnrichmentBlock + coworkBlock + webSearchBlock };
+      console.log(`📝 system prompt built: intent=${promptBundle.intent} lang=${promptBundle.language} chars=${systemInstruction.content.length} profile=${userProfile ? 'yes' : 'no'} memory=${memoryBlock ? 'yes' : 'no'} orchMemory=${orchMemoryBlock ? 'yes' : 'no'} feedback=${feedbackBlock ? 'yes' : 'no'} rag=${operationalRagContext?.active ? 'yes' : 'no'} contract=${universalTaskContract?.pipeline || 'none'} graph=${enterpriseExecutionGraph?.graph_id || 'none'} cira=${ciraRuntimeBundle?.envelope?.request_id || 'none'} docEnrichment=${documentEnrichment ? `${documentEnrichment.primaryDocType}/${documentEnrichment.perFileProfile.length}` : 'none'} webSearch=${webSearchBlock ? 'yes' : 'no'}`);
 
       // ✅ IMPROVED: Get previous chat history with proper image handling
       let historyMessages = [];

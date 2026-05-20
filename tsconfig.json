@@ -40,6 +40,8 @@
   "exclude": [
     "node_modules",
     "backend",
+    "db",
+    "drizzle.config.ts",
     "artifacts",
     "tests",
     ".test-dist",
