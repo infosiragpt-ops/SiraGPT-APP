@@ -2966,6 +2966,39 @@ router.get('/:id/api-keys/:keyId/usage', authenticateToken, async (req, res) => 
 // an orgId so org events land in the team channel.
 const slack = require('../services/slack-integration');
 
+// ─── Per-org Slack connect/test rate limits (ratchet 44) ────────────
+// Slack incoming webhook URLs are powerful — they can post into a
+// team's channel until revoked. A compromised ADMIN token (or a
+// misbehaving script) shouldn't be able to swap the configured URL
+// hundreds of times or spam the channel via the /test endpoint. Caps
+// are per-org, 24h sliding window via the shared rate-limit-store
+// (Redis-backed, in-memory fallback):
+//   - 10 connects / org / day
+//   - 20 tests / org / day
+// On limit, 429 with `Retry-After` in seconds. Fails open on store
+// errors — these are abuse guards, not security boundaries.
+const SLACK_RL_WINDOW_MS = 24 * 60 * 60 * 1000; // 24h
+const SLACK_CONNECT_LIMIT = 10;
+const SLACK_TEST_LIMIT = 20;
+
+async function checkOrgSlackRateLimit(res, orgId, kind, limit) {
+  const key = `org-slack-${kind}:${orgId}`;
+  try {
+    const result = await rateLimitStore.consume(key, limit, SLACK_RL_WINDOW_MS);
+    if (result.allowed) return true;
+    const retryAfterMs = Math.max(0, result.resetAt.getTime() - Date.now());
+    const retryAfterSec = Math.max(1, Math.ceil(retryAfterMs / 1000));
+    res.setHeader('Retry-After', String(retryAfterSec));
+    res.status(429).json({
+      error: `rate limit exceeded for org slack ${kind} (max ${limit} per 24h)`,
+      retryAfter: retryAfterSec,
+    });
+    return false;
+  } catch (_err) {
+    return true;
+  }
+}
+
 function isSlackWebhookUrl(url) {
   if (typeof url !== 'string' || !url) return false;
   try {
@@ -3020,6 +3053,10 @@ router.post('/:id/slack', authenticateToken, async (req, res) => {
     if (!canManageMembers(membership.role)) {
       return res.status(403).json({ error: 'insufficient role to configure Slack' });
     }
+    // Per-org abuse guard. Counted AFTER role check so MEMBER probes
+    // (403) and non-member probes (404) don't burn the org's budget.
+    const okRl = await checkOrgSlackRateLimit(res, orgId, 'connect', SLACK_CONNECT_LIMIT);
+    if (!okRl) return undefined;
     const encrypted = slack.encryptToken(webhookUrl);
     const existing = await prisma.slackIntegration.findFirst({
       where: { organizationId: orgId },
@@ -3067,6 +3104,10 @@ router.post('/:id/slack/test', authenticateToken, async (req, res) => {
     if (!canManageMembers(membership.role)) {
       return res.status(403).json({ error: 'insufficient role to test Slack' });
     }
+    // Per-org abuse guard. Counted AFTER role check so 403/404 probes
+    // can't exhaust the team-channel test budget.
+    const okRl = await checkOrgSlackRateLimit(res, orgId, 'test', SLACK_TEST_LIMIT);
+    if (!okRl) return undefined;
     const existing = await prisma.slackIntegration.findFirst({
       where: { organizationId: orgId },
     });
