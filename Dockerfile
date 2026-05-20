@@ -75,7 +75,7 @@ ENV PORT=3000
 #   .next/standalone/.next/static/  — client assets
 #   public/  — public directory
 COPY --from=build --chown=appuser:appgroup /app/.next/standalone ./
-COPY --from=build --chown=appuser:appgroup /app/.next/static ./.next/static
+COPY --from=build --chown=appuser:appgroup /app/.next/standalone/.next/static ./.next/static
 COPY --from=build --chown=appuser:appgroup /app/public ./public
 
 # Switch to non-root user
