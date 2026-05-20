@@ -26,7 +26,8 @@ let OpenAI = null;
 function loadOpenAI() {
   if (OpenAI) return OpenAI;
   // eslint-disable-next-line global-require
-  OpenAI = require('openai');
+  const mod = require('openai');
+  OpenAI = mod.OpenAI || mod.default || mod;
   return OpenAI;
 }
 
@@ -114,7 +115,8 @@ let openaiClient = null;
 function getOpenAI() {
   if (openaiClient) return openaiClient;
   if (!process.env.OPENAI_API_KEY) return null;
-  openaiClient = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const OpenAIClient = loadOpenAI();
+  openaiClient = new OpenAIClient({ apiKey: process.env.OPENAI_API_KEY });
   return openaiClient;
 }
 

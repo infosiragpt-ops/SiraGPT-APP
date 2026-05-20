@@ -14,6 +14,8 @@ title = "SiraGPT Gitleaks Config"
     '''docs/''',                            # General docs
     '''CLAUDE\.md''',                       # Agent instructions
     '''\.env\.example''',                   # Example env file
+    '''node_modules/''',                    # Dependency fixtures/examples
+    '''backend/node_modules/''',            # Dependency fixtures/examples
   ]
 
 [[rules]]
@@ -24,4 +26,5 @@ title = "SiraGPT Gitleaks Config"
     stopwords = [
       "ci-dummy", "sk-ci-dummy", "ci_dummy", "not-used",
       "your-api-key", "your-openai-api-key", "your-google-api-key",
+      "your-elevenlabs-api-key-here",
     ]
