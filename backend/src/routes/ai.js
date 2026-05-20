@@ -607,27 +607,10 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
       return catalogEntry.plans.includes(userPlan);
     });
 
-    // Provider key gating — hide models whose provider has no API key set.
-    // Avoids dead options in the picker that would 503 the second they're
-    // chosen. Mapping is conservative: only providers with a well-known
-    // single env var get gated. Unknown providers pass through unchanged.
-    const providerEnvKey = {
-      OpenAI: 'OPENAI_API_KEY',
-      Anthropic: 'ANTHROPIC_API_KEY',
-      Groq: 'GROQ_API_KEY',
-      Gemini: 'GOOGLE_GENERATIVE_AI_API_KEY',
-      DeepSeek: 'DEEPSEEK_API_KEY',
-      OpenRouter: 'OPENROUTER_API_KEY',
-    };
-    models = models.filter((m) => {
-      const envKey = providerEnvKey[m.provider];
-      if (!envKey) return true;
-      // Gemini's key is sometimes under GEMINI_API_KEY too — accept either.
-      if (m.provider === 'Gemini') {
-        return !!(process.env.GOOGLE_GENERATIVE_AI_API_KEY || process.env.GEMINI_API_KEY);
-      }
-      return !!process.env[envKey];
-    });
+    // Provider key gating disabled (per user request: show ALL active
+    // models). Providers without an API key configured will surface
+    // their upstream 503 only when actually invoked, instead of being
+    // hidden from the picker.
 
     res.json({ models });
   } catch (error) {

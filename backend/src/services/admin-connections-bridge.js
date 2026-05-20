@@ -195,28 +195,19 @@ async function reconcileCatalog() {
   }
 
   // Update AiModel.isActive for each provider. Map to the catalog
-  // form (e.g. 'openai' → 'OpenAI'). Skip providers without a key,
-  // unless they had a row that just got disabled (then deactivate).
+  // form (e.g. 'openai' → 'OpenAI').
+  //
+  // Policy (per user request): never auto-deactivate. Catalog entries
+  // stay visible regardless of probe outcome or missing keys — the
+  // downstream call-site surfaces upstream errors when a model is
+  // actually invoked. Admins can still disable a model explicitly via
+  // /admin/models. Probe health is mirrored to admin_connections only
+  // (below) so the panel shows a green/red dot without hiding picker
+  // entries from end users.
   const summary = [];
-  for (const [providerKey, { healthy, reason }] of Object.entries(results)) {
+  for (const [providerKey, { healthy }] of Object.entries(results)) {
     const catalogProvider = PROVIDER_CATALOG_MAP[providerKey];
     if (!catalogProvider) continue;
-    if (reason === 'no_key') {
-      // Deactivate so the chat UI doesn't show models with no upstream.
-      const { count } = await prisma.aiModel.updateMany({
-        where: { provider: catalogProvider, isActive: true },
-        data: { isActive: false },
-      });
-      if (count) summary.push(`${providerKey}:deactivated(${count})`);
-      continue;
-    }
-    // If the key is configured, keep the catalog visible to users even
-    // when the probe fails — keys can be transiently throttled or
-    // rotation-in-flight, and forcibly hiding the picker entries makes
-    // the chat appear broken. The downstream call-site will surface
-    // the upstream error if the key truly is invalid. We only deactivate
-    // when no_key is set (handled above) so admins can disable a
-    // provider explicitly by unsetting its env var.
     const { count } = await prisma.aiModel.updateMany({
       where: { provider: catalogProvider, isActive: false },
       data: { isActive: true },
