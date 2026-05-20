@@ -119,19 +119,56 @@ function start(opts = {}) {
   let hardDeleteRunning = false;
   let apiUsagePruneRunning = false;
 
+  // Lazy-loaded metrics handle — instrumentation must never break cron
+  // execution, so we swallow load errors and degrade to a no-op.
+  let _metrics = null;
+  function _getMetrics() {
+    if (_metrics !== null) return _metrics || null;
+    try {
+      // eslint-disable-next-line global-require
+      _metrics = require('../utils/metrics');
+    } catch (_) {
+      _metrics = false; // sentinel: tried + failed
+    }
+    return _metrics || null;
+  }
+
   // Per-job telemetry (lastRun / lastDuration). Each entry pushed into
   // `tasks` carries its own `meta` object; the handler stamps timings
   // around every invocation so `/api/admin/health/services` can surface
   // them without coupling to cron internals.
-  function recordRun(meta) {
+  //
+  // Ratchet 45 also emits Prometheus-shape metrics on each successful
+  // run:
+  //   siragpt_cron_last_success_timestamp{job}  — epoch seconds gauge
+  //   siragpt_cron_last_duration_seconds{job}   — duration histogram
+  // Failures intentionally skip the success-timestamp gauge so stale
+  // alerts continue to fire when a job is broken; duration is still
+  // observed (the histogram is useful even for failed runs).
+  function recordRun(meta, jobName) {
     const startedAt = Date.now();
     return (err) => {
       const endedAt = Date.now();
+      const durationMs = endedAt - startedAt;
       meta.lastRun = new Date(startedAt).toISOString();
-      meta.lastDuration = endedAt - startedAt;
+      meta.lastDuration = durationMs;
       meta.lastStatus = err ? 'error' : 'ok';
       if (err) meta.lastError = err && err.message ? err.message : String(err);
       else delete meta.lastError;
+      const metrics = _getMetrics();
+      if (metrics && jobName) {
+        const durationSec = durationMs / 1000;
+        try {
+          if (!err && typeof metrics.gauge === 'function') {
+            metrics.gauge('siragpt_cron_last_success_timestamp', { job: jobName }, Math.round(endedAt / 1000));
+          }
+          if (typeof metrics.observe === 'function' && Number.isFinite(durationSec) && durationSec >= 0) {
+            metrics.observe('siragpt_cron_last_duration_seconds', { job: jobName }, durationSec);
+          }
+        } catch (_) {
+          // never throw from instrumentation
+        }
+      }
     };
   }
 
@@ -144,7 +181,7 @@ function start(opts = {}) {
         return;
       }
       scrubRunning = true;
-      const finish = recordRun(scrubMeta);
+      const finish = recordRun(scrubMeta, 'scrub-deleted-user-content');
       let runErr = null;
       try {
         // eslint-disable-next-line global-require
@@ -176,7 +213,7 @@ function start(opts = {}) {
         return;
       }
       hardDeleteRunning = true;
-      const finish = recordRun(hardDeleteMeta);
+      const finish = recordRun(hardDeleteMeta, 'hard-delete-deleted-users');
       let runErr = null;
       try {
         // eslint-disable-next-line global-require
@@ -208,7 +245,7 @@ function start(opts = {}) {
         return;
       }
       apiUsagePruneRunning = true;
-      const finish = recordRun(apiUsagePruneMeta);
+      const finish = recordRun(apiUsagePruneMeta, 'prune-api-usage');
       let runErr = null;
       try {
         // eslint-disable-next-line global-require
@@ -241,7 +278,7 @@ function start(opts = {}) {
         return;
       }
       auditArchiveRunning = true;
-      const finish = recordRun(auditArchiveMeta);
+      const finish = recordRun(auditArchiveMeta, 'archive-audit-logs');
       let runErr = null;
       try {
         // eslint-disable-next-line global-require
@@ -274,7 +311,7 @@ function start(opts = {}) {
         return;
       }
       sessionSweepRunning = true;
-      const finish = recordRun(sessionSweepMeta);
+      const finish = recordRun(sessionSweepMeta, 'sweep-expired-sessions');
       let runErr = null;
       try {
         // eslint-disable-next-line global-require
@@ -307,7 +344,7 @@ function start(opts = {}) {
         return;
       }
       evtSweepRunning = true;
-      const finish = recordRun(evtSweepMeta);
+      const finish = recordRun(evtSweepMeta, 'sweep-expired-verification-tokens');
       let runErr = null;
       try {
         // eslint-disable-next-line global-require
@@ -341,7 +378,7 @@ function start(opts = {}) {
         return;
       }
       announcementSweepRunning = true;
-      const finish = recordRun(announcementSweepMeta);
+      const finish = recordRun(announcementSweepMeta, 'sweep-expired-announcements');
       let runErr = null;
       try {
         // eslint-disable-next-line global-require
@@ -375,7 +412,7 @@ function start(opts = {}) {
         return;
       }
       apiKeySweepRunning = true;
-      const finish = recordRun(apiKeySweepMeta);
+      const finish = recordRun(apiKeySweepMeta, 'sweep-expired-api-keys');
       let runErr = null;
       try {
         // eslint-disable-next-line global-require
@@ -409,7 +446,7 @@ function start(opts = {}) {
         return;
       }
       costFlushRunning = true;
-      const finish = recordRun(costFlushMeta);
+      const finish = recordRun(costFlushMeta, 'cost-tracker-flush');
       let runErr = null;
       try {
         // eslint-disable-next-line global-require
@@ -443,7 +480,7 @@ function start(opts = {}) {
         return;
       }
       costArchiveRunning = true;
-      const finish = recordRun(costArchiveMeta);
+      const finish = recordRun(costArchiveMeta, 'cost-tracker-archive');
       let runErr = null;
       try {
         // eslint-disable-next-line global-require
@@ -477,7 +514,7 @@ function start(opts = {}) {
         return;
       }
       webhookSecretGraceRunning = true;
-      const finish = recordRun(webhookSecretGraceMeta);
+      const finish = recordRun(webhookSecretGraceMeta, 'sweep-webhook-secret-grace');
       let runErr = null;
       try {
         // eslint-disable-next-line global-require
@@ -511,7 +548,7 @@ function start(opts = {}) {
         return;
       }
       inactiveApiKeySweepRunning = true;
-      const finish = recordRun(inactiveApiKeySweepMeta);
+      const finish = recordRun(inactiveApiKeySweepMeta, 'sweep-inactive-api-keys');
       let runErr = null;
       try {
         // eslint-disable-next-line global-require
@@ -545,7 +582,7 @@ function start(opts = {}) {
         return;
       }
       notificationSweepRunning = true;
-      const finish = recordRun(notificationSweepMeta);
+      const finish = recordRun(notificationSweepMeta, 'sweep-old-notifications');
       let runErr = null;
       try {
         // eslint-disable-next-line global-require
@@ -584,7 +621,7 @@ function start(opts = {}) {
         return;
       }
       failedEmailRetryRunning = true;
-      const finish = recordRun(failedEmailRetryMeta);
+      const finish = recordRun(failedEmailRetryMeta, 'failed-email-retry');
       let runErr = null;
       try {
         // eslint-disable-next-line global-require
@@ -623,7 +660,7 @@ function start(opts = {}) {
         return;
       }
       partialSessionSweepRunning = true;
-      const finish = recordRun(partialSessionSweepMeta);
+      const finish = recordRun(partialSessionSweepMeta, 'sweep-expired-partial-sessions');
       let runErr = null;
       try {
         // eslint-disable-next-line global-require

@@ -265,6 +265,22 @@ registerHistogram('siragpt_webhook_delivery_duration_seconds', {
   buckets: [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30],
 });
 
+// ── System-cron health metrics (ratchet 45) ─────────────────────────
+// Updated by `system-cron`'s recordRun() after each successful run so
+// dashboards / alerts can distinguish "job ran recently" from "job is
+// stale / silently broken". The timestamp gauge is epoch seconds (the
+// Prometheus canonical form) and the histogram observes the just-run
+// duration in seconds for percentile slicing per job.
+registerGauge('siragpt_cron_last_success_timestamp', {
+  help: 'Epoch seconds of the last successful run for each system-cron job',
+  labels: ['job'],
+});
+registerHistogram('siragpt_cron_last_duration_seconds', {
+  help: 'Duration of the last completed system-cron job in seconds, labelled by job',
+  labels: ['job'],
+  buckets: [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 300, 900],
+});
+
 // ── Maintenance-mode metrics (cycle 72) ─────────────────────────────
 // Incremented from the maintenance-mode middleware whenever a request
 // is short-circuited with HTTP 503 because the global maintenance flag

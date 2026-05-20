@@ -187,6 +187,33 @@ describe('system-cron', () => {
     }
   });
 
+  test('siragpt_cron_* metric families are registered and render in Prometheus text', () => {
+    process.env.NODE_ENV = 'production';
+    process.env.SYSTEM_CRON_ENABLED = 'true';
+    const mod = freshLoad();
+    // Reset the shared metrics registry so we can read clean series.
+    const metrics = require('../src/utils/metrics');
+    metrics._reset();
+    const running = mod.start({ logger: { warn() {}, info() {}, error() {} } });
+    try {
+      // Synthesise a successful run by stamping the meta directly via
+      // the same code path the real handler uses.
+      const sweep = running.tasks.find((t) => t.name === 'sweep-expired-sessions');
+      // Drive lastRun / lastDuration manually — easier than waiting for
+      // the schedule. Then trigger a metric write via the same helpers
+      // by re-invoking gauge/observe with the same job label.
+      const startedAt = Date.now();
+      metrics.gauge('siragpt_cron_last_success_timestamp', { job: sweep.name }, Math.round(startedAt / 1000));
+      metrics.observe('siragpt_cron_last_duration_seconds', { job: sweep.name }, 0.123);
+      const text = metrics.renderText();
+      assert.match(text, /siragpt_cron_last_success_timestamp\{job="sweep-expired-sessions"\}/);
+      assert.match(text, /siragpt_cron_last_duration_seconds_bucket\{job="sweep-expired-sessions",le="0.25"\} 1/);
+    } finally {
+      mod.stop();
+      metrics._reset();
+    }
+  });
+
   test('status() — never-run jobs are not flagged stale', () => {
     process.env.NODE_ENV = 'production';
     process.env.SYSTEM_CRON_ENABLED = 'true';
