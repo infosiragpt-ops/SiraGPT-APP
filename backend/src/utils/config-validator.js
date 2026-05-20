@@ -81,6 +81,10 @@ function looksLikeLocalhost(value) {
   return LOCALHOST_PATTERNS.some((re) => re.test(value));
 }
 
+function isCiEnvironment(env) {
+  return String(env.CI || '').toLowerCase() === 'true' || String(env.GITHUB_ACTIONS || '').toLowerCase() === 'true';
+}
+
 function checkRequired(env, envName, errors) {
   const required = REQUIRED_BY_ENV[envName] || [];
   for (const key of required) {
@@ -111,13 +115,20 @@ function checkRecommended(env, envName, warnings) {
 
 function checkCrossFieldMisconfig(env, envName, warnings, errors) {
   // Prod DB pointing at localhost is almost certainly a mistake.
-  if (envName === 'production' && looksLikeLocalhost(env.DATABASE_URL)) {
+  if (envName === 'production' && looksLikeLocalhost(env.DATABASE_URL) && !isCiEnvironment(env)) {
     errors.push({
       key: 'DATABASE_URL',
       envName,
       message:
         'NODE_ENV=production but DATABASE_URL points to localhost. ' +
         'This is almost certainly wrong — refusing to boot.',
+    });
+  } else if (envName === 'production' && looksLikeLocalhost(env.DATABASE_URL)) {
+    warnings.push({
+      key: 'DATABASE_URL',
+      envName,
+      message:
+        'NODE_ENV=production with localhost DATABASE_URL is allowed only because CI/GitHub Actions is set.',
     });
   }
   if (envName === 'production' && looksLikeLocalhost(env.REDIS_URL)) {

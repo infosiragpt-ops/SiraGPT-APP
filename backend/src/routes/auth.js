@@ -1480,6 +1480,119 @@ router.get('/sso/:orgSlug/callback', async (req, res) => {
   });
 });
 
+// ─── SAML response handler (ratchet 45, extends cycle 87) ───────────
+// POST /api/auth/sso/:orgSlug/callback — IdPs that use HTTP-POST binding
+// deliver the SAMLResponse here. When the org's ssoConfig is a SAML
+// config with a cert and `@node-saml/node-saml` is installed, we verify
+// the response, ensure the user exists (creating them as a member of the
+// org on first login), and mint a Sira session. If the lib is missing,
+// or the response fails verification, we surface the same shape as the
+// scaffold so the FE can render an actionable error.
+async function ssoSamlCallbackHandler(req, res, deps = {}) {
+  const db = deps.prisma || prisma;
+  const audit = deps.writeAuditLog || writeAuditLog;
+  const samlMod = deps.samlHandler || require('../services/saml-handler');
+  const resolve = deps.resolveOrgForSso || resolveOrgForSso;
+
+  const org = await resolve(req.params.orgSlug);
+  if (!org) return res.status(404).json({ error: 'organization not found' });
+  if (!org.ssoEnabled || !org.ssoConfig) {
+    return res.status(400).json({ error: 'SSO is not enabled for this organization' });
+  }
+
+  const samlResponse =
+    (req.body && (req.body.SAMLResponse || req.body.samlResponse)) || null;
+
+  // Audit the *attempt* before we know if it'll succeed so we have a
+  // record even when the verify step throws / lib is missing.
+  void audit(db, {
+    req,
+    action: 'sso_login_attempt',
+    resource: 'organization',
+    resourceId: org.id,
+    metadata: { orgSlug: org.slug, hasResponse: !!samlResponse },
+  });
+
+  const verified = await samlMod.verifySamlResponse(samlResponse, org.ssoConfig);
+  if (!verified.ok) {
+    return res.status(verified.status || 401).json({
+      ok: false,
+      error: verified.error,
+      hint: verified.hint || undefined,
+      orgSlug: org.slug,
+    });
+  }
+
+  try {
+    // Find-or-create the user matched by the asserted email.
+    let user = await db.user.findUnique({ where: { email: verified.email } });
+    let createdUser = false;
+    if (!user) {
+      user = await db.user.create({
+        data: {
+          name: verified.displayName || verified.email.split('@')[0],
+          email: verified.email,
+          // SSO users get a random password — they'll never log in with
+          // it (the SSO domain lock-out in /login bounces them back here).
+          password: await bcrypt.hash(`sso:${verified.email}:${Date.now()}:${Math.random()}`, 12),
+          plan: 'FREE',
+          isAdmin: false,
+          apiUsage: 0,
+          monthlyCallLimit: 3,
+          monthlyLimit: 10000,
+        },
+      });
+      createdUser = true;
+    }
+
+    // Ensure they're a member of the org (best-effort — orgMembership
+    // model may not exist in every test harness).
+    if (db.orgMembership && typeof db.orgMembership.upsert === 'function') {
+      try {
+        await db.orgMembership.upsert({
+          where: { orgId_userId: { orgId: org.id, userId: user.id } },
+          update: {},
+          create: { orgId: org.id, userId: user.id, role: 'MEMBER' },
+        });
+      } catch (_e) { /* non-fatal */ }
+    }
+
+    const token = signSessionToken({
+      userId: user.id,
+      isAdmin: Boolean(user.isAdmin),
+      isSuperAdmin: Boolean(user.isSuperAdmin),
+    });
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    if (db.session && typeof db.session.create === 'function') {
+      try {
+        await db.session.create({ data: { userId: user.id, token, expiresAt } });
+      } catch (_e) { /* non-fatal in test harnesses */ }
+    }
+
+    void audit(db, {
+      req,
+      action: 'sso_login_success',
+      resource: 'organization',
+      resourceId: org.id,
+      actorName: verified.email,
+      metadata: { orgSlug: org.slug, userId: user.id, createdUser },
+    });
+
+    return res.status(200).json({
+      ok: true,
+      token,
+      user: { id: user.id, email: user.email, name: user.name },
+      orgSlug: org.slug,
+      createdUser,
+    });
+  } catch (err) {
+    console.error('[auth/sso] saml login failed:', err && err.message ? err.message : err);
+    return res.status(500).json({ ok: false, error: 'sso_login_failed' });
+  }
+}
+
+router.post('/sso/:orgSlug/callback', (req, res) => ssoSamlCallbackHandler(req, res));
+
 // Resolve an org claiming `email`'s domain for SSO. Returns null if
 // no org has that domain in `ssoDomains` **and** `ssoEnabled = true`.
 // Used by /login + /register to short-circuit password auth to the
@@ -1516,6 +1629,7 @@ router.__ssoHelpers = {
   resolveOrgForSso,
   extractEmailDomain,
   resolveOrgBySsoDomain,
+  ssoSamlCallbackHandler,
 };
 
 // ─── Email verification (ratchet 45) ───────────────────────────────

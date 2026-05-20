@@ -44,6 +44,18 @@ test('production + localhost DATABASE_URL is a blocking error', () => {
   assert.ok(r.errors.some((e) => e.key === 'DATABASE_URL'));
 });
 
+test('production + localhost DATABASE_URL is allowed in CI smoke tests', () => {
+  const r = validateConfig({
+    NODE_ENV: 'production',
+    CI: 'true',
+    DATABASE_URL: 'postgres://user:pw@localhost:5432/sira',
+    SESSION_SECRET: 'a'.repeat(64),
+    JWT_SECRET: 'b'.repeat(64),
+  });
+  assert.strictEqual(r.ok, true);
+  assert.ok(r.warnings.some((w) => w.key === 'DATABASE_URL'));
+});
+
 test('production with CORS_ORIGIN=* emits warning', () => {
   const r = validateConfig({
     NODE_ENV: 'production',
