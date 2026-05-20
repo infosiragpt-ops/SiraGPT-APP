@@ -91,6 +91,16 @@ jobs:
           script_stop: true
           script: |
             set -e
+            echo "[deploy-workflow] Remote disk before cleanup"
+            df -h / /var/lib/docker 2>/dev/null || df -h / || true
+            docker system df || true
+            docker builder prune -af || true
+            docker image prune -af || true
+            docker container prune -f || true
+            echo "[deploy-workflow] Remote disk after cleanup"
+            docker system df || true
+            df -h / /var/lib/docker 2>/dev/null || df -h / || true
+            rm -f /root/siraNew/siraGPT/.git/index.lock
             cd /root/siraNew/siraGPT
             chmod +x scripts/deploy-with-rollback.sh
             ./scripts/deploy-with-rollback.sh

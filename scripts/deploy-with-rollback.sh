@@ -32,10 +32,31 @@ BACKUP_DIR="${BACKUP_DIR:-/root/siragpt-backups/postgres}"
 log() { printf '[deploy-with-rollback] %s\n' "$*"; }
 err() { printf '[deploy-with-rollback] ERROR: %s\n' "$*" >&2; }
 
+cleanup_docker_space() {
+  if [[ "${DEPLOY_PRUNE_DOCKER:-1}" != "1" ]]; then
+    log "Skipping Docker prune because DEPLOY_PRUNE_DOCKER is disabled"
+    return 0
+  fi
+
+  log "Docker disk usage before cleanup"
+  df -h / /var/lib/docker 2>/dev/null || df -h / || true
+  docker system df || true
+
+  log "Pruning Docker build cache, unused images, and stopped containers"
+  docker builder prune -af || true
+  docker image prune -af || true
+  docker container prune -f || true
+
+  log "Docker disk usage after cleanup"
+  docker system df || true
+  df -h / /var/lib/docker 2>/dev/null || df -h / || true
+}
+
 cd "$APP_DIR"
 
 PREV_SHA="$(git rev-parse HEAD)"
 log "Pre-deploy SHA: ${PREV_SHA}"
+cleanup_docker_space
 
 # Pre-deploy DB backup. Non-fatal — we want a snapshot in case
 # the new code introduces a destructive migration, but a flaky
@@ -58,6 +79,7 @@ fi
 # ─── Rollback path ────────────────────────────────────────────
 DEPLOY_EXIT=$?
 err "Deploy failed (exit ${DEPLOY_EXIT}). Rolling back to ${PREV_SHA}"
+cleanup_docker_space
 
 # 1. Reset working tree to the pre-deploy commit.
 if ! git reset --hard "${PREV_SHA}"; then
