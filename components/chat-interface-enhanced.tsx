@@ -72,7 +72,7 @@ import {
   logIngest,
 } from "@/lib/attachment-ingest"
 import { Badge } from "@/components/ui/badge"
-import { apiClient, getNormalizedApiBaseUrl } from "@/lib/api"
+import { apiClient } from "@/lib/api"
 import { track } from "@/lib/analytics"
 import { aiService, buildProfessionalCapabilityPrompt, PROFESSIONAL_CAPABILITY_CONTRACTS, shouldRouteTextPromptThroughAgenticRuntime, shouldRouteThroughAgenticRuntime, type ChatIntent } from "@/lib/ai-service"
 import { toast } from "sonner"
@@ -5296,9 +5296,7 @@ But first, you need to connect your Spotify account securely using the button be
       toast.info(`Add a query after /${slash.command} (e.g. /${slash.command} latest progress in X)`);
       return;
     }
-    const token = typeof window !== "undefined"
-      ? localStorage.getItem("auth-token") || localStorage.getItem("token") || ""
-      : "";
+    const token = (typeof window !== "undefined" ? localStorage.getItem("token") : null) || "";
 
     if (slash.command === "goal" || slash.command === "research") {
       const endpoint = slash.command === "goal" ? "/api/research-agent/stream" : "/api/scientific-search";
@@ -5312,11 +5310,8 @@ But first, you need to connect your Spotify account securely using the button be
       );
 
       try {
-        const apiBase = getNormalizedApiBaseUrl(
-          typeof window !== "undefined" && typeof (window as any).NEXT_PUBLIC_API_URL === "string"
-            ? (window as any).NEXT_PUBLIC_API_URL
-            : process.env.NEXT_PUBLIC_API_URL,
-        );
+        const apiBase = (typeof window !== "undefined" && (window as any).NEXT_PUBLIC_API_URL) ||
+          (process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api");
         const url = apiBase.replace(/\/$/, "") + endpoint.replace(/^\/api/, "");
 
         if (!isStream) {
