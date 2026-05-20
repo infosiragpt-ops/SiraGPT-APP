@@ -4,6 +4,55 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and improvement cycles follow a sequential number with the date the work landed.
 
+## [0.4.3 / backend 1.3.3] — Cycles 171-180 milestone — 2026-05-20
+
+Eighth decade past the centenarian. **PATCH** bumps (root
+`0.4.2 → 0.4.3`, backend `1.3.2 → 1.3.3`) — a small celebratory
+ten-cycle marker. Cycles 171-180 expanded admin audit search, prisma
+schema validation, service-worker hardening, bundle analyzer, and a
+broad rate-limit sweep across API keys, webhooks, Slack, invites, and
+announcements. No public API breaks. See `docs/cycles/CYCLE_180.md`
+for the milestone narrative.
+
+### Added
+- **Cycle 180 — milestone consolidation**: `docs/cycles/CYCLE_180.md`
+  marker doc + CHANGELOG cycles 171-180 sweep + PATCH version bump to
+  `0.4.3 / 1.3.3` (small celebratory ten-cycle marker; no public API
+  breaks).
+- **Cycle 179 — announcement create rate limit**: per-org rate limit
+  on announcement create to prevent broadcast spam against members.
+- **Cycle 178 — invite create+accept rate limits**: rate limits on
+  invite create + accept to harden onboarding flow against
+  enumeration and spam.
+- **Cycle 177 — org Slack rate limits**: rate limits on org Slack
+  webhook configure / test endpoints with audit emit on 429.
+- **Cycle 176 — webhook create+delete rate limits**: rate limits on
+  webhook create + delete to absorb misbehaving integrations or
+  scripted abuse.
+- **Cycle 175 — org API key rate limits**: per-IP + per-user rate
+  limits applied to API-key create/rotate/revoke endpoints with
+  structured 429 responses and audit emit.
+- **Cycle 174 — SW hardening + bundle analyzer**: service worker
+  cache versioning + safer fetch fallback; `@next/bundle-analyzer`
+  wired behind an env flag for on-demand bundle introspection.
+- **Cycle 173 — prisma format + schema-validate test**:
+  `prisma format` applied across `schema.prisma`; new test asserts
+  the formatted file is canonical and a schema validity check runs in
+  CI.
+- **Cycle 172 — per-org audit search**:
+  `GET /orgs/:id/audit-logs/search` scoped to a single org with
+  filter by actor, action, tag, time range, and free-text on
+  payload; RBAC-gated to org owners and admins.
+- **Cycle 171 — /admin/audit-logs/search endpoint**: global admin
+  audit search across orgs with filter by actor, action, tag, time
+  range, and free-text on payload.
+
+### Changed
+- Root `package.json` `0.4.2 → 0.4.3` and `backend/package.json`
+  `1.3.2 → 1.3.3` (**PATCH**; small celebratory ten-cycle marker; no
+  public API breaks).
+- Lint ratchet held at `--max-warnings 44`.
+
 ## [0.4.2 / backend 1.3.2] — Cycles 161-170 milestone — 2026-05-20
 
 Seventh decade past the centenarian. **PATCH** bumps (root
