@@ -7,9 +7,17 @@ const { run, DEFAULT_IDLE_DAYS, KEY_PREFIX } = require('../src/jobs/detect-idle-
 
 const silentLogger = { info() {}, warn() {}, error() {} };
 
-function makePrisma({ orgs = [], lastByOrg = {}, capture = {} } = {}) {
+function makePrisma({ orgs = [], lastByOrg = {}, membersByOrg = null, existingFlagKeys = [], capture = {} } = {}) {
   capture.upserts = [];
   capture.deletes = [];
+  capture.findMany = [];
+  const settings = new Set(existingFlagKeys);
+  const memberRowsFor = (orgId) => {
+    if (membersByOrg) return membersByOrg[orgId] || [];
+    const last = lastByOrg[orgId];
+    if (last === undefined || last === null) return [];
+    return [{ lastActiveAt: last, deletedAt: null }];
+  };
   return {
     organization: {
       async findMany() {
@@ -18,19 +26,29 @@ function makePrisma({ orgs = [], lastByOrg = {}, capture = {} } = {}) {
     },
     orgMembership: {
       async findFirst({ where }) {
-        const last = lastByOrg[where.orgId];
-        if (last === undefined || last === null) return null;
-        return { user: { lastActiveAt: last } };
+        const requireActiveUser = where?.user?.deletedAt === null;
+        const rows = memberRowsFor(where.orgId)
+          .filter((row) => row && row.lastActiveAt)
+          .filter((row) => !requireActiveUser || row.deletedAt == null)
+          .sort((a, b) => b.lastActiveAt.getTime() - a.lastActiveAt.getTime());
+        if (!rows.length) return null;
+        return { user: { lastActiveAt: rows[0].lastActiveAt } };
       },
     },
     systemSettings: {
+      async findMany(args) {
+        capture.findMany.push(args);
+        return [...settings].map((key) => ({ key, value: '{}' }));
+      },
       async upsert(args) {
         capture.upserts.push(args);
+        settings.add(args.where.key);
         return { id: 'fake', key: args.where.key, value: args.create.value };
       },
       async deleteMany(args) {
         capture.deletes.push(args);
-        return { count: 0 };
+        const existed = settings.delete(args.where.key);
+        return { count: existed ? 1 : 0 };
       },
     },
   };
@@ -94,6 +112,7 @@ describe('detect-idle-orgs', () => {
     const prisma = makePrisma({
       orgs: [{ id: 'o3', slug: 'live', name: 'Live', billingPlan: 'PRO' }],
       lastByOrg: { o3: recent },
+      existingFlagKeys: [`${KEY_PREFIX}o3`],
       capture,
     });
     const res = await run({ prisma, now, logger: silentLogger });
@@ -102,6 +121,30 @@ describe('detect-idle-orgs', () => {
     // Should issue a clear (deleteMany) to drop any prior flag.
     assert.equal(capture.deletes.length, 1);
     assert.equal(capture.deletes[0].where.key, `${KEY_PREFIX}o3`);
+  });
+
+  test('ignores soft-deleted users when choosing last member activity', async () => {
+    const now = new Date('2026-05-19T12:00:00Z');
+    const recentDeleted = new Date(now.getTime() - 3 * 86400 * 1000);
+    const staleActive = new Date(now.getTime() - 90 * 86400 * 1000);
+    const capture = {};
+    const prisma = makePrisma({
+      orgs: [{ id: 'o5', slug: 'soft', name: 'Soft Deleted', billingPlan: 'PLUS' }],
+      membersByOrg: {
+        o5: [
+          { lastActiveAt: recentDeleted, deletedAt: new Date(now.getTime() - 1 * 86400 * 1000) },
+          { lastActiveAt: staleActive, deletedAt: null },
+        ],
+      },
+      capture,
+    });
+
+    const res = await run({ prisma, now, logger: silentLogger });
+
+    assert.equal(res.flagged, 1);
+    const payload = JSON.parse(capture.upserts[0].create.value);
+    assert.equal(payload.daysIdle, 90);
+    assert.equal(payload.lastMemberActiveAt, staleActive.toISOString());
   });
 
   test('honours SIRAGPT_ORG_IDLE_DAYS env override', async () => {
@@ -193,6 +236,7 @@ describe('detect-idle-orgs', () => {
         { id: 'o3', slug: 'ghost', name: 'G', billingPlan: 'FREE' },
       ],
       lastByOrg: { o1: stale, o2: recent, o3: null },
+      existingFlagKeys: [`${KEY_PREFIX}o2`],
       capture,
     });
     const res = await run({ prisma, now, logger: silentLogger });
@@ -202,5 +246,41 @@ describe('detect-idle-orgs', () => {
     // Active org should be cleared.
     assert.equal(capture.deletes.length, 1);
     assert.equal(capture.deletes[0].where.key, `${KEY_PREFIX}o2`);
+  });
+
+  test('does not count already-flagged idle org as newly detected', async () => {
+    const now = new Date('2026-05-19T12:00:00Z');
+    const stale = new Date(now.getTime() - 90 * 86400 * 1000);
+    const capture = {};
+    const prisma = makePrisma({
+      orgs: [{ id: 'o1', slug: 'a', name: 'A', billingPlan: 'PRO' }],
+      lastByOrg: { o1: stale },
+      existingFlagKeys: [`${KEY_PREFIX}o1`],
+      capture,
+    });
+
+    const res = await run({ prisma, now, logger: silentLogger });
+
+    assert.equal(res.flagged, 1);
+    assert.equal(res.detected, 0);
+    assert.equal(capture.upserts.length, 1);
+  });
+
+  test('cleans idle flags whose organization no longer exists', async () => {
+    const capture = {};
+    const prisma = makePrisma({
+      orgs: [],
+      existingFlagKeys: [`${KEY_PREFIX}deleted-org`],
+      capture,
+    });
+
+    const res = await run({ prisma, logger: silentLogger });
+
+    assert.equal(res.scanned, 0);
+    assert.equal(res.flagged, 0);
+    assert.equal(res.orphaned, 1);
+    assert.equal(res.cleared, 1);
+    assert.equal(capture.deletes.length, 1);
+    assert.equal(capture.deletes[0].where.key, `${KEY_PREFIX}deleted-org`);
   });
 });

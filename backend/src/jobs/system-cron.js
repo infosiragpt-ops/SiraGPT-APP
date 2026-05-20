@@ -94,6 +94,11 @@ const PARTIAL_SESSION_SWEEP_SCHEDULE = process.env.SYSTEM_CRON_PARTIAL_SESSION_S
 // Walks every Organization, flags those with no member activity in the
 // last 60d into SystemSettings `org_idle:<orgId>`.
 const DETECT_IDLE_ORGS_SCHEDULE = process.env.SYSTEM_CRON_DETECT_IDLE_ORGS_SCHEDULE || '0 6 * * *';
+// Ratchet 45 — daily user idleness detector. Default 06:30 UTC; sits 30
+// minutes after the org idleness pass so they don't co-fire on the
+// SystemSettings table. Flags users whose User.lastActiveAt is older
+// than 90d (or null) into SystemSettings `user_idle:<userId>`.
+const DETECT_IDLE_USERS_SCHEDULE = process.env.SYSTEM_CRON_DETECT_IDLE_USERS_SCHEDULE || '30 6 * * *';
 
 let _state = null;
 
@@ -730,6 +735,45 @@ function start(opts = {}) {
     schedule: DETECT_IDLE_ORGS_SCHEDULE,
     task: detectIdleOrgsTask,
     meta: detectIdleOrgsMeta,
+  });
+
+  // Ratchet 45 — daily idle-user detector (06:30 UTC).
+  let detectIdleUsersRunning = false;
+  const detectIdleUsersMeta = {};
+  const detectIdleUsersTask = cron.schedule(
+    DETECT_IDLE_USERS_SCHEDULE,
+    async () => {
+      if (detectIdleUsersRunning) {
+        logger.warn?.('[system-cron] skip detect-idle-users — previous run still active');
+        return;
+      }
+      detectIdleUsersRunning = true;
+      const finish = recordRun(detectIdleUsersMeta, 'detect-idle-users');
+      let runErr = null;
+      try {
+        // eslint-disable-next-line global-require
+        const job = require('./detect-idle-users');
+        const runWithRetry = wrapWithRetry(() => job.run({ logger }), {
+          onRetry: ({ attempt, delayMs, reason }) =>
+            logger.warn?.(`[system-cron] detect-idle-users retry ${attempt} in ${delayMs}ms (${reason})`),
+        });
+        const res = await runWithRetry();
+        logger.info?.(`[system-cron] detect-idle-users done: ${JSON.stringify(res)}`);
+      } catch (err) {
+        runErr = err;
+        logger.error?.(`[system-cron] detect-idle-users failed: ${err && err.message}`);
+      } finally {
+        detectIdleUsersRunning = false;
+        finish(runErr);
+      }
+    },
+    { scheduled: false, timezone: 'UTC' },
+  );
+  tasks.push({
+    name: 'detect-idle-users',
+    schedule: DETECT_IDLE_USERS_SCHEDULE,
+    task: detectIdleUsersTask,
+    meta: detectIdleUsersMeta,
   });
 
   for (const t of tasks) {
