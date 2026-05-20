@@ -15,10 +15,6 @@ concurrency:
 
 env:
   NODE_VERSION: '24'
-  # GitHub Actions is moving JavaScript actions from Node 20 to Node 24.
-  # Force the newer runtime in CI so successful runs stay free of runtime
-  # deprecation annotations while upstream actions finish their migration.
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
   # Dummy NEXT_PUBLIC_* values for `next build`. The build step statically
   # evaluates them into client bundles; real values are injected at deploy
   # time via the host's env (Vercel/VPS/etc.), not baked into CI artifacts.
@@ -37,10 +33,10 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
@@ -61,7 +57,7 @@ jobs:
       # Prisma engine cache — keyed on schema. Restoring avoids re-downloading
       # the platform-specific query engine binaries on every run.
       - name: Cache Prisma engines
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             backend/node_modules/.prisma
@@ -116,7 +112,7 @@ jobs:
       # Cache .next/cache between runs so `next build` reuses
       # previously compiled modules, speeding up PR rebuilds.
       - name: Cache Next.js build
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .next/cache
           # Source-aware key: invalidate the cache when either deps or
@@ -139,7 +135,7 @@ jobs:
 
       - name: Upload bundle-size report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: bundle-size-report
           path: bundle-size-report.json
@@ -233,10 +229,10 @@ jobs:
       GOOGLE_SEARCH_ENGINE_ID: ci-dummy-cse-id
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
@@ -248,7 +244,7 @@ jobs:
       # Prisma engine cache — keyed on the schema. Avoids re-downloading
       # the query-engine + introspection-engine binaries each run.
       - name: Cache Prisma engines
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             backend/node_modules/.prisma
@@ -283,7 +279,7 @@ jobs:
 
       - name: Upload coverage report
         if: matrix.shard == 1 && always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: backend-coverage-lcov
           path: |
@@ -326,7 +322,7 @@ jobs:
 
       - name: Upload server log on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: backend-server-log
           path: backend/server.log
@@ -345,10 +341,10 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -363,7 +359,7 @@ jobs:
         run: npm run sbom:generate
 
       - name: Upload SBOM artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: supply-chain-sbom
           path: artifacts/sbom/*.cdx.json
@@ -383,10 +379,10 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
@@ -439,10 +435,10 @@ jobs:
     continue-on-error: true
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
@@ -469,7 +465,7 @@ jobs:
       # are debug artifacts, not release deliverables.
       - name: Upload Playwright report on failure
         if: always() && steps.playwright_smoke.outcome == 'failure'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: playwright-report
           path: playwright-report/
@@ -500,13 +496,13 @@ jobs:
     continue-on-error: true
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Build backend image (no push)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: backend
           file: backend/Dockerfile
@@ -516,7 +512,7 @@ jobs:
           build-args: BUILDKIT_CONTEXT_KEEP_GIT_DIR=1
 
       - name: Build frontend image (no push)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile
@@ -529,7 +525,7 @@ jobs:
     timeout-minutes: 3
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Verify UI lock hashes
         run: bash scripts/verify-ui-lock.sh
@@ -540,10 +536,10 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
@@ -561,7 +557,7 @@ jobs:
 
       - name: Upload visual diffs on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: visual-regression-diffs
           path: test-results/
@@ -574,7 +570,7 @@ jobs:
     timeout-minutes: 3
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -600,10 +596,10 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
@@ -631,7 +627,7 @@ jobs:
     timeout-minutes: 3
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Validate Prisma migrations are additive
         run: |
@@ -713,7 +709,7 @@ jobs:
     timeout-minutes: 3
     steps:
       - name: Checkout (shallow)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 1
 
