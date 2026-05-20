@@ -245,7 +245,7 @@ async function runWithLangGraph(langGraph, state, ctx, { checkpointStore, gatewa
     }),
   });
 
-  async function wrapNode(nodeName, fn) {
+  function wrapNode(nodeName, fn) {
     return async (graphState) => {
       const started = Date.now();
       const result = await fn(graphState);
@@ -297,11 +297,18 @@ async function runWithLangGraph(langGraph, state, ctx, { checkpointStore, gatewa
   }
   const compiled = checkpointer ? graph.compile({ checkpointer }) : graph.compile();
 
-  const result = await compiled.invoke({
-    stage: 'planner',
-    answer: null,
-    checkpoints: [],
-  });
+  const result = await compiled.invoke(
+    {
+      stage: 'planner',
+      answer: null,
+      checkpoints: [],
+    },
+    {
+      configurable: {
+        thread_id: ctx.threadId,
+      },
+    },
+  );
 
   return {
     ...state,
