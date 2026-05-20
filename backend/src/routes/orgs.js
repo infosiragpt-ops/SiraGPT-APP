@@ -30,6 +30,7 @@
  *   GET    /api/orgs/:id/settings                       — read per-org settings (member; cycle 66)
  *   PATCH  /api/orgs/:id/settings                       — merge per-org settings (ADMIN+; cycle 66)
  *   GET    /api/orgs/:id/limits                         — plan caps + member/quota usage (member; ratchet 45)
+ *   POST   /api/orgs/:id/notifications                  — broadcast inbox notification to org (ADMIN+; ratchet 44)
  *
  * Every state-changing route writes an AuditLog row via the shared
  * `writeAuditLog` helper (fire-and-forget).
@@ -4807,6 +4808,96 @@ router.delete('/:id/announcements/:announcementId', authenticateToken, async (re
     if (err && err.status) return res.status(err.status).json({ error: err.message });
     console.error('[orgs] delete announcement failed:', err.message);
     res.status(500).json({ error: 'failed to delete announcement' });
+  }
+});
+
+// ─── POST /api/orgs/:id/notifications (ADMIN+; ratchet 44) ──────────
+// Org-scoped notifications inbox fan-out. Cycle 128 added per-user
+// notifications; this endpoint lets an org admin broadcast a single
+// notification to every member (or, when `role` is provided, only to
+// members holding that specific role). The fan-out is delegated to
+// `user-notifications.broadcastOrgNotification` which writes one
+// `Notification` row per recipient with the org id stamped on the
+// `orgId` column added in migration 20260520170000.
+const ORG_BROADCAST_TITLE_MAX = 200;
+const ORG_BROADCAST_MESSAGE_MAX = 4000;
+router.post('/:id/notifications', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  try {
+    const membership = await assertMembership(prisma, orgId, userId, 'ADMIN');
+    if (!canManageMembers(membership.role)) {
+      return res.status(403).json({ error: 'insufficient role to broadcast notifications' });
+    }
+
+    const body = req.body || {};
+    const title = typeof body.title === 'string' ? body.title.trim() : '';
+    const message = typeof body.message === 'string' ? body.message.trim() : '';
+    const severity = typeof body.severity === 'string' ? body.severity : 'info';
+    const type = typeof body.type === 'string' && body.type ? body.type.trim() : 'org_broadcast';
+    const roleFilter = body.role === undefined || body.role === null || body.role === ''
+      ? null
+      : String(body.role).toUpperCase();
+
+    if (!title || title.length > ORG_BROADCAST_TITLE_MAX) {
+      return res.status(400).json({ error: 'invalid title' });
+    }
+    if (!message || message.length > ORG_BROADCAST_MESSAGE_MAX) {
+      return res.status(400).json({ error: 'invalid message' });
+    }
+    if (!['info', 'warning', 'critical'].includes(severity)) {
+      return res.status(400).json({ error: 'invalid severity' });
+    }
+    if (roleFilter && !isValidRole(roleFilter)) {
+      return res.status(400).json({ error: 'invalid role' });
+    }
+
+    // eslint-disable-next-line global-require
+    const userNotifications = require('../services/user-notifications');
+    const result = await userNotifications.broadcastOrgNotification(prisma, {
+      orgId,
+      title,
+      message,
+      severity,
+      type,
+      roleFilter,
+      metadata: body.metadata && typeof body.metadata === 'object' ? body.metadata : null,
+      createdById: userId,
+    });
+
+    void writeAuditLog(prisma, {
+      action: 'org_notification_broadcast',
+      userId,
+      resource: 'organization',
+      resourceId: orgId,
+      after: {
+        recipients: result.recipients,
+        created: result.created,
+        skipped: result.skipped,
+        total: result.total,
+        roleFilter: roleFilter || null,
+        severity,
+        type,
+      },
+      metadata: { orgId },
+      req,
+    });
+
+    res.status(201).json({
+      ok: true,
+      orgId,
+      severity,
+      type,
+      roleFilter: roleFilter || null,
+      created: result.created,
+      skipped: result.skipped,
+      recipients: result.recipients,
+      total: result.total,
+    });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] broadcast notification failed:', err?.message || err);
+    res.status(500).json({ error: 'failed to broadcast notification' });
   }
 });
 

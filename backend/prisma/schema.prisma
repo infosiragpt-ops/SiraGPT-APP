@@ -851,6 +851,12 @@ model UsageAlert {
 model Notification {
   id        String    @id @default(cuid())
   userId    String
+  // Ratchet 44 — org-scoped notifications (cycle 165). When the row was
+  // produced by an org-wide broadcast (POST /api/orgs/:id/notifications)
+  // the originating organization is recorded here so the inbox can
+  // surface a badge / filter and so the FE knows which org context the
+  // notification belongs to. NULL for plain user-targeted rows.
+  orgId     String?
   type      String // 'usage_warning', 'payment_failed', 'subscription_ending'
   title     String
   message   String    @db.Text
@@ -865,6 +871,7 @@ model Notification {
 
   @@index([userId, createdAt])
   @@index([userId, read])
+  @@index([orgId, createdAt])
   @@map("notifications")
 }
 
