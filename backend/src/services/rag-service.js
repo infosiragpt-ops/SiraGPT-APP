@@ -20,7 +20,16 @@
  * evolve without rewriting routes, agents, or chat flows.
  */
 
-const OpenAI = require('openai');
+// Lazy-load OpenAI SDK so orchestration boot stays resilient when the
+// dep isn't installed (e.g. fresh checkouts before npm install). Matches
+// the llm-gateway / r2-storage lazy-require pattern.
+let _OpenAICtor = null;
+function loadOpenAI() {
+  if (_OpenAICtor) return _OpenAICtor;
+  // eslint-disable-next-line global-require
+  _OpenAICtor = require('openai');
+  return _OpenAICtor;
+}
 
 const { mmrRerank } = require('./mmr');
 const { expandQuery } = require('./query-expansion');
@@ -106,7 +115,8 @@ let openaiClient = null;
 function getOpenAI() {
   if (openaiClient) return openaiClient;
   if (!process.env.OPENAI_API_KEY) return null;
-  openaiClient = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const Ctor = loadOpenAI();
+  openaiClient = new Ctor({ apiKey: process.env.OPENAI_API_KEY });
   return openaiClient;
 }
 
