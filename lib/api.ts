@@ -120,6 +120,12 @@ class ApiClient {
     reject: (err: any) => void;
   }> = [];
 
+  // CSRF token state. The backend uses double-submit cookies:
+  // GET /api/csrf-token sets both a public `csrf_token` cookie (non-httpOnly,
+  // JS-readable) and an httpOnly `_csrf_secret` cookie. Mutating requests
+  // must echo the public token in the `X-CSRF-Token` header.
+  private _csrfTokenInFlight: Promise<string | null> | null = null;
+
   constructor(baseURL: string) {
     this.baseURL = baseURL;
 
@@ -174,12 +180,23 @@ class ApiClient {
     // only when the caller didn't supply one. crypto.randomUUID is
     // baseline in Node 18+ / Chrome 92+ / Safari 15.4+; the
     // existence check covers older environments without crashing.
-    const isMutating = method === 'POST' || method === 'PUT' || method === 'PATCH';
-    if (isMutating && !headers.has('Idempotency-Key') && !headers.has('idempotency-key')) {
+    const isMutating = method === 'POST' || method === 'PUT' || method === 'PATCH' || method === 'DELETE';
+    if (isMutating && method !== 'DELETE' && !headers.has('Idempotency-Key') && !headers.has('idempotency-key')) {
       const cryptoObj = (typeof globalThis !== 'undefined' ? (globalThis as any).crypto : null);
       if (cryptoObj && typeof cryptoObj.randomUUID === 'function') {
         headers.set('Idempotency-Key', cryptoObj.randomUUID());
       }
+    }
+
+    // CSRF double-submit token. Backend requires X-CSRF-Token on mutating
+    // requests to cookie-auth routers (/api/auth, /api/users, /api/chats,
+    // /api/files, /api/projects, /api/payments, /api/bookmarks, /api/orgs,
+    // /api/library, /api/cowork, /api/thesis). Bearer-auth requests skip
+    // CSRF server-side, but we set the header unconditionally on mutating
+    // calls — harmless when not required.
+    if (isMutating && !headers.has('X-CSRF-Token') && !headers.has('x-csrf-token')) {
+      const csrf = await this._ensureCsrfToken();
+      if (csrf) headers.set('X-CSRF-Token', csrf);
     }
 
     // Track last error for re-throw on final failure
@@ -251,6 +268,28 @@ class ApiClient {
               // Reset attempt counter so this doesn't consume a retry slot
               attempt = -1;
               continue;
+            }
+          }
+
+          // 403 csrf_invalid — token rotated or missing. Refresh once and
+          // retry transparently so the UI doesn't surface a CSRF error.
+          if (response.status === 403 && isMutating) {
+            const peek = await response.clone().json().catch(() => null) as { error?: string } | null;
+            if (peek && peek.error === 'csrf_invalid') {
+              // Force a fresh token (clear in-flight + drop stale cookie value
+              // by re-fetching) and retry once. We cap at one CSRF retry by
+              // tagging the headers so we don't loop indefinitely.
+              if (!headers.has('X-CSRF-Retry')) {
+                this._csrfTokenInFlight = null;
+                const fresh = await this._ensureCsrfToken();
+                if (fresh) {
+                  headers.set('X-CSRF-Token', fresh);
+                  headers.set('X-CSRF-Retry', '1');
+                  clearTimeout(timeoutId);
+                  attempt = -1;
+                  continue;
+                }
+              }
             }
           }
 
@@ -348,6 +387,47 @@ class ApiClient {
       return Math.max(0, epoch - Date.now());
     }
     return null;
+  }
+
+  /**
+   * Read the `csrf_token` cookie (set by the backend's double-submit CSRF
+   * middleware). Returns null when running on the server, when document.cookie
+   * is unavailable, or when the cookie hasn't been issued yet.
+   */
+  private _readCsrfCookie(): string | null {
+    if (typeof document === 'undefined') return null;
+    const raw = document.cookie || '';
+    const match = raw.match(/(?:^|;\s*)csrf_token=([^;]+)/);
+    return match ? decodeURIComponent(match[1]) : null;
+  }
+
+  /**
+   * Ensure we have a CSRF token to attach to mutating requests. If the
+   * cookie is already present we return it immediately; otherwise we hit
+   * GET /api/csrf-token once (deduped via _csrfTokenInFlight) to have the
+   * backend mint a fresh pair and surface the public token in the body.
+   */
+  private async _ensureCsrfToken(): Promise<string | null> {
+    if (typeof window === 'undefined') return null;
+    const existing = this._readCsrfCookie();
+    if (existing) return existing;
+    if (this._csrfTokenInFlight) return this._csrfTokenInFlight;
+    this._csrfTokenInFlight = (async () => {
+      try {
+        const res = await fetch(`${this.baseURL}/auth/csrf-token`, {
+          method: 'GET',
+          credentials: 'include',
+        });
+        if (!res.ok) return null;
+        const data = await res.json().catch(() => null) as { csrfToken?: string } | null;
+        return (data && data.csrfToken) || this._readCsrfCookie();
+      } catch {
+        return null;
+      } finally {
+        this._csrfTokenInFlight = null;
+      }
+    })();
+    return this._csrfTokenInFlight;
   }
 
   /**
