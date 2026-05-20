@@ -4478,6 +4478,34 @@ const ANNOUNCEMENT_SEVERITIES = new Set(['info', 'warn', 'critical']);
 const ANNOUNCEMENT_TITLE_MAX = 200;
 const ANNOUNCEMENT_BODY_MAX = 10_000;
 
+// Cycle 122 — per-org create rate limit for org announcements: 20
+// creates per 24h sliding window. Same shape as the invite limiter
+// above (429 + Retry-After, fails open if the store throws).
+const ANNOUNCEMENT_CREATE_RL_WINDOW_MS = 24 * 60 * 60 * 1000; // 24h
+const ANNOUNCEMENT_CREATE_LIMIT = 20;
+
+async function checkAnnouncementCreateRateLimit(res, orgId) {
+  const key = `org-announcement-create:${orgId}`;
+  try {
+    const result = await rateLimitStore.consume(
+      key,
+      ANNOUNCEMENT_CREATE_LIMIT,
+      ANNOUNCEMENT_CREATE_RL_WINDOW_MS,
+    );
+    if (result.allowed) return true;
+    const retryAfterMs = Math.max(0, result.resetAt.getTime() - Date.now());
+    const retryAfterSec = Math.max(1, Math.ceil(retryAfterMs / 1000));
+    res.setHeader('Retry-After', String(retryAfterSec));
+    res.status(429).json({
+      error: `rate limit exceeded for org announcements (max ${ANNOUNCEMENT_CREATE_LIMIT} per 24h)`,
+      retryAfter: retryAfterSec,
+    });
+    return false;
+  } catch (_err) {
+    return true;
+  }
+}
+
 function serializeAnnouncement(row) {
   if (!row) return null;
   return {
@@ -4566,6 +4594,11 @@ router.post('/:id/announcements', authenticateToken, async (req, res) => {
     if (!canManageMembers(membership.role)) {
       return res.status(403).json({ error: 'insufficient role to create announcements' });
     }
+
+    // Cycle 122 — per-org create rate limit (20 / 24h). Placed after the
+    // role gate so unauthorized callers can't probe / poison the counter.
+    const okLimit = await checkAnnouncementCreateRateLimit(res, orgId);
+    if (!okLimit) return undefined;
 
     const body = req.body || {};
     const title = typeof body.title === 'string' ? body.title.trim() : '';
