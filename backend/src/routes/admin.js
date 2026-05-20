@@ -2396,6 +2396,37 @@ router.get('/api-keys/tombstoned', requireSuperAdmin, async (_req, res) => {
   }
 });
 
+// ── System cron jobs (ratchet 45, super-admin) ─────────────────────────
+// Surfaces the registered cron jobs from `jobs/system-cron.js` together
+// with their schedule + last-run telemetry (cycle 64 `recordRun` meta
+// stamped on every invocation + cycle 147 Prometheus metrics emitted via
+// `siragpt_cron_last_*`). Useful for an ops dashboard that wants the
+// full picture without scraping `/api/admin/health/services`.
+//
+// Each task entry carries:
+//   - name, schedule (cron expression in UTC)
+//   - lastRun (ISO), lastDuration (ms), lastStatus ("ok"|"error"|null), lastError
+//   - nextRun (ISO, computed via utils/cron-expression)
+//   - intervalMs (gap between consecutive runs)
+//   - stale, staleBy (set when lastRun is older than intervalMs ×
+//     SYSTEM_CRON_STALE_MULTIPLIER — see system-cron `status()`)
+router.get('/system-cron/jobs', requireSuperAdmin, (_req, res) => {
+  try {
+    const systemCron = require('../jobs/system-cron');
+    const snap = (typeof systemCron.status === 'function' ? systemCron.status() : null)
+      || { enabled: false, tasks: [] };
+    res.json({
+      enabled: Boolean(snap.enabled),
+      count: Array.isArray(snap.tasks) ? snap.tasks.length : 0,
+      jobs: Array.isArray(snap.tasks) ? snap.tasks : [],
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error('[admin/system-cron/jobs] failed:', err && err.message ? err.message : err);
+    res.status(500).json({ error: 'Failed to capture system-cron job list' });
+  }
+});
+
 module.exports = router;
 module.exports.metricsHandler = metricsHandler;
 module.exports.INTERNAL_CSV = { auditLogsToCsv, csvEscape, AUDIT_CSV_COLUMNS };

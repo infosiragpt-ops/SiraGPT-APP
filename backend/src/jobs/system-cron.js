@@ -105,6 +105,12 @@ const DETECT_IDLE_USERS_SCHEDULE = process.env.SYSTEM_CRON_DETECT_IDLE_USERS_SCH
 // ever delete rows whose owner has been hard-deleted AND whose embedded
 // timestamp is past retention (180d for *_idle, 730d for apiusage:summary).
 const STALE_SYSTEM_SETTINGS_SCHEDULE = process.env.SYSTEM_CRON_STALE_SYSTEM_SETTINGS_SCHEDULE || '0 7 * * *';
+// Ratchet 45 — sweep audit_archive:YYYY-MM rows older than 3 years.
+// Default 07:15 UTC, sitting right after the SystemSettings drift sweep
+// (07:00) so both SystemSettings retention passes run back-to-back.
+// Cheap single-statement deleteMany; the archive itself is enforced at
+// the 3-year compliance boundary declared in docs/data-retention.md.
+const AUDIT_ARCHIVE_SWEEP_SCHEDULE = process.env.SYSTEM_CRON_AUDIT_ARCHIVE_SWEEP_SCHEDULE || '15 7 * * *';
 
 let _state = null;
 
@@ -819,6 +825,45 @@ function start(opts = {}) {
     schedule: STALE_SYSTEM_SETTINGS_SCHEDULE,
     task: staleSystemSettingsTask,
     meta: staleSystemSettingsMeta,
+  });
+
+  // Ratchet 45 — sweep audit_archive:YYYY-MM rows past 3-year retention.
+  let auditArchiveSweepRunning = false;
+  const auditArchiveSweepMeta = {};
+  const auditArchiveSweepTask = cron.schedule(
+    AUDIT_ARCHIVE_SWEEP_SCHEDULE,
+    async () => {
+      if (auditArchiveSweepRunning) {
+        logger.warn?.('[system-cron] skip sweep-old-audit-archives — previous run still active');
+        return;
+      }
+      auditArchiveSweepRunning = true;
+      const finish = recordRun(auditArchiveSweepMeta, 'sweep-old-audit-archives');
+      let runErr = null;
+      try {
+        // eslint-disable-next-line global-require
+        const job = require('./sweep-old-audit-archives');
+        const runWithRetry = wrapWithRetry(() => job.run({ logger }), {
+          onRetry: ({ attempt, delayMs, reason }) =>
+            logger.warn?.(`[system-cron] sweep-old-audit-archives retry ${attempt} in ${delayMs}ms (${reason})`),
+        });
+        const res = await runWithRetry();
+        logger.info?.(`[system-cron] sweep-old-audit-archives done: ${JSON.stringify(res)}`);
+      } catch (err) {
+        runErr = err;
+        logger.error?.(`[system-cron] sweep-old-audit-archives failed: ${err && err.message}`);
+      } finally {
+        auditArchiveSweepRunning = false;
+        finish(runErr);
+      }
+    },
+    { scheduled: false, timezone: 'UTC' },
+  );
+  tasks.push({
+    name: 'sweep-old-audit-archives',
+    schedule: AUDIT_ARCHIVE_SWEEP_SCHEDULE,
+    task: auditArchiveSweepTask,
+    meta: auditArchiveSweepMeta,
   });
 
   for (const t of tasks) {
