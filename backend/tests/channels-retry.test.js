@@ -12,7 +12,7 @@
 const assert = require('node:assert');
 const { describe, it } = require('node:test');
 
-const { retryWithBackoff, backoffDelay } = require('../src/channels/retry');
+const { retryWithBackoff, backoffDelay, retryAfterDelay } = require('../src/channels/retry');
 
 // A fake sleep that records all the waits requested by the retry
 // loop, so tests don't actually pause execution.
@@ -104,6 +104,28 @@ describe('retryWithBackoff', () => {
     assert.equal(waits[0], 1234, 'retryAfterMs must override the backoff schedule');
   });
 
+  it('caps excessive retryAfterMs to maxDelayMs', async () => {
+    const { waits, sleep } = recorderSleep();
+    let calls = 0;
+    await retryWithBackoff(async () => {
+      calls += 1;
+      if (calls < 2) return { ok: false, status: 429, retryAfterMs: 60_000 };
+      return { ok: true, status: 200 };
+    }, { sleep, baseDelayMs: 10, maxDelayMs: 5_000, jitter: false });
+    assert.equal(waits[0], 5_000);
+  });
+
+  it('ignores invalid retryAfterMs and falls back to exponential backoff', async () => {
+    const { waits, sleep } = recorderSleep();
+    let calls = 0;
+    await retryWithBackoff(async () => {
+      calls += 1;
+      if (calls < 2) return { ok: false, status: 429, retryAfterMs: -100 };
+      return { ok: true, status: 200 };
+    }, { sleep, baseDelayMs: 10, maxDelayMs: 5_000, jitter: false });
+    assert.equal(waits[0], 10);
+  });
+
   it('exhausts attempts and returns the last retriable response', async () => {
     const { sleep } = recorderSleep();
     let calls = 0;
@@ -152,6 +174,22 @@ describe('retryWithBackoff', () => {
     assert.equal(out.ok, true);
     // Should have slept ~5ms; allow generous slack on slow CI.
     assert.ok(elapsed >= 4, `expected ≥4ms elapsed, got ${elapsed}`);
+  });
+});
+
+describe('retryAfterDelay', () => {
+  it('returns undefined when retryAfterMs is absent or invalid', () => {
+    assert.equal(retryAfterDelay(undefined, 5_000), undefined);
+    assert.equal(retryAfterDelay(null, 5_000), undefined);
+    assert.equal(retryAfterDelay(-1, 5_000), undefined);
+    assert.equal(retryAfterDelay(Number.POSITIVE_INFINITY, 5_000), undefined);
+    assert.equal(retryAfterDelay('not-a-number', 5_000), undefined);
+  });
+
+  it('preserves finite delays up to maxDelayMs and caps larger values', () => {
+    assert.equal(retryAfterDelay(0, 5_000), 0);
+    assert.equal(retryAfterDelay('250', 5_000), 250);
+    assert.equal(retryAfterDelay(60_000, 5_000), 5_000);
   });
 });
 

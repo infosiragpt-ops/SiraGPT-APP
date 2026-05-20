@@ -21,7 +21,8 @@ async function retryWithBackoff(fn, {
       if (res && res.ok) return res;
       const retriable = res && (res.status === 429 || (res.status >= 500 && res.status < 600));
       if (!retriable || attempt === maxAttempts) return res;
-      const wait = res.retryAfterMs ?? backoffDelay(attempt, baseDelayMs, maxDelayMs, jitter);
+      const wait = retryAfterDelay(res.retryAfterMs, maxDelayMs)
+        ?? backoffDelay(attempt, baseDelayMs, maxDelayMs, jitter);
       await sleep(wait);
     } catch (err) {
       lastErr = err;
@@ -39,4 +40,11 @@ function backoffDelay(attempt, base, max, jitter) {
   return Math.floor(exp / 2 + Math.random() * (exp / 2));
 }
 
-module.exports = { retryWithBackoff, backoffDelay };
+function retryAfterDelay(retryAfterMs, maxDelayMs) {
+  if (retryAfterMs === undefined || retryAfterMs === null) return undefined;
+  const delay = Number(retryAfterMs);
+  if (!Number.isFinite(delay) || delay < 0) return undefined;
+  return Math.min(delay, maxDelayMs);
+}
+
+module.exports = { retryWithBackoff, backoffDelay, retryAfterDelay };
