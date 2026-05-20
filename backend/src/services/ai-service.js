@@ -75,6 +75,21 @@ function getFallbackChain() {
     return raw.split(',').map(s => s.trim()).filter(Boolean);
 }
 
+// ── Siragpt 1.0 — modelo combinado ──────────────────────────
+// Base de razonamiento: openai/gpt-oss-120b vía OpenRouter.
+// Preprocesador de visión: gemini-2.5-flash-lite vía Gemini directo.
+// Cuando el usuario envía imágenes con siragpt-1.0, primero las describimos
+// con Gemini y el texto resultante se inyecta en el prompt antes de llamar
+// al modelo base (que no soporta visión).
+const SIRAGPT_COMBINED_ID = 'siragpt-1.0';
+const SIRAGPT_BASE_MODEL = 'openai/gpt-oss-120b';
+const SIRAGPT_VISION_MODEL = 'gemini-2.5-flash-lite';
+
+function isSiragptCombined(model) {
+    if (!model) return false;
+    return /^siragpt-1(\.0)?$/i.test(String(model).trim());
+}
+
 /**
  * Route a model name to the provider the siraGPT backend uses for it.
  * Keeps the fallback chain provider-agnostic: the caller passes a list of
@@ -83,6 +98,7 @@ function getFallbackChain() {
 function providerForModel(model) {
     if (!model) return 'OpenAI';
     const m = String(model).trim();
+    if (isSiragptCombined(m)) return 'OpenRouter';
     if (/^deepseek-(v\d|chat|reasoner)/i.test(m)) return 'DeepSeek';
     if (/^(claude|anthropic\/)/i.test(m)) return 'OpenRouter';
     if (/^(x-ai|openrouter|meta-llama|deepseek|mistralai|qwen|nvidia|microsoft|cohere|moonshotai)\//i.test(m)) return 'OpenRouter';
@@ -321,7 +337,80 @@ class AIService {
      * @param {Array<object>} options.files - Array de archivos subidos (opcional)
      * @returns {Promise<string>} - Contenido completo generado
      */
+    /**
+     * Siragpt 1.0 — preprocesa imágenes adjuntas con Gemini 2.5 Flash Lite
+     * y devuelve una descripción de texto. La descripción se inyecta en el
+     * último mensaje del usuario y las imágenes se quitan del payload para
+     * que el modelo base (openai/gpt-oss-120b, solo texto) pueda responder.
+     * Devuelve null si Gemini falla; el caller decide cómo degradar.
+     */
+    async describeImagesWithGemini(imageFiles, userText) {
+        if (!process.env.GEMINI_API_KEY) {
+            console.warn('[siragpt-1.0] GEMINI_API_KEY no configurada — no se puede preprocesar visión');
+            return null;
+        }
+        try {
+            const client = this.getClient('Gemini');
+            const contentArray = [{
+                type: 'text',
+                text: `Describe en español, con detalle y precisión, lo que aparece en la(s) imagen(es) adjunta(s). ` +
+                    `Si contienen texto, transcríbelo literalmente preservando saltos de línea. ` +
+                    `Si contienen ecuaciones, formúlalas en LaTeX. ` +
+                    `Si es un diagrama, describe su estructura. ` +
+                    `Pregunta original del usuario para contexto: "${(userText || '').slice(0, 500)}"`,
+            }];
+            for (const f of imageFiles) {
+                const img = await this.prepareImageForVision(f.path, f.mimeType);
+                if (img) contentArray.push(img);
+            }
+            const completion = await client.chat.completions.create({
+                model: SIRAGPT_VISION_MODEL,
+                messages: [{ role: 'user', content: contentArray }],
+                stream: false,
+                temperature: 0.2,
+            });
+            const text = completion?.choices?.[0]?.message?.content || '';
+            return typeof text === 'string' ? text.trim() : null;
+        } catch (err) {
+            console.error('[siragpt-1.0] Fallo preprocesando imágenes con Gemini:', err?.message || err);
+            return null;
+        }
+    }
+
     async generateStream({ provider, model, messages, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true, temperature = 0.55, skipDoneSentinel = false }) {
+        // ── Siragpt 1.0 — modelo combinado ──
+        // Si el caller pidió siragpt-1.0 y hay imágenes adjuntas, las
+        // describimos primero con Gemini 2.5 Flash Lite, inyectamos la
+        // descripción en el último mensaje y vaciamos `files` para que el
+        // pipeline siguiente trate la conversación como texto puro. Luego
+        // remapeamos a openai/gpt-oss-120b vía OpenRouter (modelo base).
+        if (isSiragptCombined(model)) {
+            const imageFiles = Array.isArray(files)
+                ? files.filter(f => f && f.mimeType && f.mimeType.startsWith('image/'))
+                : [];
+            if (imageFiles.length > 0) {
+                const lastMsg = messages[messages.length - 1];
+                const userText = typeof lastMsg?.content === 'string'
+                    ? lastMsg.content
+                    : (Array.isArray(lastMsg?.content)
+                        ? (lastMsg.content.find(p => p.type === 'text')?.text || '')
+                        : '');
+                console.log(`[siragpt-1.0] Preprocesando ${imageFiles.length} imagen(es) con ${SIRAGPT_VISION_MODEL}`);
+                const description = await this.describeImagesWithGemini(imageFiles, userText);
+                if (description) {
+                    const block = `\n\n[Análisis visual realizado por Gemini 2.5 Flash Lite sobre ${imageFiles.length} imagen(es) adjunta(s):]\n${description}\n[Fin del análisis visual]`;
+                    if (lastMsg) lastMsg.content = (userText || '') + block;
+                } else {
+                    if (lastMsg) lastMsg.content = (userText || '') +
+                        `\n\n[No se pudo analizar la(s) imagen(es) adjunta(s). Responde sobre el texto disponible.]`;
+                }
+                // Vaciar files: el modelo base no soporta visión.
+                files = [];
+            }
+            provider = 'OpenRouter';
+            model = SIRAGPT_BASE_MODEL;
+        }
+
         provider = normalizeChatProvider(provider, model);
         model = normalizeModelForProvider(provider, model);
         let fullResponseContent = '';

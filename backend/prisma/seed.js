@@ -18,6 +18,22 @@ const modelsToSeed = [
     { name: 'gpt-4o-mini', displayName: 'GPT-4o Mini', provider: 'OpenAI', type: 'TEXT', icon: 'ChatGPTLogo', description: 'Versión compacta y eficiente de GPT-4o.', isActive: true },
     { name: 'gpt-4.1', displayName: 'GPT-4.1', provider: 'OpenAI', type: 'TEXT', icon: 'ChatGPTLogo', description: 'Una iteración avanzada y mejorada de GPT-4.', isActive: true },
 
+    // --- Siragpt 1.0 — modelo combinado propio ---
+    // Base: openai/gpt-oss-120b (OpenRouter) para texto y razonamiento.
+    // Visión: gemini-2.5-flash-lite (Gemini directo) describe cualquier
+    // imagen adjunta y el texto resultante se inyecta en el prompt antes
+    // de llamar al modelo base. Ver ai-service.js > generateStream para
+    // la lógica de preprocesado.
+    {
+      name: 'siragpt-1.0',
+      displayName: 'Siragpt 1.0',
+      provider: 'OpenRouter',
+      type: 'TEXT',
+      icon: 'ChatGPTLogo',
+      description: 'Modelo combinado de Siragpt: razonamiento con GPT-OSS 120B y visión vía Gemini 2.5 Flash Lite.',
+      isActive: true,
+    },
+
     // --- OpenRouter — unified on Kimi K2.6 (moonshotai/kimi-k2.6) ---
     {
       name: 'moonshotai/kimi-k2.6',
