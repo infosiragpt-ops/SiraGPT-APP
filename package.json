@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "npm run build:backend && NEXT_OUTPUT=standalone NODE_ENV=production next build && npm run postbuild:slim",
-    "build:backend": "cd backend && npm install --omit=dev --no-audit --no-fund && npx prisma generate",
+    "build:backend": "npm --prefix backend exec -- prisma generate --schema backend/prisma/schema.prisma",
     "postbuild:slim": "node scripts/postbuild-slim.js",
     "start": "node scripts/start-all.js",
     "start:next-only": "next start",
