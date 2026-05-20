@@ -20,7 +20,15 @@
  * evolve without rewriting routes, agents, or chat flows.
  */
 
-const OpenAI = require('openai');
+// `openai` is lazy-required inside getOpenAI() so callers that never touch
+// embeddings (e.g. orchestration boot) don't pull in the SDK at module load.
+let OpenAI = null;
+function loadOpenAI() {
+  if (OpenAI) return OpenAI;
+  // eslint-disable-next-line global-require
+  OpenAI = require('openai');
+  return OpenAI;
+}
 
 const { mmrRerank } = require('./mmr');
 const { expandQuery } = require('./query-expansion');
