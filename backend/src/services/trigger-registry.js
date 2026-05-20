@@ -95,6 +95,39 @@ function endpointMatchesEvent(endpoint, event) {
   return false;
 }
 
+// Ratchet 44 (Task 2): apply per-endpoint `filters` JSON. Returns true
+// when the candidate delivery should proceed.
+//   - filters.events       : optional include-list of event names. When
+//                            present and non-empty, the event MUST be a
+//                            member (either an exact string OR matched
+//                            via the same glob compiler the `events[]`
+//                            column uses). Note: this composes with the
+//                            existing `events[]` glob array which has
+//                            already gated us; filters.events is a
+//                            SECOND gate (AND), giving operators a
+//                            cheaper way to slice a wildcard
+//                            subscription without rewriting `events[]`.
+//   - filters.excludeUsers : optional userId mute list. Anything from
+//                            this user is dropped silently.
+// Malformed filter JSON (non-object, wrong-typed members) is treated as
+// "no filter" — we never want a stray field to silently block delivery.
+function endpointFiltersAllow(endpoint, event, userId) {
+  const raw = endpoint && endpoint.filters;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return true;
+  if (Array.isArray(raw.events) && raw.events.length > 0) {
+    let any = false;
+    for (const p of raw.events) {
+      if (typeof p !== 'string') continue;
+      if (eventMatches(p, event)) { any = true; break; }
+    }
+    if (!any) return false;
+  }
+  if (Array.isArray(raw.excludeUsers) && raw.excludeUsers.length > 0) {
+    if (userId && raw.excludeUsers.includes(userId)) return false;
+  }
+  return true;
+}
+
 let prismaRef = null;
 function getPrisma() {
   if (prismaRef) return prismaRef;
@@ -303,13 +336,24 @@ async function publish(event, payload, userId, opts = {}) {
 
   for (const ep of endpoints) {
     if (!endpointMatchesEvent(ep, event)) continue;
+    // Ratchet 44 (Task 2): apply per-endpoint filters before paying for
+    // the HTTP round-trip. Filtered-out deliveries are not counted in
+    // `dispatched` or `errors` — they're simply not produced.
+    if (!endpointFiltersAllow(ep, event, userId)) continue;
     if (!dispatcher || typeof dispatcher.dispatch !== 'function') break;
     try {
+      // Ratchet 44 (Task 1): forward the per-endpoint maxRetries override
+      // when present. `undefined` lets dispatcher.dispatch fall through
+      // to its own default (3 retries).
+      const overrideRetries = (ep && typeof ep.maxRetries === 'number' && ep.maxRetries >= 0)
+        ? ep.maxRetries
+        : undefined;
       const result = await dispatcher.dispatch({
         url: ep.url,
         event,
         payload: { event, userId, orgId: ep.organizationId || orgId || null, data: payload, ts: now },
         secret: ep.secret,
+        ...(overrideRetries !== undefined ? { maxRetries: overrideRetries } : {}),
       });
       dispatched += 1;
       if (prisma && ep.id) {
@@ -397,4 +441,5 @@ module.exports = {
   _eventHash: eventHash,
   eventMatches,
   endpointMatchesEvent,
+  endpointFiltersAllow,
 };

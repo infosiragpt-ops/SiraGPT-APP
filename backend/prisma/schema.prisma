@@ -413,6 +413,21 @@ model WebhookEndpoint {
   // are cleared on the next rotation (or by GC sweeping expired rows).
   previousSecret           String?
   previousSecretExpiresAt  DateTime?
+  // Ratchet 44 (Task 1): per-endpoint retry policy override. When null
+  // the dispatcher falls back to its default (3 retries). Stored as
+  // nullable so existing rows keep the default without backfill.
+  maxRetries     Int?
+  // Ratchet 44 (Task 2): optional delivery filters. Shape:
+  //   { events?: string[], excludeUsers?: string[] }
+  // - `events`        : include-list of event names (in addition to the
+  //                     `events` glob array). When present an event must
+  //                     appear here OR match a `events[]` glob to be
+  //                     delivered.
+  // - `excludeUsers`  : userIds whose publish() calls are silently
+  //                     dropped for this endpoint (per-recipient mute).
+  // Anything else in the JSON is ignored — the field is intentionally
+  // forward-compatible.
+  filters        Json?
   isActive       Boolean   @default(true)
   createdAt      DateTime  @default(now())
   lastDeliveryAt DateTime?
