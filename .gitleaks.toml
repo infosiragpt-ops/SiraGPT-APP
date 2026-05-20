@@ -27,4 +27,7 @@ title = "SiraGPT Gitleaks Config"
       "ci-dummy", "sk-ci-dummy", "ci_dummy", "not-used",
       "your-api-key", "your-openai-api-key", "your-google-api-key",
       "your-elevenlabs-api-key-here",
+      "your-gemini-api-key-here", "your-openrouter-api-key-here",
+      "your-deepseek-api-key-here", "your-anthropic-api-key-here",
+      "your-groq-api-key-here",
     ]
