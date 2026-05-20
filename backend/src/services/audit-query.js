@@ -272,4 +272,103 @@ function query(prisma) {
   return new AuditQuery(prisma);
 }
 
-module.exports = { query, AuditQuery };
+// ── Ratchet 44 — free-text search ─────────────────────────────────────
+// Postgres-only helper. We ILIKE the `action` column (a short verb like
+// `grant_credits`) and cast the `metadata` jsonb to text so callers can
+// hit any nested value (e.g. an email buried four levels down) without
+// listing every path. The query is parameterised — `$1` is the LIKE
+// pattern, `$2/$3` are limit/offset — so the operator-supplied `q` can't
+// inject SQL.
+//
+// Ranking is unranked-newest-first (`createdAt DESC`) which matches the
+// rest of the audit UI; if we ever want true relevance ranking we can
+// switch to `ts_rank` over a stored `tsvector` column.
+const SEARCH_LIMIT_DEFAULT = 50;
+const SEARCH_LIMIT_MAX = 200;
+
+function clampSearchLimit(v) {
+  const n = parseInt(v, 10);
+  if (!Number.isFinite(n) || n <= 0) return SEARCH_LIMIT_DEFAULT;
+  return Math.min(SEARCH_LIMIT_MAX, n);
+}
+
+function clampSearchPage(v) {
+  const n = parseInt(v, 10);
+  if (!Number.isFinite(n) || n < 1) return 1;
+  return n;
+}
+
+// Escape Postgres ILIKE metacharacters so a `q` containing `%` or `_`
+// doesn't widen the match unintentionally. Backslash itself is escaped
+// because we don't use a custom ESCAPE clause.
+function escapeLikePattern(raw) {
+  return String(raw).replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
+}
+
+/**
+ * Free-text search over AuditLog. Returns the same shape as
+ * `AuditQuery.run()` — `{ items, total, page, pages, limit }`. Degrades
+ * to an empty result when prisma is missing or `$queryRawUnsafe` /
+ * `$queryRaw` aren't available (tests, sqlite fallback).
+ *
+ * @param {*} prisma  Prisma client (or stub)
+ * @param {string} q  Search text (already validated non-empty by caller)
+ * @param {{limit?: number, page?: number}} [opts]
+ */
+async function search(prisma, q, opts = {}) {
+  const limit = clampSearchLimit(opts.limit);
+  const page = clampSearchPage(opts.page);
+  const offset = (page - 1) * limit;
+  const empty = { items: [], total: 0, page, pages: 1, limit };
+
+  if (!prisma || typeof q !== 'string' || q.trim().length === 0) return empty;
+  if (typeof prisma.$queryRawUnsafe !== 'function') return empty;
+
+  const pattern = `%${escapeLikePattern(q.trim())}%`;
+  try {
+    // We use `$queryRawUnsafe` with explicit positional parameters so the
+    // SQL string itself is static (no interpolation of user input). The
+    // table name `AuditLog` is the Prisma default; if a deployment renames
+    // it, this query needs to be updated in lockstep.
+    const itemsSql =
+      'SELECT * FROM "AuditLog" '
+      + 'WHERE "action" ILIKE $1 OR ("metadata")::text ILIKE $1 '
+      + 'ORDER BY "createdAt" DESC '
+      + 'LIMIT $2 OFFSET $3';
+    const countSql =
+      'SELECT COUNT(*)::int AS count FROM "AuditLog" '
+      + 'WHERE "action" ILIKE $1 OR ("metadata")::text ILIKE $1';
+
+    const [items, countRows] = await Promise.all([
+      prisma.$queryRawUnsafe(itemsSql, pattern, limit, offset),
+      prisma.$queryRawUnsafe(countSql, pattern),
+    ]);
+
+    const total =
+      Array.isArray(countRows) && countRows[0] && typeof countRows[0].count === 'number'
+        ? countRows[0].count
+        : Array.isArray(items) ? items.length : 0;
+    const pages = limit > 0 ? Math.max(1, Math.ceil(total / limit)) : 1;
+    return {
+      items: Array.isArray(items) ? items : [],
+      total,
+      page,
+      pages,
+      limit,
+    };
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('[audit-query] search failed:', err?.message || err);
+    return { ...empty, error: 'search_failed' };
+  }
+}
+
+module.exports = {
+  query,
+  AuditQuery,
+  search,
+  // Exported for tests + reuse:
+  escapeLikePattern,
+  SEARCH_LIMIT_DEFAULT,
+  SEARCH_LIMIT_MAX,
+};

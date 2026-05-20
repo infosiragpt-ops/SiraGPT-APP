@@ -2240,6 +2240,31 @@ router.get('/audit-logs', requireSuperAdmin, async (req, res) => {
   }
 });
 
+// ── Audit log free-text search ─────────────────────────────────────────────
+// GET /api/admin/audit-logs/search?q=text&limit=&page=
+// Super-admin only. ILIKEs `action` and `metadata::text` so operators can
+// hunt a stray email, org id, or error string without knowing which JSON
+// path it lives at. `q` must be at least 2 chars to keep the pattern
+// from matching every row in a 50M-row table. Default page size 50,
+// hard cap 200 (see SEARCH_LIMIT_MAX in services/audit-query).
+router.get('/audit-logs/search', requireSuperAdmin, async (req, res) => {
+  try {
+    const raw = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+    if (raw.length < 2) {
+      return res.status(400).json({ error: 'q must be at least 2 characters' });
+    }
+    const { search: auditSearch } = require('../services/audit-query');
+    const result = await auditSearch(prisma, raw, {
+      limit: req.query.limit,
+      page: req.query.page,
+    });
+    res.json(result);
+  } catch (err) {
+    console.error('[admin/audit-logs/search] failed:', err && err.message ? err.message : err);
+    res.status(500).json({ error: 'Failed to search audit logs' });
+  }
+});
+
 // ── Audit log CSV export ───────────────────────────────────────────────────
 // GET /api/admin/audit-logs.csv — same query DSL as /audit-logs but
 // streams a text/csv response for compliance / SIEM ingestion. Quoting
