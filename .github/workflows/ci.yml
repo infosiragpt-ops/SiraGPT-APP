@@ -519,6 +519,17 @@ jobs:
           tags: siragpt-frontend:ci
           load: true
 
+  ui-lock-verify:
+    name: UI lock · verify zero visual-surface changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify UI lock hashes
+        run: bash scripts/verify-ui-lock.sh
+
   # ───────────────────────────────────────────────────────────────────
   # FINAL GATE — one-green-check for branch protection rules
   # ───────────────────────────────────────────────────────────────────
@@ -527,7 +538,7 @@ jobs:
   # touching the protection rule.
   ci:
     name: CI · required checks passed
-    needs: [frontend, backend, docker, licenses, security-audit]
+    needs: [frontend, backend, docker, licenses, security-audit, ui-lock-verify]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -549,6 +560,10 @@ jobs:
             echo "✗ security-audit: ${{ needs.security-audit.result }}"
             exit 1
           fi
+          if [[ "${{ needs.ui-lock-verify.result }}" != "success" ]]; then
+            echo "✗ ui-lock-verify: ${{ needs.ui-lock-verify.result }}"
+            exit 1
+          fi
           echo "✓ all required checks passed"
 
   # ───────────────────────────────────────────────────────────────────
@@ -562,7 +577,7 @@ jobs:
   # block merges. Runs only when an upstream job failed.
   notify-on-failure:
     name: Notify · Slack on failure
-    needs: [frontend, backend, docker, licenses, security-audit, e2e]
+    needs: [frontend, backend, docker, licenses, security-audit, ui-lock-verify, e2e]
     runs-on: ubuntu-latest
     if: failure()
     timeout-minutes: 3
@@ -582,6 +597,7 @@ jobs:
             echo "backend:         ${{ needs.backend.result }}"
             echo "licenses:        ${{ needs.licenses.result }}"
             echo "security-audit:  ${{ needs.security-audit.result }}"
+            echo "ui-lock-verify:  ${{ needs.ui-lock-verify.result }}"
             echo "docker:          ${{ needs.docker.result }}"
             echo "e2e:             ${{ needs.e2e.result }}"
             echo "EOF"
