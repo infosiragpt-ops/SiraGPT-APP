@@ -38,6 +38,21 @@ describe('trigger-registry · endpointFiltersAllow (Task 2)', () => {
     assert.equal(triggers.endpointFiltersAllow(ep, 'chat.archived', 'u1'), false);
   });
 
+  test('malformed events entries do not create an accidental deny-all filter', () => {
+    assert.equal(
+      triggers.endpointFiltersAllow({ filters: { events: [null, 42, ''] } }, 'chat.created', 'u1'),
+      true,
+    );
+    assert.equal(
+      triggers.endpointFiltersAllow({ filters: { events: [null, 'payment.*'] } }, 'payment.succeeded', 'u1'),
+      true,
+    );
+    assert.equal(
+      triggers.endpointFiltersAllow({ filters: { events: [null, 'payment.*'] } }, 'chat.created', 'u1'),
+      false,
+    );
+  });
+
   test('excludeUsers drops matching userIds', () => {
     const ep = { filters: { excludeUsers: ['banned-1', 'banned-2'] } };
     assert.equal(triggers.endpointFiltersAllow(ep, 'chat.created', 'banned-1'), false);

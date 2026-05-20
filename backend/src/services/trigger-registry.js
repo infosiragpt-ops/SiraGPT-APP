@@ -114,10 +114,12 @@ function endpointMatchesEvent(endpoint, event) {
 function endpointFiltersAllow(endpoint, event, userId) {
   const raw = endpoint && endpoint.filters;
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return true;
-  if (Array.isArray(raw.events) && raw.events.length > 0) {
+  const filterEvents = Array.isArray(raw.events)
+    ? raw.events.filter((p) => typeof p === 'string' && p.trim() !== '')
+    : [];
+  if (filterEvents.length > 0) {
     let any = false;
-    for (const p of raw.events) {
-      if (typeof p !== 'string') continue;
+    for (const p of filterEvents) {
       if (eventMatches(p, event)) { any = true; break; }
     }
     if (!any) return false;
