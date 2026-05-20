@@ -524,13 +524,23 @@ class AIService {
                 const currentModel = modelChain[m];
                 const currentProvider = m === 0 ? provider : providerForModel(currentModel);
                 const currentRuntimeModel = normalizeModelForProvider(currentProvider, currentModel);
+                // OpenRouter reasoning models (gpt-oss family) stream their
+                // chain-of-thought in `delta.reasoning` and leave `delta.content`
+                // empty until the very end. Asking OpenRouter to exclude the
+                // reasoning makes the model still think internally but only
+                // stream the final answer, so the user sees tokens immediately
+                // instead of hitting the 30s first-byte timeout.
+                const extraPayload = { temperature: normalizedTemperature };
+                if (currentProvider === 'OpenRouter' && /gpt-oss/i.test(currentRuntimeModel)) {
+                    extraPayload.reasoning = { exclude: true };
+                }
                 const providerPayload = buildProviderChatPayload({
                     provider: currentProvider,
                     model: currentRuntimeModel,
                     messages: workingMessages,
                     stream: true,
                     thinkingLevel: currentThinkingLevel(),
-                    extra: { temperature: normalizedTemperature },
+                    extra: extraPayload,
                 });
                 const payload = providerPayload.payload;
 
@@ -570,7 +580,10 @@ class AIService {
 
                         for await (const chunk of stream) {
                             const delta = chunk.choices[0]?.delta || {};
-                            const reasoningChunk = delta.reasoning_content || '';
+                            // DeepSeek emits `reasoning_content`; OpenRouter emits `reasoning`.
+                            // Tracking both prevents the first-byte timeout from firing while
+                            // a reasoning model is still in its internal-thinking phase.
+                            const reasoningChunk = delta.reasoning_content || delta.reasoning || '';
                             const contentChunk = delta.content || '';
                             if (reasoningChunk && !firstByteSeen) {
                                 firstByteSeen = true;
