@@ -63,6 +63,15 @@ const CONTEXT_WINDOWS = Object.freeze({
     'deepseek-v4-flash': 128_000,
     'deepseek-v4-pro':   128_000,
     'moonshotai/kimi-k2.6': 200_000,
+    'openai/gpt-oss-120b': 128_000,
+    'openai/gpt-oss-20b':  128_000,
+    'gpt-oss-120b':        128_000,
+    'gpt-oss-20b':         128_000,
+    // Siragpt 1.0 is a virtual model that routes to openai/gpt-oss-120b
+    // (128k context) via OpenRouter. Without this entry the default 16k
+    // window aborts the preflight on any request with a large system
+    // prompt or attached context.
+    'siragpt-1.0':         128_000,
 });
 
 const LONG_CONTEXT_LADDER = ['gpt-4o', 'claude-sonnet-4.5', 'gpt-4.1', 'gemini-2.5-pro'];
