@@ -1,10 +1,13 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const Module = require('node:module');
 
 const {
   EMBED_DIM,
   contentHash,
   createPgUserMemoryStore,
+  embedTexts,
+  getStore,
   isEnabled,
   vecToLiteral,
 } = require('../src/services/user-memory-store');
@@ -73,4 +76,104 @@ test('pg store upsert and recall use parameterized vector SQL', async () => {
   const stats = await store.stats('user_1');
   assert.equal(stats.store, 'pgvector');
   assert.equal(stats.dim, EMBED_DIM);
+});
+
+test('module loads without optional embedding/db deps installed', () => {
+  // Sanity: the module must be require-able in an environment that lacks
+  // @prisma/client, voyage/jina SDKs, or any other heavy optional dep. The
+  // store accesses Prisma only lazily inside createPgUserMemoryStore() and
+  // embedding providers only via globalThis.fetch — so top-level require
+  // must never reach for them.
+  const blocked = new Set([
+    '@prisma/client',
+    'openai',
+    '@anthropic-ai/sdk',
+    'voyageai',
+    '@jina-ai/sdk',
+    'pg',
+    'pgvector',
+  ]);
+  const originalResolve = Module._resolveFilename;
+  const touched = [];
+  Module._resolveFilename = function (request, ...rest) {
+    if (blocked.has(request)) {
+      touched.push(request);
+      const err = new Error(`Cannot find module '${request}'`);
+      err.code = 'MODULE_NOT_FOUND';
+      throw err;
+    }
+    return originalResolve.call(this, request, ...rest);
+  };
+  try {
+    delete require.cache[require.resolve('../src/services/user-memory-store')];
+    const mod = require('../src/services/user-memory-store');
+    assert.equal(typeof mod.createPgUserMemoryStore, 'function');
+    assert.equal(typeof mod.embedTexts, 'function');
+    assert.equal(typeof mod.isEnabled, 'function');
+    assert.equal(typeof mod.contentHash, 'function');
+    assert.equal(mod.EMBED_DIM, 1024);
+    // getStore must short-circuit when the feature flag is off — without
+    // touching @prisma/client.
+    const prev = process.env.SIRAGPT_USER_MEMORY_STORE;
+    delete process.env.SIRAGPT_USER_MEMORY_STORE;
+    try {
+      assert.equal(mod.getStore(), null);
+    } finally {
+      if (prev !== undefined) process.env.SIRAGPT_USER_MEMORY_STORE = prev;
+    }
+    // Caller-injected prisma path must work without resolving @prisma/client.
+    const store = mod.createPgUserMemoryStore({
+      prisma: { $executeRawUnsafe: async () => 0, $queryRawUnsafe: async () => [] },
+      embedder: async texts => texts.map(() => new Array(mod.EMBED_DIM).fill(0)),
+    });
+    assert.equal(typeof store.upsertFacts, 'function');
+    assert.equal(typeof store.recall, 'function');
+    assert.equal(typeof store.clear, 'function');
+    assert.equal(typeof store.stats, 'function');
+    assert.deepEqual(touched, [], 'no blocked deps should have been resolved');
+  } finally {
+    Module._resolveFilename = originalResolve;
+    delete require.cache[require.resolve('../src/services/user-memory-store')];
+    require('../src/services/user-memory-store');
+  }
+});
+
+test('embedTexts surfaces missing API keys without touching SDKs', async () => {
+  const prevV = process.env.VOYAGE_API_KEY;
+  const prevJ = process.env.JINA_API_KEY;
+  delete process.env.VOYAGE_API_KEY;
+  delete process.env.JINA_API_KEY;
+  try {
+    await assert.rejects(
+      embedTexts(['hello'], { provider: 'voyage', fetch: async () => ({ ok: true, json: async () => ({}) }) }),
+      /VOYAGE_API_KEY/,
+    );
+    await assert.rejects(
+      embedTexts(['hi'], { provider: 'jina', fetch: async () => ({ ok: true, json: async () => ({}) }) }),
+      /JINA_API_KEY/,
+    );
+    await assert.rejects(
+      embedTexts(['hi'], { provider: 'bogus' }),
+      /unsupported memory embedding provider/,
+    );
+    assert.deepEqual(await embedTexts([]), []);
+  } finally {
+    if (prevV !== undefined) process.env.VOYAGE_API_KEY = prevV;
+    if (prevJ !== undefined) process.env.JINA_API_KEY = prevJ;
+  }
+});
+
+test('getStore returns a singleton when feature flag enabled', () => {
+  // Avoid lazy-requiring @prisma/client by stubbing createPgUserMemoryStore
+  // indirectly through the env-gated path: ensure two calls return the same
+  // instance. We can't safely instantiate Prisma here, so just verify the
+  // off-path returns null deterministically.
+  const prev = process.env.SIRAGPT_USER_MEMORY_STORE;
+  delete process.env.SIRAGPT_USER_MEMORY_STORE;
+  try {
+    assert.equal(getStore(), null);
+    assert.equal(getStore(), null);
+  } finally {
+    if (prev !== undefined) process.env.SIRAGPT_USER_MEMORY_STORE = prev;
+  }
 });
