@@ -1,13 +1,22 @@
 'use strict';
 
 function createAgentCheckpointStore({ prisma } = {}) {
-  if (!prisma) {
+  let client = prisma;
+
+  function getPrisma() {
+    if (client) return client;
+    if (client === null) {
+      throw new Error('agent checkpoint store requires a prisma client');
+    }
     const { PrismaClient } = require('@prisma/client');
-    prisma = new PrismaClient();
+    client = new PrismaClient();
+    return client;
   }
+
   return {
     async put({ threadId, checkpointId, parentCheckpointId = null, state = {}, metadata = {} }) {
-      await prisma.$executeRawUnsafe(
+      const db = getPrisma();
+      await db.$executeRawUnsafe(
         `INSERT INTO agent_checkpoints (thread_id, checkpoint_id, parent_checkpoint_id, state, metadata)
          VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)
          ON CONFLICT (thread_id, checkpoint_id)
@@ -23,7 +32,8 @@ function createAgentCheckpointStore({ prisma } = {}) {
       return { threadId, checkpointId };
     },
     async get(threadId, checkpointId) {
-      const rows = await prisma.$queryRawUnsafe(
+      const db = getPrisma();
+      const rows = await db.$queryRawUnsafe(
         `SELECT thread_id AS "threadId", checkpoint_id AS "checkpointId",
                 parent_checkpoint_id AS "parentCheckpointId", state, metadata, created_at AS "createdAt"
          FROM agent_checkpoints
@@ -35,7 +45,8 @@ function createAgentCheckpointStore({ prisma } = {}) {
       return rows[0] || null;
     },
     async latest(threadId) {
-      const rows = await prisma.$queryRawUnsafe(
+      const db = getPrisma();
+      const rows = await db.$queryRawUnsafe(
         `SELECT thread_id AS "threadId", checkpoint_id AS "checkpointId",
                 parent_checkpoint_id AS "parentCheckpointId", state, metadata, created_at AS "createdAt"
          FROM agent_checkpoints
