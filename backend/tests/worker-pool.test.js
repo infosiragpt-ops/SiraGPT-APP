@@ -42,6 +42,24 @@ test('WorkerPool: regex-scan finds matches', async () => {
       flags: 'g',
     });
     assert.equal(out.count, 3);
+    assert.equal(out.truncated, false);
+  } finally {
+    await pool.close();
+  }
+});
+
+test('WorkerPool: regex-scan can cap returned matches', async () => {
+  const pool = new WorkerPool({ size: 1, workerPath: WORKER_PATH });
+  try {
+    const out = await pool.run('regex-scan', {
+      text: 'foo foo foo foo',
+      pattern: 'foo',
+      flags: 'g',
+      maxMatches: 2,
+    });
+    assert.equal(out.count, 2);
+    assert.equal(out.truncated, true);
+    assert.deepEqual(out.matches.map(m => m.index), [0, 4]);
   } finally {
     await pool.close();
   }

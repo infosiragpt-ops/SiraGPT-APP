@@ -32,21 +32,27 @@ function handle(message) {
     case 'echo':
       return payload;
     case 'regex-scan': {
-      const { text, pattern, flags } = payload || {};
+      const { text, pattern, flags, maxMatches } = payload || {};
       if (typeof text !== 'string' || typeof pattern !== 'string') {
         throw new Error('regex-scan requires {text, pattern}');
       }
+      const limit = Number.isInteger(maxMatches) && maxMatches > 0
+        ? Math.min(maxMatches, 1_000_000)
+        : 1_000_000;
       const re = new RegExp(pattern, flags || 'g');
       const matches = [];
       let m;
-      let safety = 0;
+      let truncated = false;
       while ((m = re.exec(text)) !== null) {
+        if (matches.length >= limit) {
+          truncated = true;
+          break;
+        }
         matches.push({ index: m.index, match: m[0] });
         if (!re.global) break;
-        if (++safety > 1_000_000) break;
         if (m.index === re.lastIndex) re.lastIndex++;
       }
-      return { count: matches.length, matches };
+      return { count: matches.length, matches, truncated };
     }
     case 'word-count': {
       const { text } = payload || {};
