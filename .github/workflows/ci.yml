@@ -15,6 +15,10 @@ concurrency:
 
 env:
   NODE_VERSION: '24'
+  # GitHub Actions is moving JavaScript actions from Node 20 to Node 24.
+  # Force the newer runtime in CI so successful runs stay free of runtime
+  # deprecation annotations while upstream actions finish their migration.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
   # Dummy NEXT_PUBLIC_* values for `next build`. The build step statically
   # evaluates them into client bundles; real values are injected at deploy
   # time via the host's env (Vercel/VPS/etc.), not baked into CI artifacts.
@@ -608,12 +612,18 @@ jobs:
             backend/package-lock.json
 
       - name: Audit root dependencies
-        continue-on-error: true
-        run: npm audit --production --audit-level=high
+        run: |
+          set +e
+          npm audit --omit=dev --audit-level=high
+          STATUS=$?
+          set -e
+          if [ "$STATUS" -ne 0 ]; then
+            echo "::warning::Root production audit found high-or-greater advisories. Required CI remains green while this existing dependency debt is tracked separately."
+          fi
 
       - name: Audit backend dependencies
         run: |
-          npm --prefix backend audit --production --audit-level=critical
+          npm --prefix backend audit --omit=dev --audit-level=critical
 
   drizzle-migrations-dry-run:
     name: Drizzle migrations · dry run
