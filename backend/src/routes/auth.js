@@ -941,6 +941,7 @@ router.post('/login', loginRateLimit, validateBody(LoginRequestSchema, { codePre
       userId: user.id,
       actorName: user.email,
       metadata: { isAdmin: Boolean(user.isAdmin), isSuperAdmin: Boolean(user.isSuperAdmin) },
+      tags: ['security', 'login'],
     });
     // Mint a fresh CSRF token alongside the session cookie so SPAs
     // can skip the dedicated /api/csrf-token roundtrip (ratchet 45,

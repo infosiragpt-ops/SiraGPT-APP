@@ -3156,6 +3156,7 @@ router.post('/:id/billing/upgrade', authenticateToken, async (req, res) => {
       },
       metadata: { orgId },
       req,
+      tags: ['billing'],
     });
 
     res.json({
@@ -4088,6 +4089,7 @@ async function configureOrgSsoHandler(req, res, deps = { prisma, writeAuditLog }
       after: { ssoConfigured: !!updated.ssoConfig, ssoEnabled: !!updated.ssoEnabled, provider: config.provider },
       metadata: { orgId, provider: config.provider },
       req,
+      tags: ['security', 'sso'],
     });
     // Scaffold only — flag the response so callers/tests know the
     // handshake itself is not implemented yet.
