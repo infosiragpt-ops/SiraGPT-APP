@@ -1663,6 +1663,147 @@ router.post('/:id/webhooks/:endpointId/toggle', authenticateToken, async (req, r
   }
 });
 
+// ─── POST /api/orgs/:id/webhooks/bulk-toggle (ADMIN+) ────────────────
+// Ratchet 44 — bulk-set `isActive` across up to 50 endpoints in a single
+// call. Body shape: `{ ids: string[], enabled: bool }`. Ids must belong
+// to the caller's org; unknown ids are returned in `notFound` so the
+// caller can reconcile state. Each successful flip writes its own audit
+// entry (action `org_webhook_bulk_toggle`) so the audit trail mirrors
+// the per-endpoint toggle route above.
+const WEBHOOK_BULK_MAX = 50;
+
+function _normalizeBulkIds(raw) {
+  if (!Array.isArray(raw)) return null;
+  const seen = new Set();
+  const out = [];
+  for (const v of raw) {
+    if (typeof v !== 'string') continue;
+    const id = v.trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+router.post('/:id/webhooks/bulk-toggle', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  try {
+    const membership = await assertMembership(prisma, orgId, userId, 'ADMIN');
+    if (!canManageMembers(membership.role)) {
+      return res.status(403).json({ error: 'insufficient role to toggle webhooks' });
+    }
+
+    const ids = _normalizeBulkIds(req.body && req.body.ids);
+    if (!ids) return res.status(400).json({ error: 'ids must be an array of strings' });
+    if (ids.length === 0) return res.status(400).json({ error: 'ids must not be empty' });
+    if (ids.length > WEBHOOK_BULK_MAX) {
+      return res.status(400).json({ error: `at most ${WEBHOOK_BULK_MAX} ids per request` });
+    }
+    if (typeof (req.body && req.body.enabled) !== 'boolean') {
+      return res.status(400).json({ error: 'enabled must be a boolean' });
+    }
+    const enabled = req.body.enabled;
+
+    const existing = await prisma.webhookEndpoint.findMany({
+      where: { id: { in: ids }, organizationId: orgId },
+    });
+    const existingById = new Map(existing.map((e) => [e.id, e]));
+    const updated = [];
+    const notFound = [];
+
+    for (const id of ids) {
+      const ep = existingById.get(id);
+      if (!ep) {
+        notFound.push(id);
+        continue;
+      }
+      const next = await prisma.webhookEndpoint.update({
+        where: { id: ep.id },
+        data: { isActive: enabled },
+      });
+      updated.push(next.id);
+      void writeAuditLog(prisma, {
+        action: 'org_webhook_bulk_toggle',
+        userId,
+        resource: 'organization',
+        resourceId: orgId,
+        before: { endpointId: ep.id, isActive: ep.isActive },
+        after: { endpointId: ep.id, isActive: enabled },
+        metadata: { orgId },
+        req,
+      });
+    }
+
+    res.json({ updated, notFound });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] bulk-toggle webhooks failed:', err.message);
+    res.status(500).json({ error: 'failed to bulk-toggle webhooks' });
+  }
+});
+
+// ─── POST /api/orgs/:id/webhooks/bulk-delete (ADMIN+) ────────────────
+// Ratchet 44 — hard-delete up to 50 endpoints by id. Unknown ids surface
+// in `notFound`. One audit entry per successful delete (action
+// `org_webhook_bulk_delete`) to match the per-endpoint delete route.
+router.post('/:id/webhooks/bulk-delete', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  try {
+    const membership = await assertMembership(prisma, orgId, userId, 'ADMIN');
+    if (!canManageMembers(membership.role)) {
+      return res.status(403).json({ error: 'insufficient role to delete webhooks' });
+    }
+
+    const ids = _normalizeBulkIds(req.body && req.body.ids);
+    if (!ids) return res.status(400).json({ error: 'ids must be an array of strings' });
+    if (ids.length === 0) return res.status(400).json({ error: 'ids must not be empty' });
+    if (ids.length > WEBHOOK_BULK_MAX) {
+      return res.status(400).json({ error: `at most ${WEBHOOK_BULK_MAX} ids per request` });
+    }
+
+    const existing = await prisma.webhookEndpoint.findMany({
+      where: { id: { in: ids }, organizationId: orgId },
+    });
+    const existingById = new Map(existing.map((e) => [e.id, e]));
+    const deleted = [];
+    const notFound = [];
+
+    for (const id of ids) {
+      const ep = existingById.get(id);
+      if (!ep) {
+        notFound.push(id);
+        continue;
+      }
+      const result = await prisma.webhookEndpoint.deleteMany({
+        where: { id: ep.id, organizationId: orgId },
+      });
+      if (result && result.count > 0) {
+        deleted.push(ep.id);
+        void writeAuditLog(prisma, {
+          action: 'org_webhook_bulk_delete',
+          userId,
+          resource: 'organization',
+          resourceId: orgId,
+          before: { endpointId: ep.id, url: ep.url },
+          metadata: { orgId },
+          req,
+        });
+      } else {
+        notFound.push(id);
+      }
+    }
+
+    res.json({ updated: deleted, notFound });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] bulk-delete webhooks failed:', err.message);
+    res.status(500).json({ error: 'failed to bulk-delete webhooks' });
+  }
+});
+
 // ─── GET /api/orgs/:id/webhooks/stats (ADMIN+) ──────────────────────
 // Ratchet 45 (Task 2) — per-endpoint delivery stats over the last 24h.
 // Joins the org's WebhookEndpoint rows against the in-memory delivery
