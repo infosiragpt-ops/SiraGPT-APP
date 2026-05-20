@@ -1,7 +1,27 @@
 'use strict';
 
-const OpenAI = require('openai');
-const CircuitBreaker = require('opossum');
+// Lazy-require optional / heavy SDK deps so this module loads even when they
+// aren't installed (fresh checkouts, partial installs, environments that only
+// use embeddings/anthropic). Mirrors the document-* analyzer "lazy require"
+// pattern (CLAUDE.md) and the r2-storage.js loadSdk() helper. The constructors
+// are only resolved on first actual call to the gateway, keeping
+// `require('./orchestration')` resilient when these deps are absent.
+let _OpenAICtor = null;
+function loadOpenAI() {
+  if (_OpenAICtor) return _OpenAICtor;
+  // eslint-disable-next-line global-require
+  _OpenAICtor = require('openai');
+  return _OpenAICtor;
+}
+
+let _CircuitBreakerCtor = null;
+function loadCircuitBreaker() {
+  if (_CircuitBreakerCtor) return _CircuitBreakerCtor;
+  // eslint-disable-next-line global-require
+  _CircuitBreakerCtor = require('opossum');
+  return _CircuitBreakerCtor;
+}
+
 const { sharedFetch } = require('../utils/provider-http-agent');
 const { configuredProviders, detectTaskType, providerApiKey, TASK_MODEL_HINTS } = require('./llm-routing.config');
 const {
@@ -68,6 +88,7 @@ class LLMGateway {
   getBreaker(provider, model) {
     const key = `${provider.id}:${model}`;
     if (!this.breakers.has(key)) {
+      const CircuitBreaker = loadCircuitBreaker();
       this.breakers.set(key, new CircuitBreaker(
         payload => this.invokeProvider(provider, model, payload),
         {
@@ -92,6 +113,7 @@ class LLMGateway {
         'X-Title': 'SiraGPT',
       };
     }
+    const OpenAI = loadOpenAI();
     return new OpenAI(opts);
   }
 
