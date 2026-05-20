@@ -1471,6 +1471,12 @@ router.get('/sso/:orgSlug/callback', async (req, res) => {
   if (!org.ssoEnabled || !org.ssoConfig) {
     return res.status(400).json({ error: 'SSO is not enabled for this organization' });
   }
+  // OIDC IdPs redirect back via GET with ?code=... (and optional &state=).
+  // Route them through the unified callback handler so the same audit +
+  // session-minting code path handles both bindings.
+  if (org.ssoConfig.provider === 'oidc' && req.query && req.query.code) {
+    return ssoSamlCallbackHandler(req, res);
+  }
   return res.status(501).json({
     ok: false,
     implemented: false,
@@ -1492,6 +1498,7 @@ async function ssoSamlCallbackHandler(req, res, deps = {}) {
   const db = deps.prisma || prisma;
   const audit = deps.writeAuditLog || writeAuditLog;
   const samlMod = deps.samlHandler || require('../services/saml-handler');
+  const oidcMod = deps.oidcHandler || require('../services/oidc-handler');
   const resolve = deps.resolveOrgForSso || resolveOrgForSso;
 
   const org = await resolve(req.params.orgSlug);
@@ -1500,8 +1507,19 @@ async function ssoSamlCallbackHandler(req, res, deps = {}) {
     return res.status(400).json({ error: 'SSO is not enabled for this organization' });
   }
 
-  const samlResponse =
-    (req.body && (req.body.SAMLResponse || req.body.samlResponse)) || null;
+  // Dispatch on provider. SAML uses POST body SAMLResponse; OIDC uses
+  // ?code= (and optional ?state=) on the query string.
+  const provider = org.ssoConfig && org.ssoConfig.provider;
+  const isOidc = provider === 'oidc';
+
+  const samlResponse = !isOidc
+    ? (req.body && (req.body.SAMLResponse || req.body.samlResponse)) || null
+    : null;
+  const oidcCode = isOidc
+    ? (req.query && req.query.code)
+        || (req.body && req.body.code)
+        || null
+    : null;
 
   // Audit the *attempt* before we know if it'll succeed so we have a
   // record even when the verify step throws / lib is missing.
@@ -1510,10 +1528,16 @@ async function ssoSamlCallbackHandler(req, res, deps = {}) {
     action: 'sso_login_attempt',
     resource: 'organization',
     resourceId: org.id,
-    metadata: { orgSlug: org.slug, hasResponse: !!samlResponse },
+    metadata: {
+      orgSlug: org.slug,
+      method: isOidc ? 'oidc' : 'saml',
+      hasResponse: isOidc ? !!oidcCode : !!samlResponse,
+    },
   });
 
-  const verified = await samlMod.verifySamlResponse(samlResponse, org.ssoConfig);
+  const verified = isOidc
+    ? await oidcMod.verifyOidcCode(oidcCode, org.ssoConfig)
+    : await samlMod.verifySamlResponse(samlResponse, org.ssoConfig);
   if (!verified.ok) {
     return res.status(verified.status || 401).json({
       ok: false,
@@ -1575,7 +1599,12 @@ async function ssoSamlCallbackHandler(req, res, deps = {}) {
       resource: 'organization',
       resourceId: org.id,
       actorName: verified.email,
-      metadata: { orgSlug: org.slug, userId: user.id, createdUser },
+      metadata: {
+        orgSlug: org.slug,
+        userId: user.id,
+        createdUser,
+        method: isOidc ? 'oidc' : 'saml',
+      },
     });
 
     return res.status(200).json({
