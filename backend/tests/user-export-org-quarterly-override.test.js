@@ -79,7 +79,22 @@ test('falls back to default when org settings.export.quarterlyLimit missing', as
   }
 });
 
-test('clamps absurd values into [1, EXPORT_QUARTERLY_LIMIT_MAX]', async () => {
+test('accepts a numeric string value (e.g. migration drift)', async () => {
+  const orgs = new Map([
+    ['org-str', { id: 'org-str', settings: { export: { quarterlyLimit: '42' } } }],
+    ['org-str-zero', { id: 'org-str-zero', settings: { export: { quarterlyLimit: '0' } } }],
+  ]);
+  const prisma = makePrisma({ orgs });
+  const ok = await resolveExportQuarterlyLimit(prisma, { orgContext: { orgId: 'org-str' } });
+  assert.equal(ok.limit, 42);
+  assert.equal(ok.source, 'org');
+  // Zero-as-string is rejected (non-positive).
+  const zero = await resolveExportQuarterlyLimit(prisma, { orgContext: { orgId: 'org-str-zero' } });
+  assert.equal(zero.limit, EXPORT_QUARTERLY_LIMIT);
+  assert.equal(zero.source, 'default');
+});
+
+  test('clamps absurd values into [1, EXPORT_QUARTERLY_LIMIT_MAX]', async () => {
   const orgs = new Map([
     ['org-high', { id: 'org-high', settings: { export: { quarterlyLimit: 99_999 } } }],
     ['org-low', { id: 'org-low', settings: { export: { quarterlyLimit: 0 } } }],

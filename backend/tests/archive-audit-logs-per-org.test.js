@@ -193,6 +193,20 @@ describe('archive-audit-logs per-org overrides', () => {
     assert.equal(prisma._state.rows[0].id, 'g-2');
   });
 
+  test('accepts retentionMonths stored as a numeric string (migration drift)', async () => {
+    const now = new Date('2026-05-19T00:00:00Z');
+    const orgs = [
+      { id: 'org-str', ownerId: 'u-str', settings: { audit: { retentionMonths: '6' } } },
+      { id: 'org-str-bad', ownerId: 'u-bad', settings: { audit: { retentionMonths: 'abc' } } },
+    ];
+    const prisma = buildPrismaStub({ now, orgs, memberships: [], rows: [] });
+    const overrides = await _loadOrgOverrides(prisma, { warn() {} });
+    assert.equal(overrides.length, 1);
+    assert.equal(overrides[0].orgId, 'org-str');
+    assert.equal(overrides[0].retentionMonths, 6);
+    assert.equal(overrides[0].retentionDays, 180);
+  });
+
   test('retentionMonths is clamped into [1, 60] when storage drifts', async () => {
     const now = new Date('2026-05-19T00:00:00Z');
     const orgs = [

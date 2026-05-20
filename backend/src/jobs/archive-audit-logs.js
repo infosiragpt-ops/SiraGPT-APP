@@ -144,7 +144,7 @@ async function _loadOrgOverrides(prisma, logger) {
     if (!settings || typeof settings !== 'object' || Array.isArray(settings)) continue;
     const audit = settings.audit;
     if (!audit || typeof audit !== 'object' || Array.isArray(audit)) continue;
-    const months = audit.retentionMonths;
+    const months = Number(audit.retentionMonths);
     if (!Number.isFinite(months) || months <= 0) continue;
     // Hard-clamp [1, 60] to mirror the zod schema — drift from older
     // settings rows is silently bounded here.

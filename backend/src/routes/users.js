@@ -99,10 +99,11 @@ async function resolveExportQuarterlyLimit(prismaClient, req) {
       const xport = settings.export;
       if (xport && typeof xport === 'object' && !Array.isArray(xport)) {
         const raw = xport.quarterlyLimit;
-        if (Number.isFinite(raw) && raw > 0) {
+        const num = Number(raw);
+        if (Number.isFinite(num) && num > 0) {
           const clamped = Math.min(
             EXPORT_QUARTERLY_LIMIT_MAX,
-            Math.max(1, Math.floor(raw)),
+            Math.max(1, Math.floor(num)),
           );
           return { limit: clamped, source: 'org', orgId };
         }
