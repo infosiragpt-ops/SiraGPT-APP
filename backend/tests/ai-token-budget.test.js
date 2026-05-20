@@ -81,6 +81,78 @@ test('preflight fails open on internal error', async () => {
     assert.equal(r.ok, true);
 });
 
+test('preflight returns 402 cost_cap_exceeded when explicit maxCostUSD < estimated', async () => {
+    // gpt-4o input is $2.50 / 1M tokens; ~25k input tokens ≈ $0.0625.
+    // A cap of $0.0001 must trigger the 402 cost_cap_exceeded branch.
+    const r = await tokenBudget.preflight({
+        userId: null,
+        model: 'gpt-4o',
+        prompt: 'x'.repeat(100_000),
+        usageService: stubUsage,
+        maxCostUSD: 0.0001,
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.status, 402);
+    assert.equal(r.reason, 'cost_cap_exceeded');
+    assert.equal(r.maxCostUSD, 0.0001);
+    assert.ok(r.estimatedCostUSD > 0.0001);
+});
+
+test('preflight uses env SIRAGPT_MAX_COST_PER_REQUEST_USD when no override', async () => {
+    process.env.SIRAGPT_MAX_COST_PER_REQUEST_USD = '0.00005';
+    try {
+        const r = await tokenBudget.preflight({
+            userId: null,
+            model: 'gpt-4o',
+            prompt: 'x'.repeat(50_000),
+            usageService: stubUsage,
+        });
+        assert.equal(r.ok, false);
+        assert.equal(r.reason, 'cost_cap_exceeded');
+        assert.equal(r.status, 402);
+    } finally {
+        delete process.env.SIRAGPT_MAX_COST_PER_REQUEST_USD;
+    }
+});
+
+test('preflight default cap of $5 lets normal requests through', async () => {
+    delete process.env.SIRAGPT_MAX_COST_PER_REQUEST_USD;
+    const r = await tokenBudget.preflight({
+        userId: null,
+        model: 'gpt-4o-mini',
+        prompt: 'hello',
+        usageService: stubUsage,
+    });
+    assert.equal(r.ok, true);
+});
+
+test('preflight maxCostUSD <= 0 disables the cap explicitly', async () => {
+    process.env.SIRAGPT_MAX_COST_PER_REQUEST_USD = '0.00005';
+    try {
+        const r = await tokenBudget.preflight({
+            userId: null,
+            model: 'gpt-4o',
+            prompt: 'x'.repeat(50_000),
+            usageService: stubUsage,
+            maxCostUSD: 0, // explicit disable
+        });
+        assert.equal(r.ok, true);
+        assert.equal(r.reason, 'ok');
+    } finally {
+        delete process.env.SIRAGPT_MAX_COST_PER_REQUEST_USD;
+    }
+});
+
+test('_resolveMaxCostUSD priority: override > env > default $5', () => {
+    delete process.env.SIRAGPT_MAX_COST_PER_REQUEST_USD;
+    assert.equal(tokenBudget._resolveMaxCostUSD(null), 5);
+    process.env.SIRAGPT_MAX_COST_PER_REQUEST_USD = '2.5';
+    assert.equal(tokenBudget._resolveMaxCostUSD(null), 2.5);
+    assert.equal(tokenBudget._resolveMaxCostUSD(1.25), 1.25);
+    assert.equal(tokenBudget._resolveMaxCostUSD(0), null);
+    delete process.env.SIRAGPT_MAX_COST_PER_REQUEST_USD;
+});
+
 test('preflight returns 402 when quota exhausted', async () => {
     process.env.USER_MONTHLY_QUOTA_USD = '0.0001';
     const fakePrisma = {

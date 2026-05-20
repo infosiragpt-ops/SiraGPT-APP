@@ -53,6 +53,30 @@ const FeaturesSchema = z
 
 const ResponseStyleSchema = z.enum(['concise', 'detailed', 'balanced']);
 
+// Allowlist of AI provider names accepted as org-level preference.
+// Mirrors the `actualProvider` branch in routes/ai.js. Case-insensitive
+// at the route layer, but stored verbatim so the FE round-trips cleanly.
+const AI_PROVIDER_ALLOWLIST = Object.freeze([
+  'OpenAI',
+  'Anthropic',
+  'Gemini',
+  'OpenRouter',
+  'DeepSeek',
+]);
+
+const AiProviderSchema = z.enum(AI_PROVIDER_ALLOWLIST);
+
+// Per-org AI preferences (Task 1 + Task 2). All keys optional — the
+// route layer treats missing keys as "no override". `maxCostPerRequestUSD`
+// is the per-request hard cap surfaced by the token-budget preflight.
+const AiSettingsSchema = z
+  .object({
+    preferredProvider: AiProviderSchema.optional(),
+    preferredModel: z.string().trim().min(1).max(120).optional(),
+    maxCostPerRequestUSD: z.number().positive().max(1_000).optional(),
+  })
+  .strict();
+
 // `.passthrough()` keeps unknown keys (forward-compat). The known keys
 // still get validated; the route layer extracts the leftover keys and
 // returns them as `warnings` so callers know they're not yet recognised.
@@ -62,6 +86,7 @@ const OrgSettingsSchema = z
     responseStyle: ResponseStyleSchema.optional(),
     branding: BrandingSchema.optional(),
     features: FeaturesSchema.optional(),
+    ai: AiSettingsSchema.optional(),
   })
   .passthrough();
 
@@ -71,6 +96,7 @@ const ORG_SETTINGS_KNOWN_KEYS = Object.freeze([
   'responseStyle',
   'branding',
   'features',
+  'ai',
 ]);
 
 // PATCH-friendly variant: each known key may be explicitly `null` to
@@ -82,6 +108,7 @@ const OrgSettingsPatchSchema = z
     responseStyle: z.union([ResponseStyleSchema, z.null()]).optional(),
     branding: z.union([BrandingSchema, z.null()]).optional(),
     features: z.union([FeaturesSchema, z.null()]).optional(),
+    ai: z.union([AiSettingsSchema, z.null()]).optional(),
   })
   .passthrough();
 
@@ -126,5 +153,6 @@ module.exports = {
   OrgSettingsSchema,
   OrgSettingsPatchSchema,
   ORG_SETTINGS_KNOWN_KEYS,
+  AI_PROVIDER_ALLOWLIST,
   parseOrgSettingsPatch,
 };
