@@ -1985,6 +1985,136 @@ router.post('/me/webauthn/registration-verify', authenticateToken, async (req, r
   }
 });
 
+// ────────────────────────────────────────────────────────────
+// Ratchet 45 — SSO identity list / unlink endpoints.
+//
+// Every successful SAML/OIDC login (auth.js, cycle 144) writes or
+// refreshes a row in `SSOIdentity` keyed by (provider, externalId).
+// Users need a way to see which IdPs are linked to their account
+// for the security-settings screen, and a way to unlink one when
+// they rotate IdPs or leave an org. Unlinking is sensitive — once
+// removed, the next SSO login from that IdP will provision a brand
+// new row — so we gate DELETE behind the same recent-auth /
+// password check used by the 2FA disable endpoints above.
+//
+// GET    /api/users/me/sso-identities          — list (auth)
+// DELETE /api/users/me/sso-identities/:id      — unlink (auth + reauth)
+// ────────────────────────────────────────────────────────────
+
+// Mask an external id so the response never echoes back a raw
+// nameID / email / OIDC sub. Keeps a few leading + trailing chars
+// for visual recognition; pads short ids with a fixed ellipsis so
+// length doesn't leak the original size.
+function maskExternalId(value) {
+  if (!value || typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (trimmed.length <= 6) return '***';
+  const head = trimmed.slice(0, 3);
+  const tail = trimmed.slice(-3);
+  return `${head}***${tail}`;
+}
+
+router.get('/me/sso-identities', authenticateToken, async (req, res) => {
+  try {
+    if (!prisma || !prisma.sSOIdentity
+      || typeof prisma.sSOIdentity.findMany !== 'function') {
+      return res.json({ ok: true, identities: [] });
+    }
+    const rows = await prisma.sSOIdentity.findMany({
+      where: { userId: req.user.id },
+      orderBy: { lastUsedAt: 'desc' },
+      select: {
+        id: true,
+        provider: true,
+        externalId: true,
+        orgId: true,
+        createdAt: true,
+        lastUsedAt: true,
+      },
+    });
+
+    // Resolve org slugs in a single round-trip rather than N findUniques.
+    const orgIds = Array.from(new Set(
+      (rows || []).map((r) => r.orgId).filter((v) => typeof v === 'string' && v),
+    ));
+    let slugByOrgId = new Map();
+    if (orgIds.length > 0
+      && prisma.organization
+      && typeof prisma.organization.findMany === 'function') {
+      try {
+        const orgs = await prisma.organization.findMany({
+          where: { id: { in: orgIds } },
+          select: { id: true, slug: true },
+        });
+        slugByOrgId = new Map((orgs || []).map((o) => [o.id, o.slug]));
+      } catch (_e) { /* non-fatal — slug becomes null below */ }
+    }
+
+    const identities = (rows || []).map((r) => ({
+      id: r.id,
+      provider: r.provider,
+      externalId: maskExternalId(r.externalId),
+      orgSlug: slugByOrgId.get(r.orgId) || null,
+      lastUsedAt: r.lastUsedAt,
+      createdAt: r.createdAt,
+    }));
+
+    return res.json({ ok: true, identities });
+  } catch (error) {
+    console.error('SSO identities list error:', error);
+    return res.status(500).json({ error: 'sso_identities_list_failed' });
+  }
+});
+
+router.delete('/me/sso-identities/:id', authenticateToken, async (req, res) => {
+  try {
+    const okAuth = await assertRecentAuthOrPassword(req, res);
+    if (!okAuth) return;
+
+    const id = req.params && typeof req.params.id === 'string' ? req.params.id : '';
+    if (!id) {
+      return res.status(400).json({ error: 'invalid_identity_id' });
+    }
+
+    if (!prisma || !prisma.sSOIdentity
+      || typeof prisma.sSOIdentity.findUnique !== 'function') {
+      return res.status(404).json({ error: 'sso_identity_not_found' });
+    }
+
+    const existing = await prisma.sSOIdentity.findUnique({
+      where: { id },
+      select: { id: true, userId: true, provider: true, orgId: true },
+    });
+    if (!existing || existing.userId !== req.user.id) {
+      // Don't leak whether the id exists for a different user.
+      return res.status(404).json({ error: 'sso_identity_not_found' });
+    }
+
+    if (typeof prisma.sSOIdentity.delete === 'function') {
+      await prisma.sSOIdentity.delete({ where: { id } });
+    }
+
+    void writeAuditLog(prisma, {
+      req,
+      action: 'sso_identity_unlinked',
+      resource: 'user',
+      resourceId: req.user.id,
+      userId: req.user.id,
+      metadata: {
+        ssoIdentityId: existing.id,
+        provider: existing.provider,
+        orgId: existing.orgId,
+      },
+    });
+
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error('SSO identity unlink error:', error);
+    return res.status(500).json({ error: 'sso_identity_unlink_failed' });
+  }
+});
+
 module.exports = router;
 // Test-only internals (ratchet 45)
 module.exports.INTERNAL = {
@@ -2008,4 +2138,5 @@ module.exports.INTERNAL = {
   buildExportArchive,
   RECENT_AUTH_WINDOW_MS,
   assertRecentAuthOrPassword,
+  maskExternalId,
 };
