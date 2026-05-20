@@ -64,7 +64,7 @@ jobs:
     name: SSH to VPS · deploy-with-rollback
     needs: [pre-check]
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 50
 
     # Only deploy when:
     #   - workflow_dispatch (manual trigger from the Actions UI), OR
@@ -87,7 +87,7 @@ jobs:
           # Remote Docker builds can exceed 12m when Next.js and npm
           # pruning run cold; keep enough headroom for deploy + rollback.
           timeout: 60s
-          command_timeout: 25m
+          command_timeout: 45m
           script_stop: true
           script: |
             set -e

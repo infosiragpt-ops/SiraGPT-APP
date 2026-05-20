@@ -88,6 +88,70 @@ wait_for_http() {
   fail "$name did not become healthy after $((attempts * delay))s: $url (last status: ${status:-none})"
 }
 
+pm2_app_exists() {
+  pm2 describe "$1" >/dev/null 2>&1
+}
+
+resolve_pm2_app() {
+  local candidate detected
+  local candidates="${PM2_APP_CANDIDATES:-${PM2_APP},sira-api,sira-api-backend,siragpt-api,siragpt-backend,backend}"
+
+  IFS=',' read -r -a candidate_list <<< "$candidates"
+  for candidate in "${candidate_list[@]}"; do
+    candidate="$(printf '%s' "$candidate" | xargs)"
+    [[ -n "$candidate" ]] || continue
+    if pm2_app_exists "$candidate"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  detected="$(
+    pm2 jlist 2>/dev/null | node -e '
+      const fs = require("fs");
+      let list = [];
+      try {
+        const input = fs.readFileSync(0, "utf8").trim();
+        list = input ? JSON.parse(input) : [];
+      } catch {
+        list = [];
+      }
+      const text = (p) => [
+        p && p.name,
+        p && p.pm2_env && p.pm2_env.pm_cwd,
+        p && p.pm2_env && p.pm2_env.cwd,
+        p && p.pm2_env && p.pm2_env.pm_exec_path,
+        p && p.pm2_env && p.pm2_env.script
+      ].filter(Boolean).join(" ");
+      const preferred = list.find((p) => /siragpt|sira|backend|api/i.test(text(p)) && /siraGPT|siraNew|backend/i.test(text(p)));
+      const fallback = list.find((p) => /siragpt|sira|backend|api/i.test(text(p)));
+      const found = preferred || fallback;
+      if (found && found.name) process.stdout.write(found.name);
+    '
+  )"
+
+  if [[ -n "$detected" ]] && pm2_app_exists "$detected"; then
+    printf '%s\n' "$detected"
+    return 0
+  fi
+
+  return 1
+}
+
+restart_pm2_backend() {
+  local resolved_pm2_app
+  if ! resolved_pm2_app="$(resolve_pm2_app)"; then
+    fail "PM2 backend process not found. Set PM2_APP to the active backend process name."
+  fi
+
+  if [[ "$resolved_pm2_app" != "$PM2_APP" ]]; then
+    log "PM2 backend default '$PM2_APP' not found; using detected process: $resolved_pm2_app"
+  fi
+
+  log "Restarting PM2 backend: $resolved_pm2_app"
+  pm2 restart "$resolved_pm2_app" --update-env
+}
+
 read_google_redirect_uri() {
   local location
   location="$(curl -fsS -o /dev/null -w '%{redirect_url}' "$GOOGLE_AUTH_URL")"
@@ -140,8 +204,7 @@ docker compose -f "$COMPOSE_FILE" build "$FRONTEND_SERVICE"
 log "Starting frontend container without backend dependencies"
 docker compose -f "$COMPOSE_FILE" up -d --no-deps "$FRONTEND_SERVICE"
 
-log "Restarting PM2 backend: $PM2_APP"
-pm2 restart "$PM2_APP" --update-env
+restart_pm2_backend
 
 wait_for_http "API health" "$API_HEALTH_URL" 30 2
 wait_for_http "Frontend login" "$FRONTEND_URL" 30 2
