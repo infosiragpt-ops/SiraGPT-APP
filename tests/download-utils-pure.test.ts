@@ -125,4 +125,16 @@ describe("generateHTMLPresentation", () => {
     assert.ok(html.includes("<th") && html.includes(">A<"))
     assert.ok(html.includes(">1<"))
   })
+
+  it("escapes generated content and table values", () => {
+    const html = generateHTMLPresentation('Intro: <img src=x onerror="alert(1)">', {
+      headers: ['<script>alert("h")</script>'],
+      rows: [['<img src=x onerror="alert(2)">']],
+    })
+
+    assert.equal(html.includes("<script>"), false)
+    assert.equal(html.includes("<img"), false)
+    assert.ok(html.includes("&lt;script&gt;alert(&quot;h&quot;)&lt;/script&gt;"))
+    assert.ok(html.includes("&lt;img src=x onerror=&quot;alert(2)&quot;&gt;"))
+  })
 })
