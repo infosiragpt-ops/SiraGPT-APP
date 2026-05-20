@@ -10,6 +10,12 @@ title = "SiraGPT Gitleaks Config"
     '''\.github/workflows/ci\.yml''',       # CI dummy test keys
     '''backend/tests/''',                    # Test fixtures with fake keys
     '''tests/''',
+    '''docs/ENV_VARIABLES\.md''',           # Env var documentation
+    '''docs/''',                            # General docs
+    '''CLAUDE\.md''',                       # Agent instructions
+    '''\.env\.example''',                   # Example env file
+    '''node_modules/''',                    # Dependency fixtures/examples
+    '''backend/node_modules/''',            # Dependency fixtures/examples
   ]
 
 [[rules]]

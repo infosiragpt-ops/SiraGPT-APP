@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1456**.
+Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1458**.
 
 > Re-run with `npm run licenses:report` after every dependency change. CI enforces that no GPL/AGPL/LGPL/CDDL/EPL/MPL-1.1/NPOSL family appears via `npm run licenses:check`.
 
@@ -431,7 +431,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `yargs-parser` | 21.1.1 | ISC | [link](https://github.com/yargs/yargs-parser) |
 | `zod-to-json-schema` | 3.25.2 | ISC | [link](https://github.com/StefanTerdell/zod-to-json-schema) |
 
-## MIT (1076)
+## MIT (1078)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -455,7 +455,6 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@elevenlabs/elevenlabs-js` | 2.25.1 | MIT | [link](https://github.com/elevenlabs/elevenlabs-js) |
 | `@esbuild-kit/core-utils` | 3.3.2 | MIT | [link](https://github.com/esbuild-kit/core-utils) |
 | `@esbuild-kit/esm-loader` | 2.6.5 | MIT | [link](https://github.com/esbuild-kit/esm-loader) |
-| `@esbuild/darwin-arm64` | 0.18.20, 0.25.12, 0.28.0 | MIT | [link](https://github.com/evanw/esbuild) |
 | `@fal-ai/client` | 1.7.0 | MIT | [link](https://github.com/fal-ai/fal-js) |
 | `@fast-csv/format` | 4.3.5 | MIT | [link](https://github.com/C2FO/fast-csv) |
 | `@fast-csv/parse` | 4.3.6 | MIT | [link](https://github.com/C2FO/fast-csv) |
@@ -486,6 +485,9 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@langchain/langgraph-checkpoint` | 1.0.1 | MIT | [link](https://github.com/langchain-ai/langgraphjs) |
 | `@langchain/langgraph-sdk` | 1.8.10 | MIT | [link](https://github.com/langchain-ai/langgraphjs) |
 | `@langchain/openai` | 1.4.4 | MIT | [link](https://github.com/langchain-ai/langchainjs) |
+| `@langfuse/core` | 5.3.0 | MIT | [link](https://github.com/langfuse/langfuse-js) |
+| `@langfuse/langchain` | 5.3.0 | MIT | [link](https://github.com/langfuse/langfuse-js) |
+| `@langfuse/tracing` | 5.3.0 | MIT | [link](https://github.com/langfuse/langfuse-js) |
 | `@levischuck/tiny-cbor` | 0.2.11 | MIT | [link](https://github.com/levischuck/tiny-cbor) |
 | `@llamaindex/core` | 0.6.22, 0.6.23 | MIT | [link](https://github.com/run-llama/LlamaIndexTS) |
 | `@llamaindex/env` | 0.1.30, 0.1.31 | MIT | [link](https://github.com/run-llama/LlamaIndexTS) |

@@ -101,4 +101,13 @@ async function searchFreshContext(query, opts = {}) {
   return { provider: 'none', configured: false, results: [], errors };
 }
 
-module.exports = { exaSearch, firecrawlSearch, needsFreshWebContext, searchFreshContext, searxngSearch, tavilySearch };
+function listWebSearchProviders(env = process.env) {
+  return {
+    tavily: Boolean(env.TAVILY_API_KEY),
+    exa: Boolean(env.EXA_API_KEY),
+    firecrawl: Boolean(env.FIRECRAWL_API_KEY),
+    searxng: Boolean(env.SEARXNG_URL),
+  };
+}
+
+module.exports = { exaSearch, firecrawlSearch, listWebSearchProviders, needsFreshWebContext, searchFreshContext, searxngSearch, tavilySearch };

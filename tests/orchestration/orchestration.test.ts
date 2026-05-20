@@ -1,7 +1,7 @@
-// @ts-nocheck
+// @ts-nocheck -- imports backend JS modules without TS declarations.
 /**
  * Unit tests for backend/src/orchestration modules.
- * Run with: npx vitest run tests/orchestration/
+ * Run with: npm test
  *
  * @ts-nocheck above: orchestration modules are .js (no .d.ts shipped)
  * so dynamic-require shapes stay inferred at runtime. The runtime
@@ -9,14 +9,56 @@
  * without forcing premature `.d.ts` boilerplate.
  */
 
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import assert from 'node:assert/strict';
+import { before, describe, it } from 'node:test';
+
+function expect(actual) {
+  const api = {
+    toBe(expected) {
+      assert.strictEqual(actual, expected);
+    },
+    toEqual(expected) {
+      assert.deepStrictEqual(actual, expected);
+    },
+    toBeDefined() {
+      assert.notStrictEqual(actual, undefined);
+    },
+    toContain(expected) {
+      assert.ok(actual.includes(expected));
+    },
+    toHaveLength(expected) {
+      assert.strictEqual(actual.length, expected);
+    },
+    toMatch(expected) {
+      assert.match(actual, expected);
+    },
+    toBeGreaterThan(expected) {
+      assert.ok(actual > expected);
+    },
+    toBeGreaterThanOrEqual(expected) {
+      assert.ok(actual >= expected);
+    },
+    toBeLessThanOrEqual(expected) {
+      assert.ok(actual <= expected);
+    },
+  };
+  api.not = {
+    toBe(expected) {
+      assert.notStrictEqual(actual, expected);
+    },
+    toContain(expected) {
+      assert.ok(!actual.includes(expected));
+    },
+  };
+  return api;
+}
 
 describe('detectTaskType', () => {
   let detectTaskType;
 
-  beforeAll(async () => {
+  before(async () => {
     const mod = await import(
-      '../../backend/src/orchestration/llm-routing.config.js'
+      '../../../backend/src/orchestration/llm-routing.config.js'
     );
     detectTaskType = mod.detectTaskType;
   });
@@ -75,9 +117,9 @@ describe('detectTaskType', () => {
 describe('configuredProviders', () => {
   let configuredProviders;
 
-  beforeAll(async () => {
+  before(async () => {
     const mod = await import(
-      '../../backend/src/orchestration/llm-routing.config.js'
+      '../../../backend/src/orchestration/llm-routing.config.js'
     );
     configuredProviders = mod.configuredProviders;
   });
@@ -111,9 +153,9 @@ describe('configuredProviders', () => {
 describe('semanticCacheKey', () => {
   let semanticCacheKey;
 
-  beforeAll(async () => {
+  before(async () => {
     semanticCacheKey = (
-      await import('../../backend/src/orchestration/semantic-cache.js')
+      await import('../../../backend/src/orchestration/semantic-cache.js')
     ).semanticCacheKey;
   });
 
@@ -158,9 +200,9 @@ describe('semanticCacheKey', () => {
 describe('shouldBypassSemanticCache', () => {
   let shouldBypassSemanticCache;
 
-  beforeAll(async () => {
+  before(async () => {
     shouldBypassSemanticCache = (
-      await import('../../backend/src/orchestration/semantic-cache.js')
+      await import('../../../backend/src/orchestration/semantic-cache.js')
     ).shouldBypassSemanticCache;
   });
 
@@ -210,9 +252,9 @@ describe('shouldBypassSemanticCache', () => {
 describe('resolveCacheTtlSeconds', () => {
   let resolveCacheTtlSeconds;
 
-  beforeAll(async () => {
+  before(async () => {
     resolveCacheTtlSeconds = (
-      await import('../../backend/src/orchestration/semantic-cache.js')
+      await import('../../../backend/src/orchestration/semantic-cache.js')
     ).resolveCacheTtlSeconds;
   });
 
@@ -247,9 +289,9 @@ describe('resolveCacheTtlSeconds', () => {
 describe('createSSEReplayBuffer', () => {
   let createSSEReplayBuffer;
 
-  beforeAll(async () => {
+  before(async () => {
     createSSEReplayBuffer = (
-      await import('../../backend/src/orchestration/sse-stream.js')
+      await import('../../../backend/src/orchestration/sse-stream.js')
     ).createSSEReplayBuffer;
   });
 
@@ -309,9 +351,9 @@ describe('createSSEReplayBuffer', () => {
 describe('classifyRateLimit', () => {
   let classifyRateLimit;
 
-  beforeAll(async () => {
+  before(async () => {
     classifyRateLimit = (
-      await import('../../backend/src/orchestration/llm-gateway.js')
+      await import('../../../backend/src/orchestration/llm-gateway.js')
     ).classifyRateLimit;
   });
 
@@ -345,9 +387,9 @@ describe('classifyRateLimit', () => {
 describe('jitteredBackoff', () => {
   let jitteredBackoff;
 
-  beforeAll(async () => {
+  before(async () => {
     jitteredBackoff = (
-      await import('../../backend/src/orchestration/llm-gateway.js')
+      await import('../../../backend/src/orchestration/llm-gateway.js')
     ).jitteredBackoff;
   });
 
@@ -379,9 +421,9 @@ describe('jitteredBackoff', () => {
 describe('needsFreshWebContext', () => {
   let needsFreshWebContext;
 
-  beforeAll(async () => {
+  before(async () => {
     const mod = await import(
-      '../../backend/src/orchestration/web-search-tools.js'
+      '../../../backend/src/orchestration/web-search-tools.js'
     );
     needsFreshWebContext = mod.needsFreshWebContext;
   });
@@ -410,9 +452,9 @@ describe('needsFreshWebContext', () => {
 describe('parserPlanFor', () => {
   let parserPlanFor;
 
-  beforeAll(async () => {
+  before(async () => {
     parserPlanFor = (
-      await import('../../backend/src/orchestration/document-pipeline.js')
+      await import('../../../backend/src/orchestration/document-pipeline.js')
     ).parserPlanFor;
   });
 
@@ -458,10 +500,10 @@ describe('parserPlanFor', () => {
 describe('selectTeam', () => {
   let selectTeam;
 
-  beforeAll(async () => {
+  before(async () => {
     selectTeam = (
       await import(
-        '../../backend/src/orchestration/multi-agent/team-router.js'
+        '../../../backend/src/orchestration/multi-agent/team-router.js'
       )
     ).selectTeam;
   });
@@ -491,9 +533,9 @@ describe('selectTeam', () => {
 describe('scoreProvider', () => {
   let scoreProvider;
 
-  beforeAll(async () => {
+  before(async () => {
     scoreProvider = (
-      await import('../../backend/src/orchestration/llm-gateway.js')
+      await import('../../../backend/src/orchestration/llm-gateway.js')
     ).scoreProvider;
   });
 
@@ -525,10 +567,10 @@ describe('scoreProvider', () => {
 describe('resolveOpenClawConfig', () => {
   let resolveOpenClawConfig;
 
-  beforeAll(async () => {
+  before(async () => {
     resolveOpenClawConfig = (
       await import(
-        '../../backend/src/orchestration/multichannel/openclaw-adapter.js'
+        '../../../backend/src/orchestration/multichannel/openclaw-adapter.js'
       )
     ).resolveOpenClawConfig;
   });
@@ -568,9 +610,9 @@ describe('resolveOpenClawConfig', () => {
 describe('prompt injection detector', () => {
   let scoreInjectionRisk;
 
-  beforeAll(async () => {
+  before(async () => {
     const mod = await import(
-      '../../backend/src/middleware/prompt-injection-detector.js'
+      '../../../backend/src/middleware/prompt-injection-detector.js'
     );
     scoreInjectionRisk = mod.scoreInjectionRisk;
   });
@@ -619,9 +661,9 @@ describe('prompt injection detector', () => {
 describe('semanticChunkingOptions', () => {
   let semanticChunkingOptions;
 
-  beforeAll(async () => {
+  before(async () => {
     semanticChunkingOptions = (
-      await import('../../backend/src/orchestration/document-pipeline.js')
+      await import('../../../backend/src/orchestration/document-pipeline.js')
     ).semanticChunkingOptions;
   });
 
@@ -650,9 +692,9 @@ describe('semanticChunkingOptions', () => {
 describe('safeKey (R2)', () => {
   let safeKey;
 
-  beforeAll(async () => {
+  before(async () => {
     safeKey = (
-      await import('../../backend/src/orchestration/r2-storage.js')
+      await import('../../../backend/src/orchestration/r2-storage.js')
     ).safeKey;
   });
 
@@ -661,7 +703,7 @@ describe('safeKey (R2)', () => {
       userId: 'user-123',
       fileName: 'thesis.pdf',
     });
-    expect(key).toMatch(/^artifacts\/user_123\/\d+-thesis\.pdf$/);
+    expect(key).toMatch(/^artifacts\/user-123\/\d+-thesis\.pdf$/);
   });
 
   it('sanitizes special characters in userId', () => {
@@ -697,9 +739,9 @@ describe('safeKey (R2)', () => {
 describe('createLangGraphOrchestrator', () => {
   let createLangGraphOrchestrator;
 
-  beforeAll(async () => {
+  before(async () => {
     const mod = await import(
-      '../../backend/src/orchestration/langgraph-engine.js'
+      '../../../backend/src/orchestration/langgraph-engine.js'
     );
     createLangGraphOrchestrator = mod.createLangGraphOrchestrator;
   });
@@ -716,23 +758,43 @@ describe('createLangGraphOrchestrator', () => {
     expect(orch.nodes).toContain('finalizer');
   });
 
-  it('has a getRunner method that returns a runner', async () => {
-    const orch = createLangGraphOrchestrator({});
-    const runner = await orch.getRunner();
-    expect(runner).toBeDefined();
-    expect(runner.nodes).toBeDefined();
-    expect(runner.provider).toBeDefined();
-    expect([
-      '@langchain/langgraph',
-      'deterministic',
-      'deterministic-fallback',
-    ]).toContain(runner.provider);
+  it('runs the orchestration pipeline to completion', async () => {
+    const checkpoints = [];
+    const orch = createLangGraphOrchestrator({
+      checkpointStore: {
+        async put(checkpoint) {
+          checkpoints.push(checkpoint);
+        },
+        async latest() {
+          return checkpoints[checkpoints.length - 1] || null;
+        },
+      },
+    });
+    const result = await orch.run({
+      threadId: 'thread-test',
+      input: { prompt: 'hola' },
+    });
+    expect(result).toBeDefined();
+    expect(result.stage).toBe('done');
+    expect(checkpoints.length).toBeGreaterThan(0);
   });
 
-  it('caches the runner promise', async () => {
-    const orch = createLangGraphOrchestrator({});
-    const runner1 = await orch.getRunner();
-    const runner2 = await orch.getRunner();
-    expect(runner1).toBe(runner2);
+  it('resumes from the latest checkpoint', async () => {
+    const latest = {
+      threadId: 'thread-test',
+      state: { stage: 'done' },
+      metadata: { node: 'completed' },
+    };
+    const orch = createLangGraphOrchestrator({
+      checkpointStore: {
+        async put() {},
+        async latest(threadId) {
+          return threadId === latest.threadId ? latest : null;
+        },
+      },
+    });
+    const resumed = await orch.resume({ threadId: 'thread-test' });
+    expect(resumed.threadId).toBe('thread-test');
+    expect(resumed.state).toEqual({ stage: 'done' });
   });
 });

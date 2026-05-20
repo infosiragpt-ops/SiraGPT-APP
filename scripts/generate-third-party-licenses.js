@@ -63,7 +63,8 @@ const PINNED_VERSION_SKIPS = new Set([
 
 function isPlatformBinary(name) {
   if (PLATFORM_CONDITIONAL_NAMES.has(name)) return true;
-  return PLATFORM_BIN_PATTERN.test(name);
+  const unscopedName = name.slice(name.lastIndexOf('/') + 1);
+  return PLATFORM_BIN_PATTERN.test(name) || PLATFORM_BIN_PATTERN.test(`native-${unscopedName}`);
 }
 
 // Documented exceptions. Each entry must include a reason; CI will print it.

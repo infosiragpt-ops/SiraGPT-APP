@@ -39,7 +39,6 @@
     "../lib/integrations/verify-webhook.ts"
   ],
   "exclude": [
-    "../tests/lib",
-    "../tests/orchestration"
+    "../tests/lib"
   ]
 }

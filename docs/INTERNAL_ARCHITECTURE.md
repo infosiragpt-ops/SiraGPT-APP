@@ -416,6 +416,60 @@ sequenceDiagram
 
 ## UI Lock Contract
 
+### Gateway Adapter (`gateway-adapter.js`)
+
+The gateway-adapter bridges the existing Express routes (ai.js) with the new orchestration layer without modifying the SSE contract or JSON response shapes:
+
+```mermaid
+sequenceDiagram
+    participant AI as ai.js Route
+    participant GA as Gateway Adapter
+    participant GW as LLM Gateway
+    participant WS as Web Search
+    participant MM as Memory Adapter
+    participant LF as Langfuse
+
+    AI->>GA: enrichWithWebSearch(prompt)
+    GA->>WS: searchFreshContext()
+    WS-->>GA: Web context block
+    GA-->>AI: Enrichment block
+
+    AI->>GA: getMemoryAdapter()
+    GA->>MM: buildMemoryPrompt()
+    MM-->>GA: Memory block
+    GA-->>AI: Memory enrichment
+
+    AI->>GA: getTracer()
+    GA-->>AI: Langfuse tracer
+
+    AI->>LF: Start span (generate)
+    AI->>AI: aiService.generateStream()
+    LF->>LF: End span (metrics)
+```
+
+#### Key Injection Points in ai.js
+
+1. **Import** (line 130): `require('../orchestration/gateway-adapter')`
+2. **Web Search Enrichment** (line ~2810): Added before system instruction assembly
+3. **Orchestration Memory** (line ~2820): Additional memory block from pgvector + RAG
+4. **Langfuse Tracing** (line ~3240): Wraps the `aiService.generateStream()` call
+
+All enrichments are best-effort (fail-open). If any orchestration service is unavailable, the request continues normally with existing behavior.
+
+### Semantic Cache Integration
+
+The gateway's `complete()` method checks the semantic cache before sending requests to providers:
+
+```
+1. Compute SHA-256(prompt + context + model + temperature)
+2. Check Upstash Redis for cached response
+3. Skip cache if: volatile query terms, streaming mode, TTL=0
+4. On cache hit: return instantly (30-60% latency reduction)
+5. On cache miss: proceed with LLM call, store result with TTL
+```
+
+## UI Lock Contract
+
 **Absolute Rule**: No UI changes allowed. The frontend is frozen.
 
 ### Verification Methods
