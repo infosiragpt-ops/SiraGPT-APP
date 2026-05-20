@@ -1478,7 +1478,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | Package | Version(s) | License | Source |
 |---|---|---|---|
 | `buffers` | 0.1.1 | UNKNOWN | [link](https://github.com/substack/node-buffers) |
-| `openwebui-backend` | 1.3.0 | UNKNOWN |  |
+| `openwebui-backend` | 1.3.1 | UNKNOWN |  |
 
 ## Platform-conditional native binaries
 
