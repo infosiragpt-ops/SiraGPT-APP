@@ -1492,6 +1492,30 @@ model OrgInvitation {
   @@map("org_invitations")
 }
 
+// Ratchet 45 — SSO identity link (cycle 144).
+//
+// Tracks the external IdP identity (SAML nameID / OIDC sub) that
+// authenticated a given local User into a given Organization. A user
+// can have one identity per (provider, externalId) tuple — re-logins
+// hit the existing row and refresh `lastUsedAt`. This decouples local
+// auth (email/password, magic-link, passkey) from the SSO trust chain
+// so we can later support multiple IdPs per user, identity-merging
+// flows, and admin-side "who logged in from where" forensics.
+model SSOIdentity {
+  id         String   @id @default(cuid())
+  userId     String
+  orgId      String
+  provider   String
+  externalId String
+  createdAt  DateTime @default(now())
+  lastUsedAt DateTime @default(now())
+
+  @@unique([provider, externalId])
+  @@index([userId])
+  @@index([orgId])
+  @@map("sso_identities")
+}
+
 // Org-wide announcements (ratchet 45).
 //
 // ADMIN+ members can publish banner-style announcements to every

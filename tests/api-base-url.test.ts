@@ -1,10 +1,7 @@
 import assert from "node:assert/strict"
 import { afterEach, beforeEach, describe, it } from "node:test"
 
-// We only import the pure helper. The rest of lib/api.ts triggers
-// fetch instrumentation on import which is fine in a node test
-// runner — no network is hit until a method is called.
-import { getNormalizedApiBaseUrl } from "../lib/api"
+import { DEFAULT_API_BASE_URL, getNormalizedApiBaseUrl } from "../lib/api-base-url"
 
 const ORIGINAL_API_URL = process.env.NEXT_PUBLIC_API_URL
 
@@ -25,6 +22,10 @@ describe("getNormalizedApiBaseUrl", () => {
     assert.equal(getNormalizedApiBaseUrl(), "http://localhost:5000/api")
   })
 
+  it("falls back to the default when an explicit value is empty", () => {
+    assert.equal(getNormalizedApiBaseUrl("   "), DEFAULT_API_BASE_URL)
+  })
+
   it("appends /api when the env var omits it", () => {
     process.env.NEXT_PUBLIC_API_URL = "https://api.siragpt.dev"
     assert.equal(getNormalizedApiBaseUrl(), "https://api.siragpt.dev/api")
@@ -42,6 +43,11 @@ describe("getNormalizedApiBaseUrl", () => {
 
   it("strips a trailing slash even when /api is already present", () => {
     process.env.NEXT_PUBLIC_API_URL = "https://api.siragpt.dev/api/"
+    assert.equal(getNormalizedApiBaseUrl(), "https://api.siragpt.dev/api")
+  })
+
+  it("strips repeated trailing slashes", () => {
+    process.env.NEXT_PUBLIC_API_URL = "https://api.siragpt.dev///"
     assert.equal(getNormalizedApiBaseUrl(), "https://api.siragpt.dev/api")
   })
 

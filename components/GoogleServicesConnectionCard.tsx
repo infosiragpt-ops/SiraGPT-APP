@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Calendar, FolderOpen, CheckCircle2, XCircle, AlertCircle } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import { getNormalizedApiBaseUrl } from '@/lib/api-base-url';
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 interface GoogleServicesConnectionCardProps {
@@ -16,6 +17,7 @@ export default function GoogleServicesConnectionCard({ onConnectionChange }: Goo
     const [isLoading, setIsLoading] = useState(true);
     const [isConnecting, setIsConnecting] = useState(false);
     const { toast } = useToast();
+    const apiRoot = getNormalizedApiBaseUrl();
 
     // Check connection status on mount
     useEffect(() => {
@@ -37,7 +39,7 @@ export default function GoogleServicesConnectionCard({ onConnectionChange }: Goo
                 return;
             }
 
-            const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/auth/google-services/status`, {
+            const response = await fetch(`${apiRoot}/auth/google-services/status`, {
                 headers: {
                     'Authorization': `Bearer ${token}`
                 }
@@ -71,7 +73,7 @@ export default function GoogleServicesConnectionCard({ onConnectionChange }: Goo
             }
 
             // Get auth URL from backend
-            const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/auth/google-services`, {
+            const response = await fetch(`${apiRoot}/auth/google-services`, {
                 headers: {
                     'Authorization': `Bearer ${token}`
                 }
@@ -141,7 +143,7 @@ export default function GoogleServicesConnectionCard({ onConnectionChange }: Goo
                 return;
             }
 
-            const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/auth/google-services/disconnect`, {
+            const response = await fetch(`${apiRoot}/auth/google-services/disconnect`, {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${token}`

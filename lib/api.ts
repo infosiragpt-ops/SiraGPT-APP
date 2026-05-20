@@ -1,6 +1,8 @@
 // Frontend API client for backend integration
 import { streamSseJson } from "./sse-client"
 import { sanitizeFetchHeaders } from "./fetch-sanitize"
+export { getNormalizedApiBaseUrl } from "./api-base-url"
+import { getNormalizedApiBaseUrl } from "./api-base-url"
 // Codegen'd from backend/src/schemas/* — DO NOT edit by hand. Regenerate
 // with `node backend/scripts/generate-api-types.js` whenever schemas change.
 import type {
@@ -65,14 +67,6 @@ export type ImpersonateEnvelope = {
   user?: AuthUser
   impersonating?: boolean
   [key: string]: unknown
-}
-
-/** Backend mounts routes under `/api` (e.g. `/api/auth/login`). Accept env with or without `/api`. */
-export function getNormalizedApiBaseUrl(): string {
-  const raw = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
-  const trimmed = raw.replace(/\/$/, "")
-  if (trimmed.endsWith("/api")) return trimmed
-  return `${trimmed}/api`
 }
 
 const API_BASE_URL = getNormalizedApiBaseUrl()

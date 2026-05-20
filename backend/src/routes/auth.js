@@ -1523,6 +1523,12 @@ async function ssoSamlCallbackHandler(req, res, deps = {}) {
 
   // Audit the *attempt* before we know if it'll succeed so we have a
   // record even when the verify step throws / lib is missing.
+  // Snapshot the provisioning policy on the attempt audit too (we
+  // compute it again post-verify but the early read makes the audit
+  // trail useful even when verify throws).
+  const _attemptPolicy = (org.ssoConfig && typeof org.ssoConfig.provisioning === 'string')
+    ? org.ssoConfig.provisioning.toLowerCase()
+    : 'jit_create';
   void audit(db, {
     req,
     action: 'sso_login_attempt',
@@ -1532,6 +1538,7 @@ async function ssoSamlCallbackHandler(req, res, deps = {}) {
       orgSlug: org.slug,
       method: isOidc ? 'oidc' : 'saml',
       hasResponse: isOidc ? !!oidcCode : !!samlResponse,
+      policy: _attemptPolicy,
     },
   });
 
@@ -1547,10 +1554,95 @@ async function ssoSamlCallbackHandler(req, res, deps = {}) {
     });
   }
 
+  // Cycle 144 — provisioning policy. `org.ssoConfig.provisioning` gates
+  // how we resolve the local User row from a verified IdP assertion:
+  //
+  //   • `jit_create`         — default; auto-create the User + membership
+  //                            on first login (legacy behaviour).
+  //   • `jit_require_invite` — only allow login if a pending OrgInvitation
+  //                            exists for the asserted email; auto-accept
+  //                            it during this login.
+  //   • `manual`             — reject if the user isn't already a member
+  //                            (admins must add them out-of-band first).
+  //
+  // Anything else falls back to `jit_create` so we never accidentally
+  // lock out a tenant on a typo.
+  const provisioning = (org.ssoConfig && typeof org.ssoConfig.provisioning === 'string')
+    ? org.ssoConfig.provisioning.toLowerCase()
+    : 'jit_create';
+  const policy = ['jit_create', 'jit_require_invite', 'manual'].includes(provisioning)
+    ? provisioning
+    : 'jit_create';
+
   try {
-    // Find-or-create the user matched by the asserted email.
+    // Find-or-create the user matched by the asserted email, gated by
+    // the org's provisioning policy.
     let user = await db.user.findUnique({ where: { email: verified.email } });
     let createdUser = false;
+    let acceptedInvitationId = null;
+
+    // Check pre-existing membership for the `manual` and invite policies.
+    let isMember = false;
+    if (user && db.orgMembership && typeof db.orgMembership.findUnique === 'function') {
+      try {
+        const m = await db.orgMembership.findUnique({
+          where: { orgId_userId: { orgId: org.id, userId: user.id } },
+        });
+        isMember = !!m;
+      } catch (_e) { /* non-fatal */ }
+    }
+
+    if (policy === 'manual' && !isMember) {
+      void audit(db, {
+        req,
+        action: 'sso_login_denied',
+        resource: 'organization',
+        resourceId: org.id,
+        actorName: verified.email,
+        metadata: { orgSlug: org.slug, policy, reason: 'not_a_member' },
+      });
+      return res.status(403).json({
+        ok: false,
+        error: 'sso_provisioning_denied',
+        hint: 'manual provisioning: user is not a member of this organization',
+        orgSlug: org.slug,
+      });
+    }
+
+    if (policy === 'jit_require_invite' && !isMember) {
+      // Look for a pending, non-expired invitation matching the email.
+      let pending = null;
+      if (db.orgInvitation && typeof db.orgInvitation.findFirst === 'function') {
+        try {
+          pending = await db.orgInvitation.findFirst({
+            where: {
+              orgId: org.id,
+              email: verified.email,
+              acceptedAt: null,
+              expiresAt: { gt: new Date() },
+            },
+          });
+        } catch (_e) { /* non-fatal */ }
+      }
+      if (!pending) {
+        void audit(db, {
+          req,
+          action: 'sso_login_denied',
+          resource: 'organization',
+          resourceId: org.id,
+          actorName: verified.email,
+          metadata: { orgSlug: org.slug, policy, reason: 'no_pending_invite' },
+        });
+        return res.status(403).json({
+          ok: false,
+          error: 'sso_provisioning_denied',
+          hint: 'jit_require_invite: no pending invitation for this email',
+          orgSlug: org.slug,
+        });
+      }
+      acceptedInvitationId = pending.id;
+    }
+
     if (!user) {
       user = await db.user.create({
         data: {
@@ -1581,6 +1673,53 @@ async function ssoSamlCallbackHandler(req, res, deps = {}) {
       } catch (_e) { /* non-fatal */ }
     }
 
+    // Mark the invitation as accepted now that membership is in place.
+    if (acceptedInvitationId
+      && db.orgInvitation && typeof db.orgInvitation.update === 'function') {
+      try {
+        await db.orgInvitation.update({
+          where: { id: acceptedInvitationId },
+          data: { acceptedAt: new Date() },
+        });
+      } catch (_e) { /* non-fatal */ }
+    }
+
+    // Cycle 144 — find-or-create SSOIdentity by (provider, externalId).
+    // External id is `verified.nameId` (SAML nameID / OIDC sub) and we
+    // fall back to the asserted email if the IdP didn't surface one so
+    // we still get a row to update on subsequent logins.
+    const externalId = (verified.nameId && String(verified.nameId)) || verified.email;
+    const providerKey = isOidc ? 'oidc' : 'saml';
+    let ssoIdentityId = null;
+    if (db.sSOIdentity && typeof db.sSOIdentity.findUnique === 'function') {
+      try {
+        const existing = await db.sSOIdentity.findUnique({
+          where: { provider_externalId: { provider: providerKey, externalId } },
+        });
+        if (existing) {
+          ssoIdentityId = existing.id;
+          if (typeof db.sSOIdentity.update === 'function') {
+            try {
+              await db.sSOIdentity.update({
+                where: { id: existing.id },
+                data: { lastUsedAt: new Date() },
+              });
+            } catch (_e) { /* non-fatal */ }
+          }
+        } else if (typeof db.sSOIdentity.create === 'function') {
+          const row = await db.sSOIdentity.create({
+            data: {
+              userId: user.id,
+              orgId: org.id,
+              provider: providerKey,
+              externalId,
+            },
+          });
+          ssoIdentityId = row && row.id ? row.id : null;
+        }
+      } catch (_e) { /* non-fatal — identity link is best-effort */ }
+    }
+
     const token = signSessionToken({
       userId: user.id,
       isAdmin: Boolean(user.isAdmin),
@@ -1604,6 +1743,9 @@ async function ssoSamlCallbackHandler(req, res, deps = {}) {
         userId: user.id,
         createdUser,
         method: isOidc ? 'oidc' : 'saml',
+        policy,
+        ssoIdentityId,
+        invitationAccepted: acceptedInvitationId || undefined,
       },
     });
 
@@ -1613,6 +1755,7 @@ async function ssoSamlCallbackHandler(req, res, deps = {}) {
       user: { id: user.id, email: user.email, name: user.name },
       orgSlug: org.slug,
       createdUser,
+      policy,
     });
   } catch (err) {
     console.error('[auth/sso] saml login failed:', err && err.message ? err.message : err);

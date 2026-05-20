@@ -1,5 +1,7 @@
 "use client"
 
+import { getNormalizedApiBaseUrl } from "./api-base-url"
+
 export interface CustomGPT {
   id: string
   name: string
@@ -61,8 +63,19 @@ export interface GPTFilters {
 }
 
 class GPTsService {
-  // Use environment variable or fallback to localhost:5000
-  private baseUrl = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api'}/gpts`
+  private baseUrl = `${getNormalizedApiBaseUrl()}/gpts`
+
+  private authHeaders(includeJson = true): HeadersInit {
+    const headers: Record<string, string> = {}
+    if (includeJson) headers['Content-Type'] = 'application/json'
+
+    if (typeof window !== 'undefined') {
+      const token = window.localStorage.getItem('auth-token')
+      if (token) headers.Authorization = `Bearer ${token}`
+    }
+
+    return headers
+  }
 
   async getGPTs(filters: GPTFilters = {}): Promise<CustomGPT[]> {
     try {
@@ -77,10 +90,7 @@ class GPTsService {
 
       const response = await fetch(`${this.baseUrl}?${params.toString()}`, {
         credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('auth-token')}`
-        },
+        headers: this.authHeaders(),
       })
 
       if (!response.ok) {
@@ -99,10 +109,7 @@ class GPTsService {
     try {
       const response = await fetch(`${this.baseUrl}/${id}`, {
         credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('auth-token')}`
-        },
+        headers: this.authHeaders(),
       })
 
       if (!response.ok) {
@@ -121,10 +128,7 @@ class GPTsService {
     try {
       const response = await fetch(`${this.baseUrl}/share/${shareId}`, {
         credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('auth-token')}`
-        },
+        headers: this.authHeaders(),
       })
 
       if (!response.ok) {
@@ -154,9 +158,7 @@ class GPTsService {
 
       const response = await fetch(this.baseUrl, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('auth-token')}`
-        },
+        headers: this.authHeaders(false),
         credentials: 'include',
         body: formData,
       })
@@ -189,9 +191,7 @@ class GPTsService {
 
       const response = await fetch(`${this.baseUrl}/${id}`, {
         method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('auth-token')}`
-        },
+        headers: this.authHeaders(false),
         credentials: 'include',
         body: formData,
       })
@@ -214,11 +214,7 @@ class GPTsService {
       const response = await fetch(`${this.baseUrl}/${id}`, {
         method: 'DELETE',
         credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('auth-token')}`
-
-        },
+        headers: this.authHeaders(),
       })
 
       if (!response.ok) {
@@ -235,10 +231,7 @@ class GPTsService {
     try {
       const response = await fetch(`${this.baseUrl}/categories`, {
         credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('auth-token')}`
-        },
+        headers: this.authHeaders(),
       })
 
       if (!response.ok) {
@@ -257,11 +250,7 @@ class GPTsService {
     try {
       const response = await fetch(`${this.baseUrl}/${gptId}/chat`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('auth-token')}`
-
-        },
+        headers: this.authHeaders(),
         credentials: 'include',
       })
 
