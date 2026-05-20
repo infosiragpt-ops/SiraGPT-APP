@@ -52,6 +52,7 @@ class AuditQuery {
       resourceId: state.resourceId ?? null,
       orgId: state.orgId ?? null,
       actorType: state.actorType ?? null,
+      tags: Array.isArray(state.tags) ? state.tags.slice() : null,
       from: state.from ?? null,
       to: state.to ?? null,
       limit: state.limit ?? DEFAULT_LIMIT,
@@ -109,6 +110,41 @@ class AuditQuery {
     return this._clone({ actorType: 'api_key', resourceId: keyId });
   }
 
+  /**
+   * Filter rows whose `metadata.tags` array contains ANY of the provided
+   * tags (logical OR). Writers commonly stash classification labels into
+   * `metadata.tags` (e.g. `['security','login']`, `['billing','refund']`)
+   * so operators can slice the audit feed by topic without inventing new
+   * resourceType values. Bad input (non-array, empty, non-strings) is a
+   * no-op so callers can pipe `?tags=...` directly into the builder.
+   *
+   * The Prisma JSON `array_contains` predicate matches when the stored
+   * JSON array contains the supplied element. Postgres' jsonb backend
+   * accepts either a scalar or an array argument for membership; we emit
+   * one predicate per tag and OR them together so any-match semantics
+   * hold even when the metadata column is null (the predicate simply
+   * fails to match instead of throwing).
+   */
+  byTags(tags) {
+    if (!Array.isArray(tags)) return this;
+    const clean = tags
+      .filter((t) => typeof t === 'string')
+      .map((t) => t.trim())
+      .filter((t) => t.length > 0);
+    if (clean.length === 0) return this;
+    // Dedupe while preserving order so the generated where clause is
+    // stable across repeated calls with equivalent inputs.
+    const seen = new Set();
+    const deduped = [];
+    for (const t of clean) {
+      if (!seen.has(t)) {
+        seen.add(t);
+        deduped.push(t);
+      }
+    }
+    return this._clone({ tags: deduped });
+  }
+
   byDate(from, to) {
     const f = toDate(from);
     const t = toDate(to);
@@ -139,12 +175,35 @@ class AuditQuery {
     if (s.action) where.action = s.action;
     if (s.resourceType) where.resourceType = s.resourceType;
     if (s.resourceId) where.resourceId = s.resourceId;
+    // metadata is `Json?` — multiple JSON-path predicates may need to be
+    // emitted simultaneously (orgId equality + tags OR-match). Prisma
+    // doesn't accept two top-level `metadata:` filters in the same
+    // object, so we accumulate them under an `AND:` array. The single
+    // predicate case is left flat so existing tests / consumers that
+    // inspect `where.metadata` directly keep working.
+    const metaPredicates = [];
     if (s.orgId) {
-      // metadata is `Json?` — Prisma JSON path filter. The writer stores
-      // `metadata.orgId` as a plain string, so `equals` is the correct
-      // operator. We keep this isolated under `where.metadata` so it
-      // composes with any future JSON predicates added by callers.
-      where.metadata = { path: ['orgId'], equals: s.orgId };
+      metaPredicates.push({ metadata: { path: ['orgId'], equals: s.orgId } });
+    }
+    if (Array.isArray(s.tags) && s.tags.length > 0) {
+      // `array_contains` is the Postgres jsonb membership operator. We
+      // emit one predicate per tag and OR them so any-match semantics
+      // hold (a row with tags=['security','login'] matches ?tags=login,
+      // ?tags=security, and ?tags=security,login). Empty/null metadata
+      // simply fails to match.
+      const tagPreds = s.tags.map((t) => ({
+        metadata: { path: ['tags'], array_contains: [t] },
+      }));
+      metaPredicates.push(tagPreds.length === 1 ? tagPreds[0] : { OR: tagPreds });
+    }
+    if (metaPredicates.length === 1) {
+      // Preserve the historical flat shape (`where.metadata = {...}`) so
+      // older tests that assert on `where.metadata` directly still pass.
+      const only = metaPredicates[0];
+      if (only.metadata) where.metadata = only.metadata;
+      else where.AND = [only];
+    } else if (metaPredicates.length > 1) {
+      where.AND = metaPredicates;
     }
     if (s.from || s.to) {
       where.createdAt = {};

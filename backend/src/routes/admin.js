@@ -2229,7 +2229,7 @@ router.post('/webhooks/retry-failed', requireSuperAdmin, async (req, res) => {
 });
 
 // ── Audit log query DSL endpoint ───────────────────────────────────────────
-// GET /api/admin/audit-logs?userId=&action=&resource=&resourceId=&orgId=&apiKeyId=&from=&to=&page=&limit=
+// GET /api/admin/audit-logs?userId=&action=&resource=&resourceId=&orgId=&apiKeyId=&tags=&from=&to=&page=&limit=
 router.get('/audit-logs', requireSuperAdmin, async (req, res) => {
   try {
     const result = await runAuditLogQuery(req);
@@ -2279,6 +2279,18 @@ async function runAuditLogQuery(req) {
   // overrides any conflicting filters when the operator is hunting a
   // specific key's activity.
   if (req.query.apiKeyId) q = q.byApiKey(String(req.query.apiKeyId));
+  // Ratchet 44 — `?tags=tag1,tag2` slices on metadata.tags. Accepts a
+  // CSV string or a repeated `?tags=a&tags=b` query (express collapses
+  // those into an array). Whitespace + empty fragments are dropped by
+  // the builder, so a stray trailing comma is safe.
+  if (req.query.tags) {
+    const raw = Array.isArray(req.query.tags) ? req.query.tags : [req.query.tags];
+    const tags = raw
+      .flatMap((entry) => String(entry).split(','))
+      .map((t) => t.trim())
+      .filter((t) => t.length > 0);
+    if (tags.length > 0) q = q.byTags(tags);
+  }
   if (req.query.from || req.query.to) q = q.byDate(req.query.from || null, req.query.to || null);
   if (req.query.page) q = q.page(req.query.page);
   if (req.query.limit) q = q.limit(req.query.limit);

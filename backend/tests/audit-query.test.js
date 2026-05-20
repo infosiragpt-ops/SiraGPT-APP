@@ -239,3 +239,85 @@ describe('AuditQuery — byApiKey() api-key activity filter', () => {
     assert.equal(b.toJSON().resourceId, 'key_abc');
   });
 });
+
+// Ratchet 44 — byTags() emits a metadata.tags `array_contains` predicate
+// (OR-joined when multiple tags are supplied) so operators can slice the
+// audit feed by classification labels written into metadata.tags.
+describe('AuditQuery — byTags() metadata.tags filter', () => {
+  test('byTags with single tag emits flat metadata array_contains', () => {
+    const where = query(null).byTags(['security']).toWhere();
+    assert.deepEqual(where.metadata, {
+      path: ['tags'],
+      array_contains: ['security'],
+    });
+  });
+
+  test('byTags with multiple tags emits OR of array_contains', () => {
+    const where = query(null).byTags(['security', 'login']).toWhere();
+    assert.ok(Array.isArray(where.AND));
+    assert.equal(where.AND.length, 1);
+    const or = where.AND[0].OR;
+    assert.ok(Array.isArray(or));
+    assert.equal(or.length, 2);
+    assert.deepEqual(or[0], { metadata: { path: ['tags'], array_contains: ['security'] } });
+    assert.deepEqual(or[1], { metadata: { path: ['tags'], array_contains: ['login'] } });
+  });
+
+  test('byTags trims, drops empties, dedupes, and rejects non-strings', () => {
+    const where = query(null)
+      .byTags(['  security  ', '', 'security', 42, null, 'login'])
+      .toWhere();
+    const or = where.AND[0].OR;
+    assert.equal(or.length, 2);
+    assert.deepEqual(or[0].metadata.array_contains, ['security']);
+    assert.deepEqual(or[1].metadata.array_contains, ['login']);
+  });
+
+  test('byTags is a no-op for non-array / empty / all-invalid input', () => {
+    assert.equal(query(null).byTags(null).toWhere().metadata, undefined);
+    assert.equal(query(null).byTags('security').toWhere().metadata, undefined);
+    assert.equal(query(null).byTags([]).toWhere().metadata, undefined);
+    assert.equal(query(null).byTags(['', '  ', 42]).toWhere().metadata, undefined);
+    assert.equal(query(null).byTags(['', '  ', 42]).toWhere().AND, undefined);
+  });
+
+  test('byTags composes with byOrg under AND', () => {
+    const where = query(null).byOrg('org_42').byTags(['security', 'login']).toWhere();
+    assert.ok(Array.isArray(where.AND));
+    assert.equal(where.AND.length, 2);
+    // orgId predicate first, then tags OR predicate.
+    assert.deepEqual(where.AND[0], { metadata: { path: ['orgId'], equals: 'org_42' } });
+    assert.ok(where.AND[1].OR);
+    assert.equal(where.AND[1].OR.length, 2);
+    // metadata should NOT be set at the top level in this combined case.
+    assert.equal(where.metadata, undefined);
+  });
+
+  test('byTags composes with byOrg (single tag) under AND', () => {
+    const where = query(null).byOrg('org_42').byTags(['security']).toWhere();
+    assert.ok(Array.isArray(where.AND));
+    assert.equal(where.AND.length, 2);
+    assert.deepEqual(where.AND[0], { metadata: { path: ['orgId'], equals: 'org_42' } });
+    assert.deepEqual(where.AND[1], {
+      metadata: { path: ['tags'], array_contains: ['security'] },
+    });
+  });
+
+  test('byTags flows into prisma findMany where clause', async () => {
+    const { prisma, capture } = makePrismaCapture([{ id: 'a1' }]);
+    await query(prisma).byTags(['security', 'login']).run();
+    const w = capture.findMany.where;
+    assert.ok(Array.isArray(w.AND));
+    const or = w.AND[0].OR;
+    assert.equal(or.length, 2);
+    assert.deepEqual(or[0], { metadata: { path: ['tags'], array_contains: ['security'] } });
+  });
+
+  test('builder purity holds for byTags', () => {
+    const a = query(null);
+    const b = a.byTags(['security']);
+    assert.notEqual(a, b);
+    assert.equal(a.toJSON().tags, null);
+    assert.deepEqual(b.toJSON().tags, ['security']);
+  });
+});
