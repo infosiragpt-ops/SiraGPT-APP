@@ -95,8 +95,8 @@ model User {
   // handler accepts a 6-digit TOTP code in addition to (or instead of)
   // an SMS challenge. Both columns are nullable / default-off so legacy
   // rows keep working.
-  totpSecret  String?
-  totpEnabled Boolean @default(false)
+  totpSecret        String?
+  totpEnabled       Boolean @default(false)
   // Ratchet 45 — TOTP recovery codes (Task 2). 10 single-use 16-char
   // codes are generated when the user calls
   // POST /api/users/me/2fa/totp/recovery-codes (totpEnabled required).
@@ -149,13 +149,13 @@ model User {
   // A user can belong to multiple organizations with different roles.
   // `ownedOrganizations` covers the legacy "creator" pointer on the org
   // row; `organizationMemberships` is the source of truth for ACL.
-  ownedOrganizations      Organization[]  @relation("OrganizationOwner")
+  ownedOrganizations      Organization[]        @relation("OrganizationOwner")
   organizationMemberships OrgMembership[]
-  sentOrgInvitations      OrgInvitation[] @relation("OrgInvitationInviter")
-  createdOrgAnnouncements OrgAnnouncement[] @relation("OrgAnnouncementCreator")
+  sentOrgInvitations      OrgInvitation[]       @relation("OrgInvitationInviter")
+  createdOrgAnnouncements OrgAnnouncement[]     @relation("OrgAnnouncementCreator")
   announcementReads       OrgAnnouncementRead[]
-  pendingTransfersFrom    OrgPendingTransfer[] @relation("OrgPendingTransferFrom")
-  pendingTransfersTo      OrgPendingTransfer[] @relation("OrgPendingTransferTo")
+  pendingTransfersFrom    OrgPendingTransfer[]  @relation("OrgPendingTransferFrom")
+  pendingTransfersTo      OrgPendingTransfer[]  @relation("OrgPendingTransferTo")
 
   @@index([deletedAt])
   @@map("users")
@@ -399,26 +399,26 @@ model Bookmark {
 // to when a matching event is published. The secret is the HMAC key
 // the recipient uses to verify the signature header.
 model WebhookEndpoint {
-  id             String    @id @default(cuid())
-  userId         String
+  id                      String    @id @default(cuid())
+  userId                  String
   // Optional org scope. When set, this endpoint participates in org-level
   // fan-out (publish payloads carrying `orgId`). userId still records the
   // creator for audit / quota attribution. Cycle 45 added per-org webhooks.
-  organizationId String?
-  url            String
-  events         String[]
-  secret         String
+  organizationId          String?
+  url                     String
+  events                  String[]
+  secret                  String
   // Ratchet 45 (Task 1): rotate-secret grace window. When an operator
   // rotates the HMAC secret, the prior value is parked here until
   // `previousSecretExpiresAt` so downstream consumers have a window to
   // roll their stored secret without dropped deliveries. Both fields
   // are cleared on the next rotation (or by GC sweeping expired rows).
-  previousSecret           String?
-  previousSecretExpiresAt  DateTime?
+  previousSecret          String?
+  previousSecretExpiresAt DateTime?
   // Ratchet 44 (Task 1): per-endpoint retry policy override. When null
   // the dispatcher falls back to its default (3 retries). Stored as
   // nullable so existing rows keep the default without backfill.
-  maxRetries     Int?
+  maxRetries              Int?
   // Ratchet 44 (Task 2): optional delivery filters. Shape:
   //   { events?: string[], excludeUsers?: string[] }
   // - `events`        : include-list of event names (in addition to the
@@ -429,10 +429,10 @@ model WebhookEndpoint {
   //                     dropped for this endpoint (per-recipient mute).
   // Anything else in the JSON is ignored — the field is intentionally
   // forward-compatible.
-  filters        Json?
-  isActive       Boolean   @default(true)
-  createdAt      DateTime  @default(now())
-  lastDeliveryAt DateTime?
+  filters                 Json?
+  isActive                Boolean   @default(true)
+  createdAt               DateTime  @default(now())
+  lastDeliveryAt          DateTime?
 
   user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -1334,24 +1334,24 @@ model PolicyAcceptance {
 // key acts on behalf of that org and the bearer is treated as the
 // owning `userId` with the org context attached to req.organization.
 model ApiKey {
-  id             String    @id @default(cuid())
-  name           String
-  prefix         String
-  tokenHash      String    @unique
-  organizationId String?
-  userId         String
-  scopes         String[]  @default([])
-  lastUsedAt     DateTime?
-  expiresAt      DateTime?
-  createdAt      DateTime  @default(now())
+  id                 String    @id @default(cuid())
+  name               String
+  prefix             String
+  tokenHash          String    @unique
+  organizationId     String?
+  userId             String
+  scopes             String[]  @default([])
+  lastUsedAt         DateTime?
+  expiresAt          DateTime?
+  createdAt          DateTime  @default(now())
   // Ratchet 45 — per-scope last-used aggregate populated by a sampled
   // (1-in-50) fire-and-forget update from requireScope(). Shape:
   // { "<scope>": { count: number, lastUsedAt: ISOString } }
-  usedScopes     Json?
+  usedScopes         Json?
   // Ratchet 45 (Task 2) — sibling histogram populated by the same
   // requireScope() sampler keyed by the Express-matched route template.
   // Shape: { "<METHOD> <pathPattern>": count }
-  usedEndpoints  Json?
+  usedEndpoints      Json?
   // Ratchet 45 — optional per-key override of the plan-derived default
   // (env SIRAGPT_API_KEY_DEFAULT_RPM, fallback 60). Requests per minute;
   // null means "use the plan default for the owning user/org".
@@ -1456,7 +1456,7 @@ model Organization {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  owner             User               @relation("OrganizationOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  owner             User                 @relation("OrganizationOwner", fields: [ownerId], references: [id], onDelete: Cascade)
   memberships       OrgMembership[]
   invitations       OrgInvitation[]
   chats             Chat[]
@@ -1527,13 +1527,13 @@ model OrgInvitation {
 // owner can rescind via DELETE on the same id. Once accepted, the row
 // is stamped with `acceptedAt` and the live transfer logic runs.
 model OrgPendingTransfer {
-  id           String    @id @default(cuid())
-  orgId        String
-  fromOwnerId  String
-  toOwnerId    String
-  requestedAt  DateTime  @default(now())
-  expiresAt    DateTime
-  acceptedAt   DateTime?
+  id          String    @id @default(cuid())
+  orgId       String
+  fromOwnerId String
+  toOwnerId   String
+  requestedAt DateTime  @default(now())
+  expiresAt   DateTime
+  acceptedAt  DateTime?
 
   organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
   fromOwner    User         @relation("OrgPendingTransferFrom", fields: [fromOwnerId], references: [id], onDelete: Cascade)
@@ -1591,8 +1591,8 @@ model OrgAnnouncement {
   createdAt   DateTime                @default(now())
   expiresAt   DateTime?
 
-  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  createdBy    User         @relation("OrgAnnouncementCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  organization Organization          @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  createdBy    User                  @relation("OrgAnnouncementCreator", fields: [createdById], references: [id], onDelete: Cascade)
   reads        OrgAnnouncementRead[]
 
   @@index([orgId, createdAt])
@@ -1686,9 +1686,9 @@ model TwoFAChallenge {
   id          String    @id @default(cuid())
   challengeId String    @unique
   userId      String?
-  channel     String    // 'sms'  — leaves room for 'totp' / 'email' later
-  destination String    // E.164 phone or email used to deliver the OTP
-  lookup      String    // SHA-256 of normalized destination for safer indexing
+  channel     String // 'sms'  — leaves room for 'totp' / 'email' later
+  destination String // E.164 phone or email used to deliver the OTP
+  lookup      String // SHA-256 of normalized destination for safer indexing
   codeHash    String
   expiresAt   DateTime
   attempts    Int       @default(0)
