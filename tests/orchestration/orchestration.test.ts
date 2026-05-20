@@ -760,6 +760,7 @@ describe('createLangGraphOrchestrator', () => {
 
   it('runs the orchestration pipeline to completion', async () => {
     const checkpoints = [];
+    const warnings = [];
     const orch = createLangGraphOrchestrator({
       checkpointStore: {
         async put(checkpoint) {
@@ -769,6 +770,11 @@ describe('createLangGraphOrchestrator', () => {
           return checkpoints[checkpoints.length - 1] || null;
         },
       },
+      logger: {
+        warn(...args) {
+          warnings.push(args);
+        },
+      },
     });
     const result = await orch.run({
       threadId: 'thread-test',
@@ -776,6 +782,7 @@ describe('createLangGraphOrchestrator', () => {
     });
     expect(result).toBeDefined();
     expect(result.stage).toBe('done');
+    expect(warnings).toEqual([]);
     expect(checkpoints.length).toBeGreaterThan(0);
   });
 
