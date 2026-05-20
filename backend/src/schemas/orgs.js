@@ -103,6 +103,18 @@ const ExportSettingsSchema = z
   })
   .strict();
 
+// Per-org ownership-transfer policy (cycle 164). When
+// requireApprovalDays > 0, POST /api/orgs/:id/transfer-ownership/request
+// inserts an OrgPendingTransfer row that the proposed new owner must
+// accept within the window. A value of 0 (the default) preserves the
+// legacy instant-swap behaviour. Restored after upstream-port regression
+// — tests in orgs-audit-and-settings.test.js depend on this.
+const TransferSettingsSchema = z
+  .object({
+    requireApprovalDays: z.number().int().min(0).max(30).optional(),
+  })
+  .strict();
+
 // `.passthrough()` keeps unknown keys (forward-compat). The known keys
 // still get validated; the route layer extracts the leftover keys and
 // returns them as `warnings` so callers know they're not yet recognised.
@@ -115,6 +127,7 @@ const OrgSettingsSchema = z
     ai: AiSettingsSchema.optional(),
     audit: AuditSettingsSchema.optional(),
     export: ExportSettingsSchema.optional(),
+    transfer: TransferSettingsSchema.optional(),
   })
   .passthrough();
 
@@ -127,6 +140,7 @@ const ORG_SETTINGS_KNOWN_KEYS = Object.freeze([
   'ai',
   'audit',
   'export',
+  'transfer',
 ]);
 
 // PATCH-friendly variant: each known key may be explicitly `null` to
@@ -141,6 +155,7 @@ const OrgSettingsPatchSchema = z
     ai: z.union([AiSettingsSchema, z.null()]).optional(),
     audit: z.union([AuditSettingsSchema, z.null()]).optional(),
     export: z.union([ExportSettingsSchema, z.null()]).optional(),
+    transfer: z.union([TransferSettingsSchema, z.null()]).optional(),
   })
   .passthrough();
 
