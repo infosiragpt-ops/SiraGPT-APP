@@ -95,6 +95,7 @@ describe('system-cron', () => {
         'cost-tracker-archive',
         'cost-tracker-flush',
         'detect-idle-orgs',
+        'detect-idle-users',
         'failed-email-retry',
         'hard-delete-deleted-users',
         'prune-api-usage',
@@ -118,12 +119,14 @@ describe('system-cron', () => {
       const archive = res.tasks.find((t) => t.name === 'archive-audit-logs');
       const sweep = res.tasks.find((t) => t.name === 'sweep-expired-sessions');
       const evt = res.tasks.find((t) => t.name === 'sweep-expired-verification-tokens');
+      const idleUsers = res.tasks.find((t) => t.name === 'detect-idle-users');
       assert.equal(scrub.schedule, '30 2 * * *');
       assert.equal(hard.schedule, '0 3 * * *');
       assert.equal(prune.schedule, '30 3 * * *');
       assert.equal(archive.schedule, '0 4 * * *');
       assert.equal(sweep.schedule, '0 * * * *');
       assert.equal(evt.schedule, '30 4 * * *');
+      assert.equal(idleUsers.schedule, '30 6 * * *');
       const costArchive = res.tasks.find((t) => t.name === 'cost-tracker-archive');
       assert.equal(costArchive.schedule, '30 5 * * *');
     } finally {
