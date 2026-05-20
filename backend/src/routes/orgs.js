@@ -14,6 +14,9 @@
  *   GET    /api/orgs/:id/members                        — list members (any member)
  *   POST   /api/orgs/:id/members/:userId/role           — change role (ADMIN+; cannot demote last OWNER)
  *   POST   /api/orgs/:id/transfer-ownership             — hand OWNER role to another MEMBER+ (OWNER only)
+ *   POST   /api/orgs/:id/transfer-ownership/request      — request transfer w/ optional approval window (OWNER only; ratchet 44)
+ *   POST   /api/orgs/transfer-requests/:id/accept        — new owner accepts pending transfer (ratchet 44)
+ *   DELETE /api/orgs/transfer-requests/:id               — current owner cancels pending transfer (ratchet 44)
  *   POST   /api/orgs/:id/leave                          — self-leave convenience (refuses last OWNER)
  *   DELETE /api/orgs/:id/members/:userId                — remove member (ADMIN+ or self)
  *   POST   /api/orgs/:id/chats/:chatId/share            — share a chat into the org
@@ -48,6 +51,7 @@ const {
   orgRequiresTwoFactor,
   userHasTwoFactor,
   assertOrgTwoFactor,
+  orgTransferApprovalDays,
 } = require('../services/orgs-service');
 const { defaultSteps, computeProgress } = require('../services/org-onboarding');
 const { responseCache, invalidate: invalidateResponseCache } = require('../middleware/response-cache');
@@ -1143,6 +1147,313 @@ async function transferOwnershipHandler(req, res, deps = { prisma, writeAuditLog
 }
 
 router.post('/:id/transfer-ownership', authenticateToken, (req, res) => transferOwnershipHandler(req, res));
+
+// ─── Ownership-transfer approval workflow (ratchet 44, cycle 76) ────
+//
+// When `settings.transfer.requireApprovalDays > 0`, the legacy instant
+// swap above is replaced by a two-step dance:
+//
+//   1. POST /api/orgs/:id/transfer-ownership/request
+//      The current OWNER calls this to *propose* a transfer. With
+//      `requireApprovalDays > 0` we insert an OrgPendingTransfer row
+//      and return `{ pending: true, transferId, expiresAt }`. With
+//      `requireApprovalDays === 0` (the default) we degrade to the
+//      original transferOwnershipHandler for backward compatibility
+//      so existing clients keep working unchanged.
+//
+//   2. POST /api/orgs/transfer-requests/:id/accept
+//      The proposed new owner calls this within the window to finalise
+//      the swap. The membership graph is mutated inside the same
+//      $transaction that stamps `acceptedAt`, identical to the in-line
+//      path used by the instant handler.
+//
+//   3. DELETE /api/orgs/transfer-requests/:id
+//      The current OWNER may rescind a still-pending request. Once
+//      accepted the row is read-only.
+//
+// All three endpoints reuse the per-org members-cache invalidator and
+// emit the same `org_ownership_transfer*` audit actions so existing
+// dashboards / SSE consumers don't need a second integration.
+
+/**
+ * Shared membership-swap helper. Performs the OWNER ↔ ADMIN swap
+ * atomically and returns the demoted/promoted/updatedOrg trio. Used
+ * by both the legacy instant handler and the pending-transfer accept
+ * handler so the on-the-wire result shape stays consistent.
+ *
+ * Does NOT enforce role checks — the caller is responsible for that.
+ */
+async function performOwnershipSwap(tx, { orgId, fromOwnerId, toOwnerId }) {
+  const demoted = await tx.orgMembership.update({
+    where: { orgId_userId: { orgId, userId: fromOwnerId } },
+    data: { role: 'ADMIN' },
+  });
+  const promoted = await tx.orgMembership.update({
+    where: { orgId_userId: { orgId, userId: toOwnerId } },
+    data: { role: 'OWNER' },
+  });
+  const updatedOrg = await tx.organization.update({
+    where: { id: orgId },
+    data: { ownerId: toOwnerId },
+  });
+  return { demoted, promoted, updatedOrg };
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * POST /api/orgs/:id/transfer-ownership/request — gate the transfer
+ * through the org's configured approval window. When the policy is
+ * disabled (default), delegates to the legacy in-line handler so
+ * existing clients see no behavioural change.
+ */
+async function requestTransferHandler(req, res, deps = { prisma, writeAuditLog }) {
+  const db = deps.prisma || prisma;
+  const audit = deps.writeAuditLog || writeAuditLog;
+  const callerId = req.user.id;
+  const orgId = req.params.id;
+  const newOwnerId = typeof req.body?.newOwnerId === 'string' ? req.body.newOwnerId.trim() : '';
+  if (!newOwnerId) return res.status(400).json({ error: 'newOwnerId is required' });
+  if (newOwnerId === callerId) {
+    return res.status(400).json({ error: 'newOwnerId must differ from the current OWNER' });
+  }
+
+  try {
+    const caller = await assertMembership(db, orgId, callerId, 'OWNER');
+    if (caller.role !== 'OWNER') {
+      return res.status(403).json({ error: 'only OWNER can transfer ownership' });
+    }
+
+    const org = await db.organization.findUnique({
+      where: { id: orgId },
+      select: { id: true, settings: true },
+    });
+    if (!org) return res.status(404).json({ error: 'organization not found' });
+
+    const days = orgTransferApprovalDays(org);
+    if (days === 0) {
+      // Instant transfer — preserve legacy semantics 1:1.
+      return transferOwnershipHandler(req, res, deps);
+    }
+
+    const target = await db.orgMembership.findUnique({
+      where: { orgId_userId: { orgId, userId: newOwnerId } },
+    });
+    if (!target) {
+      return res.status(404).json({ error: 'target user is not a member of this organization' });
+    }
+    if (!roleAtLeast(target.role, 'MEMBER')) {
+      return res.status(400).json({ error: 'newOwnerId must be at least a MEMBER of the org' });
+    }
+
+    // Refuse to enqueue if there's already an active (unaccepted,
+    // unexpired) request for this org. Cancel first or wait for it
+    // to expire — keeps the workflow predictable for the new owner.
+    const now = new Date();
+    const existing = await db.orgPendingTransfer.findFirst({
+      where: {
+        orgId,
+        acceptedAt: null,
+        expiresAt: { gt: now },
+      },
+      select: { id: true, toOwnerId: true, expiresAt: true },
+    });
+    if (existing) {
+      return res.status(409).json({
+        error: 'an ownership transfer request is already pending',
+        code: 'transfer_already_pending',
+        transferId: existing.id,
+        toOwnerId: existing.toOwnerId,
+        expiresAt: existing.expiresAt instanceof Date ? existing.expiresAt.toISOString() : existing.expiresAt,
+      });
+    }
+
+    const expiresAt = new Date(now.getTime() + days * DAY_MS);
+    const created = await db.orgPendingTransfer.create({
+      data: {
+        orgId,
+        fromOwnerId: callerId,
+        toOwnerId: newOwnerId,
+        expiresAt,
+      },
+    });
+
+    void audit(db, {
+      action: 'org_ownership_transfer_request',
+      userId: callerId,
+      resource: 'organization',
+      resourceId: orgId,
+      after: { transferId: created.id, toOwnerId: newOwnerId, expiresAt: expiresAt.toISOString() },
+      metadata: { orgId, requireApprovalDays: days },
+      req,
+    });
+
+    res.status(202).json({
+      pending: true,
+      transferId: created.id,
+      orgId,
+      fromOwnerId: callerId,
+      toOwnerId: newOwnerId,
+      requestedAt: created.requestedAt instanceof Date ? created.requestedAt.toISOString() : created.requestedAt,
+      expiresAt: created.expiresAt instanceof Date ? created.expiresAt.toISOString() : created.expiresAt,
+      requireApprovalDays: days,
+    });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] transfer-ownership/request failed:', err.message);
+    res.status(500).json({ error: 'failed to request ownership transfer' });
+  }
+}
+
+/**
+ * POST /api/orgs/transfer-requests/:id/accept — the proposed new owner
+ * finalises the swap. Atomically stamps `acceptedAt` and performs the
+ * membership swap inside a single $transaction. Rejects if the row is
+ * already accepted, already expired, or addressed to a different user.
+ */
+async function acceptTransferHandler(req, res, deps = { prisma, writeAuditLog }) {
+  const db = deps.prisma || prisma;
+  const audit = deps.writeAuditLog || writeAuditLog;
+  const callerId = req.user.id;
+  const transferId = req.params.id;
+  if (!transferId) return res.status(400).json({ error: 'invalid transferId' });
+
+  try {
+    const pending = await db.orgPendingTransfer.findUnique({
+      where: { id: transferId },
+    });
+    if (!pending) return res.status(404).json({ error: 'transfer request not found' });
+    if (pending.toOwnerId !== callerId) {
+      return res.status(403).json({ error: 'only the proposed new owner can accept this request' });
+    }
+    if (pending.acceptedAt) {
+      return res.status(409).json({ error: 'transfer request already accepted', code: 'transfer_already_accepted' });
+    }
+    const now = new Date();
+    const expiresAt = pending.expiresAt instanceof Date ? pending.expiresAt : new Date(pending.expiresAt);
+    if (expiresAt.getTime() <= now.getTime()) {
+      return res.status(410).json({ error: 'transfer request has expired', code: 'transfer_expired' });
+    }
+
+    // Re-verify both ends of the swap are still members and the
+    // from-side is still OWNER. The org state may have drifted since
+    // the request was created (e.g. previous owner left, role changed).
+    const fromMembership = await db.orgMembership.findUnique({
+      where: { orgId_userId: { orgId: pending.orgId, userId: pending.fromOwnerId } },
+    });
+    if (!fromMembership || fromMembership.role !== 'OWNER') {
+      return res.status(409).json({
+        error: 'requesting OWNER is no longer the org OWNER',
+        code: 'transfer_stale_from',
+      });
+    }
+    const toMembership = await db.orgMembership.findUnique({
+      where: { orgId_userId: { orgId: pending.orgId, userId: pending.toOwnerId } },
+    });
+    if (!toMembership) {
+      return res.status(409).json({
+        error: 'proposed new owner is no longer a member of this organization',
+        code: 'transfer_stale_to',
+      });
+    }
+    if (!roleAtLeast(toMembership.role, 'MEMBER')) {
+      return res.status(409).json({
+        error: 'proposed new owner must be at least a MEMBER of the org',
+        code: 'transfer_stale_role',
+      });
+    }
+    const previousTargetRole = toMembership.role;
+
+    const result = await db.$transaction(async (tx) => {
+      const swap = await performOwnershipSwap(tx, {
+        orgId: pending.orgId,
+        fromOwnerId: pending.fromOwnerId,
+        toOwnerId: pending.toOwnerId,
+      });
+      const stamped = await tx.orgPendingTransfer.update({
+        where: { id: pending.id },
+        data: { acceptedAt: now },
+      });
+      return { ...swap, stamped };
+    });
+
+    void audit(db, {
+      action: 'org_ownership_transfer',
+      userId: callerId,
+      resource: 'organization',
+      resourceId: pending.orgId,
+      before: { ownerId: pending.fromOwnerId, targetRole: previousTargetRole },
+      after: { ownerId: pending.toOwnerId, previousOwnerRole: 'ADMIN' },
+      metadata: { orgId: pending.orgId, transferId: pending.id, viaPendingRequest: true },
+      req,
+    });
+
+    invalidateMembersCache(pending.orgId);
+
+    res.json({
+      ok: true,
+      transferId: pending.id,
+      orgId: pending.orgId,
+      ownerId: result.updatedOrg.ownerId,
+      previousOwnerId: pending.fromOwnerId,
+      previousOwnerRole: result.demoted.role,
+      newOwnerRole: result.promoted.role,
+      previousTargetRole,
+      acceptedAt: result.stamped.acceptedAt instanceof Date ? result.stamped.acceptedAt.toISOString() : result.stamped.acceptedAt,
+    });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] transfer-requests/accept failed:', err.message);
+    res.status(500).json({ error: 'failed to accept ownership transfer' });
+  }
+}
+
+/**
+ * DELETE /api/orgs/transfer-requests/:id — the current OWNER cancels
+ * a still-pending request. Cannot rescind an already-accepted row.
+ */
+async function cancelTransferHandler(req, res, deps = { prisma, writeAuditLog }) {
+  const db = deps.prisma || prisma;
+  const audit = deps.writeAuditLog || writeAuditLog;
+  const callerId = req.user.id;
+  const transferId = req.params.id;
+  if (!transferId) return res.status(400).json({ error: 'invalid transferId' });
+
+  try {
+    const pending = await db.orgPendingTransfer.findUnique({
+      where: { id: transferId },
+    });
+    if (!pending) return res.status(404).json({ error: 'transfer request not found' });
+    if (pending.fromOwnerId !== callerId) {
+      return res.status(403).json({ error: 'only the requesting OWNER can cancel this request' });
+    }
+    if (pending.acceptedAt) {
+      return res.status(409).json({ error: 'transfer request already accepted', code: 'transfer_already_accepted' });
+    }
+
+    await db.orgPendingTransfer.delete({ where: { id: pending.id } });
+
+    void audit(db, {
+      action: 'org_ownership_transfer_cancel',
+      userId: callerId,
+      resource: 'organization',
+      resourceId: pending.orgId,
+      before: { transferId: pending.id, toOwnerId: pending.toOwnerId },
+      metadata: { orgId: pending.orgId, transferId: pending.id },
+      req,
+    });
+
+    res.json({ ok: true, transferId: pending.id, orgId: pending.orgId });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] transfer-requests cancel failed:', err.message);
+    res.status(500).json({ error: 'failed to cancel ownership transfer' });
+  }
+}
+
+router.post('/:id/transfer-ownership/request', authenticateToken, (req, res) => requestTransferHandler(req, res));
+router.post('/transfer-requests/:id/accept', authenticateToken, (req, res) => acceptTransferHandler(req, res));
+router.delete('/transfer-requests/:id', authenticateToken, (req, res) => cancelTransferHandler(req, res));
 
 // ─── POST /api/orgs/:id/leave ───────────────────────────────────────
 // Convenience self-leave endpoint. Mirrors DELETE /members/:userId
@@ -4345,6 +4656,9 @@ router.delete('/:id/announcements/:announcementId', authenticateToken, async (re
 router.__roleAtLeast = roleAtLeast;
 router.__handlers = {
   transferOwnership: transferOwnershipHandler,
+  requestTransfer: requestTransferHandler,
+  acceptTransfer: acceptTransferHandler,
+  cancelTransfer: cancelTransferHandler,
   leaveOrg: leaveOrgHandler,
   listOrgAuditLogs: listOrgAuditLogsHandler,
   listMemberActivity: listMemberActivityHandler,

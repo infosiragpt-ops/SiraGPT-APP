@@ -167,6 +167,32 @@ async function uniqueSlug(prisma, base) {
   return `${root}-${Date.now().toString(36)}`;
 }
 
+/**
+ * Returns the org's configured transfer-approval window in days. Reads
+ * `settings.transfer.requireApprovalDays` and clamps the result into
+ * the [0, 30] range to mirror the zod schema in `schemas/orgs.js`. A
+ * value of 0 (or any non-integer / negative input) means the legacy
+ * instant-transfer path applies; otherwise the new owner must accept
+ * the request within that many days.
+ */
+function orgTransferApprovalDays(org) {
+  if (!org || typeof org !== 'object') return 0;
+  const settings = org.settings && typeof org.settings === 'object' && !Array.isArray(org.settings)
+    ? org.settings
+    : null;
+  if (!settings) return 0;
+  const transfer = settings.transfer && typeof settings.transfer === 'object' && !Array.isArray(settings.transfer)
+    ? settings.transfer
+    : null;
+  if (!transfer) return 0;
+  const days = transfer.requireApprovalDays;
+  if (typeof days !== 'number' || !Number.isFinite(days)) return 0;
+  const int = Math.trunc(days);
+  if (int <= 0) return 0;
+  if (int > 30) return 30;
+  return int;
+}
+
 module.exports = {
   ROLE_RANK,
   VALID_ROLES,
@@ -181,4 +207,5 @@ module.exports = {
   orgRequiresTwoFactor,
   userHasTwoFactor,
   assertOrgTwoFactor,
+  orgTransferApprovalDays,
 };

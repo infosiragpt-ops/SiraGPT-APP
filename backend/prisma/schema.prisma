@@ -154,6 +154,8 @@ model User {
   sentOrgInvitations      OrgInvitation[] @relation("OrgInvitationInviter")
   createdOrgAnnouncements OrgAnnouncement[] @relation("OrgAnnouncementCreator")
   announcementReads       OrgAnnouncementRead[]
+  pendingTransfersFrom    OrgPendingTransfer[] @relation("OrgPendingTransferFrom")
+  pendingTransfersTo      OrgPendingTransfer[] @relation("OrgPendingTransferTo")
 
   @@index([deletedAt])
   @@map("users")
@@ -1455,6 +1457,7 @@ model Organization {
   slackIntegrations SlackIntegration[]
   apiKeys           ApiKey[]
   announcements     OrgAnnouncement[]
+  pendingTransfers  OrgPendingTransfer[]
 
   @@index([ownerId])
   @@index([slug])
@@ -1505,6 +1508,34 @@ model OrgInvitation {
   @@index([orgId, email])
   @@index([email])
   @@map("org_invitations")
+}
+
+// Ratchet 44 — pending ownership transfer (cycle 76).
+//
+// When `settings.transfer.requireApprovalDays > 0`, the existing OWNER
+// initiates the swap via POST /api/orgs/:id/transfer-ownership/request
+// which inserts a row here instead of mutating the membership graph
+// in-line. The proposed new owner has `expiresAt - requestedAt` to
+// accept via POST /api/orgs/transfer-requests/:id/accept; the current
+// owner can rescind via DELETE on the same id. Once accepted, the row
+// is stamped with `acceptedAt` and the live transfer logic runs.
+model OrgPendingTransfer {
+  id           String    @id @default(cuid())
+  orgId        String
+  fromOwnerId  String
+  toOwnerId    String
+  requestedAt  DateTime  @default(now())
+  expiresAt    DateTime
+  acceptedAt   DateTime?
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  fromOwner    User         @relation("OrgPendingTransferFrom", fields: [fromOwnerId], references: [id], onDelete: Cascade)
+  toOwner      User         @relation("OrgPendingTransferTo", fields: [toOwnerId], references: [id], onDelete: Cascade)
+
+  @@index([orgId, acceptedAt])
+  @@index([toOwnerId, acceptedAt])
+  @@index([expiresAt])
+  @@map("org_pending_transfers")
 }
 
 // Ratchet 45 — SSO identity link (cycle 144).
