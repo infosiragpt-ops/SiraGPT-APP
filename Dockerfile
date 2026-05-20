@@ -17,7 +17,9 @@ RUN apk add --no-cache libc6-compat
 
 # Install deps separately for layer caching
 COPY package.json package-lock.json ./
+COPY backend/package.json backend/package-lock.json ./backend/
 RUN npm ci --legacy-peer-deps --prefer-offline --no-audit --no-fund
+RUN npm ci --prefix backend --omit=dev --legacy-peer-deps --prefer-offline --no-audit --no-fund
 
 # ─── Stage 2: Build ─────────────────────────────────────────
 FROM node:22-alpine AS build
@@ -28,6 +30,7 @@ RUN apk add --no-cache libc6-compat
 
 # Copy node_modules from deps stage
 COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app/backend/node_modules ./backend/node_modules
 COPY . .
 
 # Public client configuration is baked into the Next.js bundle at build time.
