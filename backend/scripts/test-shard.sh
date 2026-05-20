@@ -68,4 +68,12 @@ if (( ${#SHARD_FILES[@]} == 0 )); then
   exit 0
 fi
 
-exec node --test "${SHARD_FILES[@]}"
+NODE_TEST_ARGS=(--test)
+if [ "${CI:-}" = "true" ]; then
+  # Some legacy suites leave background timers/sockets open after all tests
+  # have reported. In CI that burns the whole shard timeout and cancels an
+  # otherwise green run, so force Node to exit once the test runner is done.
+  NODE_TEST_ARGS+=(--test-force-exit)
+fi
+
+exec node "${NODE_TEST_ARGS[@]}" "${SHARD_FILES[@]}"
