@@ -58,6 +58,7 @@ const {
 } = require('../services/orgs-service');
 const { defaultSteps, computeProgress } = require('../services/org-onboarding');
 const { responseCache, invalidate: invalidateResponseCache } = require('../middleware/response-cache');
+const rateLimitStore = require('../middleware/rate-limit-store');
 const costTracker = require('../services/ai/cost-tracker');
 const { parseOrgSettingsPatch } = require('../schemas/orgs');
 const metrics = require('../utils/metrics');
@@ -2452,6 +2453,40 @@ function validateApiKeyExpiresAt(input) {
   return { ok: true, value: d };
 }
 
+// ─── Per-org API key create/revoke rate limits (ratchet 44) ────────
+// These caps protect the cluster from a compromised ADMIN token (or a
+// well-meaning script gone wrong) hammering the api-keys endpoints. Use
+// the shared rate-limit-store.consume() so the counter is shared across
+// replicas via Redis (with an in-memory fallback). Limits are per-org
+// per-calendar-day-ish (24h sliding window):
+//   - 10 creates / org / day
+//   - 100 revokes / org / day
+// On limit, return 429 with a `Retry-After` header (in seconds).
+// We fail open if the store throws unexpectedly — these caps are abuse
+// guards, not security boundaries.
+const API_KEY_RL_WINDOW_MS = 24 * 60 * 60 * 1000; // 24h
+const API_KEY_CREATE_LIMIT = 10;
+const API_KEY_REVOKE_LIMIT = 100;
+
+async function checkApiKeyRateLimit(res, orgId, kind, limit) {
+  const key = `org-api-key-${kind}:${orgId}`;
+  try {
+    const result = await rateLimitStore.consume(key, limit, API_KEY_RL_WINDOW_MS);
+    if (result.allowed) return true;
+    const retryAfterMs = Math.max(0, result.resetAt.getTime() - Date.now());
+    const retryAfterSec = Math.max(1, Math.ceil(retryAfterMs / 1000));
+    res.setHeader('Retry-After', String(retryAfterSec));
+    res.status(429).json({
+      error: `rate limit exceeded for org api-key ${kind} (max ${limit} per 24h)`,
+      retryAfter: retryAfterSec,
+    });
+    return false;
+  } catch (_err) {
+    // Fail open — never block a legitimate ADMIN over a store hiccup.
+    return true;
+  }
+}
+
 // ─── POST /api/orgs/:id/api-keys (ADMIN+) ───────────────────────────
 router.post('/:id/api-keys', authenticateToken, async (req, res) => {
   const userId = req.user.id;
@@ -2469,6 +2504,11 @@ router.post('/:id/api-keys', authenticateToken, async (req, res) => {
     if (!canManageMembers(membership.role)) {
       return res.status(403).json({ error: 'insufficient role to create api keys' });
     }
+
+    // Per-org abuse guard. Counted AFTER membership/role checks so that
+    // unauthenticated/non-admin probing can't burn the org's daily budget.
+    const ok = await checkApiKeyRateLimit(res, orgId, 'create', API_KEY_CREATE_LIMIT);
+    if (!ok) return undefined;
 
     const minted = apiKeysService.generateToken();
     const row = await prisma.apiKey.create({
@@ -2588,6 +2628,18 @@ router.post('/:id/api-keys/bulk-revoke', authenticateToken, async (req, res) => 
 
     // Dedupe to avoid double-counting when callers pass the same id twice.
     const uniqueIds = Array.from(new Set(ids));
+
+    // Per-org abuse guard — count one revoke slot per unique id we're
+    // about to attempt. Pre-consume all of them up-front so we either
+    // do the whole batch or none of it (no partial-mid-batch 429s,
+    // which would be impossible to reconcile against the audit log).
+    // If the cap is exhausted, surface 429 with Retry-After.
+    for (let i = 0; i < uniqueIds.length; i++) {
+      // eslint-disable-next-line no-await-in-loop
+      const ok = await checkApiKeyRateLimit(res, orgId, 'revoke', API_KEY_REVOKE_LIMIT);
+      if (!ok) return undefined;
+    }
+
     const revoked = [];
     const notFound = [];
     for (const keyId of uniqueIds) {
