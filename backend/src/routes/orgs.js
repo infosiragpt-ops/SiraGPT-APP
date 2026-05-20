@@ -112,6 +112,61 @@ function invalidateMembersCache(orgId) {
 
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
+// ─── Per-org invite + per-email accept rate limits (ratchet 44) ────
+// Defense-in-depth abuse guards on top of the existing membership-cap
+// and token-uniqueness checks. Counters live in the shared
+// rate-limit-store (Redis-backed across replicas, in-memory fallback).
+//
+//   - 50 invites  / org   / 24h sliding window  → POST /:id/invite
+//   - 100 accepts / email / 24h sliding window  → POST /invitation/:token/accept
+//
+// Accept is already gated by token uniqueness (one redeem per token);
+// the per-email cap guards against an adversary mass-redeeming many
+// freshly issued invites against the same recipient address. On limit
+// we return 429 with a `Retry-After` header (seconds). Fails open if
+// the store throws — these are abuse guards, not security boundaries.
+const INVITE_RL_WINDOW_MS = 24 * 60 * 60 * 1000; // 24h
+const INVITE_CREATE_LIMIT = 50;
+const INVITE_ACCEPT_LIMIT = 100;
+
+async function checkInviteCreateRateLimit(res, orgId) {
+  const key = `org-invite-create:${orgId}`;
+  try {
+    const result = await rateLimitStore.consume(key, INVITE_CREATE_LIMIT, INVITE_RL_WINDOW_MS);
+    if (result.allowed) return true;
+    const retryAfterMs = Math.max(0, result.resetAt.getTime() - Date.now());
+    const retryAfterSec = Math.max(1, Math.ceil(retryAfterMs / 1000));
+    res.setHeader('Retry-After', String(retryAfterSec));
+    res.status(429).json({
+      error: `rate limit exceeded for org invitations (max ${INVITE_CREATE_LIMIT} per 24h)`,
+      retryAfter: retryAfterSec,
+    });
+    return false;
+  } catch (_err) {
+    return true;
+  }
+}
+
+async function checkInviteAcceptRateLimit(res, email) {
+  const normalized = String(email || '').trim().toLowerCase();
+  if (!normalized) return true;
+  const key = `org-invite-accept:${normalized}`;
+  try {
+    const result = await rateLimitStore.consume(key, INVITE_ACCEPT_LIMIT, INVITE_RL_WINDOW_MS);
+    if (result.allowed) return true;
+    const retryAfterMs = Math.max(0, result.resetAt.getTime() - Date.now());
+    const retryAfterSec = Math.max(1, Math.ceil(retryAfterMs / 1000));
+    res.setHeader('Retry-After', String(retryAfterSec));
+    res.status(429).json({
+      error: `rate limit exceeded for invitation accepts (max ${INVITE_ACCEPT_LIMIT} per 24h)`,
+      retryAfter: retryAfterSec,
+    });
+    return false;
+  } catch (_err) {
+    return true;
+  }
+}
+
 function serializeOrg(org) {
   if (!org) return null;
   return {
@@ -239,6 +294,10 @@ router.post('/invitation/:token/accept', authenticateToken, async (req, res) => 
   const userEmail = (req.user.email || '').toLowerCase();
   const token = req.params.token;
   if (!token || token.length < 16) return res.status(400).json({ error: 'invalid token' });
+
+  // Ratchet 44 — per-email accept rate limit (defense-in-depth on top
+  // of token-uniqueness). Sends 429 + Retry-After when tripped.
+  if (!(await checkInviteAcceptRateLimit(res, userEmail))) return;
 
   try {
     const invite = await prisma.orgInvitation.findUnique({
@@ -419,6 +478,10 @@ router.post('/:id/invite', authenticateToken, async (req, res) => {
     if (!canManageMembers(membership.role)) {
       return res.status(403).json({ error: 'insufficient role to invite' });
     }
+
+    // Ratchet 44 — per-org invite-create rate limit (abuse guard on
+    // top of the member-count quota). 429 + Retry-After when tripped.
+    if (!(await checkInviteCreateRateLimit(res, orgId))) return;
 
     // Ratchet 45 — member-count quota per billing plan. Count current
     // members + pending (not yet accepted, not expired) invitations so
@@ -641,6 +704,12 @@ router.post('/:id/members/bulk-invite', authenticateToken, async (req, res) => {
     if (!canManageMembers(membership.role)) {
       return res.status(403).json({ error: 'insufficient role to invite' });
     }
+
+    // Ratchet 44 — share the per-org invite-create counter with the
+    // single-invite endpoint. Bulk-invite is already capped at 50/call,
+    // and the 24h window cap is 50, so this naturally allows one bulk
+    // batch per day on top of any single-invite usage.
+    if (!(await checkInviteCreateRateLimit(res, orgId))) return;
 
     const plan = membership.organization?.billingPlan || 'FREE';
     const cap = memberCapForPlan(plan);
