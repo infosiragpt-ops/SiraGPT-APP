@@ -192,3 +192,50 @@ describe('AuditQuery — byOrg() org scoping', () => {
     assert.equal(b.toJSON().orgId, 'org_42');
   });
 });
+
+// Ratchet 45 — byApiKey() composes the actorType='api_key' +
+// resourceId=<keyId> convention that Cycle 66 introduced for API-key
+// audit rows. Verify both fields land in the where clause, builder
+// purity holds, and bad inputs are no-ops.
+describe('AuditQuery — byApiKey() api-key activity filter', () => {
+  test('byApiKey sets actorType and resourceId predicates', () => {
+    const where = query(null).byApiKey('key_abc').toWhere();
+    assert.equal(where.actorType, 'api_key');
+    assert.equal(where.resourceId, 'key_abc');
+  });
+
+  test('byApiKey is a no-op for empty / non-string input', () => {
+    assert.equal(query(null).byApiKey('').toWhere().actorType, undefined);
+    assert.equal(query(null).byApiKey(null).toWhere().actorType, undefined);
+    assert.equal(query(null).byApiKey(42).toWhere().actorType, undefined);
+  });
+
+  test('byApiKey composes with byUser/byAction', () => {
+    const where = query(null)
+      .byUser('u1')
+      .byAction('api_key_used')
+      .byApiKey('key_abc')
+      .toWhere();
+    assert.equal(where.actorId, 'u1');
+    assert.equal(where.action, 'api_key_used');
+    assert.equal(where.actorType, 'api_key');
+    assert.equal(where.resourceId, 'key_abc');
+  });
+
+  test('byApiKey flows into prisma findMany where clause', async () => {
+    const { prisma, capture } = makePrismaCapture([{ id: 'a1' }]);
+    await query(prisma).byApiKey('key_xyz').run();
+    assert.equal(capture.findMany.where.actorType, 'api_key');
+    assert.equal(capture.findMany.where.resourceId, 'key_xyz');
+  });
+
+  test('builder purity holds for byApiKey', () => {
+    const a = query(null);
+    const b = a.byApiKey('key_abc');
+    assert.notEqual(a, b);
+    assert.equal(a.toJSON().actorType, null);
+    assert.equal(a.toJSON().resourceId, null);
+    assert.equal(b.toJSON().actorType, 'api_key');
+    assert.equal(b.toJSON().resourceId, 'key_abc');
+  });
+});

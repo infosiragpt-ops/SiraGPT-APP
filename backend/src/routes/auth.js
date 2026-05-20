@@ -973,6 +973,11 @@ router.get('/me', authenticateToken, async (req, res) => {
     // entries with `usedAt == null` is exposed.
     const totpEnabled = Boolean(req.user.totpEnabled);
     const twoFactorEnabled = Boolean(req.user.twoFactorEnabled);
+    // Ratchet 45 — surface a derived `totpSetupInitiated` boolean so the UI
+    // can detect a half-completed TOTP enrolment (secret stored but the user
+    // never confirmed the first code). True whenever totpSecret is present,
+    // even if totpEnabled is still false. The raw secret is never echoed.
+    const totpSetupInitiated = Boolean(req.user.totpSecret);
     const recoveryCodes = Array.isArray(req.user.totpRecoveryCodes)
       ? req.user.totpRecoveryCodes
       : [];
@@ -984,6 +989,7 @@ router.get('/me', authenticateToken, async (req, res) => {
       user: serializedUser,
       emailVerified,
       totpEnabled,
+      totpSetupInitiated,
       twoFactorEnabled,
       totpRecoveryCodesRemaining,
     });

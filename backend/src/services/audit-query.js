@@ -51,6 +51,7 @@ class AuditQuery {
       resourceType: state.resourceType ?? null,
       resourceId: state.resourceId ?? null,
       orgId: state.orgId ?? null,
+      actorType: state.actorType ?? null,
       from: state.from ?? null,
       to: state.to ?? null,
       limit: state.limit ?? DEFAULT_LIMIT,
@@ -94,6 +95,20 @@ class AuditQuery {
     return this._clone({ orgId });
   }
 
+  /**
+   * Filter to rows produced by a specific API key. Audit writers tag
+   * api-key activity with `actorType='api_key'` and `resourceId=<keyId>`
+   * (see Cycle 66). This helper composes both predicates so callers can
+   * write `query(prisma).byApiKey(keyId).run()` without remembering the
+   * tagging convention. Returns a no-op for falsy / non-string input.
+   *
+   * Note: this overrides any previously-set `actorType` and `resourceId`.
+   */
+  byApiKey(keyId) {
+    if (!keyId || typeof keyId !== 'string') return this;
+    return this._clone({ actorType: 'api_key', resourceId: keyId });
+  }
+
   byDate(from, to) {
     const f = toDate(from);
     const t = toDate(to);
@@ -120,6 +135,7 @@ class AuditQuery {
     const where = {};
     const s = this._state;
     if (s.userId) where.actorId = s.userId;
+    if (s.actorType) where.actorType = s.actorType;
     if (s.action) where.action = s.action;
     if (s.resourceType) where.resourceType = s.resourceType;
     if (s.resourceId) where.resourceId = s.resourceId;

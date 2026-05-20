@@ -324,4 +324,41 @@ describe('GET /api/auth/me — 2FA fields', () => {
     assert.equal(res.status, 200);
     assert.equal(res.body.totpRecoveryCodesRemaining, 0);
   });
+
+  // Ratchet 45 — totpSetupInitiated lets the settings UI detect a
+  // half-completed enrolment (secret persisted but the user never
+  // confirmed the first code, so totpEnabled is still false).
+  test('totpSetupInitiated=true when a totpSecret is present', async () => {
+    const res = await callRoute({
+      method: 'GET',
+      urlPath: '/api/auth/me',
+      mount: '/api/auth',
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.totpSetupInitiated, true);
+  });
+
+  test('totpSetupInitiated=true even when totpEnabled is false (half-complete)', async () => {
+    state.user.totpEnabled = false;
+    const res = await callRoute({
+      method: 'GET',
+      urlPath: '/api/auth/me',
+      mount: '/api/auth',
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.totpEnabled, false);
+    assert.equal(res.body.totpSetupInitiated, true);
+  });
+
+  test('totpSetupInitiated=false when totpSecret is missing', async () => {
+    state.user.totpSecret = null;
+    state.user.totpEnabled = false;
+    const res = await callRoute({
+      method: 'GET',
+      urlPath: '/api/auth/me',
+      mount: '/api/auth',
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.totpSetupInitiated, false);
+  });
 });

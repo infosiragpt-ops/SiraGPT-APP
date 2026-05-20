@@ -2140,7 +2140,7 @@ router.post('/webhooks/retry-failed', requireSuperAdmin, async (req, res) => {
 });
 
 // ── Audit log query DSL endpoint ───────────────────────────────────────────
-// GET /api/admin/audit-logs?userId=&action=&resource=&resourceId=&orgId=&from=&to=&page=&limit=
+// GET /api/admin/audit-logs?userId=&action=&resource=&resourceId=&orgId=&apiKeyId=&from=&to=&page=&limit=
 router.get('/audit-logs', requireSuperAdmin, async (req, res) => {
   try {
     const result = await runAuditLogQuery(req);
@@ -2184,6 +2184,12 @@ async function runAuditLogQuery(req) {
   if (req.query.action) q = q.byAction(String(req.query.action));
   if (req.query.resource) q = q.byResource(String(req.query.resource), req.query.resourceId ? String(req.query.resourceId) : null);
   if (req.query.orgId) q = q.byOrg(String(req.query.orgId));
+  // Ratchet 45 — `?apiKeyId=` composes the api-key tagging convention
+  // (actorType='api_key' + resourceId=<keyId>) without callers having to
+  // know about it. Applied after byUser/byResource so it deliberately
+  // overrides any conflicting filters when the operator is hunting a
+  // specific key's activity.
+  if (req.query.apiKeyId) q = q.byApiKey(String(req.query.apiKeyId));
   if (req.query.from || req.query.to) q = q.byDate(req.query.from || null, req.query.to || null);
   if (req.query.page) q = q.page(req.query.page);
   if (req.query.limit) q = q.limit(req.query.limit);
