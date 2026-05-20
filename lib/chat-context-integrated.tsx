@@ -1,5 +1,10 @@
 "use client"
 
+// KaTeX styles for rendered LaTeX inside markdown chat messages. Imported
+// here (where katex is actually used) instead of in app/layout.tsx so the
+// stylesheet doesn't bloat the global layout chunk past the Replit dev
+// proxy's response size cap.
+import "katex/dist/katex.min.css"
 import React from "react"
 import { createContext, useContext, useState, useCallback, useEffect, useRef } from "react"
 import { useAuth } from "./auth-context-integrated"

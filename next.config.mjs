@@ -90,7 +90,7 @@ const nextConfig = {
     ]
   },
 
-  webpack: (config) => {
+  webpack: (config, { dev }) => {
     // pdfjs-dist (used by react-pdf) optionally requires the Node-only
     // `canvas` package on the server. We use react-pdf only in client
     // components, so aliasing it to `false` prevents a "Module not found:
@@ -98,6 +98,22 @@ const nextConfig = {
     config.resolve.alias = {
       ...config.resolve.alias,
       canvas: false,
+    }
+    // Inline eval-source-maps in dev push individual chunks past 7 MB,
+    // which the Replit preview proxy truncates at ~1 MB. That truncation
+    // produces a "SyntaxError: Invalid or unexpected token" in the
+    // browser, breaks hydration, and leaves the page blank below the
+    // header. Use a cheap external source map so chunks stay under the
+    // proxy ceiling while keeping line-level debuggability.
+    if (dev) {
+      // Force-disable source maps in dev. Next.js's default `eval-source-map`
+      // inlines a full base64 source map inside every `eval(...)` HMR
+      // wrapper, blowing `app/layout.js` past 7 MB. The Replit preview
+      // proxy truncates responses at ~1 MB, so the browser receives a
+      // half-parsed chunk → "SyntaxError: Invalid or unexpected token"
+      // → hydration fails → page goes blank below the header. Trading
+      // dev source-map fidelity to keep dev usable on Replit.
+      config.devtool = false
     }
     config.watchOptions = {
       ...config.watchOptions,

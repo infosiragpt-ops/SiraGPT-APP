@@ -1,23 +1,45 @@
 import type React from "react"
 import type { Metadata, Viewport } from "next"
+import nextDynamic from "next/dynamic"
 import { GeistSans } from "geist/font/sans"
 import { GeistMono } from "geist/font/mono"
 import "./globals.css"
-import { ThemeProvider } from "@/components/theme-provider"
-import { AuthProvider } from "@/lib/auth-context-integrated"
-import { Toaster } from "@/components/ui/sonner"
-import { AppWrapper } from "@/components/app-wrapper"
-import 'katex/dist/katex.min.css';
-import { SettingsProvider } from "@/lib/settings-context"
-import { SyncfusionBannerRemover } from "@/components/SyncfusionBannerRemover"
-import { GlobalDropRedirector } from "@/components/GlobalDropRedirector"
-import { SentryClientInit } from "@/components/sentry-client-init"
-import { ErrorBoundary } from "@/components/error-boundary"
-import { PostHogClientInit } from "@/components/posthog-client-init"
-import { WebVitalsReporter } from "./web-vitals"
 import { NextIntlClientProvider } from "next-intl"
 import { getLocale, getMessages } from "next-intl/server"
 import { isRTL } from "@/lib/i18n/locales"
+// RootProviders bundles ThemeProvider + AuthProvider + SettingsProvider +
+// AppWrapper (+ ChatProvider, SidebarProvider, AppShell, ArtifactPanel,
+// BackgroundStreams, etc.). Loading it via nextDynamic moves all of that
+// into its own webpack chunk so app/layout.js stays small enough for the
+// Replit dev proxy to deliver intact (it truncates large responses).
+const RootProviders = nextDynamic(
+  () => import("@/components/root-providers").then(m => m.RootProviders),
+  { ssr: true }
+)
+
+// Side-effect-only client components: they run inside useEffect on the
+// browser and never render visible markup. Pulling them in synchronously
+// inflates the layout chunk past the Replit preview proxy's ~1 MB cap
+// (Sentry, PostHog, web-vitals, and Syncfusion shims each pull in their
+// own SDKs). Loading them via next/dynamic with ssr:false makes webpack
+// put each one in its own chunk that's fetched after hydration, keeping
+// app/layout.js small enough for the dev iframe to load it intact.
+const SentryClientInit = nextDynamic(
+  () => import("@/components/sentry-client-init").then(m => m.SentryClientInit),
+  { ssr: false }
+)
+const PostHogClientInit = nextDynamic(
+  () => import("@/components/posthog-client-init").then(m => m.PostHogClientInit),
+  { ssr: false }
+)
+const WebVitalsReporter = nextDynamic(
+  () => import("./web-vitals").then(m => m.WebVitalsReporter),
+  { ssr: false }
+)
+const SyncfusionBannerRemover = nextDynamic(
+  () => import("@/components/SyncfusionBannerRemover").then(m => m.SyncfusionBannerRemover),
+  { ssr: false }
+)
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://siragpt.com"),
@@ -125,19 +147,7 @@ export default async function RootLayout({
         <WebVitalsReporter />
         <SyncfusionBannerRemover />
         <NextIntlClientProvider locale={locale} messages={messages}>
-          <ThemeProvider attribute="class" defaultTheme="light" enableSystem disableTransitionOnChange>
-            <AuthProvider>
-              <SettingsProvider>
-                <AppWrapper>
-                  <ErrorBoundary label="root:app">
-                    {children}
-                  </ErrorBoundary>
-                </AppWrapper>
-                <GlobalDropRedirector />
-                <Toaster />
-              </SettingsProvider>
-            </AuthProvider>
-          </ThemeProvider>
+          <RootProviders>{children}</RootProviders>
         </NextIntlClientProvider>
       </body>
     </html>
