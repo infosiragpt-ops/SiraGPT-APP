@@ -4,6 +4,52 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and improvement cycles follow a sequential number with the date the work landed.
 
+## [0.3.4 / backend 1.2.4] — Cycles 131-140 milestone — 2026-05-19
+
+Fourth decade past the centenarian. PATCH bumps only (root
+`0.3.3 → 0.3.4`, backend `1.2.3 → 1.2.4`) — cycles 131-140 turned
+phone-based and time-based second-factor authentication into a
+first-class subsystem with no public API breaks. See
+`docs/cycles/CYCLE_140.md` for the milestone narrative.
+
+### Added
+- **Cycle 140 — milestone consolidation**: `docs/cycles/CYCLE_140.md`
+  marker doc + CHANGELOG cycles 131-140 sweep + PATCH version bump to
+  `0.3.4 / 1.2.4`.
+- **Cycle 139 — org-enforce 2FA requirement**: org-level setting
+  `require2FA`; members without an enrolled second factor are blocked
+  at login until they enrol, with grace-period support.
+- **Cycle 138 — 2FA disable + /me flags**: disable endpoints for both
+  SMS and TOTP factors (re-auth gated); `GET /me` exposes
+  `twoFactorSmsEnabled` / `twoFactorTotpEnabled` flags for the UI.
+- **Cycle 137 — partial-session sweep + TOTP recovery codes**: cron
+  sweep expires stale `PartialSession` rows; one-time recovery codes
+  generated at TOTP enrolment, hashed at rest, single-use on verify.
+- **Cycle 136 — TOTP login gate + PartialSession**: login flow
+  extended with a TOTP-required branch; intermediate `PartialSession`
+  model carries the pre-2FA state until the second factor is provided.
+- **Cycle 135 — TOTP 2FA scaffold**: RFC 6238 TOTP generator /
+  verifier, secret provisioning (otpauth URI + QR-friendly payload),
+  `User.twoFactorTotpSecret` storage.
+- **Cycle 134 — 2FA opt-in + login gate**: opt-in endpoint to enable
+  SMS 2FA on the current account; login flow gated to require the SMS
+  OTP step before issuing the session token.
+- **Cycle 133 — 2FA SMS scaffold**: SMS second-factor scaffold reusing
+  phone-verification primitives; `User.twoFactorSmsEnabled` flag and
+  per-login OTP challenge persistence.
+- **Cycle 132 — phone verification + journey test fix**: phone-number
+  verification flow (challenge + verify endpoints, 6-digit OTP, TTL'd
+  challenge store) plus a flaky journey test stabilised.
+- **Cycle 131 — SMS Twilio scaffold**: Twilio provider wiring,
+  env-driven config (`TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`,
+  `TWILIO_FROM`), thin `sms.send()` service with isolated error
+  handling.
+
+### Changed
+- Root `package.json` `0.3.3 → 0.3.4` and `backend/package.json`
+  `1.2.3 → 1.2.4` (PATCH; no public API breaks).
+- Lint ratchet held at `--max-warnings 45` (unchanged since cycle 60).
+
 ## [0.3.3 / backend 1.2.3] — Cycles 121-130 milestone — 2026-05-19
 
 Third decade past the centenarian. PATCH bumps only (root

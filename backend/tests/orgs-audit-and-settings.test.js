@@ -16,6 +16,7 @@ const {
   listMemberActivity,
   getOrgSettings,
   patchOrgSettings,
+  postOrgSecurity,
 } = orgsRouter.__handlers;
 const { sanitizeSettings, mergeSettings } = orgsRouter.__settingsHelpers;
 const { parseOrgSettingsPatch } = require('../src/schemas/orgs');
@@ -82,7 +83,7 @@ function makeFakePrisma({ members = {}, orgs = {}, auditRows = [] } = {}) {
   };
 
   return {
-    prisma: { orgMembership, organization, auditLog, _auditCalls: auditCalls },
+    prisma: { orgMembership, organization, auditLog, _auditCalls: auditCalls, _orgs: orgs },
     writeAuditLog,
     audits,
   };
@@ -385,6 +386,50 @@ test('patch settings: zod allows unknown keys + returns warnings array', async (
   assert.equal(res._body.settings.defaultModel, 'opus-4-7');
   assert.equal(res._body.settings.experimentalFlag, true);
   assert.deepEqual(res._body.warnings, ['experimentalFlag']);
+});
+
+// ─── POST security ─────────────────────────────────────────────────
+
+test('post security: OWNER toggles requireTwoFactor and audit-logs change', async () => {
+  const { prisma, writeAuditLog, audits } = makeFakePrisma({
+    members: { 'o1:owner1': { role: 'OWNER' } },
+    orgs: { o1: { id: 'o1', settings: { responseStyle: 'concise', security: { requireTwoFactor: false } } } },
+  });
+  const req = { user: { id: 'owner1' }, params: { id: 'o1' }, body: { requireTwoFactor: true } };
+  const res = makeRes();
+  await postOrgSecurity(req, res, { prisma, writeAuditLog });
+  assert.equal(res._status, 200);
+  assert.deepEqual(res._body.security, { requireTwoFactor: true });
+  assert.equal(prisma._orgs.o1.settings.responseStyle, 'concise');
+  assert.deepEqual(prisma._orgs.o1.settings.security, { requireTwoFactor: true });
+  assert.equal(audits.length, 1);
+  assert.equal(audits[0].action, 'org_security_update');
+  assert.deepEqual(audits[0].before.security, { requireTwoFactor: false });
+  assert.deepEqual(audits[0].after.security, { requireTwoFactor: true });
+});
+
+test('post security: rejects non-owner and malformed body', async () => {
+  const { prisma, writeAuditLog, audits } = makeFakePrisma({
+    members: { 'o1:admin1': { role: 'ADMIN' } },
+    orgs: { o1: { id: 'o1', settings: {} } },
+  });
+
+  const badBody = makeRes();
+  await postOrgSecurity(
+    { user: { id: 'admin1' }, params: { id: 'o1' }, body: { requireTwoFactor: 'yes' } },
+    badBody,
+    { prisma, writeAuditLog },
+  );
+  assert.equal(badBody._status, 400);
+
+  const notOwner = makeRes();
+  await postOrgSecurity(
+    { user: { id: 'admin1' }, params: { id: 'o1' }, body: { requireTwoFactor: true } },
+    notOwner,
+    { prisma, writeAuditLog },
+  );
+  assert.equal(notOwner._status, 403);
+  assert.equal(audits.length, 0);
 });
 
 // ─── listMemberActivity (cycle 78) ──────────────────────────────────

@@ -66,6 +66,7 @@ const state = {
   partial: [], // PartialSession rows
   twoFAChallenges: [],
   sessions: [],
+  orgMemberships: [],
 };
 
 const authMock = {
@@ -152,6 +153,10 @@ const prismaMock = {
   },
   organization: {
     findFirst: async () => null,
+  },
+  orgMembership: {
+    findMany: async ({ where } = {}) =>
+      state.orgMemberships.filter((row) => !where?.userId || row.userId === where.userId),
   },
 };
 
@@ -245,6 +250,7 @@ function resetState() {
   state.partial.length = 0;
   state.twoFAChallenges.length = 0;
   state.sessions.length = 0;
+  state.orgMemberships.length = 0;
   auditMock._calls.length = 0;
 }
 
@@ -300,6 +306,32 @@ describe('POST /api/auth/login — TOTP gate', () => {
     assert.ok(res.body.token);
     assert.equal(state.sessions.length, 1);
     assert.equal(state.partial.length, 0);
+  });
+
+  test('blocks password login when an org requires 2FA and user has no factor', async () => {
+    state.user.totpEnabled = false;
+    state.user.twoFactorEnabled = false;
+    state.orgMemberships.push({
+      userId: state.user.id,
+      organization: {
+        id: 'org-requires-2fa',
+        slug: 'secure-org',
+        settings: { security: { requireTwoFactor: true } },
+      },
+    });
+
+    const res = await callRoute({
+      method: 'POST',
+      urlPath: '/api/auth/login',
+      body: { email: state.user.email, password: 'correct-horse' },
+      mount: '/api/auth',
+    });
+
+    assert.equal(res.status, 403);
+    assert.equal(res.body.code, 'org_requires_2fa');
+    assert.equal(res.body.orgId, 'org-requires-2fa');
+    assert.equal(state.sessions.length, 0);
+    assert.ok(auditMock._calls.some((c) => c.action === 'login_blocked_org_2fa'));
   });
 });
 
