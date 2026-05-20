@@ -1796,11 +1796,12 @@ router.get('/:id/webhooks/dlq', authenticateToken, async (req, res) => {
       raw = [];
     }
 
-    const items = raw.filter((d) => d && orgUrls.has(d.url)).slice(0, limit);
+    const scopedItems = raw.filter((d) => d && orgUrls.has(d.url));
+    const items = scopedItems.slice(0, limit);
     const baseStats = webhookDispatcherForStats.dlqStats();
     res.json({
       items,
-      stats: { ...baseStats, scoped: items.length },
+      stats: { ...baseStats, scoped: scopedItems.length },
     });
   } catch (err) {
     if (err && err.status) return res.status(err.status).json({ error: err.message });

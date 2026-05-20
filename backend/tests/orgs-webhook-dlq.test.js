@@ -167,6 +167,14 @@ describe('Org-scoped webhook DLQ', () => {
     assert.ok(res.body.stats.total >= 3);
   });
 
+  test('GET — stats.scoped reports full org count even when response is limited', async () => {
+    await seedDLQ();
+    const res = await callRoute({ method: 'GET', urlPath: '/api/orgs/org-1/webhooks/dlq?limit=1' });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.items.length, 1);
+    assert.equal(res.body.stats.scoped, 2);
+  });
+
   test('GET — MEMBER role is rejected with 403/401', async () => {
     prismaState.membership.role = 'MEMBER';
     const res = await callRoute({ method: 'GET', urlPath: '/api/orgs/org-1/webhooks/dlq' });
