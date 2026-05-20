@@ -23,28 +23,20 @@ if (configuredGoogleCallback && configuredGoogleCallback !== googleCallbackURL) 
   console.warn(`Google OAuth callback override ignored; using ${googleCallbackURL}`);
 }
 
-// Google OAuth Strategy with extended scopes. Keep email/password auth available
-// when Google OAuth is not configured on a given environment.
+// Google OAuth Strategy — login-only scopes (profile + email). These are
+// NON-sensitive scopes that do not trigger Google's "unverified app"
+// warning screen, so siragpt.com works for every user without
+// individual test-user whitelisting or full verification review.
+// Gmail / Calendar / Drive scopes are requested separately in their
+// own opt-in flows (/api/auth/gmail, /api/auth/google-services) so the
+// warning only ever appears for users who explicitly enable those
+// integrations, never on the main login.
 if (googleOAuthConfigured) {
   passport.use(new GoogleStrategy({
     clientID: process.env.GOOGLE_CLIENT_ID,
     clientSecret: process.env.GOOGLE_CLIENT_SECRET,
     callbackURL: googleCallbackURL,
-    scope: [
-      'profile',
-      'email',
-      'https://www.googleapis.com/auth/gmail.readonly',
-      'https://www.googleapis.com/auth/gmail.send',
-      'https://www.googleapis.com/auth/gmail.modify',
-      'https://www.googleapis.com/auth/calendar',
-      'https://www.googleapis.com/auth/calendar.events',
-      'https://www.googleapis.com/auth/drive',
-      'https://www.googleapis.com/auth/drive.file',
-      'https://www.googleapis.com/auth/drive.readonly',
-      'https://www.googleapis.com/auth/drive.metadata.readonly'
-    ],
-    accessType: 'offline',  // Important: Get refresh token
-    prompt: 'consent'        // Force consent screen to get refresh token
+    scope: ['profile', 'email'],
   }, async (accessToken, refreshToken, profile, done) => {
   try {
     console.log('Google OAuth callback - accessToken:', !!accessToken);
