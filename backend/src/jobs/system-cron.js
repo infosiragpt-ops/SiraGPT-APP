@@ -89,6 +89,11 @@ const NOTIFICATION_SWEEP_SCHEDULE = process.env.SYSTEM_CRON_NOTIFICATION_SWEEP_S
 // Default `5 * * * *` (every hour at :05) — sits 5 minutes after the
 // session sweep at :00 so the two hourly passes don't co-fire.
 const PARTIAL_SESSION_SWEEP_SCHEDULE = process.env.SYSTEM_CRON_PARTIAL_SESSION_SWEEP_SCHEDULE || '5 * * * *';
+// Ratchet 45 — daily org idleness detector. Default 06:00 UTC; co-fires
+// with the failed-email retry queue (different tables, no contention).
+// Walks every Organization, flags those with no member activity in the
+// last 60d into SystemSettings `org_idle:<orgId>`.
+const DETECT_IDLE_ORGS_SCHEDULE = process.env.SYSTEM_CRON_DETECT_IDLE_ORGS_SCHEDULE || '0 6 * * *';
 
 let _state = null;
 
@@ -686,6 +691,45 @@ function start(opts = {}) {
     schedule: PARTIAL_SESSION_SWEEP_SCHEDULE,
     task: partialSessionSweepTask,
     meta: partialSessionSweepMeta,
+  });
+
+  // Ratchet 45 — daily idle-org detector (06:00 UTC).
+  let detectIdleOrgsRunning = false;
+  const detectIdleOrgsMeta = {};
+  const detectIdleOrgsTask = cron.schedule(
+    DETECT_IDLE_ORGS_SCHEDULE,
+    async () => {
+      if (detectIdleOrgsRunning) {
+        logger.warn?.('[system-cron] skip detect-idle-orgs — previous run still active');
+        return;
+      }
+      detectIdleOrgsRunning = true;
+      const finish = recordRun(detectIdleOrgsMeta, 'detect-idle-orgs');
+      let runErr = null;
+      try {
+        // eslint-disable-next-line global-require
+        const job = require('./detect-idle-orgs');
+        const runWithRetry = wrapWithRetry(() => job.run({ logger }), {
+          onRetry: ({ attempt, delayMs, reason }) =>
+            logger.warn?.(`[system-cron] detect-idle-orgs retry ${attempt} in ${delayMs}ms (${reason})`),
+        });
+        const res = await runWithRetry();
+        logger.info?.(`[system-cron] detect-idle-orgs done: ${JSON.stringify(res)}`);
+      } catch (err) {
+        runErr = err;
+        logger.error?.(`[system-cron] detect-idle-orgs failed: ${err && err.message}`);
+      } finally {
+        detectIdleOrgsRunning = false;
+        finish(runErr);
+      }
+    },
+    { scheduled: false, timezone: 'UTC' },
+  );
+  tasks.push({
+    name: 'detect-idle-orgs',
+    schedule: DETECT_IDLE_ORGS_SCHEDULE,
+    task: detectIdleOrgsTask,
+    meta: detectIdleOrgsMeta,
   });
 
   for (const t of tasks) {

@@ -94,6 +94,7 @@ describe('system-cron', () => {
         'archive-audit-logs',
         'cost-tracker-archive',
         'cost-tracker-flush',
+        'detect-idle-orgs',
         'failed-email-retry',
         'hard-delete-deleted-users',
         'prune-api-usage',

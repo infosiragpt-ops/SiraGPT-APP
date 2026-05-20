@@ -1680,6 +1680,51 @@ router.get('/backups', requireSuperAdmin, async (_req, res) => {
   }
 });
 
+// ── Idle organizations (ratchet 45) ─────────────────────────────────────
+//
+// Returns the orgs currently flagged idle by the daily detect-idle-orgs
+// cron (default 06:00 UTC). The job writes one SystemSettings row per
+// idle org under the `org_idle:<orgId>` key with the full payload, so
+// this endpoint is a thin reader — no live aggregation, no Organization
+// table scan. Useful for billing/lifecycle dashboards.
+//
+//   GET /api/admin/orgs/idle
+//   →   { ok: true, count, orgs: [{ orgId, slug, name, plan, daysIdle, lastMemberActiveAt }] }
+router.get('/orgs/idle', requireSuperAdmin, async (_req, res) => {
+  try {
+    const rows = await prisma.systemSettings.findMany({
+      where: { key: { startsWith: 'org_idle:' } },
+    });
+    const orgs = [];
+    for (const row of rows) {
+      try {
+        const meta = JSON.parse(row.value);
+        if (!meta || !meta.orgId) continue;
+        orgs.push({
+          orgId: meta.orgId,
+          slug: meta.slug || null,
+          name: meta.name || null,
+          plan: meta.plan || null,
+          daysIdle: typeof meta.daysIdle === 'number' ? meta.daysIdle : null,
+          lastMemberActiveAt: meta.lastMemberActiveAt || null,
+          detectedAt: meta.detectedAt || null,
+        });
+      } catch (_) { /* skip malformed row */ }
+    }
+    // Sort by daysIdle desc (nulls — never-active orgs — first).
+    orgs.sort((a, b) => {
+      if (a.daysIdle == null && b.daysIdle == null) return 0;
+      if (a.daysIdle == null) return -1;
+      if (b.daysIdle == null) return 1;
+      return b.daysIdle - a.daysIdle;
+    });
+    return res.json({ ok: true, count: orgs.length, orgs });
+  } catch (err) {
+    console.error('[admin/orgs/idle] failed:', err && err.message ? err.message : err);
+    return res.status(500).json({ error: 'Failed to read idle-org flags' });
+  }
+});
+
 // ── Prometheus /metrics exporter ─────────────────────────────────────────
 // Exposed at the top-level `/metrics` path (mounted from index.js) — NOT
 // behind `/api/admin/*` so Prometheus scrapers do not need the cookie
