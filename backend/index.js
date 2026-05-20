@@ -848,6 +848,19 @@ function startServer() {
         }
     })();
 
+    // Ratchet 44 — defense-in-depth: when prod has orgs with SSO
+    // enabled, warn loudly if the matching upstream lib isn't
+    // installed. SSO routes degrade via lazy-require, but this
+    // surfaces the misconfig at startup. Fire-and-forget.
+    (async () => {
+        try {
+            const { validateActiveSsoConfig } = require('./src/utils/sso-boot-validator');
+            await validateActiveSsoConfig({ prisma, logger });
+        } catch (err) {
+            logger.warn({ err: err && err.message }, 'sso_boot_validator_failed');
+        }
+    })();
+
     // Initialize WebSocket server for Computer Use
     initializeWebSocketServer(server);
 
