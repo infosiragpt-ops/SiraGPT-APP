@@ -6,6 +6,7 @@ BRANCH="${BRANCH:-main}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
 FRONTEND_SERVICE="${FRONTEND_SERVICE:-frontend}"
 PM2_APP="${PM2_APP:-sira-api-backend}"
+DEPLOY_AUTO_STASH_LOCAL_CHANGES="${DEPLOY_AUTO_STASH_LOCAL_CHANGES:-1}"
 
 FRONTEND_URL="${FRONTEND_URL:-https://siragpt.com/auth/login}"
 API_HEALTH_URL="${API_HEALTH_URL:-https://api.siragpt.com/health}"
@@ -26,6 +27,26 @@ fail() {
 
 require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "Missing required command: $1"
+}
+
+handle_local_tracked_changes() {
+  if git diff --quiet && git diff --cached --quiet; then
+    return 0
+  fi
+
+  if [[ "$DEPLOY_AUTO_STASH_LOCAL_CHANGES" != "1" ]]; then
+    fail "Git worktree has local tracked changes. Commit, stash, or discard them before deploy."
+  fi
+
+  local stash_name
+  stash_name="deploy-production auto-stash before ${BRANCH} update $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  log "Git worktree has local tracked changes; saving recoverable stash: ${stash_name}"
+  git status --short
+  git stash push --message "$stash_name"
+
+  if ! git diff --quiet || ! git diff --cached --quiet; then
+    fail "Git worktree still has local tracked changes after auto-stash."
+  fi
 }
 
 wait_for_http() {
@@ -69,9 +90,7 @@ cd "$APP_DIR"
 
 [[ -f "$COMPOSE_FILE" ]] || fail "Compose file not found: $APP_DIR/$COMPOSE_FILE"
 
-if ! git diff --quiet || ! git diff --cached --quiet; then
-  fail "Git worktree has local tracked changes. Commit, stash, or discard them before deploy."
-fi
+handle_local_tracked_changes
 
 current_branch="$(git rev-parse --abbrev-ref HEAD)"
 if [[ "$current_branch" != "$BRANCH" ]]; then
