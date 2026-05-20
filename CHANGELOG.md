@@ -4,6 +4,55 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and improvement cycles follow a sequential number with the date the work landed.
 
+## [0.4.0 / backend 1.3.0] — Cycles 141-150 milestone — 2026-05-19
+
+Half-century past the centenarian. **MINOR** bumps (root
+`0.3.4 → 0.4.0`, backend `1.2.4 → 1.3.0`) — the 50-cycle landmark
+lands alongside a significant federated-security surface (WebAuthn /
+SAML / OIDC) plus operational-health plumbing (cron + queue metrics,
+idle-org / idle-user detection). No public API breaks. See
+`docs/cycles/CYCLE_150.md` for the milestone narrative.
+
+### Added
+- **Cycle 150 — milestone consolidation**: `docs/cycles/CYCLE_150.md`
+  marker doc + CHANGELOG cycles 141-150 sweep + MINOR version bump to
+  `0.4.0 / 1.3.0` (50-cycle landmark + federated-security additions).
+- **Cycle 149 — idle users detection**: sweep flags users with no
+  session activity over a configurable window; powers the lifecycle
+  UI with `idleSince` + `idleDays`.
+- **Cycle 148 — idle orgs detection**: sweep flags orgs with no member
+  activity over a configurable window; surfaces in admin org list
+  with `idleSince` + `idleDays`.
+- **Cycle 147 — cron health metrics + queues snapshot**: per-job
+  last-run / next-run / last-error / last-duration metrics, plus
+  aggregate queue snapshot endpoint for the admin dashboard.
+- **Cycle 146 — totpSetupInitiated + audit byApiKey**:
+  `totpSetupInitiated` telemetry counter for the TOTP enrolment
+  funnel; audit log now records the acting `byApiKey` when a request
+  was authenticated via API key rather than a session.
+- **Cycle 145 — SSO identities list + unlink**:
+  `GET /me/sso/identities` surfaces linked external identities;
+  `DELETE /me/sso/identities/:id` unlinks with re-auth gating + audit.
+- **Cycle 144 — SSO provisioning policies + SSOIdentity**: `SSOIdentity`
+  model links external `(provider, subject)` to local users; org-level
+  just-in-time provisioning policies (auto-create / require-invite /
+  deny).
+- **Cycle 143 — OIDC handler + unified SSO dispatch**: OIDC
+  authorization-code flow + a unified `/sso/callback` dispatcher that
+  fans out to SAML / OIDC / passkey handlers by provider key.
+- **Cycle 142 — SAML response handler**: SAML 2.0 IdP-initiated
+  handler with signed-assertion verification, attribute mapping, and
+  replay-nonce protection.
+- **Cycle 141 — WebAuthn / Passkey scaffold**: third-factor scaffold —
+  challenge / registration / authentication endpoints,
+  `WebAuthnCredential` storage, rpId / origin config.
+
+### Changed
+- Root `package.json` `0.3.4 → 0.4.0` and `backend/package.json`
+  `1.2.4 → 1.3.0` (**MINOR**; 50-cycle landmark + federated-security
+  surface; no public API breaks).
+- Lint ratchet held at `--max-warnings 45` (unchanged since cycle 60).
+
 ## [0.3.4 / backend 1.2.4] — Cycles 131-140 milestone — 2026-05-19
 
 Fourth decade past the centenarian. PATCH bumps only (root
