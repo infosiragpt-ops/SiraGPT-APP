@@ -21,6 +21,7 @@
  *   GET    /api/orgs/:id/audit-logs                     — org-scoped audit feed (ADMIN+; cycle 66)
  *   GET    /api/orgs/:id/members/:userId/activity       — recent audit rows for a single member (ADMIN+; cycle 78)
  *   GET    /api/orgs/:id/events                         — live SSE tail of audit feed (ADMIN+; cycle 78)
+ *   GET    /api/orgs/:id/activity                       — unified activity feed (MEMBER+; ratchet 44)
  *   GET    /api/orgs/:id/settings                       — read per-org settings (member; cycle 66)
  *   PATCH  /api/orgs/:id/settings                       — merge per-org settings (ADMIN+; cycle 66)
  *   GET    /api/orgs/:id/limits                         — plan caps + member/quota usage (member; ratchet 45)
@@ -2961,6 +2962,33 @@ router.get(
   (req, res) => listMemberActivityHandler(req, res),
 );
 
+// ─── GET /api/orgs/:id/activity (MEMBER+; ratchet 44) ───────────────
+// Unified, cursor-paginated activity feed for the org. Aggregates audit
+// log + announcements (and is the home for additional sources added
+// later — billing, member changes, etc.). MEMBER+ access; admin-only
+// detail is filtered upstream by the safe-action allowlist inside
+// `org-activity-feed`. See that module for the full data contract.
+async function listOrgActivityHandler(req, res, deps = { prisma }) {
+  const db = deps.prisma || prisma;
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  try {
+    await assertMembership(db, orgId, userId, 'MEMBER');
+    const { buildActivityFeed } = require('../services/org-activity-feed');
+    const result = await buildActivityFeed(db, orgId, {
+      limit: req.query.limit,
+      cursor: req.query.cursor,
+    });
+    res.json(result);
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] activity feed failed:', err.message);
+    res.status(500).json({ error: 'failed to query activity feed' });
+  }
+}
+
+router.get('/:id/activity', authenticateToken, (req, res) => listOrgActivityHandler(req, res));
+
 // ─── GET /api/orgs/:id/events (ADMIN+, SSE) ─────────────────────────
 // Live tail of audit events for the org. Mechanics:
 //   - On connect, emits a `ready` event followed by a backfill of any
@@ -4306,6 +4334,7 @@ router.__handlers = {
   leaveOrg: leaveOrgHandler,
   listOrgAuditLogs: listOrgAuditLogsHandler,
   listMemberActivity: listMemberActivityHandler,
+  listOrgActivity: listOrgActivityHandler,
   getOrgSettings: getOrgSettingsHandler,
   patchOrgSettings: patchOrgSettingsHandler,
   postOrgSecurity: postOrgSecurityHandler,
