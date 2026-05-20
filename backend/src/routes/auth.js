@@ -2042,4 +2042,74 @@ router.post(
 // Expose helpers for unit tests (mirrors the SSO __ssoHelpers pattern).
 router.__twoFAHelpers = { twoFASms, mintPartialSession, PARTIAL_SESSION_TTL_MS };
 
+// ────────────────────────────────────────────────────────────
+// WebAuthn / passkey authentication — ratchet 45 scaffold.
+// Unauthenticated entry points (the user is logging IN). The
+// caller supplies a claimed userId; an unknown user still
+// receives a structurally valid response (empty
+// allowCredentials) to avoid enumeration. Verify increments the
+// stored counter via User.webauthnCredentials JSON column.
+// Issuing a JWT on success is intentionally OUT OF SCOPE for
+// this scaffold — the caller composes it with the higher-level
+// login flow once the operator has decided whether passkeys
+// replace or augment passwords.
+// ────────────────────────────────────────────────────────────
+const webauthnSvc = require('../services/webauthn');
+
+router.post('/webauthn/authentication-options', async (req, res) => {
+  try {
+    const userId = String((req.body && req.body.userId) || '').trim();
+    let user = null;
+    if (userId) {
+      user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { id: true, webauthnCredentials: true },
+      });
+    }
+    const result = await webauthnSvc.generateAuthenticationOptions({ user: user || { id: userId || 'anon' } });
+    if (!result.ok) return res.status(result.status || 500).json(result);
+    return res.json({ ok: true, options: result.options });
+  } catch (error) {
+    console.error('WebAuthn authentication-options error:', error);
+    return res.status(500).json({ error: 'webauthn_authentication_options_failed' });
+  }
+});
+
+router.post('/webauthn/authentication-verify', async (req, res) => {
+  try {
+    const userId = String((req.body && req.body.userId) || '').trim();
+    if (!userId) return res.status(400).json({ error: 'webauthn_missing_user' });
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, webauthnCredentials: true },
+    });
+    if (!user) return res.status(400).json({ error: 'webauthn_credential_not_found' });
+    const result = await webauthnSvc.verifyAuthentication({
+      user,
+      response: req.body && req.body.response,
+    });
+    if (!result.ok) return res.status(result.status || 400).json(result);
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { webauthnCredentials: result.credentials },
+      select: { id: true },
+    });
+    void writeAuditLog(prisma, {
+      req,
+      action: 'webauthn_authentication_verified',
+      resource: 'user',
+      resourceId: user.id,
+      userId: user.id,
+    });
+    return res.json({
+      ok: true,
+      userId: result.userId,
+      credentialId: result.credentialId,
+    });
+  } catch (error) {
+    console.error('WebAuthn authentication-verify error:', error);
+    return res.status(500).json({ error: 'webauthn_authentication_verify_failed' });
+  }
+});
+
 module.exports = router;

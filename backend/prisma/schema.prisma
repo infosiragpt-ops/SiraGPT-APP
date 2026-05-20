@@ -105,6 +105,16 @@ model User {
   // alternative to the 6-digit code at POST /api/auth/2fa/totp/verify.
   totpRecoveryCodes Json?
 
+  // Ratchet 45 — WebAuthn / passkey credentials (scaffold follow-up
+  // to the cycle 135 TOTP rollout). JSON array of
+  // `{ credentialId, publicKey, counter, transports[], label?,
+  //   createdAt, lastUsedAt? }`. credentialId + publicKey are
+  // base64url. Managed via the four endpoints under
+  // /api/users/me/webauthn/* (registration) and
+  // /api/auth/webauthn/* (authentication). See
+  // backend/src/services/webauthn.js. Null on legacy rows.
+  webauthnCredentials Json?
+
   // Relations
   chats                   Chat[]
   payments                Payment[]

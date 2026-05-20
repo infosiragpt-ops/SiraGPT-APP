@@ -1919,6 +1919,72 @@ router.delete('/me/2fa/sms', authenticateToken, async (req, res) => {
   }
 });
 
+// ────────────────────────────────────────────────────────────
+// WebAuthn / passkey registration — ratchet 45 scaffold.
+// Generates and verifies a registration ceremony for the
+// authenticated user. Persists the new credential into the
+// User.webauthnCredentials JSON column on success. When the
+// `@simplewebauthn/server` package isn't installed (or the RP
+// config is incomplete), the underlying service returns a 501
+// placeholder which we surface verbatim.
+// See backend/src/services/webauthn.js.
+// ────────────────────────────────────────────────────────────
+const webauthnService = require('../services/webauthn');
+
+router.post('/me/webauthn/registration-options', authenticateToken, async (req, res) => {
+  try {
+    // Re-read so we have the latest webauthnCredentials column;
+    // req.user is the JWT-decoded shape and may not include it.
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { id: true, email: true, name: true, webauthnCredentials: true },
+    });
+    if (!user) return res.status(404).json({ error: 'user_not_found' });
+    const result = await webauthnService.generateRegistrationOptions({ user });
+    if (!result.ok) return res.status(result.status || 500).json(result);
+    return res.json({ ok: true, options: result.options });
+  } catch (error) {
+    console.error('WebAuthn registration-options error:', error);
+    return res.status(500).json({ error: 'webauthn_registration_options_failed' });
+  }
+});
+
+router.post('/me/webauthn/registration-verify', authenticateToken, async (req, res) => {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { id: true, email: true, name: true, webauthnCredentials: true },
+    });
+    if (!user) return res.status(404).json({ error: 'user_not_found' });
+    const result = await webauthnService.verifyRegistration({
+      user,
+      response: req.body && req.body.response,
+      label: req.body && req.body.label,
+    });
+    if (!result.ok) return res.status(result.status || 400).json(result);
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { webauthnCredentials: result.credentials },
+      select: { id: true },
+    });
+    void writeAuditLog(prisma, {
+      req,
+      action: 'webauthn_credential_registered',
+      resource: 'user',
+      resourceId: user.id,
+      userId: user.id,
+    });
+    return res.json({
+      ok: true,
+      credentialId: result.credential.credentialId,
+      label: result.credential.label,
+    });
+  } catch (error) {
+    console.error('WebAuthn registration-verify error:', error);
+    return res.status(500).json({ error: 'webauthn_registration_verify_failed' });
+  }
+});
+
 module.exports = router;
 // Test-only internals (ratchet 45)
 module.exports.INTERNAL = {
