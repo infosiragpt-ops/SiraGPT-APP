@@ -40,7 +40,9 @@ const MODEL_CONTEXT_LIMITS = {
   'anthropic/claude-3.5-sonnet': 200000,
   'anthropic/claude-3.7-sonnet': 200000,
   'anthropic/claude-sonnet-4': 200000,
+  'anthropic/claude-sonnet-4.5': 200000,
   'anthropic/claude-opus-4': 200000,
+  'anthropic/claude-opus-4.7': 200000,
   // Anthropic native (via official SDK — Sonnet 4.5+ supports the
   // `context-1m-2025-08-07` beta header for 1M-token input. Opus and Haiku
   // stay at 200k.)
@@ -87,7 +89,9 @@ const MODEL_COMPLETION_LIMITS = {
   'anthropic/claude-3.5-sonnet': 8192,
   'anthropic/claude-3.7-sonnet': 8192,
   'anthropic/claude-sonnet-4': 64000,
+  'anthropic/claude-sonnet-4.5': 64000,
   'anthropic/claude-opus-4': 32000,
+  'anthropic/claude-opus-4.7': 32000,
   'claude-sonnet-4-5': 64000,
   'claude-sonnet-4-6': 64000,
   'claude-opus-4-7': 32000,

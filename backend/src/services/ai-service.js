@@ -82,11 +82,29 @@ function getFallbackChain() {
  */
 function providerForModel(model) {
     if (!model) return 'OpenAI';
-    if (/^deepseek-(v\d|chat|reasoner)/i.test(String(model).trim())) return 'DeepSeek';
-    if (/^(x-ai|openrouter|anthropic|meta-llama|deepseek|mistralai|qwen|nvidia|microsoft|cohere|moonshotai)\//i.test(model)) return 'OpenRouter';
-    if (/^\/?(gpt-oss|zephyr)/i.test(model)) return 'OpenRouter';
-    if (/^(gemini|imagen)/i.test(model)) return 'Gemini';
+    const m = String(model).trim();
+    if (/^deepseek-(v\d|chat|reasoner)/i.test(m)) return 'DeepSeek';
+    if (/^(claude|anthropic\/)/i.test(m)) return 'OpenRouter';
+    if (/^(x-ai|openrouter|meta-llama|deepseek|mistralai|qwen|nvidia|microsoft|cohere|moonshotai)\//i.test(m)) return 'OpenRouter';
+    if (/^\/?(gpt-oss|zephyr)/i.test(m)) return 'OpenRouter';
+    if (/^(gemini|imagen)/i.test(m)) return 'Gemini';
     return 'OpenAI';
+}
+
+function normalizeChatProvider(provider, model) {
+    const p = String(provider || '').trim();
+    if (/^anthropic$/i.test(p)) return 'OpenRouter';
+    if (!p) return providerForModel(model);
+    return p;
+}
+
+function normalizeModelForProvider(provider, model) {
+    const m = String(model || '').trim();
+    if (!m) return m;
+    if (/^openrouter$/i.test(String(provider || '')) && /^claude/i.test(m) && !m.includes('/')) {
+        return `anthropic/${m}`;
+    }
+    return m;
 }
 
 function modelSupportsVision(provider, model) {
@@ -304,6 +322,8 @@ class AIService {
      * @returns {Promise<string>} - Contenido completo generado
      */
     async generateStream({ provider, model, messages, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true, temperature = 0.55, skipDoneSentinel = false }) {
+        provider = normalizeChatProvider(provider, model);
+        model = normalizeModelForProvider(provider, model);
         let fullResponseContent = '';
         let hasStreamedAnyContent = false;
         const normalizedTemperature = normalizeTemperature(temperature);
@@ -414,9 +434,10 @@ class AIService {
             for (let m = 0; m < modelChain.length; m++) {
                 const currentModel = modelChain[m];
                 const currentProvider = m === 0 ? provider : providerForModel(currentModel);
+                const currentRuntimeModel = normalizeModelForProvider(currentProvider, currentModel);
                 const providerPayload = buildProviderChatPayload({
                     provider: currentProvider,
-                    model: currentModel,
+                    model: currentRuntimeModel,
                     messages: workingMessages,
                     stream: true,
                     thinkingLevel: currentThinkingLevel(),
@@ -450,7 +471,7 @@ class AIService {
                         // so we move to the next model in the chain instantly
                         // instead of waiting for another timeout. On recovery,
                         // a single probe call flips us back to CLOSED.
-                        const breaker = getBreaker(`${currentProvider}:${currentModel}`, {
+                        const breaker = getBreaker(`${currentProvider}:${currentRuntimeModel}`, {
                             failureThreshold: 5,
                             resetTimeoutMs: 60_000,
                         });
@@ -478,7 +499,7 @@ class AIService {
                             throw Object.assign(new Error('Empty completion — model returned no content'), { code: 'EMPTY_COMPLETION' });
                         }
 
-                        console.log(`✅ Response on ${currentProvider}:${currentModel} attempt ${attempt} (${fullResponseContent.length} chars)`);
+                        console.log(`✅ Response on ${currentProvider}:${currentRuntimeModel} attempt ${attempt} (${fullResponseContent.length} chars)`);
 
                         // Quality guard — rule #10 of the spec. Runs once,
                         // after a successful primary stream. If the reply
@@ -494,7 +515,7 @@ class AIService {
                                 console.warn(`🧪 quality-guard flagged: ${verdict.reason} — running corrective pass`);
                                 const corrected = await this._runCorrectivePass({
                                     provider: currentProvider,
-                                    model: currentModel,
+                                    model: currentRuntimeModel,
                                     baseMessages: workingMessages,
                                     userPrompt,
                                     language,
@@ -535,7 +556,7 @@ class AIService {
                         const isLastAttemptForModel = attempt >= MAX_ATTEMPTS_PER_MODEL;
                         const classified = classifyProviderError(err);
                         const reason = isOurTimeout ? 'first-byte timeout' : (classified.error_class || err.status || err.code || err.name || 'unknown');
-                        console.warn(`⚠️ ${currentProvider}:${currentModel} attempt ${attempt}/${MAX_ATTEMPTS_PER_MODEL} failed (${reason}): ${err.message}${retryable && !isLastAttemptForModel ? ' — retrying' : (m < modelChain.length - 1 ? ' — falling back' : '')}`);
+                        console.warn(`⚠️ ${currentProvider}:${currentRuntimeModel} attempt ${attempt}/${MAX_ATTEMPTS_PER_MODEL} failed (${reason}): ${err.message}${retryable && !isLastAttemptForModel ? ' — retrying' : (m < modelChain.length - 1 ? ' — falling back' : '')}`);
 
                         if (!retryable || isLastAttemptForModel) break; // break attempt loop → try next model
 
@@ -1152,6 +1173,9 @@ const service = new AIService();
 service.__test = {
     modelSupportsVision,
     selectVisionRuntime,
+    providerForModel,
+    normalizeChatProvider,
+    normalizeModelForProvider,
 };
 service.modelSupportsVision = modelSupportsVision;
 

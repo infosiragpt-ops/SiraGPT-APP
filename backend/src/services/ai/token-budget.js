@@ -82,10 +82,13 @@ function estimateInputTokens(text, model = 'gpt-4o-mini', usageService = null) {
 
 function contextWindowFor(model) {
     if (!model) return 16_000;
-    const direct = CONTEXT_WINDOWS[model] || CONTEXT_WINDOWS[String(model).toLowerCase()];
+    const raw = String(model);
+    const normalized = raw.toLowerCase();
+    const bare = normalized.includes('/') ? normalized.split('/').pop() : normalized;
+    const direct = CONTEXT_WINDOWS[model] || CONTEXT_WINDOWS[normalized] || CONTEXT_WINDOWS[bare];
     if (direct) return direct;
     // family heuristic
-    const m = String(model).toLowerCase();
+    const m = bare;
     if (m.startsWith('gpt-4')) return 128_000;
     if (m.startsWith('gpt-')) return 16_000;
     if (m.startsWith('claude')) return 200_000;
@@ -96,7 +99,10 @@ function contextWindowFor(model) {
 
 function pricingFor(model) {
     const pricing = loadPricing();
-    const direct = pricing.models && (pricing.models[model] || pricing.models[String(model).toLowerCase()]);
+    const raw = String(model || '');
+    const normalized = raw.toLowerCase();
+    const bare = normalized.includes('/') ? normalized.split('/').pop() : normalized;
+    const direct = pricing.models && (pricing.models[model] || pricing.models[normalized] || pricing.models[bare]);
     if (direct) return direct;
     return pricing._fallback || { input: 1, output: 1 };
 }

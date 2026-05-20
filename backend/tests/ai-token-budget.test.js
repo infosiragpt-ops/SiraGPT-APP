@@ -17,6 +17,7 @@ test('estimateInputTokens uses injected usageService', () => {
 test('contextWindowFor knows common models', () => {
     assert.equal(tokenBudget.contextWindowFor('gpt-4o'), 128_000);
     assert.equal(tokenBudget.contextWindowFor('claude-sonnet-4.5'), 200_000);
+    assert.equal(tokenBudget.contextWindowFor('anthropic/claude-sonnet-4.5'), 200_000);
     assert.equal(tokenBudget.contextWindowFor('gpt-3.5-turbo'), 16_000);
 });
 
@@ -30,6 +31,12 @@ test('estimateCost reports input/output/total USD', () => {
     assert.ok(c.inputUSD > 0);
     assert.ok(c.outputUSD > 0);
     assert.equal(c.totalUSD, c.inputUSD + c.outputUSD);
+});
+
+test('pricingFor resolves provider-prefixed Anthropic slugs', () => {
+    const bare = tokenBudget.pricingFor('claude-sonnet-4.5');
+    const prefixed = tokenBudget.pricingFor('anthropic/claude-sonnet-4.5');
+    assert.deepEqual(prefixed, bare);
 });
 
 test('suggestLongerContextModel picks a viable larger model', () => {
