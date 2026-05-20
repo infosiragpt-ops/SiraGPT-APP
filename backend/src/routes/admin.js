@@ -2407,6 +2407,8 @@ router.get('/api-keys/tombstoned', requireSuperAdmin, async (_req, res) => {
 //   - name, schedule (cron expression in UTC)
 //   - lastRun (ISO), lastDuration (ms), lastStatus ("ok"|"error"|null), lastError
 //   - nextRun (ISO, computed via utils/cron-expression)
+//   - nextRuns (ratchet 44 — array of next 5 ISO run timestamps for
+//     the schedule UI helper, computed via utils/cron-next-runs)
 //   - intervalMs (gap between consecutive runs)
 //   - stale, staleBy (set when lastRun is older than intervalMs ×
 //     SYSTEM_CRON_STALE_MULTIPLIER — see system-cron `status()`)
@@ -2415,10 +2417,28 @@ router.get('/system-cron/jobs', requireSuperAdmin, (_req, res) => {
     const systemCron = require('../jobs/system-cron');
     const snap = (typeof systemCron.status === 'function' ? systemCron.status() : null)
       || { enabled: false, tasks: [] };
+    const tasks = Array.isArray(snap.tasks) ? snap.tasks : [];
+    // Ratchet 44 — expand each task's cron schedule into the next 5
+    // upcoming run timestamps so the ops dashboard can preview a
+    // mini-calendar without re-parsing crontab expressions client-side.
+    let nextRunsByName = {};
+    try {
+      const { nextRunsForJobs } = require('../utils/cron-next-runs');
+      nextRunsByName = nextRunsForJobs({ tasks }, 5) || {};
+    } catch (e) {
+      // Never let the schedule helper crash the listing — degrade to
+      // nextRuns: [] for every job.
+      console.warn('[admin/system-cron/jobs] nextRunsForJobs failed:', e && e.message ? e.message : e);
+    }
+    const jobs = tasks.map((t) => {
+      const entry = t && t.name && nextRunsByName[t.name];
+      const nextRuns = entry && Array.isArray(entry.nextRuns) ? entry.nextRuns : [];
+      return { ...t, nextRuns };
+    });
     res.json({
       enabled: Boolean(snap.enabled),
-      count: Array.isArray(snap.tasks) ? snap.tasks.length : 0,
-      jobs: Array.isArray(snap.tasks) ? snap.tasks : [],
+      count: jobs.length,
+      jobs,
       timestamp: new Date().toISOString(),
     });
   } catch (err) {

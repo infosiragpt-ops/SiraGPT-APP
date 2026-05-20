@@ -120,6 +120,21 @@ describe('GET /api/admin/system-cron/jobs', () => {
     assert.ok(typeof res.body.timestamp === 'string');
   });
 
+  test('attaches nextRuns[5] from the schedule UI helper (ratchet 44)', async () => {
+    const app = buildApp({ isSuperAdmin: true });
+    const res = await request(app).get('/api/admin/system-cron/jobs');
+    assert.equal(res.status, 200);
+    for (const job of res.body.jobs) {
+      assert.ok(Array.isArray(job.nextRuns), `${job.name} should expose nextRuns array`);
+      assert.equal(job.nextRuns.length, 5, `${job.name} should expose 5 upcoming runs`);
+      // Each entry must be a valid ISO string in strictly-increasing order.
+      for (let i = 0; i < job.nextRuns.length; i++) {
+        assert.ok(Number.isFinite(Date.parse(job.nextRuns[i])));
+        if (i > 0) assert.ok(job.nextRuns[i] > job.nextRuns[i - 1]);
+      }
+    }
+  });
+
   test('exposes the new sweep-old-audit-archives job in the listing', async () => {
     const app = buildApp({ isSuperAdmin: true });
     const res = await request(app).get('/api/admin/system-cron/jobs');
