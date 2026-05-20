@@ -1866,6 +1866,10 @@ router.post('/:id/webhooks', authenticateToken, async (req, res) => {
 
   try {
     await assertMembership(prisma, orgId, userId, 'MEMBER');
+    // Per-org abuse guard. Counted AFTER membership so non-members
+    // can't burn the org's daily budget.
+    const ok = await checkOrgWebhookRateLimit(res, orgId, 'create', WEBHOOK_CREATE_LIMIT);
+    if (!ok) return undefined;
     const secret = genWebhookSecret();
     const endpoint = await prisma.webhookEndpoint.create({
       data: {
@@ -1904,6 +1908,10 @@ router.delete('/:id/webhooks/:endpointId', authenticateToken, async (req, res) =
     if (!canManageMembers(membership.role)) {
       return res.status(403).json({ error: 'insufficient role to delete webhook' });
     }
+    // Per-org abuse guard. Counted AFTER role check so probes by
+    // MEMBER tokens don't burn the org's delete budget.
+    const okRl = await checkOrgWebhookRateLimit(res, orgId, 'delete', WEBHOOK_DELETE_LIMIT);
+    if (!okRl) return undefined;
     const deleted = await prisma.webhookEndpoint.deleteMany({
       where: { id: endpointId, organizationId: orgId },
     });
@@ -2483,6 +2491,38 @@ async function checkApiKeyRateLimit(res, orgId, kind, limit) {
     return false;
   } catch (_err) {
     // Fail open — never block a legitimate ADMIN over a store hiccup.
+    return true;
+  }
+}
+
+// ─── Per-org WebhookEndpoint create/delete rate limits (ratchet 44) ─
+// Same abuse-guard pattern as the api-key caps above — a compromised
+// ADMIN token (or a misbehaving script) shouldn't be able to churn a
+// huge fan-out of WebhookEndpoint rows. Limits are per-org, 24h
+// sliding window via the shared rate-limit-store (Redis-backed,
+// in-memory fallback):
+//   - 20 creates / org / day
+//   - 50 deletes / org / day
+// On limit, 429 with `Retry-After` in seconds. Fails open on store
+// errors — these are abuse guards, not security boundaries.
+const WEBHOOK_RL_WINDOW_MS = 24 * 60 * 60 * 1000; // 24h
+const WEBHOOK_CREATE_LIMIT = 20;
+const WEBHOOK_DELETE_LIMIT = 50;
+
+async function checkOrgWebhookRateLimit(res, orgId, kind, limit) {
+  const key = `org-webhook-${kind}:${orgId}`;
+  try {
+    const result = await rateLimitStore.consume(key, limit, WEBHOOK_RL_WINDOW_MS);
+    if (result.allowed) return true;
+    const retryAfterMs = Math.max(0, result.resetAt.getTime() - Date.now());
+    const retryAfterSec = Math.max(1, Math.ceil(retryAfterMs / 1000));
+    res.setHeader('Retry-After', String(retryAfterSec));
+    res.status(429).json({
+      error: `rate limit exceeded for org webhook ${kind} (max ${limit} per 24h)`,
+      retryAfter: retryAfterSec,
+    });
+    return false;
+  } catch (_err) {
     return true;
   }
 }

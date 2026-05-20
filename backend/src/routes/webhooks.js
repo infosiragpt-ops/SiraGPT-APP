@@ -18,8 +18,40 @@ const crypto = require('crypto');
 const { authenticateToken } = require('../middleware/auth');
 const prisma = require('../config/database');
 const triggers = require('../services/trigger-registry');
+const rateLimitStore = require('../middleware/rate-limit-store');
 
 const router = express.Router();
+
+// ── Per-user WebhookEndpoint create/delete rate limits (ratchet 44) ─
+// Mirrors the per-org webhook caps in routes/orgs.js. A compromised
+// user token (or a runaway script) shouldn't be able to churn through
+// huge numbers of WebhookEndpoint rows. Limits are per-user, 24h
+// sliding window via the shared rate-limit-store:
+//   - 20 creates / user / day
+//   - 50 deletes / user / day
+// On limit, 429 with `Retry-After` in seconds. Fails open on store
+// errors — these are abuse guards, not security boundaries.
+const WEBHOOK_RL_WINDOW_MS = 24 * 60 * 60 * 1000;
+const WEBHOOK_CREATE_LIMIT = 20;
+const WEBHOOK_DELETE_LIMIT = 50;
+
+async function checkUserWebhookRateLimit(res, userId, kind, limit) {
+  const key = `user-webhook-${kind}:${userId}`;
+  try {
+    const result = await rateLimitStore.consume(key, limit, WEBHOOK_RL_WINDOW_MS);
+    if (result.allowed) return true;
+    const retryAfterMs = Math.max(0, result.resetAt.getTime() - Date.now());
+    const retryAfterSec = Math.max(1, Math.ceil(retryAfterMs / 1000));
+    res.setHeader('Retry-After', String(retryAfterSec));
+    res.status(429).json({
+      error: `rate limit exceeded for user webhook ${kind} (max ${limit} per 24h)`,
+      retryAfter: retryAfterSec,
+    });
+    return false;
+  } catch (_err) {
+    return true;
+  }
+}
 
 // ── Per-user webhook endpoint cap by plan (ratchet 45, Task 1) ──────
 // Caps the number of WebhookEndpoint rows a single user (userId set,
@@ -120,6 +152,11 @@ router.post('/endpoints', authenticateToken, async (req, res) => {
       }
     }
 
+    // Per-user abuse guard. Counted AFTER the plan cap so a 402
+    // doesn't also burn a rate-limit slot.
+    const okRl = await checkUserWebhookRateLimit(res, req.user.id, 'create', WEBHOOK_CREATE_LIMIT);
+    if (!okRl) return undefined;
+
     const secret = genSecret();
     const endpoint = await prisma.webhookEndpoint.create({
       data: {
@@ -170,6 +207,9 @@ router.get('/endpoints', authenticateToken, async (req, res) => {
 
 router.delete('/endpoints/:id', authenticateToken, async (req, res) => {
   try {
+    // Per-user abuse guard before any DB mutation.
+    const okRl = await checkUserWebhookRateLimit(res, req.user.id, 'delete', WEBHOOK_DELETE_LIMIT);
+    if (!okRl) return undefined;
     const deleted = await prisma.webhookEndpoint.deleteMany({
       where: { id: req.params.id, userId: req.user.id },
     });
