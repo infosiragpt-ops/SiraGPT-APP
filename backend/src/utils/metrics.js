@@ -251,6 +251,26 @@ registerGauge('siragpt_org_members_total', {
   labels: ['orgId'],
 });
 
+// ── API-key request latency + active gauge (ratchet 44) ────────────
+// Histogram observed from `requireScope` middleware on every authenticated
+// API-key request. Labels:
+//   prefix       — the API key's public prefix (low cardinality)
+//   method       — HTTP verb (GET/POST/PUT/PATCH/DELETE/...)
+//   statusBand   — coarse status family: 2xx / 3xx / 4xx / 5xx
+// Buckets are tighter than the global HTTP histogram so we can spot slow
+// API-key paths without renormalising the default series.
+registerHistogram('siragpt_api_key_request_duration_seconds', {
+  help: 'API-key authenticated request latency in seconds, labelled by prefix, method, and status band',
+  labels: ['prefix', 'method', 'statusBand'],
+  buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+});
+// Gauge — count of "live" API keys (not soft-deleted, not expired).
+// Refreshed from the system-cron tick (see system-cron.js recordRun).
+registerGauge('siragpt_api_keys_active_total', {
+  help: 'Active API keys (deletedAt IS NULL AND (expiresAt IS NULL OR expiresAt > now))',
+  labels: [],
+});
+
 // ── Org-events SSE metrics (cycle 79) ───────────────────────────────
 // Wired from the GET /api/orgs/:id/events SSE handler so dashboards can
 // observe live-tail subscriber counts and total events streamed.
@@ -436,6 +456,39 @@ async function refreshOrgMembersGauge(prismaClient, orgId) {
   }
 }
 
+/**
+ * Refresh the `siragpt_api_keys_active_total` gauge by counting ApiKey
+ * rows where `deletedAt IS NULL` AND (`expiresAt IS NULL` OR
+ * `expiresAt > now`). Best-effort: never throws, swallows prisma errors,
+ * and no-ops on a missing prisma client.
+ *
+ * Ratchet 44 — wired into the system-cron tick so the gauge tracks
+ * the actual live-key count without needing a dedicated scrape hook.
+ *
+ * @param {object} prismaClient — a Prisma client exposing `apiKey.count`
+ * @returns {Promise<number|null>} the freshly observed count, or null on failure
+ */
+async function refreshActiveApiKeysGauge(prismaClient) {
+  if (!prismaClient || !prismaClient.apiKey || typeof prismaClient.apiKey.count !== 'function') {
+    return null;
+  }
+  try {
+    const now = new Date();
+    const count = await prismaClient.apiKey.count({
+      where: {
+        deletedAt: null,
+        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+      },
+    });
+    const value = Number.isFinite(count) ? Math.max(0, count) : 0;
+    gauge('siragpt_api_keys_active_total', {}, value);
+    return value;
+  } catch {
+    // never throw from instrumentation
+    return null;
+  }
+}
+
 function refreshProcessMetrics() {
   try {
     gauge('siragpt_process_uptime_seconds', {}, Math.round(process.uptime()));
@@ -466,6 +519,7 @@ module.exports = {
   recordAIStreamUsage,
   recordGdprExport,
   refreshOrgMembersGauge,
+  refreshActiveApiKeysGauge,
   refreshProcessMetrics,
   _reset,
   _clearRegistry,

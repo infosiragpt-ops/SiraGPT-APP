@@ -167,6 +167,20 @@ function start(opts = {}) {
   // Failures intentionally skip the success-timestamp gauge so stale
   // alerts continue to fire when a job is broken; duration is still
   // observed (the histogram is useful even for failed runs).
+  // Ratchet 44 — lazy prisma handle for the active-api-keys gauge refresh.
+  // Best-effort; failure to load prisma simply skips the refresh.
+  let _prismaForGauge = null;
+  function _getPrismaForGauge() {
+    if (_prismaForGauge !== null) return _prismaForGauge || null;
+    try {
+      // eslint-disable-next-line global-require
+      _prismaForGauge = require('../config/database');
+    } catch (_) {
+      _prismaForGauge = false;
+    }
+    return _prismaForGauge || null;
+  }
+
   function recordRun(meta, jobName) {
     const startedAt = Date.now();
     return (err) => {
@@ -189,6 +203,17 @@ function start(opts = {}) {
           }
         } catch (_) {
           // never throw from instrumentation
+        }
+        // Ratchet 44 — refresh the active-api-keys gauge on every tick.
+        // Fire-and-forget; helper is internally try/catch and resolves to
+        // `null` on any failure so cron execution is never disturbed.
+        if (typeof metrics.refreshActiveApiKeysGauge === 'function') {
+          const prisma = _getPrismaForGauge();
+          if (prisma) {
+            try {
+              Promise.resolve(metrics.refreshActiveApiKeysGauge(prisma)).catch(() => {});
+            } catch (_) { /* never throw */ }
+          }
         }
       }
     };
