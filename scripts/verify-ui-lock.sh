@@ -1,48 +1,48 @@
 #!/usr/bin/env bash
-# Verifies the frozen UI contract captured in docs/UI_LOCK_HASHES.txt.
-# Any changed, missing, or newly added TSX/CSS/tailwind config file under the
-# locked UI paths fails the check.
-
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-HASH_FILE="$ROOT/docs/UI_LOCK_HASHES.txt"
+# verify-ui-lock.sh — Verify zero changes to UI files
+# Compares current SHA-256 hashes against the locked baseline.
+# Exit 0 = clean (no UI changes). Exit 1 = violation detected.
 
-if [[ ! -f "$HASH_FILE" ]]; then
-  echo "UI lock hash file missing: docs/UI_LOCK_HASHES.txt" >&2
-  exit 1
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+LOCK_FILE="$PROJECT_ROOT/docs/UI_LOCK_HASHES.txt"
+TEMP_CURRENT="/tmp/ui_lock_current_$$.txt"
+
+cd "$PROJECT_ROOT"
+
+if [[ ! -f "$LOCK_FILE" ]]; then
+  echo "ERROR: Lock file not found at $LOCK_FILE"
+  echo "Generate it first with: find app components styles tailwind.config.js -type f ... | xargs shasum -a 256 > docs/UI_LOCK_HASHES.txt"
+  exit 2
 fi
 
-cd "$ROOT"
+echo "==> Verifying UI lock..."
+echo "     Baseline: $LOCK_FILE"
 
-TMP_CURRENT="$(mktemp)"
-TMP_EXPECTED="$(mktemp)"
-trap 'rm -f "$TMP_CURRENT" "$TMP_EXPECTED"' EXIT
+# Generate current hashes for the same set of files
+find app components styles tailwind.config.js postcss.config.js \
+  -type f \( -name "*.tsx" -o -name "*.css" -o -name "*.ts" -o -name "*.js" \) \
+  ! -path "*/node_modules/*" ! -path "*/.next/*" ! -path "*/.turbo/*" ! -path "*/dist/*" \
+  | sort | xargs shasum -a 256 2>/dev/null | sort -k2 > "$TEMP_CURRENT"
 
-LOCK_PATHS=(
-  "client/src/components"
-  "client/src/pages"
-  "client/src/app"
-  "app"
-  "components"
-  "styles"
-)
+# Compare
+DIFF_OUTPUT=$(diff "$LOCK_FILE" "$TEMP_CURRENT" 2>&1) || true
 
-{
-  for path in "${LOCK_PATHS[@]}"; do
-    [[ -e "$path" ]] || continue
-    find "$path" -type f \( -name '*.tsx' -o -name '*.css' \) -print
-  done
-  find . -maxdepth 1 -type f \( -name 'tailwind.config.js' -o -name 'tailwind.config.ts' -o -name 'tailwind.config.mjs' -o -name 'tailwind.config.cjs' \) -print | sed 's#^\./##'
-} | sort -u | while IFS= read -r file; do
-  shasum -a 256 "$file" | awk -v f="$file" '{print $1 "  " f}'
-done | sort -k2,2 > "$TMP_CURRENT"
-
-grep -Ev '^(#|$)' "$HASH_FILE" | sort -k2,2 -u > "$TMP_EXPECTED"
-
-if ! diff -u "$TMP_EXPECTED" "$TMP_CURRENT"; then
-  echo "UI lock verification failed: visual-surface file hashes changed." >&2
+if [[ -z "$DIFF_OUTPUT" ]]; then
+  echo "✅ UI lock verified — zero changes to frontend files."
+  rm -f "$TEMP_CURRENT"
+  exit 0
+else
+  echo "❌ UI LOCK VIOLATION DETECTED!"
+  echo "---"
+  echo "$DIFF_OUTPUT"
+  echo "---"
+  echo "The following files have changed:"
+  echo "$DIFF_OUTPUT" | grep '^[<>]' | awk '{print $3}' | sort -u
+  echo ""
+  echo "This build cannot proceed. Revert UI changes before committing."
+  rm -f "$TEMP_CURRENT"
   exit 1
 fi
-
-echo "UI lock verification passed: no locked TSX/CSS/tailwind files changed."

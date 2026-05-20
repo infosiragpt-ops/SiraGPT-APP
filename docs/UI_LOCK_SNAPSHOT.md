@@ -1,383 +1,363 @@
-# UI Lock Snapshot
+# UI Lock Snapshot — 2026-05-20T18:05:27Z
 
-Generated: 2026-05-20T15:27:02.805Z
-Base commit: 8aebd72779904c28508e05c5f44a222915a41616
-
-This is the frozen visual-surface contract for internal backend/orchestration work. React components, visible Next.js routes, styles, Tailwind config, icons, copy, spacing, animation, and layout must remain unchanged unless the lock is intentionally regenerated in a dedicated UI change.
-
-Requested legacy client paths:
-- client/src/components: missing in this repo
-- client/src/pages: missing in this repo
-- client/src/app: missing in this repo
-
-Locked actual UI paths:
-- app
-- components
-- styles
-- tailwind.config.js
-
-```text
-$ tree -L 4 -I 'node_modules|dist|.next|.turbo' client/src/components client/src/pages client/src/app app components styles tailwind.config.*
-(tree binary is not installed in this environment; equivalent deterministic tree output generated locally.)
-
-client/src/components [missing]
-
-client/src/pages [missing]
-
-client/src/app [missing]
-
-app
-├── admin/
-│   ├── analytics/
-│   │   └── page.tsx
-│   ├── connections/
-│   │   └── page.tsx
-│   ├── database/
-│   │   └── page.tsx
-│   ├── health/
-│   │   └── page.tsx
-│   ├── invoices/
-│   │   └── page.tsx
-│   ├── layout.tsx
-│   ├── models/
-│   │   └── page.tsx
-│   ├── page.tsx
-│   ├── payments/
-│   │   └── page.tsx
-│   ├── reports/
-│   │   └── page.tsx
-│   ├── security/
-│   │   └── page.tsx
-│   ├── settings/
-│   │   └── page.tsx
-│   ├── status/
-│   │   └── page.tsx
-│   └── users/
-│       ├── loading.tsx
-│       └── page.tsx
-├── api/
-│   ├── health/
-│   │   └── route.ts
-│   └── ready/
-│       └── route.ts
-├── api.zip
-├── auth/
-│   ├── callback/
-│   │   └── page.tsx
-│   ├── login/
-│   │   └── page.tsx
-│   ├── page.tsx
-│   └── register/
-│       └── page.tsx
-├── billing/
-│   ├── invoices/
-│   │   └── page.tsx
-│   └── page.tsx
-├── chat/
-│   ├── layout.tsx
-│   └── page.tsx
-├── code/
-│   ├── loading.tsx
-│   └── page.tsx
-├── codex/
-│   └── page.tsx
-├── design/
-│   ├── [id]/
-│   │   └── page.tsx
-│   ├── loading.tsx
-│   └── page.tsx
-├── documents/
-│   └── editor/
-│       └── page.tsx
-├── error.tsx
-├── global-error.tsx
-├── globals.css
-├── gpts/
-│   ├── create/
-│   │   └── page.tsx
-│   ├── layout.tsx
-│   ├── loading.tsx
-│   └── page.tsx
-├── home-page.tsx
-├── layout.tsx
-├── library/
-│   ├── loading.tsx
-│   └── page.tsx
-├── loading.tsx
-├── not-found.tsx
-├── offline/
-│   └── page.tsx
-├── openclaw/
-│   └── native/
-│       └── [[...path]]/
-│           └── route.ts
-├── page.tsx
-├── parafraseo/
-│   ├── loading.tsx
-│   └── page.tsx
-├── payment/
-│   ├── cancel/
-│   │   └── page.tsx
-│   └── success/
-│       └── page.tsx
-├── plan/
-│   ├── loading.tsx
-│   └── page.tsx
-├── post/
-│   └── page.tsx
-├── privacy-policy/
-│   └── page.tsx
-├── profile/
-│   └── page.tsx
-├── projects/
-│   ├── [id]/
-│   │   ├── docs/
-│   │   │   └── [docId]/
-│   │   ├── marco-teorico/
-│   │   │   └── page.tsx
-│   │   └── page.tsx
-│   ├── loading.tsx
-│   ├── page.tsx
-│   └── share/
-│       └── [shareId]/
-│           └── page.tsx
-├── robots.ts
-├── search-brain/
-│   └── page.tsx
-├── settings/
-│   └── page.tsx
-├── share/
-│   ├── [shareId]/
-│   │   └── page.tsx
-│   └── message/
-│       └── [shareId]/
-│           └── page.tsx
-├── sitemap.ts
-├── super-admin/
-│   └── page.tsx
-├── thesis/
-│   └── page.tsx
-├── voice/
-│   └── page.tsx
-└── web-vitals.ts
-
-components
-├── admin-dashboard.tsx
-├── admin-sidebar.tsx
-├── agentic-steps.tsx
-├── analytics-dashboard.tsx
-├── app-shell.tsx
-├── app-sidebar.tsx
-├── app-wrapper.tsx
-├── artifact/
-│   ├── interactive-artifact-display.tsx
-│   └── InteractiveArtifact.tsx
-├── auth-guard.tsx
-├── AuthNavButtons.tsx
-├── billing-history.tsx
-├── BottomGlowBar.tsx
-├── BrandCycle.tsx
-├── BrandLogo.tsx
-├── BrowserActivityViewer.tsx
-├── chart-component.tsx
-├── chat/
-│   ├── ArtifactCard.tsx
-│   ├── ArtifactPanel.tsx
-│   ├── ChatEmptyStateHero.tsx
-│   ├── ComposerInlineDisplays.tsx
-│   ├── diff-block.tsx
-│   └── LongOperationIndicator.tsx
-├── chat-interface-enhanced.tsx
-├── ChatSearchDialog.tsx
-├── code/
-│   ├── activity-bar.tsx
-│   ├── ai-code-chat-panel.tsx
-│   ├── code-workspace.tsx
-│   ├── diff-view.tsx
-│   ├── editor-panel.tsx
-│   ├── file-tree-panel.tsx
-│   ├── monaco-code-area.tsx
-│   ├── search-panel.tsx
-│   ├── status-bar.tsx
-│   └── terminal-panel.tsx
-├── code-preview.tsx
-├── ComputerUseInterface.tsx
-├── ComputerUseReasoning.tsx
-├── connection-status.tsx
-├── design/
-│   ├── canvas-iframe.tsx
-│   ├── chat-panel.tsx
-│   ├── create-panel.tsx
-│   ├── design-composer.tsx
-│   └── designs-grid.tsx
-├── doc/
-│   └── doc-artifact-display.tsx
-├── document-preview.tsx
-├── download-buttons.tsx
-├── download-demo.tsx
-├── editor/
-│   ├── tiptap-editor.tsx
-│   └── toolbar.tsx
-├── elevenlabs-interface.tsx
-├── error-boundary.tsx
-├── ExcelConnector.tsx
-├── ExcelRibbon.tsx
-├── ExtractedDataDownload.tsx
-├── figma-diagram-component.tsx
-├── file-processing-badge.tsx
-├── GlobalDropRedirector.tsx
-├── GmailConnectionCard.tsx
-├── GoogleServicesConnectionCard.tsx
-├── icon-provider.tsx
-├── icons/
-│   ├── agent-status-icons.tsx
-│   ├── premium-card-icon.tsx
-│   ├── thinking-bars-icon.tsx
-│   └── whatsapp-icon.tsx
-├── ImageGenerationEffect.tsx
-├── impersonation-banner.tsx
-├── KeyboardShortcutsModal.tsx
-├── landing/
-│   ├── CTASection.tsx
-│   ├── FeaturesSection.tsx
-│   ├── Footer.tsx
-│   ├── HowItWorks.tsx
-│   ├── PricingSection.tsx
-│   └── TestimonialsSection.tsx
-├── LanguageToggle.tsx
-├── Library/
-│   └── LibraryTabs.tsx
-├── LiquidButton.tsx
-├── loading-boundary.tsx
-├── marco-teorico/
-│   ├── phase-timeline.tsx
-│   ├── source-card.tsx
-│   └── source-chart.tsx
-├── message-component.tsx
-├── MessageActionRail.tsx
-├── MinimalAuthLanding.tsx
-├── MusicGenerationComponent.tsx
-├── navigation-transition-context.tsx
-├── notification-center.tsx
-├── paste-preview-overlay.tsx
-├── payment-methods.tsx
-├── plan/
-│   ├── plan-artifact-display.tsx
-│   └── plan-viewer.tsx
-├── plan-change-manager.tsx
-├── posthog-client-init.tsx
-├── presentation-view.tsx
-├── ProcessingGmailCard.tsx
-├── ProcessingGoogleServicesCard.tsx
-├── projects/
-│   ├── create-project-dialog.tsx
-│   └── documents-section.tsx
-├── provider-error-boundary.tsx
-├── PWAInstallPrompt.tsx
-├── root-providers.tsx
-├── route-transition-shell.tsx
-├── search-brain/
-│   └── UniversalSearchPanel.tsx
-├── SearchPanel.tsx
-├── SearchSourceSelector.tsx
-├── sentry-client-init.tsx
-├── sidebar/
-│   └── sidebar-folders-dropdown.tsx
-├── skeleton/
-│   └── skeleton-pulse.tsx
-├── SlashCommandMenu.tsx
-├── speech-to-text-component.tsx
-├── spotify-results.tsx
-├── SpotifyConnectionCard.tsx
-├── subscription-manager.tsx
-├── super-admin-dashboard.tsx
-├── SyncfusionBannerRemover.tsx
-├── TableControls.tsx
-├── text-to-speech-component.tsx
-├── theme-provider.tsx
-├── theme-toggle.tsx
-├── ThesisChatConnector.tsx
-├── ThesisGenerator.tsx
-├── ThesisProgressComponent.tsx
-├── ThesisProgressDisplay.tsx
-├── thinking-placeholder.tsx
-├── ui/
-│   ├── accordion.tsx
-│   ├── alert-dialog.tsx
-│   ├── alert.tsx
-│   ├── aspect-ratio.tsx
-│   ├── avatar.tsx
-│   ├── badge.tsx
-│   ├── breadcrumb.tsx
-│   ├── button.tsx
-│   ├── calendar.tsx
-│   ├── card.tsx
-│   ├── carousel.tsx
-│   ├── chart.tsx
-│   ├── checkbox.tsx
-│   ├── CircularProgress.tsx
-│   ├── collapsible.tsx
-│   ├── command.tsx
-│   ├── context-menu.tsx
-│   ├── custom-code-block.tsx
-│   ├── date-range-picker.tsx
-│   ├── dialog.tsx
-│   ├── drawer.tsx
-│   ├── dropdown-menu.tsx
-│   ├── form.tsx
-│   ├── hover-card.tsx
-│   ├── image-modal.tsx
-│   ├── input-otp.tsx
-│   ├── input.tsx
-│   ├── label.tsx
-│   ├── menubar.tsx
-│   ├── navigation-menu.tsx
-│   ├── pagination.tsx
-│   ├── popover.tsx
-│   ├── progress.tsx
-│   ├── radio-group.tsx
-│   ├── resizable.tsx
-│   ├── scroll-area.tsx
-│   ├── select.tsx
-│   ├── separator.tsx
-│   ├── sheet.tsx
-│   ├── shiki-code-view.tsx
-│   ├── sidebar.tsx
-│   ├── skeleton.tsx
-│   ├── slider.tsx
-│   ├── sonner.tsx
-│   ├── switch.tsx
-│   ├── table.tsx
-│   ├── tabs.tsx
-│   ├── textarea.tsx
-│   ├── thinking-indicator.tsx
-│   ├── toast.tsx
-│   ├── toaster.tsx
-│   ├── toggle-group.tsx
-│   ├── toggle.tsx
-│   ├── tooltip.tsx
-│   ├── use-mobile.tsx
-│   └── use-toast.ts
-├── UpgradeModal.tsx
-├── user-settings.tsx
-├── VideoGenerationComponent.tsx
-├── viewers/
-│   └── UnifiedDocumentViewer.tsx
-├── virtual-scroll.tsx
-├── viz/
-│   ├── chartjs-chart.tsx
-│   ├── plotly-chart.tsx
-│   ├── recharts-chart.tsx
-│   └── viz-artifact-display.tsx
-├── voice-controls.tsx
-├── voice-selector.tsx
-├── WhatsAppButton.tsx
-└── WordConnector.tsx
-
-styles
-├── computer-use.css
-└── globals.css
-
-tailwind.config.js
-
+## File Tree
 ```
+app
+app/admin
+app/admin/analytics
+app/admin/analytics/page.tsx
+app/admin/connections
+app/admin/connections/page.tsx
+app/admin/database
+app/admin/database/page.tsx
+app/admin/health
+app/admin/health/page.tsx
+app/admin/invoices
+app/admin/invoices/page.tsx
+app/admin/layout.tsx
+app/admin/models
+app/admin/models/page.tsx
+app/admin/page.tsx
+app/admin/payments
+app/admin/payments/page.tsx
+app/admin/reports
+app/admin/reports/page.tsx
+app/admin/security
+app/admin/security/page.tsx
+app/admin/settings
+app/admin/settings/page.tsx
+app/admin/status
+app/admin/status/page.tsx
+app/admin/users
+app/admin/users/loading.tsx
+app/admin/users/page.tsx
+app/api
+app/api.zip
+app/api/health
+app/api/health/route.ts
+app/api/ready
+app/api/ready/route.ts
+app/auth
+app/auth/callback
+app/auth/callback/page.tsx
+app/auth/login
+app/auth/login/page.tsx
+app/auth/page.tsx
+app/auth/register
+app/auth/register/page.tsx
+app/billing
+app/billing/invoices
+app/billing/invoices/page.tsx
+app/billing/page.tsx
+app/chat
+app/chat/layout.tsx
+app/chat/page.tsx
+app/code
+app/code/loading.tsx
+app/code/page.tsx
+app/codex
+app/codex/page.tsx
+app/design
+app/design/[id]
+app/design/[id]/page.tsx
+app/design/loading.tsx
+app/design/page.tsx
+app/documents
+app/documents/editor
+app/documents/editor/page.tsx
+app/error.tsx
+app/global-error.tsx
+app/globals.css
+app/gpts
+app/gpts/create
+app/gpts/create/page.tsx
+app/gpts/layout.tsx
+app/gpts/loading.tsx
+app/gpts/page.tsx
+app/home-page.tsx
+app/layout.tsx
+app/library
+app/library/loading.tsx
+app/library/page.tsx
+app/loading.tsx
+app/not-found.tsx
+app/offline
+app/offline/page.tsx
+app/openclaw
+app/openclaw/native
+app/openclaw/native/[[...path]]
+app/openclaw/native/[[...path]]/route.ts
+app/page.tsx
+app/parafraseo
+app/parafraseo/loading.tsx
+app/parafraseo/page.tsx
+app/payment
+app/payment/cancel
+app/payment/cancel/page.tsx
+app/payment/success
+app/payment/success/page.tsx
+app/plan
+app/plan/loading.tsx
+app/plan/page.tsx
+app/post
+app/post/page.tsx
+app/privacy-policy
+app/privacy-policy/page.tsx
+app/profile
+app/profile/page.tsx
+app/projects
+app/projects/[id]
+app/projects/[id]/docs
+app/projects/[id]/docs/[docId]
+app/projects/[id]/docs/[docId]/page.tsx
+app/projects/[id]/marco-teorico
+app/projects/[id]/marco-teorico/page.tsx
+app/projects/[id]/page.tsx
+app/projects/loading.tsx
+app/projects/page.tsx
+app/projects/share
+app/projects/share/[shareId]
+app/projects/share/[shareId]/page.tsx
+app/robots.ts
+app/search-brain
+app/search-brain/page.tsx
+app/settings
+app/settings/page.tsx
+app/share
+app/share/[shareId]
+app/share/[shareId]/page.tsx
+app/share/message
+app/share/message/[shareId]
+app/share/message/[shareId]/page.tsx
+app/sitemap.ts
+app/super-admin
+app/super-admin/page.tsx
+app/thesis
+app/thesis/page.tsx
+app/voice
+app/voice/page.tsx
+app/web-vitals.ts
+components
+components/AuthNavButtons.tsx
+components/BottomGlowBar.tsx
+components/BrandCycle.tsx
+components/BrandLogo.tsx
+components/BrowserActivityViewer.tsx
+components/ChatSearchDialog.tsx
+components/ComputerUseInterface.tsx
+components/ComputerUseReasoning.tsx
+components/ExcelConnector.tsx
+components/ExcelRibbon.tsx
+components/ExtractedDataDownload.tsx
+components/GlobalDropRedirector.tsx
+components/GmailConnectionCard.tsx
+components/GoogleServicesConnectionCard.tsx
+components/ImageGenerationEffect.tsx
+components/KeyboardShortcutsModal.tsx
+components/LanguageToggle.tsx
+components/Library
+components/Library/LibraryTabs.tsx
+components/LiquidButton.tsx
+components/MessageActionRail.tsx
+components/MinimalAuthLanding.tsx
+components/MusicGenerationComponent.tsx
+components/PWAInstallPrompt.tsx
+components/ProcessingGmailCard.tsx
+components/ProcessingGoogleServicesCard.tsx
+components/SearchPanel.tsx
+components/SearchSourceSelector.tsx
+components/SlashCommandMenu.tsx
+components/SpotifyConnectionCard.tsx
+components/SyncfusionBannerRemover.tsx
+components/TableControls.tsx
+components/ThesisChatConnector.tsx
+components/ThesisGenerator.tsx
+components/ThesisProgressComponent.tsx
+components/ThesisProgressDisplay.tsx
+components/UpgradeModal.tsx
+components/VideoGenerationComponent.tsx
+components/WhatsAppButton.tsx
+components/WordConnector.tsx
+components/admin-dashboard.tsx
+components/admin-sidebar.tsx
+components/agentic-steps.tsx
+components/analytics-dashboard.tsx
+components/app-shell.tsx
+components/app-sidebar.tsx
+components/app-wrapper.tsx
+components/artifact
+components/artifact/InteractiveArtifact.tsx
+components/artifact/interactive-artifact-display.tsx
+components/auth-guard.tsx
+components/billing-history.tsx
+components/chart-component.tsx
+components/chat
+components/chat-interface-enhanced.tsx
+components/chat/ArtifactCard.tsx
+components/chat/ArtifactPanel.tsx
+components/chat/ChatEmptyStateHero.tsx
+components/chat/ComposerInlineDisplays.tsx
+components/chat/LongOperationIndicator.tsx
+components/chat/diff-block.tsx
+components/code
+components/code-preview.tsx
+components/code/activity-bar.tsx
+components/code/ai-code-chat-panel.tsx
+components/code/code-workspace.tsx
+components/code/diff-view.tsx
+components/code/editor-panel.tsx
+components/code/file-tree-panel.tsx
+components/code/monaco-code-area.tsx
+components/code/search-panel.tsx
+components/code/status-bar.tsx
+components/code/terminal-panel.tsx
+components/connection-status.tsx
+components/design
+components/design/canvas-iframe.tsx
+components/design/chat-panel.tsx
+components/design/create-panel.tsx
+components/design/design-composer.tsx
+components/design/designs-grid.tsx
+components/doc
+components/doc/doc-artifact-display.tsx
+components/document-preview.tsx
+components/download-buttons.tsx
+components/download-demo.tsx
+components/editor
+components/editor/tiptap-editor.tsx
+components/editor/toolbar.tsx
+components/elevenlabs-interface.tsx
+components/error-boundary.tsx
+components/figma-diagram-component.tsx
+components/file-processing-badge.tsx
+components/icon-provider.tsx
+components/icons
+components/icons/agent-status-icons.tsx
+components/icons/premium-card-icon.tsx
+components/icons/thinking-bars-icon.tsx
+components/icons/whatsapp-icon.tsx
+components/impersonation-banner.tsx
+components/landing
+components/landing/CTASection.tsx
+components/landing/FeaturesSection.tsx
+components/landing/Footer.tsx
+components/landing/HowItWorks.tsx
+components/landing/PricingSection.tsx
+components/landing/TestimonialsSection.tsx
+components/loading-boundary.tsx
+components/marco-teorico
+components/marco-teorico/phase-timeline.tsx
+components/marco-teorico/source-card.tsx
+components/marco-teorico/source-chart.tsx
+components/message-component.tsx
+components/navigation-transition-context.tsx
+components/notification-center.tsx
+components/paste-preview-overlay.tsx
+components/payment-methods.tsx
+components/plan
+components/plan-change-manager.tsx
+components/plan/plan-artifact-display.tsx
+components/plan/plan-viewer.tsx
+components/posthog-client-init.tsx
+components/presentation-view.tsx
+components/projects
+components/projects/create-project-dialog.tsx
+components/projects/documents-section.tsx
+components/provider-error-boundary.tsx
+components/root-providers.tsx
+components/route-transition-shell.tsx
+components/search-brain
+components/search-brain/UniversalSearchPanel.tsx
+components/sentry-client-init.tsx
+components/sidebar
+components/sidebar/sidebar-folders-dropdown.tsx
+components/skeleton
+components/skeleton/skeleton-pulse.tsx
+components/speech-to-text-component.tsx
+components/spotify-results.tsx
+components/subscription-manager.tsx
+components/super-admin-dashboard.tsx
+components/text-to-speech-component.tsx
+components/theme-provider.tsx
+components/theme-toggle.tsx
+components/thinking-placeholder.tsx
+components/ui
+components/ui/CircularProgress.tsx
+components/ui/accordion.tsx
+components/ui/alert-dialog.tsx
+components/ui/alert.tsx
+components/ui/aspect-ratio.tsx
+components/ui/avatar.tsx
+components/ui/badge.tsx
+components/ui/breadcrumb.tsx
+components/ui/button.tsx
+components/ui/calendar.tsx
+components/ui/card.tsx
+components/ui/carousel.tsx
+components/ui/chart.tsx
+components/ui/checkbox.tsx
+components/ui/collapsible.tsx
+components/ui/command.tsx
+components/ui/context-menu.tsx
+components/ui/custom-code-block.tsx
+components/ui/date-range-picker.tsx
+components/ui/dialog.tsx
+components/ui/drawer.tsx
+components/ui/dropdown-menu.tsx
+components/ui/form.tsx
+components/ui/hover-card.tsx
+components/ui/image-modal.tsx
+components/ui/input-otp.tsx
+components/ui/input.tsx
+components/ui/label.tsx
+components/ui/menubar.tsx
+components/ui/navigation-menu.tsx
+components/ui/pagination.tsx
+components/ui/popover.tsx
+components/ui/progress.tsx
+components/ui/radio-group.tsx
+components/ui/resizable.tsx
+components/ui/scroll-area.tsx
+components/ui/select.tsx
+components/ui/separator.tsx
+components/ui/sheet.tsx
+components/ui/shiki-code-view.tsx
+components/ui/sidebar.tsx
+components/ui/skeleton.tsx
+components/ui/slider.tsx
+components/ui/sonner.tsx
+components/ui/switch.tsx
+components/ui/table.tsx
+components/ui/tabs.tsx
+components/ui/textarea.tsx
+components/ui/thinking-indicator.tsx
+components/ui/toast.tsx
+components/ui/toaster.tsx
+components/ui/toggle-group.tsx
+components/ui/toggle.tsx
+components/ui/tooltip.tsx
+components/ui/use-mobile.tsx
+components/ui/use-toast.ts
+components/user-settings.tsx
+components/viewers
+components/viewers/UnifiedDocumentViewer.tsx
+components/virtual-scroll.tsx
+components/viz
+components/viz/chartjs-chart.tsx
+components/viz/plotly-chart.tsx
+components/viz/recharts-chart.tsx
+components/viz/viz-artifact-display.tsx
+components/voice-controls.tsx
+components/voice-selector.tsx
+postcss.config.js
+styles
+styles/computer-use.css
+styles/globals.css
+tailwind.config.js
+```
+
+## Contract
+- **Total UI files:** 270
+- **SHA-256 hashes:** docs/UI_LOCK_HASHES.txt
+- **Verify:** `bash scripts/verify-ui-lock.sh`
+- **Policy:** Zero changes to any UI file. CI gate enforced.
