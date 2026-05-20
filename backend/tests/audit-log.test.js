@@ -140,6 +140,48 @@ describe('writeAuditLog — mapping', () => {
     assert.equal(capture.data.metadata.ip, '5.5.5.5');
   });
 
+  test('normalises tags (trim/lowercase/dedupe/non-empty) into metadata.tags', async () => {
+    const capture = {};
+    await writeAuditLog(makePrisma(capture), {
+      action: 'login',
+      tags: [' Security ', 'security', 'LOGIN', '', 42, null, 'login'],
+    });
+    assert.deepEqual(capture.data.metadata.tags, ['security', 'login']);
+  });
+
+  test('omits metadata.tags when tags array yields no valid entries', async () => {
+    const capture = {};
+    await writeAuditLog(makePrisma(capture), {
+      action: 'cron_run',
+      tags: ['', '   ', 7, null],
+    });
+    assert.equal(capture.data.metadata, null);
+  });
+
+  test('ignores non-array tags payload without throwing', async () => {
+    const capture = {};
+    await writeAuditLog(makePrisma(capture), {
+      action: 'login',
+      tags: 'security',
+    });
+    assert.equal(capture.data.metadata, null);
+  });
+
+  test('tags coexist with ip/ua/requestId and caller metadata', async () => {
+    const capture = {};
+    await writeAuditLog(makePrisma(capture), {
+      action: 'login',
+      ip: '1.2.3.4',
+      metadata: { reason: 'password' },
+      tags: ['security', 'login'],
+    });
+    assert.deepEqual(capture.data.metadata, {
+      reason: 'password',
+      ip: '1.2.3.4',
+      tags: ['security', 'login'],
+    });
+  });
+
   test('persists before/after snapshots verbatim', async () => {
     const capture = {};
     const before = { name: 'old' };

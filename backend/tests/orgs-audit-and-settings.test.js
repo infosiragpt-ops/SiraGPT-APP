@@ -525,3 +525,44 @@ test('member activity: empty userId param → 400', async () => {
   await listMemberActivity(req, res, { prisma });
   assert.equal(res._status, 400);
 });
+
+// ─── transfer settings (ratchet 44, cycle 76) ───────────────────────
+
+test('parseOrgSettingsPatch: accepts transfer.requireApprovalDays in range', () => {
+  const r = parseOrgSettingsPatch({ transfer: { requireApprovalDays: 7 } });
+  assert.equal(r.error, null);
+  assert.deepEqual(r.warnings, []);
+  assert.equal(r.value.transfer.requireApprovalDays, 7);
+});
+
+test('parseOrgSettingsPatch: accepts transfer.requireApprovalDays = 0', () => {
+  const r = parseOrgSettingsPatch({ transfer: { requireApprovalDays: 0 } });
+  assert.equal(r.error, null);
+});
+
+test('parseOrgSettingsPatch: rejects negative transfer.requireApprovalDays', () => {
+  const r = parseOrgSettingsPatch({ transfer: { requireApprovalDays: -1 } });
+  assert.ok(r.error);
+  assert.ok(r.error.issues.some((i) => i.path.startsWith('transfer')));
+});
+
+test('parseOrgSettingsPatch: rejects transfer.requireApprovalDays > 30', () => {
+  const r = parseOrgSettingsPatch({ transfer: { requireApprovalDays: 31 } });
+  assert.ok(r.error);
+});
+
+test('parseOrgSettingsPatch: rejects non-integer transfer.requireApprovalDays', () => {
+  const r = parseOrgSettingsPatch({ transfer: { requireApprovalDays: 3.5 } });
+  assert.ok(r.error);
+});
+
+test('parseOrgSettingsPatch: rejects unknown transfer keys (strict object)', () => {
+  const r = parseOrgSettingsPatch({ transfer: { requireApprovalDays: 5, somethingElse: true } });
+  assert.ok(r.error);
+});
+
+test('parseOrgSettingsPatch: transfer:null honours delete semantics', () => {
+  const r = parseOrgSettingsPatch({ transfer: null });
+  assert.equal(r.error, null);
+  assert.equal(r.value.transfer, null);
+});

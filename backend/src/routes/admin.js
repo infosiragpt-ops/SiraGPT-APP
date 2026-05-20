@@ -2229,7 +2229,7 @@ router.post('/webhooks/retry-failed', requireSuperAdmin, async (req, res) => {
 });
 
 // ── Audit log query DSL endpoint ───────────────────────────────────────────
-// GET /api/admin/audit-logs?userId=&action=&resource=&resourceId=&orgId=&apiKeyId=&from=&to=&page=&limit=
+// GET /api/admin/audit-logs?userId=&action=&resource=&resourceId=&orgId=&apiKeyId=&tags=&from=&to=&page=&limit=
 router.get('/audit-logs', requireSuperAdmin, async (req, res) => {
   try {
     const result = await runAuditLogQuery(req);
@@ -2237,6 +2237,31 @@ router.get('/audit-logs', requireSuperAdmin, async (req, res) => {
   } catch (err) {
     console.error('[admin/audit-logs] failed:', err && err.message ? err.message : err);
     res.status(500).json({ error: 'Failed to query audit logs' });
+  }
+});
+
+// ── Audit log free-text search ─────────────────────────────────────────────
+// GET /api/admin/audit-logs/search?q=text&limit=&page=
+// Super-admin only. ILIKEs `action` and `metadata::text` so operators can
+// hunt a stray email, org id, or error string without knowing which JSON
+// path it lives at. `q` must be at least 2 chars to keep the pattern
+// from matching every row in a 50M-row table. Default page size 50,
+// hard cap 200 (see SEARCH_LIMIT_MAX in services/audit-query).
+router.get('/audit-logs/search', requireSuperAdmin, async (req, res) => {
+  try {
+    const raw = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+    if (raw.length < 2) {
+      return res.status(400).json({ error: 'q must be at least 2 characters' });
+    }
+    const { search: auditSearch } = require('../services/audit-query');
+    const result = await auditSearch(prisma, raw, {
+      limit: req.query.limit,
+      page: req.query.page,
+    });
+    res.json(result);
+  } catch (err) {
+    console.error('[admin/audit-logs/search] failed:', err && err.message ? err.message : err);
+    res.status(500).json({ error: 'Failed to search audit logs' });
   }
 });
 
@@ -2279,6 +2304,18 @@ async function runAuditLogQuery(req) {
   // overrides any conflicting filters when the operator is hunting a
   // specific key's activity.
   if (req.query.apiKeyId) q = q.byApiKey(String(req.query.apiKeyId));
+  // Ratchet 44 — `?tags=tag1,tag2` slices on metadata.tags. Accepts a
+  // CSV string or a repeated `?tags=a&tags=b` query (express collapses
+  // those into an array). Whitespace + empty fragments are dropped by
+  // the builder, so a stray trailing comma is safe.
+  if (req.query.tags) {
+    const raw = Array.isArray(req.query.tags) ? req.query.tags : [req.query.tags];
+    const tags = raw
+      .flatMap((entry) => String(entry).split(','))
+      .map((t) => t.trim())
+      .filter((t) => t.length > 0);
+    if (tags.length > 0) q = q.byTags(tags);
+  }
   if (req.query.from || req.query.to) q = q.byDate(req.query.from || null, req.query.to || null);
   if (req.query.page) q = q.page(req.query.page);
   if (req.query.limit) q = q.limit(req.query.limit);
@@ -2407,6 +2444,8 @@ router.get('/api-keys/tombstoned', requireSuperAdmin, async (_req, res) => {
 //   - name, schedule (cron expression in UTC)
 //   - lastRun (ISO), lastDuration (ms), lastStatus ("ok"|"error"|null), lastError
 //   - nextRun (ISO, computed via utils/cron-expression)
+//   - nextRuns (ratchet 44 — array of next 5 ISO run timestamps for
+//     the schedule UI helper, computed via utils/cron-next-runs)
 //   - intervalMs (gap between consecutive runs)
 //   - stale, staleBy (set when lastRun is older than intervalMs ×
 //     SYSTEM_CRON_STALE_MULTIPLIER — see system-cron `status()`)
@@ -2415,10 +2454,28 @@ router.get('/system-cron/jobs', requireSuperAdmin, (_req, res) => {
     const systemCron = require('../jobs/system-cron');
     const snap = (typeof systemCron.status === 'function' ? systemCron.status() : null)
       || { enabled: false, tasks: [] };
+    const tasks = Array.isArray(snap.tasks) ? snap.tasks : [];
+    // Ratchet 44 — expand each task's cron schedule into the next 5
+    // upcoming run timestamps so the ops dashboard can preview a
+    // mini-calendar without re-parsing crontab expressions client-side.
+    let nextRunsByName = {};
+    try {
+      const { nextRunsForJobs } = require('../utils/cron-next-runs');
+      nextRunsByName = nextRunsForJobs({ tasks }, 5) || {};
+    } catch (e) {
+      // Never let the schedule helper crash the listing — degrade to
+      // nextRuns: [] for every job.
+      console.warn('[admin/system-cron/jobs] nextRunsForJobs failed:', e && e.message ? e.message : e);
+    }
+    const jobs = tasks.map((t) => {
+      const entry = t && t.name && nextRunsByName[t.name];
+      const nextRuns = entry && Array.isArray(entry.nextRuns) ? entry.nextRuns : [];
+      return { ...t, nextRuns };
+    });
     res.json({
       enabled: Boolean(snap.enabled),
-      count: Array.isArray(snap.tasks) ? snap.tasks.length : 0,
-      jobs: Array.isArray(snap.tasks) ? snap.tasks : [],
+      count: jobs.length,
+      jobs,
       timestamp: new Date().toISOString(),
     });
   } catch (err) {

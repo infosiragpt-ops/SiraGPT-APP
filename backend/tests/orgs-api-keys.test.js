@@ -22,6 +22,7 @@ const authPath = path.resolve(__dirname, '../src/middleware/auth.js');
 const dbPath = path.resolve(__dirname, '../src/config/database.js');
 const auditPath = path.resolve(__dirname, '../src/utils/audit-log.js');
 const triggersPath = path.resolve(__dirname, '../src/services/trigger-registry.js');
+const rateLimitStorePath = path.resolve(__dirname, '../src/middleware/rate-limit-store.js');
 const orgsRoutePath = path.resolve(__dirname, '../src/routes/orgs.js');
 
 const authMock = {
@@ -153,10 +154,39 @@ const triggersMock = {
   resetForTests: () => {},
 };
 
+// In-memory rate-limit-store mock with per-key counters. Resettable
+// between tests via `rateLimitMock._reset()` so that the per-org daily
+// caps from the route don't leak between scenarios.
+const rateLimitMock = {
+  _counters: new Map(),
+  _reset() { this._counters.clear(); },
+  async consume(key, limit, windowMs) {
+    const cur = this._counters.get(key) || 0;
+    if (cur >= limit) {
+      return {
+        allowed: false,
+        remaining: 0,
+        resetAt: new Date(Date.now() + windowMs),
+      };
+    }
+    this._counters.set(key, cur + 1);
+    return {
+      allowed: true,
+      remaining: Math.max(0, limit - (cur + 1)),
+      resetAt: new Date(Date.now() + windowMs),
+    };
+  },
+  createRateLimitStore: () => ({ store: null, redis: null, mode: 'memory', reason: 'test' }),
+  shouldUseRedis: () => false,
+  setLogger: () => {},
+  _resetForTests: () => {},
+};
+
 require.cache[authPath] = { id: authPath, filename: authPath, loaded: true, exports: authMock };
 require.cache[dbPath] = { id: dbPath, filename: dbPath, loaded: true, exports: prismaMock };
 require.cache[auditPath] = { id: auditPath, filename: auditPath, loaded: true, exports: auditMock };
 require.cache[triggersPath] = { id: triggersPath, filename: triggersPath, loaded: true, exports: triggersMock };
+require.cache[rateLimitStorePath] = { id: rateLimitStorePath, filename: rateLimitStorePath, loaded: true, exports: rateLimitMock };
 
 delete require.cache[orgsRoutePath];
 const orgsRouter = require(orgsRoutePath);
@@ -194,6 +224,7 @@ function resetState({ role = 'ADMIN' } = {}) {
   auditMock._calls.length = 0;
   authMock._user = { id: 'u-admin', email: 'admin@example.com' };
   nextId = 0;
+  rateLimitMock._reset();
 }
 
 // ── POST /api/orgs/:id/api-keys ────────────────────────────────────
@@ -770,5 +801,147 @@ describe('GET /api/orgs/:id/api-keys.csv', () => {
       urlPath: '/api/orgs/org-other/api-keys.csv',
     });
     assert.equal(res.status, 404);
+  });
+});
+
+// ── Per-org API key rate limits (ratchet 44) ───────────────────────
+describe('per-org api-key rate limits (ratchet 44)', () => {
+  beforeEach(() => resetState());
+
+  test('POST api-keys: 11th create within the window returns 429 + Retry-After', async () => {
+    for (let i = 0; i < 10; i++) {
+      // eslint-disable-next-line no-await-in-loop
+      const ok = await callRoute({
+        method: 'POST',
+        urlPath: '/api/orgs/org-1/api-keys',
+        body: { name: `k-${i}` },
+      });
+      assert.equal(ok.status, 201, `create #${i + 1} should succeed`);
+    }
+    const denied = await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-1/api-keys',
+      body: { name: 'over-the-cap' },
+    });
+    assert.equal(denied.status, 429);
+    assert.match(denied.body.error, /rate limit exceeded/i);
+    assert.match(denied.body.error, /create/);
+    assert.ok(Number(denied.body.retryAfter) >= 1);
+    assert.ok(denied.headers['retry-after']);
+    assert.ok(Number(denied.headers['retry-after']) >= 1);
+  });
+
+  test('POST api-keys: rate-limit counter is per-org (org-2 unaffected)', async () => {
+    // Allow membership lookups for a second org with the same admin.
+    const originalFindUnique = prismaMock.orgMembership.findUnique;
+    prismaMock.orgMembership.findUnique = async ({ where }) => {
+      const { orgId, userId } = where.orgId_userId;
+      if (userId !== 'u-admin') return null;
+      if (orgId === 'org-1' || orgId === 'org-2') {
+        return {
+          id: 'm', orgId, userId, role: 'ADMIN', organization: { id: orgId },
+        };
+      }
+      return null;
+    };
+    try {
+      for (let i = 0; i < 10; i++) {
+        // eslint-disable-next-line no-await-in-loop
+        await callRoute({
+          method: 'POST',
+          urlPath: '/api/orgs/org-1/api-keys',
+          body: { name: `k-${i}` },
+        });
+      }
+      // org-1 is now exhausted
+      const denied = await callRoute({
+        method: 'POST',
+        urlPath: '/api/orgs/org-1/api-keys',
+        body: { name: 'over' },
+      });
+      assert.equal(denied.status, 429);
+
+      // org-2 should still have a fresh budget.
+      const otherOk = await callRoute({
+        method: 'POST',
+        urlPath: '/api/orgs/org-2/api-keys',
+        body: { name: 'fresh' },
+      });
+      assert.equal(otherOk.status, 201);
+    } finally {
+      prismaMock.orgMembership.findUnique = originalFindUnique;
+    }
+  });
+
+  test('rate-limit is checked AFTER role enforcement (MEMBER still gets 403)', async () => {
+    prismaState.membership.role = 'MEMBER';
+    // Even with no consumed slots, role check happens first.
+    const res = await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-1/api-keys',
+      body: { name: 'x' },
+    });
+    assert.equal(res.status, 403);
+    // No rate-limit slot was burned by the unauthorised attempt.
+    assert.equal(rateLimitMock._counters.get('org-api-key-create:org-1') || 0, 0);
+  });
+
+  test('bulk-revoke: pre-consumes one slot per unique id and 429s when batch exceeds remaining budget', async () => {
+    // Seed 10 keys (this also burns the create budget, but that's not
+    // what we're testing here — reset the limiter once we're seeded).
+    const ids = [];
+    for (let i = 0; i < 10; i++) {
+      // eslint-disable-next-line no-await-in-loop
+      const r = await callRoute({
+        method: 'POST',
+        urlPath: '/api/orgs/org-1/api-keys',
+        body: { name: `k-${i}` },
+      });
+      ids.push(r.body.apiKey.id);
+    }
+    // Pretend we've already burned 95 revokes today; a batch of 6 should
+    // be denied as a whole (no partial work, no audit-log entries).
+    rateLimitMock._counters.set('org-api-key-revoke:org-1', 95);
+    const auditBefore = auditMock._calls.length;
+
+    const res = await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-1/api-keys/bulk-revoke',
+      body: { ids: ids.slice(0, 6) },
+    });
+    assert.equal(res.status, 429);
+    assert.match(res.body.error, /rate limit exceeded/i);
+    assert.match(res.body.error, /revoke/);
+    assert.ok(res.headers['retry-after']);
+
+    // No key was tombstoned — bulk-revoke is all-or-nothing.
+    const tombstoned = prismaState.apiKeys.filter((r) => r.deletedAt);
+    assert.equal(tombstoned.length, 0);
+    // No audit-log entries were written for this batch.
+    assert.equal(auditMock._calls.length, auditBefore);
+  });
+
+  test('bulk-revoke under the cap consumes one slot per unique id', async () => {
+    const ids = [];
+    for (let i = 0; i < 3; i++) {
+      // eslint-disable-next-line no-await-in-loop
+      const r = await callRoute({
+        method: 'POST',
+        urlPath: '/api/orgs/org-1/api-keys',
+        body: { name: `b-${i}` },
+      });
+      ids.push(r.body.apiKey.id);
+    }
+    const beforeRevoke = rateLimitMock._counters.get('org-api-key-revoke:org-1') || 0;
+    const res = await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-1/api-keys/bulk-revoke',
+      // Repeats are deduped — counter should advance by 3, not 5.
+      body: { ids: [ids[0], ids[0], ids[1], ids[2], ids[2]] },
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.revoked.length, 3);
+    const afterRevoke = rateLimitMock._counters.get('org-api-key-revoke:org-1') || 0;
+    assert.equal(afterRevoke - beforeRevoke, 3);
   });
 });

@@ -29,6 +29,7 @@
 
 const rag = require('./rag-service');
 const { mmrRerank } = require('./mmr');
+const userMemoryStore = require('./user-memory-store');
 
 const COLLECTION_PREFIX = 'facts:';
 const DEFAULT_RECALL_K = 5;
@@ -293,6 +294,16 @@ function extractFactsAsync({ openai, userId, userMessage, assistantMessage }) {
     try {
       const facts = await extractFacts(openai, userMessage, assistantMessage);
       if (facts.length === 0) return;
+      const pgStore = userMemoryStore.getStore();
+      if (pgStore) {
+        await pgStore.upsertFacts(userId, facts.map(f => ({
+          ...f,
+          importanceScore: importanceScore(1),
+          source: `mem:${f.confidence.toFixed(2)}`,
+        })));
+        console.log(`🧠 long-term-memory: stored ${facts.length} pgvector fact(s) for user ${userId}`);
+        return;
+      }
       const docs = facts.map(f => {
         // Upsert importance tracking BEFORE ingesting so the source
         // field carries the current mention count — useful later when
@@ -321,6 +332,10 @@ async function recallFacts(userId, userMessage, k = DEFAULT_RECALL_K, opts = {})
   if (!userId || !userMessage) return [];
   const { useDiversity = true, overfetch = k * 3 } = opts;
   try {
+    const pgStore = userMemoryStore.getStore();
+    if (pgStore) {
+      return pgStore.recall(userId, userMessage, k);
+    }
     // Overfetch, then re-weight with importance + decay, then optionally
     // MMR for diversity so we don't return 5 near-duplicate facts.
     const raw = await rag.retrieve(userId, collectionFor(userId), userMessage, overfetch);
@@ -366,11 +381,15 @@ function buildMemoryBlock(facts) {
 }
 
 async function clearUserMemory(userId) {
+  const pgStore = userMemoryStore.getStore();
+  if (pgStore) return pgStore.clear(userId);
   await rag.clear(userId, collectionFor(userId));
   factMeta.delete(userId);
 }
 
 async function memoryStats(userId) {
+  const pgStore = userMemoryStore.getStore();
+  if (pgStore) return pgStore.stats(userId);
   return rag.stats(userId, collectionFor(userId));
 }
 

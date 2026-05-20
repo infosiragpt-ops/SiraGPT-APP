@@ -111,6 +111,12 @@ const STALE_SYSTEM_SETTINGS_SCHEDULE = process.env.SYSTEM_CRON_STALE_SYSTEM_SETT
 // Cheap single-statement deleteMany; the archive itself is enforced at
 // the 3-year compliance boundary declared in docs/data-retention.md.
 const AUDIT_ARCHIVE_SWEEP_SCHEDULE = process.env.SYSTEM_CRON_AUDIT_ARCHIVE_SWEEP_SCHEDULE || '15 7 * * *';
+// Ratchet 44 (cycle 164) — OrgPendingTransfer expiry sweep. Default
+// 07:30 UTC, right after the audit-archive sweep (07:15) so the daily
+// retention block finishes back-to-back. Hard-deletes pending-transfer
+// rows whose `expiresAt < now` AND `acceptedAt IS NULL` (accepted rows
+// are immutable history and stay around).
+const PENDING_TRANSFER_SWEEP_SCHEDULE = process.env.SYSTEM_CRON_PENDING_TRANSFER_SWEEP_SCHEDULE || '30 7 * * *';
 
 let _state = null;
 
@@ -167,6 +173,20 @@ function start(opts = {}) {
   // Failures intentionally skip the success-timestamp gauge so stale
   // alerts continue to fire when a job is broken; duration is still
   // observed (the histogram is useful even for failed runs).
+  // Ratchet 44 — lazy prisma handle for the active-api-keys gauge refresh.
+  // Best-effort; failure to load prisma simply skips the refresh.
+  let _prismaForGauge = null;
+  function _getPrismaForGauge() {
+    if (_prismaForGauge !== null) return _prismaForGauge || null;
+    try {
+      // eslint-disable-next-line global-require
+      _prismaForGauge = require('../config/database');
+    } catch (_) {
+      _prismaForGauge = false;
+    }
+    return _prismaForGauge || null;
+  }
+
   function recordRun(meta, jobName) {
     const startedAt = Date.now();
     return (err) => {
@@ -189,6 +209,17 @@ function start(opts = {}) {
           }
         } catch (_) {
           // never throw from instrumentation
+        }
+        // Ratchet 44 — refresh the active-api-keys gauge on every tick.
+        // Fire-and-forget; helper is internally try/catch and resolves to
+        // `null` on any failure so cron execution is never disturbed.
+        if (typeof metrics.refreshActiveApiKeysGauge === 'function') {
+          const prisma = _getPrismaForGauge();
+          if (prisma) {
+            try {
+              Promise.resolve(metrics.refreshActiveApiKeysGauge(prisma)).catch(() => {});
+            } catch (_) { /* never throw */ }
+          }
         }
       }
     };
@@ -864,6 +895,45 @@ function start(opts = {}) {
     schedule: AUDIT_ARCHIVE_SWEEP_SCHEDULE,
     task: auditArchiveSweepTask,
     meta: auditArchiveSweepMeta,
+  });
+
+  // Ratchet 44 (cycle 164) — OrgPendingTransfer expiry sweep (07:30 UTC).
+  let pendingTransferSweepRunning = false;
+  const pendingTransferSweepMeta = {};
+  const pendingTransferSweepTask = cron.schedule(
+    PENDING_TRANSFER_SWEEP_SCHEDULE,
+    async () => {
+      if (pendingTransferSweepRunning) {
+        logger.warn?.('[system-cron] skip sweep-expired-pending-transfers — previous run still active');
+        return;
+      }
+      pendingTransferSweepRunning = true;
+      const finish = recordRun(pendingTransferSweepMeta, 'sweep-expired-pending-transfers');
+      let runErr = null;
+      try {
+        // eslint-disable-next-line global-require
+        const job = require('./sweep-expired-pending-transfers');
+        const runWithRetry = wrapWithRetry(() => job.run({ logger }), {
+          onRetry: ({ attempt, delayMs, reason }) =>
+            logger.warn?.(`[system-cron] sweep-expired-pending-transfers retry ${attempt} in ${delayMs}ms (${reason})`),
+        });
+        const res = await runWithRetry();
+        logger.info?.(`[system-cron] sweep-expired-pending-transfers done: ${JSON.stringify(res)}`);
+      } catch (err) {
+        runErr = err;
+        logger.error?.(`[system-cron] sweep-expired-pending-transfers failed: ${err && err.message}`);
+      } finally {
+        pendingTransferSweepRunning = false;
+        finish(runErr);
+      }
+    },
+    { scheduled: false, timezone: 'UTC' },
+  );
+  tasks.push({
+    name: 'sweep-expired-pending-transfers',
+    schedule: PENDING_TRANSFER_SWEEP_SCHEDULE,
+    task: pendingTransferSweepTask,
+    meta: pendingTransferSweepMeta,
   });
 
   for (const t of tasks) {

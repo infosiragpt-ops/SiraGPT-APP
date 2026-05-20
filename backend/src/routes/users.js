@@ -1977,6 +1977,7 @@ router.delete('/me/2fa/totp', authenticateToken, async (req, res) => {
       resource: 'user',
       resourceId: req.user.id,
       userId: req.user.id,
+      tags: ['security', '2fa'],
     });
 
     return res.json({ ok: true, totpEnabled: false });
@@ -2008,6 +2009,7 @@ router.delete('/me/2fa/sms', authenticateToken, async (req, res) => {
       resource: 'user',
       resourceId: req.user.id,
       userId: req.user.id,
+      tags: ['security', '2fa'],
     });
 
     return res.json({ ok: true, twoFactorEnabled: false });

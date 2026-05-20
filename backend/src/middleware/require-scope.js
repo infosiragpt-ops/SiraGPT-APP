@@ -126,6 +126,17 @@ function getMetrics() {
         labels: ['prefix'],
       });
     }
+    // Ratchet 44 — companion latency histogram. Best-effort registration:
+    // the central metrics module already declares it, but re-registering
+    // here keeps the middleware self-contained for test environments that
+    // clear the registry between cases.
+    if (_metrics && typeof _metrics.registerHistogram === 'function') {
+      _metrics.registerHistogram('siragpt_api_key_request_duration_seconds', {
+        help: 'API-key authenticated request latency in seconds, labelled by prefix, method, and status band',
+        labels: ['prefix', 'method', 'statusBand'],
+        buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+      });
+    }
   } catch (_err) {
     _metrics = false;
   }
@@ -140,6 +151,49 @@ function trackApiKeyRequest(prefix) {
   } catch (_err) {
     /* never break the request on metrics */
   }
+}
+
+function _statusBand(status) {
+  const n = Number(status);
+  if (!Number.isFinite(n) || n < 100 || n > 599) return 'unknown';
+  return `${Math.floor(n / 100)}xx`;
+}
+
+// Ratchet 44 — observe per-request latency. Listens to `res` finish/close
+// once so we capture the final status code (set by downstream handlers or
+// by this middleware itself on a 403). Fire-and-forget; instrumentation
+// must never break the request.
+function _instrumentLatency(req, res, prefix) {
+  const m = getMetrics();
+  if (!m || typeof m.observe !== 'function') return;
+  const startNs = process.hrtime.bigint();
+  const method = (req && typeof req.method === 'string') ? req.method.toUpperCase() : 'UNKNOWN';
+  let settled = false;
+  const finish = () => {
+    if (settled) return;
+    settled = true;
+    try {
+      const elapsedNs = Number(process.hrtime.bigint() - startNs);
+      const seconds = elapsedNs / 1e9;
+      const statusBand = _statusBand(res && res.statusCode);
+      m.observe(
+        'siragpt_api_key_request_duration_seconds',
+        { prefix: prefix || 'unknown', method, statusBand },
+        seconds,
+      );
+    } catch (_) { /* never throw from instrumentation */ }
+  };
+  try {
+    if (res && typeof res.once === 'function') {
+      res.once('finish', finish);
+      res.once('close', finish);
+    } else {
+      // Test stubs without an EventEmitter — observe immediately so the
+      // sample isn't lost. statusCode is already set by the time the
+      // middleware returns synchronously in those tests.
+      setImmediate(finish);
+    }
+  } catch (_) { /* never throw */ }
 }
 
 function hasScope(scopes, needed) {
@@ -165,6 +219,7 @@ function requireScope(needed) {
 
     const apiKey = req.apiKey || {};
     trackApiKeyRequest(apiKey.prefix);
+    _instrumentLatency(req, res, apiKey.prefix);
 
     if (!hasScope(apiKey.scopes, needed)) {
       return res.status(403).json({

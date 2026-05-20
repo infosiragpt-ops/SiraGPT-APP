@@ -29,6 +29,10 @@
  * @property {object} [before] — pre-state snapshot
  * @property {object} [after] — post-state snapshot
  * @property {object} [metadata] — free-form context (merged with ip/ua)
+ * @property {string[]} [tags] — short keyword tags (e.g. ['security','login'])
+ *   to categorise the audit row. Normalised (lowercased, deduped, trimmed,
+ *   non-empty strings only) and stored under `metadata.tags` so existing
+ *   queries / DSL filters can grep them without a schema change.
  * @property {string} [ip] — falls back to req.ip
  * @property {string} [ua] — falls back to req.headers['user-agent']
  * @property {string} [actorType] — defaults to 'user' if userId, else 'system'
@@ -72,6 +76,23 @@ async function writeAuditLog(prisma, entry) {
   if (ip != null) metadata.ip = String(ip);
   if (ua != null) metadata.ua = String(ua);
   if (requestId != null) metadata.requestId = String(requestId);
+
+  // Tags — normalise (string, trim, lowercase, dedupe, drop empties) and
+  // fold into metadata.tags so consumers can filter without a schema
+  // migration. Invalid `tags` payloads are silently dropped: audit
+  // writers must never fail because a caller passed junk.
+  if (Array.isArray(entry.tags)) {
+    const seen = new Set();
+    const cleaned = [];
+    for (const raw of entry.tags) {
+      if (typeof raw !== 'string') continue;
+      const t = raw.trim().toLowerCase();
+      if (!t || seen.has(t)) continue;
+      seen.add(t);
+      cleaned.push(t);
+    }
+    if (cleaned.length) metadata.tags = cleaned;
+  }
 
   try {
     return await prisma.auditLog.create({

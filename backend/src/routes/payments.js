@@ -818,6 +818,7 @@ router.post(
           addedCredits: String(add),
           reason: reason || null,
         },
+        tags: ['billing', 'admin'],
       });
 
       return res.json({ user: serializeBigIntFields(updated) });
