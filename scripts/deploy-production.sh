@@ -29,6 +29,26 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "Missing required command: $1"
 }
 
+cleanup_docker_space() {
+  if [[ "${DEPLOY_PRUNE_DOCKER:-1}" != "1" ]]; then
+    log "Skipping Docker prune because DEPLOY_PRUNE_DOCKER is disabled"
+    return 0
+  fi
+
+  log "Docker disk usage before cleanup"
+  df -h / /var/lib/docker 2>/dev/null || df -h / || true
+  docker system df || true
+
+  log "Pruning Docker build cache, unused images, and stopped containers"
+  docker builder prune -af || true
+  docker image prune -af || true
+  docker container prune -f || true
+
+  log "Docker disk usage after cleanup"
+  docker system df || true
+  df -h / /var/lib/docker 2>/dev/null || df -h / || true
+}
+
 handle_local_tracked_changes() {
   if git diff --quiet && git diff --cached --quiet; then
     return 0
@@ -101,6 +121,8 @@ fi
 log "Updating $BRANCH from origin"
 git fetch origin "$BRANCH"
 git pull --ff-only origin "$BRANCH"
+
+cleanup_docker_space
 
 # Backend deps. The backend runs under PM2 on the host (not inside
 # Docker), so new dependencies in backend/package.json aren't picked up
