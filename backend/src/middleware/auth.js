@@ -204,7 +204,10 @@ const authenticateToken = async (req, res, next) => {
 
     req.user = session.user;
     req.token = token;
-    req.session = session;
+    // NOTE: do NOT assign to req.session — that name is owned by
+    // express-session and overwriting it breaks res.json() (touch()
+    // is called on response end). Use req.userSession instead.
+    req.userSession = session;
 
     // Write-behind: update lastActiveAt without hitting Postgres on
     // every request. The cache flushes every 5s or at 100 pending

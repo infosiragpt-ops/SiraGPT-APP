@@ -1814,8 +1814,8 @@ const RECENT_AUTH_WINDOW_MS = 5 * 60 * 1000;
 
 async function assertRecentAuthOrPassword(req, res) {
   // Path A — recent session: createdAt within the trailing 5 minutes.
-  const sessionCreatedAt = req.session && req.session.createdAt
-    ? new Date(req.session.createdAt)
+  const sessionCreatedAt = req.userSession && req.userSession.createdAt
+    ? new Date(req.userSession.createdAt)
     : null;
   if (sessionCreatedAt && !Number.isNaN(sessionCreatedAt.getTime())) {
     const ageMs = Date.now() - sessionCreatedAt.getTime();

@@ -61,7 +61,7 @@ const state = {
 const authMock = {
   authenticateToken: (req, _res, next) => {
     req.user = state.user;
-    req.session = state.session;
+    req.userSession = state.session;
     next();
   },
 };

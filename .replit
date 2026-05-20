@@ -1,4 +1,4 @@
-modules = ["nodejs-20", "postgresql-16"]
+modules = ["nodejs-20", "postgresql-16", "python-3.11"]
 
 # Default `Run` button: starts the Next.js dev server on Replit's
 # external port (mapped from localhost:3000 below). The backend
