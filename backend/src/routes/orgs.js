@@ -1673,17 +1673,24 @@ router.post('/:id/webhooks/:endpointId/toggle', authenticateToken, async (req, r
 const WEBHOOK_BULK_MAX = 50;
 
 function _normalizeBulkIds(raw) {
-  if (!Array.isArray(raw)) return null;
+  if (!Array.isArray(raw)) {
+    return { ok: false, error: 'ids must be an array of strings' };
+  }
   const seen = new Set();
   const out = [];
   for (const v of raw) {
-    if (typeof v !== 'string') continue;
+    if (typeof v !== 'string') {
+      return { ok: false, error: 'ids must be an array of non-empty strings' };
+    }
     const id = v.trim();
-    if (!id || seen.has(id)) continue;
+    if (!id) {
+      return { ok: false, error: 'ids must be an array of non-empty strings' };
+    }
+    if (seen.has(id)) continue;
     seen.add(id);
     out.push(id);
   }
-  return out;
+  return { ok: true, ids: out };
 }
 
 router.post('/:id/webhooks/bulk-toggle', authenticateToken, async (req, res) => {
@@ -1695,8 +1702,9 @@ router.post('/:id/webhooks/bulk-toggle', authenticateToken, async (req, res) => 
       return res.status(403).json({ error: 'insufficient role to toggle webhooks' });
     }
 
-    const ids = _normalizeBulkIds(req.body && req.body.ids);
-    if (!ids) return res.status(400).json({ error: 'ids must be an array of strings' });
+    const normalized = _normalizeBulkIds(req.body && req.body.ids);
+    if (!normalized.ok) return res.status(400).json({ error: normalized.error });
+    const ids = normalized.ids;
     if (ids.length === 0) return res.status(400).json({ error: 'ids must not be empty' });
     if (ids.length > WEBHOOK_BULK_MAX) {
       return res.status(400).json({ error: `at most ${WEBHOOK_BULK_MAX} ids per request` });
@@ -1757,8 +1765,9 @@ router.post('/:id/webhooks/bulk-delete', authenticateToken, async (req, res) => 
       return res.status(403).json({ error: 'insufficient role to delete webhooks' });
     }
 
-    const ids = _normalizeBulkIds(req.body && req.body.ids);
-    if (!ids) return res.status(400).json({ error: 'ids must be an array of strings' });
+    const normalized = _normalizeBulkIds(req.body && req.body.ids);
+    if (!normalized.ok) return res.status(400).json({ error: normalized.error });
+    const ids = normalized.ids;
     if (ids.length === 0) return res.status(400).json({ error: 'ids must not be empty' });
     if (ids.length > WEBHOOK_BULK_MAX) {
       return res.status(400).json({ error: `at most ${WEBHOOK_BULK_MAX} ids per request` });

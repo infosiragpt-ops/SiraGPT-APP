@@ -257,6 +257,22 @@ describe('POST /api/orgs/:id/webhooks/bulk-toggle', () => {
     assert.equal(res.status, 400);
   });
 
+  test('rejects non-string or blank ids with 400', async () => {
+    const numeric = await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-1/webhooks/bulk-toggle',
+      body: { ids: ['ep-0', 42], enabled: true },
+    });
+    assert.equal(numeric.status, 400);
+
+    const blank = await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-1/webhooks/bulk-toggle',
+      body: { ids: ['ep-0', '  '], enabled: true },
+    });
+    assert.equal(blank.status, 400);
+  });
+
   test('MEMBER role is rejected with 403', async () => {
     prismaState.membership.role = 'MEMBER';
     const res = await callRoute({
@@ -360,6 +376,22 @@ describe('POST /api/orgs/:id/webhooks/bulk-delete', () => {
       body: { ids: 'ep-0' },
     });
     assert.equal(res.status, 400);
+  });
+
+  test('rejects non-string or blank ids with 400', async () => {
+    const numeric = await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-1/webhooks/bulk-delete',
+      body: { ids: ['ep-0', 42] },
+    });
+    assert.equal(numeric.status, 400);
+
+    const blank = await callRoute({
+      method: 'POST',
+      urlPath: '/api/orgs/org-1/webhooks/bulk-delete',
+      body: { ids: ['ep-0', '  '] },
+    });
+    assert.equal(blank.status, 400);
   });
 
   test('deduplicates ids before processing', async () => {
