@@ -1757,6 +1757,121 @@ router.get('/:id/webhooks/stats', authenticateToken, async (req, res) => {
   }
 });
 
+// ─── GET /api/orgs/:id/webhooks/dlq (ADMIN+) ────────────────────────
+// Ratchet 45 — org-scoped view of the webhook dead-letter queue. The
+// underlying DLQ (services/webhook-dispatcher) is process-wide and
+// indexed by `url`; we filter the in-memory items down to those whose
+// `url` matches a WebhookEndpoint owned by this org. Mirrors the admin
+// endpoint shape:
+//   { items: DLQItem[], stats: { total, scoped, bufferSize, redisBacked } }
+// `stats.total` keeps the global ring-buffer total (for capacity sizing)
+// and `stats.scoped` reports the count visible to THIS org.
+router.get('/:id/webhooks/dlq', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  try {
+    const membership = await assertMembership(prisma, orgId, userId, 'ADMIN');
+    if (!canManageMembers(membership.role)) {
+      return res.status(403).json({ error: 'insufficient role to view webhook DLQ' });
+    }
+
+    const rawLimit = Number.parseInt(req.query.limit, 10);
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0
+      ? Math.min(rawLimit, 500)
+      : 100;
+    const event = req.query.event ? String(req.query.event) : null;
+
+    const endpoints = await prisma.webhookEndpoint.findMany({
+      where: { organizationId: orgId },
+      select: { id: true, url: true },
+    });
+    const orgUrls = new Set(endpoints.map((e) => e.url));
+
+    // Pull a large slice so org-filtering doesn't truncate the window;
+    // bounded by the dispatcher's DLQ ring (default 1024).
+    let raw = [];
+    try {
+      raw = webhookDispatcherForStats.listDLQ({ limit: 10_000, event }) || [];
+    } catch (_e) {
+      raw = [];
+    }
+
+    const items = raw.filter((d) => d && orgUrls.has(d.url)).slice(0, limit);
+    const baseStats = webhookDispatcherForStats.dlqStats();
+    res.json({
+      items,
+      stats: { ...baseStats, scoped: items.length },
+    });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] list webhook DLQ failed:', err.message);
+    res.status(500).json({ error: 'failed to list webhook DLQ' });
+  }
+});
+
+// ─── POST /api/orgs/:id/webhooks/dlq/:dlqId/retry (ADMIN+) ──────────
+// Ratchet 45 — retry a single DLQ item, but only when its `url` belongs
+// to a WebhookEndpoint owned by this org. The endpoint's stored secret
+// is used for HMAC signing so the receiver still verifies cleanly.
+// Audit logged (`org_webhook_dlq_retry`).
+router.post('/:id/webhooks/dlq/:dlqId/retry', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  const dlqId = req.params.dlqId;
+  try {
+    const membership = await assertMembership(prisma, orgId, userId, 'ADMIN');
+    if (!canManageMembers(membership.role)) {
+      return res.status(403).json({ error: 'insufficient role to retry webhook DLQ item' });
+    }
+
+    // Locate the DLQ item via the same listing the GET handler uses so
+    // tests that stub the dispatcher see a consistent view.
+    let dlqItem = null;
+    try {
+      const raw = webhookDispatcherForStats.listDLQ({ limit: 10_000 }) || [];
+      dlqItem = raw.find((d) => d && String(d.id) === String(dlqId)) || null;
+    } catch (_e) {
+      dlqItem = null;
+    }
+    if (!dlqItem) return res.status(404).json({ error: 'DLQ item not found' });
+
+    const endpoint = await prisma.webhookEndpoint.findFirst({
+      where: { organizationId: orgId, url: dlqItem.url },
+      select: { id: true, secret: true, url: true },
+    });
+    if (!endpoint) {
+      // The DLQ item exists, but not for this org — don't leak it.
+      return res.status(404).json({ error: 'DLQ item not found' });
+    }
+
+    const result = await webhookDispatcherForStats.retryDLQItem(dlqId, {
+      secret: endpoint.secret,
+    });
+
+    void writeAuditLog(prisma, {
+      action: 'org_webhook_dlq_retry',
+      userId,
+      resource: 'organization',
+      resourceId: orgId,
+      before: {
+        dlqId,
+        endpointId: endpoint.id,
+        url: endpoint.url,
+        event: dlqItem.event,
+      },
+      after: { status: result?.result?.status || 'unknown' },
+      metadata: { orgId },
+      req,
+    });
+
+    res.json(result);
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] retry webhook DLQ failed:', err.message);
+    res.status(500).json({ error: 'failed to retry webhook DLQ item' });
+  }
+});
+
 // ─── API keys (ratchet 45, org-scoped) ──────────────────────────────
 // Bearer tokens for programmatic access. Created by an ADMIN+ member;
 // the full plaintext is returned exactly once. List + delete are
