@@ -23,6 +23,7 @@
  *   POST   /api/orgs/:id/chats/:chatId/share            — share a chat into the org
  *   GET    /api/orgs/:id/chats                          — list chats shared into the org
  *   GET    /api/orgs/:id/audit-logs                     — org-scoped audit feed (ADMIN+; cycle 66)
+ *   GET    /api/orgs/:id/audit-logs.csv                 — org-scoped audit CSV export (ADMIN+; ratchet 44)
  *   GET    /api/orgs/:id/members/:userId/activity       — recent audit rows for a single member (ADMIN+; cycle 78)
  *   GET    /api/orgs/:id/events                         — live SSE tail of audit feed (ADMIN+; cycle 78)
  *   GET    /api/orgs/:id/activity                       — unified activity feed (MEMBER+; ratchet 44)
@@ -3299,6 +3300,98 @@ async function listOrgAuditLogsHandler(req, res, deps = { prisma }) {
 
 router.get('/:id/audit-logs', authenticateToken, (req, res) => listOrgAuditLogsHandler(req, res));
 
+// ─── GET /api/orgs/:id/audit-logs.csv (ADMIN+; ratchet 44) ──────────
+// Org-scoped variant of the super-admin /api/admin/audit-logs.csv
+// export. Same RFC4180 escaping rules; the org filter is locked to the
+// path parameter so a member of org A cannot peek at org B's trail by
+// passing ?orgId=... . Filename includes the org slug for easier
+// triage in HR/SIEM downloads (`audit-logs-<slug>-<ts>.csv`).
+const ORG_AUDIT_CSV_COLUMNS = [
+  'id', 'createdAt', 'actorId', 'actorName', 'action',
+  'resourceType', 'resourceId', 'ip', 'userAgent',
+  'before', 'after', 'metadata',
+];
+
+function orgAuditCsvEscape(value) {
+  if (value === null || value === undefined) return '';
+  let s;
+  if (value instanceof Date) s = value.toISOString();
+  else if (typeof value === 'object') {
+    try { s = JSON.stringify(value); } catch (_) { s = String(value); }
+  } else {
+    s = String(value);
+  }
+  if (/[",\r\n]/.test(s)) {
+    s = `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
+}
+
+function orgAuditLogsToCsv(items) {
+  const header = ORG_AUDIT_CSV_COLUMNS.join(',');
+  const lines = [header];
+  for (const row of items) {
+    const cells = ORG_AUDIT_CSV_COLUMNS.map((col) => orgAuditCsvEscape(row?.[col]));
+    lines.push(cells.join(','));
+  }
+  return lines.join('\r\n') + '\r\n';
+}
+
+// Sanitise a slug for use inside a Content-Disposition filename. Should
+// already be URL-safe (slugify produces [a-z0-9-]+) but defend in depth
+// against legacy rows.
+function sanitizeSlugForFilename(slug) {
+  if (!slug || typeof slug !== 'string') return 'org';
+  const clean = slug.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
+  return clean || 'org';
+}
+
+async function exportOrgAuditLogsCsvHandler(req, res, deps = { prisma }) {
+  const db = deps.prisma || prisma;
+  const userId = req.user.id;
+  const orgId = req.params.id;
+  try {
+    const membership = await assertMembership(db, orgId, userId, 'ADMIN');
+    if (!canManageMembers(membership.role)) {
+      return res.status(403).json({ error: 'insufficient role to export audit logs' });
+    }
+    const { query: auditQuery } = require('../services/audit-query');
+    let q = auditQuery(db).byOrg(orgId);
+    if (req.query.userId) q = q.byUser(String(req.query.userId));
+    if (req.query.action) q = q.byAction(String(req.query.action));
+    if (req.query.resource) {
+      q = q.byResource(
+        String(req.query.resource),
+        req.query.resourceId ? String(req.query.resourceId) : null,
+      );
+    }
+    if (req.query.from || req.query.to) {
+      q = q.byDate(req.query.from || null, req.query.to || null);
+    }
+    // Force a generous default + cap so a CSV export doesn't degenerate
+    // into a tiny paginated slice. Callers can still pass ?limit=.
+    q = q.limit(req.query.limit ? String(req.query.limit) : '500');
+    if (req.query.page) q = q.page(req.query.page);
+    const result = await q.run();
+    const items = Array.isArray(result.items) ? result.items : [];
+
+    const slug = sanitizeSlugForFilename(membership.organization?.slug);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="audit-logs-${slug}-${Date.now()}.csv"`,
+    );
+    res.write(orgAuditLogsToCsv(items));
+    return res.end();
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message });
+    console.error('[orgs] audit-logs.csv failed:', err.message);
+    return res.status(500).json({ error: 'failed to export audit logs' });
+  }
+}
+
+router.get('/:id/audit-logs.csv', authenticateToken, (req, res) => exportOrgAuditLogsCsvHandler(req, res));
+
 // ─── GET /api/orgs/:id/members/:userId/activity (cycle 78) ──────────
 // Recent audit-log rows scoped to (this org, this member). Useful for
 // compliance ("show me everything user X did inside org Y in the last
@@ -4725,6 +4818,7 @@ router.__handlers = {
   listTransferRequests: listTransferRequestsHandler,
   leaveOrg: leaveOrgHandler,
   listOrgAuditLogs: listOrgAuditLogsHandler,
+  exportOrgAuditLogsCsv: exportOrgAuditLogsCsvHandler,
   listMemberActivity: listMemberActivityHandler,
   listOrgActivity: listOrgActivityHandler,
   getOrgSettings: getOrgSettingsHandler,
@@ -4765,4 +4859,10 @@ module.exports.INTERNAL_MEMBERS_CSV = {
   membersCsvEscape,
   MEMBERS_CSV_COLUMNS,
   BULK_INVITE_MAX,
+};
+module.exports.INTERNAL_ORG_AUDIT_CSV = {
+  orgAuditLogsToCsv,
+  orgAuditCsvEscape,
+  ORG_AUDIT_CSV_COLUMNS,
+  sanitizeSlugForFilename,
 };
