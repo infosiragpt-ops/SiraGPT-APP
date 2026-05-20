@@ -1,4 +1,4 @@
-// @ts-nocheck — imports backend JS modules without TS declarations
+// @ts-nocheck -- imports backend JS modules without TS declarations.
 /**
  * Unit tests for backend/src/orchestration modules.
  * Run with: npx vitest run tests/orchestration/
