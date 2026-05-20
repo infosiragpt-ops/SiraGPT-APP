@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1423**.
+Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1403**.
 
 > Re-run with `npm run licenses:report` after every dependency change. CI enforces that no GPL/AGPL/LGPL/CDDL/EPL/MPL-1.1/NPOSL family appears via `npm run licenses:check`.
 
@@ -24,7 +24,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 |---|---|---|---|
 | `json-schema` | 0.4.0 | AFL-2.1 OR BSD-3-Clause | [link](https://github.com/kriszyp/json-schema) |
 
-## Apache-2.0 (180)
+## Apache-2.0 (167)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -38,11 +38,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@aws-crypto/util` | 5.2.0 | Apache-2.0 | [link](https://github.com/aws/aws-sdk-js-crypto-helpers) |
 | `@aws-sdk/types` | 3.973.8 | Apache-2.0 | [link](https://github.com/aws/aws-sdk-js-v3) |
 | `@bufbuild/protobuf` | 2.12.0 | Apache-2.0 AND BSD-3-Clause | [link](https://github.com/bufbuild/protobuf-es) |
-| `@chevrotain/cst-dts-gen` | 12.0.0 | Apache-2.0 | [link](https://github.com/Chevrotain/chevrotain) |
-| `@chevrotain/gast` | 12.0.0 | Apache-2.0 | [link](https://github.com/Chevrotain/chevrotain) |
-| `@chevrotain/regexp-to-ast` | 12.0.0 | Apache-2.0 | [link](https://github.com/Chevrotain/chevrotain) |
-| `@chevrotain/types` | 12.0.0 | Apache-2.0 | [link](https://github.com/Chevrotain/chevrotain) |
-| `@chevrotain/utils` | 12.0.0 | Apache-2.0 | [link](https://github.com/Chevrotain/chevrotain) |
+| `@chevrotain/types` | 11.1.2 | Apache-2.0 | [link](https://github.com/Chevrotain/chevrotain) |
 | `@connectrpc/connect` | 2.0.0-rc.3 | Apache-2.0 | [link](https://github.com/connectrpc/connect-es) |
 | `@connectrpc/connect-web` | 2.0.0-rc.3 | Apache-2.0 | [link](https://github.com/connectrpc/connect-es) |
 | `@google/genai` | 1.28.0 | Apache-2.0 | [link](https://github.com/googleapis/js-genai) |
@@ -126,7 +122,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@opentelemetry/sdk-trace-node` | 2.7.1 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
 | `@opentelemetry/semantic-conventions` | 1.40.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
 | `@opentelemetry/sql-common` | 0.41.2 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js-contrib) |
-| `@playwright/test` | 1.59.1 | Apache-2.0 | [link](https://github.com/microsoft/playwright) |
+| `@playwright/test` | 1.60.0 | Apache-2.0 | [link](https://github.com/microsoft/playwright) |
 | `@prisma/client` | 6.19.3 | Apache-2.0 | [link](https://github.com/prisma/prisma) |
 | `@prisma/config` | 6.19.3 | Apache-2.0 | [link](https://github.com/prisma/prisma) |
 | `@prisma/debug` | 6.19.3 | Apache-2.0 | [link](https://github.com/prisma/prisma) |
@@ -147,7 +143,6 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@swc/helpers` | 0.5.17, 0.5.5 | Apache-2.0 | [link](https://github.com/swc-project/swc) |
 | `@swc/types` | 0.1.26 | Apache-2.0 | [link](https://github.com/swc-project/swc) |
 | `@vercel/oidc` | 3.2.0 | Apache-2.0 | [link](https://github.com/vercel/vercel) |
-| `adler-32` | 1.3.1 | Apache-2.0 | [link](https://github.com/SheetJS/js-adler32) |
 | `ai` | 6.0.168 | Apache-2.0 | [link](https://github.com/vercel/ai) |
 | `b4a` | 1.7.3 | Apache-2.0 | [link](https://github.com/holepunchto/b4a) |
 | `bare-events` | 2.8.1 | Apache-2.0 | [link](https://github.com/holepunchto/bare-events) |
@@ -158,12 +153,9 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `bare-url` | 2.3.2 | Apache-2.0 | [link](https://github.com/holepunchto/bare-url) |
 | `baseline-browser-mapping` | 2.10.21 | Apache-2.0 | [link](https://github.com/web-platform-dx/baseline-browser-mapping) |
 | `before-after-hook` | 4.0.0 | Apache-2.0 | [link](https://github.com/gr2m/before-after-hook) |
-| `cfb` | 1.2.2 | Apache-2.0 | [link](https://github.com/SheetJS/js-cfb) |
-| `chevrotain` | 12.0.0 | Apache-2.0 | [link](https://github.com/Chevrotain/chevrotain) |
 | `chromium-bidi` | 10.5.1 | Apache-2.0 | [link](https://github.com/GoogleChromeLabs/chromium-bidi) |
 | `class-variance-authority` | 0.7.1 | Apache-2.0 | [link](https://github.com/joe-bell/cva) |
 | `cluster-key-slot` | 1.1.2 | Apache-2.0 | [link](https://github.com/Salakar/cluster-key-slot) |
-| `codepage` | 1.15.0 | Apache-2.0 | [link](https://github.com/SheetJS/js-codepage) |
 | `crc-32` | 1.2.2 | Apache-2.0 | [link](https://github.com/SheetJS/js-crc32) |
 | `denque` | 2.1.0 | Apache-2.0 | [link](https://github.com/invertase/denque) |
 | `detect-libc` | 2.1.2 | Apache-2.0 | [link](https://github.com/lovell/detect-libc) |
@@ -174,7 +166,6 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `ejs` | 3.1.10 | Apache-2.0 | [link](https://github.com/mde/ejs) |
 | `events-universal` | 1.0.1 | Apache-2.0 | [link](https://github.com/holepunchto/events-universal) |
 | `filelist` | 1.0.6 | Apache-2.0 | [link](https://github.com/mde/filelist) |
-| `frac` | 1.1.2 | Apache-2.0 | [link](https://github.com/SheetJS/frac) |
 | `gaxios` | 7.1.3 | Apache-2.0 | [link](https://github.com/googleapis/google-cloud-node-core) |
 | `gcp-metadata` | 8.1.2 | Apache-2.0 | [link](https://github.com/googleapis/google-cloud-node-core) |
 | `google-auth-library` | 10.5.0 | Apache-2.0 | [link](https://github.com/googleapis/google-auth-library-nodejs) |
@@ -188,14 +179,13 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `openai` | 5.23.2, 6.34.0 | Apache-2.0 | [link](https://github.com/openai/openai-node) |
 | `opossum` | 9.0.0 | Apache-2.0 | [link](https://github.com/nodeshift/opossum) |
 | `pdfjs-dist` | 4.10.38, 4.8.69, 5.4.296, 5.6.205 | Apache-2.0 | [link](https://github.com/mozilla/pdf.js) |
-| `playwright` | 1.56.1, 1.59.1 | Apache-2.0 | [link](https://github.com/microsoft/playwright) |
-| `playwright-core` | 1.56.1, 1.59.1 | Apache-2.0 | [link](https://github.com/microsoft/playwright) |
+| `playwright` | 1.56.1, 1.60.0 | Apache-2.0 | [link](https://github.com/microsoft/playwright) |
+| `playwright-core` | 1.56.1, 1.60.0 | Apache-2.0 | [link](https://github.com/microsoft/playwright) |
 | `prisma` | 6.19.3 | Apache-2.0 | [link](https://github.com/prisma/prisma) |
 | `puppeteer` | 24.27.0 | Apache-2.0 | [link](https://github.com/puppeteer/puppeteer.git#main) |
 | `puppeteer-core` | 24.27.0 | Apache-2.0 | [link](https://github.com/puppeteer/puppeteer.git#main) |
 | `readdir-glob` | 1.1.3 | Apache-2.0 | [link](https://github.com/Yqnn/node-readdir-glob) |
 | `sharp` | 0.34.4, 0.34.5 | Apache-2.0 | [link](https://github.com/lovell/sharp) |
-| `ssf` | 0.11.2 | Apache-2.0 | [link](https://github.com/SheetJS/ssf) |
 | `swagger-ui-dist` | 5.32.5 | Apache-2.0 | [link](https://github.com/swagger-api/swagger-ui) |
 | `tesseract.js` | 5.1.1, 7.0.0 | Apache-2.0 | [link](https://github.com/naptha/tesseract.js) |
 | `tesseract.js-core` | 5.1.1, 7.0.0 | Apache-2.0 | [link](https://github.com/naptha/tesseract.js-core) |
@@ -205,9 +195,6 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `wasm-feature-detect` | 1.8.0 | Apache-2.0 | [link](https://github.com/GoogleChromeLabs/wasm-feature-detect) |
 | `web-vitals` | 5.2.0 | Apache-2.0 | [link](https://github.com/GoogleChrome/web-vitals) |
 | `webdriver-bidi-protocol` | 0.3.8 | Apache-2.0 | [link](https://github.com/GoogleChromeLabs/webdriver-bidi-protocol) |
-| `wmf` | 1.0.2 | Apache-2.0 | [link](https://github.com/SheetJS/js-wmf) |
-| `word` | 0.3.0 | Apache-2.0 | [link](https://github.com/SheetJS/js-word) |
-| `xlsx` | 0.18.5 | Apache-2.0 | [link](https://github.com/SheetJS/sheetjs) |
 
 ## BSD (57)
 
@@ -251,10 +238,10 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `estraverse` | 5.3.0 | BSD-2-Clause | [link](https://github.com/estools/estraverse) |
 | `esutils` | 2.0.3 | BSD-2-Clause | [link](https://github.com/estools/esutils) |
 | `extract-zip` | 2.0.1 | BSD-2-Clause | [link](https://github.com/maxogden/extract-zip) |
-| `fast-uri` | 3.1.0 | BSD-3-Clause | [link](https://github.com/fastify/fast-uri) |
+| `fast-uri` | 3.1.2 | BSD-3-Clause | [link](https://github.com/fastify/fast-uri) |
 | `highlight.js` | 10.7.3, 11.11.1 | BSD-3-Clause | [link](https://github.com/highlightjs/highlight.js) |
 | `ieee754` | 1.2.1 | BSD-3-Clause | [link](https://github.com/feross/ieee754) |
-| `intl-messageformat` | 11.2.1 | BSD-3-Clause | [link](https://github.com/formatjs/formatjs) |
+| `intl-messageformat` | 11.2.6 | BSD-3-Clause | [link](https://github.com/formatjs/formatjs) |
 | `json-schema-typed` | 8.0.2 | BSD-2-Clause | [link](https://github.com/RemyRylan/json-schema-typed) |
 | `lop` | 0.4.2 | BSD-2-Clause | [link](https://github.com/mwilliamson/lop) |
 | `mammoth` | 1.12.0 | BSD-2-Clause | [link](https://github.com/mwilliamson/mammoth.js) |
@@ -271,11 +258,12 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `user-agents` | 2.1.42 | BSD-2-Clause | [link](https://github.com/intoli/user-agents) |
 | `webidl-conversions` | 3.0.1 | BSD-2-Clause | [link](https://github.com/jsdom/webidl-conversions) |
 
-## BlueOak-1.0.0 (4)
+## BlueOak-1.0.0 (5)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
 | `jackspeak` | 3.4.3 | BlueOak-1.0.0 | [link](https://github.com/isaacs/jackspeak) |
+| `minipass` | 7.1.3 | BlueOak-1.0.0 | [link](https://github.com/isaacs/minipass) |
 | `package-json-from-dist` | 1.0.1 | BlueOak-1.0.0 | [link](https://github.com/isaacs/package-json-from-dist) |
 | `path-scurry` | 1.11.1 | BlueOak-1.0.0 | [link](https://github.com/isaacs/path-scurry) |
 | `sax` | 1.4.1, 1.6.0 | BlueOak-1.0.0 | [link](https://github.com/isaacs/sax-js) |
@@ -320,7 +308,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@syncfusion/ej2-spreadsheet` | 32.2.9 | Custom: license | [link](https://github.com/syncfusion/ej2-javascript-ui-controls.git#master) |
 | `@syncfusion/ej2-svg-base` | 32.2.3 | Custom: license | [link](https://github.com/syncfusion/ej2-javascript-ui-controls) |
 
-## ISC (83)
+## ISC (82)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -386,7 +374,6 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `lucide-react` | 0.454.0 | ISC | [link](https://github.com/lucide-icons/lucide) |
 | `minimalistic-assert` | 1.0.1 | ISC | [link](https://github.com/calvinmetcalf/minimalistic-assert) |
 | `minimatch` | 10.2.5, 3.1.5, 5.1.9, 9.0.9 | ISC | [link](https://github.com/isaacs/minimatch) |
-| `minipass` | 7.1.2 | ISC | [link](https://github.com/isaacs/minipass) |
 | `next-auth` | 4.24.14 | ISC | [link](https://github.com/nextauthjs/next-auth) |
 | `node-cron` | 3.0.3 | ISC | [link](https://github.com/merencia/node-cron) |
 | `once` | 1.4.0 | ISC | [link](https://github.com/isaacs/once) |
@@ -394,7 +381,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `picocolors` | 1.1.1 | ISC | [link](https://github.com/alexeyraspopov/picocolors) |
 | `rimraf` | 2.7.1, 5.0.10 | ISC | [link](https://github.com/isaacs/rimraf) |
 | `saxes` | 5.0.1 | ISC | [link](https://github.com/lddubeau/saxes) |
-| `semver` | 7.7.4 | ISC | [link](https://github.com/npm/node-semver) |
+| `semver` | 7.7.4, 7.8.0 | ISC | [link](https://github.com/npm/node-semver) |
 | `setprototypeof` | 1.2.0 | ISC | [link](https://github.com/wesleytodd/setprototypeof) |
 | `signal-exit` | 4.1.0 | ISC | [link](https://github.com/tapjs/signal-exit) |
 | `split2` | 4.2.0 | ISC | [link](https://github.com/mcollina/split2) |
@@ -408,7 +395,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `yargs-parser` | 21.1.1 | ISC | [link](https://github.com/yargs/yargs-parser) |
 | `zod-to-json-schema` | 3.25.2 | ISC | [link](https://github.com/StefanTerdell/zod-to-json-schema) |
 
-## MIT (1067)
+## MIT (1060)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -438,9 +425,9 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@floating-ui/dom` | 1.7.6 | MIT | [link](https://github.com/floating-ui/floating-ui) |
 | `@floating-ui/react-dom` | 2.1.8 | MIT | [link](https://github.com/floating-ui/floating-ui) |
 | `@floating-ui/utils` | 0.2.11 | MIT | [link](https://github.com/floating-ui/floating-ui) |
-| `@formatjs/fast-memoize` | 3.1.2 | MIT | [link](https://github.com/formatjs/formatjs) |
-| `@formatjs/icu-messageformat-parser` | 3.5.4 | MIT | [link](https://github.com/formatjs/formatjs) |
-| `@formatjs/icu-skeleton-parser` | 2.1.4 | MIT | [link](https://github.com/formatjs/formatjs) |
+| `@formatjs/fast-memoize` | 3.1.2, 3.1.5 | MIT | [link](https://github.com/formatjs/formatjs) |
+| `@formatjs/icu-messageformat-parser` | 3.5.9 | MIT | [link](https://github.com/formatjs/formatjs) |
+| `@formatjs/icu-skeleton-parser` | 2.1.9 | MIT | [link](https://github.com/formatjs/formatjs) |
 | `@formatjs/intl-localematcher` | 0.8.3 | MIT | [link](https://github.com/formatjs/formatjs) |
 | `@hexagon/base64` | 1.1.28 | MIT | [link](https://github.com/hexagon/base64) |
 | `@hono/node-server` | 1.19.14 | MIT | [link](https://github.com/honojs/node-server) |
@@ -467,7 +454,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@llamaindex/openai` | 0.4.23 | MIT | [link](https://github.com/run-llama/LlamaIndexTS) |
 | `@llamaindex/workflow` | 1.1.24, 1.1.25 | MIT | [link](https://github.com/run-llama/LlamaIndexTS) |
 | `@llamaindex/workflow-core` | 1.3.4 | MIT | [link](https://github.com/run-llama/workflows-ts) |
-| `@mermaid-js/parser` | 1.1.0 | MIT | [link](https://github.com/mermaid-js/mermaid) |
+| `@mermaid-js/parser` | 1.1.1 | MIT | [link](https://github.com/mermaid-js/mermaid) |
 | `@modelcontextprotocol/sdk` | 1.29.0 | MIT | [link](https://github.com/modelcontextprotocol/typescript-sdk) |
 | `@monaco-editor/loader` | 1.7.0 | MIT | [link](https://github.com/suren-atoyan/monaco-loader) |
 | `@monaco-editor/react` | 4.7.0 | MIT | [link](https://github.com/suren-atoyan/monaco-react) |
@@ -577,15 +564,15 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@selderee/plugin-htmlparser2` | 0.11.0 | MIT | [link](https://github.com/mxxii/selderee) |
 | `@sentry-internal/browser-utils` | 10.51.0 | MIT | [link](https://github.com/getsentry/sentry-javascript) |
 | `@sentry-internal/feedback` | 10.51.0 | MIT | [link](https://github.com/getsentry/sentry-javascript) |
-| `@sentry-internal/node-cpu-profiler` | 2.2.0 | MIT | [link](https://github.com/getsentry/sentry-javascript-profiling-node-binaries) |
+| `@sentry-internal/node-cpu-profiler` | 2.4.1 | MIT | [link](https://github.com/getsentry/sentry-javascript-profiling-node-binaries) |
 | `@sentry-internal/replay` | 10.51.0 | MIT | [link](https://github.com/getsentry/sentry-javascript) |
 | `@sentry-internal/replay-canvas` | 10.51.0 | MIT | [link](https://github.com/getsentry/sentry-javascript) |
 | `@sentry/browser` | 10.51.0 | MIT | [link](https://github.com/getsentry/sentry-javascript) |
-| `@sentry/core` | 10.51.0 | MIT | [link](https://github.com/getsentry/sentry-javascript) |
-| `@sentry/node` | 10.51.0 | MIT | [link](https://github.com/getsentry/sentry-javascript) |
-| `@sentry/node-core` | 10.51.0 | MIT | [link](https://github.com/getsentry/sentry-javascript) |
-| `@sentry/opentelemetry` | 10.51.0 | MIT | [link](https://github.com/getsentry/sentry-javascript) |
-| `@sentry/profiling-node` | 10.51.0 | MIT | [link](https://github.com/getsentry/sentry-javascript) |
+| `@sentry/core` | 10.51.0, 10.53.1 | MIT | [link](https://github.com/getsentry/sentry-javascript) |
+| `@sentry/node` | 10.51.0, 10.53.1 | MIT | [link](https://github.com/getsentry/sentry-javascript) |
+| `@sentry/node-core` | 10.51.0, 10.53.1 | MIT | [link](https://github.com/getsentry/sentry-javascript) |
+| `@sentry/opentelemetry` | 10.51.0, 10.53.1 | MIT | [link](https://github.com/getsentry/sentry-javascript) |
+| `@sentry/profiling-node` | 10.53.1 | MIT | [link](https://github.com/getsentry/sentry-javascript) |
 | `@shikijs/core` | 1.29.2 | MIT | [link](https://github.com/shikijs/shiki) |
 | `@shikijs/engine-javascript` | 1.29.2 | MIT | [link](https://github.com/shikijs/shiki) |
 | `@shikijs/engine-oniguruma` | 1.29.2 | MIT | [link](https://github.com/shikijs/shiki) |
@@ -599,49 +586,49 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@standard-schema/utils` | 0.3.0 | MIT | [link](https://github.com/standard-schema/standard-schema) |
 | `@tabby_ai/hijri-converter` | 1.0.5 | MIT |  |
 | `@tarikjabiri/dxf` | 2.8.9 | MIT | [link](https://github.com/dxfjs/writer) |
-| `@tiptap/core` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-blockquote` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-bold` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-bubble-menu` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-bullet-list` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-character-count` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-code` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-code-block` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-color` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-document` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-dropcursor` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-floating-menu` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-font-family` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-gapcursor` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-hard-break` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-heading` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-horizontal-rule` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-image` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-italic` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-link` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-list` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-list-item` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-list-keymap` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-mathematics` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-ordered-list` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-paragraph` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-placeholder` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-strike` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-table` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-table-cell` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-table-header` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-table-row` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-task-item` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-task-list` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-text` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-text-align` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-text-style` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-typography` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-underline` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extensions` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/pm` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/react` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/starter-kit` | 3.22.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/core` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-blockquote` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-bold` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-bubble-menu` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-bullet-list` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-character-count` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-code` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-code-block` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-color` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-document` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-dropcursor` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-floating-menu` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-font-family` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-gapcursor` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-hard-break` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-heading` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-horizontal-rule` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-image` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-italic` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-link` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-list` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-list-item` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-list-keymap` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-mathematics` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-ordered-list` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-paragraph` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-placeholder` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-strike` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-table` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-table-cell` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-table-header` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-table-row` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-task-item` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-task-list` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-text` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-text-align` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-text-style` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-typography` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-underline` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extensions` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/pm` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/react` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/starter-kit` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
 | `@tokenizer/inflate` | 0.4.1 | MIT | [link](https://github.com/Borewit/tokenizer-inflate) |
 | `@tokenizer/token` | 0.3.0 | MIT | [link](https://github.com/Borewit/tokenizer-token) |
 | `@tootallnate/quickjs-emscripten` | 0.23.0 | MIT | [link](https://github.com/justjake/quickjs-emscripten) |
@@ -698,7 +685,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@types/ms` | 2.1.0 | MIT | [link](https://github.com/DefinitelyTyped/DefinitelyTyped) |
 | `@types/multer` | 2.1.0 | MIT | [link](https://github.com/DefinitelyTyped/DefinitelyTyped) |
 | `@types/mysql` | 2.15.27 | MIT | [link](https://github.com/DefinitelyTyped/DefinitelyTyped) |
-| `@types/node` | 14.18.63, 20.19.39, 22.18.13, 22.19.17, 24.12.2, 24.9.2 | MIT | [link](https://github.com/DefinitelyTyped/DefinitelyTyped) |
+| `@types/node` | 14.18.63, 20.19.41, 22.19.19, 24.12.4 | MIT | [link](https://github.com/DefinitelyTyped/DefinitelyTyped) |
 | `@types/nodemailer` | 6.4.23 | MIT | [link](https://github.com/DefinitelyTyped/DefinitelyTyped) |
 | `@types/oracledb` | 6.5.2 | MIT | [link](https://github.com/DefinitelyTyped/DefinitelyTyped) |
 | `@types/pg` | 8.15.6 | MIT | [link](https://github.com/DefinitelyTyped/DefinitelyTyped) |
@@ -720,7 +707,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `accepts` | 1.3.8, 2.0.0 | MIT | [link](https://github.com/jshttp/accepts) |
 | `acorn` | 8.16.0 | MIT | [link](https://github.com/acornjs/acorn) |
 | `acorn-import-attributes` | 1.9.5 | MIT | [link](https://github.com/xtuc/acorn-import-attributes) |
-| `agent-base` | 7.1.4 | MIT | [link](https://github.com/TooTallNate/proxy-agents) |
+| `agent-base` | 6.0.2, 7.1.4 | MIT | [link](https://github.com/TooTallNate/node-agent-base) |
 | `ajv` | 8.20.0 | MIT | [link](https://github.com/ajv-validator/ajv) |
 | `ajv-formats` | 3.0.1 | MIT | [link](https://github.com/ajv-validator/ajv-formats) |
 | `ansi-regex` | 5.0.1, 6.2.2 | MIT | [link](https://github.com/chalk/ansi-regex) |
@@ -739,7 +726,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `asynckit` | 0.4.0 | MIT | [link](https://github.com/alexindigo/asynckit) |
 | `atomic-sleep` | 1.0.0 | MIT | [link](https://github.com/davidmarkclements/atomic-sleep) |
 | `autoprefixer` | 10.5.0 | MIT | [link](https://github.com/postcss/autoprefixer) |
-| `axios` | 1.15.2 | MIT | [link](https://github.com/axios/axios) |
+| `axios` | 1.16.1 | MIT | [link](https://github.com/axios/axios) |
 | `bail` | 2.0.2 | MIT | [link](https://github.com/wooorm/bail) |
 | `balanced-match` | 1.0.2, 4.0.4 | MIT | [link](https://github.com/juliangruber/balanced-match) |
 | `base64-js` | 0.0.8, 1.5.1 | MIT | [link](https://github.com/beatgammit/base64-js) |
@@ -754,7 +741,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `bmp-js` | 0.1.0 | MIT | [link](https://github.com/shaozilee/bmp-js) |
 | `body-parser` | 1.20.5, 2.2.2 | MIT | [link](https://github.com/expressjs/body-parser) |
 | `bottleneck` | 2.19.5 | MIT | [link](https://github.com/SGrondin/bottleneck) |
-| `brace-expansion` | 1.1.14, 2.1.0, 5.0.5 | MIT | [link](https://github.com/juliangruber/brace-expansion) |
+| `brace-expansion` | 1.1.14, 2.1.0, 5.0.6 | MIT | [link](https://github.com/juliangruber/brace-expansion) |
 | `braces` | 3.0.3 | MIT | [link](https://github.com/micromatch/braces) |
 | `brotli` | 1.3.3 | MIT | [link](https://github.com/devongovett/brotli.js) |
 | `browserslist` | 4.28.2 | MIT | [link](https://github.com/browserslist/browserslist) |
@@ -762,7 +749,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `buffer-crc32` | 0.2.13 | MIT | [link](https://github.com/brianloveswords/buffer-crc32) |
 | `buffer-from` | 1.1.2 | MIT | [link](https://github.com/LinusU/buffer-from) |
 | `buffer-indexof-polyfill` | 1.0.2 | MIT | [link](https://github.com/sarosia/buffer-indexof-polyfill) |
-| `bullmq` | 5.76.2 | MIT | [link](https://github.com/taskforcesh/bullmq) |
+| `bullmq` | 5.76.10 | MIT | [link](https://github.com/taskforcesh/bullmq) |
 | `busboy` | 1.6.0 | MIT | [link](https://github.com/mscdex/busboy) |
 | `bytes` | 3.1.2 | MIT | [link](https://github.com/visionmedia/bytes.js) |
 | `c12` | 3.1.0 | MIT | [link](https://github.com/unjs/c12) |
@@ -780,7 +767,6 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `character-reference-invalid` | 2.0.1 | MIT | [link](https://github.com/wooorm/character-reference-invalid) |
 | `chart.js` | 4.5.1 | MIT | [link](https://github.com/chartjs/Chart.js) |
 | `cheerio` | 1.2.0 | MIT | [link](https://github.com/cheeriojs/cheerio) |
-| `chevrotain-allstar` | 0.4.3 | MIT | [link](https://github.com/langium/chevrotain-allstar) |
 | `chokidar` | 3.6.0, 4.0.3 | MIT | [link](https://github.com/paulmillr/chokidar) |
 | `citty` | 0.1.6, 0.2.2 | MIT | [link](https://github.com/unjs/citty) |
 | `cjs-module-lexer` | 2.2.0 | MIT | [link](https://github.com/nodejs/cjs-module-lexer) |
@@ -885,7 +871,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `exceljs` | 4.4.0 | MIT | [link](https://github.com/exceljs/exceljs) |
 | `expand-template` | 2.0.3 | MIT OR WTFPL | [link](https://github.com/ralphtheninja/expand-template) |
 | `express` | 4.22.1, 5.2.1 | MIT | [link](https://github.com/expressjs/express) |
-| `express-rate-limit` | 7.5.1, 8.4.1 | MIT | [link](https://github.com/express-rate-limit/express-rate-limit) |
+| `express-rate-limit` | 7.5.1, 8.5.2 | MIT | [link](https://github.com/express-rate-limit/express-rate-limit) |
 | `express-session` | 1.18.2 | MIT | [link](https://github.com/expressjs/session) |
 | `express-validator` | 7.3.0 | MIT | [link](https://github.com/express-validator/express-validator) |
 | `exsolve` | 1.0.8 | MIT | [link](https://github.com/unjs/exsolve) |
@@ -898,7 +884,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `fast-fifo` | 1.3.2 | MIT | [link](https://github.com/mafintosh/fast-fifo) |
 | `fast-glob` | 3.3.3 | MIT | [link](https://github.com/mrmlnc/fast-glob) |
 | `fast-safe-stringify` | 2.1.1 | MIT | [link](https://github.com/davidmarkclements/fast-safe-stringify) |
-| `fast-xml-builder` | 1.1.5 | MIT | [link](https://github.com/NaturalIntelligence/fast-xml-builder) |
+| `fast-xml-builder` | 1.2.0 | MIT | [link](https://github.com/NaturalIntelligence/fast-xml-builder) |
 | `fast-xml-parser` | 5.7.2 | MIT | [link](https://github.com/NaturalIntelligence/fast-xml-parser) |
 | `fault` | 1.0.4 | MIT | [link](https://github.com/wooorm/fault) |
 | `fd-slicer` | 1.1.0 | MIT | [link](https://github.com/andrewrk/node-fd-slicer) |
@@ -954,16 +940,16 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `hast-util-whitespace` | 3.0.0 | MIT | [link](https://github.com/syntax-tree/hast-util-whitespace) |
 | `hastscript` | 9.0.1 | MIT | [link](https://github.com/syntax-tree/hastscript) |
 | `helmet` | 7.2.0 | MIT | [link](https://github.com/helmetjs/helmet) |
-| `hono` | 4.12.16 | MIT | [link](https://github.com/honojs/hono) |
+| `hono` | 4.12.21 | MIT | [link](https://github.com/honojs/hono) |
 | `html-to-text` | 9.0.5 | MIT | [link](https://github.com/html-to-text/node-html-to-text) |
 | `html-url-attributes` | 3.0.1 | MIT | [link](https://github.com/rehypejs/rehype-minify.git#main) |
 | `html-void-elements` | 3.0.0 | MIT | [link](https://github.com/wooorm/html-void-elements) |
 | `htmlparser2` | 10.1.0, 8.0.2 | MIT | [link](https://github.com/fb55/htmlparser2) |
 | `http-errors` | 2.0.0, 2.0.1 | MIT | [link](https://github.com/jshttp/http-errors) |
 | `http-proxy-agent` | 7.0.2 | MIT | [link](https://github.com/TooTallNate/proxy-agents) |
-| `https-proxy-agent` | 7.0.6 | MIT | [link](https://github.com/TooTallNate/proxy-agents) |
+| `https-proxy-agent` | 5.0.1, 7.0.6 | MIT | [link](https://github.com/TooTallNate/node-https-proxy-agent) |
 | `iconv-lite` | 0.4.24, 0.6.3, 0.7.2 | MIT | [link](https://github.com/ashtuchkin/iconv-lite) |
-| `icu-minify` | 4.9.1 | MIT | [link](https://github.com/amannn/next-intl) |
+| `icu-minify` | 4.12.0 | MIT | [link](https://github.com/amannn/next-intl) |
 | `ignore` | 7.0.5 | MIT | [link](https://github.com/kaelzhang/node-ignore) |
 | `image-size` | 1.2.1 | MIT | [link](https://github.com/image-size/image-size) |
 | `immediate` | 3.0.6 | MIT | [link](https://github.com/calvinmetcalf/immediate) |
@@ -972,7 +958,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `inline-style-parser` | 0.2.7 | MIT | [link](https://github.com/remarkablemark/inline-style-parser) |
 | `input-otp` | 1.4.1 | MIT | [link](https://github.com/guilhermerodz/input-otp) |
 | `ioredis` | 5.10.1 | MIT | [link](https://github.com/luin/ioredis) |
-| `ip-address` | 10.1.0 | MIT | [link](https://github.com/beaugunderson/ip-address) |
+| `ip-address` | 10.2.0 | MIT | [link](https://github.com/beaugunderson/ip-address) |
 | `ipaddr.js` | 1.9.1 | MIT | [link](https://github.com/whitequark/ipaddr.js) |
 | `is-alphabetical` | 2.0.1 | MIT | [link](https://github.com/wooorm/is-alphabetical) |
 | `is-alphanumerical` | 2.0.1 | MIT | [link](https://github.com/wooorm/is-alphanumerical) |
@@ -1011,8 +997,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `langchain` | 1.3.4 | MIT | [link](https://github.com/langchain-ai/langchainjs) |
 | `langfuse` | 3.38.20 | MIT | [link](https://github.com/langfuse/langfuse-js) |
 | `langfuse-core` | 3.38.20 | MIT | [link](https://github.com/langfuse/langfuse-js) |
-| `langium` | 4.2.3 | MIT | [link](https://github.com/eclipse-langium/langium) |
-| `langsmith` | 0.5.25 | MIT | [link](https://github.com/langchain-ai/langsmith-sdk) |
+| `langsmith` | 0.5.25, 0.7.1 | MIT | [link](https://github.com/langchain-ai/langsmith-sdk) |
 | `layout-base` | 1.0.2, 2.0.1 | MIT | [link](https://github.com/iVis-at-Bilkent/layout-base) |
 | `lazystream` | 1.0.1 | MIT | [link](https://github.com/jpommerening/node-lazystream) |
 | `leac` | 0.6.0 | MIT | [link](https://github.com/mxxii/leac) |
@@ -1020,7 +1005,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `lilconfig` | 3.1.3 | MIT | [link](https://github.com/antonk52/lilconfig) |
 | `linebreak` | 1.1.0 | MIT | [link](https://github.com/devongovett/linebreaker) |
 | `lines-and-columns` | 1.2.4 | MIT | [link](https://github.com/eventualbuddha/lines-and-columns) |
-| `linkifyjs` | 4.3.2 | MIT | [link](https://github.com/nfrasser/linkifyjs) |
+| `linkifyjs` | 4.3.3 | MIT | [link](https://github.com/nfrasser/linkifyjs) |
 | `llamaindex` | 0.12.1 | MIT | [link](https://github.com/run-llama/LlamaIndexTS) |
 | `lodash` | 4.18.1 | MIT | [link](https://github.com/lodash/lodash) |
 | `lodash-es` | 4.18.1 | MIT | [link](https://github.com/lodash/lodash) |
@@ -1077,7 +1062,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `merge-descriptors` | 1.0.3, 2.0.0 | MIT | [link](https://github.com/sindresorhus/merge-descriptors) |
 | `merge-refs` | 1.3.0 | MIT | [link](https://github.com/wojtekmaj/merge-refs) |
 | `merge2` | 1.4.1 | MIT | [link](https://github.com/teambition/merge2) |
-| `mermaid` | 11.14.0 | MIT | [link](https://github.com/mermaid-js/mermaid) |
+| `mermaid` | 11.15.0 | MIT | [link](https://github.com/mermaid-js/mermaid) |
 | `methods` | 1.1.2 | MIT | [link](https://github.com/jshttp/methods) |
 | `micromark` | 4.0.2 | MIT | [link](https://github.com/micromark/micromark.git#main) |
 | `micromark-core-commonmark` | 2.0.3 | MIT | [link](https://github.com/micromark/micromark.git#main) |
@@ -1124,7 +1109,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `motion-dom` | 12.38.0 | MIT | [link](https://github.com/motiondivision/motion) |
 | `motion-utils` | 12.36.0 | MIT | [link](https://github.com/motiondivision/motion) |
 | `ms` | 2.0.0, 2.1.3 | MIT | [link](https://github.com/vercel/ms) |
-| `msgpackr` | 1.11.5 | MIT | [link](https://github.com/kriszyp/msgpackr) |
+| `msgpackr` | 2.0.1 | MIT | [link](https://github.com/kriszyp/msgpackr) |
 | `msgpackr-extract` | 3.0.3 | MIT | [link](https://github.com/kriszyp/msgpackr-extract) |
 | `multer` | 2.1.1 | MIT | [link](https://github.com/expressjs/multer) |
 | `mustache` | 4.2.0 | MIT | [link](https://github.com/janl/mustache.js) |
@@ -1135,10 +1120,10 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `negotiator` | 0.6.3, 0.6.4, 1.0.0 | MIT | [link](https://github.com/jshttp/negotiator) |
 | `netmask` | 2.0.2 | MIT | [link](https://github.com/rs/node-netmask) |
 | `next` | 14.2.35 | MIT | [link](https://github.com/vercel/next.js) |
-| `next-intl` | 4.9.1 | MIT | [link](https://github.com/amannn/next-intl) |
-| `next-intl-swc-plugin-extractor` | 4.9.1 | MIT | [link](https://github.com/amannn/next-intl) |
+| `next-intl` | 4.12.0 | MIT | [link](https://github.com/amannn/next-intl) |
+| `next-intl-swc-plugin-extractor` | 4.12.0 | MIT | [link](https://github.com/amannn/next-intl) |
 | `next-themes` | 0.4.6 | MIT | [link](https://github.com/pacocoursey/next-themes) |
-| `node-abi` | 3.89.0, 3.90.0 | MIT | [link](https://github.com/electron/node-abi) |
+| `node-abi` | 3.89.0, 3.92.0 | MIT | [link](https://github.com/electron/node-abi) |
 | `node-abort-controller` | 3.1.1 | MIT | [link](https://github.com/southpolesteve/node-abort-controller) |
 | `node-addon-api` | 7.1.1, 8.7.0 | MIT | [link](https://github.com/nodejs/node-addon-api) |
 | `node-domexception` | 1.0.0 | MIT | [link](https://github.com/jimmywarting/node-domexception) |
@@ -1437,7 +1422,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `unzipper` | 0.10.14 | MIT | [link](https://github.com/ZJONSSON/node-unzipper) |
 | `update-browserslist-db` | 1.2.3 | MIT | [link](https://github.com/browserslist/update-db) |
 | `use-callback-ref` | 1.3.3 | MIT | [link](https://github.com/theKashey/use-callback-ref) |
-| `use-intl` | 4.9.1 | MIT | [link](https://github.com/amannn/next-intl) |
+| `use-intl` | 4.12.0 | MIT | [link](https://github.com/amannn/next-intl) |
 | `use-sidecar` | 1.1.3 | MIT | [link](https://github.com/theKashey/use-sidecar) |
 | `use-sync-external-store` | 1.6.0 | MIT | [link](https://github.com/facebook/react) |
 | `util-deprecate` | 1.0.2 | MIT | [link](https://github.com/TooTallNate/util-deprecate) |
@@ -1450,12 +1435,6 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `vfile-location` | 5.0.3 | MIT | [link](https://github.com/vfile/vfile-location) |
 | `vfile-message` | 4.0.3 | MIT | [link](https://github.com/vfile/vfile-message) |
 | `victory-vendor` | 37.3.6 | MIT AND ISC | [link](https://github.com/FormidableLabs/victory) |
-| `vscode-jsonrpc` | 8.2.0 | MIT | [link](https://github.com/Microsoft/vscode-languageserver-node) |
-| `vscode-languageserver` | 9.0.1 | MIT | [link](https://github.com/Microsoft/vscode-languageserver-node) |
-| `vscode-languageserver-protocol` | 3.17.5 | MIT | [link](https://github.com/Microsoft/vscode-languageserver-node) |
-| `vscode-languageserver-textdocument` | 1.0.12 | MIT | [link](https://github.com/Microsoft/vscode-languageserver-node) |
-| `vscode-languageserver-types` | 3.17.5 | MIT | [link](https://github.com/Microsoft/vscode-languageserver-node) |
-| `vscode-uri` | 3.1.0 | MIT | [link](https://github.com/microsoft/vscode-uri) |
 | `w3c-keyname` | 2.2.8 | MIT | [link](https://github.com/marijnh/w3c-keyname) |
 | `warning` | 4.0.3 | MIT | [link](https://github.com/BerkeleyTrue/warning) |
 | `web-namespaces` | 2.0.1 | MIT | [link](https://github.com/wooorm/web-namespaces) |
@@ -1465,9 +1444,10 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `whatwg-mimetype` | 4.0.0 | MIT | [link](https://github.com/jsdom/whatwg-mimetype) |
 | `whatwg-url` | 5.0.0 | MIT | [link](https://github.com/jsdom/whatwg-url) |
 | `wrap-ansi` | 7.0.0, 8.1.0 | MIT | [link](https://github.com/chalk/wrap-ansi) |
-| `ws` | 8.18.3, 8.20.0 | MIT | [link](https://github.com/websockets/ws) |
+| `ws` | 8.20.1 | MIT | [link](https://github.com/websockets/ws) |
 | `xml` | 1.0.1 | MIT | [link](https://github.com/dylang/node-xml) |
 | `xml-js` | 1.6.11 | MIT | [link](https://github.com/nashwaan/xml-js) |
+| `xml-naming` | 0.1.0 | MIT | [link](https://github.com/NaturalIntelligence/xml-naming) |
 | `xml2js` | 0.5.0, 0.6.2 | MIT | [link](https://github.com/Leonidas-from-XIV/node-xml2js) |
 | `xmlbuilder` | 10.1.1, 11.0.1 | MIT | [link](https://github.com/oozcitak/xmlbuilder-js) |
 | `xmlchars` | 2.2.0 | MIT | [link](https://github.com/lddubeau/xmlchars) |
@@ -1498,7 +1478,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | Package | Version(s) | License | Source |
 |---|---|---|---|
 | `buffers` | 0.1.1 | UNKNOWN | [link](https://github.com/substack/node-buffers) |
-| `openwebui-backend` | 1.0.0 | UNKNOWN |  |
+| `openwebui-backend` | 1.2.4 | UNKNOWN |  |
 
 ## Platform-conditional native binaries
 

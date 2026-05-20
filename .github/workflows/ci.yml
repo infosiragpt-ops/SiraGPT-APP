@@ -265,11 +265,12 @@ jobs:
         run: npx prisma db push --accept-data-loss --skip-generate
 
       # Shard execution — round-robin slice of the full backend suite.
-      # Coverage is collected on shard 1 only (single source of truth for
-      # the lcov report); other shards run plain `node --test` for speed.
+      # Coverage is collected on shard 1 only as an lcov artifact. Global
+      # thresholds require the full suite, so the sharded CI sample must not
+      # enforce repository-wide minimums.
       - name: Backend tests (shard ${{ matrix.shard }}/${{ matrix.total }}) with coverage
         if: matrix.shard == 1
-        run: npx c8 --reporter=text-summary --reporter=lcov --reporter=json-summary --check-coverage --lines 60 --functions 60 --branches 50 --statements 60 bash scripts/test-shard.sh ${{ matrix.shard }} ${{ matrix.total }}
+        run: npx c8 --reporter=text-summary --reporter=lcov --reporter=json-summary bash scripts/test-shard.sh ${{ matrix.shard }} ${{ matrix.total }}
 
       - name: Backend tests (shard ${{ matrix.shard }}/${{ matrix.total }})
         if: matrix.shard != 1
