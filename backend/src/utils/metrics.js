@@ -241,6 +241,16 @@ registerCounter('siragpt_gdpr_exports_total', {
   labels: ['redactPII'],
 });
 
+// ── Org-members gauge (cycle 85) ────────────────────────────────────
+// Active membership count per organization, refreshed whenever the
+// members cache is invalidated (which already happens on every
+// OrgMembership create/delete/role-change). Useful for billing /
+// usage dashboards that want to size plan headcount over time.
+registerGauge('siragpt_org_members_total', {
+  help: 'Active OrgMembership rows per organization, refreshed on member-cache invalidation',
+  labels: ['orgId'],
+});
+
 // ── Org-events SSE metrics (cycle 79) ───────────────────────────────
 // Wired from the GET /api/orgs/:id/events SSE handler so dashboards can
 // observe live-tail subscriber counts and total events streamed.
@@ -403,6 +413,29 @@ function recordAnalyzerCacheStats(prevHits, prevMisses, stats) {
   return { hits, misses };
 }
 
+/**
+ * Refresh the `siragpt_org_members_total{orgId}` gauge by counting
+ * the current OrgMembership rows for the org. Best-effort: never
+ * throws, swallows prisma errors, and no-ops on a missing orgId so
+ * callers can wire it straight into mutation paths.
+ *
+ * @param {object} prismaClient — a Prisma client exposing `orgMembership.count`
+ * @param {string} orgId
+ * @returns {Promise<number|null>} the freshly observed count, or null on failure
+ */
+async function refreshOrgMembersGauge(prismaClient, orgId) {
+  if (!prismaClient || !orgId || typeof orgId !== 'string') return null;
+  try {
+    const count = await prismaClient.orgMembership.count({ where: { orgId } });
+    const value = Number.isFinite(count) ? Math.max(0, count) : 0;
+    gauge('siragpt_org_members_total', { orgId }, value);
+    return value;
+  } catch {
+    // never throw from instrumentation
+    return null;
+  }
+}
+
 function refreshProcessMetrics() {
   try {
     gauge('siragpt_process_uptime_seconds', {}, Math.round(process.uptime()));
@@ -432,6 +465,7 @@ module.exports = {
   recordAnalyzerCacheStats,
   recordAIStreamUsage,
   recordGdprExport,
+  refreshOrgMembersGauge,
   refreshProcessMetrics,
   _reset,
   _clearRegistry,

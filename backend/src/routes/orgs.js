@@ -53,6 +53,7 @@ const { defaultSteps, computeProgress } = require('../services/org-onboarding');
 const { responseCache, invalidate: invalidateResponseCache } = require('../middleware/response-cache');
 const costTracker = require('../services/ai/cost-tracker');
 const { parseOrgSettingsPatch } = require('../schemas/orgs');
+const metrics = require('../utils/metrics');
 
 const router = express.Router();
 
@@ -88,10 +89,17 @@ function invalidateMembersCache(orgId) {
   // the cached members listing — match on that so we don't accidentally
   // evict the audit-log or settings cache that may share a namespace
   // suffix in the future.
-  return invalidateResponseCache({
+  const evicted = invalidateResponseCache({
     namespace: MEMBERS_CACHE_NAMESPACE,
     contains: `/orgs/${orgId}/members`,
   });
+  // Cycle 85 — every cache invalidation rides on top of an
+  // OrgMembership create / delete / role change, so this is the
+  // canonical hook to refresh the `siragpt_org_members_total`
+  // Prometheus gauge for billing / usage dashboards. Fire-and-forget;
+  // `refreshOrgMembersGauge` is wrapped in try/catch and never throws.
+  metrics.refreshOrgMembersGauge(prisma, orgId).catch(() => {});
+  return evicted;
 }
 
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
@@ -143,6 +151,12 @@ router.post('/', authenticateToken, async (req, res) => {
       metadata: { orgId: org.id },
       req,
     });
+
+    // Cycle 85 — fresh org has a single OWNER membership; refresh
+    // the org-members gauge so the new tenant shows up in usage
+    // dashboards immediately rather than waiting for the next
+    // mutation-driven cache invalidation.
+    invalidateMembersCache(org.id);
 
     const payload = serializeOrg(org);
     payload.onboardingSteps = defaultSteps();
