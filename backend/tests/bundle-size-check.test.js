@@ -12,6 +12,7 @@ const {
   evaluateBudget,
   buildBaselineFromMeasurement,
   parseArgs,
+  resolveBundleRoot,
   bytesToKB,
   run,
 } = require('../../scripts/bundle-size-check.js');
@@ -202,6 +203,29 @@ test('parseArgs honors --root, --budget, --report, --update-baseline, --quiet', 
 
 test('parseArgs throws on unknown flags', () => {
   assert.throws(() => parseArgs(['node', 's.js', '--bogus']), /Unknown argument/);
+});
+
+test('resolveBundleRoot falls back to standalone static after postbuild slim', () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'bundle-root-'));
+  const standaloneStatic = path.join(repo, '.next', 'standalone', '.next', 'static');
+  fs.mkdirSync(standaloneStatic, { recursive: true });
+  try {
+    assert.equal(resolveBundleRoot({ root: null }, repo), standaloneStatic);
+  } finally {
+    rmrf(repo);
+  }
+});
+
+test('resolveBundleRoot honors explicit --root even when default outputs exist', () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'bundle-root-'));
+  const explicit = path.join(repo, 'custom-static');
+  const primary = path.join(repo, '.next', 'static');
+  fs.mkdirSync(primary, { recursive: true });
+  try {
+    assert.equal(resolveBundleRoot({ root: explicit }, repo), explicit);
+  } finally {
+    rmrf(repo);
+  }
 });
 
 test('bytesToKB rounds to two decimals', () => {

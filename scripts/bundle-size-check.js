@@ -2,9 +2,10 @@
 /**
  * Bundle-size budget gate.
  *
- * Scans a Next.js production build (`.next/static`) and compares the
- * total/gzipped sizes against a budget file. Exits non-zero on overage so it
- * can be wired as a CI gate after `next build`.
+ * Scans a Next.js production build (`.next/static`, or the standalone copy
+ * after `postbuild:slim`) and compares the total/gzipped sizes against a
+ * budget file. Exits non-zero on overage so it can be wired as a CI gate after
+ * `next build`.
  *
  * Usage:
  *   node scripts/bundle-size-check.js
@@ -259,10 +260,17 @@ function formatHumanReport(measurement, evaluation, budget) {
   return lines.join('\n');
 }
 
+function resolveBundleRoot(args, repoRoot = path.resolve(__dirname, '..')) {
+  if (args.root) return path.resolve(args.root);
+  const primary = path.join(repoRoot, '.next', 'static');
+  if (fs.existsSync(primary)) return primary;
+  return path.join(repoRoot, '.next', 'standalone', '.next', 'static');
+}
+
 function resolveDefaults(args) {
   const repoRoot = path.resolve(__dirname, '..');
   return {
-    root: args.root ? path.resolve(args.root) : path.join(repoRoot, '.next', 'static'),
+    root: resolveBundleRoot(args, repoRoot),
     budget:
       args.budget
         ? path.resolve(args.budget)
@@ -350,6 +358,7 @@ module.exports = {
   evaluateBudget,
   buildBaselineFromMeasurement,
   parseArgs,
+  resolveBundleRoot,
   bytesToKB,
   run,
 };
