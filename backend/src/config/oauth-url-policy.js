@@ -88,6 +88,11 @@ function isUsablePublicUrl(value, env = process.env, backendBaseUrl = '') {
   const parsed = parseUrl(value);
   if (!parsed || !/^https?:$/.test(parsed.protocol)) return false;
   if (isProduction(env) && isLocalhostUrl(value)) return false;
+  // Inside a Replit container, localhost is not reachable from the user's
+  // browser (which lives on the *.replit.dev preview domain), so a
+  // localhost callback registered in .env.local would break the OAuth
+  // round trip. Reject it so we fall back to the Replit dev domain.
+  if (env.REPLIT_DEV_DOMAIN && isLocalhostUrl(value)) return false;
   if (
     isProduction(env) &&
     !isAllowedFrontendCallback(env) &&
@@ -119,6 +124,10 @@ function resolvePublicBackendUrl(env = process.env) {
     const normalized = normalizePublicBackendBaseUrl(candidate);
     if (!normalized) continue;
     if (isProduction(env) && isLocalhostUrl(normalized)) continue;
+    // Inside a Replit container, localhost is unreachable from the user's
+    // browser. Skip localhost candidates whenever a Replit dev domain is
+    // available so OAuth callbacks land on a host the browser can reach.
+    if (env.REPLIT_DEV_DOMAIN && isLocalhostUrl(normalized)) continue;
 
     const candidateHost = parseUrl(normalized)?.hostname || '';
     if (
@@ -136,6 +145,13 @@ function resolvePublicBackendUrl(env = process.env) {
     return normalized;
   }
 
+  // In dev, prefer the Replit preview domain over a localhost or
+  // siragpt.com fallback so OAuth round trips actually land back on the
+  // browser's origin. The dev domain proxies /api/* to the backend on
+  // port 5050 the same way the published siragpt.com host does.
+  if (!isProduction(env) && env.REPLIT_DEV_DOMAIN) {
+    return `https://${env.REPLIT_DEV_DOMAIN}`;
+  }
   if (inferred) return inferred;
   // Last-resort fallback for environments that haven't set FRONTEND_URL.
   // In production we still default to the public siragpt.com origin (single
