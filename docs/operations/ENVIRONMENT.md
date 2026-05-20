@@ -125,6 +125,11 @@ APP_DIR=/root/siraNew/siraGPT scripts/deploy-production.sh
 | `AGENT_TASK_BOOT_RECOVERY_STALE_MS` | Minimum snapshot age before boot recovery marks a local in-flight task as errored; BullMQ-backed snapshots are skipped when Redis is configured | `60000` |
 | `AGENTIC_RAG_PROVIDER` | RAG provider for agents | `internal` |
 | `AGENTIC_AGENT_ENGINE` | Agent reasoning engine | `react` |
+| `SIRAGPT_USER_MEMORY_STORE` | Set to `pgvector` to store cross-session user memories in the `user_memories` pgvector table; empty keeps the existing RAG fallback | (empty) |
+| `SIRAGPT_MEMORY_EMBED_PROVIDER` | Embedding provider for pgvector user memory: `voyage` or `jina` | `voyage` |
+| `SIRAGPT_MEMORY_EMBED_MODEL` | Memory embedding model; must return 1024 dimensions | `voyage-3-large` |
+| `VOYAGE_API_KEY` | Voyage AI key for 1024-dimension memory embeddings | (required when provider is `voyage`) |
+| `JINA_API_KEY` | Jina AI key for 1024-dimension memory embeddings | (required when provider is `jina`) |
 
 ## 🧰 MCP Connectors
 
