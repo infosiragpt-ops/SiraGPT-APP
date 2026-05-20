@@ -4,6 +4,55 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and improvement cycles follow a sequential number with the date the work landed.
 
+## [0.4.1 / backend 1.3.1] — Cycles 151-160 milestone — 2026-05-20
+
+Sixth decade past the centenarian. **PATCH** bumps (root
+`0.4.0 → 0.4.1`, backend `1.3.0 → 1.3.1`) — a small celebratory
+ten-cycle marker. Cycles 151-160 hardened org-level governance:
+retention sweeps, webhook DLQ + bulk ops, API-key bulk admin,
+provider preference + cost caps, audit retention/export quotas, and
+an org activity feed. No public API breaks. See
+`docs/cycles/CYCLE_160.md` for the milestone narrative.
+
+### Added
+- **Cycle 160 — milestone consolidation**: `docs/cycles/CYCLE_160.md`
+  marker doc + CHANGELOG cycles 151-160 sweep + PATCH version bump to
+  `0.4.1 / 1.3.1` (small celebratory ten-cycle marker; no public API
+  breaks).
+- **Cycle 159 — org activity feed**: unified
+  `GET /orgs/:id/activity` feed merges audit, webhook, member, and
+  billing events into a single paginated stream with type filters.
+- **Cycle 158 — per-org audit retention + export quota**: per-org
+  audit retention window override and monthly export quota with usage
+  counter and admin override.
+- **Cycle 157 — org AI provider preference + cost cap**: orgs can pin
+  a preferred AI provider (with fallback) and set a monthly cost cap
+  with soft-warn / hard-stop thresholds.
+- **Cycle 156 — webhook maxRetries + filters**: per-webhook
+  `maxRetries` override (defaults to org policy) and event-type /
+  status filters for the admin webhook listing.
+- **Cycle 155 — webhook bulk toggle + delete**: admin endpoints to
+  bulk enable/disable and bulk delete org webhooks with confirmation
+  and audit trail.
+- **Cycle 154 — api-keys bulk-revoke + CSV**: admin can bulk-revoke
+  API keys by selection or filter and export the inventory to CSV
+  with redacted secrets.
+- **Cycle 153 — org webhook DLQ + retry**: failed webhook deliveries
+  land in a per-org dead-letter queue with admin retry endpoint and
+  delivery-attempt history.
+- **Cycle 152 — audit archive 3y sweep + cron jobs admin**: audit
+  rows older than the 3-year retention horizon are archived to cold
+  storage; admin cron jobs page surfaces last-run / next-run / state.
+- **Cycle 151 — stale SystemSettings sweep**: periodic sweep prunes
+  orphaned / unreferenced SystemSettings rows and emits a janitor
+  metric for the admin dashboard.
+
+### Changed
+- Root `package.json` `0.4.0 → 0.4.1` and `backend/package.json`
+  `1.3.0 → 1.3.1` (**PATCH**; small celebratory ten-cycle marker; no
+  public API breaks).
+- Lint ratchet held at `--max-warnings 44` (tightened from 45).
+
 ## [0.4.0 / backend 1.3.0] — Cycles 141-150 milestone — 2026-05-19
 
 Half-century past the centenarian. **MINOR** bumps (root
