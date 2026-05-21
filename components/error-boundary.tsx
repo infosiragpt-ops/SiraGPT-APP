@@ -73,8 +73,15 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
      // depends on the dev path emitting error.message, so we keep
      // that branch stable. Next.js sets NODE_ENV at build time.
      const isProd = typeof process !== "undefined" && process.env?.NODE_ENV === "production"
+     // In production we still want a small diagnostic breadcrumb so the
+     // user can tell us WHICH boundary failed and WHICH error class fired
+     // when they paste a screenshot. We deliberately omit error.message
+     // (can leak PII / stack frames) and keep just the React error name
+     // + our human label. The full error is in Sentry / console.
+     const label = this.props.label ?? "ErrorBoundary"
+     const errName = error.name || "Error"
      const detail = isProd
-       ? "Ha ocurrido un error inesperado. Por favor recarga la página."
+       ? `Ha ocurrido un error inesperado. Por favor recarga la página. [${label} · ${errName}]`
        : (error.message || "Error desconocido")
 
      return (
