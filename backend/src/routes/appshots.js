@@ -36,6 +36,7 @@ const aiService = require('../services/ai-service');
 const emailService = require('../services/email');
 const { extractIp, extractUa, reduceIp } = require('../utils/session-fingerprint');
 const { resolveGeoHint } = require('../utils/geo-lookup');
+const emailPrefs = require('../services/email-preferences');
 
 const router = express.Router();
 
@@ -132,15 +133,27 @@ router.post('/pair', authenticateToken, async (req, res) => {
     // Security notification (Task 14): warn the user out-of-band that a new
     // device was paired. Fire-and-forget — a failing/unconfigured SMTP must
     // never block the pairing flow itself.
+    //
+    // Task 18: respect the per-user `appshots_security` opt-out. If the user
+    // has turned the toggle off in /settings (notifications), skip the email.
+    // The audit log entry above is intentionally unaffected.
     if (req.user?.email) {
-      Promise.resolve(
-        emailService.sendAppshotsDeviceLinked(req.user, {
-          ip: getClientIp(req),
-          when: new Date(),
-        }),
-      ).catch((err) => {
-        console.warn('[appshots] device-linked email failed:', err?.message || err);
-      });
+      Promise.resolve()
+        .then(async () => {
+          const optIn = await emailPrefs.shouldSendEmail(
+            prisma,
+            req.user.id,
+            'appshots_security',
+          );
+          if (!optIn) return;
+          return emailService.sendAppshotsDeviceLinked(req.user, {
+            ip: getClientIp(req),
+            when: new Date(),
+          });
+        })
+        .catch((err) => {
+          console.warn('[appshots] device-linked email failed:', err?.message || err);
+        });
     }
 
     res.status(201).json({
@@ -323,12 +336,24 @@ router.delete('/sessions/:id', authenticateToken, async (req, res) => {
 
     // Security notification (Task 14): confirm the revocation by email so
     // the user notices if someone else triggered it. Fire-and-forget.
+    //
+    // Task 18: respect the `appshots_security` opt-out (same flag as the
+    // pairing notification — they are two sides of the same security loop,
+    // so toggling one toggles both).
     if (req.user?.email) {
-      Promise.resolve(
-        emailService.sendAppshotsDeviceRevoked(req.user, { when: new Date() }),
-      ).catch((err) => {
-        console.warn('[appshots] device-revoked email failed:', err?.message || err);
-      });
+      Promise.resolve()
+        .then(async () => {
+          const optIn = await emailPrefs.shouldSendEmail(
+            prisma,
+            req.user.id,
+            'appshots_security',
+          );
+          if (!optIn) return;
+          return emailService.sendAppshotsDeviceRevoked(req.user, { when: new Date() });
+        })
+        .catch((err) => {
+          console.warn('[appshots] device-revoked email failed:', err?.message || err);
+        });
     }
 
     res.json({ ok: true });

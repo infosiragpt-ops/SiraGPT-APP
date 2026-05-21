@@ -688,6 +688,44 @@ function NotificationsSection() {
   const { settings, update } = useSettings()
   const N = settings.notifications
 
+  // Task 18 — `notifications.appshots_security` lives in the same
+  // settings.notifications JSON blob but is NOT part of the FE's typed
+  // SettingsShape (it's a backend-only email opt-out flag). We read it
+  // directly from the untyped subtree and persist via the narrow
+  // PATCH /api/users/me/settings endpoint so we don't accidentally
+  // round-trip the whole settings object.
+  const appshotsSecurityEmails =
+    (settings.notifications as unknown as { appshots_security?: boolean })
+      .appshots_security !== false
+  const [savingAppshotsPref, setSavingAppshotsPref] = React.useState(false)
+  const setAppshotsSecurityEmails = async (next: boolean) => {
+    setSavingAppshotsPref(true)
+    try {
+      // Use apiClient so the Bearer token (`auth-token` in localStorage),
+      // CSRF double-submit header and credentials are handled the same
+      // way as every other mutating call in the app.
+      await apiClient.updateNotificationPreferences({ appshots_security: next })
+      // Mirror the new flag into the local settings tree so the toggle
+      // reflects state without a re-fetch. Cast through unknown — see
+      // comment above about the missing typed key.
+      update({
+        notifications: {
+          ...(N as any),
+          appshots_security: next,
+        } as any,
+      })
+      toast.success(
+        next
+          ? "Te avisaremos cuando se vincule un nuevo dispositivo"
+          : "Avisos de seguridad de Appshots silenciados",
+      )
+    } catch (err) {
+      toast.error("No se pudo guardar la preferencia")
+    } finally {
+      setSavingAppshotsPref(false)
+    }
+  }
+
   const requestDesktop = async () => {
     if (!("Notification" in window)) { toast.error("Tu navegador no soporta notificaciones"); return }
     const res = await Notification.requestPermission()
@@ -768,6 +806,18 @@ function NotificationsSection() {
         <Row title="Probar notificación" desc="Dispara un toast de ejemplo">
           <Button variant="outline" size="sm" onClick={testNotification}>Probar</Button>
         </Row>
+      </SectionCard>
+
+      <SectionCard
+        title="Seguridad de Appshots"
+        desc="Avisos por email cuando se vincula o revoca la extensión de Chrome"
+      >
+        <SwitchRow
+          title="Avisos de seguridad de Appshots"
+          desc="Te avisamos por email cuando se vincula un nuevo dispositivo o se revoca uno. Si vinculas la extensión a menudo, puedes silenciarlos. El registro de auditoría sigue grabando el evento."
+          checked={appshotsSecurityEmails}
+          onChange={(v) => { if (!savingAppshotsPref) setAppshotsSecurityEmails(v) }}
+        />
       </SectionCard>
     </>
   )

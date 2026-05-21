@@ -15,6 +15,10 @@
  *   ownership      — `sendOwnershipTransfer`
  *   billing        — payment failure / subscription / renewal mails
  *   announcements  — org-wide announcement broadcasts (critical severity)
+ *   appshots_security — Sira Appshots device-paired / device-revoked
+ *                       security notifications. Power users who re-pair
+ *                       the extension several times a day can opt out
+ *                       here; the audit log entries are unaffected.
  *
  * Verification + invitation acceptance flows are "critical" — they are
  * gated by this helper but ALSO enqueued into the failed-email retry
@@ -32,6 +36,7 @@ const VALID_CATEGORIES = Object.freeze([
   'ownership',
   'billing',
   'announcements',
+  'appshots_security',
 ]);
 
 /**

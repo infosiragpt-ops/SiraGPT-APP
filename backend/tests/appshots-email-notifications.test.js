@@ -40,6 +40,8 @@ describe('POST /api/appshots/pair → device-linked email', () => {
   let calls;
   let origSend;
   let origCreate;
+  let origUserFindUnique;
+  let userSettings;
 
   beforeEach(() => {
     auth = installAuthSessionMock({ id: 'task14-user', email: 'task14@example.com', name: 'Task 14 Tester' });
@@ -51,11 +53,17 @@ describe('POST /api/appshots/pair → device-linked email', () => {
     };
     origCreate = prisma.session.create;
     prisma.session.create = async ({ data }) => ({ id: 'new-session', ...data });
+    // Task 18: stub the user.findUnique used by email-preferences.loadNotifications
+    // so each test can control the appshots_security opt-out flag.
+    userSettings = {};
+    origUserFindUnique = prisma.user.findUnique;
+    prisma.user.findUnique = async () => ({ settings: userSettings });
   });
 
   afterEach(() => {
     emailService.sendAppshotsDeviceLinked = origSend;
     prisma.session.create = origCreate;
+    prisma.user.findUnique = origUserFindUnique;
     auth.restore();
   });
 
@@ -84,6 +92,19 @@ describe('POST /api/appshots/pair → device-linked email', () => {
       .set('Authorization', auth.authHeader);
     assert.equal(res.status, 201);
   });
+
+  it('skips the email when the user has opted out via notifications.appshots_security', async () => {
+    // Task 18 — power users can silence Appshots security mails.
+    userSettings = { notifications: { appshots_security: false } };
+    const app = buildRouteTestApp('/api/appshots', appshotsRouter);
+    const res = await request(app)
+      .post('/api/appshots/pair')
+      .set('Authorization', auth.authHeader);
+    assert.equal(res.status, 201);
+    // Allow the fire-and-forget promise chain to drain before asserting.
+    await new Promise((r) => setImmediate(r));
+    assert.equal(calls.length, 0);
+  });
 });
 
 describe('DELETE /api/appshots/sessions/:id → device-revoked email', () => {
@@ -92,6 +113,8 @@ describe('DELETE /api/appshots/sessions/:id → device-revoked email', () => {
   let origSend;
   let origFindUnique;
   let origDelete;
+  let origUserFindUnique;
+  let userSettings;
   let store;
 
   beforeEach(() => {
@@ -117,12 +140,16 @@ describe('DELETE /api/appshots/sessions/:id → device-revoked email', () => {
       if (i >= 0) store.splice(i, 1);
       return { id: where.id };
     };
+    userSettings = {};
+    origUserFindUnique = prisma.user.findUnique;
+    prisma.user.findUnique = async () => ({ settings: userSettings });
   });
 
   afterEach(() => {
     emailService.sendAppshotsDeviceRevoked = origSend;
     prisma.session.findUnique = origFindUnique;
     prisma.session.delete = origDelete;
+    prisma.user.findUnique = origUserFindUnique;
     auth.restore();
   });
 
@@ -143,6 +170,17 @@ describe('DELETE /api/appshots/sessions/:id → device-revoked email', () => {
       .delete('/api/appshots/sessions/sess-other')
       .set('Authorization', auth.authHeader);
     assert.equal(res.status, 404);
+    assert.equal(calls.length, 0);
+  });
+
+  it('skips the email when the user has opted out via notifications.appshots_security', async () => {
+    userSettings = { notifications: { appshots_security: false } };
+    const app = buildRouteTestApp('/api/appshots', appshotsRouter);
+    const res = await request(app)
+      .delete('/api/appshots/sessions/sess-own')
+      .set('Authorization', auth.authHeader);
+    assert.equal(res.status, 200);
+    await new Promise((r) => setImmediate(r));
     assert.equal(calls.length, 0);
   });
 });

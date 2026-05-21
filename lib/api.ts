@@ -1364,6 +1364,17 @@ class ApiClient {
     });
   }
 
+  // Task 18 — narrow PATCH for email-notification opt-outs (see
+  // backend/src/routes/users.js#patch /me/settings). Only the
+  // `notifications` subtree is accepted server-side and only keys in
+  // `VALID_CATEGORIES` (email-preferences.js) survive the merge.
+  async updateNotificationPreferences(notifications: Record<string, boolean>) {
+    return this.request('/users/me/settings', {
+      method: 'PATCH',
+      body: JSON.stringify({ notifications }),
+    });
+  }
+
   async getUserSessions() {
     return this.request('/users/sessions');
   }
