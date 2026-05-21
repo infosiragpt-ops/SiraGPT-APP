@@ -52,6 +52,10 @@ describe('GET /api/appshots/sessions', () => {
         createdAt: new Date('2026-05-01T10:00:00Z'),
         expiresAt: new Date('2027-05-01T10:00:00Z'),
         lastUsedAt: new Date('2026-05-10T12:00:00Z'),
+        userAgent:
+          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        ipHint: '81.45.30.0/24',
+        label: 'Portátil del trabajo',
       },
       {
         id: 'sess-plain',
@@ -81,10 +85,135 @@ describe('GET /api/appshots/sessions', () => {
     restore();
     assert.equal(res.status, 200);
     assert.equal(res.body.sessions.length, 1);
-    assert.equal(res.body.sessions[0].id, 'sess-appshots-1');
-    assert.equal(res.body.sessions[0].token, undefined);
-    assert.ok(res.body.sessions[0].createdAt);
-    assert.ok(res.body.sessions[0].lastUsedAt);
+    const s = res.body.sessions[0];
+    assert.equal(s.id, 'sess-appshots-1');
+    assert.equal(s.token, undefined);
+    assert.ok(s.createdAt);
+    assert.ok(s.lastUsedAt);
+    // Task 15 — device hints surface through the API.
+    assert.equal(s.label, 'Portátil del trabajo');
+    assert.equal(s.ipHint, '81.45.30.0/24');
+    assert.equal(s.device, 'Chrome en macOS');
+    assert.ok(typeof s.userAgent === 'string' && s.userAgent.includes('Chrome'));
+  });
+});
+
+describe('describeUserAgent (Task 15)', () => {
+  const { describeUserAgent } = appshotsRouter._private;
+  it('recognises common browser + OS combinations', () => {
+    assert.equal(
+      describeUserAgent(
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      ),
+      'Chrome en macOS',
+    );
+    assert.equal(
+      describeUserAgent(
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0',
+      ),
+      'Edge en Windows',
+    );
+    assert.equal(
+      describeUserAgent('Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0'),
+      'Firefox en Linux',
+    );
+  });
+  it('returns null when nothing is recognisable', () => {
+    assert.equal(describeUserAgent(''), null);
+    assert.equal(describeUserAgent('curl/8.0.1'), null);
+  });
+});
+
+describe('PATCH /api/appshots/sessions/:id (Task 15)', () => {
+  let restore;
+  let auth;
+  let store;
+
+  beforeEach(() => {
+    auth = installAuthSessionMock({ id: 'task15-user' });
+    store = [
+      {
+        id: 'sess-appshots-1',
+        userId: 'task15-user',
+        token: makeAppshotsToken('task15-user'),
+        label: null,
+      },
+      {
+        id: 'sess-other-user',
+        userId: 'someone-else',
+        token: makeAppshotsToken('someone-else'),
+        label: null,
+      },
+      {
+        id: 'sess-plain-mine',
+        userId: 'task15-user',
+        token: makePlainToken('task15-user'),
+        label: null,
+      },
+    ];
+    const originalFindUnique = prisma.session.findUnique;
+    const originalUpdate = prisma.session.update;
+    prisma.session.findUnique = async ({ where, select }) => {
+      if (where.token) return originalFindUnique({ where, select });
+      return store.find((r) => r.id === where.id) || null;
+    };
+    prisma.session.update = async ({ where, data }) => {
+      const row = store.find((r) => r.id === where.id);
+      if (row) Object.assign(row, data);
+      return row;
+    };
+    restore = () => {
+      prisma.session.findUnique = originalFindUnique;
+      prisma.session.update = originalUpdate;
+      auth.restore();
+    };
+  });
+
+  it('renames own appshots session', async () => {
+    const app = buildRouteTestApp('/api/appshots', appshotsRouter);
+    const res = await request(app)
+      .patch('/api/appshots/sessions/sess-appshots-1')
+      .set('Authorization', auth.authHeader)
+      .send({ label: '  Portátil de casa  ' });
+    const stored = store.find((r) => r.id === 'sess-appshots-1');
+    restore();
+    assert.equal(res.status, 200);
+    assert.equal(res.body.label, 'Portátil de casa');
+    assert.equal(stored.label, 'Portátil de casa');
+  });
+
+  it('clears the label when given an empty string', async () => {
+    const app = buildRouteTestApp('/api/appshots', appshotsRouter);
+    store[0].label = 'previo';
+    const res = await request(app)
+      .patch('/api/appshots/sessions/sess-appshots-1')
+      .set('Authorization', auth.authHeader)
+      .send({ label: '' });
+    const stored = store.find((r) => r.id === 'sess-appshots-1');
+    restore();
+    assert.equal(res.status, 200);
+    assert.equal(res.body.label, null);
+    assert.equal(stored.label, null);
+  });
+
+  it('refuses to rename a session that belongs to someone else (404)', async () => {
+    const app = buildRouteTestApp('/api/appshots', appshotsRouter);
+    const res = await request(app)
+      .patch('/api/appshots/sessions/sess-other-user')
+      .set('Authorization', auth.authHeader)
+      .send({ label: 'hack' });
+    restore();
+    assert.equal(res.status, 404);
+  });
+
+  it('refuses to rename a non-appshots session (403)', async () => {
+    const app = buildRouteTestApp('/api/appshots', appshotsRouter);
+    const res = await request(app)
+      .patch('/api/appshots/sessions/sess-plain-mine')
+      .set('Authorization', auth.authHeader)
+      .send({ label: 'nope' });
+    restore();
+    assert.equal(res.status, 403);
   });
 });
 

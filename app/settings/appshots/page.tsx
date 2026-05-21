@@ -23,6 +23,10 @@ type AppshotsSession = {
   createdAt: string;
   expiresAt: string;
   lastUsedAt: string | null;
+  label: string | null;
+  userAgent: string | null;
+  ipHint: string | null;
+  device: string | null;
 };
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
@@ -36,6 +40,9 @@ export default function AppshotsSettingsPage() {
   const [sessions, setSessions] = useState<AppshotsSession[] | null>(null);
   const [sessionsError, setSessionsError] = useState<string | null>(null);
   const [revokingId, setRevokingId] = useState<string | null>(null);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState<string>('');
+  const [savingRenameId, setSavingRenameId] = useState<string | null>(null);
 
   const loadSessions = useCallback(async () => {
     setSessionsError(null);
@@ -62,17 +69,7 @@ export default function AppshotsSettingsPage() {
       setRevokingId(id);
       setSessionsError(null);
       try {
-        let csrfToken = readCookie('csrf_token');
-        if (!csrfToken) {
-          const seed = await fetch(`${API_BASE}/api/auth/csrf-token`, {
-            method: 'GET',
-            credentials: 'include',
-          });
-          if (seed.ok) {
-            const data = (await seed.json().catch(() => null)) as { csrfToken?: string } | null;
-            csrfToken = data?.csrfToken || readCookie('csrf_token') || '';
-          }
-        }
+        const csrfToken = await ensureCsrfToken();
         const resp = await fetch(`${API_BASE}/api/appshots/sessions/${encodeURIComponent(id)}`, {
           method: 'DELETE',
           credentials: 'include',
@@ -89,32 +86,53 @@ export default function AppshotsSettingsPage() {
     [loadSessions],
   );
 
+  const startRename = useCallback((s: AppshotsSession) => {
+    setRenamingId(s.id);
+    setRenameDraft(s.label || '');
+    setSessionsError(null);
+  }, []);
+
+  const cancelRename = useCallback(() => {
+    setRenamingId(null);
+    setRenameDraft('');
+  }, []);
+
+  const saveRename = useCallback(
+    async (id: string) => {
+      setSavingRenameId(id);
+      setSessionsError(null);
+      try {
+        const csrfToken = await ensureCsrfToken();
+        const trimmed = renameDraft.trim();
+        const resp = await fetch(`${API_BASE}/api/appshots/sessions/${encodeURIComponent(id)}`, {
+          method: 'PATCH',
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-csrf-token': csrfToken || '',
+          },
+          body: JSON.stringify({ label: trimmed === '' ? null : trimmed }),
+        });
+        if (!resp.ok) throw new Error(`No se pudo renombrar (${resp.status}).`);
+        setRenamingId(null);
+        setRenameDraft('');
+        await loadSessions();
+      } catch (err) {
+        setSessionsError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setSavingRenameId(null);
+      }
+    },
+    [renameDraft, loadSessions],
+  );
+
   const generate = useCallback(async () => {
     setLoading(true);
     setError(null);
     setToken(null);
     setCopied(false);
     try {
-      // CSRF: backend uses the `csrf_token` cookie (underscore) paired with
-      // the httpOnly `_csrf_secret`. If the public cookie hasn't been issued
-      // yet (fresh tab, never POSTed before), prime it by hitting the
-      // dedicated endpoint — same pattern as lib/api.ts._ensureCsrfToken.
-      let csrfToken = readCookie('csrf_token');
-      if (!csrfToken) {
-        try {
-          const seed = await fetch(`${API_BASE}/api/auth/csrf-token`, {
-            method: 'GET',
-            credentials: 'include',
-          });
-          if (seed.ok) {
-            const data = (await seed.json().catch(() => null)) as { csrfToken?: string } | null;
-            csrfToken = data?.csrfToken || readCookie('csrf_token') || '';
-          }
-        } catch (_) {
-          // fall through — request will fail with csrf_invalid and surface
-          // the real reason to the user instead of a silent retry loop.
-        }
-      }
+      const csrfToken = await ensureCsrfToken();
       const resp = await fetch(`${API_BASE}/api/appshots/pair`, {
         method: 'POST',
         credentials: 'include',
@@ -236,30 +254,87 @@ export default function AppshotsSettingsPage() {
           </p>
         ) : (
           <ul className="mt-3 divide-y divide-border rounded border border-border">
-            {sessions.map((s) => (
-              <li
-                key={s.id}
-                className="flex flex-col gap-2 px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
-              >
-                <div className="text-sm">
-                  <div>
-                    Vinculada el{' '}
-                    <span className="font-medium">{formatDate(s.createdAt)}</span>
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    Último uso: {s.lastUsedAt ? formatDate(s.lastUsedAt) : 'sin usar todavía'}
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => revoke(s.id)}
-                  disabled={revokingId === s.id}
-                  className="self-start rounded-md border border-destructive bg-background px-3 py-1.5 text-sm text-destructive hover:bg-destructive/10 disabled:opacity-50 sm:self-auto"
+            {sessions.map((s) => {
+              const headline =
+                s.label ||
+                s.device ||
+                (s.userAgent ? s.userAgent.slice(0, 60) : 'Dispositivo sin identificar');
+              const subtitleParts: string[] = [];
+              if (s.label && s.device) subtitleParts.push(s.device);
+              if (s.ipHint) subtitleParts.push(s.ipHint);
+              return (
+                <li
+                  key={s.id}
+                  className="flex flex-col gap-2 px-3 py-2 sm:flex-row sm:items-start sm:justify-between"
                 >
-                  {revokingId === s.id ? 'Revocando…' : 'Revocar'}
-                </button>
-              </li>
-            ))}
+                  <div className="text-sm">
+                    {renamingId === s.id ? (
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                        <input
+                          type="text"
+                          value={renameDraft}
+                          onChange={(e) => setRenameDraft(e.target.value)}
+                          maxLength={80}
+                          placeholder="Ej. Portátil del trabajo"
+                          className="rounded border border-border bg-background px-2 py-1 text-sm"
+                          autoFocus
+                        />
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => saveRename(s.id)}
+                            disabled={savingRenameId === s.id}
+                            className="rounded-md border border-border bg-background px-2 py-1 text-xs hover:bg-muted disabled:opacity-50"
+                          >
+                            {savingRenameId === s.id ? 'Guardando…' : 'Guardar'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={cancelRename}
+                            disabled={savingRenameId === s.id}
+                            className="rounded-md border border-border bg-background px-2 py-1 text-xs hover:bg-muted disabled:opacity-50"
+                          >
+                            Cancelar
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="font-medium">{headline}</div>
+                    )}
+                    {subtitleParts.length > 0 ? (
+                      <div className="text-xs text-muted-foreground">
+                        {subtitleParts.join(' · ')}
+                      </div>
+                    ) : null}
+                    <div className="text-xs text-muted-foreground">
+                      Vinculada el {formatDate(s.createdAt)}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      Último uso: {s.lastUsedAt ? formatDate(s.lastUsedAt) : 'sin usar todavía'}
+                    </div>
+                  </div>
+                  <div className="flex gap-2 self-start sm:self-auto">
+                    {renamingId === s.id ? null : (
+                      <button
+                        type="button"
+                        onClick={() => startRename(s)}
+                        className="rounded-md border border-border bg-background px-3 py-1.5 text-sm hover:bg-muted"
+                      >
+                        Renombrar
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => revoke(s.id)}
+                      disabled={revokingId === s.id}
+                      className="rounded-md border border-destructive bg-background px-3 py-1.5 text-sm text-destructive hover:bg-destructive/10 disabled:opacity-50"
+                    >
+                      {revokingId === s.id ? 'Revocando…' : 'Revocar'}
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
           </ul>
         )}
       </section>
@@ -296,6 +371,29 @@ function formatDate(iso: string): string {
   } catch (_) {
     return iso;
   }
+}
+
+async function ensureCsrfToken(): Promise<string> {
+  // CSRF: backend uses the `csrf_token` cookie (underscore) paired with the
+  // httpOnly `_csrf_secret`. If the public cookie hasn't been issued yet
+  // (fresh tab, never POSTed before), prime it by hitting the dedicated
+  // endpoint — same pattern as lib/api.ts._ensureCsrfToken.
+  let csrfToken = readCookie('csrf_token');
+  if (csrfToken) return csrfToken;
+  try {
+    const seed = await fetch(`${API_BASE}/api/auth/csrf-token`, {
+      method: 'GET',
+      credentials: 'include',
+    });
+    if (seed.ok) {
+      const data = (await seed.json().catch(() => null)) as { csrfToken?: string } | null;
+      csrfToken = data?.csrfToken || readCookie('csrf_token') || '';
+    }
+  } catch (_) {
+    // fall through — request will fail with csrf_invalid and surface
+    // the real reason to the user instead of a silent retry loop.
+  }
+  return csrfToken || '';
 }
 
 function readCookie(name: string): string | null {

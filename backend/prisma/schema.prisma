@@ -253,6 +253,15 @@ model Session {
   // compared on each request so a leaked token can't be replayed from
   // a different network or browser. See utils/session-fingerprint.js.
   fingerprint String?
+  // Task 15 — Appshots device hints. Recorded at /api/appshots/pair so the
+  // settings UI can distinguish multiple linked devices ("Chrome en macOS ·
+  // 81.x.x.x"). All nullable: cookie sessions and pre-migration rows leave
+  // them empty. ipHint is the /24 (IPv4) or /64 (IPv6) network prefix from
+  // reduceIp() — never the full address — to avoid leaking precise IPs
+  // back to the UI. label is a user-editable nickname.
+  userAgent   String?
+  ipHint      String?
+  label       String?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

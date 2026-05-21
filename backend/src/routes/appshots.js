@@ -34,6 +34,7 @@ const { authenticateToken } = require('../middleware/auth');
 const auditLog = require('../services/agents/audit-log');
 const aiService = require('../services/ai-service');
 const emailService = require('../services/email');
+const { extractIp, extractUa, reduceIp } = require('../utils/session-fingerprint');
 
 const router = express.Router();
 
@@ -87,11 +88,22 @@ router.post('/pair', authenticateToken, async (req, res) => {
       { expiresIn: '365d' },
     );
 
+    // Task 15: capture User-Agent + IP-class hint at pair time so the
+    // settings UI can distinguish multiple linked devices. UA is truncated
+    // to 512 chars to keep row width bounded; ipHint is the /24 (IPv4) or
+    // /64 (IPv6) prefix from reduceIp — never the full address.
+    const rawUa = extractUa(req);
+    const userAgent = rawUa ? String(rawUa).slice(0, 512) : null;
+    const rawIp = extractIp(req);
+    const ipHint = rawIp ? reduceIp(rawIp) || null : null;
+
     await prisma.session.create({
       data: {
         userId: req.user.id,
         token,
         expiresAt: new Date(Date.now() + ttlMs),
+        userAgent,
+        ipHint,
       },
     });
 
@@ -99,6 +111,8 @@ router.post('/pair', authenticateToken, async (req, res) => {
       event: 'appshots_paired',
       userId: req.user.id,
       tokenPrefix: token.slice(0, 12),
+      userAgent,
+      ipHint,
     });
 
     // Security notification (Task 14): warn the user out-of-band that a new
@@ -150,6 +164,9 @@ router.get('/sessions', authenticateToken, async (req, res) => {
         createdAt: true,
         expiresAt: true,
         lastUsedAt: true,
+        userAgent: true,
+        ipHint: true,
+        label: true,
       },
       orderBy: { createdAt: 'desc' },
     });
@@ -160,11 +177,66 @@ router.get('/sessions', authenticateToken, async (req, res) => {
         createdAt: row.createdAt,
         expiresAt: row.expiresAt,
         lastUsedAt: row.lastUsedAt,
+        label: row.label || null,
+        userAgent: row.userAgent || null,
+        ipHint: row.ipHint || null,
+        // Pre-computed friendly device string ("Chrome en macOS") so the UI
+        // doesn't need to ship a UA parser. Falls back to null when we
+        // can't recognise the UA — clients then render the raw string.
+        device: row.userAgent ? describeUserAgent(row.userAgent) : null,
       }));
     res.json({ sessions });
   } catch (error) {
     console.error('[appshots] list sessions error:', error?.message || error);
     res.status(500).json({ error: 'Could not list sessions' });
+  }
+});
+
+/**
+ * PATCH /api/appshots/sessions/:id — rename a linked device.
+ *
+ * Body: { label: string|null }. Pass null/empty to clear. We cap to 80 chars
+ * after sanitisation so a malicious client can't bloat the row. Only the
+ * owner can rename, and only appshots-scoped sessions are accepted.
+ */
+router.patch('/sessions/:id', authenticateToken, async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const id = String(req.params.id || '');
+    if (!id) return res.status(400).json({ error: 'session id required' });
+
+    const raw = req.body?.label;
+    let label = null;
+    if (raw !== null && raw !== undefined) {
+      label = sanitiseLabel(raw);
+      if (label === null && String(raw).trim() !== '') {
+        // sanitiseLabel returned null because the string was empty after
+        // stripping; treat as "clear" rather than rejecting.
+        label = null;
+      }
+    }
+
+    const row = await prisma.session.findUnique({
+      where: { id },
+      select: { id: true, userId: true, token: true },
+    });
+    if (!row || row.userId !== req.user.id) {
+      return res.status(404).json({ error: 'session not found' });
+    }
+    if (!isAppshotsToken(row.token)) {
+      return res.status(403).json({ error: 'not an appshots session' });
+    }
+    await prisma.session.update({ where: { id }, data: { label } });
+    auditLog.audit({
+      event: 'appshots_session_renamed',
+      userId: req.user.id,
+      sessionId: id,
+      hasLabel: Boolean(label),
+    });
+    res.json({ ok: true, label });
+  } catch (error) {
+    console.error('[appshots] rename session error:', error?.message || error);
+    res.status(500).json({ error: 'Rename failed' });
   }
 });
 
@@ -463,6 +535,42 @@ function getClientIp(req) {
   return req.ip || req.socket?.remoteAddress || 'unknown';
 }
 
+/**
+ * describeUserAgent — minimal "Chrome en macOS" parser. We do this server-
+ * side so the small set of legitimate browsers + OS combinations live in
+ * one place and the UI doesn't need to bundle a UA-parser. Returns null
+ * when neither browser nor OS could be guessed — the client then falls
+ * back to the raw UA string.
+ *
+ * Order matters: Edge (EdgA / Edg) must be checked before Chrome because
+ * its UA contains the Chrome token; Opera (OPR) likewise.
+ */
+function describeUserAgent(ua) {
+  if (typeof ua !== 'string' || !ua) return null;
+  const s = ua;
+
+  let browser = null;
+  if (/Edg(?:e|A|iOS)?\//i.test(s)) browser = 'Edge';
+  else if (/OPR\//i.test(s) || /Opera\//i.test(s)) browser = 'Opera';
+  else if (/Firefox\//i.test(s)) browser = 'Firefox';
+  else if (/Chrome\//i.test(s) && !/Chromium/i.test(s)) browser = 'Chrome';
+  else if (/Chromium\//i.test(s)) browser = 'Chromium';
+  else if (/Safari\//i.test(s) && /Version\//i.test(s)) browser = 'Safari';
+
+  let os = null;
+  if (/Windows NT/i.test(s)) os = 'Windows';
+  else if (/Mac OS X|Macintosh/i.test(s)) os = 'macOS';
+  else if (/Android/i.test(s)) os = 'Android';
+  else if (/iPhone|iPad|iPod/i.test(s)) os = 'iOS';
+  else if (/CrOS/i.test(s)) os = 'ChromeOS';
+  else if (/Linux/i.test(s)) os = 'Linux';
+
+  if (browser && os) return `${browser} en ${os}`;
+  if (browser) return browser;
+  if (os) return os;
+  return null;
+}
+
 function getCanonicalApiBaseUrl(req) {
   // Prefer the explicit env override so a dev tunnel doesn't leak into
   // production. Falls back to whatever host the request came in on.
@@ -482,4 +590,4 @@ function getCanonicalFrontendBaseUrl(req) {
 }
 
 module.exports = router;
-module.exports._private = { sanitiseLabel, sanitiseNote, sanitiseModel, truncate, pickOcrFlag, isAppshotsToken };
+module.exports._private = { sanitiseLabel, sanitiseNote, sanitiseModel, truncate, pickOcrFlag, isAppshotsToken, describeUserAgent };
