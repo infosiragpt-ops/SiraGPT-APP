@@ -63,7 +63,6 @@ import {
   LinkContextDisplay,
 } from "@/components/chat/ComposerInlineDisplays"
 import { FileProcessingBadge } from "@/components/file-processing-badge"
-import { LongOperationIndicator } from "@/components/chat/LongOperationIndicator"
 import {
   extractFilesFromDataTransfer,
   extractFromClipboardEvent,
@@ -8554,21 +8553,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           </>
         )}
       </div>
-      <LongOperationIndicator
-        active={isGeneratingWebDev || isStreaming || isLoading}
-        label={
-          isGeneratingWebDev
-            ? "Generando aplicación web…"
-            : isStreaming
-              ? "Generando respuesta…"
-              : "Procesando…"
-        }
-        onCancel={() => {
-          intentAbortControllerRef.current?.abort()
-          searchAbortControllerRef.current?.abort()
-          imageAbortControllerRef.current?.abort()
-        }}
-      />
     </div >
   )
 }
