@@ -483,6 +483,11 @@ app.use(cookieParser());
 // BigInt serialization middleware
 app.use(bigintSerializerMiddleware);
 
+// ── Input sanitizer (XSS + prompt injection) ─────────────────────
+const { createInputSanitizer } = require('./middleware/input-sanitizer');
+const inputSanitizerMode = process.env.SIRAGPT_INPUT_SANITIZER_MODE === 'block' ? 'block' : 'off';
+app.use(createInputSanitizer({ mode: inputSanitizerMode }));
+
 // ── Attach orchestration layer to app.locals ────────────────────
 // Routes access orchestration via req.app.locals.orchestration.
 // Initialised once at boot; lazy module loading means missing deps
