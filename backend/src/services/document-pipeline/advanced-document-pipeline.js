@@ -225,9 +225,36 @@ function buildDocxMarkdown(plan, imagePath = 'siragpt-docx-marker.png') {
     }
   }
 
+  // Wire in the per-section LLM content produced by generateSectionContent
+  // (plan.blocks, keyed by index matching plan.sections). When the block
+  // is missing or marked _error, fall back to the stub. This is THE fix
+  // for the long-standing "every section ships placeholder text" bug —
+  // the LLM was producing real content but the markdown writer ignored it.
   plan.sections.forEach((section, index) => {
     lines.push(index === 0 ? `# ${section}` : `## ${section}`, '');
-    lines.push(`Se desarrolla ${section.toLowerCase()} con estructura profesional, evidencia verificable y enfoque ${plan.template}. El contenido mantiene jerarquia visual, legibilidad y consistencia documental.`, '');
+    const block = Array.isArray(plan.blocks) ? plan.blocks[index] : null;
+    const hasRealContent =
+      block &&
+      !block._error &&
+      typeof block.paragraph === 'string' &&
+      block.paragraph.trim().length > 0 &&
+      !/no estuvo disponible para este intento/i.test(block.paragraph);
+    if (hasRealContent) {
+      lines.push(block.paragraph.trim(), '');
+      if (Array.isArray(block.bullets) && block.bullets.length > 0) {
+        for (const bullet of block.bullets) {
+          const text = String(bullet || '').trim();
+          if (text) lines.push(`- ${text}`);
+        }
+        lines.push('');
+      }
+      const notes = typeof block.notes === 'string' ? block.notes.trim() : '';
+      if (notes && !/no respond.* en este intento/i.test(notes)) {
+        lines.push(`> ${notes}`, '');
+      }
+    } else {
+      lines.push(`Se desarrolla ${section.toLowerCase()} con estructura profesional, evidencia verificable y enfoque ${plan.template}. El contenido mantiene jerarquia visual, legibilidad y consistencia documental.`, '');
+    }
   });
 
   lines.push(
@@ -1037,17 +1064,47 @@ async function buildDocx(plan, outputPath) {
       })),
     ] : []),
     ...formulaChildren,
-    ...plan.sections.flatMap((section, index) => [
-      new Paragraph({ text: section, heading: index === 0 ? HeadingLevel.HEADING_1 : HeadingLevel.HEADING_2 }),
-      new Paragraph({
-        children: [
-          new TextRun({
-            text: `Se desarrolla ${section.toLowerCase()} con estructura profesional, evidencia verificable y enfoque ${plan.template}. `,
+    // Same wiring as buildDocxMarkdown: prefer plan.blocks[index] (real
+    // LLM content) over the hardcoded stub. This is the docx-js path used
+    // when Pandoc isn't on PATH (most production deploys) — without this
+    // fix the LLM-generated paragraph/bullets/notes were thrown away.
+    ...plan.sections.flatMap((section, index) => {
+      const heading = new Paragraph({ text: section, heading: index === 0 ? HeadingLevel.HEADING_1 : HeadingLevel.HEADING_2 });
+      const block = Array.isArray(plan.blocks) ? plan.blocks[index] : null;
+      const hasRealContent =
+        block &&
+        !block._error &&
+        typeof block.paragraph === 'string' &&
+        block.paragraph.trim().length > 0 &&
+        !/no estuvo disponible para este intento/i.test(block.paragraph);
+      if (!hasRealContent) {
+        return [
+          heading,
+          new Paragraph({
+            children: [
+              new TextRun({
+                text: `Se desarrolla ${section.toLowerCase()} con estructura profesional, evidencia verificable y enfoque ${plan.template}. `,
+              }),
+              new TextRun({ text: 'El contenido mantiene jerarquía visual, legibilidad y consistencia documental.', bold: true }),
+            ],
           }),
-          new TextRun({ text: 'El contenido mantiene jerarquía visual, legibilidad y consistencia documental.', bold: true }),
-        ],
-      }),
-    ]),
+        ];
+      }
+      const out = [heading, new Paragraph({ children: [new TextRun(block.paragraph.trim())] })];
+      if (Array.isArray(block.bullets) && block.bullets.length > 0) {
+        for (const bullet of block.bullets) {
+          const text = String(bullet || '').trim();
+          if (text) {
+            out.push(new Paragraph({ text, bullet: { level: 0 } }));
+          }
+        }
+      }
+      const notes = typeof block.notes === 'string' ? block.notes.trim() : '';
+      if (notes && !/no respond.* en este intento/i.test(notes)) {
+        out.push(new Paragraph({ children: [new TextRun({ text: notes, italics: true })] }));
+      }
+      return out;
+    }),
     table,
     new Paragraph({ text: 'Referencias APA 7', heading: HeadingLevel.HEADING_1 }),
     new Paragraph('American Psychological Association. (2020). Publication manual of the American Psychological Association (7th ed.).'),
@@ -1391,11 +1448,37 @@ async function buildPdf(plan, outputPath) {
       }
       doc.moveDown(0.5);
     }
+    // Wire plan.blocks (real per-section LLM content) into the PDF too —
+    // same fix as DOCX. Without this PDFs ship the same stub sentence
+    // for every section regardless of what generateSectionContent produced.
     for (const [i, section] of plan.sections.entries()) {
       if (i === 4) doc.addPage();
       doc.fontSize(16).fillColor('#111827').text(`${i + 1}. ${section}`);
       doc.moveDown(0.35);
-      doc.fontSize(10.5).fillColor('#374151').text(`Esta sección desarrolla ${section.toLowerCase()} con foco en estructura, legibilidad, márgenes correctos y entrega verificable.`, { align: 'justify', lineGap: 4 });
+      const block = Array.isArray(plan.blocks) ? plan.blocks[i] : null;
+      const hasRealContent =
+        block &&
+        !block._error &&
+        typeof block.paragraph === 'string' &&
+        block.paragraph.trim().length > 0 &&
+        !/no estuvo disponible para este intento/i.test(block.paragraph);
+      if (hasRealContent) {
+        doc.fontSize(10.5).fillColor('#374151').text(block.paragraph.trim(), { align: 'justify', lineGap: 4 });
+        if (Array.isArray(block.bullets) && block.bullets.length > 0) {
+          doc.moveDown(0.35);
+          for (const bullet of block.bullets) {
+            const text = String(bullet || '').trim();
+            if (text) doc.fontSize(10.5).fillColor('#374151').text(`• ${text}`, { align: 'left', lineGap: 3 });
+          }
+        }
+        const notes = typeof block.notes === 'string' ? block.notes.trim() : '';
+        if (notes && !/no respond.* en este intento/i.test(notes)) {
+          doc.moveDown(0.3);
+          doc.fontSize(9.5).fillColor('#64748b').text(notes, { align: 'justify', lineGap: 3, oblique: true });
+        }
+      } else {
+        doc.fontSize(10.5).fillColor('#374151').text(`Esta sección desarrolla ${section.toLowerCase()} con foco en estructura, legibilidad, márgenes correctos y entrega verificable.`, { align: 'justify', lineGap: 4 });
+      }
       doc.moveDown(0.8);
     }
     doc.fontSize(12).fillColor('#0f172a').text('Tabla de control', { underline: true });
@@ -1418,13 +1501,63 @@ async function buildText(plan, outputPath, format) {
     ].join('\n');
   } else if (format === 'html') {
     const refs = plan.referenceFiles?.length ? `<section class="card"><h2>Material de referencia</h2>${plan.referenceBriefs.map((ref) => `<p><strong>${ref.name}</strong>: ${ref.excerpt}</p>`).join('')}</section>` : '';
-    const sectionCards = plan.sections.map((s, i) => `<section class="card" data-section="${i + 1}" aria-label="Sección ${i + 1}: ${xmlEscape(s)}"><span class="eyebrow">Bloque ${i + 1}</span><h2>${s}</h2><p>Contenido profesional para ${s.toLowerCase()} con estructura verificable, jerarquía visual y criterios de entrega auditables.</p><button type="button" class="inspect" data-target="${i + 1}">Ver criterio</button></section>`).join('');
+    // Use plan.blocks (real LLM content) when available, same wiring as
+    // DOCX/PDF. Falls back to the generic stub only when block missing/error.
+    const sectionCards = plan.sections.map((s, i) => {
+      const block = Array.isArray(plan.blocks) ? plan.blocks[i] : null;
+      const hasRealContent =
+        block &&
+        !block._error &&
+        typeof block.paragraph === 'string' &&
+        block.paragraph.trim().length > 0 &&
+        !/no estuvo disponible para este intento/i.test(block.paragraph);
+      let body;
+      if (hasRealContent) {
+        const bulletsHtml = Array.isArray(block.bullets) && block.bullets.length > 0
+          ? `<ul>${block.bullets.map((b) => `<li>${xmlEscape(String(b || '').trim())}</li>`).filter((li) => li !== '<li></li>').join('')}</ul>`
+          : '';
+        const notes = typeof block.notes === 'string' ? block.notes.trim() : '';
+        const notesHtml = notes && !/no respond.* en este intento/i.test(notes) ? `<p class="notes"><em>${xmlEscape(notes)}</em></p>` : '';
+        body = `<p>${xmlEscape(block.paragraph.trim())}</p>${bulletsHtml}${notesHtml}`;
+      } else {
+        body = `<p>Contenido profesional para ${xmlEscape(s.toLowerCase())} con estructura verificable, jerarquía visual y criterios de entrega auditables.</p>`;
+      }
+      return `<section class="card" data-section="${i + 1}" aria-label="Sección ${i + 1}: ${xmlEscape(s)}"><span class="eyebrow">Bloque ${i + 1}</span><h2>${xmlEscape(s)}</h2>${body}<button type="button" class="inspect" data-target="${i + 1}">Ver criterio</button></section>`;
+    }).join('');
     text = `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${plan.title}</title><style>:root{--bg:#f8fafc;--ink:#0f172a;--muted:#64748b;--line:#e2e8f0;--card:#fff;--accent:#2563eb;--cyan:#06b6d4}*{box-sizing:border-box}body{font-family:Inter,Aptos,system-ui,sans-serif;margin:0;background:radial-gradient(circle at 20% 10%,#dbeafe 0,#f8fafc 34%,#ecfeff 100%);color:var(--ink)}.wrap{max-width:1080px;margin:auto;padding:clamp(24px,5vw,64px)}header.hero{display:grid;grid-template-columns:1.25fr .75fr;gap:24px;align-items:end;margin-bottom:28px}.kpi-panel,.card{background:rgba(255,255,255,.88);border:1px solid var(--line);border-radius:24px;padding:24px;box-shadow:0 24px 70px rgba(15,23,42,.10);backdrop-filter:blur(14px)}h1{font-size:clamp(36px,6vw,64px);line-height:.95;margin:0 0 16px}h2{font-size:24px;margin:8px 0 10px}.lead{font-size:18px;color:#475569;max-width:720px;line-height:1.65}.eyebrow{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);font-weight:800}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;margin:22px 0}.toolbar{display:flex;gap:10px;flex-wrap:wrap;margin:20px 0}.chip,.inspect{border:1px solid var(--line);background:#fff;border-radius:999px;padding:10px 14px;font-weight:700;cursor:pointer}.chip[aria-pressed=true],.inspect:hover{background:linear-gradient(135deg,var(--accent),var(--cyan));color:#fff;border-color:transparent}.metric{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);padding:12px 0}.metric strong{font-size:28px}.notice{margin:20px 0;padding:18px;border-radius:18px;background:#0f172a;color:white}table{width:100%;border-collapse:collapse;background:#fff;border-radius:18px;overflow:hidden}td,th{border-bottom:1px solid var(--line);padding:12px;text-align:left}canvas{width:100%;height:120px;border-radius:18px;background:linear-gradient(135deg,#eff6ff,#ecfeff)}@media(max-width:760px){header.hero,.grid{grid-template-columns:1fr}.wrap{padding:22px}}</style></head><body><main class="wrap"><header class="hero"><div><span class="eyebrow">siraGPT artifact engine</span><h1>${plan.title}</h1><p class="lead">Documento HTML semántico con diseño premium, tabla, enlaces verificables, controles reales y una ruta de validación auditable para entregas profesionales.</p><a href="https://siragpt.com" aria-label="Referencia de producto siraGPT">Referencia de producto</a></div><aside class="kpi-panel" aria-label="Panel de métricas"><div class="metric"><span>Integridad</span><strong>OK</strong></div><div class="metric"><span>Diseño</span><strong>92</strong></div><div class="metric"><span>Entrega</span><strong>Lista</strong></div><canvas id="spark" role="img" aria-label="Tendencia de calidad"></canvas></aside></header><nav class="toolbar" aria-label="Filtros de vista"><button class="chip" type="button" data-filter="all" aria-pressed="true">Todo</button><button class="chip" type="button" data-filter="quality" aria-pressed="false">Calidad</button><button class="chip" type="button" data-filter="delivery" aria-pressed="false">Entrega</button></nav><p id="status" class="notice" role="status">Mostrando todos los bloques validados del documento.</p>${refs}<div class="grid">${sectionCards}</div><section class="card"><h2>Tabla de control</h2><table><tr><th>Métrica</th><th>Estado</th><th>Evidencia</th></tr><tr><td>Integridad</td><td>OK</td><td>Archivo generado y validado</td></tr><tr><td>Diseño</td><td>OK</td><td>Viewport, estructura, interacción y accesibilidad</td></tr><tr><td>Descarga</td><td>OK</td><td>Artefacto persistido en almacenamiento local</td></tr></table></section></main><script>const statusEl=document.getElementById('status');document.querySelectorAll('.chip').forEach(btn=>btn.addEventListener('click',()=>{document.querySelectorAll('.chip').forEach(x=>x.setAttribute('aria-pressed','false'));btn.setAttribute('aria-pressed','true');statusEl.textContent=btn.dataset.filter==='all'?'Mostrando todos los bloques validados del documento.':'Filtro activo: '+btn.textContent+'. Los criterios siguen auditables.';}));document.querySelectorAll('.inspect').forEach(btn=>btn.addEventListener('click',()=>{statusEl.textContent='Criterio del bloque '+btn.dataset.target+': contenido completo, estructura semántica y revisión de entrega aprobada.';}));const c=document.getElementById('spark'),ctx=c.getContext('2d');c.width=640;c.height=180;ctx.lineWidth=8;ctx.strokeStyle='#2563eb';ctx.beginPath();[35,82,64,118,92,136,126].forEach((v,i)=>{const x=40+i*92,y=160-v;i?ctx.lineTo(x,y):ctx.moveTo(x,y)});ctx.stroke();ctx.fillStyle='#06b6d4';ctx.beginPath();ctx.arc(592,34,12,0,Math.PI*2);ctx.fill();</script></body></html>`;
   } else {
     const refs = plan.referenceFiles?.length
       ? ['## Material de referencia', '', ...plan.referenceBriefs.flatMap((ref) => [`- **${ref.name}:** ${ref.excerpt}`, '']), '']
       : [];
-    text = [`# ${plan.title}`, '', 'Documento Markdown estructurado con tabla, enlaces y secciones profesionales.', '', '[Referencia siraGPT](https://siragpt.com)', '', ...refs, '| Métrica | Estado |', '|---|---|', '| Integridad | OK |', '| Diseño | OK |', '', ...plan.sections.flatMap((s, i) => [`## ${i + 1}. ${s}`, `Contenido profesional para ${s.toLowerCase()} con criterios verificables.`, ''])].join('\n');
+    // Use plan.blocks (real LLM content) when available — same wiring as
+    // DOCX/PDF/HTML. Falls back to the stub only when block missing/error.
+    const sectionLines = plan.sections.flatMap((s, i) => {
+      const header = `## ${i + 1}. ${s}`;
+      const block = Array.isArray(plan.blocks) ? plan.blocks[i] : null;
+      const hasRealContent =
+        block &&
+        !block._error &&
+        typeof block.paragraph === 'string' &&
+        block.paragraph.trim().length > 0 &&
+        !/no estuvo disponible para este intento/i.test(block.paragraph);
+      if (!hasRealContent) {
+        return [header, `Contenido profesional para ${s.toLowerCase()} con criterios verificables.`, ''];
+      }
+      const out = [header, block.paragraph.trim(), ''];
+      if (Array.isArray(block.bullets) && block.bullets.length > 0) {
+        for (const bullet of block.bullets) {
+          const t = String(bullet || '').trim();
+          if (t) out.push(`- ${t}`);
+        }
+        out.push('');
+      }
+      const notes = typeof block.notes === 'string' ? block.notes.trim() : '';
+      if (notes && !/no respond.* en este intento/i.test(notes)) {
+        out.push(`> ${notes}`, '');
+      }
+      return out;
+    });
+    text = [`# ${plan.title}`, '', 'Documento Markdown estructurado con tabla, enlaces y secciones profesionales.', '', '[Referencia siraGPT](https://siragpt.com)', '', ...refs, '| Métrica | Estado |', '|---|---|', '| Integridad | OK |', '| Diseño | OK |', '', ...sectionLines].join('\n');
   }
   await fsp.writeFile(outputPath, text, 'utf8');
   return Buffer.from(text, 'utf8');
