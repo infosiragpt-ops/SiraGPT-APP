@@ -2,6 +2,35 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { randomUUID } = require('crypto');
+
+// Multer / busboy decodes the multipart `Content-Disposition; filename=...`
+// header as latin1 by default (per the multipart spec). Modern browsers
+// send the bytes as UTF-8, so the resulting `file.originalname` arrives
+// mojibaked when the original name contained any non-ASCII character —
+// curly quote U+2019 becomes `â€™`, NBSP becomes `Â `, etc. We detect
+// that case heuristically (every char ≤ 255 = latin1-shaped) and re-
+// decode the bytes as UTF-8 so the DB `originalName`, the chat preview
+// alt text, and the disk filename all carry the human-readable name.
+function fixLatin1Filename(name) {
+  const s = String(name || '');
+  if (!s) return s;
+  // If any code point is outside latin1 (>255), the string was already
+  // decoded as something other than latin1. Don't touch it — re-decoding
+  // would corrupt valid multi-byte characters into U+FFFD replacements.
+  for (let i = 0; i < s.length; i++) {
+    if (s.charCodeAt(i) > 255) return s;
+  }
+  try {
+    const decoded = Buffer.from(s, 'latin1').toString('utf8');
+    // Reject decodes that introduced replacement characters — that
+    // signals the bytes were not actually valid UTF-8 to begin with
+    // (e.g. legitimately latin1-only filenames from old systems).
+    if (decoded.includes('\uFFFD')) return s;
+    return decoded;
+  } catch {
+    return s;
+  }
+}
 const {
   ALLOWED_EXTENSIONS,
   ALLOWED_MIMES,
@@ -56,6 +85,11 @@ const storage = multer.diskStorage({
 // The post-write route revalidates bytes and extension with
 // upload-security-policy before extraction/RAG/OpenAI upload.
 const fileFilter = (req, file, cb) => {
+  // Normalise the filename encoding *here* — fileFilter runs before
+  // storage.filename, so the extension parse and every downstream
+  // consumer (Prisma row, OpenAI files.create, response payload,
+  // chat preview alt text) all see the same clean UTF-8 string.
+  file.originalname = fixLatin1Filename(file.originalname);
   if (isDeclaredUploadAllowed(file)) {
     return cb(null, true);
   }
@@ -85,6 +119,7 @@ const upload = multer({
 module.exports = upload;
 module.exports.resolveUserUploadDir = resolveUserUploadDir;
 module.exports.safeStorageSegment = safeStorageSegment;
+module.exports.fixLatin1Filename = fixLatin1Filename;
 // Exposed so the post-magic-byte check in routes/files.js can re-validate
 // the *real* detected mime against the same allowlist the multer pre-gate
 // uses, without duplicating the list.
