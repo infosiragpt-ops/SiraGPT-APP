@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """CrewAI bridge for SirAGPT multi-agent orchestration."""
-import argparse, json, os, sys
+import argparse, json, os
 try:
     from crewai import Agent, Task, Crew, Process
     CREWAI_AVAILABLE = True
@@ -10,7 +10,7 @@ except ImportError:
 def run_workflow(input_path, output_path):
     if not CREWAI_AVAILABLE:
         with open(output_path, 'w') as f:
-            json.dump({"error": "crewai Python package not installed", "available": False}, f)
+            json.dump({"error": "crewai Python package not installed"}, f)
         return
     with open(input_path, 'r') as f:
         config = json.load(f)
@@ -24,15 +24,15 @@ def run_workflow(input_path, output_path):
     crew = Crew(agents=crew_agents, tasks=[task], process=process, verbose=False)
     try:
         result_text = crew.kickoff()
-        result = {"output": str(result_text), "agents_used": len(crew_agents), "mode": mode, "success": True}
+        result = {"output": str(result_text), "agents_used": len(crew_agents), "success": True}
     except Exception as e:
-        result = {"error": str(e), "agents_used": len(crew_agents), "mode": mode, "success": False}
+        result = {"error": str(e), "success": False}
     with open(output_path, 'w') as f:
         json.dump(result, f)
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='CrewAI bridge for SirAGPT')
-    parser.add_argument('--input', required=True, help='Input JSON file')
-    parser.add_argument('--output', required=True, help='Output JSON file')
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--input', required=True)
+    parser.add_argument('--output', required=True)
     args = parser.parse_args()
     run_workflow(args.input, args.output)

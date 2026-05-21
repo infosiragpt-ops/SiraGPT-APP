@@ -484,7 +484,7 @@ app.use(cookieParser());
 app.use(bigintSerializerMiddleware);
 
 // ── Input sanitizer (XSS + prompt injection) ─────────────────────
-const { createInputSanitizer } = require('./middleware/input-sanitizer');
+const { createInputSanitizer } = require('./src/middleware/input-sanitizer');
 const inputSanitizerMode = process.env.SIRAGPT_INPUT_SANITIZER_MODE === 'block' ? 'block' : 'off';
 app.use(createInputSanitizer({ mode: inputSanitizerMode }));
 

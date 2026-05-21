@@ -6,18 +6,18 @@ function createFirecrawlScraper({ env = process.env, fetchImpl = globalThis.fetc
   const configured = Boolean(apiKey);
 
   async function scrape(url, opts = {}) {
-    if (!configured) return { configured: false, results: null, error: 'FIRECRAWL_API_KEY not set' };
+    if (!configured) return { configured: false, results: null };
     const res = await fetchImpl(`${host}/v1/scrape`, {
       method: 'POST', headers: { 'content-type': 'application/json', Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({ url, formats: opts.formats || ['markdown'], onlyMainContent: opts.onlyMainContent !== false, waitFor: opts.waitFor || 0 }),
+      body: JSON.stringify({ url, formats: opts.formats || ['markdown'], onlyMainContent: opts.onlyMainContent !== false }),
     });
-    if (!res.ok) throw Object.assign(new Error(`Firecrawl scrape failed: ${res.status}`), { status: res.status });
+    if (!res.ok) throw Object.assign(new Error(`Firecrawl failed: ${res.status}`), { status: res.status });
     const data = await res.json();
     return { configured: true, results: data.data };
   }
 
   async function deepSearch(query, { maxResults = 3 } = {}) {
-    if (!configured) return { configured: false, results: [], error: 'FIRECRAWL_API_KEY not set' };
+    if (!configured) return { configured: false, results: [] };
     try {
       const res = await fetchImpl(`${host}/v1/search`, {
         method: 'POST', headers: { 'content-type': 'application/json', Authorization: `Bearer ${apiKey}` },

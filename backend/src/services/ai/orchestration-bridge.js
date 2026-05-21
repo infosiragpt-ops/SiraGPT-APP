@@ -15,7 +15,7 @@ function createOrchestrationBridge(env = process.env) {
   function getWireup() {
     if (!_wireup && enabled) {
       try {
-        _wireup = require('../orchestration/orchestration-wireup').getOrchestrationWireup(env);
+        _wireup = require('../../orchestration/orchestration-wireup').getOrchestrationWireup(env);
       } catch (_) { /* unavailable */ }
     }
     return _wireup;
@@ -54,7 +54,7 @@ function createOrchestrationBridge(env = process.env) {
     if (!enabled) return null;
     const w = getWireup();
     if (!w?.semanticCache?.enabled) return null;
-    const { semanticCacheKey, shouldBypassSemanticCache } = require('../orchestration/semantic-cache');
+    const { semanticCacheKey, shouldBypassSemanticCache } = require('../../orchestration/semantic-cache');
     const promptText = prompt || (messages?.map?.(m => m.content)?.join('\n')) || '';
     if (shouldBypassSemanticCache({ prompt: promptText })) return null;
     try { return await w.semanticCache.get(semanticCacheKey({ prompt: promptText, context, model, temperature })); } catch (_) { return null; }
@@ -64,8 +64,8 @@ function createOrchestrationBridge(env = process.env) {
     if (!enabled) return;
     const w = getWireup();
     if (!w?.semanticCache?.enabled) return;
-    const { semanticCacheKey, resolveCacheTtlSeconds, shouldBypassSemanticCache } = require('../orchestration/semantic-cache');
-    const { detectTaskType } = require('../orchestration/llm-routing.config');
+    const { semanticCacheKey, resolveCacheTtlSeconds, shouldBypassSemanticCache } = require('../../orchestration/semantic-cache');
+    const { detectTaskType } = require('../../orchestration/llm-routing.config');
     const promptText = prompt || (messages?.map?.(m => m.content)?.join('\n')) || '';
     if (shouldBypassSemanticCache({ prompt: promptText })) return;
     const ttl = resolveCacheTtlSeconds(detectTaskType({ prompt: promptText }), env);
@@ -83,7 +83,7 @@ function createOrchestrationBridge(env = process.env) {
     if (!enabled) return null;
     const w = getWireup();
     if (!w?.r2Storage?.enabled) return null;
-    const { safeKey } = require('../orchestration/r2-storage');
+    const { safeKey } = require('../../orchestration/r2-storage');
     try {
       const key = safeKey({ userId: String(userId || 'anon'), fileName, prefix: 'artifacts' });
       await w.r2Storage.put({ key, body, contentType });

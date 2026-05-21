@@ -6,7 +6,7 @@ function createSearXNGSearcher({ fetchImpl = globalThis.fetch } = {}) {
   const configured = Boolean(process.env.SEARXNG_URL);
 
   async function search(query, { categories = '', maxResults = 10, language = 'es' } = {}) {
-    if (!configured) return { configured: false, results: [], error: 'SEARXNG_URL not set' };
+    if (!configured) return { configured: false, results: [] };
     const params = new URLSearchParams({ q: query, format: 'json', language, safesearch: '1', pageno: '1' });
     if (categories) params.set('categories', categories);
     const res = await fetchImpl(`${SEARXNG_URL.replace(/\/$/, '')}/search?${params.toString()}`);
