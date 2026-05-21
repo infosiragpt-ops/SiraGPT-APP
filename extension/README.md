@@ -152,6 +152,58 @@ Captura un resumen (texto plano) con: versión de Chrome, sistema operativo,
 entorno (`apiBase`) y commit de la extensión probada. Pégalo en el PR junto
 con cualquier desviación de los pasos anteriores.
 
+### 9) Cobertura multi-navegador (Edge / Brave / Arc)
+
+Aunque la extensión es MV3 estándar, cada Chromium-fork tiene matices propios
+en `chrome.offscreen` y en el selector nativo de `desktopCapture`. Las
+secciones 1-6 deben repetirse en la **última versión estable** de cada
+navegador. Carga la extensión vía `edge://extensions`, `brave://extensions` o
+`arc://extensions` (todos exponen **Modo desarrollador → Cargar
+descomprimida** igual que Chrome).
+
+Apunta en el PR, por cada navegador: versión, OS, commit probado y cualquier
+desviación. Cuando una API falle, abre issue con commit + navegador + stack
+copiado del service worker (`Inspeccionar service worker`).
+
+#### Microsoft Edge
+
+- El picker nativo es el de Edge, no el de Chrome: confirma que las tres
+  pestañas (**Toda la pantalla / Ventana / Pestaña**) siguen apareciendo.
+  Edge ha ocultado **Pestaña** en el pasado cuando la extensión no declaraba
+  `tabs` en `permissions` — ya lo declaramos, pero verifica.
+- Atajo: Edge tiene `Ctrl+Shift+S` reservado a **Web Capture**. En
+  `edge://extensions/shortcuts` re-asigna **Capturar ventana y enviar a Sira**
+  si el atajo no dispara nada. Anótalo como limitación si el conflicto persiste.
+- Notificaciones (`chrome.notifications`): Edge respeta el setting global del
+  SO; en Windows confirma que aparece el toast de error al provocar un fallo
+  (sección 7).
+
+#### Brave
+
+- Brave Shields puede bloquear la subida a `${apiBase}/api/appshots/capture`
+  si el dominio está en una lista de filtros agresiva. Con Shields **Down**
+  para el dominio del backend debe funcionar; documenta si Shields **Up** lo
+  rompe.
+- El picker en Brave es idéntico al de Chrome (mismo Chromium). Verifica
+  igualmente las tres fuentes.
+- Brave puede deshabilitar `chrome.notifications` por defecto en algunas
+  builds desktop: si la sección 7 no muestra toasts, ve a
+  `brave://settings/content/notifications` y comprueba el permiso.
+
+#### Arc
+
+- Arc usa Chromium ≥ 116 desde Arc 1.30, así que `chrome.offscreen` debe
+  estar disponible. Verifica la versión en `arc://version`.
+- El selector aparece como sheet anclado a la ventana Arc; las **Little Arc**
+  (mini-ventanas) pueden no listarse como fuentes de tipo *Ventana*. Si una
+  Little Arc no aparece, capturar **Toda la pantalla** sigue funcionando —
+  anótalo como limitación conocida, no como bug.
+- El atajo `⌘⇧S` no choca con atajos por defecto de Arc (la captura nativa de
+  Arc es `⌘⇧2`), pero confirma en `arc://extensions/shortcuts`.
+- Arc abre las pestañas nuevas en el espacio activo; comprueba que la pestaña
+  con el chat de Sira aparece en el sidebar correcto y no en una ventana
+  flotante.
+
 ## Tests automatizados
 
 `e2e/extension-appshots.spec.ts` levanta Chromium con `--load-extension` y
