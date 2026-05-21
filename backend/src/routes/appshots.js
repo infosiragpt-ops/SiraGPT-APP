@@ -338,15 +338,7 @@ router.delete('/sessions/:id', authenticateToken, async (req, res) => {
   }
 });
 
-function isAppshotsToken(token) {
-  if (!token || typeof token !== 'string') return false;
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    return decoded?.scope === 'appshots:capture';
-  } catch (_) {
-    return false;
-  }
-}
+const { isAppshotsToken } = require('../utils/appshots-token');
 
 // ─────────────────────────────────────────────────────────────
 // POST /api/appshots/capture

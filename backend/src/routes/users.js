@@ -32,6 +32,44 @@ const {
 
 const router = express.Router();
 
+// Task 21 — when bulk-revocation paths (revoke-others, account self-delete,
+// admin-initiated session deletion) wipe rows out of the Session table,
+// authenticateToken's Task 17 path doesn't fire because the deleted session
+// never reaches the middleware. This helper takes the snapshot the caller
+// captured *before* prisma.session.deleteMany() and, for any row whose
+// token decodes as an `appshots:capture`-scoped JWT, fans a single
+// `sendAppshotsDeviceAutoRevoked` email per session id with the supplied
+// reason. Lazy-requires email + the appshots-token util so test envs that
+// don't load nodemailer/jsonwebtoken still boot. Best-effort, never throws.
+function _notifyAppshotsAutoRevoked(preDeleteRows, owner, reason) {
+  try {
+    if (!Array.isArray(preDeleteRows) || preDeleteRows.length === 0) return;
+    if (!owner || !owner.email) return;
+    const emailService = require('../services/email');
+    if (!emailService || typeof emailService.sendAppshotsDeviceAutoRevoked !== 'function') return;
+    const { isAppshotsToken } = require('../utils/appshots-token');
+    if (typeof isAppshotsToken !== 'function') return;
+    const seen = new Set();
+    const when = new Date();
+    for (const row of preDeleteRows) {
+      if (!row || !row.token || !row.id) continue;
+      if (seen.has(row.id)) continue;
+      if (!isAppshotsToken(row.token)) continue;
+      seen.add(row.id);
+      Promise.resolve(
+        emailService.sendAppshotsDeviceAutoRevoked(owner, { when, reason }),
+      ).catch((err) => {
+        console.warn(
+          `[appshots-auto-revoked] email failed user=${owner.id} reason=${reason}:`,
+          err?.message || err,
+        );
+      });
+    }
+  } catch (err) {
+    console.warn('[appshots-auto-revoked] notify helper failed:', err?.message || err);
+  }
+}
+
 // ────────────────────────────────────────────────────────────
 // Per-user rate limiter for the GDPR export endpoint. Backed by the
 // shared rate-limit-store.consume() (cycle 2) so the cap works across
@@ -835,9 +873,24 @@ router.get('/sessions', authenticateToken, async (req, res) => {
 router.post('/sessions/revoke-others', authenticateToken, async (req, res) => {
   try {
     const currentToken = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    // Task 21 — snapshot the rows we're about to nuke so we can fan
+    // sendAppshotsDeviceAutoRevoked notices to the owner for each
+    // Appshots-scoped session. authenticateToken's Task 17 path
+    // doesn't fire on bulk revocations.
+    let preDelete = [];
+    try {
+      preDelete = await prisma.session.findMany({
+        where: { userId: req.user.id, NOT: { token: currentToken } },
+        select: { id: true, token: true },
+      });
+    } catch (_) { preDelete = []; }
+
     const result = await prisma.session.deleteMany({
       where: { userId: req.user.id, NOT: { token: currentToken } },
     });
+
+    void _notifyAppshotsAutoRevoked(preDelete, req.user, 'admin_revoked');
+
     res.json({ revoked: result.count });
   } catch (error) {
     console.error('Revoke sessions error:', error);
@@ -1298,12 +1351,23 @@ router.post(
       const cascade = await cascadeSoftDeleteForUser(prisma, userId);
 
       // Revoke active sessions so the soft-deleted user is immediately
-      // logged out across devices.
+      // logged out across devices. Task 21 — snapshot first so we can
+      // fan an `admin_revoked` Appshots auto-revoked email to the owner
+      // (we still have `user` in scope before the soft-delete cascade
+      // finishes). Best-effort; never blocks the GDPR delete path.
+      let preDeleteAppshots = [];
+      try {
+        preDeleteAppshots = await prisma.session.findMany({
+          where: { userId },
+          select: { id: true, token: true },
+        });
+      } catch (_) { preDeleteAppshots = []; }
       try {
         await prisma.session.deleteMany({ where: { userId } });
       } catch (sessErr) {
         console.warn('[delete] could not revoke sessions:', sessErr?.message || sessErr);
       }
+      void _notifyAppshotsAutoRevoked(preDeleteAppshots, user, 'admin_revoked');
 
       // Best-effort confirmation email — no-op when SMTP isn't
       // configured. Lazy-required so test envs without nodemailer
