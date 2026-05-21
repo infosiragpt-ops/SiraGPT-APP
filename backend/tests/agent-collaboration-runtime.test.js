@@ -163,3 +163,33 @@ test('chain stops after a failed step when stopOnError is true', async () => {
     restore();
   }
 });
+
+test('forkJoin retry events include scalar attempt and original error message', async () => {
+  let calls = 0;
+  const events = [];
+  const { collaboration, restore } = loadCollaborationWithRunner(async () => {
+    calls += 1;
+    if (calls === 1) throw new Error('temporary-runner-failure');
+    return { ok: true, output: 'recovered' };
+  });
+
+  try {
+    const result = await collaboration.forkJoin({
+      user: { id: 'user-1' },
+      options: {
+        maxRetries: 1,
+        onEvent: (event) => events.push(event),
+      },
+      subTasks: [{ goal: 'retry once' }],
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(calls, 2);
+    const retryEvent = events.find((event) => event.type === 'collab_subtask_retry');
+    assert.ok(retryEvent, 'expected a retry event');
+    assert.equal(retryEvent.attempt, 1);
+    assert.equal(retryEvent.error, 'temporary-runner-failure');
+  } finally {
+    restore();
+  }
+});

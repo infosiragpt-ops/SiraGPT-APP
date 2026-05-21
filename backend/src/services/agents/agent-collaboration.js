@@ -158,12 +158,12 @@ async function executeSubTask(task, idx, user, options, patternKey, taskContext)
         maxRetries: options.maxRetries ?? 2,
         classifyError: getClassifyError() || undefined,
         circuitBreaker: breaker,
-        onRetry: (attempt, err) => {
+        onRetry: (info) => {
           emitEvent(options.onEvent, 'collab_subtask_retry', {
             index: idx,
             goal: truncateGoal(task.goal),
-            attempt,
-            error: err?.message || String(err),
+            attempt: info?.attempt,
+            error: info?.error?.message || String(info?.error),
           });
         },
         signal: options.signal || null,
