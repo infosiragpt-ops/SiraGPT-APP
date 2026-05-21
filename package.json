@@ -42,6 +42,7 @@
     "licenses:check": "node scripts/generate-third-party-licenses.js --check",
     "audit:production": "node scripts/audit-production-allowlist.js",
     "doctor:production": "node scripts/doctor-production.js",
+    "check:orchestration": "node scripts/check-orchestration-activation.js",
     "security:validate": "node scripts/validate-supply-chain.js",
     "sbom:generate": "node scripts/validate-supply-chain.js --sbom-only",
     "quality:100": "node scripts/quality-100-checks.js",
