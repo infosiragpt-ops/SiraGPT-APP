@@ -74,12 +74,18 @@ function createOrchestrationContext({ env = process.env } = {}) {
     return _toolRegistry;
   }
 
-  // Lazy logger — use pino if available, else console
+  // Lazy logger — use pino if available, else console. The unified
+  // logger module exports a bag `{ logger, buildLogger, ... }` so the
+  // pino instance lives under `.logger`. Fall through to the module
+  // itself if `.logger` is missing (some envs may expose a pino-shaped
+  // default export) and ultimately to `console` so callers can always
+  // do `logger.info(...)` without optional chaining masking dropped lines.
   let _logger = null;
   function getLogger() {
     if (!_logger) {
       try {
-        _logger = require('../utils/logger');
+        const mod = require('../utils/logger');
+        _logger = (mod && typeof mod.logger?.info === 'function') ? mod.logger : (mod && typeof mod.info === 'function' ? mod : console);
       } catch (_) {
         _logger = console;
       }

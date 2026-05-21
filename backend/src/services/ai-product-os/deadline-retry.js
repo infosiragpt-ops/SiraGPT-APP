@@ -51,6 +51,26 @@ function defaultBackoff() {
   return { next: ({ attempt }) => Math.min(30_000, 200 * Math.pow(2, attempt)) };
 }
 
+function abortableSleep(ms, signal) {
+  if (!signal) return new Promise((r) => setTimeout(r, ms));
+  if (signal.aborted) return Promise.reject(new AbortedError(signal.reason || 'caller_aborted'));
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, ms);
+    const cleanup = () => {
+      try { signal.removeEventListener('abort', onAbort); } catch { /* swallow */ }
+    };
+    const onAbort = () => {
+      clearTimeout(timer);
+      cleanup();
+      reject(new AbortedError(signal.reason || 'caller_aborted'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 async function runWithDeadlineRetry(opts = {}) {
   if (typeof opts.run !== 'function') throw new TypeError('deadline-retry: run required');
   const deadlineMs = Number.isFinite(opts.deadlineMs) && opts.deadlineMs > 0 ? Math.floor(opts.deadlineMs) : 30_000;
@@ -58,7 +78,7 @@ async function runWithDeadlineRetry(opts = {}) {
   const isRetryable = typeof opts.isRetryable === 'function' ? opts.isRetryable : defaultIsRetryable;
   const onAttempt = typeof opts.onAttempt === 'function' ? opts.onAttempt : null;
   const now = typeof opts.now === 'function' ? opts.now : () => Date.now();
-  const sleep = typeof opts.sleep === 'function' ? opts.sleep : (ms) => new Promise((r) => setTimeout(r, ms));
+  const sleep = typeof opts.sleep === 'function' ? opts.sleep : abortableSleep;
   const backoff = opts.backoff && typeof opts.backoff.next === 'function' ? opts.backoff : defaultBackoff();
   const signal = opts.signal || null;
 
@@ -92,7 +112,9 @@ async function runWithDeadlineRetry(opts = {}) {
       if (remaining <= 0) break;
       const wait = backoff.next({ attempt: attempts - 1, retryAfter: err && err.retryAfter, now: now() });
       if (wait >= remaining) break; // would overshoot the deadline
-      try { await sleep(wait); } catch { /* swallow */ }
+      try { await sleep(wait, signal); } catch {
+        if (signal && signal.aborted) throw new AbortedError(signal.reason || 'caller_aborted');
+      }
     }
   }
 

@@ -17,6 +17,32 @@ function requireRedisUrl() {
   return redisUrl;
 }
 
+function isTruthyEnv(value) {
+  return /^(1|true|yes|on)$/i.test(String(value || '').trim());
+}
+
+function shouldSkipBullMQVersionCheck({ redisUrl = process.env.REDIS_URL, env = process.env } = {}) {
+  if (isTruthyEnv(env.BULLMQ_SKIP_VERSION_CHECK)) return true;
+  if (!redisUrl) return false;
+
+  // Upstash serverless plans can report managed maxmemory policies such as
+  // `optimistic-volatile`. BullMQ's generic Redis warning recommends
+  // `noeviction`, but this deployment keeps bounded jobs via removeOn* counts
+  // and cannot change the provider policy. Skipping BullMQ's startup INFO check
+  // prevents noisy recurring production warnings without hiding Redis runtime
+  // errors, which still flow through attachRedisListeners().
+  try {
+    const { hostname } = new URL(redisUrl);
+    return /(^|\.)upstash\.io$/i.test(hostname);
+  } catch (_) {
+    return /upstash\.io/i.test(String(redisUrl));
+  }
+}
+
+function getBullMQRuntimeOptions({ redisUrl = process.env.REDIS_URL, env = process.env } = {}) {
+  return shouldSkipBullMQVersionCheck({ redisUrl, env }) ? { skipVersionCheck: true } : {};
+}
+
 function createRedisConnection({ label = 'redis' } = {}) {
   const redisUrl = requireRedisUrl();
   const conn = new IORedis(redisUrl, {
@@ -35,6 +61,7 @@ function getAgentTaskQueue() {
   if (queue) return queue;
   queueConnection = createRedisConnection({ label: 'agent-task-queue' });
   queue = new Queue(getQueueName(), {
+    ...getBullMQRuntimeOptions(),
     connection: queueConnection,
     defaultJobOptions: {
       attempts: 1,
@@ -92,7 +119,9 @@ module.exports = {
   createRedisConnection,
   enqueueAgentTask,
   getAgentTaskQueue,
+  getBullMQRuntimeOptions,
   getQueueHealth,
   getQueueName,
   requireRedisUrl,
+  shouldSkipBullMQVersionCheck,
 };

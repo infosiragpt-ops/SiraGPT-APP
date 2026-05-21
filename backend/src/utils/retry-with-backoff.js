@@ -100,10 +100,11 @@ async function withRetry(fn, opts = {}) {
       //
       // cb.call() with no timeout override (timeoutMs:0) means
       // "use the breaker's default timeout, if any".
+      const runAttempt = () => (signal ? fn({ signal, attempt }) : fn());
       if (cb) {
-        return await cb.call(fn, { signal });
+        return await cb.call(runAttempt, { signal });
       }
-      return await fn();
+      return await raceWithSignal(runAttempt(), signal);
     } catch (err) {
       lastError = err;
 
@@ -144,6 +145,40 @@ async function withRetry(fn, opts = {}) {
   throw new Error('withRetry: unexpected state (no error, no result)');
 }
 
+function raceWithSignal(promise, signal) {
+  if (!signal) return promise;
+  if (signal.aborted) {
+    return Promise.reject(signal.reason || new Error('Operation aborted'));
+  }
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => {
+      if (typeof signal.removeEventListener === 'function') {
+        signal.removeEventListener('abort', onAbort);
+      }
+    };
+    const settle = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      fn(value);
+    };
+    const onAbort = () => {
+      settle(reject, signal.reason || new Error('Operation aborted'));
+    };
+
+    if (typeof signal.addEventListener === 'function') {
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+
+    Promise.resolve(promise).then(
+      value => settle(resolve, value),
+      err => settle(reject, err),
+    );
+  });
+}
+
 /**
  * Simple promise-based sleep that respects an AbortSignal.
  * Throws signal.reason on abort.
@@ -179,6 +214,7 @@ function sleep(ms, signal) {
 module.exports = {
   withRetry,
   computeBackoff,
+  raceWithSignal,
   sleep,
   defaultClassifier,
   CircuitBreaker,

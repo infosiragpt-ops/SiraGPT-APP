@@ -1,15 +1,7 @@
-// Empty default = use a relative URL so the browser resolves it
-// against the current page origin. Next.js then rewrites `/uploads/*`
-// (see next.config.mjs) to the internal backend, which is the only
-// way image previews can load in production where the backend is
-// not directly exposed. A hard-coded "http://localhost:5000" default
-// silently broke every deployed image because the user's browser
-// tried to hit their OWN machine on port 5000.
-const DEFAULT_BACKEND_ASSET_BASE_URL = "";
+const DEFAULT_BACKEND_ASSET_BASE_URL = "http://localhost:5000";
 
 function cleanBaseUrl(baseUrl?: string | null) {
-  const value = baseUrl == null ? DEFAULT_BACKEND_ASSET_BASE_URL : String(baseUrl);
-  return value.replace(/\/+$/, "");
+  return String(baseUrl || DEFAULT_BACKEND_ASSET_BASE_URL).replace(/\/+$/, "");
 }
 
 function looksLikeBase64Image(value: string) {

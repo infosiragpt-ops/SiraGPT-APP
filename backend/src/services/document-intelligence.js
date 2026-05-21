@@ -1,7 +1,7 @@
 const fs = require('fs');
-const ocrEngine = require('./ocr-engine');
-const fileProcessor = require('./fileProcessor');
 const hierarchicalChunker = require('./document/hierarchical-document-chunker');
+
+const OCR_PLACEHOLDER_RE = /^(no text found in image|no text detected(?: in image pdf)?|no content available|binary file|file content could not be extracted|file ".*?" uploaded successfully|error processing file:|unsupported file type)/i;
 
 const MAX_CHUNK_CHARS = Number.parseInt(
   process.env.SIRAGPT_DOCINTEL_CHUNK_CHARS || '3600',
@@ -44,7 +44,12 @@ function cleanText(value) {
 }
 
 function hasUsefulText(value) {
-  return ocrEngine.hasUsefulText(value);
+  const text = cleanText(value);
+  if (!text || OCR_PLACEHOLDER_RE.test(text)) return false;
+  const usefulChars = (text.match(/[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9]/g) || []).length;
+  const minUsefulChars = Number(process.env.OCR_MIN_USEFUL_CHARS);
+  const threshold = Math.min(3, Number.isFinite(minUsefulChars) ? minUsefulChars : 20);
+  return usefulChars >= threshold;
 }
 
 function looksLikeUnsupportedExtractionPlaceholder(value) {
@@ -544,6 +549,7 @@ async function reprocessIfNeeded(prisma, file) {
     return { file, result: null };
   }
   try {
+    const fileProcessor = require('./fileProcessor');
     const result = await fileProcessor.processFile({
       path: file.path,
       mimetype: file.mimeType,

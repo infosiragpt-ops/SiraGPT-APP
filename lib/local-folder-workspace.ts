@@ -18,6 +18,13 @@ const IGNORED_DIRS = new Set([
   ".vercel",
   ".idea",
   ".vscode",
+  ".husky",
+  ".orchestration",
+  ".cursor",
+  ".test-dist",
+  "test-results",
+  "output",
+  "playwright-report",
 ])
 
 const TEXT_EXTENSIONS = new Set([

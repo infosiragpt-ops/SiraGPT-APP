@@ -119,6 +119,36 @@ describe('runWithDeadlineRetry — abort signal', () => {
       AbortedError,
     );
   });
+
+  test('passes abort signal into retry sleep so backoff can stop promptly', async () => {
+    const ctrl = new AbortController();
+    let attempts = 0;
+    let seenSignal = null;
+
+    await assert.rejects(
+      runWithDeadlineRetry({
+        run: async () => {
+          attempts += 1;
+          const e = new Error('temporary outage');
+          e.status = 503;
+          throw e;
+        },
+        deadlineMs: 60_000,
+        maxAttempts: 3,
+        signal: ctrl.signal,
+        backoff: { next: () => 1_000 },
+        sleep: async (_ms, signal) => {
+          seenSignal = signal;
+          ctrl.abort('caller_cancelled');
+          throw new Error('sleep interrupted');
+        },
+      }),
+      AbortedError,
+    );
+
+    assert.equal(seenSignal, ctrl.signal);
+    assert.equal(attempts, 1);
+  });
 });
 
 describe('runWithDeadlineRetry — onAttempt sink', () => {

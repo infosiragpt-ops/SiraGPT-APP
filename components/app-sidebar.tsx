@@ -32,7 +32,6 @@ import {
   CalendarDays,
   FolderKanban,
   Palette,
-  Code2,
   Loader2,
   PenSquare,
   Shield,
@@ -841,7 +840,6 @@ export function AppSidebar() {
   const isOnParaphrasePage = activePathname.startsWith('/parafraseo')
   const isOnProjectsPage = activePathname.startsWith('/projects')
   const isOnDesignPage = activePathname.startsWith('/design')
-  const isOnCodePage = activePathname.startsWith('/code')
 
   return (
     <Sidebar className="w-[--sidebar-width] border-r border-border/40 bg-sidebar" collapsible="icon">
@@ -1046,25 +1044,6 @@ export function AppSidebar() {
             onNavigate={() => { if (isMobile) setOpenMobile(false) }}
           />
 
-          {/* Código — Cursor-style code workspace at /code (Monaco
-              editor + virtual file tree + AI chat panel). Sits
-              directly under Diseño so the two creative surfaces
-              (visual + textual) live next to each other. Code2
-              icon (with the angle brackets) is the lucide
-              convention for a code-editor entry. */}
-          <SidebarNavItem
-            href="/code"
-            label={t("code")}
-            tooltip={t("code")}
-            icon={Code2}
-            active={isOnCodePage}
-            pending={isPendingRoute("/code")}
-            sidebarState={state}
-            markNavigationIntent={markNavigationIntent}
-            prefetchOnHover={prefetchOnHover}
-            onNavigate={() => { if (isMobile) setOpenMobile(false) }}
-          />
-
         </TooltipProvider>
 
       </div>
@@ -1075,17 +1054,6 @@ export function AppSidebar() {
         onScroll={handleScroll}
       >
         <SidebarSeparator />
-
-        {/* Folders dropdown — projects act as the user's "carpetas". Sits
-            above the recent-chats list so the user can pick a workspace
-            scope before browsing individual conversations. Hidden when
-            the sidebar is collapsed to icon mode (no room for the tree). */}
-        {selectedType === "Text Chat" && (
-          <SidebarFoldersDropdown
-            collapsed={state === "closed"}
-            onMobileNavigate={() => { if (isMobile) setOpenMobile(false) }}
-          />
-        )}
 
         {/* Recent Chats - Only show for Text Chat */}
         {selectedType === "Text Chat" && (
@@ -1446,6 +1414,15 @@ export function AppSidebar() {
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
+        )}
+
+        {/* Codex — code workspaces below recent chats, above the profile
+            footer. Local folders and cloud projects open /code directly. */}
+        {selectedType === "Text Chat" && (
+          <SidebarFoldersDropdown
+            collapsed={state === "closed"}
+            onMobileNavigate={() => { if (isMobile) setOpenMobile(false) }}
+          />
         )}
       </SidebarContent>
 

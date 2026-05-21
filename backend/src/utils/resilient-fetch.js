@@ -60,7 +60,7 @@ function createResilientFetch(opts = {}) {
     ? opts.backoff
     : createJitteredBackoff({ baseMs: 200, maxMs: 5000, strategy: 'full' });
   const traceContext = opts.traceContext || null;
-  const headers = opts.headers && typeof opts.headers === 'object' ? { ...opts.headers } : null;
+  const headers = normalizeHeaderInit(opts.headers);
   const isRetryable = typeof opts.isRetryable === 'function' ? opts.isRetryable : null;
 
   function evalRetryable(resOrErr) {
@@ -76,7 +76,7 @@ function createResilientFetch(opts = {}) {
   }
 
   function buildHeaders(initHeaders) {
-    const h = { ...(headers || {}), ...(initHeaders || {}) };
+    const h = { ...(headers || {}), ...normalizeHeaderInit(initHeaders) };
     if (traceContext) injectHeaders(h, traceContext);
     return h;
   }
@@ -137,6 +137,28 @@ function createResilientFetch(opts = {}) {
   }
 
   return { send, json, evalRetryable };
+}
+
+function normalizeHeaderInit(headerInit) {
+  if (!headerInit || typeof headerInit !== 'object') return null;
+  const out = {};
+  if (Array.isArray(headerInit)) {
+    for (const pair of headerInit) {
+      if (!Array.isArray(pair) || pair.length < 2) continue;
+      out[String(pair[0]).toLowerCase()] = String(pair[1]);
+    }
+    return out;
+  }
+  if (typeof headerInit.forEach === 'function') {
+    headerInit.forEach((value, key) => {
+      out[String(key).toLowerCase()] = String(value);
+    });
+    return out;
+  }
+  for (const [key, value] of Object.entries(headerInit)) {
+    out[String(key).toLowerCase()] = String(value);
+  }
+  return out;
 }
 
 function mergeSignals(a, b) {
