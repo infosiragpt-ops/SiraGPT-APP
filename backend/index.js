@@ -64,6 +64,30 @@ process.on('warning', (warning) => {
     // don't accidentally hide deprecations or memory warnings.
     console.warn(`[node-warning] ${warning.name}: ${warning.message}`);
 });
+
+// Silence BullMQ's recurring "IMPORTANT! Eviction policy is X. It
+// should be 'noeviction'" warning. BullMQ emits this via console.warn
+// on every Redis connection establish. Our Upstash plan uses an
+// optimistic-volatile policy that works fine for our queue payloads
+// (jobs are persisted in Postgres; Redis is just the dispatcher).
+// We summarise once per process and then drop subsequent emissions
+// so the log stays readable. If queue reliability degrades, the real
+// signal is `unhandledRejection` Redis failures, which we already
+// log via the resilience layer above.
+const _origConsoleWarn = console.warn.bind(console);
+let _upstashEvictionLogged = false;
+console.warn = (...args) => {
+    try {
+        const first = args[0];
+        if (typeof first === 'string' && first.includes('Eviction policy is')) {
+            if (_upstashEvictionLogged) return;
+            _upstashEvictionLogged = true;
+            _origConsoleWarn('[redis] suppressing recurring eviction-policy warning from BullMQ (Upstash plan uses optimistic-volatile; safe for our workload).');
+            return;
+        }
+    } catch (_) { /* fall through to original */ }
+    _origConsoleWarn(...args);
+};
 process.on('unhandledRejection', (reason, promise) => {
     // Transient Redis errors (Upstash quota, connection blips, etc.)
     // surface here from BullMQ internals. Log as warning and keep
@@ -1147,17 +1171,28 @@ function startServer() {
     // ── Alerting configuration ─────────────────────────────────────
     alerting.configure({ logger });
 
-    // Memory monitor: every 30s, alert when heapUsed > 80% of heapTotal.
+    // Memory monitor: every 30s, alert when heapUsed > 85% of the V8
+    // heap *limit* (max-old-space-size), NOT current allocated heap.
+    //
+    // The old implementation compared against `heapTotal`, which is the
+    // currently-reserved heap (grows lazily). With --max-old-space-size=2048
+    // this fired false alarms at "90%" when actually using ~12% of the
+    // real limit, because Node had only reserved 266 MB so far. The
+    // honest metric is `heapUsed / heap_size_limit`.
+    //
     // Dedup at the alerting layer ensures a sustained high-memory state
-    // produces one Slack message per 5min, not 10.
+    // produces one Slack message per 5 min, not 10.
+    const v8 = require('v8');
     const memInterval = setInterval(() => {
         try {
             const m = process.memoryUsage();
-            if (!m.heapTotal) return;
-            const pct = (m.heapUsed / m.heapTotal) * 100;
-            if (pct > 80) {
+            const heapLimit = v8.getHeapStatistics().heap_size_limit;
+            if (!heapLimit) return;
+            const pct = (m.heapUsed / heapLimit) * 100;
+            if (pct > 85) {
                 Promise.resolve().then(() => alerting.notifyHighMemory(pct, {
                     heapUsedMb: Math.round(m.heapUsed / 1024 / 1024),
+                    heapLimitMb: Math.round(heapLimit / 1024 / 1024),
                     heapTotalMb: Math.round(m.heapTotal / 1024 / 1024),
                     rssMb: Math.round(m.rss / 1024 / 1024),
                 })).catch(() => {});
