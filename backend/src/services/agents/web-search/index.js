@@ -31,7 +31,15 @@ const DEFAULT_CACHE_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_CACHE_MAX = 200;
 
 const builtinProviders = [
+  // Scientific tier (priority 3-7) — try the most authoritative sources
+  // first. Each returns [] when the query has no scientific match, so
+  // the adapter falls through cleanly to the general-web tier.
+  require('./providers/crossref'),
+  require('./providers/pubmed'),
   require('./providers/scielo'),
+  require('./providers/openalex'),
+  require('./providers/arxiv'),
+  // General-web tier (priority 10-30).
   require('./providers/duckduckgo'),
   require('./providers/wikipedia'),
   require('./providers/searxng'),
