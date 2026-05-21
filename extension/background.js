@@ -68,6 +68,15 @@ async function runCapture() {
     headers: { Authorization: `Bearer ${token}` },
     body: form,
   });
+  if (resp.status === 401 || resp.status === 403) {
+    // The session row was revoked from /settings/appshots, the JWT expired,
+    // or the scope check failed. Either way the stored token is useless —
+    // wipe it so the next capture forces a fresh pairing instead of looping
+    // 401s, and surface a clear message to the user.
+    await clearStoredToken();
+    await openOptionsTab().catch(() => { /* best-effort */ });
+    throw new Error('Vinculaci\u00f3n expirada, vuelve a vincular.');
+  }
   if (!resp.ok) {
     const text = await resp.text().catch(() => '');
     throw new Error(`Sira rechaz\u00f3 la captura (${resp.status}): ${text.slice(0, 200)}`);
@@ -159,6 +168,14 @@ async function loadConfig() {
     token: data[STORAGE_KEYS.token] || null,
     apiBase: data[STORAGE_KEYS.apiBase] || DEFAULT_API_BASE,
   };
+}
+
+async function clearStoredToken() {
+  try {
+    await chrome.storage.local.remove([STORAGE_KEYS.token, STORAGE_KEYS.apiBase]);
+  } catch (err) {
+    console.warn('[appshots] could not clear storage:', err);
+  }
 }
 
 async function openOptionsTab() {

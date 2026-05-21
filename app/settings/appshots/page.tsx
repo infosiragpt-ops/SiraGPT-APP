@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 /**
  * Página de vinculación de la extensión Sira Appshots.
@@ -18,6 +18,13 @@ type PairResponse = {
   apiBaseUrl: string;
 };
 
+type AppshotsSession = {
+  id: string;
+  createdAt: string;
+  expiresAt: string;
+  lastUsedAt: string | null;
+};
+
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
 
 export default function AppshotsSettingsPage() {
@@ -26,6 +33,61 @@ export default function AppshotsSettingsPage() {
   const [apiBaseUrl, setApiBaseUrl] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [sessions, setSessions] = useState<AppshotsSession[] | null>(null);
+  const [sessionsError, setSessionsError] = useState<string | null>(null);
+  const [revokingId, setRevokingId] = useState<string | null>(null);
+
+  const loadSessions = useCallback(async () => {
+    setSessionsError(null);
+    try {
+      const resp = await fetch(`${API_BASE}/api/appshots/sessions`, {
+        method: 'GET',
+        credentials: 'include',
+      });
+      if (!resp.ok) throw new Error(`No se pudieron cargar las sesiones (${resp.status}).`);
+      const data = (await resp.json()) as { sessions: AppshotsSession[] };
+      setSessions(data.sessions || []);
+    } catch (err) {
+      setSessionsError(err instanceof Error ? err.message : String(err));
+      setSessions([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadSessions();
+  }, [loadSessions]);
+
+  const revoke = useCallback(
+    async (id: string) => {
+      setRevokingId(id);
+      setSessionsError(null);
+      try {
+        let csrfToken = readCookie('csrf_token');
+        if (!csrfToken) {
+          const seed = await fetch(`${API_BASE}/api/auth/csrf-token`, {
+            method: 'GET',
+            credentials: 'include',
+          });
+          if (seed.ok) {
+            const data = (await seed.json().catch(() => null)) as { csrfToken?: string } | null;
+            csrfToken = data?.csrfToken || readCookie('csrf_token') || '';
+          }
+        }
+        const resp = await fetch(`${API_BASE}/api/appshots/sessions/${encodeURIComponent(id)}`, {
+          method: 'DELETE',
+          credentials: 'include',
+          headers: { 'x-csrf-token': csrfToken || '' },
+        });
+        if (!resp.ok) throw new Error(`No se pudo revocar (${resp.status}).`);
+        await loadSessions();
+      } catch (err) {
+        setSessionsError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setRevokingId(null);
+      }
+    },
+    [loadSessions],
+  );
 
   const generate = useCallback(async () => {
     setLoading(true);
@@ -69,12 +131,15 @@ export default function AppshotsSettingsPage() {
       const data = (await resp.json()) as PairResponse;
       setToken(data.token);
       setApiBaseUrl(data.apiBaseUrl);
+      // Refresh the active-sessions list so the user sees the freshly
+      // minted token appear without a manual reload.
+      loadSessions();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [loadSessions]);
 
   const copy = useCallback(async () => {
     if (!token) return;
@@ -150,6 +215,57 @@ export default function AppshotsSettingsPage() {
 
       <section className="mt-6 rounded-lg border border-border bg-card p-5">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+          Sesiones activas de Appshots
+        </h2>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Si pierdes el portátil o quieres desconectar la extensión, revoca su sesión aquí.
+          La extensión dejará de poder enviar capturas inmediatamente.
+        </p>
+
+        {sessionsError ? (
+          <p className="mt-3 rounded border border-destructive bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            {sessionsError}
+          </p>
+        ) : null}
+
+        {sessions === null ? (
+          <p className="mt-3 text-sm text-muted-foreground">Cargando…</p>
+        ) : sessions.length === 0 ? (
+          <p className="mt-3 text-sm text-muted-foreground">
+            No hay extensiones vinculadas todavía.
+          </p>
+        ) : (
+          <ul className="mt-3 divide-y divide-border rounded border border-border">
+            {sessions.map((s) => (
+              <li
+                key={s.id}
+                className="flex flex-col gap-2 px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
+              >
+                <div className="text-sm">
+                  <div>
+                    Vinculada el{' '}
+                    <span className="font-medium">{formatDate(s.createdAt)}</span>
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    Último uso: {s.lastUsedAt ? formatDate(s.lastUsedAt) : 'sin usar todavía'}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => revoke(s.id)}
+                  disabled={revokingId === s.id}
+                  className="self-start rounded-md border border-destructive bg-background px-3 py-1.5 text-sm text-destructive hover:bg-destructive/10 disabled:opacity-50 sm:self-auto"
+                >
+                  {revokingId === s.id ? 'Revocando…' : 'Revocar'}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section className="mt-6 rounded-lg border border-border bg-card p-5">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
           Paso 3 · Pégalo en la extensión
         </h2>
         <ol className="mt-3 list-decimal space-y-1 pl-5 text-sm">
@@ -164,6 +280,22 @@ export default function AppshotsSettingsPage() {
       </section>
     </div>
   );
+}
+
+function formatDate(iso: string): string {
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    return d.toLocaleString('es-ES', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch (_) {
+    return iso;
+  }
 }
 
 function readCookie(name: string): string | null {

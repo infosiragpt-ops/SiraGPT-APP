@@ -244,6 +244,11 @@ model Session {
   token       String   @unique
   expiresAt   DateTime
   createdAt   DateTime @default(now())
+  // lastUsedAt: bumped by routes that re-use a long-lived session (e.g.
+  // /api/appshots/capture) so the settings UI can show "last seen" and
+  // the user can confidently revoke stale Appshots tokens. Nullable so
+  // pre-migration rows don't have to backfill.
+  lastUsedAt  DateTime?
   // fingerprint: hex sha256(IP-class || User-Agent) recorded at login,
   // compared on each request so a leaked token can't be replayed from
   // a different network or browser. See utils/session-fingerprint.js.

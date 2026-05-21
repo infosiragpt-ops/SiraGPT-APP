@@ -644,6 +644,9 @@ app.use('/api/files', requireCsrf);
 // Pairing is cookie-auth, so it needs CSRF; capture is bearer-only and is
 // mounted without CSRF below. Path-level matching keeps the protection tight.
 app.use('/api/appshots/pair', requireCsrf);
+// Sessions management (list + revoke) is cookie-auth too — same threat
+// model as /pair, so it gets the same CSRF gate. /capture stays exempt.
+app.use('/api/appshots/sessions', requireCsrf);
 app.use('/api/projects', requireCsrf);
 app.use('/api/payments', requireCsrf);
 app.use('/api/bookmarks', requireCsrf);

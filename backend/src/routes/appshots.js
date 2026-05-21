@@ -114,6 +114,87 @@ router.post('/pair', authenticateToken, async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────
+// GET /api/appshots/sessions
+// DELETE /api/appshots/sessions/:id
+// ─────────────────────────────────────────────────────────────
+/**
+ * List active Appshots sessions for the caller. We don't store the JWT
+ * scope as a column, so we filter by decoding each session's token and
+ * keeping only those with `scope === 'appshots:capture'`. The token
+ * itself is never returned — only metadata the user needs to recognise
+ * and revoke a stale device.
+ */
+router.get('/sessions', authenticateToken, async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const rows = await prisma.session.findMany({
+      where: { userId: req.user.id },
+      select: {
+        id: true,
+        token: true,
+        createdAt: true,
+        expiresAt: true,
+        lastUsedAt: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    const sessions = rows
+      .filter((row) => isAppshotsToken(row.token))
+      .map((row) => ({
+        id: row.id,
+        createdAt: row.createdAt,
+        expiresAt: row.expiresAt,
+        lastUsedAt: row.lastUsedAt,
+      }));
+    res.json({ sessions });
+  } catch (error) {
+    console.error('[appshots] list sessions error:', error?.message || error);
+    res.status(500).json({ error: 'Could not list sessions' });
+  }
+});
+
+router.delete('/sessions/:id', authenticateToken, async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    const id = String(req.params.id || '');
+    if (!id) return res.status(400).json({ error: 'session id required' });
+
+    // Scope the delete to BOTH the caller and the appshots scope so a
+    // compromised cookie can't be used to log every browser tab out.
+    const row = await prisma.session.findUnique({
+      where: { id },
+      select: { id: true, userId: true, token: true },
+    });
+    if (!row || row.userId !== req.user.id) {
+      return res.status(404).json({ error: 'session not found' });
+    }
+    if (!isAppshotsToken(row.token)) {
+      return res.status(403).json({ error: 'not an appshots session' });
+    }
+    await prisma.session.delete({ where: { id } });
+    auditLog.audit({
+      event: 'appshots_revoked',
+      userId: req.user.id,
+      sessionId: id,
+    });
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('[appshots] revoke session error:', error?.message || error);
+    res.status(500).json({ error: 'Revoke failed' });
+  }
+});
+
+function isAppshotsToken(token) {
+  if (!token || typeof token !== 'string') return false;
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    return decoded?.scope === 'appshots:capture';
+  } catch (_) {
+    return false;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
 // POST /api/appshots/capture
 // ─────────────────────────────────────────────────────────────
 /**
@@ -275,6 +356,15 @@ router.post(
         ocrChars: extractedText ? extractedText.length : 0,
       });
 
+      // Bump lastUsedAt so the settings UI can show "last seen" and the
+      // user can confidently revoke abandoned tokens. Best-effort: if
+      // req.userSession is missing (e.g. test stub) we silently skip.
+      if (req.userSession?.id) {
+        prisma.session
+          .update({ where: { id: req.userSession.id }, data: { lastUsedAt: new Date() } })
+          .catch(() => { /* don't fail the capture if the bump fails */ });
+      }
+
       const frontendBase = getCanonicalFrontendBaseUrl(req);
       return res.status(201).json({
         chatId: chat.id,
@@ -353,4 +443,4 @@ function getCanonicalFrontendBaseUrl(req) {
 }
 
 module.exports = router;
-module.exports._private = { sanitiseLabel, sanitiseNote, sanitiseModel, truncate, pickOcrFlag };
+module.exports._private = { sanitiseLabel, sanitiseNote, sanitiseModel, truncate, pickOcrFlag, isAppshotsToken };
