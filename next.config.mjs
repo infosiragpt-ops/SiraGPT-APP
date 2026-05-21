@@ -87,6 +87,15 @@ const nextConfig = {
         source: '/api/:path*',
         destination: `${backendBase}/api/:path*`,
       },
+      // `/uploads/*` is served by Express via `express.static(uploadDir)`.
+      // Without this rewrite the browser fetches `/uploads/<user>/<file>`
+      // from Next.js, which 404s, and image previews in chat render as
+      // broken icons. Proxy through Next.js so the public domain is the
+      // only ingress (same pattern as `/api`).
+      {
+        source: '/uploads/:path*',
+        destination: `${backendBase}/uploads/:path*`,
+      },
     ]
   },
 

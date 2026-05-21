@@ -1193,7 +1193,27 @@ async function handleQueuedTaskRequest(req, res) {
     documentPolicy,
   };
 
-  const job = await enqueueAgentTask(payload);
+  let job;
+  try {
+    job = await enqueueAgentTask(payload);
+  } catch (err) {
+    // Redis enqueue can fail at runtime even when REDIS_URL is
+    // configured: Upstash daily request limits, connection drops,
+    // BullMQ "MaxRetriesPerRequest" errors, etc. We must not surface
+    // this as a hard failure to the user — fall back to the in-process
+    // local task runner (same path used when Redis is not configured
+    // at all) so chat keeps working in degraded mode.
+    const message = err && err.message ? String(err.message) : String(err);
+    const isRedisFailure = /redis|connection|ECONN|max requests limit|enqueue|bullmq|maxretriesperrequest/i.test(message);
+    if (isRedisFailure) {
+      console.warn('[agent-task] enqueue failed, falling back to local runtime:', message);
+      return handleLocalTaskRequest(req, res, {
+        fallbackReason: 'redis_unavailable',
+        fallbackDetail: message,
+      });
+    }
+    throw err;
+  }
   let streamState = initialAgentState();
   const snapshot = {
     taskId,
