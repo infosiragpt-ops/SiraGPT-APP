@@ -87,8 +87,18 @@ function createResilientFetch(opts = {}) {
     let lastRes = null;
     return runWithDeadlineRetry({
       run: async (_attempt, signal) => {
-        const merged = signal ? { ...finalInit, signal: mergeSignals(finalInit.signal, signal) } : finalInit;
-        const res = await fetchFn(url, merged);
+        const mergedSignal = signal && finalInit.signal && signal !== finalInit.signal
+          ? mergeSignals(finalInit.signal, signal)
+          : null;
+        const merged = signal
+          ? { ...finalInit, signal: mergedSignal ? mergedSignal.signal : signal }
+          : finalInit;
+        let res;
+        try {
+          res = await fetchFn(url, merged);
+        } finally {
+          if (mergedSignal) mergedSignal.cleanup();
+        }
         if (evalRetryable(res)) {
           // Surface as a retryable error carrying retry-After hint.
           const e = new Error(`http ${res.status}`);
@@ -108,6 +118,7 @@ function createResilientFetch(opts = {}) {
       deadlineMs,
       maxAttempts,
       backoff,
+      signal: finalInit.signal,
     }).then(({ value }) => value).catch((err) => {
       // If we eventually exhausted on a retryable HTTP response, hand
       // back the last response — caller decides what to do with a
@@ -129,15 +140,32 @@ function createResilientFetch(opts = {}) {
 }
 
 function mergeSignals(a, b) {
-  if (!a) return b;
-  if (!b) return a;
+  if (!a) return { signal: b, cleanup: () => {} };
+  if (!b) return { signal: a, cleanup: () => {} };
   const ctrl = new AbortController();
+  const added = [];
   const onAbort = (signal) => () => { try { ctrl.abort(signal.reason); } catch { /* swallow */ } };
   if (a.aborted) ctrl.abort(a.reason);
-  else a.addEventListener('abort', onAbort(a), { once: true });
+  else {
+    const listener = onAbort(a);
+    a.addEventListener('abort', listener, { once: true });
+    added.push([a, listener]);
+  }
   if (b.aborted) ctrl.abort(b.reason);
-  else b.addEventListener('abort', onAbort(b), { once: true });
-  return ctrl.signal;
+  else {
+    const listener = onAbort(b);
+    b.addEventListener('abort', listener, { once: true });
+    added.push([b, listener]);
+  }
+  return {
+    signal: ctrl.signal,
+    cleanup: () => {
+      for (const [signal, listener] of added) {
+        try { signal.removeEventListener('abort', listener); } catch { /* swallow */ }
+      }
+      added.length = 0;
+    },
+  };
 }
 
 module.exports = {
