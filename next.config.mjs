@@ -53,6 +53,11 @@ const nextConfig = {
   // tab keeps working after a redeploy.
   // Docs: https://nextjs.org/docs/app/building-your-application/data-fetching/server-actions-and-mutations#deployments
   experimental: {
+    // Loads instrumentation.ts at server startup so we can install
+    // the stale-Server-Action log filter (see instrumentation.ts).
+    // Required for Next.js < 15; safe no-op in 15+ where it's on
+    // by default.
+    instrumentationHook: true,
     serverActions: {
       ...(process.env.NEXT_SERVER_ACTIONS_ENCRYPTION_KEY
         ? { encryptionKey: process.env.NEXT_SERVER_ACTIONS_ENCRYPTION_KEY }
