@@ -1,5 +1,6 @@
 { pkgs }: {
   deps = [
+    pkgs.pandoc
     pkgs.nodejs_20
     pkgs.nodePackages.npm
     # Some test fixtures need basic utilities.
