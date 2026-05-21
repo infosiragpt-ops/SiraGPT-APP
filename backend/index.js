@@ -88,6 +88,43 @@ console.warn = (...args) => {
     } catch (_) { /* fall through to original */ }
     _origConsoleWarn(...args);
 };
+
+// Collapse multi-line object/array dumps in console.log to one-line
+// JSON. Node's default `console.log(obj)` uses util.inspect, which
+// produces multi-line pretty-printed output like:
+//     {
+//       analysisId: "cmpfp17xy000b1edujr4ghoz3",
+//       ordinal: 16,
+//       ...
+//     }
+// In our deployed Replit log pipeline each line is prefixed with
+// `[backend]`, so a 20-key object explodes into 22 noisy log lines
+// that are hard to scan and hard to grep. By forcing one-line JSON
+// for non-primitive args we keep one log event per call, preserving
+// the data but making it greppable. Strings, numbers, booleans, and
+// Error instances are formatted as-is so stack traces still render.
+const _origConsoleLog = console.log.bind(console);
+const _formatLogArg = (arg) => {
+    if (arg === null || arg === undefined) return String(arg);
+    const t = typeof arg;
+    if (t === 'string' || t === 'number' || t === 'boolean' || t === 'bigint') return String(arg);
+    if (arg instanceof Error) return arg.stack || `${arg.name}: ${arg.message}`;
+    try {
+        // Compact JSON; cap size so accidental dumps of huge buffers
+        // don't blow up the log line. Circular refs fall through to
+        // util.inspect via the catch below.
+        const s = JSON.stringify(arg);
+        if (s === undefined) return String(arg);
+        return s.length > 4000 ? s.slice(0, 4000) + '…[truncated]' : s;
+    } catch (_) {
+        try { return require('util').inspect(arg, { depth: 3, breakLength: Infinity, compact: true }); }
+        catch (_e) { return String(arg); }
+    }
+};
+console.log = (...args) => {
+    if (args.length === 0) { _origConsoleLog(); return; }
+    _origConsoleLog(args.map(_formatLogArg).join(' '));
+};
 process.on('unhandledRejection', (reason, promise) => {
     // Transient Redis errors (Upstash quota, connection blips, etc.)
     // surface here from BullMQ internals. Log as warning and keep
