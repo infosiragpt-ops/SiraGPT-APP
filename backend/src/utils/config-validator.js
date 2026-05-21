@@ -89,6 +89,11 @@ function isCiEnvironment(env) {
   return String(env.CI || '').toLowerCase() === 'true' || String(env.GITHUB_ACTIONS || '').toLowerCase() === 'true';
 }
 
+function shouldBlockLocalDatabaseUrl(env) {
+  const policy = String(env.DATABASE_URL_LOCALHOST_POLICY || '').toLowerCase().trim();
+  return policy === 'block' || String(env.REJECT_LOCAL_DATABASE_URL || '').toLowerCase() === 'true';
+}
+
 function checkRequired(env, envName, errors) {
   const required = REQUIRED_BY_ENV[envName] || [];
   for (const key of required) {
@@ -122,20 +127,23 @@ function checkCrossFieldMisconfig(env, envName, warnings, errors) {
   const databaseUrl = resolveDatabaseUrl(env);
   const databaseKey = env.PRISMA_DATABASE_URL ? 'PRISMA_DATABASE_URL' : 'DATABASE_URL';
 
-  if (envName === 'production' && looksLikeLocalhost(databaseUrl) && !isCiEnvironment(env)) {
+  if (envName === 'production' && looksLikeLocalhost(databaseUrl) && shouldBlockLocalDatabaseUrl(env)) {
     errors.push({
       key: databaseKey,
       envName,
       message:
         'NODE_ENV=production but database URL points to localhost. ' +
-        'This is almost certainly wrong — refusing to boot.',
+        'DATABASE_URL_LOCALHOST_POLICY=block is set — refusing to boot.',
     });
   } else if (envName === 'production' && looksLikeLocalhost(databaseUrl)) {
     warnings.push({
       key: databaseKey,
       envName,
       message:
-        'NODE_ENV=production with localhost database URL is allowed only because CI/GitHub Actions is set.',
+        'NODE_ENV=production but database URL points to localhost. ' +
+        (isCiEnvironment(env)
+          ? 'Allowed for CI/GitHub Actions smoke tests.'
+          : 'Verify this is intentional (e.g. same-host Postgres or sidecar). Set DATABASE_URL_LOCALHOST_POLICY=block to fail closed.'),
     });
   }
   if (envName === 'production' && looksLikeLocalhost(env.REDIS_URL)) {
