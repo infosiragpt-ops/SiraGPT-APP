@@ -1129,21 +1129,29 @@ router.post(
 
 async function handleQueuedTaskRequest(req, res) {
   const rawGoal = String(req.body.goal || '');
-  const requestedFileIds = Array.isArray(req.body.files)
-    ? req.body.files.map(String).filter(Boolean).slice(0, 20)
-    : [];
   try {
     requireRedisUrl();
   } catch (err) {
-    if (requestedFileIds.length > 0 || isTranscriptionRequest(rawGoal)) {
-      return handleLocalTaskRequest(req, res, {
-        fallbackReason: 'redis_unavailable',
-        fallbackDetail: err.message,
-      });
-    }
-    return res.status(503).json({
-      error: 'REDIS_URL is required for agentic tasks. Configure Redis and restart the backend worker.',
-      detail: err.message,
+    // REDIS_URL is not configured at all — always run locally so chat
+    // keeps working regardless of request type. The in-process runner
+    // handles documents, transcription, and plain chat goals.
+    return handleLocalTaskRequest(req, res, {
+      fallbackReason: 'redis_unavailable',
+      fallbackDetail: err.message,
+    });
+  }
+  // Circuit breaker: if Redis has recently surfaced a transient error
+  // (Upstash daily limit, connection drop, rate limit, etc.) skip the
+  // queue entirely and serve the task via the in-process runtime. The
+  // marker auto-clears after the unhealthy window, so we re-enable
+  // queued mode as soon as Redis recovers. This prevents the "Runtime
+  // agentico no disponible" red banner from leaking to the user when
+  // BullMQ's offline queue would otherwise hang waiting on Redis.
+  const { isRedisRecentlyUnhealthy, getLastRedisFailureMessage } = require('../services/agents/redis-resilience');
+  if (isRedisRecentlyUnhealthy()) {
+    return handleLocalTaskRequest(req, res, {
+      fallbackReason: 'redis_unhealthy',
+      fallbackDetail: getLastRedisFailureMessage() || 'recent transient redis error',
     });
   }
 

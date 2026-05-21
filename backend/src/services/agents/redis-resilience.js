@@ -36,6 +36,35 @@ function createThrottledLogger(windowMs = 60000) {
   };
 }
 
+// Circuit-breaker state. When Redis surfaces a transient error
+// (Upstash daily limit, connection drop, rate-limit, etc.) we record
+// the timestamp so route handlers can skip the queue and fall back to
+// the in-process runtime without waiting for a hung `q.add()` to time
+// out. The window auto-clears so we re-enable queued mode once Redis
+// recovers.
+let lastRedisFailureAt = 0;
+let lastRedisFailureMessage = '';
+const DEFAULT_UNHEALTHY_WINDOW_MS = 60_000;
+
+function markRedisFailure(err) {
+  lastRedisFailureAt = Date.now();
+  lastRedisFailureMessage = err && err.message ? String(err.message) : String(err || 'unknown');
+}
+
+function isRedisRecentlyUnhealthy(windowMs = DEFAULT_UNHEALTHY_WINDOW_MS) {
+  if (!lastRedisFailureAt) return false;
+  return Date.now() - lastRedisFailureAt < windowMs;
+}
+
+function getLastRedisFailureMessage() {
+  return lastRedisFailureMessage;
+}
+
+function clearRedisFailureMarker() {
+  lastRedisFailureAt = 0;
+  lastRedisFailureMessage = '';
+}
+
 // Attaches resilience listeners to an ioredis connection. Idempotent:
 // calling twice on the same connection is a no-op.
 function attachRedisListeners(connection, { label = 'redis', logger = console } = {}) {
@@ -44,6 +73,7 @@ function attachRedisListeners(connection, { label = 'redis', logger = console } 
   const throttled = createThrottledLogger();
   connection.on('error', (err) => {
     if (isTransientRedisError(err)) {
+      markRedisFailure(err);
       throttled(() => logger.warn(`[${label}] transient connection error: ${err.message || err}`));
     } else {
       logger.error(`[${label}] unexpected error:`, err);
@@ -77,8 +107,12 @@ function installProcessGuards({ logger = console } = {}) {
 
 module.exports = {
   attachRedisListeners,
+  clearRedisFailureMarker,
   createThrottledLogger,
+  getLastRedisFailureMessage,
   installProcessGuards,
+  isRedisRecentlyUnhealthy,
   isTransientRedisError,
+  markRedisFailure,
   reconnectDelay,
 };
