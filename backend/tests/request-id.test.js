@@ -2,6 +2,7 @@ const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 
 const { HEADER, getRequestId, requestIdMiddleware } = require('../src/middleware/request-id');
+const { currentContext } = require('../src/utils/logger');
 
 function makeRes() {
   const headers = {};
@@ -52,6 +53,39 @@ describe('requestIdMiddleware', () => {
     assert.equal(req.requestId, undefined);
     assert.equal(res.locals, undefined);
     assert.equal(res.getHeader(HEADER), undefined);
+  });
+
+  test('binds the request id into the logger AsyncLocalStorage context', () => {
+    const req = { id: 'req-als-1', headers: {} };
+    const res = makeRes();
+    let seen;
+
+    requestIdMiddleware(req, res, () => {
+      seen = currentContext();
+    });
+
+    assert.equal(seen.reqId, 'req-als-1');
+    assert.equal(seen.requestId, 'req-als-1');
+    assert.equal(seen.request_id, 'req-als-1');
+    assert.equal(currentContext(), null);
+  });
+
+  test('preserves the logger context across async work scheduled downstream', async () => {
+    const req = { id: 'req-als-async', headers: {} };
+    const res = makeRes();
+    let seen;
+
+    await new Promise((resolve) => {
+      requestIdMiddleware(req, res, () => {
+        setImmediate(() => {
+          seen = currentContext();
+          resolve();
+        });
+      });
+    });
+
+    assert.equal(seen.reqId, 'req-als-async');
+    assert.equal(seen.requestId, 'req-als-async');
   });
 });
 

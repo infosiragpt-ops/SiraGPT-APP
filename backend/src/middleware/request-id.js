@@ -34,6 +34,17 @@
 
 const HEADER = 'X-Request-Id';
 
+let _contextLogger = null;
+function contextLogger() {
+  if (_contextLogger) return _contextLogger;
+  try {
+    _contextLogger = require('../utils/logger');
+  } catch (_err) {
+    _contextLogger = { runWithContext: (_ctx, fn) => fn() };
+  }
+  return _contextLogger;
+}
+
 function requestIdMiddleware(req, res, next) {
   // pino-http populates `req.id` — either from `x-request-id` upstream
   // or as a fresh UUID. We just pin it onto `req.requestId` for clearer
@@ -51,9 +62,14 @@ function requestIdMiddleware(req, res, next) {
     // route handler writes to the response. Express returns the same
     // res object to error handlers, so this header survives errors.
     res.setHeader(HEADER, id);
+
+    const { runWithContext } = contextLogger();
+    if (typeof runWithContext === 'function') {
+      return runWithContext({ reqId: id, requestId: id, request_id: id }, next);
+    }
   }
 
-  next();
+  return next();
 }
 
 /**
