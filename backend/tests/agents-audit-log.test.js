@@ -14,6 +14,8 @@ const {
   audit,
   auditAgentRun,
   redact,
+  _resetDedupeStateForTests,
+  _forceFlushDedupeForTests,
 } = require('../src/services/agents/audit-log');
 
 // Capture stderr writes per-test.
@@ -33,6 +35,7 @@ function stopCapture() {
 
 beforeEach(() => {
   captured = [];
+  _resetDedupeStateForTests();
 });
 
 // ── redact ────────────────────────────────────────────────────────
@@ -292,9 +295,135 @@ describe('auditAgentRun', () => {
 // ── module surface ──────────────────────────────────────────────
 
 describe('module surface', () => {
-  it('exports audit, auditAgentRun, redact, _flush (test-only)', () => {
+  it('exports audit, auditAgentRun, redact, slimDocumentPolicy, _flush, _resetDedupeStateForTests, _forceFlushDedupeForTests', () => {
     const mod = require('../src/services/agents/audit-log');
     const keys = Object.keys(mod).sort();
-    assert.deepEqual(keys, ['_flush', 'audit', 'auditAgentRun', 'redact']);
+    assert.deepEqual(keys, [
+      '_flush',
+      '_forceFlushDedupeForTests',
+      '_resetDedupeStateForTests',
+      'audit',
+      'auditAgentRun',
+      'redact',
+      'slimDocumentPolicy',
+    ]);
+  });
+});
+
+// ── lifecycle-event idempotency ────────────────────────────────────
+//
+// Regression for the duplicate-emission bug: agent_task_worker_started
+// / worker_finished / queued / failed were observed 2-4× per (taskId)
+// at the same millisecond. The dedupe window collapses duplicates and
+// emits a single summary line when it closes.
+describe('audit · lifecycle-event dedupe', () => {
+  it('emits the first lifecycle event for a taskId and suppresses identical duplicates', () => {
+    startCapture();
+    audit({ event: 'agent_task_worker_started', taskId: 'task-A', jobId: 'job-A' });
+    audit({ event: 'agent_task_worker_started', taskId: 'task-A', jobId: 'job-A' });
+    audit({ event: 'agent_task_worker_started', taskId: 'task-A', jobId: 'job-A' });
+    const out = stopCapture();
+    const lines = out.trim().split('\n').filter(Boolean);
+    assert.equal(lines.length, 1, 'only the first hit should reach stderr inside the window');
+    const obj = JSON.parse(lines[0]);
+    assert.equal(obj.event, 'agent_task_worker_started');
+    assert.equal(obj.taskId, 'task-A');
+  });
+
+  it('does NOT dedupe lifecycle events for different taskIds', () => {
+    startCapture();
+    audit({ event: 'agent_task_worker_started', taskId: 'task-A' });
+    audit({ event: 'agent_task_worker_started', taskId: 'task-B' });
+    const out = stopCapture();
+    const lines = out.trim().split('\n').filter(Boolean);
+    assert.equal(lines.length, 2);
+  });
+
+  it('does NOT dedupe lifecycle events with no taskId (safe fallthrough)', () => {
+    startCapture();
+    audit({ event: 'agent_task_worker_started' });
+    audit({ event: 'agent_task_worker_started' });
+    const out = stopCapture();
+    assert.equal(out.trim().split('\n').filter(Boolean).length, 2);
+  });
+
+  it('does NOT dedupe non-lifecycle events even with matching taskId', () => {
+    startCapture();
+    audit({ event: 'agent_task_local_fallback_started', taskId: 'task-A' });
+    audit({ event: 'agent_task_local_fallback_started', taskId: 'task-A' });
+    const out = stopCapture();
+    assert.equal(out.trim().split('\n').filter(Boolean).length, 2);
+  });
+
+  it('collapses 4 identical lifecycle events to 1 emit inside the window', () => {
+    startCapture();
+    for (let i = 0; i < 4; i++) {
+      audit({ event: 'agent_task_worker_finished', taskId: 'task-C', status: 'completed' });
+    }
+    const out = stopCapture();
+    const lines = out.trim().split('\n').filter(Boolean);
+    assert.equal(lines.length, 1);
+    assert.equal(JSON.parse(lines[0]).status, 'completed');
+  });
+
+  it('emits an agent_task_event_deduped summary with suppressedCount when the window closes', () => {
+    startCapture();
+    for (let i = 0; i < 4; i++) {
+      audit({ event: 'agent_task_worker_finished', taskId: 'task-D', jobId: 'job-D', status: 'completed' });
+    }
+    // Force the window closed via the test hook instead of waiting 90s.
+    _forceFlushDedupeForTests('agent_task_worker_finished:task-D:job-D');
+    const out = stopCapture();
+    const lines = out.trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    assert.equal(lines.length, 2, 'first emit + summary line');
+    assert.equal(lines[0].event, 'agent_task_worker_finished');
+    assert.equal(lines[1].event, 'agent_task_event_deduped');
+    assert.equal(lines[1].suppressedEvent, 'agent_task_worker_finished');
+    assert.equal(lines[1].taskId, 'task-D');
+    assert.equal(lines[1].jobId, 'job-D');
+    assert.equal(lines[1].suppressedCount, 3);
+    assert.ok(lines[1].firstAt, 'firstAt timestamp present');
+  });
+
+  it('does NOT emit a summary when no duplicates were suppressed', () => {
+    startCapture();
+    audit({ event: 'agent_task_worker_finished', taskId: 'task-E' });
+    _forceFlushDedupeForTests('agent_task_worker_finished:task-E');
+    const lines = stopCapture().trim().split('\n').filter(Boolean);
+    assert.equal(lines.length, 1, 'only the original line, no dedup summary');
+  });
+
+  it('jobId-aware key: same taskId with different jobIds (retries) are NOT collapsed', () => {
+    startCapture();
+    audit({ event: 'agent_task_worker_started', taskId: 'task-F', jobId: 'job-1' });
+    audit({ event: 'agent_task_worker_started', taskId: 'task-F', jobId: 'job-2' });
+    audit({ event: 'agent_task_worker_started', taskId: 'task-F', jobId: 'job-1' });
+    const lines = stopCapture().trim().split('\n').filter(Boolean);
+    assert.equal(lines.length, 2, 'two distinct jobIds → two emits, third (dup of job-1) suppressed');
+  });
+
+  it('also dedupes agent_task_worker_failed (runner-side failure event)', () => {
+    startCapture();
+    audit({ event: 'agent_task_worker_failed', taskId: 'task-G', error: 'boom' });
+    audit({ event: 'agent_task_worker_failed', taskId: 'task-G', error: 'boom' });
+    const lines = stopCapture().trim().split('\n').filter(Boolean);
+    assert.equal(lines.length, 1);
+  });
+
+  it('all five lifecycle events are deduped (started, finished, queued, failed, worker_failed)', () => {
+    for (const event of [
+      'agent_task_queued',
+      'agent_task_worker_started',
+      'agent_task_worker_finished',
+      'agent_task_failed',
+      'agent_task_worker_failed',
+    ]) {
+      _resetDedupeStateForTests();
+      startCapture();
+      audit({ event, taskId: `t-${event}` });
+      audit({ event, taskId: `t-${event}` });
+      const lines = stopCapture().trim().split('\n').filter(Boolean);
+      assert.equal(lines.length, 1, `${event} should dedupe`);
+    }
   });
 });
