@@ -81,6 +81,39 @@ describe('StructuredLogger', () => {
     assert.ok(lines[0].error.stack);
   });
 
+  it('redacts sensitive values before serializing agent log data', () => {
+    const lines = [];
+    const log = new StructuredLogger('test', { level: 'info', transport: line => lines.push(JSON.parse(line)) });
+    log.info('provider call', {
+      provider: {
+        request: {
+          headers: { authorization: 'Bearer leaked-token' },
+          credentials: { apiKey: 'deep-api-key', clientSecret: 'deep-client-secret' },
+        },
+      },
+      safe: 'visible',
+    });
+    assert.strictEqual(lines[0].data.provider.request.headers.authorization, '[REDACTED]');
+    assert.strictEqual(lines[0].data.provider.request.credentials.apiKey, '[REDACTED]');
+    assert.strictEqual(lines[0].data.provider.request.credentials.clientSecret, '[REDACTED]');
+    assert.strictEqual(lines[0].data.safe, 'visible');
+  });
+
+  it('redacts sensitive values before pretty-printing agent log data', () => {
+    const writes = [];
+    const originalWrite = process.stdout.write;
+    process.stdout.write = (chunk) => { writes.push(String(chunk)); return true; };
+    try {
+      const log = new StructuredLogger('test', { level: 'info', pretty: true });
+      log.info('pretty redaction', { nested: { token: 'pretty-token' } });
+    } finally {
+      process.stdout.write = originalWrite;
+    }
+    const output = writes.join('');
+    assert.match(output, /\[REDACTED\]/);
+    assert.doesNotMatch(output, /pretty-token/);
+  });
+
   it('fatal level is always emitted', () => {
     const lines = [];
     const log = new StructuredLogger('test', { level: 'fatal', transport: line => lines.push(JSON.parse(line)) });

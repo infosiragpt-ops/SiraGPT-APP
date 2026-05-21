@@ -5,6 +5,7 @@ const { randomUUID } = require('crypto');
 // requiring it unconditionally is safe and adds zero cost when tracing
 // is disabled.
 const { context: otelContext, trace: otelTrace } = require('@opentelemetry/api');
+const { REDACTION_CENSOR, redactPayloadDeep } = require('../utils/log-redaction');
 
 // Paths the logger MUST never emit in cleartext. fast-redact (pino's
 // underlying engine) supports literal paths and one-level `*` wildcards,
@@ -101,8 +102,13 @@ const logger = pino({
   level: process.env.LOG_LEVEL || 'info',
   redact: {
     paths: REDACT_PATHS,
-    censor: '[REDACTED]',
+    censor: REDACTION_CENSOR,
     remove: false,
+  },
+  formatters: {
+    log(object) {
+      return redactPayloadDeep(object);
+    },
   },
   mixin: traceCorrelationMixin,
 });
@@ -137,4 +143,11 @@ const httpLogger = pinoHttp({
   },
 });
 
-module.exports = { logger, httpLogger, REDACT_PATHS, traceCorrelationMixin };
+module.exports = {
+  logger,
+  httpLogger,
+  REDACT_PATHS,
+  REDACTION_CENSOR,
+  redactPayloadDeep,
+  traceCorrelationMixin,
+};

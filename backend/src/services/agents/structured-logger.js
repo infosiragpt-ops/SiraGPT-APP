@@ -29,6 +29,8 @@
  *   log.withTrace(ctx).warn('sub-agent timeout', { subTaskId: 'xyz' });
  */
 
+const { redactPayloadDeep } = require('../../utils/log-redaction');
+
 const LEVELS = Object.freeze({
   debug: 0,
   info: 1,
@@ -160,11 +162,13 @@ class StructuredLogger {
 
     if (this.traceId) entry.traceId = this.traceId;
 
+    const safeData = redactPayloadDeep(data);
+
     // Merge base data
     if (Object.keys(this.baseData).length > 0) {
-      entry.data = truncateData({ ...this.baseData, ...data });
-    } else if (Object.keys(data).length > 0) {
-      entry.data = truncateData(data);
+      entry.data = truncateData(redactPayloadDeep({ ...this.baseData, ...data }));
+    } else if (Object.keys(safeData).length > 0) {
+      entry.data = truncateData(safeData);
     }
 
     // Handle error objects specially
