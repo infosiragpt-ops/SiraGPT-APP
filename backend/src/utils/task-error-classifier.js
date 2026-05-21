@@ -5,10 +5,10 @@
  * Single source of truth — agent-task-runner re-exports this module.
  */
 
-function withJitter(baseMs, jitterRatio = 0.25) {
-  const base = Math.max(0, Number(baseMs) || 0);
-  const jitter = base * jitterRatio * (Math.random() * 2 - 1);
-  return Math.max(0, Math.floor(base + jitter));
+function withJitter(baseMs) {
+  if (!baseMs || baseMs <= 0) return baseMs;
+  const spread = baseMs * 0.2;
+  return Math.max(100, Math.round(baseMs + (Math.random() * 2 - 1) * spread));
 }
 
 function includesAny(value, needles) {

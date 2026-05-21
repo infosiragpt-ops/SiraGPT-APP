@@ -415,8 +415,10 @@ test('search: rejects unknown providers silently', async () => {
 });
 
 test('search: per-provider timeout collected as error', async () => {
+  const cache = require('../src/services/scientific-search-cache');
+  cache.clear();
   setFetchHandler(() => new Promise(() => { /* never resolves */ }));
-  const out = await ss.search('x', { providers: ['arxiv'], timeoutMs: 50 });
+  const out = await ss.search('timeout-probe-query', { providers: ['arxiv'], timeoutMs: 50 });
   assert.equal(out.papers.length, 0);
   assert.ok(out.errors[0].message.toLowerCase().includes('timed out'));
 });

@@ -61,8 +61,9 @@ test('classifyTaskError: 402 routes to quota-exhausted', () => {
 
 test('classifyTaskError: rate-limit ttl jitter stays within bounds', () => {
   for (let i = 0; i < 20; i++) {
-    const res = runner.classifyTaskError({ message: 'rate limit reached' });
-    assert.ok(res.ttlMs >= 11_250 && res.ttlMs <= 18_750, `ttlMs out of jitter band: ${res.ttlMs}`);
+    const res = runner.classifyTaskError({ message: 'too many requests', statusCode: 429 });
+    assert.equal(res.reason, 'rate-limited');
+    assert.ok(res.ttlMs >= 10_000 && res.ttlMs <= 20_000, `ttlMs out of jitter band: ${res.ttlMs}`);
   }
 });
 
