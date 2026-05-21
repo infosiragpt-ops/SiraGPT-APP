@@ -98,7 +98,9 @@ service init. It enforces per-environment required env vars
 misconfigurations:
 
 - `NODE_ENV=production` + `PRISMA_DATABASE_URL` pointing to localhost →
-  blocking error (refuses to boot).
+  warning by default because same-host Postgres/sidecars are valid production
+  topologies. Set `DATABASE_URL_LOCALHOST_POLICY=block` or
+  `REJECT_LOCAL_DATABASE_URL=true` to fail closed.
 - Short `SESSION_SECRET` / `JWT_SECRET` in production → warning.
 - `CORS_ORIGINS="*"` in production → warning.
 - `LOG_LEVEL=debug` in production → warning.

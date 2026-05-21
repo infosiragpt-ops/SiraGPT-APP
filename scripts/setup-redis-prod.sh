@@ -21,7 +21,7 @@ set -Eeuo pipefail
 
 APP_DIR="${APP_DIR:-/root/siraNew/siraGPT}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
-PM2_APP="${PM2_APP:-sira-api-backend}"
+PM2_APP="${PM2_APP:-siraGPT-api}"
 ENV_FILE="${ENV_FILE:-${APP_DIR}/.env}"
 API_HEALTH_URL="${API_HEALTH_URL:-https://api.siragpt.com/health}"
 

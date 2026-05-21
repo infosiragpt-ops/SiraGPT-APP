@@ -10,7 +10,7 @@ on:
       remove_redis_url:
         description: 'Strip REDIS_URL from .env before restart (rollback redis-session change)'
         type: boolean
-        default: true
+        default: false
 
 concurrency:
   group: emergency-fix
@@ -37,16 +37,45 @@ jobs:
             set +e
             cd /root/siraNew/siraGPT
 
+            PM2_APP="${PM2_APP:-siraGPT-api}"
+            if ! pm2 describe "$PM2_APP" >/dev/null 2>&1; then
+              PM2_APP="$(pm2 jlist 2>/dev/null | node -e '
+                const fs = require("fs");
+                let list = [];
+                try {
+                  const input = fs.readFileSync(0, "utf8").trim();
+                  list = input ? JSON.parse(input) : [];
+                } catch {
+                  list = [];
+                }
+                const text = (p) => [
+                  p && p.name,
+                  p && p.pm2_env && p.pm2_env.pm_cwd,
+                  p && p.pm2_env && p.pm2_env.cwd,
+                  p && p.pm2_env && p.pm2_env.pm_exec_path,
+                  p && p.pm2_env && p.pm2_env.script
+                ].filter(Boolean).join(" ");
+                const found = list.find((p) => /siragpt|sira|backend|api/i.test(text(p)));
+                if (found && found.name) process.stdout.write(found.name);
+              ')"
+            fi
+
             echo "=== PM2 list ==="
-            pm2 list | grep -E "name|sira-api"
+            pm2 list
 
             echo ""
-            echo "=== Last 60 lines of error log ==="
-            tail -60 /root/.pm2/logs/sira-api-backend-error.log
+            echo "=== PM2 describe: ${PM2_APP:-unknown} ==="
+            if [[ -n "${PM2_APP:-}" ]]; then
+              pm2 describe "$PM2_APP" || true
+            fi
 
             echo ""
-            echo "=== Last 40 lines of stdout ==="
-            tail -40 /root/.pm2/logs/sira-api-backend-out.log
+            echo "=== Last backend logs ==="
+            if [[ -n "${PM2_APP:-}" ]]; then
+              pm2 logs "$PM2_APP" --nostream --lines 120 || true
+            else
+              pm2 logs --nostream --lines 120 || true
+            fi
 
             echo ""
             echo "=== REDIS_URL currently in .env? ==="
@@ -62,7 +91,7 @@ jobs:
 
               echo ""
               echo "=== Restarting PM2 backend ==="
-              pm2 restart sira-api-backend --update-env
+              pm2 restart "$PM2_APP" --update-env
 
               echo ""
               echo "=== Wait 5s and poll /health ==="
@@ -79,6 +108,6 @@ jobs:
               done
               echo "✗ Backend STILL unhealthy after 40s"
               echo "--- newer error log ---"
-              tail -30 /root/.pm2/logs/sira-api-backend-error.log
+              pm2 logs "$PM2_APP" --nostream --lines 60 || true
               exit 1
             fi

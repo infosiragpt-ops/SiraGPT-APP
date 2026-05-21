@@ -102,6 +102,10 @@ jobs:
             df -h / /var/lib/docker 2>/dev/null || df -h / || true
             rm -f /root/siraNew/siraGPT/.git/index.lock
             cd /root/siraNew/siraGPT
+            TARGET_SHA="${{ github.event.workflow_run.head_sha || github.sha }}"
+            echo "[deploy-workflow] Bootstrapping deploy scripts from ${TARGET_SHA}"
+            git fetch origin "${TARGET_SHA}"
+            git checkout "${TARGET_SHA}" -- scripts/deploy-with-rollback.sh scripts/deploy-production.sh
             chmod +x scripts/deploy-with-rollback.sh
             ./scripts/deploy-with-rollback.sh
 

@@ -20,7 +20,7 @@
 #   2. Back up backend/.env with a timestamp suffix
 #   3. Update the three STRIPE_* fields atomically
 #   4. Update NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY in .env.local for the frontend
-#   5. Restart sira-api-backend under PM2 with --update-env
+#   5. Restart siraGPT-api under PM2 with --update-env
 #   6. Wait until /health returns 200
 #   7. Run initializeStripeProducts() to create Products/Prices in Stripe
 #      AND record the resulting STRIPE_PRICE_PRO / PRO_MAX / ENTERPRISE
@@ -31,7 +31,7 @@ set -Eeuo pipefail
 
 APP_DIR="${APP_DIR:-/root/siraNew/siraGPT}"
 BACKEND_DIR="$APP_DIR/backend"
-PM2_APP="${PM2_APP:-sira-api-backend}"
+PM2_APP="${PM2_APP:-siraGPT-api}"
 HEALTH_URL="${HEALTH_URL:-https://api.siragpt.com/health}"
 
 log() { printf '[stripe-live] %s\n' "$*"; }

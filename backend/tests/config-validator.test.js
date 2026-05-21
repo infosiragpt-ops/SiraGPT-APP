@@ -33,9 +33,21 @@ test('production with valid required vars passes (with warnings allowed)', () =>
   assert.strictEqual(r.ok, true);
 });
 
-test('production + localhost PRISMA_DATABASE_URL is a blocking error', () => {
+test('production + localhost PRISMA_DATABASE_URL warns by default', () => {
   const r = validateConfig({
     NODE_ENV: 'production',
+    PRISMA_DATABASE_URL: 'postgres://user:pw@localhost:5432/sira',
+    SESSION_SECRET: 'a'.repeat(64),
+    JWT_SECRET: 'b'.repeat(64),
+  });
+  assert.strictEqual(r.ok, true);
+  assert.ok(r.warnings.some((w) => w.key === 'PRISMA_DATABASE_URL'));
+});
+
+test('production + localhost PRISMA_DATABASE_URL can be blocked by policy', () => {
+  const r = validateConfig({
+    NODE_ENV: 'production',
+    DATABASE_URL_LOCALHOST_POLICY: 'block',
     PRISMA_DATABASE_URL: 'postgres://user:pw@localhost:5432/sira',
     SESSION_SECRET: 'a'.repeat(64),
     JWT_SECRET: 'b'.repeat(64),

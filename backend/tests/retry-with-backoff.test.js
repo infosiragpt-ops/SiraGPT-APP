@@ -13,6 +13,7 @@ const {
 const {
   withRetry,
   computeBackoff,
+  sleep,
 } = require('../src/utils/retry-with-backoff');
 
 // ── Sleep helper ──────────────────────────────────────────────────────────
@@ -325,6 +326,25 @@ describe('retry-with-backoff', () => {
       ac.abort(reason);
 
       await assert.rejects(promise, { message: 'cancelled-during-sleep' });
+    });
+
+    it('removes abort listeners once backoff sleep resolves', async () => {
+      const listeners = new Set();
+      const fakeSignal = {
+        aborted: false,
+        addEventListener(event, listener) {
+          assert.equal(event, 'abort');
+          listeners.add(listener);
+        },
+        removeEventListener(event, listener) {
+          assert.equal(event, 'abort');
+          listeners.delete(listener);
+        },
+      };
+
+      await sleep(0, fakeSignal);
+
+      assert.equal(listeners.size, 0);
     });
   });
 
