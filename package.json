@@ -156,7 +156,7 @@
     "next-intl": "^4.9.1",
     "next-themes": "latest",
     "node-fetch": "^3.3.2",
-    "nodemailer": "^7.0.7",
+    "nodemailer": "^8.0.7",
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^4.10.38",
     "plotly.js-basic-dist-min": "^3.5.0",

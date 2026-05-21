@@ -241,9 +241,9 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@protobufjs/base64` | 1.1.2 | BSD-3-Clause | [link](https://github.com/dcodeIO/protobuf.js) |
 | `@protobufjs/codegen` | 2.0.5 | BSD-3-Clause | [link](https://github.com/dcodeIO/protobuf.js) |
 | `@protobufjs/eventemitter` | 1.1.0 | BSD-3-Clause | [link](https://github.com/dcodeIO/protobuf.js) |
-| `@protobufjs/fetch` | 1.1.0 | BSD-3-Clause | [link](https://github.com/dcodeIO/protobuf.js) |
+| `@protobufjs/fetch` | 1.1.0, 1.1.1 | BSD-3-Clause | [link](https://github.com/dcodeIO/protobuf.js) |
 | `@protobufjs/float` | 1.0.2 | BSD-3-Clause | [link](https://github.com/dcodeIO/protobuf.js) |
-| `@protobufjs/inquire` | 1.1.1 | BSD-3-Clause | [link](https://github.com/dcodeIO/protobuf.js) |
+| `@protobufjs/inquire` | 1.1.1, 1.1.2 | BSD-3-Clause | [link](https://github.com/dcodeIO/protobuf.js) |
 | `@protobufjs/path` | 1.1.2 | BSD-3-Clause | [link](https://github.com/dcodeIO/protobuf.js) |
 | `@protobufjs/pool` | 1.1.0 | BSD-3-Clause | [link](https://github.com/dcodeIO/protobuf.js) |
 | `@protobufjs/utf8` | 1.1.1 | BSD-3-Clause | [link](https://github.com/dcodeIO/protobuf.js) |
@@ -283,7 +283,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `mammoth` | 1.12.0 | BSD-2-Clause | [link](https://github.com/mwilliamson/mammoth.js) |
 | `nth-check` | 2.1.1 | BSD-2-Clause | [link](https://github.com/fb55/nth-check) |
 | `option` | 0.2.4 | BSD-2-Clause | [link](https://github.com/mwilliamson/node-options) |
-| `protobufjs` | 7.5.6, 8.0.1 | BSD-3-Clause | [link](https://github.com/protobufjs/protobuf.js) |
+| `protobufjs` | 7.5.6, 7.6.0, 8.0.1 | BSD-3-Clause | [link](https://github.com/protobufjs/protobuf.js) |
 | `qs` | 6.14.2, 6.15.1 | BSD-3-Clause | [link](https://github.com/ljharb/qs) |
 | `robot3` | 0.4.1 | BSD-2-Clause | [link](https://github.com/matthewp/robot) |
 | `rw` | 1.3.3 | BSD-3-Clause | [link](https://github.com/mbostock/rw) |
@@ -1181,7 +1181,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `node-pandoc` | 0.3.0 | MIT | [link](https://github.com/eshinn/node-pandoc) |
 | `node-readable-to-web-readable-stream` | 0.4.2 | MIT | [link](https://github.com/Borewit/node-readable-to-web-readable-stream) |
 | `node-releases` | 2.0.38 | MIT | [link](https://github.com/chicoxyzzy/node-releases) |
-| `nodemailer` | 7.0.13, 8.0.7 | MIT-0 | [link](https://github.com/nodemailer/nodemailer) |
+| `nodemailer` | 8.0.7 | MIT-0 | [link](https://github.com/nodemailer/nodemailer) |
 | `nopt` | 1.0.10 | MIT | [link](https://github.com/isaacs/nopt) |
 | `normalize-path` | 3.0.0 | MIT | [link](https://github.com/jonschlinkert/normalize-path) |
 | `nypm` | 0.6.6 | MIT | [link](https://github.com/unjs/nypm) |
