@@ -263,17 +263,26 @@ function createIdempotencyStore(env = process.env, options = {}) {
 }
 
 /**
- * buildCacheKey — `idem:user:<id>:<key>` for authenticated, or
- * `idem:ip:<ip>:<key>` for anonymous. Tenant scoping (separate
- * cache namespace per user) is the load-bearing property: User A's
- * idempotency key MUST NOT replay a response captured by User B
- * even if they pick the same string.
+ * buildCacheKey — `idem:user:<id>:<method>:<route>:<key>` for
+ * authenticated, or `idem:ip:<ip>:<method>:<route>:<key>` for
+ * anonymous. Tenant scoping (separate cache namespace per user) is
+ * the first load-bearing property: User A's idempotency key MUST NOT
+ * replay a response captured by User B even if they pick the same
+ * string. Route scoping is the second: the same key reused on a
+ * different endpoint must not replay a successful response from the
+ * first endpoint.
  */
 function buildCacheKey(req, idempotencyKey) {
+  const method = String((req && req.method) || 'UNKNOWN').toUpperCase();
+  const rawRoute = String(
+    (req && (req.path || req.originalUrl || req.url))
+    || 'unknown-route',
+  );
+  const route = rawRoute.split('?')[0] || 'unknown-route';
   const userId = req && req.user && req.user.id;
-  if (userId) return `user:${userId}:${idempotencyKey}`;
+  if (userId) return `user:${userId}:${method}:${route}:${idempotencyKey}`;
   const ip = (req && req.ip) || 'unknown';
-  return `ip:${ip}:${idempotencyKey}`;
+  return `ip:${ip}:${method}:${route}:${idempotencyKey}`;
 }
 
 function isStreamingResponse(res) {

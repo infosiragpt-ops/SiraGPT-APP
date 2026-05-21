@@ -56,8 +56,8 @@ function fakeNext() {
   return next;
 }
 
-function fakeReq({ method = 'POST', headers = {}, user = null, ip = '203.0.113.5' } = {}) {
-  return { method, headers, user, ip };
+function fakeReq({ method = 'POST', headers = {}, user = null, ip = '203.0.113.5', path = '/api/tasks' } = {}) {
+  return { method, headers, user, ip, path };
 }
 
 describe("resolveIdempotencyConfig", () => {
@@ -88,18 +88,29 @@ describe("resolveIdempotencyConfig", () => {
 describe("buildCacheKey — tenant scoping", () => {
   test("authenticated user gets a user:<id>:<key> namespace", () => {
     const req = fakeReq({ user: { id: 'u-1' } });
-    assert.equal(buildCacheKey(req, 'foo'), 'user:u-1:foo');
+    assert.equal(buildCacheKey(req, 'foo'), 'user:u-1:POST:/api/tasks:foo');
   });
 
   test("anonymous traffic falls back to ip:<ip>:<key>", () => {
     const req = fakeReq({ ip: '203.0.113.9' });
-    assert.equal(buildCacheKey(req, 'foo'), 'ip:203.0.113.9:foo');
+    assert.equal(buildCacheKey(req, 'foo'), 'ip:203.0.113.9:POST:/api/tasks:foo');
   });
 
   test("two users with the same key get distinct cache keys", () => {
     const a = buildCacheKey(fakeReq({ user: { id: 'u-1' } }), 'common');
     const b = buildCacheKey(fakeReq({ user: { id: 'u-2' } }), 'common');
     assert.notEqual(a, b);
+  });
+
+  test("same user and key on different routes get distinct cache keys", () => {
+    const a = buildCacheKey(fakeReq({ user: { id: 'u-1' }, path: '/api/chats' }), 'common');
+    const b = buildCacheKey(fakeReq({ user: { id: 'u-1' }, path: '/api/files' }), 'common');
+    assert.notEqual(a, b);
+  });
+
+  test("query strings are not persisted into cache keys", () => {
+    const req = fakeReq({ user: { id: 'u-1' }, path: '/api/chats?token=secret' });
+    assert.equal(buildCacheKey(req, 'foo'), 'user:u-1:POST:/api/chats:foo');
   });
 });
 
@@ -221,6 +232,34 @@ describe("middleware — replay contract", () => {
     const next2 = fakeNext();
     await mw(req2, res2, next2);
     assert.equal(next2.calls(), 1, 'B must NOT see A\'s response');
+    assert.equal(res2._state().headers[REPLAY_HEADER], 'fresh');
+  });
+
+  test("different route with same user and key → no replay (endpoint isolation)", async () => {
+    const store = createInMemoryIdempotencyStore();
+    const mw = idempotencyMiddleware({ store, env: { IDEMPOTENCY_ENABLED: 'true' } });
+
+    const req1 = fakeReq({
+      method: 'POST',
+      user: { id: 'u-1' },
+      path: '/api/chats',
+      headers: { 'idempotency-key': 'same-key' },
+    });
+    const res1 = fakeRes();
+    await mw(req1, res1, fakeNext());
+    res1.status(200).json({ chatId: 'c-1' });
+
+    const req2 = fakeReq({
+      method: 'POST',
+      user: { id: 'u-1' },
+      path: '/api/files',
+      headers: { 'idempotency-key': 'same-key' },
+    });
+    const res2 = fakeRes();
+    const next2 = fakeNext();
+    await mw(req2, res2, next2);
+
+    assert.equal(next2.calls(), 1, 'a different route must run its own handler');
     assert.equal(res2._state().headers[REPLAY_HEADER], 'fresh');
   });
 
