@@ -31,6 +31,7 @@ const DEFAULT_CACHE_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_CACHE_MAX = 200;
 
 const builtinProviders = [
+  require('./providers/scielo'),
   require('./providers/duckduckgo'),
   require('./providers/wikipedia'),
   require('./providers/searxng'),
