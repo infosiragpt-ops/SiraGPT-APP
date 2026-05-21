@@ -136,6 +136,22 @@ describe('createResilientFetch — trace context injection', () => {
     assert.equal(seen['x-default'], 'A');
     assert.equal(seen['x-extra'], 'B');
   });
+
+  test('Headers instances and tuple header lists are preserved when merged', async () => {
+    let seen = null;
+    const defaultHeaders = typeof Headers === 'function'
+      ? new Headers({ 'X-Default': 'A' })
+      : { forEach: (fn) => fn('A', 'X-Default') };
+    const r = createResilientFetch({
+      fetch: async (_url, init) => { seen = init.headers; return fakeRes(200, {}); },
+      headers: defaultHeaders,
+    });
+
+    await r.send('http://x', { headers: [['X-Extra', 'B']] });
+
+    assert.equal(seen['x-default'], 'A');
+    assert.equal(seen['x-extra'], 'B');
+  });
 });
 
 describe('createResilientFetch — guards', () => {
