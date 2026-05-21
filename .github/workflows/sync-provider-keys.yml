@@ -60,7 +60,29 @@ jobs:
 
             echo ""
             echo "=== Restarting PM2 backend ==="
-            pm2 restart sira-api-backend --update-env
+            PM2_APP="${PM2_APP:-siraGPT-api}"
+            if ! pm2 describe "$PM2_APP" >/dev/null 2>&1; then
+              PM2_APP="$(pm2 jlist 2>/dev/null | node -e '
+                const fs = require("fs");
+                let list = [];
+                try {
+                  const input = fs.readFileSync(0, "utf8").trim();
+                  list = input ? JSON.parse(input) : [];
+                } catch {
+                  list = [];
+                }
+                const text = (p) => [
+                  p && p.name,
+                  p && p.pm2_env && p.pm2_env.pm_cwd,
+                  p && p.pm2_env && p.pm2_env.cwd,
+                  p && p.pm2_env && p.pm2_env.pm_exec_path,
+                  p && p.pm2_env && p.pm2_env.script
+                ].filter(Boolean).join(" ");
+                const found = list.find((p) => /siragpt|sira|backend|api/i.test(text(p)));
+                if (found && found.name) process.stdout.write(found.name);
+              ')"
+            fi
+            pm2 restart "$PM2_APP" --update-env
 
             echo ""
             echo "=== Wait for /health and report providers ==="
@@ -75,5 +97,5 @@ jobs:
               sleep 2
             done
             echo "✗ Backend unhealthy after 60s"
-            tail -30 /root/.pm2/logs/sira-api-backend-error.log
+            pm2 logs "$PM2_APP" --nostream --lines 60 || true
             exit 1

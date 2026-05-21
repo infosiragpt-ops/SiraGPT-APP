@@ -5,7 +5,7 @@ APP_DIR="${APP_DIR:-/root/siraNew/siraGPT}"
 BRANCH="${BRANCH:-main}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
 FRONTEND_SERVICE="${FRONTEND_SERVICE:-frontend}"
-PM2_APP="${PM2_APP:-sira-api-backend}"
+PM2_APP="${PM2_APP:-siraGPT-api}"
 DEPLOY_AUTO_STASH_LOCAL_CHANGES="${DEPLOY_AUTO_STASH_LOCAL_CHANGES:-1}"
 
 FRONTEND_URL="${FRONTEND_URL:-https://siragpt.com/auth/login}"
@@ -94,7 +94,7 @@ pm2_app_exists() {
 
 resolve_pm2_app() {
   local candidate detected
-  local candidates="${PM2_APP_CANDIDATES:-${PM2_APP},sira-api,sira-api-backend,siragpt-api,siragpt-backend,backend}"
+  local candidates="${PM2_APP_CANDIDATES:-${PM2_APP},siraGPT-api,sira-api,sira-api-backend,siragpt-api,siragpt-backend,backend}"
 
   IFS=',' read -r -a candidate_list <<< "$candidates"
   for candidate in "${candidate_list[@]}"; do

@@ -25,8 +25,9 @@ set -Eeuo pipefail
 APP_DIR="${APP_DIR:-/root/siraNew/siraGPT}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
 FRONTEND_SERVICE="${FRONTEND_SERVICE:-frontend}"
-PM2_APP="${PM2_APP:-sira-api-backend}"
+PM2_APP="${PM2_APP:-siraGPT-api}"
 API_HEALTH_URL="${API_HEALTH_URL:-https://api.siragpt.com/health}"
+API_LOCAL_HEALTH_URL="${API_LOCAL_HEALTH_URL:-http://127.0.0.1:${PORT:-5000}/health}"
 BACKUP_DIR="${BACKUP_DIR:-/root/siragpt-backups/postgres}"
 
 log() { printf '[deploy-with-rollback] %s\n' "$*"; }
@@ -58,7 +59,7 @@ pm2_app_exists() {
 
 resolve_pm2_app() {
   local candidate detected
-  local candidates="${PM2_APP_CANDIDATES:-${PM2_APP},sira-api,sira-api-backend,siragpt-api,siragpt-backend,backend}"
+  local candidates="${PM2_APP_CANDIDATES:-${PM2_APP},siraGPT-api,sira-api,sira-api-backend,siragpt-api,siragpt-backend,backend}"
 
   IFS=',' read -r -a candidate_list <<< "$candidates"
   for candidate in "${candidate_list[@]}"; do
@@ -115,6 +116,43 @@ restart_pm2_backend() {
 
   log "Restarting PM2 backend: $resolved_pm2_app"
   pm2 restart "$resolved_pm2_app" --update-env
+}
+
+print_failure_diagnostics() {
+  local resolved_pm2_app=""
+
+  resolved_pm2_app="$(resolve_pm2_app 2>/dev/null || true)"
+
+  err "Collecting deploy diagnostics"
+  echo "=== git state ==="
+  git --no-pager log -1 --oneline || true
+  git status --short || true
+
+  echo ""
+  echo "=== public health (${API_HEALTH_URL}) ==="
+  curl -k -i --max-time 10 "${API_HEALTH_URL}" || true
+
+  echo ""
+  echo "=== local backend health (${API_LOCAL_HEALTH_URL}) ==="
+  curl -i --max-time 10 "${API_LOCAL_HEALTH_URL}" || true
+
+  echo ""
+  echo "=== PM2 list ==="
+  pm2 list || true
+
+  if [[ -n "$resolved_pm2_app" ]]; then
+    echo ""
+    echo "=== PM2 describe: ${resolved_pm2_app} ==="
+    pm2 describe "$resolved_pm2_app" || true
+
+    echo ""
+    echo "=== PM2 logs: ${resolved_pm2_app} ==="
+    pm2 logs "$resolved_pm2_app" --nostream --lines 120 || true
+  fi
+
+  echo ""
+  echo "=== nginx recent errors ==="
+  journalctl -u nginx --since "10 minutes ago" --no-pager -n 120 2>/dev/null || true
 }
 
 cd "$APP_DIR"
@@ -183,4 +221,5 @@ done
 
 err "🔥 ROLLBACK HEALTH CHECK FAILED — manual intervention required"
 err "Working tree is at ${PREV_SHA} but ${API_HEALTH_URL} is not responding"
+print_failure_diagnostics
 exit 2
