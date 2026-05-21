@@ -2832,7 +2832,7 @@ router.post(
           let parsedFiles = [];
           if (m.files) {
             try {
-              parsedFiles = JSON.parse(m.files);
+              parsedFiles = typeof m.files === 'string' ? JSON.parse(m.files) : (m.files || []);
               if (!Array.isArray(parsedFiles)) {
                 parsedFiles = [];
               }
@@ -3412,7 +3412,7 @@ router.post(
             const imageMessages = historyMessages.filter(msg => {
               if (msg.role === 'ASSISTANT' && msg.files) {
                 try {
-                  const files = JSON.parse(msg.files);
+                  const files = typeof msg.files === 'string' ? JSON.parse(msg.files) : (msg.files || []);
                   return Array.isArray(files) && files.some(f => (f.type === 'chart' && f.imageUrl) || (f.type === 'image' && f.url));
                 } catch { return false; }
               }
@@ -3426,7 +3426,7 @@ router.post(
               const imageMarkdowns = [];
               imageMessages.forEach((msg, index) => {
                 try {
-                  const files = JSON.parse(msg.files);
+                  const files = typeof msg.files === 'string' ? JSON.parse(msg.files) : (msg.files || []);
                   const imageFile = files.find(f => (f.type === 'chart' && f.imageUrl) || (f.type === 'image' && f.url));
                   if (imageFile) {
                     const imageUrl = imageFile.imageUrl || imageFile.url;
@@ -4179,8 +4179,9 @@ router.post(
         });
 
         if (lastMessage && lastMessage.files) {
-          const files = JSON.parse(lastMessage.files);
-          const lastImage = files.find(f => f.type === 'image' && f.fileId);
+          const parsed = typeof lastMessage.files === 'string' ? JSON.parse(lastMessage.files) : lastMessage.files;
+          const files = Array.isArray(parsed) ? parsed : [];
+          const lastImage = files.find(f => f && f.type === 'image' && f.fileId);
           if (lastImage) {
             fileId = lastImage.fileId;
             console.log(`Found last image in chat with fileId: ${fileId}`);
@@ -6283,7 +6284,7 @@ router.post(
 
         if (lastMessageWithFile && lastMessageWithFile.files) {
           try {
-            const files = JSON.parse(lastMessageWithFile.files);
+            const files = typeof lastMessageWithFile.files === 'string' ? JSON.parse(lastMessageWithFile.files) : (lastMessageWithFile.files || []);
             // Find the first file that is not an image, or take any file if that's all there is
             const dataFile = files.find(f => f.type && !f.type.startsWith('image/')) || files[0];
             if (dataFile && dataFile.id) {

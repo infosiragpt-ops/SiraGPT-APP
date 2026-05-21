@@ -4,14 +4,14 @@ const { authenticateToken } = require('../middleware/auth');
 const router = express.Router();
 const prisma = new PrismaClient();
 
-function parseAndFindFile(jsonString, type) {
-    if (!jsonString) return null;
+function parseAndFindFile(value, type) {
+    if (!value) return null;
     try {
-        const filesArray = JSON.parse(jsonString);
-        // Find the first entry that matches the type and has a URL
-        const foundFile = filesArray.find((f) => f.type === type && typeof f.url === 'string' && f.url.length > 0);
-        //console.log(`[parseAndFindFile] JSON String: ${jsonString}, Type: ${type}, Found: ${JSON.stringify(foundFile)}`); // NEW LOG
-        return foundFile;
+        // Prisma Json column returns the parsed value directly; legacy rows
+        // may still store a JSON-encoded string. Accept both shapes.
+        const filesArray = typeof value === 'string' ? JSON.parse(value) : value;
+        if (!Array.isArray(filesArray)) return null;
+        return filesArray.find((f) => f && f.type === type && typeof f.url === 'string' && f.url.length > 0) || null;
     } catch (e) {
         console.error("Error parsing file JSON:", e);
         return null;
@@ -182,7 +182,7 @@ router.get('/media-library', authenticateToken, async (req, res) => {
         // Filter and process media items in JavaScript
         const allMediaItems = messagesWithFiles.flatMap(message => {
             try {
-                const files = JSON.parse(message.files);
+                const files = typeof message.files === 'string' ? JSON.parse(message.files) : (message.files || []);
                 if (Array.isArray(files)) {
                     return files.map(file => {
                         // Only consider items with a 'type' property that is 'image' or 'video'
