@@ -34,6 +34,7 @@ type AppshotsSession = {
   userAgent: string | null;
   ipHint: string | null;
   geoHint: string | null;
+  geoHintStatus?: 'ok' | 'private' | 'unresolved';
   device: string | null;
   isCurrent?: boolean;
 };
@@ -309,6 +310,14 @@ export default function AppshotsSettingsPage() {
               // failed (or the row predates the migration).
               if (s.geoHint) subtitleParts.push(s.geoHint);
               else if (s.ipHint) subtitleParts.push(s.ipHint);
+              // Task 29 — when geo lookup didn't produce a label, render
+              // a discreet sub-line explaining *why* (private network,
+              // upstream failure) so the user understands the contrast
+              // with other devices that do show a city.
+              const geoStatusNote =
+                s.geoHintStatus && s.geoHintStatus !== 'ok'
+                  ? describeGeoHintStatus(s.geoHintStatus)
+                  : null;
               return (
                 <li
                   key={s.id}
@@ -358,6 +367,14 @@ export default function AppshotsSettingsPage() {
                     {subtitleParts.length > 0 ? (
                       <div className="text-xs text-muted-foreground">
                         {subtitleParts.join(' · ')}
+                      </div>
+                    ) : null}
+                    {geoStatusNote ? (
+                      <div
+                        className="text-xs italic text-muted-foreground/80"
+                        data-testid="appshots-geo-status"
+                      >
+                        {geoStatusNote}
                       </div>
                     ) : null}
                     <div className="text-xs text-muted-foreground">
@@ -454,6 +471,21 @@ export default function AppshotsSettingsPage() {
       </section>
     </div>
   );
+}
+
+export function describeGeoHintStatus(status: 'ok' | 'private' | 'unresolved'): string | null {
+  // Task 29 — copy intentionally short and neutral. Anything longer
+  // would push the device card onto a third visual line and start
+  // competing for attention with the "Último uso" timestamp.
+  switch (status) {
+    case 'private':
+      return 'Ubicación no disponible (red privada)';
+    case 'unresolved':
+      return 'Ubicación no disponible';
+    case 'ok':
+    default:
+      return null;
+  }
 }
 
 function describeRevocationReason(code: string): string {

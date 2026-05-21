@@ -139,9 +139,44 @@ function sanitisePart(raw) {
   return cleaned ? cleaned.slice(0, 64) : null;
 }
 
+/**
+ * classifyGeoHint({ geoHint, ipHint }) → 'ok' | 'private' | 'unresolved'
+ *
+ * Task 29 — gives the settings UI a stable reason code to explain why a
+ * device is missing its "City, CC" label. We derive the status at API
+ * time from what we already store on the row, instead of adding another
+ * column / re-running the lookup:
+ *
+ *   - `ok`         — a non-empty geoHint is present. The upstream
+ *                    successfully mapped the pair-time IP.
+ *   - `private`    — no geoHint, and the stored ipHint /24 (or /64)
+ *                    belongs to a private / reserved / loopback range.
+ *                    The user is on a LAN / VPN and we deliberately
+ *                    never sent the address to the geo provider.
+ *   - `unresolved` — no geoHint and either no ipHint at all, or a
+ *                    public-looking ipHint whose lookup failed (timeout,
+ *                    upstream down, malformed payload, row predates the
+ *                    Task 19 migration).
+ *
+ * Heuristic on purpose: it loses the ability to distinguish "private IP"
+ * from "lookup returned an empty city for a public IP", but for the
+ * UI's sub-label that distinction doesn't matter — both render as "no
+ * podemos ubicar este dispositivo".
+ */
+function classifyGeoHint({ geoHint, ipHint } = {}) {
+  if (typeof geoHint === 'string' && geoHint.trim()) return 'ok';
+  if (typeof ipHint !== 'string' || !ipHint) return 'unresolved';
+  // Strip the trailing /NN that reduceIp appends so isPrivateOrReserved
+  // sees a bare address. Falls back to the raw string if no suffix.
+  const base = ipHint.replace(/\/\d+$/, '');
+  if (isPrivateOrReserved(base)) return 'private';
+  return 'unresolved';
+}
+
 module.exports = {
   resolveGeoHint,
   formatGeoHint,
   isPrivateOrReserved,
   isSecureLookupUrl,
+  classifyGeoHint,
 };

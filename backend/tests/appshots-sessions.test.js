@@ -99,10 +99,55 @@ describe('GET /api/appshots/sessions', () => {
     assert.equal(s.device, 'Chrome en macOS');
     // Task 19 — geo hint also surfaces.
     assert.equal(s.geoHint, 'Madrid, ES');
+    // Task 29 — when geoHint is present, the status is `ok`.
+    assert.equal(s.geoHintStatus, 'ok');
     assert.ok(typeof s.userAgent === 'string' && s.userAgent.includes('Chrome'));
     // Task 20 — isCurrent flag is always present and false when the
     // request's UA/IP don't match the stored session.
     assert.equal(s.isCurrent, false);
+  });
+
+  // Task 29 — when the geo lookup couldn't produce a label, the API
+  // returns a stable reason code so the settings UI can render a short
+  // "ubicación no disponible" sub-line instead of just hiding the row.
+  it('returns geoHintStatus=private for a LAN ipHint and =unresolved for a public one', async () => {
+    rows = [
+      {
+        id: 'sess-private',
+        userId: 'task8-user',
+        token: makeAppshotsToken('task8-user'),
+        createdAt: new Date('2026-05-03T10:00:00Z'),
+        expiresAt: new Date('2027-05-03T10:00:00Z'),
+        lastUsedAt: null,
+        userAgent: 'Mozilla/5.0 lan',
+        ipHint: '192.168.1.0/24',
+        geoHint: null,
+        label: null,
+      },
+      {
+        id: 'sess-failed',
+        userId: 'task8-user',
+        token: makeAppshotsToken('task8-user'),
+        createdAt: new Date('2026-05-04T10:00:00Z'),
+        expiresAt: new Date('2027-05-04T10:00:00Z'),
+        lastUsedAt: null,
+        userAgent: 'Mozilla/5.0 wan',
+        ipHint: '203.0.113.0/24',
+        geoHint: null,
+        label: null,
+      },
+    ];
+    const app = buildRouteTestApp('/api/appshots', appshotsRouter);
+    const res = await request(app)
+      .get('/api/appshots/sessions')
+      .set('Authorization', auth.authHeader);
+    restore();
+    assert.equal(res.status, 200);
+    const byId = new Map(res.body.sessions.map((s) => [s.id, s]));
+    assert.equal(byId.get('sess-private').geoHintStatus, 'private');
+    assert.equal(byId.get('sess-private').geoHint, null);
+    assert.equal(byId.get('sess-failed').geoHintStatus, 'unresolved');
+    assert.equal(byId.get('sess-failed').geoHint, null);
   });
 
   // Task 20 — when the caller's User-Agent + ipHint match a stored

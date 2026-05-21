@@ -35,7 +35,7 @@ const auditLog = require('../services/agents/audit-log');
 const aiService = require('../services/ai-service');
 const emailService = require('../services/email');
 const { extractIp, extractUa, reduceIp } = require('../utils/session-fingerprint');
-const { resolveGeoHint } = require('../utils/geo-lookup');
+const { resolveGeoHint, classifyGeoHint } = require('../utils/geo-lookup');
 const emailPrefs = require('../services/email-preferences');
 
 const router = express.Router();
@@ -235,6 +235,14 @@ router.get('/sessions', authenticateToken, async (req, res) => {
           // failed at pair time or the row predates the migration; the UI
           // then falls back to ipHint.
           geoHint: row.geoHint || null,
+          // Task 29 — stable reason code so the UI can render a discreet
+          // "ubicación no disponible" / "red privada" sub-text when the
+          // geo lookup didn't produce a label. Derived from what's
+          // already on the row (see classifyGeoHint for the heuristic).
+          geoHintStatus: classifyGeoHint({
+            geoHint: row.geoHint || null,
+            ipHint: row.ipHint || null,
+          }),
           // Pre-computed friendly device string ("Chrome en macOS") so the UI
           // doesn't need to ship a UA parser. Falls back to null when we
           // can't recognise the UA — clients then render the raw string.
