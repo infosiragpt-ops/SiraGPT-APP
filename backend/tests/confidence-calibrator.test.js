@@ -10,6 +10,51 @@ const {
   SHIP_THRESHOLD,
 } = require('../src/services/sira/confidence-calibrator');
 
+test('calibrateConfidence: missing intent.confidence drops the source (not 0)', () => {
+  // Regression: clamp(NaN) used to collapse to 0 here, dragging composite
+  // down ~0.10 with weight 0.12 and making `intent` the spurious
+  // dominantRisk on every turn the semantic router did not run.
+  const r = calibrateConfidence({
+    intent: { confidence: null, needs_clarification: false },
+    retrieval: { score: 0.85, has_evidence: true },
+    validators: { aggregate_score: 0.9, failed_count: 0 },
+    answer: { score: 0.9, failed_count: 0, warning_count: 0 },
+    hallucination: { overallRisk: 'low', totalFlags: 0 },
+    quality: { overall: 88 },
+  });
+  assert.equal(r.breakdown.intent, null);
+  assert.notEqual(r.dominantRisk?.source, 'intent');
+  assert.equal(r.recommendation, 'ship');
+});
+
+test('calibrateConfidence: repair band without hard signal → hold_for_review', () => {
+  // Composite lands in the repair band purely from soft signals
+  // (low retrieval/quality), nothing the pipeline can actually repair.
+  // Should downgrade to hold_for_review instead of an empty `repair`.
+  const r = calibrateConfidence({
+    intent: { confidence: 0.45 },
+    retrieval: { score: 0.25, has_evidence: true },
+    rerank: { score: 0.30 },
+    validators: { aggregate_score: 0.60, failed_count: 0 },
+    answer: { score: 0.60, failed_count: 0, warning_count: 0 },
+    hallucination: { overallRisk: 'low', totalFlags: 0 },
+    quality: { overall: 35 },
+  });
+  assert.ok(r.composite >= 0.42 && r.composite < 0.62, `composite=${r.composite}`);
+  assert.equal(r.recommendation, 'hold_for_review');
+});
+
+test('calibrateConfidence: repair band WITH hard answer signal → still repair', () => {
+  const r = calibrateConfidence({
+    retrieval: { score: 0.35, has_evidence: true },
+    validators: { aggregate_score: 0.55, failed_count: 0 },
+    answer: { score: 0.30, failed_count: 1, warning_count: 0 }, // hard override
+    hallucination: { overallRisk: 'medium', totalFlags: 2 },
+    quality: { overall: 45 },
+  });
+  assert.equal(r.recommendation, 'repair');
+});
+
 test('calibrateConfidence: all-positive signals → ship', () => {
   const r = calibrateConfidence({
     intent: { confidence: 0.92, needs_clarification: false },

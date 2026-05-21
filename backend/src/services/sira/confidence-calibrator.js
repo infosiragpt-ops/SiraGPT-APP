@@ -67,7 +67,26 @@ const REPAIR_THRESHOLD = 0.42;
 
 function normalizeIntent(s) {
   if (!s) return null;
-  const conf = clamp(num(s.confidence));
+  // Skip the signal entirely when the upstream router did not report a
+  // numeric confidence. clamp(NaN) collapses to 0 (the `lo` bound),
+  // which would force a hard zero with weight 0.12 into the composite
+  // and make `intent` look like the dominant risk on every turn where
+  // the semantic router was not even invoked. All other normalisers
+  // already follow this "missing → null → rescale" convention.
+  // Guard explicitly against null/undefined before delegating to num().
+  // `Number(null)` is 0 (not NaN), so a bare Number.isFinite check would
+  // silently let a missing confidence become a hard zero downstream.
+  if (s.confidence == null) {
+    return s.needs_clarification ? 0.5 : null;
+  }
+  const raw = num(s.confidence);
+  if (!Number.isFinite(raw)) {
+    // `needs_clarification` without a numeric confidence is still
+    // meaningful — treat it as a low-but-known signal so the calibrator
+    // can react. Otherwise drop the source entirely.
+    return s.needs_clarification ? 0.5 : null;
+  }
+  const conf = clamp(raw);
   if (s.needs_clarification) return Math.min(conf, 0.5);
   return conf;
 }
@@ -228,7 +247,20 @@ function decideRecommendation(composite, breakdown) {
   }
   if (composite >= SHIP_THRESHOLD) return 'ship';
   if (composite >= REVIEW_THRESHOLD) return 'hold_for_review';
-  if (composite >= REPAIR_THRESHOLD) return 'repair';
+  if (composite >= REPAIR_THRESHOLD) {
+    // Composite landed in repair band but no detector (hallucination,
+    // answer, validators) is actually complaining — that means we have
+    // no actionable repair hint to offer the caller, so downgrade to
+    // `hold_for_review`. A `repair` verdict without hints is just
+    // noise: the caller can neither auto-repair nor surface anything
+    // concrete to the user. We keep `repair` only when at least one
+    // of the hard-override sources flagged something above.
+    const noActionableSignal
+      = (breakdown.hallucination == null || breakdown.hallucination >= 0.55)
+      && (breakdown.answer == null || breakdown.answer >= 0.55)
+      && (breakdown.validators == null || breakdown.validators >= 0.55);
+    return noActionableSignal ? 'hold_for_review' : 'repair';
+  }
   return 'abort';
 }
 

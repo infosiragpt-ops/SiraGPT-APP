@@ -82,9 +82,31 @@ function logVerdict(verdict, input, options) {
   };
   // Structured one-line JSON log; downstream log aggregators can index it.
   const message = `[brain] ${verdict.decision} · ${verdict.blocking_flags}b/${verdict.warning_flags}w · ${verdict.latency_ms}ms`;
+
+  // Decide log level. In shadow mode (no enforcement) the response is
+  // ALREADY delivered to the user — these are advisory verdicts, not
+  // production failures. Only escalate to `warn` when:
+  //   • we're enforcing (the verdict actually gated delivery), OR
+  //   • there's at least one blocking flag, OR
+  //   • the verdict is `abort` (the most severe band, regardless of mode).
+  // A `repair` verdict with `blocking_flags=0` in shadow mode is the
+  // pipeline saying "I would have asked for a repair pass" — that's
+  // informational, not a warning. Logging every one of them as `warn`
+  // flooded prod logs without giving callers anything actionable.
+  const enforce = options.enforce === true
+    || (options.enforce !== false && ENFORCE_FROM_ENV);
+  // Under enforcement, any non-ship verdict actually gated delivery —
+  // operators want to see those at `warn` so they surface in alerting.
+  // In shadow mode, only `abort` or a real blocking_flags count rises
+  // above informational.
+  const escalate
+    = verdict.decision === 'abort'
+    || (verdict.blocking_flags || 0) > 0
+    || (enforce && verdict.decision !== 'ship');
+
   if (SHADOW_LOG_LEVEL === 'debug') {
     logger.log(message, JSON.stringify(payload));
-  } else if (verdict.decision === 'abort' || verdict.decision === 'repair') {
+  } else if (escalate) {
     logger.warn(message, JSON.stringify(payload));
   } else {
     logger.log(message);

@@ -5,6 +5,52 @@ const assert = require('node:assert/strict');
 
 const hook = require('../src/services/sira/post-response-brain-hook');
 
+test('logVerdict: shadow-mode "repair" with no blocking flags logs at info, not warn', () => {
+  // Regression for noisy `[brain] repair · 0b/3w` prod logs.
+  const calls = { log: 0, warn: 0 };
+  const logger = {
+    log: () => { calls.log += 1; },
+    warn: () => { calls.warn += 1; },
+  };
+  hook._internal.logVerdict(
+    { decision: 'repair', blocking_flags: 0, warning_flags: 3, latency_ms: 8, reasons: ['confidence.repair@0.54:intent'], repair_hints: [] },
+    {},
+    { logger, enforce: false },
+  );
+  assert.equal(calls.warn, 0);
+  assert.equal(calls.log, 1);
+});
+
+test('logVerdict: enforce-mode escalates non-ship verdicts to warn', () => {
+  const calls = { log: 0, warn: 0 };
+  const logger = {
+    log: () => { calls.log += 1; },
+    warn: () => { calls.warn += 1; },
+  };
+  hook._internal.logVerdict(
+    { decision: 'hold_for_review', blocking_flags: 0, warning_flags: 1, latency_ms: 3, reasons: [], repair_hints: [] },
+    {},
+    { logger, enforce: true },
+  );
+  assert.equal(calls.warn, 1);
+  assert.equal(calls.log, 0);
+});
+
+test('logVerdict: abort always escalates to warn even in shadow mode', () => {
+  const calls = { log: 0, warn: 0 };
+  const logger = {
+    log: () => { calls.log += 1; },
+    warn: () => { calls.warn += 1; },
+  };
+  hook._internal.logVerdict(
+    { decision: 'abort', blocking_flags: 0, warning_flags: 1, latency_ms: 4, reasons: [], repair_hints: [] },
+    {},
+    { logger, enforce: false },
+  );
+  assert.equal(calls.warn, 1);
+  assert.equal(calls.log, 0);
+});
+
 test('runShadowModeBrainPipeline: returns null in default (shadow) mode', async () => {
   const out = await hook.runShadowModeBrainPipeline({
     answer: 'Plain test answer.',
