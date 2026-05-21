@@ -32,38 +32,6 @@ const nextConfig = {
   // Enable React strict mode in development to catch double-render bugs
   reactStrictMode: true,
 
-  // Stable build ID across deploys (AGGRESSIVE MODE).
-  // Previous version fell back to REPLIT_DEPLOYMENT_ID, which Replit
-  // mutates on every deploy - that defeated the purpose because the
-  // build hash changed on every push and invalidated every Server
-  // Action ID baked into open user tabs.
-  //
-  // Hard-pin to a constant unless NEXT_BUILD_ID is explicitly set. Combined
-  // with the pinned encryption key below, this keeps Server Action hashes
-  // valid while the source files are unchanged.
-  //
-  // Trade-off: asset URLs (/_next/static/<buildId>/...) are no longer
-  // cache-busted by the build ID across deploys. This is mitigated by content
-  // hashed chunk filenames, so browser cache changes when files change.
-  generateBuildId: async () => {
-    return process.env.NEXT_BUILD_ID || 'siragpt-stable'
-  },
-
-  // Mitigation for "Failed to find Server Action x*" across rolling deploys:
-  // the encryption key for Server Action payloads is normally regenerated per
-  // build, which invalidates every in-flight action from older client bundles.
-  // Pinning it via env keeps working after a redeploy.
-  // Docs: https://nextjs.org/docs/app/building-your-application/data-fetching/server-actions-and-mutations#deployments
-  experimental: {
-    // Loads instrumentation.ts at server startup so we can install the stale Server Action log filter.
-    // Required for Next.js < 15; safe no-op in 15+ where it's on by default.
-    instrumentationHook: true,
-    serverActions: {
-      ...(process.env.NEXT_SERVER_ACTIONS_ENCRYPTION_KEY
-        ? { encryptionKey: process.env.NEXT_SERVER_ACTIONS_ENCRYPTION_KEY }
-        : {}),
-    },
-  },
   // Production source maps for Sentry (uploaded separately, not served to users)
   productionBrowserSourceMaps: false,
 
