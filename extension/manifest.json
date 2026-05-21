@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "Sira Appshots",
+  "version": "0.1.0",
+  "description": "Captura cualquier ventana o pestaña y env\u00edala a Sira como contexto de chat.",
+  "permissions": [
+    "desktopCapture",
+    "storage",
+    "offscreen",
+    "tabs",
+    "notifications"
+  ],
+  "host_permissions": [
+    "https://siragpt.com/*",
+    "https://*.siragpt.com/*",
+    "https://*.replit.dev/*",
+    "https://*.replit.app/*",
+    "http://localhost/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Sira Appshots"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "commands": {
+    "capture-window": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+S",
+        "mac": "Command+Shift+S"
+      },
+      "description": "Capturar ventana y enviar a Sira"
+    }
+  }
+}

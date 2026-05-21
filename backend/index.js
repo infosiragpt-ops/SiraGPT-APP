@@ -280,6 +280,7 @@ const prisma = require('./src/config/database');
 const authRoutes = require('./src/routes/auth');
 const chatRoutes = require('./src/routes/chats');
 const fileRoutes = require('./src/routes/files');
+const appshotsRoutes = require('./src/routes/appshots');
 const aiRoutes = require('./src/routes/ai');
 const documentGenerateAiRoutes = require('./src/routes/generate-document');
 
@@ -640,6 +641,9 @@ app.use('/api/auth', requireCsrf);
 app.use('/api/users', requireCsrf);
 app.use('/api/chats', requireCsrf);
 app.use('/api/files', requireCsrf);
+// Pairing is cookie-auth, so it needs CSRF; capture is bearer-only and is
+// mounted without CSRF below. Path-level matching keeps the protection tight.
+app.use('/api/appshots/pair', requireCsrf);
 app.use('/api/projects', requireCsrf);
 app.use('/api/payments', requireCsrf);
 app.use('/api/bookmarks', requireCsrf);
@@ -913,6 +917,10 @@ app.use('/api/version', versionRouter);
 app.use('/api/auth', authRoutes);
 app.use('/api/chats', chatRoutes);
 app.use('/api/files', fileRoutes);
+// Appshots — Chrome extension capture endpoints. /pair uses cookie auth and
+// is protected by the global requireCsrf list (see ~/api/auth section above),
+// /capture uses bearer-only auth and is intentionally CSRF-exempt.
+app.use('/api/appshots', appshotsRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/admin/queues', adminQueuesRoutes);
