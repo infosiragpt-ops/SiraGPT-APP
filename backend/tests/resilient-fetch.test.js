@@ -152,6 +152,22 @@ describe('createResilientFetch — trace context injection', () => {
     assert.equal(seen['x-default'], 'A');
     assert.equal(seen['x-extra'], 'B');
   });
+
+  test('plain object headers are normalized case-insensitively before merging', async () => {
+    let seen = null;
+    const r = createResilientFetch({
+      fetch: async (_url, init) => { seen = init.headers; return fakeRes(200, {}); },
+      headers: { Authorization: 'Bearer default', 'X-Default': 'A' },
+    });
+
+    await r.send('http://x', { headers: { authorization: 'Bearer request', 'x-extra': 'B' } });
+
+    assert.deepEqual(seen, {
+      authorization: 'Bearer request',
+      'x-default': 'A',
+      'x-extra': 'B',
+    });
+  });
 });
 
 describe('createResilientFetch — guards', () => {

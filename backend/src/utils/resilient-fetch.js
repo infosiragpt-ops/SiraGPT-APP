@@ -141,8 +141,8 @@ function createResilientFetch(opts = {}) {
 
 function normalizeHeaderInit(headerInit) {
   if (!headerInit || typeof headerInit !== 'object') return null;
+  const out = {};
   if (Array.isArray(headerInit)) {
-    const out = {};
     for (const pair of headerInit) {
       if (!Array.isArray(pair) || pair.length < 2) continue;
       out[String(pair[0]).toLowerCase()] = String(pair[1]);
@@ -150,13 +150,15 @@ function normalizeHeaderInit(headerInit) {
     return out;
   }
   if (typeof headerInit.forEach === 'function') {
-    const out = {};
     headerInit.forEach((value, key) => {
       out[String(key).toLowerCase()] = String(value);
     });
     return out;
   }
-  return { ...headerInit };
+  for (const [key, value] of Object.entries(headerInit)) {
+    out[String(key).toLowerCase()] = String(value);
+  }
+  return out;
 }
 
 function mergeSignals(a, b) {
