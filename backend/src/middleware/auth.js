@@ -5,6 +5,44 @@ const { writeAuditLog } = require('../utils/audit-log');
 const { createQueryDedup } = require('../utils/query-dedup');
 const { createWriteBehindCache } = require('../services/write-behind-cache');
 const apiKeysService = require('../services/api-keys-service');
+// Lazy require to keep the auth module's import graph cheap for tests that
+// stub the email service. Resolved on first auto-revoke event.
+let _emailService = null;
+function getEmailService() {
+  if (_emailService) return _emailService;
+  try {
+    // eslint-disable-next-line global-require
+    _emailService = require('../services/email');
+  } catch (_err) {
+    _emailService = false;
+  }
+  return _emailService;
+}
+
+/**
+ * Fire-and-forget security email when the backend auto-revokes an Appshots
+ * session (fingerprint mismatch, token expiration detected at decode time,
+ * etc.). The user-initiated /api/appshots/sessions/:id DELETE path keeps
+ * sending the existing "you revoked a device" email — this one covers the
+ * branches the user didn't trigger.
+ */
+function notifyAppshotsAutoRevoked(user, reason) {
+  if (!user || !user.email) return;
+  try {
+    const svc = getEmailService();
+    if (!svc || typeof svc.sendAppshotsDeviceAutoRevoked !== 'function') return;
+    void Promise.resolve(svc.sendAppshotsDeviceAutoRevoked(user, { reason, when: new Date() }))
+      .catch((err) => {
+        console.warn('[appshots] auto-revoke email failed:', err?.message || err);
+      });
+  } catch (err) {
+    console.warn('[appshots] auto-revoke email dispatch error:', err?.message || err);
+  }
+}
+
+function isAppshotsScope(decoded) {
+  return !!(decoded && typeof decoded === 'object' && decoded.scope === 'appshots:capture');
+}
 // Ratchet 45 — lazy-loaded so the auth module stays cheap to import in
 // environments (tests) that don't exercise the API-key path.
 let _enforceApiKeyRateLimitMw = null;
@@ -190,6 +228,11 @@ const authenticateToken = async (req, res, next) => {
         userId: session.userId,
         metadata: { expiresAt: session.expiresAt },
       });
+      // Appshots sessions also trigger a security email so the owner
+      // notices an automatic revocation they didn't request.
+      if (isAppshotsScope(decoded)) {
+        notifyAppshotsAutoRevoked(session.user, 'token_expired');
+      }
       return res.status(401).json({ error: 'Invalid or expired token' });
     }
 
@@ -212,6 +255,12 @@ const authenticateToken = async (req, res, next) => {
           userId: session.userId,
           metadata: { revoked: true },
         });
+        // Appshots sessions: notify the owner. A fingerprint mismatch on a
+        // long-lived capture token is the canonical "someone copied my token"
+        // signal, so the email is more important here than the audit log.
+        if (isAppshotsScope(decoded)) {
+          notifyAppshotsAutoRevoked(session.user, 'fingerprint_mismatch');
+        }
         return res.status(401).json({
           error: 'Session revoked — re-authentication required',
           reason: 'fingerprint_mismatch',
@@ -246,6 +295,21 @@ const authenticateToken = async (req, res, next) => {
         resource: 'session',
         metadata: { reason: 'jwt_expired' },
       });
+      // jwt.verify threw, so `decoded` is not in scope here. The signature
+      // was checked before the exp comparison (jsonwebtoken's verify order),
+      // so it is safe to read the payload via jwt.decode for the sole
+      // purpose of routing the auto-revoke email to the right user.
+      try {
+        const authHeader = req.headers && req.headers['authorization'];
+        const rawToken = (authHeader && authHeader.split(' ')[1]) || req.cookies?.token;
+        const payload = rawToken ? jwt.decode(rawToken) : null;
+        if (isAppshotsScope(payload) && payload?.userId) {
+          void prisma.user
+            .findUnique({ where: { id: payload.userId }, select: { id: true, email: true, name: true } })
+            .then((user) => { if (user) notifyAppshotsAutoRevoked(user, 'token_expired'); })
+            .catch(() => {});
+        }
+      } catch (_) { /* never let telemetry break the auth response */ }
     }
     console.error('Auth middleware error:', error);
     return res.status(403).json({ error: 'Invalid token' });
