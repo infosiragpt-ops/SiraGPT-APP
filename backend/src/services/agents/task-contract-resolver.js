@@ -88,11 +88,11 @@ const FEW_SHOT_EXAMPLES = [
       ambiguity_level: "low",
       clarifying_questions: [],
       success_tests: [
-        { id: "extension_match", type: "deterministic", description: "El archivo entregado termina en .svg.", check: "extension_match", parameters: { value: "svg" } },
-        { id: "mime_match", type: "deterministic", description: "MIME type real del archivo es image/svg+xml.", check: "mime_magic_match", parameters: { value: "image/svg+xml" } },
-        { id: "svg_parseable", type: "deterministic", description: "Contiene <svg> y parsea como XML válido.", check: "parses_as_svg" },
-        { id: "forbidden_docx", type: "deterministic", description: "No se entrega un Word en lugar del SVG.", check: "forbidden_format_absent", parameters: { extensions: ["docx", "pdf", "png"] } },
-        { id: "renders_house", type: "semantic", description: "Al renderizarlo, se ve una casa con techo rojo y dos ventanas." },
+        { id: "extension_match", type: "deterministic", description: "El archivo entregado termina en .svg.", check: "extension_match", parameters: "{\"value\":\"svg\"}" },
+        { id: "mime_match", type: "deterministic", description: "MIME type real del archivo es image/svg+xml.", check: "mime_magic_match", parameters: "{\"value\":\"image/svg+xml\"}" },
+        { id: "svg_parseable", type: "deterministic", description: "Contiene <svg> y parsea como XML válido.", check: "parses_as_svg", parameters: "" },
+        { id: "forbidden_docx", type: "deterministic", description: "No se entrega un Word en lugar del SVG.", check: "forbidden_format_absent", parameters: "{\"extensions\":[\"docx\",\"pdf\",\"png\"]}" },
+        { id: "renders_house", type: "semantic", description: "Al renderizarlo, se ve una casa con techo rojo y dos ventanas.", check: "semantic_match", parameters: "" },
       ],
     },
   },
@@ -118,12 +118,12 @@ const FEW_SHOT_EXAMPLES = [
       ambiguity_level: "low",
       clarifying_questions: [],
       success_tests: [
-        { id: "extension_match", type: "deterministic", description: "Archivo .xlsx.", check: "extension_match", parameters: { value: "xlsx" } },
-        { id: "mime_match", type: "deterministic", description: "MIME real openxmlformats spreadsheet.", check: "mime_magic_match", parameters: { value: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" } },
-        { id: "opens_as_xlsx", type: "deterministic", description: "Se abre correctamente como xlsx (ZIP con workbook.xml).", check: "opens_as_xlsx" },
-        { id: "min_rows_31", type: "deterministic", description: "Al menos 31 filas (30 datos + header).", check: "min_rows", parameters: { value: 31 } },
-        { id: "min_columns_6", type: "deterministic", description: "Al menos 6 columnas.", check: "min_columns", parameters: { value: 6 } },
-        { id: "forbidden_word_pdf", type: "deterministic", description: "No se entrega Word o PDF en lugar.", check: "forbidden_format_absent", parameters: { extensions: ["docx", "pdf", "csv"] } },
+        { id: "extension_match", type: "deterministic", description: "Archivo .xlsx.", check: "extension_match", parameters: "{\"value\":\"xlsx\"}" },
+        { id: "mime_match", type: "deterministic", description: "MIME real openxmlformats spreadsheet.", check: "mime_magic_match", parameters: "{\"value\":\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet\"}" },
+        { id: "opens_as_xlsx", type: "deterministic", description: "Se abre correctamente como xlsx (ZIP con workbook.xml).", check: "opens_as_xlsx", parameters: "" },
+        { id: "min_rows_31", type: "deterministic", description: "Al menos 31 filas (30 datos + header).", check: "min_rows", parameters: "{\"value\":31}" },
+        { id: "min_columns_6", type: "deterministic", description: "Al menos 6 columnas.", check: "min_columns", parameters: "{\"value\":6}" },
+        { id: "forbidden_word_pdf", type: "deterministic", description: "No se entrega Word o PDF en lugar.", check: "forbidden_format_absent", parameters: "{\"extensions\":[\"docx\",\"pdf\",\"csv\"]}" },
       ],
     },
   },
@@ -147,9 +147,9 @@ const FEW_SHOT_EXAMPLES = [
       ambiguity_level: "low",
       clarifying_questions: [],
       success_tests: [
-        { id: "inline_only", type: "deterministic", description: "No se adjunta ningún archivo.", check: "forbidden_format_absent", parameters: { extensions: ["docx", "xlsx", "pptx", "pdf"] } },
-        { id: "mentions_bayes", type: "deterministic", description: "El texto menciona 'Bayes'.", check: "contains_text", parameters: { value: "Bayes" } },
-        { id: "has_formula", type: "deterministic", description: "Incluye la fórmula P(A|B).", check: "contains_regex", parameters: { pattern: "P\\s*\\(\\s*A\\s*\\|\\s*B\\s*\\)" } },
+        { id: "inline_only", type: "deterministic", description: "No se adjunta ningún archivo.", check: "forbidden_format_absent", parameters: "{\"extensions\":[\"docx\",\"xlsx\",\"pptx\",\"pdf\"]}" },
+        { id: "mentions_bayes", type: "deterministic", description: "El texto menciona 'Bayes'.", check: "contains_text", parameters: "{\"value\":\"Bayes\"}" },
+        { id: "has_formula", type: "deterministic", description: "Incluye la fórmula P(A|B).", check: "contains_regex", parameters: "{\"pattern\":\"P\\\\s*\\\\(\\\\s*A\\\\s*\\\\|\\\\s*B\\\\s*\\\\)\"}" },
       ],
     },
   },
@@ -308,7 +308,7 @@ function toStrictOpenAISchema(root) {
     if (copy.type === "object" && copy.properties && !copy.additionalProperties) {
       copy.additionalProperties = false;
     }
-    if (copy.type === "object" && copy.properties && !Array.isArray(copy.required)) {
+    if (copy.type === "object" && copy.properties) {
       copy.required = Object.keys(copy.properties);
     }
     return copy;
@@ -335,7 +335,7 @@ function makeEmptyContract(goal) {
         type: "deterministic",
         description: "La respuesta inline no está vacía.",
         check: "contains_regex",
-        parameters: { pattern: "\\S" },
+        parameters: "{\"pattern\":\"\\\\S\"}",
       },
     ],
   };

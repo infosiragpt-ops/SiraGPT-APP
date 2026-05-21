@@ -33,6 +33,14 @@ test('shouldRecoverAttachmentResponse flags operational disclosure and file-read
   );
   assert.equal(
     shouldRecoverAttachmentResponse({
+      prompt: 'resume el archivo adjunto',
+      response: 'No puedo acceder al contenido del archivo adjunto desde aquí.',
+      processedFiles: files,
+    }),
+    true,
+  );
+  assert.equal(
+    shouldRecoverAttachmentResponse({
       prompt: 'hola',
       response: 'Hola, ¿en qué puedo ayudarte hoy?',
       processedFiles: [],

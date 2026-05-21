@@ -1,6 +1,6 @@
 'use strict';
 
-const { parserPlanFor } = require('../../../orchestration/document-pipeline');
+const { parserPlanFor } = require('../../orchestration/document-pipeline');
 
 let _marker = null;
 function getMarker() {

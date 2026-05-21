@@ -11,7 +11,7 @@ const {
 } = require('./agents/agent-task-runner');
 const { evaluateResponse } = require('./quality-guard');
 
-const FILE_READ_FAILURE_RE = /\b(?:no\s+pude\s+leer\w*|no\s+puedo\s+leer\w*|recib[ií]\s+tu\s+archivo.{0,80}no\s+pude\s+leer|no\s+(?:pude|puedo)\s+(?:procesar|abrir|analizar)\s+(?:tu\s+)?archivo|no\s+encontr[eé]\s+texto|binary file|content not available|file content could not be extracted|no\s+tengo\s+acceso\s+al\s+archivo|cannot\s+read\s+(?:the\s+)?file|unable\s+to\s+read)\b/i;
+const FILE_READ_FAILURE_RE = /\b(?:no\s+pude\s+leer\w*|no\s+puedo\s+leer\w*|recib[ií]\s+tu\s+archivo.{0,80}no\s+pude\s+leer|no\s+(?:pude|puedo)\s+(?:procesar|abrir|analizar|acceder\s+al\s+contenido\s+de(?:l)?|acceder\s+a|ver)\s+(?:tu\s+)?(?:archivo|adjunto|documento|file)|no\s+encontr[eé]\s+texto|binary file|content not available|file content could not be extracted|no\s+tengo\s+acceso\s+al\s+(?:archivo|adjunto|documento)|cannot\s+(?:read|access)\s+(?:the\s+)?(?:file|attachment)|unable\s+to\s+(?:read|access))\b/i;
 const OPERATIONAL_DISCLOSURE_RE = /nota operativa|runtime principal|respuesta segura/i;
 const GENERIC_STREAM_FAILURE_RE = /hubo un problema procesando tu solicitud|there was a problem processing your request/i;
 

@@ -83,7 +83,9 @@ function attachRedisListeners(connection, { label = 'redis', logger = console } 
     throttled(() => logger.warn(`[${label}] reconnecting in ${delay}ms`));
   });
   connection.on('end', () => {
-    logger.warn(`[${label}] connection ended (will not auto-reconnect from this state)`);
+    const err = new Error(`${label} connection ended`);
+    markRedisFailure(err);
+    logger.warn(`[${label}] connection ended; queued tasks will use local fallback until Redis reconnects`);
   });
   return connection;
 }

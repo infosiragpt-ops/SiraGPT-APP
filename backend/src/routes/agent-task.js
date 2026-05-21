@@ -1214,6 +1214,8 @@ async function handleQueuedTaskRequest(req, res) {
     const message = err && err.message ? String(err.message) : String(err);
     const isRedisFailure = /redis|connection|ECONN|max requests limit|enqueue|bullmq|maxretriesperrequest/i.test(message);
     if (isRedisFailure) {
+      const { markRedisFailure } = require('../services/agents/redis-resilience');
+      markRedisFailure(err);
       console.warn('[agent-task] enqueue failed, falling back to local runtime:', message);
       return handleLocalTaskRequest(req, res, {
         fallbackReason: 'redis_unavailable',
