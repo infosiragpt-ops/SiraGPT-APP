@@ -109,9 +109,30 @@ function _flush() {
   return Promise.resolve();
 }
 
+/**
+ * Project a documentPolicy down to the fields that are actually useful in
+ * the log feed. The full object carries a colour palette, threshold knobs,
+ * and other UI metadata that bloated every `agent_task_*` line to ~1.5 KB
+ * of noise without adding diagnostic value. Keep only the routing-relevant
+ * fields so operators can still grep by mode/template/complexity.
+ */
+function slimDocumentPolicy(policy) {
+  if (!policy || typeof policy !== 'object') return policy ?? null;
+  const {
+    mode = null,
+    format = null,
+    template = null,
+    complexity = null,
+    autoGenerate = null,
+    reason = null,
+  } = policy;
+  return { mode, format, template, complexity, autoGenerate, reason };
+}
+
 module.exports = {
   audit,
   auditAgentRun,
   redact,
+  slimDocumentPolicy,
   _flush, // for tests
 };

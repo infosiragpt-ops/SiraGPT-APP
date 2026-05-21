@@ -999,7 +999,7 @@ async function runAgentTaskJob(payload = {}, job = null) {
     queue: getQueueName(),
     jobId: job?.id ? String(job.id) : task.jobId,
     traceId: task.traceId,
-    documentPolicy,
+    documentPolicy: auditLog.slimDocumentPolicy(documentPolicy),
   });
 
   let assistantMessageId = existing?.assistantMessageId || null;

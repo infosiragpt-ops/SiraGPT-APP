@@ -1285,7 +1285,7 @@ async function handleQueuedTaskRequest(req, res) {
     queue: getQueueName(),
     jobId: String(job.id),
     traceId,
-    documentPolicy,
+    documentPolicy: auditLog.slimDocumentPolicy(documentPolicy),
   });
   metrics.counter('agent_task_invocations_total', { status: 'queued' });
 
