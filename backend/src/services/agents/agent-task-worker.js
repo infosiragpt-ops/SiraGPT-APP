@@ -1,6 +1,7 @@
 const { Worker } = require('bullmq');
 const {
   createRedisConnection,
+  getBullMQRuntimeOptions,
   getQueueName,
   requireRedisUrl,
 } = require('./agent-task-queue');
@@ -30,6 +31,7 @@ function startAgentTaskWorker() {
     getQueueName(),
     async (job) => runAgentTaskJob(job.data, job),
     {
+      ...getBullMQRuntimeOptions(),
       connection: workerConnection,
       concurrency,
     }
