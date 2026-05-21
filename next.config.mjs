@@ -32,17 +32,26 @@ const nextConfig = {
   // Enable React strict mode in development to catch double-render bugs
   reactStrictMode: true,
 
-  // Stable build ID across deploys: when the source hasn't changed,
-  // re-deploying shouldn't invalidate every Server Action ID baked
-  // into client bundles already loaded in user tabs. Using a fixed
-  // env-derived value (or a constant fallback) means Server Action
-  // hashes stay valid as long as their source files are unchanged,
-  // killing most "Failed to find Server Action 'x'" errors that hit
-  // users with a tab open across deploys.
+  // Stable build ID across deploys (AGGRESSIVE MODE).
+  //
+  // Previous version fell back to REPLIT_DEPLOYMENT_ID, which Replit
+  // mutates on every deploy — that defeated the purpose because the
+  // build hash changed on every push and invalidated every Server
+  // Action ID baked into open user tabs.
+  //
+  // New behaviour: hard-pin to a CONSTANT unless NEXT_BUILD_ID is
+  // explicitly set. Combined with the pinned encryptionKey below,
+  // this means Server Action hashes only change when the action's
+  // source code actually changes. Open tabs survive routine
+  // redeploys without firing "Failed to find Server Action".
+  //
+  // Trade-off: asset URLs (/_next/static/<buildId>/...) are no
+  // longer cache-busted by the build ID across deploys. We mitigate
+  // this with content-hashed chunk filenames (Next.js default), so
+  // CSS / JS chunks already include their own content hash —
+  // browsers re-fetch only the chunks that actually changed.
   generateBuildId: async () => {
-    return process.env.NEXT_BUILD_ID
-      || process.env.REPLIT_DEPLOYMENT_ID
-      || 'siragpt-stable'
+    return process.env.NEXT_BUILD_ID || 'siragpt-stable'
   },
 
   // Mitigation for "Failed to find Server Action 'x'" across

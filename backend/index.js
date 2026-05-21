@@ -50,6 +50,20 @@ validateStartupEnvironment(process.env, { failOnBlocking: true });
 let _redisSwallowLastLog = 0;
 let _redisSwallowSuppressed = 0;
 const REDIS_SWALLOW_WINDOW_MS = 60_000;
+
+// Silence PromiseRejectionHandledWarning. Node emits this when a
+// promise is rejected synchronously but its `.catch` handler is
+// attached on a later tick. In Sira this fires on transient Redis
+// rejections that the resilience layer catches asynchronously —
+// the rejection IS handled, just not in the same tick. The warning
+// is cosmetic noise; the actual error path is already covered by
+// the `unhandledRejection` handler above for genuine issues.
+process.on('warning', (warning) => {
+    if (warning && warning.name === 'PromiseRejectionHandledWarning') return;
+    // Re-emit other warnings through the default formatter so we
+    // don't accidentally hide deprecations or memory warnings.
+    console.warn(`[node-warning] ${warning.name}: ${warning.message}`);
+});
 process.on('unhandledRejection', (reason, promise) => {
     // Transient Redis errors (Upstash quota, connection blips, etc.)
     // surface here from BullMQ internals. Log as warning and keep
