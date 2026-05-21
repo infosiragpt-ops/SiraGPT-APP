@@ -21,7 +21,10 @@ function extractAnchors(text) {
 
 function buildEvidencePool(sources) {
   const pool = { numbers: new Set(), dates: new Set(), entities: new Set(), claims: [] };
+  if (!Array.isArray(sources)) return pool;
   for (const src of sources) {
+    if (src == null) continue; // tolerate null/undefined entries — they were
+    // crashing the pool builder before this guard.
     const text = typeof src === 'string' ? src : (src.extractedText || src.text || '');
     if (!text) continue;
     const anchors = extractAnchors(text);
