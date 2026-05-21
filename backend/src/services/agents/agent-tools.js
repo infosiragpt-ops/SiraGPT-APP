@@ -32,6 +32,7 @@ const rag = require('../rag-service');
 const bm25 = require('../bm25');
 const codeChunker = require('../code-chunker');
 const gearAgent = require('../gear-agent');
+const webSearch = require('./web-search');
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
@@ -1079,10 +1080,42 @@ const propose_patch = {
   },
 };
 
+// ─── Web search (free providers, no API key) ────────────────────────────────
+
+const web_search = {
+  name: 'web_search',
+  description: 'Search the open web through free, key-less providers (DuckDuckGo → Wikipedia → SearXNG). Use only when the answer needs information past the model cutoff or specific recent facts. Returns up to maxResults normalised hits.',
+  schema: {
+    query: 'string (required — the search query)',
+    maxResults: 'number (optional, default 5, max 15)',
+    locale: 'string (optional — BCP47-ish like "es-es" or "en"; nudges provider region/language)',
+  },
+  async handler(args) {
+    const query = typeof args?.query === 'string' ? args.query.trim() : '';
+    if (!query) return { error: 'missing "query"' };
+    const maxResults = Math.max(1, Math.min(Number(args?.maxResults) || 5, 15));
+    const locale = typeof args?.locale === 'string' ? args.locale : null;
+    const { results, provider, cached, attempts } = await webSearch.search(query, { maxResults, locale });
+    // Return structured JSON (not a concatenated string) so the model can
+    // cite individual URLs rather than treat the whole response as prose.
+    return {
+      provider,
+      cached,
+      count: results.length,
+      results,
+      // Slim attempt trace — useful when the model needs to explain why
+      // a query returned nothing ("DDG timed out, Wikipedia 0 hits").
+      attempts: Array.isArray(attempts)
+        ? attempts.map(({ id, ok, ms, count }) => ({ id, ok, ms, count }))
+        : [],
+    };
+  },
+};
+
 // ─── Registry ───────────────────────────────────────────────────────────────
 
 const ALL_TOOLS = [
-  read_file, list_files, search_docs, search_code, search_graph, get_symbol, static_checks, propose_patch,
+  read_file, list_files, search_docs, search_code, search_graph, get_symbol, static_checks, propose_patch, web_search,
 ];
 
 const TOOLS_BY_NAME = new Map(ALL_TOOLS.map(t => [t.name, t]));
@@ -1096,7 +1129,7 @@ module.exports = {
   TOOLS_BY_NAME,
   pick,
   // individual exports for tests
-  read_file, list_files, search_docs, search_code, search_graph, get_symbol, static_checks, propose_patch,
+  read_file, list_files, search_docs, search_code, search_graph, get_symbol, static_checks, propose_patch, web_search,
   STATIC_CHECKS,
   buildCommentCodeMask, // exported for tests
   stripStringLiterals,  // exported for tests
