@@ -328,6 +328,39 @@ describe('retry-with-backoff', () => {
       await assert.rejects(promise, { message: 'cancelled-during-sleep' });
     });
 
+    it('throws signal.reason when aborted during an in-flight attempt without a circuit breaker', async () => {
+      const ac = new AbortController();
+      const promise = withRetry(async () => new Promise(() => {}), {
+        maxRetries: 3,
+        baseDelayMs: 10,
+        classifyError: () => ({ retryable: true, reason: 'transient', ttlMs: 10 }),
+        signal: ac.signal,
+      });
+
+      await delay(10);
+      const reason = new Error('cancelled-during-attempt');
+      ac.abort(reason);
+
+      await assert.rejects(promise, { message: 'cancelled-during-attempt' });
+    });
+
+    it('passes the AbortSignal to fn() on each direct attempt', async () => {
+      const ac = new AbortController();
+      const seenSignals = [];
+      await withRetry(async ({ signal }) => {
+        seenSignals.push(signal);
+        if (seenSignals.length === 1) throw new Error('transient');
+        return 'ok';
+      }, {
+        maxRetries: 1,
+        baseDelayMs: 1,
+        classifyError: () => ({ retryable: true, reason: 'transient', ttlMs: 10 }),
+        signal: ac.signal,
+      });
+
+      assert.deepEqual(seenSignals, [ac.signal, ac.signal]);
+    });
+
     it('removes abort listeners once backoff sleep resolves', async () => {
       const listeners = new Set();
       const fakeSignal = {
