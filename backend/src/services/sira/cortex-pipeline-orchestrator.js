@@ -158,6 +158,20 @@ function runBrainPipeline(input = {}) {
 
   let decision = confidence.recommendation; // ship | hold_for_review | repair | abort
 
+  // When the recommendation already comes from the confidence
+  // calibrator (and not from a downstream elevation below), record
+  // WHY — without this the audit log surfaces `decision=repair` with
+  // an empty `reasons` array, which makes the brain audit useless
+  // for debugging. We expose the composite score and the dominant
+  // risk source the calibrator identified.
+  if (decision !== 'ship') {
+    const composite = typeof confidence.composite === 'number'
+      ? confidence.composite.toFixed(2)
+      : 'n/a';
+    const risk = confidence.dominantRisk?.source || 'unknown';
+    reasons.push(`confidence.${decision}@${composite}:${risk}`);
+  }
+
   // Plan blocking always escalates to repair
   if (planVerdict && planVerdict.severity === 'blocking' && decision === 'ship') {
     decision = 'repair';
@@ -168,6 +182,26 @@ function runBrainPipeline(input = {}) {
   if (coherence.verdict === 'incoherent' && decision === 'ship') {
     decision = 'repair';
     reasons.push('decision.elevated_due_to_coherence');
+  }
+
+  // Warning-only flags (no blocking elevation, no downstream signal)
+  // are still worth annotating so the audit log explains why the
+  // decision could not be 'ship' on a clean composite. Pull from the
+  // contributors we already counted above.
+  if (decision !== 'ship' && reasons.length === 0) {
+    if ((planVerdict?.summary?.warning_count || 0) > 0) {
+      reasons.push(`plan_critic.${planVerdict.summary.warning_count}_warning`);
+    }
+    if ((coherence.summary?.warning || 0) > 0) {
+      reasons.push(`coherence.${coherence.summary.warning}_warning`);
+    }
+    if (hallucination?.overallRisk === 'medium') {
+      reasons.push('hallucination.medium_risk');
+    }
+    if (answerReport) {
+      const warning = answerReport.checks.filter(c => c.status === 'warning').length;
+      if (warning > 0) reasons.push(`answer_validator.${warning}_warning`);
+    }
   }
 
   // Aggregate counts
