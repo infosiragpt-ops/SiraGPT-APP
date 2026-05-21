@@ -156,6 +156,9 @@ function requireAppshotsScope(req, res, next) {
       return res.status(403).json({ error: 'token scope mismatch', code: 'scope_required' });
     }
     req._appshotsTokenScope = decoded.scope;
+    // Opt this route in to the scope gate inside authenticateToken — without
+    // this flag the next middleware would reject the scoped token globally.
+    req._allowScopedToken = 'appshots:capture';
     return next();
   } catch (err) {
     return res.status(401).json({ error: 'Invalid or expired token', code: 'jwt_invalid' });

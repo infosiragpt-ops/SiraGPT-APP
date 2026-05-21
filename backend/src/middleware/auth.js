@@ -147,6 +147,23 @@ const authenticateToken = async (req, res, next) => {
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
+    // Scope gate (added for Appshots, generally applicable). A JWT minted
+    // with a `scope` claim is a SCOPED token — it must only be usable on the
+    // routes that explicitly opt-in by setting `req._allowScopedToken` BEFORE
+    // this middleware runs. Without this, a long-lived Appshots pairing token
+    // would be a fully-elevated session token on every other endpoint, since
+    // the Session table treats all tokens uniformly. General login tokens
+    // never carry a scope claim, so they're unaffected.
+    if (decoded && typeof decoded === 'object' && decoded.scope) {
+      if (req._allowScopedToken !== decoded.scope) {
+        return res.status(403).json({
+          error: 'Scoped token used on a route that does not accept it',
+          code: 'scope_not_allowed',
+          scope: decoded.scope,
+        });
+      }
+    }
+
     // Check if session exists and is valid. Coalesce concurrent
     // identical lookups within a 50ms window so the SPA's burst of
     // authenticated calls only generates one DB roundtrip.
