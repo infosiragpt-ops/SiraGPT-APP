@@ -14,11 +14,11 @@ test('resolveEnvName maps NODE_ENV variants', () => {
   assert.strictEqual(resolveEnvName({}), 'development');
 });
 
-test('production requires DATABASE_URL / SESSION_SECRET / JWT_SECRET', () => {
+test('production requires PRISMA_DATABASE_URL / SESSION_SECRET / JWT_SECRET', () => {
   const r = validateConfig({ NODE_ENV: 'production' });
   assert.strictEqual(r.ok, false);
   const keys = r.errors.map((e) => e.key);
-  assert.ok(keys.includes('DATABASE_URL'));
+  assert.ok(keys.includes('PRISMA_DATABASE_URL'));
   assert.ok(keys.includes('SESSION_SECRET'));
   assert.ok(keys.includes('JWT_SECRET'));
 });
@@ -26,59 +26,71 @@ test('production requires DATABASE_URL / SESSION_SECRET / JWT_SECRET', () => {
 test('production with valid required vars passes (with warnings allowed)', () => {
   const r = validateConfig({
     NODE_ENV: 'production',
-    DATABASE_URL: 'postgres://user:pw@db.internal:5432/sira',
+    PRISMA_DATABASE_URL: 'postgres://user:pw@db.internal:5432/sira',
     SESSION_SECRET: 'a'.repeat(64),
     JWT_SECRET: 'b'.repeat(64),
   });
   assert.strictEqual(r.ok, true);
 });
 
-test('production + localhost DATABASE_URL is a blocking error', () => {
+test('production + localhost PRISMA_DATABASE_URL is a blocking error', () => {
   const r = validateConfig({
     NODE_ENV: 'production',
-    DATABASE_URL: 'postgres://user:pw@localhost:5432/sira',
+    PRISMA_DATABASE_URL: 'postgres://user:pw@localhost:5432/sira',
     SESSION_SECRET: 'a'.repeat(64),
     JWT_SECRET: 'b'.repeat(64),
   });
   assert.strictEqual(r.ok, false);
-  assert.ok(r.errors.some((e) => e.key === 'DATABASE_URL'));
+  assert.ok(r.errors.some((e) => e.key === 'PRISMA_DATABASE_URL'));
 });
 
-test('production + localhost DATABASE_URL is allowed in CI smoke tests', () => {
+test('production + localhost PRISMA_DATABASE_URL is allowed in CI smoke tests', () => {
   const r = validateConfig({
     NODE_ENV: 'production',
     CI: 'true',
-    DATABASE_URL: 'postgres://user:pw@localhost:5432/sira',
+    PRISMA_DATABASE_URL: 'postgres://user:pw@localhost:5432/sira',
     SESSION_SECRET: 'a'.repeat(64),
     JWT_SECRET: 'b'.repeat(64),
   });
   assert.strictEqual(r.ok, true);
-  assert.ok(r.warnings.some((w) => w.key === 'DATABASE_URL'));
+  assert.ok(r.warnings.some((w) => w.key === 'PRISMA_DATABASE_URL'));
 });
 
-test('production with CORS_ORIGIN=* emits warning', () => {
+test('production with CORS_ORIGINS=* emits warning', () => {
   const r = validateConfig({
     NODE_ENV: 'production',
-    DATABASE_URL: 'postgres://user:pw@db.internal:5432/sira',
+    PRISMA_DATABASE_URL: 'postgres://user:pw@db.internal:5432/sira',
     SESSION_SECRET: 'a'.repeat(64),
     JWT_SECRET: 'b'.repeat(64),
-    CORS_ORIGIN: '*',
+    CORS_ORIGINS: '*',
   });
   assert.strictEqual(r.ok, true);
-  assert.ok(r.warnings.some((w) => w.key === 'CORS_ORIGIN'));
+  assert.ok(r.warnings.some((w) => w.key === 'CORS_ORIGINS'));
 });
 
-test('development requires only DATABASE_URL', () => {
-  const r = validateConfig({ NODE_ENV: 'development', DATABASE_URL: 'postgres://localhost/dev' });
+test('development requires only PRISMA_DATABASE_URL', () => {
+  const r = validateConfig({ NODE_ENV: 'development', PRISMA_DATABASE_URL: 'postgres://localhost/dev' });
   assert.strictEqual(r.ok, true);
 });
 
 test('short SESSION_SECRET in production warns', () => {
   const r = validateConfig({
     NODE_ENV: 'production',
-    DATABASE_URL: 'postgres://user:pw@db.internal:5432/sira',
+    PRISMA_DATABASE_URL: 'postgres://user:pw@db.internal:5432/sira',
     SESSION_SECRET: 'short',
     JWT_SECRET: 'b'.repeat(64),
   });
   assert.ok(r.warnings.some((w) => w.key === 'SESSION_SECRET'));
+});
+
+test('PRISMA_DATABASE_URL takes precedence over legacy DATABASE_URL diagnostics', () => {
+  const r = validateConfig({
+    NODE_ENV: 'production',
+    DATABASE_URL: 'postgres://user:pw@localhost:5432/sira',
+    PRISMA_DATABASE_URL: 'postgres://user:pw@db.internal:5432/sira',
+    SESSION_SECRET: 'a'.repeat(64),
+    JWT_SECRET: 'b'.repeat(64),
+  });
+  assert.strictEqual(r.ok, true);
+  assert.equal(r.errors.length, 0);
 });

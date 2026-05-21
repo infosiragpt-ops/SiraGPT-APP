@@ -122,7 +122,8 @@
 
 | Variable | Purpose |
 |----------|---------|
-| `DATABASE_URL` | PostgreSQL connection string (Prisma) |
+| `PRISMA_DATABASE_URL` | PostgreSQL connection string used by Prisma |
+| `DATABASE_URL` | Optional legacy/adapter PostgreSQL connection string |
 | `REDIS_URL` | Redis connection string (sessions, queues, rate limits, cache) |
 | `SESSION_SECRET` | Express session signing secret |
 

@@ -97,10 +97,10 @@ service init. It enforces per-environment required env vars
 (`dev` / `staging` / `prod`) and warns on cross-field
 misconfigurations:
 
-- `NODE_ENV=production` + `DATABASE_URL` pointing to localhost →
+- `NODE_ENV=production` + `PRISMA_DATABASE_URL` pointing to localhost →
   blocking error (refuses to boot).
 - Short `SESSION_SECRET` / `JWT_SECRET` in production → warning.
-- `CORS_ORIGIN="*"` in production → warning.
+- `CORS_ORIGINS="*"` in production → warning.
 - `LOG_LEVEL=debug` in production → warning.
 
 To extend: edit `REQUIRED_BY_ENV` / `RECOMMENDED_BY_ENV` in

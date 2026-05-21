@@ -8,7 +8,7 @@
 //
 //   - what env vars are REQUIRED per environment (dev/staging/prod)
 //   - common cross-field misconfigurations
-//     (e.g. NODE_ENV=production + DATABASE_URL points to localhost)
+//     (e.g. NODE_ENV=production + PRISMA_DATABASE_URL points to localhost)
 //   - missing-but-recommended observability / integration keys
 //
 // Designed to be wired BEFORE any service init in `backend/index.js`
@@ -30,18 +30,18 @@
 // live in RECOMMENDED.
 const REQUIRED_BY_ENV = {
   development: [
-    'DATABASE_URL',
+    'PRISMA_DATABASE_URL',
   ],
   test: [
     // tests typically inject their own fixtures
   ],
   staging: [
-    'DATABASE_URL',
+    'PRISMA_DATABASE_URL',
     'SESSION_SECRET',
     'JWT_SECRET',
   ],
   production: [
-    'DATABASE_URL',
+    'PRISMA_DATABASE_URL',
     'SESSION_SECRET',
     'JWT_SECRET',
     'NODE_ENV',
@@ -81,6 +81,10 @@ function looksLikeLocalhost(value) {
   return LOCALHOST_PATTERNS.some((re) => re.test(value));
 }
 
+function resolveDatabaseUrl(env) {
+  return env.PRISMA_DATABASE_URL || env.DATABASE_URL || '';
+}
+
 function isCiEnvironment(env) {
   return String(env.CI || '').toLowerCase() === 'true' || String(env.GITHUB_ACTIONS || '').toLowerCase() === 'true';
 }
@@ -115,20 +119,23 @@ function checkRecommended(env, envName, warnings) {
 
 function checkCrossFieldMisconfig(env, envName, warnings, errors) {
   // Prod DB pointing at localhost is almost certainly a mistake.
-  if (envName === 'production' && looksLikeLocalhost(env.DATABASE_URL) && !isCiEnvironment(env)) {
+  const databaseUrl = resolveDatabaseUrl(env);
+  const databaseKey = env.PRISMA_DATABASE_URL ? 'PRISMA_DATABASE_URL' : 'DATABASE_URL';
+
+  if (envName === 'production' && looksLikeLocalhost(databaseUrl) && !isCiEnvironment(env)) {
     errors.push({
-      key: 'DATABASE_URL',
+      key: databaseKey,
       envName,
       message:
-        'NODE_ENV=production but DATABASE_URL points to localhost. ' +
+        'NODE_ENV=production but database URL points to localhost. ' +
         'This is almost certainly wrong — refusing to boot.',
     });
-  } else if (envName === 'production' && looksLikeLocalhost(env.DATABASE_URL)) {
+  } else if (envName === 'production' && looksLikeLocalhost(databaseUrl)) {
     warnings.push({
-      key: 'DATABASE_URL',
+      key: databaseKey,
       envName,
       message:
-        'NODE_ENV=production with localhost DATABASE_URL is allowed only because CI/GitHub Actions is set.',
+        'NODE_ENV=production with localhost database URL is allowed only because CI/GitHub Actions is set.',
     });
   }
   if (envName === 'production' && looksLikeLocalhost(env.REDIS_URL)) {
@@ -160,11 +167,11 @@ function checkCrossFieldMisconfig(env, envName, warnings, errors) {
     }
   }
   // CORS wide-open in prod
-  if (envName === 'production' && String(env.CORS_ORIGIN || '').trim() === '*') {
+  if (envName === 'production' && String(env.CORS_ORIGINS || env.CORS_ORIGIN || '').trim() === '*') {
     warnings.push({
-      key: 'CORS_ORIGIN',
+      key: env.CORS_ORIGINS ? 'CORS_ORIGINS' : 'CORS_ORIGIN',
       envName,
-      message: 'CORS_ORIGIN="*" in production is dangerous — pin to your domains.',
+      message: 'CORS_ORIGINS="*" in production is dangerous — pin to your domains.',
     });
   }
 }
@@ -235,5 +242,5 @@ module.exports = {
   REQUIRED_BY_ENV,
   RECOMMENDED_BY_ENV,
   // exported for tests
-  _internal: { looksLikeLocalhost },
+  _internal: { looksLikeLocalhost, resolveDatabaseUrl },
 };
