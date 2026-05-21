@@ -608,14 +608,7 @@ jobs:
             backend/package-lock.json
 
       - name: Audit root dependencies
-        run: |
-          set +e
-          npm audit --omit=dev --audit-level=high
-          STATUS=$?
-          set -e
-          if [ "$STATUS" -ne 0 ]; then
-            echo "::warning::Root production audit found high-or-greater advisories. Required CI remains green while this existing dependency debt is tracked separately."
-          fi
+        run: npm run audit:production
 
       - name: Audit backend dependencies
         run: |
