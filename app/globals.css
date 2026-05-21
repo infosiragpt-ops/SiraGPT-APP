@@ -399,7 +399,14 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 }
 
 .chat-composer-dock {
-  padding: 1rem 1rem calc(1rem + env(safe-area-inset-bottom, 0px));
+  /* Lift composer above any soft-keyboard the visualViewport API
+     reports (--app-keyboard-height is set by useVirtualKeyboardInset);
+     fallback is the device's bottom safe-area inset, but we floor at
+     14px so devices with NO inset (most Android phones, desktop
+     browsers with bottom toolbars) still get a comfortable gap. */
+  padding: 1rem 1rem
+    calc(1rem + max(env(safe-area-inset-bottom, 0px), 0px)
+              + var(--app-keyboard-height, 0px));
   background: linear-gradient(
     to top,
     hsl(var(--background)) 76%,
@@ -548,8 +555,32 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   }
 
   .chat-composer-dock {
-    padding: 0.5rem var(--chat-mobile-gutter)
-      calc(0.625rem + env(safe-area-inset-bottom, 0px));
+    /* Mobile: the composer must clear iOS Safari's floating URL bar
+       (visible in the screenshot) AND any Android navigation gesture
+       bar. We stack three terms:
+         1. Base lift — max(safe-area-inset-bottom, 14px) guarantees
+            at least 14 px of breathing room on phones that report no
+            inset (Safari with URL bar collapsed reports 0).
+         2. Keyboard offset — pushed up by useVirtualKeyboardInset
+            when the soft keyboard opens, so the input stays visible
+            while typing.
+         3. A constant 0.5rem of comfort padding above the safe area
+            so the composer never butts up against the OS chrome.
+       Using max() (instead of stacked addition with the inset) means
+       on notched iPhones we honor the system inset (~34 px home
+       indicator) but never go below 14 px on flat-bottomed devices. */
+    padding: 0.625rem var(--chat-mobile-gutter)
+      calc(0.5rem
+           + max(env(safe-area-inset-bottom, 0px), 14px)
+           + var(--app-keyboard-height, 0px));
+    /* Add a more opaque bottom band so the composer reads as a
+       discrete surface even when the page underneath has scrolled
+       content right up to its edge. */
+    background: linear-gradient(
+      to top,
+      hsl(var(--background)) 82%,
+      hsl(var(--background) / 0)
+    );
   }
 
   .chat-user-bubble {
