@@ -35,6 +35,7 @@ const auditLog = require('../services/agents/audit-log');
 const aiService = require('../services/ai-service');
 const emailService = require('../services/email');
 const { extractIp, extractUa, reduceIp } = require('../utils/session-fingerprint');
+const { resolveGeoHint } = require('../utils/geo-lookup');
 
 const router = express.Router();
 
@@ -97,6 +98,17 @@ router.post('/pair', authenticateToken, async (req, res) => {
     const rawIp = extractIp(req);
     const ipHint = rawIp ? reduceIp(rawIp) || null : null;
 
+    // Task 19 — resolve the caller's IP to a short "City, CC" label so the
+    // settings UI can show "Chrome en macOS · Madrid, ES" instead of just
+    // the /24 prefix. Best-effort with a hard timeout in resolveGeoHint;
+    // any failure leaves geoHint null and the UI falls back to ipHint.
+    let geoHint = null;
+    try {
+      geoHint = await resolveGeoHint(rawIp);
+    } catch (err) {
+      console.warn('[appshots] geo lookup failed, degrading silently:', err?.message || err);
+    }
+
     await prisma.session.create({
       data: {
         userId: req.user.id,
@@ -104,6 +116,7 @@ router.post('/pair', authenticateToken, async (req, res) => {
         expiresAt: new Date(Date.now() + ttlMs),
         userAgent,
         ipHint,
+        geoHint,
       },
     });
 
@@ -113,6 +126,7 @@ router.post('/pair', authenticateToken, async (req, res) => {
       tokenPrefix: token.slice(0, 12),
       userAgent,
       ipHint,
+      geoHint,
     });
 
     // Security notification (Task 14): warn the user out-of-band that a new
@@ -166,6 +180,7 @@ router.get('/sessions', authenticateToken, async (req, res) => {
         lastUsedAt: true,
         userAgent: true,
         ipHint: true,
+        geoHint: true,
         label: true,
       },
       orderBy: { createdAt: 'desc' },
@@ -180,6 +195,10 @@ router.get('/sessions', authenticateToken, async (req, res) => {
         label: row.label || null,
         userAgent: row.userAgent || null,
         ipHint: row.ipHint || null,
+        // Task 19 — pre-resolved "City, CC" hint. Null when the lookup
+        // failed at pair time or the row predates the migration; the UI
+        // then falls back to ipHint.
+        geoHint: row.geoHint || null,
         // Pre-computed friendly device string ("Chrome en macOS") so the UI
         // doesn't need to ship a UA parser. Falls back to null when we
         // can't recognise the UA — clients then render the raw string.

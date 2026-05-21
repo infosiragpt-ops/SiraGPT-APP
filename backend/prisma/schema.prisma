@@ -262,6 +262,12 @@ model Session {
   userAgent   String?
   ipHint      String?
   label       String?
+  // Task 19 — human-readable geo hint resolved from the caller's IP at
+  // pair time (e.g. "Madrid, ES"). Best-effort: NULL when the lookup
+  // fails, when the IP is private/reserved, or for pre-migration rows.
+  // The UI shows it alongside (or in place of) ipHint to make the
+  // session list legible at a glance.
+  geoHint     String?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

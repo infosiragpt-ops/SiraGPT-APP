@@ -55,6 +55,7 @@ describe('GET /api/appshots/sessions', () => {
         userAgent:
           'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
         ipHint: '81.45.30.0/24',
+        geoHint: 'Madrid, ES',
         label: 'Portátil del trabajo',
       },
       {
@@ -94,6 +95,8 @@ describe('GET /api/appshots/sessions', () => {
     assert.equal(s.label, 'Portátil del trabajo');
     assert.equal(s.ipHint, '81.45.30.0/24');
     assert.equal(s.device, 'Chrome en macOS');
+    // Task 19 — geo hint also surfaces.
+    assert.equal(s.geoHint, 'Madrid, ES');
     assert.ok(typeof s.userAgent === 'string' && s.userAgent.includes('Chrome'));
   });
 });
@@ -121,6 +124,75 @@ describe('describeUserAgent (Task 15)', () => {
   it('returns null when nothing is recognisable', () => {
     assert.equal(describeUserAgent(''), null);
     assert.equal(describeUserAgent('curl/8.0.1'), null);
+  });
+});
+
+describe('POST /api/appshots/pair (Task 19 — geoHint)', () => {
+  let restore;
+  let auth;
+  let createdRows;
+  let originalFetch;
+  let originalGeoUrl;
+
+  beforeEach(() => {
+    auth = installAuthSessionMock({ id: 'task19-user', email: 'task19@example.com' });
+    createdRows = [];
+    const originalCreate = prisma.session.create;
+    prisma.session.create = async ({ data }) => {
+      const row = { id: `sess-${createdRows.length + 1}`, ...data };
+      createdRows.push(row);
+      return row;
+    };
+    originalFetch = globalThis.fetch;
+    originalGeoUrl = process.env.GEOIP_LOOKUP_URL;
+    // Point the geo lookup at a loopback HTTPS-equivalent (the secure-by-
+    // default guard allows http on localhost). We never actually hit the
+    // network — the test substitutes globalThis.fetch with a canned
+    // response per case below.
+    process.env.GEOIP_LOOKUP_URL = 'http://127.0.0.1:65535/{ip}';
+    restore = () => {
+      prisma.session.create = originalCreate;
+      globalThis.fetch = originalFetch;
+      if (originalGeoUrl === undefined) delete process.env.GEOIP_LOOKUP_URL;
+      else process.env.GEOIP_LOOKUP_URL = originalGeoUrl;
+      auth.restore();
+    };
+  });
+
+  it('persists the resolved geoHint on the new session row', async () => {
+    globalThis.fetch = async () => ({
+      ok: true,
+      json: async () => ({ status: 'success', city: 'Madrid', countryCode: 'ES' }),
+    });
+    const app = buildRouteTestApp('/api/appshots', appshotsRouter);
+    const res = await request(app)
+      .post('/api/appshots/pair')
+      .set('Authorization', auth.authHeader)
+      .set('X-Forwarded-For', '81.45.30.20')
+      .send({});
+    const lastRow = createdRows[createdRows.length - 1];
+    restore();
+    assert.equal(res.status, 201);
+    assert.ok(res.body.token);
+    assert.ok(lastRow, 'pair handler must have created a Session row');
+    assert.equal(lastRow.geoHint, 'Madrid, ES');
+    assert.equal(lastRow.ipHint, '81.45.30.0/24');
+  });
+
+  it('falls back to a null geoHint when the lookup fails (degrades silently)', async () => {
+    globalThis.fetch = async () => { throw new Error('upstream down'); };
+    const app = buildRouteTestApp('/api/appshots', appshotsRouter);
+    const res = await request(app)
+      .post('/api/appshots/pair')
+      .set('Authorization', auth.authHeader)
+      .set('X-Forwarded-For', '81.45.30.20')
+      .send({});
+    const lastRow = createdRows[createdRows.length - 1];
+    restore();
+    assert.equal(res.status, 201);
+    assert.ok(lastRow);
+    assert.equal(lastRow.geoHint, null);
+    assert.equal(lastRow.ipHint, '81.45.30.0/24');
   });
 });
 

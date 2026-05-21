@@ -26,6 +26,7 @@ type AppshotsSession = {
   label: string | null;
   userAgent: string | null;
   ipHint: string | null;
+  geoHint: string | null;
   device: string | null;
 };
 
@@ -261,7 +262,11 @@ export default function AppshotsSettingsPage() {
                 (s.userAgent ? s.userAgent.slice(0, 60) : 'Dispositivo sin identificar');
               const subtitleParts: string[] = [];
               if (s.label && s.device) subtitleParts.push(s.device);
-              if (s.ipHint) subtitleParts.push(s.ipHint);
+              // Task 19 — prefer the resolved "City, CC" hint over the raw
+              // /24 prefix; only fall back to the prefix when geo lookup
+              // failed (or the row predates the migration).
+              if (s.geoHint) subtitleParts.push(s.geoHint);
+              else if (s.ipHint) subtitleParts.push(s.ipHint);
               return (
                 <li
                   key={s.id}
