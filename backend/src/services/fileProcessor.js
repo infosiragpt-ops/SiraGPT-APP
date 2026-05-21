@@ -125,14 +125,14 @@ class FileProcessor {
       console.log(`Processing file: ${originalname}, type: ${mimetype}${effectiveMimeType !== mimetype ? ` -> ${effectiveMimeType}` : ''}, path: ${filePath}`);
 
       // ── Try external parser chain (Marker → Docling → MarkItDown) ──
-      const externalParserTypes = ['application/pdf', 'application/msword',
+      const EXTERNAL_PARSER_TYPES = ['application/pdf', 'application/msword',
         'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         'application/vnd.ms-powerpoint',
         'application/vnd.openxmlformats-officedocument.presentationml.presentation',
       ];
 
-      if (externalParserTypes.includes(effectiveMimeType)) {
+      if (EXTERNAL_PARSER_TYPES.includes(effectiveMimeType)) {
         try {
           const { parseFileWithBestParser } = require('./document-pipeline/parser-orchestrator');
           const result = await parseFileWithBestParser(filePath, { mimetype: effectiveMimeType });
