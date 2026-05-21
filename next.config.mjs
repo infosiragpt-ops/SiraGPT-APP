@@ -32,6 +32,34 @@ const nextConfig = {
   // Enable React strict mode in development to catch double-render bugs
   reactStrictMode: true,
 
+  // Stable build ID across deploys: when the source hasn't changed,
+  // re-deploying shouldn't invalidate every Server Action ID baked
+  // into client bundles already loaded in user tabs. Using a fixed
+  // env-derived value (or a constant fallback) means Server Action
+  // hashes stay valid as long as their source files are unchanged,
+  // killing most "Failed to find Server Action 'x'" errors that hit
+  // users with a tab open across deploys.
+  generateBuildId: async () => {
+    return process.env.NEXT_BUILD_ID
+      || process.env.REPLIT_DEPLOYMENT_ID
+      || 'siragpt-stable'
+  },
+
+  // Mitigation for "Failed to find Server Action 'x'" across
+  // rolling deploys: the encryption key for Server Action payloads
+  // is normally regenerated per build, which invalidates every
+  // in-flight action from older client bundles. Pinning it via env
+  // makes the payload format stable across deploys so a user's open
+  // tab keeps working after a redeploy.
+  // Docs: https://nextjs.org/docs/app/building-your-application/data-fetching/server-actions-and-mutations#deployments
+  experimental: {
+    serverActions: {
+      ...(process.env.NEXT_SERVER_ACTIONS_ENCRYPTION_KEY
+        ? { encryptionKey: process.env.NEXT_SERVER_ACTIONS_ENCRYPTION_KEY }
+        : {}),
+    },
+  },
+
   // Production source maps for Sentry (uploaded separately, not served to users)
   productionBrowserSourceMaps: false,
 

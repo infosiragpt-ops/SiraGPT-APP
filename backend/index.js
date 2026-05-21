@@ -1,5 +1,22 @@
 require('dotenv').config();
 
+// ── EventTarget listener cap ───────────────────────────────
+// AbortSignals are shared across many concurrent operations
+// (per-attempt LLM retries, tool calls inside long agent runs,
+// token-bulkhead waiters, model-fallback-cascade) and a single
+// long-running task can legitimately attach 10+ 'abort' listeners
+// to the same parent signal. Node's default cap of 10 fires a
+// `MaxListenersExceededWarning` even though every listener is
+// removed on cleanup. Raise the EventTarget default to 30 so the
+// noise stops; real leaks would grow unbounded and still warn.
+try {
+    const events = require('events');
+    if (typeof events.setMaxListeners === 'function') {
+        events.setMaxListeners(30);
+    }
+    events.EventEmitter.defaultMaxListeners = 30;
+} catch { /* node <15 — ignore */ }
+
 // ── Agent platform bootstrap ────────────────────────────────
 // Initialises the new platform services (provider-registry,
 // bulkhead pool, structured-logger, performance-tracer,
