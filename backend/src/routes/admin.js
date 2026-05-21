@@ -624,9 +624,52 @@ router.delete('/users/:id', async (req, res) => {
       return res.status(400).json({ error: 'Cannot delete your own account' });
     }
 
+    // Task 26 — snapshot the victim's sessions BEFORE the cascade so we
+    // can emit a distinguishable `session_admin_revoked` audit row per
+    // session. The Session table is wiped by Prisma's onDelete: Cascade
+    // when we drop the User row below, so any read has to happen first.
+    // Best-effort: a failure here must not block the user-delete.
+    let preDeleteSessions = [];
+    try {
+      preDeleteSessions = await prisma.session.findMany({
+        where: { userId: req.params.id },
+        select: { id: true, token: true },
+      });
+    } catch (_) {
+      preDeleteSessions = [];
+    }
+
     await prisma.user.delete({
       where: { id: req.params.id }
     });
+
+    // Emit one audit row per revoked session. actorId points at the
+    // VICTIM (not the admin) so /api/appshots/revocations — which
+    // filters by `actorId = req.user.id` — surfaces these rows on the
+    // owner's settings page. The admin's id lives in metadata.adminId
+    // so SIEM / GET /admin/audit-logs can still attribute the action.
+    // metadata.scope === 'appshots:capture' is the tag the appshots
+    // revocations endpoint requires to include the row.
+    try {
+      const { isAppshotsToken } = require('../utils/appshots-token');
+      for (const s of preDeleteSessions) {
+        const isAppshots = isAppshotsToken(s.token);
+        void writeAuditLog(prisma, {
+          req,
+          action: 'session_admin_revoked',
+          userId: req.params.id,
+          actorName: null,
+          resource: 'session',
+          resourceId: s.id,
+          metadata: {
+            adminId: req.user.id,
+            ...(isAppshots ? { scope: 'appshots:capture' } : {}),
+          },
+        });
+      }
+    } catch (auditErr) {
+      console.warn('[admin/users:id] session_admin_revoked audit failed:', auditErr?.message || auditErr);
+    }
 
     res.json({ message: 'User deleted successfully' });
   } catch (error) {
