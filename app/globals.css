@@ -443,9 +443,25 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 
 .chat-tools-menu {
   width: min(calc(100vw - 1.5rem), 18rem);
-  max-height: min(calc(var(--chat-viewport-height, 100dvh) - 5rem), 34rem);
+  /* Subtract composer + safe-area + breathing room so the menu's
+     bottom edge never collides with the chat composer or iOS Safari
+     URL bar; cap at 34rem so on tall viewports it doesn't dominate. */
+  max-height: min(
+    calc(var(--chat-viewport-height, 100dvh)
+         - var(--chat-composer-height, 112px)
+         - max(env(safe-area-inset-bottom, 0px), 14px)
+         - 3rem),
+    34rem
+  );
   overflow-y: auto;
   overflow-x: hidden;
+  /* iOS Safari requires both `-webkit-overflow-scrolling` and an
+     explicit `touch-action` to allow finger-scrolling inside a
+     Radix popover; without these the menu list is rendered scroll-
+     able but swallows the touch gesture and feels locked. */
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+  overscroll-behavior: contain;
 }
 
 .chat-model-menu-scroll {
