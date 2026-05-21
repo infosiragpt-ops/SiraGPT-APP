@@ -5017,22 +5017,17 @@ But first, you need to connect your Spotify account securely using the button be
       const pastedText = (text && text.trim()) ? text : htmlFallbackText;
       if (pastedText && shouldCompilePastedTextAsDocument(pastedText)) {
         e.preventDefault();
-        // Fast-path: when the pasted text is clearly large (≥1200 chars,
-        // ≥200 words, or ≥20 lines) skip the "Adjuntar / Insertar"
-        // chooser overlay entirely and attach it as a document directly.
-        // The chooser still appears for medium pastes where either
-        // action is reasonable; this only removes it for content that
-        // shouldn't live in the input bar at all.
+        // NO chooser popup. Direct paste, always:
+        //   · Clearly large content (≥1200 chars, ≥200 words, ≥20 lines)
+        //     → attach as document chip next to the input.
+        //   · Anything smaller → insert as plain text in the input bar.
         const analyzed = analyzePastedContent(pastedText);
         const isClearlyLarge =
           analyzed.charCount >= 1200 ||
           analyzed.wordCount >= 200 ||
           analyzed.lineCount >= 20;
-        if (isClearlyLarge) {
-          handlePasteCaptureActionRef.current("attach_document", analyzed);
-          return;
-        }
-        capturePastedText(pastedText);
+        const action: PasteCaptureAction = isClearlyLarge ? "attach_document" : "insert_text";
+        handlePasteCaptureActionRef.current(action, analyzed);
         return;
       }
       // HTML-only paste (rare — usually browsers attach text/plain too).
