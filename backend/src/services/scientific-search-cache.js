@@ -10,7 +10,8 @@ const cache = new Map();
 function cacheKey(query, opts = {}) {
   const providers = Array.isArray(opts.providers) ? opts.providers.slice().sort().join(',') : 'all';
   const limit = Number(opts.limit) || 10;
-  const raw = `${String(query || '').trim().toLowerCase()}|${providers}|${limit}`;
+  const timeoutMs = Number(opts.timeoutMs) || 'default';
+  const raw = `${String(query || '').trim().toLowerCase()}|${providers}|${limit}|${timeoutMs}`;
   return crypto.createHash('sha256').update(raw).digest('hex').slice(0, 24);
 }
 
