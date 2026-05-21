@@ -19,7 +19,7 @@ const assert = require("node:assert/strict");
 const { Writable } = require("node:stream");
 const pino = require("pino");
 
-const { REDACT_PATHS } = require("../src/middleware/logger");
+const { REDACT_PATHS, REDACTION_CENSOR, redactPayloadDeep } = require("../src/middleware/logger");
 
 // Build a pino instance with the same redact config but writing into a
 // buffer so we can assert the serialized JSON. We deliberately mirror
@@ -39,8 +39,13 @@ function buildBufferedLogger() {
       level: "info",
       redact: {
         paths: REDACT_PATHS,
-        censor: "[REDACTED]",
+        censor: REDACTION_CENSOR,
         remove: false,
+      },
+      formatters: {
+        log(object) {
+          return redactPayloadDeep(object);
+        },
       },
     },
     sink,
@@ -184,5 +189,22 @@ describe("logger redaction", () => {
     // shouldn't break, they should just see `[REDACTED]`.
     assert.ok("password" in out, "password key must remain in serialized output");
     assert.equal(out.password, "[REDACTED]");
+  });
+
+  test("censors sensitive keys at arbitrary nested depths", () => {
+    const { logger, lines } = buildBufferedLogger();
+    logger.info({
+      workflow: {
+        provider: {
+          credentials: {
+            apiKey: "deep-api-key",
+            nested: { clientSecret: "deep-client-secret" },
+          },
+        },
+      },
+    }, "deep");
+    const out = lastLine(lines);
+    assert.equal(out.workflow.provider.credentials.apiKey, "[REDACTED]");
+    assert.equal(out.workflow.provider.credentials.nested.clientSecret, "[REDACTED]");
   });
 });
