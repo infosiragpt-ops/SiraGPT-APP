@@ -67,7 +67,7 @@ outputType = "console"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cd backend && PORT=5050 node -r dotenv/config index.js dotenv_config_path=../.env.local"
+args = "cd backend && PORT=5050 NODE_OPTIONS='--max-old-space-size=2048' node -r dotenv/config index.js dotenv_config_path=../.env.local"
 
 [[workflows.workflow]]
 name = "Start application"
