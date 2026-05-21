@@ -89,7 +89,7 @@ function initAgentSystem() {
       timeoutMs: DEFAULTS.agentPoolTimeoutMs,
       active: DEFAULTS.agentPoolMax - (_agentPool.stats?.()?.availableSlots ?? 0),
     });
-    log.info({ maxConcurrent: DEFAULTS.agentPoolMax }, 'bulkhead initialised');
+    log.info('bulkhead initialised', { maxConcurrent: DEFAULTS.agentPoolMax });
 
     // 5. Sub-agent orchestrator — decomposes complex goals and runs
     //    sub-tasks in parallel with retry + timeout.
@@ -98,15 +98,15 @@ function initAgentSystem() {
       subTaskTimeoutMs: DEFAULTS.subTaskTimeoutMs,
       maxRetries: DEFAULTS.maxRetries,
     });
-    log.info({
+    log.info('sub-agent-orchestrator initialised', {
       maxSubAgents: DEFAULTS.maxSubAgents,
       subTaskTimeoutMs: DEFAULTS.subTaskTimeoutMs,
-    }, 'sub-agent-orchestrator initialised');
+    });
 
     _initialised = true;
     log.info('agent-system initialised successfully');
   } catch (err) {
-    log.error({ err: err.message }, 'agent-system initialisation failed');
+    log.error('agent-system initialisation failed', { err: err.message });
     // Don't crash the boot — let the server start so health probes
     // work. Degradation is reported via /health.
   }

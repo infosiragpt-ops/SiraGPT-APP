@@ -44,11 +44,13 @@ validateStartupEnvironment(process.env, { failOnBlocking: true });
 // Prevent the process from silently crashing on unhandled
 // rejections or uncaught exceptions. In production, log and
 // exit gracefully; in development, dump the stack.
+// Throttle for transient Redis rejection logging — Upstash quota
+// hits fire many rejections per second; we keep a single warn per
+// minute and a suppressed-count so the log stays useful.
+let _redisSwallowLastLog = 0;
+let _redisSwallowSuppressed = 0;
+const REDIS_SWALLOW_WINDOW_MS = 60_000;
 process.on('unhandledRejection', (reason, promise) => {
-    const reasonStr =
-        reason instanceof Error
-            ? `${reason.name}: ${reason.message}${reason.stack ? '\n' + reason.stack : ''}`
-            : String(reason);
     // Transient Redis errors (Upstash quota, connection blips, etc.)
     // surface here from BullMQ internals. Log as warning and keep
     // serving — the worker will retry once Redis recovers.
@@ -58,9 +60,21 @@ process.on('unhandledRejection', (reason, promise) => {
         isTransientRedis = isTransientRedisError(reason);
     } catch (_) { /* module not loaded yet — fall through to FATAL path */ }
     if (isTransientRedis) {
-        console.warn('[redis] swallowed transient rejection:', reasonStr);
+        _redisSwallowSuppressed += 1;
+        const now = Date.now();
+        if (now - _redisSwallowLastLog >= REDIS_SWALLOW_WINDOW_MS) {
+            _redisSwallowLastLog = now;
+            const extra = _redisSwallowSuppressed > 1 ? ` (+${_redisSwallowSuppressed - 1} suppressed in last 60s)` : '';
+            const msg = reason && reason.message ? reason.message : String(reason);
+            console.warn(`[redis] swallowed transient rejection${extra}:`, msg);
+            _redisSwallowSuppressed = 0;
+        }
         return;
     }
+    const reasonStr =
+        reason instanceof Error
+            ? `${reason.name}: ${reason.message}${reason.stack ? '\n' + reason.stack : ''}`
+            : String(reason);
     console.error('[FATAL] unhandledRejection:', reasonStr);
     // In production, log and continue (let PM2/Docker restart if
     // the process becomes unhealthy). In development, exit hard.

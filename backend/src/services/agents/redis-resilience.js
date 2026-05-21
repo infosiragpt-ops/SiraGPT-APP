@@ -102,9 +102,20 @@ let processGuardsInstalled = false;
 function installProcessGuards({ logger = console } = {}) {
   if (processGuardsInstalled) return;
   processGuardsInstalled = true;
+  // Throttle the swallow log: when Upstash hits its daily quota
+  // BullMQ retries fire many rejections per second; logging every
+  // one of them buries the rest of the boot output. One line per
+  // minute is enough to signal the circuit is open.
+  const throttled = createThrottledLogger();
+  let suppressedSinceLast = 0;
   process.on('unhandledRejection', (reason) => {
     if (isTransientRedisError(reason)) {
-      logger.warn('[agent-task-worker] swallowed transient Redis rejection:', reason?.message || reason);
+      suppressedSinceLast += 1;
+      throttled(() => {
+        const extra = suppressedSinceLast > 1 ? ` (+${suppressedSinceLast - 1} suppressed)` : '';
+        logger.warn(`[agent-task-worker] swallowed transient Redis rejection${extra}:`, reason?.message || reason);
+        suppressedSinceLast = 0;
+      });
       return;
     }
     logger.error('[agent-task-worker] unhandled rejection:', reason);
