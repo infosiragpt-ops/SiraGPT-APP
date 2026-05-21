@@ -125,3 +125,120 @@ test('redis mirror is fire-and-forget', async () => {
   assert.ok(redisCalls.some((c) => c[0] === 'hset'));
   await wbc.flushNow();
 });
+
+test('flushNow retains transient failures for retry instead of dropping writes', async () => {
+  const calls = [];
+  let fail = true;
+  const prisma = {
+    user: {
+      update: async ({ where, data }) => {
+        calls.push({ where, data });
+        if (fail) throw new Error('temporary database outage');
+        return { id: where.id, ...data };
+      },
+    },
+  };
+  const errors = [];
+  const wbc = createWriteBehindCache({ prisma, flushIntervalMs: 0, maxRetries: 3, onError: (...args) => errors.push(args) });
+
+  wbc.queueWrite('user', { id: 'retry-me' }, { apiUsage: { __increment: 2 } });
+  const first = await wbc.flushNow();
+
+  assert.equal(first.flushed, 0);
+  assert.equal(first.retried, 1);
+  assert.equal(wbc.size(), 1);
+  assert.deepEqual(wbc.getPending('user', { id: 'retry-me' }), { apiUsage: { __increment: 2 } });
+  assert.ok(errors.some(([stage]) => stage === 'flush_update'));
+
+  fail = false;
+  const second = await wbc.flushNow();
+  assert.equal(second.flushed, 1);
+  assert.equal(wbc.size(), 0);
+  assert.equal(calls.length, 2);
+});
+
+test('flushNow merges retry payloads with writes queued during an in-flight flush', async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const prisma = {
+    user: {
+      update: async () => {
+        await gate;
+        throw new Error('db still down');
+      },
+    },
+  };
+  const wbc = createWriteBehindCache({ prisma, flushIntervalMs: 0, maxRetries: 3 });
+
+  wbc.queueWrite('user', { id: 'coalesced' }, { apiUsage: { __increment: 2 }, lastActiveAt: 100 });
+  const flushing = wbc.flushNow();
+  wbc.queueWrite('user', { id: 'coalesced' }, { apiUsage: { __increment: 5 }, lastActiveAt: 200 });
+  release();
+  const result = await flushing;
+
+  assert.equal(result.retried, 1);
+  assert.deepEqual(wbc.getPending('user', { id: 'coalesced' }), {
+    apiUsage: { __increment: 7 },
+    lastActiveAt: 200,
+  });
+});
+
+test('flushNow drops poison writes after maxRetries and clears redis only then', async () => {
+  const redisCalls = [];
+  const prisma = {
+    user: {
+      update: async () => { throw new Error('permanent failure'); },
+    },
+  };
+  const redis = {
+    hset: async (...args) => { redisCalls.push(['hset', args]); },
+    hdel: async (...args) => { redisCalls.push(['hdel', args]); },
+    hgetall: async () => ({}),
+  };
+  const errors = [];
+  const wbc = createWriteBehindCache({ prisma, redis, flushIntervalMs: 0, maxRetries: 1, onError: (...args) => errors.push(args) });
+
+  wbc.queueWrite('user', { id: 'poison' }, { lastActiveAt: 1 });
+  await new Promise((r) => setTimeout(r, 5));
+  const first = await wbc.flushNow();
+  assert.equal(first.retried, 1);
+  assert.equal(redisCalls.filter(([op]) => op === 'hdel').length, 0);
+
+  const second = await wbc.flushNow();
+  assert.equal(second.dropped, 1);
+  assert.equal(wbc.size(), 0);
+  assert.equal(wbc.stats().totalDropped, 1);
+  assert.ok(redisCalls.some(([op]) => op === 'hdel'));
+  assert.ok(errors.some(([stage]) => stage === 'retry_exhausted'));
+});
+
+test('queueWrite rejects non-finite increment payloads before corrupting data', () => {
+  const wbc = createWriteBehindCache({ prisma: fakePrisma(), flushIntervalMs: 0 });
+  assert.throws(
+    () => wbc.queueWrite('user', { id: 'bad' }, { apiUsage: { __increment: Number.NaN } }),
+    /finite increment/,
+  );
+  assert.equal(wbc.size(), 0);
+});
+
+test('hydrateFromRedis merges duplicate pending entries with local queue safely', async () => {
+  const redis = {
+    hgetall: async () => ({
+      [keyFor('user', { id: 'hydrated' })]: JSON.stringify({
+        model: 'user',
+        where: { id: 'hydrated' },
+        data: { apiUsage: { __increment: 2 }, lastActiveAt: 100 },
+      }),
+    }),
+  };
+  const wbc = createWriteBehindCache({ prisma: fakePrisma(), redis, flushIntervalMs: 0 });
+  wbc.queueWrite('user', { id: 'hydrated' }, { apiUsage: { __increment: 3 }, lastActiveAt: 200 });
+
+  const result = await wbc.hydrateFromRedis();
+
+  assert.equal(result.hydrated, 1);
+  assert.deepEqual(wbc.getPending('user', { id: 'hydrated' }), {
+    apiUsage: { __increment: 5 },
+    lastActiveAt: 200,
+  });
+});
