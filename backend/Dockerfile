@@ -48,7 +48,6 @@ COPY --from=build --chown=appuser:appgroup /app/package.json ./package.json
 COPY --from=build --chown=appuser:appgroup /app/index.js ./index.js
 COPY --from=build --chown=appuser:appgroup /app/src ./src
 COPY --from=build --chown=appuser:appgroup /app/prisma ./prisma
-COPY --from=build --chown=appuser:appgroup /app/uploads ./uploads
 
 # Ensure uploads directory is writable
 RUN mkdir -p /app/uploads && chown -R appuser:appgroup /app/uploads

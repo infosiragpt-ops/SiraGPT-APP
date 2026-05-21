@@ -48,24 +48,6 @@ export default function Error({
     })
   }, [error])
 
-  // ── Stale Server Action auto-recovery ───────────────────────
-  // "Failed to find Server Action 'x'. This request might be from
-  // an older or newer deployment." happens when a user has a tab
-  // open across a deploy that changed Server Action hashes. The
-  // client bundle holds the old ID, the new server bundle no
-  // longer has it. Hard-reload once to pull the new client bundle.
-  // sessionStorage guard prevents an infinite reload loop if the
-  // underlying cause is actually persistent.
-  useEffect(() => {
-    if (typeof window === "undefined") return
-    const msg = error?.message || ""
-    if (!/Failed to find Server Action/i.test(msg)) return
-    const guardKey = "__siragpt_sa_reload_guard__"
-    if (sessionStorage.getItem(guardKey)) return
-    sessionStorage.setItem(guardKey, String(Date.now()))
-    window.location.reload()
-  }, [error])
-
   const handleRetry = useCallback(() => {
     const next = attempts + 1
     setAttempts(next)

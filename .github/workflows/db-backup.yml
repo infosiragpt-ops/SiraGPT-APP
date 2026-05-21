@@ -37,21 +37,29 @@ jobs:
             set -euo pipefail
             cd /root/siraNew/siraGPT
 
-            # Source the prod env so $DATABASE_URL is available.
+            # Source the prod env so $DATABASE_URL / $PRISMA_DATABASE_URL is available.
             if [[ -f backend/.env ]]; then
               # shellcheck disable=SC1091
               set -a; . backend/.env; set +a
             fi
+            export DATABASE_URL="${DATABASE_URL:-${PRISMA_DATABASE_URL:-}}"
 
             # 1. Run the backup script. Produces a fresh .sql.gz under ./backups/.
             bash backend/scripts/backup-db.sh
 
-            # 2. Pick the newest backup file we just produced and upload it.
+            # 2. Pick the newest backup file we just produced.
             LATEST="$(ls -1t backups/siraGPT_*.sql.gz 2>/dev/null | head -n 1 || true)"
             if [[ -z "${LATEST}" ]]; then
               echo "::error::No backup file produced — aborting upload." >&2
               exit 1
             fi
+
+            if [[ -z "${BACKUP_BUCKET:-}" || -z "${BACKUP_ACCESS_KEY_ID:-}" || -z "${BACKUP_SECRET_ACCESS_KEY:-}" ]]; then
+              echo "::notice::BACKUP_BUCKET / BACKUP_ACCESS_KEY_ID / BACKUP_SECRET_ACCESS_KEY are not fully configured; local pg_dump succeeded, skipping S3 upload."
+              echo "Backup retained locally: ${LATEST}"
+              exit 0
+            fi
+
             echo "Uploading ${LATEST} to s3://${BACKUP_BUCKET}/"
 
             # 3. Upload via aws CLI (works for AWS S3 and S3-compatible

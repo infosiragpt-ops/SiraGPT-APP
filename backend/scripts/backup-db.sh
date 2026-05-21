@@ -12,6 +12,8 @@
 #
 # Env vars:
 #   DATABASE_URL   required. Postgres connection string.
+#                  Falls back to PRISMA_DATABASE_URL when DATABASE_URL
+#                  is unset, matching the production Prisma config.
 #   BACKUP_DIR     optional. Defaults to ./backups (resolved from $PWD).
 #   PG_DUMP_BIN    optional. Defaults to `pg_dump` on PATH.
 #
@@ -21,8 +23,10 @@
 
 set -euo pipefail
 
+DATABASE_URL="${DATABASE_URL:-${PRISMA_DATABASE_URL:-}}"
+
 if [[ -z "${DATABASE_URL:-}" ]]; then
-  echo "[backup-db] ERROR: DATABASE_URL is not set" >&2
+  echo "[backup-db] ERROR: DATABASE_URL/PRISMA_DATABASE_URL is not set" >&2
   exit 1
 fi
 
