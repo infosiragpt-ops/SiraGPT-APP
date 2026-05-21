@@ -147,3 +147,53 @@
 | `SEMANTIC_SCHOLAR_API_KEY` | Semantic Scholar | Higher rate limits |
 | `NCBI_API_KEY` | NCBI PubMed | Higher rate limits |
 | `CORE_API_KEY` | CORE | Higher rate limits |
+
+---
+
+## Document Pipeline Parsers
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `MARKER_BIN` | `marker` | Path to Marker Python CLI for PDF parsing |
+| `MARKER_TIMEOUT_MS` | `120000` | Marker process timeout in ms |
+| `DOCLING_BIN` | `docling` | Path to Docling Python CLI for technical documents |
+| `DOCLING_TIMEOUT_MS` | `120000` | Docling process timeout in ms |
+| `MARKITDOWN_BIN` | `markitdown` | Path to MarkItDown CLI for Office docs |
+| `MARKITDOWN_TIMEOUT_MS` | `60000` | MarkItDown process timeout in ms |
+| `SIRAGPT_SEMANTIC_CHUNK_SIZE` | `1200` | Semantic chunking character size |
+| `SIRAGPT_SEMANTIC_CHUNK_OVERLAP` | `200` | Semantic chunk overlap characters |
+
+---
+
+## Web Scraping (Optional)
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `FIRECRAWL_HOST` | `https://api.firecrawl.dev` | Firecrawl API host (cloud or self-hosted) |
+| `SEARXNG_URL` | — | SearXNG self-hosted meta-search JSON API URL |
+
+---
+
+## Helicone Proxy (Optional)
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `HELICONE_API_KEY` | — | Helicone observability proxy API key |
+| `HELICONE_BASE_URL` | `https://oai.helicone.ai` | Helicone proxy base URL |
+
+---
+
+## CrewAI Bridge (Optional)
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SIRAGPT_CREWAI_MODEL` | `gpt-4o-mini` | Model used by CrewAI Python workflows |
+| `SIRAGPT_MULTI_AGENT_FRAMEWORK` | `builtin` | `builtin` or `crewai` |
+
+---
+
+## Security Middleware
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SIRAGPT_INPUT_SANITIZER_MODE` | `block` | XSS/prompt injection mode: `block`, `warn`, `off` |
