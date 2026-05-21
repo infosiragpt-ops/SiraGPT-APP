@@ -97,6 +97,55 @@ test('detectFormat honors explicit requested format', () => {
   assert.equal(detectFormat('Haz un informe', 'pdf'), 'pdf');
 });
 
+test('DocumentDeliveryPolicy treats "cuál es el título del word?" as chat-only (read intent, not generate)', () => {
+  // Regression: user uploads a DOCX in a prior turn, then asks
+  // "cuál es el título del word?" on a later turn (no file re-attached).
+  // The literal "word" used to match WORDISH_RE and promote the turn
+  // to doc_required with autoGenerate=true, generating a brand-new
+  // unrelated DOCX instead of answering the question about the
+  // already-shared file.
+  const policy = buildDocumentDeliveryPolicy({
+    goal: 'cual es el titulo del word?',
+    files: [],
+  });
+  assert.equal(policy.mode, 'chat_only');
+  assert.equal(policy.autoGenerate, false);
+});
+
+test('DocumentDeliveryPolicy keeps other read-intent phrasings in chat_only', () => {
+  for (const goal of [
+    'de qué trata el documento?',
+    'qué dice el pdf adjunto',
+    'cómo se llama el archivo',
+    'cuántas páginas tiene el word',
+    'resume el word',
+    'léeme el pdf',
+    'muéstrame el documento',
+    'explícame el excel',
+  ]) {
+    const policy = buildDocumentDeliveryPolicy({ goal, files: [] });
+    assert.notEqual(policy.mode, 'doc_required', `"${goal}" must not auto-generate`);
+    assert.equal(policy.autoGenerate, false, `"${goal}" must not auto-generate`);
+  }
+});
+
+test('DocumentDeliveryPolicy still promotes explicit generate-in-word requests', () => {
+  // Sanity: the inquiry guard must not weaken legitimate generation
+  // requests. "Hazme un word sobre X" and "exporta esto a pdf" still
+  // need to land in doc_required.
+  for (const goal of [
+    'hazme un word sobre la guerra fría',
+    'genera un informe en word',
+    'crea un documento word',
+    'exporta esto a pdf',
+    'dame un excel con las ventas',
+  ]) {
+    const policy = buildDocumentDeliveryPolicy({ goal, files: [] });
+    assert.equal(policy.mode, 'doc_required', `"${goal}" must auto-generate`);
+    assert.equal(policy.autoGenerate, true, `"${goal}" must auto-generate`);
+  }
+});
+
 test('DocumentDeliveryPolicy ignores assistant wording when classifying user intent', () => {
   // Regression: a short user question whose assistant draft happens to
   // contain "documento" used to be promoted to doc_required because the

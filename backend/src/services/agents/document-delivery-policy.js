@@ -10,6 +10,15 @@ const EXPLICIT_DECK_OUTPUT_RE = /\b(?:en|como|a|formato)\s+(?:un\s+|una\s+|el\s+
 const EXPLICIT_PDF_OUTPUT_RE = /\b(?:en|como|a|formato)\s+(?:un\s+|una\s+|el\s+|la\s+)?pdf\b|\bpdf\b/i;
 const EXPLICIT_TRANSCRIPTION_OUTPUT_RE = /\b(?:en|como|a)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|presentaci[oó]n)\b|\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|exporta(?:r|me)?|descarga(?:r|me)?|dame|prepara(?:r|me)?)\b.*\b(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|documento|archivo|informe|reporte|presentaci[oó]n)\b/i;
 const DOCUMENT_UNDERSTANDING_RE = /\b(analiza(?:r|me)?|an[aá]lisis|resume(?:n|me)?|resumir|extrae(?:r|me)?|transcrib(?:e|ir|eme|irme)?|qu[eé]\s+dice|seg[uú]n\s+(?:el\s+)?documento|archivo\s+adjunto|documento\s+adjunto|evidencia)\b/i;
+// Read/inquiry intents about a previously-shared document. Matches
+// phrases like "cuál es el título del word", "de qué trata el
+// documento", "qué dice el pdf", "cómo se llama el archivo", "resume
+// el word", "lee el documento", "ábreme el pdf", "cuántas páginas
+// tiene el excel". These reference the file the user already shared
+// in a previous turn (so `files` may be empty on the current turn)
+// and must NOT be promoted to doc_required just because the prompt
+// contains the literal word "word" / "documento" / "pdf".
+const DOCUMENT_INQUIRY_RE = /\b(?:cu[aá]l(?:es)?|qu[eé]|c[oó]mo|de\s+qu[eé]|qui[eé]n(?:es)?|cu[aá]ndo|d[oó]nde|por\s+qu[eé]|cu[aá]nt[oa]s?|resume(?:me|n)?|res[uú]meme|lee(?:me)?|l[eé]eme|abre(?:me)?|[aá]breme|muestra(?:me)?|mu[eé]strame|dime|cu[eé]ntame|expl[ií]came|explica(?:me)?|busca(?:me)?|encuentra(?:me)?|de\s+qu[eé]\s+trata|sobre\s+qu[eé])\b[^.?!]{0,160}\b(?:word|docx|documento|archivo|pdf|excel|xlsx|hoja\s+de\s+c[aá]lculo|pptx|power\s*point|powerpoint|presentaci[oó]n|adjunto|texto)\b/i;
 const EXPLICIT_DOCUMENT_OUTPUT_RE = /\b(?:en|como|a)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|presentaci[oó]n|documento|archivo)\b|\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|exporta(?:r|me)?|descarga(?:r|me)?|prepara(?:r|me)?)\b.*\b(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|documento|archivo|informe|reporte|presentaci[oó]n)\b/i;
 
 const PALETTES = {
@@ -97,6 +106,14 @@ function classifyMode(requestText, estimatedWords, format, files = [], options =
   if (options.transcriptionOnly) return 'chat_only';
   const documentUnderstanding = DOCUMENT_UNDERSTANDING_RE.test(requestText);
   const explicitOutput = EXPLICIT_DOCUMENT_OUTPUT_RE.test(requestText);
+  // Read/inquiry intent about a doc the user already shared in a
+  // prior turn must short-circuit BEFORE the WORDISH/SHEET/DECK/PDF
+  // check below — otherwise "cuál es el título del word?" matches
+  // WORDISH on the literal "word" and gets promoted to doc_required,
+  // generating a brand-new DOCX instead of answering the question.
+  if (DOCUMENT_INQUIRY_RE.test(requestText) && !explicitOutput) {
+    return 'chat_only';
+  }
   if (documentUnderstanding && !explicitOutput) {
     return estimatedWords >= 900 || LONG_DELIVERABLE_RE.test(requestText) ? 'doc_suggested' : 'chat_only';
   }
