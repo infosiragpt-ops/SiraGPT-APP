@@ -1574,10 +1574,24 @@ async function runAgentTaskJob(payload = {}, job = null) {
       },
     };
 
+    // Chat-only requests against an attachment have no artifact to
+    // produce — the agent only needs to read the file, reason, and
+    // answer inline. Capping at 20 steps prevents the runner from
+    // looping for 3+ minutes when the attachment turns out to be
+    // unreadable; the post-loop recovery (attachment_unreadable_
+    // empty_response_recovery) then generates a fallback answer in
+    // seconds instead of minutes. Non-attachment goals and document-
+    // generation goals keep the caller-provided ceiling.
+    const isChatOnlyWithAttachment = hasAttachedFiles
+      && documentPolicy?.mode === 'chat_only';
+    const effectiveMaxSteps = isChatOnlyWithAttachment
+      ? Math.min(maxSteps, 20)
+      : maxSteps;
+
     const result = await reactAgent.run(openai, {
       query: goal,
       tools,
-      maxSteps,
+      maxSteps: effectiveMaxSteps,
       maxRuntimeMs,
       model: runtimeModelProfile.runtimeModel,
       extraSystem: internals.buildAgentSystemPrompt(
