@@ -18,6 +18,13 @@ type PairResponse = {
   apiBaseUrl: string;
 };
 
+type AppshotsRevocation = {
+  id: string;
+  sessionId: string | null;
+  when: string;
+  reason: string;
+};
+
 type AppshotsSession = {
   id: string;
   createdAt: string;
@@ -41,6 +48,8 @@ export default function AppshotsSettingsPage() {
   const [copied, setCopied] = useState(false);
   const [sessions, setSessions] = useState<AppshotsSession[] | null>(null);
   const [sessionsError, setSessionsError] = useState<string | null>(null);
+  const [revocations, setRevocations] = useState<AppshotsRevocation[] | null>(null);
+  const [revocationsError, setRevocationsError] = useState<string | null>(null);
   const [revokingId, setRevokingId] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState<string>('');
@@ -62,9 +71,26 @@ export default function AppshotsSettingsPage() {
     }
   }, []);
 
+  const loadRevocations = useCallback(async () => {
+    setRevocationsError(null);
+    try {
+      const resp = await fetch(`${API_BASE}/api/appshots/revocations`, {
+        method: 'GET',
+        credentials: 'include',
+      });
+      if (!resp.ok) throw new Error(`No se pudo cargar el historial (${resp.status}).`);
+      const data = (await resp.json()) as { revocations: AppshotsRevocation[] };
+      setRevocations(data.revocations || []);
+    } catch (err) {
+      setRevocationsError(err instanceof Error ? err.message : String(err));
+      setRevocations([]);
+    }
+  }, []);
+
   useEffect(() => {
     loadSessions();
-  }, [loadSessions]);
+    loadRevocations();
+  }, [loadSessions, loadRevocations]);
 
   const revoke = useCallback(
     async (id: string, opts?: { isCurrent?: boolean }) => {
@@ -374,6 +400,46 @@ export default function AppshotsSettingsPage() {
 
       <section className="mt-6 rounded-lg border border-border bg-card p-5">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+          Revocaciones recientes
+        </h2>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Cuando detectamos un problema con un dispositivo vinculado (cambio de
+          red, token caducado, intervención del equipo de soporte) lo
+          desconectamos automáticamente y te avisamos por email. Aquí queda el
+          registro por si pierdes el correo.
+        </p>
+
+        {revocationsError ? (
+          <p className="mt-3 rounded border border-destructive bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            {revocationsError}
+          </p>
+        ) : null}
+
+        {revocations === null ? (
+          <p className="mt-3 text-sm text-muted-foreground">Cargando…</p>
+        ) : revocations.length === 0 ? (
+          <p className="mt-3 text-sm text-muted-foreground">
+            No hay revocaciones automáticas registradas en los últimos 6 meses.
+          </p>
+        ) : (
+          <ul className="mt-3 divide-y divide-border rounded border border-border">
+            {revocations.map((r) => (
+              <li key={r.id} className="flex flex-col gap-1 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+                <div className="text-sm">
+                  <div className="font-medium">{describeRevocationReason(r.reason)}</div>
+                  <div className="text-xs text-muted-foreground">{formatDate(r.when)}</div>
+                </div>
+                <div className="text-xs text-muted-foreground sm:text-right">
+                  Código: <code>{r.reason}</code>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section className="mt-6 rounded-lg border border-border bg-card p-5">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
           Paso 3 · Pégalo en la extensión
         </h2>
         <ol className="mt-3 list-decimal space-y-1 pl-5 text-sm">
@@ -388,6 +454,23 @@ export default function AppshotsSettingsPage() {
       </section>
     </div>
   );
+}
+
+function describeRevocationReason(code: string): string {
+  // Stable codes come from the backend (backend/src/routes/appshots.js
+  // → mapAuditActionToReason). Keep this map small and explicit so a
+  // typo on either side surfaces as the raw code rather than a
+  // misleading Spanish string.
+  switch (code) {
+    case 'fingerprint_mismatch':
+      return 'Cambio sospechoso de red o navegador';
+    case 'token_expired':
+      return 'Token caducado';
+    case 'admin_revoked':
+      return 'Revocado por el equipo de soporte';
+    default:
+      return 'Sesión revocada automáticamente';
+  }
 }
 
 function formatDate(iso: string): string {

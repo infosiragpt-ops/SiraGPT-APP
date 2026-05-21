@@ -226,7 +226,15 @@ const authenticateToken = async (req, res, next) => {
         resource: 'session',
         resourceId: session.id,
         userId: session.userId,
-        metadata: { expiresAt: session.expiresAt },
+        metadata: {
+          expiresAt: session.expiresAt,
+          // Task 22: tag the audit row with the JWT scope so the
+          // /settings/appshots history view can filter for auto-
+          // revocations of Appshots-scoped sessions only.
+          ...(decoded && typeof decoded === 'object' && decoded.scope
+            ? { scope: String(decoded.scope) }
+            : {}),
+        },
       });
       // Appshots sessions also trigger a security email so the owner
       // notices an automatic revocation they didn't request.
@@ -253,7 +261,14 @@ const authenticateToken = async (req, res, next) => {
           resource: 'session',
           resourceId: session.id,
           userId: session.userId,
-          metadata: { revoked: true },
+          metadata: {
+            revoked: true,
+            // Task 22: tag scope so /settings/appshots can list auto
+            // revocations of the extension's bearer token.
+            ...(decoded && typeof decoded === 'object' && decoded.scope
+              ? { scope: String(decoded.scope) }
+              : {}),
+          },
         });
         // Appshots sessions: notify the owner. A fingerprint mismatch on a
         // long-lived capture token is the canonical "someone copied my token"
@@ -289,11 +304,32 @@ const authenticateToken = async (req, res, next) => {
     next();
   } catch (error) {
     if (error && error.name === 'TokenExpiredError') {
+      // Task 22: jwt.verify threw before we could read decoded.scope, but
+      // jwt.decode is a non-verifying parse so we can still extract the
+      // scope claim for the audit metadata (the token bytes are already
+      // trusted to the extent that they were signed at mint time).
+      let expiredScope = null;
+      let expiredUserId = null;
+      try {
+        const authHeader2 = req.headers['authorization'];
+        const token2 = (authHeader2 && authHeader2.split(' ')[1]) || req.cookies?.token;
+        if (token2) {
+          const peek = jwt.decode(token2);
+          if (peek && typeof peek === 'object') {
+            if (peek.scope) expiredScope = String(peek.scope);
+            if (peek.userId) expiredUserId = String(peek.userId);
+          }
+        }
+      } catch (_) { /* best-effort decode */ }
       void writeAuditLog(prisma, {
         req,
         action: 'session_expired',
         resource: 'session',
-        metadata: { reason: 'jwt_expired' },
+        userId: expiredUserId,
+        metadata: {
+          reason: 'jwt_expired',
+          ...(expiredScope ? { scope: expiredScope } : {}),
+        },
       });
       // jwt.verify threw, so `decoded` is not in scope here. The signature
       // was checked before the exp comparison (jsonwebtoken's verify order),

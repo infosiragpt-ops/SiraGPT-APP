@@ -309,6 +309,93 @@ router.patch('/sessions/:id', authenticateToken, async (req, res) => {
   }
 });
 
+/**
+ * GET /api/appshots/revocations — Task 22.
+ *
+ * Lists the caller's most recent AUTO-revocations of Appshots-scoped
+ * sessions. "Auto" means the backend killed the session on its own
+ * (expired token, fingerprint mismatch, admin sweep) — not a click on
+ * the "Revocar" button in /settings/appshots, which is already
+ * self-evident to the user.
+ *
+ * Source of truth: the existing `audit_log` table. We filter by
+ *   actorId        = req.user.id
+ *   action         ∈ session_expired | session_fingerprint_mismatch | session_admin_revoked
+ *   metadata.scope = 'appshots:capture'
+ *
+ * The scope tag is written by middleware/auth.js (see task 22 edits
+ * there). Old rows without the tag are silently skipped — we'd rather
+ * under-report than mislabel a non-Appshots logout as one.
+ *
+ * Capped at 50 rows / 180 days so the response stays small without
+ * pagination. If a user genuinely has more, the email log + full audit
+ * trail remain the source of record.
+ */
+router.get('/revocations', authenticateToken, async (req, res) => {
+  try {
+    const prisma = getPrisma();
+    if (!prisma.auditLog || typeof prisma.auditLog.findMany !== 'function') {
+      // Audit table absent (e.g. narrow test stub) — return an empty
+      // list rather than 500 so the UI can render the empty state.
+      return res.json({ revocations: [] });
+    }
+    const since = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000);
+    const rows = await prisma.auditLog.findMany({
+      where: {
+        actorId: req.user.id,
+        action: {
+          in: [
+            'session_expired',
+            'session_fingerprint_mismatch',
+            'session_admin_revoked',
+          ],
+        },
+        createdAt: { gte: since },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+      select: {
+        id: true,
+        action: true,
+        createdAt: true,
+        metadata: true,
+        resourceId: true,
+      },
+    });
+
+    const revocations = [];
+    for (const row of rows) {
+      const meta = (row.metadata && typeof row.metadata === 'object') ? row.metadata : {};
+      if (meta.scope !== 'appshots:capture') continue;
+      revocations.push({
+        id: row.id,
+        sessionId: row.resourceId || null,
+        when: row.createdAt,
+        // Stable machine-readable reason code the UI maps to Spanish copy.
+        reason: mapAuditActionToReason(row.action, meta),
+      });
+      if (revocations.length >= 50) break;
+    }
+    res.json({ revocations });
+  } catch (error) {
+    console.error('[appshots] list revocations error:', error?.message || error);
+    res.status(500).json({ error: 'Could not list revocations' });
+  }
+});
+
+function mapAuditActionToReason(action, meta) {
+  if (action === 'session_fingerprint_mismatch') return 'fingerprint_mismatch';
+  if (action === 'session_admin_revoked') return 'admin_revoked';
+  if (action === 'session_expired') {
+    // Distinguish a JWT-expiry (token TTL hit) from a session-row expiry
+    // (rare for appshots: the row TTL is 365d, matching the JWT). Both
+    // are surfaced to the user as "token_expired" because the practical
+    // outcome is identical: re-pair the extension.
+    return 'token_expired';
+  }
+  return action;
+}
+
 router.delete('/sessions/:id', authenticateToken, async (req, res) => {
   try {
     const prisma = getPrisma();
