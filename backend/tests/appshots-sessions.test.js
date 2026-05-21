@@ -16,6 +16,7 @@
 
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
+const express = require('express');
 const request = require('supertest');
 const jwt = require('jsonwebtoken');
 
@@ -24,6 +25,7 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'appshots-sessions-test-secre
 const prisma = require('../src/config/database');
 const { buildRouteTestApp, installAuthSessionMock } = require('./http-test-utils');
 const appshotsRouter = require('../src/routes/appshots');
+const { authenticateToken } = require('../src/middleware/auth');
 
 function makeAppshotsToken(userId) {
   return jwt.sign(
@@ -321,6 +323,253 @@ describe('PATCH /api/appshots/sessions/:id (Task 15)', () => {
       .send({ label: 'nope' });
     restore();
     assert.equal(res.status, 403);
+  });
+});
+
+describe('GET /api/appshots/revocations (Task 22/25)', () => {
+  let restore;
+  let auth;
+  let findManyArgs;
+  let storedRows;
+
+  beforeEach(() => {
+    auth = installAuthSessionMock({ id: 'task22-user' });
+    findManyArgs = null;
+    // 60 appshots-scoped rows so we can verify the in-handler cap at 50
+    // kicks in even when the upstream `take: 200` returned more.
+    storedRows = [];
+    for (let i = 0; i < 60; i++) {
+      storedRows.push({
+        id: `appshots-${String(i).padStart(2, '0')}`,
+        action: i % 3 === 0 ? 'session_fingerprint_mismatch'
+              : i % 3 === 1 ? 'session_admin_revoked'
+              : 'session_expired',
+        createdAt: new Date(Date.UTC(2026, 4, 20) - i * 60_000),
+        metadata: { scope: 'appshots:capture' },
+        resourceId: `sess-${i}`,
+      });
+    }
+    // Noise rows that MUST be filtered out by the scope guard.
+    storedRows.push({
+      id: 'noise-no-scope',
+      action: 'session_expired',
+      createdAt: new Date('2026-05-20T09:00:00Z'),
+      metadata: { reason: 'jwt_expired' },
+      resourceId: 'sess-noise-1',
+    });
+    storedRows.push({
+      id: 'noise-other-scope',
+      action: 'session_fingerprint_mismatch',
+      createdAt: new Date('2026-05-20T09:00:00Z'),
+      metadata: { scope: 'something-else' },
+      resourceId: 'sess-noise-2',
+    });
+    storedRows.push({
+      id: 'noise-null-metadata',
+      action: 'session_admin_revoked',
+      createdAt: new Date('2026-05-20T09:00:00Z'),
+      metadata: null,
+      resourceId: 'sess-noise-3',
+    });
+
+    const hadAuditLog = !!prisma.auditLog;
+    const originalFindMany = prisma.auditLog?.findMany;
+    if (!prisma.auditLog) prisma.auditLog = {};
+    prisma.auditLog.findMany = async (args) => {
+      findManyArgs = args;
+      return storedRows;
+    };
+
+    restore = () => {
+      if (hadAuditLog) prisma.auditLog.findMany = originalFindMany;
+      else delete prisma.auditLog;
+      auth.restore();
+    };
+  });
+
+  it('returns only appshots-scoped rows, capped at 50, with mapped reasons', async () => {
+    const app = buildRouteTestApp('/api/appshots', appshotsRouter);
+    const res = await request(app)
+      .get('/api/appshots/revocations')
+      .set('Authorization', auth.authHeader);
+    restore();
+    assert.equal(res.status, 200);
+    assert.equal(res.body.revocations.length, 50);
+    // Only appshots-scoped rows surface (noise stripped).
+    for (const row of res.body.revocations) {
+      assert.ok(row.id.startsWith('appshots-'), `noise row leaked: ${row.id}`);
+      assert.ok(
+        ['token_expired', 'fingerprint_mismatch', 'admin_revoked'].includes(row.reason),
+        `unexpected reason: ${row.reason}`,
+      );
+      assert.ok(row.when, 'each revocation must carry a timestamp');
+    }
+    // The handler preserves upstream order, which is desc by createdAt.
+    // The first 50 of our 60 appshots rows are the newest 50.
+    assert.equal(res.body.revocations[0].id, 'appshots-00');
+    assert.equal(res.body.revocations[49].id, 'appshots-49');
+  });
+
+  it('asks Prisma for the right scope: actorId, action whitelist, desc order', async () => {
+    const app = buildRouteTestApp('/api/appshots', appshotsRouter);
+    await request(app)
+      .get('/api/appshots/revocations')
+      .set('Authorization', auth.authHeader);
+    restore();
+    assert.ok(findManyArgs, 'auditLog.findMany must have been called');
+    assert.equal(findManyArgs.where.actorId, 'task22-user');
+    assert.deepEqual(
+      [...findManyArgs.where.action.in].sort(),
+      ['session_admin_revoked', 'session_expired', 'session_fingerprint_mismatch'],
+    );
+    assert.equal(findManyArgs.orderBy.createdAt, 'desc');
+    assert.ok(findManyArgs.where.createdAt?.gte instanceof Date);
+  });
+
+  it('returns an empty list when the Prisma client lacks auditLog.findMany (narrow stubs)', async () => {
+    // The real PrismaClient defines model getters non-configurably so we
+    // can't `delete prisma.auditLog` outright; stubbing findMany to a
+    // non-function exercises the same defensive branch in the route.
+    prisma.auditLog.findMany = null;
+    const app = buildRouteTestApp('/api/appshots', appshotsRouter);
+    const res = await request(app)
+      .get('/api/appshots/revocations')
+      .set('Authorization', auth.authHeader);
+    restore();
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.body, { revocations: [] });
+  });
+});
+
+describe('authenticateToken metadata.scope tagging (Task 22/25)', () => {
+  let restore;
+  let auditCalls;
+
+  function buildScopedApp() {
+    const app = express();
+    app.use((req, _res, next) => {
+      req._allowScopedToken = 'appshots:capture';
+      next();
+    });
+    app.get('/protected', authenticateToken, (_req, res) => res.json({ ok: true }));
+    return app;
+  }
+
+  function waitForAuditFlush() {
+    // writeAuditLog is fire-and-forget (`void writeAuditLog(...)`); give
+    // the event loop a couple of ticks to flush our awaited stub.
+    return new Promise((r) => setTimeout(r, 25));
+  }
+
+  beforeEach(() => {
+    auditCalls = [];
+    const hadAuditLog = !!prisma.auditLog;
+    const originalAuditCreate = prisma.auditLog?.create;
+    const originalFindUnique = prisma.session.findUnique;
+    const originalDeleteMany = prisma.session.deleteMany;
+
+    if (!prisma.auditLog) prisma.auditLog = {};
+    prisma.auditLog.create = async (args) => {
+      auditCalls.push(args);
+      return { id: `aud-${auditCalls.length}`, ...args.data };
+    };
+    prisma.session.deleteMany = async () => ({ count: 1 });
+
+    restore = () => {
+      prisma.session.findUnique = originalFindUnique;
+      prisma.session.deleteMany = originalDeleteMany;
+      if (hadAuditLog) prisma.auditLog.create = originalAuditCreate;
+      else delete prisma.auditLog;
+    };
+  });
+
+  it('writes metadata.scope when an Appshots session row has expired', async () => {
+    const token = makeAppshotsToken('user-22-expired');
+    prisma.session.findUnique = async ({ where }) => {
+      if (where?.token !== token) return null;
+      return {
+        id: 'sess-22-expired',
+        token,
+        userId: 'user-22-expired',
+        user: { id: 'user-22-expired', email: 'expired@example.com' },
+        expiresAt: new Date(Date.now() - 1000),
+        fingerprint: null,
+      };
+    };
+    const res = await request(buildScopedApp())
+      .get('/protected')
+      .set('Authorization', `Bearer ${token}`);
+    await waitForAuditFlush();
+    const expiredCall = auditCalls.find((c) => c.data.action === 'session_expired');
+    restore();
+    assert.equal(res.status, 401);
+    assert.ok(expiredCall, 'session_expired audit row must be written');
+    assert.equal(expiredCall.data.metadata.scope, 'appshots:capture');
+    assert.equal(expiredCall.data.resourceType, 'session');
+    assert.equal(expiredCall.data.resourceId, 'sess-22-expired');
+    assert.equal(expiredCall.data.actorId, 'user-22-expired');
+  });
+
+  it('writes metadata.scope on fingerprint mismatch for Appshots tokens', async () => {
+    const token = makeAppshotsToken('user-22-fingerprint');
+    prisma.session.findUnique = async ({ where }) => {
+      if (where?.token !== token) return null;
+      return {
+        id: 'sess-22-fp',
+        token,
+        userId: 'user-22-fingerprint',
+        user: { id: 'user-22-fingerprint', email: 'fp@example.com' },
+        expiresAt: new Date(Date.now() + 60_000),
+        // A non-matching stored fingerprint forces the mismatch branch:
+        // compareFingerprints(current, 'wrong-hash') is false because the
+        // current request fingerprint is sha256(...) of a totally different
+        // IP + UA, never equal to this literal string.
+        fingerprint: 'definitely-not-a-real-fingerprint-hash',
+      };
+    };
+    const res = await request(buildScopedApp())
+      .get('/protected')
+      .set('Authorization', `Bearer ${token}`)
+      .set('User-Agent', 'AppshotsTest/1.0')
+      .set('X-Forwarded-For', '10.20.30.40');
+    await waitForAuditFlush();
+    const fpCall = auditCalls.find((c) => c.data.action === 'session_fingerprint_mismatch');
+    restore();
+    assert.equal(res.status, 401);
+    assert.equal(res.body.reason, 'fingerprint_mismatch');
+    assert.ok(fpCall, 'session_fingerprint_mismatch audit row must be written');
+    assert.equal(fpCall.data.metadata.scope, 'appshots:capture');
+    assert.equal(fpCall.data.metadata.revoked, true);
+    assert.equal(fpCall.data.resourceId, 'sess-22-fp');
+    assert.equal(fpCall.data.actorId, 'user-22-fingerprint');
+  });
+
+  it('does NOT tag scope on plain (non-scoped) JWT expiry — sanity check', async () => {
+    const token = makePlainToken('user-22-plain');
+    prisma.session.findUnique = async ({ where }) => {
+      if (where?.token !== token) return null;
+      return {
+        id: 'sess-22-plain',
+        token,
+        userId: 'user-22-plain',
+        user: { id: 'user-22-plain', email: 'plain@example.com' },
+        expiresAt: new Date(Date.now() - 1000),
+        fingerprint: null,
+      };
+    };
+    const res = await request(buildScopedApp())
+      .get('/protected')
+      .set('Authorization', `Bearer ${token}`);
+    await waitForAuditFlush();
+    const expiredCall = auditCalls.find((c) => c.data.action === 'session_expired');
+    restore();
+    assert.equal(res.status, 401);
+    assert.ok(expiredCall, 'session_expired audit row must be written for plain tokens too');
+    assert.equal(
+      expiredCall.data.metadata.scope,
+      undefined,
+      'plain tokens carry no scope claim, so metadata.scope must be absent',
+    );
   });
 });
 
