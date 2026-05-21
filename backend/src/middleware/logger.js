@@ -118,6 +118,31 @@ const logger = pino({
 // `req.log` is the same pino instance bound to that id, so any
 // downstream code that swaps `console.log(...)` for `req.log.info({...}, '...')`
 // gets free correlation IDs across the whole request lifecycle.
+
+// Authenticated media URLs (e.g. `/uploads/...?token=<JWT>`) must never
+// hit the log feed verbatim. Redact any query parameter likely to carry
+// a bearer/credential before serializing the request URL.
+const URL_SECRET_PARAMS = new Set(['token', 'access_token', 'apikey', 'api_key', 'signature', 'sig']);
+function redactUrlSecrets(rawUrl) {
+  const url = String(rawUrl || '');
+  const qIndex = url.indexOf('?');
+  if (qIndex === -1) return url;
+  const path = url.slice(0, qIndex);
+  const query = url.slice(qIndex + 1);
+  const redacted = query
+    .split('&')
+    .map((pair) => {
+      const eqIndex = pair.indexOf('=');
+      const key = eqIndex === -1 ? pair : pair.slice(0, eqIndex);
+      if (URL_SECRET_PARAMS.has(key.toLowerCase())) {
+        return `${key}=[REDACTED]`;
+      }
+      return pair;
+    })
+    .join('&');
+  return `${path}?${redacted}`;
+}
+
 const httpLogger = pinoHttp({
   logger,
   // Honor an upstream-supplied request id (load balancer / gateway /
@@ -135,7 +160,7 @@ const httpLogger = pinoHttp({
   // user payloads into logs (PII risk + log bloat).
   serializers: {
     req(req) {
-      return { id: req.id, method: req.method, url: req.url };
+      return { id: req.id, method: req.method, url: redactUrlSecrets(req.url) };
     },
     res(res) {
       return { statusCode: res.statusCode };

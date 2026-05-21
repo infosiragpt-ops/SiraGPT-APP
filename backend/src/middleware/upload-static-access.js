@@ -65,6 +65,18 @@ function classifyUploadPath(relativePath) {
 function tokenFromRequest(req) {
   const authHeader = req.headers.authorization || '';
   if (authHeader.startsWith('Bearer ')) return authHeader.slice('Bearer '.length).trim();
+  // Cookies are sent automatically only when the cookie's domain matches
+  // the request origin. In our split-host setup (frontend on one origin,
+  // backend on another) the `token` cookie issued by the backend isn't
+  // sent on `<img src="/uploads/...">` requests originating from the
+  // frontend page. Allow callers to pass the JWT explicitly via the
+  // `?token=` query string so authenticated media (images, video, etc.)
+  // can be referenced from plain HTML elements that cannot set custom
+  // Authorization headers. The token is still validated against the DB
+  // session below, so this carries the same security properties as the
+  // header-based path.
+  const queryToken = req.query && typeof req.query.token === 'string' ? req.query.token.trim() : '';
+  if (queryToken) return queryToken;
   return req.cookies?.token || null;
 }
 
