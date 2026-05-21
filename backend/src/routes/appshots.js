@@ -33,6 +33,7 @@ const jwt = require('jsonwebtoken');
 const { authenticateToken } = require('../middleware/auth');
 const auditLog = require('../services/agents/audit-log');
 const aiService = require('../services/ai-service');
+const emailService = require('../services/email');
 
 const router = express.Router();
 
@@ -99,6 +100,20 @@ router.post('/pair', authenticateToken, async (req, res) => {
       userId: req.user.id,
       tokenPrefix: token.slice(0, 12),
     });
+
+    // Security notification (Task 14): warn the user out-of-band that a new
+    // device was paired. Fire-and-forget — a failing/unconfigured SMTP must
+    // never block the pairing flow itself.
+    if (req.user?.email) {
+      Promise.resolve(
+        emailService.sendAppshotsDeviceLinked(req.user, {
+          ip: getClientIp(req),
+          when: new Date(),
+        }),
+      ).catch((err) => {
+        console.warn('[appshots] device-linked email failed:', err?.message || err);
+      });
+    }
 
     res.status(201).json({
       token,
@@ -177,6 +192,17 @@ router.delete('/sessions/:id', authenticateToken, async (req, res) => {
       userId: req.user.id,
       sessionId: id,
     });
+
+    // Security notification (Task 14): confirm the revocation by email so
+    // the user notices if someone else triggered it. Fire-and-forget.
+    if (req.user?.email) {
+      Promise.resolve(
+        emailService.sendAppshotsDeviceRevoked(req.user, { when: new Date() }),
+      ).catch((err) => {
+        console.warn('[appshots] device-revoked email failed:', err?.message || err);
+      });
+    }
+
     res.json({ ok: true });
   } catch (error) {
     console.error('[appshots] revoke session error:', error?.message || error);
@@ -422,6 +448,19 @@ function sanitiseModel(raw) {
 
 function truncate(s, n) {
   return s.length > n ? s.slice(0, n - 1) + '…' : s;
+}
+
+// Best-effort client IP for security-notification emails. We prefer the first
+// X-Forwarded-For hop (set by Replit's proxy / typical load balancers) and
+// fall back to express's req.ip / the raw socket address. Always sanitised
+// before reaching the template via sanitizeHeader.
+function getClientIp(req) {
+  const xff = req.headers && req.headers['x-forwarded-for'];
+  if (typeof xff === 'string' && xff.length) {
+    const first = xff.split(',')[0].trim();
+    if (first) return first;
+  }
+  return req.ip || req.socket?.remoteAddress || 'unknown';
 }
 
 function getCanonicalApiBaseUrl(req) {
