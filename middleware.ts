@@ -26,9 +26,19 @@ export async function middleware(request: NextRequest) {
     return applyNextApiCorsHeaders(request, res)
   }
 
-  // If the user already has a supported locale cookie, do nothing.
+  // Expose the current pathname to RSC via a request header. The root
+  // layout's generateMetadata() reads this to emit a per-route canonical
+  // tag — fixing the Lighthouse "rel=canonical points to homepage"
+  // warning without forcing every page to declare its own metadata.
+  const reqHeaders = new Headers(request.headers)
+  reqHeaders.set('x-pathname', pathname)
+
+  // If the user already has a supported locale cookie, do nothing
+  // (besides forwarding the new header).
   const existing = request.cookies.get(LOCALE_COOKIE)?.value
-  if (isSupportedLocale(existing)) return NextResponse.next()
+  if (isSupportedLocale(existing)) {
+    return NextResponse.next({ request: { headers: reqHeaders } })
+  }
 
   // 2) Negotiate from Accept-Language using IETF precedence.
   const accept = request.headers.get('accept-language') || ''
@@ -79,7 +89,7 @@ export async function middleware(request: NextRequest) {
   }
 
   const locale = isSupportedLocale(resolved) ? (resolved as string) : DEFAULT_LOCALE
-  const res = NextResponse.next()
+  const res = NextResponse.next({ request: { headers: reqHeaders } })
   res.cookies.set(LOCALE_COOKIE, locale, { path: '/', maxAge: ONE_YEAR, sameSite: 'lax' })
   return res
 }

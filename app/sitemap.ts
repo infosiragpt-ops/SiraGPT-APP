@@ -1,44 +1,27 @@
 import type { MetadataRoute } from "next"
 
 /**
- * Sitemap for public pages. Mirrors what robots.txt allows. Pages
- * behind auth (chat, projects, settings, …) are intentionally
- * omitted — they're per-user surfaces with no canonical content.
+ * Static sitemap for marketing surfaces. We list the same routes that
+ * robots.ts explicitly allows — authenticated/transient routes are
+ * intentionally excluded so we don't ship conflicting signals to Google.
+ * Kept static (no DB query) so it stays fast and resilient at build time.
  */
 const BASE_URL = "https://siragpt.com"
 
 export default function sitemap(): MetadataRoute.Sitemap {
   const now = new Date()
-  return [
-    {
-      url: BASE_URL,
-      lastModified: now,
-      changeFrequency: "weekly",
-      priority: 1.0,
-    },
-    {
-      url: `${BASE_URL}/auth/login`,
-      lastModified: now,
-      changeFrequency: "yearly",
-      priority: 0.6,
-    },
-    {
-      url: `${BASE_URL}/auth/register`,
-      lastModified: now,
-      changeFrequency: "yearly",
-      priority: 0.7,
-    },
-    {
-      url: `${BASE_URL}/privacy-policy`,
-      lastModified: now,
-      changeFrequency: "yearly",
-      priority: 0.3,
-    },
-    {
-      url: `${BASE_URL}/terms`,
-      lastModified: now,
-      changeFrequency: "yearly",
-      priority: 0.3,
-    },
+  const entries: Array<{ path: string; changeFrequency: MetadataRoute.Sitemap[number]["changeFrequency"]; priority: number }> = [
+    { path: "/", changeFrequency: "weekly", priority: 1.0 },
+    { path: "/auth/login", changeFrequency: "monthly", priority: 0.6 },
+    { path: "/auth/register", changeFrequency: "monthly", priority: 0.7 },
+    { path: "/privacy-policy", changeFrequency: "yearly", priority: 0.3 },
+    { path: "/privacy", changeFrequency: "yearly", priority: 0.3 },
+    { path: "/terms", changeFrequency: "yearly", priority: 0.3 },
   ]
+  return entries.map(({ path, changeFrequency, priority }) => ({
+    url: `${BASE_URL}${path}`,
+    lastModified: now,
+    changeFrequency,
+    priority,
+  }))
 }

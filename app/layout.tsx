@@ -1,5 +1,6 @@
 import type React from "react"
 import type { Metadata, Viewport } from "next"
+import { headers } from "next/headers"
 import nextDynamic from "next/dynamic"
 import { GeistSans } from "geist/font/sans"
 import { GeistMono } from "geist/font/mono"
@@ -41,7 +42,49 @@ const SyncfusionBannerRemover = nextDynamic(
   { ssr: false }
 )
 
-export const metadata: Metadata = {
+// Routes that must NOT advertise themselves as canonical — they're
+// authenticated surfaces (chat, settings, billing) or transient (auth
+// callbacks, share previews). They're already disallowed in robots.ts;
+// omitting canonical here keeps Google from accidentally indexing a
+// canonical URL it can't crawl.
+const NON_CANONICAL_PREFIXES = [
+  "/admin",
+  "/super-admin",
+  "/billing",
+  "/share",
+  "/chat",
+  "/projects",
+  "/settings",
+  "/library",
+  "/voice",
+  "/codex",
+  "/gpts/create",
+  "/auth/callback",
+  "/api",
+]
+
+/**
+ * Build the canonical URL for the current request. We strip the query
+ * string and any trailing slash (except for "/" itself) so duplicate
+ * variants collapse onto a single canonical, and we omit the tag
+ * entirely for non-indexable routes.
+ */
+function canonicalFromPathname(pathname: string | null | undefined): string | undefined {
+  if (!pathname) return "/"
+  const clean = pathname.split("?")[0].split("#")[0]
+  if (NON_CANONICAL_PREFIXES.some((p) => clean === p || clean.startsWith(`${p}/`))) {
+    return undefined
+  }
+  if (clean === "/" || clean === "") return "/"
+  // Collapse trailing slash on deep paths so /foo and /foo/ map to /foo.
+  return clean.endsWith("/") ? clean.slice(0, -1) : clean
+}
+
+export async function generateMetadata(): Promise<Metadata> {
+  const h = await headers()
+  const pathname = h.get("x-pathname") || "/"
+  const canonical = canonicalFromPathname(pathname)
+  const meta: Metadata = {
   metadataBase: new URL("https://siragpt.com"),
   title: {
     default: "Sira GPT — Plataforma de IA Multimodal",
@@ -54,11 +97,12 @@ export const metadata: Metadata = {
   publisher: "Sira GPT",
   applicationName: "Sira GPT",
   category: "technology",
-  // Explicit canonical so search engines collapse duplicate variants
-  // (trailing slash, query strings, www, etc.) onto a single URL.
-  alternates: {
-    canonical: "/",
-  },
+  // Per-route canonical computed from the x-pathname header injected
+  // by middleware. Pages on the NON_CANONICAL list (chat, settings,
+  // billing, etc.) omit the tag entirely so Google doesn't try to
+  // canonicalise them to themselves while robots.txt also disallows
+  // them — the conflicting signals were what Lighthouse was flagging.
+  alternates: canonical ? { canonical } : undefined,
   // Explicit robots directives — Lighthouse otherwise warns
   // "Page is blocked from indexing" whenever it cannot find a positive
   // index/follow signal. We also opt into Google's max-* hints so rich
@@ -114,6 +158,8 @@ export const metadata: Metadata = {
       { url: "/sira-gpt-180.png", sizes: "180x180", type: "image/png" },
     ],
   },
+  }
+  return meta
 }
 
 // `viewport-fit=cover` is what makes `env(safe-area-inset-*)` resolve

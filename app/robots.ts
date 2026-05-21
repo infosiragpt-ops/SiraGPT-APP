@@ -26,6 +26,10 @@ export default function robots(): MetadataRoute.Robots {
           "/voice",
           "/codex",
           "/gpts/create",
+          // Auth callback URLs carry one-time codes / state params — never
+          // a candidate for indexing. Mirrors NON_CANONICAL_PREFIXES in
+          // app/layout.tsx so robots + canonical signals stay aligned.
+          "/auth/callback",
         ],
       },
     ],
