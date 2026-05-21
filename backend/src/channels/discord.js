@@ -58,7 +58,7 @@ class DiscordAdapter extends ChannelAdapter {
   }
 
   parseInbound(req) {
-    const interaction = typeof req?.body === 'string' ? JSON.parse(req.body) : (req?.body || req || {});
+    const interaction = parseRequestBody(req);
     if (!interaction?.id) return null;
     const accessGroup = this.accessGroupResolver
       ? this.accessGroupResolver(interaction)
@@ -113,5 +113,10 @@ class DiscordAdapter extends ChannelAdapter {
 }
 
 async function safeJson(r) { try { return await r.json(); } catch { return null; } }
+
+function parseRequestBody(req) {
+  if (typeof req?.body !== 'string') return req?.body || req || {};
+  try { return JSON.parse(req.body); } catch { return null; }
+}
 
 module.exports = { DiscordAdapter };

@@ -243,6 +243,10 @@ describe('DiscordAdapter · parseInbound', () => {
     assert.equal(out.id, 'INT-6');
   });
 
+  it('returns null instead of throwing when the JSON-string body is malformed', () => {
+    assert.equal(a.parseInbound({ body: '{"id":' }), null);
+  });
+
   it('invokes accessGroupResolver and stores the result', () => {
     const a2 = makeAdapter({
       accessGroupResolver: (i) => `g-${i.guild_id || 'dm'}`,

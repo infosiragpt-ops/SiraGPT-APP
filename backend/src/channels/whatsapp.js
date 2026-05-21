@@ -72,7 +72,8 @@ class WhatsAppAdapter extends ChannelAdapter {
   }
 
   parseInbound(req) {
-    const payload = typeof req?.body === 'string' ? JSON.parse(req.body) : (req?.body || req || {});
+    const payload = parseRequestBody(req);
+    if (!payload) return null;
     const change = payload?.entry?.[0]?.changes?.[0];
     const value = change?.value;
     const msg = value?.messages?.[0];
@@ -129,5 +130,10 @@ class WhatsAppAdapter extends ChannelAdapter {
 }
 
 async function safeJson(r) { try { return await r.json(); } catch { return null; } }
+
+function parseRequestBody(req) {
+  if (typeof req?.body !== 'string') return req?.body || req || {};
+  try { return JSON.parse(req.body); } catch { return null; }
+}
 
 module.exports = { WhatsAppAdapter };
