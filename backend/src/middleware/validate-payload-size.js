@@ -121,18 +121,41 @@ function validatePayloadSize(opts = {}) {
 
     const declared = parseContentLength(req.headers['content-length']);
 
+    // Per RFC 7230 §3.3.3, when both Transfer-Encoding and Content-Length
+    // are present chunked semantics win and Content-Length must be
+    // disregarded. We treat *any* TE other than the literal "identity"
+    // (case-insensitive) as untrusted-length so a malicious client cannot
+    // bypass the cap by advertising a small Content-Length and then
+    // streaming an unbounded chunked body.
+    const teRaw = req.headers['transfer-encoding'];
+    const teTrusted = !teRaw || String(teRaw).trim().toLowerCase() === 'identity';
+
     // Cheap path: declared length exceeds cap → reject immediately without
     // reading the body.
-    if (Number.isFinite(declared) && declared > limit) {
+    if (teTrusted && Number.isFinite(declared) && declared > limit) {
       if (onReject) {
         try { onReject(req, { kind, limit, received: declared, stage: 'header' }); } catch { /* noop */ }
       }
       return reject(res, { kind, limit, received: declared });
     }
 
-    // Streaming guard: chunked or missing Content-Length. We tally bytes
-    // as they arrive and abort the read as soon as we cross the cap. This
-    // protects against clients that omit/lie about Content-Length.
+    // Declared length is within cap AND no chunked TE → trust it and pass
+    // through WITHOUT touching the request stream. Attaching a 'data'
+    // listener here would put the stream into flowing mode before
+    // multer/body-parser is ready to consume it, which silently truncates
+    // multipart bodies and surfaces as "Unexpected end of form" from
+    // busboy.
+    if (teTrusted && Number.isFinite(declared)) {
+      return next();
+    }
+
+    // Streaming guard: only when Content-Length is missing (chunked
+    // transfer encoding or non-conforming clients). We use `prependListener`
+    // so our tally listener registers *before* any downstream body parser
+    // attaches its own consumer, and we never put the stream into flowing
+    // mode ourselves — Node will only start flowing once the *downstream*
+    // consumer attaches its own listener. This preserves the body for
+    // multer/busboy/body-parser while still capping unbounded uploads.
     let received = 0;
     let aborted = false;
     function onData(chunk) {
@@ -143,15 +166,12 @@ function validatePayloadSize(opts = {}) {
         if (onReject) {
           try { onReject(req, { kind, limit, received, stage: 'stream' }); } catch { /* noop */ }
         }
-        // Stop further data flow and respond. We intentionally do NOT
-        // destroy the socket — that would surface as a confusing
-        // connection reset on the client; a clean 413 is friendlier.
         req.removeListener('data', onData);
         req.pause();
         reject(res, { kind, limit, received });
       }
     }
-    req.on('data', onData);
+    req.prependListener('data', onData);
     req.once('end', () => req.removeListener('data', onData));
     req.once('close', () => req.removeListener('data', onData));
     return next();
