@@ -308,7 +308,13 @@ function toStrictOpenAISchema(root) {
     if (copy.type === "object" && copy.properties && !copy.additionalProperties) {
       copy.additionalProperties = false;
     }
-    if (copy.type === "object" && copy.properties && !Array.isArray(copy.required)) {
+    if (copy.type === "object" && copy.properties) {
+      // OpenAI strict mode demands `required` enumerate EVERY property
+      // key — not just the semantically required ones. Overwrite any
+      // partial `required` array the schema author wrote (e.g.
+      // success_tests.items declares ["id","type","description"] but
+      // also exposes "check" and "parameters") so the API stops
+      // rejecting the call with "Missing 'check'".
       copy.required = Object.keys(copy.properties);
     }
     return copy;

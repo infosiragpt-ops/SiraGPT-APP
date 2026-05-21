@@ -132,7 +132,7 @@ class FileProcessor {
         'application/vnd.openxmlformats-officedocument.presentationml.presentation',
       ];
 
-      if (externalParserTypes.includes(effectiveMimeType)) {
+      if (externalParserTypes.includes(effectiveMimeType) && !FileProcessor._externalParserDisabled) {
         try {
           const { parseFileWithBestParser } = require('./document-pipeline/parser-orchestrator');
           const result = await parseFileWithBestParser(filePath, { mimetype: effectiveMimeType });
@@ -142,7 +142,14 @@ class FileProcessor {
             effectiveMimeType = '__external_done';
           }
         } catch (err) {
-          console.warn(`[fileProcessor] external parser chain unavailable: ${err && err.message}`);
+          // The optional external parser chain requires an `orchestration/`
+          // sibling tree that doesn't exist in this repo. Log the first
+          // time, then permanently skip the require so we don't spam the
+          // logs on every uploaded document.
+          if (!FileProcessor._externalParserDisabled) {
+            FileProcessor._externalParserDisabled = true;
+            console.warn(`[fileProcessor] external parser chain unavailable, using built-in parsers: ${err && err.message}`);
+          }
         }
       }
 
@@ -397,13 +404,16 @@ class FileProcessor {
       const header = `Word document — ${markdown.length} characters extracted, structure preserved as markdown\n---\n`;
       return header + markdown;
     } catch (error) {
-      console.error(`Word file processing error for ${filePath}:`, error);
-      // Fallback to raw text so the user doesn't lose the file entirely
-      // if mammoth's HTML pipeline chokes on a weird input.
+      // Mammoth throws verbose stack traces (jszip/openZip chain) when
+      // the .docx is corrupt, truncated, or actually a different format
+      // (e.g. .doc renamed). The outer caller (reprocessIfNeeded) has
+      // its own try/catch, so we just log a compact warning and try
+      // the raw-text fallback before giving up.
+      console.warn(`[fileProcessor] mammoth convertToHtml failed for ${filePath}: ${error && error.message}`);
       try {
         const fallback = await mammoth.extractRawText({ path: filePath });
         return fallback.value;
-      } catch {
+      } catch (fallbackErr) {
         throw new Error(`Word document processing failed: ${error.message}`);
       }
     }

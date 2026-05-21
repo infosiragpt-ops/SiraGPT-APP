@@ -83,7 +83,13 @@ function attachRedisListeners(connection, { label = 'redis', logger = console } 
     throttled(() => logger.warn(`[${label}] reconnecting in ${delay}ms`));
   });
   connection.on('end', () => {
-    logger.warn(`[${label}] connection ended (will not auto-reconnect from this state)`);
+    // 'end' fires when ioredis has stopped retrying (typically after
+    // Upstash returns a fatal "max requests limit exceeded" or the
+    // connection idles out). The circuit breaker in `markRedisFailure`
+    // already routes traffic to the local runtime, so this is a soft
+    // notice — not an actionable error.
+    markRedisFailure(new Error('redis connection closed'));
+    throttled(() => logger.warn(`[${label}] connection closed; serving requests via local runtime until redis recovers`));
   });
   return connection;
 }
