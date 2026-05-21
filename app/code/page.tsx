@@ -3,8 +3,8 @@
 /**
  * /code — Cursor-inspired AI coding workspace.
  *
- * Layout: activity bar + explorer (left), Cursor Chat panel, then
- * editor + terminal. The whole page is a single client
+ * Layout: Cursor Chat (left), editor + terminal (center), Codex folders (right).
+ * The whole page is a single client
  * component so the workspace state stays mounted while the user
  * navigates within it; the inner pieces are lazy-loaded so the
  * route shell paints fast and the editor chunk only ships when
@@ -22,6 +22,7 @@ import * as React from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 
 import { CodeWorkspaceProvider, useCodeWorkspace } from "@/lib/code-workspace-context"
+import { listCodexProjects } from "@/lib/codex-projects"
 import { projectsService } from "@/lib/projects-service"
 import { useAuth } from "@/lib/auth-context-integrated"
 
@@ -37,7 +38,9 @@ export default function CodeWorkspacePage() {
   return (
     <CodeWorkspaceGate>
       <CodeWorkspaceProvider>
-        <ActiveFolderHydrator />
+        <React.Suspense fallback={null}>
+          <ActiveFolderHydrator />
+        </React.Suspense>
         <CodeWorkspace />
       </CodeWorkspaceProvider>
     </CodeWorkspaceGate>
@@ -75,9 +78,20 @@ function CodeWorkspaceGate({ children }: { children: React.ReactNode }) {
 function ActiveFolderHydrator() {
   const searchParams = useSearchParams()
   const folderId = searchParams?.get("folder") || null
-  const { activeFolder, setActiveFolder } = useCodeWorkspace()
+  const localId = searchParams?.get("local") || null
+  const { activeFolder, setActiveFolder, switchCodexWorkspace } = useCodeWorkspace()
 
   React.useEffect(() => {
+    if (localId) {
+      if (activeFolder?.id === localId) return
+      const entry = listCodexProjects().find((row) => row.id === localId)
+      void switchCodexWorkspace({
+        id: localId,
+        name: entry?.name || localId.replace(/^local:/, ""),
+        kind: "local-folder",
+      })
+      return
+    }
     if (!folderId) return
     if (activeFolder?.id === folderId) return
     let cancelled = false
@@ -92,7 +106,6 @@ function ActiveFolderHydrator() {
           instructions: project.instructions,
         })
       } catch {
-        // Surface nothing; the workspace stays usable without folder context.
         if (cancelled) return
         setActiveFolder({ id: folderId, name: folderId })
       }
@@ -100,7 +113,7 @@ function ActiveFolderHydrator() {
     return () => {
       cancelled = true
     }
-  }, [folderId, activeFolder?.id, setActiveFolder])
+  }, [folderId, localId, activeFolder?.id, setActiveFolder, switchCodexWorkspace])
 
   return null
 }
@@ -112,17 +125,7 @@ function CodeWorkspaceSkeleton() {
         <div className="h-4 w-16 rounded bg-muted/50 animate-pulse" />
         <div className="ml-auto h-5 w-[260px] rounded border border-border/60 bg-muted/30 animate-pulse" />
       </div>
-      <div className="grid min-h-0 flex-1 grid-cols-[44px_220px_360px_1fr]">
-        <div className="flex flex-col items-center gap-3 border-r border-border/60 py-3">
-          {Array.from({ length: 6 }).map((_, i) => (
-            <div key={i} className="h-7 w-7 rounded-md bg-muted/40 animate-pulse" />
-          ))}
-        </div>
-        <div className="border-r border-border/60 p-3 space-y-2">
-          {Array.from({ length: 8 }).map((_, i) => (
-            <div key={i} className="h-5 w-full rounded bg-muted/40 animate-pulse" />
-          ))}
-        </div>
+      <div className="grid min-h-0 flex-1 grid-cols-[360px_1fr]">
         <div className="border-r border-border/60 p-3 space-y-3">
           <div className="h-7 w-32 rounded-full bg-muted/40 animate-pulse" />
           {Array.from({ length: 6 }).map((_, i) => (

@@ -32,11 +32,46 @@ import {
   normalizePath,
 } from "./code-workspace-utils"
 import {
+  CODEX_UPDATED_EVENT,
+  codexIdForLocalFolder,
+  codexIdForProject,
+  listCodexProjects,
+  upsertCodexProject,
+} from "./codex-projects"
+import { projectsService } from "./projects-service"
+import {
   getLinkedLocalFolderName,
   hasLinkedLocalFolder,
   openLocalDirectoryWorkspace,
   saveLinkedWorkspaceFile,
 } from "./local-folder-workspace"
+import {
+  CODE_CHAT_SESSIONS_UPDATED_EVENT,
+  type CodeChatSession,
+  type CodeChatTurn,
+  codeWorkspaceKey,
+  codexWorkspaceSessionKey,
+  createCodeChatSession as createCodeChatSessionRecord,
+  ensureDefaultSession,
+  getActiveSessionId,
+  listSessionsForWorkspace,
+  readCodeChatStore,
+  setActiveCodeChatSession as setActiveCodeChatSessionRecord,
+  updateCodeChatSessionTurns,
+} from "./code-chat-sessions"
+
+export const SWITCH_CODEX_WORKSPACE_EVENT = "siragpt:switch-codex-workspace"
+export const TOGGLE_CODEX_SIDEBAR_EVENT = "siragpt:toggle-codex-sidebar"
+export const CODE_ACTIVITY_EVENT = "siragpt:code-activity"
+export const CODE_NEW_CODE_CHAT_EVENT = "siragpt:code-new-code-chat"
+export const CODE_SELECT_CHAT_SESSION_EVENT = "siragpt:code-select-chat-session"
+
+export type CodeNewChatDetail = {
+  workspaceId: string
+  name: string
+  kind: "local-folder" | "project"
+  projectId?: string
+}
 
 const STORAGE_KEY = "code-workspace:v1"
 const STORAGE_ACTIVE_FOLDER = "code-workspace:active-folder"
@@ -117,7 +152,28 @@ export type CodeWorkspaceContextValue = {
    *  context prompt and the top-bar breadcrumb. */
   activeFolder: ActiveFolder | null
   setActiveFolder: (folder: ActiveFolder | null) => void
+
+  /** Parallel code-agent chats for the active workspace (same files, separate threads). */
+  codeChatSessions: CodeChatSession[]
+  activeCodeChatSessionId: string | null
+  activeCodeChatSession: CodeChatSession | null
+  createCodeChatSession: () => string
+  setActiveCodeChatSession: (sessionId: string) => void
+  patchCodeChatSessionTurns: (
+    sessionId: string,
+    updater: (prev: CodeChatTurn[]) => CodeChatTurn[],
+  ) => void
+  listCodeChatSessionsForWorkspace: (workspaceId: string) => CodeChatSession[]
+  openWorkspaceNewCodeChat: (detail: CodeNewChatDetail) => Promise<void>
   workspaceSource: WorkspaceSource
+
+  /** Load a Codex workspace (cloud project or saved local folder). */
+  switchCodexWorkspace: (target: {
+    id: string
+    name: string
+    kind: "local-folder" | "project"
+    projectId?: string
+  }) => Promise<void>
 }
 
 const CodeWorkspaceContext = React.createContext<CodeWorkspaceContextValue | null>(null)
@@ -199,6 +255,20 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
   const chatFocusListeners = React.useRef<Set<Listener>>(new Set())
   const paletteListeners = React.useRef<Set<Listener>>(new Set())
   const lastFolderIdRef = React.useRef<string | null>(initialFolder?.id ?? null)
+  const [chatSessionStore, setChatSessionStore] = React.useState(readCodeChatStore)
+
+  const workspaceSessionKey = codexWorkspaceSessionKey(activeFolder?.id)
+
+  React.useEffect(() => {
+    setChatSessionStore((prev) => ensureDefaultSession(workspaceSessionKey, prev))
+  }, [workspaceSessionKey])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const sync = () => setChatSessionStore(readCodeChatStore())
+    window.addEventListener(CODE_CHAT_SESSIONS_UPDATED_EVENT, sync)
+    return () => window.removeEventListener(CODE_CHAT_SESSIONS_UPDATED_EVENT, sync)
+  }, [])
 
   const setActiveFolder = React.useCallback((folder: ActiveFolder | null) => {
     const previousFolderId = lastFolderIdRef.current
@@ -365,11 +435,15 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
     try {
       const imported = await openLocalDirectoryWorkspace()
       const paths = pickInitialOpenTabs(Object.keys(imported.files))
-      setState({
+      const codexId = codexIdForLocalFolder(imported.rootName)
+      const nextState = {
         files: imported.files,
         openTabs: paths,
         activePath: paths[0] ?? Object.keys(imported.files)[0] ?? null,
-      })
+      }
+      setState(nextState)
+      writePersisted(codexId, nextState)
+      setActiveFolder({ id: codexId, name: imported.rootName })
       setWorkspaceSource({
         kind: "local-folder",
         name: imported.rootName,
@@ -377,6 +451,16 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
         fileCount: imported.fileCount,
         skippedCount: imported.skippedCount,
       })
+      upsertCodexProject({
+        id: codexId,
+        name: imported.rootName,
+        kind: "local-folder",
+        displayPath: `~/Desktop/${imported.rootName}`,
+        fileCount: imported.fileCount,
+      })
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent(CODEX_UPDATED_EVENT))
+      }
       toast.success(`Carpeta "${imported.rootName}" abierta como workspace.`)
       if (imported.skippedCount > 0) {
         toast.info(`${imported.skippedCount} archivo(s) se omitieron por tamaño, formato o carpeta ignorada.`)
@@ -386,15 +470,81 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
       if (err?.name === "AbortError") return
       toast.error(err?.message || "No se pudo abrir la carpeta local.")
     }
-  }, [])
+  }, [setActiveFolder])
+
+  const switchCodexWorkspace = React.useCallback(
+    async (target: { id: string; name: string; kind: "local-folder" | "project"; projectId?: string }) => {
+      if (target.kind === "project") {
+        const projectId = target.projectId || target.id.replace(/^project:/, "")
+        try {
+          const project = await projectsService.get(projectId)
+          setActiveFolder({
+            id: project.id,
+            name: project.name,
+            description: project.description,
+            instructions: project.instructions,
+          })
+          upsertCodexProject({
+            id: codexIdForProject(project.id),
+            name: project.name,
+            kind: "project",
+          })
+        } catch {
+          setActiveFolder({ id: projectId, name: target.name })
+        }
+        setWorkspaceSource({ kind: "browser", name: target.name, linked: false })
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent(CODEX_UPDATED_EVENT))
+        }
+        return
+      }
+
+      const persisted = buildInitialStateFor(target.id)
+      setActiveFolder({ id: target.id, name: target.name })
+      const linked = hasLinkedLocalFolder() && getLinkedLocalFolderName() === target.name
+      setWorkspaceSource({
+        kind: linked ? "local-folder" : "browser",
+        name: target.name,
+        linked,
+        fileCount: Object.keys(persisted.files).length,
+      })
+      upsertCodexProject({
+        id: target.id,
+        name: target.name,
+        kind: "local-folder",
+        fileCount: Object.keys(persisted.files).length,
+      })
+      if (!linked && Object.keys(persisted.files).length === 0) {
+        toast.info("Vuelve a enlazar la carpeta con + si quieres sincronizar con el disco.")
+      }
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent(CODEX_UPDATED_EVENT))
+      }
+    },
+    [setActiveFolder],
+  )
 
   React.useEffect(() => {
-    const handler = () => {
+    const openFolder = () => {
       void openLocalFolderWorkspace()
     }
-    window.addEventListener("siragpt:open-local-folder", handler)
-    return () => window.removeEventListener("siragpt:open-local-folder", handler)
-  }, [openLocalFolderWorkspace])
+    const switchWorkspace = (event: Event) => {
+      const detail = (event as CustomEvent<{
+        id: string
+        name: string
+        kind: "local-folder" | "project"
+        projectId?: string
+      }>).detail
+      if (!detail?.id) return
+      void switchCodexWorkspace(detail)
+    }
+    window.addEventListener("siragpt:open-local-folder", openFolder)
+    window.addEventListener(SWITCH_CODEX_WORKSPACE_EVENT, switchWorkspace)
+    return () => {
+      window.removeEventListener("siragpt:open-local-folder", openFolder)
+      window.removeEventListener(SWITCH_CODEX_WORKSPACE_EVENT, switchWorkspace)
+    }
+  }, [openLocalFolderWorkspace, switchCodexWorkspace])
 
   const saveFileToWorkspace = React.useCallback(async (path?: string) => {
     const targetPath = path || state.activePath
@@ -464,6 +614,101 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
     })
   }, [])
 
+  const codeChatSessions = React.useMemo(
+    () => listSessionsForWorkspace(workspaceSessionKey, chatSessionStore),
+    [workspaceSessionKey, chatSessionStore],
+  )
+
+  const activeCodeChatSessionId = React.useMemo(
+    () => getActiveSessionId(workspaceSessionKey, chatSessionStore),
+    [workspaceSessionKey, chatSessionStore],
+  )
+
+  const activeCodeChatSession = React.useMemo(
+    () => codeChatSessions.find((s) => s.id === activeCodeChatSessionId) ?? null,
+    [codeChatSessions, activeCodeChatSessionId],
+  )
+
+  const listCodeChatSessionsForWorkspace = React.useCallback(
+    (workspaceId: string) => listSessionsForWorkspace(codexWorkspaceSessionKey(workspaceId), chatSessionStore),
+    [chatSessionStore],
+  )
+
+  const createCodeChatSession = React.useCallback(() => {
+    const { store, session } = createCodeChatSessionRecord(workspaceSessionKey, undefined, chatSessionStore)
+    setChatSessionStore(store)
+    focusChat()
+    return session.id
+  }, [chatSessionStore, focusChat, workspaceSessionKey])
+
+  const setActiveCodeChatSession = React.useCallback(
+    (sessionId: string) => {
+      setChatSessionStore(setActiveCodeChatSessionRecord(workspaceSessionKey, sessionId, chatSessionStore))
+      focusChat()
+    },
+    [chatSessionStore, focusChat, workspaceSessionKey],
+  )
+
+  const patchCodeChatSessionTurns = React.useCallback(
+    (sessionId: string, updater: (prev: CodeChatTurn[]) => CodeChatTurn[]) => {
+      setChatSessionStore(updateCodeChatSessionTurns(sessionId, updater, chatSessionStore))
+    },
+    [chatSessionStore],
+  )
+
+  const openWorkspaceNewCodeChat = React.useCallback(
+    async (detail: CodeNewChatDetail) => {
+      await switchCodexWorkspace({
+        id: detail.workspaceId,
+        name: detail.name,
+        kind: detail.kind,
+        projectId: detail.projectId,
+      })
+      const key = codexWorkspaceSessionKey(detail.workspaceId)
+      const { store } = createCodeChatSessionRecord(key, undefined, chatSessionStore)
+      setChatSessionStore(store)
+      focusChat()
+    },
+    [chatSessionStore, focusChat, switchCodexWorkspace],
+  )
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const onNewChat = (event: Event) => {
+      const detail = (event as CustomEvent<CodeNewChatDetail>).detail
+      if (!detail?.workspaceId) return
+      void openWorkspaceNewCodeChat(detail)
+    }
+    const onSelectSession = (event: Event) => {
+      const detail = (event as CustomEvent<{ workspaceId: string; sessionId: string }>).detail
+      if (!detail?.sessionId || !detail.workspaceId) return
+      const targetKey = codexWorkspaceSessionKey(detail.workspaceId)
+      void (async () => {
+        if (targetKey !== workspaceSessionKey) {
+          const entry = listCodexProjects().find((row) => row.id === detail.workspaceId)
+          if (entry) {
+            await switchCodexWorkspace({
+              id: entry.id,
+              name: entry.name,
+              kind: entry.kind,
+              projectId: entry.kind === "project" ? entry.id.replace(/^project:/, "") : undefined,
+            })
+          }
+        }
+        setChatSessionStore((prev) =>
+          setActiveCodeChatSessionRecord(targetKey, detail.sessionId, prev),
+        )
+        focusChat()
+      })()
+    }
+    window.addEventListener(CODE_NEW_CODE_CHAT_EVENT, onNewChat)
+    window.addEventListener(CODE_SELECT_CHAT_SESSION_EVENT, onSelectSession)
+    return () => {
+      window.removeEventListener(CODE_NEW_CODE_CHAT_EVENT, onNewChat)
+      window.removeEventListener(CODE_SELECT_CHAT_SESSION_EVENT, onSelectSession)
+    }
+  }, [activeFolder?.id, chatSessionStore, focusChat, openWorkspaceNewCodeChat, switchCodexWorkspace, workspaceSessionKey])
+
   const value = React.useMemo<CodeWorkspaceContextValue>(
     () => ({
       files: state.files,
@@ -487,6 +732,15 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
       activeFolder,
       setActiveFolder,
       workspaceSource,
+      switchCodexWorkspace,
+      codeChatSessions,
+      activeCodeChatSessionId,
+      activeCodeChatSession,
+      createCodeChatSession,
+      setActiveCodeChatSession,
+      patchCodeChatSessionTurns,
+      listCodeChatSessionsForWorkspace,
+      openWorkspaceNewCodeChat,
     }),
     [
       state.files,
@@ -510,6 +764,15 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
       activeFolder,
       setActiveFolder,
       workspaceSource,
+      switchCodexWorkspace,
+      codeChatSessions,
+      activeCodeChatSessionId,
+      activeCodeChatSession,
+      createCodeChatSession,
+      setActiveCodeChatSession,
+      patchCodeChatSessionTurns,
+      listCodeChatSessionsForWorkspace,
+      openWorkspaceNewCodeChat,
     ],
   )
 
@@ -524,8 +787,18 @@ export function useCodeWorkspace(): CodeWorkspaceContextValue {
   return ctx
 }
 
+function isLowSignalWorkspacePath(path: string): boolean {
+  const p = path.toLowerCase()
+  if (p.includes(".orchestration/")) return true
+  if (/\/agent-\d+/.test(p)) return true
+  if (p.includes("/locales/") && p.endsWith(".json")) return true
+  if (p.endsWith(".report.md") && p.includes("agent-")) return true
+  if (p.endsWith(".prompt.md") && p.includes("agent-")) return true
+  return false
+}
+
 function pickInitialOpenTabs(paths: string[]): string[] {
-  const sorted = [...paths].sort((a, b) => a.localeCompare(b))
+  const sorted = [...paths].filter((p) => !isLowSignalWorkspacePath(p)).sort((a, b) => a.localeCompare(b))
   const preferred = [
     "README.md",
     "readme.md",

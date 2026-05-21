@@ -1,31 +1,12 @@
 "use client"
 
 /**
- * SidebarFoldersDropdown — collapsible "Carpetas" section that sits in
- * the sidebar between the static nav and the recent-chats list. Each
- * row is a folder (a Project from /api/projects) that the user can
- * expand to see and open the chats inside it. The header has a
- * "Cursor" affordance that jumps into /code with the folder selected
- * as the active workspace.
- *
- * Why folders == projects:
- *   The backend already models a "folder of chats with shared files
- *   and instructions" as a Project. Adding a separate folder concept
- *   would duplicate that. Reusing Projects keeps one source of truth
- *   and means existing chats placed into a project (Chat.projectId)
- *   appear here automatically.
- *
- * Persistence:
- *   The set of expanded folders is kept in localStorage so a refresh
- *   restores the user's open trees. The "active folder" used by /code
- *   is read from the URL (?folder=) and from `code-workspace:active-folder`
- *   so it is shareable and survives reloads.
+ * SidebarFoldersDropdown — Codex workspaces block in the app sidebar.
  */
 
 import * as React from "react"
-import { useRouter } from "next/navigation"
-import { ChevronRight, FolderClosed, FolderOpen, Plus, RefreshCw, Square, SquareCheck, Terminal } from "lucide-react"
-import { toast } from "sonner"
+import { usePathname, useRouter } from "next/navigation"
+import { RefreshCw, X } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -33,13 +14,35 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { cn } from "@/lib/utils"
+import { CodexFolderPicker } from "@/components/codex/codex-folder-picker"
+import { CodexWorkspaceTree, type WorkspaceTreeNode } from "@/components/codex/codex-workspace-tree"
+import {
+  CODE_CHAT_SESSIONS_UPDATED_EVENT,
+  codexWorkspaceSessionKey,
+  getActiveSessionId,
+  listSessionsForWorkspace,
+  readCodeChatStore,
+} from "@/lib/code-chat-sessions"
+import {
+  CODE_NEW_CODE_CHAT_EVENT,
+  CODE_SELECT_CHAT_SESSION_EVENT,
+  type CodeNewChatDetail,
+} from "@/lib/code-workspace-context"
 import { useChat } from "@/lib/chat-context-integrated"
+import {
+  CODEX_UPDATED_EVENT,
+  codexIdForProject,
+  listCodexProjects,
+  type CodexProjectEntry,
+  upsertCodexProject,
+} from "@/lib/codex-projects"
 import { projectsService, type Project, type ProjectChatSummary } from "@/lib/projects-service"
+import { cn } from "@/lib/utils"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
-const STORAGE_EXPANDED = "code-workspace:expanded-folders"
-const STORAGE_ACTIVE = "code-workspace:active-folder"
+
+const STORAGE_EXPANDED = "code-workspace:expanded-workspaces"
+const STORAGE_ACTIVE_FOLDER = "code-workspace:active-folder"
 
 type Props = {
   collapsed: boolean
@@ -48,20 +51,26 @@ type Props = {
 
 export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
   const router = useRouter()
-  const { selectChat } = useChat()
+  const pathname = usePathname()
+  const isOnCodePage = pathname?.startsWith("/code") ?? false
+  const { selectChat, currentChat } = useChat()
 
   const [folders, setFolders] = React.useState<Project[]>([])
+  const [codexProjects, setCodexProjects] = React.useState<CodexProjectEntry[]>([])
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
 
-  const [open, setOpen] = React.useState(true)
   const [expandedIds, setExpandedIds] = React.useState<Set<string>>(new Set())
   const [chatsByFolder, setChatsByFolder] = React.useState<
     Record<string, { loading: boolean; chats: ProjectChatSummary[]; error: string | null }>
   >({})
   const [activeFolderId, setActiveFolderId] = React.useState<string | null>(null)
+  const [codeAgentStore, setCodeAgentStore] = React.useState(readCodeChatStore)
 
-  // Restore expanded + active folder from localStorage on mount.
+  const refreshCodexProjects = React.useCallback(() => {
+    setCodexProjects(listCodexProjects())
+  }, [])
+
   React.useEffect(() => {
     try {
       const raw = window.localStorage.getItem(STORAGE_EXPANDED)
@@ -69,10 +78,45 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
         const arr = JSON.parse(raw)
         if (Array.isArray(arr)) setExpandedIds(new Set(arr.filter((v) => typeof v === "string")))
       }
-      const active = window.localStorage.getItem(STORAGE_ACTIVE)
-      if (active) setActiveFolderId(active)
+      const activeRaw = window.localStorage.getItem(STORAGE_ACTIVE_FOLDER)
+      if (activeRaw) {
+        try {
+          const parsed = JSON.parse(activeRaw) as { id?: string }
+          if (parsed?.id) setActiveFolderId(parsed.id)
+        } catch {
+          setActiveFolderId(activeRaw)
+        }
+      }
     } catch {
-      /* corrupted storage — ignore */
+      /* ignore */
+    }
+    refreshCodexProjects()
+  }, [refreshCodexProjects])
+
+  React.useEffect(() => {
+    const handler = () => refreshCodexProjects()
+    window.addEventListener(CODEX_UPDATED_EVENT, handler)
+    return () => window.removeEventListener(CODEX_UPDATED_EVENT, handler)
+  }, [refreshCodexProjects])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const sync = () => setCodeAgentStore(readCodeChatStore())
+    window.addEventListener(CODE_CHAT_SESSIONS_UPDATED_EVENT, sync)
+    const onFolderChange = () => {
+      try {
+        const raw = window.localStorage.getItem(STORAGE_ACTIVE_FOLDER)
+        if (!raw) return
+        const parsed = JSON.parse(raw) as { id?: string }
+        if (parsed?.id) setActiveFolderId(parsed.id)
+      } catch {
+        /* ignore */
+      }
+    }
+    window.addEventListener(CODEX_UPDATED_EVENT, onFolderChange)
+    return () => {
+      window.removeEventListener(CODE_CHAT_SESSIONS_UPDATED_EVENT, sync)
+      window.removeEventListener(CODEX_UPDATED_EVENT, onFolderChange)
     }
   }, [])
 
@@ -91,7 +135,7 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
       const list = await projectsService.list({ sort: "activity" })
       setFolders(list)
     } catch (err: any) {
-      setError(err?.message || "No se pudieron cargar las carpetas")
+      setError(err?.message || "No se pudieron cargar los workspaces")
     } finally {
       setLoading(false)
     }
@@ -101,45 +145,80 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
     refresh()
   }, [refresh])
 
-  const toggleExpanded = React.useCallback(
-    (id: string) => {
-      setExpandedIds((prev) => {
-        const next = new Set(prev)
-        if (next.has(id)) {
-          next.delete(id)
-        } else {
-          next.add(id)
-        }
-        return next
-      })
-      // Lazy-load chats the first time a folder is opened.
-      setChatsByFolder((prev) => {
-        if (prev[id]?.chats?.length || prev[id]?.loading) return prev
-        return { ...prev, [id]: { loading: true, chats: [], error: null } }
-      })
-    },
-    [],
+  const localProjects = React.useMemo(
+    () => codexProjects.filter((row) => row.kind === "local-folder"),
+    [codexProjects],
   )
 
+  const workspaceNodes = React.useMemo<WorkspaceTreeNode[]>(() => {
+    const locals: WorkspaceTreeNode[] = localProjects.map((entry) => ({
+      id: entry.id,
+      name: entry.name,
+      kind: "local-folder",
+      chatListId: entry.id,
+    }))
+    const cloud: WorkspaceTreeNode[] = folders.map((folder) => ({
+      id: codexIdForProject(folder.id),
+      name: folder.name,
+      kind: "project",
+      chatListId: folder.id,
+    }))
+    return [...locals, ...cloud]
+  }, [folders, localProjects])
+
+  const activeWorkspaceId = React.useMemo(() => {
+    if (!activeFolderId) return null
+    const key = codexWorkspaceSessionKey(activeFolderId)
+    if (workspaceNodes.some((n) => n.id === key)) return key
+    if (localProjects.some((l) => l.id === activeFolderId)) return activeFolderId
+    if (folders.some((f) => f.id === activeFolderId)) return codexIdForProject(activeFolderId)
+    return key
+  }, [activeFolderId, folders, localProjects, workspaceNodes])
+
+  const activeCodeSessionId = React.useMemo(() => {
+    if (!activeWorkspaceId) return null
+    return getActiveSessionId(activeWorkspaceId, codeAgentStore)
+  }, [activeWorkspaceId, codeAgentStore])
+
+  const toggleExpanded = React.useCallback((workspaceId: string) => {
+    const node = workspaceNodes.find((n) => n.id === workspaceId)
+    setExpandedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(workspaceId)) next.delete(workspaceId)
+      else next.add(workspaceId)
+      return next
+    })
+    if (node?.kind === "project") {
+      setChatsByFolder((prev) => {
+        if (prev[node.chatListId]?.chats?.length || prev[node.chatListId]?.loading) return prev
+        return { ...prev, [node.chatListId]: { loading: true, chats: [], error: null } }
+      })
+    }
+  }, [workspaceNodes])
+
   React.useEffect(() => {
-    const pendingId = Array.from(expandedIds).find(
-      (id) => chatsByFolder[id]?.loading && !chatsByFolder[id]?.chats?.length,
+    const pending = workspaceNodes.find(
+      (n) =>
+        n.kind === "project"
+        && expandedIds.has(n.id)
+        && chatsByFolder[n.chatListId]?.loading
+        && !chatsByFolder[n.chatListId]?.chats?.length,
     )
-    if (!pendingId) return
+    if (!pending) return
     let cancelled = false
     ;(async () => {
       try {
-        const chats = await projectsService.listChats(pendingId, { limit: 12 })
+        const chats = await projectsService.listChats(pending.chatListId, { limit: 12 })
         if (cancelled) return
         setChatsByFolder((prev) => ({
           ...prev,
-          [pendingId]: { loading: false, chats, error: null },
+          [pending.chatListId]: { loading: false, chats, error: null },
         }))
       } catch (err: any) {
         if (cancelled) return
         setChatsByFolder((prev) => ({
           ...prev,
-          [pendingId]: {
+          [pending.chatListId]: {
             loading: false,
             chats: [],
             error: err?.message || "No se pudieron cargar los chats",
@@ -150,30 +229,70 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
     return () => {
       cancelled = true
     }
-  }, [expandedIds, chatsByFolder])
-
-  const handleSelectFolder = React.useCallback(
-    (folder: Project) => {
-      setActiveFolderId(folder.id)
-      try {
-        window.localStorage.setItem(STORAGE_ACTIVE, folder.id)
-      } catch {
-        /* ignore */
-      }
-    },
-    [],
-  )
+  }, [expandedIds, chatsByFolder, workspaceNodes])
 
   const handleOpenInCode = React.useCallback(
-    (folder: Project) => {
-      handleSelectFolder(folder)
+    (opts: { folderId?: string; localId?: string }) => {
+      if (opts.folderId) {
+        const codexId = codexIdForProject(opts.folderId)
+        const folder = folders.find((f) => f.id === opts.folderId)
+        try {
+          window.localStorage.setItem(
+            STORAGE_ACTIVE_FOLDER,
+            JSON.stringify({ id: codexId, name: folder?.name || opts.folderId }),
+          )
+        } catch {
+          /* ignore */
+        }
+        setActiveFolderId(codexId)
+      }
+      if (opts.localId) {
+        const entry = localProjects.find((l) => l.id === opts.localId)
+        try {
+          window.localStorage.setItem(
+            STORAGE_ACTIVE_FOLDER,
+            JSON.stringify({ id: opts.localId, name: entry?.name || opts.localId }),
+          )
+        } catch {
+          /* ignore */
+        }
+        setActiveFolderId(opts.localId)
+      }
       if (typeof window !== "undefined") {
         window.dispatchEvent(new CustomEvent("siragpt:collapse-sidebar"))
       }
-      router.push(`/code?folder=${encodeURIComponent(folder.id)}`)
+      const params = new URLSearchParams()
+      if (opts.folderId) params.set("folder", opts.folderId)
+      if (opts.localId) params.set("local", opts.localId)
+      const query = params.toString()
+      router.push(query ? `/code?${query}` : "/code")
       onMobileNavigate?.()
     },
-    [handleSelectFolder, onMobileNavigate, router],
+    [folders, localProjects, onMobileNavigate, router],
+  )
+
+  const handleOpenWorkspace = React.useCallback(
+    (node: WorkspaceTreeNode) => {
+      if (node.kind === "project") {
+        const projectId = node.chatListId
+        try {
+          window.localStorage.setItem(
+            STORAGE_ACTIVE_FOLDER,
+            JSON.stringify({ id: node.id, name: node.name }),
+          )
+        } catch {
+          /* ignore */
+        }
+        setActiveFolderId(projectId)
+        upsertCodexProject({ id: node.id, name: node.name, kind: "project" })
+        refreshCodexProjects()
+        window.dispatchEvent(new CustomEvent(CODEX_UPDATED_EVENT))
+        handleOpenInCode({ folderId: projectId })
+        return
+      }
+      handleOpenInCode({ localId: node.id })
+    },
+    [handleOpenInCode, refreshCodexProjects],
   )
 
   const handleOpenChat = React.useCallback(
@@ -187,227 +306,158 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
 
   const handleOpenDesktopFolder = React.useCallback(() => {
     if (typeof window === "undefined") return
-    if (window.location.pathname.startsWith("/code")) {
+    handleOpenInCode({})
+    window.setTimeout(() => {
       window.dispatchEvent(new CustomEvent("siragpt:open-local-folder"))
-      onMobileNavigate?.()
-      return
-    }
-    toast.info("Abre Cursor y vuelve a pulsar + para seleccionar una carpeta del escritorio.")
-    router.push("/code")
+    }, 120)
     onMobileNavigate?.()
-  }, [onMobileNavigate, router])
+  }, [handleOpenInCode, onMobileNavigate])
 
-  if (collapsed) return null
-
-  return (
-    <div className="px-1 pt-3">
-      <div className="flex items-center gap-1 px-2 pb-1">
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          className={cn(
-            "group flex flex-1 items-center gap-1.5 rounded-md px-1.5 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/70 hover:text-foreground",
-          )}
-          aria-expanded={open}
-        >
-          <ChevronRight
-            className={cn(
-              "h-3 w-3 shrink-0 transition-transform duration-150",
-              open && "rotate-90",
-            )}
-          />
-          <span>Carpetas</span>
-          {folders.length > 0 ? (
-            <span className="ml-1 rounded bg-muted/60 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-tight text-muted-foreground">
-              {folders.length}
-            </span>
-          ) : null}
-        </button>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-6 w-6 text-muted-foreground hover:text-foreground"
-              onClick={handleOpenDesktopFolder}
-              aria-label="Abrir carpeta del escritorio"
-            >
-              <Plus className="h-3.5 w-3.5" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="right">
-            <p>Abrir carpeta del escritorio</p>
-          </TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-6 w-6 text-muted-foreground hover:text-foreground"
-              onClick={() => refresh()}
-              aria-label="Actualizar carpetas"
-              disabled={loading}
-            >
-              {loading ? <ThinkingIndicator size="sm" className="h-3.5 w-3.5" /> : <RefreshCw className="h-3.5 w-3.5" />}
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="right">
-            <p>Actualizar</p>
-          </TooltipContent>
-        </Tooltip>
-      </div>
-
-      {open ? (
-        loading && folders.length === 0 ? (
-          <div className="px-3 py-3 text-center text-xs text-muted-foreground">
-            <ThinkingIndicator size="sm" className="mx-auto mb-1 h-3.5 w-3.5 opacity-60" />
-            Cargando…
-          </div>
-        ) : error ? (
-          <div className="rounded-md border border-rose-300/40 bg-rose-500/5 px-3 py-2 text-xs text-rose-700 dark:text-rose-300">
-            {error}
-          </div>
-        ) : folders.length === 0 ? (
-          null
-        ) : (
-          <div className="space-y-0.5 pb-1">
-            {folders.map((folder) => (
-              <FolderRow
-                key={folder.id}
-                folder={folder}
-                expanded={expandedIds.has(folder.id)}
-                isActive={activeFolderId === folder.id}
-                state={chatsByFolder[folder.id]}
-                onToggleExpanded={() => toggleExpanded(folder.id)}
-                onSelectFolder={() => handleSelectFolder(folder)}
-                onOpenInCode={() => handleOpenInCode(folder)}
-                onOpenChat={handleOpenChat}
-              />
-            ))}
-          </div>
-        )
-      ) : null}
-    </div>
+  const listCodeSessions = React.useCallback(
+    (workspaceId: string) =>
+      listSessionsForWorkspace(workspaceId, codeAgentStore).map((s) => ({
+        id: s.id,
+        title: s.title,
+        updatedAt: s.updatedAt,
+      })),
+    [codeAgentStore],
   )
-}
 
-function FolderRow({
-  folder,
-  expanded,
-  isActive,
-  state,
-  onToggleExpanded,
-  onSelectFolder,
-  onOpenInCode,
-  onOpenChat,
-}: {
-  folder: Project
-  expanded: boolean
-  isActive: boolean
-  state: { loading: boolean; chats: ProjectChatSummary[]; error: string | null } | undefined
-  onToggleExpanded: () => void
-  onSelectFolder: () => void
-  onOpenInCode: () => void
-  onOpenChat: (chatId: string) => void
-}) {
-  return (
-    <div
-      className={cn(
-        "rounded-md transition-colors",
-        isActive ? "bg-accent/40" : "hover:bg-muted/30",
-      )}
-    >
-      <div className="flex items-center gap-1 px-1.5 py-1">
-        <button
-          type="button"
-          onClick={onToggleExpanded}
-          className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
-          aria-label={expanded ? "Cerrar carpeta" : "Abrir carpeta"}
-        >
-          <ChevronRight
-            className={cn("h-3 w-3 transition-transform duration-150", expanded && "rotate-90")}
-          />
-        </button>
-        <button
-          type="button"
-          onClick={onSelectFolder}
-          className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
-          title={folder.name}
-        >
-          {isActive ? (
-            <SquareCheck className="h-3.5 w-3.5 shrink-0 text-sky-500" />
-          ) : expanded ? (
-            <FolderOpen className="h-3.5 w-3.5 shrink-0 text-amber-500" />
-          ) : (
-            <FolderClosed className="h-3.5 w-3.5 shrink-0 text-amber-500/80" />
+  const handleSelectCodeSession = React.useCallback(
+    (workspaceId: string, sessionId: string) => {
+      const node = workspaceNodes.find((n) => n.id === workspaceId)
+      if (!node) return
+      handleOpenWorkspace(node)
+      if (typeof window !== "undefined") {
+        window.setTimeout(() => {
+          window.dispatchEvent(
+            new CustomEvent(CODE_SELECT_CHAT_SESSION_EVENT, {
+              detail: { workspaceId, sessionId },
+            }),
+          )
+        }, 180)
+      }
+    },
+    [handleOpenWorkspace, workspaceNodes],
+  )
+
+  const handleNewCodeChat = React.useCallback(
+    (node: WorkspaceTreeNode) => {
+      handleOpenWorkspace(node)
+      const detail: CodeNewChatDetail = {
+        workspaceId: node.id,
+        name: node.name,
+        kind: node.kind,
+        projectId: node.kind === "project" ? node.chatListId : undefined,
+      }
+      if (typeof window !== "undefined") {
+        window.setTimeout(() => {
+          window.dispatchEvent(new CustomEvent(CODE_NEW_CODE_CHAT_EVENT, { detail }))
+        }, 180)
+      }
+    },
+    [handleOpenWorkspace],
+  )
+
+  const pickerSelectEntry = React.useCallback(
+    (entry: CodexProjectEntry) => {
+      if (entry.kind === "project") {
+        const projectId = entry.id.replace(/^project:/, "")
+        const folder = folders.find((f) => f.id === projectId)
+        if (folder) {
+          handleOpenWorkspace({
+            id: entry.id,
+            name: entry.name,
+            kind: "project",
+            chatListId: projectId,
+          })
+        } else {
+          handleOpenInCode({ folderId: projectId })
+        }
+        return
+      }
+      handleOpenInCode({ localId: entry.id })
+    },
+    [folders, handleOpenInCode, handleOpenWorkspace],
+  )
+
+  const pickerProps = {
+    onOpenFolder: handleOpenDesktopFolder,
+    onSelectEntry: pickerSelectEntry,
+    onOpenHome: () => handleOpenInCode({}),
+    align: "start" as const,
+    side: "right" as const,
+  }
+
+  if (collapsed) {
+    return (
+      <div className="flex justify-center px-2 pt-2">
+        <CodexFolderPicker
+          {...pickerProps}
+          triggerVariant="codex-mark"
+          side="right"
+          triggerClassName={cn(
+            isOnCodePage &&
+              "bg-foreground/[0.065] text-foreground ring-1 ring-border/40",
           )}
-          <span
-            className={cn(
-              "min-w-0 flex-1 truncate text-[13px]",
-              isActive ? "font-medium text-foreground" : "text-foreground/85",
-            )}
-          >
-            {folder.name}
-          </span>
-          {typeof folder.chatCount === "number" ? (
-            <span className="shrink-0 text-[10px] text-muted-foreground">{folder.chatCount}</span>
-          ) : null}
-        </button>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              className={cn(
-                "h-6 w-6 shrink-0 text-muted-foreground hover:text-sky-500",
-                isActive && "text-sky-500",
-              )}
-              onClick={(e) => {
-                e.stopPropagation()
-                onOpenInCode()
-              }}
-              aria-label={`Abrir ${folder.name} en Cursor`}
-            >
-              <Terminal className="h-3.5 w-3.5" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="right">
-            <p>Abrir en Cursor</p>
-          </TooltipContent>
-        </Tooltip>
+        />
       </div>
+    )
+  }
 
-      {expanded ? (
-        <div className="ml-4 border-l border-border/40 pl-2">
-          {state?.loading ? (
-            <div className="px-2 py-1.5 text-[11px] text-muted-foreground">
-              <ThinkingIndicator size="xs" className="mr-1 inline opacity-70" />
-              Cargando chats…
-            </div>
-          ) : state?.error ? (
-            <div className="px-2 py-1.5 text-[11px] text-rose-500">{state.error}</div>
-          ) : state?.chats?.length ? (
-            <ul className="py-0.5">
-              {state.chats.map((chat) => (
-                <li key={chat.id}>
-                  <button
-                    type="button"
-                    onClick={() => onOpenChat(chat.id)}
-                    className="flex w-full min-w-0 items-center gap-1.5 rounded-md px-2 py-1 text-left text-[12px] text-muted-foreground hover:bg-muted/40 hover:text-foreground"
-                    title={chat.title}
-                  >
-                    <Square className="h-2.5 w-2.5 shrink-0 opacity-60" />
-                    <span className="min-w-0 flex-1 truncate">{chat.title}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <div className="px-2 py-1.5 text-[11px] text-muted-foreground/80">Sin chats todavía.</div>
-          )}
+  return (
+    <div className="flex max-h-[min(420px,50vh)] min-h-[120px] flex-col px-1 pt-3">
+      {error ? (
+        <div className="mx-2 mb-2 rounded-md border border-rose-300/40 bg-rose-500/5 px-3 py-2 text-xs text-rose-700 dark:text-rose-300">
+          {error}
         </div>
       ) : null}
+
+      <CodexWorkspaceTree
+        workspaces={workspaceNodes}
+        expandedIds={expandedIds}
+        activeWorkspaceId={activeWorkspaceId}
+        activeChatId={currentChat?.id ?? null}
+        chatsByWorkspace={chatsByFolder}
+        loading={loading}
+        onToggleExpand={toggleExpanded}
+        onOpenWorkspace={handleOpenWorkspace}
+        onOpenChat={handleOpenChat}
+        onNewCodeChat={handleNewCodeChat}
+        onSelectCodeSession={handleSelectCodeSession}
+        activeCodeSessionId={activeCodeSessionId}
+        listCodeSessions={listCodeSessions}
+        headerRight={
+          <>
+            <CodexFolderPicker {...pickerProps} triggerVariant="folder-plus" triggerClassName="h-6 w-6" />
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6 text-muted-foreground hover:text-foreground"
+                  onClick={() => refresh()}
+                  aria-label="Actualizar"
+                  disabled={loading}
+                >
+                  {loading ? (
+                    <ThinkingIndicator size="sm" className="h-3.5 w-3.5" />
+                  ) : (
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  )}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="right">
+                <p>Actualizar</p>
+              </TooltipContent>
+            </Tooltip>
+          </>
+        }
+      />
+
+      <div className="shrink-0 border-t border-border/40 px-2 py-2">
+        <CodexFolderPicker {...pickerProps} triggerVariant="open-workspace-row" />
+      </div>
     </div>
   )
 }

@@ -9,7 +9,7 @@
  */
 
 import * as React from "react"
-import { FileCode2, FilePlus2, RotateCcw } from "lucide-react"
+import { FileCode2, FilePlus2, RotateCcw, X } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -18,31 +18,21 @@ import { useCodeWorkspace } from "@/lib/code-workspace-context"
 export function EditorPanel() {
   const {
     files,
+    openTabs,
     activePath,
     setActiveTab,
+    closeTab,
     updateFile,
     focusChat,
     createFile,
     resetWorkspace,
     saveFileToWorkspace,
   } = useCodeWorkspace()
-  // Current page URL shown as a browser-style address in the tab bar.
-  // Reads `window.location.href` after mount (SSR-safe) and refreshes
-  // on `popstate` so it tracks back/forward navigation without a full
-  // route remount. We never write to it — it's purely a display.
-  const [pageUrl, setPageUrl] = React.useState<string>("")
-  React.useEffect(() => {
-    if (typeof window === "undefined") return
-    const sync = () => setPageUrl(window.location.href)
-    sync()
-    window.addEventListener("popstate", sync)
-    return () => window.removeEventListener("popstate", sync)
-  }, [])
 
   const activeFile = activePath ? files[activePath] : null
-  const sortedPaths = React.useMemo(
-    () => Object.keys(files).sort((a, b) => a.localeCompare(b)),
-    [files],
+  const tabPaths = React.useMemo(
+    () => openTabs.filter((path) => Boolean(files[path])),
+    [files, openTabs],
   )
 
   const handleChange = React.useCallback(
@@ -92,31 +82,21 @@ export function EditorPanel() {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border/60 px-2">
-        <div className="flex min-w-0 flex-1 items-center gap-2">
-          <div
-            className="flex h-7 min-w-0 max-w-[260px] shrink-0 items-center gap-1.5 rounded-full border border-border/70 bg-muted/30 px-2.5 text-[11px] text-muted-foreground"
-            title={pageUrl || "URL del workspace"}
-          >
-            <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-500" />
-            <span className="truncate font-mono">
-              {pageUrl || "http://localhost:3000/code"}
-            </span>
-          </div>
-          <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
-            {sortedPaths.length === 0 ? (
-              <span className="px-2 text-xs text-muted-foreground">Sin archivos</span>
-            ) : (
-              sortedPaths.map((path) => (
-                <FileSwitchButton
-                  key={path}
-                  path={path}
-                  active={path === activePath}
-                  onSelect={() => setActiveTab(path)}
-                />
-              ))
-            )}
-          </div>
+      <div className="flex h-8 shrink-0 items-center gap-1 border-b border-border/50 px-1.5">
+        <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
+          {tabPaths.length === 0 ? (
+            <span className="px-2 text-[11px] text-muted-foreground">Sin archivos abiertos</span>
+          ) : (
+            tabPaths.map((path) => (
+              <FileTabButton
+                key={path}
+                path={path}
+                active={path === activePath}
+                onSelect={() => setActiveTab(path)}
+                onClose={() => closeTab(path)}
+              />
+            ))
+          )}
         </div>
         <div className="flex shrink-0 items-center gap-1">
           <Button
@@ -159,31 +139,43 @@ export function EditorPanel() {
   )
 }
 
-function FileSwitchButton({
+function FileTabButton({
   path,
   active,
   onSelect,
+  onClose,
 }: {
   path: string
   active: boolean
   onSelect: () => void
+  onClose: () => void
 }) {
   const label = path.includes("/") ? path.slice(path.lastIndexOf("/") + 1) : path
   return (
-    <button
-      type="button"
-      onClick={onSelect}
+    <div
       className={cn(
-        "h-7 max-w-[180px] shrink-0 truncate rounded-md px-2.5 text-left text-xs transition-colors",
+        "group flex h-7 max-w-[200px] shrink-0 items-center gap-0.5 rounded-md border border-transparent px-1.5 text-[11px] transition-colors",
         active
-          ? "bg-foreground text-background shadow-sm"
-          : "bg-muted/45 text-muted-foreground hover:bg-muted hover:text-foreground",
+          ? "border-border/60 bg-background text-foreground shadow-sm"
+          : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
       )}
-      title={path}
-      aria-label={`Abrir ${label}`}
     >
-      {label}
-    </button>
+      <button type="button" onClick={onSelect} className="flex min-w-0 items-center gap-1 truncate" title={path}>
+        <FileCode2 className="h-3 w-3 shrink-0 opacity-60" />
+        <span className="truncate">{label}</span>
+      </button>
+      <button
+        type="button"
+        className="rounded p-0.5 opacity-0 transition-opacity hover:bg-muted group-hover:opacity-100"
+        aria-label={`Cerrar ${label}`}
+        onClick={(e) => {
+          e.stopPropagation()
+          onClose()
+        }}
+      >
+        <X className="h-3 w-3" />
+      </button>
+    </div>
   )
 }
 

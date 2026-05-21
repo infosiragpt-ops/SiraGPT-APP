@@ -422,6 +422,102 @@ router.post('/task/:taskId/retry', authenticateToken, async (req, res) => {
   }
 });
 
+// ─── POST /api/agent/workspace-workflow ─────────────────────────────────
+// Replit-style durable chained orchestration (10–20 h budget).
+
+const workspaceWorkflowOrchestrator = require('../services/agents/workspace-workflow-orchestrator');
+
+router.post(
+  '/workspace-workflow',
+  agentRateLimiter,
+  [
+    body('goal').isString().trim().isLength({ min: 8, max: 8000 }),
+    body('model').optional().isString().trim().isLength({ min: 2, max: 120 }),
+    body('maxSteps').optional().isInt({ min: 10, max: 200 }),
+    body('maxRuntimeMs').optional().isInt({ min: 3_600_000, max: 72_000_000 }),
+    body('chatId').optional().isString(),
+    body('files').optional().isArray({ max: 20 }),
+  ],
+  authenticateToken,
+  enforcePlanQuota({ surface: 'agent.task.create' }),
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+    const built = workspaceWorkflowOrchestrator.buildWorkspaceWorkflowJob({
+      goal: req.body.goal,
+      user: req.user,
+      model: req.body.model,
+      maxSteps: req.body.maxSteps,
+      maxRuntimeMs: req.body.maxRuntimeMs,
+      chatId: req.body.chatId,
+      fileIds: req.body.files,
+    });
+    if (!built.ok) {
+      return res.status(400).json({ error: built.error });
+    }
+
+    const { payload, taskId, traceId, plan, subTasks, maxRuntimeMs, model, displayGoal, documentPolicy } = built;
+
+    if (process.env.AGENT_TASK_INLINE === '1') {
+      return res.status(501).json({
+        error: 'workspace-workflow requires queued agent runtime (unset AGENT_TASK_INLINE)',
+      });
+    }
+
+    const { isRedisRecentlyUnhealthy, getLastRedisFailureMessage } = require('../services/agents/redis-resilience');
+    if (isRedisRecentlyUnhealthy()) {
+      return res.status(503).json({
+        error: 'Redis no disponible para workflows largos',
+        detail: getLastRedisFailureMessage(),
+      });
+    }
+
+    let job;
+    try {
+      job = await enqueueAgentTask(payload);
+    } catch (err) {
+      const message = err?.message ? String(err.message) : String(err);
+      return res.status(503).json({ error: message || 'enqueue failed' });
+    }
+
+    const streamState = initialAgentState();
+    taskStore.writeTaskSnapshot({
+      taskId,
+      userId: req.user?.id,
+      chatId: payload.chatId,
+      displayGoal,
+      agentGoal: payload.goal,
+      systemContract: payload.systemContract,
+      fileIds: payload.files,
+      model,
+      maxSteps: payload.maxSteps,
+      maxRuntimeMs,
+      status: 'queued',
+      jobId: String(job.id),
+      queueName: getQueueName(),
+      traceId,
+      documentPolicy,
+      streamState,
+      executionProfile: payload.executionProfile,
+      intentAlignmentProfile: payload.intentAlignmentProfile,
+      taskPlan: plan,
+      events: [],
+      artifacts: [],
+    });
+
+    return res.status(202).json({
+      ok: true,
+      taskId,
+      queued: true,
+      plan,
+      subTasks,
+      maxRuntimeMs,
+      model,
+    });
+  },
+);
+
 // ─── POST /api/agent/task ───────────────────────────────────────────────
 
 router.post(
@@ -436,7 +532,7 @@ router.post(
     body('chatId').optional().isString(),
     body('model').optional().isString(),
     body('maxSteps').optional().isInt({ min: 2, max: 120 }),
-    body('maxRuntimeMs').optional().isInt({ min: 60000, max: 7200000 }),
+    body('maxRuntimeMs').optional().isInt({ min: 60000, max: 72_000_000 }),
   ],
   authenticateToken,
   // Plan-quota enforcement on the durable task creation path.

@@ -22,6 +22,7 @@
 
 import * as React from "react"
 import {
+  ArrowUp,
   BookOpen,
   Bug,
   Check,
@@ -29,12 +30,11 @@ import {
   CircleHelp,
   Image as ImageIcon,
   ListChecks,
-  Mic,
   Plus,
-  Send,
   Server,
   Sparkles,
-  StopCircle} from "lucide-react"
+  StopCircle,
+} from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -57,18 +57,12 @@ import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { useChat } from "@/lib/chat-context-integrated"
 import { useCodeWorkspace } from "@/lib/code-workspace-context"
+import type { CodeChatTurn } from "@/lib/code-chat-sessions"
 import { computeLineDiff, parseCodeBlocks, type CodeBlock } from "@/lib/code-workspace-utils"
 
 import { DiffView } from "./diff-view"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
-type ChatTurn = {
-  id: string
-  role: "user" | "assistant"
-  content: string
-  /** Streaming flag: true while the assistant turn is still receiving tokens. */
-  streaming?: boolean
-}
 
 type ComposerMode = "build" | "plan" | "debug" | "ask" | "image"
 
@@ -81,11 +75,11 @@ const COMPOSER_MODE_LABEL: Record<ComposerMode, string> = {
 }
 
 const COMPOSER_PLACEHOLDER: Record<ComposerMode, string> = {
-  build: "Describe el cambio que quieres construir, pega código o escribe / para comandos",
-  plan: "Describe el objetivo y te devuelvo un plan claro antes de tocar archivos",
-  debug: "Pega el error, stack trace o comportamiento esperado para diagnosticarlo",
-  ask: "Pregunta sobre el workspace, el archivo activo o una decision tecnica",
-  image: "Describe la interfaz o asset que quieres analizar o implementar",
+  build: "Pide un cambio, pega código o / para comandos",
+  plan: "Objetivo o plan antes de editar archivos…",
+  debug: "Error, stack trace o comportamiento esperado…",
+  ask: "Pregunta sobre el workspace o el archivo activo…",
+  image: "Describe UI, asset o captura…",
 }
 
 const COMPOSER_MODE_INSTRUCTION: Record<ComposerMode, string> = {
@@ -148,9 +142,33 @@ export function AICodeChatPanel() {
     setSelectedProivder,
     availableModels,
   } = useChat()
-  const { files, activePath, applyBlock, registerChatFocusHandler, activeFolder } = useCodeWorkspace()
+  const {
+    files,
+    activePath,
+    applyBlock,
+    registerChatFocusHandler,
+    activeFolder,
+    codeChatSessions,
+    activeCodeChatSessionId,
+    activeCodeChatSession,
+    createCodeChatSession,
+    setActiveCodeChatSession,
+    patchCodeChatSessionTurns,
+  } = useCodeWorkspace()
 
-  const [turns, setTurns] = React.useState<ChatTurn[]>([])
+  const sessionId = activeCodeChatSessionId
+  const turns = activeCodeChatSession?.turns ?? []
+
+  const setTurns = React.useCallback(
+    (updater: React.SetStateAction<CodeChatTurn[]>) => {
+      if (!sessionId) return
+      patchCodeChatSessionTurns(sessionId, (prev) =>
+        typeof updater === "function" ? (updater as (p: CodeChatTurn[]) => CodeChatTurn[])(prev) : updater,
+      )
+    },
+    [patchCodeChatSessionTurns, sessionId],
+  )
+
   const [input, setInput] = React.useState("")
   const [busy, setBusy] = React.useState(false)
   const [includeContext, setIncludeContext] = React.useState(true)
@@ -194,10 +212,17 @@ export function AICodeChatPanel() {
   }, [turns])
 
   React.useEffect(() => {
+    setInput("")
+    setBusy(false)
+    abortRef.current?.abort()
+    abortRef.current = null
+  }, [sessionId])
+
+  React.useEffect(() => {
     const el = inputRef.current
     if (!el) return
     el.style.height = "0px"
-    el.style.height = `${Math.min(Math.max(el.scrollHeight, 54), 168)}px`
+    el.style.height = `${Math.min(Math.max(el.scrollHeight, 28), 140)}px`
   }, [input])
 
   const cancelStream = React.useCallback(() => {
@@ -226,6 +251,11 @@ export function AICodeChatPanel() {
       }
       if (!selectedModel) {
         toast.error("No hay modelo seleccionado todavía. Abre el chat principal una vez para inicializar.")
+        return
+      }
+
+      if (!sessionId) {
+        toast.error("Selecciona o crea un agente de código.")
         return
       }
 
@@ -295,7 +325,20 @@ export function AICodeChatPanel() {
         abortRef.current = null
       }
     },
-    [activePath, activeFolder, busy, composerMode, files, includeContext, selectProvider, selectedModel, token, user],
+    [
+      activePath,
+      activeFolder,
+      busy,
+      composerMode,
+      files,
+      includeContext,
+      selectProvider,
+      selectedModel,
+      sessionId,
+      setTurns,
+      token,
+      user,
+    ],
   )
 
   const onSubmit = (e: React.FormEvent) => {
@@ -310,22 +353,50 @@ export function AICodeChatPanel() {
     }
   }
 
-  const activeFileLabel = activePath ? activePath.split("/").pop() || activePath : "Sin archivo activo"
-  const hasWorkspaceContext = includeContext && Object.keys(files).length > 0
+  const activeFileLabel = activePath ? activePath.split("/").pop() || activePath : null
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
-      <div className="flex h-10 shrink-0 items-center justify-between gap-2 border-b border-border/60 px-3">
-        <div className="flex shrink-0 items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-          <Sparkles className="h-3.5 w-3.5 text-sky-500" />
-          <span>Cursor Chat</span>
+      <div className="shrink-0 border-b border-border/50">
+        <div className="flex h-8 items-center justify-between gap-2 px-3">
+          <span className="text-[11px] font-medium text-muted-foreground">Chat</span>
+          {activeFileLabel ? (
+            <span
+              className="min-w-0 truncate font-mono text-[10px] text-muted-foreground/80"
+              title={activePath ?? undefined}
+            >
+              {activeFileLabel}
+            </span>
+          ) : null}
         </div>
-        <span
-          className="min-w-0 truncate text-[10.5px] font-mono text-muted-foreground/90"
-          title={activePath ?? undefined}
-        >
-          {activeFileLabel}
-        </span>
+        <div className="flex items-center gap-1 overflow-x-auto px-2 pb-1.5">
+          {codeChatSessions.map((session) => (
+            <button
+              key={session.id}
+              type="button"
+              onClick={() => setActiveCodeChatSession(session.id)}
+              className={cn(
+                "h-6 shrink-0 rounded-md px-2 text-[11px] transition-colors",
+                session.id === activeCodeChatSessionId
+                  ? "bg-foreground text-background"
+                  : "bg-muted/50 text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {session.title}
+            </button>
+          ))}
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6 shrink-0 rounded-md text-muted-foreground"
+            aria-label="Nuevo agente"
+            title="Nuevo chat en paralelo"
+            onClick={() => createCodeChatSession()}
+          >
+            <Plus className="h-3 w-3" />
+          </Button>
+        </div>
       </div>
 
       <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto p-3">
@@ -352,22 +423,8 @@ export function AICodeChatPanel() {
         )}
       </div>
 
-      <form onSubmit={onSubmit} className="shrink-0 border-t border-border/60 bg-background/95 px-3 py-3">
-        <div className="group rounded-[22px] border border-border/70 bg-background px-3 py-2.5 shadow-[0_10px_30px_rgba(15,23,42,0.06)] transition-[border-color,box-shadow,background-color] focus-within:border-foreground/20 focus-within:bg-background focus-within:shadow-[0_14px_38px_rgba(15,23,42,0.1)] focus-within:ring-1 focus-within:ring-foreground/10">
-          <div className="mb-2 flex items-center justify-between gap-3">
-            <div className="flex min-w-0 items-center gap-1.5">
-              <span className="inline-flex h-6 shrink-0 items-center gap-1 rounded-full border border-border/60 bg-muted/45 px-2 text-[11px] font-medium text-foreground">
-                <Sparkles className="h-3 w-3 text-sky-500" />
-                {COMPOSER_MODE_LABEL[composerMode]}
-              </span>
-              <span className="min-w-0 truncate rounded-full bg-muted/35 px-2 py-1 text-[11px] text-muted-foreground">
-                {hasWorkspaceContext ? `Contexto: ${activeFileLabel}` : "Contexto desactivado"}
-              </span>
-            </div>
-            <span className="hidden shrink-0 text-[11px] text-muted-foreground/70 sm:inline">
-              Enter envía · Shift+Enter nueva línea
-            </span>
-          </div>
+      <form onSubmit={onSubmit} className="shrink-0 px-3 pb-3 pt-2">
+        <div className="group rounded-2xl border border-border/60 bg-muted/20 px-2.5 py-2 transition-colors focus-within:border-border focus-within:bg-background focus-within:shadow-sm">
           <Textarea
             aria-label="Mensaje para el chat de código"
             ref={inputRef}
@@ -377,47 +434,53 @@ export function AICodeChatPanel() {
             placeholder={COMPOSER_PLACEHOLDER[composerMode]}
             rows={1}
             disabled={busy}
-            className="max-h-[168px] min-h-[54px] resize-none border-0 bg-transparent px-0 py-0 text-sm leading-5 shadow-none outline-none ring-0 placeholder:text-muted-foreground/50 focus-visible:ring-0"
+            className="max-h-[140px] min-h-[28px] resize-none border-0 bg-transparent px-1 py-0.5 text-[13px] leading-[1.45] shadow-none outline-none ring-0 placeholder:text-muted-foreground/55 focus-visible:ring-0"
           />
-          <div className="mt-2 flex items-center justify-between gap-2 border-t border-border/50 pt-2">
-            <div className="flex min-w-0 items-center gap-2">
-              <ComposerPlusMenu
-                mode={composerMode}
-                includeContext={includeContext}
-                onModeChange={(mode) => {
-                  setComposerMode(mode)
-                  inputRef.current?.focus()
-                }}
-                onIncludeContextChange={setIncludeContext}
-              />
-              <ModelPickerInline
-                models={availableModels || []}
-                selectedModel={selectedModel}
-                onSelect={(m) => {
-                  setSelectedModel(m.name)
-                  if (m.provider) setSelectedProivder(m.provider)
-                }}
-              />
-            </div>
+          <div className="mt-1 flex items-center gap-0.5">
+            <ComposerPlusMenu
+              mode={composerMode}
+              includeContext={includeContext}
+              activeFileLabel={activeFileLabel}
+              onModeChange={(mode) => {
+                setComposerMode(mode)
+                inputRef.current?.focus()
+              }}
+              onIncludeContextChange={setIncludeContext}
+            />
+            <ModelPickerInline
+              models={availableModels || []}
+              selectedModel={selectedModel}
+              onSelect={(m) => {
+                setSelectedModel(m.name)
+                if (m.provider) setSelectedProivder(m.provider)
+              }}
+            />
+            <span className="min-w-0 flex-1" />
             {busy ? (
               <Button
                 type="button"
                 size="icon"
-                className="h-8 w-8 shrink-0 rounded-full bg-foreground text-background hover:bg-foreground/90"
+                variant="ghost"
+                className="h-7 w-7 shrink-0 rounded-lg text-foreground hover:bg-muted"
                 onClick={cancelStream}
                 aria-label="Detener"
               >
-                <StopCircle className="h-3.5 w-3.5" />
+                <StopCircle className="h-4 w-4" />
               </Button>
             ) : (
               <Button
                 type="submit"
                 size="icon"
-                className="h-8 w-8 shrink-0 rounded-full bg-foreground text-background hover:bg-foreground/90 disabled:bg-muted-foreground/20 disabled:text-muted-foreground"
+                className={cn(
+                  "h-7 w-7 shrink-0 rounded-lg transition-colors",
+                  input.trim()
+                    ? "bg-foreground text-background hover:bg-foreground/90"
+                    : "bg-transparent text-muted-foreground/40",
+                )}
                 disabled={!input.trim()}
-                aria-label={input.trim() ? "Enviar" : "Dictar"}
+                aria-label="Enviar"
               >
-                {input.trim() ? <Send className="h-3.5 w-3.5" /> : <Mic className="h-3.5 w-3.5" />}
+                <ArrowUp className="h-4 w-4" strokeWidth={2.25} />
               </Button>
             )}
           </div>
@@ -445,7 +508,7 @@ function ChatBubble({
   onApply,
   lookupContent,
 }: {
-  turn: ChatTurn
+  turn: CodeChatTurn
   onApply: (block: CodeBlock) => void
   lookupContent: (path: string) => string
 }) {
@@ -491,11 +554,13 @@ function stripFences(text: string): string {
 function ComposerPlusMenu({
   mode,
   includeContext,
+  activeFileLabel,
   onModeChange,
   onIncludeContextChange,
 }: {
   mode: ComposerMode
   includeContext: boolean
+  activeFileLabel: string | null
   onModeChange: (mode: ComposerMode) => void
   onIncludeContextChange: (value: boolean) => void
 }) {
@@ -507,12 +572,12 @@ function ComposerPlusMenu({
       <DropdownMenuTrigger asChild>
         <Button
           type="button"
-          variant="secondary"
+          variant="ghost"
           size="icon"
-          className="h-8 w-8 shrink-0 rounded-full border border-transparent bg-muted/70 text-foreground shadow-none hover:border-border/70 hover:bg-muted"
-          aria-label="Agregar agentes, contexto y herramientas"
+          className="h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+          aria-label="Modo, contexto y herramientas"
         >
-          <Plus className="h-[18px] w-[18px]" />
+          <Plus className="h-4 w-4" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
@@ -521,9 +586,17 @@ function ComposerPlusMenu({
         sideOffset={10}
         className="w-[292px] rounded-xl border-border/70 p-1.5 shadow-xl"
       >
-        <DropdownMenuLabel className="px-2.5 py-2 text-sm font-normal text-muted-foreground">
-          Agentes, contexto y herramientas
+        <DropdownMenuLabel className="px-2.5 py-1.5 text-[11px] font-normal text-muted-foreground">
+          {COMPOSER_MODE_LABEL[mode]}
+          {activeFileLabel && includeContext ? ` · ${activeFileLabel}` : ""}
         </DropdownMenuLabel>
+        <DropdownMenuItem
+          className={cn(itemClass, mode === "build" && "bg-muted font-medium")}
+          onClick={() => onModeChange("build")}
+        >
+          <Sparkles className={iconClass} />
+          <span>Build</span>
+        </DropdownMenuItem>
         <DropdownMenuItem
           className={cn(itemClass, mode === "plan" && "bg-muted font-medium")}
           onClick={() => onModeChange("plan")}
@@ -628,11 +701,11 @@ function ModelPickerInline({
           type="button"
           variant="ghost"
           size="sm"
-          className="h-8 min-w-0 gap-1 rounded-full px-2 text-xs font-medium text-muted-foreground hover:bg-muted/60 hover:text-foreground data-[state=open]:bg-muted data-[state=open]:text-foreground"
+          className="h-7 min-w-0 gap-0.5 rounded-md px-1.5 text-[11px] font-normal text-muted-foreground hover:bg-muted/80 hover:text-foreground data-[state=open]:bg-muted/80"
           aria-label="Seleccionar modelo"
         >
-          <span className="max-w-[150px] truncate">{label}</span>
-          <ChevronDown className="h-3.5 w-3.5 opacity-65" />
+          <span className="max-w-[120px] truncate">{label}</span>
+          <ChevronDown className="h-3 w-3 opacity-50" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
