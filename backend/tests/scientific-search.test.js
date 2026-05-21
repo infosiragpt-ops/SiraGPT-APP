@@ -10,6 +10,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const ss = require('../src/services/scientific-search');
+const searchCache = require('../src/services/scientific-search-cache');
 
 // ── Fetch stub helpers ─────────────────────────────────────────────────
 
@@ -49,6 +50,7 @@ function errorResponse(status) {
 test.afterEach(() => {
   fetchHandler = null;
   global.fetch = originalFetch;
+  searchCache.clear();
 });
 
 // ── Internal helpers ───────────────────────────────────────────────────

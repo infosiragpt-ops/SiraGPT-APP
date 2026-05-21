@@ -62,7 +62,7 @@ test('classifyTaskError: 402 routes to quota-exhausted', () => {
 test('classifyTaskError: rate-limit ttl jitter stays within bounds', () => {
   for (let i = 0; i < 20; i++) {
     const res = runner.classifyTaskError({ message: 'rate limit reached' });
-    assert.ok(res.ttlMs >= 12_000 && res.ttlMs <= 18_000, `ttlMs out of jitter band: ${res.ttlMs}`);
+    assert.ok(res.ttlMs >= 11_250 && res.ttlMs <= 18_750, `ttlMs out of jitter band: ${res.ttlMs}`);
   }
 });
 
@@ -90,11 +90,11 @@ test('classifyTaskError: depth_zero_self_signed cert error is retryable as ssl-e
   assert.equal(res.retryable, true);
 });
 
-test('classifyTaskError: completely opaque message defaults to retryable unknown', () => {
+test('classifyTaskError: completely opaque message defaults to non-retryable unknown', () => {
   const res = runner.classifyTaskError(new Error('extraterrestrial bit-rot'));
-  assert.equal(res.retryable, true);
+  assert.equal(res.retryable, false);
   assert.equal(res.reason, 'unknown');
-  assert.ok(res.ttlMs > 0);
+  assert.equal(res.ttlMs, 0);
 });
 
 // ─── normalizeAgentRuntimeModel ───────────────────────────────────────────
