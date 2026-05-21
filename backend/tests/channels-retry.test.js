@@ -12,7 +12,13 @@
 const assert = require('node:assert');
 const { describe, it } = require('node:test');
 
-const { retryWithBackoff, backoffDelay, retryAfterDelay, abortableSleep } = require('../src/channels/retry');
+const {
+  retryWithBackoff,
+  backoffDelay,
+  retryAfterDelay,
+  parseRetryAfterHeader,
+  abortableSleep,
+} = require('../src/channels/retry');
 
 // A fake sleep that records all the waits requested by the retry
 // loop, so tests don't actually pause execution.
@@ -126,6 +132,21 @@ describe('retryWithBackoff', () => {
     assert.equal(waits[0], 10);
   });
 
+  it('honours Retry-After date strings before falling back to exponential backoff', async () => {
+    const { waits, sleep } = recorderSleep();
+    const now = Date.parse('Wed, 21 Oct 2015 07:28:00 GMT');
+    const retryAt = 'Wed, 21 Oct 2015 07:28:02 GMT';
+    let calls = 0;
+
+    await retryWithBackoff(async () => {
+      calls += 1;
+      if (calls < 2) return { ok: false, status: 429, retryAfterMs: retryAt };
+      return { ok: true, status: 200 };
+    }, { sleep, baseDelayMs: 10, jitter: false, now });
+
+    assert.equal(waits[0], 2000);
+  });
+
   it('exhausts attempts and returns the last retriable response', async () => {
     const { sleep } = recorderSleep();
     let calls = 0;
@@ -218,6 +239,28 @@ describe('abortableSleep', () => {
   });
 });
 
+describe('parseRetryAfterHeader', () => {
+  it('parses delta seconds into milliseconds', () => {
+    assert.equal(parseRetryAfterHeader('3'), 3000);
+    assert.equal(parseRetryAfterHeader('0.25'), 250);
+  });
+
+  it('parses HTTP-date values relative to a supplied clock', () => {
+    const now = Date.parse('Wed, 21 Oct 2015 07:28:00 GMT');
+    const retryAt = 'Wed, 21 Oct 2015 07:28:05 GMT';
+
+    assert.equal(parseRetryAfterHeader(retryAt, now), 5000);
+  });
+
+  it('ignores invalid, negative, or stale values', () => {
+    const now = Date.parse('Wed, 21 Oct 2015 07:28:00 GMT');
+
+    assert.equal(parseRetryAfterHeader('not-a-date', now), undefined);
+    assert.equal(parseRetryAfterHeader('-1', now), undefined);
+    assert.equal(parseRetryAfterHeader('Wed, 21 Oct 2015 07:27:59 GMT', now), undefined);
+  });
+});
+
 describe('retryAfterDelay', () => {
   it('returns undefined when retryAfterMs is absent or invalid', () => {
     assert.equal(retryAfterDelay(undefined, 5_000), undefined);
@@ -231,6 +274,7 @@ describe('retryAfterDelay', () => {
     assert.equal(retryAfterDelay(0, 5_000), 0);
     assert.equal(retryAfterDelay('250', 5_000), 250);
     assert.equal(retryAfterDelay(60_000, 5_000), 5_000);
+    assert.equal(retryAfterDelay('Wed, 21 Oct 2015 07:29:00 GMT', 10_000, Date.parse('Wed, 21 Oct 2015 07:28:00 GMT')), 10_000);
   });
 });
 

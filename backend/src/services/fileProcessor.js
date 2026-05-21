@@ -58,6 +58,20 @@ const EXTENSION_MIME_HINTS = new Map([
   ['.rtf', 'application/rtf'],
 ]);
 
+async function assertReadableDocxZip(filePath) {
+  let handle;
+  try {
+    handle = await fs.open(filePath, 'r');
+    const header = Buffer.alloc(4);
+    const { bytesRead } = await handle.read(header, 0, 4, 0);
+    if (bytesRead < 4 || header.toString('utf8', 0, 2) !== 'PK') {
+      throw new Error('Word document is not a readable DOCX zip. Re-upload a valid .docx file or export legacy .doc files to .docx first.');
+    }
+  } finally {
+    if (handle) await handle.close().catch(() => {});
+  }
+}
+
 function resolveProcessMimeType(file = {}) {
   const declared = String(file.mimetype || file.mimeType || '').split(';')[0].trim().toLowerCase();
   const ext = path.extname(String(file.originalname || file.originalName || file.filename || file.path || '')).toLowerCase();
@@ -70,7 +84,7 @@ class FileProcessor {
   async processFile(file) {
     try {
       const { mimetype, path: filePath, originalname, size } = file;
-      const effectiveMimeType = resolveProcessMimeType(file);
+      let effectiveMimeType = resolveProcessMimeType(file);
 
       // ── Memory-safe guard for large files ──
       // Files > MEMORY_SAFE_MAX_BYTES could OOM the process. For PDFs,
@@ -125,14 +139,14 @@ class FileProcessor {
       console.log(`Processing file: ${originalname}, type: ${mimetype}${effectiveMimeType !== mimetype ? ` -> ${effectiveMimeType}` : ''}, path: ${filePath}`);
 
       // ── Try external parser chain (Marker → Docling → MarkItDown) ──
-      const externalParserTypes = ['application/pdf', 'application/msword',
+      const EXTERNAL_PARSER_TYPES = ['application/pdf', 'application/msword',
         'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         'application/vnd.ms-powerpoint',
         'application/vnd.openxmlformats-officedocument.presentationml.presentation',
       ];
 
-      if (externalParserTypes.includes(effectiveMimeType) && !FileProcessor._externalParserDisabled) {
+      if (EXTERNAL_PARSER_TYPES.includes(effectiveMimeType) && !FileProcessor._externalParserDisabled) {
         try {
           const { parseFileWithBestParser } = require('./document-pipeline/parser-orchestrator');
           const result = await parseFileWithBestParser(filePath, { mimetype: effectiveMimeType });
@@ -394,6 +408,7 @@ class FileProcessor {
 
   async processWord(filePath) {
     try {
+      await assertReadableDocxZip(filePath);
       // convertToHtml preserves document structure (headings, lists,
       // emphasis, tables) which extractRawText discards. We then run
       // a minimal HTML → markdown pass so the LLM sees the document as
@@ -404,17 +419,23 @@ class FileProcessor {
       const header = `Word document — ${markdown.length} characters extracted, structure preserved as markdown\n---\n`;
       return header + markdown;
     } catch (error) {
-      // Mammoth throws verbose stack traces (jszip/openZip chain) when
-      // the .docx is corrupt, truncated, or actually a different format
-      // (e.g. .doc renamed). The outer caller (reprocessIfNeeded) has
-      // its own try/catch, so we just log a compact warning and try
-      // the raw-text fallback before giving up.
-      console.warn(`[fileProcessor] mammoth convertToHtml failed for ${filePath}: ${error && error.message}`);
+        // Mammoth throws verbose stack traces (jszip/openZip chain) when
+        // the .docx is corrupt, truncated, or actually a different format
+        // (e.g. .doc renamed). The outer caller (reprocessIfNeeded) has
+        // its own try/catch, so we just log a compact warning and try
+        // the raw-text fallback before giving up.
+        const conciseMessage = error?.message || String(error);
+        console.warn(`Word file processing failed for ${filePath}: ${conciseMessage}`);
+        if (/not a readable DOCX zip/i.test(conciseMessage)) {
+          throw new Error(conciseMessage);
+        }
+        // Fallback to raw text so the user doesn't lose the file entirely
+        // if mammoth's HTML pipeline chokes on a weird input.
       try {
         const fallback = await mammoth.extractRawText({ path: filePath });
         return fallback.value;
-      } catch (fallbackErr) {
-        throw new Error(`Word document processing failed: ${error.message}`);
+      } catch {
+        throw new Error(`Word document processing failed: ${conciseMessage}`);
       }
     }
   }

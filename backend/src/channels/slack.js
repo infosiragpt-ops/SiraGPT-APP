@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 const { ChannelAdapter } = require('./channel-adapter');
 const { KINDS } = require('./metrics');
-const { retryWithBackoff } = require('./retry');
+const { retryWithBackoff, parseRetryAfterHeader } = require('./retry');
 
 /**
  * Slack Events API adapter.
@@ -102,12 +102,12 @@ class SlackAdapter extends ChannelAdapter {
         body: JSON.stringify(payload),
       });
       const body = await safeJson(r);
-      const retryAfter = Number(r.headers?.get?.('retry-after'));
+      const retryAfter = parseRetryAfterHeader(r.headers?.get?.('retry-after'));
       return {
         ok: r.ok && body?.ok !== false,
         status: r.status,
         body,
-        retryAfterMs: Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : undefined,
+        retryAfterMs: retryAfter,
       };
     });
     if (!res.ok) {

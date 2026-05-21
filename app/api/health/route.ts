@@ -92,12 +92,8 @@ async function backendCheck(): Promise<HealthCheck> {
 }
 
 function resolveBackendHealthUrl(): string {
-  const configuredApiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
-  const url = new URL(configuredApiUrl, "http://localhost:5000")
-
-  if (url.pathname.endsWith("/api")) {
-    url.pathname = url.pathname.slice(0, -"/api".length) || "/"
-  }
+  const backendBase = process.env.BACKEND_INTERNAL_URL || "http://127.0.0.1:5050"
+  const url = new URL(backendBase)
 
   url.pathname = joinPath(url.pathname, "health")
   url.search = ""

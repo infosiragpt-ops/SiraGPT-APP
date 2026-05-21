@@ -120,7 +120,7 @@ async function runReadinessCheck() {
   }
 }
 
-async function runLivenessCheck() {
+function runLivenessCheck() {
   return {
     status: 'alive',
     ok: true,
