@@ -95,12 +95,19 @@ async function inspectFrameworkImports({ force = false } = {}) {
 }
 
 async function tryImport(pkg) {
+  // We only need to know whether the package is installed and resolvable —
+  // we don't actually need the module's exports here. Using `require.resolve`
+  // instead of `await import(pkg)` avoids loading every llamaindex /
+  // langchain bundle at boot, which (a) wastes ~200ms of startup and
+  // (b) triggers llamaindex's "was already imported" warning because the
+  // four @llamaindex/* packages each ship their own copy of
+  // @llamaindex/core and the runtime flags duplicates the first time
+  // they coexist in the module graph.
   try {
-    const mod = await import(pkg);
+    require.resolve(pkg);
     return {
       package: pkg,
       installed: true,
-      exportCount: Object.keys(mod || {}).length,
     };
   } catch (err) {
     return {
