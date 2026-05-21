@@ -51,6 +51,30 @@ export const metadata: Metadata = {
   keywords: ["IA", "ChatGPT", "Claude", "Gemini", "generación de imágenes", "asistente IA", "plataforma IA", "productividad"],
   authors: [{ name: "Sira GPT" }],
   creator: "Sira GPT",
+  publisher: "Sira GPT",
+  applicationName: "Sira GPT",
+  category: "technology",
+  // Explicit canonical so search engines collapse duplicate variants
+  // (trailing slash, query strings, www, etc.) onto a single URL.
+  alternates: {
+    canonical: "/",
+  },
+  // Explicit robots directives — Lighthouse otherwise warns
+  // "Page is blocked from indexing" whenever it cannot find a positive
+  // index/follow signal. We also opt into Google's max-* hints so rich
+  // results aren't truncated.
+  robots: {
+    index: true,
+    follow: true,
+    nocache: false,
+    googleBot: {
+      index: true,
+      follow: true,
+      "max-snippet": -1,
+      "max-image-preview": "large",
+      "max-video-preview": -1,
+    },
+  },
   // OG tags so Slack / WhatsApp / Twitter previews show a branded
   // card instead of a generic Next.js placeholder.
   openGraph: {
@@ -140,6 +164,54 @@ export default async function RootLayout({
           which doubled the request and re-painted equations on
           stylesheet swap. The bundled copy is sufficient.
         */}
+        {/*
+          JSON-LD structured data — feeds Google's Knowledge Graph and
+          enables rich results (sitelinks search box, organization
+          card). Inlined in the document head so crawlers see it on
+          first byte without waiting for hydration.
+        */}
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{
+            __html: JSON.stringify({
+              "@context": "https://schema.org",
+              "@graph": [
+                {
+                  "@type": "Organization",
+                  "@id": "https://siragpt.com/#organization",
+                  name: "Sira GPT",
+                  url: "https://siragpt.com",
+                  logo: "https://siragpt.com/sira-gpt-512.png",
+                },
+                {
+                  "@type": "WebSite",
+                  "@id": "https://siragpt.com/#website",
+                  url: "https://siragpt.com",
+                  name: "Sira GPT",
+                  description:
+                    "Plataforma multi-LLM con generación de texto, imagen, audio y video.",
+                  inLanguage: "es",
+                  publisher: { "@id": "https://siragpt.com/#organization" },
+                },
+                {
+                  "@type": "SoftwareApplication",
+                  name: "Sira GPT",
+                  applicationCategory: "BusinessApplication",
+                  operatingSystem: "Web, iOS, Android",
+                  url: "https://siragpt.com",
+                  description:
+                    "ChatGPT, Claude, Gemini, Grok y más en una sola plataforma. Chatea, genera imágenes, analiza documentos, diseña prototipos e investiga con IA.",
+                  offers: {
+                    "@type": "Offer",
+                    price: "0",
+                    priceCurrency: "USD",
+                  },
+                  publisher: { "@id": "https://siragpt.com/#organization" },
+                },
+              ],
+            }),
+          }}
+        />
       </head>
       <body className={GeistSans.className}>
         <SentryClientInit />

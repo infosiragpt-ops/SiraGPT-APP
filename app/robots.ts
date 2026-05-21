@@ -12,7 +12,7 @@ export default function robots(): MetadataRoute.Robots {
     rules: [
       {
         userAgent: "*",
-        allow: ["/", "/auth/login", "/auth/register", "/privacy-policy"],
+        allow: ["/", "/auth/login", "/auth/register", "/privacy-policy", "/privacy", "/terms"],
         disallow: [
           "/admin",
           "/super-admin",
@@ -29,6 +29,7 @@ export default function robots(): MetadataRoute.Robots {
         ],
       },
     ],
+    sitemap: "https://siragpt.com/sitemap.xml",
     host: "https://siragpt.com",
   }
 }
