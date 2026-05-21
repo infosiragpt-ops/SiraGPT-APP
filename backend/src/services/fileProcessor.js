@@ -124,6 +124,28 @@ class FileProcessor {
 
       console.log(`Processing file: ${originalname}, type: ${mimetype}${effectiveMimeType !== mimetype ? ` -> ${effectiveMimeType}` : ''}, path: ${filePath}`);
 
+      // ── Try external parser chain (Marker → Docling → MarkItDown) ──
+      const externalParserTypes = ['application/pdf', 'application/msword',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'application/vnd.ms-powerpoint',
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      ];
+
+      if (externalParserTypes.includes(effectiveMimeType)) {
+        try {
+          const { parseFileWithBestParser } = require('./document-pipeline/parser-orchestrator');
+          const result = await parseFileWithBestParser(filePath, { mimetype: effectiveMimeType });
+          if (result?.available && result?.text && !result?.fallback) {
+            extractedText = result.text;
+            console.log(`[fileProcessor] external parser success: ${result.parser}`);
+            effectiveMimeType = '__external_done';
+          }
+        } catch (err) {
+          console.warn(`[fileProcessor] external parser chain unavailable: ${err && err.message}`);
+        }
+      }
+
       switch (effectiveMimeType) {
         case 'application/pdf':
           {
@@ -176,6 +198,9 @@ class FileProcessor {
         case 'application/vnd.ms-powerpoint':
         case 'application/vnd.openxmlformats-officedocument.presentationml.presentation':
           extractedText = await this.processPowerPoint(filePath);
+          break;
+
+        case '__external_done':
           break;
 
         default:

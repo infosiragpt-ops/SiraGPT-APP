@@ -1,6 +1,6 @@
 'use strict';
 
-const { parserPlanFor } = require('../../orchestration/document-pipeline');
+const { parserPlanFor } = require('../../../orchestration/document-pipeline');
 
 let _marker = null;
 function getMarker() {
@@ -27,29 +27,11 @@ async function parseFileWithBestParser(filePath, fileInfo = {}) {
   const parserOrder = parserPlanFor(fileInfo);
   for (const parserName of parserOrder) {
     switch (parserName) {
-      case 'marker': {
-        const m = getMarker();
-        if (await m.available()) return m.parse(filePath);
-        continue;
-      }
-      case 'docling': {
-        const d = getDocling();
-        if (await d.available()) return d.parse(filePath);
-        continue;
-      }
-      case 'markitdown': {
-        const md = getMarkItDown();
-        if (await md.available()) return md.parse(filePath);
-        continue;
-      }
-      case 'unstructured':
-      case 'surya-ocr':
-      case 'mammoth':
-      case 'exceljs':
-      case 'officeparser':
-        continue;
-      default:
-        return { parser: parserName, available: true, text: null, fallback: true, internal: true };
+      case 'marker': { const m = getMarker(); if (await m.available()) return m.parse(filePath); continue; }
+      case 'docling': { const d = getDocling(); if (await d.available()) return d.parse(filePath); continue; }
+      case 'markitdown': { const md = getMarkItDown(); if (await md.available()) return md.parse(filePath); continue; }
+      case 'unstructured': case 'surya-ocr': case 'mammoth': case 'exceljs': case 'officeparser': continue;
+      default: return { parser: parserName, available: true, text: null, fallback: true, internal: true };
     }
   }
   return { parser: 'none', available: false, text: null, fallback: true, error: 'No parser available' };
