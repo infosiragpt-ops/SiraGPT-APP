@@ -43,6 +43,21 @@ export default function GlobalError({
     }
   }, [error])
 
+  // ── Stale Server Action auto-recovery ───────────────────────
+  // Same as app/error.tsx — when a user's open tab hits a Server
+  // Action ID that no longer exists in the current deploy, the
+  // only safe fix is a hard reload to pick up the new client
+  // bundle. sessionStorage guard prevents reload loops.
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const msg = error?.message || ""
+    if (!/Failed to find Server Action/i.test(msg)) return
+    const guardKey = "__siragpt_sa_reload_guard__"
+    if (sessionStorage.getItem(guardKey)) return
+    sessionStorage.setItem(guardKey, String(Date.now()))
+    window.location.reload()
+  }, [error])
+
   const handleRetry = useCallback(() => {
     const next = attempts + 1
     setAttempts(next)
