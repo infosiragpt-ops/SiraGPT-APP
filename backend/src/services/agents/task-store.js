@@ -12,6 +12,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const taskStorePrismaSync = require('./task-store-prisma-sync');
 
 const DEFAULT_RETENTION_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_EVENT_LIMIT = 1000;
@@ -112,6 +113,7 @@ function writeTaskSnapshot(record) {
   snapshot.updatedAt = snapshot.updatedAt || nowIso();
   atomicWriteJson(snapshotPathFor(snapshot.taskId), snapshot);
   try { updateIndexForSnapshot(snapshot); } catch { /* index is best-effort */ }
+  taskStorePrismaSync.schedulePrismaSync(snapshot);
   return snapshot;
 }
 
@@ -190,7 +192,9 @@ function appendTaskEvent(snapshotLike, event, streamState, options = {}) {
       next.artifacts = [...current, stamped.artifact];
     }
   }
-  return writeTaskSnapshot(next);
+  const written = writeTaskSnapshot(next);
+  taskStorePrismaSync.schedulePrismaSync(written, stamped);
+  return written;
 }
 
 function shouldCheckpoint(event) {
@@ -216,6 +220,9 @@ function markTaskStatus(taskLike, status, patch = {}) {
   // Auto-compact long traces when the task reaches a terminal state.
   // The compaction runs after the status write so a crash mid-compact
   // can't lose the terminal status itself; the compaction is best-effort.
+  if (result) {
+    taskStorePrismaSync.schedulePrismaSync(result);
+  }
   if (result && TERMINAL_STATUSES.has(status)) {
     const eventCount = Array.isArray(result.events) ? result.events.length : 0;
     if (eventCount > AUTO_COMPACT_EVENT_THRESHOLD) {

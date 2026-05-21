@@ -64,6 +64,21 @@ async function dispatchTool(registry, name, argsRaw, ctx) {
   if (ctx?.signal?.aborted) {
     return { error: 'aborted' };
   }
+  if (ctx?.toolGate && name !== 'finalize') {
+    const auth = ctx.toolGate.authorize(name, ctx.toolAuthCtx || {});
+    if (!auth?.ok) {
+      return { error: auth?.reason || 'tool_denied' };
+    }
+  }
+  if (ctx?.checkToolBudget && name !== 'finalize') {
+    const usage = ctx.toolUsageMap || {};
+    const budget = ctx.checkToolBudget(name, usage);
+    if (budget && budget.ok === false) {
+      return { error: budget.reason || 'tool_budget_exceeded' };
+    }
+    usage[name] = (Number(usage[name]) || 0) + 1;
+    ctx.toolUsageMap = usage;
+  }
   const tool = registry.find(t => t.name === name);
   if (!tool) {
     return { error: `unknown_tool: ${name}` };

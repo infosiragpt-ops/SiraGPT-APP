@@ -5,7 +5,8 @@ const {
   getQueueName,
   requireRedisUrl,
 } = require('./agent-task-queue');
-const { runAgentTaskJob, classifyTaskError } = require('./agent-task-runner');
+const { runAgentTaskJob } = require('./agent-task-runner');
+const { classifyTaskError } = require('../../utils/task-error-classifier');
 const { installProcessGuards, isTransientRedisError } = require('./redis-resilience');
 
 let worker;

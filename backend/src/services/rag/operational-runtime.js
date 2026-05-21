@@ -96,9 +96,27 @@ function dedupeDocs(docs) {
   return out;
 }
 
-async function ensureIndexed({ rag, userId, collection = DEFAULT_COLLECTION, docs = [], chunkOptions } = {}) {
+async function ensureIndexed({
+  rag,
+  userId,
+  collection = DEFAULT_COLLECTION,
+  docs = [],
+  chunkOptions,
+  intentAnalysis = null,
+} = {}) {
   if (!rag || !userId) return { indexed: false, reason: 'missing rag/user', chunksAdded: 0, totalChunks: 0, skippedSources: [] };
-  const cleanDocs = dedupeDocs(docs).filter(d => d && typeof d.text === 'string' && d.text.trim().length >= MIN_DOC_CHARS);
+  let cleanDocs = dedupeDocs(docs).filter(d => d && typeof d.text === 'string' && d.text.trim().length >= MIN_DOC_CHARS);
+  if (intentAnalysis) {
+    try {
+      const intentRagGate = require('../document-intent-rag-gate');
+      const gated = intentRagGate.rankSources(
+        cleanDocs.map((d) => ({ ...d, fileId: d.fileId || d.source })),
+        intentAnalysis
+      );
+      const allowed = new Set(gated.sources.map((s) => String(s.source || s.fileId || '')));
+      cleanDocs = cleanDocs.filter((d) => allowed.has(String(d.source)) || allowed.has(String(d.fileId || '')));
+    } catch { /* gate is best-effort */ }
+  }
   if (cleanDocs.length === 0) return { indexed: false, reason: 'no text docs', chunksAdded: 0, totalChunks: 0, skippedSources: [] };
 
   let existingSources = new Set();

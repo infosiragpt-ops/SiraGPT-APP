@@ -100,6 +100,13 @@ function sanitizeArtifactFilename(filename) {
 }
 
 function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation }) {
+  try {
+    const { requireDurableArtifactStorage } = require('../../orchestration/artifact-storage-policy');
+    const policy = requireDurableArtifactStorage();
+    if (!policy.ok && process.env.NODE_ENV === 'production') {
+      console.warn('[task-tools] artifact storage policy:', policy.error);
+    }
+  } catch { /* policy module optional in tests */ }
   ensureArtifactDir();
   const clean = sanitizeArtifactFilename(filename);
   const buf = Buffer.from(base64 || '', 'base64');

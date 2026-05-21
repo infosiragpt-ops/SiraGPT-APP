@@ -1,6 +1,9 @@
 'use strict';
 
 const crypto = require('crypto');
+const diskPersistence = require('./cowork-disk-persistence');
+
+const hydratedUsers = new Set();
 
 const MAX_ACTIVE_SESSIONS = Number.parseInt(process.env.SIRAGPT_MAX_ACTIVE_SESSIONS || '50', 10);
 const MAX_HISTORY_MESSAGES = Number.parseInt(process.env.SIRAGPT_SESSION_MAX_HISTORY || '200', 10);
@@ -31,7 +34,25 @@ function stopCleanup() {
   }
 }
 
+function hydrateUserSessions(userId) {
+  if (!userId || hydratedUsers.has(userId)) return;
+  hydratedUsers.add(userId);
+  const saved = diskPersistence.loadSessions(userId);
+  for (const session of saved) {
+    if (session?.id && !sessions.has(session.id)) {
+      sessions.set(session.id, session);
+    }
+  }
+}
+
+function persistUserSessions(userId) {
+  if (!userId) return;
+  const rows = [...sessions.values()].filter((s) => s.userId === userId);
+  diskPersistence.saveSessions(userId, rows);
+}
+
 function createSession(userId, opts = {}) {
+  hydrateUserSessions(userId);
   const id = opts.id || `sess_${crypto.randomBytes(8).toString('hex')}`;
   const now = Date.now();
 
@@ -58,6 +79,7 @@ function createSession(userId, opts = {}) {
   };
 
   sessions.set(id, session);
+  persistUserSessions(userId);
   return session;
 }
 
@@ -105,6 +127,7 @@ function addMessage(sessionId, message) {
 
   session.messages.push(msg);
   session.lastActivity = Date.now();
+  persistUserSessions(session.userId);
   session.tokenCount += msg.tokens;
 
   if (session.messages.length > MAX_HISTORY_MESSAGES) {
@@ -286,6 +309,7 @@ function resetSession(sessionId) {
   session.summary = null;
   session.tokenCount = 0;
   session.lastActivity = Date.now();
+  persistUserSessions(session.userId);
 
   return { id: session.id, reset: true };
 }

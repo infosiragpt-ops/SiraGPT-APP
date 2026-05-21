@@ -1,6 +1,10 @@
 'use strict';
 
 const crypto = require('crypto');
+const diskPersistence = require('./cowork-disk-persistence');
+
+const hydratedUsers = new Set();
+const persistTimers = new Map();
 
 const MAX_MEMORY_ENTRIES = Number.parseInt(process.env.SIRAGPT_MAX_MEMORY_ENTRIES || '1000', 10);
 const PROMOTION_THRESHOLD = Number.parseInt(process.env.SIRAGPT_MEMORY_PROMOTION_THRESHOLD || '3', 10);
@@ -14,17 +18,56 @@ function contentHash(text) {
   return crypto.createHash('sha256').update(String(text || '')).digest('hex').slice(0, 16);
 }
 
+function normalizeFactForDedup(fact) {
+  return String(fact || '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 240);
+}
+
+function hydrateUserMemory(userId) {
+  if (!userId || hydratedUsers.has(userId)) return;
+  hydratedUsers.add(userId);
+  const saved = diskPersistence.loadMemoryEntries(userId);
+  for (const entry of saved) {
+    if (entry?.id && !store.has(entry.id)) {
+      store.set(entry.id, entry);
+    }
+  }
+}
+
+function schedulePersistUserMemory(userId) {
+  if (!userId) return;
+  const existing = persistTimers.get(userId);
+  if (existing) clearTimeout(existing);
+  const timer = setTimeout(() => {
+    persistTimers.delete(userId);
+    const entries = [...store.values()].filter((e) => e.userId === userId);
+    diskPersistence.saveMemoryEntries(userId, entries);
+  }, 400);
+  if (timer.unref) timer.unref();
+  persistTimers.set(userId, timer);
+}
+
 function createMemoryEntry(userId, fact, opts = {}) {
+  hydrateUserMemory(userId);
+  const normalized = normalizeFactForDedup(fact);
+  const nearHash = crypto.createHash('sha256').update(normalized).digest('hex').slice(0, 16);
+  for (const entry of store.values()) {
+    if (entry.userId !== userId) continue;
+    const other = normalizeFactForDedup(entry.fact);
+    if (other === normalized || entry.hash === nearHash) {
+      entry.accessCount += 1;
+      entry.lastAccessed = Date.now();
+      entry.strength = Math.min(1, entry.strength + 0.1);
+      schedulePersistUserMemory(userId);
+      return entry;
+    }
+  }
+
   const id = `mem_${crypto.randomBytes(6).toString('hex')}`;
   const hash = contentHash(fact);
-
-  const existing = findExisting(userId, hash);
-  if (existing) {
-    existing.accessCount += 1;
-    existing.lastAccessed = Date.now();
-    existing.strength = Math.min(1, existing.strength + 0.1);
-    return existing;
-  }
 
   const entry = {
     id,
@@ -51,6 +94,7 @@ function createMemoryEntry(userId, fact, opts = {}) {
   }
 
   store.set(id, entry);
+  schedulePersistUserMemory(userId);
   return entry;
 }
 
@@ -143,6 +187,7 @@ function autoDemote(userId) {
 }
 
 function recall(userId, query, opts = {}) {
+  hydrateUserMemory(userId);
   const limit = Math.min(opts.limit || 10, 50);
   const tier = opts.tier || null;
   const category = opts.category || null;

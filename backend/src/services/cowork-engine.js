@@ -5,6 +5,7 @@ const deepDocumentAnalyzer = require('./deep-document-analyzer');
 const activeMemory = require('./active-memory');
 const sessionManager = require('./session-manager');
 const skillsRegistry = require('./skills-registry');
+const skillsExecutor = require('./skills-executor');
 
 const MAX_COWORK_BLOCK_CHARS = Number.parseInt(process.env.SIRAGPT_COWORK_BLOCK_MAX_CHARS || '4000', 10);
 
@@ -165,6 +166,19 @@ async function enrichAIRequest(userId, content, opts = {}) {
 
   const memoryPrompt = userId ? activeMemory.buildMemoryPrompt(userId, { limit: 12 }) : '';
 
+  let skillRuns = [];
+  if (userId && content) {
+    try {
+      skillRuns = await skillsExecutor.executeRecommendedSkills(
+        { query: String(content).slice(0, 500), tags: ['cowork', 'document'] },
+        { userId, content, prisma: opts.prisma, chatId: opts.chatId },
+        { limit: 2 }
+      );
+    } catch (_skillErr) {
+      skillRuns = [];
+    }
+  }
+
   const coworkPrompt = buildCoworkSystemPrompt(userId, {
     chatId: opts.chatId,
     model: opts.model,
@@ -209,11 +223,16 @@ async function enrichAIRequest(userId, content, opts = {}) {
     }
   }
 
+  const skillPrompt = skillRuns.length
+    ? `### Skill execution\n${skillRuns.map((r) => `- ${r.skillId || 'skill'}: ${r.ok ? 'ok' : r.error}`).join('\n')}`
+    : '';
+
   return {
     enriched,
-    systemPromptAdditions: [coworkPrompt, memoryPrompt, deepAnalysisPrompt].filter(Boolean).join('\n\n'),
+    systemPromptAdditions: [coworkPrompt, memoryPrompt, deepAnalysisPrompt, skillPrompt].filter(Boolean).join('\n\n'),
     autoFileResult: enriched.autoFileResult,
     deepAnalysis: enriched.deepAnalysis,
+    skillRuns,
   };
 }
 

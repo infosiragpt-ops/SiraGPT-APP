@@ -33,6 +33,7 @@
  */
 
 const scientificSearch = require('./scientific-search');
+const researchRunStore = require('./research-run-store');
 
 const DEFAULTS = {
   maxSteps: 6,
@@ -339,7 +340,21 @@ async function run(opts = {}) {
     ...depthCfg,
     ...opts,
   };
-  const onEvent = opts.onEvent || null;
+  const runId = researchRunStore.createRunId(query);
+  researchRunStore.saveRun({
+    id: runId,
+    query,
+    depth: opts.depth || 'standard',
+    status: 'running',
+    createdAt: Date.now(),
+    events: [],
+  });
+  const onEvent = (event) => {
+    researchRunStore.appendEvent(runId, event);
+    if (typeof opts.onEvent === 'function') {
+      try { opts.onEvent(event); } catch { /* best effort */ }
+    }
+  };
 
   const queriesTried = [query];
   const allPapers = [];

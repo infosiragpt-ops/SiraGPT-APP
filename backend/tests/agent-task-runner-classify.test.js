@@ -57,11 +57,10 @@ test('classifyTaskError: validation errors are NOT retryable', () => {
   }
 });
 
-test('classifyTaskError: unknown errors are retryable', () => {
+test('classifyTaskError: unknown errors are NOT retryable (prevents retry storms)', () => {
   const result = classifyTaskError(new Error('something unexpected happened'));
-  assert.equal(result.retryable, true);
+  assert.equal(result.retryable, false);
   assert.equal(result.reason, 'unknown');
-  assert.ok(result.ttlMs > 0);
 });
 
 test('classifyTaskError: aborted/cancelled errors are NOT retryable', () => {

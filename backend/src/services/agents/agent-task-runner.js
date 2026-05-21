@@ -1539,6 +1539,10 @@ async function runAgentTaskJob(payload = {}, job = null) {
       });
     }
 
+    const { createAuthorizationGate } = require('./tool-authorization-gate');
+    const toolManifest = require('./tool-manifest');
+    const toolGate = createAuthorizationGate();
+    const toolUsageMap = {};
     const toolCtx = {
       userId: user.id,
       userEmail: user.email,
@@ -1552,6 +1556,15 @@ async function runAgentTaskJob(payload = {}, job = null) {
       universalTaskContract,
       enterpriseExecutionGraph,
       enterpriseRuntimeProfile,
+      toolGate,
+      toolAuthCtx: {
+        userId: user.id,
+        clearance: user.clearance || 'authenticated',
+        scopes: user.scopes || [],
+        taskId,
+      },
+      toolUsageMap,
+      checkToolBudget: toolManifest.checkToolUsageBudget,
       enterpriseToolRuntimePlan,
       prisma,
       onEvent: (evt) => {
@@ -1928,96 +1941,7 @@ function withJitter(baseMs) {
  * Returns { retryable, reason, ttlMs } where ttlMs is how long before retry
  * (0 = immediate, >0 = backoff).
  */
-function classifyTaskError(err) {
-  if (!err) return { retryable: false, reason: 'no-error' };
-  const msg = String(err.message || err).toLowerCase();
-  const code = String(err.code || err.statusCode || '').toLowerCase();
-  const errName = String(err.name || '').toLowerCase();
-
-  // Non-retryable: explicit user/system abort. Retrying a cancelled job
-  // would resurrect work the operator just stopped.
-  if (errName === 'aborterror' || msg.includes('aborted') || msg.includes('operation was canceled') || code === 'abort_err')
-    return { retryable: false, reason: 'aborted' };
-
-  // Non-retryable: quota / billing — retry won't fix a depleted account.
-  if (msg.includes('insufficient_quota') || msg.includes('insufficient quota') ||
-      msg.includes('quota exceeded') || msg.includes('billing') ||
-      msg.includes('payment required') || code === '402')
-    return { retryable: false, reason: 'quota-exhausted' };
-
-  // Non-retryable: token/context length — same prompt will fail again.
-  if (msg.includes('context_length_exceeded') || msg.includes('context length') ||
-      msg.includes('maximum context') || msg.includes('too many tokens') ||
-      msg.includes('reduce the length'))
-    return { retryable: false, reason: 'context-length' };
-
-  // Non-retryable: model or content policy refusals.
-  if (msg.includes('content_policy') || msg.includes('content policy') ||
-      msg.includes('safety filter') || msg.includes('flagged by') ||
-      msg.includes('moderation'))
-    return { retryable: false, reason: 'content-policy' };
-
-  // Non-retryable: auth / permission issues
-  if (msg.includes('api_key') || msg.includes('api key') || msg.includes('authentication') || msg.includes('unauthorized') || code === '401' || code === '403')
-    return { retryable: false, reason: 'auth-failure' };
-  if (msg.includes('missing') && (msg.includes('taskid') || msg.includes('required')))
-    return { retryable: false, reason: 'validation-error' };
-
-  // Non-retryable: model unavailable / decommissioned / typo'd model id —
-  // retrying with the same model id will fail identically. Operator must
-  // update the model selection.
-  if (msg.includes('model_not_found') || msg.includes('does not exist') ||
-      msg.includes('deprecated model') || msg.includes('decommissioned') ||
-      msg.includes('has been retired') || msg.includes('no such model'))
-    return { retryable: false, reason: 'model-unavailable' };
-
-  // Non-retryable: payload too large — same prompt/file will fail again.
-  if (msg.includes('payload too large') || msg.includes('request entity too large') ||
-      code === '413')
-    return { retryable: false, reason: 'payload-too-large' };
-
-  // Non-retryable: 501 Not Implemented — feature missing on upstream.
-  if (code === '501' || msg.includes('not implemented'))
-    return { retryable: false, reason: 'not-implemented' };
-
-  // Retryable: rate limits (any rate / 429 / too many)
-  if (code.includes('rate_limit') || msg.includes('rate limit') || msg.includes('rate_limit') || msg.includes('too many requests') || code.startsWith('429'))
-    return { retryable: true, reason: 'rate-limited', ttlMs: withJitter(15_000) };
-
-  // Retryable: DNS resolution failures — usually transient at our edge.
-  if (msg.includes('enotfound') || msg.includes('eai_again') || msg.includes('getaddrinfo'))
-    return { retryable: true, reason: 'dns-failure', ttlMs: withJitter(5_000) };
-
-  // Retryable: network / timeout / connection errors. Includes 408
-  // (Request Timeout) and 504 (Gateway Timeout) explicitly so they
-  // don't fall into the generic 5xx bucket with a longer backoff.
-  if (code.includes('timeout') || msg.includes('timeout') || msg.includes('etimedout') ||
-      msg.includes('econnreset') || msg.includes('econnrefused') || msg.includes('econnaborted') ||
-      msg.includes('epipe') || msg.includes('hang up') || msg.includes('socket') ||
-      code === '408' || code === '504' || code.startsWith('408') || code.startsWith('504'))
-    return { retryable: true, reason: 'network-timeout', ttlMs: withJitter(5_000) };
-
-  // Retryable: TLS/SSL handshake hiccups — usually transient (clock skew,
-  // intermediate proxy refresh). Cert *expired* on our side wouldn't fix
-  // itself, but we still classify retryable so the operator sees the
-  // pattern in retry telemetry rather than a hard fail on first call.
-  if (msg.includes('cert_has_expired') || msg.includes('unable to verify') ||
-      msg.includes('self signed certificate') || msg.includes('self-signed certificate') ||
-      msg.includes('depth_zero_self_signed') || msg.includes('ssl handshake') ||
-      msg.includes('tls handshake') || msg.includes('handshake failure'))
-    return { retryable: true, reason: 'ssl-error', ttlMs: withJitter(8_000) };
-
-  // Retryable: server errors (5xx)
-  if (code.startsWith('5') || msg.includes('internal server') || msg.includes('service unavailable') || msg.includes('bad gateway'))
-    return { retryable: true, reason: 'server-error', ttlMs: withJitter(10_000) };
-
-  // Non-retryable: validation / config
-  if (msg.includes('missing') || msg.includes('invalid') || msg.includes('required') || msg.includes('not configured'))
-    return { retryable: false, reason: 'validation-error' };
-
-  // Default: safe to retry once
-  return { retryable: true, reason: 'unknown', ttlMs: withJitter(3_000) };
-}
+const { classifyTaskError } = require('../../utils/task-error-classifier');
 
 module.exports = {
   runAgentTaskJob,

@@ -60,11 +60,29 @@ function handle(message) {
       const tokens = text.trim() === '' ? [] : text.trim().split(/\s+/);
       return { words: tokens.length, chars: text.length };
     }
-    case 'document-analyze':
-      // TODO: dispatch into document-professional-analyzer once the heavy
-      // regex/text-parsing step is isolated behind a pure function. For now
-      // return a placeholder so the pool round-trip can be verified.
-      return { ok: true, todo: 'document-analyze: scaffold only' };
+    case 'document-analyze': {
+      const { text, maxChars } = payload || {};
+      if (typeof text !== 'string' || !text.trim()) {
+        throw new Error('document-analyze requires {text}');
+      }
+      const limit = Number.isInteger(maxChars) && maxChars > 0
+        ? Math.min(maxChars, 2_000_000)
+        : 500_000;
+      const sample = text.length > limit ? text.slice(0, limit) : text;
+      const tokens = sample.trim() === '' ? [] : sample.trim().split(/\s+/);
+      const headingMatches = sample.match(/^#{1,6}\s+.+$/gm) || [];
+      const sentenceMatches = sample.match(/[^.!?]+[.!?]+/g) || [];
+      return {
+        ok: true,
+        engine: 'heavy-analysis-worker',
+        chars: text.length,
+        sampledChars: sample.length,
+        words: tokens.length,
+        headings: headingMatches.length,
+        sentences: sentenceMatches.length,
+        truncated: text.length > limit,
+      };
+    }
     default:
       throw new Error(`unknown message type: ${type}`);
   }
