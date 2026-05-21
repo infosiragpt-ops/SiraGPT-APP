@@ -50,7 +50,7 @@ if (googleOAuthConfigured) {
       // Check if user already has a refresh token stored
       const existingUser = await prisma.user.findUnique({
         where: { email: profile.emails[0].value },
-        select: { gmailTokens: true }
+        select: { id: true, gmailTokens: true }
       });
 
       if (existingUser?.gmailTokens) {
