@@ -48,28 +48,49 @@ const usageService = {
     //     }
     // },
 
-     calculateTextTokens(text, modelName = "gpt-3.5-turbo") {
-        // Cambio aplicado en esta sección
-        let modelForTiktoken;
+    /**
+     * Mapeo de nombres de modelo "lógicos" (los que viajan por nuestro chat
+     * — claude-opus-4-7, deepseek-v4-flash, gemini-2.5-pro, gpt-5, …) al
+     * encoder de tiktoken más cercano. tiktoken solo trae tokenizers de
+     * OpenAI, así que para todo lo demás elegimos `cl100k_base` vía gpt-4
+     * (suficientemente preciso para contar contexto en estimación gruesa)
+     * y para variantes OpenAI nuevas las redirigimos al encoder base
+     * conocido. Esto evita el ruido `Tiktoken model 'X' not found` en
+     * producción sin perder precisión real (el conteo era un estimado
+     * incluso cuando "funcionaba", porque para no-OpenAI no hay tokenizer
+     * oficial en tiktoken).
+     */
+    _resolveTiktokenModel(modelName) {
+        if (!modelName || typeof modelName !== 'string') return 'gpt-4';
+        const m = modelName.toLowerCase();
+        // OpenRouter o cualquier ruta tipo "vendor/model"
+        if (m.includes('/')) return 'gpt-4';
+        // Familias no-OpenAI: usamos el encoder de OpenAI como aproximación
+        if (m.startsWith('claude-')) return 'gpt-4';
+        if (m.startsWith('deepseek')) return 'gpt-4';
+        if (m.startsWith('gemini')) return 'gpt-4';
+        if (m.startsWith('llama') || m.startsWith('mistral') || m.startsWith('mixtral')) return 'gpt-4';
+        if (m.startsWith('command') || m.startsWith('qwen') || m.startsWith('grok')) return 'gpt-4';
+        // OpenAI nuevos (gpt-5, gpt-4.5, o3, o4, etc.) → cl100k base via gpt-4
+        if (/^gpt-(5|6|7|4\.5|4o|4-1)/.test(m)) return 'gpt-4';
+        if (/^o\d/.test(m)) return 'gpt-4';
+        // Para el resto, intenta el nombre tal cual.
+        return modelName;
+    },
 
-        if (modelName.includes('/')) {
-            modelForTiktoken = 'gpt-4';
-        } else {
-            // Si es un modelo OpenAI estándar, usarlo tal cual.
-            modelForTiktoken = modelName;
-        }
-
+    calculateTextTokens(text, modelName = "gpt-3.5-turbo") {
+        const modelForTiktoken = this._resolveTiktokenModel(modelName);
         try {
-            // En este punto siempre se usa un nombre de modelo válido.
             const enc = encoding_for_model(modelForTiktoken);
             const tokens = enc.encode(text);
-            enc.free(); // cleanup
+            enc.free();
             return tokens.length;
         } catch (err) {
-            // Si aun así ocurre un error (p. ej. un nuevo modelo de OpenAI
-            // que tiktoken todavía no conoce), usar el cálculo de respaldo.
-            console.warn(`Tiktoken model '${modelForTiktoken}' (from '${modelName}') not found. Using fallback calculation.`);
-            // fallback to rough estimate
+            // Solo llegamos aquí si tiktoken no conoce ni siquiera 'gpt-4',
+            // lo que no debería pasar nunca. Usamos el fallback gross.
+            if (process.env.LOG_TIKTOKEN_FALLBACK === '1') {
+                console.warn(`Tiktoken fallback for '${modelForTiktoken}' (from '${modelName}'): ${err?.message || err}`);
+            }
             return Math.ceil(text.length / 4);
         }
     },

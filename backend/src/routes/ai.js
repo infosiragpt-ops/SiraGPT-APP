@@ -4230,6 +4230,22 @@ router.post(
         }
       }
 
+      // Allow-list de proveedores que SÍ saben generar imágenes. Cualquier
+      // otro (DeepSeek, Anthropic, Groq, xAI, etc.) hablaría con un endpoint
+      // OpenAI-compatible que NO implementa /v1/images/generations y
+      // devolvería un 404 "no body" (visto en prod con server: 'elb',
+      // x-ds-trace-id). Lo cortamos aquí con un mensaje claro en español
+      // antes de gastar tiempo en una llamada que va a fallar igual.
+      const IMAGE_CAPABLE_PROVIDERS = new Set(['OpenAI', 'Gemini', 'OpenRouter']);
+      if (!IMAGE_CAPABLE_PROVIDERS.has(provider)) {
+        return res.status(400).json({
+          error: `El proveedor "${provider || 'desconocido'}" no soporta generación de imágenes. Usa OpenAI, Gemini u OpenRouter.`,
+          code: 'image_provider_unsupported',
+          provider: provider || null,
+          supported: Array.from(IMAGE_CAPABLE_PROVIDERS),
+        });
+      }
+
       let imageBase64s;
       const timeoutPromise = new Promise((_, reject) => {
         setTimeout(() => reject(new Error('Image generation timeout')), 200000);
