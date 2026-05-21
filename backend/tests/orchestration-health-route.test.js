@@ -3,83 +3,115 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-function findRouteHandler(router, routePath, method = 'get') {
+function findRouteLayer(router, routePath, method = 'get') {
   const layer = router.stack.find((l) => l.route && l.route.path === routePath);
   if (!layer) return null;
-  const methods = layer.route.methods;
-  if (!methods[method]) return null;
-  // The actual user handler is the last entry in the route stack
-  return layer.route.stack[layer.route.stack.length - 1].handle;
+  if (!layer.route.methods[method]) return null;
+  return layer;
+}
+
+function getUserHandler(routeLayer) {
+  // Last entry in the route stack is the user-supplied async handler;
+  // earlier entries are middleware (noCacheHeaders, optionalAuth, etc.).
+  return routeLayer.route.stack[routeLayer.route.stack.length - 1].handle;
 }
 
 function makeRes() {
-  const captured = { statusCode: 200, body: null };
+  const captured = { statusCode: 200, body: null, headers: {} };
   const res = {
     status(code) { captured.statusCode = code; return this; },
     json(body) { captured.body = body; return this; },
+    set(nameOrObj, value) {
+      if (typeof nameOrObj === 'object' && nameOrObj !== null) {
+        Object.assign(captured.headers, nameOrObj);
+      } else {
+        captured.headers[nameOrObj] = value;
+      }
+      return this;
+    },
   };
   return { res, captured };
 }
 
-test('orchestration route exports an Express Router with /health', () => {
+// Walk the route's middleware stack and invoke each handler in sequence
+// until one of them responds (status/json) or all run through next().
+async function runRoute(routeLayer, req) {
+  const { res, captured } = makeRes();
+  const stack = routeLayer.route.stack;
+  for (let i = 0; i < stack.length; i++) {
+    let advance = false;
+    const next = () => { advance = true; };
+    await stack[i].handle(req, res, next);
+    if (!advance) break;
+  }
+  return { res, captured };
+}
+
+test('orchestration route exports an Express Router with /health, /health/ready, /health/live', () => {
   const route = require('../src/routes/orchestration');
-  assert.ok(route, 'route module should export something');
-  assert.equal(typeof route, 'function', 'Express Router is a function');
-  assert.ok(Array.isArray(route.stack), 'router.stack should be an array');
+  assert.ok(route);
+  assert.equal(typeof route, 'function');
   for (const p of ['/health', '/health/ready', '/health/live']) {
-    const layer = route.stack.find((l) => l.route && l.route.path === p);
+    const layer = findRouteLayer(route, p);
     assert.ok(layer, `should register ${p}`);
     assert.ok(layer.route.methods.get, `should respond to GET ${p}`);
   }
 });
 
-test('orchestration /health handler returns subsystem snapshot or 503', async () => {
+test('all three health probes set Cache-Control: no-store (avoid CDN/proxy caching)', async () => {
   const route = require('../src/routes/orchestration');
-  const handler = findRouteHandler(route, '/health');
-  assert.ok(handler, 'expected /health handler');
-  const { res, captured } = makeRes();
-  await handler({ user: null }, res);
-  assert.ok([200, 503].includes(captured.statusCode), `unexpected status: ${captured.statusCode}`);
-  assert.ok(captured.body, 'should return a body');
-  if (captured.statusCode === 200) {
-    assert.equal(typeof captured.body.gateway, 'boolean', 'gateway must be boolean');
-    assert.equal(typeof captured.body.memory, 'object', 'memory must be object');
-    assert.equal(typeof captured.body.search, 'object', 'search must be object');
-  } else {
-    assert.equal(captured.body.status, 'unhealthy', '503 must carry unhealthy status');
+  for (const p of ['/health', '/health/ready', '/health/live']) {
+    const layer = findRouteLayer(route, p);
+    const { captured } = await runRoute(layer, { user: null });
+    assert.match(captured.headers['Cache-Control'] || '', /no-store/, `${p} must set no-store`);
+    assert.equal(captured.headers.Pragma, 'no-cache', `${p} must set Pragma: no-cache for HTTP/1.0 caches`);
+    assert.equal(captured.headers.Expires, '0', `${p} must set Expires: 0`);
   }
 });
 
-test('orchestration /health/ready returns 200 with ready status when gateway is up', async () => {
+test('orchestration /health returns subsystem snapshot or 503', async () => {
   const route = require('../src/routes/orchestration');
-  const handler = findRouteHandler(route, '/health/ready');
-  assert.ok(handler, 'expected /health/ready handler');
+  const layer = findRouteLayer(route, '/health');
+  const handler = getUserHandler(layer);
+  const { res, captured } = makeRes();
+  await handler({ user: null }, res);
+  assert.ok([200, 503].includes(captured.statusCode));
+  assert.ok(captured.body);
+  if (captured.statusCode === 200) {
+    assert.equal(typeof captured.body.gateway, 'boolean');
+    assert.equal(typeof captured.body.memory, 'object');
+    assert.equal(typeof captured.body.search, 'object');
+  } else {
+    assert.equal(captured.body.status, 'unhealthy');
+  }
+});
+
+test('orchestration /health/ready returns 200 + ready when gateway is up', async () => {
+  const route = require('../src/routes/orchestration');
+  const layer = findRouteLayer(route, '/health/ready');
+  const handler = getUserHandler(layer);
   const { res, captured } = makeRes();
   await handler({}, res);
-  // gateway is universally available (no provider keys required) so this
-  // path should be 200 + ready in any environment.
   assert.equal(captured.statusCode, 200);
   assert.equal(captured.body.status, 'ready');
   assert.equal(captured.body.gateway, true);
 });
 
-test('orchestration /health/live always returns 200 with alive status', () => {
+test('orchestration /health/live always returns 200 + alive', () => {
   const route = require('../src/routes/orchestration');
-  const handler = findRouteHandler(route, '/health/live');
-  assert.ok(handler, 'expected /health/live handler');
+  const layer = findRouteLayer(route, '/health/live');
+  const handler = getUserHandler(layer);
   const { res, captured } = makeRes();
   const before = Date.now();
   handler({}, res);
   const after = Date.now();
-  // liveness is synchronous so no await needed
-  assert.equal(captured.statusCode, 200, 'liveness must always be 200');
+  assert.equal(captured.statusCode, 200);
   assert.equal(captured.body.status, 'alive');
-  assert.ok(typeof captured.body.timestamp === 'number');
-  assert.ok(captured.body.timestamp >= before && captured.body.timestamp <= after, 'timestamp must be a recent epoch ms');
+  assert.equal(typeof captured.body.timestamp, 'number');
+  assert.ok(captured.body.timestamp >= before && captured.body.timestamp <= after);
 });
 
 test('orchestration /health/ready returns 503 when wireup fails to boot', async () => {
-  // Inject a require-cache stub so getOrchestrationWireup throws.
   const wireupPath = require.resolve('../src/orchestration/orchestration-wireup');
   const original = require.cache[wireupPath];
   require.cache[wireupPath] = {
@@ -90,20 +122,19 @@ test('orchestration /health/ready returns 503 when wireup fails to boot', async 
       getOrchestrationWireup: () => { throw new Error('boot failed'); },
     },
   };
-  // Force re-require of the route to pick up the stubbed wireup
   const routePath = require.resolve('../src/routes/orchestration');
   const routeOriginal = require.cache[routePath];
   delete require.cache[routePath];
   try {
     const route = require('../src/routes/orchestration');
-    const handler = findRouteHandler(route, '/health/ready');
+    const layer = findRouteLayer(route, '/health/ready');
+    const handler = getUserHandler(layer);
     const { res, captured } = makeRes();
     await handler({}, res);
-    assert.equal(captured.statusCode, 503, 'boot failure must surface as 503');
+    assert.equal(captured.statusCode, 503);
     assert.equal(captured.body.status, 'not_ready');
     assert.match(captured.body.error, /boot failed/);
   } finally {
-    // Restore caches so subsequent tests see the real modules
     if (original) require.cache[wireupPath] = original;
     else delete require.cache[wireupPath];
     if (routeOriginal) require.cache[routePath] = routeOriginal;
