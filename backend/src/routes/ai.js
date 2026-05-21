@@ -63,6 +63,7 @@ function enforceOrgBudgetSafe(req, res, next) {
 const prisma = require('../config/database');
 const { tryConsumePlanQuota } = require('../services/plan-quota');
 const aiService = require('../services/ai-service');
+const agentFilters = require('../services/agents/filters');
 const OpenAI = require('openai');
 const usageService = require("../services/usage-service");
 const contextWindow = require("../services/context-window");
@@ -1016,7 +1017,7 @@ router.post(
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const { model, prompt, chatId, files, provider, regenerate } = req.body;
+      let { model, prompt, chatId, files, provider, regenerate } = req.body;
       const isAuth = !!req.user;
       const userId = isAuth ? req.user.id : null;
       const canPersist = isAuth && !!chatId;
@@ -1051,6 +1052,57 @@ router.post(
         try { console.warn('[ai/generate] prompt-injection detector failed:', injErr && injErr.message); } catch (_) {}
       }
 
+        // Filter pipeline pre-hooks. Cross-cutting concerns
+        // (rate-limit, redaction, metrics, memory) live as
+        // self-contained modules under services/agents/filters.
+        // History is pre-loaded from the chat so filters like
+        // conversation-memory can see real turns; pre hooks may
+        // mutate ctx.prompt and ctx.extraContext, which we then fold
+        // back into the prompt used downstream.
+        let _filterHistory = [];
+        if (canPersist && chatId) {
+          try {
+            const recent = await prisma.message.findMany({
+              where: { chatId },
+              orderBy: { timestamp: 'desc' },
+              take: 20,
+              select: { role: true, content: true },
+            });
+            _filterHistory = recent.reverse().map(m => ({
+              role: (m.role || '').toLowerCase(),
+              content: m.content || '',
+            }));
+          } catch (_) { /* fail-open: empty history */ }
+        }
+        req._filterCtx = {
+          scope: 'ai.generate',
+          userId, chatId, model, provider, prompt,
+          history: _filterHistory, req, res,
+        };
+        try { await agentFilters.runPre(req._filterCtx); }
+        catch (filtErr) { try { console.warn('[ai/generate] filter pre-hook failed:', filtErr && filtErr.message); } catch (_) {} }
+        if (req._filterCtx.aborted) {
+          try {
+            await agentFilters.runPost(req._filterCtx);
+            req._filterCtx._postRan = true;
+          } catch (_) {}
+          return res.status(req._filterCtx.abortStatus || 400).json({
+            error: req._filterCtx.abortMessage || 'request aborted by filter',
+            code: req._filterCtx.abortReason || 'filter.aborted',
+            filter: req._filterCtx.abortFilter || null,
+          });
+        }
+        // Fold pre-hook mutations back into the request-scoped prompt
+        // so model routing, system-prompt assembly and RAG all see the
+        // filter-modified text. extraContext is prepended so a memory
+        // filter (or any future filter) can inject context for free.
+        if (typeof req._filterCtx.prompt === 'string' && req._filterCtx.prompt) {
+          prompt = req._filterCtx.prompt;
+        }
+        if (req._filterCtx.extraContext) {
+          prompt = String(req._filterCtx.extraContext).trim() + '\n\n' + (prompt || '');
+        }
+  
       // ─── SSE resumption preflight ──────────────────────────────────
       // If the client sends `Last-Event-ID: <streamId>:<position>` we
       // open the existing resume record so already-sent chunks can be
@@ -3667,6 +3719,29 @@ router.post(
         keepAlive = null;
       }
 
+        // Filter pipeline post-hooks. Runs ALWAYS so metrics/audit
+        // observe every request — unless an earlier abort already
+        // flushed the post pipeline (tracked via _postRan to avoid
+        // double-emission). A post filter MAY mutate ctx.response; if
+        // it does and the SSE stream is still open we emit one final
+        // replace-frame so the client sees the annotated reply.
+        try {
+          if (req._filterCtx && !req._filterCtx._postRan) {
+            let __resp = '';
+            try { __resp = typeof fullResponseContent === 'string' ? fullResponseContent : ''; } catch (_) { __resp = ''; }
+            req._filterCtx.response = __resp;
+            const __before = __resp;
+            await agentFilters.runPost(req._filterCtx);
+            req._filterCtx._postRan = true;
+            const __after = typeof req._filterCtx.response === 'string' ? req._filterCtx.response : __before;
+            if (__after !== __before && !res.writableEnded) {
+              try { res.write(`data: ${JSON.stringify({ replace: true, content: __after })}\n\n`); } catch (_) {}
+            }
+          }
+        } catch (filtErr) {
+          try { console.warn('[ai/generate] filter post-hook failed:', filtErr && filtErr.message); } catch (_) {}
+        }
+  
       if (streamId) {
         streamControllers.delete(streamId);
         console.log(`Stream unregistered for ID: ${streamId}`);
