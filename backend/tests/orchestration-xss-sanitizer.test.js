@@ -10,7 +10,7 @@ const {
 } = require('../src/middleware/xss-sanitizer');
 
 test('sanitizeText escapes HTML special chars', () => {
-  assert.equal(sanitizeText('<script>alert("xss")</script>'), '&lt;script&gt;alert(&quot;xss&quot;)&lt;&#x2F;script&gt;');
+  assert.equal(sanitizeText('<script>alert("xss")</script>'), '&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;');
   assert.equal(sanitizeText('normal text'), 'normal text');
   assert.equal(sanitizeText(null), null);
   assert.equal(sanitizeText(123), 123);

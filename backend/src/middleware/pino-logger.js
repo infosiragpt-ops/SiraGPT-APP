@@ -111,9 +111,6 @@ function createPinoLogger(opts = {}) {
     : (process.env.LOG_PRETTY === '1' || (!isProduction && process.env.LOG_PRETTY !== '0'));
 
   const transport = [];
-  if (pretty) {
-    transport.push({ target: 'pino-pretty', options: { colorize: true, translateTime: 'HH:MM:ss Z' } });
-  }
 
   const stream = opts.destination || process.env.LOG_DESTINATION
     ? pino.destination(opts.destination || process.env.LOG_DESTINATION)
@@ -131,8 +128,8 @@ function createPinoLogger(opts = {}) {
       paths: REDACT_KEYS.map(k => `*.${k}`),
       censor: '[REDACTED]',
     },
-    ...(transport.length === 1 ? { transport: transport[0] } : {}),
-    ...(stream ? {} : {}),
+    // Only add transport when pretty print is available.
+    ...(transport.length ? { transport: transport[0] } : {}),
     ...(opts.pinoOptions || {}),
   }, stream);
 
