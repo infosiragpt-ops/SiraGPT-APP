@@ -1,0 +1,473 @@
+Skip to content
+open-webui
+open-webui
+Repository navigation
+Code
+Issues
+151
+ (151)
+Pull requests
+121
+ (121)
+Agents
+Discussions
+Actions
+Security and quality
+77
+ (77)
+Insights
+Owner avatar
+open-webui
+Public
+open-webui/open-webui
+
+t
+T
+Name		
+tjbck
+tjbck
+Merge pull request #24492 from open-webui/dev
+3660bc0
+ · 
+2 weeks ago
+.github
+chore
+2 weeks ago
+backend
+chore: format
+2 weeks ago
+cypress
+refac: aria label model item
+10 months ago
+docs
+refac
+2 weeks ago
+scripts
+refac
+last month
+src
+chore: format
+2 weeks ago
+static
+refac
+2 weeks ago
+test/test_files/image_gen
+feat: add image gen with automatic1111 to integration test
+2 years ago
+.dockerignore
+feat: Initial support for pgvector
+2 years ago
+.env.example
+Improve local development setup
+11 months ago
+.eslintignore
+chat feature added
+3 years ago
+.eslintrc.cjs
+feat: add basic cypress test as initial work towards e2e tests
+2 years ago
+.gitattributes
+refac: standardize formatting in .gitattributes for consistency
+last year
+.gitignore
+Merge pull request #16185 from hiwylee/vector-search-branch
+9 months ago
+.npmrc
+chat feature added
+3 years ago
+.pre-commit-config.yaml
+feat: add ruff linter & formatter (#22576)
+2 months ago
+.prettierignore
+chore: remove very outdated kubernetes configs (#19731)
+5 months ago
+.prettierrc
+refac: update .gitattributes and .prettierrc for consistent line endings
+last year
+CHANGELOG.md
+doc: changelog
+2 weeks ago
+CODE_OF_CONDUCT.md
+chore: wording
+last year
+CONTRIBUTOR_LICENSE_AGREEMENT
+refac
+3 months ago
+Dockerfile
+refac
+2 weeks ago
+LICENSE
+refac: license
+last month
+LICENSE_HISTORY
+refac
+10 months ago
+LICENSE_NOTICE
+doc: readme
+8 months ago
+Makefile
+Chose between "docker-compose" and "docker compose" in Makefile
+2 years ago
+README.md
+feat: add PaddleOCR-vl loader support and implement retrieval router …
+last month
+TROUBLESHOOTING.md
+fix: Fix typos
+2 years ago
+banner.png
+doc: banner
+5 months ago
+confirm_remove.sh
+Chose between "docker-compose" and "docker compose" in confirm_remove.sh
+2 years ago
+contribution_stats.py
+refac
+2 months ago
+cypress.config.ts
+feat: add basic cypress test as initial work towards e2e tests
+2 years ago
+demo.png
+doc: demo image
+5 months ago
+docker-compose.a1111-test.yaml
+feat: add image gen with automatic1111 to integration test
+2 years ago
+docker-compose.amdgpu.yaml
+Add variables
+2 years ago
+docker-compose.api.yaml
+Removed version synatax as its no longer needed per Docker Docs
+2 years ago
+docker-compose.data.yaml
+Removed version synatax as its no longer needed per Docker Docs
+2 years ago
+docker-compose.gpu.yaml
+Removed version synatax as its no longer needed per Docker Docs
+2 years ago
+docker-compose.otel.yaml
+fix: otel yaml
+10 months ago
+docker-compose.playwright.yaml
+chore: Updates minor/patch versions for 21 Python backend dependencies (
+3 months ago
+docker-compose.yaml
+refac
+7 months ago
+hatch_build.py
+refac
+2 months ago
+i18next-parser.config.ts
+fix: configure i18next to not return empty strings
+2 years ago
+package-lock.json
+chore: bump
+2 weeks ago
+package.json
+chore: bump
+2 weeks ago
+postcss.config.js
+chore: format
+last year
+pyproject.toml
+refactor(firecrawl): use v2 API directly (#23934)
+last month
+run-compose.sh
+Introduce docker-compose.playwright.yaml + run-compose update
+last year
+run-ollama-docker.sh
+fix: run-ollama-docker.sh
+2 years ago
+run.sh
+Update run.sh
+2 years ago
+svelte.config.js
+refac
+last year
+tailwind.config.js
+refac
+3 months ago
+tsconfig.json
+chat feature added
+3 years ago
+update_ollama_models.sh
+fix: chmod +x update_ollama_models.sh
+2 years ago
+uv.lock
+refactor(firecrawl): use v2 API directly (#23934)
+last month
+vite.config.ts
+refac
+8 months ago
+Repository files navigation
+README
+Code of conduct
+License
+Security
+Open WebUI 👋
+
+GitHub stars GitHub forks GitHub watchers GitHub repo size GitHub language count GitHub top language GitHub last commit Discord 
+
+Open WebUI Banner
+
+Open WebUI is an extensible, feature-rich, and user-friendly self-hosted AI platform designed to operate entirely offline. It supports various LLM runners like Ollama and OpenAI-compatible APIs, with built-in inference engine for RAG, making it a powerful AI deployment solution.
+
+Passionate about open-source AI? Join our team →
+
+Open WebUI Demo
+
+Tip
+
+Looking for an Enterprise Plan? – Speak with Our Sales Team Today!
+
+Get enhanced capabilities, including custom theming and branding, Service Level Agreement (SLA) support, Long-Term Support (LTS) versions, and more!
+For more information, be sure to check out our Open WebUI Documentation.
+
+Key Features of Open WebUI ⭐
+
+🚀 Effortless Setup: Install seamlessly using Docker or Kubernetes (kubectl, kustomize or helm) for a hassle-free experience with support for both :ollama and :cuda tagged images.
+
+🤝 Ollama/OpenAI API Integration: Effortlessly integrate OpenAI-compatible APIs for versatile conversations alongside Ollama models. Customize the OpenAI API URL to link with LMStudio, GroqCloud, Mistral, OpenRouter, and more.
+
+🛡️ Granular Permissions and User Groups: By allowing administrators to create detailed user roles and permissions, we ensure a secure user environment. This granularity not only enhances security but also allows for customized user experiences, fostering a sense of ownership and responsibility amongst users.
+
+📱 Responsive Design: Enjoy a seamless experience across Desktop PC, Laptop, and Mobile devices.
+
+📱 Progressive Web App (PWA) for Mobile: Enjoy a native app-like experience on your mobile device with our PWA, providing offline access on localhost and a seamless user interface.
+
+✒️🔢 Full Markdown and LaTeX Support: Elevate your LLM experience with comprehensive Markdown and LaTeX capabilities for enriched interaction.
+
+🎤📹 Hands-Free Voice/Video Call: Experience seamless communication with integrated hands-free voice and video call features using multiple Speech-to-Text providers (Local Whisper, OpenAI, Deepgram, Azure) and Text-to-Speech engines (Azure, ElevenLabs, OpenAI, Transformers, WebAPI), allowing for dynamic and interactive chat environments.
+
+🛠️ Model Builder: Easily create Ollama models via the Web UI. Create and add custom characters/agents, customize chat elements, and import models effortlessly through Open WebUI Community integration.
+
+🐍 Native Python Function Calling Tool: Enhance your LLMs with built-in code editor support in the tools workspace. Bring Your Own Function (BYOF) by simply adding your pure Python functions, enabling seamless integration with LLMs.
+
+💾 Persistent Artifact Storage: Built-in key-value storage API for artifacts, enabling features like journals, trackers, leaderboards, and collaborative tools with both personal and shared data scopes across sessions.
+
+📚 Local RAG Integration: Dive into the future of chat interactions with groundbreaking Retrieval Augmented Generation (RAG) support using your choice of 9 vector databases and multiple content extraction engines (Tika, Docling, Document Intelligence, Mistral OCR, PaddleOCR-vl, External loaders). Load documents directly into chat or add files to your document library, effortlessly accessing them using the # command before a query.
+
+🔍 Web Search for RAG: Perform web searches using 15+ providers including SearXNG, Google PSE, Brave Search, Kagi, Mojeek, Tavily, Perplexity, serpstack, serper, Serply, DuckDuckGo, SearchApi, SerpApi, Bing, Jina, Exa, Sougou, Azure AI Search, and Ollama Cloud, injecting results directly into your chat experience.
+
+🌐 Web Browsing Capability: Seamlessly integrate websites into your chat experience using the # command followed by a URL. This feature allows you to incorporate web content directly into your conversations, enhancing the richness and depth of your interactions.
+
+🎨 Image Generation & Editing Integration: Create and edit images using multiple engines including OpenAI's DALL-E, Gemini, ComfyUI (local), and AUTOMATIC1111 (local), with support for both generation and prompt-based editing workflows.
+
+⚙️ Many Models Conversations: Effortlessly engage with various models simultaneously, harnessing their unique strengths for optimal responses. Enhance your experience by leveraging a diverse set of models in parallel.
+
+🔐 Role-Based Access Control (RBAC): Ensure secure access with restricted permissions; only authorized individuals can access your Ollama, and exclusive model creation/pulling rights are reserved for administrators.
+
+🗄️ Flexible Database & Storage Options: Choose from SQLite (with optional encryption), PostgreSQL, or configure cloud storage backends (S3, Google Cloud Storage, Azure Blob Storage) for scalable deployments.
+
+🔍 Advanced Vector Database Support: Select from 9 vector database options including ChromaDB, PGVector, Qdrant, Milvus, Elasticsearch, OpenSearch, Pinecone, S3Vector, and Oracle 23ai for optimal RAG performance.
+
+🔐 Enterprise Authentication: Full support for LDAP/Active Directory integration, SCIM 2.0 automated provisioning, and SSO via trusted headers alongside OAuth providers. Enterprise-grade user and group provisioning through SCIM 2.0 protocol, enabling seamless integration with identity providers like Okta, Azure AD, and Google Workspace for automated user lifecycle management.
+
+☁️ Cloud-Native Integration: Native support for Google Drive and OneDrive/SharePoint file picking, enabling seamless document import from enterprise cloud storage.
+
+📊 Production Observability: Built-in OpenTelemetry support for traces, metrics, and logs, enabling comprehensive monitoring with your existing observability stack.
+
+⚖️ Horizontal Scalability: Redis-backed session management and WebSocket support for multi-worker and multi-node deployments behind load balancers.
+
+🌐🌍 Multilingual Support: Experience Open WebUI in your preferred language with our internationalization (i18n) support. Join us in expanding our supported languages! We're actively seeking contributors!
+
+🧩 Pipelines, Open WebUI Plugin Support: Seamlessly integrate custom logic and Python libraries into Open WebUI using Pipelines Plugin Framework. Launch your Pipelines instance, set the OpenAI URL to the Pipelines URL, and explore endless possibilities. Examples include Function Calling, User Rate Limiting to control access, Usage Monitoring with tools like Langfuse, Live Translation with LibreTranslate for multilingual support, Toxic Message Filtering and much more.
+
+🌟 Continuous Updates: We are committed to improving Open WebUI with regular updates, fixes, and new features.
+
+Want to learn more about Open WebUI's features? Check out our Open WebUI documentation for a comprehensive overview!
+
+We are incredibly grateful for the generous support of our sponsors. Their contributions help us to maintain and improve our project, ensuring we can continue to deliver quality work to our community. Thank you!
+
+How to Install 🚀
+
+Installation via Python pip 🐍
+
+Open WebUI can be installed using pip, the Python package installer. Before proceeding, ensure you're using Python 3.11 to avoid compatibility issues.
+
+Install Open WebUI: Open your terminal and run the following command to install Open WebUI:
+
+pip install open-webui
+Running Open WebUI: After installation, you can start Open WebUI by executing:
+
+open-webui serve
+This will start the Open WebUI server, which you can access at http://localhost:8080
+
+Quick Start with Docker 🐳
+
+Note
+
+Please note that for certain Docker environments, additional configurations might be needed. If you encounter any connection issues, our detailed guide on Open WebUI Documentation is ready to assist you.
+Warning
+
+When using Docker to install Open WebUI, make sure to include the -v open-webui:/app/backend/data in your Docker command. This step is crucial as it ensures your database is properly mounted and prevents any loss of data.
+Tip
+
+If you wish to utilize Open WebUI with Ollama included or CUDA acceleration, we recommend utilizing our official images tagged with either :cuda or :ollama. To enable CUDA, you must install the Nvidia CUDA container toolkit on your Linux/WSL system.
+Installation with Default Configuration
+
+If Ollama is on your computer, use this command:
+
+docker run -d -p 3000:8080 --add-host=host.docker.internal:host-gateway -v open-webui:/app/backend/data --name open-webui --restart always ghcr.io/open-webui/open-webui:main
+If Ollama is on a Different Server, use this command:
+
+To connect to Ollama on another server, change the OLLAMA_BASE_URL to the server's URL:
+
+docker run -d -p 3000:8080 -e OLLAMA_BASE_URL=https://example.com -v open-webui:/app/backend/data --name open-webui --restart always ghcr.io/open-webui/open-webui:main
+To run Open WebUI with Nvidia GPU support, use this command:
+
+docker run -d -p 3000:8080 --gpus all --add-host=host.docker.internal:host-gateway -v open-webui:/app/backend/data --name open-webui --restart always ghcr.io/open-webui/open-webui:cuda
+Installation for OpenAI API Usage Only
+
+If you're only using OpenAI API, use this command:
+
+docker run -d -p 3000:8080 -e OPENAI_API_KEY=your_secret_key -v open-webui:/app/backend/data --name open-webui --restart always ghcr.io/open-webui/open-webui:main
+Installing Open WebUI with Bundled Ollama Support
+
+This installation method uses a single container image that bundles Open WebUI with Ollama, allowing for a streamlined setup via a single command. Choose the appropriate command based on your hardware setup:
+
+With GPU Support: Utilize GPU resources by running the following command:
+
+docker run -d -p 3000:8080 --gpus=all -v ollama:/root/.ollama -v open-webui:/app/backend/data --name open-webui --restart always ghcr.io/open-webui/open-webui:ollama
+For CPU Only: If you're not using a GPU, use this command instead:
+
+docker run -d -p 3000:8080 -v ollama:/root/.ollama -v open-webui:/app/backend/data --name open-webui --restart always ghcr.io/open-webui/open-webui:ollama
+Both commands facilitate a built-in, hassle-free installation of both Open WebUI and Ollama, ensuring that you can get everything up and running swiftly.
+
+After installation, you can access Open WebUI at http://localhost:3000. Enjoy! 😄
+
+Other Installation Methods
+
+We offer various installation alternatives, including non-Docker native installation methods, Docker Compose, Kustomize, and Helm. Visit our Open WebUI Documentation or join our Discord community for comprehensive guidance.
+
+Troubleshooting
+
+Encountering connection issues? Our Open WebUI Documentation has got you covered. For further assistance and to join our vibrant community, visit the Open WebUI Discord.
+
+Open WebUI: Server Connection Error
+
+If you're experiencing connection issues, it’s often due to the WebUI docker container not being able to reach the Ollama server at 127.0.0.1:11434 (host.docker.internal:11434) inside the container . Use the --network=host flag in your docker command to resolve this. Note that the port changes from 3000 to 8080, resulting in the link: http://localhost:8080.
+
+Example Docker Command:
+
+docker run -d --network=host -v open-webui:/app/backend/data -e OLLAMA_BASE_URL=http://127.0.0.1:11434 --name open-webui --restart always ghcr.io/open-webui/open-webui:main
+Keeping Your Docker Installation Up-to-Date
+
+Check our Updating Guide available in our Open WebUI Documentation.
+
+Using the Dev Branch 🌙
+
+Warning
+
+The :dev branch contains the latest unstable features and changes. Use it at your own risk as it may have bugs or incomplete features.
+If you want to try out the latest bleeding-edge features and are okay with occasional instability, you can use the :dev tag like this:
+
+docker run -d -p 3000:8080 -v open-webui:/app/backend/data --name open-webui --add-host=host.docker.internal:host-gateway --restart always ghcr.io/open-webui/open-webui:dev
+Offline Mode
+
+If you are running Open WebUI in an offline environment, you can set the HF_HUB_OFFLINE environment variable to 1 to prevent attempts to download models from the internet.
+
+export HF_HUB_OFFLINE=1
+What's Next? 🌟
+
+Discover upcoming features on our roadmap in the Open WebUI Documentation.
+
+License 📜
+
+This project contains code under multiple licenses. The current codebase includes components licensed under the Open WebUI License with an additional requirement to preserve the "Open WebUI" branding, as well as prior contributions under their respective original licenses. For a detailed record of license changes and the applicable terms for each section of the code, please refer to LICENSE_HISTORY. For complete and updated licensing details, please see the LICENSE and LICENSE_HISTORY files.
+
+Support 💬
+
+If you have any questions, suggestions, or need assistance, please open an issue or join our Open WebUI Discord community to connect with us! 🤝
+
+Star History
+
+ Star History Chart
+Created by Timothy Jaeryang Baek - Let's make Open WebUI even more amazing together! 💪
+About
+
+User-friendly AI Interface (Supports Ollama, OpenAI API, ...)
+
+openwebui.com
+Topics
+ui  ai  mcp  openapi self-hosted  openai  webui  rag llm  llms  ollama  llm-ui ollama-webui  llm-webui open-webui
+Resources
+ Readme
+License
+ View license
+Code of conduct
+ Code of conduct
+Security policy
+ Security policy
+ Activity
+ Custom properties
+Stars
+ 138k stars
+Watchers
+ 607 watching
+Forks
+ 19.8k forks
+Report repository
+Releases 162
+
+v0.9.5
+Latest
+2 weeks ago
++ 161 releases
+Sponsor this project
+
+@tjbck
+tjbck Tim Baek
+Learn more about GitHub Sponsors
+Packages
+1
+
+open-webui
+Contributors
+780
+
+ @tjbck
+ @Classic298
+ @silentoplayz
+ @cheahjs
+ @ShirasawaSama
+ @dependabot[bot]
+ @jannikstdl
+ @michaelpoluektov
+ @rgaricano
+ @dannyl1u
+ @karllee830
+ @Yanyutin753
+ @aleixdorca
+ @joaoback
++ 766 contributors
+Languages
+
+Python
+35.5%
+ 
+Svelte
+32.8%
+JavaScript
+23.9%
+TypeScript
+5.2%
+ 
+CSS
+2.2%
+Shell
+0.2%
+ 
+Other
+0.2%
+Footer
+© 2026 GitHub, Inc.
+Footer navigation
+Terms
+Privacy
+Security
+Status
+Community
+Docs
+Contact
+Manage cookies
+Do not share my personal information
