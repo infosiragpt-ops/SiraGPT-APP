@@ -15,8 +15,8 @@ const RANK = new Map([
   ['critical', 4],
 ]);
 
-function readConfig() {
-  const config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+function readConfig(configPath = CONFIG_PATH, now = Date.now()) {
+  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
   if (!Array.isArray(config.allowed)) {
     throw new Error('audit-production-allowlist.json must include an allowed array');
   }
@@ -25,13 +25,23 @@ function readConfig() {
   if (!Number.isFinite(expiresOn.getTime())) {
     throw new Error('audit-production-allowlist.json has an invalid expiresOn date');
   }
-  if (Date.now() > expiresOn.getTime()) {
+  const nowMs = now instanceof Date ? now.getTime() : now;
+  if (!Number.isFinite(nowMs)) {
+    throw new Error('audit production allowlist received an invalid clock value');
+  }
+  if (nowMs > expiresOn.getTime()) {
     throw new Error(`production audit allowlist expired on ${config.expiresOn}`);
   }
 
   const level = config.level || 'high';
   if (!RANK.has(level)) {
     throw new Error(`unsupported audit allowlist level: ${level}`);
+  }
+
+  for (const item of config.allowed) {
+    if (!item || typeof item.package !== 'string' || typeof item.source !== 'number') {
+      throw new Error('audit-production-allowlist.json allowed entries require package and numeric source');
+    }
   }
 
   return {
@@ -120,9 +130,20 @@ function main() {
   );
 }
 
-try {
-  main();
-} catch (error) {
-  console.error(`\n[audit-allowlist] ${error.message}`);
-  process.exit(1);
+if (require.main === module) {
+  try {
+    main();
+  } catch (error) {
+    console.error(`\n[audit-allowlist] ${error.message}`);
+    process.exit(1);
+  }
 }
+
+module.exports = {
+  RANK,
+  collectFindings,
+  getRank,
+  main,
+  readConfig,
+  runAudit,
+};
