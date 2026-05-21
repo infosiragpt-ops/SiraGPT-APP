@@ -2,10 +2,27 @@
 
 const crypto = require('crypto');
 
-const DEFAULT_TTL_MS = Number.parseInt(process.env.SCIENTIFIC_SEARCH_CACHE_TTL_MS || '900000', 10);
-const MAX_ENTRIES = Number.parseInt(process.env.SCIENTIFIC_SEARCH_CACHE_MAX || '200', 10);
+function positiveInt(value, fallback) {
+  const n = Number.parseInt(value, 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+const DEFAULT_TTL_MS = positiveInt(process.env.SCIENTIFIC_SEARCH_CACHE_TTL_MS, 900000);
+const MAX_ENTRIES = positiveInt(process.env.SCIENTIFIC_SEARCH_CACHE_MAX, 200);
 
 const cache = new Map();
+
+function cloneValue(value) {
+  if (value == null || typeof value !== 'object') return value;
+  if (typeof structuredClone === 'function') return structuredClone(value);
+  return JSON.parse(JSON.stringify(value));
+}
+
+function evictExpired(now = Date.now()) {
+  for (const [key, row] of cache) {
+    if (now > row.expiresAt) cache.delete(key);
+  }
+}
 
 function cacheKey(query, opts = {}) {
   const providers = Array.isArray(opts.providers) ? opts.providers.slice().sort().join(',') : 'all';
@@ -19,23 +36,29 @@ function get(query, opts) {
   const key = cacheKey(query, opts);
   const row = cache.get(key);
   if (!row) return null;
-  if (Date.now() > row.expiresAt) {
+  const now = Date.now();
+  if (now > row.expiresAt) {
     cache.delete(key);
     return null;
   }
-  return { ...row.value, _cache: { hit: true, ageMs: Date.now() - row.storedAt } };
+  return {
+    ...cloneValue(row.value),
+    _cache: { hit: true, ageMs: now - row.storedAt },
+  };
 }
 
 function set(query, opts, value, ttlMs = DEFAULT_TTL_MS) {
   const key = cacheKey(query, opts);
+  evictExpired();
   if (cache.size >= MAX_ENTRIES) {
     const oldest = cache.keys().next().value;
     if (oldest) cache.delete(oldest);
   }
+  const now = Date.now();
   cache.set(key, {
-    value,
-    storedAt: Date.now(),
-    expiresAt: Date.now() + Math.max(60_000, ttlMs),
+    value: cloneValue(value),
+    storedAt: now,
+    expiresAt: now + Math.max(60_000, positiveInt(ttlMs, DEFAULT_TTL_MS)),
   });
 }
 
@@ -44,6 +67,7 @@ function clear() {
 }
 
 function stats() {
+  evictExpired();
   return { size: cache.size, maxEntries: MAX_ENTRIES, ttlMs: DEFAULT_TTL_MS };
 }
 

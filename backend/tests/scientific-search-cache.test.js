@@ -58,6 +58,28 @@ test('set + get round-trip returns the stored value with cache metadata', () => 
   assert.ok(out._cache.ageMs >= 0);
 });
 
+test('get returns defensive copies so callers cannot mutate cached rows', () => {
+  set('mutable', {}, { papers: [{ title: 'original', authors: ['a'] }] });
+
+  const first = get('mutable', {});
+  first.papers[0].title = 'mutated';
+  first.papers[0].authors.push('b');
+  first.extra = true;
+
+  const second = get('mutable', {});
+  assert.deepEqual(second.papers, [{ title: 'original', authors: ['a'] }]);
+  assert.equal(second.extra, undefined);
+});
+
+test('set stores a defensive copy of the input value', () => {
+  const value = { papers: [{ title: 'before' }] };
+  set('input-copy', {}, value);
+  value.papers[0].title = 'after';
+
+  const out = get('input-copy', {});
+  assert.deepEqual(out.papers, [{ title: 'before' }]);
+});
+
 test('get returns null and evicts when the row is expired', () => {
   // Use a tiny TTL — the floor enforces 60_000ms, so manipulate via fake time
   // by mutating internal state isn't easy; instead, set a row with a custom
@@ -110,6 +132,20 @@ test('stats reports size, maxEntries, and ttlMs', () => {
   assert.equal(typeof out.ttlMs, 'number');
   set('x', {}, {});
   assert.equal(stats().size, 1);
+});
+
+test('stats lazily evicts expired rows', () => {
+  const realNow = Date.now;
+  try {
+    let t = 1_000_000;
+    Date.now = () => t;
+    set('expire-for-stats', {}, { papers: [] }, 60_000);
+    assert.equal(stats().size, 1);
+    t += 65_000;
+    assert.equal(stats().size, 0);
+  } finally {
+    Date.now = realNow;
+  }
 });
 
 test('set evicts the oldest entry when the cache exceeds MAX_ENTRIES', () => {
