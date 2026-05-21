@@ -7,7 +7,7 @@ const { classifyTaskError } = require('../src/utils/task-error-classifier');
 const workspaceIdempotency = require('../src/services/agents/workspace-idempotency');
 const searchCache = require('../src/services/scientific-search-cache');
 const intentRagGate = require('../src/services/document-intent-rag-gate');
-const { resolveTaskPolicy } = require('../src/services/ai-product-os/litellm-task-policy');
+const { resolveTaskPolicy, applyPolicyToGatewayRequest } = require('../src/services/ai-product-os/litellm-task-policy');
 const { requireDurableArtifactStorage } = require('../src/orchestration/artifact-storage-policy');
 const researchRunStore = require('../src/services/research-run-store');
 const refreshRotation = require('../src/services/auth/refresh-token-rotation');
@@ -71,6 +71,22 @@ describe('internal improvements suite', () => {
     const p = resolveTaskPolicy('agent.orchestrator');
     assert.equal(p.allow_fallbacks, false);
     assert.ok(p.preferred_models.length > 0);
+  });
+
+  it('litellm task policy honors fallback-disabling overrides', () => {
+    const p = resolveTaskPolicy('agent.synthesis', { allow_fallbacks: false });
+    assert.equal(p.allow_fallbacks, false);
+    assert.deepEqual(p.fallbacks, []);
+
+    const request = applyPolicyToGatewayRequest(
+      { model: 'gpt-4o-mini', metadata: { trace_id: 'trace-1' } },
+      'agent.synthesis',
+      { allow_fallbacks: false },
+    );
+    assert.equal(request.allow_fallbacks, false);
+    assert.deepEqual(request.fallbacks, []);
+    assert.equal(request.metadata.trace_id, 'trace-1');
+    assert.equal(request.metadata.task_kind, 'agent.synthesis');
   });
 
   it('artifact storage policy is lenient outside production', () => {

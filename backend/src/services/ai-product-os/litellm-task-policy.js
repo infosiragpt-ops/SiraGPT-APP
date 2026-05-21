@@ -33,12 +33,15 @@ const POLICIES = {
 
 function resolveTaskPolicy(taskKind, overrides = {}) {
   const base = POLICIES[taskKind] || POLICIES['chat.default'];
+  const allowFallbacks = overrides.allow_fallbacks ?? base.allow_fallbacks;
+  const preferredModels = overrides.preferred_models || base.preferred_models;
+
   return {
     taskKind: taskKind || 'chat.default',
-    allow_fallbacks: overrides.allow_fallbacks ?? base.allow_fallbacks,
-    preferred_models: overrides.preferred_models || base.preferred_models,
+    allow_fallbacks: allowFallbacks,
+    preferred_models: preferredModels,
     timeoutMs: Number(overrides.timeoutMs) || base.timeoutMs,
-    fallbacks: overrides.fallbacks || (base.allow_fallbacks ? base.preferred_models.slice(1) : []),
+    fallbacks: overrides.fallbacks || (allowFallbacks ? preferredModels.slice(1) : []),
   };
 }
 
