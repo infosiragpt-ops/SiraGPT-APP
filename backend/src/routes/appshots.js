@@ -32,6 +32,7 @@ const jwt = require('jsonwebtoken');
 
 const { authenticateToken } = require('../middleware/auth');
 const auditLog = require('../services/agents/audit-log');
+const aiService = require('../services/ai-service');
 
 const router = express.Router();
 
@@ -192,6 +193,30 @@ router.post(
       const noteText = sanitiseNote(req.body?.note);
       const model = sanitiseModel(req.body?.model) || 'gpt-4o-mini';
 
+      // OCR: extrae el texto visible de la captura con Gemini Vision para que
+      // el pipeline de chat existente lo inyecte como contexto vía
+      // `File.extractedText`. La extensión envía `ocr=1` por defecto; lo
+      // tratamos como activado salvo que se pase explícitamente "0"/"false".
+      // Degradación silenciosa: si Gemini falla, la captura sigue adelante
+      // sin texto extraído y se loguea un warning.
+      const ocrFlag = pickOcrFlag(req.query?.ocr, req.body?.ocr);
+      let extractedText = null;
+      if (ocrFlag) {
+        try {
+          const description = await aiService.describeImagesWithGemini(
+            [{ path: diskPath, mimeType: req.file.mimetype, name: filename }],
+            `Captura enviada por Appshots (${sourceLabel}).`,
+          );
+          if (description && description.trim().length > 0) {
+            extractedText = description.trim().slice(0, 200000);
+          } else {
+            console.warn('[appshots] OCR Gemini devolvió texto vacío; se guarda sin extractedText');
+          }
+        } catch (err) {
+          console.warn('[appshots] OCR Gemini falló, degradando silenciosamente:', err?.message || err);
+        }
+      }
+
       const fileRecord = await prisma.file.create({
         data: {
           userId,
@@ -200,6 +225,7 @@ router.post(
           mimeType: req.file.mimetype,
           size: req.file.size,
           path: diskPath,
+          extractedText,
           processingStage: 'ready',
           processingStageAt: new Date(),
         },
@@ -245,6 +271,8 @@ router.post(
         bytes: req.file.size,
         mimeType: req.file.mimetype,
         sourceLabel,
+        ocr: ocrFlag,
+        ocrChars: extractedText ? extractedText.length : 0,
       });
 
       const frontendBase = getCanonicalFrontendBaseUrl(req);
@@ -282,6 +310,19 @@ function sanitiseNote(raw) {
   return cleaned.slice(0, 2000) || null;
 }
 
+// Acepta el flag OCR vía query o body. Activado por defecto salvo "0"/"false"/""
+// explícitos — la extensión envía `ocr=1`, pero clientes antiguos sin el campo
+// también se benefician del OCR.
+function pickOcrFlag(...candidates) {
+  for (const raw of candidates) {
+    if (raw === undefined || raw === null) continue;
+    const v = String(raw).trim().toLowerCase();
+    if (v === '' || v === '0' || v === 'false' || v === 'no' || v === 'off') return false;
+    return true;
+  }
+  return true;
+}
+
 function sanitiseModel(raw) {
   if (typeof raw !== 'string') return null;
   // Whitelist-by-pattern: only allow short alnum/dash/dot strings so an
@@ -312,4 +353,4 @@ function getCanonicalFrontendBaseUrl(req) {
 }
 
 module.exports = router;
-module.exports._private = { sanitiseLabel, sanitiseNote, sanitiseModel, truncate };
+module.exports._private = { sanitiseLabel, sanitiseNote, sanitiseModel, truncate, pickOcrFlag };

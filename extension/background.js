@@ -61,6 +61,7 @@ async function runCapture() {
   const form = new FormData();
   form.append('image', blob, 'appshot.png');
   form.append('source', 'Captura de ventana');
+  form.append('ocr', '1');
 
   const resp = await fetch(`${baseUrl}/api/appshots/capture`, {
     method: 'POST',
