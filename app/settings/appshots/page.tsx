@@ -28,6 +28,7 @@ type AppshotsSession = {
   ipHint: string | null;
   geoHint: string | null;
   device: string | null;
+  isCurrent?: boolean;
 };
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
@@ -66,7 +67,22 @@ export default function AppshotsSettingsPage() {
   }, [loadSessions]);
 
   const revoke = useCallback(
-    async (id: string) => {
+    async (id: string, opts?: { isCurrent?: boolean }) => {
+      // Task 20: si la sesión coincide con el navegador actual, exigimos
+      // una confirmación extra. La extensión deja de poder enviar
+      // capturas inmediatamente, así que si el usuario lo hace por
+      // error se queda sin la integración hasta volver a vincular.
+      if (opts?.isCurrent) {
+        const ok =
+          typeof window === 'undefined'
+            ? true
+            : window.confirm(
+                'Vas a revocar la sesión del dispositivo desde el que estás conectado ahora. ' +
+                  'La extensión dejará de poder enviar capturas hasta que la vincules de nuevo. ' +
+                  '¿Seguro que quieres continuar?',
+              );
+        if (!ok) return;
+      }
       setRevokingId(id);
       setSessionsError(null);
       try {
@@ -273,6 +289,13 @@ export default function AppshotsSettingsPage() {
                   className="flex flex-col gap-2 px-3 py-2 sm:flex-row sm:items-start sm:justify-between"
                 >
                   <div className="text-sm">
+                    {s.isCurrent ? (
+                      <div className="mb-1">
+                        <span className="inline-flex items-center rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                          Este dispositivo
+                        </span>
+                      </div>
+                    ) : null}
                     {renamingId === s.id ? (
                       <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                         <input
@@ -330,8 +353,13 @@ export default function AppshotsSettingsPage() {
                     )}
                     <button
                       type="button"
-                      onClick={() => revoke(s.id)}
+                      onClick={() => revoke(s.id, { isCurrent: s.isCurrent })}
                       disabled={revokingId === s.id}
+                      title={
+                        s.isCurrent
+                          ? 'Estás conectado desde este dispositivo. Pediremos confirmación antes de revocar.'
+                          : undefined
+                      }
                       className="rounded-md border border-destructive bg-background px-3 py-1.5 text-sm text-destructive hover:bg-destructive/10 disabled:opacity-50"
                     >
                       {revokingId === s.id ? 'Revocando…' : 'Revocar'}

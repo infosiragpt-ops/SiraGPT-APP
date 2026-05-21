@@ -98,6 +98,41 @@ describe('GET /api/appshots/sessions', () => {
     // Task 19 — geo hint also surfaces.
     assert.equal(s.geoHint, 'Madrid, ES');
     assert.ok(typeof s.userAgent === 'string' && s.userAgent.includes('Chrome'));
+    // Task 20 — isCurrent flag is always present and false when the
+    // request's UA/IP don't match the stored session.
+    assert.equal(s.isCurrent, false);
+  });
+
+  // Task 20 — when the caller's User-Agent + ipHint match a stored
+  // session, that one row is flagged isCurrent: true so the UI can
+  // render "Este dispositivo".
+  it('marks the matching session as isCurrent based on UA + ipHint', async () => {
+    const app = buildRouteTestApp('/api/appshots', appshotsRouter);
+    const matchingUa =
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+    const res = await request(app)
+      .get('/api/appshots/sessions')
+      .set('Authorization', auth.authHeader)
+      .set('User-Agent', matchingUa)
+      .set('X-Forwarded-For', '81.45.30.42');
+    restore();
+    assert.equal(res.status, 200);
+    assert.equal(res.body.sessions.length, 1);
+    assert.equal(res.body.sessions[0].isCurrent, true);
+  });
+
+  it('does not mark anything as current when only the UA matches', async () => {
+    const app = buildRouteTestApp('/api/appshots', appshotsRouter);
+    const matchingUa =
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+    const res = await request(app)
+      .get('/api/appshots/sessions')
+      .set('Authorization', auth.authHeader)
+      .set('User-Agent', matchingUa)
+      .set('X-Forwarded-For', '203.0.113.5');
+    restore();
+    assert.equal(res.status, 200);
+    assert.equal(res.body.sessions[0].isCurrent, false);
   });
 });
 

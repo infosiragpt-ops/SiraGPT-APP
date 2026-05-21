@@ -185,25 +185,62 @@ router.get('/sessions', authenticateToken, async (req, res) => {
       },
       orderBy: { createdAt: 'desc' },
     });
+
+    // Task 20: marca la sesión que corresponde al navegador desde el que
+    // se está consultando la página, para que el usuario no revoque sin
+    // querer la que está usando ahora. Comparamos contra el mismo par
+    // (User-Agent normalizado + ipHint /24-/64) que guardamos al vincular.
+    const currentRawUa = extractUa(req);
+    const currentUaNorm = currentRawUa
+      ? String(currentRawUa).slice(0, 512).trim().toLowerCase()
+      : '';
+    const currentRawIp = extractIp(req);
+    const currentIpHint = currentRawIp ? reduceIp(currentRawIp) || null : null;
+
     const sessions = rows
       .filter((row) => isAppshotsToken(row.token))
-      .map((row) => ({
-        id: row.id,
-        createdAt: row.createdAt,
-        expiresAt: row.expiresAt,
-        lastUsedAt: row.lastUsedAt,
-        label: row.label || null,
-        userAgent: row.userAgent || null,
-        ipHint: row.ipHint || null,
-        // Task 19 — pre-resolved "City, CC" hint. Null when the lookup
-        // failed at pair time or the row predates the migration; the UI
-        // then falls back to ipHint.
-        geoHint: row.geoHint || null,
-        // Pre-computed friendly device string ("Chrome en macOS") so the UI
-        // doesn't need to ship a UA parser. Falls back to null when we
-        // can't recognise the UA — clients then render the raw string.
-        device: row.userAgent ? describeUserAgent(row.userAgent) : null,
-      }));
+      .map((row) => {
+        const rowUaNorm = row.userAgent ? String(row.userAgent).trim().toLowerCase() : '';
+        // Sólo consideramos "este dispositivo" cuando ambos datos
+        // coinciden Y los dos no son vacíos — un UA o ipHint vacío en
+        // la fila no debería marcar todas las sesiones huérfanas como
+        // actuales. ipHint puede ser null en sesiones antiguas; en ese
+        // caso exigimos también que el actual sea null para evitar
+        // falsos positivos.
+        const uaMatches = !!rowUaNorm && !!currentUaNorm && rowUaNorm === currentUaNorm;
+        const ipMatches = (row.ipHint || null) === (currentIpHint || null);
+        const isCurrent = uaMatches && ipMatches;
+        return {
+          id: row.id,
+          createdAt: row.createdAt,
+          expiresAt: row.expiresAt,
+          lastUsedAt: row.lastUsedAt,
+          label: row.label || null,
+          userAgent: row.userAgent || null,
+          ipHint: row.ipHint || null,
+          // Task 19 — pre-resolved "City, CC" hint. Null when the lookup
+          // failed at pair time or the row predates the migration; the UI
+          // then falls back to ipHint.
+          geoHint: row.geoHint || null,
+          // Pre-computed friendly device string ("Chrome en macOS") so the UI
+          // doesn't need to ship a UA parser. Falls back to null when we
+          // can't recognise the UA — clients then render the raw string.
+          device: row.userAgent ? describeUserAgent(row.userAgent) : null,
+          isCurrent,
+        };
+      });
+
+    // Si varias filas coinciden (p. ej. el usuario vinculó dos veces
+    // desde el mismo navegador y red), nos quedamos sólo con la más
+    // reciente como "actual" para que la UI sólo muestre un badge.
+    const firstCurrent = sessions.find((s) => s.isCurrent);
+    if (firstCurrent) {
+      for (const s of sessions) {
+        if (s !== firstCurrent) s.isCurrent = false;
+      }
+    }
+
+
     res.json({ sessions });
   } catch (error) {
     console.error('[appshots] list sessions error:', error?.message || error);
