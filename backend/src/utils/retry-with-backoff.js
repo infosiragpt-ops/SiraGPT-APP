@@ -153,11 +153,23 @@ function sleep(ms, signal) {
     if (signal?.aborted) {
       return reject(signal.reason || new Error('sleep aborted'));
     }
-    const timer = setTimeout(resolve, ms);
+
+    const cleanup = () => {
+      if (signal && typeof signal.removeEventListener === 'function') {
+        signal.removeEventListener('abort', onAbort);
+      }
+    };
+    const finish = () => {
+      cleanup();
+      resolve();
+    };
     const onAbort = () => {
       clearTimeout(timer);
+      cleanup();
       reject(signal?.reason || new Error('sleep aborted'));
     };
+
+    const timer = setTimeout(finish, ms);
     if (signal) {
       signal.addEventListener('abort', onAbort, { once: true });
     }
