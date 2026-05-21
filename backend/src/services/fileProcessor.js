@@ -419,18 +419,18 @@ class FileProcessor {
       const header = `Word document — ${markdown.length} characters extracted, structure preserved as markdown\n---\n`;
       return header + markdown;
     } catch (error) {
-        // Mammoth throws verbose stack traces (jszip/openZip chain) when
-        // the .docx is corrupt, truncated, or actually a different format
-        // (e.g. .doc renamed). The outer caller (reprocessIfNeeded) has
-        // its own try/catch, so we just log a compact warning and try
-        // the raw-text fallback before giving up.
-        const conciseMessage = error?.message || String(error);
-        console.warn(`Word file processing failed for ${filePath}: ${conciseMessage}`);
-        if (/not a readable DOCX zip/i.test(conciseMessage)) {
-          throw new Error(conciseMessage);
-        }
-        // Fallback to raw text so the user doesn't lose the file entirely
-        // if mammoth's HTML pipeline chokes on a weird input.
+      // Mammoth throws verbose stack traces (jszip/openZip chain) when
+      // the .docx is corrupt, truncated, or actually a different format
+      // (e.g. .doc renamed). The outer caller (reprocessIfNeeded) has
+      // its own try/catch, so we just log a compact warning and try
+      // the raw-text fallback before giving up.
+      const conciseMessage = error?.message || String(error);
+      console.warn(`Word file processing failed for ${filePath}: ${conciseMessage}`);
+      if (/not a readable DOCX zip/i.test(conciseMessage)) {
+        throw new Error(conciseMessage);
+      }
+      // Fallback to raw text so the user doesn't lose the file entirely
+      // if mammoth's HTML pipeline chokes on a weird input.
       try {
         const fallback = await mammoth.extractRawText({ path: filePath });
         return fallback.value;
