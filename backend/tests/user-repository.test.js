@@ -180,3 +180,52 @@ test('UserRepository: new methods route through withRetry with stable labels', a
     'user-repo.updateWebauthnCredentials',
   ]);
 });
+
+test('UserRepository.updateGmailTokens: writes sealed blob with id projection', async () => {
+  const prisma = makePrismaSpy();
+  const repo = new UserRepository({ prisma, withRetry: passthroughRetry });
+  await repo.updateGmailTokens('u1', 'SEALED_BLOB');
+  assert.deepEqual(prisma._calls.update[0], {
+    where: { id: 'u1' },
+    data: { gmailTokens: 'SEALED_BLOB' },
+    select: { id: true },
+  });
+});
+
+test('UserRepository.updateGoogleServicesTokens: writes sealed blob with id projection', async () => {
+  const prisma = makePrismaSpy();
+  const repo = new UserRepository({ prisma, withRetry: passthroughRetry });
+  await repo.updateGoogleServicesTokens('u1', 'SEALED_BLOB');
+  assert.deepEqual(prisma._calls.update[0], {
+    where: { id: 'u1' },
+    data: { googleServicesTokens: 'SEALED_BLOB' },
+    select: { id: true },
+  });
+});
+
+test('UserRepository.clearGoogleServicesTokens: nulls googleServicesTokens', async () => {
+  const prisma = makePrismaSpy();
+  const repo = new UserRepository({ prisma, withRetry: passthroughRetry });
+  await repo.clearGoogleServicesTokens('u1');
+  assert.deepEqual(prisma._calls.update[0], {
+    where: { id: 'u1' },
+    data: { googleServicesTokens: null },
+  });
+});
+
+test('UserRepository: token-vault-facing methods route through withRetry with stable labels', async () => {
+  const prisma = makePrismaSpy();
+  const labels = [];
+  const repo = new UserRepository({
+    prisma,
+    withRetry: (fn, opts) => { labels.push(opts?.label); return fn(); },
+  });
+  await repo.updateGmailTokens('u1', 'X');
+  await repo.updateGoogleServicesTokens('u1', 'Y');
+  await repo.clearGoogleServicesTokens('u1');
+  assert.deepEqual(labels, [
+    'user-repo.updateGmailTokens',
+    'user-repo.updateGoogleServicesTokens',
+    'user-repo.clearGoogleServicesTokens',
+  ]);
+});

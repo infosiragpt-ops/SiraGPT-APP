@@ -70,6 +70,52 @@ class UserRepository {
   }
 
   /**
+   * Persist a sealed Gmail token blob. Callers MUST pass the
+   * ciphertext from TokenVault.sealProviderTokens — this repo does
+   * not encrypt. Pass `null` to disconnect (prefer `clearGmailTokens`
+   * for that path to keep intent obvious at the call site).
+   */
+  updateGmailTokens(userId, sealedBlob) {
+    return this.withRetry(
+      () => this.prisma.user.update({
+        where: { id: userId },
+        data: { gmailTokens: sealedBlob },
+        select: { id: true },
+      }),
+      { label: 'user-repo.updateGmailTokens' }
+    );
+  }
+
+  /**
+   * Persist a sealed Google Services (Calendar + Drive) token blob.
+   * Same contract as `updateGmailTokens` — ciphertext only.
+   */
+  updateGoogleServicesTokens(userId, sealedBlob) {
+    return this.withRetry(
+      () => this.prisma.user.update({
+        where: { id: userId },
+        data: { googleServicesTokens: sealedBlob },
+        select: { id: true },
+      }),
+      { label: 'user-repo.updateGoogleServicesTokens' }
+    );
+  }
+
+  /**
+   * Disconnect Google Services by nulling the token column. Parity
+   * with `clearGmailTokens` so disconnect handlers look symmetric.
+   */
+  clearGoogleServicesTokens(userId) {
+    return this.withRetry(
+      () => this.prisma.user.update({
+        where: { id: userId },
+        data: { googleServicesTokens: null },
+      }),
+      { label: 'user-repo.clearGoogleServicesTokens' }
+    );
+  }
+
+  /**
    * Create a password-backed account (email/password signup path).
    * Distinct from `createOAuthUser` because callers shouldn't have to
    * remember to null out the google fields, and the default plan

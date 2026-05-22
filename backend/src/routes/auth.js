@@ -6,11 +6,15 @@ const prisma = require('../config/database');
 const { withAccelerateRetry, isAccelerateTransientError } = require('../utils/prisma-accelerate-retry');
 const { SessionRepository } = require('../repositories/SessionRepository');
 const { UserRepository } = require('../repositories/UserRepository');
-// Single repository instances shared by every call site in this file.
-// Cross-cutting concerns (fingerprint-column fallback, Accelerate
-// retry) live inside the repos so handlers stay focused on policy.
+const { TokenVault } = require('../services/TokenVault');
+const { encrypt: encryptToken, decrypt: decryptToken } = require('../utils/encryption');
+// Single repository / service instances shared by every call site in
+// this file. Cross-cutting concerns (fingerprint-column fallback,
+// Accelerate retry, token envelope crypto) live inside them so
+// handlers stay focused on policy.
 const sessions = new SessionRepository({ prisma, withRetry: withAccelerateRetry });
 const users = new UserRepository({ prisma, withRetry: withAccelerateRetry });
+const tokenVault = new TokenVault({ encrypt: encryptToken, decrypt: decryptToken });
 const { authenticateToken } = require('../middleware/auth');
 const { makeAuthRateLimit } = require('../middleware/rate-limit-auth');
 const { writeAuditLog } = require('../utils/audit-log');
@@ -289,9 +293,6 @@ router.get('/gmail/callback', async (req, res) => {
     // Exchange code for tokens
     const { tokens } = await gmailOauth2Client.getToken(code);
 
-    // Store Gmail tokens for the user (encrypted)
-    const { encrypt } = require('../utils/encryption');
-
     console.log('🎉 Gmail OAuth successful - Received tokens:', {
       hasAccessToken: !!tokens.access_token,
       hasRefreshToken: !!tokens.refresh_token,
@@ -299,20 +300,15 @@ router.get('/gmail/callback', async (req, res) => {
       expiryDate: tokens.expiry_date ? new Date(tokens.expiry_date) : 'none'
     });
 
-    const gmailTokens = JSON.stringify({
+    const sealed = tokenVault.sealProviderTokens({
       accessToken: tokens.access_token,
       refreshToken: tokens.refresh_token,
-      tokenType: tokens.token_type || 'Bearer',
+      tokenType: tokens.token_type,
       scope: tokens.scope || 'gmail',
-      expiresAt: tokens.expiry_date || (Date.now() + 3600000) // Use Google's expiry or 1 hour default
+      expiresAt: tokens.expiry_date || undefined,
     });
 
-    await prisma.user.update({
-      where: { id: userId },
-      data: {
-        gmailTokens: encrypt(gmailTokens)
-      }
-    });
+    await users.updateGmailTokens(userId, sealed);
 
     // ✅ Send a full HTML page with a script to ensure execution
     res.set('Content-Type', 'text/html');
@@ -328,13 +324,7 @@ router.get('/gmail/callback', async (req, res) => {
 // Disconnect Gmail
 router.post('/gmail/disconnect', authenticateToken, async (req, res) => {
   try {
-    await prisma.user.update({
-      where: { id: req.user.id },
-      data: {
-        gmailTokens: null
-      }
-    });
-
+    await users.clearGmailTokens(req.user.id);
     res.json({ success: true });
   } catch (error) {
     console.error('Gmail disconnect error:', error);
@@ -345,33 +335,25 @@ router.post('/gmail/disconnect', authenticateToken, async (req, res) => {
 // Check Gmail connection status
 router.get('/gmail/status', authenticateToken, async (req, res) => {
   try {
-    const user = await prisma.user.findUnique({
-      where: { id: req.user.id },
-      select: { gmailTokens: true }
-    });
+    const user = await users.findById(req.user.id, { select: { gmailTokens: true } });
 
     let isConnected = false;
     let hasRefreshToken = false;
     let hasRequiredScopes = false;
 
-    if (user?.gmailTokens) {
-      try {
-        const { decrypt } = require('../utils/encryption');
-        const tokens = JSON.parse(decrypt(user.gmailTokens));
-        isConnected = true;
-        hasRefreshToken = !!tokens.refreshToken;
+    const tokens = tokenVault.openProviderTokens(user?.gmailTokens);
+    if (tokens) {
+      isConnected = true;
+      hasRefreshToken = !!tokens.refreshToken;
 
-        // Check scopes
-        const requiredScopes = [
-          'https://www.googleapis.com/auth/gmail.readonly',
-          'https://www.googleapis.com/auth/gmail.send',
-          'https://www.googleapis.com/auth/gmail.modify'
-        ];
-        const tokenScope = tokens.scope || '';
-        hasRequiredScopes = requiredScopes.every(scope => tokenScope.includes(scope));
-      } catch (error) {
-        console.error('Error decrypting Gmail tokens:', error);
-      }
+      // Check scopes
+      const requiredScopes = [
+        'https://www.googleapis.com/auth/gmail.readonly',
+        'https://www.googleapis.com/auth/gmail.send',
+        'https://www.googleapis.com/auth/gmail.modify'
+      ];
+      const tokenScope = tokens.scope || '';
+      hasRequiredScopes = requiredScopes.every(scope => tokenScope.includes(scope));
     }
 
     res.json({
@@ -466,9 +448,6 @@ router.get('/google-services/callback', async (req, res) => {
     // Exchange code for tokens
     const { tokens } = await googleServicesOauth2Client.getToken(code);
 
-    // Store Google Services tokens for the user (encrypted)
-    const { encrypt } = require('../utils/encryption');
-
     console.log('🎉 Google Services OAuth successful - Received tokens:', {
       hasAccessToken: !!tokens.access_token,
       hasRefreshToken: !!tokens.refresh_token,
@@ -476,20 +455,15 @@ router.get('/google-services/callback', async (req, res) => {
       expiryDate: tokens.expiry_date ? new Date(tokens.expiry_date) : 'none'
     });
 
-    const googleServicesTokens = JSON.stringify({
+    const sealed = tokenVault.sealProviderTokens({
       accessToken: tokens.access_token,
       refreshToken: tokens.refresh_token,
-      tokenType: tokens.token_type || 'Bearer',
+      tokenType: tokens.token_type,
       scope: tokens.scope || 'calendar,drive',
-      expiresAt: tokens.expiry_date || (Date.now() + 3600000) // Use Google's expiry or 1 hour default
+      expiresAt: tokens.expiry_date || undefined,
     });
 
-    await prisma.user.update({
-      where: { id: userId },
-      data: {
-        googleServicesTokens: encrypt(googleServicesTokens)
-      }
-    });
+    await users.updateGoogleServicesTokens(userId, sealed);
 
     res.set('Content-Type', 'text/html');
     res.send(popupResponseHtml({
@@ -507,13 +481,7 @@ router.get('/google-services/callback', async (req, res) => {
 // Disconnect Google Services
 router.post('/google-services/disconnect', authenticateToken, async (req, res) => {
   try {
-    await prisma.user.update({
-      where: { id: req.user.id },
-      data: {
-        googleServicesTokens: null
-      }
-    });
-
+    await users.clearGoogleServicesTokens(req.user.id);
     res.json({ success: true });
   } catch (error) {
     console.error('Google Services disconnect error:', error);
@@ -524,32 +492,24 @@ router.post('/google-services/disconnect', authenticateToken, async (req, res) =
 // Check Google Services connection status
 router.get('/google-services/status', authenticateToken, async (req, res) => {
   try {
-    const user = await prisma.user.findUnique({
-      where: { id: req.user.id },
-      select: { googleServicesTokens: true }
-    });
+    const user = await users.findById(req.user.id, { select: { googleServicesTokens: true } });
 
     let isConnected = false;
     let hasRefreshToken = false;
     let hasRequiredScopes = false;
 
-    if (user?.googleServicesTokens) {
-      try {
-        const { decrypt } = require('../utils/encryption');
-        const tokens = JSON.parse(decrypt(user.googleServicesTokens));
-        isConnected = true;
-        hasRefreshToken = !!tokens.refreshToken;
+    const tokens = tokenVault.openProviderTokens(user?.googleServicesTokens);
+    if (tokens) {
+      isConnected = true;
+      hasRefreshToken = !!tokens.refreshToken;
 
-        // Check for Calendar and Drive scopes
-        const requiredScopes = [
-          'https://www.googleapis.com/auth/calendar',
-          'https://www.googleapis.com/auth/drive'
-        ];
-        const tokenScope = tokens.scope || '';
-        hasRequiredScopes = requiredScopes.some(scope => tokenScope.includes(scope));
-      } catch (error) {
-        console.error('Error decrypting Google Services tokens:', error);
-      }
+      // Check for Calendar and Drive scopes
+      const requiredScopes = [
+        'https://www.googleapis.com/auth/calendar',
+        'https://www.googleapis.com/auth/drive'
+      ];
+      const tokenScope = tokens.scope || '';
+      hasRequiredScopes = requiredScopes.some(scope => tokenScope.includes(scope));
     }
 
     res.json({
