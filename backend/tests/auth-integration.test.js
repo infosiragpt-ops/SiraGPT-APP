@@ -255,6 +255,10 @@ describe('auth · login', () => {
   beforeEach(async () => {
     resetRateLimitStore();
     store = mockPrisma();
+    // Default: no org claims any email domain. Individual tests can
+    // override this to exercise the SSO-gated path.
+    prisma.organization = prisma.organization || {};
+    prisma.organization.findFirst = async () => null;
 
     // Pre-register a user with a known password
     const hashed = await bcrypt.hash(VALID_USER.password, 4);
@@ -304,6 +308,52 @@ describe('auth · login', () => {
       .expect(401);
 
     assert(res.body.error);
+  });
+
+  it('returns 501 with SSO redirect body when an SSO-enabled org claims the email domain', async () => {
+    // Stub the org lookup so resolveOrgBySsoDomain returns a matching
+    // org for this email's domain. Other findFirst calls (if any) fall
+    // back to returning null so the rest of the pipeline still works.
+    prisma.organization = prisma.organization || {};
+    prisma.organization.findFirst = async ({ where } = {}) => {
+      if (where && where.ssoEnabled === true) {
+        return { id: 'org-sso-1', slug: 'acme', ssoEnabled: true };
+      }
+      return null;
+    };
+
+    // Seed a password-bearing user under the SSO-claimed domain so we
+    // can prove the gate fires BEFORE password verification (i.e. no
+    // session is issued even when credentials would otherwise be valid).
+    const hashed = await bcrypt.hash(VALID_USER.password, 4);
+    store.users.push({
+      id: 'login-sso-user',
+      name: 'Acme User',
+      email: 'employee@acme.com',
+      password: hashed,
+      plan: 'FREE',
+      isAdmin: false,
+      monthlyCallLimit: 3,
+      monthlyLimit: 10000,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    const sessionsBefore = store.sessions.length;
+
+    const app = buildRouteTestApp('/api/auth', reloadModule('../src/routes/auth'));
+
+    const res = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'employee@acme.com', password: VALID_USER.password })
+      .expect(501);
+
+    assert.equal(res.body.ok, false);
+    assert.equal(res.body.ssoRequired, true);
+    assert.equal(res.body.orgSlug, 'acme');
+    assert.equal(res.body.ssoLoginUrl, '/api/auth/sso/acme/login');
+    // No session should have been issued on the SSO-gated path.
+    assert.equal(store.sessions.length, sessionsBefore);
+    assert.equal(res.body.token, undefined);
   });
 });
 
