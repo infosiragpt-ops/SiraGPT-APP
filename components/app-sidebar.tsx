@@ -1081,8 +1081,18 @@ export function AppSidebar() {
             >
               <SidebarMenu>
                 {chats.length === 0 ? (
-                  <div className="px-3 py-4 text-center text-sm text-muted-foreground">
-                    {t("noChats")}
+                  // Lote C · #14 — friendlier empty state with a CTA.
+                  // Uses the existing t("noChats") copy as the headline
+                  // and adds a soft hint pointing at the composer. No
+                  // new button: we explicitly avoid duplicating the
+                  // "Nuevo chat" action already in the header.
+                  <div className="px-3 py-5 text-center">
+                    <p className="text-sm font-medium text-foreground/80">
+                      {t("noChats")}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Empieza una conversación abajo y aparecerá aquí.
+                    </p>
                   </div>
                 ) : (
                   <>
