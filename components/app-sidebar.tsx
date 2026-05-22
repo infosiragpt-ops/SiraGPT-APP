@@ -386,6 +386,23 @@ export function AppSidebar() {
   const [hiddenChatIds, setHiddenChatIds] = React.useState<string[]>([])
   const [chatFolders, setChatFolders] = React.useState<Record<string, string>>({})
   const [scheduledChats, setScheduledChats] = React.useState<Record<string, { at: string; note?: string; title?: string }>>({})
+  // Lote F · #45 — Codex section collapsible with persistent state.
+  // Defaults to expanded on first visit so users discover it; once
+  // collapsed the choice is remembered across reloads via localStorage.
+  const [codexCollapsed, setCodexCollapsed] = React.useState<boolean>(false)
+  React.useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem("sira:sidebar:codex-collapsed")
+      if (raw === "1") setCodexCollapsed(true)
+    } catch { /* ignore */ }
+  }, [])
+  const toggleCodexCollapsed = React.useCallback(() => {
+    setCodexCollapsed((prev) => {
+      const next = !prev
+      try { window.localStorage.setItem("sira:sidebar:codex-collapsed", next ? "1" : "0") } catch { /* ignore */ }
+      return next
+    })
+  }, [])
   const [scheduleTarget, setScheduleTarget] = React.useState<any | null>(null)
   const [scheduleAt, setScheduleAt] = React.useState("")
   const [scheduleNote, setScheduleNote] = React.useState("")
@@ -1057,12 +1074,38 @@ export function AppSidebar() {
 
         {/* Codex — workspaces de código por encima de los chats recientes.
             Movido aquí (antes vivía al final del SidebarContent) para que el
-            usuario lo encuentre nada más abrir la barra lateral. */}
+            usuario lo encuentre nada más abrir la barra lateral.
+            Lote F · #45 — ahora con header colapsable persistente. */}
         {selectedType === "Text Chat" && (
-          <SidebarFoldersDropdown
-            collapsed={state === "closed"}
-            onMobileNavigate={() => { if (isMobile) setOpenMobile(false) }}
-          />
+          <SidebarGroup className="py-0">
+            {state !== "closed" && (
+              <button
+                type="button"
+                onClick={toggleCodexCollapsed}
+                aria-expanded={!codexCollapsed}
+                aria-controls="sidebar-codex-content"
+                className="group flex w-full items-center gap-1 px-3 pt-4 pb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/60 hover:text-foreground/80 transition-colors select-none"
+              >
+                <ChevronDown
+                  className={cn(
+                    "h-3 w-3 transition-transform duration-150",
+                    codexCollapsed && "-rotate-90"
+                  )}
+                  aria-hidden="true"
+                />
+                <span>Codex</span>
+              </button>
+            )}
+            <div
+              id="sidebar-codex-content"
+              hidden={codexCollapsed && state !== "closed"}
+            >
+              <SidebarFoldersDropdown
+                collapsed={state === "closed"}
+                onMobileNavigate={() => { if (isMobile) setOpenMobile(false) }}
+              />
+            </div>
+          </SidebarGroup>
         )}
 
         {/* Recent Chats - Only show for Text Chat */}
