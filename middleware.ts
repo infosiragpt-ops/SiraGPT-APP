@@ -14,8 +14,28 @@ import { applyNextApiCorsHeaders, buildNextApiPreflightResponse } from './lib/ne
 const LOCALE_COOKIE = 'NEXT_LOCALE'
 const ONE_YEAR = 60 * 60 * 24 * 365
 
+// Server Action IDs in Next.js are 40-char lowercase hex SHA-1 digests.
+// Anything else hitting the `Next-Action` header is either a stale client
+// from a previous deployment or — much more commonly — a security scanner
+// probing for server actions. We don't use Server Actions in this app
+// (no "use server" directives), so we can safely 410 these and stop the
+// log noise without affecting any real user flow.
+const SERVER_ACTION_ID_RE = /^[a-f0-9]{40}$/
+
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
+
+  // Short-circuit bogus / stale Server Action POSTs before Next.js's
+  // runtime turns them into a "Failed to find Server Action" error.
+  const nextActionHeader = request.headers.get('next-action')
+  if (nextActionHeader !== null) {
+    if (!SERVER_ACTION_ID_RE.test(nextActionHeader)) {
+      return new NextResponse(null, { status: 410 })
+    }
+    // Even if it matches the hash shape, this app doesn't ship any
+    // server actions, so the action will never resolve. Treat as gone.
+    return new NextResponse(null, { status: 410 })
+  }
 
   // API + Next internals skip locale handling but keep CORS for /api.
   if (pathname.startsWith('/api/')) {

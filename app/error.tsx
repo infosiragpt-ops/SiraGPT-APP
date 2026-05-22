@@ -27,6 +27,19 @@ import { track } from "@/lib/analytics"
 export const dynamic = "force-static"
 export const revalidate = false
 
+// Errors that mean "this tab is running JS from a previous deployment".
+// The only safe recovery is a hard reload to fetch the new bundle —
+// `reset()` re-renders with the same stale chunks and loops forever.
+function isStaleDeploymentError(err: Error & { digest?: string }): boolean {
+  const msg = (err.message || "") + " " + (err.digest || "")
+  return (
+    /Failed to find Server Action/i.test(msg) ||
+    /ChunkLoadError/i.test(err.name || "") ||
+    /Loading chunk \d+ failed/i.test(msg) ||
+    /Loading CSS chunk/i.test(msg)
+  )
+}
+
 export default function Error({
   error,
   reset,
@@ -37,6 +50,31 @@ export default function Error({
   const router = useRouter()
   const [attempts, setAttempts] = useState(0)
   const [canRetry, setCanRetry] = useState(true)
+
+  // Stale-deployment errors: hard-reload once automatically so the user
+  // gets the new bundle without seeing this screen at all. We guard
+  // with sessionStorage AND version the guard key by Next.js build ID,
+  // so:
+  //  - within the same deployment, a broken build can't infinite-loop
+  //    reload (we only reload once per (tab, build) pair);
+  //  - after a NEW deployment, the build ID changes and the user gets
+  //    one fresh auto-reload chance again instead of being stuck on
+  //    the error screen for the rest of the tab's lifetime.
+  useEffect(() => {
+    if (!isStaleDeploymentError(error)) return
+    if (typeof window === "undefined") return
+    try {
+      const buildId = (window as unknown as { __NEXT_DATA__?: { buildId?: string } })
+        .__NEXT_DATA__?.buildId || "unknown"
+      const KEY = `__siragpt_stale_reload__:${buildId}`
+      if (!sessionStorage.getItem(KEY)) {
+        sessionStorage.setItem(KEY, String(Date.now()))
+        window.location.reload()
+      }
+    } catch {
+      /* sessionStorage unavailable (private mode) — fall through to UI */
+    }
+  }, [error])
 
   // Track the error in analytics once on mount
   useEffect(() => {
