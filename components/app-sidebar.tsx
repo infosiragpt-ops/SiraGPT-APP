@@ -87,6 +87,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
+import { Skeleton } from "@/components/ui/skeleton"
 import {
   Tooltip,
   TooltipContent,
@@ -264,7 +265,8 @@ export function AppSidebar() {
     loadMoreChats,
     hasMoreChats,
     isLoadingMore,
-    pagination
+    pagination,
+    isLoading: isLoadingChats,
   } = useChat()
   const router = useRouter()
   // NB: pathname is declared here (not further down like the original)
@@ -1136,7 +1138,21 @@ export function AppSidebar() {
               className={cn(state === "closed" && "hidden")}
             >
               <SidebarMenu>
-                {chats.length === 0 ? (
+                {chats.length === 0 && isLoadingChats ? (
+                  // Pulido · skeleton placeholders mientras se carga el
+                  // historial de chats. Antes mostrábamos directamente el
+                  // empty state "no tienes chats", lo que parpadeaba y
+                  // confundía al usuario cuando la red iba lenta. Cinco
+                  // filas con anchos distintos imitan el ritmo visual del
+                  // listado real.
+                  <div className="space-y-1 px-2 py-2" aria-busy="true" aria-label="Cargando chats">
+                    {[88, 72, 80, 64, 76].map((w, i) => (
+                      <div key={i} className="flex h-9 items-center gap-2 rounded-lg px-2">
+                        <Skeleton className="h-4 rounded-md" style={{ width: `${w}%` }} />
+                      </div>
+                    ))}
+                  </div>
+                ) : chats.length === 0 ? (
                   // Lote C · #14 — friendlier empty state with a CTA.
                   // Uses the existing t("noChats") copy as the headline
                   // and adds a soft hint pointing at the composer. No
