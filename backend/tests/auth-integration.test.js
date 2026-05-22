@@ -14,11 +14,19 @@ const jwt = require('jsonwebtoken');
 
 const prisma = require('../src/config/database');
 const { buildRouteTestApp, reloadModule } = require('./http-test-utils');
+const rateLimitStore = require('../src/middleware/rate-limit-store');
 
 // ── Seed JWT secret ─────────────────────────────────────────────
 
 const JWT_SECRET = 'test-auth-integration-jwt-secret-at-least-32-chars!!';
 process.env.JWT_SECRET = JWT_SECRET;
+
+// Force the rate-limit store to its in-memory mode so each test can
+// reset it via `_resetForTests()` between runs. Otherwise we'd share a
+// real Redis ZSET with every other test process (and previous runs),
+// which is what made these tests intermittently 429 on validation
+// failures unrelated to the actual rate-limit feature under test.
+process.env.RATE_LIMIT_STORE = 'memory';
 
 // ── Helpers ─────────────────────────────────────────────────────
 
@@ -105,6 +113,7 @@ describe('auth · registration', () => {
   let store;
 
   beforeEach(() => {
+    rateLimitStore._resetForTests();
     store = mockPrisma();
   });
 
@@ -188,6 +197,7 @@ describe('auth · login', () => {
   let store;
 
   beforeEach(async () => {
+    rateLimitStore._resetForTests();
     store = mockPrisma();
 
     // Pre-register a user with a known password
@@ -248,6 +258,7 @@ describe('auth · me endpoint', () => {
   const testUser = { ...VALID_USER, id: 'me-test-user' };
 
   beforeEach(async () => {
+    rateLimitStore._resetForTests();
     store = mockPrisma();
 
     const hashed = await bcrypt.hash(testUser.password, 4);
@@ -328,6 +339,7 @@ describe('auth · logout', () => {
   let token;
 
   beforeEach(async () => {
+    rateLimitStore._resetForTests();
     store = mockPrisma();
 
     const hashed = await bcrypt.hash(VALID_USER.password, 4);
