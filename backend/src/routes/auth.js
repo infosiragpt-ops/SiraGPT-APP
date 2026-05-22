@@ -5,11 +5,12 @@ const { body, validationResult } = require('express-validator');
 const prisma = require('../config/database');
 const { withAccelerateRetry, isAccelerateTransientError } = require('../utils/prisma-accelerate-retry');
 const { SessionRepository } = require('../repositories/SessionRepository');
-// Single repository instance shared by every session call site in
-// this file (Google callback, signup, login, logout, refresh). The
-// fingerprint-column fallback and Accelerate retry policy live
-// inside it, so callers stay focused on business logic.
+const { UserRepository } = require('../repositories/UserRepository');
+// Single repository instances shared by every call site in this file.
+// Cross-cutting concerns (fingerprint-column fallback, Accelerate
+// retry) live inside the repos so handlers stay focused on policy.
 const sessions = new SessionRepository({ prisma, withRetry: withAccelerateRetry });
+const users = new UserRepository({ prisma, withRetry: withAccelerateRetry });
 const { authenticateToken } = require('../middleware/auth');
 const { makeAuthRateLimit } = require('../middleware/rate-limit-auth');
 const { writeAuditLog } = require('../utils/audit-log');
@@ -611,9 +612,7 @@ router.post('/register', registerRateLimit, validateBody(RegisterRequestSchema, 
     }
 
     // Check if user exists
-    const existingUser = await prisma.user.findUnique({
-      where: { email }
-    });
+    const existingUser = await users.findByEmail(email);
 
     if (existingUser) {
       return res.status(400).json({ error: 'User already exists' });
@@ -623,17 +622,10 @@ router.post('/register', registerRateLimit, validateBody(RegisterRequestSchema, 
     const hashedPassword = await bcrypt.hash(password, 12);
 
     // Create user
-    const user = await prisma.user.create({
-      data: {
-        name,
-        email,
-        password: hashedPassword,
-        plan: 'FREE',
-        isAdmin: false,
-        apiUsage: 0,
-        monthlyCallLimit: 3,   // <-- new: 3 queries/month for Free
-        monthlyLimit: 10000
-      }
+    const user = await users.createPasswordUser({
+      name,
+      email,
+      passwordHash: hashedPassword,
     });
 
     // Create session — embed isSuperAdmin claim so the rate-limit
@@ -743,9 +735,7 @@ router.post('/login', loginRateLimit, validateBody(LoginRequestSchema, { codePre
     }
 
     // Find user
-    const user = await prisma.user.findUnique({
-      where: { email }
-    });
+    const user = await users.findByEmail(email);
 
     if (!user) {
       const after = defaultLockout.recordFailure(email);
@@ -1131,7 +1121,7 @@ router.post('/impersonate/:userId', authenticateToken, async (req, res) => {
       });
     }
 
-    const targetUser = await prisma.user.findUnique({ where: { id: userId } });
+    const targetUser = await users.findById(userId);
     if (!targetUser) {
       return res.status(404).json({ error: 'User not found' });
     }
@@ -1193,9 +1183,7 @@ router.post('/end-impersonation', authenticateToken, async (req, res) => {
     }
 
     // Find the original super admin user
-    const superAdmin = await prisma.user.findUnique({
-      where: { id: decoded.impersonatedBy }
-    });
+    const superAdmin = await users.findById(decoded.impersonatedBy);
 
     if (!superAdmin || !superAdmin.isSuperAdmin) {
       return res.status(403).json({ error: 'Original super admin not found' });
@@ -2052,7 +2040,7 @@ router.post(
       // the email/password /login handler so downstream middleware sees
       // an identical token shape. The partial-session model that would
       // gate this behind an earlier login step lands next cycle.
-      const user = await prisma.user.findUnique({ where: { id: result.userId } });
+      const user = await users.findById(result.userId);
       if (!user) {
         // The row's user disappeared between challenge mint and verify.
         return res.status(404).json({ error: 'User no longer exists' });
@@ -2161,7 +2149,7 @@ router.post(
         return res.status(410).json({ error: 'partial session expired' });
       }
 
-      const user = await prisma.user.findUnique({ where: { id: row.userId } });
+      const user = await users.findById(row.userId);
       if (!user || !user.totpSecret || !user.totpEnabled) {
         return res.status(400).json({ error: 'TOTP not enabled for user' });
       }
@@ -2236,11 +2224,7 @@ router.post(
       // it does emit a warning so ops sees re-usable recovery codes.
       if (usedRecovery && updatedRecoveryCodes) {
         try {
-          await prisma.user.update({
-            where: { id: user.id },
-            data: { totpRecoveryCodes: updatedRecoveryCodes },
-            select: { id: true },
-          });
+          await users.updateRecoveryCodes(user.id, updatedRecoveryCodes);
         } catch (err) {
           console.warn('[auth/2fa/totp/verify] failed to mark recovery code used:', err?.message || err);
         }
@@ -2312,8 +2296,7 @@ router.post('/webauthn/authentication-options', async (req, res) => {
     const userId = String((req.body && req.body.userId) || '').trim();
     let user = null;
     if (userId) {
-      user = await prisma.user.findUnique({
-        where: { id: userId },
+      user = await users.findById(userId, {
         select: { id: true, webauthnCredentials: true },
       });
     }
@@ -2330,8 +2313,7 @@ router.post('/webauthn/authentication-verify', async (req, res) => {
   try {
     const userId = String((req.body && req.body.userId) || '').trim();
     if (!userId) return res.status(400).json({ error: 'webauthn_missing_user' });
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
+    const user = await users.findById(userId, {
       select: { id: true, webauthnCredentials: true },
     });
     if (!user) return res.status(400).json({ error: 'webauthn_credential_not_found' });
@@ -2340,11 +2322,7 @@ router.post('/webauthn/authentication-verify', async (req, res) => {
       response: req.body && req.body.response,
     });
     if (!result.ok) return res.status(result.status || 400).json(result);
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { webauthnCredentials: result.credentials },
-      select: { id: true },
-    });
+    await users.updateWebauthnCredentials(user.id, result.credentials);
     void writeAuditLog(prisma, {
       req,
       action: 'webauthn_authentication_verified',

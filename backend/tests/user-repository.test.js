@@ -106,3 +106,77 @@ test('UserRepository: routes calls through withRetry wrapper', async () => {
     'user-repo.clearGmailTokens',
   ]);
 });
+
+test('UserRepository.createPasswordUser: defaults + omits google fields', async () => {
+  const prisma = makePrismaSpy();
+  const repo = new UserRepository({ prisma, withRetry: passthroughRetry });
+  await repo.createPasswordUser({ name: 'Sira', email: 'a@b.com', passwordHash: 'hash' });
+  const arg = prisma._calls.create[0];
+  assert.equal(arg.data.plan, 'FREE');
+  assert.equal(arg.data.isAdmin, false);
+  assert.equal(arg.data.apiUsage, 0);
+  assert.equal(arg.data.monthlyCallLimit, 3);
+  assert.equal(arg.data.monthlyLimit, 10000);
+  assert.equal(arg.data.password, 'hash');
+  assert.equal('googleId' in arg.data, false);
+  assert.equal('gmailTokens' in arg.data, false);
+  assert.equal('googleServicesTokens' in arg.data, false);
+});
+
+test('UserRepository.createPasswordUser: caller overrides take precedence', async () => {
+  const prisma = makePrismaSpy();
+  const repo = new UserRepository({ prisma, withRetry: passthroughRetry });
+  await repo.createPasswordUser({
+    name: 'Sira',
+    email: 'a@b.com',
+    passwordHash: 'hash',
+    plan: 'PRO',
+    isAdmin: true,
+    monthlyCallLimit: 999,
+  });
+  const arg = prisma._calls.create[0];
+  assert.equal(arg.data.plan, 'PRO');
+  assert.equal(arg.data.isAdmin, true);
+  assert.equal(arg.data.monthlyCallLimit, 999);
+});
+
+test('UserRepository.updateRecoveryCodes: writes column with id projection', async () => {
+  const prisma = makePrismaSpy();
+  const repo = new UserRepository({ prisma, withRetry: passthroughRetry });
+  const codes = [{ hash: 'h1', usedAt: null }];
+  await repo.updateRecoveryCodes('u1', codes);
+  assert.deepEqual(prisma._calls.update[0], {
+    where: { id: 'u1' },
+    data: { totpRecoveryCodes: codes },
+    select: { id: true },
+  });
+});
+
+test('UserRepository.updateWebauthnCredentials: writes column with id projection', async () => {
+  const prisma = makePrismaSpy();
+  const repo = new UserRepository({ prisma, withRetry: passthroughRetry });
+  const creds = [{ credentialId: 'c1', signCount: 42 }];
+  await repo.updateWebauthnCredentials('u1', creds);
+  assert.deepEqual(prisma._calls.update[0], {
+    where: { id: 'u1' },
+    data: { webauthnCredentials: creds },
+    select: { id: true },
+  });
+});
+
+test('UserRepository: new methods route through withRetry with stable labels', async () => {
+  const prisma = makePrismaSpy();
+  const labels = [];
+  const repo = new UserRepository({
+    prisma,
+    withRetry: (fn, opts) => { labels.push(opts?.label); return fn(); },
+  });
+  await repo.createPasswordUser({ name: 'x', email: 'x@y', passwordHash: 'h' });
+  await repo.updateRecoveryCodes('u1', []);
+  await repo.updateWebauthnCredentials('u1', []);
+  assert.deepEqual(labels, [
+    'user-repo.createPasswordUser',
+    'user-repo.updateRecoveryCodes',
+    'user-repo.updateWebauthnCredentials',
+  ]);
+});

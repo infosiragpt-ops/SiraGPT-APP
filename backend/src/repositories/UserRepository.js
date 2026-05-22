@@ -69,6 +69,70 @@ class UserRepository {
     );
   }
 
+  /**
+   * Create a password-backed account (email/password signup path).
+   * Distinct from `createOAuthUser` because callers shouldn't have to
+   * remember to null out the google fields, and the default plan
+   * shape lives in one place.
+   */
+  createPasswordUser({
+    name,
+    email,
+    passwordHash,
+    plan = 'FREE',
+    isAdmin = false,
+    apiUsage = 0,
+    monthlyCallLimit = 3,
+    monthlyLimit = 10000,
+  }) {
+    return this.withRetry(
+      () => this.prisma.user.create({
+        data: {
+          name,
+          email,
+          password: passwordHash,
+          plan,
+          isAdmin,
+          apiUsage,
+          monthlyCallLimit,
+          monthlyLimit,
+        },
+      }),
+      { label: 'user-repo.createPasswordUser' }
+    );
+  }
+
+  /**
+   * Rewrite the totpRecoveryCodes JSON column. Used after a recovery
+   * code is consumed during 2FA verify. Returns only `{id}` since
+   * callers don't need the full row.
+   */
+  updateRecoveryCodes(userId, totpRecoveryCodes) {
+    return this.withRetry(
+      () => this.prisma.user.update({
+        where: { id: userId },
+        data: { totpRecoveryCodes },
+        select: { id: true },
+      }),
+      { label: 'user-repo.updateRecoveryCodes' }
+    );
+  }
+
+  /**
+   * Rewrite the webauthnCredentials JSON column after a successful
+   * WebAuthn authentication so the signCount stays monotonic.
+   */
+  updateWebauthnCredentials(userId, webauthnCredentials) {
+    return this.withRetry(
+      () => this.prisma.user.update({
+        where: { id: userId },
+        data: { webauthnCredentials },
+        select: { id: true },
+      }),
+      { label: 'user-repo.updateWebauthnCredentials' }
+    );
+  }
+
   createOAuthUser({
     googleId,
     name,
