@@ -36,6 +36,44 @@ const RETRYABLE_CODES = new Set([
     'P2024',  // Connection pool timeout
 ]);
 
+function abortError(signal) {
+    if (signal?.reason instanceof Error) return signal.reason;
+    const error = new Error(signal?.reason ? String(signal.reason) : 'Operation aborted');
+    error.name = 'AbortError';
+    return error;
+}
+
+function throwIfAborted(signal) {
+    if (signal?.aborted) throw abortError(signal);
+}
+
+function delayWithSignal(ms, signal) {
+    if (ms <= 0) {
+        throwIfAborted(signal);
+        return Promise.resolve();
+    }
+
+    return new Promise((resolve, reject) => {
+        const onAbort = () => {
+            clearTimeout(timer);
+            reject(abortError(signal));
+        };
+
+        const timer = setTimeout(() => {
+            signal?.removeEventListener?.('abort', onAbort);
+            resolve();
+        }, ms);
+
+        if (signal) {
+            if (signal.aborted) {
+                onAbort();
+            } else {
+                signal.addEventListener('abort', onAbort, { once: true });
+            }
+        }
+    });
+}
+
 function isRetryableError(error) {
     if (!error || typeof error !== 'object') return false;
 
@@ -66,20 +104,25 @@ function isRetryableError(error) {
  * @param {object} [options]
  * @param {number} [options.maxRetries]  Override MAX_RETRIES
  * @param {number} [options.baseDelayMs] Override BASE_DELAY_MS
+ * @param {AbortSignal} [options.signal] Abort retries/backoff when caller is cancelled
  * @param {Function} [options.onRetry]   Callback on each retry (attempt, error)
  * @returns {Promise<any>} Result from the wrapped function
  */
 async function withRetry(fn, options = {}) {
     const maxRetries = options.maxRetries ?? MAX_RETRIES;
     const baseDelayMs = options.baseDelayMs ?? BASE_DELAY_MS;
+    const { signal } = options;
 
     let lastError;
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
         try {
+            throwIfAborted(signal);
             return await fn();
         } catch (error) {
             lastError = error;
+
+            if (signal?.aborted) throw abortError(signal);
 
             if (attempt < maxRetries && isRetryableError(error)) {
                 const delay = Math.min(baseDelayMs * Math.pow(2, attempt), MAX_DELAY_MS);
@@ -88,7 +131,7 @@ async function withRetry(fn, options = {}) {
                     `Retrying in ${delay}ms...`
                 );
                 options.onRetry?.(attempt + 1, error);
-                await new Promise(r => setTimeout(r, delay));
+                await delayWithSignal(delay, signal);
                 continue;
             }
 

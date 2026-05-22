@@ -259,6 +259,30 @@ describe('withRetry', () => {
       restoreConsole();
     }
   });
+
+  it('stops retrying when the caller aborts during backoff', async () => {
+    const controller = new AbortController();
+    let calls = 0;
+
+    muteConsole();
+    try {
+      const retryPromise = withRetry(
+        async () => {
+          calls += 1;
+          const err = new Error('ECONNRESET');
+          throw err;
+        },
+        { maxRetries: 2, baseDelayMs: 50, signal: controller.signal },
+      );
+
+      setTimeout(() => controller.abort(new Error('request cancelled')), 5);
+
+      await assert.rejects(retryPromise, /request cancelled|aborted/i);
+      assert.equal(calls, 1);
+    } finally {
+      restoreConsole();
+    }
+  });
 });
 
 describe('RETRYABLE_CODES (the exported set)', () => {
