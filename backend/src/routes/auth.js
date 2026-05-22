@@ -5,7 +5,11 @@ const { body, validationResult } = require('express-validator');
 const prisma = require('../config/database');
 const { withAccelerateRetry, isAccelerateTransientError } = require('../utils/prisma-accelerate-retry');
 const { SessionRepository } = require('../repositories/SessionRepository');
-const googleCallbackSessions = new SessionRepository({ prisma, withRetry: withAccelerateRetry });
+// Single repository instance shared by every session call site in
+// this file (Google callback, signup, login, logout, refresh). The
+// fingerprint-column fallback and Accelerate retry policy live
+// inside it, so callers stay focused on business logic.
+const sessions = new SessionRepository({ prisma, withRetry: withAccelerateRetry });
 const { authenticateToken } = require('../middleware/auth');
 const { makeAuthRateLimit } = require('../middleware/rate-limit-auth');
 const { writeAuditLog } = require('../utils/audit-log');
@@ -218,7 +222,7 @@ router.get('/google/callback',
 
       const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
-      await googleCallbackSessions.create({
+      await sessions.create({
         userId: req.user.id,
         token,
         expiresAt,
@@ -644,13 +648,7 @@ router.post('/register', registerRateLimit, validateBody(RegisterRequestSchema, 
 
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
-    await prisma.session.create({
-      data: {
-        userId: user.id,
-        token,
-        expiresAt
-      }
-    });
+    await sessions.create({ userId: user.id, token, expiresAt });
 
     // Remove password from response
     const { password: _, ...userWithoutPassword } = user;
@@ -925,28 +923,10 @@ router.post('/login', loginRateLimit, validateBody(LoginRequestSchema, { codePre
     // Bind the session to the issuing client's IP-class + UA hash so
     // a leaked token can't be replayed from a different network /
     // browser. See utils/session-fingerprint.js for the reduce-to-/24
-    // tolerance for mobile networks.
+    // tolerance for mobile networks. The repository transparently
+    // falls back to a fingerprint-less write on legacy schemas.
     const fingerprint = computeFingerprint(req);
-    try {
-      await prisma.session.create({
-        data: {
-          userId: user.id,
-          token,
-          expiresAt,
-          fingerprint,
-        }
-      });
-    } catch (e) {
-      // Fallback for environments where the schema hasn't been
-      // migrated yet (the fingerprint column was added in cycle 17).
-      if (e && /fingerprint/i.test(String(e.message))) {
-        await prisma.session.create({
-          data: { userId: user.id, token, expiresAt }
-        });
-      } else {
-        throw e;
-      }
-    }
+    await sessions.create({ userId: user.id, token, expiresAt, fingerprint });
 
     // Remove password from response
     const { password: _, ...userWithoutPassword } = user;
@@ -1029,9 +1009,7 @@ router.get('/me', authenticateToken, async (req, res) => {
 // Logout
 router.post('/logout', authenticateToken, async (req, res) => {
   try {
-    await prisma.session.deleteMany({
-      where: { token: req.token }
-    });
+    await sessions.deleteByToken(req.token);
 
     res.clearCookie('token');
     res.json({ message: 'Logged out successfully' });
@@ -1062,23 +1040,14 @@ router.post('/refresh', authenticateToken, async (req, res) => {
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
     // Update session — re-bind fingerprint to the refreshing client
-    // so subsequent verifications track the current network/UA.
+    // so subsequent verifications track the current network/UA. The
+    // repository handles the legacy-schema fallback transparently.
     const refreshedFp = computeFingerprint(req);
-    try {
-      await prisma.session.update({
-        where: { token: req.token },
-        data: { token: newToken, expiresAt, fingerprint: refreshedFp }
-      });
-    } catch (e) {
-      if (e && /fingerprint/i.test(String(e.message))) {
-        await prisma.session.update({
-          where: { token: req.token },
-          data: { token: newToken, expiresAt }
-        });
-      } else {
-        throw e;
-      }
-    }
+    await sessions.updateByToken(req.token, {
+      newToken,
+      expiresAt,
+      fingerprint: refreshedFp,
+    });
 
     res.cookie('token', newToken, {
       httpOnly: true,
@@ -1182,12 +1151,10 @@ router.post('/impersonate/:userId', authenticateToken, async (req, res) => {
 
     const expiresAt = new Date(Date.now() + IMPERSONATE_TTL_MS);
 
-    await prisma.session.create({
-      data: {
-        userId: targetUser.id,
-        token: impersonationToken,
-        expiresAt,
-      },
+    await sessions.create({
+      userId: targetUser.id,
+      token: impersonationToken,
+      expiresAt,
     });
 
     console.warn(
@@ -1235,9 +1202,7 @@ router.post('/end-impersonation', authenticateToken, async (req, res) => {
     }
 
     // Delete the impersonation session
-    await prisma.session.deleteMany({
-      where: { token: req.token }
-    });
+    await sessions.deleteByToken(req.token);
 
     // Create new session for super admin
     const newToken = signSessionToken({
@@ -1248,13 +1213,7 @@ router.post('/end-impersonation', authenticateToken, async (req, res) => {
 
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
-    await prisma.session.create({
-      data: {
-        userId: superAdmin.id,
-        token: newToken,
-        expiresAt
-      }
-    });
+    await sessions.create({ userId: superAdmin.id, token: newToken, expiresAt });
 
     console.log(`Ending impersonation, returning to super admin ${superAdmin.email}`);
 
@@ -1294,16 +1253,12 @@ router.get('/sessions', authenticateToken, async (req, res) => {
       SESSIONS_MAX_LIMIT,
       Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : SESSIONS_DEFAULT_LIMIT,
     );
-    const where = { userId: req.user.id, expiresAt: { gt: now } };
-    const total = typeof prisma.session.count === 'function'
-      ? await prisma.session.count({ where })
-      : null;
-    const sessions = await prisma.session.findMany({
-      where,
-      orderBy: { createdAt: 'desc' },
-      skip: (page - 1) * limit,
-      take: limit,
-      select: { id: true, token: true, createdAt: true, expiresAt: true },
+    const total = await sessions.countActiveByUser({ userId: req.user.id, now });
+    const rows = await sessions.findActiveByUserPaged({
+      userId: req.user.id,
+      now,
+      page,
+      limit,
     });
 
     // Best-effort enrichment: pull recent login/refresh audit rows for
@@ -1350,7 +1305,7 @@ router.get('/sessions', authenticateToken, async (req, res) => {
       ua: req.headers['user-agent'] || null,
     };
 
-    const items = sessions.map((s) => {
+    const items = rows.map((s) => {
       const isCurrent = s.token === req.token;
       const meta = pickAuditFor(s.createdAt) || (isCurrent ? currentReqMeta : null) || {};
       return {
@@ -1377,8 +1332,7 @@ router.delete('/sessions/:id', authenticateToken, async (req, res) => {
     const id = String(req.params.id || '');
     if (!id) return res.status(400).json({ error: 'session id required' });
 
-    const target = await prisma.session.findUnique({
-      where: { id },
+    const target = await sessions.findById(id, {
       select: { id: true, userId: true, token: true },
     });
     if (!target || target.userId !== req.user.id) {
@@ -1396,7 +1350,7 @@ router.delete('/sessions/:id', authenticateToken, async (req, res) => {
       });
     }
 
-    await prisma.session.delete({ where: { id } });
+    await sessions.deleteById(id);
     void writeAuditLog(prisma, {
       req,
       action: 'session_revoked',
@@ -1421,9 +1375,7 @@ router.delete('/sessions/:id', authenticateToken, async (req, res) => {
 // alert on mass-revocations (a common post-compromise reaction).
 router.post('/sessions/revoke-all', authenticateToken, async (req, res) => {
   try {
-    const result = await prisma.session.deleteMany({
-      where: { userId: req.user.id, NOT: { token: req.token } },
-    });
+    const result = await sessions.deleteAllForUserExceptToken(req.user.id, req.token);
     const count = (result && typeof result.count === 'number') ? result.count : 0;
 
     void writeAuditLog(prisma, {
@@ -2113,17 +2065,7 @@ router.post(
       });
       const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
       const fingerprint = computeFingerprint(req);
-      try {
-        await prisma.session.create({
-          data: { userId: user.id, token, expiresAt, fingerprint },
-        });
-      } catch (e) {
-        if (e && /fingerprint/i.test(String(e.message))) {
-          await prisma.session.create({ data: { userId: user.id, token, expiresAt } });
-        } else {
-          throw e;
-        }
-      }
+      await sessions.create({ userId: user.id, token, expiresAt, fingerprint });
 
       const { password: _pw, ...userWithoutPassword } = user;
       const serializedUser = serializeUser(userWithoutPassword);
@@ -2312,17 +2254,7 @@ router.post(
       });
       const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
       const fingerprint = computeFingerprint(req);
-      try {
-        await prisma.session.create({
-          data: { userId: user.id, token, expiresAt, fingerprint },
-        });
-      } catch (e) {
-        if (e && /fingerprint/i.test(String(e.message))) {
-          await prisma.session.create({ data: { userId: user.id, token, expiresAt } });
-        } else {
-          throw e;
-        }
-      }
+      await sessions.create({ userId: user.id, token, expiresAt, fingerprint });
 
       const { password: _pw, ...userWithoutPassword } = user;
       const serializedUser = serializeUser(userWithoutPassword);
