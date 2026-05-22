@@ -33,6 +33,9 @@ const {
   buildValidationPayload,
   formatExpressValidatorErrors,
 } = require('../src/middleware/validate');
+const {
+  aiGenerateRequestSchema,
+} = require('../src/schemas');
 const responseValidator = require('../src/services/ai/response-validator');
 const { z } = require('zod');
 
@@ -121,6 +124,35 @@ test('CreatePaymentRequestSchema uppercases currency', () => {
   });
   assert.equal(r.success, true);
   assert.equal(r.data.currency, 'USD');
+});
+
+test('aiGenerateRequestSchema rejects oversized inline file content before decoding', () => {
+  const oversizedBase64 = 'A'.repeat((10 * 1024 * 1024) + 8);
+  const r = aiGenerateRequestSchema.safeParse({
+    messages: [{ role: 'user', content: 'summarize this inline file' }],
+    files: [{
+      name: 'large.txt',
+      mimeType: 'text/plain',
+      content: oversizedBase64,
+    }],
+  });
+
+  assert.equal(r.success, false);
+  assert.ok(r.error.issues.some((issue) => issue.message === 'files.content.too_large'));
+});
+
+test('aiGenerateRequestSchema rejects malformed inline file MIME before parsing', () => {
+  const r = aiGenerateRequestSchema.safeParse({
+    messages: [{ role: 'user', content: 'inspect this inline file' }],
+    files: [{
+      name: 'payload.bin',
+      mimeType: 'text/plain; charset=utf-8',
+      content: 'aGVsbG8=',
+    }],
+  });
+
+  assert.equal(r.success, false);
+  assert.ok(r.error.issues.some((issue) => issue.message === 'files.mimeType.invalid'));
 });
 
 // ---------- validation middleware -------------------------------------

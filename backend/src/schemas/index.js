@@ -2,12 +2,28 @@
 
 const { z } = require('zod');
 
+const INLINE_FILE_CONTENT_MAX_CHARS = 10 * 1024 * 1024;
+const INLINE_FILE_MIME_RE = /^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}\/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$/i;
+
 const chatMessageSchema = z.object({
   role: z.enum(['system', 'user', 'assistant', 'tool']),
   content: z.string().min(1).max(100000),
   name: z.string().max(100).optional(),
   tool_calls: z.array(z.any()).optional(),
   tool_call_id: z.string().optional(),
+});
+
+const inlineFileSchema = z.object({
+  id: z.string().uuid().optional(),
+  name: z.string().max(500),
+  mimeType: z.string()
+    .max(200)
+    .regex(INLINE_FILE_MIME_RE, { message: 'files.mimeType.invalid' })
+    .optional(),
+  content: z.string()
+    .max(INLINE_FILE_CONTENT_MAX_CHARS, { message: 'files.content.too_large' })
+    .optional(),
+  url: z.string().url().optional(),
 });
 
 const aiGenerateRequestSchema = z.object({
@@ -17,13 +33,7 @@ const aiGenerateRequestSchema = z.object({
   stream: z.boolean().optional(),
   model: z.string().max(200).optional(),
   taskType: z.enum(['deep_reasoning', 'speed', 'multimodal', 'code', 'embeddings', 'default']).optional(),
-  files: z.array(z.object({
-    id: z.string().uuid().optional(),
-    name: z.string().max(500),
-    mimeType: z.string().max(200).optional(),
-    content: z.string().optional(),
-    url: z.string().url().optional(),
-  })).optional(),
+  files: z.array(inlineFileSchema).optional(),
   cacheBypass: z.boolean().optional(),
   sessionId: z.string().max(200).optional(),
   projectId: z.string().uuid().optional(),
@@ -113,6 +123,7 @@ module.exports = {
   aiGenerateRequestSchema,
   chatMessageSchema,
   fileUploadSchema,
+  inlineFileSchema,
   promptInjectionPatterns,
   sanitizeAgainstPromptInjection,
   sanitizeAgainstXSS,
