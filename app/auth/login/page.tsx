@@ -12,6 +12,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Separator } from "@/components/ui/separator"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { getNormalizedApiBaseUrl } from "@/lib/api"
+import { getAuthErrorMessage, getSafeAuthRedirectMessage } from "@/lib/auth/auth-error-classifier"
 import { toast } from "sonner"
 import { useTranslations } from "next-intl"
 
@@ -35,7 +36,7 @@ export default function LoginPage() {
     const params = new URLSearchParams(window.location.search)
     const errorMsg = params.get("error")
     if (errorMsg) {
-      toast.error(errorMsg)
+      toast.error(getSafeAuthRedirectMessage(errorMsg, window.navigator.language))
       // Clean the URL so a refresh doesn't re-toast the same error
       params.delete("error")
       const cleaned = params.toString()
@@ -76,10 +77,10 @@ export default function LoginPage() {
         // login, regardless of when the AuthContext re-renders.
         router.push("/chat")
       } else {
-        toast.error(t("invalidCreds"))
+        toast.error(getAuthErrorMessage("invalid_credentials", window.navigator.language))
       }
     } catch (error) {
-      toast.error(t("invalidCreds"))
+      toast.error(getAuthErrorMessage("unknown", window.navigator.language))
     } finally {
       setIsLoading(false)
     }

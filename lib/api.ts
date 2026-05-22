@@ -1,5 +1,6 @@
 // Frontend API client for backend integration
 import { streamSseJson } from "./sse-client"
+import { clearAuthSession, readAuthToken, writeAuthToken, type WriteAuthTokenOptions } from "./auth/session-storage"
 import { sanitizeFetchHeaders } from "./fetch-sanitize"
 export { getNormalizedApiBaseUrl } from "./api-base-url"
 import { getNormalizedApiBaseUrl } from "./api-base-url"
@@ -131,7 +132,7 @@ class ApiClient {
 
     // Get token from localStorage on client side
     if (typeof window !== 'undefined') {
-      this.token = localStorage.getItem('auth-token');
+      this.token = readAuthToken().token;
     }
   }
 
@@ -459,7 +460,7 @@ class ApiClient {
         }
 
         const data = await res.json();
-        this.setToken(data.token);
+        this.setToken(data.token, { source: 'refresh' });
         return true;
       } catch {
         this.setToken(null);
@@ -472,13 +473,13 @@ class ApiClient {
     return result;
   }
 
-  setToken(token: string | null) {
+  setToken(token: string | null, options: WriteAuthTokenOptions = {}) {
     this.token = token;
     if (typeof window !== 'undefined') {
       if (token) {
-        localStorage.setItem('auth-token', token);
+        writeAuthToken(token, options);
       } else {
-        localStorage.removeItem('auth-token');
+        clearAuthSession();
       }
     }
   }
@@ -498,7 +499,7 @@ class ApiClient {
     });
 
     if (result?.token) {
-      this.setToken(result.token);
+      this.setToken(result.token, { source: 'credentials' });
     }
 
     return result;
@@ -511,7 +512,7 @@ class ApiClient {
     });
 
     if (result?.token) {
-      this.setToken(result.token);
+      this.setToken(result.token, { source: 'credentials' });
     }
 
     return result;
@@ -1951,7 +1952,7 @@ class ApiClient {
     onEvent: (ev: any) => void,
     opts: { signal?: AbortSignal } = {},
   ): Promise<void> {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('auth-token') : null;
+    const token = readAuthToken().token;
     const res = await fetch(`${this.baseURL}${path}`, {
       method: 'POST',
       credentials: 'include',
