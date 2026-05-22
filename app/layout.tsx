@@ -260,12 +260,28 @@ export default async function RootLayout({
         />
       </head>
       <body className={GeistSans.className}>
+        {/*
+          #77 — Skip-to-content link (Lote A · accesibilidad). Hidden
+          until the user tabs into it as the first focusable element,
+          then slides into view. Targets the #main-content wrapper
+          below, which has tabIndex=-1 so it can receive focus
+          programmatically without entering the natural tab order.
+          Pinned to the top of <body> so it's always the first stop
+          regardless of which page renders.
+        */}
+        <a href="#main-content" className="skip-to-content">
+          Saltar al contenido
+        </a>
         <SentryClientInit />
         <PostHogClientInit />
         <WebVitalsReporter />
         <SyncfusionBannerRemover />
         <NextIntlClientProvider locale={locale} messages={messages}>
-          <RootProviders>{children}</RootProviders>
+          <RootProviders>
+            <div id="main-content" tabIndex={-1} className="outline-none">
+              {children}
+            </div>
+          </RootProviders>
         </NextIntlClientProvider>
       </body>
     </html>

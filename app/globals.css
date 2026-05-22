@@ -1045,6 +1045,129 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+    /* Frozen transforms too — without this, `transform: scale(1.05)`
+       and the like still play on hover even with reduced motion on. */
+    transform: none !important;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────
+   Accessibility baseline (Lote A · #72 #74 #75 #77 #78 #89)
+   Additive rules only — never override component-specific tokens.
+   Lives at the end of the base layer so component styles can opt out.
+   ───────────────────────────────────────────────────────────────── */
+
+/* #77 — Skip-to-content link. Hidden until focused; visible only when
+   the user tabs into it as the first focusable element on the page.
+   Targets #main-content (set in app/layout.tsx around <main>). */
+.skip-to-content {
+  position: fixed;
+  top: 0.5rem;
+  left: 0.5rem;
+  z-index: 10000;
+  padding: 0.625rem 1rem;
+  border-radius: 0.5rem;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  border: 1px solid hsl(var(--border));
+  box-shadow: 0 8px 24px -8px rgba(0, 0, 0, 0.25);
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-decoration: none;
+  /* Visually hidden until focused — uses transform so screen readers
+     still see it (display:none would remove it from the a11y tree). */
+  transform: translateY(-200%);
+  transition: transform 150ms ease-out;
+}
+.skip-to-content:focus,
+.skip-to-content:focus-visible {
+  transform: translateY(0);
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+
+/* #72 — Universal focus-visible ring fallback. Components that already
+   define their own focus-visible:ring-* utility take precedence; this
+   only kicks in for native elements (a, button, input, [tabindex]) that
+   had no explicit ring style, so users navigating with Tab always see
+   where focus is. */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible,
+[tabindex]:focus-visible,
+[role="button"]:focus-visible,
+[role="link"]:focus-visible,
+[role="menuitem"]:focus-visible,
+[role="tab"]:focus-visible {
+  outline: 2px solid hsl(var(--ring, 217 91% 60%));
+  outline-offset: 2px;
+}
+/* Opt-out hook for components that explicitly handle their own ring
+   (so they don't get a doubled outline). Add `no-default-focus-ring`
+   to the className. */
+.no-default-focus-ring:focus-visible {
+  outline: none !important;
+}
+
+/* #74 — Placeholder / hint contrast. Tailwind's default
+   placeholder:text-muted-foreground sometimes drops below AA on light
+   surfaces. Nudge to a slightly darker tone without touching the
+   foreground token itself. */
+::placeholder {
+  opacity: 0.7;
+}
+.dark ::placeholder {
+  opacity: 0.65;
+}
+
+/* #78 — Minimum touch target on coarse pointers (mobile + tablet).
+   44×44 CSS px is the WCAG 2.5.5 target. Scoped to coarse pointers
+   so the desktop UI keeps its current density.
+
+   We only enforce min-* (not width/height) so existing flex/grid
+   layouts aren't disrupted, and we exclude elements that explicitly
+   set their own size with `data-no-tap-target` or are inside dense
+   surfaces like tables / code toolbars. */
+@media (pointer: coarse) {
+  button:not([data-no-tap-target]):not(.no-tap-target),
+  a[href]:not([data-no-tap-target]):not(.no-tap-target),
+  [role="button"]:not([data-no-tap-target]):not(.no-tap-target),
+  [role="link"]:not([data-no-tap-target]):not(.no-tap-target) {
+    min-height: 2.75rem;
+    min-width: 2.75rem;
+  }
+  /* Restore density for buttons inside code blocks, tables, and
+     compact menu/popover surfaces where 44px would break layout. */
+  pre button,
+  table button,
+  [role="menu"] button,
+  [role="listbox"] button,
+  [role="dialog"] header button,
+  .composer-toolbar button,
+  .codex-folders-sidebar button {
+    min-height: 0;
+    min-width: 0;
+  }
+}
+
+/* #89 — Differentiated interactive states. Native elements with no
+   custom hover/active style get a baseline so users can tell when a
+   click registered (especially on touch). */
+button:not([class*="bg-"]):not(:disabled):hover,
+[role="button"]:not([class*="bg-"]):not([aria-disabled="true"]):hover {
+  filter: brightness(1.05);
+}
+button:not(:disabled):active,
+[role="button"]:not([aria-disabled="true"]):active {
+  transform: translateY(0.5px);
+}
+@media (prefers-reduced-motion: reduce) {
+  button:not(:disabled):active,
+  [role="button"]:not([aria-disabled="true"]):active {
+    transform: none;
   }
 }
 
