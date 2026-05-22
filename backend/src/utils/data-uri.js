@@ -17,6 +17,14 @@
  *   isDataUri(s) → boolean
  */
 
+function isValidBase64Payload(payload) {
+  if (typeof payload !== 'string') return false;
+  if (payload.length % 4 === 1) return false;
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(payload)) return false;
+  if (payload.includes('=') && payload.length % 4 !== 0) return false;
+  return true;
+}
+
 function parseDataUri(uri) {
   if (typeof uri !== 'string' || !uri.startsWith('data:')) return null;
   const comma = uri.indexOf(',');
@@ -39,6 +47,7 @@ function parseDataUri(uri) {
   }
   let data;
   try {
+    if (isBase64 && !isValidBase64Payload(body)) return null;
     data = isBase64 ? Buffer.from(body, 'base64') : Buffer.from(decodeURIComponent(body), 'utf8');
   } catch {
     return null;
