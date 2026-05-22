@@ -12,6 +12,7 @@ const { TokenVault } = require('../services/TokenVault');
 const { ProviderOAuthService } = require('../services/ProviderOAuthService');
 const { SsoCallbackService } = require('../services/SsoCallbackService');
 const { RegistrationService } = require('../services/RegistrationService');
+const { LoginService } = require('../services/LoginService');
 const { encrypt: encryptToken, decrypt: decryptToken } = require('../utils/encryption');
 // Single repository / service instances shared by every call site in
 // this file. Cross-cutting concerns (fingerprint-column fallback,
@@ -32,6 +33,30 @@ const registrationService = new RegistrationService({
   resolveOrgBySsoDomain: (email) => resolveOrgBySsoDomain(email),
   signSessionToken,
 });
+// LoginService depends on collaborators declared further down in this
+// module (`twoFASms`, `mintPartialSession`, `userHasTwoFactor`,
+// `orgRequiresTwoFactor`, `computeFingerprint`). `const`/import
+// bindings here aren't accessible at module-construction time, so we
+// instantiate lazily on first call — by then every binding is live.
+let _loginService = null;
+function getLoginService() {
+  if (_loginService) return _loginService;
+  _loginService = new LoginService({
+    users,
+    sessions,
+    audit: writeAuditLog,
+    prisma,
+    lockout: defaultLockout,
+    resolveOrgBySsoDomain: (email) => resolveOrgBySsoDomain(email),
+    signSessionToken,
+    computeFingerprint,
+    userHasTwoFactor,
+    orgRequiresTwoFactor,
+    twoFASms,
+    mintPartialSession,
+  });
+  return _loginService;
+}
 const { authenticateToken } = require('../middleware/auth');
 const { makeAuthRateLimit } = require('../middleware/rate-limit-auth');
 const { writeAuditLog } = require('../utils/audit-log');
@@ -521,238 +546,64 @@ router.post('/login', loginRateLimit, validateBody(LoginRequestSchema, { codePre
     }
 
     const { email, password } = req.body;
+    const result = await getLoginService().login({ email, password, req });
 
-    // SSO domain claim (ratchet 45) — if any org has claimed the
-    // user's email domain AND ssoEnabled = true, bounce them at the
-    // password handler so password auth can't be used to bypass the
-    // org's IdP. The actual redirect target (501) is the SSO scaffold
-    // route; see `GET /api/auth/sso/:orgSlug/login`. Once the real
-    // SAML/OIDC handshake ships this becomes a 302.
-    const ssoOrg = await resolveOrgBySsoDomain(email);
-    if (ssoOrg) {
-      void writeAuditLog(prisma, {
-        req,
-        action: 'login_sso_required',
-        resource: 'organization',
-        resourceId: ssoOrg.id,
-        actorName: email,
-        metadata: { orgSlug: ssoOrg.slug },
-      });
+    if (!result.ok && result.kind === 'sso_required') {
       return res.status(501).json({
         ok: false,
         ssoRequired: true,
         implemented: false,
         message: 'password login disabled — use SSO for this organization',
-        orgSlug: ssoOrg.slug,
-        ssoLoginUrl: `/api/auth/sso/${ssoOrg.slug}/login`,
+        orgSlug: result.org.slug,
+        ssoLoginUrl: `/api/auth/sso/${result.org.slug}/login`,
       });
     }
-
-    // Account-level lockout — distinct from the per-IP rate limit so
-    // distributed credential-stuffing (one attempt per IP) still hits
-    // a cap. See utils/login-lockout.js for the rolling window.
-    const lockState = defaultLockout.isLocked(email);
-    if (lockState.locked) {
-      const retryAfterSec = Math.max(1, Math.ceil(lockState.retryAfterMs / 1000));
+    if (!result.ok && result.kind === 'locked') {
+      const retryAfterSec = Math.max(1, Math.ceil(result.retryAfterMs / 1000));
       res.set('Retry-After', String(retryAfterSec));
-      void writeAuditLog(prisma, {
-        req,
-        action: 'account_locked',
-        resource: 'user',
-        actorName: email,
-        metadata: { reason: 'too_many_failures', attempts: lockState.attempts },
-      });
       return res.status(423).json({
         error: 'Account temporarily locked. Try again later.',
-        retryAfterMs: lockState.retryAfterMs,
+        retryAfterMs: result.retryAfterMs,
       });
     }
-
-    // Find user
-    const user = await users.findByEmail(email);
-
-    if (!user) {
-      const after = defaultLockout.recordFailure(email);
-      void writeAuditLog(prisma, {
-        req,
-        action: 'login_failed',
-        resource: 'user',
-        actorName: email,
-        metadata: { reason: 'unknown_email', attempts: after.attempts },
-      });
-      if (after.locked) {
-        void writeAuditLog(prisma, {
-          req,
-          action: 'account_locked',
-          resource: 'user',
-          actorName: email,
-          metadata: { reason: 'failure_threshold', attempts: after.attempts },
-        });
-      }
+    if (!result.ok && result.kind === 'invalid_credentials') {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
-
-    // Check password
-    const isValidPassword = await bcrypt.compare(password, user.password);
-    if (!isValidPassword) {
-      const after = defaultLockout.recordFailure(email);
-      void writeAuditLog(prisma, {
-        req,
-        action: 'login_failed',
-        resource: 'user',
-        resourceId: user.id,
-        actorName: email,
-        metadata: { reason: 'bad_password', attempts: after.attempts },
+    if (!result.ok && result.kind === 'org_2fa_required') {
+      return res.status(403).json({
+        error: 'organization requires two-factor authentication',
+        code: 'org_requires_2fa',
+        orgId: result.orgId,
       });
-      if (after.locked) {
-        void writeAuditLog(prisma, {
-          req,
-          action: 'account_locked',
-          resource: 'user',
-          resourceId: user.id,
-          actorName: email,
-          metadata: { reason: 'failure_threshold', attempts: after.attempts },
-        });
-      }
-      return res.status(401).json({ error: 'Invalid credentials' });
     }
-    // Successful credential check — clear lockout counter.
-    defaultLockout.recordSuccess(email);
-
-    // ─── Org-level 2FA enforcement (ratchet 45) ───────────────
-    // When the user belongs to an org with settings.security.requireTwoFactor
-    // enabled and has not enrolled either SMS or TOTP, refuse to mint a
-    // session. The SMS/TOTP gates below already handle users who *have*
-    // enrolled 2FA — this gate fires when the user has none at all.
-    if (!userHasTwoFactor(user) && prisma.orgMembership?.findMany) {
-      try {
-        const memberships = await prisma.orgMembership.findMany({
-          where: { userId: user.id },
-          include: { organization: { select: { id: true, slug: true, settings: true } } },
-        });
-        const blocking = memberships.find((m) => orgRequiresTwoFactor(m.organization));
-        if (blocking) {
-          void writeAuditLog(prisma, {
-            req,
-            action: 'login_blocked_org_2fa',
-            resource: 'user',
-            resourceId: user.id,
-            userId: user.id,
-            actorName: user.email,
-            metadata: { orgId: blocking.organization.id },
-          });
-          return res.status(403).json({
-            error: 'organization requires two-factor authentication',
-            code: 'org_requires_2fa',
-            orgId: blocking.organization.id,
-          });
-        }
-      } catch (e) {
-        console.error('[auth/login] org-2fa check failed:', e?.message || e);
-        // Fail open on transient DB errors to avoid locking everyone out —
-        // the per-route enforce hook still blocks org-scoped fetches.
+    if (!result.ok && result.kind === 'sms_2fa_required') {
+      const body202 = {
+        twoFactorRequired: true,
+        challengeId: result.challengeId,
+        expiresAt: result.expiresAt.toISOString(),
+        smsSent: result.smsSent,
+      };
+      if (result.smsSkippedReason) {
+        body202.smsSkippedReason = result.smsSkippedReason;
       }
+      return res.status(202).json(body202);
+    }
+    if (!result.ok && result.kind === 'sms_2fa_mint_failed') {
+      return res.status(500).json({ error: 'Failed to issue 2FA challenge' });
+    }
+    if (!result.ok && result.kind === 'totp_2fa_required') {
+      return res.status(202).json({
+        twoFactorRequired: true,
+        method: 'totp',
+        partialToken: result.partialToken,
+        expiresAt: result.expiresAt.toISOString(),
+      });
+    }
+    if (!result.ok && result.kind === 'totp_partial_mint_failed') {
+      return res.status(500).json({ error: 'Failed to issue TOTP challenge' });
     }
 
-    // ─── SMS 2FA gate (ratchet 45) ────────────────────────────
-    // When the user has opted in (User.twoFactorEnabled) AND has a
-    // verified phone on file, do NOT mint a session JWT yet. Instead
-    // mint a TwoFAChallenge row, send the OTP, and respond 202 with
-    // { twoFactorRequired: true, challengeId }. The FE then submits
-    // POST /api/auth/2fa/sms/verify to redeem a full JWT. Falls back
-    // to the legacy flow (full JWT immediately) when 2FA is not
-    // enabled so cycle-0 callers are unaffected.
-    if (user.twoFactorEnabled && user.phoneVerifiedAt && user.phone
-      && twoFASms.isValidPhone(user.phone)) {
-      try {
-        const { challengeId, code, expiresAt } = await twoFASms.createSmsChallenge(
-          prisma,
-          user,
-          user.phone,
-        );
-        const smsResult = await twoFASms.sendSms(user.phone, code);
-        void writeAuditLog(prisma, {
-          req,
-          action: 'login_2fa_required',
-          resource: 'user',
-          resourceId: user.id,
-          userId: user.id,
-          actorName: user.email,
-          metadata: {
-            phoneMasked: user.phone.replace(/.(?=.{4})/g, '*'),
-            smsSent: Boolean(smsResult.sent),
-            smsReason: smsResult.reason || null,
-          },
-        });
-        const body202 = {
-          twoFactorRequired: true,
-          challengeId,
-          expiresAt: expiresAt.toISOString(),
-          smsSent: Boolean(smsResult.sent),
-        };
-        if (!smsResult.sent && smsResult.reason) {
-          body202.smsSkippedReason = smsResult.reason;
-        }
-        return res.status(202).json(body202);
-      } catch (e) {
-        console.error('[auth/login] 2fa challenge mint failed:', e?.message || e);
-        return res.status(500).json({ error: 'Failed to issue 2FA challenge' });
-      }
-    }
-
-    // ─── TOTP 2FA gate (ratchet 45) ────────────────────────────
-    // When the user has enrolled TOTP (totpEnabled = true) but has NOT
-    // opted into SMS 2FA (twoFactorEnabled = false), we still refuse to
-    // mint a full session JWT until they prove possession of the
-    // authenticator app. The client receives a partial-session token
-    // and submits POST /api/auth/2fa/totp/verify { code } to redeem the
-    // full token. SMS-enabled users keep the SMS-only flow above (TOTP
-    // is treated as the secondary lever there — out of scope for this
-    // cycle).
-    if (user.totpEnabled && !user.twoFactorEnabled) {
-      try {
-        const partial = await mintPartialSession(user.id);
-        void writeAuditLog(prisma, {
-          req,
-          action: 'login_totp_required',
-          resource: 'user',
-          resourceId: user.id,
-          userId: user.id,
-          actorName: user.email,
-        });
-        return res.status(202).json({
-          twoFactorRequired: true,
-          method: 'totp',
-          partialToken: partial.token,
-          expiresAt: partial.expiresAt.toISOString(),
-        });
-      } catch (e) {
-        console.error('[auth/login] partial-session mint failed:', e?.message || e);
-        return res.status(500).json({ error: 'Failed to issue TOTP challenge' });
-      }
-    }
-
-    // Create session — embed admin / super-admin claims so the
-    // rate-limit bypass + admin route guards can read them without
-    // hitting the DB on every authenticated request. aud/iss claims
-    // added centrally via signSessionToken().
-    const token = signSessionToken({
-      userId: user.id,
-      isAdmin: Boolean(user.isAdmin),
-      isSuperAdmin: Boolean(user.isSuperAdmin),
-    });
-
-    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-
-    // Bind the session to the issuing client's IP-class + UA hash so
-    // a leaked token can't be replayed from a different network /
-    // browser. See utils/session-fingerprint.js for the reduce-to-/24
-    // tolerance for mobile networks. The repository transparently
-    // falls back to a fingerprint-less write on legacy schemas.
-    const fingerprint = computeFingerprint(req);
-    await sessions.create({ userId: user.id, token, expiresAt, fingerprint });
-
-    // Remove password from response
+    const { user, token } = result;
     const { password: _, ...userWithoutPassword } = user;
 
     res.cookie('token', token, {
