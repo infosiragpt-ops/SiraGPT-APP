@@ -52,15 +52,27 @@ function mergeData(existing, incoming) {
   const out = { ...existing };
   for (const [k, v] of Object.entries(incoming)) {
     if (v && typeof v === 'object' && '__increment' in v) {
+      const next = Number(v.__increment);
+      if (!Number.isFinite(next)) throw new TypeError(`write-behind-cache: ${k} must be a finite increment`);
       const prev = out[k] && typeof out[k] === 'object' && '__increment' in out[k]
-        ? out[k].__increment
+        ? Number(out[k].__increment)
         : 0;
-      out[k] = { __increment: prev + Number(v.__increment) };
+      if (!Number.isFinite(prev)) throw new TypeError(`write-behind-cache: ${k} has a non-finite pending increment`);
+      out[k] = { __increment: prev + next };
     } else {
       out[k] = v;
     }
   }
   return out;
+}
+
+function validateData(data) {
+  for (const [k, v] of Object.entries(data)) {
+    if (v && typeof v === 'object' && '__increment' in v) {
+      const n = Number(v.__increment);
+      if (!Number.isFinite(n)) throw new TypeError(`write-behind-cache: ${k} must be a finite increment`);
+    }
+  }
 }
 
 function toPrismaData(data) {
@@ -79,7 +91,7 @@ function toPrismaData(data) {
 function createWriteBehindCache(opts = {}) {
   const prisma = opts.prisma || null;
   const redis = opts.redis || null;
-  const flushIntervalMs = Number.isFinite(opts.flushIntervalMs) && opts.flushIntervalMs > 0
+  const flushIntervalMs = Number.isFinite(opts.flushIntervalMs) && opts.flushIntervalMs >= 0
     ? Math.floor(opts.flushIntervalMs)
     : 5000;
   const flushThreshold = Number.isFinite(opts.flushThreshold) && opts.flushThreshold > 0
@@ -88,18 +100,45 @@ function createWriteBehindCache(opts = {}) {
   const redisPrefix = String(opts.redisPrefix || 'wbc:');
   const onError = typeof opts.onError === 'function' ? opts.onError : null;
   const now = typeof opts.now === 'function' ? opts.now : () => Date.now();
+  const maxRetries = Number.isFinite(opts.maxRetries) && opts.maxRetries >= 0
+    ? Math.floor(opts.maxRetries)
+    : 3;
 
-  /** @type {Map<string, {model:string, where:any, data:any, addedAt:number}>} */
+  /** @type {Map<string, {model:string, where:any, data:any, addedAt:number, retryCount:number}>} */
   const queue = new Map();
   let timer = null;
   let flushing = false;
   let totalFlushed = 0;
   let totalDropped = 0;
+  let totalRetried = 0;
   let lastFlushAt = 0;
+  let lastErrorAt = 0;
 
   function reportError(stage, err) {
+    lastErrorAt = now();
     if (onError) {
       try { onError(stage, err); } catch (_) { /* swallow */ }
+    }
+  }
+
+  function mergeQueueEntry(k, entry, opts = {}) {
+    const incomingWins = opts.incomingWins !== false;
+    validateData(entry.data);
+    const existing = queue.get(k);
+    if (existing) {
+      existing.data = incomingWins
+        ? mergeData(existing.data, entry.data)
+        : mergeData(entry.data, existing.data);
+      existing.retryCount = Math.max(existing.retryCount || 0, entry.retryCount || 0);
+      existing.addedAt = Math.min(existing.addedAt || now(), entry.addedAt || now());
+    } else {
+      queue.set(k, {
+        model: entry.model,
+        where: entry.where,
+        data: { ...entry.data },
+        addedAt: entry.addedAt || now(),
+        retryCount: entry.retryCount || 0,
+      });
     }
   }
 
@@ -119,13 +158,9 @@ function createWriteBehindCache(opts = {}) {
     if (!model || typeof model !== 'string') throw new TypeError('queueWrite: model required');
     if (!where || typeof where !== 'object') throw new TypeError('queueWrite: where required');
     if (!data || typeof data !== 'object') throw new TypeError('queueWrite: data required');
+    validateData(data);
     const k = keyFor(model, where);
-    const existing = queue.get(k);
-    if (existing) {
-      existing.data = mergeData(existing.data, data);
-    } else {
-      queue.set(k, { model, where, data: { ...data }, addedAt: now() });
-    }
+    mergeQueueEntry(k, { model, where, data, addedAt: now(), retryCount: 0 });
     // Mirror to redis (fire-and-forget; failures don't block).
     if (redis) {
       const payload = JSON.stringify({ model, where, data: queue.get(k).data });
@@ -145,8 +180,8 @@ function createWriteBehindCache(opts = {}) {
   }
 
   async function flushNow() {
-    if (flushing) return { flushed: 0, batches: 0, skipped: true };
-    if (queue.size === 0) return { flushed: 0, batches: 0 };
+    if (flushing) return { flushed: 0, batches: 0, retried: 0, dropped: 0, skipped: true };
+    if (queue.size === 0) return { flushed: 0, batches: 0, retried: 0, dropped: 0 };
     flushing = true;
     const snapshot = Array.from(queue.values());
     queue.clear();
@@ -156,7 +191,10 @@ function createWriteBehindCache(opts = {}) {
       batches.get(entry.model).push(entry);
     }
     let flushed = 0;
+    let retried = 0;
+    let dropped = 0;
     let batchCount = 0;
+    const redisClearFields = [];
     try {
       for (const [model, entries] of batches.entries()) {
         batchCount += 1;
@@ -165,32 +203,50 @@ function createWriteBehindCache(opts = {}) {
           // (e.g. dev without migration, or write-behind enabled for a
           // table that doesn't have lastActiveAt). Telemetry tracks it.
           totalDropped += entries.length;
+          dropped += entries.length;
+          redisClearFields.push(...entries.map((e) => keyFor(e.model, e.where)));
           continue;
         }
         for (const entry of entries) {
+          const fieldKey = keyFor(entry.model, entry.where);
           try {
             await prisma[model].update({
               where: entry.where,
               data: toPrismaData(entry.data),
             });
             flushed += 1;
+            redisClearFields.push(fieldKey);
           } catch (err) {
             // P2025 — record not found — is non-fatal: the row was
             // deleted between queue + flush. Other errors are reported.
             const code = err && err.code;
-            if (code !== 'P2025') reportError('flush_update', err);
+            if (code === 'P2025') {
+              redisClearFields.push(fieldKey);
+              continue;
+            }
+            reportError('flush_update', err);
+            const retryCount = (entry.retryCount || 0) + 1;
+            if (retryCount <= maxRetries) {
+              retried += 1;
+              totalRetried += 1;
+              mergeQueueEntry(fieldKey, { ...entry, retryCount }, { incomingWins: false });
+            } else {
+              dropped += 1;
+              totalDropped += 1;
+              redisClearFields.push(fieldKey);
+              reportError('retry_exhausted', err);
+            }
           }
         }
-        // Clear the redis mirror for this batch.
-        if (redis) {
-          const fields = entries.map((e) => keyFor(e.model, e.where));
-          Promise.resolve().then(() => redis.hdel(`${redisPrefix}pending`, ...fields))
-            .catch((e) => reportError('redis_clear', e));
-        }
+      }
+      if (redis && redisClearFields.length > 0) {
+        const fields = Array.from(new Set(redisClearFields));
+        await Promise.resolve().then(() => redis.hdel(`${redisPrefix}pending`, ...fields))
+          .catch((e) => reportError('redis_clear', e));
       }
       totalFlushed += flushed;
       lastFlushAt = now();
-      return { flushed, batches: batchCount };
+      return { flushed, batches: batchCount, retried, dropped };
     } finally {
       flushing = false;
     }
@@ -206,7 +262,7 @@ function createWriteBehindCache(opts = {}) {
         try {
           const parsed = JSON.parse(raw);
           if (parsed && parsed.model && parsed.where && parsed.data) {
-            queue.set(k, { ...parsed, addedAt: now() });
+            mergeQueueEntry(k, { ...parsed, addedAt: now(), retryCount: parsed.retryCount || 0 }, { incomingWins: false });
             hydrated += 1;
           }
         } catch (_) { /* skip malformed */ }
@@ -221,9 +277,12 @@ function createWriteBehindCache(opts = {}) {
       pending: queue.size,
       totalFlushed,
       totalDropped,
+      totalRetried,
       lastFlushAt,
+      lastErrorAt,
       flushIntervalMs,
       flushThreshold,
+      maxRetries,
     };
   }
 

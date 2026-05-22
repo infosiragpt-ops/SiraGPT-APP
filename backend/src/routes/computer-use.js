@@ -9,6 +9,7 @@ const {
   computerUseSafetyCheck,
   computerUseRateLimiter
 } = require('../middleware/computer-use-safety');
+const { resolveComputerUseCapabilities } = require('../services/computer-use-capabilities');
 const router = express.Router();
 
 // Initialize OpenAI client
@@ -297,6 +298,13 @@ const broadcastToSession = (sessionId, data) => {
 // The feature can drive a remote browser and persist extracted data,
 // so every session is scoped to req.user.id below.
 router.use(authenticateToken);
+
+router.get('/capabilities', async (_req, res) => {
+  res.json({
+    success: true,
+    capabilities: resolveComputerUseCapabilities(),
+  });
+});
 
 
 

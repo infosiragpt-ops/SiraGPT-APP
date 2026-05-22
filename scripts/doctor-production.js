@@ -11,6 +11,13 @@ const DEFAULT_ENDPOINTS = [
   { name: 'api_live', url: '/health/live', expect: 200, critical: true },
   { name: 'api_ready', url: '/health/ready', expect: 200, critical: true },
   { name: 'api_health', url: '/health', expect: 200, critical: true },
+  // Orchestration-layer probes (added in feat(orchestration): expose
+  // /api/orchestration/health endpoint). Non-critical because the
+  // orchestration subsystems degrade to no-op when their providers
+  // are unconfigured — the main service stays up regardless.
+  { name: 'orchestration_live', url: '/api/orchestration/health/live', expect: 200, critical: false },
+  { name: 'orchestration_ready', url: '/api/orchestration/health/ready', expect: 200, critical: false },
+  { name: 'orchestration_health', url: '/api/orchestration/health', expect: 200, critical: false },
 ];
 
 function parseArgs(argv) {

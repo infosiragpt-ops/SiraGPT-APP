@@ -127,7 +127,12 @@ function parserKey(mime) {
  * @param {number} [options.timeoutMs] - per-parser timeout override
  * @returns {Promise<{ text: string, parser: string, metadata?: object, tried: Array<{ id: string, error?: string }> }>}
  */
-async function parseDocument(filePath, mimeType, options = {}) {
+const DEFAULT_TOTAL_TIMEOUT_MS = Number.parseInt(
+  process.env.SIRAGPT_PARSER_TOTAL_TIMEOUT_MS || '120000',
+  10
+);
+
+async function parseDocumentInner(filePath, mimeType, options = {}) {
   const effectiveMime =
     (options.file ? resolveProcessMimeType(options.file) : null) ||
     mimeType;
@@ -181,6 +186,25 @@ async function parseDocument(filePath, mimeType, options = {}) {
   const lastResult = await lastResortParse(filePath, options);
   lastResult.tried = tried;
   return lastResult;
+}
+
+async function parseDocument(filePath, mimeType, options = {}) {
+  const budgetMs = Number(options.totalTimeoutMs) || DEFAULT_TOTAL_TIMEOUT_MS;
+  let timer;
+  const budget = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`parser_total_timeout after ${budgetMs}ms`));
+    }, budgetMs);
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([
+      parseDocumentInner(filePath, mimeType, options),
+      budget,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function tryParserById(parserId, filePath, options, mimeType) {

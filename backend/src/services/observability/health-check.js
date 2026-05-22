@@ -288,6 +288,54 @@ function checkCircuitBreakers(breakers = {}) {
   };
 }
 
+function checkR2Storage(env = process.env) {
+  const start = Date.now();
+  try {
+    const { enabled } = require('../../orchestration/r2-storage');
+    const ok = enabled(env);
+    const required = env.NODE_ENV === 'production' || env.SIRAGPT_REQUIRE_R2_ARTIFACTS === '1';
+    let status = ok ? 'healthy' : 'skipped';
+    if (required && !ok) status = 'degraded';
+    return {
+      name: 'r2_artifacts',
+      status,
+      critical: false,
+      latency_ms: Date.now() - start,
+      details: { configured: ok, required },
+    };
+  } catch (err) {
+    return {
+      name: 'r2_artifacts',
+      status: 'degraded',
+      critical: false,
+      latency_ms: Date.now() - start,
+      error: err?.message || String(err),
+    };
+  }
+}
+
+function checkPlaywright() {
+  const start = Date.now();
+  try {
+    require.resolve('playwright');
+    return {
+      name: 'playwright',
+      status: 'healthy',
+      critical: false,
+      latency_ms: Date.now() - start,
+      details: { installed: true },
+    };
+  } catch {
+    return {
+      name: 'playwright',
+      status: 'degraded',
+      critical: false,
+      latency_ms: Date.now() - start,
+      details: { installed: false, reason: 'research_agent_text_only_mode' },
+    };
+  }
+}
+
 function checkCoworkSubsystem(coworkHealth) {
   if (!coworkHealth || typeof coworkHealth.runLivenessCheck !== "function") {
     return { name: "cowork", status: "skipped", critical: false, latency_ms: 0, details: { reason: "no_cowork_health_module" } };
@@ -347,6 +395,8 @@ async function runFullHealthCheck({ prisma, redis, queue, telemetry, sentry, lan
   if (coworkHealth) {
     checks.push(checkCoworkSubsystem(coworkHealth));
   }
+  checks.push(checkR2Storage());
+  checks.push(checkPlaywright());
   return composeStatus(checks);
 }
 
@@ -390,6 +440,8 @@ module.exports = {
   checkPostHog,
   checkCircuitBreakers,
   checkCoworkSubsystem,
+  checkR2Storage,
+  checkPlaywright,
   runLivenessCheck,
   runReadinessCheck,
   runFullHealthCheck,

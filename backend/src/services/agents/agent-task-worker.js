@@ -5,30 +5,9 @@ const {
   getQueueName,
   requireRedisUrl,
 } = require('./agent-task-queue');
-const { runAgentTaskJob, classifyTaskError } = require('./agent-task-runner');
-const {
-  createThrottledLogger,
-  installProcessGuards,
-  isTransientRedisError,
-} = require('./redis-resilience');
-
-// BullMQ defaults: lockDuration 30s, lockRenewTime ~15s. Agent tasks
-// here orchestrate LLM streams that routinely run 60-180s and can spike
-// past 5 min during slow upstream providers (Together, Fireworks). The
-// 30s default guarantees a "could not renew lock" race whenever a renew
-// tick collides with an Upstash failover or a long LLM blocking call,
-// which is exactly the spam we were seeing in production. 5 min gives
-// the renew loop generous headroom; if a worker actually dies the job
-// is still moved to failed via maxStalledCount on the next stalled
-// check (configurable via STALLED_INTERVAL_MS).
-const DEFAULT_LOCK_DURATION_MS = 15 * 60 * 1000;
-const DEFAULT_STALLED_INTERVAL_MS = 60 * 1000;
-const DEFAULT_MAX_STALLED_COUNT = 1;
-
-function readPositiveInt(value, fallback) {
-  const n = Number.parseInt(value, 10);
-  return Number.isFinite(n) && n > 0 ? n : fallback;
-}
+const { runAgentTaskJob } = require('./agent-task-runner');
+const { classifyTaskError } = require('../../utils/task-error-classifier');
+const { installProcessGuards, isTransientRedisError } = require('./redis-resilience');
 
 let worker;
 let workerConnection;

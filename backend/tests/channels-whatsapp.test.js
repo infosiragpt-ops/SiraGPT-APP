@@ -219,6 +219,10 @@ describe('WhatsAppAdapter · parseInbound', () => {
     assert.equal(a.parseInbound({ body: {} }), null);
   });
 
+  it('returns null instead of throwing when the JSON-string body is malformed', () => {
+    assert.equal(a.parseInbound({ body: '{"entry":' }), null);
+  });
+
   it('parses a text message', () => {
     const out = a.parseInbound({
       body: envelope({

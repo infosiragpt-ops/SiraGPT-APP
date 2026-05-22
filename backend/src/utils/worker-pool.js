@@ -51,16 +51,7 @@ class WorkerPool {
       else job.reject(new Error(msg.error?.message || 'worker error'));
     });
     worker.on('error', (err) => {
-      // Reject all inflight jobs from this worker
-      for (const id of slot.inflight) {
-        const job = this.pending.get(id);
-        if (job) {
-          clearTimeout(job.timer);
-          this.pending.delete(id);
-          job.reject(err);
-        }
-      }
-      slot.inflight.clear();
+      this._rejectInflight(slot, err);
       // Replace the crashed worker if the pool is still open
       if (!this.closed) this._replace(idx);
     });
@@ -68,19 +59,23 @@ class WorkerPool {
       // If unexpected exit (pool not closed), the 'error' handler usually
       // fires first; otherwise rejected/cleaned via close()
       if (!this.closed && this.workers[idx] === slot) {
-        for (const id of slot.inflight) {
-          const job = this.pending.get(id);
-          if (job) {
-            clearTimeout(job.timer);
-            this.pending.delete(id);
-            job.reject(new Error('worker exited'));
-          }
-        }
-        slot.inflight.clear();
+        this._rejectInflight(slot, new Error('worker exited'));
         this._replace(idx);
       }
     });
     this.workers[idx] = slot;
+  }
+
+  _rejectInflight(slot, err) {
+    for (const id of slot.inflight) {
+      const job = this.pending.get(id);
+      if (job) {
+        clearTimeout(job.timer);
+        this.pending.delete(id);
+        job.reject(err);
+      }
+    }
+    slot.inflight.clear();
   }
 
   _replace(idx) {
@@ -100,6 +95,14 @@ class WorkerPool {
           this.pending.delete(id);
           slot.inflight.delete(id);
           reject(new Error(`worker-pool: job ${type} timed out after ${timeoutMs}ms`));
+
+          // A timeout usually means the worker thread is blocked inside a
+          // CPU-bound operation (for example a pathological regex). Recycle it
+          // immediately so the next queued job does not inherit the stuck
+          // thread. Any other in-flight work assigned to the same worker cannot
+          // make forward progress either, so fail those jobs explicitly.
+          this._rejectInflight(slot, new Error('worker-pool: worker recycled after job timeout'));
+          if (!this.closed) this._replace(slot.idx);
         }
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer, workerId: slot.idx });

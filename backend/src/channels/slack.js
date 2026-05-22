@@ -57,7 +57,8 @@ class SlackAdapter extends ChannelAdapter {
   }
 
   parseInbound(req) {
-    const payload = typeof req?.body === 'string' ? JSON.parse(req.body) : (req?.body || req || {});
+    const payload = parseRequestBody(req);
+    if (!payload) return null;
     // URL verification handshake — surface as a non-message envelope.
     if (payload?.type === 'url_verification') {
       return {
@@ -122,5 +123,10 @@ class SlackAdapter extends ChannelAdapter {
 }
 
 async function safeJson(r) { try { return await r.json(); } catch { return null; } }
+
+function parseRequestBody(req) {
+  if (typeof req?.body !== 'string') return req?.body || req || {};
+  try { return JSON.parse(req.body); } catch { return null; }
+}
 
 module.exports = { SlackAdapter };

@@ -426,9 +426,35 @@ router.post('/task/:taskId/retry', authenticateToken, async (req, res) => {
 // Replit-style durable chained orchestration (10–20 h budget).
 
 const workspaceWorkflowOrchestrator = require('../services/agents/workspace-workflow-orchestrator');
+const workspaceIdempotency = require('../services/agents/workspace-idempotency');
+
+const WORKFLOW_RATE_MAX = parseInt(process.env.WORKFLOW_RATE_LIMIT_MAX || '6', 10);
+const workflowRateBuckets = new Map();
+
+function workspaceWorkflowRateLimiter(req, res, next) {
+  if (AGENT_RATE_DISABLED) return next();
+  const key = `wf:${agentKeyGen(req)}`;
+  const now = Date.now();
+  let bucket = workflowRateBuckets.get(key);
+  if (!bucket || now > bucket.resetAt) {
+    bucket = { hits: 0, resetAt: now + AGENT_RATE_WINDOW };
+    workflowRateBuckets.set(key, bucket);
+  }
+  bucket.hits += 1;
+  if (bucket.hits > WORKFLOW_RATE_MAX) {
+    return res.status(429).json({
+      ok: false,
+      error: 'workflow_rate_limit_exceeded',
+      message: 'Demasiados workflows largos en curso. Espera antes de encolar otro.',
+      retryAfterMs: bucket.resetAt - now,
+    });
+  }
+  return next();
+}
 
 router.post(
   '/workspace-workflow',
+  workspaceWorkflowRateLimiter,
   agentRateLimiter,
   [
     body('goal').isString().trim().isLength({ min: 8, max: 8000 }),
@@ -457,6 +483,21 @@ router.post(
       return res.status(400).json({ error: built.error });
     }
 
+    const existing = workspaceIdempotency.findExistingWorkflow(
+      req.user?.id,
+      req.body.goal,
+      req.body.chatId
+    );
+    if (existing?.taskId) {
+      return res.status(200).json({
+        ok: true,
+        deduplicated: true,
+        taskId: existing.taskId,
+        jobId: existing.jobId,
+        message: 'Workflow ya encolado para este objetivo',
+      });
+    }
+
     const { payload, taskId, traceId, plan, subTasks, maxRuntimeMs, model, displayGoal, documentPolicy } = built;
 
     if (process.env.AGENT_TASK_INLINE === '1') {
@@ -480,6 +521,12 @@ router.post(
       const message = err?.message ? String(err.message) : String(err);
       return res.status(503).json({ error: message || 'enqueue failed' });
     }
+
+    workspaceIdempotency.registerWorkflow(req.user?.id, req.body.goal, req.body.chatId, {
+      taskId,
+      jobId: String(job.id),
+      status: 'queued',
+    });
 
     const streamState = initialAgentState();
     taskStore.writeTaskSnapshot({

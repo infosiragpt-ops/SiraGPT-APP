@@ -31,6 +31,11 @@ function detectXSS(input) {
   if (typeof input !== 'string') return { detected: false, patterns: [] };
   const patterns = [];
   for (const [pattern, id] of XSS_PATTERNS) {
+    // Each XSS_PATTERN uses the /g flag (needed for sanitizeAgainstXSS's
+    // replace() to scrub every occurrence), but `g` makes `.test()`
+    // stateful via lastIndex — without resetting, alternating calls on
+    // the same input would silently flip between detected/not detected.
+    pattern.lastIndex = 0;
     if (pattern.test(input)) {
       patterns.push(id);
     }
@@ -45,7 +50,13 @@ function sanitizeRequestBody(body, depth = 0) {
   if (body && typeof body === 'object') {
     const sanitized = {};
     for (const [key, value] of Object.entries(body)) {
-      if (typeof key === 'string' && XSS_PATTERNS.some(([re]) => re.test(key))) {
+      // Reset lastIndex on every key so the stateful /g regex doesn't
+      // flip-flop across consecutive keys in the same body.
+      const keyHasXSS = typeof key === 'string' && XSS_PATTERNS.some(([re]) => {
+        re.lastIndex = 0;
+        return re.test(key);
+      });
+      if (keyHasXSS) {
         sanitized[key.replace(/<[^>]*>/g, '')] = sanitizeRequestBody(value, depth + 1);
       } else {
         sanitized[key] = sanitizeRequestBody(value, depth + 1);

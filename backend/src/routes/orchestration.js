@@ -5,12 +5,23 @@ const { optionalAuth } = require('../middleware/optionalAuth');
 
 const router = express.Router();
 
+// Apply no-cache headers to every health probe under this router.
+// Without these, intermediate caches (CDNs, ingress controllers, browser
+// devtools) can serve a stale 200 from before a subsystem failure,
+// blinding operators to outages they triggered seconds ago.
+function noCacheHeaders(_req, res, next) {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+  next();
+}
+
 // GET /api/orchestration/health — returns the wireup health snapshot
 // (gateway, semanticCache, r2Storage, checkpointStore, memory, search,
 // multichannel, multiAgent). Booleans + shape only; never returns key
 // values. Safe to call anonymously so operators can monitor which
 // subsystems are activated by the current env without auth.
-router.get('/health', optionalAuth, async (_req, res) => {
+router.get('/health', noCacheHeaders, optionalAuth, async (_req, res) => {
   try {
     const { getOrchestrationWireup } = require('../orchestration/orchestration-wireup');
     const wireup = getOrchestrationWireup(process.env);
@@ -29,7 +40,7 @@ router.get('/health', optionalAuth, async (_req, res) => {
 // gateway (the only universally-required subsystem). 503 otherwise.
 // Use this from K8s readinessProbe or load-balancer health checks
 // so the pod is only added to rotation once orchestration boots.
-router.get('/health/ready', async (_req, res) => {
+router.get('/health/ready', noCacheHeaders, async (_req, res) => {
   try {
     const { getOrchestrationWireup } = require('../orchestration/orchestration-wireup');
     const wireup = getOrchestrationWireup(process.env);
@@ -52,7 +63,7 @@ router.get('/health/ready', async (_req, res) => {
 // from K8s livenessProbe — orchestration itself never crashes the
 // process even when every external dep is down (all subsystems
 // degrade to no-op), so liveness is the same as "process up".
-router.get('/health/live', (_req, res) => {
+router.get('/health/live', noCacheHeaders, (_req, res) => {
   res.json({ status: 'alive', timestamp: Date.now() });
 });
 

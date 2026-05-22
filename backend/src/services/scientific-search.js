@@ -465,10 +465,15 @@ const PROVIDER_FUNCS = {
  * @param {number}   [opts.timeoutMs] — per-provider timeout
  * @returns {Promise<{ papers, errors, providers }>}
  */
+const searchCache = require('./scientific-search-cache');
+
 async function search(query, opts = {}) {
   if (typeof query !== 'string' || !query.trim()) {
     return { papers: [], errors: [{ provider: 'input', message: 'query is empty' }], providers: [] };
   }
+  const cached = searchCache.get(query, opts);
+  if (cached) return cached;
+
   const chosen = (Array.isArray(opts.providers) && opts.providers.length)
     ? opts.providers.filter((p) => PROVIDER_FUNCS[p])
     : PROVIDERS.slice();
@@ -487,7 +492,9 @@ async function search(query, opts = {}) {
   });
   const deduped = dedupeByDoi(papers);
   const ranked = rankPapers(deduped);
-  return { papers: ranked, errors, providers: chosen };
+  const result = { papers: ranked, errors, providers: chosen };
+  searchCache.set(query, opts, result);
+  return result;
 }
 
 module.exports = {

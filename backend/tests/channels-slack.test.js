@@ -228,6 +228,10 @@ describe('SlackAdapter · parseInbound', () => {
     assert.equal(out.text, 'parsed');
   });
 
+  it('returns null instead of throwing when the JSON-string body is malformed', () => {
+    assert.equal(a.parseInbound({ body: '{"event_id":' }), null);
+  });
+
   it('invokes accessGroupResolver and stores its result', () => {
     const a2 = makeAdapter({
       accessGroupResolver: (event) => `group-for-${event.channel}`,

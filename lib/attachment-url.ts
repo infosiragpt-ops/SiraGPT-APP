@@ -9,72 +9,13 @@ function looksLikeBase64Image(value: string) {
   return /^[A-Za-z0-9+/=\s]+$/.test(value);
 }
 
-/**
- * For paths that hit the authenticated `/uploads/*` static route, append
- * the auth token from localStorage as a `?token=` query parameter. Plain
- * `<img>` elements cannot set the `Authorization: Bearer ...` header,
- * and our deployed setup serves the frontend and backend from different
- * origins, so the cookie issued at login is not sent automatically.
- * Backend `upload-static-access.js` accepts the same token via query.
- */
-function isTrustedBackendOrigin(absoluteUrl: string): boolean {
-  // Same-origin as the current page is always trusted (Next.js rewrites
-  // `/uploads/*` to our backend, so `siragpt.com/uploads/...` is ours).
-  // For absolute URLs, only attach the token when the host matches the
-  // explicitly configured backend (`NEXT_PUBLIC_API_URL` /
-  // `NEXT_PUBLIC_IMAGE_URL`). Never leak the JWT to arbitrary hosts
-  // that happen to have `/uploads/` in their path.
-  try {
-    const parsed = new URL(absoluteUrl, window.location.href);
-    if (parsed.origin === window.location.origin) return true;
-    const candidates = [
-      process.env.NEXT_PUBLIC_API_URL,
-      process.env.NEXT_PUBLIC_IMAGE_URL,
-    ];
-    for (const candidate of candidates) {
-      if (!candidate) continue;
-      try {
-        const backend = new URL(candidate);
-        if (backend.origin === parsed.origin) return true;
-      } catch {
-        /* malformed env value — ignore */
-      }
-    }
-  } catch {
-    /* malformed URL — treat as untrusted */
-  }
-  return false;
-}
-
-function maybeAttachAuthQueryParam(url: string): string {
-  if (typeof window === "undefined") return url;
-  if (!url) return url;
-  // Only attach for paths that we know are protected by the
-  // upload-static-access guard. Public assets (audio/, images/,
-  // presentations/) work without it but tolerate the extra param.
-  if (!/\/uploads\//.test(url)) return url;
-  // If a token is already present, don't double-attach.
-  if (/[?&]token=/.test(url)) return url;
-  // Defense-in-depth: never attach the JWT to a host we don't own.
-  // Relative URLs (no scheme) resolve same-origin so are always safe.
-  if (/^https?:/i.test(url) && !isTrustedBackendOrigin(url)) return url;
-  try {
-    const token = window.localStorage.getItem("auth-token");
-    if (!token) return url;
-    const sep = url.includes("?") ? "&" : "?";
-    return `${url}${sep}token=${encodeURIComponent(token)}`;
-  } catch {
-    return url;
-  }
-}
-
 export function resolveBackendAssetUrl(pathOrUrl: unknown, baseUrl?: string | null) {
   const raw = String(pathOrUrl || "").trim();
   if (!raw) return "";
-  if (/^(https?:|data:|blob:)/i.test(raw)) return maybeAttachAuthQueryParam(raw);
+  if (/^(https?:|data:|blob:)/i.test(raw)) return raw;
 
   const base = cleanBaseUrl(baseUrl);
-  return maybeAttachAuthQueryParam(`${base}${raw.startsWith("/") ? "" : "/"}${raw}`);
+  return `${base}${raw.startsWith("/") ? "" : "/"}${raw}`;
 }
 
 /**

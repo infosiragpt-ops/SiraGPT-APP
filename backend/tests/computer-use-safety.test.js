@@ -96,6 +96,9 @@ describe('computerUseSafetyCheck · harmful-keyword filter', () => {
   const harmful = [
     'delete', 'remove', 'format', 'destroy', 'hack', 'crack', 'password',
     'personal information', 'credit card', 'bank account', 'social security',
+    'captcha', 'checkout', 'place order', 'send email', 'post tweet', 'login',
+    'comprar', 'pagar', 'transferir dinero', 'enviar correo', 'publicar',
+    'iniciar sesión',
   ];
 
   for (const kw of harmful) {
