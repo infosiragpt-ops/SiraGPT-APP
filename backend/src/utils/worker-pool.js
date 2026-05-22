@@ -23,11 +23,16 @@ function defaultSize() {
   return Math.max(1, Math.min(4, cpus));
 }
 
+function normalizeSize(value) {
+  if (!Number.isFinite(value)) return defaultSize();
+  return Math.max(1, Math.floor(value));
+}
+
 class WorkerPool {
   constructor(opts = {}) {
     this.workerPath = opts.workerPath
       || path.join(__dirname, '..', 'workers', 'heavy-analysis.worker.js');
-    this.size = Number.isFinite(opts.size) ? opts.size : defaultSize();
+    this.size = normalizeSize(opts.size);
     this.defaultTimeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : 30_000;
     this.workers = [];
     this.pending = new Map(); // id -> { resolve, reject, timer, workerId }
@@ -156,4 +161,5 @@ module.exports = {
   getSharedPool,
   resetSharedPool,
   defaultSize,
+  normalizeSize,
 };
