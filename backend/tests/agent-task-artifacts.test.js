@@ -36,6 +36,28 @@ test('agent task artifacts: ids are scoped per owner and chat', () => {
   assert.notEqual(first.id, second.id);
 });
 
+test('agent task artifacts: normalizes dangerous executable extensions before saving', () => {
+  const artifact = saveArtifact({
+    filename: 'quarterly-report.pdf.exe',
+    base64: Buffer.from('not actually an executable').toString('base64'),
+    ownerUserId: 'user-a',
+    chatId: 'chat-a',
+  });
+
+  assert.equal(artifact.filename, 'quarterly-report.pdf.exe.txt');
+  assert.equal(artifact.format, 'txt');
+  assert.equal(artifact.mime, 'text/plain');
+  assert.match(artifact.downloadUrl, /quarterly-report\.pdf\.exe\.txt/);
+
+  const storedName = path.basename(artifact.path);
+  assert.ok(storedName.endsWith('-quarterly-report.pdf.exe.txt'));
+
+  const metadata = JSON.parse(fs.readFileSync(INTERNAL.metadataPathFor(artifact.id), 'utf8'));
+  assert.equal(metadata.filename, 'quarterly-report.pdf.exe.txt');
+  assert.equal(metadata.format, 'txt');
+  assert.equal(metadata.mime, 'text/plain');
+});
+
 test('agent task create_document: validates and returns artifact ids for downstream verification', async () => {
   const events = [];
   const result = await INTERNAL.createDocument.execute({
