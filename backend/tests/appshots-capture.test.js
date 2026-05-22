@@ -53,6 +53,7 @@ function installPrismaMocks(token) {
     fileCreate: prisma.file.create,
     chatCreate: prisma.chat.create,
     messageCreate: prisma.message.create,
+    transaction: prisma.$transaction,
   };
 
   const calls = { file: [], chat: [], message: [], sessionUpdate: [] };
@@ -87,6 +88,15 @@ function installPrismaMocks(token) {
     calls.message.push(data);
     return { id: 'msg-capture-1', ...data };
   };
+  // Route uses prisma.$transaction(fn) to wrap File+Chat+Message atomically.
+  // Real Prisma passes a tx proxy whose model methods bypass our overrides,
+  // so we replace $transaction with a pass-through that hands the function
+  // the same prisma instance the overrides are installed on.
+  prisma.$transaction = async (arg) => {
+    if (typeof arg === 'function') return arg(prisma);
+    if (Array.isArray(arg)) return Promise.all(arg);
+    throw new Error('test $transaction stub only supports function or array');
+  };
 
   return {
     calls,
@@ -96,6 +106,7 @@ function installPrismaMocks(token) {
       prisma.file.create = originals.fileCreate;
       prisma.chat.create = originals.chatCreate;
       prisma.message.create = originals.messageCreate;
+      prisma.$transaction = originals.transaction;
     },
   };
 }

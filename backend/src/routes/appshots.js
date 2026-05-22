@@ -519,6 +519,9 @@ router.post(
   authenticateToken,
   upload.single('image'),
   async (req, res) => {
+    // Hoisted so the catch block can clean up a half-written file if a
+    // downstream step (OCR, DB) throws after the PNG hit disk.
+    let diskPath = null;
     try {
       if (!req.file) {
         return res.status(400).json({ error: 'image file is required' });
@@ -533,7 +536,7 @@ router.post(
 
       const ext = req.file.mimetype === 'image/jpeg' ? 'jpg' : 'png';
       const filename = `appshot-${Date.now()}-${crypto.randomBytes(6).toString('hex')}.${ext}`;
-      const diskPath = path.join(userDir, filename);
+      diskPath = path.join(userDir, filename);
       fs.writeFileSync(diskPath, req.file.buffer);
 
       const sourceLabel = sanitiseLabel(req.body?.source) || 'Captura';
@@ -564,51 +567,68 @@ router.post(
         }
       }
 
-      const fileRecord = await prisma.file.create({
-        data: {
-          userId,
-          filename,
-          originalName: `${sourceLabel}.${ext}`,
-          mimeType: req.file.mimetype,
-          size: req.file.size,
-          path: diskPath,
-          extractedText,
-          processingStage: 'ready',
-          processingStageAt: new Date(),
-        },
-      });
-
-      const chat = await prisma.chat.create({
-        data: {
-          userId,
-          title: truncate(`Appshot · ${sourceLabel}`, 80),
-          model,
-        },
-      });
-
-      // First user message carries the file reference in the existing JSON
-      // `files` column so the chat UI renders the attachment chip natively.
+      // Atomic File + Chat + Message. If any of the three INSERTs fails,
+      // the transaction rolls back so we don't leave a half-built capture
+      // (orphan File without a Chat, or Chat with no first message that the
+      // UI would render as an empty thread). Disk cleanup of the PNG is
+      // handled in the catch below — Prisma can't rollback fs.writeFileSync.
+      //
+      // Some test stubs in /tests/appshots-capture.test.js mock prisma at
+      // the model level without implementing `$transaction`. Fall back to
+      // sequential creates when $transaction isn't a function — same
+      // semantics in production (real prisma always has it), best-effort
+      // atomicity in tests.
       const messageContent = noteText
         ? noteText
         : `He capturado ${sourceLabel}. ¿Puedes analizarla?`;
 
-      await prisma.message.create({
-        data: {
-          chatId: chat.id,
-          role: 'user',
-          content: messageContent,
-          files: [
-            {
-              id: fileRecord.id,
-              name: fileRecord.originalName,
-              size: fileRecord.size,
-              type: fileRecord.mimeType,
-              url: `/uploads/${userId}/${filename}`,
-            },
-          ],
-          metadata: { source: 'appshots', sourceLabel },
-        },
-      });
+      const runCreates = async (tx) => {
+        const fileRecord = await tx.file.create({
+          data: {
+            userId,
+            filename,
+            originalName: `${sourceLabel}.${ext}`,
+            mimeType: req.file.mimetype,
+            size: req.file.size,
+            path: diskPath,
+            extractedText,
+            processingStage: 'ready',
+            processingStageAt: new Date(),
+          },
+        });
+
+        const chat = await tx.chat.create({
+          data: {
+            userId,
+            title: truncate(`Appshot · ${sourceLabel}`, 80),
+            model,
+          },
+        });
+
+        await tx.message.create({
+          data: {
+            chatId: chat.id,
+            role: 'user',
+            content: messageContent,
+            files: [
+              {
+                id: fileRecord.id,
+                name: fileRecord.originalName,
+                size: fileRecord.size,
+                type: fileRecord.mimeType,
+                url: `/uploads/${userId}/${filename}`,
+              },
+            ],
+            metadata: { source: 'appshots', sourceLabel },
+          },
+        });
+
+        return { fileRecord, chat };
+      };
+
+      const { fileRecord, chat } = typeof prisma.$transaction === 'function'
+        ? await prisma.$transaction(runCreates)
+        : await runCreates(prisma);
 
       auditLog.audit({
         event: 'appshots_capture',
@@ -639,6 +659,18 @@ router.post(
       });
     } catch (error) {
       console.error('[appshots] capture error:', error?.message || error);
+      // If the PNG was already written to disk but a downstream step (OCR
+      // exception, DB transaction rollback, etc.) failed, the file has no
+      // owning File row to reach it from — clean it up so the user's
+      // uploads dir doesn't accumulate orphans. Best-effort: a missing
+      // file or unlink error is non-fatal.
+      try {
+        if (typeof diskPath === 'string' && diskPath && fs.existsSync(diskPath)) {
+          fs.unlinkSync(diskPath);
+        }
+      } catch (cleanupErr) {
+        console.warn('[appshots] orphan cleanup failed:', cleanupErr?.message || cleanupErr);
+      }
       // Multer file-too-large surfaces as MulterError with code LIMIT_FILE_SIZE.
       if (error?.code === 'LIMIT_FILE_SIZE') {
         return res.status(413).json({ error: 'image exceeds 10 MB limit' });
