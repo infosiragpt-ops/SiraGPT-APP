@@ -3333,6 +3333,31 @@ function ChatInterfaceContent() {
     };
   }, [radixViewport]);
 
+  // Lote D · #26 — Smart auto-scroll durante streaming.
+  // Si el usuario YA está al final cuando llegan tokens nuevos, lo
+  // pegamos al fondo automáticamente para que la respuesta se vea
+  // creciendo. Si subió a leer mensajes anteriores (isAtBottom=false),
+  // NO lo arrastramos al fondo — el pill "Nuevos mensajes" ya le da
+  // el control de cuándo volver. En cuanto vuelve manualmente al
+  // fondo, isAtBottom pasa a true y este efecto reanuda el follow.
+  //
+  // Disparador: el contenido de la última burbuja (la que está
+  // recibiendo tokens). Usamos su longitud como proxy barato sin
+  // tener que enganchar a cada chunk del SSE.
+  const streamingContentLen = React.useMemo(() => {
+    if (!isStreaming) return 0;
+    const msgs = currentChat?.messages;
+    if (!msgs || msgs.length === 0) return 0;
+    const last = msgs[msgs.length - 1];
+    return typeof last?.content === 'string' ? last.content.length : 0;
+  }, [isStreaming, currentChat?.messages]);
+
+  React.useEffect(() => {
+    if (!isStreaming) return;
+    if (!isAtBottom) return;
+    scrollToBottom();
+  }, [streamingContentLen, isStreaming, isAtBottom, scrollToBottom]);
+
   const [isUploading, setIsUploading] = React.useState(false);
   const [isDragging, setIsDragging] = React.useState(false);
   const [uploadProgress, setUploadProgress] = React.useState<{ [key: string]: number }>({});
