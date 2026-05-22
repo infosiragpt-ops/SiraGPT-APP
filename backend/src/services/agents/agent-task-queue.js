@@ -74,6 +74,30 @@ function getAgentTaskQueue() {
 
 async function enqueueAgentTask(payload, opts = {}) {
   if (!payload?.taskId) throw new Error('taskId is required');
+
+  // Per-task-type Temporal opt-in. When `USE_TEMPORAL_FOR_<TYPE>=1` is
+  // set AND `TEMPORAL_ADDRESS` is configured, dispatch to a Temporal
+  // workflow instead of BullMQ. Any failure here silently falls back
+  // to BullMQ so a misbehaving Temporal Cloud namespace can never
+  // strand a user's task. See `infra/temporal/README.md`.
+  try {
+    // eslint-disable-next-line global-require
+    const { shouldUseTemporalForTaskType, startAgentTaskWorkflow } = require('./temporal/temporal-client');
+    if (shouldUseTemporalForTaskType(payload.taskType)) {
+      const handle = await startAgentTaskWorkflow({
+        taskType: payload.taskType,
+        jobData: payload,
+        idempotencyKey: payload.taskId,
+      });
+      if (handle) {
+        console.log(`[agent-task-queue] dispatched via temporal taskId=${payload.taskId} workflowId=${handle.workflowId} runId=${handle.runId}`);
+        return { id: handle.workflowId, _temporal: true };
+      }
+    }
+  } catch (err) {
+    console.warn(`[agent-task-queue] temporal dispatch failed taskId=${payload.taskId}, falling back to bullmq: ${err && err.message || err}`);
+  }
+
   const q = getAgentTaskQueue();
   return q.add('agent-task', payload, {
     jobId: opts.jobId || payload.taskId,
