@@ -74,15 +74,23 @@ async function run(opts = {}) {
     `[sweep-expired-partial-sessions] starting now=${now.toISOString()} dryRun=${dryRun}`,
   );
 
+  // Lazy require + lazy retry-helper so jobs that inject their own
+  // prisma in tests don't have to also stub the Accelerate retry
+  // util. Both repos accept any `withRetry` matching the signature.
+  const { PartialSessionRepository } = require('../repositories/PartialSessionRepository');
+  const { withAccelerateRetry } = require('../utils/prisma-accelerate-retry');
+  const repo = opts.partialSessions
+    || new PartialSessionRepository({ prisma, withRetry: withAccelerateRetry });
+
   if (dryRun) {
-    const candidates = await prisma.partialSession.count({ where });
+    const candidates = await repo.count(where);
     logger.info?.(
       `[sweep-expired-partial-sessions] dry-run candidates=${candidates}`,
     );
     return { deleted: 0, candidates, dryRun: true, now: now.toISOString() };
   }
 
-  const res = await prisma.partialSession.deleteMany({ where });
+  const res = await repo.deleteMany(where);
   const deleted = typeof res?.count === 'number' ? res.count : 0;
   _bumpCounter(deleted);
 

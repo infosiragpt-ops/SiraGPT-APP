@@ -18,6 +18,25 @@
 
 'use strict';
 
+const { AuditLogRepository } = require('../repositories/AuditLogRepository');
+const { withAccelerateRetry } = require('./prisma-accelerate-retry');
+
+// Memoise repository instances keyed by the passed-in prisma client.
+// Tests pass narrow mocks (sometimes a fresh one per call) so we
+// can't assume identity across the process — but for the real client
+// from ../config/database this cache hits on every call after the
+// first, avoiding a per-write allocation.
+const _repoCache = new WeakMap();
+function _repoFor(prisma) {
+  if (!prisma || typeof prisma !== 'object') return null;
+  let repo = _repoCache.get(prisma);
+  if (!repo) {
+    repo = new AuditLogRepository({ prisma, withRetry: withAccelerateRetry });
+    _repoCache.set(prisma, repo);
+  }
+  return repo;
+}
+
 /**
  * @typedef {object} AuditEntry
  * @property {string} action — imperative verb ('login', 'login_failed',
@@ -47,7 +66,8 @@
  * @param {AuditEntry} entry
  */
 async function writeAuditLog(prisma, entry) {
-  if (!prisma || !prisma.auditLog || typeof prisma.auditLog.create !== 'function') {
+  const repo = _repoFor(prisma);
+  if (!repo || !repo._modelAvailable()) {
     // Prisma client without AuditLog model — silently ignore so the
     // caller doesn't blow up in tests that mock prisma narrowly.
     return null;
@@ -94,26 +114,21 @@ async function writeAuditLog(prisma, entry) {
     if (cleaned.length) metadata.tags = cleaned;
   }
 
-  try {
-    return await prisma.auditLog.create({
-      data: {
-        actorType,
-        actorId: userId,
-        actorName,
-        resourceType: entry.resource || actorType, // fallback so the NOT NULL column always has a value
-        resourceId: entry.resourceId ?? null,
-        action: entry.action,
-        before: entry.before ?? null,
-        after: entry.after ?? null,
-        diff: null,
-        metadata: Object.keys(metadata).length ? metadata : null,
-      },
-    });
-  } catch (err) {
-    // Audit failures must never break the wrapping request.
-    console.error('[AUDIT] write failed:', err?.message || err, 'action=', entry.action);
-    return null;
-  }
+  // Repository handles its own try/catch and logs failures with the
+  // same `[AUDIT] write failed` prefix the previous inline path used,
+  // so ops greps continue to work unchanged.
+  return repo.safeCreate({
+    actorType,
+    actorId: userId,
+    actorName,
+    resourceType: entry.resource || actorType, // fallback so the NOT NULL column always has a value
+    resourceId: entry.resourceId ?? null,
+    action: entry.action,
+    before: entry.before ?? null,
+    after: entry.after ?? null,
+    diff: null,
+    metadata: Object.keys(metadata).length ? metadata : null,
+  });
 }
 
 module.exports = { writeAuditLog };

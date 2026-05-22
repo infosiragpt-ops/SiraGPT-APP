@@ -6,14 +6,18 @@ const prisma = require('../config/database');
 const { withAccelerateRetry, isAccelerateTransientError } = require('../utils/prisma-accelerate-retry');
 const { SessionRepository } = require('../repositories/SessionRepository');
 const { UserRepository } = require('../repositories/UserRepository');
+const { PartialSessionRepository } = require('../repositories/PartialSessionRepository');
+const { AuditLogRepository } = require('../repositories/AuditLogRepository');
 const { TokenVault } = require('../services/TokenVault');
 const { encrypt: encryptToken, decrypt: decryptToken } = require('../utils/encryption');
 // Single repository / service instances shared by every call site in
 // this file. Cross-cutting concerns (fingerprint-column fallback,
-// Accelerate retry, token envelope crypto) live inside them so
-// handlers stay focused on policy.
+// Accelerate retry, token envelope crypto, fire-and-forget audit
+// writes) live inside them so handlers stay focused on policy.
 const sessions = new SessionRepository({ prisma, withRetry: withAccelerateRetry });
 const users = new UserRepository({ prisma, withRetry: withAccelerateRetry });
+const partialSessions = new PartialSessionRepository({ prisma, withRetry: withAccelerateRetry });
+const auditLogs = new AuditLogRepository({ prisma, withRetry: withAccelerateRetry });
 const tokenVault = new TokenVault({ encrypt: encryptToken, decrypt: decryptToken });
 const { authenticateToken } = require('../middleware/auth');
 const { makeAuthRateLimit } = require('../middleware/rate-limit-auth');
@@ -1213,20 +1217,12 @@ router.get('/sessions', authenticateToken, async (req, res) => {
     // this user so we can attribute ip/ua to each session by createdAt
     // proximity. Audit-log reads may fail (table missing in narrow test
     // mocks) — degrade silently.
-    let auditRows = [];
-    try {
-      if (prisma.auditLog && typeof prisma.auditLog.findMany === 'function') {
-        auditRows = await prisma.auditLog.findMany({
-          where: {
-            actorId: req.user.id,
-            action: { in: ['login', 'token_refresh', 'register'] },
-          },
-          orderBy: { createdAt: 'desc' },
-          take: 50,
-          select: { createdAt: true, metadata: true },
-        });
-      }
-    } catch (_) { /* ignore — enrichment is optional */ }
+    const auditRows = await auditLogs.findRecentForActor({
+      actorId: req.user.id,
+      actions: ['login', 'token_refresh', 'register'],
+      take: 50,
+      select: { createdAt: true, metadata: true },
+    });
 
     function pickAuditFor(createdAt) {
       // Closest audit row at-or-before the session's createdAt within
@@ -2060,9 +2056,7 @@ async function mintPartialSession(userId) {
   const { randomBytes } = require('node:crypto');
   const token = randomBytes(32).toString('hex');
   const expiresAt = new Date(Date.now() + PARTIAL_SESSION_TTL_MS);
-  await prisma.partialSession.create({
-    data: { token, userId, expiresAt },
-  });
+  await partialSessions.create({ token, userId, expiresAt });
   return { token, expiresAt };
 }
 
@@ -2096,9 +2090,7 @@ router.post(
       }
       const { code, partialToken } = req.body;
 
-      const row = await prisma.partialSession.findUnique({
-        where: { token: partialToken },
-      });
+      const row = await partialSessions.findByToken(partialToken);
       if (!row) {
         return res.status(404).json({ error: 'partial session not found' });
       }
@@ -2170,10 +2162,7 @@ router.post(
       // Atomically consume the partial session. If another concurrent
       // verify already flipped it we treat that as 409 — defence-in-
       // depth against double-spend should a client retry.
-      const consumed = await prisma.partialSession.updateMany({
-        where: { token: partialToken, consumedAt: null },
-        data: { consumedAt: new Date() },
-      });
+      const consumed = await partialSessions.consumeByToken(partialToken);
       if (!consumed || (typeof consumed.count === 'number' && consumed.count === 0)) {
         return res.status(409).json({ error: 'partial session already used' });
       }
