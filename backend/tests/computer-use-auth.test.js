@@ -60,6 +60,7 @@ describe('Computer Use HTTP route auth boundaries', () => {
       request(app).post('/api/computer-use/chat-integration').send({ message: 'go', chatId: 'c1', userId: 'other-user' }),
       request(app).post('/api/computer-use/acknowledge-safety').send({ sessionId: 's1', callId: 'call-1' }),
       request(app).post('/api/computer-use/generate-html').send({ extractedData: { title: 'x' } }),
+      request(app).get('/api/computer-use/capabilities'),
       request(app).get('/api/computer-use/status/s1'),
     ];
 
@@ -68,6 +69,19 @@ describe('Computer Use HTTP route auth boundaries', () => {
       assert.equal(res.status, 401);
       assert.equal(res.body.error, 'Access token required');
     }
+  });
+
+  test('capabilities endpoint is authenticated and advertises browser controls', async () => {
+    const res = await request(buildApp())
+      .get('/api/computer-use/capabilities')
+      .set('Authorization', auth.authHeader);
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body.success, true);
+    assert.equal(res.body.capabilities.mode, 'openclaw_style_browser');
+    assert.equal(res.body.capabilities.safety.requiresAuth, true);
+    assert.ok(res.body.capabilities.actions.includes('navigate'));
+    assert.ok(res.body.capabilities.actions.includes('screenshot'));
   });
 
   test('does not expose another user session status', async () => {

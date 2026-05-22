@@ -12,10 +12,20 @@ const computerUseSafetyCheck = (req, res, next) => {
     });
   }
   
-  // Check for potentially harmful tasks
+  // Check for potentially harmful or externally irreversible tasks.
+  // Computer-use can click real websites; keep this default policy
+  // conservative until a separate human-confirmation flow exists.
   const harmfulKeywords = [
     'delete', 'remove', 'format', 'destroy', 'hack', 'crack', 'password',
-    'personal information', 'credit card', 'bank account', 'social security'
+    'personal information', 'credit card', 'bank account', 'social security',
+    'captcha', 'recaptcha', 'hcaptcha', 'paywall',
+    'checkout', 'place order', 'purchase', 'buy now', 'transfer money',
+    'wire transfer', 'send email', 'send message', 'post tweet', 'publish post',
+    'login', 'log in', 'sign in',
+    'borrar', 'eliminar', 'formatear', 'destruir', 'contraseña',
+    'tarjeta de credito', 'tarjeta de crédito', 'cuenta bancaria',
+    'comprar', 'pagar', 'transferir dinero', 'enviar correo',
+    'enviar mensaje', 'publicar', 'iniciar sesion', 'iniciar sesión'
   ];
   
   const taskLower = task.toLowerCase();
