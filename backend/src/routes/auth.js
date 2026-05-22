@@ -3,6 +3,9 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { body, validationResult } = require('express-validator');
 const prisma = require('../config/database');
+const { withAccelerateRetry, isAccelerateTransientError } = require('../utils/prisma-accelerate-retry');
+const { SessionRepository } = require('../repositories/SessionRepository');
+const googleCallbackSessions = new SessionRepository({ prisma, withRetry: withAccelerateRetry });
 const { authenticateToken } = require('../middleware/auth');
 const { makeAuthRateLimit } = require('../middleware/rate-limit-auth');
 const { writeAuditLog } = require('../utils/audit-log');
@@ -215,19 +218,22 @@ router.get('/google/callback',
 
       const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
-      await prisma.session.create({
-        data: {
-          userId: req.user.id,
-          token,
-          expiresAt
-        }
+      await googleCallbackSessions.create({
+        userId: req.user.id,
+        token,
+        expiresAt,
       });
 
       // Redirect to frontend with token
       res.redirect(`${getFrontendUrl()}/auth/callback?token=${token}`);
     } catch (error) {
       console.error('Google auth callback error:', error);
-      res.redirect(`${getFrontendUrl()}/auth/login?error=auth_failed`);
+      // Same Accelerate-aware soft-failure treatment as passport.js:
+      // a transient DB outage redirects with the specific
+      // `db_unavailable` code so the login UI shows the friendly
+      // Spanish message instead of the generic auth_failed.
+      const reason = isAccelerateTransientError(error) ? 'db_unavailable' : 'auth_failed';
+      res.redirect(`${getFrontendUrl()}/auth/login?error=${reason}`);
     }
   }
 );
