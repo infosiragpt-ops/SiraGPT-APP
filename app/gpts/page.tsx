@@ -144,7 +144,7 @@ function GPTIcon({ gpt }: { gpt: CustomGPT }) {
   if (iconSrc) {
     return (
       // eslint-disable-next-line @next/next/no-img-element
-      <img src={iconSrc} alt={`${gpt.name} icon`} className="h-full w-full rounded-full object-cover" />
+      <img src={iconSrc} alt={`${gpt.name} icon`} loading="lazy" decoding="async" className="h-full w-full rounded-full object-cover" />
     )
   }
 

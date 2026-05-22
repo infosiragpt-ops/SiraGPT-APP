@@ -369,7 +369,7 @@ function ResultCard({ item, index }: { item: Result; index: number }) {
       <CardContent className="flex gap-4 p-4">
         {item.imageUrl && (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={item.imageUrl} alt="" className="h-20 w-20 shrink-0 rounded-md object-cover" />
+          <img src={item.imageUrl} alt="" loading="lazy" decoding="async" className="h-20 w-20 shrink-0 rounded-md object-cover" />
         )}
         <div className="min-w-0 flex-1 space-y-2">
           <div className="flex flex-wrap items-center gap-2">

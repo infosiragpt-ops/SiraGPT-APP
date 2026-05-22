@@ -2282,9 +2282,9 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                 );
                                 const getFileIcon = () => {
                                     if (fileNameLower.endsWith('.pdf')) {
-                                        return <img src="/icons/pdf.png" alt="PDF" className="h-10 w-10" />;
+                                        return <img src="/icons/pdf.png" alt="PDF" loading="lazy" decoding="async" className="h-10 w-10" />;
                                     } else if (fileNameLower.endsWith('.docx') || fileNameLower.endsWith('.doc')) {
-                                        return <img src="/icons/Word.png" alt="Word" className="h-10 w-10" />;
+                                        return <img src="/icons/Word.png" alt="Word" loading="lazy" decoding="async" className="h-10 w-10" />;
                                     } else if (isPowerPoint) {
                                         return <PresentationIcon className="h-10 w-10 text-orange-600" />;
                                     }
