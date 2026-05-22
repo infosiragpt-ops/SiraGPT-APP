@@ -122,6 +122,10 @@ const {
   buildAgenticOperatingPrompt,
 } = require('../services/agents/agentic-operating-core');
 const { buildSemanticIntentAnalysis } = require('../services/agents/semantic-intent-router');
+const { triageIntent } = require('../services/agents/intent-triage');
+const { makeGeminiJudge } = require('../services/agents/intent-triage-judge');
+const siraMetrics = require('../services/sira/metrics');
+const __intentTriageJudge = makeGeminiJudge();
 const ciraEngine = require('../services/sira/engine');
 const postResponseBrainHook = require('../services/sira/post-response-brain-hook');
 const coworkEngine = require('../services/cowork-engine');
@@ -2720,6 +2724,7 @@ router.post(
       let enterpriseQaBoardReview = null;
       let agenticOperatingCore = null;
       let semanticIntentAnalysis = null;
+      let intentTriageDecision = null;
       let ciraRuntimeBundle = null;
       let ciraRuntimeBlock = '';
       let enterpriseExecutionBlock = '';
@@ -2757,6 +2762,28 @@ router.post(
           userId: userId || null,
           chatId: canPersist ? chatId : null,
         });
+        // ─── Intent Triage ──────────────────────────────────────────
+        // One pre-flight pass that may short-circuit with a single
+        // clarifying question instead of guessing. Gated by env flag
+        // and per-request header so it's easy to disable for testing.
+        try {
+          const triageEnabled = String(process.env.INTENT_TRIAGE_ENABLED || 'true').toLowerCase() !== 'false';
+          const triageHeaderOff = String(req.headers['x-sira-no-triage'] || '') === '1';
+          if (triageEnabled && !triageHeaderOff) {
+            intentTriageDecision = await triageIntent({
+              analysis: semanticIntentAnalysis,
+              prompt,
+              recentTurns: [],
+              judge: __intentTriageJudge,
+            });
+            try {
+              console.log(`[intent-triage] action=${intentTriageDecision.action} source=${intentTriageDecision.source} score=${intentTriageDecision.score?.toFixed?.(2) || intentTriageDecision.score} reason=${intentTriageDecision.reason}`);
+            } catch (_) { /* noop */ }
+          }
+        } catch (triageErr) {
+          console.warn('[intent-triage] failed (continuing without):', triageErr && triageErr.message);
+          intentTriageDecision = null;
+        }
         ciraRuntimeBundle = await ciraEngine.runUserMessage({
           text: prompt,
           attachments: processedFiles.map(toCiraAttachment).filter(Boolean),
@@ -3215,6 +3242,75 @@ router.post(
       // assignment — promoting it to `let` here would shadow the outer
       // binding and re-introduce the responseChars:0 metric bug.
       fullResponseContent = '';
+
+      // ─── Intent Triage short-circuit ───────────────────────────────
+      // If pre-flight decided the request is ambiguous enough to need
+      // one clarifying question, emit it as a normal assistant turn
+      // and end the SSE stream. The user's next message naturally
+      // becomes the disambiguating reply, no extra wiring required.
+      if (intentTriageDecision && intentTriageDecision.action === 'ask' && intentTriageDecision.question) {
+        const triageQuestion = String(intentTriageDecision.question);
+        try { res.write(`data: ${JSON.stringify({ content: triageQuestion })}\n\n`); } catch { /* socket gone */ }
+        fullResponseContent = triageQuestion;
+        try {
+          if (canPersist && userId && chatId) {
+            const __chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
+            if (__chat) {
+              if (!regenerate) {
+                await prisma.message.create({
+                  data: {
+                    chatId,
+                    role: 'USER',
+                    content: prompt,
+                    files: processedFiles.length > 0 ? JSON.stringify(processedFiles) : null,
+                  },
+                });
+              }
+              await prisma.message.create({
+                data: {
+                  chatId,
+                  role: 'ASSISTANT',
+                  content: triageQuestion,
+                  tokens: 0,
+                  files: null,
+                },
+              });
+              await prisma.chat.update({
+                where: { id: chatId },
+                data: {
+                  updatedAt: new Date(),
+                  title: __chat.title === 'New Chat'
+                    ? prompt.slice(0, 50) + (prompt.length > 50 ? '...' : '')
+                    : __chat.title,
+                },
+              });
+            }
+          }
+        } catch (persistErr) {
+          console.warn('[intent-triage] persistence failed (non-fatal):', persistErr && persistErr.message);
+        }
+        try { siraMetrics.recordClarificationRequested(); } catch (_) { /* noop */ }
+        try {
+          siraMetrics.recordTurn({
+            stage: 'needs_clarification',
+            status: 'needs_clarification',
+            plan: req.user?.plan || 'unknown',
+            durationMs: Date.now() - (typeof generateStartMs === 'number' ? generateStartMs : Date.now()),
+          });
+        } catch (_) { /* noop */ }
+        try {
+          res.write(`data: ${JSON.stringify({ type: 'done', origin: 'intent_triage', reason: intentTriageDecision.reason })}\n\n`);
+        } catch { /* socket gone */ }
+        try { res.write('event: close\ndata: end\n\n'); } catch { /* socket gone */ }
+        try { res.write('data: [DONE]\n\n'); } catch { /* socket gone */ }
+        if (cacheHandle && typeof cacheHandle.complete === 'function') {
+          try { cacheHandle.complete(); } catch (_) {}
+        }
+        if (keepAlive) { clearInterval(keepAlive); keepAlive = null; }
+        if (!res.writableEnded) res.end();
+        return;
+      }
+
       // ─── Artifact branch ───────────────────────────────────────────
       // If the user asked "grafica / visualiza / anima / plot / draw",
       // bypass the plain-text LLM and produce an interactive HTML
