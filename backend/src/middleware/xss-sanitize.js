@@ -27,7 +27,7 @@ const EVENT_HANDLER_RE = /\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi;
 const JS_URI_RE = /(?:href|src|action|formaction)\s*=\s*(?:"javascript:[^"]*"|'javascript:[^']*'|javascript:[^\s>]+)/gi;
 const VBSCRIPT_URI_RE = /(?:href|src|action)\s*=\s*(?:"vbscript:[^"]*"|'vbscript:[^']*'|vbscript:[^\s>]+)/gi;
 const UNICODE_TAG_RE = /[\u{E0000}-\u{E007F}]/gu;
-const PROMPT_TAG_RE = /<\/?\s*(?:prompt|system|assistant|instructions?|sys|im_start|im_end)\s*>/gi;
+const PROMPT_TAG_RE = /(?:<\|im_(?:start|end)\|>|<\/?\s*(?:prompt|system|assistant|instructions?|sys|im_start|im_end)\s*>)/gi;
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
@@ -38,7 +38,10 @@ const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
  * - Arrays: sanitize each element
  * - Primitives (number, boolean, null): pass through
  */
-function sanitizeValue(val) {
+function sanitizeValue(val, opts = {}, seen = new WeakSet(), depth = 0) {
+  const maxDepth = Number.isFinite(opts.maxDepth) ? Math.max(0, opts.maxDepth) : 20;
+  if (depth > maxDepth) return val;
+
   if (typeof val === 'string') {
     let s = val;
     s = s.replace(SCRIPT_RE, '');
@@ -50,12 +53,16 @@ function sanitizeValue(val) {
     return s;
   }
   if (Array.isArray(val)) {
-    return val.map(sanitizeValue);
+    if (seen.has(val)) return '[circular]';
+    seen.add(val);
+    return val.map((item) => sanitizeValue(item, opts, seen, depth + 1));
   }
   if (val !== null && typeof val === 'object' && val.constructor === Object) {
+    if (seen.has(val)) return '[circular]';
+    seen.add(val);
     const cleaned = {};
     for (const [k, v] of Object.entries(val)) {
-      cleaned[k] = sanitizeValue(v);
+      cleaned[k] = sanitizeValue(v, opts, seen, depth + 1);
     }
     return cleaned;
   }

@@ -17,6 +17,7 @@ describe('api-keys-service · generateToken', () => {
     assert.ok(minted.token.startsWith('sk_'));
     assert.equal(minted.prefix.length, svc.PREFIX_LEN);
     assert.equal(minted.secret.length, svc.SECRET_LEN);
+    assert.equal(`${minted.prefix}${minted.secret}`.length, svc.BODY_LEN);
     // body = prefix + secret
     assert.equal(minted.token, `sk_${minted.prefix}${minted.secret}`);
   });
@@ -72,6 +73,17 @@ describe('api-keys-service · parseToken', () => {
   test('returns null when body is too short for prefix + 1', () => {
     assert.equal(svc.parseToken('sk_short'), null);
   });
+
+  test('returns null when sk_ body length is not exact', () => {
+    const minted = svc.generateToken();
+    assert.equal(svc.parseToken(`${minted.token}extra`), null);
+  });
+
+  test('hasTokenScheme identifies only sk_ strings', () => {
+    assert.equal(svc.hasTokenScheme('sk_abc'), true);
+    assert.equal(svc.hasTokenScheme('Bearer sk_abc'), false);
+    assert.equal(svc.hasTokenScheme(null), false);
+  });
 });
 
 describe('api-keys-service · hashToken', () => {
@@ -82,6 +94,16 @@ describe('api-keys-service · hashToken', () => {
   test('throws on empty input', () => {
     assert.throws(() => svc.hashToken(''));
     assert.throws(() => svc.hashToken(null));
+  });
+
+  test('compareTokenHash uses strict sha256 hex equality', () => {
+    const a = svc.hashToken('abc');
+    const b = svc.hashToken('abc');
+    const c = svc.hashToken('def');
+    assert.equal(svc.compareTokenHash(a, b), true);
+    assert.equal(svc.compareTokenHash(a, c), false);
+    assert.equal(svc.compareTokenHash(a, 'not-hex'), false);
+    assert.equal(svc.compareTokenHash(a.slice(1), a), false);
   });
 });
 

@@ -163,6 +163,8 @@ function createRateLimitStore(env = process.env, options = {}) {
 // re-try Redis lazily once the breaker reopens (every 30s).
 
 const FALLBACK_RETRY_MS = 30_000;
+const DEFAULT_FALLBACK_MAX_KEYS = 10_000;
+const MAX_CONSUME_KEY_LENGTH = 512;
 const FALLBACK_MEMORY = new Map();
 let _fallbackWarned = false;
 let _redisDeadUntil = 0;
@@ -203,6 +205,33 @@ function _consumeMemory(key, limit, windowMs, now) {
     remaining: Math.max(0, limit - log.length),
     resetAt: new Date(log[0] + windowMs),
   };
+}
+
+function _maxFallbackKeys(env = process.env, opts = {}) {
+  const raw = opts.maxFallbackKeys ?? env.RATE_LIMIT_MEMORY_MAX_KEYS;
+  const parsed = Number(raw);
+  if (Number.isFinite(parsed) && parsed > 0) return Math.floor(parsed);
+  return DEFAULT_FALLBACK_MAX_KEYS;
+}
+
+function _enforceFallbackMax(maxKeys) {
+  while (FALLBACK_MEMORY.size > maxKeys) {
+    const firstKey = FALLBACK_MEMORY.keys().next().value;
+    if (firstKey === undefined) return;
+    FALLBACK_MEMORY.delete(firstKey);
+  }
+}
+
+function _validateConsumeKey(key) {
+  if (typeof key !== 'string' || key.length === 0) {
+    throw new TypeError('consume: key must be a non-empty string');
+  }
+  if (key.length > MAX_CONSUME_KEY_LENGTH) {
+    throw new TypeError(`consume: key must be at most ${MAX_CONSUME_KEY_LENGTH} characters`);
+  }
+  if (/[\r\n\0]/.test(key)) {
+    throw new TypeError('consume: key contains unsafe control characters');
+  }
 }
 
 async function _consumeRedis(redis, key, limit, windowMs, now) {
@@ -258,9 +287,7 @@ async function _consumeRedis(redis, key, limit, windowMs, now) {
  * @returns {Promise<{ allowed: boolean, remaining: number, resetAt: Date }>}
  */
 async function consume(key, limit, windowMs = 60_000, opts = {}) {
-  if (typeof key !== 'string' || key.length === 0) {
-    throw new TypeError('consume: key must be a non-empty string');
-  }
+  _validateConsumeKey(key);
   if (!Number.isFinite(limit) || limit <= 0) {
     throw new TypeError('consume: limit must be a positive number');
   }
@@ -269,26 +296,35 @@ async function consume(key, limit, windowMs = 60_000, opts = {}) {
   }
   const env = opts.env || process.env;
   const now = typeof opts.now === 'function' ? opts.now() : Date.now();
+  const maxFallbackKeys = _maxFallbackKeys(env, opts);
 
   // Memory fallback explicitly forced or no Redis URL
   if (!shouldUseRedis(env)) {
-    return _consumeMemory(key, limit, windowMs, now);
+    const result = _consumeMemory(key, limit, windowMs, now);
+    _enforceFallbackMax(maxFallbackKeys);
+    return result;
   }
   if (now < _redisDeadUntil) {
-    return _consumeMemory(key, limit, windowMs, now);
+    const result = _consumeMemory(key, limit, windowMs, now);
+    _enforceFallbackMax(maxFallbackKeys);
+    return result;
   }
   const redis = opts.redis || createRedisClient(env.REDIS_URL);
   if (!redis) {
     _warn('redis client init failed');
     _redisDeadUntil = now + FALLBACK_RETRY_MS;
-    return _consumeMemory(key, limit, windowMs, now);
+    const result = _consumeMemory(key, limit, windowMs, now);
+    _enforceFallbackMax(maxFallbackKeys);
+    return result;
   }
   try {
     return await _consumeRedis(redis, key, limit, windowMs, now);
   } catch (err) {
     _warn('redis pipeline failed', err);
     _redisDeadUntil = now + FALLBACK_RETRY_MS;
-    return _consumeMemory(key, limit, windowMs, now);
+    const result = _consumeMemory(key, limit, windowMs, now);
+    _enforceFallbackMax(maxFallbackKeys);
+    return result;
   }
 }
 
@@ -304,10 +340,18 @@ function setLogger(logger) {
   _logger = logger;
 }
 
+function _fallbackSize() {
+  return FALLBACK_MEMORY.size;
+}
+
 module.exports = {
   createRateLimitStore,
   shouldUseRedis,
   consume,
   setLogger,
   _resetForTests,
+  _fallbackSize,
+  _validateConsumeKey,
+  DEFAULT_FALLBACK_MAX_KEYS,
+  MAX_CONSUME_KEY_LENGTH,
 };

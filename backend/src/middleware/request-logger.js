@@ -15,6 +15,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const { normalizeRequestId } = require('./request-id');
 
 function _safeUuid() {
   try {
@@ -87,7 +88,11 @@ function buildRequestLogger(opts = {}) {
   return function requestLogger(req, res, next) {
     const start = now();
 
-    if (!req.id) {
+    const incomingRequestId = normalizeRequestId(req.id)
+      || normalizeRequestId(req.headers && req.headers['x-request-id']);
+    if (incomingRequestId) {
+      req.id = incomingRequestId;
+    } else {
       try { req.id = _safeUuid(); } catch { req.id = ''; }
     }
 

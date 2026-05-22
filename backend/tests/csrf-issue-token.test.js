@@ -18,7 +18,10 @@ const {
 } = require('../src/middleware/csrf');
 
 function mockRes() {
-  const res = { cookies: {} };
+  const headers = {};
+  const res = { cookies: {}, headers };
+  res.setHeader = (k, v) => { headers[String(k).toLowerCase()] = v; return res; };
+  res.getHeader = (k) => headers[String(k).toLowerCase()];
   res.cookie = (name, value, opts) => {
     res.cookies[name] = { value, opts };
     return res;

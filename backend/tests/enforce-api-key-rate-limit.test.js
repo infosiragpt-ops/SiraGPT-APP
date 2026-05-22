@@ -180,14 +180,21 @@ describe('enforce-api-key-rate-limit · middleware', () => {
     const req = buildReq({
       apiKey: { id: 'ak_deny', prefix: 'sk_d', scopes: ['*'], rateLimitPerMinute: 2 },
     });
+    req.requestId = 'req_api_key_limit_1';
     const res = buildRes();
     await runMw(mw, req, res);
     assert.equal(res.statusCode, 429);
+    assert.equal(res.body.ok, false);
+    assert.equal(res.body.code, 'api_key_rate_limited');
     assert.equal(res.body.error, 'api key rate limit exceeded');
     assert.equal(res.body.keyId, 'ak_deny');
     assert.equal(res.body.limitPerMinute, 2);
+    assert.equal(res.body.requestId, 'req_api_key_limit_1');
     assert.ok(res.body.retryAfterMs >= 0);
+    assert.ok(res.body.retryAfterSec >= 1);
     assert.ok(res.getHeader('Retry-After'));
+    assert.equal(res.getHeader('Cache-Control'), 'no-store');
+    assert.equal(res.getHeader('X-Content-Type-Options'), 'nosniff');
   });
 
   test('fails open on store errors and still audits', async () => {

@@ -27,6 +27,10 @@
  */
 
 const crypto = require('crypto');
+const net = require('net');
+
+const MAX_IP_INPUT_LENGTH = 128;
+const MAX_UA_LENGTH = 512;
 
 function getPepper() {
   return (
@@ -36,8 +40,48 @@ function getPepper() {
   );
 }
 
+function firstHeaderValue(value) {
+  if (Array.isArray(value)) return value[0];
+  return value;
+}
+
+function normalizeIpInput(value) {
+  const first = firstHeaderValue(value);
+  if (first == null) return '';
+  const cleaned = String(first)
+    .split(',')[0]
+    .trim()
+    .replace(/^::ffff:/i, '')
+    .split('%')[0];
+  if (!cleaned || cleaned.length > MAX_IP_INPUT_LENGTH) return '';
+  if (/[\r\n\0]/.test(cleaned)) return '';
+  return cleaned;
+}
+
+function normalizeUserAgent(value) {
+  const first = firstHeaderValue(value);
+  if (first == null) return '';
+  return String(first)
+    .replace(/[\r\n\0]+/g, ' ')
+    .trim()
+    .slice(0, MAX_UA_LENGTH);
+}
+
 function isIPv6(ip) {
   return typeof ip === 'string' && ip.includes(':');
+}
+
+function expandIPv6(ip) {
+  const compact = String(ip || '').toLowerCase();
+  const [headRaw = '', tailRaw = ''] = compact.split('::');
+  const head = headRaw ? headRaw.split(':') : [];
+  const tail = tailRaw ? tailRaw.split(':') : [];
+  const missing = Math.max(0, 8 - head.length - tail.length);
+  return [...head, ...Array(missing).fill('0'), ...tail].map(part => (part || '0').padStart(4, '0'));
+}
+
+function trimHextet(part) {
+  return String(part || '0').replace(/^0+/, '') || '0';
 }
 
 /**
@@ -47,15 +91,16 @@ function isIPv6(ip) {
  * Falls back to the raw string when parsing fails.
  */
 function reduceIp(ip) {
-  if (!ip || typeof ip !== 'string') return '';
-  const cleaned = ip.replace(/^::ffff:/, '').split(',')[0].trim();
+  const cleaned = normalizeIpInput(ip);
   if (!cleaned) return '';
-  if (isIPv6(cleaned)) {
-    const parts = cleaned.split(':');
-    return parts.slice(0, 4).join(':') + '::/64';
+  const ipKind = net.isIP(cleaned);
+  if (ipKind === 6 || isIPv6(cleaned)) {
+    if (ipKind !== 6) return cleaned;
+    const parts = expandIPv6(cleaned);
+    return parts.slice(0, 4).map(trimHextet).join(':') + '::/64';
   }
   const parts = cleaned.split('.');
-  if (parts.length === 4 && parts.every((p) => /^\d+$/.test(p))) {
+  if (ipKind === 4 && parts.length === 4) {
     return `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
   }
   return cleaned;
@@ -64,12 +109,14 @@ function reduceIp(ip) {
 function extractIp(req) {
   if (!req) return '';
   const xff = req.headers && req.headers['x-forwarded-for'];
-  if (xff && typeof xff === 'string') return xff.split(',')[0].trim();
-  return req.ip || (req.socket && req.socket.remoteAddress) || '';
+  return normalizeIpInput(xff)
+    || normalizeIpInput(req.ip)
+    || normalizeIpInput(req.socket && req.socket.remoteAddress)
+    || '';
 }
 
 function extractUa(req) {
-  return (req && req.headers && (req.headers['user-agent'] || '')) || '';
+  return normalizeUserAgent(req && req.headers && req.headers['user-agent']);
 }
 
 /**
@@ -85,8 +132,8 @@ function computeFingerprint(input) {
     ip = extractIp(input);
     ua = extractUa(input);
   } else {
-    ip = (input && input.ip) || '';
-    ua = (input && input.ua) || '';
+    ip = normalizeIpInput(input && input.ip);
+    ua = normalizeUserAgent(input && input.ua);
   }
   const ipClass = reduceIp(ip);
   const uaNorm = String(ua).trim().toLowerCase();
@@ -113,4 +160,8 @@ module.exports = {
   reduceIp,
   extractIp,
   extractUa,
+  normalizeIpInput,
+  normalizeUserAgent,
+  MAX_IP_INPUT_LENGTH,
+  MAX_UA_LENGTH,
 };

@@ -41,7 +41,6 @@ const DEV_FALLBACK = [
 const PROD_FALLBACK = [
   'https://siragpt.io',
   'https://www.siragpt.io',
-  'http://localhost:3000',
 ];
 
 /**
@@ -51,8 +50,12 @@ const PROD_FALLBACK = [
  * fails loudly instead of silently producing an unreachable allowlist.
  */
 function validateAllowedOrigins(list) {
+  const normalized = [];
   for (const entry of list) {
-    if (entry === '*') continue;
+    if (entry === '*') {
+      normalized.push(entry);
+      continue;
+    }
     let parsed;
     try {
       parsed = new URL(entry);
@@ -72,13 +75,24 @@ function validateAllowedOrigins(list) {
         `[cors-policy] Invalid CORS_ORIGINS entry "${entry}": only http:// or https:// allowed, got "${parsed.protocol}".`
       );
     }
+    if (parsed.username || parsed.password) {
+      throw new Error(
+        `[cors-policy] Invalid CORS_ORIGINS entry "${entry}": credentials are not allowed in origins.`
+      );
+    }
     if (parsed.pathname && parsed.pathname !== '/' && parsed.pathname !== '') {
       throw new Error(
         `[cors-policy] Invalid CORS_ORIGINS entry "${entry}": must be bare origin without path (got pathname "${parsed.pathname}").`
       );
     }
+    if (parsed.search || parsed.hash) {
+      throw new Error(
+        `[cors-policy] Invalid CORS_ORIGINS entry "${entry}": must be bare origin without query or hash.`
+      );
+    }
+    normalized.push(parsed.origin);
   }
-  return list;
+  return [...new Set(normalized)];
 }
 
 function resolveAllowedOrigins(env = process.env) {
@@ -112,4 +126,4 @@ function makeOriginCallback(allowed) {
   };
 }
 
-module.exports = { resolveAllowedOrigins, makeOriginCallback, validateAllowedOrigins, DEV_FALLBACK };
+module.exports = { resolveAllowedOrigins, makeOriginCallback, validateAllowedOrigins, DEV_FALLBACK, PROD_FALLBACK };

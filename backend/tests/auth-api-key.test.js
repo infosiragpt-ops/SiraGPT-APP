@@ -48,7 +48,13 @@ require.cache[dbPath] = { id: dbPath, filename: dbPath, loaded: true, exports: p
 process.env.JWT_SECRET = 'unused-in-api-key-tests-but-set-to-avoid-undefined-throw';
 
 delete require.cache[authPath];
-const { authenticateToken } = require(authPath);
+const {
+  authenticateToken,
+  __extractAccessToken,
+  __parseAuthorizationHeader,
+  __validateAccessTokenValue,
+  MAX_ACCESS_TOKEN_LENGTH,
+} = require(authPath);
 
 function buildReqRes(token, { useCookie = false } = {}) {
   const req = {
@@ -125,6 +131,17 @@ describe('authenticateToken · API key path', () => {
     await authenticateToken(req, res, () => { called = true; });
     assert.equal(called, false);
     assert.equal(res.statusCode, 401);
+    assert.equal(res.body.code, 'invalid_api_key');
+    assert.match(res.body.error, /Invalid API key/);
+  });
+
+  test('rejects malformed sk_ token as API key without JWT fallback', async () => {
+    const { req, res } = buildReqRes('sk_short');
+    let called = false;
+    await authenticateToken(req, res, () => { called = true; });
+    assert.equal(called, false);
+    assert.equal(res.statusCode, 401);
+    assert.equal(res.body.code, 'invalid_api_key');
     assert.match(res.body.error, /Invalid API key/);
   });
 
@@ -146,6 +163,7 @@ describe('authenticateToken · API key path', () => {
     await authenticateToken(req, res, () => { called = true; });
     assert.equal(called, false);
     assert.equal(res.statusCode, 401);
+    assert.equal(res.body.code, 'api_key_expired');
     assert.match(res.body.error, /expired/);
   });
 
@@ -172,6 +190,7 @@ describe('authenticateToken · API key path', () => {
     await authenticateToken(req, res, () => { called = true; });
     assert.equal(called, false);
     assert.equal(res.statusCode, 401);
+    assert.equal(res.body.code, 'api_key_revoked');
     assert.match(res.body.error, /revoked/);
   });
 
@@ -207,5 +226,67 @@ describe('authenticateToken · API key path', () => {
     await authenticateToken(req, res, () => { called = true; });
     assert.equal(called, false);
     assert.ok(res.statusCode === 401 || res.statusCode === 403);
+  });
+
+  test('rejects malformed Authorization header before cookie fallback', async () => {
+    const { req, res } = buildReqRes('cookie-token', { useCookie: true });
+    req.headers.authorization = 'Bearer ';
+
+    await authenticateToken(req, res, () => assert.fail('next should not be called'));
+
+    assert.equal(res.statusCode, 401);
+    assert.equal(res.body.ok, false);
+    assert.equal(res.body.code, 'unsupported_authorization_scheme');
+  });
+});
+
+describe('auth token extraction helpers', () => {
+  test('__parseAuthorizationHeader accepts Bearer case-insensitively', () => {
+    assert.deepEqual(__parseAuthorizationHeader('Bearer abc.def'), {
+      present: true,
+      token: 'abc.def',
+    });
+    assert.deepEqual(__parseAuthorizationHeader('bearer sk_test'), {
+      present: true,
+      token: 'sk_test',
+    });
+  });
+
+  test('__parseAuthorizationHeader rejects non-Bearer, controls and oversize headers', () => {
+    assert.equal(__parseAuthorizationHeader('Basic abc').error, 'unsupported_authorization_scheme');
+    assert.equal(__parseAuthorizationHeader('Bearer abc\r\nx: y').error, 'invalid_authorization_header');
+    assert.equal(
+      __parseAuthorizationHeader(`Bearer ${'x'.repeat(MAX_ACCESS_TOKEN_LENGTH + 1)}`).error,
+      'token_too_large',
+    );
+    assert.equal(__parseAuthorizationHeader('x'.repeat(MAX_ACCESS_TOKEN_LENGTH + 40)).error, 'authorization_header_too_large');
+  });
+
+  test('__validateAccessTokenValue rejects whitespace/control characters', () => {
+    assert.equal(__validateAccessTokenValue('abc def').error, 'invalid_token_format');
+    assert.equal(__validateAccessTokenValue('abc\n').error, 'invalid_token_format');
+    assert.equal(__validateAccessTokenValue('x'.repeat(MAX_ACCESS_TOKEN_LENGTH + 1)).error, 'token_too_large');
+  });
+
+  test('__extractAccessToken prefers Authorization and treats malformed headers as terminal', () => {
+    assert.deepEqual(__extractAccessToken({
+      headers: { authorization: 'Bearer header-token' },
+      cookies: { token: 'cookie-token' },
+    }), {
+      present: true,
+      token: 'header-token',
+    });
+    assert.equal(__extractAccessToken({
+      headers: { authorization: 'Basic abc' },
+      cookies: { token: 'cookie-token' },
+    }).error, 'unsupported_authorization_scheme');
+    assert.deepEqual(__extractAccessToken({
+      headers: {},
+      cookies: { token: 'cookie-token' },
+    }), {
+      present: true,
+      source: 'cookie',
+      token: 'cookie-token',
+    });
   });
 });

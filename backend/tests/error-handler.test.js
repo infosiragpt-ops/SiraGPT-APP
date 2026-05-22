@@ -5,6 +5,7 @@ const {
   createHttpError,
   globalErrorHandler,
   notFoundHandler,
+  sanitizeErrorDetails,
   standardizeErrorResponses,
 } = require('../src/middleware/error-handler');
 
@@ -89,6 +90,30 @@ describe('common API error handling', () => {
     assert.equal(events[0].message, 'http_error_response');
   });
 
+  test('standardized error responses redact sensitive fields in details', async () => {
+    const { req, res } = createReqRes({ requestId: 'req-redact-body' });
+    installStandardizer(req, res);
+
+    res.status(400).json({
+      error: 'Bad request',
+      details: {
+        provider: 'openai',
+        api_key: 'sk-should-not-leak',
+        nested: {
+          clientSecret: 'client-secret-should-not-leak',
+          safe: 'kept',
+        },
+      },
+      token: 'top-level-token',
+    });
+
+    assert.equal(res.body.details.provider, 'openai');
+    assert.equal(res.body.details.api_key, '[REDACTED]');
+    assert.equal(res.body.details.nested.clientSecret, '[REDACTED]');
+    assert.equal(res.body.details.nested.safe, 'kept');
+    assert.equal(res.body.token, '[REDACTED]');
+  });
+
   test('returns structured 404 responses', async () => {
     const { req, res } = createReqRes({ url: '/missing-route' });
     installStandardizer(req, res);
@@ -105,6 +130,7 @@ describe('common API error handling', () => {
     const { req, res, logger, captured } = createReqRes();
     const handler = globalErrorHandler({
       logger,
+      stdout: () => {},
       captureException(error, context) {
         captured.push({ error, context });
       },
@@ -124,12 +150,56 @@ describe('common API error handling', () => {
     assert.equal(captured.length, 1);
   });
 
+  test('redacts sensitive HTTP error details before sending JSON', async () => {
+    const { req, res, logger } = createReqRes({ requestId: 'req-redact-details' });
+    const handler = globalErrorHandler({ logger, stdout: () => {} });
+
+    handler(createHttpError(502, 'Provider failed', {
+      code: 'provider_failed',
+      details: {
+        provider: 'openai',
+        api_key: 'sk-live-secret',
+        nested: { password: 'hunter2', region: 'us-east-1' },
+      },
+      expose: true,
+    }), req, res, () => {});
+
+    assert.equal(res.statusCode, 502);
+    assert.equal(res.body.details.provider, 'openai');
+    assert.equal(res.body.details.api_key, '[REDACTED]');
+    assert.equal(res.body.details.nested.password, '[REDACTED]');
+    assert.equal(res.body.details.nested.region, 'us-east-1');
+  });
+
+  test('sanitizeErrorDetails handles primitives, arrays, depth and circular objects', () => {
+    assert.equal(sanitizeErrorDetails(undefined), undefined);
+    assert.equal(sanitizeErrorDetails(null), null);
+    assert.equal(sanitizeErrorDetails('x'.repeat(1200)).length, 1000);
+    assert.equal(sanitizeErrorDetails(42), 42);
+
+    const circular = { token: 'secret-token', safe: 'ok' };
+    circular.self = circular;
+    const out = sanitizeErrorDetails({
+      list: [
+        { accessToken: 'access-secret', keep: 1 },
+        { safe: true },
+      ],
+      circular,
+    });
+
+    assert.equal(out.list[0].accessToken, '[REDACTED]');
+    assert.equal(out.list[0].keep, 1);
+    assert.equal(out.circular.token, '[REDACTED]');
+    assert.equal(out.circular.safe, 'ok');
+    assert.equal(out.circular.self, '[circular]');
+  });
+
   test('masks unexpected 500 errors in production', async () => {
     const previousNodeEnv = process.env.NODE_ENV;
     process.env.NODE_ENV = 'production';
     try {
       const { req, res, logger } = createReqRes();
-      const handler = globalErrorHandler({ logger });
+      const handler = globalErrorHandler({ logger, stdout: () => {} });
       handler(new Error('database password leaked in stack'), req, res, () => {});
 
       assert.equal(res.statusCode, 500);

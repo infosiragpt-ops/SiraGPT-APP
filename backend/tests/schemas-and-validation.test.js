@@ -45,8 +45,10 @@ function fakeRes() {
   const res = {
     statusCode: 200,
     body: null,
+    headers: {},
     headersSent: false,
     status(c) { this.statusCode = c; return this; },
+    setHeader(k, v) { this.headers[k.toLowerCase()] = v; return this; },
     json(b) { this.body = b; this.headersSent = true; return this; },
   };
   return res;
@@ -173,7 +175,11 @@ test('validateBody returns 400 with structured errors on invalid input', () => {
   const res = fakeRes();
   mw(req, res, () => assert.fail('next should NOT be called'));
   assert.equal(res.statusCode, 400);
+  assert.equal(res.headers['cache-control'], 'no-store');
+  assert.equal(res.headers['x-content-type-options'], 'nosniff');
+  assert.equal(res.body.ok, false);
   assert.equal(res.body.error, 'Validation failed');
+  assert.equal(res.body.code, 'validation_failed');
   assert.ok(Array.isArray(res.body.validation));
   assert.ok(res.body.validation.length >= 1);
   // Each entry has field + code
@@ -197,11 +203,26 @@ test('validateQuery coerces and runs', () => {
 test('formatExpressValidatorErrors mirrors envelope', () => {
   const out = formatExpressValidatorErrors(
     [{ path: 'email', msg: 'auth.email.invalid', value: 'x' }],
-    { codePrefix: 'auth' },
+    { codePrefix: 'auth', requestId: 'req_123' },
   );
+  assert.equal(out.ok, false);
   assert.equal(out.error, 'Validation failed');
+  assert.equal(out.code, 'validation_failed');
+  assert.equal(out.requestId, 'req_123');
   assert.equal(out.validation[0].field, 'email');
   assert.equal(out.validation[0].code, 'auth.email.invalid');
+  assert.equal(out.validation[0].received, undefined);
+});
+
+test('formatExpressValidatorErrors redacts received values when explicitly enabled', () => {
+  const out = formatExpressValidatorErrors(
+    [{ path: 'password', msg: 'invalid password', value: { password: 'secret123', nested: { token: 'tok' } } }],
+    { codePrefix: 'auth', includeReceived: true },
+  );
+  assert.deepEqual(out.validation[0].received, {
+    password: '[REDACTED]',
+    nested: { token: '[REDACTED]' },
+  });
 });
 
 test('buildValidationPayload synthesizes code when message is not dotted', () => {

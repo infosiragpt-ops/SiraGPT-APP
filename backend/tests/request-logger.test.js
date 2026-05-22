@@ -75,6 +75,47 @@ describe('request-logger middleware', () => {
     assert.equal(captured[0].reqId, 'preset-id-123');
   });
 
+  test('honors a safe upstream x-request-id when req.id is absent', () => {
+    const captured = [];
+    const mw = buildRequestLogger({ logger: (p) => captured.push(p) });
+    const req = mockReq({ headers: { 'user-agent': 'jest/1.0', 'x-request-id': 'gateway-trace-123' } });
+    const res = mockRes();
+
+    mw(req, res, () => {});
+    res.emit('finish');
+
+    assert.equal(req.id, 'gateway-trace-123');
+    assert.equal(captured[0].reqId, 'gateway-trace-123');
+  });
+
+  test('ignores unsafe upstream x-request-id values and generates a fresh id', () => {
+    const captured = [];
+    const mw = buildRequestLogger({ logger: (p) => captured.push(p) });
+    const req = mockReq({ headers: { 'user-agent': 'jest/1.0', 'x-request-id': 'bad\r\nx-owned: 1' } });
+    const res = mockRes();
+
+    mw(req, res, () => {});
+    res.emit('finish');
+
+    assert.notEqual(captured[0].reqId, 'bad\r\nx-owned: 1');
+    assert.ok(!/[\r\n]/.test(captured[0].reqId));
+    assert.ok(captured[0].reqId.length >= 16);
+  });
+
+  test('falls back to a safe header when an existing req.id is unsafe', () => {
+    const captured = [];
+    const mw = buildRequestLogger({ logger: (p) => captured.push(p) });
+    const req = mockReq({ headers: { 'x-request-id': 'safe-header-id' } });
+    req.id = 'bad id with spaces';
+    const res = mockRes();
+
+    mw(req, res, () => {});
+    res.emit('finish');
+
+    assert.equal(req.id, 'safe-header-id');
+    assert.equal(captured[0].reqId, 'safe-header-id');
+  });
+
   test('generates a UUID-shaped req.id when none is set', () => {
     const captured = [];
     const mw = buildRequestLogger({ logger: (p) => captured.push(p) });

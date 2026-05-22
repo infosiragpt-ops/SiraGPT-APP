@@ -6,6 +6,7 @@ const { randomUUID } = require('crypto');
 // is disabled.
 const { context: otelContext, trace: otelTrace } = require('@opentelemetry/api');
 const { REDACTION_CENSOR, redactPayloadDeep } = require('../utils/log-redaction');
+const { normalizeRequestId } = require('./request-id');
 
 // Paths the logger MUST never emit in cleartext. fast-redact (pino's
 // underlying engine) supports literal paths and one-level `*` wildcards,
@@ -147,7 +148,7 @@ const httpLogger = pinoHttp({
   logger,
   // Honor an upstream-supplied request id (load balancer / gateway /
   // distributed trace header) if present; otherwise mint a fresh UUID.
-  genReqId: (req) => req.headers['x-request-id'] || randomUUID(),
+  genReqId: (req) => normalizeRequestId(req.headers['x-request-id']) || randomUUID(),
   // Quieter defaults: 5xx → error, 4xx → warn, otherwise → info.
   // Without this every 4xx logs at info, which buries real errors.
   customLogLevel: (req, res, err) => {

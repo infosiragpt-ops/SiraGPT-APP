@@ -11,6 +11,14 @@ const {
   withRetry,
   isRetryableError,
   RETRYABLE_CODES,
+  parseBoundedInt,
+  normalizeRetries,
+  normalizeDelay,
+  computeDelay,
+  formatErrorHint,
+  sleep,
+  MAX_RETRIES,
+  MAX_SAFE_RETRIES,
 } = require('../src/utils/db-retry-middleware');
 
 // Silence the wrapper's console.warn/error during these tests.
@@ -190,6 +198,31 @@ describe('withRetry', () => {
     }
   });
 
+  it('does not let onRetry observer failures abort a recoverable query', async () => {
+    let calls = 0;
+    muteConsole();
+    try {
+      const result = await withRetry(
+        async () => {
+          calls += 1;
+          if (calls === 1) {
+            const err = new Error('ECONNRESET');
+            throw err;
+          }
+          return 'ok';
+        },
+        {
+          baseDelayMs: 1,
+          onRetry: () => { throw new Error('observer failed'); },
+        },
+      );
+      assert.equal(result, 'ok');
+      assert.equal(calls, 2);
+    } finally {
+      restoreConsole();
+    }
+  });
+
   it('respects custom maxRetries option', async () => {
     let calls = 0;
     muteConsole();
@@ -234,6 +267,94 @@ describe('withRetry', () => {
       // second gap is at least roughly the first.
       assert.ok(gap1 >= 15, `expected gap1 ≥ 15ms, got ${gap1}`);
       assert.ok(gap2 >= gap1 - 5, `expected gap2 ≳ gap1 (${gap1}), got ${gap2}`);
+    } finally {
+      restoreConsole();
+    }
+  });
+
+  it('uses caller maxDelayMs when clamping exponential backoff', async () => {
+    const delays = [];
+    muteConsole();
+    try {
+      await assert.rejects(
+        withRetry(
+          async () => {
+            throw new Error('ECONNRESET');
+          },
+          {
+            maxRetries: 2,
+            baseDelayMs: 100,
+            maxDelayMs: 50,
+            sleep: async (ms) => { delays.push(ms); },
+          },
+        ),
+      );
+      assert.deepEqual(delays, [50, 50]);
+    } finally {
+      restoreConsole();
+    }
+  });
+
+  it('normalizes invalid retry options instead of skipping the operation', async () => {
+    let calls = 0;
+    muteConsole();
+    try {
+      await assert.rejects(
+        withRetry(
+          async () => {
+            calls += 1;
+            throw new Error('ECONNRESET');
+          },
+          {
+            maxRetries: Number.NaN,
+            baseDelayMs: Number.NaN,
+            maxDelayMs: Number.POSITIVE_INFINITY,
+            sleep: async () => {},
+          },
+        ),
+      );
+      assert.equal(calls, MAX_RETRIES + 1);
+    } finally {
+      restoreConsole();
+    }
+  });
+
+  it('throws TypeError when the wrapped operation is not a function', async () => {
+    await assert.rejects(withRetry(null), TypeError);
+  });
+
+  it('throws signal.reason when aborted before the first attempt', async () => {
+    const ac = new AbortController();
+    ac.abort(new Error('db-cancelled'));
+    await assert.rejects(
+      withRetry(async () => 'never', { signal: ac.signal }),
+      { message: 'db-cancelled' },
+    );
+  });
+
+  it('throws signal.reason when aborted during retry sleep', async () => {
+    const ac = new AbortController();
+    let calls = 0;
+    muteConsole();
+    try {
+      await assert.rejects(
+        withRetry(
+          async () => {
+            calls += 1;
+            throw new Error('ECONNRESET');
+          },
+          {
+            baseDelayMs: 10,
+            signal: ac.signal,
+            sleep: async (_ms, signal) => {
+              ac.abort(new Error('db-sleep-cancelled'));
+              return sleep(0, signal);
+            },
+          },
+        ),
+        { message: 'db-sleep-cancelled' },
+      );
+      assert.equal(calls, 1);
     } finally {
       restoreConsole();
     }
@@ -294,5 +415,27 @@ describe('RETRYABLE_CODES (the exported set)', () => {
     // No surprise additions — pin the size so adding a new retryable
     // code is a deliberate change that updates this test too.
     assert.equal(RETRYABLE_CODES.size, expected.length);
+  });
+});
+
+describe('db retry helper guards', () => {
+  it('parseBoundedInt and normalizers keep values finite and bounded', () => {
+    assert.equal(parseBoundedInt(Number.NaN, 7, 0, 10), 7);
+    assert.equal(parseBoundedInt(-1, 7, 0, 10), 7);
+    assert.equal(parseBoundedInt(99, 7, 0, 10), 10);
+    assert.equal(normalizeRetries(999), MAX_SAFE_RETRIES);
+    assert.equal(normalizeDelay(Number.POSITIVE_INFINITY, 123), 123);
+  });
+
+  it('computeDelay clamps exponential growth', () => {
+    assert.equal(computeDelay(100, 250, 0), 100);
+    assert.equal(computeDelay(100, 250, 2), 250);
+    assert.equal(computeDelay(Number.NaN, 50, Number.NaN), 50);
+  });
+
+  it('formatErrorHint strips control characters and caps output', () => {
+    const hint = formatErrorHint(new Error('ECONNRESET\nsecret'), 10);
+    assert.equal(hint, 'ECONNRESET');
+    assert.equal(formatErrorHint({ code: 'P1001\r\nx' }), 'P1001  x');
   });
 });

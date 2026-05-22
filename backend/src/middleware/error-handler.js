@@ -5,6 +5,7 @@ const multer = require('multer');
 const { validationResult } = require('express-validator');
 const { logger: defaultLogger } = require('./logger');
 const { getRequestId } = require('./request-id');
+const { redactPayloadDeep } = require('../utils/log-redaction');
 
 function statusMessage(statusCode) {
   return http.STATUS_CODES[statusCode] || 'Request failed';
@@ -53,9 +54,17 @@ function validationMessage(errors) {
   return `${field}: ${msg}`;
 }
 
+function sanitizeErrorDetails(details) {
+  if (details === undefined) return undefined;
+  if (details === null) return null;
+  if (typeof details === 'string') return details.slice(0, 1000);
+  if (typeof details !== 'object' || Buffer.isBuffer(details)) return details;
+  return redactPayloadDeep(details, { maxDepth: 6, maxArrayItems: 25 });
+}
+
 function normalizeErrorBody(body, { statusCode = 500, requestId = null } = {}) {
   const source = body && typeof body === 'object' && !Buffer.isBuffer(body)
-    ? { ...body }
+    ? redactPayloadDeep({ ...body }, { maxDepth: 6, maxArrayItems: 25 })
     : { error: body == null ? statusMessage(statusCode) : String(body) };
 
   const validationErrors = hasValidationErrors(source);
@@ -259,7 +268,7 @@ function errorToResponse(err, req, { exposeStack = false } = {}) {
     message: safeMessage,
     ...(err?.code || (classified && classified.code) ? { code: err?.code || classified.code } : {}),
     ...(Array.isArray(err?.errors) ? { errors: sanitizeValidationErrors(err.errors) } : {}),
-    ...(err?.details ? { details: err.details } : {}),
+    ...(err?.details ? { details: sanitizeErrorDetails(err.details) } : {}),
     ...(reqId ? { requestId: reqId, reqId } : {}),
     ...(exposeStack && err?.stack ? { stack: truncateStack(err.stack) } : {}),
   };
@@ -350,6 +359,7 @@ module.exports = {
   normalizeErrorBody,
   notFoundHandler,
   sanitizeValidationErrors,
+  sanitizeErrorDetails,
   standardizeErrorResponses,
   truncateStack,
   validateRequest,

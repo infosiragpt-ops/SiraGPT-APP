@@ -16,14 +16,61 @@
  *
  * Error envelope:
  *   {
+ *     "ok": false,
  *     "error": "Validation failed",
+ *     "code": "validation_failed",
  *     "validation": [
- *       { "field": "email", "code": "auth.email.invalid", "expected": "...", "received": "..." }
+ *       { "field": "email", "code": "auth.email.invalid", "expected": "...", "received": "invalid_type" }
  *     ]
  *   }
  */
 
 const { ZodError } = require('zod');
+const { getRequestId } = require('./request-id');
+const { redactPayloadDeep } = require('../utils/log-redaction');
+
+function setValidationResponseHeaders(res) {
+  if (!res || typeof res.setHeader !== 'function') return;
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+}
+
+function normalizeBuildOptions(codePrefix, opts) {
+  if (codePrefix && typeof codePrefix === 'object') {
+    return {
+      codePrefix: codePrefix.codePrefix || 'validation',
+      requestId: codePrefix.requestId || null,
+    };
+  }
+  return {
+    codePrefix: codePrefix || 'validation',
+    requestId: opts && opts.requestId ? opts.requestId : null,
+  };
+}
+
+function formatIssuePath(path) {
+  if (!Array.isArray(path) || path.length === 0) return '(root)';
+  return path.map(part => String(part)).join('.') || '(root)';
+}
+
+function validationDetailFromIssue(issue, codePrefix) {
+  const field = formatIssuePath(issue && issue.path);
+  // We treat the `message` as the i18n code when it looks like one
+  // (dot-separated lowercase). Otherwise we synthesize a code from the
+  // path + zod issue code so the FE still has a stable key.
+  const raw = typeof issue?.message === 'string' ? issue.message : '';
+  const looksLikeCode = /^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$/.test(raw);
+  const issueCode = issue?.code || 'invalid';
+  const safeField = field === '(root)' ? 'root' : field;
+  const code = looksLikeCode ? raw : `${codePrefix}.${safeField}.${issueCode}`;
+  return {
+    field,
+    code,
+    message: raw || `${field} is invalid`,
+    expected: issue?.expected ?? issue?.options ?? undefined,
+    received: issue?.received ?? undefined,
+  };
+}
 
 /**
  * Convert a ZodError into the structured envelope above.
@@ -32,31 +79,43 @@ const { ZodError } = require('zod');
  * @param {ZodError} err
  * @param {string} codePrefix — fallback i18n namespace, e.g. "validation"
  */
-function buildValidationPayload(err, codePrefix = 'validation') {
-  const issues = Array.isArray(err.issues) ? err.issues : [];
-  const validation = issues.map((issue) => {
-    const path = Array.isArray(issue.path) ? issue.path.join('.') : '';
-    const field = path || '(root)';
-    // We treat the `message` as the i18n code when it looks like one
-    // (dot-separated lowercase). Otherwise we synthesize a code from the
-    // path + zod issue code so the FE still has a stable key.
-    const raw = typeof issue.message === 'string' ? issue.message : '';
-    const looksLikeCode = /^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$/.test(raw);
-    const code = looksLikeCode
-      ? raw
-      : `${codePrefix}.${field || 'root'}.${issue.code || 'invalid'}`;
-    return {
-      field,
-      code,
-      message: raw || `${field} is invalid`,
-      expected: issue.expected ?? issue.options ?? undefined,
-      received: issue.received ?? undefined,
-    };
-  });
-  return {
+function buildValidationPayload(err, codePrefix = 'validation', opts = {}) {
+  const buildOpts = normalizeBuildOptions(codePrefix, opts);
+  const issues = Array.isArray(err && err.issues) ? err.issues : [];
+  const payload = {
+    ok: false,
     error: 'Validation failed',
-    validation,
+    code: 'validation_failed',
+    validation: issues.map(issue => validationDetailFromIssue(issue, buildOpts.codePrefix)),
   };
+  if (buildOpts.requestId) {
+    payload.requestId = buildOpts.requestId;
+  }
+  return payload;
+}
+
+function validationPayloadForRequest(err, req, codePrefix) {
+  return buildValidationPayload(err, codePrefix, { requestId: getRequestId(req) });
+}
+
+function sanitizeReceivedValue(value, opts = {}) {
+  if (!opts.includeReceived) return undefined;
+  return redactPayloadDeep(value, { maxDepth: 4, maxArrayItems: 10 });
+}
+
+function formatExpressValidatorError(e, codePrefix, opts) {
+  const field = e?.path || e?.param || '(root)';
+  const raw = typeof e?.msg === 'string' ? e.msg : '';
+  const looksLikeCode = /^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$/.test(raw);
+  const code = looksLikeCode ? raw : `${codePrefix}.${field}.invalid`;
+  const detail = {
+    field,
+    code,
+    message: raw || `${field} is invalid`,
+  };
+  const received = sanitizeReceivedValue(e?.value, opts);
+  if (received !== undefined) detail.received = received;
+  return detail;
 }
 
 function validate(target, schema, opts = {}) {
@@ -68,7 +127,8 @@ function validate(target, schema, opts = {}) {
     const input = req[target];
     const parsed = schema.safeParse(input);
     if (!parsed.success) {
-      const payload = buildValidationPayload(parsed.error, codePrefix);
+      setValidationResponseHeaders(res);
+      const payload = validationPayloadForRequest(parsed.error, req, codePrefix);
       return res.status(400).json(payload);
     }
     // Replace with the parsed (and possibly coerced) value so downstream
@@ -100,10 +160,18 @@ function validateParams(schema, opts) {
  * decides to surface a parse failure to the caller.
  */
 function sendValidationError(res, err, opts = {}) {
+  setValidationResponseHeaders(res);
+  const requestId = opts.requestId || getRequestId(opts.req);
   if (err instanceof ZodError) {
-    return res.status(400).json(buildValidationPayload(err, opts.codePrefix));
+    return res.status(400).json(buildValidationPayload(err, opts.codePrefix, { requestId }));
   }
-  return res.status(400).json({ error: 'Validation failed', validation: [] });
+  return res.status(400).json({
+    ok: false,
+    error: 'Validation failed',
+    code: 'validation_failed',
+    validation: [],
+    ...(requestId ? { requestId } : {}),
+  });
 }
 
 /**
@@ -113,22 +181,14 @@ function sendValidationError(res, err, opts = {}) {
  */
 function formatExpressValidatorErrors(errArray, opts = {}) {
   const codePrefix = opts.codePrefix || 'validation';
-  const validation = (errArray || []).map((e) => {
-    const field = e.path || e.param || '(root)';
-    const raw = typeof e.msg === 'string' ? e.msg : '';
-    const looksLikeCode = /^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$/.test(raw);
-    const code = looksLikeCode ? raw : `${codePrefix}.${field}.invalid`;
-    return {
-      field,
-      code,
-      message: raw || `${field} is invalid`,
-      received: e.value,
-    };
-  });
-  return {
+  const payload = {
+    ok: false,
     error: 'Validation failed',
-    validation,
+    code: 'validation_failed',
+    validation: (errArray || []).map(e => formatExpressValidatorError(e, codePrefix, opts)),
   };
+  if (opts.requestId) payload.requestId = opts.requestId;
+  return payload;
 }
 
 module.exports = {
@@ -138,5 +198,6 @@ module.exports = {
   validateParams,
   sendValidationError,
   buildValidationPayload,
+  setValidationResponseHeaders,
   formatExpressValidatorErrors,
 };

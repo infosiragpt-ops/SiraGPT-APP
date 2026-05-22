@@ -9,10 +9,13 @@ const { writeAuditLog } = require('../utils/audit-log');
 const { csrfTokenRoute, issueCsrfToken } = require('../middleware/csrf');
 const { defaultLockout } = require('../utils/login-lockout');
 const { computeFingerprint } = require('../utils/session-fingerprint');
+const { clearSessionCookie, setSessionCookie } = require('../utils/session-cookie');
 const {
   validateBody,
   formatExpressValidatorErrors,
+  setValidationResponseHeaders,
 } = require('../middleware/validate');
+const { getRequestId } = require('../middleware/request-id');
 const {
   LoginRequestSchema,
   RegisterRequestSchema,
@@ -560,7 +563,11 @@ router.post('/register', registerRateLimit, validateBody(RegisterRequestSchema, 
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({ ...formatExpressValidatorErrors(errors.array(), { codePrefix: 'auth' }), errors: errors.array() });
+      setValidationResponseHeaders(res);
+      return res.status(400).json(formatExpressValidatorErrors(errors.array(), {
+        codePrefix: 'auth',
+        requestId: getRequestId(req),
+      }));
     }
 
     const { name, email, password } = req.body;
@@ -629,12 +636,7 @@ router.post('/register', registerRateLimit, validateBody(RegisterRequestSchema, 
     // Remove password from response
     const { password: _, ...userWithoutPassword } = user;
 
-    res.cookie('token', token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 7 * 24 * 60 * 60 * 1000
-    });
+    setSessionCookie(res, token);
 
     // Mint a fresh CSRF token alongside the session cookie so SPAs
     // can skip the dedicated /api/csrf-token roundtrip (ratchet 45,
@@ -667,7 +669,11 @@ router.post('/login', loginRateLimit, validateBody(LoginRequestSchema, { codePre
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({ ...formatExpressValidatorErrors(errors.array(), { codePrefix: 'auth' }), errors: errors.array() });
+      setValidationResponseHeaders(res);
+      return res.status(400).json(formatExpressValidatorErrors(errors.array(), {
+        codePrefix: 'auth',
+        requestId: getRequestId(req),
+      }));
     }
 
     const { email, password } = req.body;
@@ -704,6 +710,8 @@ router.post('/login', loginRateLimit, validateBody(LoginRequestSchema, { codePre
     const lockState = defaultLockout.isLocked(email);
     if (lockState.locked) {
       const retryAfterSec = Math.max(1, Math.ceil(lockState.retryAfterMs / 1000));
+      const requestId = getRequestId(req);
+      setValidationResponseHeaders(res);
       res.set('Retry-After', String(retryAfterSec));
       void writeAuditLog(prisma, {
         req,
@@ -713,8 +721,12 @@ router.post('/login', loginRateLimit, validateBody(LoginRequestSchema, { codePre
         metadata: { reason: 'too_many_failures', attempts: lockState.attempts },
       });
       return res.status(423).json({
+        ok: false,
+        code: 'account_locked',
         error: 'Account temporarily locked. Try again later.',
         retryAfterMs: lockState.retryAfterMs,
+        retryAfterSec,
+        ...(requestId ? { requestId } : {}),
       });
     }
 
@@ -925,12 +937,7 @@ router.post('/login', loginRateLimit, validateBody(LoginRequestSchema, { codePre
     // Remove password from response
     const { password: _, ...userWithoutPassword } = user;
 
-    res.cookie('token', token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 7 * 24 * 60 * 60 * 1000
-    });
+    setSessionCookie(res, token);
 
     const serializedUser = serializeUser(userWithoutPassword);
     void writeAuditLog(prisma, {
@@ -1007,7 +1014,7 @@ router.post('/logout', authenticateToken, async (req, res) => {
       where: { token: req.token }
     });
 
-    res.clearCookie('token');
+    clearSessionCookie(res);
     res.json({ message: 'Logged out successfully' });
   } catch (error) {
     console.error('Logout error:', error);
@@ -1054,12 +1061,7 @@ router.post('/refresh', authenticateToken, async (req, res) => {
       }
     }
 
-    res.cookie('token', newToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 7 * 24 * 60 * 60 * 1000
-    });
+    setSessionCookie(res, newToken);
 
     void writeAuditLog(prisma, {
       req,
@@ -2111,12 +2113,7 @@ router.post(
         actorName: user.email,
       });
 
-      res.cookie('token', token, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        maxAge: 7 * 24 * 60 * 60 * 1000,
-      });
+      setSessionCookie(res, token);
       const csrfToken = issueCsrfToken(res);
 
       return res.json({
@@ -2311,12 +2308,7 @@ router.post(
         metadata: usedRecovery ? { method: 'recovery_code' } : undefined,
       });
 
-      res.cookie('token', token, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        maxAge: 7 * 24 * 60 * 60 * 1000,
-      });
+      setSessionCookie(res, token);
       const csrfToken = issueCsrfToken(res);
 
       return res.json({

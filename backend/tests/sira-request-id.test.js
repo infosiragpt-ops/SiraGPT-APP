@@ -65,6 +65,14 @@ describe("request-id middleware", () => {
     assert.equal(req.requestId, "from-upstream-lb");
   });
 
+  test("rejects unsafe incoming x-request-id header values", () => {
+    const req = fakeReq({ headers: { "x-request-id": "bad\r\nx-owned: 1" } });
+    const res = fakeRes();
+    assert.doesNotThrow(() => requestIdMiddleware(req, res, () => {}));
+    assert.equal(res.getHeader(HEADER), undefined);
+    assert.equal(req.requestId, undefined);
+  });
+
   test("emits no header when neither req.id nor header is present", () => {
     const req = fakeReq();
     const res = fakeRes();

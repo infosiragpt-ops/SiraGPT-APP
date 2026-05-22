@@ -23,6 +23,7 @@
  */
 
 const rateLimitStore = require('./rate-limit-store');
+const { getRequestId } = require('./request-id');
 
 const WINDOW_MS = 60_000;
 
@@ -83,6 +84,11 @@ function logOnce(msg, err) {
   const detail = err && err.message ? ` (${err.message})` : '';
   // eslint-disable-next-line no-console
   console.warn(`[api-key-rate-limit] ${msg}${detail}`);
+}
+
+function setNoStoreHeaders(res) {
+  try { res.setHeader('Cache-Control', 'no-store'); } catch (_e) { /* swallow */ }
+  try { res.setHeader('X-Content-Type-Options', 'nosniff'); } catch (_e) { /* swallow */ }
 }
 
 // ─── Sampled audit-log of API-key usage (Task 2) ────────────────────
@@ -188,14 +194,20 @@ function enforceApiKeyRateLimit(opts = {}) {
     if (result && result.allowed === false) {
       const retryAfterMs = Math.max(0, resetAt - Date.now());
       const retryAfterSec = Math.max(1, Math.ceil(retryAfterMs / 1000));
+      setNoStoreHeaders(res);
       try { res.setHeader('Retry-After', String(retryAfterSec)); } catch (_e) { /* swallow */ }
+      const requestId = getRequestId(req);
       return res.status(429).json({
+        ok: false,
+        code: 'api_key_rate_limited',
         error: 'api key rate limit exceeded',
         keyId: req.apiKey.id,
         prefix: req.apiKey.prefix || null,
         limitPerMinute: limit,
         source,
         retryAfterMs,
+        retryAfterSec,
+        ...(requestId ? { requestId } : {}),
       });
     }
 

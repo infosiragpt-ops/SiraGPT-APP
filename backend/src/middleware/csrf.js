@@ -34,6 +34,7 @@
  */
 
 const crypto = require('crypto');
+const { getRequestId } = require('./request-id');
 
 const TOKEN_BYTES = 32;
 const TOKEN_COOKIE = 'csrf_token';
@@ -67,12 +68,45 @@ function timingSafeEqual(a, b) {
   return crypto.timingSafeEqual(ab, bb);
 }
 
+function readHeader(req, name) {
+  if (!req || !req.headers) return undefined;
+  const direct = req.headers[name];
+  if (direct !== undefined) return Array.isArray(direct) ? direct[0] : direct;
+  const lower = String(name).toLowerCase();
+  for (const [key, value] of Object.entries(req.headers)) {
+    if (String(key).toLowerCase() === lower) {
+      return Array.isArray(value) ? value[0] : value;
+    }
+  }
+  return undefined;
+}
+
+function setCsrfSecurityHeaders(res) {
+  if (!res || typeof res.setHeader !== 'function') return;
+  if (typeof res.getHeader !== 'function' || !res.getHeader('Cache-Control')) {
+    res.setHeader('Cache-Control', 'no-store');
+  }
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+}
+
+function rejectCsrf(req, res, reason) {
+  setCsrfSecurityHeaders(res);
+  return res.status(403).json({
+    ok: false,
+    error: 'csrf_invalid',
+    message: 'CSRF token invalid or missing',
+    code: 'csrf_invalid',
+    reason,
+    ...(getRequestId(req) ? { requestId: getRequestId(req) } : {}),
+  });
+}
+
 /**
  * Has bearer-auth — if so, CSRF does not apply because the browser
  * does not auto-send Authorization headers cross-origin.
  */
 function hasBearerAuth(req) {
-  const h = req.headers && req.headers.authorization;
+  const h = readHeader(req, 'authorization');
   return typeof h === 'string' && /^bearer\s+\S+/i.test(h);
 }
 
@@ -116,6 +150,7 @@ function issueCsrfToken(res) {
  */
 function csrfTokenRoute(req, res) {
   const token = issueCsrfToken(res);
+  setCsrfSecurityHeaders(res);
   res.json({ csrfToken: token });
 }
 
@@ -141,20 +176,19 @@ function requireCsrf(req, res, next) {
     return next();
   }
 
-  const headerToken =
-    req.headers && (req.headers[HEADER_NAME] || req.headers['x-xsrf-token']);
+  const headerToken = readHeader(req, HEADER_NAME) || readHeader(req, 'x-xsrf-token');
   const bodyToken = req.body && (req.body._csrf || req.body.csrfToken);
   const submitted = headerToken || bodyToken;
 
   const secret = req.cookies && req.cookies[SECRET_COOKIE];
 
   if (!submitted || !secret) {
-    return res.status(403).json({ error: 'csrf_invalid', reason: 'missing_token' });
+    return rejectCsrf(req, res, 'missing_token');
   }
 
   const expected = hashToken(submitted);
   if (!timingSafeEqual(expected, secret)) {
-    return res.status(403).json({ error: 'csrf_invalid', reason: 'mismatch' });
+    return rejectCsrf(req, res, 'mismatch');
   }
 
   return next();
@@ -167,6 +201,9 @@ module.exports = {
   hashToken,
   generateToken,
   hasBearerAuth,
+  readHeader,
+  rejectCsrf,
+  setCsrfSecurityHeaders,
   TOKEN_COOKIE,
   SECRET_COOKIE,
   HEADER_NAME,
