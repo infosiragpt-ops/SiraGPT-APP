@@ -49,6 +49,7 @@ import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { CredentialWarning } from "@/components/credential-warning"
 import { Input } from "@/components/ui/input"
 import { useChat } from "@/lib/chat-context-integrated"
 import { useAuth } from "@/lib/auth-context-integrated"
@@ -7865,6 +7866,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       }}
                       onClose={() => setSlashMenuOpen(false)}
                     />
+                    <CredentialWarning text={input} />
                     <div
                       className={cn(
                         "composer-surface group/composer relative rounded-3xl",
@@ -8331,6 +8333,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
                       {/* Same composer as the initial state — chips
                           render INSIDE the same rounded card. */}
+                      <CredentialWarning text={input} />
                       <div className="relative">
                         {pasteCapture.Overlay}
                         <div
