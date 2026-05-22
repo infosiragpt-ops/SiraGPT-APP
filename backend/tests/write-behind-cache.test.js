@@ -26,11 +26,20 @@ test('stableStringify is order-insensitive', () => {
   assert.equal(stableStringify({ a: 1, b: 2 }), stableStringify({ b: 2, a: 1 }));
   assert.equal(stableStringify(null), 'null');
   assert.equal(stableStringify([1, 2]), '[1,2]');
+  assert.equal(stableStringify(new Date('2026-05-22T00:00:00Z')), '"2026-05-22T00:00:00.000Z"');
+  assert.equal(stableStringify({ id: 1n }), '{"id":"1n"}');
+  const circular = { id: 'x' };
+  circular.self = circular;
+  assert.equal(stableStringify(circular), '{"id":"x","self":"[circular]"}');
 });
 
 test('keyFor produces deterministic keys', () => {
   assert.equal(keyFor('user', { id: 'a' }), keyFor('user', { id: 'a' }));
   assert.notEqual(keyFor('user', { id: 'a' }), keyFor('user', { id: 'b' }));
+  assert.notEqual(
+    keyFor('user', { updatedAt: new Date('2026-01-01T00:00:00Z') }),
+    keyFor('user', { updatedAt: new Date('2026-01-02T00:00:00Z') }),
+  );
 });
 
 test('mergeData overwrites scalars and accumulates increments', () => {

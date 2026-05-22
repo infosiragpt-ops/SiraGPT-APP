@@ -26,14 +26,58 @@
  * instance deploy.
  */
 
-const DAILY_TOKENS = parseInt(process.env.BUDGET_DAILY_TOKENS_DEFAULT || '2000000', 10);
-const HOURLY_TOKENS = parseInt(process.env.BUDGET_HOURLY_TOKENS_DEFAULT || '500000', 10);
-const RPM = parseInt(process.env.BUDGET_RPM_DEFAULT || '60', 10);
+const { getRequestId } = require('../../middleware/request-id');
+
+const MAX_TOKEN_CAP = 1_000_000_000_000;
+const MAX_RPM_CAP = 100_000;
+const MAX_LEDGER_USERS = parsePositiveInt(process.env.BUDGET_MAX_LEDGER_USERS, 10_000, 1, 1_000_000);
+const MAX_RPM_LOG_ENTRIES = parsePositiveInt(process.env.BUDGET_MAX_RPM_LOG_ENTRIES, 10_000, 1, 1_000_000);
+const MAX_USER_ID_LENGTH = 128;
+
+const DAILY_TOKENS = parsePositiveInt(process.env.BUDGET_DAILY_TOKENS_DEFAULT, 2_000_000, 1, MAX_TOKEN_CAP);
+const HOURLY_TOKENS = parsePositiveInt(process.env.BUDGET_HOURLY_TOKENS_DEFAULT, 500_000, 1, MAX_TOKEN_CAP);
+const RPM = parsePositiveInt(process.env.BUDGET_RPM_DEFAULT, 60, 1, MAX_RPM_CAP);
 
 // userId → { windows: {...}, requestLog: number[] (timestamps ms) }
 const ledger = new Map();
 
 function now() { return Date.now(); }
+
+function parsePositiveInt(value, fallback, min = 1, max = Number.MAX_SAFE_INTEGER) {
+  const n = Number.parseInt(String(value ?? ''), 10);
+  if (!Number.isFinite(n) || n < min) return fallback;
+  return Math.min(Math.floor(n), max);
+}
+
+function normalizeCap(value, fallback, max) {
+  if (value === undefined || value === null || value === '') return fallback;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return fallback;
+  return Math.min(Math.floor(n), max);
+}
+
+function normalizeUserId(userId) {
+  if (Array.isArray(userId)) return normalizeUserId(userId[0]);
+  if (userId === undefined || userId === null) return null;
+  const id = String(userId).trim();
+  if (!id || id.length > MAX_USER_ID_LENGTH) return null;
+  if (/[\u0000-\u001f\u007f]/.test(id)) return null;
+  return id;
+}
+
+function normalizeTokens(tokens) {
+  const n = Number(tokens);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.min(Math.floor(n), MAX_TOKEN_CAP);
+}
+
+function normalizeCaps(caps = {}) {
+  return {
+    daily: normalizeCap(caps.daily, DAILY_TOKENS, MAX_TOKEN_CAP),
+    hourly: normalizeCap(caps.hourly, HOURLY_TOKENS, MAX_TOKEN_CAP),
+    rpm: normalizeCap(caps.rpm, RPM, MAX_RPM_CAP),
+  };
+}
 
 function currentHour() {
   const d = new Date();
@@ -46,8 +90,12 @@ function currentDay() {
 }
 
 function getOrInit(userId) {
-  let rec = ledger.get(userId);
+  const id = normalizeUserId(userId);
+  if (!id) throw new TypeError('budget userId must be a non-empty header-safe value');
+
+  let rec = ledger.get(id);
   if (!rec) {
+    evictIfFull();
     rec = {
       hourWindow: currentHour(),
       dayWindow: currentDay(),
@@ -57,9 +105,15 @@ function getOrInit(userId) {
       dayRequests: 0,
       rpmLog: [], // rolling-window timestamps
     };
-    ledger.set(userId, rec);
+    ledger.set(id, rec);
   }
   return rec;
+}
+
+function evictIfFull() {
+  if (ledger.size < MAX_LEDGER_USERS) return;
+  const oldestKey = ledger.keys().next().value;
+  if (oldestKey !== undefined) ledger.delete(oldestKey);
 }
 
 function rollWindows(rec) {
@@ -77,6 +131,13 @@ function rollWindows(rec) {
   }
 }
 
+function pruneRpmLog(rec, t = now()) {
+  rec.rpmLog = rec.rpmLog.filter(ts => Number.isFinite(ts) && t - ts < 60_000);
+  if (rec.rpmLog.length > MAX_RPM_LOG_ENTRIES) {
+    rec.rpmLog = rec.rpmLog.slice(rec.rpmLog.length - MAX_RPM_LOG_ENTRIES);
+  }
+}
+
 /**
  * Check if this call is allowed. Returns { allowed: true } or
  * { allowed: false, reason: '<human>', retryAfterMs: number }.
@@ -85,19 +146,29 @@ function rollWindows(rec) {
  * charged via record() after the run reports actual usage.
  */
 function checkAllowed(userId, { caps } = {}) {
-  const c = {
-    daily: caps?.daily ?? DAILY_TOKENS,
-    hourly: caps?.hourly ?? HOURLY_TOKENS,
-    rpm: caps?.rpm ?? RPM,
-  };
+  const c = normalizeCaps(caps);
   const rec = getOrInit(userId);
   rollWindows(rec);
 
+  if (c.daily === 0) {
+    return {
+      allowed: false,
+      reason: 'daily token budget (0) exceeded',
+      retryAfterMs: msUntilMidnightUTC(),
+    };
+  }
   if (rec.dayTokens >= c.daily) {
     return {
       allowed: false,
       reason: `daily token budget (${c.daily}) exceeded`,
       retryAfterMs: msUntilMidnightUTC(),
+    };
+  }
+  if (c.hourly === 0) {
+    return {
+      allowed: false,
+      reason: 'hourly token budget (0) exceeded',
+      retryAfterMs: msUntilNextHour(),
     };
   }
   if (rec.hourTokens >= c.hourly) {
@@ -110,13 +181,20 @@ function checkAllowed(userId, { caps } = {}) {
 
   // Rolling-minute rate limit.
   const t = now();
-  rec.rpmLog = rec.rpmLog.filter(ts => t - ts < 60_000);
+  pruneRpmLog(rec, t);
+  if (c.rpm === 0) {
+    return {
+      allowed: false,
+      reason: '0 requests per minute exceeded',
+      retryAfterMs: 60_000,
+    };
+  }
   if (rec.rpmLog.length >= c.rpm) {
     const oldest = rec.rpmLog[0];
     return {
       allowed: false,
       reason: `${c.rpm} requests per minute exceeded`,
-      retryAfterMs: Math.max(1000, 60_000 - (t - oldest)),
+      retryAfterMs: Math.max(1000, 60_000 - (t - oldest || 0)),
     };
   }
 
@@ -130,11 +208,17 @@ function checkAllowed(userId, { caps } = {}) {
 function record(userId, { tokens = 0 } = {}) {
   const rec = getOrInit(userId);
   rollWindows(rec);
-  rec.hourTokens += tokens;
-  rec.dayTokens += tokens;
+  const safeTokens = normalizeTokens(tokens);
+  rec.hourTokens = Math.min(MAX_TOKEN_CAP, rec.hourTokens + safeTokens);
+  rec.dayTokens = Math.min(MAX_TOKEN_CAP, rec.dayTokens + safeTokens);
   rec.hourRequests += 1;
   rec.dayRequests += 1;
-  rec.rpmLog.push(now());
+  const t = now();
+  pruneRpmLog(rec, t);
+  rec.rpmLog.push(t);
+  if (rec.rpmLog.length > MAX_RPM_LOG_ENTRIES) {
+    rec.rpmLog = rec.rpmLog.slice(rec.rpmLog.length - MAX_RPM_LOG_ENTRIES);
+  }
 }
 
 function msUntilMidnightUTC() {
@@ -150,7 +234,9 @@ function msUntilNextHour() {
 }
 
 function getUsage(userId) {
-  const rec = ledger.get(userId);
+  const id = normalizeUserId(userId);
+  if (!id) return { dayTokens: 0, hourTokens: 0, dayRequests: 0, hourRequests: 0 };
+  const rec = ledger.get(id);
   if (!rec) return { dayTokens: 0, hourTokens: 0, dayRequests: 0, hourRequests: 0 };
   rollWindows(rec);
   return {
@@ -172,12 +258,24 @@ function _reset() { ledger.clear(); }
  */
 function budgetMiddleware(caps) {
   return (req, res, next) => {
-    const uid = req.user?.id;
+    const uid = normalizeUserId(req.user?.id);
     if (!uid) return next(); // auth middleware should have caught this
     const check = checkAllowed(uid, { caps });
     if (!check.allowed) {
-      res.setHeader('Retry-After', Math.ceil(check.retryAfterMs / 1000));
-      return res.status(429).json({ error: 'rate_limited', reason: check.reason, retryAfterMs: check.retryAfterMs });
+      const retryAfterSec = Math.max(1, Math.ceil(check.retryAfterMs / 1000));
+      res.setHeader('Retry-After', String(retryAfterSec));
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      const requestId = getRequestId(req);
+      return res.status(429).json({
+        ok: false,
+        error: 'rate_limited',
+        code: 'agent_budget_limited',
+        reason: check.reason,
+        retryAfterMs: check.retryAfterMs,
+        retryAfterSec,
+        ...(requestId ? { requestId } : {}),
+      });
     }
     next();
   };
@@ -192,4 +290,7 @@ module.exports = {
   DAILY_TOKENS,
   HOURLY_TOKENS,
   RPM,
+  MAX_LEDGER_USERS,
+  MAX_RPM_LOG_ENTRIES,
+  MAX_USER_ID_LENGTH,
 };

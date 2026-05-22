@@ -23,9 +23,16 @@
 //     not-found errors — these are application bugs, not transient.
 // ──────────────────────────────────────────────────────────────
 
-const MAX_RETRIES = parseInt(process.env.DB_OP_RETRIES || '3', 10);
-const BASE_DELAY_MS = parseInt(process.env.DB_OP_RETRY_BASE_MS || '200', 10);
-const MAX_DELAY_MS = parseInt(process.env.DB_OP_RETRY_MAX_MS || '2000', 10);
+const DEFAULT_MAX_RETRIES = 3;
+const DEFAULT_BASE_DELAY_MS = 200;
+const DEFAULT_MAX_DELAY_MS = 2000;
+const MAX_SAFE_RETRIES = 20;
+const MAX_TIMER_MS = 2_147_483_647;
+const MAX_ATTEMPT_EXPONENT = 30;
+
+const MAX_RETRIES = parseBoundedInt(process.env.DB_OP_RETRIES, DEFAULT_MAX_RETRIES, 0, MAX_SAFE_RETRIES);
+const BASE_DELAY_MS = parseBoundedInt(process.env.DB_OP_RETRY_BASE_MS, DEFAULT_BASE_DELAY_MS, 0, MAX_TIMER_MS);
+const MAX_DELAY_MS = parseBoundedInt(process.env.DB_OP_RETRY_MAX_MS, DEFAULT_MAX_DELAY_MS, 0, MAX_TIMER_MS);
 
 // Prisma error codes that are safe to retry (transient)
 const RETRYABLE_CODES = new Set([
@@ -35,6 +42,44 @@ const RETRYABLE_CODES = new Set([
     'P1017',  // Server has closed the connection
     'P2024',  // Connection pool timeout
 ]);
+
+function abortError(signal) {
+    if (signal?.reason instanceof Error) return signal.reason;
+    const error = new Error(signal?.reason ? String(signal.reason) : 'Operation aborted');
+    error.name = 'AbortError';
+    return error;
+}
+
+function throwIfAborted(signal) {
+    if (signal?.aborted) throw abortError(signal);
+}
+
+function delayWithSignal(ms, signal) {
+    if (ms <= 0) {
+        throwIfAborted(signal);
+        return Promise.resolve();
+    }
+
+    return new Promise((resolve, reject) => {
+        const onAbort = () => {
+            clearTimeout(timer);
+            reject(abortError(signal));
+        };
+
+        const timer = setTimeout(() => {
+            signal?.removeEventListener?.('abort', onAbort);
+            resolve();
+        }, ms);
+
+        if (signal) {
+            if (signal.aborted) {
+                onAbort();
+            } else {
+                signal.addEventListener('abort', onAbort, { once: true });
+            }
+        }
+    });
+}
 
 function isRetryableError(error) {
     if (!error || typeof error !== 'object') return false;
@@ -59,6 +104,63 @@ function isRetryableError(error) {
     return false;
 }
 
+function parseBoundedInt(value, fallback, min, max) {
+    if (value === undefined || value === null || value === '') return fallback;
+    const n = Number(value);
+    if (!Number.isFinite(n) || n < min) return fallback;
+    return Math.min(Math.floor(n), max);
+}
+
+function normalizeRetries(value) {
+    return parseBoundedInt(value, MAX_RETRIES, 0, MAX_SAFE_RETRIES);
+}
+
+function normalizeDelay(value, fallback) {
+    return parseBoundedInt(value, fallback, 0, MAX_TIMER_MS);
+}
+
+function computeDelay(baseDelayMs, maxDelayMs, attempt) {
+    const base = normalizeDelay(baseDelayMs, BASE_DELAY_MS);
+    const max = normalizeDelay(maxDelayMs, MAX_DELAY_MS);
+    const safeAttempt = parseBoundedInt(attempt, 0, 0, MAX_ATTEMPT_EXPONENT);
+    return Math.min(base * Math.pow(2, safeAttempt), max);
+}
+
+function formatErrorHint(error, maxLen = 150) {
+    const raw = String(error?.code || error?.message || 'unknown_error');
+    return raw.replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, maxLen);
+}
+
+function sleep(ms, signal) {
+    if (signal?.aborted) return Promise.reject(signal.reason || new Error('db retry aborted'));
+    const delay = normalizeDelay(ms, 0);
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        const cleanup = () => {
+            if (signal && typeof signal.removeEventListener === 'function') {
+                signal.removeEventListener('abort', onAbort);
+            }
+        };
+        const finish = () => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            resolve();
+        };
+        const onAbort = () => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            cleanup();
+            reject(signal.reason || new Error('db retry aborted'));
+        };
+        const timer = setTimeout(finish, delay);
+        if (signal && typeof signal.addEventListener === 'function') {
+            signal.addEventListener('abort', onAbort, { once: true });
+        }
+    });
+}
+
 /**
  * Wraps a Prisma operation with transparent retry on transient errors.
  *
@@ -66,29 +168,40 @@ function isRetryableError(error) {
  * @param {object} [options]
  * @param {number} [options.maxRetries]  Override MAX_RETRIES
  * @param {number} [options.baseDelayMs] Override BASE_DELAY_MS
+ * @param {AbortSignal} [options.signal] Abort retries/backoff when caller is cancelled
  * @param {Function} [options.onRetry]   Callback on each retry (attempt, error)
  * @returns {Promise<any>} Result from the wrapped function
  */
 async function withRetry(fn, options = {}) {
-    const maxRetries = options.maxRetries ?? MAX_RETRIES;
-    const baseDelayMs = options.baseDelayMs ?? BASE_DELAY_MS;
+    if (typeof fn !== 'function') throw new TypeError('db-retry: fn must be a function');
+    const maxRetries = normalizeRetries(options.maxRetries);
+    const baseDelayMs = normalizeDelay(options.baseDelayMs, BASE_DELAY_MS);
+    const maxDelayMs = normalizeDelay(options.maxDelayMs, MAX_DELAY_MS);
+    const signal = options.signal || null;
+    const sleepFn = typeof options.sleep === 'function' ? options.sleep : sleep;
 
     let lastError;
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        throwIfAborted(signal);
         try {
+            throwIfAborted(signal);
             return await fn();
         } catch (error) {
             lastError = error;
 
+            if (signal?.aborted) throw abortError(signal);
+
             if (attempt < maxRetries && isRetryableError(error)) {
-                const delay = Math.min(baseDelayMs * Math.pow(2, attempt), MAX_DELAY_MS);
+                const delay = computeDelay(baseDelayMs, maxDelayMs, attempt);
                 console.warn(
-                    `[db-retry] Attempt ${attempt + 1}/${maxRetries + 1} failed: ${error.code || error.message?.slice(0, 100)}. ` +
+                    `[db-retry] Attempt ${attempt + 1}/${maxRetries + 1} failed: ${formatErrorHint(error, 100)}. ` +
                     `Retrying in ${delay}ms...`
                 );
-                options.onRetry?.(attempt + 1, error);
-                await new Promise(r => setTimeout(r, delay));
+                if (typeof options.onRetry === 'function') {
+                    try { options.onRetry(attempt + 1, error); } catch { /* observer only */ }
+                }
+                await sleepFn(delay, signal);
                 continue;
             }
 
@@ -96,7 +209,7 @@ async function withRetry(fn, options = {}) {
             if (attempt === maxRetries && isRetryableError(error)) {
                 console.error(
                     `[db-retry] All ${maxRetries + 1} attempts exhausted. ` +
-                    `Last error: ${error.code || error.message?.slice(0, 150)}`
+                    `Last error: ${formatErrorHint(error, 150)}`
                 );
             }
             throw error;
@@ -106,4 +219,18 @@ async function withRetry(fn, options = {}) {
     throw lastError || new Error('withRetry: unreachable');
 }
 
-module.exports = { withRetry, isRetryableError, RETRYABLE_CODES };
+module.exports = {
+    withRetry,
+    isRetryableError,
+    RETRYABLE_CODES,
+    parseBoundedInt,
+    normalizeRetries,
+    normalizeDelay,
+    computeDelay,
+    formatErrorHint,
+    sleep,
+    MAX_RETRIES,
+    BASE_DELAY_MS,
+    MAX_DELAY_MS,
+    MAX_SAFE_RETRIES,
+};

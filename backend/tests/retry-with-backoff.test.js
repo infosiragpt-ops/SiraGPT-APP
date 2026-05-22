@@ -14,6 +14,11 @@ const {
   withRetry,
   computeBackoff,
   sleep,
+  normalizeNonNegativeInt,
+  normalizeDelay,
+  clampRandom,
+  safeClassify,
+  MAX_RETRIES,
 } = require('../src/utils/retry-with-backoff');
 
 // ── Sleep helper ──────────────────────────────────────────────────────────
@@ -47,6 +52,26 @@ describe('retry-with-backoff', () => {
       const result = computeBackoff({ attempt: 0 });
       assert.ok(result >= 0);
       assert.ok(result <= 1000);
+    });
+
+    it('normalizes invalid delay options instead of returning NaN', () => {
+      const result = computeBackoff({
+        baseDelayMs: Number.NaN,
+        maxDelayMs: Number.POSITIVE_INFINITY,
+        attempt: Number.NaN,
+        rng: () => Number.NaN,
+      });
+      assert.equal(result, 0);
+    });
+
+    it('supports deterministic rng injection and clamps attempt growth', () => {
+      const result = computeBackoff({
+        baseDelayMs: 100,
+        maxDelayMs: 500,
+        attempt: 999,
+        rng: () => 1,
+      });
+      assert.equal(result, 500);
     });
   });
 
@@ -161,6 +186,34 @@ describe('retry-with-backoff', () => {
       );
 
       assert.equal(calls, 2); // first retried, second not
+    });
+
+    it('does not let an onRetry observer failure abort the retry', async () => {
+      let calls = 0;
+      const result = await withRetry(async () => {
+        calls += 1;
+        if (calls === 1) throw new Error('transient');
+        return 'ok';
+      }, {
+        maxRetries: 1,
+        baseDelayMs: 1,
+        classifyError: () => ({ retryable: true, reason: 'transient' }),
+        onRetry: () => { throw new Error('observer failed'); },
+      });
+      assert.equal(result, 'ok');
+      assert.equal(calls, 2);
+    });
+
+    it('classifier failures do not mask the original operation error', async () => {
+      const original = new Error('upstream failed');
+      await assert.rejects(
+        withRetry(async () => { throw original; }, {
+          maxRetries: 3,
+          baseDelayMs: 1,
+          classifyError: () => { throw new Error('classifier failed'); },
+        }),
+        { message: 'upstream failed' },
+      );
     });
   });
 
@@ -379,6 +432,11 @@ describe('retry-with-backoff', () => {
 
       assert.equal(listeners.size, 0);
     });
+
+    it('sleep treats invalid delays as zero-delay waits', async () => {
+      await sleep(Number.NaN);
+      await sleep(-10);
+    });
   });
 
   // ── Edge cases ──────────────────────────────────────────────
@@ -411,6 +469,22 @@ describe('retry-with-backoff', () => {
     it('resolves immediately if fn() succeeds without error', async () => {
       const result = await withRetry(async () => 42, { maxRetries: 5 });
       assert.equal(result, 42);
+    });
+
+    it('rejects a non-function operation before entering the retry loop', async () => {
+      await assert.rejects(withRetry(null), TypeError);
+    });
+
+    it('normalizes helper inputs at their safety boundaries', () => {
+      assert.equal(normalizeNonNegativeInt(Number.NaN, 2, 10), 2);
+      assert.equal(normalizeNonNegativeInt(999, 2, MAX_RETRIES), MAX_RETRIES);
+      assert.equal(normalizeDelay(Number.POSITIVE_INFINITY, 123), 123);
+      assert.equal(normalizeDelay(-1, 123), 123);
+      assert.equal(clampRandom(Number.NaN), 0);
+      assert.equal(clampRandom(-1), 0);
+      assert.equal(clampRandom(2), 1);
+      assert.equal(safeClassify(() => null, new Error('x')).retryable, false);
+      assert.equal(safeClassify(() => { throw new Error('boom'); }, new Error('x')).reason, 'classifier_error');
     });
   });
 });

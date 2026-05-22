@@ -84,6 +84,32 @@ describe('Probe', () => {
     assert.ok(r.elapsedMs >= 30);
   });
 
+  it('aborts the check signal when a probe times out', async () => {
+    let signalSeen = null;
+    let abortedByTimeout = false;
+    const p = new Probe({
+      name: 'abortable',
+      timeoutMs: 30,
+      ttlMs: 0,
+      check: ({ signal }) => {
+        signalSeen = signal;
+        assert.equal(signal.aborted, false);
+        return new Promise((resolve) => {
+          signal.addEventListener('abort', () => {
+            abortedByTimeout = true;
+            resolve('aborted');
+          }, { once: true });
+        });
+      },
+    });
+
+    const r = await p.run();
+    assert.equal(r.status, STATUS.TIMEOUT);
+    assert.equal(signalSeen instanceof AbortSignal, true);
+    assert.equal(abortedByTimeout, true);
+    assert.equal(signalSeen.aborted, true);
+  });
+
   it('caches results within TTL and returns cached:true', async () => {
     let calls = 0;
     const p = new Probe({

@@ -160,12 +160,12 @@ function reviewCode({ source, language, filename, thresholds = {} } = {}) {
     };
   }
   const limits = {
-    fileLength: thresholds.fileLength || FILE_LENGTH_WARN,
-    funcLength: thresholds.funcLength || FUNCTION_LENGTH_WARN,
-    nesting: thresholds.nesting || NESTING_WARN,
-    complexity: thresholds.complexity || COMPLEXITY_WARN,
-    lineLength: thresholds.lineLength || LINE_LENGTH_WARN,
-    todoDensity: thresholds.todoDensity || TODO_DENSITY_WARN,
+    fileLength: thresholds.fileLength ?? FILE_LENGTH_WARN,
+    funcLength: thresholds.funcLength ?? FUNCTION_LENGTH_WARN,
+    nesting: thresholds.nesting ?? NESTING_WARN,
+    complexity: thresholds.complexity ?? COMPLEXITY_WARN,
+    lineLength: thresholds.lineLength ?? LINE_LENGTH_WARN,
+    todoDensity: thresholds.todoDensity ?? TODO_DENSITY_WARN,
   };
 
   const lines = source.split(/\r?\n/);

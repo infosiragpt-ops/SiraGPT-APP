@@ -15,16 +15,21 @@ const {
   hashToken,
   generateToken,
   hasBearerAuth,
+  readHeader,
 } = require('../src/middleware/csrf');
 
 function mockRes() {
+  const headers = {};
   const res = {
     statusCode: 200,
     body: undefined,
     cookies: {},
+    headers,
   };
   res.status = (c) => { res.statusCode = c; return res; };
   res.json = (b) => { res.body = b; return res; };
+  res.setHeader = (k, v) => { res.headers[String(k).toLowerCase()] = v; return res; };
+  res.getHeader = (k) => res.headers[String(k).toLowerCase()];
   res.cookie = (name, value, opts) => {
     res.cookies[name] = { value, opts };
     return res;
@@ -57,6 +62,8 @@ describe('csrfTokenRoute', () => {
     assert.equal(res.cookies.csrf_token.opts.httpOnly, false);
     // Secret cookie must encode hash(token) so server can verify.
     assert.equal(res.cookies._csrf_secret.value, hashToken(res.body.csrfToken));
+    assert.equal(res.getHeader('Cache-Control'), 'no-store');
+    assert.equal(res.getHeader('X-Content-Type-Options'), 'nosniff');
   });
 });
 
@@ -87,19 +94,35 @@ describe('requireCsrf — bearer auth bypass', () => {
 
   test('hasBearerAuth recognises common forms', () => {
     assert.equal(hasBearerAuth({ headers: { authorization: 'Bearer x' } }), true);
+    assert.equal(hasBearerAuth({ headers: { Authorization: 'Bearer x' } }), true);
+    assert.equal(hasBearerAuth({ headers: { authorization: ['Bearer x'] } }), true);
     assert.equal(hasBearerAuth({ headers: { authorization: 'bearer x' } }), true);
     assert.equal(hasBearerAuth({ headers: { authorization: 'Basic x' } }), false);
     assert.equal(hasBearerAuth({ headers: {} }), false);
+  });
+
+  test('readHeader handles lowercase, uppercase and array values', () => {
+    assert.equal(readHeader({ headers: { 'x-csrf-token': 'a' } }, 'x-csrf-token'), 'a');
+    assert.equal(readHeader({ headers: { 'X-CSRF-Token': 'b' } }, 'x-csrf-token'), 'b');
+    assert.equal(readHeader({ headers: { 'x-csrf-token': ['c', 'd'] } }, 'x-csrf-token'), 'c');
+    assert.equal(readHeader({ headers: {} }, 'x-csrf-token'), undefined);
   });
 });
 
 describe('requireCsrf — validation', () => {
   test('rejects missing token + secret with 403 csrf_invalid/missing_token', () => {
+    const req = mockReq({ headers: { 'x-request-id': 'req-csrf-missing' } });
     const res = mockRes();
-    requireCsrf(mockReq(), res, () => assert.fail('next should not be called'));
+    requireCsrf(req, res, () => assert.fail('next should not be called'));
     assert.equal(res.statusCode, 403);
+    assert.equal(res.body.ok, false);
     assert.equal(res.body.error, 'csrf_invalid');
+    assert.equal(res.body.code, 'csrf_invalid');
+    assert.equal(res.body.message, 'CSRF token invalid or missing');
     assert.equal(res.body.reason, 'missing_token');
+    assert.equal(res.body.requestId, 'req-csrf-missing');
+    assert.equal(res.getHeader('Cache-Control'), 'no-store');
+    assert.equal(res.getHeader('X-Content-Type-Options'), 'nosniff');
   });
 
   test('rejects mismatched header token', () => {
@@ -111,13 +134,15 @@ describe('requireCsrf — validation', () => {
     });
     requireCsrf(req, res, () => assert.fail('next should not be called'));
     assert.equal(res.statusCode, 403);
+    assert.equal(res.body.ok, false);
+    assert.equal(res.body.error, 'csrf_invalid');
     assert.equal(res.body.reason, 'mismatch');
   });
 
   test('accepts matching header token', () => {
     const token = generateToken();
     const req = mockReq({
-      headers: { 'x-csrf-token': token },
+      headers: { 'X-CSRF-Token': token },
       cookies: { _csrf_secret: hashToken(token) },
     });
     let called = false;

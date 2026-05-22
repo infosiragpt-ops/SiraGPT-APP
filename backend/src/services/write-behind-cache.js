@@ -32,14 +32,22 @@
  *   - When Redis isn't configured we operate purely in memory.
  */
 
-function stableStringify(value) {
+function stableStringify(value, seen = new WeakSet()) {
   if (value === null || value === undefined) return 'null';
+  if (typeof value === 'bigint') return JSON.stringify(`${value.toString()}n`);
   if (typeof value !== 'object') return JSON.stringify(value);
+  if (value instanceof Date) return JSON.stringify(value.toISOString());
+  if (seen.has(value)) return JSON.stringify('[circular]');
+  seen.add(value);
   if (Array.isArray(value)) {
-    return `[${value.map(stableStringify).join(',')}]`;
+    const out = `[${value.map(item => stableStringify(item, seen)).join(',')}]`;
+    seen.delete(value);
+    return out;
   }
   const keys = Object.keys(value).sort();
-  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(',')}}`;
+  const out = `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(value[k], seen)}`).join(',')}}`;
+  seen.delete(value);
+  return out;
 }
 
 function keyFor(model, where) {

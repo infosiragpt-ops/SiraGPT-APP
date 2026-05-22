@@ -81,6 +81,22 @@ test('stableStringify handles arrays and nulls', () => {
   assert.equal(stableStringify([{ b: 1, a: 2 }]), '[{"a":2,"b":1}]');
 });
 
+test('stableStringify handles Date, BigInt, shared refs and cycles', () => {
+  assert.equal(stableStringify(new Date('2026-05-22T00:00:00Z')), '"2026-05-22T00:00:00.000Z"');
+  assert.equal(stableStringify({ id: 10n }), '{"id":"10n"}');
+  const shared = { a: 1 };
+  assert.equal(stableStringify({ x: shared, y: shared }), '{"x":{"a":1},"y":{"a":1}}');
+  const circular = { id: 'x' };
+  circular.self = circular;
+  assert.equal(stableStringify(circular), '{"id":"x","self":"[circular]"}');
+});
+
+test('buildKey distinguishes Date filters', () => {
+  const a = buildKey('session', { where: { expiresAt: new Date('2026-01-01T00:00:00Z') } });
+  const b = buildKey('session', { where: { expiresAt: new Date('2026-01-02T00:00:00Z') } });
+  assert.notEqual(a, b);
+});
+
 test('ttlMs=0 disables dedup', async () => {
   const dedup = createQueryDedup({ ttlMs: 0 });
   let calls = 0;

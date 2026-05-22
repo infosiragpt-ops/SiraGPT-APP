@@ -24,15 +24,30 @@
  * route handler. The middleware must run on every request (including
  * 4xx and 5xx) so even errored responses carry the header.
  *
- * Trust model: `x-request-id` is honored from any upstream source. If
- * an attacker sends a chosen id, the only consequence is that their
- * own logs/audit rows are filed under that id; nothing about
- * authorization or routing depends on the value. We therefore do not
- * sanitize the contents beyond what `pino-http` already did at parse
- * time.
+ * Trust model: `x-request-id` is honored from any upstream source only
+ * when it is a compact, header-safe token. The id is not used for
+ * authorization, but it does become a response header and log key, so
+ * we reject control characters, whitespace and unbounded strings.
  */
 
 const HEADER = 'X-Request-Id';
+const MAX_REQUEST_ID_LENGTH = 128;
+const SAFE_REQUEST_ID_RE = /^[A-Za-z0-9._~:/+=@-]+$/;
+
+function firstHeaderValue(value) {
+  if (Array.isArray(value)) return value[0];
+  return value;
+}
+
+function normalizeRequestId(value) {
+  const first = firstHeaderValue(value);
+  if (first == null) return null;
+
+  const id = String(first).trim();
+  if (!id || id.length > MAX_REQUEST_ID_LENGTH) return null;
+  if (!SAFE_REQUEST_ID_RE.test(id)) return null;
+  return id;
+}
 
 let _contextLogger = null;
 function contextLogger() {
@@ -50,9 +65,9 @@ function requestIdMiddleware(req, res, next) {
   // or as a fresh UUID. We just pin it onto `req.requestId` for clearer
   // semantics in route handlers and onto the response header for the
   // client/proxies. If somehow `req.id` is missing (a route mounted
-  // before the http logger), fall back to a string version of the
-  // header so we never emit an empty `X-Request-Id`.
-  const id = (req.id != null ? String(req.id) : '') || String(req.headers['x-request-id'] || '');
+  // before the http logger), fall back to the raw header only when it is
+  // safe to echo.
+  const id = normalizeRequestId(req.id) || normalizeRequestId(req.headers && req.headers['x-request-id']);
 
   if (id) {
     req.requestId = id;
@@ -79,14 +94,17 @@ function requestIdMiddleware(req, res, next) {
  */
 function getRequestId(req) {
   if (!req) return null;
-  if (req.requestId) return String(req.requestId);
-  if (req.id) return String(req.id);
-  const headerVal = req.headers && req.headers['x-request-id'];
-  return headerVal ? String(headerVal) : null;
+  return (
+    normalizeRequestId(req.requestId)
+    || normalizeRequestId(req.id)
+    || normalizeRequestId(req.headers && req.headers['x-request-id'])
+  );
 }
 
 module.exports = {
   requestIdMiddleware,
   getRequestId,
+  normalizeRequestId,
   HEADER,
+  MAX_REQUEST_ID_LENGTH,
 };

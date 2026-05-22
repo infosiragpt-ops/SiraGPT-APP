@@ -2,7 +2,7 @@
 
 const { ChannelAdapter } = require('./channel-adapter');
 const { KINDS } = require('./metrics');
-const { retryWithBackoff } = require('./retry');
+const { retryWithBackoff, parseRetryAfterHeader } = require('./retry');
 
 /**
  * Telegram Bot API adapter.
@@ -88,11 +88,12 @@ class TelegramAdapter extends ChannelAdapter {
       });
       const body = await safeJson(r);
       const retryAfter = body?.parameters?.retry_after;
+      const headerRetryAfter = parseRetryAfterHeader(r.headers?.get?.('retry-after'));
       return {
         ok: r.ok,
         status: r.status,
         body,
-        retryAfterMs: retryAfter ? retryAfter * 1000 : undefined,
+        retryAfterMs: retryAfter ? retryAfter * 1000 : headerRetryAfter,
       };
     });
     if (!res.ok) {

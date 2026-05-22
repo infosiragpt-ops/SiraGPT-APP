@@ -13,6 +13,7 @@ const {
   makeOriginCallback,
   validateAllowedOrigins,
   DEV_FALLBACK,
+  PROD_FALLBACK,
 } = require("../src/middleware/cors-policy");
 
 describe("resolveAllowedOrigins", () => {
@@ -32,12 +33,22 @@ describe("resolveAllowedOrigins", () => {
   });
 
   test("returns the prod fallback origins when CORS_ORIGINS is empty in production (with WARN)", () => {
-    const result = resolveAllowedOrigins({ NODE_ENV: "production" });
-    // PROD_FALLBACK was introduced cycle 9; the previous fail-closed
-    // behaviour is replaced by safe-default origins + a loud WARN.
-    assert.ok(Array.isArray(result));
-    assert.ok(result.length > 0);
-    assert.ok(result.some((o) => o.startsWith("https://siragpt")));
+    const originalWarn = console.warn;
+    const warnings = [];
+    console.warn = (...args) => warnings.push(args.join(" "));
+    try {
+      const result = resolveAllowedOrigins({ NODE_ENV: "production" });
+      // PROD_FALLBACK was introduced cycle 9; the previous fail-closed
+      // behaviour is replaced by safe-default origins + a loud WARN.
+      assert.deepEqual(result, PROD_FALLBACK);
+      assert.ok(result.some((o) => o.startsWith("https://siragpt")));
+      assert.equal(result.some((o) => o.startsWith("http://localhost")), false);
+      assert.equal(result.some((o) => o.startsWith("http://127.0.0.1")), false);
+      assert.equal(result.every((o) => o.startsWith("https://")), true);
+      assert.ok(warnings.some((line) => line.includes("CORS_ORIGINS env var is unset")));
+    } finally {
+      console.warn = originalWarn;
+    }
   });
 
   test("respects CORS_ORIGINS in production", () => {
@@ -62,6 +73,13 @@ describe("validateAllowedOrigins", () => {
     assert.deepEqual(validateAllowedOrigins(list), list);
   });
 
+  test("normalizes trailing slashes and deduplicates origins", () => {
+    assert.deepEqual(
+      validateAllowedOrigins(["https://a.com/", "https://a.com", "https://b.com:443/"]),
+      ["https://a.com", "https://b.com"],
+    );
+  });
+
   test("throws on garbage non-URL entry", () => {
     assert.throws(
       () => validateAllowedOrigins(["not a url"]),
@@ -80,6 +98,21 @@ describe("validateAllowedOrigins", () => {
     assert.throws(
       () => validateAllowedOrigins(["https://a.com/app"]),
       /must be bare origin without path/
+    );
+  });
+
+  test("throws when origin contains query, hash, or credentials", () => {
+    assert.throws(
+      () => validateAllowedOrigins(["https://a.com?debug=1"]),
+      /without query or hash/
+    );
+    assert.throws(
+      () => validateAllowedOrigins(["https://a.com#fragment"]),
+      /without query or hash/
+    );
+    assert.throws(
+      () => validateAllowedOrigins(["https://user:pass@a.com"]),
+      /credentials are not allowed/
     );
   });
 

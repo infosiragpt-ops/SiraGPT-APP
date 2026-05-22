@@ -7,6 +7,10 @@ const {
   createResilientFetch,
   isRetryableResponse,
   isRetryableError,
+  normalizeHeaderInit,
+  normalizeHeaderName,
+  normalizeHeaderValue,
+  safeRetryAfterValue,
 } = require('../src/utils/resilient-fetch');
 
 function fakeRes(status, body, headers = {}) {
@@ -109,6 +113,18 @@ describe('createResilientFetch — retries', () => {
     await r.send('http://x');
     assert.equal(seenWaits[0], 0.05);
   });
+
+  test('unsafe Retry-After values are ignored before retry scheduling', async () => {
+    const seenWaits = [];
+    let n = 0;
+    const r = createResilientFetch({
+      fetch: async () => { n += 1; return n < 2 ? fakeRes(429, null, { 'retry-after': '0.05\r\nx-bad: 1' }) : fakeRes(200, {}); },
+      backoff: { next: ({ retryAfter }) => { seenWaits.push(retryAfter); return 1; } },
+      deadlineMs: 60_000,
+    });
+    await r.send('http://x');
+    assert.equal(seenWaits[0], undefined);
+  });
 });
 
 describe('createResilientFetch — trace context injection', () => {
@@ -167,6 +183,57 @@ describe('createResilientFetch — trace context injection', () => {
       'x-default': 'A',
       'x-extra': 'B',
     });
+  });
+
+  test('unsafe outgoing headers are dropped before fetch is called', async () => {
+    let seen = null;
+    const r = createResilientFetch({
+      fetch: async (_url, init) => { seen = init.headers; return fakeRes(200, {}); },
+      headers: {
+        'X-Default': 'A',
+        'Bad Header': 'ignored',
+        'X-Bad-Value': 'line\r\nnext',
+      },
+    });
+
+    await r.send('http://x', {
+      headers: [
+        ['X-Extra', 'B'],
+        ['X-Nul', 'bad\0value'],
+        [':bad', 'ignored'],
+      ],
+    });
+
+    assert.deepEqual(seen, {
+      'x-default': 'A',
+      'x-extra': 'B',
+    });
+  });
+});
+
+describe('header normalization helpers', () => {
+  test('normalizeHeaderName accepts token names and rejects invalid names', () => {
+    assert.equal(normalizeHeaderName(' X-Trace-ID '), 'x-trace-id');
+    assert.equal(normalizeHeaderName('bad header'), null);
+    assert.equal(normalizeHeaderName('bad:name'), null);
+  });
+
+  test('normalizeHeaderValue rejects control characters and nullish values', () => {
+    assert.equal(normalizeHeaderValue('ok value'), 'ok value');
+    assert.equal(normalizeHeaderValue('bad\nvalue'), null);
+    assert.equal(normalizeHeaderValue(null), null);
+  });
+
+  test('normalizeHeaderInit handles objects, tuples and Headers-like inputs safely', () => {
+    assert.deepEqual(normalizeHeaderInit({ Good: 'yes', Bad: 'no\n' }), { good: 'yes' });
+    assert.deepEqual(normalizeHeaderInit([['X-A', '1'], ['Bad Name', '2']]), { 'x-a': '1' });
+    assert.deepEqual(normalizeHeaderInit({ forEach: (fn) => { fn('1', 'X-A'); fn('bad\r', 'X-B'); } }), { 'x-a': '1' });
+  });
+
+  test('safeRetryAfterValue accepts clean values and rejects response-splitting payloads', () => {
+    assert.equal(safeRetryAfterValue(['5']), '5');
+    assert.equal(safeRetryAfterValue('Wed, 21 Oct 2015 07:28:00 GMT'), 'Wed, 21 Oct 2015 07:28:00 GMT');
+    assert.equal(safeRetryAfterValue('5\r\nx-bad: 1'), null);
   });
 });
 

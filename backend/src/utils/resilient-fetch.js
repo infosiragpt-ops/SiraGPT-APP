@@ -37,6 +37,10 @@ const { injectHeaders } = require('../services/observability/trace-context');
 const DEFAULT_DEADLINE_MS = 30_000;
 const DEFAULT_MAX_ATTEMPTS = 4;
 const DEFAULT_RETRY_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
+const MAX_HEADER_NAME_LENGTH = 128;
+const MAX_HEADER_VALUE_LENGTH = 8192;
+const HEADER_NAME_RE = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+const HEADER_VALUE_UNSAFE_RE = /[\u0000-\u001f\u007f]/;
 
 function isRetryableResponse(res) {
   return res && DEFAULT_RETRY_STATUSES.has(Number(res.status));
@@ -104,7 +108,7 @@ function createResilientFetch(opts = {}) {
           const e = new Error(`http ${res.status}`);
           e.retryable = true;
           e.status = res.status;
-          const ra = res.headers && (res.headers.get ? res.headers.get('retry-after') : res.headers['retry-after']);
+          const ra = safeRetryAfterValue(res.headers && (res.headers.get ? res.headers.get('retry-after') : res.headers['retry-after']));
           if (ra != null) {
             const ms = parseRetryAfter(ra);
             if (ms != null) e.retryAfter = ms / 1000;
@@ -145,20 +149,52 @@ function normalizeHeaderInit(headerInit) {
   if (Array.isArray(headerInit)) {
     for (const pair of headerInit) {
       if (!Array.isArray(pair) || pair.length < 2) continue;
-      out[String(pair[0]).toLowerCase()] = String(pair[1]);
+      setSafeHeader(out, pair[0], pair[1]);
     }
     return out;
   }
   if (typeof headerInit.forEach === 'function') {
     headerInit.forEach((value, key) => {
-      out[String(key).toLowerCase()] = String(value);
+      setSafeHeader(out, key, value);
     });
     return out;
   }
   for (const [key, value] of Object.entries(headerInit)) {
-    out[String(key).toLowerCase()] = String(value);
+    setSafeHeader(out, key, value);
   }
   return out;
+}
+
+function normalizeHeaderName(name) {
+  if (name === undefined || name === null) return null;
+  const key = String(name).trim().toLowerCase();
+  if (!key || key.length > MAX_HEADER_NAME_LENGTH) return null;
+  if (!HEADER_NAME_RE.test(key)) return null;
+  return key;
+}
+
+function normalizeHeaderValue(value) {
+  if (value === undefined || value === null) return null;
+  const text = String(value);
+  if (text.length > MAX_HEADER_VALUE_LENGTH) return null;
+  if (HEADER_VALUE_UNSAFE_RE.test(text)) return null;
+  return text;
+}
+
+function setSafeHeader(out, key, value) {
+  const safeKey = normalizeHeaderName(key);
+  const safeValue = normalizeHeaderValue(value);
+  if (!safeKey || safeValue === null) return;
+  out[safeKey] = safeValue;
+}
+
+function firstHeaderValue(value) {
+  if (Array.isArray(value)) return value[0];
+  return value;
+}
+
+function safeRetryAfterValue(value) {
+  return normalizeHeaderValue(firstHeaderValue(value));
 }
 
 function mergeSignals(a, b) {
@@ -194,5 +230,11 @@ module.exports = {
   createResilientFetch,
   isRetryableResponse,
   isRetryableError,
+  normalizeHeaderInit,
+  normalizeHeaderName,
+  normalizeHeaderValue,
+  safeRetryAfterValue,
   DEFAULT_RETRY_STATUSES,
+  MAX_HEADER_NAME_LENGTH,
+  MAX_HEADER_VALUE_LENGTH,
 };

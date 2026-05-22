@@ -16,9 +16,12 @@ const assert = require('node:assert/strict');
 const {
   enforceOrgRateLimit,
   rpsFor,
+  resolveOrgId,
+  normalizeOrgId,
   HEADER_RPS_LIMIT,
   HEADER_RPS_REMAINING,
   HEADER_RPS_PLAN,
+  MAX_ORG_ID_LENGTH,
 } = require('../src/middleware/enforce-org-rate-limit');
 
 function fakeRes() {
@@ -72,6 +75,21 @@ describe('enforce-org-rate-limit', () => {
     assert.equal(rpsFor('garbage'), 1);
   });
 
+  test('normalizeOrgId accepts compact safe ids and rejects unsafe values', () => {
+    assert.equal(normalizeOrgId(' org_123 '), 'org_123');
+    assert.equal(normalizeOrgId(['org_array']), 'org_array');
+    assert.equal(normalizeOrgId('bad\nid'), null);
+    assert.equal(normalizeOrgId('x'.repeat(MAX_ORG_ID_LENGTH + 1)), null);
+    assert.equal(normalizeOrgId('org with spaces'), null);
+  });
+
+  test('resolveOrgId ignores unsafe header and falls back to body', () => {
+    assert.equal(resolveOrgId({
+      headers: { 'x-org-id': 'bad\nid' },
+      body: { organizationId: 'body_org' },
+    }), 'body_org');
+  });
+
   test('no orgId → pass-through (next called, no 429)', async () => {
     const mw = enforceOrgRateLimit({
       prisma: makePrisma('FREE'),
@@ -94,19 +112,25 @@ describe('enforce-org-rate-limit', () => {
     const res = fakeRes();
     let called = false;
     await mw(
-      { headers: { 'x-org-id': 'org_abc' }, body: {} },
+      { headers: { 'x-org-id': 'org_abc' }, body: {}, requestId: 'req_org_limit_1' },
       res,
       () => { called = true; },
     );
     const s = res._state();
     assert.equal(called, false);
     assert.equal(s.statusCode, 429);
+    assert.equal(s.payload.ok, false);
+    assert.equal(s.payload.code, 'org_rate_limited');
     assert.equal(s.payload.error, 'organization rate limit exceeded');
     assert.equal(s.payload.orgId, 'org_abc');
     assert.equal(s.payload.plan, 'FREE');
     assert.equal(s.payload.limitRps, 1);
+    assert.equal(s.payload.requestId, 'req_org_limit_1');
     assert.ok(s.payload.retryAfterMs > 0);
+    assert.ok(s.payload.retryAfterSec >= 1);
     assert.ok(Number(s.headers['Retry-After']) >= 1);
+    assert.equal(s.headers['Cache-Control'], 'no-store');
+    assert.equal(s.headers['X-Content-Type-Options'], 'nosniff');
     assert.equal(s.headers[HEADER_RPS_PLAN], 'FREE');
     assert.equal(s.headers[HEADER_RPS_LIMIT], '1');
   });

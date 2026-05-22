@@ -119,6 +119,69 @@ function addRowsWorksheet(workbook, name, rows) {
   return worksheet;
 }
 
+/**
+ * Evaluate and collect formula information from a workbook.
+ * ExcelJS computes many formulas automatically during read.
+ * This function returns computed values and formula metadata.
+ *
+ * Returns { formulaCount, formulaCells, formulaSummary }
+ */
+function evaluateFormulas(workbook) {
+  if (!workbook || !workbook.worksheets) {
+    return { formulaCount: 0, formulaCells: [], formulaSummary: '' };
+  }
+
+  const formulaCells = [];
+  let totalFormulas = 0;
+  const MAX_FORMULA_REPORT = 50;
+
+  for (const ws of workbook.worksheets) {
+    if (!ws) continue;
+    const rowCount = ws.actualRowCount || ws.rowCount || 0;
+    for (let r = 1; r <= rowCount && formulaCells.length < MAX_FORMULA_REPORT; r++) {
+      const row = ws.getRow(r);
+      if (!row) continue;
+      row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
+        if (cell.formula) {
+          totalFormulas++;
+          if (formulaCells.length < MAX_FORMULA_REPORT) {
+            formulaCells.push({
+              sheet: ws.name,
+              row: r,
+              col: colNumber,
+              formula: String(cell.formula).substring(0, 120),
+              computedValue: cell.result !== undefined && cell.result !== null
+                ? String(cell.result).substring(0, 80)
+                : null,
+              colLetter: String.fromCharCode(64 + Math.min(colNumber, 26)),
+            });
+          }
+        }
+      });
+    }
+  }
+
+  let formulaSummary = '';
+  if (totalFormulas > 0) {
+    const computedCount = formulaCells.filter(f => f.computedValue !== null).length;
+    formulaSummary = `${totalFormulas} formulas detected (${computedCount} computed by ExcelJS, ${totalFormulas - computedCount} require external evaluation). `;
+
+    const formulaTypes = {};
+    for (const f of formulaCells) {
+      const type = f.formula.match(/^[A-Z]+/)?.[0] || 'OTHER';
+      formulaTypes[type] = (formulaTypes[type] || 0) + 1;
+    }
+    const topTypes = Object.entries(formulaTypes)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([t, c]) => `${t}(${c})`)
+      .join(', ');
+    formulaSummary += `Top functions: ${topTypes}`;
+  }
+
+  return { formulaCount: totalFormulas, formulaCells, formulaSummary };
+}
+
 module.exports = {
   DEFAULT_MAX_COLUMNS,
   DEFAULT_MAX_ROWS,
@@ -128,6 +191,7 @@ module.exports = {
   createWorkbook,
   defangCellText,
   getXlsxMaxSheets,
+  evaluateFormulas,
   readXlsxBuffer,
   readXlsxFile,
   rowToValues,

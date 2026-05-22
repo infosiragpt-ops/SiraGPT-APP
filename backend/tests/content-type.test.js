@@ -27,6 +27,26 @@ describe('parseContentType', () => {
     assert.equal(r.parameters.boundary, 'ab"c');
   });
 
+  test('preserves semicolons inside quoted parameter values', () => {
+    const r = parseContentType('multipart/form-data; boundary="part;still-boundary"; charset=utf-8');
+    assert.equal(r.parameters.boundary, 'part;still-boundary');
+    assert.equal(r.parameters.charset, 'utf-8');
+  });
+
+  test('rejects duplicate parameters', () => {
+    assert.equal(parseContentType('text/plain; charset=utf-8; CHARSET=iso-8859-1'), null);
+  });
+
+  test('rejects malformed quoted parameters', () => {
+    assert.equal(parseContentType('text/plain; charset="unterminated'), null);
+    assert.equal(parseContentType('text/plain; charset=utf-8"'), null);
+  });
+
+  test('rejects malformed parameter names and empty values', () => {
+    assert.equal(parseContentType('text/plain; bad name=utf-8'), null);
+    assert.equal(parseContentType('text/plain; charset='), null);
+  });
+
   test('rejects malformed', () => {
     assert.equal(parseContentType(''), null);
     assert.equal(parseContentType(null), null);

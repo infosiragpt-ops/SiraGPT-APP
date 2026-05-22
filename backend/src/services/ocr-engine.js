@@ -28,7 +28,8 @@ function usefulCharCount(text) {
 
 class OcrEngine {
   constructor() {
-    this.defaultLanguage = 'spa+eng';
+    // Configurable default language via env. Falls back to spa+eng.
+    this.defaultLanguage = process.env.OCR_DEFAULT_LANGUAGE || 'spa+eng';
   }
 
   get config() {
@@ -37,6 +38,8 @@ class OcrEngine {
       minConfidence: numberFromEnv('OCR_MIN_CONFIDENCE', 70),
       minUsefulChars: numberFromEnv('OCR_MIN_USEFUL_CHARS', 20),
       visionModel: process.env.OCR_VISION_MODEL || process.env.VISION_MODEL || 'gpt-4o-mini',
+      visionPdfMaxPages: numberFromEnv('OCR_VISION_PDF_MAX_PAGES', 20),
+      visionPdfStrategy: process.env.OCR_VISION_PDF_STRATEGY || 'first', // first | first-last-middle | first
     };
   }
 
@@ -210,10 +213,35 @@ class OcrEngine {
       .greyscale();
 
     return Promise.all([
+      // 1. Normalize + sharpen (best for well-lit documents)
       base.clone().normalize().sharpen().png().toBuffer(),
+      // 2. High contrast — linear stretch (best for faded text)
       base.clone().linear(1.25, -8).normalize().sharpen().png().toBuffer(),
+      // 3. Hard threshold binarization (best for clean scans)
       base.clone().normalize().threshold(165).png().toBuffer(),
+      // 4. Adaptive threshold via local contrast (best for uneven lighting)
+      this._adaptiveThreshold(base.clone()),
+      // 5. Inverted — white text on black (important for some diagrams)
+      base.clone().negate({ alpha: false }).normalize().sharpen().png().toBuffer(),
     ]);
+  }
+
+  /**
+   * Approximate adaptive thresholding by applying a strong blur
+   * (local-mean estimate) and then subtracting it before thresholding.
+   * This handles documents photographed with shadows or uneven lighting.
+   */
+  async _adaptiveThreshold(sharpInstance) {
+    // Blur, subtract from original, then threshold
+    const blurred = sharpInstance.clone().blur(20);
+    // Use composite to subtract blurred from original
+    const result = await sharpInstance
+      .composite([{ input: await blurred.png().toBuffer(), blend: 'difference' }])
+      .normalize()
+      .threshold(128)
+      .png()
+      .toBuffer();
+    return result;
   }
 
   async runLocalImageOcr(filePath, options = {}) {
@@ -283,18 +311,39 @@ class OcrEngine {
   }
 
   async runVisionPdfFallback(pageBuffers, { config = this.config, localQuality = null } = {}) {
-    const maxPages = Math.min(pageBuffers.length, 5);
+    const maxPages = Math.min(pageBuffers.length, config.visionPdfMaxPages || 20, 50);
+    const strategy = config.visionPdfStrategy || 'first';
+
+    // Select pages based on strategy
+    let pageIndices = [];
+    if (strategy === 'first-last-middle' && pageBuffers.length > 3) {
+      // First pages, middle pages, last pages
+      const firstCount = Math.ceil(maxPages * 0.4);
+      const lastCount = Math.ceil(maxPages * 0.3);
+      const middleCount = maxPages - firstCount - lastCount;
+      for (let i = 0; i < firstCount; i++) pageIndices.push(i);
+      const midStart = Math.max(firstCount, Math.floor((pageBuffers.length - middleCount) / 2));
+      for (let i = 0; i < middleCount; i++) pageIndices.push(midStart + i);
+      for (let i = 0; i < lastCount; i++) pageIndices.push(pageBuffers.length - lastCount + i);
+    } else {
+      // 'first' strategy: take first N pages
+      for (let i = 0; i < maxPages; i++) pageIndices.push(i);
+    }
+
+    pageIndices = [...new Set(pageIndices)].sort((a, b) => a - b).slice(0, maxPages);
+
     const texts = [];
     let totalConfidence = 0;
     let usedPages = 0;
 
-    for (let index = 0; index < maxPages; index += 1) {
+    for (let idx = 0; idx < pageIndices.length; idx += 1) {
+      const pageIdx = pageIndices[idx];
       const result = await this.runVisionFallback({
-        buffer: pageBuffers[index],
+        buffer: pageBuffers[pageIdx],
         mimeType: 'image/png',
         config,
         localQuality,
-        promptPrefix: `Pagina ${index + 1} de ${pageBuffers.length}.`,
+        promptPrefix: `Pagina ${pageIdx + 1} de ${pageBuffers.length}.`,
       });
 
       if (result.ocr.status === 'vision_fallback' && result.text) {
@@ -355,7 +404,7 @@ class OcrEngine {
         messages: [
           {
             role: 'system',
-            content: 'Eres un motor OCR profesional. Devuelve solo el texto visible, preserva saltos de linea utiles y no inventes contenido.',
+            content: 'You are a professional OCR engine. Return ONLY the visible text from the image. Preserve useful line breaks. Do NOT invent or hallucinate content. Do NOT translate — output text in the original language. If you cannot read any text, respond with exactly: OCR_EMPTY',
           },
           {
             role: 'user',

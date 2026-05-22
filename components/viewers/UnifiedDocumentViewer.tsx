@@ -1,7 +1,7 @@
 "use client"
 
 /**
- * UnifiedDocumentViewer — one viewer modal for every supported format.
+ * UnifiedDocumentViewer — one fast viewer modal for every supported format.
  *
  * Dispatches to a format-specific renderer based on MIME + extension +
  * (where available) a first-bytes magic-byte sniff. The viewer itself
@@ -21,7 +21,7 @@
  *
  * Renderers (all client-side except where noted):
  *   image   → <img> with wheel-zoom and click-drag pan
- *   pdf     → <iframe> using browser-native PDF viewer
+ *   pdf     → pdf.js paginated viewer with zoom + navigation
  *   csv     → papa-free mini-parser → <table>
  *   xlsx    → ExcelJS parses workbook → tabs + bounded <table> per sheet
  *   docx    → mammoth → HTML (sanitized) → rendered in scrollable pane
@@ -34,12 +34,7 @@
  */
 
 import * as React from "react"
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
+import { createPortal } from "react-dom"
 import { Button } from "@/components/ui/button"
 import {
   Download,
@@ -58,7 +53,9 @@ import {
   Copy,
   Maximize2,
   RefreshCw,
-  Reply} from "lucide-react"
+  Reply,
+  X,
+} from "lucide-react"
 import { cn } from "@/lib/utils"
 import { normalizeBackendAssetUrl } from "@/lib/attachment-url"
 import ReactMarkdown from "react-markdown"
@@ -82,6 +79,17 @@ function loadMammoth() {
     })
   }
   return mammothPromise
+}
+
+let docxPreviewPromise: Promise<typeof import("docx-preview")> | null = null
+function loadDocxPreview() {
+  if (!docxPreviewPromise) {
+    docxPreviewPromise = import("docx-preview").catch((err) => {
+      docxPreviewPromise = null
+      throw err
+    })
+  }
+  return docxPreviewPromise
 }
 
 /**
@@ -206,6 +214,45 @@ interface UnifiedDocumentViewerProps {
   onNavigate?: (next: AttachmentLike) => void
 }
 
+class ViewerRenderBoundary extends React.Component<
+  { children: React.ReactNode; name: string },
+  { error: string | null }
+> {
+  state = { error: null }
+
+  static getDerivedStateFromError(error: unknown) {
+    const message = error instanceof Error ? error.message : String(error || "Error")
+    return { error: message }
+  }
+
+  componentDidCatch(error: unknown) {
+    if (process.env.NODE_ENV !== "production") {
+      // eslint-disable-next-line no-console
+      console.warn("[UnifiedDocumentViewer] renderer crashed:", error)
+    }
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children
+    return (
+      <div className="flex h-full flex-col">
+        <div className="border-b border-border/50 px-4 py-3">
+          <h2 className="truncate text-[14px] font-semibold">{this.props.name}</h2>
+        </div>
+        <div className="flex min-h-0 flex-1 items-center justify-center p-8 text-center">
+          <div className="max-w-md space-y-2">
+            <p className="text-[14px] font-semibold">No se pudo abrir el documento</p>
+            <p className="text-[12px] text-muted-foreground">
+              El render del documento falló dentro del navegador. Cierra esta vista y vuelve a intentarlo.
+            </p>
+            <p className="text-[11px] text-muted-foreground/70">{this.state.error}</p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+}
+
 function formatSize(n: number | null | undefined) {
   if (!n && n !== 0) return ""
   if (n < 1024) return `${n} B`
@@ -291,7 +338,7 @@ export default function UnifiedDocumentViewer({
 
   // Safe early-return — every hook above ran, so React's hook count
   // stays constant across renders regardless of attachment state.
-  if (!attachment) return null
+  if (!open || !attachment || typeof document === "undefined") return null
 
   const kind = detectKind(attachment)
   const Icon = iconForKind(kind)
@@ -316,20 +363,27 @@ export default function UnifiedDocumentViewer({
     }
   }
 
-  return (
-    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent
-        className={cn(
-          "flex h-[85vh] max-w-5xl flex-col overflow-hidden p-0",
-          "bg-background",
-        )}
+  return createPortal(
+    <div className="fixed inset-0 z-[10000]">
+      <div
+        className="absolute inset-0 bg-black/80"
+        aria-hidden="true"
+        onClick={onClose}
+      />
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="unified-document-viewer-title"
+        data-testid="unified-document-viewer-dialog"
+        className="fixed left-1/2 top-1/2 z-[10001] flex h-[85vh] w-[min(96vw,64rem)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg border border-border bg-background p-0 shadow-lg"
+        onClick={(e) => e.stopPropagation()}
       >
-        <DialogHeader className="flex flex-row items-center gap-3 border-b border-border/50 px-4 py-2.5 space-y-0">
+        <div className="flex flex-row items-center gap-3 border-b border-border/50 px-4 py-2.5">
           <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
           <div className="min-w-0 flex-1">
-            <DialogTitle className="truncate text-[14px] font-semibold">
+            <h2 id="unified-document-viewer-title" className="truncate text-[14px] font-semibold">
               {attachment.name}
-            </DialogTitle>
+            </h2>
             <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
               {kind !== "unknown" && <span className="uppercase tracking-wide">{kind}</span>}
               {attachment.size ? <span>· {formatSize(attachment.size)}</span> : null}
@@ -341,28 +395,26 @@ export default function UnifiedDocumentViewer({
 
           {siblings && siblings.length > 1 && (
             <div className="flex items-center gap-1">
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8"
+              <button
+                type="button"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-40"
                 disabled={!canPrev}
                 onClick={() => go(-1)}
                 title="Anterior"
                 aria-label="Anterior"
               >
                 <ChevronLeft className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8"
+              </button>
+              <button
+                type="button"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-40"
                 disabled={!canNext}
                 onClick={() => go(1)}
                 title="Siguiente"
                 aria-label="Siguiente"
               >
                 <ChevronRight className="h-4 w-4" />
-              </Button>
+              </button>
             </div>
           )}
 
@@ -371,10 +423,9 @@ export default function UnifiedDocumentViewer({
               Only meaningful for attachments that already have a backend
               id (i.e., already uploaded). */}
           {attachment.id && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8"
+            <button
+              type="button"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-accent hover:text-accent-foreground"
               onClick={() => {
                 if (typeof window === "undefined") return
                 window.dispatchEvent(new CustomEvent("sira:reuse-attachment", {
@@ -392,45 +443,55 @@ export default function UnifiedDocumentViewer({
               aria-label="Reutilizar en prompt"
             >
               <Reply className="h-4 w-4" />
-            </Button>
+            </button>
           )}
           {canDownload && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8"
+            <button
+              type="button"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-accent hover:text-accent-foreground"
               onClick={handleDownload}
               title="Descargar"
               aria-label="Descargar"
             >
               <Download className="h-4 w-4" />
-            </Button>
+            </button>
           )}
           {downloadUrl && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8"
+            <button
+              type="button"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-accent hover:text-accent-foreground"
               onClick={() => window.open(downloadUrl, "_blank", "noopener,noreferrer")}
               title="Abrir en nueva pestaña"
               aria-label="Abrir en nueva pestaña"
             >
               <ExternalLink className="h-4 w-4" />
-            </Button>
+            </button>
           )}
-        </DialogHeader>
+          <button
+            type="button"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-accent hover:text-accent-foreground"
+            onClick={onClose}
+            title="Cerrar"
+            aria-label="Cerrar"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
 
         {/* Renderer subtree, wrapped in a context that gives
             LoadingState/ErrorState access to attachment+kind+onRetry,
             and keyed on `retryKey` so "Reintentar" remounts the renderer
             cleanly (resets all internal state, re-runs effects). */}
-        <RendererCtx.Provider value={{ attachment, kind, onRetry }}>
-          <div className="min-h-0 flex-1 overflow-hidden" key={retryKey}>
-            <RendererDispatch kind={kind} attachment={attachment} isDark={isDark} />
-          </div>
-        </RendererCtx.Provider>
-      </DialogContent>
-    </Dialog>
+        <ViewerRenderBoundary name={attachment.name}>
+          <RendererCtx.Provider value={{ attachment, kind, onRetry }}>
+            <div className="min-h-0 flex-1 overflow-hidden" key={retryKey}>
+              <RendererDispatch kind={kind} attachment={attachment} isDark={isDark} />
+            </div>
+          </RendererCtx.Provider>
+        </ViewerRenderBoundary>
+      </section>
+    </div>,
+    document.body,
   )
 }
 
@@ -488,8 +549,72 @@ function RendererDispatch({
  * never left with an empty modal.
  *
  * The backend caches the produced PDF on disk by file id, so the second
- * open of the same attachment is instant.
+ * open of the same attachment is instant. An additional in-memory
+ * `convertedPdfCache` avoids the fetch entirely for re-opens within the
+ * same session — the second click on the same PPTX/DOC chip is sub-ms.
  */
+
+const convertedPdfCache = new Map<string, AttachmentLike>()
+const convertedPdfPromiseCache = new Map<string, Promise<AttachmentLike>>()
+
+function hasClientPreviewSource(a: AttachmentLike): boolean {
+  return !!a.file || !!a.url || !!a.extractedText
+}
+
+function canUseServerPdfConversion(a: AttachmentLike): boolean {
+  const id = String(a.id || "")
+  return !!id && !id.startsWith("temp")
+}
+
+function renderedPdfName(name: string): string {
+  return `${name.replace(/\.[^.]+$/, "") || name}.pdf`
+}
+
+async function fetchServerConvertedPdfAttachment(a: AttachmentLike): Promise<AttachmentLike> {
+  if (!canUseServerPdfConversion(a)) {
+    throw new Error("no-stable-id")
+  }
+
+  const key = String(a.id)
+  const cached = convertedPdfCache.get(key)
+  if (cached) return cached
+
+  const inflight = convertedPdfPromiseCache.get(key)
+  if (inflight) return inflight
+
+  const promise = (async () => {
+    const token = typeof window !== "undefined"
+      ? (window.localStorage?.getItem("auth-token") || "")
+      : ""
+    const base = process.env.NEXT_PUBLIC_IMAGE_URL || ""
+    const url = `${base}/api/files/${encodeURIComponent(String(a.id))}/render?target=pdf`
+    const res = await fetch(url, {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      credentials: "include",
+    })
+    if (!res.ok) {
+      throw new Error(`http-${res.status}`)
+    }
+
+    const buf = await res.arrayBuffer()
+    const pdfBlob = new File([buf], renderedPdfName(a.name), { type: "application/pdf" })
+    const pdfAtt: AttachmentLike = {
+      id: a.id,
+      name: renderedPdfName(a.name),
+      mimeType: "application/pdf",
+      size: buf.byteLength,
+      file: pdfBlob,
+    }
+    convertedPdfCache.set(key, pdfAtt)
+    cacheSet(cacheKeyFor(pdfAtt, "ab"), { buffer: buf })
+    return pdfAtt
+  })()
+
+  convertedPdfPromiseCache.set(key, promise)
+  promise.finally(() => convertedPdfPromiseCache.delete(key)).catch(() => {})
+  return promise
+}
+
 function ServerConvertedPdfRenderer({
   a, fallback,
 }: { a: AttachmentLike; fallback: React.ReactNode }) {
@@ -498,43 +623,21 @@ function ServerConvertedPdfRenderer({
   const [unavailableReason, setUnavailableReason] = React.useState<string>("")
 
   React.useEffect(() => {
-    // We need a stable backend id to ask the server to convert. While the
-    // attachment is still in the composer (pre-upload), there's no id —
-    // we silently fall back to the client-side renderer.
-    if (!a.id) { setState("unavailable"); setUnavailableReason("no-id"); return }
+    setState("probing")
+    setPdfAttachment(null)
+    setUnavailableReason("")
+    if (!canUseServerPdfConversion(a)) {
+      setState("unavailable")
+      setUnavailableReason(a.id ? "temporary-id" : "no-id")
+      return
+    }
 
     let cancelled = false
     ;(async () => {
       try {
-        const token = typeof window !== "undefined"
-          ? (window.localStorage?.getItem("auth-token") || "")
-          : ""
-        const base = process.env.NEXT_PUBLIC_IMAGE_URL || ""
-        const url = `${base}/api/files/${encodeURIComponent(String(a.id))}/render?target=pdf`
-        const res = await fetch(url, {
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-          credentials: "include",
-        })
+        const pdfAtt = await fetchServerConvertedPdfAttachment(a)
         if (cancelled) return
-        if (!res.ok) {
-          // 503 = engine not available, 415 = format not convertible,
-          // 404 = file disappeared. All map to "use fallback".
-          setUnavailableReason(`http-${res.status}`)
-          setState("unavailable")
-          return
-        }
-        const buf = await res.arrayBuffer()
-        // Wrap the PDF buffer in a synthetic File so PdfRenderer's
-        // `a.file.arrayBuffer()` path picks it up — no special-case
-        // plumbing needed inside the renderer.
-        const pdfBlob = new File([buf], `${a.name}.pdf`, { type: "application/pdf" })
-        setPdfAttachment({
-          id: a.id,
-          name: a.name,
-          mimeType: "application/pdf",
-          size: buf.byteLength,
-          file: pdfBlob,
-        })
+        setPdfAttachment(pdfAtt)
         setState("ok")
       } catch (e: any) {
         if (!cancelled) {
@@ -546,6 +649,7 @@ function ServerConvertedPdfRenderer({
     return () => { cancelled = true }
   }, [a])
 
+  if (state === "probing" && hasClientPreviewSource(a)) return <>{fallback}</>
   if (state === "probing") return <LoadingState label="Generando vista de alta fidelidad…" />
   if (state === "unavailable" || !pdfAttachment) {
     if (process.env.NODE_ENV !== "production" && unavailableReason) {
@@ -584,6 +688,46 @@ function CopyButton({ text, className }: { text: string; className?: string }) {
 
 // ─── Utilities for loading raw content ───────────────────────────────
 
+// Module-level LRU cache so re-opening the same attachment (or opening a
+// chip after prewarm) avoids re-reading/re-fetching the same bytes.
+const MAX_CACHE_SIZE = 50
+
+interface CacheEntry {
+  text?: string
+  buffer?: ArrayBuffer
+  at: number
+}
+
+const contentCache = new Map<string, CacheEntry>()
+
+function cacheKeyFor(a: AttachmentLike, suffix: string): string {
+  return `${a.id || a.url || a.name || "anon"}:${suffix}`
+}
+
+function cacheGet(key: string): CacheEntry | undefined {
+  const entry = contentCache.get(key)
+  if (!entry) return undefined
+  entry.at = Date.now()
+  return entry
+}
+
+function cacheSet(key: string, partial: { text?: string; buffer?: ArrayBuffer }) {
+  if (contentCache.size >= MAX_CACHE_SIZE) {
+    let oldestKey = ""
+    let oldestAt = Infinity
+    for (const [k, v] of contentCache) {
+      if (v.at < oldestAt) { oldestAt = v.at; oldestKey = k }
+    }
+    if (oldestKey) contentCache.delete(oldestKey)
+  }
+  const existing = contentCache.get(key)
+  contentCache.set(key, {
+    text: partial.text ?? existing?.text,
+    buffer: partial.buffer ?? existing?.buffer,
+    at: Date.now(),
+  })
+}
+
 /**
  * Build a fetch init that carries both the session cookie and the
  * Bearer token most of the backend's auth middlewares look for.
@@ -601,25 +745,82 @@ function authedAssetFetchInit(): RequestInit {
   }
 }
 
+async function fetchAssetBytes(url: string): Promise<Response> {
+  const normalized = absUrl(url)
+  const init = /^(data:|blob:)/i.test(normalized)
+    ? undefined
+    : authedAssetFetchInit()
+  return fetch(normalized, init)
+}
+
 async function readAsText(a: AttachmentLike): Promise<string> {
-  if (a.file) return await a.file.text()
-  if (a.url) {
-    const res = await fetch(absUrl(a.url), authedAssetFetchInit())
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    return await res.text()
+  const tKey = cacheKeyFor(a, "text")
+  const cachedText = cacheGet(tKey)
+  if (cachedText?.text !== undefined) return cachedText.text
+
+  if (a.extractedText) {
+    cacheSet(tKey, { text: a.extractedText })
+    return a.extractedText
   }
-  if (a.extractedText) return a.extractedText
+
+  if (a.file) {
+    const text = await a.file.text()
+    cacheSet(tKey, { text })
+    return text
+  }
+
+  if (a.url) {
+    const res = await fetchAssetBytes(a.url)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const text = await res.text()
+    cacheSet(tKey, { text })
+    return text
+  }
+
   throw new Error("No source available")
 }
 
 async function readAsArrayBuffer(a: AttachmentLike): Promise<ArrayBuffer> {
-  if (a.file) return await a.file.arrayBuffer()
-  if (a.url) {
-    const res = await fetch(absUrl(a.url), authedAssetFetchInit())
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    return await res.arrayBuffer()
+  const bKey = cacheKeyFor(a, "ab")
+  const cachedBuf = cacheGet(bKey)
+  if (cachedBuf?.buffer) return cachedBuf.buffer
+
+  if (a.file) {
+    const buf = await a.file.arrayBuffer()
+    cacheSet(bKey, { buffer: buf })
+    return buf
   }
+
+  if (a.url) {
+    const res = await fetchAssetBytes(a.url)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const buf = await res.arrayBuffer()
+    cacheSet(bKey, { buffer: buf })
+    return buf
+  }
+
   throw new Error("No source available")
+}
+
+export function prewarmUnifiedDocumentPreview(a: AttachmentLike): void {
+  if (typeof window === "undefined") return
+  const kind = detectKind(a)
+
+  if (["doc", "docx", "xlsx", "pptx"].includes(kind) && canUseServerPdfConversion(a)) {
+    void fetchServerConvertedPdfAttachment(a).catch(() => null)
+  }
+
+  if (["pdf", "docx", "xlsx", "pptx"].includes(kind) && (a.file || a.url)) {
+    void readAsArrayBuffer(a).catch(() => null)
+  }
+
+  if (kind === "docx" && hasClientPreviewSource(a)) {
+    void loadDocxPreview().catch(() => null)
+  }
+
+  if (["csv", "md", "html", "xml", "json", "text", "code"].includes(kind) && hasClientPreviewSource(a)) {
+    void readAsText(a).catch(() => null)
+  }
 }
 
 // ─── Renderer context ────────────────────────────────────────────────
@@ -989,19 +1190,15 @@ function PdfRenderer({ a }: { a: AttachmentLike }) {
   const pageRefs = React.useRef<Record<number, HTMLDivElement | null>>({})
   const [activePage, setActivePage] = React.useState<number>(1)
 
-  // Resolve source from File or URL.
+  // Resolve through the same authenticated byte loader used by the
+  // other document renderers. A plain pdf.js URL load cannot attach the
+  // Bearer token required by protected /uploads assets.
   React.useEffect(() => {
     let cancelled = false
     ;(async () => {
       try {
-        if (a.file) {
-          const buf = await a.file.arrayBuffer()
-          if (!cancelled) setSource({ data: new Uint8Array(buf) })
-        } else if (a.url) {
-          if (!cancelled) setSource({ url: absUrl(a.url) })
-        } else {
-          throw new Error("Sin fuente PDF")
-        }
+        const buf = await readAsArrayBuffer(a)
+        if (!cancelled) setSource({ data: new Uint8Array(buf) })
       } catch (e: any) {
         if (!cancelled) setErr(e?.message || "Error")
       }
@@ -1734,7 +1931,7 @@ function PptxRenderer({ a }: { a: AttachmentLike }) {
  *      Download CTA so the user is never left at a broken modal.
  */
 function DocxRenderer({ a, isDark: _isDark }: { a: AttachmentLike; isDark: boolean }) {
-  const containerRef = React.useRef<HTMLDivElement | null>(null)
+  const iframeRef = React.useRef<HTMLIFrameElement | null>(null)
   const [mode, setMode] = React.useState<"loading" | "native" | "fallback" | "extracted" | "error">("loading")
   const [fallbackHtml, setFallbackHtml] = React.useState<string>("")
   const [err, setErr] = React.useState<string | null>(null)
@@ -1755,10 +1952,52 @@ function DocxRenderer({ a, isDark: _isDark }: { a: AttachmentLike; isDark: boole
         // Try docx-preview first (high fidelity). Imported lazily so the
         // ~250 KB module isn't loaded for any non-DOCX preview.
         try {
-          const { renderAsync } = await import("docx-preview")
-          if (cancelled || !containerRef.current) return
-          containerRef.current.innerHTML = ""
-          await renderAsync(buf, containerRef.current, undefined, {
+          const { renderAsync } = await loadDocxPreview()
+          const frame = iframeRef.current
+          const frameDoc = frame?.contentDocument
+          if (cancelled || !frameDoc?.body || !frameDoc?.head) return
+
+          frameDoc.open()
+          frameDoc.write(`<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      html, body {
+        margin: 0;
+        min-height: 100%;
+        background: #f4f4f5;
+        color: #111827;
+      }
+      body {
+        overflow: auto;
+        font-family: Arial, Helvetica, sans-serif;
+      }
+      #docx-preview-root {
+        min-height: 100vh;
+      }
+      .docx-wrapper,
+      .docx-preview-doc-wrapper {
+        background: transparent !important;
+        padding: 24px 0 !important;
+      }
+      section.docx,
+      section.docx-preview-doc {
+        margin: 12px auto !important;
+        border-radius: 2px;
+        background: white !important;
+        color: black !important;
+        box-shadow: 0 12px 30px rgba(15, 23, 42, 0.12);
+      }
+    </style>
+  </head>
+  <body><div id="docx-preview-root"></div></body>
+</html>`)
+          frameDoc.close()
+          const root = frameDoc.getElementById("docx-preview-root")
+          if (cancelled || !root) return
+
+          await renderAsync(buf, root, frameDoc.head, {
             className: "docx-preview-doc",
             inWrapper: true,
             ignoreWidth: false,
@@ -1766,7 +2005,7 @@ function DocxRenderer({ a, isDark: _isDark }: { a: AttachmentLike; isDark: boole
             ignoreFonts: false,
             breakPages: true,
             ignoreLastRenderedPageBreak: true,
-            experimental: true,
+            experimental: false,
             trimXmlDeclaration: true,
             useBase64URL: true,
             renderHeaders: true,
@@ -1843,20 +2082,19 @@ function DocxRenderer({ a, isDark: _isDark }: { a: AttachmentLike; isDark: boole
   }
 
   return (
-    <div className="h-full overflow-auto bg-muted/30">
+    <div className="relative h-full overflow-hidden bg-muted dark:bg-zinc-900">
       {mode === "loading" && <LoadingState label="Renderizando documento…" />}
 
       {/* Native docx-preview output. The library generates its own page
-          containers + CSS; we just provide a centered scrollable canvas
-          and a small style override so the page chrome reads in dark
-          mode without re-coloring the document body itself. */}
-      <div
-        ref={containerRef}
+          containers + CSS. It runs inside an iframe so any DOM cleanup
+          performed by docx-preview cannot remove the app modal. */}
+      <iframe
+        ref={iframeRef}
+        title={`Vista previa de ${a.name}`}
+        sandbox="allow-same-origin"
         className={cn(
-          "mx-auto py-6 [&_.docx-wrapper]:bg-transparent [&_.docx-wrapper]:p-0",
-          "[&_section.docx]:mx-auto [&_section.docx]:my-3 [&_section.docx]:rounded-sm",
-          "[&_section.docx]:shadow-md [&_section.docx]:ring-1 [&_section.docx]:ring-border/30",
-          mode !== "native" && "hidden",
+          "h-full w-full border-0 bg-muted dark:bg-zinc-900",
+          mode !== "native" && "pointer-events-none absolute inset-0 opacity-0",
         )}
       />
 

@@ -13,13 +13,22 @@
  * and the raw `req.body` is left untouched for backward compat.
  */
 
+const { getRequestId } = require('./request-id');
+
+function setValidationHeaders(res) {
+  if (!res || typeof res.setHeader !== 'function') return;
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+}
+
 function formatZodError(zodError) {
-  const details = zodError.errors.map(err => ({
-    path: err.path.join('.'),
+  const details = (zodError.errors || zodError.issues || []).map(err => ({
+    path: Array.isArray(err.path) ? err.path.join('.') : '',
     message: err.message,
     code: err.code,
   }));
   return {
+    ok: false,
     error: 'validation_failed',
     message: 'Request body validation failed',
     details,
@@ -37,11 +46,15 @@ function validateBody(schema) {
       next();
     } catch (err) {
       if (err && err.name === 'ZodError') {
-        return res.status(400).json(formatZodError(err));
+        setValidationHeaders(res);
+        const payload = formatZodError(err);
+        const requestId = getRequestId(req);
+        if (requestId) payload.requestId = requestId;
+        return res.status(400).json(payload);
       }
       next(err);
     }
   };
 }
 
-module.exports = { formatZodError, validateBody };
+module.exports = { formatZodError, setValidationHeaders, validateBody };

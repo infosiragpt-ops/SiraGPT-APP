@@ -12,6 +12,11 @@ const {
   computeFingerprint,
   compareFingerprints,
   reduceIp,
+  extractIp,
+  extractUa,
+  normalizeIpInput,
+  normalizeUserAgent,
+  MAX_UA_LENGTH,
 } = require('../src/utils/session-fingerprint');
 
 describe('reduceIp', () => {
@@ -29,6 +34,10 @@ describe('reduceIp', () => {
     );
   });
 
+  test('compressed IPv6 collapses to deterministic /64', () => {
+    assert.equal(reduceIp('2001:db8::1'), '2001:db8:0:0::/64');
+  });
+
   test('strips IPv4-mapped IPv6 prefix', () => {
     assert.equal(reduceIp('::ffff:203.0.113.1'), '203.0.113.0/24');
   });
@@ -37,6 +46,38 @@ describe('reduceIp', () => {
     assert.equal(reduceIp(''), '');
     assert.equal(reduceIp(null), '');
     assert.equal(reduceIp('not-an-ip'), 'not-an-ip');
+    assert.equal(reduceIp('999.999.999.999'), '999.999.999.999');
+    assert.equal(reduceIp('1.2.3.4\r\nx: y'), '');
+  });
+});
+
+describe('input normalization', () => {
+  test('normalizeIpInput takes first forwarded value and rejects controls/oversize', () => {
+    assert.equal(normalizeIpInput('203.0.113.1, 198.51.100.2'), '203.0.113.1');
+    assert.equal(normalizeIpInput(['203.0.113.3']), '203.0.113.3');
+    assert.equal(normalizeIpInput('203.0.113.1\r\nx: y'), '');
+    assert.equal(normalizeIpInput('1'.repeat(200)), '');
+  });
+
+  test('normalizeUserAgent strips controls and caps length', () => {
+    const ua = normalizeUserAgent(` Agent\r\nInjected ${'x'.repeat(MAX_UA_LENGTH + 50)}`);
+    assert.equal(ua.includes('\n'), false);
+    assert.equal(ua.length, MAX_UA_LENGTH);
+  });
+
+  test('extractIp prefers safe X-Forwarded-For and falls back to socket', () => {
+    assert.equal(extractIp({
+      headers: { 'x-forwarded-for': '203.0.113.5, 198.51.100.1' },
+      ip: '10.0.0.1',
+    }), '203.0.113.5');
+    assert.equal(extractIp({
+      headers: { 'x-forwarded-for': '203.0.113.5\r\nbad' },
+      socket: { remoteAddress: '10.0.0.9' },
+    }), '10.0.0.9');
+  });
+
+  test('extractUa normalizes request header arrays', () => {
+    assert.equal(extractUa({ headers: { 'user-agent': ['  Mozilla/5.0  '] } }), 'Mozilla/5.0');
   });
 });
 

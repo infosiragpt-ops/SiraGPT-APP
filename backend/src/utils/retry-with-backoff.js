@@ -29,6 +29,13 @@
 
 const { CircuitBreaker, CircuitOpenError } = require('./circuit-breaker');
 
+const DEFAULT_MAX_RETRIES = 2;
+const DEFAULT_BASE_DELAY_MS = 1_000;
+const DEFAULT_MAX_DELAY_MS = 30_000;
+const MAX_RETRIES = 20;
+const MAX_TIMER_MS = 2_147_483_647;
+const MAX_ATTEMPT_EXPONENT = 30;
+
 /**
  * Default error classifier — always retryable with a short delay.
  * Override with `classifyTaskError()` or your own.
@@ -53,11 +60,13 @@ function defaultClassifier(err) {
  * @returns {number}  delay in milliseconds
  */
 function computeBackoff(opts = {}) {
-  const base = opts.baseDelayMs ?? 1_000;
-  const max = opts.maxDelayMs ?? 30_000;
-  const attempt = opts.attempt ?? 0;
+  const base = normalizeDelay(opts.baseDelayMs, DEFAULT_BASE_DELAY_MS);
+  const max = normalizeDelay(opts.maxDelayMs, DEFAULT_MAX_DELAY_MS);
+  const attempt = normalizeNonNegativeInt(opts.attempt, 0, MAX_ATTEMPT_EXPONENT);
+  const rng = typeof opts.rng === 'function' ? opts.rng : Math.random;
+  const rand = clampRandom(rng());
   const cap = Math.min(max, base * Math.pow(2, attempt));
-  return Math.round(Math.random() * cap);
+  return normalizeDelay(Math.round(rand * cap), 0);
 }
 
 /**
@@ -77,11 +86,13 @@ function computeBackoff(opts = {}) {
  * @returns {Promise<T>}
  */
 async function withRetry(fn, opts = {}) {
-  const maxRetries = opts.maxRetries ?? 2;
+  if (typeof fn !== 'function') throw new TypeError('withRetry: fn must be a function');
+  const maxRetries = normalizeNonNegativeInt(opts.maxRetries, DEFAULT_MAX_RETRIES, MAX_RETRIES);
   const classify = opts.classifyError || defaultClassifier;
   const cb = opts.circuitBreaker || null;
   const onRetry = opts.onRetry || null;
   const signal = opts.signal || null;
+  const sleepFn = typeof opts.sleep === 'function' ? opts.sleep : sleep;
 
   let lastError = null;
 
@@ -115,7 +126,7 @@ async function withRetry(fn, opts = {}) {
       }
 
       // Classify the error for retry decision
-      const classification = classify(err);
+      const classification = safeClassify(classify, err);
       const retryable = classification.retryable === true;
 
       // Last attempt or non-retryable? Surface immediately.
@@ -128,13 +139,16 @@ async function withRetry(fn, opts = {}) {
         baseDelayMs: opts.baseDelayMs,
         maxDelayMs: opts.maxDelayMs,
         attempt,
+        rng: opts.rng,
       });
 
       if (onRetry) {
-        onRetry({ attempt: attempt + 1, delayMs, error: err, reason: classification.reason || 'unknown' });
+        try {
+          onRetry({ attempt: attempt + 1, delayMs, error: err, reason: classification.reason || 'unknown' });
+        } catch { /* retry observers must not break the operation */ }
       }
 
-      await sleep(delayMs, signal);
+      await sleepFn(delayMs, signal);
     }
   }
 
@@ -179,6 +193,36 @@ function raceWithSignal(promise, signal) {
   });
 }
 
+function normalizeNonNegativeInt(value, fallback, max = Number.MAX_SAFE_INTEGER) {
+  if (value === undefined || value === null || value === '') return fallback;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return fallback;
+  return Math.min(Math.floor(n), max);
+}
+
+function normalizeDelay(value, fallback) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return fallback;
+  return Math.min(Math.floor(n), MAX_TIMER_MS);
+}
+
+function clampRandom(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  if (n >= 1) return 1;
+  return n;
+}
+
+function safeClassify(classify, err) {
+  try {
+    const result = classify(err);
+    if (!result || typeof result !== 'object') return { retryable: false, reason: 'invalid_classification' };
+    return result;
+  } catch {
+    return { retryable: false, reason: 'classifier_error' };
+  }
+}
+
 /**
  * Simple promise-based sleep that respects an AbortSignal.
  * Throws signal.reason on abort.
@@ -204,7 +248,7 @@ function sleep(ms, signal) {
       reject(signal?.reason || new Error('sleep aborted'));
     };
 
-    const timer = setTimeout(finish, ms);
+    const timer = setTimeout(finish, normalizeDelay(ms, 0));
     if (signal) {
       signal.addEventListener('abort', onAbort, { once: true });
     }
@@ -218,4 +262,10 @@ module.exports = {
   sleep,
   defaultClassifier,
   CircuitBreaker,
+  normalizeNonNegativeInt,
+  normalizeDelay,
+  clampRandom,
+  safeClassify,
+  MAX_RETRIES,
+  MAX_TIMER_MS,
 };

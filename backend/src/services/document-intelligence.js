@@ -441,10 +441,30 @@ function extractMarkdownTables(text) {
 function extractCsvTable(file = {}, text = '') {
   const mime = String(file.mimeType || '').toLowerCase();
   const name = String(file.originalName || file.filename || '').toLowerCase();
-  if (mime !== 'text/csv' && !name.endsWith('.csv')) return [];
+  if (mime !== 'text/csv' && !name.endsWith('.csv') && !name.endsWith('.tsv')) return [];
   const lines = String(text || '').split(/\r?\n/).filter((line) => line.trim());
   if (lines.length < 2) return [];
-  const delimiter = lines[0].includes(';') && !lines[0].includes(',') ? ';' : ',';
+
+  // Multi-delimiter detection: score comma, semicolon, tab, pipe
+  const delimiters = [',', ';', '\t', '|'];
+  let bestDelimiter = ',';
+  let bestScore = -Infinity;
+
+  for (const d of delimiters) {
+    const cols = lines[0].split(d).length;
+    if (cols < 2) continue;
+    // Consistency check: test first 5 lines
+    const counts = [];
+    for (let i = 0; i < Math.min(lines.length, 5); i++) {
+      counts.push(lines[i].split(d).length);
+    }
+    if (counts.length < 2) continue;
+    const unique = new Set(counts);
+    const score = cols * 10 / (1 + unique.size);
+    if (score > bestScore) { bestScore = score; bestDelimiter = d; }
+  }
+
+  const delimiter = bestDelimiter;
   const columns = lines[0].split(delimiter).map((cell) => cell.trim()).filter(Boolean);
   if (!columns.length) return [];
   const preview = lines.slice(1, MAX_TABLE_PREVIEW_ROWS + 1).map((line) => {

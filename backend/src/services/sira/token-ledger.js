@@ -185,14 +185,48 @@ function normalizeProviderUsage(usage) {
   if (!usage || typeof usage !== "object") {
     return Object.freeze({ reported: false, input_tokens: 0, output_tokens: 0, total_tokens: 0 });
   }
-  const input = Number(usage.input_tokens || usage.prompt_tokens || 0);
-  const output = Number(usage.output_tokens || usage.completion_tokens || 0);
-  const total = Number(usage.total_tokens || input + output || 0);
+  const input = normalizeTokenCount(usage.input_tokens || usage.prompt_tokens || 0);
+  const output = normalizeTokenCount(usage.output_tokens || usage.completion_tokens || 0);
+  const total = Math.max(normalizeTokenCount(usage.total_tokens || input + output || 0), input + output);
   return Object.freeze({
     reported: input > 0 || output > 0 || total > 0,
-    input_tokens: Number.isFinite(input) ? input : 0,
-    output_tokens: Number.isFinite(output) ? output : 0,
-    total_tokens: Number.isFinite(total) ? total : 0,
+    input_tokens: input,
+    output_tokens: output,
+    total_tokens: total,
+  });
+}
+
+function normalizeTokenCount(value) {
+  const count = Number(value);
+  if (!Number.isFinite(count) || count <= 0) return 0;
+  return Math.floor(count);
+}
+
+function evaluateTokenBudget(frame, { maxTotalTokens = 0, warnAtRatio = 0.8 } = {}) {
+  validateTokenUsageFrame(frame);
+  const limit = normalizeTokenCount(maxTotalTokens);
+  const total = frame.usage.total_tokens;
+
+  if (limit <= 0) {
+    return Object.freeze({
+      status: "unlimited",
+      total_tokens: total,
+      max_total_tokens: null,
+      remaining_tokens: null,
+      usage_ratio: null,
+    });
+  }
+
+  const usageRatio = total / limit;
+  const warningThreshold = Math.min(Math.max(Number(warnAtRatio) || 0.8, 0), 1);
+  const status = total > limit ? "exceeded" : usageRatio >= warningThreshold ? "warning" : "ok";
+
+  return Object.freeze({
+    status,
+    total_tokens: total,
+    max_total_tokens: limit,
+    remaining_tokens: Math.max(0, limit - total),
+    usage_ratio: Number(usageRatio.toFixed(4)),
   });
 }
 
@@ -280,5 +314,6 @@ module.exports = {
   estimateTokens,
   buildTokenUsageFrame,
   createInMemoryTokenLedger,
+  evaluateTokenBudget,
   validateTokenUsageFrame,
 };

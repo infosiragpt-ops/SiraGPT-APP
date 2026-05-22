@@ -43,11 +43,18 @@ function detectXSS(input) {
   return { detected: patterns.length > 0, patterns };
 }
 
-function sanitizeRequestBody(body, depth = 0) {
-  if (depth > 20) return body;
+function sanitizeRequestBody(body, depth = 0, opts = {}, seen = new WeakSet()) {
+  const maxDepth = Number.isFinite(opts.maxDepth) ? Math.max(0, opts.maxDepth) : 20;
+  if (depth > maxDepth) return body;
   if (typeof body === 'string') return sanitizeAgainstXSS(body);
-  if (Array.isArray(body)) return body.map(item => sanitizeRequestBody(item, depth + 1));
+  if (Array.isArray(body)) {
+    if (seen.has(body)) return '[circular]';
+    seen.add(body);
+    return body.map(item => sanitizeRequestBody(item, depth + 1, opts, seen));
+  }
   if (body && typeof body === 'object') {
+    if (seen.has(body)) return '[circular]';
+    seen.add(body);
     const sanitized = {};
     for (const [key, value] of Object.entries(body)) {
       // Reset lastIndex on every key so the stateful /g regex doesn't
@@ -57,9 +64,9 @@ function sanitizeRequestBody(body, depth = 0) {
         return re.test(key);
       });
       if (keyHasXSS) {
-        sanitized[key.replace(/<[^>]*>/g, '')] = sanitizeRequestBody(value, depth + 1);
+        sanitized[key.replace(/<[^>]*>/g, '')] = sanitizeRequestBody(value, depth + 1, opts, seen);
       } else {
-        sanitized[key] = sanitizeRequestBody(value, depth + 1);
+        sanitized[key] = sanitizeRequestBody(value, depth + 1, opts, seen);
       }
     }
     return sanitized;
@@ -73,7 +80,7 @@ function createXSSSanitizerMiddleware(opts = {}) {
   return function xssSanitizer(req, res, next) {
     if (!req.body || typeof req.body !== 'object') return next();
 
-    const sanitized = sanitizeRequestBody(req.body, 0);
+    const sanitized = sanitizeRequestBody(req.body, 0, { maxDepth });
     req.body = sanitized;
 
     next();
@@ -114,5 +121,6 @@ module.exports = {
   createXSSSanitizerMiddleware,
   createPromptInjectionSanitizerMiddleware,
   sanitizeAgainstXSS,
+  sanitizeRequestBody,
   detectXSS,
 };

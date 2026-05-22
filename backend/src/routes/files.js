@@ -15,11 +15,14 @@ const deepAsk = require('../services/rag/deep-ask');
 const { validateUploadPolicy } = require('../services/upload-security-policy');
 const prisma = require('../config/database');
 const rag = require('../services/rag-service');
+const ragStore = require('../services/rag-store');
 const operationalRag = require('../services/rag/operational-runtime');
 const fs = require('fs').promises;
 const path = require('path');
 const OpenAI = require('openai');
 const documentIntentAnalyzer = require('../services/document-intent-analyzer');
+const fileIntegrityValidator = require('../services/file-integrity-validator');
+const { progressStream } = require('../services/upload-progress-sse');
 const {
   contentDispositionHeader,
   safeDownloadFilename,
@@ -79,33 +82,75 @@ function scheduleDefaultRagIndex(userId, fileRecord) {
     // Mark the entry into the async pipeline so the frontend can
     // distinguish "extraction done, still indexing" from "ready".
     await fileProcessingStatus.setStage(prisma, fileRecord.id, 'chunking', { userId });
-    try {
-      await fileProcessingStatus.setStage(prisma, fileRecord.id, 'embedding', { userId });
-      const result = await operationalRag.ensureIndexed({
-        rag,
-        userId,
-        collection: operationalRag.DEFAULT_COLLECTION,
-        docs,
-      });
-      await fileProcessingStatus.setStage(prisma, fileRecord.id, 'indexing', { userId });
-      if (result.indexed && operationalRag.shouldUseGraphBackfill(docs)) {
-        const graphSources = (result.ingestedSources && result.ingestedSources.length > 0)
-          ? result.ingestedSources
-          : docs.map(doc => doc.source);
-        operationalRag.scheduleGraphBackfill({
+
+    // Retry helper: retries RAG indexing up to RAG_INDEX_MAX_RETRIES (default 3)
+    // with exponential backoff. Recoverable failures (network, rate-limit,
+    // embedding timeouts) are retried; permanent ones skip to failed stage.
+    const maxRetries = Number.parseInt(process.env.RAG_INDEX_MAX_RETRIES || '3', 10);
+    const baseDelay = Number.parseInt(process.env.RAG_INDEX_RETRY_BASE_MS || '2000', 10);
+    let lastError = null;
+    let indexed = false;
+    let result = null;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      if (attempt > 0) {
+        const delay = Math.min(60000, baseDelay * Math.pow(2, attempt - 1)) * (0.5 + Math.random() * 0.5);
+        console.warn(`[files] RAG indexing retry ${attempt}/${maxRetries} for file ${fileRecord.id} in ${Math.round(delay)}ms`);
+        await new Promise(r => setTimeout(r, delay));
+      }
+      try {
+        await fileProcessingStatus.setStage(prisma, fileRecord.id, 'embedding', { userId });
+        result = await operationalRag.ensureIndexed({
           rag,
           userId,
           collection: operationalRag.DEFAULT_COLLECTION,
-          sources: graphSources,
-          openai: rag.getOpenAI(),
+          docs,
+        });
+        indexed = true;
+        break;
+      } catch (err) {
+        lastError = err;
+        const isRecoverable =
+          /rate.?limit|timeout|network|econnrefused|etimedout|5\d\d|429|too many requests/i.test(err?.message || String(err));
+        if (!isRecoverable || attempt >= maxRetries) break;
+      }
+    }
+
+    try {
+      if (indexed && result) {
+        await fileProcessingStatus.setStage(prisma, fileRecord.id, 'indexing', { userId });
+        if (result.indexed && operationalRag.shouldUseGraphBackfill(docs)) {
+          const graphSources = (result.ingestedSources && result.ingestedSources.length > 0)
+            ? result.ingestedSources
+            : docs.map(doc => doc.source);
+          operationalRag.scheduleGraphBackfill({
+            rag,
+            userId,
+            collection: operationalRag.DEFAULT_COLLECTION,
+            sources: graphSources,
+            openai: rag.getOpenAI(),
+          });
+        }
+        await fileProcessingStatus.setStage(prisma, fileRecord.id, 'ready', { userId });
+
+        // Trigger TTL eviction for expired chunks to keep the index clean
+        try {
+          ragStore.evictExpired(userId, operationalRag.DEFAULT_COLLECTION)
+            .then(r => { if (r.removed > 0) console.log(`[files] RAG TTL eviction: removed ${r.removed} expired chunks for user ${userId}`); })
+            .catch(() => {});
+        } catch (_) { /* best-effort */ }
+      } else {
+        console.warn('[files] default RAG indexing failed:', lastError?.message || lastError);
+        await fileProcessingStatus.setStage(prisma, fileRecord.id, 'failed', {
+          userId,
+          error: `rag_indexing: ${lastError && lastError.message ? lastError.message : String(lastError)}`,
         });
       }
-      await fileProcessingStatus.setStage(prisma, fileRecord.id, 'ready', { userId });
-    } catch (err) {
-      console.warn('[files] default RAG indexing failed:', err.message || err);
+    } catch (finalErr) {
+      console.warn('[files] RAG post-processing failed:', finalErr.message || finalErr);
       await fileProcessingStatus.setStage(prisma, fileRecord.id, 'failed', {
         userId,
-        error: `rag_indexing: ${err && err.message ? err.message : String(err)}`,
+        error: `rag_post: ${finalErr && finalErr.message ? finalErr.message : String(finalErr)}`,
       });
     }
   });
@@ -249,6 +294,22 @@ async function processFilesInParallel(files, userId, prismaClient) {
         if (policy.mimeType && policy.mimeType !== file.mimetype) {
           file.mimetype = policy.mimeType;
         }
+
+        // ── File integrity validation ──
+        // Quick structural checks to catch corrupted/truncated files
+        // before we invest time in expensive extraction.
+        let integrity = { valid: true, warnings: [], issues: [] };
+        try {
+          integrity = await fileIntegrityValidator.validateFile(file.path, file.mimetype, file.size);
+          if (!integrity.valid && integrity.issues.some(iss => iss.code === 'empty_file')) {
+            await fileProcessingStatus.setStage(prismaClient, fileRecord.id, 'failed', { userId, error: 'empty_file: El archivo esta vacio (0 bytes).' });
+            await unlinkQuiet(file.path);
+            return { id: fileRecord.id, name: file.originalname, size: file.size, type: file.mimetype, success: false, error: 'El archivo esta vacio.', code: 'empty_file' };
+          }
+          if (integrity.issues.length > 0) {
+            console.warn(`[files] integrity warnings for ${file.originalname}:`, integrity.issues.map(i => i.message).join('; '));
+          }
+        } catch { /* integrity validation is best-effort */ }
 
         // ── Extract text ──
         await fileProcessingStatus.setStage(prismaClient, fileRecord.id, 'extracting', { userId });
@@ -425,6 +486,22 @@ router.get('/:id/processing-status', authenticateToken, async (req, res) => {
     console.error('[files] processing-status read failed:', err.message || err);
     return res.status(500).json({ error: 'Failed to read processing status' });
   }
+});
+
+/**
+ * GET /api/files/progress-stream?fileIds=id1,id2,id3
+ *
+ * Real-time SSE stream for file processing progress.
+ * Clients connect once and receive events as each file moves
+ * through the processing pipeline (uploaded → validating →
+ * extracting → chunking → embedding → indexing → ready).
+ *
+ * Events: stage, complete, error, heartbeat, done, timeout
+ *
+ * Authorization: user can only stream progress for their own files.
+ */
+router.get('/progress-stream', authenticateToken, async (req, res) => {
+  progressStream(req, res);
 });
 
 // Get user files

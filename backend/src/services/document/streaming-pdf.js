@@ -62,6 +62,60 @@ function pageItemsToText(items) {
 }
 
 /**
+ * Extract table structure from text items using spatial coordinates.
+ * Groups items by y-coordinate (rows) and then sorts by x-coordinate
+ * within each row to produce pipe-delimited table text.
+ *
+ * Returns the page text with table content formatted as markdown tables.
+ */
+function extractTableStructures(items, pageText) {
+  if (!items || items.length === 0) return pageText;
+
+  // Group items by row (y-coordinate, rounded to nearest 5px)
+  const rows = new Map();
+  for (const item of items) {
+    if (!item || typeof item.str !== 'string' || !item.transform) continue;
+    const y = Math.round((item.transform[5] || 0) / 5) * 5;
+    const x = item.transform[4] || 0;
+
+    if (!rows.has(y)) rows.set(y, []);
+    rows.get(y).push({ text: item.str.trim(), x, width: item.width || 0 });
+  }
+
+  // Sort rows by y descending (PDF coords: higher y = higher on page)
+  const sortedRows = [...rows.entries()]
+    .sort((a, b) => b[0] - a[0]);
+
+  // Detect tabular structure: if multiple rows have 3+ items each
+  // with consistent x-positions across rows, it's likely a table.
+  const tableRows = [];
+  for (const [, items] of sortedRows) {
+    if (items.length >= 3) {
+      // Sort items within row by x position
+      items.sort((a, b) => a.x - b.x);
+      tableRows.push(items);
+    }
+  }
+
+  // If we found meaningful table structure (2+ rows with 3+ columns each)
+  if (tableRows.length >= 2) {
+    // Merge spatial tables into the text
+    const tableBlocks = [];
+    for (const row of tableRows) {
+      const cells = row.map(item => item.text || '');
+      tableBlocks.push(`| ${cells.join(' | ')} |`);
+    }
+
+    // Replace the matching text region with table markdown
+    // Simple heuristic: append table at end of page text
+    const tableMd = '\n\n' + tableBlocks.join('\n') + '\n';
+    return pageText + tableMd;
+  }
+
+  return pageText;
+}
+
+/**
  * Detect structural elements from page text content.
  * Returns { headings, tables, listItems } counts.
  */
@@ -146,7 +200,7 @@ async function* streamPdfPages(filePath, opts = {}) {
           includeMarkedContent: false,
           disableCombineTextItems: false,
         });
-        const text = pageItemsToText(textContent.items);
+        const text = extractTableStructures(textContent.items, pageItemsToText(textContent.items));
         const structure = analyzePageStructure(text);
 
         const currentRss = rssMb();

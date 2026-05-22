@@ -82,6 +82,12 @@ const EXTENSION_TO_MIME = {
 
 const ADVANCED_DOCUMENT_FORMATS = new Set(['docx', 'xlsx', 'pptx', 'pdf', 'csv', 'html', 'md']);
 
+const DANGEROUS_ARTIFACT_EXTENSIONS = new Set([
+  'app', 'apk', 'bat', 'cmd', 'com', 'cpl', 'dll', 'dmg', 'exe', 'gadget',
+  'hta', 'jar', 'js', 'jse', 'lnk', 'mjs', 'msi', 'msp', 'pif', 'ps1',
+  'psm1', 'scr', 'sh', 'vb', 'vbe', 'vbs', 'ws', 'wsc', 'wsf', 'wsh',
+]);
+
 function metadataPathFor(id) {
   return path.join(ARTIFACT_DIR, `${id}.json`);
 }
@@ -90,7 +96,11 @@ function sanitizeArtifactFilename(filename) {
   // Replace unsafe chars, then cap total length to 120 while preserving
   // the extension. A naive slice(0, 120) on a long name would drop the
   // extension and break MIME inference downstream.
-  const sanitized = String(filename || 'artifact').replace(/[^a-zA-Z0-9._-]/g, '_') || 'artifact';
+  let sanitized = String(filename || 'artifact').replace(/[^a-zA-Z0-9._-]/g, '_') || 'artifact';
+  const extName = path.extname(sanitized).slice(1).toLowerCase();
+  if (DANGEROUS_ARTIFACT_EXTENSIONS.has(extName)) {
+    sanitized += '.txt';
+  }
   if (sanitized.length <= 120) return sanitized;
   const ext = path.extname(sanitized);
   if (!ext || ext.length >= 120) return sanitized.slice(0, 120);

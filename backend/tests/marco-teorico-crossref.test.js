@@ -224,6 +224,44 @@ describe('verify · happy paths', () => {
 });
 
 describe('verify · timeout / abort', () => {
+  it('does not start fetch when caller-signal is already aborted', async () => {
+    let calls = 0;
+    setFetch(async () => {
+      calls += 1;
+      return { ok: true, json: async () => ({ message: {} }) };
+    });
+    const ac = new AbortController();
+    ac.abort(new Error('cancel before crossref'));
+
+    const out = await verify('10.1/x', { signal: ac.signal });
+
+    assert.deepEqual(out, { valid: false, doi: '10.1/x' });
+    assert.equal(calls, 0);
+  });
+
+  it('removes caller abort listener after a completed fetch', async () => {
+    const ac = new AbortController();
+    let addCount = 0;
+    let removeCount = 0;
+    const originalAdd = ac.signal.addEventListener.bind(ac.signal);
+    const originalRemove = ac.signal.removeEventListener.bind(ac.signal);
+    ac.signal.addEventListener = ((...args) => {
+      if (args[0] === 'abort') addCount += 1;
+      return originalAdd(...args);
+    });
+    ac.signal.removeEventListener = ((...args) => {
+      if (args[0] === 'abort') removeCount += 1;
+      return originalRemove(...args);
+    });
+
+    setFetch(async () => ({ ok: true, json: async () => ({ message: {} }) }));
+    const out = await verify('10.1/x', { signal: ac.signal });
+
+    assert.equal(out.valid, true);
+    assert.equal(addCount, 1);
+    assert.equal(removeCount, 1);
+  });
+
   it('aborts when caller-signal aborts', async () => {
     setFetch(async (_url, init) => {
       return new Promise((_resolve, reject) => {

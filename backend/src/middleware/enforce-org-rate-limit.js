@@ -41,12 +41,15 @@
 
 const prisma = require('../config/database');
 const rateLimitStore = require('./rate-limit-store');
+const { getRequestId } = require('./request-id');
 
 const HEADER_RPS_LIMIT = 'X-Org-Rps-Limit';
 const HEADER_RPS_REMAINING = 'X-Org-Rps-Remaining';
 const HEADER_RPS_PLAN = 'X-Org-Rps-Plan';
 
 const WINDOW_MS = 1000;
+const MAX_ORG_ID_LENGTH = 128;
+const SAFE_ORG_ID_RE = /^[A-Za-z0-9._~:-]+$/;
 
 function envInt(name, fallback) {
   const v = process.env[name];
@@ -72,13 +75,30 @@ function rpsFor(plan) {
   }
 }
 
+function firstHeaderValue(value) {
+  if (Array.isArray(value)) return value[0];
+  return value;
+}
+
+function normalizeOrgId(value) {
+  const first = firstHeaderValue(value);
+  if (typeof first !== 'string') return null;
+  const orgId = first.trim();
+  if (!orgId || orgId.length > MAX_ORG_ID_LENGTH) return null;
+  if (/[\r\n\0]/.test(orgId)) return null;
+  if (!SAFE_ORG_ID_RE.test(orgId)) return null;
+  return orgId;
+}
+
 function resolveOrgId(req) {
-  if (req && req.orgContext && req.orgContext.orgId) return req.orgContext.orgId;
+  if (req && req.orgContext && req.orgContext.orgId) {
+    return normalizeOrgId(req.orgContext.orgId);
+  }
   const h = req && req.headers && (req.headers['x-org-id'] || req.headers['X-Org-Id']);
-  if (typeof h === 'string' && h.trim()) return h.trim();
+  const headerOrgId = normalizeOrgId(h);
+  if (headerOrgId) return headerOrgId;
   const b = req && req.body && typeof req.body === 'object' ? req.body.organizationId : null;
-  if (typeof b === 'string' && b.trim()) return b.trim();
-  return null;
+  return normalizeOrgId(b);
 }
 
 let _resolveFailureLogged = false;
@@ -88,6 +108,11 @@ function logOnce(msg, err) {
   const detail = err && err.message ? ` (${err.message})` : '';
   // eslint-disable-next-line no-console
   console.warn(`[org-rate-limit] ${msg}${detail}`);
+}
+
+function setNoStoreHeaders(res) {
+  try { res.setHeader('Cache-Control', 'no-store'); } catch (_e) { /* swallow */ }
+  try { res.setHeader('X-Content-Type-Options', 'nosniff'); } catch (_e) { /* swallow */ }
 }
 
 /**
@@ -151,13 +176,19 @@ function enforceOrgRateLimit(opts = {}) {
       const resetAt = result.resetAt instanceof Date ? result.resetAt.getTime() : Date.now() + windowMs;
       const retryAfterMs = Math.max(0, resetAt - Date.now());
       const retryAfterSec = Math.max(1, Math.ceil(retryAfterMs / 1000));
+      setNoStoreHeaders(res);
       try { res.setHeader('Retry-After', String(retryAfterSec)); } catch (_e) { /* swallow */ }
+      const requestId = getRequestId(req);
       return res.status(429).json({
+        ok: false,
+        code: 'org_rate_limited',
         error: 'organization rate limit exceeded',
         orgId,
         plan,
         limitRps: limit,
         retryAfterMs,
+        retryAfterSec,
+        ...(requestId ? { requestId } : {}),
       });
     }
 
@@ -169,7 +200,9 @@ module.exports = {
   enforceOrgRateLimit,
   rpsFor,
   resolveOrgId,
+  normalizeOrgId,
   HEADER_RPS_LIMIT,
   HEADER_RPS_REMAINING,
   HEADER_RPS_PLAN,
+  MAX_ORG_ID_LENGTH,
 };

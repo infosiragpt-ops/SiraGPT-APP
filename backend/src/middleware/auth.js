@@ -4,6 +4,7 @@ const { computeFingerprint, compareFingerprints } = require('../utils/session-fi
 const { writeAuditLog } = require('../utils/audit-log');
 const { createQueryDedup } = require('../utils/query-dedup');
 const { createWriteBehindCache } = require('../services/write-behind-cache');
+const { getRequestId } = require('./request-id');
 const apiKeysService = require('../services/api-keys-service');
 // Lazy require to keep the auth module's import graph cheap for tests that
 // stub the email service. Resolved on first auto-revoke event.
@@ -43,6 +44,8 @@ function notifyAppshotsAutoRevoked(user, reason) {
 function isAppshotsScope(decoded) {
   return !!(decoded && typeof decoded === 'object' && decoded.scope === 'appshots:capture');
 }
+
+const MAX_ACCESS_TOKEN_LENGTH = 8192;
 // Ratchet 45 — lazy-loaded so the auth module stays cheap to import in
 // environments (tests) that don't exercise the API-key path.
 let _enforceApiKeyRateLimitMw = null;
@@ -56,6 +59,65 @@ function _getApiKeyRateLimitMw() {
     _enforceApiKeyRateLimitMw = false;
   }
   return _enforceApiKeyRateLimitMw;
+}
+
+function firstHeaderValue(value) {
+  if (Array.isArray(value)) return value[0];
+  return value;
+}
+
+function validateAccessTokenValue(value) {
+  const raw = String(value || '');
+  if (/[\r\n\0]/.test(raw)) return { error: 'invalid_token_format' };
+  const token = raw.trim();
+  if (!token) return { error: 'missing_token' };
+  if (token.length > MAX_ACCESS_TOKEN_LENGTH) return { error: 'token_too_large' };
+  if (/\s/.test(token)) return { error: 'invalid_token_format' };
+  return { token };
+}
+
+function parseAuthorizationHeader(value) {
+  const raw = firstHeaderValue(value);
+  if (raw == null || raw === '') return { present: false, token: null };
+  const header = String(raw);
+  if (header.length > MAX_ACCESS_TOKEN_LENGTH + 32) {
+    return { present: true, error: 'authorization_header_too_large' };
+  }
+  if (/[\r\n\0]/.test(header)) {
+    return { present: true, error: 'invalid_authorization_header' };
+  }
+  const match = header.match(/^\s*Bearer\s+([^\s]+)\s*$/i);
+  if (!match) {
+    return { present: true, error: 'unsupported_authorization_scheme' };
+  }
+  return { present: true, ...validateAccessTokenValue(match[1]) };
+}
+
+function extractAccessToken(req) {
+  const auth = parseAuthorizationHeader(req && req.headers && req.headers.authorization);
+  if (auth.error) return auth;
+  if (auth.token) return auth;
+  const cookieToken = req && req.cookies && req.cookies.token;
+  if (cookieToken == null || cookieToken === '') return { present: false, token: null };
+  return { present: true, source: 'cookie', ...validateAccessTokenValue(cookieToken) };
+}
+
+function setAuthErrorHeaders(res) {
+  if (!res || typeof res.setHeader !== 'function') return;
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+}
+
+function sendAuthError(req, res, status, code, error, extra = {}) {
+  setAuthErrorHeaders(res);
+  const requestId = getRequestId(req);
+  return res.status(status).json({
+    ok: false,
+    code,
+    error,
+    ...(requestId ? { requestId } : {}),
+    ...extra,
+  });
 }
 
 // Hot-path read coalescing: two requests for the same session token
@@ -95,7 +157,13 @@ function getWriteBehindCache() {
  */
 async function tryAuthenticateApiKey(req, res, rawToken) {
   const parsed = apiKeysService.parseToken(rawToken);
-  if (!parsed) return false; // not our scheme — caller falls back to JWT
+  if (!parsed) {
+    if (apiKeysService.hasTokenScheme(rawToken)) {
+      sendAuthError(req, res, 401, 'invalid_api_key', 'Invalid API key');
+      return true;
+    }
+    return false; // not our scheme — caller falls back to JWT
+  }
 
   try {
     const row = await prisma.apiKey.findFirst({
@@ -104,24 +172,24 @@ async function tryAuthenticateApiKey(req, res, rawToken) {
     });
 
     const presentedHash = apiKeysService.hashToken(parsed.body);
-    if (!row || row.tokenHash !== presentedHash) {
-      res.status(401).json({ error: 'Invalid API key' });
+    if (!row || !apiKeysService.compareTokenHash(row.tokenHash, presentedHash)) {
+      sendAuthError(req, res, 401, 'invalid_api_key', 'Invalid API key');
       return true;
     }
     // Ratchet 45 (TrueDelete) — soft-deleted rows MUST NOT authenticate.
     // We surface the same opaque "revoked" error rather than leaking the
     // distinction between a never-existed key and one we tombstoned.
     if (row.deletedAt) {
-      res.status(401).json({ error: 'API key revoked' });
+      sendAuthError(req, res, 401, 'api_key_revoked', 'API key revoked');
       return true;
     }
     if (apiKeysService.isExpired(row)) {
-      res.status(401).json({ error: 'API key expired' });
+      sendAuthError(req, res, 401, 'api_key_expired', 'API key expired');
       return true;
     }
     if (!row.user) {
       // Owner was deleted — defence in depth; FK cascade should make this rare.
-      res.status(401).json({ error: 'Invalid API key' });
+      sendAuthError(req, res, 401, 'invalid_api_key', 'Invalid API key');
       return true;
     }
 
@@ -151,18 +219,21 @@ async function tryAuthenticateApiKey(req, res, rawToken) {
     return true;
   } catch (err) {
     console.error('API key auth error:', err && err.message);
-    res.status(500).json({ error: 'auth lookup failed' });
+    sendAuthError(req, res, 500, 'auth_lookup_failed', 'auth lookup failed');
     return true;
   }
 }
 
 const authenticateToken = async (req, res, next) => {
   try {
-    const authHeader = req.headers['authorization'];
-    const token = (authHeader && authHeader.split(' ')[1]) || req.cookies?.token;
+    const tokenResult = extractAccessToken(req);
+    if (tokenResult.error) {
+      return sendAuthError(req, res, 401, tokenResult.error, 'Invalid authorization header');
+    }
+    const token = tokenResult.token;
 
     if (!token) {
-      return res.status(401).json({ error: 'Access token required' });
+      return sendAuthError(req, res, 401, 'access_token_required', 'Access token required');
     }
 
     // Bearer API key (sk_…) short-circuits the JWT/session path so a
@@ -374,4 +445,9 @@ module.exports = {
   __sessionDedup: sessionDedup,
   __getWriteBehindCache: getWriteBehindCache,
   __tryAuthenticateApiKey: tryAuthenticateApiKey,
+  __extractAccessToken: extractAccessToken,
+  __parseAuthorizationHeader: parseAuthorizationHeader,
+  __validateAccessTokenValue: validateAccessTokenValue,
+  __sendAuthError: sendAuthError,
+  MAX_ACCESS_TOKEN_LENGTH,
 };

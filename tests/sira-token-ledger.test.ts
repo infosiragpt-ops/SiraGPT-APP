@@ -94,6 +94,42 @@ describe("sira token ledger", () => {
     assert.equal(userSummary.by_user.user_a.records, 1)
     assert.equal(userSummary.by_task.docx_generation.records, 1)
   })
+
+  it("normalizes provider token usage so totals cannot be under-reported", () => {
+    const frame = tokenLedger.buildTokenUsageFrame({
+      providerUsage: {
+        input_tokens: 120.9,
+        output_tokens: 80.4,
+        total_tokens: 50,
+      },
+      responseText: "ok",
+    })
+
+    assert.equal(frame.usage.provider_reported, true)
+    assert.equal(frame.usage.provider_usage.input_tokens, 120)
+    assert.equal(frame.usage.provider_usage.output_tokens, 80)
+    assert.equal(frame.usage.provider_usage.total_tokens, 200)
+    assert.ok(frame.usage.total_tokens >= 200)
+  })
+
+  it("evaluates token budgets without storing prompt content", () => {
+    const frame = tokenLedger.buildTokenUsageFrame({
+      userMessage: "x".repeat(400),
+      responseText: "y".repeat(120),
+    })
+
+    const ok = tokenLedger.evaluateTokenBudget(frame, { maxTotalTokens: frame.usage.total_tokens * 2 })
+    const warning = tokenLedger.evaluateTokenBudget(frame, {
+      maxTotalTokens: frame.usage.total_tokens + 1,
+      warnAtRatio: 0.5,
+    })
+    const exceeded = tokenLedger.evaluateTokenBudget(frame, { maxTotalTokens: 1 })
+
+    assert.equal(ok.status, "ok")
+    assert.equal(warning.status, "warning")
+    assert.equal(exceeded.status, "exceeded")
+    assert.equal(exceeded.remaining_tokens, 0)
+  })
 })
 
 describe("sira chat controller token accounting", () => {

@@ -7,6 +7,7 @@ const {
   createXSSSanitizerMiddleware,
   createPromptInjectionSanitizerMiddleware,
   sanitizeAgainstXSS,
+  sanitizeRequestBody,
   detectXSS,
 } = require('../src/middleware/security-sanitizer');
 
@@ -14,6 +15,7 @@ test('exports the documented surface', () => {
   assert.equal(typeof createXSSSanitizerMiddleware, 'function');
   assert.equal(typeof createPromptInjectionSanitizerMiddleware, 'function');
   assert.equal(typeof sanitizeAgainstXSS, 'function');
+  assert.equal(typeof sanitizeRequestBody, 'function');
   assert.equal(typeof detectXSS, 'function');
 });
 
@@ -142,6 +144,36 @@ test('createXSSSanitizerMiddleware recurses into nested objects', () => {
   assert.deepEqual(calls, ['__pass__']);
   assert.ok(!req.body.user.bio.includes('<script'));
   assert.ok(req.body.user.bio.includes('safe bio'));
+});
+
+test('sanitizeRequestBody handles circular objects without recursion overflow', () => {
+  const body = { msg: '<script>evil()</script>safe' };
+  body.self = body;
+
+  const out = sanitizeRequestBody(body);
+
+  assert.equal(out.msg, 'evil()safe');
+  assert.equal(out.self, '[circular]');
+});
+
+test('createXSSSanitizerMiddleware honors maxDepth option', () => {
+  const middleware = createXSSSanitizerMiddleware({ maxDepth: 1 });
+  const req = {
+    body: {
+      shallow: '<script>strip()</script>ok',
+      nested: {
+        tooDeep: '<script>kept()</script>value',
+      },
+    },
+  };
+  const { res } = makeRes();
+  const { next, calls } = makeNext();
+
+  middleware(req, res, next);
+
+  assert.deepEqual(calls, ['__pass__']);
+  assert.equal(req.body.shallow, 'strip()ok');
+  assert.equal(req.body.nested.tooDeep, '<script>kept()</script>value');
 });
 
 test('createXSSSanitizerMiddleware no-ops when req.body is missing or non-object', () => {

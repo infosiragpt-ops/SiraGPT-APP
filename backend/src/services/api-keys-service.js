@@ -30,6 +30,8 @@ const crypto = require('crypto');
 const TOKEN_SCHEME = 'sk_';
 const PREFIX_LEN = 8;
 const SECRET_LEN = 32;
+const BODY_LEN = PREFIX_LEN + SECRET_LEN;
+const SHA256_HEX_RE = /^[a-f0-9]{64}$/i;
 
 // Use a url-safe base62 alphabet so tokens copy cleanly in shells and
 // curl examples without needing quoting. crypto.randomBytes →
@@ -59,6 +61,15 @@ function hashToken(body) {
   return crypto.createHash('sha256').update(body).digest('hex');
 }
 
+function compareTokenHash(a, b) {
+  if (!SHA256_HEX_RE.test(String(a || '')) || !SHA256_HEX_RE.test(String(b || ''))) {
+    return false;
+  }
+  const ab = Buffer.from(String(a), 'hex');
+  const bb = Buffer.from(String(b), 'hex');
+  return ab.length === bb.length && crypto.timingSafeEqual(ab, bb);
+}
+
 function generateToken() {
   const prefix = randomString(PREFIX_LEN);
   const secret = randomString(SECRET_LEN);
@@ -81,13 +92,17 @@ function parseToken(raw) {
   if (typeof raw !== 'string' || !raw) return null;
   if (!raw.startsWith(TOKEN_SCHEME)) return null;
   const body = raw.slice(TOKEN_SCHEME.length);
-  if (body.length < PREFIX_LEN + 1) return null;
+  if (body.length !== BODY_LEN) return null;
   const prefix = body.slice(0, PREFIX_LEN);
   // Cheap structural sanity check — reject anything that smells like
   // a JWT (contains `.`) or whitespace; lets the middleware skip the
   // DB lookup on obviously malformed inputs.
   if (/[\s.]/.test(body)) return null;
   return { prefix, body };
+}
+
+function hasTokenScheme(raw) {
+  return typeof raw === 'string' && raw.startsWith(TOKEN_SCHEME);
 }
 
 function isExpired(row, now) {
@@ -134,9 +149,12 @@ module.exports = {
   TOKEN_SCHEME,
   PREFIX_LEN,
   SECRET_LEN,
+  BODY_LEN,
   generateToken,
   hashToken,
+  compareTokenHash,
   parseToken,
+  hasTokenScheme,
   isExpired,
   redactKey,
   presentNewKey,

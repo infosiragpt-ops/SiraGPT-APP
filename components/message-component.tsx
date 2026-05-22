@@ -5,7 +5,10 @@ import { useState, useEffect, useMemo, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { cn, downloadHref, downloadUrlAsFile } from "@/lib/utils"
-import UnifiedDocumentViewer, { type AttachmentLike } from "@/components/viewers/UnifiedDocumentViewer"
+import UnifiedDocumentViewer, {
+    prewarmUnifiedDocumentPreview,
+    type AttachmentLike,
+} from "@/components/viewers/UnifiedDocumentViewer"
 import { FileProcessingBadge } from "@/components/file-processing-badge"
 import { InteractiveArtifact, extractArtifact } from "@/components/artifact/InteractiveArtifact"
 import { AgenticStepsRenderer } from "@/components/agentic-steps"
@@ -63,6 +66,7 @@ import MessageActionRail from "./MessageActionRail"
 import ComputerUseReasoning from "./ComputerUseReasoning"
 import type { DocumentPreviewTarget } from "./document-preview"
 import { resolveImageAttachmentUrl } from "@/lib/attachment-url"
+import { toDocumentViewerAttachment } from "@/lib/document-viewer-attachment"
 import { isImageOnlyMessageForRender } from "@/lib/message-render-policy"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import {
@@ -369,20 +373,16 @@ const MessageDocChips = ({ parsedFiles }: { parsedFiles: any[] }) => {
         return parsedFiles.filter(isDocumentLikeAttachment);
     }, [parsedFiles]);
 
-    const attachments: AttachmentLike[] = React.useMemo(() => chips.map(f => ({
-        id: f.id || f.attachmentId,
-        name: String(f.longPasteTitle || f.longPasteMeta?.title || f.longPasteMetadata?.title || f.originalName || f.name || 'archivo'),
-        mimeType: f.mimeType || f.type || null,
-        size: f.size ?? null,
-        // LLM-generated docs (doc-generator) ship the bytes as
-        // `dataUrl: data:<mime>;base64,<…>` and never populate `url`.
-        // Without this fallback the viewer ended up with `url: null`
-        // and surfaced "Failed to fetch" / "No source available" even
-        // though the file was right there in the message payload.
-        url: f.url || f.dataUrl || null,
-        file: f.file instanceof File ? f.file : null,
-        extractedText: f.extractedText || null,
-    })), [chips]);
+    const attachments: AttachmentLike[] = React.useMemo(
+        () => chips.map(f => toDocumentViewerAttachment(f)),
+        [chips],
+    );
+
+    React.useEffect(() => {
+        attachments.forEach((attachment) => {
+            prewarmUnifiedDocumentPreview(attachment);
+        });
+    }, [attachments]);
 
     if (chips.length === 0) return null;
 

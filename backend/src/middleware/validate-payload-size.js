@@ -22,7 +22,8 @@
  *     "code": "payload.too_large",
  *     "limit": <bytes>,
  *     "received": <bytes>,
- *     "kind": "json" | "multipart"
+ *     "kind": "json" | "multipart",
+ *     "requestId": "<optional safe request id>"
  *   }
  *
  * Usage:
@@ -44,6 +45,8 @@
 const DEFAULT_JSON_BYTES = 1 * 1024 * 1024; // 1 MB
 const DEFAULT_MULTIPART_BYTES = 10 * 1024 * 1024; // 10 MB
 
+const { getRequestId } = require('./request-id');
+
 const JSON_RE = /^application\/(?:[^;]+\+)?json\b/i;
 const MULTIPART_RE = /^multipart\/(?:form-data|mixed|related)\b/i;
 
@@ -58,8 +61,9 @@ const MULTIPART_RE = /^multipart\/(?:form-data|mixed|related)\b/i;
  */
 function classifyContentType(contentType) {
   if (typeof contentType !== 'string' || !contentType) return 'other';
-  if (JSON_RE.test(contentType)) return 'json';
-  if (MULTIPART_RE.test(contentType)) return 'multipart';
+  const normalized = contentType.trim();
+  if (JSON_RE.test(normalized)) return 'json';
+  if (MULTIPART_RE.test(normalized)) return 'multipart';
   return 'other';
 }
 
@@ -70,19 +74,39 @@ function classifyContentType(contentType) {
  */
 function parseContentLength(raw) {
   if (raw === undefined || raw === null || raw === '') return NaN;
-  const n = Number(raw);
+  const text = Array.isArray(raw) ? raw[0] : String(raw).trim();
+  if (!/^\d+$/.test(text)) return NaN;
+  const n = Number(text);
   if (!Number.isFinite(n) || n < 0) return NaN;
   return Math.trunc(n);
 }
 
-function reject(res, { kind, limit, received }) {
+function isMalformedContentLength(raw) {
+  if (raw === undefined || raw === null || raw === '') return false;
+  const text = Array.isArray(raw) ? raw[0] : String(raw).trim();
+  if (!/^\d+$/.test(text)) return true;
+  return !Number.isSafeInteger(Number(text));
+}
+
+function setRejectionHeaders(res) {
+  if (typeof res.setHeader !== 'function') return;
+  if (typeof res.getHeader !== 'function' || !res.getHeader('Cache-Control')) {
+    res.setHeader('Cache-Control', 'no-store');
+  }
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+}
+
+function reject(res, { status = 413, error = 'Payload too large', code = 'payload.too_large', kind, limit, received, requestId }) {
   if (res.headersSent) return;
-  res.status(413).json({
-    error: 'Payload too large',
-    code: 'payload.too_large',
+  setRejectionHeaders(res);
+  res.status(status).json({
+    error,
+    message: error,
+    code,
     kind,
     limit,
     received,
+    ...(requestId ? { requestId } : {}),
   });
 }
 
@@ -119,7 +143,25 @@ function validatePayloadSize(opts = {}) {
     const limit = kind === 'json' ? jsonBytes : multipartBytes;
     if (limit <= 0) return next(); // explicit opt-out for this branch
 
-    const declared = parseContentLength(req.headers['content-length']);
+    const rawContentLength = req.headers['content-length'];
+    const requestId = getRequestId(req);
+
+    if (isMalformedContentLength(rawContentLength)) {
+      if (onReject) {
+        try { onReject(req, { kind, limit, received: null, stage: 'header-invalid', requestId }); } catch { /* noop */ }
+      }
+      return reject(res, {
+        status: 400,
+        error: 'Invalid Content-Length',
+        code: 'payload.invalid_content_length',
+        kind,
+        limit,
+        received: null,
+        requestId,
+      });
+    }
+
+    const declared = parseContentLength(rawContentLength);
 
     // Per RFC 7230 §3.3.3, when both Transfer-Encoding and Content-Length
     // are present chunked semantics win and Content-Length must be
@@ -134,9 +176,9 @@ function validatePayloadSize(opts = {}) {
     // reading the body.
     if (teTrusted && Number.isFinite(declared) && declared > limit) {
       if (onReject) {
-        try { onReject(req, { kind, limit, received: declared, stage: 'header' }); } catch { /* noop */ }
+        try { onReject(req, { kind, limit, received: declared, stage: 'header', requestId }); } catch { /* noop */ }
       }
-      return reject(res, { kind, limit, received: declared });
+      return reject(res, { kind, limit, received: declared, requestId });
     }
 
     // Declared length is within cap AND no chunked TE → trust it and pass
@@ -164,11 +206,11 @@ function validatePayloadSize(opts = {}) {
       if (received > limit) {
         aborted = true;
         if (onReject) {
-          try { onReject(req, { kind, limit, received, stage: 'stream' }); } catch { /* noop */ }
+          try { onReject(req, { kind, limit, received, stage: 'stream', requestId }); } catch { /* noop */ }
         }
         req.removeListener('data', onData);
         req.pause();
-        reject(res, { kind, limit, received });
+        reject(res, { kind, limit, received, requestId });
       }
     }
     req.prependListener('data', onData);
@@ -183,4 +225,5 @@ module.exports.validatePayloadSize = validatePayloadSize;
 module.exports.DEFAULT_JSON_BYTES = DEFAULT_JSON_BYTES;
 module.exports.DEFAULT_MULTIPART_BYTES = DEFAULT_MULTIPART_BYTES;
 module.exports.classifyContentType = classifyContentType;
+module.exports.isMalformedContentLength = isMalformedContentLength;
 module.exports.parseContentLength = parseContentLength;

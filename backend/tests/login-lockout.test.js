@@ -18,7 +18,9 @@ describe('LoginLockout — basic counting', () => {
     const state = lo.isLocked('a@b.com');
     assert.equal(state.locked, true);
     assert.equal(state.attempts, 3);
+    assert.equal(state.remaining, 0);
     assert.ok(state.retryAfterMs > 0);
+    assert.ok(Date.parse(state.lockedUntil) >= Date.now());
   });
 
   test('per-email scoping (one account locking does not affect others)', () => {
@@ -34,6 +36,12 @@ describe('LoginLockout — basic counting', () => {
     lo.recordFailure('  A@B.com ');
     assert.equal(lo.isLocked('a@b.com').locked, true);
   });
+
+  test('constructor rejects invalid limits', () => {
+    assert.throws(() => new LoginLockout({ maxAttempts: 0 }), TypeError);
+    assert.throws(() => new LoginLockout({ maxAttempts: 1.5 }), TypeError);
+    assert.throws(() => new LoginLockout({ windowMs: 0 }), TypeError);
+  });
 });
 
 describe('LoginLockout — window expiry', () => {
@@ -45,6 +53,16 @@ describe('LoginLockout — window expiry', () => {
     assert.equal(lo.isLocked('a@b.com', t0).locked, true);
     // 2 seconds later — entries expired.
     assert.equal(lo.isLocked('a@b.com', t0 + 2_000).locked, false);
+    assert.equal(lo.size(), 0, 'expired empty buckets are removed');
+  });
+
+  test('retryAfterMs is based on oldest live failure, not a fresh full window', () => {
+    const lo = new LoginLockout({ maxAttempts: 3, windowMs: 1_000 });
+    lo.recordFailure('a@b.com', 1_000);
+    lo.recordFailure('a@b.com', 1_300);
+    const state = lo.recordFailure('a@b.com', 1_900);
+    assert.equal(state.locked, true);
+    assert.equal(state.retryAfterMs, 100);
   });
 });
 
@@ -55,6 +73,7 @@ describe('LoginLockout — success resets', () => {
     lo.recordFailure('a@b.com');
     lo.recordSuccess('a@b.com');
     assert.equal(lo.isLocked('a@b.com').attempts, 0);
+    assert.equal(lo.size(), 0);
   });
 });
 

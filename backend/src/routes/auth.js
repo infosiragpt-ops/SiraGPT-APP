@@ -78,10 +78,13 @@ const { writeAuditLog } = require('../utils/audit-log');
 const { csrfTokenRoute, issueCsrfToken } = require('../middleware/csrf');
 const { defaultLockout } = require('../utils/login-lockout');
 const { computeFingerprint } = require('../utils/session-fingerprint');
+const { clearSessionCookie, setSessionCookie } = require('../utils/session-cookie');
 const {
   validateBody,
   formatExpressValidatorErrors,
+  setValidationResponseHeaders,
 } = require('../middleware/validate');
+const { getRequestId } = require('../middleware/request-id');
 const {
   LoginRequestSchema,
   RegisterRequestSchema,
@@ -497,7 +500,11 @@ router.post('/register', registerRateLimit, validateBody(RegisterRequestSchema, 
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({ ...formatExpressValidatorErrors(errors.array(), { codePrefix: 'auth' }), errors: errors.array() });
+      setValidationResponseHeaders(res);
+      return res.status(400).json(formatExpressValidatorErrors(errors.array(), {
+        codePrefix: 'auth',
+        requestId: getRequestId(req),
+      }));
     }
 
     const { name, email, password } = req.body;
@@ -520,12 +527,7 @@ router.post('/register', registerRateLimit, validateBody(RegisterRequestSchema, 
     const { user, token } = result;
     const { password: _, ...userWithoutPassword } = user;
 
-    res.cookie('token', token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 7 * 24 * 60 * 60 * 1000
-    });
+    setSessionCookie(res, token);
 
     // Mint a fresh CSRF token alongside the session cookie so SPAs
     // can skip the dedicated /api/csrf-token roundtrip — `issueCsrfToken`
@@ -557,7 +559,11 @@ router.post('/login', loginRateLimit, validateBody(LoginRequestSchema, { codePre
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({ ...formatExpressValidatorErrors(errors.array(), { codePrefix: 'auth' }), errors: errors.array() });
+      setValidationResponseHeaders(res);
+      return res.status(400).json(formatExpressValidatorErrors(errors.array(), {
+        codePrefix: 'auth',
+        requestId: getRequestId(req),
+      }));
     }
 
     const { email, password } = req.body;
@@ -573,14 +579,24 @@ router.post('/login', loginRateLimit, validateBody(LoginRequestSchema, { codePre
         ssoLoginUrl: `/api/auth/sso/${result.org.slug}/login`,
       });
     }
-    if (!result.ok && result.kind === 'locked') {
-      const retryAfterSec = Math.max(1, Math.ceil(result.retryAfterMs / 1000));
-      res.set('Retry-After', String(retryAfterSec));
-      return res.status(423).json({
-        error: 'Account temporarily locked. Try again later.',
-        retryAfterMs: result.retryAfterMs,
-      });
-    }
+  // Account-level lockout is distinct from the per-IP rate limit.
+  const lockState = defaultLockout.isLocked(email);
+  if ((!result.ok && result.kind === 'locked') || lockState.locked) {
+    const retryAfterMs = Number(result.retryAfterMs || lockState.retryAfterMs || 1000);
+    const retryAfterSec = Math.max(1, Math.ceil(retryAfterMs / 1000));
+    const requestId = getRequestId(req);
+    setValidationResponseHeaders(res);
+    res.set('Retry-After', String(retryAfterSec));
+    return res.status(423).json({
+      ok: false,
+      code: 'account_locked',
+      error: 'Account temporarily locked. Try again later.',
+      retryAfterMs,
+      retryAfterSec,
+      requestId,
+    });
+  }
+
     if (!result.ok && result.kind === 'invalid_credentials') {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
@@ -621,12 +637,7 @@ router.post('/login', loginRateLimit, validateBody(LoginRequestSchema, { codePre
     const { user, token } = result;
     const { password: _, ...userWithoutPassword } = user;
 
-    res.cookie('token', token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 7 * 24 * 60 * 60 * 1000
-    });
+    setSessionCookie(res, token);
 
     const serializedUser = serializeUser(userWithoutPassword);
     void writeAuditLog(prisma, {
@@ -701,7 +712,7 @@ router.post('/logout', authenticateToken, async (req, res) => {
   try {
     await getSessionService().revoke({ user: req.user, token: req.token, req });
 
-    res.clearCookie('token');
+    clearSessionCookie(res);
     res.json({ message: 'Logged out successfully' });
   } catch (error) {
     console.error('Logout error:', error);
@@ -725,13 +736,28 @@ router.post('/refresh', authenticateToken, async (req, res) => {
       req,
     });
 
-    res.cookie('token', newToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 7 * 24 * 60 * 60 * 1000
-    });
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
+    // Update session - re-bind fingerprint to the refreshing client
+    // so subsequent verifications track the current network/UA.
+    const refreshedFp = computeFingerprint(req);
+    try {
+      await prisma.session.update({
+        where: { token: req.token },
+        data: { token: newToken, expiresAt, fingerprint: refreshedFp }
+      });
+    } catch (e) {
+      if (e && /fingerprint/i.test(String(e.message))) {
+        await prisma.session.update({
+          where: { token: req.token },
+          data: { token: newToken, expiresAt }
+        });
+      } else {
+        throw e;
+      }
+    }
+
+    setSessionCookie(res, newToken);
     res.json({ token: newToken });
   } catch (error) {
     console.error('Token refresh error:', error);
@@ -1482,12 +1508,7 @@ router.post(
         actorName: user.email,
       });
 
-      res.cookie('token', token, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        maxAge: 7 * 24 * 60 * 60 * 1000,
-      });
+      setSessionCookie(res, token);
       const csrfToken = issueCsrfToken(res);
 
       return res.json({
@@ -1661,12 +1682,7 @@ router.post(
         metadata: usedRecovery ? { method: 'recovery_code' } : undefined,
       });
 
-      res.cookie('token', token, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        maxAge: 7 * 24 * 60 * 60 * 1000,
-      });
+      setSessionCookie(res, token);
       const csrfToken = issueCsrfToken(res);
 
       return res.json({

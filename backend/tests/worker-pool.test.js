@@ -3,13 +3,31 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
-const { WorkerPool, defaultSize } = require('../src/utils/worker-pool');
+const { WorkerPool, defaultSize, normalizeSize } = require('../src/utils/worker-pool');
 
 const WORKER_PATH = path.join(__dirname, '..', 'src', 'workers', 'heavy-analysis.worker.js');
 
 test('defaultSize is between 1 and 4', () => {
   const n = defaultSize();
   assert.ok(n >= 1 && n <= 4, `expected 1..4, got ${n}`);
+});
+
+test('normalizeSize clamps invalid or fractional pool sizes to usable integers', () => {
+  assert.equal(normalizeSize(0), 1);
+  assert.equal(normalizeSize(-3), 1);
+  assert.equal(normalizeSize(2.9), 2);
+  assert.equal(normalizeSize(Number.NaN), defaultSize());
+});
+
+test('WorkerPool: size=0 is normalized instead of creating an unusable pool', async () => {
+  const pool = new WorkerPool({ size: 0, workerPath: WORKER_PATH });
+  try {
+    assert.equal(pool.stats().size, 1);
+    const out = await pool.run('echo', { normalized: true });
+    assert.deepEqual(out, { normalized: true });
+  } finally {
+    await pool.close();
+  }
 });
 
 test('WorkerPool: echo round-trip', async () => {

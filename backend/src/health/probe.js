@@ -156,10 +156,12 @@ class Probe {
   async _execute(startedAt) {
     let timer;
     let timedOut = false;
+    const controller = new AbortController();
     const timeoutPromise = new Promise((resolve) => {
       timer = setTimeout(() => {
         timedOut = true;
         resolve({ __timeout: true });
+        controller.abort(new Error(`probe "${this.name}" timed out after ${this.timeoutMs}ms`));
       }, this.timeoutMs);
       if (typeof timer.unref === 'function') timer.unref();
     });
@@ -167,7 +169,11 @@ class Probe {
     let raw;
     try {
       raw = await Promise.race([
-        Promise.resolve().then(() => this._check({ name: this.name, timeoutMs: this.timeoutMs })),
+        Promise.resolve().then(() => this._check({
+          name: this.name,
+          timeoutMs: this.timeoutMs,
+          signal: controller.signal,
+        })),
         timeoutPromise,
       ]);
     } catch (err) {

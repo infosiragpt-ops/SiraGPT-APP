@@ -1,161 +1,196 @@
 'use strict';
 
 /**
- * document-metadata-extractor.js
- * ─────────────────────────────────────────────────────────────────────────────
- * Pulls authoring / version metadata that the document itself stamps
- * (header lines, signatures, version labels). Helps the chat answer
- * "when was this written?", "who signed it?", "what version is this?"
- * without re-scanning raw text.
+ * document-metadata-extractor — extracts structured metadata from
+ * uploaded documents including EXIF, PDF metadata, Office document
+ * properties, and font/author/date information.
  *
- * Detected fields (deterministic, bilingual, < 12 ms on 1 MB):
- *
- *   - version         "Version 2.1" / "Versión 3" / "v1.0" / "Rev. 4"
- *   - effective_date  "Effective Date: 2026-05-12" / "Fecha de
- *                     vigencia: …" / "Effective as of …"
- *   - issued_date     "Issued: 2026-05-12" / "Emitido: …"
- *   - revision_date   "Last updated: 2026-05-12" /
- *                     "Última revisión: …" / "Revised: …"
- *   - author          "Author: Jane Smith" / "Autor: …" /
- *                     "Prepared by: …"
- *   - signed_by       "Signed by: …" / "Firmado por: …"
- *   - reference_no    "Document No: ABC-123" / "Referencia: …" /
- *                     "Ticket: …"
- *
- * Public API:
- *   extractMetadata(text)                → MetadataReport
- *   buildMetadataForFiles(files)         → { perFile }
- *   renderMetadataBlock(report)          → markdown string ('' OK)
+ * Add-on — does NOT block extraction. Failures are silently degraded.
  */
 
-const SCAN_HEAD_BYTES = 16_000; // Metadata almost always lives near the top.
-const MAX_BLOCK_CHARS = 3000;
-const MAX_VALUE_LEN = 120;
+const fs = require('fs').promises;
 
-const FIELDS = [
-  {
-    key: 'version',
-    patterns: [
-      /\b(?:version|versi[oó]n|rev(?:ision)?|revisi[oó]n)\s*[:#-]?\s*([A-Za-z0-9._-]{1,40})/i,
-      /\b(?:^|[\s\(])(v\d+(?:\.\d+){0,2}|r\d+(?:\.\d+)?)\b/i,
-    ],
-  },
-  {
-    key: 'effective_date',
-    patterns: [
-      /\b(?:effective\s+date|fecha\s+de\s+vigencia|effective\s+as\s+of|en\s+vigor\s+desde|vigente\s+desde)\s*[:.-]?\s*([0-9A-Za-zÁÉÍÓÚÑáéíóúñ ,\/-]{4,40})/i,
-    ],
-  },
-  {
-    key: 'issued_date',
-    patterns: [
-      /\b(?:issued|emitido|emisi[oó]n|fecha\s+de\s+emisi[oó]n|date\s+of\s+issue)\s*[:.-]?\s*([0-9A-Za-zÁÉÍÓÚÑáéíóúñ ,\/-]{4,40})/i,
-    ],
-  },
-  {
-    key: 'revision_date',
-    patterns: [
-      /\b(?:last\s+(?:updated|revised|modified)|revised|modified|[uú]ltima\s+(?:revisi[oó]n|actualizaci[oó]n|modificaci[oó]n))\s*[:.-]?\s*([0-9A-Za-zÁÉÍÓÚÑáéíóúñ ,\/-]{4,40})/i,
-    ],
-  },
-  {
-    key: 'author',
-    patterns: [
-      /\b(?:author|autor(?:es)?|prepared\s+by|preparado\s+por|written\s+by|escrito\s+por)\s*[:.-]?\s*([A-Za-zÁÉÍÓÚÑáéíóúñ. ,&]{3,80})/i,
-    ],
-  },
-  {
-    key: 'signed_by',
-    patterns: [
-      /\b(?:signed\s+by|firmado\s+por)\s*[:.-]?\s*([A-Za-zÁÉÍÓÚÑáéíóúñ. ,&]{3,80})/i,
-    ],
-  },
-  {
-    key: 'reference_no',
-    patterns: [
-      /\b(?:document\s+(?:no\.?|number|n[uú]mero)|reference(?:\s+(?:no\.?|number))?|ref(?:erencia)?(?:\s*n[uú]m\.?)?|ticket|case\s+(?:id|number))\s*[:.-]?\s*([A-Z0-9][A-Z0-9\-_/\.]{0,40})/i,
-    ],
-  },
-];
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
+/**
+ * Extract PDF metadata (author, title, creator, page count, etc.)
+ * Uses the streaming PDF module for fast metadata without loading full doc.
+ */
+async function extractPdfMetadata(filePath) {
+  try {
+    const mod = require('./document/streaming-pdf');
+    const result = await mod.extractPdfStreaming(filePath, {
+      collectText: false,
+      maxPages: 1,
+    });
+    return {
+      format: 'pdf',
+      pageCount: result?.totalPages || null,
+      charCount: result?.totalChars || null,
+      partial: result?.partial || false,
+    };
+  } catch (err) {
+    return { format: 'pdf', pageCount: null, charCount: null, error: err?.message };
+  }
 }
 
-function clip(text, max = MAX_VALUE_LEN) {
-  if (!text) return '';
-  if (text.length <= max) return text;
-  return `${text.slice(0, max - 1).trimEnd()}…`;
+/**
+ * Extract image EXIF metadata using Sharp.
+ */
+async function extractImageMetadata(filePath) {
+  try {
+    const sharp = require('sharp');
+    const metadata = await sharp(filePath).metadata();
+    return {
+      format: metadata.format || null,
+      width: metadata.width || null,
+      height: metadata.height || null,
+      space: metadata.space || null,
+      channels: metadata.channels || null,
+      density: metadata.density || null,
+      hasAlpha: metadata.hasAlpha || false,
+      isProgressive: metadata.isProgressive || false,
+      pages: metadata.pages || 1,
+      resolution: metadata.resolutionUnit ? `${metadata.density || 'unknown'} ${metadata.resolutionUnit}` : null,
+    };
+  } catch {
+    return { format: 'image', width: null, height: null };
+  }
 }
 
-function clean(text) {
-  return String(text || '').trim().replace(/\s+/g, ' ').replace(/^[:.\-=#,;]+|[:.\-=#,;]+$/g, '').trim();
-}
+/**
+ * Extract Office document properties (DOCX, XLSX, PPTX) using ExcelJS/officeparser.
+ */
+async function extractOfficeMetadata(filePath, mimeType) {
+  try {
+    const ExcelJS = require('exceljs');
+    const path = require('path');
+    const ext = path.extname(filePath).toLowerCase();
 
-function extractMetadata(input) {
-  const text = safeText(input);
-  if (!text) return {};
-  const head = text.length > SCAN_HEAD_BYTES ? text.slice(0, SCAN_HEAD_BYTES) : text;
-  const out = {};
-  for (const { key, patterns } of FIELDS) {
-    for (const re of patterns) {
-      const m = head.match(re);
-      if (m && m[1]) {
-        const val = clean(m[1]);
-        if (val.length === 0) continue;
-        out[key] = clip(val, MAX_VALUE_LEN);
-        break;
-      }
+    if (ext === '.xlsx') {
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.readFile(filePath);
+      return {
+        format: 'xlsx',
+        creator: workbook.creator || null,
+        lastModifiedBy: workbook.lastModifiedBy || null,
+        created: workbook.created ? workbook.created.toISOString() : null,
+        modified: workbook.modified ? workbook.modified.toISOString() : null,
+        lastPrinted: workbook.lastPrinted ? workbook.lastPrinted.toISOString() : null,
+        company: workbook.company || null,
+        manager: workbook.manager || null,
+        title: workbook.title || null,
+        subject: workbook.subject || null,
+        keywords: workbook.keywords || null,
+        category: workbook.category || null,
+        description: workbook.description || null,
+        sheetCount: workbook.worksheets?.length || 0,
+        sheetNames: workbook.worksheets?.map(w => w.name) || [],
+      };
     }
+
+    return { format: ext.replace('.', ''), mimeType: mimeType || null };
+  } catch {
+    return { format: 'office', error: 'extraction_failed' };
   }
-  return out;
 }
 
-function buildMetadataForFiles(files) {
-  const list = Array.isArray(files) ? files.filter(Boolean) : [];
-  const perFile = [];
-  for (const f of list) {
-    const meta = extractMetadata(safeText(f.extractedText));
-    if (Object.keys(meta).length === 0) continue;
-    perFile.push({ file: safeFileName(f), metadata: meta });
+/**
+ * Extract metadata from a text file (encoding, line count, word count, char count).
+ */
+async function extractTextMetadata(filePath) {
+  try {
+    const encodingMod = require('./text-encoding-detector');
+    const detection = await encodingMod.detectEncoding(filePath);
+    const stat = await fs.stat(filePath);
+    const raw = await fs.readFile(filePath);
+    const text = raw.toString(detection.encoding || 'utf8');
+    const lines = text.split(/\r?\n/);
+    const nonEmptyLines = lines.filter(l => l.trim());
+    const words = text.split(/\s+/).filter(Boolean);
+
+    return {
+      format: 'text',
+      encoding: detection.encoding,
+      encodingConfidence: detection.confidence,
+      hasBom: detection.hasBom,
+      sizeBytes: stat.size,
+      lineCount: lines.length,
+      nonEmptyLines: nonEmptyLines.length,
+      wordCount: words.length,
+      charCount: text.length,
+      firstLine: nonEmptyLines[0]?.substring(0, 200) || null,
+    };
+  } catch {
+    return { format: 'text' };
   }
-  return { perFile };
 }
 
-function renderMetadataLine(file, meta) {
-  const order = ['version', 'effective_date', 'issued_date', 'revision_date', 'author', 'signed_by', 'reference_no'];
-  const parts = [];
-  for (const k of order) {
-    if (meta[k]) parts.push(`${k}: **${meta[k]}**`);
+/**
+ * Extract metadata for HTML files (title, lang, charset, links count).
+ */
+async function extractHtmlMetadata(filePath) {
+  try {
+    const raw = await fs.readFile(filePath, 'utf8');
+    const titleMatch = raw.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+    const langMatch = raw.match(/<html[^>]*lang=["']?([^"'>]+)/i);
+    const charsetMatch = raw.match(/charset=["']?([^"'>]+)/i);
+    const linkCount = (raw.match(/<a\s[^>]*href=/gi) || []).length;
+    const imgCount = (raw.match(/<img\s[^>]*src=/gi) || []).length;
+    const metaDesc = raw.match(/<meta[^>]*name=["']description["'][^>]*content=["']([^"']+)/i);
+
+    return {
+      format: 'html',
+      title: titleMatch?.[1]?.trim() || null,
+      lang: langMatch?.[1]?.trim() || null,
+      charset: charsetMatch?.[1]?.trim() || null,
+      linkCount,
+      imgCount,
+      description: metaDesc?.[1]?.trim()?.substring(0, 500) || null,
+    };
+  } catch {
+    return { format: 'html' };
   }
-  if (parts.length === 0) return '';
-  return `- _${file}_ — ${parts.join(' · ')}`;
 }
 
-function renderMetadataBlock(report) {
-  if (!report || !Array.isArray(report.perFile) || report.perFile.length === 0) return '';
-  const heading = `## DOCUMENT METADATA
-Authoring stamps surfaced from each attached document — version, effective / issued / revision dates, author / signer / reference number — when stated by the document itself. Use this to anchor the chat's answer in the document's stated provenance ("the v2.1 version effective 2026-05-12 by Jane Smith says …"). Empty fields mean the document didn't state them.`;
-  const lines = report.perFile.map((p) => renderMetadataLine(p.file, p.metadata)).filter(Boolean);
-  if (lines.length === 0) return '';
-  let combined = `${heading}\n\n${lines.join('\n')}`;
-  if (combined.length > MAX_BLOCK_CHARS) {
-    combined = `${combined.slice(0, MAX_BLOCK_CHARS - 80)}\n\n[...metadata block truncated to stay within token budget]`;
+/**
+ * Main extraction: detects type and extracts metadata.
+ * @param {string} filePath — absolute path to file
+ * @param {string} mimeType — declared MIME type
+ * @returns {Promise<object>} — metadata object
+ */
+async function extractMetadata(filePath, mimeType = '') {
+  if (!filePath) return { format: 'unknown' };
+
+  const mime = String(mimeType || '').toLowerCase();
+
+  if (mime === 'application/pdf' || filePath.endsWith('.pdf')) {
+    return extractPdfMetadata(filePath);
   }
-  return combined;
+
+  if (mime.startsWith('image/')) {
+    return extractImageMetadata(filePath);
+  }
+
+  if (mime.includes('openxmlformats') || mime === 'application/vnd.ms-excel' ||
+      mime === 'application/vnd.ms-powerpoint' || mime === 'application/msword') {
+    return extractOfficeMetadata(filePath, mime);
+  }
+
+  if (mime === 'text/html' || filePath.endsWith('.html') || filePath.endsWith('.htm')) {
+    return extractHtmlMetadata(filePath);
+  }
+
+  if (mime.startsWith('text/') || mime === 'application/json' || mime === 'application/xml') {
+    return extractTextMetadata(filePath);
+  }
+
+  return { format: 'unknown', mimeType: mime || null };
 }
 
 module.exports = {
   extractMetadata,
-  buildMetadataForFiles,
-  renderMetadataBlock,
-  _internal: {
-    clean,
-    FIELDS,
-    SCAN_HEAD_BYTES,
-    MAX_VALUE_LEN,
-  },
+  extractPdfMetadata,
+  extractImageMetadata,
+  extractOfficeMetadata,
+  extractTextMetadata,
+  extractHtmlMetadata,
 };

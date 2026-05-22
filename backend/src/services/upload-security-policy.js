@@ -31,6 +31,8 @@ const ALLOWED_MIMES = new Set([
   'application/msword',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-excel',
+  'application/msexcel',
   'application/vnd.ms-powerpoint',
   'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   // OpenDocument
@@ -49,6 +51,12 @@ const ALLOWED_MIMES = new Set([
   'audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/webm', 'audio/mp4',
   // Video
   'video/mp4', 'video/mpeg', 'video/quicktime', 'video/webm',
+  // Ebooks / Academic
+  // Ebooks / Academic
+  'application/epub+zip',
+  'application/x-tex', 'application/x-latex',
+  // Archives
+  'application/zip',
 ]);
 
 const ALLOWED_EXTENSIONS = new Set([
@@ -56,7 +64,7 @@ const ALLOWED_EXTENSIONS = new Set([
   'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tif', 'tiff',
   'svg', 'heic', 'heif',
   // Office / OpenDocument
-  'pdf', 'doc', 'docx', 'xlsx', 'ppt', 'pptx',
+  'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
   'odt', 'ods', 'odp',
   // Text
   'txt', 'md', 'markdown', 'csv', 'tsv', 'rtf',
@@ -66,6 +74,11 @@ const ALLOWED_EXTENSIONS = new Set([
   'eml', 'msg',
   // Media
   'mp3', 'wav', 'ogg', 'webm', 'mp4', 'm4a', 'mov', 'mpeg', 'mpg',
+  // Ebooks / Academic
+  // Ebooks / Academic
+  'epub', 'tex', 'latex',
+  // Archives
+  'zip',
 ]);
 
 const EXTENSION_TO_MIMES = new Map([
@@ -83,7 +96,7 @@ const EXTENSION_TO_MIMES = new Map([
   ['pdf', new Set(['application/pdf'])],
   ['doc', new Set(['application/msword'])],
   ['docx', new Set(['application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/zip'])],
-  ['xlsx', new Set(['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/zip'])],
+  ['xls', new Set(['application/vnd.ms-excel', 'application/msexcel'])],
   ['ppt', new Set(['application/vnd.ms-powerpoint'])],
   ['pptx', new Set(['application/vnd.openxmlformats-officedocument.presentationml.presentation', 'application/zip'])],
   ['odt', new Set(['application/vnd.oasis.opendocument.text'])],
@@ -110,6 +123,12 @@ const EXTENSION_TO_MIMES = new Map([
   ['mov', new Set(['video/quicktime'])],
   ['mpeg', new Set(['video/mpeg'])],
   ['mpg', new Set(['video/mpeg'])],
+  // Ebooks / Academic
+  ['epub', new Set(['application/epub+zip'])],
+  ['tex', new Set(['application/x-tex', 'application/x-latex'])],
+  ['latex', new Set(['application/x-latex', 'application/x-tex'])],
+  // Archives
+  ['zip', new Set(['application/zip'])],
 ]);
 
 const CANONICAL_EXTENSION_MIME = new Map([

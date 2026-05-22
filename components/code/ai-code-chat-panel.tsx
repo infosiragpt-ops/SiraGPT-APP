@@ -157,7 +157,10 @@ export function AICodeChatPanel() {
   } = useCodeWorkspace()
 
   const sessionId = activeCodeChatSessionId
-  const turns = activeCodeChatSession?.turns ?? []
+  const turns = React.useMemo(
+    () => activeCodeChatSession?.turns ?? [],
+    [activeCodeChatSession?.turns],
+  )
 
   const setTurns = React.useCallback(
     (updater: React.SetStateAction<CodeChatTurn[]>) => {
@@ -232,7 +235,7 @@ export function AICodeChatPanel() {
     setTurns((prev) =>
       prev.map((t) => (t.streaming ? { ...t, streaming: false } : t)),
     )
-  }, [])
+  }, [setTurns])
 
   const sendPrompt = React.useCallback(
     async (prompt: string) => {

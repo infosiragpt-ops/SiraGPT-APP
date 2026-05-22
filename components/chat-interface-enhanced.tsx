@@ -57,7 +57,11 @@ import { useAuth } from "@/lib/auth-context-integrated"
 import { ThemeToggle } from "@/components/theme-toggle"
 import WhatsAppButton from "@/components/WhatsAppButton"
 import { PremiumCardIcon } from "@/components/icons/premium-card-icon"
-import UnifiedDocumentViewer, { type AttachmentLike } from "@/components/viewers/UnifiedDocumentViewer"
+import UnifiedDocumentViewer, {
+  prewarmUnifiedDocumentPreview,
+  type AttachmentLike,
+} from "@/components/viewers/UnifiedDocumentViewer"
+import { getAttachmentLocalFile, toDocumentViewerAttachment } from "@/lib/document-viewer-attachment"
 import { SlashCommandMenu, detectSlashFilter, parseSlashPrefix } from "@/components/SlashCommandMenu"
 import {
   ImageAspectRatioMark,
@@ -1454,28 +1458,18 @@ const ActiveOptionsDisplay = ({
     if (viewingIndex === null) return null;
     const f = uploadedFiles[viewingIndex];
     if (!f) return null;
-    return {
-      id: f.id || f.tempId,
-      name: f.name,
-      mimeType: f.type,
-      size: f.size,
-      file: f.file instanceof globalThis.File ? f.file : null,
-      url: f.url || null,
-      extractedText: f.extractedText || null,
-    };
+    return toDocumentViewerAttachment(f);
   }, [viewingIndex, uploadedFiles]);
   const viewerSiblings: AttachmentLike[] = React.useMemo(
-    () => uploadedFiles.map((f: any) => ({
-      id: f.id || f.tempId,
-      name: f.name,
-      mimeType: f.type,
-      size: f.size,
-      file: f.file instanceof globalThis.File ? f.file : null,
-      url: f.url || null,
-      extractedText: f.extractedText || null,
-    })),
+    () => uploadedFiles.map((f: any) => toDocumentViewerAttachment(f)),
     [uploadedFiles]
   );
+
+  React.useEffect(() => {
+    viewerSiblings.forEach((attachment) => {
+      prewarmUnifiedDocumentPreview(attachment);
+    });
+  }, [viewerSiblings]);
 
   if (uploadedFiles.length === 0) return null;
 
@@ -1490,6 +1484,12 @@ const ActiveOptionsDisplay = ({
           const isFailed = file.status === 'failed';
           const longPasteMeta = getLongPasteMetadata(file);
           const imageSizeClass = uploadedFiles.length > 1 ? 'h-20 w-20' : 'h-32 w-32';
+          const attachment = viewerSiblings[index];
+          const canPreview = !isFailed && Boolean(
+            attachment?.file ||
+            attachment?.url ||
+            attachment?.extractedText
+          );
 
           return (
             <div
@@ -1500,17 +1500,17 @@ const ActiveOptionsDisplay = ({
                 isFailed ? "border-red-300 dark:border-red-700/50" : "border-gray-200 dark:border-border/60",
                 isImage ? `${imageSizeClass} p-0` : "flex items-center gap-2 px-2 py-1",
                 // Clickable chip — opens the unified high-fidelity viewer.
-                !isUploading && !isFailed && "cursor-pointer hover:border-foreground/40 hover:shadow-sm transition-all",
+                canPreview && "cursor-pointer hover:border-foreground/40 hover:shadow-sm transition-all",
               )}
-              title={isFailed ? `Subida fallida: ${file.uploadError || 'error'}` : 'Ver documento'}
+              title={isFailed ? `Subida fallida: ${file.uploadError || 'error'}` : canPreview ? 'Ver documento' : 'Preparando documento'}
               onClick={() => {
-                if (isUploading || isFailed) return;
+                if (!canPreview) return;
                 setViewingIndex(index);
               }}
-              role={!isUploading && !isFailed ? 'button' : undefined}
-              tabIndex={!isUploading && !isFailed ? 0 : undefined}
+              role={canPreview ? 'button' : undefined}
+              tabIndex={canPreview ? 0 : undefined}
               onKeyDown={(e) => {
-                if (isUploading || isFailed) return;
+                if (!canPreview) return;
                 if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setViewingIndex(index); }
               }}
             >
@@ -4815,7 +4815,8 @@ But first, you need to connect your Spotify account securely using the button be
    * object stored on the chip — no need for the user to re-drop.
    */
   const retryUpload = React.useCallback((failedFile: any) => {
-    if (!failedFile?.file || !(failedFile.file instanceof globalThis.File)) {
+    const localFile = getAttachmentLocalFile(failedFile);
+    if (!localFile) {
       toast.error('No se puede reintentar — el archivo se perdió. Vuelve a arrastrarlo.');
       return;
     }
@@ -4825,7 +4826,12 @@ But first, you need to connect your Spotify account securely using the button be
       return next;
     });
     const dt = new DataTransfer();
-    dt.items.add(failedFile.file);
+    try {
+      dt.items.add(localFile);
+    } catch {
+      toast.error('No se puede reintentar — el archivo se perdió. Vuelve a arrastrarlo.');
+      return;
+    }
     handleAndUploadFiles(dt.files, failedFile.sourceChannel || 'retry');
   }, [handleAndUploadFiles, setUploadedFiles]);
 

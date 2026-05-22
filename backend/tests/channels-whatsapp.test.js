@@ -223,7 +223,7 @@ describe('WhatsAppAdapter · parseInbound', () => {
     assert.equal(a.parseInbound({ body: '{"entry":' }), null);
   });
 
-  it('parses a text message', () => {
+  it('parses text.message.body', () => {
     const out = a.parseInbound({
       body: envelope({
         id: 'wamid.123',

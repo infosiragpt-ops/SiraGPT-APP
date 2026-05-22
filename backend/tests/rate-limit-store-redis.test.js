@@ -164,8 +164,21 @@ test("consume: RATE_LIMIT_STORE=memory forces in-memory even with REDIS_URL", as
 
 test("consume: rejects invalid arguments", async () => {
   await assert.rejects(() => store.consume("", 5, 60_000), /non-empty string/);
+  await assert.rejects(() => store.consume("x".repeat(store.MAX_CONSUME_KEY_LENGTH + 1), 5, 60_000), /at most/);
+  await assert.rejects(() => store.consume("bad\nkey", 5, 60_000), /control characters/);
   await assert.rejects(() => store.consume("k", 0, 60_000), /positive number/);
   await assert.rejects(() => store.consume("k", 5, 0), /positive number/);
+});
+
+test("consume: memory fallback enforces max key cap", async () => {
+  const env = { RATE_LIMIT_STORE: "memory" };
+  await store.consume("mem:1", 5, 60_000, { env, maxFallbackKeys: 2 });
+  await store.consume("mem:2", 5, 60_000, { env, maxFallbackKeys: 2 });
+  await store.consume("mem:3", 5, 60_000, { env, maxFallbackKeys: 2 });
+  assert.equal(store._fallbackSize(), 2);
+  const r = await store.consume("mem:1", 5, 60_000, { env, maxFallbackKeys: 2 });
+  assert.equal(r.allowed, true, "oldest key should have been evicted and start fresh");
+  assert.equal(r.remaining, 4);
 });
 
 test("consume: sliding window expires old entries via ZREMRANGEBYSCORE", async () => {

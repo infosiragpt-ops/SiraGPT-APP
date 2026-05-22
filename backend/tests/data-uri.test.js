@@ -32,6 +32,18 @@ describe('parseDataUri', () => {
     assert.equal(parseDataUri('not a data uri'), null);
     assert.equal(parseDataUri('data:no-comma'), null);
   });
+
+  test('null on malformed base64 payloads', () => {
+    assert.equal(parseDataUri('data:text/plain;base64,%%%%'), null);
+    assert.equal(parseDataUri('data:text/plain;base64,a'), null);
+    assert.equal(parseDataUri('data:text/plain;base64,SGV=sbG8='), null);
+    assert.equal(parseDataUri('data:text/plain;base64,SGVsbG8==='), null);
+  });
+
+  test('accepts valid unpadded base64 payloads', () => {
+    const r = parseDataUri('data:text/plain;base64,SGk');
+    assert.equal(r.data.toString('utf8'), 'Hi');
+  });
 });
 
 describe('buildDataUri', () => {

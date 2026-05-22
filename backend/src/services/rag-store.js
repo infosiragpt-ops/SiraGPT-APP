@@ -36,6 +36,8 @@
  */
 
 const USE_PG_STORE = process.env.USE_PG_STORE === '1';
+const CHUNK_TTL_MS = Number.parseInt(process.env.SIRAGPT_RAG_CHUNK_TTL_MS || '86400000', 10); // default 24h
+const CHUNK_TTL_ENABLED = process.env.SIRAGPT_RAG_CHUNK_TTL !== '0' && process.env.SIRAGPT_RAG_CHUNK_TTL !== 'false';
 
 // ─── In-memory backend (same shape as rag-service's internal Map) ──────────
 
@@ -49,7 +51,11 @@ const memoryBackend = {
   async appendChunks(userId, collection, chunks) {
     const key = memKey(userId, collection);
     const existing = memStore.get(key) || [];
-    const merged = existing.concat(chunks);
+    const now = Date.now();
+    const chunksWithTTL = CHUNK_TTL_ENABLED
+      ? chunks.map(c => ({ ...c, _ingestedAt: now, _expiresAt: now + CHUNK_TTL_MS }))
+      : chunks;
+    const merged = existing.concat(chunksWithTTL);
     memStore.set(key, merged);
     return { inserted: chunks.length, total: merged.length };
   },
@@ -93,6 +99,16 @@ const memoryBackend = {
     const sources = new Set(entries.map(e => e.source).filter(Boolean));
     const dim = entries[0]?.embedding?.length || 0;
     return { chunks: entries.length, sources: sources.size, dim };
+  },
+  async evictExpired(userId, collection) {
+    if (!CHUNK_TTL_ENABLED) return { removed: 0 };
+    const key = memKey(userId, collection);
+    const entries = memStore.get(key) || [];
+    const now = Date.now();
+    const kept = entries.filter(c => !c._expiresAt || c._expiresAt > now);
+    const removed = entries.length - kept.length;
+    memStore.set(key, kept);
+    return { removed };
   },
   _reset() { memStore.clear(); },
 };
@@ -234,6 +250,15 @@ function pgBackend() {
         userId, collection,
       );
       return { chunks: rows[0].chunks, sources: rows[0].sources, dim: 1536 };
+    },
+    async evictExpired(userId, collection) {
+      if (!CHUNK_TTL_ENABLED) return { removed: 0 };
+      const ttlHours = Math.floor(CHUNK_TTL_MS / 3600000);
+      const result = await prisma.$executeRawUnsafe(
+        `DELETE FROM rag_chunks WHERE user_id = $1 AND collection = $2 AND created_at < NOW() - INTERVAL '${ttlHours} hours'`,
+        userId, collection,
+      );
+      return { removed: Number(result) };
     },
     _reset() { /* no-op — use clearCollection */ },
   };

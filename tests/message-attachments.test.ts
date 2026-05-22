@@ -7,7 +7,9 @@ const {
   buildUploadedFileContext,
   extractFileIdsFromMessageFiles,
   hasUsefulExtractedText,
+  isProfessionalDocumentSynthesisRequest,
   isPlainTranscriptionRequest,
+  prepareDocumentTextForProfessionalSynthesis,
   resolveTranscriptionFileIds,
   serializeMessageAttachments,
 } = require(path.join(process.cwd(), "backend/src/services/message-attachments"))
@@ -223,6 +225,53 @@ describe("message attachments · agent task persistence", () => {
     const evidenceBlock = context.split("Contenido relevante recuperado desde todo el documento:")[1]
       .split("[La evidencia")[0]
     assert.doesNotMatch(evidenceBlock, /FACULTAD DE NEGOCIOS/)
+  })
+
+  it("cleans table-of-contents noise before professional one-paragraph analysis", async () => {
+    const noisyExtract = [
+      "Word document — 13520 characters extracted, structure preserved as markdown",
+      "---",
+      "Índice de contenidos [Declaratoria de autenticidad del asesor](#_Toc1) ii [Índice de tablas](#_Toc2) v [Índice de figuras](#_Toc3) vi [l. # Introducción Actualmente, el estudio de tiempos y movimientos es una herramienta clave para mejorar los procesos laborales, ya que ayuda a observar cómo se realizan las tareas, detectar acciones innecesarias y organizar mejor el trabajo.",
+      "A partir de los aportes de Taylor y los Gilbreth, esta técnica permite reconocer demoras, cuellos de botella y oportunidades de mejora en la producción.",
+    ].join("\n")
+
+    const prisma = {
+      file: {
+        async findMany() {
+          return [
+            {
+              id: "file-docx",
+              filename: "intro.docx",
+              originalName: "055 037 - Introducción UCV COMPLETA.docx",
+              mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+              size: 90000,
+              extractedText: noisyExtract,
+              openaiFileId: null,
+              documentAnalysis: null,
+            },
+          ]
+        },
+      },
+    }
+
+    const prompt = "dame un analisis en un solo parrafo"
+    const cleaned = prepareDocumentTextForProfessionalSynthesis(noisyExtract)
+    assert.equal(isProfessionalDocumentSynthesisRequest(prompt), true)
+    assert.doesNotMatch(cleaned, /Índice de contenidos/)
+    assert.doesNotMatch(cleaned, /Declaratoria de autenticidad/)
+    assert.match(cleaned, /Introducción Actualmente, el estudio de tiempos/)
+
+    const context = await buildUploadedFileContext(prisma, {
+      userId: "user-1",
+      fileIds: ["file-docx"],
+      query: prompt,
+      maxChars: 5000,
+    })
+
+    assert.match(context, /exactamente un parrafo/)
+    assert.match(context, /Introducción Actualmente, el estudio de tiempos/)
+    assert.doesNotMatch(context, /Índice de contenidos/)
+    assert.doesNotMatch(context, /Declaratoria de autenticidad/)
   })
 
   it("returns verbatim extracted text for plain transcription requests", async () => {
