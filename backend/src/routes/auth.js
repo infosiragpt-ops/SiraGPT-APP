@@ -11,6 +11,7 @@ const { AuditLogRepository } = require('../repositories/AuditLogRepository');
 const { TokenVault } = require('../services/TokenVault');
 const { ProviderOAuthService } = require('../services/ProviderOAuthService');
 const { SsoCallbackService } = require('../services/SsoCallbackService');
+const { RegistrationService } = require('../services/RegistrationService');
 const { encrypt: encryptToken, decrypt: decryptToken } = require('../utils/encryption');
 // Single repository / service instances shared by every call site in
 // this file. Cross-cutting concerns (fingerprint-column fallback,
@@ -21,6 +22,16 @@ const users = new UserRepository({ prisma, withRetry: withAccelerateRetry });
 const partialSessions = new PartialSessionRepository({ prisma, withRetry: withAccelerateRetry });
 const auditLogs = new AuditLogRepository({ prisma, withRetry: withAccelerateRetry });
 const tokenVault = new TokenVault({ encrypt: encryptToken, decrypt: decryptToken });
+// RegistrationService is wired here even though `resolveOrgBySsoDomain`
+// and `signSessionToken` are declared further down: both are hoisted
+// (async function declaration + module-level import respectively) so
+// they're already bound by the time this constructor runs.
+const registrationService = new RegistrationService({
+  users,
+  sessions,
+  resolveOrgBySsoDomain: (email) => resolveOrgBySsoDomain(email),
+  signSessionToken,
+});
 const { authenticateToken } = require('../middleware/auth');
 const { makeAuthRateLimit } = require('../middleware/rate-limit-auth');
 const { writeAuditLog } = require('../utils/audit-log');
@@ -450,54 +461,23 @@ router.post('/register', registerRateLimit, validateBody(RegisterRequestSchema, 
     }
 
     const { name, email, password } = req.body;
+    const result = await registrationService.register({ name, email, password });
 
-    // SSO domain claim (ratchet 45) — same gate as /login: if the
-    // email domain belongs to an SSO-enabled org we refuse to create
-    // a password-backed account and steer the user to the IdP.
-    const ssoOrg = await resolveOrgBySsoDomain(email);
-    if (ssoOrg) {
+    if (!result.ok && result.kind === 'sso_required') {
       return res.status(501).json({
         ok: false,
         ssoRequired: true,
         implemented: false,
         message: 'password registration disabled — use SSO for this organization',
-        orgSlug: ssoOrg.slug,
-        ssoLoginUrl: `/api/auth/sso/${ssoOrg.slug}/login`,
+        orgSlug: result.org.slug,
+        ssoLoginUrl: `/api/auth/sso/${result.org.slug}/login`,
       });
     }
-
-    // Check if user exists
-    const existingUser = await users.findByEmail(email);
-
-    if (existingUser) {
+    if (!result.ok && result.kind === 'duplicate') {
       return res.status(400).json({ error: 'User already exists' });
     }
 
-    // Hash password
-    const hashedPassword = await bcrypt.hash(password, 12);
-
-    // Create user
-    const user = await users.createPasswordUser({
-      name,
-      email,
-      passwordHash: hashedPassword,
-    });
-
-    // Create session — embed isSuperAdmin claim so the rate-limit
-    // bypass + downstream policy checks can use it without a DB
-    // lookup on the hot path. aud/iss claims are added centrally via
-    // signSessionToken().
-    const token = signSessionToken({
-      userId: user.id,
-      isAdmin: Boolean(user.isAdmin),
-      isSuperAdmin: Boolean(user.isSuperAdmin),
-    });
-
-    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-
-    await sessions.create({ userId: user.id, token, expiresAt });
-
-    // Remove password from response
+    const { user, token } = result;
     const { password: _, ...userWithoutPassword } = user;
 
     res.cookie('token', token, {
@@ -508,8 +488,7 @@ router.post('/register', registerRateLimit, validateBody(RegisterRequestSchema, 
     });
 
     // Mint a fresh CSRF token alongside the session cookie so SPAs
-    // can skip the dedicated /api/csrf-token roundtrip (ratchet 45,
-    // task 2). The token still rotates on every call — `issueCsrfToken`
+    // can skip the dedicated /api/csrf-token roundtrip — `issueCsrfToken`
     // resets both the public + secret cookies with brand-new randomness.
     const csrfToken = issueCsrfToken(res);
 
