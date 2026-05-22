@@ -91,7 +91,7 @@ function toPrismaData(data) {
 function createWriteBehindCache(opts = {}) {
   const prisma = opts.prisma || null;
   const redis = opts.redis || null;
-  const flushIntervalMs = Number.isFinite(opts.flushIntervalMs) && opts.flushIntervalMs > 0
+  const flushIntervalMs = Number.isFinite(opts.flushIntervalMs) && opts.flushIntervalMs >= 0
     ? Math.floor(opts.flushIntervalMs)
     : 5000;
   const flushThreshold = Number.isFinite(opts.flushThreshold) && opts.flushThreshold > 0

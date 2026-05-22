@@ -60,6 +60,20 @@ test('queueWrite coalesces by (model, where) and last-write-wins', () => {
   assert.deepEqual(wbc.getPending('user', { id: 'a' }), { lastActiveAt: 200 });
 });
 
+test('flushIntervalMs: 0 disables interval-driven flushing for deterministic callers', async () => {
+  const prisma = fakePrisma();
+  const wbc = createWriteBehindCache({ prisma, flushIntervalMs: 0, flushThreshold: 100 });
+  wbc.queueWrite('user', { id: 'manual-only' }, { lastActiveAt: 1 });
+
+  await new Promise((r) => setTimeout(r, 20));
+
+  assert.equal(wbc.stats().flushIntervalMs, 0);
+  assert.equal(wbc.size(), 1);
+  assert.equal(prisma._calls.length, 0);
+  const result = await wbc.flushNow();
+  assert.equal(result.flushed, 1);
+});
+
 test('flushNow batches per model and calls prisma.update', async () => {
   const prisma = fakePrisma();
   const wbc = createWriteBehindCache({ prisma, flushIntervalMs: 0 });
