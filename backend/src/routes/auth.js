@@ -9,6 +9,7 @@ const { UserRepository } = require('../repositories/UserRepository');
 const { PartialSessionRepository } = require('../repositories/PartialSessionRepository');
 const { AuditLogRepository } = require('../repositories/AuditLogRepository');
 const { TokenVault } = require('../services/TokenVault');
+const { ProviderOAuthService } = require('../services/ProviderOAuthService');
 const { encrypt: encryptToken, decrypt: decryptToken } = require('../utils/encryption');
 // Single repository / service instances shared by every call site in
 // this file. Cross-cutting concerns (fingerprint-column fallback,
@@ -172,6 +173,70 @@ const googleServicesOauth2Client = new OAuth2Client(
   getGoogleServicesCallbackURL()
 );
 
+// Provider descriptors → ProviderOAuthService instances. Adding a
+// third Google-style integration is "describe it here, wire 4 thin
+// routes" — no business logic in the route layer.
+const GMAIL_SCOPES = [
+  'https://www.googleapis.com/auth/gmail.readonly',
+  'https://www.googleapis.com/auth/gmail.send',
+  'https://www.googleapis.com/auth/gmail.modify',
+];
+const GOOGLE_SERVICES_SCOPES = [
+  'https://www.googleapis.com/auth/calendar',
+  'https://www.googleapis.com/auth/calendar.events',
+  'https://www.googleapis.com/auth/drive',
+  'https://www.googleapis.com/auth/drive.file',
+  'https://www.googleapis.com/auth/drive.readonly',
+  'https://www.googleapis.com/auth/drive.metadata.readonly',
+];
+
+const gmailOAuth = new ProviderOAuthService({
+  provider: {
+    service: 'gmail',
+    oauth2Client: gmailOauth2Client,
+    scopes: GMAIL_SCOPES,
+    scopeFallback: 'gmail',
+    // Status requires ALL three Gmail scopes (read/send/modify) — the
+    // app breaks if any is missing, so 'every' is the right policy.
+    requiredScopes: GMAIL_SCOPES,
+    scopeMatch: 'every',
+    persistTokens: (userId, sealed) => users.updateGmailTokens(userId, sealed),
+    clearTokens: (userId) => users.clearGmailTokens(userId),
+    readSealedTokens: async (userId) => {
+      const row = await users.findById(userId, { select: { gmailTokens: true } });
+      return row?.gmailTokens ?? null;
+    },
+  },
+  tokenVault,
+  signState: signOAuthState,
+  verifyState: verifyOAuthState,
+});
+
+const googleServicesOAuth = new ProviderOAuthService({
+  provider: {
+    service: 'google_services',
+    oauth2Client: googleServicesOauth2Client,
+    scopes: GOOGLE_SERVICES_SCOPES,
+    scopeFallback: 'calendar,drive',
+    // Status only requires ANY of (calendar, drive) — the user might
+    // have approved only one half and the integration still works.
+    requiredScopes: [
+      'https://www.googleapis.com/auth/calendar',
+      'https://www.googleapis.com/auth/drive',
+    ],
+    scopeMatch: 'some',
+    persistTokens: (userId, sealed) => users.updateGoogleServicesTokens(userId, sealed),
+    clearTokens: (userId) => users.clearGoogleServicesTokens(userId),
+    readSealedTokens: async (userId) => {
+      const row = await users.findById(userId, { select: { googleServicesTokens: true } });
+      return row?.googleServicesTokens ?? null;
+    },
+  },
+  tokenVault,
+  signState: signOAuthState,
+  verifyState: verifyOAuthState,
+});
+
 // Google OAuth routes
 router.get('/google',
   requireGoogleOAuth,
@@ -251,84 +316,44 @@ router.get('/google/callback',
   }
 );
 
-// Gmail OAuth routes - separate from regular Google auth
-router.get('/gmail',
-  authenticateToken,
-  requireGoogleIntegrations,
-  async (req, res) => {
-    try {
-      const scopes = [
-        'https://www.googleapis.com/auth/gmail.readonly',
-        'https://www.googleapis.com/auth/gmail.send',
-        'https://www.googleapis.com/auth/gmail.modify'
-      ];
-
-      const authUrl = gmailOauth2Client.generateAuthUrl({
-        access_type: 'offline',
-        scope: scopes,
-        prompt: 'consent', // ✅ Force consent screen to ensure refresh token is always sent
-        state: signOAuthState({ userId: req.user.id, service: 'gmail' })
-      });
-      res.json({ authUrl });
-    } catch (error) {
-      console.error('Gmail OAuth error:', error);
-      res.status(500).json({ error: 'Failed to generate Gmail auth URL' });
-    }
+// Gmail + Google-Services OAuth routes — uniform four-step lifecycle
+// (init / callback / disconnect / status) implemented by
+// ProviderOAuthService. Routes here only deal with HTTP (status
+// codes, popup HTML, auth/middleware) — every provider concern lives
+// in the service.
+function _renderCallbackResult(res, result, { successMessage } = {}) {
+  res.set('Content-Type', 'text/html');
+  if (result.ok) {
+    return res.send(popupResponseHtml({
+      status: 'success',
+      service: result.service,
+      ...(successMessage ? { message: successMessage } : {}),
+    }));
   }
-);
+  return res.send(popupResponseHtml({
+    status: 'error',
+    service: result.service,
+    error: result.error || 'auth_failed',
+  }));
+}
 
-router.get('/gmail/callback', async (req, res) => {
+router.get('/gmail', authenticateToken, requireGoogleIntegrations, (req, res) => {
   try {
-    console.log('🔵 Gmail OAuth callback triggered');
-    const { code, state } = req.query;
-    let userId;
-
-    if (!code || !state) {
-      return res.send(popupResponseHtml({ status: 'error', service: 'gmail', error: 'auth_failed' }));
-    }
-
-    try {
-      ({ userId } = verifyOAuthState(state, { service: 'gmail' }));
-    } catch (stateError) {
-      console.warn('Gmail OAuth state validation failed:', stateError.message);
-      return res.send(popupResponseHtml({ status: 'error', service: 'gmail', error: 'invalid_state' }));
-    }
-
-    // Exchange code for tokens
-    const { tokens } = await gmailOauth2Client.getToken(code);
-
-    console.log('🎉 Gmail OAuth successful - Received tokens:', {
-      hasAccessToken: !!tokens.access_token,
-      hasRefreshToken: !!tokens.refresh_token,
-      scope: tokens.scope,
-      expiryDate: tokens.expiry_date ? new Date(tokens.expiry_date) : 'none'
-    });
-
-    const sealed = tokenVault.sealProviderTokens({
-      accessToken: tokens.access_token,
-      refreshToken: tokens.refresh_token,
-      tokenType: tokens.token_type,
-      scope: tokens.scope || 'gmail',
-      expiresAt: tokens.expiry_date || undefined,
-    });
-
-    await users.updateGmailTokens(userId, sealed);
-
-    // ✅ Send a full HTML page with a script to ensure execution
-    res.set('Content-Type', 'text/html');
-    res.send(popupResponseHtml({ status: 'success', service: 'gmail' }));
+    res.json({ authUrl: gmailOAuth.buildAuthUrl(req.user.id) });
   } catch (error) {
-    console.error('Gmail OAuth callback error:', error);
-    // ✅ Handle error case as well
-    res.set('Content-Type', 'text/html');
-    res.send(popupResponseHtml({ status: 'error', service: 'gmail', error: 'auth_failed' }));
+    console.error('Gmail OAuth error:', error);
+    res.status(500).json({ error: 'Failed to generate Gmail auth URL' });
   }
 });
 
-// Disconnect Gmail
+router.get('/gmail/callback', async (req, res) => {
+  const result = await gmailOAuth.handleCallback({ code: req.query.code, state: req.query.state });
+  _renderCallbackResult(res, result);
+});
+
 router.post('/gmail/disconnect', authenticateToken, async (req, res) => {
   try {
-    await users.clearGmailTokens(req.user.id);
+    await gmailOAuth.disconnect(req.user.id);
     res.json({ success: true });
   } catch (error) {
     console.error('Gmail disconnect error:', error);
@@ -336,156 +361,47 @@ router.post('/gmail/disconnect', authenticateToken, async (req, res) => {
   }
 });
 
-// Check Gmail connection status
 router.get('/gmail/status', authenticateToken, async (req, res) => {
   try {
-    const user = await users.findById(req.user.id, { select: { gmailTokens: true } });
-
-    let isConnected = false;
-    let hasRefreshToken = false;
-    let hasRequiredScopes = false;
-
-    const tokens = tokenVault.openProviderTokens(user?.gmailTokens);
-    if (tokens) {
-      isConnected = true;
-      hasRefreshToken = !!tokens.refreshToken;
-
-      // Check scopes
-      const requiredScopes = [
-        'https://www.googleapis.com/auth/gmail.readonly',
-        'https://www.googleapis.com/auth/gmail.send',
-        'https://www.googleapis.com/auth/gmail.modify'
-      ];
-      const tokenScope = tokens.scope || '';
-      hasRequiredScopes = requiredScopes.every(scope => tokenScope.includes(scope));
-    }
-
-    res.json({
-      isConnected,
-      hasRefreshToken,
-      hasRequiredScopes,
-      needsReauth: isConnected && (!hasRefreshToken || !hasRequiredScopes)
-    });
+    res.json(await gmailOAuth.getStatus(req.user.id));
   } catch (error) {
     console.error('Gmail status error:', error);
     res.status(500).json({ error: 'Failed to check Gmail status' });
   }
 });
 
-// Force Gmail re-authentication with consent screen
+// /gmail/reauth used to construct an ad-hoc OAuth2Client just to flip
+// `prompt: 'consent'` — the service already forces consent by
+// default, so this endpoint is now identical to /gmail. Kept as a
+// separate path so existing frontend code doesn't have to change.
 router.get('/gmail/reauth', authenticateToken, requireGoogleIntegrations, (req, res) => {
   try {
-    // Generate OAuth URL with forced consent
-    const { OAuth2Client } = require('google-auth-library');
-    const oauth2Client = new OAuth2Client(
-      process.env.GOOGLE_CLIENT_ID,
-      process.env.GOOGLE_CLIENT_SECRET,
-      getGoogleGmailCallbackURL()
-    );
-
-    const scopes = [
-      'https://www.googleapis.com/auth/gmail.readonly',
-      'https://www.googleapis.com/auth/gmail.send',
-      'https://www.googleapis.com/auth/gmail.modify'
-    ];
-
-    const authUrl = oauth2Client.generateAuthUrl({
-      access_type: 'offline',
-      prompt: 'consent', // Force consent screen
-      scope: scopes,
-      state: signOAuthState({ userId: req.user.id, service: 'gmail' })
-    });
-
-    res.json({ authUrl });
+    res.json({ authUrl: gmailOAuth.buildAuthUrl(req.user.id, { forceConsent: true }) });
   } catch (error) {
     console.error('Gmail reauth error:', error);
     res.status(500).json({ error: 'Failed to generate reauth URL' });
   }
 });
 
-// Google Calendar & Drive OAuth routes
-router.get('/google-services',
-  authenticateToken,
-  requireGoogleIntegrations,
-  async (req, res) => {
-    try {
-      const scopes = [
-        'https://www.googleapis.com/auth/calendar',
-        'https://www.googleapis.com/auth/calendar.events',
-        'https://www.googleapis.com/auth/drive',
-        'https://www.googleapis.com/auth/drive.file',
-        'https://www.googleapis.com/auth/drive.readonly',
-        'https://www.googleapis.com/auth/drive.metadata.readonly'
-      ];
-
-      const authUrl = googleServicesOauth2Client.generateAuthUrl({
-        access_type: 'offline',
-        scope: scopes,
-        prompt: 'consent',
-        state: signOAuthState({ userId: req.user.id, service: 'google_services' })
-      });
-
-      res.json({ authUrl });
-    } catch (error) {
-      console.error('Google Services OAuth error:', error);
-      res.status(500).json({ error: 'Failed to generate Google Services auth URL' });
-    }
-  }
-);
-
-router.get('/google-services/callback', async (req, res) => {
+router.get('/google-services', authenticateToken, requireGoogleIntegrations, (req, res) => {
   try {
-    const { code, state } = req.query;
-    let userId;
-
-    if (!code || !state) {
-      return res.send(popupResponseHtml({ status: 'error', service: 'google_services', error: 'auth_failed' }));
-    }
-
-    try {
-      ({ userId } = verifyOAuthState(state, { service: 'google_services' }));
-    } catch (stateError) {
-      console.warn('Google Services OAuth state validation failed:', stateError.message);
-      return res.send(popupResponseHtml({ status: 'error', service: 'google_services', error: 'invalid_state' }));
-    }
-
-    // Exchange code for tokens
-    const { tokens } = await googleServicesOauth2Client.getToken(code);
-
-    console.log('🎉 Google Services OAuth successful - Received tokens:', {
-      hasAccessToken: !!tokens.access_token,
-      hasRefreshToken: !!tokens.refresh_token,
-      scope: tokens.scope,
-      expiryDate: tokens.expiry_date ? new Date(tokens.expiry_date) : 'none'
-    });
-
-    const sealed = tokenVault.sealProviderTokens({
-      accessToken: tokens.access_token,
-      refreshToken: tokens.refresh_token,
-      tokenType: tokens.token_type,
-      scope: tokens.scope || 'calendar,drive',
-      expiresAt: tokens.expiry_date || undefined,
-    });
-
-    await users.updateGoogleServicesTokens(userId, sealed);
-
-    res.set('Content-Type', 'text/html');
-    res.send(popupResponseHtml({
-      status: 'success',
-      service: 'google_services',
-      message: 'Google Calendar & Drive connected successfully! This window will now close.',
-    }));
+    res.json({ authUrl: googleServicesOAuth.buildAuthUrl(req.user.id) });
   } catch (error) {
-    console.error('Google Services OAuth callback error:', error);
-    res.set('Content-Type', 'text/html');
-    res.send(popupResponseHtml({ status: 'error', service: 'google_services', error: 'auth_failed' }));
+    console.error('Google Services OAuth error:', error);
+    res.status(500).json({ error: 'Failed to generate Google Services auth URL' });
   }
 });
 
-// Disconnect Google Services
+router.get('/google-services/callback', async (req, res) => {
+  const result = await googleServicesOAuth.handleCallback({ code: req.query.code, state: req.query.state });
+  _renderCallbackResult(res, result, {
+    successMessage: 'Google Calendar & Drive connected successfully! This window will now close.',
+  });
+});
+
 router.post('/google-services/disconnect', authenticateToken, async (req, res) => {
   try {
-    await users.clearGoogleServicesTokens(req.user.id);
+    await googleServicesOAuth.disconnect(req.user.id);
     res.json({ success: true });
   } catch (error) {
     console.error('Google Services disconnect error:', error);
@@ -493,35 +409,9 @@ router.post('/google-services/disconnect', authenticateToken, async (req, res) =
   }
 });
 
-// Check Google Services connection status
 router.get('/google-services/status', authenticateToken, async (req, res) => {
   try {
-    const user = await users.findById(req.user.id, { select: { googleServicesTokens: true } });
-
-    let isConnected = false;
-    let hasRefreshToken = false;
-    let hasRequiredScopes = false;
-
-    const tokens = tokenVault.openProviderTokens(user?.googleServicesTokens);
-    if (tokens) {
-      isConnected = true;
-      hasRefreshToken = !!tokens.refreshToken;
-
-      // Check for Calendar and Drive scopes
-      const requiredScopes = [
-        'https://www.googleapis.com/auth/calendar',
-        'https://www.googleapis.com/auth/drive'
-      ];
-      const tokenScope = tokens.scope || '';
-      hasRequiredScopes = requiredScopes.some(scope => tokenScope.includes(scope));
-    }
-
-    res.json({
-      isConnected,
-      hasRefreshToken,
-      hasRequiredScopes,
-      needsReauth: isConnected && (!hasRefreshToken || !hasRequiredScopes)
-    });
+    res.json(await googleServicesOAuth.getStatus(req.user.id));
   } catch (error) {
     console.error('Google Services status error:', error);
     res.status(500).json({ error: 'Failed to check Google Services status' });
