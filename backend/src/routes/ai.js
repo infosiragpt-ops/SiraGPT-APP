@@ -255,6 +255,36 @@ function createProviderClient(provider) {
   });
 }
 
+/**
+ * Request-aware variant of createProviderClient. When the litellm Proxy
+ * is enabled AND the request opts in via `x-sira-gateway: 1` (or the
+ * global `LLM_GATEWAY_FORCE=1` is set), this returns the gateway OpenAI
+ * client — a single OpenAI-shaped endpoint that routes to every provider
+ * server-side. Otherwise it returns the legacy direct-provider client.
+ *
+ * This is the surgical migration point for the first call site. Other
+ * `createProviderClient(provider)` call sites are migrated incrementally
+ * in follow-up turns so each can ship with its own regression test.
+ *
+ * @returns {{ client: OpenAI, via: 'gateway' | 'direct' }}
+ */
+function createProviderClientForRequest(provider, req) {
+  try {
+    // Lazy require so the route module loads even if the gateway client
+    // file is absent (e.g. shallow checkouts in CI).
+    // eslint-disable-next-line global-require
+    const { shouldUseGatewayForRequest, createGatewayClient } = require('../services/ai/llm-gateway-client');
+    if (shouldUseGatewayForRequest(req)) {
+      const gw = createGatewayClient();
+      if (gw) return { client: gw, via: 'gateway' };
+    }
+  } catch (_err) {
+    // Fall through to legacy on any failure — never break the user's chat
+    // because the gateway helper crashed.
+  }
+  return { client: createProviderClient(provider), via: 'direct' };
+}
+
 // One-shot boot-time provider-key audit. Logs a single WARN for each
 // missing key so operators see at a glance which providers will 503.
 // Models from unconfigured providers are also hidden from /api/ai/models
@@ -1187,7 +1217,13 @@ router.post(
       }
 
       let actualProvider = provider; // ✅ NEW: track actual provider
-      let openai = createProviderClient(provider);
+      const _providerResolution = createProviderClientForRequest(provider, req);
+      let openai = _providerResolution.client;
+      // Observability: log when this request was served by the gateway
+      // so we can grep production logs during the staged rollout.
+      if (_providerResolution.via === 'gateway') {
+        console.log('[ai/generate] via=gateway', JSON.stringify({ provider, model }));
+      }
 
       // Plan gating — premium models are catalogued in model-router with an
       // explicit plans whitelist. If the model is in the catalog and the

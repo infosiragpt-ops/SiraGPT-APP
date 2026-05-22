@@ -37,10 +37,11 @@
  *   createGatewayClient({ env, fetchImpl }) → OpenAI client | null
  *   getGatewayConfig({ env })               → { url, key, timeoutMs, ... }
  *
- * The module never throws on bad config — a missing key with the URL set
- * logs one warn and returns disabled, so a misconfigured prod boot never
- * crashes the chat route. Real misconfigurations surface as 503 from the
- * first request the user makes, with a clear `gateway_disabled` reason.
+ * The module never throws on bad config — a missing URL or key returns
+ * `{ enabled: false, reason }` silently so a misconfigured prod boot
+ * never crashes the chat route. Operators can grep config state by
+ * calling `getGatewayConfig()` from a debug endpoint; we deliberately
+ * don't spam the boot log on every cold start.
  */
 
 let _OpenAICtor = null;
