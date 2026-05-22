@@ -488,13 +488,8 @@ function RendererDispatch({
  * never left with an empty modal.
  *
  * The backend caches the produced PDF on disk by file id, so the second
- * open of the same attachment is instant. An additional in-memory
- * `convertedPdfCache` avoids the fetch entirely for re-opens within the
- * same session — the second click on the same PPTX/DOC chip is sub-ms.
+ * open of the same attachment is instant.
  */
-
-const convertedPdfCache = new Map<string, AttachmentLike>()
-
 function ServerConvertedPdfRenderer({
   a, fallback,
 }: { a: AttachmentLike; fallback: React.ReactNode }) {
@@ -503,16 +498,10 @@ function ServerConvertedPdfRenderer({
   const [unavailableReason, setUnavailableReason] = React.useState<string>("")
 
   React.useEffect(() => {
+    // We need a stable backend id to ask the server to convert. While the
+    // attachment is still in the composer (pre-upload), there's no id —
+    // we silently fall back to the client-side renderer.
     if (!a.id) { setState("unavailable"); setUnavailableReason("no-id"); return }
-
-    // In-memory hit — skip the network round-trip entirely. The PDF File
-    // blob was cached on first successful conversion; re-open is instant.
-    const cached = a.id ? convertedPdfCache.get(a.id) : undefined
-    if (cached) {
-      setPdfAttachment(cached)
-      setState("ok")
-      return
-    }
 
     let cancelled = false
     ;(async () => {
@@ -528,22 +517,24 @@ function ServerConvertedPdfRenderer({
         })
         if (cancelled) return
         if (!res.ok) {
+          // 503 = engine not available, 415 = format not convertible,
+          // 404 = file disappeared. All map to "use fallback".
           setUnavailableReason(`http-${res.status}`)
           setState("unavailable")
           return
         }
         const buf = await res.arrayBuffer()
+        // Wrap the PDF buffer in a synthetic File so PdfRenderer's
+        // `a.file.arrayBuffer()` path picks it up — no special-case
+        // plumbing needed inside the renderer.
         const pdfBlob = new File([buf], `${a.name}.pdf`, { type: "application/pdf" })
-        const pdfAtt: AttachmentLike = {
+        setPdfAttachment({
           id: a.id,
           name: a.name,
           mimeType: "application/pdf",
           size: buf.byteLength,
           file: pdfBlob,
-        }
-        // Persist so the next re-open (or arrow-key nav back) is instant.
-        if (a.id) convertedPdfCache.set(a.id, pdfAtt)
-        setPdfAttachment(pdfAtt)
+        })
         setState("ok")
       } catch (e: any) {
         if (!cancelled) {
@@ -591,52 +582,6 @@ function CopyButton({ text, className }: { text: string; className?: string }) {
   )
 }
 
-// ─── Content cache ──────────────────────────────────────────────────
-//
-// Module-level LRU cache so re-opening the same attachment (or navigating
-// back to it via arrow keys) is instant — no re-fetch, no re-parse.
-// Keyed by attachment id or url; evicts the oldest entry when >50 items.
-
-const MAX_CACHE_SIZE = 50
-
-interface CacheEntry {
-  text?: string
-  buffer?: ArrayBuffer
-  at: number
-}
-
-const contentCache = new Map<string, CacheEntry>()
-
-function cacheKeyFor(a: AttachmentLike, suffix: string): string {
-  return `${a.id || a.url || a.name || "anon"}:${suffix}`
-}
-
-function cacheGet(key: string): CacheEntry | undefined {
-  const entry = contentCache.get(key)
-  if (!entry) return undefined
-  // Bump recency so the entry isn't evicted prematurely.
-  entry.at = Date.now()
-  return entry
-}
-
-function cacheSet(key: string, partial: { text?: string; buffer?: ArrayBuffer }) {
-  if (contentCache.size >= MAX_CACHE_SIZE) {
-    // Evict the oldest entry (smallest `at` timestamp).
-    let oldestKey = ""
-    let oldestAt = Infinity
-    for (const [k, v] of contentCache) {
-      if (v.at < oldestAt) { oldestAt = v.at; oldestKey = k }
-    }
-    if (oldestKey) contentCache.delete(oldestKey)
-  }
-  const existing = contentCache.get(key)
-  contentCache.set(key, {
-    text: partial.text ?? existing?.text,
-    buffer: partial.buffer ?? existing?.buffer,
-    at: Date.now(),
-  })
-}
-
 // ─── Utilities for loading raw content ───────────────────────────────
 
 /**
@@ -657,63 +602,23 @@ function authedAssetFetchInit(): RequestInit {
 }
 
 async function readAsText(a: AttachmentLike): Promise<string> {
-  // 1) Cache hit — instant return for already-loaded content.
-  const tKey = cacheKeyFor(a, "text")
-  const cachedText = cacheGet(tKey)
-  if (cachedText?.text !== undefined) return cachedText.text
-
-  // 2) Pre-extracted text (server-side) — avoids reading the binary
-  //    blob at all for text-based formats. The upload response already
-  //    includes this field, so the first open of an uploaded .txt / .md /
-  //    .json / .csv / .xml / code file is also instant.
-  if (a.extractedText) {
-    cacheSet(tKey, { text: a.extractedText })
-    return a.extractedText
-  }
-
-  // 3) In-memory File blob (composer chip, pre-upload or preserved
-  //    after upload via swap).
-  if (a.file) {
-    const text = await a.file.text()
-    cacheSet(tKey, { text })
-    return text
-  }
-
-  // 4) Server fetch — only for sent-message chips where the File blob
-  //    was discarded or for urls that don't carry extractedText.
+  if (a.file) return await a.file.text()
   if (a.url) {
     const res = await fetch(absUrl(a.url), authedAssetFetchInit())
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    const text = await res.text()
-    cacheSet(tKey, { text })
-    return text
+    return await res.text()
   }
-
+  if (a.extractedText) return a.extractedText
   throw new Error("No source available")
 }
 
 async function readAsArrayBuffer(a: AttachmentLike): Promise<ArrayBuffer> {
-  // 1) Cache hit — instant for already-loaded binary content.
-  const bKey = cacheKeyFor(a, "ab")
-  const cachedBuf = cacheGet(bKey)
-  if (cachedBuf?.buffer) return cachedBuf.buffer
-
-  // 2) In-memory File blob.
-  if (a.file) {
-    const buf = await a.file.arrayBuffer()
-    cacheSet(bKey, { buffer: buf })
-    return buf
-  }
-
-  // 3) Server fetch.
+  if (a.file) return await a.file.arrayBuffer()
   if (a.url) {
     const res = await fetch(absUrl(a.url), authedAssetFetchInit())
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    const buf = await res.arrayBuffer()
-    cacheSet(bKey, { buffer: buf })
-    return buf
+    return await res.arrayBuffer()
   }
-
   throw new Error("No source available")
 }
 
