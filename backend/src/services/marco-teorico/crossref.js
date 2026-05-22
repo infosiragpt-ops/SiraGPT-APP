@@ -25,10 +25,16 @@ const PER_CALL_TIMEOUT_MS = 6000;
 const CONCURRENCY = 6; // polite; CrossRef allows more but cap to be neighbourly
 
 async function fetchWithTimeout(url, { signal, timeoutMs = PER_CALL_TIMEOUT_MS } = {}) {
+  if (signal?.aborted) throw signal.reason || abortError();
+
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  const timer = setTimeout(() => ctrl.abort(abortError()), timeoutMs);
+  let onAbort;
   // If the caller aborted, propagate to our inner controller.
-  if (signal) signal.addEventListener('abort', () => ctrl.abort(), { once: true });
+  if (signal) {
+    onAbort = () => ctrl.abort(signal.reason || abortError());
+    signal.addEventListener('abort', onAbort, { once: true });
+  }
   try {
     return await fetch(url, {
       headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
@@ -36,7 +42,14 @@ async function fetchWithTimeout(url, { signal, timeoutMs = PER_CALL_TIMEOUT_MS }
     });
   } finally {
     clearTimeout(timer);
+    if (onAbort) signal.removeEventListener('abort', onAbort);
   }
+}
+
+function abortError() {
+  const err = new Error('crossref request aborted');
+  err.name = 'AbortError';
+  return err;
 }
 
 /**
