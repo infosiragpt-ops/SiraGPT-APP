@@ -1,0 +1,317 @@
+# Ejecucion profesional de las 1000 mejoras internas
+
+Este tracker registra lotes realmente implementados y validados en el estado actual del repo. No se marca ningun lote como cerrado sin cambio concreto, prueba automatizada y verificacion local.
+
+## Reglas de ejecucion
+
+- Ejecutar por lotes pequenos, revisables y reversibles.
+- Mantener la interfaz estable salvo solicitud explicita de UI.
+- Priorizar seguridad, estabilidad de chat, pruebas, observabilidad y despliegue seguro.
+- Validar con type-check, pruebas focalizadas y smoke local cuando aplique.
+- No introducir secretos ni logs con datos sensibles.
+
+## Lote 26: ayuda CLI extendida del doctor local
+
+- Estado: implementado y validado.
+- Mejora cubierta: hacer el doctor local autosuficiente para uso por humanos y scripts sin revisar codigo fuente.
+- Cambio: se agregaron `scripts/local-chat-readiness.js` y `scripts/local-chat-recovery.js`, con `npm run smoke:local-chat` y `npm run doctor:local-chat`.
+- Control: `scripts/local-chat-recovery.js --help` documenta opciones, reportes, limpieza, rutas configurables y codigos de salida.
+- Control: la ayuda explica que los reportes redaccionan passwords y bearer tokens y solo reportan presencia de variables.
+- Control: los codigos `0`, `1`, `31`, `32`, `33` y `34` quedan visibles desde la CLI.
+- Pruebas: se agrego `tests/scripts/local-chat-recovery.test.ts` para comandos de recuperacion, redaccion, escritura, limpieza y ayuda CLI.
+- Verificacion: `npm run type-check`, prueba focalizada, `npm run doctor:local-chat -- --help`, `npm run doctor:local-chat` con salida `32` por backend local caido y suite completa.
+
+## Lote 27: contrato JSON versionado para CI local
+
+- Estado: implementado y validado.
+- Mejora cubierta: permitir que consumidores automaticos detecten cambios incompatibles en la salida compacta del doctor/readiness.
+- Cambio: `scripts/local-chat-readiness.js` exporta `CI_SUMMARY_SCHEMA_VERSION` e incluye `schemaVersion` en `--summary-json`.
+- Control: `scripts/local-chat-recovery.js` hereda la misma version en su resumen compacto.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para fijar `schemaVersion=1` en readiness y recovery.
+- Verificacion: `npm run type-check`, prueba focalizada, `npm run doctor:local-chat -- --summary-json` con `schemaVersion=1` y suite completa.
+
+## Lote 28: resumen de fallo primario para automatizacion local
+
+- Estado: implementado y validado.
+- Mejora cubierta: reducir parsing externo cuando una automatizacion solo necesita saber el bloqueo principal y la primera accion recomendada.
+- Cambio: `scripts/local-chat-readiness.js` agrega `primaryFailure` al JSON compacto.
+- Cambio: `scripts/local-chat-recovery.js` agrega `primaryAction` al JSON compacto del doctor.
+- Control: `primaryFailure` ignora advertencias no bloqueantes y usa el primer check requerido fallido.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para `primaryFailure`, `primaryAction` y advertencias.
+- Verificacion: `npm run type-check`, prueba focalizada, `npm run doctor:local-chat -- --summary-json` con `primaryFailure=backend_auth` y `primaryAction=backend_dev_server`, y suite completa.
+
+## Lote 29: seccion primaria en reporte Markdown
+
+- Estado: implementado y validado.
+- Mejora cubierta: hacer que el reporte Markdown sea accionable sin leer tablas completas.
+- Cambio: `scripts/local-chat-recovery.js` agrega `Primary failure` y `Primary action` al reporte `--markdown`.
+- Control: los campos provienen del contrato compacto ya saneado y no agregan secretos.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para verificar ambos campos.
+- Verificacion: `npm run type-check`, prueba focalizada, `npm run doctor:local-chat -- --markdown --timeout-ms 1000` y suite completa.
+
+## Lote 30: deteccion segura de `.env.local`
+
+- Estado: implementado y validado.
+- Mejora cubierta: evitar falsos warnings cuando `.env.local` existe pero las variables no estan exportadas al proceso.
+- Cambio: `scripts/local-chat-readiness.js` lee `.env.local` y registra solo presencia/fuente de `NEXT_PUBLIC_API_URL` y `SIRAGPT_LOCAL_API_URL`.
+- Control: no serializa valores reales de entorno ni URLs internas del archivo.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para parseo seguro y ausencia de fuga de valores.
+- Verificacion: `npm run type-check`, prueba focalizada y suite completa.
+
+## Lote 31: timeout configurable para probes locales
+
+- Estado: implementado y validado.
+- Mejora cubierta: permitir diagnosticos rapidos o tolerantes segun el estado de compilacion local.
+- Cambio: `scripts/local-chat-readiness.js` y `scripts/local-chat-recovery.js` aceptan `--timeout-ms <n>`.
+- Control: el timeout se aplica por probe y conserva errores normalizados `timeout` o `request_error`.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para parsing de timeout.
+- Verificacion: `npm run type-check`, prueba focalizada, `npm run doctor:local-chat -- --markdown --timeout-ms 1000` y suite completa.
+
+## Lote 32: modo estricto de entorno local
+
+- Estado: implementado y validado.
+- Mejora cubierta: permitir que CI local bloquee si falta configuracion explicita de API.
+- Cambio: `--strict-env` convierte `local_env` de advertencia a check requerido.
+- Control: el doctor recomienda crear `.env.local` sin imprimir valores y usa codigo de salida `35`.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para codigo de salida y parsing.
+- Verificacion: `npm run type-check`, prueba focalizada, `npm run doctor:local-chat -- --summary-json --strict-env --timeout-ms 1000` y suite completa.
+
+## Lote 33: resumen compacto de fallos y detalles de acciones
+
+- Estado: implementado y validado.
+- Mejora cubierta: dar a automatizaciones un motivo corto por check y la descripcion de la accion recomendada.
+- Cambio: `--summary-json` incluye `failureSummary` y cada accion incluye `detail`.
+- Control: los motivos son rutas/fallos normalizados, sin cuerpos HTML ni secretos.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para `failureSummary` y `actions[].detail`.
+- Verificacion: `npm run type-check`, prueba focalizada, `npm run doctor:local-chat -- --summary-json --strict-env --timeout-ms 1000` y suite completa.
+
+## Lote 34: codigo de salud resumido
+
+- Estado: implementado y validado.
+- Mejora cubierta: dar a dashboards locales un estado estable sin parsear listas de checks.
+- Cambio: `scripts/local-chat-readiness.js` agrega `healthCode` al JSON compacto.
+- Control: `healthCode` usa valores discretos como `ready`, `frontend_down`, `backend_down`, `env_missing` o `blocked`.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para `healthCode=backend_down`.
+- Verificacion: `npm run type-check`, prueba focalizada, `npm run smoke:local-chat:json` con `healthCode=backend_down` y suite completa.
+
+## Lote 35: modo quiet para automatizaciones shell
+
+- Estado: implementado y validado.
+- Mejora cubierta: permitir scripts shell simples que solo necesitan estado y accion principal.
+- Cambio: `scripts/local-chat-recovery.js` acepta `--quiet` y emite `healthCode primaryAction`.
+- Control: no imprime tablas, cuerpos, URLs internas de `.env.local`, tokens ni passwords.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para parsing de `--quiet`.
+- Verificacion: `npm run type-check`, prueba focalizada, `npm run doctor:local-chat -- --quiet --timeout-ms 1000` con salida `backend_down backend_dev_server` y suite completa.
+
+## Lote 36: mapa JSON de codigos de salida
+
+- Estado: implementado y validado.
+- Mejora cubierta: hacer consumible el contrato de exit codes sin leer la ayuda humana.
+- Cambio: `scripts/local-chat-recovery.js` acepta `--exit-codes-json` y devuelve el mapa estable sin ejecutar probes.
+- Control: el mapa no contiene secretos ni depende del entorno local.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para `RECOVERY_EXIT_CODE_LABELS`.
+- Verificacion: `npm run type-check`, prueba focalizada, `npm run doctor:local-chat -- --exit-codes-json` y suite completa.
+
+## Lote 37: ejemplos operativos en ayuda CLI
+
+- Estado: implementado y validado.
+- Mejora cubierta: reducir errores de uso al ejecutar diagnosticos con timeout o reporte persistente.
+- Cambio: `--help` incluye ejemplos para `--summary-json --timeout-ms 1000` y `--write-report`.
+- Control: los ejemplos usan rutas locales no sensibles y placeholders seguros.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para validar la seccion `Examples`.
+- Verificacion: `npm run type-check`, prueba focalizada, cobertura de `usage()` y suite completa.
+
+## Lote 38: scripts npm dedicados para diagnostico local
+
+- Estado: implementado y validado.
+- Mejora cubierta: acelerar ejecuciones repetidas sin recordar flags largos.
+- Cambio: se agregaron `smoke:local-chat:json` y `doctor:local-chat:report` a `package.json`.
+- Control: el reporte mantiene redaccion de secretos y escribe bajo `tmp/` por defecto.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para verificar los scripts registrados.
+- Verificacion: `npm run type-check`, prueba focalizada, `npm run smoke:local-chat:json`, `npm run doctor:local-chat:report` y suite completa.
+
+## Lote 39: perfiles locales de diagnostico
+
+- Estado: implementado y validado.
+- Mejora cubierta: estandarizar ejecuciones `default`, `fast` y `ci` sin repetir combinaciones de flags.
+- Cambio: `scripts/local-chat-readiness.js` y `scripts/local-chat-recovery.js` aceptan `--profile <name>`.
+- Control: `fast` usa timeout bajo; `ci` activa timeout estable y `strictEnv`.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para perfiles y precedencia de timeout explicito.
+- Verificacion: `npm run type-check`, prueba focalizada, `npm run doctor:local-chat:quiet`, `npm run doctor:local-chat:ci`, `npm run smoke:local-chat:ci` y suite completa.
+
+## Lote 40: catalogo JSON de checks locales
+
+- Estado: implementado y validado.
+- Mejora cubierta: permitir que integraciones descubran checks disponibles sin ejecutar probes de red.
+- Cambio: `scripts/local-chat-recovery.js` acepta `--list-checks-json` y devuelve contrato con version, perfiles y checks.
+- Control: el catalogo contiene descripciones operativas y no contiene credenciales ni valores de entorno.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para fijar nombres y ausencia de secretos.
+- Verificacion: `npm run type-check`, prueba focalizada, `npm run doctor:local-chat -- --list-checks-json` y suite completa.
+
+## Lote 41: validacion estricta de opciones numericas
+
+- Estado: implementado y validado.
+- Mejora cubierta: evitar diagnosticos ambiguos cuando se pasa un timeout o retencion invalida.
+- Cambio: `--timeout-ms` y `--max-report-age-hours` rechazan valores no enteros positivos.
+- Control: los errores ocurren antes de ejecutar probes o escribir reportes.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para valores invalidos y perfiles desconocidos.
+- Verificacion: `npm run type-check`, prueba focalizada con valores invalidos y suite completa.
+
+## Lote 42: redaccion ampliada de secretos en reportes
+
+- Estado: implementado y validado.
+- Mejora cubierta: reducir riesgo de fuga accidental en diagnosticos compartidos.
+- Cambio: el reporte Markdown redacciona credenciales embebidas en URLs y `NPM_TOKEN`.
+- Control: mantiene la redaccion existente de passwords de login y bearer tokens.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para URL con usuario/password y token npm.
+- Verificacion: `npm run type-check`, prueba focalizada, `npm run doctor:local-chat:report` y suite completa.
+
+## Lote 43: atajos npm para perfiles locales
+
+- Estado: implementado y validado.
+- Mejora cubierta: acelerar diagnosticos repetibles para terminal y CI local.
+- Cambio: se agregaron `smoke:local-chat:ci`, `doctor:local-chat:quiet` y `doctor:local-chat:ci` a `package.json`.
+- Control: los scripts reutilizan perfiles versionados y no contienen secretos.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para verificar los scripts registrados.
+- Verificacion: `npm run type-check`, prueba focalizada, scripts reales de perfil local y suite completa.
+
+## Lote 44: tiempos de probes locales
+
+- Estado: implementado y validado.
+- Mejora cubierta: exponer latencia de diagnosticos para detectar lentitud local o compilacion pendiente.
+- Cambio: `scripts/local-chat-readiness.js` registra `durationMs` por probe/check y agrega `latencySummary` al JSON compacto.
+- Cambio: `scripts/local-chat-recovery.js` muestra `Slowest probe` y tabla de latencias en el reporte Markdown.
+- Control: los tiempos se agregan sin incluir cuerpos de respuesta, credenciales ni valores reales de entorno.
+- Control: el exit code ya no permite que un warning de `local_env` no requerido oculte un fallo requerido de backend/frontend.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para duraciones, probe mas lento, Markdown de latencias y prioridad de exit code.
+- Verificacion: `npm run type-check`, prueba focalizada, `node scripts/local-chat-readiness.js --summary-json --timeout-ms 1000`, `node scripts/local-chat-recovery.js --markdown --timeout-ms 1000`, `npm test` y `npm run lint`.
+
+## Lote 45: contadores compactos de checks
+
+- Estado: implementado y validado.
+- Mejora cubierta: permitir dashboards locales sin recalcular conteos desde arrays.
+- Cambio: `--summary-json` incluye `totalChecks`, `failedRequiredCount` y `warningCount`.
+- Control: los contadores derivan del mismo contrato versionado.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para conteos requeridos y warnings.
+- Verificacion: `npm run type-check`, prueba focalizada, JSON real con `totalChecks=3`, `failedRequiredCount=1`, `warningCount=0` y suite completa.
+
+## Lote 46: codigo de salida en resumen y Markdown
+
+- Estado: implementado y validado.
+- Mejora cubierta: hacer visible el resultado operativo sin depender solo del exit status del proceso.
+- Cambio: `scripts/local-chat-recovery.js` agrega `exitCode` al resumen compacto y al reporte Markdown.
+- Control: el valor se calcula con la misma funcion que devuelve el proceso.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para `exitCode=32`.
+- Verificacion: `npm run type-check`, prueba focalizada, `npm --silent run doctor:local-chat:report` con `Exit code: 32` y suite completa.
+
+## Lote 47: saneamiento de URLs en salidas
+
+- Estado: implementado y validado.
+- Mejora cubierta: evitar fuga de userinfo si una URL local contiene usuario/password.
+- Cambio: `scripts/local-chat-readiness.js` sanea `frontendUrl`, `apiUrl` y lineas humanas de checks.
+- Control: la URL usada para probe se conserva internamente; solo se limpia la salida.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para URLs con credenciales.
+- Verificacion: `npm run type-check`, prueba focalizada con URLs con userinfo, JSON real saneado y suite completa.
+
+## Lote 48: atajo npm para catalogo de checks
+
+- Estado: implementado y validado.
+- Mejora cubierta: consultar el contrato de checks sin recordar el flag largo.
+- Cambio: se agrego `doctor:local-chat:checks` a `package.json`.
+- Control: ejecuta `--list-checks-json` sin probes ni secretos.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para verificar el script.
+- Verificacion: `npm run type-check`, prueba focalizada, `npm --silent run doctor:local-chat:checks` y suite completa.
+
+## Lote 49: probe real de login local
+
+- Estado: implementado y validado.
+- Mejora cubierta: verificar `/api/auth/login` solo cuando se solicite explicitamente.
+- Cambio: `scripts/local-chat-readiness.js` acepta `--require-login` y ejecuta POST con `SIRAGPT_TEST_EMAIL` y `SIRAGPT_TEST_PASSWORD`.
+- Control: el probe no imprime password ni cuerpo de respuesta.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para login exitoso con fetch simulado.
+- Verificacion: `npm run type-check`, prueba focalizada, `npm --silent run smoke:local-chat:login` y suite completa.
+
+## Lote 50: clasificacion de credenciales faltantes
+
+- Estado: implementado y validado.
+- Mejora cubierta: diferenciar backend caido de credenciales de prueba ausentes cuando el login es requerido.
+- Cambio: el endpoint `/api/auth/login` queda bloqueado con `missing_credentials` si faltan variables de prueba.
+- Control: la clasificacion reutiliza el codigo de salida `33` cuando aplica.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para credenciales faltantes.
+- Verificacion: `npm run type-check`, prueba focalizada con `missing_credentials` y suite completa.
+
+## Lote 51: ayuda CLI para login smoke
+
+- Estado: implementado y validado.
+- Mejora cubierta: documentar el flujo de login local sin exponer passwords.
+- Cambio: `--help` documenta `--require-login` y ejemplo con placeholder `<password>`.
+- Control: la ayuda no contiene secretos reales.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para el texto de ayuda.
+- Verificacion: `npm run type-check`, prueba focalizada sobre `usage()` y suite completa.
+
+## Lote 52: soporte de entorno inyectado para probes
+
+- Estado: implementado y validado.
+- Mejora cubierta: facilitar pruebas y automatizaciones sin depender siempre de `process.env`.
+- Cambio: `runReadiness` y `checkBackend` usan `options.env` para URLs y credenciales de login.
+- Control: los resultados siguen redaccionados y no persisten credenciales.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` con entorno inyectado.
+- Verificacion: `npm run type-check`, prueba focalizada con `options.env` y suite completa.
+
+## Lote 53: scripts npm para login smoke
+
+- Estado: implementado y validado.
+- Mejora cubierta: ejecutar smoke de login sin recordar flags largos.
+- Cambio: se agregaron `smoke:local-chat:login` y `doctor:local-chat:login` a `package.json`.
+- Control: los scripts requieren credenciales por variables temporales y no contienen secretos.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para verificar los scripts.
+- Verificacion: `npm run type-check`, prueba focalizada, `npm --silent run doctor:local-chat:login` y suite completa.
+
+## Lote 54: salida JSON compacta para CI
+
+- Estado: implementado y validado.
+- Mejora cubierta: emitir JSON de una linea para logs y parsers simples.
+- Cambio: `scripts/local-chat-readiness.js` y `scripts/local-chat-recovery.js` aceptan `--compact-json`.
+- Control: reutiliza el mismo contrato de `--summary-json`; solo cambia el formato.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para `formatJson` compacto.
+- Verificacion: `npm run type-check`, prueba focalizada, `node scripts/local-chat-readiness.js --compact-json --timeout-ms 1000`, `node scripts/local-chat-recovery.js --compact-json --timeout-ms 1000` y suite completa.
+
+## Lote 55: helper unico de serializacion JSON
+
+- Estado: implementado y validado.
+- Mejora cubierta: evitar divergencias entre salidas JSON de readiness y recovery.
+- Cambio: se agregaron `formatJson` y `printJson` reutilizables en `scripts/local-chat-readiness.js`.
+- Control: `--exit-codes-json`, `--list-checks-json`, `--summary-json` y `--json` respetan el mismo modo compacto.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para formato pretty y compacto.
+- Verificacion: `npm run type-check`, prueba focalizada, comandos JSON compactos reales y suite completa.
+
+## Lote 56: ayuda CLI para JSON compacto
+
+- Estado: implementado y validado.
+- Mejora cubierta: documentar ejecuciones limpias con `npm --silent` para consumidores automaticos.
+- Cambio: la ayuda del doctor incluye `--compact-json` y ejemplo `npm --silent run doctor:local-chat:compact`.
+- Control: la documentacion usa comandos sin secretos.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para validar ayuda.
+- Verificacion: `npm run type-check`, prueba focalizada sobre `usage()` y suite completa.
+
+## Lote 57: scripts npm compactos
+
+- Estado: implementado y validado.
+- Mejora cubierta: ejecutar JSON compacto sin recordar flags.
+- Cambio: se agregaron `smoke:local-chat:compact` y `doctor:local-chat:compact` a `package.json`.
+- Control: los scripts no contienen secretos y son compatibles con `npm --silent`.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para verificar scripts.
+- Verificacion: `npm run type-check`, prueba focalizada, scripts compactos reales por `node` y suite completa.
+
+## Lote 58: compactacion de metadatos sin probes
+
+- Estado: implementado y validado.
+- Mejora cubierta: permitir contratos compactos tambien para mapas estaticos.
+- Cambio: `--exit-codes-json` y `--list-checks-json` respetan `--compact-json`.
+- Control: no ejecuta probes y no imprime valores de entorno.
+- Pruebas: se cubre mediante el helper JSON compartido y parsing de flags.
+- Verificacion: `npm run type-check`, prueba focalizada, `node scripts/local-chat-recovery.js --exit-codes-json --compact-json`, `node scripts/local-chat-recovery.js --list-checks-json --compact-json` y suite completa.
+
+## Siguientes lotes
+
+- Lote 59: agregar guardas para detectar puertos locales ocupados por procesos inesperados.
