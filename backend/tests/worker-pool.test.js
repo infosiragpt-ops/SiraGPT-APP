@@ -113,3 +113,23 @@ test('WorkerPool: timeout rejects', async () => {
     await pool.close();
   }
 });
+
+test('WorkerPool: timed-out jobs recycle the stuck worker before accepting more work', async () => {
+  const pool = new WorkerPool({ size: 1, workerPath: WORKER_PATH, timeoutMs: 200 });
+  try {
+    const longText = 'a'.repeat(2000);
+    await assert.rejects(
+      pool.run('regex-scan', {
+        text: longText + '!',
+        pattern: '^(a+)+$',
+        flags: '',
+      }, { timeoutMs: 1 }),
+      /timed out/,
+    );
+
+    const out = await pool.run('echo', { recovered: true }, { timeoutMs: 500 });
+    assert.deepEqual(out, { recovered: true });
+  } finally {
+    await pool.close();
+  }
+});
