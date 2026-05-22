@@ -16,17 +16,20 @@ function AuthCallbackContent() {
       const error = searchParams.get('error')
 
       if (error) {
-        router.push('/auth/login?error=oauth_failed')
+        router.push('/auth/login?error=' + encodeURIComponent('Error de autenticación'))
         return
       }
 
       if (token) {
+        // Store token and redirect
+        localStorage.setItem('auth-token', token)
+
         const loginSuccess = await loginWithToken(token);
 
         if (loginSuccess) {
           router.replace('/chat');
         } else {
-          router.replace('/auth/login?error=expired_session');
+          router.replace('/auth/login?error=' + encodeURIComponent('La sesión es inválida o expiró'));
         }
         // try {
         //   // Verify token by getting user info

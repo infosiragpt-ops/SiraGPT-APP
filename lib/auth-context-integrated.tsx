@@ -3,16 +3,6 @@
 import type React from "react"
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react"
 import { apiClient } from "./api"
-import {
-  LOCAL_DEMO_TOKEN,
-  LOCAL_DEMO_SESSION_TTL_MS,
-  LOCAL_DEMO_USER,
-  isLocalDemoLogin,
-  localDemoAuthEnabled,
-  normalizeLocalDemoPassword,
-} from "./auth/local-demo-auth"
-import { classifyAuthError } from "./auth/auth-error-classifier"
-import { readAuthToken } from "./auth/session-storage"
 import { devLog } from "./dev-log"
 import { clearAllChatDrafts } from "@/hooks/use-chat-draft"
 
@@ -48,6 +38,12 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 const AUTH_CHECK_TIMEOUT_MS = 12000
 
+function normalizeLoginPassword(password: string): string {
+  return String(password || "")
+    .replace(/[\u200B-\u200D\uFEFF\u2028\u2029\r\n\t]/g, "")
+    .trim()
+}
+
 function withAuthTimeout<T>(promise: Promise<T>, message: string): Promise<T> {
   let timeoutId: number | undefined
   const timeout = new Promise<never>((_, reject) => {
@@ -71,17 +67,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const checkAuth = async () => {
       const checkEpoch = authEpochRef.current
       const isCurrentCheck = () => !cancelled && authEpochRef.current === checkEpoch
-      const savedToken = readAuthToken().token
+      const savedToken = localStorage.getItem('auth-token')
       if (!savedToken) {
         if (!cancelled) setIsLoading(false)
-        return
-      }
-
-      if (localDemoAuthEnabled() && savedToken === LOCAL_DEMO_TOKEN) {
-        apiClient.setToken(savedToken)
-        setToken(savedToken)
-        setUser(LOCAL_DEMO_USER)
-        setIsLoading(false)
         return
       }
 
@@ -96,8 +84,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         )
         if (isCurrentCheck()) setUser(response.user)
       } catch (error) {
-        console.error('Auth check failed:', classifyAuthError(error).code)
+        console.error('Auth check failed:', error)
         if (!isCurrentCheck()) return
+        localStorage.removeItem('auth-token')
         apiClient.setToken(null)
         setToken(null)
         setUser(null)
@@ -119,24 +108,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const response = await apiClient.login({
         email: email.trim(),
-        password: normalizeLocalDemoPassword(password),
+        password: normalizeLoginPassword(password),
       })
       if (!response?.user || !response?.token) {
         throw new Error('Invalid login response')
       }
       if (authEpochRef.current !== loginEpoch) return false
-      apiClient.setToken(response.token, { source: "credentials" })
+      apiClient.setToken(response.token)
       setUser(response.user)
       setToken(response.token)
       return true
     } catch (error) {
-      if (isLocalDemoLogin(email, password)) {
-        apiClient.setToken(LOCAL_DEMO_TOKEN, { source: "local-demo", expiresInMs: LOCAL_DEMO_SESSION_TTL_MS })
-        setUser(LOCAL_DEMO_USER)
-        setToken(LOCAL_DEMO_TOKEN)
-        return true
-      }
-      console.error('Login failed:', classifyAuthError(error).code)
+      console.error('Login failed:', error)
       return false
     } finally {
       if (authEpochRef.current === loginEpoch) setIsLoading(false)
@@ -153,7 +136,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setToken(response.token)
       return true
     } catch (error) {
-      console.error('Registration failed:', classifyAuthError(error).code)
+      console.error('Registration failed:', error)
       return false
     } finally {
       if (authEpochRef.current === registerEpoch) setIsLoading(false)
@@ -166,8 +149,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const tokenLoginEpoch = ++authEpochRef.current
     setIsLoading(true);
     try {
-      // Step 1: Token ko storage aur apiClient mein set karein
-      apiClient.setToken(token, { source: "token" });
+      // Step 1: Token ko localStorage aur apiClient mein set karein
+      localStorage.setItem('auth-token', token);
+      apiClient.setToken(token);
       setToken(token); // Context ki state ko update karein
 
       // Step 2: User ka data hasil karein
@@ -181,8 +165,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return true;
 
     } catch (error) {
-      console.error('Login with token failed:', classifyAuthError(error).code);
+      console.error('Login with token failed:', error);
       // Agar fail ho jaye to har jagah se token hata dein
+      localStorage.removeItem('auth-token');
       apiClient.setToken(null);
       setToken(null);
       setUser(null);
@@ -197,7 +182,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       await apiClient.logout()
     } catch (error) {
-      console.error('Logout error:', classifyAuthError(error).code)
+      console.error('Logout error:', error)
     } finally {
       setUser(null)
       setToken(null)
@@ -210,18 +195,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const refreshUser = useCallback(async () => {
     if (!token) return
-    if (localDemoAuthEnabled() && token === LOCAL_DEMO_TOKEN) {
-      setUser(LOCAL_DEMO_USER)
-      return
-    }
 
     try {
       const latestUser = await apiClient.getCurrentUser()
       devLog("Refreshing user in AuthContext:", latestUser)
       setUser(latestUser.user)
     } catch (error) {
-      console.error("Failed to refresh user:", classifyAuthError(error).code)
+      console.error("Failed to refresh user:", error)
       if ((error as any)?.status === 401 || (error as any)?.statusCode === 401) {
+        localStorage.removeItem('auth-token')
         apiClient.setToken(null)
         setToken(null)
         setUser(null)
