@@ -31,11 +31,15 @@ export interface ShortcutDescriptor {
 }
 
 export const CHAT_KEYBOARD_SHORTCUTS: ShortcutDescriptor[] = [
+  { keys: ["Enter"], description: "Enviar mensaje" },
+  { keys: ["⌘/Ctrl", "Enter"], description: "Enviar mensaje (alternativo)" },
+  { keys: ["Shift", "Enter"], description: "Nueva línea en el mensaje" },
   { keys: ["⌘/Ctrl", "K"], description: "Enfocar búsqueda" },
-  { keys: ["⌘/Ctrl", "Enter"], description: "Enviar mensaje" },
-  { keys: ["Esc"], description: "Cerrar modal / cancelar" },
+  { keys: ["/"], description: "Abrir menú de comandos" },
   { keys: ["↑"], description: "Editar último mensaje (composer vacío)" },
+  { keys: ["Esc"], description: "Cerrar herramientas / cancelar / desenfocar" },
   { keys: ["⌘/Ctrl", "/"], description: "Mostrar esta ayuda" },
+  { keys: ["?"], description: "Mostrar esta ayuda (alternativo)" },
 ]
 
 interface Props {

@@ -148,6 +148,7 @@ import {
 } from "@/lib/long-paste"
 import { usePasteCapture } from "@/components/paste-preview-overlay"
 import { analyzePastedContent, type PasteCaptureResult, type PasteCaptureAction } from "@/lib/paste-capture"
+import { useChatDraft } from "@/hooks/use-chat-draft"
 import { useVisualViewportCssVars } from "@/hooks/use-visual-viewport-css-vars"
 
 const resolveUploadFileId = (file: any): string | null => {
@@ -3074,6 +3075,12 @@ function ChatInterfaceContent() {
   } = useChat()
 
   const [input, setInput] = React.useState("")
+  // Per-chat draft persistence. The composer's text is saved (debounced)
+  // to localStorage scoped by chatId and restored when the user comes
+  // back to the same conversation after a reload or accidental
+  // navigation. See hooks/use-chat-draft.ts for the contract.
+  const chatDraft = useChatDraft(currentChat?.id, user?.id)
+  const lastRestoredChatIdRef = React.useRef<string | null>(null)
   const [isRecording, setIsRecording] = React.useState(false)
   const [isDictationTranscribing, setIsDictationTranscribing] = React.useState(false)
   const inputRef = React.useRef("")
@@ -3110,6 +3117,22 @@ function ChatInterfaceContent() {
       /* private-mode / blocked storage — harmless */
     }
   }, [currentChat?.id])
+
+  // Restore a previously saved composer draft when entering a chat.
+  // Runs AFTER the project-prefill effect so an explicit project draft
+  // still wins. Each chat id is restored at most once per mount; further
+  // typing is captured by handleTextareaChange below.
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const id = currentChat?.id
+    if (!id) return
+    if (lastRestoredChatIdRef.current === id) return
+    lastRestoredChatIdRef.current = id
+    const saved = chatDraft.loadInitial()
+    if (saved && saved.trim()) {
+      setInput(prev => (prev.trim() ? prev : saved))
+    }
+  }, [currentChat?.id, chatDraft])
   const [isSearching, setIsSearching] = React.useState(false)
   const [showInstructions, setShowInstructions] = React.useState(false)
   const [isGeneratingImage, setIsGeneratingImage] = React.useState(false)
@@ -3906,7 +3929,10 @@ But first, you need to connect your Spotify account securely using the button be
 
   // Handle textarea input change with smooth scrolling
   const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setInput(e.target.value);
+    const value = e.target.value;
+    setInput(value);
+    // Persist the in-progress draft per chat (debounced inside the hook).
+    chatDraft.save(value);
 
     // Use requestAnimationFrame to ensure DOM is updated before scrolling
     requestAnimationFrame(resizeComposerTextarea);
@@ -5568,6 +5594,10 @@ REWRITTEN TEXT:`;
       return `${rawPrompt}\n\nImage edit target: modify only the marked region of the attached image. Region in percentages from the image top-left: x=${Math.round(region.x || 0)}%, y=${Math.round(region.y || 0)}%, width=${Math.round(region.width || 0)}%, height=${Math.round(region.height || 0)}%. Keep the rest of the image visually unchanged.`;
     };
     setInput("");
+    // The message is on its way — drop the saved draft so the next
+    // visit to this chat starts with a clean composer instead of
+    // re-showing the text the user just sent.
+    chatDraft.clear();
     uploadedFilesRef.current = [];
     setUploadedFiles([]);
 
@@ -8191,7 +8221,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               // each token delta doesn't relayout the whole
                               // message list above. See .streaming-message
                               // in globals.css (contain: layout style).
-                              <div className="streaming-message">
+                              <div
+                                className="streaming-message"
+                                role="region"
+                                aria-live="polite"
+                                aria-atomic="false"
+                                aria-label="Respuesta del asistente en progreso"
+                              >
                                 <ErrorBoundary label={`message:${streamingMessage.id}:stream`}>
                                   <MessageComponent
                                     key={streamingMessage.id}

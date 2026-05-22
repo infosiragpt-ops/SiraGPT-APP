@@ -4,6 +4,7 @@ import type React from "react"
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react"
 import { apiClient } from "./api"
 import { devLog } from "./dev-log"
+import { clearAllChatDrafts } from "@/hooks/use-chat-draft"
 
 interface User {
   id: string
@@ -186,6 +187,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(null)
       setToken(null)
       apiClient.setToken(null)
+      // Wipe any saved composer drafts so a different account on the
+      // same device cannot see the previous user's unsent chat text.
+      clearAllChatDrafts()
     }
   }
 
