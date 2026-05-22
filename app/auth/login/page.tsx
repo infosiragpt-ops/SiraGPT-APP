@@ -30,12 +30,21 @@ export default function LoginPage() {
   // a failed OAuth round-trip ("La sesión es inválida o expiró",
   // "Error de autenticación", etc.) so the user gets a clear toast
   // explaining why they're back on the login form instead of /chat.
+  // Known short codes (auth_failed, db_unavailable) get a friendly
+  // Spanish message; anything else falls through as-is so the
+  // auth/callback page can still pass a custom message string.
   React.useEffect(() => {
     if (typeof window === "undefined") return
     const params = new URLSearchParams(window.location.search)
     const errorMsg = params.get("error")
     if (errorMsg) {
-      toast.error(errorMsg)
+      const friendly: Record<string, string> = {
+        auth_failed:
+          "No pudimos completar el inicio de sesión con Google. Inténtalo de nuevo.",
+        db_unavailable:
+          "Estamos teniendo problemas para conectar con la base de datos. Inténtalo de nuevo en unos segundos.",
+      }
+      toast.error(friendly[errorMsg] ?? errorMsg)
       // Clean the URL so a refresh doesn't re-toast the same error
       params.delete("error")
       const cleaned = params.toString()

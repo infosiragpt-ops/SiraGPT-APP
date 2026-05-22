@@ -180,7 +180,27 @@ router.get('/google',
 
 router.get('/google/callback',
   requireGoogleOAuth,
-  passport.authenticate('google', { session: false }),
+  // Custom-callback form of passport.authenticate so we can distinguish
+  // between a real auth failure and a transient database outage. When
+  // passport returns `info.message === 'database_unavailable'` (set by
+  // the Google verify callback when Prisma Accelerate is failing), we
+  // redirect the user to the login page with a specific error code so
+  // the frontend can render a friendly Spanish message instead of a
+  // generic "auth_failed".
+  (req, res, next) => {
+    passport.authenticate('google', { session: false }, (err, user, info) => {
+      if (err) {
+        console.error('Google passport.authenticate error:', err && err.message ? err.message : err);
+        return res.redirect(`${getFrontendUrl()}/auth/login?error=auth_failed`);
+      }
+      if (!user) {
+        const reason = info && info.message === 'database_unavailable' ? 'db_unavailable' : 'auth_failed';
+        return res.redirect(`${getFrontendUrl()}/auth/login?error=${reason}`);
+      }
+      req.user = user;
+      return next();
+    })(req, res, next);
+  },
   async (req, res) => {
     try {
       console.log('🟡 General Google OAuth callback triggered (NOT Gmail-specific)');

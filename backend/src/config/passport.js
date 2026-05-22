@@ -4,6 +4,7 @@ const JwtStrategy = require('passport-jwt').Strategy;
 const ExtractJwt = require('passport-jwt').ExtractJwt;
 const prisma = require('./database');
 const bcrypt = require('bcryptjs');
+const { withAccelerateRetry, isAccelerateTransientError } = require('../utils/prisma-accelerate-retry');
 const {
   stripTrailingSlash,
   getGoogleCallbackURL,
@@ -48,10 +49,13 @@ if (googleOAuthConfigured) {
       console.error('📋 To get refresh token: Go to https://myaccount.google.com/permissions, revoke access to your app, then re-authenticate.');
 
       // Check if user already has a refresh token stored
-      const existingUser = await prisma.user.findUnique({
-        where: { email: profile.emails[0].value },
-        select: { id: true, gmailTokens: true }
-      });
+      const existingUser = await withAccelerateRetry(
+        () => prisma.user.findUnique({
+          where: { email: profile.emails[0].value },
+          select: { id: true, gmailTokens: true }
+        }),
+        { label: 'google-oauth.lookup-existing' }
+      );
 
       if (existingUser?.gmailTokens) {
         const { decrypt } = require('../utils/encryption');
@@ -66,10 +70,13 @@ if (googleOAuthConfigured) {
           console.log('🔄 Will proceed without existing refresh token - user may need to complete full re-auth');
           // Clear corrupted tokens
           try {
-            await prisma.user.update({
-              where: { id: existingUser.id },
-              data: { gmailTokens: null }
-            });
+            await withAccelerateRetry(
+              () => prisma.user.update({
+                where: { id: existingUser.id },
+                data: { gmailTokens: null }
+              }),
+              { label: 'google-oauth.clear-corrupted' }
+            );
             console.log('🧹 Cleared corrupted Gmail tokens');
           } catch (clearError) {
             console.error('Error clearing corrupted tokens:', clearError);
@@ -114,31 +121,39 @@ if (googleOAuthConfigured) {
     });
 
     // Check if user already exists
-    let user = await prisma.user.findUnique({
-      where: { email: profile.emails[0].value }
-    });
+    let user = await withAccelerateRetry(
+      () => prisma.user.findUnique({
+        where: { email: profile.emails[0].value }
+      }),
+      { label: 'google-oauth.find-user' }
+    );
 
     if (user) {
       // Update user with Google ID and tokens
-      user = await prisma.user.update({
-        where: { id: user.id },
-        data: {
-          googleId: profile.id,
-          gmailTokens: encrypt(gmailTokens),
-          googleServicesTokens: encrypt(googleServicesTokens)
-        }
-      });
+      user = await withAccelerateRetry(
+        () => prisma.user.update({
+          where: { id: user.id },
+          data: {
+            googleId: profile.id,
+            gmailTokens: encrypt(gmailTokens),
+            googleServicesTokens: encrypt(googleServicesTokens)
+          }
+        }),
+        { label: 'google-oauth.update-user' }
+      );
       return done(null, user);
     }
 
     // Create new user with all tokens
-    const newUser = await prisma.user.create({
+    const generatedPasswordHash = await bcrypt.hash(Math.random().toString(36), 12);
+    const newUser = await withAccelerateRetry(
+      () => prisma.user.create({
       data: {
         googleId: profile.id,
         name: profile.displayName,
         email: profile.emails[0].value,
         avatar: profile.photos[0]?.value,
-        password: await bcrypt.hash(Math.random().toString(36), 12),
+        password: generatedPasswordHash,
         plan: 'FREE',
         isAdmin: false,
         apiUsage: 0,
@@ -147,11 +162,21 @@ if (googleOAuthConfigured) {
         gmailTokens: encrypt(gmailTokens),
         googleServicesTokens: encrypt(googleServicesTokens)
       }
-    });
+      }),
+      { label: 'google-oauth.create-user' }
+    );
 
     return done(null, newUser);
   } catch (error) {
     console.error('Google OAuth error:', error);
+    // When the underlying failure is a transient Accelerate outage
+    // (P6008 etc.), signal a soft auth-failure with a tagged reason so
+    // the route handler can redirect the user to the login page with a
+    // friendly Spanish message instead of bubbling a 500. Real bugs
+    // still propagate so we don't mask code errors.
+    if (isAccelerateTransientError(error)) {
+      return done(null, false, { message: 'database_unavailable' });
+    }
     return done(error, null);
   }
   }));
@@ -167,15 +192,21 @@ passport.use(new JwtStrategy({
   secretOrKey: process.env.JWT_SECRET
 }, async (payload, done) => {
   try {
-    const user = await prisma.user.findUnique({
-      where: { id: payload.userId }
-    });
+    const user = await withAccelerateRetry(
+      () => prisma.user.findUnique({ where: { id: payload.userId } }),
+      { label: 'jwt-strategy.find-user' }
+    );
 
     if (user) {
       return done(null, user);
     }
     return done(null, false);
   } catch (error) {
+    if (isAccelerateTransientError(error)) {
+      // Soft-fail JWT auth on database hiccups instead of returning a
+      // hard 500; the client will see 401 and can retry the request.
+      return done(null, false);
+    }
     return done(error, false);
   }
 }));
@@ -186,11 +217,17 @@ passport.serializeUser((user, done) => {
 
 passport.deserializeUser(async (id, done) => {
   try {
-    const user = await prisma.user.findUnique({
-      where: { id }
-    });
+    const user = await withAccelerateRetry(
+      () => prisma.user.findUnique({ where: { id } }),
+      { label: 'passport.deserialize' }
+    );
     done(null, user);
   } catch (error) {
+    if (isAccelerateTransientError(error)) {
+      // Treat as "no user" so the request continues unauthenticated
+      // instead of crashing the session middleware.
+      return done(null, null);
+    }
     done(error, null);
   }
 });
