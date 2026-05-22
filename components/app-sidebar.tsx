@@ -75,6 +75,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -378,6 +388,9 @@ export function AppSidebar() {
   }, [])
 
   const [editingChatId, setEditingChatId] = React.useState<string | null>(null)
+  // #44 — reemplaza window.confirm() por AlertDialog accesible.
+  // Guarda {id, title} del chat pendiente; null = diálogo cerrado.
+  const [chatPendingDelete, setChatPendingDelete] = React.useState<{ id: string; title: string } | null>(null)
   const [editTitle, setEditTitle] = React.useState("")
   const [optimisticUpdates, setOptimisticUpdates] = React.useState<Record<string, string>>({})
   const [pinnedGpts, setPinnedGpts] = React.useState<Array<{ id: string; name: string; iconUrl?: string | null; modelName?: string | null }>>([])
@@ -1414,13 +1427,17 @@ export function AppSidebar() {
                                       <DropdownMenuItem
                                         onSelect={(event) => {
                                           event.preventDefault()
-                                          const confirmed = window.confirm(`Eliminar "${displayTitle}"? Esta acción no se puede deshacer.`)
-                                          if (confirmed) deleteChat(chat.id)
+                                          // #44 — abre AlertDialog accesible
+                                          // en lugar del window.confirm() del
+                                          // navegador (que no recibe foco
+                                          // teclado correctamente y rompe el
+                                          // estilo del producto).
+                                          setChatPendingDelete({ id: chat.id, title: displayTitle })
                                         }}
                                         className="h-11 rounded-xl text-[15px] text-red-600 focus:text-red-600"
                                       >
                                         <Trash2 className="mr-3 h-5 w-5" />
-                                        Delete
+                                        Eliminar
                                       </DropdownMenuItem>
                                     </DropdownMenuContent>
                                   </DropdownMenu>
@@ -1679,6 +1696,37 @@ export function AppSidebar() {
         open={searchOpen}
         onOpenChange={setSearchOpen}
       />
+
+      {/* #44 — Confirmación accesible de borrado de chat. Sustituye al
+          window.confirm() nativo: foco teclado correcto, ESC y click
+          fuera para cancelar, botón rojo destacado, texto en español. */}
+      <AlertDialog
+        open={Boolean(chatPendingDelete)}
+        onOpenChange={(open) => { if (!open) setChatPendingDelete(null) }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Eliminar chat</AlertDialogTitle>
+            <AlertDialogDescription>
+              ¿Seguro que quieres eliminar <span className="font-medium text-foreground">“{chatPendingDelete?.title}”</span>?
+              Esta acción no se puede deshacer.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 text-white hover:bg-red-700 focus-visible:ring-red-500/50"
+              onClick={() => {
+                const id = chatPendingDelete?.id
+                setChatPendingDelete(null)
+                if (id) deleteChat(id)
+              }}
+            >
+              Eliminar
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Dialog
         open={Boolean(scheduleTarget)}
