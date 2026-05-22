@@ -13,6 +13,7 @@ const { ProviderOAuthService } = require('../services/ProviderOAuthService');
 const { SsoCallbackService } = require('../services/SsoCallbackService');
 const { RegistrationService } = require('../services/RegistrationService');
 const { LoginService } = require('../services/LoginService');
+const { SessionService } = require('../services/SessionService');
 const { encrypt: encryptToken, decrypt: decryptToken } = require('../utils/encryption');
 // Single repository / service instances shared by every call site in
 // this file. Cross-cutting concerns (fingerprint-column fallback,
@@ -56,6 +57,20 @@ function getLoginService() {
     mintPartialSession,
   });
   return _loginService;
+}
+// SessionService is also wired lazily so it picks up the hoisted
+// `signSessionToken` + `computeFingerprint` bindings declared below.
+let _sessionService = null;
+function getSessionService() {
+  if (_sessionService) return _sessionService;
+  _sessionService = new SessionService({
+    sessions,
+    audit: writeAuditLog,
+    prisma,
+    signSessionToken,
+    computeFingerprint,
+  });
+  return _sessionService;
 }
 const { authenticateToken } = require('../middleware/auth');
 const { makeAuthRateLimit } = require('../middleware/rate-limit-auth');
@@ -684,7 +699,7 @@ router.get('/me', authenticateToken, async (req, res) => {
 // Logout
 router.post('/logout', authenticateToken, async (req, res) => {
   try {
-    await sessions.deleteByToken(req.token);
+    await getSessionService().revoke({ user: req.user, token: req.token, req });
 
     res.clearCookie('token');
     res.json({ message: 'Logged out successfully' });
@@ -704,24 +719,10 @@ router.post('/logout', authenticateToken, async (req, res) => {
 // fix but requires coordinated FE+BE changes; tracked separately.
 router.post('/refresh', authenticateToken, async (req, res) => {
   try {
-    // Create new token — re-embed admin claims so the rate-limit
-    // bypass continues to apply across refreshes.
-    const newToken = signSessionToken({
-      userId: req.user.id,
-      isAdmin: Boolean(req.user.isAdmin),
-      isSuperAdmin: Boolean(req.user.isSuperAdmin),
-    });
-
-    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-
-    // Update session — re-bind fingerprint to the refreshing client
-    // so subsequent verifications track the current network/UA. The
-    // repository handles the legacy-schema fallback transparently.
-    const refreshedFp = computeFingerprint(req);
-    await sessions.updateByToken(req.token, {
-      newToken,
-      expiresAt,
-      fingerprint: refreshedFp,
+    const { token: newToken } = await getSessionService().refresh({
+      user: req.user,
+      oldToken: req.token,
+      req,
     });
 
     res.cookie('token', newToken, {
@@ -729,14 +730,6 @@ router.post('/refresh', authenticateToken, async (req, res) => {
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
       maxAge: 7 * 24 * 60 * 60 * 1000
-    });
-
-    void writeAuditLog(prisma, {
-      req,
-      action: 'token_refresh',
-      resource: 'session',
-      userId: req.user.id,
-      actorName: req.user.email,
     });
 
     res.json({ token: newToken });
