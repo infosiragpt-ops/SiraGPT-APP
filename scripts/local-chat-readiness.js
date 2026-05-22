@@ -2,6 +2,7 @@
 
 const fs = require("node:fs")
 const path = require("node:path")
+const { execFileSync } = require("node:child_process")
 
 const DEFAULT_FRONTEND_URL = "http://127.0.0.1:3000"
 const DEFAULT_API_URL = "http://127.0.0.1:5000"
@@ -76,6 +77,57 @@ function formatJson(value, compact = false) {
 
 function printJson(value, compact = false) {
   console.log(formatJson(value, compact))
+}
+
+function portFromUrl(rawUrl) {
+  const parsed = new URL(normalizeUrl(rawUrl, DEFAULT_FRONTEND_URL))
+  if (parsed.port) return Number(parsed.port)
+  if (parsed.protocol === "https:") return 443
+  return 80
+}
+
+function sanitizeProcessCommand(command) {
+  return String(command || "")
+    .replace(/(SIRAGPT_TEST_PASSWORD=)(?:"[^"]*"|'[^']*'|\S+)/g, "$1<password>")
+    .replace(/(NPM_TOKEN=)(?:"[^"]*"|'[^']*'|\S+)/g, "$1<token>")
+    .replace(/(Authorization:\s*Bearer\s+)[^\s|]+/gi, "$1<token>")
+    .slice(0, 160)
+}
+
+function inspectPort(port, options = {}) {
+  if (!Number.isInteger(port) || port <= 0) return { port, listening: false, processCount: 0, commands: [], error: "invalid_port" }
+  try {
+    const execFn = options.execFileSync || execFileSync
+    const output = execFn("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+    const commands = String(output || "")
+      .split(/\r?\n/)
+      .slice(1)
+      .map((line) => line.trim().split(/\s+/)[0])
+      .filter(Boolean)
+      .map(sanitizeProcessCommand)
+    const uniqueCommands = [...new Set(commands)]
+    return {
+      port,
+      listening: uniqueCommands.length > 0,
+      processCount: uniqueCommands.length,
+      commands: uniqueCommands,
+    }
+  } catch {
+    return { port, listening: false, processCount: 0, commands: [] }
+  }
+}
+
+function buildPortDiagnostics(frontendUrl, apiUrl, options = {}) {
+  const inspectFn = options.inspectPort || inspectPort
+  const frontendPort = portFromUrl(frontendUrl)
+  const apiPort = portFromUrl(apiUrl)
+  return {
+    frontend: inspectFn(frontendPort, options),
+    api: inspectFn(apiPort, options),
+  }
 }
 
 async function probe(url, options = {}) {
@@ -261,9 +313,28 @@ function compactCheck(check) {
     name: check.name,
     ok: Boolean(check.ok),
     required: Boolean(check.required),
+    status: checkStatus(check),
   }
   if (Number.isFinite(check.durationMs)) compact.durationMs = check.durationMs
   return compact
+}
+
+function checkStatus(check) {
+  if (check?.ok) return "ok"
+  return check?.required ? "blocked" : "warning"
+}
+
+function statusCounts(checks = []) {
+  return checks.reduce((counts, check) => {
+    counts[check.status] = (counts[check.status] || 0) + 1
+    return counts
+  }, { ok: 0, warning: 0, blocked: 0 })
+}
+
+function overallStatusFromCounts(counts) {
+  if ((counts.blocked || 0) > 0) return "blocked"
+  if ((counts.warning || 0) > 0) return "warning"
+  return "ok"
 }
 
 function resolveHealthCode(summary) {
@@ -328,6 +399,7 @@ function buildReadinessCiSummary(summary) {
   const checks = summary.checks.map(compactCheck)
   const failedRequiredChecks = checks.filter((check) => check.required && !check.ok).map((check) => check.name)
   const warnings = checks.filter((check) => !check.required && !check.ok).map((check) => check.name)
+  const counts = statusCounts(checks)
   const failureSummary = {}
   for (const check of summary.checks) {
     const failure = firstFailureForCheck(check)
@@ -337,18 +409,21 @@ function buildReadinessCiSummary(summary) {
     schemaVersion: CI_SUMMARY_SCHEMA_VERSION,
     ok: Boolean(summary.ok),
     status: summary.ok ? "ok" : "blocked",
+    overallStatus: overallStatusFromCounts(counts),
     healthCode: resolveHealthCode(summary),
     durationMs: Number.isFinite(summary.durationMs) ? summary.durationMs : undefined,
     frontendUrl: sanitizeUrlForOutput(summary.frontendUrl),
     apiUrl: sanitizeUrlForOutput(summary.apiUrl),
     primaryFailure: failedRequiredChecks[0] || "",
     totalChecks: checks.length,
+    statusCounts: counts,
     failedRequiredCount: failedRequiredChecks.length,
     warningCount: warnings.length,
     failedRequiredChecks,
     warnings,
     failureSummary,
     latencySummary: buildLatencySummary(summary),
+    portDiagnostics: summary.portDiagnostics,
     checks,
   }
 }
@@ -364,23 +439,29 @@ async function runReadiness(options = {}) {
     await checkFrontend(frontendUrl, { timeoutMs }),
     await checkBackend(apiUrl, { timeoutMs, requireLogin: options.requireLogin === true, env }),
   ]
+  const portDiagnostics = options.inspectPorts === true
+    ? buildPortDiagnostics(frontendUrl, apiUrl, { inspectPort: options.inspectPort })
+    : undefined
   return {
     ok: checks.filter((check) => check.required).every((check) => check.ok),
     durationMs: Math.max(0, Date.now() - startedAtMs),
     frontendUrl,
     apiUrl,
+    portDiagnostics,
     checks,
   }
 }
 
 function formatCheck(check) {
-  if (check.name === "frontend_routes") return `${check.ok ? "✓" : "✗"} frontend ${sanitizeUrlForOutput(check.baseUrl)}`
-  if (check.name === "backend_auth") return `${check.ok ? "✓" : "✗"} backend ${sanitizeUrlForOutput(check.baseUrl)}`
-  return `${check.ok ? "✓" : "~"} ${check.name}`
+  const status = checkStatus(check)
+  const marker = status === "ok" ? "✓" : status === "warning" ? "~" : "✗"
+  if (check.name === "frontend_routes") return `${marker} frontend ${sanitizeUrlForOutput(check.baseUrl)} ${status}`
+  if (check.name === "backend_auth") return `${marker} backend ${sanitizeUrlForOutput(check.baseUrl)} ${status}`
+  return `${marker} ${check.name} ${status}`
 }
 
 function parseArgs(argv) {
-  const args = { json: false, compactJson: false, frontendUrl: "", apiUrl: "", profile: "default", requireLogin: false, strictEnv: false, timeoutMs: undefined }
+  const args = { json: false, compactJson: false, frontendUrl: "", apiUrl: "", profile: "default", inspectPorts: false, requireLogin: false, strictEnv: false, timeoutMs: undefined }
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]
     if (arg === "--json" || arg === "--summary-json") args.json = true
@@ -391,6 +472,7 @@ function parseArgs(argv) {
     else if (arg === "--frontend-url") args.frontendUrl = argv[++index] || ""
     else if (arg === "--api-url") args.apiUrl = argv[++index] || ""
     else if (arg === "--profile") args.profile = argv[++index] || ""
+    else if (arg === "--inspect-ports") args.inspectPorts = true
     else if (arg === "--require-login") args.requireLogin = true
     else if (arg === "--strict-env") args.strictEnv = true
     else if (arg === "--timeout-ms") args.timeoutMs = parsePositiveInteger(argv[++index], "--timeout-ms")
@@ -409,12 +491,14 @@ async function runCli(argv = process.argv.slice(2)) {
       "  npm run smoke:local-chat -- --summary-json",
       "  npm run smoke:local-chat -- --compact-json",
       "  npm run smoke:local-chat -- --profile fast",
+      "  npm run smoke:local-chat -- --inspect-ports",
       "  npm run smoke:local-chat -- --require-login",
       "  npm run smoke:local-chat -- --strict-env --timeout-ms 1000",
       "",
       "Options:",
       `  --profile <name>  Probe profile: ${Object.keys(LOCAL_CHAT_PROFILES).join(", ")}`,
       "  --compact-json    Print compact single-line JSON",
+      "  --inspect-ports   Include best-effort local listener diagnostics",
       "  --require-login   Probe /api/auth/login with SIRAGPT_TEST_EMAIL and SIRAGPT_TEST_PASSWORD",
       "  --timeout-ms <n>  Timeout for each local probe",
       "  --strict-env      Treat missing local API env as blocking",
@@ -446,8 +530,10 @@ module.exports = {
   applyReadinessProfile,
   buildLatencySummary,
   buildReadinessCiSummary,
+  buildPortDiagnostics,
   checkBackend,
   checkFrontend,
+  checkStatus,
   checkLocalEnv,
   collectLatencyProbes,
   envPresence,
@@ -459,10 +545,15 @@ module.exports = {
   parsePositiveInteger,
   parseEnvFile,
   formatJson,
+  inspectPort,
+  overallStatusFromCounts,
+  portFromUrl,
   probe,
   printJson,
   readLocalEnv,
   resolveHealthCode,
   runReadiness,
+  sanitizeProcessCommand,
   sanitizeUrlForOutput,
+  statusCounts,
 }

@@ -314,4 +314,186 @@ Este tracker registra lotes realmente implementados y validados en el estado act
 
 ## Siguientes lotes
 
-- Lote 59: agregar guardas para detectar puertos locales ocupados por procesos inesperados.
+## Lote 59: extraccion estable de puertos locales
+
+- Estado: implementado y validado.
+- Mejora cubierta: identificar puertos relevantes desde URLs locales normalizadas.
+- Cambio: `scripts/local-chat-readiness.js` agrega `portFromUrl` con soporte de puertos explicitos y defaults HTTP/HTTPS.
+- Control: no imprime userinfo ni valores de entorno.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para puertos explicitos y `https` default.
+- Verificacion: `npm run type-check`, prueba focalizada con puertos explicitos/default y suite completa.
+
+## Lote 60: diagnostico best-effort de listeners locales
+
+- Estado: implementado y validado.
+- Mejora cubierta: detectar si los puertos esperados tienen procesos escuchando.
+- Cambio: `inspectPort` consulta `lsof` de forma local y tolerante a fallo.
+- Control: errores de `lsof` no rompen el doctor; retornan puerto sin listener.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` con inspector inyectado.
+- Verificacion: `npm run type-check`, prueba focalizada, `npm --silent run doctor:local-chat:ports` y suite completa.
+
+## Lote 61: flag `--inspect-ports`
+
+- Estado: implementado y validado.
+- Mejora cubierta: activar diagnostico de puertos solo cuando se necesite.
+- Cambio: readiness y recovery aceptan `--inspect-ports` y agregan `portDiagnostics` al JSON.
+- Control: no ejecuta inspeccion de puertos en el flujo normal.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para parsing y contrato JSON.
+- Verificacion: `npm run type-check`, prueba focalizada, JSON real con `portDiagnostics` y suite completa.
+
+## Lote 62: puertos en reporte Markdown
+
+- Estado: implementado y validado.
+- Mejora cubierta: hacer visible en el reporte si frontend/API tienen listeners locales.
+- Cambio: `scripts/local-chat-recovery.js` agrega tabla `Port diagnostics` cuando existe `portDiagnostics`.
+- Control: muestra solo puerto, estado y comandos saneados.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para tabla Markdown.
+- Verificacion: `npm run type-check`, prueba focalizada, `npm --silent run doctor:local-chat -- --inspect-ports --markdown --timeout-ms 1000` y suite completa.
+
+## Lote 63: script npm para diagnostico de puertos
+
+- Estado: implementado y validado.
+- Mejora cubierta: ejecutar inspeccion de puertos sin recordar flags.
+- Cambio: se agrego `doctor:local-chat:ports` a `package.json`.
+- Control: usa `--summary-json --inspect-ports` y no contiene secretos.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para verificar el script.
+- Verificacion: `npm run type-check`, prueba focalizada, `doctor:local-chat:ports` y suite completa.
+
+## Lote 64: estado normalizado por check
+
+- Estado: implementado y validado.
+- Mejora cubierta: evitar que consumidores infieran estados desde `ok` y `required`.
+- Cambio: `scripts/local-chat-readiness.js` agrega `checkStatus` y `checks[].status` con `ok`, `warning` o `blocked`.
+- Control: mantiene los campos existentes para compatibilidad.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para estados `ok`, `warning` y `blocked`.
+- Verificacion: `npm run type-check`, prueba focalizada de estados y suite completa.
+
+## Lote 65: conteos de estado en JSON compacto
+
+- Estado: implementado y validado.
+- Mejora cubierta: permitir dashboards sin recalcular severidades.
+- Cambio: `--summary-json` agrega `statusCounts` y `overallStatus`.
+- Control: `overallStatus` prioriza `blocked` sobre `warning` y `ok`.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para `statusCounts` y `overallStatus`.
+- Verificacion: `npm run type-check`, prueba focalizada de `statusCounts` y suite completa.
+
+## Lote 66: resumen minimo de estado
+
+- Estado: implementado y validado.
+- Mejora cubierta: entregar un contrato pequeño para monitores que no necesitan checks completos.
+- Cambio: `scripts/local-chat-recovery.js` acepta `--status-json` y exporta `buildStatusSummary`.
+- Control: el resumen no incluye acciones completas ni comandos.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para validar el contrato minimo.
+- Verificacion: `npm run type-check`, prueba focalizada, `npm --silent run doctor:local-chat:status` y suite completa.
+
+## Lote 67: estado normalizado en Markdown
+
+- Estado: implementado y validado.
+- Mejora cubierta: hacer que el reporte humano distinga `warning` de `blocked`.
+- Cambio: el reporte Markdown agrega `Overall status` y usa `checks[].status` en la tabla.
+- Control: conserva `Health code`, `Exit code` y acciones recomendadas.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para `Overall status`.
+- Verificacion: `npm run type-check`, prueba focalizada sobre Markdown y suite completa.
+
+## Lote 68: script npm de estado minimo
+
+- Estado: implementado y validado.
+- Mejora cubierta: consultar estado minimo con una linea compacta.
+- Cambio: se agrego `doctor:local-chat:status` a `package.json`.
+- Control: usa `--status-json --compact-json` y no imprime secretos.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para verificar el script.
+- Verificacion: `npm run type-check`, prueba focalizada, script real `doctor:local-chat:status` y suite completa.
+
+## Lote 69: conteo estable de acciones recomendadas
+
+- Estado: implementado y validado.
+- Mejora cubierta: exponer cuantas acciones recomienda el doctor sin contar arrays externamente.
+- Cambio: `scripts/local-chat-recovery.js` agrega `actionCount` al resumen compacto.
+- Control: el conteo usa acciones ya normalizadas.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para `actionCount`.
+- Verificacion: `npm run type-check`, prueba focalizada de `actionCount` y suite completa.
+
+## Lote 70: saneamiento de comandos en JSON compacto
+
+- Estado: implementado y validado.
+- Mejora cubierta: evitar fuga accidental de secretos tambien en salidas JSON de acciones.
+- Cambio: `buildRecoveryCiSummary` sanea `actions[].command` antes de serializar.
+- Control: reutiliza la misma redaccion de reportes Markdown.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` con password simulado.
+- Verificacion: `npm run type-check`, prueba focalizada con password simulado y suite completa.
+
+## Lote 71: contrato JSON solo de acciones
+
+- Estado: implementado y validado.
+- Mejora cubierta: permitir que integraciones lean acciones sin checks completos ni reportes humanos.
+- Cambio: `scripts/local-chat-recovery.js` acepta `--actions-json` y exporta `buildActionsSummary`.
+- Control: el contrato no incluye valores de entorno ni comandos sin sanear.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para claves del contrato.
+- Verificacion: `npm run type-check`, prueba focalizada, `npm --silent run doctor:local-chat:actions` y suite completa.
+
+## Lote 72: acciones enriquecidas en Markdown
+
+- Estado: implementado y validado.
+- Mejora cubierta: mostrar titulo y detalle de cada accion recomendada en reportes humanos.
+- Cambio: la tabla `Recommended actions` incluye `ID`, `Title`, `Command` y `Detail`.
+- Control: los comandos de la tabla siguen redaccionados.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para la fila de backend.
+- Verificacion: `npm run type-check`, prueba focalizada de Markdown y suite completa.
+
+## Lote 73: script npm de acciones
+
+- Estado: implementado y validado.
+- Mejora cubierta: consultar acciones en JSON compacto con un comando corto.
+- Cambio: se agrego `doctor:local-chat:actions` a `package.json`.
+- Control: usa `--actions-json --compact-json` y no contiene secretos.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para verificar el script.
+- Verificacion: `npm run type-check`, prueba focalizada, script real `doctor:local-chat:actions` y suite completa.
+
+## Lote 74: codigos estables de remediacion
+
+- Estado: implementado y validado.
+- Mejora cubierta: identificar acciones recomendadas con codigos estables para integraciones.
+- Cambio: `scripts/local-chat-recovery.js` agrega `remediationCode` a cada accion compacta.
+- Control: los codigos no dependen del texto humano ni del idioma.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para `LOCAL_BACKEND_START`.
+- Verificacion: `npm run type-check`, prueba focalizada para `LOCAL_BACKEND_START` y suite completa.
+
+## Lote 75: severidad y categoria por accion
+
+- Estado: implementado y validado.
+- Mejora cubierta: priorizar acciones recomendadas sin parsear titulos.
+- Cambio: cada accion compacta incluye `severity` y `category`.
+- Control: las acciones desconocidas reciben valores seguros por defecto.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para acciones conocidas y desconocidas.
+- Verificacion: `npm run type-check`, prueba focalizada para acciones conocidas/desconocidas y suite completa.
+
+## Lote 76: catalogo JSON de remediaciones
+
+- Estado: implementado y validado.
+- Mejora cubierta: descubrir remediaciones disponibles sin ejecutar probes.
+- Cambio: se agrego `--remediation-catalog-json` y `buildRemediationCatalog`.
+- Control: el catalogo no contiene comandos, secretos ni valores de entorno.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para catalogo saneado.
+- Verificacion: `npm run type-check`, prueba focalizada, `npm --silent run doctor:local-chat:remediations` y suite completa.
+
+## Lote 77: remediaciones enriquecidas en Markdown
+
+- Estado: implementado y validado.
+- Mejora cubierta: mostrar codigo, severidad y categoria en reportes humanos.
+- Cambio: la tabla de acciones Markdown incluye `Code`, `Severity` y `Category`.
+- Control: los comandos siguen redaccionados.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para la fila de backend enriquecida.
+- Verificacion: `npm run type-check`, prueba focalizada de Markdown y suite completa.
+
+## Lote 78: script npm de catalogo de remediaciones
+
+- Estado: implementado y validado.
+- Mejora cubierta: consultar remediaciones con un comando corto.
+- Cambio: se agrego `doctor:local-chat:remediations` a `package.json`.
+- Control: usa `--remediation-catalog-json --compact-json` y no ejecuta probes.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para verificar el script.
+- Verificacion: `npm run type-check`, prueba focalizada, script real `doctor:local-chat:remediations` y suite completa.
+
+## Siguientes lotes
+
+- Lote 79: agregar formato JSON de matriz de checks y acciones para dashboards.

@@ -34,6 +34,33 @@ const RECOVERY_EXIT_CODE_LABELS = {
   [RECOVERY_EXIT_CODES.packageScripts]: "package_scripts_missing",
   [RECOVERY_EXIT_CODES.localEnv]: "local_env_missing",
 }
+const RECOVERY_ACTION_CATALOG = {
+  frontend_dev_server: {
+    remediationCode: "LOCAL_FRONTEND_START",
+    severity: "critical",
+    category: "frontend",
+  },
+  backend_dev_server: {
+    remediationCode: "LOCAL_BACKEND_START",
+    severity: "critical",
+    category: "backend",
+  },
+  login_credentials: {
+    remediationCode: "LOCAL_LOGIN_CREDENTIALS",
+    severity: "high",
+    category: "auth",
+  },
+  local_env_file: {
+    remediationCode: "LOCAL_ENV_CONFIG",
+    severity: "medium",
+    category: "configuration",
+  },
+  ready: {
+    remediationCode: "LOCAL_READY",
+    severity: "info",
+    category: "none",
+  },
+}
 
 function hasFailedCheck(summary, name) {
   return (summary?.checks || []).some((check) => check.name === name && !check.ok)
@@ -131,22 +158,75 @@ function sanitizeCommandForReport(command) {
     .replace(/(Authorization:\s*Bearer\s+)[^\s|]+/gi, "$1<token>")
 }
 
+function enrichRecoveryAction(action) {
+  const metadata = RECOVERY_ACTION_CATALOG[action.id] || {
+    remediationCode: "LOCAL_UNKNOWN_ACTION",
+    severity: "medium",
+    category: "unknown",
+  }
+  return {
+    ...action,
+    ...metadata,
+  }
+}
+
+function buildRemediationCatalog() {
+  return {
+    schemaVersion: CI_SUMMARY_SCHEMA_VERSION,
+    actions: Object.entries(RECOVERY_ACTION_CATALOG).map(([id, metadata]) => ({
+      id,
+      ...metadata,
+    })),
+  }
+}
+
 function escapeMarkdownCell(value) {
   return String(value || "").replace(/\|/g, "\\|").replace(/\r?\n/g, " ")
 }
 
 function buildRecoveryCiSummary(summary, actions = recommendRecoveryActions(summary)) {
   const compact = buildReadinessCiSummary(summary)
+  const compactActions = actions.map(enrichRecoveryAction).map((action) => ({
+    id: action.id,
+    remediationCode: action.remediationCode,
+    severity: action.severity,
+    category: action.category,
+    title: action.title,
+    command: sanitizeCommandForReport(action.command),
+    detail: action.detail,
+  }))
   return {
     ...compact,
     exitCode: resolveRecoveryExitCode(summary),
-    primaryAction: actions[0]?.id || "",
-    actions: actions.map((action) => ({
-      id: action.id,
-      title: action.title,
-      command: action.command,
-      detail: action.detail,
-    })),
+    primaryAction: compactActions[0]?.id || "",
+    actionCount: compactActions.length,
+    actions: compactActions,
+  }
+}
+
+function buildActionsSummary(compactSummary) {
+  return {
+    schemaVersion: compactSummary.schemaVersion,
+    ok: compactSummary.ok,
+    overallStatus: compactSummary.overallStatus,
+    healthCode: compactSummary.healthCode,
+    primaryAction: compactSummary.primaryAction,
+    actionCount: compactSummary.actionCount,
+    actions: compactSummary.actions,
+  }
+}
+
+function buildStatusSummary(compactSummary) {
+  return {
+    schemaVersion: compactSummary.schemaVersion,
+    ok: compactSummary.ok,
+    overallStatus: compactSummary.overallStatus,
+    healthCode: compactSummary.healthCode,
+    primaryFailure: compactSummary.primaryFailure,
+    primaryAction: compactSummary.primaryAction,
+    exitCode: compactSummary.exitCode,
+    failedRequiredCount: compactSummary.failedRequiredCount,
+    warningCount: compactSummary.warningCount,
   }
 }
 
@@ -156,6 +236,7 @@ function formatMarkdownReport(summary, actions = recommendRecoveryActions(summar
     "# SiraGPT local chat diagnostics",
     "",
     `- Status: ${compact.status}`,
+    `- Overall status: ${compact.overallStatus}`,
     `- Frontend: ${compact.frontendUrl || "unknown"}`,
     `- API: ${compact.apiUrl || "unknown"}`,
     `- Health code: ${compact.healthCode || "unknown"}`,
@@ -172,7 +253,7 @@ function formatMarkdownReport(summary, actions = recommendRecoveryActions(summar
     "| --- | --- | --- |",
   ]
   for (const check of compact.checks) {
-    lines.push(`| ${escapeMarkdownCell(check.name)} | ${check.required ? "yes" : "no"} | ${check.ok ? "ok" : "blocked"} |`)
+    lines.push(`| ${escapeMarkdownCell(check.name)} | ${check.required ? "yes" : "no"} | ${check.status} |`)
   }
   if (compact.latencySummary?.probeCount) {
     lines.push("", "## Probe latency", "", "| Probe | Duration | Status |", "| --- | --- | --- |")
@@ -180,9 +261,15 @@ function formatMarkdownReport(summary, actions = recommendRecoveryActions(summar
       lines.push(`| ${escapeMarkdownCell(`${probe.check} ${probe.probe}`)} | ${probe.durationMs}ms | ${probe.ok ? "ok" : "blocked"} |`)
     }
   }
-  lines.push("", "## Recommended actions", "", "| ID | Command |", "| --- | --- |")
+  if (compact.portDiagnostics) {
+    lines.push("", "## Port diagnostics", "", "| Target | Port | Listening | Processes |", "| --- | --- | --- | --- |")
+    for (const [target, diagnostic] of Object.entries(compact.portDiagnostics)) {
+      lines.push(`| ${escapeMarkdownCell(target)} | ${diagnostic.port} | ${diagnostic.listening ? "yes" : "no"} | ${escapeMarkdownCell((diagnostic.commands || []).join(", ") || "none")} |`)
+    }
+  }
+  lines.push("", "## Recommended actions", "", "| ID | Code | Severity | Category | Title | Command | Detail |", "| --- | --- | --- | --- | --- | --- | --- |")
   for (const action of compact.actions) {
-    lines.push(`| ${escapeMarkdownCell(action.id)} | \`${escapeMarkdownCell(sanitizeCommandForReport(action.command))}\` |`)
+    lines.push(`| ${escapeMarkdownCell(action.id)} | ${escapeMarkdownCell(action.remediationCode)} | ${escapeMarkdownCell(action.severity)} | ${escapeMarkdownCell(action.category)} | ${escapeMarkdownCell(action.title)} | \`${escapeMarkdownCell(action.command)}\` | ${escapeMarkdownCell(action.detail)} |`)
   }
   return lines.join("\n")
 }
@@ -222,6 +309,9 @@ function parseArgs(argv) {
   const args = {
     json: false,
     summaryJson: false,
+    statusJson: false,
+    actionsJson: false,
+    remediationCatalogJson: false,
     markdown: false,
     quiet: false,
     compactJson: false,
@@ -231,6 +321,7 @@ function parseArgs(argv) {
     cleanOldReports: false,
     maxReportAgeHours: DEFAULT_REPORT_MAX_AGE_HOURS,
     profile: "default",
+    inspectPorts: false,
     requireLogin: false,
     strictEnv: false,
     timeoutMs: undefined,
@@ -241,6 +332,9 @@ function parseArgs(argv) {
     const arg = argv[index]
     if (arg === "--json") args.json = true
     else if (arg === "--summary-json") args.summaryJson = true
+    else if (arg === "--status-json") args.statusJson = true
+    else if (arg === "--actions-json") args.actionsJson = true
+    else if (arg === "--remediation-catalog-json") args.remediationCatalogJson = true
     else if (arg === "--compact-json") {
       args.summaryJson = true
       args.compactJson = true
@@ -260,6 +354,7 @@ function parseArgs(argv) {
     } else if (arg === "--clean-old-reports") args.cleanOldReports = true
     else if (arg === "--max-report-age-hours") args.maxReportAgeHours = parsePositiveInteger(argv[++index], "--max-report-age-hours")
     else if (arg === "--profile") args.profile = argv[++index] || ""
+    else if (arg === "--inspect-ports") args.inspectPorts = true
     else if (arg === "--require-login") args.requireLogin = true
     else if (arg === "--strict-env") args.strictEnv = true
     else if (arg === "--timeout-ms") args.timeoutMs = parsePositiveInteger(argv[++index], "--timeout-ms")
@@ -277,11 +372,15 @@ function usage() {
     "  npm run doctor:local-chat",
     "  npm run doctor:local-chat -- --json",
     "  npm run doctor:local-chat -- --summary-json",
+    "  npm run doctor:local-chat -- --status-json",
+    "  npm run doctor:local-chat -- --actions-json",
+    "  npm run doctor:local-chat -- --remediation-catalog-json",
     "  npm run doctor:local-chat -- --compact-json",
     "  npm run doctor:local-chat -- --markdown",
     "  npm run doctor:local-chat -- --write-report",
     "  npm run doctor:local-chat -- --clean-old-reports",
     "  npm run doctor:local-chat -- --quiet",
+    "  npm run doctor:local-chat -- --inspect-ports",
     "  npm run doctor:local-chat -- --require-login",
     "  npm run doctor:local-chat -- --exit-codes-json",
     "  npm run doctor:local-chat -- --list-checks-json",
@@ -291,9 +390,13 @@ function usage() {
     "  --api-url <url>               Override local backend API URL",
     "  --timeout-ms <n>              Timeout for each local probe",
     `  --profile <name>             Probe profile: ${Object.keys(LOCAL_CHAT_PROFILES).join(", ")}`,
+    "  --inspect-ports              Include best-effort local listener diagnostics",
     "  --require-login              Probe /api/auth/login with SIRAGPT_TEST_EMAIL and SIRAGPT_TEST_PASSWORD",
     "  --strict-env                  Treat missing local API env as blocking",
     "  --summary-json                Print compact CI-safe JSON",
+    "  --status-json                 Print minimal status JSON",
+    "  --actions-json                Print recommended actions JSON",
+    "  --remediation-catalog-json    Print remediation action catalog without running probes",
     "  --compact-json                Print compact single-line CI-safe JSON",
     "  --markdown                    Print sanitized Markdown diagnostics",
     "  --quiet                       Print only healthCode and primaryAction",
@@ -317,7 +420,11 @@ function usage() {
     "",
     "Examples:",
     "  npm --silent run doctor:local-chat:ci",
+    "  npm --silent run doctor:local-chat:status",
+    "  npm --silent run doctor:local-chat:actions",
+    "  npm --silent run doctor:local-chat:remediations",
     "  npm --silent run doctor:local-chat:compact",
+    "  npm run doctor:local-chat -- --inspect-ports --markdown",
     "  SIRAGPT_TEST_EMAIL=admin@example.com SIRAGPT_TEST_PASSWORD=<password> npm run doctor:local-chat -- --require-login",
     "  npm run doctor:local-chat -- --quiet --profile fast",
     "  npm run doctor:local-chat -- --summary-json --timeout-ms 1000",
@@ -343,6 +450,10 @@ async function runCli(argv = process.argv.slice(2)) {
     }, args.compactJson)
     return 0
   }
+  if (args.remediationCatalogJson) {
+    printJson(buildRemediationCatalog(), args.compactJson)
+    return 0
+  }
   const summary = await runReadiness(args)
   const actions = recommendRecoveryActions(summary)
   const markdownReport = args.markdown || args.writeReport ? formatMarkdownReport(summary, actions) : ""
@@ -351,6 +462,8 @@ async function runCli(argv = process.argv.slice(2)) {
   if (args.cleanOldReports) removedReports = cleanupOldReports({ maxAgeHours: args.maxReportAgeHours })
   if (args.quiet) console.log(`${compactSummary.healthCode} ${compactSummary.primaryAction || "none"}`)
   else if (args.markdown) console.log(markdownReport)
+  else if (args.statusJson) printJson(buildStatusSummary(compactSummary), args.compactJson)
+  else if (args.actionsJson) printJson(buildActionsSummary(compactSummary), args.compactJson)
   else if (args.summaryJson) printJson(compactSummary, args.compactJson)
   else if (args.json) printJson({ ok: summary.ok, actions }, args.compactJson)
   else console.log(formatRecoveryReport(summary, actions))
@@ -371,14 +484,19 @@ module.exports = {
   DEFAULT_REPORT_PATH,
   RECOVERY_EXIT_CODES,
   RECOVERY_EXIT_CODE_LABELS,
+  RECOVERY_ACTION_CATALOG,
   REPORT_FILE_PREFIX,
   buildRecoveryCiSummary,
+  buildActionsSummary,
+  buildRemediationCatalog,
+  buildStatusSummary,
   cleanupOldReports,
   escapeMarkdownCell,
   failedBackendHealth,
   formatMarkdownReport,
   formatRecoveryReport,
   hasFailedRequiredCheck,
+  enrichRecoveryAction,
   missingLoginCredentials,
   parseArgs,
   recommendRecoveryActions,
