@@ -27,7 +27,9 @@ export interface MessageActionRailProps {
   /** Message identity — passed straight through to telemetry. */
   messageId: string
   chatId: string
-  /** Optional model id for telemetry (not displayed). */
+  /** Optional model id. Used for telemetry and (when present) rendered
+   *  as a subtle, non-interactive pill at the end of the action rail
+   *  so the user can see which model produced this answer. #99 */
   model?: string
 
   /** Plaintext content used for: copy clipboard payload, TTS source,
@@ -197,9 +199,14 @@ export function MessageActionRail({
   const showRegenerate = canRegenerate && !isLive && (hasText || hasError)
   const showShare = canShare && hasText && !hasError && !isLive
 
+  // #99 — prettify model id for the trailing pill (kept inline so we
+  // don't ship another import for ~10 lines of mapping).
+  const prettyModel = React.useMemo(() => prettifyModelId(model), [model])
+  const showModelBadge = !isLive && !hasError && hasText && !!prettyModel
+
   // Nothing to render? Don't render the container either — keeps the
   // bubble visually clean for messages that genuinely have no actions.
-  if (!showCopy && !showSpeak && !showFeedback && !showRegenerate && !showShare) {
+  if (!showCopy && !showSpeak && !showFeedback && !showRegenerate && !showShare && !showModelBadge) {
     return null
   }
 
@@ -375,9 +382,77 @@ export function MessageActionRail({
             icon={sharePulse === "success" ? <Check className="h-4 w-4" /> : sharePulse === "error" ? <XIcon className="h-4 w-4" /> : <Share2 className="h-4 w-4" />}
           />
         )}
+        {showModelBadge && (
+          // #99 — Modelo respondedor. Pill no interactiva, color muy
+          // suave para no competir con las acciones. Tooltip muestra
+          // el id crudo por si el usuario lo necesita para reportar
+          // un bug. ml-1 separa del último icono; aria-label da el
+          // texto completo a lectores de pantalla.
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span
+                aria-label={`Respuesta generada por ${prettyModel}`}
+                className={cn(
+                  "ml-1 inline-flex h-7 items-center rounded-full px-2",
+                  "text-[11px] font-medium text-muted-foreground/75",
+                  "border border-border/40 bg-muted/30",
+                  "select-none cursor-default tabular-nums",
+                )}
+              >
+                {prettyModel}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" sideOffset={6} className="text-[11.5px] font-medium">
+              {model}
+            </TooltipContent>
+          </Tooltip>
+        )}
       </div>
     </TooltipProvider>
   )
+}
+
+// #99 — Map common model ids to a human label. Anything we don't
+// recognise just gets returned as-is (truncated) so future models
+// still show up without code changes.
+function prettifyModelId(raw?: string): string | null {
+  if (!raw || typeof raw !== "string") return null
+  const id = raw.trim()
+  if (!id) return null
+  const lower = id.toLowerCase()
+  const map: Array<[RegExp, string]> = [
+    [/^gpt-?5(?:[-.]|$)/, "GPT-5"],
+    [/^gpt-?4o-mini\b/, "GPT-4o mini"],
+    [/^gpt-?4o\b/, "GPT-4o"],
+    [/^gpt-?4\.1\b/, "GPT-4.1"],
+    [/^gpt-?4\b/, "GPT-4"],
+    [/^o4-mini\b/, "o4-mini"],
+    [/^o3-mini\b/, "o3-mini"],
+    [/^o3\b/, "o3"],
+    [/^o1\b/, "o1"],
+    [/^claude.*opus.*4/, "Claude Opus 4"],
+    [/^claude.*sonnet.*4/, "Claude Sonnet 4"],
+    [/^claude.*haiku/, "Claude Haiku"],
+    [/^claude.*opus/, "Claude Opus"],
+    [/^claude.*sonnet/, "Claude Sonnet"],
+    [/^gemini-?2\.5.*pro/, "Gemini 2.5 Pro"],
+    [/^gemini-?2\.5.*flash/, "Gemini 2.5 Flash"],
+    [/^gemini-?2\.0.*flash/, "Gemini 2.0 Flash"],
+    [/^gemini.*pro/, "Gemini Pro"],
+    [/^gemini.*flash/, "Gemini Flash"],
+    [/^deepseek-?r1/, "DeepSeek R1"],
+    [/^deepseek-?v3/, "DeepSeek V3"],
+    [/^llama-?3\.3/, "Llama 3.3"],
+    [/^llama-?3\.1/, "Llama 3.1"],
+    [/^mistral-?large/, "Mistral Large"],
+    [/^grok/, "Grok"],
+    [/^qwen/, "Qwen"],
+  ]
+  for (const [rx, label] of map) {
+    if (rx.test(lower)) return label
+  }
+  // Unknown id — show a short, readable version (cap at 24 chars).
+  return id.length > 24 ? id.slice(0, 23) + "…" : id
 }
 
 export default MessageActionRail
