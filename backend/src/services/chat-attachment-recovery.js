@@ -44,11 +44,15 @@ function shouldRecoverAttachmentResponse({ prompt, response, processedFiles = []
   return hasExtracted;
 }
 
-function buildProcessedFilesContext(processedFiles = []) {
+function buildProcessedFilesContext(processedFiles = [], prompt = '') {
   if (!Array.isArray(processedFiles) || processedFiles.length === 0) return '';
+  const synthesisRequest = messageAttachments.isProfessionalDocumentSynthesisRequest(prompt);
   const blocks = processedFiles
     .map((file, index) => {
-      const text = String(file?.extractedText || '').trim();
+      const rawText = String(file?.extractedText || '').trim();
+      const text = synthesisRequest
+        ? messageAttachments.prepareDocumentTextForProfessionalSynthesis(rawText)
+        : rawText;
       if (!text || looksLikeUnsupportedExtractionPlaceholder(text)) return '';
       return [
         `### Archivo adjunto ${index + 1}: ${file.name || file.originalName || file.id || 'archivo'}`,
@@ -104,13 +108,13 @@ async function refreshProcessedFileExtracts(prisma, processedFiles = []) {
 async function buildChatUploadedFileContext(prisma, { userId, processedFiles, prompt }) {
   if (!userId || !processedFiles?.length) return '';
   const fileIds = processedFiles.map((f) => f.id).filter(Boolean);
-  if (fileIds.length === 0) return buildProcessedFilesContext(processedFiles);
+  if (fileIds.length === 0) return buildProcessedFilesContext(processedFiles, prompt);
   const enrichedContext = await messageAttachments.buildUploadedFileContext(prisma, {
     userId,
     fileIds,
     query: prompt,
   });
-  return enrichedContext || buildProcessedFilesContext(processedFiles);
+  return enrichedContext || buildProcessedFilesContext(processedFiles, prompt);
 }
 
 async function recoverChatAttachmentResponse({
@@ -123,7 +127,7 @@ async function recoverChatAttachmentResponse({
 }) {
   const context = uploadedFileContext
     || await buildChatUploadedFileContext(prisma, { userId, processedFiles, prompt })
-    || buildProcessedFilesContext(processedFiles);
+    || buildProcessedFilesContext(processedFiles, prompt);
   let answer = resolveAttachmentFallbackMarkdown({
     goal: prompt,
     uploadedFileContext: context,

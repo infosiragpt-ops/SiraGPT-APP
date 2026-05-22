@@ -313,6 +313,94 @@ function normalizeForSearch(value) {
     .replace(/[\u0300-\u036f]/g, '');
 }
 
+function countDocumentWords(value) {
+  return (normalizeForSearch(value).match(/[a-z0-9]{3,}/g) || []).length;
+}
+
+function isExactDocumentExtractionQuestion(query) {
+  return /\b(transcrib|transcripcion|copia|copiar|literal|textual|verbatim|exact[oa]|primera palabra|primer parrafo|primer p[aá]rrafo|extrae el texto|extraer el texto|texto completo)\b/i.test(
+    String(query || '')
+  );
+}
+
+function isProfessionalDocumentSynthesisRequest(query) {
+  const normalized = normalizeForSearch(query);
+  if (!normalized || isExactDocumentExtractionQuestion(query)) return false;
+  return /\b(analiza|analisis|resumen|resume|sintesis|conclusion|conclusiones|de que trata|que dice|explica|interpreta|hallazgo|hallazgos|recomendacion|recomendaciones|evaluacion|critica)\b/.test(normalized);
+}
+
+function wantsSingleParagraphSynthesis(query) {
+  const normalized = normalizeForSearch(query).replace(/[^a-z0-9]+/g, ' ');
+  return (
+    /\b(?:un|uno|1)\s+(?:solo\s+)?parrafo\b/.test(normalized) ||
+    /\ben\s+(?:un|uno|1)\s+parrafo\b/.test(normalized) ||
+    /\bparrafo\s+unico\b/.test(normalized)
+  );
+}
+
+function stripDocumentExtractorHeader(text) {
+  return String(text || '')
+    .replace(/^(?:Word document|PDF document|PowerPoint document|Excel workbook|Spreadsheet|Text document)\s+[^\n]*\n---\n/i, '')
+    .replace(/^---\s*\n/, '');
+}
+
+function looksLikeFrontMatterLine(line, index = 0) {
+  const raw = String(line || '').trim();
+  if (!raw) return true;
+  const normalized = normalizeForSearch(raw).replace(/[^a-z0-9]+/g, ' ').trim();
+  if (!normalized) return true;
+  const linkCount = (raw.match(/\]\(/g) || []).length;
+  if (index < 90 && linkCount >= 2) return true;
+  if (/^(indice de contenidos|indice general|tabla de contenido|table of contents|index|indice de tablas|indice de figuras)\b/.test(normalized)) return true;
+  if (index < 90 && /\b(declaratoria de autenticidad|dedicatoria|agradecimientos?|asesor|autores?|bachiller|jurado|facultad|escuela profesional)\b/.test(normalized)) return true;
+  if (index < 90 && /^(?:[ivxlcdm]+|\d{1,3})$/.test(normalized)) return true;
+  if (index < 90 && /^(?:declaratoria|dedicatoria|agradecimiento|indice|tabla de contenido)\b.*\b(?:[ivxlcdm]+|\d{1,3})$/.test(normalized)) return true;
+  return false;
+}
+
+function dropLeadingTocBlob(text) {
+  const source = String(text || '');
+  const head = source.slice(0, 5000);
+  if (!/\b(?:indice de contenidos|indice general|tabla de contenido|table of contents|declaratoria de autenticidad)\b/i.test(head.normalize('NFD').replace(/[\u0300-\u036f]/g, ''))) {
+    return source;
+  }
+  const bodyStart = head.match(/(?:^|\n|\s)(?:#{1,6}\s*)?(?:\d+(?:\.\d+)*\s*)?introducci[oó]n(?:\s|\n)+(?:actualmente|el|la|los|las|este|esta|en|se|a\s+partir)\b/i);
+  if (bodyStart && Number.isInteger(bodyStart.index) && bodyStart.index > 0) {
+    return source.slice(bodyStart.index).trimStart();
+  }
+  return source;
+}
+
+function prepareDocumentTextForProfessionalSynthesis(text) {
+  const original = String(text || '');
+  if (!original.trim()) return '';
+  let cleaned = stripDocumentExtractorHeader(original)
+    .replace(/\[[^\]\n]{0,12}\.\s*#\s*/g, '# ')
+    .replace(/\[\s*#\s*/g, '# ');
+
+  cleaned = dropLeadingTocBlob(cleaned)
+    .replace(/\[([^\]\n]{1,180})\]\((?:#[^)]+|[^)]*)\)/g, '$1')
+    .replace(/\u00a0/g, ' ');
+
+  const lines = cleaned
+    .split(/\r?\n+/)
+    .map((line) => line.trim())
+    .filter((line, index) => !looksLikeFrontMatterLine(line, index));
+
+  cleaned = lines.join('\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  if (countDocumentWords(cleaned) < 25 && countDocumentWords(original) >= 25) {
+    return stripDocumentExtractorHeader(original)
+      .replace(/\[([^\]\n]{1,180})\]\((?:#[^)]+|[^)]*)\)/g, '$1')
+      .replace(/[ \t]{2,}/g, ' ')
+      .trim();
+  }
+  return cleaned;
+}
+
 function isDeepDocumentQuestion(query) {
   return /\b(conclusion|conclusiones|concluir|concluye|analiza|analisis|resumen|resume|sintesis|sintetiza|resultado|resultados|discusion|hallazgo|hallazgos|recomendacion|recomendaciones|objetivo|objetivos|segun|interpreta|extrae)\b/.test(
     normalizeForSearch(query)
@@ -352,7 +440,9 @@ function sourceLabelForEvidence(item = {}) {
 }
 
 function buildBalancedExcerpt(text, maxChars, query = '') {
-  const source = safeText(text, '');
+  const source = isProfessionalDocumentSynthesisRequest(query)
+    ? safeText(prepareDocumentTextForProfessionalSynthesis(text), '')
+    : safeText(text, '');
   const budget = Math.max(1200, Number(maxChars) || 6000);
   if (source.length <= budget) return source;
 
@@ -537,6 +627,10 @@ async function buildUploadedFileContext(prisma, {
     const chunks = Array.isArray(analysis?.chunks) ? analysis.chunks : [];
     const tables = Array.isArray(analysis?.tables) ? analysis.tables : [];
     const genericOverview = isGenericDocumentOverviewQuestion(query);
+    const synthesisRequest = isProfessionalDocumentSynthesisRequest(query);
+    const effectiveDocumentText = synthesisRequest
+      ? prepareDocumentTextForProfessionalSynthesis(row.documentText)
+      : row.documentText;
     const evidence = deepQuestion && !genericOverview
       ? await retrieveRelevantEvidence(prisma, {
         userId,
@@ -545,6 +639,11 @@ async function buildUploadedFileContext(prisma, {
         limit: evidenceLimit,
       })
       : [];
+    const effectiveEvidence = synthesisRequest
+      ? evidence
+        .map((item) => ({ ...item, text: prepareDocumentTextForProfessionalSynthesis(item.text) }))
+        .filter((item) => countDocumentWords(item.text) >= 8)
+      : evidence;
     const spreadsheetBibliography = bibliographyRequest && isSpreadsheetMime(row.mimeType);
     const tableMarkdown = spreadsheetBibliography && tables.length
       ? tables
@@ -552,30 +651,38 @@ async function buildUploadedFileContext(prisma, {
         .filter(Boolean)
         .join('\n\n')
       : '';
-    const selectedText = evidence.length
+    const selectedText = effectiveEvidence.length
       ? [
         'Contenido relevante recuperado desde todo el documento:',
-        ...evidence.map((item, evidenceIndex) => {
-          const text = safeText(item.text, '').slice(0, Math.max(700, Math.floor(perFileBudget / Math.max(1, evidence.length))));
+        ...effectiveEvidence.map((item, evidenceIndex) => {
+          const text = safeText(item.text, '').slice(0, Math.max(700, Math.floor(perFileBudget / Math.max(1, effectiveEvidence.length))));
           return `Evidencia ${evidenceIndex + 1} [${sourceLabelForEvidence(item)}]: ${text.replace(/\s+/g, ' ')}`;
         }),
       ].join('\n\n')
       : spreadsheetBibliography
         ? compactString(
-          [tableMarkdown, row.documentText].filter(Boolean).join('\n\n'),
+          [tableMarkdown, effectiveDocumentText].filter(Boolean).join('\n\n'),
           Math.max(perFileBudget, maxChars),
         )
-        : buildBalancedExcerpt(row.documentText, perFileBudget, query);
-    const clipped = evidence.length
+        : buildBalancedExcerpt(effectiveDocumentText, perFileBudget, query);
+    const clipped = effectiveEvidence.length
       ? '\n[La evidencia fue recuperada buscando en todos los fragmentos disponibles del documento, no solo en la portada.]'
-      : row.documentText.length > selectedText.length
+      : effectiveDocumentText.length > selectedText.length
         ? '\n[Extracto balanceado; si necesitas precision adicional usa docintel_retrieve con la pregunta del usuario.]'
         : '';
-    const firstChunks = (!deepQuestion || !evidence.length) && chunks.length
+    const firstChunks = (!deepQuestion || !effectiveEvidence.length) && chunks.length
       ? [
         '',
         'Primeras referencias estructuradas disponibles:',
-        ...chunks.map((chunk) => `- ${chunk.sourceLabel || chunk.sectionTitle || `Fragmento ${chunk.ordinal}`}: ${safeText(chunk.text, '').slice(0, 240).replace(/\s+/g, ' ')}`),
+        ...chunks
+          .map((chunk) => {
+            const chunkText = synthesisRequest
+              ? prepareDocumentTextForProfessionalSynthesis(chunk.text)
+              : safeText(chunk.text, '');
+            if (synthesisRequest && countDocumentWords(chunkText) < 8) return '';
+            return `- ${chunk.sourceLabel || chunk.sectionTitle || `Fragmento ${chunk.ordinal}`}: ${chunkText.slice(0, 240).replace(/\s+/g, ' ')}`;
+          })
+          .filter(Boolean),
       ].join('\n')
       : '';
     const tableSummary = tables.length
@@ -601,10 +708,12 @@ async function buildUploadedFileContext(prisma, {
   return [
     'Contexto inicial de archivos adjuntos ya extraido por siraGPT.',
     'Usa este contenido para responder sobre el documento pegado/subido. Si el usuario pide analisis, resumen o conclusiones, responde desde la evidencia relevante del documento completo y no desde portada, indice, autores o metadatos preliminares.',
+    'Para analisis profesionales: sintetiza con criterio academico/ejecutivo, no copies el indice, no enumeres metadatos internos y no empieces con "Indice de contenidos".',
+    wantsSingleParagraphSynthesis(query) ? 'El usuario pidio un solo parrafo: la respuesta final debe ser exactamente un parrafo, sin titulo, sin viñetas, sin tabla y sin saltos de seccion.' : '',
     'Para evidencia estructurada adicional llama docintel_retrieve/docintel_extract_tables; para busqueda semantica general llama rag_retrieve.',
     '',
     blocks.join('\n\n---\n\n'),
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }
 
 async function buildTranscriptionTextFromFiles(prisma, { userId, fileIds = [], maxChars = 120000 } = {}) {
@@ -646,9 +755,12 @@ module.exports = {
   extractFileIdsFromMessageFiles,
   ensureImageOcr,
   hasUsefulExtractedText,
+  isProfessionalDocumentSynthesisRequest,
   isPlainTranscriptionRequest,
   mapWithLimit,
   normalizeClientMetadata,
+  prepareDocumentTextForProfessionalSynthesis,
   resolveTranscriptionFileIds,
   serializeMessageAttachments,
+  wantsSingleParagraphSynthesis,
 };

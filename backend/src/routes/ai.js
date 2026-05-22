@@ -127,6 +127,7 @@ const postResponseBrainHook = require('../services/sira/post-response-brain-hook
 const coworkEngine = require('../services/cowork-engine');
 const activeMemory = require('../services/active-memory');
 const chatAttachmentRecovery = require('../services/chat-attachment-recovery');
+const messageAttachments = require('../services/message-attachments');
 const router = express.Router();
 const cookie = require('cookie');
 const crypto = require('crypto');
@@ -2962,7 +2963,10 @@ router.post(
 
             if (nonImageFiles.length > 0) {
               const textContext = nonImageFiles.map(f => {
-                const content = f.extractedText || 'Binary file - content not available';
+                const preparedContent = messageAttachments.isProfessionalDocumentSynthesisRequest(prompt)
+                  ? messageAttachments.prepareDocumentTextForProfessionalSynthesis(f.extractedText || '')
+                  : '';
+                const content = preparedContent || f.extractedText || 'Binary file - content not available';
                 return `\n\nAttached file: ${f.name}\nContent: ${content}`;
               }).join('');
 
@@ -2985,7 +2989,10 @@ router.post(
 
             if (nonImageFiles.length > 0) {
               const fileContext = nonImageFiles.map(f => {
-                const content = f.extractedText || 'Binary file - content not available';
+                const preparedContent = messageAttachments.isProfessionalDocumentSynthesisRequest(prompt)
+                  ? messageAttachments.prepareDocumentTextForProfessionalSynthesis(f.extractedText || '')
+                  : '';
+                const content = preparedContent || f.extractedText || 'Binary file - content not available';
                 return `\n\nAttached file: ${f.name}\nContent: ${content}`;
               }).join('');
               messageContent += fileContext;
@@ -3065,9 +3072,14 @@ router.post(
             'CURRENT TURN DOCUMENT LOCK:',
             '- The attached document/spreadsheet/PDF files below are the active source for this user request.',
             '- If the user asks for a summary, resumen, analysis, extraction, or explanation, answer from these current files first.',
+            '- For professional analysis, synthesize the argument and implications; do not reproduce the table of contents, index links, cover metadata, advisor names, or internal extraction labels.',
+            '- Never start the final answer with "Indice de contenidos", "Índice de contenidos", raw markdown links, or filename metadata.',
+            messageAttachments.wantsSingleParagraphSynthesis(prompt)
+              ? '- The user requested one paragraph: answer in exactly one polished paragraph, with no heading, no bullets, no table, and no section breaks.'
+              : '',
             '- Do not answer from prior images, weather cards, generated visuals, or unrelated chat history unless the user explicitly asks for that older context.',
             '- Preserve file identity: refer to each attachment by filename and never reinterpret a document as an image.'
-          ].join('\n')
+          ].filter(Boolean).join('\n')
           : '';
 
         finalPrompt = `${documentTurnGuard ? `${documentTurnGuard}\n\n` : ''}${prompt}${mathInstructions}\n\nAttached files:\n${truncatedFileContext}`;
