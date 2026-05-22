@@ -317,4 +317,26 @@ describe('DiscordAdapter · sendOutbound', () => {
     );
     assert.equal(a.metrics.get('discord', KINDS.ERROR), 1);
   });
+
+  it('honours Retry-After header when Discord body omits retry_after', async () => {
+    let calls = 0;
+    const a = makeAdapter({
+      fetchImpl: async () => {
+        calls += 1;
+        if (calls === 1) {
+          return {
+            ok: false,
+            status: 429,
+            json: async () => ({ message: 'rate limited' }),
+            headers: { get: (name) => (name === 'retry-after' ? '0.001' : null) },
+          };
+        }
+        return { ok: true, status: 200, json: async () => ({ id: 'm2' }) };
+      },
+    });
+
+    await a.sendOutbound({ chatId: 'C', text: 't' });
+
+    assert.equal(calls, 2);
+  });
 });

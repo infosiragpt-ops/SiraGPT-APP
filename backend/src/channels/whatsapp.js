@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 const { ChannelAdapter } = require('./channel-adapter');
 const { KINDS } = require('./metrics');
-const { retryWithBackoff } = require('./retry');
+const { retryWithBackoff, parseRetryAfterHeader } = require('./retry');
 
 /**
  * WhatsApp (Meta Cloud API) adapter.
@@ -116,7 +116,8 @@ class WhatsAppAdapter extends ChannelAdapter {
         body: JSON.stringify(payload),
       });
       const body = await safeJson(r);
-      return { ok: r.ok, status: r.status, body };
+      const retryAfter = parseRetryAfterHeader(r.headers?.get?.('retry-after'));
+      return { ok: r.ok, status: r.status, body, retryAfterMs: retryAfter };
     });
     if (!res.ok) {
       this.metrics.inc(this.name, KINDS.ERROR);

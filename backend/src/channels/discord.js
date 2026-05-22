@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 const { ChannelAdapter } = require('./channel-adapter');
 const { KINDS } = require('./metrics');
-const { retryWithBackoff } = require('./retry');
+const { retryWithBackoff, parseRetryAfterHeader } = require('./retry');
 
 /**
  * Discord interactions adapter.
@@ -94,11 +94,12 @@ class DiscordAdapter extends ChannelAdapter {
       });
       const body = await safeJson(r);
       const retryAfter = body?.retry_after;
+      const headerRetryAfter = parseRetryAfterHeader(r.headers?.get?.('retry-after'));
       return {
         ok: r.ok,
         status: r.status,
         body,
-        retryAfterMs: retryAfter ? Math.ceil(retryAfter * 1000) : undefined,
+        retryAfterMs: retryAfter ? Math.ceil(retryAfter * 1000) : headerRetryAfter,
       };
     });
     if (!res.ok) {
