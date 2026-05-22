@@ -991,6 +991,17 @@ router.post(
     // can't keep us streaming tokens to a dead socket.
     let keepAlive = null;
 
+    // Hoisted so the outer `finally` (filter-pipeline post-hook,
+    // stream-resume bookkeeping) can read them even when an early
+    // return inside the try never reaches the inner `let`. Previously
+    // these were `let`-scoped inside the outer try block: the finally
+    // hit a ReferenceError, the try/catch around it swallowed it, and
+    // `filter_pipeline_metrics` was logged with `responseChars:0`
+    // even on perfectly successful 200 responses — a misleading audit
+    // signal that suggested empty completions where there were none.
+    let fullResponseContent = '';
+    let resumeSession = null;
+
     if (streamId) {
       streamControllers.set(streamId, controller);
       console.log(`Stream registered with ID: ${streamId}`);
@@ -1109,7 +1120,10 @@ router.post(
       // replayed below (after flushHeaders). On a fresh request we mint
       // a new streamId and surface it via the X-Stream-Id header so the
       // client can store + replay on reconnect.
-      let resumeSession = null;
+      // Assignment, not declaration — see the hoisted `let resumeSession`
+      // at the top of the handler. Shadowing here would re-break the
+      // outer finally's stream-resume bookkeeping.
+      resumeSession = null;
       let resumeReplayPosition = 0;
       try {
         const lastEventHeader = req.get && req.get('Last-Event-ID');
@@ -3196,7 +3210,11 @@ router.post(
         };
       }
 
-      let fullResponseContent = '';
+      // NOTE: declared at function scope (see top of handler) so the
+      // outer `finally` block can read the final value. This is just an
+      // assignment — promoting it to `let` here would shadow the outer
+      // binding and re-introduce the responseChars:0 metric bug.
+      fullResponseContent = '';
       // ─── Artifact branch ───────────────────────────────────────────
       // If the user asked "grafica / visualiza / anima / plot / draw",
       // bypass the plain-text LLM and produce an interactive HTML
