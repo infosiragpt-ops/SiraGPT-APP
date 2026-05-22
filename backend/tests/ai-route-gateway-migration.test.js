@@ -44,12 +44,27 @@ test('ai.js exports the request-aware helper and uses the gateway client', () =>
   assert.match(
     src,
     /createProviderClientForRequest\(provider, req\)/,
-    'the main /generate path must use the request-aware variant',
+    'the main /generate path must use the request-aware variant on first resolution',
   );
   assert.match(
     src,
     /\[ai\/generate\] via=gateway/,
     'rollout observability log must be present',
+  );
+
+  // BUG REGRESSION GUARD: the post-actualProvider re-resolution MUST go
+  // through the request-aware helper. A previous pass clobbered the
+  // gateway client with a direct one and the rollout silently routed
+  // everything through legacy providers while logging the opposite.
+  assert.doesNotMatch(
+    src,
+    /openai\s*=\s*createProviderClient\(actualProvider\)\s*;/,
+    'must NOT reset openai to direct client — use createProviderClientForRequest(actualProvider, req)',
+  );
+  assert.match(
+    src,
+    /createProviderClientForRequest\(actualProvider, req\)/,
+    'must re-resolve via request-aware helper after actualProvider is determined',
   );
 });
 

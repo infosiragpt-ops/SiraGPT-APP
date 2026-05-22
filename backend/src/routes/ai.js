@@ -1217,13 +1217,8 @@ router.post(
       }
 
       let actualProvider = provider; // ✅ NEW: track actual provider
-      const _providerResolution = createProviderClientForRequest(provider, req);
+      let _providerResolution = createProviderClientForRequest(provider, req);
       let openai = _providerResolution.client;
-      // Observability: log when this request was served by the gateway
-      // so we can grep production logs during the staged rollout.
-      if (_providerResolution.via === 'gateway') {
-        console.log('[ai/generate] via=gateway', JSON.stringify({ provider, model }));
-      }
 
       // Plan gating — premium models are catalogued in model-router with an
       // explicit plans whitelist. If the model is in the catalog and the
@@ -1409,8 +1404,23 @@ router.post(
         console.warn('[ai/generate] org AI preference lookup failed (open):', orgAiErr && orgAiErr.message);
       }
 
-      // ✅ Re-initialize OpenAI client with actualProvider
-      openai = createProviderClient(actualProvider);
+      // ✅ Re-initialize OpenAI client with actualProvider, preserving
+      // the gateway opt-in: if the request was already routed through the
+      // litellm Proxy, keep using the gateway client (it doesn't care which
+      // underlying provider we resolved to — that's the whole point of the
+      // proxy). Otherwise re-resolve via the legacy direct path.
+      _providerResolution = createProviderClientForRequest(actualProvider, req);
+      openai = _providerResolution.client;
+      // Observability: log gateway routing once the final client is locked
+      // in, so rollout telemetry can't lie about which path served the
+      // completion.
+      if (_providerResolution.via === 'gateway') {
+        console.log('[ai/generate] via=gateway', JSON.stringify({
+          requested_provider: provider,
+          actual_provider: actualProvider,
+          model,
+        }));
+      }
 
       // ✅ Load per-user personalization so every turn carries the
       // user's name, preferred tone, and any custom instructions they
