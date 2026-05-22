@@ -8271,20 +8271,34 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         <button
                           type="button"
                           onClick={scrollToBottom}
-                          aria-label="Ir al final de la conversación"
+                          aria-label={isStreaming ? "Nuevos mensajes, ir al final" : "Ir al final de la conversación"}
                           className={cn(
                             "pointer-events-auto inline-flex h-9 items-center gap-1.5 rounded-full px-3.5",
-                            "border border-border/55 bg-background/95 backdrop-blur-md",
-                            "text-[12.5px] font-medium text-foreground/80",
+                            "border bg-background/95 backdrop-blur-md",
+                            "text-[12.5px] font-medium",
                             "shadow-[0_4px_14px_-4px_rgba(15,23,42,0.18),0_1px_2px_rgba(15,23,42,0.06)] dark:shadow-[0_12px_28px_-12px_rgba(0,0,0,0.55)]",
                             "transition-all duration-fast ease-smooth",
-                            "hover:bg-background hover:border-border hover:-translate-y-[1px] hover:text-foreground",
+                            "hover:-translate-y-[1px]",
                             "active:translate-y-0 active:scale-[0.97]",
                             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/15 focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+                            // Lote D · #27 — when the model is actively
+                            // streaming and the user has scrolled up to
+                            // read older content, accent the pill so it
+                            // reads as "there's new stuff" rather than a
+                            // passive "go down".
+                            isStreaming
+                              ? "border-primary/40 text-primary-foreground bg-primary/95 hover:bg-primary"
+                              : "border-border/55 text-foreground/80 hover:bg-background hover:border-border hover:text-foreground",
                           )}
                         >
+                          {isStreaming && (
+                            <span
+                              aria-hidden="true"
+                              className="h-1.5 w-1.5 rounded-full bg-current animate-pulse"
+                            />
+                          )}
                           <ChevronDown className="h-3.5 w-3.5" strokeWidth={2} />
-                          <span>Ir al final</span>
+                          <span>{isStreaming ? "Nuevos mensajes" : "Ir al final"}</span>
                         </button>
                       </div>
 
