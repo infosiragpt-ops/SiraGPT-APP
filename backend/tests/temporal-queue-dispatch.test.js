@@ -39,6 +39,58 @@ test('enqueueAgentTask: dispatches to Temporal when shouldUseTemporalForTaskType
   assert.equal(startCalled.idempotencyKey, 'task-1');
 });
 
+test('enqueueAgentTask: payload WITHOUT taskType (real route shape) routes via USE_TEMPORAL_FOR_AGENT_TASK', async () => {
+  // Regression guard for the architect's main rejection: existing
+  // producers (routes/agent-task.js, workspace orchestrator) do NOT
+  // attach a taskType field, so the dispatch layer must normalize to
+  // 'agent_task' before checking flags, otherwise no flag can ever
+  // route real traffic.
+  let observedTaskType = null;
+  let startedWith = null;
+  const stub = {
+    shouldUseTemporalForTaskType: (taskType) => {
+      observedTaskType = taskType;
+      return taskType === 'agent_task';
+    },
+    startAgentTaskWorkflow: async (opts) => {
+      startedWith = opts;
+      return { workflowId: 'wf-x', runId: 'run-x' };
+    },
+  };
+  const queue = freshQueueModule({ temporalClientStub: stub });
+  const realRoutePayload = {
+    taskId: 'task-abc',
+    traceId: 't-1',
+    user: { id: 'u1', email: 'u@x' },
+    goal: 'Investigar X',
+    files: [],
+    chatId: null,
+  };
+  const result = await queue.enqueueAgentTask(realRoutePayload);
+  assert.equal(observedTaskType, 'agent_task');
+  assert.equal(startedWith.taskType, 'agent_task');
+  assert.equal(startedWith.jobData.taskType, 'agent_task');
+  assert.equal(startedWith.jobData.goal, 'Investigar X');
+  assert.equal(result._temporal, true);
+  assert.equal(result.id, 'wf-x');
+});
+
+test('enqueueAgentTask: USE_TEMPORAL_FOR_ALL semantics — start succeeds without taskType field', async () => {
+  let startedWith = null;
+  const stub = {
+    shouldUseTemporalForTaskType: () => true, // simulates USE_TEMPORAL_FOR_ALL=1
+    startAgentTaskWorkflow: async (opts) => {
+      startedWith = opts;
+      return { workflowId: 'wf-all', runId: 'run-all' };
+    },
+  };
+  const queue = freshQueueModule({ temporalClientStub: stub });
+  const result = await queue.enqueueAgentTask({ taskId: 'tz' });
+  assert.equal(result._temporal, true);
+  assert.ok(startedWith.taskType, 'taskType must be passed to workflow start (was missing → previous bug)');
+  assert.equal(startedWith.taskType, 'agent_task');
+});
+
 test('enqueueAgentTask: falls back to BullMQ when Temporal returns null', async () => {
   const stub = {
     shouldUseTemporalForTaskType: () => true,

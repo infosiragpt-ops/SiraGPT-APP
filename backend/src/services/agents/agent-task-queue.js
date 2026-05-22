@@ -80,17 +80,26 @@ async function enqueueAgentTask(payload, opts = {}) {
   // workflow instead of BullMQ. Any failure here silently falls back
   // to BullMQ so a misbehaving Temporal Cloud namespace can never
   // strand a user's task. See `infra/temporal/README.md`.
+  // Existing producers (routes/agent-task.js, workspace orchestrator)
+  // don't yet attach a `taskType` discriminator — the worker just runs
+  // `runAgentTaskJob` on whatever payload. Default to a stable bucket
+  // ('agent_task') so the rollout flags are actually usable today
+  // (USE_TEMPORAL_FOR_AGENT_TASK=1 or USE_TEMPORAL_FOR_ALL=1). Once the
+  // first migrated route starts tagging payloads with a finer-grained
+  // type (e.g. 'research', 'deep_research'), this default will just be
+  // the catch-all for the rest.
+  const resolvedTaskType = String(payload.taskType || 'agent_task');
   try {
     // eslint-disable-next-line global-require
     const { shouldUseTemporalForTaskType, startAgentTaskWorkflow } = require('./temporal/temporal-client');
-    if (shouldUseTemporalForTaskType(payload.taskType)) {
+    if (shouldUseTemporalForTaskType(resolvedTaskType)) {
       const handle = await startAgentTaskWorkflow({
-        taskType: payload.taskType,
-        jobData: payload,
+        taskType: resolvedTaskType,
+        jobData: { ...payload, taskType: resolvedTaskType },
         idempotencyKey: payload.taskId,
       });
       if (handle) {
-        console.log(`[agent-task-queue] dispatched via temporal taskId=${payload.taskId} workflowId=${handle.workflowId} runId=${handle.runId}`);
+        console.log(`[agent-task-queue] dispatched via temporal taskId=${payload.taskId} taskType=${resolvedTaskType} workflowId=${handle.workflowId} runId=${handle.runId}`);
         return { id: handle.workflowId, _temporal: true };
       }
     }

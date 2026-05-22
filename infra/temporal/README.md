@@ -97,10 +97,18 @@ Per-task-type rollout flags:
 | Flag                                | Effect                                                    |
 |-------------------------------------|-----------------------------------------------------------|
 | `USE_TEMPORAL_FOR_ALL=1`            | Route every task type through Temporal                    |
-| `USE_TEMPORAL_FOR_RESEARCH=1`       | Only research tasks (start here — highest-impact, lowest-risk) |
+| `USE_TEMPORAL_FOR_AGENT_TASK=1`     | Catch-all for payloads without a `taskType` field (the only producer shape today — start here) |
+| `USE_TEMPORAL_FOR_RESEARCH=1`       | Reserved for when routes start tagging payloads with `taskType: 'research'` |
 | `USE_TEMPORAL_FOR_DEEP_RESEARCH=1`  | Long-running deep research                                |
 | `USE_TEMPORAL_FOR_BATCH=1`          | Batch jobs                                                |
 | (unset)                             | Falls back to the existing BullMQ worker                  |
+
+Today every enqueue call goes through `enqueueAgentTask` without a
+`taskType` field, so the dispatch layer normalizes that to
+`'agent_task'`. The recommended first flip is therefore
+`USE_TEMPORAL_FOR_AGENT_TASK=1`. Once the runtime is healthy and we
+start splitting payloads into finer buckets, the other flags become
+useful for partial rollouts.
 
 The task-type string is normalized to UPPER_SNAKE_CASE, so
 `'deep-research'`, `'deep_research'`, and `'DeepResearch'` all map to
