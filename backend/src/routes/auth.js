@@ -10,6 +10,7 @@ const { PartialSessionRepository } = require('../repositories/PartialSessionRepo
 const { AuditLogRepository } = require('../repositories/AuditLogRepository');
 const { TokenVault } = require('../services/TokenVault');
 const { ProviderOAuthService } = require('../services/ProviderOAuthService');
+const { SsoCallbackService } = require('../services/SsoCallbackService');
 const { encrypt: encryptToken, decrypt: decryptToken } = require('../utils/encryption');
 // Single repository / service instances shared by every call site in
 // this file. Cross-cutting concerns (fingerprint-column fallback,
@@ -1305,281 +1306,26 @@ router.get('/sso/:orgSlug/callback', async (req, res) => {
   });
 });
 
-// ─── SAML response handler (ratchet 45, extends cycle 87) ───────────
-// POST /api/auth/sso/:orgSlug/callback — IdPs that use HTTP-POST binding
-// deliver the SAMLResponse here. When the org's ssoConfig is a SAML
-// config with a cert and `@node-saml/node-saml` is installed, we verify
-// the response, ensure the user exists (creating them as a member of the
-// org on first login), and mint a Sira session. If the lib is missing,
-// or the response fails verification, we surface the same shape as the
-// scaffold so the FE can render an actionable error.
+// ─── SAML / OIDC callback handler (ratchet 45, cycles 87 + 144) ─────
+// POST /api/auth/sso/:orgSlug/callback receives either a SAML
+// HTTP-POST binding (`SAMLResponse` body) or an OIDC authorization
+// code (`?code=`). The orchestration (verify → provisioning policy
+// → find-or-create user → membership upsert → SSOIdentity link →
+// session mint → audit) lives in SsoCallbackService. This wrapper
+// adapts the legacy `(req, res, deps)` signature consumed by the
+// three existing regression test files so they keep passing without
+// modification: deps overrides any of {prisma, writeAuditLog,
+// samlHandler, oidcHandler, resolveOrgForSso}.
 async function ssoSamlCallbackHandler(req, res, deps = {}) {
-  const db = deps.prisma || prisma;
-  const audit = deps.writeAuditLog || writeAuditLog;
-  const samlMod = deps.samlHandler || require('../services/saml-handler');
-  const oidcMod = deps.oidcHandler || require('../services/oidc-handler');
-  const resolve = deps.resolveOrgForSso || resolveOrgForSso;
-
-  const org = await resolve(req.params.orgSlug);
-  if (!org) return res.status(404).json({ error: 'organization not found' });
-  if (!org.ssoEnabled || !org.ssoConfig) {
-    return res.status(400).json({ error: 'SSO is not enabled for this organization' });
-  }
-
-  // Dispatch on provider. SAML uses POST body SAMLResponse; OIDC uses
-  // ?code= (and optional ?state=) on the query string.
-  const provider = org.ssoConfig && org.ssoConfig.provider;
-  const isOidc = provider === 'oidc';
-
-  const samlResponse = !isOidc
-    ? (req.body && (req.body.SAMLResponse || req.body.samlResponse)) || null
-    : null;
-  const oidcCode = isOidc
-    ? (req.query && req.query.code)
-        || (req.body && req.body.code)
-        || null
-    : null;
-
-  // Audit the *attempt* before we know if it'll succeed so we have a
-  // record even when the verify step throws / lib is missing.
-  // Snapshot the provisioning policy on the attempt audit too (we
-  // compute it again post-verify but the early read makes the audit
-  // trail useful even when verify throws).
-  const _attemptPolicy = (org.ssoConfig && typeof org.ssoConfig.provisioning === 'string')
-    ? org.ssoConfig.provisioning.toLowerCase()
-    : 'jit_create';
-  void audit(db, {
-    req,
-    action: 'sso_login_attempt',
-    resource: 'organization',
-    resourceId: org.id,
-    metadata: {
-      orgSlug: org.slug,
-      method: isOidc ? 'oidc' : 'saml',
-      hasResponse: isOidc ? !!oidcCode : !!samlResponse,
-      policy: _attemptPolicy,
-    },
+  const svc = new SsoCallbackService({
+    prisma: deps.prisma || prisma,
+    audit: deps.writeAuditLog || writeAuditLog,
+    samlHandler: deps.samlHandler || require('../services/saml-handler'),
+    oidcHandler: deps.oidcHandler || require('../services/oidc-handler'),
+    resolveOrg: deps.resolveOrgForSso || resolveOrgForSso,
+    signSessionToken,
   });
-
-  const verified = isOidc
-    ? await oidcMod.verifyOidcCode(oidcCode, org.ssoConfig)
-    : await samlMod.verifySamlResponse(samlResponse, org.ssoConfig);
-  if (!verified.ok) {
-    return res.status(verified.status || 401).json({
-      ok: false,
-      error: verified.error,
-      hint: verified.hint || undefined,
-      orgSlug: org.slug,
-    });
-  }
-
-  // Cycle 144 — provisioning policy. `org.ssoConfig.provisioning` gates
-  // how we resolve the local User row from a verified IdP assertion:
-  //
-  //   • `jit_create`         — default; auto-create the User + membership
-  //                            on first login (legacy behaviour).
-  //   • `jit_require_invite` — only allow login if a pending OrgInvitation
-  //                            exists for the asserted email; auto-accept
-  //                            it during this login.
-  //   • `manual`             — reject if the user isn't already a member
-  //                            (admins must add them out-of-band first).
-  //
-  // Anything else falls back to `jit_create` so we never accidentally
-  // lock out a tenant on a typo.
-  const provisioning = (org.ssoConfig && typeof org.ssoConfig.provisioning === 'string')
-    ? org.ssoConfig.provisioning.toLowerCase()
-    : 'jit_create';
-  const policy = ['jit_create', 'jit_require_invite', 'manual'].includes(provisioning)
-    ? provisioning
-    : 'jit_create';
-
-  try {
-    // Find-or-create the user matched by the asserted email, gated by
-    // the org's provisioning policy.
-    let user = await db.user.findUnique({ where: { email: verified.email } });
-    let createdUser = false;
-    let acceptedInvitationId = null;
-
-    // Check pre-existing membership for the `manual` and invite policies.
-    let isMember = false;
-    if (user && db.orgMembership && typeof db.orgMembership.findUnique === 'function') {
-      try {
-        const m = await db.orgMembership.findUnique({
-          where: { orgId_userId: { orgId: org.id, userId: user.id } },
-        });
-        isMember = !!m;
-      } catch (_e) { /* non-fatal */ }
-    }
-
-    if (policy === 'manual' && !isMember) {
-      void audit(db, {
-        req,
-        action: 'sso_login_denied',
-        resource: 'organization',
-        resourceId: org.id,
-        actorName: verified.email,
-        metadata: { orgSlug: org.slug, policy, reason: 'not_a_member' },
-      });
-      return res.status(403).json({
-        ok: false,
-        error: 'sso_provisioning_denied',
-        hint: 'manual provisioning: user is not a member of this organization',
-        orgSlug: org.slug,
-      });
-    }
-
-    if (policy === 'jit_require_invite' && !isMember) {
-      // Look for a pending, non-expired invitation matching the email.
-      let pending = null;
-      if (db.orgInvitation && typeof db.orgInvitation.findFirst === 'function') {
-        try {
-          pending = await db.orgInvitation.findFirst({
-            where: {
-              orgId: org.id,
-              email: verified.email,
-              acceptedAt: null,
-              expiresAt: { gt: new Date() },
-            },
-          });
-        } catch (_e) { /* non-fatal */ }
-      }
-      if (!pending) {
-        void audit(db, {
-          req,
-          action: 'sso_login_denied',
-          resource: 'organization',
-          resourceId: org.id,
-          actorName: verified.email,
-          metadata: { orgSlug: org.slug, policy, reason: 'no_pending_invite' },
-        });
-        return res.status(403).json({
-          ok: false,
-          error: 'sso_provisioning_denied',
-          hint: 'jit_require_invite: no pending invitation for this email',
-          orgSlug: org.slug,
-        });
-      }
-      acceptedInvitationId = pending.id;
-    }
-
-    if (!user) {
-      user = await db.user.create({
-        data: {
-          name: verified.displayName || verified.email.split('@')[0],
-          email: verified.email,
-          // SSO users get a random password — they'll never log in with
-          // it (the SSO domain lock-out in /login bounces them back here).
-          password: await bcrypt.hash(`sso:${verified.email}:${Date.now()}:${Math.random()}`, 12),
-          plan: 'FREE',
-          isAdmin: false,
-          apiUsage: 0,
-          monthlyCallLimit: 3,
-          monthlyLimit: 10000,
-        },
-      });
-      createdUser = true;
-    }
-
-    // Ensure they're a member of the org (best-effort — orgMembership
-    // model may not exist in every test harness).
-    if (db.orgMembership && typeof db.orgMembership.upsert === 'function') {
-      try {
-        await db.orgMembership.upsert({
-          where: { orgId_userId: { orgId: org.id, userId: user.id } },
-          update: {},
-          create: { orgId: org.id, userId: user.id, role: 'MEMBER' },
-        });
-      } catch (_e) { /* non-fatal */ }
-    }
-
-    // Mark the invitation as accepted now that membership is in place.
-    if (acceptedInvitationId
-      && db.orgInvitation && typeof db.orgInvitation.update === 'function') {
-      try {
-        await db.orgInvitation.update({
-          where: { id: acceptedInvitationId },
-          data: { acceptedAt: new Date() },
-        });
-      } catch (_e) { /* non-fatal */ }
-    }
-
-    // Cycle 144 — find-or-create SSOIdentity by (provider, externalId).
-    // External id is `verified.nameId` (SAML nameID / OIDC sub) and we
-    // fall back to the asserted email if the IdP didn't surface one so
-    // we still get a row to update on subsequent logins.
-    const externalId = (verified.nameId && String(verified.nameId)) || verified.email;
-    const providerKey = isOidc ? 'oidc' : 'saml';
-    let ssoIdentityId = null;
-    if (db.sSOIdentity && typeof db.sSOIdentity.findUnique === 'function') {
-      try {
-        const existing = await db.sSOIdentity.findUnique({
-          where: { provider_externalId: { provider: providerKey, externalId } },
-        });
-        if (existing) {
-          ssoIdentityId = existing.id;
-          if (typeof db.sSOIdentity.update === 'function') {
-            try {
-              await db.sSOIdentity.update({
-                where: { id: existing.id },
-                data: { lastUsedAt: new Date() },
-              });
-            } catch (_e) { /* non-fatal */ }
-          }
-        } else if (typeof db.sSOIdentity.create === 'function') {
-          const row = await db.sSOIdentity.create({
-            data: {
-              userId: user.id,
-              orgId: org.id,
-              provider: providerKey,
-              externalId,
-            },
-          });
-          ssoIdentityId = row && row.id ? row.id : null;
-        }
-      } catch (_e) { /* non-fatal — identity link is best-effort */ }
-    }
-
-    const token = signSessionToken({
-      userId: user.id,
-      isAdmin: Boolean(user.isAdmin),
-      isSuperAdmin: Boolean(user.isSuperAdmin),
-    });
-    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-    if (db.session && typeof db.session.create === 'function') {
-      try {
-        await db.session.create({ data: { userId: user.id, token, expiresAt } });
-      } catch (_e) { /* non-fatal in test harnesses */ }
-    }
-
-    void audit(db, {
-      req,
-      action: 'sso_login_success',
-      resource: 'organization',
-      resourceId: org.id,
-      actorName: verified.email,
-      metadata: {
-        orgSlug: org.slug,
-        userId: user.id,
-        createdUser,
-        method: isOidc ? 'oidc' : 'saml',
-        policy,
-        ssoIdentityId,
-        invitationAccepted: acceptedInvitationId || undefined,
-      },
-    });
-
-    return res.status(200).json({
-      ok: true,
-      token,
-      user: { id: user.id, email: user.email, name: user.name },
-      orgSlug: org.slug,
-      createdUser,
-      policy,
-    });
-  } catch (err) {
-    console.error('[auth/sso] saml login failed:', err && err.message ? err.message : err);
-    return res.status(500).json({ ok: false, error: 'sso_login_failed' });
-  }
+  return svc.handle(req, res);
 }
 
 router.post('/sso/:orgSlug/callback', (req, res) => ssoSamlCallbackHandler(req, res));
