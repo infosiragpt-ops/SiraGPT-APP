@@ -53,8 +53,29 @@ function classifyRateLimit(err) {
   return { limited: false, retryAfterMs: null, headers };
 }
 
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+function abortError(signal) {
+  if (signal?.reason instanceof Error) return signal.reason;
+  const err = new Error('The operation was aborted');
+  err.name = 'AbortError';
+  return err;
+}
+
+function sleep(ms, signal) {
+  if (signal?.aborted) return Promise.reject(abortError(signal));
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener?.('abort', onAbort);
+      resolve();
+    }, ms);
+
+    function onAbort() {
+      clearTimeout(timer);
+      signal?.removeEventListener?.('abort', onAbort);
+      reject(abortError(signal));
+    }
+
+    signal?.addEventListener?.('abort', onAbort, { once: true });
+  });
 }
 
 function jitteredBackoff(attempt, retryAfterMs) {
@@ -220,7 +241,7 @@ class LLMGateway {
           errors.push({ provider: candidate.providerId, model: candidate.model, message: err.message, rateLimit });
           if (signal?.aborted) throw err;
           if (attempt < 2 && (rateLimit.limited || err.status >= 500 || err.name === 'TimeoutError')) {
-            await sleep(jitteredBackoff(attempt, rateLimit.retryAfterMs));
+            await sleep(jitteredBackoff(attempt, rateLimit.retryAfterMs), signal);
             continue;
           }
           break;
