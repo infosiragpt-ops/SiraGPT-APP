@@ -58,6 +58,22 @@ test('agent task artifacts: normalizes dangerous executable extensions before sa
   assert.equal(metadata.mime, 'text/plain');
 });
 
+test('agent task artifacts: blocks oversized active text artifacts before disk write', () => {
+  const maxBytes = INTERNAL.ACTIVE_TEXT_ARTIFACT_MAX_BYTES || 2 * 1024 * 1024;
+  const payload = `${'<svg>'.padEnd(maxBytes + 1, 'x')}</svg>`;
+
+  assert.throws(() => saveArtifact({
+    filename: 'huge.svg',
+    base64: Buffer.from(payload).toString('base64'),
+    ownerUserId: 'user-a',
+    chatId: 'chat-a',
+  }), /artifact size limit exceeded.*svg/i);
+
+  const stored = fs.readdirSync(process.env.AGENT_ARTIFACT_DIR)
+    .filter((entry) => entry.endsWith('-huge.svg') || entry === 'huge.svg');
+  assert.deepEqual(stored, []);
+});
+
 test('agent task create_document: validates and returns artifact ids for downstream verification', async () => {
   const events = [];
   const result = await INTERNAL.createDocument.execute({

@@ -82,6 +82,9 @@ const EXTENSION_TO_MIME = {
 
 const ADVANCED_DOCUMENT_FORMATS = new Set(['docx', 'xlsx', 'pptx', 'pdf', 'csv', 'html', 'md']);
 
+const ACTIVE_TEXT_ARTIFACT_EXTENSIONS = new Set(['html', 'htm', 'svg', 'json']);
+const ACTIVE_TEXT_ARTIFACT_MAX_BYTES = 2 * 1024 * 1024;
+
 const DANGEROUS_ARTIFACT_EXTENSIONS = new Set([
   'app', 'apk', 'bat', 'cmd', 'com', 'cpl', 'dll', 'dmg', 'exe', 'gadget',
   'hta', 'jar', 'js', 'jse', 'lnk', 'mjs', 'msi', 'msp', 'pif', 'ps1',
@@ -109,6 +112,21 @@ function sanitizeArtifactFilename(filename) {
   return base.slice(0, keep) + ext;
 }
 
+function assertArtifactSizeWithinLimit(ext, buffer) {
+  const normalizedExt = String(ext || '').toLowerCase();
+  if (!ACTIVE_TEXT_ARTIFACT_EXTENSIONS.has(normalizedExt)) return;
+  if (buffer.length <= ACTIVE_TEXT_ARTIFACT_MAX_BYTES) return;
+
+  const limitMb = (ACTIVE_TEXT_ARTIFACT_MAX_BYTES / (1024 * 1024)).toFixed(0);
+  const actualKb = Math.ceil(buffer.length / 1024);
+  const err = new Error(`artifact size limit exceeded for ${normalizedExt}: ${actualKb} KB > ${limitMb} MB`);
+  err.code = 'ARTIFACT_SIZE_LIMIT_EXCEEDED';
+  err.format = normalizedExt;
+  err.sizeBytes = buffer.length;
+  err.maxBytes = ACTIVE_TEXT_ARTIFACT_MAX_BYTES;
+  throw err;
+}
+
 function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation }) {
   try {
     const { requireDurableArtifactStorage } = require('../../orchestration/artifact-storage-policy');
@@ -120,9 +138,10 @@ function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation 
   ensureArtifactDir();
   const clean = sanitizeArtifactFilename(filename);
   const buf = Buffer.from(base64 || '', 'base64');
+  const ext = path.extname(clean).slice(1).toLowerCase() || 'bin';
+  assertArtifactSizeWithinLimit(ext, buf);
   const scope = `${ownerUserId || 'anonymous'}:${chatId || 'no-chat'}:`;
   const id = artifactIdFor(Buffer.concat([Buffer.from(clean), buf]), scope);
-  const ext = path.extname(clean).slice(1).toLowerCase() || 'bin';
   const stored = `${id}-${clean}`;
   const full = path.join(ARTIFACT_DIR, stored);
   fs.writeFileSync(full, buf);
@@ -1839,6 +1858,9 @@ module.exports = {
     artifactIdFor,
     metadataPathFor,
     sanitizeArtifactFilename,
+    assertArtifactSizeWithinLimit,
+    ACTIVE_TEXT_ARTIFACT_EXTENSIONS,
+    ACTIVE_TEXT_ARTIFACT_MAX_BYTES,
     clampTimeoutMs,
     clampInt,
     describeFileIdTruncation,
