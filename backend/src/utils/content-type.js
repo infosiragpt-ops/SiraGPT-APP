@@ -20,6 +20,42 @@
  */
 
 const TOKEN_UNSAFE = /[^!#$%&'*+\-.^_`|~0-9A-Za-z]/;
+const TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+function splitContentTypeParts(header) {
+  const parts = [];
+  let current = '';
+  let quoted = false;
+  let escaped = false;
+
+  for (const ch of header) {
+    if (escaped) {
+      current += ch;
+      escaped = false;
+      continue;
+    }
+    if (quoted && ch === '\\') {
+      current += ch;
+      escaped = true;
+      continue;
+    }
+    if (ch === '"') {
+      quoted = !quoted;
+      current += ch;
+      continue;
+    }
+    if (!quoted && ch === ';') {
+      parts.push(current.trim());
+      current = '';
+      continue;
+    }
+    current += ch;
+  }
+
+  if (quoted || escaped) return null;
+  parts.push(current.trim());
+  return parts.filter(Boolean);
+}
 
 function unquoteParam(s) {
   if (s.length < 2 || s[0] !== '"' || s[s.length - 1] !== '"') return s;
@@ -33,21 +69,26 @@ function unquoteParam(s) {
 
 function parseContentType(header) {
   if (typeof header !== 'string' || !header.trim()) return null;
-  const parts = header.split(';').map((s) => s.trim()).filter(Boolean);
+  const parts = splitContentTypeParts(header);
+  if (!parts) return null;
   if (parts.length === 0) return null;
   const head = parts[0];
   const slash = head.indexOf('/');
   if (slash === -1) return null;
   const type = head.slice(0, slash).toLowerCase();
   const subtype = head.slice(slash + 1).toLowerCase();
-  if (!type || !subtype) return null;
+  if (!TOKEN.test(type) || !TOKEN.test(subtype)) return null;
   const parameters = {};
   for (const p of parts.slice(1)) {
     const eq = p.indexOf('=');
-    if (eq === -1) continue;
+    if (eq === -1) return null;
     const k = p.slice(0, eq).trim().toLowerCase();
-    const v = unquoteParam(p.slice(eq + 1).trim());
-    if (k) parameters[k] = v;
+    const rawValue = p.slice(eq + 1).trim();
+    if (!TOKEN.test(k) || rawValue === '' || Object.hasOwn(parameters, k)) return null;
+    const quoted = rawValue.startsWith('"') || rawValue.endsWith('"');
+    if (quoted && (rawValue.length < 2 || rawValue[0] !== '"' || rawValue[rawValue.length - 1] !== '"')) return null;
+    if (!quoted && !TOKEN.test(rawValue)) return null;
+    parameters[k] = unquoteParam(rawValue);
   }
   return { type, subtype, parameters };
 }
