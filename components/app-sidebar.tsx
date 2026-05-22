@@ -1243,8 +1243,25 @@ export function AppSidebar() {
                                             </span>
                                             {/* Timestamp fades on row-hover so the 3-dot menu
                                                 doesn't fight it for the right slot. tabular-nums
-                                                keeps widths aligned between "3h" and "12d". */}
-                                            <span className="text-[11px] text-muted-foreground/60 shrink-0 tabular-nums transition-opacity duration-150 group-hover:opacity-0">
+                                                keeps widths aligned between "3h" and "12d".
+                                                Lote D · #97 — native title surfaces the absolute
+                                                timestamp on hover (e.g. "22/5/2026 4:38"). Using
+                                                the native browser tooltip keeps it free of layout
+                                                cost and works on touch via long-press. */}
+                                            <span
+                                              className="text-[11px] text-muted-foreground/60 shrink-0 tabular-nums transition-opacity duration-150 group-hover:opacity-0"
+                                              title={(() => {
+                                                try {
+                                                  const d = new Date(chat.updatedAt)
+                                                  return Number.isNaN(d.getTime())
+                                                    ? ""
+                                                    : d.toLocaleString("es-ES", {
+                                                        dateStyle: "medium",
+                                                        timeStyle: "short",
+                                                      })
+                                                } catch { return "" }
+                                              })()}
+                                            >
                                               {formatChatTimeCompact(chat.updatedAt)}
                                             </span>
                                           </div>

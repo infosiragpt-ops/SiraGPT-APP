@@ -1112,6 +1112,22 @@ summary:focus-visible,
   outline: none !important;
 }
 
+/* #83 — Tighter sidebar padding on small viewports so the chat
+   titles get more horizontal room when the sidebar is shown on
+   mobile/tablet. Scoped to the SidebarMenuButton padding only —
+   we don't shrink the row height (44px touch target is enforced
+   above) or the gap between icon + label. */
+@media (max-width: 480px) {
+  [data-sidebar="menu-button"] {
+    padding-left: 0.5rem !important;
+    padding-right: 0.25rem !important;
+  }
+  [data-sidebar="group-label"] {
+    padding-left: 0.625rem !important;
+    padding-right: 0.625rem !important;
+  }
+}
+
 /* #74 — Placeholder / hint contrast. Tailwind's default
    placeholder:text-muted-foreground sometimes drops below AA on light
    surfaces. Nudge to a slightly darker tone without touching the
