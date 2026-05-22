@@ -4206,11 +4206,17 @@ router.post(
   async (req, res) => {
     const requestAbortController = new AbortController();
     let clientDisconnected = false;
+    // Declarado FUERA del try para que el bloque catch pueda invocarlo
+    // sin caer en ReferenceError (los `const` del try no están en
+    // scope dentro del catch). Se reasigna cuando arrancamos el
+    // heartbeat; mientras tanto es un no-op seguro.
+    let stopKeepAlive = () => {};
     res.on('close', () => {
       if (!res.writableEnded) {
         clientDisconnected = true;
         requestAbortController.abort();
       }
+      stopKeepAlive();
     });
 
     try {
@@ -4321,6 +4327,52 @@ router.post(
         });
       }
 
+      // Pre-validar la existencia del chat ANTES de empezar a generar.
+      // Esto evita gastar 30-120 s en una imagen para luego descubrir que
+      // el chatId es inválido y tener que responder 404 — algo imposible
+      // de hacer después porque ya habremos enviado los headers como 200
+      // para sobrevivir al timeout del proxy (ver bloque siguiente).
+      let preValidatedChat = null;
+      if (chatId) {
+        preValidatedChat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
+        if (!preValidatedChat) {
+          return res.status(404).json({ error: 'Chat not found' });
+        }
+      }
+
+      // --- Keep-alive del proxy de ingreso ---------------------------------
+      // El edge de Replit Autoscale corta cualquier petición que no haya
+      // empezado a enviar headers de respuesta en ~30 s. La generación de
+      // imagen puede tardar 60-180 s, así que el cliente recibía
+      // "socket hang up / ECONNRESET" aunque el backend siguiera trabajando
+      // y la imagen se persistiera huérfana.
+      //
+      // Truco: enviamos cabeceras 200 + Content-Type JSON inmediatamente y
+      // escribimos un espacio cada 15 s mientras se genera. JSON.parse()
+      // ignora whitespace al inicio del cuerpo, así que el payload final
+      // sigue siendo válido para el cliente. Cualquier error funcional
+      // (proveedor no soportado, timeout, etc.) ya no puede ir como 4xx/5xx
+      // — debe viajar dentro del cuerpo JSON con un campo `error` y código.
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Cache-Control': 'no-store',
+        // Desactiva el buffering en proxies estilo nginx para que los
+        // heartbeats lleguen al edge en cuanto los escribimos.
+        'X-Accel-Buffering': 'no',
+      });
+      if (typeof res.flushHeaders === 'function') res.flushHeaders();
+      let keepAliveTimer = setInterval(() => {
+        if (res.writableEnded || clientDisconnected) return;
+        try { res.write(' '); } catch (_e) { /* socket already closed */ }
+      }, 15_000);
+      keepAliveTimer.unref?.();
+      stopKeepAlive = () => {
+        if (keepAliveTimer) {
+          clearInterval(keepAliveTimer);
+          keepAliveTimer = null;
+        }
+      };
+
       let imageBase64s;
       const timeoutPromise = new Promise((_, reject) => {
         setTimeout(() => reject(new Error('Image generation timeout')), 200000);
@@ -4401,12 +4453,7 @@ router.post(
 
       const primaryImageUrl = generatedFiles[0].url;
 
-      if (chatId) {
-        const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
-        if (!chat) {
-          return res.status(404).json({ error: 'Chat not found' });
-        }
-
+      if (chatId && preValidatedChat) {
         await prisma.message.create({
           data: {
             chatId,
@@ -4431,9 +4478,9 @@ router.post(
           where: { id: chatId },
           data: {
             updatedAt: new Date(),
-            title: chat.title === 'New Chat'
+            title: preValidatedChat.title === 'New Chat'
               ? `Imagen: ${prompt.slice(0, 30)}${prompt.length > 30 ? '...' : ''}`
-              : chat.title
+              : preValidatedChat.title
           }
         });
       }
@@ -4447,23 +4494,33 @@ router.post(
         data: { apiUsage: { increment: 1000 * generatedFiles.length } }
       });
 
-      res.json({
+      // Headers ya enviados arriba para sobrevivir al proxy; cerramos
+      // con el payload JSON real (los espacios de heartbeat al inicio
+      // son whitespace válido para JSON.parse).
+      stopKeepAlive();
+      res.end(JSON.stringify({
         imageUrl: primaryImageUrl,
         imageUrls: generatedFiles.map((file) => file.url),
         aspectRatio,
         imageCount: generatedFiles.length,
         tokens: 1000 * generatedFiles.length,
         usage: { current: updatedUser.apiUsage, limit: updatedUser.monthlyLimit }
-      });
+      }));
 
     } catch (error) {
+      stopKeepAlive();
       if (clientDisconnected || requestAbortController.signal.aborted || error?.name === 'AbortError') {
         console.log('Image generation request aborted by client.');
+        if (!res.writableEnded) res.end();
         return;
       }
       console.error('Image generation error:', error);
       if (!res.headersSent) {
         res.status(500).json({ error: error.message || 'Image generation failed' });
+      } else if (!res.writableEnded) {
+        // Headers ya enviados como 200 (estábamos en modo keep-alive).
+        // Mandamos el error en el cuerpo JSON para que el cliente lo vea.
+        res.end(JSON.stringify({ error: error.message || 'Image generation failed', code: 'image_generation_failed' }));
       }
     }
   }

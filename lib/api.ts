@@ -1050,7 +1050,15 @@ class ApiClient {
       body: JSON.stringify(data),
       signal: options.signal,
     });
-
+    // El backend ahora envía cabeceras 200 al inicio (para no morir
+    // en el proxy de 30 s) y, si la generación falla después, devuelve
+    // `{ error, code }` con status 200. Sin esta comprobación, la UI
+    // trataría el fallo como éxito.
+    if (response && typeof response === 'object' && (response as any).error) {
+      const err: any = new Error((response as any).error);
+      err.code = (response as any).code;
+      throw err;
+    }
     return response;
   }
   async generateImageByImage(data: { fileId: string, prompt: string; chatId?: string, provider: string; model: string; }) {
@@ -1058,7 +1066,11 @@ class ApiClient {
       method: 'POST',
       body: JSON.stringify(data),
     })
-
+    if (response && typeof response === 'object' && (response as any).error) {
+      const err: any = new Error((response as any).error);
+      err.code = (response as any).code;
+      throw err;
+    }
     return response
   }
 
