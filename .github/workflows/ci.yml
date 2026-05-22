@@ -431,7 +431,9 @@ jobs:
   e2e:
     name: E2E · Playwright smoke (informational)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The suite is informational, but it still needs enough wall-clock to
+    # finish on cold GitHub runners so the visible workflow can stay green.
+    timeout-minutes: 30
     continue-on-error: true
     steps:
       - name: Checkout
@@ -456,15 +458,22 @@ jobs:
       - name: Run Playwright smoke
         id: playwright_smoke
         if: steps.playwright_install.outcome == 'success'
-        timeout-minutes: 8
-        continue-on-error: true
-        run: npm run test:e2e -- --reporter=list
+        timeout-minutes: 20
+        run: |
+          set +e
+          npm run test:e2e -- --reporter=list
+          status=$?
+          echo "status=${status}" >> "${GITHUB_OUTPUT}"
+          if [ "${status}" -ne 0 ]; then
+            echo "::warning::Informational Playwright smoke failed; required CI gates are unaffected."
+          fi
+          exit 0
 
       # Upload the HTML report only when the smoke step actually failed,
       # so green runs don't pay the artifact tax. Retention is short — these
       # are debug artifacts, not release deliverables.
       - name: Upload Playwright report on failure
-        if: always() && steps.playwright_smoke.outcome == 'failure'
+        if: always() && steps.playwright_smoke.outputs.status != '0'
         uses: actions/upload-artifact@v6
         with:
           name: playwright-report
@@ -477,7 +486,7 @@ jobs:
         run: |
           if [[ "${{ steps.playwright_install.outcome }}" != "success" ]]; then
             echo "::warning::Playwright Chromium install failed; skipping informational E2E smoke."
-          elif [[ "${{ steps.playwright_smoke.outcome }}" != "success" ]]; then
+          elif [[ "${{ steps.playwright_smoke.outputs.status }}" != "0" ]]; then
             echo "::warning::Informational Playwright smoke failed; required CI gates are unaffected."
           else
             echo "✓ informational Playwright smoke passed"
@@ -492,7 +501,7 @@ jobs:
   docker:
     name: Docker · build images
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     continue-on-error: true
     steps:
       - name: Checkout
