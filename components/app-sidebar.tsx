@@ -1055,6 +1055,16 @@ export function AppSidebar() {
       >
         <SidebarSeparator />
 
+        {/* Codex — workspaces de código por encima de los chats recientes.
+            Movido aquí (antes vivía al final del SidebarContent) para que el
+            usuario lo encuentre nada más abrir la barra lateral. */}
+        {selectedType === "Text Chat" && (
+          <SidebarFoldersDropdown
+            collapsed={state === "closed"}
+            onMobileNavigate={() => { if (isMobile) setOpenMobile(false) }}
+          />
+        )}
+
         {/* Recent Chats - Only show for Text Chat */}
         {selectedType === "Text Chat" && (
           <SidebarGroup>
