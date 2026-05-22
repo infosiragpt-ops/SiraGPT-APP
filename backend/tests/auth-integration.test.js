@@ -14,18 +14,19 @@ const jwt = require('jsonwebtoken');
 
 const prisma = require('../src/config/database');
 const { buildRouteTestApp, reloadModule } = require('./http-test-utils');
-const rateLimitStore = require('../src/middleware/rate-limit-store');
+const { _resetForTests: resetRateLimitStore } = require('../src/middleware/rate-limit-store');
 
 // ── Seed JWT secret ─────────────────────────────────────────────
 
 const JWT_SECRET = 'test-auth-integration-jwt-secret-at-least-32-chars!!';
 process.env.JWT_SECRET = JWT_SECRET;
 
-// Force the rate-limit store to its in-memory mode so each test can
-// reset it via `_resetForTests()` between runs. Otherwise we'd share a
-// real Redis ZSET with every other test process (and previous runs),
-// which is what made these tests intermittently 429 on validation
-// failures unrelated to the actual rate-limit feature under test.
+// Force the auth rate-limit store onto its in-memory fallback so each
+// test can reset counters via `resetRateLimitStore()` between runs.
+// Otherwise the 3/min/IP /register cap (backed in production by the
+// shared Upstash ZSET via REDIS_URL) trips mid-suite and we get
+// intermittent 429s on tests that have nothing to do with rate limits.
+delete process.env.REDIS_URL;
 process.env.RATE_LIMIT_STORE = 'memory';
 
 // ── Helpers ─────────────────────────────────────────────────────
@@ -113,8 +114,15 @@ describe('auth · registration', () => {
   let store;
 
   beforeEach(() => {
-    rateLimitStore._resetForTests();
     store = mockPrisma();
+    // Each test exercises /register multiple times via the same shared
+    // in-process rate-limit store. Without resetting we'd start
+    // tripping the 3/min/IP cap partway through the suite.
+    resetRateLimitStore();
+    // Default: no org claims any email domain. Individual tests can
+    // override this to exercise the SSO-gated path.
+    prisma.organization = prisma.organization || {};
+    prisma.organization.findFirst = async () => null;
   });
 
   it('registers a new user and returns token + user (no password)', async () => {
@@ -191,13 +199,61 @@ describe('auth · registration', () => {
 
     assert(res.body.errors || res.body.error);
   });
+
+  it('returns 501 with SSO redirect body when an SSO-enabled org claims the email domain', async () => {
+    // Stub the org lookup so resolveOrgBySsoDomain returns a matching
+    // org for this email's domain. Other findFirst calls (if any) fall
+    // back to returning null so the rest of the pipeline still works.
+    prisma.organization = prisma.organization || {};
+    prisma.organization.findFirst = async ({ where } = {}) => {
+      if (where && where.ssoEnabled === true) {
+        return { id: 'org-sso-1', slug: 'acme', ssoEnabled: true };
+      }
+      return null;
+    };
+
+    const app = buildRouteTestApp('/api/auth', reloadModule('../src/routes/auth'));
+
+    const res = await request(app)
+      .post('/api/auth/register')
+      .send({ ...VALID_USER, email: 'newcomer@acme.com' })
+      .expect(501);
+
+    assert.equal(res.body.ok, false);
+    assert.equal(res.body.ssoRequired, true);
+    assert.equal(res.body.orgSlug, 'acme');
+    assert.equal(res.body.ssoLoginUrl, '/api/auth/sso/acme/login');
+    // No user/session should have been created on the SSO-gated path.
+    assert.equal(store.users.length, 0);
+    assert.equal(store.sessions.length, 0);
+  });
+
+  it('returns 500 { error: "Registration failed" } when session creation throws', async () => {
+    // Make the session insert blow up to simulate an unexpected DB
+    // error after the user row has already been created. The route's
+    // catch-all should map this to a generic 500 without leaking the
+    // underlying error message.
+    prisma.session.create = async () => {
+      throw new Error('boom — simulated session insert failure with sensitive detail');
+    };
+
+    const app = buildRouteTestApp('/api/auth', reloadModule('../src/routes/auth'));
+
+    const res = await request(app)
+      .post('/api/auth/register')
+      .send(VALID_USER)
+      .expect(500);
+
+    assert.deepEqual(res.body, { error: 'Registration failed' });
+    assert.ok(!/boom/i.test(JSON.stringify(res.body)), 'underlying error must not leak');
+  });
 });
 
 describe('auth · login', () => {
   let store;
 
   beforeEach(async () => {
-    rateLimitStore._resetForTests();
+    resetRateLimitStore();
     store = mockPrisma();
 
     // Pre-register a user with a known password
@@ -258,7 +314,7 @@ describe('auth · me endpoint', () => {
   const testUser = { ...VALID_USER, id: 'me-test-user' };
 
   beforeEach(async () => {
-    rateLimitStore._resetForTests();
+    resetRateLimitStore();
     store = mockPrisma();
 
     const hashed = await bcrypt.hash(testUser.password, 4);
@@ -339,7 +395,7 @@ describe('auth · logout', () => {
   let token;
 
   beforeEach(async () => {
-    rateLimitStore._resetForTests();
+    resetRateLimitStore();
     store = mockPrisma();
 
     const hashed = await bcrypt.hash(VALID_USER.password, 4);
