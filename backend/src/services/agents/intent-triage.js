@@ -88,6 +88,30 @@ async function triageIntent({ analysis, prompt, recentTurns = [], judge, options
     return { action: "execute", reason: "empty_prompt", source: "skip", score };
   }
 
+  // Conversational short turns (saludos, follow-ups, chit-chat) no deben ser
+  // bloqueadas por la heurística de ambigüedad: el LLM ya tiene el historial
+  // y un "hola" / "gracias" / "¿cómo estás?" no necesita aclaración previa.
+  // Esto contrarresta el sesgo de `inferAmbiguity` que asigna 0.85 a cualquier
+  // prompt de <3 tokens sin archivos adjuntos.
+  const wordCount = promptText.split(/\s+/).filter(Boolean).length;
+  const isShortTurn = wordCount <= 6;
+  // Saludos/agradecimientos puros: la frase ENTERA es chitchat (anclado a ^ y $)
+  // para que "hola necesito X" NO se trate como saludo.
+  const looksLikeChitChat = /^(?:[¿¡]\s*)?(?:hola|hi|hello|hey|holi|holaa+|buenas|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches|qu[eé]\s+tal|c[oó]mo\s+est[aá]s|c[oó]mo\s+vas?|c[oó]mo\s+andas|qu[eé]\s+hay|qu[eé]\s+pasa|qu[eé]\s+onda|saludos|gracias|muchas\s+gracias|mil\s+gracias|ok(?:ay)?|vale|listo|perfecto|genial|s[ií]|no|claro|entendido|de\s+acuerdo|adi[oó]s|chao|hasta\s+luego|bye)[\s!.?¿¡,]*$/i.test(promptText);
+  // Follow-ups deícticos/continuativos cortos: solo cuando el turno actual
+  // explícitamente referencia el contexto anterior. Evita pasar prompts
+  // ambiguos como "el reporte" al LLM solo porque haya historial.
+  const looksLikeFollowUp = /^(?:[¿¡]\s*)?(?:sigue|continua|contin[uú]a|adelante|dale|ok|listo|claro|m[aá]s|otra\s+vez|de\s+nuevo|repite|repitelo|repetir|eso|esa|ese|eso\s+mismo|exacto|exactamente|y\s+(?:luego|despues|despu[eé]s|ahora|qu[eé])|y\s+bien|amplia|amp[lí]ia|expande|explica|detalla|profundiza|resume)[\s!.?¿¡,]*$/i.test(promptText);
+  const hasPriorTurns = Array.isArray(recentTurns) && recentTurns.length > 0;
+  if (isShortTurn && (looksLikeChitChat || (looksLikeFollowUp && hasPriorTurns))) {
+    return {
+      action: "execute",
+      reason: looksLikeChitChat ? "short_chitchat" : "short_followup_with_history",
+      source: "heuristic_override",
+      score,
+    };
+  }
+
   // High-confidence ambiguity → ask immediately with heuristic question.
   if (needsFlag || score >= cfg.highThreshold) {
     const question = normalizeQuestion(

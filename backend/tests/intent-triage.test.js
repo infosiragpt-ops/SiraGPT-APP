@@ -27,6 +27,64 @@ test('triage: clear request below low threshold → execute, no judge call', asy
   assert.equal(judgeCalled, false, 'judge must not be called below low threshold');
 });
 
+test('triage: short greeting → execute even with high ambiguity score (no clarification loop)', async () => {
+  let judgeCalled = false;
+  const judge = async () => { judgeCalled = true; return { action: 'ask', question: '¿qué?' }; };
+  for (const greeting of ['hola', 'Hola', '¿cómo estás?', 'como estas?', 'buenas', 'gracias', 'ok']) {
+    const verdict = await triageIntent({
+      analysis: makeAnalysis({ score: 0.85, questions: ['¿De qué tema?'] }),
+      prompt: greeting,
+      judge,
+    });
+    assert.equal(verdict.action, 'execute', `expected execute for "${greeting}", got ${verdict.action} (${verdict.reason})`);
+    assert.equal(verdict.source, 'heuristic_override');
+  }
+  assert.equal(judgeCalled, false);
+});
+
+test('triage: short follow-up with recent history → execute (LLM has context)', async () => {
+  const verdict = await triageIntent({
+    analysis: makeAnalysis({ score: 0.85 }),
+    prompt: 'sigue',
+    recentTurns: [
+      { role: 'user', text: 'Cuéntame sobre fotosíntesis' },
+      { role: 'assistant', text: 'La fotosíntesis convierte luz en energía...' },
+    ],
+  });
+  assert.equal(verdict.action, 'execute');
+  assert.equal(verdict.reason, 'short_followup_with_history');
+});
+
+test('triage: short ambiguous first turn (no chitchat, no history) still asks', async () => {
+  const verdict = await triageIntent({
+    analysis: makeAnalysis({ score: 0.85, questions: ['¿Qué reporte?'] }),
+    prompt: 'el reporte',
+  });
+  assert.equal(verdict.action, 'ask');
+});
+
+test('triage: greeting + real request (not pure chitchat) still asks', async () => {
+  // "hola necesito el reporte" must NOT be swallowed by the greeting bypass.
+  const verdict = await triageIntent({
+    analysis: makeAnalysis({ score: 0.85, questions: ['¿Qué reporte?'] }),
+    prompt: 'hola necesito el reporte',
+  });
+  assert.equal(verdict.action, 'ask');
+});
+
+test('triage: short ambiguous turn with stale history (no follow-up cue) still asks', async () => {
+  // History present but the new prompt is not a deictic follow-up — must ask.
+  const verdict = await triageIntent({
+    analysis: makeAnalysis({ score: 0.85, questions: ['¿Qué reporte?'] }),
+    prompt: 'el reporte',
+    recentTurns: [
+      { role: 'user', text: 'Cuéntame sobre fotosíntesis' },
+      { role: 'assistant', text: 'La fotosíntesis convierte luz en energía...' },
+    ],
+  });
+  assert.equal(verdict.action, 'ask');
+});
+
 test('triage: obvious ambiguity (score >= 0.8) → ask with heuristic question, no judge call', async () => {
   let judgeCalled = false;
   const judge = async () => { judgeCalled = true; return { action: 'execute' }; };
