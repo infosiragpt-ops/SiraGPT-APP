@@ -3,7 +3,15 @@
 // event on the connection AND as a rejected promise on any in-flight
 // command — without listeners, those rejections crash the Node process.
 
-const TRANSIENT_REDIS_ERROR_RE = /(connection is closed|connection lost|connection reset|read econn|write econn|stream isn'?t writeable|enotfound|etimedout|econnrefused|ENOTCONN|EPIPE|reply error: loading|reconnecting|max requests limit exceeded|max daily request limit|max commands per second|quota exceeded|rate limit exceeded|max payload size exceeded|max concurrent connections|max database size|max memory)/i;
+// NOTE: "could not renew lock", "missing lock" and "lock mismatch" are
+// BullMQ-level symptoms of an underlying Redis hiccup (the renew tick
+// raced a reconnect / Upstash failover / quota throttle). We classify
+// them as transient so the worker logs them once per minute via the
+// throttled warn path instead of spamming console.error on every retry.
+// The job itself is then either retried by BullMQ or moved to failed
+// after `maxStalledCount` — both deterministic, neither requires a
+// shouty error log.
+const TRANSIENT_REDIS_ERROR_RE = /(connection is closed|connection lost|connection reset|read econn|write econn|stream isn'?t writeable|enotfound|etimedout|econnrefused|ENOTCONN|EPIPE|reply error: loading|reconnecting|max requests limit exceeded|max daily request limit|max commands per second|quota exceeded|rate limit exceeded|max payload size exceeded|max concurrent connections|max database size|max memory|could not renew lock|missing lock|lock mismatch|lock is not held|job is not in the active set)/i;
 
 function isTransientRedisError(err) {
   if (!err) return false;

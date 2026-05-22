@@ -6,7 +6,29 @@ const {
   requireRedisUrl,
 } = require('./agent-task-queue');
 const { runAgentTaskJob, classifyTaskError } = require('./agent-task-runner');
-const { installProcessGuards, isTransientRedisError } = require('./redis-resilience');
+const {
+  createThrottledLogger,
+  installProcessGuards,
+  isTransientRedisError,
+} = require('./redis-resilience');
+
+// BullMQ defaults: lockDuration 30s, lockRenewTime ~15s. Agent tasks
+// here orchestrate LLM streams that routinely run 60-180s and can spike
+// past 5 min during slow upstream providers (Together, Fireworks). The
+// 30s default guarantees a "could not renew lock" race whenever a renew
+// tick collides with an Upstash failover or a long LLM blocking call,
+// which is exactly the spam we were seeing in production. 5 min gives
+// the renew loop generous headroom; if a worker actually dies the job
+// is still moved to failed via maxStalledCount on the next stalled
+// check (configurable via STALLED_INTERVAL_MS).
+const DEFAULT_LOCK_DURATION_MS = 5 * 60 * 1000;
+const DEFAULT_STALLED_INTERVAL_MS = 60 * 1000;
+const DEFAULT_MAX_STALLED_COUNT = 1;
+
+function readPositiveInt(value, fallback) {
+  const n = Number.parseInt(value, 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
 
 let worker;
 let workerConnection;
@@ -26,6 +48,9 @@ function startAgentTaskWorker() {
   installProcessGuards();
 
   const concurrency = Math.max(1, Number.parseInt(process.env.AGENT_WORKER_CONCURRENCY || '2', 10) || 2);
+  const lockDuration = readPositiveInt(process.env.AGENT_WORKER_LOCK_DURATION_MS, DEFAULT_LOCK_DURATION_MS);
+  const stalledInterval = readPositiveInt(process.env.AGENT_WORKER_STALLED_INTERVAL_MS, DEFAULT_STALLED_INTERVAL_MS);
+  const maxStalledCount = readPositiveInt(process.env.AGENT_WORKER_MAX_STALLED_COUNT, DEFAULT_MAX_STALLED_COUNT);
   workerConnection = createRedisConnection({ label: 'agent-task-worker' });
   worker = new Worker(
     getQueueName(),
@@ -34,11 +59,14 @@ function startAgentTaskWorker() {
       ...getBullMQRuntimeOptions(),
       connection: workerConnection,
       concurrency,
+      lockDuration,
+      stalledInterval,
+      maxStalledCount,
     }
   );
 
   worker.on('ready', () => {
-    console.log(`[agent-task-worker] ready queue=${getQueueName()} concurrency=${concurrency}`);
+    console.log(`[agent-task-worker] ready queue=${getQueueName()} concurrency=${concurrency} lockDuration=${lockDuration}ms stalledInterval=${stalledInterval}ms`);
   });
   worker.on('failed', (job, err) => {
     console.error(`[agent-task-worker] job failed ${job?.id || 'unknown'}:`, err?.message || err);
@@ -64,11 +92,23 @@ function startAgentTaskWorker() {
   });
   // The connection itself already logs transient errors via
   // attachRedisListeners; this handler only surfaces worker-level
-  // BullMQ events that aren't connection-driven.
+  // BullMQ events that aren't connection-driven. Transient lock/Redis
+  // hiccups (covered by isTransientRedisError) are funneled through a
+  // throttled warn so operators still get one ping per minute when
+  // Upstash flaps without flooding the console on every retry tick.
+  const throttledTransient = createThrottledLogger();
+  let suppressedTransient = 0;
   worker.on('error', (err) => {
-    if (!isTransientRedisError(err)) {
-      console.error('[agent-task-worker] worker error:', err?.message || err);
+    if (isTransientRedisError(err)) {
+      suppressedTransient += 1;
+      throttledTransient(() => {
+        const extra = suppressedTransient > 1 ? ` (+${suppressedTransient - 1} suppressed)` : '';
+        console.warn(`[agent-task-worker] transient worker error${extra}: ${err?.message || err}`);
+        suppressedTransient = 0;
+      });
+      return;
     }
+    console.error('[agent-task-worker] worker error:', err?.message || err);
   });
 
   return worker;
