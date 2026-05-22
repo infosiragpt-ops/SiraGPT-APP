@@ -1024,6 +1024,28 @@ app.use(buildGlobalErrorHandler({ logger, captureException: captureSentryExcepti
 function startServer() {
     prisma.connectDatabase();
     const server = app.listen(PORT, () => {
+        // --- HTTP timeouts ---------------------------------------------------
+        // The Next.js front-end proxies every /api/* call to this Express
+        // process over a keep-alive HTTP connection. Node's default
+        // `server.keepAliveTimeout` is 5 s, which is SHORTER than the idle
+        // window the proxy's upstream agent holds the socket open for.
+        // When the proxy then re-uses a socket the backend has silently
+        // closed, the next write races the FIN and surfaces as
+        // `ECONNRESET` / "socket hang up" in the Next.js logs (most
+        // visible on long endpoints like /api/ai/generate-image).
+        //
+        // Fix:
+        //   - keepAliveTimeout: 2 min, comfortably longer than any
+        //     upstream-agent idle window we've observed.
+        //   - headersTimeout: must be STRICTLY > keepAliveTimeout (Node
+        //     enforces this; otherwise the socket can close while still
+        //     waiting for the next request line and throw HPE_INVALID_*).
+        //   - requestTimeout: 5 min, so legitimately slow endpoints
+        //     (image generation has its own 200 s ceiling, file uploads,
+        //     model warm-ups) don't get cut off mid-flight.
+        server.keepAliveTimeout = 120_000;
+        server.headersTimeout   = 125_000;
+        server.requestTimeout   = 300_000;
         const startInfo = {
             port: PORT,
             env: process.env.NODE_ENV || 'development',
