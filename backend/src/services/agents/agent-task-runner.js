@@ -1058,6 +1058,50 @@ async function runAgentTaskJob(payload = {}, job = null) {
   let stepIdCounter = 0;
   let currentStepId = null;
   const runtimeTimer = setTimeout(() => controller.abort(), maxRuntimeMs + 5000);
+
+  // ── BullMQ lock heartbeat ──────────────────────────────────────────
+  // Agent tasks routinely run 10–20 min (max_steps=80 reached at ~19min
+  // in prod logs). BullMQ's automatic lock renewal fires every
+  // lockDuration/2 and any single failed renew (Upstash failover, quota
+  // throttle, network blip) loses the lock for the rest of the run,
+  // producing the "could not renew lock" spam and then the fatal
+  // "Missing lock for job ... moveToFinished" when the work is done.
+  //
+  // We piggyback our own heartbeat that explicitly calls extendLock on
+  // a tight cadence (every 30 s by default) using the job's token. If a
+  // single tick fails we retry on the next tick instead of giving up,
+  // and we throttle warns so a Redis outage logs once per minute, not
+  // once per heartbeat. Cleared in the outer `finally` below.
+  const lockHeartbeatIntervalMs = Math.max(
+    5_000,
+    Number.parseInt(process.env.AGENT_WORKER_LOCK_HEARTBEAT_MS || '30000', 10) || 30_000,
+  );
+  const lockHeartbeatExtendMs = Math.max(
+    lockHeartbeatIntervalMs * 4,
+    Number.parseInt(process.env.AGENT_WORKER_LOCK_DURATION_MS || '', 10) || 5 * 60 * 1000,
+  );
+  let lockHeartbeatTimer = null;
+  let lockHeartbeatLastWarnAt = 0;
+  if (job && typeof job.extendLock === 'function' && job.token) {
+    const tick = async () => {
+      try {
+        await job.extendLock(job.token, lockHeartbeatExtendMs);
+      } catch (err) {
+        const now = Date.now();
+        if (now - lockHeartbeatLastWarnAt > 60_000) {
+          lockHeartbeatLastWarnAt = now;
+          console.warn(
+            `[agent-task-runner] lock heartbeat extendLock failed for ${taskId}: ${err?.message || err} (will keep retrying)`,
+          );
+        }
+      }
+    };
+    // Refresh immediately so the first long step doesn't race the
+    // initial 30s renew, then on a steady cadence.
+    tick();
+    lockHeartbeatTimer = setInterval(tick, lockHeartbeatIntervalMs);
+    if (typeof lockHeartbeatTimer.unref === 'function') lockHeartbeatTimer.unref();
+  }
   const finishDeterministicTask = async ({
     finalMarkdown,
     stoppedReason,
@@ -1908,6 +1952,10 @@ async function runAgentTaskJob(payload = {}, job = null) {
     return { taskId, status: task.status };
   } finally {
     clearTimeout(runtimeTimer);
+    if (lockHeartbeatTimer) {
+      clearInterval(lockHeartbeatTimer);
+      lockHeartbeatTimer = null;
+    }
   }
 }
 

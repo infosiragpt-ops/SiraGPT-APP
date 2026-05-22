@@ -21,7 +21,7 @@ const {
 // the renew loop generous headroom; if a worker actually dies the job
 // is still moved to failed via maxStalledCount on the next stalled
 // check (configurable via STALLED_INTERVAL_MS).
-const DEFAULT_LOCK_DURATION_MS = 5 * 60 * 1000;
+const DEFAULT_LOCK_DURATION_MS = 15 * 60 * 1000;
 const DEFAULT_STALLED_INTERVAL_MS = 60 * 1000;
 const DEFAULT_MAX_STALLED_COUNT = 1;
 
@@ -69,6 +69,17 @@ function startAgentTaskWorker() {
     console.log(`[agent-task-worker] ready queue=${getQueueName()} concurrency=${concurrency} lockDuration=${lockDuration}ms stalledInterval=${stalledInterval}ms`);
   });
   worker.on('failed', (job, err) => {
+    // "Missing lock" / "could not renew lock" surface here when BullMQ
+    // tries to moveToFinished on a job whose lock expired mid-run. By
+    // the time we see them the runner's own audit trail
+    // (agent_task_worker_finished) has already persisted the result
+    // and the user got their answer — retrying would re-run a 19-min
+    // job for nothing and double-charge LLM tokens. Surface once at
+    // warn and bail out without rescheduling.
+    if (err && isTransientRedisError(err)) {
+      console.warn(`[agent-task-worker] job ${job?.id || 'unknown'} dropped by BullMQ after completion (${err.message || err}); not retrying — result already persisted by runner`);
+      return;
+    }
     console.error(`[agent-task-worker] job failed ${job?.id || 'unknown'}:`, err?.message || err);
     if (job && err) {
       const classification = classifyTaskError(err);
