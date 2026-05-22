@@ -10,6 +10,7 @@ import { PricingSection } from "@/components/landing/PricingSection"
 import { TestimonialsSection } from "@/components/landing/TestimonialsSection"
 import { LoginButton, SignUpButton } from "@/components/AuthNavButtons"
 import { ThemeToggle } from "@/components/theme-toggle"
+import { useEffect } from "react"
 import { motion } from "framer-motion"
 import {
   Cpu,
@@ -47,6 +48,31 @@ const trustLogos = [
 ]
 
 export default function HomePage() {
+  useEffect(() => {
+    // Enable standard browser scrolling on the public landing page
+    const htmlEl = document.documentElement
+    const bodyEl = document.body
+
+    htmlEl.style.overflow = "auto"
+    htmlEl.style.height = "auto"
+    htmlEl.style.overscrollBehavior = "auto"
+
+    bodyEl.style.overflow = "auto"
+    bodyEl.style.height = "auto"
+    bodyEl.style.overscrollBehavior = "auto"
+
+    return () => {
+      // Revert back to app-shell overflow:hidden locks when leaving
+      htmlEl.style.overflow = ""
+      htmlEl.style.height = ""
+      htmlEl.style.overscrollBehavior = ""
+
+      bodyEl.style.overflow = ""
+      bodyEl.style.height = ""
+      bodyEl.style.overscrollBehavior = ""
+    }
+  }, [])
+
   return (
     <div className="relative min-h-screen bg-gradient-to-b from-white to-gray-50 dark:from-[#05070A] dark:to-gray-950 text-gray-900 dark:text-white overflow-x-hidden">
       <BottomGlowBar />
