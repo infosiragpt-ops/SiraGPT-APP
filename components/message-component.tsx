@@ -1348,6 +1348,12 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                 >
                     {content}
                 </ReactMarkdown>
+                {isStreaming && message.role === 'ASSISTANT' ? (
+                    <span
+                        aria-hidden="true"
+                        className="premium-caret ml-0.5 inline-block w-[0.5ch] h-[1em] -mb-[0.15em] bg-current align-baseline rounded-[1px]"
+                    />
+                ) : null}
             </div>
         );
     };
@@ -2710,6 +2716,15 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                             on pure-code; everything hides during
                             streaming-only state). See MessageActionRail
                             for telemetry contract. */}
+                        {!isVideoMessage && message.role === 'ASSISTANT' && !isStreaming && (message as any).model ? (
+                            <div
+                                className="mt-1 mb-0.5 text-[11px] leading-none text-muted-foreground/70 select-none"
+                                title={`Respondido con ${(message as any).model}`}
+                                aria-label={`Respondido con ${(message as any).model}`}
+                            >
+                                {String((message as any).model).split('/').pop()}
+                            </div>
+                        ) : null}
                         {!isVideoMessage && (
                             <MessageActionRail
                                 messageId={message.id}
