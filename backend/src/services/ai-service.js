@@ -600,6 +600,17 @@ class AIService {
                         if (!hasStreamedAnyContent) {
                             throw Object.assign(new Error('Empty completion — model returned no content'), { code: 'EMPTY_COMPLETION' });
                         }
+                        // Whitespace/punctuation-only deltas count as empty:
+                        // the provider streamed bytes but no actual answer.
+                        // Reset accumulators AND emit a clear-frame so the
+                        // retry / fallback chain starts clean instead of
+                        // appending the next answer to a leading space.
+                        if (!fullResponseContent.replace(/[\s.,!?¿¡:;\-—…“”"'`()\[\]{}]+/g, '')) {
+                            try { res.write(`data: ${JSON.stringify({ replace: true, content: '' })}\n\n`); } catch { /* socket gone */ }
+                            fullResponseContent = '';
+                            hasStreamedAnyContent = false;
+                            throw Object.assign(new Error('Empty completion — model streamed only whitespace'), { code: 'EMPTY_COMPLETION' });
+                        }
 
                         console.log(`✅ Response on ${currentProvider}:${currentRuntimeModel} attempt ${attempt} (${fullResponseContent.length} chars)`);
 
@@ -644,7 +655,12 @@ class AIService {
                         const isOurTimeout = timedOut || err.code === 'TIMEOUT';
                         const isClientCancel = !isOurTimeout && signal?.aborted;
                         if (isClientCancel) throw err;
-                        if (hasStreamedAnyContent) throw err;
+                        // Empty-completion reset (above) already cleared
+                        // hasStreamedAnyContent + fullResponseContent, so
+                        // this guard naturally lets EMPTY_COMPLETION fall
+                        // into the retry/fallback path. Defensive check in
+                        // case a future refactor reorders things.
+                        if (hasStreamedAnyContent && err.code !== 'EMPTY_COMPLETION') throw err;
 
                         // CircuitBreakerError means this provider is currently
                         // shorted. Don't waste retries here — fall straight to

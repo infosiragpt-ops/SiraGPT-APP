@@ -55,6 +55,11 @@ const CONCRETE_SIGNAL = /\b(por\s+ejemplo|ejemplo|paso|primero|segundo|tercero|d
  */
 const MIN_USEFUL_LENGTH = 20;
 const MIN_SUBSTANTIAL_LENGTH = 120;
+// Prompts shorter than this are NEVER treated as "substantial", even when
+// they coincidentally contain a pattern word like "explica" or "plan".
+// Catches noisy false positives like "explica IA" (11 chars) that were
+// triggering an unnecessary corrective pass on gpt-4o-mini.
+const MIN_SUBSTANTIAL_PROMPT_LENGTH = 24;
 
 function normalizeText(value) {
   return String(value || '').trim();
@@ -70,6 +75,7 @@ function looksSubstantialPrompt(userPrompt) {
   const text = normalizeText(userPrompt);
   if (!text || looksLightweightPrompt(text)) return false;
   if (text.length >= 70) return true;
+  if (text.length < MIN_SUBSTANTIAL_PROMPT_LENGTH) return false;
   return SUBSTANTIAL_PROMPT_PATTERNS.some(pattern => pattern.test(text));
 }
 
@@ -186,6 +192,7 @@ module.exports = {
   REFUSAL_PATTERNS,
   MIN_USEFUL_LENGTH,
   MIN_SUBSTANTIAL_LENGTH,
+  MIN_SUBSTANTIAL_PROMPT_LENGTH,
   looksLightweightPrompt,
   looksSubstantialPrompt,
 };
