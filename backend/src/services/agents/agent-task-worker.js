@@ -9,6 +9,44 @@ const { runAgentTaskJob } = require('./agent-task-runner');
 const { classifyTaskError } = require('../../utils/task-error-classifier');
 const { installProcessGuards, isTransientRedisError } = require('./redis-resilience');
 
+// Worker tuning defaults. BullMQ's own defaults (30s lock, 30s stall check,
+// max 1 stall) are too aggressive for our long-running agent jobs that can
+// legitimately spend minutes on a single LLM call. These envelopes match the
+// values used in production since the "Improve reliability of long-running
+// agent tasks" change.
+const DEFAULT_LOCK_DURATION_MS = 5 * 60_000;      // 5 minutes
+const DEFAULT_STALLED_INTERVAL_MS = 60_000;       // 1 minute
+const DEFAULT_MAX_STALLED_COUNT = 2;
+
+/**
+ * Parse an env var as a positive integer, falling back to `fallback` when the
+ * value is missing, malformed, zero, or negative. Anything that survives
+ * Number.parseInt and is >0 wins.
+ */
+function readPositiveInt(rawValue, fallback) {
+  if (rawValue === undefined || rawValue === null || rawValue === '') return fallback;
+  const parsed = Number.parseInt(rawValue, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return parsed;
+}
+
+/**
+ * Returns a function that, when invoked repeatedly, only forwards to the
+ * underlying callback once per `windowMs`. Used to keep the worker from
+ * spamming the console with one log line per BullMQ retry tick while Upstash
+ * is flapping — operators still get a heartbeat every minute, suppressed
+ * lines are counted and reported by the caller.
+ */
+function createThrottledLogger(windowMs = 60_000) {
+  let lastFiredAt = 0;
+  return function throttled(fn) {
+    const now = Date.now();
+    if (now - lastFiredAt < windowMs) return;
+    lastFiredAt = now;
+    try { fn(); } catch { /* never throw from log throttler */ }
+  };
+}
+
 let worker;
 let workerConnection;
 
