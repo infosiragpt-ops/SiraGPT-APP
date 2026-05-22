@@ -50,6 +50,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { CredentialWarning } from "@/components/credential-warning"
+import { ComposerCharCounter } from "@/components/composer-char-counter"
 import { Input } from "@/components/ui/input"
 import { useChat } from "@/lib/chat-context-integrated"
 import { useAuth } from "@/lib/auth-context-integrated"
@@ -8004,6 +8005,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             Primary swaps glyph based on state — never a
                             decorative button. */}
                         <div className="flex shrink-0 items-center gap-1.5">
+                          {/* Pulido · contador suave de caracteres. Aparece
+                              sólo cuando ya escribiste bastante. */}
+                          <ComposerCharCounter input={input} />
                           {!isStopButtonVisible && (
                             renderDictationButton()
                           )}
@@ -8461,6 +8465,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               disabled={isLoading || isGeneratingVideo || isGeneratingWord || isGeneratingExcel || isWebSearching}
                             />
                             <div className="flex shrink-0 items-center gap-1.5">
+                              {/* Pulido · contador suave de caracteres. */}
+                              <ComposerCharCounter input={input} />
                               {!isStopButtonVisible && (
                                 renderDictationButton()
                               )}

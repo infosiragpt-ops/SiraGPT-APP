@@ -946,7 +946,14 @@ export function AppSidebar() {
               </button>
             </TooltipTrigger>
             <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
-              <p>{t("newChat")}</p>
+              {/* Pulido · muestra el atajo (⌘N / Ctrl+N) en el tooltip
+                  para que el usuario lo descubra de paso. */}
+              <p className="flex items-center gap-2">
+                <span>{t("newChat")}</span>
+                <kbd className="rounded border border-border/60 bg-muted px-1 text-[10px] font-medium text-muted-foreground">
+                  ⌘N
+                </kbd>
+              </p>
             </TooltipContent>
           </Tooltip>
 
@@ -997,7 +1004,13 @@ export function AppSidebar() {
               </SidebarMenuButton>
             </TooltipTrigger>
             <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
-              <p>{t("searchChats")}</p>
+              {/* Pulido · muestra el atajo ⌘K en el tooltip. */}
+              <p className="flex items-center gap-2">
+                <span>{t("searchChats")}</span>
+                <kbd className="rounded border border-border/60 bg-muted px-1 text-[10px] font-medium text-muted-foreground">
+                  ⌘K
+                </kbd>
+              </p>
             </TooltipContent>
           </Tooltip>
 
