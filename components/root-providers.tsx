@@ -18,6 +18,7 @@ import { AppWrapper } from "@/components/app-wrapper"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { GlobalDropRedirector } from "@/components/GlobalDropRedirector"
 import { Toaster } from "@/components/ui/sonner"
+import { KeyboardShortcutsProvider } from "@/components/keyboard-shortcuts"
 
 export function RootProviders({ children }: { children: React.ReactNode }) {
   return (
@@ -30,6 +31,7 @@ export function RootProviders({ children }: { children: React.ReactNode }) {
             </ErrorBoundary>
           </AppWrapper>
           <GlobalDropRedirector />
+          <KeyboardShortcutsProvider />
           <Toaster />
         </SettingsProvider>
       </AuthProvider>
