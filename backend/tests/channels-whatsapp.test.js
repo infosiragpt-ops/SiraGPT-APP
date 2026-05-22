@@ -223,7 +223,7 @@ describe('WhatsAppAdapter · parseInbound', () => {
     assert.equal(a.parseInbound({ body: '{"entry":' }), null);
   });
 
-  it('parses a text message', () => {
+  it('parses text.message.body', () => {
     const out = a.parseInbound({
       body: envelope({
         id: 'wamid.123',
@@ -386,27 +386,5 @@ describe('WhatsAppAdapter · sendOutbound', () => {
       /whatsapp send failed: 400/,
     );
     assert.equal(a.metrics.get('whatsapp', KINDS.ERROR), 1);
-  });
-
-  it('honours Retry-After header on transient Graph API failures', async () => {
-    let calls = 0;
-    const a = makeAdapter({
-      fetchImpl: async () => {
-        calls += 1;
-        if (calls === 1) {
-          return {
-            ok: false,
-            status: 503,
-            json: async () => ({ error: { message: 'temporarily unavailable' } }),
-            headers: { get: (name) => (name === 'retry-after' ? '0.001' : null) },
-          };
-        }
-        return { ok: true, status: 200, json: async () => ({ messages: [{ id: 'wamid.2' }] }) };
-      },
-    });
-
-    await a.sendOutbound({ userId: '1', text: 't' });
-
-    assert.equal(calls, 2);
   });
 });

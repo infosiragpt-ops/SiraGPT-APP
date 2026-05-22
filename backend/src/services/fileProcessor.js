@@ -5,7 +5,18 @@ const sharp = require('sharp');
 const fs = require('fs').promises;
 const path = require('path');
 const ocrEngine = require('./ocr-engine');
-const { readXlsxFile, selectWorkbookWorksheets, worksheetRows } = require('./xlsx-safe-workbook');
+const { readXlsxFile, selectWorkbookWorksheets, worksheetRows, evaluateFormulas } = require('./xlsx-safe-workbook');
+const rtfParser = require('./rtf-parser');
+const odfParser = require('./opendocument-parser');
+const epubParser = require('./epub-parser');
+const latexParser = require('./latex-parser');
+const audioTranscriber = require('./audio-transcriber');
+const zipParser = require('./zip-parser');
+const { detectProtectedFile, detectCorruptFile } = require('./protected-file-detector');
+const { isLegacyFormat, extractLegacyText } = require('./legacy-format-converter');
+const { readTextFile } = require('./text-encoding-detector');
+const { detectDialect, parseCSV, formatCsvBlock } = require('./csv-dialect-detector');
+const { extractFromFile: extractHtmlContent } = require('./html-content-extractor');
 
 let _streamingPdf;
 let _streamingPdfTried = false;
@@ -43,6 +54,7 @@ const GENERIC_UPLOAD_MIMES = new Set([
 const EXTENSION_MIME_HINTS = new Map([
   ['.doc', 'application/msword'],
   ['.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+  ['.xls', 'application/vnd.ms-excel'],
   ['.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
   ['.ppt', 'application/vnd.ms-powerpoint'],
   ['.pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'],
@@ -56,6 +68,10 @@ const EXTENSION_MIME_HINTS = new Map([
   ['.html', 'text/html'],
   ['.htm', 'text/html'],
   ['.rtf', 'application/rtf'],
+  ['.epub', 'application/epub+zip'],
+  ['.tex', 'application/x-tex'],
+  ['.latex', 'application/x-latex'],
+  ['.zip', 'application/zip'],
 ]);
 
 async function assertReadableDocxZip(filePath) {
@@ -138,32 +154,74 @@ class FileProcessor {
 
       console.log(`Processing file: ${originalname}, type: ${mimetype}${effectiveMimeType !== mimetype ? ` -> ${effectiveMimeType}` : ''}, path: ${filePath}`);
 
+      // ── Early detection: password-protected or corrupt files ──
+      const protection = await detectProtectedFile(filePath, effectiveMimeType, originalname);
+      if (protection.protected) {
+        return {
+          success: false,
+          error: protection.message,
+          extractedText: protection.message,
+          ocr: { status: 'failed', confidence: 0, provider: null, reason: protection.type },
+          fileInfo: { name: originalname, type: effectiveMimeType || mimetype, size: fileSize },
+        };
+      }
+
+      const corruption = await detectCorruptFile(filePath, effectiveMimeType, originalname);
+      if (corruption.corrupt) {
+        console.warn(`[fileProcessor] corrupt file detected: ${originalname} — ${corruption.message}`);
+        // Don't block — still attempt processing, but flag it
+      }
+
       // ── Try external parser chain (Marker → Docling → MarkItDown) ──
       const EXTERNAL_PARSER_TYPES = ['application/pdf', 'application/msword',
         'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'application/vnd.ms-excel',
         'application/vnd.ms-powerpoint',
         'application/vnd.openxmlformats-officedocument.presentationml.presentation',
       ];
 
-      if (EXTERNAL_PARSER_TYPES.includes(effectiveMimeType) && !FileProcessor._externalParserDisabled) {
+      const _EXT_COOLDOWN_MS = Number.parseInt(process.env.EXTERNAL_PARSER_COOLDOWN_MS || '60000', 10);
+
+      if (EXTERNAL_PARSER_TYPES.includes(effectiveMimeType)) {
+        const now = Date.now();
+        if (!FileProcessor._externalParserLastFailed || (now - FileProcessor._externalParserLastFailed) > _EXT_COOLDOWN_MS) {
+          try {
+            const { parseFileWithBestParser } = require('./document-pipeline/parser-orchestrator');
+            const result = await parseFileWithBestParser(filePath, { mimetype: effectiveMimeType });
+            if (result?.available && result?.text && !result?.fallback) {
+              extractedText = result.text;
+              console.log(`[fileProcessor] external parser success: ${result.parser}`);
+              effectiveMimeType = '__external_done';
+            } else if (!result?.available) {
+              FileProcessor._externalParserLastFailed = now;
+              if (!FileProcessor._externalParserLogged) {
+                FileProcessor._externalParserLogged = true;
+                console.warn(`[fileProcessor] external parser chain unavailable (cooldown ${_EXT_COOLDOWN_MS}ms), using built-in parsers`);
+              }
+            }
+          } catch (err) {
+            FileProcessor._externalParserLastFailed = now;
+            if (!FileProcessor._externalParserLogged) {
+              FileProcessor._externalParserLogged = true;
+              console.warn(`[fileProcessor] external parser chain error (cooldown ${_EXT_COOLDOWN_MS}ms), using built-in parsers: ${err && err.message}`);
+            }
+          }
+        }
+      }
+
+      // ── Legacy format detection & conversion (.doc, .xls, .ppt via LibreOffice) ──
+      const fileExt = path.extname(String(originalname || '')).toLowerCase();
+      if (effectiveMimeType !== '__external_done' && isLegacyFormat(fileExt)) {
         try {
-          const { parseFileWithBestParser } = require('./document-pipeline/parser-orchestrator');
-          const result = await parseFileWithBestParser(filePath, { mimetype: effectiveMimeType });
-          if (result?.available && result?.text && !result?.fallback) {
-            extractedText = result.text;
-            console.log(`[fileProcessor] external parser success: ${result.parser}`);
+          const legacyText = await extractLegacyText(filePath, fileExt);
+          if (legacyText && legacyText.trim().length > 20) {
+            extractedText = legacyText;
+            console.log(`[fileProcessor] legacy format (${fileExt}) converted via LibreOffice: ${legacyText.length} chars`);
             effectiveMimeType = '__external_done';
           }
         } catch (err) {
-          // The optional external parser chain requires an `orchestration/`
-          // sibling tree that doesn't exist in this repo. Log the first
-          // time, then permanently skip the require so we don't spam the
-          // logs on every uploaded document.
-          if (!FileProcessor._externalParserDisabled) {
-            FileProcessor._externalParserDisabled = true;
-            console.warn(`[fileProcessor] external parser chain unavailable, using built-in parsers: ${err && err.message}`);
-          }
+          console.warn(`[fileProcessor] legacy format conversion failed (${fileExt}): ${err && err.message}`);
         }
       }
 
@@ -177,11 +235,14 @@ class FileProcessor {
           break;
 
         case 'application/msword':
+          extractedText = await this.processLegacyDoc(filePath, originalname);
+          break;
         case 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
           extractedText = await this.processWord(filePath);
           break;
 
         case 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':
+        case 'application/vnd.ms-excel':
           extractedText = await this.processExcel(filePath);
           break;
 
@@ -190,13 +251,39 @@ class FileProcessor {
         case 'text/csv':
         case 'text/tab-separated-values':
         case 'text/html':
+          extractedText = await this.processHtml(filePath);
+          break;
         case 'text/xml':
         case 'application/xml':
         case 'application/json':
-        case 'application/rtf':
         case 'text/rtf':
         case 'message/rfc822':
           extractedText = await this.processText(filePath);
+          break;
+
+        case 'application/rtf':
+          extractedText = await this.processRtf(filePath);
+          break;
+
+        case 'application/vnd.oasis.opendocument.text':
+          extractedText = await this.processOdt(filePath);
+          break;
+
+        case 'application/vnd.oasis.opendocument.spreadsheet':
+          extractedText = await this.processOds(filePath);
+          break;
+
+        case 'application/vnd.oasis.opendocument.presentation':
+          extractedText = await this.processOdp(filePath);
+          break;
+
+        case 'application/epub+zip':
+          extractedText = await this.processEpub(filePath);
+          break;
+
+        case 'application/x-tex':
+        case 'application/x-latex':
+          extractedText = await this.processLatex(filePath);
           break;
 
         case 'image/jpeg':
@@ -219,6 +306,24 @@ class FileProcessor {
         case 'application/vnd.ms-powerpoint':
         case 'application/vnd.openxmlformats-officedocument.presentationml.presentation':
           extractedText = await this.processPowerPoint(filePath);
+          break;
+
+        case 'audio/mpeg':
+        case 'audio/wav':
+        case 'audio/ogg':
+        case 'audio/webm':
+        case 'audio/mp4':
+        case 'video/mp4':
+        case 'video/mpeg':
+        case 'video/quicktime':
+        case 'video/webm':
+          extractedText = await this.processAudio(filePath, effectiveMimeType, originalname);
+          break;
+
+        case 'application/zip':
+        case 'application/x-zip':
+        case 'application/x-zip-compressed':
+          extractedText = await this.processZip(filePath);
           break;
 
         case '__external_done':
@@ -525,6 +630,13 @@ class FileProcessor {
         header += `Showing first ${worksheets.length} sheet(s); ${skipped} sheet(s) skipped by safety cap (${maxSheets}).\n`;
         sheetSummaries.push(`[truncated: ${skipped} sheet(s) skipped by safety cap]`);
       }
+
+      // Formula evaluation summary
+      const { formulaCount, formulaSummary } = evaluateFormulas(workbook);
+      if (formulaCount > 0) {
+        header += formulaSummary + '\n';
+      }
+
       header += '\n';
       return header + sheetSummaries.join('\n');
     } catch (error) {
@@ -532,14 +644,63 @@ class FileProcessor {
     }
   }
 
-  async processText(filePath) {
+  async processHtml(filePath) {
     try {
-      const content = await fs.readFile(filePath, 'utf8');
-      console.log(`Text file processed: ${filePath}, length: ${content.length}`);
-      return content;
+      const result = await extractHtmlContent(filePath);
+      const header = result.title
+        ? `HTML document — "${result.title}" — ${result.wordCount} words, ${result.charCount} chars\n---\n`
+        : `HTML document — ${result.wordCount} words, ${result.charCount} chars\n---\n`;
+      console.log(`HTML processed: ${filePath}, title="${result.title}", chars=${result.charCount}, words=${result.wordCount}`);
+      return header + result.text;
     } catch (error) {
-      console.error(`Text file processing error for ${filePath}:`, error);
-      throw new Error(`Text file processing failed: ${error.message}`);
+      console.warn(`HTML content extraction failed, falling back to raw: ${error.message}`);
+      try {
+        const { readTextFile } = require('./text-encoding-detector');
+        const { text } = await readTextFile(filePath);
+        return text;
+      } catch {
+        const content = await fs.readFile(filePath, 'utf8');
+        return content;
+      }
+    }
+  }
+
+  async processText(filePath, options = {}) {
+    try {
+      // Use encoding detection for better handling of non-UTF8 text files
+      const { text, encoding, confidence } = await readTextFile(filePath);
+      const ext = path.extname(String(filePath || '')).toLowerCase();
+      const isCSV = ext === '.csv' || ext === '.tsv';
+
+      if (isCSV && text && text.length > 10) {
+        try {
+          const dialect = await detectDialect(filePath);
+          const parsed = await parseCSV(filePath, { maxRows: 5000 });
+          const formatted = formatCsvBlock(parsed);
+          if (formatted && formatted.length > 20) {
+            console.log(`CSV file processed with dialect detection: ${filePath}, encoding=${encoding}, delimiter=${dialect.delimiterName}, rows=${parsed.rows.length}`);
+            return formatted;
+          }
+        } catch (csvErr) {
+          console.warn(`[fileProcessor] CSV dialect detection failed, using raw: ${csvErr && csvErr.message}`);
+        }
+      }
+
+      if (encoding !== 'utf8' && confidence > 0.6) {
+        console.log(`Text file processed with encoding detection: ${filePath}, encoding=${encoding}, confidence=${confidence.toFixed(2)}`);
+      }
+      console.log(`Text file processed: ${filePath}, length: ${text.length}`);
+      return text;
+    } catch (error) {
+      // Fallback to raw utf8 read if encoding detection fails
+      try {
+        const content = await fs.readFile(filePath, 'utf8');
+        console.log(`Text file processed (fallback utf8): ${filePath}, length: ${content.length}`);
+        return content;
+      } catch (fallbackError) {
+        console.error(`Text file processing error for ${filePath}:`, error);
+        throw new Error(`Text file processing failed: ${error.message}`);
+      }
     }
   }
 
@@ -690,6 +851,90 @@ class FileProcessor {
     } catch (error) {
       console.error(`PowerPoint file processing error for ${filePath}:`, error);
       throw new Error(`PowerPoint presentation processing failed: ${error.message}`);
+    }
+  }
+
+  async processRtf(filePath) {
+    try {
+      const raw = await fs.readFile(filePath, 'utf8');
+      const parsed = rtfParser.parseRtf(raw);
+      const header = `RTF document — ${parsed.length} characters extracted, formatting hints preserved\n---\n`;
+      return header + parsed;
+    } catch (error) {
+      console.warn(`[fileProcessor] RTF parse failed, falling back to plain text: ${error.message}`);
+      return this.processText(filePath);
+    }
+  }
+
+  async processOdt(filePath) {
+    try {
+      return await odfParser.parseOdt(filePath);
+    } catch (error) {
+      console.warn(`[fileProcessor] ODT parse failed: ${error.message}`);
+      return `OpenDocument Text — parsing unavailable (${error.message}). Consider converting to DOCX for best results.`;
+    }
+  }
+
+  async processOds(filePath) {
+    try {
+      return await odfParser.parseOds(filePath);
+    } catch (error) {
+      console.warn(`[fileProcessor] ODS parse failed: ${error.message}`);
+      return `OpenDocument Spreadsheet — parsing unavailable (${error.message}). Consider converting to XLSX for best results.`;
+    }
+  }
+
+  async processOdp(filePath) {
+    try {
+      return await odfParser.parseOdp(filePath);
+    } catch (error) {
+      console.warn(`[fileProcessor] ODP parse failed: ${error.message}`);
+      return `OpenDocument Presentation — parsing unavailable (${error.message}). Consider converting to PPTX for best results.`;
+    }
+  }
+
+  async processEpub(filePath) {
+    try {
+      return await epubParser.parseEpub(filePath);
+    } catch (error) {
+      console.warn(`[fileProcessor] EPUB parse failed: ${error.message}`);
+      return `EPUB document — parsing unavailable (${error.message}). Consider converting to PDF for best results.`;
+    }
+  }
+
+  async processLatex(filePath) {
+    try {
+      const raw = await fs.readFile(filePath, 'utf8');
+      const parsed = latexParser.parseLatex(raw);
+      const header = `LaTeX document — ${parsed.length} characters extracted, math stripped\n---\n`;
+      return header + parsed;
+    } catch (error) {
+      console.warn(`[fileProcessor] LaTeX parse failed, falling back to plain text: ${error.message}`);
+      return this.processText(filePath);
+    }
+  }
+
+async processAudio(filePath, mimeType, originalName) {
+    try {
+      const result = await audioTranscriber.transcribe(filePath, mimeType, originalName);
+      if (result.method === 'whisper') {
+        console.log(`[fileProcessor] Audio transcribed via Whisper: ${originalName}, ${result.text?.length || 0} chars`);
+      }
+      return result.text || '';
+    } catch (error) {
+      console.warn(`[fileProcessor] Audio transcription failed: ${error.message}`);
+      return `Media file "${originalName}" — transcription unavailable. Type: ${mimeType}`;
+    }
+  }
+
+  async processZip(filePath) {
+    try {
+      const text = await zipParser.parseZip(filePath);
+      const header = `ZIP Archive — contents extracted below\n---\n`;
+      return header + text;
+    } catch (error) {
+      console.warn(`[fileProcessor] ZIP parsing failed: ${error.message}`);
+      return `ZIP archive — extraction unavailable (${error.message}). Install 'unzip' for ZIP support.`;
     }
   }
 
