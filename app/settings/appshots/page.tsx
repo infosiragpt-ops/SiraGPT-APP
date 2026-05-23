@@ -473,7 +473,11 @@ export default function AppshotsSettingsPage() {
   );
 }
 
-export function describeGeoHintStatus(status: 'ok' | 'private' | 'unresolved'): string | null {
+// Not exported on purpose: Next.js App Router page files only allow a
+// fixed allowlist of named exports (metadata, default, generateStaticParams,
+// dynamic, revalidate, ...). Any extra `export` here breaks the production
+// build with a TS2344 on the auto-generated `.next/types/.../page.ts`.
+function describeGeoHintStatus(status: 'ok' | 'private' | 'unresolved'): string | null {
   // Task 29 — copy intentionally short and neutral. Anything longer
   // would push the device card onto a third visual line and start
   // competing for attention with the "Último uso" timestamp.
