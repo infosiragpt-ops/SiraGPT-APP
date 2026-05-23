@@ -16,6 +16,7 @@ import { toast } from "sonner"
 import { useBackgroundStreams } from "./background-streams-context"
 import { save as savePending, clear as clearPending, retryAll } from "./pending-messages"
 import { devLog } from "./dev-log"
+import { createStreamBuffer, type StreamBuffer } from "./stream-buffer"
 
 // Helper function to check if error is related to monthly API limit
 const isMonthlyLimitError = (errorMessage: string) => {
@@ -335,11 +336,21 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [pendingStop, setPendingStop] = useState(false);
 
   const abortControllerRef = useRef<AbortController | null>(null);
+  const streamBufferRef = useRef<StreamBuffer | null>(null);
   const chatsRef = useRef<Chat[]>([])
   const isStreamingRef = useRef(false)
 
   useEffect(() => { chatsRef.current = chats }, [chats])
   useEffect(() => { isStreamingRef.current = isStreaming }, [isStreaming])
+
+  // Dispose the per-frame stream buffer when the provider unmounts so a
+  // late rAF callback can't fire setState on a torn-down tree.
+  useEffect(() => {
+    return () => {
+      streamBufferRef.current?.dispose();
+      streamBufferRef.current = null;
+    };
+  }, []);
 
   // Retry pending messages when the user logs back in
   useEffect(() => {
@@ -520,6 +531,15 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       devLog("Aborting local fetch request");
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
+    }
+
+    // Flush any tokens still in the per-frame buffer so the user sees
+    // the full last batch before "(Generation stopped by user)" is
+    // appended below, then dispose the buffer so no later flush leaks.
+    if (streamBufferRef.current) {
+      streamBufferRef.current.flush();
+      streamBufferRef.current.dispose();
+      streamBufferRef.current = null;
     }
 
     // Update the last AI message to show it was stopped
@@ -1091,6 +1111,26 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           // from there to show "N chats en progreso".
           bg.register(activeChat.id, activeChat.title || 'Nuevo chat', controller);
 
+          // Per-frame buffer: accumulate SSE chunks and apply to React
+          // state once per animation frame. Without this, a long answer
+          // does hundreds of full-chat re-renders per second.
+          streamBufferRef.current?.dispose();
+          const fgBuffer = createStreamBuffer({
+            onFlush: (joined) => {
+              setCurrentChat((prevChat) => {
+                if (!prevChat) return prevChat;
+                const newMessages = prevChat.messages.map((msg) => {
+                  if (msg.id === aiMessagePlaceholder.id) {
+                    return { ...msg, content: msg.content + joined };
+                  }
+                  return msg;
+                });
+                return { ...prevChat, messages: newMessages };
+              });
+            },
+          });
+          streamBufferRef.current = fgBuffer;
+
           // STEP 3: Nayi streaming API call karein
           await apiClient.generateAIStream(
             {
@@ -1112,22 +1152,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 return;
               }
 
-              // onData: Jab bhi backend se naya text aaye
-              setCurrentChat((prevChat) => {
-                if (!prevChat) return prevChat;
-
-                const newMessages = prevChat.messages.map((msg) => {
-                  if (msg.id === aiMessagePlaceholder.id) {
-                    // Placeholder ke content mein naya chunk jodein
-                    return { ...msg, content: msg.content + chunk };
-                  }
-                  return msg;
-                });
-                return { ...prevChat, messages: newMessages };
-              });
+              // Queue the chunk; the buffer flushes once per frame.
+              fgBuffer.append(chunk);
             },
             async () => {
               // onClose: Jab stream khatam ho jaye
+              fgBuffer.flush();
+              fgBuffer.dispose();
+              if (streamBufferRef.current === fgBuffer) streamBufferRef.current = null;
               clearPending(activeChat.id);
               bg.complete(activeChat.id);
               if (!controller.signal.aborted && !pendingStop) {
@@ -1162,6 +1194,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             },
             (error) => {
               console.error("Streaming failed:", error);
+              // Flush whatever made it through before the error so the
+              // partial answer is visible, then dispose.
+              fgBuffer.flush();
+              fgBuffer.dispose();
+              if (streamBufferRef.current === fgBuffer) streamBufferRef.current = null;
               // Mirror the failure into BackgroundStreams so the
               // sidebar pill shows the error state for this chat.
               bg.fail(activeChat.id, error?.message || 'stream failed');
@@ -1235,6 +1272,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 if (controller.signal.aborted || pendingStop) {
                   return;
                 }
+                // Drop any queued tokens — the replacement is authoritative.
+                fgBuffer.dispose();
+                if (streamBufferRef.current === fgBuffer) streamBufferRef.current = null;
                 setCurrentChat((prevChat) => {
                   if (!prevChat) return prevChat;
                   const newMessages = prevChat.messages.map((msg) => {
@@ -1707,6 +1747,24 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
+    // Per-frame buffer (regenerate path).
+    streamBufferRef.current?.dispose();
+    const regenBuffer = createStreamBuffer({
+      onFlush: (joined) => {
+        setCurrentChat((prevChat) => {
+          if (!prevChat) return prevChat;
+          const updatedMessages = prevChat.messages.map((msg) => {
+            if (msg.id === aiMessagePlaceholder.id) {
+              return { ...msg, content: msg.content + joined };
+            }
+            return msg;
+          });
+          return { ...prevChat, messages: updatedMessages };
+        });
+      },
+    });
+    streamBufferRef.current = regenBuffer;
+
     try {
       // Call the streaming function with the original user message
       await apiClient.generateAIStream(
@@ -1724,22 +1782,13 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           if (controller.signal.aborted || pendingStop) {
             return;
           }
-
-          // onData: Fill the placeholder
-          setCurrentChat((prevChat) => {
-            if (!prevChat) return prevChat;
-            const updatedMessages = prevChat.messages.map((msg) => {
-              if (msg.id === aiMessagePlaceholder.id) {
-                return { ...msg, content: msg.content + chunk };
-              }
-              return msg;
-            });
-            devLog('Processing chunk, total messages:', updatedMessages.length);
-            return { ...prevChat, messages: updatedMessages };
-          });
+          regenBuffer.append(chunk);
         },
         async () => {
           // onClose: Stop loading only if not manually stopped
+          regenBuffer.flush();
+          regenBuffer.dispose();
+          if (streamBufferRef.current === regenBuffer) streamBufferRef.current = null;
           if (!controller.signal.aborted && !pendingStop) {
             devLog('Regeneration completed successfully');
             setIsLoading(false);
@@ -1776,6 +1825,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         },
         (error: any) => {
           // onError: Handle error only if not manually stopped
+          regenBuffer.flush();
+          regenBuffer.dispose();
+          if (streamBufferRef.current === regenBuffer) streamBufferRef.current = null;
           if (!controller.signal.aborted && !pendingStop) {
             console.error("Streaming failed during regeneration:", error);
 
@@ -1835,6 +1887,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             if (controller.signal.aborted || pendingStop) {
               return;
             }
+            regenBuffer.dispose();
+            if (streamBufferRef.current === regenBuffer) streamBufferRef.current = null;
             setCurrentChat((prevChat) => {
               if (!prevChat) return prevChat;
               const updatedMessages = prevChat.messages.map((msg) => {
@@ -1851,6 +1905,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
     } catch (error) {
       console.error("Regeneration failed:", error);
+      // Defensive: if generateAIStream throws before onError fires, the
+      // buffer would otherwise stay alive and flush into a stale tree.
+      streamBufferRef.current?.dispose();
+      streamBufferRef.current = null;
       setIsLoading(false);
       setIsStreaming(false);
       setCurrentStreamId(null);
@@ -1905,6 +1963,24 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         ? JSON.parse(updatedUserMessage.files)
         : updatedUserMessage.files;
 
+      // Per-frame buffer (edit-and-regenerate path).
+      streamBufferRef.current?.dispose();
+      const editBuffer = createStreamBuffer({
+        onFlush: (joined) => {
+          setCurrentChat((prevChat) => {
+            if (!prevChat) return prevChat;
+            const updatedMessages = prevChat.messages.map((msg) => {
+              if (msg.id === aiMessagePlaceholder.id) {
+                return { ...msg, content: msg.content + joined };
+              }
+              return msg;
+            });
+            return { ...prevChat, messages: updatedMessages };
+          });
+        },
+      });
+      streamBufferRef.current = editBuffer;
+
       // Now, generate the new response
       await apiClient.generateAIStream(
         {
@@ -1921,20 +1997,13 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           if (controller.signal.aborted || pendingStop) {
             return;
           }
-
-          setCurrentChat((prevChat) => {
-            if (!prevChat) return prevChat;
-            const updatedMessages = prevChat.messages.map((msg) => {
-              if (msg.id === aiMessagePlaceholder.id) {
-                return { ...msg, content: msg.content + chunk };
-              }
-              return msg;
-            });
-            return { ...prevChat, messages: updatedMessages };
-          });
+          editBuffer.append(chunk);
         },
         async () => {
           // Only complete if not manually stopped
+          editBuffer.flush();
+          editBuffer.dispose();
+          if (streamBufferRef.current === editBuffer) streamBufferRef.current = null;
           if (!controller.signal.aborted && !pendingStop) {
             setIsLoading(false);
             setIsStreaming(false);
@@ -1967,6 +2036,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         },
         (error: any) => {
           // Only handle error if not manually stopped
+          editBuffer.flush();
+          editBuffer.dispose();
+          if (streamBufferRef.current === editBuffer) streamBufferRef.current = null;
           if (!controller.signal.aborted && !pendingStop) {
             console.error("Streaming failed during regeneration:", error);
 
@@ -2026,6 +2098,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             if (controller.signal.aborted || pendingStop) {
               return;
             }
+            editBuffer.dispose();
+            if (streamBufferRef.current === editBuffer) streamBufferRef.current = null;
             setCurrentChat((prevChat) => {
               if (!prevChat) return prevChat;
               const updatedMessages = prevChat.messages.map((msg) => {
@@ -2041,6 +2115,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       );
     } catch (error) {
       console.error("Failed to edit and regenerate:", error);
+      streamBufferRef.current?.dispose();
+      streamBufferRef.current = null;
       setIsLoading(false);
       setIsStreaming(false);
       setCurrentStreamId(null);
