@@ -35,6 +35,10 @@ APP_DIR=/root/siraNew/siraGPT scripts/deploy-production.sh
 | `GEMINI_API_KEY` | Google Gemini API key |
 | `OPENROUTER_API_KEY` | OpenRouter API key |
 | `DEEPSEEK_API_KEY` | DeepSeek API key |
+| `GEMA4_MODEL_ID` | Free-tier fallback model id. Default: `Gema4-31B` |
+| `GEMA4_PROVIDER` | Provider client for the free-tier fallback model. Default: `OpenAI` |
+| `GEMA4_DISPLAY_NAME` | Display name returned in the model selector policy. Default: `Gema4 31B` |
+| `GEMA4_ICON` | Icon key returned for the virtual fallback model. Default: `ChatGPTLogo` |
 
 ## 🗄️ Database & Cache
 

@@ -19,6 +19,15 @@
 | `MISTRAL_API_KEY` | Mistral La Plateforme | Mistral Large, Small, Codestral | `mistral-large-latest` |
 | `DEEPSEEK_API_KEY` | DeepSeek API | DeepSeek Chat, DeepSeek Reasoner | `deepseek-chat` |
 
+### Free-Tier Fallback Model
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `GEMA4_MODEL_ID` | `Gema4-31B` | Model id used when the FREE plan or exhausted premium pools route to the Gema4 fallback |
+| `GEMA4_PROVIDER` | `OpenAI` | Provider client used for the configured Gema4 fallback model |
+| `GEMA4_DISPLAY_NAME` | `Gema4 31B` | Public display name returned by `/api/ai/models` |
+| `GEMA4_ICON` | `ChatGPTLogo` | Icon key returned with the virtual fallback model |
+
 ### Embedding Providers
 
 | Variable | Provider | Purpose |

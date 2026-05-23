@@ -28,6 +28,7 @@
 
 const COST_RANK = Object.freeze({ low: 1, medium: 2, high: 3 });
 const LATENCY_RANK = Object.freeze({ fast: 1, normal: 2, slow_ok: 3 });
+const PLAN_RANK = Object.freeze({ FREE: 0, PRO: 1, PRO_MAX: 2, ENTERPRISE: 3 });
 
 /**
  * Deterministic capability/cost/latency profile per model. We do not
@@ -123,11 +124,30 @@ const CATALOG_BY_ID = Object.freeze(
 
 function listModels({ plan } = {}) {
   if (!plan) return CATALOG.map(m => ({ ...m }));
-  return CATALOG.filter(m => m.plans.includes(plan)).map(m => ({ ...m }));
+  return CATALOG.filter(m => isPlanEligible(m.plans, plan)).map(m => ({ ...m }));
 }
 
 function getModel(id) {
   return CATALOG_BY_ID[id] ? { ...CATALOG_BY_ID[id] } : null;
+}
+
+function normalizePlan(plan) {
+  return String(plan || "FREE").trim().toUpperCase() || "FREE";
+}
+
+function isPlanEligible(modelPlans = [], userPlan = "FREE") {
+  const normalizedUserPlan = normalizePlan(userPlan);
+  const userRank = PLAN_RANK[normalizedUserPlan];
+  if (userRank == null) return false;
+
+  const normalizedPlans = Array.isArray(modelPlans)
+    ? modelPlans.map(normalizePlan).filter((p) => PLAN_RANK[p] != null)
+    : [];
+  if (normalizedPlans.includes(normalizedUserPlan)) return true;
+  if (normalizedPlans.length === 0) return false;
+
+  const minimumRank = Math.min(...normalizedPlans.map((p) => PLAN_RANK[p]));
+  return userRank >= minimumRank;
 }
 
 /**
@@ -203,7 +223,7 @@ function scoreModel(model, req) {
 
   // ── Plan eligibility (HARD filter is applied earlier; this is the
   //    soft fallback for partial matches) ──────────────────────────
-  if (req.user_plan && !model.plans.includes(req.user_plan)) {
+  if (req.user_plan && !isPlanEligible(model.plans, req.user_plan)) {
     score -= 1000; // hard reject
     reasons.push(`plan_${req.user_plan}_not_eligible → -1000`);
   }
@@ -303,6 +323,8 @@ module.exports = {
   CATALOG_BY_ID,
   listModels,
   getModel,
+  normalizePlan,
+  isPlanEligible,
   scoreModel,
   select,
   reqFromDecision,

@@ -17,6 +17,7 @@ const {
     buildProviderChatPayload,
     classifyProviderError,
 } = require('./ai-product-os/litellm-gateway');
+const { GEMA4_MODEL_ID } = require('./plan-credits-catalog');
 const { sharedFetch } = require('../utils/provider-http-agent');
 
 const HEARTBEAT_INTERVAL_MS = 15000;
@@ -98,6 +99,10 @@ function isSiragptCombined(model) {
 function providerForModel(model) {
     if (!model) return 'OpenAI';
     const m = String(model).trim();
+    const configuredGema4Model = String(process.env.GEMA4_MODEL_ID || GEMA4_MODEL_ID).trim();
+    if (m === configuredGema4Model || /^gema4[-\s]?31b$/i.test(m)) {
+        return process.env.GEMA4_PROVIDER || 'OpenAI';
+    }
     if (isSiragptCombined(m)) return 'OpenRouter';
     if (/^deepseek-(v\d|chat|reasoner)/i.test(m)) return 'DeepSeek';
     if (/^(claude|anthropic\/)/i.test(m)) return 'OpenRouter';

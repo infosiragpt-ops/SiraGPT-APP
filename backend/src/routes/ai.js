@@ -77,7 +77,12 @@ const masterPrompt = require('../services/master-prompt');
 const streamCache = require('../services/stream-cache');
 const { enqueueCodexRun, detectCodeTaskIntent } = require('../services/codex/codex-run-orchestrator');
 const { runParaphrasePipeline } = require('../services/paraphrase-engine');
-const { resolveModelForUser, persistModelPreference } = require('../services/model-quota-router');
+const {
+  buildGema4VirtualModel,
+  buildModelQuotaPolicy,
+  resolveModelForUser,
+  persistModelPreference,
+} = require('../services/model-quota-router');
 const streamResume = require('../services/ai/stream-resume');
 const promptInjectionDetector = require('../services/ai/prompt-injection-detector');
 const longTermMemory = require('../services/long-term-memory');
@@ -603,6 +608,8 @@ router.post(
 router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace: 'ai-models' }), async (req, res) => {
   try {
     const { type } = req.query; // Query se 'type' hasil karein (e.g., ?type=TEXT)
+    const userPlan = req.user?.plan || 'FREE';
+    const modelPolicy = buildModelQuotaPolicy(req.user);
 
     const whereClause = {
       isActive: true,
@@ -679,14 +686,45 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
       }
     }
 
+    if (wantText) {
+      const fallbackModel = buildGema4VirtualModel();
+      const alreadyListed = models.some((m) => m.name === fallbackModel.name);
+      if (!alreadyListed) {
+        const fallbackRow = await prisma.aiModel.findFirst({
+          where: { name: fallbackModel.name },
+          select: { id: true },
+        });
+        if (!fallbackRow) {
+          models = modelPolicy.currentPlan === 'FREE'
+            ? [fallbackModel, ...models]
+            : [...models, fallbackModel];
+        }
+      }
+    }
+
     // Plan gating — drop catalogued models the user's plan can't use, but
     // leave models not in the catalog untouched (DB-only / virtual entries
     // keep their existing behavior). Anonymous users default to FREE.
-    const userPlan = req.user?.plan || 'FREE';
     models = models.filter((m) => {
       const catalogEntry = modelRouter.getModel(m.name);
       if (!catalogEntry) return true;
-      return catalogEntry.plans.includes(userPlan);
+      return modelRouter.isPlanEligible(catalogEntry.plans, userPlan);
+    });
+
+    models = models.map((m) => {
+      const catalogEntry = modelRouter.getModel(m.name);
+      return {
+        ...m,
+        isDefault: !!modelPolicy.defaultModel && modelPolicy.defaultModel.name === m.name,
+        isFallback: modelPolicy.fallbackModel.name === m.name,
+        planAccess: {
+          currentPlan: modelPolicy.currentPlan,
+          allowed: true,
+          catalogued: !!catalogEntry,
+          requiredPlans: catalogEntry ? catalogEntry.plans : null,
+          reason: catalogEntry ? 'plan_eligible' : 'not_catalogued',
+        },
+      };
     });
 
     // Provider key gating disabled (per user request: show ALL active
@@ -694,7 +732,7 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
     // their upstream 503 only when actually invoked, instead of being
     // hidden from the picker.
 
-    res.json({ models });
+    res.json({ models, policy: modelPolicy });
   } catch (error) {
     console.error('Get AI models error:', error);
     res.status(500).json({ error: 'Failed to fetch AI models' });
@@ -1125,7 +1163,7 @@ router.post(
         }
         if (routed.model && routed.model !== model) {
           model = routed.model;
-          provider = provider || 'OpenAI';
+          provider = routed.provider || provider || 'OpenAI';
         }
       }
 
@@ -1289,7 +1327,7 @@ router.post(
       if (isAuth) {
         const catalogEntry = modelRouter.getModel(model);
         const userPlan = req.user.plan || 'FREE';
-        if (catalogEntry && !catalogEntry.plans.includes(userPlan)) {
+        if (catalogEntry && !modelRouter.isPlanEligible(catalogEntry.plans, userPlan)) {
           return res.status(403).json({
             error: 'plan_does_not_include_model',
             message: `El modelo "${catalogEntry.id}" requiere un plan ${catalogEntry.plans.join(' o ')}. Tu plan actual: ${userPlan}.`,

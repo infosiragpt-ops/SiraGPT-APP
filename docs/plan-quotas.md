@@ -56,6 +56,23 @@ single shape:
 A `monthlyLimit` of `0` is treated as **unlimited** (no enforcement),
 matching the legacy convention for staff / unlimited accounts.
 
+## Model selector policy
+
+`GET /api/ai/models` returns the existing `{ models }` payload plus a
+backward-compatible `policy` object. The policy is user-scoped by the
+response cache key and exposes only public quota state:
+
+- `currentPlan`
+- `defaultModel` for FREE users
+- `fallbackModel`
+- `calls`, `premiumTokens`, and `gemaTokens`
+- localized-safe notice codes/messages for exhausted pools
+
+The FREE plan places the configured Gema4 fallback first in the text
+model list so existing clients that pick the first available model keep
+using the intended default. Paid plans keep their existing ordering and
+use Gema4 only as an explicit fallback when premium tokens are exhausted.
+
 ## Where the middleware is wired
 
 | Route / mount                | Middleware? | Surface label              |

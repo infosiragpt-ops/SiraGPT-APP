@@ -69,6 +69,23 @@ describe("model-router", () => {
     expect(list.some(m => m.id === "gpt-5" && !m.plans.includes("FREE"))).toBe(false);
   });
 
+  test("PRO_MAX inherits PRO catalog access", () => {
+    expect(modelRouter.isPlanEligible(["PRO"], "PRO_MAX")).toBe(true);
+    expect(modelRouter.isPlanEligible(["ENTERPRISE"], "PRO_MAX")).toBe(false);
+
+    const list = modelRouter.listModels({ plan: "PRO_MAX" });
+    expect(list.length).toBeGreaterThan(0);
+
+    const r = modelRouter.select({
+      user_plan: "PRO_MAX",
+      complexity: "high",
+      requires_reasoning: true,
+      max_cost: "high",
+      latency: "normal",
+    });
+    expect(r.model).toBeTruthy();
+  });
+
   test("user prefer is respected when eligible", () => {
     // Pick a model that IS guaranteed to be in the catalog.
     const eligibleId = modelRouter.listModels()[0]?.id;
