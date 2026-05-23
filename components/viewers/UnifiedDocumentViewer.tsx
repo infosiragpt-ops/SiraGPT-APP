@@ -568,7 +568,17 @@ function RendererDispatch({
         fallback={<PptxRenderer a={attachment} />}
       />
     )
-    case "docx":     return <DocxRenderer a={attachment} isDark={isDark} />
+    // DOCX should look like the uploaded Word file, not like a loose HTML
+    // extraction. Prefer the backend LibreOffice/Gotenberg PDF render when
+    // the file has a stable id; browser DOCX rendering stays as fallback for
+    // fresh composer blobs and deployments without a renderer.
+    case "docx":     return (
+      <ServerConvertedPdfRenderer
+        a={attachment}
+        preferServer
+        fallback={<DocxRenderer a={attachment} isDark={isDark} />}
+      />
+    )
     // Legacy binary .doc cannot be parsed in the browser. Server PDF
     // is the only viable preview path; if the server can't convert,
     // we surface the professional fallback (download CTA).
@@ -671,8 +681,8 @@ async function fetchServerConvertedPdfAttachment(a: AttachmentLike): Promise<Att
 }
 
 function ServerConvertedPdfRenderer({
-  a, fallback,
-}: { a: AttachmentLike; fallback: React.ReactNode }) {
+  a, fallback, preferServer = false,
+}: { a: AttachmentLike; fallback: React.ReactNode; preferServer?: boolean }) {
   const [state, setState] = React.useState<"probing" | "ok" | "unavailable">("probing")
   const [pdfAttachment, setPdfAttachment] = React.useState<AttachmentLike | null>(null)
   const [unavailableReason, setUnavailableReason] = React.useState<string>("")
@@ -704,7 +714,7 @@ function ServerConvertedPdfRenderer({
     return () => { cancelled = true }
   }, [a])
 
-  if (state === "probing" && hasClientPreviewSource(a)) return <>{fallback}</>
+  if (state === "probing" && hasClientPreviewSource(a) && !preferServer) return <>{fallback}</>
   if (state === "probing") return <LoadingState label="Generando vista de alta fidelidad…" />
   if (state === "unavailable" || !pdfAttachment) {
     if (process.env.NODE_ENV !== "production" && unavailableReason) {
@@ -900,6 +910,17 @@ async function readAsArrayBuffer(a: AttachmentLike): Promise<ArrayBuffer> {
   }
 
   throw new Error("No source available")
+}
+
+function looksLikeZipContainer(buf: ArrayBuffer): boolean {
+  if (buf.byteLength < 4) return false
+  const b = new Uint8Array(buf, 0, 4)
+  // ZIP local file header, empty archive, or spanned archive signatures.
+  return b[0] === 0x50 && b[1] === 0x4b && (
+    (b[2] === 0x03 && b[3] === 0x04) ||
+    (b[2] === 0x05 && b[3] === 0x06) ||
+    (b[2] === 0x07 && b[3] === 0x08)
+  )
 }
 
 export function prewarmUnifiedDocumentPreview(a: AttachmentLike): void {
@@ -1122,8 +1143,8 @@ function ErrorState({ error, hint }: { error: string; hint?: string }) {
   }
 
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center">
-      <div className="rounded-full bg-amber-500/10 p-3 ring-1 ring-amber-500/25">
+    <div className="flex h-full flex-col items-center justify-center gap-3 bg-[radial-gradient(circle_at_50%_35%,rgba(255,255,255,0.72),transparent_38%),linear-gradient(180deg,rgba(250,250,250,0.92),rgba(244,244,245,0.82))] p-8 text-center dark:bg-[radial-gradient(circle_at_50%_35%,rgba(255,255,255,0.08),transparent_38%),linear-gradient(180deg,rgba(24,24,27,0.94),rgba(9,9,11,0.9))]">
+      <div className="rounded-full border border-white/65 bg-white/68 p-3 text-amber-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_18px_42px_rgba(15,23,42,0.10)] backdrop-blur-2xl dark:border-white/10 dark:bg-white/10 dark:text-amber-300 dark:shadow-[0_18px_42px_rgba(0,0,0,0.34),inset_0_1px_0_rgba(255,255,255,0.08)]">
         <Icon className="h-7 w-7 text-amber-600 dark:text-amber-400" />
       </div>
       <div>
@@ -1133,13 +1154,22 @@ function ErrorState({ error, hint }: { error: string; hint?: string }) {
       </div>
       <div className="mt-2 flex flex-wrap items-center justify-center gap-2">
         {canDownload && (
-          <Button variant="outline" size="sm" onClick={handleDownload}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleDownload}
+            className="rounded-full border-white/65 bg-white/70 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_12px_26px_rgba(15,23,42,0.08)] backdrop-blur-xl hover:bg-white/90 dark:border-white/10 dark:bg-white/10 dark:hover:bg-white/16"
+          >
             <Download className="mr-1.5 h-3.5 w-3.5" />
             Descargar archivo original
           </Button>
         )}
         {onRetry && (
-          <Button size="sm" onClick={onRetry}>
+          <Button
+            size="sm"
+            onClick={onRetry}
+            className="rounded-full shadow-[0_12px_28px_rgba(15,23,42,0.16)]"
+          >
             <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
             Reintentar
           </Button>
@@ -2240,6 +2270,14 @@ function DocxRenderer({ a, isDark: _isDark }: { a: AttachmentLike; isDark: boole
       }
       try {
         const buf = await readAsArrayBuffer(a)
+        if (!looksLikeZipContainer(buf)) {
+          if (a.extractedText) {
+            setFallbackHtml(extractedTextToHtml(a.extractedText, a.name))
+            setMode("extracted")
+            return
+          }
+          throw new Error("No se recibio el archivo DOCX original. El servidor devolvio una respuesta que no es un documento Word valido.")
+        }
         // Try docx-preview first (high fidelity). Imported lazily so the
         // ~250 KB module isn't loaded for any non-DOCX preview.
         try {
