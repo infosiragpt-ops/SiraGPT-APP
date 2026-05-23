@@ -28,7 +28,7 @@
 {"id":"ambig-short-08","prompt":"dame uno","expected_action":"ask","tags":["ambig","short"]}
 {"id":"ambig-format-conflict-01","prompt":"prepara el material en Word o Excel, lo que prefieras","expected_action":"execute","tags":["format-conflict","user-delegates"]}
 {"id":"ambig-format-conflict-02","prompt":"genera algo en PDF o PPTX","expected_action":"execute","tags":["format-conflict","user-delegates"]}
-{"id":"ambig-signal-conflict-01","prompt":"hazme un documento con gráficos de los datos","expected_action":"execute","tags":["clear","mixed"]}
+{"id":"ambig-signal-conflict-01","prompt":"hazme un documento con gráficos de los datos","expected_action":"ask","tags":["ambig","needs-source"]}
 {"id":"ambig-signal-conflict-02","prompt":"algo visual o un documento sobre el proyecto","expected_action":"ask","expected_options":["documento","visualización"],"tags":["ambig","signal-conflict"]}
 {"id":"coref-01","prompt":"cambia la segunda parte","ctx_history":[{"role":"user","text":"escribe un ensayo en 3 partes sobre IA"},{"role":"assistant","text":"Parte 1: Definición. Parte 2: Historia. Parte 3: Futuro."}],"expected_action":"execute","coref":{"anaphor":"la segunda parte","resolves_to":"Parte 2: Historia"},"tags":["coref","multi-turn"]}
 {"id":"coref-02","prompt":"hazlo más corto","ctx_history":[{"role":"user","text":"resume este paper"},{"role":"assistant","text":"El paper presenta un nuevo método de atención..."}],"expected_action":"execute","coref":{"anaphor":"lo","resolves_to":"el resumen previo"},"tags":["coref","multi-turn"]}

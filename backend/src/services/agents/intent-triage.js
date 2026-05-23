@@ -83,28 +83,29 @@ function readScore(analysis) {
 function looksLikeVagueRequest(promptText) {
   if (!promptText || typeof promptText !== "string") return null;
   const t = promptText.trim().toLowerCase();
-  if (!t || t.split(/\s+/).filter(Boolean).length > 8) return null;
-  // 1. Acciones genéricas sin objeto concreto: "algo de X", "X cualquiera"
+  if (!t) return null;
+  const isShortish = t.split(/\s+/).filter(Boolean).length <= 8;
+  // Medium_conflict puede aparecer en prompts más largos: "prepara material
+  // que sirva para imprimir o para web" (9 tokens). Lo chequeamos primero
+  // sin el guard de longitud.
+  if (/\b(?:tanto\s+\w+\s+como\s+\w+|para\s+\w+\s+o\s+para\s+\w+|audio\s+o\s+video|imagen\s+o\s+texto|imprimir\s+o\s+(?:digital|web|pantalla|en\s+pantalla)|impresi[oó]n\s+o\s+(?:digital|web)|formato\s+\w+\s+o\s+\w+)\b/.test(t)) {
+    return "medium_conflict";
+  }
+  // Resto de heurísticas requieren prompt cortish (filtra detalle largo)
+  if (!isShortish) return null;
+  // 1. Acciones genéricas sin objeto concreto
   if (/^(?:algo|cualquier(?:a)?\s+cosa|lo\s+que\s+sea|haz(?:me)?\s+algo|hazme\s+uno|dame\s+uno)\b/.test(t)) {
     return "generic_action";
   }
-  // 2. Verbos de transformación sin fuente: "hazme un resumen", "tradúceme",
-  //    "analiza", "corre el código" (sin código adjunto en el prompt)
+  // 2. Verbos de transformación sin fuente
   if (/^(?:h[aá]zme?\s+(?:un|una)\s+(?:resumen|traducci[oó]n|an[aá]lisis|s[ií]ntesis|reporte|informe)|trad[uú]ce(?:me)?|analiza|resume|sintetiza|corre|ejecuta)\s*(?:el\s+(?:c[oó]digo|texto|archivo|documento|adjunto))?\s*$/.test(t)) {
     return "transform_no_source";
   }
-  // 3. Referencias deícticas a contexto inexistente: "el reporte que pediste",
-  //    "lo que dijimos", "ese archivo" — pero solo SIN historial previo.
-  //    (Con historial, looksLikeFollowUp ya los maneja antes.)
+  // 3. Referencias deícticas a contexto inexistente
   if (/^(?:el|la|los|las)\s+\w+\s+(?:que|de|del|que\s+pediste|que\s+te\s+ped[ií])/.test(t)) {
     return "context_ref_no_history";
   }
-  // 4. Conflicto explícito de formato/medio: "para imprimir o para web",
-  //    "audio o video", "imagen o texto"
-  if (/\b(?:tanto\s+\w+\s+como\s+\w+|para\s+\w+\s+o\s+para\s+\w+|audio\s+o\s+video|imagen\s+o\s+texto|imprimir\s+o\s+digital)\b/.test(t)) {
-    return "medium_conflict";
-  }
-  // 5. Petición de ayuda sin scope: "ayúdame", "ayúdame a empezar", "necesito ayuda"
+  // 5. Petición de ayuda sin scope
   if (/^(?:ay[uú]dame(?:\s+a\s+\w+)?|necesito\s+ayuda|qu[eé]\s+puedo\s+hacer|por\s+d[oó]nde\s+empiezo)\s*$/.test(t)) {
     return "help_no_scope";
   }
