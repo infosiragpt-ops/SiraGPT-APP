@@ -173,6 +173,35 @@ function traceLLMGeneration(params) {
   }
 }
 
+/**
+ * scoreTrace — emit a Langfuse "score" event keyed to a trace id.
+ *
+ * Used by misunderstanding-signals (PR-2) to flag implicit signals of
+ * miscomprehension on a per-turn basis. The Langfuse dashboard will
+ * surface these as additional axes alongside the LLM generation traces.
+ *
+ * @param {string} traceId
+ * @param {Object} params
+ * @param {string} params.name   Score key, e.g. `misunderstanding.correction_followup`.
+ * @param {number} params.value  Numeric value (typically 1 for boolean signals).
+ * @param {string} [params.comment]
+ * @returns {boolean}
+ */
+function scoreTrace(traceId, { name, value, comment } = {}) {
+  if (!langfuseClient || !traceId || !name) return false;
+  try {
+    langfuseClient.score({
+      traceId,
+      name: String(name),
+      value: typeof value === 'number' ? value : 1,
+      comment: comment ? String(comment).slice(0, 500) : undefined,
+    });
+    return true;
+  } catch (_err) {
+    return false;
+  }
+}
+
 async function shutdownLangfuse() {
   if (!langfuseClient) return;
   try {
@@ -191,5 +220,6 @@ module.exports = {
   getLangfuseClient,
   startLangfuse,
   traceLLMGeneration,
+  scoreTrace,
   shutdownLangfuse,
 };

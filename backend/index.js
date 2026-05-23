@@ -184,8 +184,17 @@ const {
     getLangfuseStatus,
     shutdownLangfuse,
     startLangfuse,
+    scoreTrace: langfuseScoreTrace,
 } = require('./src/services/observability/langfuse');
 startLangfuse();
+// PR-7: wire misunderstanding-signals to the real Langfuse sink so
+// every implicit signal (regenerate, abandon, correction, dislike,
+// manual_edit) appears as a "score" on its associated trace. Best-effort:
+// the sink swallows all errors and noops when Langfuse is disabled.
+try {
+  const __misSignals = require('./src/services/agents/misunderstanding-signals');
+  __misSignals.setLangfuseSink({ scoreTrace: langfuseScoreTrace });
+} catch (_misWireErr) { /* noop — telemetry must never block boot */ }
 const {
     getPostHogStatus,
     shutdownPostHog,

@@ -1,0 +1,141 @@
+name: Eval · Understanding (nightly)
+
+# Runs the deterministic-path eval harness against the curated golden
+# corpus (backend/tests/eval/understanding-corpus.jsonl).
+# Non-blocking: failures do NOT gate merges; the goal is to track
+# trends in intent_accuracy / clarify F1 / ECE / options_precision /
+# coref_resolution_rate over time and surface regressions early.
+#
+# Triggers:
+#   - nightly schedule (cron, 04:15 UTC)
+#   - manual dispatch
+#   - on push to main (so a fresh baseline is captured per merge)
+#
+# Outputs:
+#   - JSON report archived as an artifact (90-day retention)
+#   - Markdown summary printed to job log + uploaded
+#
+# Required env: none (the harness does not call LLM judges in default
+# mode — only the deterministic router + triage code paths).
+
+on:
+  schedule:
+    - cron: '15 4 * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/src/services/agents/semantic-intent-router.js'
+      - 'backend/src/services/agents/intent-triage.js'
+      - 'backend/src/services/agents/clarification-options-builder.js'
+      - 'backend/src/services/agents/understanding-eval-harness.js'
+      - 'backend/tests/eval/understanding-corpus.jsonl'
+      - 'backend/scripts/run-understanding-eval.js'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '24'
+
+jobs:
+  eval:
+    name: Eval · Understanding
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Non-blocking — never fails the workflow regardless of metric values.
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            backend/package-lock.json
+
+      - name: Install root dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Install backend dependencies
+        run: npm ci --prefix backend --prefer-offline --no-audit --no-fund
+
+      - name: Run understanding eval (JSON)
+        id: eval
+        run: |
+          set -o pipefail
+          node backend/scripts/run-understanding-eval.js --json > eval-report.json 2> eval-console.log || true
+          echo "report_path=eval-report.json" >> $GITHUB_OUTPUT
+          # Also produce a human-readable summary
+          node backend/scripts/run-understanding-eval.js > eval-summary.txt 2>&1 || true
+
+      - name: Print summary to job log
+        run: |
+          echo "::group::Understanding Eval Summary"
+          cat eval-summary.txt || true
+          echo "::endgroup::"
+
+      - name: Generate markdown summary
+        run: |
+          python3 - <<'PY'
+          import json, os
+          try:
+              with open("eval-report.json") as f:
+                  r = json.load(f)
+          except Exception as e:
+              print(f"Could not parse eval-report.json: {e}")
+              raise SystemExit(0)
+          m = r.get("metrics", {})
+          ia = m.get("intent_accuracy", {}) or {}
+          cl = m.get("clarify", {}) or {}
+          conf = (cl.get("confusion") or {})
+          summary = f"""# Understanding Eval Report
+
+          - **Corpus**: `{r.get('corpus_path','?')}`
+          - **Rows evaluated**: {r.get('n_evaluated', 0)} / {r.get('n_rows', 0)}
+          - **Parse errors**: {len(r.get('parse_errors', []))}
+          - **Runtime errors**: {len(r.get('errors', []))}
+
+          ## Intent accuracy (multi-label)
+
+          - precision: **{ia.get('precision', 0):.3f}**
+          - recall: **{ia.get('recall', 0):.3f}**
+          - F1: **{ia.get('f1', 0):.3f}**
+
+          ## Clarify (ask vs execute)
+
+          - precision: **{cl.get('precision', 0):.3f}**
+          - recall: **{cl.get('recall', 0):.3f}**
+          - F1: **{cl.get('f1', 0):.3f}**
+          - confusion: tp={conf.get('tp', 0)} fp={conf.get('fp', 0)} fn={conf.get('fn', 0)} tn={conf.get('tn', 0)}
+
+          ## Calibration
+
+          - ambiguity ECE: **{m.get('ambiguity_calibration_ece', 0):.4f}**
+
+          ## Other
+
+          - options_precision: **{m.get('options_precision', 0) or 0:.3f}**
+          - coref_resolution_rate: **{(m.get('coref_resolution_rate') or 0):.3f}** (N/A when no resolver)
+          """
+          path = os.environ.get('GITHUB_STEP_SUMMARY')
+          if path:
+              with open(path, 'a') as f:
+                  f.write(summary)
+          print(summary)
+          PY
+
+      - name: Upload eval report
+        uses: actions/upload-artifact@v4
+        with:
+          name: understanding-eval-${{ github.run_id }}
+          path: |
+            eval-report.json
+            eval-summary.txt
+            eval-console.log
+          retention-days: 90
