@@ -3035,7 +3035,25 @@ router.post(
         }
       }
 
-      const systemInstruction = { role: 'system', content: promptBundle.system + universalContractBlock + enterpriseExecutionBlock + memoryBlock + orchMemoryBlock + feedbackBlock + evidenceBlock + documentEnrichmentBlock + coworkBlock + webSearchBlock };
+      // PR-5: Grounding preface para tareas de alto coste. Detecta si
+      // el contrato es de alto coste (presentations, video, deep
+      // research, web app build) y, si lo es, añade una instrucción al
+      // system prompt que pide al LLM iniciar con "Entendí: …".
+      let __pr5GroundingBlock = '';
+      try {
+        if (String(process.env.SIRAGPT_GROUNDING_PREFACE_ENABLED || 'true').toLowerCase() !== 'false'
+            && String(req.headers['x-sira-confirm-mode'] || '') !== 'off') {
+          const __ig = require('../services/agents/intent-grounding-text');
+          const __block = __ig.shouldInjectGrounding({
+            contract: universalTaskContract,
+            structuredIntent: semanticIntentAnalysis?.structured_intent,
+            requiredTools: semanticIntentAnalysis?.routing?.required_tools || universalTaskContract?.required_tools,
+          });
+          if (__block) __pr5GroundingBlock = `\n\n${__block}`;
+        }
+      } catch (_pr5Err) { /* swallow */ }
+
+      const systemInstruction = { role: 'system', content: promptBundle.system + universalContractBlock + enterpriseExecutionBlock + memoryBlock + orchMemoryBlock + feedbackBlock + evidenceBlock + documentEnrichmentBlock + coworkBlock + webSearchBlock + __pr5GroundingBlock };
       console.log(`📝 system prompt built: intent=${promptBundle.intent} lang=${promptBundle.language} chars=${systemInstruction.content.length} profile=${userProfile ? 'yes' : 'no'} memory=${memoryBlock ? 'yes' : 'no'} orchMemory=${orchMemoryBlock ? 'yes' : 'no'} feedback=${feedbackBlock ? 'yes' : 'no'} rag=${operationalRagContext?.active ? 'yes' : 'no'} contract=${universalTaskContract?.pipeline || 'none'} graph=${enterpriseExecutionGraph?.graph_id || 'none'} cira=${ciraRuntimeBundle?.envelope?.request_id || 'none'} docEnrichment=${documentEnrichment ? `${documentEnrichment.primaryDocType}/${documentEnrichment.perFileProfile.length}` : 'none'} webSearch=${webSearchBlock ? 'yes' : 'no'}`);
 
       // ✅ IMPROVED: Get previous chat history with proper image handling
