@@ -123,9 +123,13 @@ const {
 } = require('../services/agents/agentic-operating-core');
 const { buildSemanticIntentAnalysis } = require('../services/agents/semantic-intent-router');
 const { triageIntent } = require('../services/agents/intent-triage');
-const { makeGeminiJudge } = require('../services/agents/intent-triage-judge');
+const { makeGeminiJudge, makeGeminiCorefJudge } = require('../services/agents/intent-triage-judge');
 const siraMetrics = require('../services/sira/metrics');
 const __intentTriageJudge = makeGeminiJudge();
+// PR-3: coref + lexicón. Both lazy-required at use to avoid load-order issues.
+const corefResolver = require('../services/agents/coref-resolver');
+const personalLexicon = require('../services/personal-lexicon');
+const __corefJudge = makeGeminiCorefJudge();
 const ciraEngine = require('../services/sira/engine');
 const postResponseBrainHook = require('../services/sira/post-response-brain-hook');
 const coworkEngine = require('../services/cowork-engine');
@@ -1440,6 +1444,53 @@ router.post(
         }
       }
 
+      // PR-3: Personal lexicon + coreference resolution.
+      // Antes de construir el system prompt, recuperar términos personales
+      // del usuario y resolver coreferencias del mensaje actual. Ambos son
+      // best-effort: cualquier fallo cae al comportamiento actual.
+      const __pr3ExtraBlocks = [];
+      let __pr3RecentTurns = [];
+      try {
+        if (userId && canPersist && chatId) {
+          const __historyMsgs = await prisma.message.findMany({
+            where: { chatId },
+            orderBy: { timestamp: 'desc' },
+            take: 6,
+            select: { role: true, content: true },
+          });
+          // Map oldest → newest, normalized shape for the resolver.
+          __pr3RecentTurns = (__historyMsgs || []).reverse().map((m) => ({
+            role: m.role === 'ASSISTANT' ? 'assistant' : 'user',
+            text: m.content || '',
+          })).filter((m) => m.text);
+        }
+      } catch (_pr3HistErr) { /* swallow — coref still useful with attachments only */ }
+
+      try {
+        if (userId && String(process.env.SIRAGPT_LEXICON_DISABLED || '').toLowerCase() !== '1') {
+          const __lexTerms = await personalLexicon.lookupTerms({ userId, prompt, k: 5 });
+          const __lexBlock = personalLexicon.buildLexiconBlock(__lexTerms || []);
+          if (__lexBlock) __pr3ExtraBlocks.push(__lexBlock);
+        }
+      } catch (_pr3LexErr) { /* swallow — lexicón es nice-to-have */ }
+
+      let __pr3CorefResult = null;
+      try {
+        if (String(process.env.SIRAGPT_COREF_ENABLED || 'true').toLowerCase() !== 'false') {
+          __pr3CorefResult = await corefResolver.resolveCoreferences({
+            prompt,
+            recentTurns: __pr3RecentTurns,
+            attachments: processedFiles.map((f) => ({ id: f?.id, name: f?.name || f?.fileId, filename: f?.filename })).filter((a) => a.id || a.name || a.filename),
+            judge: __corefJudge,
+            options: { timeoutMs: 250 },
+          });
+          if (__pr3CorefResult && Array.isArray(__pr3CorefResult.references) && __pr3CorefResult.references.length > 0) {
+            const __corefBlock = corefResolver.buildCorefPromptBlock(__pr3CorefResult.references);
+            if (__corefBlock) __pr3ExtraBlocks.push(__corefBlock);
+          }
+        }
+      } catch (_pr3CorefErr) { /* swallow */ }
+
       // ✅ Master prompt — the single source of truth for siraGPT's voice.
       // Injects the 10 absolute rules, language policy, intent-specialized
       // context, the user's personalization, and the custom GPT persona
@@ -1451,6 +1502,7 @@ router.post(
         project,
         userProfile,
         fileIds: processedFiles.map(f => f.id || f.fileId || f.openaiFileId || f.name || 'attachment'),
+        extraBlocks: __pr3ExtraBlocks,
       });
 
       // Long-term memory recall: pull the top-K durable facts for this
@@ -3540,6 +3592,15 @@ router.post(
           try {
             const memoryOpenAI = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
             longTermMemory.extractFactsAsync({
+              openai: memoryOpenAI,
+              userId,
+              userMessage: prompt,
+              assistantMessage: fullResponseContent,
+            });
+            // PR-3: also extract personal lexicon terms from the same turn.
+            // Separate LLM call (different prompt, different output shape),
+            // also fire-and-forget. Disabled via SIRAGPT_LEXICON_DISABLED=1.
+            personalLexicon.extractTermsAsync({
               openai: memoryOpenAI,
               userId,
               userMessage: prompt,

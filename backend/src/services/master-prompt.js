@@ -448,7 +448,7 @@ CUSTOM_GPT_INSTRUCTIONS>>>
  * @param {string[]} [opts.fileIds] — current-turn attachments, used only for intent alignment
  * @returns {{ system: string, intent: string }}
  */
-function buildSystemPrompt({ language, userMessage, customGpt, project, userProfile, fileIds = [] }) {
+function buildSystemPrompt({ language, userMessage, customGpt, project, userProfile, fileIds = [], extraBlocks = [] }) {
   const lang = language || 'es';
   const { intent, context: intentContext } = classifyIntent(userMessage || '');
   const alignmentProfile = buildUserIntentAlignmentProfile({
@@ -493,6 +493,18 @@ function buildSystemPrompt({ language, userMessage, customGpt, project, userProf
   body += intentContext;
 
   body += `\n\n## USER INTENT ALIGNMENT\n${buildUserIntentAlignmentPrompt(alignmentProfile)}`;
+
+  // PR-3: opcional bloques externos (COREFERENCE_RESOLUTION, PERSONAL_LEXICON,
+  // GROUNDING_PREFACE, ...). Cada uno se inyecta como sección propia.
+  // Acepta strings o null/undefined (se ignoran). Mantener orden de
+  // appearance para predictability.
+  if (Array.isArray(extraBlocks) && extraBlocks.length > 0) {
+    for (const block of extraBlocks) {
+      if (typeof block === 'string' && block.trim()) {
+        body += `\n\n${block.trim()}`;
+      }
+    }
+  }
 
   // Math + document-tag contract — kept as trailing reminders so they
   // don't dilute the absolute rules but still stay in the system prompt.
