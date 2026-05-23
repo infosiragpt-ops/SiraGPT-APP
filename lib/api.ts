@@ -62,6 +62,21 @@ export type SuccessEnvelope = {
   message?: string
   [key: string]: unknown
 }
+export type ChatRunSummary = {
+  runId: string
+  chatId: string
+  status: "pending" | "running" | "completed" | "failed" | "cancelled" | string
+  model: string
+  provider: string | null
+  messageId: string | null
+  startedAt: string | null
+  lastChunkAt: string | null
+  completedAt: string | null
+  cancelledAt: string | null
+  cancelReason: string | null
+  attempt: number
+  snippet: string
+}
 export type ImpersonateEnvelope = {
   token?: string
   user?: AuthUser
@@ -546,7 +561,7 @@ class ApiClient {
   // Chat endpoints
   // Returns ChatsEnvelope at runtime — kept as `any` because consumers
   // store the result in the local Chat[] state (id: string only).
-  async getChats(params?: { page?: number; limit?: number; projectId?: string; includeProjects?: boolean; search?: string }): Promise<any> {
+  async getChats(params?: { page?: number; limit?: number; projectId?: string; includeProjects?: boolean; includeArchived?: boolean; search?: string }): Promise<any> {
     const query = new URLSearchParams(params as any).toString();
     return this.request(`/chats${query ? `?${query}` : ''}`);
   }
@@ -578,6 +593,35 @@ class ApiClient {
     return (await this.request(`/chats/${id}`, { method: 'DELETE' })) as
       | { success?: boolean; [key: string]: unknown }
       | null;
+  }
+
+  async getActiveChatRuns(): Promise<{ runs: ChatRunSummary[] }> {
+    return (await this.request('/chats/active-runs')) as { runs: ChatRunSummary[] };
+  }
+
+  async getActiveChatRun(chatId: string): Promise<{ run: ChatRunSummary | null }> {
+    return (await this.request(`/chats/${chatId}/run/active`)) as { run: ChatRunSummary | null };
+  }
+
+  async cancelChatRun(chatId: string, runId: string, reason = 'user_cancel'): Promise<{ ok: boolean; run: ChatRunSummary; noop?: boolean }> {
+    return (await this.request(`/chats/${chatId}/run/${runId}/cancel`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    })) as { ok: boolean; run: ChatRunSummary; noop?: boolean };
+  }
+
+  async pinChat(id: string, pinned: boolean): Promise<{ chat: { id: string; isPinned: boolean; pinnedAt: string | null } }> {
+    return (await this.request(`/chats/${id}/pin`, {
+      method: 'PATCH',
+      body: JSON.stringify({ pinned }),
+    })) as { chat: { id: string; isPinned: boolean; pinnedAt: string | null } };
+  }
+
+  async archiveChat(id: string, archived: boolean): Promise<{ chat: { id: string; isArchived: boolean } }> {
+    return (await this.request(`/chats/${id}/archive`, {
+      method: 'PATCH',
+      body: JSON.stringify({ archived }),
+    })) as { chat: { id: string; isArchived: boolean } };
   }
 
   // Returns AddMessageEnvelope at runtime — kept as `any` because the
