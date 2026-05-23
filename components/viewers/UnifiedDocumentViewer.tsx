@@ -267,14 +267,29 @@ function formatSize(n: number | null | undefined) {
   return `${(n / 1024 / 1024).toFixed(1)} MB`
 }
 
-const liquidToolbarClass =
-  "border border-white/35 bg-background/78 shadow-[0_16px_44px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.38)] backdrop-blur-2xl supports-[backdrop-filter]:bg-background/62 dark:border-white/10 dark:bg-zinc-950/62 dark:shadow-[0_16px_44px_rgba(0,0,0,0.34),inset_0_1px_0_rgba(255,255,255,0.08)]"
+const liquidViewerHeaderClass =
+  "border-b border-white/55 bg-white/78 shadow-[0_18px_54px_rgba(15,23,42,0.08),inset_0_-1px_0_rgba(255,255,255,0.82)] backdrop-blur-2xl supports-[backdrop-filter]:bg-white/62 dark:border-white/10 dark:bg-zinc-950/72 dark:shadow-[0_18px_54px_rgba(0,0,0,0.28),inset_0_-1px_0_rgba(255,255,255,0.06)]"
+
+const liquidFileBadgeClass =
+  "grid h-10 w-10 shrink-0 place-items-center rounded-2xl border border-white/65 bg-white/72 text-zinc-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.88),0_12px_28px_rgba(15,23,42,0.08)] backdrop-blur-xl dark:border-white/10 dark:bg-white/10 dark:text-zinc-200"
+
+const liquidMetaPillClass =
+  "inline-flex h-5 items-center rounded-full border border-white/58 bg-white/56 px-2 text-[10.5px] font-semibold uppercase tracking-[0.06em] text-zinc-500 shadow-[inset_0_1px_0_rgba(255,255,255,0.72)] backdrop-blur-xl dark:border-white/10 dark:bg-white/8 dark:text-zinc-400"
 
 const liquidIconButtonClass =
-  "inline-flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition hover:bg-foreground/[0.06] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/20 disabled:pointer-events-none disabled:opacity-40 dark:hover:bg-white/10"
+  "inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/55 bg-white/56 text-zinc-600 shadow-[inset_0_1px_0_rgba(255,255,255,0.78),0_10px_24px_rgba(15,23,42,0.08)] backdrop-blur-xl transition hover:-translate-y-0.5 hover:bg-white/78 hover:text-zinc-950 hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_14px_32px_rgba(15,23,42,0.12)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/20 disabled:pointer-events-none disabled:opacity-40 dark:border-white/10 dark:bg-white/10 dark:text-zinc-300 dark:hover:bg-white/16 dark:hover:text-white"
 
 const liquidGhostButtonClass =
-  "h-7 w-7 rounded-full text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground dark:hover:bg-white/10"
+  "h-8 w-8 rounded-full border border-white/50 bg-white/54 text-zinc-600 shadow-[inset_0_1px_0_rgba(255,255,255,0.72),0_8px_20px_rgba(15,23,42,0.07)] backdrop-blur-xl hover:bg-white/78 hover:text-zinc-950 disabled:pointer-events-none disabled:opacity-40 dark:border-white/10 dark:bg-white/10 dark:text-zinc-300 dark:hover:bg-white/16 dark:hover:text-white"
+
+const liquidControlShellClass =
+  "rounded-[999px] border border-white/70 bg-white/72 px-2 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_20px_54px_rgba(15,23,42,0.18)] backdrop-blur-2xl supports-[backdrop-filter]:bg-white/58 dark:border-white/10 dark:bg-zinc-950/64 dark:shadow-[0_20px_54px_rgba(0,0,0,0.36),inset_0_1px_0_rgba(255,255,255,0.08)]"
+
+const liquidMetricPillClass =
+  "flex h-8 min-w-[4.75rem] items-center justify-center rounded-full border border-white/58 bg-white/62 px-3 text-[11px] font-semibold tabular-nums text-zinc-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.78)] backdrop-blur-xl dark:border-white/10 dark:bg-white/10 dark:text-zinc-100"
+
+const liquidControlDividerClass =
+  "mx-1 h-6 w-px bg-zinc-300/70 dark:bg-white/10"
 
 function absUrl(u: string) {
   // Routes through the shared `normalizeBackendAssetUrl` so the
@@ -410,27 +425,28 @@ export default function UnifiedDocumentViewer({
         onClick={(e) => e.stopPropagation()}
       >
         <div className={cn(
-          "relative flex flex-row items-center gap-3 border-b border-border/45 px-4 py-2.5",
-          "bg-background/82 shadow-[0_10px_26px_rgba(15,23,42,0.05),inset_0_-1px_0_rgba(255,255,255,0.52)] backdrop-blur-2xl supports-[backdrop-filter]:bg-background/68 dark:bg-zinc-950/72 dark:shadow-[0_10px_26px_rgba(0,0,0,0.2),inset_0_-1px_0_rgba(255,255,255,0.05)]",
+          "relative isolate flex min-h-16 flex-row items-center gap-3 overflow-hidden px-4 py-2.5",
+          liquidViewerHeaderClass,
         )}>
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl border border-border/45 bg-background/70 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)] dark:bg-white/[0.04]">
-            <Icon className="h-[18px] w-[18px] text-muted-foreground" />
+          <div className="pointer-events-none absolute inset-x-8 top-0 h-px bg-white/80 dark:bg-white/10" aria-hidden="true" />
+          <div className={liquidFileBadgeClass}>
+            <Icon className="h-[18px] w-[18px]" />
           </div>
           <div className="min-w-0 flex-1">
-            <h2 id="unified-document-viewer-title" className="truncate text-[14.5px] font-semibold leading-5 tracking-[-0.01em] text-foreground">
+            <h2 id="unified-document-viewer-title" className="truncate text-[14.5px] font-semibold leading-5 text-zinc-950 dark:text-zinc-50">
               {attachment.name}
             </h2>
-            <div className="mt-0.5 flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
-              {kind !== "unknown" && <span className="uppercase tracking-wide">{kind}</span>}
-              {attachment.size ? <span>· {formatSize(attachment.size)}</span> : null}
+            <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5">
+              {kind !== "unknown" && <span className={liquidMetaPillClass}>{kind}</span>}
+              {attachment.size ? <span className={liquidMetaPillClass}>{formatSize(attachment.size)}</span> : null}
               {siblings && siblings.length > 1 && idx >= 0 ? (
-                <span>· {idx + 1} / {siblings.length}</span>
+                <span className={liquidMetaPillClass}>{idx + 1} / {siblings.length}</span>
               ) : null}
             </div>
           </div>
 
           {siblings && siblings.length > 1 && (
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1.5">
               <button
                 type="button"
                 className={liquidIconButtonClass}
@@ -1367,15 +1383,15 @@ function PdfRenderer({ a }: { a: AttachmentLike }) {
       </div>
 
       {/* Bottom liquid-glass controls */}
-      <div className="pointer-events-none absolute inset-x-0 bottom-4 z-30 flex justify-center px-3">
-        <div className={cn("pointer-events-auto flex max-w-full flex-wrap items-center justify-center gap-1.5 rounded-full px-2 py-1", liquidToolbarClass)}>
+      <div className="pointer-events-none absolute inset-x-0 bottom-5 z-30 flex justify-center px-3">
+        <div className={cn("pointer-events-auto flex max-w-full flex-wrap items-center justify-center gap-1.5", liquidControlShellClass)}>
           <Button size="icon" variant="ghost" className={liquidGhostButtonClass}
             disabled={activePage <= 1}
             onClick={() => goToPage(activePage - 1)}
             aria-label="Página anterior" title="Página anterior">
             <ChevronLeft className="h-3.5 w-3.5" />
           </Button>
-          <div className="flex items-center gap-1 rounded-full border border-border/35 bg-background/48 px-1.5 py-0.5 text-[11.5px] font-medium tabular-nums text-foreground/85 shadow-[inset_0_1px_0_rgba(255,255,255,0.34)]">
+          <div className={cn("gap-1 px-1.5", liquidMetricPillClass)}>
             <input
               type="number"
               min={1}
@@ -1387,7 +1403,7 @@ function PdfRenderer({ a }: { a: AttachmentLike }) {
               }}
               onKeyDown={e => { if (e.key === "Enter") goToPage(activePage) }}
               onBlur={() => goToPage(activePage)}
-              className="h-6 w-10 rounded-full border border-transparent bg-transparent px-1 text-center text-[11.5px] tabular-nums focus:border-border/70 focus:bg-background/70 focus:outline-none"
+              className="h-6 w-10 rounded-full border border-transparent bg-transparent px-1 text-center text-[11px] font-semibold tabular-nums focus:border-white/70 focus:bg-white/70 focus:outline-none dark:focus:border-white/20 dark:focus:bg-white/10"
               aria-label="Número de página"
             />
             <span className="pr-1 text-muted-foreground">/ {numPages || "…"}</span>
@@ -1399,7 +1415,7 @@ function PdfRenderer({ a }: { a: AttachmentLike }) {
             <ChevronRight className="h-3.5 w-3.5" />
           </Button>
 
-          <div className="mx-0.5 h-5 w-px bg-border/50" />
+          <div className={liquidControlDividerClass} />
 
           <Button size="icon" variant="ghost" className={liquidGhostButtonClass}
             onClick={() => setScale(s => Math.max(0.5, +(s - 0.25).toFixed(2)))}
@@ -1408,7 +1424,7 @@ function PdfRenderer({ a }: { a: AttachmentLike }) {
           </Button>
           <button
             onClick={() => setScale(1)}
-            className="h-7 min-w-[52px] rounded-full border border-border/35 bg-background/48 px-2 text-[11px] font-semibold tabular-nums text-foreground/80 shadow-[inset_0_1px_0_rgba(255,255,255,0.34)] hover:bg-background/65"
+            className={cn(liquidMetricPillClass, "min-w-[4.25rem] hover:bg-white/78 dark:hover:bg-white/16")}
             title="Restablecer zoom (⌘0)"
             aria-label="Restablecer zoom"
           >
@@ -2244,8 +2260,8 @@ function DocxRenderer({ a, isDark: _isDark }: { a: AttachmentLike; isDark: boole
       />
 
       {mode === "native" && (
-        <div className="pointer-events-none absolute inset-x-0 bottom-4 z-30 flex justify-center px-3">
-          <div className={cn("pointer-events-auto flex max-w-full flex-wrap items-center justify-center gap-1.5 rounded-full px-2 py-1", liquidToolbarClass)}>
+        <div className="pointer-events-none absolute inset-x-0 bottom-5 z-30 flex justify-center px-3">
+          <div className={cn("pointer-events-auto flex max-w-full flex-wrap items-center justify-center gap-1.5", liquidControlShellClass)}>
             <Button
               size="icon"
               variant="ghost"
@@ -2257,7 +2273,7 @@ function DocxRenderer({ a, isDark: _isDark }: { a: AttachmentLike; isDark: boole
             >
               <ChevronLeft className="h-3.5 w-3.5" />
             </Button>
-            <div className="flex h-7 items-center rounded-full border border-border/35 bg-background/48 px-3 text-[11px] font-semibold tabular-nums text-foreground/80 shadow-[inset_0_1px_0_rgba(255,255,255,0.34)]">
+            <div className={liquidMetricPillClass}>
               {activePage} / {pageCount || "…"}
             </div>
             <Button
@@ -2272,7 +2288,7 @@ function DocxRenderer({ a, isDark: _isDark }: { a: AttachmentLike; isDark: boole
               <ChevronRight className="h-3.5 w-3.5" />
             </Button>
 
-            <div className="mx-0.5 h-5 w-px bg-border/50" />
+            <div className={liquidControlDividerClass} />
 
             <Button
               size="icon"
@@ -2287,7 +2303,7 @@ function DocxRenderer({ a, isDark: _isDark }: { a: AttachmentLike; isDark: boole
             <button
               type="button"
               onClick={() => setScale(1)}
-              className="h-7 min-w-[52px] rounded-full border border-border/35 bg-background/48 px-2 text-[11px] font-semibold tabular-nums text-foreground/80 shadow-[inset_0_1px_0_rgba(255,255,255,0.34)] hover:bg-background/65"
+              className={cn(liquidMetricPillClass, "min-w-[4.25rem] hover:bg-white/78 dark:hover:bg-white/16")}
               title="Restablecer zoom"
               aria-label="Restablecer zoom"
             >
