@@ -1,5 +1,7 @@
 'use strict';
 
+const { resolveDesktopBridgeCapabilities } = require('./desktop-action-policy');
+
 const DEFAULT_ACTIONS = Object.freeze([
   'navigate',
   'click',
@@ -33,6 +35,7 @@ function resolveComputerUseCapabilities(env = process.env) {
   const playwrightAvailable = hasModule('playwright');
   const openAiConfigured = Boolean(env.OPENAI_API_KEY);
   const enabled = env.COMPUTER_USE_ENABLED !== '0';
+  const desktopBridge = resolveDesktopBridgeCapabilities(env);
 
   return {
     enabled,
@@ -41,7 +44,10 @@ function resolveComputerUseCapabilities(env = process.env) {
     planner: openAiConfigured ? 'openai_chat_dom_planner' : 'manual_or_stub_only',
     canLaunchBrowser: enabled && playwrightAvailable,
     canPlanActions: enabled && openAiConfigured,
+    canPlanDesktopActions: true,
+    canExecuteDesktopActions: enabled && desktopBridge.enabled,
     actions: DEFAULT_ACTIONS,
+    desktopBridge,
     limits: {
       maxStepsPerTask: 20,
       sessionTtlMinutes: 30,
@@ -52,6 +58,7 @@ function resolveComputerUseCapabilities(env = process.env) {
       requiresAuth: true,
       userScopedSessions: true,
       blocksExternalIrreversibleActions: true,
+      blocksDestructiveDesktopActions: true,
       rules: DEFAULT_SAFETY_RULES,
     },
   };
