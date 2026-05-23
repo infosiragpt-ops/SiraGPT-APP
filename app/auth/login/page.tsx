@@ -98,21 +98,28 @@ export default function LoginPage() {
     "border-neutral-300 bg-white text-neutral-900 placeholder:text-neutral-500 focus-visible:border-neutral-900 focus-visible:ring-neutral-900/15"
 
   return (
-    <div className="relative flex min-h-screen items-center justify-center bg-neutral-50 p-4 text-neutral-950" style={{ colorScheme: "light" }}>
-      <Button
-        type="button"
-        variant="ghost"
-        onClick={handleBack}
-        className="absolute left-4 top-4 h-10 gap-2 rounded-full border border-neutral-200 bg-white/90 px-4 text-sm font-medium text-neutral-700 shadow-sm backdrop-blur transition hover:bg-white hover:text-neutral-950 sm:left-6 sm:top-6"
-        aria-label="Volver atras"
+    <div className="flex min-h-[100svh] items-center justify-center overflow-y-auto bg-neutral-50 px-4 py-6 text-neutral-950 sm:min-h-screen sm:py-10" style={{ colorScheme: "light" }}>
+      <Card
+        data-testid="login-card"
+        className="w-full max-w-md border-neutral-200 bg-white text-neutral-950 shadow-[0_24px_64px_-16px_rgba(0,0,0,0.18)]"
       >
-        <ArrowLeft className="h-4 w-4" />
-        Volver
-      </Button>
-      <Card className="w-full max-w-md border-neutral-200 bg-white text-neutral-950 shadow-[0_24px_64px_-16px_rgba(0,0,0,0.18)]">
-        <CardHeader className="text-center">
-          <div className="mb-4 flex justify-center">
-            <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-neutral-200 bg-white">
+        <CardHeader className="px-6 pt-7 text-center sm:px-8 sm:pt-8">
+          <div className="mb-5 grid grid-cols-[1fr_auto_1fr] items-center">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={handleBack}
+              className="h-9 w-fit gap-1.5 justify-self-start rounded-full border border-neutral-200 bg-white/90 px-3 text-sm font-medium text-neutral-700 shadow-sm backdrop-blur transition hover:bg-neutral-50 hover:text-neutral-950"
+              aria-label="Volver atras"
+              data-testid="login-back-button"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Volver
+            </Button>
+            <div
+              data-testid="login-logo"
+              className="flex h-14 w-14 items-center justify-center rounded-2xl border border-neutral-200 bg-white"
+            >
               <Image
                 src="/sira-gpt.png"
                 alt=""
@@ -121,6 +128,7 @@ export default function LoginPage() {
                 className="rounded-lg object-contain"
               />
             </div>
+            <div aria-hidden="true" />
           </div>
           <CardTitle className="text-2xl font-semibold tracking-tight text-neutral-900">
             {t("welcomeBack")}

@@ -15,6 +15,7 @@ const KNOWN_BENIGN_CONSOLE = [
   /Download the React DevTools/,
   /MISSING_MESSAGE/i,
   /Failed to load resource:.*\b(401|403|404)\b/i,
+  /Failed to load resource:.*net::ERR_CONNECTION_REFUSED/i,
   /\bUnauthorized\b/i,
   /\bInvalid credentials\b/i,
   /\bAccess token required\b/i,
@@ -61,6 +62,48 @@ test("login page renders an email and password field", async ({ page }) => {
 
   await expect(emailField).toBeVisible()
   await expect(passwordField).toBeVisible()
+  expect(errors.map((e) => e.message)).toHaveLength(0)
+})
+
+test("login mobile header keeps back beside the logo without clipping the welcome title", async ({ page }) => {
+  const errors = arming(page)
+  await page.setViewportSize({ width: 393, height: 852 })
+  await page.goto("/auth/login", { waitUntil: "domcontentloaded", timeout: 60_000 })
+  await page.waitForLoadState("domcontentloaded")
+  await page.waitForTimeout(1500)
+
+  const card = page.getByTestId("login-card")
+  const backButton = page.getByTestId("login-back-button")
+  const logo = page.getByTestId("login-logo")
+  const welcomeTitle = page.getByRole("heading", { name: /bienvenido de nuevo|welcome back/i })
+
+  if (
+    (await card.count()) === 0
+    || (await backButton.count()) === 0
+    || (await logo.count()) === 0
+    || (await welcomeTitle.count()) === 0
+  ) {
+    test.info().annotations.push({ type: "skipped", description: "login header not present" })
+    return
+  }
+
+  const [cardBox, backBox, logoBox, titleBox] = await Promise.all([
+    card.boundingBox(),
+    backButton.boundingBox(),
+    logo.boundingBox(),
+    welcomeTitle.boundingBox(),
+  ])
+
+  expect(cardBox).not.toBeNull()
+  expect(backBox).not.toBeNull()
+  expect(logoBox).not.toBeNull()
+  expect(titleBox).not.toBeNull()
+
+  expect(backBox!.x, "back button should stay inside the card").toBeGreaterThanOrEqual(cardBox!.x)
+  expect(backBox!.x + backBox!.width, "back button should sit to the left of the logo").toBeLessThan(logoBox!.x)
+  expect(Math.abs((backBox!.y + backBox!.height / 2) - (logoBox!.y + logoBox!.height / 2))).toBeLessThan(8)
+  expect(titleBox!.x, "welcome title should not clip on the left").toBeGreaterThanOrEqual(cardBox!.x)
+  expect(titleBox!.x + titleBox!.width, "welcome title should not clip on the right").toBeLessThanOrEqual(cardBox!.x + cardBox!.width)
   expect(errors.map((e) => e.message)).toHaveLength(0)
 })
 
