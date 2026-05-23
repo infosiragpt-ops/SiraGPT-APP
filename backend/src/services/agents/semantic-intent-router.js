@@ -80,9 +80,93 @@ function shouldAnswerFromExistingDocument(rawUserRequest) {
   return EXISTING_DOCUMENT_REFERENCE_RE.test(n) && DOCUMENT_UNDERSTANDING_RE.test(n);
 }
 
+// User-facing improvement #2 (intent routing — negative-intent guards):
+// When the user explicitly negates a capability ("no busques en internet",
+// "sin documento", "no me hagas un video"), the regex-based signals above
+// will still fire on the noun and produce a false positive (e.g. routing
+// to web_search when the user just said don't search). NEGATION_GUARDS
+// maps a signal key to keyword groups; if any keyword appears within
+// ~32 chars after a negation word, that signal is forced false.
+//
+// We keep this narrow on purpose: we only mask out signals already
+// detected by the affirmative patterns above — we never add new
+// inferences from negations. That way:
+//   - the contract-first pipeline upstream still sees the raw prompt,
+//   - the domain_signals object becomes negation-aware,
+//   - downstream callers (mapContractToChatIntent, requiresAgenticExecution,
+//     productIntentForContract, etc.) get the corrected booleans for free.
+//
+// Tokens used as "negation":
+//   no | sin | tampoco | nada de | nunca | ni
+// They must precede the keyword with no more than 16 characters between
+// them (≈3 short words) and not be themselves part of another word
+// (\b anchors). 16 chars is calibrated to cover the canonical short
+// negations:
+//   "no busques en X"           (1 char gap)
+//   "no me hagas un video"      (12 char gap)
+//   "no me hagas una grafica"   (14 char gap)
+//   "no necesito un grafico"    (13 char gap)
+//   "sin web"                   (1 char gap)
+//   "no uses gmail"             (5 char gap)
+// while NOT firing on compound sentences where the negation scopes to
+// a different verb, e.g. "no me importa nada mas, busca en internet"
+// (22 char gap between "no" and "busca") — there the user does want to
+// search, and our shorter window correctly keeps realtimeLookup alive.
+// Trade-off: very long phrasings like "no te molestes en hacer una web"
+// (26 char gap) will NOT be neutralized by this guard; those are rare
+// and the contract-first layer upstream still sees the raw prompt so
+// it can still detect text_only constraints elsewhere.
+const NEGATION_TOKEN_RE = '(?:no|sin|tampoco|nada de|nunca|ni)';
+const NEGATION_MAX_GAP = 16;
+function buildNegationRegex(keywordAlternation) {
+  return new RegExp(
+    `\\b${NEGATION_TOKEN_RE}\\b[\\w\\s,;:]{0,${NEGATION_MAX_GAP}}?\\b(?:${keywordAlternation})\\b`,
+    'i',
+  );
+}
+const NEGATION_GUARDS = {
+  realtimeLookup: buildNegationRegex('busca(?:r|s|me)?|busques|buscar en internet|web|internet|google|search|navega(?:r|s)?'),
+  gmail:          buildNegationRegex('gmail|correo|correos|e-?mail|mail'),
+  googleServices: buildNegationRegex('drive|calendario|calendar|carpeta|google'),
+  webdev:         buildNegationRegex('web|website|p[aá]gina web|sitio web|landing|frontend|web app|app web'),
+  video:          buildNegationRegex('video|clip|animaci[oó]n|veo3|sora'),
+  plan:           buildNegationRegex('plano|planta|floor plan|blueprint|planos?'),
+  figma:          buildNegationRegex('figma|wireframe|user flow|prototipo'),
+  artifact:       buildNegationRegex('artefacto|artifact|simulador|widget|calculadora interactiva'),
+  math:           buildNegationRegex('matem[aá]tica|matem[aá]ticas|c[aá]lculos?|calcular|ecuaci[oó]n|estad[ií]stica'),
+  viz:            buildNegationRegex('gr[aá]fic[ao]?|chart|plot|diagrama|visualizaci[oó]n|dashboard'),
+};
+
+// Contrastive constructions where "no" does NOT negate the following
+// keyword but instead introduces an additive clause ("no solo X, sino
+// también Y", "no únicamente X"). Architect-flagged regression: under
+// the bare guard, "no solo busques en internet, también razona" would
+// suppress realtimeLookup even though the user explicitly DOES want to
+// search. We neutralize the leading "no" in those constructions before
+// the guards run, preserving string length so the regex windows still
+// measure correctly. Order matters: "no unicamente" before "no solo".
+const CONTRASTIVE_NEGATION_RE = /\bno\s+(solo|unicamente|s[oó]lo)\b/gi;
+function neutralizeContrastiveNegations(normalizedText) {
+  return normalizedText.replace(
+    CONTRASTIVE_NEGATION_RE,
+    (match, qualifier) => `${' '.repeat(2)} ${qualifier}`,
+  );
+}
+
+function applyNegationGuards(signals, normalizedText) {
+  if (!normalizedText) return signals;
+  const scanned = neutralizeContrastiveNegations(normalizedText);
+  for (const [key, guardRe] of Object.entries(NEGATION_GUARDS)) {
+    if (signals[key] && guardRe.test(scanned)) {
+      signals[key] = false;
+    }
+  }
+  return signals;
+}
+
 function buildDomainSignals(rawUserRequest, tokenAnalysis = null) {
   const n = normalizeText(rawUserRequest);
-  return {
+  const signals = {
     gmail: matchAny(n, [
       /\b(gmail|e-?mail|correo|correos|redacta(?:r)? un correo|envia(?:r)? un correo|lee(?:r)? mis correos)\b/i,
     ]),
@@ -129,6 +213,10 @@ function buildDomainSignals(rawUserRequest, tokenAnalysis = null) {
       /\b(codigo|código|script|api|backend|frontend|debug|bug|test|tests|lint|build|repositorio|github|despliegue|deploy)\b/i,
     ]),
   };
+  // Apply explicit-negation guards last so we never produce a signal
+  // the user just told us not to. Only mutates already-true signals;
+  // never invents new ones.
+  return applyNegationGuards(signals, n);
 }
 
 function extractFileIds(files = [], conversationHistory = []) {
@@ -678,6 +766,8 @@ module.exports = {
   buildSemanticIntentAnalysis,
   INTERNAL: {
     buildDomainSignals,
+    applyNegationGuards,
+    NEGATION_GUARDS,
     mapContractToChatIntent,
     requiresAgenticExecution,
     finalOutputForContract,
