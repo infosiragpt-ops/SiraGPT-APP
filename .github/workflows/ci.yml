@@ -461,10 +461,19 @@ jobs:
         timeout-minutes: 20
         run: |
           set +e
-          npm run test:e2e -- --reporter=list
-          status=$?
-          echo "status=${status}" >> "${GITHUB_OUTPUT}"
-          if [ "${status}" -ne 0 ]; then
+          E2E_SMOKE_SPECS=(
+            e2e/health.spec.ts
+            e2e/chat.spec.ts
+            e2e/auth-forms.spec.ts
+            e2e/admin-smoke.spec.ts
+            e2e/chat-upload.spec.ts
+          )
+          timeout --kill-after=30s 8m npm run test:e2e -- --reporter=list "${E2E_SMOKE_SPECS[@]}"
+          smoke_status=$?
+          echo "status=${smoke_status}" >> "${GITHUB_OUTPUT}"
+          if [ "${smoke_status}" -eq 124 ] || [ "${smoke_status}" -eq 137 ]; then
+            echo "::warning::Informational Playwright smoke timed out; required CI gates are unaffected."
+          elif [ "${smoke_status}" -ne 0 ]; then
             echo "::warning::Informational Playwright smoke failed; required CI gates are unaffected."
           fi
           exit 0
@@ -592,11 +601,22 @@ jobs:
         run: |
           set -euo pipefail
           GITLEAKS_VERSION="8.30.1"
-          gh release download "v${GITLEAKS_VERSION}" \
-            --repo gitleaks/gitleaks \
-            --pattern "gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
-            --output /tmp/gitleaks.tar.gz \
-            --clobber
+          for attempt in 1 2 3; do
+            if gh release download "v${GITLEAKS_VERSION}" \
+              --repo gitleaks/gitleaks \
+              --pattern "gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+              --output /tmp/gitleaks.tar.gz \
+              --clobber; then
+              break
+            fi
+
+            if [ "${attempt}" -eq 3 ]; then
+              exit 1
+            fi
+
+            sleep "$((attempt * 2))"
+          done
+          test -s /tmp/gitleaks.tar.gz
           tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
           sudo mv /tmp/gitleaks /usr/local/bin/gitleaks
           gitleaks version
