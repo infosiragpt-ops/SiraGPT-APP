@@ -19,12 +19,27 @@
  * tests sin red y permite cambiar de proveedor sin tocar el callsite.
  */
 
+const { buildClarificationOptions } = require('./clarification-options-builder');
+
 const DEFAULTS = Object.freeze({
   lowThreshold: 0.5,
   highThreshold: 0.8,
   timeoutMs: 400,
   maxQuestionChars: 220,
 });
+
+const CLARIFICATION_OPTIONS_ENABLED = process.env.SIRAGPT_CLARIFY_OPTIONS_ENABLED !== '0';
+
+function tryBuildOptions(analysis, prompt, recentTurns) {
+  if (!CLARIFICATION_OPTIONS_ENABLED) return null;
+  try {
+    const result = buildClarificationOptions({ analysis, prompt, recentTurns });
+    if (!result || !Array.isArray(result.options) || result.options.length < 2) return null;
+    return result;
+  } catch (_err) {
+    return null;
+  }
+}
 
 const SPANGLISH_RE = /[_]|input_under_specified|needs_clarification/i;
 
@@ -114,18 +129,25 @@ async function triageIntent({ analysis, prompt, recentTurns = [], judge, options
 
   // High-confidence ambiguity → ask immediately with heuristic question.
   if (needsFlag || score >= cfg.highThreshold) {
+    const built = tryBuildOptions(analysis, promptText, recentTurns);
+    const baseQuestion = built?.question || heuristicQ;
     const question = normalizeQuestion(
-      heuristicQ,
+      baseQuestion,
       "¿Puedes dar un poco más de contexto sobre lo que esperas?"
     );
     if (question) {
-      return {
+      const out = {
         action: "ask",
         question,
         reason: needsFlag ? "envelope_needs_clarification" : "ambiguity_score_high",
         source: "heuristic",
         score,
       };
+      if (built && built.options && built.options.length > 0) {
+        out.options = built.options;
+        out.optionsSource = built.source;
+      }
+      return out;
     }
   }
 
@@ -149,15 +171,21 @@ async function triageIntent({ analysis, prompt, recentTurns = [], judge, options
       cfg.timeoutMs
     );
     if (verdict && verdict.action === "ask") {
-      const question = normalizeQuestion(verdict.question, heuristicQ);
+      const built = tryBuildOptions(analysis, promptText, recentTurns);
+      const question = normalizeQuestion(verdict.question || built?.question, heuristicQ);
       if (question) {
-        return {
+        const out = {
           action: "ask",
           question,
           reason: "judge_ask",
           source: "judge",
           score,
         };
+        if (built && built.options && built.options.length > 0) {
+          out.options = built.options;
+          out.optionsSource = built.source;
+        }
+        return out;
       }
     }
     return { action: "execute", reason: "judge_execute", source: "judge", score };

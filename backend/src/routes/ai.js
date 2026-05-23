@@ -3310,7 +3310,28 @@ router.post(
       // and end the SSE stream. The user's next message naturally
       // becomes the disambiguating reply, no extra wiring required.
       if (intentTriageDecision && intentTriageDecision.action === 'ask' && intentTriageDecision.question) {
-        const triageQuestion = String(intentTriageDecision.question);
+        const triageOptions = Array.isArray(intentTriageDecision.options)
+          ? intentTriageDecision.options.filter(o => o && o.label)
+          : [];
+        const baseQuestion = String(intentTriageDecision.question);
+        const triageQuestion = triageOptions.length >= 2
+          ? `${baseQuestion}\n\n${triageOptions
+              .map((o, i) => `${i + 1}. ${o.label}`)
+              .join('\n')}\n\nResponde con el número de la opción o describe otra.`
+          : baseQuestion;
+        // Emit structured clarify options as a side-channel SSE event so
+        // future clients can render chips while current clients still see
+        // the numbered text in the content stream.
+        if (triageOptions.length >= 2) {
+          try {
+            res.write(`data: ${JSON.stringify({
+              type: 'intent.clarify_options',
+              question: baseQuestion,
+              options: triageOptions,
+              source: intentTriageDecision.optionsSource || 'unknown',
+            })}\n\n`);
+          } catch { /* socket gone */ }
+        }
         try { res.write(`data: ${JSON.stringify({ content: triageQuestion })}\n\n`); } catch { /* socket gone */ }
         fullResponseContent = triageQuestion;
         try {

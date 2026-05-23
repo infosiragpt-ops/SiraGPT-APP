@@ -23,6 +23,8 @@ backend/prisma/dev.db
 backend/prisma/*.db-journal
 # scheduler state (generated at runtime by services/scheduler/scheduler.js)
 backend/data/
+# generated eval reports (corpus is checked in; only timestamped reports are ignored)
+backend/eval-results/
 
 # next.js
 /.next/
