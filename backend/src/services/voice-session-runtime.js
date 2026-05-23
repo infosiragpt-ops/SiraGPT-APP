@@ -28,6 +28,11 @@ function normalizeSessionMode(mode) {
   return 'advanced_voice';
 }
 
+function normalizeChatId(chatId) {
+  const normalized = typeof chatId === 'string' ? chatId.trim() : '';
+  return normalized || null;
+}
+
 function createVoiceSession({ userId, chatId = null, mode = 'advanced_voice', now = new Date() } = {}) {
   assertUserId(userId);
   const timestamp = nowIso(now);
@@ -35,7 +40,7 @@ function createVoiceSession({ userId, chatId = null, mode = 'advanced_voice', no
     version: VOICE_SESSION_VERSION,
     id: randomId('voice'),
     userId,
-    chatId: chatId || null,
+    chatId: normalizeChatId(chatId),
     mode: normalizeSessionMode(mode),
     status: 'listening',
     createdAt: timestamp,
@@ -71,6 +76,7 @@ function buildVoiceSessionSnapshot(session) {
 
 function classifyVoiceTurn(text, options = {}) {
   const transcript = String(text || '').trim();
+  const chatId = normalizeChatId(options.chatId);
   if (!transcript) {
     return {
       route: 'empty',
@@ -102,6 +108,7 @@ function classifyVoiceTurn(text, options = {}) {
     chatDispatch: {
       enabled: true,
       text: transcript,
+      chatId,
       mode: 'normal_chat',
       canUseComposerConcurrently: true,
     },
@@ -117,7 +124,7 @@ function statusForTurn(route) {
   return 'listening';
 }
 
-function appendVoiceTurn(session, { text, source = 'stt', now = new Date(), defaultWorkingDirectory = null } = {}) {
+function appendVoiceTurn(session, { text, source = 'stt', now = new Date(), defaultWorkingDirectory = null, chatId } = {}) {
   if (!session) {
     const error = new Error('voice session is required');
     error.code = 'voice_session_required';
@@ -129,6 +136,10 @@ function appendVoiceTurn(session, { text, source = 'stt', now = new Date(), defa
     throw error;
   }
 
+  if (chatId !== undefined) {
+    session.chatId = normalizeChatId(chatId);
+  }
+
   const rawText = String(text || '');
   if (rawText.length > MAX_TRANSCRIPT_CHARS) {
     const error = new Error(`voice transcript exceeds ${MAX_TRANSCRIPT_CHARS} characters`);
@@ -137,7 +148,10 @@ function appendVoiceTurn(session, { text, source = 'stt', now = new Date(), defa
   }
 
   const timestamp = nowIso(now);
-  const route = classifyVoiceTurn(rawText, { defaultWorkingDirectory });
+  const route = classifyVoiceTurn(rawText, {
+    chatId: session.chatId,
+    defaultWorkingDirectory,
+  });
   const turn = {
     id: randomId('voice_turn'),
     sessionId: session.id,
@@ -196,4 +210,5 @@ module.exports = {
   stopVoiceSession,
   isVoiceSessionExpired,
   pruneExpiredVoiceSessions,
+  normalizeChatId,
 };

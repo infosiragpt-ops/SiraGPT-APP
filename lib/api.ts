@@ -142,6 +142,7 @@ export type GrokVoiceTurn = {
   chatDispatch?: {
     enabled: boolean
     text?: string
+    chatId?: string | null
     mode?: string
     canUseComposerConcurrently?: boolean
     reason?: string
@@ -1840,6 +1841,7 @@ class ApiClient {
     sessionId: string,
     data: {
       text: string
+      chatId?: string | null
       source?: 'stt' | 'typed' | 'system'
       respond?: boolean
     },

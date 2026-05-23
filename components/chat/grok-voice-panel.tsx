@@ -79,6 +79,8 @@ export function GrokVoicePanel({
 
   const statusRef = React.useRef<VoicePanelStatus>("connecting")
   const sessionIdRef = React.useRef<string | null>(null)
+  const chatIdRef = React.useRef<string | null>(chatId || null)
+  const sessionRef = React.useRef<GrokVoiceSessionSnapshot | null>(null)
   const transcriptRef = React.useRef("")
   const recognitionRef = React.useRef<BrowserSpeechRecognition | null>(null)
   const recorderRef = React.useRef<MediaRecorder | null>(null)
@@ -91,6 +93,10 @@ export function GrokVoicePanel({
   }, [status])
 
   React.useEffect(() => {
+    chatIdRef.current = chatId || null
+  }, [chatId])
+
+  React.useEffect(() => {
     setSpeechRecognitionSupported(Boolean(getSpeechRecognitionCtor()))
   }, [])
 
@@ -99,17 +105,18 @@ export function GrokVoicePanel({
   }, [])
 
   const ensureSession = React.useCallback(async () => {
-    if (sessionIdRef.current && session) return session
+    if (sessionIdRef.current && sessionRef.current) return sessionRef.current
     setStatus("connecting")
     const envelope = await apiClient.createGrokVoiceSession({
-      chatId: chatId || null,
+      chatId: chatIdRef.current,
       mode: "advanced_voice",
     })
     sessionIdRef.current = envelope.session.id
+    sessionRef.current = envelope.session
     setSession(envelope.session)
     setStatus("idle")
     return envelope.session
-  }, [chatId, session])
+  }, [])
 
   React.useEffect(() => {
     let cancelled = false
@@ -155,9 +162,11 @@ export function GrokVoicePanel({
       const activeSession = await ensureSession()
       const envelope = await apiClient.sendGrokVoiceTurn(activeSession.id, {
         text: transcript,
+        chatId: chatIdRef.current,
         source: "stt",
         respond: true,
       })
+      sessionRef.current = envelope.session
       setSession(envelope.session)
       const assistant = envelope.assistant
       if (assistant?.text) {

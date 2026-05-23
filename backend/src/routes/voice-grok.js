@@ -44,13 +44,14 @@ function createAndStoreSession(req, mode) {
 }
 
 const sessionValidators = [
-  body('chatId').optional().isString().isLength({ max: 128 }),
+  body('chatId').optional({ nullable: true }).isString().isLength({ max: 128 }),
   body('mode').optional().isIn(['advanced_voice', 'dictation', 'hands_free']),
 ];
 
 const turnValidators = [
   param('sessionId').isString().isLength({ min: 1, max: 128 }),
   body('text').isString().isLength({ min: 1, max: 4000 }),
+  body('chatId').optional({ nullable: true }).isString().isLength({ max: 128 }),
   body('source').optional().isIn(['stt', 'typed', 'system']),
   body('respond').optional().isBoolean(),
 ];
@@ -99,6 +100,7 @@ router.post(
       const result = appendVoiceTurn(session, {
         text: req.body.text,
         source: req.body.source || 'stt',
+        chatId: Object.prototype.hasOwnProperty.call(req.body, 'chatId') ? req.body.chatId : undefined,
         defaultWorkingDirectory: '/Users/luis/Desktop/siraGPT',
       });
       const payload = {
@@ -192,6 +194,7 @@ router.post(
       const result = appendVoiceTurn(session, {
         text: req.body.text,
         source: 'stt',
+        chatId: Object.prototype.hasOwnProperty.call(req.body, 'chatId') ? req.body.chatId : undefined,
         defaultWorkingDirectory: '/Users/luis/Desktop/siraGPT',
       });
       send({ type: 'turn', turn: result.turn, session: result.session });

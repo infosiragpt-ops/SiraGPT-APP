@@ -100,6 +100,27 @@ describe('Voice Grok route persistent session contract', () => {
     assert.equal(res.body.assistant.text, 'Respuesta Grok para: explicame la arquitectura');
   });
 
+  test('turn endpoint can rebind the voice session to the active normal chat', async () => {
+    const app = buildApp();
+    const create = await request(app)
+      .post('/api/voice/grok/sessions')
+      .set('Authorization', auth.authHeader)
+      .send({ chatId: null });
+
+    assert.equal(create.status, 200);
+    assert.equal(create.body.session.chatId, null);
+
+    const res = await request(app)
+      .post(`/api/voice/grok/sessions/${create.body.session.id}/turn`)
+      .set('Authorization', auth.authHeader)
+      .send({ text: 'continua en este chat', chatId: 'chat-live-2' });
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body.session.chatId, 'chat-live-2');
+    assert.equal(res.body.turn.chatDispatch.chatId, 'chat-live-2');
+    assert.equal(res.body.turn.chatDispatch.canUseComposerConcurrently, true);
+  });
+
   test('turn endpoint plans allowlisted desktop actions without executing them', async () => {
     const create = await request(buildApp())
       .post('/api/voice/grok/sessions')
