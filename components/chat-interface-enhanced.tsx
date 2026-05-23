@@ -1263,7 +1263,7 @@ const ActionsDropdown = ({
           {/* Voice Studio - Opens panel directly */}
           <DropdownMenuItem
             className="liquid-menu-item"
-            onClick={() => { setShowAudioPanel(true); setAudioTab('tts'); }}
+            onClick={() => { setShowAudioPanel(true); setAudioTab('stt'); setIsOpen(false); }}
             disabled={currentPlan === "FREE" || isToolSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
