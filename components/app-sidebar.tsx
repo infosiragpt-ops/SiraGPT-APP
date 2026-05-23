@@ -95,7 +95,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { useAuth } from "@/lib/auth-context-integrated"
-import { useChat } from "@/lib/chat-context-integrated"
+import { useChatList, useModelsAndFiles } from "@/lib/chat-context-integrated"
 import { useRouter, usePathname } from "next/navigation"
 import { cn, downloadBlob } from "@/lib/utils"
 import Link from "next/link"
@@ -253,21 +253,27 @@ export function AppSidebar() {
   const t = useTranslations("sidebar")
   const bgStreams = useBackgroundStreams()
   const { user, logout } = useAuth()
+  // Sidebar lee únicamente del ChatList context — durante un stream
+  // sólo cambia `currentChat` (que vive en CurrentChatContext) y la
+  // sidebar no se re-renderiza. Para el id/título del chat activo
+  // usamos los campos sintéticos `currentChatId` / `currentChatTitle`;
+  // para el resto (export, rename) usamos `getCurrentChatSnapshot`
+  // que NO suscribe a actualizaciones. (Task #57.)
   const {
     chats,
-    currentChat,
+    currentChatId,
     createNewChat,
     setCurrentChat,
     selectChat,
     deleteChat,
-    selectedModel,
-    setSelectedModel,
     loadMoreChats,
     hasMoreChats,
     isLoadingMore,
     pagination,
-    isLoading: isLoadingChats,
-  } = useChat()
+    isLoadingChats,
+    getCurrentChatSnapshot,
+  } = useChatList()
+  const { selectedModel, setSelectedModel } = useModelsAndFiles()
   const router = useRouter()
   // NB: pathname is declared here (not further down like the original)
   // because the navigation helpers below depend on it. The later
@@ -527,7 +533,7 @@ export function AppSidebar() {
 
   const downloadChatExport = React.useCallback(async (chat: any) => {
     try {
-      const activeChat = currentChat
+      const activeChat = getCurrentChatSnapshot()
       let source: any
       if (activeChat && activeChat.id === chat.id && activeChat.messages?.length) {
         source = activeChat
@@ -555,7 +561,7 @@ export function AppSidebar() {
     } catch (error) {
       toast.error("No se pudo descargar el chat")
     }
-  }, [currentChat])
+  }, [getCurrentChatSnapshot])
 
   const openScheduleDialog = React.useCallback((chat: any) => {
     const current = scheduledChats[chat.id]
@@ -769,9 +775,11 @@ export function AppSidebar() {
     // Optimistic update - update immediately
     setOptimisticUpdates(prev => ({ ...prev, [chatId]: newTitle }))
 
-    // Update current chat immediately if it's the one being edited
-    if (currentChat?.id === chatId) {
-      setCurrentChat({ ...currentChat, title: newTitle })
+    // Update current chat immediately if it's the one being edited.
+    // Functional setState avoids reading `currentChat` here so the
+    // sidebar doesn't have to subscribe to it.
+    if (currentChatId === chatId) {
+      setCurrentChat(prev => (prev && prev.id === chatId ? { ...prev, title: newTitle } : prev))
     }
 
     setEditingChatId(null)
@@ -787,7 +795,7 @@ export function AppSidebar() {
         const refreshedChat = chatResponse.chat
 
         // Update currentChat if it's the active one (without navigation)
-        if (currentChat?.id === chatId) {
+        if (currentChatId === chatId) {
           setCurrentChat(refreshedChat)
         }
 
@@ -815,8 +823,8 @@ export function AppSidebar() {
       })
 
       // Revert current chat if it was updated
-      if (currentChat?.id === chatId) {
-        setCurrentChat({ ...currentChat, title: originalTitle })
+      if (currentChatId === chatId) {
+        setCurrentChat(prev => (prev && prev.id === chatId ? { ...prev, title: originalTitle } : prev))
       }
 
       toast.error('Failed to update chat title')
@@ -1260,8 +1268,8 @@ export function AppSidebar() {
                                   <Tooltip>
                                     <TooltipTrigger asChild>
                                       <SidebarMenuButton
-                                        isActive={currentChat?.id === chat.id && pathname.startsWith('/chat')}
-                                        aria-current={currentChat?.id === chat.id && pathname.startsWith('/chat') ? 'page' : undefined}
+                                        isActive={currentChatId === chat.id && pathname.startsWith('/chat')}
+                                        aria-current={currentChatId === chat.id && pathname.startsWith('/chat') ? 'page' : undefined}
                                         onClick={() => !isEditing && handleChatClick(chat.id)}
                                         className={cn(
                                           "h-8 min-w-0 flex-1 justify-start py-0 pr-1 transition-all",

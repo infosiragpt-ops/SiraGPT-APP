@@ -6,7 +6,7 @@
 // proxy's response size cap.
 import "katex/dist/katex.min.css"
 import React from "react"
-import { createContext, useContext, useState, useCallback, useEffect, useRef } from "react"
+import { createContext, useContext, useState, useCallback, useEffect, useMemo, useRef } from "react"
 import { useAuth } from "./auth-context-integrated"
 import { apiClient } from "./api"
 import { aiService, buildProfessionalCapabilityPrompt, shouldAnswerFromExistingDocument, type ChatIntent } from "./ai-service"
@@ -339,9 +339,17 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const streamBufferRef = useRef<StreamBuffer | null>(null);
   const chatsRef = useRef<Chat[]>([])
   const isStreamingRef = useRef(false)
+  const currentChatRef = useRef<Chat | null>(null)
 
   useEffect(() => { chatsRef.current = chats }, [chats])
   useEffect(() => { isStreamingRef.current = isStreaming }, [isStreaming])
+  useEffect(() => { currentChatRef.current = currentChat }, [currentChat])
+
+  // Stable, identity-preserving snapshot getter for consumers that
+  // need the full current chat occasionally (e.g. exporting from the
+  // sidebar) without subscribing to its updates. Used by ChatList
+  // consumers so the sidebar stays inert during token streams.
+  const getCurrentChatSnapshot = useCallback(() => currentChatRef.current, [])
 
   // Dispose the per-frame stream buffer when the provider unmounts so a
   // late rAF callback can't fire setState on a torn-down tree.
@@ -2646,46 +2654,240 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     }
   }, [pollingIntervals])
 
-  const value: ChatContextType = {
+  // ────────────────────────────────────────────────────────────────
+  // Context split (task #57). The provider still owns all state in a
+  // single place, but exposes it through four separate React contexts
+  // so each consumer only re-renders when *its* slice changes:
+  //
+  //   ChatListContext       lista de chats + selección       (sidebar)
+  //   CurrentChatContext    chat actual + historial          (lista de mensajes)
+  //   StreamingContext      isStreaming/isLoading/addMessage (composer)
+  //   ModelsFilesContext    modelos + archivos adjuntos      (badge / composer)
+  //
+  // Sub-values are memoized on their real inputs. While Sira responde,
+  // sólo `currentChat` cambia por frame; los demás value objects
+  // conservan identidad y la sidebar / catálogo no se re-renderizan.
+  //
+  // `useChat()` se mantiene como hook de compatibilidad — compone los
+  // cuatro contextos en un único objeto. Los consumidores legacy
+  // siguen funcionando sin cambios, pero pierden el beneficio del
+  // split hasta migrarse a los hooks específicos.
+  // ────────────────────────────────────────────────────────────────
+
+  const currentChatId = currentChat?.id ?? null
+  const currentChatTitle = currentChat?.title ?? null
+
+  const chatListValue = useMemo<ChatListContextType>(() => ({
     chats,
+    pagination,
+    hasMoreChats,
+    isLoadingMore,
+    isLoadingChats: isLoading,
+    currentChatId,
+    currentChatTitle,
+    setCurrentChat,
+    selectChat,
+    deleteChat,
+    createNewChat,
+    loadMoreChats,
+    resetChats,
+    getCurrentChatSnapshot,
+  }), [
+    chats, pagination, hasMoreChats, isLoadingMore, isLoading,
+    currentChatId, currentChatTitle,
+    setCurrentChat, selectChat, deleteChat, createNewChat, loadMoreChats, resetChats,
+    getCurrentChatSnapshot,
+  ])
+
+  const currentChatValue = useMemo<CurrentChatContextType>(() => ({
     currentChat,
     setCurrentChat,
-    createNewChat,
-    selectChat,
-    addMessage,
+    updateMessageInChat,
+    regenerateMessage,
+    regenerateLastMessage,
+    editAndRegenerate,
+    clearCurrentChat,
     addVideoMessage,
     addThesisMessage,
-    clearCurrentChat,
-    deleteChat,
+    pollVideoStatus,
+    chatType,
+    setChatType,
+  }), [
+    currentChat,
+    setCurrentChat, updateMessageInChat, regenerateMessage, regenerateLastMessage,
+    editAndRegenerate, clearCurrentChat, addVideoMessage, addThesisMessage,
+    pollVideoStatus, chatType, setChatType,
+  ])
+
+  const streamingValue = useMemo<StreamingContextType>(() => ({
+    isStreaming,
+    pendingStop,
+    isLoading,
+    stopStreaming,
+    addMessage,
+  }), [isStreaming, pendingStop, isLoading, stopStreaming, addMessage])
+
+  const modelsFilesValue = useMemo<ModelsFilesContextType>(() => ({
     selectedModel,
     setSelectedModel,
     selectProvider,
     setSelectedProivder,
-    isLoading,
     availableModels,
-    chatType,
-    setChatType,
     uploadedFiles,
     setUploadedFiles,
-    regenerateLastMessage,
-    regenerateMessage,
-    editAndRegenerate,
-    updateMessageInChat,
-    pollVideoStatus, isStreaming, pendingStop, stopStreaming,
-    pagination,
-    isLoadingMore,
-    hasMoreChats,
-    loadMoreChats,
-    resetChats,
-  }
+  }), [
+    selectedModel, setSelectedModel, selectProvider, setSelectedProivder,
+    availableModels, uploadedFiles, setUploadedFiles,
+  ])
 
-  return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>
+  return (
+    <ChatListContext.Provider value={chatListValue}>
+      <ModelsFilesContext.Provider value={modelsFilesValue}>
+        <StreamingContext.Provider value={streamingValue}>
+          <CurrentChatContext.Provider value={currentChatValue}>
+            {children}
+          </CurrentChatContext.Provider>
+        </StreamingContext.Provider>
+      </ModelsFilesContext.Provider>
+    </ChatListContext.Provider>
+  )
 }
 
-export function useChat() {
-  const context = useContext(ChatContext)
-  if (context === undefined) {
-    throw new Error("useChat must be used within a ChatProvider")
-  }
-  return context
+// ────────────────────────────────────────────────────────────────────
+// Split contexts (task #57)
+// ────────────────────────────────────────────────────────────────────
+
+interface ChatListContextType {
+  chats: Chat[]
+  pagination: PaginationInfo | null
+  hasMoreChats: boolean
+  isLoadingMore: boolean
+  isLoadingChats: boolean
+  /** Only the id/title summary of the active chat — full object lives
+   *  in CurrentChatContext so token streams don't re-render the sidebar. */
+  currentChatId: string | null
+  currentChatTitle: string | null
+  setCurrentChat: React.Dispatch<React.SetStateAction<Chat | null>>
+  selectChat: (chatId: string) => void
+  deleteChat: (chatId: string) => void
+  createNewChat: ChatContextType["createNewChat"]
+  loadMoreChats: () => Promise<void>
+  resetChats: () => void
+  /** Read the current chat without subscribing — useful for rare
+   *  click handlers (e.g. exporting) that need messages on demand. */
+  getCurrentChatSnapshot: () => Chat | null
+}
+
+interface CurrentChatContextType {
+  currentChat: Chat | null
+  setCurrentChat: React.Dispatch<React.SetStateAction<Chat | null>>
+  updateMessageInChat: (messageId: string, newContent: string) => void
+  regenerateMessage: (messageId?: string) => void
+  regenerateLastMessage: () => void
+  editAndRegenerate: (messageId: string, newContent: string, files?: any[]) => void
+  clearCurrentChat: () => void
+  addVideoMessage: (prompt: string, fileIds?: string[]) => Promise<void>
+  addThesisMessage: (topics: string[]) => Promise<void>
+  pollVideoStatus: (operationId: string, messageId: string) => void
+  chatType: ChatContextType["chatType"]
+  setChatType: ChatContextType["setChatType"]
+}
+
+interface StreamingContextType {
+  isStreaming: boolean
+  pendingStop: boolean
+  isLoading: boolean
+  stopStreaming: () => void
+  addMessage: ChatContextType["addMessage"]
+}
+
+interface ModelsFilesContextType {
+  selectedModel: string
+  setSelectedModel: (model: string) => void
+  selectProvider: string
+  setSelectedProivder: (model: string) => void
+  availableModels: any[]
+  uploadedFiles: any[]
+  setUploadedFiles: React.Dispatch<React.SetStateAction<any[]>>
+}
+
+const ChatListContext = createContext<ChatListContextType | undefined>(undefined)
+const CurrentChatContext = createContext<CurrentChatContextType | undefined>(undefined)
+const StreamingContext = createContext<StreamingContextType | undefined>(undefined)
+const ModelsFilesContext = createContext<ModelsFilesContextType | undefined>(undefined)
+
+export function useChatList(): ChatListContextType {
+  const ctx = useContext(ChatListContext)
+  if (!ctx) throw new Error("useChatList must be used within a ChatProvider")
+  return ctx
+}
+
+export function useCurrentChat(): CurrentChatContextType {
+  const ctx = useContext(CurrentChatContext)
+  if (!ctx) throw new Error("useCurrentChat must be used within a ChatProvider")
+  return ctx
+}
+
+export function useStreamingState(): StreamingContextType {
+  const ctx = useContext(StreamingContext)
+  if (!ctx) throw new Error("useStreamingState must be used within a ChatProvider")
+  return ctx
+}
+
+export function useModelsAndFiles(): ModelsFilesContextType {
+  const ctx = useContext(ModelsFilesContext)
+  if (!ctx) throw new Error("useModelsAndFiles must be used within a ChatProvider")
+  return ctx
+}
+
+/**
+ * Legacy composite hook. Internally subscribes to the four split
+ * contexts and returns them as the original flat shape so existing
+ * consumers keep working unchanged. Components that only need a
+ * subset should migrate to the specific hooks above for the
+ * re-render savings (sidebar, message list, composer, model badge).
+ */
+export function useChat(): ChatContextType {
+  const list = useChatList()
+  const current = useCurrentChat()
+  const streaming = useStreamingState()
+  const mf = useModelsAndFiles()
+  // Reconstruct the historical `currentChat` field from the dedicated
+  // context (NOT the id-only summary in `list`) so consumers see the
+  // full Chat object with messages, exactly as before.
+  return useMemo<ChatContextType>(() => ({
+    chats: list.chats,
+    currentChat: current.currentChat,
+    setCurrentChat: current.setCurrentChat,
+    createNewChat: list.createNewChat,
+    selectChat: list.selectChat,
+    addMessage: streaming.addMessage,
+    addVideoMessage: current.addVideoMessage,
+    addThesisMessage: current.addThesisMessage,
+    clearCurrentChat: current.clearCurrentChat,
+    deleteChat: list.deleteChat,
+    selectedModel: mf.selectedModel,
+    setSelectedModel: mf.setSelectedModel,
+    selectProvider: mf.selectProvider,
+    setSelectedProivder: mf.setSelectedProivder,
+    isLoading: streaming.isLoading,
+    availableModels: mf.availableModels,
+    chatType: current.chatType,
+    setChatType: current.setChatType,
+    uploadedFiles: mf.uploadedFiles,
+    setUploadedFiles: mf.setUploadedFiles,
+    regenerateLastMessage: current.regenerateLastMessage,
+    regenerateMessage: current.regenerateMessage,
+    editAndRegenerate: current.editAndRegenerate,
+    updateMessageInChat: current.updateMessageInChat,
+    pollVideoStatus: current.pollVideoStatus,
+    isStreaming: streaming.isStreaming,
+    pendingStop: streaming.pendingStop,
+    stopStreaming: streaming.stopStreaming,
+    pagination: list.pagination,
+    isLoadingMore: list.isLoadingMore,
+    hasMoreChats: list.hasMoreChats,
+    loadMoreChats: list.loadMoreChats,
+    resetChats: list.resetChats,
+  }), [list, current, streaming, mf])
 }
