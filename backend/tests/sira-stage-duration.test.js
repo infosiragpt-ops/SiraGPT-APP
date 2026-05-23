@@ -79,6 +79,22 @@ describe("chat-controller emits per-stage durations on a happy turn", () => {
     assert.match(text, /sira_chat_stage_duration_ms_count\{stage="context_compaction"\}/);
   });
 
+  test("records contextual_understanding stage", async () => {
+    const storage = createSiraStorage({ adapter: createInMemoryStorage() });
+    await handleChatTurn({
+      ...baseArgs,
+      userMessage: "haz la segunda parte",
+      history: [
+        { role: "user", content: "elige una opcion" },
+        { role: "assistant", content: "1. A\n2. B" },
+      ],
+      requestId: "req-stage-contextual",
+    }, { storage, registry: createDefaultRegistry() });
+
+    const text = metrics.renderText();
+    assert.match(text, /sira_chat_stage_duration_ms_count\{stage="contextual_understanding"\}/);
+  });
+
   test("records memory_recall when memoryStore is wired", async () => {
     const storage = createSiraStorage({ adapter: createInMemoryStorage() });
     const memoryStore = createInMemoryStore();

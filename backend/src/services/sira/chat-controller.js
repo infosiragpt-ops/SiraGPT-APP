@@ -40,6 +40,7 @@ const siraMetrics = require("./metrics");
 const chatModes = require("./chat-modes");
 const projectWorkspace = require("./project-workspace");
 const { compactContext } = require("./context-compactor");
+const { analyzeContextualTurn } = require("./contextual-understanding");
 const { buildCitationFrame } = require("./citation-frame");
 const { createNoOpEvents } = require("./turn-events");
 const { validateScope: validateMemoryScope } = require("./memory-store");
@@ -157,6 +158,8 @@ async function handleChatTurnUnlocked({
   // Per-turn memory-tier limits. Caller can tune; default keeps
   // the prompt tight.
   memoryRecallLimit = 5,
+  // Optional dependency injection for contextual-understanding tests.
+  contextualUnderstandingDeps = null,
 } = {}) {
   // Stage-aware errors so `siraErrorHandler` can map them straight to
   // an HTTP 4xx with `{ code, stage, request_id, ... }` and the audit
@@ -404,10 +407,37 @@ async function handleChatTurnUnlocked({
     }
   }
 
+  // ── 1.9. Contextual understanding (consumer side) ────────────────
+  // Interprets the current turn against recent history, private
+  // lexicon, and repair signals before the deterministic engine builds
+  // its task envelope. The original user text stays persisted as-is;
+  // only the engine sees the effective prompt.
+  const _contextualStartedAt = Date.now();
+  const contextualUnderstanding = await analyzeContextualTurn({
+    userId,
+    conversationId,
+    userMessage,
+    history: historyForEngine,
+    attachments,
+    requestId,
+  }, contextualUnderstandingDeps || {});
+  siraMetrics.recordStageDuration("contextual_understanding", Date.now() - _contextualStartedAt);
+  const contextualPayload = {
+    applied: Boolean(contextualUnderstanding.applied),
+    coreference_source: contextualUnderstanding.envelopeContext?.coreference?.source || null,
+    lexicon_term_count: contextualUnderstanding.envelopeContext?.lexicon_terms?.length || 0,
+    is_repair: Boolean(contextualUnderstanding.envelopeContext?.repair?.is_repair),
+    signal_count: contextualUnderstanding.envelopeContext?.misunderstanding_signals?.length || 0,
+  };
+  await store.audit("contextual_understanding_applied", contextualPayload, auditMeta);
+  events.emit("contextual_understanding_applied", { ...contextualPayload, request_id: requestId });
+
   // ── 2. Run engine (envelope + 5 frames + dry response) ───────────
   const _engineStartedAt = Date.now();
   const bundle = await ciraEngine.runUserMessage({
-    text: userMessage,
+    text: contextualUnderstanding.effectiveText || userMessage,
+    originalText: userMessage,
+    contextualUnderstanding: contextualUnderstanding.envelopeContext,
     attachments,
     history: historyForEngine,
     userPlan,
@@ -433,6 +463,7 @@ async function handleChatTurnUnlocked({
       errors: bundle.errors || ["unknown_envelope_failure"],
       token_budget: tokenBudget,
       persisted_ids: persistedIds,
+      contextual_understanding: contextualUnderstanding.envelopeContext,
     };
   }
   // After this point, every emit can use bundle.envelope.request_id
@@ -525,6 +556,7 @@ async function handleChatTurnUnlocked({
       persisted_ids: persistedIds,
       mode: modeResolution,
       project_context: projectContext,
+      contextual_understanding: contextualUnderstanding.envelopeContext,
     };
   }
 
@@ -704,6 +736,7 @@ async function handleChatTurnUnlocked({
     mode: modeResolution,
     project_context: projectContext,
     recalled_memory: recalledMemory,
+    contextual_understanding: contextualUnderstanding.envelopeContext,
     summary: {
       stage: finalStage,
       mode: modeResolution.mode,
@@ -715,6 +748,7 @@ async function handleChatTurnUnlocked({
       coverage_ratio: citationFrame.coverage.coverage_ratio,
       token_usage: tokenUsage.usage,
       execution_trace: runtimeResult.execution_trace_frame?.counters || null,
+      contextual_understanding_applied: Boolean(contextualUnderstanding.applied),
     },
   };
 }
