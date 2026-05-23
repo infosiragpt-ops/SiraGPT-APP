@@ -119,6 +119,7 @@ model User {
 
   // Relations
   chats                   Chat[]
+  chatRuns                ChatRun[]
   payments                Payment[]
   apiUsages               ApiUsage[]
   sessions                Session[]
@@ -295,6 +296,18 @@ model Chat {
   isArchived Boolean   @default(false)
   deletedAt  DateTime?
 
+  // Pinned-chat support (Sprint 6 sidebar UX). pinnedAt is null when
+  // the chat is unpinned so the sidebar can sort pinned items by the
+  // time the user pinned them.
+  isPinned   Boolean   @default(false)
+  pinnedAt   DateTime?
+
+  // Per-chat draft text the composer auto-saves so the user can "keep
+  // writing where they left off" after navigating away. Stored
+  // server-side (in addition to the client localStorage mirror) so the
+  // draft survives across devices.
+  draftText  String?   @db.Text
+
   // Language policy — persisted resolution of "what language should the
   // assistant reply in for this thread". Set on first turn (or on any
   // explicit "respond in X" instruction); reused on every subsequent turn
@@ -336,11 +349,13 @@ model Chat {
   sharedMessages     MessageShare[]      @relation("SharedMessages")
   agentTasks         AgentTask[]
   generatedArtifacts GeneratedArtifact[]
+  runs               ChatRun[]
 
   @@index([userId, updatedAt])
   @@index([customGptId])
   @@index([projectId])
   @@index([organizationId, sharedAt])
+  @@index([userId, isPinned, pinnedAt])
   @@map("chats")
 }
 
@@ -368,14 +383,72 @@ model Message {
   // SQL in /api/search.
   content_tsv Unsupported("tsvector")?
 
+  // Link to the ChatRun that produced this message (assistant rows only).
+  // Null on user rows and on legacy assistant rows that pre-date the
+  // ChatRun introduction.
+  runId String?
+
   // Relations
   chat               Chat                @relation(fields: [chatId], references: [id], onDelete: Cascade)
   generatedArtifacts GeneratedArtifact[]
   bookmarks          Bookmark[]
+  run                ChatRun?            @relation("RunMessage", fields: [runId], references: [id], onDelete: SetNull)
 
   @@index([chatId, timestamp])
   @@index([chatId, deletedAt])
+  @@index([runId])
   @@map("messages")
+}
+
+// ────────────────────────────────────────────────────────────
+// ChatRun — durable record of one AI generation. The HTTP route
+// enqueues a row + a BullMQ job; the worker reads it, streams the
+// answer, and writes the final content back to the linked Message.
+// This is the source of truth for "is this chat still generating in
+// background", "what is its partial text" and "did it complete on a
+// previous server boot."
+// ────────────────────────────────────────────────────────────
+enum ChatRunStatus {
+  pending
+  running
+  completed
+  failed
+  cancelled
+}
+
+model ChatRun {
+  id              String         @id @default(cuid())
+  chatId          String
+  userId          String
+  status          ChatRunStatus  @default(pending)
+  model           String
+  provider        String?
+  promptMessageId String?
+  // The assistant Message row this run is producing into. Created up
+  // front with empty content so the UI can stream into a stable id.
+  messageId       String?        @unique
+  partialContent  String         @default("") @db.Text
+  inputPayload    Json
+  error           String?
+  errorClass      String?
+  jobId           String?
+  startedAt       DateTime?
+  lastChunkAt     DateTime?
+  completedAt     DateTime?
+  cancelledAt     DateTime?
+  cancelReason    String?
+  attempt         Int            @default(0)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  chat            Chat           @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  message         Message[]      @relation("RunMessage")
+
+  @@index([chatId, status])
+  @@index([userId, status, updatedAt])
+  @@index([status, createdAt])
+  @@map("chat_runs")
 }
 
 // Saved searches — see migration 20260519050000_add_saved_search.
