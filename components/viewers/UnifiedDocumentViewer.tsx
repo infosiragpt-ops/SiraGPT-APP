@@ -267,6 +267,15 @@ function formatSize(n: number | null | undefined) {
   return `${(n / 1024 / 1024).toFixed(1)} MB`
 }
 
+const liquidToolbarClass =
+  "border border-white/35 bg-background/78 shadow-[0_16px_44px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.38)] backdrop-blur-2xl supports-[backdrop-filter]:bg-background/62 dark:border-white/10 dark:bg-zinc-950/62 dark:shadow-[0_16px_44px_rgba(0,0,0,0.34),inset_0_1px_0_rgba(255,255,255,0.08)]"
+
+const liquidIconButtonClass =
+  "inline-flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition hover:bg-foreground/[0.06] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/20 disabled:pointer-events-none disabled:opacity-40 dark:hover:bg-white/10"
+
+const liquidGhostButtonClass =
+  "h-7 w-7 rounded-full text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground dark:hover:bg-white/10"
+
 function absUrl(u: string) {
   // Routes through the shared `normalizeBackendAssetUrl` so the
   // /uploads/* origin-rewrite (see lib/attachment-url.ts) stays in
@@ -400,13 +409,18 @@ export default function UnifiedDocumentViewer({
         )}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex flex-row items-center gap-3 border-b border-border/50 px-4 py-2.5">
-          <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <div className={cn(
+          "relative flex flex-row items-center gap-3 border-b border-border/45 px-4 py-2.5",
+          "bg-background/82 shadow-[0_10px_26px_rgba(15,23,42,0.05),inset_0_-1px_0_rgba(255,255,255,0.52)] backdrop-blur-2xl supports-[backdrop-filter]:bg-background/68 dark:bg-zinc-950/72 dark:shadow-[0_10px_26px_rgba(0,0,0,0.2),inset_0_-1px_0_rgba(255,255,255,0.05)]",
+        )}>
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl border border-border/45 bg-background/70 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)] dark:bg-white/[0.04]">
+            <Icon className="h-[18px] w-[18px] text-muted-foreground" />
+          </div>
           <div className="min-w-0 flex-1">
-            <h2 id="unified-document-viewer-title" className="truncate text-[14px] font-semibold">
+            <h2 id="unified-document-viewer-title" className="truncate text-[14.5px] font-semibold leading-5 tracking-[-0.01em] text-foreground">
               {attachment.name}
             </h2>
-            <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <div className="mt-0.5 flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
               {kind !== "unknown" && <span className="uppercase tracking-wide">{kind}</span>}
               {attachment.size ? <span>· {formatSize(attachment.size)}</span> : null}
               {siblings && siblings.length > 1 && idx >= 0 ? (
@@ -419,7 +433,7 @@ export default function UnifiedDocumentViewer({
             <div className="flex items-center gap-1">
               <button
                 type="button"
-                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-40"
+                className={liquidIconButtonClass}
                 disabled={!canPrev}
                 onClick={() => go(-1)}
                 title="Anterior"
@@ -429,7 +443,7 @@ export default function UnifiedDocumentViewer({
               </button>
               <button
                 type="button"
-                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-40"
+                className={liquidIconButtonClass}
                 disabled={!canNext}
                 onClick={() => go(1)}
                 title="Siguiente"
@@ -447,7 +461,7 @@ export default function UnifiedDocumentViewer({
           {attachment.id && (
             <button
               type="button"
-              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-accent hover:text-accent-foreground"
+              className={liquidIconButtonClass}
               onClick={() => {
                 if (typeof window === "undefined") return
                 window.dispatchEvent(new CustomEvent("sira:reuse-attachment", {
@@ -470,7 +484,7 @@ export default function UnifiedDocumentViewer({
           {canDownload && (
             <button
               type="button"
-              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-accent hover:text-accent-foreground"
+              className={liquidIconButtonClass}
               onClick={handleDownload}
               title="Descargar"
               aria-label="Descargar"
@@ -481,7 +495,7 @@ export default function UnifiedDocumentViewer({
           {downloadUrl && (
             <button
               type="button"
-              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-accent hover:text-accent-foreground"
+              className={liquidIconButtonClass}
               onClick={() => window.open(downloadUrl, "_blank", "noopener,noreferrer")}
               title="Abrir en nueva pestaña"
               aria-label="Abrir en nueva pestaña"
@@ -491,7 +505,7 @@ export default function UnifiedDocumentViewer({
           )}
           <button
             type="button"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-accent hover:text-accent-foreground"
+            className={liquidIconButtonClass}
             onClick={onClose}
             title="Cerrar"
             aria-label="Cerrar"
@@ -1354,14 +1368,14 @@ function PdfRenderer({ a }: { a: AttachmentLike }) {
 
       {/* Bottom liquid-glass controls */}
       <div className="pointer-events-none absolute inset-x-0 bottom-4 z-30 flex justify-center px-3">
-        <div className="pointer-events-auto flex max-w-full flex-wrap items-center justify-center gap-1.5 rounded-full border border-white/25 bg-background/75 px-2 py-1 shadow-[0_10px_35px_rgba(15,23,42,0.18)] backdrop-blur-2xl dark:border-white/10 dark:bg-background/70">
-          <Button size="icon" variant="ghost" className="h-7 w-7 rounded-full"
+        <div className={cn("pointer-events-auto flex max-w-full flex-wrap items-center justify-center gap-1.5 rounded-full px-2 py-1", liquidToolbarClass)}>
+          <Button size="icon" variant="ghost" className={liquidGhostButtonClass}
             disabled={activePage <= 1}
             onClick={() => goToPage(activePage - 1)}
             aria-label="Página anterior" title="Página anterior">
             <ChevronLeft className="h-3.5 w-3.5" />
           </Button>
-          <div className="flex items-center gap-1 rounded-full bg-background/45 px-1.5 py-0.5 text-[11.5px] tabular-nums text-foreground/85">
+          <div className="flex items-center gap-1 rounded-full border border-border/35 bg-background/48 px-1.5 py-0.5 text-[11.5px] font-medium tabular-nums text-foreground/85 shadow-[inset_0_1px_0_rgba(255,255,255,0.34)]">
             <input
               type="number"
               min={1}
@@ -1378,7 +1392,7 @@ function PdfRenderer({ a }: { a: AttachmentLike }) {
             />
             <span className="pr-1 text-muted-foreground">/ {numPages || "…"}</span>
           </div>
-          <Button size="icon" variant="ghost" className="h-7 w-7 rounded-full"
+          <Button size="icon" variant="ghost" className={liquidGhostButtonClass}
             disabled={activePage >= numPages}
             onClick={() => goToPage(activePage + 1)}
             aria-label="Página siguiente" title="Página siguiente">
@@ -1387,25 +1401,25 @@ function PdfRenderer({ a }: { a: AttachmentLike }) {
 
           <div className="mx-0.5 h-5 w-px bg-border/50" />
 
-          <Button size="icon" variant="ghost" className="h-7 w-7 rounded-full"
+          <Button size="icon" variant="ghost" className={liquidGhostButtonClass}
             onClick={() => setScale(s => Math.max(0.5, +(s - 0.25).toFixed(2)))}
             aria-label="Reducir zoom" title="Reducir (⌘−)">
             <Minus className="h-3.5 w-3.5" />
           </Button>
           <button
             onClick={() => setScale(1)}
-            className="h-7 min-w-[48px] rounded-full px-2 text-[11px] font-medium tabular-nums text-muted-foreground hover:bg-background/55"
+            className="h-7 min-w-[52px] rounded-full border border-border/35 bg-background/48 px-2 text-[11px] font-semibold tabular-nums text-foreground/80 shadow-[inset_0_1px_0_rgba(255,255,255,0.34)] hover:bg-background/65"
             title="Restablecer zoom (⌘0)"
             aria-label="Restablecer zoom"
           >
             {Math.round(scale * 100)}%
           </button>
-          <Button size="icon" variant="ghost" className="h-7 w-7 rounded-full"
+          <Button size="icon" variant="ghost" className={liquidGhostButtonClass}
             onClick={() => setScale(s => Math.min(3, +(s + 0.25).toFixed(2)))}
             aria-label="Aumentar zoom" title="Aumentar (⌘+)">
             <Plus className="h-3.5 w-3.5" />
           </Button>
-          <Button size="icon" variant="ghost" className="h-7 w-7 rounded-full"
+          <Button size="icon" variant="ghost" className={liquidGhostButtonClass}
             onClick={() => setScale(1)}
             aria-label="Ajustar al ancho" title="Ajustar al ancho">
             <Maximize2 className="h-3.5 w-3.5" />
@@ -1972,6 +1986,99 @@ function DocxRenderer({ a, isDark: _isDark }: { a: AttachmentLike; isDark: boole
   const [mode, setMode] = React.useState<"loading" | "native" | "fallback" | "extracted" | "error">("loading")
   const [fallbackHtml, setFallbackHtml] = React.useState<string>("")
   const [err, setErr] = React.useState<string | null>(null)
+  const [scale, setScale] = React.useState<number>(1)
+  const [pageCount, setPageCount] = React.useState<number>(0)
+  const [activePage, setActivePage] = React.useState<number>(1)
+
+  React.useEffect(() => {
+    setScale(1)
+    setPageCount(0)
+    setActivePage(1)
+  }, [a.id, a.name])
+
+  const getNativeDocxPages = React.useCallback((): HTMLElement[] => {
+    const frameDoc = iframeRef.current?.contentDocument
+    if (!frameDoc) return []
+    return Array.from(frameDoc.querySelectorAll<HTMLElement>("section.docx, section.docx-preview-doc"))
+  }, [])
+
+  const updateNativePageState = React.useCallback(() => {
+    const frame = iframeRef.current
+    const frameWin = frame?.contentWindow
+    const frameDoc = frame?.contentDocument
+    if (!frameWin || !frameDoc) return
+    const pages = getNativeDocxPages()
+    if (!pages.length) {
+      setPageCount(0)
+      setActivePage(1)
+      return
+    }
+
+    setPageCount(pages.length)
+
+    const viewportHeight = frameWin.innerHeight || frameDoc.documentElement.clientHeight || 1
+    let bestPage = 1
+    let bestVisible = -1
+    let bestDistance = Number.POSITIVE_INFINITY
+
+    pages.forEach((page, index) => {
+      const rect = page.getBoundingClientRect()
+      const visible = Math.max(0, Math.min(rect.bottom, viewportHeight) - Math.max(rect.top, 0))
+      const distance = Math.abs(rect.top)
+      if (visible > bestVisible || (visible === bestVisible && distance < bestDistance)) {
+        bestVisible = visible
+        bestDistance = distance
+        bestPage = index + 1
+      }
+    })
+
+    setActivePage(bestPage)
+  }, [getNativeDocxPages])
+
+  const applyNativeZoom = React.useCallback((nextScale: number) => {
+    const frameDoc = iframeRef.current?.contentDocument
+    if (!frameDoc?.body) return
+    ;(frameDoc.body.style as CSSStyleDeclaration & { zoom?: string }).zoom = String(nextScale)
+    frameDoc.body.style.transformOrigin = "top center"
+    frameDoc.body.style.transition = "zoom 160ms ease"
+    window.requestAnimationFrame(updateNativePageState)
+  }, [updateNativePageState])
+
+  const goToNativePage = React.useCallback((page: number) => {
+    const pages = getNativeDocxPages()
+    const total = pages.length || 1
+    const target = Math.min(Math.max(1, page), total)
+    pages[target - 1]?.scrollIntoView({ behavior: "smooth", block: "start" })
+    setActivePage(target)
+  }, [getNativeDocxPages])
+
+  React.useEffect(() => {
+    if (mode !== "native") return
+    applyNativeZoom(scale)
+  }, [mode, scale, applyNativeZoom])
+
+  React.useEffect(() => {
+    if (mode !== "native") return
+    const frame = iframeRef.current
+    const frameWin = frame?.contentWindow
+    const frameDoc = frame?.contentDocument
+    if (!frameWin || !frameDoc) return
+
+    const onViewportChange = () => updateNativePageState()
+    frameWin.addEventListener("scroll", onViewportChange, { passive: true })
+    frameWin.addEventListener("resize", onViewportChange)
+
+    const observer = new MutationObserver(onViewportChange)
+    observer.observe(frameDoc.body, { childList: true, subtree: true })
+
+    const raf = window.requestAnimationFrame(onViewportChange)
+    return () => {
+      window.cancelAnimationFrame(raf)
+      observer.disconnect()
+      frameWin.removeEventListener("scroll", onViewportChange)
+      frameWin.removeEventListener("resize", onViewportChange)
+    }
+  }, [mode, updateNativePageState])
 
   React.useEffect(() => {
     let cancelled = false
@@ -2052,6 +2159,7 @@ function DocxRenderer({ a, isDark: _isDark }: { a: AttachmentLike; isDark: boole
             renderChanges: false,
           })
           if (!cancelled) setMode("native")
+          if (!cancelled) window.requestAnimationFrame(updateNativePageState)
         } catch (docxErr) {
           // Fallback to mammoth → sanitized HTML.
           // eslint-disable-next-line no-console
@@ -2102,7 +2210,7 @@ function DocxRenderer({ a, isDark: _isDark }: { a: AttachmentLike; isDark: boole
       }
     })()
     return () => { cancelled = true }
-  }, [a])
+  }, [a, updateNativePageState])
 
   if (mode === "error") {
     const isReloadHint = err?.startsWith("La aplicación se actualizó")
@@ -2134,6 +2242,70 @@ function DocxRenderer({ a, isDark: _isDark }: { a: AttachmentLike; isDark: boole
           mode !== "native" && "pointer-events-none absolute inset-0 opacity-0",
         )}
       />
+
+      {mode === "native" && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-4 z-30 flex justify-center px-3">
+          <div className={cn("pointer-events-auto flex max-w-full flex-wrap items-center justify-center gap-1.5 rounded-full px-2 py-1", liquidToolbarClass)}>
+            <Button
+              size="icon"
+              variant="ghost"
+              className={liquidGhostButtonClass}
+              disabled={activePage <= 1}
+              onClick={() => goToNativePage(activePage - 1)}
+              aria-label="Página anterior"
+              title="Página anterior"
+            >
+              <ChevronLeft className="h-3.5 w-3.5" />
+            </Button>
+            <div className="flex h-7 items-center rounded-full border border-border/35 bg-background/48 px-3 text-[11px] font-semibold tabular-nums text-foreground/80 shadow-[inset_0_1px_0_rgba(255,255,255,0.34)]">
+              {activePage} / {pageCount || "…"}
+            </div>
+            <Button
+              size="icon"
+              variant="ghost"
+              className={liquidGhostButtonClass}
+              disabled={!!pageCount && activePage >= pageCount}
+              onClick={() => goToNativePage(activePage + 1)}
+              aria-label="Página siguiente"
+              title="Página siguiente"
+            >
+              <ChevronRight className="h-3.5 w-3.5" />
+            </Button>
+
+            <div className="mx-0.5 h-5 w-px bg-border/50" />
+
+            <Button
+              size="icon"
+              variant="ghost"
+              className={liquidGhostButtonClass}
+              onClick={() => setScale(s => Math.max(0.65, +(s - 0.1).toFixed(2)))}
+              aria-label="Reducir zoom"
+              title="Reducir zoom"
+            >
+              <Minus className="h-3.5 w-3.5" />
+            </Button>
+            <button
+              type="button"
+              onClick={() => setScale(1)}
+              className="h-7 min-w-[52px] rounded-full border border-border/35 bg-background/48 px-2 text-[11px] font-semibold tabular-nums text-foreground/80 shadow-[inset_0_1px_0_rgba(255,255,255,0.34)] hover:bg-background/65"
+              title="Restablecer zoom"
+              aria-label="Restablecer zoom"
+            >
+              {Math.round(scale * 100)}%
+            </button>
+            <Button
+              size="icon"
+              variant="ghost"
+              className={liquidGhostButtonClass}
+              onClick={() => setScale(s => Math.min(1.6, +(s + 0.1).toFixed(2)))}
+              aria-label="Aumentar zoom"
+              title="Aumentar zoom"
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* Mammoth fallback. */}
       {mode === "fallback" && (
