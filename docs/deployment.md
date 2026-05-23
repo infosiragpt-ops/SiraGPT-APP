@@ -1,13 +1,18 @@
 # siraGPT Deployment
 
 This document covers the production deployment pipeline, including
-the **auto-rollback** path used by default and the **blue-green**
-scaffold added in cycle 34.
+the manual **auto-rollback** path and the **blue-green** scaffold
+added in cycle 34.
 
-## Standard deploy (auto-rollback)
+## Standard deploy (manual auto-rollback)
 
 Entry point: `.github/workflows/deploy.yml` → SSH to the VPS →
 `scripts/deploy-with-rollback.sh`.
+
+Production deploys are manual-only. A push to `main` may run CI, but it
+must not deploy to the VPS automatically. To deploy, run the `Deploy to
+production` workflow from GitHub Actions after CI is green. Optionally
+provide `target_sha` to deploy a specific commit.
 
 Sequence:
 

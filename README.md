@@ -50,6 +50,7 @@ cp .env.example .env.local   # edit API keys
 ## Documentation
 
 - [Architecture](docs/architecture.md)
+- [Master execution prompt](docs/SIRAGPT_MASTER_PROMPT.md)
 - [Observability](docs/observability.md)
 - [Prompt caching](docs/prompt-caching.md)
 - [OpenAPI spec](docs/openapi.json)
