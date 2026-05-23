@@ -1480,6 +1480,29 @@ router.post(
         }
       } catch (_pr3HistErr) { /* swallow — coref still useful with attachments only */ }
 
+      // PR-6: conversation-repair detection.
+      // Si el mensaje actual es una corrección explícita ("no, en
+      // español", "eso no es lo que quería"), construir un addendum
+      // que instruya al LLM a NO repetir la interpretación previa.
+      try {
+        if (String(process.env.SIRAGPT_REPAIR_LOOP_ENABLED || 'true').toLowerCase() !== 'false') {
+          const __cr = require('../services/agents/conversation-repair');
+          const __prevAssistant = (__pr3RecentTurns || []).slice().reverse().find((t) => t.role === 'assistant');
+          const __prevUser = (__pr3RecentTurns || []).slice().reverse().find((t) => t.role === 'user');
+          const __repairDet = __cr.detectRepair({
+            prompt,
+            prevTurn: __prevAssistant || null,
+            prevUserPrompt: __prevUser ? __prevUser.text : null,
+          });
+          if (__repairDet && __repairDet.isRepair) {
+            const __repairCtx = __cr.buildRepairContext(__repairDet);
+            if (__repairCtx.systemAddendum) {
+              __pr3ExtraBlocks.push(__repairCtx.systemAddendum);
+            }
+          }
+        }
+      } catch (_pr6Err) { /* swallow */ }
+
       try {
         if (userId && String(process.env.SIRAGPT_LEXICON_DISABLED || '').toLowerCase() !== '1') {
           const __lexTerms = await personalLexicon.lookupTerms({ userId, prompt, k: 5 });
