@@ -47,7 +47,11 @@ import TableControls from './TableControls';
 import ImageGenerationEffect from './ImageGenerationEffect';
 // import CodePreview from './code-preview';
 import { parseCodeFromContent, hasWebDevelopmentCode, combineWebCode, detectCodeType } from '@/lib/code-detection';
-import ChartComponent from './chart-component';
+import dynamic from 'next/dynamic';
+const ChartComponent = dynamic(() => import('./chart-component'), {
+  ssr: false,
+  loading: () => <div className="h-64 w-full animate-pulse bg-muted/30 rounded" aria-hidden="true" />,
+});
 import { FigmaDiagramDisplay } from './figma-diagram-component';
 import { PlanArtifactDisplay } from './plan/plan-artifact-display';
 import { VizArtifactDisplay } from './viz/viz-artifact-display';

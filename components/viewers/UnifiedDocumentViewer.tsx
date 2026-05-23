@@ -60,7 +60,11 @@ import { cn } from "@/lib/utils"
 import { normalizeBackendAssetUrl } from "@/lib/attachment-url"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
-import { ShikiCodeView } from "@/components/ui/shiki-code-view"
+import dynamic from "next/dynamic"
+const ShikiCodeView = dynamic(
+  () => import("@/components/ui/shiki-code-view").then(m => ({ default: m.ShikiCodeView })),
+  { ssr: false, loading: () => <div className="h-full w-full animate-pulse bg-muted/30" aria-hidden="true" /> }
+)
 import { readXlsxWorkbook, xlsxCellToText } from "@/lib/xlsx-client"
 // mammoth is imported dynamically inside DocxRenderer's fallback path
 // (~250 KB module, only loaded when docx-preview fails). Static import

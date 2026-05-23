@@ -25,7 +25,11 @@ import {
   Check, Clipboard,
 } from "lucide-react"
 import { useArtifactPanel } from "@/lib/artifact-panel-context"
-import { ShikiCodeView } from "@/components/ui/shiki-code-view"
+import dynamic from "next/dynamic"
+const ShikiCodeView = dynamic(
+  () => import("@/components/ui/shiki-code-view").then(m => ({ default: m.ShikiCodeView })),
+  { ssr: false, loading: () => <div className="h-full w-full animate-pulse bg-muted/30" aria-hidden="true" /> }
+)
 
 export type ArtifactCardProps = {
   code: string

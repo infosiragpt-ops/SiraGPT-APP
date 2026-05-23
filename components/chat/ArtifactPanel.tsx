@@ -18,7 +18,11 @@ import {
   RefreshCw, FileCode, Download, ExternalLink, X, Eye, Check, Clipboard,
 } from "lucide-react"
 import { useArtifactPanel } from "@/lib/artifact-panel-context"
-import { ShikiCodeView } from "@/components/ui/shiki-code-view"
+import dynamic from "next/dynamic"
+const ShikiCodeView = dynamic(
+  () => import("@/components/ui/shiki-code-view").then(m => ({ default: m.ShikiCodeView })),
+  { ssr: false, loading: () => <div className="h-full w-full animate-pulse bg-muted/30" aria-hidden="true" /> }
+)
 
 /**
  * Focus-trap + body-scroll-lock helper for the mobile drawer. Saves the

@@ -185,13 +185,6 @@ function prefetchExcelConnector() {
     __excelConnectorModulePromise = import("./ExcelConnector")
   }
 }
-let __computerUseModulePromise: Promise<typeof import("./ComputerUseInterface")> | null = null
-function prefetchComputerUseInterface() {
-  if (typeof window === "undefined") return
-  if (!__computerUseModulePromise) {
-    __computerUseModulePromise = import("./ComputerUseInterface")
-  }
-}
 import { resolveModelIconName } from "@/lib/model-icons"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import {
