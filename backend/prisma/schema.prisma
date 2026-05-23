@@ -121,6 +121,7 @@ model User {
   chats                   Chat[]
   chatRuns                ChatRun[]
   payments                Payment[]
+  invoices                Invoice[]
   apiUsages               ApiUsage[]
   sessions                Session[]
   files                   File[]
@@ -812,6 +813,54 @@ model DocumentNode {
   @@index([parentId])
   @@index([analysisId])
   @@map("document_nodes")
+}
+
+// Local Invoice mirror (spec §8). Webhook-fed copy of Stripe invoice
+// objects so the billing UI can read history from Postgres instead of
+// making a network call to Stripe on every page load. Source of truth
+// remains Stripe; this table is eventually consistent via webhook fan-out.
+//
+// Amounts stored in cents (Int) to match Stripe's wire format and avoid
+// the float drift Payment.amount suffers from.
+enum InvoiceStatus {
+  DRAFT
+  OPEN
+  PAID
+  UNCOLLECTIBLE
+  VOID
+}
+
+model Invoice {
+  id                   String        @id @default(cuid())
+  userId               String
+  stripeInvoiceId      String        @unique
+  stripeCustomerId     String?
+  stripeSubscriptionId String?
+  number               String?
+  status               InvoiceStatus @default(OPEN)
+  amountDueCents       Int           @default(0)
+  amountPaidCents      Int           @default(0)
+  amountRemainingCents Int           @default(0)
+  subtotalCents        Int           @default(0)
+  totalCents           Int           @default(0)
+  currency             String        @default("usd")
+  periodStart          DateTime?
+  periodEnd            DateTime?
+  hostedInvoiceUrl     String?
+  invoicePdfUrl        String?
+  lines                Json?
+  issuedAt             DateTime?
+  paidAt               DateTime?
+  dueDate              DateTime?
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+  @@index([stripeSubscriptionId])
+  @@map("invoices")
 }
 
 model Payment {

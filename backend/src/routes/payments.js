@@ -986,6 +986,16 @@ async function handleInvoicePaymentSucceeded(invoice) {
       return;
     }
 
+    // Mirror the invoice locally (spec §8). Best-effort — the billing UI
+    // reads from this table but a sync failure must not block the
+    // subscription state machine below.
+    try {
+      const { syncInvoiceFromStripe } = require('../services/invoice-sync');
+      await syncInvoiceFromStripe(prisma, invoice, { user });
+    } catch (syncErr) {
+      console.warn('[invoice-sync] payment_succeeded mirror failed:', syncErr?.message || syncErr);
+    }
+
     // Update subscription status
     await prisma.user.update({
       where: { id: user.id },
@@ -1030,12 +1040,23 @@ async function handleInvoicePaymentSucceeded(invoice) {
 async function handleInvoicePaymentFailed(invoice) {
   try {
     const customerId = invoice.customer;
-    
+
     // Find user by customer ID
     const user = await prisma.user.findUnique({
       where: { stripeCustomerId: customerId }
     });
-    
+
+    if (user) {
+      // Mirror the invoice locally so the billing UI shows the failed
+      // attempt with its current status. Best-effort.
+      try {
+        const { syncInvoiceFromStripe } = require('../services/invoice-sync');
+        await syncInvoiceFromStripe(prisma, invoice, { user });
+      } catch (syncErr) {
+        console.warn('[invoice-sync] payment_failed mirror failed:', syncErr?.message || syncErr);
+      }
+    }
+
     if (!user) {
       console.error('User not found for customer:', customerId);
       return;
