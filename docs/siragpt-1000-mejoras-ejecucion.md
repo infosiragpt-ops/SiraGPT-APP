@@ -899,6 +899,16 @@ Este tracker registra lotes realmente implementados y validados en el estado act
 - Pruebas: se ampliaron parseo, ayuda y scripts dedicados.
 - Verificacion: `node -c`, type-check, prueba focalizada, scripts reales, `git diff --check` y `npm test`.
 
+## Lote 124: comprension contextual de turnos de chat
+
+- Estado: implementado y validado.
+- Mejora cubierta: interpretar referencias conversacionales, terminos personales y correcciones del usuario antes de planificar la respuesta.
+- Cambio: se agrego `backend/src/services/sira/contextual-understanding.js` como etapa backend previa al motor Sira.
+- Cambio: el controlador de chat conserva el texto original y entrega al motor un prompt efectivo enriquecido con coreferencias, lexico personal y contexto de reparacion.
+- Control: no se modifico ningun archivo de interfaz, rutas visuales, estilos ni componentes React.
+- Pruebas: se agregaron pruebas unitarias del modulo, pruebas de envelope y pruebas de integracion del controlador.
+- Verificacion: `node --test` focalizado, `npm test`, `bash scripts/verify-ui-lock.sh` y `git diff --check`.
+
 ## Siguientes lotes
 
-- Lote 124: agregar retencion configurable del historial diagnostico local.
+- Lote 125: agregar retencion configurable del historial diagnostico local.
