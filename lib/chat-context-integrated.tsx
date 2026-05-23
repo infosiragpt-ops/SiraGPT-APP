@@ -2677,6 +2677,32 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const currentChatId = currentChat?.id ?? null
   const currentChatTitle = currentChat?.title ?? null
 
+  // Identity-stable wrappers for the action callbacks exposed on
+  // ChatListContext. Several of the originals (`createNewChat`,
+  // `deleteChat`) depend on `currentChat` or `addMessage`, which means
+  // their identity changes on every token flush during a stream. If we
+  // included those raw references in `chatListValue`, the memo would
+  // be invalidated every frame and the sidebar would re-render. The
+  // wrappers below are created once and forward to the latest
+  // implementation via refs — so the sidebar sees a frozen value
+  // object while a stream is in progress. (Task #57.)
+  const createNewChatRef = useRef(createNewChat)
+  const selectChatRef = useRef(selectChat)
+  const deleteChatRef = useRef(deleteChat)
+  const loadMoreChatsRef = useRef(loadMoreChats)
+  const resetChatsRef = useRef(resetChats)
+  useEffect(() => { createNewChatRef.current = createNewChat }, [createNewChat])
+  useEffect(() => { selectChatRef.current = selectChat }, [selectChat])
+  useEffect(() => { deleteChatRef.current = deleteChat }, [deleteChat])
+  useEffect(() => { loadMoreChatsRef.current = loadMoreChats }, [loadMoreChats])
+  useEffect(() => { resetChatsRef.current = resetChats }, [resetChats])
+  const stableCreateNewChat = useCallback(((...args: Parameters<typeof createNewChat>) =>
+    createNewChatRef.current(...args)) as typeof createNewChat, [])
+  const stableSelectChat = useCallback((chatId: string) => selectChatRef.current(chatId), [])
+  const stableDeleteChat = useCallback((chatId: string) => { void deleteChatRef.current(chatId) }, [])
+  const stableLoadMoreChats = useCallback(() => loadMoreChatsRef.current(), [])
+  const stableResetChats = useCallback(() => resetChatsRef.current(), [])
+
   const chatListValue = useMemo<ChatListContextType>(() => ({
     chats,
     pagination,
@@ -2686,17 +2712,17 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     currentChatId,
     currentChatTitle,
     setCurrentChat,
-    selectChat,
-    deleteChat,
-    createNewChat,
-    loadMoreChats,
-    resetChats,
+    selectChat: stableSelectChat,
+    deleteChat: stableDeleteChat,
+    createNewChat: stableCreateNewChat,
+    loadMoreChats: stableLoadMoreChats,
+    resetChats: stableResetChats,
     getCurrentChatSnapshot,
   }), [
     chats, pagination, hasMoreChats, isLoadingMore, isLoading,
     currentChatId, currentChatTitle,
-    setCurrentChat, selectChat, deleteChat, createNewChat, loadMoreChats, resetChats,
-    getCurrentChatSnapshot,
+    setCurrentChat, stableSelectChat, stableDeleteChat, stableCreateNewChat,
+    stableLoadMoreChats, stableResetChats, getCurrentChatSnapshot,
   ])
 
   const currentChatValue = useMemo<CurrentChatContextType>(() => ({
