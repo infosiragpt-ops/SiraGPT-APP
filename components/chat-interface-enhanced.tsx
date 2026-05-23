@@ -999,6 +999,7 @@ const ActionsDropdown = ({
         </Tooltip>
         <DropdownMenuContent
           align="start"
+          side="top"
           sideOffset={10}
           collisionPadding={12}
           className="chat-tools-menu liquid-menu-surface"

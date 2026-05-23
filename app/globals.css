@@ -486,9 +486,9 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 }
 
 .chat-mobile-connectors-list {
-  border-block: 1px solid hsl(var(--border) / 0.32);
-  margin-block: 0.35rem;
-  padding-block: 0.35rem;
+  border-block: 1px solid hsl(var(--border) / 0.22);
+  margin-block: 0.25rem;
+  padding-block: 0.25rem;
 }
 
 .chat-mobile-connectors-heading {
@@ -647,18 +647,18 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 
 @media (max-width: 767px) {
   .chat-tools-menu {
-    width: min(calc(100vw - 1rem), 21rem);
-    max-height: min(calc(var(--chat-viewport-height, 100dvh) - 5.5rem), 34rem);
+    width: min(calc(100vw - 1.25rem), 20.25rem);
+    max-height: min(calc(var(--chat-viewport-height, 100dvh) - 6rem), 33rem);
   }
 
   .chat-tools-menu .liquid-menu-item {
-    padding: 0.625rem 0.7rem !important;
+    padding: 0.58rem 0.64rem !important;
   }
 
   .chat-tools-menu .liquid-icon {
-    width: 2.25rem !important;
-    height: 2.25rem !important;
-    border-radius: 0.875rem !important;
+    width: 2.18rem !important;
+    height: 2.18rem !important;
+    border-radius: 0.78rem !important;
   }
 }
 
@@ -3258,23 +3258,23 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
  * ──────────────────────────────────────────────────────────── */
 .liquid-menu-surface {
   background:
-    linear-gradient(145deg, hsl(0 0% 100% / 0.86), hsl(0 0% 100% / 0.64) 56%, hsl(210 28% 98% / 0.76)),
-    radial-gradient(circle at 16% 0%, hsl(0 0% 100% / 0.72), transparent 35%),
-    radial-gradient(circle at 94% 100%, hsl(var(--primary) / 0.055), transparent 42%) !important;
-  backdrop-filter: blur(36px) saturate(1.28) contrast(1.01);
-  -webkit-backdrop-filter: blur(36px) saturate(1.28) contrast(1.01);
-  border: 1px solid hsl(0 0% 100% / 0.78) !important;
-  border-radius: 22px !important;
-  padding: 7px !important;
+    linear-gradient(145deg, hsl(0 0% 100% / 0.82), hsl(0 0% 100% / 0.66) 56%, hsl(210 20% 98% / 0.72)),
+    radial-gradient(circle at 14% 0%, hsl(0 0% 100% / 0.58), transparent 34%),
+    radial-gradient(circle at 92% 100%, hsl(var(--primary) / 0.035), transparent 40%) !important;
+  backdrop-filter: blur(30px) saturate(1.2) contrast(1.01);
+  -webkit-backdrop-filter: blur(30px) saturate(1.2) contrast(1.01);
+  border: 1px solid hsl(0 0% 100% / 0.72) !important;
+  border-radius: 20px !important;
+  padding: 6px !important;
   overflow: hidden !important;
   position: relative;
   box-shadow:
-    0 8px 18px -16px hsl(220 35% 18% / 0.2),
-    0 28px 62px -34px hsl(220 38% 16% / 0.28),
-    0 1px 0 0 hsl(0 0% 100% / 0.9) inset,
-    0 -14px 28px -26px hsl(var(--primary) / 0.22) inset,
-    0 0 0 1px hsl(0 0% 100% / 0.38) inset !important;
-  animation: liquid-menu-enter 260ms cubic-bezier(0.16, 1, 0.3, 1);
+    0 10px 22px -18px hsl(220 35% 18% / 0.22),
+    0 24px 54px -34px hsl(220 38% 16% / 0.26),
+    0 1px 0 0 hsl(0 0% 100% / 0.86) inset,
+    0 -12px 24px -24px hsl(var(--primary) / 0.16) inset,
+    0 0 0 1px hsl(0 0% 100% / 0.3) inset !important;
+  animation: liquid-menu-enter 220ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 /* Top-left highlight pool — the "light catch" of a glass surface. */
 .liquid-menu-surface::before {
@@ -3285,8 +3285,8 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
   border-radius: inherit;
   z-index: 0;
   background:
-    radial-gradient(ellipse 58% 38% at 12% 0%, hsl(0 0% 100% / 0.46), transparent 66%),
-    linear-gradient(120deg, transparent 20%, hsl(0 0% 100% / 0.17) 43%, transparent 62%);
+    radial-gradient(ellipse 58% 36% at 12% 0%, hsl(0 0% 100% / 0.38), transparent 66%),
+    linear-gradient(120deg, transparent 20%, hsl(0 0% 100% / 0.12) 43%, transparent 62%);
   mix-blend-mode: screen;
 }
 .liquid-menu-surface::after {
@@ -3298,21 +3298,21 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
   pointer-events: none;
   z-index: 0;
   border-radius: 999px;
-  background: radial-gradient(circle, hsl(var(--primary) / 0.055), transparent 66%);
+  background: radial-gradient(circle, hsl(var(--primary) / 0.04), transparent 66%);
   filter: blur(14px);
   transform: rotate(-12deg);
 }
 .dark .liquid-menu-surface {
   background:
-    linear-gradient(145deg, hsl(222 18% 13% / 0.84), hsl(222 18% 9% / 0.72) 58%, hsl(222 20% 14% / 0.78)),
-    radial-gradient(circle at 18% 6%, hsl(0 0% 100% / 0.09), transparent 34%),
-    radial-gradient(circle at 88% 92%, hsl(var(--primary) / 0.13), transparent 40%) !important;
-  border: 1px solid hsl(0 0% 100% / 0.13) !important;
+    linear-gradient(145deg, hsl(222 16% 12% / 0.86), hsl(222 16% 8% / 0.74) 58%, hsl(222 18% 13% / 0.78)),
+    radial-gradient(circle at 18% 6%, hsl(0 0% 100% / 0.075), transparent 34%),
+    radial-gradient(circle at 88% 92%, hsl(var(--primary) / 0.09), transparent 40%) !important;
+  border: 1px solid hsl(0 0% 100% / 0.12) !important;
   box-shadow:
-    0 10px 24px -18px hsl(0 0% 0% / 0.58),
-    0 32px 68px -32px hsl(0 0% 0% / 0.76),
-    inset 0 1px 0 0 hsl(0 0% 100% / 0.13),
-    inset 0 -14px 30px -26px hsl(var(--primary) / 0.26),
+    0 10px 24px -18px hsl(0 0% 0% / 0.54),
+    0 28px 62px -32px hsl(0 0% 0% / 0.72),
+    inset 0 1px 0 0 hsl(0 0% 100% / 0.12),
+    inset 0 -12px 26px -24px hsl(var(--primary) / 0.2),
     inset 0 0 0 1px hsl(0 0% 100% / 0.05) !important;
 }
 .dark .liquid-menu-surface::before {
@@ -3359,9 +3359,9 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
   position: relative;
   isolation: isolate;
   overflow: visible;
-  border-radius: 16px !important;
-  padding: 0.575rem 0.625rem !important;
-  transition: color 180ms ease-out;
+  border-radius: 15px !important;
+  padding: 0.55rem 0.6rem !important;
+  transition: background-color 160ms ease-out, color 160ms ease-out;
 }
 .liquid-menu-item::before {
   content: "";
@@ -3370,57 +3370,63 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
   z-index: -1;
   background: linear-gradient(
     135deg,
-    hsl(0 0% 100% / 0.58) 0%,
-    hsl(var(--primary) / 0.055) 48%,
-    hsl(0 0% 100% / 0.34) 100%
+    hsl(0 0% 100% / 0.5) 0%,
+    hsl(var(--primary) / 0.04) 48%,
+    hsl(0 0% 100% / 0.28) 100%
   );
-  border-radius: 16px;
+  border-radius: 15px;
   opacity: 0;
   transform: scale(0.98) translateY(1px);
   transition:
-    opacity 220ms cubic-bezier(0.25, 0.1, 0.25, 1),
-    transform 220ms cubic-bezier(0.25, 0.1, 0.25, 1),
-    border-radius 280ms cubic-bezier(0.25, 0.1, 0.25, 1);
+    opacity 180ms cubic-bezier(0.25, 0.1, 0.25, 1),
+    transform 180ms cubic-bezier(0.25, 0.1, 0.25, 1),
+    border-radius 220ms cubic-bezier(0.25, 0.1, 0.25, 1);
   pointer-events: none;
   box-shadow:
-    0 8px 18px -18px hsl(220 35% 20% / 0.36),
-    inset 0 1px 0 hsl(0 0% 100% / 0.62),
-    inset 0 -10px 18px -18px hsl(var(--primary) / 0.38);
+    0 8px 18px -18px hsl(220 35% 20% / 0.28),
+    inset 0 1px 0 hsl(0 0% 100% / 0.58),
+    inset 0 -10px 18px -18px hsl(var(--primary) / 0.28);
 }
 .dark .liquid-menu-item::before {
   background: linear-gradient(
     135deg,
-    hsl(0 0% 100% / 0.08) 0%,
-    hsl(var(--primary) / 0.18) 46%,
-    hsl(0 0% 100% / 0.05) 100%
+    hsl(0 0% 100% / 0.07) 0%,
+    hsl(var(--primary) / 0.13) 46%,
+    hsl(0 0% 100% / 0.045) 100%
   );
   box-shadow:
     0 10px 24px -18px hsl(0 0% 0% / 0.75),
     inset 0 1px 0 hsl(0 0% 100% / 0.12),
-    inset 0 -10px 18px -18px hsl(var(--primary) / 0.65);
+    inset 0 -10px 18px -18px hsl(var(--primary) / 0.5);
 }
 .liquid-menu-item:hover::before,
 .liquid-menu-item[data-highlighted]::before,
 .liquid-menu-item:focus-visible::before {
   opacity: 1;
   transform: scale(1) translateY(0);
-  border-radius: 18px;
-  animation: liquid-shimmer 520ms cubic-bezier(0.25, 0.1, 0.25, 1) forwards;
+  border-radius: 17px;
+  animation: liquid-shimmer 420ms cubic-bezier(0.25, 0.1, 0.25, 1) forwards;
 }
 
 .liquid-icon {
-  transition: transform 240ms cubic-bezier(0.25, 0.1, 0.25, 1);
+  box-shadow:
+    inset 0 1px 0 hsl(0 0% 100% / 0.55),
+    0 8px 18px -16px hsl(220 35% 20% / 0.32);
+  transition: transform 180ms cubic-bezier(0.25, 0.1, 0.25, 1), box-shadow 180ms ease-out;
   transform-origin: center;
 }
 .liquid-menu-item:hover .liquid-icon,
 .liquid-menu-item[data-highlighted] .liquid-icon,
 .liquid-menu-item:focus-visible .liquid-icon {
-  transform: translateY(-1px) scale(1.025);
+  transform: translateY(-1px) scale(1.018);
+  box-shadow:
+    inset 0 1px 0 hsl(0 0% 100% / 0.68),
+    0 10px 22px -16px hsl(220 35% 20% / 0.36);
 }
 
 .liquid-label {
   display: inline-block;
-  transition: transform 200ms cubic-bezier(0.25, 0.1, 0.25, 1), color 200ms ease-out;
+  transition: transform 160ms cubic-bezier(0.25, 0.1, 0.25, 1), color 160ms ease-out;
 }
 .liquid-menu-item:hover .liquid-label,
 .liquid-menu-item[data-highlighted] .liquid-label {
