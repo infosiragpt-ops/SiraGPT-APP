@@ -76,6 +76,9 @@ describe("semantic intent router · structured profile", () => {
     const offline = semanticRouter.buildSemanticIntentAnalysis({
       rawUserRequest: "dame 10 fuentes sobre IA sin internet",
     })
+    const offlineTextOnly = semanticRouter.buildSemanticIntentAnalysis({
+      rawUserRequest: "solo texto sin buscar en internet sobre IA",
+    })
 
     assert.equal(fresh.intent, "web_search")
     assert.equal(fresh.contract.source_requirements.required, true)
@@ -83,6 +86,11 @@ describe("semantic intent router · structured profile", () => {
     assert.equal(offline.intent, "text")
     assert.equal(offline.contract.source_requirements.required, false)
     assert.equal(offline.request_intelligence.context.has_no_search_directive, true)
+    assert.equal(offlineTextOnly.intent, "text")
+    assert.equal(offlineTextOnly.contract.pipeline, "DirectAnswerPipeline")
+    assert.deepEqual(offlineTextOnly.semantic_profile.required_tools, ["finalize"])
+    assert.equal(offlineTextOnly.request_intelligence.context.has_no_search_directive, true)
+    assert.equal(offlineTextOnly.request_intelligence.context.has_text_only_directive, true)
   })
 
   it("keeps text-only requests in chat even when artifact words appear", () => {
@@ -91,6 +99,9 @@ describe("semantic intent router · structured profile", () => {
     })
     const noFileSummary = semanticRouter.buildSemanticIntentAnalysis({
       rawUserRequest: "no crees archivo, solo dime las ideas principales",
+    })
+    const negatedPpt = semanticRouter.buildSemanticIntentAnalysis({
+      rawUserRequest: "solo responde aqui, no hagas ppt, dame 5 diapositivas",
     })
 
     assert.equal(slidesAsText.intent, "text")
@@ -104,11 +115,21 @@ describe("semantic intent router · structured profile", () => {
     assert.equal(noFileSummary.intent, "text")
     assert.equal(noFileSummary.contract.pipeline, "DirectAnswerPipeline")
     assert.equal(noFileSummary.request_intelligence.context.asks_existing_document_question, false)
+
+    assert.equal(negatedPpt.intent, "text")
+    assert.equal(negatedPpt.contract.pipeline, "DirectAnswerPipeline")
+    assert.equal(negatedPpt.contract.artifact_required, false)
+    assert.equal(negatedPpt.contract.required_extension, null)
+    assert.deepEqual(negatedPpt.semantic_profile.required_tools, ["finalize"])
+    assert.ok(negatedPpt.contract.user_constraints.includes("requested_count:5 diapositivas"))
   })
 
   it("allows web grounding with text-only delivery but blocks file creation", () => {
     const analysis = semanticRouter.buildSemanticIntentAnalysis({
       rawUserRequest: "dame fuentes actuales sobre IA solo texto",
+    })
+    const webNoFile = semanticRouter.buildSemanticIntentAnalysis({
+      rawUserRequest: "busca en internet noticias actuales de OpenAI pero no crees archivo",
     })
 
     assert.equal(analysis.intent, "web_search")
@@ -118,6 +139,10 @@ describe("semantic intent router · structured profile", () => {
     assert.ok(analysis.contract.required_tools.includes("web_search"))
     assert.ok(analysis.contract.forbidden_tools.includes("create_document"))
     assert.ok(!analysis.semantic_profile.required_tools.includes("create_document"))
+    assert.equal(webNoFile.intent, "web_search")
+    assert.equal(webNoFile.needs_clarification, false)
+    assert.equal(webNoFile.contract.ambiguity_score, 0.12)
+    assert.ok(webNoFile.contract.forbidden_tools.includes("create_document"))
   })
 
   it("answers questions about an uploaded Word instead of generating a new Word", () => {
@@ -193,5 +218,21 @@ describe("semantic intent router · structured profile", () => {
     assert.equal(analysis.contract.pipeline, "DirectAnswerPipeline")
     assert.equal(analysis.request_intelligence.context.has_contextual_followup, true)
     assert.ok(analysis.contract.ambiguity_score < 0.5)
+  })
+
+  it("preserves current-thread context when a follow-up requests a presentation", () => {
+    const analysis = semanticRouter.buildSemanticIntentAnalysis({
+      rawUserRequest: "crea una ppt con lo anterior",
+      conversationHistory: [
+        { role: "user", text: "dame 3 ideas de marketing" },
+        { role: "assistant", text: "1. SEO local 2. Email nurturing 3. Programa de referidos" },
+      ],
+    })
+
+    assert.equal(analysis.intent, "ppt")
+    assert.equal(analysis.contract.pipeline, "SlidePipeline")
+    assert.equal(analysis.contract.required_extension, ".pptx")
+    assert.equal(analysis.request_intelligence.context.has_contextual_followup, true)
+    assert.ok(analysis.contract.user_constraints.includes("conversation_context:previous_turn"))
   })
 })

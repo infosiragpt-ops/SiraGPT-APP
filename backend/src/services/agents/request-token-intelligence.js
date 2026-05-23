@@ -69,13 +69,17 @@ const LEXICON = Object.freeze({
   ],
   noSearch: [
     "sin internet", "sin busqueda", "sin busqueda web", "no busques",
-    "no buscar", "no uses internet", "no consultes internet", "sin fuentes",
-    "sin citas", "sin referencias",
+    "no buscar", "sin buscar internet", "sin buscar en internet",
+    "sin buscar web", "sin consultar internet", "sin consultar la web",
+    "no uses internet", "no consultes internet", "no consultes la web",
+    "sin fuentes", "sin citas", "sin referencias",
   ],
   textOnly: [
     "solo texto", "solamente texto", "unicamente texto", "respuesta textual",
-    "texto plano", "sin archivo", "sin documento", "no generes archivo",
+    "texto plano", "solo responde aqui", "responde aqui", "solo en el chat",
+    "aqui en el chat", "sin archivo", "sin documento", "no generes archivo",
     "no crees archivo", "no hagas archivo", "no adjuntes archivo",
+    "no hagas ppt", "no hagas word", "no crees ppt", "no crees word",
   ],
   data: [
     "datos", "dataset", "tabla", "tablas", "filas", "columnas", "formula",
@@ -236,10 +240,10 @@ function classifyFormatOccurrence({ tokens, occurrence, evidence }) {
 }
 
 const NO_SEARCH_RE =
-  /\b(?:sin\s+(?:internet|b[uú]squeda(?:\s+web)?|fuentes|citas|referencias)|no\s+(?:busques?|buscar|uses?\s+internet|consultes?\s+(?:internet|la\s+web)))\b/i;
+  /\b(?:sin\s+(?:internet|b[uú]squeda(?:\s+web)?|buscar\s+(?:en\s+)?(?:internet|la\s+web|web)|consultar\s+(?:internet|la\s+web|web)|fuentes|citas|referencias)|no\s+(?:busques?|buscar|uses?\s+internet|consultes?\s+(?:internet|la\s+web|web)))\b/i;
 
 const TEXT_ONLY_RE =
-  /\b(?:solo|solamente|unicamente)\s+(?:texto|respuesta|contenido|explicacion)\b|\brespuesta\s+textual\b|\btexto\s+plano\b|\b(?:sin|no\s+(?:crees?|crear|generes?|generar|hagas?|hacer|entregues?|entregar|produzcas?|producir|adjuntes?|adjuntar))\s+(?:archivo|documento|docx|word|pptx|powerpoint|presentacion|pdf|excel|xlsx)\b/i;
+  /\b(?:solo|solamente|unicamente)\s+(?:texto|respuesta|contenido|explicacion|responde(?:r)?\s+(?:aqui|en\s+el\s+chat))\b|\b(?:solo\s+)?responde(?:me)?\s+(?:aqui|en\s+el\s+chat)\b|\b(?:solo\s+)?(?:aqui|aca)\s+en\s+el\s+chat\b|\brespuesta\s+textual\b|\btexto\s+plano\b|\b(?:sin|no\s+(?:me\s+)?(?:crees?|crear|generes?|generar|hagas?|hacer|entregues?|entregar|produzcas?|producir|adjuntes?|adjuntar))\s+(?:un\s+|una\s+|el\s+|la\s+)?(?:archivo|documento|docx|word|ppt|pptx|powerpoint|power\s+point|presentacion|pdf|excel|xlsx)\b/i;
 
 const PRIVATE_FILE_REFERENCE_RE =
   /\b(?:adjunt[oa]s?|subido|cargado|uploaded|attached)\b|\b(?:este|esta|ese|esa|el|la|mi|mis)\s+(?:archivo|documento|pdf|word|docx|excel|xlsx|ppt|pptx)\b|\b(?:archivo|documento|pdf|word|docx|excel|xlsx|ppt|pptx)\s+(?:adjunto|subido|cargado|anterior)\b/i;
@@ -272,7 +276,8 @@ function isContextualFollowup(tokens, conversationHistory = []) {
   if (!Array.isArray(conversationHistory) || conversationHistory.length === 0) return false;
   const text = tokensText(tokens).trim();
   if (!text || tokens.length > 10) return false;
-  return /^(?:sigue|continua|adelante|dale|completa|otra vez|de nuevo|repite|repitelo|eso|esa|ese|esto|exacto|exactamente|mejor|mejoralo|hazlo|traducelo|resumelo|amplia|amplialo|expande|detalla|profundiza|mas|menos|shorter|longer|y\s+(?:entonces|ahora|luego|despues|por que|que)|el\s+(?:primero|segundo|tercero|cuarto|quinto|ultimo)|la\s+(?:primera|segunda|tercera|cuarta|quinta|ultima)|punto\s+\d+)\b/i.test(text)
+  return /^(?:sigue|continua|adelante|dale|completa|otra vez|de nuevo|repite|repitelo|eso|esa|ese|esto|lo\s+anterior|con\s+eso|sobre\s+eso|exacto|exactamente|mejor|mejoralo|hazlo|traducelo|resumelo|amplia|amplialo|expande|detalla|profundiza|mas|menos|shorter|longer|y\s+(?:entonces|ahora|luego|despues|por que|que)|el\s+(?:primero|segundo|tercero|cuarto|quinto|ultimo)|la\s+(?:primera|segunda|tercera|cuarta|quinta|ultima)|punto\s+\d+)\b/i.test(text)
+    || /\b(?:lo\s+anterior|del\s+hilo|mismo\s+hilo|misma\s+conversacion|con\s+eso|sobre\s+eso|eso\s+que\s+dijiste|respuesta\s+anterior)\b/i.test(text)
     || /\b(?:punto|parte|opcion|fila|columna|slide|diapositiva)\s+\d+\b/i.test(text)
     || /\b(?:mas|menos)\s+(?:formal|casual|corto|largo|claro|simple|profesional|oscuro|detallado)\b/i.test(text)
     || /\b(?:en|como)\s+(?:pdf|word|docx|excel|xlsx|pptx|powerpoint|espanol|ingles)\b/i.test(text);

@@ -530,15 +530,16 @@ function matchAny(raw, patterns) {
 
 function hasNoSearchDirective(raw) {
   return matchAny(raw, [
-    /\b(?:sin\s+(?:internet|b[uú]squeda(?:\s+web)?|fuentes|citas|referencias)|no\s+(?:busques?|buscar|uses?\s+internet|consultes?\s+(?:internet|la\s+web)))\b/i,
+    /\b(?:sin\s+(?:internet|b[uú]squeda(?:\s+web)?|buscar\s+(?:en\s+)?(?:internet|la\s+web|web)|consultar\s+(?:internet|la\s+web|web)|fuentes|citas|referencias)|no\s+(?:busques?|buscar|uses?\s+internet|consultes?\s+(?:internet|la\s+web|web)))\b/i,
   ]);
 }
 
 function hasTextOnlyDirective(raw) {
   return matchAny(raw, [
-    /\b(?:solo|solamente|unicamente|únicamente)\s+(?:texto|respuesta|contenido|explicaci[oó]n)\b/i,
+    /\b(?:solo|solamente|unicamente|únicamente)\s+(?:texto|respuesta|contenido|explicaci[oó]n|responde(?:r)?\s+(?:aqu[ií]|en\s+el\s+chat))\b/i,
+    /\b(?:solo\s+)?responde(?:me)?\s+(?:aqu[ií]|en\s+el\s+chat)\b|\b(?:solo\s+)?(?:aqu[ií]|ac[aá])\s+en\s+el\s+chat\b/i,
     /\brespuesta\s+textual\b|\btexto\s+plano\b/i,
-    /\b(?:sin|no\s+(?:crees?|crear|generes?|generar|hagas?|hacer|entregues?|entregar|produzcas?|producir|adjuntes?|adjuntar))\s+(?:archivo|documento|docx|word|pptx|power\s*point|powerpoint|presentaci[oó]n|pdf|excel|xlsx)\b/i,
+    /\b(?:sin|no\s+(?:me\s+)?(?:crees?|crear|generes?|generar|hagas?|hacer|entregues?|entregar|produzcas?|producir|adjuntes?|adjuntar))\s+(?:un\s+|una\s+|el\s+|la\s+)?(?:archivo|documento|docx|word|ppt|pptx|power\s*point|powerpoint|presentaci[oó]n|pdf|excel|xlsx)\b/i,
   ]);
 }
 
@@ -942,9 +943,11 @@ function buildExecutionPlan({ pipeline, primaryIntent, requiredTools, validation
   return plan;
 }
 
-function inferAmbiguityScore({ raw, requiredExtension, pipeline, sourceRequirements }) {
+function inferAmbiguityScore({ raw, requiredExtension, pipeline, sourceRequirements, requestTokenAnalysis = null }) {
   const n = normalize(raw);
   if (!n) return 1;
+  if (hasTextOnlyDirective(raw) || requestTokenAnalysis?.context?.has_text_only_directive) return 0.12;
+  if (requestTokenAnalysis?.context?.has_contextual_followup) return 0.15;
   if (isPlainTranscriptionRequest(raw, requiredExtension)) return 0.15;
   if (/\b(archivo|documento|haz algo|lo que sea|cualquier cosa)\b/.test(n) && !requiredExtension) return 0.85;
   if (sourceRequirements.required && /\b(articulos|fuentes|papers)\b/.test(n) && !/\b(\d{1,5}|varios|algunos|lista)\b/.test(n)) return 0.45;
@@ -960,12 +963,13 @@ function inferRiskLevel({ sourceRequirements, pipeline, requiredExtension, ambig
   return 'low';
 }
 
-function buildUserConstraints(raw, requiredExtension, sourceRequirements) {
+function buildUserConstraints(raw, requiredExtension, sourceRequirements, requestTokenAnalysis = null) {
   const constraints = [];
   if (requiredExtension) constraints.push(`required_extension:${requiredExtension}`);
   if (isPlainTranscriptionRequest(raw, requiredExtension)) constraints.push('transcription_mode:verbatim_inline_no_summary_no_document');
   if (hasNoSearchDirective(raw)) constraints.push('no_external_search:user_requested');
   if (hasTextOnlyDirective(raw)) constraints.push('text_only:user_requested');
+  if (requestTokenAnalysis?.context?.has_contextual_followup) constraints.push('conversation_context:previous_turn');
   for (const c of extractCountConstraints(raw)) constraints.push(`requested_count:${c}`);
   if (sourceRequirements.required) constraints.push(`source_verification:${sourceRequirements.verification_policy}`);
   if (sourceRequirements.recency_range) constraints.push(`recency_range:${sourceRequirements.recency_range}`);
@@ -1055,6 +1059,7 @@ function buildUniversalTaskContract({ rawUserRequest, fileIds = [], now = new Da
     requiredExtension,
     pipeline: primaryPipeline,
     sourceRequirements,
+    requestTokenAnalysis,
   });
   const riskLevel = inferRiskLevel({
     sourceRequirements,
@@ -1083,7 +1088,7 @@ function buildUniversalTaskContract({ rawUserRequest, fileIds = [], now = new Da
     source_requirements: sourceRequirements,
     grounding_required: Boolean(sourceRequirements.required || hasFiles || primaryPipeline === 'RAGDocumentUnderstandingPipeline'),
     citations_required: Boolean(sourceRequirements.required || matchAny(raw, [/\b(cita|citas|referencias|apa|doi)\b/i])),
-    user_constraints: buildUserConstraints(raw, requiredExtension, sourceRequirements),
+    user_constraints: buildUserConstraints(raw, requiredExtension, sourceRequirements, requestTokenAnalysis),
     implicit_constraints: buildImplicitConstraints({ primaryPipeline, requiredExtension, artifactRequired, hasFiles, sourceRequirements }),
     quality_bar: buildQualityBar({ riskLevel, artifactRequired, sourceRequirements }),
     ambiguity_score: ambiguityScore,

@@ -99,6 +99,7 @@ test('research plus multiple deliverables creates a MultiIntent DAG', () => {
 test('negated output and no-internet directives do not create unwanted tools', () => {
   const noWord = buildUniversalTaskContract({ rawUserRequest: 'dame 10 fuentes sobre IA sin Word' });
   const noInternet = buildUniversalTaskContract({ rawUserRequest: 'dame 10 fuentes sobre IA sin internet' });
+  const noInternetSearch = buildUniversalTaskContract({ rawUserRequest: 'solo texto sin buscar en internet sobre IA' });
 
   assert.equal(noWord.pipeline, 'ResearchGroundingPipeline');
   assert.equal(noWord.artifact_required, false);
@@ -111,6 +112,12 @@ test('negated output and no-internet directives do not create unwanted tools', (
   assert.ok(!noInternet.required_tools.includes('web_search'));
   assert.ok(noInternet.forbidden_tools.includes('web_search'));
   assert.ok(noInternet.user_constraints.includes('no_external_search:user_requested'));
+
+  assert.equal(noInternetSearch.pipeline, 'DirectAnswerPipeline');
+  assert.equal(noInternetSearch.source_requirements.required, false);
+  assert.deepEqual(noInternetSearch.required_tools, ['finalize']);
+  assert.ok(noInternetSearch.forbidden_tools.includes('web_search'));
+  assert.ok(noInternetSearch.user_constraints.includes('text_only:user_requested'));
 });
 
 test('text-only directives suppress artifact generation and forbid file tools', () => {
@@ -119,6 +126,12 @@ test('text-only directives suppress artifact generation and forbid file tools', 
   });
   const groundedText = buildUniversalTaskContract({
     rawUserRequest: 'dame fuentes actuales sobre IA solo texto',
+  });
+  const negatedPpt = buildUniversalTaskContract({
+    rawUserRequest: 'solo responde aqui, no hagas ppt, dame 5 diapositivas',
+  });
+  const webNoFile = buildUniversalTaskContract({
+    rawUserRequest: 'busca en internet noticias actuales de OpenAI pero no crees archivo',
   });
 
   assert.equal(slidesAsText.pipeline, 'DirectAnswerPipeline');
@@ -134,6 +147,54 @@ test('text-only directives suppress artifact generation and forbid file tools', 
   assert.equal(groundedText.source_requirements.required, true);
   assert.ok(groundedText.required_tools.includes('web_search'));
   assert.ok(groundedText.forbidden_tools.includes('create_document'));
+
+  assert.equal(negatedPpt.pipeline, 'DirectAnswerPipeline');
+  assert.equal(negatedPpt.required_extension, null);
+  assert.equal(negatedPpt.artifact_required, false);
+  assert.deepEqual(negatedPpt.required_tools, ['finalize']);
+  assert.ok(negatedPpt.user_constraints.includes('requested_count:5 diapositivas'));
+
+  assert.equal(webNoFile.pipeline, 'ResearchGroundingPipeline');
+  assert.equal(webNoFile.artifact_required, false);
+  assert.equal(webNoFile.ambiguity_score, 0.12);
+  assert.ok(webNoFile.required_tools.includes('web_search'));
+  assert.ok(webNoFile.forbidden_tools.includes('create_document'));
+});
+
+test('contextual follow-ups carry previous-turn context without losing requested format', () => {
+  const tokenAnalysis = {
+    version: 'test',
+    token_count: 6,
+    primary_intent: 'slide_generation',
+    pipeline: 'SlidePipeline',
+    confidence: 0.9,
+    ambiguity_score: 0.15,
+    requested_formats: [{
+      extension: '.pptx',
+      output_format: 'PPTX',
+      artifact_type: 'presentation',
+      pipeline: 'SlidePipeline',
+      intent: 'slide_generation',
+    }],
+    excluded_formats: [],
+    intent_scores: [{ intent: 'slide_generation', score: 0.9, reasons: ['test'] }],
+    context: {
+      has_contextual_followup: true,
+      has_text_only_directive: false,
+      has_no_search_directive: false,
+      asks_existing_document_question: false,
+    },
+  };
+  const contract = buildUniversalTaskContract({
+    rawUserRequest: 'crea una ppt con lo anterior',
+    tokenAnalysis,
+  });
+
+  assert.equal(contract.pipeline, 'SlidePipeline');
+  assert.equal(contract.required_extension, '.pptx');
+  assert.equal(contract.artifact_required, true);
+  assert.equal(contract.ambiguity_score, 0.15);
+  assert.ok(contract.user_constraints.includes('conversation_context:previous_turn'));
 });
 
 test('freshness questions require grounded web search', () => {
