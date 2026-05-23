@@ -35,15 +35,20 @@ const MARKER_RE = /\[\s*(?:source|fuente)\s*:?\s*(\d+)\s*\]/gi;
  */
 function buildCitationSystemBlock(chunks, { language = 'en' } = {}) {
   if (!Array.isArray(chunks) || chunks.length === 0) return '';
-  const header = language === 'es'
+  const isSpanish = language === 'es';
+  const header = isSpanish
     ? 'FUENTES (cita como [Fuente: N] cuando uses información de ellas):'
     : 'SOURCES (cite as [Source: N] when you use information from them):';
+  const integrity = isSpanish
+    ? 'Usa solo estas fuentes para afirmaciones verificables. No inventes fuentes, DOI, autores, URLs ni métricas; si una afirmación no está respaldada, márcala como no confirmada.'
+    : 'Use only these sources for verifiable claims. Do not invent sources, DOIs, authors, URLs, or metrics; if a claim is unsupported, mark it as unconfirmed.';
   const body = chunks.map((c, i) => {
     const label = c.title || c.source || `source-${i + 1}`;
+    const provenance = [c.source, c.url, c.doi].filter(Boolean).join(' | ');
     const snippet = (c.text || '').slice(0, 500).replace(/\s+/g, ' ').trim();
-    return `[${i + 1}] ${label}\n${snippet}`;
+    return `[${i + 1}] ${label}${provenance && provenance !== label ? ` (${provenance})` : ''}\n${snippet}`;
   }).join('\n\n');
-  return `${header}\n\n${body}`;
+  return `${header}\n${integrity}\n\n${body}`;
 }
 
 /**

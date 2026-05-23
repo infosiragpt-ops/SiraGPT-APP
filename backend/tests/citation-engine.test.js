@@ -23,12 +23,28 @@ test('buildCitationSystemBlock: numbers chunks starting at 1', () => {
   assert.ok(block.includes('[1] pricing.md'));
   assert.ok(block.includes('[2] refunds.md'));
   assert.ok(block.includes('[3] billing.md'));
+  assert.ok(block.includes('Do not invent sources, DOIs, authors, URLs, or metrics'));
 });
 
 test('buildCitationSystemBlock: Spanish header when language=es', () => {
   const block = buildCitationSystemBlock(CHUNKS, { language: 'es' });
   assert.ok(block.startsWith('FUENTES'));
   assert.ok(block.includes('[Fuente: N]'));
+  assert.ok(block.includes('No inventes fuentes, DOI, autores, URLs ni métricas'));
+});
+
+test('buildCitationSystemBlock: includes traceable provenance when available', () => {
+  const block = buildCitationSystemBlock([
+    {
+      text: 'Study summary.',
+      title: 'Research paper',
+      source: 'OpenAlex',
+      doi: '10.5555/source.1',
+      url: 'https://doi.org/10.5555/source.1',
+    },
+  ]);
+
+  assert.ok(block.includes('Research paper (OpenAlex | https://doi.org/10.5555/source.1 | 10.5555/source.1)'));
 });
 
 test('buildCitationSystemBlock: empty chunks → empty string', () => {

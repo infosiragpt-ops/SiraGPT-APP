@@ -38,7 +38,7 @@ const ABSOLUTE_RULES = `You are siraGPT, a professional, high-capability AI assi
 5. **When a file is attached, analyze EVERY record in it.** Do not sample the first N rows, do not summarize only the top, do not ignore sheets. If the file is huge, say so explicitly and describe your coverage — never silently truncate.
 6. **When the user asks you to regenerate, produce a genuinely new version — this includes visual content (diagrams, charts, code for visuals, generated images, presentation layouts).** Do not ask for preferences, do not offer A/B choices — rewrite from scratch with a distinct angle, structure, palette, or approach from the previous version and ship it.
 7. **Always respond in the user's language** (enforced above by the LANGUAGE POLICY section — do not override it).
-8. **For academic, legal, medical, or scientific topics, include real citations in APA 7 format.** Use in-text citations (Author, YYYY) and close with a "Referencias" / "References" section where every entry follows APA 7: Author, A. A. (Year). *Title of work* (edition). Publisher. https://doi.org/xx.xxxx. Never invent authors, titles, DOIs, or journals — if unsure, cite a canonical real work close to the topic and flag the uncertainty.
+8. **For academic, legal, medical, scientific, market, current, or citation-seeking topics, use only verified or user-provided sources.** Never invent authors, titles, journals, DOI, laws, statistics, URLs, prices, metrics, or bibliographic entries. If verified sources are not available in the prompt, uploaded files, RAG evidence, or search/tool output, say that source verification is required and provide uncited background, a search plan, or a clearly marked draft instead of fake citations.
 9. **When uncertain, state your confidence level and give the best available answer.** Do not refuse for lack of certainty. Format: a direct answer first, then "Nivel de confianza: alto/medio/bajo" with a one-line justification.
 10. **Format every response with professional markdown.** Use headings (##, ###), bullet or numbered lists, tables for comparative data, and fenced code blocks with language hints (\`\`\`python, \`\`\`ts, \`\`\`bash). Never ship a wall of plain text for anything longer than two short paragraphs.
 
@@ -162,6 +162,15 @@ const QUALITY_RESPONSE_CONTRACT = `## RESPONSE QUALITY CONTRACT
 - Avoid generic filler such as "claro, puedo ayudarte" as the whole answer. Do the work immediately.
 - Make professional assumptions when information is missing. State the assumption briefly and continue with the best useful answer.
 - Keep the language resolved by the language policy, with Spanish as the default for Spanish-speaking users.`;
+
+const SOURCE_INTEGRITY_CONTRACT = `## SOURCE INTEGRITY CONTRACT
+
+- Treat "fuentes reales", "citas", "APA 7", "DOI", "articulos cientificos", "tesis", "normativa", current data, prices, laws, statistics, and provider/model availability as source-verification work.
+- Cite only source metadata that comes from SIRA EVIDENCE RUNTIME, web/search tools, uploaded user files, project knowledge, or sources explicitly pasted by the user.
+- Never cite a "close" or "canonical" work just because it sounds plausible. Plausible is not verified.
+- When evidence is incomplete, separate the answer into verified, inferred, and not confirmed information instead of blending them.
+- For thesis and academic work, draft structure, methodology, matrices, instruments, and wording from the user's facts, but leave references pending verification unless real source metadata is present.
+- Do not create fake APA entries, fake DOI URLs, fake journal names, fake legal norms, fake payments, fake model availability, or fake administrative metrics.`;
 
 // ────────────────────────────────────────────────────────────────────
 // Intent taxonomy. Order matters: the first matching intent wins, so
@@ -294,13 +303,16 @@ Hard requirements regardless of which structure applies:
     intent: 'SEARCH_WEB',
     patterns: [
       /\b(search|busca|buscar|google|look up|find|investiga|research)\b.{0,30}\b(web|internet|online)\b/i,
+      /\b(busca|buscar|dame|necesito|encuentra|recopila|investiga|research|find|give me)\b.{0,80}\b(fuentes|referencias|citas|bibliograf[ií]a|art[ií]culos?|papers?|doi|scopus|openalex|crossref|pubmed|scielo|redalyc|dialnet|semantic scholar|web of science|wos)\b/i,
+      /\b(fuentes|referencias|citas|bibliograf[ií]a|art[ií]culos?|papers?)\b.{0,80}\b(reales|verificad[ao]s?|doi|apa|cient[ií]fic[ao]s?|acad[eé]mic[ao]s?|actual(?:es)?|reciente(?:s)?)\b/i,
+      /\b(apa\s*7|doi)\b.{0,80}\b(real(?:es)?|verificad[ao]s?|art[ií]culos?|fuentes?|referencias?|papers?)\b/i,
       /\b(latest|recent|news|reciente|[uú]ltim[ao]s?)\b.{0,40}\b(news|noticias|updates|release)\b/i,
       /\b(price|precio|cotizaci[oó]n|stock price|market cap)\b/i,
     ],
     context: `\n## TASK: WEB-LIKE QUERY
-- You do not have live internet. Be explicit about what you know vs. what needs verification.
-- Give the best answer from your training data, flag any part that may be out of date, and suggest the exact query the user should run if they need current data.
-- When the user asks for sources, provide plausible search terms and canonical site names (Wikipedia, arXiv, docs.python.org, etc.) rather than fabricated URLs.`,
+- If SIRA EVIDENCE RUNTIME, Web Search, RAG, or another tool has supplied sources, answer from those sources and cite them.
+- If no live-search/tool evidence is present, be explicit that source verification is still required. Provide useful background or a search strategy, but do not fabricate URLs, DOI, authors, dates, journals, laws, prices, or current facts.
+- Prefer official, peer-reviewed, institutional, or primary sources. Separate verified facts from inference and uncertainty.`,
   },
   {
     intent: 'TRANSLATE',
@@ -458,7 +470,7 @@ function buildSystemPrompt({ language, userMessage, customGpt, project, userProf
 
   const header = buildSystemRule(lang);
 
-  let body = `${ABSOLUTE_RULES}\n\n${QUALITY_RESPONSE_CONTRACT}`;
+  let body = `${ABSOLUTE_RULES}\n\n${SOURCE_INTEGRITY_CONTRACT}\n\n${QUALITY_RESPONSE_CONTRACT}`;
 
   // User profile — per-user personalization loaded from the database at
   // request time. Lives above custom GPT persona so user preferences
@@ -530,6 +542,7 @@ module.exports = {
   buildUserIntentAlignmentProfile,
   buildUserIntentAlignmentPrompt,
   ABSOLUTE_RULES,
+  SOURCE_INTEGRITY_CONTRACT,
   QUALITY_RESPONSE_CONTRACT,
   LANG_NAMES,
 };

@@ -37,6 +37,7 @@ const SOURCE_CHECKS = Object.freeze([
   "no_fake_doi", "doi_or_url_present", "sources_match_claims",
   "citation_style_correct", "year_recent_enough", "domain_authoritative",
   "every_claim_has_source", "no_hallucinated_quotes",
+  "no_placeholder_sources", "source_traceability_present",
 ]);
 
 const CODE_CHECKS = Object.freeze([
@@ -112,7 +113,11 @@ function validateSources({ claims = [], sources = [], citation_style = "APA7", r
 
   // every claim must reference at least one source id
   if (claims.length > 0) {
-    const ungrounded = claims.filter(c => !c.source_id || (c.source_id && !sources.some(s => s.id === c.source_id)));
+    const sourceIds = new Set(sources.map(sourceIdentifier).filter(Boolean).map(String));
+    const ungrounded = claims.filter(c => {
+      const ids = claimSourceIds(c);
+      return ids.length === 0 || ids.every(id => !sourceIds.has(String(id)));
+    });
     checks.push(check("every_claim_has_source",
       ungrounded.length === 0 ? "passed" : "failed",
       `${ungrounded.length}/${claims.length} ungrounded`));
@@ -120,10 +125,20 @@ function validateSources({ claims = [], sources = [], citation_style = "APA7", r
 
   // doi or url present per source
   if (sources.length > 0) {
-    const missing = sources.filter(s => !s.doi && !s.url);
+    const missing = sources.filter(s => !sourceLocator(s));
     checks.push(check("doi_or_url_present",
       missing.length === 0 ? "passed" : "warning",
       `${missing.length} sources missing doi/url`));
+
+    const untraceable = sources.filter(s => !sourceHasTraceableMetadata(s));
+    checks.push(check("source_traceability_present",
+      untraceable.length === 0 ? "passed" : required ? "failed" : "warning",
+      `${untraceable.length} sources missing traceable metadata`));
+
+    const placeholders = sources.filter(looksPlaceholderSource);
+    checks.push(check("no_placeholder_sources",
+      placeholders.length === 0 ? "passed" : "failed",
+      `${placeholders.length} placeholder-like sources`));
 
     // year_recent_enough — last 5 years
     const cutoff = new Date().getUTCFullYear() - 5;
@@ -142,7 +157,7 @@ function validateSources({ claims = [], sources = [], citation_style = "APA7", r
       `${authoritative.length}/${sources.length} authoritative`));
 
     // no fake doi (basic heuristic: 10.xxxx/yyyy pattern)
-    const fake = sources.filter(s => s.doi && !/^10\.\d{4,9}\/[\w.\-/:;()<>]+$/i.test(s.doi));
+    const fake = sources.filter(s => s.doi && !isConformantDoi(s.doi));
     checks.push(check("no_fake_doi",
       fake.length === 0 ? "passed" : "failed",
       `${fake.length} non-conformant DOIs`));
@@ -329,8 +344,84 @@ function parseYear(s) {
   return m ? parseInt(m[0], 10) : null;
 }
 
+function claimSourceIds(claim) {
+  if (!claim || typeof claim !== "object") return [];
+  const ids = [];
+  if (claim.source_id) ids.push(claim.source_id);
+  if (claim.sourceId) ids.push(claim.sourceId);
+  if (Array.isArray(claim.source_ids)) ids.push(...claim.source_ids);
+  if (Array.isArray(claim.sources)) {
+    for (const source of claim.sources) {
+      if (typeof source === "string") ids.push(source);
+      else if (source && typeof source === "object") {
+        if (source.source_id) ids.push(source.source_id);
+        if (source.id) ids.push(source.id);
+      }
+    }
+  }
+  return ids.filter(Boolean);
+}
+
+function sourceIdentifier(source) {
+  if (!source || typeof source !== "object") return null;
+  return source.id || source.source_id || source.sourceId || source.doi || source.url || source.title || null;
+}
+
+function sourceLocator(source) {
+  if (!source || typeof source !== "object") return null;
+  return source.doi || source.url || source.link || source.href || source.uri || null;
+}
+
+function sourceTitle(source) {
+  if (!source || typeof source !== "object") return null;
+  return source.title || source.name || source.source || source.formatted || null;
+}
+
+function sourceHasTraceableMetadata(source) {
+  return Boolean(sourceIdentifier(source) && sourceLocator(source) && sourceTitle(source));
+}
+
+function normaliseDoi(value) {
+  return String(value || "")
+    .trim()
+    .replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "")
+    .replace(/^doi:\s*/i, "");
+}
+
+function isConformantDoi(value) {
+  const doi = normaliseDoi(value);
+  if (!/^10\.\d{4,9}\/[\w.\-/:;()<>]+$/i.test(doi)) return false;
+  return !/(?:xx\.xxxx|placeholder|example|fake|todo|tbd|lorem)/i.test(doi);
+}
+
+function flattenAuthors(authors) {
+  if (!Array.isArray(authors)) return String(authors || "");
+  return authors.map(author => {
+    if (!author || typeof author !== "object") return String(author || "");
+    return [author.given, author.family, author.name].filter(Boolean).join(" ");
+  }).join(" ");
+}
+
+function looksPlaceholderSource(source) {
+  if (!source || typeof source !== "object") return true;
+  const joined = [
+    source.title,
+    source.name,
+    source.source,
+    source.journal,
+    source.publisher,
+    source.formatted,
+    source.url,
+    source.doi,
+    flattenAuthors(source.authors),
+  ].filter(Boolean).join(" ");
+  if (!joined.trim()) return true;
+  return /\b(?:lorem ipsum|placeholder|todo|fixme|tbd|unknown author|author,\s*a\.?\s*a\.?|title of work|journal name|example\.com|not available|n\/a)\b/i.test(joined)
+    || /doi\.org\/xx\.xxxx/i.test(joined);
+}
+
 function isAuthoritativeDomain(urlOrDoi) {
-  const t = String(urlOrDoi).toLowerCase();
+  const t = normaliseDoi(urlOrDoi).toLowerCase();
   if (/^10\.\d{4,9}\//.test(t)) return true; // DOI
   return /\.(edu|gov|ac\.\w+|org)\b/.test(t)
       || /(scielo|redalyc|crossref|pubmed|wiley|springer|elsevier|nature|nih|who|fao|imf|worldbank)\b/.test(t);

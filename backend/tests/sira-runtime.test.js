@@ -158,6 +158,40 @@ describe("cira validator-engine", () => {
     expect(r.checks.some(c => c.name === "no_fake_doi" && c.status === "failed")).toBe(true);
   });
 
+  test("validateSources accepts source_id claim bindings and traceable metadata", () => {
+    const r = validators.validateSources({
+      claims: [{ id: "c1", source_id: "src-openalex-1" }],
+      sources: [{
+        source_id: "src-openalex-1",
+        title: "Adolescent anxiety interventions",
+        doi: "https://doi.org/10.5555/anxiety.2025",
+        provider: "openalex",
+        formatted: "Smith, A. (2025). Adolescent anxiety interventions. Journal. https://doi.org/10.5555/anxiety.2025",
+      }],
+      required: true,
+    });
+
+    expect(r.checks.some(c => c.name === "every_claim_has_source" && c.status === "passed")).toBe(true);
+    expect(r.checks.some(c => c.name === "source_traceability_present" && c.status === "passed")).toBe(true);
+    expect(r.checks.some(c => c.name === "no_fake_doi" && c.status === "passed")).toBe(true);
+  });
+
+  test("validateSources rejects placeholder bibliographic metadata", () => {
+    const r = validators.validateSources({
+      sources: [{
+        id: "placeholder-1",
+        title: "Title of work",
+        authors: ["Author, A. A."],
+        url: "https://example.com/fake-source",
+        formatted: "Author, A. A. (2024). Title of work. Journal Name. https://doi.org/xx.xxxx",
+      }],
+      required: true,
+    });
+
+    expect(r.checks.some(c => c.name === "no_placeholder_sources" && c.status === "failed")).toBe(true);
+    expect(r.checks.some(c => c.name === "source_traceability_present" && c.status === "passed")).toBe(true);
+  });
+
   test("validateCode flags eval()", () => {
     const r = validators.validateCode({ source: "function x(){ eval('hi'); }" });
     expect(r.checks.some(c => c.name === "no_dangerous_calls" && c.status === "failed")).toBe(true);

@@ -35,6 +35,7 @@ type MasterPrompt = {
     fileIds?: string[]
   }) => { system: string; intent: string; language: string; alignmentProfile?: Record<string, unknown> }
   ABSOLUTE_RULES: string
+  SOURCE_INTEGRITY_CONTRACT: string
 }
 
 const masterPrompt = cjsRequire("../../backend/src/services/master-prompt") as MasterPrompt
@@ -54,6 +55,14 @@ describe("master-prompt · classifyIntent", () => {
 
   it("falls back to GENERAL_CHAT when nothing matches", () => {
     assert.equal(masterPrompt.classifyIntent("hola qué tal cómo va todo").intent, "GENERAL_CHAT")
+  })
+
+  it("routes source-verification requests to SEARCH_WEB even without saying internet", () => {
+    const result = masterPrompt.classifyIntent(
+      "dame 10 artículos científicos reales con DOI sobre ansiedad adolescente",
+    )
+
+    assert.equal(result.intent, "SEARCH_WEB")
   })
 
   it("does NOT trigger GENERATE_DOCUMENT on a pasted paragraph that just happens to mention 'informe' or 'reporte'", () => {
@@ -96,6 +105,19 @@ describe("master-prompt · buildSystemPrompt", () => {
 
   it("includes the VISUAL ARTIFACTS auto-rendering contract", () => {
     assert.match(built.system, /VISUAL ARTIFACTS RULE/)
+  })
+
+  it("injects the source integrity contract and forbids plausible filler citations", () => {
+    const academic = masterPrompt.buildSystemPrompt({
+      language: "es",
+      userMessage: "dame fuentes APA 7 con DOI reales para mi tesis",
+    })
+
+    assert.match(academic.system, /SOURCE INTEGRITY CONTRACT/)
+    assert.match(academic.system, /Plausible is not verified/)
+    assert.match(academic.system, /source verification is required/)
+    assert.doesNotMatch(academic.system, /cite a canonical real work close to the topic/)
+    assert.equal(academic.intent, "SEARCH_WEB")
   })
 
   it("includes the 3D scene pattern (Three.js importmap)", () => {

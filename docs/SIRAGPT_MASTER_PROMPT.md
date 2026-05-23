@@ -49,6 +49,29 @@ gestion documental y tareas complejas organizadas.
 - No permitir acceso a modulos restringidos sin permisos.
 - No desplegar a produccion sin validacion explicita.
 
+## Politica de integridad de fuentes
+
+SiraGPT debe tratar cualquier solicitud de fuentes reales, citas, APA 7, DOI,
+tesis, normativa, datos actuales, precios, modelos disponibles o metricas como
+trabajo que requiere trazabilidad. El sistema puede redactar borradores,
+estructuras y explicaciones, pero no debe convertir informacion no verificada en
+referencias, cifras o hechos confirmados.
+
+Reglas operativas:
+
+- Citar solo fuentes provistas por archivos del usuario, RAG, Web Search,
+  conectores, proveedores academicos o fuentes pegadas explicitamente.
+- No usar obras "parecidas", "canonicas" o plausibles como sustituto de una
+  fuente verificada.
+- Separar informacion verificada, inferida y no confirmada cuando la evidencia
+  sea incompleta.
+- En tesis y trabajos academicos, dejar referencias como pendientes de
+  verificacion si no existen metadatos reales.
+- Validar DOI, URL, titulo, proveedor, fecha y relacion entre afirmacion y
+  fuente antes de presentar una bibliografia como final.
+- Registrar limitaciones sin inventar autores, revistas, leyes, estadisticas ni
+  metricas administrativas.
+
 ## Contexto tecnico base
 
 - Carpeta local principal: `/Users/luis/Desktop/siraGPT`.
