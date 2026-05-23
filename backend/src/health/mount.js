@@ -8,6 +8,7 @@ const { createMemoryProbe } = require('./probes/memory');
 const { createDiskProbe } = require('./probes/disk');
 const { createOpenAIProbe } = require('./probes/provider-openai');
 const { createConfiguredLlmProbes } = require('./probes/provider-llm');
+const { createConfiguredExternalProbes } = require('./probes/provider-external');
 
 function createHealthSystem({ prisma, redisClient, logger = console, env = process.env } = {}) {
   const registry = new HealthRegistry();
@@ -59,6 +60,19 @@ function createHealthSystem({ prisma, redisClient, logger = console, env = proce
     }
   } catch (err) {
     logger.warn?.({ err }, 'health: llm provider probes not available');
+  }
+
+  try {
+    const externalProbes = createConfiguredExternalProbes({ env });
+    for (const probe of externalProbes) {
+      try {
+        registry.add(probe);
+      } catch (err) {
+        logger.warn?.({ err, name: probe.name }, 'health: external provider probe registration failed');
+      }
+    }
+  } catch (err) {
+    logger.warn?.({ err }, 'health: external provider probes not available');
   }
 
   const scheduler = new ProbeScheduler({ registry });
