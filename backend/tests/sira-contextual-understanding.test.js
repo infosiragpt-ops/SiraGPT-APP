@@ -1,0 +1,126 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+
+const misunderstanding = require('../src/services/agents/misunderstanding-signals');
+const contextual = require('../src/services/sira/contextual-understanding');
+
+test.beforeEach(() => {
+  misunderstanding._clearAllForTests();
+});
+
+test('normalizeRecentTurns keeps recent role/text pairs from mixed history content', () => {
+  const turns = contextual.normalizeRecentTurns([
+    { role: 'system', content: 'hidden' },
+    { role: 'user', content: 'elige una opcion' },
+    { role: 'assistant', content: { text: '1. Word\n2. PDF' } },
+  ]);
+  assert.deepEqual(turns, [
+    { role: 'user', text: 'elige una opcion' },
+    { role: 'assistant', text: '1. Word\n2. PDF' },
+  ]);
+});
+
+test('analyzeContextualTurn resolves ordinal follow-up into the effective prompt', async () => {
+  const result = await contextual.analyzeContextualTurn({
+    userId: 'u-coref',
+    conversationId: 'c-coref',
+    userMessage: 'haz la segunda parte en Word',
+    history: [
+      { role: 'user', content: 'dame opciones' },
+      { role: 'assistant', content: '1. Resumen ejecutivo\n2. Carta laboral\n3. Marco teorico' },
+    ],
+    attachments: [],
+    requestId: 'req-coref',
+  });
+
+  assert.equal(result.applied, true);
+  assert.match(result.effectiveText, /Carta laboral/);
+  assert.match(result.effectiveText, /SOLICITUD_USUARIO/);
+  assert.equal(result.envelopeContext.coreference.source, 'ordinal_list');
+  assert.equal(result.envelopeContext.original_text, 'haz la segunda parte en Word');
+});
+
+test('analyzeContextualTurn injects lexicon terms without changing the original text', async () => {
+  const result = await contextual.analyzeContextualTurn({
+    userId: 'u-lex',
+    conversationId: 'c-lex',
+    userMessage: 'actualiza mi CV con la experiencia nueva',
+    history: [],
+    attachments: [],
+    requestId: 'req-lex',
+  }, {
+    lexicon: {
+      lookupTerms: async () => [{
+        term: 'mi CV',
+        definition: 'archivo profesional cv_luis_2026.pdf',
+        confidence: 0.91,
+        hits: 3,
+      }],
+      buildLexiconBlock: (terms) => [
+        '## PERSONAL_LEXICON',
+        ...terms.map((term) => `- "${term.term}" -> ${term.definition}`),
+      ].join('\n'),
+    },
+  });
+
+  assert.equal(result.originalText, 'actualiza mi CV con la experiencia nueva');
+  assert.match(result.effectiveText, /PERSONAL_LEXICON/);
+  assert.match(result.effectiveText, /cv_luis_2026\.pdf/);
+  assert.equal(result.envelopeContext.lexicon_terms.length, 1);
+});
+
+test('analyzeContextualTurn adds repair context for correction follow-up', async () => {
+  const result = await contextual.analyzeContextualTurn({
+    userId: 'u-repair',
+    conversationId: 'c-repair',
+    userMessage: 'no, en formato Word',
+    history: [
+      { role: 'user', content: 'hazme un informe' },
+      { role: 'assistant', content: 'Aqui va el informe en PDF con contenido profesional y suficiente detalle para corregir.' },
+    ],
+    attachments: [],
+    requestId: 'req-repair',
+  });
+
+  assert.equal(result.applied, true);
+  assert.match(result.effectiveText, /CONVERSATION_REPAIR/);
+  assert.equal(result.envelopeContext.repair.contract_override.required_extension, '.docx');
+  assert.ok(result.envelopeContext.misunderstanding_signals.includes('correction_followup'));
+});
+
+test('analyzeContextualTurn is a no-op when there is no contextual signal', async () => {
+  const result = await contextual.analyzeContextualTurn({
+    userId: 'u-clean',
+    conversationId: 'c-clean',
+    userMessage: 'genera un informe profesional en Word sobre energia solar',
+    history: [],
+    attachments: [],
+    requestId: 'req-clean',
+  });
+
+  assert.equal(result.applied, false);
+  assert.equal(result.effectiveText, 'genera un informe profesional en Word sobre energia solar');
+  assert.equal(result.envelopeContext.applied, false);
+});
+
+test('analyzeContextualTurn fails open when a dependency throws', async () => {
+  const result = await contextual.analyzeContextualTurn({
+    userId: 'u-open',
+    conversationId: 'c-open',
+    userMessage: 'traduce eso',
+    history: [{ role: 'assistant', content: 'texto previo' }],
+    attachments: [],
+    requestId: 'req-open',
+  }, {
+    lexicon: {
+      lookupTerms: async () => { throw new Error('lexicon down'); },
+      buildLexiconBlock: () => null,
+    },
+  });
+
+  assert.equal(result.originalText, 'traduce eso');
+  assert.ok(typeof result.effectiveText === 'string');
+  assert.equal(result.error, null);
+});
