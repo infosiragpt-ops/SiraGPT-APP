@@ -131,12 +131,25 @@ const formatSidebarChatTitle = (value: unknown) => {
     .trim()
 }
 
-/** Cursor-style nav chrome: neutral icons, quiet hover, no per-item rainbow colors. */
+/** Futuristic but restrained nav chrome: fast visual feedback, colored icon glass. */
 const NAV_ROW =
-  "group/nav flex h-9 w-full items-center justify-start gap-2.5 rounded-lg px-2.5 text-left text-[13px] font-normal leading-none text-muted-foreground transition-colors duration-150 hover:bg-foreground/[0.045] hover:text-foreground"
+  "group/nav flex h-9 w-full items-center justify-start gap-2.5 rounded-xl px-2 text-left text-[13px] font-normal leading-none text-muted-foreground transition-[background-color,color,box-shadow,transform] duration-150 hover:bg-white/62 hover:text-foreground hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.72),0_10px_24px_rgba(15,23,42,0.06)] active:scale-[0.992] dark:hover:bg-white/[0.075] dark:hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.07)]"
 const NAV_ROW_ACTIVE =
-  "bg-foreground/[0.065] text-foreground ring-1 ring-border/40 shadow-none"
+  "bg-white/78 text-foreground ring-1 ring-white/65 shadow-[inset_0_1px_0_rgba(255,255,255,0.78),0_14px_34px_rgba(15,23,42,0.08)] backdrop-blur-xl dark:bg-white/[0.095] dark:ring-white/10 dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_16px_34px_rgba(0,0,0,0.24)]"
 const NAV_ICON = "h-4 w-4 shrink-0 stroke-[1.85]"
+const NAV_ICON_SHELL =
+  "grid h-7 w-7 shrink-0 place-items-center rounded-xl border shadow-[inset_0_1px_0_rgba(255,255,255,0.72),0_8px_18px_rgba(15,23,42,0.06)] transition-transform duration-150 group-hover/nav:-translate-y-0.5 group-data-[state=closed]:h-8 group-data-[state=closed]:w-8"
+
+const NAV_TONES = {
+  chat: "border-sky-200/70 bg-sky-50 text-sky-600 dark:border-sky-400/15 dark:bg-sky-400/10 dark:text-sky-300",
+  search: "border-zinc-200/80 bg-zinc-50 text-zinc-600 dark:border-white/10 dark:bg-white/[0.07] dark:text-zinc-300",
+  library: "border-cyan-200/70 bg-cyan-50 text-cyan-600 dark:border-cyan-400/15 dark:bg-cyan-400/10 dark:text-cyan-300",
+  gpts: "border-violet-200/70 bg-violet-50 text-violet-600 dark:border-violet-400/15 dark:bg-violet-400/10 dark:text-violet-300",
+  paraphrase: "border-fuchsia-200/70 bg-fuchsia-50 text-fuchsia-600 dark:border-fuchsia-400/15 dark:bg-fuchsia-400/10 dark:text-fuchsia-300",
+  projects: "border-amber-200/75 bg-amber-50 text-amber-600 dark:border-amber-400/15 dark:bg-amber-400/10 dark:text-amber-300",
+  design: "border-emerald-200/70 bg-emerald-50 text-emerald-600 dark:border-emerald-400/15 dark:bg-emerald-400/10 dark:text-emerald-300",
+  codex: "border-blue-200/70 bg-blue-50 text-blue-600 dark:border-blue-400/15 dark:bg-blue-400/10 dark:text-blue-300",
+} as const
 
 type SidebarNavItemProps = {
   href: string
@@ -144,12 +157,14 @@ type SidebarNavItemProps = {
   tooltip: React.ReactNode
   icon: React.ComponentType<{ className?: string }>
   iconClassName?: string
+  iconToneClassName?: string
   active: boolean
   pending: boolean
   sidebarState: "open" | "closed"
   navigationLabel?: string
   markNavigationIntent: (href: string, label?: string) => void
   prefetchOnHover: (href: string) => void
+  navigate: (href: string, label?: string) => void
   onNavigate?: () => void
 }
 
@@ -159,12 +174,14 @@ function SidebarNavItem({
   tooltip,
   icon: Icon,
   iconClassName,
+  iconToneClassName,
   active,
   pending,
   sidebarState,
   navigationLabel,
   markNavigationIntent,
   prefetchOnHover,
+  navigate,
   onNavigate,
 }: SidebarNavItemProps) {
   const intentLabel = navigationLabel ?? (typeof label === "string" ? label : undefined)
@@ -188,25 +205,27 @@ function SidebarNavItem({
             aria-current={active ? "page" : undefined}
             className="focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border focus-visible:ring-offset-0"
             onPointerDown={markIntent}
+            onPointerEnter={() => prefetchOnHover(href)}
+            onFocus={() => prefetchOnHover(href)}
             onKeyDown={(event) => {
               if (event.key === "Enter" || event.key === " ") {
-                if (event.key === " ") event.preventDefault()
+                event.preventDefault()
                 markIntent()
+                navigate(href, intentLabel)
+                onNavigate?.()
               }
             }}
-            onMouseEnter={() => prefetchOnHover(href)}
-            onClick={() => {
+            onClick={(event) => {
+              if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return
+              event.preventDefault()
               markIntent()
+              navigate(href, intentLabel)
               onNavigate?.()
             }}
           >
-            <Icon
-              className={cn(
-                NAV_ICON,
-                active ? "text-foreground" : "text-muted-foreground",
-                iconClassName,
-              )}
-            />
+            <span className={cn(NAV_ICON_SHELL, iconToneClassName)}>
+              <Icon className={cn(NAV_ICON, iconClassName)} />
+            </span>
             <span className="group-data-[state=closed]:hidden truncate">{label}</span>
           </Link>
         </SidebarMenuButton>
@@ -364,6 +383,9 @@ export function AppSidebar() {
     markSharedNavigationIntent(targetHref, label)
     try { router.prefetch(targetHref) } catch { /* ignore */ }
   }, [markSharedNavigationIntent, normalizedPathname, router])
+  const closeMobileSidebar = React.useCallback(() => {
+    if (isMobile) setOpenMobile(false)
+  }, [isMobile, setOpenMobile])
   const markNewChatIntent = React.useCallback(() => {
     setNewChatPending(true)
     markSharedNavigationIntent("/chat", t("newChat"))
@@ -949,7 +971,9 @@ export function AppSidebar() {
                   "group-data-[collapsible=icon]:!size-8 group-data-[collapsible=icon]:!p-2",
                 )}
               >
-                <PenSquare className={cn(NAV_ICON, "text-foreground")} />
+                <span className={cn(NAV_ICON_SHELL, NAV_TONES.chat)}>
+                  <PenSquare className={NAV_ICON} />
+                </span>
                 <span className="group-data-[state=closed]:hidden truncate">{t("newChat")}</span>
               </button>
             </TooltipTrigger>
@@ -1007,7 +1031,9 @@ export function AppSidebar() {
                 className={cn(NAV_ROW, "group-data-[collapsible=icon]:!size-8 group-data-[collapsible=icon]:!p-2")}
                 variant="default"
               >
-                <Search className={cn(NAV_ICON, "text-muted-foreground")} />
+                <span className={cn(NAV_ICON_SHELL, NAV_TONES.search)}>
+                  <Search className={NAV_ICON} />
+                </span>
                 <span className="group-data-[state=closed]:hidden truncate">{t("searchChats")}</span>
               </SidebarMenuButton>
             </TooltipTrigger>
@@ -1027,12 +1053,14 @@ export function AppSidebar() {
             label={t("library")}
             tooltip={t("library")}
             icon={Images}
+            iconToneClassName={NAV_TONES.library}
             active={isOnLibraryPage}
             pending={isPendingRoute("/library")}
             sidebarState={state}
             markNavigationIntent={markNavigationIntent}
             prefetchOnHover={prefetchOnHover}
-            onNavigate={() => { if (isMobile) setOpenMobile(false) }}
+            navigate={navigate}
+            onNavigate={closeMobileSidebar}
           />
 
           <SidebarNavItem
@@ -1040,12 +1068,14 @@ export function AppSidebar() {
             label={t("gpts")}
             tooltip={t("gpts")}
             icon={LayoutGrid}
+            iconToneClassName={NAV_TONES.gpts}
             active={isOnGPTsPage}
             pending={isPendingRoute("/gpts")}
             sidebarState={state}
             markNavigationIntent={markNavigationIntent}
             prefetchOnHover={prefetchOnHover}
-            onNavigate={() => { if (isMobile) setOpenMobile(false) }}
+            navigate={navigate}
+            onNavigate={closeMobileSidebar}
           />
 
           <SidebarNavItem
@@ -1053,12 +1083,14 @@ export function AppSidebar() {
             label="Parafraseo"
             tooltip="Parafraseo"
             icon={Sparkles}
+            iconToneClassName={NAV_TONES.paraphrase}
             active={isOnParaphrasePage}
             pending={isPendingRoute("/parafraseo")}
             sidebarState={state}
             markNavigationIntent={markNavigationIntent}
             prefetchOnHover={prefetchOnHover}
-            onNavigate={() => { if (isMobile) setOpenMobile(false) }}
+            navigate={navigate}
+            onNavigate={closeMobileSidebar}
           />
 
           {/* Projects — file-bucket workspaces. Placed right after GPTs
@@ -1071,12 +1103,14 @@ export function AppSidebar() {
             label={t("projects")}
             tooltip={t("projects")}
             icon={FolderKanban}
+            iconToneClassName={NAV_TONES.projects}
             active={isOnProjectsPage}
             pending={isPendingRoute("/projects")}
             sidebarState={state}
             markNavigationIntent={markNavigationIntent}
             prefetchOnHover={prefetchOnHover}
-            onNavigate={() => { if (isMobile) setOpenMobile(false) }}
+            navigate={navigate}
+            onNavigate={closeMobileSidebar}
           />
 
           {/* Design — siraGPT's Claude-Design-style canvas, placed
@@ -1089,12 +1123,14 @@ export function AppSidebar() {
             label={t("design")}
             tooltip={t("design")}
             icon={Palette}
+            iconToneClassName={NAV_TONES.design}
             active={isOnDesignPage}
             pending={isPendingRoute("/design")}
             sidebarState={state}
             markNavigationIntent={markNavigationIntent}
             prefetchOnHover={prefetchOnHover}
-            onNavigate={() => { if (isMobile) setOpenMobile(false) }}
+            navigate={navigate}
+            onNavigate={closeMobileSidebar}
           />
 
         </TooltipProvider>
