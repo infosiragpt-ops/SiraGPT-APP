@@ -894,7 +894,10 @@ router.post(
     if (typeof responseTimeoutTimer.unref === 'function') responseTimeoutTimer.unref();
 
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    const tools = buildTaskTools();
+    const forbiddenToolNames = new Set(Array.isArray(universalTaskContract.forbidden_tools)
+      ? universalTaskContract.forbidden_tools
+      : []);
+    const tools = buildTaskTools().filter((tool) => !forbiddenToolNames.has(tool.name));
     const langGraphLayer = await buildLangGraphLayer({ taskId, documentPolicy });
     const frameworkStatus = await buildAgenticFrameworkStatus({ tools, langGraphLayer });
     const runtimeTimer = setTimeout(() => controller.abort(), maxRuntimeMs + 5000);

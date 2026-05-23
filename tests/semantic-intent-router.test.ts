@@ -56,6 +56,35 @@ describe("semantic intent router · structured profile", () => {
     assert.equal(analysis.request_intelligence.excluded_formats[0].extension, ".docx")
   })
 
+  it("keeps negated file formats out of research DAG artifacts", () => {
+    const analysis = semanticRouter.buildSemanticIntentAnalysis({
+      rawUserRequest: "dame 10 fuentes sobre IA sin Word",
+    })
+
+    assert.equal(analysis.intent, "web_search")
+    assert.equal(analysis.contract.pipeline, "ResearchGroundingPipeline")
+    assert.equal(analysis.contract.artifact_required, false)
+    assert.equal(analysis.contract.multi_intent_dag.enabled, false)
+    assert.deepEqual(analysis.request_intelligence.requested_formats, [])
+    assert.equal(analysis.request_intelligence.excluded_formats[0].extension, ".docx")
+  })
+
+  it("routes freshness questions to web search and respects no-internet text intent", () => {
+    const fresh = semanticRouter.buildSemanticIntentAnalysis({
+      rawUserRequest: "qué pasó hoy con OpenAI",
+    })
+    const offline = semanticRouter.buildSemanticIntentAnalysis({
+      rawUserRequest: "dame 10 fuentes sobre IA sin internet",
+    })
+
+    assert.equal(fresh.intent, "web_search")
+    assert.equal(fresh.contract.source_requirements.required, true)
+    assert.equal(fresh.request_intelligence.context.has_freshness_lookup, true)
+    assert.equal(offline.intent, "text")
+    assert.equal(offline.contract.source_requirements.required, false)
+    assert.equal(offline.request_intelligence.context.has_no_search_directive, true)
+  })
+
   it("answers questions about an uploaded Word instead of generating a new Word", () => {
     const analysis = semanticRouter.buildSemanticIntentAnalysis({
       rawUserRequest: "cual es la primera palabra del word?",
@@ -114,5 +143,20 @@ describe("semantic intent router · structured profile", () => {
     assert.equal(analysis.context.has_web_build, true)
     assert.ok(analysis.intent_scores[0].score >= analysis.intent_scores[1].score)
     assert.ok(analysis.tokens.length > 5)
+  })
+
+  it("marks short contextual follow-ups as executable direct answers", () => {
+    const analysis = semanticRouter.buildSemanticIntentAnalysis({
+      rawUserRequest: "amplía el punto 2",
+      conversationHistory: [
+        { role: "user", text: "dame 3 ideas de marketing" },
+        { role: "assistant", text: "1. SEO local 2. Email nurturing 3. Programa de referidos" },
+      ],
+    })
+
+    assert.equal(analysis.intent, "text")
+    assert.equal(analysis.contract.pipeline, "DirectAnswerPipeline")
+    assert.equal(analysis.request_intelligence.context.has_contextual_followup, true)
+    assert.ok(analysis.contract.ambiguity_score < 0.5)
   })
 })

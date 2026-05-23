@@ -47,7 +47,7 @@ const LEXICON = Object.freeze({
     "arma", "construye", "construir", "build", "make", "create", "generate",
     "prepare", "deliver", "desarrolla", "desarrollar", "programa", "programar",
   ],
-  export: ["exporta", "exportar", "descarga", "descargar", "download", "entrega", "entregar", "formato", "descargable"],
+  export: ["exporta", "exportar", "descarga", "descargar", "download", "entrega", "entregar", "entregame", "entregalo", "entregalos", "formato", "descargable"],
   understand: [
     "lee", "leer", "analiza", "analizar", "resume", "resumen", "resumir",
     "transcribe", "transcribir", "transcribeme", "transcripcion", "transcript",
@@ -61,6 +61,16 @@ const LEXICON = Object.freeze({
     "scopus", "openalex", "crossref", "pubmed", "doaj", "scielo", "wos",
     "web of science", "semantic scholar", "cientifico", "cientificos",
     "academico", "academicos", "actual", "reciente", "reales", "verifica",
+  ],
+  freshness: [
+    "hoy", "ahora", "actual", "actuales", "actualidad", "reciente",
+    "recientes", "ultimo", "ultima", "ultimos", "ultimas", "latest",
+    "today", "current", "news", "noticias", "paso hoy", "precio actual",
+  ],
+  noSearch: [
+    "sin internet", "sin busqueda", "sin busqueda web", "no busques",
+    "no buscar", "no uses internet", "no consultes internet", "sin fuentes",
+    "sin citas", "sin referencias",
   ],
   data: [
     "datos", "dataset", "tabla", "tablas", "filas", "columnas", "formula",
@@ -206,17 +216,51 @@ function classifyFormatOccurrence({ tokens, occurrence, evidence }) {
   };
 }
 
+const NO_SEARCH_RE =
+  /\b(?:sin\s+(?:internet|b[uú]squeda(?:\s+web)?|fuentes|citas|referencias)|no\s+(?:busques?|buscar|uses?\s+internet|consultes?\s+(?:internet|la\s+web)))\b/i;
+
+function tokensText(tokens) {
+  return tokens.map(t => t.value).join(" ");
+}
+
+function hasExplicitNoSearch(tokens) {
+  return NO_SEARCH_RE.test(tokensText(tokens));
+}
+
+function isFreshnessLookup(tokens) {
+  const text = tokensText(tokens);
+  return /\b(?:que|cual|quien|cuando|donde|precio|resultado|marcador|noticias?)\b.*\b(?:hoy|ahora|actual(?:es)?|actualidad|reciente(?:s)?|ultim[oa]s?|latest|today|current|202[0-9])\b/i.test(text)
+    || /\b(?:hoy|ahora|actual(?:es)?|actualidad|reciente(?:s)?|ultim[oa]s?|latest|today|current)\b.*\b(?:noticias?|paso|ocurrio|precio|estado|resultado|marcador|avance)\b/i.test(text)
+    || /\b(?:latest news|what happened today|que paso hoy|ultimas noticias)\b/i.test(text);
+}
+
+function isContextualFollowup(tokens, conversationHistory = []) {
+  if (!Array.isArray(conversationHistory) || conversationHistory.length === 0) return false;
+  const text = tokensText(tokens).trim();
+  if (!text || tokens.length > 10) return false;
+  return /^(?:sigue|continua|adelante|dale|completa|otra vez|de nuevo|repite|repitelo|eso|esa|ese|esto|exacto|exactamente|mejor|mejoralo|hazlo|traducelo|resumelo|amplia|amplialo|expande|detalla|profundiza|mas|menos|shorter|longer|y\s+(?:entonces|ahora|luego|despues|por que|que)|el\s+(?:primero|segundo|tercero|cuarto|quinto|ultimo)|la\s+(?:primera|segunda|tercera|cuarta|quinta|ultima)|punto\s+\d+)\b/i.test(text)
+    || /\b(?:punto|parte|opcion|fila|columna|slide|diapositiva)\s+\d+\b/i.test(text)
+    || /\b(?:mas|menos)\s+(?:formal|casual|corto|largo|claro|simple|profesional|oscuro|detallado)\b/i.test(text)
+    || /\b(?:en|como)\s+(?:pdf|word|docx|excel|xlsx|pptx|powerpoint|espanol|ingles)\b/i.test(text);
+}
+
 function buildContext({ tokens, terms, evidence, fileIds, conversationHistory, requestedFormats }) {
   const hasFiles = Array.isArray(fileIds) && fileIds.length > 0;
   const hasHistoryFiles = Array.isArray(conversationHistory)
     && conversationHistory.slice(-6).some(m => Array.isArray(m?.files) && m.files.length > 0);
+  const noSearch = hasExplicitNoSearch(tokens);
+  const freshnessLookup = !noSearch && isFreshnessLookup(tokens);
+  const contextualFollowup = isContextualFollowup(tokens, conversationHistory);
   const asksExistingDocumentQuestion = evidence.understand.present
     && (hasFiles || hasHistoryFiles || evidence.fileContext.present)
     && requestedFormats.length === 0;
   return Object.freeze({
     has_files: hasFiles || hasHistoryFiles,
     has_generation_action: evidence.create.present || evidence.export.present,
-    has_research_requirement: evidence.research.present,
+    has_research_requirement: !noSearch && (evidence.research.present || freshnessLookup),
+    has_freshness_lookup: freshnessLookup,
+    has_no_search_directive: noSearch,
+    has_contextual_followup: contextualFollowup,
     has_data_work: evidence.data.present,
     has_code_work: evidence.code.present,
     has_web_build: evidence.web.present && (evidence.create.present || evidence.code.present),
@@ -241,7 +285,10 @@ function scoreIntents({ evidence, context, requestedFormats, excludedFormats }) 
     spreadsheet_generation: 0.06 + (formatIntentBoost.spreadsheet_generation || 0) + weight(evidence.data, 0.16) + (context.has_generation_action ? 0.1 : 0),
     slide_generation: 0.06 + (formatIntentBoost.slide_generation || 0) + (context.has_generation_action ? 0.11 : 0),
     code_generation: 0.07 + weight(evidence.code, 0.2) + (context.has_web_build ? 0.22 : 0) + (context.has_generation_action ? 0.08 : 0),
-    research_grounding: 0.08 + weight(evidence.research, 0.26) + (context.has_research_requirement ? 0.12 : 0),
+    research_grounding: 0.08
+      + (context.has_no_search_directive ? -0.24 : weight(evidence.research, 0.26))
+      + (context.has_research_requirement ? 0.12 : 0)
+      + (context.has_freshness_lookup ? 0.24 : 0),
     document_understanding: 0.06 + (context.asks_existing_document_question ? 0.54 : 0) + weight(evidence.understand, 0.1),
     image_generation: 0.06 + weight(evidence.image, 0.23) + (context.has_generation_action ? 0.12 : 0),
     image_editing: 0.04 + (evidence.image.present && termsHaveAny(evidence, ["edita", "modifica", "retoca"]) ? 0.4 : 0),
@@ -256,6 +303,7 @@ function scoreIntents({ evidence, context, requestedFormats, excludedFormats }) 
     scores.visual_artifact -= 0.2;
   }
   if (excludedFormats.some(f => f.extension === ".docx")) scores.document_generation -= 0.18;
+  if (context.has_contextual_followup) scores.direct_answer += 0.18;
   if (context.has_math_work && !context.has_generation_action) scores.direct_answer += 0.18;
   if (context.has_long_running_signal && (context.has_research_requirement || requestedFormats.length > 0 || context.has_code_work)) {
     scores.code_generation += 0.08;
@@ -283,6 +331,7 @@ function inferPipeline(intent, requestedFormats, context) {
 
 function inferAmbiguity({ tokens, context, requestedFormats, best }) {
   if (tokens.length === 0) return 1;
+  if (context.has_contextual_followup) return 0.15;
   if (tokens.length < 3 && !context.has_files) return 0.85;
   if (best.score < 0.55) return 0.62;
   if (requestedFormats.length === 0 && context.has_generation_action && !context.has_web_build && !context.has_code_work && !context.has_research_requirement) return 0.45;

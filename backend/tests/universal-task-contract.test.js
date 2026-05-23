@@ -96,6 +96,31 @@ test('research plus multiple deliverables creates a MultiIntent DAG', () => {
   assert.ok(contract.multi_intent_dag.edges.some((edge) => edge.from === 'research_1'));
 });
 
+test('negated output and no-internet directives do not create unwanted tools', () => {
+  const noWord = buildUniversalTaskContract({ rawUserRequest: 'dame 10 fuentes sobre IA sin Word' });
+  const noInternet = buildUniversalTaskContract({ rawUserRequest: 'dame 10 fuentes sobre IA sin internet' });
+
+  assert.equal(noWord.pipeline, 'ResearchGroundingPipeline');
+  assert.equal(noWord.artifact_required, false);
+  assert.equal(noWord.multi_intent_dag.enabled, false);
+  assert.equal(noWord.required_extension, null);
+  assert.ok(noWord.required_tools.includes('web_search'));
+
+  assert.equal(noInternet.pipeline, 'DirectAnswerPipeline');
+  assert.equal(noInternet.source_requirements.required, false);
+  assert.ok(!noInternet.required_tools.includes('web_search'));
+  assert.ok(noInternet.forbidden_tools.includes('web_search'));
+  assert.ok(noInternet.user_constraints.includes('no_external_search:user_requested'));
+});
+
+test('freshness questions require grounded web search', () => {
+  const contract = buildUniversalTaskContract({ rawUserRequest: 'qué pasó hoy con OpenAI' });
+
+  assert.equal(contract.pipeline, 'ResearchGroundingPipeline');
+  assert.equal(contract.source_requirements.required, true);
+  assert.ok(contract.required_tools.includes('web_search'));
+});
+
 test('web product requests compile to the code pipeline before UI routing', () => {
   const contract = buildUniversalTaskContract({
     rawUserRequest: 'crea una web de una empresa de carros',

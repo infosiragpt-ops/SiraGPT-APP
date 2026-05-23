@@ -528,6 +528,12 @@ function matchAny(raw, patterns) {
   return patterns.some((pattern) => pattern.test(raw) || pattern.test(normalize(raw)));
 }
 
+function hasNoSearchDirective(raw) {
+  return matchAny(raw, [
+    /\b(?:sin\s+(?:internet|b[uú]squeda(?:\s+web)?|fuentes|citas|referencias)|no\s+(?:busques?|buscar|uses?\s+internet|consultes?\s+(?:internet|la\s+web)))\b/i,
+  ]);
+}
+
 const TRANSCRIPTION_REQUEST_RE =
   /\b(transcrib(?:e|ir|eme|irme|elo|alo|irlo)?|transcripci[oó]n|transcripcion|transcript|transcribe)\b/i;
 
@@ -567,7 +573,7 @@ function hasOutputFormatMention(n, keywords) {
     const before = n.slice(Math.max(0, match.index - 140), match.index);
     if (formatMentionIsInputContext(before.slice(-60))) continue;
     const explicitOutputPreposition = /\b(en|como|a|formato)\s+(?:un|una|el|la)?\s*$/.test(before);
-    const generationVerb = /\b(crea|crear|creame|haz|hazme|genera|generar|generame|prepara|entrega|exporta|exportar|descarga|descargar|download|dame|quiero|necesito|elabora|elaborar|redacta|redactar|arma|construye|build|make|generate|prepare|deliver)\b/.test(before);
+    const generationVerb = /\b(crea|crear|creame|haz|hazme|genera|generar|generame|prepara|entrega|entregar|entregame|entregalo|entregalos|exporta|exportar|descarga|descargar|download|dame|quiero|necesito|elabora|elaborar|redacta|redactar|arma|construye|build|make|generate|prepare|deliver)\b/.test(before);
     const finalOutputMarker = /^(?:\s+(?:para descargar|descargable|de salida|final|profesional|academico|acad[eé]mico|ejecutivo|editable|con|sobre|de)\b)/.test(n.slice(match.index + match[0].length, match.index + match[0].length + 80));
     if (explicitOutputPreposition || generationVerb || finalOutputMarker) return true;
   }
@@ -602,7 +608,7 @@ function inferExplicitExtension(raw, tokenAnalysis = null) {
     /\b(este|esta|el|la|mi|mis)\s+(archivo|documento|pdf|word|docx|excel|xlsx|ppt|pptx)\b/.test(n) ||
     /\b(adjunto|cargado|subido|uploaded|attached)\b/.test(n);
   const asksToGenerateArtifact =
-    /\b(crea|crear|creame|créame|haz|hacer|hazme|genera|generar|generame|genérame|prepara|entrega|exporta|exportar|descarga|descargar|download)\b/.test(n) ||
+    /\b(crea|crear|creame|créame|haz|hacer|hazme|genera|generar|generame|genérame|prepara|entrega|entregar|entregame|entregalo|entregalos|exporta|exportar|descarga|descargar|download)\b/.test(n) ||
     /\b(en|como)\s+(word|docx|excel|xlsx|powerpoint|pptx|pdf|svg|csv|html|markdown)\b/.test(n) ||
     /\b(archivo|file)\s+(word|docx|excel|xlsx|powerpoint|pptx|pdf|svg|csv|html|markdown)\b/.test(n);
   const asksToUnderstandInput =
@@ -652,10 +658,15 @@ function extractSourceRequirements(raw, tokenAnalysis = null) {
   if (/\b(scielo)\b/.test(n)) providers.push('SciELO');
   if (/\b(semantic scholar|semantic)\b/.test(n)) providers.push('Semantic Scholar');
 
-  const tokenResearch = Boolean(tokenAnalysis?.context?.has_research_requirement || tokenAnalysis?.evidence?.research?.present);
-  const sourceRequired = tokenResearch || matchAny(raw, [
+  const noSearch = Boolean(tokenAnalysis?.context?.has_no_search_directive) || hasNoSearchDirective(raw);
+  const freshnessLookup = Boolean(tokenAnalysis?.context?.has_freshness_lookup) || (!noSearch && matchAny(raw, [
+    /\b(?:qu[eé]|cu[aá]l|qui[eé]n|cu[aá]ndo|d[oó]nde|precio|resultado|marcador|noticias?)\b.*\b(?:hoy|ahora|actual(?:es)?|actualidad|reciente(?:s)?|[uú]ltim[oa]s?|latest|today|current|202[0-9])\b/i,
+    /\b(?:hoy|ahora|actual(?:es)?|actualidad|reciente(?:s)?|[uú]ltim[oa]s?|latest|today|current)\b.*\b(?:noticias?|pas[oó]|ocurri[oó]|precio|estado|resultado|marcador|avance)\b/i,
+  ]));
+  const tokenResearch = !noSearch && Boolean(tokenAnalysis?.context?.has_research_requirement || tokenAnalysis?.evidence?.research?.present);
+  const sourceRequired = !noSearch && (tokenResearch || freshnessLookup || matchAny(raw, [
     /\b(busca|buscar|investiga|investigar|fuentes|referencias|citas|art[ií]culos?|papers?|doi|scopus|wos|openalex|crossref|pubmed|doaj|scielo|cient[ií]fic[oa]s?|acad[eé]mic[oa]s?)\b/i,
-  ]);
+  ]));
   const strict = Boolean(tokenAnalysis?.evidence?.strict?.present) || matchAny(raw, [/\b(100%|reales|verifica|validar|doi|open access|acceso abierto|no invent|precis[ao]|art[ií]culos cient[ií]ficos)\b/i]);
   const exclusions = [];
   if (/\b(no incluir libros|sin libros|no libros)\b/.test(n)) exclusions.push('books');
@@ -748,7 +759,10 @@ function inferRequestedArtifacts(raw, tokenAnalysis = null) {
   if (Array.isArray(tokenAnalysis?.requested_formats) && tokenAnalysis.requested_formats.length > 0) {
     return tokenAnalysis.requested_formats.map(({ extension, pipeline, intent }) => ({ ext: extension, pipeline, intent }));
   }
-  return detectRequestedOutputFormats(raw).map(({ ext, pipeline, intent }) => ({ ext, pipeline, intent }));
+  const excluded = new Set((tokenAnalysis?.excluded_formats || []).map((item) => item.extension));
+  return detectRequestedOutputFormats(raw)
+    .filter(({ ext }) => !excluded.has(ext))
+    .map(({ ext, pipeline, intent }) => ({ ext, pipeline, intent }));
 }
 
 function buildMultiIntentDag({ raw, primaryPipeline, primaryIntent, requiredExtension, tokenAnalysis = null }) {
@@ -938,6 +952,7 @@ function buildUserConstraints(raw, requiredExtension, sourceRequirements) {
   const constraints = [];
   if (requiredExtension) constraints.push(`required_extension:${requiredExtension}`);
   if (isPlainTranscriptionRequest(raw, requiredExtension)) constraints.push('transcription_mode:verbatim_inline_no_summary_no_document');
+  if (hasNoSearchDirective(raw)) constraints.push('no_external_search:user_requested');
   for (const c of extractCountConstraints(raw)) constraints.push(`requested_count:${c}`);
   if (sourceRequirements.required) constraints.push(`source_verification:${sourceRequirements.verification_policy}`);
   if (sourceRequirements.recency_range) constraints.push(`recency_range:${sourceRequirements.recency_range}`);
@@ -1044,7 +1059,7 @@ function buildUniversalTaskContract({ rawUserRequest, fileIds = [], now = new Da
     mime_type: mimeType,
     delivery_mode: deliveryMode,
     required_tools: requiredTools,
-    forbidden_tools: buildForbiddenTools(primaryPipeline),
+    forbidden_tools: buildForbiddenTools(primaryPipeline, raw),
     source_requirements: sourceRequirements,
     grounding_required: Boolean(sourceRequirements.required || hasFiles || primaryPipeline === 'RAGDocumentUnderstandingPipeline'),
     citations_required: Boolean(sourceRequirements.required || matchAny(raw, [/\b(cita|citas|referencias|apa|doi)\b/i])),
@@ -1093,8 +1108,9 @@ function buildUniversalTaskContract({ rawUserRequest, fileIds = [], now = new Da
   return contract;
 }
 
-function buildForbiddenTools(pipeline) {
+function buildForbiddenTools(pipeline, raw = '') {
   const forbidden = [];
+  if (hasNoSearchDirective(raw)) forbidden.push('web_search');
   if (pipeline === 'DirectAnswerPipeline') forbidden.push('create_document_when_not_requested');
   forbidden.push('invented_tool_names');
   forbidden.push('untyped_external_action_without_confirmation');

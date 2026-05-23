@@ -89,10 +89,12 @@ function buildDomainSignals(rawUserRequest, tokenAnalysis = null) {
     googleServices: matchAny(n, [
       /\b(google drive|drive|google calendar|calendario|calendar|evento|event|reunion|meeting|agenda|carpeta)\b/i,
     ]),
-    realtimeLookup: matchAny(n, [
+    realtimeLookup: Boolean(tokenAnalysis?.context?.has_freshness_lookup) || matchAny(n, [
       /\b(clima|tiempo actual|pron[oó]stico|temperatura|weather|forecast)\b/i,
       /\b(resultados?|marcador|score|partidos?|fixture|estad[ií]sticas?)\b.*\b(nba|nfl|mlb|nhl|f[uú]tbol|soccer|epl|champions|liga|deporte|sports?)\b/i,
       /\b(restaurantes?|hoteles?|lugares?|atracciones?|direcci[oó]n|mapa|ruta|itinerario|cerca de mi|google places)\b/i,
+      /\b(?:qu[eé]|cu[aá]l|qui[eé]n|cu[aá]ndo|d[oó]nde|precio|resultado|marcador|noticias?)\b.*\b(?:hoy|ahora|actual(?:es)?|actualidad|reciente(?:s)?|[uú]ltim[oa]s?|latest|today|current|202[0-9])\b/i,
+      /\b(?:hoy|ahora|actual(?:es)?|actualidad|reciente(?:s)?|[uú]ltim[oa]s?|latest|today|current)\b.*\b(?:noticias?|pas[oó]|ocurri[oó]|precio|estado|resultado|marcador|avance)\b/i,
     ]),
     math: Boolean(tokenAnalysis?.context?.has_math_work) || matchAny(n, [
       /\b(integral|derivada|ecuacion|cronbach|spearman|anova|regresion|chi cuadrado|p valor|probabilidad|matriz|autovalor|estadistica|likert|varianza|desviacion|sistema de ecuaciones|fisica|quimica)\b/i,
