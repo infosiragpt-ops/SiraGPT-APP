@@ -346,6 +346,8 @@ describe("local chat recovery doctor", () => {
     assert.equal(recoverySummary.actions[0].remediationCode, "LOCAL_UNKNOWN_ACTION")
     assert.equal(recoverySummary.actions[0].severity, "medium")
     assert.equal(recoverySummary.actions[0].category, "unknown")
+    assert.equal(recoverySummary.actions[0].sourceCheck, "unknown")
+    assert.equal(recoverySummary.actions[0].priorityScore, 50)
     assert.equal(recoverySummary.actions[0].command, "SIRAGPT_TEST_PASSWORD=<password> npm run smoke:local-chat")
     assert.equal(JSON.stringify(actionsSummary).includes("super-secret"), false)
     assert.deepEqual(Object.keys(actionsSummary), [
@@ -371,6 +373,10 @@ describe("local chat recovery doctor", () => {
     assert.equal(backendAction.remediationCode, "LOCAL_BACKEND_START")
     assert.equal(backendAction.severity, "critical")
     assert.equal(backendAction.category, "backend")
+    assert.equal(backendAction.sourceCheck, "backend_auth")
+    assert.equal(backendAction.priorityScore, 100)
+    assert.equal(recoverySummary.highestPriorityScore, 100)
+    assert.deepEqual(recoverySummary.highestPriorityActions, ["backend_dev_server"])
   })
 
   it("exposes a remediation catalog without secrets or probes", () => {
@@ -382,8 +388,175 @@ describe("local chat recovery doctor", () => {
       remediationCode: "LOCAL_ENV_CONFIG",
       severity: "medium",
       category: "configuration",
+      sourceCheck: "local_env",
+      priorityScore: 50,
     })
     assert.equal(JSON.stringify(catalog).includes("password"), false)
+  })
+
+  it("builds a sanitized check/action diagnostics matrix", () => {
+    const recoverySummary = recovery.buildRecoveryCiSummary({
+      ok: false,
+      frontendUrl: "http://127.0.0.1:3000",
+      apiUrl: "http://127.0.0.1:5000",
+      checks: [
+        { name: "local_env", ok: true, required: false },
+        { name: "backend_auth", ok: false, required: true, endpoints: [{ path: "/health/live", ok: false }] },
+      ],
+    }, [
+      {
+        id: "backend_dev_server",
+        title: "Levantar backend local",
+        command: "SIRAGPT_TEST_PASSWORD=super-secret cd backend && npm run dev",
+        detail: "safe detail",
+      },
+      {
+        id: "unknown_action",
+        title: "Unknown",
+        command: "SIRAGPT_TEST_PASSWORD=super-secret npm run probe",
+        detail: "safe unknown",
+      },
+    ])
+    const matrix = recovery.buildDiagnosticsMatrix(recoverySummary)
+
+    assert.equal(matrix.healthCode, "backend_down")
+    assert.equal(matrix.checks.find((check: { name: string }) => check.name === "backend_auth").actions[0].id, "backend_dev_server")
+    assert.equal(matrix.checks.find((check: { name: string }) => check.name === "backend_auth").actions[0].command, "SIRAGPT_TEST_PASSWORD=<password> cd backend && npm run dev")
+    assert.equal(matrix.unmappedActions[0].sourceCheck, "unknown")
+    assert.equal(JSON.stringify(matrix).includes("super-secret"), false)
+  })
+
+  it("summarizes remediation impact by category and severity", () => {
+    const recoverySummary = recovery.buildRecoveryCiSummary({
+      ok: false,
+      frontendUrl: "http://127.0.0.1:3000",
+      apiUrl: "http://127.0.0.1:5000",
+      checks: [
+        { name: "frontend_routes", ok: false, required: true },
+        { name: "backend_auth", ok: false, required: true, endpoints: [{ path: "/health/live", ok: false }] },
+      ],
+    })
+    const impact = recovery.buildActionImpactSummary(recoverySummary)
+
+    assert.equal(impact.actionCount, 2)
+    assert.equal(impact.criticalActionCount, 2)
+    assert.equal(impact.byCategory.frontend, 1)
+    assert.equal(impact.byCategory.backend, 1)
+    assert.equal(impact.bySeverity.critical, 2)
+    assert.deepEqual(impact.categories.find((category: { name: string }) => category.name === "backend").actions[0], {
+      id: "backend_dev_server",
+      remediationCode: "LOCAL_BACKEND_START",
+      sourceCheck: "backend_auth",
+      priorityScore: 100,
+    })
+    assert.equal(JSON.stringify(impact).includes("npm run dev"), false)
+  })
+
+  it("builds a command-free priority summary for triage", () => {
+    const recoverySummary = recovery.buildRecoveryCiSummary({
+      ok: false,
+      frontendUrl: "http://127.0.0.1:3000",
+      apiUrl: "http://127.0.0.1:5000",
+      checks: [
+        { name: "local_env", ok: false, required: false },
+        { name: "backend_auth", ok: false, required: true, endpoints: [{ path: "/health/live", ok: false }] },
+      ],
+    })
+    const priority = recovery.buildPrioritySummary(recoverySummary)
+
+    assert.equal(priority.highestPriorityScore, 100)
+    assert.deepEqual(priority.highestPriorityActions, ["backend_dev_server"])
+    assert.equal(priority.actions.find((action: { id: string }) => action.id === "local_env_file").priorityScore, 50)
+    assert.equal(JSON.stringify(priority).includes("cd backend"), false)
+  })
+
+  it("builds a sanitized next-action summary from highest priority", () => {
+    const recoverySummary = recovery.buildRecoveryCiSummary({
+      ok: false,
+      frontendUrl: "http://127.0.0.1:3000",
+      apiUrl: "http://127.0.0.1:5000",
+      checks: [{ name: "backend_auth", ok: false, required: true, endpoints: [{ path: "/health/live", ok: false }] }],
+    }, [
+      {
+        id: "local_env_file",
+        title: "Env",
+        command: "SIRAGPT_TEST_PASSWORD=super-secret printf env",
+        detail: "medium",
+      },
+      {
+        id: "backend_dev_server",
+        title: "Backend",
+        command: "SIRAGPT_TEST_PASSWORD=super-secret cd backend && npm run dev",
+        detail: "critical",
+      },
+    ])
+    const nextAction = recovery.buildNextActionSummary(recoverySummary)
+
+    assert.equal(nextAction.nextAction.id, "backend_dev_server")
+    assert.equal(nextAction.nextAction.priorityScore, 100)
+    assert.equal(nextAction.nextAction.command, "SIRAGPT_TEST_PASSWORD=<password> cd backend && npm run dev")
+    assert.equal(nextAction.reason, "backend_auth:critical:100")
+    assert.equal(JSON.stringify(nextAction).includes("super-secret"), false)
+  })
+
+  it("builds a sanitized execution plan ordered by priority", () => {
+    const recoverySummary = recovery.buildRecoveryCiSummary({
+      ok: false,
+      frontendUrl: "http://127.0.0.1:3000",
+      apiUrl: "http://127.0.0.1:5000",
+      checks: [
+        { name: "local_env", ok: false, required: false },
+        { name: "backend_auth", ok: false, required: true, endpoints: [{ path: "/health/live", ok: false }] },
+      ],
+    }, [
+      {
+        id: "local_env_file",
+        title: "Env",
+        command: "SIRAGPT_TEST_PASSWORD=super-secret printf env",
+        detail: "medium",
+      },
+      {
+        id: "backend_dev_server",
+        title: "Backend",
+        command: "SIRAGPT_TEST_PASSWORD=super-secret cd backend && npm run dev",
+        detail: "critical",
+      },
+    ])
+    const plan = recovery.buildActionExecutionPlan(recoverySummary)
+
+    assert.equal(plan.stepCount, 2)
+    assert.equal(plan.steps[0].step, 1)
+    assert.equal(plan.steps[0].id, "backend_dev_server")
+    assert.equal(plan.steps[1].step, 2)
+    assert.equal(plan.steps[1].id, "local_env_file")
+    assert.equal(plan.steps[0].command, "SIRAGPT_TEST_PASSWORD=<password> cd backend && npm run dev")
+    assert.equal(JSON.stringify(plan).includes("super-secret"), false)
+  })
+
+  it("builds a stable diagnostic fingerprint without commands", () => {
+    assert.equal(recovery.stableJsonStringify({ b: 1, a: { d: 2, c: 3 } }), "{\"a\":{\"c\":3,\"d\":2},\"b\":1}")
+
+    const recoverySummary = recovery.buildRecoveryCiSummary({
+      ok: false,
+      frontendUrl: "http://127.0.0.1:3000",
+      apiUrl: "http://127.0.0.1:5000",
+      checks: [{ name: "backend_auth", ok: false, required: true, endpoints: [{ path: "/health/live", ok: false }] }],
+    }, [
+      {
+        id: "backend_dev_server",
+        title: "Backend",
+        command: "SIRAGPT_TEST_PASSWORD=super-secret cd backend && npm run dev",
+        detail: "critical",
+      },
+    ])
+    const fingerprint = recovery.buildFingerprintSummary(recoverySummary)
+
+    assert.match(recoverySummary.diagnosticHash, /^[a-f0-9]{64}$/)
+    assert.equal(fingerprint.algorithm, "sha256")
+    assert.equal(fingerprint.hashInputVersion, 1)
+    assert.equal(fingerprint.diagnosticHash, recoverySummary.diagnosticHash)
+    assert.equal(JSON.stringify(fingerprint).includes("cd backend"), false)
+    assert.equal(JSON.stringify(fingerprint).includes("super-secret"), false)
   })
 
   it("formats markdown with primary failure and primary action", () => {
@@ -406,10 +579,21 @@ describe("local chat recovery doctor", () => {
     assert.match(report, /Primary action: backend_dev_server/)
     assert.match(report, /Overall status: blocked/)
     assert.match(report, /Health code: backend_down/)
+    assert.match(report, /Diagnostic hash: [a-f0-9]{64}/)
     assert.match(report, /Exit code: 32/)
+    assert.match(report, /Highest priority: 100 \(backend_dev_server\)/)
     assert.match(report, /Slowest probe: backend_auth \/health\/live 34ms/)
     assert.match(report, /\| backend_auth \/health\/live \| 34ms \| blocked \|/)
-    assert.match(report, /\| backend_dev_server \| LOCAL_BACKEND_START \| critical \| backend \| Levantar backend local \| `cd backend && npm run dev` \|/)
+    assert.match(report, /Check\/action matrix/)
+    assert.match(report, /\| backend_auth \| blocked \| backend_dev_server \(LOCAL_BACKEND_START\) \|/)
+    assert.match(report, /Action impact/)
+    assert.match(report, /\| Category \| backend \| 1 \| backend_dev_server \|/)
+    assert.match(report, /\| Severity \| critical \| 1 \| backend_dev_server \|/)
+    assert.match(report, /Next action/)
+    assert.match(report, /\| backend_dev_server \| LOCAL_BACKEND_START \| 100 \| backend_auth \| `cd backend && npm run dev` \|/)
+    assert.match(report, /Execution plan/)
+    assert.match(report, /\| 1 \| backend_dev_server \| 100 \| `cd backend && npm run dev` \|/)
+    assert.match(report, /\| backend_dev_server \| LOCAL_BACKEND_START \| critical \| backend \| 100 \| Levantar backend local \| `cd backend && npm run dev` \|/)
   })
 
   it("redacts URL credentials in human readiness check lines", () => {
@@ -470,7 +654,7 @@ describe("local chat recovery doctor", () => {
 
   it("parses timeout and strict env flags", () => {
     const readinessArgs = readiness.parseArgs(["--strict-env", "--timeout-ms", "750", "--require-login", "--compact-json", "--inspect-ports"])
-    const recoveryArgs = recovery.parseArgs(["--strict-env", "--timeout-ms", "750", "--quiet", "--require-login", "--compact-json", "--inspect-ports", "--status-json", "--actions-json", "--remediation-catalog-json"])
+    const recoveryArgs = recovery.parseArgs(["--strict-env", "--timeout-ms", "750", "--quiet", "--require-login", "--compact-json", "--inspect-ports", "--status-json", "--actions-json", "--matrix-json", "--impact-json", "--priority-json", "--next-action-json", "--plan-json", "--fingerprint-json", "--remediation-catalog-json"])
 
     assert.equal(readinessArgs.strictEnv, true)
     assert.equal(readinessArgs.timeoutMs, 750)
@@ -486,6 +670,12 @@ describe("local chat recovery doctor", () => {
     assert.equal(recoveryArgs.summaryJson, true)
     assert.equal(recoveryArgs.statusJson, true)
     assert.equal(recoveryArgs.actionsJson, true)
+    assert.equal(recoveryArgs.matrixJson, true)
+    assert.equal(recoveryArgs.impactJson, true)
+    assert.equal(recoveryArgs.priorityJson, true)
+    assert.equal(recoveryArgs.nextActionJson, true)
+    assert.equal(recoveryArgs.planJson, true)
+    assert.equal(recoveryArgs.fingerprintJson, true)
     assert.equal(recoveryArgs.remediationCatalogJson, true)
   })
 
@@ -539,6 +729,12 @@ describe("local chat recovery doctor", () => {
     assert.match(help, /--list-checks-json/)
     assert.match(help, /--status-json/)
     assert.match(help, /--actions-json/)
+    assert.match(help, /--matrix-json/)
+    assert.match(help, /--impact-json/)
+    assert.match(help, /--priority-json/)
+    assert.match(help, /--next-action-json/)
+    assert.match(help, /--plan-json/)
+    assert.match(help, /--fingerprint-json/)
     assert.match(help, /--remediation-catalog-json/)
     assert.match(help, /--profile <name>/)
     assert.match(help, /--compact-json/)
@@ -548,6 +744,12 @@ describe("local chat recovery doctor", () => {
     assert.match(help, /npm --silent run doctor:local-chat:ci/)
     assert.match(help, /npm --silent run doctor:local-chat:status/)
     assert.match(help, /npm --silent run doctor:local-chat:actions/)
+    assert.match(help, /npm --silent run doctor:local-chat:matrix/)
+    assert.match(help, /npm --silent run doctor:local-chat:impact/)
+    assert.match(help, /npm --silent run doctor:local-chat:priority/)
+    assert.match(help, /npm --silent run doctor:local-chat:next-action/)
+    assert.match(help, /npm --silent run doctor:local-chat:plan/)
+    assert.match(help, /npm --silent run doctor:local-chat:fingerprint/)
     assert.match(help, /npm --silent run doctor:local-chat:remediations/)
     assert.match(help, /npm --silent run doctor:local-chat:compact/)
     assert.match(help, /--inspect-ports --markdown/)
@@ -569,6 +771,12 @@ describe("local chat recovery doctor", () => {
     assert.equal(packageJson.scripts["doctor:local-chat:ports"], "node scripts/local-chat-recovery.js --summary-json --inspect-ports")
     assert.equal(packageJson.scripts["doctor:local-chat:status"], "node scripts/local-chat-recovery.js --status-json --compact-json")
     assert.equal(packageJson.scripts["doctor:local-chat:actions"], "node scripts/local-chat-recovery.js --actions-json --compact-json")
+    assert.equal(packageJson.scripts["doctor:local-chat:matrix"], "node scripts/local-chat-recovery.js --matrix-json --compact-json")
+    assert.equal(packageJson.scripts["doctor:local-chat:impact"], "node scripts/local-chat-recovery.js --impact-json --compact-json")
+    assert.equal(packageJson.scripts["doctor:local-chat:priority"], "node scripts/local-chat-recovery.js --priority-json --compact-json")
+    assert.equal(packageJson.scripts["doctor:local-chat:next-action"], "node scripts/local-chat-recovery.js --next-action-json --compact-json")
+    assert.equal(packageJson.scripts["doctor:local-chat:plan"], "node scripts/local-chat-recovery.js --plan-json --compact-json")
+    assert.equal(packageJson.scripts["doctor:local-chat:fingerprint"], "node scripts/local-chat-recovery.js --fingerprint-json --compact-json")
     assert.equal(packageJson.scripts["doctor:local-chat:remediations"], "node scripts/local-chat-recovery.js --remediation-catalog-json --compact-json")
     assert.equal(packageJson.scripts["doctor:local-chat:ci"], "node scripts/local-chat-recovery.js --summary-json --profile ci")
     assert.equal(packageJson.scripts["doctor:local-chat:checks"], "node scripts/local-chat-recovery.js --list-checks-json")

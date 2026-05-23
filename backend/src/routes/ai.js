@@ -3083,7 +3083,10 @@ router.post(
       if (processedFiles.length > 0) {
         const fileContext = uploadedFileContextForTurn
           || processedFiles.map(f => {
-            const content = f.extractedText || 'Binary file - content not available';
+            const preparedContent = messageAttachments.isProfessionalDocumentSynthesisRequest(prompt)
+              ? messageAttachments.prepareDocumentTextForProfessionalSynthesis(f.extractedText || '')
+              : '';
+            const content = preparedContent || f.extractedText || 'Binary file - content not available';
             return `File: ${f.name}\nContent: ${content}`;
           }).join('\n\n');
 

@@ -364,8 +364,17 @@ function dropLeadingTocBlob(text) {
   if (!/\b(?:indice de contenidos|indice general|tabla de contenido|table of contents|declaratoria de autenticidad)\b/i.test(head.normalize('NFD').replace(/[\u0300-\u036f]/g, ''))) {
     return source;
   }
-  const bodyStart = head.match(/(?:^|\n|\s)(?:#{1,6}\s*)?(?:\d+(?:\.\d+)*\s*)?introducci[oó]n(?:\s|\n)+(?:actualmente|el|la|los|las|este|esta|en|se|a\s+partir)\b/i);
-  if (bodyStart && Number.isInteger(bodyStart.index) && bodyStart.index > 0) {
+  const bodyAnchorPatterns = [
+    /(?:^|\n|\s)(?:#{1,6}\s*)?(?:\d+(?:\.\d+)*\s*)?introducci[oó]n(?:\s|\n)+(?:actualmente|el|la|los|las|este|esta|en|se|a\s+partir)\b/i,
+    /(?:^|\n|\s)(?:#{1,6}\s*)?cap[ií]tulo\s+(?:[ivxlcdm]+|\d+)\s+(?:planteamiento\s+del\s+problema|marco\s+te[oó]rico|metodolog[ií]a|resultados?|discusi[oó]n|conclusiones?)\b/i,
+    /(?:^|\n|\s)(?:#{1,6}\s*)?(?:resumen|abstract)\s+(?:el|la|este|esta|en|se|la\s+presente|el\s+presente)\b/i,
+  ];
+
+  const bodyStart = bodyAnchorPatterns
+    .map((pattern) => head.match(pattern))
+    .filter((match) => match && Number.isInteger(match.index) && match.index > 0)
+    .sort((a, b) => a.index - b.index)[0];
+  if (bodyStart) {
     return source.slice(bodyStart.index).trimStart();
   }
   return source;
@@ -392,7 +401,11 @@ function prepareDocumentTextForProfessionalSynthesis(text) {
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 
-  if (countDocumentWords(cleaned) < 25 && countDocumentWords(original) >= 25) {
+  const originalLooksLikeToc = /\b(?:indice de contenidos|indice general|tabla de contenido|table of contents|declaratoria de autenticidad)\b/i.test(
+    original.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  );
+  const cleanedHasBodyAnchor = /\b(?:introducci[oó]n|cap[ií]tulo\s+(?:[ivxlcdm]+|\d+)\s+(?:planteamiento|marco|metodolog[ií]a|resultados?|discusi[oó]n|conclusiones?)|resumen|abstract)\b/i.test(cleaned);
+  if (countDocumentWords(cleaned) < 25 && countDocumentWords(original) >= 25 && !(originalLooksLikeToc && cleanedHasBodyAnchor && countDocumentWords(cleaned) >= 8)) {
     return stripDocumentExtractorHeader(original)
       .replace(/\[([^\]\n]{1,180})\]\((?:#[^)]+|[^)]*)\)/g, '$1')
       .replace(/[ \t]{2,}/g, ' ')

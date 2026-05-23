@@ -2,6 +2,7 @@
 
 const fs = require("node:fs")
 const path = require("node:path")
+const crypto = require("node:crypto")
 const {
   CI_SUMMARY_SCHEMA_VERSION,
   LOCAL_CHAT_CHECKS,
@@ -34,31 +35,43 @@ const RECOVERY_EXIT_CODE_LABELS = {
   [RECOVERY_EXIT_CODES.packageScripts]: "package_scripts_missing",
   [RECOVERY_EXIT_CODES.localEnv]: "local_env_missing",
 }
+const RECOVERY_SEVERITY_PRIORITY = {
+  critical: 100,
+  high: 80,
+  medium: 50,
+  low: 25,
+  info: 0,
+}
 const RECOVERY_ACTION_CATALOG = {
   frontend_dev_server: {
     remediationCode: "LOCAL_FRONTEND_START",
     severity: "critical",
     category: "frontend",
+    sourceCheck: "frontend_routes",
   },
   backend_dev_server: {
     remediationCode: "LOCAL_BACKEND_START",
     severity: "critical",
     category: "backend",
+    sourceCheck: "backend_auth",
   },
   login_credentials: {
     remediationCode: "LOCAL_LOGIN_CREDENTIALS",
     severity: "high",
     category: "auth",
+    sourceCheck: "backend_auth",
   },
   local_env_file: {
     remediationCode: "LOCAL_ENV_CONFIG",
     severity: "medium",
     category: "configuration",
+    sourceCheck: "local_env",
   },
   ready: {
     remediationCode: "LOCAL_READY",
     severity: "info",
     category: "none",
+    sourceCheck: "none",
   },
 }
 
@@ -158,15 +171,34 @@ function sanitizeCommandForReport(command) {
     .replace(/(Authorization:\s*Bearer\s+)[^\s|]+/gi, "$1<token>")
 }
 
+function normalizeForStableJson(value) {
+  if (Array.isArray(value)) return value.map(normalizeForStableJson)
+  if (!value || typeof value !== "object") return value
+  return Object.keys(value).sort().reduce((normalized, key) => {
+    normalized[key] = normalizeForStableJson(value[key])
+    return normalized
+  }, {})
+}
+
+function stableJsonStringify(value) {
+  return JSON.stringify(normalizeForStableJson(value))
+}
+
+function priorityScoreForSeverity(severity) {
+  return RECOVERY_SEVERITY_PRIORITY[severity] ?? RECOVERY_SEVERITY_PRIORITY.medium
+}
+
 function enrichRecoveryAction(action) {
   const metadata = RECOVERY_ACTION_CATALOG[action.id] || {
     remediationCode: "LOCAL_UNKNOWN_ACTION",
     severity: "medium",
     category: "unknown",
+    sourceCheck: "unknown",
   }
   return {
     ...action,
     ...metadata,
+    priorityScore: priorityScoreForSeverity(metadata.severity),
   }
 }
 
@@ -176,6 +208,7 @@ function buildRemediationCatalog() {
     actions: Object.entries(RECOVERY_ACTION_CATALOG).map(([id, metadata]) => ({
       id,
       ...metadata,
+      priorityScore: priorityScoreForSeverity(metadata.severity),
     })),
   }
 }
@@ -191,16 +224,25 @@ function buildRecoveryCiSummary(summary, actions = recommendRecoveryActions(summ
     remediationCode: action.remediationCode,
     severity: action.severity,
     category: action.category,
+    sourceCheck: action.sourceCheck,
+    priorityScore: action.priorityScore,
     title: action.title,
     command: sanitizeCommandForReport(action.command),
     detail: action.detail,
   }))
-  return {
+  const highestPriorityScore = Math.max(0, ...compactActions.map((action) => action.priorityScore))
+  const recoverySummary = {
     ...compact,
     exitCode: resolveRecoveryExitCode(summary),
     primaryAction: compactActions[0]?.id || "",
     actionCount: compactActions.length,
+    highestPriorityScore,
+    highestPriorityActions: compactActions.filter((action) => action.priorityScore === highestPriorityScore).map((action) => action.id),
     actions: compactActions,
+  }
+  return {
+    ...recoverySummary,
+    diagnosticHash: buildDiagnosticFingerprint(recoverySummary).diagnosticHash,
   }
 }
 
@@ -213,6 +255,231 @@ function buildActionsSummary(compactSummary) {
     primaryAction: compactSummary.primaryAction,
     actionCount: compactSummary.actionCount,
     actions: compactSummary.actions,
+  }
+}
+
+function compactMatrixAction(action) {
+  return {
+    id: action.id,
+    remediationCode: action.remediationCode,
+    severity: action.severity,
+    category: action.category,
+    priorityScore: action.priorityScore,
+    title: action.title,
+    command: sanitizeCommandForReport(action.command),
+    detail: action.detail,
+  }
+}
+
+function buildDiagnosticsMatrix(compactSummary) {
+  const checks = compactSummary?.checks || []
+  const checkNames = new Set(checks.map((check) => check.name))
+  const actionsByCheck = new Map()
+  const unmappedActions = []
+  for (const action of compactSummary?.actions || []) {
+    const sourceCheck = action.sourceCheck || "unknown"
+    const matrixAction = compactMatrixAction(action)
+    if (checkNames.has(sourceCheck)) {
+      const mappedActions = actionsByCheck.get(sourceCheck) || []
+      mappedActions.push(matrixAction)
+      actionsByCheck.set(sourceCheck, mappedActions)
+    } else if (sourceCheck !== "none") {
+      unmappedActions.push({
+        sourceCheck,
+        ...matrixAction,
+      })
+    }
+  }
+  return {
+    schemaVersion: compactSummary.schemaVersion,
+    ok: compactSummary.ok,
+    overallStatus: compactSummary.overallStatus,
+    healthCode: compactSummary.healthCode,
+    primaryFailure: compactSummary.primaryFailure,
+    primaryAction: compactSummary.primaryAction,
+    checks: checks.map((check) => ({
+      name: check.name,
+      required: Boolean(check.required),
+      status: check.status,
+      actions: actionsByCheck.get(check.name) || [],
+    })),
+    unmappedActions,
+  }
+}
+
+function actionImpactRef(action) {
+  return {
+    id: action.id,
+    remediationCode: action.remediationCode,
+    sourceCheck: action.sourceCheck || "unknown",
+    priorityScore: action.priorityScore,
+  }
+}
+
+function addActionImpactBucket(buckets, key, action) {
+  const bucketName = key || "unknown"
+  const bucket = buckets.get(bucketName) || {
+    name: bucketName,
+    count: 0,
+    actions: [],
+  }
+  bucket.count += 1
+  bucket.actions.push(actionImpactRef(action))
+  buckets.set(bucketName, bucket)
+}
+
+function buildActionImpactSummary(compactSummary) {
+  const severityBuckets = new Map()
+  const categoryBuckets = new Map()
+  for (const action of compactSummary?.actions || []) {
+    addActionImpactBucket(severityBuckets, action.severity, action)
+    addActionImpactBucket(categoryBuckets, action.category, action)
+  }
+  const severities = Array.from(severityBuckets.values())
+  const categories = Array.from(categoryBuckets.values())
+  return {
+    schemaVersion: compactSummary.schemaVersion,
+    ok: compactSummary.ok,
+    overallStatus: compactSummary.overallStatus,
+    healthCode: compactSummary.healthCode,
+    primaryAction: compactSummary.primaryAction,
+    actionCount: compactSummary.actionCount,
+    criticalActionCount: severityBuckets.get("critical")?.count || 0,
+    bySeverity: Object.fromEntries(severities.map((bucket) => [bucket.name, bucket.count])),
+    byCategory: Object.fromEntries(categories.map((bucket) => [bucket.name, bucket.count])),
+    severities,
+    categories,
+  }
+}
+
+function buildPrioritySummary(compactSummary) {
+  return {
+    schemaVersion: compactSummary.schemaVersion,
+    ok: compactSummary.ok,
+    overallStatus: compactSummary.overallStatus,
+    healthCode: compactSummary.healthCode,
+    primaryAction: compactSummary.primaryAction,
+    actionCount: compactSummary.actionCount,
+    highestPriorityScore: compactSummary.highestPriorityScore,
+    highestPriorityActions: compactSummary.highestPriorityActions,
+    actions: (compactSummary.actions || []).map((action) => ({
+      id: action.id,
+      remediationCode: action.remediationCode,
+      severity: action.severity,
+      category: action.category,
+      sourceCheck: action.sourceCheck,
+      priorityScore: action.priorityScore,
+    })),
+  }
+}
+
+function compactNextAction(action) {
+  if (!action) return null
+  return {
+    id: action.id,
+    remediationCode: action.remediationCode,
+    severity: action.severity,
+    category: action.category,
+    sourceCheck: action.sourceCheck,
+    priorityScore: action.priorityScore,
+    title: action.title,
+    command: sanitizeCommandForReport(action.command),
+    detail: action.detail,
+  }
+}
+
+function buildNextActionSummary(compactSummary) {
+  const actions = compactSummary?.actions || []
+  const highestPriorityScore = compactSummary?.highestPriorityScore ?? 0
+  const nextAction = actions.find((action) => action.priorityScore === highestPriorityScore) || actions[0] || null
+  return {
+    schemaVersion: compactSummary.schemaVersion,
+    ok: compactSummary.ok,
+    overallStatus: compactSummary.overallStatus,
+    healthCode: compactSummary.healthCode,
+    primaryFailure: compactSummary.primaryFailure,
+    primaryAction: compactSummary.primaryAction,
+    actionCount: compactSummary.actionCount,
+    highestPriorityScore,
+    nextAction: compactNextAction(nextAction),
+    reason: nextAction ? `${nextAction.sourceCheck}:${nextAction.severity}:${nextAction.priorityScore}` : "no_action",
+  }
+}
+
+function buildActionExecutionPlan(compactSummary) {
+  const steps = (compactSummary?.actions || [])
+    .map((action, index) => ({
+      originalIndex: index,
+      action,
+    }))
+    .sort((left, right) => {
+      if (right.action.priorityScore !== left.action.priorityScore) {
+        return right.action.priorityScore - left.action.priorityScore
+      }
+      return left.originalIndex - right.originalIndex
+    })
+    .map(({ action }, index) => ({
+      step: index + 1,
+      id: action.id,
+      remediationCode: action.remediationCode,
+      severity: action.severity,
+      category: action.category,
+      sourceCheck: action.sourceCheck,
+      priorityScore: action.priorityScore,
+      title: action.title,
+      command: sanitizeCommandForReport(action.command),
+      detail: action.detail,
+    }))
+  return {
+    schemaVersion: compactSummary.schemaVersion,
+    ok: compactSummary.ok,
+    overallStatus: compactSummary.overallStatus,
+    healthCode: compactSummary.healthCode,
+    primaryAction: compactSummary.primaryAction,
+    actionCount: compactSummary.actionCount,
+    stepCount: steps.length,
+    steps,
+  }
+}
+
+function buildDiagnosticFingerprint(compactSummary) {
+  const payload = {
+    schemaVersion: compactSummary.schemaVersion,
+    ok: compactSummary.ok,
+    overallStatus: compactSummary.overallStatus,
+    healthCode: compactSummary.healthCode,
+    primaryFailure: compactSummary.primaryFailure,
+    checks: (compactSummary.checks || []).map((check) => ({
+      name: check.name,
+      required: Boolean(check.required),
+      status: check.status,
+    })),
+    actions: (compactSummary.actions || []).map((action) => ({
+      id: action.id,
+      remediationCode: action.remediationCode,
+      severity: action.severity,
+      category: action.category,
+      sourceCheck: action.sourceCheck,
+      priorityScore: action.priorityScore,
+    })),
+  }
+  return {
+    schemaVersion: compactSummary.schemaVersion,
+    algorithm: "sha256",
+    hashInputVersion: 1,
+    diagnosticHash: crypto.createHash("sha256").update(stableJsonStringify(payload)).digest("hex"),
+  }
+}
+
+function buildFingerprintSummary(compactSummary) {
+  return {
+    ...buildDiagnosticFingerprint(compactSummary),
+    ok: compactSummary.ok,
+    overallStatus: compactSummary.overallStatus,
+    healthCode: compactSummary.healthCode,
+    primaryFailure: compactSummary.primaryFailure,
+    primaryAction: compactSummary.primaryAction,
+    actionCount: compactSummary.actionCount,
   }
 }
 
@@ -240,11 +507,13 @@ function formatMarkdownReport(summary, actions = recommendRecoveryActions(summar
     `- Frontend: ${compact.frontendUrl || "unknown"}`,
     `- API: ${compact.apiUrl || "unknown"}`,
     `- Health code: ${compact.healthCode || "unknown"}`,
+    `- Diagnostic hash: ${compact.diagnosticHash || "none"}`,
     `- Exit code: ${compact.exitCode}`,
     `- Slowest probe: ${compact.latencySummary?.slowestProbe ? `${compact.latencySummary.slowestProbe.check} ${compact.latencySummary.slowestProbe.probe} ${compact.latencySummary.slowestProbe.durationMs}ms` : "none"}`,
     `- Failed required checks: ${compact.failedRequiredChecks.length ? compact.failedRequiredChecks.join(", ") : "none"}`,
     `- Primary failure: ${compact.primaryFailure || "none"}`,
     `- Primary action: ${compact.primaryAction || "none"}`,
+    `- Highest priority: ${compact.highestPriorityScore} (${compact.highestPriorityActions.length ? compact.highestPriorityActions.join(", ") : "none"})`,
     `- Warnings: ${compact.warnings.length ? compact.warnings.join(", ") : "none"}`,
     "",
     "## Checks",
@@ -254,6 +523,34 @@ function formatMarkdownReport(summary, actions = recommendRecoveryActions(summar
   ]
   for (const check of compact.checks) {
     lines.push(`| ${escapeMarkdownCell(check.name)} | ${check.required ? "yes" : "no"} | ${check.status} |`)
+  }
+  const diagnosticsMatrix = buildDiagnosticsMatrix(compact)
+  lines.push("", "## Check/action matrix", "", "| Check | Status | Actions |", "| --- | --- | --- |")
+  for (const check of diagnosticsMatrix.checks) {
+    const actionLabels = check.actions.length
+      ? check.actions.map((action) => `${action.id} (${action.remediationCode})`).join(", ")
+      : "none"
+    lines.push(`| ${escapeMarkdownCell(check.name)} | ${check.status} | ${escapeMarkdownCell(actionLabels)} |`)
+  }
+  const impactSummary = buildActionImpactSummary(compact)
+  lines.push("", "## Action impact", "", "| Type | Name | Count | Actions |", "| --- | --- | --- | --- |")
+  for (const category of impactSummary.categories) {
+    lines.push(`| Category | ${escapeMarkdownCell(category.name)} | ${category.count} | ${escapeMarkdownCell(category.actions.map((action) => action.id).join(", ") || "none")} |`)
+  }
+  for (const severity of impactSummary.severities) {
+    lines.push(`| Severity | ${escapeMarkdownCell(severity.name)} | ${severity.count} | ${escapeMarkdownCell(severity.actions.map((action) => action.id).join(", ") || "none")} |`)
+  }
+  const nextActionSummary = buildNextActionSummary(compact)
+  lines.push("", "## Next action", "", "| ID | Code | Priority | Source check | Command |", "| --- | --- | --- | --- | --- |")
+  if (nextActionSummary.nextAction) {
+    lines.push(`| ${escapeMarkdownCell(nextActionSummary.nextAction.id)} | ${escapeMarkdownCell(nextActionSummary.nextAction.remediationCode)} | ${nextActionSummary.nextAction.priorityScore} | ${escapeMarkdownCell(nextActionSummary.nextAction.sourceCheck)} | \`${escapeMarkdownCell(nextActionSummary.nextAction.command)}\` |`)
+  } else {
+    lines.push("| none | none | 0 | none | none |")
+  }
+  const executionPlan = buildActionExecutionPlan(compact)
+  lines.push("", "## Execution plan", "", "| Step | ID | Priority | Command |", "| --- | --- | --- | --- |")
+  for (const step of executionPlan.steps) {
+    lines.push(`| ${step.step} | ${escapeMarkdownCell(step.id)} | ${step.priorityScore} | \`${escapeMarkdownCell(step.command)}\` |`)
   }
   if (compact.latencySummary?.probeCount) {
     lines.push("", "## Probe latency", "", "| Probe | Duration | Status |", "| --- | --- | --- |")
@@ -267,9 +564,9 @@ function formatMarkdownReport(summary, actions = recommendRecoveryActions(summar
       lines.push(`| ${escapeMarkdownCell(target)} | ${diagnostic.port} | ${diagnostic.listening ? "yes" : "no"} | ${escapeMarkdownCell((diagnostic.commands || []).join(", ") || "none")} |`)
     }
   }
-  lines.push("", "## Recommended actions", "", "| ID | Code | Severity | Category | Title | Command | Detail |", "| --- | --- | --- | --- | --- | --- | --- |")
+  lines.push("", "## Recommended actions", "", "| ID | Code | Severity | Category | Priority | Title | Command | Detail |", "| --- | --- | --- | --- | --- | --- | --- | --- |")
   for (const action of compact.actions) {
-    lines.push(`| ${escapeMarkdownCell(action.id)} | ${escapeMarkdownCell(action.remediationCode)} | ${escapeMarkdownCell(action.severity)} | ${escapeMarkdownCell(action.category)} | ${escapeMarkdownCell(action.title)} | \`${escapeMarkdownCell(action.command)}\` | ${escapeMarkdownCell(action.detail)} |`)
+    lines.push(`| ${escapeMarkdownCell(action.id)} | ${escapeMarkdownCell(action.remediationCode)} | ${escapeMarkdownCell(action.severity)} | ${escapeMarkdownCell(action.category)} | ${action.priorityScore} | ${escapeMarkdownCell(action.title)} | \`${escapeMarkdownCell(action.command)}\` | ${escapeMarkdownCell(action.detail)} |`)
   }
   return lines.join("\n")
 }
@@ -311,6 +608,12 @@ function parseArgs(argv) {
     summaryJson: false,
     statusJson: false,
     actionsJson: false,
+    matrixJson: false,
+    impactJson: false,
+    priorityJson: false,
+    nextActionJson: false,
+    planJson: false,
+    fingerprintJson: false,
     remediationCatalogJson: false,
     markdown: false,
     quiet: false,
@@ -334,6 +637,12 @@ function parseArgs(argv) {
     else if (arg === "--summary-json") args.summaryJson = true
     else if (arg === "--status-json") args.statusJson = true
     else if (arg === "--actions-json") args.actionsJson = true
+    else if (arg === "--matrix-json") args.matrixJson = true
+    else if (arg === "--impact-json") args.impactJson = true
+    else if (arg === "--priority-json") args.priorityJson = true
+    else if (arg === "--next-action-json") args.nextActionJson = true
+    else if (arg === "--plan-json") args.planJson = true
+    else if (arg === "--fingerprint-json") args.fingerprintJson = true
     else if (arg === "--remediation-catalog-json") args.remediationCatalogJson = true
     else if (arg === "--compact-json") {
       args.summaryJson = true
@@ -374,6 +683,12 @@ function usage() {
     "  npm run doctor:local-chat -- --summary-json",
     "  npm run doctor:local-chat -- --status-json",
     "  npm run doctor:local-chat -- --actions-json",
+    "  npm run doctor:local-chat -- --matrix-json",
+    "  npm run doctor:local-chat -- --impact-json",
+    "  npm run doctor:local-chat -- --priority-json",
+    "  npm run doctor:local-chat -- --next-action-json",
+    "  npm run doctor:local-chat -- --plan-json",
+    "  npm run doctor:local-chat -- --fingerprint-json",
     "  npm run doctor:local-chat -- --remediation-catalog-json",
     "  npm run doctor:local-chat -- --compact-json",
     "  npm run doctor:local-chat -- --markdown",
@@ -396,6 +711,12 @@ function usage() {
     "  --summary-json                Print compact CI-safe JSON",
     "  --status-json                 Print minimal status JSON",
     "  --actions-json                Print recommended actions JSON",
+    "  --matrix-json                 Print check/action matrix JSON",
+    "  --impact-json                 Print remediation impact summary JSON",
+    "  --priority-json               Print remediation priority summary JSON",
+    "  --next-action-json            Print next best remediation action JSON",
+    "  --plan-json                   Print ordered remediation execution plan JSON",
+    "  --fingerprint-json            Print stable diagnostic fingerprint JSON",
     "  --remediation-catalog-json    Print remediation action catalog without running probes",
     "  --compact-json                Print compact single-line CI-safe JSON",
     "  --markdown                    Print sanitized Markdown diagnostics",
@@ -422,6 +743,12 @@ function usage() {
     "  npm --silent run doctor:local-chat:ci",
     "  npm --silent run doctor:local-chat:status",
     "  npm --silent run doctor:local-chat:actions",
+    "  npm --silent run doctor:local-chat:matrix",
+    "  npm --silent run doctor:local-chat:impact",
+    "  npm --silent run doctor:local-chat:priority",
+    "  npm --silent run doctor:local-chat:next-action",
+    "  npm --silent run doctor:local-chat:plan",
+    "  npm --silent run doctor:local-chat:fingerprint",
     "  npm --silent run doctor:local-chat:remediations",
     "  npm --silent run doctor:local-chat:compact",
     "  npm run doctor:local-chat -- --inspect-ports --markdown",
@@ -464,6 +791,12 @@ async function runCli(argv = process.argv.slice(2)) {
   else if (args.markdown) console.log(markdownReport)
   else if (args.statusJson) printJson(buildStatusSummary(compactSummary), args.compactJson)
   else if (args.actionsJson) printJson(buildActionsSummary(compactSummary), args.compactJson)
+  else if (args.matrixJson) printJson(buildDiagnosticsMatrix(compactSummary), args.compactJson)
+  else if (args.impactJson) printJson(buildActionImpactSummary(compactSummary), args.compactJson)
+  else if (args.priorityJson) printJson(buildPrioritySummary(compactSummary), args.compactJson)
+  else if (args.nextActionJson) printJson(buildNextActionSummary(compactSummary), args.compactJson)
+  else if (args.planJson) printJson(buildActionExecutionPlan(compactSummary), args.compactJson)
+  else if (args.fingerprintJson) printJson(buildFingerprintSummary(compactSummary), args.compactJson)
   else if (args.summaryJson) printJson(compactSummary, args.compactJson)
   else if (args.json) printJson({ ok: summary.ok, actions }, args.compactJson)
   else console.log(formatRecoveryReport(summary, actions))
@@ -485,9 +818,17 @@ module.exports = {
   RECOVERY_EXIT_CODES,
   RECOVERY_EXIT_CODE_LABELS,
   RECOVERY_ACTION_CATALOG,
+  RECOVERY_SEVERITY_PRIORITY,
   REPORT_FILE_PREFIX,
   buildRecoveryCiSummary,
+  buildActionImpactSummary,
   buildActionsSummary,
+  buildActionExecutionPlan,
+  buildDiagnosticFingerprint,
+  buildDiagnosticsMatrix,
+  buildFingerprintSummary,
+  buildNextActionSummary,
+  buildPrioritySummary,
   buildRemediationCatalog,
   buildStatusSummary,
   cleanupOldReports,
@@ -503,6 +844,7 @@ module.exports = {
   resolveRecoveryExitCode,
   resolveReportPath,
   sanitizeCommandForReport,
+  stableJsonStringify,
   usage,
   writeReportFile,
 }

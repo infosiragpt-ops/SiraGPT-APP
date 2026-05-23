@@ -166,6 +166,12 @@ const resolveUploadFileId = (file: any): string | null => {
 const collectUploadFileIds = (files: any[] = []): string[] =>
   files.map(resolveUploadFileId).filter((id): id is string => Boolean(id))
 
+const attachmentHasPreviewSource = (attachment: AttachmentLike | null | undefined): boolean =>
+  Boolean(attachment?.file || attachment?.url || attachment?.extractedText)
+
+const previewAttachmentKey = (attachment: AttachmentLike | null | undefined): string =>
+  String(attachment?.id || attachment?.url || attachment?.name || "")
+
 const getComposerFileFingerprint = (file: any): string => {
   const source = typeof File !== "undefined" && file?.file instanceof File ? file.file : file
   return [
@@ -1444,12 +1450,14 @@ const ActiveOptionsDisplay = ({
   uploadProgress,
   retryUpload,
   restoreLongPasteToInput,
+  onPreviewAttachment,
 }: {
   uploadedFiles: any[];
   removeFile: (index: number) => void;
   uploadProgress: { [key: string]: number };
   retryUpload?: (file: any) => void;
   restoreLongPasteToInput?: (file: any, index: number) => void;
+  onPreviewAttachment?: (attachment: AttachmentLike, siblings: AttachmentLike[], index: number) => void;
 }) => {
   // Viewer state — same reusable viewer used by sent-message chips, so
   // the user gets identical high-fidelity preview in both contexts.
@@ -1479,17 +1487,24 @@ const ActiveOptionsDisplay = ({
         {uploadedFiles.map((file, index) => {
           const isImage = file.type?.startsWith('image/');
           const fileId = file.id || file.tempId;
-          const progress = uploadProgress[fileId] || 0;
-          const isUploading = progress > 0 && progress < 100;
+          const rawProgress = uploadProgress[fileId];
+          const isUploading = file.status === 'uploading';
+          const progress = isUploading
+            ? Math.max(1, Math.min(99, rawProgress ?? 1))
+            : (rawProgress || 0);
           const isFailed = file.status === 'failed';
           const longPasteMeta = getLongPasteMetadata(file);
           const imageSizeClass = uploadedFiles.length > 1 ? 'h-20 w-20' : 'h-32 w-32';
           const attachment = viewerSiblings[index];
-          const canPreview = !isFailed && Boolean(
-            attachment?.file ||
-            attachment?.url ||
-            attachment?.extractedText
-          );
+          const canPreview = !isFailed && attachmentHasPreviewSource(attachment);
+          const openPreview = () => {
+            if (!canPreview || !attachment) return;
+            if (onPreviewAttachment) {
+              onPreviewAttachment(attachment, viewerSiblings, index);
+            } else {
+              setViewingIndex(index);
+            }
+          };
 
           return (
             <div
@@ -1503,15 +1518,12 @@ const ActiveOptionsDisplay = ({
                 canPreview && "cursor-pointer hover:border-foreground/40 hover:shadow-sm transition-all",
               )}
               title={isFailed ? `Subida fallida: ${file.uploadError || 'error'}` : canPreview ? 'Ver documento' : 'Preparando documento'}
-              onClick={() => {
-                if (!canPreview) return;
-                setViewingIndex(index);
-              }}
+              onClick={openPreview}
               role={canPreview ? 'button' : undefined}
               tabIndex={canPreview ? 0 : undefined}
               onKeyDown={(e) => {
                 if (!canPreview) return;
-                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setViewingIndex(index); }
+                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPreview(); }
               }}
             >
               {isImage ? (

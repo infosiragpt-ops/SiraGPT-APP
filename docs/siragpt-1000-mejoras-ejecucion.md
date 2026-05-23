@@ -494,6 +494,276 @@ Este tracker registra lotes realmente implementados y validados en el estado act
 - Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para verificar el script.
 - Verificacion: `npm run type-check`, prueba focalizada, script real `doctor:local-chat:remediations` y suite completa.
 
+## Lote 79: origen estable de acciones por check
+
+- Estado: implementado y validado.
+- Mejora cubierta: vincular cada accion recomendada con el check que la origina.
+- Cambio: `RECOVERY_ACTION_CATALOG` agrega `sourceCheck` para frontend, backend, login, entorno y estado listo.
+- Control: las acciones desconocidas reciben `sourceCheck: unknown` sin secretos.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para acciones conocidas y desconocidas.
+- Verificacion: `npm run type-check`, prueba focalizada y suite completa.
+
+## Lote 80: matriz JSON de checks y acciones
+
+- Estado: implementado y validado.
+- Mejora cubierta: entregar una matriz consumible por dashboards internos.
+- Cambio: `scripts/local-chat-recovery.js` exporta `buildDiagnosticsMatrix`.
+- Control: la matriz sanea comandos y separa acciones no mapeadas.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` con password simulado.
+- Verificacion: `npm run type-check`, prueba focalizada y suite completa.
+
+## Lote 81: bandera CLI para matriz JSON
+
+- Estado: implementado y validado.
+- Mejora cubierta: consultar la matriz desde CLI sin escribir codigo auxiliar.
+- Cambio: se agrego `--matrix-json` a `scripts/local-chat-recovery.js`.
+- Control: respeta `--compact-json` y conserva los codigos de salida existentes.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para parseo y ayuda.
+- Verificacion: `npm run type-check`, prueba focalizada, `npm --silent run doctor:local-chat:matrix` y suite completa.
+
+## Lote 82: matriz de acciones en Markdown
+
+- Estado: implementado y validado.
+- Mejora cubierta: hacer visible la relacion check-accion en reportes humanos.
+- Cambio: el reporte Markdown agrega la seccion `Check/action matrix`.
+- Control: muestra identificadores y codigos estables, no valores de entorno.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para la fila de backend.
+- Verificacion: `npm run type-check`, prueba focalizada de Markdown y suite completa.
+
+## Lote 83: script npm de matriz local
+
+- Estado: implementado y validado.
+- Mejora cubierta: consultar la matriz de diagnostico con un comando corto.
+- Cambio: se agrego `doctor:local-chat:matrix` a `package.json`.
+- Control: usa `--matrix-json --compact-json` para salida estable de una linea.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para verificar el script.
+- Verificacion: `npm run type-check`, prueba focalizada, script real `doctor:local-chat:matrix` y suite completa.
+
+## Lote 84: impacto por categoria de remediacion
+
+- Estado: implementado y validado.
+- Mejora cubierta: resumir que areas internas requieren accion sin parsear textos.
+- Cambio: `buildActionImpactSummary` agrega `byCategory` y buckets por categoria.
+- Control: el resumen no incluye comandos ni valores de entorno.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para frontend/backend.
+- Verificacion: `npm run type-check`, prueba focalizada y suite completa.
+
+## Lote 85: impacto por severidad de remediacion
+
+- Estado: implementado y validado.
+- Mejora cubierta: contar acciones criticas para priorizacion automatica.
+- Cambio: `buildActionImpactSummary` agrega `bySeverity` y `criticalActionCount`.
+- Control: usa la metadata estable del catalogo de acciones.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para severidad `critical`.
+- Verificacion: `npm run type-check`, prueba focalizada y suite completa.
+
+## Lote 86: bandera CLI de impacto
+
+- Estado: implementado y validado.
+- Mejora cubierta: consultar impacto de remediaciones desde CLI.
+- Cambio: se agrego `--impact-json` a `scripts/local-chat-recovery.js`.
+- Control: respeta `--compact-json` y los codigos de salida existentes.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para parseo y ayuda.
+- Verificacion: `npm run type-check`, prueba focalizada, `npm --silent run doctor:local-chat:impact` y suite completa.
+
+## Lote 87: impacto en reporte Markdown
+
+- Estado: implementado y validado.
+- Mejora cubierta: mostrar categorias y severidades en diagnosticos humanos.
+- Cambio: el reporte Markdown agrega la seccion `Action impact`.
+- Control: lista solo IDs de acciones, no comandos ni secretos.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para filas de categoria y severidad.
+- Verificacion: `npm run type-check`, prueba focalizada de Markdown y suite completa.
+
+## Lote 88: script npm de impacto local
+
+- Estado: implementado y validado.
+- Mejora cubierta: consultar impacto de remediaciones con un comando corto.
+- Cambio: se agrego `doctor:local-chat:impact` a `package.json`.
+- Control: usa `--impact-json --compact-json` para salida estable.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para verificar el script.
+- Verificacion: `npm run type-check`, prueba focalizada, script real `doctor:local-chat:impact` y suite completa.
+
+## Lote 89: puntaje estable de prioridad
+
+- Estado: implementado y validado.
+- Mejora cubierta: priorizar acciones sin depender del texto humano.
+- Cambio: cada accion enriquecida agrega `priorityScore` derivado de severidad.
+- Control: las acciones desconocidas reciben prioridad media segura.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para acciones conocidas y desconocidas.
+- Verificacion: `npm run type-check`, prueba focalizada y suite completa.
+
+## Lote 90: maxima prioridad en resumen compacto
+
+- Estado: implementado y validado.
+- Mejora cubierta: identificar rapidamente las acciones mas urgentes.
+- Cambio: el resumen compacto agrega `highestPriorityScore` y `highestPriorityActions`.
+- Control: no cambia `primaryAction`, solo agrega metadata estable.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para backend critico.
+- Verificacion: `npm run type-check`, prueba focalizada y suite completa.
+
+## Lote 91: resumen JSON de prioridad
+
+- Estado: implementado y validado.
+- Mejora cubierta: entregar un contrato de triage sin comandos ejecutables.
+- Cambio: se agrego `buildPrioritySummary` y la bandera `--priority-json`.
+- Control: la salida lista IDs, codigos, severidad, categoria y puntaje, no comandos.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para asegurar ausencia de comandos.
+- Verificacion: `npm run type-check`, prueba focalizada, `npm --silent run doctor:local-chat:priority` y suite completa.
+
+## Lote 92: prioridad en reporte Markdown
+
+- Estado: implementado y validado.
+- Mejora cubierta: hacer visible la prioridad en diagnosticos humanos.
+- Cambio: el reporte Markdown agrega `Highest priority` y columna `Priority`.
+- Control: conserva redaccion de comandos y codigos estables.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para encabezado y fila de backend.
+- Verificacion: `npm run type-check`, prueba focalizada de Markdown y suite completa.
+
+## Lote 93: script npm de prioridad local
+
+- Estado: implementado y validado.
+- Mejora cubierta: consultar prioridad de remediaciones con un comando corto.
+- Cambio: se agrego `doctor:local-chat:priority` a `package.json`.
+- Control: usa `--priority-json --compact-json` para salida estable.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para verificar el script.
+- Verificacion: `npm run type-check`, prueba focalizada, script real `doctor:local-chat:priority` y suite completa.
+
+## Lote 94: siguiente mejor accion saneada
+
+- Estado: implementado y validado.
+- Mejora cubierta: seleccionar la accion de mayor prioridad para recuperacion guiada.
+- Cambio: se agrego `buildNextActionSummary` con `nextAction` saneada.
+- Control: si hay empate conserva el orden recomendado por el doctor.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` con password simulado.
+- Verificacion: `npm run type-check`, prueba focalizada y suite completa.
+
+## Lote 95: razon estable de siguiente accion
+
+- Estado: implementado y validado.
+- Mejora cubierta: explicar por que se eligio una accion sin depender del texto humano.
+- Cambio: `buildNextActionSummary` agrega `reason` como `sourceCheck:severity:priority`.
+- Control: no incluye valores de entorno ni comandos sin sanear.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para `backend_auth:critical:100`.
+- Verificacion: `npm run type-check`, prueba focalizada y suite completa.
+
+## Lote 96: bandera CLI de siguiente accion
+
+- Estado: implementado y validado.
+- Mejora cubierta: consultar la siguiente accion desde CLI.
+- Cambio: se agrego `--next-action-json` a `scripts/local-chat-recovery.js`.
+- Control: respeta `--compact-json` y los codigos de salida existentes.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para parseo y ayuda.
+- Verificacion: `npm run type-check`, prueba focalizada, `npm --silent run doctor:local-chat:next-action` y suite completa.
+
+## Lote 97: siguiente accion en Markdown
+
+- Estado: implementado y validado.
+- Mejora cubierta: hacer visible la accion inmediata en reportes humanos.
+- Cambio: el reporte Markdown agrega la seccion `Next action`.
+- Control: el comando se redacciona con el mismo saneamiento de reportes.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para la fila de backend.
+- Verificacion: `npm run type-check`, prueba focalizada de Markdown y suite completa.
+
+## Lote 98: script npm de siguiente accion
+
+- Estado: implementado y validado.
+- Mejora cubierta: consultar la siguiente accion con un comando corto.
+- Cambio: se agrego `doctor:local-chat:next-action` a `package.json`.
+- Control: usa `--next-action-json --compact-json` para salida estable.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para verificar el script.
+- Verificacion: `npm run type-check`, prueba focalizada, script real `doctor:local-chat:next-action` y suite completa.
+
+## Lote 99: plan de ejecucion priorizado
+
+- Estado: implementado y validado.
+- Mejora cubierta: ordenar acciones por prioridad para recuperacion paso a paso.
+- Cambio: se agrego `buildActionExecutionPlan`.
+- Control: el orden conserva estabilidad cuando hay empate de prioridad.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` con acciones media y critica.
+- Verificacion: `npm run type-check`, prueba focalizada y suite completa.
+
+## Lote 100: numeracion estable de pasos
+
+- Estado: implementado y validado.
+- Mejora cubierta: permitir que automatizaciones referencien pasos por numero.
+- Cambio: cada entrada del plan incluye `step` secuencial y `stepCount`.
+- Control: los pasos se calculan despues de ordenar por prioridad.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para pasos 1 y 2.
+- Verificacion: `npm run type-check`, prueba focalizada y suite completa.
+
+## Lote 101: bandera CLI de plan
+
+- Estado: implementado y validado.
+- Mejora cubierta: consultar el plan priorizado desde CLI.
+- Cambio: se agrego `--plan-json` a `scripts/local-chat-recovery.js`.
+- Control: respeta `--compact-json` y codigos de salida existentes.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para parseo y ayuda.
+- Verificacion: `npm run type-check`, prueba focalizada, `npm --silent run doctor:local-chat:plan` y suite completa.
+
+## Lote 102: plan de ejecucion en Markdown
+
+- Estado: implementado y validado.
+- Mejora cubierta: mostrar los pasos ordenados en reportes humanos.
+- Cambio: el reporte Markdown agrega la seccion `Execution plan`.
+- Control: los comandos del plan se redaccionan antes de imprimirse.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para la fila del paso 1.
+- Verificacion: `npm run type-check`, prueba focalizada de Markdown y suite completa.
+
+## Lote 103: script npm de plan local
+
+- Estado: implementado y validado.
+- Mejora cubierta: consultar el plan priorizado con un comando corto.
+- Cambio: se agrego `doctor:local-chat:plan` a `package.json`.
+- Control: usa `--plan-json --compact-json` para salida estable.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para verificar el script.
+- Verificacion: `npm run type-check`, prueba focalizada, script real `doctor:local-chat:plan` y suite completa.
+
+## Lote 104: serializacion estable de diagnostico
+
+- Estado: implementado y validado.
+- Mejora cubierta: normalizar objetos antes de comparar resultados.
+- Cambio: se agrego `stableJsonStringify` con orden alfabetico de claves.
+- Control: no cambia las salidas existentes salvo al calcular huellas.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` con objeto reordenado.
+- Verificacion: `npm run type-check`, prueba focalizada y suite completa.
+
+## Lote 105: hash estable en resumen compacto
+
+- Estado: implementado y validado.
+- Mejora cubierta: detectar cambios reales en el diagnostico entre ejecuciones.
+- Cambio: el resumen compacto agrega `diagnosticHash` SHA-256.
+- Control: la huella excluye comandos, tiempos y valores sensibles.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para formato hexadecimal.
+- Verificacion: `npm run type-check`, prueba focalizada y suite completa.
+
+## Lote 106: resumen JSON de huella
+
+- Estado: implementado y validado.
+- Mejora cubierta: consultar solo la huella y metadata de comparacion.
+- Cambio: se agrego `buildFingerprintSummary` y `--fingerprint-json`.
+- Control: incluye algoritmo y version de entrada, no comandos.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para ausencia de comandos y secretos.
+- Verificacion: `npm run type-check`, prueba focalizada, `npm --silent run doctor:local-chat:fingerprint` y suite completa.
+
+## Lote 107: huella en reporte Markdown
+
+- Estado: implementado y validado.
+- Mejora cubierta: permitir comparar reportes humanos entre corridas.
+- Cambio: el reporte Markdown agrega `Diagnostic hash`.
+- Control: la huella es determinista sobre campos saneados.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para hash hexadecimal en Markdown.
+- Verificacion: `npm run type-check`, prueba focalizada de Markdown y suite completa.
+
+## Lote 108: script npm de huella local
+
+- Estado: implementado y validado.
+- Mejora cubierta: consultar la huella diagnostica con un comando corto.
+- Cambio: se agrego `doctor:local-chat:fingerprint` a `package.json`.
+- Control: usa `--fingerprint-json --compact-json` para salida estable.
+- Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para verificar el script.
+- Verificacion: `npm run type-check`, prueba focalizada, script real `doctor:local-chat:fingerprint` y suite completa.
+
 ## Siguientes lotes
 
-- Lote 79: agregar formato JSON de matriz de checks y acciones para dashboards.
+- Lote 109: agregar comparacion entre diagnostico actual y baseline local.

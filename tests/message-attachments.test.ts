@@ -13,6 +13,8 @@ const {
   resolveTranscriptionFileIds,
   serializeMessageAttachments,
 } = require(path.join(process.cwd(), "backend/src/services/message-attachments"))
+const chatAttachmentRecovery = require(path.join(process.cwd(), "backend/src/services/chat-attachment-recovery"))
+const fileProcessor = require(path.join(process.cwd(), "backend/src/services/fileProcessor"))
 
 const prismaMock = {
   file: {
@@ -272,6 +274,46 @@ describe("message attachments · agent task persistence", () => {
     assert.match(context, /Introducción Actualmente, el estudio de tiempos/)
     assert.doesNotMatch(context, /Índice de contenidos/)
     assert.doesNotMatch(context, /Declaratoria de autenticidad/)
+  })
+
+  it("drops DOCX front matter before thesis body anchors for professional synthesis", () => {
+    const noisyExtract = [
+      "Índice de contenidos [Declaratoria de autenticidad](#_Toc1) ii [Índice de tablas](#_Toc2) v",
+      "[Capítulo I](#_Toc3) 1 [Planteamiento del problema](#_Toc4) 2",
+      "Capítulo I Planteamiento del problema La empresa presenta demoras críticas en producción y requiere analizar los tiempos de ciclo.",
+    ].join(" ")
+
+    const cleaned = prepareDocumentTextForProfessionalSynthesis(noisyExtract)
+
+    assert.match(cleaned, /^Capítulo I Planteamiento del problema/)
+    assert.doesNotMatch(cleaned, /Índice de contenidos/)
+    assert.doesNotMatch(cleaned, /Declaratoria de autenticidad/)
+  })
+
+  it("recovers professional analysis responses contaminated by raw TOC text", () => {
+    assert.equal(
+      chatAttachmentRecovery.shouldRecoverAttachmentResponse({
+        prompt: "dame un analisis en un solo parrafo",
+        response: "Índice de contenidos [Declaratoria de autenticidad](#_Toc1) ii [Índice de tablas](#_Toc2) v Introducción Actualmente...",
+        processedFiles: [
+          {
+            name: "tesis.docx",
+            extractedText: "Introducción Actualmente, el estudio de tiempos y movimientos permite reconocer demoras y oportunidades de mejora en la producción.",
+          },
+        ],
+      }),
+      true,
+    )
+  })
+
+  it("keeps DOCX internal anchor links out of extracted markdown", () => {
+    const markdown = fileProcessor._htmlToMarkdown(
+      '<p><a href="#_Toc1">Índice de contenidos</a> <a href="#_Toc2">Índice de tablas</a> <a href="https://example.com">Fuente externa</a></p>',
+    )
+
+    assert.match(markdown, /Índice de contenidos/)
+    assert.doesNotMatch(markdown, /\]\(#_Toc/)
+    assert.match(markdown, /\[Fuente externa\]\(https:\/\/example\.com\)/)
   })
 
   it("returns verbatim extracted text for plain transcription requests", async () => {

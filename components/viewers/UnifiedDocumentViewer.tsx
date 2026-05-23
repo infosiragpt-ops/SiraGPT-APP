@@ -206,6 +206,8 @@ export interface AttachmentLike {
 interface UnifiedDocumentViewerProps {
   open: boolean
   onClose: () => void
+  /** Modal by default; panel renders inline inside the chat split view. */
+  variant?: "modal" | "panel"
   /** Primary attachment (required when open=true). */
   attachment: AttachmentLike | null
   /** Other attachments in the same context — enables arrow navigation. */
@@ -284,6 +286,7 @@ function useIsDark() {
 export default function UnifiedDocumentViewer({
   open,
   onClose,
+  variant = "modal",
   attachment,
   siblings,
   onNavigate,
@@ -338,7 +341,8 @@ export default function UnifiedDocumentViewer({
 
   // Safe early-return — every hook above ran, so React's hook count
   // stays constant across renders regardless of attachment state.
-  if (!open || !attachment || typeof document === "undefined") return null
+  if (!open || !attachment) return null
+  if (variant === "modal" && typeof document === "undefined") return null
 
   const kind = detectKind(attachment)
   const Icon = iconForKind(kind)
@@ -363,19 +367,28 @@ export default function UnifiedDocumentViewer({
     }
   }
 
-  return createPortal(
-    <div className="fixed inset-0 z-[10000]">
+  const shell = (
       <div
-        className="absolute inset-0 bg-black/80"
-        aria-hidden="true"
-        onClick={onClose}
-      />
+        className={variant === "panel" ? "flex h-full w-full min-w-0 flex-col overflow-hidden" : "fixed inset-0 z-[10000]"}
+      >
+      {variant === "modal" && (
+        <div
+          className="absolute inset-0 bg-black/80"
+          aria-hidden="true"
+          onClick={onClose}
+        />
+      )}
       <section
         role="dialog"
-        aria-modal="true"
+        aria-modal={variant === "modal"}
         aria-labelledby="unified-document-viewer-title"
         data-testid="unified-document-viewer-dialog"
-        className="fixed left-1/2 top-1/2 z-[10001] flex h-[85vh] w-[min(96vw,64rem)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg border border-border bg-background p-0 shadow-lg"
+        className={cn(
+          "flex flex-col overflow-hidden border border-border bg-background p-0",
+          variant === "panel"
+            ? "h-full w-full rounded-none border-y-0 border-r-0 shadow-none"
+            : "fixed left-1/2 top-1/2 z-[10001] h-[85vh] w-[min(96vw,64rem)] -translate-x-1/2 -translate-y-1/2 rounded-lg shadow-lg",
+        )}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex flex-row items-center gap-3 border-b border-border/50 px-4 py-2.5">
@@ -490,9 +503,11 @@ export default function UnifiedDocumentViewer({
           </RendererCtx.Provider>
         </ViewerRenderBoundary>
       </section>
-    </div>,
-    document.body,
+    </div>
   )
+
+  if (variant === "panel") return shell
+  return createPortal(shell, document.body)
 }
 
 // ─── Renderer dispatch ───────────────────────────────────────────────

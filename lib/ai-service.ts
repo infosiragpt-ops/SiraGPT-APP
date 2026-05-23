@@ -225,9 +225,12 @@ const OUTPUT_FORMAT_REQUEST_RE =
   /\b(?:en|como|a)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|svg)\b|\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|exporta(?:r|me)?|descarga(?:r|me)?|prepara(?:r|me)?|elabora(?:r|me)?|redacta(?:r|me)?)\b.*\b(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|svg|documento|archivo|informe|reporte|presentaci[oó]n)\b/i
 
 const DOCUMENT_FILE_EXT_RE = /\.(?:docx?|pdf|xlsx?|csv|pptx?|txt|md)$/i
+const SPREADSHEET_FILE_EXT_RE = /\.(?:xlsx?|csv)$/i
 
 const DOCUMENT_MIME_RE =
   /(?:application\/(?:pdf|msword|vnd\.openxmlformats-officedocument|vnd\.ms-|vnd\.oasis\.opendocument)|text\/(?:plain|markdown|csv)|application\/csv)/i
+
+const SPREADSHEET_MIME_RE = /(?:spreadsheet|excel|csv|ms-excel|sheet)/i
 
 const parseFilesFromMessage = (message: any): any[] => {
   const rawFiles = message?.files
@@ -253,6 +256,14 @@ const isDocumentLikeAttachment = (file: any) => {
   return DOCUMENT_FILE_EXT_RE.test(name) || DOCUMENT_MIME_RE.test(mimeType)
 }
 
+const isSpreadsheetLikeAttachment = (file: any) => {
+  if (!file) return false
+  if (typeof file === 'string') return SPREADSHEET_FILE_EXT_RE.test(file)
+  const name = String(file.name || file.originalName || file.filename || file.path || '')
+  const mimeType = String(file.mimeType || file.type || file.contentType || '')
+  return SPREADSHEET_FILE_EXT_RE.test(name) || SPREADSHEET_MIME_RE.test(mimeType)
+}
+
 export function hasDocumentAttachmentContext(conversationHistory: any[] = []): boolean {
   return (Array.isArray(conversationHistory) ? conversationHistory : []).some((message) =>
     parseFilesFromMessage(message).some(isDocumentLikeAttachment)
@@ -266,7 +277,10 @@ export function shouldAnswerFromExistingDocument(
   const normalized = normalizePrompt(prompt)
   if (!normalized) return false
   if (OUTPUT_FORMAT_REQUEST_RE.test(normalized)) return false
-  if (!EXISTING_DOCUMENT_REFERENCE_RE.test(normalized)) return false
+  const referencesExistingDocument =
+    EXISTING_DOCUMENT_REFERENCE_RE.test(normalized)
+    || hasDocumentAttachmentContext(conversationHistory)
+  if (!referencesExistingDocument) return false
   if (!DOCUMENT_UNDERSTANDING_RE.test(normalized)) return false
 
   // Even without loaded history, this is a question about an existing
@@ -333,7 +347,20 @@ export function isLightweightConversationalPrompt(prompt: string): boolean {
 
 export function shouldRouteTextPromptThroughAgenticRuntime(prompt: string, files: any[] = []): boolean {
   const normalized = normalizePrompt(prompt)
-  if (files.length > 0) return true
+  if (files.length > 0) {
+    const fileList = Array.isArray(files) ? files : []
+    const hasDocumentForSynthesis = fileList.some((file) =>
+      isDocumentLikeAttachment(file) && !isSpreadsheetLikeAttachment(file)
+    )
+    if (
+      hasDocumentForSynthesis
+      && DOCUMENT_UNDERSTANDING_RE.test(normalized)
+      && !OUTPUT_FORMAT_REQUEST_RE.test(normalized)
+    ) {
+      return false
+    }
+    return true
+  }
   if (isLightweightConversationalPrompt(normalized)) return false
 
   const words = normalized.split(/\s+/).filter(Boolean)

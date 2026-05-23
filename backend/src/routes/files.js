@@ -353,6 +353,199 @@ async function processFilesInParallel(files, userId, prismaClient) {
   return results;
 }
 
+function isAsyncUploadRequest(req) {
+  const value = req.body && req.body.asyncProcessing;
+  return value === true || /^(1|true|yes)$/i.test(String(value || ''));
+}
+
+function uploadResponseForFile(file, fileRecord, extra = {}) {
+  return {
+    id: fileRecord.id,
+    name: file.originalname,
+    originalName: file.originalname,
+    filename: file.filename,
+    size: file.size,
+    type: file.mimetype,
+    mimeType: file.mimetype,
+    url: `/uploads/${fileRecord.userId}/${file.filename}`,
+    thumbnailUrl: null,
+    extractedText: null,
+    processingStage: extra.processingStage || 'extracting',
+    status: extra.status || 'uploaded',
+    ragIndexed: extra.ragIndexed || 'pending',
+    success: true,
+    error: null,
+  };
+}
+
+async function processFileAfterFastUpload(file, userId, prismaClient, fileRecord) {
+  try {
+    let integrity = { valid: true, warnings: [], issues: [] };
+    try {
+      integrity = await fileIntegrityValidator.validateFile(file.path, file.mimetype, file.size);
+      if (!integrity.valid && integrity.issues.some(iss => iss.code === 'empty_file')) {
+        await fileProcessingStatus.setStage(prismaClient, fileRecord.id, 'failed', { userId, error: 'empty_file: El archivo esta vacio (0 bytes).' });
+        await unlinkQuiet(file.path);
+        return;
+      }
+      if (integrity.issues.length > 0) {
+        console.warn(`[files] integrity warnings for ${file.originalname}:`, integrity.issues.map(i => i.message).join('; '));
+      }
+    } catch { /* integrity validation is best-effort */ }
+
+    await fileProcessingStatus.setStage(prismaClient, fileRecord.id, 'extracting', { userId });
+    const result = await fileProcessor.processFile(file);
+    const thumbnailPath = await fileProcessor.generateThumbnail(file.path, file.mimetype);
+
+    let openaiFileId = null;
+    const oaMimes = ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.ms-powerpoint', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'];
+    if (oaMimes.includes(file.mimetype) || file.mimetype.startsWith('text/')) {
+      try {
+        const buf = await fs.readFile(file.path);
+        const oaFile = await openai.files.create({ file: new File([buf], file.originalname, { type: file.mimetype }), purpose: 'assistants' });
+        openaiFileId = oaFile.id;
+      } catch (openaiError) { console.error('OpenAI file upload error:', openaiError); }
+    }
+
+    fileRecord = await prismaClient.file.update({
+      where: { id: fileRecord.id },
+      data: { mimeType: file.mimetype, extractedText: result.extractedText, openaiFileId },
+    });
+
+    scheduleDefaultRagIndex(userId, fileRecord);
+    try {
+      await documentIntelligence.analyzeFile(prismaClient, { userId, fileRecord, extractionResult: result, force: true });
+    } catch (analysisError) { console.warn('[files] document analysis failed:', analysisError.message || analysisError); }
+
+    if (thumbnailPath) {
+      // Thumbnail is stored on disk for later consumers; no extra DB field exists
+      // on File, so the immediate upload response remains the source of truth.
+    }
+  } catch (error) {
+    console.error('File processing error:', error);
+    if (fileRecord?.id) {
+      await fileProcessingStatus.setStage(prismaClient, fileRecord.id, 'failed', { userId, error: `processing: ${error?.message || error}` });
+    }
+  }
+}
+
+function scheduleFileAfterFastUpload(file, userId, prismaClient, fileRecord) {
+  setImmediate(() => {
+    processFileAfterFastUpload(file, userId, prismaClient, fileRecord)
+      .catch(err => console.warn('[files] async post-upload processing failed:', err?.message || err));
+  });
+}
+
+async function processFilesForAsyncPreview(files, userId, prismaClient) {
+  const results = new Array(files.length).fill(null);
+
+  for (let i = 0; i < files.length; i += MAX_CONCURRENT) {
+    const batch = files.slice(i, i + MAX_CONCURRENT);
+    const batchPromises = batch.map(async (file) => {
+      let fileRecord = null;
+      try {
+        fileRecord = await prismaClient.file.create({
+          data: {
+            userId,
+            filename: file.filename,
+            originalName: file.originalname,
+            mimeType: file.mimetype,
+            size: file.size,
+            path: file.path,
+            extractedText: null,
+            openaiFileId: null,
+            processingStage: 'uploaded',
+            processingStageAt: new Date(),
+          },
+        });
+      } catch (createError) {
+        console.error('[files] could not create File row:', createError.message || createError);
+        await unlinkQuiet(file.path);
+        return {
+          name: file.originalname, size: file.size, type: file.mimetype,
+          success: false, error: 'No se pudo registrar el archivo en la base de datos.',
+          code: 'db_create_failed',
+        };
+      }
+
+      try {
+        await fileProcessingStatus.setStage(prismaClient, fileRecord.id, 'validating', { userId });
+        const detection = await detectMime(file.path, file.mimetype);
+        const policy = validateUploadPolicy({
+          originalName: file.originalname,
+          declaredMime: file.mimetype,
+          detectedMime: detection.mime,
+          detectionSource: detection.source,
+          size: file.size,
+        });
+        if (!policy.ok) {
+          console.warn(`[files] rejected ${file.originalname}: declared=${file.mimetype} real=${detection.mime || 'unknown'} reason=${policy.code}`);
+          await fileProcessingStatus.setStage(prismaClient, fileRecord.id, 'failed', { userId, error: `${policy.code}: ${policy.message}` });
+          await unlinkQuiet(file.path);
+          return { id: fileRecord.id, name: file.originalname, size: file.size, type: file.mimetype, mimeType: file.mimetype, success: false, error: policy.message, code: policy.code, detectedMime: detection.mime || null, detectedExtension: detection.ext || null };
+        }
+        if (policy.mimeType && policy.mimeType !== file.mimetype) {
+          file.mimetype = policy.mimeType;
+          fileRecord = await prismaClient.file.update({
+            where: { id: fileRecord.id },
+            data: { mimeType: file.mimetype },
+          });
+        }
+
+        await fileProcessingStatus.setStage(prismaClient, fileRecord.id, 'extracting', { userId });
+        scheduleFileAfterFastUpload(file, userId, prismaClient, fileRecord);
+        return uploadResponseForFile(file, fileRecord);
+      } catch (error) {
+        console.error('Fast upload validation error:', error);
+        if (fileRecord?.id) {
+          await fileProcessingStatus.setStage(prismaClient, fileRecord.id, 'failed', { userId, error: `processing: ${error?.message || error}` });
+        }
+        await unlinkQuiet(file.path);
+        return { id: fileRecord?.id, name: file.originalname, size: file.size, type: file.mimetype, mimeType: file.mimetype, success: false, error: error.message };
+      }
+    });
+    const batchResults = await Promise.all(batchPromises);
+    for (let j = 0; j < batchResults.length; j++) results[i + j] = batchResults[j];
+  }
+
+  return results;
+}
+
+function scheduleCrossDocumentAnalysisWhenReady(fileIds, userId) {
+  const ids = Array.from(new Set((fileIds || []).map(String).filter(Boolean))).slice(0, 50);
+  if (ids.length < 2) return;
+
+  setImmediate(async () => {
+    const deadline = Date.now() + Number.parseInt(process.env.SIRAGPT_BATCH_CONTEXT_WAIT_MS || '60000', 10);
+    let records = [];
+    while (Date.now() < deadline) {
+      records = await prisma.file.findMany({
+        where: { id: { in: ids }, userId },
+        select: { id: true, originalName: true, extractedText: true, mimeType: true, size: true },
+      }).catch(() => []);
+      if (records.filter(r => r.extractedText && r.extractedText.length > 200).length >= 2) break;
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+
+    const readyFiles = records
+      .filter(r => r.extractedText && r.extractedText.length > 200)
+      .map(r => ({
+        id: r.id,
+        name: r.originalName,
+        extractedText: r.extractedText,
+        type: r.mimeType,
+        mimeType: r.mimeType,
+        size: r.size,
+        success: true,
+      }));
+    if (readyFiles.length >= 2) {
+      scheduleCrossDocumentAnalysis(readyFiles, userId).catch(err =>
+        console.warn('[files] async cross-document analysis error:', err.message || err)
+      );
+    }
+  });
+}
+
 // Upload files — parallel batch processing
 router.post('/upload', authenticateToken, requireScope('files:write'), upload.array('files', 50), enforceOrgRateLimitSafe, async (req, res) => {
   try {
@@ -360,16 +553,26 @@ router.post('/upload', authenticateToken, requireScope('files:write'), upload.ar
       return res.status(400).json({ error: 'No files uploaded' });
     }
 
-    const processedFiles = await processFilesInParallel(req.files, req.user.id, prisma);
+    const asyncProcessing = isAsyncUploadRequest(req);
+    const processedFiles = asyncProcessing
+      ? await processFilesForAsyncPreview(req.files, req.user.id, prisma)
+      : await processFilesInParallel(req.files, req.user.id, prisma);
 
     // ── Cross-document context for batch uploads ──
     // When multiple files are uploaded together, build a cross-document
     // context that correlates content. This helps the chat infer intent.
-    const successFiles = processedFiles.filter(f => f.success && f.id && f.extractedText && f.extractedText.length > 200);
-    if (successFiles.length >= 2) {
-      scheduleCrossDocumentAnalysis(processedFiles, req.user.id).catch(err =>
-        console.warn('[files] cross-document analysis error:', err.message || err)
+    if (asyncProcessing) {
+      scheduleCrossDocumentAnalysisWhenReady(
+        processedFiles.filter(f => f.success && f.id).map(f => f.id),
+        req.user.id,
       );
+    } else {
+      const successFiles = processedFiles.filter(f => f.success && f.id && f.extractedText && f.extractedText.length > 200);
+      if (successFiles.length >= 2) {
+        scheduleCrossDocumentAnalysis(processedFiles, req.user.id).catch(err =>
+          console.warn('[files] cross-document analysis error:', err.message || err)
+        );
+      }
     }
 
     const ok = processedFiles.filter(f => f.success).length;

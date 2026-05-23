@@ -685,6 +685,7 @@ class ApiClient {
     opts: {
       sourceChannel?: string
       idempotencyKey?: string
+      asyncProcessing?: boolean
       onProgress?: (percent: number, loadedBytes: number, totalBytes: number) => void
       signal?: AbortSignal
     } = {}
@@ -692,6 +693,7 @@ class ApiClient {
     const formData = new FormData();
     Array.from(files).forEach((file) => formData.append('files', file));
     if (opts.sourceChannel) formData.append('sourceChannel', opts.sourceChannel);
+    if (opts.asyncProcessing) formData.append('asyncProcessing', '1');
 
     const url = `${this.baseURL}/files/upload`;
 

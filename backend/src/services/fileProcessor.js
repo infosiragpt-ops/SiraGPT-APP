@@ -575,8 +575,14 @@ class FileProcessor {
       return `\n| ${cells.join(' | ')} |`;
     });
     md = md.replace(/<\/?(table|tbody|thead)[^>]*>/gi, '\n');
-    // Links
-    md = md.replace(/<a\s+[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, '[$2]($1)');
+    // Links. Internal Word anchors (_Toc...) are mostly table-of-contents
+    // plumbing; keep their label but avoid leaking raw markdown links into
+    // later document analysis.
+    md = md.replace(/<a\s+[^>]*href=(["'])(.*?)\1[^>]*>([\s\S]*?)<\/a>/gi, (_, __quote, href, label) => {
+      const target = String(href || '').trim();
+      const text = String(label || '').trim();
+      return target.startsWith('#') ? text : `[${text}](${target})`;
+    });
     // Paragraphs and line breaks
     md = md.replace(/<p[^>]*>([\s\S]*?)<\/p>/gi, '$1\n\n');
     md = md.replace(/<br\s*\/?>/gi, '\n');

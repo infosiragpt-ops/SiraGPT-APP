@@ -5,6 +5,7 @@ import {
   aiService,
   buildProfessionalCapabilityPrompt,
   shouldRouteThroughAgenticRuntime,
+  shouldRouteTextPromptThroughAgenticRuntime,
   shouldAnswerFromExistingDocument,
 } from "../lib/ai-service"
 
@@ -45,6 +46,43 @@ describe("ai-service · deterministic intent routing", () => {
     const intent = await aiService.classifyIntent("cual es la primera palabra del word ?", history)
     assert.equal(intent, "text")
     assert.equal(shouldAnswerFromExistingDocument("cual es la primera palabra del word ?", history), true)
+  })
+
+  it("treats an attached document plus an implicit analysis prompt as document chat", async () => {
+    const history = [
+      {
+        role: "USER",
+        content: "055 037 - Introducción UCV COMPLETA.docx",
+        files: [
+          {
+            id: "file-docx-analysis",
+            name: "055 037 - Introducción UCV COMPLETA.docx",
+            mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          },
+        ],
+      },
+    ]
+
+    const prompt = "dame un analisis en un solo parrafo"
+    assert.equal(shouldAnswerFromExistingDocument(prompt, history), true)
+    assert.equal(await aiService.classifyIntent(prompt, history), "text")
+    assert.equal(
+      shouldRouteTextPromptThroughAgenticRuntime(prompt, history[0].files),
+      false,
+    )
+  })
+
+  it("keeps spreadsheet data work on the agentic route when a spreadsheet is attached", () => {
+    assert.equal(
+      shouldRouteTextPromptThroughAgenticRuntime("analiza estos datos de ventas", [
+        {
+          id: "file-xlsx",
+          name: "ventas.xlsx",
+          mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        },
+      ]),
+      true,
+    )
   })
 
   it("still creates a Word file when Word is requested as the output format", async () => {
