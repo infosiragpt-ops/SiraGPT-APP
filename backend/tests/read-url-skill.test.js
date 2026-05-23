@@ -12,8 +12,19 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
 
+// The skill blocks any fetch whose hostname resolves to a private or
+// reserved IP. The test suite spins up loopback HTTP servers, so we
+// opt into the test-only escape hatch BEFORE loading the module.
+process.env.SIRA_READ_URL_ALLOW_PRIVATE = '1';
+
 const skill = require('../src/skills/read_url/handler');
-const { parseRobots, pathDisallowed, normalizeUrl } = skill._internal;
+const {
+  parseRobots,
+  pathDisallowed,
+  normalizeUrl,
+  isPrivateOrReservedIp,
+  assertHostIsPublic,
+} = skill._internal;
 
 function listen(handler) {
   const server = http.createServer(handler);
@@ -50,6 +61,16 @@ test('parseRobots handles wildcard groups and Disallow paths', () => {
     { agent: '*', path: '/private' },
     { agent: 'siragptbot', path: '/no-bots' },
   ]);
+});
+
+test('parseRobots preserves empty Disallow as allow-all (RFC 9309)', () => {
+  // An empty Disallow value means "allow everything for this group" —
+  // the opposite of a Disallow: / line. parseRobots must keep the
+  // empty string verbatim, and pathDisallowed must treat it as a no-op.
+  const rules = parseRobots('User-agent: *\nDisallow:');
+  assert.deepEqual(rules, [{ agent: '*', path: '' }]);
+  assert.equal(pathDisallowed(rules, '/anything'), false);
+  assert.equal(pathDisallowed(rules, '/'), false);
 });
 
 test('pathDisallowed prefers SiraGPTBot-specific rules over wildcard', () => {
@@ -185,6 +206,65 @@ test('read_url times out on a hanging server', async () => {
     server.closeAllConnections?.();
     await closeServer(server);
   }
+});
+
+test('isPrivateOrReservedIp blocks loopback, private, link-local, metadata, IPv6', () => {
+  // IPv4
+  assert.equal(isPrivateOrReservedIp('127.0.0.1'), true);
+  assert.equal(isPrivateOrReservedIp('10.0.0.1'), true);
+  assert.equal(isPrivateOrReservedIp('172.16.5.5'), true);
+  assert.equal(isPrivateOrReservedIp('192.168.1.1'), true);
+  assert.equal(isPrivateOrReservedIp('169.254.169.254'), true); // AWS metadata
+  assert.equal(isPrivateOrReservedIp('0.0.0.0'), true);
+  assert.equal(isPrivateOrReservedIp('255.255.255.255'), true);
+  assert.equal(isPrivateOrReservedIp('224.0.0.1'), true);       // multicast
+  // Public IPv4
+  assert.equal(isPrivateOrReservedIp('8.8.8.8'), false);
+  assert.equal(isPrivateOrReservedIp('1.1.1.1'), false);
+  // IPv6
+  assert.equal(isPrivateOrReservedIp('::1'), true);
+  assert.equal(isPrivateOrReservedIp('fc00::1'), true);          // unique local
+  assert.equal(isPrivateOrReservedIp('fe80::1'), true);          // link-local
+  assert.equal(isPrivateOrReservedIp('ff02::1'), true);          // multicast
+  assert.equal(isPrivateOrReservedIp('::ffff:127.0.0.1'), true); // mapped loopback
+  assert.equal(isPrivateOrReservedIp('2606:4700:4700::1111'), false); // public Cloudflare
+  // Garbage → fail closed
+  assert.equal(isPrivateOrReservedIp(''), true);
+  assert.equal(isPrivateOrReservedIp(null), true);
+});
+
+test('read_url refuses literal private/reserved IPs', async () => {
+  // Bypass the env override for this single call so the production
+  // guard is exercised verbatim. Then restore it for the other tests
+  // that depend on loopback servers.
+  const prev = process.env.SIRA_READ_URL_ALLOW_PRIVATE;
+  delete process.env.SIRA_READ_URL_ALLOW_PRIVATE;
+  try {
+    const targets = [
+      'http://127.0.0.1/admin',
+      'http://169.254.169.254/latest/meta-data/',
+      'http://10.0.0.1/internal',
+      'http://[::1]/healthz',
+    ];
+    for (const u of targets) {
+      const out = await skill.execute({ url: u });
+      assert.equal(out.error, 'host_blocked', `expected host_blocked for ${u}, got ${out.error}`);
+    }
+    // Hostname "localhost" must also be refused even if DNS would
+    // resolve it to a public IP (defence-in-depth).
+    const lh = await skill.execute({ url: 'http://localhost/admin' });
+    assert.equal(lh.error, 'host_blocked');
+  } finally {
+    if (prev !== undefined) process.env.SIRA_READ_URL_ALLOW_PRIVATE = prev;
+    else process.env.SIRA_READ_URL_ALLOW_PRIVATE = '1';
+  }
+});
+
+test('assertHostIsPublic respects the test-only env override', async () => {
+  // With the override active (set at the top of this file), a literal
+  // loopback IP must be accepted — otherwise none of the loopback
+  // server tests below would work.
+  assert.equal(await assertHostIsPublic('127.0.0.1'), null);
 });
 
 test('read_url applies the maxChars cap', async () => {

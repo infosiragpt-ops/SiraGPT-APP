@@ -24,9 +24,13 @@
  */
 
 const { request } = require('undici');
+const dns = require('node:dns');
+const net = require('node:net');
 const { JSDOM } = require('jsdom');
 const { Readability, isProbablyReaderable } = require('@mozilla/readability');
 const TurndownService = require('turndown');
+
+const dnsLookup = require('node:util').promisify(dns.lookup);
 
 const USER_AGENT = 'SiraGPTBot/1.0 (+https://siragpt.com)';
 const HARD_TIMEOUT_MS = 8000;
@@ -49,6 +53,122 @@ function normalizeUrl(input) {
   try { u = new URL(trimmed); } catch { return null; }
   if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
   return u;
+}
+
+/**
+ * Parse a dotted-quad IPv4 string into its 32-bit numeric form, or
+ * return null. We avoid the deprecated `os.networkInterfaces`-style
+ * helpers and just compute the integer manually so the SSRF check has
+ * no extra dependencies.
+ */
+function ipv4ToInt(ip) {
+  const parts = ip.split('.');
+  if (parts.length !== 4) return null;
+  let n = 0;
+  for (const p of parts) {
+    const v = Number(p);
+    if (!Number.isInteger(v) || v < 0 || v > 255) return null;
+    n = (n * 256) + v;
+  }
+  return n;
+}
+
+function inIpv4Cidr(ipInt, base, prefix) {
+  const mask = prefix === 0 ? 0 : (~((1 << (32 - prefix)) - 1)) >>> 0;
+  const baseInt = ipv4ToInt(base);
+  if (baseInt === null) return false;
+  return ((ipInt & mask) >>> 0) === ((baseInt & mask) >>> 0);
+}
+
+/**
+ * Decide whether a resolved IP address is unsafe to fetch from a
+ * server-side request. Blocks the standard private + reserved ranges
+ * for both IPv4 and IPv6 (loopback, link-local, private, multicast,
+ * unspecified, cloud-metadata, IPv4-mapped IPv6 of any of the above).
+ *
+ * Used by the SSRF guard right after DNS resolution AND on every
+ * redirect hop — without the redirect check, a public host could 302
+ * us to http://169.254.169.254/ and leak EC2 instance metadata.
+ */
+function isPrivateOrReservedIp(ip) {
+  if (!ip || typeof ip !== 'string') return true; // fail closed
+  // IPv4 (or IPv4-mapped IPv6 like ::ffff:10.0.0.1)
+  let v4 = ip;
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(ip);
+  if (mapped) v4 = mapped[1];
+  if (net.isIPv4(v4)) {
+    const n = ipv4ToInt(v4);
+    if (n === null) return true;
+    // 0.0.0.0/8 (unspecified / "this network")
+    if (inIpv4Cidr(n, '0.0.0.0', 8)) return true;
+    // 10.0.0.0/8 private
+    if (inIpv4Cidr(n, '10.0.0.0', 8)) return true;
+    // 127.0.0.0/8 loopback
+    if (inIpv4Cidr(n, '127.0.0.0', 8)) return true;
+    // 169.254.0.0/16 link-local (covers AWS/GCP metadata 169.254.169.254)
+    if (inIpv4Cidr(n, '169.254.0.0', 16)) return true;
+    // 172.16.0.0/12 private
+    if (inIpv4Cidr(n, '172.16.0.0', 12)) return true;
+    // 192.0.0.0/24 IETF protocol assignments
+    if (inIpv4Cidr(n, '192.0.0.0', 24)) return true;
+    // 192.168.0.0/16 private
+    if (inIpv4Cidr(n, '192.168.0.0', 16)) return true;
+    // 224.0.0.0/4 multicast
+    if (inIpv4Cidr(n, '224.0.0.0', 4)) return true;
+    // 240.0.0.0/4 reserved future use (includes 255.255.255.255 broadcast)
+    if (inIpv4Cidr(n, '240.0.0.0', 4)) return true;
+    return false;
+  }
+  if (net.isIPv6(ip)) {
+    const lower = ip.toLowerCase();
+    if (lower === '::' || lower === '::1') return true;
+    // fc00::/7 unique local
+    if (/^f[cd][0-9a-f]{2}:/.test(lower)) return true;
+    // fe80::/10 link-local
+    if (/^fe[89ab][0-9a-f]:/.test(lower)) return true;
+    // ff00::/8 multicast
+    if (/^ff[0-9a-f]{2}:/.test(lower)) return true;
+    return false;
+  }
+  // Unknown family — be conservative.
+  return true;
+}
+
+/**
+ * Resolve a hostname to its A/AAAA records and reject if ANY of them
+ * is private/reserved. We check ALL records (not just the first) so a
+ * "DNS rebinding"-style attack that points the first record at a public
+ * IP and the second at 127.0.0.1 still gets blocked.
+ *
+ * Honored env override: when SIRA_READ_URL_ALLOW_PRIVATE=1 we skip the
+ * check entirely. This is ONLY for the test suite, which exercises the
+ * skill against a loopback HTTP server.
+ */
+async function assertHostIsPublic(hostname) {
+  if (process.env.SIRA_READ_URL_ALLOW_PRIVATE === '1') return null;
+  // Literal IP in URL → skip DNS, check directly.
+  if (net.isIP(hostname)) {
+    return isPrivateOrReservedIp(hostname) ? hostname : null;
+  }
+  // Block obvious localhost-y hostnames before we even resolve, so that
+  // a misconfigured resolver returning a stale public IP for "localhost"
+  // (rare but real on some corporate networks) still gets caught.
+  const lc = hostname.toLowerCase();
+  if (lc === 'localhost' || lc.endsWith('.localhost') || lc.endsWith('.internal') || lc.endsWith('.local')) {
+    return hostname;
+  }
+  let addrs;
+  try {
+    addrs = await dnsLookup(hostname, { all: true, verbatim: true });
+  } catch {
+    // DNS failure → can't verify safety → fail closed. The model can
+    // try a different URL; that's better than leaking internals.
+    return hostname;
+  }
+  for (const a of (addrs || [])) {
+    if (isPrivateOrReservedIp(a.address)) return a.address;
+  }
+  return null;
 }
 
 /**
@@ -75,7 +195,10 @@ function parseRobots(text) {
       const v = value.toLowerCase();
       activeGroup = (v === '*' || v === 'siragptbot') ? v : null;
     } else if (directive === 'disallow' && activeGroup) {
-      rules.push({ agent: activeGroup, path: value || '/' });
+      // RFC 9309 §2.2.2: an EMPTY `Disallow:` value means "allow all"
+      // for that user-agent group. Preserve the empty string verbatim
+      // — pathDisallowed treats path === '' as a no-op.
+      rules.push({ agent: activeGroup, path: value });
     }
   }
   return rules;
@@ -187,6 +310,21 @@ async function execute(args = {}, _ctx = {}) {
 
   let dom = null;
   try {
+    // ── SSRF guard ────────────────────────────────────────────────────
+    // Resolve the hostname and reject if ANY A/AAAA record points at a
+    // private / reserved / loopback / link-local address. This blocks
+    // the model from coaxing read_url into hitting localhost,
+    // RFC1918 internal services, or cloud metadata endpoints (e.g.
+    // 169.254.169.254). Re-checked on every redirect hop below.
+    const blockedHost = await assertHostIsPublic(url.hostname);
+    if (blockedHost) {
+      return {
+        error: 'host_blocked',
+        message: `Refusing to fetch private/reserved host (${blockedHost})`,
+        source_url: url.toString(),
+      };
+    }
+
     // ── robots.txt ────────────────────────────────────────────────────
     const rules = await fetchRobots(origin, controller.signal);
     if (pathDisallowed(rules, url.pathname || '/')) {
@@ -240,6 +378,17 @@ async function execute(args = {}, _ctx = {}) {
         if (next.protocol !== 'http:' && next.protocol !== 'https:') {
           await response.body.dump();
           return { error: 'unsafe_redirect_scheme', source_url: currentUrl.toString() };
+        }
+        // Re-run the SSRF guard for the redirect target — a public host
+        // could otherwise 302 us into localhost / metadata IPs.
+        const redirectBlocked = await assertHostIsPublic(next.hostname);
+        if (redirectBlocked) {
+          await response.body.dump();
+          return {
+            error: 'host_blocked',
+            message: `Refusing redirect to private/reserved host (${redirectBlocked})`,
+            source_url: currentUrl.toString(),
+          };
         }
         await response.body.dump();
         currentUrl = next;
@@ -364,4 +513,13 @@ async function execute(args = {}, _ctx = {}) {
   }
 }
 
-module.exports = { execute, _internal: { parseRobots, pathDisallowed, normalizeUrl } };
+module.exports = {
+  execute,
+  _internal: {
+    parseRobots,
+    pathDisallowed,
+    normalizeUrl,
+    isPrivateOrReservedIp,
+    assertHostIsPublic,
+  },
+};
