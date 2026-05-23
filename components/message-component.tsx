@@ -40,6 +40,8 @@ import { useVoiceControls } from './voice-controls';
 import ReactMarkdown from 'react-markdown'
 import { PerformanceOptimizer } from "@/lib/performance-optimizer"
 import { markdownRehypePlugins, markdownRemarkPlugins } from '@/lib/markdown-sanitize'
+import MemoMarkdownBlock from '@/components/markdown/memo-markdown-block'
+import { splitStableHead } from '@/lib/markdown-block-split'
 import { DownloadButtons } from './download-buttons';
 import TableControls from './TableControls';
 import ImageGenerationEffect from './ImageGenerationEffect';
@@ -366,7 +368,7 @@ const ChartDisplay = ({ files, fullResponse, onImageClick }: { files: any[], ful
  * — the SAME viewer the composer uses. Skips images (they render inline
  * via FileDisplay) and Gmail-payload entries.
  */
-const MessageDocChips = ({ parsedFiles }: { parsedFiles: any[] }) => {
+const MessageDocChipsInner = ({ parsedFiles }: { parsedFiles: any[] }) => {
     const [idx, setIdx] = React.useState<number | null>(null);
     const chips = React.useMemo(() => {
         if (!Array.isArray(parsedFiles)) return [];
@@ -423,6 +425,10 @@ const MessageDocChips = ({ parsedFiles }: { parsedFiles: any[] }) => {
         </div>
     );
 };
+
+// Memoized so a parent re-render triggered only by streaming token
+// updates doesn't reach into the chips and re-walk every attachment.
+const MessageDocChips = React.memo(MessageDocChipsInner);
 
 const clampPercent = (value: number) => Math.max(0, Math.min(100, value));
 
@@ -1138,178 +1144,161 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         // }
 
 
-        // Memoize ReactMarkdown components to prevent unnecessary re-renders
-        const components = useMemo(() => {
-            const commonProps = {
-                pre: ({ children }: any) => {
-                    const child = React.Children.toArray(children)[0]
-                    const childProps = React.isValidElement(child) ? (child.props as any) : null
-                    if (
-                        typeof childProps?.className === "string" &&
-                        childProps.className.includes("language-agent-task-state")
-                    ) {
-                        return <>{children}</>
+        // Tag-renderers that don't depend on streaming/final mode. Kept
+        // as a single useMemo so both maps reuse the same references and
+        // MemoMarkdownBlock can rely on components identity for memoing.
+        const baseComponents = useMemo(() => ({
+            pre: ({ children }: any) => {
+                const child = React.Children.toArray(children)[0]
+                const childProps = React.isValidElement(child) ? (child.props as any) : null
+                if (
+                    typeof childProps?.className === "string" &&
+                    childProps.className.includes("language-agent-task-state")
+                ) {
+                    return <>{children}</>
+                }
+                return <pre>{children}</pre>
+            },
+            p: ({ children }: any) => <p className="mb-4 text-base leading-7">{children}</p>,
+            ul: ({ children }: any) => <ul className="mb-4 pl-6 text-base leading-7">{children}</ul>,
+            ol: ({ children }: any) => <ol className="mb-4 pl-6 text-base leading-7">{children}</ol>,
+            li: ({ children }: any) => <li className="mb-1.5 text-base leading-7">{children}</li>,
+            h1: ({ children }: any) => <h1 className="mb-4 text-2xl font-semibold leading-8">{children}</h1>,
+            h2: ({ children }: any) => <h2 className="mb-3 text-xl font-semibold leading-7">{children}</h2>,
+            h3: ({ children }: any) => <h3 className="mb-2 text-lg font-semibold leading-7">{children}</h3>,
+            blockquote: ({ children }: any) => <blockquote className="border-l-4 border-muted pl-4 mb-3 italic">{children}</blockquote>,
+            th: ({ children }: any) => <th className="border border-muted px-3 py-2 bg-muted/50 text-left font-medium text-sm whitespace-nowrap">{children}</th>,
+            td: ({ children }: any) => <td className="border border-muted px-3 py-2 text-sm whitespace-nowrap">{children}</td>,
+            strong: ({ children }: any) => <strong className="font-semibold">{children}</strong>,
+            em: ({ children }: any) => <em className="italic">{children}</em>,
+            a: ({ href, children, ...props }: any) => (
+                <a
+                    href={href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sky-600 hover:text-sky-800 underline decoration-sky-400 hover:decoration-sky-600"
+                    title={href}
+                    {...props}
+                >
+                    {truncateUrl(children)}
+                </a>
+            ),
+        }), []);
+
+        // Streaming-only map: stable as long as the message id doesn't
+        // change. Crucially does NOT close over `message.content`, so it
+        // survives every token without invalidating MemoMarkdownBlock.
+        const streamingComponents = useMemo(() => ({
+            ...baseComponents,
+            table: ({ children }: any) => (
+                <div className="group relative mt-3">
+                    <div className="overflow-x-auto w-full min-w-0 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-transparent hover:scrollbar-thumb-gray-600" style={{ WebkitOverflowScrolling: 'touch', maxWidth: '100vw' }}>
+                        <table className="border-collapse border border-muted mb-3 w-full" style={{ minWidth: "520px" }}>{children}</table>
+                    </div>
+                    <div className="block md:hidden mt-1 text-xs text-muted-foreground text-center select-none">Swipe left/right to view the table</div>
+                </div>
+            ),
+            code: ({ node, inline, className, children, ...props }: any) => {
+                const match = /language-([\w-]+)/.exec(className || '');
+                if (!inline && match) {
+                    const lang = (match[1] || '').toLowerCase();
+                    const codeString = String(children).replace(/\n$/, '');
+                    if (lang === 'agent-task-state') {
+                        try {
+                            const state = JSON.parse(codeString);
+                            return <AgenticStepsRenderer state={state} onDocumentPreview={onDocumentPreview} />;
+                        } catch {
+                            return null;
+                        }
                     }
-                    return <pre>{children}</pre>
-                },
-                p: ({ children }: any) => <p className="mb-4 text-base leading-7">{children}</p>,
-                ul: ({ children }: any) => <ul className="mb-4 pl-6 text-base leading-7">{children}</ul>,
-                ol: ({ children }: any) => <ol className="mb-4 pl-6 text-base leading-7">{children}</ol>,
-                li: ({ children }: any) => <li className="mb-1.5 text-base leading-7">{children}</li>,
-                h1: ({ children }: any) => <h1 className="mb-4 text-2xl font-semibold leading-8">{children}</h1>,
-                h2: ({ children }: any) => <h2 className="mb-3 text-xl font-semibold leading-7">{children}</h2>,
-                h3: ({ children }: any) => <h3 className="mb-2 text-lg font-semibold leading-7">{children}</h3>,
-                blockquote: ({ children }: any) => <blockquote className="border-l-4 border-muted pl-4 mb-3 italic">{children}</blockquote>,
-                table: ({ node, children, ...props }: any) => {
-                    // ✅ Performance Optimization: Skip expensive processing during streaming
-                    // Only enable table controls and data extraction when streaming is complete
-                    if (isStreaming) {
-                        // During streaming, render simple table without controls
+                    const willBeArtifact = isExecutableArtifact(lang, codeString)
+                        || (lang === 'html' && /<!doctype|<html[\s>]/i.test(codeString.slice(0, 200)))
+                        || (lang === 'mermaid')
+                        || (lang === 'svg');
+                    if (willBeArtifact) {
                         return (
-                            <div className="group relative mt-3">
-                                <div className="overflow-x-auto w-full min-w-0 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-transparent hover:scrollbar-thumb-gray-600" style={{ WebkitOverflowScrolling: 'touch', maxWidth: '100vw' }}>
-                                    <table className="border-collapse border border-muted mb-3 w-full" style={{ minWidth: "520px" }}>{children}</table>
+                            <div className="my-4 overflow-hidden rounded-lg border border-black/[0.06] dark:border-white/[0.06] bg-zinc-950/70">
+                                <div className="flex items-center justify-between px-3.5 py-1.5 border-b border-white/[0.04]">
+                                    <span className="text-[11px] font-sans tracking-wide text-zinc-500">{lang}</span>
+                                    <span className="inline-flex items-center gap-1.5 text-[11px] text-emerald-400/90">
+                                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                                        Generando artefacto…
+                                    </span>
                                 </div>
-                                <div className="block md:hidden mt-1 text-xs text-muted-foreground text-center select-none">Swipe left/right to view the table</div>
+                                <div className="relative">
+                                    <pre className="text-[12.5px] leading-[1.55] whitespace-pre-wrap p-3.5 font-mono text-zinc-200 max-h-[280px] overflow-auto"><code>{codeString}</code></pre>
+                                    <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-zinc-950/90 to-transparent" />
+                                </div>
                             </div>
                         );
                     }
-
-                    // After streaming is complete, enable full table functionality
-                    let title = '';
-                    const parent = node.parent;
-                    if (parent) {
-                        const tableIndex = parent.children.indexOf(node);
-                        for (let i = tableIndex - 1; i >= 0; i--) {
-                            const sibling = parent.children[i];
-                            if (sibling.tagName === 'h1' || sibling.tagName === 'h2' || sibling.tagName === 'h3') {
-                                title = getNodeText(sibling);
-                                break;
-                            }
-                            if (sibling.type !== 'text' || sibling.value.trim() !== '') {
-                                break;
-                            }
-                        }
-                    }
-
-                    const handleExpand = () => {
-                        const tHead = node.children.find((child: any) => child.tagName === 'thead');
-                        const tBody = node.children.find((child: any) => child.tagName === 'tbody');
-                        // intentionally no-op: children inspection moved to debugger
-
-                        const headers = tHead?.children?.[0]?.children?.map(getNodeText).filter((e: string) => e != "\n") ?? [];
-                        const data = tBody?.children?.map((tr: any) => tr.children?.map(getNodeText).filter((e: string) => e !== "\n") ?? []) ?? [];
-
-                        setTableHeaders(headers);
-                        setTableData(data);
-                        setTableTitle(title);
-                        setIsTableExpanded(true);
-                    };
-
                     return (
-                        <div className="group relative mt-3">
-                            <TableControls content={message.content} messageId={message.id} onExpand={handleExpand} title={title} />
-                            <div className="overflow-x-auto w-full min-w-0 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-transparent hover:scrollbar-thumb-gray-600" style={{ WebkitOverflowScrolling: 'touch', maxWidth: '100vw' }}>
-                                <table className="border-collapse border border-muted mb-3 w-full" style={{ minWidth: "520px" }}>{children}</table>
-                            </div>
-                            <div className="block md:hidden mt-1 text-xs text-muted-foreground text-center select-none">Swipe left/right to view the table</div>
+                        <div className="my-4 overflow-hidden rounded-lg border border-black/[0.06] dark:border-white/[0.06] bg-zinc-950/60">
+                            <div className="px-3.5 py-1.5 border-b border-white/[0.04] text-[11px] font-sans tracking-wide text-zinc-500">{lang}</div>
+                            <pre className="text-[12.5px] leading-[1.55] whitespace-pre-wrap p-3.5 font-mono text-zinc-100 max-h-[280px] overflow-auto"><code>{codeString}</code></pre>
                         </div>
                     );
-                },
-                th: ({ children }: any) => <th className="border border-muted px-3 py-2 bg-muted/50 text-left font-medium text-sm whitespace-nowrap">{children}</th>,
-                td: ({ children }: any) => <td className="border border-muted px-3 py-2 text-sm whitespace-nowrap">{children}</td>,
-                strong: ({ children }: any) => <strong className="font-semibold">{children}</strong>,
-                em: ({ children }: any) => <em className="italic">{children}</em>,
-                a: ({ href, children, ...props }: any) => (
-                    <a
-                        href={href}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-sky-600 hover:text-sky-800 underline decoration-sky-400 hover:decoration-sky-600"
-                        title={href} // Tooltip for full URL
-                        {...props}
-                    >
-                        {truncateUrl(children)}
-                    </a>
-                )
-            };
+                }
+                return (
+                    <code className="text-sm font-mono bg-muted px-[0.4rem] py-[0.2rem] rounded-sm" {...props}>{children}</code>
+                );
+            },
+        // onDocumentPreview is typically stable (callback from parent);
+        // baseComponents is stable. Deps stay narrow on purpose.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        }), [baseComponents, onDocumentPreview]);
 
-            if (isStreaming) {
-                return {
-                    ...commonProps,
-                    code: ({ node, inline, className, children, ...props }: any) => {
-                        const match = /language-([\w-]+)/.exec(className || '');
-                        if (!inline && match) {
-                            const lang = (match[1] || '').toLowerCase();
-                            const codeString = String(children).replace(/\n$/, '');
-                            // Agent task state: rendered as Claude-style step
-                            // cards instead of a raw code block. The chat
-                            // surface persists agent runs as a fenced JSON
-                            // payload so a chat reload can re-hydrate them.
-                            if (lang === 'agent-task-state') {
-                                try {
-                                    const state = JSON.parse(codeString);
-                                    return <AgenticStepsRenderer state={state} onDocumentPreview={onDocumentPreview} />;
-                                } catch {
-                                    return null;
-                                }
-                            }
-                            // Will the block become an artifact once streaming
-                            // finishes? Run the same detector we use post-
-                            // stream so the header + final card stay aligned.
-                            const willBeArtifact = isExecutableArtifact(lang, codeString)
-                                || (lang === 'html' && /<!doctype|<html[\s>]/i.test(codeString.slice(0, 200)))
-                                || (lang === 'mermaid')
-                                || (lang === 'svg');
-                            if (willBeArtifact) {
-                                // Compact streaming card: capped height so a
-                                // long HTML document doesn't take over the
-                                // whole viewport while it's being generated.
-                                // A fade at the bottom hints at the scroll,
-                                // and the "Generando artefacto…" pill sits
-                                // on top-right with a pulsing dot.
-                                return (
-                                    <div className="my-4 overflow-hidden rounded-lg border border-black/[0.06] dark:border-white/[0.06] bg-zinc-950/70">
-                                        <div className="flex items-center justify-between px-3.5 py-1.5 border-b border-white/[0.04]">
-                                            <span className="text-[11px] font-sans tracking-wide text-zinc-500">{lang}</span>
-                                            <span className="inline-flex items-center gap-1.5 text-[11px] text-emerald-400/90">
-                                                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                                                Generando artefacto…
-                                            </span>
-                                        </div>
-                                        <div className="relative">
-                                            <pre className="text-[12.5px] leading-[1.55] whitespace-pre-wrap p-3.5 font-mono text-zinc-200 max-h-[280px] overflow-auto"><code>{codeString}</code></pre>
-                                            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-zinc-950/90 to-transparent" />
-                                        </div>
-                                    </div>
-                                );
-                            }
-                            // Non-artifact code block during streaming:
-                            // same cap + simple header.
-                            return (
-                                <div className="my-4 overflow-hidden rounded-lg border border-black/[0.06] dark:border-white/[0.06] bg-zinc-950/60">
-                                    <div className="px-3.5 py-1.5 border-b border-white/[0.04] text-[11px] font-sans tracking-wide text-zinc-500">{lang}</div>
-                                    <pre className="text-[12.5px] leading-[1.55] whitespace-pre-wrap p-3.5 font-mono text-zinc-100 max-h-[280px] overflow-auto"><code>{codeString}</code></pre>
-                                </div>
-                            );
+        // Final (post-streaming) map: enriches the table with controls
+        // tied to the now-stable message.content. Recomputed only when
+        // streaming ends or the user edits a stored message.
+        const finalComponents = useMemo(() => ({
+            ...baseComponents,
+            table: ({ node, children, ...props }: any) => {
+                let title = '';
+                const parent = node.parent;
+                if (parent) {
+                    const tableIndex = parent.children.indexOf(node);
+                    for (let i = tableIndex - 1; i >= 0; i--) {
+                        const sibling = parent.children[i];
+                        if (sibling.tagName === 'h1' || sibling.tagName === 'h2' || sibling.tagName === 'h3') {
+                            title = getNodeText(sibling);
+                            break;
                         }
-                        return (
-                            <code className="text-sm font-mono bg-muted px-[0.4rem] py-[0.2rem] rounded-sm" {...props}>{children}</code>
-                        );
-                    },
-                };
-            }
+                        if (sibling.type !== 'text' || sibling.value.trim() !== '') {
+                            break;
+                        }
+                    }
+                }
 
-            return {
-                ...commonProps,
-                code: CodeBlock,
-            };
-          // ESLint flags these as "outer scope" deps because MessageContent
-          // is defined inside MessageComponent; in practice both isStreaming
-          // (prop) and CodeBlock (memoized child component) DO trigger a
-          // re-render and need to invalidate the memo. Keep deps explicit.
-          // eslint-disable-next-line react-hooks/exhaustive-deps
-        }, [isStreaming, CodeBlock]);
+                const handleExpand = () => {
+                    const tHead = node.children.find((child: any) => child.tagName === 'thead');
+                    const tBody = node.children.find((child: any) => child.tagName === 'tbody');
+                    const headers = tHead?.children?.[0]?.children?.map(getNodeText).filter((e: string) => e != "\n") ?? [];
+                    const data = tBody?.children?.map((tr: any) => tr.children?.map(getNodeText).filter((e: string) => e !== "\n") ?? []) ?? [];
+                    setTableHeaders(headers);
+                    setTableData(data);
+                    setTableTitle(title);
+                    setIsTableExpanded(true);
+                };
+
+                return (
+                    <div className="group relative mt-3">
+                        <TableControls content={message.content} messageId={message.id} onExpand={handleExpand} title={title} />
+                        <div className="overflow-x-auto w-full min-w-0 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-transparent hover:scrollbar-thumb-gray-600" style={{ WebkitOverflowScrolling: 'touch', maxWidth: '100vw' }}>
+                            <table className="border-collapse border border-muted mb-3 w-full" style={{ minWidth: "520px" }}>{children}</table>
+                        </div>
+                        <div className="block md:hidden mt-1 text-xs text-muted-foreground text-center select-none">Swipe left/right to view the table</div>
+                    </div>
+                );
+            },
+            code: CodeBlock,
+        // CodeBlock is recreated per MessageComponent render but content
+        // and id only stabilize after streaming, where we actually use
+        // this map; keep deps explicit.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        }), [baseComponents, CodeBlock, message.id, message.content]);
+
+        const components = isStreaming ? streamingComponents : finalComponents;
 
         if (message.role === 'ASSISTANT' && (content === '[GENERATING_IMAGE]' || content === '[PROCESSING_GMAIL]' || content === '[PROCESSING_CALENDAR_ACTION]' || content === '[PROCESSING_DRIVE_ACTION]' || content === '[GENERATING_PPT]' || content === '[GENERATING_VECTOR_PPT]' || content === '[THESIS_GENERATING]' || content.startsWith('[THESIS_GENERATING]'))) {
             return null;
@@ -1341,13 +1330,54 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                 data-sgpt-rich-copy-root=""
                 onCopyCapture={handleRenderedCopy}
             >
-                <ReactMarkdown
-                    remarkPlugins={markdownRemarkPlugins}
-                    rehypePlugins={markdownRehypePlugins}
-                    components={components}
-                >
-                    {content}
-                </ReactMarkdown>
+                {(() => {
+                    // While streaming, split the assistant content into a
+                    // stable "head" (closed blocks) and a "live tail" so
+                    // closed paragraphs/code/lists don't get re-parsed and
+                    // re-rendered on every incoming token. The head is
+                    // wrapped in a React.memo'd block that compares the
+                    // content string and the components reference; both
+                    // are stable across token deltas thanks to the
+                    // streamingComponents useMemo above.
+                    const isStreamingAssistant = isStreaming && message.role === 'ASSISTANT';
+                    if (!isStreamingAssistant) {
+                        return (
+                            <ReactMarkdown
+                                remarkPlugins={markdownRemarkPlugins}
+                                rehypePlugins={markdownRehypePlugins}
+                                components={components}
+                            >
+                                {content}
+                            </ReactMarkdown>
+                        );
+                    }
+                    const { head, tail } = splitStableHead(content);
+                    if (!head) {
+                        return (
+                            <ReactMarkdown
+                                remarkPlugins={markdownRemarkPlugins}
+                                rehypePlugins={markdownRehypePlugins}
+                                components={components}
+                            >
+                                {content}
+                            </ReactMarkdown>
+                        );
+                    }
+                    return (
+                        <>
+                            <MemoMarkdownBlock content={head} components={components} />
+                            {tail ? (
+                                <ReactMarkdown
+                                    remarkPlugins={markdownRemarkPlugins}
+                                    rehypePlugins={markdownRehypePlugins}
+                                    components={components}
+                                >
+                                    {tail}
+                                </ReactMarkdown>
+                            ) : null}
+                        </>
+                    );
+                })()}
                 {isStreaming && message.role === 'ASSISTANT' ? (
                     <span
                         aria-hidden="true"
