@@ -213,16 +213,6 @@ const attachmentHasPreviewSource = (attachment: AttachmentLike | null | undefine
 const previewAttachmentKey = (attachment: AttachmentLike | null | undefined): string =>
   String(attachment?.id || attachment?.url || attachment?.name || "")
 
-const getComposerFileFingerprint = (file: any): string => {
-  const source = typeof File !== "undefined" && file?.file instanceof File ? file.file : file
-  return [
-    file?.name || file?.originalName || file?.filename || source?.name || "",
-    file?.size ?? source?.size ?? "",
-    file?.type || file?.mimeType || source?.type || "",
-    file?.sourceChannel || "",
-  ].join("::")
-}
-
 const isComposerFileUploadPending = (file: any): boolean =>
   Boolean(file && file.status === "uploading" && !resolveUploadFileId(file))
 
@@ -3229,26 +3219,6 @@ function ChatInterfaceContent() {
     pasteCapturePendingRef.current = pasteCapture.captureResult;
   }, [pasteCapture.captureResult]);
 
-  const waitForComposerUploads = React.useCallback(async (initialFiles: any[], timeoutMs = 30000) => {
-    const startedAt = Date.now();
-    const fingerprints = new Set(initialFiles.map(getComposerFileFingerprint).filter(Boolean));
-
-    const pickCurrentFiles = () => {
-      const current = uploadedFilesRef.current.length > 0 ? uploadedFilesRef.current : initialFiles;
-      if (fingerprints.size === 0) return current;
-      const matching = current.filter((file: any) => fingerprints.has(getComposerFileFingerprint(file)));
-      return matching.length > 0 ? matching : current;
-    };
-
-    while (Date.now() - startedAt < timeoutMs) {
-      const current = pickCurrentFiles();
-      if (!current.some(isComposerFileUploadPending)) return [...current];
-      await new Promise(resolve => setTimeout(resolve, 150));
-    }
-
-    return [...pickCurrentFiles()];
-  }, []);
-
   React.useEffect(() => {
     const onImageRegionEdit = (event: Event) => {
       const detail = (event as CustomEvent).detail || {};
@@ -3518,8 +3488,11 @@ function ChatInterfaceContent() {
     setDocumentPreviewUrl(null);
     setActiveSearchActivityId(null);
     setSplitViewContent(null);
+    setComposerPreviewIndex(null);
     setSelectedWordText(null);
+    uploadedFilesRef.current = [];
     setUploadedFiles([]);
+    setUploadProgress({});
     setInput('');
 
     // Clear Computer Use state
@@ -5607,12 +5580,7 @@ But first, you need to connect your Spotify account securely using the button be
     }
 
     if (composerFiles.some(isComposerFileUploadPending)) {
-      toast.info("Terminando de adjuntar el documento...", { duration: 1800 });
-      composerFiles = await waitForComposerUploads(composerFiles);
-    }
-
-    if (composerFiles.some(isComposerFileUploadPending)) {
-      toast.error("El documento todavia se esta subiendo. Intenta enviar de nuevo en unos segundos.");
+      toast.info("Espera a que el documento llegue al 100% antes de enviarlo.", { duration: 2200 });
       return;
     }
 
