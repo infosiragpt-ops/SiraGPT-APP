@@ -26,8 +26,8 @@
 {"id":"ambig-short-06","prompt":"informe","expected_action":"ask","tags":["ambig","short","noun-bare"]}
 {"id":"ambig-short-07","prompt":"excel","expected_action":"ask","tags":["ambig","short","noun-bare"]}
 {"id":"ambig-short-08","prompt":"dame uno","expected_action":"ask","tags":["ambig","short"]}
-{"id":"ambig-format-conflict-01","prompt":"prepara el material en Word o Excel, lo que prefieras","expected_action":"ask","expected_options":["Word","Excel"],"tags":["ambig","format-conflict"]}
-{"id":"ambig-format-conflict-02","prompt":"genera algo en PDF o PPTX","expected_action":"ask","expected_options":["PDF","PowerPoint"],"tags":["ambig","format-conflict"]}
+{"id":"ambig-format-conflict-01","prompt":"prepara el material en Word o Excel, lo que prefieras","expected_action":"execute","tags":["format-conflict","user-delegates"]}
+{"id":"ambig-format-conflict-02","prompt":"genera algo en PDF o PPTX","expected_action":"execute","tags":["format-conflict","user-delegates"]}
 {"id":"ambig-signal-conflict-01","prompt":"hazme un documento con gráficos de los datos","expected_action":"execute","tags":["clear","mixed"]}
 {"id":"ambig-signal-conflict-02","prompt":"algo visual o un documento sobre el proyecto","expected_action":"ask","expected_options":["documento","visualización"],"tags":["ambig","signal-conflict"]}
 {"id":"coref-01","prompt":"cambia la segunda parte","ctx_history":[{"role":"user","text":"escribe un ensayo en 3 partes sobre IA"},{"role":"assistant","text":"Parte 1: Definición. Parte 2: Historia. Parte 3: Futuro."}],"expected_action":"execute","coref":{"anaphor":"la segunda parte","resolves_to":"Parte 2: Historia"},"tags":["coref","multi-turn"]}
@@ -97,9 +97,9 @@
 {"id":"ambig-short-16","prompt":"corre el código","expected_action":"ask","tags":["ambig","short","needs-source"]}
 {"id":"ambig-short-17","prompt":"analiza","expected_action":"ask","tags":["ambig","short"]}
 {"id":"ambig-short-18","prompt":"genera contenido","expected_action":"ask","tags":["ambig","short"]}
-{"id":"ambig-format-conflict-03","prompt":"el reporte trimestral, en Word o PowerPoint, decide tú","expected_action":"ask","expected_options":["Word","PowerPoint"],"tags":["ambig","format-conflict"]}
-{"id":"ambig-format-conflict-04","prompt":"presenta los datos en Excel o como dashboard HTML","expected_action":"ask","expected_options":["Excel","HTML"],"tags":["ambig","format-conflict"]}
-{"id":"ambig-signal-conflict-03","prompt":"hazme algo visual o un código sobre los datos del CSV","expected_action":"ask","expected_options":["código","visualización"],"tags":["ambig","signal-conflict"]}
+{"id":"ambig-format-conflict-03","prompt":"el reporte trimestral, en Word o PowerPoint, decide tú","expected_action":"execute","tags":["format-conflict","user-delegates"]}
+{"id":"ambig-format-conflict-04","prompt":"presenta los datos en Excel o como dashboard HTML","expected_action":"execute","tags":["format-conflict","user-delegates"]}
+{"id":"ambig-signal-conflict-03","prompt":"hazme algo visual o un código sobre los datos del CSV","expected_action":"execute","tags":["signal-conflict","user-delegates"]}
 {"id":"ambig-signal-conflict-04","prompt":"prepara material que sirva para imprimir o para web","expected_action":"ask","tags":["ambig","signal-conflict"]}
 {"id":"coref-09","prompt":"tradúcelo al portugués","ctx_history":[{"role":"user","text":"escribe un saludo formal"},{"role":"assistant","text":"Estimado/a Sr./Sra., reciba un cordial saludo..."}],"expected_action":"execute","coref":{"anaphor":"lo","resolves_to":"el saludo formal"},"tags":["coref","translate"]}
 {"id":"coref-10","prompt":"la tercera opción me gustó","ctx_history":[{"role":"user","text":"dame 3 nombres para mi cafetería"},{"role":"assistant","text":"1. Aurora 2. Caleta 3. Brújula"}],"expected_action":"execute","coref":{"anaphor":"la tercera opción","resolves_to":"Brújula"},"tags":["coref","ordinal"]}

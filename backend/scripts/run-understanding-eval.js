@@ -56,7 +56,8 @@ Options:
 async function loadComponents() {
   const router = require('../src/services/agents/semantic-intent-router');
   const triage = require('../src/services/agents/intent-triage');
-  return { router, triage };
+  const coref = require('../src/services/agents/coref-resolver');
+  return { router, triage, coref };
 }
 
 function pickIntentSecondary(analysis) {
@@ -102,11 +103,33 @@ async function runOnce({ corpus, components }) {
     };
   };
 
+  // PR-8: wire coref-resolver into the eval so coref_resolution_rate
+  // becomes a real number instead of N/A. Sin judge LLM (mantiene la
+  // eval determinista y reproducible sin API keys): el resolver cae al
+  // cosine fallback que ancla al último turno assistant más probable.
+  const runCorefResolver = async (row) => {
+    if (!row || !row.coref || !row.coref.anaphor) return null;
+    try {
+      const result = await components.coref.resolveCoreferences({
+        prompt: row.prompt || '',
+        recentTurns: Array.isArray(row.ctx_history)
+          ? row.ctx_history.map((h) => ({ role: h.role, text: h.text }))
+          : [],
+        attachments: [],
+        judge: null, // deterministic path only
+      });
+      const ref = (result.references || []).find((r) => r && r.resolvesTo);
+      return ref ? { resolvesTo: ref.resolvesTo, confidence: ref.confidence } : null;
+    } catch (_) {
+      return null;
+    }
+  };
+
   return runUnderstandingEval({
     corpusPath: corpus,
     runRouter,
     runTriage,
-    runCorefResolver: null,
+    runCorefResolver,
   });
 }
 
