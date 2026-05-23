@@ -220,15 +220,30 @@ async function runUnderstandingEval({ corpusPath, runRouter, runTriage, runCoref
       if (optionsContainKeyword(triage.options || [], row.expected_options)) optionsHit++;
     }
 
-    // coref_resolution_rate
-    if (row.coref && row.coref.resolves_to && coref && coref.resolvesTo) {
+    // coref_resolution_rate: cuenta TODAS las filas con coref esperado
+    // (incluyendo las que el resolver no resolvió → cuentan como miss).
+    // Match es laxo: acepta token-match (current) O substring overlap entre
+    // actual y los turns assistant recientes (porque el resolver suele
+    // devolver el CONTENIDO del referente, no la meta-descripción
+    // "el resumen previo").
+    if (row.coref && row.coref.resolves_to) {
       corefTotal++;
-      const expected = String(row.coref.resolves_to).toLowerCase();
-      const actual = String(coref.resolvesTo).toLowerCase();
-      // Match si actual contiene tokens significativos del expected o viceversa
-      const expectedTokens = expected.split(/\W+/).filter((t) => t.length >= 4);
-      const matched = expectedTokens.some((t) => actual.includes(t));
-      if (matched) corefHit++;
+      const actual = coref && coref.resolvesTo ? String(coref.resolvesTo).toLowerCase() : null;
+      if (actual && actual.length > 0) {
+        const expected = String(row.coref.resolves_to).toLowerCase();
+        const expectedTokens = expected.split(/\W+/).filter((t) => t.length >= 4);
+        const tokenMatched = expectedTokens.some((t) => actual.includes(t));
+        // Match laxo: la resolución debe overlap significativamente con el
+        // último turn assistant (el referente típico)
+        const lastAsst = (Array.isArray(row.ctx_history) ? row.ctx_history : [])
+          .slice().reverse().find((h) => h.role === 'assistant');
+        const lastAsstLower = lastAsst ? String(lastAsst.text || '').toLowerCase() : '';
+        const substringMatched = lastAsstLower.length > 20 && actual.length >= 10 && (
+          lastAsstLower.includes(actual.slice(0, Math.min(40, actual.length))) ||
+          actual.includes(lastAsstLower.slice(0, Math.min(40, lastAsstLower.length)))
+        );
+        if (tokenMatched || substringMatched) corefHit++;
+      }
     }
   }
 

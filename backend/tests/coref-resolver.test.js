@@ -260,6 +260,170 @@ test('resolve: handles attachment-only context', async () => {
   assert.notEqual(r.source, 'no_context');
 });
 
+// ─── PR-9: heurísticas determinísticas ───────────────────────────────
+
+test('ordinal_list: "el primero" en lista numerada → ítem 1', () => {
+  const r = C._internal.tryOrdinalListMatch(
+    [{ role: 'assistant', text: '1. Marketplace de freelancers.\n2. App de meditación.\n3. SaaS de inventario.' }],
+    'el primero',
+  );
+  assert.ok(r);
+  assert.equal(r.source, 'ordinal_list');
+  assert.match(r.resolvesTo, /Marketplace/);
+});
+
+test('ordinal_list: "la segunda parte" en lista numerada → ítem 2', () => {
+  const r = C._internal.tryOrdinalListMatch(
+    [{ role: 'assistant', text: '1. Definición\n2. Historia\n3. Futuro' }],
+    'la segunda parte',
+  );
+  assert.ok(r);
+  assert.match(r.resolvesTo, /Historia/);
+});
+
+test('ordinal_list: "el último" → último ítem', () => {
+  const r = C._internal.tryOrdinalListMatch(
+    [{ role: 'assistant', text: '1. A\n2. B\n3. C' }],
+    'el último',
+  );
+  assert.ok(r);
+  assert.match(r.resolvesTo, /C/);
+});
+
+test('ordinal_list: bulleted list también funciona', () => {
+  const r = C._internal.tryOrdinalListMatch(
+    [{ role: 'assistant', text: '- Idea A\n- Idea B\n- Idea C' }],
+    'el segundo',
+  );
+  assert.ok(r);
+  assert.match(r.resolvesTo, /Idea B/);
+});
+
+test('ordinal_list: "first" English también funciona', () => {
+  const r = C._internal.tryOrdinalListMatch(
+    [{ role: 'assistant', text: '1. Option A\n2. Option B' }],
+    'the first',
+  );
+  assert.ok(r);
+  assert.match(r.resolvesTo, /Option A/);
+});
+
+test('ordinal_list: ordinal sin lista → null', () => {
+  const r = C._internal.tryOrdinalListMatch(
+    [{ role: 'assistant', text: 'plain prose without lists' }],
+    'el primero',
+  );
+  assert.equal(r, null);
+});
+
+test('ordinal_list: anáfora sin ordinal → null', () => {
+  assert.equal(C._internal.tryOrdinalListMatch([{ role: 'assistant', text: '1. X\n2. Y' }], 'eso'), null);
+});
+
+test('ordinal_list: out of bounds → null', () => {
+  const r = C._internal.tryOrdinalListMatch(
+    [{ role: 'assistant', text: '1. Only one' }],
+    'el quinto',
+  );
+  assert.equal(r, null);
+});
+
+test('file_ref: 1 attachment + anáfora "el documento" → match', () => {
+  const r = C._internal.tryFileRefMatch(
+    [{ name: 'macroeconomia.pdf' }],
+    'el documento adjunto',
+  );
+  assert.ok(r);
+  assert.match(r.resolvesTo, /macroeconomia\.pdf/);
+});
+
+test('file_ref: 1 attachment + cualquier anáfora → match (single attachment heuristic)', () => {
+  const r = C._internal.tryFileRefMatch(
+    [{ name: 'data.csv' }],
+    'eso',
+  );
+  assert.ok(r);
+  assert.match(r.resolvesTo, /data\.csv/);
+});
+
+test('file_ref: múltiples attachments + extension hint "pdf" → match por ext', () => {
+  const r = C._internal.tryFileRefMatch(
+    [{ name: 'foo.docx' }, { name: 'bar.pdf' }, { name: 'baz.xlsx' }],
+    'el pdf adjunto',
+  );
+  assert.ok(r);
+  assert.match(r.resolvesTo, /bar\.pdf/);
+});
+
+test('file_ref: sin attachments → null', () => {
+  assert.equal(C._internal.tryFileRefMatch([], 'el documento'), null);
+});
+
+test('file_ref: múltiples attachments sin hint específico → null', () => {
+  const r = C._internal.tryFileRefMatch(
+    [{ name: 'a.txt' }, { name: 'b.txt' }],
+    'eso',
+  );
+  assert.equal(r, null);
+});
+
+test('code_block: "el código" + bloque ``` en prev → match', () => {
+  const r = C._internal.tryCodeBlockMatch(
+    [{ role: 'assistant', text: 'Aquí está:\n```js\nfunction add(a,b){ return a+b; }\n```\nfin.' }],
+    'el código',
+  );
+  assert.ok(r);
+  assert.match(r.resolvesTo, /function add/);
+});
+
+test('code_block: "el código de arriba" + bloque → match', () => {
+  const r = C._internal.tryCodeBlockMatch(
+    [{ role: 'assistant', text: '```python\ndef hello(): print("hi")\n```' }],
+    'el código de arriba',
+  );
+  assert.ok(r);
+  assert.match(r.resolvesTo, /def hello/);
+});
+
+test('code_block: sin código en prev → null', () => {
+  const r = C._internal.tryCodeBlockMatch(
+    [{ role: 'assistant', text: 'plain text response' }],
+    'el código',
+  );
+  assert.equal(r, null);
+});
+
+test('code_block: anáfora sin "código/code" → null (no aplica heurística)', () => {
+  assert.equal(C._internal.tryCodeBlockMatch(
+    [{ role: 'assistant', text: '```\nfoo\n```' }],
+    'eso',
+  ), null);
+});
+
+test('buildCosineFallback: integra todas las heurísticas en orden de prioridad', () => {
+  // Ordinal gana sobre fallback genérico
+  const r1 = C._internal.buildCosineFallback(
+    [{ role: 'assistant', text: '1. Foo\n2. Bar' }],
+    'el primero',
+    [],
+  );
+  assert.equal(r1.source, 'ordinal_list');
+  // Sin ordinal pero con attachment → file_ref
+  const r2 = C._internal.buildCosineFallback(
+    [{ role: 'assistant', text: 'OK' }],
+    'eso',
+    [{ name: 'doc.pdf' }],
+  );
+  assert.equal(r2.source, 'single_attachment');
+  // Sin nada específico → fallback genérico
+  const r3 = C._internal.buildCosineFallback(
+    [{ role: 'assistant', text: 'genérico' }],
+    'eso',
+    [],
+  );
+  assert.equal(r3.source, 'cosine_fallback');
+});
+
 // ─── cache LRU ────────────────────────────────────────────────────────
 
 test('cache: respects max entries', () => {
