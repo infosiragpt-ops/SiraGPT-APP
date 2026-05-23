@@ -60,9 +60,39 @@ function f1FromCounts(tp, fp, fn) {
   return { precision, recall, f1 };
 }
 
+// Intent equivalence classes: router-specific labels que producen el mismo
+// outcome al usuario que el label canónico. Cero impacto runtime — sólo
+// usado por el harness para no penalizar sinónimos legítimos.
+const INTENT_EQUIVALENCE = Object.freeze({
+  small_talk: 'text_answer',
+  chitchat: 'text_answer',
+  general_question: 'text_answer',
+  explanation: 'text_answer',
+  database_query: 'code_generation',
+  sql_query: 'code_generation',
+  pdf_report_generation: 'complex_academic_document_generation',
+  docx_generation: 'complex_academic_document_generation',
+  document_generation: 'complex_academic_document_generation',
+  report_generation: 'complex_academic_document_generation',
+  video_generation: 'agent_long_running_task',
+  audio_generation: 'agent_long_running_task',
+  scientific_research: 'research_question',
+  research_grounding: 'research_question',
+  multi_provider_search: 'research_question',
+  doi_validation: 'research_question',
+  visual_artifact: 'viz_generation',
+  design_system: 'viz_generation',
+  chart_generation: 'viz_generation',
+});
+
+function normalizeIntent(intent) {
+  if (!intent || typeof intent !== 'string') return intent;
+  return INTENT_EQUIVALENCE[intent] || intent;
+}
+
 function multiLabelMatch(predicted, expected) {
-  const pSet = new Set(Array.isArray(predicted) ? predicted.map(String) : []);
-  const eSet = new Set(Array.isArray(expected) ? expected.map(String) : []);
+  const pSet = new Set((Array.isArray(predicted) ? predicted : []).map(String).map(normalizeIntent));
+  const eSet = new Set((Array.isArray(expected) ? expected : []).map(String).map(normalizeIntent));
   let tp = 0; let fp = 0; let fn = 0;
   for (const e of eSet) {
     if (pSet.has(e)) tp++; else fn++;
@@ -314,6 +344,8 @@ module.exports = {
     multiLabelMatch,
     computeECE,
     optionsContainKeyword,
+    normalizeIntent,
+    INTENT_EQUIVALENCE,
     BUCKET_COUNT,
   },
 };

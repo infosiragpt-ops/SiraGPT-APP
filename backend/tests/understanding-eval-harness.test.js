@@ -63,6 +63,30 @@ test('multiLabelMatch: empty inputs', () => {
   assert.equal(m.fn, 0);
 });
 
+test('normalizeIntent: known sinónimos colapsan', () => {
+  assert.equal(_internal.normalizeIntent('small_talk'), 'text_answer');
+  assert.equal(_internal.normalizeIntent('chitchat'), 'text_answer');
+  assert.equal(_internal.normalizeIntent('database_query'), 'code_generation');
+  assert.equal(_internal.normalizeIntent('pdf_report_generation'), 'complex_academic_document_generation');
+  assert.equal(_internal.normalizeIntent('video_generation'), 'agent_long_running_task');
+});
+
+test('normalizeIntent: intent desconocido pasa intacto', () => {
+  assert.equal(_internal.normalizeIntent('completely_new_intent'), 'completely_new_intent');
+});
+
+test('normalizeIntent: null/undefined passthrough', () => {
+  assert.equal(_internal.normalizeIntent(null), null);
+  assert.equal(_internal.normalizeIntent(undefined), undefined);
+});
+
+test('multiLabelMatch: sinónimo match cuenta como tp via equivalencia', () => {
+  const m = _internal.multiLabelMatch(['small_talk'], ['text_answer']);
+  assert.equal(m.tp, 1);
+  assert.equal(m.fp, 0);
+  assert.equal(m.fn, 0);
+});
+
 test('computeECE: empty input → 0', () => {
   assert.equal(_internal.computeECE([]), 0);
 });
