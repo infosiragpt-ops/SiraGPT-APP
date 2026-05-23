@@ -1222,8 +1222,20 @@ function normalizeContextualValueContext(valueContext) {
       evidence: String(constraint?.evidence || ""),
       priority: constraint?.priority === "hard" ? "hard" : "soft",
     })).filter(constraint => constraint.id && constraint.label),
+    task_context: String(ctx.task_context || "general"),
+    subjectivity: {
+      score: clamp01(Number(ctx.subjectivity?.score || 0)),
+      label: String(ctx.subjectivity?.label || "objective"),
+      signals: Array.isArray(ctx.subjectivity?.signals)
+        ? ctx.subjectivity.signals.slice(0, 6).map(signal => ({
+          id: String(signal?.id || ""),
+          label: String(signal?.label || ""),
+        })).filter(signal => signal.id && signal.label)
+        : [],
+    },
     collaboration_mode: String(ctx.collaboration_mode || "direct_response"),
     response_posture: String(ctx.response_posture || "neutral_acknowledgment"),
+    response_type: String(ctx.response_type || ctx.response_posture || "neutral_acknowledgment"),
     confidence: clamp01(Number(ctx.confidence || 0)),
   };
 }
@@ -1235,8 +1247,11 @@ function compactContextualValueContext(valueContext) {
     primary_domains: normalized.primary_domains,
     value_ids: normalized.values.map(value => value.id).slice(0, 5),
     constraints: normalized.constraints.map(constraint => constraint.id).slice(0, 5),
+    task_context: normalized.task_context,
+    subjectivity: normalized.subjectivity.label,
     collaboration_mode: normalized.collaboration_mode,
     response_posture: normalized.response_posture,
+    response_type: normalized.response_type,
     confidence: normalized.confidence,
   };
 }
@@ -1277,8 +1292,11 @@ function compactContextualUnderstanding(contextualUnderstanding) {
     repair_type: normalized.repair?.repair_type || null,
     signal_count: normalized.misunderstanding_signals.length,
     primary_value_domains: normalized.value_context.primary_domains,
+    task_context: normalized.value_context.task_context,
+    subjectivity: normalized.value_context.subjectivity.label,
     collaboration_mode: normalized.value_context.collaboration_mode,
     response_posture: normalized.value_context.response_posture,
+    response_type: normalized.value_context.response_type,
     constraint_count: normalized.value_context.constraints.length,
   };
 }

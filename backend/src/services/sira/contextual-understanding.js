@@ -17,8 +17,15 @@ const EMPTY_VALUE_CONTEXT = Object.freeze({
   values: [],
   primary_domains: [],
   constraints: [],
+  task_context: 'general',
+  subjectivity: {
+    score: 0,
+    label: 'objective',
+    signals: [],
+  },
   collaboration_mode: 'direct_response',
   response_posture: 'neutral_acknowledgment',
+  response_type: 'neutral_acknowledgment',
   confidence: 0,
 });
 
@@ -127,6 +134,122 @@ function uniqueById(items) {
   return out;
 }
 
+function subjectivitySignal(id, label, weight) {
+  return { id, label, weight };
+}
+
+function inferSubjectivity(text, attachments = []) {
+  const signals = [];
+  const current = String(text || '');
+  const hasAttachment = Array.isArray(attachments) && attachments.length > 0;
+
+  if (/\b(deber[ií]a|conviene|prioriza|elige|decide|recomienda|aconseja|mejor(?:a|as|es)?|suficientemente\s+inteligente|intelligent|values?|valor(?:es)?|criterio|juicio)\b/i.test(current)) {
+    signals.push(subjectivitySignal('normative_choice', 'Request requires prioritization or judgment', 0.32));
+  }
+  if (/\b(analiza|eval[uú]a|audita|review|under review|paper|investigaci[oó]n|framework|metodolog[ií]a)\b/i.test(current)) {
+    signals.push(subjectivitySignal('interpretive_analysis', 'Request asks for interpretive analysis', 0.24));
+  }
+  if (/\b(sin\s+(?:cambiar|modificar|tocar)|no\s+invent(?:es|ar)|segur(?:o|idad)|privacidad|riesgo|bloquea|valida|estatus\s+verde)\b/i.test(current)) {
+    signals.push(subjectivitySignal('constraint_tradeoff', 'Request includes tradeoffs or hard constraints', 0.22));
+  }
+  if (hasAttachment) {
+    signals.push(subjectivitySignal('attached_context', 'Attachment can change task-specific priorities', 0.12));
+  }
+  if (/\b(c[uó]mo|por\s+qu[eé]|qué\s+opinas|opini[oó]n|siento|creo)\b/i.test(current)) {
+    signals.push(subjectivitySignal('preference_or_explanation', 'Request includes preference or explanation framing', 0.14));
+  }
+
+  const score = Math.max(0, Math.min(1, signals.reduce((sum, item) => sum + item.weight, 0)));
+  const label = score >= 0.5 ? 'highly_subjective'
+    : score >= 0.28 ? 'mixed'
+      : 'objective';
+  return {
+    score,
+    label,
+    signals: signals.map(({ id, label: signalLabel }) => ({ id, label: signalLabel })).slice(0, 6),
+  };
+}
+
+function inferTaskContext(text, attachments = []) {
+  const current = String(text || '');
+  const attachmentNames = Array.isArray(attachments)
+    ? attachments.map((a) => `${a?.filename || a?.name || ''} ${a?.mime_type || a?.mimeType || ''}`).join(' ')
+    : '';
+  const combined = `${current}\n${attachmentNames}`;
+
+  if (/\b(c[oó]digo|software|repo|github|main|ci|deploy|tests?|type-check|bug|backend|frontend|interfaz|ui)\b/i.test(combined)) {
+    return 'software_engineering';
+  }
+  if (/\b(pdf|docx|word|excel|ppt|documento|archivo|paper|art[ií]culo|investigaci[oó]n)\b/i.test(combined)) {
+    return 'document_analysis';
+  }
+  if (/\b(fuentes?|citas?|doi|apa\s*7|paper|estudios?|cient[ií]fic[ao]s?)\b/i.test(combined)) {
+    return 'research';
+  }
+  if (/\b(relaci[oó]n|pareja|familia|amigo|emocional|bienestar|consejo)\b/i.test(combined)) {
+    return 'personal_advice';
+  }
+  if (/\b(hack|bypass|evadir|robar|credenciales|malware|phishing|destructiv[ao])\b/i.test(combined)) {
+    return 'safety_sensitive';
+  }
+  if (/\b(historia|guion|copy|marketing|creativ[ao]|dise[ñn]a)\b/i.test(combined)) {
+    return 'creative_content';
+  }
+  return 'general';
+}
+
+function enrichValueTaxonomy(values, taskContext, { subjectivity, attachments } = {}) {
+  const shouldEnrich = (subjectivity?.score || 0) >= 0.24 || (Array.isArray(attachments) && attachments.length > 0);
+  if (!shouldEnrich) return;
+
+  const taskValue = {
+    software_engineering: {
+      id: 'implementation_integrity',
+      domain: 'practical',
+      label: 'Implementation integrity',
+      evidence: 'software task needs behaviorally correct code and validation',
+      confidence: 0.83,
+    },
+    document_analysis: {
+      id: 'document_fidelity',
+      domain: 'epistemic',
+      label: 'Document fidelity',
+      evidence: 'document task must preserve source meaning and attached context',
+      confidence: 0.82,
+    },
+    research: {
+      id: 'epistemic_traceability',
+      domain: 'epistemic',
+      label: 'Epistemic traceability',
+      evidence: 'research task depends on verifiable claims and source tracking',
+      confidence: 0.84,
+    },
+    personal_advice: {
+      id: 'healthy_boundaries',
+      domain: 'protective',
+      label: 'Healthy boundaries',
+      evidence: 'personal advice should reframe toward agency and wellbeing',
+      confidence: 0.82,
+    },
+    safety_sensitive: {
+      id: 'harm_prevention',
+      domain: 'protective',
+      label: 'Harm prevention',
+      evidence: 'request may involve unsafe or abusive actions',
+      confidence: 0.9,
+    },
+    creative_content: {
+      id: 'creative_fit',
+      domain: 'practical',
+      label: 'Creative fit',
+      evidence: 'creative task should match the user goal and audience',
+      confidence: 0.76,
+    },
+  }[taskContext];
+
+  if (taskValue) addValueSignal(values, taskValue);
+}
+
 function deriveContextualConstraints(text) {
   const constraints = [];
   if (/\b(sin\s+(?:cambiar|modificar|tocar)\s+(?:nada\s+de\s+)?(?:la\s+)?(?:interfaz|ui)|no\s+(?:cambies|toques)\s+(?:la\s+)?(?:interfaz|ui)|ui\s*lock)\b/i.test(text)) {
@@ -185,6 +308,20 @@ function inferResponsePosture(values, constraints, repairDetection) {
   return 'neutral_acknowledgment';
 }
 
+function inferResponseType({ values, constraints, repairDetection, taskContext, subjectivity }) {
+  if (values.some((value) => value.id === 'harm_prevention')) return 'strong_resistance';
+  if (constraints.length > 0 || repairDetection?.isRepair) return 'reframing';
+  if (taskContext === 'personal_advice') return 'reframing';
+  if (subjectivity?.label === 'highly_subjective' && values.some((value) => value.domain === 'epistemic')) {
+    return 'mild_resistance';
+  }
+  if (values.some((value) => ['execution_reliability', 'implementation_integrity'].includes(value.id))) {
+    return 'strong_support';
+  }
+  if (values.length > 0) return 'mild_support';
+  return 'neutral_acknowledgment';
+}
+
 function inferContextualValueContext({
   originalText,
   recentTurns = [],
@@ -197,6 +334,8 @@ function inferContextualValueContext({
   const recentText = recentTurns.map((turn) => turn.text).join('\n');
   const combined = `${currentText}\n${recentText}`;
   const values = [];
+  const taskContext = inferTaskContext(currentText, attachments);
+  const subjectivity = inferSubjectivity(currentText, attachments);
 
   const corefRefs = Array.isArray(coreference?.references) ? coreference.references : [];
   if (
@@ -282,11 +421,20 @@ function inferContextualValueContext({
     });
   }
 
+  enrichValueTaxonomy(values, taskContext, { subjectivity, attachments });
+
   const uniqueValues = uniqueById(values).sort((a, b) => b.confidence - a.confidence).slice(0, 8);
   const primaryDomains = Array.from(new Set(uniqueValues.map((value) => value.domain))).slice(0, 5);
   const constraints = deriveContextualConstraints(currentText);
   const collaborationMode = inferCollaborationMode(currentText, uniqueValues, constraints);
   const responsePosture = inferResponsePosture(uniqueValues, constraints, repairDetection);
+  const responseType = inferResponseType({
+    values: uniqueValues,
+    constraints,
+    repairDetection,
+    taskContext,
+    subjectivity,
+  });
   const confidence = uniqueValues.length > 0 ? Math.max(...uniqueValues.map((value) => value.confidence)) : 0;
 
   return {
@@ -294,8 +442,11 @@ function inferContextualValueContext({
     values: uniqueValues,
     primary_domains: primaryDomains,
     constraints,
+    task_context: taskContext,
+    subjectivity,
     collaboration_mode: collaborationMode,
     response_posture: responsePosture,
+    response_type: responseType,
     confidence,
   };
 }
@@ -318,8 +469,20 @@ function summarizeValueContext(valueContext) {
       evidence: clampText(constraint.evidence, 140),
       priority: constraint.priority === 'hard' ? 'hard' : 'soft',
     })).filter((constraint) => constraint.id && constraint.label) : [],
+    task_context: String(ctx.task_context || EMPTY_VALUE_CONTEXT.task_context),
+    subjectivity: {
+      score: typeof ctx.subjectivity?.score === 'number' ? Math.max(0, Math.min(1, ctx.subjectivity.score)) : 0,
+      label: String(ctx.subjectivity?.label || EMPTY_VALUE_CONTEXT.subjectivity.label),
+      signals: Array.isArray(ctx.subjectivity?.signals)
+        ? ctx.subjectivity.signals.slice(0, 6).map((signal) => ({
+          id: String(signal.id || ''),
+          label: clampText(signal.label, 120),
+        })).filter((signal) => signal.id && signal.label)
+        : [],
+    },
     collaboration_mode: String(ctx.collaboration_mode || EMPTY_VALUE_CONTEXT.collaboration_mode),
     response_posture: String(ctx.response_posture || EMPTY_VALUE_CONTEXT.response_posture),
+    response_type: String(ctx.response_type || ctx.response_posture || EMPTY_VALUE_CONTEXT.response_type),
     confidence: typeof ctx.confidence === 'number' ? Math.max(0, Math.min(1, ctx.confidence)) : 0,
   };
 }
@@ -337,7 +500,12 @@ function buildContextualValuePromptBlock(valueContext) {
     '## CONTEXTUAL_VALUE_FRAME',
     `- collaboration_mode: ${ctx.collaboration_mode}`,
     `- response_posture: ${ctx.response_posture}`,
+    `- response_type: ${ctx.response_type}`,
+    `- task_context: ${ctx.task_context}`,
   ];
+  if (ctx.subjectivity.score > 0) {
+    lines.push(`- subjectivity: ${ctx.subjectivity.label} (${ctx.subjectivity.score.toFixed(2)})`);
+  }
   if (ctx.primary_domains.length > 0) lines.push(`- primary_domains: ${ctx.primary_domains.join(', ')}`);
   for (const value of ctx.values.slice(0, 5)) {
     lines.push(`- value: ${value.id} (${value.domain}, ${value.confidence.toFixed(2)}) - ${value.label}; evidence: ${value.evidence}`);

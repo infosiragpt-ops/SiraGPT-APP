@@ -429,8 +429,11 @@ async function handleChatTurnUnlocked({
     is_repair: Boolean(contextualUnderstanding.envelopeContext?.repair?.is_repair),
     signal_count: contextualUnderstanding.envelopeContext?.misunderstanding_signals?.length || 0,
     value_domains: contextualUnderstanding.envelopeContext?.value_context?.primary_domains || [],
+    task_context: contextualUnderstanding.envelopeContext?.value_context?.task_context || null,
+    subjectivity: contextualUnderstanding.envelopeContext?.value_context?.subjectivity?.label || null,
     collaboration_mode: contextualUnderstanding.envelopeContext?.value_context?.collaboration_mode || null,
     response_posture: contextualUnderstanding.envelopeContext?.value_context?.response_posture || null,
+    response_type: contextualUnderstanding.envelopeContext?.value_context?.response_type || null,
   };
   await store.audit("contextual_understanding_applied", contextualPayload, auditMeta);
   events.emit("contextual_understanding_applied", { ...contextualPayload, request_id: requestId });

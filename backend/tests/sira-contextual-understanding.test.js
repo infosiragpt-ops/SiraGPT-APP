@@ -107,9 +107,30 @@ test('analyzeContextualTurn injects value context for autonomous no-ui work', as
   assert.match(result.effectiveText, /CONTEXTUAL_VALUE_FRAME/);
   assert.equal(result.envelopeContext.value_context.collaboration_mode, 'autonomous_execution');
   assert.equal(result.envelopeContext.value_context.response_posture, 'support_with_guardrails');
+  assert.equal(result.envelopeContext.value_context.response_type, 'reframing');
+  assert.equal(result.envelopeContext.value_context.task_context, 'software_engineering');
+  assert.equal(result.envelopeContext.value_context.subjectivity.label, 'highly_subjective');
   assert.ok(result.envelopeContext.value_context.primary_domains.includes('practical'));
   assert.ok(result.envelopeContext.value_context.primary_domains.includes('protective'));
   assert.ok(result.envelopeContext.value_context.constraints.some(c => c.id === 'preserve_interface'));
+  assert.ok(result.envelopeContext.value_context.values.some(v => v.id === 'implementation_integrity'));
+});
+
+test('analyzeContextualTurn maps task-conditioned values from document analysis', async () => {
+  const result = await contextual.analyzeContextualTurn({
+    userId: 'u-paper-values',
+    conversationId: 'c-paper-values',
+    userMessage: 'Analiza el paper adjunto e implementa mejoras para que el software sea mas inteligente sin tocar la UI',
+    history: [],
+    attachments: [{ filename: '2504.15236v1.pdf', mime_type: 'application/pdf', size: 5970469 }],
+    requestId: 'req-paper-values',
+  });
+
+  assert.equal(result.applied, true);
+  assert.match(result.effectiveText, /task_context: software_engineering/);
+  assert.match(result.effectiveText, /subjectivity: highly_subjective/);
+  assert.ok(result.envelopeContext.value_context.values.some(v => v.id === 'document_fidelity' || v.id === 'implementation_integrity'));
+  assert.ok(result.envelopeContext.value_context.values.some(v => v.id === 'attachment_grounding'));
 });
 
 test('analyzeContextualTurn is a no-op when there is no contextual signal', async () => {
