@@ -1,9 +1,9 @@
 "use client"
 
 import React from "react"
-import { X, AlertCircle, Download, FileText } from "lucide-react"
+import { X, AlertCircle, ChevronLeft, ChevronRight, Download, ExternalLink, FileText, Minus, Plus } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { downloadHref, downloadUrlAsFile } from "@/lib/utils"
+import { cn, downloadHref, downloadUrlAsFile } from "@/lib/utils"
 import { normalizeBackendAssetUrl } from "@/lib/attachment-url"
 import { toast } from "sonner"
 import DOMPurify from "dompurify"
@@ -56,6 +56,22 @@ type State =
   | { kind: "iframeHtml"; html: string }
   | { kind: "unsupported"; message: string }
   | { kind: "error"; message: string }
+
+const MIN_PREVIEW_ZOOM = 0.75
+const MAX_PREVIEW_ZOOM = 1.75
+const PREVIEW_ZOOM_STEP = 0.1
+
+const previewHeaderClass =
+  "border-b border-white/45 bg-white/72 shadow-[0_18px_50px_rgba(15,23,42,0.08)] backdrop-blur-2xl supports-[backdrop-filter]:bg-white/58 dark:border-white/10 dark:bg-zinc-950/72 dark:shadow-black/25"
+
+const previewIconButtonClass =
+  "h-9 w-9 rounded-full border border-white/60 bg-white/68 text-zinc-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.75),0_10px_24px_rgba(15,23,42,0.08)] backdrop-blur-xl transition-all hover:-translate-y-0.5 hover:bg-white/88 hover:text-zinc-950 hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_14px_30px_rgba(15,23,42,0.12)] dark:border-white/10 dark:bg-white/10 dark:text-zinc-200 dark:hover:bg-white/16"
+
+const previewControlShellClass =
+  "rounded-full border border-white/65 bg-white/70 px-2 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.85),0_18px_44px_rgba(15,23,42,0.16)] backdrop-blur-2xl supports-[backdrop-filter]:bg-white/56 dark:border-white/10 dark:bg-zinc-950/62 dark:shadow-black/30"
+
+const previewMetricClass =
+  "min-w-[4.6rem] rounded-full border border-white/60 bg-white/68 px-3 py-1.5 text-center text-xs font-semibold tabular-nums text-zinc-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] backdrop-blur-xl dark:border-white/10 dark:bg-white/10 dark:text-zinc-100"
 
 const FORMAT_EXTENSION: Record<PreviewFormat, string> = {
   pdf: "pdf",
@@ -290,6 +306,10 @@ async function renderPptx(buffer: ArrayBuffer) {
 export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
   const [state, setState] = React.useState<State>({ kind: "loading" })
   const [isDownloading, setIsDownloading] = React.useState(false)
+  const [zoom, setZoom] = React.useState(1)
+  const [activePage, setActivePage] = React.useState(1)
+  const [pageCount, setPageCount] = React.useState(1)
+  const scrollRef = React.useRef<HTMLDivElement | null>(null)
   // Resolve the URL through `normalizeBackendAssetUrl` so an absolute
   // `/uploads/...` URL the backend baked in gets rewritten to the
   // frontend's NEXT_PUBLIC_IMAGE_URL host. Fixes "Failed to fetch"
@@ -310,6 +330,43 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
     if (typeof url !== "string" && url.filename) return url.filename
     return inferFilename(downloadUrl, format)
   }, [downloadUrl, format, url])
+  const formatLabel = (FORMAT_EXTENSION[format] || "documento").toUpperCase()
+  const canUsePreviewControls = ["pdf", "svg", "html", "iframeHtml"].includes(state.kind)
+  const previewZoomStyle = React.useMemo(
+    () => ({ zoom }) as React.CSSProperties & { zoom: number },
+    [zoom],
+  )
+
+  const updatePageMetrics = React.useCallback(() => {
+    const el = scrollRef.current
+    if (!el || !canUsePreviewControls) {
+      setActivePage(1)
+      setPageCount(1)
+      return
+    }
+
+    const viewport = Math.max(1, el.clientHeight)
+    const total = Math.max(1, Math.ceil(Math.max(el.scrollHeight, viewport) / viewport))
+    const current = Math.min(total, Math.max(1, Math.floor((el.scrollTop + viewport * 0.35) / viewport) + 1))
+
+    setPageCount((previous) => (previous === total ? previous : total))
+    setActivePage((previous) => (previous === current ? previous : current))
+  }, [canUsePreviewControls])
+
+  const setBoundedZoom = React.useCallback((nextZoom: number) => {
+    setZoom(Math.min(MAX_PREVIEW_ZOOM, Math.max(MIN_PREVIEW_ZOOM, Number(nextZoom.toFixed(2)))))
+  }, [])
+
+  const goToPreviewPage = React.useCallback((page: number) => {
+    const el = scrollRef.current
+    if (!el) return
+    const targetPage = Math.min(Math.max(page, 1), pageCount)
+    el.scrollTo({
+      top: (targetPage - 1) * Math.max(1, el.clientHeight),
+      behavior: "smooth",
+    })
+    setActivePage(targetPage)
+  }, [pageCount])
 
   const download = React.useCallback(async () => {
     if (isDownloading) return
@@ -333,6 +390,39 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
       setIsDownloading(false)
     }
   }, [downloadUrl, filename, isDownloading])
+
+  const openInNewTab = React.useCallback(() => {
+    if (typeof window === "undefined") return
+    window.open(downloadUrl, "_blank", "noopener,noreferrer")
+  }, [downloadUrl])
+
+  React.useEffect(() => {
+    setZoom(1)
+    setActivePage(1)
+    setPageCount(1)
+  }, [previewUrl])
+
+  React.useEffect(() => {
+    if (!canUsePreviewControls) return
+    const el = scrollRef.current
+    if (!el) return
+
+    const handleScroll = () => updatePageMetrics()
+    const frame = window.requestAnimationFrame(updatePageMetrics)
+    const delayedFrame = window.setTimeout(updatePageMetrics, 350)
+    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(updatePageMetrics) : null
+
+    el.addEventListener("scroll", handleScroll, { passive: true })
+    observer?.observe(el)
+    if (el.firstElementChild instanceof HTMLElement) observer?.observe(el.firstElementChild)
+
+    return () => {
+      window.cancelAnimationFrame(frame)
+      window.clearTimeout(delayedFrame)
+      el.removeEventListener("scroll", handleScroll)
+      observer?.disconnect()
+    }
+  }, [canUsePreviewControls, state.kind, updatePageMetrics, zoom])
 
   React.useEffect(() => {
     if (!previewUrl) return
@@ -441,12 +531,17 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
 
   return (
     <div className="relative flex h-full w-full min-w-0 flex-col overflow-hidden bg-background">
-      <div className="sticky top-0 z-20 flex h-14 min-h-14 w-full min-w-0 items-center border-b border-border/40 bg-background px-3">
-        <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden pr-3">
-          <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <span className="block min-w-0 max-w-full truncate text-sm font-medium" title={filename}>
-            {filename}
-          </span>
+      <div className={cn("sticky top-0 z-30 flex min-h-16 w-full min-w-0 items-center px-4", previewHeaderClass)}>
+        <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden pr-3">
+          <div className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl border border-white/60 bg-white/70 text-zinc-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_12px_24px_rgba(15,23,42,0.08)] backdrop-blur-xl dark:border-white/10 dark:bg-white/10 dark:text-zinc-200">
+            <FileText className="h-5 w-5" />
+          </div>
+          <div className="min-w-0">
+            <span className="block min-w-0 max-w-full truncate text-sm font-semibold text-zinc-950 dark:text-zinc-50" title={filename}>
+              {filename}
+            </span>
+            <span className="mt-0.5 block text-xs font-medium text-zinc-500 dark:text-zinc-400">{formatLabel}</span>
+          </div>
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-1">
           <Button
@@ -454,7 +549,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
             size="icon"
             onClick={download}
             disabled={isDownloading}
-            className="h-8 w-8 shrink-0"
+            className={cn("shrink-0", previewIconButtonClass)}
             title={isDownloading ? "Descargando" : "Descargar"}
             aria-label={isDownloading ? "Descargando" : "Descargar"}
           >
@@ -463,8 +558,18 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
           <Button
             variant="ghost"
             size="icon"
+            onClick={openInNewTab}
+            className={cn("shrink-0", previewIconButtonClass)}
+            title="Abrir en una pestaña"
+            aria-label="Abrir documento en una pestaña"
+          >
+            <ExternalLink className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
             onClick={onClose}
-            className="h-8 w-8 shrink-0"
+            className={cn("shrink-0", previewIconButtonClass)}
             title="Cerrar"
             aria-label="Cerrar previsualización"
           >
@@ -473,7 +578,10 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
         </div>
       </div>
 
-      <div className="scroll-contain min-h-0 flex-1 overflow-auto bg-muted/10">
+      <div
+        ref={scrollRef}
+        className="scroll-contain min-h-0 flex-1 overflow-auto bg-[linear-gradient(180deg,rgba(250,250,250,0.9),rgba(244,246,248,0.78))] dark:bg-[linear-gradient(180deg,rgba(24,24,27,0.95),rgba(9,9,11,0.96))]"
+      >
         {state.kind === "loading" && (
           <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
             <ThinkingIndicator size="sm" />
@@ -482,11 +590,16 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
         )}
 
         {state.kind === "pdf" && (
-          <iframe src={previewUrl} className="h-full w-full bg-white dark:bg-zinc-900" title={`Vista previa ${filename}`} />
+          <iframe
+            src={previewUrl}
+            className="h-full w-full bg-white dark:bg-zinc-900"
+            style={previewZoomStyle}
+            title={`Vista previa ${filename}`}
+          />
         )}
 
         {state.kind === "svg" && (
-          <div className="flex min-h-full items-center justify-center p-6">
+          <div className="flex min-h-full items-center justify-center p-6 pb-28" style={previewZoomStyle}>
             {/* eslint-disable-next-line @next/next/no-img-element -- SVG preview from blob URL (user-generated artifact); next/image cannot fetch blob: URIs */}
             <img src={previewUrl} alt={filename} className="max-h-full max-w-full rounded-xl bg-white dark:bg-zinc-800 shadow-sm" />
           </div>
@@ -496,13 +609,14 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
           <iframe
             srcDoc={state.html}
             className="h-full w-full border-0 bg-white dark:bg-zinc-900"
+            style={previewZoomStyle}
             title={`Vista previa ${filename}`}
             sandbox=""
           />
         )}
 
         {state.kind === "html" && (
-          <div className="px-4 py-6 md:px-6 md:py-8">
+          <div className="px-4 pb-28 pt-6 md:px-6 md:pt-8" style={previewZoomStyle}>
             <div dangerouslySetInnerHTML={{ __html: state.html }} />
           </div>
         )}
@@ -523,6 +637,76 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
           </div>
         )}
       </div>
+
+      {canUsePreviewControls && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-4 z-30 flex justify-center px-4">
+          <div className={cn("pointer-events-auto flex max-w-full items-center gap-1", previewControlShellClass)}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className={cn("h-8 w-8", previewIconButtonClass)}
+              onClick={() => goToPreviewPage(activePage - 1)}
+              disabled={activePage <= 1}
+              title="Página anterior"
+              aria-label="Página anterior"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+            <span className={previewMetricClass} aria-live="polite">
+              {activePage} / {pageCount}
+            </span>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className={cn("h-8 w-8", previewIconButtonClass)}
+              onClick={() => goToPreviewPage(activePage + 1)}
+              disabled={activePage >= pageCount}
+              title="Página siguiente"
+              aria-label="Página siguiente"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+
+            <span className="mx-1 h-6 w-px bg-zinc-300/70 dark:bg-white/10" aria-hidden="true" />
+
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className={cn("h-8 w-8", previewIconButtonClass)}
+              onClick={() => setBoundedZoom(zoom - PREVIEW_ZOOM_STEP)}
+              disabled={zoom <= MIN_PREVIEW_ZOOM}
+              title="Alejar"
+              aria-label="Alejar documento"
+            >
+              <Minus className="h-4 w-4" />
+            </Button>
+            <button
+              type="button"
+              className={cn(previewMetricClass, "min-w-[4.1rem]")}
+              onClick={() => setBoundedZoom(1)}
+              title="Restablecer zoom"
+              aria-label="Restablecer zoom"
+            >
+              {Math.round(zoom * 100)}%
+            </button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className={cn("h-8 w-8", previewIconButtonClass)}
+              onClick={() => setBoundedZoom(zoom + PREVIEW_ZOOM_STEP)}
+              disabled={zoom >= MAX_PREVIEW_ZOOM}
+              title="Acercar"
+              aria-label="Acercar documento"
+            >
+              <Plus className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
