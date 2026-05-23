@@ -75,6 +75,42 @@ function readScore(analysis) {
   return s;
 }
 
+// PR-12: detección de peticiones vagas para fallback determinista
+// en zona gris. Retorna un string descriptor (categoría) si el prompt
+// es vago, o null si parece concreto. Sólo se usa cuando NO hay judge
+// disponible — es un cinturón y tirantes para no caer silenciosamente
+// a execute en producciones sin LLM judge configurado.
+function looksLikeVagueRequest(promptText) {
+  if (!promptText || typeof promptText !== "string") return null;
+  const t = promptText.trim().toLowerCase();
+  if (!t || t.split(/\s+/).filter(Boolean).length > 8) return null;
+  // 1. Acciones genéricas sin objeto concreto: "algo de X", "X cualquiera"
+  if (/^(?:algo|cualquier(?:a)?\s+cosa|lo\s+que\s+sea|haz(?:me)?\s+algo|hazme\s+uno|dame\s+uno)\b/.test(t)) {
+    return "generic_action";
+  }
+  // 2. Verbos de transformación sin fuente: "hazme un resumen", "tradúceme",
+  //    "analiza", "corre el código" (sin código adjunto en el prompt)
+  if (/^(?:h[aá]zme?\s+(?:un|una)\s+(?:resumen|traducci[oó]n|an[aá]lisis|s[ií]ntesis|reporte|informe)|trad[uú]ce(?:me)?|analiza|resume|sintetiza|corre|ejecuta)\s*(?:el\s+(?:c[oó]digo|texto|archivo|documento|adjunto))?\s*$/.test(t)) {
+    return "transform_no_source";
+  }
+  // 3. Referencias deícticas a contexto inexistente: "el reporte que pediste",
+  //    "lo que dijimos", "ese archivo" — pero solo SIN historial previo.
+  //    (Con historial, looksLikeFollowUp ya los maneja antes.)
+  if (/^(?:el|la|los|las)\s+\w+\s+(?:que|de|del|que\s+pediste|que\s+te\s+ped[ií])/.test(t)) {
+    return "context_ref_no_history";
+  }
+  // 4. Conflicto explícito de formato/medio: "para imprimir o para web",
+  //    "audio o video", "imagen o texto"
+  if (/\b(?:tanto\s+\w+\s+como\s+\w+|para\s+\w+\s+o\s+para\s+\w+|audio\s+o\s+video|imagen\s+o\s+texto|imprimir\s+o\s+digital)\b/.test(t)) {
+    return "medium_conflict";
+  }
+  // 5. Petición de ayuda sin scope: "ayúdame", "ayúdame a empezar", "necesito ayuda"
+  if (/^(?:ay[uú]dame(?:\s+a\s+\w+)?|necesito\s+ayuda|qu[eé]\s+puedo\s+hacer|por\s+d[oó]nde\s+empiezo)\s*$/.test(t)) {
+    return "help_no_scope";
+  }
+  return null;
+}
+
 function withTimeout(promise, ms) {
   let timer;
   const timeout = new Promise((_, reject) => {
@@ -162,6 +198,30 @@ async function triageIntent({ analysis, prompt, recentTurns = [], judge, options
 
   // Gray zone → consult lightweight judge if available.
   if (typeof judge !== "function") {
+    // No-judge fallback: en zona gris sin LLM, aplicar una segunda
+    // heurística determinista que detecta peticiones vagas obvias.
+    // El usuario espera ASK en producción (con judge) o en tests, no
+    // execute silencioso.
+    const vague = looksLikeVagueRequest(promptText);
+    if (vague) {
+      const built = tryBuildOptions(analysis, promptText, recentTurns);
+      const question = normalizeQuestion(
+        built?.question || heuristicQ,
+        "¿Puedes precisar un poco más sobre lo que esperas?"
+      );
+      const out = {
+        action: "ask",
+        question,
+        reason: `gray_zone_vague:${vague}`,
+        source: "heuristic_vague",
+        score,
+      };
+      if (built && built.options && built.options.length > 0) {
+        out.options = built.options;
+        out.optionsSource = built.source;
+      }
+      return out;
+    }
     return { action: "execute", reason: "gray_zone_no_judge", source: "fallback", score };
   }
 
@@ -207,5 +267,5 @@ module.exports = {
   triageIntent,
   DEFAULTS,
   // exposed for tests
-  _internal: { normalizeQuestion, pickHeuristicQuestion, readScore, withTimeout },
+  _internal: { normalizeQuestion, pickHeuristicQuestion, readScore, withTimeout, looksLikeVagueRequest },
 };

@@ -55,6 +55,21 @@ test('triage: short follow-up with recent history → execute (LLM has context)'
   assert.equal(verdict.reason, 'short_followup_with_history');
 });
 
+test('triage: contextual follow-up with object reference executes when history exists', async () => {
+  for (const prompt of ['amplía el punto 2', 'hazlo más formal', 'mejor en PDF', 'la tercera opción']) {
+    const verdict = await triageIntent({
+      analysis: makeAnalysis({ score: 0.85 }),
+      prompt,
+      recentTurns: [
+        { role: 'user', text: 'dame 3 ideas de marketing' },
+        { role: 'assistant', text: '1. SEO local 2. Email nurturing 3. Programa de referidos' },
+      ],
+    });
+    assert.equal(verdict.action, 'execute', `expected execute for ${prompt}`);
+    assert.equal(verdict.reason, 'short_followup_with_history');
+  }
+});
+
 test('triage: short ambiguous first turn (no chitchat, no history) still asks', async () => {
   const verdict = await triageIntent({
     analysis: makeAnalysis({ score: 0.85, questions: ['¿Qué reporte?'] }),
@@ -159,13 +174,55 @@ test('triage: judge timeout → fallback to execute', async () => {
   assert.match(verdict.reason, /timeout/);
 });
 
-test('triage: gray zone without a judge → fallback execute', async () => {
+test('triage: gray zone without a judge + concrete prompt → fallback execute', async () => {
   const verdict = await triageIntent({
     analysis: makeAnalysis({ score: 0.6 }),
-    prompt: 'algo ambiguo',
+    prompt: 'genera informe trimestral con métricas de marketing',
   });
   assert.equal(verdict.action, 'execute');
   assert.equal(verdict.reason, 'gray_zone_no_judge');
+});
+
+test('triage: gray zone without judge + vague prompt → ask (heuristic_vague)', async () => {
+  const verdict = await triageIntent({
+    analysis: makeAnalysis({ score: 0.6 }),
+    prompt: 'algo de marketing',
+  });
+  assert.equal(verdict.action, 'ask');
+  assert.equal(verdict.source, 'heuristic_vague');
+  assert.match(verdict.reason, /gray_zone_vague:/);
+});
+
+test('triage: vague heuristic categorizes correctly', async () => {
+  const cases = [
+    { prompt: 'algo', expectCat: 'generic_action' },
+    { prompt: 'hazme un resumen', expectCat: 'transform_no_source' },
+    { prompt: 'ayúdame a empezar', expectCat: 'help_no_scope' },
+    { prompt: 'tanto audio como video', expectCat: 'medium_conflict' },
+  ];
+  for (const c of cases) {
+    const verdict = await triageIntent({
+      analysis: makeAnalysis({ score: 0.6 }),
+      prompt: c.prompt,
+    });
+    assert.equal(verdict.action, 'ask', `expected ask for "${c.prompt}"`);
+    assert.match(verdict.reason, new RegExp(c.expectCat), `expected category ${c.expectCat} for "${c.prompt}"`);
+  }
+});
+
+test('looksLikeVagueRequest: known patterns', () => {
+  assert.equal(_internal.looksLikeVagueRequest('algo de marketing'), 'generic_action');
+  assert.equal(_internal.looksLikeVagueRequest('hazme un resumen'), 'transform_no_source');
+  assert.equal(_internal.looksLikeVagueRequest('ayúdame'), 'help_no_scope');
+});
+
+test('looksLikeVagueRequest: long concrete prompt → null', () => {
+  assert.equal(_internal.looksLikeVagueRequest('genera informe trimestral con métricas detalladas y proyecciones'), null);
+});
+
+test('looksLikeVagueRequest: empty input → null', () => {
+  assert.equal(_internal.looksLikeVagueRequest(''), null);
+  assert.equal(_internal.looksLikeVagueRequest(null), null);
 });
 
 test('triage: spanglish heuristic question is rewritten in Spanish', async () => {
