@@ -1507,10 +1507,30 @@ const ActiveOptionsDisplay = ({
   );
 
   React.useEffect(() => {
-    viewerSiblings.forEach((attachment) => {
-      prewarmUnifiedDocumentPreview(attachment);
+    if (typeof window === "undefined") return;
+    const readyAttachments = viewerSiblings.filter((attachment, index) => {
+      const file = uploadedFiles[index];
+      return file?.status !== "uploading" && file?.status !== "failed" && attachmentHasPreviewSource(attachment);
     });
-  }, [viewerSiblings]);
+    if (readyAttachments.length === 0) return;
+
+    let cancelled = false;
+    const prewarm = () => {
+      if (cancelled) return;
+      readyAttachments.forEach((attachment) => prewarmUnifiedDocumentPreview(attachment));
+    };
+    const requestIdle = (window as any).requestIdleCallback;
+    const cancelIdle = (window as any).cancelIdleCallback;
+    const handle = typeof requestIdle === "function"
+      ? requestIdle(prewarm, { timeout: 1500 })
+      : window.setTimeout(prewarm, 120);
+
+    return () => {
+      cancelled = true;
+      if (typeof cancelIdle === "function") cancelIdle(handle);
+      else window.clearTimeout(handle);
+    };
+  }, [viewerSiblings, uploadedFiles]);
 
   if (uploadedFiles.length === 0) return null;
 
@@ -4789,6 +4809,7 @@ But first, you need to connect your Spotify account securely using the button be
       const response: any = await apiClient.uploadFiles(dt.files, {
         sourceChannel,
         idempotencyKey,
+        asyncProcessing: true,
         onProgress: (pct) => {
           setUploadProgress(prev => {
             const next = { ...prev };

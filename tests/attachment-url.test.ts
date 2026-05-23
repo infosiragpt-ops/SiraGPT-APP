@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  appendUploadAuthToken,
   normalizeBackendAssetUrl,
   resolveBackendAssetUrl,
   resolveImageAttachmentUrl,
@@ -18,6 +19,29 @@ test('does not turn short backend paths into broken base64 image data', () => {
 
   assert.equal(resolved, 'http://localhost:5000/uploads/user-1/image.png');
   assert.equal(resolved.startsWith('data:image/jpeg;base64,/uploads'), false);
+});
+
+test('browser runtime resolves relative uploads through the current frontend origin', () => {
+  const previousWindow = (globalThis as any).window;
+  const previousImageUrl = process.env.NEXT_PUBLIC_IMAGE_URL;
+  const previousApiUrl = process.env.NEXT_PUBLIC_API_URL;
+
+  try {
+    delete process.env.NEXT_PUBLIC_IMAGE_URL;
+    delete process.env.NEXT_PUBLIC_API_URL;
+    (globalThis as any).window = { location: { origin: 'https://siragpt.com' } };
+
+    assert.equal(
+      resolveImageAttachmentUrl({ url: '/uploads/user-1/image.png' }, undefined),
+      'https://siragpt.com/uploads/user-1/image.png',
+    );
+  } finally {
+    (globalThis as any).window = previousWindow;
+    if (previousImageUrl === undefined) delete process.env.NEXT_PUBLIC_IMAGE_URL;
+    else process.env.NEXT_PUBLIC_IMAGE_URL = previousImageUrl;
+    if (previousApiUrl === undefined) delete process.env.NEXT_PUBLIC_API_URL;
+    else process.env.NEXT_PUBLIC_API_URL = previousApiUrl;
+  }
 });
 
 test('resolves stored filesystem upload paths to public URLs', () => {
@@ -76,6 +100,21 @@ test('normalizeBackendAssetUrl prepends the base for relative paths (legacy beha
 test('normalizeBackendAssetUrl passes through data: and blob: URLs verbatim', () => {
   assert.equal(normalizeBackendAssetUrl('data:image/png;base64,abc'), 'data:image/png;base64,abc');
   assert.equal(normalizeBackendAssetUrl('blob:http://localhost:3000/abc-def'), 'blob:http://localhost:3000/abc-def');
+});
+
+test('appendUploadAuthToken appends JWTs only to upload URLs', () => {
+  assert.equal(
+    appendUploadAuthToken('https://api.siragpt.com/uploads/user-1/image.png', 'jwt-123'),
+    'https://api.siragpt.com/uploads/user-1/image.png?token=jwt-123',
+  );
+  assert.equal(
+    appendUploadAuthToken('https://cdn.example.com/image.png', 'jwt-123'),
+    'https://cdn.example.com/image.png',
+  );
+  assert.equal(
+    appendUploadAuthToken('blob:http://localhost:3000/local', 'jwt-123'),
+    'blob:http://localhost:3000/local',
+  );
 });
 
 test('normalizeBackendAssetUrl returns absolute URL unchanged when no baseUrl is configured', () => {

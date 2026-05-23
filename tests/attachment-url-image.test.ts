@@ -32,6 +32,18 @@ describe("resolveImageAttachmentUrl · field priority", () => {
     assert.equal(out, "https://example.com/x.png")
   })
 
+  it("uses local preview blobs before server URLs for optimistic chat rendering", () => {
+    const out = resolveImageAttachmentUrl(
+      {
+        preview: "blob:http://localhost:3000/local-preview",
+        url: "/uploads/user-1/photo.png",
+        mimeType: "image/png",
+      },
+      "http://localhost:5000",
+    )
+    assert.equal(out, "blob:http://localhost:3000/local-preview")
+  })
+
   it("uses base64 as last resort when only base64 is present", () => {
     // Need >= 120 chars and base64 alphabet for the heuristic.
     const big = "A".repeat(160)

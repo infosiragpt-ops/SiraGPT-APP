@@ -82,7 +82,7 @@ import { ThinkingPlaceholder } from "./thinking-placeholder"
 import MessageActionRail from "./MessageActionRail"
 import ComputerUseReasoning from "./ComputerUseReasoning"
 import type { DocumentPreviewTarget } from "./document-preview"
-import { resolveImageAttachmentUrl } from "@/lib/attachment-url"
+import { appendUploadAuthToken, resolveImageAttachmentUrl } from "@/lib/attachment-url"
 import { toDocumentViewerAttachment } from "@/lib/document-viewer-attachment"
 import { isImageOnlyMessageForRender } from "@/lib/message-render-policy"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
@@ -146,6 +146,13 @@ const isDocumentLikeAttachment = (file: any) => {
     if (isRenderableImageAttachment(file)) return false;
     if (['gmail_emails', 'gmail_search_results', 'chart'].includes(file?.type)) return false;
     return !!(getAttachmentName(file) || file?.id || file?.attachmentId);
+};
+
+const resolveUserImageAttachmentUrl = (file: any) => {
+    const imageUrl = resolveImageAttachmentUrl(file, process.env.NEXT_PUBLIC_IMAGE_URL);
+    if (!imageUrl) return "";
+    const token = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null;
+    return appendUploadAuthToken(imageUrl, token);
 };
 
 const formatAgentTaskUserContent = (content: string) => {
@@ -396,9 +403,28 @@ const MessageDocChipsInner = ({ parsedFiles }: { parsedFiles: any[] }) => {
     );
 
     React.useEffect(() => {
-        attachments.forEach((attachment) => {
-            prewarmUnifiedDocumentPreview(attachment);
-        });
+        if (typeof window === "undefined") return;
+        const readyAttachments = attachments.filter((attachment) =>
+            Boolean(attachment?.file || attachment?.url || attachment?.extractedText)
+        );
+        if (readyAttachments.length === 0) return;
+
+        let cancelled = false;
+        const prewarm = () => {
+            if (cancelled) return;
+            readyAttachments.forEach((attachment) => prewarmUnifiedDocumentPreview(attachment));
+        };
+        const requestIdle = (window as any).requestIdleCallback;
+        const cancelIdle = (window as any).cancelIdleCallback;
+        const handle = typeof requestIdle === "function"
+            ? requestIdle(prewarm, { timeout: 1500 })
+            : window.setTimeout(prewarm, 120);
+
+        return () => {
+            cancelled = true;
+            if (typeof cancelIdle === "function") cancelIdle(handle);
+            else window.clearTimeout(handle);
+        };
     }, [attachments]);
 
     if (chips.length === 0) return null;
@@ -2569,7 +2595,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                             {parsedFiles
                                 .filter(isRenderableImageAttachment)
                                 .map((file: any, index: number) => {
-                                    const imageUrl = resolveImageAttachmentUrl(file, process.env.NEXT_PUBLIC_IMAGE_URL);
+                                    const imageUrl = resolveUserImageAttachmentUrl(file);
                                     return (
                                         <img
                                             key={`img-${index}`}

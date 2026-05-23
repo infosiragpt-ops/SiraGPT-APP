@@ -104,6 +104,8 @@ const normalizeMessageAttachment = (file: any) => {
     type: typeof mimeType === 'string' && mimeType.startsWith('image/') ? mimeType : (file.type || mimeType),
     size: file.size ?? null,
     url: file.url || file.imageUrl || null,
+    preview: file.preview || file.objectUrl || null,
+    thumbnailUrl: file.thumbnailUrl || null,
     path: file.path || null,
     extractedText: file.extractedText || null,
     openaiFileId: file.openaiFileId || null,
