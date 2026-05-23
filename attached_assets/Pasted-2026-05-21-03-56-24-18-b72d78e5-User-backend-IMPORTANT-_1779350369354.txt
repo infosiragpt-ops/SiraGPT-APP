@@ -1,0 +1,133 @@
+2026-05-21 03:56:24.18
+b72d78e5
+User
+[backend] IMPORTANT! Eviction policy is optimistic-volatile. It should be "noeviction"
+
+2026-05-21 03:56:24.39
+b72d78e5
+User
+[backend] GET /api/files/cmpf74ims003431f5fhjac7wm/processing-status 304 443.453 ms - -
+2026-05-21 03:56:24.39
+b72d78e5
+User
+[backend] {"level":30,"time":1779350184393,"pid":124,"hostname":"localhost","req":{"id":"93eaf71b-f349-46da-937b-7d6553c32fb7","method":"GET","url":"/api/files/cmpf74ims003431f5fhjac7wm/processing-status"},"res":{"statusCode":null},"responseTime":444,"msg":"request completed"}
+2026-05-21 03:56:24.39
+b72d78e5
+User
+[backend] {"ts":"2026-05-21T07:56:24.392Z","level":"info","method":"GET","path":"/api/files/cmpf74ims003431f5fhjac7wm/processing-status","status":304,"durMs":444,"userId":"cmpdbjuqh00001hfgayz771yu","reqId":"93eaf71b-f349-46da-937b-7d6553c32fb7","ip":"34.39.238.36","ua":"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 OPR/131.0.0.0"}
+2026-05-21 03:56:26.40
+b72d78e5
+User
+[backend] {"t":"2026-05-21T07:56:26.400Z","event":"agent_task_queued","taskId":"b5822f2b-2daa-4f05-b1e2-faf12efc9e7f","userId":"cmpdbjuqh00001hfgayz771yu","chatId":"cmpf75o1v003931f52tnrouir","model":"gpt-4o","queue":"siragpt-agent-tasks","jobId":"b5822f2b-2daa-4f05-b1e2-faf12efc9e7f","traceId":"b0ae54bb-3394-4f38-ab27-e7dc1ef14944","documentPolicy":{"mode":"chat_only","format":"docx","template":"business","complexity":"simple","reason":"Solicitud de analisis documental; se responde primero en chat y se sugiere documento solo si hace falta.","autoGenerate":false,"thresholds":{"wordCount":0,"estimatedWords":352,"tableSignals":false,"fileCount":1,"transcriptionOnly":false,"explicitOutput":false,"documentUnderstanding":true},"palette":{"id":"business","label":"Business","colors":{"primary":"#0F172A","surface":"#F8FAFC","neutral":"#475569","accent":"#059669","warning":"#D97706"}}}}
+2026-05-21 03:56:32.06
+b72d78e5
+User
+[backend] {"t":"2026-05-21T07:56:32.065Z","event":"agent_task_worker_started","taskId":"b5822f2b-2daa-4f05-b1e2-faf12efc9e7f","userId":"cmpdbjuqh00001hfgayz771yu","chatId":"cmpf75o1v003931f52tnrouir","model":"gpt-4o","runtimeModel":"gpt-4o","runtimeProvider":"OpenAI","modelRemapped":false,"queue":"siragpt-agent-tasks","jobId":"b5822f2b-2daa-4f05-b1e2-faf12efc9e7f","traceId":"b0ae54bb-3394-4f38-ab27-e7dc1ef14944","documentPolicy":{"mode":"chat_only","format":"docx","template":"business","complexity":"simple","reason":"Solicitud de analisis documental; se responde primero en chat y se sugiere documento solo si hace falta.","autoGenerate":false,"thresholds":{"wordCount":0,"estimatedWords":352,"tableSignals":false,"fileCount":1,"transcriptionOnly":false,"explicitOutput":false,"documentUnderstanding":true},"palette":{"id":"business","label":"Business","colors":{"primary":"#0F172A","surface":"#F8FAFC","neutral":"#475569","accent":"#059669","warning":"#D97706"}}}}
+2026-05-21 03:57:27.80
+b72d78e5
+User
+at Object.wrap (/home/runner/workspace/.next/standalone/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:13:17831)
+2026-05-21 03:57:27.80
+b72d78e5
+User
+at rE (/home/runner/workspace/.next/standalone/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:15:6522)
+2026-05-21 03:57:27.80
+b72d78e5
+User
+at no (/home/runner/workspace/.next/standalone/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:19:1150)
+2026-05-21 03:57:27.80
+b72d78e5
+User
+at AsyncLocalStorage.run (node:async_hooks:346:14)
+2026-05-21 03:57:27.80
+b72d78e5
+User
+at Object.wrap (/home/runner/workspace/.next/standalone/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:13:16935)
+2026-05-21 03:57:27.80
+b72d78e5
+User
+at r$ (/home/runner/workspace/.next/standalone/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:17:1667)
+2026-05-21 03:57:27.80
+b72d78e5
+User
+at ni (/home/runner/workspace/.next/standalone/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:20:543)
+2026-05-21 03:57:27.80
+b72d78e5
+User
+at /home/runner/workspace/.next/standalone/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:20:726
+2026-05-21 03:57:27.80
+b72d78e5
+User
+at AsyncLocalStorage.run (node:async_hooks:346:14)
+2026-05-21 03:57:27.80
+b72d78e5
+User
+at /home/runner/workspace/.next/standalone/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:20:616
+2026-05-21 03:57:27.80
+b72d78e5
+User
+Error: Failed to find Server Action "x". This request might be from an older or newer deployment.
+2026-05-21 03:57:40.03
+b72d78e5
+User
+[backend] {"level":50,"time":1779350260035,"pid":124,"hostname":"localhost","alert":{"title":"memory_high_heap_usage","severity":"error","message":"Heap usage 90.6% exceeds 80% threshold","context":{"usagePct":90.5952838863923,"heapUsedMb":241,"heapTotalMb":266,"rssMb":446}},"msg":"alert_emitted"}
+2026-05-21 03:57:40.74
+b72d78e5
+User
+at /home/runner/workspace/.next/standalone/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:20:616
+2026-05-21 03:57:40.74
+b72d78e5
+User
+at /home/runner/workspace/.next/standalone/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:20:726
+2026-05-21 03:57:40.74
+b72d78e5
+User
+at no (/home/runner/workspace/.next/standalone/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:19:1150)
+2026-05-21 03:57:40.74
+b72d78e5
+User
+at AsyncLocalStorage.run (node:async_hooks:346:14)
+2026-05-21 03:57:40.74
+b72d78e5
+User
+at Object.wrap (/home/runner/workspace/.next/standalone/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:13:17831)
+2026-05-21 03:57:40.74
+b72d78e5
+User
+at Object.wrap (/home/runner/workspace/.next/standalone/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:13:16935)
+2026-05-21 03:57:40.74
+b72d78e5
+User
+at ni (/home/runner/workspace/.next/standalone/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:20:543)
+2026-05-21 03:57:40.74
+b72d78e5
+User
+at AsyncLocalStorage.run (node:async_hooks:346:14)
+2026-05-21 03:57:40.74
+b72d78e5
+User
+Error: Failed to find Server Action "x". This request might be from an older or newer deployment.
+2026-05-21 03:57:40.74
+b72d78e5
+User
+at rE (/home/runner/workspace/.next/standalone/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:15:6522)
+2026-05-21 03:57:40.74
+b72d78e5
+User
+at r$ (/home/runner/workspace/.next/standalone/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:17:1667)
+2026-05-21 03:57:43.08
+b72d78e5
+User
+[backend] {"ts":"2026-05-21T07:57:43.089Z","level":"info","method":"POST","path":"/api/agent/task","status":200,"durMs":79160,"userId":"cmpdbjuqh00001hfgayz771yu","reqId":"1494fa84-4dcc-4456-ba0f-a6187bfa3c29","ip":"34.95.146.204","ua":"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 OPR/131.0.0.0"}
+2026-05-21 03:57:43.09
+b72d78e5
+User
+[backend] POST /api/agent/task 200 2470.863 ms - -
+2026-05-21 03:57:43.09
+b72d78e5
+User
+[backend] {"level":30,"time":1779350263089,"pid":124,"hostname":"localhost","req":{"id":"1494fa84-4dcc-4456-ba0f-a6187bfa3c29","method":"POST","url":"/api/agent/task"},"res":{"statusCode":null},"responseTime":79159,"msg":"request completed"}
+2026-05-21 03:57:43.60
+b72d78e5
+User
+[backend] {"t":"2026-05-21T07:57:43.606Z","event":"agent_task_worker_finished","taskId":"b5822f2b-2daa-4f05-b1e2-faf12efc9e7f","userId":"cmpdbjuqh00001hfgayz771yu","chatId":"cmpf75o1v003931f52tnrouir","status":"completed","stoppedReason":"plain_text_finalize","steps":7,"artifacts":0,"durationMs":79396}

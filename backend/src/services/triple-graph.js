@@ -1,0 +1,382 @@
+/**
+ * triple-graph — in-memory knowledge graph for GEAR-style retrieval.
+ *
+ * Stores triples `(subject, predicate, object)` linked to source chunks,
+ * alongside an entity → triples inverted index that powers the
+ * get_neighbours() call in the paper's Diverse Triple Beam Search
+ * (Shen et al., ACL 2025). A "neighbour" of triple t is any triple in
+ * the graph that shares its head (subject) or tail (object) entity.
+ *
+ * We also store an embedding per triple (over a canonical string form)
+ * so `linkTriple(queryTriple)` can find the closest stored triple by
+ * cosine — this is the `tripleLink` function in §4.1 of the paper.
+ *
+ * Storage is namespaced per (userId, collection) to match rag-service's
+ * isolation. Triples live in-memory (Map-backed) so they share the
+ * "production will swap to pgvector" roadmap noted in rag-service.js.
+ *
+ * Minimal API:
+ *   addTriples(userId, collection, triples[])       — also stores embeddings
+ *   getNeighbours(userId, collection, triple)        — entity-shared triples
+ *   linkTriple(userId, collection, queryTriple)      — closest stored triple
+ *   getTriplesForSource(userId, collection, sourceId) — reverse lookup
+ *   stats / clear
+ *
+ * Triples are deduped by canonical `(subject|predicate|object)` key with
+ * entities lowercased. The canonical display form (with original casing)
+ * is kept on the first-inserted copy; later insertions bump confidence
+ * by averaging rather than adding duplicates.
+ */
+
+// Circular require with rag-service: both files need each other, but
+// Node CJS resolves the later-loaded one to a partial-exports object
+// that doesn't reflect any functions defined after the `require` call.
+// The safe form is `lazyRag()` below, which resolves the reference at
+// CALL time (when both modules have finished loading).
+function lazyRag() { return require('./rag-service'); }
+
+const store = new Map(); // storeKey → { triples: Map<tripleKey, Triple>, byEntity: Map<entity, Set<tripleKey>>, bySource: Map<sourceId, Set<tripleKey>> }
+
+function storeKey(userId, collection) {
+  return `${userId || 'anon'}:${collection || 'default'}`;
+}
+
+function tripleKey(t) {
+  return `${(t.subject || '').toLowerCase()}|${(t.predicate || '').toLowerCase()}|${(t.object || '').toLowerCase()}`;
+}
+
+/**
+ * Canonical string form used for embedding. We embed the full triple as
+ * a natural-language sentence rather than concatenating raw fields,
+ * because the embedding model (text-embedding-3-small) was trained on
+ * prose — "Stephen Curry plays for Golden State Warriors" embeds to a
+ * more useful point in space than "Stephen Curry|plays for|Golden State Warriors".
+ */
+function tripleToSentence(t) {
+  return `${t.subject} ${t.predicate} ${t.object}`.replace(/\s+/g, ' ').trim();
+}
+
+function getNamespace(userId, collection) {
+  const key = storeKey(userId, collection);
+  let ns = store.get(key);
+  if (!ns) {
+    ns = {
+      triples: new Map(),
+      byEntity: new Map(),
+      bySource: new Map(),
+    };
+    store.set(key, ns);
+  }
+  return ns;
+}
+
+function indexTripleInNs(ns, t) {
+  const key = tripleKey(t);
+  const existing = ns.triples.get(key);
+  if (existing) {
+    // Dedup by averaging confidence and unioning sources.
+    const oldConf = existing.confidence ?? 0.8;
+    const newConf = t.confidence ?? 0.8;
+    existing.confidence = (oldConf + newConf) / 2;
+    if (t.source && existing.source !== t.source) {
+      // Convert source to a Set only when we see the second distinct source.
+      existing.sources = existing.sources || new Set([existing.source]);
+      existing.sources.add(t.source);
+    }
+    return existing;
+  }
+  ns.triples.set(key, { ...t });
+
+  const subjKey = (t.subject || '').toLowerCase();
+  const objKey = (t.object || '').toLowerCase();
+  if (subjKey) {
+    if (!ns.byEntity.has(subjKey)) ns.byEntity.set(subjKey, new Set());
+    ns.byEntity.get(subjKey).add(key);
+  }
+  if (objKey) {
+    if (!ns.byEntity.has(objKey)) ns.byEntity.set(objKey, new Set());
+    ns.byEntity.get(objKey).add(key);
+  }
+  if (t.source) {
+    if (!ns.bySource.has(t.source)) ns.bySource.set(t.source, new Set());
+    ns.bySource.get(t.source).add(key);
+  }
+  return ns.triples.get(key);
+}
+
+/**
+ * Add triples to the graph. Returns `{ added, total }`.
+ *
+ * If `embedder` is provided, it's called with the list of canonical
+ * sentences and must return a parallel array of vectors (OpenAI-style).
+ * Otherwise we fall back to rag-service.embed(). Pass `embedder: null`
+ * to skip embeddings entirely (e.g. in tests that don't need linkTriple).
+ */
+async function addTriples(userId, collection, triples, { embedder } = {}) {
+  if (!Array.isArray(triples) || triples.length === 0) return { added: 0, total: 0 };
+
+  const ns = getNamespace(userId, collection);
+  const fresh = [];
+  const freshRefs = [];
+  let newCount = 0;
+  for (const raw of triples) {
+    if (!raw || !raw.subject || !raw.predicate || !raw.object) continue;
+    const already = ns.triples.has(tripleKey(raw));
+    const ref = indexTripleInNs(ns, raw);
+    if (!already) newCount++;
+    // Queue for embedding when the triple has no vector yet — regardless
+    // of whether this is the first insertion or a backfill pass. Previously
+    // we gated on `!already`, which meant an initial embedder-less insert
+    // would permanently lock the triple out of linkTriple/DBS scoring.
+    if (!ref.embedding) {
+      fresh.push(tripleToSentence(raw));
+      freshRefs.push(ref);
+    }
+  }
+
+  if (fresh.length > 0 && embedder !== null) {
+    try {
+      const vectors = embedder
+        ? await embedder(fresh)
+        : await lazyRag().embed(fresh);
+      for (let i = 0; i < freshRefs.length; i++) {
+        freshRefs[i].embedding = vectors[i];
+      }
+    } catch (err) {
+      // Embedding failure is non-fatal — triples are still in the graph,
+      // just without linkTriple support. Graph expansion based on shared
+      // entities still works.
+      console.warn('[triple-graph] embedding failed, triples indexed without embeddings:', err.message);
+    }
+  }
+
+  return { added: newCount, embedded: fresh.length, total: ns.triples.size };
+}
+
+function getTriple(userId, collection, t) {
+  const ns = store.get(storeKey(userId, collection));
+  if (!ns) return null;
+  return ns.triples.get(tripleKey(t)) || null;
+}
+
+/**
+ * Neighbours of a triple = every stored triple that shares its head OR
+ * tail entity (§4.2 in GEAR paper: "shared head or tail entities").
+ * The triple itself is excluded. Optionally exclude any keys in
+ * `excludeKeys`.
+ */
+function getNeighbours(userId, collection, t, { excludeKeys = null } = {}) {
+  const ns = store.get(storeKey(userId, collection));
+  if (!ns) return [];
+
+  const selfKey = tripleKey(t);
+  const subjKey = (t.subject || '').toLowerCase();
+  const objKey = (t.object || '').toLowerCase();
+
+  const keys = new Set();
+  for (const entity of [subjKey, objKey]) {
+    if (!entity) continue;
+    const set = ns.byEntity.get(entity);
+    if (!set) continue;
+    for (const k of set) {
+      if (k === selfKey) continue;
+      if (excludeKeys && excludeKeys.has(k)) continue;
+      keys.add(k);
+    }
+  }
+
+  const out = [];
+  for (const k of keys) {
+    const triple = ns.triples.get(k);
+    if (triple) out.push(triple);
+  }
+  return out;
+}
+
+function cosine(a, b) {
+  if (!a || !b) return 0;
+  let dot = 0, na = 0, nb = 0;
+  const len = Math.min(a.length, b.length);
+  for (let i = 0; i < len; i++) {
+    const av = a[i], bv = b[i];
+    dot += av * bv;
+    na += av * av;
+    nb += bv * bv;
+  }
+  const denom = Math.sqrt(na) * Math.sqrt(nb);
+  return denom === 0 ? 0 : dot / denom;
+}
+
+/**
+ * tripleLink (§4.1): given a proximal triple produced by the LLM "read"
+ * step, return the most similar stored triple by cosine over embeddings.
+ * Returns null if the graph is empty or no triple has an embedding.
+ */
+async function linkTriple(userId, collection, queryTriple, { embedder, k = 1 } = {}) {
+  const ns = store.get(storeKey(userId, collection));
+  if (!ns || ns.triples.size === 0) return k > 1 ? [] : null;
+
+  // Reject malformed triples — all three fields must carry non-whitespace
+  // content. Previously an empty or whitespace-only subject/predicate/
+  // object would produce a "sentence" like "   " that embeds to noise,
+  // and cosine against it returns meaningless rankings.
+  const subj = String(queryTriple?.subject || '').trim();
+  const pred = String(queryTriple?.predicate || '').trim();
+  const obj = String(queryTriple?.object || '').trim();
+  if (!subj || !pred || !obj) return k > 1 ? [] : null;
+
+  const sentence = tripleToSentence({ subject: subj, predicate: pred, object: obj });
+  let qVec;
+  try {
+    const vectors = embedder ? await embedder([sentence]) : await lazyRag().embed([sentence]);
+    qVec = vectors[0];
+  } catch (err) {
+    console.warn('[triple-graph] linkTriple embedding failed:', err.message);
+    return k > 1 ? [] : null;
+  }
+  if (!qVec) return k > 1 ? [] : null;
+
+  let best = null;
+  let bestScore = -Infinity;
+  const topK = [];
+  for (const t of ns.triples.values()) {
+    if (!t.embedding) continue;
+    const score = cosine(qVec, t.embedding);
+    if (k > 1) {
+      topK.push({ triple: t, score });
+    } else if (score > bestScore) {
+      bestScore = score;
+      best = { triple: t, score };
+    }
+  }
+  if (k > 1) {
+    topK.sort((a, b) => b.score - a.score);
+    return topK.slice(0, k);
+  }
+  return best;
+}
+
+function getTriplesForSource(userId, collection, sourceId) {
+  const ns = store.get(storeKey(userId, collection));
+  if (!ns) return [];
+  const keys = ns.bySource.get(sourceId);
+  if (!keys) return [];
+  const out = [];
+  for (const k of keys) {
+    const t = ns.triples.get(k);
+    if (t) out.push(t);
+  }
+  return out;
+}
+
+function clear(userId, collection) {
+  store.delete(storeKey(userId, collection));
+}
+
+/**
+ * Drop every triple whose source matches `sourceId`. Keeps the rest of
+ * the graph intact. Used by rag-service when chunk eviction removes a
+ * source entirely — otherwise the graph keeps dangling triples that
+ * retrieval would happily return despite no backing chunk.
+ *
+ * Returns { removed } — the number of triples dropped.
+ */
+function clearSource(userId, collection, sourceId) {
+  const ns = store.get(storeKey(userId, collection));
+  if (!ns || !sourceId) return { removed: 0 };
+  const keys = ns.bySource.get(sourceId);
+  if (!keys || keys.size === 0) return { removed: 0 };
+
+  let removed = 0;
+  for (const tkey of keys) {
+    const triple = ns.triples.get(tkey);
+    if (!triple) continue;
+    ns.triples.delete(tkey);
+    removed++;
+
+    // Remove the triple from every entity set it participated in. We
+    // can't blindly delete the entity entries because other triples may
+    // still share them.
+    const subjKey = (triple.subject || '').toLowerCase();
+    const objKey = (triple.object || '').toLowerCase();
+    for (const entity of [subjKey, objKey]) {
+      if (!entity) continue;
+      const set = ns.byEntity.get(entity);
+      if (!set) continue;
+      set.delete(tkey);
+      if (set.size === 0) ns.byEntity.delete(entity);
+    }
+  }
+  ns.bySource.delete(sourceId);
+  return { removed };
+}
+
+function stats(userId, collection) {
+  const ns = store.get(storeKey(userId, collection));
+  if (!ns) return { triples: 0, entities: 0, sources: 0 };
+  return {
+    triples: ns.triples.size,
+    entities: ns.byEntity.size,
+    sources: ns.bySource.size,
+  };
+}
+
+/**
+ * Export the entity graph as nodes + weighted edges — what GraphRAG
+ * needs for community detection. Edge weight = number of triples that
+ * co-mention both entities. Also returns a getRelations(entity) closure
+ * so downstream callers don't re-traverse the triples map.
+ */
+function _dumpEntities(userId, collection) {
+  const ns = store.get(storeKey(userId, collection));
+  if (!ns) return { entities: [], edges: [], getRelations: () => [] };
+
+  const entities = [...ns.byEntity.keys()];
+  const edgeCounts = new Map(); // "a|b" → count, with a < b for undirected stability
+
+  for (const triple of ns.triples.values()) {
+    const a = (triple.subject || '').toLowerCase();
+    const b = (triple.object || '').toLowerCase();
+    if (!a || !b || a === b) continue;
+    const [lo, hi] = a < b ? [a, b] : [b, a];
+    const key = `${lo}|${hi}`;
+    edgeCounts.set(key, (edgeCounts.get(key) || 0) + 1);
+  }
+  const edges = [];
+  for (const [key, w] of edgeCounts) {
+    const [a, b] = key.split('|');
+    edges.push({ a, b, weight: w });
+  }
+
+  // Closure captures the namespace; reads are cheap because byEntity
+  // is already indexed.
+  const getRelations = (entity) => {
+    const ekey = String(entity).toLowerCase();
+    const tripleKeys = ns.byEntity.get(ekey);
+    if (!tripleKeys) return [];
+    const out = [];
+    for (const tk of tripleKeys) {
+      const t = ns.triples.get(tk);
+      if (t) out.push({ subject: t.subject, predicate: t.predicate, object: t.object });
+    }
+    return out;
+  };
+
+  return { entities, edges, getRelations };
+}
+
+module.exports = {
+  addTriples,
+  getNeighbours,
+  linkTriple,
+  getTriple,
+  getTriplesForSource,
+  clear,
+  clearSource,
+  stats,
+  _dumpEntities,
+  // exported for tests
+  tripleKey,
+  tripleToSentence,
+  cosine,
+};

@@ -1,0 +1,23 @@
+{
+  "id": "session_list",
+  "name": "List chat sessions",
+  "version": "1.0.0",
+  "description": "List the user's chat sessions (id, title, last-updated). Use when the user asks 'what was I working on' or to find a prior chat to resume.",
+  "capabilities": ["agent:read"],
+  "params": {
+    "type": "object",
+    "properties": {
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 50,
+        "description": "How many sessions to return, most-recently-updated first. Default 10."
+      },
+      "includeArchived": {
+        "type": "boolean",
+        "description": "Include archived chats too. Default false."
+      }
+    },
+    "additionalProperties": false
+  }
+}

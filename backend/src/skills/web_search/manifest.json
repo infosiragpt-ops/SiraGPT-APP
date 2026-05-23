@@ -1,0 +1,24 @@
+{
+  "id": "web_search",
+  "name": "Web Search",
+  "version": "1.0.0",
+  "description": "Search the public web for recent, credible information. Returns source snippets (title, url, summary). Use for facts, news, prices, comparisons — anything likely to have moved since training.",
+  "capabilities": ["net:outbound:llm"],
+  "params": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string",
+        "description": "Search query, 2-12 words, specific and keyword-rich."
+      },
+      "k": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 8,
+        "description": "How many sources to return. Default 5."
+      }
+    },
+    "required": ["query"],
+    "additionalProperties": false
+  }
+}

@@ -1,0 +1,256 @@
+name: Deploy to production
+
+# Fires after the CI workflow completes successfully on main.
+# We do NOT trigger on every push directly — we wait for CI
+# (lint, tsc, ~2900 tests, build, smoke /health, security audit,
+# license check) to go green first. That's the entire point of
+# this pipeline: a broken commit never reaches paying users.
+#
+# workflow_dispatch is kept for emergency manual deploys (e.g.
+# hot-patching a config when CI is itself broken) and for
+# replaying a deploy after a transient SSH/Docker failure.
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+# Production deploys are serialized. cancel-in-progress is FALSE
+# so a second push during an in-flight deploy queues behind it
+# instead of killing the running deploy mid-pm2-restart.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  # ── Pre-deploy sanity checks (cycle 34) ─────────────────────
+  # Lightweight gate that runs in the GH Actions runner BEFORE
+  # we SSH to the VPS. Catches unsafe migrations early so we
+  # never even attempt a destructive prod deploy.
+  pre-check:
+    name: Pre-deploy sanity checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Migration safety check
+        # Fails the pipeline on unsafe migrations unless the SQL
+        # contains an explicit `-- migration-safety: allow-*` marker.
+        # See scripts/check-migration-safety.js.
+        run: node scripts/check-migration-safety.js
+
+      - name: Notify Slack — deploy starting
+        # Best-effort notification; never blocks the deploy.
+        if: always()
+        continue-on-error: true
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_DEPLOY_WEBHOOK }}
+        run: |
+          if [[ -z "${SLACK_WEBHOOK_URL}" ]]; then
+            echo "::notice::SLACK_DEPLOY_WEBHOOK not set — skipping Slack ping"
+            exit 0
+          fi
+          curl -sS -X POST -H 'Content-Type: application/json' \
+            --data "{\"text\":\":rocket: siraGPT deploy starting — sha=${GITHUB_SHA::7} run=${GITHUB_RUN_ID}\"}" \
+            "${SLACK_WEBHOOK_URL}" || true
+
+  deploy:
+    name: SSH to VPS · deploy-with-rollback
+    needs: [pre-check]
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+
+    # Only deploy when:
+    #   - workflow_dispatch (manual trigger from the Actions UI), OR
+    #   - the upstream CI run on main concluded with success.
+    # head_branch is explicitly checked so a successful CI run on
+    # a PR branch (which can also fire workflow_run) never deploys.
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main')
+
+    steps:
+      - name: Deploy via SSH (with auto-rollback)
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          # Remote Docker builds can exceed 12m when Next.js and npm
+          # pruning run cold; keep enough headroom for deploy + rollback.
+          timeout: 60s
+          command_timeout: 45m
+          script_stop: true
+          script: |
+            set -e
+            echo "[deploy-workflow] Remote disk before cleanup"
+            df -h / /var/lib/docker 2>/dev/null || df -h / || true
+            docker system df || true
+            docker builder prune -af || true
+            docker image prune -af || true
+            docker container prune -f || true
+            echo "[deploy-workflow] Remote disk after cleanup"
+            docker system df || true
+            df -h / /var/lib/docker 2>/dev/null || df -h / || true
+            rm -f /root/siraNew/siraGPT/.git/index.lock
+            cd /root/siraNew/siraGPT
+            TARGET_SHA="${{ github.event.workflow_run.head_sha || github.sha }}"
+            echo "[deploy-workflow] Bootstrapping deploy scripts from ${TARGET_SHA}"
+            git fetch origin "${TARGET_SHA}"
+            git checkout "${TARGET_SHA}" -- scripts/deploy-with-rollback.sh scripts/deploy-production.sh
+            chmod +x scripts/deploy-with-rollback.sh
+            ./scripts/deploy-with-rollback.sh
+
+      - name: Surface deploy result
+        if: always()
+        run: |
+          if [[ "${{ job.status }}" == "success" ]]; then
+            echo "::notice::Production deploy succeeded — siragpt.com is on the new commit"
+          else
+            echo "::error::Production deploy failed. Check the SSH step output above for whether rollback succeeded."
+            echo "::error::Exit 1 from deploy-with-rollback.sh means rollback OK; exit 2 means manual intervention needed."
+          fi
+
+  # ── Post-deploy health verification (cycle 34) ──────────────
+  # Polls /health/ready from the GH Actions runner up to 60s.
+  # If it never returns 200, fires a webhook to the VPS that
+  # invokes deploy-with-rollback.sh's rollback path. Currently
+  # marked continue-on-error so it never wedges an otherwise
+  # healthy deploy while the probe is being tuned.
+  post-check:
+    name: Post-deploy health check
+    needs: [deploy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: always() && needs.deploy.result == 'success'
+    continue-on-error: true
+    steps:
+      - name: Poll /health/ready (max 60s)
+        id: health
+        env:
+          READY_URL: ${{ secrets.READY_URL }}
+        run: |
+          URL="${READY_URL:-https://api.siragpt.com/health/ready}"
+          echo "Polling ${URL}"
+          deadline=$(( $(date +%s) + 60 ))
+          while [[ $(date +%s) -lt ${deadline} ]]; do
+            if curl -sSf -o /dev/null --max-time 5 "${URL}"; then
+              echo "ready=true" >> "$GITHUB_OUTPUT"
+              echo "::notice::/health/ready returned 200"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "ready=false" >> "$GITHUB_OUTPUT"
+          echo "::error::/health/ready did not return 200 within 60s"
+          exit 1
+
+      - name: Trigger auto-rollback via SSH
+        if: failure() && steps.health.outputs.ready != 'true'
+        continue-on-error: true
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          timeout: 30s
+          command_timeout: 8m
+          script_stop: true
+          script: |
+            set -e
+            cd /root/siraNew/siraGPT
+            # Re-run deploy-with-rollback with TRIGGER_ROLLBACK to
+            # short-circuit straight into the rollback path. The
+            # script gracefully ignores the var if unsupported.
+            export TRIGGER_ROLLBACK=1
+            chmod +x scripts/deploy-with-rollback.sh
+            ./scripts/deploy-with-rollback.sh || true
+
+  # ── Source map upload (cycle 52, opt-in) ───────────────────
+  # Uploads frontend + backend source maps to Sentry so production
+  # stack traces resolve to original source. Only runs when the
+  # SENTRY_AUTH_TOKEN repository secret is configured — without it
+  # the whole job is skipped, so this is a no-op until ops opts in.
+  # See docs/sentry-sourcemaps.md.
+  sourcemaps:
+    name: Upload source maps to Sentry
+    needs: [deploy]
+    if: |
+      always() &&
+      needs.deploy.result == 'success' &&
+      vars.SOURCE_MAP_UPLOAD == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    env:
+      SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+      SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+      SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
+      SENTRY_RELEASE: ${{ github.sha }}
+    steps:
+      - name: Guard — require SENTRY_AUTH_TOKEN
+        run: |
+          if [[ -z "${SENTRY_AUTH_TOKEN}" ]]; then
+            echo "::notice::SENTRY_AUTH_TOKEN not set — skipping source map upload"
+            exit 0
+          fi
+
+      - uses: actions/checkout@v4
+        if: env.SENTRY_AUTH_TOKEN != ''
+
+      - name: Setup Node
+        if: env.SENTRY_AUTH_TOKEN != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install @sentry/cli
+        if: env.SENTRY_AUTH_TOKEN != ''
+        run: npm install -g @sentry/cli@2
+
+      - name: Build (frontend) to generate source maps
+        if: env.SENTRY_AUTH_TOKEN != ''
+        env:
+          GENERATE_SOURCEMAP: 'true'
+        run: npm ci --no-audit --no-fund && npm run build
+
+      - name: Upload source maps
+        if: env.SENTRY_AUTH_TOKEN != ''
+        run: ./scripts/upload-sentry-sourcemaps.sh
+
+  notify:
+    name: Slack notification
+    needs: [deploy, post-check]
+    if: always()
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Post result to Slack
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_DEPLOY_WEBHOOK }}
+          DEPLOY_RESULT: ${{ needs.deploy.result }}
+          HEALTH_RESULT: ${{ needs.post-check.result }}
+        run: |
+          if [[ -z "${SLACK_WEBHOOK_URL}" ]]; then
+            echo "::notice::SLACK_DEPLOY_WEBHOOK not set — skipping Slack ping"
+            exit 0
+          fi
+          if [[ "${DEPLOY_RESULT}" == "success" && "${HEALTH_RESULT}" != "failure" ]]; then
+            EMOJI=":white_check_mark:"
+            TEXT="siraGPT deploy succeeded — sha=${GITHUB_SHA::7} health=${HEALTH_RESULT}"
+          else
+            EMOJI=":x:"
+            TEXT="siraGPT deploy FAILED — deploy=${DEPLOY_RESULT} health=${HEALTH_RESULT} sha=${GITHUB_SHA::7} run=https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          fi
+          curl -sS -X POST -H 'Content-Type: application/json' \
+            --data "{\"text\":\"${EMOJI} ${TEXT}\"}" \
+            "${SLACK_WEBHOOK_URL}" || true

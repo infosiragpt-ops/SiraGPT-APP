@@ -1,0 +1,54 @@
+# ──────────────────────────────────────────────────────────────
+# siraGPT — Docker Compose Override (Development)
+# ──────────────────────────────────────────────────────────────
+# This file automatically merges with docker-compose.yml when
+# running `docker compose up` (Docker picks up override files
+# by convention). It enables hot-reload for both frontend and
+# backend, and exposes debug ports.
+#
+# Does NOT create the override file in production envs.
+# ──────────────────────────────────────────────────────────────
+
+services:
+  # ── Backend (dev) ─────────────────────────────────────────
+  # Mounts the source directory so changes are reflected without rebuild.
+  # Runs with node's --watch flag for auto-restart on file changes.
+  backend:
+    build:
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ./backend/src:/app/src
+      - ./backend/index.js:/app/index.js
+      - ./backend/prisma:/app/prisma
+      - uploads_data:/app/uploads
+    environment:
+      NODE_ENV: development
+    ports:
+      - "9229:9229"   # Node.js inspector (debugger)
+    command: ["node", "--watch", "index.js"]
+
+  # ── Frontend (dev) ────────────────────────────────────────
+  # Runs Next.js in dev mode with Turbopack for HMR.
+  frontend:
+    build:
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ./app:/app/app
+      - ./components:/app/components
+      - ./lib:/app/lib
+      - ./hooks:/app/hooks
+      - ./messages:/app/messages
+      - ./styles:/app/styles
+      - ./types:/app/types
+      - ./public:/app/public
+      - ./next.config.mjs:/app/next.config.mjs
+      - ./tailwind.config.js:/app/tailwind.config.js
+      - ./tsconfig.json:/app/tsconfig.json
+      - ./postcss.config.mjs:/app/postcss.config.mjs
+      - ./postcss.config.js:/app/postcss.config.js
+      - ./components.json:/app/components.json
+    environment:
+      NODE_ENV: development
+    ports:
+      - "3000:3000"
+    command: ["npm", "run", "dev"]

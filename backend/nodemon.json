@@ -1,0 +1,20 @@
+{
+  "watch": [
+    "index.js",
+    "src",
+    "prisma",
+    "scripts"
+  ],
+  "ext": "js,json,prisma",
+  "ignore": [
+    "uploads/**",
+    "uploads/agent-tasks/**",
+    "uploads/document-pipeline/**",
+    "artifacts/**",
+    "tmp/**",
+    "logs/**",
+    "*.log",
+    "node_modules/**"
+  ],
+  "delay": "500"
+}

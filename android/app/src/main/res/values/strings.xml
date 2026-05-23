@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Sira GPT</string>
+    <string name="title_activity_main">Sira GPT</string>
+    <string name="package_name">com.siragpt.app</string>
+    <string name="custom_url_scheme">com.siragpt.app</string>
+</resources>

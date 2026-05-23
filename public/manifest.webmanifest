@@ -1,0 +1,64 @@
+{
+  "name": "Sira GPT — Plataforma de IA Multimodal",
+  "short_name": "Sira GPT",
+  "description": "ChatGPT, Claude, Gemini, Grok y más en una sola plataforma. Chatea, genera imágenes, analiza documentos, diseña prototipos e investiga con IA.",
+  "lang": "es",
+  "dir": "ltr",
+  "start_url": "/chat",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#ffffff",
+  "theme_color": "#05070a",
+  "categories": ["productivity", "utilities", "education"],
+  "icons": [
+    {
+      "src": "/sira-gpt-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/sira-gpt-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/sira-gpt-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/sira-gpt-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Nuevo chat",
+      "short_name": "Chat",
+      "description": "Abrir el chat para empezar una conversación",
+      "url": "/chat",
+      "icons": [{ "src": "/sira-gpt-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Biblioteca",
+      "short_name": "Biblioteca",
+      "description": "Ver imágenes y documentos generados",
+      "url": "/library",
+      "icons": [{ "src": "/sira-gpt-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Proyectos",
+      "short_name": "Proyectos",
+      "description": "Gestionar tus proyectos",
+      "url": "/projects",
+      "icons": [{ "src": "/sira-gpt-192.png", "sizes": "192x192" }]
+    }
+  ],
+  "prefer_related_applications": false
+}

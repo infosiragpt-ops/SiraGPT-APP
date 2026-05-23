@@ -1,0 +1,45 @@
+{
+  "name": "@siragpt/sdk",
+  "version": "0.1.0-alpha.0",
+  "description": "Official TypeScript SDK for the SiraGPT public API.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    },
+    "./errors": {
+      "types": "./dist/errors.d.ts",
+      "import": "./dist/errors.mjs",
+      "require": "./dist/errors.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test src/__tests__/*.test.mjs",
+    "clean": "rm -rf dist"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "siragpt",
+    "ai",
+    "sdk",
+    "typescript"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

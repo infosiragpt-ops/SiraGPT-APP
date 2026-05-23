@@ -1,0 +1,101 @@
+name: Sync provider API keys to VPS
+
+# Updates .env on the VPS with API keys stored as GitHub secrets.
+# Only keys present as PROD_<NAME> secrets are touched — others are
+# left as-is. Idempotent: for each key, either replaces the existing
+# line in .env or appends a new one.
+#
+# Secrets read (set via `gh secret set PROD_<NAME>` from .env.local):
+#   PROD_GROQ_API_KEY, PROD_GEMINI_API_KEY, PROD_DEEPSEEK_API_KEY,
+#   PROD_OPENROUTER_API_KEY, PROD_ANTHROPIC_API_KEY, PROD_OPENAI_API_KEY
+#
+# The script never prints key values — only the var names being
+# updated and whether they were added or replaced.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: sync-provider-keys
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: SSH · update .env + restart PM2
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    # The PROD_* env vars are pulled from secrets at the JOB level so
+    # appleboy/ssh-action's `envs:` field can forward them. Without
+    # this `env:` block, the secrets are unset in the job environment
+    # and the SSH session sees empty strings.
+    env:
+      PROD_GROQ_API_KEY: ${{ secrets.PROD_GROQ_API_KEY }}
+      PROD_GEMINI_API_KEY: ${{ secrets.PROD_GEMINI_API_KEY }}
+      PROD_DEEPSEEK_API_KEY: ${{ secrets.PROD_DEEPSEEK_API_KEY }}
+      PROD_OPENROUTER_API_KEY: ${{ secrets.PROD_OPENROUTER_API_KEY }}
+      PROD_ANTHROPIC_API_KEY: ${{ secrets.PROD_ANTHROPIC_API_KEY }}
+      PROD_OPENAI_API_KEY: ${{ secrets.PROD_OPENAI_API_KEY }}
+
+    steps:
+      - name: Sync keys + restart backend
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          timeout: 60s
+          command_timeout: 4m
+          script_stop: true
+          envs: PROD_GROQ_API_KEY,PROD_GEMINI_API_KEY,PROD_DEEPSEEK_API_KEY,PROD_OPENROUTER_API_KEY,PROD_ANTHROPIC_API_KEY,PROD_OPENAI_API_KEY
+          script: |
+            set -e
+            cd /root/siraNew/siraGPT
+            echo "=== git pull (so latest scripts/sync-env-keys.py is on disk) ==="
+            git fetch origin main
+            git pull --ff-only origin main
+            echo ""
+            echo "=== Syncing provider keys via scripts/sync-env-keys.py ==="
+            python3 scripts/sync-env-keys.py /root/siraNew/siraGPT/.env
+
+            echo ""
+            echo "=== Restarting PM2 backend ==="
+            PM2_APP="${PM2_APP:-siraGPT-api}"
+            if ! pm2 describe "$PM2_APP" >/dev/null 2>&1; then
+              PM2_APP="$(pm2 jlist 2>/dev/null | node -e '
+                const fs = require("fs");
+                let list = [];
+                try {
+                  const input = fs.readFileSync(0, "utf8").trim();
+                  list = input ? JSON.parse(input) : [];
+                } catch {
+                  list = [];
+                }
+                const text = (p) => [
+                  p && p.name,
+                  p && p.pm2_env && p.pm2_env.pm_cwd,
+                  p && p.pm2_env && p.pm2_env.cwd,
+                  p && p.pm2_env && p.pm2_env.pm_exec_path,
+                  p && p.pm2_env && p.pm2_env.script
+                ].filter(Boolean).join(" ");
+                const found = list.find((p) => /siragpt|sira|backend|api/i.test(text(p)));
+                if (found && found.name) process.stdout.write(found.name);
+              ')"
+            fi
+            pm2 restart "$PM2_APP" --update-env
+
+            echo ""
+            echo "=== Wait for /health and report providers ==="
+            sleep 5
+            for i in $(seq 1 30); do
+              if curl -sSf -o /dev/null https://api.siragpt.com/health; then
+                echo "✓ Backend healthy"
+                curl -s https://api.siragpt.com/health \
+                  | python3 -c "import json,sys; d=json.load(sys.stdin); mp=[c for c in d['checks'] if c['name']=='model_providers'][0]; import pprint; pprint.pprint(mp['details'])"
+                exit 0
+              fi
+              sleep 2
+            done
+            echo "✗ Backend unhealthy after 60s"
+            pm2 logs "$PM2_APP" --nostream --lines 60 || true
+            exit 1

@@ -1,0 +1,1800 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("PRISMA_DATABASE_URL")
+}
+
+model User {
+  id               String  @id @default(cuid())
+  email            String  @unique
+  name             String
+  password         String
+  avatar           String?
+  googleId         String? @unique
+  plan             Plan    @default(FREE)
+  isAdmin          Boolean @default(false)
+  isSuperAdmin     Boolean @default(false) // Super admin can impersonate any user
+  apiUsage         BigInt  @default(0)
+  monthlyCallLimit BigInt  @default(3) // FREE plan: remaining daily generate calls (resets UTC)
+  monthlyLimit     BigInt  @default(1000)
+  gemmaTokenUsage  BigInt  @default(0) // Gema4 31B pool consumption (paid plans)
+  gemmaTokenPool   BigInt  @default(0) // Gema4 31B pool grant (paid plans)
+  freeQuotaDay     String? @db.VarChar(10) // UTC YYYY-MM-DD — last daily FREE reset
+
+  // Gmail Integration
+  gmailTokens String? // Store encrypted Gmail OAuth tokens as JSON
+
+  // Google Services Integration (Calendar & Drive)
+  googleServicesTokens String? // Store encrypted Google OAuth tokens for Calendar & Drive as JSON
+
+  // Spotify Integration
+  spotifyTokens String? // Store encrypted Spotify OAuth tokens as JSON
+
+  // Stripe Integration Fields
+  stripeCustomerId     String?   @unique
+  stripeSubscriptionId String?   @unique
+  subscriptionStatus   String? // active, inactive, canceled, past_due
+  subscriptionEndDate  DateTime?
+
+  // Personalization — injected into the master system prompt per turn so
+  // every LLM call hears the user's voice (not just their chat history).
+  locale             String? // ISO 639-1, e.g. "es", "en". Null → auto-detect from message.
+  preferredTone      String? // e.g. "casual", "formal", "technical", "pedagogical"
+  customInstructions String? @db.Text // free-form "what should the assistant know about you"
+
+  // Flexible settings bag — stores the full settings tree from /settings
+  // (theme, accent, density, font size, notification prefs, app toggles,
+  // etc.). JSON lets us evolve the shape without migrations. Controls
+  // that need to be queryable (locale, tone) live in their own columns.
+  settings Json?
+
+  // Last activity timestamp — written via the write-behind cache from
+  // every authenticated request. Used by /api/admin/stats/users to
+  // distinguish active vs dormant accounts. Nullable so existing rows
+  // are unaffected by the migration.
+  lastActiveAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // GDPR soft-delete tombstone. When non-null the account is in the
+  // 30-day grace window before the hard-delete cron purges it.
+  deletedAt DateTime?
+
+  // Email verification — non-null once the user has clicked the
+  // magic link from `EmailVerificationToken`. Org invitations (cycle
+  // 27) gate full membership acceptance on this column being set so
+  // a freshly-invited stranger can't slip past identity checks.
+  emailVerifiedAt DateTime?
+
+  // SMS opt-in — E.164 phone number used by the SMS-delivery bridge
+  // (ratchet 45) to fan out `severity === 'critical'` notifications
+  // through Twilio. Nullable: users without a phone simply skip SMS.
+  phone String?
+
+  // Phone verification — non-null once the user has redeemed a 6-digit
+  // SMS code issued by `PUT /api/users/me/phone` and accepted by
+  // `POST /api/users/me/phone/verify` (ratchet 45, Task 1).
+  phoneVerifiedAt DateTime?
+
+  // SMS 2FA opt-in flag — when true AND phoneVerifiedAt is non-null, the
+  // /api/auth/login handler returns a 202 partial-session response that
+  // forces the user through /api/auth/2fa/sms/verify before a full JWT is
+  // issued (ratchet 45, 2FA opt-in cycle). Defaults to false so legacy
+  // users retain the cycle-0 login behaviour until they opt in via
+  // `PATCH /api/users/me/2fa`.
+  twoFactorEnabled Boolean @default(false)
+
+  // TOTP-based 2FA (ratchet 45, Task 1) — alternative to SMS for
+  // Google Authenticator / Authy / 1Password etc. `totpSecret` holds
+  // the base32 seed encrypted at rest with the platform ENCRYPTION_KEY
+  // (see src/utils/encryption.js). When `totpEnabled` is true the login
+  // handler accepts a 6-digit TOTP code in addition to (or instead of)
+  // an SMS challenge. Both columns are nullable / default-off so legacy
+  // rows keep working.
+  totpSecret        String?
+  totpEnabled       Boolean @default(false)
+  // Ratchet 45 — TOTP recovery codes (Task 2). 10 single-use 16-char
+  // codes are generated when the user calls
+  // POST /api/users/me/2fa/totp/recovery-codes (totpEnabled required).
+  // Stored hashed as `[{ hash, usedAt? }]`; the plaintext is returned
+  // ONCE at generation time. Recovery codes are accepted as an
+  // alternative to the 6-digit code at POST /api/auth/2fa/totp/verify.
+  totpRecoveryCodes Json?
+
+  // Ratchet 45 — WebAuthn / passkey credentials (scaffold follow-up
+  // to the cycle 135 TOTP rollout). JSON array of
+  // `{ credentialId, publicKey, counter, transports[], label?,
+  //   createdAt, lastUsedAt? }`. credentialId + publicKey are
+  // base64url. Managed via the four endpoints under
+  // /api/users/me/webauthn/* (registration) and
+  // /api/auth/webauthn/* (authentication). See
+  // backend/src/services/webauthn.js. Null on legacy rows.
+  webauthnCredentials Json?
+
+  // Relations
+  chats                   Chat[]
+  payments                Payment[]
+  apiUsages               ApiUsage[]
+  sessions                Session[]
+  files                   File[]
+  createdGpts             CustomGpt[]
+  projects                Project[]
+  designs                 DesignProject[]
+  scheduledPosts          ScheduledPost[]
+  socialConnections       SocialConnection[]
+  searchBrainSettings     SearchBrainSettings?
+  usageAlerts             UsageAlert[]
+  notifications           Notification[]
+  subscriptionEvents      SubscriptionEvent[]
+  agentTasks              AgentTask[]
+  generatedArtifacts      GeneratedArtifact[]
+  documentAnalyses        DocumentAnalysis[]
+  pushSubscriptions       PushSubscription[]
+  savedSearches           SavedSearch[]
+  bookmarks               Bookmark[]
+  webhookEndpoints        WebhookEndpoint[]
+  slackIntegrations       SlackIntegration[]
+  policyAcceptances       PolicyAcceptance[]
+  apiKeys                 ApiKey[]
+  emailVerificationTokens EmailVerificationToken[]
+  phoneVerifications      PhoneVerification[]
+  twoFAChallenges         TwoFAChallenge[]
+  partialSessions         PartialSession[]
+
+  // Organization / team membership — multi-tenant scaffolding (cycle 27).
+  // A user can belong to multiple organizations with different roles.
+  // `ownedOrganizations` covers the legacy "creator" pointer on the org
+  // row; `organizationMemberships` is the source of truth for ACL.
+  ownedOrganizations      Organization[]        @relation("OrganizationOwner")
+  organizationMemberships OrgMembership[]
+  sentOrgInvitations      OrgInvitation[]       @relation("OrgInvitationInviter")
+  createdOrgAnnouncements OrgAnnouncement[]     @relation("OrgAnnouncementCreator")
+  announcementReads       OrgAnnouncementRead[]
+  pendingTransfersFrom    OrgPendingTransfer[]  @relation("OrgPendingTransferFrom")
+  pendingTransfersTo      OrgPendingTransfer[]  @relation("OrgPendingTransferTo")
+
+  // User memory relations (orchestration)
+  memories UserMemory[]
+
+  @@index([deletedAt])
+  @@map("users")
+}
+
+model PushSubscription {
+  id         String   @id @default(cuid())
+  userId     String
+  token      String   @unique
+  platform   String // 'ios' | 'android' | 'web'
+  endpoint   String?
+  p256dh     String?
+  auth       String?
+  createdAt  DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("push_subscriptions")
+}
+
+model AiModel {
+  id          String    @id @default(cuid())
+  name        String    @unique
+  displayName String
+  provider    String
+  description String?
+  apiKey      String?
+  type        ModelType @default(TEXT) // <-- NAYA: Model ki type (TEXT/IMAGE)
+  icon        String?
+  isActive    Boolean   @default(true)
+
+  // Auto-sync tracking fields
+  lastSynced    DateTime?
+  syncSource    String?   @default("manual") // "api", "manual", "scheduled"
+  contextLength Int? // Model's context window size
+  pricing       Json? // Provider pricing information
+  tags          String[] // Model tags/categories
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("ai_models")
+}
+
+// Admin-curated upstream API connections used to source AI models.
+// Each row is one base URL + auth combo (e.g. https://api.openai.com/v1
+// with a specific key). The /admin/models view enumerates models
+// surfaced by these connections; chat code routes a model request
+// through the connection that exposes it.
+//
+// `apiKey` is stored as-is for MVP — a future migration will swap
+// the column for an envelope-encrypted blob keyed by a master KEK.
+model AdminConnection {
+  id            String    @id @default(cuid())
+  url           String // base URL, e.g. https://api.openai.com/v1
+  providerKey   String // "openai" | "anthropic" | "gemini" | "mistral" | "groq" | "openrouter" | "custom"
+  providerLabel String? // human label, e.g. "OpenAI API"
+  apiKey        String? // bearer token; null = no auth (e.g. local Ollama)
+  authType      String    @default("Bearer") // "Bearer" | "None" | "Custom"
+  apiType       String    @default("chat_completions") // "chat_completions" | "responses" | "embeddings"
+  headers       Json? // optional extra request headers
+  prefixId      String? // model name prefix for namespacing
+  modelIds      String[] // empty array = include all from /models endpoint
+  tags          String[]
+  enabled       Boolean   @default(true)
+  // Per-connection sync status (last list-models call)
+  lastSyncedAt  DateTime?
+  lastSyncOk    Boolean   @default(false)
+  lastSyncError String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([providerKey])
+  @@index([enabled])
+  @@map("admin_connections")
+}
+
+model Session {
+  id          String   @id @default(cuid())
+  userId      String
+  token       String   @unique
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+  // lastUsedAt: bumped by routes that re-use a long-lived session (e.g.
+  // /api/appshots/capture) so the settings UI can show "last seen" and
+  // the user can confidently revoke stale Appshots tokens. Nullable so
+  // pre-migration rows don't have to backfill.
+  lastUsedAt  DateTime?
+  // fingerprint: hex sha256(IP-class || User-Agent) recorded at login,
+  // compared on each request so a leaked token can't be replayed from
+  // a different network or browser. See utils/session-fingerprint.js.
+  fingerprint String?
+  // Task 15 — Appshots device hints. Recorded at /api/appshots/pair so the
+  // settings UI can distinguish multiple linked devices ("Chrome en macOS ·
+  // 81.x.x.x"). All nullable: cookie sessions and pre-migration rows leave
+  // them empty. ipHint is the /24 (IPv4) or /64 (IPv6) network prefix from
+  // reduceIp() — never the full address — to avoid leaking precise IPs
+  // back to the UI. label is a user-editable nickname.
+  userAgent   String?
+  ipHint      String?
+  label       String?
+  // Task 19 — human-readable geo hint resolved from the caller's IP at
+  // pair time (e.g. "Madrid, ES"). Best-effort: NULL when the lookup
+  // fails, when the IP is private/reserved, or for pre-migration rows.
+  // The UI shows it alongside (or in place of) ipHint to make the
+  // session list legible at a glance.
+  geoHint     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model Chat {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String
+  model     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  isShared Boolean @default(false)
+  shareId  String? @unique
+
+  // Lifecycle flags driven from the Settings → Data controls section.
+  // `isArchived` hides the chat from the main list without deleting it;
+  // `deletedAt` soft-deletes with a 30-day window before hard purge.
+  isArchived Boolean   @default(false)
+  deletedAt  DateTime?
+
+  // Language policy — persisted resolution of "what language should the
+  // assistant reply in for this thread". Set on first turn (or on any
+  // explicit "respond in X" instruction); reused on every subsequent turn
+  // so short follow-ups like "ok", "continúa", "summarize" don't drift to
+  // the model's default language. ISO 639-1 (es, en, pt, fr, …).
+  preferredResponseLanguage String?
+
+  googleCalendarContext Json? // NEW: Store recent Google Calendar event IDs for context
+
+  // Word Connector Integration
+  isWordConnectorChat Boolean @default(false) // Track if this chat is for Word Connector
+  wordContent         String? @db.Text // Store the full Word document HTML content
+
+  // Excel Connector Integration
+  isExcelConnectorChat Boolean @default(false) // Track if this chat is for Excel Connector
+  excelContent         Json? // Store the workbook JSON (Syncfusion openFromJson compatible)
+
+  // GPT Integration
+  customGptId String?
+  customGpt   CustomGpt? @relation(fields: [customGptId], references: [id], onDelete: SetNull)
+
+  // Project Integration — mirrors customGptId. When set, the AI route
+  // injects the project's instructions + attached file contents into
+  // the system prompt so a chat inside a project answers with that
+  // context baked in.
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  // Organization sharing (cycle 27). When non-null, members of the
+  // organization with at least VIEWER role can see this chat. The
+  // chat owner remains `userId`; sharing does not transfer ownership.
+  organizationId String?
+  sharedAt       DateTime?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  // Relations
+  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages           Message[]
+  sharedMessages     MessageShare[]      @relation("SharedMessages")
+  agentTasks         AgentTask[]
+  generatedArtifacts GeneratedArtifact[]
+
+  @@index([userId, updatedAt])
+  @@index([customGptId])
+  @@index([projectId])
+  @@index([organizationId, sharedAt])
+  @@map("chats")
+}
+
+model Message {
+  id        String      @id @default(cuid())
+  chatId    String
+  role      MessageRole
+  content   String      @db.Text
+  tokens    BigInt?
+  timestamp DateTime    @default(now())
+  files     Json? // Store file references
+  metadata  Json? // Store message metadata (like Gmail connection requirements)
+  feedback  String?
+
+  // Soft-delete tombstone — mirrors Chat.deletedAt so GDPR delete can
+  // cascade without losing chat shape (foreign-key cascade still works
+  // on hard purge from the cron).
+  deletedAt DateTime?
+
+  // Full-text search tsvector — managed by a Postgres trigger on
+  // INSERT/UPDATE OF content (see migration
+  // 20260519040000_add_message_fts). Declared as Unsupported because
+  // Prisma's Postgres connector doesn't have a first-class tsvector
+  // type — we never read/write it from the JS client, only via raw
+  // SQL in /api/search.
+  content_tsv Unsupported("tsvector")?
+
+  // Relations
+  chat               Chat                @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  generatedArtifacts GeneratedArtifact[]
+  bookmarks          Bookmark[]
+
+  @@index([chatId, timestamp])
+  @@index([chatId, deletedAt])
+  @@map("messages")
+}
+
+// Saved searches — see migration 20260519050000_add_saved_search.
+// `filters` is a free-form JSON bag (chatId, dateRange, role, etc.)
+// so the search panel can grow new knobs without a migration.
+model SavedSearch {
+  id        String   @id @default(cuid())
+  userId    String
+  name      String
+  query     String
+  filters   Json?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("saved_searches")
+}
+
+// Bookmarks — per-user favourites on individual messages. The
+// optional `note` field is a user-authored annotation. Unique on
+// (userId, messageId) prevents duplicate stars.
+model Bookmark {
+  id        String   @id @default(cuid())
+  userId    String
+  messageId String
+  note      String?
+  // Optional grouping label so the UI can render bookmarks into
+  // user-defined folders ("Prompts", "Bugs", …). Free-form string —
+  // no FK to a folders table, so renaming is just an UPDATE and
+  // there's no orphan cleanup. NULL means "uncategorised".
+  folder    String?
+  createdAt DateTime @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, messageId])
+  @@index([userId, createdAt])
+  @@index([userId, folder])
+  @@map("bookmarks")
+}
+
+// User-managed outbound webhook subscriptions. Each row is one
+// {url, events[], secret} triple that the trigger registry fans out
+// to when a matching event is published. The secret is the HMAC key
+// the recipient uses to verify the signature header.
+model WebhookEndpoint {
+  id                      String    @id @default(cuid())
+  userId                  String
+  // Optional org scope. When set, this endpoint participates in org-level
+  // fan-out (publish payloads carrying `orgId`). userId still records the
+  // creator for audit / quota attribution. Cycle 45 added per-org webhooks.
+  organizationId          String?
+  url                     String
+  events                  String[]
+  secret                  String
+  // Ratchet 45 (Task 1): rotate-secret grace window. When an operator
+  // rotates the HMAC secret, the prior value is parked here until
+  // `previousSecretExpiresAt` so downstream consumers have a window to
+  // roll their stored secret without dropped deliveries. Both fields
+  // are cleared on the next rotation (or by GC sweeping expired rows).
+  previousSecret          String?
+  previousSecretExpiresAt DateTime?
+  // Ratchet 44 (Task 1): per-endpoint retry policy override. When null
+  // the dispatcher falls back to its default (3 retries). Stored as
+  // nullable so existing rows keep the default without backfill.
+  maxRetries              Int?
+  // Ratchet 44 (Task 2): optional delivery filters. Shape:
+  //   { events?: string[], excludeUsers?: string[] }
+  // - `events`        : include-list of event names (in addition to the
+  //                     `events` glob array). When present an event must
+  //                     appear here OR match a `events[]` glob to be
+  //                     delivered.
+  // - `excludeUsers`  : userIds whose publish() calls are silently
+  //                     dropped for this endpoint (per-recipient mute).
+  // Anything else in the JSON is ignored — the field is intentionally
+  // forward-compatible.
+  filters                 Json?
+  isActive                Boolean   @default(true)
+  createdAt               DateTime  @default(now())
+  lastDeliveryAt          DateTime?
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([userId, isActive])
+  @@index([organizationId, isActive])
+  @@map("webhook_endpoints")
+}
+
+// Per-user Slack Incoming Webhook configuration. The webhookUrl is
+// encrypted at rest (AES-256-GCM, see services/slack-integration.js).
+// `isEnabled` gates whether trigger-registry fires Slack notifications
+// for this user — flipped off after the test ping until the user opts
+// in explicitly.
+model SlackIntegration {
+  id             String    @id @default(cuid())
+  userId         String
+  organizationId String?
+  webhookUrl     String    @db.Text
+  channelName    String?
+  isEnabled      Boolean   @default(false)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  lastEventAt    DateTime?
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([organizationId, isEnabled])
+  @@map("slack_integrations")
+}
+
+model AgentTask {
+  id             String    @id @default(cuid())
+  userId         String
+  chatId         String?
+  jobId          String?   @unique
+  status         String    @default("queued")
+  goal           String    @db.Text
+  model          String?
+  traceId        String?
+  documentPolicy Json?
+  state          Json?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  completedAt    DateTime?
+  cancelledAt    DateTime?
+  failedAt       DateTime?
+
+  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chat      Chat?               @relation(fields: [chatId], references: [id], onDelete: SetNull)
+  events    AgentTaskEvent[]
+  artifacts GeneratedArtifact[]
+
+  @@index([userId, updatedAt])
+  @@index([status, updatedAt])
+  @@index([chatId])
+  @@map("agent_tasks")
+}
+
+model AgentTaskEvent {
+  id        String   @id @default(cuid())
+  taskId    String
+  seq       Int
+  type      String
+  payload   Json
+  createdAt DateTime @default(now())
+
+  task AgentTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, seq])
+  @@index([taskId, createdAt])
+  @@map("agent_task_events")
+}
+
+model GeneratedArtifact {
+  id          String   @id
+  userId      String
+  taskId      String?
+  chatId      String?
+  messageId   String?
+  filename    String
+  mime        String
+  format      String
+  path        String?
+  sizeBytes   Int
+  previewHtml String?  @db.Text
+  validation  Json?
+  createdAt   DateTime @default(now())
+
+  user    User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  task    AgentTask? @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  chat    Chat?      @relation(fields: [chatId], references: [id], onDelete: SetNull)
+  message Message?   @relation(fields: [messageId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([taskId, createdAt])
+  @@map("generated_artifacts")
+}
+
+model MessageShare {
+  id                 String   @id @default(cuid())
+  messageId          String // The original message that was shared
+  chatId             String // The chat this message belongs to
+  userMessageId      String // The user message in the pair
+  assistantMessageId String // The assistant message in the pair
+  sharedAt           DateTime @default(now())
+
+  // Relations
+  chat Chat @relation("SharedMessages", fields: [chatId], references: [id], onDelete: Cascade)
+
+  @@index([messageId])
+  @@index([chatId])
+  @@map("message_shares")
+}
+
+model File {
+  id            String   @id @default(cuid())
+  userId        String
+  filename      String
+  originalName  String
+  mimeType      String
+  size          Int
+  path          String
+  extractedText String?  @db.Text
+  openaiFileId  String? // OpenAI Files API ID
+  createdAt     DateTime @default(now())
+
+  // Processing state machine — written by the upload pipeline and the
+  // RAG indexer. Stages, in order: uploaded → validating → extracting
+  // → chunking → embedding → indexing → ready (or → failed at any
+  // step). The frontend polls /api/files/:id/processing-status and
+  // surfaces the current stage / error in the attachment chip so the
+  // chat never sits on a silent spinner when the pipeline stalls.
+  // Nullable to keep legacy rows queryable without a backfill.
+  processingStage   String?
+  processingError   String?
+  processingStageAt DateTime?
+
+  // Relations
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  documentAnalysis DocumentAnalysis?
+  documentChunks   DocumentChunk[]
+  documentTables   DocumentTable[]
+  documentNodes    DocumentNode[]
+
+  customGptId String?
+  customGpt   CustomGpt? @relation("GptKnowledgeFiles", fields: [customGptId], references: [id], onDelete: SetNull)
+
+  // Files attached to a Project. Same pattern as GPT knowledge files:
+  // a File can belong to a Project (its extractedText is injected into
+  // chats that run inside that project) or stand alone (uploaded to a
+  // regular chat). SetNull on delete preserves the File row if the
+  // project is removed — the user can reattach it elsewhere.
+  projectId String?
+  project   Project? @relation("ProjectFiles", fields: [projectId], references: [id], onDelete: SetNull)
+
+  // Soft-delete tombstone for GDPR / "Trash" workflows. Hard purge
+  // happens via the daily cron after a 30-day grace window.
+  deletedAt DateTime?
+
+  @@index([userId, createdAt])
+  @@index([customGptId])
+  @@index([projectId])
+  @@index([userId, deletedAt])
+  @@map("files")
+}
+
+model DocumentAnalysis {
+  id           String   @id @default(cuid())
+  userId       String
+  fileId       String   @unique
+  status       String   @default("pending")
+  language     String?
+  mimeType     String?
+  pageCount    Int?
+  sheetCount   Int?
+  slideCount   Int?
+  charCount    Int      @default(0)
+  chunkCount   Int      @default(0)
+  tableCount   Int      @default(0)
+  summary      String?  @db.Text
+  textCoverage Json?
+  ocr          Json?
+  warnings     Json?
+  metadata     Json?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user   User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  file   File            @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  chunks DocumentChunk[]
+  tables DocumentTable[]
+  nodes  DocumentNode[]
+
+  @@index([userId, updatedAt])
+  @@map("document_analyses")
+}
+
+model DocumentChunk {
+  id           String   @id @default(cuid())
+  analysisId   String
+  fileId       String
+  ordinal      Int
+  sourceType   String
+  sourceLabel  String?
+  pageNumber   Int?
+  sheetName    String?
+  slideNumber  Int?
+  sectionTitle String?
+  text         String   @db.Text
+  charCount    Int      @default(0)
+  metadata     Json?
+  createdAt    DateTime @default(now())
+
+  analysis DocumentAnalysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+  file     File             @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  @@index([analysisId, ordinal])
+  @@index([fileId, ordinal])
+  @@map("document_chunks")
+}
+
+model DocumentTable {
+  id          String   @id @default(cuid())
+  analysisId  String
+  fileId      String
+  ordinal     Int
+  sourceType  String
+  sourceLabel String?
+  pageNumber  Int?
+  sheetName   String?
+  slideNumber Int?
+  title       String?
+  columns     String[]
+  rowCount    Int      @default(0)
+  preview     Json?
+  markdown    String?  @db.Text
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  analysis DocumentAnalysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+  file     File             @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  @@index([analysisId, ordinal])
+  @@index([fileId, ordinal])
+  @@map("document_tables")
+}
+
+// Hierarchical document nodes — tree structure (root → sections →
+// subsections → paragraphs) with bottom-up summaries. Built by
+// services/rag/hierarchical-chunker.js for queries that need
+// either pinpoint recall or whole-document overview.
+model DocumentNode {
+  id         String   @id
+  fileId     String
+  analysisId String?
+  parentId   String?
+  level      Int
+  role       String // 'root' | 'section' | 'paragraph' | …
+  heading    String?
+  text       String   @default("") @db.Text
+  summary    String   @default("") @db.Text
+  embedding  Json? // float[] stored as JSON for portability
+  metadata   Json?
+  ordinal    Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  file     File              @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  analysis DocumentAnalysis? @relation(fields: [analysisId], references: [id], onDelete: SetNull)
+  parent   DocumentNode?     @relation("DocumentNodeChildren", fields: [parentId], references: [id], onDelete: Cascade)
+  children DocumentNode[]    @relation("DocumentNodeChildren")
+
+  @@index([fileId, ordinal])
+  @@index([fileId, level])
+  @@index([parentId])
+  @@index([analysisId])
+  @@map("document_nodes")
+}
+
+model Payment {
+  id         String          @id @default(cuid())
+  userId     String
+  amount     Float
+  currency   String          @default("USD")
+  status     PaymentStatus   @default(PENDING)
+  plan       Plan
+  provider   PaymentProvider
+  providerId String? // External payment ID (Stripe session ID, PayPal order ID, etc.)
+
+  // Stripe specific fields
+  stripeSessionId      String? @unique
+  stripeSubscriptionId String?
+  stripeCustomerId     String?
+  stripePriceId        String?
+
+  metadata  Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+  @@map("payments")
+}
+
+model ApiUsage {
+  id        String   @id @default(cuid())
+  userId    String
+  model     String
+  tokens    BigInt
+  cost      Float
+  timestamp DateTime @default(now())
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, timestamp])
+  @@index([model, timestamp])
+  @@map("api_usage")
+}
+
+model SystemSettings {
+  id    String @id @default(cuid())
+  key   String @unique
+  value String @db.Text
+
+  @@map("system_settings")
+}
+
+// Ratchet 45 — daily aggregate of AI cost usage.
+//
+// The in-process cost-tracker flushes once a day (05:00 UTC by default)
+// into this table so historical reports survive process restarts. Rows
+// are aggregated by (date, userId, model, provider, organizationId) —
+// the unique compound key — and upserted, so a partial flush followed by
+// a retry never double-counts.
+model CostUsageDaily {
+  id             String   @id @default(cuid())
+  userId         String   @default("")
+  organizationId String   @default("")
+  date           DateTime @db.Date
+  model          String
+  provider       String   @default("")
+  inputTokens    BigInt   @default(0)
+  outputTokens   BigInt   @default(0)
+  costUSD        Float    @default(0)
+  requests       Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([date, userId, model, provider, organizationId], name: "cost_usage_daily_unique")
+  @@index([date])
+  @@index([userId, date])
+  @@index([organizationId, date])
+  @@map("cost_usage_daily")
+}
+
+enum ProviderType {
+  OpenAI
+  Gemini
+  OpenRouter
+  DeepSeek
+  Groq
+  Custom // Mustaqbil ke liye
+}
+
+enum ModelType {
+  TEXT
+  IMAGE
+}
+
+enum Plan {
+  FREE
+  PRO
+  PRO_MAX
+  ENTERPRISE
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum PaymentProvider {
+  STRIPE
+  PAYPAL
+  MERCADOPAGO
+}
+
+model UsageAlert {
+  id        String   @id @default(cuid())
+  userId    String
+  alertType String // 'api_usage' | 'call_usage'
+  threshold Float // 0.8, 0.9, 1.0
+  sentAt    DateTime @default(now())
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, sentAt])
+  @@map("usage_alerts")
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  // Ratchet 44 — org-scoped notifications (cycle 165). When the row was
+  // produced by an org-wide broadcast (POST /api/orgs/:id/notifications)
+  // the originating organization is recorded here so the inbox can
+  // surface a badge / filter and so the FE knows which org context the
+  // notification belongs to. NULL for plain user-targeted rows.
+  orgId     String?
+  type      String // 'usage_warning', 'payment_failed', 'subscription_ending'
+  title     String
+  message   String    @db.Text
+  severity  String // 'info', 'warning', 'critical'
+  read      Boolean   @default(false)
+  metadata  Json? // Additional data
+  createdAt DateTime  @default(now())
+  readAt    DateTime?
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([userId, read])
+  @@index([orgId, createdAt])
+  @@map("notifications")
+}
+
+model SubscriptionEvent {
+  id            String   @id @default(cuid())
+  userId        String
+  eventType     String // 'created', 'updated', 'canceled', 'reactivated'
+  previousPlan  String?
+  newPlan       String?
+  eventData     Json? // Store full event data
+  stripeEventId String?  @unique
+  processedAt   DateTime @default(now())
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, processedAt])
+  @@index([eventType, processedAt])
+  @@map("subscription_events")
+}
+
+model AnonymousUsage {
+  id          String   @id @default(cuid())
+  anonId      String   @unique
+  usedQueries Int      @default(0)
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("anonymous_usage")
+}
+
+enum GptVisibility {
+  PRIVATE
+  UNLISTED
+  PUBLIC
+}
+
+model CustomGpt {
+  id        String @id @default(cuid())
+  creatorId String
+  creator   User   @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+
+  // Basic Info
+  name        String
+  description String? @db.Text
+  iconUrl     String?
+
+  // Behavior Configuration
+  instructions    String  @db.Text
+  greetingMessage String? @db.Text
+
+  // Model Parameters
+  modelName   String @default("gpt-3.5-turbo")
+  temperature Float  @default(0.7)
+  maxTokens   Int?
+
+  // Knowledge Files
+  knowledgeFiles File[] @relation("GptKnowledgeFiles")
+
+  // 🔹 Add this line (reverse relation for Chat)
+  chats Chat[]
+
+  // Actions
+  actions              Json?
+  conversationStarters Json?
+
+  // Publishing
+  visibility GptVisibility @default(PRIVATE)
+  shareId    String        @unique @default(cuid())
+  category   String?
+  isFeatured Boolean       @default(false)
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+
+  // Soft-delete tombstone — owner-driven GDPR deletes hide the GPT
+  // from the creator dashboard without cascading on shared chats.
+  deletedAt DateTime?
+
+  @@index([creatorId, updatedAt])
+  @@index([visibility, isFeatured])
+  @@index([creatorId, deletedAt])
+  @@map("custom_gpts")
+}
+
+// Projects — a workspace for chatting against a curated bundle of
+// files + custom instructions. Distinct from CustomGpt because:
+//   - Projects are always private to their owner (no visibility
+//     tier, no shareId, no category/featured machinery).
+//   - The goal is task-scoped knowledge ("Research paper Q1",
+//     "Thesis methodology") rather than a reusable persona that
+//     others can chat with.
+//   - Instructions are optional — a project works as a pure
+//     file-bucket even with no prompt set.
+// Otherwise the wiring is identical to CustomGpt: chats reference
+// the project via Chat.projectId, files via File.projectId, and the
+// ai.js route reads both and injects them into the system prompt.
+model Project {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name         String
+  description  String? @db.Text
+  instructions String? @db.Text // Optional custom instructions; may be edited any time.
+
+  // Optional star / favourite — powers the "starred first" sort the
+  // UI offers alongside recent activity.
+  isStarred Boolean @default(false)
+
+  // Read-only share — if non-null, /projects/share/<shareId>
+  // renders a public snapshot of the project (name, description,
+  // file list) without revealing the owner's chats. Toggled via the
+  // "share link" control on the detail page.
+  shareId String? @unique
+
+  // Relations — file bucket + chats created inside this project.
+  files     File[]            @relation("ProjectFiles")
+  chats     Chat[]
+  memories  ProjectMemory[]
+  documents ProjectDocument[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Soft-delete tombstone. The Project list view should filter on
+  // `deletedAt: null` via the prisma-soft-delete helper.
+  deletedAt DateTime?
+
+  @@index([userId, updatedAt])
+  @@index([userId, deletedAt])
+  @@map("projects")
+}
+
+// Project memory — durable facts the assistant should remember across
+// chats inside a project. One row per extracted fact. Populated
+// asynchronously after each chat turn by services/project-memory.js:
+// the assistant's reply + the preceding user message are handed to a
+// small LLM extractor that emits 0-3 short "things worth remembering"
+// bullet points (user preferences, the project's scope, decisions
+// made). Rows are plain text — this intentionally sidesteps the
+// embedding-based RAG machinery in long-term-memory.js because the UI
+// just renders the list; semantic retrieval isn't required here.
+model ProjectMemory {
+  id           String   @id @default(cuid())
+  projectId    String
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  fact         String   @db.Text
+  sourceChatId String? // optional pointer to the chat this came from
+  createdAt    DateTime @default(now())
+
+  @@index([projectId, createdAt])
+  @@map("project_memories")
+}
+
+// Project documents — long-form writing surface for each project.
+// Think: thesis draft, methodology section, research notes. Edited
+// with a Tiptap-based WYSIWYG editor that serialises to Markdown;
+// `content` is the authoritative form (Markdown round-trip lets the
+// document export cleanly via the existing /api/generate-document
+// docx pipeline without a separate HTML path).
+//
+// Kept separate from File because these are NOT upload artifacts —
+// they're live documents the user authors in-app, auto-saved as
+// they type. File is for PDFs/images the user brings in; this is
+// for prose the user writes.
+model ProjectDocument {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  title   String
+  content String @db.Text // Markdown source of truth
+  // Optional scratchpad for editor-specific state (open/closed sections,
+  // cursor position, last-view timestamp) without forcing a schema
+  // change every time the editor grows a new affordance.
+  meta    Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId, updatedAt])
+  @@map("project_documents")
+}
+
+// Design projects — the siraGPT Design studio. Each row is one
+// Claude-Design-style artifact (prototype, slide deck, or arbitrary
+// "other" page) that the user iterates on via chat. The `html`
+// column holds the current full single-file HTML document rendered
+// in the canvas iframe; the `messages` JSON is the append-only
+// conversation that produced it.
+//
+// We store the full HTML (not a diff log) because the generation
+// prompt asks the model to emit the complete updated document per
+// turn — that's what makes iteration deterministic. A diff history
+// could go in a sibling table if we ever want step-by-step replay,
+// but the UX the user gets from "last stable version" is just the
+// current `html`.
+model DesignProject {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name     String
+  // Creation shape: prototype | slide_deck | template | other.
+  // Controls what system prompt is selected in the generator and
+  // what container the canvas renders in (slides get a 16:9 stage,
+  // prototypes get a responsive frame, etc.).
+  kind     String
+  // Prototype-only: "wireframe" or "high" fidelity. Null for other
+  // kinds. The wireframe mode tells the generator to use grey
+  // placeholders and system-ui type; high-fidelity gives branded
+  // palette + serif display type.
+  fidelity String?
+
+  // Optional user-written speaker notes toggle for slide_deck.
+  speakerNotes Boolean? @default(false)
+
+  // The current canonical HTML document. May be null before the
+  // first generation.
+  html     String? @db.Text
+  // Append-only conversation. Shape: [{role, content, at}]. Kept
+  // inline rather than in Message rows because chats in design
+  // projects aren't part of the user's regular Chat history — they
+  // are artifacts of the design iteration and should live with the
+  // design.
+  messages Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, updatedAt])
+  @@map("design_projects")
+}
+
+// ─── Marketing — agente de publicación programada ─────────────────────────
+//
+// One row per scheduled / published social post. The UI (/marketing)
+// lets the user write an idea, pick a posting time on a calendar,
+// choose target networks, and generate the post image with the
+// OpenAI image model. We store the *intent* here — real distribution
+// to the networks is a worker's job (out-of-band), so `status` moves
+// draft → scheduled → publishing → published | failed.
+model ScheduledPost {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // The user-provided prompt / idea the agent will post about.
+  prompt  String  @db.Text
+  // Optional caption shown on the social card. When null the UI
+  // derives one from the prompt.
+  caption String? @db.Text
+
+  // Server-generated image URL. Currently a data: URL or a persisted
+  // file path — depending on how we stored the OpenAI result.
+  imageUrl   String? @db.Text
+  // The image model used (`openai/gpt-5.4-image-2` today).
+  imageModel String?
+
+  // Target platforms as a JSON array of strings:
+  //   ["facebook", "instagram", "youtube", "tiktok", "linkedin"]
+  platforms Json
+
+  // Absolute publish time in UTC. Null = draft, not yet scheduled.
+  scheduledAt DateTime?
+
+  // draft | scheduled | publishing | published | failed | cancelled
+  status String @default("draft")
+
+  // Freeform config (filters the composer exposes — color /
+  // orientation / animation / price / extra knobs the frontend may
+  // add over time). Kept as JSON so we don't have to migrate every
+  // time the product grows a new toggle.
+  config Json?
+
+  // Reference images the user uploaded so the agent grounds its
+  // generation on brand assets. Shape: array of { name, dataUrl,
+  // size, type }. Kept inline in the row for now; future migration
+  // to S3 / uploads table when size becomes a concern.
+  referenceImages Json?
+
+  // Auto-series batch id — posts generated together by the
+  // "Programación automática" flow share one batchId so the UI can
+  // group them ("Serie de 10 posts · 24-29 abril"). Null for
+  // one-off posts.
+  batchId String?
+
+  // Last worker attempt metadata. Populated by the scheduler when it
+  // tries to publish. Useful for the UI's "re-try" button.
+  lastError   String?   @db.Text
+  publishedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, scheduledAt])
+  @@index([userId, status])
+  @@map("scheduled_posts")
+}
+
+// ─── Marketing — social-account OAuth connections ─────────────────────────
+//
+// One row per (user × platform). We persist the access token the user
+// granted us when they clicked "Conectar con Facebook" (or Instagram /
+// YouTube / TikTok / LinkedIn), plus a snapshot of the account profile
+// so the LLM can ground its suggestions ("voy a escribir como
+// @tu_marca, que vende X a un público Y").
+//
+// Tokens are stored raw for now; wire up encryption when the rest of
+// the app (Gmail / Spotify tokens) gets the same treatment.
+model SocialConnection {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  platform     String // facebook | instagram | youtube | tiktok | linkedin
+  accountId    String? // platform-side user id / page id
+  accountName  String? // handle displayed to the user ("@tu_marca")
+  accessToken  String?   @db.Text
+  refreshToken String?   @db.Text
+  expiresAt    DateTime?
+
+  // Profile snapshot the LLM grounds post generation on:
+  //   { name, bio, website, industry, recentPosts: [...] }
+  profile Json?
+  scopes  Json? // OAuth scopes granted
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, platform])
+  @@index([userId])
+  @@map("social_connections")
+}
+
+model UniversalSearchCache {
+  id               String   @id @default(cuid())
+  queryHash        String
+  intentCategories String[]
+  region           String
+  provider         String
+  resultJson       Json
+  embeddingJson    Json?
+  metadata         Json?
+  cachedAt         DateTime @default(now())
+  ttlSeconds       Int
+
+  @@unique([queryHash, provider])
+  @@index([queryHash])
+  @@index([provider, cachedAt])
+  @@map("universal_search_cache")
+}
+
+model SearchBrainSettings {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  region    String   @default("global")
+  mode      String   @default("local")
+  userEmail String?
+  keys      Json     @default("{}")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("search_brain_settings")
+}
+
+model SchedulerJob {
+  id           String    @id
+  name         String
+  schedule     String
+  enabled      Boolean   @default(true)
+  state        String    @default("idle")
+  nextRunAt    DateTime?
+  lastRunAt    DateTime?
+  lastError    String?
+  runCount     Int       @default(0)
+  successCount Int       @default(0)
+  failureCount Int       @default(0)
+  lockedBy     String?
+  lockedUntil  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([nextRunAt])
+  @@index([state])
+  @@index([lockedUntil])
+  @@map("scheduler_jobs")
+}
+
+model SchedulerRun {
+  runId      String    @id
+  jobId      String
+  startedAt  DateTime
+  finishedAt DateTime?
+  status     String
+  attempt    Int       @default(0)
+  error      String?
+  durationMs Int?
+
+  @@index([jobId])
+  @@index([startedAt])
+  @@index([status])
+  @@map("scheduler_runs")
+}
+
+// Audit log — one row per state-changing action observable in the
+// system. Designed to answer "who did what to which resource, and
+// what did it look like before vs. after". The before/after JSON
+// blobs are intentionally schema-less so any subsystem (chats,
+// projects, files, settings, agent tasks…) can write audit rows
+// without coupling its shape to this table.
+//
+// Fields:
+//   - actorType: 'user' | 'agent' | 'system' | 'api' | 'admin'
+//   - actorId: stable id of the actor (User.id, agent name, …)
+//   - actorName: optional human-readable label (email, "scheduler")
+//   - resourceType: domain noun ('chat', 'project', 'file', 'user', …)
+//   - resourceId: id of the touched resource (nullable for collection-
+//     scoped events like 'login')
+//   - action: imperative verb ('create' | 'update' | 'delete' |
+//     'access' | 'login' | 'export' | …)
+//   - before / after: full or partial snapshots of the resource
+//   - diff: computed shallow diff of changed keys (for fast filter)
+//   - metadata: free-form context (ip, userAgent, requestId, reason)
+// Record of a user accepting a versioned legal document (Privacy
+// Policy, Terms of Service, etc.). One row per (user, document, version)
+// — re-acceptance of the same version is idempotent, but acceptance of
+// a new version creates a new row so we keep the full history.
+//
+// Persisted IP + UA give us evidence of WHO accepted WHAT and FROM WHERE,
+// which is what regulators ask for in a GDPR/CCPA audit. The audit_log
+// table also gets a row per acceptance for the cross-resource trail.
+model PolicyAcceptance {
+  id         String   @id @default(cuid())
+  userId     String
+  document   String // 'privacy-policy' | 'terms-of-service' | …
+  version    String
+  ip         String?
+  ua         String?
+  acceptedAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, document, version])
+  @@index([userId, document])
+  @@index([document, version])
+  @@map("policy_acceptance")
+}
+
+// ─── API Keys (ratchet 45) ──────────────────────────────────────────
+//
+// Org-scoped bearer credentials for programmatic access. Tokens are
+// presented as `sk_<prefix><secret>`; only the SHA-256 hash of the
+// full plaintext (after the `sk_` tag) lives in the DB. The 8-char
+// `prefix` is safe to display — the middleware looks up by prefix,
+// then verifies the hash. `organizationId` is optional: when set, the
+// key acts on behalf of that org and the bearer is treated as the
+// owning `userId` with the org context attached to req.organization.
+model ApiKey {
+  id                 String    @id @default(cuid())
+  name               String
+  prefix             String
+  tokenHash          String    @unique
+  organizationId     String?
+  userId             String
+  scopes             String[]  @default([])
+  lastUsedAt         DateTime?
+  expiresAt          DateTime?
+  createdAt          DateTime  @default(now())
+  // Ratchet 45 — per-scope last-used aggregate populated by a sampled
+  // (1-in-50) fire-and-forget update from requireScope(). Shape:
+  // { "<scope>": { count: number, lastUsedAt: ISOString } }
+  usedScopes         Json?
+  // Ratchet 45 (Task 2) — sibling histogram populated by the same
+  // requireScope() sampler keyed by the Express-matched route template.
+  // Shape: { "<METHOD> <pathPattern>": count }
+  usedEndpoints      Json?
+  // Ratchet 45 — optional per-key override of the plan-derived default
+  // (env SIRAGPT_API_KEY_DEFAULT_RPM, fallback 60). Requests per minute;
+  // null means "use the plan default for the owning user/org".
+  rateLimitPerMinute Int?
+  // Ratchet 45 (TrueDelete) — soft-delete tombstone. When non-null the
+  // key is no longer accepted by the auth middleware, but the row is
+  // preserved so audit/forensics can still attribute past activity.
+  // A dedicated admin purge endpoint hard-deletes rows where
+  // deletedAt is set.
+  deletedAt          DateTime?
+
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([prefix])
+  @@index([organizationId, createdAt])
+  @@index([userId, createdAt])
+  @@index([deletedAt])
+  @@map("api_keys")
+}
+
+model AuditLog {
+  id           String   @id @default(cuid())
+  actorType    String
+  actorId      String?
+  actorName    String?
+  resourceType String
+  resourceId   String?
+  action       String
+  before       Json?
+  after        Json?
+  diff         Json?
+  metadata     Json?
+  createdAt    DateTime @default(now())
+
+  @@index([actorType, actorId, createdAt])
+  // audit-query DSL `byUser` filters on `actorId` alone (no actorType
+  // predicate) — the composite (actorType, actorId, createdAt) above
+  // can't be used as a prefix in that case, so we add a dedicated
+  // (actorId, createdAt) covering index. byAction → (action, createdAt)
+  // and byResource → (resourceType, resourceId, createdAt) are already
+  // covered above.
+  @@index([actorId, createdAt])
+  @@index([resourceType, resourceId, createdAt])
+  @@index([action, createdAt])
+  @@index([createdAt])
+  @@map("audit_log")
+}
+
+// Document index cache — keyed by SHA-256 of the source file's bytes.
+// Stores the output of the RAG pipeline (chunks + embeddings + optional
+// hierarchy root) so identical re-uploads short-circuit. `pageHashes` is
+// an array of per-page (or per-chunk-group) hashes for incremental
+// recompute: when the user re-uploads a near-identical file, the store
+// reuses embeddings of pages whose hash is unchanged and only recomputes
+// the rest.
+model DocumentIndex {
+  contentHash     String   @id
+  version         Int      @default(1)
+  chunks          Json
+  embeddings      Json
+  pageHashes      Json?
+  hierarchyRootId String?
+  bytesSize       Int      @default(0)
+  embedTokens     Int      @default(0)
+  metadata        Json?
+  createdAt       DateTime @default(now())
+  accessedAt      DateTime @default(now())
+  hitCount        Int      @default(0)
+
+  @@index([accessedAt])
+  @@index([createdAt])
+  @@index([hierarchyRootId])
+  @@map("document_index")
+}
+
+// ─── Organizations / Teams (cycle 27) ───────────────────────────────
+//
+// Multi-tenant scaffolding. An Organization is a workspace owned by
+// one user (`ownerId`) and joined by N users via `OrgMembership` rows.
+// `slug` is a URL-friendly handle (unique). `billingPlan` mirrors the
+// per-user `Plan` enum but at org level so a team can subscribe to
+// PRO/ENTERPRISE collectively.
+//
+// `monthlyQuota` / `usedThisMonth` track AI request budget when a user
+// acts "on behalf of" an organization (see middleware/enforce-org-quota.js).
+// Counters reset on the calendar month rollover.
+
+model Organization {
+  id            String   @id @default(cuid())
+  name          String
+  slug          String   @unique
+  billingPlan   Plan     @default(FREE)
+  ownerId       String
+  monthlyQuota  BigInt   @default(10000)
+  usedThisMonth BigInt   @default(0)
+  quotaResetAt  DateTime @default(now())
+  settings      Json?
+  ssoConfig     Json?
+  ssoEnabled    Boolean  @default(false)
+  ssoDomains    String[] @default([])
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  owner             User                 @relation("OrganizationOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  memberships       OrgMembership[]
+  invitations       OrgInvitation[]
+  chats             Chat[]
+  webhookEndpoints  WebhookEndpoint[]
+  slackIntegrations SlackIntegration[]
+  apiKeys           ApiKey[]
+  announcements     OrgAnnouncement[]
+  pendingTransfers  OrgPendingTransfer[]
+
+  @@index([ownerId])
+  @@index([slug])
+  @@map("organizations")
+}
+
+enum OrgRole {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+model OrgMembership {
+  id        String   @id @default(cuid())
+  orgId     String
+  userId    String
+  role      OrgRole  @default(MEMBER)
+  createdAt DateTime @default(now())
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, userId])
+  @@index([userId])
+  @@index([orgId, role])
+  @@map("org_memberships")
+}
+
+// Pending email invitations into an organization. The token is a
+// cryptographically-strong random string sent via magic link. The
+// invitee redeems by POST /api/orgs/invitation/:token/accept while
+// authenticated; the route enforces email match.
+model OrgInvitation {
+  id         String    @id @default(cuid())
+  orgId      String
+  email      String
+  role       OrgRole   @default(MEMBER)
+  token      String    @unique
+  invitedBy  String
+  acceptedAt DateTime?
+  expiresAt  DateTime
+  createdAt  DateTime  @default(now())
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  inviter      User         @relation("OrgInvitationInviter", fields: [invitedBy], references: [id], onDelete: Cascade)
+
+  @@index([orgId, email])
+  @@index([email])
+  @@map("org_invitations")
+}
+
+// Ratchet 44 — pending ownership transfer (cycle 76).
+//
+// When `settings.transfer.requireApprovalDays > 0`, the existing OWNER
+// initiates the swap via POST /api/orgs/:id/transfer-ownership/request
+// which inserts a row here instead of mutating the membership graph
+// in-line. The proposed new owner has `expiresAt - requestedAt` to
+// accept via POST /api/orgs/transfer-requests/:id/accept; the current
+// owner can rescind via DELETE on the same id. Once accepted, the row
+// is stamped with `acceptedAt` and the live transfer logic runs.
+model OrgPendingTransfer {
+  id          String    @id @default(cuid())
+  orgId       String
+  fromOwnerId String
+  toOwnerId   String
+  requestedAt DateTime  @default(now())
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  fromOwner    User         @relation("OrgPendingTransferFrom", fields: [fromOwnerId], references: [id], onDelete: Cascade)
+  toOwner      User         @relation("OrgPendingTransferTo", fields: [toOwnerId], references: [id], onDelete: Cascade)
+
+  @@index([orgId, acceptedAt])
+  @@index([toOwnerId, acceptedAt])
+  @@index([expiresAt])
+  @@map("org_pending_transfers")
+}
+
+// Ratchet 45 — SSO identity link (cycle 144).
+//
+// Tracks the external IdP identity (SAML nameID / OIDC sub) that
+// authenticated a given local User into a given Organization. A user
+// can have one identity per (provider, externalId) tuple — re-logins
+// hit the existing row and refresh `lastUsedAt`. This decouples local
+// auth (email/password, magic-link, passkey) from the SSO trust chain
+// so we can later support multiple IdPs per user, identity-merging
+// flows, and admin-side "who logged in from where" forensics.
+model SSOIdentity {
+  id         String   @id @default(cuid())
+  userId     String
+  orgId      String
+  provider   String
+  externalId String
+  createdAt  DateTime @default(now())
+  lastUsedAt DateTime @default(now())
+
+  @@unique([provider, externalId])
+  @@index([userId])
+  @@index([orgId])
+  @@map("sso_identities")
+}
+
+// Org-wide announcements (ratchet 45).
+//
+// ADMIN+ members can publish banner-style announcements to every
+// member of the organization. Rows can carry an optional
+// `expiresAt` after which the GET feed hides them, and a severity
+// level so the UI can choose styling.
+enum OrgAnnouncementSeverity {
+  info
+  warn
+  critical
+}
+
+model OrgAnnouncement {
+  id          String                  @id @default(cuid())
+  orgId       String
+  title       String
+  body        String
+  createdById String
+  severity    OrgAnnouncementSeverity @default(info)
+  createdAt   DateTime                @default(now())
+  expiresAt   DateTime?
+
+  organization Organization          @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  createdBy    User                  @relation("OrgAnnouncementCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  reads        OrgAnnouncementRead[]
+
+  @@index([orgId, createdAt])
+  @@index([orgId, expiresAt])
+  @@index([createdById])
+  @@map("org_announcements")
+}
+
+// Ratchet 45 — per-user read receipts for org announcements.
+//
+// One row per (announcementId, userId) the first time a member
+// acknowledges they read an announcement. The GET feed joins against
+// this table for the requesting user to expose
+// `acknowledgedByCurrentUser` on each item.
+model OrgAnnouncementRead {
+  id             String   @id @default(cuid())
+  announcementId String
+  userId         String
+  readAt         DateTime @default(now())
+
+  announcement OrgAnnouncement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([announcementId, userId])
+  @@index([userId])
+  @@map("org_announcement_reads")
+}
+
+// Email verification token (ratchet 45).
+//
+// Short-lived magic-link tokens. The verify-email endpoint looks up
+// a row by `token`, checks it is unread + unexpired, sets
+// `User.emailVerifiedAt`, and marks the row consumed. Resend mints
+// a new row — previous unconsumed rows for the same user are left
+// alone but expire on their own clock.
+model EmailVerificationToken {
+  id         String    @id @default(cuid())
+  userId     String
+  token      String    @unique
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("email_verification_tokens")
+}
+
+// Phone-verification challenge (ratchet 45, Task 1).
+//
+// Holds the bcrypt-hashed 6-digit SMS code issued by
+// `PUT /api/users/me/phone`. Single-use, TTL 10 minutes (override with
+// `PHONE_VERIFICATION_TTL_MS`), at most 5 verify attempts per row
+// before it's invalidated. The plaintext code is never persisted — we
+// only keep its hash so a DB leak doesn't expose live OTPs.
+model PhoneVerification {
+  id         String    @id @default(cuid())
+  userId     String
+  phone      String
+  codeHash   String
+  expiresAt  DateTime
+  attempts   Int       @default(0)
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("phone_verifications")
+}
+
+// SMS-based 2FA login challenge (ratchet 45, cycle 131).
+//
+// Holds the bcrypt-hashed 6-digit OTP issued by
+// `POST /api/auth/2fa/sms/challenge`. Unlike `PhoneVerification` this
+// row is meant for the LOGIN flow (so it can be issued without an
+// authenticated session) and is keyed by an opaque `challengeId` that
+// the client echoes back on `POST /api/auth/2fa/sms/verify`. Single-use,
+// TTL 5 minutes (override with `TWOFA_SMS_TTL_MS`), at most 5 verify
+// attempts per row before it's invalidated. The plaintext code is
+// never persisted — we only keep its hash so a DB leak doesn't expose
+// live OTPs. The `lookup` column stores a SHA-256 of the contact value
+// (email or E.164 phone) so attacker-controlled enumeration of "does
+// this email have 2FA?" still requires guessing the hash.
+//
+// Login-flow integration (binding to a partial session, gating the
+// final JWT) is intentionally left for the next cycle — this model
+// scaffolds the challenge lifecycle only.
+model TwoFAChallenge {
+  id          String    @id @default(cuid())
+  challengeId String    @unique
+  userId      String?
+  channel     String // 'sms'  — leaves room for 'totp' / 'email' later
+  destination String // E.164 phone or email used to deliver the OTP
+  lookup      String // SHA-256 of normalized destination for safer indexing
+  codeHash    String
+  expiresAt   DateTime
+  attempts    Int       @default(0)
+  consumedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([lookup])
+  @@map("two_fa_challenges")
+}
+
+// Partial session bridge (ratchet 45, TOTP login gate).
+//
+// When the login handler determines the user must complete a TOTP
+// challenge (totpEnabled = true and twoFactorEnabled = false), it
+// mints a short-lived (5 minute) opaque token persisted here instead
+// of issuing a full session JWT. The client echoes the token back to
+// `POST /api/auth/2fa/totp/verify` together with the 6-digit code; on
+// success the row is consumed and a real Session + JWT are minted.
+//
+// Single-use semantics: `consumedAt` is set the first time the token
+// is redeemed and subsequent lookups are rejected. The expiresAt
+// column lets a sweeper GC stale rows without a separate scheduler.
+model PartialSession {
+  id         String    @id @default(cuid())
+  token      String    @unique
+  userId     String
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("partial_sessions")
+}
+
+model AgentCheckpoint {
+  threadId           String    @map("thread_id")
+  checkpointId       String    @map("checkpoint_id")
+  parentCheckpointId String?   @map("parent_checkpoint_id")
+  state              Json      @default("{}")
+  metadata           Json      @default("{}")
+  createdAt          DateTime  @default(now()) @map("created_at")
+
+  @@id([threadId, checkpointId])
+  @@index([threadId, createdAt(sort: Desc)])
+  @@map("agent_checkpoints")
+}
+
+model UserMemory {
+  id              String    @id @default(cuid())
+  userId          String    @map("user_id")
+  content         String    @db.Text
+  category        String?
+  importanceScore Float     @default(0) @map("importance_score")
+  lastAccessedAt  DateTime  @default(now()) @map("last_accessed_at")
+  accessCount     Int       @default(0) @map("access_count")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  embeddings UserMemoryEmbedding[]
+
+  @@index([userId, category])
+  @@index([userId, importanceScore(sort: Desc)])
+  @@map("user_memories")
+}
+
+model UserMemoryEmbedding {
+  id         String   @id @default(cuid())
+  memoryId   String   @map("memory_id")
+  embedding  Bytes    @db.ByteA
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  memory UserMemory @relation(fields: [memoryId], references: [id], onDelete: Cascade)
+
+  @@index([memoryId])
+  @@map("user_memory_embeddings")
+}

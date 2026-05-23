@@ -1,0 +1,4 @@
+-- AlterTable: plan credit pools + daily FREE quota tracking
+ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "gemmaTokenUsage" BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "gemmaTokenPool" BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "freeQuotaDay" VARCHAR(10);

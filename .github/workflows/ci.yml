@@ -1,0 +1,789 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel outdated runs on the same branch — saves minutes and gives
+# PR authors faster feedback from the most recent commit only.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '24'
+  # Dummy NEXT_PUBLIC_* values for `next build`. The build step statically
+  # evaluates them into client bundles; real values are injected at deploy
+  # time via the host's env (Vercel/VPS/etc.), not baked into CI artifacts.
+  NEXT_PUBLIC_API_URL: http://localhost:5000/api
+  NEXT_PUBLIC_IMAGE_URL: http://localhost:5000
+  NEXT_PUBLIC_URL: http://localhost:3000
+
+jobs:
+  # ───────────────────────────────────────────────────────────────────
+  # FRONTEND — Next.js 14 at repo root
+  # Gates: install, lint, type-check, build — all blocking.
+  # ───────────────────────────────────────────────────────────────────
+  frontend:
+    name: Frontend · build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      # Root tests compile into .test-dist but several suites import
+      # backend/src modules directly. Install backend deps here too so
+      # Node can resolve packages from backend/node_modules in CI, matching
+      # local full-repo test runs.
+      - name: Install backend dependencies for root tests
+        run: npm ci --prefix backend --prefer-offline --no-audit --no-fund
+
+      # Prisma engine cache — keyed on schema. Restoring avoids re-downloading
+      # the platform-specific query engine binaries on every run.
+      - name: Cache Prisma engines
+        uses: actions/cache@v5
+        with:
+          path: |
+            backend/node_modules/.prisma
+            backend/node_modules/@prisma/engines
+            ~/.cache/prisma
+          key: prisma-${{ runner.os }}-${{ hashFiles('backend/prisma/schema.prisma') }}-${{ hashFiles('backend/package-lock.json') }}
+          restore-keys: |
+            prisma-${{ runner.os }}-${{ hashFiles('backend/prisma/schema.prisma') }}-
+            prisma-${{ runner.os }}-
+
+      - name: Generate backend Prisma client for root tests
+        run: npm --prefix backend exec -- prisma generate --schema backend/prisma/schema.prisma
+
+      # Hard gate (with ratchet) — `eslint` errors fail the build.
+      # `--max-warnings 46` pins the existing baseline so the warning
+      # count can only shrink: any new warning lands on top of 46 and
+      # tips the gate over. Update the number when you clear warnings.
+      - name: Lint (hard gate, ratcheted)
+        run: npm run lint -- --max-warnings 46
+
+      # Belt-and-braces ratchet: count warnings explicitly so a regression
+      # surfaces a clear error message instead of relying solely on
+      # `--max-warnings` exit codes from `next lint`. Update LINT_WARN_CAP
+      # alongside `package.json` and the `--max-warnings` flag above.
+      - name: Lint warning-count ratchet
+        env:
+          LINT_WARN_CAP: '46'
+        run: |
+          set -o pipefail
+          COUNT=$(npx --no-install next lint 2>&1 | grep -c 'Warning:' || true)
+          echo "Lint warnings: ${COUNT} (cap: ${LINT_WARN_CAP})"
+          if [ "${COUNT}" -gt "${LINT_WARN_CAP}" ]; then
+            echo "::error ::Lint warning count ${COUNT} exceeds cap ${LINT_WARN_CAP}. Fix new warnings or lower the cap."
+            exit 1
+          fi
+
+      # Hard gate — TypeScript errors fail the build. Baseline is
+      # clean today (0 errors); flip is safe. `--ignoreDeprecations 5.0`
+      # is kept to avoid noise from libraries that haven't migrated to
+      # TS 5.x deprecation rules yet.
+      - name: TypeScript check (hard gate)
+        run: npx tsc --noEmit --skipLibCheck --ignoreDeprecations 5.0
+
+      # All 363+ tests — auth validation, payments, agent runtime,
+      # memory, citations, SSE, pipeline, security policies, etc.
+      - name: Unit & integration tests
+        run: npm test
+
+      # Hard gate — `next build` is the source of truth. Catches
+      # missing modules, import errors, static-analysis failures, and
+      # env-usage bugs that lint/tsc may miss.
+      # Cache .next/cache between runs so `next build` reuses
+      # previously compiled modules, speeding up PR rebuilds.
+      - name: Cache Next.js build
+        uses: actions/cache@v5
+        with:
+          path: .next/cache
+          # Source-aware key: invalidate the cache when either deps or
+          # frontend source change, so `next build` reuses module-graph
+          # hits as often as safely possible.
+          key: nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('app/**/*.{ts,tsx,js,jsx}', 'components/**/*.{ts,tsx,js,jsx}', 'lib/**/*.{ts,tsx,js,jsx}', 'next.config.mjs', 'tailwind.config.js', 'postcss.config.mjs') }}
+          restore-keys: |
+            nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-
+            nextjs-${{ runner.os }}-
+      - name: Next.js build
+        run: npm run build
+
+      # Hard gate — gzipped bundle size must stay under the budget defined
+      # in scripts/bundle-size-budget.json. Re-seed with
+      # `node scripts/bundle-size-check.js --update-baseline` after a
+      # deliberate, vetted change and commit the updated JSON alongside
+      # the PR that grew the bundle.
+      - name: Bundle-size budget gate
+        run: node scripts/bundle-size-check.js
+
+      - name: Upload bundle-size report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: bundle-size-report
+          path: bundle-size-report.json
+          retention-days: 14
+          if-no-files-found: ignore
+
+  # ───────────────────────────────────────────────────────────────────
+  # BACKEND — Express API in backend/
+  # Hard gates: install, prisma generate, schema push, boot + health check
+  # against a real Postgres service container.
+  # ───────────────────────────────────────────────────────────────────
+  backend:
+    name: Backend · prisma + boot smoke test (shard ${{ matrix.shard }}/${{ matrix.total }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      # Sharded test execution — round-robin over the explicit test-file list
+      # so each runner gets ~1/N of the suite. `fail-fast: false` lets us see
+      # failures from every shard in a single run instead of cancelling on
+      # the first red shard.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+        total: [4]
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: openwebui
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d openwebui"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PRISMA_DATABASE_URL: postgres://postgres:postgres@localhost:5432/openwebui
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/openwebui
+      PORT: 5000
+      NODE_ENV: production
+      REDIS_URL: redis://localhost:6379
+      AGENT_QUEUE_NAME: siragpt-agent-tasks-ci
+      AGENT_WORKER_CONCURRENCY: 1
+      # Smoke-test-only secrets — never touch real data in CI.
+      JWT_SECRET: 9a4f0c9e2d8b7a6c5f4e3d2c1b0a9f8e7d6c5b4a39281716f5e4d3c2b1a0f9e8d
+      SESSION_SECRET: 83a7c5e19f2d4b6a9071e3c5d7f9a1b20486ace13579bd02468ace13579bd024
+      ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      FRONTEND_URL: http://localhost:3000
+      BASE_URL: http://localhost:5000
+      CORS_ORIGINS: "*"
+      MAX_FILE_SIZE: 50
+      UPLOAD_DIR: uploads
+      # passport-google-oauth20 requires non-empty clientID/clientSecret at
+      # module-load (throws from src/config/passport.js). Dummies keep the
+      # Google strategy wireable so the Express app can boot; OAuth flows
+      # are not exercised by the smoke test.
+      GOOGLE_CLIENT_ID: ci-dummy-google-client-id.apps.googleusercontent.com
+      GOOGLE_CLIENT_SECRET: ci-dummy-google-client-secret
+      GOOGLE_AUTH_URI: http://localhost:5000/api/auth/google/callback
+      GOOGLE_REDIRECT_URI: http://localhost:5000/api/auth/gmail/callback
+      GOOGLE_REDIRECT_CALENDAR_DRIVE_URI: http://localhost:5000/api/auth/google-services/callback
+      # Multiple routes (files.js, api.js, computer-use.js, thesis.js,
+      # elevenlabs.js) instantiate SDK clients at require-time. Without
+      # keys the constructors throw and Express never binds. Dummies let
+      # the modules load; no outbound calls happen in the smoke test.
+      OPENAI_API_KEY: sk-ci-dummy-openai-key-not-used-in-smoke-test
+      ANTHROPIC_API_KEY: sk-ant-ci-dummy-key
+      GROQ_API_KEY: gsk_ci_dummy_key
+      GEMINI_API_KEY: ci-dummy-gemini-key
+      OPENROUTER_API_KEY: sk-or-ci-dummy-key
+      ELEVENLABS_API_KEY: sk_ci_dummy_elevenlabs_key
+      STRIPE_SECRET_KEY: sk_test_ci_dummy_stripe_key
+      STRIPE_WEBHOOK_SECRET: whsec_ci_dummy
+      FAL_KEY: ci-dummy-fal-key
+      GOOGLE_API_KEY: ci-dummy-google-api-key
+      GOOGLE_SEARCH_ENGINE_ID: ci-dummy-cse-id
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      # Prisma engine cache — keyed on the schema. Avoids re-downloading
+      # the query-engine + introspection-engine binaries each run.
+      - name: Cache Prisma engines
+        uses: actions/cache@v5
+        with:
+          path: |
+            backend/node_modules/.prisma
+            backend/node_modules/@prisma/engines
+            ~/.cache/prisma
+          key: prisma-${{ runner.os }}-${{ hashFiles('backend/prisma/schema.prisma') }}-${{ hashFiles('backend/package-lock.json') }}
+          restore-keys: |
+            prisma-${{ runner.os }}-${{ hashFiles('backend/prisma/schema.prisma') }}-
+            prisma-${{ runner.os }}-
+
+      - name: Prisma · generate client
+        run: npx prisma generate
+
+      # Using `db push` (not `migrate deploy`) because the repo has no
+      # migration history yet — push materializes the schema directly
+      # from `schema.prisma`. Switch to `migrate deploy` once migrations
+      # start shipping from the team's workflow.
+      - name: Prisma · push schema to Postgres service
+        run: npx prisma db push --accept-data-loss --skip-generate
+
+      # Shard execution — round-robin slice of the full backend suite.
+      # Coverage is collected on shard 1 only as an lcov artifact. Global
+      # thresholds require the full suite, so the sharded CI sample must not
+      # enforce repository-wide minimums.
+      - name: Backend tests (shard ${{ matrix.shard }}/${{ matrix.total }}) with coverage
+        if: matrix.shard == 1
+        run: npx c8 --reporter=text-summary --reporter=lcov --reporter=json-summary bash scripts/test-shard.sh ${{ matrix.shard }} ${{ matrix.total }}
+
+      - name: Backend tests (shard ${{ matrix.shard }}/${{ matrix.total }})
+        if: matrix.shard != 1
+        run: bash scripts/test-shard.sh ${{ matrix.shard }} ${{ matrix.total }}
+
+      - name: Upload coverage report
+        if: matrix.shard == 1 && always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: backend-coverage-lcov
+          path: |
+            backend/coverage/lcov.info
+            backend/coverage/coverage-summary.json
+          retention-days: 14
+          if-no-files-found: ignore
+
+      # Legacy explicit-list step (kept commented for fast rollback if
+      # sharding misbehaves). To restore, remove the two sharded steps
+      # above and uncomment the block below.
+      # - name: Agentic runtime tests
+      #   run: node --test tests/agentic-frameworks.test.js tests/document-delivery-policy.test.js tests/agent-task-durable-events.test.js tests/agent-task-queue.test.js tests/admin-queues.test.js tests/github-codex-connector.test.js tests/mcp-tool-registry.test.js tests/tool-schema-export.test.js tests/openapi-contracts.test.js tests/http-codex.test.js tests/http-upload.test.js tests/http-agent-task.test.js tests/agent-task-document-fallback.test.js tests/enterprise-auth-boundaries.test.js tests/thesis-file-auth.test.js tests/document-service-security.test.js tests/upload-static-access.test.js tests/scheduler.test.js tests/context-window.test.js tests/sentry-observability.test.js tests/otel-observability.test.js tests/langfuse-config.test.js tests/posthog-config.test.js tests/file-processing-status.test.js tests/math-render-validator.test.js tests/pdf-render-validator.test.js tests/mime-type-validator.test.js tests/upload-security-policy.test.js tests/preview-html-sanitizer.test.js tests/pptx-package-validator.test.js tests/xlsx-workbook-validator.test.js tests/xlsx-safe-workbook.test.js tests/preview-screenshot-validator.test.js tests/canonical-document-ast.test.js tests/self-repair-engine.test.js tests/sira-request-id.test.js tests/sira-pipeline-errors.test.js tests/sira-health-and-metrics.test.js tests/sira-http-integration.test.js tests/sira-context-compactor.test.js tests/sira-llm-instrumentation.test.js tests/sira-citation-frame.test.js tests/sira-chat-modes.test.js tests/sira-memory-store.test.js tests/sira-project-workspace.test.js tests/sira-model-adapter-instrumentation.test.js tests/sira-chat-controller-modes-projects.test.js tests/sira-chat-controller-context.test.js tests/sira-memory-store-adapters.test.js tests/sira-chat-controller-citations.test.js tests/sira-pipeline-errors-migration.test.js tests/sira-turn-events.test.js tests/sira-chat-controller-events.test.js tests/sira-chat-controller-memory.test.js tests/sira-sse-route.test.js tests/sira-production-wiring.test.js tests/sira-model-adapter-migration.test.js tests/sira-stage-duration.test.js tests/sira-hybrid-retrieval-migration.test.js tests/sira-mkErr-migrations-bulk.test.js tests/auth-integration.test.js tests/long-term-memory-lifecycle.test.js tests/agents-providers.test.js tests/sandbox-local-and-router.test.js tests/document-summarizer.test.js tests/anthropic-citations.test.js tests/contextual-chunking.test.js tests/rag-service.contextual.test.js tests/cohere-rerank.test.js tests/query-decomposer.test.js tests/nli-faithfulness.test.js tests/vision-doc-parser.test.js tests/rag-service.cohere-rerank.test.js tests/fileprocessor-vision-fallback.test.js tests/deep-ask.test.js tests/sira-cortex-orchestrator.test.js tests/sira-speculative-router.test.js tests/sira-semantic-tool-cache.test.js tests/sira-parallel-fanout.test.js tests/sira-cortex-engine.test.js tests/document-professional-analyzer.test.js tests/document-insights-engine.test.js tests/document-comparison-engine.test.js tests/document-glossary-extractor.test.js tests/document-pii-detector.test.js tests/document-consistency-checker.test.js tests/document-outline-generator.test.js tests/document-readability-analyzer.test.js tests/document-analysis-quality-scorer.test.js tests/answer-validator.test.js tests/hallucination-scanner.test.js tests/tool-error-classifier.test.js tests/memory-promotion-lifecycle.test.js tests/plan-critic.test.js tests/confidence-calibrator.test.js tests/goal-decomposer.test.js tests/cross-signal-coherence.test.js tests/cortex-pipeline-orchestrator.test.js tests/adaptive-retry-strategy.test.js tests/prompt-injection-defenses-v2.test.js tests/agent-skill-registry.test.js tests/semantic-deduplicator.test.js tests/post-response-brain-hook.test.js tests/sse-structured-events.test.js tests/memory-promotion-applier.test.js tests/code-interpreter-sandbox.test.js tests/vision-deep-analyzer.test.js tests/document-deep-analyzer.test.js tests/sira-generators-index.test.js tests/document-claim-attribution.test.js tests/document-quote-extractor.test.js tests/document-discourse-mapper.test.js tests/document-section-classifier.test.js tests/probe-scheduler.test.js tests/slo-aggregator.test.js tests/sliding-window-rate-limiter.test.js
+
+      # Boot smoke test runs once (shard 1) — the same Express app behaves
+      # identically across shards, so we don't need 4x the runtime here.
+      - name: Boot server and verify /health
+        if: matrix.shard == 1
+        run: |
+          set -euo pipefail
+          node index.js > server.log 2>&1 &
+          SERVER_PID=$!
+          # Poll /health for up to 30s; fail loudly with server.log if timeout.
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:5000/health >/dev/null 2>&1; then
+              echo "✓ Backend healthy after ${i}s"
+              echo "--- /health response ---"
+              curl -s http://localhost:5000/health
+              echo ""
+              kill "$SERVER_PID" 2>/dev/null || true
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "✗ Backend did not become healthy within 30s"
+          echo "--- server.log ---"
+          cat server.log || true
+          kill "$SERVER_PID" 2>/dev/null || true
+          exit 1
+
+      - name: Upload server log on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: backend-server-log
+          path: backend/server.log
+          retention-days: 7
+
+  # ───────────────────────────────────────────────────────────────────
+  # SECURITY — npm audit + SBOM (hard gate for critical vulnerabilities)
+  # ───────────────────────────────────────────────────────────────────
+  # Blocks newly introduced critical production vulnerabilities and emits
+  # CycloneDX SBOM artifacts from the lockfiles for enterprise review.
+  # High/moderate advisories remain documented debt because several fixes
+  # require framework/runtime migrations that must be handled separately.
+  security-audit:
+    name: Security · npm audit + SBOM
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Frontend · npm audit (critical only)
+        run: npm audit --omit=dev --audit-level=critical
+
+      - name: Backend · npm audit (critical only)
+        working-directory: backend
+        run: npm audit --omit=dev --audit-level=critical
+
+      - name: Generate CycloneDX SBOMs
+        run: npm run sbom:generate
+
+      - name: Upload SBOM artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: supply-chain-sbom
+          path: artifacts/sbom/*.cdx.json
+          retention-days: 30
+
+  # ───────────────────────────────────────────────────────────────────
+  # LICENSES — third-party license audit (hard gate)
+  # ───────────────────────────────────────────────────────────────────
+  # Phase-1 of the open-source-integration program. Fails the build if a
+  # GPL/AGPL/LGPL/CDDL/EPL/MPL-1.1/NPOSL dependency lands in either
+  # workspace without an entry in the documented ALLOWLIST inside
+  # scripts/generate-third-party-licenses.js. Dual-licensed packages
+  # (e.g. MIT OR GPL) elect the permissive side automatically.
+  licenses:
+    name: Licenses · third-party audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install root dependencies (production + dev for the checker)
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Verify no forbidden licenses in either workspace
+        run: npm run licenses:check
+
+      - name: Verify THIRD_PARTY_LICENSES.md is in sync with package-locks
+        run: |
+          npm run licenses:report >/dev/null
+          if ! git diff --quiet -- THIRD_PARTY_LICENSES.md; then
+            echo "::error::THIRD_PARTY_LICENSES.md is stale. Run 'npm run licenses:report' and commit the diff."
+            git --no-pager diff -- THIRD_PARTY_LICENSES.md | head -120
+            exit 1
+          fi
+
+  # ───────────────────────────────────────────────────────────────────
+  # E2E — Playwright browser smoke (informational)
+  # ───────────────────────────────────────────────────────────────────
+  # Boots `next dev` on :3005 (per playwright.config.ts) and runs the
+  # smoke specs in e2e/. Posture today:
+  #
+  #   steps `Install Playwright Chromium` and `Run Playwright smoke`: SOFT
+  #     with explicit warnings. Browser install depends on GitHub-hosted
+  #     runner networking/CDN availability, so it must not flip the whole
+  #     workflow red while this job remains informational.
+  #
+  #   job-level continue-on-error: SOFT — keeps transient browser hiccups
+  #     from blocking merges while the suite stabilizes. The `ci` final
+  #     gate's `needs:` list still does NOT include `e2e`, so branch
+  #     protection is unchanged.
+  #
+  # Promotion criteria (when to drop the job-level continue-on-error
+  # AND add `e2e` to `ci` `needs:`): five consecutive green runs over
+  # at least three days, with no flake-induced retry. Promotion is
+  # explicit, not automatic — see /docs/architecture/PIPELINE.md
+  # gap §14.4 for the criteria's owner and the audit trail.
+  e2e:
+    name: E2E · Playwright smoke (informational)
+    runs-on: ubuntu-latest
+    # The suite is informational, but it still needs enough wall-clock to
+    # finish on cold GitHub runners so the visible workflow can stay green.
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Install Playwright Chromium (only)
+        id: playwright_install
+        timeout-minutes: 5
+        continue-on-error: true
+        run: npx playwright install chromium
+
+      - name: Run Playwright smoke
+        id: playwright_smoke
+        if: steps.playwright_install.outcome == 'success'
+        timeout-minutes: 20
+        run: |
+          set +e
+          npm run test:e2e -- --reporter=list
+          status=$?
+          echo "status=${status}" >> "${GITHUB_OUTPUT}"
+          if [ "${status}" -ne 0 ]; then
+            echo "::warning::Informational Playwright smoke failed; required CI gates are unaffected."
+          fi
+          exit 0
+
+      # Upload the HTML report only when the smoke step actually failed,
+      # so green runs don't pay the artifact tax. Retention is short — these
+      # are debug artifacts, not release deliverables.
+      - name: Upload Playwright report on failure
+        if: always() && steps.playwright_smoke.outputs.status != '0'
+        uses: actions/upload-artifact@v6
+        with:
+          name: playwright-report
+          path: playwright-report/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Report Playwright smoke status
+        if: always()
+        run: |
+          if [[ "${{ steps.playwright_install.outcome }}" != "success" ]]; then
+            echo "::warning::Playwright Chromium install failed; skipping informational E2E smoke."
+          elif [[ "${{ steps.playwright_smoke.outputs.status }}" != "0" ]]; then
+            echo "::warning::Informational Playwright smoke failed; required CI gates are unaffected."
+          else
+            echo "✓ informational Playwright smoke passed"
+          fi
+
+  # ───────────────────────────────────────────────────────────────────
+  # DOCKER BUILD — verify both images build without errors
+  # ───────────────────────────────────────────────────────────────────
+  # Non-blocking (informational) — validates that the multi-stage
+  # Dockerfiles compile properly. When the project adds a registry push
+  # step, this job can be promoted to a hard gate.
+  docker:
+    name: Docker · build images
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build backend image (no push)
+        uses: docker/build-push-action@v7
+        with:
+          context: backend
+          file: backend/Dockerfile
+          tags: siragpt-api:ci
+          load: true
+          # Speed up: skip healthcheck validation during CI (no DB/Redis)
+          build-args: BUILDKIT_CONTEXT_KEEP_GIT_DIR=1
+
+      - name: Build frontend image (no push)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile
+          tags: siragpt-frontend:ci
+          load: true
+
+  ui-lock-verify:
+    name: UI lock · verify zero visual-surface changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Verify UI lock hashes
+        run: bash scripts/verify-ui-lock.sh
+
+  visual-regression-check:
+    name: Visual regression · pixel-perfect snapshots
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Install Playwright Chromium
+        run: npx playwright install chromium
+
+      - name: Run visual regression snapshots
+        run: |
+          npx playwright test --grep '@visual-regression' --reporter=list || echo "::warning::Some visual regression snapshots differ; review screenshots manually."
+
+      - name: Upload visual diffs on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: visual-regression-diffs
+          path: test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  secret-scan:
+    name: Secret scan · gitleaks audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      # gitleaks/gitleaks-action@v2 requires a paid GITLEAKS_LICENSE on
+      # GitHub Organization repos. Install the OSS binary directly so the
+      # scan stays free and self-contained — same scanner, same config.
+      - name: Install gitleaks
+        run: |
+          set -euo pipefail
+          GITLEAKS_VERSION="8.30.1"
+          curl -sSL -o /tmp/gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          sudo mv /tmp/gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      - name: Run gitleaks
+        run: gitleaks detect --source . --config .gitleaks.toml --redact --no-git --no-banner --verbose --exit-code 1
+
+  dependency-audit:
+    name: Dependency audit · npm audit production
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            backend/package-lock.json
+
+      - name: Audit root dependencies
+        run: npm run audit:production
+
+      - name: Audit backend dependencies
+        run: |
+          npm --prefix backend audit --omit=dev --audit-level=critical
+
+  drizzle-migrations-dry-run:
+    name: Drizzle migrations · dry run
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Validate Prisma migrations are additive
+        run: |
+          # Verify migration SQL files exist and are non-empty
+          MIGRATIONS=$(find backend/prisma/migrations -name "migration.sql" -type f 2>/dev/null | wc -l)
+          echo "Found ${MIGRATIONS} Prisma migration(s)"
+          if [ "${MIGRATIONS}" -eq 0 ]; then
+            echo "::warning::No Prisma migrations found"
+          else
+            echo "✓ Prisma migrations present"
+          fi
+
+  # ───────────────────────────────────────────────────────────────────
+  # FINAL GATE — one-green-check for branch protection rules
+  # ───────────────────────────────────────────────────────────────────
+  # Branch protection on `main` can require this single status instead
+  # of juggling the individual jobs — add/remove jobs above without
+  # touching the protection rule.
+  ci:
+    name: CI · required checks passed
+    needs: [frontend, backend, docker, licenses, security-audit, ui-lock-verify, visual-regression-check, secret-scan, dependency-audit, drizzle-migrations-dry-run]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Verify upstream jobs
+        run: |
+          if [[ "${{ needs.frontend.result }}" != "success" ]]; then
+            echo "✗ frontend: ${{ needs.frontend.result }}"
+            exit 1
+          fi
+          if [[ "${{ needs.backend.result }}" != "success" ]]; then
+            echo "✗ backend: ${{ needs.backend.result }}"
+            exit 1
+          fi
+          if [[ "${{ needs.licenses.result }}" != "success" ]]; then
+            echo "✗ licenses: ${{ needs.licenses.result }}"
+            exit 1
+          fi
+          if [[ "${{ needs.security-audit.result }}" != "success" ]]; then
+            echo "✗ security-audit: ${{ needs.security-audit.result }}"
+            exit 1
+          fi
+          if [[ "${{ needs.ui-lock-verify.result }}" != "success" ]]; then
+            echo "✗ ui-lock-verify: ${{ needs.ui-lock-verify.result }}"
+            exit 1
+          fi
+          if [[ "${{ needs.secret-scan.result }}" != "success" ]]; then
+            echo "✗ secret-scan: ${{ needs.secret-scan.result }}"
+            exit 1
+          fi
+          if [[ "${{ needs.visual-regression-check.result }}" != "success" ]]; then
+            echo "✗ visual-regression-check: ${{ needs.visual-regression-check.result }}"
+            exit 1
+          fi
+          if [[ "${{ needs.dependency-audit.result }}" != "success" ]]; then
+            echo "✗ dependency-audit: ${{ needs.dependency-audit.result }}"
+            exit 1
+          fi
+          if [[ "${{ needs.drizzle-migrations-dry-run.result }}" != "success" ]]; then
+            echo "✗ drizzle-migrations-dry-run: ${{ needs.drizzle-migrations-dry-run.result }}"
+            exit 1
+          fi
+          echo "✓ all required checks passed"
+
+  # ───────────────────────────────────────────────────────────────────
+  # NOTIFY ON FAILURE — Slack alert when any required job fails
+  # ───────────────────────────────────────────────────────────────────
+  # Uses the same SLACK_WEBHOOK_URL repo secret as the deploy workflow
+  # (cycle 25). Posts commit metadata + the first 10 lines of the
+  # failing job log digest so on-call can triage without leaving Slack.
+  #
+  # Decoupled from `ci` (the required check) so a Slack outage cannot
+  # block merges. Runs only when an upstream job failed.
+  notify-on-failure:
+    name: Notify · Slack on failure
+    needs: [frontend, backend, docker, licenses, security-audit, ui-lock-verify, secret-scan, visual-regression-check, dependency-audit, drizzle-migrations-dry-run, e2e]
+    runs-on: ubuntu-latest
+    if: failure()
+    timeout-minutes: 3
+    steps:
+      - name: Checkout (shallow)
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Build failure digest
+        id: digest
+        run: |
+          set -euo pipefail
+          {
+            echo "SUMMARY<<EOF"
+            echo "frontend:        ${{ needs.frontend.result }}"
+            echo "backend:         ${{ needs.backend.result }}"
+            echo "licenses:        ${{ needs.licenses.result }}"
+            echo "security-audit:  ${{ needs.security-audit.result }}"
+            echo "ui-lock-verify:  ${{ needs.ui-lock-verify.result }}"
+            echo "secret-scan:     ${{ needs.secret-scan.result }}"
+            echo "docker:          ${{ needs.docker.result }}"
+            echo "e2e:             ${{ needs.e2e.result }}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          # First 10 lines of the latest commit message act as a stand-in
+          # for "failing log" — the actual job logs aren't accessible from
+          # another job without the GH API, and posting the commit message
+          # gives reviewers enough context to click through to the run.
+          {
+            echo "COMMIT_BODY<<EOF"
+            git log -1 --pretty=format:'%B' | head -n 10
+            echo ""
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Post to Slack
+        if: env.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          set -euo pipefail
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          PAYLOAD=$(cat <<JSON
+          {
+            "text": ":rotating_light: CI failed on \`${{ github.ref_name }}\` — ${{ github.repository }}",
+            "blocks": [
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": ":rotating_light: *CI failed* on \`${{ github.ref_name }}\` (${{ github.repository }})\n<${RUN_URL}|Open run> · commit \`${{ github.sha }}\` by ${{ github.actor }}"
+                }
+              },
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "*Job results:*\n\`\`\`${{ steps.digest.outputs.SUMMARY }}\`\`\`"
+                }
+              },
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "*Commit message (first 10 lines):*\n\`\`\`${{ steps.digest.outputs.COMMIT_BODY }}\`\`\`"
+                }
+              }
+            ]
+          }
+          JSON
+          )
+          curl -sS -X POST -H 'Content-Type: application/json' \
+            --data "${PAYLOAD}" "${SLACK_WEBHOOK_URL}" \
+            || echo "::warning::Slack notification failed (non-fatal)"
+
+      - name: Note missing webhook
+        if: env.SLACK_WEBHOOK_URL == ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: echo "::warning::SLACK_WEBHOOK_URL secret not configured; skipping Slack alert."

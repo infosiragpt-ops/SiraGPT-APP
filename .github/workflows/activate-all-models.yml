@@ -1,0 +1,37 @@
+name: Activate all AI models in prod DB
+
+# UPDATE ai_models SET "isActive"=true WHERE "isActive"=false.
+# Currently only deepseek-v4-{flash,pro} are active; this re-enables
+# every catalogue row (OpenAI, Gemini, OpenRouter, etc.). Idempotent.
+on:
+  workflow_dispatch:
+
+jobs:
+  activate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          timeout: 30s
+          command_timeout: 2m
+          script: |
+            echo "=== Before: active count ==="
+            docker exec siragpt-db-1 psql -U myuser -d siraGPTNew -tAc \
+              "SELECT COUNT(*) FILTER (WHERE \"isActive\"=true) || ' active / ' || COUNT(*) || ' total' FROM ai_models"
+            echo ""
+            echo "=== UPDATE ai_models SET isActive=true WHERE isActive=false ==="
+            docker exec siragpt-db-1 psql -U myuser -d siraGPTNew \
+              -c "UPDATE ai_models SET \"isActive\"=true WHERE \"isActive\"=false RETURNING name, provider"
+            echo ""
+            echo "=== After: active count ==="
+            docker exec siragpt-db-1 psql -U myuser -d siraGPTNew -tAc \
+              "SELECT COUNT(*) FILTER (WHERE \"isActive\"=true) || ' active / ' || COUNT(*) || ' total' FROM ai_models"
+            echo ""
+            echo "=== Verify /api/ai/models (anonymous, FREE-tier view) ==="
+            curl -s --max-time 6 https://api.siragpt.com/api/ai/models | \
+              python3 -c "import json,sys; d=json.load(sys.stdin); print(f'Returned: {len(d[\"models\"])} total'); [print(f'  - [{m[\"type\"]}] {m[\"displayName\"]} ({m[\"provider\"]})') for m in d['models']]"
