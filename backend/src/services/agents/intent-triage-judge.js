@@ -199,6 +199,84 @@ function makeGeminiCorefJudge({ apiKey = process.env.GEMINI_API_KEY, fetchImpl =
   };
 }
 
+// ─── PR-4: Haiku judge (Anthropic Messages API) ─────────────────────
+const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
+const ANTHROPIC_VERSION = "2023-06-01";
+
+function makeHaikuJudge({
+  apiKey = process.env.ANTHROPIC_API_KEY,
+  fetchImpl = global.fetch,
+  model = "claude-haiku-4-5",
+} = {}) {
+  if (!apiKey || typeof fetchImpl !== "function") return null;
+  return async function haikuJudge({ prompt, recentTurns, hintedQuestion }) {
+    const body = {
+      model,
+      max_tokens: 150,
+      temperature: 0.1,
+      system: SYSTEM,
+      messages: [
+        { role: "user", content: buildUserBlock({ prompt, recentTurns, hintedQuestion }) },
+      ],
+    };
+    const resp = await fetchImpl(ANTHROPIC_URL, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": ANTHROPIC_VERSION,
+      },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+      throw new Error(`anthropic_http_${resp.status}`);
+    }
+    const data = await resp.json();
+    // Anthropic returns content as array of blocks; concat text blocks.
+    const text = Array.isArray(data?.content)
+      ? data.content.filter((b) => b.type === "text").map((b) => b.text || "").join("")
+      : "";
+    return parseModelOutput(text);
+  };
+}
+
+// ─── PR-4: Groq judge (OpenAI-compatible) ───────────────────────────
+const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
+
+function makeGroqJudge({
+  apiKey = process.env.GROQ_API_KEY,
+  fetchImpl = global.fetch,
+  model = "llama-3.3-70b-versatile",
+} = {}) {
+  if (!apiKey || typeof fetchImpl !== "function") return null;
+  return async function groqJudge({ prompt, recentTurns, hintedQuestion }) {
+    const body = {
+      model,
+      max_tokens: 150,
+      temperature: 0.1,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: SYSTEM },
+        { role: "user", content: buildUserBlock({ prompt, recentTurns, hintedQuestion }) },
+      ],
+    };
+    const resp = await fetchImpl(GROQ_URL, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+      throw new Error(`groq_http_${resp.status}`);
+    }
+    const data = await resp.json();
+    const text = data?.choices?.[0]?.message?.content || "";
+    return parseModelOutput(text);
+  };
+}
+
 module.exports = {
   makeGeminiJudge,
   parseModelOutput,
@@ -209,4 +287,9 @@ module.exports = {
   parseCorefOutput,
   buildCorefUserBlock,
   COREF_SYSTEM,
+  // PR-4: additional triage judges
+  makeHaikuJudge,
+  makeGroqJudge,
+  ANTHROPIC_URL,
+  GROQ_URL,
 };

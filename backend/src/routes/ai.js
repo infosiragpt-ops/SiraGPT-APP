@@ -123,13 +123,27 @@ const {
 } = require('../services/agents/agentic-operating-core');
 const { buildSemanticIntentAnalysis } = require('../services/agents/semantic-intent-router');
 const { triageIntent } = require('../services/agents/intent-triage');
-const { makeGeminiJudge, makeGeminiCorefJudge } = require('../services/agents/intent-triage-judge');
+const {
+  makeGeminiJudge,
+  makeGeminiCorefJudge,
+  makeHaikuJudge,
+  makeGroqJudge,
+} = require('../services/agents/intent-triage-judge');
 const siraMetrics = require('../services/sira/metrics');
-const __intentTriageJudge = makeGeminiJudge();
-// PR-3: coref + lexicón. Both lazy-required at use to avoid load-order issues.
+// PR-3: coref + lexicón.
 const corefResolver = require('../services/agents/coref-resolver');
 const personalLexicon = require('../services/personal-lexicon');
 const __corefJudge = makeGeminiCorefJudge();
+// PR-4: ensemble de judges + short-query expander.
+const { buildEnsembleJudge } = require('../services/agents/triage-ensemble');
+const { expandShortQuery } = require('../services/agents/short-query-expander');
+// Construye un ensemble con los judges disponibles. Cualquier judge sin
+// API key configurada devuelve null y se filtra fuera. Si todos están
+// ausentes, fallback al judge único Gemini (mantiene comportamiento PR-pre-4).
+const __ensembleJudges = [makeGeminiJudge(), makeHaikuJudge(), makeGroqJudge()].filter(Boolean);
+const __intentTriageJudge = __ensembleJudges.length > 0
+  ? buildEnsembleJudge({ judges: __ensembleJudges, budgetMs: 350 })
+  : null;
 const ciraEngine = require('../services/sira/engine');
 const postResponseBrainHook = require('../services/sira/post-response-brain-hook');
 const coworkEngine = require('../services/cowork-engine');
@@ -2855,8 +2869,25 @@ router.post(
           toolRuntimePlan: enterpriseToolRuntimePlan,
           qaBoardReview: enterpriseQaBoardReview,
         });
+        // PR-4: short-query expander. Solo alimenta al router/triage; el
+        // LLM grande sigue viendo el `prompt` literal. Si el prompt ya
+        // tiene >= 10 tokens, no se expande (no_expansion).
+        let __routerPrompt = prompt;
+        try {
+          if (String(process.env.SIRAGPT_SHORT_QUERY_EXPAND_ENABLED || 'true').toLowerCase() !== 'false') {
+            const __expansion = expandShortQuery({
+              prompt,
+              recentTurns: __pr3RecentTurns,
+              lexiconTerms: [], // El lexicón ya se inyectó al system prompt en PR-3
+            });
+            if (__expansion && __expansion.source === 'expanded') {
+              __routerPrompt = __expansion.expanded;
+            }
+          }
+        } catch (_pr4ExpErr) { /* fallback: usar prompt literal */ }
+
         semanticIntentAnalysis = buildSemanticIntentAnalysis({
-          rawUserRequest: prompt,
+          rawUserRequest: __routerPrompt,
           files: processedFiles,
           userId: userId || null,
           chatId: canPersist ? chatId : null,
@@ -2872,7 +2903,10 @@ router.post(
             intentTriageDecision = await triageIntent({
               analysis: semanticIntentAnalysis,
               prompt,
-              recentTurns: [],
+              // PR-4: pasar historial reciente al ensemble para mejor
+              // calibración en zona gris. El recentTurns viene del bloque
+              // PR-3 ~líneas 1465-1483.
+              recentTurns: __pr3RecentTurns || [],
               judge: __intentTriageJudge,
             });
             try {
