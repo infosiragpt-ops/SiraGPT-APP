@@ -734,6 +734,27 @@ router.post('/messages/:messageId/feedback', [
           console.warn('[chats] feedback ledger update failed:', ledgerErr.message || ledgerErr);
         }
       });
+
+      // PR-2: misunderstanding signal — negative_feedback_in_60s
+      // Solo si el dislike llega dentro de la ventana corta tras la
+      // respuesta del asistente. Fire-and-forget, no bloquea la
+      // respuesta del endpoint.
+      if (feedback === 'disliked') {
+        setImmediate(() => {
+          try {
+            const __misSignals = require('../services/agents/misunderstanding-signals');
+            const msSinceResponse = Date.now() - new Date(message.timestamp).getTime();
+            __misSignals.recordFromContext({
+              userId: req.user.id,
+              sessionId: message.chatId,
+              turnId: message.id,
+              feedback: 'disliked',
+              msSinceResponse,
+              messageId: message.id,
+            });
+          } catch (_) { /* fully swallowed */ }
+        });
+      }
     }
 
     res.status(200).json({ message: updatedMessage });

@@ -3577,6 +3577,19 @@ router.post(
         if (cacheHandle) cacheHandle.fail(apiError && apiError.message ? apiError.message : 'stream failed');
         if (apiError && typeof apiError === 'object' && 'name' in apiError && apiError.name === 'AbortError') {
           console.warn('AI Service stream aborted by client in route, no further content will be sent.');
+          // PR-2: record abandoned_stream signal (fire-and-forget).
+          try {
+            const __misSignals = require('../services/agents/misunderstanding-signals');
+            setImmediate(() => {
+              try {
+                __misSignals.recordFromContext({
+                  userId, sessionId: chatId,
+                  tokensGenerated: (fullResponseContent || '').length,
+                  completed: false,
+                });
+              } catch (_) {}
+            });
+          } catch (_) { /* fully swallowed */ }
           // Don't rethrow, just return, as client has already aborted and doesn't expect more data/error
           return;
         }
@@ -3838,6 +3851,57 @@ router.post(
         }
         await saveChatAndTrackUsage(null, null, prompt, finalContent, tokens, actualModel, processedFiles, [], regenerate);
       }
+
+      // ── PR-2: misunderstanding signals (fire-and-forget) ──────────
+      // Captura señales implícitas de que la respuesta puede haber
+      // fallado en comprender al usuario. Nunca bloquea: setImmediate +
+      // try/catch en cada paso. Disponible sólo cuando hay userId.
+      try {
+        const __misunderstandingSignals = require('../services/agents/misunderstanding-signals');
+        setImmediate(async () => {
+          try {
+            // Detección de prompt-level (no DB needed para correction).
+            if (__misunderstandingSignals.detectCorrectionFollowup({ currentPrompt: prompt })) {
+              __misunderstandingSignals.recordSignal({
+                userId, sessionId: chatId, signal: 'correction_followup',
+                payload: { currentPrompt: String(prompt || '').slice(0, 200) },
+              });
+            }
+            // Manual prompt edit: comparar con prev USER message en DB.
+            if (!regenerate && userId && canPersist && chatId) {
+              try {
+                // El mensaje actual ya se guardó en saveChatAndTrackUsage,
+                // así que el segundo más reciente es el "previo real". Pedimos 2.
+                const __recentUserMsgs = await prisma.message.findMany({
+                  where: { chatId, role: 'USER' },
+                  orderBy: { timestamp: 'desc' },
+                  take: 2,
+                  select: { content: true, timestamp: true },
+                });
+                const prev = Array.isArray(__recentUserMsgs) && __recentUserMsgs.length >= 2
+                  ? __recentUserMsgs[1] : null;
+                if (prev && prev.content) {
+                  const msSincePrevious = Date.now() - new Date(prev.timestamp).getTime();
+                  if (__misunderstandingSignals.detectManualPromptEdit({
+                    currentPrompt: prompt, previousPrompt: prev.content, msSincePrevious,
+                  })) {
+                    __misunderstandingSignals.recordSignal({
+                      userId, sessionId: chatId, signal: 'manual_prompt_edit',
+                      payload: { msSincePrevious },
+                    });
+                  }
+                }
+              } catch (_) { /* swallow DB errors */ }
+            }
+            // Completion-level: regenerate + stream completed normally.
+            __misunderstandingSignals.recordFromContext({
+              userId, sessionId: chatId,
+              regenerate, tokensGenerated: (fullResponseContent || '').length,
+              completed: true,
+            });
+          } catch (_) { /* swallow all */ }
+        });
+      } catch (_) { /* fully swallowed */ }
 
       // ── Emit a final `usage` event so the client can show tokens /
       // cost for this turn and we have a structured trailer for SSE
