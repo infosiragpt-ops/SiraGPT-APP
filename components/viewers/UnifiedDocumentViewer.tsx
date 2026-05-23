@@ -1321,6 +1321,26 @@ function PdfRenderer({ a }: { a: AttachmentLike }) {
     return () => ro.disconnect()
   }, [])
 
+  React.useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const onWheel = (e: WheelEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return
+      e.preventDefault()
+      const factor = Math.exp(-e.deltaY * 0.0016)
+      setScale(s => Math.min(3, Math.max(0.5, +(s * factor).toFixed(3))))
+    }
+    const onDoubleClick = () => {
+      setScale(s => (s === 1 ? 1.35 : 1))
+    }
+    el.addEventListener("wheel", onWheel, { passive: false })
+    el.addEventListener("dblclick", onDoubleClick)
+    return () => {
+      el.removeEventListener("wheel", onWheel)
+      el.removeEventListener("dblclick", onDoubleClick)
+    }
+  }, [])
+
   // IntersectionObserver — track which page is currently most visible so
   // the "page X of Y" indicator stays accurate while the user scrolls.
   React.useEffect(() => {
@@ -1635,6 +1655,51 @@ function sanitizeDocxHtml(html: string): string {
     // DOCX inline images come back as data:image/* — keep them.
     ADD_DATA_URI_TAGS: ["img"],
   })
+}
+
+function paginateOverflowingDocxSections(root: HTMLElement, view: Window = window) {
+  const sections = Array.from(root.querySelectorAll<HTMLElement>("section.docx, section.docx-preview-doc"))
+  if (sections.length !== 1) return
+  const source = sections[0]
+  const wrapper = source.parentElement
+  if (!wrapper) return
+
+  const computed = view.getComputedStyle(source)
+  const pageHeight = Number.parseFloat(computed.minHeight || "") || Number.parseFloat(computed.height || "") || 1122
+  const pageWidth = source.getBoundingClientRect().width
+  if (!pageHeight || source.scrollHeight <= pageHeight * 1.15) return
+
+  const contentParent = source.children.length === 1 && source.firstElementChild instanceof HTMLElement
+    ? source.firstElementChild
+    : source
+  const nodes = Array.from(contentParent.childNodes)
+  if (nodes.length < 2) return
+
+  const createPage = () => {
+    const page = source.cloneNode(false) as HTMLElement
+    page.removeAttribute("id")
+    page.style.width = `${pageWidth}px`
+    page.style.height = `${pageHeight}px`
+    page.style.minHeight = `${pageHeight}px`
+    page.style.overflow = "hidden"
+    const content = contentParent === source
+      ? page
+      : contentParent.cloneNode(false) as HTMLElement
+    if (content !== page) page.appendChild(content)
+    wrapper.appendChild(page)
+    return { page, content }
+  }
+
+  source.remove()
+  let current = createPage()
+  for (const node of nodes) {
+    current.content.appendChild(node)
+    if (current.page.scrollHeight > current.page.clientHeight + 8 && current.content.childNodes.length > 1) {
+      current.content.removeChild(node)
+      current = createPage()
+      current.content.appendChild(node)
+    }
+  }
 }
 
 function HtmlRenderer({ a }: { a: AttachmentLike }) {
@@ -2038,6 +2103,11 @@ function DocxRenderer({ a, isDark: _isDark }: { a: AttachmentLike; isDark: boole
   const [scale, setScale] = React.useState<number>(1)
   const [pageCount, setPageCount] = React.useState<number>(0)
   const [activePage, setActivePage] = React.useState<number>(1)
+  const scaleRef = React.useRef(scale)
+
+  React.useEffect(() => {
+    scaleRef.current = scale
+  }, [scale])
 
   React.useEffect(() => {
     setScale(1)
@@ -2114,8 +2184,32 @@ function DocxRenderer({ a, isDark: _isDark }: { a: AttachmentLike; isDark: boole
     if (!frameWin || !frameDoc) return
 
     const onViewportChange = () => updateNativePageState()
+    const onWheel = (event: WheelEvent) => {
+      if (!(event.ctrlKey || event.metaKey)) return
+      event.preventDefault()
+      const factor = Math.exp(-event.deltaY * 0.0016)
+      setScale(current => Math.min(1.8, Math.max(0.65, +(current * factor).toFixed(3))))
+    }
+    const onDoubleClick = () => {
+      setScale(current => (current === 1 ? 1.25 : 1))
+    }
+    const onGestureStart = (event: Event) => {
+      event.preventDefault()
+      scaleRef.current = scale
+    }
+    const onGestureChange = (event: Event) => {
+      const gestureEvent = event as Event & { scale?: number }
+      if (!gestureEvent.scale) return
+      event.preventDefault()
+      const next = Math.min(1.8, Math.max(0.65, +(scaleRef.current * gestureEvent.scale).toFixed(3)))
+      setScale(next)
+    }
     frameWin.addEventListener("scroll", onViewportChange, { passive: true })
     frameWin.addEventListener("resize", onViewportChange)
+    frameWin.addEventListener("wheel", onWheel, { passive: false })
+    frameDoc.addEventListener("dblclick", onDoubleClick)
+    frameDoc.addEventListener("gesturestart", onGestureStart)
+    frameDoc.addEventListener("gesturechange", onGestureChange)
 
     const observer = new MutationObserver(onViewportChange)
     observer.observe(frameDoc.body, { childList: true, subtree: true })
@@ -2126,8 +2220,12 @@ function DocxRenderer({ a, isDark: _isDark }: { a: AttachmentLike; isDark: boole
       observer.disconnect()
       frameWin.removeEventListener("scroll", onViewportChange)
       frameWin.removeEventListener("resize", onViewportChange)
+      frameWin.removeEventListener("wheel", onWheel)
+      frameDoc.removeEventListener("dblclick", onDoubleClick)
+      frameDoc.removeEventListener("gesturestart", onGestureStart)
+      frameDoc.removeEventListener("gesturechange", onGestureChange)
     }
-  }, [mode, updateNativePageState])
+  }, [mode, scale, updateNativePageState])
 
   React.useEffect(() => {
     let cancelled = false
@@ -2147,8 +2245,9 @@ function DocxRenderer({ a, isDark: _isDark }: { a: AttachmentLike; isDark: boole
         try {
           const { renderAsync } = await loadDocxPreview()
           const frame = iframeRef.current
+          const frameWin = frame?.contentWindow
           const frameDoc = frame?.contentDocument
-          if (cancelled || !frameDoc?.body || !frameDoc?.head) return
+          if (cancelled || !frameWin || !frameDoc?.body || !frameDoc?.head) return
 
           frameDoc.open()
           frameDoc.write(`<!doctype html>
@@ -2159,8 +2258,9 @@ function DocxRenderer({ a, isDark: _isDark }: { a: AttachmentLike; isDark: boole
       html, body {
         margin: 0;
         min-height: 100%;
-        background: #f4f4f5;
+        background: #262626;
         color: #111827;
+        scrollbar-gutter: stable;
       }
       body {
         overflow: auto;
@@ -2168,19 +2268,26 @@ function DocxRenderer({ a, isDark: _isDark }: { a: AttachmentLike; isDark: boole
       }
       #docx-preview-root {
         min-height: 100vh;
+        padding: 32px clamp(28px, 8vw, 96px) 112px;
+        box-sizing: border-box;
       }
       .docx-wrapper,
       .docx-preview-doc-wrapper {
         background: transparent !important;
-        padding: 24px 0 !important;
+        padding: 0 !important;
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: center !important;
+        gap: 28px !important;
       }
       section.docx,
       section.docx-preview-doc {
-        margin: 12px auto !important;
+        margin: 0 auto !important;
         border-radius: 2px;
         background: white !important;
         color: black !important;
-        box-shadow: 0 12px 30px rgba(15, 23, 42, 0.12);
+        outline: 1px solid rgba(255, 255, 255, 0.08);
+        box-shadow: 0 18px 50px rgba(0, 0, 0, 0.34);
       }
     </style>
   </head>
@@ -2207,6 +2314,7 @@ function DocxRenderer({ a, isDark: _isDark }: { a: AttachmentLike; isDark: boole
             renderEndnotes: true,
             renderChanges: false,
           })
+          paginateOverflowingDocxSections(root, frameWin)
           if (!cancelled) setMode("native")
           if (!cancelled) window.requestAnimationFrame(updateNativePageState)
         } catch (docxErr) {
@@ -2358,29 +2466,31 @@ function DocxRenderer({ a, isDark: _isDark }: { a: AttachmentLike; isDark: boole
 
       {/* Mammoth fallback. */}
       {mode === "fallback" && (
-        <div
-          className={cn(
-            "prose prose-sm dark:prose-invert mx-auto max-w-3xl px-8 py-8",
-            "[&_table]:w-full [&_table]:border-collapse [&_td]:border [&_th]:border [&_td]:border-border/50 [&_th]:border-border/50",
-            "[&_td]:px-2 [&_td]:py-1 [&_th]:px-2 [&_th]:py-1",
-            "[&_img]:max-w-full [&_img]:h-auto",
-          )}
-          dangerouslySetInnerHTML={{ __html: fallbackHtml }}
-        />
+        <div className="h-full overflow-auto bg-[#262626] px-[clamp(1.5rem,8vw,6rem)] py-8 pb-24">
+          <div
+            className={cn(
+              "prose prose-sm mx-auto min-h-[72rem] max-w-[52rem] bg-white px-12 py-12 text-black shadow-[0_18px_50px_rgba(0,0,0,0.34)]",
+              "[&_table]:w-full [&_table]:border-collapse [&_td]:border [&_th]:border [&_td]:border-zinc-300 [&_th]:border-zinc-300",
+              "[&_td]:px-2 [&_td]:py-1 [&_th]:px-2 [&_th]:py-1",
+              "[&_img]:h-auto [&_img]:max-w-full",
+            )}
+            dangerouslySetInnerHTML={{ __html: fallbackHtml }}
+          />
+        </div>
       )}
 
       {/* extractedText fallback — original docx not available locally
           but the server-side parser stored its text. Shown so the user
           can at least read the content of an old chat without re-upload. */}
       {mode === "extracted" && (
-        <div className="mx-auto max-w-3xl px-6 py-6">
-          <div className="mb-4 rounded-md border border-amber-300/40 bg-amber-50/60 px-3 py-2 text-[12px] text-amber-900 dark:border-amber-700/40 dark:bg-amber-950/30 dark:text-amber-200">
-            Mostrando el texto extraído. El archivo binario original no está disponible (chat antiguo). Para una vista exacta, vuelve a adjuntar el .docx.
+        <div className="h-full overflow-auto bg-[#262626] px-[clamp(1.5rem,8vw,6rem)] py-8 pb-24">
+          <div className="mx-auto mb-4 max-w-[52rem] rounded-[14px] border border-white/15 bg-white/12 px-3 py-2 text-[12px] text-white/80 shadow-sm backdrop-blur-xl">
+            Mostrando el texto extraído. Para una vista exacta, vuelve a adjuntar el .docx.
           </div>
           <div
             className={cn(
-              "prose prose-sm dark:prose-invert max-w-none",
-              "[&_table]:w-full [&_table]:border-collapse [&_td]:border [&_th]:border [&_td]:border-border/50 [&_th]:border-border/50",
+              "prose prose-sm mx-auto min-h-[72rem] max-w-[52rem] bg-white px-12 py-12 text-black shadow-[0_18px_50px_rgba(0,0,0,0.34)]",
+              "[&_table]:w-full [&_table]:border-collapse [&_td]:border [&_th]:border [&_td]:border-zinc-300 [&_th]:border-zinc-300",
               "[&_td]:px-2 [&_td]:py-1 [&_th]:px-2 [&_th]:py-1",
             )}
             dangerouslySetInnerHTML={{ __html: fallbackHtml }}

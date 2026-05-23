@@ -5,7 +5,7 @@ import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { Check, AlertTriangle } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useFileProcessingStatus, describeStage } from "@/hooks/use-file-processing-status"
-import { shouldFireReadyTransition, type FileProcessingStage } from "@/lib/file-processing-vocab"
+import { shouldFireReadyTransition, stageProgressPercent, type FileProcessingStage } from "@/lib/file-processing-vocab"
 
 interface Props {
   fileId: string | null | undefined
@@ -54,6 +54,7 @@ export function FileProcessingBadge({ fileId, compact, className, onReady }: Pro
   if (status.stage === "ready") return null
 
   const { label, tone } = describeStage(status.stage, status.error)
+  const progress = stageProgressPercent(status.stage)
 
   const palette = {
     progress: "text-muted-foreground",
@@ -71,19 +72,30 @@ export function FileProcessingBadge({ fileId, compact, className, onReady }: Pro
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 leading-none",
-        compact ? "text-[10px]" : "text-[11px]",
+        "inline-flex min-w-0 flex-col gap-1 leading-none",
+        compact ? "w-[5.75rem] text-[10px]" : "w-full max-w-[220px] text-[11px]",
         palette,
         className,
       )}
       title={tone === "error" && status.error ? status.error : label}
     >
-      {Icon ? (
-        <Icon className={compact ? "h-3 w-3" : "h-3.5 w-3.5"} />
-      ) : (
-        <ThinkingIndicator size="sm" className={compact ? "h-3 w-3" : "h-3.5 w-3.5"} />
-      )}
-      <span className="truncate max-w-[200px]">{label}</span>
+      <span className="inline-flex min-w-0 items-center gap-1">
+        {Icon ? (
+          <Icon className={compact ? "h-3 w-3" : "h-3.5 w-3.5"} />
+        ) : (
+          <ThinkingIndicator size="sm" className={compact ? "h-3 w-3" : "h-3.5 w-3.5"} />
+        )}
+        <span className="truncate">{label}</span>
+      </span>
+      <span className="block h-[2px] w-full overflow-hidden rounded-full bg-zinc-200/80 dark:bg-white/10" aria-hidden="true">
+        <span
+          className={cn(
+            "block h-full rounded-full transition-[width,background-color] duration-500 ease-out",
+            tone === "error" ? "bg-red-500" : "bg-zinc-900/75 dark:bg-white/75",
+          )}
+          style={{ width: `${progress}%` }}
+        />
+      </span>
     </span>
   )
 }

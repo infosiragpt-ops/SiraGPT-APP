@@ -83,6 +83,22 @@ export interface StageDescription {
   tone: StageTone
 }
 
+const STAGE_PROGRESS: Record<FileProcessingStage, number> = {
+  uploaded: 18,
+  validating: 34,
+  extracting: 54,
+  chunking: 68,
+  embedding: 82,
+  indexing: 92,
+  ready: 100,
+  failed: 100,
+}
+
+export function stageProgressPercent(stage: FileProcessingStage | null | undefined): number {
+  if (!stage) return 8
+  return STAGE_PROGRESS[stage] ?? 8
+}
+
 /**
  * Localised label + tone for a stage. Centralised here so every
  * surface that reads stage data — chip in composer, chip in sent

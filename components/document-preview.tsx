@@ -52,6 +52,7 @@ type State =
   | { kind: "loading" }
   | { kind: "pdf" }
   | { kind: "svg" }
+  | { kind: "docxNative"; buffer: ArrayBuffer }
   | { kind: "html"; html: string; warnings: string[] }
   | { kind: "iframeHtml"; html: string }
   | { kind: "unsupported"; message: string }
@@ -128,6 +129,55 @@ function escapeHtml(value: unknown) {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
+}
+
+function cloneArrayBuffer(buffer: ArrayBuffer) {
+  return buffer.slice(0)
+}
+
+function paginateOverflowingDocxSections(root: HTMLElement) {
+  const sections = Array.from(root.querySelectorAll<HTMLElement>("section.docx, section.docx-preview-doc"))
+  if (sections.length !== 1) return
+  const source = sections[0]
+  const wrapper = source.parentElement
+  if (!wrapper) return
+
+  const computed = window.getComputedStyle(source)
+  const pageHeight = Number.parseFloat(computed.minHeight || "") || Number.parseFloat(computed.height || "") || 1122
+  const pageWidth = source.getBoundingClientRect().width
+  if (!pageHeight || source.scrollHeight <= pageHeight * 1.15) return
+
+  const contentParent = source.children.length === 1 && source.firstElementChild instanceof HTMLElement
+    ? source.firstElementChild
+    : source
+  const nodes = Array.from(contentParent.childNodes)
+  if (nodes.length < 2) return
+
+  const createPage = () => {
+    const page = source.cloneNode(false) as HTMLElement
+    page.removeAttribute("id")
+    page.style.width = `${pageWidth}px`
+    page.style.height = `${pageHeight}px`
+    page.style.minHeight = `${pageHeight}px`
+    page.style.overflow = "hidden"
+    const content = contentParent === source
+      ? page
+      : contentParent.cloneNode(false) as HTMLElement
+    if (content !== page) page.appendChild(content)
+    wrapper.appendChild(page)
+    return { page, content }
+  }
+
+  source.remove()
+  let current = createPage()
+  for (const node of nodes) {
+    current.content.appendChild(node)
+    if (current.page.scrollHeight > current.page.clientHeight + 8 && current.content.childNodes.length > 1) {
+      current.content.removeChild(node)
+      current = createPage()
+      current.content.appendChild(node)
+    }
+  }
 }
 
 function tableHtml(rows: unknown[][], options: { title?: string; truncated?: string } = {}) {
@@ -310,6 +360,9 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
   const [activePage, setActivePage] = React.useState(1)
   const [pageCount, setPageCount] = React.useState(1)
   const scrollRef = React.useRef<HTMLDivElement | null>(null)
+  const docxRootRef = React.useRef<HTMLDivElement | null>(null)
+  const docxStyleRef = React.useRef<HTMLDivElement | null>(null)
+  const [docxNativeReady, setDocxNativeReady] = React.useState(false)
   // Resolve the URL through `normalizeBackendAssetUrl` so an absolute
   // `/uploads/...` URL the backend baked in gets rewritten to the
   // frontend's NEXT_PUBLIC_IMAGE_URL host. Fixes "Failed to fetch"
@@ -331,11 +384,17 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
     return inferFilename(downloadUrl, format)
   }, [downloadUrl, format, url])
   const formatLabel = (FORMAT_EXTENSION[format] || "documento").toUpperCase()
-  const canUsePreviewControls = ["pdf", "svg", "html", "iframeHtml"].includes(state.kind)
+  const canUsePreviewControls = ["pdf", "svg", "docxNative", "html", "iframeHtml"].includes(state.kind)
   const previewZoomStyle = React.useMemo(
     () => ({ zoom }) as React.CSSProperties & { zoom: number },
     [zoom],
   )
+
+  const getDocxNativePages = React.useCallback((): HTMLElement[] => {
+    const root = docxRootRef.current
+    if (!root) return []
+    return Array.from(root.querySelectorAll<HTMLElement>("section.docx, section.docx-preview-doc"))
+  }, [])
 
   const updatePageMetrics = React.useCallback(() => {
     const el = scrollRef.current
@@ -345,13 +404,39 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
       return
     }
 
+    if (state.kind === "docxNative") {
+      const pages = getDocxNativePages()
+      if (pages.length === 0) {
+        setActivePage(1)
+        setPageCount(1)
+        return
+      }
+      const scrollRect = el.getBoundingClientRect()
+      let bestPage = 1
+      let bestVisible = -1
+      let bestDistance = Number.POSITIVE_INFINITY
+      pages.forEach((page, index) => {
+        const rect = page.getBoundingClientRect()
+        const visible = Math.max(0, Math.min(rect.bottom, scrollRect.bottom) - Math.max(rect.top, scrollRect.top))
+        const distance = Math.abs(rect.top - scrollRect.top)
+        if (visible > bestVisible || (visible === bestVisible && distance < bestDistance)) {
+          bestVisible = visible
+          bestDistance = distance
+          bestPage = index + 1
+        }
+      })
+      setPageCount(pages.length)
+      setActivePage(bestPage)
+      return
+    }
+
     const viewport = Math.max(1, el.clientHeight)
     const total = Math.max(1, Math.ceil(Math.max(el.scrollHeight, viewport) / viewport))
     const current = Math.min(total, Math.max(1, Math.floor((el.scrollTop + viewport * 0.35) / viewport) + 1))
 
     setPageCount((previous) => (previous === total ? previous : total))
     setActivePage((previous) => (previous === current ? previous : current))
-  }, [canUsePreviewControls])
+  }, [canUsePreviewControls, getDocxNativePages, state.kind])
 
   const setBoundedZoom = React.useCallback((nextZoom: number) => {
     setZoom(Math.min(MAX_PREVIEW_ZOOM, Math.max(MIN_PREVIEW_ZOOM, Number(nextZoom.toFixed(2)))))
@@ -361,12 +446,26 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
     const el = scrollRef.current
     if (!el) return
     const targetPage = Math.min(Math.max(page, 1), pageCount)
+    if (state.kind === "docxNative") {
+      const pages = getDocxNativePages()
+      const pageEl = pages[targetPage - 1]
+      if (pageEl) {
+        const scrollRect = el.getBoundingClientRect()
+        const pageRect = pageEl.getBoundingClientRect()
+        el.scrollTo({
+          top: el.scrollTop + pageRect.top - scrollRect.top - 12,
+          behavior: "smooth",
+        })
+      }
+      setActivePage(targetPage)
+      return
+    }
     el.scrollTo({
       top: (targetPage - 1) * Math.max(1, el.clientHeight),
       behavior: "smooth",
     })
     setActivePage(targetPage)
-  }, [pageCount])
+  }, [getDocxNativePages, pageCount, state.kind])
 
   const download = React.useCallback(async () => {
     if (isDownloading) return
@@ -423,6 +522,96 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
       observer?.disconnect()
     }
   }, [canUsePreviewControls, state.kind, updatePageMetrics, zoom])
+
+  React.useEffect(() => {
+    if (!canUsePreviewControls) return
+    const el = scrollRef.current
+    if (!el) return
+    const onWheel = (event: WheelEvent) => {
+      if (!(event.ctrlKey || event.metaKey)) return
+      event.preventDefault()
+      const factor = Math.exp(-event.deltaY * 0.0015)
+      setBoundedZoom(zoom * factor)
+    }
+    el.addEventListener("wheel", onWheel, { passive: false })
+    return () => el.removeEventListener("wheel", onWheel)
+  }, [canUsePreviewControls, setBoundedZoom, zoom])
+
+  React.useEffect(() => {
+    if (state.kind !== "docxNative") {
+      setDocxNativeReady(false)
+      return
+    }
+
+    const root = docxRootRef.current
+    const styleHost = docxStyleRef.current
+    if (!root || !styleHost) return
+
+    let cancelled = false
+    setDocxNativeReady(false)
+    root.replaceChildren()
+    styleHost.replaceChildren()
+
+    ;(async () => {
+      try {
+        const { renderAsync } = await import("docx-preview")
+        if (cancelled) return
+        await renderAsync(cloneArrayBuffer(state.buffer), root, styleHost, {
+          className: "docx-preview-doc",
+          inWrapper: true,
+          ignoreWidth: false,
+          ignoreHeight: false,
+          ignoreFonts: false,
+          breakPages: true,
+          ignoreLastRenderedPageBreak: true,
+          experimental: false,
+          trimXmlDeclaration: true,
+          useBase64URL: true,
+          renderHeaders: true,
+          renderFooters: true,
+          renderFootnotes: true,
+          renderEndnotes: true,
+          renderChanges: false,
+        })
+        if (cancelled) return
+        paginateOverflowingDocxSections(root)
+        const style = document.createElement("style")
+        style.textContent = `
+          .sira-document-preview-docx .docx-wrapper,
+          .sira-document-preview-docx .docx-preview-doc-wrapper {
+            background: transparent !important;
+            padding: 0 !important;
+            display: flex !important;
+            flex-direction: column !important;
+            align-items: center !important;
+            gap: 28px !important;
+          }
+          .sira-document-preview-docx section.docx,
+          .sira-document-preview-docx section.docx-preview-doc {
+            margin: 0 auto !important;
+            border-radius: 2px !important;
+            background: white !important;
+            color: black !important;
+            outline: 1px solid rgba(255,255,255,0.08) !important;
+            box-shadow: 0 18px 50px rgba(0,0,0,0.34) !important;
+          }
+        `
+        styleHost.appendChild(style)
+        setDocxNativeReady(true)
+        window.requestAnimationFrame(updatePageMetrics)
+      } catch (error) {
+        if (cancelled) return
+        const message = error instanceof Error ? error.message : "No se pudo abrir el documento."
+        setState({ kind: "error", message })
+      }
+    })()
+
+    return () => {
+      cancelled = true
+      root.replaceChildren()
+      styleHost.replaceChildren()
+    }
+  }, [state, updatePageMetrics])
 
   React.useEffect(() => {
     if (!previewUrl) return
@@ -497,6 +686,11 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
           const html = await renderPptx(buffer)
           if (cancelled) return
           setState({ kind: "html", html: sanitizeClientPreviewHtml(html), warnings: [] })
+          return
+        }
+
+        if (format === "docx") {
+          setState({ kind: "docxNative", buffer: cloneArrayBuffer(buffer) })
           return
         }
 
@@ -613,6 +807,24 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
             title={`Vista previa ${filename}`}
             sandbox=""
           />
+        )}
+
+        {state.kind === "docxNative" && (
+          <div
+            className="relative min-h-full bg-[#262626] px-[clamp(1.5rem,8vw,6rem)] py-8 pb-28"
+            style={previewZoomStyle}
+          >
+            <div ref={docxStyleRef} className="contents" aria-hidden="true" />
+            <div ref={docxRootRef} className="sira-document-preview-docx min-h-[42rem]" />
+            {!docxNativeReady && (
+              <div className="absolute inset-0 flex items-center justify-center bg-[#262626]/80 text-sm text-white/75 backdrop-blur-sm">
+                <div className="flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-2 shadow-sm">
+                  <ThinkingIndicator size="sm" />
+                  Renderizando documento…
+                </div>
+              </div>
+            )}
+          </div>
         )}
 
         {state.kind === "html" && (

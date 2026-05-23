@@ -5,6 +5,7 @@ import {
   describeStage,
   friendlyFailureLabel,
   isTerminalStage,
+  stageProgressPercent,
   shouldFireReadyTransition,
   TERMINAL_STAGES,
 } from "../lib/file-processing-vocab"
@@ -51,6 +52,15 @@ test("describeStage returns the canonical Spanish label per stage", () => {
 
 test("describeStage(null) returns the neutral 'Pendiente' default", () => {
   assert.deepEqual(describeStage(null), { label: "Pendiente", tone: "neutral" })
+})
+
+test("stageProgressPercent gives stable monotonic progress for non-terminal stages", () => {
+  const stages = ["uploaded", "validating", "extracting", "chunking", "embedding", "indexing", "ready"] as const
+  const progress = stages.map(stageProgressPercent)
+  assert.deepEqual(progress, [18, 34, 54, 68, 82, 92, 100])
+  assert.equal(stageProgressPercent(null), 8)
+  assert.equal(stageProgressPercent(undefined), 8)
+  assert.equal(stageProgressPercent("future_unknown_stage" as any), 8)
 })
 
 test("describeStage('failed') routes through friendlyFailureLabel for the prefix mapping", () => {
