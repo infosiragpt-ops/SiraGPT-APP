@@ -68,6 +68,8 @@ async function runUserMessage(args = {}) {
     userId: args.userId,
     modelChoice: args.modelChoice,
     llmClient: args.llmClient,
+    originalText: args.originalText,
+    contextualUnderstanding: args.contextualUnderstanding,
     requestId: args.requestId,
   });
   const envelope = envelopeBundle.envelope;

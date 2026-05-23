@@ -181,6 +181,33 @@ describe("task-envelope-builder", () => {
     expect(r.envelope.entities.requested_formats.includes("xlsx")).toBe(false);
   });
 
+  test("contextual understanding preserves raw text and classifies with effective text", async () => {
+    const r = await buildEnvelope({
+      text: "## COREFERENCE_RESOLUTION\n- \"la segunda parte\" -> Carta laboral (conf 0.75)\n\nSOLICITUD_USUARIO:\nhaz Carta laboral en Word",
+      originalText: "haz la segunda parte en Word",
+      contextualUnderstanding: {
+        applied: true,
+        original_text: "haz la segunda parte en Word",
+        effective_text: "haz Carta laboral en Word",
+        recent_turn_count: 2,
+        coreference: {
+          source: "ordinal_list",
+          latency_ms: 3,
+          references: [{ span: "la segunda parte", resolves_to: "Carta laboral", confidence: 0.75, source: "ordinal_list" }],
+        },
+        lexicon_terms: [],
+        repair: { is_repair: false, repair_type: null, contract_override: null },
+        misunderstanding_signals: [],
+      },
+    });
+
+    expect(r.validation.ok).toBe(true);
+    expect(r.envelope.raw_input.text).toBe("haz la segunda parte en Word");
+    expect(r.envelope.normalized_request.clean_text).toContain("Carta laboral");
+    expect(r.envelope.contextual_understanding.applied).toBe(true);
+    expect(r.envelope.entities.requested_formats.includes("docx")).toBe(true);
+  });
+
   test("web app request produces code_project output", async () => {
     const r = await buildEnvelope({
       text: "Construye una landing en Next.js para mi clínica dental",

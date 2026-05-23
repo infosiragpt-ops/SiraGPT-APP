@@ -49,6 +49,30 @@ const TASK_ENVELOPE_SCHEMA = Object.freeze({
     conversation_id: { type: ["string", "null"] },
     user_id: { type: ["string", "null"] },
     created_at: { type: "string", format: "date-time" },
+    contextual_understanding: {
+      type: ["object", "null"],
+      additionalProperties: false,
+      required: [
+        "applied",
+        "original_text",
+        "effective_text",
+        "recent_turn_count",
+        "coreference",
+        "lexicon_terms",
+        "repair",
+        "misunderstanding_signals",
+      ],
+      properties: {
+        applied: { type: "boolean" },
+        original_text: { type: "string" },
+        effective_text: { type: "string" },
+        recent_turn_count: { type: "integer", minimum: 0 },
+        coreference: { type: "object" },
+        lexicon_terms: { type: "array", items: { type: "object" } },
+        repair: { type: "object" },
+        misunderstanding_signals: { type: "array", items: { type: "string" } },
+      },
+    },
 
     raw_input: {
       type: "object",

@@ -57,6 +57,8 @@ const SIRA_EXECUTION_LAW = Object.freeze({
  * @param {string} [args.userId]
  * @param {object} [args.modelChoice]           — output of model-router.select()
  * @param {object} [args.llmClient]             — optional intent classifier client
+ * @param {string} [args.originalText]          — original user text when `text` is an enriched effective prompt
+ * @param {object} [args.contextualUnderstanding] — optional contextual-understanding summary for replay
  * @param {string} [args.requestId]             — caller-supplied request id (HTTP `X-Request-Id`).
  *                                                If omitted, a fresh one is minted. Pass-through
  *                                                from the route handler unifies the access log,
@@ -74,6 +76,8 @@ async function buildEnvelope({
   userId = null,
   modelChoice = null,
   llmClient = null,
+  originalText = null,
+  contextualUnderstanding = null,
   requestId = null,
 } = {}) {
   if (typeof text !== "string" || text.trim().length === 0) {
@@ -86,19 +90,25 @@ async function buildEnvelope({
     });
   }
 
+  const effectiveText = text;
+  const rawText = typeof originalText === "string" && originalText.trim().length > 0
+    ? originalText
+    : text;
+
   // ── 1. Normalise raw input ───────────────────────────────────────
-  const cleanText = normaliseText(text);
-  const detectedLanguage = detectLanguage(text);
+  const cleanText = normaliseText(effectiveText);
+  const detectedLanguage = detectLanguage(rawText);
   const normalizedAttachments = (attachments || []).map(normaliseAttachment);
   const requestIntelligence = analyzeRequestTokens({
-    rawUserRequest: text,
+    rawUserRequest: effectiveText,
     fileIds: normalizedAttachments.map(a => a.file_id),
     conversationHistory: history,
   });
+  const contextualUnderstandingContext = normalizeContextualUnderstanding(contextualUnderstanding);
 
   // ── 2. Run the intent router (LLM-primary + regex fallback) ──────
   const decision = await intentRouter.classifyIntent({
-    prompt: text,
+    prompt: effectiveText,
     history,
     context: {
       has_attachments: normalizedAttachments.length > 0,
@@ -106,15 +116,16 @@ async function buildEnvelope({
       locale: detectedLanguage,
       user_role: userProfile.role || null,
       request_intelligence: compactRequestIntelligence(requestIntelligence),
+      contextual_understanding: compactContextualUnderstanding(contextualUnderstandingContext),
     },
     llmClient,
   });
-  const tokenAwareDecision = mergeDecisionWithRequestIntelligence(decision, requestIntelligence, text, normalizedAttachments);
+  const tokenAwareDecision = mergeDecisionWithRequestIntelligence(decision, requestIntelligence, effectiveText, normalizedAttachments);
 
   // Map the router's primary_intent (e.g. "complex_academic_document_generation")
   // to the universal taxonomy id (e.g. "academic_document"). Keeps both ids
   // available so downstream code can pick whichever it prefers.
-  const taxonomyIntent = mapRouterIntentToTaxonomy(tokenAwareDecision.intent_primary, normalizedAttachments, text, requestIntelligence);
+  const taxonomyIntent = mapRouterIntentToTaxonomy(tokenAwareDecision.intent_primary, normalizedAttachments, effectiveText, requestIntelligence);
 
   // ── 3. Resolve the skill bundle ──────────────────────────────────
   const skill = skillSystem.resolveSkillForIntent(tokenAwareDecision, { userPlan });
@@ -149,13 +160,14 @@ async function buildEnvelope({
     conversation_id: conversationId,
     user_id: userId,
     created_at: new Date().toISOString(),
+    contextual_understanding: contextualUnderstandingContext,
 
     raw_input: {
-      text,
+      text: rawText,
       input_language: detectedLanguage,
-      input_mode: pickInputMode(text, normalizedAttachments),
+      input_mode: pickInputMode(rawText, normalizedAttachments),
       attachments: normalizedAttachments,
-      links: extractLinks(text),
+      links: extractLinks(rawText),
       images: normalizedAttachments.filter(a => a.detected_type === "image"),
       audio: normalizedAttachments.filter(a => a.detected_type === "audio"),
       video: normalizedAttachments.filter(a => a.detected_type === "video"),
@@ -166,9 +178,10 @@ async function buildEnvelope({
       detected_language: detectedLanguage,
       target_language: detectedLanguage,
       translated_query_en: null,
-      user_tone: inferTone(text),
-      spelling_quality: inferSpellingQuality(text),
-      requires_context_resolution: history.length > 0 && /\b(eso|aquello|el documento|la imagen|esto|the file|that one)\b/i.test(text),
+      user_tone: inferTone(rawText),
+      spelling_quality: inferSpellingQuality(rawText),
+      requires_context_resolution: Boolean(contextualUnderstandingContext?.applied)
+        || history.length > 0 && /\b(eso|aquello|el documento|la imagen|esto|the file|that one)\b/i.test(rawText),
     },
 
     intent_analysis: {
@@ -180,7 +193,7 @@ async function buildEnvelope({
       secondary_intents: (enrichedDecision.intent_secondary || []).slice(0, 8).map(s => ({ id: s, label: humanise(s), confidence: 0.7 })),
       excluded_intents: deriveExcludedIntents(taxonomyIntent),
       task_family: taxonomyIntent.family,
-      task_domain: inferDomain(text, taxonomyIntent),
+      task_domain: inferDomain(effectiveText, taxonomyIntent),
       complexity_level: taxonomyIntent.default_complexity,
       ambiguity_level: tokenAwareDecision.needs_clarification ? "high" : ambiguityFromScore(requestIntelligence.ambiguity_score),
       novelty_level: "medium",
@@ -188,17 +201,17 @@ async function buildEnvelope({
       system_autonomy_expected: tokenAwareDecision.confidence >= 0.8 ? "high" : "medium",
     },
 
-    goal_model: deriveGoalModel(text, taxonomyIntent, normalizedAttachments),
+    goal_model: deriveGoalModel(effectiveText, taxonomyIntent, normalizedAttachments),
 
     task_classification: deriveTaskClassification(taxonomyIntent, enrichedDecision, normalizedAttachments, requestIntelligence),
 
-    entities: deriveEntities(text, taxonomyIntent, normalizedAttachments, requestIntelligence),
+    entities: deriveEntities(effectiveText, taxonomyIntent, normalizedAttachments, requestIntelligence),
 
     context_requirements: deriveContextRequirements(taxonomyIntent, normalizedAttachments, requestIntelligence),
 
     data_ingestion_plan: deriveDataIngestionPlan(normalizedAttachments, taxonomyIntent, requestIntelligence),
 
-    output_contract: deriveOutputContract(taxonomyIntent, text, targetFormat, requestIntelligence),
+    output_contract: deriveOutputContract(taxonomyIntent, effectiveText, targetFormat, requestIntelligence),
 
     model_execution_context: deriveModelExecutionContext(modelChoice, taxonomyIntent),
 
@@ -211,7 +224,7 @@ async function buildEnvelope({
     clarification_policy: {
       needs_clarification: Boolean(tokenAwareDecision.needs_clarification),
       clarification_reason: tokenAwareDecision.needs_clarification ? "input_under_specified" : null,
-      questions: tokenAwareDecision.needs_clarification ? deriveClarifyingQuestions(text, taxonomyIntent) : [],
+      questions: tokenAwareDecision.needs_clarification ? deriveClarifyingQuestions(effectiveText, taxonomyIntent) : [],
       auto_assumptions_allowed: !tokenAwareDecision.needs_clarification,
       act_without_clarification_if_confidence_above: 0.82,
       ask_user_if_confidence_below: 0.55,
@@ -1162,6 +1175,43 @@ function clamp01(n) {
   return n;
 }
 
+function normalizeContextualUnderstanding(contextualUnderstanding) {
+  if (!contextualUnderstanding || typeof contextualUnderstanding !== "object") return null;
+  return {
+    applied: Boolean(contextualUnderstanding.applied),
+    original_text: String(contextualUnderstanding.original_text || ""),
+    effective_text: String(contextualUnderstanding.effective_text || ""),
+    recent_turn_count: Number.isFinite(contextualUnderstanding.recent_turn_count)
+      ? contextualUnderstanding.recent_turn_count
+      : 0,
+    coreference: contextualUnderstanding.coreference && typeof contextualUnderstanding.coreference === "object"
+      ? contextualUnderstanding.coreference
+      : { source: "not_run", latency_ms: 0, references: [] },
+    lexicon_terms: Array.isArray(contextualUnderstanding.lexicon_terms)
+      ? contextualUnderstanding.lexicon_terms
+      : [],
+    repair: contextualUnderstanding.repair && typeof contextualUnderstanding.repair === "object"
+      ? contextualUnderstanding.repair
+      : { is_repair: false, repair_type: null, contract_override: null },
+    misunderstanding_signals: Array.isArray(contextualUnderstanding.misunderstanding_signals)
+      ? contextualUnderstanding.misunderstanding_signals.map(String).slice(0, 10)
+      : [],
+  };
+}
+
+function compactContextualUnderstanding(contextualUnderstanding) {
+  const normalized = normalizeContextualUnderstanding(contextualUnderstanding);
+  if (!normalized) return null;
+  return {
+    applied: normalized.applied,
+    coreference_source: normalized.coreference?.source || null,
+    lexicon_term_count: normalized.lexicon_terms.length,
+    is_repair: Boolean(normalized.repair?.is_repair),
+    repair_type: normalized.repair?.repair_type || null,
+    signal_count: normalized.misunderstanding_signals.length,
+  };
+}
+
 module.exports = {
   buildEnvelope,
   SIRA_EXECUTION_LAW,
@@ -1170,4 +1220,6 @@ module.exports = {
   deriveOutputContract,
   deriveSafety,
   deriveQualityPlan,
+  normalizeContextualUnderstanding,
+  compactContextualUnderstanding,
 };
