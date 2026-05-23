@@ -136,21 +136,7 @@ const NAV_ROW =
   "group/nav flex h-9 w-full items-center justify-start gap-2.5 rounded-lg px-2.5 text-left text-[13px] font-normal leading-none text-muted-foreground transition-colors duration-150 hover:bg-foreground/[0.045] hover:text-foreground"
 const NAV_ROW_ACTIVE =
   "bg-foreground/[0.065] text-foreground ring-1 ring-border/40 shadow-none"
-// Base sizing/stroke for every sidebar icon. The transform + transition
-// give every nav row a single, consistent micro-interaction: hovering
-// the row rotates the icon a full turn over 600ms. We use the named
-// `group/nav` (declared on NAV_ROW) so this only triggers from THIS
-// row's hover — sibling rows stay still. `motion-safe` respects users
-// who set `prefers-reduced-motion: reduce`. `will-change-transform`
-// hints the compositor so the rotation stays butter-smooth on low-end
-// hardware. The icon also lifts in opacity / saturates a touch on
-// hover so the color shift reads as deliberate, not accidental.
-const NAV_ICON = cn(
-  "h-4 w-4 shrink-0 stroke-[1.85] will-change-transform",
-  "transition-[transform,opacity,filter] duration-[600ms] ease-[cubic-bezier(0.22,1,0.36,1)]",
-  "opacity-90 saturate-[0.92]",
-  "motion-safe:group-hover/nav:rotate-[360deg] motion-safe:group-hover/nav:opacity-100 motion-safe:group-hover/nav:saturate-100",
-)
+const NAV_ICON = "h-4 w-4 shrink-0 stroke-[1.85]"
 
 type SidebarNavItemProps = {
   href: string
@@ -217,11 +203,7 @@ function SidebarNavItem({
             <Icon
               className={cn(
                 NAV_ICON,
-                // Default color only kicks in when the caller does NOT
-                // pass an `iconClassName` — otherwise the per-item brand
-                // color (indigo/emerald/etc.) would get overridden by
-                // `text-muted-foreground` and the icons would look gray.
-                !iconClassName && (active ? "text-foreground" : "text-muted-foreground"),
+                active ? "text-foreground" : "text-muted-foreground",
                 iconClassName,
               )}
             />
@@ -967,7 +949,7 @@ export function AppSidebar() {
                   "group-data-[collapsible=icon]:!size-8 group-data-[collapsible=icon]:!p-2",
                 )}
               >
-                <PenSquare className={cn(NAV_ICON, "text-indigo-600 dark:text-indigo-400")} />
+                <PenSquare className={cn(NAV_ICON, "text-foreground")} />
                 <span className="group-data-[state=closed]:hidden truncate">{t("newChat")}</span>
               </button>
             </TooltipTrigger>
@@ -1025,7 +1007,7 @@ export function AppSidebar() {
                 className={cn(NAV_ROW, "group-data-[collapsible=icon]:!size-8 group-data-[collapsible=icon]:!p-2")}
                 variant="default"
               >
-                <Search className={cn(NAV_ICON, "text-amber-500 dark:text-amber-400")} />
+                <Search className={cn(NAV_ICON, "text-muted-foreground")} />
                 <span className="group-data-[state=closed]:hidden truncate">{t("searchChats")}</span>
               </SidebarMenuButton>
             </TooltipTrigger>
@@ -1045,7 +1027,6 @@ export function AppSidebar() {
             label={t("library")}
             tooltip={t("library")}
             icon={Images}
-            iconClassName="text-emerald-600 dark:text-emerald-400"
             active={isOnLibraryPage}
             pending={isPendingRoute("/library")}
             sidebarState={state}
@@ -1059,7 +1040,6 @@ export function AppSidebar() {
             label={t("gpts")}
             tooltip={t("gpts")}
             icon={LayoutGrid}
-            iconClassName="text-violet-600 dark:text-violet-400"
             active={isOnGPTsPage}
             pending={isPendingRoute("/gpts")}
             sidebarState={state}
@@ -1073,7 +1053,6 @@ export function AppSidebar() {
             label="Parafraseo"
             tooltip="Parafraseo"
             icon={Sparkles}
-            iconClassName="text-sky-600 dark:text-sky-400"
             active={isOnParaphrasePage}
             pending={isPendingRoute("/parafraseo")}
             sidebarState={state}
@@ -1092,7 +1071,6 @@ export function AppSidebar() {
             label={t("projects")}
             tooltip={t("projects")}
             icon={FolderKanban}
-            iconClassName="text-amber-600 dark:text-amber-400"
             active={isOnProjectsPage}
             pending={isPendingRoute("/projects")}
             sidebarState={state}
@@ -1111,7 +1089,6 @@ export function AppSidebar() {
             label={t("design")}
             tooltip={t("design")}
             icon={Palette}
-            iconClassName="text-rose-500 dark:text-rose-400"
             active={isOnDesignPage}
             pending={isPendingRoute("/design")}
             sidebarState={state}

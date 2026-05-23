@@ -18,13 +18,7 @@ const nextConfig = {
     : undefined,
 
   eslint: {
-    // Lint is run as its own gate in CI (`npm run lint`). Running it
-    // again inside `next build` only adds ~30 s and gives us a *second*
-    // place where a single new warning can take down a deploy — exactly
-    // the failure mode we are protecting against. Production build now
-    // trusts CI for static checks; runtime correctness is what matters
-    // here.
-    ignoreDuringBuilds: true,
+    ignoreDuringBuilds: false,
   },
   typescript: {
     // Type-checking is enforced in CI via `npm run type-check`. Skipping
