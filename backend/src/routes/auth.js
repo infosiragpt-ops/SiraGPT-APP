@@ -89,6 +89,8 @@ const { getRequestId } = require('../middleware/request-id');
 const {
   LoginRequestSchema,
   RegisterRequestSchema,
+  ForgotPasswordRequestSchema,
+  ResetPasswordRequestSchema,
 } = require('../schemas/auth');
 
 // JWT audience / issuer — included in every signed token and verified
@@ -1295,6 +1297,117 @@ router.get('/verify-email/:token', verifyEmailRateLimit, async (req, res) => {
 // POST /api/auth/resend-verification — authenticated. Mints a fresh
 // token + emails it. No-ops with 200 if the user is already verified
 // so the FE can be naive about state.
+// ─── Password reset (spec §7.13) ────────────────────────────────────
+// POST /api/auth/forgot-password — public. Mints a single-use token
+// + emails the reset link. We always return 200 regardless of whether
+// an account matched the email, so this endpoint cannot be used to
+// enumerate registered users. Rate-limited per IP+email.
+const {
+  createPasswordResetToken,
+  validatePasswordResetToken,
+  consumePasswordResetToken,
+} = require('../services/password-reset');
+
+router.post(
+  '/forgot-password',
+  forgotPasswordRateLimit,
+  validateBody(ForgotPasswordRequestSchema, { codePrefix: 'auth' }),
+  async (req, res) => {
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const ip = req.ip || req.headers['x-forwarded-for'] || null;
+    try {
+      const user = email
+        ? await prisma.user.findUnique({ where: { email } })
+        : null;
+      if (user) {
+        try {
+          const { token, expiresAt } = await createPasswordResetToken(prisma, user.id, {
+            requestedFromIp: typeof ip === 'string' ? ip : null,
+          });
+          try {
+            await emailService.sendPasswordReset(
+              { name: user.name, email: user.email },
+              token,
+            );
+          } catch (sendErr) {
+            // Queue retry on SMTP error so the 06:00 cron can redeliver.
+            try {
+              const retryQueue = require('../services/failed-email-retry');
+              await retryQueue.enqueue(prisma, 'password-reset', {
+                user: { name: user.name, email: user.email },
+                token,
+              });
+            } catch (_) { /* best-effort */ }
+          }
+          void writeAuditLog(prisma, {
+            req,
+            action: 'password_reset_requested',
+            resource: 'user',
+            resourceId: user.id,
+            userId: user.id,
+            actorName: user.email,
+            metadata: { expiresAt },
+          });
+        } catch (mintErr) {
+          console.error('[auth/forgot-password] mint failed:', mintErr?.message || mintErr);
+        }
+      }
+      // Constant-shape 200 so an attacker cannot tell from the response
+      // whether the email matched a registered user.
+      return res.json({ ok: true });
+    } catch (err) {
+      console.error('[auth/forgot-password] failed:', err?.message || err);
+      return res.json({ ok: true });
+    }
+  },
+);
+
+// POST /api/auth/reset-password — public. Redeems a token + sets the
+// new password hash. Returns 200 on success or a structured error code
+// matching the email-verify error semantics (404/409/410).
+router.post(
+  '/reset-password',
+  forgotPasswordRateLimit,
+  validateBody(ResetPasswordRequestSchema, { codePrefix: 'auth' }),
+  async (req, res) => {
+    const token = String(req.body?.token || '');
+    const password = String(req.body?.password || '');
+    try {
+      const validation = await validatePasswordResetToken(prisma, token);
+      if (!validation.ok) {
+        switch (validation.code) {
+          case 'expired':
+            return res.status(410).json({ error: 'reset token expired' });
+          case 'already_used':
+            return res.status(409).json({ error: 'reset token already used' });
+          case 'not_found':
+          default:
+            return res.status(404).json({ error: 'reset token not found' });
+        }
+      }
+      const bcrypt = require('bcryptjs');
+      const rounds = Number.parseInt(process.env.BCRYPT_ROUNDS || '12', 10);
+      const newPasswordHash = await bcrypt.hash(password, Number.isFinite(rounds) ? rounds : 12);
+      const result = await consumePasswordResetToken(prisma, token, { newPasswordHash });
+      if (!result.ok) {
+        // Race condition: token was consumed between validate and consume.
+        return res.status(409).json({ error: 'reset token already used' });
+      }
+      void writeAuditLog(prisma, {
+        req,
+        action: 'password_reset_completed',
+        resource: 'user',
+        resourceId: result.userId,
+        userId: result.userId,
+      });
+      return res.json({ ok: true });
+    } catch (err) {
+      console.error('[auth/reset-password] failed:', err?.message || err);
+      return res.status(500).json({ error: 'failed to reset password' });
+    }
+  },
+);
+
 router.post('/resend-verification', authenticateToken, resendVerificationRateLimit, async (req, res) => {
   try {
     const user = req.user;

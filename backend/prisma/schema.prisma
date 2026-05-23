@@ -144,6 +144,7 @@ model User {
   policyAcceptances       PolicyAcceptance[]
   apiKeys                 ApiKey[]
   emailVerificationTokens EmailVerificationToken[]
+  passwordResetTokens     PasswordResetToken[]
   phoneVerifications      PhoneVerification[]
   twoFAChallenges         TwoFAChallenge[]
   partialSessions         PartialSession[]
@@ -1738,6 +1739,28 @@ model EmailVerificationToken {
 
   @@index([userId])
   @@map("email_verification_tokens")
+}
+
+// Password reset token (spec §7.13).
+//
+// Single-use, short-lived (default 30m, override with
+// PASSWORD_RESET_TTL_MS). Forgot-password endpoint mints a row and emails
+// the link; reset endpoint validates the row, updates `User.password`,
+// and marks the row consumed.
+model PasswordResetToken {
+  id              String    @id @default(cuid())
+  userId          String
+  token           String    @unique
+  expiresAt       DateTime
+  consumedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  requestedFromIp String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("password_reset_tokens")
 }
 
 // Phone-verification challenge (ratchet 45, Task 1).

@@ -57,6 +57,28 @@ const LoginRequestSchema = z
   })
   .strict();
 
+// Forgot-password (spec §7.13). Just an email. We always respond 200 to
+// avoid disclosing whether an account exists — see auth route handler.
+const ForgotPasswordRequestSchema = z
+  .object({
+    email: EmailSchema,
+  })
+  .strict();
+
+// Reset-password (spec §7.13). Token + new password. The new password
+// must meet the strong-password rules; we do not honour legacy weak
+// passwords on reset because that is the moment the user is replacing
+// the credential anyway.
+const ResetPasswordRequestSchema = z
+  .object({
+    token: z
+      .string()
+      .min(16, { message: 'auth.token.too_short' })
+      .max(256, { message: 'auth.token.too_long' }),
+    password: StrongPasswordSchema,
+  })
+  .strict();
+
 // Mirrors the user shape returned by /auth/{login,register,me} after we strip
 // `password`. Kept loose (passthrough) because Prisma may add fields we don't
 // want this contract to gatekeep — we only assert the keys the FE relies on.
@@ -89,6 +111,8 @@ module.exports = {
   LoosePasswordSchema,
   RegisterRequestSchema,
   LoginRequestSchema,
+  ForgotPasswordRequestSchema,
+  ResetPasswordRequestSchema,
   AuthUserSchema,
   AuthResponseSchema,
 };
