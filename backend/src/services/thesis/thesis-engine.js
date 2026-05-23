@@ -4,6 +4,7 @@ const scientificSearch = require('../scientific-search');
 const { referenceEntry } = require('../marco-teorico/apa7');
 const { getTemplate, listTemplates } = require('./chapter-templates');
 const { validateWordCount, validateChapterPlan } = require('./word-count-validator');
+const { markUnverified, strictModeEnabled } = require('./citation-verifier');
 
 const MIN_YEAR = 2020;
 
@@ -79,13 +80,19 @@ async function runThesisPipeline(params = {}, deps = {}) {
 
   emit({ type: 'phase', phase: 'generate', percent: 70 });
   const generateChapter = deps.generateChapter || (async () => '');
+  const strict = params.strictCitations === undefined ? strictModeEnabled() : Boolean(params.strictCitations);
   const chapters = [];
+  let totalUnverified = 0;
   for (const tpl of templates) {
-    const content = await generateChapter({
+    const raw = await generateChapter({
       template: tpl,
       topic,
       references,
     });
+    const { text: content, report: citationReport } = strict
+      ? markUnverified(raw, references)
+      : { text: raw, report: { totalUnverified: 0, totalVerified: 0, dois: { verified: [], unverified: [] }, apa: { verified: [], unverified: [] } } };
+    totalUnverified += citationReport.totalUnverified;
     const validation = validateWordCount(content, {
       min: tpl.minWords,
       max: tpl.maxWords,
@@ -96,9 +103,11 @@ async function runThesisPipeline(params = {}, deps = {}) {
       title: tpl.title,
       content,
       validation,
+      citations: citationReport,
     });
-    emit({ type: 'chapter', id: tpl.id, words: validation.words, ok: validation.ok });
+    emit({ type: 'chapter', id: tpl.id, words: validation.words, ok: validation.ok, unverifiedCitations: citationReport.totalUnverified });
   }
+  emit({ type: 'citations', strict, totalUnverified, totalVerified: chapters.reduce((s, c) => s + (c.citations?.totalVerified || 0), 0) });
 
   const planValidation = validateChapterPlan(
     chapters.map((c) => ({
@@ -117,6 +126,11 @@ async function runThesisPipeline(params = {}, deps = {}) {
     chapters,
     planValidation,
     templates: listTemplates(),
+    citationVerification: {
+      strict,
+      totalUnverified,
+      totalVerified: chapters.reduce((s, c) => s + (c.citations?.totalVerified || 0), 0),
+    },
   };
 }
 
