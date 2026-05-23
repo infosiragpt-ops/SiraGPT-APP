@@ -201,7 +201,7 @@ async function buildEnvelope({
       system_autonomy_expected: tokenAwareDecision.confidence >= 0.8 ? "high" : "medium",
     },
 
-    goal_model: deriveGoalModel(effectiveText, taxonomyIntent, normalizedAttachments),
+    goal_model: deriveGoalModel(effectiveText, taxonomyIntent, normalizedAttachments, contextualUnderstandingContext),
 
     task_classification: deriveTaskClassification(taxonomyIntent, enrichedDecision, normalizedAttachments, requestIntelligence),
 
@@ -232,7 +232,7 @@ async function buildEnvelope({
 
     safety_and_permissions: deriveSafety(taxonomyIntent, enrichedDecision),
 
-    quality_plan: deriveQualityPlan(taxonomyIntent, enrichedDecision, requestIntelligence),
+    quality_plan: deriveQualityPlan(taxonomyIntent, enrichedDecision, requestIntelligence, contextualUnderstandingContext),
 
     ui_response_plan: deriveUiPlan(plan, taxonomyIntent),
 
@@ -249,6 +249,7 @@ async function buildEnvelope({
       redact_sensitive_data_in_logs: true,
       metrics: ["latency", "tool_success_rate", "artifact_success_rate", "source_validation_rate", "user_satisfaction_signal", "cost_estimate"],
       request_intelligence: compactRequestIntelligence(requestIntelligence),
+      contextual_values: compactContextualValueContext(contextualUnderstandingContext?.value_context),
     },
 
     execution_law: { ...SIRA_EXECUTION_LAW },
@@ -486,18 +487,35 @@ function deriveExcludedIntents(taxonomyIntent) {
   return out.slice(0, 6);
 }
 
-function deriveGoalModel(text, taxonomyIntent, attachments) {
+function deriveGoalModel(text, taxonomyIntent, attachments, contextualUnderstanding = null) {
   const wantsExcel = attachments.some(a => a.detected_type === "spreadsheet");
   const successCriteria = [];
   successCriteria.push(`Cumplir el formato de salida ${taxonomyIntent.default_output_kind}.`);
   if (taxonomyIntent.default_required_capabilities.includes("research")) successCriteria.push("Incluir fuentes verificables.");
   if (wantsExcel) successCriteria.push("Procesar el archivo adjunto sin alterarlo.");
   if (taxonomyIntent.family === "document_artifacts") successCriteria.push("Mantener tono profesional y estructura clara.");
+  const valueContext = normalizeContextualValueContext(contextualUnderstanding?.value_context);
+  const valueLabels = valueContext.values.map(value => value.label).filter(Boolean).slice(0, 3);
+  if (valueLabels.length > 0) {
+    successCriteria.push(`Alinear la respuesta con valores contextuales detectados: ${valueLabels.join(", ")}.`);
+  }
+  const hardConstraints = valueContext.constraints
+    .filter(constraint => constraint.priority === "hard")
+    .map(constraint => constraint.label)
+    .filter(Boolean)
+    .slice(0, 3);
+  if (hardConstraints.length > 0) {
+    successCriteria.push(`Preservar restricciones contextuales: ${hardConstraints.join(", ")}.`);
+  }
+  const nonGoals = ["No inventar fuentes.", "No modificar archivos originales sin confirmacion.", "No realizar acciones destructivas."];
+  if (valueContext.constraints.some(constraint => constraint.id === "preserve_interface")) {
+    nonGoals.push("No alterar la interfaz ni los contratos visuales existentes.");
+  }
   return {
     user_goal: text.length > 200 ? `${text.slice(0, 200)}…` : text,
     business_goal: null,
     success_criteria: successCriteria,
-    non_goals: ["No inventar fuentes.", "No modificar archivos originales sin confirmación.", "No realizar acciones destructivas."],
+    non_goals: nonGoals,
     assumptions: deriveAssumptions(taxonomyIntent),
   };
 }
@@ -999,10 +1017,17 @@ function deriveSafety(taxonomyIntent, decision) {
   };
 }
 
-function deriveQualityPlan(taxonomyIntent, decision, requestIntelligence = null) {
+function deriveQualityPlan(taxonomyIntent, decision, requestIntelligence = null, contextualUnderstanding = null) {
   const validators = [{ name: "intent_fulfillment_validator", checks: ["all_requested_outputs_created", "user_goal_satisfied"] }];
   if (taxonomyIntent.default_required_capabilities.includes("research") || requestIntelligence?.context?.has_research_requirement) {
     validators.push({ name: "source_validator", checks: ["no_fake_references", "doi_or_url_present_when_available", "sources_match_claims", "citation_style_correct"] });
+  }
+  const valueContext = normalizeContextualValueContext(contextualUnderstanding?.value_context);
+  if (valueContext.values.length > 0 || valueContext.constraints.length > 0) {
+    validators.push({
+      name: "contextual_alignment_validator",
+      checks: ["respect_inferred_user_values", "preserve_explicit_constraints", "match_collaboration_mode"],
+    });
   }
   if (taxonomyIntent.family === "document_artifacts" || taxonomyIntent.family === "spreadsheet_artifacts" || taxonomyIntent.family === "presentation_artifacts") {
     validators.push({ name: "artifact_validator", checks: ["file_opens_successfully", "format_sovereignty"] });
@@ -1175,6 +1200,47 @@ function clamp01(n) {
   return n;
 }
 
+function normalizeContextualValueContext(valueContext) {
+  const ctx = valueContext && typeof valueContext === "object" ? valueContext : {};
+  const values = Array.isArray(ctx.values) ? ctx.values : [];
+  const constraints = Array.isArray(ctx.constraints) ? ctx.constraints : [];
+  return {
+    source: String(ctx.source || "deterministic_contextual_value_mapper"),
+    values: values.slice(0, 8).map(value => ({
+      id: String(value?.id || ""),
+      domain: String(value?.domain || ""),
+      label: String(value?.label || ""),
+      evidence: String(value?.evidence || ""),
+      confidence: clamp01(Number(value?.confidence || 0)),
+    })).filter(value => value.id && value.domain && value.label),
+    primary_domains: Array.isArray(ctx.primary_domains)
+      ? ctx.primary_domains.map(String).filter(Boolean).slice(0, 5)
+      : [],
+    constraints: constraints.slice(0, 8).map(constraint => ({
+      id: String(constraint?.id || ""),
+      label: String(constraint?.label || ""),
+      evidence: String(constraint?.evidence || ""),
+      priority: constraint?.priority === "hard" ? "hard" : "soft",
+    })).filter(constraint => constraint.id && constraint.label),
+    collaboration_mode: String(ctx.collaboration_mode || "direct_response"),
+    response_posture: String(ctx.response_posture || "neutral_acknowledgment"),
+    confidence: clamp01(Number(ctx.confidence || 0)),
+  };
+}
+
+function compactContextualValueContext(valueContext) {
+  const normalized = normalizeContextualValueContext(valueContext);
+  if (normalized.values.length === 0 && normalized.constraints.length === 0) return null;
+  return {
+    primary_domains: normalized.primary_domains,
+    value_ids: normalized.values.map(value => value.id).slice(0, 5),
+    constraints: normalized.constraints.map(constraint => constraint.id).slice(0, 5),
+    collaboration_mode: normalized.collaboration_mode,
+    response_posture: normalized.response_posture,
+    confidence: normalized.confidence,
+  };
+}
+
 function normalizeContextualUnderstanding(contextualUnderstanding) {
   if (!contextualUnderstanding || typeof contextualUnderstanding !== "object") return null;
   return {
@@ -1196,6 +1262,7 @@ function normalizeContextualUnderstanding(contextualUnderstanding) {
     misunderstanding_signals: Array.isArray(contextualUnderstanding.misunderstanding_signals)
       ? contextualUnderstanding.misunderstanding_signals.map(String).slice(0, 10)
       : [],
+    value_context: normalizeContextualValueContext(contextualUnderstanding.value_context),
   };
 }
 
@@ -1209,6 +1276,10 @@ function compactContextualUnderstanding(contextualUnderstanding) {
     is_repair: Boolean(normalized.repair?.is_repair),
     repair_type: normalized.repair?.repair_type || null,
     signal_count: normalized.misunderstanding_signals.length,
+    primary_value_domains: normalized.value_context.primary_domains,
+    collaboration_mode: normalized.value_context.collaboration_mode,
+    response_posture: normalized.value_context.response_posture,
+    constraint_count: normalized.value_context.constraints.length,
   };
 }
 
@@ -1221,5 +1292,7 @@ module.exports = {
   deriveSafety,
   deriveQualityPlan,
   normalizeContextualUnderstanding,
+  normalizeContextualValueContext,
   compactContextualUnderstanding,
+  compactContextualValueContext,
 };

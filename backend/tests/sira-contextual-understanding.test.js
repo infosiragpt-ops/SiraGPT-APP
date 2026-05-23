@@ -90,6 +90,28 @@ test('analyzeContextualTurn adds repair context for correction follow-up', async
   assert.ok(result.envelopeContext.misunderstanding_signals.includes('correction_followup'));
 });
 
+test('analyzeContextualTurn injects value context for autonomous no-ui work', async () => {
+  const result = await contextual.analyzeContextualTurn({
+    userId: 'u-values',
+    conversationId: 'c-values',
+    userMessage: 'implementa mejoras en el software sin cambiar nada de la interfaz y trabaja de manera autonoma hasta que quede en main verde',
+    history: [
+      { role: 'user', content: 'La comprension contextual considera el contexto completo.' },
+      { role: 'assistant', content: 'Puedo usar el contexto para mantener restricciones y objetivos.' },
+    ],
+    attachments: [{ filename: 'paper.pdf', mime_type: 'application/pdf', size: 1200 }],
+    requestId: 'req-values',
+  });
+
+  assert.equal(result.applied, true);
+  assert.match(result.effectiveText, /CONTEXTUAL_VALUE_FRAME/);
+  assert.equal(result.envelopeContext.value_context.collaboration_mode, 'autonomous_execution');
+  assert.equal(result.envelopeContext.value_context.response_posture, 'support_with_guardrails');
+  assert.ok(result.envelopeContext.value_context.primary_domains.includes('practical'));
+  assert.ok(result.envelopeContext.value_context.primary_domains.includes('protective'));
+  assert.ok(result.envelopeContext.value_context.constraints.some(c => c.id === 'preserve_interface'));
+});
+
 test('analyzeContextualTurn is a no-op when there is no contextual signal', async () => {
   const result = await contextual.analyzeContextualTurn({
     userId: 'u-clean',
@@ -103,6 +125,7 @@ test('analyzeContextualTurn is a no-op when there is no contextual signal', asyn
   assert.equal(result.applied, false);
   assert.equal(result.effectiveText, 'genera un informe profesional en Word sobre energia solar');
   assert.equal(result.envelopeContext.applied, false);
+  assert.deepEqual(result.envelopeContext.value_context.values, []);
 });
 
 test('analyzeContextualTurn fails open when a dependency throws', async () => {

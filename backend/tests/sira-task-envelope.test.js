@@ -208,6 +208,45 @@ describe("task-envelope-builder", () => {
     expect(r.envelope.entities.requested_formats.includes("docx")).toBe(true);
   });
 
+  test("contextual value frame adds alignment criteria without changing output contract", async () => {
+    const r = await buildEnvelope({
+      text: "## CONTEXTUAL_VALUE_FRAME\n- collaboration_mode: autonomous_execution\n- constraint: preserve_interface (hard) - Preserve the existing interface\n\nSOLICITUD_USUARIO:\nimplementa mejoras internas",
+      originalText: "implementa mejoras internas sin tocar la ui",
+      contextualUnderstanding: {
+        applied: true,
+        original_text: "implementa mejoras internas sin tocar la ui",
+        effective_text: "implementa mejoras internas",
+        recent_turn_count: 1,
+        coreference: { source: "not_run", latency_ms: 0, references: [] },
+        lexicon_terms: [],
+        repair: { is_repair: false, repair_type: null, contract_override: null },
+        misunderstanding_signals: [],
+        value_context: {
+          source: "deterministic_contextual_value_mapper",
+          values: [
+            { id: "execution_reliability", domain: "practical", label: "Execution reliability", evidence: "autonomous implementation", confidence: 0.9 },
+            { id: "risk_bounded_execution", domain: "protective", label: "Risk-bounded execution", evidence: "no UI change", confidence: 0.88 },
+          ],
+          primary_domains: ["practical", "protective"],
+          constraints: [
+            { id: "preserve_interface", label: "Preserve the existing interface", evidence: "no UI change", priority: "hard" },
+          ],
+          collaboration_mode: "autonomous_execution",
+          response_posture: "support_with_guardrails",
+          confidence: 0.9,
+        },
+      },
+    });
+
+    const validatorNames = r.envelope.quality_plan.validators.map(v => v.name);
+    expect(r.validation.ok).toBe(true);
+    expect(r.envelope.raw_input.text).toBe("implementa mejoras internas sin tocar la ui");
+    expect(r.envelope.goal_model.success_criteria.some(c => c.includes("Execution reliability"))).toBe(true);
+    expect(r.envelope.goal_model.non_goals.includes("No alterar la interfaz ni los contratos visuales existentes.")).toBe(true);
+    expect(validatorNames.includes("contextual_alignment_validator")).toBe(true);
+    expect(r.envelope.output_contract.primary_output.required).toBe(true);
+  });
+
   test("web app request produces code_project output", async () => {
     const r = await buildEnvelope({
       text: "Construye una landing en Next.js para mi clínica dental",

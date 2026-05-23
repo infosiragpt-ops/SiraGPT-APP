@@ -71,6 +71,19 @@ const TASK_ENVELOPE_SCHEMA = Object.freeze({
         lexicon_terms: { type: "array", items: { type: "object" } },
         repair: { type: "object" },
         misunderstanding_signals: { type: "array", items: { type: "string" } },
+        value_context: {
+          type: "object",
+          required: ["source", "values", "primary_domains", "constraints", "collaboration_mode", "response_posture", "confidence"],
+          properties: {
+            source: { type: "string" },
+            values: { type: "array", items: { type: "object" } },
+            primary_domains: { type: "array", items: { type: "string" } },
+            constraints: { type: "array", items: { type: "object" } },
+            collaboration_mode: { type: "string" },
+            response_posture: { type: "string" },
+            confidence: { type: "number", minimum: 0, maximum: 1 },
+          },
+        },
       },
     },
 
@@ -350,6 +363,7 @@ const TASK_ENVELOPE_SCHEMA = Object.freeze({
         redact_sensitive_data_in_logs: { type: "boolean" },
         metrics: { type: "array", items: { type: "string" } },
         request_intelligence: { type: ["object", "null"] },
+        contextual_values: { type: ["object", "null"] },
       },
     },
 
