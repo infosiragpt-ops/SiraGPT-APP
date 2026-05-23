@@ -116,7 +116,11 @@ async function triageIntent({ analysis, prompt, recentTurns = [], judge, options
   // Follow-ups deícticos/continuativos cortos: solo cuando el turno actual
   // explícitamente referencia el contexto anterior. Evita pasar prompts
   // ambiguos como "el reporte" al LLM solo porque haya historial.
-  const looksLikeFollowUp = /^(?:[¿¡]\s*)?(?:sigue|continua|contin[uú]a|adelante|dale|ok|listo|claro|m[aá]s|otra\s+vez|de\s+nuevo|repite|repitelo|repetir|eso|esa|ese|eso\s+mismo|exacto|exactamente|y\s+(?:luego|despues|despu[eé]s|ahora|qu[eé])|y\s+bien|amplia|amp[lí]ia|expande|explica|detalla|profundiza|resume)[\s!.?¿¡,]*$/i.test(promptText);
+  const looksLikeFollowUp = /^(?:[¿¡]\s*)?(?:sigue|continua|contin[uú]a|adelante|dale|ok|listo|claro|m[aá]s|otra\s+vez|de\s+nuevo|repite|rep[ií]telo|repetir|eso|esa|ese|esto|eso\s+mismo|exacto|exactamente|y\s+(?:entonces|luego|despues|despu[eé]s|ahora|por\s+qu[eé]|qu[eé])|y\s+bien|ampl[ií]a|ampl[ií]alo|expande|explica|detalla|profundiza|resume|mejor|mej[oó]ralo|hazlo|trad[uú]celo|res[uú]melo|completa|shorter|longer)(?:\b|[\s!.?¿¡,])/i.test(promptText)
+    || /^(?:[¿¡]\s*)?(?:el\s+(?:primero|segundo|tercero|cuarto|quinto|[uú]ltimo)|la\s+(?:primera|segunda|tercera|cuarta|quinta|[uú]ltima)|punto\s+\d+)\b/i.test(promptText)
+    || /\b(?:punto|parte|opci[oó]n|fila|columna|slide|diapositiva)\s+\d+\b/i.test(promptText)
+    || /\b(?:m[aá]s|menos)\s+(?:formal|casual|corto|largo|claro|simple|profesional|oscuro|detallado)\b/i.test(promptText)
+    || /\b(?:en|como)\s+(?:pdf|word|docx|excel|xlsx|pptx|powerpoint|espa[nñ]ol|ingl[eé]s)\b/i.test(promptText);
   const hasPriorTurns = Array.isArray(recentTurns) && recentTurns.length > 0;
   if (isShortTurn && (looksLikeChitChat || (looksLikeFollowUp && hasPriorTurns))) {
     return {
