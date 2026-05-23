@@ -3595,6 +3595,41 @@ router.post(
             planTier: __spanPlanTier,
           },
           async (span) => {
+            // ─── Agentic chat path (feature-flagged) ─────────────────
+            // When AGENTIC_TOOLS_IN_CHAT=1 AND the selected model can
+            // do OpenAI-style tool calls AND there are no images
+            // attached (the function-calling loop currently only
+            // streams text), run a bounded react-agent loop with
+            // web_search + read_url instead of a plain LLM stream.
+            // On any failure we fall through to the standard stream so
+            // the user never sees a blank reply.
+            try {
+              const agenticStream = require('../services/agentic-chat-stream');
+              const hasImages = (filesForVision || []).some(f => f && f.mimeType && f.mimeType.startsWith('image/'));
+              if (
+                agenticStream.isEnabled()
+                && agenticStream.modelSupportsFunctionCalling(actualProvider, actualModel)
+                && !hasImages
+              ) {
+                const agenticClient = createProviderClient(actualProvider);
+                const priorHistory = Array.isArray(messages) ? messages.slice(0, -1) : [];
+                const agenticResult = await agenticStream.runAgenticChat({
+                  openai: agenticClient,
+                  model: actualModel,
+                  userQuery: prompt,
+                  history: priorHistory,
+                  res,
+                  signal,
+                });
+                return agenticResult.finalAnswer || '';
+              }
+            } catch (agenticErr) {
+              console.warn('[agentic-chat] loop failed, falling back to plain stream:', agenticErr && agenticErr.message);
+              // Fall through to aiService.generateStream below. The
+              // sentinel block we may have already written is harmless:
+              // the next replace frame from aiService overwrites it.
+            }
+
             const out = await aiService.generateStream({
               provider: actualProvider,
               model: actualModel,

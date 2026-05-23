@@ -1112,10 +1112,34 @@ const web_search = {
   },
 };
 
+// ─── Read URL (free, key-less) ──────────────────────────────────────────────
+//
+// Companion to web_search: once the agent picks a URL from search results,
+// it usually needs the full page text (snippets are often 1-2 sentences).
+// read_url runs the @mozilla/readability extractor inside jsdom and returns
+// clean markdown. Implementation lives under backend/src/skills/read_url so
+// the same logic is reachable from the skills-registry path; this entry is
+// the legacy ALL_TOOLS-array adapter so react-agent / agent-core can pick
+// it up via the same pick() helper as everything else.
+
+const readUrlSkill = require('../../skills/read_url/handler');
+
+const read_url = {
+  name: 'read_url',
+  description: 'Fetch a single public URL and return its main readable content as markdown (Firefox Reader-style). Use AFTER web_search when a snippet is not enough. Hard 8 s timeout, 1 MB HTML cap, 50 000 char markdown cap. Respects robots.txt and never follows cross-domain redirects.',
+  schema: {
+    url: 'string (required — absolute http(s) URL)',
+    maxChars: 'number (optional, default 12000, max 50000)',
+  },
+  async handler(args) {
+    return readUrlSkill.execute(args || {});
+  },
+};
+
 // ─── Registry ───────────────────────────────────────────────────────────────
 
 const ALL_TOOLS = [
-  read_file, list_files, search_docs, search_code, search_graph, get_symbol, static_checks, propose_patch, web_search,
+  read_file, list_files, search_docs, search_code, search_graph, get_symbol, static_checks, propose_patch, web_search, read_url,
 ];
 
 const TOOLS_BY_NAME = new Map(ALL_TOOLS.map(t => [t.name, t]));
@@ -1129,7 +1153,7 @@ module.exports = {
   TOOLS_BY_NAME,
   pick,
   // individual exports for tests
-  read_file, list_files, search_docs, search_code, search_graph, get_symbol, static_checks, propose_patch, web_search,
+  read_file, list_files, search_docs, search_code, search_graph, get_symbol, static_checks, propose_patch, web_search, read_url,
   STATIC_CHECKS,
   buildCommentCodeMask, // exported for tests
   stripStringLiterals,  // exported for tests
