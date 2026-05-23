@@ -113,6 +113,64 @@ type AIStreamOptions = {
   onReplace?: (content: string) => void
 }
 
+export type GrokVoiceSessionSnapshot = {
+  version: string
+  id: string
+  chatId: string | null
+  mode: 'advanced_voice' | 'dictation' | 'hands_free'
+  status: string
+  createdAt: string
+  updatedAt: string
+  expiresAt: string
+  lastTurnId: string | null
+  turnCount: number
+  capabilities: {
+    persistentWhileChatting?: boolean
+    chatComposerRemainsUsable?: boolean
+    supportsDesktopActionPlanning?: boolean
+    desktopBridge?: unknown
+  }
+}
+
+export type GrokVoiceTurn = {
+  id: string
+  sessionId: string
+  source: 'stt' | 'typed' | 'system'
+  transcript: string
+  route: 'chat_message' | 'desktop_action' | 'empty'
+  responseMode: string
+  chatDispatch?: {
+    enabled: boolean
+    text?: string
+    mode?: string
+    canUseComposerConcurrently?: boolean
+    reason?: string
+  }
+  desktopAction?: unknown
+  createdAt: string
+}
+
+export type GrokVoiceAssistantReply = {
+  provider: string
+  model: string
+  configured: boolean
+  text: string
+  spoken?: boolean
+  errorCode?: string
+}
+
+export type GrokVoiceSessionEnvelope = {
+  success: boolean
+  session: GrokVoiceSessionSnapshot
+}
+
+export type GrokVoiceTurnEnvelope = {
+  success: boolean
+  session: GrokVoiceSessionSnapshot
+  turn: GrokVoiceTurn
+  assistant?: GrokVoiceAssistantReply
+}
+
 class ApiClient {
   private baseURL: string;
   private token: string | null = null;
@@ -1765,6 +1823,37 @@ class ApiClient {
     return this.request('/elevenlabs/speech-to-text', {
       method: 'POST',
       body: formData,
+    });
+  }
+
+  async createGrokVoiceSession(data: {
+    chatId?: string | null
+    mode?: 'advanced_voice' | 'dictation' | 'hands_free'
+  } = {}): Promise<GrokVoiceSessionEnvelope> {
+    return this.request('/voice/grok/sessions', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async sendGrokVoiceTurn(
+    sessionId: string,
+    data: {
+      text: string
+      source?: 'stt' | 'typed' | 'system'
+      respond?: boolean
+    },
+  ): Promise<GrokVoiceTurnEnvelope> {
+    return this.request(`/voice/grok/sessions/${encodeURIComponent(sessionId)}/turn`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+      timeoutMs: 60000,
+    });
+  }
+
+  async stopGrokVoiceSession(sessionId: string): Promise<GrokVoiceSessionEnvelope> {
+    return this.request(`/voice/grok/sessions/${encodeURIComponent(sessionId)}/stop`, {
+      method: 'POST',
     });
   }
 

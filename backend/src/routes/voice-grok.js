@@ -10,6 +10,7 @@ const {
   stopVoiceSession,
   pruneExpiredVoiceSessions,
 } = require('../services/voice-session-runtime');
+const { generateGrokVoiceReply } = require('../services/grok-voice-model');
 
 const router = express.Router();
 const activeVoiceSessions = new Map();
@@ -51,6 +52,7 @@ const turnValidators = [
   param('sessionId').isString().isLength({ min: 1, max: 128 }),
   body('text').isString().isLength({ min: 1, max: 4000 }),
   body('source').optional().isIn(['stt', 'typed', 'system']),
+  body('respond').optional().isBoolean(),
 ];
 
 router.post(
@@ -87,7 +89,7 @@ router.post(
   '/sessions/:sessionId/turn',
   turnValidators,
   authenticateToken,
-  (req, res) => {
+  async (req, res) => {
     if (validationErrors(req, res)) return;
     pruneExpiredVoiceSessions(activeVoiceSessions);
     const session = getUserSession(req.params.sessionId, req.user.id);
@@ -99,10 +101,33 @@ router.post(
         source: req.body.source || 'stt',
         defaultWorkingDirectory: '/Users/luis/Desktop/siraGPT',
       });
-      res.json({
+      const payload = {
         success: true,
         ...result,
-      });
+      };
+
+      const shouldRespond = req.body.respond === true || req.body.respond === 'true';
+      if (shouldRespond) {
+        try {
+          const responder = req.app.locals.grokVoiceResponder || generateGrokVoiceReply;
+          payload.assistant = await responder({
+            session,
+            turn: result.turn,
+            user: req.user,
+          });
+        } catch (replyError) {
+          payload.assistant = {
+            provider: 'fallback',
+            model: 'grok-voice-fallback',
+            configured: false,
+            text: 'Recibi tu voz, pero Grok no pudo responder en este momento. El chat normal sigue disponible.',
+            spoken: true,
+            errorCode: replyError.code || 'grok_voice_reply_failed',
+          };
+        }
+      }
+
+      res.json(payload);
     } catch (error) {
       res.status(error.code === 'voice_transcript_too_large' ? 413 : 400).json({
         success: false,

@@ -158,6 +158,7 @@ import { useTranslations } from "next-intl"
 import { useArtifactPanel } from "@/lib/artifact-panel-context"
 import { ArtifactPanel } from "@/components/chat/ArtifactPanel"
 import { ChatEmptyStateHero } from "@/components/chat/ChatEmptyStateHero"
+import { GrokVoicePanel } from "@/components/chat/grok-voice-panel"
 import { DocumentPreview, type DocumentPreviewTarget } from "./document-preview"
 import { CodePreview } from "./code-preview"
 import SpotifyResults from "./spotify-results"
@@ -7069,7 +7070,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   // which left cleared chats stuck on a blank ScrollArea.
   const hasRenderableMessages = (currentChat?.messages?.length || 0) > 0
   const isInitial =
-    !showAudioPanel &&
     !isWordConnectorActive &&
     !isExcelConnectorActive &&
     !hasRenderableMessages
@@ -7111,6 +7111,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   };
 
   const rightPanelActive = Boolean(
+    showAudioPanel ||
     searchActivityPanelOpen ||
     documentPreviewUrl ||
     composerPreviewAttachment ||
@@ -7118,6 +7119,19 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     isExcelConnectorActive ||
     activeArtifact
   );
+
+  const mainPaneAudioPanelEnabled = false;
+
+  const openGrokVoicePanel = React.useCallback(() => {
+    setSplitViewContent(null);
+    setDocumentPreviewUrl(null);
+    setComposerPreviewIndex(null);
+    setActiveSearchActivityId(null);
+    setIsWordConnectorActive(false);
+    setIsExcelConnectorActive(false);
+    setShowAudioPanel(true);
+    setAudioTab('stt');
+  }, []);
 
   React.useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
@@ -7781,24 +7795,15 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                     <Menu className="h-6 w-6" />
                   </SidebarTrigger>
                 </div>
-                {!showAudioPanel ? (
-                  <>
-                    <NavbarModelSelector
-                      selectedModel={selectedModel}
-                      setSelectedModel={setSelectedModel}
-                      availableModels={availableModels}
-                      setSelectedProvider={setSelectedProivder}
-                      chatTypes={chatType}
-                      currentChat={currentChat}
-                      setCurrentChat={setCurrentChat}
-                    />
-                  </>
-                ) : (
-                  <div className="flex flex-col">
-                    <div className="text-lg font-semibold">Voice Studio</div>
-                    <div className="text-xs text-muted-foreground">Text-to-Speech, Speech-to-Text, Music & Video</div>
-                  </div>
-                )}
+                <NavbarModelSelector
+                  selectedModel={selectedModel}
+                  setSelectedModel={setSelectedModel}
+                  availableModels={availableModels}
+                  setSelectedProvider={setSelectedProivder}
+                  chatTypes={chatType}
+                  currentChat={currentChat}
+                  setCurrentChat={setCurrentChat}
+                />
               </div>
               <div className="chat-header-actions flex shrink-0 items-center gap-0.5">
                 {/* Complete Chat Share Button - only show if there's a chat with messages.
@@ -8138,7 +8143,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             // When the user has typed → Send. When idle → open Voice Studio.
                             const action = canSend
                               ? handleSend
-                              : () => { setShowAudioPanel(true); setAudioTab('stt') }
+                              : openGrokVoicePanel
                             const label = canSend ? 'Enviar (⏎)' : 'Modo de voz'
                             const Icon = canSend ? ArrowUp : AudioLines
                             return (
@@ -8221,7 +8226,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             </div>
           ) : (
             <>
-              {showAudioPanel ? (
+              {mainPaneAudioPanelEnabled && showAudioPanel ? (
                 // Voice Studio responsive view
                 <div className="flex flex-1 flex-col lg:flex-row">
                   {/* Navigation - Mobile: horizontal tabs, Desktop: vertical sidebar */}
@@ -8597,7 +8602,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                 const busy = isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices
                                 const action = canSend
                                   ? handleSend
-                                  : () => { setShowAudioPanel(true); setAudioTab('stt') }
+                                  : openGrokVoicePanel
                                 const label = canSend ? 'Enviar (⏎)' : 'Modo de voz'
                                 const Icon = canSend ? ArrowUp : AudioLines
                                 return (
@@ -8722,24 +8727,98 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             </div>
             <div
               style={{
-                width: `clamp(${SPLIT_RIGHT_MIN_PX}px, ${100 - splitRatio}%, 62%)`,
+                width: showAudioPanel
+                  ? `clamp(320px, ${100 - splitRatio}%, 420px)`
+                  : `clamp(${SPLIT_RIGHT_MIN_PX}px, ${100 - splitRatio}%, 62%)`,
                 transition: isDraggingSplit ? undefined : 'width 300ms ease',
               }}
               className="h-full min-w-0 overflow-hidden shrink-0"
             >
-              {activeSearchActivity && (
+              {showAudioPanel && audioTab === 'stt' && (
+                <GrokVoicePanel
+                  chatId={currentChat?.id || null}
+                  onClose={() => setShowAudioPanel(false)}
+                />
+              )}
+              {showAudioPanel && audioTab !== 'stt' && (
+                <div className="flex h-full min-h-0 flex-col border-l border-border/40 bg-background">
+                  <div className="flex items-center justify-between border-b border-border/40 px-4 py-3">
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold">Voice Studio</div>
+                      <div className="truncate text-xs text-muted-foreground">Herramientas de audio</div>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      aria-label="Cerrar Voice Studio"
+                      title="Cerrar"
+                      className="h-8 w-8 rounded-full"
+                      onClick={() => setShowAudioPanel(false)}
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                  <div className="flex gap-2 overflow-x-auto border-b border-border/40 p-3">
+                    <Button
+                      variant={audioTab === 'tts' ? 'default' : 'outline'}
+                      size="sm"
+                      className="shrink-0"
+                      onClick={() => setAudioTab('tts')}
+                    >
+                      TTS
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="shrink-0"
+                      onClick={() => setAudioTab('stt')}
+                    >
+                      Voz
+                    </Button>
+                    <Button
+                      variant={audioTab === 'music' ? 'default' : 'outline'}
+                      size="sm"
+                      className="shrink-0"
+                      onClick={() => setAudioTab('music')}
+                    >
+                      Music
+                    </Button>
+                    <Button
+                      variant={audioTab === 'video' ? 'default' : 'outline'}
+                      size="sm"
+                      className="shrink-0"
+                      onClick={() => setAudioTab('video')}
+                    >
+                      Video
+                    </Button>
+                  </div>
+                  <div className="min-h-0 flex-1 overflow-auto p-3">
+                    {audioTab === 'tts' && (
+                      <TextToSpeechComponent />
+                    )}
+                    {audioTab === 'music' && (
+                      <MusicGenerationComponent />
+                    )}
+                    {audioTab === 'video' && (
+                      <VideoGenerationComponent />
+                    )}
+                  </div>
+                </div>
+              )}
+              {!showAudioPanel && activeSearchActivity && (
                 <SearchActivityPanel
                   activity={activeSearchActivity}
                   onClose={closeSearchActivityPanel}
                 />
               )}
-              {!activeSearchActivity && documentPreviewUrl && (
+              {!showAudioPanel && !activeSearchActivity && documentPreviewUrl && (
                 <DocumentPreview
                   url={documentPreviewUrl}
                   onClose={() => setDocumentPreviewUrl(null)}
                 />
               )}
-              {!activeSearchActivity && !documentPreviewUrl && composerPreviewAttachment && (
+              {!showAudioPanel && !activeSearchActivity && !documentPreviewUrl && composerPreviewAttachment && (
                 <UnifiedDocumentViewer
                   variant="panel"
                   className="h-full"
@@ -8753,7 +8832,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   }}
                 />
               )}
-              {!activeSearchActivity && !composerPreviewAttachment && isWordConnectorActive && (
+              {!showAudioPanel && !activeSearchActivity && !composerPreviewAttachment && isWordConnectorActive && (
                 <WordConnector
                   ref={wordConnectorRef}
                   onClose={() => setIsWordConnectorActive(false)}
@@ -8766,7 +8845,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   }}
                 />
               )}
-              {!activeSearchActivity && !composerPreviewAttachment && isExcelConnectorActive && (
+              {!showAudioPanel && !activeSearchActivity && !composerPreviewAttachment && isExcelConnectorActive && (
                 <React.Suspense fallback={<div className="h-full w-full animate-pulse bg-muted/30" aria-hidden="true" />}>
                   <ExcelConnector
                     ref={excelConnectorRef}
@@ -8775,7 +8854,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   />
                 </React.Suspense>
               )}
-              {!activeSearchActivity && activeArtifact && !isWordConnectorActive && !isExcelConnectorActive && !documentPreviewUrl && !composerPreviewAttachment && (
+              {!showAudioPanel && !activeSearchActivity && activeArtifact && !isWordConnectorActive && !isExcelConnectorActive && !documentPreviewUrl && !composerPreviewAttachment && (
                 <ArtifactPanel />
               )}
             </div>

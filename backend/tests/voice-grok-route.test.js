@@ -72,6 +72,34 @@ describe('Voice Grok route persistent session contract', () => {
     assert.equal(res.body.session.status, 'listening');
   });
 
+  test('turn endpoint can attach a Grok assistant reply without taking over chat', async () => {
+    const app = buildApp();
+    app.locals.grokVoiceResponder = async ({ turn }) => ({
+      provider: 'openrouter',
+      model: 'x-ai/grok-4',
+      configured: true,
+      text: `Respuesta Grok para: ${turn.transcript}`,
+      spoken: true,
+    });
+
+    const create = await request(app)
+      .post('/api/voice/grok/sessions')
+      .set('Authorization', auth.authHeader)
+      .send({ chatId: 'chat-1' });
+
+    const res = await request(app)
+      .post(`/api/voice/grok/sessions/${create.body.session.id}/turn`)
+      .set('Authorization', auth.authHeader)
+      .send({ text: 'explicame la arquitectura', respond: true });
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body.success, true);
+    assert.equal(res.body.session.capabilities.chatComposerRemainsUsable, true);
+    assert.equal(res.body.turn.chatDispatch.canUseComposerConcurrently, true);
+    assert.equal(res.body.assistant.model, 'x-ai/grok-4');
+    assert.equal(res.body.assistant.text, 'Respuesta Grok para: explicame la arquitectura');
+  });
+
   test('turn endpoint plans allowlisted desktop actions without executing them', async () => {
     const create = await request(buildApp())
       .post('/api/voice/grok/sessions')

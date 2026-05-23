@@ -755,6 +755,19 @@ interface CacheEntry {
 
 const contentCache = new Map<string, CacheEntry>()
 
+function isDetachedArrayBuffer(buf: ArrayBuffer | null | undefined): boolean {
+  if (!buf) return false
+  try {
+    // Detached buffers report byteLength 0 in some engines but the
+    // reliable signal is that constructing a view throws.
+    void new Uint8Array(buf)
+    return false
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error || "")
+    return /detached/i.test(message)
+  }
+}
+
 function cacheKeyFor(a: AttachmentLike, suffix: string): string {
   return `${a.id || a.url || a.name || "anon"}:${suffix}`
 }
@@ -762,6 +775,10 @@ function cacheKeyFor(a: AttachmentLike, suffix: string): string {
 function cacheGet(key: string): CacheEntry | undefined {
   const entry = contentCache.get(key)
   if (!entry) return undefined
+  if (isDetachedArrayBuffer(entry.buffer)) {
+    contentCache.delete(key)
+    return undefined
+  }
   entry.at = Date.now()
   return entry
 }
@@ -809,9 +826,17 @@ async function fetchAssetBytes(url: string): Promise<Response> {
 }
 
 function cloneArrayBuffer(buf: ArrayBuffer): ArrayBuffer {
+  if (isDetachedArrayBuffer(buf)) {
+    throw new Error("ArrayBuffer source is detached")
+  }
   const copy = new Uint8Array(buf.byteLength)
   copy.set(new Uint8Array(buf))
   return copy.buffer
+}
+
+function isDetachedBufferError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error || "")
+  return /detached/i.test(message)
 }
 
 async function readAsText(a: AttachmentLike): Promise<string> {
@@ -844,7 +869,14 @@ async function readAsText(a: AttachmentLike): Promise<string> {
 async function readAsArrayBuffer(a: AttachmentLike): Promise<ArrayBuffer> {
   const bKey = cacheKeyFor(a, "ab")
   const cachedBuf = cacheGet(bKey)
-  if (cachedBuf?.buffer) return cloneArrayBuffer(cachedBuf.buffer)
+  if (cachedBuf?.buffer) {
+    try {
+      return cloneArrayBuffer(cachedBuf.buffer)
+    } catch (error) {
+      if (!isDetachedBufferError(error)) throw error
+      contentCache.delete(bKey)
+    }
+  }
 
   if (a.file) {
     try {
@@ -853,6 +885,7 @@ async function readAsArrayBuffer(a: AttachmentLike): Promise<ArrayBuffer> {
       cacheSet(bKey, { buffer: cached })
       return cloneArrayBuffer(cached)
     } catch (fileErr) {
+      if (isDetachedBufferError(fileErr)) contentCache.delete(bKey)
       if (!a.url) throw fileErr
     }
   }
