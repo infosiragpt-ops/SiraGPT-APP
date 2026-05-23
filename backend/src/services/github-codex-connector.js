@@ -1376,6 +1376,82 @@ function createGitHubCodexConnector(options = {}) {
         rateLimit: readRateLimit(treeResponse.headers || repositoryResponse.headers),
       };
     },
+
+    async createBranch(params = {}) {
+      const parsed = parseGitHubRepository(params.repository || params.repo);
+      const baseBranch = trimString(params.baseBranch || params.branch) || 'main';
+      const branchName = trimString(params.branchName || params.head);
+      if (!branchName) {
+        throw new GitHubCodexConnectorError('invalid_branch', 400, 'branchName is required');
+      }
+      const auth = resolveAuth(env);
+      if (!auth.configured) {
+        throw new GitHubCodexConnectorError('github_auth_required', 401, 'GitHub token required for branch creation');
+      }
+      const octokit = await octokitFactory({ token: auth.token, tokenSource: auth.source, env });
+      const ref = await octokit.rest.git.getRef({
+        ...parsed,
+        ref: `heads/${baseBranch}`,
+      });
+      const sha = ref.data?.object?.sha;
+      if (!sha) throw new GitHubCodexConnectorError('branch_base_missing', 404, 'Base branch not found');
+      await octokit.rest.git.createRef({
+        ...parsed,
+        ref: `refs/heads/${branchName}`,
+        sha,
+      });
+      return { repository: parsed.fullName, branch: branchName, base: baseBranch, sha };
+    },
+
+    async openPullRequest(params = {}) {
+      const parsed = parseGitHubRepository(params.repository || params.repo);
+      const auth = resolveAuth(env);
+      if (!auth.configured) {
+        throw new GitHubCodexConnectorError('github_auth_required', 401, 'GitHub token required for pull requests');
+      }
+      const octokit = await octokitFactory({ token: auth.token, tokenSource: auth.source, env });
+      const response = await octokit.rest.pulls.create({
+        ...parsed,
+        title: trimString(params.title) || 'Codex automated PR',
+        head: trimString(params.head),
+        base: trimString(params.base) || 'main',
+        body: trimString(params.body) || '',
+      });
+      return {
+        number: response.data?.number || null,
+        url: response.data?.html_url || null,
+        state: response.data?.state || null,
+      };
+    },
+
+    async watchWorkflowRun(params = {}) {
+      const parsed = parseGitHubRepository(params.repository || params.repo);
+      const branch = trimString(params.branch) || 'main';
+      const timeoutMs = clampInt(params.timeoutMs, 120_000, 5_000, 600_000);
+      const started = Date.now();
+      let lastRunId = null;
+      while (Date.now() - started < timeoutMs) {
+        const listing = await this.listActionRuns({
+          repository: parsed.fullName,
+          branch,
+          limit: 1,
+        });
+        const run = listing.runs?.[0];
+        if (run) {
+          lastRunId = run.id;
+          if (run.status === 'completed') {
+            return {
+              runId: run.id,
+              status: run.status,
+              conclusion: run.conclusion,
+              url: run.htmlUrl || null,
+            };
+          }
+        }
+        await new Promise((r) => setTimeout(r, 5000));
+      }
+      return { runId: lastRunId, status: 'timeout', conclusion: null };
+    },
   };
 }
 

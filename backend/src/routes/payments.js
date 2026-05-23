@@ -9,6 +9,15 @@ const usageMonitor = require('../services/usage-monitor');
 const emailService = require('../services/email');
 const { writeAuditLog } = require('../utils/audit-log');
 const triggers = require('../services/trigger-registry');
+const { monthlyLimitForStripePlan, gemaTokenGrant } = require('../services/plan-credits-catalog');
+
+function premiumCreditsForPlan(plan) {
+  return monthlyLimitForStripePlan(plan);
+}
+
+function gemaLimitForPlan(plan) {
+  return gemaTokenGrant(plan);
+}
 
 // Helper: coerce a value to BigInt safely. Stripe + Prisma return
 // monthlyLimit/usage as BigInt in some code paths and Number in
@@ -452,12 +461,7 @@ router.get('/verify-session', authenticateToken, async (req, res) => {
         // `monthlyLimit` is BigInt in Prisma — coerce both operands to BigInt
         // before adding. Mixing BigInt+Number throws and silently aborts the
         // handler, leaving the user on FREE after a successful charge.
-        const planCredits = {
-          PRO: 500000n,
-          PRO_MAX: 1000000n,
-          ENTERPRISE: 10000000n,
-        };
-        const creditsForPlan = planCredits[payment.plan] ?? 0n;
+        const creditsForPlan = premiumCreditsForPlan(payment.plan);
 
         // Get current user to add to existing limits
         const currentUser = await prisma.user.findUnique({ where: { id: req.user.id } });
@@ -465,12 +469,15 @@ router.get('/verify-session', authenticateToken, async (req, res) => {
           ? currentUser.monthlyLimit
           : BigInt(currentUser?.monthlyLimit ?? 0);
         const newTotalLimit = currentLimit + creditsForPlan;
+        const currentGemaLimit = toBigIntSafe(currentUser?.gemaTokenLimit);
+        const newGemaLimit = currentGemaLimit + gemaLimitForPlan(payment.plan);
 
         const updatedUser = await prisma.user.update({
           where: { id: req.user.id },
           data: {
             plan: payment.plan,
             monthlyLimit: newTotalLimit,
+            gemaTokenLimit: newGemaLimit,
             stripeSubscriptionId: session.subscription,
             subscriptionStatus: 'active'
             // monthlyCallLimit: NOT UPDATED - preserve current usage
@@ -495,12 +502,7 @@ router.get('/verify-session', authenticateToken, async (req, res) => {
 
         // Update user subscription - ADD new plan limits to existing monthlyLimit.
         // BigInt-safe: see comment in the Stripe branch above for context.
-        const planCredits = {
-          PRO: 500000n,
-          PRO_MAX: 1000000n,
-          ENTERPRISE: 10000000n,
-        };
-        const creditsForPlan = planCredits[payment.plan] ?? 0n;
+        const creditsForPlan = premiumCreditsForPlan(payment.plan);
 
         // Get current user to add to existing limits
         const currentUser = await prisma.user.findUnique({ where: { id: req.user.id } });
@@ -508,12 +510,15 @@ router.get('/verify-session', authenticateToken, async (req, res) => {
           ? currentUser.monthlyLimit
           : BigInt(currentUser?.monthlyLimit ?? 0);
         const newTotalLimit = currentLimit + creditsForPlan;
+        const currentGemaLimit = toBigIntSafe(currentUser?.gemaTokenLimit);
+        const newGemaLimit = currentGemaLimit + gemaLimitForPlan(payment.plan);
 
         const updatedUser = await prisma.user.update({
           where: { id: req.user.id },
           data: {
             plan: payment.plan,
             monthlyLimit: newTotalLimit,
+            gemaTokenLimit: newGemaLimit,
             subscriptionStatus: 'active'
             // monthlyCallLimit: NOT UPDATED - preserve current usage
           }
@@ -754,14 +759,9 @@ router.post(
       const { plan, monthlyLimit, targetUserId, reason } = req.body;
       const userIdToUpdate = targetUserId || req.user.id;
 
-      const planCredits = {
-        PRO: 500000n,
-        PRO_MAX: 1000000n,
-        ENTERPRISE: 10000000n,
-      };
       const add = typeof monthlyLimit !== 'undefined' && monthlyLimit !== null
         ? toBigIntSafe(monthlyLimit)
-        : (planCredits[plan] || 0n);
+        : premiumCreditsForPlan(plan);
 
       const dbUser = await prisma.user.findUnique({ where: { id: userIdToUpdate } });
       if (!dbUser) {
@@ -776,6 +776,7 @@ router.post(
         data: {
           plan,
           monthlyLimit: newMonthlyLimit,
+          gemaTokenLimit: toBigIntSafe(dbUser.gemaTokenLimit) + gemaLimitForPlan(plan),
           monthlyCallLimit: 0,
         },
       });
@@ -914,12 +915,7 @@ async function handleCheckoutSessionCompleted(session) {
     // the whole handler — leaving the user in FREE despite a paid
     // checkout. This was the root cause of plans not activating
     // after a successful Stripe charge.
-    const planCredits = {
-      PRO: 500000n,
-      PRO_MAX: 1000000n,
-      ENTERPRISE: 10000000n,
-    };
-    const creditsForPlan = planCredits[plan] ?? 0n;
+    const creditsForPlan = premiumCreditsForPlan(plan);
 
     // Get current user to add to existing limits
     const currentUser = await prisma.user.findUnique({ where: { id: userId } });
@@ -927,12 +923,14 @@ async function handleCheckoutSessionCompleted(session) {
       ? currentUser.monthlyLimit
       : BigInt(currentUser?.monthlyLimit ?? 0);
     const newTotalLimit = currentLimit + creditsForPlan;
+    const newGemaLimit = toBigIntSafe(currentUser?.gemaTokenLimit) + gemaLimitForPlan(plan);
 
     await prisma.user.update({
       where: { id: userId },
       data: {
         plan,
         monthlyLimit: newTotalLimit,
+        gemaTokenLimit: newGemaLimit,
         stripeSubscriptionId: session.subscription,
         subscriptionStatus: 'active',
         subscriptionEndDate: null // Let Stripe handle the billing cycle

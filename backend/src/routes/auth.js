@@ -78,6 +78,7 @@ const { writeAuditLog } = require('../utils/audit-log');
 const { csrfTokenRoute, issueCsrfToken } = require('../middleware/csrf');
 const { defaultLockout } = require('../utils/login-lockout');
 const { computeFingerprint } = require('../utils/session-fingerprint');
+const refreshRotation = require('../services/auth/refresh-token-rotation');
 const { clearSessionCookie, setSessionCookie } = require('../utils/session-cookie');
 const {
   validateBody,
@@ -730,6 +731,15 @@ router.post('/logout', authenticateToken, async (req, res) => {
 // fix but requires coordinated FE+BE changes; tracked separately.
 router.post('/refresh', authenticateToken, async (req, res) => {
   try {
+    const familyId = req.headers['x-refresh-family'];
+    const version = req.headers['x-refresh-version'];
+    if (refreshRotation.enabled() && familyId) {
+      const check = refreshRotation.validateRefresh(familyId, version);
+      if (!check.ok) {
+        return res.status(401).json({ error: 'refresh_reuse_detected', reason: check.reason });
+      }
+    }
+
     const { token: newToken } = await getSessionService().refresh({
       user: req.user,
       oldToken: req.token,
@@ -758,7 +768,16 @@ router.post('/refresh', authenticateToken, async (req, res) => {
     }
 
     setSessionCookie(res, newToken);
-    res.json({ token: newToken });
+    const body = { token: newToken };
+    if (refreshRotation.enabled()) {
+      const issued = refreshRotation.issueRefreshPayload(req.user.id);
+      if (issued) {
+        body.refreshFamilyId = issued.familyId;
+        body.refreshVersion = issued.version;
+        body.refreshToken = issued.refreshToken;
+      }
+    }
+    res.json(body);
   } catch (error) {
     console.error('Token refresh error:', error);
     res.status(500).json({ error: 'Token refresh failed' });

@@ -21,6 +21,8 @@ model User {
   isAdmin          Boolean @default(false)
   isSuperAdmin     Boolean @default(false) // Super admin can impersonate any user
   apiUsage         BigInt  @default(0)
+  gemaTokenUsage   BigInt  @default(0)
+  gemaTokenLimit   BigInt  @default(0)
   monthlyCallLimit BigInt  @default(3) // NEW: counts number of generate calls / month
   monthlyLimit     BigInt  @default(1000)
 

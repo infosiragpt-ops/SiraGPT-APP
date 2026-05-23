@@ -101,6 +101,7 @@ function buildWorkspaceWorkflowJob(params = {}) {
   });
 
   const subTasks = planToSubTasks(plan, goal);
+  const workflowPattern = subTasks.length >= 3 ? 'fork_join' : 'chain';
   const systemContract = [
     buildExecutionProfilePrompt(executionProfile),
     buildUserIntentAlignmentPrompt(intentAlignmentProfile),
@@ -137,9 +138,12 @@ function buildWorkspaceWorkflowJob(params = {}) {
     taskPlan: plan,
     workflow: {
       version: WORKFLOW_VERSION,
-      pattern: 'chain',
+      pattern: workflowPattern,
       subTasks,
       orchestratorModel: model,
+      collaboration: workflowPattern === 'fork_join'
+        ? { mode: 'fork_join', roles: ['planner', 'coder', 'reviewer'] }
+        : { mode: 'chain' },
     },
   };
 

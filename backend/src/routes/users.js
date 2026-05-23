@@ -617,6 +617,11 @@ router.get('/usage', authenticateToken, async (req, res) => {
       return acc;
     }, {});
 
+    const { getPlanCatalog } = require('../services/plan-credits-catalog');
+    const catalog = getPlanCatalog(req.user.plan);
+    const gemaUsage = Number(req.user.gemaTokenUsage || 0);
+    const gemaLimit = Number(req.user.gemaTokenLimit || 0);
+
     res.json({
       summary: {
         totalTokens: apiUsage.reduce((sum, usage) => sum + asNumber(usage.tokens), 0),
@@ -625,7 +630,18 @@ router.get('/usage', authenticateToken, async (req, res) => {
         messageCount,
         currentUsage,
         monthlyLimit,
-        usagePercentage: monthlyLimit > 0 ? (currentUsage / monthlyLimit) * 100 : 0
+        usagePercentage: monthlyLimit > 0 ? (currentUsage / monthlyLimit) * 100 : 0,
+        plan: req.user.plan,
+        premiumPool: {
+          used: currentUsage,
+          limit: monthlyLimit,
+        },
+        gemaPool: {
+          used: gemaUsage,
+          limit: catalog.gemaUnlimited ? null : gemaLimit,
+          unlimited: catalog.gemaUnlimited,
+        },
+        catalog,
       },
       usageByDay,
       usageByModel,

@@ -427,6 +427,7 @@ router.post('/task/:taskId/retry', authenticateToken, async (req, res) => {
 
 const workspaceWorkflowOrchestrator = require('../services/agents/workspace-workflow-orchestrator');
 const workspaceIdempotency = require('../services/agents/workspace-idempotency');
+const chatTaskScope = require('../services/agents/chat-task-scope');
 
 const WORKFLOW_RATE_MAX = parseInt(process.env.WORKFLOW_RATE_LIMIT_MAX || '6', 10);
 const workflowRateBuckets = new Map();
@@ -462,6 +463,7 @@ router.post(
     body('maxSteps').optional().isInt({ min: 10, max: 200 }),
     body('maxRuntimeMs').optional().isInt({ min: 3_600_000, max: 72_000_000 }),
     body('chatId').optional().isString(),
+    body('scopeMode').optional().isIn(['chat', 'global']),
     body('files').optional().isArray({ max: 20 }),
   ],
   authenticateToken,
@@ -469,6 +471,14 @@ router.post(
   async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+    const scope = await chatTaskScope.assertChatScopeForAgentTask({
+      prisma,
+      userId: req.user?.id,
+      body: req.body,
+    });
+    if (!scope.ok) return res.status(scope.status).json(scope.body);
+    req.body.chatId = scope.chatId;
 
     const built = workspaceWorkflowOrchestrator.buildWorkspaceWorkflowJob({
       goal: req.body.goal,
@@ -577,6 +587,7 @@ router.post(
     body('files').optional().isArray({ max: 20 }),
     body('files.*').optional().isString().trim().isLength({ min: 1, max: 200 }),
     body('chatId').optional().isString(),
+    body('scopeMode').optional().isIn(['chat', 'global']),
     body('model').optional().isString(),
     body('maxSteps').optional().isInt({ min: 2, max: 120 }),
     body('maxRuntimeMs').optional().isInt({ min: 60000, max: 72_000_000 }),
@@ -589,6 +600,15 @@ router.post(
   async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+    const scope = await chatTaskScope.assertChatScopeForAgentTask({
+      prisma,
+      userId: req.user?.id,
+      body: req.body,
+    });
+    if (!scope.ok) return res.status(scope.status).json(scope.body);
+    req.body.chatId = scope.chatId;
+
     const requestedFileIds = Array.isArray(req.body.files)
       ? req.body.files.map(String).filter(Boolean).slice(0, 20)
       : [];

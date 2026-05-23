@@ -478,8 +478,25 @@ function getTaskStoreStats({ useIndex = true } = {}) {
   return stats;
 }
 
+function listActiveTasksForChat(chatId, userId, { limit = 10 } = {}) {
+  if (!chatId) return [];
+  const index = readIndex();
+  const active = new Set(['running', 'queued', 'planning', 'executing', 'verifying', 'shipping']);
+  const matches = Object.entries(index)
+    .filter(([, meta]) => String(meta.chatId || '') === String(chatId))
+    .filter(([, meta]) => !userId || String(meta.userId) === String(userId))
+    .filter(([, meta]) => active.has(String(meta.status || '')))
+    .sort((a, b) => Date.parse(b[1].updatedAt || 0) - Date.parse(a[1].updatedAt || 0))
+    .slice(0, limit);
+  const rows = [];
+  for (const [taskId] of matches) {
+    const snapshot = readTaskSnapshot(taskId);
+    if (snapshot) rows.push(snapshot);
+  }
+  return rows;
+}
+
 /**
- * Find a task snapshot by chatId. Returns the most-recently-updated
  * task for the chat (a chat can host multiple sequential agent tasks).
  * Indexed lookup — no full directory scan.
  */
@@ -992,6 +1009,7 @@ module.exports = {
   deleteTaskSnapshot,
   findStaleRunningTasks,
   getLatestTaskForChat,
+  listActiveTasksForChat,
   getRunningTasksForUser,
   getTaskByJobId,
   getTaskSnapshotForUser,

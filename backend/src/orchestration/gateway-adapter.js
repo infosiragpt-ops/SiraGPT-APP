@@ -60,24 +60,29 @@ function getSSEBuffer(opts = {}) {
 }
 
 async function enrichWithWebSearch(prompt, opts = {}) {
-  if (!needsFreshWebContext(prompt)) return null;
+  const mode = String(opts.mode || 'auto').toLowerCase();
+  const dedicated = mode === 'dedicated';
+  if (!dedicated && !needsFreshWebContext(prompt)) return null;
 
   try {
     const results = await searchFreshContext(prompt, {
       env: opts.env || process.env,
       fetchImpl: opts.fetchImpl || globalThis.fetch,
+      limit: dedicated ? 12 : 5,
     });
 
     if (!results?.results?.length) return null;
 
-    const snippets = results.results.slice(0, 5).map(r =>
-      `- [${r.title || 'Source'}](${r.url || '#'}): ${(r.content || r.snippet || '').slice(0, 300)}`
+    const sliceCount = dedicated ? 10 : 5;
+    const snippets = results.results.slice(0, sliceCount).map(r =>
+      `- [${r.title || 'Source'}](${r.url || '#'}): ${(r.content || r.snippet || '').slice(0, dedicated ? 500 : 300)}`
     );
 
     return {
       source: results.provider,
+      mode: dedicated ? 'dedicated' : 'auto',
       injectedAt: new Date().toISOString(),
-      block: `\n\n[Fresh Web Context — ${results.provider}]\n${snippets.join('\n')}\n[/Fresh Web Context]`,
+      block: `\n\n[Fresh Web Context — ${results.provider}${dedicated ? ' (dedicated)' : ''}]\n${snippets.join('\n')}\n[/Fresh Web Context]`,
     };
   } catch (_) {
     return null;

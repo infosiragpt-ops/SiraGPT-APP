@@ -753,6 +753,39 @@ async function runAgentTaskJob(payload = {}, job = null) {
     throw new Error('OPENAI_API_KEY not configured');
   }
 
+  if (payload.workflow?.pattern === 'fork_join' && !payload._skipForkJoin) {
+    const { forkJoin } = require('./agent-collaboration');
+    const subTasks = (payload.workflow.subTasks || []).slice(0, 3).map((st, idx) => ({
+      goal: typeof st === 'string' ? st : (st.goal || goal),
+      taskId: `${taskId}-fj-${idx}`,
+      maxSteps: Math.min(25, maxSteps),
+    }));
+    if (subTasks.length >= 2) {
+      taskStore.markTaskStatus({ taskId, userId: user.id }, 'running');
+      const fj = await forkJoin({
+        subTasks,
+        user,
+        options: {
+          chatId,
+          model,
+          maxSteps: Math.min(25, maxSteps),
+          maxRuntimeMs: Math.min(maxRuntimeMs, 180_000),
+          onEvent: (type, data) => {
+            try {
+              taskStore.appendTaskEvent({ taskId, userId: user.id }, { type, payload: data });
+            } catch { /* best-effort */ }
+          },
+        },
+      });
+      taskStore.markTaskStatus(
+        { taskId, userId: user.id },
+        fj.ok ? 'completed' : 'failed',
+        { mergedSummary: fj.mergedSummary || null },
+      );
+      return { ok: fj.ok, pattern: 'fork_join', mergedSummary: fj.mergedSummary, results: fj.results };
+    }
+  }
+
   const internals = routeInternals();
   const controller = new AbortController();
   const startedAt = Date.now();

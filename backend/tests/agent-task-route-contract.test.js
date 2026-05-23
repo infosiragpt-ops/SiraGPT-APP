@@ -7,6 +7,7 @@ const path = require('path');
 const agentTaskRouter = require('../src/routes/agent-task');
 const { INTERNAL } = agentTaskRouter;
 const taskStore = require('../src/services/agents/task-store');
+const chatTaskScope = require('../src/services/agents/chat-task-scope');
 
 test('agent task route: strips internal execution contracts from visible goals', () => {
   const raw = [
@@ -266,4 +267,27 @@ test('agent task route: system prompt includes intent alignment without echoing 
   assert.match(prompt, /source_research/);
   assert.match(prompt, /requested_count:5 articulos/);
   assert.doesNotMatch(prompt, /Dame 5 articulos/);
+});
+
+test('chat-task-scope: prisma validates chat ownership', async () => {
+  const prismaMock = {
+    chat: {
+      findFirst: async ({ where }) => (where.id === 'owned' ? { id: 'owned' } : null),
+    },
+  };
+  const ok = await chatTaskScope.assertChatScopeForAgentTask({
+    prisma: prismaMock,
+    userId: 'user-1',
+    body: { chatId: 'owned' },
+  });
+  assert.equal(ok.ok, true);
+  assert.equal(ok.chatId, 'owned');
+
+  const denied = await chatTaskScope.assertChatScopeForAgentTask({
+    prisma: prismaMock,
+    userId: 'user-1',
+    body: { chatId: 'foreign' },
+  });
+  assert.equal(denied.ok, false);
+  assert.equal(denied.status, 404);
 });

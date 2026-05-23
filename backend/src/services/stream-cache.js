@@ -69,6 +69,9 @@ async function start(userId, chatId, { ttlMs = DEFAULT_TTL_MS, title = '' } = {}
     error: null,
     startedAt: Date.now(),
     updatedAt: Date.now(),
+    taskId: null,
+    agentPhase: null,
+    agentPercent: null,
   };
   cache.set(k, entry);
 
@@ -100,6 +103,15 @@ async function start(userId, chatId, { ttlMs = DEFAULT_TTL_MS, title = '' } = {}
       entry.updatedAt = Date.now();
       cache.set(k, entry);
     },
+    setAgentProgress({ taskId, phase, percent } = {}) {
+      if (taskId) entry.taskId = String(taskId);
+      if (phase) entry.agentPhase = String(phase);
+      if (Number.isFinite(Number(percent))) {
+        entry.agentPercent = Math.max(0, Math.min(100, Math.floor(Number(percent))));
+      }
+      entry.updatedAt = Date.now();
+      cache.set(k, entry);
+    },
     forget() {
       cache.delete(k);
     },
@@ -123,6 +135,32 @@ async function resume(userId, chatId) {
     error: e.error,
     startedAt: e.startedAt,
     updatedAt: e.updatedAt,
+    taskId: e.taskId || null,
+    agentPhase: e.agentPhase || null,
+    agentPercent: e.agentPercent ?? null,
+  };
+}
+
+/**
+ * Update agent progress for a chat without an active text stream handle.
+ */
+async function updateAgentProgress(userId, chatId, progress = {}) {
+  const cache = await getCacheInstance();
+  const k = key(userId, chatId);
+  const e = cache.get(k);
+  if (!e) return null;
+  if (progress.taskId) e.taskId = String(progress.taskId);
+  if (progress.phase) e.agentPhase = String(progress.phase);
+  if (Number.isFinite(Number(progress.percent))) {
+    e.agentPercent = Math.max(0, Math.min(100, Math.floor(Number(progress.percent))));
+  }
+  e.updatedAt = Date.now();
+  cache.set(k, e);
+  return {
+    taskId: e.taskId,
+    agentPhase: e.agentPhase,
+    agentPercent: e.agentPercent,
+    updatedAt: e.updatedAt,
   };
 }
 
@@ -130,4 +168,4 @@ async function resume(userId, chatId) {
 async function _reset() { (await getCacheInstance()).clear(); }
 async function _size() { return (await getCacheInstance()).size; }
 
-module.exports = { start, resume, _reset, _size };
+module.exports = { start, resume, updateAgentProgress, _reset, _size };

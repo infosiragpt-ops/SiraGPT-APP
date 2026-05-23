@@ -75,6 +75,9 @@ const documentService = require('../services/document-service');
 const langPolicy = require('../services/language-policy');
 const masterPrompt = require('../services/master-prompt');
 const streamCache = require('../services/stream-cache');
+const { enqueueCodexRun, detectCodeTaskIntent } = require('../services/codex/codex-run-orchestrator');
+const { runParaphrasePipeline } = require('../services/paraphrase-engine');
+const { resolveModelForUser, persistModelPreference } = require('../services/model-quota-router');
 const streamResume = require('../services/ai/stream-resume');
 const promptInjectionDetector = require('../services/ai/prompt-injection-detector');
 const longTermMemory = require('../services/long-term-memory');
@@ -522,24 +525,48 @@ router.post(
 
     try {
       const openai = createProviderClient('DeepSeek');
-      const completion = await openai.chat.completions.create({
-        model,
-        temperature: mode === 'creative' || mode === 'humanize' ? 0.7 : 0.35,
-        max_tokens: Math.min(4096, Math.max(700, Math.ceil(text.length * 1.6))),
-        messages: [
-          { role: 'system', content: buildParaphraseInstructions({ mode, language: targetLanguage.id, customInstruction }) },
-          { role: 'user', content: text },
-        ],
+      const rewriteFn = async ({ text: chunk, pass, mode: pipelineMode }) => {
+        const completion = await openai.chat.completions.create({
+          model,
+          temperature: pipelineMode === 'creative' || pipelineMode === 'humanize' ? 0.7 : 0.35,
+          max_tokens: Math.min(4096, Math.max(700, Math.ceil(chunk.length * 1.6))),
+          messages: [
+            {
+              role: 'system',
+              content: buildParaphraseInstructions({
+                mode: pipelineMode,
+                language: targetLanguage.id,
+                customInstruction: pass === 2 ? `${customInstruction}\nVaría la estructura de párrafos.` : customInstruction,
+              }),
+            },
+            { role: 'user', content: chunk },
+          ],
+        });
+        return String(completion.choices?.[0]?.message?.content || '').trim();
+      };
+
+      const pipeline = await runParaphrasePipeline({
+        source: text,
+        rewriteFn,
+        mode,
+        maxSimilarity: mode === 'academic' ? 0.65 : 0.72,
       });
 
-      const output = String(completion.choices?.[0]?.message?.content || '').trim();
+      const output = pipeline.output || '';
       if (!output) return res.status(502).json({ error: 'DeepSeek returned an empty paraphrase.' });
+      if (!pipeline.ok) {
+        return res.status(422).json({
+          error: 'paraphrase_too_similar',
+          similarity: pipeline.similarity,
+          maxSimilarity: pipeline.maxSimilarity,
+        });
+      }
 
-      const totalTokens = completion.usage?.total_tokens || Math.ceil((text.length + output.length) / 4);
+      const totalTokens = Math.ceil((text.length + output.length) / 4);
       // Fire-and-forget cost tracking — never blocks or throws into the response.
       try {
-        const inputTokens = completion.usage?.prompt_tokens || Math.ceil(text.length / 4);
-        const outputTokens = completion.usage?.completion_tokens || Math.ceil(output.length / 4);
+        const inputTokens = Math.ceil(text.length / 4);
+        const outputTokens = Math.ceil(output.length / 4);
         costTracker.track({
           userId: req.user?.id,
           model,
@@ -562,7 +589,8 @@ router.post(
         model,
         mode,
         language: targetLanguage.id,
-        usage: completion.usage || { total_tokens: totalTokens },
+        pipeline: { passes: pipeline.passes, similarity: pipeline.similarity },
+        usage: { total_tokens: totalTokens },
       });
     } catch (error) {
       console.error('[paraphrase] DeepSeek error:', error?.message || error);
@@ -928,7 +956,7 @@ async function loadUserFile(fileRef, userId) {
   return toProcessedFile(file);
 }
 
-async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles = [], regenerate = false) {
+async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles = [], regenerate = false, extraMetadata = null) {
   let assistantMessage = null;
   try {
     console.log("Background task: Saving to database...", { assistantFiles });
@@ -974,13 +1002,17 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
         });
       }
 
+      const metadataPayload = extraMetadata && typeof extraMetadata === 'object' && Object.keys(extraMetadata).length > 0
+        ? JSON.stringify(extraMetadata)
+        : null;
       assistantMessage = await prisma.message.create({
         data: {
           chatId,
           role: 'ASSISTANT',
           content: fullResponseContent,
           tokens,
-          files: assistantFiles.length > 0 ? JSON.stringify(assistantFiles) : null
+          files: assistantFiles.length > 0 ? JSON.stringify(assistantFiles) : null,
+          metadata: metadataPayload,
         }
       });
 
@@ -1081,10 +1113,21 @@ router.post(
         return res.status(400).json({ errors: errors.array() });
       }
 
-      let { model, prompt, chatId, files, provider, regenerate } = req.body;
+      let { model, prompt, chatId, files, provider, regenerate, webSearchMode } = req.body;
       const isAuth = !!req.user;
       const userId = isAuth ? req.user.id : null;
       const canPersist = isAuth && !!chatId;
+
+      if (isAuth && req.user) {
+        const routed = resolveModelForUser(req.user, model);
+        if (routed.blocked) {
+          return res.status(429).json({ error: 'quota_exceeded', reason: routed.reason });
+        }
+        if (routed.model && routed.model !== model) {
+          model = routed.model;
+          provider = provider || 'OpenAI';
+        }
+      }
 
       // ─── Prompt-injection preflight ───────────────────────────
       // Heuristic detector for "ignore previous instructions" / DAN /
@@ -3043,7 +3086,9 @@ router.post(
       let orchMemoryBlock = '';
       if (typeof prompt === 'string' && prompt.length > 0) {
         try {
-          const webContext = await enrichWithWebSearch(prompt);
+          const webContext = await enrichWithWebSearch(prompt, {
+            mode: webSearchMode === 'dedicated' ? 'dedicated' : 'auto',
+          });
           if (webContext?.block) {
             webSearchBlock = webContext.block;
           }
@@ -3367,6 +3412,30 @@ router.post(
       const cacheHandle = isAuth && chatId
         ? await streamCache.start(userId, chatId, { title: typeof prompt === 'string' ? prompt.slice(0, 80) : '' })
         : null;
+
+      let codexRunId = null;
+      if (isAuth && chatId && typeof prompt === 'string') {
+        const codeIntent = detectCodeTaskIntent(prompt);
+        if (codeIntent.isCodeTask && codeIntent.confidence >= 0.75) {
+          try {
+            const codexRun = enqueueCodexRun({
+              userId,
+              chatId,
+              goal: prompt,
+            });
+            codexRunId = codexRun.runId;
+            if (cacheHandle && typeof cacheHandle.setAgentProgress === 'function') {
+              cacheHandle.setAgentProgress({ taskId: codexRunId, phase: 'plan', percent: 5 });
+            }
+            try {
+              res.write(`data: ${JSON.stringify({ type: 'codex_run_started', runId: codexRunId, chatId })}\n\n`);
+            } catch { /* headers may not be flushed yet in edge cases */ }
+          } catch (codexErr) {
+            console.warn('[ai/generate] codex delegation failed:', codexErr && codexErr.message);
+          }
+        }
+      }
+      req._codexRunId = codexRunId;
       if (cacheHandle) {
         const origWrite = res.write.bind(res);
         res.write = (payload, ...rest) => {
@@ -3983,7 +4052,21 @@ router.post(
             : finalContent;
         }
 
-        const savedChat = await saveChatAndTrackUsage(userId, canPersist ? chatId : null, prompt, finalContent, tokens, actualModel, processedFiles, newFiles, regenerate);
+        const codexMeta = req._codexRunId
+          ? { codexRunId: req._codexRunId, taskId: req._codexRunId, type: 'codex_delegated' }
+          : null;
+        const savedChat = await saveChatAndTrackUsage(
+          userId,
+          canPersist ? chatId : null,
+          prompt,
+          finalContent,
+          tokens,
+          actualModel,
+          processedFiles,
+          newFiles,
+          regenerate,
+          codexMeta,
+        );
         if (savedChat?.assistantMessage?.id && operationalRagContext?.active) {
           operationalRag.scheduleQualityAudit({
             prisma,

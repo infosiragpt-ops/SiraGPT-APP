@@ -5,7 +5,7 @@ const prisma = require('../config/database');
 const fetch = require('node-fetch');
 const OpenAI = require('openai');
 const { serializeBigIntFields } = require('../utils/bigint-serializer');
-const { runAgenticBatch } = require('../services/searchBrain/agenticBatch');
+const { semanticBoostForMessages, mergeHybridResults } = require('../services/chat-hybrid-search');
 
 const router = express.Router();
 
@@ -620,7 +620,7 @@ router.get('/', authenticateToken, async (req, res) => {
     const rows = await prisma.$queryRawUnsafe(sql, ...params);
 
     // BigInt safety + ISO timestamps for the wire.
-    const results = rows.map((r) => ({
+    let results = rows.map((r) => ({
       messageId: r.messageId,
       chatId: r.chatId,
       chatTitle: r.chatTitle,
@@ -630,7 +630,16 @@ router.get('/', authenticateToken, async (req, res) => {
       rank: Number(r.rank) || 0,
     }));
 
-    res.json({ query: rawQ, lang, total: results.length, results });
+    const semanticMap = await semanticBoostForMessages({
+      userId,
+      query: rawQ,
+      messageIds: results.map((r) => r.messageId),
+    });
+    if (semanticMap.size > 0) {
+      results = mergeHybridResults(results, semanticMap);
+    }
+
+    res.json({ query: rawQ, lang, total: results.length, results, hybrid: semanticMap.size > 0 });
   } catch (err) {
     // TODO(FTS): if Postgres FTS is unavailable (e.g. SQLite dev),
     // fall back to ILIKE with proper escaping. Today we just surface

@@ -7,6 +7,7 @@ const OpenAI = require('openai');
 const { v4: uuidv4 } = require('uuid');
 const { serializeChat, serializeBigIntFields } = require('../utils/bigint-serializer');
 const streamCache = require('../services/stream-cache');
+const taskStore = require('../services/agents/task-store');
 const { buildChatListWhere, parseBoolean, parsePositiveInt } = require('../services/chat-scope');
 const feedbackLedger = require('../services/agents/feedback-ledger');
 const rag = require('../services/rag-service');
@@ -53,8 +54,27 @@ const projectChatSelect = {
 // See services/stream-cache.js for the lifecycle + TTL.
 router.get('/:chatId/pending-stream', authenticateToken, async (req, res) => {
   const snapshot = await streamCache.resume(req.user.id, req.params.chatId);
-  if (!snapshot) return res.json({ ok: true, pending: null });
-  return res.json({ ok: true, pending: snapshot });
+  const activeTasks = taskStore.listActiveTasksForChat(req.params.chatId, req.user.id, { limit: 3 });
+  const latestTask = taskStore.getLatestTaskForChat(req.params.chatId, req.user.id);
+  if (!snapshot && !activeTasks.length && !latestTask) {
+    return res.json({ ok: true, pending: null, activeTasks: [], latestTask: null });
+  }
+  return res.json({
+    ok: true,
+    pending: snapshot,
+    activeTasks: activeTasks.map((t) => ({
+      taskId: t.taskId,
+      status: t.status,
+      displayGoal: t.displayGoal || t.agentGoal,
+      updatedAt: t.updatedAt,
+    })),
+    latestTask: latestTask ? {
+      taskId: latestTask.taskId,
+      status: latestTask.status,
+      displayGoal: latestTask.displayGoal || latestTask.agentGoal,
+      updatedAt: latestTask.updatedAt,
+    } : null,
+  });
 });
 
 // Get user's chats
@@ -117,7 +137,16 @@ router.get('/', authenticateToken, requireScope('chats:read'), async (req, res) 
     ]);
 
     // Serialize BigInt fields before sending response
-    const serializedChats = chats.map(chat => serializeChat(chat));
+    const serializedChats = chats.map((chat) => {
+      const row = serializeChat(chat);
+      const activeTasks = taskStore.listActiveTasksForChat(chat.id, req.user.id, { limit: 1 });
+      row.activeTask = activeTasks[0] ? {
+        taskId: activeTasks[0].taskId,
+        status: activeTasks[0].status,
+        displayGoal: activeTasks[0].displayGoal || activeTasks[0].agentGoal,
+      } : null;
+      return row;
+    });
 
     res.json({
       chats: serializedChats,
