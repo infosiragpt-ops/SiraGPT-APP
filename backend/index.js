@@ -345,6 +345,7 @@ const artifactRoutes = require('./src/routes/artifact');
 const enterpriseRoutes = require('./src/routes/enterprise');
 const socialPostsRoutes = require('./src/routes/social-posts');
 const githubCodexRoutes = require('./src/routes/github-codex');
+const codexRunsRoutes = require('./src/routes/codex-runs');
 const pushRoutes = require('./src/routes/push');
 const coworkRoutes = require('./src/routes/cowork');
 const orchestrationRoutes = require('./src/routes/orchestration');
