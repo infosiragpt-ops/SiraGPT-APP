@@ -3860,6 +3860,7 @@ But first, you need to connect your Spotify account securely using the button be
   const [currentUserInfo, setCurrentUserInfo] = React.useState<any>(null);
   const [splitViewContent, setSplitViewContent] = React.useState<any>(null)
   const [documentPreviewUrl, setDocumentPreviewUrl] = React.useState<DocumentPreviewTarget | null>(null);
+  const [composerPreviewIndex, setComposerPreviewIndex] = React.useState<number | null>(null);
   const activeSearchActivity = activeSearchActivityId ? searchActivities[activeSearchActivityId] : null;
   const searchActivityPanelOpen = Boolean(activeSearchActivity);
 
@@ -4120,11 +4121,13 @@ But first, you need to connect your Spotify account securely using the button be
 
   const handleToggleSplitView = (content: any) => {
     setDocumentPreviewUrl(null)
+    setComposerPreviewIndex(null)
     setSplitViewContent(content)
   }
 
   const handleDocumentPreview = (url: DocumentPreviewTarget) => {
     setSplitViewContent(null)
+    setComposerPreviewIndex(null)
     setSplitRatio((current) => {
       const balanced = current < 40 || current > 62 ? 48 : current
       try { localStorage.setItem(SPLIT_STORAGE_KEY, String(balanced)); } catch { /* ignore */ }
@@ -4781,8 +4784,28 @@ But first, you need to connect your Spotify account securely using the button be
     });
 
     setIsUploading(true);
+    let optimisticTimer: ReturnType<typeof setInterval> | null = null;
 
     try {
+      let optimisticPct = 6;
+      setUploadProgress(prev => {
+        const next = { ...prev };
+        tempFiles.forEach(tf => { next[tf.tempId] = Math.max(next[tf.tempId] || 0, optimisticPct); });
+        return next;
+      });
+      optimisticTimer = setInterval(() => {
+        optimisticPct = Math.min(96, optimisticPct + Math.max(4, Math.round((96 - optimisticPct) * 0.28)));
+        setUploadProgress(prev => {
+          const next = { ...prev };
+          tempFiles.forEach(tf => { next[tf.tempId] = Math.max(next[tf.tempId] || 0, optimisticPct); });
+          return next;
+        });
+        if (optimisticPct >= 96 && optimisticTimer) {
+          clearInterval(optimisticTimer);
+          optimisticTimer = null;
+        }
+      }, 90);
+
       const dt = new DataTransfer();
       filesToUpload.forEach(file => dt.items.add(file));
 
@@ -4796,7 +4819,7 @@ But first, you need to connect your Spotify account securely using the button be
         onProgress: (pct) => {
           setUploadProgress(prev => {
             const next = { ...prev };
-            tempFiles.forEach(tf => { next[tf.tempId] = pct; });
+            tempFiles.forEach(tf => { next[tf.tempId] = Math.max(next[tf.tempId] || 0, pct); });
             return next;
           });
         },
@@ -4865,6 +4888,7 @@ But first, you need to connect your Spotify account securely using the button be
       // Previews are intentionally KEPT alive on failure so the chip
       // can render its thumbnail next to the retry button.
     } finally {
+      if (optimisticTimer) clearInterval(optimisticTimer);
       setIsUploading(false);
     }
   }, [chatType, setUploadedFiles]);
@@ -5366,6 +5390,35 @@ But first, you need to connect your Spotify account securely using the button be
   // effect on every ratio change.
   const splitRatioRef = React.useRef(splitRatio);
   React.useEffect(() => { splitRatioRef.current = splitRatio; }, [splitRatio]);
+
+  const composerPreviewSiblings: AttachmentLike[] = React.useMemo(
+    () => uploadedFiles.map((f: any) => toDocumentViewerAttachment(f)),
+    [uploadedFiles],
+  );
+  const composerPreviewAttachment = React.useMemo<AttachmentLike | null>(() => {
+    if (composerPreviewIndex === null) return null;
+    return composerPreviewSiblings[composerPreviewIndex] || null;
+  }, [composerPreviewIndex, composerPreviewSiblings]);
+
+  const openComposerDocumentPreview = React.useCallback((index: number) => {
+    if (!uploadedFiles[index]) return;
+    setSplitViewContent(null);
+    setDocumentPreviewUrl(null);
+    setActiveSearchActivityId(null);
+    setSplitRatio((current) => {
+      const balanced = current < 40 || current > 62 ? 48 : current;
+      try { localStorage.setItem(SPLIT_STORAGE_KEY, String(balanced)); } catch { /* ignore */ }
+      return balanced;
+    });
+    setComposerPreviewIndex(index);
+  }, [uploadedFiles]);
+
+  React.useEffect(() => {
+    if (composerPreviewIndex === null) return;
+    if (composerPreviewIndex >= uploadedFiles.length) {
+      setComposerPreviewIndex(uploadedFiles.length > 0 ? uploadedFiles.length - 1 : null);
+    }
+  }, [composerPreviewIndex, uploadedFiles.length]);
 
   // Auto-collapse sidebar when any workspace tool activates (connectors,
   // web search, media gen, thesis, Voice Studio, Computer Use, etc.) so
@@ -6999,7 +7052,16 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   }
 
   const removeFile = (index: number) => {
-    setUploadedFiles(uploadedFiles.filter((_, i) => i !== index))
+    setUploadedFiles((cur: any[]) => {
+      const next = cur.filter((_, i) => i !== index);
+      uploadedFilesRef.current = next;
+      return next;
+    });
+    setComposerPreviewIndex((current) => {
+      if (current === null) return null;
+      if (current === index) return null;
+      return index < current ? current - 1 : current;
+    });
   }
 
   const restoreLongPasteToInput = React.useCallback((file: any, index: number) => {
@@ -7062,6 +7124,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   const rightPanelActive = Boolean(
     searchActivityPanelOpen ||
     documentPreviewUrl ||
+    composerPreviewAttachment ||
     isWordConnectorActive ||
     isExcelConnectorActive ||
     activeArtifact
@@ -7955,6 +8018,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       uploadProgress={uploadProgress}
                       retryUpload={retryUpload}
                       restoreLongPasteToInput={restoreLongPasteToInput}
+                      onPreviewAttachment={(_attachment, _siblings, index) => openComposerDocumentPreview(index)}
                     />
                     <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
                     <LinkContextDisplay
@@ -8423,6 +8487,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           uploadProgress={uploadProgress}
                           retryUpload={retryUpload}
                           restoreLongPasteToInput={restoreLongPasteToInput}
+                          onPreviewAttachment={(_attachment, _siblings, index) => openComposerDocumentPreview(index)}
                         />
                         <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
                         <LinkContextDisplay
@@ -8685,7 +8750,21 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   onClose={() => setDocumentPreviewUrl(null)}
                 />
               )}
-              {!activeSearchActivity && isWordConnectorActive && (
+              {!activeSearchActivity && !documentPreviewUrl && composerPreviewAttachment && (
+                <UnifiedDocumentViewer
+                  variant="panel"
+                  className="h-full"
+                  open={true}
+                  onClose={() => setComposerPreviewIndex(null)}
+                  attachment={composerPreviewAttachment}
+                  siblings={composerPreviewSiblings}
+                  onNavigate={(next) => {
+                    const idx = composerPreviewSiblings.findIndex(s => s === next || (next.id && s.id === next.id));
+                    if (idx >= 0) setComposerPreviewIndex(idx);
+                  }}
+                />
+              )}
+              {!activeSearchActivity && !composerPreviewAttachment && isWordConnectorActive && (
                 <WordConnector
                   ref={wordConnectorRef}
                   onClose={() => setIsWordConnectorActive(false)}
@@ -8698,7 +8777,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   }}
                 />
               )}
-              {!activeSearchActivity && isExcelConnectorActive && (
+              {!activeSearchActivity && !composerPreviewAttachment && isExcelConnectorActive && (
                 <React.Suspense fallback={<div className="h-full w-full animate-pulse bg-muted/30" aria-hidden="true" />}>
                   <ExcelConnector
                     ref={excelConnectorRef}
@@ -8707,7 +8786,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   />
                 </React.Suspense>
               )}
-              {!activeSearchActivity && activeArtifact && !isWordConnectorActive && !isExcelConnectorActive && !documentPreviewUrl && (
+              {!activeSearchActivity && activeArtifact && !isWordConnectorActive && !isExcelConnectorActive && !documentPreviewUrl && !composerPreviewAttachment && (
                 <ArtifactPanel />
               )}
             </div>

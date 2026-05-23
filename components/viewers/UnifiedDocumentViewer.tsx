@@ -45,6 +45,7 @@ import {
   Presentation,
   File as FileIcon,
   Image as ImageIcon,
+  X,
   ChevronLeft,
   ChevronRight,
   Minus,
@@ -54,7 +55,6 @@ import {
   Maximize2,
   RefreshCw,
   Reply,
-  X,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { normalizeBackendAssetUrl } from "@/lib/attachment-url"
@@ -218,6 +218,7 @@ interface UnifiedDocumentViewerProps {
   siblings?: AttachmentLike[]
   /** Called when the user arrows to a different attachment in the set. */
   onNavigate?: (next: AttachmentLike) => void
+  className?: string
 }
 
 class ViewerRenderBoundary extends React.Component<
@@ -294,6 +295,7 @@ export default function UnifiedDocumentViewer({
   attachment,
   siblings,
   onNavigate,
+  className,
 }: UnifiedDocumentViewerProps) {
   // ALL hooks must run unconditionally — the early-return for null
   // attachment must come AFTER every hook below, otherwise toggling
@@ -372,9 +374,12 @@ export default function UnifiedDocumentViewer({
   }
 
   const shell = (
-      <div
-        className={variant === "panel" ? "flex h-full w-full min-w-0 flex-col overflow-hidden" : "fixed inset-0 z-[10000]"}
-      >
+    <div
+      className={cn(
+        variant === "panel" ? "flex h-full w-full min-w-0 flex-col overflow-hidden" : "fixed inset-0 z-[10000]",
+        className,
+      )}
+    >
       {variant === "modal" && (
         <div
           className="absolute inset-0 bg-black/80"
@@ -616,7 +621,8 @@ async function fetchServerConvertedPdfAttachment(a: AttachmentLike): Promise<Att
     }
 
     const buf = await res.arrayBuffer()
-    const pdfBlob = new File([buf], renderedPdfName(a.name), { type: "application/pdf" })
+    const cached = cloneArrayBuffer(buf)
+    const pdfBlob = new File([cloneArrayBuffer(cached)], renderedPdfName(a.name), { type: "application/pdf" })
     const pdfAtt: AttachmentLike = {
       id: a.id,
       name: renderedPdfName(a.name),
@@ -625,7 +631,7 @@ async function fetchServerConvertedPdfAttachment(a: AttachmentLike): Promise<Att
       file: pdfBlob,
     }
     convertedPdfCache.set(key, pdfAtt)
-    cacheSet(cacheKeyFor(pdfAtt, "ab"), { buffer: buf })
+    cacheSet(cacheKeyFor(pdfAtt, "ab"), { buffer: cached })
     return pdfAtt
   })()
 
@@ -772,6 +778,12 @@ async function fetchAssetBytes(url: string): Promise<Response> {
   return fetch(normalized, init)
 }
 
+function cloneArrayBuffer(buf: ArrayBuffer): ArrayBuffer {
+  const copy = new Uint8Array(buf.byteLength)
+  copy.set(new Uint8Array(buf))
+  return copy.buffer
+}
+
 async function readAsText(a: AttachmentLike): Promise<string> {
   const tKey = cacheKeyFor(a, "text")
   const cachedText = cacheGet(tKey)
@@ -802,20 +814,26 @@ async function readAsText(a: AttachmentLike): Promise<string> {
 async function readAsArrayBuffer(a: AttachmentLike): Promise<ArrayBuffer> {
   const bKey = cacheKeyFor(a, "ab")
   const cachedBuf = cacheGet(bKey)
-  if (cachedBuf?.buffer) return cachedBuf.buffer
+  if (cachedBuf?.buffer) return cloneArrayBuffer(cachedBuf.buffer)
 
   if (a.file) {
-    const buf = await a.file.arrayBuffer()
-    cacheSet(bKey, { buffer: buf })
-    return buf
+    try {
+      const buf = await a.file.arrayBuffer()
+      const cached = cloneArrayBuffer(buf)
+      cacheSet(bKey, { buffer: cached })
+      return cloneArrayBuffer(cached)
+    } catch (fileErr) {
+      if (!a.url) throw fileErr
+    }
   }
 
   if (a.url) {
     const res = await fetchAssetBytes(a.url)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const buf = await res.arrayBuffer()
-    cacheSet(bKey, { buffer: buf })
-    return buf
+    const cached = cloneArrayBuffer(buf)
+    cacheSet(bKey, { buffer: cached })
+    return cloneArrayBuffer(cached)
   }
 
   throw new Error("No source available")
@@ -1217,7 +1235,7 @@ function PdfRenderer({ a }: { a: AttachmentLike }) {
     ;(async () => {
       try {
         const buf = await readAsArrayBuffer(a)
-        if (!cancelled) setSource({ data: new Uint8Array(buf) })
+        if (!cancelled) setSource({ data: new Uint8Array(cloneArrayBuffer(buf)) })
       } catch (e: any) {
         if (!cancelled) setErr(e?.message || "Error")
       }
@@ -1305,70 +1323,9 @@ function PdfRenderer({ a }: { a: AttachmentLike }) {
   const renderWidth = Math.floor(containerWidth * scale)
 
   return (
-    <div className="flex h-full flex-col">
-      {/* Toolbar */}
-      <div className="flex items-center gap-2 border-b border-border/40 px-3 py-1.5">
-        <div className="flex items-center gap-1">
-          <Button size="icon" variant="ghost" className="h-7 w-7"
-            disabled={activePage <= 1}
-            onClick={() => goToPage(activePage - 1)}
-            aria-label="Página anterior" title="Página anterior">
-            <ChevronLeft className="h-3.5 w-3.5" />
-          </Button>
-          <div className="flex items-center gap-1 text-[11.5px] tabular-nums">
-            <input
-              type="number"
-              min={1}
-              max={numPages || 1}
-              value={activePage}
-              onChange={e => {
-                const n = parseInt(e.target.value, 10)
-                if (Number.isFinite(n)) setActivePage(Math.min(Math.max(1, n), numPages || 1))
-              }}
-              onKeyDown={e => { if (e.key === "Enter") goToPage(activePage) }}
-              onBlur={() => goToPage(activePage)}
-              className="h-6 w-10 rounded border border-border/60 bg-background px-1 text-center text-[11.5px] tabular-nums focus:outline-none focus:ring-1 focus:ring-foreground/30"
-              aria-label="Número de página"
-            />
-            <span className="text-muted-foreground">/ {numPages || "…"}</span>
-          </div>
-          <Button size="icon" variant="ghost" className="h-7 w-7"
-            disabled={activePage >= numPages}
-            onClick={() => goToPage(activePage + 1)}
-            aria-label="Página siguiente" title="Página siguiente">
-            <ChevronRight className="h-3.5 w-3.5" />
-          </Button>
-        </div>
-
-        <div className="ml-auto flex items-center gap-1">
-          <Button size="icon" variant="ghost" className="h-7 w-7"
-            onClick={() => setScale(s => Math.max(0.5, +(s - 0.25).toFixed(2)))}
-            aria-label="Reducir zoom" title="Reducir (⌘−)">
-            <Minus className="h-3.5 w-3.5" />
-          </Button>
-          <button
-            onClick={() => setScale(1)}
-            className="min-w-[48px] rounded px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-muted-foreground hover:bg-muted"
-            title="Restablecer zoom (⌘0)"
-            aria-label="Restablecer zoom"
-          >
-            {Math.round(scale * 100)}%
-          </button>
-          <Button size="icon" variant="ghost" className="h-7 w-7"
-            onClick={() => setScale(s => Math.min(3, +(s + 0.25).toFixed(2)))}
-            aria-label="Aumentar zoom" title="Aumentar (⌘+)">
-            <Plus className="h-3.5 w-3.5" />
-          </Button>
-          <Button size="icon" variant="ghost" className="h-7 w-7"
-            onClick={() => setScale(1)}
-            aria-label="Ajustar al ancho" title="Ajustar al ancho">
-            <Maximize2 className="h-3.5 w-3.5" />
-          </Button>
-        </div>
-      </div>
-
+    <div className="relative flex h-full flex-col">
       {/* Pages */}
-      <div ref={containerRef} className="min-h-0 flex-1 overflow-auto bg-muted/30 px-3 py-4">
+      <div ref={containerRef} className="min-h-0 flex-1 overflow-auto bg-muted/30 px-3 pb-20 pt-4">
         <PdfDocument
           file={source}
           onLoadSuccess={({ numPages: n }) => setNumPages(n)}
@@ -1393,6 +1350,67 @@ function PdfRenderer({ a }: { a: AttachmentLike }) {
             </div>
           ))}
         </PdfDocument>
+      </div>
+
+      {/* Bottom liquid-glass controls */}
+      <div className="pointer-events-none absolute inset-x-0 bottom-4 z-30 flex justify-center px-3">
+        <div className="pointer-events-auto flex max-w-full flex-wrap items-center justify-center gap-1.5 rounded-full border border-white/25 bg-background/75 px-2 py-1 shadow-[0_10px_35px_rgba(15,23,42,0.18)] backdrop-blur-2xl dark:border-white/10 dark:bg-background/70">
+          <Button size="icon" variant="ghost" className="h-7 w-7 rounded-full"
+            disabled={activePage <= 1}
+            onClick={() => goToPage(activePage - 1)}
+            aria-label="Página anterior" title="Página anterior">
+            <ChevronLeft className="h-3.5 w-3.5" />
+          </Button>
+          <div className="flex items-center gap-1 rounded-full bg-background/45 px-1.5 py-0.5 text-[11.5px] tabular-nums text-foreground/85">
+            <input
+              type="number"
+              min={1}
+              max={numPages || 1}
+              value={activePage}
+              onChange={e => {
+                const n = parseInt(e.target.value, 10)
+                if (Number.isFinite(n)) setActivePage(Math.min(Math.max(1, n), numPages || 1))
+              }}
+              onKeyDown={e => { if (e.key === "Enter") goToPage(activePage) }}
+              onBlur={() => goToPage(activePage)}
+              className="h-6 w-10 rounded-full border border-transparent bg-transparent px-1 text-center text-[11.5px] tabular-nums focus:border-border/70 focus:bg-background/70 focus:outline-none"
+              aria-label="Número de página"
+            />
+            <span className="pr-1 text-muted-foreground">/ {numPages || "…"}</span>
+          </div>
+          <Button size="icon" variant="ghost" className="h-7 w-7 rounded-full"
+            disabled={activePage >= numPages}
+            onClick={() => goToPage(activePage + 1)}
+            aria-label="Página siguiente" title="Página siguiente">
+            <ChevronRight className="h-3.5 w-3.5" />
+          </Button>
+
+          <div className="mx-0.5 h-5 w-px bg-border/50" />
+
+          <Button size="icon" variant="ghost" className="h-7 w-7 rounded-full"
+            onClick={() => setScale(s => Math.max(0.5, +(s - 0.25).toFixed(2)))}
+            aria-label="Reducir zoom" title="Reducir (⌘−)">
+            <Minus className="h-3.5 w-3.5" />
+          </Button>
+          <button
+            onClick={() => setScale(1)}
+            className="h-7 min-w-[48px] rounded-full px-2 text-[11px] font-medium tabular-nums text-muted-foreground hover:bg-background/55"
+            title="Restablecer zoom (⌘0)"
+            aria-label="Restablecer zoom"
+          >
+            {Math.round(scale * 100)}%
+          </button>
+          <Button size="icon" variant="ghost" className="h-7 w-7 rounded-full"
+            onClick={() => setScale(s => Math.min(3, +(s + 0.25).toFixed(2)))}
+            aria-label="Aumentar zoom" title="Aumentar (⌘+)">
+            <Plus className="h-3.5 w-3.5" />
+          </Button>
+          <Button size="icon" variant="ghost" className="h-7 w-7 rounded-full"
+            onClick={() => setScale(1)}
+            aria-label="Ajustar al ancho" title="Ajustar al ancho">
+            <Maximize2 className="h-3.5 w-3.5" />
+          </Button>
+        </div>
       </div>
     </div>
   )
@@ -1654,7 +1672,7 @@ function XlsxRenderer({ a }: { a: AttachmentLike }) {
     ;(async () => {
       try {
         const buf = await readAsArrayBuffer(a)
-        const parsed = await readXlsxWorkbook(buf)
+        const parsed = await readXlsxWorkbook(cloneArrayBuffer(buf))
         setWb(parsed)
         setActive(parsed.worksheets[0]?.name || null)
       } catch (e: any) {
@@ -1843,7 +1861,7 @@ function PptxRenderer({ a }: { a: AttachmentLike }) {
     ;(async () => {
       try {
         const buf = await readAsArrayBuffer(a)
-        setSlides(await extractPptx(buf))
+        setSlides(await extractPptx(cloneArrayBuffer(buf)))
       } catch (e: any) {
         setErr(e?.message || "Error")
       }
@@ -2016,7 +2034,7 @@ function DocxRenderer({ a, isDark: _isDark }: { a: AttachmentLike; isDark: boole
           const root = frameDoc.getElementById("docx-preview-root")
           if (cancelled || !root) return
 
-          await renderAsync(buf, root, frameDoc.head, {
+          await renderAsync(cloneArrayBuffer(buf), root, frameDoc.head, {
             className: "docx-preview-doc",
             inWrapper: true,
             ignoreWidth: false,
@@ -2041,7 +2059,7 @@ function DocxRenderer({ a, isDark: _isDark }: { a: AttachmentLike; isDark: boole
           const mammothMod = (await loadMammoth()) as any
           const mammoth = mammothMod.default || mammothMod
           const result = await mammoth.convertToHtml(
-            { arrayBuffer: buf },
+            { arrayBuffer: cloneArrayBuffer(buf) },
             {
               includeDefaultStyleMap: true,
               convertImage: mammoth.images?.imgElement
