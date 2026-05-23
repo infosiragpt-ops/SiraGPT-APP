@@ -52,6 +52,10 @@ ENV NEXT_PUBLIC_SENTRY_DSN=${NEXT_PUBLIC_SENTRY_DSN}
 # Build with standalone output
 ENV DOCKER_BUILD=true
 ENV NEXT_TELEMETRY_DISABLED=1
+# GitHub's Docker runner has less usable memory than the host build job.
+# Keep Next's heap below the default package-script ceiling so BuildKit
+# does not cancel the frontend image build under memory pressure.
+ENV NODE_OPTIONS=--max-old-space-size=4096
 RUN npm run build
 
 # Prune dev dependencies
