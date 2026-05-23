@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import dynamic from "next/dynamic"
 import {
   Send,
   Paperclip,
@@ -57,10 +58,32 @@ import { useAuth } from "@/lib/auth-context-integrated"
 import { ThemeToggle } from "@/components/theme-toggle"
 import WhatsAppButton from "@/components/WhatsAppButton"
 import { PremiumCardIcon } from "@/components/icons/premium-card-icon"
-import UnifiedDocumentViewer, {
-  prewarmUnifiedDocumentPreview,
-  type AttachmentLike,
-} from "@/components/viewers/UnifiedDocumentViewer"
+// Visor de documentos: pesado (PDF.js, mammoth, xlsx, etc.). Solo se
+// monta cuando el usuario abre un adjunto, así que lo cargamos por
+// demanda. SSR desactivado porque el visor depende de APIs del
+// navegador. El prefetch se dispara al pasar el ratón por encima de
+// los chips que lo abren.
+const UnifiedDocumentViewer = dynamic(
+  () => import("@/components/viewers/UnifiedDocumentViewer"),
+  { ssr: false, loading: () => null },
+)
+import type { AttachmentLike } from "@/components/viewers/UnifiedDocumentViewer"
+// Wrapper perezoso: importa el módulo solo la primera vez que un
+// chip pide precalentar. Mantiene la firma sync-fire-and-forget que
+// los callers (useEffect en chips) ya usan.
+let __unifiedViewerModulePromise: Promise<typeof import("@/components/viewers/UnifiedDocumentViewer")> | null = null
+function loadUnifiedViewerModule() {
+  if (!__unifiedViewerModulePromise) {
+    __unifiedViewerModulePromise = import("@/components/viewers/UnifiedDocumentViewer")
+  }
+  return __unifiedViewerModulePromise
+}
+function prewarmUnifiedDocumentPreview(a: AttachmentLike): void {
+  if (typeof window === "undefined") return
+  void loadUnifiedViewerModule()
+    .then(mod => mod.prewarmUnifiedDocumentPreview(a))
+    .catch(() => null)
+}
 import { getAttachmentLocalFile, toDocumentViewerAttachment } from "@/lib/document-viewer-attachment"
 import { SlashCommandMenu, detectSlashFilter, parseSlashPrefix } from "@/components/SlashCommandMenu"
 import {
@@ -138,12 +161,37 @@ import { ChatEmptyStateHero } from "@/components/chat/ChatEmptyStateHero"
 import { DocumentPreview, type DocumentPreviewTarget } from "./document-preview"
 import { CodePreview } from "./code-preview"
 import SpotifyResults from "./spotify-results"
-import ComputerUseInterface from "./ComputerUseInterface"
-import ComputerUseReasoning from "./ComputerUseReasoning"
+// Panel "Computer Use": solo aparece cuando el usuario activa esa
+// herramienta. Lo bajamos a dynamic para sacarlo del bundle inicial.
+const ComputerUseInterface = dynamic(
+  () => import("./ComputerUseInterface"),
+  { ssr: false, loading: () => null },
+)
 import ExtractedDataDownload from "./ExtractedDataDownload"
 import { useComputerUse } from "@/hooks/use-computer-use"
 import { WordConnector } from "./WordConnector"
-import { ExcelConnector, type ExcelConnectorRef } from "./ExcelConnector"
+// Conector de Excel: forwardRef pesado. next/dynamic no propaga refs,
+// así que usamos React.lazy + Suspense en el callsite. La carga se
+// dispara cuando el usuario activa la herramienta o pasa el ratón
+// por el botón del menú (prefetch).
+const ExcelConnector = React.lazy(() =>
+  import("./ExcelConnector").then(m => ({ default: m.ExcelConnector })),
+)
+import type { ExcelConnectorRef } from "./ExcelConnector"
+let __excelConnectorModulePromise: Promise<typeof import("./ExcelConnector")> | null = null
+function prefetchExcelConnector() {
+  if (typeof window === "undefined") return
+  if (!__excelConnectorModulePromise) {
+    __excelConnectorModulePromise = import("./ExcelConnector")
+  }
+}
+let __computerUseModulePromise: Promise<typeof import("./ComputerUseInterface")> | null = null
+function prefetchComputerUseInterface() {
+  if (typeof window === "undefined") return
+  if (!__computerUseModulePromise) {
+    __computerUseModulePromise = import("./ComputerUseInterface")
+  }
+}
 import { resolveModelIconName } from "@/lib/model-icons"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import {
@@ -1194,6 +1242,8 @@ const ActionsDropdown = ({
                 <DropdownMenuItem
                   className="liquid-menu-item"
                   data-brand="excel"
+                  onMouseEnter={prefetchExcelConnector}
+                  onFocus={prefetchExcelConnector}
                   onClick={() => {
                     if (handleExcelConnectorToggle) {
                       handleExcelConnectorToggle();
@@ -1925,7 +1975,11 @@ const ActiveToolsDisplay = ({
                 </div>
               </DropdownMenuItem>
 
-              <DropdownMenuItem onSelect={(e) => e.preventDefault()}>
+              <DropdownMenuItem
+                onSelect={(e) => e.preventDefault()}
+                onMouseEnter={prefetchExcelConnector}
+                onFocus={prefetchExcelConnector}
+              >
                 <div className="flex items-center justify-between w-full">
                   <div className="flex items-center gap-2">
                     <img src="/icons/Excel.png" alt="Excel Connector" className="h-4 w-4" />
@@ -8652,11 +8706,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 />
               )}
               {!activeSearchActivity && isExcelConnectorActive && (
-                <ExcelConnector
-                  ref={excelConnectorRef}
-                  onClose={() => setIsExcelConnectorActive(false)}
-                  isGeneratingExternal={isGeneratingExcel}
-                />
+                <React.Suspense fallback={<div className="h-full w-full animate-pulse bg-muted/30" aria-hidden="true" />}>
+                  <ExcelConnector
+                    ref={excelConnectorRef}
+                    onClose={() => setIsExcelConnectorActive(false)}
+                    isGeneratingExternal={isGeneratingExcel}
+                  />
+                </React.Suspense>
               )}
               {!activeSearchActivity && activeArtifact && !isWordConnectorActive && !isExcelConnectorActive && !documentPreviewUrl && (
                 <ArtifactPanel />
