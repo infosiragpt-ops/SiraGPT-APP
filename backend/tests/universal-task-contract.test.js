@@ -113,6 +113,29 @@ test('negated output and no-internet directives do not create unwanted tools', (
   assert.ok(noInternet.user_constraints.includes('no_external_search:user_requested'));
 });
 
+test('text-only directives suppress artifact generation and forbid file tools', () => {
+  const slidesAsText = buildUniversalTaskContract({
+    rawUserRequest: 'hazme diapositivas pero solo texto en el chat',
+  });
+  const groundedText = buildUniversalTaskContract({
+    rawUserRequest: 'dame fuentes actuales sobre IA solo texto',
+  });
+
+  assert.equal(slidesAsText.pipeline, 'DirectAnswerPipeline');
+  assert.equal(slidesAsText.required_extension, null);
+  assert.equal(slidesAsText.artifact_required, false);
+  assert.deepEqual(slidesAsText.required_tools, ['finalize']);
+  assert.ok(slidesAsText.forbidden_tools.includes('create_document'));
+  assert.ok(slidesAsText.forbidden_tools.includes('verify_artifact'));
+  assert.ok(slidesAsText.user_constraints.includes('text_only:user_requested'));
+
+  assert.equal(groundedText.pipeline, 'ResearchGroundingPipeline');
+  assert.equal(groundedText.artifact_required, false);
+  assert.equal(groundedText.source_requirements.required, true);
+  assert.ok(groundedText.required_tools.includes('web_search'));
+  assert.ok(groundedText.forbidden_tools.includes('create_document'));
+});
+
 test('freshness questions require grounded web search', () => {
   const contract = buildUniversalTaskContract({ rawUserRequest: 'qué pasó hoy con OpenAI' });
 

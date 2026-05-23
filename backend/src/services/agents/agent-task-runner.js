@@ -61,17 +61,21 @@ function buildFinalizeProfile(executionProfile, universalTaskContract) {
   // Dynamic approved tool list from the manifest — no hardcoded names.
   // This stays current as new tools are registered without code changes.
   const appTools = new Set(listManifests().map((m) => m.name));
+  const forbiddenTools = new Set(Array.isArray(universalTaskContract?.forbidden_tools)
+    ? universalTaskContract.forbidden_tools
+    : []);
   const executableContractTools = new Set(
     (universalTaskContract?.required_tools || [])
       .filter((tool) => tool !== 'finalize')
       .filter((tool) => appTools.has(tool))
+      .filter((tool) => !forbiddenTools.has(tool))
   );
   return {
     ...(executionProfile || {}),
     requiredTools: Array.from(new Set([
       ...(executionProfile?.requiredTools || []),
       ...executableContractTools,
-    ])),
+    ])).filter((tool) => !forbiddenTools.has(tool)),
     minimumToolCalls: {
       ...(executionProfile?.minimumToolCalls || {}),
       ...(universalTaskContract?.source_requirements?.verification_policy === 'strict' && executableContractTools.has('web_search')
@@ -977,7 +981,10 @@ async function runAgentTaskJob(payload = {}, job = null) {
   emit({ type: 'document_policy', policy: documentPolicy });
 
   const langGraphLayer = await buildLangGraphLayer({ taskId, documentPolicy });
-  const tools = buildTaskTools();
+  const forbiddenToolNames = new Set(Array.isArray(universalTaskContract.forbidden_tools)
+    ? universalTaskContract.forbidden_tools
+    : []);
+  const tools = buildTaskTools().filter((tool) => !forbiddenToolNames.has(tool.name));
   const frameworkStatus = await buildAgenticFrameworkStatus({ tools, langGraphLayer });
   emit({
     type: 'framework_status',

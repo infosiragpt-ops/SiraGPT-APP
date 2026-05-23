@@ -307,6 +307,17 @@ function productSecondaryIntents(contract, rawDecision) {
 }
 
 function productToolsForContract(contract, primary, rawDecision) {
+  const forbidden = new Set(Array.isArray(contract?.forbidden_tools) ? contract.forbidden_tools : []);
+  const textOnly = (contract?.user_constraints || []).includes('text_only:user_requested');
+  if (
+    textOnly
+    && contract?.pipeline === 'DirectAnswerPipeline'
+    && !contract?.source_requirements?.required
+    && !contract?.artifact_required
+    && !contract?.grounding_required
+  ) {
+    return ['finalize'];
+  }
   const tools = [
     ...(productIntentRouter.TOOL_BUNDLE_BY_INTENT[primary] || []),
     ...(rawDecision.required_tools || []),
@@ -323,7 +334,7 @@ function productToolsForContract(contract, primary, rawDecision) {
   if (contract?.pipeline === 'VisualArtifactPipeline') {
     tools.push('design.tokens.build', 'wcag.contrast.check', 'create_document', 'verify_artifact');
   }
-  return [...new Set(tools)];
+  return [...new Set(tools)].filter((tool) => !forbidden.has(tool));
 }
 
 function productFinalOutputForContract(contract, primary, fallback) {
@@ -400,6 +411,7 @@ function semanticTools(contract, structuredIntent, fileIds = []) {
     ...(structuredIntent?.required_tools || []),
     ...(contract?.required_tools || []),
   ]);
+  const forbidden = new Set(Array.isArray(contract?.forbidden_tools) ? contract.forbidden_tools : []);
   const raw = contract?.raw_user_request || '';
   const mentionsSpreadsheet = /\b(excel|xlsx|csv|hoja de c[aá]lculo|spreadsheet|tabla|dataset|base de datos)\b/i.test(raw)
     || fileIds.some((id) => /\.(xlsx|xls|csv)$/i.test(String(id)));
@@ -417,6 +429,30 @@ function semanticTools(contract, structuredIntent, fileIds = []) {
   if (contract?.required_extension === '.html') tools.add('html_renderer');
   if (contract?.required_extension === '.svg') tools.add('svg_renderer');
   if (contract?.artifact_required) tools.add('artifact_validator');
+  for (const toolName of forbidden) tools.delete(toolName);
+  if ((contract?.user_constraints || []).includes('text_only:user_requested')) {
+    for (const toolName of [
+      'create_document',
+      'verify_artifact',
+      'docx_renderer',
+      'xlsx_renderer',
+      'pptx_renderer',
+      'pdf_renderer',
+      'csv_renderer',
+      'html_renderer',
+      'svg_renderer',
+      'artifact_validator',
+    ]) tools.delete(toolName);
+  }
+  if (
+    (contract?.user_constraints || []).includes('text_only:user_requested')
+    && contract?.pipeline === 'DirectAnswerPipeline'
+    && !contract?.source_requirements?.required
+    && !contract?.artifact_required
+    && !contract?.grounding_required
+  ) {
+    return ['finalize'];
+  }
   return [...tools].slice(0, 24);
 }
 

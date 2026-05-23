@@ -85,6 +85,41 @@ describe("semantic intent router · structured profile", () => {
     assert.equal(offline.request_intelligence.context.has_no_search_directive, true)
   })
 
+  it("keeps text-only requests in chat even when artifact words appear", () => {
+    const slidesAsText = semanticRouter.buildSemanticIntentAnalysis({
+      rawUserRequest: "hazme diapositivas pero solo texto en el chat",
+    })
+    const noFileSummary = semanticRouter.buildSemanticIntentAnalysis({
+      rawUserRequest: "no crees archivo, solo dime las ideas principales",
+    })
+
+    assert.equal(slidesAsText.intent, "text")
+    assert.equal(slidesAsText.contract.pipeline, "DirectAnswerPipeline")
+    assert.equal(slidesAsText.contract.artifact_required, false)
+    assert.equal(slidesAsText.contract.required_extension, null)
+    assert.equal(slidesAsText.request_intelligence.context.has_text_only_directive, true)
+    assert.ok(slidesAsText.contract.forbidden_tools.includes("create_document"))
+    assert.deepEqual(slidesAsText.semantic_profile.required_tools, ["finalize"])
+
+    assert.equal(noFileSummary.intent, "text")
+    assert.equal(noFileSummary.contract.pipeline, "DirectAnswerPipeline")
+    assert.equal(noFileSummary.request_intelligence.context.asks_existing_document_question, false)
+  })
+
+  it("allows web grounding with text-only delivery but blocks file creation", () => {
+    const analysis = semanticRouter.buildSemanticIntentAnalysis({
+      rawUserRequest: "dame fuentes actuales sobre IA solo texto",
+    })
+
+    assert.equal(analysis.intent, "web_search")
+    assert.equal(analysis.contract.pipeline, "ResearchGroundingPipeline")
+    assert.equal(analysis.contract.artifact_required, false)
+    assert.equal(analysis.contract.source_requirements.required, true)
+    assert.ok(analysis.contract.required_tools.includes("web_search"))
+    assert.ok(analysis.contract.forbidden_tools.includes("create_document"))
+    assert.ok(!analysis.semantic_profile.required_tools.includes("create_document"))
+  })
+
   it("answers questions about an uploaded Word instead of generating a new Word", () => {
     const analysis = semanticRouter.buildSemanticIntentAnalysis({
       rawUserRequest: "cual es la primera palabra del word?",

@@ -72,6 +72,11 @@ const LEXICON = Object.freeze({
     "no buscar", "no uses internet", "no consultes internet", "sin fuentes",
     "sin citas", "sin referencias",
   ],
+  textOnly: [
+    "solo texto", "solamente texto", "unicamente texto", "respuesta textual",
+    "texto plano", "sin archivo", "sin documento", "no generes archivo",
+    "no crees archivo", "no hagas archivo", "no adjuntes archivo",
+  ],
   data: [
     "datos", "dataset", "tabla", "tablas", "filas", "columnas", "formula",
     "formulas", "dashboard", "kpi", "metricas", "ventas", "gastos", "registros",
@@ -149,6 +154,7 @@ function buildEvidence(terms) {
 function detectRequestedFormats({ tokens, terms, evidence }) {
   const requested = [];
   const excluded = [];
+  const textOnly = hasTextOnlyDirective(tokens);
   for (const definition of FORMAT_DEFINITIONS) {
     const occurrences = [];
     for (const term of definition.terms) {
@@ -178,6 +184,19 @@ function detectRequestedFormats({ tokens, terms, evidence }) {
         evidence: occurrenceEvidence.flatMap(e => e.evidence).slice(0, 8),
       });
     }
+  }
+  if (textOnly && requested.length > 0) {
+    return {
+      requested_formats: [],
+      excluded_formats: dedupeFormats([
+        ...excluded,
+        ...requested.map((item) => ({
+          ...item,
+          reason: "text_only_by_user",
+          evidence: ["text_only_directive"],
+        })),
+      ]),
+    };
   }
   return {
     requested_formats: dedupeFormats(requested),
@@ -219,12 +238,27 @@ function classifyFormatOccurrence({ tokens, occurrence, evidence }) {
 const NO_SEARCH_RE =
   /\b(?:sin\s+(?:internet|b[uú]squeda(?:\s+web)?|fuentes|citas|referencias)|no\s+(?:busques?|buscar|uses?\s+internet|consultes?\s+(?:internet|la\s+web)))\b/i;
 
+const TEXT_ONLY_RE =
+  /\b(?:solo|solamente|unicamente)\s+(?:texto|respuesta|contenido|explicacion)\b|\brespuesta\s+textual\b|\btexto\s+plano\b|\b(?:sin|no\s+(?:crees?|crear|generes?|generar|hagas?|hacer|entregues?|entregar|produzcas?|producir|adjuntes?|adjuntar))\s+(?:archivo|documento|docx|word|pptx|powerpoint|presentacion|pdf|excel|xlsx)\b/i;
+
+const PRIVATE_FILE_REFERENCE_RE =
+  /\b(?:adjunt[oa]s?|subido|cargado|uploaded|attached)\b|\b(?:este|esta|ese|esa|el|la|mi|mis)\s+(?:archivo|documento|pdf|word|docx|excel|xlsx|ppt|pptx)\b|\b(?:archivo|documento|pdf|word|docx|excel|xlsx|ppt|pptx)\s+(?:adjunto|subido|cargado|anterior)\b/i;
+
 function tokensText(tokens) {
   return tokens.map(t => t.value).join(" ");
 }
 
 function hasExplicitNoSearch(tokens) {
   return NO_SEARCH_RE.test(tokensText(tokens));
+}
+
+function hasTextOnlyDirective(tokens) {
+  return TEXT_ONLY_RE.test(tokensText(tokens));
+}
+
+function hasExplicitPrivateFileReference(tokens) {
+  if (hasTextOnlyDirective(tokens)) return false;
+  return PRIVATE_FILE_REFERENCE_RE.test(tokensText(tokens));
 }
 
 function isFreshnessLookup(tokens) {
@@ -249,10 +283,13 @@ function buildContext({ tokens, terms, evidence, fileIds, conversationHistory, r
   const hasHistoryFiles = Array.isArray(conversationHistory)
     && conversationHistory.slice(-6).some(m => Array.isArray(m?.files) && m.files.length > 0);
   const noSearch = hasExplicitNoSearch(tokens);
+  const textOnly = hasTextOnlyDirective(tokens);
   const freshnessLookup = !noSearch && isFreshnessLookup(tokens);
   const contextualFollowup = isContextualFollowup(tokens, conversationHistory);
+  const explicitPrivateFileReference = hasExplicitPrivateFileReference(tokens);
   const asksExistingDocumentQuestion = evidence.understand.present
-    && (hasFiles || hasHistoryFiles || evidence.fileContext.present)
+    && (hasFiles || hasHistoryFiles || explicitPrivateFileReference)
+    && !textOnly
     && requestedFormats.length === 0;
   return Object.freeze({
     has_files: hasFiles || hasHistoryFiles,
@@ -260,7 +297,9 @@ function buildContext({ tokens, terms, evidence, fileIds, conversationHistory, r
     has_research_requirement: !noSearch && (evidence.research.present || freshnessLookup),
     has_freshness_lookup: freshnessLookup,
     has_no_search_directive: noSearch,
+    has_text_only_directive: textOnly,
     has_contextual_followup: contextualFollowup,
+    has_private_file_reference: explicitPrivateFileReference,
     has_data_work: evidence.data.present,
     has_code_work: evidence.code.present,
     has_web_build: evidence.web.present && (evidence.create.present || evidence.code.present),
@@ -303,6 +342,14 @@ function scoreIntents({ evidence, context, requestedFormats, excludedFormats }) 
     scores.visual_artifact -= 0.2;
   }
   if (excludedFormats.some(f => f.extension === ".docx")) scores.document_generation -= 0.18;
+  if (context.has_text_only_directive) {
+    scores.visual_artifact -= 0.32;
+    scores.document_generation -= 0.34;
+    scores.spreadsheet_generation -= 0.3;
+    scores.slide_generation -= 0.34;
+    scores.image_generation -= 0.18;
+    scores.direct_answer += 0.22;
+  }
   if (context.has_contextual_followup) scores.direct_answer += 0.18;
   if (context.has_math_work && !context.has_generation_action) scores.direct_answer += 0.18;
   if (context.has_long_running_signal && (context.has_research_requirement || requestedFormats.length > 0 || context.has_code_work)) {
@@ -331,6 +378,7 @@ function inferPipeline(intent, requestedFormats, context) {
 
 function inferAmbiguity({ tokens, context, requestedFormats, best }) {
   if (tokens.length === 0) return 1;
+  if (context.has_text_only_directive) return 0.12;
   if (context.has_contextual_followup) return 0.15;
   if (tokens.length < 3 && !context.has_files) return 0.85;
   if (best.score < 0.55) return 0.62;
@@ -422,5 +470,7 @@ module.exports = {
     buildNgrams,
     detectRequestedFormats,
     scoreIntents,
+    hasTextOnlyDirective,
+    hasExplicitPrivateFileReference,
   },
 };
