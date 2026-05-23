@@ -5,10 +5,22 @@ import { useState, useEffect, useMemo, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { cn, downloadHref, downloadUrlAsFile } from "@/lib/utils"
-import UnifiedDocumentViewer, {
-    prewarmUnifiedDocumentPreview,
-    type AttachmentLike,
-} from "@/components/viewers/UnifiedDocumentViewer"
+import dynamic from "next/dynamic"
+import type { AttachmentLike } from "@/components/viewers/UnifiedDocumentViewer"
+const UnifiedDocumentViewer = dynamic(
+    () => import("@/components/viewers/UnifiedDocumentViewer"),
+    { ssr: false, loading: () => null }
+)
+let __unifiedViewerModulePromise: Promise<typeof import("@/components/viewers/UnifiedDocumentViewer")> | null = null
+function prewarmUnifiedDocumentPreview(attachment: AttachmentLike): void {
+    if (typeof window === "undefined") return
+    if (!__unifiedViewerModulePromise) {
+        __unifiedViewerModulePromise = import("@/components/viewers/UnifiedDocumentViewer")
+    }
+    __unifiedViewerModulePromise.then(mod => {
+        try { mod.prewarmUnifiedDocumentPreview(attachment) } catch { /* noop */ }
+    }).catch(() => { /* noop */ })
+}
 import { FileProcessingBadge } from "@/components/file-processing-badge"
 import { InteractiveArtifact, extractArtifact } from "@/components/artifact/InteractiveArtifact"
 import { AgenticStepsRenderer } from "@/components/agentic-steps"
@@ -47,7 +59,6 @@ import TableControls from './TableControls';
 import ImageGenerationEffect from './ImageGenerationEffect';
 // import CodePreview from './code-preview';
 import { parseCodeFromContent, hasWebDevelopmentCode, combineWebCode, detectCodeType } from '@/lib/code-detection';
-import dynamic from 'next/dynamic';
 const ChartComponent = dynamic(() => import('./chart-component'), {
   ssr: false,
   loading: () => <div className="h-64 w-full animate-pulse bg-muted/30 rounded" aria-hidden="true" />,
