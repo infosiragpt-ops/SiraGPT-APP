@@ -764,6 +764,141 @@ Este tracker registra lotes realmente implementados y validados en el estado act
 - Pruebas: se amplio `tests/scripts/local-chat-recovery.test.ts` para verificar el script.
 - Verificacion: `npm run type-check`, prueba focalizada, script real `doctor:local-chat:fingerprint` y suite completa.
 
+## Lote 109: snapshot baseline local
+
+- Estado: implementado y validado.
+- Mejora cubierta: persistir un baseline saneado del diagnostico local.
+- Cambio: se agrego `buildBaselineSnapshot` a `scripts/local-chat-recovery.js`.
+- Control: guarda hashes, estados y acciones sin comandos ni secretos.
+- Pruebas: se agrego cobertura de snapshot y ausencia de fugas.
+- Verificacion: `node -c`, type-check, prueba focalizada, scripts reales, `git diff --check` y `npm test`.
+
+## Lote 110: lectura de baseline local
+
+- Estado: implementado y validado.
+- Mejora cubierta: leer baselines existentes sin fallar cuando faltan.
+- Cambio: se agrego `readBaselineFile` con respuesta `found=false`.
+- Control: la ruta relativa se resuelve desde el `cwd` del proceso.
+- Pruebas: se cubrio archivo presente y archivo inexistente.
+- Verificacion: `node -c`, type-check, prueba focalizada, scripts reales, `git diff --check` y `npm test`.
+
+## Lote 111: escritura de baseline local
+
+- Estado: implementado y validado.
+- Mejora cubierta: escribir el baseline desde CLI o tests.
+- Cambio: se agrego `writeBaselineFile`.
+- Control: crea directorios y normaliza JSON con claves estables.
+- Pruebas: se valido escritura en directorio temporal y redaccion de comandos.
+- Verificacion: `node -c`, type-check, prueba focalizada, scripts reales, `git diff --check` y `npm test`.
+
+## Lote 112: comparacion contra baseline
+
+- Estado: implementado y validado.
+- Mejora cubierta: detectar cambios entre diagnostico actual y baseline.
+- Cambio: se agrego `buildBaselineComparison`.
+- Control: reporta hash actual, hash base, cambios de checks y delta de acciones.
+- Pruebas: se cubrio regresion por nuevo frontend bloqueado.
+- Verificacion: `node -c`, type-check, prueba focalizada, scripts reales, `git diff --check` y `npm test`.
+
+## Lote 113: CLI de baseline
+
+- Estado: implementado y validado.
+- Mejora cubierta: consultar y escribir baseline desde npm.
+- Cambio: se agregaron `--baseline-json` y `--write-baseline`.
+- Control: `doctor:local-chat:baseline` y `doctor:local-chat:baseline:write` usan salida compacta.
+- Pruebas: se ampliaron parseo, ayuda y scripts dedicados.
+- Verificacion: `node -c`, type-check, prueba focalizada, scripts reales, `git diff --check` y `npm test`.
+
+## Lote 114: ranking explicito de estados
+
+- Estado: implementado y validado.
+- Mejora cubierta: comparar severidad de estados sin heuristicas fragiles.
+- Cambio: se agrego `statusRank`.
+- Control: `ok`, `warning`, `blocked` y `missing` tienen orden estable.
+- Pruebas: se valido que `ok` supere a `blocked`.
+- Verificacion: `node -c`, type-check, prueba focalizada, scripts reales, `git diff --check` y `npm test`.
+
+## Lote 115: deteccion de regresiones
+
+- Estado: implementado y validado.
+- Mejora cubierta: separar cambios que empeoran el diagnostico.
+- Cambio: se agrego `isCheckRegression` y `actionRegressions`.
+- Control: un check nuevo no-ok cuenta como regresion.
+- Pruebas: se cubrio `frontend_routes` de `missing` a `blocked`.
+- Verificacion: `node -c`, type-check, prueba focalizada, scripts reales, `git diff --check` y `npm test`.
+
+## Lote 116: deteccion de mejoras
+
+- Estado: implementado y validado.
+- Mejora cubierta: separar cambios que recuperan checks o acciones.
+- Cambio: se agrego `isCheckImprovement` y `actionImprovements`.
+- Control: una accion correctiva removida cuenta como mejora.
+- Pruebas: se cubrio `backend_auth` de `blocked` a `ok`.
+- Verificacion: `node -c`, type-check, prueba focalizada, scripts reales, `git diff --check` y `npm test`.
+
+## Lote 117: clasificacion de tendencia
+
+- Estado: implementado y validado.
+- Mejora cubierta: resumir cambios como `regression`, `improvement`, `mixed`, `unchanged` o `no_baseline`.
+- Cambio: se agrego `classifyBaselineTrend`.
+- Control: no infiere tendencia desde un unico contador.
+- Pruebas: se valido mejora real y baseline ausente.
+- Verificacion: `node -c`, type-check, prueba focalizada, scripts reales, `git diff --check` y `npm test`.
+
+## Lote 118: CLI de tendencia baseline
+
+- Estado: implementado y validado.
+- Mejora cubierta: consultar tendencia actual contra baseline desde npm.
+- Cambio: se agrego `--baseline-trend-json`.
+- Control: `doctor:local-chat:baseline-trend` devuelve JSON compacto y seguro.
+- Pruebas: se ampliaron parseo, ayuda y script dedicado.
+- Verificacion: `node -c`, type-check, prueba focalizada, scripts reales, `git diff --check` y `npm test`.
+
+## Lote 119: entrada historica saneada
+
+- Estado: implementado y validado.
+- Mejora cubierta: registrar ejecuciones locales sin guardar comandos.
+- Cambio: se agrego `buildHistoryEntry`.
+- Control: persiste hash, estado, healthCode y accion primaria.
+- Pruebas: se valido que no se escriban passwords ni comandos.
+- Verificacion: `node -c`, type-check, prueba focalizada, scripts reales, `git diff --check` y `npm test`.
+
+## Lote 120: historial JSONL append-only
+
+- Estado: implementado y validado.
+- Mejora cubierta: mantener historial local incremental.
+- Cambio: se agrego `appendHistoryEntry`.
+- Control: crea directorios y agrega una linea JSON estable por ejecucion.
+- Pruebas: se escribieron dos entradas en archivo temporal.
+- Verificacion: `node -c`, type-check, prueba focalizada, scripts reales, `git diff --check` y `npm test`.
+
+## Lote 121: lectura de historial
+
+- Estado: implementado y validado.
+- Mejora cubierta: leer historial JSONL o iniciar vacio.
+- Cambio: se agrego `readHistoryFile`.
+- Control: un historial faltante devuelve `entries=[]`.
+- Pruebas: se cubrieron historial existente y archivo ausente.
+- Verificacion: `node -c`, type-check, prueba focalizada, scripts reales, `git diff --check` y `npm test`.
+
+## Lote 122: resumen historico
+
+- Estado: implementado y validado.
+- Mejora cubierta: comparar el diagnostico actual con ejecuciones previas.
+- Cambio: se agrego `buildHistorySummary`.
+- Control: reporta `seenCurrentHash`, hash previo y healthCode previo.
+- Pruebas: se valido resumen con dos corridas consecutivas.
+- Verificacion: `node -c`, type-check, prueba focalizada, scripts reales, `git diff --check` y `npm test`.
+
+## Lote 123: CLI de historial local
+
+- Estado: implementado y validado.
+- Mejora cubierta: consultar y escribir historial desde npm.
+- Cambio: se agregaron `--history-json` y `--write-history`.
+- Control: `doctor:local-chat:history` y `doctor:local-chat:history:write` son compactos y saneados.
+- Pruebas: se ampliaron parseo, ayuda y scripts dedicados.
+- Verificacion: `node -c`, type-check, prueba focalizada, scripts reales, `git diff --check` y `npm test`.
+
 ## Siguientes lotes
 
-- Lote 109: agregar comparacion entre diagnostico actual y baseline local.
+- Lote 124: agregar retencion configurable del historial diagnostico local.

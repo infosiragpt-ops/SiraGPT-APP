@@ -35,6 +35,7 @@ describe('buildChatListWhere', () => {
   test('scopes to standalone chats by default', () => {
     assert.deepEqual(buildChatListWhere({ userId: 'user-1' }), {
       userId: 'user-1',
+      isArchived: false,
       projectId: null,
     });
   });
@@ -42,6 +43,7 @@ describe('buildChatListWhere', () => {
   test('scopes to a project when projectId is provided', () => {
     assert.deepEqual(buildChatListWhere({ userId: 'user-1', projectId: 'project-1' }), {
       userId: 'user-1',
+      isArchived: false,
       projectId: 'project-1',
     });
   });
@@ -49,12 +51,21 @@ describe('buildChatListWhere', () => {
   test('can include project chats without projectId filtering', () => {
     assert.deepEqual(buildChatListWhere({ userId: 'user-1', includeProjects: true }), {
       userId: 'user-1',
+      isArchived: false,
+    });
+  });
+
+  test('can include archived chats explicitly', () => {
+    assert.deepEqual(buildChatListWhere({ userId: 'user-1', includeArchived: true }), {
+      userId: 'user-1',
+      projectId: null,
     });
   });
 
   test('adds title and message search filters after trimming search text', () => {
     assert.deepEqual(buildChatListWhere({ userId: 'user-1', search: '  thesis  ' }), {
       userId: 'user-1',
+      isArchived: false,
       projectId: null,
       OR: [
         { title: { contains: 'thesis', mode: 'insensitive' } },

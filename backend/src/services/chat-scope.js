@@ -8,10 +8,20 @@ function parseBoolean(value) {
   return value === true || value === 'true' || value === '1';
 }
 
-function buildChatListWhere({ userId, projectId = null, includeProjects = false, search = '' }) {
+function buildChatListWhere({
+  userId,
+  projectId = null,
+  includeProjects = false,
+  includeArchived = false,
+  search = '',
+}) {
   if (!userId) throw new Error('userId is required');
 
   const where = { userId };
+
+  if (!includeArchived) {
+    where.isArchived = false;
+  }
 
   if (projectId) {
     where.projectId = projectId;

@@ -559,6 +559,141 @@ describe("local chat recovery doctor", () => {
     assert.equal(JSON.stringify(fingerprint).includes("super-secret"), false)
   })
 
+  it("compares current diagnostics with a sanitized baseline snapshot", () => {
+    const baselineSummary = recovery.buildRecoveryCiSummary({
+      ok: false,
+      frontendUrl: "http://127.0.0.1:3000",
+      apiUrl: "http://127.0.0.1:5000",
+      checks: [
+        { name: "backend_auth", ok: false, required: true, endpoints: [{ path: "/health/live", ok: false }] },
+      ],
+    })
+    const currentSummary = recovery.buildRecoveryCiSummary({
+      ok: false,
+      frontendUrl: "http://127.0.0.1:3000",
+      apiUrl: "http://127.0.0.1:5000",
+      checks: [
+        { name: "frontend_routes", ok: false, required: true },
+        { name: "backend_auth", ok: false, required: true, endpoints: [{ path: "/health/live", ok: false }] },
+      ],
+    })
+    const comparison = recovery.buildBaselineComparison(currentSummary, recovery.buildBaselineSnapshot(baselineSummary))
+
+    assert.equal(comparison.baselinePresent, true)
+    assert.equal(comparison.comparisonStatus, "changed")
+    assert.equal(comparison.changed, true)
+    assert.equal(comparison.changeClassification, "regression")
+    assert.equal(comparison.regressionCount, 2)
+    assert.equal(comparison.actionDelta.added.some((action: { id: string }) => action.id === "frontend_dev_server"), true)
+    assert.equal(comparison.actionRegressions.some((action: { id: string }) => action.id === "frontend_dev_server"), true)
+    assert.deepEqual(comparison.checkStatusChanges.find((change: { name: string }) => change.name === "frontend_routes"), {
+      name: "frontend_routes",
+      required: true,
+      baselineStatus: "missing",
+      currentStatus: "blocked",
+    })
+    assert.equal(JSON.stringify(comparison).includes("npm run dev"), false)
+  })
+
+  it("summarizes baseline trend as improvement when checks recover", () => {
+    const baselineSummary = recovery.buildRecoveryCiSummary({
+      ok: false,
+      frontendUrl: "http://127.0.0.1:3000",
+      apiUrl: "http://127.0.0.1:5000",
+      checks: [
+        { name: "backend_auth", ok: false, required: true, endpoints: [{ path: "/health/live", ok: false }] },
+      ],
+    })
+    const currentSummary = recovery.buildRecoveryCiSummary({
+      ok: true,
+      frontendUrl: "http://127.0.0.1:3000",
+      apiUrl: "http://127.0.0.1:5000",
+      checks: [
+        { name: "backend_auth", ok: true, required: true },
+      ],
+    })
+    const trend = recovery.buildBaselineTrendSummary(currentSummary, recovery.buildBaselineSnapshot(baselineSummary))
+
+    assert.equal(recovery.statusRank("ok") > recovery.statusRank("blocked"), true)
+    assert.equal(trend.changeClassification, "improvement")
+    assert.equal(trend.improvementCount, 2)
+    assert.equal(trend.regressionCount, 0)
+    assert.equal(trend.checkImprovements.some((change: { name: string }) => change.name === "backend_auth"), true)
+    assert.equal(trend.actionImprovements.some((action: { id: string }) => action.id === "backend_dev_server"), true)
+  })
+
+  it("reads and writes sanitized baseline files", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "siragpt-baseline-"))
+    const baselinePath = path.join(directory, "baseline.json")
+    const summary = recovery.buildRecoveryCiSummary({
+      ok: false,
+      frontendUrl: "http://127.0.0.1:3000",
+      apiUrl: "http://127.0.0.1:5000",
+      checks: [{ name: "backend_auth", ok: false, required: true }],
+    }, [
+      {
+        id: "secret_action",
+        title: "Secret",
+        command: "SIRAGPT_TEST_PASSWORD=super-secret npm run dev",
+        detail: "safe",
+      },
+    ])
+
+    const writtenPath = recovery.writeBaselineFile(baselinePath, summary)
+    const read = recovery.readBaselineFile(baselinePath)
+    const missing = recovery.readBaselineFile(path.join(directory, "missing.json"))
+
+    assert.equal(writtenPath, baselinePath)
+    assert.equal(read.found, true)
+    assert.equal(read.snapshot.baselineVersion, 1)
+    assert.equal(read.snapshot.actions[0].id, "secret_action")
+    assert.equal(JSON.stringify(read.snapshot).includes("super-secret"), false)
+    assert.equal(JSON.stringify(read.snapshot).includes("npm run dev"), false)
+    assert.equal(missing.found, false)
+    assert.equal(missing.snapshot, null)
+  })
+
+  it("appends sanitized diagnostic history and summarizes previous runs", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "siragpt-history-"))
+    const historyPath = path.join(directory, "history.jsonl")
+    const previousSummary = recovery.buildRecoveryCiSummary({
+      ok: false,
+      frontendUrl: "http://127.0.0.1:3000",
+      apiUrl: "http://127.0.0.1:5000",
+      checks: [{ name: "backend_auth", ok: false, required: true }],
+    }, [
+      {
+        id: "secret_action",
+        title: "Secret",
+        command: "SIRAGPT_TEST_PASSWORD=super-secret npm run dev",
+        detail: "safe",
+      },
+    ])
+    const currentSummary = recovery.buildRecoveryCiSummary({
+      ok: true,
+      frontendUrl: "http://127.0.0.1:3000",
+      apiUrl: "http://127.0.0.1:5000",
+      checks: [{ name: "backend_auth", ok: true, required: true }],
+    })
+
+    recovery.appendHistoryEntry(historyPath, previousSummary)
+    recovery.appendHistoryEntry(historyPath, currentSummary)
+    const history = recovery.readHistoryFile(historyPath)
+    const summary = recovery.buildHistorySummary(currentSummary, history.entries)
+    const missing = recovery.readHistoryFile(path.join(directory, "missing.jsonl"))
+
+    assert.equal(history.found, true)
+    assert.equal(history.entries.length, 2)
+    assert.equal(summary.entryCount, 2)
+    assert.equal(summary.seenCurrentHash, true)
+    assert.equal(summary.previousHash, previousSummary.diagnosticHash)
+    assert.equal(summary.previousHealthCode, previousSummary.healthCode)
+    assert.equal(JSON.stringify(history.entries).includes("super-secret"), false)
+    assert.equal(JSON.stringify(history.entries).includes("npm run dev"), false)
+    assert.equal(missing.found, false)
+    assert.deepEqual(missing.entries, [])
+  })
+
   it("formats markdown with primary failure and primary action", () => {
     const report = recovery.formatMarkdownReport({
       ok: false,
@@ -654,7 +789,33 @@ describe("local chat recovery doctor", () => {
 
   it("parses timeout and strict env flags", () => {
     const readinessArgs = readiness.parseArgs(["--strict-env", "--timeout-ms", "750", "--require-login", "--compact-json", "--inspect-ports"])
-    const recoveryArgs = recovery.parseArgs(["--strict-env", "--timeout-ms", "750", "--quiet", "--require-login", "--compact-json", "--inspect-ports", "--status-json", "--actions-json", "--matrix-json", "--impact-json", "--priority-json", "--next-action-json", "--plan-json", "--fingerprint-json", "--remediation-catalog-json"])
+    const recoveryArgs = recovery.parseArgs([
+      "--strict-env",
+      "--timeout-ms",
+      "750",
+      "--quiet",
+      "--require-login",
+      "--compact-json",
+      "--inspect-ports",
+      "--status-json",
+      "--actions-json",
+      "--matrix-json",
+      "--impact-json",
+      "--priority-json",
+      "--next-action-json",
+      "--plan-json",
+      "--fingerprint-json",
+      "--baseline-json",
+      "tmp/custom-baseline.json",
+      "--baseline-trend-json",
+      "--history-json",
+      "tmp/history.jsonl",
+      "--write-baseline",
+      "tmp/write-baseline.json",
+      "--write-history",
+      "tmp/write-history.jsonl",
+      "--remediation-catalog-json",
+    ])
 
     assert.equal(readinessArgs.strictEnv, true)
     assert.equal(readinessArgs.timeoutMs, 750)
@@ -676,6 +837,13 @@ describe("local chat recovery doctor", () => {
     assert.equal(recoveryArgs.nextActionJson, true)
     assert.equal(recoveryArgs.planJson, true)
     assert.equal(recoveryArgs.fingerprintJson, true)
+    assert.equal(recoveryArgs.baselineJson, true)
+    assert.equal(recoveryArgs.baselineTrendJson, true)
+    assert.equal(recoveryArgs.baselinePath, "tmp/custom-baseline.json")
+    assert.equal(recoveryArgs.historyJson, true)
+    assert.equal(recoveryArgs.historyPath, "tmp/history.jsonl")
+    assert.equal(recoveryArgs.writeBaseline, "tmp/write-baseline.json")
+    assert.equal(recoveryArgs.writeHistory, "tmp/write-history.jsonl")
     assert.equal(recoveryArgs.remediationCatalogJson, true)
   })
 
@@ -735,6 +903,11 @@ describe("local chat recovery doctor", () => {
     assert.match(help, /--next-action-json/)
     assert.match(help, /--plan-json/)
     assert.match(help, /--fingerprint-json/)
+    assert.match(help, /--baseline-json/)
+    assert.match(help, /--baseline-trend-json/)
+    assert.match(help, /--history-json/)
+    assert.match(help, /--write-baseline/)
+    assert.match(help, /--write-history/)
     assert.match(help, /--remediation-catalog-json/)
     assert.match(help, /--profile <name>/)
     assert.match(help, /--compact-json/)
@@ -750,6 +923,9 @@ describe("local chat recovery doctor", () => {
     assert.match(help, /npm --silent run doctor:local-chat:next-action/)
     assert.match(help, /npm --silent run doctor:local-chat:plan/)
     assert.match(help, /npm --silent run doctor:local-chat:fingerprint/)
+    assert.match(help, /npm --silent run doctor:local-chat:baseline/)
+    assert.match(help, /npm --silent run doctor:local-chat:baseline-trend/)
+    assert.match(help, /npm --silent run doctor:local-chat:history/)
     assert.match(help, /npm --silent run doctor:local-chat:remediations/)
     assert.match(help, /npm --silent run doctor:local-chat:compact/)
     assert.match(help, /--inspect-ports --markdown/)
@@ -777,6 +953,11 @@ describe("local chat recovery doctor", () => {
     assert.equal(packageJson.scripts["doctor:local-chat:next-action"], "node scripts/local-chat-recovery.js --next-action-json --compact-json")
     assert.equal(packageJson.scripts["doctor:local-chat:plan"], "node scripts/local-chat-recovery.js --plan-json --compact-json")
     assert.equal(packageJson.scripts["doctor:local-chat:fingerprint"], "node scripts/local-chat-recovery.js --fingerprint-json --compact-json")
+    assert.equal(packageJson.scripts["doctor:local-chat:baseline"], "node scripts/local-chat-recovery.js --baseline-json --compact-json")
+    assert.equal(packageJson.scripts["doctor:local-chat:baseline-trend"], "node scripts/local-chat-recovery.js --baseline-trend-json --compact-json")
+    assert.equal(packageJson.scripts["doctor:local-chat:baseline:write"], "node scripts/local-chat-recovery.js --write-baseline --fingerprint-json --compact-json")
+    assert.equal(packageJson.scripts["doctor:local-chat:history"], "node scripts/local-chat-recovery.js --history-json --compact-json")
+    assert.equal(packageJson.scripts["doctor:local-chat:history:write"], "node scripts/local-chat-recovery.js --write-history --fingerprint-json --compact-json")
     assert.equal(packageJson.scripts["doctor:local-chat:remediations"], "node scripts/local-chat-recovery.js --remediation-catalog-json --compact-json")
     assert.equal(packageJson.scripts["doctor:local-chat:ci"], "node scripts/local-chat-recovery.js --summary-json --profile ci")
     assert.equal(packageJson.scripts["doctor:local-chat:checks"], "node scripts/local-chat-recovery.js --list-checks-json")

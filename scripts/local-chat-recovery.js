@@ -15,6 +15,8 @@ const {
 } = require("./local-chat-readiness.js")
 
 const DEFAULT_REPORT_PATH = "tmp/siragpt-local-chat-diagnostics.md"
+const DEFAULT_BASELINE_PATH = "tmp/siragpt-local-chat-baseline.json"
+const DEFAULT_HISTORY_PATH = "tmp/siragpt-local-chat-history.jsonl"
 const DEFAULT_REPORT_MAX_AGE_HOURS = 168
 const REPORT_FILE_PREFIX = "siragpt-local-chat-diagnostics"
 const RECOVERY_EXIT_CODES = {
@@ -483,6 +485,225 @@ function buildFingerprintSummary(compactSummary) {
   }
 }
 
+function compactBaselineCheck(check) {
+  return {
+    name: check.name,
+    required: Boolean(check.required),
+    status: check.status,
+  }
+}
+
+function compactBaselineAction(action) {
+  return {
+    id: action.id,
+    remediationCode: action.remediationCode,
+    severity: action.severity,
+    category: action.category,
+    sourceCheck: action.sourceCheck,
+    priorityScore: action.priorityScore,
+  }
+}
+
+function resolveBaselinePath(rawPath = DEFAULT_BASELINE_PATH, cwd = process.cwd()) {
+  const targetPath = String(rawPath || DEFAULT_BASELINE_PATH)
+  return path.isAbsolute(targetPath) ? targetPath : path.join(cwd, targetPath)
+}
+
+function buildBaselineSnapshot(compactSummary) {
+  return {
+    baselineVersion: 1,
+    ...buildFingerprintSummary(compactSummary),
+    checks: (compactSummary.checks || []).map(compactBaselineCheck),
+    actions: (compactSummary.actions || []).map(compactBaselineAction),
+  }
+}
+
+function writeBaselineFile(filePath, compactSummary, cwd = process.cwd()) {
+  const resolvedPath = resolveBaselinePath(filePath, cwd)
+  fs.mkdirSync(path.dirname(resolvedPath), { recursive: true })
+  fs.writeFileSync(resolvedPath, `${JSON.stringify(normalizeForStableJson(buildBaselineSnapshot(compactSummary)), null, 2)}\n`, "utf8")
+  return resolvedPath
+}
+
+function readBaselineFile(filePath = DEFAULT_BASELINE_PATH, cwd = process.cwd()) {
+  const resolvedPath = resolveBaselinePath(filePath, cwd)
+  if (!fs.existsSync(resolvedPath)) return { path: resolvedPath, found: false, snapshot: null }
+  return {
+    path: resolvedPath,
+    found: true,
+    snapshot: JSON.parse(fs.readFileSync(resolvedPath, "utf8")),
+  }
+}
+
+function keyById(items = []) {
+  return new Map(items.map((item) => [item.id || item.name, item]))
+}
+
+function statusRank(status) {
+  const ranks = {
+    missing: 0,
+    blocked: 1,
+    warning: 2,
+    ok: 3,
+  }
+  return ranks[status] ?? ranks.missing
+}
+
+function isCheckRegression(change) {
+  if (change.baselineStatus === "missing") return change.currentStatus !== "missing" && change.currentStatus !== "ok"
+  if (change.currentStatus === "missing") return false
+  return statusRank(change.currentStatus) < statusRank(change.baselineStatus)
+}
+
+function isCheckImprovement(change) {
+  if (change.currentStatus === "missing") return change.baselineStatus !== "missing" && change.baselineStatus !== "ok"
+  if (change.baselineStatus === "missing") return false
+  return statusRank(change.currentStatus) > statusRank(change.baselineStatus)
+}
+
+function classifyBaselineTrend(comparison) {
+  if (!comparison?.baselinePresent) return "no_baseline"
+  if (comparison.regressionCount > 0 && comparison.improvementCount > 0) return "mixed"
+  if (comparison.regressionCount > 0) return "regression"
+  if (comparison.improvementCount > 0) return "improvement"
+  if (!comparison.changed) return "unchanged"
+  return "changed"
+}
+
+function buildBaselineComparison(compactSummary, baselineSnapshot) {
+  const currentSnapshot = buildBaselineSnapshot(compactSummary)
+  const baselinePresent = Boolean(baselineSnapshot)
+  const currentChecks = keyById(currentSnapshot.checks)
+  const baselineChecks = keyById(baselineSnapshot?.checks || [])
+  const checkStatusChanges = Array.from(new Set([...baselineChecks.keys(), ...currentChecks.keys()]))
+    .sort()
+    .map((name) => {
+      const baselineCheck = baselineChecks.get(name)
+      const currentCheck = currentChecks.get(name)
+      return {
+        name,
+        required: Boolean(currentCheck?.required ?? baselineCheck?.required),
+        baselineStatus: baselineCheck?.status || "missing",
+        currentStatus: currentCheck?.status || "missing",
+      }
+    })
+    .filter((change) => change.baselineStatus !== change.currentStatus)
+  const currentActions = keyById(currentSnapshot.actions)
+  const baselineActions = keyById(baselineSnapshot?.actions || [])
+  const addedActions = Array.from(currentActions.keys())
+    .filter((id) => !baselineActions.has(id))
+    .sort()
+    .map((id) => currentActions.get(id))
+  const removedActions = Array.from(baselineActions.keys())
+    .filter((id) => !currentActions.has(id))
+    .sort()
+    .map((id) => baselineActions.get(id))
+  const checkRegressions = checkStatusChanges.filter(isCheckRegression)
+  const checkImprovements = checkStatusChanges.filter(isCheckImprovement)
+  const actionRegressions = addedActions.filter((action) => action.id !== "ready")
+  const actionImprovements = removedActions.filter((action) => action.id !== "ready")
+  const changed = baselinePresent && currentSnapshot.diagnosticHash !== baselineSnapshot.diagnosticHash
+  const comparison = {
+    schemaVersion: compactSummary.schemaVersion,
+    baselineVersion: baselineSnapshot?.baselineVersion || null,
+    baselinePresent,
+    comparisonStatus: baselinePresent ? (changed ? "changed" : "unchanged") : "missing_baseline",
+    changed,
+    currentHash: currentSnapshot.diagnosticHash,
+    baselineHash: baselineSnapshot?.diagnosticHash || "",
+    currentHealthCode: currentSnapshot.healthCode,
+    baselineHealthCode: baselineSnapshot?.healthCode || "",
+    statusChanged: baselinePresent && currentSnapshot.healthCode !== baselineSnapshot.healthCode,
+    actionDelta: {
+      added: addedActions,
+      removed: removedActions,
+    },
+    checkStatusChanges,
+    checkRegressions,
+    checkImprovements,
+    actionRegressions,
+    actionImprovements,
+  }
+  comparison.regressionCount = checkRegressions.length + actionRegressions.length
+  comparison.improvementCount = checkImprovements.length + actionImprovements.length
+  comparison.changeClassification = classifyBaselineTrend(comparison)
+  return comparison
+}
+
+function buildBaselineTrendSummary(compactSummary, baselineSnapshot) {
+  const comparison = buildBaselineComparison(compactSummary, baselineSnapshot)
+  return {
+    schemaVersion: comparison.schemaVersion,
+    baselineVersion: comparison.baselineVersion,
+    baselinePresent: comparison.baselinePresent,
+    comparisonStatus: comparison.comparisonStatus,
+    changeClassification: comparison.changeClassification,
+    changed: comparison.changed,
+    regressionCount: comparison.baselinePresent ? comparison.regressionCount : 0,
+    improvementCount: comparison.baselinePresent ? comparison.improvementCount : 0,
+    currentHash: comparison.currentHash,
+    baselineHash: comparison.baselineHash,
+    currentHealthCode: comparison.currentHealthCode,
+    baselineHealthCode: comparison.baselineHealthCode,
+    checkRegressions: comparison.baselinePresent ? comparison.checkRegressions : [],
+    checkImprovements: comparison.baselinePresent ? comparison.checkImprovements : [],
+    actionRegressions: comparison.baselinePresent ? comparison.actionRegressions : [],
+    actionImprovements: comparison.baselinePresent ? comparison.actionImprovements : [],
+  }
+}
+
+function resolveHistoryPath(rawPath = DEFAULT_HISTORY_PATH, cwd = process.cwd()) {
+  const targetPath = String(rawPath || DEFAULT_HISTORY_PATH)
+  return path.isAbsolute(targetPath) ? targetPath : path.join(cwd, targetPath)
+}
+
+function buildHistoryEntry(compactSummary) {
+  return {
+    historyVersion: 1,
+    schemaVersion: compactSummary.schemaVersion,
+    diagnosticHash: compactSummary.diagnosticHash,
+    ok: compactSummary.ok,
+    overallStatus: compactSummary.overallStatus,
+    healthCode: compactSummary.healthCode,
+    primaryAction: compactSummary.primaryAction,
+    actionCount: compactSummary.actionCount,
+  }
+}
+
+function appendHistoryEntry(filePath, compactSummary, cwd = process.cwd()) {
+  const resolvedPath = resolveHistoryPath(filePath, cwd)
+  fs.mkdirSync(path.dirname(resolvedPath), { recursive: true })
+  fs.appendFileSync(resolvedPath, `${stableJsonStringify(buildHistoryEntry(compactSummary))}\n`, "utf8")
+  return resolvedPath
+}
+
+function readHistoryFile(filePath = DEFAULT_HISTORY_PATH, cwd = process.cwd()) {
+  const resolvedPath = resolveHistoryPath(filePath, cwd)
+  if (!fs.existsSync(resolvedPath)) return { path: resolvedPath, found: false, entries: [] }
+  return {
+    path: resolvedPath,
+    found: true,
+    entries: fs.readFileSync(resolvedPath, "utf8").split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line)),
+  }
+}
+
+function buildHistorySummary(compactSummary, entries = []) {
+  const currentHash = compactSummary.diagnosticHash
+  const previousEntry = [...entries].reverse().find((entry) => entry.diagnosticHash !== currentHash) || null
+  return {
+    schemaVersion: compactSummary.schemaVersion,
+    historyVersion: 1,
+    historyPresent: entries.length > 0,
+    entryCount: entries.length,
+    currentHash,
+    previousHash: previousEntry?.diagnosticHash || "",
+    seenCurrentHash: entries.some((entry) => entry.diagnosticHash === currentHash),
+    currentHealthCode: compactSummary.healthCode,
+    previousHealthCode: previousEntry?.healthCode || "",
+    previousPrimaryAction: previousEntry?.primaryAction || "",
+  }
+}
+
 function buildStatusSummary(compactSummary) {
   return {
     schemaVersion: compactSummary.schemaVersion,
@@ -614,6 +835,9 @@ function parseArgs(argv) {
     nextActionJson: false,
     planJson: false,
     fingerprintJson: false,
+    baselineJson: false,
+    baselineTrendJson: false,
+    historyJson: false,
     remediationCatalogJson: false,
     markdown: false,
     quiet: false,
@@ -621,6 +845,10 @@ function parseArgs(argv) {
     exitCodesJson: false,
     listChecksJson: false,
     writeReport: "",
+    writeBaseline: "",
+    writeHistory: "",
+    baselinePath: DEFAULT_BASELINE_PATH,
+    historyPath: DEFAULT_HISTORY_PATH,
     cleanOldReports: false,
     maxReportAgeHours: DEFAULT_REPORT_MAX_AGE_HOURS,
     profile: "default",
@@ -643,6 +871,28 @@ function parseArgs(argv) {
     else if (arg === "--next-action-json") args.nextActionJson = true
     else if (arg === "--plan-json") args.planJson = true
     else if (arg === "--fingerprint-json") args.fingerprintJson = true
+    else if (arg === "--baseline-json") {
+      args.baselineJson = true
+      const nextArg = argv[index + 1]
+      if (nextArg && !nextArg.startsWith("--")) {
+        args.baselinePath = nextArg
+        index += 1
+      }
+    } else if (arg === "--baseline-trend-json") {
+      args.baselineTrendJson = true
+      const nextArg = argv[index + 1]
+      if (nextArg && !nextArg.startsWith("--")) {
+        args.baselinePath = nextArg
+        index += 1
+      }
+    } else if (arg === "--history-json") {
+      args.historyJson = true
+      const nextArg = argv[index + 1]
+      if (nextArg && !nextArg.startsWith("--")) {
+        args.historyPath = nextArg
+        index += 1
+      }
+    }
     else if (arg === "--remediation-catalog-json") args.remediationCatalogJson = true
     else if (arg === "--compact-json") {
       args.summaryJson = true
@@ -661,6 +911,23 @@ function parseArgs(argv) {
         args.writeReport = DEFAULT_REPORT_PATH
       }
     } else if (arg === "--clean-old-reports") args.cleanOldReports = true
+    else if (arg === "--write-baseline") {
+      const nextArg = argv[index + 1]
+      if (nextArg && !nextArg.startsWith("--")) {
+        args.writeBaseline = nextArg
+        index += 1
+      } else {
+        args.writeBaseline = DEFAULT_BASELINE_PATH
+      }
+    } else if (arg === "--write-history") {
+      const nextArg = argv[index + 1]
+      if (nextArg && !nextArg.startsWith("--")) {
+        args.writeHistory = nextArg
+        index += 1
+      } else {
+        args.writeHistory = DEFAULT_HISTORY_PATH
+      }
+    }
     else if (arg === "--max-report-age-hours") args.maxReportAgeHours = parsePositiveInteger(argv[++index], "--max-report-age-hours")
     else if (arg === "--profile") args.profile = argv[++index] || ""
     else if (arg === "--inspect-ports") args.inspectPorts = true
@@ -689,10 +956,15 @@ function usage() {
     "  npm run doctor:local-chat -- --next-action-json",
     "  npm run doctor:local-chat -- --plan-json",
     "  npm run doctor:local-chat -- --fingerprint-json",
+    "  npm run doctor:local-chat -- --baseline-json",
+    "  npm run doctor:local-chat -- --baseline-trend-json",
+    "  npm run doctor:local-chat -- --history-json",
     "  npm run doctor:local-chat -- --remediation-catalog-json",
     "  npm run doctor:local-chat -- --compact-json",
     "  npm run doctor:local-chat -- --markdown",
     "  npm run doctor:local-chat -- --write-report",
+    "  npm run doctor:local-chat -- --write-baseline",
+    "  npm run doctor:local-chat -- --write-history",
     "  npm run doctor:local-chat -- --clean-old-reports",
     "  npm run doctor:local-chat -- --quiet",
     "  npm run doctor:local-chat -- --inspect-ports",
@@ -717,6 +989,9 @@ function usage() {
     "  --next-action-json            Print next best remediation action JSON",
     "  --plan-json                   Print ordered remediation execution plan JSON",
     "  --fingerprint-json            Print stable diagnostic fingerprint JSON",
+    "  --baseline-json [path]        Compare current diagnostics against a sanitized baseline JSON",
+    "  --baseline-trend-json [path]  Print regression/improvement trend against baseline JSON",
+    "  --history-json [path]         Summarize append-only local diagnostic history JSONL",
     "  --remediation-catalog-json    Print remediation action catalog without running probes",
     "  --compact-json                Print compact single-line CI-safe JSON",
     "  --markdown                    Print sanitized Markdown diagnostics",
@@ -724,6 +999,8 @@ function usage() {
     "  --exit-codes-json             Print exit-code map without running probes",
     "  --list-checks-json            Print local check catalog without running probes",
     `  --write-report [path]         Write sanitized Markdown report; default ${DEFAULT_REPORT_PATH}`,
+    `  --write-baseline [path]       Write sanitized baseline JSON; default ${DEFAULT_BASELINE_PATH}`,
+    `  --write-history [path]        Append sanitized history JSONL; default ${DEFAULT_HISTORY_PATH}`,
     `  --clean-old-reports           Remove old ${REPORT_FILE_PREFIX}*.md files from tmp`,
     `  --max-report-age-hours <n>    Retention for cleanup; default ${DEFAULT_REPORT_MAX_AGE_HOURS}`,
     "",
@@ -749,6 +1026,9 @@ function usage() {
     "  npm --silent run doctor:local-chat:next-action",
     "  npm --silent run doctor:local-chat:plan",
     "  npm --silent run doctor:local-chat:fingerprint",
+    "  npm --silent run doctor:local-chat:baseline",
+    "  npm --silent run doctor:local-chat:baseline-trend",
+    "  npm --silent run doctor:local-chat:history",
     "  npm --silent run doctor:local-chat:remediations",
     "  npm --silent run doctor:local-chat:compact",
     "  npm run doctor:local-chat -- --inspect-ports --markdown",
@@ -756,6 +1036,8 @@ function usage() {
     "  npm run doctor:local-chat -- --quiet --profile fast",
     "  npm run doctor:local-chat -- --summary-json --timeout-ms 1000",
     "  npm run doctor:local-chat -- --write-report tmp/siragpt-local-chat-diagnostics.md",
+    "  npm run doctor:local-chat -- --write-baseline tmp/siragpt-local-chat-baseline.json",
+    "  npm run doctor:local-chat -- --write-history tmp/siragpt-local-chat-history.jsonl",
   ].join("\n")
 }
 
@@ -797,10 +1079,24 @@ async function runCli(argv = process.argv.slice(2)) {
   else if (args.nextActionJson) printJson(buildNextActionSummary(compactSummary), args.compactJson)
   else if (args.planJson) printJson(buildActionExecutionPlan(compactSummary), args.compactJson)
   else if (args.fingerprintJson) printJson(buildFingerprintSummary(compactSummary), args.compactJson)
+  else if (args.baselineTrendJson) {
+    const baseline = readBaselineFile(args.baselinePath)
+    printJson(buildBaselineTrendSummary(compactSummary, baseline.snapshot), args.compactJson)
+  }
+  else if (args.baselineJson) {
+    const baseline = readBaselineFile(args.baselinePath)
+    printJson(buildBaselineComparison(compactSummary, baseline.snapshot), args.compactJson)
+  }
+  else if (args.historyJson) {
+    const history = readHistoryFile(args.historyPath)
+    printJson(buildHistorySummary(compactSummary, history.entries), args.compactJson)
+  }
   else if (args.summaryJson) printJson(compactSummary, args.compactJson)
   else if (args.json) printJson({ ok: summary.ok, actions }, args.compactJson)
   else console.log(formatRecoveryReport(summary, actions))
   if (args.writeReport) console.error(`report_written=${writeReportFile(args.writeReport, markdownReport || formatMarkdownReport(summary, actions))}`)
+  if (args.writeBaseline) console.error(`baseline_written=${writeBaselineFile(args.writeBaseline, compactSummary)}`)
+  if (args.writeHistory) console.error(`history_written=${appendHistoryEntry(args.writeHistory, compactSummary)}`)
   if (args.cleanOldReports) console.error(`reports_removed=${removedReports.length}`)
   return resolveRecoveryExitCode(summary)
 }
@@ -813,6 +1109,8 @@ if (require.main === module) {
 }
 
 module.exports = {
+  DEFAULT_BASELINE_PATH,
+  DEFAULT_HISTORY_PATH,
   DEFAULT_REPORT_MAX_AGE_HOURS,
   DEFAULT_REPORT_PATH,
   RECOVERY_EXIT_CODES,
@@ -824,9 +1122,14 @@ module.exports = {
   buildActionImpactSummary,
   buildActionsSummary,
   buildActionExecutionPlan,
+  buildBaselineComparison,
+  buildBaselineSnapshot,
+  buildBaselineTrendSummary,
   buildDiagnosticFingerprint,
   buildDiagnosticsMatrix,
   buildFingerprintSummary,
+  buildHistoryEntry,
+  buildHistorySummary,
   buildNextActionSummary,
   buildPrioritySummary,
   buildRemediationCatalog,
@@ -837,14 +1140,25 @@ module.exports = {
   formatMarkdownReport,
   formatRecoveryReport,
   hasFailedRequiredCheck,
+  appendHistoryEntry,
+  classifyBaselineTrend,
   enrichRecoveryAction,
+  isCheckImprovement,
+  isCheckRegression,
+  keyById,
   missingLoginCredentials,
   parseArgs,
+  readBaselineFile,
+  readHistoryFile,
   recommendRecoveryActions,
+  resolveBaselinePath,
+  resolveHistoryPath,
   resolveRecoveryExitCode,
   resolveReportPath,
   sanitizeCommandForReport,
   stableJsonStringify,
+  statusRank,
   usage,
+  writeBaselineFile,
   writeReportFile,
 }

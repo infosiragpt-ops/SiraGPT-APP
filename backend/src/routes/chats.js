@@ -48,6 +48,31 @@ const projectChatSelect = {
   _count: { select: { files: true, chats: true, memories: true, documents: true } },
 };
 
+const NON_TERMINAL_CHAT_RUN_STATUSES = ['pending', 'running'];
+
+function summarizeChatRun(run) {
+  return {
+    runId: run.id,
+    chatId: run.chatId,
+    status: run.status,
+    model: run.model,
+    provider: run.provider || null,
+    messageId: run.messageId || null,
+    startedAt: run.startedAt,
+    lastChunkAt: run.lastChunkAt,
+    completedAt: run.completedAt,
+    cancelledAt: run.cancelledAt,
+    cancelReason: run.cancelReason || null,
+    attempt: run.attempt,
+    snippet: run.partialContent ? String(run.partialContent).slice(0, 240) : '',
+  };
+}
+
+function writeSse(res, event, payload) {
+  res.write(`event: ${event}\n`);
+  res.write(`data: ${JSON.stringify(payload)}\n\n`);
+}
+
 // GET /api/chats/:chatId/pending-stream
 // Returns the server-side cached partial content for an in-flight
 // stream so the UI can resume after a tab reload / reconnect.
@@ -83,6 +108,7 @@ router.get('/', authenticateToken, requireScope('chats:read'), async (req, res) 
     const page = parsePositiveInt(req.query.page, 1, { min: 1, max: 10000 });
     const limit = parsePositiveInt(req.query.limit, 20, { min: 1, max: 100 });
     const includeProjects = parseBoolean(req.query.includeProjects);
+    const includeArchived = parseBoolean(req.query.includeArchived);
     const projectId = typeof req.query.projectId === 'string' ? req.query.projectId.trim() : '';
     const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
     const skip = (page - 1) * limit;
@@ -99,6 +125,7 @@ router.get('/', authenticateToken, requireScope('chats:read'), async (req, res) 
       userId: req.user.id,
       projectId: projectId || null,
       includeProjects,
+      includeArchived,
       search,
     });
 
@@ -163,6 +190,26 @@ router.get('/', authenticateToken, requireScope('chats:read'), async (req, res) 
   }
 });
 
+// GET /api/chats/active-runs
+// Returns lightweight durable generation state for sidebar/resume UI.
+router.get('/active-runs', authenticateToken, async (req, res) => {
+  try {
+    const runs = await prisma.chatRun.findMany({
+      where: {
+        userId: req.user.id,
+        status: { in: NON_TERMINAL_CHAT_RUN_STATUSES },
+      },
+      orderBy: { updatedAt: 'desc' },
+      take: 50,
+    });
+
+    res.json({ runs: runs.map(summarizeChatRun) });
+  } catch (error) {
+    console.error('Get active chat runs error:', error);
+    res.status(500).json({ error: 'Failed to load active runs' });
+  }
+});
+
 // Create new chat
 router.post('/', [
   body('title').trim().isLength({ min: 1 }).withMessage('Title is required'),
@@ -218,6 +265,157 @@ router.post('/', [
   } catch (error) {
     console.error('Create chat error:', error);
     res.status(500).json({ error: 'Failed to create chat' });
+  }
+});
+
+// GET /api/chats/:chatId/run/active
+// Returns the latest non-terminal durable generation for one chat.
+router.get('/:chatId/run/active', authenticateToken, async (req, res) => {
+  try {
+    const chat = await prisma.chat.findFirst({
+      where: { id: req.params.chatId, userId: req.user.id, deletedAt: null },
+      select: { id: true },
+    });
+
+    if (!chat) return res.status(404).json({ error: 'Chat not found' });
+
+    const run = await prisma.chatRun.findFirst({
+      where: {
+        chatId: chat.id,
+        userId: req.user.id,
+        status: { in: NON_TERMINAL_CHAT_RUN_STATUSES },
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+
+    res.json({ run: run ? summarizeChatRun(run) : null });
+  } catch (error) {
+    console.error('Get active chat run error:', error);
+    res.status(500).json({ error: 'Failed to load active run' });
+  }
+});
+
+// POST /api/chats/:chatId/run/:runId/cancel
+router.post('/:chatId/run/:runId/cancel', authenticateToken, async (req, res) => {
+  try {
+    const { chatId, runId } = req.params;
+    const run = await prisma.chatRun.findFirst({
+      where: { id: runId, chatId, userId: req.user.id },
+    });
+
+    if (!run) return res.status(404).json({ error: 'Run not found' });
+
+    if (!NON_TERMINAL_CHAT_RUN_STATUSES.includes(run.status)) {
+      return res.json({ ok: true, run: summarizeChatRun(run), noop: true });
+    }
+
+    const updated = await prisma.chatRun.update({
+      where: { id: runId },
+      data: {
+        status: 'cancelled',
+        cancelledAt: new Date(),
+        cancelReason: req.body?.reason ? String(req.body.reason).slice(0, 256) : 'user_cancel',
+      },
+    });
+
+    res.json({ ok: true, run: summarizeChatRun(updated) });
+  } catch (error) {
+    console.error('Cancel chat run error:', error);
+    res.status(500).json({ error: 'Failed to cancel run' });
+  }
+});
+
+// GET /api/chats/:chatId/run/:runId/stream
+// Durable SSE tail for a ChatRun. Emits the current DB snapshot first,
+// then polls for partialContent/status changes until terminal.
+router.get('/:chatId/run/:runId/stream', authenticateToken, async (req, res) => {
+  const { chatId, runId } = req.params;
+
+  try {
+    const run = await prisma.chatRun.findFirst({
+      where: { id: runId, chatId, userId: req.user.id },
+    });
+
+    if (!run) return res.status(404).json({ error: 'Run not found' });
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    if (typeof res.flushHeaders === 'function') res.flushHeaders();
+
+    writeSse(res, 'snapshot', {
+      runId: run.id,
+      chatId: run.chatId,
+      status: run.status,
+      model: run.model,
+      partialContent: run.partialContent || '',
+      messageId: run.messageId || null,
+      lastChunkAt: run.lastChunkAt,
+    });
+
+    if (!NON_TERMINAL_CHAT_RUN_STATUSES.includes(run.status)) {
+      writeSse(res, 'done', {
+        status: run.status,
+        completedAt: run.completedAt,
+        cancelledAt: run.cancelledAt,
+        error: run.error || null,
+      });
+      res.end();
+      return;
+    }
+
+    let closed = false;
+    req.on('close', () => {
+      closed = true;
+    });
+
+    const heartbeat = setInterval(() => {
+      if (!closed) res.write(': ping\n\n');
+    }, 15_000);
+
+    let lastSnapshotKey = `${run.status}:${run.partialContent?.length || 0}`;
+    let lastChunkAtMs = run.lastChunkAt ? new Date(run.lastChunkAt).getTime() : 0;
+
+    while (!closed) {
+      await new Promise((resolve) => setTimeout(resolve, 750));
+      if (closed) break;
+
+      const fresh = await prisma.chatRun.findUnique({ where: { id: runId } });
+      if (!fresh) break;
+
+      const key = `${fresh.status}:${fresh.partialContent?.length || 0}`;
+      const freshChunkAtMs = fresh.lastChunkAt ? new Date(fresh.lastChunkAt).getTime() : 0;
+      if (key !== lastSnapshotKey || freshChunkAtMs !== lastChunkAtMs) {
+        writeSse(res, 'chunk', {
+          partialContent: fresh.partialContent || '',
+          status: fresh.status,
+          lastChunkAt: fresh.lastChunkAt,
+        });
+        lastSnapshotKey = key;
+        lastChunkAtMs = freshChunkAtMs;
+      }
+
+      if (!NON_TERMINAL_CHAT_RUN_STATUSES.includes(fresh.status)) {
+        writeSse(res, 'done', {
+          status: fresh.status,
+          completedAt: fresh.completedAt,
+          cancelledAt: fresh.cancelledAt,
+          error: fresh.error || null,
+        });
+        break;
+      }
+    }
+
+    clearInterval(heartbeat);
+    if (!closed) res.end();
+  } catch (error) {
+    console.error('Stream chat run error:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Stream failed' });
+    } else {
+      try { res.end(); } catch { /* already closed */ }
+    }
   }
 });
 
@@ -516,15 +714,78 @@ router.post('/:id/messages', [
   }
 });
 
+router.patch('/:id/pin', authenticateToken, async (req, res) => {
+  try {
+    const pinned = parseBoolean(req.body?.pinned ?? req.body?.isPinned);
+    const chat = await prisma.chat.findFirst({
+      where: { id: req.params.id, userId: req.user.id, deletedAt: null },
+      select: { id: true },
+    });
+
+    if (!chat) return res.status(404).json({ error: 'Chat not found' });
+
+    const updated = await prisma.chat.update({
+      where: { id: chat.id },
+      data: {
+        isPinned: pinned,
+        pinnedAt: pinned ? new Date() : null,
+      },
+      select: { id: true, isPinned: true, pinnedAt: true },
+    });
+
+    res.json({ chat: updated });
+  } catch (error) {
+    console.error('Pin chat error:', error);
+    res.status(500).json({ error: 'Failed to pin chat' });
+  }
+});
+
+router.patch('/:id/archive', authenticateToken, async (req, res) => {
+  try {
+    const archived = parseBoolean(req.body?.archived ?? req.body?.isArchived);
+    const chat = await prisma.chat.findFirst({
+      where: { id: req.params.id, userId: req.user.id, deletedAt: null },
+      select: { id: true },
+    });
+
+    if (!chat) return res.status(404).json({ error: 'Chat not found' });
+
+    const updated = await prisma.chat.update({
+      where: { id: chat.id },
+      data: { isArchived: archived, updatedAt: new Date() },
+      select: { id: true, isArchived: true },
+    });
+
+    res.json({ chat: updated });
+
+    if (archived) {
+      triggers.publish('chat.archived', { chatId: req.params.id }, req.user.id).catch((err) => {
+        console.warn('[chats] trigger chat.archived failed:', err?.message || err);
+      });
+    }
+  } catch (error) {
+    console.error('Archive chat error:', error);
+    res.status(500).json({ error: 'Failed to archive chat' });
+  }
+});
+
 // Archive a chat — fires chat.archived trigger.
 router.post('/:id/archive', authenticateToken, async (req, res) => {
   try {
-    const updated = await prisma.chat.updateMany({
+    const chat = await prisma.chat.findFirst({
       where: { id: req.params.id, userId: req.user.id, deletedAt: null },
-      data: { isArchived: true, updatedAt: new Date() },
+      select: { id: true },
     });
-    if (updated.count === 0) return res.status(404).json({ error: 'Chat not found' });
-    res.json({ ok: true });
+
+    if (!chat) return res.status(404).json({ error: 'Chat not found' });
+
+    const updated = await prisma.chat.update({
+      where: { id: chat.id },
+      data: { isArchived: true, updatedAt: new Date() },
+      select: { id: true, isArchived: true },
+    });
+
+    res.json({ ok: true, chat: updated });
     triggers.publish('chat.archived', { chatId: req.params.id }, req.user.id).catch((err) => {
       console.warn('[chats] trigger chat.archived failed:', err?.message || err);
     });
