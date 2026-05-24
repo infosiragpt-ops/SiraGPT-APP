@@ -184,6 +184,7 @@ export default function SecurityPage() {
           <CardDescription>Monitor security-related activities</CardDescription>
         </CardHeader>
         <CardContent>
+          <div className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -208,6 +209,7 @@ export default function SecurityPage() {
               ))}
             </TableBody>
           </Table>
+          </div>
         </CardContent>
       </Card>
     </div>

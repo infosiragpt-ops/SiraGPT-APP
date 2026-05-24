@@ -438,6 +438,7 @@ export default function UsersPage() {
             <div className="py-8 text-center text-red-600">Error: {error}</div>
           ) : (
             <>
+              <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -501,6 +502,7 @@ export default function UsersPage() {
                   ))}
                 </TableBody>
               </Table>
+              </div>
 
               {/* Simple pagination controls */}
               <div className="mt-4 flex items-center justify-between">

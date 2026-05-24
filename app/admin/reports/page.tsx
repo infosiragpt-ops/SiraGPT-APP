@@ -184,6 +184,7 @@ export default function ReportsPage() {
           <CardDescription>Previously generated reports available for download</CardDescription>
         </CardHeader>
         <CardContent>
+          <div className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -214,6 +215,7 @@ export default function ReportsPage() {
               ))}
             </TableBody>
           </Table>
+          </div>
         </CardContent>
       </Card>
     </div>

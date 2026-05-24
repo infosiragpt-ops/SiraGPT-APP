@@ -138,6 +138,7 @@ export default function PaymentsPage() {
           <CardDescription>All payment transactions on the platform</CardDescription>
         </CardHeader>
         <CardContent>
+          <div className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -184,6 +185,7 @@ export default function PaymentsPage() {
               ))}
             </TableBody>
           </Table>
+          </div>
         </CardContent>
       </Card>
     </div>

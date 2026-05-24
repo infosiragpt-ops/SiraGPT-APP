@@ -73,6 +73,7 @@ export default function DatabasePage() {
           <CardDescription>Overview of all database tables and their statistics</CardDescription>
         </CardHeader>
         <CardContent>
+          <div className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -101,6 +102,7 @@ export default function DatabasePage() {
               ))}
             </TableBody>
           </Table>
+          </div>
         </CardContent>
       </Card>
 

@@ -466,7 +466,7 @@ export default function ModelsPage() {
 
   if (isLoading) {
     return (
-      <div className="flex-1 space-y-6 p-6">
+      <div className="mx-auto w-full max-w-7xl space-y-6 px-4 py-4 pb-24 sm:px-6 lg:px-8">
         <div className="flex items-center space-x-2">
           <RefreshCw className="h-4 w-4 animate-spin" />
           <span>Loading models...</span>
@@ -476,15 +476,18 @@ export default function ModelsPage() {
   }
 
   return (
-    <div className="flex-1 space-y-6 p-6">
+    <div className="mx-auto w-full max-w-7xl space-y-4 px-4 py-4 pb-24 sm:space-y-6 sm:px-6 lg:px-8">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold">AI Models</h1>
-          <p className="text-muted-foreground">Manage and sync AI models from multiple providers</p>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 items-start gap-3">
+          <SidebarTrigger className="mt-1 h-9 w-9 shrink-0 md:hidden" />
+          <div className="min-w-0">
+            <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">AI Models</h1>
+            <p className="text-sm text-muted-foreground sm:text-base">Manage and sync AI models from multiple providers</p>
+          </div>
         </div>
         
-        <div className="flex items-center space-x-2">
+        <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center">
           {/* Fetch Models - Commented out, auto-sync handles this
           <Button 
             variant="outline" 
@@ -504,23 +507,26 @@ export default function ModelsPage() {
             variant="outline" 
             onClick={syncModelsToDatabase} 
             disabled={isSyncing}
+            size="sm"
           >
             {isSyncing ? (
               <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
             ) : (
               <Upload className="mr-2 h-4 w-4" />
             )}
-            Sync Models
+            <span className="hidden sm:inline">Sync Models</span>
+            <span className="sm:hidden">Sync</span>
           </Button>
 
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogTrigger asChild>
-              <Button>
+              <Button size="sm">
                 <Plus className="mr-2 h-4 w-4" />
-                Add Model
+                <span className="hidden sm:inline">Add Model</span>
+                <span className="sm:hidden">Add</span>
               </Button>
             </DialogTrigger>
-            <DialogContent>
+            <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg">
               <DialogHeader>
                 <DialogTitle>Add New AI Model</DialogTitle>
               </DialogHeader>
@@ -590,43 +596,43 @@ export default function ModelsPage() {
 
       {/* Stats Cards */}
       {stats && (
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
           <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 p-4 pb-2 sm:p-6 sm:pb-2">
               <CardTitle className="text-sm font-medium">Total Models</CardTitle>
               <Database className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
-            <CardContent>
+            <CardContent className="p-4 pt-0 sm:p-6 sm:pt-0">
               <div className="text-2xl font-bold">{stats.total}</div>
             </CardContent>
           </Card>
           
           <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 p-4 pb-2 sm:p-6 sm:pb-2">
               <CardTitle className="text-sm font-medium">Active Models</CardTitle>
               <CheckCircle className="h-4 w-4 text-green-500" />
             </CardHeader>
-            <CardContent>
+            <CardContent className="p-4 pt-0 sm:p-6 sm:pt-0">
               <div className="text-2xl font-bold text-green-600">{stats.active}</div>
             </CardContent>
           </Card>
           
           <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 p-4 pb-2 sm:p-6 sm:pb-2">
               <CardTitle className="text-sm font-medium">Inactive Models</CardTitle>
               <XCircle className="h-4 w-4 text-red-500" />
             </CardHeader>
-            <CardContent>
+            <CardContent className="p-4 pt-0 sm:p-6 sm:pt-0">
               <div className="text-2xl font-bold text-red-600">{stats.inactive}</div>
             </CardContent>
           </Card>
           
           <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 p-4 pb-2 sm:p-6 sm:pb-2">
               <CardTitle className="text-sm font-medium">Providers</CardTitle>
               <Zap className="h-4 w-4 text-blue-500" />
             </CardHeader>
-            <CardContent>
+            <CardContent className="p-4 pt-0 sm:p-6 sm:pt-0">
               <div className="text-2xl font-bold">{Object.keys(stats.byProvider).length}</div>
             </CardContent>
           </Card>
@@ -767,6 +773,7 @@ export default function ModelsPage() {
         </CardHeader>
         <CardContent>
           {/* Models Table */}
+          <div className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -878,6 +885,7 @@ export default function ModelsPage() {
               ))}
             </TableBody>
           </Table>
+          </div>
 
           {paginatedModels.length === 0 && (
             <div className="text-center py-8">

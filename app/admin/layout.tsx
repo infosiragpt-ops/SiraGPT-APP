@@ -12,9 +12,9 @@ export default function AdminLayout({
   return (
     <AuthGuard requireAdmin={true}>
       <SidebarProvider defaultOpen={true}>
-        <div className="flex h-screen w-full">
+        <div className="flex h-screen w-full overflow-hidden">
           <AdminSidebar />
-          <SidebarInset className="flex-1">{children}</SidebarInset>
+          <SidebarInset className="flex-1 overflow-y-auto overflow-x-hidden">{children}</SidebarInset>
         </div>
       </SidebarProvider>
     </AuthGuard>
