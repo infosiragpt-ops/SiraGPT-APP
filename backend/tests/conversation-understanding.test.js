@@ -34,6 +34,19 @@ test('conversation understanding block preserves earlier goals and recent correc
   assert.match(block, /Current user request/);
 });
 
+test('conversation understanding block exists for new autonomous chat turns', () => {
+  const block = buildConversationUnderstandingBlock({
+    history: [],
+    currentPrompt: 'Quiero que clones un repo en local, ejecutes pruebas y subas a main.',
+  });
+
+  assert.match(block, /INTERNAL CONVERSATION UNDERSTANDING/);
+  assert.match(block, /autonomous agent/);
+  assert.match(block, /coding agent/);
+  assert.match(block, /clones un repo/);
+  assert.doesNotMatch(block, /Most recent thread/);
+});
+
 test('conversation understanding block caps size deterministically', () => {
   const history = Array.from({ length: 40 }, (_, i) => ({
     role: i % 2 ? 'ASSISTANT' : 'USER',

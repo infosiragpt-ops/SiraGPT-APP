@@ -29,6 +29,8 @@ const bcrypt = require('bcryptjs');
 
 process.env.JWT_SECRET = process.env.JWT_SECRET
   || 'test-2fa-totp-login-jwt-secret-at-least-32-chars!!';
+process.env.ENCRYPTION_KEY = process.env.ENCRYPTION_KEY
+  || '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
 delete process.env.TWILIO_ACCOUNT_SID;
 delete process.env.TWILIO_AUTH_TOKEN;
 delete process.env.TWILIO_FROM_NUMBER;

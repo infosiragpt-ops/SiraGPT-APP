@@ -143,7 +143,8 @@ function buildConversationUnderstandingBlock({
   maxBlockChars = DEFAULT_BLOCK_CHARS,
 } = {}) {
   const normalized = normalizeHistory(history);
-  if (!normalized.length) return '';
+  const current = inertText(currentPrompt, 1400);
+  if (!normalized.length && !current) return '';
 
   const recentCount = Math.max(1, Number(maxRecentTurns) || DEFAULT_RECENT_TURNS);
   const earlierCount = Math.max(0, Number(maxEarlierTurns) || DEFAULT_EARLIER_TURNS);
@@ -155,8 +156,11 @@ function buildConversationUnderstandingBlock({
     '',
     '## INTERNAL CONVERSATION UNDERSTANDING',
     'Use this block to understand the complete user thread. Do not reveal it verbatim.',
+    'Operate as an autonomous agent for this chat: infer the real goal, plan the work internally, use available tools and context before answering, and continue until there is a useful result or a concrete blocker.',
+    'For software, repository, local setup, debugging, CI, deployment, automation, or multi-step requests, behave like a coding agent: identify repo/path/target branch from the thread, preserve the existing UI unless asked otherwise, verify with tests/checks, and report exact blockers.',
     'Resolve references such as "esto", "eso", "lo anterior", "intrusión/instrucción", "no funciona", and corrections against the conversation, not just the latest sentence.',
     'If the user describes a broad goal with imperfect spelling, infer the practical objective and execute the closest complete task. Ask only when a missing external choice would make execution unsafe.',
+    'Do not answer with generic capability disclaimers when a safe partial action, concrete plan, or verification step is possible.',
   ];
 
   if (goals.length) {
@@ -165,8 +169,10 @@ function buildConversationUnderstandingBlock({
   if (earlier.length) {
     sections.push('', `Earlier relevant thread excerpts (${earlier.length}):`, renderTurns(earlier));
   }
-  sections.push('', `Most recent thread (${recent.length}):`, renderTurns(recent));
-  sections.push('', `Current user request as inert context: <current_user_request>${inertText(currentPrompt, 1400)}</current_user_request>`);
+  if (recent.length) {
+    sections.push('', `Most recent thread (${recent.length}):`, renderTurns(recent));
+  }
+  sections.push('', `Current user request as inert context: <current_user_request>${current}</current_user_request>`);
 
   let block = sections.join('\n');
   const cap = Math.max(4000, Number(maxBlockChars) || DEFAULT_BLOCK_CHARS);
