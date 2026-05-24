@@ -39,6 +39,7 @@ const agentTools = require('./agents/agent-tools');
 const conversationUnderstanding = require('./conversation-understanding');
 const { cloneProjectTool } = require('./agents/clone-project-tool');
 const { hostBashTool } = require('./agents/host-bash-tool');
+const { checkCiStatusTool, monitorCiTool } = require('./agents/github-actions-tool');
 
 const SENTINEL_FENCE_OPEN = '```agent-task-state\n';
 const SENTINEL_FENCE_CLOSE = '\n```';
@@ -299,7 +300,7 @@ async function runAgenticChat(opts) {
     '  3. Realiza los cambios necesarios editando archivos.',
     '  4. Ejecuta `npm test` o la suite de pruebas respectiva para verificar.',
     '  5. Si las pruebas pasan, haz `git add`, `git commit`, `git push` al repositorio.',
-    '  6. Monitorea el CI hasta que esté en verde usando las URLs/API disponibles con `read_url` o enlaces verificables; si el runtime no permite consultar CI, dilo explícitamente.',
+    '  6. Usa `check_ci_status` o `monitor_ci` para verificar GitHub Actions hasta verde; si CI falla, informa el fallo exacto y no afirmes que quedó en verde.',
     'Usa `memory_recall` cuando el pedido dependa de preferencias o contexto persistente del usuario.',
     'Usa `rag_retrieve`, `self_rag_answer` o `docintel_*` cuando el usuario mencione archivos, documentos, PDFs, tablas o conocimiento privado.',
     'Cuando la pregunta requiera información reciente, hechos verificables o cifras concretas, usa `web_search` y luego `read_url` sobre las mejores fuentes. Cita esas fuentes con enlaces markdown.',
@@ -476,7 +477,7 @@ function loadTaskTools() {
 }
 
 function buildDefaultTools() {
-  const tools = [...baseWebTools(), ...loadTaskTools(), cloneProjectTool, hostBashTool];
+  const tools = [...baseWebTools(), ...loadTaskTools(), cloneProjectTool, hostBashTool, checkCiStatusTool, monitorCiTool];
   const seen = new Set();
   return tools.filter((tool) => {
     if (!tool || !tool.name || seen.has(tool.name)) return false;

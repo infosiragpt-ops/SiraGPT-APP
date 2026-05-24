@@ -133,6 +133,10 @@ test('default toolset includes chat, document and verification tools', () => {
   assert.ok(names.includes('rag_retrieve'));
   assert.ok(names.includes('python_exec'));
   assert.ok(names.includes('run_tests'));
+  assert.ok(names.includes('clone_project'));
+  assert.ok(names.includes('host_bash'));
+  assert.ok(names.includes('check_ci_status'));
+  assert.ok(names.includes('monitor_ci'));
 });
 
 test('buildThreadWorkContext preserves standing user goals from prior turns', () => {
