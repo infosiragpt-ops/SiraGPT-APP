@@ -1,6 +1,6 @@
 # ──────────────────────────────────────────────────────────────
 # siraGPT — Frontend (Next.js)
-# Multi-stage build: deps → build → production runner
+# Multi-stage build: build → production runner
 # ──────────────────────────────────────────────────────────────
 # Usage during Docker Compose:
 #   docker compose build frontend
@@ -9,8 +9,8 @@
 # in next.config.mjs, producing a lean .next/standalone/ output.
 # ──────────────────────────────────────────────────────────────
 
-# ─── Stage 1: Install dependencies ───────────────────────────
-FROM node:22-alpine AS deps
+# ─── Stage 1: Build ──────────────────────────────────────────
+FROM node:22-alpine AS build
 WORKDIR /app
 
 RUN apk add --no-cache libc6-compat
@@ -21,16 +21,7 @@ COPY backend/package.json backend/package-lock.json ./backend/
 RUN npm ci --legacy-peer-deps --prefer-offline --no-audit --no-fund
 RUN npm ci --prefix backend --omit=dev --legacy-peer-deps --prefer-offline --no-audit --no-fund
 
-# ─── Stage 2: Build ─────────────────────────────────────────
-FROM node:22-alpine AS build
-WORKDIR /app
-
-# Install build-time OS deps
-RUN apk add --no-cache libc6-compat
-
-# Copy node_modules from deps stage
-COPY --from=deps /app/node_modules ./node_modules
-COPY --from=deps /app/backend/node_modules ./backend/node_modules
+# Copy app source after dependency install so Docker can cache npm layers.
 COPY . .
 
 # Public client configuration is baked into the Next.js bundle at build time.
@@ -61,7 +52,7 @@ RUN npm run build
 # Prune dev dependencies
 RUN npm prune --omit=dev --prefer-offline
 
-# ─── Stage 3: Production runner ─────────────────────────────
+# ─── Stage 2: Production runner ─────────────────────────────
 FROM node:22-alpine AS runner
 WORKDIR /app
 

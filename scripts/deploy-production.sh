@@ -217,6 +217,54 @@ verify_auth_login_path() {
   log "Auth login smoke is correct (invalid credentials return 401)"
 }
 
+repair_known_failed_prisma_migration() {
+  local migration_name="20241125_add_model_sync_fields"
+
+  log "Repairing known failed Prisma migration state: ${migration_name}"
+  log "Applying idempotent columns for ${migration_name} before marking it applied"
+  (
+    cd backend
+    npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
+ALTER TABLE "ai_models"
+  ADD COLUMN IF NOT EXISTS "lastSynced" TIMESTAMP(3),
+  ADD COLUMN IF NOT EXISTS "syncSource" TEXT DEFAULT 'manual',
+  ADD COLUMN IF NOT EXISTS "contextLength" INTEGER,
+  ADD COLUMN IF NOT EXISTS "pricing" JSONB,
+  ADD COLUMN IF NOT EXISTS "tags" TEXT[];
+SQL
+    npx prisma migrate resolve --schema prisma/schema.prisma --applied "${migration_name}"
+  )
+}
+
+run_prisma_migrations() {
+  local migrate_output migrate_status
+
+  log "Generating Prisma client"
+  (cd backend && npx prisma generate --schema prisma/schema.prisma)
+
+  log "Applying pending Prisma migrations"
+  set +e
+  migrate_output="$(
+    cd backend && npx prisma migrate deploy --schema prisma/schema.prisma 2>&1
+  )"
+  migrate_status=$?
+  set -e
+  printf '%s\n' "$migrate_output"
+
+  if [[ "$migrate_status" -eq 0 ]]; then
+    return 0
+  fi
+
+  if [[ "$migrate_output" == *"P3009"* && "$migrate_output" == *"20241125_add_model_sync_fields"* ]]; then
+    repair_known_failed_prisma_migration
+    log "Retrying Prisma migrations after known migration repair"
+    (cd backend && npx prisma migrate deploy --schema prisma/schema.prisma)
+    return $?
+  fi
+
+  return "$migrate_status"
+}
+
 require_command git
 require_command docker
 require_command pm2
@@ -251,8 +299,7 @@ cleanup_docker_space
 log "Installing backend production dependencies"
 (cd backend && npm install --omit=dev --no-audit --no-fund)
 
-log "Generating Prisma client and applying pending migrations"
-(cd backend && npx prisma generate && npx prisma migrate deploy)
+run_prisma_migrations
 
 log "Building frontend Docker image with NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL"
 docker compose -f "$COMPOSE_FILE" build "$FRONTEND_SERVICE"

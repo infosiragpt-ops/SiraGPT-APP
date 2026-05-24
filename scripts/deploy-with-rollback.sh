@@ -29,11 +29,14 @@ PM2_APP="${PM2_APP:-siraGPT-api}"
 API_HEALTH_URL="${API_HEALTH_URL:-https://api.siragpt.com/health}"
 API_LOCAL_HEALTH_URL="${API_LOCAL_HEALTH_URL:-http://127.0.0.1:${PORT:-5000}/health}"
 BACKUP_DIR="${BACKUP_DIR:-/root/siragpt-backups/postgres}"
+FRONTEND_IMAGE="${FRONTEND_IMAGE:-siragpt-frontend:latest}"
 
 log() { printf '[deploy-with-rollback] %s\n' "$*"; }
 err() { printf '[deploy-with-rollback] ERROR: %s\n' "$*" >&2; }
 
 cleanup_docker_space() {
+  local prune_images="${1:-1}"
+
   if [[ "${DEPLOY_PRUNE_DOCKER:-1}" != "1" ]]; then
     log "Skipping Docker prune because DEPLOY_PRUNE_DOCKER is disabled"
     return 0
@@ -45,12 +48,42 @@ cleanup_docker_space() {
 
   log "Pruning Docker build cache, unused images, and stopped containers"
   docker builder prune -af || true
-  docker image prune -af || true
+  if [[ "$prune_images" == "1" ]]; then
+    docker image prune -af || true
+  else
+    log "Skipping Docker image prune to preserve rollback image"
+  fi
   docker container prune -f || true
 
   log "Docker disk usage after cleanup"
   docker system df || true
   df -h / /var/lib/docker 2>/dev/null || df -h / || true
+}
+
+preserve_frontend_image() {
+  local rollback_image="$1"
+
+  if docker image inspect "$FRONTEND_IMAGE" >/dev/null 2>&1; then
+    log "Preserving current frontend image for rollback: ${rollback_image}"
+    docker tag "$FRONTEND_IMAGE" "$rollback_image"
+  else
+    err "Current frontend image not found (${FRONTEND_IMAGE}); rollback may need a rebuild"
+  fi
+}
+
+restore_frontend_image() {
+  local rollback_image="$1"
+
+  if docker image inspect "$rollback_image" >/dev/null 2>&1; then
+    log "Restoring preserved frontend image: ${rollback_image} -> ${FRONTEND_IMAGE}"
+    docker tag "$rollback_image" "$FRONTEND_IMAGE"
+    docker compose -f "${COMPOSE_FILE}" up -d --no-deps "${FRONTEND_SERVICE}"
+    return $?
+  fi
+
+  err "Preserved frontend image missing (${rollback_image}); falling back to rebuild"
+  docker compose -f "${COMPOSE_FILE}" build "${FRONTEND_SERVICE}" \
+    && docker compose -f "${COMPOSE_FILE}" up -d --no-deps "${FRONTEND_SERVICE}"
 }
 
 pm2_app_exists() {
@@ -158,8 +191,10 @@ print_failure_diagnostics() {
 cd "$APP_DIR"
 
 PREV_SHA="$(git rev-parse HEAD)"
+ROLLBACK_FRONTEND_IMAGE="${ROLLBACK_FRONTEND_IMAGE:-siragpt-frontend:rollback-${PREV_SHA:0:12}}"
 log "Pre-deploy SHA: ${PREV_SHA}"
 cleanup_docker_space
+preserve_frontend_image "$ROLLBACK_FRONTEND_IMAGE"
 
 # Pre-deploy DB backup. Non-fatal — we want a snapshot in case
 # the new code introduces a destructive migration, but a flaky
@@ -185,7 +220,7 @@ fi
 
 # ─── Rollback path ────────────────────────────────────────────
 err "Deploy failed (exit ${DEPLOY_EXIT}). Rolling back to ${PREV_SHA}"
-cleanup_docker_space
+cleanup_docker_space 0
 
 # 1. Reset working tree to the pre-deploy commit.
 if ! git reset --hard "${PREV_SHA}"; then
@@ -193,13 +228,11 @@ if ! git reset --hard "${PREV_SHA}"; then
   exit 2
 fi
 
-# 2. Rebuild + restart frontend from the rolled-back code.
-if ! docker compose -f "${COMPOSE_FILE}" build "${FRONTEND_SERVICE}"; then
-  err "Frontend rebuild during rollback FAILED — manual intervention required"
-  exit 2
-fi
-if ! docker compose -f "${COMPOSE_FILE}" up -d --no-deps "${FRONTEND_SERVICE}"; then
-  err "Frontend restart during rollback FAILED — manual intervention required"
+# 2. Restore + restart frontend from the pre-deploy image. Rebuilding the old
+# commit is a fallback only; the current production image is the real rollback
+# artifact and works even when Docker build cache was pruned before deploy.
+if ! restore_frontend_image "$ROLLBACK_FRONTEND_IMAGE"; then
+  err "Frontend restore during rollback FAILED — manual intervention required"
   exit 2
 fi
 
