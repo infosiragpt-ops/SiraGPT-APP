@@ -3,7 +3,11 @@
 const scientificSearch = require('../scientific-search');
 const { referenceEntry } = require('../marco-teorico/apa7');
 const { getTemplate, listTemplates } = require('./chapter-templates');
-const { validateWordCount, validateChapterPlan } = require('./word-count-validator');
+const {
+  validateWordCount,
+  validateChapterPlan,
+  validateAgainstSpec,
+} = require('./word-count-validator');
 const {
   markUnverified,
   strictModeEnabled,
@@ -11,6 +15,10 @@ const {
   onlineFallbackEnabled,
   hallucinationThreshold,
 } = require('./citation-verifier');
+const {
+  listSpecsForChapter,
+  buildSpecBlock,
+} = require('./section-specs');
 
 const MIN_YEAR = 2020;
 
@@ -59,6 +67,57 @@ function structurePhase(chapterIds = ['introduction', 'methodology']) {
     .filter(Boolean);
 }
 
+/**
+ * Heuristic extractor: given a chapter body and the list of expected
+ * sub-section specs, find each sub-section's text by matching its
+ * title as a markdown header. Returns a Map<specId, text>. The match
+ * is forgiving: case-insensitive, ignores accents, allows the LLM to
+ * use `##`, `###` or numbered titles like `1.1`.
+ */
+function extractSubsections(text, subspecs = []) {
+  const map = new Map();
+  if (!text || typeof text !== 'string' || !subspecs.length) return map;
+
+  function normalize(s) {
+    return String(s)
+      .toLowerCase()
+      .normalize('NFKD')
+      .replace(/[̀-ͯ]/g, '')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim();
+  }
+
+  const normalizedText = text;
+  // Build a sorted list of header positions to slice the body by
+  // sub-section. Headers are matched greedily; if the LLM used plain
+  // text titles we still try to find them as substrings.
+  const positions = [];
+  for (const spec of subspecs) {
+    const normTitle = normalize(spec.title);
+    if (!normTitle) continue;
+    const headerRe = new RegExp(
+      `(?:^|\\n)\\s*(?:#{1,6}\\s+|\\*\\*|\\d+(?:\\.\\d+)*\\s+)?[^\\n]*${escapeRegex(normTitle.split(' ').slice(0, 4).join(' '))}[^\\n]*`,
+      'i',
+    );
+    const m = normalizedText.match(headerRe);
+    if (m && typeof m.index === 'number') {
+      positions.push({ specId: spec.id, start: m.index });
+    }
+  }
+
+  positions.sort((a, b) => a.start - b.start);
+  for (let i = 0; i < positions.length; i++) {
+    const { specId, start } = positions[i];
+    const end = i + 1 < positions.length ? positions[i + 1].start : normalizedText.length;
+    map.set(specId, normalizedText.slice(start, end).trim());
+  }
+  return map;
+}
+
+function escapeRegex(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 async function runThesisPipeline(params = {}, deps = {}) {
   const {
     topic,
@@ -90,10 +149,27 @@ async function runThesisPipeline(params = {}, deps = {}) {
   const chapters = [];
   let totalUnverified = 0;
   for (const tpl of templates) {
+    // Hand the LLM the strict sub-section specs (exact word counts,
+    // required citations, regions to mention, year ranges) so it can
+    // generate paragraphs that survive the post-generation validator
+    // — the prompt master nails specific counts like 75/100/220 words
+    // that won't be hit unless the model knows them up front.
+    const subspecs = listSpecsForChapter(tpl.id);
+    if (subspecs.length > 0) {
+      emit({
+        type: 'subsection-specs',
+        chapter: tpl.id,
+        count: subspecs.length,
+        ids: subspecs.map((s) => s.id),
+      });
+    }
+    const subspecPrompt = subspecs.map(buildSpecBlock).filter(Boolean).join('\n\n');
     const raw = await generateChapter({
       template: tpl,
       topic,
       references,
+      subspecs,
+      subspecPrompt,
     });
     const { text: content, report: citationReport } = strict
       ? markUnverified(raw, references)
@@ -104,14 +180,41 @@ async function runThesisPipeline(params = {}, deps = {}) {
       max: tpl.maxWords,
       label: tpl.title,
     });
+
+    // Best-effort sub-section validation: when the LLM keeps section
+    // headers in its output we can verify per-sub-section word counts
+    // against the strict spec table. When headers can't be matched we
+    // skip silently (the chapter-level validation already ran).
+    let subsectionValidations = [];
+    if (subspecs.length > 0) {
+      const sectionsMap = extractSubsections(content, subspecs);
+      subsectionValidations = subspecs.map((spec) => {
+        const sectionText = sectionsMap.get(spec.id) || '';
+        const v = sectionText
+          ? validateAgainstSpec(sectionText, spec)
+          : { ok: null, label: spec.title, words: 0, skipped: true };
+        return { specId: spec.id, ...v };
+      });
+    }
+
     chapters.push({
       id: tpl.id,
       title: tpl.title,
       content,
       validation,
       citations: citationReport,
+      subsectionValidations,
     });
-    emit({ type: 'chapter', id: tpl.id, words: validation.words, ok: validation.ok, unverifiedCitations: citationReport.totalUnverified });
+    emit({
+      type: 'chapter',
+      id: tpl.id,
+      words: validation.words,
+      ok: validation.ok,
+      unverifiedCitations: citationReport.totalUnverified,
+      subsections: subsectionValidations.length,
+      subsectionsOk: subsectionValidations.filter((s) => s.ok === true).length,
+      subsectionsSkipped: subsectionValidations.filter((s) => s.skipped).length,
+    });
   }
   let totalVerified = chapters.reduce((s, c) => s + (c.citations?.totalVerified || 0), 0);
   let externallyVerified = 0;
