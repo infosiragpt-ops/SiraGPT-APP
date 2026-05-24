@@ -159,6 +159,45 @@ APP_DIR=/root/siraNew/siraGPT scripts/deploy-production.sh
 | `SEMANTIC_CACHE_ENABLED` | Enable LLM response cache | `false` |
 | `SEMANTIC_CACHE_TTL_SECONDS` | Cache TTL | `3600` |
 
+## 💎 Credits Ledger (F2)
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `CREDITS_PARAPHRASE_PER_1K_CHARS` | Credits charged per 1,000 chars of text in `/api/paraphrase`. Multiplied by `Math.ceil(text.length / 1000)`. | `1` |
+| `CREDITS_IMAGE_BASE` | Flat credit cost per image generation / variation / upscale via `/api/images/*`. Clamped to ≥ 1. | `5` |
+| `CREDITS_VIDEO_BASE` | (Future) flat credit cost per video generation once `/api/video/jobs` switches to real providers. | `20` |
+| `CREDITS_DEFAULT_REFILL_DAY` | Day-of-month for the monthly credits refill cron (F2 follow-up). | `1` |
+
+## 🔐 RBAC (F1 + F2)
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `RBAC_CACHE_TTL_MS` | TTL (ms) for the in-memory `requirePermission()` permission cache. Lower = fresher, higher = cheaper. | `60000` |
+| `RBAC_SHADOW_MODE` | When `true`, `requirePermission()` allows `req.user.isSuperAdmin` to bypass the declarative check (and logs `kind: 'rbac.shadow.diff'`). Flip to `false` in F5 PR23 sunset once logs show zero diffs for ≥ 7 days. | `true` |
+
+## 🖼️ Image / 🎬 Video providers (F4)
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `IMAGE_PROVIDER` | `mock` (placeholder SVG) / `openai` (DALL-E) / `none` (503 every request). | `mock` |
+| `STABILITY_API_KEY` | (Future) Stability AI key once `stability` provider lands. | — |
+| `REPLICATE_API_TOKEN` | (Future) Replicate token once `replicate` provider lands. | — |
+| `VIDEO_PROVIDER` | `mock` (SVG storyboard + UI disclaimer) / `pika` / `runway` / `none`. | `mock` |
+| `PIKA_API_KEY` | Pika Labs REST key. Required when `VIDEO_PROVIDER=pika`. | — |
+| `PIKA_WEBHOOK_SECRET` | HMAC secret Pika signs delivery webhooks with. Required for prod use. | — |
+| `RUNWAY_API_KEY` | Runway Gen-3 REST key. Required when `VIDEO_PROVIDER=runway`. | — |
+| `RUNWAY_WEBHOOK_SECRET` | HMAC secret Runway signs delivery webhooks with. | — |
+| `IMAGE_GEN_QUEUE_CONCURRENCY` | (Future) BullMQ worker concurrency for image jobs. | `4` |
+| `IMAGE_GEN_TIMEOUT_MS` | (Future) Per-job timeout before failing + auto-refund. | `120000` |
+| `IMAGE_RETENTION_DAYS_FREE` | (Future) TTL for soft-deleted images on FREE plan. | `90` |
+
+## 📈 Metrics (F5)
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `METRICS_TOKEN` | Optional bearer token for `GET /metrics`. When unset the endpoint is open (typical in-VPC scrape). When set, `Authorization: Bearer <METRICS_TOKEN>` is required. | — |
+| `METRICS_BIND` | (Future) Bind address for a dedicated metrics listener (e.g. `127.0.0.1:9090`). Today metrics ride on the main backend port (`5000`). | — |
+
 ## 🚀 Frontend (NEXT_PUBLIC_*)
 
 | Variable | Description | Default |
