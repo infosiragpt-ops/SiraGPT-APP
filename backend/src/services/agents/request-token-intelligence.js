@@ -89,7 +89,8 @@ const LEXICON = Object.freeze({
   code: [
     "codigo", "script", "funcion", "api", "backend", "frontend", "debug",
     "bug", "test", "tests", "lint", "build", "repositorio", "github",
-    "deploy", "despliegue", "python", "javascript", "typescript", "react",
+    "repo", "git", "clone", "clona", "clonar", "commit", "push", "branch",
+    "rama", "main", "ci", "actions", "checkout", "deploy", "despliegue", "python", "javascript", "typescript", "react",
     "nextjs", "next js", "node", "fastapi", "html", "css", "xml", "source",
   ],
   web: [

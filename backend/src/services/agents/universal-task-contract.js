@@ -703,7 +703,10 @@ function inferIntentAndPipeline({ raw, fileIds = [], tokenAnalysis = null }) {
   const action = matchAny(raw, [/\b(envia|enviar|correo|email|gmail|calendario|calendar|reserva|reservar|whatsapp|telegram|navegador|browser|agenda|programa una reunion)\b/i]);
   const editImage = matchAny(raw, [/\b(edita|editar|modifica|retoca|inpaint|pincel|mascara|mask)\b/i]) && matchAny(raw, [/\b(imagen|foto|png|jpg|jpeg|webp)\b/i]);
   const image = !editImage && matchAny(raw, [/\b(genera una imagen|crear imagen|imagen de|foto de|png|jpg|jpeg|webp)\b/i]);
-  const code = matchAny(raw, [/\b(codigo|código|programa|script|funcion|función|api|backend|frontend|react|next\.?js|python|javascript|typescript|debug|bug|test|lint|build)\b/i]);
+  const code = matchAny(raw, [
+    /\b(codigo|código|programa|script|funcion|función|api|backend|frontend|react|next\.?js|python|javascript|typescript|debug|bug|test|lint|build)\b/i,
+    /\b(?:github\.com\/[\w.-]+\/[\w.-]+|git\s+clone|clona(?:r|me)?|clone(?:ar)?|fork|pull\s+request|pr\b|commit|push|sube(?:r)?\s+(?:a\s+)?(?:github|main)|repositorio|repo|checkout|branch|rama|main|ci\s+(?:verde|green)|actions?)\b/i,
+  ]);
   const webBuild = matchAny(raw, [
     /\b(crea|crear|creame|créame|haz|hazme|genera|generar|desarrolla|programa|construye|implementa|diseña|disena)\b.*\b(web|website|pagina web|página web|sitio web|landing|web app|frontend|react|next\.?js|saas|ecommerce|e-commerce|tienda online)\b/i,
     /\b(web|website|pagina web|página web|sitio web|landing|web app|frontend|react|next\.?js|saas|ecommerce|e-commerce|tienda online)\b.*\b(crea|crear|haz|hazme|genera|generar|desarrolla|programa|construye|implementa|diseña|disena)\b/i,

@@ -194,6 +194,22 @@ describe("semantic intent router · structured profile", () => {
     assert.ok(analysis.semantic_profile.secondary_intents.includes("doi_validation"))
   })
 
+  it("routes repository setup and GitHub delivery as autonomous agent work", () => {
+    const clone = semanticRouter.buildSemanticIntentAnalysis({
+      rawUserRequest: "quiero que me des este proyecto en local github.com/open-webui/open-webui",
+    })
+    const ship = semanticRouter.buildSemanticIntentAnalysis({
+      rawUserRequest: "mejora el backend sin tocar la interfaz, haz commit, sube a main y vigila CI verde",
+    })
+
+    assert.equal(clone.intent, "agent_task")
+    assert.equal(clone.contract.pipeline, "CodePipeline")
+    assert.ok(clone.semantic_profile.required_tools.includes("git.clone"))
+    assert.ok(clone.semantic_profile.required_tools.includes("repo.inspect"))
+    assert.equal(ship.intent, "agent_task")
+    assert.ok(ship.semantic_profile.required_tools.includes("github.actions.monitor"))
+  })
+
   it("exposes deterministic token evidence for the routing layer", () => {
     const analysis = tokenIntelligence.analyzeRequestTokens({
       rawUserRequest: "crea una landing page con React y ejecuta pruebas",
