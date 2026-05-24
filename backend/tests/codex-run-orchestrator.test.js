@@ -18,8 +18,17 @@ test('detectCodeTaskIntent flags coding prompts', () => {
   const hit = detectCodeTaskIntent('Please fix the bug in api.js and run npm test');
   assert.equal(hit.isCodeTask, true);
   assert.ok(hit.confidence >= 0.75);
+  const repoHit = detectCodeTaskIntent('Dame en local https://github.com/open-webui/open-webui y sube los cambios a main cuando CI esté verde');
+  assert.equal(repoHit.isCodeTask, true);
+  assert.ok(repoHit.confidence >= 0.75);
   const miss = detectCodeTaskIntent('Explain quantum physics');
   assert.equal(miss.isCodeTask, false);
+});
+
+test('detectCodeTaskIntent catches Spanish repo automation requests', () => {
+  const hit = detectCodeTaskIntent('Clona github.com/open-webui/open-webui en local, mejora el software, sube a main y vigila estatus verde');
+  assert.equal(hit.isCodeTask, true);
+  assert.ok(hit.confidence >= 0.75);
 });
 
 test('chat-task-scope requires chatId unless global', async () => {

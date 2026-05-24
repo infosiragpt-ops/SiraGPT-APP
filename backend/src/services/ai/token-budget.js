@@ -62,6 +62,8 @@ const CONTEXT_WINDOWS = Object.freeze({
     'gemini-2.5-flash':  1_000_000,
     'deepseek-v4-flash': 128_000,
     'deepseek-v4-pro':   128_000,
+    'Gema4-31B':          128_000,
+    'gema4-31b':          128_000,
     'moonshotai/kimi-k2.6': 200_000,
     'openai/gpt-oss-120b': 128_000,
     'openai/gpt-oss-20b':  128_000,

@@ -36,6 +36,7 @@
 
 const reactAgent = require('./react-agent');
 const agentTools = require('./agents/agent-tools');
+const conversationUnderstanding = require('./conversation-understanding');
 
 const SENTINEL_FENCE_OPEN = '```agent-task-state\n';
 const SENTINEL_FENCE_CLOSE = '\n```';
@@ -49,6 +50,21 @@ const DEFAULT_MAX_RUNTIME_MS = 90 * 1000;
 const STAGE_LABELS = {
   web_search: (args) => `Buscando "${truncate(args?.query, 60)}"`,
   read_url:   (args) => `Leyendo ${prettyDomain(args?.url) || 'fuente'}`,
+  memory_recall: (args) => `Recordando contexto sobre "${truncate(args?.query, 48)}"`,
+  rag_retrieve: (args) => `Consultando documentos sobre "${truncate(args?.query, 48)}"`,
+  self_rag_answer: () => 'Construyendo respuesta grounded',
+  docintel_analyze: () => 'Analizando documentos adjuntos',
+  docintel_retrieve: () => 'Recuperando evidencia documental',
+  docintel_extract_tables: () => 'Extrayendo tablas',
+  docintel_compare: () => 'Comparando documentos',
+  deep_analyze: () => 'Analizando contenido en profundidad',
+  auto_file: () => 'Archivando contenido como documento',
+  compare_documents: () => 'Comparando documentos',
+  python_exec: () => 'Ejecutando Python',
+  bash_exec: () => 'Ejecutando JavaScript aislado',
+  create_document: (args) => `Creando ${truncate(args?.filename || 'archivo', 48)}`,
+  verify_artifact: () => 'Verificando archivo generado',
+  run_tests: () => 'Ejecutando pruebas',
   finalize:   () => 'Componiendo respuesta',
 };
 
@@ -69,6 +85,45 @@ function safeArgs(raw) {
   if (typeof raw === 'object') return raw;
   try { return JSON.parse(String(raw || '{}')); }
   catch { return {}; }
+}
+
+function textFromMessageContent(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .map(p => (p && p.type === 'text') ? p.text : '')
+      .filter(Boolean)
+      .join(' ');
+  }
+  if (content && typeof content === 'object') {
+    if (typeof content.text === 'string') return content.text;
+    try { return JSON.stringify(content); } catch { return ''; }
+  }
+  return '';
+}
+
+function buildThreadWorkContext(history, userQuery) {
+  const normalized = conversationUnderstanding.normalizeHistory(history || []);
+  const recentTurns = normalized.slice(-18).map(m => {
+    const tag = m.role === 'assistant' ? 'ASSISTANT' : (m.role === 'system' ? 'SYSTEM' : 'USER');
+    return `${tag}: ${truncate(m.content, 900)}`;
+  }).join('\n');
+
+  const goals = conversationUnderstanding.extractLikelyUserGoals(normalized, userQuery, 8);
+  const lines = [
+    'Treat this chat thread as an ongoing autonomous work session, not as an isolated Q&A turn.',
+    'Infer the user intent from the full thread, including spelling mistakes and corrections. Continue the task unless an external irreversible action needs explicit confirmation.',
+    'Before finalizing, check whether the request requires tool use, recent facts, repository context, or step-by-step execution. Use the available tools when they materially improve the answer.',
+    'If a requested action needs a tool that is not available in this runtime, state that limitation briefly and provide the closest executable next step instead of pretending it was done.',
+  ];
+
+  if (goals.length) {
+    lines.push('', 'Standing user goals inferred from this thread:', ...goals.map(goal => `- ${truncate(goal, 900)}`));
+  }
+  if (recentTurns) {
+    lines.push('', 'Recent thread context:', recentTurns);
+  }
+  return lines.join('\n');
 }
 
 function stageLabelFor(toolName, args) {
@@ -93,12 +148,15 @@ function modelSupportsFunctionCalling(provider, model) {
     return /^(gpt-4|gpt-4o|gpt-4\.1|gpt-5|o3|o4|chatgpt|gpt-3\.5-turbo-1106|gpt-3\.5-turbo-0125)/i.test(m);
   }
   if (p === 'gemini') {
-    return /^gemini-(1\.5|2|2\.5)/i.test(m);
+    return /^gemini-(1\.5|2|2\.5|3)/i.test(m);
+  }
+  if (p === 'deepseek') {
+    return /^deepseek-(v\d|chat|reasoner)/i.test(m);
   }
   if (p === 'openrouter') {
     // OpenRouter normalises tools across providers; the safe bets are
     // the same families as above when surfaced through OpenRouter.
-    return /(openai\/(gpt-4|gpt-4o|gpt-4\.1|gpt-5|o3|o4)|google\/gemini-(1\.5|2))/i.test(m);
+    return /(openai\/(gpt-4|gpt-4o|gpt-4\.1|gpt-5|o3|o4)|google\/gemini-(1\.5|2|2\.5|3)|deepseek\/|moonshotai\/kimi-k2\.6)/i.test(m);
   }
   return false;
 }
@@ -109,9 +167,9 @@ function modelSupportsFunctionCalling(provider, model) {
  * lib/agent-task-service.ts `initialAgentState` so the existing
  * reducers / renderers work without modification.
  */
-function freshState() {
+function freshState(toolNames = ['web_search', 'read_url']) {
   return {
-    meta: { goal: '', model: '', tools: ['web_search', 'read_url'] },
+    meta: { goal: '', model: '', tools: toolNames },
     steps: [],
     artifacts: [],
     approvals: [],
@@ -153,7 +211,8 @@ async function writeSse(res, payload) {
  * @param {number}  [opts.maxRuntimeMs=90000]
  * @param {boolean} [opts.skipDoneSentinel=true]
  * @param {object}  [opts.toolsOverride] — for tests; defaults to
- *                                          [web_search, read_url] from agent-tools.
+ *                                          the production chat toolset.
+ * @param {object}  [opts.toolContext]   — per-request context passed to tools.
  * @returns {Promise<{finalAnswer:string, stoppedReason:string, steps:Array}>}
  */
 async function runAgenticChat(opts) {
@@ -168,6 +227,7 @@ async function runAgenticChat(opts) {
     maxRuntimeMs = DEFAULT_MAX_RUNTIME_MS,
     skipDoneSentinel = true,
     toolsOverride = null,
+    toolContext = {},
   } = opts || {};
 
   if (!openai) throw new Error('runAgenticChat: openai client is required');
@@ -175,31 +235,9 @@ async function runAgenticChat(opts) {
   if (!userQuery) throw new Error('runAgenticChat: userQuery is required');
   if (!res) throw new Error('runAgenticChat: res is required');
 
-  const tools = toolsOverride || [
-    // react-agent expects {name,description,parameters,execute(args,ctx)};
-    // agent-tools entries use {schema,handler}. Adapt them inline.
-    adaptAgentTool(agentTools.web_search, {
-      type: 'object',
-      properties: {
-        query:      { type: 'string', description: 'Search query, 2-12 keywords.' },
-        maxResults: { type: 'integer', minimum: 1, maximum: 15, description: 'How many hits to return. Default 5.' },
-        locale:     { type: 'string', description: 'BCP-47 hint, e.g. "es-es".' },
-      },
-      required: ['query'],
-      additionalProperties: false,
-    }),
-    adaptAgentTool(agentTools.read_url, {
-      type: 'object',
-      properties: {
-        url:      { type: 'string', description: 'Absolute http(s) URL to read.' },
-        maxChars: { type: 'integer', minimum: 500, maximum: 50000, description: 'Markdown cap. Default 12000.' },
-      },
-      required: ['url'],
-      additionalProperties: false,
-    }),
-  ];
+  const tools = toolsOverride || buildDefaultTools();
 
-  const state = freshState();
+  const state = freshState(tools.map((tool) => tool.name));
   state.meta.goal = truncate(userQuery, 160);
   state.meta.model = model;
 
@@ -219,23 +257,25 @@ async function runAgenticChat(opts) {
   // conversation but doesn't re-stream every turn.
   const historyForPrompt = (history || [])
     .filter(m => m && typeof m === 'object' && typeof m.content !== 'undefined')
-    .slice(-8) // last few turns is plenty — keeps the prompt budget honest
+    .slice(-18)
     .map(m => {
       const role = String(m.role || '').toLowerCase();
       const tag = role === 'assistant' ? 'ASSISTANT' : (role === 'system' ? 'SYSTEM' : 'USER');
-      const txt = typeof m.content === 'string'
-        ? m.content
-        : (Array.isArray(m.content)
-          ? m.content.map(p => (p && p.type === 'text') ? p.text : '').join(' ')
-          : '');
+      const txt = textFromMessageContent(m.content);
       return `${tag}: ${truncate(txt, 800)}`;
     })
     .join('\n');
 
   const extraSystem = [
     'Responde SIEMPRE en español, con tono profesional y cercano. No uses emojis.',
-    'Cuando la pregunta requiera información reciente, hechos verificables o cifras concretas, USA `web_search` y luego `read_url` sobre los 1-3 mejores resultados antes de finalizar.',
-    'Cita las fuentes al final del mensaje como una lista markdown de enlaces (`- [Título](url)`).',
+    buildThreadWorkContext(history, userQuery),
+    'Este hilo es una sesion agentica: decide, usa herramientas, observa resultados, corrige y finaliza solo cuando tengas una respuesta verificable.',
+    'Usa `memory_recall` cuando el pedido dependa de preferencias o contexto persistente del usuario.',
+    'Usa `rag_retrieve`, `self_rag_answer` o `docintel_*` cuando el usuario mencione archivos, documentos, PDFs, tablas o conocimiento privado.',
+    'Cuando la pregunta requiera información reciente, hechos verificables o cifras concretas, usa `web_search` y luego `read_url` sobre las mejores fuentes. Cita esas fuentes con enlaces markdown.',
+    'Para calculos, transformaciones de datos o verificacion deterministica, usa `python_exec`. Cuando generes codigo no trivial, usa `run_tests` antes de finalizar.',
+    'Cuando el usuario pida un archivo descargable, usa `create_document` y despues `verify_artifact`; no finalices si la verificacion muestra un archivo vacio o incorrecto.',
+    'No afirmes que modificaste repositorios, GitHub o el filesystem local si ninguna herramienta disponible lo hizo realmente.',
     historyForPrompt ? `\nConversación previa (recortada):\n${historyForPrompt}` : '',
   ].filter(Boolean).join('\n');
 
@@ -247,7 +287,7 @@ async function runAgenticChat(opts) {
     maxSteps,
     maxRuntimeMs,
     extraSystem,
-    ctx: { signal },
+    ctx: { ...toolContext, signal },
     onStepStart: async (stepRec) => {
       stepCounter += 1;
       // Mark the previous synthetic step done.
@@ -350,14 +390,84 @@ function adaptAgentTool(tool, jsonSchema) {
   };
 }
 
+function baseWebTools() {
+  return [
+    // react-agent expects {name,description,parameters,execute(args,ctx)};
+    // agent-tools entries use {schema,handler}. Adapt them inline.
+    adaptAgentTool(agentTools.web_search, {
+      type: 'object',
+      properties: {
+        query:      { type: 'string', description: 'Search query, 2-12 keywords.' },
+        maxResults: { type: 'integer', minimum: 1, maximum: 15, description: 'How many hits to return. Default 5.' },
+        locale:     { type: 'string', description: 'BCP-47 hint, e.g. "es-es".' },
+      },
+      required: ['query'],
+      additionalProperties: false,
+    }),
+    adaptAgentTool(agentTools.read_url, {
+      type: 'object',
+      properties: {
+        url:      { type: 'string', description: 'Absolute http(s) URL to read.' },
+        maxChars: { type: 'integer', minimum: 500, maximum: 50000, description: 'Markdown cap. Default 12000.' },
+      },
+      required: ['url'],
+      additionalProperties: false,
+    }),
+  ];
+}
+
+function loadTaskTools() {
+  try {
+    // Lazy-load: document/media helpers are heavy and should not be
+    // imported unless the agentic chat path actually runs.
+    // eslint-disable-next-line global-require
+    const taskTools = require('./agents/task-tools').INTERNAL;
+    return [
+      taskTools.memoryRecall,
+      taskTools.ragRetrieve,
+      taskTools.selfRagAnswer,
+      taskTools.docintelAnalyze,
+      taskTools.docintelRetrieve,
+      taskTools.docintelExtractTables,
+      taskTools.docintelCompare,
+      taskTools.deepAnalyze,
+      taskTools.autoFile,
+      taskTools.compareDocuments,
+      taskTools.pythonExec,
+      taskTools.bashExec,
+      taskTools.createDocument,
+      taskTools.verifyArtifact,
+      taskTools.runTests,
+    ].filter(Boolean);
+  } catch (err) {
+    try { console.warn('[agentic-chat] task tools unavailable:', err && err.message); } catch (_) {}
+    return [];
+  }
+}
+
+function buildDefaultTools() {
+  const tools = [...baseWebTools(), ...loadTaskTools()];
+  const seen = new Set();
+  return tools.filter((tool) => {
+    if (!tool || !tool.name || seen.has(tool.name)) return false;
+    seen.add(tool.name);
+    return true;
+  });
+}
+
 /**
- * Read the runtime feature flag for the agentic chat path. Read each
- * invocation (not cached) so operators can flip it without restarting
- * the backend — a requirement for safe rollout of an unproven feature.
+ * Read the runtime feature flag for the agentic chat path. Agentic chat
+ * is now the default for tool-capable models because otherwise normal
+ * chat silently behaves like a plain completion. Operators can still
+ * disable it without a deploy by setting either flag to false/0/off/no.
  */
 function isEnabled() {
-  const v = String(process.env.AGENTIC_TOOLS_IN_CHAT || '').trim().toLowerCase();
-  return v === '1' || v === 'true' || v === 'on' || v === 'yes';
+  const explicit = process.env.SIRAGPT_AGENTIC_CHAT_ENABLED;
+  const legacy = process.env.AGENTIC_TOOLS_IN_CHAT;
+  const raw = explicit != null ? explicit : legacy;
+  if (raw == null || String(raw).trim() === '') return true;
+  const v = String(raw).trim().toLowerCase();
+  return !(v === '0' || v === 'false' || v === 'off' || v === 'no');
 }
 
 module.exports = {
@@ -369,7 +479,10 @@ module.exports = {
     freshState,
     serializeSentinel,
     stageLabelFor,
+    buildThreadWorkContext,
     adaptAgentTool,
+    baseWebTools,
+    buildDefaultTools,
     SENTINEL_FENCE_OPEN,
     SENTINEL_FENCE_CLOSE,
   },

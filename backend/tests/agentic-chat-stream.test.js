@@ -81,18 +81,25 @@ function finalizeMessage(text) {
   };
 }
 
-test('isEnabled reads AGENTIC_TOOLS_IN_CHAT at runtime', () => {
+test('isEnabled defaults on and reads runtime opt-out flags', () => {
   const prev = process.env.AGENTIC_TOOLS_IN_CHAT;
+  const prevNew = process.env.SIRAGPT_AGENTIC_CHAT_ENABLED;
+  delete process.env.SIRAGPT_AGENTIC_CHAT_ENABLED;
   process.env.AGENTIC_TOOLS_IN_CHAT = '';
-  assert.equal(agenticStream.isEnabled(), false);
+  assert.equal(agenticStream.isEnabled(), true);
   process.env.AGENTIC_TOOLS_IN_CHAT = '1';
   assert.equal(agenticStream.isEnabled(), true);
   process.env.AGENTIC_TOOLS_IN_CHAT = 'true';
   assert.equal(agenticStream.isEnabled(), true);
   process.env.AGENTIC_TOOLS_IN_CHAT = 'no';
   assert.equal(agenticStream.isEnabled(), false);
+  process.env.SIRAGPT_AGENTIC_CHAT_ENABLED = 'off';
+  process.env.AGENTIC_TOOLS_IN_CHAT = '1';
+  assert.equal(agenticStream.isEnabled(), false);
   if (prev === undefined) delete process.env.AGENTIC_TOOLS_IN_CHAT;
   else process.env.AGENTIC_TOOLS_IN_CHAT = prev;
+  if (prevNew === undefined) delete process.env.SIRAGPT_AGENTIC_CHAT_ENABLED;
+  else process.env.SIRAGPT_AGENTIC_CHAT_ENABLED = prevNew;
 });
 
 test('modelSupportsFunctionCalling allowlist', () => {
@@ -100,6 +107,9 @@ test('modelSupportsFunctionCalling allowlist', () => {
   assert.equal(agenticStream.modelSupportsFunctionCalling('OpenAI', 'gpt-4.1'), true);
   assert.equal(agenticStream.modelSupportsFunctionCalling('OpenAI', 'gpt-5'), true);
   assert.equal(agenticStream.modelSupportsFunctionCalling('Gemini', 'gemini-2.5-pro'), true);
+  assert.equal(agenticStream.modelSupportsFunctionCalling('Gemini', 'gemini-3-pro'), true);
+  assert.equal(agenticStream.modelSupportsFunctionCalling('DeepSeek', 'deepseek-v4-pro'), true);
+  assert.equal(agenticStream.modelSupportsFunctionCalling('OpenRouter', 'moonshotai/kimi-k2.6'), true);
   assert.equal(agenticStream.modelSupportsFunctionCalling('OpenAI', 'davinci-002'), false);
   assert.equal(agenticStream.modelSupportsFunctionCalling('Anthropic', 'claude-3-opus'), false);
 });
@@ -112,6 +122,61 @@ test('serializeSentinel produces a fenced agent-task-state block', () => {
   const json = JSON.parse(out.slice('```agent-task-state\n'.length, -4));
   assert.ok(Array.isArray(json.steps));
   assert.ok(Array.isArray(json.meta.tools));
+});
+
+test('default toolset includes chat, document and verification tools', () => {
+  const { buildDefaultTools } = agenticStream._internal;
+  const names = buildDefaultTools().map(tool => tool.name);
+  assert.ok(names.includes('web_search'));
+  assert.ok(names.includes('read_url'));
+  assert.ok(names.includes('memory_recall'));
+  assert.ok(names.includes('rag_retrieve'));
+  assert.ok(names.includes('python_exec'));
+  assert.ok(names.includes('run_tests'));
+});
+
+test('buildThreadWorkContext preserves standing user goals from prior turns', () => {
+  const { buildThreadWorkContext } = agenticStream._internal;
+  const context = buildThreadWorkContext([
+    { role: 'user', content: 'Quiero que cada chat sea un agente autónomo.' },
+    { role: 'assistant', content: 'Voy a revisar el backend.' },
+    { role: 'user', content: 'Necesito que pueda trabajar como Claude Code con repos.' },
+  ], 'Aun no funciona, no entiende todo el hilo.');
+
+  assert.match(context, /ongoing autonomous work session/);
+  assert.match(context, /cada chat sea un agente/);
+  assert.match(context, /Claude Code/);
+  assert.match(context, /Recent thread context/);
+});
+
+test('runAgenticChat sends expanded thread context to the model', async () => {
+  let firstCreateArgs = null;
+  const openai = {
+    chat: {
+      completions: {
+        create: async (args) => {
+          firstCreateArgs = args;
+          return finalizeMessage('Listo.');
+        },
+      },
+    },
+  };
+  const { res } = makeFakeRes();
+
+  await agenticStream.runAgenticChat({
+    openai,
+    model: 'gpt-4o-mini',
+    userQuery: 'continua con eso',
+    history: [
+      { role: 'user', content: 'Quiero que cada hilo recuerde la meta completa.' },
+      { role: 'assistant', content: 'Entendido.' },
+    ],
+    res,
+  });
+
+  const system = firstCreateArgs.messages.find(m => m.role === 'system')?.content || '';
+  assert.match(system, /ongoing autonomous work session/);
+  assert.match(system, /cada hilo recuerde la meta completa/);
 });
 
 test('runAgenticChat emits sentinel + final answer with a stub tool', async () => {
@@ -143,6 +208,38 @@ test('runAgenticChat emits sentinel + final answer with a stub tool', async () =
   const last = replaces[replaces.length - 1];
   assert.match(last.content, /agent-task-state/);
   assert.match(last.content, /La respuesta final/);
+});
+
+test('runAgenticChat passes request toolContext into tool execution', async () => {
+  let seenCtx = null;
+  const openai = makeFakeOpenAI([
+    toolCallMessage('capture_ctx', {}),
+    finalizeMessage('Contexto recibido.'),
+  ]);
+  const { res } = makeFakeRes();
+
+  await agenticStream.runAgenticChat({
+    openai,
+    model: 'gpt-4o-mini',
+    userQuery: 'usa contexto',
+    history: [],
+    res,
+    toolContext: { userId: 'user-1', chatId: 'chat-1', fileIds: ['file-1'] },
+    toolsOverride: [{
+      name: 'capture_ctx',
+      description: 'capture ctx',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+      execute: async (_args, ctx) => {
+        seenCtx = ctx;
+        return { ok: true };
+      },
+    }],
+  });
+
+  assert.equal(seenCtx.userId, 'user-1');
+  assert.equal(seenCtx.chatId, 'chat-1');
+  assert.deepEqual(seenCtx.fileIds, ['file-1']);
+  assert.ok('signal' in seenCtx);
 });
 
 test('runAgenticChat does not hang when a tool errors', async () => {

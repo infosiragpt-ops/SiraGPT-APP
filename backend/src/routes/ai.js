@@ -156,6 +156,7 @@ const ciraEngine = require('../services/sira/engine');
 const postResponseBrainHook = require('../services/sira/post-response-brain-hook');
 const coworkEngine = require('../services/cowork-engine');
 const activeMemory = require('../services/active-memory');
+const conversationUnderstanding = require('../services/conversation-understanding');
 const chatAttachmentRecovery = require('../services/chat-attachment-recovery');
 const messageAttachments = require('../services/message-attachments');
 const router = express.Router();
@@ -1545,21 +1546,31 @@ router.post(
       // best-effort: cualquier fallo cae al comportamiento actual.
       const __pr3ExtraBlocks = [];
       let __pr3RecentTurns = [];
+      let __conversationHistoryForUnderstanding = [];
       try {
         if (userId && canPersist && chatId) {
           const __historyMsgs = await prisma.message.findMany({
             where: { chatId },
             orderBy: { timestamp: 'desc' },
-            take: 6,
+            take: 80,
             select: { role: true, content: true },
           });
           // Map oldest → newest, normalized shape for the resolver.
-          __pr3RecentTurns = (__historyMsgs || []).reverse().map((m) => ({
+          __conversationHistoryForUnderstanding = (__historyMsgs || []).reverse().map((m) => ({
             role: m.role === 'ASSISTANT' ? 'assistant' : 'user',
-            text: m.content || '',
-          })).filter((m) => m.text);
+            content: m.content || '',
+          })).filter((m) => m.content);
+          __pr3RecentTurns = __conversationHistoryForUnderstanding.slice(-6).map((m) => ({
+            role: m.role,
+            text: m.content,
+          }));
         }
       } catch (_pr3HistErr) { /* swallow — coref still useful with attachments only */ }
+
+      const conversationUnderstandingBlock = conversationUnderstanding.buildConversationUnderstandingBlock({
+        history: __conversationHistoryForUnderstanding,
+        currentPrompt: prompt,
+      });
 
       // PR-6: conversation-repair detection.
       // Si el mensaje actual es una corrección explícita ("no, en
@@ -2976,11 +2987,14 @@ router.post(
         // PR-4: short-query expander. Solo alimenta al router/triage; el
         // LLM grande sigue viendo el `prompt` literal. Si el prompt ya
         // tiene >= 10 tokens, no se expande (no_expansion).
-        let __routerPrompt = prompt;
+        let __routerPrompt = conversationUnderstanding.buildThreadAwarePrompt({
+          history: __conversationHistoryForUnderstanding,
+          currentPrompt: prompt,
+        });
         try {
           if (String(process.env.SIRAGPT_SHORT_QUERY_EXPAND_ENABLED || 'true').toLowerCase() !== 'false') {
             const __expansion = expandShortQuery({
-              prompt,
+              prompt: __routerPrompt,
               recentTurns: __pr3RecentTurns,
               lexiconTerms: [], // El lexicón ya se inyectó al system prompt en PR-3
             });
@@ -3024,7 +3038,7 @@ router.post(
         ciraRuntimeBundle = await ciraEngine.runUserMessage({
           text: prompt,
           attachments: processedFiles.map(toCiraAttachment).filter(Boolean),
-          history: [],
+          history: __conversationHistoryForUnderstanding,
           userProfile: userProfile || {},
           userPlan: req.user?.plan || 'FREE',
           conversationId: canPersist ? chatId : null,
@@ -3159,8 +3173,8 @@ router.post(
         }
       } catch (_pr5Err) { /* swallow */ }
 
-      const systemInstruction = { role: 'system', content: promptBundle.system + universalContractBlock + enterpriseExecutionBlock + memoryBlock + orchMemoryBlock + feedbackBlock + evidenceBlock + documentEnrichmentBlock + coworkBlock + webSearchBlock + __pr5GroundingBlock };
-      console.log(`📝 system prompt built: intent=${promptBundle.intent} lang=${promptBundle.language} chars=${systemInstruction.content.length} profile=${userProfile ? 'yes' : 'no'} memory=${memoryBlock ? 'yes' : 'no'} orchMemory=${orchMemoryBlock ? 'yes' : 'no'} feedback=${feedbackBlock ? 'yes' : 'no'} rag=${operationalRagContext?.active ? 'yes' : 'no'} contract=${universalTaskContract?.pipeline || 'none'} graph=${enterpriseExecutionGraph?.graph_id || 'none'} cira=${ciraRuntimeBundle?.envelope?.request_id || 'none'} docEnrichment=${documentEnrichment ? `${documentEnrichment.primaryDocType}/${documentEnrichment.perFileProfile.length}` : 'none'} webSearch=${webSearchBlock ? 'yes' : 'no'}`);
+      const systemInstruction = { role: 'system', content: promptBundle.system + conversationUnderstandingBlock + universalContractBlock + enterpriseExecutionBlock + memoryBlock + orchMemoryBlock + feedbackBlock + evidenceBlock + documentEnrichmentBlock + coworkBlock + webSearchBlock + __pr5GroundingBlock };
+      console.log(`📝 system prompt built: intent=${promptBundle.intent} lang=${promptBundle.language} chars=${systemInstruction.content.length} profile=${userProfile ? 'yes' : 'no'} threadContext=${conversationUnderstandingBlock ? 'yes' : 'no'} threadTurns=${__conversationHistoryForUnderstanding.length} memory=${memoryBlock ? 'yes' : 'no'} orchMemory=${orchMemoryBlock ? 'yes' : 'no'} feedback=${feedbackBlock ? 'yes' : 'no'} rag=${operationalRagContext?.active ? 'yes' : 'no'} contract=${universalTaskContract?.pipeline || 'none'} graph=${enterpriseExecutionGraph?.graph_id || 'none'} cira=${ciraRuntimeBundle?.envelope?.request_id || 'none'} docEnrichment=${documentEnrichment ? `${documentEnrichment.primaryDocType}/${documentEnrichment.perFileProfile.length}` : 'none'} webSearch=${webSearchBlock ? 'yes' : 'no'}`);
 
       // ✅ IMPROVED: Get previous chat history with proper image handling
       let historyMessages = [];
@@ -3173,7 +3187,7 @@ router.post(
       }
 
       const currentTurnHasNonImageFiles = processedFiles.some(f => !isImageMime(f.mimeType));
-      const messages = [systemInstruction];
+      let messages = [systemInstruction];
       if (historyMessages.length) {
         for (const m of historyMessages) {
           const messageRole = m.role === 'USER' ? 'user' : 'assistant';
@@ -3377,6 +3391,14 @@ router.post(
         content: finalPrompt,
         attachments: openaiFiles.map(fileId => ({ file_id: fileId, tools: [{ type: "file_search" }] }))
       });
+
+      const fittedContext = contextWindow.fitMessagesToContext(messages, actualModel, {
+        reservedCompletionTokens: Math.min(8192, contextWindow.getCompletionLimit(actualModel)),
+      });
+      messages = fittedContext.messages;
+      if (fittedContext.droppedCount > 0) {
+        console.log(`✂️ route context fit: dropped ${fittedContext.droppedCount} message(s), ${fittedContext.totalTokens}/${fittedContext.budget} tokens before preflight`);
+      }
 
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache');
@@ -3720,6 +3742,10 @@ router.post(
               ) {
                 const agenticClient = createProviderClient(actualProvider);
                 const priorHistory = Array.isArray(messages) ? messages.slice(0, -1) : [];
+                const agenticFileIds = (processedFiles || [])
+                  .map((file) => file && (file.id || file.fileId || file.uploadId || file.databaseId))
+                  .filter(Boolean)
+                  .map(String);
                 const agenticResult = await agenticStream.runAgenticChat({
                   openai: agenticClient,
                   model: actualModel,
@@ -3727,6 +3753,15 @@ router.post(
                   history: priorHistory,
                   res,
                   signal,
+                  toolContext: {
+                    userId,
+                    chatId: canPersist ? chatId : null,
+                    userEmail: req.user?.email || null,
+                    prisma,
+                    openai: agenticClient,
+                    collection: 'default',
+                    fileIds: agenticFileIds,
+                  },
                 });
                 return agenticResult.finalAnswer || '';
               }

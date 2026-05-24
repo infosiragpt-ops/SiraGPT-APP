@@ -13,9 +13,12 @@ function detectCodeTaskIntent(text) {
   const t = String(text || '');
   if (!t.trim()) return { isCodeTask: false, confidence: 0 };
   const patterns = [
-    /\b(fix|refactor|implement|debug|bug|pull request|commit|github|codex|cursor|npm test|eslint)\b/i,
-    /\b(creates?|write|genera|implementa).{0,40}\b(api|endpoint|component|funci[oó]n|script|module|class)\b/i,
+    /\b(fix|refactor|implement|debug|bug|pull request|commit|github|repo(?:sitory)?|clone|codex|claude code|openclaw|cursor|npm test|eslint)\b/i,
+    /\b(arregla|corrige|programa|mejora|implementa|clona|descarga|sube|pushea|env[ií]a|vigila|monitorea|despliega|prueba)\b/i,
+    /\b(creates?|write|genera|implementa).{0,40}\b(api|endpoint|component|funci[oó]n|script|module|class|software|proyecto|repo)\b/i,
     /\b(push|merge|deploy|ci)\b/i,
+    /https?:\/\/github\.com\/[\w.-]+\/[\w.-]+/i,
+    /\b(open-webui|siraGPT|local|main|green status|estatus verde)\b/i,
   ];
   const hits = patterns.filter((re) => re.test(t)).length;
   if (hits >= 2) return { isCodeTask: true, confidence: 0.9 };
