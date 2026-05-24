@@ -3130,7 +3130,6 @@ function ChatInterfaceContent() {
     clearCurrentChat,
     selectedModel,
     createNewChat,
-    isLoading,
     setSelectedModel,
     setSelectedProivder,
     selectProvider,
@@ -3141,13 +3140,16 @@ function ChatInterfaceContent() {
     availableModels, regenerateLastMessage, regenerateMessage,
     editAndRegenerate,
     updateMessageInChat,
-    isStreaming, // ✅ isStreaming ko yahan se fetch karein
+    activeStreamingChatIds,
     pendingStop, // Add pendingStop state
     stopStreaming,
 
   } = useChat()
 
   const [input, setInput] = React.useState("")
+  const currentChatId = currentChat?.id ?? null
+  const isCurrentChatStreaming = Boolean(currentChatId && activeStreamingChatIds.includes(currentChatId))
+  const isCurrentChatLoading = isCurrentChatStreaming
   // Per-chat draft persistence. The composer's text is saved (debounced)
   // to localStorage scoped by chatId and restored when the user comes
   // back to the same conversation after a reload or accidental
@@ -3398,18 +3400,18 @@ function ChatInterfaceContent() {
   // recibiendo tokens). Usamos su longitud como proxy barato sin
   // tener que enganchar a cada chunk del SSE.
   const streamingContentLen = React.useMemo(() => {
-    if (!isStreaming) return 0;
+    if (!isCurrentChatStreaming) return 0;
     const msgs = currentChat?.messages;
     if (!msgs || msgs.length === 0) return 0;
     const last = msgs[msgs.length - 1];
     return typeof last?.content === 'string' ? last.content.length : 0;
-  }, [isStreaming, currentChat?.messages]);
+  }, [isCurrentChatStreaming, currentChat?.messages]);
 
   React.useEffect(() => {
-    if (!isStreaming) return;
+    if (!isCurrentChatStreaming) return;
     if (!isAtBottom) return;
     scrollToBottom();
-  }, [streamingContentLen, isStreaming, isAtBottom, scrollToBottom]);
+  }, [streamingContentLen, isCurrentChatStreaming, isAtBottom, scrollToBottom]);
 
   const [isUploading, setIsUploading] = React.useState(false);
   const [isDragging, setIsDragging] = React.useState(false);
@@ -3417,6 +3419,7 @@ function ChatInterfaceContent() {
 
   // Local sending / intent state so Stop button appears immediately on Enter
   const [isSending, setIsSending] = React.useState(false);
+  const [sendingChatId, setSendingChatId] = React.useState<string | null>(null);
   const intentAbortControllerRef = React.useRef<AbortController | null>(null);
   // Separate controller for the agentic search so Stop can cancel the
   // SSE stream without clobbering other in-flight requests (intent
@@ -3565,6 +3568,7 @@ function ChatInterfaceContent() {
     }
     stopStreaming();
     setIsSending(false);
+    setSendingChatId(null);
   }, [markImageGenerationStopped, stopStreaming]);
 
   // Add reasoning steps to chat messages as they come in
@@ -5253,7 +5257,7 @@ But first, you need to connect your Spotify account securely using the button be
   // composer is busy streaming a prior turn, we park it in this ref and
   // flush it automatically when the pipeline goes idle. This keeps the
   // "user types 3 things quickly" flow working without losing text.
-  const pendingMsgQueueRef = React.useRef<Array<{ msg: string; files: any[] }>>([]);
+  const pendingMsgQueueRef = React.useRef<Array<{ chatId: string | null; msg: string; files: any[] }>>([]);
   const queueBurstTimestampsRef = React.useRef<number[]>([]);
   const handleSendRef = React.useRef<() => void>(() => {});
 
@@ -5631,12 +5635,12 @@ But first, you need to connect your Spotify account securely using the button be
       model: selectedModel || null,
     });
 
-    const isBusy = isLoading || isGeneratingImage || isGeneratingVideo || isGeneratingWebDev || isStreaming || isProcessingGmail || isProcessingGoogleServices || isProcessingSpotify || isGeneratingWord || isGeneratingExcel || isRewriting;
+    const isBusy = isCurrentChatStreaming || isGeneratingImage || isGeneratingVideo || isGeneratingWebDev || isProcessingGmail || isProcessingGoogleServices || isProcessingSpotify || isGeneratingWord || isGeneratingExcel || isRewriting;
 
     if (isBusy) {
       // Park the message — we'll drain the queue once the busy flags
       // flip back to idle (see the useEffect watching busy state).
-      pendingMsgQueueRef.current.push({ msg, files: composerFiles });
+      pendingMsgQueueRef.current.push({ chatId: currentChat?.id ?? null, msg, files: composerFiles });
       setInput("");
       uploadedFilesRef.current = [];
       setUploadedFiles([]);
@@ -6158,6 +6162,7 @@ REWRITTEN TEXT:`;
 
 
       // Mark that we started handling the message so Stop button can appear immediately
+      setSendingChatId(chatToUpdate?.id || userMessage.chatId || null);
       setIsSending(true);
       // Classify intent (can be aborted via Stop button)
       const intentController = new AbortController();
@@ -6323,6 +6328,7 @@ REWRITTEN TEXT:`;
       });
     } finally {
       setIsSending(false);
+      setSendingChatId(null);
       intentAbortControllerRef.current = null;
     }
   }
@@ -6998,17 +7004,20 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   // next tick so React has a chance to commit the setInput/setFiles
   // updates before the send guard reads them.
   React.useEffect(() => {
-    const isBusy = isLoading || isGeneratingImage || isGeneratingVideo || isGeneratingWebDev || isStreaming || isProcessingGmail || isProcessingGoogleServices || isProcessingSpotify || isGeneratingWord || isGeneratingExcel || isRewriting;
+    const isBusy = isCurrentChatStreaming || isGeneratingImage || isGeneratingVideo || isGeneratingWebDev || isProcessingGmail || isProcessingGoogleServices || isProcessingSpotify || isGeneratingWord || isGeneratingExcel || isRewriting;
     if (isBusy) return;
     if (pendingMsgQueueRef.current.length === 0) return;
-    const next = pendingMsgQueueRef.current.shift();
+    const queueChatId = currentChat?.id ?? null;
+    const nextIndex = pendingMsgQueueRef.current.findIndex((item) => item.chatId === queueChatId);
+    if (nextIndex < 0) return;
+    const [next] = pendingMsgQueueRef.current.splice(nextIndex, 1);
     if (!next) return;
     setInput(next.msg);
     uploadedFilesRef.current = next.files || [];
     setUploadedFiles(next.files || []);
     const t = setTimeout(() => { handleSendRef.current(); }, 0);
     return () => clearTimeout(t);
-  }, [isLoading, isGeneratingImage, isGeneratingVideo, isGeneratingWebDev, isStreaming, isProcessingGmail, isProcessingGoogleServices, isProcessingSpotify, isGeneratingWord, isGeneratingExcel, isRewriting, setUploadedFiles]);
+  }, [currentChat?.id, isCurrentChatStreaming, isGeneratingImage, isGeneratingVideo, isGeneratingWebDev, isProcessingGmail, isProcessingGoogleServices, isProcessingSpotify, isGeneratingWord, isGeneratingExcel, isRewriting, setUploadedFiles]);
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -7084,7 +7093,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     || isSpotifyActive || isWordConnectorActive || isExcelConnectorActive
     || chatType === 'thesis'
   );
-  const isStopButtonVisible = isLoading || isStreaming || pendingStop || isSending || isWebSearching || isGeneratingImage;
+  const isSendingForCurrentChat = isSending && sendingChatId === currentChatId;
+  const isStopButtonVisible = isCurrentChatLoading || isCurrentChatStreaming || (pendingStop && isCurrentChatStreaming) || isSendingForCurrentChat || isWebSearching || isGeneratingImage;
 
   // Shared props bundle for <ActiveToolsDisplay /> — the component is
   // now rendered in a different spot (below the input instead of above)
@@ -8067,7 +8077,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           handleAndUploadFiles={handleAndUploadFiles}
                           isUploading={isUploading}
                           isWebSearching={isWebSearching}
-                          isLoading={isLoading}
+                          isLoading={isCurrentChatLoading}
                           isGeneratingImage={isGeneratingImage}
                           isGeneratingVideo={isGeneratingVideo}
                           isGeneratingPPT={isGeneratingPPT}
@@ -8122,7 +8132,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             boxShadow: "none",
                           }}
                           rows={1}
-                          disabled={isLoading || isGeneratingImage || isGeneratingVideo || isWebSearching}
+                          disabled={isCurrentChatLoading || isGeneratingImage || isGeneratingVideo || isWebSearching}
                         />
 
                         {/* RIGHT — VoiceControls (mic, ghost) + primary action.
@@ -8152,7 +8162,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                 <TooltipTrigger asChild>
                                   <Button
                                     onClick={action}
-                                    disabled={canSend && (isLoading || busy || isGeneratingWord || isGeneratingExcel || isRewriting)}
+                                    disabled={canSend && (isCurrentChatLoading || busy || isGeneratingWord || isGeneratingExcel || isRewriting)}
                                     size="icon"
                                     aria-label={label}
                                     title={label}
@@ -8185,7 +8195,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               size="icon"
                               aria-label="Detener generación"
                               title="Detener"
-                              disabled={pendingStop}
+                              disabled={pendingStop && isCurrentChatStreaming}
                               className={cn(
                                 "h-9 w-9 rounded-full p-0 transition-all duration-200",
                                 "bg-foreground text-background",
@@ -8319,8 +8329,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                     <div className="chat-message-scroll-content space-y-2 max-w-3xl mx-auto w-full">
                       {(() => {
                         const messages = currentChat?.messages || [];
-                        const stableMessages = isStreaming ? messages.slice(0, -1) : messages;
-                        const streamingMessage = isStreaming ? messages[messages.length - 1] : null;
+                        const stableMessages = isCurrentChatStreaming ? messages.slice(0, -1) : messages;
+                        const streamingMessage = isCurrentChatStreaming ? messages[messages.length - 1] : null;
 
                         return (
                           <>
@@ -8426,7 +8436,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         <button
                           type="button"
                           onClick={scrollToBottom}
-                          aria-label={isStreaming ? "Nuevos mensajes, ir al final" : "Ir al final de la conversación"}
+                          aria-label={isCurrentChatStreaming ? "Nuevos mensajes, ir al final" : "Ir al final de la conversación"}
                           className={cn(
                             "pointer-events-auto inline-flex h-9 items-center gap-1.5 rounded-full px-3.5",
                             "border bg-background/95 backdrop-blur-md",
@@ -8441,19 +8451,19 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             // read older content, accent the pill so it
                             // reads as "there's new stuff" rather than a
                             // passive "go down".
-                            isStreaming
+                            isCurrentChatStreaming
                               ? "border-primary/40 text-primary-foreground bg-primary/95 hover:bg-primary"
                               : "border-border/55 text-foreground/80 hover:bg-background hover:border-border hover:text-foreground",
                           )}
                         >
-                          {isStreaming && (
+                          {isCurrentChatStreaming && (
                             <span
                               aria-hidden="true"
                               className="h-1.5 w-1.5 rounded-full bg-current animate-pulse"
                             />
                           )}
                           <ChevronDown className="h-3.5 w-3.5" strokeWidth={2} />
-                          <span>{isStreaming ? "Nuevos mensajes" : "Ir al final"}</span>
+                          <span>{isCurrentChatStreaming ? "Nuevos mensajes" : "Ir al final"}</span>
                         </button>
                       </div>
 
@@ -8534,7 +8544,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               handleAndUploadFiles={handleAndUploadFiles}
                               isUploading={isUploading}
                               isWebSearching={isWebSearching}
-                              isLoading={isLoading}
+                              isLoading={isCurrentChatLoading}
                               isGeneratingImage={isGeneratingImage}
                               isGeneratingVideo={isGeneratingVideo}
                               isGeneratingPPT={isGeneratingPPT}
@@ -8587,7 +8597,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                 boxShadow: "none",
                               }}
                               rows={1}
-                              disabled={isLoading || isGeneratingVideo || isGeneratingWord || isGeneratingExcel || isWebSearching}
+                              disabled={isCurrentChatLoading || isGeneratingVideo || isGeneratingWord || isGeneratingExcel || isWebSearching}
                             />
                             <div className="flex shrink-0 items-center gap-1.5">
                               {/* Pulido · contador suave de caracteres. */}
@@ -8611,7 +8621,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                     <TooltipTrigger asChild>
                                       <Button
                                         onClick={action}
-                                        disabled={canSend && (isLoading || busy || isGeneratingWord || isGeneratingExcel || isRewriting)}
+                                        disabled={canSend && (isCurrentChatLoading || busy || isGeneratingWord || isGeneratingExcel || isRewriting)}
                                         size="icon"
                                         aria-label={label}
                                         title={label}
@@ -8644,7 +8654,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                   size="icon"
                                   aria-label="Detener generación"
                                   title="Detener"
-                                  disabled={pendingStop}
+                                  disabled={pendingStop && isCurrentChatStreaming}
                                   className={cn(
                                     "h-9 w-9 rounded-full p-0 transition-all duration-200",
                                     "bg-foreground text-background",

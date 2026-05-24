@@ -302,6 +302,7 @@ interface ChatContextType {
   pollVideoStatus: (operationId: string, messageId: string) => void,
 
   isStreaming: boolean;
+  activeStreamingChatIds: string[];
   pendingStop: boolean;
   stopStreaming: () => void;
   pagination: PaginationInfo | null
@@ -334,10 +335,13 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [isLoadingMore, setIsLoadingMore] = useState(false)
   const [hasMoreChats, setHasMoreChats] = useState(true)
   const [isStreaming, setIsStreaming] = useState(false);
+  const [activeStreamingChatIds, setActiveStreamingChatIds] = useState<string[]>([]);
   const [currentStreamId, setCurrentStreamId] = useState<string | null>(null);
   const [pendingStop, setPendingStop] = useState(false);
 
   const abortControllerRef = useRef<AbortController | null>(null);
+  const streamControllersRef = useRef<Map<string, { streamId: string; controller: AbortController }>>(new Map());
+  const activeStreamingChatIdsRef = useRef<Set<string>>(new Set());
   const streamBufferRef = useRef<StreamBuffer | null>(null);
   const chatsRef = useRef<Chat[]>([])
   const isStreamingRef = useRef(false)
@@ -346,6 +350,38 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => { chatsRef.current = chats }, [chats])
   useEffect(() => { isStreamingRef.current = isStreaming }, [isStreaming])
   useEffect(() => { currentChatRef.current = currentChat }, [currentChat])
+
+  const syncActiveStreamingState = useCallback(() => {
+    const ids = Array.from(activeStreamingChatIdsRef.current)
+    setActiveStreamingChatIds(ids)
+    setIsStreaming(ids.length > 0)
+    setIsLoading(ids.length > 0)
+  }, [])
+
+  const markChatStreaming = useCallback((chatId: string, streamId?: string, controller?: AbortController) => {
+    if (!chatId) return
+    activeStreamingChatIdsRef.current.add(chatId)
+    if (streamId && controller) {
+      streamControllersRef.current.set(chatId, { streamId, controller })
+    }
+    if (currentChatRef.current?.id === chatId && streamId) {
+      setCurrentStreamId(streamId)
+    }
+    syncActiveStreamingState()
+  }, [syncActiveStreamingState])
+
+  const markChatIdle = useCallback((chatId: string, streamId?: string) => {
+    if (!chatId) return
+    const tracked = streamControllersRef.current.get(chatId)
+    if (!streamId || !tracked || tracked.streamId === streamId) {
+      streamControllersRef.current.delete(chatId)
+      activeStreamingChatIdsRef.current.delete(chatId)
+    }
+    if (currentChatRef.current?.id === chatId) {
+      setCurrentStreamId(null)
+    }
+    syncActiveStreamingState()
+  }, [syncActiveStreamingState])
 
   // Stable, identity-preserving snapshot getter for consumers that
   // need the full current chat occasionally (e.g. exporting from the
@@ -529,15 +565,25 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   // }, [setCurrentChat]);
 
   const stopStreaming = useCallback(() => {
-    devLog("Stop Streaming triggered", { currentStreamId, isStreaming, isLoading });
+    const targetChatId = currentChatRef.current?.id || null;
+    const targetStream = targetChatId ? streamControllersRef.current.get(targetChatId) : null;
+    const streamIdToStop = targetStream?.streamId || currentStreamId;
+    devLog("Stop Streaming triggered", { currentStreamId: streamIdToStop, targetChatId, isStreaming, isLoading });
 
     // IMMEDIATE UI State Reset - no waiting for API
     setPendingStop(true);
-    setIsStreaming(false);
-    setIsLoading(false);
+    if (targetChatId) {
+      markChatIdle(targetChatId, streamIdToStop || undefined);
+    } else {
+      setIsStreaming(false);
+      setIsLoading(false);
+    }
 
     // Abort local fetch request immediately
-    if (abortControllerRef.current) {
+    if (targetStream?.controller) {
+      devLog("Aborting chat-scoped fetch request");
+      targetStream.controller.abort();
+    } else if (abortControllerRef.current) {
       devLog("Aborting local fetch request");
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
@@ -576,9 +622,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     });
 
     // Send stop signal to backend (non-blocking)
-    if (currentStreamId) {
-      devLog(`Sending stop signal to backend: ${currentStreamId}`);
-      apiClient.stopAIStream(currentStreamId)
+    if (streamIdToStop) {
+      devLog(`Sending stop signal to backend: ${streamIdToStop}`);
+      apiClient.stopAIStream(streamIdToStop)
         .then(() => {
           devLog("Backend stop signal sent successfully");
         })
@@ -593,7 +639,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       setCurrentStreamId(null);
       setPendingStop(false);
     }
-  }, [currentStreamId, isStreaming, isLoading]);
+  }, [currentStreamId, isStreaming, isLoading, markChatIdle]);
   const addMessage = useCallback(
     async (content: string, fileIds?: any[], chat?: any, skipUserMessage?: boolean, intentOverride?: ChatIntent) => { // Added skipUserMessage and forceFlowChartDiagram parameters
       const activeChat = chat || currentChat; // Use provided chat or fallback to currentChat
@@ -644,6 +690,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       // Add AI placeholder to chat
       setCurrentChat(prevChat => {
         if (!prevChat) return prevChat;
+        if (prevChat.id !== activeChat.id) return prevChat;
         return {
           ...prevChat,
           messages: [...prevChat.messages, aiMessagePlaceholder]
@@ -651,10 +698,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       });
 
       setUploadedFiles([]); // Uploaded files clear kar dein
-      setIsLoading(true); // Loading state start karein
-      setIsStreaming(true); // Immediately set streaming to true so stop button appears
       const streamId = crypto.randomUUID();
-      setCurrentStreamId(streamId);
+      markChatStreaming(activeChat.id, streamId);
       // Reset pending stop state
       setPendingStop(false);
       try {
@@ -1114,6 +1159,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           // Create new AbortController for this request
           const controller = new AbortController();
           abortControllerRef.current = controller;
+          markChatStreaming(activeChat.id, streamId, controller);
 
           // Register this chat's stream in the BackgroundStreams
           // context so it keeps accruing tokens even if the user
@@ -1129,6 +1175,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             onFlush: (joined) => {
               setCurrentChat((prevChat) => {
                 if (!prevChat) return prevChat;
+                if (prevChat.id !== activeChat.id) return prevChat;
                 const newMessages = prevChat.messages.map((msg) => {
                   if (msg.id === aiMessagePlaceholder.id) {
                     return { ...msg, content: msg.content + joined };
@@ -1182,12 +1229,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 // with a delay because the backend may still be persisting
                 // (document uploads add 1-3s after [DONE]).
                 const syncIds = async (attempt = 1) => {
-                  if (isStreamingRef.current) return;
+                  if (activeStreamingChatIdsRef.current.has(activeChat.id)) return;
                   try {
                     const resp = await apiClient.getChat(activeChat.id);
                     const serverChat = resp.chat;
                     setCurrentChat(prev => {
-                      if (!prev || prev.id !== activeChat.id || isStreamingRef.current) return prev;
+                      if (!prev || prev.id !== activeChat.id || activeStreamingChatIdsRef.current.has(activeChat.id)) return prev;
                       const merged = mergeChatPreservingUserMessages(serverChat, prev);
                       // If the merge preserved all local content (same
                       // message count), the IDs are synced — we're done.
@@ -1384,9 +1431,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         setIsStreaming(false);
         setCurrentStreamId(null);
       } finally {
-        setIsLoading(false);
-        setIsStreaming(false);
-        setCurrentStreamId(null);
+        markChatIdle(activeChat.id, streamId);
       }
     },
     // bg / pendingStop / selectChat / selectProvider are intentionally
@@ -1394,7 +1439,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // per render. The hook is scoped to the user-facing inputs
     // (chat, auth, model, files) that matter for the send action.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [currentChat, user, token, selectedModel, uploadedFiles]
+    [currentChat, user, token, selectedModel, uploadedFiles, markChatStreaming, markChatIdle]
   );
   const handleNewChatWithPlaceholder = useCallback(async (newChat: Chat, initialContent: string, placeholderContent: string, uploadedFiles: any[]) => {
     const displayFiles = Array.isArray(uploadedFiles)
@@ -1557,11 +1602,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
   const selectChat = useCallback(
     async (chatId: string) => {
-      // Block selectChat during active streaming — the content the user
-      // is watching on screen is more up-to-date than anything the API
-      // can return, and a fetch here would race the DB write.
-      if (isStreamingRef.current) return;
-
+      const targetIsStreaming = activeStreamingChatIdsRef.current.has(chatId)
       const cachedChat = chatsRef.current.find(chat => chat?.id === chatId)
       if (cachedChat) {
         setCurrentChat(prev => {
@@ -1572,14 +1613,21 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         setUploadedFiles([])
       }
 
+      // If this specific chat is still streaming, keep the optimistic
+      // client copy. Fetching it now can race persistence and replace a
+      // growing answer with an older DB snapshot. Other chats remain
+      // selectable so one background generation never locks the app.
+      if (targetIsStreaming) return
+
       try {
         const response = await apiClient.getChat(chatId)
         const chat = response.chat
         setCurrentChat(prev => {
           if (!prev || prev.id !== chatId) return mergeChatPreservingUserMessages(chat, prev)
 
-          // Re-check streaming in case it started while the API call was in flight
-          if (isStreamingRef.current) return prev;
+          // Re-check this chat in case it started streaming while the
+          // API call was in flight.
+          if (activeStreamingChatIdsRef.current.has(chatId)) return prev;
 
           // NEVER overwrite a local chat that has more assistant content
           // than the server returned — the backend may not have persisted
@@ -2749,11 +2797,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
   const streamingValue = useMemo<StreamingContextType>(() => ({
     isStreaming,
+    activeStreamingChatIds,
     pendingStop,
     isLoading,
     stopStreaming,
     addMessage,
-  }), [isStreaming, pendingStop, isLoading, stopStreaming, addMessage])
+  }), [isStreaming, activeStreamingChatIds, pendingStop, isLoading, stopStreaming, addMessage])
 
   const modelsFilesValue = useMemo<ModelsFilesContextType>(() => ({
     selectedModel,
@@ -2823,6 +2872,7 @@ interface CurrentChatContextType {
 
 interface StreamingContextType {
   isStreaming: boolean
+  activeStreamingChatIds: string[]
   pendingStop: boolean
   isLoading: boolean
   stopStreaming: () => void
@@ -2910,6 +2960,7 @@ export function useChat(): ChatContextType {
     updateMessageInChat: current.updateMessageInChat,
     pollVideoStatus: current.pollVideoStatus,
     isStreaming: streaming.isStreaming,
+    activeStreamingChatIds: streaming.activeStreamingChatIds,
     pendingStop: streaming.pendingStop,
     stopStreaming: streaming.stopStreaming,
     pagination: list.pagination,
