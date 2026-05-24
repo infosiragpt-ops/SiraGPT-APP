@@ -135,6 +135,7 @@ model User {
   notifications           Notification[]
   subscriptionEvents      SubscriptionEvent[]
   agentTasks              AgentTask[]
+  goalRuns                GoalRun[]
   generatedArtifacts      GeneratedArtifact[]
   documentAnalyses        DocumentAnalysis[]
   pushSubscriptions       PushSubscription[]
@@ -356,6 +357,7 @@ model Chat {
   messages           Message[]
   sharedMessages     MessageShare[]      @relation("SharedMessages")
   agentTasks         AgentTask[]
+  goalRuns           GoalRun[]
   generatedArtifacts GeneratedArtifact[]
   runs               ChatRun[]
 
@@ -614,6 +616,60 @@ model AgentTaskEvent {
   @@unique([taskId, seq])
   @@index([taskId, createdAt])
   @@map("agent_task_events")
+}
+
+// Persistent /goal background runs. Mirrors the AgentTask + AgentTaskEvent
+// shape: the parent row tracks status/counters/final report, and the
+// child event log replays the SSE timeline so the chat composer can
+// re-attach after a reload without losing context. `agentKind` is a
+// forward-looking discriminator (research today; code / image / video /
+// song planned) so the same queue can drive multiple slash commands.
+model GoalRun {
+  id              String    @id @default(cuid())
+  userId          String
+  chatId          String?
+  jobId           String?   @unique
+  status          String    @default("queued")
+  prompt          String    @db.Text
+  depth           String    @default("standard")
+  agentKind       String    @default("research")
+  papersCount     Int       @default(0)
+  findingsCount   Int       @default(0)
+  pagesCount      Int       @default(0)
+  phase           String?
+  finalReport     String?   @db.Text
+  error           String?   @db.Text
+  cancelReason    String?
+  createdAt       DateTime  @default(now())
+  startedAt       DateTime?
+  updatedAt       DateTime  @updatedAt
+  completedAt     DateTime?
+  cancelledAt     DateTime?
+  failedAt        DateTime?
+
+  user   User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chat   Chat?          @relation(fields: [chatId], references: [id], onDelete: SetNull)
+  events GoalRunEvent[]
+
+  @@index([userId, status, updatedAt])
+  @@index([chatId, status])
+  @@index([status, createdAt])
+  @@map("goal_runs")
+}
+
+model GoalRunEvent {
+  id        String   @id @default(cuid())
+  goalRunId String
+  seq       Int
+  type      String
+  payload   Json
+  createdAt DateTime @default(now())
+
+  goalRun GoalRun @relation(fields: [goalRunId], references: [id], onDelete: Cascade)
+
+  @@unique([goalRunId, seq])
+  @@index([goalRunId, createdAt])
+  @@map("goal_run_events")
 }
 
 model GeneratedArtifact {

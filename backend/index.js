@@ -327,6 +327,7 @@ const voiceGrokRoutes = require('./src/routes/voice-grok');
 const researchRoutes = require('./src/routes/research');
 const scientificSearchRoutes = require('./src/routes/scientific-search');
 const researchAgentRoutes = require('./src/routes/research-agent');
+const goalsRoutes = require('./src/routes/goals');
 const intentRoutes = require('./src/routes/intent');
 const ragRoutes = require('./src/routes/rag');
 const agentRoutes = require('./src/routes/agent');
@@ -365,6 +366,8 @@ const { runAgent } = require('./src/services/agents/agent-entry');
 const { recoverAgentTasksAfterBoot } = require('./src/services/agents/agent-task-boot-recovery');
 const { startAgentTaskWorker, closeAgentTaskWorker } = require('./src/services/agents/agent-task-worker');
 const { closeAgentTaskQueue } = require('./src/services/agents/agent-task-queue');
+const { startGoalWorker, closeGoalWorker } = require('./src/services/goal-worker');
+const { closeGoalQueue } = require('./src/services/goal-queue');
 const alerting = require('./src/services/alerting');
 const sloTracker = require('./src/services/slo-tracker');
 const shutdownRegistry = require('./src/utils/shutdown');
@@ -985,6 +988,7 @@ app.use('/api/voice/grok', voiceGrokRoutes);
 app.use('/api/research', researchRoutes);
 app.use('/api/scientific-search', scientificSearchRoutes);
 app.use('/api/research-agent', researchAgentRoutes);
+app.use('/api/goals', goalsRoutes);
 app.use('/api/intent', intentRoutes);
 app.use('/api/rag', ragRoutes);
 // Idempotency is scoped to the surfaces that mutate durable state
@@ -1124,6 +1128,7 @@ function startServer() {
 
     recoverAgentTasksAfterBoot({ logger });
     startAgentTaskWorker();
+    startGoalWorker();
 
     // Apply any admin-curated provider keys (panel /admin/connections)
     // by overriding the corresponding process.env vars in this worker.
@@ -1224,7 +1229,12 @@ function startServer() {
 
     // 3. Close BullMQ workers + queue.
     shutdownRegistry.register('bullmq_workers_close', async () => {
-        await Promise.allSettled([closeAgentTaskWorker(), closeAgentTaskQueue()]);
+        await Promise.allSettled([
+            closeAgentTaskWorker(),
+            closeAgentTaskQueue(),
+            closeGoalWorker(),
+            closeGoalQueue(),
+        ]);
     }, 5000);
 
     // 2. Disconnect Prisma.
