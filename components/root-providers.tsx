@@ -23,7 +23,7 @@ import { OfflineBanner } from "@/components/offline-banner"
 
 export function RootProviders({ children }: { children: React.ReactNode }) {
   return (
-    <ThemeProvider attribute="class" defaultTheme="light" enableSystem disableTransitionOnChange>
+    <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
       <AuthProvider>
         <SettingsProvider>
           <AppWrapper>
