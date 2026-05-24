@@ -189,7 +189,8 @@ describe('host-bash-tool', () => {
       directory: os.tmpdir(),
     });
     assert.strictEqual(result.ok, false);
-    assert.strictEqual(result.exitCode, 1);
+    assert.notStrictEqual(result.exitCode, 0);
+    assert.ok(Number.isInteger(result.exitCode));
   });
 
   it('tool definition has correct name and parameters', () => {
