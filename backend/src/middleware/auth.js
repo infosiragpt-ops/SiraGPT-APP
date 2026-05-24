@@ -423,6 +423,60 @@ const authenticateToken = async (req, res, next) => {
   }
 };
 
+/**
+ * optionalAuth — soft authentication. Populates `req.user` and
+ * `req.userSession` when the request carries a valid session token,
+ * otherwise calls `next()` anonymously instead of returning 401. Used
+ * by public-but-personalisable endpoints (e.g. `GET /api/plans`, the
+ * catalog of plans where super-admins see inactive rows too).
+ *
+ * Mirror of the happy-path branch of `authenticateToken` minus the
+ * fail-closed responses: every error path falls through to next().
+ */
+const optionalAuth = async (req, res, next) => {
+  try {
+    const tokenResult = extractAccessToken(req);
+    if (tokenResult.error || !tokenResult.token) return next();
+
+    const token = tokenResult.token;
+    if (apiKeysService.hasTokenScheme(token)) {
+      // API-key auth still applies; reuse the strict path but swallow
+      // its 401 (we want anonymous fallthrough, not a forced error).
+      const handled = await tryAuthenticateApiKey(req, {
+        status() { return { json() {} }; },
+        setHeader() {},
+      }, token).catch(() => false);
+      void handled;
+      return next();
+    }
+
+    let decoded;
+    try {
+      decoded = jwt.verify(token, process.env.JWT_SECRET);
+    } catch {
+      return next();
+    }
+    if (decoded && typeof decoded === 'object' && decoded.scope) {
+      // Scoped tokens (e.g. Appshots) must NOT silently elevate a
+      // generic optional-auth route — drop to anonymous instead.
+      return next();
+    }
+
+    const session = await prisma.session.findUnique({
+      where: { token },
+      include: { user: true },
+    }).catch(() => null);
+    if (session && session.expiresAt > new Date() && session.user) {
+      req.user = session.user;
+      req.token = token;
+      req.userSession = session;
+    }
+    return next();
+  } catch {
+    return next();
+  }
+};
+
 const requireAdmin = (req, res, next) => {
   if (!req.user || (!req.user.isAdmin && !req.user.isSuperAdmin)) {
     return res.status(403).json({ error: 'Admin access required' });
@@ -439,6 +493,7 @@ const requireSuperAdmin = (req, res, next) => {
 
 module.exports = {
   authenticateToken,
+  optionalAuth,
   requireAdmin,
   requireSuperAdmin,
   // Exported for tests + graceful shutdown wiring.
