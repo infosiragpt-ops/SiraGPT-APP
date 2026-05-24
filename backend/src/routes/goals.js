@@ -21,15 +21,17 @@
 
 const express = require('express');
 const { body, query, param, validationResult } = require('express-validator');
-const { authenticateToken } = require('../middleware/auth');
+const { authenticateToken, requireAdmin } = require('../middleware/auth');
 const goalQueue = require('../services/goal-queue');
 const goalEvents = require('../services/goal-events');
+const goalRecovery = require('../services/goal-boot-recovery');
 
 const prisma = (() => {
   try { return require('../config/database'); } catch { return null; }
 })();
 
 const router = express.Router();
+const adminRouter = express.Router();
 
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
 const ACTIVE_STATUSES = new Set(['queued', 'running']);
@@ -408,9 +410,146 @@ router.post('/:id/cancel', authenticateToken, cancelValidators, async (req, res)
   return res.json({ cancelled: true, status: 'cancelled', reason: result.cancelReason });
 });
 
+// ── Admin observability ───────────────────────────────────────────
+const HEALTH_SUBSYSTEM_TIMEOUT_MS = 2000;
+
+/**
+ * Run a promise with a hard timeout. Resolves with `fallback` if the
+ * promise doesn't settle in time so a single hung subsystem cannot
+ * stall the whole admin snapshot.
+ */
+function withTimeout(promise, timeoutMs, fallback) {
+  return Promise.race([
+    Promise.resolve().then(() => promise),
+    new Promise((resolve) => {
+      const t = setTimeout(() => resolve(fallback), timeoutMs);
+      if (typeof t.unref === 'function') t.unref();
+    }),
+  ]);
+}
+
+async function collectDbStatusCounts() {
+  if (!prisma || !prisma.goalRun) {
+    return {
+      queued: 0,
+      running: 0,
+      completed: 0,
+      failed: 0,
+      cancelled: 0,
+      error: 'persistence_unavailable',
+    };
+  }
+  try {
+    const [queued, running, completed, failed, cancelled] = await Promise.all([
+      prisma.goalRun.count({ where: { status: 'queued' } }),
+      prisma.goalRun.count({ where: { status: 'running' } }),
+      prisma.goalRun.count({ where: { status: 'completed' } }),
+      prisma.goalRun.count({ where: { status: 'failed' } }),
+      prisma.goalRun.count({ where: { status: 'cancelled' } }),
+    ]);
+    return { queued, running, completed, failed, cancelled };
+  } catch (err) {
+    return {
+      queued: 0,
+      running: 0,
+      completed: 0,
+      failed: 0,
+      cancelled: 0,
+      error: err?.message || String(err),
+    };
+  }
+}
+
+async function collectQueueHealth() {
+  try {
+    const health = await goalQueue.getGoalQueueHealth();
+    return {
+      name: health.queue || goalQueue.getQueueName(),
+      counts: health.counts || {
+        waiting: 0, active: 0, completed: 0, failed: 0, delayed: 0, paused: 0,
+      },
+      redisUrlConfigured: Boolean(health.redisUrlConfigured),
+    };
+  } catch (err) {
+    return {
+      name: goalQueue.getQueueName(),
+      counts: {
+        waiting: 0, active: 0, completed: 0, failed: 0, delayed: 0, paused: 0,
+      },
+      error: err?.message || String(err),
+    };
+  }
+}
+
+adminRouter.get('/health', authenticateToken, requireAdmin, async (req, res) => {
+  const config = goalRecovery.readConfig();
+  const fallbackQueue = {
+    name: goalQueue.getQueueName(),
+    counts: { waiting: 0, active: 0, completed: 0, failed: 0, delayed: 0, paused: 0 },
+    error: 'subsystem_timeout',
+  };
+  const fallbackDb = {
+    queued: 0,
+    running: 0,
+    completed: 0,
+    failed: 0,
+    cancelled: 0,
+    error: 'subsystem_timeout',
+  };
+
+  const settled = await Promise.allSettled([
+    withTimeout(collectQueueHealth(), HEALTH_SUBSYSTEM_TIMEOUT_MS, fallbackQueue),
+    withTimeout(collectDbStatusCounts(), HEALTH_SUBSYSTEM_TIMEOUT_MS, fallbackDb),
+    withTimeout(
+      goalRecovery.listStuckQueued({
+        prisma,
+        reenqueueAfterMs: config.reenqueueAfterMs,
+        topK: goalRecovery.DEFAULT_TOP_K,
+      }),
+      HEALTH_SUBSYSTEM_TIMEOUT_MS,
+      [],
+    ),
+    withTimeout(
+      goalRecovery.listZombieRunning({
+        prisma,
+        stallAfterMs: config.stallAfterMs,
+        topK: goalRecovery.DEFAULT_TOP_K,
+      }),
+      HEALTH_SUBSYSTEM_TIMEOUT_MS,
+      [],
+    ),
+  ]);
+
+  const queue = settled[0].status === 'fulfilled' ? settled[0].value : fallbackQueue;
+  const db = settled[1].status === 'fulfilled' ? settled[1].value : fallbackDb;
+  const stuckQueued = settled[2].status === 'fulfilled' && Array.isArray(settled[2].value)
+    ? settled[2].value
+    : [];
+  const zombieRunning = settled[3].status === 'fulfilled' && Array.isArray(settled[3].value)
+    ? settled[3].value
+    : [];
+
+  res.json({
+    queue,
+    db,
+    stuckQueued,
+    zombieRunning,
+    config: {
+      reenqueueAfterMs: config.reenqueueAfterMs,
+      stallAfterMs: config.stallAfterMs,
+      scanIntervalMs: config.scanIntervalMs,
+    },
+    capturedAt: new Date().toISOString(),
+  });
+});
+
 module.exports = router;
+module.exports.adminRouter = adminRouter;
 module.exports._internal = {
   serializeRun,
   parseStatusFilter,
   bearerFromQueryFallback,
+  withTimeout,
+  collectDbStatusCounts,
+  collectQueueHealth,
 };

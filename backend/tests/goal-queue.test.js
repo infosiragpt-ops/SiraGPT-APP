@@ -7,6 +7,7 @@ const goalQueue = require('../src/services/goal-queue');
 const goalEvents = require('../src/services/goal-events');
 const goalWorker = require('../src/services/goal-worker');
 const goalsRoutes = require('../src/routes/goals');
+const goalRecovery = require('../src/services/goal-boot-recovery');
 
 test('goal queue requires REDIS_URL for durable runtime', () => {
   const previous = process.env.REDIS_URL;
@@ -147,4 +148,128 @@ test('goal-events module exports appendEvent, listEventsSince, markCancelRequest
   assert.equal(typeof goalEvents.appendEvent, 'function');
   assert.equal(typeof goalEvents.listEventsSince, 'function');
   assert.equal(typeof goalEvents.markCancelRequested, 'function');
+});
+
+// ── goal-boot-recovery ─────────────────────────────────────────────
+test('goal-boot-recovery exports recoverGoalRunsAfterBoot + stopGoalRecovery', () => {
+  assert.equal(typeof goalRecovery.recoverGoalRunsAfterBoot, 'function');
+  assert.equal(typeof goalRecovery.stopGoalRecovery, 'function');
+  assert.equal(typeof goalRecovery.sweepOnce, 'function');
+  assert.equal(typeof goalRecovery.readConfig, 'function');
+  assert.equal(typeof goalRecovery.listStuckQueued, 'function');
+  assert.equal(typeof goalRecovery.listZombieRunning, 'function');
+});
+
+test('stopGoalRecovery is callable when no interval is running', () => {
+  // First call: no-op when nothing is running.
+  assert.doesNotThrow(() => goalRecovery.stopGoalRecovery());
+  // Idempotent — calling again must still be safe.
+  assert.doesNotThrow(() => goalRecovery.stopGoalRecovery());
+});
+
+test('readConfig defaults: 5 min re-enqueue, 30 min stall, 5 min scan interval', () => {
+  const previous = {
+    re: process.env.GOAL_RECOVERY_REENQUEUE_AFTER_MS,
+    stall: process.env.GOAL_RECOVERY_STALL_AFTER_MS,
+    scan: process.env.GOAL_RECOVERY_SCAN_INTERVAL_MS,
+  };
+  delete process.env.GOAL_RECOVERY_REENQUEUE_AFTER_MS;
+  delete process.env.GOAL_RECOVERY_STALL_AFTER_MS;
+  delete process.env.GOAL_RECOVERY_SCAN_INTERVAL_MS;
+
+  const cfg = goalRecovery.readConfig();
+  assert.equal(cfg.reenqueueAfterMs, 300_000, 'default reenqueue = 5 minutes');
+  assert.equal(cfg.stallAfterMs, 1_800_000, 'default stall = 30 minutes');
+  assert.equal(cfg.scanIntervalMs, 300_000, 'default scan interval = 5 minutes');
+
+  // Module-level constants match too.
+  assert.equal(goalRecovery.DEFAULT_REENQUEUE_AFTER_MS, 300_000);
+  assert.equal(goalRecovery.DEFAULT_STALL_AFTER_MS, 1_800_000);
+  assert.equal(goalRecovery.DEFAULT_SCAN_INTERVAL_MS, 300_000);
+
+  if (previous.re !== undefined) process.env.GOAL_RECOVERY_REENQUEUE_AFTER_MS = previous.re;
+  if (previous.stall !== undefined) process.env.GOAL_RECOVERY_STALL_AFTER_MS = previous.stall;
+  if (previous.scan !== undefined) process.env.GOAL_RECOVERY_SCAN_INTERVAL_MS = previous.scan;
+});
+
+test('readConfig honours env overrides', () => {
+  const previous = {
+    re: process.env.GOAL_RECOVERY_REENQUEUE_AFTER_MS,
+    stall: process.env.GOAL_RECOVERY_STALL_AFTER_MS,
+    scan: process.env.GOAL_RECOVERY_SCAN_INTERVAL_MS,
+  };
+  process.env.GOAL_RECOVERY_REENQUEUE_AFTER_MS = '1000';
+  process.env.GOAL_RECOVERY_STALL_AFTER_MS = '2000';
+  process.env.GOAL_RECOVERY_SCAN_INTERVAL_MS = '3000';
+
+  const cfg = goalRecovery.readConfig();
+  assert.equal(cfg.reenqueueAfterMs, 1000);
+  assert.equal(cfg.stallAfterMs, 2000);
+  assert.equal(cfg.scanIntervalMs, 3000);
+
+  if (previous.re === undefined) delete process.env.GOAL_RECOVERY_REENQUEUE_AFTER_MS;
+  else process.env.GOAL_RECOVERY_REENQUEUE_AFTER_MS = previous.re;
+  if (previous.stall === undefined) delete process.env.GOAL_RECOVERY_STALL_AFTER_MS;
+  else process.env.GOAL_RECOVERY_STALL_AFTER_MS = previous.stall;
+  if (previous.scan === undefined) delete process.env.GOAL_RECOVERY_SCAN_INTERVAL_MS;
+  else process.env.GOAL_RECOVERY_SCAN_INTERVAL_MS = previous.scan;
+});
+
+test('readConfig falls back to defaults on invalid env values', () => {
+  const previous = process.env.GOAL_RECOVERY_REENQUEUE_AFTER_MS;
+  process.env.GOAL_RECOVERY_REENQUEUE_AFTER_MS = 'not-a-number';
+  const cfg = goalRecovery.readConfig();
+  assert.equal(cfg.reenqueueAfterMs, 300_000, 'falls back to default on garbage');
+  if (previous === undefined) delete process.env.GOAL_RECOVERY_REENQUEUE_AFTER_MS;
+  else process.env.GOAL_RECOVERY_REENQUEUE_AFTER_MS = previous;
+});
+
+test('recoverGoalRunsAfterBoot returns zeroed summary when prisma is unavailable', async () => {
+  // The module lazy-requires `../config/database` and caches the result.
+  // In the test runner the require may resolve to a stub or throw — in
+  // either case the function must never throw and must return a summary.
+  const result = await goalRecovery.recoverGoalRunsAfterBoot({
+    logger: { info() {}, warn() {} },
+    runInterval: false,
+  });
+  assert.ok(result, 'returns a summary object');
+  assert.equal(typeof result.requeued, 'number');
+  assert.equal(typeof result.stalled, 'number');
+  assert.equal(typeof result.scanned, 'number');
+});
+
+test('routes/goals exports adminRouter with /health endpoint', () => {
+  const adminRouter = goalsRoutes.adminRouter;
+  assert.ok(adminRouter, 'adminRouter is exported');
+  assert.equal(typeof adminRouter, 'function', 'adminRouter is callable middleware');
+  assert.equal(typeof adminRouter.use, 'function', 'adminRouter has .use');
+  assert.equal(typeof adminRouter.get, 'function', 'adminRouter has .get');
+
+  // Inspect the express router stack for a GET /health registration.
+  const stack = adminRouter.stack || [];
+  const healthLayer = stack.find((layer) => {
+    if (!layer || !layer.route) return false;
+    const path = layer.route.path || '';
+    const methods = layer.route.methods || {};
+    return path === '/health' && methods.get;
+  });
+  assert.ok(healthLayer, 'admin router exposes GET /health');
+});
+
+test('routes/goals._internal exposes withTimeout helper', () => {
+  const { withTimeout } = goalsRoutes._internal;
+  assert.equal(typeof withTimeout, 'function');
+});
+
+test('withTimeout resolves to fallback when promise hangs past timeout', async () => {
+  const { withTimeout } = goalsRoutes._internal;
+  const hangingPromise = new Promise(() => {}); // never resolves
+  const result = await withTimeout(hangingPromise, 10, { error: 'timeout' });
+  assert.deepEqual(result, { error: 'timeout' });
+});
+
+test('withTimeout resolves to the promise value when it settles in time', async () => {
+  const { withTimeout } = goalsRoutes._internal;
+  const result = await withTimeout(Promise.resolve({ ok: true }), 1000, { error: 'fallback' });
+  assert.deepEqual(result, { ok: true });
 });

@@ -368,6 +368,7 @@ const { startAgentTaskWorker, closeAgentTaskWorker } = require('./src/services/a
 const { closeAgentTaskQueue } = require('./src/services/agents/agent-task-queue');
 const { startGoalWorker, closeGoalWorker } = require('./src/services/goal-worker');
 const { closeGoalQueue } = require('./src/services/goal-queue');
+const { recoverGoalRunsAfterBoot, stopGoalRecovery } = require('./src/services/goal-boot-recovery');
 const alerting = require('./src/services/alerting');
 const sloTracker = require('./src/services/slo-tracker');
 const shutdownRegistry = require('./src/utils/shutdown');
@@ -956,6 +957,7 @@ app.use('/api/admin/plans', plansRoutes.adminRouter);
 app.use('/api/plans', plansRoutes);
 app.use('/api/admin/credits', creditsRoutes.adminRouter);
 app.use('/api/credits', creditsRoutes);
+app.use('/api/admin/goals', goalsRoutes.adminRouter);
 app.use('/api/paraphrase', paraphraseRoutes);
 app.use('/api/admin/rbac', rbacRoutes.adminRouter);
 app.use('/api/rbac', rbacRoutes);
@@ -1127,6 +1129,7 @@ function startServer() {
     });
 
     recoverAgentTasksAfterBoot({ logger });
+    recoverGoalRunsAfterBoot({ logger });
     startAgentTaskWorker();
     startGoalWorker();
 
@@ -1229,6 +1232,7 @@ function startServer() {
 
     // 3. Close BullMQ workers + queue.
     shutdownRegistry.register('bullmq_workers_close', async () => {
+        try { stopGoalRecovery(); } catch {}
         await Promise.allSettled([
             closeAgentTaskWorker(),
             closeAgentTaskQueue(),
