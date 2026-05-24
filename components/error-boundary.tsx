@@ -4,6 +4,7 @@ import { Component, ErrorInfo, ReactNode } from "react"
 import { AlertTriangle, RotateCcw } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { track } from "@/lib/analytics"
+import { reportErrorBoundary } from "@/lib/client-logs"
 
 interface ErrorBoundaryProps {
   children: ReactNode
@@ -51,6 +52,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       name: error.name,
       message: (error.message || "").slice(0, 500),
     })
+    reportErrorBoundary(label, error)
     this.props.onError?.(error, info)
   }
 

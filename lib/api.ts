@@ -1,6 +1,7 @@
 // Frontend API client for backend integration
 import { streamSseJson } from "./sse-client"
 import { sanitizeFetchHeaders } from "./fetch-sanitize"
+import { reportClientLog } from "./client-logs"
 export { getNormalizedApiBaseUrl } from "./api-base-url"
 import { getNormalizedApiBaseUrl } from "./api-base-url"
 // Codegen'd from backend/src/schemas/* — DO NOT edit by hand. Regenerate
@@ -209,6 +210,28 @@ class ApiClient {
     }
   }
 
+  private _reportApiFailure(args: {
+    endpoint: string
+    method: string
+    status?: number | null
+    requestId?: string | null
+    message?: string
+    extra?: Record<string, unknown>
+  }): void {
+    if (args.endpoint.startsWith("/telemetry")) return
+    reportClientLog({
+      source: "api",
+      severity: args.status && args.status >= 500 ? "error" : "warn",
+      action: "api_request_failed",
+      endpoint: args.endpoint,
+      method: args.method,
+      status: args.status ?? null,
+      requestId: args.requestId || null,
+      message: args.message || "API request failed",
+      extra: args.extra || null,
+    })
+  }
+
   /**
    * Core request method with timeout + retry.
    * Throws on final failure with status, statusCode, and errorData attached.
@@ -323,6 +346,14 @@ class ApiClient {
           (error as any).status = response.status;
           (error as any).statusCode = response.status;
           (error as any).errorData = errorData;
+          this._reportApiFailure({
+            endpoint,
+            method,
+            status: response.status,
+            requestId: response.headers.get("X-Request-Id"),
+            message: error.message,
+            extra: { code: errorData.code || errorData.error || null },
+          })
           throw error;
         }
 
@@ -373,6 +404,14 @@ class ApiClient {
           (error as any).status = response.status;
           (error as any).statusCode = response.status;
           (error as any).errorData = errorData;
+          this._reportApiFailure({
+            endpoint,
+            method,
+            status: response.status,
+            requestId: response.headers.get("X-Request-Id"),
+            message: error.message,
+            extra: { code: errorData.code || errorData.error || null },
+          })
           throw error;
         }
 
@@ -426,6 +465,13 @@ class ApiClient {
     // All retries exhausted
     const finalError = lastError || new Error('Request failed after retries');
     console.error(`[ApiClient] Request failed after ${this.MAX_RETRIES + 1} attempts:`, endpoint, finalError.message);
+    this._reportApiFailure({
+      endpoint,
+      method,
+      status: (finalError as any).status ?? null,
+      requestId: (finalError as any).errorData?.requestId || null,
+      message: finalError.message,
+    })
     throw finalError;
   }
 
@@ -1645,6 +1691,26 @@ class ApiClient {
 
   async getSystemStats() {
     return this.request('/admin/stats');
+  }
+
+  async getAdminAuditLogs(params?: {
+    page?: number
+    limit?: number
+    userId?: string
+    action?: string
+    resource?: string
+    resourceId?: string
+    tags?: string
+    from?: string
+    to?: string
+  }) {
+    const query = new URLSearchParams(params as any).toString();
+    return this.request(`/admin/audit-logs${query ? `?${query}` : ''}`);
+  }
+
+  async searchAdminAuditLogs(params: { q: string; page?: number; limit?: number }) {
+    const query = new URLSearchParams(params as any).toString();
+    return this.request(`/admin/audit-logs/search?${query}`);
   }
 
   // Admin invoices

@@ -16,18 +16,34 @@ const express = require('express');
 const router = express.Router();
 
 const alerting = require('../services/alerting');
+const prisma = require('../config/database');
+const { optionalAuth } = require('../middleware/optionalAuth');
+const { writeAuditLog } = require('../utils/audit-log');
+const {
+  sanitizeClientEvent,
+  buildClientEventAuditEntry,
+} = require('../services/client-event-log');
 
-router.post('/error', express.json({ limit: '32kb' }), async (req, res) => {
+router.post('/error', express.json({ limit: '32kb' }), optionalAuth, async (req, res) => {
   const body = (req && req.body && typeof req.body === 'object') ? req.body : {};
+  const event = sanitizeClientEvent(body, req);
   // Fire-and-forget — never block the client on alerting I/O.
   Promise.resolve().then(() => alerting.notifyFrontendError({
-    page: body.page || body.url || 'unknown',
-    message: body.message || body.error || '',
-    stack: body.stack || '',
-    userAgent: req.headers['user-agent'] || '',
+    page: event.page,
+    message: event.message,
+    stack: event.stack || '',
+    userAgent: event.browser || '',
     userId: (req.user && req.user.id) || null,
   })).catch(() => {});
-  res.status(202).json({ accepted: true });
+
+  Promise.resolve()
+    .then(() => writeAuditLog(prisma, buildClientEventAuditEntry(event, req)))
+    .catch(() => {});
+
+  res.status(202).json({
+    accepted: true,
+    requestId: req.requestId || req.headers?.['x-request-id'] || null,
+  });
 });
 
 module.exports = router;
