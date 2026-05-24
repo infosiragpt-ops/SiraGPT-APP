@@ -131,25 +131,12 @@ const formatSidebarChatTitle = (value: unknown) => {
     .trim()
 }
 
-/** Futuristic but restrained nav chrome: fast visual feedback, colored icon glass. */
+/** Neutral nav chrome with fast visual feedback and no decorative color. */
 const NAV_ROW =
-  "group/nav flex h-9 w-full items-center justify-start gap-2.5 rounded-xl px-2 text-left text-[13px] font-normal leading-none text-muted-foreground transition-[background-color,color,box-shadow,transform] duration-150 hover:bg-white/62 hover:text-foreground hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.72),0_10px_24px_rgba(15,23,42,0.06)] active:scale-[0.992] dark:hover:bg-white/[0.075] dark:hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.07)]"
+  "group/nav flex h-9 w-full items-center justify-start gap-3 rounded-lg px-2.5 text-left text-[13px] font-normal leading-none text-muted-foreground transition-[background-color,color,transform] duration-150 hover:bg-foreground/[0.045] hover:text-foreground active:scale-[0.992] dark:hover:bg-white/[0.07]"
 const NAV_ROW_ACTIVE =
-  "bg-white/78 text-foreground ring-1 ring-white/65 shadow-[inset_0_1px_0_rgba(255,255,255,0.78),0_14px_34px_rgba(15,23,42,0.08)] backdrop-blur-xl dark:bg-white/[0.095] dark:ring-white/10 dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_16px_34px_rgba(0,0,0,0.24)]"
-const NAV_ICON = "h-4 w-4 shrink-0 stroke-[1.85]"
-const NAV_ICON_SHELL =
-  "grid h-7 w-7 shrink-0 place-items-center rounded-xl border shadow-[inset_0_1px_0_rgba(255,255,255,0.72),0_8px_18px_rgba(15,23,42,0.06)] transition-transform duration-150 group-hover/nav:-translate-y-0.5 group-data-[state=closed]:h-8 group-data-[state=closed]:w-8"
-
-const NAV_TONES = {
-  chat: "border-sky-200/70 bg-sky-50 text-sky-600 dark:border-sky-400/15 dark:bg-sky-400/10 dark:text-sky-300",
-  search: "border-zinc-200/80 bg-zinc-50 text-zinc-600 dark:border-white/10 dark:bg-white/[0.07] dark:text-zinc-300",
-  library: "border-cyan-200/70 bg-cyan-50 text-cyan-600 dark:border-cyan-400/15 dark:bg-cyan-400/10 dark:text-cyan-300",
-  gpts: "border-violet-200/70 bg-violet-50 text-violet-600 dark:border-violet-400/15 dark:bg-violet-400/10 dark:text-violet-300",
-  paraphrase: "border-fuchsia-200/70 bg-fuchsia-50 text-fuchsia-600 dark:border-fuchsia-400/15 dark:bg-fuchsia-400/10 dark:text-fuchsia-300",
-  projects: "border-amber-200/75 bg-amber-50 text-amber-600 dark:border-amber-400/15 dark:bg-amber-400/10 dark:text-amber-300",
-  design: "border-emerald-200/70 bg-emerald-50 text-emerald-600 dark:border-emerald-400/15 dark:bg-emerald-400/10 dark:text-emerald-300",
-  codex: "border-blue-200/70 bg-blue-50 text-blue-600 dark:border-blue-400/15 dark:bg-blue-400/10 dark:text-blue-300",
-} as const
+  "bg-foreground/[0.055] text-foreground ring-1 ring-border/45 dark:bg-white/[0.08] dark:ring-white/10"
+const NAV_ICON = "h-5 w-5 shrink-0 stroke-[1.85]"
 
 type SidebarNavItemProps = {
   href: string
@@ -157,7 +144,6 @@ type SidebarNavItemProps = {
   tooltip: React.ReactNode
   icon: React.ComponentType<{ className?: string }>
   iconClassName?: string
-  iconToneClassName?: string
   active: boolean
   pending: boolean
   sidebarState: "open" | "closed"
@@ -174,7 +160,6 @@ function SidebarNavItem({
   tooltip,
   icon: Icon,
   iconClassName,
-  iconToneClassName,
   active,
   pending,
   sidebarState,
@@ -223,9 +208,7 @@ function SidebarNavItem({
               onNavigate?.()
             }}
           >
-            <span className={cn(NAV_ICON_SHELL, iconToneClassName)}>
-              <Icon className={cn(NAV_ICON, iconClassName)} />
-            </span>
+            <Icon className={cn(NAV_ICON, active ? "text-foreground" : "text-muted-foreground", iconClassName)} />
             <span className="group-data-[state=closed]:hidden truncate">{label}</span>
           </Link>
         </SidebarMenuButton>
@@ -971,9 +954,7 @@ export function AppSidebar() {
                   "group-data-[collapsible=icon]:!size-8 group-data-[collapsible=icon]:!p-2",
                 )}
               >
-                <span className={cn(NAV_ICON_SHELL, NAV_TONES.chat)}>
-                  <PenSquare className={NAV_ICON} />
-                </span>
+                <PenSquare className={cn(NAV_ICON, "text-foreground")} />
                 <span className="group-data-[state=closed]:hidden truncate">{t("newChat")}</span>
               </button>
             </TooltipTrigger>
@@ -1031,9 +1012,7 @@ export function AppSidebar() {
                 className={cn(NAV_ROW, "group-data-[collapsible=icon]:!size-8 group-data-[collapsible=icon]:!p-2")}
                 variant="default"
               >
-                <span className={cn(NAV_ICON_SHELL, NAV_TONES.search)}>
-                  <Search className={NAV_ICON} />
-                </span>
+                <Search className={cn(NAV_ICON, "text-muted-foreground")} />
                 <span className="group-data-[state=closed]:hidden truncate">{t("searchChats")}</span>
               </SidebarMenuButton>
             </TooltipTrigger>
@@ -1053,7 +1032,6 @@ export function AppSidebar() {
             label={t("library")}
             tooltip={t("library")}
             icon={Images}
-            iconToneClassName={NAV_TONES.library}
             active={isOnLibraryPage}
             pending={isPendingRoute("/library")}
             sidebarState={state}
@@ -1068,7 +1046,6 @@ export function AppSidebar() {
             label={t("gpts")}
             tooltip={t("gpts")}
             icon={LayoutGrid}
-            iconToneClassName={NAV_TONES.gpts}
             active={isOnGPTsPage}
             pending={isPendingRoute("/gpts")}
             sidebarState={state}
@@ -1083,7 +1060,6 @@ export function AppSidebar() {
             label="Parafraseo"
             tooltip="Parafraseo"
             icon={Sparkles}
-            iconToneClassName={NAV_TONES.paraphrase}
             active={isOnParaphrasePage}
             pending={isPendingRoute("/parafraseo")}
             sidebarState={state}
@@ -1103,7 +1079,6 @@ export function AppSidebar() {
             label={t("projects")}
             tooltip={t("projects")}
             icon={FolderKanban}
-            iconToneClassName={NAV_TONES.projects}
             active={isOnProjectsPage}
             pending={isPendingRoute("/projects")}
             sidebarState={state}
@@ -1123,7 +1098,6 @@ export function AppSidebar() {
             label={t("design")}
             tooltip={t("design")}
             icon={Palette}
-            iconToneClassName={NAV_TONES.design}
             active={isOnDesignPage}
             pending={isPendingRoute("/design")}
             sidebarState={state}
