@@ -25,6 +25,7 @@ const ALLOWED_HOSTS = new Set(['github.com', 'gitlab.com', 'bitbucket.org']);
 
 const GIT_CLONE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const MAX_OUTPUT_BYTES = 32 * 1024;
+const SAFE_BRANCH_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$/;
 
 // Matches https://github.com/owner/repo, github.com/owner/repo, and git@github.com:owner/repo.git
 const GITHUB_RE = /^(?:(?:https?:\/\/)?(?:www\.)?(github\.com|gitlab\.com|bitbucket\.org)\/([\w.-]+)\/([\w.-]+?)(?:\.git)?(?:\/.*)?|git@(github\.com):([\w.-]+)\/([\w.-]+?)(?:\.git)?)$/i;
@@ -37,6 +38,12 @@ function ensureDir(dir) {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
+}
+
+function isWithinDir(parent, child) {
+  const parentPath = path.resolve(parent);
+  const childPath = path.resolve(child);
+  return childPath === parentPath || childPath.startsWith(parentPath + path.sep);
 }
 
 function safeCloneUrl(raw) {
@@ -52,6 +59,15 @@ function safeCloneUrl(raw) {
   // Construct a clean URL: no shell metacharacters, no fragments,
   // always https, always with .git suffix for bare-clone compat.
   return `https://${host}/${owner}/${repo}.git`;
+}
+
+function safeBranchName(raw) {
+  const branch = String(raw || '').trim();
+  if (!branch) return '';
+  if (!SAFE_BRANCH_RE.test(branch)) return null;
+  if (branch.includes('..') || branch.includes('@{') || branch.includes('//')) return null;
+  if (branch.endsWith('.') || branch.endsWith('/') || branch.endsWith('.lock')) return null;
+  return branch;
 }
 
 function repoDirName(cloneUrl) {
@@ -142,7 +158,16 @@ async function cloneProject(args, ctx = {}) {
 
   const dirName = repoDirName(cloneUrl);
   const destPath = path.join(baseDir, dirName);
-  const branch = String(args?.branch || '').trim();
+  if (!isWithinDir(baseDir, destPath)) {
+    return { ok: false, error: 'Ruta de destino inválida para el repositorio solicitado' };
+  }
+  const branch = safeBranchName(args?.branch);
+  if (branch === null) {
+    return {
+      ok: false,
+      error: 'Nombre de rama inválido. Usa solo letras, números, punto, guion, guion bajo o slash, sin espacios ni opciones de línea de comandos.',
+    };
+  }
 
   ctx.onEvent?.({ type: 'tool_call', tool: 'clone_project', preview: `Clonando ${cloneUrl} → ${destPath}` });
   ctx.onEvent?.({ type: 'stage', label: `Clonando ${dirName}`, pct: 10 });
@@ -182,7 +207,7 @@ async function cloneProject(args, ctx = {}) {
 
   const cloneArgs = ['clone', '--depth', '1'];
   if (branch) cloneArgs.push('--branch', branch);
-  cloneArgs.push(cloneUrl, destPath);
+  cloneArgs.push('--', cloneUrl, destPath);
   const result = await runGit(cloneArgs, baseDir);
   const cloneDurationMs = Date.now() - startMs;
 
@@ -259,5 +284,5 @@ module.exports = {
   listProjects,
   projectsDir,
   // Exported for testing:
-  _internal: { safeCloneUrl, repoDirName, GITHUB_RE, ALLOWED_HOSTS },
+  _internal: { safeCloneUrl, repoDirName, safeBranchName, isWithinDir, GITHUB_RE, ALLOWED_HOSTS },
 };

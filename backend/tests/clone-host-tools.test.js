@@ -1,7 +1,7 @@
 /**
  * Tests for clone-project-tool and host-bash-tool
  *
- * Run: node --test tests/clone-host-tools.test.js
+ * Run: node --test backend/tests/clone-host-tools.test.js
  */
 
 const assert = require('node:assert');
@@ -48,6 +48,14 @@ describe('clone-project-tool', () => {
     assert.strictEqual(internal.safeCloneUrl(''), null);
     assert.strictEqual(internal.safeCloneUrl('   '), null);
     assert.strictEqual(internal.safeCloneUrl('not a url'), null);
+  });
+
+  it('safeBranchName accepts normal refs and rejects option injection', () => {
+    assert.strictEqual(internal.safeBranchName('main'), 'main');
+    assert.strictEqual(internal.safeBranchName('feature/repo-tools'), 'feature/repo-tools');
+    assert.strictEqual(internal.safeBranchName('--upload-pack=touch /tmp/pwned'), null);
+    assert.strictEqual(internal.safeBranchName('feature with spaces'), null);
+    assert.strictEqual(internal.safeBranchName('feature..escape'), null);
   });
 
   it('repoDirName extracts owner-repo from clone URL', () => {
@@ -120,6 +128,20 @@ describe('host-bash-tool', () => {
     assert.strictEqual(internal.isAllowedCommand('ls | grep x'), false);
     assert.strictEqual(internal.isAllowedCommand('ls; rm -rf'), false);
     assert.strictEqual(internal.isAllowedCommand('ls && rm'), false);
+    assert.strictEqual(internal.isAllowedCommand('ls > /tmp/out'), false);
+    assert.strictEqual(internal.isAllowedCommand('echo $(whoami)'), false);
+  });
+
+  it('buildCommandSpec maps user text to fixed allowed program families', () => {
+    assert.deepStrictEqual(internal.buildCommandSpec('git status --short'), {
+      program: 'git',
+      args: ['status', '--short'],
+    });
+    assert.deepStrictEqual(internal.buildCommandSpec('echo "hello world"'), {
+      program: 'echo',
+      args: ['hello world'],
+    });
+    assert.strictEqual(internal.buildCommandSpec('git checkout main'), null);
   });
 
   it('isAllowedDirectory allows projects dir', () => {
@@ -132,6 +154,11 @@ describe('host-bash-tool', () => {
     assert.strictEqual(internal.isAllowedDirectory('/etc'), false);
     assert.strictEqual(internal.isAllowedDirectory('/usr/bin'), false);
     assert.strictEqual(internal.isAllowedDirectory('/opt'), false);
+  });
+
+  it('commandHasUnsafePathReference rejects paths outside allowed roots', () => {
+    assert.strictEqual(internal.commandHasUnsafePathReference('cat /etc/passwd', os.tmpdir()), true);
+    assert.strictEqual(internal.commandHasUnsafePathReference('ls ./fixture', os.tmpdir()), false);
   });
 
   it('hostBash returns error for empty command', async () => {
@@ -158,10 +185,11 @@ describe('host-bash-tool', () => {
 
   it('hostBash captures non-zero exit codes', async () => {
     const result = await hostModule.hostBash({
-      command: 'ls /nonexistent_dir_xyz_abc123',
+      command: 'ls ./nonexistent_dir_xyz_abc123',
       directory: os.tmpdir(),
     });
     assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.exitCode, 1);
   });
 
   it('tool definition has correct name and parameters', () => {

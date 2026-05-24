@@ -46,7 +46,7 @@ function detectCodeTaskIntent(text) {
  */
 function extractRepoUrl(text) {
   const t = String(text || '').trim();
-  const m = /(?:https?:\/\/)?(?:www\.)?(github\.com|gitlab\.com)[^\s)]+/i.exec(t);
+  const m = /(?:https?:\/\/)?(?:www\.)?(github\.com|gitlab\.com|bitbucket\.org)[^\s)]+/i.exec(t);
   if (m) return m[0].replace(/\.git$/, '').replace(/\/$/, '');
   return null;
 }
@@ -111,7 +111,8 @@ async function runCodexPipeline(params = {}, deps = {}) {
       await setPhase('execute', 35, { subphase: 'cloning' });
       emit({ type: 'clone_start', url: repoUrl });
 
-      const cloneResult = await cloneProject({ url: repoUrl, branch }, { onEvent: emit });
+      const cloneArgs = params.branch ? { url: repoUrl, branch } : { url: repoUrl };
+      const cloneResult = await cloneProject(cloneArgs, { onEvent: emit });
 
       if (cloneResult.ok) {
         codexRunStore.updateRun(runId, { clonePath: cloneResult.path });

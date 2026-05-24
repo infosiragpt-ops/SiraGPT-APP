@@ -56,23 +56,91 @@ const ALLOWED_DIRS = new Set([
 
 const HOST_BASH_TIMEOUT_MS = parseInt(process.env.SIRAGPT_HOST_BASH_TIMEOUT_MS || '120000', 10); // 2 min
 const MAX_OUTPUT_BYTES = 128 * 1024;
+const DEFAULT_WORKING_DIR = path.join(os.homedir(), 'Desktop', 'sira-projects');
+
+const SIMPLE_COMMANDS = new Set([
+  'ls', 'cat', 'head', 'tail', 'wc', 'find', 'grep', 'stat', 'du', 'file', 'tree',
+  'node', 'npm', 'npx', 'python3', 'pip3',
+  'pwd', 'echo', 'which', 'uname', 'sw_vers', 'df', 'date',
+  'make', 'cmake',
+]);
+
+const GIT_SUBCOMMANDS = new Set(['status', 'log', 'diff', 'show', 'branch', 'remote', 'tag']);
 
 // ============================================================
 // Validation
 // ============================================================
 
 function isAllowedCommand(rawCmd) {
-  const cmd = String(rawCmd || '').trim();
+  return Boolean(buildCommandSpec(rawCmd));
+}
 
-  // Reject shell chaining operators
-  if (/[;&|]/.test(cmd)) return false;
+function hasShellControlChars(rawCmd) {
+  const cmd = String(rawCmd || '');
+  return /[;&|`<>]/.test(cmd) || /\$\(/.test(cmd) || /[\r\n]/.test(cmd);
+}
 
-  // Check against allowed command prefixes
-  for (const prefix of ALLOWED_COMMANDS) {
-    if (cmd.startsWith(prefix + ' ') || cmd === prefix) return true;
+function splitCommandLine(rawCmd) {
+  const input = String(rawCmd || '').trim();
+  if (!input || hasShellControlChars(input)) return null;
+
+  const out = [];
+  let current = '';
+  let quote = null;
+  let escaping = false;
+
+  for (const ch of input) {
+    if (escaping) {
+      current += ch;
+      escaping = false;
+      continue;
+    }
+    if (ch === '\\') {
+      escaping = true;
+      continue;
+    }
+    if (quote) {
+      if (ch === quote) quote = null;
+      else current += ch;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (current) {
+        out.push(current);
+        current = '';
+      }
+      continue;
+    }
+    current += ch;
   }
 
-  return false;
+  if (escaping || quote) return null;
+  if (current) out.push(current);
+  return out.length ? out : null;
+}
+
+function buildCommandSpec(rawCmd) {
+  const parts = splitCommandLine(rawCmd);
+  if (!parts) return null;
+
+  const command = parts[0];
+  if (SIMPLE_COMMANDS.has(command)) {
+    return { program: command, args: parts.slice(1) };
+  }
+
+  if (command === 'git') {
+    const subcommand = parts[1];
+    if (!subcommand) return null;
+    if (GIT_SUBCOMMANDS.has(subcommand)) return { program: 'git', args: parts.slice(1) };
+    if (subcommand === 'stash' && parts[2] === 'list') return { program: 'git', args: parts.slice(1) };
+    return null;
+  }
+
+  return null;
 }
 
 function isAllowedDirectory(dir) {
@@ -86,7 +154,7 @@ function isAllowedDirectory(dir) {
 
 function isSafePathToken(token, workingDir) {
   if (!token || token.startsWith('-')) return true;
-  const unquoted = String(token).replace(/^['"]|['"]$/g, '');
+  const unquoted = String(token);
   if (!unquoted || unquoted === '.' || unquoted === '..') return unquoted !== '..';
   if (unquoted.includes('..' + path.sep) || unquoted.includes('/../')) return false;
 
@@ -96,37 +164,81 @@ function isSafePathToken(token, workingDir) {
     return isAllowedDirectory(expanded);
   }
 
-  const resolved = path.resolve(workingDir || path.join(os.homedir(), 'Desktop', 'sira-projects'), unquoted);
+  const resolved = path.resolve(workingDir || DEFAULT_WORKING_DIR, unquoted);
   return isAllowedDirectory(resolved);
 }
 
 function commandHasUnsafePathReference(command, workingDir) {
-  const parts = String(command || '').trim().split(/\s+/).slice(1);
+  const parsed = splitCommandLine(command);
+  if (!parsed) return true;
+  const parts = parsed.slice(1);
   return parts.some((part) => !isSafePathToken(part, workingDir));
+}
+
+function spawnAllowedProgram(spec, options) {
+  switch (spec.program) {
+    case 'ls': return spawn('ls', spec.args, options);
+    case 'cat': return spawn('cat', spec.args, options);
+    case 'head': return spawn('head', spec.args, options);
+    case 'tail': return spawn('tail', spec.args, options);
+    case 'wc': return spawn('wc', spec.args, options);
+    case 'find': return spawn('find', spec.args, options);
+    case 'grep': return spawn('grep', spec.args, options);
+    case 'stat': return spawn('stat', spec.args, options);
+    case 'du': return spawn('du', spec.args, options);
+    case 'file': return spawn('file', spec.args, options);
+    case 'tree': return spawn('tree', spec.args, options);
+    case 'git': return spawn('git', spec.args, options);
+    case 'node': return spawn('node', spec.args, options);
+    case 'npm': return spawn('npm', spec.args, options);
+    case 'npx': return spawn('npx', spec.args, options);
+    case 'python3': return spawn('python3', spec.args, options);
+    case 'pip3': return spawn('pip3', spec.args, options);
+    case 'pwd': return spawn('pwd', spec.args, options);
+    case 'echo': return spawn('echo', spec.args, options);
+    case 'which': return spawn('which', spec.args, options);
+    case 'uname': return spawn('uname', spec.args, options);
+    case 'sw_vers': return spawn('sw_vers', spec.args, options);
+    case 'df': return spawn('df', spec.args, options);
+    case 'date': return spawn('date', spec.args, options);
+    case 'make': return spawn('make', spec.args, options);
+    case 'cmake': return spawn('cmake', spec.args, options);
+    default:
+      throw new Error(`Unsupported command: ${spec.program}`);
+  }
 }
 
 // ============================================================
 // Execution
 // ============================================================
 
-function runHostCommand(fullCommand, cwd) {
+function runHostCommand(commandSpec, cwd) {
   return new Promise((resolve) => {
-    // Parse the command into the first token (as argv[0]) and the rest as args.
-    // We run through `sh -c` but with the allowlist guard already passed.
-    const parts = fullCommand.trim().split(/\s+/);
-    const bin = parts[0];
-    const args = parts.slice(1);
+    let child;
+    try {
+      child = spawnAllowedProgram(commandSpec, {
+        cwd: cwd || os.homedir(),
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: {
+          ...process.env,
+          GIT_TERMINAL_PROMPT: '0',
+          NODE_ENV: process.env.NODE_ENV || 'development',
+        },
+      });
+    } catch (err) {
+      resolve({
+        ok: false,
+        exitCode: null,
+        stdout: '',
+        stderr: `Error al ejecutar: ${err.message}`,
+        timedOut: false,
+      });
+      return;
+    }
 
-    const child = spawn(bin, args, {
-      cwd: cwd || os.homedir(),
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        GIT_TERMINAL_PROMPT: '0',
-        NODE_ENV: process.env.NODE_ENV || 'development',
-      },
-      timeout: HOST_BASH_TIMEOUT_MS,
-    });
+    const timer = setTimeout(() => {
+      try { child.kill('SIGKILL'); } catch { /* already exited */ }
+    }, HOST_BASH_TIMEOUT_MS);
 
     let stdoutBuf = Buffer.alloc(0);
     let stderrBuf = Buffer.alloc(0);
@@ -149,6 +261,7 @@ function runHostCommand(fullCommand, cwd) {
     try { child.stdin.end(); } catch { /* already closed */ }
 
     child.on('close', (code, signal) => {
+      clearTimeout(timer);
       const stdout = stdoutBuf.toString('utf8').slice(0, MAX_OUTPUT_BYTES);
       const stderr = stderrBuf.toString('utf8').slice(0, MAX_OUTPUT_BYTES);
       resolve({
@@ -161,6 +274,7 @@ function runHostCommand(fullCommand, cwd) {
     });
 
     child.on('error', (err) => {
+      clearTimeout(timer);
       resolve({
         ok: false,
         exitCode: null,
@@ -199,7 +313,9 @@ async function hostBash(args, ctx = {}) {
     };
   }
 
-  const workingDir = args.directory || path.join(os.homedir(), 'Desktop', 'sira-projects');
+  const commandSpec = buildCommandSpec(command);
+
+  const workingDir = args.directory || DEFAULT_WORKING_DIR;
 
   if (args.directory && !isAllowedDirectory(args.directory)) {
     return {
@@ -218,7 +334,7 @@ async function hostBash(args, ctx = {}) {
   ctx.onEvent?.({ type: 'tool_call', tool: 'host_bash', preview: command.slice(0, 200) });
   ctx.onEvent?.({ type: 'stage', label: `Ejecutando: ${command.slice(0, 80)}`, pct: 30 });
 
-  const result = await runHostCommand(command, workingDir);
+  const result = await runHostCommand(commandSpec, workingDir);
 
   const stdoutPreview = result.stdout.slice(0, 1500);
   const stderrPreview = result.stderr.slice(0, 1000);
@@ -277,5 +393,5 @@ module.exports = {
   ALLOWED_COMMANDS,
   ALLOWED_DIRS,
   // Exported for testing:
-  _internal: { isAllowedCommand, isAllowedDirectory, commandHasUnsafePathReference, runHostCommand },
+  _internal: { isAllowedCommand, isAllowedDirectory, commandHasUnsafePathReference, runHostCommand, splitCommandLine, buildCommandSpec },
 };
