@@ -369,6 +369,7 @@ const { closeAgentTaskQueue } = require('./src/services/agents/agent-task-queue'
 const { startGoalWorker, closeGoalWorker } = require('./src/services/goal-worker');
 const { closeGoalQueue } = require('./src/services/goal-queue');
 const { recoverGoalRunsAfterBoot, stopGoalRecovery } = require('./src/services/goal-boot-recovery');
+const { startGoalCleanup, stopGoalCleanup } = require('./src/services/goal-cleanup');
 const alerting = require('./src/services/alerting');
 const sloTracker = require('./src/services/slo-tracker');
 const shutdownRegistry = require('./src/utils/shutdown');
@@ -1130,6 +1131,7 @@ function startServer() {
 
     recoverAgentTasksAfterBoot({ logger });
     recoverGoalRunsAfterBoot({ logger });
+    startGoalCleanup({ logger });
     startAgentTaskWorker();
     startGoalWorker();
 
@@ -1233,6 +1235,7 @@ function startServer() {
     // 3. Close BullMQ workers + queue.
     shutdownRegistry.register('bullmq_workers_close', async () => {
         try { stopGoalRecovery(); } catch {}
+        try { stopGoalCleanup(); } catch {}
         await Promise.allSettled([
             closeAgentTaskWorker(),
             closeAgentTaskQueue(),

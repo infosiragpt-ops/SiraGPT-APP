@@ -410,6 +410,106 @@ router.post('/:id/cancel', authenticateToken, cancelValidators, async (req, res)
   return res.json({ cancelled: true, status: 'cancelled', reason: result.cancelReason });
 });
 
+// ── POST /api/goals/:id/retry — re-run a terminal goal ────────────
+// Only terminal goals (completed | failed | cancelled) can be retried.
+// Retrying a running goal would race with the worker — return 409 so
+// the client can wait/cancel first.
+//
+// Retry creates a NEW `goal_runs` row copying { userId, chatId,
+// prompt, depth, agentKind } from the source. We append paired info
+// events linking source ↔ new so the chat's SSE replay surfaces the
+// retry chain to the user.
+const retryValidators = [
+  param('id').isString().isLength({ min: 1, max: 64 }),
+];
+
+router.post('/:id/retry', authenticateToken, retryValidators, async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ error: 'validation_failed', details: errors.array() });
+  }
+  if (!prisma || !prisma.goalRun) {
+    return res.status(503).json({ error: 'persistence_unavailable' });
+  }
+  const userId = String(req.user?.id || '');
+  if (!userId) return res.status(401).json({ error: 'unauthenticated' });
+
+  const sourceId = String(req.params.id);
+  const source = await prisma.goalRun.findFirst({ where: { id: sourceId, userId } }).catch(() => null);
+  if (!source) return res.status(404).json({ error: 'not_found' });
+
+  if (!TERMINAL_STATUSES.has(source.status)) {
+    return res.status(409).json({ error: 'not_terminal', currentStatus: source.status });
+  }
+
+  let created;
+  try {
+    created = await prisma.goalRun.create({
+      data: {
+        userId,
+        chatId: source.chatId ?? null,
+        status: 'queued',
+        prompt: source.prompt,
+        depth: source.depth,
+        agentKind: source.agentKind,
+      },
+    });
+  } catch (err) {
+    console.error('[goals] retry create failed:', err?.message || err);
+    return res.status(500).json({ error: 'retry_failed', message: err?.message || 'unknown' });
+  }
+
+  // Initial info event on the NEW row pointing back at the source so
+  // the new SSE stream renders a "retry of {sourceId}" line first.
+  await goalEvents.appendEvent({
+    goalRunId: created.id,
+    type: 'info',
+    payload: {
+      type: 'info',
+      message: `retry of ${source.id}`,
+      sourceGoalRunId: source.id,
+      depth: created.depth,
+      agentKind: created.agentKind,
+      at: new Date().toISOString(),
+    },
+  });
+
+  // Paired info event on the SOURCE row so any client still attached
+  // to the source's stream (or replaying it from history) surfaces the
+  // link forward. Best-effort — appendEvent already swallows errors.
+  await goalEvents.appendEvent({
+    goalRunId: source.id,
+    type: 'info',
+    payload: {
+      type: 'info',
+      message: `retried as ${created.id}`,
+      retriedAs: created.id,
+      at: new Date().toISOString(),
+    },
+  });
+
+  try {
+    await goalQueue.enqueueGoalRun({ goalRunId: created.id });
+  } catch (err) {
+    // Queue unavailable — leave row in queued status so the boot
+    // recovery sweeper can re-enqueue. Surface the warning so the
+    // client knows the run won't start until the queue recovers.
+    console.warn('[goals] retry enqueue failed (row left queued):', err?.message || err);
+    return res.status(202).json({
+      goalRunId: created.id,
+      sourceGoalRunId: source.id,
+      queuedAt: created.createdAt,
+      enqueueWarning: err?.message || 'enqueue_failed',
+    });
+  }
+
+  return res.status(202).json({
+    goalRunId: created.id,
+    sourceGoalRunId: source.id,
+    queuedAt: created.createdAt,
+  });
+});
+
 // ── Admin observability ───────────────────────────────────────────
 const HEALTH_SUBSYSTEM_TIMEOUT_MS = 2000;
 

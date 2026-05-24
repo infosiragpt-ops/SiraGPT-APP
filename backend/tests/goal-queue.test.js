@@ -8,6 +8,7 @@ const goalEvents = require('../src/services/goal-events');
 const goalWorker = require('../src/services/goal-worker');
 const goalsRoutes = require('../src/routes/goals');
 const goalRecovery = require('../src/services/goal-boot-recovery');
+const goalCleanup = require('../src/services/goal-cleanup');
 
 test('goal queue requires REDIS_URL for durable runtime', () => {
   const previous = process.env.REDIS_URL;
@@ -272,4 +273,135 @@ test('withTimeout resolves to the promise value when it settles in time', async 
   const { withTimeout } = goalsRoutes._internal;
   const result = await withTimeout(Promise.resolve({ ok: true }), 1000, { error: 'fallback' });
   assert.deepEqual(result, { ok: true });
+});
+
+// ── goal-cleanup ───────────────────────────────────────────────────
+test('goal-cleanup exports runGoalCleanupSweep, startGoalCleanup, stopGoalCleanup', () => {
+  assert.equal(typeof goalCleanup.runGoalCleanupSweep, 'function');
+  assert.equal(typeof goalCleanup.startGoalCleanup, 'function');
+  assert.equal(typeof goalCleanup.stopGoalCleanup, 'function');
+  assert.equal(typeof goalCleanup.readConfig, 'function');
+});
+
+test('goal-cleanup default retention is 30 days (2_592_000_000 ms)', () => {
+  const previous = process.env.GOAL_CLEANUP_RETENTION_MS;
+  delete process.env.GOAL_CLEANUP_RETENTION_MS;
+
+  const cfg = goalCleanup.readConfig();
+  assert.equal(cfg.retentionMs, 2_592_000_000, 'default retention = 30 days × 24h × 60m × 60s × 1000ms');
+  assert.equal(goalCleanup.DEFAULT_RETENTION_MS, 2_592_000_000);
+
+  if (previous !== undefined) process.env.GOAL_CLEANUP_RETENTION_MS = previous;
+});
+
+test('goal-cleanup default interval is 1 hour (3_600_000 ms)', () => {
+  const previous = process.env.GOAL_CLEANUP_INTERVAL_MS;
+  delete process.env.GOAL_CLEANUP_INTERVAL_MS;
+
+  const cfg = goalCleanup.readConfig();
+  assert.equal(cfg.intervalMs, 3_600_000, 'default interval = 60 minutes × 60s × 1000ms');
+  assert.equal(goalCleanup.DEFAULT_INTERVAL_MS, 3_600_000);
+
+  if (previous !== undefined) process.env.GOAL_CLEANUP_INTERVAL_MS = previous;
+});
+
+test('goal-cleanup readConfig honours env overrides for retention + interval', () => {
+  const previous = {
+    retention: process.env.GOAL_CLEANUP_RETENTION_MS,
+    interval: process.env.GOAL_CLEANUP_INTERVAL_MS,
+  };
+  process.env.GOAL_CLEANUP_RETENTION_MS = '1000';
+  process.env.GOAL_CLEANUP_INTERVAL_MS = '2000';
+
+  const cfg = goalCleanup.readConfig();
+  assert.equal(cfg.retentionMs, 1000);
+  assert.equal(cfg.intervalMs, 2000);
+
+  if (previous.retention === undefined) delete process.env.GOAL_CLEANUP_RETENTION_MS;
+  else process.env.GOAL_CLEANUP_RETENTION_MS = previous.retention;
+  if (previous.interval === undefined) delete process.env.GOAL_CLEANUP_INTERVAL_MS;
+  else process.env.GOAL_CLEANUP_INTERVAL_MS = previous.interval;
+});
+
+test('goal-cleanup is enabled by default; readConfig.enabled === true when env unset', () => {
+  const previous = process.env.GOAL_CLEANUP_ENABLED;
+  delete process.env.GOAL_CLEANUP_ENABLED;
+
+  const cfg = goalCleanup.readConfig();
+  assert.equal(cfg.enabled, true);
+
+  if (previous !== undefined) process.env.GOAL_CLEANUP_ENABLED = previous;
+});
+
+test('GOAL_CLEANUP_ENABLED=0 disables startGoalCleanup (no interval scheduled)', async () => {
+  const previous = process.env.GOAL_CLEANUP_ENABLED;
+  process.env.GOAL_CLEANUP_ENABLED = '0';
+
+  // Safety: ensure no stray interval is dangling from a prior test.
+  goalCleanup.stopGoalCleanup();
+
+  const summary = await goalCleanup.startGoalCleanup({
+    logger: { info() {}, warn() {} },
+    runInterval: true,
+  });
+  assert.ok(summary, 'returns a summary even when disabled');
+  assert.equal(summary.skipped, true);
+  assert.equal(summary.reason, 'disabled');
+
+  // stopGoalCleanup must be a no-op when nothing was scheduled.
+  assert.doesNotThrow(() => goalCleanup.stopGoalCleanup());
+
+  if (previous === undefined) delete process.env.GOAL_CLEANUP_ENABLED;
+  else process.env.GOAL_CLEANUP_ENABLED = previous;
+});
+
+test('GOAL_CLEANUP_ENABLED=false also disables (case-insensitive)', () => {
+  const previous = process.env.GOAL_CLEANUP_ENABLED;
+
+  process.env.GOAL_CLEANUP_ENABLED = 'False';
+  assert.equal(goalCleanup.readConfig().enabled, false);
+
+  process.env.GOAL_CLEANUP_ENABLED = 'OFF';
+  assert.equal(goalCleanup.readConfig().enabled, false);
+
+  process.env.GOAL_CLEANUP_ENABLED = 'no';
+  assert.equal(goalCleanup.readConfig().enabled, false);
+
+  process.env.GOAL_CLEANUP_ENABLED = '1';
+  assert.equal(goalCleanup.readConfig().enabled, true);
+
+  if (previous === undefined) delete process.env.GOAL_CLEANUP_ENABLED;
+  else process.env.GOAL_CLEANUP_ENABLED = previous;
+});
+
+test('stopGoalCleanup is safe to call when nothing was started', () => {
+  // First call: no-op when nothing is running.
+  assert.doesNotThrow(() => goalCleanup.stopGoalCleanup());
+  // Idempotent — calling again must still be safe.
+  assert.doesNotThrow(() => goalCleanup.stopGoalCleanup());
+});
+
+test('runGoalCleanupSweep returns a zeroed summary when prisma is unavailable', async () => {
+  // The module lazy-requires `../config/database` and caches the result.
+  // In the test runner the require may resolve to a stub or throw — in
+  // either case the function must never throw and must return a summary.
+  const result = await goalCleanup.runGoalCleanupSweep({
+    logger: { info() {}, warn() {} },
+  });
+  assert.ok(result, 'returns a summary object');
+  assert.equal(typeof result.deleted, 'number');
+  assert.equal(typeof result.scanned, 'number');
+  assert.equal(typeof result.durationMs, 'number');
+});
+
+// ── retry route ────────────────────────────────────────────────────
+test('routes/goals exposes POST /:id/retry on the default router', () => {
+  const stack = goalsRoutes.stack || [];
+  const retryLayer = stack.find((layer) => {
+    if (!layer || !layer.route) return false;
+    const path = layer.route.path || '';
+    const methods = layer.route.methods || {};
+    return path === '/:id/retry' && methods.post;
+  });
+  assert.ok(retryLayer, 'default router exposes POST /:id/retry');
 });
