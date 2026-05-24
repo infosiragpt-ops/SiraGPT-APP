@@ -144,6 +144,13 @@ async function buildEnvelope({
   });
   const targetFormat = inferTargetFormatFromDecision(enrichedDecision, taxonomyIntent, requestIntelligence);
   const siraToolPlan = deriveToolPlan(enrichedDecision, taxonomyIntent, targetFormat);
+  const clarificationPolicy = deriveClarificationPolicy({
+    decision: tokenAwareDecision,
+    text: effectiveText,
+    taxonomyIntent,
+    attachments: normalizedAttachments,
+    contextualUnderstanding: contextualUnderstandingContext,
+  });
   const workflowGraph = deriveWorkflowGraph(
     plan,
     enrichedDecision,
@@ -222,14 +229,7 @@ async function buildEnvelope({
 
     workflow_graph: workflowGraph,
 
-    clarification_policy: {
-      needs_clarification: Boolean(tokenAwareDecision.needs_clarification),
-      clarification_reason: tokenAwareDecision.needs_clarification ? "input_under_specified" : null,
-      questions: tokenAwareDecision.needs_clarification ? deriveClarifyingQuestions(effectiveText, taxonomyIntent) : [],
-      auto_assumptions_allowed: !tokenAwareDecision.needs_clarification,
-      act_without_clarification_if_confidence_above: 0.82,
-      ask_user_if_confidence_below: 0.55,
-    },
+    clarification_policy: clarificationPolicy,
 
     safety_and_permissions: deriveSafety(taxonomyIntent, enrichedDecision),
 
@@ -1149,8 +1149,74 @@ function deriveMustInclude(taxonomyIntent) {
   return out;
 }
 
-function deriveClarifyingQuestions(text, taxonomyIntent) {
+function deriveClarificationPolicy({
+  decision,
+  text,
+  taxonomyIntent,
+  attachments = [],
+  contextualUnderstanding = null,
+} = {}) {
+  const trajectory = normalizeTaskTrajectory(contextualUnderstanding?.value_context?.task_trajectory);
+  const baseNeedsClarification = Boolean(decision?.needs_clarification);
+  const confidence = clamp01(Number(decision?.confidence || 0));
+  const canUseEndToEndAssumptions = trajectory.mode === "end_to_end_execution"
+    && trajectory.confidence >= 0.72
+    && confidence >= 0.55;
+  const criticalMissing = detectCriticalMissingInformation({ text, taxonomyIntent, attachments });
+
+  if (baseNeedsClarification && canUseEndToEndAssumptions && criticalMissing.length === 0) {
+    return {
+      needs_clarification: false,
+      clarification_reason: "contextual_end_to_end_assumptions",
+      questions: [],
+      auto_assumptions_allowed: true,
+      act_without_clarification_if_confidence_above: 0.82,
+      ask_user_if_confidence_below: 0.55,
+    };
+  }
+
+  const needsClarification = baseNeedsClarification || criticalMissing.length > 0;
+  return {
+    needs_clarification: needsClarification,
+    clarification_reason: needsClarification
+      ? criticalMissing[0] || "input_under_specified"
+      : null,
+    questions: needsClarification
+      ? deriveClarifyingQuestions(text, taxonomyIntent, criticalMissing)
+      : [],
+    auto_assumptions_allowed: !needsClarification,
+    act_without_clarification_if_confidence_above: 0.82,
+    ask_user_if_confidence_below: 0.55,
+  };
+}
+
+function detectCriticalMissingInformation({ text, taxonomyIntent, attachments = [] } = {}) {
+  const current = String(text || "");
+  const missing = [];
+  const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
+  if (/(?:analiza|analizar|procesa|procesar|extrae|leer)\s+(?:el|este|esta)?\s*(archivo|excel|pdf|word|csv|imagen|documento)\b/i.test(current) && !hasAttachments) {
+    missing.push("missing_referenced_attachment");
+  }
+  if (/\b(?:enviar|manda(?:r)?\s+(?:correo|email)|transferir|pagar|cobrar|borrar|eliminar|destruir|publicar\s+(?:en\s+)?(?:twitter|x|linkedin|facebook|instagram))\b/i.test(current)) {
+    missing.push("external_or_destructive_action_requires_confirmation");
+  }
+  if (taxonomyIntent?.id === "database_query" && /\b(update|delete|drop|truncate|insert)\b/i.test(current)) {
+    missing.push("database_write_requires_confirmation");
+  }
+  return missing.slice(0, 3);
+}
+
+function deriveClarifyingQuestions(text, taxonomyIntent, criticalMissing = []) {
   const out = [];
+  if (criticalMissing.includes("missing_referenced_attachment")) {
+    out.push("Sube el archivo o confirma cuál documento debo usar.");
+  }
+  if (criticalMissing.includes("external_or_destructive_action_requires_confirmation")) {
+    out.push("Confirma explícitamente la acción externa o irreversible antes de ejecutarla.");
+  }
+  if (criticalMissing.includes("database_write_requires_confirmation")) {
+    out.push("Confirma la operación de escritura en base de datos y el alcance exacto.");
+  }
   if (taxonomyIntent.family === "document_artifacts") out.push("¿Sobre qué tema específico quieres el documento?");
   if (taxonomyIntent.id === "image_generation") out.push("¿Estilo realista, ilustración o 3D?");
   if (taxonomyIntent.id === "video_generation") out.push("¿Cuántos segundos y qué tipo de cámara?");

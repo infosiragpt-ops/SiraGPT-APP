@@ -295,6 +295,108 @@ describe("task-envelope-builder", () => {
     expect(r.envelope.workflow_graph.audit_trace.some(e => e.event === "task_trajectory_applied")).toBe(true);
   });
 
+  test("end-to-end contextual trajectory acts with safe assumptions instead of generic clarification", async () => {
+    const r = await buildEnvelope({
+      text: "## CONTEXTUAL_VALUE_FRAME\n- collaboration_mode: autonomous_execution\n- task_trajectory: end_to_end_execution (0.90)\n- trajectory_phases: understand_full_context -> build_execution_plan -> implement_changes -> validate_with_tests -> deliver_concise_status\n\nSOLICITUD_USUARIO:\ncontinua implementación de la mejora",
+      originalText: "continua implementación de la mejora",
+      contextualUnderstanding: {
+        applied: true,
+        original_text: "continua implementación de la mejora",
+        effective_text: "continua implementación de la mejora",
+        recent_turn_count: 4,
+        coreference: { source: "not_run", latency_ms: 0, references: [] },
+        lexicon_terms: [],
+        repair: { is_repair: false, repair_type: null, contract_override: null },
+        misunderstanding_signals: [],
+        value_context: {
+          source: "deterministic_contextual_value_mapper",
+          values: [
+            { id: "execution_reliability", domain: "practical", label: "Execution reliability", evidence: "continue implementation", confidence: 0.9 },
+          ],
+          primary_domains: ["practical"],
+          constraints: [],
+          task_trajectory: {
+            mode: "end_to_end_execution",
+            objective: "continua implementación de la mejora",
+            phases: ["understand_full_context", "build_execution_plan", "implement_changes", "validate_with_tests", "deliver_concise_status"],
+            success_criteria: ["Carry the workflow from interpretation through delivery."],
+            stop_conditions: ["external action requires user approval"],
+            confidence: 0.9,
+          },
+          collaboration_mode: "autonomous_execution",
+          response_posture: "support_with_guardrails",
+          response_type: "strong_support",
+          confidence: 0.9,
+        },
+      },
+      llmClient: async () => ({
+        intent_primary: "unknown",
+        intent_secondary: [],
+        required_agents: [],
+        required_tools: [],
+        confidence: 0.6,
+        needs_clarification: true,
+        final_output: "text",
+      }),
+    });
+
+    expect(r.validation.ok).toBe(true);
+    expect(r.envelope.clarification_policy.needs_clarification).toBe(false);
+    expect(r.envelope.clarification_policy.auto_assumptions_allowed).toBe(true);
+    expect(r.envelope.workflow_graph.nodes.some(n => n.id === "trajectory.validate_with_tests")).toBe(true);
+  });
+
+  test("end-to-end contextual trajectory still asks for missing referenced files", async () => {
+    const r = await buildEnvelope({
+      text: "## CONTEXTUAL_VALUE_FRAME\n- collaboration_mode: autonomous_execution\n- task_trajectory: end_to_end_execution (0.90)\n\nSOLICITUD_USUARIO:\nanaliza el documento y continúa implementación",
+      originalText: "analiza el documento y continúa implementación",
+      contextualUnderstanding: {
+        applied: true,
+        original_text: "analiza el documento y continúa implementación",
+        effective_text: "analiza el documento y continúa implementación",
+        recent_turn_count: 2,
+        coreference: { source: "not_run", latency_ms: 0, references: [] },
+        lexicon_terms: [],
+        repair: { is_repair: false, repair_type: null, contract_override: null },
+        misunderstanding_signals: [],
+        value_context: {
+          source: "deterministic_contextual_value_mapper",
+          values: [
+            { id: "execution_reliability", domain: "practical", label: "Execution reliability", evidence: "continue implementation", confidence: 0.9 },
+          ],
+          primary_domains: ["practical"],
+          constraints: [],
+          task_trajectory: {
+            mode: "end_to_end_execution",
+            objective: "analiza el documento y continúa implementación",
+            phases: ["understand_full_context", "ground_in_attachments", "implement_changes"],
+            success_criteria: ["Ground in attachments."],
+            stop_conditions: ["missing credential or permission blocks execution"],
+            confidence: 0.9,
+          },
+          collaboration_mode: "autonomous_execution",
+          response_posture: "support_with_guardrails",
+          response_type: "strong_support",
+          confidence: 0.9,
+        },
+      },
+      llmClient: async () => ({
+        intent_primary: "unknown",
+        intent_secondary: [],
+        required_agents: [],
+        required_tools: [],
+        confidence: 0.6,
+        needs_clarification: true,
+        final_output: "text",
+      }),
+    });
+
+    expect(r.validation.ok).toBe(true);
+    expect(r.envelope.clarification_policy.needs_clarification).toBe(true);
+    expect(r.envelope.clarification_policy.clarification_reason).toBe("missing_referenced_attachment");
+    expect(r.envelope.clarification_policy.questions[0]).toMatch(/Sube el archivo/);
+  });
+
   test("web app request produces code_project output", async () => {
     const r = await buildEnvelope({
       text: "Construye una landing en Next.js para mi clínica dental",
