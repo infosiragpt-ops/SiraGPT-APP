@@ -62,13 +62,30 @@ cleanup_docker_space() {
 
 preserve_frontend_image() {
   local rollback_image="$1"
+  local container_id=""
+  local image_id=""
 
   if docker image inspect "$FRONTEND_IMAGE" >/dev/null 2>&1; then
     log "Preserving current frontend image for rollback: ${rollback_image}"
     docker tag "$FRONTEND_IMAGE" "$rollback_image"
-  else
-    err "Current frontend image not found (${FRONTEND_IMAGE}); rollback may need a rebuild"
+    return 0
   fi
+
+  container_id="$(docker compose -f "${COMPOSE_FILE}" ps -q "${FRONTEND_SERVICE}" 2>/dev/null | head -n 1 || true)"
+  if [[ -z "$container_id" ]]; then
+    err "Current frontend image not found (${FRONTEND_IMAGE}) and no running ${FRONTEND_SERVICE} container was found; rollback may need a rebuild"
+    return 0
+  fi
+
+  image_id="$(docker inspect -f '{{.Image}}' "$container_id" 2>/dev/null || true)"
+  if [[ -z "$image_id" ]]; then
+    err "Current frontend image not found (${FRONTEND_IMAGE}) and running container image id could not be inspected; rollback may need a rebuild"
+    return 0
+  fi
+
+  log "Preserving running frontend container image for rollback: ${rollback_image}"
+  docker tag "$image_id" "$rollback_image"
+  docker tag "$image_id" "$FRONTEND_IMAGE"
 }
 
 restore_frontend_image() {

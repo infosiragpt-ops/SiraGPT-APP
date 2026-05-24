@@ -401,6 +401,73 @@ SQL
   )
 }
 
+repair_optional_pgvector_migration() {
+  local migration_name="$1"
+  local feature_name="$2"
+
+  log "Repairing optional pgvector migration state: ${migration_name}"
+  log "${feature_name} requires the Postgres vector extension, which is optional for this deployment"
+  log "Marking ${migration_name} applied so core auth/schema migrations can continue"
+  (
+    cd backend
+    resolve_prisma_migration_applied "${migration_name}"
+  )
+}
+
+repair_user_memories_schema_migration() {
+  local migration_name="20260520200000_add_user_memories"
+
+  log "Repairing Prisma migration state without pgvector: ${migration_name}"
+  log "Creating Prisma-compatible user memory tables with BYTEA embeddings"
+  (
+    cd backend
+    npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
+CREATE TABLE IF NOT EXISTS "user_memories" (
+  "id" TEXT NOT NULL,
+  "user_id" TEXT NOT NULL,
+  "content" TEXT NOT NULL,
+  "category" TEXT,
+  "importance_score" DOUBLE PRECISION NOT NULL DEFAULT 0,
+  "last_accessed_at" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  "access_count" INTEGER NOT NULL DEFAULT 0,
+  "created_at" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT "user_memories_pkey" PRIMARY KEY ("id")
+);
+
+CREATE INDEX IF NOT EXISTS "user_memories_user_id_category_idx"
+  ON "user_memories"("user_id", "category");
+
+CREATE INDEX IF NOT EXISTS "user_memories_user_id_importance_score_idx"
+  ON "user_memories"("user_id", "importance_score" DESC);
+
+CREATE TABLE IF NOT EXISTS "user_memory_embeddings" (
+  "id" TEXT NOT NULL,
+  "memory_id" TEXT NOT NULL,
+  "embedding" BYTEA NOT NULL,
+  "created_at" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT "user_memory_embeddings_pkey" PRIMARY KEY ("id")
+);
+
+CREATE INDEX IF NOT EXISTS "user_memory_embeddings_memory_id_idx"
+  ON "user_memory_embeddings"("memory_id");
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'user_memories_user_id_fkey') THEN
+    ALTER TABLE "user_memories" ADD CONSTRAINT "user_memories_user_id_fkey"
+      FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'user_memory_embeddings_memory_id_fkey') THEN
+    ALTER TABLE "user_memory_embeddings" ADD CONSTRAINT "user_memory_embeddings_memory_id_fkey"
+      FOREIGN KEY ("memory_id") REFERENCES "user_memories"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;
+SQL
+    resolve_prisma_migration_applied "${migration_name}"
+  )
+}
+
 extract_prisma_migration_name() {
   node -e '
     const fs = require("fs");
@@ -432,6 +499,15 @@ repair_known_prisma_migration() {
       ;;
     20251021064736_add_gmail_integration)
       repair_gmail_integration_migration
+      ;;
+    20260420000000_rag_store)
+      repair_optional_pgvector_migration "$migration_name" "Persistent RAG storage"
+      ;;
+    20260520180000_add_user_memories_pgvector)
+      repair_optional_pgvector_migration "$migration_name" "Pgvector user memory"
+      ;;
+    20260520200000_add_user_memories)
+      repair_user_memories_schema_migration
       ;;
     *)
       return 1
