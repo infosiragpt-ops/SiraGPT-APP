@@ -51,6 +51,25 @@ cleanup_docker_space() {
   df -h / /var/lib/docker 2>/dev/null || df -h / || true
 }
 
+cleanup_frontend_container_conflicts() {
+  local ids
+  log "Removing stale frontend containers before recreate"
+
+  # Compose can leave a stale/recreated frontend container behind after
+  # interrupted deploys. When that happens, `docker compose up` fails with
+  # "container name is already in use" even though the new image built fine.
+  docker compose -f "$COMPOSE_FILE" rm -sf "$FRONTEND_SERVICE" >/dev/null 2>&1 || true
+
+  ids="$(
+    docker ps -aq \
+      --filter "label=com.docker.compose.service=${FRONTEND_SERVICE}" \
+      --filter "name=siragpt-frontend-1" 2>/dev/null || true
+  )"
+  if [[ -n "$ids" ]]; then
+    docker rm -f $ids >/dev/null 2>&1 || true
+  fi
+}
+
 handle_local_tracked_changes() {
   if git diff --quiet && git diff --cached --quiet; then
     return 0
@@ -987,6 +1006,7 @@ log "Building frontend Docker image with NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_UR
 docker compose -f "$COMPOSE_FILE" build "$FRONTEND_SERVICE"
 
 log "Starting frontend container without backend dependencies"
+cleanup_frontend_container_conflicts
 docker compose -f "$COMPOSE_FILE" up -d --no-deps "$FRONTEND_SERVICE"
 
 restart_pm2_backend
