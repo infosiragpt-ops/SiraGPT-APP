@@ -124,6 +124,30 @@ const LG_ITEM = cn(
 )
 const LG_SEP = "my-1 bg-border/60"
 
+const CHAT_ACTION_MENU = cn(
+  "relative isolate w-[214px] overflow-hidden rounded-[18px] p-1.5",
+  "border border-white/65 bg-white/72 text-zinc-800",
+  "shadow-[inset_0_1px_0_rgba(255,255,255,0.86),0_18px_50px_rgba(15,23,42,0.16)]",
+  "backdrop-blur-2xl backdrop-saturate-150 supports-[backdrop-filter]:bg-white/58",
+  "dark:border-white/10 dark:bg-zinc-950/70 dark:text-zinc-100",
+  "dark:shadow-[0_20px_54px_rgba(0,0,0,0.42),inset_0_1px_0_rgba(255,255,255,0.08)]",
+)
+const CHAT_ACTION_ITEM = cn(
+  "h-8 cursor-pointer rounded-[10px] px-2 text-[13px] font-medium leading-none",
+  "text-zinc-700 transition-all duration-150",
+  "focus:bg-white/72 focus:text-zinc-950 focus:shadow-[inset_0_1px_0_rgba(255,255,255,0.76),0_8px_18px_rgba(15,23,42,0.08)]",
+  "data-[highlighted]:bg-white/72 data-[highlighted]:text-zinc-950",
+  "dark:text-zinc-300 dark:focus:bg-white/12 dark:focus:text-white dark:data-[highlighted]:bg-white/12 dark:data-[highlighted]:text-white",
+)
+const CHAT_ACTION_ICON = "mr-2 h-3.5 w-3.5 shrink-0 stroke-[1.9]"
+const CHAT_ACTION_SEP = "mx-1 my-1 bg-zinc-950/[0.08] dark:bg-white/10"
+const CHAT_ACTION_SUBMENU = cn(
+  "w-[196px] rounded-[16px] border border-white/65 bg-white/72 p-1.5",
+  "shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_16px_42px_rgba(15,23,42,0.14)]",
+  "backdrop-blur-2xl backdrop-saturate-150 supports-[backdrop-filter]:bg-white/58",
+  "dark:border-white/10 dark:bg-zinc-950/72 dark:shadow-[0_18px_46px_rgba(0,0,0,0.38),inset_0_1px_0_rgba(255,255,255,0.08)]",
+)
+
 const LEADING_CHAT_EMOJI_RE =
   /^((?:[\u2600-\u27BF]|[\uD83C-\uDBFF][\uDC00-\uDFFF])(?:\uFE0F|\uFE0E)?)\s*/
 
@@ -1454,16 +1478,17 @@ export function AppSidebar() {
                                     <DropdownMenuContent
                                       align="end"
                                       onClick={(e) => e.stopPropagation()}
-                                      className="w-[268px] rounded-2xl p-1.5 shadow-xl"
+                                      sideOffset={6}
+                                      className={CHAT_ACTION_MENU}
                                     >
                                       <DropdownMenuItem
                                         onSelect={(event) => {
                                           event.preventDefault()
                                           togglePinnedChat(chat)
                                         }}
-                                        className="h-11 rounded-xl text-[15px]"
+                                        className={CHAT_ACTION_ITEM}
                                       >
-                                        <Pin className="mr-3 h-5 w-5" />
+                                        <Pin className={CHAT_ACTION_ICON} />
                                         {pinnedChatIds.includes(chat.id) ? "Desfijar chat" : "Fijar chat"}
                                       </DropdownMenuItem>
                                       <DropdownMenuItem
@@ -1471,18 +1496,18 @@ export function AppSidebar() {
                                           event.preventDefault()
                                           handleEditClick(chat, event as any)
                                         }}
-                                        className="h-11 rounded-xl text-[15px]"
+                                        className={CHAT_ACTION_ITEM}
                                       >
-                                        <Edit2 className="mr-3 h-5 w-5" />
+                                        <Edit2 className={CHAT_ACTION_ICON} />
                                         Editar
                                       </DropdownMenuItem>
                                       <DropdownMenuSub>
-                                        <DropdownMenuSubTrigger className="h-11 rounded-xl px-2 text-[15px]">
-                                          <Folder className="mr-3 h-5 w-5" />
+                                        <DropdownMenuSubTrigger className={CHAT_ACTION_ITEM}>
+                                          <Folder className={CHAT_ACTION_ICON} />
                                           Mover a carpeta
                                         </DropdownMenuSubTrigger>
                                         <DropdownMenuPortal>
-                                          <DropdownMenuSubContent className="w-56 rounded-2xl p-1.5">
+                                          <DropdownMenuSubContent className={CHAT_ACTION_SUBMENU}>
                                             {["Trabajo", "Proyecto", "Personal"].map((folder) => (
                                               <DropdownMenuItem
                                                 key={folder}
@@ -1490,22 +1515,22 @@ export function AppSidebar() {
                                                   event.preventDefault()
                                                   moveChatToFolder(chat, folder)
                                                 }}
-                                                className="h-10 rounded-xl"
+                                                className={CHAT_ACTION_ITEM}
                                               >
-                                                <Folder className="mr-2 h-4 w-4" />
+                                                <Folder className={CHAT_ACTION_ICON} />
                                                 {folder}
-                                                {chatFolders[chat.id] === folder && <Check className="ml-auto h-4 w-4" />}
+                                                {chatFolders[chat.id] === folder && <Check className="ml-auto h-3.5 w-3.5" />}
                                               </DropdownMenuItem>
                                             ))}
-                                            <DropdownMenuSeparator />
+                                            <DropdownMenuSeparator className={CHAT_ACTION_SEP} />
                                             <DropdownMenuItem
                                               onSelect={(event) => {
                                                 event.preventDefault()
                                                 createFolderAndMove(chat)
                                               }}
-                                              className="h-10 rounded-xl"
+                                              className={CHAT_ACTION_ITEM}
                                             >
-                                              <Plus className="mr-2 h-4 w-4" />
+                                              <Plus className={CHAT_ACTION_ICON} />
                                               Nueva carpeta...
                                             </DropdownMenuItem>
                                             {chatFolders[chat.id] && (
@@ -1514,9 +1539,9 @@ export function AppSidebar() {
                                                   event.preventDefault()
                                                   moveChatToFolder(chat, null)
                                                 }}
-                                                className="h-10 rounded-xl"
+                                                className={CHAT_ACTION_ITEM}
                                               >
-                                                <X className="mr-2 h-4 w-4" />
+                                                <X className={CHAT_ACTION_ICON} />
                                                 Quitar de carpeta
                                               </DropdownMenuItem>
                                             )}
@@ -1528,9 +1553,9 @@ export function AppSidebar() {
                                           event.preventDefault()
                                           downloadChatExport(chat)
                                         }}
-                                        className="h-11 rounded-xl text-[15px]"
+                                        className={CHAT_ACTION_ITEM}
                                       >
-                                        <Download className="mr-3 h-5 w-5" />
+                                        <Download className={CHAT_ACTION_ICON} />
                                         Descargar
                                       </DropdownMenuItem>
                                       <DropdownMenuItem
@@ -1538,20 +1563,20 @@ export function AppSidebar() {
                                           event.preventDefault()
                                           openScheduleDialog(chat)
                                         }}
-                                        className="h-11 rounded-xl text-[15px]"
+                                        className={CHAT_ACTION_ITEM}
                                       >
-                                        <CalendarDays className="mr-3 h-5 w-5" />
+                                        <CalendarDays className={CHAT_ACTION_ICON} />
                                         Programar
                                       </DropdownMenuItem>
-                                      <DropdownMenuSeparator />
+                                      <DropdownMenuSeparator className={CHAT_ACTION_SEP} />
                                       <DropdownMenuItem
                                         onSelect={(event) => {
                                           event.preventDefault()
                                           archiveChatLocally(chat)
                                         }}
-                                        className="h-11 rounded-xl text-[15px]"
+                                        className={CHAT_ACTION_ITEM}
                                       >
-                                        <Archive className="mr-3 h-5 w-5" />
+                                        <Archive className={CHAT_ACTION_ICON} />
                                         Archivar
                                       </DropdownMenuItem>
                                       <DropdownMenuItem
@@ -1559,12 +1584,12 @@ export function AppSidebar() {
                                           event.preventDefault()
                                           hideChatLocally(chat)
                                         }}
-                                        className="h-11 rounded-xl text-[15px]"
+                                        className={CHAT_ACTION_ITEM}
                                       >
-                                        <EyeOff className="mr-3 h-5 w-5" />
+                                        <EyeOff className={CHAT_ACTION_ICON} />
                                         Ocultar
                                       </DropdownMenuItem>
-                                      <DropdownMenuSeparator />
+                                      <DropdownMenuSeparator className={CHAT_ACTION_SEP} />
                                       <DropdownMenuItem
                                         onSelect={(event) => {
                                           event.preventDefault()
@@ -1575,9 +1600,12 @@ export function AppSidebar() {
                                           // estilo del producto).
                                           setChatPendingDelete({ id: chat.id, title: displayTitle })
                                         }}
-                                        className="h-11 rounded-xl text-[15px] text-red-600 focus:text-red-600"
+                                        className={cn(
+                                          CHAT_ACTION_ITEM,
+                                          "text-red-600 focus:bg-red-500/10 focus:text-red-700 data-[highlighted]:bg-red-500/10 data-[highlighted]:text-red-700 dark:text-red-400 dark:focus:text-red-300 dark:data-[highlighted]:text-red-300",
+                                        )}
                                       >
-                                        <Trash2 className="mr-3 h-5 w-5" />
+                                        <Trash2 className={CHAT_ACTION_ICON} />
                                         Eliminar
                                       </DropdownMenuItem>
                                     </DropdownMenuContent>
