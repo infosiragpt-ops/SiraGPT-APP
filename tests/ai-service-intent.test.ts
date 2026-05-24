@@ -159,6 +159,17 @@ describe("ai-service · deterministic intent routing", () => {
     assert.equal(intent, "agent_task")
   })
 
+  it("routes repository checkout and GitHub delivery requests to the task agent", async () => {
+    assert.equal(
+      await aiService.classifyIntent("quiero que me des este proyecto en local github.com/open-webui/open-webui"),
+      "agent_task",
+    )
+    assert.equal(
+      await aiService.classifyIntent("arregla el backend, haz commit, sube a main y vigila CI verde"),
+      "agent_task",
+    )
+  })
+
   it("routes plural 3D animation requests to live artifacts", async () => {
     const intent = await aiService.classifyIntent(
       "crea animaciones en 3D con Three.js para explicar una estructura molecular",

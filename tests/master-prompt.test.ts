@@ -36,6 +36,8 @@ type MasterPrompt = {
   }) => { system: string; intent: string; language: string; alignmentProfile?: Record<string, unknown> }
   ABSOLUTE_RULES: string
   SOURCE_INTEGRITY_CONTRACT: string
+  SIRAGPT_PRODUCT_OPERATING_CONTRACT: string
+  THESIS_RESEARCH_CONTRACT: string
 }
 
 const masterPrompt = cjsRequire("../../backend/src/services/master-prompt") as MasterPrompt
@@ -118,6 +120,32 @@ describe("master-prompt · buildSystemPrompt", () => {
     assert.match(academic.system, /source verification is required/)
     assert.doesNotMatch(academic.system, /cite a canonical real work close to the topic/)
     assert.equal(academic.intent, "SEARCH_WEB")
+  })
+
+  it("injects the siraGPT operating contract for autonomous work without UI changes", () => {
+    const built = masterPrompt.buildSystemPrompt({
+      language: "es",
+      userMessage: "Quiero que cada chat funcione como Claude Code y trabaje con repositorios.",
+    })
+
+    assert.match(built.system, /SIRAGPT PRODUCT OPERATING CONTRACT/)
+    assert.match(built.system, /durable work session/)
+    assert.match(built.system, /Preserve the existing user interface/)
+    assert.match(built.system, /Gema4-31B/)
+    assert.match(built.system, /Never claim GitHub/)
+  })
+
+  it("injects thesis research guardrails against fake DOI and detector evasion", () => {
+    const built = masterPrompt.buildSystemPrompt({
+      language: "es",
+      userMessage: "Genera mi tesis con articulos cientificos reales DOI APA 7 y reduce similitud a cero.",
+    })
+
+    assert.match(built.system, /THESIS AND ACADEMIC RESEARCH CONTRACT/)
+    assert.match(built.system, /Never invent articles/)
+    assert.match(built.system, /2020 onward/)
+    assert.match(built.system, /detector-evasion/)
+    assert.equal(built.intent, "SEARCH_WEB")
   })
 
   it("includes the 3D scene pattern (Three.js importmap)", () => {

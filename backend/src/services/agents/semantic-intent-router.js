@@ -135,6 +135,7 @@ const NEGATION_GUARDS = {
   artifact:       buildNegationRegex('artefacto|artifact|simulador|widget|calculadora interactiva'),
   math:           buildNegationRegex('matem[aá]tica|matem[aá]ticas|c[aá]lculos?|calcular|ecuaci[oó]n|estad[ií]stica'),
   viz:            buildNegationRegex('gr[aá]fic[ao]?|chart|plot|diagrama|visualizaci[oó]n|dashboard'),
+  repoOperation:  buildNegationRegex('repo|repositorio|github|git|clone|clona|commit|push|branch|rama|main|ci|actions?'),
 };
 
 // Contrastive constructions where "no" does NOT negate the following
@@ -212,6 +213,9 @@ function buildDomainSignals(rawUserRequest, tokenAnalysis = null) {
     codeWork: Boolean(tokenAnalysis?.context?.has_code_work) || matchAny(n, [
       /\b(codigo|código|script|api|backend|frontend|debug|bug|test|tests|lint|build|repositorio|github|despliegue|deploy)\b/i,
     ]),
+    repoOperation: matchAny(n, [
+      /\b(?:github\.com\/[\w.-]+\/[\w.-]+|git\s+clone|clona(?:r|me)?|clone(?:ar)?|fork|pull\s+request|pr\b|commit|push|sube(?:r)?\s+(?:a\s+)?(?:github|main)|repositorio|repo|checkout|branch|rama|main|ci\s+(?:verde|green)|actions?)\b/i,
+    ]),
   };
   // Apply explicit-negation guards last so we never produce a signal
   // the user just told us not to. Only mutates already-true signals;
@@ -244,6 +248,7 @@ function requiresAgenticExecution(contract, signals) {
     contract?.pipeline === 'MultiIntentPipeline'
     || hasMultiDag
     || signals.longRunning
+    || signals.repoOperation
     || (hasSources && hasArtifact)
     || (hasArtifact && (signals.dataWork || signals.codeWork) && hasSources)
     || (strictSources && hasArtifact)
@@ -281,7 +286,7 @@ function mapContractToChatIntent(contract, signals) {
     case 'ActionExecutionPipeline':
       return signals.gmail ? 'gmail' : signals.googleServices ? 'google_services' : 'agent_task';
     case 'CodePipeline':
-      return signals.webdev ? 'webdev' : signals.longRunning ? 'agent_task' : 'text';
+      return signals.webdev && !signals.repoOperation ? 'webdev' : (signals.longRunning || signals.repoOperation) ? 'agent_task' : 'text';
     case 'DirectAnswerPipeline':
       if (signals.webdev) return 'webdev';
       if (signals.math) return 'math';
@@ -327,7 +332,7 @@ function buildProductOsDecisionFromContract(contract, signals, fileIds = []) {
   const primary = productIntentForContract(contract, signals, rawDecision.intent_primary);
   const secondary = productSecondaryIntents(contract, rawDecision);
   const requiredAgents = productIntentRouter.AGENT_BUNDLE_BY_INTENT[primary] || rawDecision.required_agents || ['intent-compiler'];
-  const requiredTools = productToolsForContract(contract, primary, rawDecision);
+  const requiredTools = productToolsForContract(contract, primary, rawDecision, signals);
 
   return {
     intent_primary: primary,
@@ -394,7 +399,7 @@ function productSecondaryIntents(contract, rawDecision) {
   return [...new Set(items)].slice(0, 12);
 }
 
-function productToolsForContract(contract, primary, rawDecision) {
+function productToolsForContract(contract, primary, rawDecision, signals = {}) {
   const forbidden = new Set(Array.isArray(contract?.forbidden_tools) ? contract.forbidden_tools : []);
   const textOnly = (contract?.user_constraints || []).includes('text_only:user_requested');
   if (
@@ -421,6 +426,9 @@ function productToolsForContract(contract, primary, rawDecision) {
   }
   if (contract?.pipeline === 'VisualArtifactPipeline') {
     tools.push('design.tokens.build', 'wcag.contrast.check', 'create_document', 'verify_artifact');
+  }
+  if (signals?.repoOperation) {
+    tools.push('git.clone', 'repo.inspect', 'code-review.analyze', 'test.run', 'github.actions.monitor');
   }
   return [...new Set(tools)].filter((tool) => !forbidden.has(tool));
 }
@@ -517,6 +525,13 @@ function semanticTools(contract, structuredIntent, fileIds = []) {
   if (contract?.required_extension === '.html') tools.add('html_renderer');
   if (contract?.required_extension === '.svg') tools.add('svg_renderer');
   if (contract?.artifact_required) tools.add('artifact_validator');
+  if (/\b(?:github\.com\/[\w.-]+\/[\w.-]+|git\s+clone|clona(?:r|me)?|clone(?:ar)?|fork|pull\s+request|pr\b|commit|push|sube(?:r)?\s+(?:a\s+)?(?:github|main)|repositorio|repo|checkout|branch|rama|main|ci\s+(?:verde|green)|actions?)\b/i.test(raw)) {
+    tools.add('git.clone');
+    tools.add('repo.inspect');
+    tools.add('code-review.analyze');
+    tools.add('test.run');
+    tools.add('github.actions.monitor');
+  }
   for (const toolName of forbidden) tools.delete(toolName);
   if ((contract?.user_constraints || []).includes('text_only:user_requested')) {
     for (const toolName of [

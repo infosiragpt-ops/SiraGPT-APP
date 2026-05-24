@@ -297,6 +297,7 @@ const ROUTING_PATTERNS = {
   deliverableFile: /\b(docx|xlsx|pptx|word|excel|power\s*point|powerpoint|pdf\b|svg|informe|reporte|presentacion|diapositivas|slides|hoja de calculo|spreadsheet|archivo|documento|matriz narrativa|matriz de consistencia|base de datos)\b/i,
   dataWork: /\b(calcula(r)?|analiza(r)?|procesa(r)?|limpia(r)?|extrae(r)?|clasifica(r)?|regresion|estadistica|csv|datos|dataset|cronbach|spearman|anova|correlacion|likert)\b/i,
   codeWork: /\b(codigo|code|programa|script|web|website|landing|sitio|frontend|backend|debug|bug|corrige(r)?|prueba(s)?|test(s)?|autocorrige(r)?|auto corrige(r)?|revisando y corrigiendo)\b/i,
+  repoOperation: /\b(?:github\.com\/[\w.-]+\/[\w.-]+|git\s+clone|clona(?:r|me)?|clone(?:ar)?|fork|pull\s+request|pr\b|commit|push|sube(?:r)?\s+(?:a\s+)?(?:github|main)|repositorio|repo|checkout|branch|rama|main|ci\s+(?:verde|green)|actions?)\b/i,
   longRunningAgent: /\b(2 horas|dos horas|30 minutos|60 minutos|una hora|sin detenerse|sin parar|persistente|background|mientras salgo|aunque cierre|auto.?corrige|autonom(o|a)|verifica(r)?|self.?check|self.?supervision)\b/i,
   architecturePlan: /\b(plano|planos|blueprint|floor[- ]?plan|planta (arquitect|baj|alt)|plano arquitectonico|dxf)\b|\b(casa|vivienda|departamento|oficina)\b.*\b(plano|planta|arquitectonico|distribucion|habitaciones|dormitorios|banos)\b/i,
   artifact: /\b(calculadora (interactiva|de|para|con)|simulador|quiz|cuestionario|widget|componente interactivo|artifact|artefacto|editor (apa|en tiempo real|de citas?)|dashboard (interactivo|con inputs|que (calcul|actualiz|responda))|herramienta (interactiva|para calcular)|interfaz interactiva|visualizador (interactivo|que recalcul)|mapa interactivo|animacion(?:es)?(?: en)? 3d|three\.?js|threejs|modelo 3d|visor 3d|evaluador de ensayos|grader|rubrica interactiva)\b/i,
@@ -333,6 +334,7 @@ export function isLightweightConversationalPrompt(prompt: string): boolean {
       ROUTING_PATTERNS.deliverableFile,
       ROUTING_PATTERNS.dataWork,
       ROUTING_PATTERNS.codeWork,
+      ROUTING_PATTERNS.repoOperation,
       ROUTING_PATTERNS.doc,
       ROUTING_PATTERNS.viz,
       ROUTING_PATTERNS.math,
@@ -370,6 +372,7 @@ export function shouldRouteTextPromptThroughAgenticRuntime(prompt: string, files
     ROUTING_PATTERNS.externalResearch,
     ROUTING_PATTERNS.deliverableFile,
     ROUTING_PATTERNS.dataWork,
+    ROUTING_PATTERNS.repoOperation,
     ROUTING_PATTERNS.longRunningAgent,
   ].some((pattern) => pattern.test(normalized))
 }
@@ -387,6 +390,7 @@ export function shouldUseFastTextRoute(prompt: string): boolean {
     ROUTING_PATTERNS.deliverableFile,
     ROUTING_PATTERNS.dataWork,
     ROUTING_PATTERNS.codeWork,
+    ROUTING_PATTERNS.repoOperation,
     ROUTING_PATTERNS.longRunningAgent,
     ROUTING_PATTERNS.architecturePlan,
     ROUTING_PATTERNS.artifact,
@@ -481,10 +485,12 @@ export function classifyIntentFastPath(prompt: string): ChatIntent | null {
   const asksForDeliverableFile = ROUTING_PATTERNS.deliverableFile.test(lc)
   const asksForDataWork = ROUTING_PATTERNS.dataWork.test(lc)
   const asksForCodeWork = ROUTING_PATTERNS.codeWork.test(lc)
+  const asksForRepoOperation = ROUTING_PATTERNS.repoOperation.test(lc)
   const asksForLongRunningAgent = ROUTING_PATTERNS.longRunningAgent.test(lc)
 
   if (
-    (asksForDeliverableFile && (asksForExternalResearch || asksForDataWork || asksForCodeWork))
+    asksForRepoOperation
+    || (asksForDeliverableFile && (asksForExternalResearch || asksForDataWork || asksForCodeWork))
     || (asksForLongRunningAgent && (asksForExternalResearch || asksForDeliverableFile || asksForDataWork || asksForCodeWork))
   ) {
     return 'agent_task'

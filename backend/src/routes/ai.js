@@ -76,6 +76,7 @@ const langPolicy = require('../services/language-policy');
 const masterPrompt = require('../services/master-prompt');
 const streamCache = require('../services/stream-cache');
 const { enqueueCodexRun, detectCodeTaskIntent } = require('../services/codex/codex-run-orchestrator');
+const autonomousGoalEscalation = require('../services/autonomous-goal-escalation');
 const { runParaphrasePipeline } = require('../services/paraphrase-engine');
 const {
   buildGema4VirtualModel,
@@ -3473,9 +3474,51 @@ router.post(
         ? await streamCache.start(userId, chatId, { title: typeof prompt === 'string' ? prompt.slice(0, 80) : '' })
         : null;
 
+      const codeIntent = typeof prompt === 'string'
+        ? detectCodeTaskIntent(prompt)
+        : { isCodeTask: false, confidence: 0 };
+
+      let autonomousGoalRunId = null;
+      if (isAuth && chatId && typeof prompt === 'string') {
+        try {
+          const goalEscalation = await autonomousGoalEscalation.maybeCreateAutonomousGoalRun({
+            prisma,
+            userId,
+            chatId,
+            prompt,
+            history: __conversationHistoryForUnderstanding,
+            codeIntent,
+          });
+          if (goalEscalation.created && goalEscalation.goalRunId) {
+            autonomousGoalRunId = goalEscalation.goalRunId;
+            if (cacheHandle && typeof cacheHandle.setAgentProgress === 'function') {
+              cacheHandle.setAgentProgress({
+                taskId: autonomousGoalRunId,
+                phase: 'queued',
+                percent: 3,
+                kind: 'goal',
+              });
+            }
+            try {
+              res.write(`data: ${JSON.stringify({
+                type: 'goal_run_started',
+                goalRunId: autonomousGoalRunId,
+                chatId,
+                depth: goalEscalation.depth,
+                agentKind: goalEscalation.agentKind,
+                enqueueWarning: goalEscalation.enqueueWarning || null,
+                auto: true,
+              })}\n\n`);
+            } catch { /* socket gone */ }
+          }
+        } catch (goalErr) {
+          console.warn('[ai/generate] autonomous goal escalation failed:', goalErr && goalErr.message);
+        }
+      }
+      req._autonomousGoalRunId = autonomousGoalRunId;
+
       let codexRunId = null;
       if (isAuth && chatId && typeof prompt === 'string') {
-        const codeIntent = detectCodeTaskIntent(prompt);
         if (codeIntent.isCodeTask && codeIntent.confidence >= 0.75) {
           try {
             const codexRun = enqueueCodexRun({
