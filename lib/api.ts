@@ -1437,6 +1437,10 @@ class ApiClient {
     return this.request('/payments/subscription');
   }
 
+  async getCreditsBalance() {
+    return this.request('/payments/credits-balance');
+  }
+
   async cancelSubscription() {
     return this.request('/payments/subscription/cancel', {
       method: 'POST',

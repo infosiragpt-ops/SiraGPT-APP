@@ -84,13 +84,62 @@ router.get('/usage', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
     const period = req.query.period || 'current_month';
-    
+
     const stats = await usageMonitor.getUsageStats(userId, period);
     res.json(stats);
-    
+
   } catch (error) {
     console.error('Error fetching usage stats:', error);
     res.status(500).json({ error: 'Failed to fetch usage statistics' });
+  }
+});
+
+// Credits balance — alimenta la "cinta de consumo" del usuario en la
+// página de facturación y, eventualmente, en cualquier surface que
+// necesite mostrar cuánto le queda. Devuelve la policy unificada del
+// model-quota-router (mismo shape que se usa internamente al rutear
+// modelos en /api/ai/generate), enriquecida con un par de campos de
+// presentación cómodos para el frontend (porcentajes ya calculados,
+// label legible, fecha del cómputo).
+//
+// Endpoint público para el usuario autenticado. No expone márgenes
+// internos ni precios — esos viven en /api/plans (catálogo).
+router.get('/credits-balance', authenticateToken, async (req, res) => {
+  try {
+    const { buildModelQuotaPolicy } = require('../services/model-quota-router');
+    const policy = buildModelQuotaPolicy(req.user);
+
+    function pct(usedStr, limitStr) {
+      const u = Number(usedStr || 0);
+      const l = Number(limitStr || 0);
+      if (!Number.isFinite(u) || !Number.isFinite(l) || l <= 0) return null;
+      return Math.max(0, Math.min(100, Math.round((u / l) * 100)));
+    }
+
+    res.json({
+      computedAt: new Date().toISOString(),
+      plan: policy.currentPlan,
+      defaultModel: policy.defaultModel,
+      fallbackModel: policy.fallbackModel,
+      calls: policy.calls,
+      premiumTokens: {
+        ...policy.premiumTokens,
+        usedPercent: policy.premiumTokens.unlimited
+          ? null
+          : pct(policy.premiumTokens.used, policy.premiumTokens.limit),
+      },
+      gemaTokens: {
+        ...policy.gemaTokens,
+        usedPercent: policy.gemaTokens.unlimited
+          ? null
+          : pct(policy.gemaTokens.used, policy.gemaTokens.limit),
+      },
+      routing: policy.routing,
+      notices: policy.notices,
+    });
+  } catch (error) {
+    console.error('Error building credits balance:', error);
+    res.status(500).json({ error: 'Failed to build credits balance' });
   }
 });
 
