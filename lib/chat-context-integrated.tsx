@@ -322,8 +322,50 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const bg = useBackgroundStreams()
   const [chats, setChats] = useState<Chat[]>([])
   const [currentChat, setCurrentChat] = useState<Chat | null>(null)
+  // Persistencia del selector de modelos (spec del prompt maestro:
+  // "siempre quedarse en donde le usuario ah seleccionado"). La clave
+  // es por usuario para no mezclar preferencias en una máquina
+  // compartida. SSR-safe: el hidrato sólo se ejecuta en el cliente.
   const [selectedModel, setSelectedModel] = useState("")
   const [selectProvider, setSelectedProivder] = useState("")
+
+  // Hidrata el modelo/proveedor del usuario tras montar (browser only).
+  // Espera a que `user` esté disponible para que la clave sea estable.
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const userKey = user?.id || "guest"
+    try {
+      const model = window.localStorage.getItem(`siragpt:selectedModel:${userKey}`)
+      const provider = window.localStorage.getItem(`siragpt:selectedProvider:${userKey}`)
+      if (model) setSelectedModel(model)
+      if (provider) setSelectedProivder(provider)
+    } catch {
+      // Modo privado o storage bloqueado — fallamos en silencio, el
+      // usuario reseleccionará el modelo en esta sesión.
+    }
+  }, [user?.id])
+
+  // Persiste cada cambio para que la próxima visita restaure la
+  // elección. Se omite el primer render (cuando el valor todavía está
+  // vacío) para no machacar el valor previamente guardado durante el
+  // hidrato.
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    if (!selectedModel) return
+    const userKey = user?.id || "guest"
+    try {
+      window.localStorage.setItem(`siragpt:selectedModel:${userKey}`, selectedModel)
+    } catch { /* storage lleno o bloqueado */ }
+  }, [selectedModel, user?.id])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    if (!selectProvider) return
+    const userKey = user?.id || "guest"
+    try {
+      window.localStorage.setItem(`siragpt:selectedProvider:${userKey}`, selectProvider)
+    } catch { /* storage lleno o bloqueado */ }
+  }, [selectProvider, user?.id])
   const [availableModels, setAvailableModels] = useState<any[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [uploadedFiles, setUploadedFiles] = useState<any[]>([])
