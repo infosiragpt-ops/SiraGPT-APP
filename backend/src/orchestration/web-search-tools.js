@@ -1,7 +1,15 @@
 'use strict';
 
+// JS regex `\b` (word boundary) is ASCII-only — `\bú`, `\bñ`,
+// `\belección` silently fail to match because the boundary check
+// treats accented letters as non-word characters. Replace `\b` with
+// Unicode property classes (`\p{L}\p{N}`) inside lookahead /
+// lookbehind so accented Spanish keywords ("últimos", "elección",
+// "recientemente") trigger as expected. Requires the `u` flag.
+const FRESH_WEB_CONTEXT_RE = /(?<![\p{L}\p{N}])(?:actual(?:es|mente)?|hoy|últim[ao]s?|latest|current|noticias?|paper\s+reciente|precio|202[5-9]|ahora|news|weather|clima|sismo|terremoto|elecci[oó]n|recien(?:te|tes|temente)|cotizaci[oó]n)(?![\p{L}\p{N}])/iu;
+
 function needsFreshWebContext(prompt = '') {
-  return /\b(actual|hoy|últim[ao]s?|latest|current|noticias|paper reciente|precio|202[5-9]|ahora|news|weather|clima|sismo|terremoto|elecci[oó]n)\b/i.test(String(prompt || ''));
+  return FRESH_WEB_CONTEXT_RE.test(String(prompt || ''));
 }
 
 async function tavilySearch(query, { env = process.env, fetchImpl = globalThis.fetch, maxResults = 5 } = {}) {
