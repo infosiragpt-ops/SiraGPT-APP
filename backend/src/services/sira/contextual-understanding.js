@@ -17,6 +17,14 @@ const EMPTY_VALUE_CONTEXT = Object.freeze({
   values: [],
   primary_domains: [],
   constraints: [],
+  task_trajectory: {
+    mode: 'single_turn',
+    objective: null,
+    phases: [],
+    success_criteria: [],
+    stop_conditions: [],
+    confidence: 0,
+  },
   task_context: 'general',
   subjectivity: {
     score: 0,
@@ -279,6 +287,60 @@ function deriveContextualConstraints(text) {
   return constraints;
 }
 
+function inferTaskTrajectory(text, recentTurns = [], attachments = [], valueContext = {}) {
+  const current = String(text || '');
+  const recent = Array.isArray(recentTurns) ? recentTurns.map((turn) => turn.text).join('\n') : '';
+  const combined = `${current}\n${recent}`;
+  const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
+  const isEndToEnd = /\b(de\s+inicio\s+a\s+fin|inicio\s+a\s+fin|end[-\s]?to[-\s]?end|completa(?:r|me)?\s+tareas?|hasta\s+que\s+(?:quede|est[eé]|funcione)|trabaja\s+de\s+manera\s+aut[oó]noma|programemos|codifica|implementemos|investiga(?:r)?\s+.+\s+(?:y|e)\s+(?:hag[aá]moslo|programemos|codifica)|sube\s+(?:los\s+)?cambios\s+a\s+github|ci\s+(?:en\s+)?verde)\b/i.test(combined);
+  const needsResearch = /\b(investiga|estudios?|papers?|claude|chatgpt|openai|anthropic|fuentes?|documentaci[oó]n|research)\b/i.test(combined);
+  const needsImplementation = /\b(implementa(?:r|mos)?|programa(?:r|mos)?|codifica|software|c[oó]digo|repo|github|ci|tests?|deploy|main)\b/i.test(combined);
+  const needsValidation = /\b(valida|verifica|tests?|ci|estatus\s+verde|green|calidad|profesional|correctamente)\b/i.test(combined);
+
+  if (!isEndToEnd && !needsImplementation && !needsResearch && !hasAttachments) {
+    return EMPTY_VALUE_CONTEXT.task_trajectory;
+  }
+
+  const phases = [];
+  phases.push('understand_full_context');
+  if (hasAttachments) phases.push('ground_in_attachments');
+  if (needsResearch) phases.push('research_current_best_practices');
+  phases.push('build_execution_plan');
+  if (needsImplementation) phases.push('implement_changes');
+  if (needsValidation || needsImplementation) phases.push('validate_with_tests');
+  if (/\b(github|main|ci|deploy|sube)\b/i.test(combined)) phases.push('publish_and_monitor');
+  phases.push('deliver_concise_status');
+
+  const criteria = [];
+  if ((valueContext.constraints || []).some((constraint) => constraint.id === 'preserve_interface')) {
+    criteria.push('Preserve existing UI/visual contract unless the user explicitly asks to change it.');
+  }
+  if (needsResearch) criteria.push('Use current, attributable source context before changing behavior.');
+  if (needsImplementation) criteria.push('Convert the user goal into scoped code changes with focused tests.');
+  if (needsValidation) criteria.push('Do not call the task done until local/remote validation is green or a concrete blocker is reported.');
+  if (isEndToEnd) criteria.push('Carry the workflow from interpretation through delivery without stopping at a proposal.');
+
+  const stopConditions = [
+    'external action requires user approval',
+    'missing credential or permission blocks execution',
+    'destructive action would be required',
+  ];
+
+  return {
+    mode: isEndToEnd || needsImplementation ? 'end_to_end_execution' : 'contextual_assistance',
+    objective: clampText(current, 220),
+    phases: Array.from(new Set(phases)).slice(0, 10),
+    success_criteria: criteria.slice(0, 6),
+    stop_conditions: stopConditions,
+    confidence: Math.max(
+      isEndToEnd ? 0.9 : 0,
+      needsImplementation ? 0.82 : 0,
+      needsResearch ? 0.72 : 0,
+      hasAttachments ? 0.68 : 0,
+    ),
+  };
+}
+
 function addValueSignal(values, { id, domain, label, evidence, confidence }) {
   if (!id || !domain || !label) return;
   values.push({
@@ -426,6 +488,7 @@ function inferContextualValueContext({
   const uniqueValues = uniqueById(values).sort((a, b) => b.confidence - a.confidence).slice(0, 8);
   const primaryDomains = Array.from(new Set(uniqueValues.map((value) => value.domain))).slice(0, 5);
   const constraints = deriveContextualConstraints(currentText);
+  const taskTrajectory = inferTaskTrajectory(currentText, recentTurns, attachments, { values: uniqueValues, constraints });
   const collaborationMode = inferCollaborationMode(currentText, uniqueValues, constraints);
   const responsePosture = inferResponsePosture(uniqueValues, constraints, repairDetection);
   const responseType = inferResponseType({
@@ -442,6 +505,7 @@ function inferContextualValueContext({
     values: uniqueValues,
     primary_domains: primaryDomains,
     constraints,
+    task_trajectory: taskTrajectory,
     task_context: taskContext,
     subjectivity,
     collaboration_mode: collaborationMode,
@@ -469,6 +533,7 @@ function summarizeValueContext(valueContext) {
       evidence: clampText(constraint.evidence, 140),
       priority: constraint.priority === 'hard' ? 'hard' : 'soft',
     })).filter((constraint) => constraint.id && constraint.label) : [],
+    task_trajectory: summarizeTaskTrajectory(ctx.task_trajectory),
     task_context: String(ctx.task_context || EMPTY_VALUE_CONTEXT.task_context),
     subjectivity: {
       score: typeof ctx.subjectivity?.score === 'number' ? Math.max(0, Math.min(1, ctx.subjectivity.score)) : 0,
@@ -487,11 +552,30 @@ function summarizeValueContext(valueContext) {
   };
 }
 
+function summarizeTaskTrajectory(taskTrajectory) {
+  const trajectory = taskTrajectory && typeof taskTrajectory === 'object'
+    ? taskTrajectory
+    : EMPTY_VALUE_CONTEXT.task_trajectory;
+  return {
+    mode: String(trajectory.mode || EMPTY_VALUE_CONTEXT.task_trajectory.mode),
+    objective: trajectory.objective ? clampText(trajectory.objective, 220) : null,
+    phases: Array.isArray(trajectory.phases) ? trajectory.phases.map(String).filter(Boolean).slice(0, 10) : [],
+    success_criteria: Array.isArray(trajectory.success_criteria)
+      ? trajectory.success_criteria.map((item) => clampText(item, 180)).filter(Boolean).slice(0, 6)
+      : [],
+    stop_conditions: Array.isArray(trajectory.stop_conditions)
+      ? trajectory.stop_conditions.map((item) => clampText(item, 140)).filter(Boolean).slice(0, 5)
+      : [],
+    confidence: typeof trajectory.confidence === 'number' ? Math.max(0, Math.min(1, trajectory.confidence)) : 0,
+  };
+}
+
 function buildContextualValuePromptBlock(valueContext) {
   const ctx = summarizeValueContext(valueContext);
   const shouldInject = ctx.values.length > 0 && (
     ctx.constraints.length > 0
     || ctx.collaboration_mode !== 'direct_response'
+    || ctx.task_trajectory.mode !== 'single_turn'
     || ctx.values.some((value) => value.confidence >= 0.82)
   );
   if (!shouldInject) return null;
@@ -507,6 +591,14 @@ function buildContextualValuePromptBlock(valueContext) {
     lines.push(`- subjectivity: ${ctx.subjectivity.label} (${ctx.subjectivity.score.toFixed(2)})`);
   }
   if (ctx.primary_domains.length > 0) lines.push(`- primary_domains: ${ctx.primary_domains.join(', ')}`);
+  if (ctx.task_trajectory.mode !== 'single_turn') {
+    lines.push(`- task_trajectory: ${ctx.task_trajectory.mode} (${ctx.task_trajectory.confidence.toFixed(2)})`);
+    if (ctx.task_trajectory.objective) lines.push(`- trajectory_objective: ${ctx.task_trajectory.objective}`);
+    if (ctx.task_trajectory.phases.length > 0) lines.push(`- trajectory_phases: ${ctx.task_trajectory.phases.join(' -> ')}`);
+    for (const criterion of ctx.task_trajectory.success_criteria.slice(0, 4)) {
+      lines.push(`- trajectory_success: ${criterion}`);
+    }
+  }
   for (const value of ctx.values.slice(0, 5)) {
     lines.push(`- value: ${value.id} (${value.domain}, ${value.confidence.toFixed(2)}) - ${value.label}; evidence: ${value.evidence}`);
   }
@@ -667,6 +759,8 @@ module.exports = {
   inferContextualValueContext,
   summarizeValueContext,
   buildContextualValuePromptBlock,
+  inferTaskTrajectory,
+  summarizeTaskTrajectory,
   constants: {
     MAX_RECENT_TURNS,
     MAX_EFFECTIVE_TEXT,

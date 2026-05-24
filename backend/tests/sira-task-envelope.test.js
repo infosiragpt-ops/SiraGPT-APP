@@ -247,6 +247,54 @@ describe("task-envelope-builder", () => {
     expect(r.envelope.output_contract.primary_output.required).toBe(true);
   });
 
+  test("end-to-end contextual trajectory expands workflow and validation gates", async () => {
+    const r = await buildEnvelope({
+      text: "## CONTEXTUAL_VALUE_FRAME\n- collaboration_mode: autonomous_execution\n- task_trajectory: end_to_end_execution (0.90)\n- trajectory_phases: understand_full_context -> research_current_best_practices -> build_execution_plan -> implement_changes -> validate_with_tests -> publish_and_monitor -> deliver_concise_status\n\nSOLICITUD_USUARIO:\ninvestiga Claude y ChatGPT, implementa y deja CI verde",
+      originalText: "investiga Claude y ChatGPT, implementa y deja CI verde",
+      contextualUnderstanding: {
+        applied: true,
+        original_text: "investiga Claude y ChatGPT, implementa y deja CI verde",
+        effective_text: "investiga Claude y ChatGPT, implementa y deja CI verde",
+        recent_turn_count: 2,
+        coreference: { source: "not_run", latency_ms: 0, references: [] },
+        lexicon_terms: [],
+        repair: { is_repair: false, repair_type: null, contract_override: null },
+        misunderstanding_signals: [],
+        value_context: {
+          source: "deterministic_contextual_value_mapper",
+          values: [
+            { id: "execution_reliability", domain: "practical", label: "Execution reliability", evidence: "end-to-end delivery", confidence: 0.9 },
+          ],
+          primary_domains: ["practical"],
+          constraints: [
+            { id: "remote_green_status", label: "Finish through remote green status", evidence: "CI verde", priority: "hard" },
+          ],
+          task_trajectory: {
+            mode: "end_to_end_execution",
+            objective: "investiga Claude y ChatGPT, implementa y deja CI verde",
+            phases: ["understand_full_context", "research_current_best_practices", "build_execution_plan", "implement_changes", "validate_with_tests", "publish_and_monitor", "deliver_concise_status"],
+            success_criteria: ["Use current source context before changing behavior.", "Do not stop at a proposal."],
+            stop_conditions: ["external action requires user approval"],
+            confidence: 0.9,
+          },
+          collaboration_mode: "autonomous_execution",
+          response_posture: "support_with_guardrails",
+          response_type: "strong_support",
+          confidence: 0.9,
+        },
+      },
+    });
+
+    expect(r.validation.ok).toBe(true);
+    expect(r.envelope.context_requirements.needs_end_to_end_task_state).toBe(true);
+    expect(r.envelope.context_requirements.needs_web_search).toBe(true);
+    expect(r.envelope.context_requirements.needs_code_sandbox).toBe(true);
+    expect(r.envelope.workflow_graph.nodes.some(n => n.id === "trajectory.implement_changes")).toBe(true);
+    expect(r.envelope.workflow_graph.nodes.some(n => n.id === "trajectory.validate_with_tests")).toBe(true);
+    expect(r.envelope.workflow_graph.validation_gate.validators.includes("contextual_alignment_validator")).toBe(true);
+    expect(r.envelope.workflow_graph.audit_trace.some(e => e.event === "task_trajectory_applied")).toBe(true);
+  });
+
   test("web app request produces code_project output", async () => {
     const r = await buildEnvelope({
       text: "Construye una landing en Next.js para mi clínica dental",

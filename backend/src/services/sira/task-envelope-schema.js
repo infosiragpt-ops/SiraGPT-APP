@@ -173,7 +173,7 @@ const TASK_ENVELOPE_SCHEMA = Object.freeze({
     context_requirements: {
       type: "object",
       additionalProperties: false,
-      required: ["needs_conversation_history", "needs_user_profile", "needs_project_memory", "needs_uploaded_files", "needs_web_search", "needs_scientific_apis", "needs_database_access", "needs_browser_automation", "needs_code_sandbox", "freshness_required", "minimum_source_quality", "citation_required", "source_validation_required"],
+      required: ["needs_conversation_history", "needs_user_profile", "needs_project_memory", "needs_uploaded_files", "needs_web_search", "needs_scientific_apis", "needs_database_access", "needs_browser_automation", "needs_code_sandbox", "freshness_required", "minimum_source_quality", "citation_required", "source_validation_required", "needs_end_to_end_task_state"],
       properties: {
         needs_conversation_history: { type: "boolean" },
         needs_user_profile: { type: "boolean" },
@@ -188,6 +188,7 @@ const TASK_ENVELOPE_SCHEMA = Object.freeze({
         minimum_source_quality: { type: "string" },
         citation_required: { type: "boolean" },
         source_validation_required: { type: "boolean" },
+        needs_end_to_end_task_state: { type: "boolean" },
       },
     },
 

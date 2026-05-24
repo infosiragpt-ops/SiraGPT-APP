@@ -133,6 +133,29 @@ test('analyzeContextualTurn maps task-conditioned values from document analysis'
   assert.ok(result.envelopeContext.value_context.values.some(v => v.id === 'attachment_grounding'));
 });
 
+test('analyzeContextualTurn builds an end-to-end task trajectory for contextual AI work', async () => {
+  const result = await contextual.analyzeContextualTurn({
+    userId: 'u-trajectory',
+    conversationId: 'c-trajectory',
+    userMessage: 'Investiga en Claude y ChatGPT cómo mejorar comprensión contextual, implementemos y codifica de inicio a fin hasta dejar CI verde',
+    history: [
+      { role: 'user', content: 'Quiero que el software me entienda mejor.' },
+      { role: 'assistant', content: 'Puedo mejorar la capa contextual y validar el flujo.' },
+    ],
+    attachments: [],
+    requestId: 'req-trajectory',
+  });
+
+  assert.equal(result.applied, true);
+  assert.match(result.effectiveText, /task_trajectory: end_to_end_execution/);
+  assert.match(result.effectiveText, /trajectory_phases:/);
+  assert.equal(result.envelopeContext.value_context.task_trajectory.mode, 'end_to_end_execution');
+  assert.ok(result.envelopeContext.value_context.task_trajectory.phases.includes('research_current_best_practices'));
+  assert.ok(result.envelopeContext.value_context.task_trajectory.phases.includes('implement_changes'));
+  assert.ok(result.envelopeContext.value_context.task_trajectory.phases.includes('validate_with_tests'));
+  assert.ok(result.envelopeContext.value_context.task_trajectory.success_criteria.some(c => /inicio|workflow|delivery|propuesta|Carry/i.test(c)));
+});
+
 test('analyzeContextualTurn is a no-op when there is no contextual signal', async () => {
   const result = await contextual.analyzeContextualTurn({
     userId: 'u-clean',

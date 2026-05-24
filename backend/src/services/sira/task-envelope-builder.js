@@ -151,6 +151,7 @@ async function buildEnvelope({
     siraToolPlan.required_tools.map(t => t.tool_name),
     targetFormat,
     requestIntelligence,
+    contextualUnderstandingContext,
   );
 
   // ── 5. Compose the envelope ──────────────────────────────────────
@@ -207,7 +208,7 @@ async function buildEnvelope({
 
     entities: deriveEntities(effectiveText, taxonomyIntent, normalizedAttachments, requestIntelligence),
 
-    context_requirements: deriveContextRequirements(taxonomyIntent, normalizedAttachments, requestIntelligence),
+    context_requirements: deriveContextRequirements(taxonomyIntent, normalizedAttachments, requestIntelligence, contextualUnderstandingContext),
 
     data_ingestion_plan: deriveDataIngestionPlan(normalizedAttachments, taxonomyIntent, requestIntelligence),
 
@@ -595,23 +596,25 @@ function spreadsheetMentionIsInputContext(text, attachments = []) {
   return hasSpreadsheetAttachment && explicitInput;
 }
 
-function deriveContextRequirements(taxonomyIntent, attachments, requestIntelligence = null) {
+function deriveContextRequirements(taxonomyIntent, attachments, requestIntelligence = null, contextualUnderstanding = null) {
   const caps = taxonomyIntent.default_required_capabilities;
   const ctx = requestIntelligence?.context || {};
+  const trajectory = normalizeTaskTrajectory(contextualUnderstanding?.value_context?.task_trajectory);
   return {
     needs_conversation_history: true,
     needs_user_profile: true,
     needs_project_memory: true,
     needs_uploaded_files: attachments.length > 0 || Boolean(ctx.has_files),
-    needs_web_search: caps.includes("research") || Boolean(ctx.has_research_requirement),
+    needs_web_search: caps.includes("research") || Boolean(ctx.has_research_requirement) || trajectory.phases.includes("research_current_best_practices"),
     needs_scientific_apis: taxonomyIntent.id === "scientific_research" || taxonomyIntent.id === "academic_document" || Boolean(ctx.has_research_requirement),
     needs_database_access: taxonomyIntent.id === "database_query" || /\bsql|database|base de datos|postgres|mysql\b/i.test(requestIntelligence?.normalized_request || ""),
-    needs_browser_automation: taxonomyIntent.id === "web_scraping" || taxonomyIntent.id === "browser_automation" || Boolean(ctx.has_external_action),
-    needs_code_sandbox: caps.includes("sandbox") || caps.includes("code") || Boolean(ctx.has_code_work || ctx.has_data_work),
+    needs_browser_automation: taxonomyIntent.id === "web_scraping" || taxonomyIntent.id === "browser_automation" || Boolean(ctx.has_external_action) || trajectory.phases.includes("publish_and_monitor"),
+    needs_code_sandbox: caps.includes("sandbox") || caps.includes("code") || Boolean(ctx.has_code_work || ctx.has_data_work) || trajectory.phases.includes("implement_changes"),
     freshness_required: caps.includes("research") || ctx.has_research_requirement ? "medium" : "none",
     minimum_source_quality: caps.includes("research") || ctx.has_research_requirement ? "scientific_or_institutional" : "any",
     citation_required: caps.includes("research") || Boolean(requestIntelligence?.evidence?.research?.matches?.includes("citas")),
     source_validation_required: caps.includes("research") || Boolean(ctx.has_research_requirement),
+    needs_end_to_end_task_state: trajectory.mode === "end_to_end_execution",
   };
 }
 
@@ -784,7 +787,7 @@ function deriveAgentPlan(decision) {
   return out;
 }
 
-function deriveWorkflowGraph(plan, decision, taxonomyIntent, requiredToolNames = [], targetFormat = null, requestIntelligence = null) {
+function deriveWorkflowGraph(plan, decision, taxonomyIntent, requiredToolNames = [], targetFormat = null, requestIntelligence = null, contextualUnderstanding = null) {
   const nodes = (plan.nodes || []).map(n => ({
     id: n.id,
     label: humanise(n.id),
@@ -795,6 +798,24 @@ function deriveWorkflowGraph(plan, decision, taxonomyIntent, requiredToolNames =
   }));
   const existingTools = new Set(nodes.flatMap(n => n.tools || []));
   let lastNodeId = nodes.length > 0 ? nodes[nodes.length - 1].id : null;
+  const trajectory = normalizeTaskTrajectory(contextualUnderstanding?.value_context?.task_trajectory);
+  if (trajectory.mode === "end_to_end_execution") {
+    for (const phase of trajectory.phases) {
+      const nodeId = `trajectory.${phase}`;
+      if (nodes.some(n => n.id === nodeId)) continue;
+      const phaseTools = toolsForTrajectoryPhase(phase, requiredToolNames);
+      nodes.push({
+        id: nodeId,
+        label: humanise(phase),
+        agent: agentForTrajectoryPhase(phase),
+        tools: phaseTools,
+        depends_on: lastNodeId ? [lastNodeId] : [],
+        status: "pending",
+      });
+      for (const tool of phaseTools) existingTools.add(tool);
+      lastNodeId = nodeId;
+    }
+  }
   for (const toolName of requiredToolNames) {
     if (existingTools.has(toolName)) continue;
     const nodeId = `tool.${toolName}`;
@@ -850,7 +871,9 @@ function deriveWorkflowGraph(plan, decision, taxonomyIntent, requiredToolNames =
     rollback_strategy: "new_artifacts_only_no_original_overwrite",
     validation_gate: {
       required: true,
-      validators: ["intent_fulfillment_validator", "artifact_validator", "safety_validator"],
+      validators: trajectory.mode === "end_to_end_execution"
+        ? ["intent_fulfillment_validator", "contextual_alignment_validator", "artifact_validator", "safety_validator"]
+        : ["intent_fulfillment_validator", "artifact_validator", "safety_validator"],
       block_release_on_failure: true,
     },
     human_approval_gate: {
@@ -887,6 +910,13 @@ function deriveWorkflowGraph(plan, decision, taxonomyIntent, requiredToolNames =
         nodes: nodes.length,
         tool_calls: toolCalls.length,
       },
+      ...(trajectory.mode === "end_to_end_execution" ? [{
+        event: "task_trajectory_applied",
+        at: new Date().toISOString(),
+        mode: trajectory.mode,
+        phases: trajectory.phases,
+        success_criteria_count: trajectory.success_criteria.length,
+      }] : []),
     ],
     fallback_policy: {
       if_scientific_api_fails: "use_alternative_source_api",
@@ -894,6 +924,23 @@ function deriveWorkflowGraph(plan, decision, taxonomyIntent, requiredToolNames =
       if_chart_generation_fails: "generate_tables_only_and_report_limitation",
     },
   };
+}
+
+function agentForTrajectoryPhase(phase) {
+  if (/research/.test(phase)) return "research-agent";
+  if (/plan/.test(phase)) return "planner-agent";
+  if (/implement/.test(phase)) return "coder-agent";
+  if (/validate/.test(phase)) return "qa-validator";
+  if (/publish|monitor/.test(phase)) return "release-manager-agent";
+  if (/deliver/.test(phase)) return "response-calibrator";
+  return "context-manager";
+}
+
+function toolsForTrajectoryPhase(phase, requiredToolNames = []) {
+  if (/research/.test(phase)) return requiredToolNames.includes("scientific_search") ? ["scientific_search"] : ["web_search"];
+  if (/implement/.test(phase)) return requiredToolNames.filter(t => /code|project|test|artifact|build/i.test(t)).slice(0, 3);
+  if (/validate/.test(phase)) return requiredToolNames.filter(t => /test|validator|validate|build/i.test(t)).slice(0, 4);
+  return [];
 }
 
 function normaliseSiraTools(toolNames, taxonomyIntent, targetFormat = null) {
@@ -1222,6 +1269,7 @@ function normalizeContextualValueContext(valueContext) {
       evidence: String(constraint?.evidence || ""),
       priority: constraint?.priority === "hard" ? "hard" : "soft",
     })).filter(constraint => constraint.id && constraint.label),
+    task_trajectory: normalizeTaskTrajectory(ctx.task_trajectory),
     task_context: String(ctx.task_context || "general"),
     subjectivity: {
       score: clamp01(Number(ctx.subjectivity?.score || 0)),
@@ -1240,6 +1288,24 @@ function normalizeContextualValueContext(valueContext) {
   };
 }
 
+function normalizeTaskTrajectory(taskTrajectory) {
+  const trajectory = taskTrajectory && typeof taskTrajectory === "object" ? taskTrajectory : {};
+  return {
+    mode: String(trajectory.mode || "single_turn"),
+    objective: trajectory.objective ? String(trajectory.objective).slice(0, 220) : null,
+    phases: Array.isArray(trajectory.phases)
+      ? trajectory.phases.map(String).filter(Boolean).slice(0, 10)
+      : [],
+    success_criteria: Array.isArray(trajectory.success_criteria)
+      ? trajectory.success_criteria.map(String).filter(Boolean).slice(0, 6)
+      : [],
+    stop_conditions: Array.isArray(trajectory.stop_conditions)
+      ? trajectory.stop_conditions.map(String).filter(Boolean).slice(0, 5)
+      : [],
+    confidence: clamp01(Number(trajectory.confidence || 0)),
+  };
+}
+
 function compactContextualValueContext(valueContext) {
   const normalized = normalizeContextualValueContext(valueContext);
   if (normalized.values.length === 0 && normalized.constraints.length === 0) return null;
@@ -1252,6 +1318,8 @@ function compactContextualValueContext(valueContext) {
     collaboration_mode: normalized.collaboration_mode,
     response_posture: normalized.response_posture,
     response_type: normalized.response_type,
+    task_trajectory_mode: normalized.task_trajectory.mode,
+    task_trajectory_phases: normalized.task_trajectory.phases,
     confidence: normalized.confidence,
   };
 }
