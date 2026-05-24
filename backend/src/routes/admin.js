@@ -1150,6 +1150,47 @@ function probeSystemCron(systemCronModule) {
   }
 }
 
+// Trust pipeline probe — verifies that the two anti-hallucination modules
+// introduced in cycle 50 (source-confidence for web search + thesis
+// citation verifier) load cleanly and return their canonical shapes.
+// Pure in-process checks; never makes a network call from the health
+// path so a CrossRef outage doesn't paint the dashboard red.
+function probeTrust() {
+  const out = { sourceConfidence: null, thesisCitationVerifier: null };
+  try {
+    const sc = require('../services/search/source-confidence');
+    const sample = sc.classifySource({ url: 'https://example.gov/health-report' });
+    out.sourceConfidence = sample && sample.confidence === 'verified'
+      ? { status: 'up', sampleConfidence: sample.confidence }
+      : { status: 'degraded', sampleConfidence: sample && sample.confidence };
+  } catch (err) {
+    out.sourceConfidence = { status: 'down', error: err?.message || String(err) };
+  }
+  try {
+    const cv = require('../services/thesis/citation-verifier');
+    const dois = cv.extractDois('Per Smith et al. (2024) the result is 10.1038/nature12373 — see also (Doe, 2023).');
+    const apa = cv.extractApaCitations('(Doe, 2023) and (Smith et al., 2024)');
+    const ok = Array.isArray(dois) && dois.length === 1 && Array.isArray(apa) && apa.length >= 1;
+    out.thesisCitationVerifier = ok
+      ? {
+          status: 'up',
+          doisExtracted: dois.length,
+          apaExtracted: apa.length,
+          strict: cv.strictModeEnabled(),
+          onlineFallback: cv.onlineFallbackEnabled(),
+          hallucinationThreshold: cv.hallucinationThreshold(),
+        }
+      : { status: 'degraded', doisExtracted: dois?.length || 0, apaExtracted: apa?.length || 0 };
+  } catch (err) {
+    out.thesisCitationVerifier = { status: 'down', error: err?.message || String(err) };
+  }
+  const statuses = [out.sourceConfidence?.status, out.thesisCitationVerifier?.status];
+  const overall = statuses.includes('down')
+    ? 'degraded'
+    : (statuses.includes('degraded') ? 'degraded' : 'up');
+  return { status: overall, ...out };
+}
+
 async function collectServiceHealth({
   prismaClient,
   env,
@@ -1172,6 +1213,7 @@ async function collectServiceHealth({
   const scheduler = probeScheduler(schedulerModule);
   const websocket = probeWebsocket(socketModule);
   const systemCron = probeSystemCron(systemCronModule);
+  const trust = probeTrust();
   const services = {
     postgres,
     redis,
@@ -1183,6 +1225,7 @@ async function collectServiceHealth({
     scheduler,
     websocket,
     systemCron,
+    trust,
   };
   return {
     timestamp: new Date().toISOString(),

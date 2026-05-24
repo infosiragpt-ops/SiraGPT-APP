@@ -6,6 +6,7 @@ const { createLangfuseTracer } = require('./observability');
 const { searchFreshContext, needsFreshWebContext } = require('./web-search-tools');
 const { createMemoryAdapter } = require('./memory-adapter');
 const { createSSEReplayBuffer, attachSSEStream, writeSSE } = require('./sse-stream');
+const { classifySource, labelFor: confidenceLabel } = require('../services/search/source-confidence');
 
 let _gatewaySingleton = null;
 let _cacheSingleton = null;
@@ -74,15 +75,36 @@ async function enrichWithWebSearch(prompt, opts = {}) {
     if (!results?.results?.length) return null;
 
     const sliceCount = dedicated ? 10 : 5;
-    const snippets = results.results.slice(0, sliceCount).map(r =>
-      `- [${r.title || 'Source'}](${r.url || '#'}): ${(r.content || r.snippet || '').slice(0, dedicated ? 500 : 300)}`
-    );
+    const sliced = results.results.slice(0, sliceCount);
+    const tally = { verified: 0, unverified: 0, inferred: 0 };
+    const snippets = sliced.map((r) => {
+      const cls = classifySource({ url: r.url });
+      tally[cls.confidence] = (tally[cls.confidence] || 0) + 1;
+      const label = confidenceLabel(cls.confidence);
+      const title = r.title || 'Source';
+      const url = r.url || '#';
+      const snippet = (r.content || r.snippet || '').slice(0, dedicated ? 500 : 300);
+      return `- [${label}] [${title}](${url}): ${snippet}`;
+    });
+
+    const trustGuidance =
+      'Cita cada fuente con su etiqueta de confianza entre paréntesis (verificada / sin verificar / inferida). ' +
+      'No afirmes hechos respaldados solo por fuentes "sin verificar" sin advertirlo al usuario, y nunca presentes ' +
+      'información "inferida" como verificada.';
+    const tallyLine =
+      `Resumen de fuentes — verificadas: ${tally.verified || 0}, sin verificar: ${tally.unverified || 0}, ` +
+      `inferidas: ${tally.inferred || 0}.`;
 
     return {
       source: results.provider,
       mode: dedicated ? 'dedicated' : 'auto',
       injectedAt: new Date().toISOString(),
-      block: `\n\n[Fresh Web Context — ${results.provider}${dedicated ? ' (dedicated)' : ''}]\n${snippets.join('\n')}\n[/Fresh Web Context]`,
+      sourceConfidence: tally,
+      block:
+        `\n\n[Fresh Web Context — ${results.provider}${dedicated ? ' (dedicated)' : ''}]\n` +
+        `${snippets.join('\n')}\n` +
+        `\n${tallyLine}\n${trustGuidance}\n` +
+        `[/Fresh Web Context]`,
     };
   } catch (_) {
     return null;

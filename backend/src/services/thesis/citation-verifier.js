@@ -187,6 +187,51 @@ function strictModeEnabled() {
   return !/^(0|false|off|no)$/i.test(String(v).trim());
 }
 
+function onlineFallbackEnabled() {
+  const v = process.env.THESIS_VERIFY_ONLINE_FALLBACK;
+  if (v === undefined || v === null || v === '') return false;
+  return /^(1|true|on|yes)$/i.test(String(v).trim());
+}
+
+function hallucinationThreshold() {
+  const v = Number(process.env.THESIS_HALLUCINATION_THRESHOLD);
+  if (!Number.isFinite(v) || v <= 0 || v > 1) return 0.3;
+  return v;
+}
+
+/**
+ * Verify a batch of DOIs against CrossRef with bounded concurrency.
+ * Returns a Map<normalisedDoi, { ok, paper?, error? }>. Network failures
+ * are silently captured per-DOI (the caller treats absence as "still
+ * unverified") so a CrossRef outage never blocks thesis generation.
+ *
+ * @param {string[]} dois
+ * @param {object} [opts]
+ * @param {number} [opts.concurrency=5]
+ * @param {number} [opts.timeoutMs] — passed to verifyDoiOnline
+ * @param {Function} [opts.fetcher]
+ */
+async function verifyDoisBatch(dois, opts = {}) {
+  const out = new Map();
+  if (!Array.isArray(dois) || dois.length === 0) return out;
+
+  const concurrency = Math.max(1, Math.min(opts.concurrency || 5, 16));
+  const queue = [...new Set(dois.map(normaliseDoi).filter(Boolean))];
+
+  async function worker() {
+    while (queue.length > 0) {
+      const doi = queue.shift();
+      if (!doi || out.has(doi)) continue;
+      const result = await verifyDoiOnline(doi, opts);
+      out.set(doi, result);
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(concurrency, queue.length) }, () => worker());
+  await Promise.all(workers);
+  return out;
+}
+
 module.exports = {
   DOI_RE,
   APA_CITATION_RE,
@@ -197,5 +242,8 @@ module.exports = {
   verifyCitations,
   markUnverified,
   verifyDoiOnline,
+  verifyDoisBatch,
   strictModeEnabled,
+  onlineFallbackEnabled,
+  hallucinationThreshold,
 };

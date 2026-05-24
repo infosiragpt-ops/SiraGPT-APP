@@ -4,7 +4,13 @@ const scientificSearch = require('../scientific-search');
 const { referenceEntry } = require('../marco-teorico/apa7');
 const { getTemplate, listTemplates } = require('./chapter-templates');
 const { validateWordCount, validateChapterPlan } = require('./word-count-validator');
-const { markUnverified, strictModeEnabled } = require('./citation-verifier');
+const {
+  markUnverified,
+  strictModeEnabled,
+  verifyDoisBatch,
+  onlineFallbackEnabled,
+  hallucinationThreshold,
+} = require('./citation-verifier');
 
 const MIN_YEAR = 2020;
 
@@ -107,7 +113,96 @@ async function runThesisPipeline(params = {}, deps = {}) {
     });
     emit({ type: 'chapter', id: tpl.id, words: validation.words, ok: validation.ok, unverifiedCitations: citationReport.totalUnverified });
   }
-  emit({ type: 'citations', strict, totalUnverified, totalVerified: chapters.reduce((s, c) => s + (c.citations?.totalVerified || 0), 0) });
+  let totalVerified = chapters.reduce((s, c) => s + (c.citations?.totalVerified || 0), 0);
+  let externallyVerified = 0;
+
+  // Optional online fallback: any DOI that wasn't in the canonical
+  // references list may still be a real paper that the LLM cited from
+  // its own knowledge. Check CrossRef once per unique unverified DOI
+  // and reclassify the hits, dropping the `[no verificado]` marker.
+  const onlineFallback = params.verifyOnlineFallback === undefined
+    ? onlineFallbackEnabled()
+    : Boolean(params.verifyOnlineFallback);
+  if (strict && onlineFallback) {
+    emit({ type: 'phase', phase: 'crossref-verify', percent: 85 });
+    const unverifiedDois = [];
+    for (const ch of chapters) {
+      for (const d of ch.citations?.dois?.unverified || []) unverifiedDois.push(d);
+    }
+    if (unverifiedDois.length > 0) {
+      try {
+        const verifications = await verifyDoisBatch(unverifiedDois, {
+          timeoutMs: Number(process.env.THESIS_DOI_VERIFY_TIMEOUT_MS) || 5_000,
+          concurrency: 5,
+          fetcher: deps.fetcher,
+        });
+        for (const ch of chapters) {
+          const dois = ch.citations?.dois || { verified: [], unverified: [] };
+          const stillUnverified = [];
+          const reclassified = [];
+          for (const doi of dois.unverified) {
+            const v = verifications.get(doi);
+            if (v && v.ok) {
+              reclassified.push(doi);
+              // Drop the marker we previously appended right after this DOI.
+              const escaped = doi.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              const markerEscaped = '\\[no verificado\\]';
+              const re = new RegExp(`(${escaped})\\s+${markerEscaped}`, 'gi');
+              ch.content = ch.content.replace(re, '$1');
+            } else {
+              stillUnverified.push(doi);
+            }
+          }
+          if (reclassified.length > 0) {
+            ch.citations.dois.verified = [...dois.verified, ...reclassified];
+            ch.citations.dois.unverified = stillUnverified;
+            ch.citations.externallyVerifiedDois = reclassified;
+            ch.citations.totalVerified += reclassified.length;
+            ch.citations.totalUnverified -= reclassified.length;
+            externallyVerified += reclassified.length;
+            totalUnverified -= reclassified.length;
+            totalVerified += reclassified.length;
+          }
+        }
+        emit({ type: 'crossref-verify', checked: unverifiedDois.length, externallyVerified });
+      } catch (err) {
+        // Network-wide failure (no fetch at all, etc.) — log via the event
+        // stream but don't fail the pipeline; the offline verification is
+        // already complete and is the source of truth.
+        emit({ type: 'crossref-verify', checked: unverifiedDois.length, error: err?.message || 'fetch_failed' });
+      }
+    }
+  }
+
+  // Hallucination guard. Anything above the configured threshold (default
+  // 30%) of unverified citations is a strong signal the LLM is making
+  // sources up. Surface the warning so the route can short-circuit or
+  // the UI can render an honest disclaimer.
+  const totalCitations = totalUnverified + totalVerified;
+  const unverifiedRate = totalCitations > 0 ? totalUnverified / totalCitations : 0;
+  const threshold = hallucinationThreshold();
+  const hallucinationWarning = strict && unverifiedRate > threshold
+    ? {
+        level: 'critical',
+        unverifiedRate: Number(unverifiedRate.toFixed(4)),
+        threshold,
+        totalUnverified,
+        totalCitations,
+        message:
+          `${(unverifiedRate * 100).toFixed(0)}% de las citas no se verificaron contra la lista de referencias` +
+          `${onlineFallback ? ' ni contra CrossRef' : ''}. Revisa cada cita antes de presentar el documento.`,
+      }
+    : null;
+
+  emit({
+    type: 'citations',
+    strict,
+    totalUnverified,
+    totalVerified,
+    externallyVerified,
+    unverifiedRate: Number(unverifiedRate.toFixed(4)),
+    hallucinationWarning,
+  });
 
   const planValidation = validateChapterPlan(
     chapters.map((c) => ({
@@ -128,8 +223,12 @@ async function runThesisPipeline(params = {}, deps = {}) {
     templates: listTemplates(),
     citationVerification: {
       strict,
+      onlineFallback,
       totalUnverified,
-      totalVerified: chapters.reduce((s, c) => s + (c.citations?.totalVerified || 0), 0),
+      totalVerified,
+      externallyVerified,
+      unverifiedRate: Number(unverifiedRate.toFixed(4)),
+      hallucinationWarning,
     },
   };
 }
