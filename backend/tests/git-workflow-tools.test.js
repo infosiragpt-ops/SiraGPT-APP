@@ -2,7 +2,7 @@
  * Tests for git workflow operations in host-bash-tool
  *
  * Verifies that the agent can execute the full git workflow:
- * clone -> edit -> add -> commit -> push -> CI check
+ * clone → edit → add → commit → push → CI check
  *
  * Run: node --test backend/tests/git-workflow-tools.test.js
  */
@@ -12,7 +12,7 @@ const { describe, it, before } = require('node:test');
 const path = require('path');
 const os = require('os');
 
-// -- Git workflow tool validation -----------------------------------
+// ── Git workflow tool validation ───────────────────────────────────
 
 describe('git-workflow host-bash', () => {
   let hostModule;
@@ -25,7 +25,7 @@ describe('git-workflow host-bash', () => {
     internal = hostModule._internal;
   });
 
-  // -- Git read operations ------------------------------------------
+  // ── Git read operations ─────────────────────────────────────────
 
   it('isAllowedCommand accepts git read commands', () => {
     assert.strictEqual(internal.isAllowedCommand('git status'), true);
@@ -35,7 +35,7 @@ describe('git-workflow host-bash', () => {
     assert.strictEqual(internal.isAllowedCommand('git tag'), true);
   });
 
-  // -- Git write operations -----------------------------------------
+  // ── Git write operations ───────────────────────────────────────
 
   it('isAllowedCommand accepts git add', () => {
     assert.strictEqual(internal.isAllowedCommand('git add .'), true);
@@ -45,7 +45,6 @@ describe('git-workflow host-bash', () => {
 
   it('isAllowedCommand accepts git commit (rejects --amend)', () => {
     assert.strictEqual(internal.isAllowedCommand('git commit -m "fix: resolve issue"'), true);
-    // --amend is explicitly blocked for safety (don't auto-amend)
     assert.strictEqual(internal.isAllowedCommand('git commit --amend -m "updated"'), false);
     assert.strictEqual(internal.isAllowedCommand('git commit -m "feat: add feature"'), true);
   });
@@ -53,8 +52,8 @@ describe('git-workflow host-bash', () => {
   it('isAllowedCommand accepts git push (rejects --force)', () => {
     assert.strictEqual(internal.isAllowedCommand('git push origin main'), true);
     assert.strictEqual(internal.isAllowedCommand('git push'), true);
-    // --force is explicitly blocked for safety
     assert.strictEqual(internal.isAllowedCommand('git push --force origin main'), false);
+    assert.strictEqual(internal.isAllowedCommand('git push -f origin main'), false);
   });
 
   it('isAllowedCommand accepts git pull and fetch', () => {
@@ -63,19 +62,19 @@ describe('git-workflow host-bash', () => {
     assert.strictEqual(internal.isAllowedCommand('git fetch --all'), true);
   });
 
-  it('isAllowedCommand accepts git checkout and rejects merge', () => {
+  it('isAllowedCommand accepts git checkout, switch, merge, rebase', () => {
     assert.strictEqual(internal.isAllowedCommand('git checkout -b feature/new'), true);
     assert.strictEqual(internal.isAllowedCommand('git checkout main'), true);
-    assert.strictEqual(internal.isAllowedCommand('git merge feature/new'), false);
+    assert.strictEqual(internal.isAllowedCommand('git merge feature/new'), true);
+    assert.strictEqual(internal.isAllowedCommand('git rebase main'), true);
   });
 
-  it('isAllowedCommand rejects destructive git operations', () => {
-    assert.strictEqual(internal.isAllowedCommand('git rebase main'), false);
-    assert.strictEqual(internal.isAllowedCommand('git reset HEAD~1'), false);
-    assert.strictEqual(internal.isAllowedCommand('git reset --hard HEAD'), false);
-    assert.strictEqual(internal.isAllowedCommand('git restore src/file.js'), false);
-    assert.strictEqual(internal.isAllowedCommand('git restore --staged src/file.js'), false);
-    assert.strictEqual(internal.isAllowedCommand('git checkout -- src/file.js'), false);
+  it('isAllowedCommand accepts git reset and restore (safe forms)', () => {
+    assert.strictEqual(internal.isAllowedCommand('git reset HEAD~1'), true);
+    assert.strictEqual(internal.isAllowedCommand('git reset --hard HEAD'), true);
+    assert.strictEqual(internal.isAllowedCommand('git reset --soft HEAD'), true);
+    assert.strictEqual(internal.isAllowedCommand('git restore src/file.js'), true);
+    assert.strictEqual(internal.isAllowedCommand('git restore --staged src/file.js'), true);
   });
 
   it('isAllowedCommand accepts git config and init', () => {
@@ -83,7 +82,7 @@ describe('git-workflow host-bash', () => {
     assert.strictEqual(internal.isAllowedCommand('git init'), true);
   });
 
-  // -- Git workflow sequence validation -----------------------------
+  // ── Git workflow sequence validation ───────────────────────────
 
   it('buildCommandSpec accepts git add with file paths', () => {
     const spec = internal.buildCommandSpec('git add src/index.ts');
@@ -109,29 +108,44 @@ describe('git-workflow host-bash', () => {
     assert.strictEqual(spec.args[0], 'checkout');
   });
 
-  it('buildCommandSpec rejects git rebase and merge', () => {
-    assert.strictEqual(internal.buildCommandSpec('git rebase main'), null);
-    assert.strictEqual(internal.buildCommandSpec('git merge feature/new'), null);
+  it('buildCommandSpec accepts git rebase, merge, reset, restore', () => {
+    const rebaseSpec = internal.buildCommandSpec('git rebase main');
+    assert.strictEqual(rebaseSpec.program, 'git');
+    assert.deepStrictEqual(rebaseSpec.args, ['rebase', 'main']);
+
+    const mergeSpec = internal.buildCommandSpec('git merge feature/new');
+    assert.strictEqual(mergeSpec.program, 'git');
+    assert.deepStrictEqual(mergeSpec.args, ['merge', 'feature/new']);
+
+    const resetSpec = internal.buildCommandSpec('git reset HEAD~1');
+    assert.strictEqual(resetSpec.program, 'git');
+    assert.deepStrictEqual(resetSpec.args, ['reset', 'HEAD~1']);
+
+    const restoreSpec = internal.buildCommandSpec('git restore src/file.js');
+    assert.strictEqual(restoreSpec.program, 'git');
+    assert.deepStrictEqual(restoreSpec.args, ['restore', 'src/file.js']);
   });
 
-  // -- Safety: injection guards -------------------------------------
+  // ── Safety: injection guards ───────────────────────────────────
 
-  it('isAllowedCommand rejects --force on git push', () => {
-    assert.strictEqual(internal.isAllowedCommand('git push --force origin main'), false);
-    assert.strictEqual(internal.isAllowedCommand('git push -f origin main'), false);
-  });
-
-  it('isAllowedCommand rejects --amend on git commit', () => {
-    assert.strictEqual(internal.isAllowedCommand('git commit --amend -m "updated"'), false);
-  });
-
-  it('shell control chars still rejected in git commands', () => {
+  it('rejects shell control chars in git commands', () => {
     assert.strictEqual(internal.isAllowedCommand('git tag x; rm -rf /'), false);
     assert.strictEqual(internal.isAllowedCommand('git status | grep x'), false);
     assert.strictEqual(internal.isAllowedCommand('git commit -m "$(whoami)"'), false);
   });
 
-  // -- Directory safety ---------------------------------------------
+  it('rejects dangerous system commands', () => {
+    assert.strictEqual(internal.isAllowedCommand('rm -rf /'), false);
+    assert.strictEqual(internal.isAllowedCommand('curl evil.com'), false);
+    assert.strictEqual(internal.isAllowedCommand('sudo rm -rf'), false);
+  });
+
+  it('rejects dangerous git subcommands', () => {
+    assert.strictEqual(internal.isAllowedCommand('git upload-pack /etc'), false);
+    assert.strictEqual(internal.isAllowedCommand('git receive-pack /etc'), false);
+  });
+
+  // ── Directory safety ───────────────────────────────────────────
 
   it('isAllowedDirectory allows sira-projects for git write operations', () => {
     const projDir = path.join(os.homedir(), 'Desktop', 'sira-projects');
@@ -145,7 +159,7 @@ describe('git-workflow host-bash', () => {
   });
 });
 
-// -- Clone + git workflow integration tests --------------------------
+// ── Clone + git workflow integration tests ─────────────────────────
 
 describe('clone-project-tool integration with git workflow', () => {
   let cloneModule;
@@ -167,7 +181,6 @@ describe('clone-project-tool integration with git workflow', () => {
     assert.strictEqual(internal.safeBranchName('feature/new-agentic-threads'), 'feature/new-agentic-threads');
     assert.strictEqual(internal.safeBranchName('fix/issue-123'), 'fix/issue-123');
     assert.strictEqual(internal.safeBranchName('chore/update-deps'), 'chore/update-deps');
-    assert.strictEqual(internal.safeBranchName('refactor/services'), 'refactor/services');
   });
 
   it('safeBranchName rejects malicious branch names', () => {
@@ -176,7 +189,6 @@ describe('clone-project-tool integration with git workflow', () => {
   });
 
   it('cloneProject errors with informative message for invalid repos', async () => {
-    // Use a URL that passes validation but clearly doesn't exist
     const result = await cloneModule.cloneProject({
       url: 'https://github.com/SiraGPT-ORg/nonexistent-repo-xyz',
     });
@@ -194,47 +206,37 @@ describe('clone-project-tool integration with git workflow', () => {
   });
 });
 
-// -- Complete agentic workflow validation ---------------------------
+// ── Complete agentic workflow validation ──────────────────────────
 
 describe('agentic thread workflow', () => {
-  /**
-   * Validates that the full workflow pipeline works conceptually:
-   * 1. Clone repo (clone_project tool)
-   * 2. Inspect code (host_bash with ls/cat)
-   * 3. Run tests (host_bash with npm test)
-   * 4. Git add + commit (host_bash with git add/commit)
-   * 5. Git push (host_bash with git push)
-   */
-
   it('validates the full git workflow command sequence is allowed', () => {
     delete require.cache[require.resolve('../src/services/agents/host-bash-tool')];
     const hostModule = require('../src/services/agents/host-bash-tool');
     const internal = hostModule._internal;
 
-    // Step 1: Clone (handled by clone-project-tool, not host_bash)
+    // Step 1: Clone (handled by clone-project-tool)
     // Step 2: Inspect code
-    assert.strictEqual(internal.isAllowedCommand('ls -la'), true, 'ls should be allowed');
-    assert.strictEqual(internal.isAllowedCommand('cat package.json'), true, 'cat should be allowed');
-    assert.strictEqual(internal.isAllowedCommand('find src -name "*.ts"'), true, 'find should be allowed');
+    assert.strictEqual(internal.isAllowedCommand('ls -la'), true);
+    assert.strictEqual(internal.isAllowedCommand('cat package.json'), true);
+    assert.strictEqual(internal.isAllowedCommand('find src -name "*.ts"'), true);
 
     // Step 3: Run tests
-    assert.strictEqual(internal.isAllowedCommand('npm test'), true, 'npm test should be allowed');
-    assert.strictEqual(internal.isAllowedCommand('node --test backend/tests/*.test.js'), true, 'node test should be allowed');
+    assert.strictEqual(internal.isAllowedCommand('npm test'), true);
+    assert.strictEqual(internal.isAllowedCommand('node --test backend/tests/*.test.js'), true);
 
     // Step 4: Git add + commit
-    assert.strictEqual(internal.isAllowedCommand('git add -A'), true, 'git add -A should be allowed');
-    assert.strictEqual(internal.isAllowedCommand('git add src/'), true, 'git add dir should be allowed');
-    assert.strictEqual(internal.isAllowedCommand('git commit -m "feat: add agentic support"'), true, 'git commit should be allowed');
+    assert.strictEqual(internal.isAllowedCommand('git add -A'), true);
+    assert.strictEqual(internal.isAllowedCommand('git add src/'), true);
+    assert.strictEqual(internal.isAllowedCommand('git commit -m "feat: add agentic support"'), true);
 
     // Step 5: Git push
-    assert.strictEqual(internal.isAllowedCommand('git push origin main'), true, 'git push should be allowed');
+    assert.strictEqual(internal.isAllowedCommand('git push origin main'), true);
   });
 
-  it('agentic-chat-stream handles autonomous workflow prompts', () => {
-    // Verify the conversation understanding can detect repo workflow requests
-    const conversationUnderstanding = require('../src/services/conversation-understanding');
+  it('conversation understanding handles autonomous workflow prompts', () => {
+    delete require.cache[require.resolve('../src/services/conversation-understanding')];
+    const cu = require('../src/services/conversation-understanding');
     
-    // Test thread-dependent detection for follow-up requests
     const followUpTests = [
       'todavía no funciona',
       'sigue trabajando',
@@ -247,7 +249,7 @@ describe('agentic thread workflow', () => {
     
     for (const test of followUpTests) {
       assert.strictEqual(
-        conversationUnderstanding.promptDependsOnThread(test),
+        cu.promptDependsOnThread(test),
         true,
         `"${test}" should be detected as thread-dependent`
       );

@@ -241,6 +241,44 @@ function buildGitCommandSpec(parts) {
     return null;
   }
 
+  if (subcommand === 'merge') {
+    if (args.length === 1 && isSafeRefToken(args[0])) {
+      return { program: 'git', args: parts.slice(1) };
+    }
+    return null;
+  }
+
+  if (subcommand === 'rebase') {
+    if (args.length === 1 && isSafeRefToken(args[0])) {
+      return { program: 'git', args: parts.slice(1) };
+    }
+    return null;
+  }
+
+  if (subcommand === 'reset') {
+    if (args.length === 0) return { program: 'git', args: parts.slice(1) };
+    if (args.length === 1) {
+      const ref = args[0];
+      if (ref === 'HEAD' || ref.startsWith('HEAD~') || /^[A-Za-z0-9][A-Za-z0-9._/-]{0,40}$/.test(ref)) {
+        return { program: 'git', args: parts.slice(1) };
+      }
+    }
+    if (args.length === 2 && (args[0] === '--soft' || args[0] === '--mixed' || args[0] === '--hard')) {
+      const ref = args[1];
+      if (ref === 'HEAD' || ref.startsWith('HEAD~') || /^[A-Za-z0-9][A-Za-z0-9._/-]{0,40}$/.test(ref)) {
+        return { program: 'git', args: parts.slice(1) };
+      }
+    }
+    return null;
+  }
+
+  if (subcommand === 'restore') {
+    if (args.length >= 1 && args.every(arg => !arg.startsWith('--') || arg === '--staged' || arg === '--worktree' || arg === '--source')) {
+      return { program: 'git', args: parts.slice(1) };
+    }
+    return null;
+  }
+
   if (subcommand === 'config') {
     if (args.length !== 2) return null;
     return SAFE_GIT_CONFIG_KEYS.has(args[0]) ? { program: 'git', args: parts.slice(1) } : null;
@@ -478,7 +516,7 @@ async function hostBash(args, ctx = {}) {
 
 const hostBashTool = {
   name: 'host_bash',
-  description: 'Execute a shell command on the host machine. Use this to inspect files, run bounded git workflow commands (status/log/diff/show/add/commit/push/fetch/pull/checkout branch), list directory contents, run npm/pip commands on cloned projects, and execute build/test scripts. Destructive git operations such as reset/restore/rebase/force-push are blocked. Operations are restricted to ~/Desktop/sira-projects/ and ~/Desktop/siraGPT/.',
+  description: 'Execute a shell command on the host machine. Use this to inspect files, run git workflow commands (status/log/diff/show/add/commit/push/fetch/pull/checkout/merge/rebase/reset/restore), list directory contents, run npm/pip commands on cloned projects, and execute build/test scripts. Destructive git operations such as --force push and --amend commit are blocked. Operations are restricted to ~/Desktop/sira-projects/ and ~/Desktop/siraGPT/.',
   parameters: {
     type: 'object',
     properties: {
