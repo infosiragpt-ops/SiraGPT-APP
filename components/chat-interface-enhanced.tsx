@@ -3148,6 +3148,8 @@ function ChatInterfaceContent() {
 
   const [input, setInput] = React.useState("")
   const currentChatId = currentChat?.id ?? null
+  const currentChatIdRef = React.useRef<string | null>(null)
+  React.useEffect(() => { currentChatIdRef.current = currentChatId }, [currentChatId])
   const isCurrentChatStreaming = Boolean(currentChatId && activeStreamingChatIds.includes(currentChatId))
   const isCurrentChatLoading = isCurrentChatStreaming
   // Per-chat draft persistence. The composer's text is saved (debounced)
@@ -3426,6 +3428,34 @@ function ChatInterfaceContent() {
   // classification, chat streaming) that live under intentAbortController.
   const searchAbortControllerRef = React.useRef<AbortController | null>(null);
   const currentAgentTaskIdRef = React.useRef<string | null>(null);
+  const localJobControllersRef = React.useRef<Map<string, AbortController>>(new Map());
+  const agentTaskIdsByChatRef = React.useRef<Map<string, string>>(new Map());
+  const activeLocalJobChatIdsRef = React.useRef<Set<string>>(new Set());
+  const [activeLocalJobChatIds, setActiveLocalJobChatIds] = React.useState<string[]>([]);
+
+  const syncActiveLocalJobs = React.useCallback(() => {
+    setActiveLocalJobChatIds(Array.from(activeLocalJobChatIdsRef.current));
+  }, []);
+
+  const markLocalJobBusy = React.useCallback((chatId?: string | null, controller?: AbortController) => {
+    if (!chatId) return;
+    activeLocalJobChatIdsRef.current.add(chatId);
+    if (controller) {
+      localJobControllersRef.current.set(chatId, controller);
+    }
+    syncActiveLocalJobs();
+  }, [syncActiveLocalJobs]);
+
+  const markLocalJobIdle = React.useCallback((chatId?: string | null, controller?: AbortController) => {
+    if (!chatId) return;
+    const tracked = localJobControllersRef.current.get(chatId);
+    if (!controller || !tracked || tracked === controller) {
+      localJobControllersRef.current.delete(chatId);
+      agentTaskIdsByChatRef.current.delete(chatId);
+      activeLocalJobChatIdsRef.current.delete(chatId);
+      syncActiveLocalJobs();
+    }
+  }, [syncActiveLocalJobs]);
 
   // Voice Studio panel state
   const [showAudioPanel, setShowAudioPanel] = React.useState(false);
@@ -3456,6 +3486,7 @@ function ChatInterfaceContent() {
 
   const [isExcelConnectorActive, setIsExcelConnectorActive] = React.useState(false);
   const [isGeneratingExcel, setIsGeneratingExcel] = React.useState(false);
+  const isCurrentChatLocalJobBusy = Boolean(currentChatId && activeLocalJobChatIds.includes(currentChatId));
   const excelConnectorRef = React.useRef<ExcelConnectorRef | null>(null);
 
   // Computer Use hook
@@ -3546,16 +3577,36 @@ function ChatInterfaceContent() {
       intentAbortControllerRef.current.abort();
       intentAbortControllerRef.current = null;
     }
-    if (currentAgentTaskIdRef.current) {
-      const taskId = currentAgentTaskIdRef.current;
-      currentAgentTaskIdRef.current = null;
+    const targetChatId = currentChatId;
+    const scopedTaskId = targetChatId ? agentTaskIdsByChatRef.current.get(targetChatId) : null;
+    const fallbackTaskId = currentAgentTaskIdRef.current;
+    const taskId = scopedTaskId || fallbackTaskId;
+    if (taskId) {
+      if (scopedTaskId && targetChatId) {
+        agentTaskIdsByChatRef.current.delete(targetChatId);
+      }
+      if (fallbackTaskId === taskId) {
+        currentAgentTaskIdRef.current = null;
+      }
       void agentTaskService.cancelTask(taskId).catch((err) => {
         console.warn('Failed to cancel agent task:', err);
       });
     }
-    if (searchAbortControllerRef.current) {
-      searchAbortControllerRef.current.abort();
+    const scopedController = targetChatId ? localJobControllersRef.current.get(targetChatId) : null;
+    if (scopedController) {
+      scopedController.abort();
+      markLocalJobIdle(targetChatId, scopedController);
+      if (searchAbortControllerRef.current === scopedController) {
+        searchAbortControllerRef.current = null;
+        setIsWebSearching(false);
+      }
+    } else if (searchAbortControllerRef.current) {
+      const controller = searchAbortControllerRef.current;
+      controller.abort();
       searchAbortControllerRef.current = null;
+      if (targetChatId) {
+        markLocalJobIdle(targetChatId, controller);
+      }
       setIsWebSearching(false);
     }
     if (imageAbortControllerRef.current) {
@@ -3563,13 +3614,16 @@ function ChatInterfaceContent() {
       imageAbortControllerRef.current = null;
       isGeneratingImageRef.current = false;
       setIsGeneratingImage(false);
+      if (targetChatId) {
+        markLocalJobIdle(targetChatId);
+      }
       markImageGenerationStopped();
       toast.info('Generación de imagen detenida');
     }
     stopStreaming();
     setIsSending(false);
     setSendingChatId(null);
-  }, [markImageGenerationStopped, stopStreaming]);
+  }, [currentChatId, markImageGenerationStopped, markLocalJobIdle, stopStreaming]);
 
   // Add reasoning steps to chat messages as they come in
   React.useEffect(() => {
@@ -3814,6 +3868,7 @@ But first, you need to connect your Spotify account securely using the button be
 
         const updateChatWithLimitError = (prevChat: any) => {
           if (!prevChat) return prevChat;
+          if (currentChat?.id && prevChat.id !== currentChat.id) return prevChat;
           const newMessages = prevChat.messages.map((msg: any) => {
             if (msg.content === '[PROCESSING_SPOTIFY]') {
               return {
@@ -5635,7 +5690,7 @@ But first, you need to connect your Spotify account securely using the button be
       model: selectedModel || null,
     });
 
-    const isBusy = isCurrentChatStreaming || isGeneratingImage || isGeneratingVideo || isGeneratingWebDev || isProcessingGmail || isProcessingGoogleServices || isProcessingSpotify || isGeneratingWord || isGeneratingExcel || isRewriting;
+    const isBusy = isCurrentChatStreaming || isCurrentChatLocalJobBusy || isUploading;
 
     if (isBusy) {
       // Park the message — we'll drain the queue once the busy flags
@@ -6299,7 +6354,7 @@ REWRITTEN TEXT:`;
         };
 
         setCurrentChat(prevChat => {
-          if (!prevChat) return prevChat;
+          if (!prevChat || prevChat.id !== (chatToUpdate?.id || userMessage.chatId)) return prevChat;
           const updatedMessages = [...(prevChat.messages || []), errorMessage];
           return { ...prevChat, messages: updatedMessages };
         });
@@ -6322,7 +6377,7 @@ REWRITTEN TEXT:`;
       };
 
       setCurrentChat(prevChat => {
-        if (!prevChat) return prevChat;
+        if (!prevChat || prevChat.id !== (chatToUpdate?.id || userMessage.chatId)) return prevChat;
         const updatedMessages = [...(prevChat.messages || []), errorMessage];
         return { ...prevChat, messages: updatedMessages };
       });
@@ -6428,6 +6483,7 @@ But first, you need to connect your Gmail account securely using the button belo
         // Update placeholder with limit error
         const updateChatWithLimitError = (prevChat: any) => {
           if (!prevChat) return prevChat;
+          if (currentChat?.id && prevChat.id !== currentChat.id) return prevChat;
           const newMessages = prevChat.messages.map((msg: any) => {
             if (msg.content === '[PROCESSING_GMAIL]') {
               return {
@@ -6542,6 +6598,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
         const updateChatWithLimitError = (prevChat: any) => {
           if (!prevChat) return prevChat;
+          if (currentChat?.id && prevChat.id !== currentChat.id) return prevChat;
           const newMessages = prevChat.messages.map((msg: any) => {
             if (msg.content === '[PROCESSING_CALENDAR_ACTION]' || msg.content === '[PROCESSING_DRIVE_ACTION]') {
               return {
@@ -6605,6 +6662,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       if (!activeChatId) {
         throw new Error('No se pudo crear el chat para generar la imagen.');
       }
+      markLocalJobBusy(activeChatId, controller);
 
       const assistantPlaceholder = {
         id: `msg-assistant-generating-${Date.now()}`,
@@ -6628,6 +6686,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       } : null;
 
       setCurrentChat(prevChat => {
+        if (prevChat && prevChat.id !== activeChatId) return prevChat;
         const baseChat = prevChat?.id === activeChatId
           ? prevChat
           : activeChat
@@ -6658,7 +6717,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       await apiClient.generateImage(payload, { signal: controller.signal });
 
       if (!controller.signal.aborted) {
-        await selectChat(activeChatId);
+        if (currentChatIdRef.current === activeChatId) {
+          await selectChat(activeChatId);
+        }
         toast.success('Imagen generada correctamente');
       }
     } catch (error: any) {
@@ -6705,6 +6766,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
       const updateChatWithError = (prevChat: any) => {
         if (!prevChat) return prevChat;
+        if (prevChat.id !== activeChatId) return prevChat;
         // Find the placeholder and update it with the error
         const newMessages = prevChat.messages.map((msg: any) => {
           if (msg.content === '[GENERATING_IMAGE]') {
@@ -6720,16 +6782,21 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       if (imageAbortControllerRef.current === controller) {
         imageAbortControllerRef.current = null;
       }
+      markLocalJobIdle(activeChatId, controller);
       isGeneratingImageRef.current = false;
       setIsGeneratingImage(false)
     }
   }
 
   const handleVideoGeneration = async (prompt: string) => {
+    let activeChatId = currentChat?.id || null;
     setIsGeneratingVideo(true)
+    if (activeChatId) markLocalJobBusy(activeChatId);
     try {
       if (!currentChat) {
-        await createNewChat('video', prompt)
+        const newChat = await createNewChat('video', prompt)
+        activeChatId = newChat?.id || activeChatId;
+        if (activeChatId) markLocalJobBusy(activeChatId);
       } else {
         await addVideoMessage(prompt)
       }
@@ -6753,6 +6820,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
       toast.error(errorMessage)
     } finally {
+      markLocalJobIdle(activeChatId);
       setIsGeneratingVideo(false)
       // Don't auto-reset - user must manually remove
     }
@@ -7004,7 +7072,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   // next tick so React has a chance to commit the setInput/setFiles
   // updates before the send guard reads them.
   React.useEffect(() => {
-    const isBusy = isCurrentChatStreaming || isGeneratingImage || isGeneratingVideo || isGeneratingWebDev || isProcessingGmail || isProcessingGoogleServices || isProcessingSpotify || isGeneratingWord || isGeneratingExcel || isRewriting;
+    const isBusy = isCurrentChatStreaming || isCurrentChatLocalJobBusy || isUploading;
     if (isBusy) return;
     if (pendingMsgQueueRef.current.length === 0) return;
     const queueChatId = currentChat?.id ?? null;
@@ -7017,7 +7085,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     setUploadedFiles(next.files || []);
     const t = setTimeout(() => { handleSendRef.current(); }, 0);
     return () => clearTimeout(t);
-  }, [currentChat?.id, isCurrentChatStreaming, isGeneratingImage, isGeneratingVideo, isGeneratingWebDev, isProcessingGmail, isProcessingGoogleServices, isProcessingSpotify, isGeneratingWord, isGeneratingExcel, isRewriting, setUploadedFiles]);
+  }, [currentChat?.id, isCurrentChatStreaming, isCurrentChatLocalJobBusy, isUploading, setUploadedFiles]);
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -7094,7 +7162,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     || chatType === 'thesis'
   );
   const isSendingForCurrentChat = isSending && sendingChatId === currentChatId;
-  const isStopButtonVisible = isCurrentChatLoading || isCurrentChatStreaming || (pendingStop && isCurrentChatStreaming) || isSendingForCurrentChat || isWebSearching || isGeneratingImage;
+  const isStopButtonVisible = isCurrentChatLoading || isCurrentChatStreaming || (pendingStop && isCurrentChatStreaming) || isSendingForCurrentChat || isCurrentChatLocalJobBusy;
 
   // Shared props bundle for <ActiveToolsDisplay /> — the component is
   // now rendered in a different spot (below the input instead of above)
@@ -7231,6 +7299,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     }
 
     setIsWebSearching(true);
+    markLocalJobBusy(activeChat.id);
     const requestedTopK = inferAcademicSearchCount(searchQuery);
     const searchTarget = targetForAcademicSearch(requestedTopK);
     const searchBatchSize = Math.min(20, Math.max(5, requestedTopK));
@@ -7247,7 +7316,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         };
 
         setCurrentChat(prevChat => {
-          if (!prevChat) return prevChat;
+          if (!prevChat || prevChat.id !== activeChat.id) return prevChat;
           const updatedMessages = [...(prevChat.messages || []), userMessage];
           return { ...prevChat, messages: updatedMessages };
         });
@@ -7264,7 +7333,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
       // Add AI message to chat
       setCurrentChat(prevChat => {
-        if (!prevChat) return prevChat;
+        if (!prevChat || prevChat.id !== activeChat.id) return prevChat;
         const updatedMessages = [...(prevChat.messages || []), aiMessage];
         return { ...prevChat, messages: updatedMessages };
       });
@@ -7337,7 +7406,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
       const updateBubble = (content: string) => {
         setCurrentChat(prev => {
-          if (!prev) return prev;
+          if (!prev || prev.id !== activeChat.id) return prev;
           const newMessages = prev.messages.map(msg =>
             msg.id === aiMessage.id ? { ...msg, content } : msg
           );
@@ -7374,6 +7443,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       // orchestrator mid-run. No wasted provider quota.
       const controller = new AbortController();
       searchAbortControllerRef.current = controller;
+      markLocalJobBusy(activeChat.id, controller);
 
       let finalSummary = '';
       let aborted = false;
@@ -7539,6 +7609,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             // the client-side fallback we built from `selected`.
             const body = finalSummary || buildClientSummary(selectedSources) || "_No se recuperaron fuentes válidas para esta búsqueda._";
             updateBubble(body + tail);
+            markLocalJobIdle(activeChat.id, controller);
             setIsWebSearching(false);
             searchAbortControllerRef.current = null;
             toast.success('Búsqueda agéntica completada');
@@ -7549,6 +7620,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             if (controller.signal.aborted || /abort/i.test(error.message || '')) {
               recordSearchEvent({ type: "aborted", reason: "Cancelado por el usuario" });
               updateBubble('🛑 Búsqueda detenida por el usuario.');
+              markLocalJobIdle(activeChat.id, controller);
               setIsWebSearching(false);
               searchAbortControllerRef.current = null;
               return;
@@ -7560,12 +7632,14 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
               setSubscribeOpen(true);
               toast.error('Monthly API limit exceeded. Please upgrade to continue.');
               updateBubble('Monthly API limit exceeded. Please upgrade your plan to continue using web search.');
+              markLocalJobIdle(activeChat.id, controller);
               setIsWebSearching(false);
               searchAbortControllerRef.current = null;
               return;
             }
             toast.error(errorMessage);
             updateBubble(`❌ **Búsqueda fallida:** ${errorMessage}`);
+            markLocalJobIdle(activeChat.id, controller);
             setIsWebSearching(false);
             searchAbortControllerRef.current = null;
           },
@@ -7575,6 +7649,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     } catch (error: any) {
       console.error('Web search failed:', error);
       toast.error(error.message || 'Web search failed');
+      markLocalJobIdle(activeChat?.id);
       setIsWebSearching(false);
     }
   };
@@ -7614,6 +7689,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     }
 
     setIsWebSearching(true); // reuse the busy flag — Stop button is wired the same way
+    markLocalJobBusy(activeChat.id);
 
     try {
       if (isNewChat) {
@@ -7625,7 +7701,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           timestamp: new Date().toISOString(),
           files: filesToSend,
         };
-        setCurrentChat(prev => prev ? { ...prev, messages: [...(prev.messages || []), userMessage] } : prev);
+        setCurrentChat(prev => {
+          if (!prev || prev.id !== activeChat.id) return prev;
+          return { ...prev, messages: [...(prev.messages || []), userMessage] };
+        });
       }
 
       const aiMessage = {
@@ -7635,19 +7714,26 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         content: '```agent-task-state\n' + JSON.stringify({ ...initialAgentState, steps: [], artifacts: [], approvals: [], checkpoints: [], qualityGates: [], repairs: [] }) + '\n```',
         timestamp: new Date().toISOString(),
       };
-      setCurrentChat(prev => prev ? { ...prev, messages: [...(prev.messages || []), aiMessage] } : prev);
+      setCurrentChat(prev => {
+        if (!prev || prev.id !== activeChat.id) return prev;
+        return { ...prev, messages: [...(prev.messages || []), aiMessage] };
+      });
 
       const updateBubble = (state: AgentTaskState) => {
         const fenced = '```agent-task-state\n' + JSON.stringify(state) + '\n```' +
           (state.finalText ? '\n\n' + state.finalText : '');
-        setCurrentChat(prev => prev ? {
-          ...prev,
-          messages: prev.messages.map(m => m.id === aiMessage.id ? { ...m, content: fenced } : m),
-        } : prev);
+        setCurrentChat(prev => {
+          if (!prev || prev.id !== activeChat.id) return prev;
+          return {
+            ...prev,
+            messages: prev.messages.map(m => m.id === aiMessage.id ? { ...m, content: fenced } : m),
+          };
+        });
       };
 
       const controller = new AbortController();
       searchAbortControllerRef.current = controller;
+      markLocalJobBusy(activeChat.id, controller);
       currentAgentTaskIdRef.current = null;
 
       let state: AgentTaskState = { ...initialAgentState, steps: [], artifacts: [], approvals: [], checkpoints: [], qualityGates: [], repairs: [] };
@@ -7670,6 +7756,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           const taskIdFromEvent = (evt as any).taskId;
           if (taskIdFromEvent) {
             currentAgentTaskIdRef.current = taskIdFromEvent;
+            agentTaskIdsByChatRef.current.set(activeChat.id, taskIdFromEvent);
           }
           state = reduceEvent(state, evt);
           updateBubble(state);
@@ -7701,6 +7788,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         }
       }
 
+      markLocalJobIdle(activeChat.id, controller);
       setIsWebSearching(false);
       searchAbortControllerRef.current = null;
       currentAgentTaskIdRef.current = null;
@@ -7715,6 +7803,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     } catch (err: any) {
       console.error('Agent task failed:', err);
       toast.error(err?.message || 'Agent task failed');
+      markLocalJobIdle(activeChat?.id);
       setIsWebSearching(false);
       searchAbortControllerRef.current = null;
       currentAgentTaskIdRef.current = null;
@@ -8076,12 +8165,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           setAudioTab={setAudioTab}
                           handleAndUploadFiles={handleAndUploadFiles}
                           isUploading={isUploading}
-                          isWebSearching={isWebSearching}
+                          isWebSearching={isCurrentChatLocalJobBusy}
                           isLoading={isCurrentChatLoading}
-                          isGeneratingImage={isGeneratingImage}
-                          isGeneratingVideo={isGeneratingVideo}
+                          isGeneratingImage={isCurrentChatLocalJobBusy && isGeneratingImage}
+                          isGeneratingVideo={isCurrentChatLocalJobBusy && isGeneratingVideo}
                           isGeneratingPPT={isGeneratingPPT}
-                          isProcessingGmail={isProcessingGmail}
+                          isProcessingGmail={isCurrentChatLocalJobBusy && isProcessingGmail}
                         />
 
                         {/* CENTER — single-line textarea, expands vertically up to 200px */}
@@ -8132,7 +8221,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             boxShadow: "none",
                           }}
                           rows={1}
-                          disabled={isCurrentChatLoading || isGeneratingImage || isGeneratingVideo || isWebSearching}
+                          disabled={isCurrentChatLoading || isCurrentChatLocalJobBusy}
                         />
 
                         {/* RIGHT — VoiceControls (mic, ghost) + primary action.
@@ -8150,7 +8239,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             const hasText = input.trim().length > 0
                             const hasAttachment = uploadedFiles.length > 0
                             const canSend = hasText || hasAttachment
-                            const busy = isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices
+                            const busy = isCurrentChatLocalJobBusy || isUploading
                             // When the user has typed → Send. When idle → open Voice Studio.
                             const action = canSend
                               ? handleSend
@@ -8162,7 +8251,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                 <TooltipTrigger asChild>
                                   <Button
                                     onClick={action}
-                                    disabled={canSend && (isCurrentChatLoading || busy || isGeneratingWord || isGeneratingExcel || isRewriting)}
+                                    disabled={canSend && (isCurrentChatLoading || busy)}
                                     size="icon"
                                     aria-label={label}
                                     title={label}
@@ -8543,12 +8632,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               setAudioTab={setAudioTab}
                               handleAndUploadFiles={handleAndUploadFiles}
                               isUploading={isUploading}
-                              isWebSearching={isWebSearching}
+                              isWebSearching={isCurrentChatLocalJobBusy}
                               isLoading={isCurrentChatLoading}
-                              isGeneratingImage={isGeneratingImage}
-                              isGeneratingVideo={isGeneratingVideo}
+                              isGeneratingImage={isCurrentChatLocalJobBusy && isGeneratingImage}
+                              isGeneratingVideo={isCurrentChatLocalJobBusy && isGeneratingVideo}
                               isGeneratingPPT={isGeneratingPPT}
-                              isProcessingGmail={isProcessingGmail}
+                              isProcessingGmail={isCurrentChatLocalJobBusy && isProcessingGmail}
                             />
                             <Textarea
                               ref={textareaRef}
@@ -8597,7 +8686,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                 boxShadow: "none",
                               }}
                               rows={1}
-                              disabled={isCurrentChatLoading || isGeneratingVideo || isGeneratingWord || isGeneratingExcel || isWebSearching}
+                              disabled={isCurrentChatLoading || isCurrentChatLocalJobBusy}
                             />
                             <div className="flex shrink-0 items-center gap-1.5">
                               {/* Pulido · contador suave de caracteres. */}
@@ -8610,7 +8699,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                 const hasText = input.trim().length > 0
                                 const hasAttachment = uploadedFiles.length > 0
                                 const canSend = hasText || hasAttachment
-                                const busy = isGeneratingImage || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices
+                                const busy = isCurrentChatLocalJobBusy || isUploading
                                 const action = canSend
                                   ? handleSend
                                   : openGrokVoicePanel
@@ -8621,7 +8710,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                     <TooltipTrigger asChild>
                                       <Button
                                         onClick={action}
-                                        disabled={canSend && (isCurrentChatLoading || busy || isGeneratingWord || isGeneratingExcel || isRewriting)}
+                                        disabled={canSend && (isCurrentChatLoading || busy)}
                                         size="icon"
                                         aria-label={label}
                                         title={label}
