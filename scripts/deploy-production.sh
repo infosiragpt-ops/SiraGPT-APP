@@ -622,6 +622,56 @@ SQL
   )
 }
 
+repair_scheduler_jobs_migration() {
+  local migration_name="20260508000000_add_scheduler_jobs"
+
+  log "Repairing Prisma migration state: ${migration_name}"
+  (
+    cd backend
+    npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
+CREATE TABLE IF NOT EXISTS "scheduler_jobs" (
+  "id" TEXT NOT NULL,
+  "name" TEXT NOT NULL,
+  "schedule" TEXT NOT NULL,
+  "enabled" BOOLEAN NOT NULL DEFAULT TRUE,
+  "state" TEXT NOT NULL DEFAULT 'idle',
+  "nextRunAt" TIMESTAMP(3),
+  "lastRunAt" TIMESTAMP(3),
+  "lastError" TEXT,
+  "runCount" INTEGER NOT NULL DEFAULT 0,
+  "successCount" INTEGER NOT NULL DEFAULT 0,
+  "failureCount" INTEGER NOT NULL DEFAULT 0,
+  "lockedBy" TEXT,
+  "lockedUntil" TIMESTAMP(3),
+  "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT "scheduler_jobs_pkey" PRIMARY KEY ("id")
+);
+
+CREATE INDEX IF NOT EXISTS "scheduler_jobs_nextRunAt_idx" ON "scheduler_jobs"("nextRunAt");
+CREATE INDEX IF NOT EXISTS "scheduler_jobs_state_idx" ON "scheduler_jobs"("state");
+CREATE INDEX IF NOT EXISTS "scheduler_jobs_lockedUntil_idx" ON "scheduler_jobs"("lockedUntil");
+
+CREATE TABLE IF NOT EXISTS "scheduler_runs" (
+  "runId" TEXT NOT NULL,
+  "jobId" TEXT NOT NULL,
+  "startedAt" TIMESTAMP(3) NOT NULL,
+  "finishedAt" TIMESTAMP(3),
+  "status" TEXT NOT NULL,
+  "attempt" INTEGER NOT NULL DEFAULT 0,
+  "error" TEXT,
+  "durationMs" INTEGER,
+  CONSTRAINT "scheduler_runs_pkey" PRIMARY KEY ("runId")
+);
+
+CREATE INDEX IF NOT EXISTS "scheduler_runs_jobId_idx" ON "scheduler_runs"("jobId");
+CREATE INDEX IF NOT EXISTS "scheduler_runs_startedAt_idx" ON "scheduler_runs"("startedAt");
+CREATE INDEX IF NOT EXISTS "scheduler_runs_status_idx" ON "scheduler_runs"("status");
+SQL
+    resolve_prisma_migration_applied "${migration_name}"
+  )
+}
+
 extract_prisma_migration_name() {
   node -e '
     const fs = require("fs");
@@ -659,6 +709,9 @@ repair_known_prisma_migration() {
       ;;
     20260427040000_add_agentic_task_queue)
       repair_agentic_task_queue_migration
+      ;;
+    20260508000000_add_scheduler_jobs)
+      repair_scheduler_jobs_migration
       ;;
     20260420000000_rag_store)
       repair_optional_pgvector_migration "$migration_name" "Persistent RAG storage"
