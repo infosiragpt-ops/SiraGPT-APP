@@ -1693,6 +1693,53 @@ class ApiClient {
     return this.request('/admin/stats');
   }
 
+  async getAdminUserStats(params?: { from?: string; to?: string }) {
+    const query = new URLSearchParams(params as any).toString();
+    return this.request(`/admin/stats/users${query ? `?${query}` : ''}`);
+  }
+
+  async getAdminUsageStats(params?: { from?: string; to?: string }) {
+    const query = new URLSearchParams(params as any).toString();
+    return this.request(`/admin/stats/usage${query ? `?${query}` : ''}`);
+  }
+
+  async getAdminFileStats(params?: { from?: string; to?: string }) {
+    const query = new URLSearchParams(params as any).toString();
+    return this.request(`/admin/stats/files${query ? `?${query}` : ''}`);
+  }
+
+  async getAdminAgentStats(params?: { from?: string; to?: string }) {
+    const query = new URLSearchParams(params as any).toString();
+    return this.request(`/admin/stats/agents${query ? `?${query}` : ''}`);
+  }
+
+  async getAdminServiceHealth() {
+    return this.request('/admin/health/services');
+  }
+
+  async getAdminBackups() {
+    return this.request('/admin/backups');
+  }
+
+  async getAdminMaintenanceMode() {
+    return this.request('/admin/maintenance/mode');
+  }
+
+  async setAdminMaintenanceMode(data: { enabled: boolean; message?: string | null }) {
+    return this.request('/admin/maintenance/mode', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async getAdminSystemSummary() {
+    return this.request('/admin/system-summary');
+  }
+
+  async getAdminSystemSnapshot() {
+    return this.request('/admin/system-snapshot');
+  }
+
   async getAdminAuditLogs(params?: {
     page?: number
     limit?: number
@@ -1711,6 +1758,31 @@ class ApiClient {
   async searchAdminAuditLogs(params: { q: string; page?: number; limit?: number }) {
     const query = new URLSearchParams(params as any).toString();
     return this.request(`/admin/audit-logs/search?${query}`);
+  }
+
+  async exportAdminAuditLogsCsv(params?: {
+    userId?: string
+    action?: string
+    resource?: string
+    resourceId?: string
+    tags?: string
+    from?: string
+    to?: string
+    limit?: number
+  }) {
+    const query = new URLSearchParams(params as any).toString();
+    const response = await fetch(`${this.baseURL}/admin/audit-logs.csv${query ? `?${query}` : ''}`, {
+      headers: {
+        ...(this.token && { Authorization: `Bearer ${this.token}` }),
+      },
+    });
+
+    if (!response.ok) {
+      const error = await response.text().catch(() => 'Failed to export audit logs');
+      throw new Error(error || `HTTP ${response.status}`);
+    }
+
+    return response.text();
   }
 
   // Admin invoices

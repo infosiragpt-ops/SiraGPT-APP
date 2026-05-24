@@ -736,20 +736,74 @@ router.post(
 // Get system stats
 router.get('/stats', async (req, res) => {
   try {
+    const now = new Date();
+    const [
+      users,
+      chats,
+      messages,
+      files,
+      payments,
+      apiUsage,
+      sessions,
+      activeSessions,
+      apiKeys,
+      activeApiKeys,
+      auditLogs,
+      admins,
+      superAdmins,
+      twoFactorUsers,
+      emailVerifiedUsers,
+      storageTotalSize,
+    ] = await Promise.all([
+      prisma.user.count(),
+      prisma.chat.count(),
+      prisma.message.count(),
+      prisma.file.count(),
+      prisma.payment.count(),
+      prisma.apiUsage.count(),
+      prisma.session.count(),
+      prisma.session.count({ where: { expiresAt: { gt: now } } }),
+      prisma.apiKey.count(),
+      prisma.apiKey.count({ where: { deletedAt: null } }),
+      prisma.auditLog.count(),
+      prisma.user.count({ where: { isAdmin: true, deletedAt: null } }),
+      prisma.user.count({ where: { isSuperAdmin: true, deletedAt: null } }),
+      prisma.user.count({
+        where: {
+          deletedAt: null,
+          OR: [{ twoFactorEnabled: true }, { totpEnabled: true }],
+        },
+      }),
+      prisma.user.count({ where: { emailVerifiedAt: { not: null }, deletedAt: null } }),
+      prisma.file.aggregate({ _sum: { size: true } }).then(result => result._sum.size || 0),
+    ]);
+
     const stats = {
       database: {
-        users: await prisma.user.count(),
-        chats: await prisma.chat.count(),
-        messages: await prisma.message.count(),
-        files: await prisma.file.count(),
-        payments: await prisma.payment.count(),
-        apiUsage: await prisma.apiUsage.count()
+        users,
+        chats,
+        messages,
+        files,
+        payments,
+        apiUsage,
+        sessions,
+        activeSessions,
+        apiKeys,
+        activeApiKeys,
+        auditLogs,
       },
       storage: {
-        totalFiles: await prisma.file.count(),
-        totalSize: await prisma.file.aggregate({
-          _sum: { size: true }
-        }).then(result => result._sum.size || 0)
+        totalFiles: files,
+        totalSize: storageTotalSize,
+      },
+      security: {
+        admins,
+        superAdmins,
+        activeSessions,
+        apiKeys,
+        activeApiKeys,
+        twoFactorUsers,
+        emailVerifiedUsers,
       }
     };
 

@@ -1,71 +1,156 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useEffect, useMemo, useState } from "react"
 import {
-  BarChart,
   Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Line,
+  LineChart,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
   XAxis,
   YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  LineChart,
-  Line,
-  PieChart,
-  Pie,
-  Cell,
 } from "recharts"
+import { RefreshCw } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { db } from "@/lib/database"
 import { SidebarTrigger } from "@/components/ui/sidebar"
+import { apiClient } from "@/lib/api"
+import { toast } from "sonner"
 
-const COLORS = ["#0088FE", "#00C49F", "#FFBB28", "#FF8042"]
+const COLORS = ["#0f172a", "#2563eb", "#16a34a", "#f59e0b", "#dc2626", "#7c3aed"]
+
+type AnalyticsPayload = {
+  totalUsers?: number
+  activeUsers?: number
+  totalRevenue?: number
+  totalApiUsage?: number
+  usersByPlan?: Record<string, number>
+  apiUsageByModel?: Array<{ model: string; tokens?: number; count?: number }>
+  revenueByMonth?: Record<string, number>
+}
+
+type UserStatsPayload = {
+  signupTrend?: Array<{ date: string; count: number }>
+  breakdownByPlan?: Record<string, number>
+}
+
+type UsageStatsPayload = {
+  byModel?: Array<{ model: string; provider?: string; tokens?: number; calls?: number; cost?: number }>
+  totalTokens?: number
+  totalCost?: number
+}
+
+type AnalyticsState = {
+  summary: AnalyticsPayload
+  userStats: UserStatsPayload | null
+  usageStats: UsageStatsPayload | null
+}
+
+function rangeFor(value: string) {
+  const days = value === "90d" ? 90 : value === "30d" ? 30 : 7
+  const to = new Date()
+  const from = new Date(to.getTime() - days * 24 * 60 * 60 * 1000)
+  return { from: from.toISOString(), to: to.toISOString() }
+}
+
+function formatNumber(value: unknown) {
+  const n = Number(value || 0)
+  return Number.isFinite(n) ? n.toLocaleString() : "0"
+}
+
+function formatCurrency(value: unknown) {
+  const n = Number(value || 0)
+  return Number.isFinite(n)
+    ? new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(n)
+    : "$0"
+}
+
+function safePercent(part: unknown, total: unknown) {
+  const p = Number(part || 0)
+  const t = Number(total || 0)
+  if (!Number.isFinite(p) || !Number.isFinite(t) || t <= 0) return "0.0"
+  return ((p / t) * 100).toFixed(1)
+}
 
 export default function AnalyticsPage() {
-  const [analytics, setAnalytics] = useState<any>(null)
+  const [analytics, setAnalytics] = useState<AnalyticsState | null>(null)
   const [timeRange, setTimeRange] = useState("7d")
-
-  useEffect(() => {
-    loadAnalytics()
-  }, [timeRange])
+  const [loading, setLoading] = useState(false)
 
   const loadAnalytics = async () => {
+    setLoading(true)
     try {
-      const data = await db.getAnalytics()
+      const range = rangeFor(timeRange)
+      const [summaryResult, userStatsResult, usageStatsResult] = await Promise.allSettled([
+        apiClient.getAnalytics(),
+        apiClient.getAdminUserStats(range),
+        apiClient.getAdminUsageStats(range),
+      ])
 
-      // Generate mock time series data
-      const dates = Array.from({ length: 30 }, (_, i) => {
-        const date = new Date()
-        date.setDate(date.getDate() - (29 - i))
-        return date.toISOString().slice(0, 10)
-      })
-
-      const userGrowth = dates.map((date, i) => ({
-        date,
-        users: Math.floor(Math.random() * 50) + i * 2,
-        revenue: Math.floor(Math.random() * 1000) + i * 50,
-      }))
-
-      const modelUsage = [
-        { name: "ChatGPT", value: 45, usage: 15420 },
-        { name: "Claude", value: 25, usage: 8930 },
-        { name: "Grok", value: 15, usage: 5240 },
-        { name: "DeepSeek", value: 10, usage: 3150 },
-        { name: "Gemini", value: 5, usage: 1680 },
-      ]
+      if (summaryResult.status !== "fulfilled") throw summaryResult.reason
 
       setAnalytics({
-        ...data,
-        userGrowth,
-        modelUsage,
+        summary: summaryResult.value as AnalyticsPayload,
+        userStats: userStatsResult.status === "fulfilled" ? (userStatsResult.value as UserStatsPayload) : null,
+        usageStats: usageStatsResult.status === "fulfilled" ? (usageStatsResult.value as UsageStatsPayload) : null,
       })
-    } catch (error) {
+    } catch (error: any) {
       console.error("Failed to load analytics:", error)
+      toast.error(error?.message || "No se pudieron cargar métricas reales")
+    } finally {
+      setLoading(false)
     }
   }
 
-  if (!analytics) {
+  useEffect(() => {
+    loadAnalytics()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timeRange])
+
+  const userGrowth = useMemo(() => {
+    return (analytics?.userStats?.signupTrend || []).map((row) => ({
+      date: row.date,
+      users: Number(row.count || 0),
+    }))
+  }, [analytics])
+
+  const revenueTrend = useMemo(() => {
+    return Object.entries(analytics?.summary.revenueByMonth || {})
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, revenue]) => ({ date, revenue: Number(revenue || 0) }))
+  }, [analytics])
+
+  const modelUsage = useMemo(() => {
+    const detailed = analytics?.usageStats?.byModel || []
+    if (detailed.length) {
+      return detailed.slice(0, 8).map((model) => ({
+        name: model.model,
+        value: Number(model.calls || 0),
+        usage: Number(model.tokens || 0),
+        cost: Number(model.cost || 0),
+      }))
+    }
+
+    return (analytics?.summary.apiUsageByModel || []).slice(0, 8).map((model) => ({
+      name: model.model,
+      value: Number(model.count || 0),
+      usage: Number(model.tokens || 0),
+      cost: 0,
+    }))
+  }, [analytics])
+
+  const usersByPlan = analytics?.userStats?.breakdownByPlan || analytics?.summary.usersByPlan || {}
+  const totalUsers = Number(analytics?.summary.totalUsers || 0)
+  const totalRevenue = Number(analytics?.summary.totalRevenue || 0)
+  const activeUsers = Number(analytics?.summary.activeUsers || 0)
+  const totalApiUsage = Number(analytics?.summary.totalApiUsage || 0)
+
+  if (!analytics && loading) {
     return (
       <div className="flex-1 space-y-4 sm:space-y-6 p-3 sm:p-4 lg:p-6">
         <div className="animate-pulse">
@@ -88,123 +173,126 @@ export default function AnalyticsPage() {
           <div className="flex items-center gap-2 sm:gap-3">
             <SidebarTrigger className="md:hidden" />
             <div>
-              <h1 className="text-2xl sm:text-3xl font-bold">Analytics</h1>
-              <p className="text-muted-foreground text-sm sm:text-base mt-1">Detailed insights and performance metrics</p>
+              <h1 className="text-2xl sm:text-3xl font-bold">Métricas</h1>
+              <p className="text-muted-foreground text-sm sm:text-base mt-1">
+                Analítica real desde base de datos, pagos y uso API
+              </p>
             </div>
           </div>
         </div>
         <div className="flex gap-1 sm:gap-2 flex-shrink-0 flex-wrap">
-          <Button 
-            variant={timeRange === "7d" ? "default" : "outline"} 
-            onClick={() => setTimeRange("7d")}
-            size="sm"
-            className="text-xs sm:text-sm"
-          >
-            7 Days
-          </Button>
-          <Button 
-            variant={timeRange === "30d" ? "default" : "outline"} 
-            onClick={() => setTimeRange("30d")}
-            size="sm"
-            className="text-xs sm:text-sm"
-          >
-            30 Days
-          </Button>
-          <Button 
-            variant={timeRange === "90d" ? "default" : "outline"} 
-            onClick={() => setTimeRange("90d")}
-            size="sm"
-            className="text-xs sm:text-sm"
-          >
-            90 Days
+          {(["7d", "30d", "90d"] as const).map((range) => (
+            <Button
+              key={range}
+              variant={timeRange === range ? "default" : "outline"}
+              onClick={() => setTimeRange(range)}
+              size="sm"
+              className="text-xs sm:text-sm"
+            >
+              {range === "7d" ? "7 días" : range === "30d" ? "30 días" : "90 días"}
+            </Button>
+          ))}
+          <Button variant="outline" size="sm" onClick={loadAnalytics} disabled={loading} className="gap-2">
+            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+            Recargar
           </Button>
         </div>
       </div>
 
-      {/* User Growth Chart */}
       <Card>
         <CardHeader>
-          <CardTitle>User Growth</CardTitle>
-          <CardDescription>Daily user registrations over time</CardDescription>
+          <CardTitle>Crecimiento de usuarios</CardTitle>
+          <CardDescription>Altas reales registradas por día</CardDescription>
         </CardHeader>
         <CardContent>
-          <ResponsiveContainer width="100%" height={300}>
-            <LineChart data={analytics.userGrowth}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="date" />
-              <YAxis />
-              <Tooltip />
-              <Line type="monotone" dataKey="users" stroke="#8884d8" strokeWidth={2} />
-            </LineChart>
-          </ResponsiveContainer>
+          {userGrowth.length === 0 ? (
+            <div className="h-[300px] content-center text-center text-sm text-muted-foreground">Sin altas en el rango disponible.</div>
+          ) : (
+            <ResponsiveContainer width="100%" height={300}>
+              <LineChart data={userGrowth}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="date" />
+                <YAxis allowDecimals={false} />
+                <Tooltip />
+                <Line type="monotone" dataKey="users" stroke="#2563eb" strokeWidth={2} />
+              </LineChart>
+            </ResponsiveContainer>
+          )}
         </CardContent>
       </Card>
 
       <div className="grid gap-6 md:grid-cols-2">
-        {/* Revenue Chart */}
         <Card>
           <CardHeader>
-            <CardTitle>Revenue Trend</CardTitle>
-            <CardDescription>Daily revenue over time</CardDescription>
+            <CardTitle>Ingresos por mes</CardTitle>
+            <CardDescription>Pagos completados agregados por mes</CardDescription>
           </CardHeader>
           <CardContent>
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={analytics.userGrowth}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="date" />
-                <YAxis />
-                <Tooltip />
-                <Bar dataKey="revenue" fill="#82ca9d" />
-              </BarChart>
-            </ResponsiveContainer>
+            {revenueTrend.length === 0 ? (
+              <div className="h-[300px] content-center text-center text-sm text-muted-foreground">Sin pagos completados.</div>
+            ) : (
+              <ResponsiveContainer width="100%" height={300}>
+                <BarChart data={revenueTrend}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="date" />
+                  <YAxis />
+                  <Tooltip formatter={(value) => formatCurrency(value)} />
+                  <Bar dataKey="revenue" fill="#16a34a" />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
           </CardContent>
         </Card>
 
-        {/* Model Usage Distribution */}
         <Card>
           <CardHeader>
-            <CardTitle>Model Usage Distribution</CardTitle>
-            <CardDescription>Usage breakdown by AI model</CardDescription>
+            <CardTitle>Uso por modelo</CardTitle>
+            <CardDescription>Distribución real por registros de uso API</CardDescription>
           </CardHeader>
           <CardContent>
-            <ResponsiveContainer width="100%" height={300}>
-              <PieChart>
-                <Pie
-                  data={analytics.modelUsage}
-                  cx="50%"
-                  cy="50%"
-                  labelLine={false}
-                  label={({ name, percent }: any) => `${name} ${(percent * 100).toFixed(0)}%`}
-                  outerRadius={80}
-                  fill="#8884d8"
-                  dataKey="value"
-                >
-                  {analytics.modelUsage.map((entry: any, index: number) => (
-                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip />
-              </PieChart>
-            </ResponsiveContainer>
+            {modelUsage.length === 0 ? (
+              <div className="h-[300px] content-center text-center text-sm text-muted-foreground">Sin uso API registrado.</div>
+            ) : (
+              <ResponsiveContainer width="100%" height={300}>
+                <PieChart>
+                  <Pie
+                    data={modelUsage}
+                    cx="50%"
+                    cy="50%"
+                    labelLine={false}
+                    label={({ name, percent }: any) => `${name} ${(percent * 100).toFixed(0)}%`}
+                    outerRadius={80}
+                    fill="#8884d8"
+                    dataKey="value"
+                  >
+                    {modelUsage.map((entry, index) => (
+                      <Cell key={`cell-${entry.name}`} fill={COLORS[index % COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip />
+                </PieChart>
+              </ResponsiveContainer>
+            )}
           </CardContent>
         </Card>
       </div>
 
-      {/* Detailed Metrics */}
       <div className="grid gap-6 md:grid-cols-3">
         <Card>
           <CardHeader>
-            <CardTitle>Top Performing Models</CardTitle>
+            <CardTitle>Modelos con uso</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="space-y-3">
-              {analytics.modelUsage.map((model: any, index: number) => (
-                <div key={model.name} className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <div className="w-3 h-3 rounded-full" style={{ backgroundColor: COLORS[index % COLORS.length] }} />
-                    <span className="text-sm font-medium">{model.name}</span>
+              {modelUsage.length === 0 ? (
+                <p className="text-sm text-muted-foreground">Sin registros.</p>
+              ) : modelUsage.map((model, index) => (
+                <div key={model.name} className="flex items-center justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <div className="h-3 w-3 rounded-full" style={{ backgroundColor: COLORS[index % COLORS.length] }} />
+                    <span className="truncate text-sm font-medium">{model.name}</span>
                   </div>
-                  <span className="text-sm text-muted-foreground">{model.usage.toLocaleString()}</span>
+                  <span className="text-sm text-muted-foreground">{formatNumber(model.usage)}</span>
                 </div>
               ))}
             </div>
@@ -213,49 +301,39 @@ export default function AnalyticsPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>User Plan Distribution</CardTitle>
+            <CardTitle>Usuarios por plan</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="space-y-3">
-              <div className="flex justify-between">
-                <span className="text-sm">Free Plan</span>
-                <span className="text-sm font-medium">{analytics.usersByPlan.Free}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-sm">Pro Plan</span>
-                <span className="text-sm font-medium">{analytics.usersByPlan.Pro}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-sm">Enterprise Plan</span>
-                <span className="text-sm font-medium">{analytics.usersByPlan.Enterprise}</span>
-              </div>
+              {Object.entries(usersByPlan).length === 0 ? (
+                <p className="text-sm text-muted-foreground">Sin datos de planes.</p>
+              ) : Object.entries(usersByPlan).map(([plan, count]) => (
+                <div key={plan} className="flex justify-between gap-3">
+                  <span className="text-sm">{plan.replace("_", " ")}</span>
+                  <span className="text-sm font-medium">{formatNumber(count)}</span>
+                </div>
+              ))}
             </div>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
-            <CardTitle>Key Metrics</CardTitle>
+            <CardTitle>Métricas clave</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="space-y-3">
-              <div className="flex justify-between">
-                <span className="text-sm">Avg. Revenue per User</span>
-                <span className="text-sm font-medium">
-                  ${(analytics.totalRevenue / analytics.totalUsers).toFixed(2)}
-                </span>
+              <div className="flex justify-between gap-3">
+                <span className="text-sm">Ingresos por usuario</span>
+                <span className="text-sm font-medium">{formatCurrency(totalUsers > 0 ? totalRevenue / totalUsers : 0)}</span>
               </div>
-              <div className="flex justify-between">
-                <span className="text-sm">Active User Rate</span>
-                <span className="text-sm font-medium">
-                  {((analytics.activeUsers / analytics.totalUsers) * 100).toFixed(1)}%
-                </span>
+              <div className="flex justify-between gap-3">
+                <span className="text-sm">Usuarios activos</span>
+                <span className="text-sm font-medium">{safePercent(activeUsers, totalUsers)}%</span>
               </div>
-              <div className="flex justify-between">
-                <span className="text-sm">Avg. API Calls per User</span>
-                <span className="text-sm font-medium">
-                  {(analytics.totalApiCalls / analytics.totalUsers).toFixed(0)}
-                </span>
+              <div className="flex justify-between gap-3">
+                <span className="text-sm">Registros API por usuario</span>
+                <span className="text-sm font-medium">{formatNumber(totalUsers > 0 ? totalApiUsage / totalUsers : 0)}</span>
               </div>
             </div>
           </CardContent>
