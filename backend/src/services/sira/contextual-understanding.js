@@ -37,6 +37,17 @@ const EMPTY_VALUE_CONTEXT = Object.freeze({
   confidence: 0,
 });
 
+const EMPTY_GOAL_UNDERSTANDING = Object.freeze({
+  source: 'deterministic_goal_understanding',
+  explicit_request: null,
+  inferred_user_goal: null,
+  desired_outcome: null,
+  continuity_anchors: [],
+  missing_context: [],
+  proactive_next_steps: [],
+  confidence: 0,
+});
+
 function clampText(value, max = 500) {
   const text = String(value || '').trim().replace(/\s+/g, ' ');
   if (!text) return '';
@@ -119,10 +130,11 @@ function buildEffectiveText({
   lexiconBlock,
   repairAddendum,
   valueContextBlock,
+  goalUnderstandingBlock,
   resolvedPrompt,
 }) {
   const basePrompt = String(resolvedPrompt || originalText || '').trim();
-  const blocks = [corefBlock, lexiconBlock, repairAddendum, valueContextBlock]
+  const blocks = [corefBlock, lexiconBlock, repairAddendum, valueContextBlock, goalUnderstandingBlock]
     .filter((block) => typeof block === 'string' && block.trim().length > 0);
   if (blocks.length === 0 || basePrompt.length === 0) return basePrompt;
   const effective = `${blocks.join('\n\n')}\n\nSOLICITUD_USUARIO:\n${basePrompt}`;
@@ -292,7 +304,7 @@ function inferTaskTrajectory(text, recentTurns = [], attachments = [], valueCont
   const recent = Array.isArray(recentTurns) ? recentTurns.map((turn) => turn.text).join('\n') : '';
   const combined = `${current}\n${recent}`;
   const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
-  const isEndToEnd = /\b(de\s+inicio\s+a\s+fin|inicio\s+a\s+fin|end[-\s]?to[-\s]?end|completa(?:r|me)?\s+tareas?|hasta\s+que\s+(?:quede|est[eé]|funcione)|trabaja\s+de\s+manera\s+aut[oó]noma|programemos|codifica|implementemos|investiga(?:r)?\s+.+\s+(?:y|e)\s+(?:hag[aá]moslo|programemos|codifica)|sube\s+(?:los\s+)?cambios\s+a\s+github|ci\s+(?:en\s+)?verde)\b/i.test(combined);
+  const isEndToEnd = /\b(de\s+inicio\s+a\s+fin|inicio\s+a\s+fin|end[-\s]?to[-\s]?end|completa(?:r|me)?\s+tareas?|ejecuta(?:r)?\s+tareas?\s+completas?|desarrollar\s+algo\s+complejo|hasta\s+que\s+(?:quede|est[eé]|funcione)|trabaja\s+de\s+manera\s+aut[oó]noma|programemos|codifica|implementemos|investiga(?:r)?\s+.+\s+(?:y|e)\s+(?:hag[aá]moslo|programemos|codifica)|sube\s+(?:los\s+)?cambios\s+a\s+github|ci\s+(?:en\s+)?verde)\b/i.test(combined);
   const needsResearch = /\b(investiga|estudios?|papers?|claude|chatgpt|openai|anthropic|fuentes?|documentaci[oó]n|research)\b/i.test(combined);
   const needsImplementation = /\b(implementa(?:r|mos)?|programa(?:r|mos)?|codifica|software|c[oó]digo|repo|github|ci|tests?|deploy|main)\b/i.test(combined);
   const needsValidation = /\b(valida|verifica|tests?|ci|estatus\s+verde|green|calidad|profesional|correctamente)\b/i.test(combined);
@@ -608,6 +620,135 @@ function buildContextualValuePromptBlock(valueContext) {
   return lines.join('\n');
 }
 
+function inferGoalUnderstanding({
+  originalText,
+  recentTurns = [],
+  attachments = [],
+  valueContext = EMPTY_VALUE_CONTEXT,
+  coreference = null,
+  repairDetection = null,
+} = {}) {
+  const currentText = String(originalText || '').trim();
+  const recentUserTurns = Array.isArray(recentTurns)
+    ? recentTurns.filter((turn) => turn.role === 'user').map((turn) => turn.text).filter(Boolean)
+    : [];
+  const recentAssistantTurns = Array.isArray(recentTurns)
+    ? recentTurns.filter((turn) => turn.role === 'assistant').map((turn) => turn.text).filter(Boolean)
+    : [];
+  const combined = `${currentText}\n${recentUserTurns.join('\n')}`;
+  const trajectory = valueContext?.task_trajectory || EMPTY_VALUE_CONTEXT.task_trajectory;
+  const values = Array.isArray(valueContext?.values) ? valueContext.values : [];
+  const constraints = Array.isArray(valueContext?.constraints) ? valueContext.constraints : [];
+  const corefRefs = Array.isArray(coreference?.references) ? coreference.references : [];
+  const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
+
+  const continuityAnchors = [];
+  if (recentUserTurns.length > 0) continuityAnchors.push(`recent_user_context: ${clampText(recentUserTurns.at(-1), 180)}`);
+  if (recentAssistantTurns.length > 0) continuityAnchors.push(`recent_assistant_context: ${clampText(recentAssistantTurns.at(-1), 180)}`);
+  if (corefRefs.length > 0) continuityAnchors.push(`resolved_references: ${corefRefs.length}`);
+  for (const constraint of constraints.slice(0, 3)) {
+    continuityAnchors.push(`constraint:${constraint.id}`);
+  }
+
+  const wantsUnderstanding = /\b(comprensi[oó]n|entienda|entender(?:me)?|contexto|hilo|conversaci[oó]n|intenci[oó]n|lo\s+que\s+(?:quiero|quiere)\s+lograr|objetivo|anticip(?:a|ar|arnos)|antepon(?:er|ernos)|coexistir|tareas?\s+completas?)\b/i.test(combined);
+  const wantsCompleteExecution = trajectory.mode !== 'single_turn'
+    || /\b(ejecuta(?:r)?\s+tareas?\s+completas?|desarrollar\s+algo\s+complejo|de\s+inicio\s+a\s+fin|no\s+pares|hasta\s+comprobar|verifica(?:r)?)\b/i.test(combined);
+  const hasContextDependency = corefRefs.length > 0
+    || repairDetection?.isRepair
+    || /\b(esto|eso|lo\s+anterior|todo\s+el\s+hilo|contexto\s+completo|como\s+dije|ahora\s+s[ií])\b/i.test(currentText)
+    || recentUserTurns.length >= 2;
+
+  let confidence = 0;
+  if (wantsUnderstanding) confidence = Math.max(confidence, 0.86);
+  if (wantsCompleteExecution) confidence = Math.max(confidence, 0.82);
+  if (hasContextDependency) confidence = Math.max(confidence, 0.74);
+  if (values.some((value) => value.id === 'contextual_fidelity')) confidence = Math.max(confidence, 0.88);
+  if (values.some((value) => value.id === 'execution_reliability')) confidence = Math.max(confidence, 0.86);
+  if (hasAttachments) confidence = Math.max(confidence, 0.68);
+
+  if (confidence < 0.65) return { ...EMPTY_GOAL_UNDERSTANDING };
+
+  const inferredPieces = [];
+  if (wantsUnderstanding || values.some((value) => value.id === 'contextual_fidelity')) {
+    inferredPieces.push('understand the full conversational context and the user objective before answering');
+  }
+  if (wantsCompleteExecution || values.some((value) => value.id === 'execution_reliability')) {
+    inferredPieces.push('turn simple ideas into complete planned execution with validation');
+  }
+  if (values.some((value) => value.id === 'human_ai_collaboration')) {
+    inferredPieces.push('cooperate with the human while preserving their intent and control');
+  }
+  if (constraints.length > 0) {
+    inferredPieces.push('respect hard constraints from the thread');
+  }
+
+  const proactiveSteps = ['reconstruct_thread_goal', 'identify_missing_context_before_guessing'];
+  if (trajectory.mode !== 'single_turn' || wantsCompleteExecution) proactiveSteps.push('plan_execute_validate');
+  if (hasAttachments || trajectory.phases?.includes('ground_in_attachments')) proactiveSteps.push('ground_answer_in_attachments');
+  if (trajectory.phases?.includes('validate_with_tests')) proactiveSteps.push('self_check_before_delivery');
+  if (constraints.length > 0) proactiveSteps.push('enforce_thread_constraints');
+
+  const missingContext = [];
+  if (/\b(el\s+documento|la\s+imagen|el\s+archivo|adjunto)\b/i.test(currentText) && !hasAttachments && corefRefs.length === 0) {
+    missingContext.push('referenced_attachment_not_available');
+  }
+  if (/\b(contin[uú]a|sigue|hazlo|corr[ií]gelo)\b/i.test(currentText) && recentTurns.length === 0) {
+    missingContext.push('referenced_prior_turn_not_available');
+  }
+
+  return {
+    source: EMPTY_GOAL_UNDERSTANDING.source,
+    explicit_request: clampText(currentText, 240) || null,
+    inferred_user_goal: inferredPieces.length > 0
+      ? inferredPieces.join('; ')
+      : clampText(trajectory.objective || currentText, 240),
+    desired_outcome: wantsCompleteExecution
+      ? 'complete_task_execution_with_verified_result'
+      : 'context_aware_answer_that_matches_user_intent',
+    continuity_anchors: Array.from(new Set(continuityAnchors)).slice(0, 8),
+    missing_context: missingContext.slice(0, 5),
+    proactive_next_steps: Array.from(new Set(proactiveSteps)).slice(0, 8),
+    confidence,
+  };
+}
+
+function summarizeGoalUnderstanding(goalUnderstanding) {
+  const goal = goalUnderstanding && typeof goalUnderstanding === 'object'
+    ? goalUnderstanding
+    : EMPTY_GOAL_UNDERSTANDING;
+  return {
+    source: String(goal.source || EMPTY_GOAL_UNDERSTANDING.source),
+    explicit_request: goal.explicit_request ? clampText(goal.explicit_request, 240) : null,
+    inferred_user_goal: goal.inferred_user_goal ? clampText(goal.inferred_user_goal, 360) : null,
+    desired_outcome: goal.desired_outcome ? clampText(goal.desired_outcome, 120) : null,
+    continuity_anchors: Array.isArray(goal.continuity_anchors)
+      ? goal.continuity_anchors.map((item) => clampText(item, 220)).filter(Boolean).slice(0, 8)
+      : [],
+    missing_context: Array.isArray(goal.missing_context)
+      ? goal.missing_context.map(String).filter(Boolean).slice(0, 5)
+      : [],
+    proactive_next_steps: Array.isArray(goal.proactive_next_steps)
+      ? goal.proactive_next_steps.map(String).filter(Boolean).slice(0, 8)
+      : [],
+    confidence: typeof goal.confidence === 'number' ? Math.max(0, Math.min(1, goal.confidence)) : 0,
+  };
+}
+
+function buildGoalUnderstandingPromptBlock(goalUnderstanding) {
+  const goal = summarizeGoalUnderstanding(goalUnderstanding);
+  if (!goal.inferred_user_goal || goal.confidence < 0.65) return null;
+  const lines = [
+    '## GOAL_UNDERSTANDING_FRAME',
+    `- confidence: ${goal.confidence.toFixed(2)}`,
+    `- inferred_user_goal: ${goal.inferred_user_goal}`,
+  ];
+  if (goal.desired_outcome) lines.push(`- desired_outcome: ${goal.desired_outcome}`);
+  for (const anchor of goal.continuity_anchors.slice(0, 4)) lines.push(`- continuity_anchor: ${anchor}`);
+  for (const step of goal.proactive_next_steps.slice(0, 6)) lines.push(`- proactive_next_step: ${step}`);
+  for (const missing of goal.missing_context.slice(0, 3)) lines.push(`- missing_context: ${missing}`);
+  return lines.join('\n');
+}
+
 async function safeLookupTerms(lexicon, { userId, prompt }) {
   if (!lexicon || typeof lexicon.lookupTerms !== 'function') return [];
   try {
@@ -683,6 +824,15 @@ async function analyzeContextualTurn({
       coreference: coref,
     });
     const valueContextBlock = buildContextualValuePromptBlock(valueContext);
+    const goalUnderstanding = inferGoalUnderstanding({
+      originalText,
+      recentTurns,
+      attachments,
+      valueContext,
+      coreference: coref,
+      repairDetection,
+    });
+    const goalUnderstandingBlock = buildGoalUnderstandingPromptBlock(goalUnderstanding);
 
     const effectiveText = buildEffectiveText({
       originalText,
@@ -690,6 +840,7 @@ async function analyzeContextualTurn({
       lexiconBlock,
       repairAddendum: repairContext.systemAddendum,
       valueContextBlock,
+      goalUnderstandingBlock,
       resolvedPrompt: coref.resolvedPrompt || originalText,
     });
     const applied = effectiveText !== originalText;
@@ -704,6 +855,7 @@ async function analyzeContextualTurn({
       repair: summarizeRepair(repairDetection, repairContext),
       misunderstanding_signals: recordedSignals,
       value_context: summarizeValueContext(valueContext),
+      goal_understanding: summarizeGoalUnderstanding(goalUnderstanding),
     };
 
     return {
@@ -741,6 +893,7 @@ async function analyzeContextualTurn({
         repair: { is_repair: false, repair_type: null, contract_override: null },
         misunderstanding_signals: [],
         value_context: summarizeValueContext(EMPTY_VALUE_CONTEXT),
+        goal_understanding: summarizeGoalUnderstanding(EMPTY_GOAL_UNDERSTANDING),
       },
       error: error && error.message ? error.message : String(error),
     };
@@ -761,6 +914,9 @@ module.exports = {
   buildContextualValuePromptBlock,
   inferTaskTrajectory,
   summarizeTaskTrajectory,
+  inferGoalUnderstanding,
+  summarizeGoalUnderstanding,
+  buildGoalUnderstandingPromptBlock,
   constants: {
     MAX_RECENT_TURNS,
     MAX_EFFECTIVE_TEXT,

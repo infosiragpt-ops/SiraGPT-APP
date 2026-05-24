@@ -71,6 +71,7 @@ const TASK_ENVELOPE_SCHEMA = Object.freeze({
         lexicon_terms: { type: "array", items: { type: "object" } },
         repair: { type: "object" },
         misunderstanding_signals: { type: "array", items: { type: "string" } },
+        goal_understanding: { type: "object" },
         value_context: {
           type: "object",
           required: ["source", "values", "primary_domains", "constraints", "collaboration_mode", "response_posture", "confidence"],

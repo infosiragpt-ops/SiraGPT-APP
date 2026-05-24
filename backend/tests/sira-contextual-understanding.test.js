@@ -156,6 +156,28 @@ test('analyzeContextualTurn builds an end-to-end task trajectory for contextual 
   assert.ok(result.envelopeContext.value_context.task_trajectory.success_criteria.some(c => /inicio|workflow|delivery|propuesta|Carry/i.test(c)));
 });
 
+test('analyzeContextualTurn infers the user goal and proactive steps from full-thread understanding requests', async () => {
+  const result = await contextual.analyzeContextualTurn({
+    userId: 'u-goal',
+    conversationId: 'c-goal',
+    userMessage: 'mejora el funcionamiento y comprensión textual de lo que el usuario quiere lograr, entiende todo el hilo y ejecuta tareas completas',
+    history: [
+      { role: 'user', content: 'A veces no entiende lo que le pido.' },
+      { role: 'assistant', content: 'Puedo revisar el flujo de contexto e intención.' },
+    ],
+    attachments: [],
+    requestId: 'req-goal',
+  });
+
+  assert.equal(result.applied, true);
+  assert.match(result.effectiveText, /GOAL_UNDERSTANDING_FRAME/);
+  assert.match(result.effectiveText, /reconstruct_thread_goal/);
+  assert.equal(result.envelopeContext.goal_understanding.desired_outcome, 'complete_task_execution_with_verified_result');
+  assert.ok(result.envelopeContext.goal_understanding.confidence >= 0.86);
+  assert.ok(result.envelopeContext.goal_understanding.inferred_user_goal.includes('full conversational context'));
+  assert.ok(result.envelopeContext.goal_understanding.proactive_next_steps.includes('plan_execute_validate'));
+});
+
 test('analyzeContextualTurn is a no-op when there is no contextual signal', async () => {
   const result = await contextual.analyzeContextualTurn({
     userId: 'u-clean',
@@ -170,6 +192,7 @@ test('analyzeContextualTurn is a no-op when there is no contextual signal', asyn
   assert.equal(result.effectiveText, 'genera un informe profesional en Word sobre energia solar');
   assert.equal(result.envelopeContext.applied, false);
   assert.deepEqual(result.envelopeContext.value_context.values, []);
+  assert.equal(result.envelopeContext.goal_understanding.confidence, 0);
 });
 
 test('analyzeContextualTurn fails open when a dependency throws', async () => {

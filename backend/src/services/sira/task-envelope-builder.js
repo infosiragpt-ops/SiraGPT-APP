@@ -508,16 +508,31 @@ function deriveGoalModel(text, taxonomyIntent, attachments, contextualUnderstand
   if (hardConstraints.length > 0) {
     successCriteria.push(`Preservar restricciones contextuales: ${hardConstraints.join(", ")}.`);
   }
+  const goalUnderstanding = normalizeGoalUnderstanding(contextualUnderstanding?.goal_understanding);
+  if (goalUnderstanding.inferred_user_goal) {
+    successCriteria.push(`Resolver el objetivo inferido del usuario: ${goalUnderstanding.inferred_user_goal}.`);
+  }
+  if (goalUnderstanding.proactive_next_steps.length > 0) {
+    successCriteria.push(`Aplicar pasos proactivos: ${goalUnderstanding.proactive_next_steps.slice(0, 4).join(", ")}.`);
+  }
   const nonGoals = ["No inventar fuentes.", "No modificar archivos originales sin confirmacion.", "No realizar acciones destructivas."];
   if (valueContext.constraints.some(constraint => constraint.id === "preserve_interface")) {
     nonGoals.push("No alterar la interfaz ni los contratos visuales existentes.");
   }
+  const assumptions = deriveAssumptions(taxonomyIntent);
+  if (goalUnderstanding.confidence >= 0.75 && goalUnderstanding.missing_context.length === 0) {
+    assumptions.push({
+      assumption: "Usar el objetivo inferido del hilo como guia principal antes de responder o ejecutar.",
+      confidence: Math.min(0.92, goalUnderstanding.confidence),
+      needs_user_confirmation: false,
+    });
+  }
   return {
-    user_goal: text.length > 200 ? `${text.slice(0, 200)}…` : text,
+    user_goal: goalUnderstanding.inferred_user_goal || (text.length > 200 ? `${text.slice(0, 200)}…` : text),
     business_goal: null,
     success_criteria: successCriteria,
     non_goals: nonGoals,
-    assumptions: deriveAssumptions(taxonomyIntent),
+    assumptions,
   };
 }
 
@@ -1412,6 +1427,7 @@ function normalizeContextualUnderstanding(contextualUnderstanding) {
       ? contextualUnderstanding.misunderstanding_signals.map(String).slice(0, 10)
       : [],
     value_context: normalizeContextualValueContext(contextualUnderstanding.value_context),
+    goal_understanding: normalizeGoalUnderstanding(contextualUnderstanding.goal_understanding),
   };
 }
 
@@ -1432,6 +1448,29 @@ function compactContextualUnderstanding(contextualUnderstanding) {
     response_posture: normalized.value_context.response_posture,
     response_type: normalized.value_context.response_type,
     constraint_count: normalized.value_context.constraints.length,
+    goal_understanding_confidence: normalized.goal_understanding.confidence,
+    desired_outcome: normalized.goal_understanding.desired_outcome,
+    proactive_next_steps: normalized.goal_understanding.proactive_next_steps,
+  };
+}
+
+function normalizeGoalUnderstanding(goalUnderstanding) {
+  const goal = goalUnderstanding && typeof goalUnderstanding === "object" ? goalUnderstanding : {};
+  return {
+    source: String(goal.source || "deterministic_goal_understanding"),
+    explicit_request: goal.explicit_request ? String(goal.explicit_request).slice(0, 240) : null,
+    inferred_user_goal: goal.inferred_user_goal ? String(goal.inferred_user_goal).slice(0, 360) : null,
+    desired_outcome: goal.desired_outcome ? String(goal.desired_outcome).slice(0, 120) : null,
+    continuity_anchors: Array.isArray(goal.continuity_anchors)
+      ? goal.continuity_anchors.map(String).filter(Boolean).slice(0, 8)
+      : [],
+    missing_context: Array.isArray(goal.missing_context)
+      ? goal.missing_context.map(String).filter(Boolean).slice(0, 5)
+      : [],
+    proactive_next_steps: Array.isArray(goal.proactive_next_steps)
+      ? goal.proactive_next_steps.map(String).filter(Boolean).slice(0, 8)
+      : [],
+    confidence: clamp01(Number(goal.confidence || 0)),
   };
 }
 
@@ -1445,6 +1484,7 @@ module.exports = {
   deriveQualityPlan,
   normalizeContextualUnderstanding,
   normalizeContextualValueContext,
+  normalizeGoalUnderstanding,
   compactContextualUnderstanding,
   compactContextualValueContext,
 };

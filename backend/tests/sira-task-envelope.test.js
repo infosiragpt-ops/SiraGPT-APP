@@ -247,6 +247,60 @@ describe("task-envelope-builder", () => {
     expect(r.envelope.output_contract.primary_output.required).toBe(true);
   });
 
+  test("goal understanding becomes the envelope goal and proactive success criteria", async () => {
+    const r = await buildEnvelope({
+      text: "## GOAL_UNDERSTANDING_FRAME\n- confidence: 0.88\n- inferred_user_goal: understand the full conversational context and the user objective before answering; turn simple ideas into complete planned execution with validation\n- desired_outcome: complete_task_execution_with_verified_result\n- proactive_next_step: reconstruct_thread_goal\n- proactive_next_step: plan_execute_validate\n\nSOLICITUD_USUARIO:\nmejora la comprensión textual del hilo",
+      originalText: "mejora la comprensión textual del hilo",
+      contextualUnderstanding: {
+        applied: true,
+        original_text: "mejora la comprensión textual del hilo",
+        effective_text: "mejora la comprensión textual del hilo",
+        recent_turn_count: 3,
+        coreference: { source: "not_run", latency_ms: 0, references: [] },
+        lexicon_terms: [],
+        repair: { is_repair: false, repair_type: null, contract_override: null },
+        misunderstanding_signals: [],
+        value_context: {
+          source: "deterministic_contextual_value_mapper",
+          values: [
+            { id: "contextual_fidelity", domain: "epistemic", label: "Contextual fidelity", evidence: "full thread", confidence: 0.88 },
+          ],
+          primary_domains: ["epistemic"],
+          constraints: [],
+          task_trajectory: {
+            mode: "end_to_end_execution",
+            objective: "mejora la comprensión textual del hilo",
+            phases: ["understand_full_context", "build_execution_plan", "validate_with_tests"],
+            success_criteria: ["Understand the full thread."],
+            stop_conditions: [],
+            confidence: 0.86,
+          },
+          collaboration_mode: "autonomous_execution",
+          response_posture: "support_with_guardrails",
+          response_type: "strong_support",
+          confidence: 0.88,
+        },
+        goal_understanding: {
+          source: "deterministic_goal_understanding",
+          explicit_request: "mejora la comprensión textual del hilo",
+          inferred_user_goal: "understand the full conversational context and the user objective before answering; turn simple ideas into complete planned execution with validation",
+          desired_outcome: "complete_task_execution_with_verified_result",
+          continuity_anchors: ["recent_user_context: A veces no entiende lo que pido."],
+          missing_context: [],
+          proactive_next_steps: ["reconstruct_thread_goal", "plan_execute_validate"],
+          confidence: 0.88,
+        },
+      },
+    });
+
+    expect(r.validation.ok).toBe(true);
+    expect(r.envelope.goal_model.user_goal).toContain("understand the full conversational context");
+    expect(r.envelope.goal_model.success_criteria.some(c => c.includes("Resolver el objetivo inferido"))).toBe(true);
+    expect(r.envelope.goal_model.success_criteria.some(c => c.includes("reconstruct_thread_goal"))).toBe(true);
+    expect(r.envelope.goal_model.assumptions.some(a => a.assumption.includes("objetivo inferido del hilo"))).toBe(true);
+    expect(r.envelope.contextual_understanding.goal_understanding.desired_outcome).toBe("complete_task_execution_with_verified_result");
+  });
+
   test("end-to-end contextual trajectory expands workflow and validation gates", async () => {
     const r = await buildEnvelope({
       text: "## CONTEXTUAL_VALUE_FRAME\n- collaboration_mode: autonomous_execution\n- task_trajectory: end_to_end_execution (0.90)\n- trajectory_phases: understand_full_context -> research_current_best_practices -> build_execution_plan -> implement_changes -> validate_with_tests -> publish_and_monitor -> deliver_concise_status\n\nSOLICITUD_USUARIO:\ninvestiga Claude y ChatGPT, implementa y deja CI verde",
