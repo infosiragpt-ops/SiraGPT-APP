@@ -12,6 +12,8 @@ FRONTEND_URL="${FRONTEND_URL:-https://siragpt.com/auth/login}"
 API_HEALTH_URL="${API_HEALTH_URL:-https://api.siragpt.com/health}"
 GOOGLE_AUTH_URL="${GOOGLE_AUTH_URL:-https://api.siragpt.com/api/auth/google}"
 EXPECTED_GOOGLE_REDIRECT_URI="${EXPECTED_GOOGLE_REDIRECT_URI:-https://api.siragpt.com/api/auth/google/callback}"
+AUTH_CSRF_URL="${AUTH_CSRF_URL:-https://api.siragpt.com/api/auth/csrf-token}"
+AUTH_LOGIN_URL="${AUTH_LOGIN_URL:-https://api.siragpt.com/api/auth/login}"
 
 export NEXT_PUBLIC_API_URL="${NEXT_PUBLIC_API_URL:-https://api.siragpt.com/api}"
 export NEXT_PUBLIC_URL="${NEXT_PUBLIC_URL:-https://siragpt.com}"
@@ -164,6 +166,57 @@ read_google_redirect_uri() {
   ' "$location"
 }
 
+verify_auth_login_path() {
+  local cookie_jar csrf_payload csrf_token login_payload status
+
+  cookie_jar="$(mktemp)"
+  trap 'rm -f "$cookie_jar"' RETURN
+
+  csrf_payload="$(curl -fsS -c "$cookie_jar" "$AUTH_CSRF_URL")" \
+    || fail "Auth CSRF endpoint failed: $AUTH_CSRF_URL"
+
+  csrf_token="$(
+    node -e '
+      try {
+        const payload = JSON.parse(process.argv[1] || "{}");
+        process.stdout.write(payload.csrfToken || "");
+      } catch (_) {
+        process.exit(1);
+      }
+    ' "$csrf_payload"
+  )" || fail "Auth CSRF endpoint returned invalid JSON"
+
+  [[ -n "$csrf_token" ]] || fail "Auth CSRF endpoint did not return csrfToken"
+
+  login_payload="$(
+    node -e '
+      const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      process.stdout.write(JSON.stringify({
+        email: `deploy-smoke-${suffix}@example.invalid`,
+        password: `definitely-not-a-real-password-${suffix}`
+      }));
+    '
+  )"
+
+  status="$(
+    curl -sS -o /dev/null -w '%{http_code}' \
+      -b "$cookie_jar" -c "$cookie_jar" \
+      -H "Content-Type: application/json" \
+      -H "X-CSRF-Token: $csrf_token" \
+      --data "$login_payload" \
+      "$AUTH_LOGIN_URL" || true
+  )"
+
+  rm -f "$cookie_jar"
+  trap - RETURN
+
+  if [[ "$status" != "401" ]]; then
+    fail "Auth login smoke expected 401 for invalid credentials, got ${status:-none}: $AUTH_LOGIN_URL"
+  fi
+
+  log "Auth login smoke is correct (invalid credentials return 401)"
+}
+
 require_command git
 require_command docker
 require_command pm2
@@ -198,6 +251,9 @@ cleanup_docker_space
 log "Installing backend production dependencies"
 (cd backend && npm install --omit=dev --no-audit --no-fund)
 
+log "Generating Prisma client and applying pending migrations"
+(cd backend && npx prisma generate && npx prisma migrate deploy)
+
 log "Building frontend Docker image with NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL"
 docker compose -f "$COMPOSE_FILE" build "$FRONTEND_SERVICE"
 
@@ -208,6 +264,7 @@ restart_pm2_backend
 
 wait_for_http "API health" "$API_HEALTH_URL" 30 2
 wait_for_http "Frontend login" "$FRONTEND_URL" 30 2
+verify_auth_login_path
 
 actual_redirect_uri="$(read_google_redirect_uri)"
 if [[ "$actual_redirect_uri" != "$EXPECTED_GOOGLE_REDIRECT_URI" ]]; then
