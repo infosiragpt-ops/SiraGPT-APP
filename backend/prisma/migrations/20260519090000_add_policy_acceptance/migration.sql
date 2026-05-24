@@ -20,7 +20,7 @@ BEGIN
   ) THEN
     ALTER TABLE "policy_acceptance"
       ADD CONSTRAINT "policy_acceptance_userId_fkey"
-      FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+      FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
   END IF;
 END
 $$;

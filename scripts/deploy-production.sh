@@ -827,6 +827,19 @@ SQL
   )
 }
 
+repair_session_fingerprint_migration() {
+  local migration_name="20260519020000_add_session_fingerprint"
+
+  log "Repairing Prisma migration state: ${migration_name}"
+  (
+    cd backend
+    npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
+ALTER TABLE "sessions" ADD COLUMN IF NOT EXISTS "fingerprint" TEXT;
+SQL
+    resolve_prisma_migration_applied "${migration_name}"
+  )
+}
+
 extract_prisma_migration_name() {
   node -e '
     const fs = require("fs");
@@ -879,6 +892,9 @@ repair_known_prisma_migration() {
       ;;
     20260515220000_add_admin_connections)
       repair_admin_connections_migration
+      ;;
+    20260519020000_add_session_fingerprint)
+      repair_session_fingerprint_migration
       ;;
     20260420000000_rag_store)
       repair_optional_pgvector_migration "$migration_name" "Persistent RAG storage"
