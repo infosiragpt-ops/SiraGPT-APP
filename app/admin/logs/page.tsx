@@ -123,8 +123,8 @@ export default function AdminLogsPage() {
   }, [rows])
 
   return (
-    <div className="flex-1 space-y-4 sm:space-y-6 p-3 sm:p-4 lg:p-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+    <div className="min-w-0 max-w-full flex-1 space-y-4 overflow-x-hidden p-3 sm:space-y-6 sm:p-4 lg:p-6">
+      <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
           <div className="flex items-center gap-2 sm:gap-3">
             <SidebarTrigger className="md:hidden" />
@@ -136,32 +136,32 @@ export default function AdminLogsPage() {
             </div>
           </div>
         </div>
-        <Button variant="outline" size="sm" onClick={() => load(page)} disabled={loading} className="gap-2">
+        <Button variant="outline" size="sm" onClick={() => load(page)} disabled={loading} className="w-full gap-2 sm:w-auto">
           <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
           Recargar
         </Button>
       </div>
 
-      <div className="grid gap-3 md:grid-cols-4">
-        <Card>
+      <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <Card className="min-w-0">
           <CardHeader className="pb-2">
             <CardDescription>Eventos visibles</CardDescription>
             <CardTitle className="flex items-center gap-2 text-2xl"><TerminalSquare className="h-5 w-5 text-sky-500" />{stats.total}</CardTitle>
           </CardHeader>
         </Card>
-        <Card>
+        <Card className="min-w-0">
           <CardHeader className="pb-2">
             <CardDescription>Errores críticos</CardDescription>
             <CardTitle className="flex items-center gap-2 text-2xl"><ShieldAlert className="h-5 w-5 text-red-500" />{stats.errors}</CardTitle>
           </CardHeader>
         </Card>
-        <Card>
+        <Card className="min-w-0">
           <CardHeader className="pb-2">
             <CardDescription>Advertencias</CardDescription>
             <CardTitle className="flex items-center gap-2 text-2xl"><AlertTriangle className="h-5 w-5 text-amber-500" />{stats.warnings}</CardTitle>
           </CardHeader>
         </Card>
-        <Card>
+        <Card className="min-w-0">
           <CardHeader className="pb-2">
             <CardDescription>Fallos API</CardDescription>
             <CardTitle className="flex items-center gap-2 text-2xl"><Clock3 className="h-5 w-5 text-violet-500" />{stats.api}</CardTitle>
@@ -169,17 +169,17 @@ export default function AdminLogsPage() {
         </Card>
       </div>
 
-      <Card>
-        <CardHeader>
+      <Card className="min-w-0">
+        <CardHeader className="px-3 sm:px-6">
           <CardTitle>Investigación</CardTitle>
           <CardDescription>
             Busca por email, request id, ruta, acción o mensaje. Los valores sensibles se redactan antes de guardarse.
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid gap-2 md:grid-cols-[220px_1fr]">
+        <CardContent className="space-y-4 px-3 sm:px-6">
+          <div className="grid min-w-0 gap-2 sm:grid-cols-[220px_1fr]">
             <Select value={filter} onValueChange={(value) => { setFilter(value); setPage(1) }}>
-              <SelectTrigger>
+              <SelectTrigger className="w-full">
                 <SelectValue placeholder="Tipo de log" />
               </SelectTrigger>
               <SelectContent>
@@ -194,7 +194,7 @@ export default function AdminLogsPage() {
                 value={search}
                 onChange={(event) => { setSearch(event.target.value); setPage(1) }}
                 placeholder="Buscar request id, usuario, ruta, mensaje..."
-                className="pl-9"
+                className="min-w-0 pl-9"
               />
             </div>
           </div>
@@ -203,8 +203,8 @@ export default function AdminLogsPage() {
             <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{error}</div>
           ) : null}
 
-          <div className="overflow-x-auto rounded-md border">
-            <Table>
+          <div className="max-w-full overflow-x-auto rounded-md border">
+            <Table className="min-w-[760px]">
               <TableHeader>
                 <TableRow>
                   <TableHead>Severidad</TableHead>
@@ -232,7 +232,7 @@ export default function AdminLogsPage() {
                       <div className="font-medium">{row.action}</div>
                       <div className="text-xs text-muted-foreground">{row.resourceType || "—"}</div>
                     </TableCell>
-                    <TableCell className="max-w-[460px]">
+                    <TableCell className="max-w-[340px] sm:max-w-[460px]">
                       <div className="truncate text-sm">{compactMetadata(row.metadata)}</div>
                       {row.metadata?.endpoint ? <div className="truncate font-mono text-xs text-muted-foreground">{row.metadata.endpoint}</div> : null}
                     </TableCell>
@@ -264,7 +264,7 @@ export default function AdminLogsPage() {
       </Card>
 
       {selected ? (
-        <Card className="border-primary/30">
+        <Card className="min-w-0 overflow-hidden border-primary/30">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <CheckCircle2 className="h-5 w-5 text-emerald-500" />
@@ -272,7 +272,7 @@ export default function AdminLogsPage() {
             </CardTitle>
             <CardDescription className="font-mono">{selected.id}</CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="px-3 sm:px-6">
             <pre className="max-h-[420px] overflow-auto rounded-md bg-muted p-3 text-xs">
               {JSON.stringify(selected, null, 2)}
             </pre>
