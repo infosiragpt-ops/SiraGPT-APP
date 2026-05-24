@@ -135,7 +135,7 @@ async function listInvoicesForUser(prisma, userId, opts = {}) {
   const [items, total] = await Promise.all([
     prisma.invoice.findMany({
       where: { userId },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       skip,
       take: limit,
     }),

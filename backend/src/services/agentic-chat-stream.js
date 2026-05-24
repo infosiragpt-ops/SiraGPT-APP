@@ -37,6 +37,8 @@
 const reactAgent = require('./react-agent');
 const agentTools = require('./agents/agent-tools');
 const conversationUnderstanding = require('./conversation-understanding');
+const { cloneProjectTool } = require('./agents/clone-project-tool');
+const { hostBashTool } = require('./agents/host-bash-tool');
 
 const SENTINEL_FENCE_OPEN = '```agent-task-state\n';
 const SENTINEL_FENCE_CLOSE = '\n```';
@@ -51,6 +53,8 @@ const STAGE_LABELS = {
   web_search: (args) => `Buscando "${truncate(args?.query, 60)}"`,
   read_url:   (args) => `Leyendo ${prettyDomain(args?.url) || 'fuente'}`,
   memory_recall: (args) => `Recordando contexto sobre "${truncate(args?.query, 48)}"`,
+  clone_project: (args) => `Clonando ${truncate(args?.url, 60)}`,
+  host_bash: (args) => `Ejecutando ${truncate(args?.command, 60)}`,
   rag_retrieve: (args) => `Consultando documentos sobre "${truncate(args?.query, 48)}"`,
   self_rag_answer: () => 'Construyendo respuesta grounded',
   docintel_analyze: () => 'Analizando documentos adjuntos',
@@ -446,7 +450,7 @@ function loadTaskTools() {
 }
 
 function buildDefaultTools() {
-  const tools = [...baseWebTools(), ...loadTaskTools()];
+  const tools = [...baseWebTools(), ...loadTaskTools(), cloneProjectTool, hostBashTool];
   const seen = new Set();
   return tools.filter((tool) => {
     if (!tool || !tool.name || seen.has(tool.name)) return false;

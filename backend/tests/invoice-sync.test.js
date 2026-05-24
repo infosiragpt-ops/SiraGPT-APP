@@ -32,7 +32,11 @@ function makeFakePrisma() {
       },
       async findMany({ where, orderBy, skip = 0, take = 20 }) {
         const all = [...invoices.values()].filter((i) => i.userId === where.userId);
-        all.sort((a, b) => b.createdAt - a.createdAt);
+        all.sort((a, b) => {
+          const createdDelta = b.createdAt - a.createdAt;
+          if (createdDelta) return createdDelta;
+          return String(b.id).localeCompare(String(a.id));
+        });
         return all.slice(skip, skip + take);
       },
       async count({ where }) {
