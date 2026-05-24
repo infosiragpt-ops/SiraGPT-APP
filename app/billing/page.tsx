@@ -10,7 +10,6 @@ import { useSearchParams } from "next/navigation"
 import SubscriptionManager from "@/components/subscription-manager"
 import PaymentMethods from "@/components/payment-methods"
 import BillingHistory from "@/components/billing-history"
-import { CreditsRibbon } from "@/components/credits-ribbon"
 
 export default function BillingPage() {
   return (
@@ -51,8 +50,6 @@ function BillingContent() {
             </Button>
           </Link>
         </div>
-
-        <CreditsRibbon hideBuyButton />
 
         <Tabs defaultValue={defaultTab} className="space-y-6">
           <TabsList className="grid w-full grid-cols-2">

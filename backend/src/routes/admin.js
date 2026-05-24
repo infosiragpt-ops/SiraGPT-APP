@@ -736,28 +736,6 @@ router.post(
 // Get system stats
 router.get('/stats', async (req, res) => {
   try {
-    // usersByPlan: groupBy the User.plan enum so the admin dashboard can
-    // render a real distribution instead of the prior hard-coded numbers.
-    // Empty buckets are omitted; the frontend defaults to "Pendiente"
-    // when the map is missing so a Prisma client without the column on a
-    // legacy DB doesn't break the page.
-    let usersByPlan = {};
-    try {
-      const groups = await prisma.user.groupBy({
-        by: ['plan'],
-        _count: { _all: true },
-      });
-      for (const g of groups || []) {
-        const key = String(g.plan || 'UNKNOWN').toUpperCase();
-        usersByPlan[key] = Number(g._count?._all || 0);
-      }
-    } catch (groupErr) {
-      // Legacy DB without `plan` column or narrow test mock — degrade
-      // gracefully, the FE renders "Pendiente" when the map is empty.
-      console.warn('[admin/stats] usersByPlan groupBy failed:', groupErr?.message || groupErr);
-      usersByPlan = {};
-    }
-
     const stats = {
       database: {
         users: await prisma.user.count(),
@@ -772,8 +750,7 @@ router.get('/stats', async (req, res) => {
         totalSize: await prisma.file.aggregate({
           _sum: { size: true }
         }).then(result => result._sum.size || 0)
-      },
-      usersByPlan,
+      }
     };
 
     res.json(stats);
