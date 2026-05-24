@@ -217,11 +217,17 @@ verify_auth_login_path() {
   log "Auth login smoke is correct (invalid credentials return 401)"
 }
 
-repair_known_failed_prisma_migration() {
+resolve_prisma_migration_applied() {
+  local migration_name="$1"
+
+  npx prisma migrate resolve --schema prisma/schema.prisma --applied "${migration_name}"
+}
+
+repair_model_sync_migration() {
   local migration_name="20241125_add_model_sync_fields"
 
-  log "Repairing known failed Prisma migration state: ${migration_name}"
-  log "Applying idempotent columns for ${migration_name} before marking it applied"
+  log "Repairing Prisma migration state: ${migration_name}"
+  log "Applying idempotent SQL for ${migration_name} before marking it applied"
   (
     cd backend
     npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
@@ -232,37 +238,241 @@ ALTER TABLE "ai_models"
   ADD COLUMN IF NOT EXISTS "pricing" JSONB,
   ADD COLUMN IF NOT EXISTS "tags" TEXT[];
 SQL
-    npx prisma migrate resolve --schema prisma/schema.prisma --applied "${migration_name}"
+    resolve_prisma_migration_applied "${migration_name}"
   )
 }
 
+repair_init_baseline_migration() {
+  local migration_name="20250919203029_init"
+
+  log "Repairing Prisma baseline migration state: ${migration_name}"
+  log "Verifying baseline schema objects exist before marking ${migration_name} applied"
+  (
+    cd backend
+    npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'ProviderType') THEN
+    RAISE EXCEPTION 'ProviderType enum is missing; cannot baseline init migration safely';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'ModelType') THEN
+    RAISE EXCEPTION 'ModelType enum is missing; cannot baseline init migration safely';
+  END IF;
+  IF to_regclass('public.users') IS NULL THEN
+    RAISE EXCEPTION 'users table is missing; cannot baseline init migration safely';
+  END IF;
+  IF to_regclass('public.ai_models') IS NULL THEN
+    RAISE EXCEPTION 'ai_models table is missing; cannot baseline init migration safely';
+  END IF;
+  IF to_regclass('public.sessions') IS NULL THEN
+    RAISE EXCEPTION 'sessions table is missing; cannot baseline init migration safely';
+  END IF;
+  IF to_regclass('public.chats') IS NULL THEN
+    RAISE EXCEPTION 'chats table is missing; cannot baseline init migration safely';
+  END IF;
+  IF to_regclass('public.messages') IS NULL THEN
+    RAISE EXCEPTION 'messages table is missing; cannot baseline init migration safely';
+  END IF;
+  IF to_regclass('public.files') IS NULL THEN
+    RAISE EXCEPTION 'files table is missing; cannot baseline init migration safely';
+  END IF;
+END $$;
+SQL
+    resolve_prisma_migration_applied "${migration_name}"
+  )
+}
+
+repair_stripe_integration_migration() {
+  local migration_name="20250928102318_add_stripe_integration"
+
+  log "Repairing Prisma migration state: ${migration_name}"
+  (
+    cd backend
+    npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
+ALTER TABLE "payments"
+  ADD COLUMN IF NOT EXISTS "stripeCustomerId" TEXT,
+  ADD COLUMN IF NOT EXISTS "stripePriceId" TEXT,
+  ADD COLUMN IF NOT EXISTS "stripeSessionId" TEXT,
+  ADD COLUMN IF NOT EXISTS "stripeSubscriptionId" TEXT;
+
+ALTER TABLE "users"
+  ADD COLUMN IF NOT EXISTS "stripeCustomerId" TEXT,
+  ADD COLUMN IF NOT EXISTS "stripeSubscriptionId" TEXT,
+  ADD COLUMN IF NOT EXISTS "subscriptionEndDate" TIMESTAMP(3),
+  ADD COLUMN IF NOT EXISTS "subscriptionStatus" TEXT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS "payments_stripeSessionId_key" ON "payments"("stripeSessionId");
+CREATE UNIQUE INDEX IF NOT EXISTS "users_stripeCustomerId_key" ON "users"("stripeCustomerId");
+CREATE UNIQUE INDEX IF NOT EXISTS "users_stripeSubscriptionId_key" ON "users"("stripeSubscriptionId");
+SQL
+    resolve_prisma_migration_applied "${migration_name}"
+  )
+}
+
+repair_stripe_enhancement_migration() {
+  local migration_name="20251001184158_stripe_enahcement"
+
+  log "Repairing Prisma migration state: ${migration_name}"
+  (
+    cd backend
+    npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
+CREATE TABLE IF NOT EXISTS "usage_alerts" (
+  "id" TEXT NOT NULL,
+  "userId" TEXT NOT NULL,
+  "alertType" TEXT NOT NULL,
+  "threshold" DOUBLE PRECISION NOT NULL,
+  "sentAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT "usage_alerts_pkey" PRIMARY KEY ("id")
+);
+
+CREATE TABLE IF NOT EXISTS "notifications" (
+  "id" TEXT NOT NULL,
+  "userId" TEXT NOT NULL,
+  "type" TEXT NOT NULL,
+  "title" TEXT NOT NULL,
+  "message" TEXT NOT NULL,
+  "severity" TEXT NOT NULL,
+  "read" BOOLEAN NOT NULL DEFAULT false,
+  "metadata" JSONB,
+  "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "readAt" TIMESTAMP(3),
+  CONSTRAINT "notifications_pkey" PRIMARY KEY ("id")
+);
+
+CREATE TABLE IF NOT EXISTS "subscription_events" (
+  "id" TEXT NOT NULL,
+  "userId" TEXT NOT NULL,
+  "eventType" TEXT NOT NULL,
+  "previousPlan" TEXT,
+  "newPlan" TEXT,
+  "eventData" JSONB,
+  "stripeEventId" TEXT,
+  "processedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT "subscription_events_pkey" PRIMARY KEY ("id")
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS "subscription_events_stripeEventId_key"
+  ON "subscription_events"("stripeEventId");
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'usage_alerts_userId_fkey') THEN
+    ALTER TABLE "usage_alerts" ADD CONSTRAINT "usage_alerts_userId_fkey"
+      FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'notifications_userId_fkey') THEN
+    ALTER TABLE "notifications" ADD CONSTRAINT "notifications_userId_fkey"
+      FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'subscription_events_userId_fkey') THEN
+    ALTER TABLE "subscription_events" ADD CONSTRAINT "subscription_events_userId_fkey"
+      FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;
+SQL
+    resolve_prisma_migration_applied "${migration_name}"
+  )
+}
+
+repair_monthly_limit_default_migration() {
+  local migration_name="20251001211311_limit_set_monthly"
+
+  log "Repairing Prisma migration state: ${migration_name}"
+  (
+    cd backend
+    npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
+ALTER TABLE "users" ALTER COLUMN "monthlyLimit" SET DEFAULT 1000;
+SQL
+    resolve_prisma_migration_applied "${migration_name}"
+  )
+}
+
+repair_gmail_integration_migration() {
+  local migration_name="20251021064736_add_gmail_integration"
+
+  log "Repairing Prisma migration state: ${migration_name}"
+  (
+    cd backend
+    npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
+ALTER TABLE "messages" ADD COLUMN IF NOT EXISTS "metadata" JSONB;
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "gmailTokens" TEXT;
+SQL
+    resolve_prisma_migration_applied "${migration_name}"
+  )
+}
+
+extract_prisma_migration_name() {
+  node -e '
+    const fs = require("fs");
+    const input = fs.readFileSync(0, "utf8");
+    const explicit = input.match(/Migration name:\s*([^\s]+)/);
+    const p3009 = input.match(/The `([^`]+)` migration/);
+    process.stdout.write((explicit && explicit[1]) || (p3009 && p3009[1]) || "");
+  '
+}
+
+repair_known_prisma_migration() {
+  local migration_name="$1"
+
+  case "$migration_name" in
+    20241125_add_model_sync_fields)
+      repair_model_sync_migration
+      ;;
+    20250919203029_init)
+      repair_init_baseline_migration
+      ;;
+    20250928102318_add_stripe_integration)
+      repair_stripe_integration_migration
+      ;;
+    20251001184158_stripe_enahcement)
+      repair_stripe_enhancement_migration
+      ;;
+    20251001211311_limit_set_monthly)
+      repair_monthly_limit_default_migration
+      ;;
+    20251021064736_add_gmail_integration)
+      repair_gmail_integration_migration
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 run_prisma_migrations() {
-  local migrate_output migrate_status
+  local migrate_output migrate_status migration_name
 
   log "Generating Prisma client"
   (cd backend && npx prisma generate --schema prisma/schema.prisma)
 
-  log "Applying pending Prisma migrations"
-  set +e
-  migrate_output="$(
-    cd backend && npx prisma migrate deploy --schema prisma/schema.prisma 2>&1
-  )"
-  migrate_status=$?
-  set -e
-  printf '%s\n' "$migrate_output"
+  for attempt in $(seq 1 10); do
+    log "Applying pending Prisma migrations (attempt ${attempt}/10)"
+    set +e
+    migrate_output="$(
+      cd backend && npx prisma migrate deploy --schema prisma/schema.prisma 2>&1
+    )"
+    migrate_status=$?
+    set -e
+    printf '%s\n' "$migrate_output"
 
-  if [[ "$migrate_status" -eq 0 ]]; then
-    return 0
-  fi
+    if [[ "$migrate_status" -eq 0 ]]; then
+      return 0
+    fi
 
-  if [[ "$migrate_output" == *"P3009"* && "$migrate_output" == *"20241125_add_model_sync_fields"* ]]; then
-    repair_known_failed_prisma_migration
-    log "Retrying Prisma migrations after known migration repair"
-    (cd backend && npx prisma migrate deploy --schema prisma/schema.prisma)
-    return $?
-  fi
+    migration_name="$(printf '%s\n' "$migrate_output" | extract_prisma_migration_name)"
+    if [[ -z "$migration_name" ]]; then
+      return "$migrate_status"
+    fi
 
-  return "$migrate_status"
+    if repair_known_prisma_migration "$migration_name"; then
+      log "Retrying Prisma migrations after repairing ${migration_name}"
+      continue
+    fi
+
+    return "$migrate_status"
+  done
+
+  fail "Prisma migrations did not converge after repair attempts"
 }
 
 require_command git
