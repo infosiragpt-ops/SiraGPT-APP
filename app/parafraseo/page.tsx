@@ -57,8 +57,13 @@ export default function ParafraseoPage() {
     setLoading(true)
     setCopied(false)
     try {
+      // F3 PR12 — Migrated from legacy `/ai/paraphrase` to the canonical
+      // `/paraphrase` endpoint introduced in F2 PR8. The new endpoint
+      // charges credits via the chargeCredits middleware + supports
+      // Idempotency-Key for safe retries; response field renamed
+      // text → output to match the wider services contract.
       const token = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null
-      const response = await fetch(`${API_ROOT}/ai/paraphrase`, {
+      const response = await fetch(`${API_ROOT}/paraphrase`, {
         method: "POST",
         credentials: "include",
         headers: {
@@ -74,8 +79,15 @@ export default function ParafraseoPage() {
       })
 
       const data = await response.json().catch(() => ({}))
-      if (!response.ok) throw new Error(data?.error || "No se pudo parafrasear")
-      setOutput(String(data.text || "").trim())
+      if (!response.ok) {
+        if (response.status === 402) {
+          throw new Error(data?.error || "Saldo de créditos insuficiente")
+        }
+        throw new Error(data?.error || "No se pudo parafrasear")
+      }
+      // New canonical: data.output. Tolerate legacy data.text for any
+      // proxy / cache that may still be in-flight during rollout.
+      setOutput(String(data.output || data.text || "").trim())
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo parafrasear")
     } finally {
