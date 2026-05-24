@@ -124,11 +124,57 @@ const LG_ITEM = cn(
 )
 const LG_SEP = "my-1 bg-border/60"
 
-const formatSidebarChatTitle = (value: unknown) => {
+const LEADING_CHAT_EMOJI_RE =
+  /^((?:[\u2600-\u27BF]|[\uD83C-\uDBFF][\uDC00-\uDFFF])(?:\uFE0F|\uFE0E)?)\s*/
+
+const CHAT_EMOJI_RULES: Array<[RegExp, string]> = [
+  [/\b(tesis|metodolog|investig|art[ií]culo|apa|cita|fuente|acad[eé]mic|marco te[oó]rico)\b/i, "⚖️"],
+  [/\b(estrateg|metacog|gesti[oó]n|formativa|educaci[oó]n|docente|clase|aprendizaje)\b/i, "📚"],
+  [/\b(hola|saludo|greeting|bienvenida|hello)\b/i, "👋"],
+  [/\b(codex|c[oó]digo|api|deploy|producci[oó]n|software|bug|error|admin|panel)\b/i, "💻"],
+  [/\b(imagen|foto|dise[ñn]o|logo|visual|mockup|ui|ux)\b/i, "🎨"],
+  [/\b(video|audio|voz|m[uú]sica|transcripci[oó]n)\b/i, "🎬"],
+  [/\b(pago|factura|cr[eé]dito|billing|stripe|mercado ?pago)\b/i, "💳"],
+  [/\b(calendario|agenda|reuni[oó]n|evento|fecha)\b/i, "🗓️"],
+  [/\b(pdf|documento|docx|excel|archivo|informe|reporte)\b/i, "📄"],
+  [/\b(web|internet|buscar|b[uú]squeda|noticias|fuente)\b/i, "🔎"],
+]
+
+const CHAT_EMOJI_FALLBACKS = ["💬", "✨", "🧠", "📌", "📝", "🔹"]
+
+const normalizeSidebarChatTitle = (value: unknown) => {
   return String(value || "")
-    .replace(/^🤖\s*Tarea:\s*/i, "{} ")
-    .replace(/^🤖\s*/i, "{} ")
-    .trim()
+    .replace(/^🤖\s*Tarea:\s*/i, "")
+    .replace(/^🤖\s*/i, "")
+    .replace(/\s+/g, " ")
+    .trim() || "Nuevo chat"
+}
+
+const inferSidebarChatEmoji = (title: string) => {
+  for (const [pattern, emoji] of CHAT_EMOJI_RULES) {
+    if (pattern.test(title)) return emoji
+  }
+
+  const seed = Array.from(title).reduce((acc, char) => acc + char.charCodeAt(0), 0)
+  return CHAT_EMOJI_FALLBACKS[seed % CHAT_EMOJI_FALLBACKS.length]
+}
+
+const getSidebarChatTitleParts = (value: unknown) => {
+  const title = normalizeSidebarChatTitle(value)
+  const leadingEmoji = title.match(LEADING_CHAT_EMOJI_RE)
+
+  if (leadingEmoji?.[1]) {
+    const cleanTitle = title.slice(leadingEmoji[0].length).trim()
+    return {
+      emoji: leadingEmoji[1],
+      title: cleanTitle || title,
+    }
+  }
+
+  return {
+    emoji: inferSidebarChatEmoji(title),
+    title,
+  }
 }
 
 /** Neutral nav chrome with fast visual feedback and no decorative color. */
@@ -1159,11 +1205,23 @@ export function AppSidebar() {
           <SidebarGroup>
             <SidebarGroupLabel
               className={cn(
-                "px-3 pt-4 pb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/60 select-none",
+                "flex items-center justify-between px-3 pt-4 pb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/60 select-none",
                 state === "closed" && "hidden"
               )}
             >
-              {t("recentChats")}
+              <span>{t("recentChats")}</span>
+              {isLoadingChats || isLoadingMore ? (
+                <Loader2
+                  className="h-3 w-3 animate-spin text-muted-foreground/70"
+                  aria-label="Cargando historial de chats"
+                />
+              ) : (
+                <span
+                  className="h-1.5 w-1.5 rounded-full bg-sky-500/85 shadow-[0_0_0_3px_rgba(14,165,233,0.12)]"
+                  aria-label="Historial cargado"
+                  title="Historial cargado"
+                />
+              )}
             </SidebarGroupLabel>
             <SidebarGroupContent
               className={cn(state === "closed" && "hidden")}
@@ -1179,6 +1237,13 @@ export function AppSidebar() {
                   <div className="space-y-1 px-2 py-2" aria-busy="true" aria-label="Cargando chats">
                     {[88, 72, 80, 64, 76].map((w, i) => (
                       <div key={i} className="flex h-9 items-center gap-2 rounded-lg px-2">
+                        <span className="flex h-4 w-4 shrink-0 items-center justify-center">
+                          {i === 0 ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground/70" />
+                          ) : (
+                            <span className="h-1.5 w-1.5 rounded-full bg-sky-500/45" />
+                          )}
+                        </span>
                         <Skeleton className="h-4 rounded-md" style={{ width: `${w}%` }} />
                       </div>
                     ))}
@@ -1228,12 +1293,15 @@ export function AppSidebar() {
 
                       const renderChatItem = (chat: any) => {
                         const isEditing = editingChatId === chat.id
-                        const displayTitle = formatSidebarChatTitle(optimisticUpdates[chat.id] || chat.title)
+                        const { emoji: chatEmoji, title: displayTitle } = getSidebarChatTitleParts(optimisticUpdates[chat.id] || chat.title)
                         const isTruncated = displayTitle.length > 25
-                        // Per-chat streaming indicator — drives the small
-                        // blue spinner that sits to the left of the 3-dot
-                        // menu while this chat's stream is still generating.
-                        const isStreaming = bgStreams.get(chat.id)?.status === "streaming"
+                        // Per-chat status — compact left rail:
+                        // spinner while generating, blue dot for a
+                        // freshly completed task, red dot for an error.
+                        const streamStatus = bgStreams.get(chat.id)?.status
+                        const isStreaming = streamStatus === "streaming"
+                        const isComplete = streamStatus === "done"
+                        const isFailed = streamStatus === "error"
 
                         return (
                           <SidebarMenuItem key={chat.id}>
@@ -1287,6 +1355,44 @@ export function AppSidebar() {
                                         )}
                                       >
                                           <div className="flex items-center gap-2 min-w-0 flex-1">
+                                            <span
+                                              className="flex h-4 w-4 shrink-0 items-center justify-center"
+                                              title={
+                                                isStreaming
+                                                  ? "Generando..."
+                                                  : isComplete
+                                                    ? "Tarea completada"
+                                                    : isFailed
+                                                      ? "Tarea con error"
+                                                      : undefined
+                                              }
+                                            >
+                                              {isStreaming ? (
+                                                <Loader2
+                                                  aria-label="Chat en progreso"
+                                                  className="h-3.5 w-3.5 animate-spin text-muted-foreground/80"
+                                                  strokeWidth={2.25}
+                                                />
+                                              ) : isComplete ? (
+                                                <span
+                                                  className="h-2 w-2 rounded-full bg-sky-500 shadow-[0_0_0_3px_rgba(14,165,233,0.16)]"
+                                                  aria-label="Tarea completada"
+                                                />
+                                              ) : isFailed ? (
+                                                <span
+                                                  className="h-2 w-2 rounded-full bg-destructive/85"
+                                                  aria-label="Tarea con error"
+                                                />
+                                              ) : (
+                                                <span className="h-1.5 w-1.5 rounded-full bg-transparent" aria-hidden="true" />
+                                              )}
+                                            </span>
+                                            <span
+                                              className="w-5 shrink-0 text-[15px] leading-none"
+                                              aria-hidden="true"
+                                            >
+                                              {chatEmoji}
+                                            </span>
                                             <span className="text-sm flex-1 truncate">
                                               {displayTitle}
                                             </span>
@@ -1333,18 +1439,6 @@ export function AppSidebar() {
                                       </TooltipContent>
                                     )}
                                   </Tooltip>
-                                  {isStreaming && (
-                                    <span
-                                      className="flex h-8 w-7 shrink-0 items-center justify-center"
-                                      title="Generando…"
-                                    >
-                                      <Loader2
-                                        aria-label="Chat en progreso"
-                                        className="h-3.5 w-3.5 animate-spin text-primary"
-                                        strokeWidth={2.25}
-                                      />
-                                    </span>
-                                  )}
                                   <DropdownMenu>
                                     <DropdownMenuTrigger asChild>
                                       <Button
@@ -1558,15 +1652,6 @@ export function AppSidebar() {
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
-        )}
-
-        {/* Codex — code workspaces below recent chats, above the profile
-            footer. Local folders and cloud projects open /code directly. */}
-        {selectedType === "Text Chat" && (
-          <SidebarFoldersDropdown
-            collapsed={state === "closed"}
-            onMobileNavigate={() => { if (isMobile) setOpenMobile(false) }}
-          />
         )}
       </SidebarContent>
 

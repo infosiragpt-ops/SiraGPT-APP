@@ -118,15 +118,15 @@ export function BackgroundStreamsProvider({ children }: { children: React.ReactN
     if (!s) return
     s.status = "done"
     force()
-    // Leave the entry in the Map for a few seconds so the UI can
-    // show a success pulse, then garbage-collect.
+    // Leave the entry in the Map briefly so the sidebar can show the
+    // completed-state blue dot before garbage-collecting the stream.
     setTimeout(() => {
       const cur = streamsRef.current.get(chatId)
       if (cur && cur.status === "done") {
         streamsRef.current.delete(chatId)
         force()
       }
-    }, 4000)
+    }, 12000)
   }, [])
 
   const fail = React.useCallback((chatId: string, error: string) => {
