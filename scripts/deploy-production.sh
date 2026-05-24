@@ -672,6 +672,42 @@ SQL
   )
 }
 
+repair_audit_log_migration() {
+  local migration_name="20260508120000_add_audit_log"
+
+  log "Repairing Prisma migration state: ${migration_name}"
+  (
+    cd backend
+    npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
+CREATE TABLE IF NOT EXISTS "audit_log" (
+  "id" TEXT NOT NULL,
+  "actorType" TEXT NOT NULL,
+  "actorId" TEXT,
+  "actorName" TEXT,
+  "resourceType" TEXT NOT NULL,
+  "resourceId" TEXT,
+  "action" TEXT NOT NULL,
+  "before" JSONB,
+  "after" JSONB,
+  "diff" JSONB,
+  "metadata" JSONB,
+  "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT "audit_log_pkey" PRIMARY KEY ("id")
+);
+
+CREATE INDEX IF NOT EXISTS "audit_log_actorType_actorId_createdAt_idx"
+  ON "audit_log"("actorType", "actorId", "createdAt");
+CREATE INDEX IF NOT EXISTS "audit_log_resourceType_resourceId_createdAt_idx"
+  ON "audit_log"("resourceType", "resourceId", "createdAt");
+CREATE INDEX IF NOT EXISTS "audit_log_action_createdAt_idx"
+  ON "audit_log"("action", "createdAt");
+CREATE INDEX IF NOT EXISTS "audit_log_createdAt_idx"
+  ON "audit_log"("createdAt");
+SQL
+    resolve_prisma_migration_applied "${migration_name}"
+  )
+}
+
 extract_prisma_migration_name() {
   node -e '
     const fs = require("fs");
@@ -712,6 +748,9 @@ repair_known_prisma_migration() {
       ;;
     20260508000000_add_scheduler_jobs)
       repair_scheduler_jobs_migration
+      ;;
+    20260508120000_add_audit_log)
+      repair_audit_log_migration
       ;;
     20260420000000_rag_store)
       repair_optional_pgvector_migration "$migration_name" "Persistent RAG storage"
