@@ -165,6 +165,12 @@ model User {
   // User memory relations (orchestration)
   memories UserMemory[]
 
+  // F1 — declarative RBAC. `userRoles` joins to `user_roles` and
+  // ultimately to `roles` + `permissions`. The legacy `isSuperAdmin`
+  // flag stays as a shadow until F5 sunset.
+  userRoles UserRole[] @relation("UserRoleAssignedTo")
+  assignedRoles UserRole[] @relation("UserRoleAssignedBy")
+
   @@index([deletedAt])
   @@map("users")
 }
@@ -967,6 +973,75 @@ model PlanCatalog {
 
   @@index([isActive, displayOrder])
   @@map("plans")
+}
+
+// F1 PR2 — Declarative RBAC. `roles` are named buckets; `permissions`
+// are `resource.action` codes; `role_permissions` maps roles to
+// permissions; `user_roles` assigns roles to users (optionally scoped
+// to an organization). The legacy `OrgRole` enum is kept for back-compat
+// on `OrgMembership.role`; PR4 backfills `user_roles` from it.
+model Role {
+  id          String           @id @default(cuid())
+  code        String           @unique
+  name        String
+  description String?
+  isSystem    Boolean          @default(false)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @default(now()) @updatedAt
+
+  permissions RolePermission[]
+  userRoles   UserRole[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id          String           @id @default(cuid())
+  code        String           @unique
+  description String?
+  isSystem    Boolean          @default(false)
+  createdAt   DateTime         @default(now())
+
+  roles RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  id           String   @id @default(cuid())
+  roleId       String
+  permissionId String
+  createdAt    DateTime @default(now())
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@index([permissionId])
+  @@map("role_permissions")
+}
+
+enum RoleScope {
+  GLOBAL
+  ORG
+}
+
+model UserRole {
+  id         String    @id @default(cuid())
+  userId     String
+  roleId     String
+  scope      RoleScope @default(GLOBAL)
+  scopeId    String?
+  assignedBy String?
+  assignedAt DateTime  @default(now())
+
+  user     User @relation("UserRoleAssignedTo", fields: [userId], references: [id], onDelete: Cascade)
+  role     Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  assigner User? @relation("UserRoleAssignedBy", fields: [assignedBy], references: [id], onDelete: SetNull)
+
+  @@index([userId, scope])
+  @@index([roleId])
+  @@map("user_roles")
 }
 
 enum ProviderType {
