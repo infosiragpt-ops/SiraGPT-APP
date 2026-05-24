@@ -244,11 +244,11 @@ model AdminConnection {
 }
 
 model Session {
-  id          String   @id @default(cuid())
+  id          String    @id @default(cuid())
   userId      String
-  token       String   @unique
+  token       String    @unique
   expiresAt   DateTime
-  createdAt   DateTime @default(now())
+  createdAt   DateTime  @default(now())
   // lastUsedAt: bumped by routes that re-use a long-lived session (e.g.
   // /api/appshots/capture) so the settings UI can show "last seen" and
   // the user can confidently revoke stale Appshots tokens. Nullable so
@@ -301,14 +301,14 @@ model Chat {
   // Pinned-chat support (Sprint 6 sidebar UX). pinnedAt is null when
   // the chat is unpinned so the sidebar can sort pinned items by the
   // time the user pinned them.
-  isPinned   Boolean   @default(false)
-  pinnedAt   DateTime?
+  isPinned Boolean   @default(false)
+  pinnedAt DateTime?
 
   // Per-chat draft text the composer auto-saves so the user can "keep
   // writing where they left off" after navigating away. Stored
   // server-side (in addition to the client localStorage mirror) so the
   // draft survives across devices.
-  draftText  String?   @db.Text
+  draftText String? @db.Text
 
   // Language policy — persisted resolution of "what language should the
   // assistant reply in for this thread". Set on first turn (or on any
@@ -419,17 +419,17 @@ enum ChatRunStatus {
 }
 
 model ChatRun {
-  id              String         @id @default(cuid())
+  id              String        @id @default(cuid())
   chatId          String
   userId          String
-  status          ChatRunStatus  @default(pending)
+  status          ChatRunStatus @default(pending)
   model           String
   provider        String?
   promptMessageId String?
   // The assistant Message row this run is producing into. Created up
   // front with empty content so the UI can stream into a stable id.
-  messageId       String?        @unique
-  partialContent  String         @default("") @db.Text
+  messageId       String?       @unique
+  partialContent  String        @default("") @db.Text
   inputPayload    Json
   error           String?
   errorClass      String?
@@ -439,13 +439,13 @@ model ChatRun {
   completedAt     DateTime?
   cancelledAt     DateTime?
   cancelReason    String?
-  attempt         Int            @default(0)
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
+  attempt         Int           @default(0)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
 
-  chat            Chat           @relation(fields: [chatId], references: [id], onDelete: Cascade)
-  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  message         Message[]      @relation("RunMessage")
+  chat    Chat      @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  user    User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  message Message[] @relation("RunMessage")
 
   @@index([chatId, status])
   @@index([userId, status, updatedAt])
@@ -941,6 +941,32 @@ model CostUsageDaily {
   @@index([userId, date])
   @@index([organizationId, date])
   @@map("cost_usage_daily")
+}
+
+// F1 — Plans catalog. Distinct from the `Plan` enum (kept for back-compat
+// of `User.plan` / `Payment.plan`). `code` is the natural key joining the
+// two: `PlanCatalog.code` == `Plan` enum value. F2 introduces `User.planId`
+// FK referencing this table; for now both coexist.
+model PlanCatalog {
+  id                   String   @id @default(cuid())
+  code                 String   @unique
+  name                 String
+  description          String?
+  priceMonthlyCents    Int      @default(0)
+  priceYearlyCents     Int      @default(0)
+  currency             String   @default("usd")
+  monthlyCredits       BigInt   @default(0)
+  trialDays            Int      @default(0)
+  features             Json     @default("[]")
+  stripePriceIdMonthly String?
+  stripePriceIdYearly  String?
+  isActive             Boolean  @default(true)
+  displayOrder         Int      @default(0)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @default(now()) @updatedAt
+
+  @@index([isActive, displayOrder])
+  @@map("plans")
 }
 
 enum ProviderType {
@@ -1900,12 +1926,12 @@ model PartialSession {
 }
 
 model AgentCheckpoint {
-  threadId           String    @map("thread_id")
-  checkpointId       String    @map("checkpoint_id")
-  parentCheckpointId String?   @map("parent_checkpoint_id")
-  state              Json      @default("{}")
-  metadata           Json      @default("{}")
-  createdAt          DateTime  @default(now()) @map("created_at")
+  threadId           String   @map("thread_id")
+  checkpointId       String   @map("checkpoint_id")
+  parentCheckpointId String?  @map("parent_checkpoint_id")
+  state              Json     @default("{}")
+  metadata           Json     @default("{}")
+  createdAt          DateTime @default(now()) @map("created_at")
 
   @@id([threadId, checkpointId])
   @@index([threadId, createdAt(sort: Desc)])
@@ -1913,17 +1939,17 @@ model AgentCheckpoint {
 }
 
 model UserMemory {
-  id              String    @id @default(cuid())
-  userId          String    @map("user_id")
-  content         String    @db.Text
+  id              String   @id @default(cuid())
+  userId          String   @map("user_id")
+  content         String   @db.Text
   category        String?
-  importanceScore Float     @default(0) @map("importance_score")
-  lastAccessedAt  DateTime  @default(now()) @map("last_accessed_at")
-  accessCount     Int       @default(0) @map("access_count")
-  createdAt       DateTime  @default(now()) @map("created_at")
-  updatedAt       DateTime  @updatedAt @map("updated_at")
+  importanceScore Float    @default(0) @map("importance_score")
+  lastAccessedAt  DateTime @default(now()) @map("last_accessed_at")
+  accessCount     Int      @default(0) @map("access_count")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user       User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
   embeddings UserMemoryEmbedding[]
 
   @@index([userId, category])
@@ -1932,10 +1958,10 @@ model UserMemory {
 }
 
 model UserMemoryEmbedding {
-  id         String   @id @default(cuid())
-  memoryId   String   @map("memory_id")
-  embedding  Bytes    @db.ByteA
-  createdAt  DateTime @default(now()) @map("created_at")
+  id        String   @id @default(cuid())
+  memoryId  String   @map("memory_id")
+  embedding Bytes    @db.ByteA
+  createdAt DateTime @default(now()) @map("created_at")
 
   memory UserMemory @relation(fields: [memoryId], references: [id], onDelete: Cascade)
 
