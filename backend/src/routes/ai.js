@@ -1159,6 +1159,7 @@ router.post(
       const canPersist = isAuth && !!chatId;
 
       if (isAuth && req.user) {
+        const requestedModelBeforeQuota = model;
         const routed = resolveModelForUser(req.user, model);
         if (routed.blocked) {
           return res.status(429).json({ error: 'quota_exceeded', reason: routed.reason });
@@ -1166,6 +1167,52 @@ router.post(
         if (routed.model && routed.model !== model) {
           model = routed.model;
           provider = routed.provider || provider || 'OpenAI';
+        }
+        // Keep agentic chats on a function-calling model when the user's
+        // original free model supports tools but quota fallback does not.
+        // This preserves repo, web, and CI tool execution for free users
+        // without bypassing a hard quota block above.
+        if (model !== requestedModelBeforeQuota) {
+          const quotaRoutedProvider = provider;
+          const quotaRoutedModel = model;
+          try {
+            const agenticStream = require('../services/agentic-chat-stream');
+            if (!agenticStream.modelSupportsFunctionCalling(quotaRoutedProvider, quotaRoutedModel)) {
+              const requestedCatalogEntry = modelRouter.getModel(requestedModelBeforeQuota);
+              if (requestedCatalogEntry && Array.isArray(requestedCatalogEntry.plans) && requestedCatalogEntry.plans.includes('FREE')) {
+                let requestedProvider;
+                if (isDirectDeepSeekModel(requestedModelBeforeQuota)) {
+                  requestedProvider = 'DeepSeek';
+                } else if (String(requestedModelBeforeQuota).includes('gemini')) {
+                  requestedProvider = 'Gemini';
+                } else if (
+                  requestedModelBeforeQuota.includes('x-ai/') ||
+                  requestedModelBeforeQuota.includes('openrouter/') ||
+                  requestedModelBeforeQuota.includes('anthropic/') ||
+                  requestedModelBeforeQuota.includes('meta-llama/') ||
+                  requestedModelBeforeQuota.includes('deepseek/') ||
+                  requestedModelBeforeQuota.includes('/gpt-oss') ||
+                  requestedModelBeforeQuota.includes('moonshotai/')
+                ) {
+                  requestedProvider = 'OpenRouter';
+                } else {
+                  requestedProvider = 'OpenAI';
+                }
+                if (agenticStream.modelSupportsFunctionCalling(requestedProvider, requestedModelBeforeQuota)) {
+                  console.log(
+                    '[agentic-override] restoring original tool-capable model',
+                    requestedModelBeforeQuota,
+                    'over',
+                    quotaRoutedModel
+                  );
+                  model = requestedModelBeforeQuota;
+                  provider = requestedProvider;
+                }
+              }
+            }
+          } catch (_agenticOverrideErr) {
+            // If the agentic stream module is unavailable, keep the quota-routed model.
+          }
         }
       }
 
