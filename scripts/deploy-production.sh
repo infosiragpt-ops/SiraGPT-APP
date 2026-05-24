@@ -708,6 +708,125 @@ SQL
   )
 }
 
+repair_document_index_migration() {
+  local migration_name="20260508130000_add_document_index"
+
+  log "Repairing Prisma migration state: ${migration_name}"
+  (
+    cd backend
+    npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
+CREATE TABLE IF NOT EXISTS "document_index" (
+  "contentHash" TEXT NOT NULL,
+  "version" INTEGER NOT NULL DEFAULT 1,
+  "chunks" JSONB NOT NULL,
+  "embeddings" JSONB NOT NULL,
+  "pageHashes" JSONB,
+  "hierarchyRootId" TEXT,
+  "bytesSize" INTEGER NOT NULL DEFAULT 0,
+  "embedTokens" INTEGER NOT NULL DEFAULT 0,
+  "metadata" JSONB,
+  "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "accessedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "hitCount" INTEGER NOT NULL DEFAULT 0,
+  CONSTRAINT "document_index_pkey" PRIMARY KEY ("contentHash")
+);
+
+CREATE INDEX IF NOT EXISTS "document_index_accessedAt_idx" ON "document_index"("accessedAt");
+CREATE INDEX IF NOT EXISTS "document_index_createdAt_idx" ON "document_index"("createdAt");
+CREATE INDEX IF NOT EXISTS "document_index_hierarchyRootId_idx" ON "document_index"("hierarchyRootId");
+SQL
+    resolve_prisma_migration_applied "${migration_name}"
+  )
+}
+
+repair_document_nodes_migration() {
+  local migration_name="20260508140000_add_document_nodes"
+
+  log "Repairing Prisma migration state: ${migration_name}"
+  (
+    cd backend
+    npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
+CREATE TABLE IF NOT EXISTS "document_nodes" (
+  "id" TEXT NOT NULL,
+  "fileId" TEXT NOT NULL,
+  "analysisId" TEXT,
+  "parentId" TEXT,
+  "level" INTEGER NOT NULL,
+  "role" TEXT NOT NULL,
+  "heading" TEXT,
+  "text" TEXT NOT NULL DEFAULT '',
+  "summary" TEXT NOT NULL DEFAULT '',
+  "embedding" JSONB,
+  "metadata" JSONB,
+  "ordinal" INTEGER NOT NULL DEFAULT 0,
+  "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT "document_nodes_pkey" PRIMARY KEY ("id")
+);
+
+CREATE INDEX IF NOT EXISTS "document_nodes_fileId_ordinal_idx"
+  ON "document_nodes"("fileId", "ordinal");
+CREATE INDEX IF NOT EXISTS "document_nodes_fileId_level_idx"
+  ON "document_nodes"("fileId", "level");
+CREATE INDEX IF NOT EXISTS "document_nodes_parentId_idx"
+  ON "document_nodes"("parentId");
+CREATE INDEX IF NOT EXISTS "document_nodes_analysisId_idx"
+  ON "document_nodes"("analysisId");
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'document_nodes_fileId_fkey') THEN
+    ALTER TABLE "document_nodes" ADD CONSTRAINT "document_nodes_fileId_fkey"
+      FOREIGN KEY ("fileId") REFERENCES "files"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'document_nodes_analysisId_fkey') THEN
+    ALTER TABLE "document_nodes" ADD CONSTRAINT "document_nodes_analysisId_fkey"
+      FOREIGN KEY ("analysisId") REFERENCES "document_analyses"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'document_nodes_parentId_fkey') THEN
+    ALTER TABLE "document_nodes" ADD CONSTRAINT "document_nodes_parentId_fkey"
+      FOREIGN KEY ("parentId") REFERENCES "document_nodes"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;
+SQL
+    resolve_prisma_migration_applied "${migration_name}"
+  )
+}
+
+repair_admin_connections_migration() {
+  local migration_name="20260515220000_add_admin_connections"
+
+  log "Repairing Prisma migration state: ${migration_name}"
+  (
+    cd backend
+    npx prisma db execute --schema prisma/schema.prisma --stdin <<'SQL'
+CREATE TABLE IF NOT EXISTS "admin_connections" (
+  "id" TEXT NOT NULL,
+  "url" TEXT NOT NULL,
+  "providerKey" TEXT NOT NULL,
+  "providerLabel" TEXT,
+  "apiKey" TEXT,
+  "authType" TEXT NOT NULL DEFAULT 'Bearer',
+  "apiType" TEXT NOT NULL DEFAULT 'chat_completions',
+  "headers" JSONB,
+  "prefixId" TEXT,
+  "modelIds" TEXT[] DEFAULT ARRAY[]::TEXT[],
+  "tags" TEXT[] DEFAULT ARRAY[]::TEXT[],
+  "enabled" BOOLEAN NOT NULL DEFAULT true,
+  "lastSyncedAt" TIMESTAMP(3),
+  "lastSyncOk" BOOLEAN NOT NULL DEFAULT false,
+  "lastSyncError" TEXT,
+  "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updatedAt" TIMESTAMP(3) NOT NULL,
+  CONSTRAINT "admin_connections_pkey" PRIMARY KEY ("id")
+);
+
+CREATE INDEX IF NOT EXISTS "admin_connections_providerKey_idx" ON "admin_connections"("providerKey");
+CREATE INDEX IF NOT EXISTS "admin_connections_enabled_idx" ON "admin_connections"("enabled");
+SQL
+    resolve_prisma_migration_applied "${migration_name}"
+  )
+}
+
 extract_prisma_migration_name() {
   node -e '
     const fs = require("fs");
@@ -752,6 +871,15 @@ repair_known_prisma_migration() {
     20260508120000_add_audit_log)
       repair_audit_log_migration
       ;;
+    20260508130000_add_document_index)
+      repair_document_index_migration
+      ;;
+    20260508140000_add_document_nodes)
+      repair_document_nodes_migration
+      ;;
+    20260515220000_add_admin_connections)
+      repair_admin_connections_migration
+      ;;
     20260420000000_rag_store)
       repair_optional_pgvector_migration "$migration_name" "Persistent RAG storage"
       ;;
@@ -773,8 +901,8 @@ run_prisma_migrations() {
   log "Generating Prisma client"
   (cd backend && npx prisma generate --schema prisma/schema.prisma)
 
-  for attempt in $(seq 1 10); do
-    log "Applying pending Prisma migrations (attempt ${attempt}/10)"
+  for attempt in $(seq 1 30); do
+    log "Applying pending Prisma migrations (attempt ${attempt}/30)"
     set +e
     migrate_output="$(
       cd backend && npx prisma migrate deploy --schema prisma/schema.prisma 2>&1
