@@ -39,6 +39,7 @@ const agentTools = require('./agents/agent-tools');
 const conversationUnderstanding = require('./conversation-understanding');
 const { cloneProjectTool } = require('./agents/clone-project-tool');
 const { hostBashTool } = require('./agents/host-bash-tool');
+const { hostFileTool } = require('./agents/host-file-tool');
 const { checkCiStatusTool, monitorCiTool } = require('./agents/github-actions-tool');
 
 const SENTINEL_FENCE_OPEN = '```agent-task-state\n';
@@ -59,6 +60,7 @@ const STAGE_LABELS = {
   memory_recall: (args) => `Recordando contexto sobre "${truncate(args?.query, 48)}"`,
   clone_project: (args) => `Clonando ${truncate(args?.url, 60)}`,
   host_bash: (args) => `Ejecutando ${truncate(args?.command, 60)}`,
+  host_file: (args) => `Editando ${truncate(args?.path, 60)}`,
   git_commit_push: (args) => `Subiendo cambios a ${truncate(args?.branch || 'repo', 40)}`,
   git_workflow: (args) => `Git: ${truncate(args?.action || 'operación', 48)}`,
   rag_retrieve: (args) => `Consultando documentos sobre "${truncate(args?.query, 48)}"`,
@@ -297,7 +299,7 @@ async function runAgenticChat(opts) {
     'Cuando detectes que el usuario quiere hacer operaciones de repositorio (clonar, editar, commit, push, PR, deploy, CI), actúa como un coding agent completo:',
     '  1. Clona o localiza el repositorio usando `clone_project` o `host_bash` con git.',
     '  2. Comprende la estructura del proyecto.',
-    '  3. Realiza los cambios necesarios editando archivos.',
+    '  3. Realiza los cambios necesarios editando archivos con `host_file` para cambios de texto y `host_bash` solo para comandos.',
     '  4. Ejecuta `npm test` o la suite de pruebas respectiva para verificar.',
     '  5. Si las pruebas pasan, haz `git add`, `git commit`, `git push` al repositorio.',
     '  6. Usa `check_ci_status` o `monitor_ci` para verificar GitHub Actions hasta verde; si CI falla, informa el fallo exacto y no afirmes que quedó en verde.',
@@ -477,7 +479,7 @@ function loadTaskTools() {
 }
 
 function buildDefaultTools() {
-  const tools = [...baseWebTools(), ...loadTaskTools(), cloneProjectTool, hostBashTool, checkCiStatusTool, monitorCiTool];
+  const tools = [...baseWebTools(), ...loadTaskTools(), cloneProjectTool, hostBashTool, hostFileTool, checkCiStatusTool, monitorCiTool];
   const seen = new Set();
   return tools.filter((tool) => {
     if (!tool || !tool.name || seen.has(tool.name)) return false;

@@ -75,7 +75,6 @@ export function CodexWorkspaceTree({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 items-center justify-between gap-1 px-2.5 py-2">
-        <span className="text-[11px] font-medium text-muted-foreground/90">Codex</span>
         <div className="flex items-center gap-0.5">
           <button
             type="button"
