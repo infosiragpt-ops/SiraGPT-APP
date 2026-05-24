@@ -141,7 +141,11 @@ describe('host-bash-tool', () => {
       program: 'echo',
       args: ['hello world'],
     });
-    assert.strictEqual(internal.buildCommandSpec('git checkout main'), null);
+    assert.deepStrictEqual(internal.buildCommandSpec('git checkout main'), {
+      program: 'git',
+      args: ['checkout', 'main'],
+    });
+    assert.strictEqual(internal.buildCommandSpec('git checkout -- file.js'), null);
   });
 
   it('isAllowedDirectory allows projects dir', () => {

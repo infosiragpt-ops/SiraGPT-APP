@@ -43,11 +43,14 @@ const { hostBashTool } = require('./agents/host-bash-tool');
 const SENTINEL_FENCE_OPEN = '```agent-task-state\n';
 const SENTINEL_FENCE_CLOSE = '\n```';
 
-// Bounded by spec — task #58 calls for 6 iterations max per turn.
-const DEFAULT_MAX_STEPS = 6;
-// Per-turn wall clock. read_url has an 8 s cap and the loop calls a few
-// of them; 90 s is generous without being a UX hazard if it hangs.
-const DEFAULT_MAX_RUNTIME_MS = 90 * 1000;
+// Autonomous agents need more iterations for real work:
+// - Repository clone + edit + test + commit + push can take 10+ steps
+// - Research + web_search + read_url + verify can take 8+ steps
+// - /goal tasks run until the agent decides they are done.
+const DEFAULT_MAX_STEPS = 24;
+// Per-turn wall clock. Extended for multi-file edits, npm install, and
+// git operations that may include slow CI checks.
+const DEFAULT_MAX_RUNTIME_MS = 5 * 60 * 1000;
 
 const STAGE_LABELS = {
   web_search: (args) => `Buscando "${truncate(args?.query, 60)}"`,
@@ -55,6 +58,8 @@ const STAGE_LABELS = {
   memory_recall: (args) => `Recordando contexto sobre "${truncate(args?.query, 48)}"`,
   clone_project: (args) => `Clonando ${truncate(args?.url, 60)}`,
   host_bash: (args) => `Ejecutando ${truncate(args?.command, 60)}`,
+  git_commit_push: (args) => `Subiendo cambios a ${truncate(args?.branch || 'repo', 40)}`,
+  git_workflow: (args) => `Git: ${truncate(args?.action || 'operación', 48)}`,
   rag_retrieve: (args) => `Consultando documentos sobre "${truncate(args?.query, 48)}"`,
   self_rag_answer: () => 'Construyendo respuesta grounded',
   docintel_analyze: () => 'Analizando documentos adjuntos',
@@ -69,6 +74,12 @@ const STAGE_LABELS = {
   create_document: (args) => `Creando ${truncate(args?.filename || 'archivo', 48)}`,
   verify_artifact: () => 'Verificando archivo generado',
   run_tests: () => 'Ejecutando pruebas',
+  npm_install: () => 'Instalando dependencias',
+  commit_changes: () => 'Haciendo commit de cambios',
+  push_changes: () => 'Subiendo cambios a GitHub',
+  monitor_ci: () => 'Esperando verificación CI en verde',
+  check_ci_status: () => 'Verificando estado de CI',
+  create_pr: () => 'Creando Pull Request',
   finalize:   () => 'Componiendo respuesta',
 };
 
@@ -211,8 +222,8 @@ async function writeSse(res, payload) {
  * @param {Array}   opts.history    — prior chat messages [{role,content}]
  * @param {object}  opts.res        — express Response, already SSE-headered
  * @param {AbortSignal} [opts.signal]
- * @param {number}  [opts.maxSteps=6]
- * @param {number}  [opts.maxRuntimeMs=90000]
+ * @param {number}  [opts.maxSteps=24]
+ * @param {number}  [opts.maxRuntimeMs=300000]
  * @param {boolean} [opts.skipDoneSentinel=true]
  * @param {object}  [opts.toolsOverride] — for tests; defaults to
  *                                          the production chat toolset.
@@ -270,10 +281,25 @@ async function runAgenticChat(opts) {
     })
     .join('\n');
 
+  const isGoalCommand = /^\s*(\/goal|\/plan)\b/i.test(userQuery);
+  const isRepoTask = /\b(clon|repo|github|git|commit|push|pr|pull ?request|deploy|despleg|codex|cursor|claude.?code|program|c[oó]digo|refactor|mejora|arregla|corrige)\b/i.test(userQuery);
+  const isAutonomous = isGoalCommand || isRepoTask || /\b(meses?|semanas?|sin.?detene|no.?pare?s|background|segundo.?plano|auto.?ejecut|contin[uú]a.?trabajando|trabaja.?por.?meses|no.?funciona.?a[uú]n|todav[ií]a.?no.?funciona)\b/i.test(userQuery);
+
+  const maxStepsOverride = isAutonomous ? Math.max(maxSteps, isGoalCommand ? 60 : 30) : maxSteps;
+  const maxRuntimeOverride = isAutonomous ? Math.max(maxRuntimeMs, 15 * 60 * 1000) : maxRuntimeMs;
+
   const extraSystem = [
     'Responde SIEMPRE en español, con tono profesional y cercano. No uses emojis.',
     buildThreadWorkContext(history, userQuery),
-    'Este hilo es una sesion agentica: decide, usa herramientas, observa resultados, corrige y finaliza solo cuando tengas una respuesta verificable.',
+    'Este hilo es una sesion agentica autónoma: decide, usa herramientas, observa resultados, corrige y finaliza solo cuando tengas una respuesta verificable o la tarea esté completa.',
+    'Si el usuario dice "todavía no funciona", "sigue", "arregla", "no sirve", o similar, revisa TODO el historial del hilo para entender qué se pidió antes, qué se hizo, qué falló, y continúa desde donde se quedó. No empieces de cero.',
+    'Cuando detectes que el usuario quiere hacer operaciones de repositorio (clonar, editar, commit, push, PR, deploy, CI), actúa como un coding agent completo:',
+    '  1. Clona o localiza el repositorio usando `clone_project` o `host_bash` con git.',
+    '  2. Comprende la estructura del proyecto.',
+    '  3. Realiza los cambios necesarios editando archivos.',
+    '  4. Ejecuta `npm test` o la suite de pruebas respectiva para verificar.',
+    '  5. Si las pruebas pasan, haz `git add`, `git commit`, `git push` al repositorio.',
+    '  6. Monitorea el CI hasta que esté en verde usando las URLs/API disponibles con `read_url` o enlaces verificables; si el runtime no permite consultar CI, dilo explícitamente.',
     'Usa `memory_recall` cuando el pedido dependa de preferencias o contexto persistente del usuario.',
     'Usa `rag_retrieve`, `self_rag_answer` o `docintel_*` cuando el usuario mencione archivos, documentos, PDFs, tablas o conocimiento privado.',
     'Cuando la pregunta requiera información reciente, hechos verificables o cifras concretas, usa `web_search` y luego `read_url` sobre las mejores fuentes. Cita esas fuentes con enlaces markdown.',
@@ -288,8 +314,8 @@ async function runAgenticChat(opts) {
     query: userQuery,
     tools,
     model,
-    maxSteps,
-    maxRuntimeMs,
+    maxSteps: maxStepsOverride,
+    maxRuntimeMs: maxRuntimeOverride,
     extraSystem,
     ctx: { ...toolContext, signal },
     onStepStart: async (stepRec) => {

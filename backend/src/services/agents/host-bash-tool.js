@@ -34,9 +34,11 @@ const os = require('os');
 const ALLOWED_COMMANDS = new Set([
   // File system
   'ls', 'cat', 'head', 'tail', 'wc', 'find', 'grep', 'stat', 'du', 'file', 'tree',
-  // Git (read-only + common ops)
+  // Git (read-only + bounded write ops for autonomous repo workflow)
   'git status', 'git log', 'git diff', 'git show', 'git branch', 'git remote',
   'git stash list', 'git tag',
+  'git add', 'git commit', 'git push', 'git pull', 'git fetch', 'git checkout', 'git switch',
+  'git config', 'git init',
   // Node / npm
   'node', 'npm', 'npx', 'node_modules/.bin',
   // Python
@@ -65,7 +67,12 @@ const SIMPLE_COMMANDS = new Set([
   'make', 'cmake',
 ]);
 
-const GIT_SUBCOMMANDS = new Set(['status', 'log', 'diff', 'show', 'branch', 'remote', 'tag']);
+const GIT_READ_SUBCOMMANDS = new Set(['status', 'log', 'diff', 'show', 'branch', 'tag']);
+const SAFE_GIT_CONFIG_KEYS = new Set(['user.name', 'user.email', 'init.defaultBranch']);
+const SAFE_GIT_FETCH_FLAGS = new Set(['--all', '--prune', '--tags']);
+const SAFE_GIT_PULL_FLAGS = new Set(['--ff-only']);
+const SAFE_GIT_ADD_FLAGS = new Set(['-A', '--all', '-u', '--update']);
+const SAFE_GIT_PUSH_FLAGS = new Set(['-u', '--set-upstream']);
 
 // ============================================================
 // Validation
@@ -133,11 +140,114 @@ function buildCommandSpec(rawCmd) {
   }
 
   if (command === 'git') {
-    const subcommand = parts[1];
-    if (!subcommand) return null;
-    if (GIT_SUBCOMMANDS.has(subcommand)) return { program: 'git', args: parts.slice(1) };
-    if (subcommand === 'stash' && parts[2] === 'list') return { program: 'git', args: parts.slice(1) };
+    return buildGitCommandSpec(parts);
+  }
+
+  return null;
+}
+
+function isSafeRefToken(token) {
+  const ref = String(token || '');
+  if (!ref || ref.startsWith('-')) return false;
+  if (ref === '.' || ref === '..' || ref.includes('..') || ref.includes('@{') || ref.includes('//')) return false;
+  return /^[A-Za-z0-9][A-Za-z0-9._/-]{0,180}$/.test(ref) && !ref.endsWith('/') && !ref.endsWith('.lock');
+}
+
+function hasDisallowedGitFlag(args, blocked) {
+  return args.some((arg) => blocked.some((re) => re.test(arg)));
+}
+
+function buildGitCommandSpec(parts) {
+  const subcommand = parts[1];
+  const args = parts.slice(2);
+  if (!subcommand) return null;
+
+  if (GIT_READ_SUBCOMMANDS.has(subcommand)) {
+    return { program: 'git', args: parts.slice(1) };
+  }
+
+  if (subcommand === 'remote') {
+    if (args.length === 0) return { program: 'git', args: parts.slice(1) };
+    if (args.length === 1 && args[0] === '-v') return { program: 'git', args: parts.slice(1) };
+    if (args[0] === 'get-url' && args.length <= 2) return { program: 'git', args: parts.slice(1) };
     return null;
+  }
+
+  if (subcommand === 'stash') {
+    return args.length === 1 && args[0] === 'list' ? { program: 'git', args: parts.slice(1) } : null;
+  }
+
+  if (subcommand === 'add') {
+    if (args.length === 0) return null;
+    if (args.every(arg => SAFE_GIT_ADD_FLAGS.has(arg) || !arg.startsWith('-'))) {
+      return { program: 'git', args: parts.slice(1) };
+    }
+    return null;
+  }
+
+  if (subcommand === 'commit') {
+    if (hasDisallowedGitFlag(args, [/^--amend$/, /^--allow-empty$/, /^--reuse-message\b/, /^--reedit-message\b/, /^--fixup\b/, /^--squash\b/])) {
+      return null;
+    }
+    let sawMessage = false;
+    for (let i = 0; i < args.length; i += 1) {
+      const arg = args[i];
+      if (arg === '-m' || arg === '--message') {
+        if (!args[i + 1]) return null;
+        sawMessage = true;
+        i += 1;
+        continue;
+      }
+      if (arg.startsWith('--message=')) {
+        sawMessage = arg.length > '--message='.length;
+        continue;
+      }
+      return null;
+    }
+    return sawMessage ? { program: 'git', args: parts.slice(1) } : null;
+  }
+
+  if (subcommand === 'push') {
+    if (hasDisallowedGitFlag(args, [/^--force(?:-with-lease)?$/, /^-f$/, /^--mirror$/, /^--delete$/, /^--prune$/])) {
+      return null;
+    }
+    if (args.every(arg => SAFE_GIT_PUSH_FLAGS.has(arg) || isSafeRefToken(arg))) {
+      return { program: 'git', args: parts.slice(1) };
+    }
+    return null;
+  }
+
+  if (subcommand === 'fetch') {
+    if (args.every(arg => SAFE_GIT_FETCH_FLAGS.has(arg) || isSafeRefToken(arg))) {
+      return { program: 'git', args: parts.slice(1) };
+    }
+    return null;
+  }
+
+  if (subcommand === 'pull') {
+    if (args.every(arg => SAFE_GIT_PULL_FLAGS.has(arg) || isSafeRefToken(arg))) {
+      return { program: 'git', args: parts.slice(1) };
+    }
+    return null;
+  }
+
+  if (subcommand === 'checkout' || subcommand === 'switch') {
+    if (args.length === 1 && isSafeRefToken(args[0])) {
+      return { program: 'git', args: parts.slice(1) };
+    }
+    if (args.length === 2 && (args[0] === '-b' || (subcommand === 'switch' && args[0] === '-c')) && isSafeRefToken(args[1])) {
+      return { program: 'git', args: parts.slice(1) };
+    }
+    return null;
+  }
+
+  if (subcommand === 'config') {
+    if (args.length !== 2) return null;
+    return SAFE_GIT_CONFIG_KEYS.has(args[0]) ? { program: 'git', args: parts.slice(1) } : null;
+  }
+
+  if (subcommand === 'init') {
+    return args.length === 0 || (args.length === 1 && args[0] === '.') ? { program: 'git', args: parts.slice(1) } : null;
   }
 
   return null;
@@ -368,7 +478,7 @@ async function hostBash(args, ctx = {}) {
 
 const hostBashTool = {
   name: 'host_bash',
-  description: 'Execute a shell command on the host machine. Use this to inspect files, run git commands (status/log/diff), list directory contents, run npm/pip commands on cloned projects, and execute build/test scripts. Allowed commands: ls, cat, head, tail, find, grep, git (status/log/diff/show/branch/remote), node, npm, npx, python3, pip3, make, and basic system utilities. Operations are restricted to ~/Desktop/sira-projects/ and ~/Desktop/siraGPT/.',
+  description: 'Execute a shell command on the host machine. Use this to inspect files, run bounded git workflow commands (status/log/diff/show/add/commit/push/fetch/pull/checkout branch), list directory contents, run npm/pip commands on cloned projects, and execute build/test scripts. Destructive git operations such as reset/restore/rebase/force-push are blocked. Operations are restricted to ~/Desktop/sira-projects/ and ~/Desktop/siraGPT/.',
   parameters: {
     type: 'object',
     properties: {

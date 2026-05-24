@@ -4,7 +4,7 @@ const DEFAULT_RECENT_TURNS = 18;
 const DEFAULT_EARLIER_TURNS = 12;
 const DEFAULT_MESSAGE_CHARS = 900;
 const DEFAULT_BLOCK_CHARS = 18000;
-const THREAD_DEPENDENT_PROMPT_RE = /\b(a[uú]n|todav[ií]a|sigue|no funciona|no sirve|no entend[ií]o|no comprende|eso|esto|lo anterior|el anterior|la anterior|como dije|te dije|corrige|arregla|mej[oó]ralo|hazlo|contin[uú]a|sigue con|same|that|this|previous|still|doesn'?t work|fix it|continue)\b/i;
+const THREAD_DEPENDENT_PROMPT_RE = /\b(a[uú]n|todav[ií]a|sigue|no funciona|no sirve|no entend[ií]o|no comprende|eso|esto|lo anterior|el anterior|la anterior|como dije|te dije|corrige|arregla|mej[oó]ralo|hazlo|contin[uú]a|sigue con|same|that|this|previous|still|doesn'?t work|fix it|continue|sigue trabajando|no pares|sigue haci[eé]ndolo|d[eé]jalo trabajando|background|segundo\s+plano|sin\s+detener|auto.?ejecut|goal|plan\b|trabaja\s+por\s+meses|contin[uú]a\s+con\s+lo\s+anterior|no\s+funciona\s+a[uú]n|todav[ií]a\s+no|sigue\s+con\s+la\s+tarea|sigue\s+con\s+el\s+trabajo|no\s+detengas|sigue\s+adelante|contin[uú]a\s+adelante|no\s+termines|sigue\s+procesando|avanza|prosigue|adelante)\b/i;
 
 function inertText(value, maxChars = DEFAULT_MESSAGE_CHARS) {
   return truncateText(value, maxChars)
