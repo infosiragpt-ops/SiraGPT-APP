@@ -163,6 +163,10 @@ function toPrometheusText() {
   lines.push('# HELP sira_free_ia_upstream_errors_total Failed Cerebras Llama 3.1 8B calls.');
   lines.push('# TYPE sira_free_ia_upstream_errors_total counter');
   lines.push(`sira_free_ia_upstream_errors_total ${state.upstreamErrors}`);
+  for (const [code, count] of Object.entries(state.upstreamErrorsByCode)) {
+    const escaped = String(code).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    lines.push(`sira_free_ia_upstream_errors_total{code="${escaped}"} ${count}`);
+  }
   return lines.join('\n') + '\n';
 }
 

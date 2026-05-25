@@ -292,6 +292,16 @@ test('toPrometheusText includes upstream success/error counters', () => {
   assert.match(txt, /^sira_free_ia_upstream_errors_total 1$/m);
 });
 
+test('toPrometheusText includes per-error-code labels', () => {
+  metrics.reset();
+  metrics.recordUpstreamError({ code: '503' });
+  metrics.recordUpstreamError({ code: '503' });
+  metrics.recordUpstreamError({ code: '429' });
+  const txt = metrics.toPrometheusText();
+  assert.match(txt, /sira_free_ia_upstream_errors_total\{code="503"\} 2/);
+  assert.match(txt, /sira_free_ia_upstream_errors_total\{code="429"\} 1/);
+});
+
 test('reset() clears upstream counters too', () => {
   metrics.recordUpstreamSuccess();
   metrics.recordUpstreamError({ code: '500' });
