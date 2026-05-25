@@ -39,11 +39,40 @@ const MODE_SIMILARITY_CEILINGS = Object.freeze({
   custom: 0.72,
 });
 
+// Aliases — callers sometimes pass the conversational form of the
+// mode ("human", "academic-style", "shorter", ...) instead of the
+// canonical keys. We resolve common variants so the engine doesn't
+// silently fall back to "standard" for typos.
+const MODE_ALIASES = Object.freeze({
+  human: 'humanize',
+  humanized: 'humanize',
+  humanise: 'humanize',
+  humanised: 'humanize',
+  paraphrase: 'standard',
+  default: 'standard',
+  formalize: 'formal',
+  formalise: 'formal',
+  'academic-style': 'academic',
+  scholarly: 'academic',
+  short: 'shorten',
+  shorter: 'shorten',
+  expanded: 'expand',
+  longer: 'expand',
+  simplify: 'simple',
+  simplified: 'simple',
+});
+
+function normaliseMode(mode) {
+  const raw = String(mode || '').trim().toLowerCase();
+  return MODE_ALIASES[raw] || raw;
+}
+
 function resolveMaxSimilarity(mode, explicit) {
   if (typeof explicit === 'number' && Number.isFinite(explicit) && explicit > 0 && explicit <= 1) {
     return explicit;
   }
-  return MODE_SIMILARITY_CEILINGS[mode] || MODE_SIMILARITY_CEILINGS.standard;
+  const canonical = normaliseMode(mode);
+  return MODE_SIMILARITY_CEILINGS[canonical] || MODE_SIMILARITY_CEILINGS.standard;
 }
 
 async function runParaphrasePipeline({ source, rewriteFn, mode = 'standard', maxSimilarity }) {
@@ -78,5 +107,7 @@ module.exports = {
   structuralVariation,
   runParaphrasePipeline,
   resolveMaxSimilarity,
+  normaliseMode,
   MODE_SIMILARITY_CEILINGS,
+  MODE_ALIASES,
 };

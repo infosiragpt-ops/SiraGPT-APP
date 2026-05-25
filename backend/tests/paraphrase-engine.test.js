@@ -7,7 +7,9 @@ const {
   runParaphrasePipeline,
   jaccardSimilarity,
   resolveMaxSimilarity,
+  normaliseMode,
   MODE_SIMILARITY_CEILINGS,
+  MODE_ALIASES,
 } = require('../src/services/paraphrase-engine');
 
 test('jaccardSimilarity detects overlap', () => {
@@ -55,6 +57,37 @@ test('resolveMaxSimilarity: invalid explicit values fall back to the mode ceilin
   assert.equal(resolveMaxSimilarity('humanize', 2), 0.55);
   assert.equal(resolveMaxSimilarity('humanize', NaN), 0.55);
   assert.equal(resolveMaxSimilarity('humanize'), 0.55);
+});
+
+test('normaliseMode: known aliases resolve to the canonical key', () => {
+  assert.equal(normaliseMode('human'), 'humanize');
+  assert.equal(normaliseMode('humanise'), 'humanize');
+  assert.equal(normaliseMode('paraphrase'), 'standard');
+  assert.equal(normaliseMode('formalize'), 'formal');
+  assert.equal(normaliseMode('academic-style'), 'academic');
+  assert.equal(normaliseMode('scholarly'), 'academic');
+  assert.equal(normaliseMode('short'), 'shorten');
+  assert.equal(normaliseMode('shorter'), 'shorten');
+  assert.equal(normaliseMode('expanded'), 'expand');
+  assert.equal(normaliseMode('longer'), 'expand');
+  assert.equal(normaliseMode('simplify'), 'simple');
+});
+
+test('normaliseMode: case-insensitive + trims whitespace', () => {
+  assert.equal(normaliseMode('  HUMAN  '), 'humanize');
+  assert.equal(normaliseMode('Academic-Style'), 'academic');
+});
+
+test('normaliseMode: unknown mode passes through unchanged (lowercase)', () => {
+  assert.equal(normaliseMode('weird'), 'weird');
+  assert.equal(normaliseMode(''), '');
+});
+
+test('resolveMaxSimilarity: applies aliases — "human" → humanize ceiling', () => {
+  assert.equal(resolveMaxSimilarity('human'), 0.55);
+  assert.equal(resolveMaxSimilarity('humanize'), 0.55);
+  assert.equal(resolveMaxSimilarity('paraphrase'), 0.72); // → standard
+  assert.equal(resolveMaxSimilarity('shorter'), 0.78);    // → shorten
 });
 
 test('resolveMaxSimilarity: unknown modes fall back to standard (0.72)', () => {
