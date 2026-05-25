@@ -42,6 +42,8 @@ const { authenticateToken, requireAdmin } = require('../middleware/auth');
 const {
   getCerebrasConfig,
   isFreeIaConfigured,
+  buildFreeIaModelDescriptor,
+  getFreeIaPricing,
 } = require('../services/ai/cerebras-client');
 const freeIaMetrics = require('../services/free-ia-metrics');
 
@@ -59,6 +61,27 @@ router.get('/status', (_req, res) => {
 
 router.get('/configured', (_req, res) => {
   res.json({ configured: isFreeIaConfigured() });
+});
+
+// Consolidated view for the model picker's first paint — one round-trip
+// instead of /status + /metrics/summary + /health + pricing.
+router.get('/info', (_req, res) => {
+  const cfg = getCerebrasConfig();
+  const sum = freeIaMetrics.summary();
+  res.json({
+    enabled: cfg.enabled,
+    reason: cfg.reason,
+    model: cfg.model,
+    displayName: cfg.displayName,
+    provider: cfg.provider,
+    descriptor: buildFreeIaModelDescriptor(),
+    pricing: getFreeIaPricing(),
+    health: {
+      ok: cfg.enabled && !sum.degraded,
+      degraded: sum.degraded,
+    },
+    summary: sum,
+  });
 });
 
 // Lightweight liveness/readiness probe — friendly to k8s/load-balancer

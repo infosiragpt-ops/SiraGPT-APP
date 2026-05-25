@@ -78,6 +78,44 @@ test('GET /api/free-ia/status reports enabled when CEREBRAS_API_KEY is set', asy
   }
 });
 
+test('GET /api/free-ia/info returns a consolidated single-call view', async () => {
+  const metrics = require('../src/services/free-ia-metrics');
+  metrics.reset();
+  metrics.recordFallback({ feature: 'paraphrase', amount: 5 });
+  metrics.recordUpstreamSuccess();
+  const prevKey = process.env.CEREBRAS_API_KEY;
+  process.env.CEREBRAS_API_KEY = 'csk-info-test';
+  const { server, baseURL } = await startServer();
+  try {
+    const { status, body } = await fetchJSON(`${baseURL}/api/free-ia/info`);
+    assert.equal(status, 200);
+    assert.equal(body.enabled, true);
+    assert.equal(body.reason, 'ok');
+    assert.equal(body.model, 'llama-3.1-8b');
+    assert.equal(body.displayName, 'Free IA');
+    assert.equal(body.provider, 'Cerebras');
+    assert.ok(body.descriptor);
+    assert.equal(body.descriptor.virtual, true);
+    assert.ok(body.pricing);
+    assert.equal(body.pricing.isFree, true);
+    assert.equal(body.pricing.badge, 'Gratis');
+    assert.ok(body.health);
+    assert.equal(body.health.ok, true);
+    assert.equal(body.health.degraded, false);
+    assert.ok(body.summary);
+    assert.equal(body.summary.fallbacks, 1);
+    assert.equal(body.summary.upstreamSuccess, 1);
+    // API key never leaked anywhere in the payload.
+    assert.equal(body.apiKey, undefined);
+    assert.equal(JSON.stringify(body).includes('csk-info-test'), false);
+  } finally {
+    server.close();
+    metrics.reset();
+    if (prevKey === undefined) delete process.env.CEREBRAS_API_KEY;
+    else process.env.CEREBRAS_API_KEY = prevKey;
+  }
+});
+
 test('GET /api/free-ia/configured returns boolean only', async () => {
   const prevKey = process.env.CEREBRAS_API_KEY;
   process.env.CEREBRAS_API_KEY = 'csk-test-configured';
