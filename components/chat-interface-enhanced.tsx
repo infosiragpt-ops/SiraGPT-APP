@@ -1898,7 +1898,7 @@ const ActiveToolsDisplay = ({
               <Button
                 variant="ghost"
                 size="sm"
-                className="group/ratio-trigger relative isolate h-7 gap-1.5 overflow-hidden rounded-lg border border-border/50 bg-background/55 px-2 py-0 text-xs font-semibold text-foreground/80 shadow-[inset_0_1px_0_rgba(255,255,255,0.72),0_8px_22px_-18px_rgba(15,23,42,0.35)] backdrop-blur-xl transition-all duration-200 hover:border-foreground/15 hover:bg-background/80 dark:bg-white/[0.055] dark:hover:bg-white/[0.08]"
+                className="group/ratio-trigger relative isolate h-7 gap-1.5 overflow-hidden rounded-lg border border-zinc-200/80 bg-white/80 px-2 py-0 text-xs font-semibold text-zinc-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_8px_22px_-18px_rgba(15,23,42,0.35)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/10 dark:bg-white/[0.055] dark:text-white/82 dark:hover:bg-white/[0.08]"
                 title={`Imagen: ${selectedImageAspectRatio}, ${selectedImageQuality}, ${selectedImageCount}`}
                 aria-label={`Configurar imagen. Actual ${selectedImageAspectRatio}, ${selectedImageQuality}, ${selectedImageCount}`}
               >
@@ -1907,20 +1907,22 @@ const ActiveToolsDisplay = ({
                 <span>{selectedImageAspectRatio}</span>
                 <span className="h-1 w-1 rounded-full bg-current/35" />
                 <span>{selectedImageQuality}</span>
+                <span className="h-1 w-1 rounded-full bg-current/35" />
+                <span>{selectedImageCount} img</span>
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent
               align="start"
               sideOffset={9}
               collisionPadding={12}
-              className="liquid-menu-surface w-[min(calc(100vw-1.25rem),34rem)] overflow-hidden rounded-[28px] border-white/20 bg-black/70 p-0 text-white shadow-[0_24px_80px_-36px_rgba(0,0,0,0.9),inset_0_1px_0_rgba(255,255,255,0.18)] backdrop-blur-2xl dark:bg-black/72"
+              className="w-[min(calc(100vw-1.25rem),24rem)] overflow-hidden rounded-[22px] border border-zinc-200/65 bg-white/86 p-0 text-zinc-950 shadow-[0_22px_70px_-36px_rgba(15,23,42,0.55),inset_0_1px_0_rgba(255,255,255,0.85)] backdrop-blur-2xl dark:border-white/14 dark:bg-zinc-950/72 dark:text-white dark:shadow-[0_24px_80px_-36px_rgba(0,0,0,0.95),inset_0_1px_0_rgba(255,255,255,0.16)]"
             >
-              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_24%_18%,rgba(255,255,255,0.18),transparent_28%),radial-gradient(circle_at_70%_42%,rgba(255,255,255,0.10),transparent_32%),linear-gradient(135deg,rgba(255,255,255,0.12),rgba(255,255,255,0.02)_42%,rgba(255,255,255,0.07))]" />
-              <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-white/24" />
+              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_24%_18%,rgba(255,255,255,0.92),transparent_30%),radial-gradient(circle_at_72%_45%,rgba(15,23,42,0.08),transparent_34%),linear-gradient(135deg,rgba(255,255,255,0.72),rgba(255,255,255,0.26)_44%,rgba(255,255,255,0.58))] dark:bg-[radial-gradient(circle_at_24%_18%,rgba(255,255,255,0.15),transparent_30%),radial-gradient(circle_at_72%_45%,rgba(255,255,255,0.08),transparent_34%),linear-gradient(135deg,rgba(255,255,255,0.10),rgba(255,255,255,0.02)_44%,rgba(255,255,255,0.06))]" />
+              <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-white/70 dark:bg-white/20" />
               <div className="relative z-10">
-                <section className="px-5 pb-6 pt-6 sm:px-7 sm:pb-7 sm:pt-7">
-                  <h3 className="text-[24px] font-medium leading-none tracking-normal text-white sm:text-[28px]">Aspect Ratio</h3>
-                  <div className="mt-6 grid grid-cols-5 gap-2 sm:mt-7 sm:gap-5" role="radiogroup" aria-label="Aspect ratio">
+                <section className="px-4 pb-4 pt-4 sm:px-5 sm:pb-5 sm:pt-5">
+                  <h3 className="text-[17px] font-semibold leading-none tracking-normal text-zinc-950 dark:text-white">Aspect Ratio</h3>
+                  <div className="mt-4 grid grid-cols-5 gap-1.5 sm:gap-2" role="radiogroup" aria-label="Aspect ratio">
                   {IMAGE_ASPECT_RATIO_OPTIONS.map(option => {
                     if (option.value === "4:3" || option.value === "9:16") return null;
                     const selected = option.value === selectedImageAspectRatio;
@@ -1931,24 +1933,24 @@ const ActiveToolsDisplay = ({
                         role="radio"
                         aria-checked={selected}
                         className={cn(
-                          "group/ratio-option relative flex h-20 min-w-0 flex-col items-center justify-center gap-3 overflow-hidden rounded-2xl text-center transition-all duration-200 sm:h-24 sm:gap-4",
+                          "group/ratio-option relative flex h-[58px] min-w-0 flex-col items-center justify-center gap-2 overflow-hidden rounded-xl text-center transition-all duration-200",
                           selected
-                            ? "bg-white/12 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_16px_34px_-22px_rgba(255,255,255,0.35)]"
-                            : "text-white/72 hover:bg-white/[0.07] hover:text-white"
+                            ? "bg-zinc-950/[0.075] text-zinc-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.80),0_12px_26px_-22px_rgba(15,23,42,0.55)] dark:bg-white/12 dark:text-white dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.16),0_16px_34px_-24px_rgba(255,255,255,0.35)]"
+                            : "text-zinc-600 hover:bg-zinc-950/[0.045] hover:text-zinc-950 dark:text-white/68 dark:hover:bg-white/[0.07] dark:hover:text-white"
                         )}
                         onClick={() => setSelectedImageAspectRatio(option.value)}
                         title={`${option.label} ${option.ratio}`}
                       >
-                        <span className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_28%_5%,rgba(255,255,255,0.24),transparent_45%)] opacity-0 transition-opacity duration-200 group-hover/ratio-option:opacity-100" />
-                        <span className="relative z-10 text-[18px] font-normal leading-none tabular-nums sm:text-[22px]">{option.ratio}</span>
-                        <span className="relative z-10 flex h-8 items-center justify-center text-white">
+                        <span className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_28%_5%,rgba(255,255,255,0.65),transparent_48%)] opacity-0 transition-opacity duration-200 group-hover/ratio-option:opacity-100 dark:bg-[radial-gradient(circle_at_28%_5%,rgba(255,255,255,0.20),transparent_48%)]" />
+                        <span className="relative z-10 text-[13px] font-medium leading-none tabular-nums">{option.ratio}</span>
+                        <span className="relative z-10 flex h-6 items-center justify-center">
                           <span
                             className={cn(
-                              "rounded-[4px] border-2 transition-all duration-200",
+                              "rounded-[4px] border transition-all duration-200",
                               option.className,
                               selected
-                                ? "border-white bg-white/8 shadow-[0_0_0_3px_rgba(255,255,255,0.10)]"
-                                : "border-white/82 bg-transparent group-hover/ratio-option:border-white"
+                                ? "border-zinc-950 bg-white/45 shadow-[0_0_0_3px_rgba(24,24,27,0.06)] dark:border-white dark:bg-white/8 dark:shadow-[0_0_0_3px_rgba(255,255,255,0.10)]"
+                                : "border-zinc-500/65 bg-white/20 group-hover/ratio-option:border-zinc-800 dark:border-white/62 dark:bg-transparent dark:group-hover/ratio-option:border-white"
                             )}
                           />
                         </span>
@@ -1958,16 +1960,16 @@ const ActiveToolsDisplay = ({
                   </div>
                   <button
                     type="button"
-                    className="mt-5 inline-flex items-center gap-2 rounded-full text-[19px] font-normal leading-none text-white/78 transition-colors hover:text-white sm:mt-6 sm:text-[21px]"
+                    className="mt-4 inline-flex items-center gap-1.5 rounded-full text-[13px] font-medium leading-none text-zinc-600 transition-colors hover:text-zinc-950 dark:text-white/66 dark:hover:text-white"
                     aria-label="Ver todos los aspect ratios"
                   >
-                    View All <ChevronDown className="h-5 w-5" />
+                    View All <ChevronDown className="h-3.5 w-3.5" />
                   </button>
                 </section>
 
-                <section className="border-t border-white/10 px-5 py-6 sm:px-7 sm:py-7">
-                  <h3 className="text-[24px] font-medium leading-none tracking-normal text-white sm:text-[28px]">Quality</h3>
-                  <div className="mt-6 flex flex-wrap items-center gap-2 sm:mt-7 sm:gap-4" role="radiogroup" aria-label="Image quality">
+                <section className="border-t border-zinc-950/8 px-4 py-4 dark:border-white/10 sm:px-5 sm:py-5">
+                  <h3 className="text-[17px] font-semibold leading-none tracking-normal text-zinc-950 dark:text-white">Quality</h3>
+                  <div className="mt-4 flex flex-wrap items-center gap-2" role="radiogroup" aria-label="Image quality">
                     {IMAGE_QUALITY_OPTIONS.map(option => {
                       const selected = option === selectedImageQuality;
                       return (
@@ -1978,8 +1980,8 @@ const ActiveToolsDisplay = ({
                           aria-checked={selected}
                           onClick={() => setSelectedImageQuality(option)}
                           className={cn(
-                            "relative h-12 rounded-2xl px-3 text-[18px] font-normal leading-none text-white/74 transition-all duration-200 hover:bg-white/[0.07] hover:text-white sm:h-[60px] sm:px-4 sm:text-[22px]",
-                            selected && "bg-white/13 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.16),0_12px_30px_-24px_rgba(255,255,255,0.55)]"
+                            "relative h-9 rounded-xl px-3 text-[14px] font-medium leading-none text-zinc-600 transition-all duration-200 hover:bg-zinc-950/[0.045] hover:text-zinc-950 dark:text-white/68 dark:hover:bg-white/[0.07] dark:hover:text-white",
+                            selected && "bg-zinc-950/[0.075] text-zinc-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_12px_24px_-22px_rgba(15,23,42,0.45)] dark:bg-white/13 dark:text-white dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.16),0_12px_30px_-24px_rgba(255,255,255,0.55)]"
                           )}
                         >
                           {option}
@@ -1989,9 +1991,9 @@ const ActiveToolsDisplay = ({
                   </div>
                 </section>
 
-                <section className="border-t border-white/10 px-5 py-6 sm:px-7 sm:py-7">
-                  <h3 className="text-[24px] font-medium leading-none tracking-normal text-white sm:text-[28px]">Number of Images</h3>
-                  <div className="mt-6 flex flex-wrap items-center gap-2 sm:mt-7 sm:gap-4" role="radiogroup" aria-label="Number of images">
+                <section className="border-t border-zinc-950/8 px-4 py-4 dark:border-white/10 sm:px-5 sm:py-5">
+                  <h3 className="text-[17px] font-semibold leading-none tracking-normal text-zinc-950 dark:text-white">Number of Images</h3>
+                  <div className="mt-4 flex flex-wrap items-center gap-2" role="radiogroup" aria-label="Number of images">
                     {IMAGE_COUNT_OPTIONS.map(option => {
                       const selected = option === selectedImageCount;
                       return (
@@ -2002,8 +2004,8 @@ const ActiveToolsDisplay = ({
                           aria-checked={selected}
                           onClick={() => setSelectedImageCount(option)}
                           className={cn(
-                            "h-12 min-w-10 rounded-2xl px-3 text-[18px] font-normal leading-none text-white/74 transition-all duration-200 hover:bg-white/[0.07] hover:text-white sm:h-[60px] sm:px-4 sm:text-[22px]",
-                            selected && "bg-white/13 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.16),0_12px_30px_-24px_rgba(255,255,255,0.55)]"
+                            "h-9 min-w-9 rounded-xl px-3 text-[14px] font-medium leading-none text-zinc-600 transition-all duration-200 hover:bg-zinc-950/[0.045] hover:text-zinc-950 dark:text-white/68 dark:hover:bg-white/[0.07] dark:hover:text-white",
+                            selected && "bg-zinc-950/[0.075] text-zinc-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_12px_24px_-22px_rgba(15,23,42,0.45)] dark:bg-white/13 dark:text-white dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.16),0_12px_30px_-24px_rgba(255,255,255,0.55)]"
                           )}
                         >
                           {option}
