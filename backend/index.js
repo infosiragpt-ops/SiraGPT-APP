@@ -1,4 +1,4 @@
-require('dotenv').config();
+require('./src/config/load-env').loadEnvFiles();
 
 // ── EventTarget listener cap ───────────────────────────────
 // AbortSignals are shared across many concurrent operations
