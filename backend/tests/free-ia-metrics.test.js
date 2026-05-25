@@ -21,6 +21,48 @@ test('summary.line omits "/min" suffix when sub-1-minute window', () => {
   assert.ok(!/\/min/.test(s.line), `should not include /min: ${s.line}`);
 });
 
+test('summary() snapshot: stable shape (all expected keys present)', () => {
+  metrics.reset();
+  const s = metrics.summary();
+  const expectedKeys = [
+    'line',
+    'fallbacks',
+    'upstreamSuccess',
+    'upstreamTotal',
+    'successRate',
+    'degraded',
+    'requestRatePerMin',
+    'lastEventAt',
+  ].sort();
+  assert.deepEqual(Object.keys(s).sort(), expectedKeys);
+});
+
+test('snapshot() shape: stable top-level keys + upstream block', () => {
+  metrics.reset();
+  const s = metrics.snapshot();
+  const expectedTop = [
+    'totalFallbacks',
+    'totalCostBlocked',
+    'perFeature',
+    'lastEventAt',
+    'upstream',
+    'startedAt',
+    'lastResetAt',
+  ].sort();
+  assert.deepEqual(Object.keys(s).sort(), expectedTop);
+  const expectedUpstream = [
+    'success',
+    'errors',
+    'successRate',
+    'lastErrorAt',
+    'lastErrorCode',
+    'lastErrorMessage',
+    'errorsByCode',
+    'topErrorCodes',
+  ].sort();
+  assert.deepEqual(Object.keys(s.upstream).sort(), expectedUpstream);
+});
+
 test('summary() returns a one-line digest with all the numbers backing it', () => {
   metrics.reset();
   metrics.recordFallback({ feature: 'paraphrase', amount: 5 });
