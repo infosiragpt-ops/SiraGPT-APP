@@ -31,6 +31,7 @@ const state = {
   // Frequency map of upstream error codes — lets ops see "503 is the
   // top failure" at a glance rather than tailing logs.
   upstreamErrorsByCode: Object.create(null),
+  lastUpstreamErrorMessage: null,
   // Bookkeeping: when the process started + the last time someone hit
   // the admin reset endpoint. Helps ops distinguish "counter is 0
   // because no events" from "counter is 0 because we just reset".
@@ -79,11 +80,17 @@ function recordUpstreamSuccess() {
   return state.upstreamSuccess;
 }
 
-function recordUpstreamError({ code } = {}) {
+function recordUpstreamError({ code, message } = {}) {
   state.upstreamErrors += 1;
   state.lastUpstreamErrorAt = new Date().toISOString();
   const codeStr = typeof code === 'string' ? code : (code != null ? String(code) : null);
   state.lastUpstreamErrorCode = codeStr;
+  // Capture the last error message too — useful for a postmortem
+  // banner without having to grep logs. Capped at 240 chars to keep
+  // the in-memory state bounded.
+  if (typeof message === 'string' && message.trim()) {
+    state.lastUpstreamErrorMessage = message.trim().slice(0, 240);
+  }
   // Bump per-code frequency map. `unknown` bucket catches errors that
   // didn't carry an identifiable code/status/name.
   const bucket = codeStr || 'unknown';
@@ -129,6 +136,7 @@ function snapshot() {
       successRate,
       lastErrorAt: state.lastUpstreamErrorAt,
       lastErrorCode: state.lastUpstreamErrorCode,
+      lastErrorMessage: state.lastUpstreamErrorMessage,
       errorsByCode: { ...state.upstreamErrorsByCode },
       topErrorCodes: topUpstreamErrorCodes(5),
     },
@@ -219,6 +227,7 @@ function reset() {
   state.lastUpstreamErrorAt = null;
   state.lastUpstreamErrorCode = null;
   state.upstreamErrorsByCode = Object.create(null);
+  state.lastUpstreamErrorMessage = null;
   state.lastResetAt = new Date().toISOString();
 }
 

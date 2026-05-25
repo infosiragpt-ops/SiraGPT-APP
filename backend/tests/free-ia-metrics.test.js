@@ -239,6 +239,33 @@ test('upstream.successRate is null when no upstream events recorded', () => {
   assert.equal(s.upstream.successRate, null);
 });
 
+test('recordUpstreamError captures the message (capped at 240 chars)', () => {
+  metrics.reset();
+  metrics.recordUpstreamError({ code: '503', message: 'upstream is having a bad day' });
+  let s = metrics.snapshot();
+  assert.equal(s.upstream.lastErrorMessage, 'upstream is having a bad day');
+
+  // Long messages get truncated to 240 chars
+  metrics.recordUpstreamError({ code: '500', message: 'x'.repeat(500) });
+  s = metrics.snapshot();
+  assert.equal(s.upstream.lastErrorMessage.length, 240);
+});
+
+test('recordUpstreamError without a message keeps the previous one', () => {
+  metrics.reset();
+  metrics.recordUpstreamError({ code: '503', message: 'set first' });
+  metrics.recordUpstreamError({ code: '500' }); // no message arg
+  const s = metrics.snapshot();
+  assert.equal(s.upstream.lastErrorMessage, 'set first');
+});
+
+test('reset() clears lastErrorMessage too', () => {
+  metrics.recordUpstreamError({ code: '503', message: 'something' });
+  metrics.reset();
+  const s = metrics.snapshot();
+  assert.equal(s.upstream.lastErrorMessage, null);
+});
+
 test('topUpstreamErrorCodes returns codes sorted by frequency (most common first)', () => {
   metrics.reset();
   for (let i = 0; i < 5; i += 1) metrics.recordUpstreamError({ code: '503' });
