@@ -14,6 +14,7 @@ const {
   isFreeIaConfigured,
   createCerebrasClient,
   buildFreeIaModelDescriptor,
+  runWithMetrics,
   DEFAULT_BASE_URL,
   DEFAULT_MODEL,
   DEFAULT_DISPLAY_NAME,
@@ -124,4 +125,51 @@ test('buildFreeIaModelDescriptor: enabled:false when Cerebras key missing — de
   assert.equal(desc.enabled, false);
   assert.equal(desc.name, 'llama-3.1-8b');
   assert.equal(desc.provider, 'Cerebras');
+});
+
+test('runWithMetrics: records success on a fulfilled call', async () => {
+  const calls = { success: 0, errors: 0, lastCode: null };
+  const stub = {
+    recordUpstreamSuccess: () => { calls.success += 1; },
+    recordUpstreamError: ({ code }) => { calls.errors += 1; calls.lastCode = code; },
+  };
+  const out = await runWithMetrics(async () => 'ok', { metrics: stub });
+  assert.equal(out, 'ok');
+  assert.equal(calls.success, 1);
+  assert.equal(calls.errors, 0);
+});
+
+test('runWithMetrics: records error AND re-throws the original error', async () => {
+  const calls = { success: 0, errors: 0, lastCode: null };
+  const stub = {
+    recordUpstreamSuccess: () => { calls.success += 1; },
+    recordUpstreamError: ({ code }) => { calls.errors += 1; calls.lastCode = code; },
+  };
+  const err = new Error('boom');
+  err.status = 503;
+  await assert.rejects(
+    () => runWithMetrics(async () => { throw err; }, { metrics: stub }),
+    /boom/,
+  );
+  assert.equal(calls.success, 0);
+  assert.equal(calls.errors, 1);
+  assert.equal(calls.lastCode, 503);
+});
+
+test('runWithMetrics: extracts error code from .code / .status / .statusCode / .name', async () => {
+  const codes = [];
+  const stub = {
+    recordUpstreamSuccess: () => {},
+    recordUpstreamError: ({ code }) => { codes.push(code); },
+  };
+  await assert.rejects(() => runWithMetrics(async () => { const e = new Error(); e.code = 'ETIMEDOUT'; throw e; }, { metrics: stub }));
+  await assert.rejects(() => runWithMetrics(async () => { const e = new Error(); e.status = 429; throw e; }, { metrics: stub }));
+  await assert.rejects(() => runWithMetrics(async () => { const e = new Error(); e.statusCode = 502; throw e; }, { metrics: stub }));
+  await assert.rejects(() => runWithMetrics(async () => { const e = new TypeError('bad'); throw e; }, { metrics: stub }));
+  assert.deepEqual(codes, ['ETIMEDOUT', 429, 502, 'TypeError']);
+});
+
+test('runWithMetrics: missing metrics module is non-fatal (call still succeeds)', async () => {
+  const out = await runWithMetrics(async () => 42, { metrics: null });
+  assert.equal(out, 42);
 });

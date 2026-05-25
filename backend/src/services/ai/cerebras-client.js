@@ -106,6 +106,37 @@ function createCerebrasClient({ env = process.env, OpenAICtor } = {}) {
 }
 
 /**
+ * Wrap any Cerebras-bound async call so its success / failure is
+ * reflected in the Free IA metrics counters. Re-throws the original
+ * error after recording so callers see the same exception they would
+ * have seen without instrumentation.
+ *
+ * Example:
+ *   const out = await runWithMetrics(() => client.chat.completions.create({...}));
+ */
+async function runWithMetrics(fn, { metrics } = {}) {
+  // Lazy-require so tests that don't care about metrics don't have to
+  // stub the module.
+  const m = metrics || (() => {
+    try {
+      // eslint-disable-next-line global-require
+      return require('../free-ia-metrics');
+    } catch { return null; }
+  })();
+  try {
+    const result = await fn();
+    if (m && typeof m.recordUpstreamSuccess === 'function') m.recordUpstreamSuccess();
+    return result;
+  } catch (err) {
+    if (m && typeof m.recordUpstreamError === 'function') {
+      const code = err && (err.code || err.status || err.statusCode || (err.name && err.name !== 'Error' ? err.name : null));
+      m.recordUpstreamError({ code });
+    }
+    throw err;
+  }
+}
+
+/**
  * Build the descriptor used by /api/ai/models (and the model picker) for
  * the Free IA entry. Safe to call even when Cerebras isn't configured —
  * the caller decides whether to surface the entry based on `enabled`.
@@ -134,4 +165,5 @@ module.exports = {
   isFreeIaConfigured,
   createCerebrasClient,
   buildFreeIaModelDescriptor,
+  runWithMetrics,
 };
