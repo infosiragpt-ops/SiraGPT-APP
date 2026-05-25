@@ -287,6 +287,39 @@ test('reset() clears lastErrorMessage too', () => {
   assert.equal(s.upstream.lastErrorMessage, null);
 });
 
+test('pruneErrorCodes(retain) keeps only the top-N most frequent codes', () => {
+  metrics.reset();
+  for (let i = 0; i < 10; i += 1) metrics.recordUpstreamError({ code: '503' });
+  for (let i = 0; i < 5; i += 1) metrics.recordUpstreamError({ code: '429' });
+  for (let i = 0; i < 3; i += 1) metrics.recordUpstreamError({ code: '500' });
+  metrics.recordUpstreamError({ code: 'ETIMEDOUT' });
+  metrics.recordUpstreamError({ code: 'oneoff-1' });
+  metrics.recordUpstreamError({ code: 'oneoff-2' });
+  const dropped = metrics.pruneErrorCodes(3);
+  assert.equal(dropped, 3, 'should drop 3 (ETIMEDOUT + oneoff-1 + oneoff-2)');
+  const s = metrics.snapshot();
+  assert.deepEqual(Object.keys(s.upstream.errorsByCode).sort(), ['429', '500', '503']);
+});
+
+test('pruneErrorCodes returns 0 when nothing exceeds the retain limit', () => {
+  metrics.reset();
+  metrics.recordUpstreamError({ code: '503' });
+  metrics.recordUpstreamError({ code: '429' });
+  const dropped = metrics.pruneErrorCodes(10);
+  assert.equal(dropped, 0);
+  const s = metrics.snapshot();
+  assert.equal(Object.keys(s.upstream.errorsByCode).length, 2);
+});
+
+test('pruneErrorCodes(0) drops everything (drains the map)', () => {
+  metrics.reset();
+  metrics.recordUpstreamError({ code: '503' });
+  metrics.recordUpstreamError({ code: '429' });
+  const dropped = metrics.pruneErrorCodes(0);
+  assert.equal(dropped, 2);
+  assert.deepEqual(metrics.snapshot().upstream.errorsByCode, {});
+});
+
 test('topUpstreamErrorCodes returns codes sorted by frequency (most common first)', () => {
   metrics.reset();
   for (let i = 0; i < 5; i += 1) metrics.recordUpstreamError({ code: '503' });

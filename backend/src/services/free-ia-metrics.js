@@ -110,6 +110,26 @@ function topUpstreamErrorCodes(limit = 5) {
 }
 
 /**
+ * Trim the per-error-code frequency map to the top-N most common
+ * codes. Bounds in-memory growth on long-lived processes that see a
+ * cardinal explosion of one-off error strings. Returns the number of
+ * codes dropped.
+ */
+function pruneErrorCodes(retain = 20) {
+  const keepN = Math.max(0, Math.floor(retain));
+  const sorted = Object.entries(state.upstreamErrorsByCode)
+    .sort((a, b) => b[1] - a[1]);
+  if (sorted.length <= keepN) return 0;
+  const kept = sorted.slice(0, keepN);
+  const dropped = sorted.length - keepN;
+  state.upstreamErrorsByCode = Object.create(null);
+  for (const [code, count] of kept) {
+    state.upstreamErrorsByCode[code] = count;
+  }
+  return dropped;
+}
+
+/**
  * Return a JSON-safe snapshot of the current counters. BigInts are
  * serialised to strings so callers can JSON.stringify without crashing.
  */
@@ -236,6 +256,7 @@ module.exports = {
   recordUpstreamSuccess,
   recordUpstreamError,
   topUpstreamErrorCodes,
+  pruneErrorCodes,
   snapshot,
   summary,
   toPrometheusText,
