@@ -97,14 +97,56 @@ router.post(
           .status(502)
           .json({ error: 'paraphrase engine returned empty output' });
       }
+      const raw = typeof output === 'string'
+        ? output
+        : output.text || output.output || output;
+
+      // Anti-AI-detection humanization: applied automatically for the
+      // 'humanize' mode and as an opt-in for other modes via the
+      // `?humanize=1` query param. Reports an aiScore (0..1) so the UI
+      // can render a "stealth" gauge. Free IA fallback users get this
+      // too — the layer is pure JS and runs after the LLM pass.
+      const wantHumanize = mode === 'humanize'
+        || String(req.query?.humanize || '').trim() === '1';
+      let stealth = null;
+      let finalText = raw;
+      if (wantHumanize && typeof raw === 'string' && raw.trim()) {
+        try {
+          // eslint-disable-next-line global-require
+          const { humanizeText } = require('../services/paraphrase-humanizer');
+          const intensity = String(req.query?.intensity || 'medium')
+            .toLowerCase();
+          const safeIntensity = ['low', 'medium', 'high'].includes(intensity)
+            ? intensity
+            : 'medium';
+          const humanized = humanizeText({
+            text: raw,
+            language,
+            intensity: safeIntensity,
+          });
+          finalText = humanized.text;
+          stealth = {
+            aiScoreBefore: humanized.aiScoreBefore,
+            aiScoreAfter: humanized.aiScoreAfter,
+            deltaScore: humanized.deltaScore,
+            transformations: humanized.applied.length,
+            intensity: humanized.intensity,
+          };
+        } catch (humanizeErr) {
+          // Humanizer is best-effort: a failure must not break the
+          // paraphrase response (the LLM output is still valid).
+          if (req.log?.warn) {
+            req.log.warn({ err: humanizeErr }, 'paraphrase humanizer failed');
+          }
+        }
+      }
+
       const txn = req._chargedCredits?.txn;
       res.json({
-        output:
-          typeof output === 'string'
-            ? output
-            : output.text || output.output || output,
+        output: finalText,
         mode,
         language,
+        stealth,
         charge: txn
           ? {
               amount: String(req._chargedCredits.amount),
