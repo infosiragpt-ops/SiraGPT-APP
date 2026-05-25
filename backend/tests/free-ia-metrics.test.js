@@ -84,6 +84,27 @@ test('summary.requestRatePerMin computes throughput from elapsed time', () => {
   assert.ok(typeof s.requestRatePerMin === 'number' || s.requestRatePerMin === null);
 });
 
+test('summary.requestRatePerMin: null when reset() called with no subsequent upstream calls', () => {
+  metrics.reset();
+  // No upstream calls after reset → totalUpstream = 0 → rate must be null.
+  const fakeNow = Date.now() + 5 * 60 * 1000;
+  const s = metrics.summary({ now: fakeNow });
+  assert.equal(s.requestRatePerMin, null);
+  assert.ok(!/\/min/.test(s.line));
+});
+
+test('summary.requestRatePerMin: timestamp uses lastResetAt when present (not startedAt)', () => {
+  metrics.reset();
+  // Reset just stamped lastResetAt. Now record some upstream calls and
+  // verify the elapsed window starts from the reset, not from process boot.
+  for (let i = 0; i < 5; i += 1) metrics.recordUpstreamSuccess();
+  const fiveMinPostReset = Date.now() + 5 * 60 * 1000;
+  const s = metrics.summary({ now: fiveMinPostReset });
+  // 5 calls / 5 min = 1.0 (with some sub-second drift)
+  assert.ok(s.requestRatePerMin >= 0.95 && s.requestRatePerMin <= 1.05,
+    `expected ~1/min, got ${s.requestRatePerMin}`);
+});
+
 test('summary.requestRatePerMin: returns a finite positive number for a 5-minute window', () => {
   metrics.reset();
   for (let i = 0; i < 30; i += 1) metrics.recordUpstreamSuccess();
