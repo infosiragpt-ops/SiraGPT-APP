@@ -693,7 +693,10 @@ function generateOperationId() {
 // Enhanced video generation with Fal.ai
 router.post('/generate', [
   body('prompt').trim().notEmpty().withMessage('Video prompt is required'),
-  body('aspect_ratio').optional().isIn(['16:9', '9:16', '1:1']).withMessage('Invalid aspect ratio'),
+  body('aspect_ratio').optional().isIn(['auto', '16:9', '9:16', '1:1', '4:3', '3:4', '4:5', '21:9']).withMessage('Invalid aspect ratio'),
+  body('resolution').optional().isIn(['480p', '720p']).withMessage('Invalid resolution'),
+  body('duration').optional().isInt({ min: 4, max: 10 }).withMessage('Invalid duration'),
+  body('audio').optional().isBoolean().withMessage('Audio must be a boolean'),
   body('negative_prompt').optional().isString().withMessage('Negative prompt must be a string'),
   body('image_url').optional().isString().withMessage('Image URL must be a string'),
   body('model').optional().isString().withMessage('Model must be a string')
@@ -711,17 +714,22 @@ router.post('/generate', [
     const {
       prompt,
       aspect_ratio = '16:9',
+      resolution = '720p',
+      duration: requestedDuration = 5,
+      audio = true,
       negative_prompt,
       image_url,
       model = 'veo-fast' // Default model
     } = req.body;
 
-    // Set duration based on the selected model
-    const duration = model === 'veo-fast' ? "8s" : "10";
+    const numericDuration = Math.min(Math.max(Number(requestedDuration) || 5, 4), 10);
+    const duration = `${numericDuration}s`;
 
     console.log('Video generation request received:', {
       prompt: prompt.substring(0, 50) + '...',
       duration,
+      resolution,
+      audio,
       aspect_ratio,
       hasImageUrl: !!image_url,
       model
@@ -771,7 +779,7 @@ router.post('/generate', [
       activeOperations.set(operationId, operationData);
 
       // Start video generation with Fal.ai (async)
-      generateVideoAsync(operationId, prompt, aspect_ratio, duration, negative_prompt, filename, req.user.id, image_url, model);
+      generateVideoAsync(operationId, prompt, aspect_ratio, duration, negative_prompt, filename, req.user.id, image_url, model, resolution, audio);
 
       // Track initial usage
       await prisma.apiUsage.create({
@@ -838,7 +846,7 @@ router.post('/generate', [
 });
 
 // generateVideoAsync function with proper variable scoping and syntax fix
-async function generateVideoAsync(operationId, prompt, aspectRatio, duration, negativePrompt, filename, userId, imageUrl = null, model = 'veo-fast') {
+async function generateVideoAsync(operationId, prompt, aspectRatio, duration, negativePrompt, filename, userId, imageUrl = null, model = 'veo-fast', resolution = '720p', audio = true) {
   const maxRetries = 3;
   let retryCount = 0;
 
@@ -914,8 +922,8 @@ async function generateVideoAsync(operationId, prompt, aspectRatio, duration, ne
           aspect_ratio: aspectRatio === '16:9' ? '16:9' :
             aspectRatio === '9:16' ? '9:16' : 'auto',
           duration: duration,
-          generate_audio: true,
-          resolution: "720p"
+          generate_audio: Boolean(audio),
+          resolution
         };
         console.log(`🖼️➡️🎬 Using Image-to-Video model (${endpoint})`);
         console.log('🔗 Using processed image URL:', processedImageUrl.substring(0, 50) + '...');
@@ -936,7 +944,9 @@ async function generateVideoAsync(operationId, prompt, aspectRatio, duration, ne
         requestPayload = {
           prompt: prompt,
           duration: duration,
-          aspect_ratio: aspectRatio,
+          aspect_ratio: aspectRatio === 'auto' ? '16:9' : aspectRatio,
+          generate_audio: Boolean(audio),
+          resolution,
           negative_prompt: negativePrompt || undefined
         };
         console.log(`📝➡️🎬 Using Text-to-Video model (${endpoint})`);
@@ -1003,11 +1013,12 @@ async function generateVideoAsync(operationId, prompt, aspectRatio, duration, ne
         video_url: `/video/watch/${filename}`,
         download_url: `/video/download/${filename}`,
         filename,
-        duration: "8s",
+        duration,
         file_size: videoBuffer.byteLength,
         resolution: result.data.video.width && result.data.video.height ?
-          `${result.data.video.width}x${result.data.video.height}` : "720p",
+          `${result.data.video.width}x${result.data.video.height}` : resolution,
         aspect_ratio: aspectRatio,
+        audio: Boolean(audio),
         fal_video_url: result.data.video.url,
         fal_request_id: result.requestId || null,
         sourceImageUrl: imageUrl,

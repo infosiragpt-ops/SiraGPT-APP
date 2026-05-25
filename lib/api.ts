@@ -2091,7 +2091,10 @@ class ApiClient {
 
   async generateVideo(data: {
     prompt: string;
-    aspect_ratio?: '16:9' | '9:16' | '1:1';
+    aspect_ratio?: 'auto' | '16:9' | '9:16' | '1:1' | '4:3' | '3:4' | '4:5' | '21:9';
+    resolution?: '480p' | '720p';
+    duration?: 4 | 5 | 6 | 7 | 8 | 10;
+    audio?: boolean;
     negative_prompt?: string;
     chatId?: string;
     files?: string[];

@@ -5236,7 +5236,10 @@ router.post(
   [
     body('prompt').trim().notEmpty().withMessage('Prompt is required'),
     body('chatId').optional().isString(),
-    body('aspect_ratio').optional().isIn(['16:9', '9:16', '1:1']).withMessage('Invalid aspect ratio'),
+    body('aspect_ratio').optional().isIn(['auto', '16:9', '9:16', '1:1', '4:3', '3:4', '4:5', '21:9']).withMessage('Invalid aspect ratio'),
+    body('resolution').optional().isIn(['480p', '720p']).withMessage('Invalid resolution'),
+    body('duration').optional().isInt({ min: 4, max: 10 }).withMessage('Invalid duration'),
+    body('audio').optional().isBoolean().withMessage('Invalid audio option'),
     body('negative_prompt').optional().isString(),
     body('files').optional().isArray(),
     body('image_url').optional().isString(),
@@ -5249,7 +5252,7 @@ router.post(
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const { prompt, chatId, aspect_ratio = '16:9', negative_prompt, files, image_url, model = 'veo-fast' // Default model
+      const { prompt, chatId, aspect_ratio = '16:9', resolution = '720p', duration = 5, audio = true, negative_prompt, files, image_url, model = 'veo-fast' // Default model
       } = req.body;
       const userId = req.user.id;
 
@@ -5300,6 +5303,9 @@ router.post(
         const videoPayload = {
           prompt,
           aspect_ratio,
+          resolution,
+          duration,
+          audio,
           negative_prompt,
           ...(processedImageUrl && { image_url: processedImageUrl }),
           model
@@ -5431,6 +5437,9 @@ router.post(
                 filename: videoResponse.data.filename,
                 prompt: prompt,
                 aspect_ratio: aspect_ratio,
+                resolution,
+                duration,
+                audio,
                 sourceImageUrl: processedImageUrl
               }])
             }
@@ -5470,6 +5479,10 @@ router.post(
           message: processedImageUrl ? 'Image-to-video generation started successfully' : 'Video generation started successfully',
           tokens,
           usage: { current: updatedUser.apiUsage, limit: updatedUser.monthlyLimit },
+          aspect_ratio,
+          resolution,
+          duration,
+          audio,
           sourceImageUrl: processedImageUrl
         });
 

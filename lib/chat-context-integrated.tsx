@@ -200,6 +200,13 @@ interface Message {
   metadata?: string
 }
 
+type VideoGenerationOptions = {
+  resolution?: '480p' | '720p'
+  aspectRatio?: 'auto' | '16:9' | '9:16' | '1:1' | '4:3' | '3:4' | '4:5' | '21:9'
+  duration?: 4 | 5 | 6 | 7 | 8 | 10
+  audio?: boolean
+}
+
 // Update the Chat interface around line 24
 
 interface Chat {
@@ -281,7 +288,7 @@ interface ChatContextType {
   ) => Promise<any>
   selectChat: (chatId: string) => void
   addMessage: (content: string, files?: any[], chat?: any, skipUserMessage?: boolean, intentOverride?: ChatIntent) => Promise<void>
-  addVideoMessage: (prompt: string, fileIds?: string[]) => Promise<void>
+  addVideoMessage: (prompt: string, fileIds?: string[], chat?: any, options?: VideoGenerationOptions) => Promise<void>
   addThesisMessage: (topics: string[]) => Promise<void>
   clearCurrentChat: () => void
   deleteChat: (chatId: string) => void
@@ -2250,9 +2257,13 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     });
   }, [currentChat?.id, selectChat, setCurrentChat]);
 
-  const addVideoMessage = useCallback(async (prompt: string, fileIds?: string[], chat?: any) => {
+  const addVideoMessage = useCallback(async (prompt: string, fileIds?: string[], chat?: any, options?: VideoGenerationOptions) => {
     const activeChat = chat || currentChat; // Use provided chat or fallback to currentChat
     if (!activeChat || !user) return;
+    const aspectRatio = options?.aspectRatio || '16:9';
+    const duration = options?.duration || 5;
+    const resolution = options?.resolution || '720p';
+    const audio = options?.audio ?? true;
 
     setIsLoading(true);
     try {
@@ -2305,7 +2316,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
       devLog('🎬 Calling generateVideo with:', {
         prompt,
-        aspect_ratio: '16:9',
+        aspect_ratio: aspectRatio,
+        duration,
+        resolution,
+        audio,
         chatId: activeChat.id,
         files: fileIds,
         image_url: imageUrl
@@ -2314,7 +2328,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       // 2) Kick off video generation with files and image URL
       const videoResponse = await apiClient.generateVideo({
         prompt,
-        aspect_ratio: '16:9',
+        aspect_ratio: aspectRatio,
+        duration,
+        resolution,
+        audio,
         chatId: activeChat.id,
         files: fileIds,
         ...(imageUrl && { image_url: imageUrl }),
@@ -2863,7 +2880,7 @@ interface CurrentChatContextType {
   regenerateLastMessage: () => void
   editAndRegenerate: (messageId: string, newContent: string, files?: any[]) => void
   clearCurrentChat: () => void
-  addVideoMessage: (prompt: string, fileIds?: string[]) => Promise<void>
+  addVideoMessage: (prompt: string, fileIds?: string[], chat?: any, options?: VideoGenerationOptions) => Promise<void>
   addThesisMessage: (topics: string[]) => Promise<void>
   pollVideoStatus: (operationId: string, messageId: string) => void
   chatType: ChatContextType["chatType"]

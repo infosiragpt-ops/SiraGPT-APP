@@ -301,6 +301,9 @@ type SearchActivityState = {
 type ImageAspectRatio = "1:1" | "2:3" | "3:2" | "3:4" | "9:16" | "4:3" | "16:9"
 type ImageGenerationCount = 1 | 2 | 3 | 4 | 5
 type ImageQuality = "512px" | "1K" | "2K" | "4K"
+type VideoResolution = "480p" | "720p"
+type VideoAspectRatio = "auto" | "16:9" | "9:16" | "1:1" | "4:3" | "3:4" | "4:5" | "21:9"
+type VideoDuration = 4 | 5 | 6 | 7 | 8 | 10
 
 const IMAGE_ASPECT_RATIO_OPTIONS: Array<{ value: ImageAspectRatio; label: string; ratio: string; className: string }> = [
   { value: "1:1", label: "Square", ratio: "1:1", className: "h-7 w-7" },
@@ -314,6 +317,18 @@ const IMAGE_ASPECT_RATIO_OPTIONS: Array<{ value: ImageAspectRatio; label: string
 
 const IMAGE_QUALITY_OPTIONS: ImageQuality[] = ["512px", "1K", "2K", "4K"]
 const IMAGE_COUNT_OPTIONS: ImageGenerationCount[] = [1, 2, 3, 4, 5]
+const VIDEO_RESOLUTION_OPTIONS: VideoResolution[] = ["480p", "720p"]
+const VIDEO_ASPECT_RATIO_OPTIONS: Array<{ value: VideoAspectRatio; label: string; ratio: string; className: string; visibleByDefault?: boolean }> = [
+  { value: "auto", label: "Auto", ratio: "Auto", className: "h-6 w-6", visibleByDefault: true },
+  { value: "16:9", label: "Wide", ratio: "16:9", className: "h-[16px] w-8", visibleByDefault: true },
+  { value: "9:16", label: "Story", ratio: "9:16", className: "h-8 w-[16px]", visibleByDefault: true },
+  { value: "1:1", label: "Square", ratio: "1:1", className: "h-7 w-7", visibleByDefault: true },
+  { value: "4:3", label: "Classic", ratio: "4:3", className: "h-[22px] w-8", visibleByDefault: true },
+  { value: "3:4", label: "Portrait", ratio: "3:4", className: "h-8 w-6" },
+  { value: "4:5", label: "Social", ratio: "4:5", className: "h-8 w-[25px]" },
+  { value: "21:9", label: "Cinema", ratio: "21:9", className: "h-[14px] w-9" },
+]
+const VIDEO_DURATION_OPTIONS: VideoDuration[] = [4, 5, 6, 7, 8, 10]
 
 // `ImageAspectRatioMark` was extracted to
 // `components/chat/ComposerInlineDisplays.tsx` to keep this file
@@ -1675,6 +1690,14 @@ const ActiveToolsDisplay = ({
   setSelectedImageCount,
   isVideoGenerationActive,
   setIsVideoGenerationActive,
+  selectedVideoResolution,
+  setSelectedVideoResolution,
+  selectedVideoAspectRatio,
+  setSelectedVideoAspectRatio,
+  selectedVideoDuration,
+  setSelectedVideoDuration,
+  selectedVideoAudio,
+  setSelectedVideoAudio,
   isComputerUseActive,
   setIsComputerUseActive,
   computerUseStatus,
@@ -1714,6 +1737,14 @@ const ActiveToolsDisplay = ({
   setSelectedImageCount: (count: ImageGenerationCount) => void;
   isVideoGenerationActive: boolean;
   setIsVideoGenerationActive: (value: boolean) => void;
+  selectedVideoResolution: VideoResolution;
+  setSelectedVideoResolution: (resolution: VideoResolution) => void;
+  selectedVideoAspectRatio: VideoAspectRatio;
+  setSelectedVideoAspectRatio: (ratio: VideoAspectRatio) => void;
+  selectedVideoDuration: VideoDuration;
+  setSelectedVideoDuration: (duration: VideoDuration) => void;
+  selectedVideoAudio: boolean;
+  setSelectedVideoAudio: (enabled: boolean) => void;
   isComputerUseActive: boolean;
   setIsComputerUseActive: (value: boolean) => void;
   computerUseStatus: 'idle' | 'running' | 'completed' | 'error';
@@ -1740,6 +1771,8 @@ const ActiveToolsDisplay = ({
   handleWordConnectorToggle: () => void;
   handleExcelConnectorToggle: () => void;
 }) => {
+  const [showAllVideoRatios, setShowAllVideoRatios] = React.useState(false);
+  const [showAllVideoDurations, setShowAllVideoDurations] = React.useState(false);
   const activeConnectors = [
     isGmailActive && { id: 'gmail', icon: <img src="/icons/google.png" alt="Gmail" className="h-4 w-4" /> },
     isGoogleCalendarActive && { id: 'calendar', icon: <img src="/icons/google-calendar.png" alt="Google Calendar" className="h-4 w-4" /> },
@@ -2065,18 +2098,166 @@ const ActiveToolsDisplay = ({
       )}
 
       {isVideoGenerationActive && (
-        <div className="flex items-center gap-1.5 bg-orange-100 dark:bg-orange-900/20 text-orange-700 dark:text-orange-300 px-2 py-1 rounded-full text-xs border border-orange-200 dark:border-orange-800">
-          <Video className="h-3 w-3" />
-          <span className="font-medium">Generar video</span>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-4 w-4 p-0 hover:bg-orange-200 dark:hover:bg-orange-800/30 rounded-full ml-1"
-            onClick={handleVideoGenerationClose}
-          >
-            <X className="h-3 w-3" />
-          </Button>
-        </div>
+        <>
+          <div className="group/video-liquid relative isolate flex min-h-7 items-center gap-1.5 overflow-hidden rounded-full border border-orange-300/70 bg-orange-100/85 px-2.5 py-1 text-xs text-orange-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.75),0_10px_28px_-22px_rgba(234,88,12,0.75)] backdrop-blur-xl transition-all duration-300 hover:scale-[1.015] hover:border-orange-400/80 dark:border-orange-500/40 dark:bg-orange-900/25 dark:text-orange-200">
+            <span className="pointer-events-none absolute -inset-8 -z-10 rounded-full bg-[conic-gradient(from_90deg,transparent_0deg,rgba(251,146,60,0.0)_70deg,rgba(251,146,60,0.52)_135deg,rgba(249,115,22,0.24)_198deg,transparent_280deg)] opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
+            <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/75 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/video-liquid:translate-x-[155%] dark:via-white/25" />
+            <Video className="relative z-10 h-3 w-3 drop-shadow-[0_0_8px_rgba(234,88,12,0.35)]" />
+            <span className="relative z-10 font-medium">Video</span>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="relative z-10 ml-1 h-4 w-4 rounded-full p-0 hover:bg-white/50 dark:hover:bg-orange-800/30"
+              onClick={handleVideoGenerationClose}
+              title="Cerrar video"
+            >
+              <X className="h-3 w-3" />
+            </Button>
+          </div>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="group/video-trigger relative isolate h-7 gap-1.5 overflow-hidden rounded-lg border border-zinc-200/80 bg-white/80 px-2 py-0 text-xs font-semibold text-zinc-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_8px_22px_-18px_rgba(15,23,42,0.35)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/10 dark:bg-white/[0.055] dark:text-white/82 dark:hover:bg-white/[0.08]"
+                title={`Video: ${selectedVideoAspectRatio}, ${selectedVideoResolution}, ${selectedVideoDuration}s, audio ${selectedVideoAudio ? "on" : "off"}`}
+                aria-label={`Configurar video. Actual ${selectedVideoAspectRatio}, ${selectedVideoResolution}, ${selectedVideoDuration} segundos`}
+              >
+                <span className="pointer-events-none absolute inset-y-[-55%] left-[-65%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/70 to-transparent opacity-0 blur-sm transition-all duration-700 group-hover/video-trigger:left-[92%] group-hover/video-trigger:opacity-100 dark:via-white/20" />
+                <span>{selectedVideoAspectRatio === "auto" ? "Auto" : selectedVideoAspectRatio}</span>
+                <span className="h-1 w-1 rounded-full bg-current/35" />
+                <span>{selectedVideoResolution}</span>
+                <span className="h-1 w-1 rounded-full bg-current/35" />
+                <span>{selectedVideoDuration} sec</span>
+                <span className={cn("h-1.5 w-1.5 rounded-full", selectedVideoAudio ? "bg-sky-400" : "bg-current/25")} />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="start"
+              sideOffset={9}
+              collisionPadding={12}
+              className="w-[min(calc(100vw-1.25rem),23rem)] overflow-hidden rounded-[22px] border border-zinc-200/65 bg-white/86 p-0 text-zinc-950 shadow-[0_22px_70px_-36px_rgba(15,23,42,0.55),inset_0_1px_0_rgba(255,255,255,0.85)] backdrop-blur-2xl dark:border-white/14 dark:bg-zinc-950/72 dark:text-white dark:shadow-[0_24px_80px_-36px_rgba(0,0,0,0.95),inset_0_1px_0_rgba(255,255,255,0.16)]"
+            >
+              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_24%_18%,rgba(255,255,255,0.92),transparent_30%),radial-gradient(circle_at_72%_45%,rgba(15,23,42,0.08),transparent_34%),linear-gradient(135deg,rgba(255,255,255,0.72),rgba(255,255,255,0.26)_44%,rgba(255,255,255,0.58))] dark:bg-[radial-gradient(circle_at_24%_18%,rgba(255,255,255,0.15),transparent_30%),radial-gradient(circle_at_72%_45%,rgba(255,255,255,0.08),transparent_34%),linear-gradient(135deg,rgba(255,255,255,0.10),rgba(255,255,255,0.02)_44%,rgba(255,255,255,0.06))]" />
+              <div className="relative z-10">
+                <section className="px-4 pb-4 pt-4 sm:px-5 sm:pb-5 sm:pt-5">
+                  <h3 className="text-[17px] font-semibold leading-none tracking-normal text-zinc-950 dark:text-white">Resolution</h3>
+                  <div className="mt-4 flex flex-wrap items-center gap-2" role="radiogroup" aria-label="Video resolution">
+                    {VIDEO_RESOLUTION_OPTIONS.map(option => {
+                      const selected = option === selectedVideoResolution;
+                      return (
+                        <button
+                          key={option}
+                          type="button"
+                          role="radio"
+                          aria-checked={selected}
+                          onClick={() => setSelectedVideoResolution(option)}
+                          className={cn(
+                            "h-9 rounded-xl px-3.5 text-[14px] font-medium leading-none text-zinc-600 transition-all duration-200 hover:bg-zinc-950/[0.045] hover:text-zinc-950 dark:text-white/68 dark:hover:bg-white/[0.07] dark:hover:text-white",
+                            selected && "bg-zinc-950/[0.075] text-zinc-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_12px_24px_-22px_rgba(15,23,42,0.45)] dark:bg-white/13 dark:text-white"
+                          )}
+                        >
+                          {option}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </section>
+
+                <section className="border-t border-zinc-950/8 px-4 py-4 dark:border-white/10 sm:px-5 sm:py-5">
+                  <h3 className="text-[17px] font-semibold leading-none tracking-normal text-zinc-950 dark:text-white">Aspect Ratio</h3>
+                  <div className="mt-4 grid grid-cols-5 gap-1.5 sm:gap-2" role="radiogroup" aria-label="Video aspect ratio">
+                    {VIDEO_ASPECT_RATIO_OPTIONS.filter(option => showAllVideoRatios || option.visibleByDefault).map(option => {
+                      const selected = option.value === selectedVideoAspectRatio;
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          role="radio"
+                          aria-checked={selected}
+                          onClick={() => setSelectedVideoAspectRatio(option.value)}
+                          className={cn(
+                            "group/video-ratio-option relative flex h-[58px] min-w-0 flex-col items-center justify-center gap-2 overflow-hidden rounded-xl text-center transition-all duration-200",
+                            selected
+                              ? "bg-zinc-950/[0.075] text-zinc-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.80),0_12px_26px_-22px_rgba(15,23,42,0.55)] dark:bg-white/12 dark:text-white"
+                              : "text-zinc-600 hover:bg-zinc-950/[0.045] hover:text-zinc-950 dark:text-white/68 dark:hover:bg-white/[0.07] dark:hover:text-white"
+                          )}
+                          title={`${option.label} ${option.ratio}`}
+                        >
+                          <span className="relative z-10 text-[13px] font-medium leading-none tabular-nums">{option.ratio}</span>
+                          <span className="relative z-10 flex h-6 items-center justify-center">
+                            {option.value === "auto" ? (
+                              <span className={cn("grid h-6 w-6 place-items-center rounded-[6px] border transition-all duration-200", selected ? "border-zinc-950 bg-white/45 dark:border-white dark:bg-white/8" : "border-zinc-500/65 dark:border-white/62")}>
+                                <Plus className="h-4 w-4" />
+                              </span>
+                            ) : (
+                              <span className={cn("rounded-[4px] border transition-all duration-200", option.className, selected ? "border-zinc-950 bg-white/45 dark:border-white dark:bg-white/8" : "border-zinc-500/65 bg-white/20 dark:border-white/62 dark:bg-transparent")} />
+                            )}
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowAllVideoRatios(value => !value)}
+                    className="mt-4 inline-flex items-center gap-1.5 rounded-full text-[13px] font-medium leading-none text-zinc-600 transition-colors hover:text-zinc-950 dark:text-white/66 dark:hover:text-white"
+                    aria-expanded={showAllVideoRatios}
+                  >
+                    {showAllVideoRatios ? "View Less" : "View All"} <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", showAllVideoRatios && "rotate-180")} />
+                  </button>
+                </section>
+
+                <section className="border-t border-zinc-950/8 px-4 py-4 dark:border-white/10 sm:px-5 sm:py-5">
+                  <h3 className="text-[17px] font-semibold leading-none tracking-normal text-zinc-950 dark:text-white">Duration</h3>
+                  <div className="mt-4 flex flex-wrap items-center gap-2" role="radiogroup" aria-label="Video duration">
+                    {VIDEO_DURATION_OPTIONS.filter(option => showAllVideoDurations || option <= 7).map(option => {
+                      const selected = option === selectedVideoDuration;
+                      return (
+                        <button
+                          key={option}
+                          type="button"
+                          role="radio"
+                          aria-checked={selected}
+                          onClick={() => setSelectedVideoDuration(option)}
+                          className={cn(
+                            "h-9 rounded-xl px-3.5 text-[14px] font-medium leading-none text-zinc-600 transition-all duration-200 hover:bg-zinc-950/[0.045] hover:text-zinc-950 dark:text-white/68 dark:hover:bg-white/[0.07] dark:hover:text-white",
+                            selected && "bg-zinc-950/[0.075] text-zinc-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_12px_24px_-22px_rgba(15,23,42,0.45)] dark:bg-white/13 dark:text-white"
+                          )}
+                        >
+                          {option} sec
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowAllVideoDurations(value => !value)}
+                    className="mt-4 inline-flex items-center gap-1.5 rounded-full text-[13px] font-medium leading-none text-zinc-600 transition-colors hover:text-zinc-950 dark:text-white/66 dark:hover:text-white"
+                    aria-expanded={showAllVideoDurations}
+                  >
+                    {showAllVideoDurations ? "View Less" : "View All"} <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", showAllVideoDurations && "rotate-180")} />
+                  </button>
+                </section>
+
+                <section className="border-t border-zinc-950/8 px-4 py-4 dark:border-white/10 sm:px-5 sm:py-5">
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-[17px] font-semibold leading-none tracking-normal text-zinc-950 dark:text-white">Audio</h3>
+                      <Info className="h-4 w-4 text-zinc-500 dark:text-white/55" />
+                    </div>
+                    <Switch checked={selectedVideoAudio} onCheckedChange={setSelectedVideoAudio} aria-label="Audio" />
+                  </div>
+                </section>
+
+                <div className="border-t border-zinc-950/8 px-4 py-3 text-[13px] font-medium text-zinc-600 dark:border-white/10 dark:text-white/62 sm:px-5">
+                  {selectedVideoAspectRatio === "auto" ? "Auto" : selectedVideoAspectRatio} / {selectedVideoResolution} / {selectedVideoDuration} Seconds
+                </div>
+              </div>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </>
       )}
 
       {isComputerUseActive && (
@@ -3162,6 +3343,10 @@ function ChatInterfaceContent() {
   const [selectedImageAspectRatio, setSelectedImageAspectRatio] = React.useState<ImageAspectRatio>("1:1")
   const [selectedImageQuality, setSelectedImageQuality] = React.useState<ImageQuality>("2K")
   const [selectedImageCount, setSelectedImageCount] = React.useState<ImageGenerationCount>(1)
+  const [selectedVideoResolution, setSelectedVideoResolution] = React.useState<VideoResolution>("720p")
+  const [selectedVideoAspectRatio, setSelectedVideoAspectRatio] = React.useState<VideoAspectRatio>("auto")
+  const [selectedVideoDuration, setSelectedVideoDuration] = React.useState<VideoDuration>(5)
+  const [selectedVideoAudio, setSelectedVideoAudio] = React.useState(true)
   const imageAbortControllerRef = React.useRef<AbortController | null>(null)
   const isGeneratingImageRef = React.useRef(false)
   const [isGeneratingVideo, setIsGeneratingVideo] = React.useState(false)
@@ -6049,7 +6234,7 @@ REWRITTEN TEXT:`;
         return;
       }
       if (isVideoGenerationActive || chatType === 'video') {
-        await handleVideoGeneration(msg);
+        await handleVideoGeneration(msg, collectUploadFileIds(filesToSend));
         return;
       }
       if (chatType === 'thesis' && !isNewChat) {
@@ -6738,17 +6923,26 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     }
   }
 
-  const handleVideoGeneration = async (prompt: string) => {
+  const handleVideoGeneration = async (prompt: string, files?: string[]) => {
     let activeChatId = currentChat?.id || null;
     setIsGeneratingVideo(true)
     if (activeChatId) markLocalJobBusy(activeChatId);
+    const videoOptions = {
+      resolution: selectedVideoResolution,
+      aspectRatio: selectedVideoAspectRatio,
+      duration: selectedVideoDuration,
+      audio: selectedVideoAudio,
+    };
     try {
       if (!currentChat) {
-        const newChat = await createNewChat('video', prompt)
+        const newChat = await createNewChat('video', undefined, undefined, {
+          skipInitialProcessing: true,
+        } as any)
         activeChatId = newChat?.id || activeChatId;
         if (activeChatId) markLocalJobBusy(activeChatId);
+        await addVideoMessage(prompt, files, newChat, videoOptions as any)
       } else {
-        await addVideoMessage(prompt)
+        await addVideoMessage(prompt, files, undefined, videoOptions as any)
       }
       toast.success('Video generation started! This may take 2-5 minutes.')
     } catch (error: any) {
@@ -7126,6 +7320,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     selectedImageQuality, setSelectedImageQuality,
     selectedImageCount, setSelectedImageCount,
     isVideoGenerationActive, setIsVideoGenerationActive,
+    selectedVideoResolution, setSelectedVideoResolution,
+    selectedVideoAspectRatio, setSelectedVideoAspectRatio,
+    selectedVideoDuration, setSelectedVideoDuration,
+    selectedVideoAudio, setSelectedVideoAudio,
     isComputerUseActive, setIsComputerUseActive,
     computerUseStatus,
     isGmailActive, setIsGmailActive,
