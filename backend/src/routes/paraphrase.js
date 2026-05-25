@@ -176,12 +176,25 @@ router.post(
         }
       }
 
+      // Optional debug field: list the top AI-tells that were present
+      // in the LLM output before the humanizer ran. Opt-in via
+      // `?showTells=1` so the response stays lean by default.
+      let tellsBefore = null;
+      if (String(req.query?.showTells || '').trim() === '1' && typeof raw === 'string' && raw.trim()) {
+        try {
+          // eslint-disable-next-line global-require
+          const { topAITellsFound } = require('../services/paraphrase-humanizer');
+          tellsBefore = topAITellsFound(raw, { limit: 10 });
+        } catch { /* best-effort */ }
+      }
+
       const txn = req._chargedCredits?.txn;
       res.json({
         output: finalText,
         mode,
         language,
         stealth,
+        tellsBefore,
         charge: txn
           ? {
               amount: String(req._chargedCredits.amount),
