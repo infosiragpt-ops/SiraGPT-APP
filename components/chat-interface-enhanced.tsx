@@ -125,6 +125,7 @@ import {
   DialogClose,
 } from "@/components/ui/dialog"
 import { Switch } from "@/components/ui/switch"
+import { Slider } from "@/components/ui/slider"
 import {
   Tooltip,
   TooltipContent,
@@ -304,6 +305,10 @@ type ImageQuality = "512px" | "1K" | "2K" | "4K"
 type VideoResolution = "480p" | "720p"
 type VideoAspectRatio = "auto" | "16:9" | "9:16" | "1:1" | "4:3" | "3:4" | "21:9"
 type VideoDuration = 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15
+type VoiceModel = "ElevenLabs" | "Mimo Max 02HD"
+type VoiceLanguage = "English" | "Spanish" | "German" | "French" | "Portuguese" | "Afrikaans" | "Arabic" | "Armenian" | "Assamese" | "Azerbaijani" | "Belarusian" | "Bengali"
+type VoiceAccent = "Neutral" | "Latino" | "US" | "British" | "Spanish" | "Mexican"
+type VoiceEffect = "None" | "Studio Clean" | "Warm" | "Cinematic" | "Narration" | "Podcast"
 
 const IMAGE_ASPECT_RATIO_OPTIONS: Array<{ value: ImageAspectRatio; label: string; ratio: string; className: string }> = [
   { value: "1:1", label: "Square", ratio: "1:1", className: "h-7 w-7" },
@@ -328,6 +333,10 @@ const VIDEO_ASPECT_RATIO_OPTIONS: Array<{ value: VideoAspectRatio; label: string
   { value: "21:9", label: "Cinema", ratio: "21:9", className: "h-[14px] w-9" },
 ]
 const VIDEO_DURATION_OPTIONS: VideoDuration[] = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+const VOICE_MODEL_OPTIONS: VoiceModel[] = ["ElevenLabs", "Mimo Max 02HD"]
+const VOICE_LANGUAGE_OPTIONS: VoiceLanguage[] = ["English", "Spanish", "German", "French", "Portuguese", "Afrikaans", "Arabic", "Armenian", "Assamese", "Azerbaijani", "Belarusian", "Bengali"]
+const VOICE_ACCENT_OPTIONS: VoiceAccent[] = ["Neutral", "Latino", "US", "British", "Spanish", "Mexican"]
+const VOICE_EFFECT_OPTIONS: VoiceEffect[] = ["None", "Studio Clean", "Warm", "Cinematic", "Narration", "Podcast"]
 
 // `ImageAspectRatioMark` was extracted to
 // `components/chat/ComposerInlineDisplays.tsx` to keep this file
@@ -750,6 +759,8 @@ const ActionsDropdown = ({
   setIsWebSearchActive,
   isImageGenerationActive,
   setIsImageGenerationActive,
+  isVoiceGenerationActive,
+  setIsVoiceGenerationActive,
   isVideoGenerationActive,
   setIsVideoGenerationActive,
   isComputerUseActive,
@@ -860,6 +871,17 @@ const ActionsDropdown = ({
     }
 
     setIsVideoGenerationActive(newState);
+  };
+
+  const handleVoiceGenerationToggle = () => {
+    const newState = !isVoiceGenerationActive;
+
+    if (newState) {
+      closeAllToolsAndConnectors();
+      setChatType('text');
+    }
+
+    setIsVoiceGenerationActive(newState);
   };
 
 
@@ -1197,7 +1219,7 @@ const ActionsDropdown = ({
           {/* Voz / Audio quick action — opens Voice Studio on TTS tab */}
           <DropdownMenuItem
             className="liquid-menu-item"
-            onClick={() => { setShowAudioPanel(true); setAudioTab('tts'); setIsOpen(false); }}
+            onClick={() => { handleVoiceGenerationToggle(); setIsOpen(false); }}
             disabled={currentPlan === "FREE" || isToolSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
@@ -1210,6 +1232,9 @@ const ActionsDropdown = ({
                   ElevenLabs / Mimo HD · TTS
                 </div>
               </div>
+              {isVoiceGenerationActive && (
+                <div className="w-2 h-2 bg-cyan-500 rounded-full" />
+              )}
               {currentPlan === "FREE" && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
               )}
@@ -1687,6 +1712,18 @@ const ActiveToolsDisplay = ({
   setSelectedImageQuality,
   selectedImageCount,
   setSelectedImageCount,
+  isVoiceGenerationActive,
+  setIsVoiceGenerationActive,
+  selectedVoiceModel,
+  setSelectedVoiceModel,
+  selectedVoiceLanguage,
+  setSelectedVoiceLanguage,
+  selectedVoiceAccent,
+  setSelectedVoiceAccent,
+  selectedVoiceStability,
+  setSelectedVoiceStability,
+  selectedVoiceEffect,
+  setSelectedVoiceEffect,
   isVideoGenerationActive,
   setIsVideoGenerationActive,
   selectedVideoResolution,
@@ -1734,6 +1771,18 @@ const ActiveToolsDisplay = ({
   setSelectedImageQuality: (quality: ImageQuality) => void;
   selectedImageCount: ImageGenerationCount;
   setSelectedImageCount: (count: ImageGenerationCount) => void;
+  isVoiceGenerationActive: boolean;
+  setIsVoiceGenerationActive: (value: boolean) => void;
+  selectedVoiceModel: VoiceModel;
+  setSelectedVoiceModel: (model: VoiceModel) => void;
+  selectedVoiceLanguage: VoiceLanguage;
+  setSelectedVoiceLanguage: (language: VoiceLanguage) => void;
+  selectedVoiceAccent: VoiceAccent;
+  setSelectedVoiceAccent: (accent: VoiceAccent) => void;
+  selectedVoiceStability: number;
+  setSelectedVoiceStability: (stability: number) => void;
+  selectedVoiceEffect: VoiceEffect;
+  setSelectedVoiceEffect: (effect: VoiceEffect) => void;
   isVideoGenerationActive: boolean;
   setIsVideoGenerationActive: (value: boolean) => void;
   selectedVideoResolution: VideoResolution;
@@ -1782,7 +1831,7 @@ const ActiveToolsDisplay = ({
   ].filter(Boolean) as { id: string; icon: JSX.Element }[];
 
   const hasConnectors = activeConnectors.length > 0;
-  const hasOtherTools = isImageGenerationActive || isVideoGenerationActive || isWebSearchActive || isComputerUseActive;
+  const hasOtherTools = isImageGenerationActive || isVoiceGenerationActive || isVideoGenerationActive || isWebSearchActive || isComputerUseActive;
   const hasThesis = chatType === 'thesis';
 
   if (!hasConnectors && !hasOtherTools && !hasThesis) return null;
@@ -1800,6 +1849,11 @@ const ActiveToolsDisplay = ({
   const handleImageGenerationClose = () => {
     if (isGeneratingImage) return;
     setIsImageGenerationActive(false);
+    setChatType('text');
+  };
+
+  const handleVoiceGenerationClose = () => {
+    setIsVoiceGenerationActive(false);
     setChatType('text');
   };
 
@@ -2090,6 +2144,144 @@ const ActiveToolsDisplay = ({
                     })}
                   </div>
                 </section>
+              </div>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </>
+      )}
+
+      {isVoiceGenerationActive && (
+        <>
+          <div className="group/voice-liquid relative isolate flex min-h-7 items-center gap-1.5 overflow-hidden rounded-full border border-cyan-300/70 bg-cyan-100/85 px-2.5 py-1 text-xs text-cyan-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.75),0_10px_28px_-22px_rgba(8,145,178,0.75)] backdrop-blur-xl transition-all duration-300 hover:scale-[1.015] hover:border-cyan-400/80 dark:border-cyan-500/40 dark:bg-cyan-900/25 dark:text-cyan-200">
+            <span className="pointer-events-none absolute -inset-8 -z-10 rounded-full bg-[conic-gradient(from_90deg,transparent_0deg,rgba(34,211,238,0.0)_70deg,rgba(34,211,238,0.50)_135deg,rgba(6,182,212,0.24)_198deg,transparent_280deg)] opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
+            <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/75 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/voice-liquid:translate-x-[155%] dark:via-white/25" />
+            <AudioLines className="relative z-10 h-3 w-3 drop-shadow-[0_0_8px_rgba(8,145,178,0.35)]" />
+            <span className="relative z-10 font-medium">Voz</span>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="relative z-10 ml-1 h-4 w-4 rounded-full p-0 hover:bg-white/50 dark:hover:bg-cyan-800/30"
+              onClick={handleVoiceGenerationClose}
+              title="Cerrar voz"
+            >
+              <X className="h-3 w-3" />
+            </Button>
+          </div>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="group/voice-trigger relative isolate h-[22px] gap-1 overflow-hidden rounded-md border border-zinc-200/80 bg-white/82 px-1.5 py-0 text-[10.5px] font-semibold text-zinc-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_8px_22px_-18px_rgba(15,23,42,0.35)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/88 dark:text-white/90 dark:hover:bg-zinc-800/92"
+                title={`Voz: ${selectedVoiceModel}, ${selectedVoiceLanguage}, ${selectedVoiceAccent}, ${selectedVoiceStability}%`}
+                aria-label={`Configurar voz. Actual ${selectedVoiceModel}, ${selectedVoiceLanguage}, estabilidad ${selectedVoiceStability} por ciento`}
+              >
+                <span className="pointer-events-none absolute inset-y-[-55%] left-[-65%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/70 to-transparent opacity-0 blur-sm transition-all duration-700 group-hover/voice-trigger:left-[92%] group-hover/voice-trigger:opacity-100 dark:via-white/20" />
+                <span>{selectedVoiceModel === "Mimo Max 02HD" ? "Mimo 02HD" : "Eleven"}</span>
+                <span className="h-1 w-1 rounded-full bg-current/35" />
+                <span>{selectedVoiceLanguage}</span>
+                <span className="h-1 w-1 rounded-full bg-current/35" />
+                <span>{selectedVoiceStability}%</span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="start"
+              sideOffset={9}
+              collisionPadding={12}
+              className="w-[min(calc(100vw-1rem),15.5rem)] overflow-hidden rounded-[14px] border border-zinc-200/70 bg-white/92 p-0 text-zinc-950 shadow-[0_16px_48px_-32px_rgba(15,23,42,0.55),inset_0_1px_0_rgba(255,255,255,0.9)] backdrop-blur-2xl dark:border-white/18 dark:bg-[#08090c]/96 dark:text-white dark:shadow-[0_22px_70px_-38px_rgba(0,0,0,1),inset_0_1px_0_rgba(255,255,255,0.14)]"
+            >
+              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_22%_10%,rgba(255,255,255,0.92),transparent_28%),radial-gradient(circle_at_82%_36%,rgba(34,211,238,0.12),transparent_30%),linear-gradient(135deg,rgba(255,255,255,0.78),rgba(255,255,255,0.32)_45%,rgba(255,255,255,0.62))] dark:bg-[radial-gradient(circle_at_18%_8%,rgba(255,255,255,0.13),transparent_26%),radial-gradient(circle_at_82%_36%,rgba(34,211,238,0.16),transparent_32%),linear-gradient(135deg,rgba(255,255,255,0.08),rgba(255,255,255,0.025)_45%,rgba(255,255,255,0.055))]" />
+              <div className="relative z-10 py-1">
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-9 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
+                    <span>Modelo de voz</span>
+                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62">{selectedVoiceModel}</span>
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuPortal>
+                    <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="liquid-menu-surface max-h-[min(18rem,calc(100vh-2rem))] w-44 overflow-y-auto p-1">
+                      {VOICE_MODEL_OPTIONS.map(option => (
+                        <DropdownMenuItem key={option} className="chat-active-apps-menu-item text-[12px]" onClick={() => setSelectedVoiceModel(option)}>
+                          <span className="min-w-0 flex-1 truncate">{option}</span>
+                          {selectedVoiceModel === option && <Check className="h-3.5 w-3.5" />}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuSubContent>
+                  </DropdownMenuPortal>
+                </DropdownMenuSub>
+
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-9 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
+                    <span>Language</span>
+                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62">{selectedVoiceLanguage}</span>
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuPortal>
+                    <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="liquid-menu-surface max-h-[min(22rem,calc(100vh-2rem))] w-44 overflow-y-auto p-1">
+                      {VOICE_LANGUAGE_OPTIONS.map(option => (
+                        <DropdownMenuItem key={option} className="chat-active-apps-menu-item text-[12px]" onClick={() => setSelectedVoiceLanguage(option)}>
+                          <span className="min-w-0 flex-1 truncate">{option}</span>
+                          {selectedVoiceLanguage === option && <Check className="h-3.5 w-3.5" />}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuSubContent>
+                  </DropdownMenuPortal>
+                </DropdownMenuSub>
+
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-9 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
+                    <span>Accent</span>
+                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62">{selectedVoiceAccent}</span>
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuPortal>
+                    <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="liquid-menu-surface max-h-[min(18rem,calc(100vh-2rem))] w-44 overflow-y-auto p-1">
+                      {VOICE_ACCENT_OPTIONS.map(option => (
+                        <DropdownMenuItem key={option} className="chat-active-apps-menu-item text-[12px]" onClick={() => setSelectedVoiceAccent(option)}>
+                          <span className="min-w-0 flex-1 truncate">{option}</span>
+                          {selectedVoiceAccent === option && <Check className="h-3.5 w-3.5" />}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuSubContent>
+                  </DropdownMenuPortal>
+                </DropdownMenuSub>
+
+                <div className="border-t border-zinc-950/8 px-2.5 py-2.5 dark:border-white/12">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[12px] font-medium leading-none text-zinc-800 dark:text-white/90">Stability</span>
+                      <Info className="h-3 w-3 text-zinc-500 dark:text-white/62" />
+                    </div>
+                    <span className="text-[10.5px] font-medium text-zinc-500 dark:text-white/72">{selectedVoiceStability}%</span>
+                  </div>
+                  <Slider
+                    value={[selectedVoiceStability]}
+                    onValueChange={([value]) => setSelectedVoiceStability(value)}
+                    min={0}
+                    max={100}
+                    step={1}
+                    className="mt-2"
+                  />
+                </div>
+
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-9 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
+                    <span>Effect</span>
+                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62">{selectedVoiceEffect}</span>
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuPortal>
+                    <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="liquid-menu-surface max-h-[min(18rem,calc(100vh-2rem))] w-44 overflow-y-auto p-1">
+                      {VOICE_EFFECT_OPTIONS.map(option => (
+                        <DropdownMenuItem key={option} className="chat-active-apps-menu-item text-[12px]" onClick={() => setSelectedVoiceEffect(option)}>
+                          <span className="min-w-0 flex-1 truncate">{option}</span>
+                          {selectedVoiceEffect === option && <Check className="h-3.5 w-3.5" />}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuSubContent>
+                  </DropdownMenuPortal>
+                </DropdownMenuSub>
+
+                <div className="border-t border-zinc-950/8 px-2.5 py-1.5 text-[10.5px] font-medium text-zinc-600 dark:border-white/12 dark:text-white/80">
+                  {selectedVoiceModel} / {selectedVoiceLanguage} / {selectedVoiceAccent} / {selectedVoiceEffect}
+                </div>
               </div>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -3342,6 +3534,12 @@ function ChatInterfaceContent() {
   const [selectedImageAspectRatio, setSelectedImageAspectRatio] = React.useState<ImageAspectRatio>("1:1")
   const [selectedImageQuality, setSelectedImageQuality] = React.useState<ImageQuality>("2K")
   const [selectedImageCount, setSelectedImageCount] = React.useState<ImageGenerationCount>(1)
+  const [isVoiceGenerationActive, setIsVoiceGenerationActive] = React.useState(false)
+  const [selectedVoiceModel, setSelectedVoiceModel] = React.useState<VoiceModel>("ElevenLabs")
+  const [selectedVoiceLanguage, setSelectedVoiceLanguage] = React.useState<VoiceLanguage>("Spanish")
+  const [selectedVoiceAccent, setSelectedVoiceAccent] = React.useState<VoiceAccent>("Latino")
+  const [selectedVoiceStability, setSelectedVoiceStability] = React.useState(100)
+  const [selectedVoiceEffect, setSelectedVoiceEffect] = React.useState<VoiceEffect>("Studio Clean")
   const [selectedVideoResolution, setSelectedVideoResolution] = React.useState<VideoResolution>("720p")
   const [selectedVideoAspectRatio, setSelectedVideoAspectRatio] = React.useState<VideoAspectRatio>("auto")
   const [selectedVideoDuration, setSelectedVideoDuration] = React.useState<VideoDuration>(5)
@@ -3651,6 +3849,7 @@ function ChatInterfaceContent() {
   const closeAllToolsAndConnectors = React.useCallback(() => {
     setIsWebSearchActive(false);
     setIsImageGenerationActive(false);
+    setIsVoiceGenerationActive(false);
     setIsVideoGenerationActive(false);
     setIsGmailActive(false);
     setIsGoogleCalendarActive(false);
@@ -7299,7 +7498,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   // the "tool pills" row below the input — if nothing is active, we
   // hide the entire bar so the composer stays a clean pill.
   const hasActiveTools = (
-    isWebSearchActive || isImageGenerationActive || isVideoGenerationActive || isComputerUseActive
+    isWebSearchActive || isImageGenerationActive || isVoiceGenerationActive || isVideoGenerationActive || isComputerUseActive
     || isGmailActive || isGoogleCalendarActive || isGoogleDriveActive
     || isSpotifyActive || isWordConnectorActive || isExcelConnectorActive
     || chatType === 'thesis'
@@ -7318,6 +7517,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     selectedImageAspectRatio, setSelectedImageAspectRatio,
     selectedImageQuality, setSelectedImageQuality,
     selectedImageCount, setSelectedImageCount,
+    isVoiceGenerationActive, setIsVoiceGenerationActive,
+    selectedVoiceModel, setSelectedVoiceModel,
+    selectedVoiceLanguage, setSelectedVoiceLanguage,
+    selectedVoiceAccent, setSelectedVoiceAccent,
+    selectedVoiceStability, setSelectedVoiceStability,
+    selectedVoiceEffect, setSelectedVoiceEffect,
     isVideoGenerationActive, setIsVideoGenerationActive,
     selectedVideoResolution, setSelectedVideoResolution,
     selectedVideoAspectRatio, setSelectedVideoAspectRatio,
@@ -8284,6 +8489,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           setIsWebSearchActive={setIsWebSearchActive}
                           isImageGenerationActive={isImageGenerationActive}
                           setIsImageGenerationActive={setIsImageGenerationActive}
+                          isVoiceGenerationActive={isVoiceGenerationActive}
+                          setIsVoiceGenerationActive={setIsVoiceGenerationActive}
                           isVideoGenerationActive={isVideoGenerationActive}
                           setIsVideoGenerationActive={setIsVideoGenerationActive}
                           isComputerUseActive={isComputerUseActive}
@@ -8751,6 +8958,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               setIsWebSearchActive={setIsWebSearchActive}
                               isImageGenerationActive={isImageGenerationActive}
                               setIsImageGenerationActive={setIsImageGenerationActive}
+                              isVoiceGenerationActive={isVoiceGenerationActive}
+                              setIsVoiceGenerationActive={setIsVoiceGenerationActive}
                               isVideoGenerationActive={isVideoGenerationActive}
                               setIsVideoGenerationActive={setIsVideoGenerationActive}
                               isComputerUseActive={isComputerUseActive}
