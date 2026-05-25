@@ -145,6 +145,24 @@ function toPrometheusText() {
   return lines.join('\n') + '\n';
 }
 
+/**
+ * One-line ops summary for status badges and dashboards. Returns a
+ * short human-readable string plus the numeric fields backing it.
+ */
+function summary() {
+  const totalUpstream = state.upstreamSuccess + state.upstreamErrors;
+  const rate = totalUpstream === 0 ? null : state.upstreamSuccess / totalUpstream;
+  const ratePct = rate === null ? '—' : `${(rate * 100).toFixed(2)}%`;
+  return {
+    line: `Free IA: ${state.totalFallbacks} fallbacks, ${state.upstreamSuccess}/${totalUpstream} upstream OK (${ratePct})`,
+    fallbacks: state.totalFallbacks,
+    upstreamSuccess: state.upstreamSuccess,
+    upstreamTotal: totalUpstream,
+    successRate: rate === null ? null : Math.round(rate * 10000) / 10000,
+    lastEventAt: state.lastEventAt,
+  };
+}
+
 function reset() {
   state.totalFallbacks = 0;
   state.totalCostBlocked = 0n;
@@ -162,6 +180,7 @@ module.exports = {
   recordUpstreamSuccess,
   recordUpstreamError,
   snapshot,
+  summary,
   toPrometheusText,
   reset,
 };

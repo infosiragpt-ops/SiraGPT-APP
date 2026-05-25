@@ -5,6 +5,32 @@ const assert = require('node:assert/strict');
 
 const metrics = require('../src/services/free-ia-metrics');
 
+test('summary() returns a one-line digest with all the numbers backing it', () => {
+  metrics.reset();
+  metrics.recordFallback({ feature: 'paraphrase', amount: 5 });
+  metrics.recordFallback({ feature: 'generate', amount: 2 });
+  metrics.recordUpstreamSuccess();
+  metrics.recordUpstreamSuccess();
+  metrics.recordUpstreamSuccess();
+  metrics.recordUpstreamError({ code: '503' });
+  const s = metrics.summary();
+  assert.equal(s.fallbacks, 2);
+  assert.equal(s.upstreamSuccess, 3);
+  assert.equal(s.upstreamTotal, 4);
+  assert.equal(s.successRate, 0.75);
+  assert.match(s.line, /Free IA: 2 fallbacks/);
+  assert.match(s.line, /3\/4 upstream OK/);
+  assert.match(s.line, /75\.00%/);
+});
+
+test('summary() reports successRate=null + "—" when no upstream events recorded', () => {
+  metrics.reset();
+  const s = metrics.summary();
+  assert.equal(s.successRate, null);
+  assert.equal(s.upstreamTotal, 0);
+  assert.match(s.line, /—/);
+});
+
 test('snapshot includes startedAt + lastResetAt for ops bookkeeping', () => {
   metrics.reset();
   const s = metrics.snapshot();

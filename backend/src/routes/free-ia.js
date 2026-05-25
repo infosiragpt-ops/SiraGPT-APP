@@ -48,6 +48,11 @@ router.get('/metrics', (_req, res) => {
   res.json(freeIaMetrics.snapshot());
 });
 
+// One-line digest for status badges / health dashboards.
+router.get('/metrics/summary', (_req, res) => {
+  res.json(freeIaMetrics.summary());
+});
+
 router.get('/metrics.prom', (_req, res) => {
   res.type('text/plain; version=0.0.4');
   res.send(freeIaMetrics.toPrometheusText());
