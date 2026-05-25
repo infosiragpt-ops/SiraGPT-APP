@@ -388,15 +388,26 @@ Cerebras. Wiring:
   `x-sira-fallback-feature` + `x-sira-fallback-cost`) instead of
   returning 402. Routes opt out via `allowFreeIaFallback: false` (e.g.
   `images.js` — Free IA is text-only).
-- **Status endpoint**: `GET /api/free-ia/status` + `/configured`. Public,
-  no auth. API key never leaked.
+- **HTTP surface** (`/api/free-ia/*`):
+    - `GET  /status`           — config + brand
+    - `GET  /configured`       — boolean
+    - `GET  /brand`            — brand constants (no Cerebras dep)
+    - `GET  /health`           — k8s liveness/readiness (503 when degraded)
+    - `GET  /metrics`          — JSON snapshot
+    - `GET  /metrics/summary`  — one-line digest (`?format=text` for plain)
+    - `GET  /metrics.prom`     — Prometheus text exposition
+    - `GET  /info`             — single-call aggregator for picker first paint
+    - `POST /metrics/reset`    — admin-only counter reset
+  All read endpoints public, no auth. API key NEVER leaked in any payload.
 - **Provider routing** in `ai.js` `createProviderClient('Cerebras')` and
   helper `inferProviderFromModelId` so a `llama-3.1-*` model id always
   routes to Cerebras.
-- **Tests**: `cerebras-client.test.js` (10), `charge-credits-middleware.test.js`
-  (+5 incl. header + metrics), `plan-credits-catalog.test.js` (+2),
-  `free-ia-route.test.js` (5 incl. metrics), `free-ia-metrics.test.js` (8),
-  `provider-inference.test.js` (11).
+- **Tests** (107+ tests covering the feature, all deterministic):
+  `cerebras-client.test.js` (19), `charge-credits-middleware.test.js` (15),
+  `plan-credits-catalog.test.js` (8), `free-ia-route.test.js` (14),
+  `free-ia-metrics.test.js` (22), `provider-inference.test.js` (11),
+  `paraphrase-humanizer.test.js` (21), `paraphrase-engine.test.js` (9),
+  `paraphrase-route.test.js` (14).
 - **Observability**: `backend/src/services/free-ia-metrics.js` — tiny
   in-memory counter for fallback events (`recordFallback`, `snapshot`,
   `toPrometheusText`). Wired into `chargeCredits` so every silent
