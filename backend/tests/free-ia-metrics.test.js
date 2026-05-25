@@ -88,6 +88,58 @@ test('toPrometheusText emits the expected counter names + per-feature labels', (
   assert.match(sanitized, /feature="weird\\"feature"/);
 });
 
+test('recordUpstreamSuccess / recordUpstreamError track the Free IA upstream', () => {
+  metrics.reset();
+  metrics.recordUpstreamSuccess();
+  metrics.recordUpstreamSuccess();
+  metrics.recordUpstreamSuccess();
+  metrics.recordUpstreamError({ code: '503' });
+  const s = metrics.snapshot();
+  assert.equal(s.upstream.success, 3);
+  assert.equal(s.upstream.errors, 1);
+  assert.equal(s.upstream.successRate, 0.75);
+  assert.equal(s.upstream.lastErrorCode, '503');
+  assert.ok(s.upstream.lastErrorAt);
+});
+
+test('upstream.successRate is null when no upstream events recorded', () => {
+  metrics.reset();
+  const s = metrics.snapshot();
+  assert.equal(s.upstream.success, 0);
+  assert.equal(s.upstream.errors, 0);
+  assert.equal(s.upstream.successRate, null);
+});
+
+test('recordUpstreamError without a code uses null', () => {
+  metrics.reset();
+  metrics.recordUpstreamError();
+  const s = metrics.snapshot();
+  assert.equal(s.upstream.errors, 1);
+  assert.equal(s.upstream.lastErrorCode, null);
+});
+
+test('toPrometheusText includes upstream success/error counters', () => {
+  metrics.reset();
+  metrics.recordUpstreamSuccess();
+  metrics.recordUpstreamSuccess();
+  metrics.recordUpstreamError({ code: 'rate_limit' });
+  const txt = metrics.toPrometheusText();
+  assert.match(txt, /^# TYPE sira_free_ia_upstream_success_total counter/m);
+  assert.match(txt, /^sira_free_ia_upstream_success_total 2$/m);
+  assert.match(txt, /^sira_free_ia_upstream_errors_total 1$/m);
+});
+
+test('reset() clears upstream counters too', () => {
+  metrics.recordUpstreamSuccess();
+  metrics.recordUpstreamError({ code: '500' });
+  metrics.reset();
+  const s = metrics.snapshot();
+  assert.equal(s.upstream.success, 0);
+  assert.equal(s.upstream.errors, 0);
+  assert.equal(s.upstream.lastErrorAt, null);
+  assert.equal(s.upstream.lastErrorCode, null);
+});
+
 test('chargeCredits triggers recordFallback on the Free IA path', async () => {
   // Re-stub Prisma like the existing charge-credits-middleware tests do.
   const Module = require('node:module');

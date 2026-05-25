@@ -22,6 +22,12 @@ const state = {
   totalCostBlocked: 0n,
   perFeature: Object.create(null),
   lastEventAt: null,
+  // Health: track Free IA upstream outcomes so ops can see whether
+  // Cerebras itself is healthy when we route to it.
+  upstreamSuccess: 0,
+  upstreamErrors: 0,
+  lastUpstreamErrorAt: null,
+  lastUpstreamErrorCode: null,
 };
 
 function toAmount(value) {
@@ -53,6 +59,26 @@ function recordFallback({ feature, amount } = {}) {
 }
 
 /**
+ * Record the OUTCOME of a Free IA upstream call (Cerebras).
+ *   recordUpstreamSuccess() — bump success counter
+ *   recordUpstreamError({ code }) — bump error counter + stash code
+ *
+ * The two together let ops compute a Free IA success rate from
+ * `upstreamSuccess / (upstreamSuccess + upstreamErrors)`.
+ */
+function recordUpstreamSuccess() {
+  state.upstreamSuccess += 1;
+  return state.upstreamSuccess;
+}
+
+function recordUpstreamError({ code } = {}) {
+  state.upstreamErrors += 1;
+  state.lastUpstreamErrorAt = new Date().toISOString();
+  state.lastUpstreamErrorCode = typeof code === 'string' ? code : (code != null ? String(code) : null);
+  return state.upstreamErrors;
+}
+
+/**
  * Return a JSON-safe snapshot of the current counters. BigInts are
  * serialised to strings so callers can JSON.stringify without crashing.
  */
@@ -64,11 +90,22 @@ function snapshot() {
       costBlocked: v.costBlocked.toString(),
     };
   }
+  const totalUpstream = state.upstreamSuccess + state.upstreamErrors;
+  const successRate = totalUpstream === 0
+    ? null
+    : Math.round((state.upstreamSuccess / totalUpstream) * 10000) / 10000;
   return {
     totalFallbacks: state.totalFallbacks,
     totalCostBlocked: state.totalCostBlocked.toString(),
     perFeature,
     lastEventAt: state.lastEventAt,
+    upstream: {
+      success: state.upstreamSuccess,
+      errors: state.upstreamErrors,
+      successRate,
+      lastErrorAt: state.lastUpstreamErrorAt,
+      lastErrorCode: state.lastUpstreamErrorCode,
+    },
   };
 }
 
@@ -92,6 +129,12 @@ function toPrometheusText() {
     lines.push(`sira_free_ia_fallback_total{feature="${escaped}"} ${v.count}`);
     lines.push(`sira_free_ia_fallback_cost_blocked_total{feature="${escaped}"} ${v.costBlocked.toString()}`);
   }
+  lines.push('# HELP sira_free_ia_upstream_success_total Successful Cerebras Llama 3.1 8B calls.');
+  lines.push('# TYPE sira_free_ia_upstream_success_total counter');
+  lines.push(`sira_free_ia_upstream_success_total ${state.upstreamSuccess}`);
+  lines.push('# HELP sira_free_ia_upstream_errors_total Failed Cerebras Llama 3.1 8B calls.');
+  lines.push('# TYPE sira_free_ia_upstream_errors_total counter');
+  lines.push(`sira_free_ia_upstream_errors_total ${state.upstreamErrors}`);
   return lines.join('\n') + '\n';
 }
 
@@ -100,10 +143,16 @@ function reset() {
   state.totalCostBlocked = 0n;
   state.perFeature = Object.create(null);
   state.lastEventAt = null;
+  state.upstreamSuccess = 0;
+  state.upstreamErrors = 0;
+  state.lastUpstreamErrorAt = null;
+  state.lastUpstreamErrorCode = null;
 }
 
 module.exports = {
   recordFallback,
+  recordUpstreamSuccess,
+  recordUpstreamError,
   snapshot,
   toPrometheusText,
   reset,
