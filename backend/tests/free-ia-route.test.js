@@ -196,6 +196,37 @@ test('GET /api/free-ia/health stays 200 with <10 samples even if rate is poor', 
   }
 });
 
+test('GET /api/free-ia/metrics/summary?format=text returns just the .line as text/plain', async () => {
+  const metrics = require('../src/services/free-ia-metrics');
+  metrics.reset();
+  metrics.recordFallback({ feature: 'paraphrase', amount: 5 });
+  metrics.recordUpstreamSuccess();
+  const { server, baseURL } = await startServer();
+  try {
+    const resp = await new Promise((resolve, reject) => {
+      http.get(`${baseURL}/api/free-ia/metrics/summary?format=text`, (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => resolve({
+          status: res.statusCode,
+          contentType: res.headers['content-type'],
+          body: Buffer.concat(chunks).toString('utf8'),
+        }));
+        res.on('error', reject);
+      }).on('error', reject);
+    });
+    assert.equal(resp.status, 200);
+    assert.match(resp.contentType, /^text\/plain/);
+    assert.match(resp.body, /^Free IA: 1 fallbacks/);
+    assert.ok(resp.body.endsWith('\n'), 'should end with a trailing newline for shell use');
+    // Plain text — not JSON. Should not contain JSON braces.
+    assert.ok(!resp.body.includes('{'), 'should not include JSON braces');
+  } finally {
+    server.close();
+    metrics.reset();
+  }
+});
+
 test('GET /api/free-ia/metrics/summary returns the one-line digest', async () => {
   const metrics = require('../src/services/free-ia-metrics');
   metrics.reset();

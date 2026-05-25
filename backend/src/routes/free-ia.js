@@ -96,8 +96,15 @@ router.get('/metrics', (_req, res) => {
 });
 
 // One-line digest for status badges / health dashboards.
-router.get('/metrics/summary', (_req, res) => {
-  res.json(freeIaMetrics.summary());
+// `?format=text` returns just the `.line` field as text/plain so shell
+// scripts (`watch -n5 curl …/summary?format=text`) get a clean view.
+router.get('/metrics/summary', (req, res) => {
+  const sum = freeIaMetrics.summary();
+  if (String(req.query?.format || '').toLowerCase() === 'text') {
+    res.type('text/plain; charset=utf-8');
+    return res.send(`${sum.line}\n`);
+  }
+  res.json(sum);
 });
 
 router.get('/metrics.prom', (_req, res) => {
