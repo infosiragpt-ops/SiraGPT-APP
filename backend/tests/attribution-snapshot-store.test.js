@@ -56,8 +56,12 @@ test('readSnapshots: respects limit', async () => {
 
 test('readSnapshots: respects since filter', async () => {
   await store.saveSnapshot({ userId: 'u', chatId: 'c', snapshot: { i: 1 } });
+  // Wait long enough that the next save's timestamp definitively
+  // exceeds the cutoff even on coarse-resolution clocks (the previous
+  // 5 ms gap was flaky on CI where Date.now() advances slowly).
+  await new Promise((r) => setTimeout(r, 40));
   const cutoff = Date.now();
-  await new Promise((r) => setTimeout(r, 5));
+  await new Promise((r) => setTimeout(r, 40));
   await store.saveSnapshot({ userId: 'u', chatId: 'c', snapshot: { i: 2 } });
   const list = await store.readSnapshots({ userId: 'u', chatId: 'c', since: cutoff });
   assert.strictEqual(list.length, 1);
