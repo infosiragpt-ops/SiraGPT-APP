@@ -494,18 +494,22 @@ function buildSystemPrompt({ language, userMessage, customGpt, project, userProf
 
   const header = buildSystemRule(lang);
 
-  let body = `${ABSOLUTE_RULES}\n\n${SOURCE_INTEGRITY_CONTRACT}\n\n${SIRAGPT_PRODUCT_OPERATING_CONTRACT}\n\n${THESIS_RESEARCH_CONTRACT}\n\n${QUALITY_RESPONSE_CONTRACT}`;
+  // Cacheable group A: language header + absolute rules + product
+  // contracts. These rarely change across turns within a chat — perfect
+  // material for an Anthropic ephemeral cache breakpoint.
+  const headerBlock = header;
+  const rulesBlock = `${ABSOLUTE_RULES}\n\n${SOURCE_INTEGRITY_CONTRACT}\n\n${SIRAGPT_PRODUCT_OPERATING_CONTRACT}\n\n${THESIS_RESEARCH_CONTRACT}\n\n${QUALITY_RESPONSE_CONTRACT}`;
 
   // User profile — per-user personalization loaded from the database at
   // request time. Lives above custom GPT persona so user preferences
   // can't be stomped on by a generic GPT author's instructions.
-  body += buildUserProfileBlock(userProfile);
+  const userProfileText = buildUserProfileBlock(userProfile);
 
   // Custom GPT — the author's instructions become a persona layer UNDER
   // the absolute rules + user profile. They can steer tone and scope
   // but can't override the 10 rules, the language policy, or the
   // user's own preferences.
-  body += buildCustomGptPromptBlock(customGpt);
+  const customGptText = buildCustomGptPromptBlock(customGpt);
 
   // Project context — the user's task-scoped workspace. Unlike
   // CustomGpt, projects are private and goal-oriented. The model
@@ -514,46 +518,70 @@ function buildSystemPrompt({ language, userMessage, customGpt, project, userProf
   // customGpt so that if both happen to be set (rare edge case), the
   // project instructions take precedence as the user's most recent
   // expressed intent.
+  let projectText = '';
   if (project && project.name) {
-    body += `\n\n## PROJECT: "${project.name}"`;
-    body += `\n\n${buildProjectPromptHeader(project)}`;
+    projectText += `\n\n## PROJECT: "${project.name}"`;
+    projectText += `\n\n${buildProjectPromptHeader(project)}`;
     if (project.description) {
-      body += `\n**Goal:** ${project.description}`;
+      projectText += `\n**Goal:** ${project.description}`;
     }
     if (project.instructions) {
-      body += `\n\n### Project instructions (follow these in every reply)\n${project.instructions}`;
+      projectText += `\n\n### Project instructions (follow these in every reply)\n${project.instructions}`;
     }
-    body += `\n\n${buildProjectKnowledgeBlock(project)}`;
+    projectText += `\n\n${buildProjectKnowledgeBlock(project)}`;
   }
 
-  body += intentContext;
-
-  body += `\n\n## USER INTENT ALIGNMENT\n${buildUserIntentAlignmentPrompt(alignmentProfile)}`;
+  const intentContextText = intentContext;
+  const intentAlignmentText = `\n\n## USER INTENT ALIGNMENT\n${buildUserIntentAlignmentPrompt(alignmentProfile)}`;
 
   // PR-3: opcional bloques externos (COREFERENCE_RESOLUTION, PERSONAL_LEXICON,
   // GROUNDING_PREFACE, ...). Cada uno se inyecta como sección propia.
   // Acepta strings o null/undefined (se ignoran). Mantener orden de
   // appearance para predictability.
+  const extraBlockTexts = [];
   if (Array.isArray(extraBlocks) && extraBlocks.length > 0) {
     for (const block of extraBlocks) {
       if (typeof block === 'string' && block.trim()) {
-        body += `\n\n${block.trim()}`;
+        extraBlockTexts.push(`\n\n${block.trim()}`);
       }
     }
   }
 
   // Math + document-tag contract — kept as trailing reminders so they
   // don't dilute the absolute rules but still stay in the system prompt.
-  body += `\n\n## FORMATTING CONTRACT
+  const formattingContractText = `\n\n## FORMATTING CONTRACT
 - Math: single-dollar delimiters ONLY. Inline: $E = mc^2$. Never \`$$\`, never \`[ ... ]\`, never \`\\(...\\)\`.
 - Downloadable documents: wrap the ENTIRE content in [CREATE_DOCUMENT:filename.ext]...[/CREATE_DOCUMENT] and add a one-line acknowledgement outside the tag.
 - Inline content requests (tables, lists, summaries, comparisons) render directly in chat — no file tag.`;
+
+  const body = `${rulesBlock}${userProfileText}${customGptText}${projectText}${intentContextText}${intentAlignmentText}${extraBlockTexts.join('')}${formattingContractText}`;
+
+  // Structured blocks list. The `cacheable` flag marks groups that are
+  // stable across turns within a chat so the gateway can place
+  // `cache_control: { type: 'ephemeral' }` breakpoints when calling
+  // Anthropic. Per-turn signals (intent context, the user-intent
+  // alignment block, the dynamic extra blocks injected by the caller,
+  // and the formatting contract reminder that lives at the tail) are
+  // intentionally marked non-cacheable so they don't poison stable
+  // breakpoints when they shift.
+  const systemBlocks = [
+    { kind: 'header', text: headerBlock, cacheable: true },
+    { kind: 'rules', text: rulesBlock, cacheable: true },
+    { kind: 'user-profile', text: userProfileText, cacheable: true },
+    { kind: 'custom-gpt', text: customGptText, cacheable: true },
+    { kind: 'project', text: projectText, cacheable: true },
+    { kind: 'intent-context', text: intentContextText, cacheable: false },
+    { kind: 'intent-alignment', text: intentAlignmentText, cacheable: false },
+    ...extraBlockTexts.map((t) => ({ kind: 'extra-block', text: t, cacheable: false })),
+    { kind: 'formatting-contract', text: formattingContractText, cacheable: false },
+  ].filter((b) => typeof b.text === 'string' && b.text.trim().length > 0);
 
   return {
     system: `${header}\n\n${body}`,
     intent,
     language: lang,
     alignmentProfile,
+    systemBlocks,
   };
 }
 

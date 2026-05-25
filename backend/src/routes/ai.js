@@ -3222,7 +3222,31 @@ router.post(
       } catch (_pr5Err) { /* swallow */ }
 
       const systemInstruction = { role: 'system', content: promptBundle.system + conversationUnderstandingBlock + universalContractBlock + enterpriseExecutionBlock + memoryBlock + orchMemoryBlock + feedbackBlock + evidenceBlock + documentEnrichmentBlock + coworkBlock + webSearchBlock + __pr5GroundingBlock };
-      console.log(`📝 system prompt built: intent=${promptBundle.intent} lang=${promptBundle.language} chars=${systemInstruction.content.length} profile=${userProfile ? 'yes' : 'no'} threadContext=${conversationUnderstandingBlock ? 'yes' : 'no'} threadTurns=${__conversationHistoryForUnderstanding.length} memory=${memoryBlock ? 'yes' : 'no'} orchMemory=${orchMemoryBlock ? 'yes' : 'no'} feedback=${feedbackBlock ? 'yes' : 'no'} rag=${operationalRagContext?.active ? 'yes' : 'no'} contract=${universalTaskContract?.pipeline || 'none'} graph=${enterpriseExecutionGraph?.graph_id || 'none'} cira=${ciraRuntimeBundle?.envelope?.request_id || 'none'} docEnrichment=${documentEnrichment ? `${documentEnrichment.primaryDocType}/${documentEnrichment.perFileProfile.length}` : 'none'} webSearch=${webSearchBlock ? 'yes' : 'no'}`);
+      // Structured view of the system prompt — same content as
+      // `systemInstruction.content`, but split into typed blocks with a
+      // `cacheable` hint. When the downstream provider is Anthropic (or
+      // OpenRouter routed to Claude) the gateway uses these to place
+      // `cache_control: { type: 'ephemeral' }` breakpoints on the stable
+      // groups. For every other provider this metadata is ignored and
+      // the flat string is used as-is.
+      const systemBlocks = [
+        ...(Array.isArray(promptBundle.systemBlocks) ? promptBundle.systemBlocks : [
+          { kind: 'master-prompt', text: promptBundle.system, cacheable: true },
+        ]),
+        { kind: 'conversation-understanding', text: conversationUnderstandingBlock, cacheable: false },
+        { kind: 'universal-contract', text: universalContractBlock, cacheable: false },
+        { kind: 'enterprise-execution', text: enterpriseExecutionBlock, cacheable: false },
+        { kind: 'memory', text: memoryBlock, cacheable: true },
+        { kind: 'orchestration-memory', text: orchMemoryBlock, cacheable: true },
+        { kind: 'feedback', text: feedbackBlock, cacheable: false },
+        { kind: 'evidence', text: evidenceBlock, cacheable: false },
+        { kind: 'document-enrichment', text: documentEnrichmentBlock, cacheable: false },
+        { kind: 'cowork', text: coworkBlock, cacheable: false },
+        { kind: 'web-search', text: webSearchBlock, cacheable: false },
+        { kind: 'pr5-grounding', text: __pr5GroundingBlock, cacheable: false },
+      ].filter((b) => typeof b.text === 'string' && b.text.trim().length > 0);
+      const __cacheableBlockCount = systemBlocks.filter((b) => b.cacheable).length;
+      console.log(`📝 system prompt built: intent=${promptBundle.intent} lang=${promptBundle.language} chars=${systemInstruction.content.length} blocks=${systemBlocks.length} cacheable=${__cacheableBlockCount} profile=${userProfile ? 'yes' : 'no'} threadContext=${conversationUnderstandingBlock ? 'yes' : 'no'} threadTurns=${__conversationHistoryForUnderstanding.length} memory=${memoryBlock ? 'yes' : 'no'} orchMemory=${orchMemoryBlock ? 'yes' : 'no'} feedback=${feedbackBlock ? 'yes' : 'no'} rag=${operationalRagContext?.active ? 'yes' : 'no'} contract=${universalTaskContract?.pipeline || 'none'} graph=${enterpriseExecutionGraph?.graph_id || 'none'} cira=${ciraRuntimeBundle?.envelope?.request_id || 'none'} docEnrichment=${documentEnrichment ? `${documentEnrichment.primaryDocType}/${documentEnrichment.perFileProfile.length}` : 'none'} webSearch=${webSearchBlock ? 'yes' : 'no'}`);
 
       // ✅ IMPROVED: Get previous chat history with proper image handling
       let historyMessages = [];
@@ -3866,6 +3890,7 @@ router.post(
               provider: actualProvider,
               model: actualModel,
               messages,
+              systemBlocks,
               res,
               signal,
               temperature: actualTemperature,

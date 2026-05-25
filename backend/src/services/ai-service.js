@@ -17,6 +17,7 @@ const {
     buildProviderChatPayload,
     classifyProviderError,
 } = require('./ai-product-os/litellm-gateway');
+const { applyAnthropicCacheToMessages } = require('./anthropic-cache-formatter');
 const { GEMA4_MODEL_ID } = require('./plan-credits-catalog');
 const { sharedFetch } = require('../utils/provider-http-agent');
 
@@ -382,7 +383,7 @@ class AIService {
         }
     }
 
-    async generateStream({ provider, model, messages, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true, temperature = 0.55, skipDoneSentinel = false }) {
+    async generateStream({ provider, model, messages, systemBlocks, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true, temperature = 0.55, skipDoneSentinel = false }) {
         // ── Siragpt 1.0 — modelo combinado ──
         // Si el caller pidió siragpt-1.0 y hay imágenes adjuntas, las
         // describimos primero con Gemini 2.5 Flash Lite, inyectamos la
@@ -439,6 +440,22 @@ class AIService {
             console.log(`✂️  context trim: dropped ${fit.droppedCount} middle message(s), ${fit.totalTokens}/${fit.budget} tokens after fit`);
         }
         let workingMessages = fit.messages;
+
+        // Anthropic prompt-cache hook. When the caller supplied
+        // `systemBlocks` (the structured form of the system prompt) and
+        // the downstream provider is Anthropic — directly or via
+        // OpenRouter routed to Claude — rewrite the leading system
+        // message into content-block form so the gateway can place
+        // `cache_control: { type: 'ephemeral' }` markers on the stable
+        // groups (master rules, persona, project, user profile,
+        // memory). For every other provider this is a no-op.
+        if (Array.isArray(systemBlocks) && systemBlocks.length > 0) {
+            const cacheAttempt = applyAnthropicCacheToMessages(workingMessages, systemBlocks, { provider, model });
+            if (cacheAttempt.applied) {
+                workingMessages = cacheAttempt.messages;
+                console.log(`🧊 anthropic cache: applied=${cacheAttempt.applied} breakpoints=${cacheAttempt.breakpoints} provider=${provider} model=${model}`);
+            }
+        }
 
         try {
             // ✅ IMPROVED: Handle images properly for vision API
