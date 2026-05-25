@@ -18,6 +18,22 @@ const {
     classifyProviderError,
 } = require('./ai-product-os/litellm-gateway');
 const { applyAnthropicCacheToMessages } = require('./anthropic-cache-formatter');
+const { attachConversationSummary } = require('./conversation-summarizer');
+
+let __anthropicSummarizerClient = null;
+function getAnthropicSummarizerClient() {
+    if (__anthropicSummarizerClient) return __anthropicSummarizerClient;
+    const apiKey = process.env.ANTHROPIC_API_KEY || process.env.SIRA_ANTHROPIC_API_KEY;
+    if (!apiKey) return null;
+    try {
+        const Anthropic = require('@anthropic-ai/sdk');
+        __anthropicSummarizerClient = new Anthropic({ apiKey, fetch: sharedFetch });
+        return __anthropicSummarizerClient;
+    } catch (err) {
+        console.warn('[conversation-summarizer] anthropic client init failed:', err?.message || err);
+        return null;
+    }
+}
 const { GEMA4_MODEL_ID } = require('./plan-credits-catalog');
 const { sharedFetch } = require('../utils/provider-http-agent');
 
@@ -383,7 +399,7 @@ class AIService {
         }
     }
 
-    async generateStream({ provider, model, messages, systemBlocks, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true, temperature = 0.55, skipDoneSentinel = false }) {
+    async generateStream({ provider, model, messages, systemBlocks, chatId, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true, temperature = 0.55, skipDoneSentinel = false }) {
         // ── Siragpt 1.0 — modelo combinado ──
         // Si el caller pidió siragpt-1.0 y hay imágenes adjuntas, las
         // describimos primero con Gemini 2.5 Flash Lite, inyectamos la
@@ -440,6 +456,30 @@ class AIService {
             console.log(`✂️  context trim: dropped ${fit.droppedCount} middle message(s), ${fit.totalTokens}/${fit.budget} tokens after fit`);
         }
         let workingMessages = fit.messages;
+
+        // Conversation summarizer — when fitMessagesToContext drops the
+        // middle of a long thread, replace the static "[Nota interna: se
+        // omitieron N mensaje(s)]" breadcrumb with a real LLM-generated
+        // summary so the model regains context about what was discussed
+        // in the gap. Best-effort: silent fallback on any failure keeps
+        // us on the original breadcrumb.
+        if (fit.droppedCount > 0 && Array.isArray(fit.droppedMessages) && fit.droppedMessages.length > 0) {
+            try {
+                const summaryResult = await attachConversationSummary({
+                    messages: workingMessages,
+                    droppedMessages: fit.droppedMessages,
+                    chatId: chatId || `anon:${streamId || 'x'}`,
+                    language,
+                    anthropicClient: getAnthropicSummarizerClient(),
+                });
+                if (summaryResult.applied) {
+                    workingMessages = summaryResult.messages;
+                    console.log(`📚 conversation summary: applied reason=${summaryResult.reason} dropped=${fit.droppedCount}`);
+                } else if (summaryResult.reason && summaryResult.reason !== 'no_breadcrumb' && summaryResult.reason !== 'no_dropped') {
+                    console.log(`📚 conversation summary: skipped reason=${summaryResult.reason}`);
+                }
+            } catch (_summarizerErr) { /* keep the original breadcrumb */ }
+        }
 
         // Anthropic prompt-cache hook. When the caller supplied
         // `systemBlocks` (the structured form of the system prompt) and

@@ -3891,6 +3891,7 @@ router.post(
               model: actualModel,
               messages,
               systemBlocks,
+              chatId: canPersist ? chatId : null,
               res,
               signal,
               temperature: actualTemperature,

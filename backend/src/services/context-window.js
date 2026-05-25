@@ -234,7 +234,7 @@ function fitMessagesToContext(messages, model, { reservedCompletionTokens = 1024
 
   let total = messages.reduce((acc, m) => acc + tokensOfMessage(m), 0);
   if (total <= budget) {
-    return { messages, droppedCount: 0, totalTokens: total, budget, reservedCompletionTokens: reserved };
+    return { messages, droppedCount: 0, droppedMessages: [], totalTokens: total, budget, reservedCompletionTokens: reserved };
   }
 
   const keepTail = getKeepTail(model);
@@ -348,7 +348,7 @@ function fitMessagesToContext(messages, model, { reservedCompletionTokens = 1024
   const next = [...head, ...breadcrumb, ...kept, ...tail];
   const newTotal = next.reduce((acc, m) => acc + tokensOfMessage(m), 0);
 
-  return { messages: next, droppedCount, totalTokens: newTotal, budget, reservedCompletionTokens: reserved };
+  return { messages: next, droppedCount, droppedMessages, totalTokens: newTotal, budget, reservedCompletionTokens: reserved };
 }
 
 module.exports = {
