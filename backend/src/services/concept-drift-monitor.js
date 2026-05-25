@@ -123,6 +123,7 @@ function observe({ userId, chatId, turnIndex = 0, prompt = '' } = {}) {
 
   trail.push(entry);
   if (trail.length > MAX_SNAPSHOTS_PER_CHAT) trail.splice(0, trail.length - MAX_SNAPSHOTS_PER_CHAT);
+  persistSoon(userId, chatId);
 
   const newConcepts = diffNewConcepts(trail);
   const lostConcepts = diffLostConcepts(trail);
@@ -201,10 +202,12 @@ function reset({ userId, chatId } = {}) {
   if (!trail) return { cleared: 0 };
   const n = trail.length;
   TRAIL.delete(k);
+  HYDRATED.delete(k);
+  if (persistence) persistence.remove('drift', k);
   return { cleared: n };
 }
 
-function _reset() { TRAIL.clear(); }
+function _reset() { TRAIL.clear(); HYDRATED.clear(); }
 
 module.exports = {
   observe,
