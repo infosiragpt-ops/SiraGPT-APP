@@ -804,6 +804,29 @@ async function runAgentTaskJob(payload = {}, job = null) {
 
   const executionProfile = buildExecutionProfile({ goal, fileIds: files });
   const intentAlignmentProfile = buildUserIntentAlignmentProfile({ request: goal, fileIds: files });
+  // Attribution telemetry — runs the executive summary on the goal so we
+  // can record what the system thought the user wanted before any step
+  // executes. Pure local, no LLM. Posted as a task event so reviewers see
+  // "I understood your goal as X (confidence Y)" alongside the run.
+  try {
+    if (String(process.env.SIRAGPT_AGENT_ATTRIBUTION_DISABLED || '').toLowerCase() !== '1') {
+      const executiveSummary = require('../attribution-executive-summary');
+      const attrSummary = executiveSummary.buildSummary({ prompt: String(goal || '') });
+      try {
+        taskStore.appendTaskEvent({ taskId, userId: user.id }, {
+          type: 'attribution_summary',
+          payload: {
+            headline: attrSummary.headline,
+            verdict: attrSummary.verdict,
+            confidenceGrade: attrSummary.confidenceGrade,
+            qualityGrade: attrSummary.qualityGrade,
+            recommendedSkill: attrSummary.recommendedSkill?.id || null,
+            metrics: attrSummary.metrics,
+          },
+        });
+      } catch (_evtErr) { /* swallow */ }
+    }
+  } catch (_attrErr) { /* swallow */ }
   const universalTaskContract = buildUniversalTaskContract({
     rawUserRequest: goal,
     fileIds: files,
