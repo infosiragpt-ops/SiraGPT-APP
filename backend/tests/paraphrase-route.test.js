@@ -86,6 +86,23 @@ test('ParaphraseSchema: rejects an unknown mode', () => {
   assert.equal(r.success, false);
 });
 
+test('ParaphraseSchema: a body without mode defaults cleanly (alias middleware safe)', () => {
+  // Mirrors what the route's pre-parse middleware would leave behind
+  // when no mode was sent — the schema must still resolve mode to
+  // "standard" via its .default('standard').
+  const r = ParaphraseSchema.safeParse({ text: 'hello' });
+  assert.equal(r.success, true);
+  assert.equal(r.data.mode, 'standard');
+});
+
+test('ParaphraseSchema: explicit canonical mode survives validation', () => {
+  for (const mode of ['standard', 'humanize', 'formal', 'academic', 'simple', 'creative', 'expand', 'shorten', 'custom']) {
+    const r = ParaphraseSchema.safeParse({ text: 'hello', mode });
+    assert.equal(r.success, true, `expected "${mode}" to validate`);
+    assert.equal(r.data.mode, mode);
+  }
+});
+
 test('paraphraseCost: at least 1 credit', () => {
   assert.ok(paraphraseCost({ body: { text: '' } }) >= 1);
   assert.ok(paraphraseCost({ body: { text: 'a'.repeat(500) } }) >= 1);
