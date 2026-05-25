@@ -2119,7 +2119,7 @@ const ActiveToolsDisplay = ({
               <Button
                 variant="ghost"
                 size="sm"
-                className="group/video-trigger relative isolate h-6 gap-1 overflow-hidden rounded-md border border-zinc-200/80 bg-white/82 px-1.5 py-0 text-[11px] font-semibold text-zinc-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_8px_22px_-18px_rgba(15,23,42,0.35)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/88 dark:hover:bg-zinc-800/88"
+                className="group/video-trigger relative isolate h-[22px] gap-1 overflow-hidden rounded-md border border-zinc-200/80 bg-white/82 px-1.5 py-0 text-[10.5px] font-semibold text-zinc-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_8px_22px_-18px_rgba(15,23,42,0.35)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/88 dark:text-white/90 dark:hover:bg-zinc-800/92"
                 title={`Video: ${selectedVideoAspectRatio}, ${selectedVideoResolution}, ${selectedVideoDuration}s, audio ${selectedVideoAudio ? "on" : "off"}`}
                 aria-label={`Configurar video. Actual ${selectedVideoAspectRatio}, ${selectedVideoResolution}, ${selectedVideoDuration} segundos`}
               >
@@ -2136,13 +2136,13 @@ const ActiveToolsDisplay = ({
               align="start"
               sideOffset={9}
               collisionPadding={12}
-              className="w-[min(calc(100vw-1rem),19rem)] overflow-hidden rounded-2xl border border-zinc-200/70 bg-white/90 p-0 text-zinc-950 shadow-[0_18px_56px_-34px_rgba(15,23,42,0.55),inset_0_1px_0_rgba(255,255,255,0.9)] backdrop-blur-2xl dark:border-white/16 dark:bg-[#08090c]/95 dark:text-white dark:shadow-[0_22px_70px_-38px_rgba(0,0,0,1),inset_0_1px_0_rgba(255,255,255,0.14)]"
+              className="w-[min(calc(100vw-1rem),15.5rem)] overflow-hidden rounded-[14px] border border-zinc-200/70 bg-white/92 p-0 text-zinc-950 shadow-[0_16px_48px_-32px_rgba(15,23,42,0.55),inset_0_1px_0_rgba(255,255,255,0.9)] backdrop-blur-2xl dark:border-white/18 dark:bg-[#08090c]/96 dark:text-white dark:shadow-[0_22px_70px_-38px_rgba(0,0,0,1),inset_0_1px_0_rgba(255,255,255,0.14)]"
             >
               <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_22%_10%,rgba(255,255,255,0.92),transparent_28%),radial-gradient(circle_at_82%_36%,rgba(251,146,60,0.12),transparent_30%),linear-gradient(135deg,rgba(255,255,255,0.78),rgba(255,255,255,0.32)_45%,rgba(255,255,255,0.62))] dark:bg-[radial-gradient(circle_at_18%_8%,rgba(255,255,255,0.13),transparent_26%),radial-gradient(circle_at_82%_36%,rgba(251,146,60,0.16),transparent_32%),linear-gradient(135deg,rgba(255,255,255,0.08),rgba(255,255,255,0.025)_45%,rgba(255,255,255,0.055))]" />
               <div className="relative z-10">
-                <section className="px-3 pb-3 pt-3">
-                  <h3 className="text-[14px] font-semibold leading-none tracking-normal text-zinc-950 dark:text-white">Resolution</h3>
-                  <div className="mt-2.5 flex flex-wrap items-center gap-1.5" role="radiogroup" aria-label="Video resolution">
+                <section className="px-2.5 pb-2.5 pt-2.5">
+                  <h3 className="text-[12.5px] font-semibold leading-none tracking-normal text-zinc-950 dark:text-white">Resolution</h3>
+                  <div className="mt-2 flex flex-wrap items-center gap-1" role="radiogroup" aria-label="Video resolution">
                     {VIDEO_RESOLUTION_OPTIONS.map(option => {
                       const selected = option === selectedVideoResolution;
                       return (
@@ -2153,8 +2153,8 @@ const ActiveToolsDisplay = ({
                           aria-checked={selected}
                           onClick={() => setSelectedVideoResolution(option)}
                           className={cn(
-                            "h-7 rounded-lg px-3 text-[12px] font-medium leading-none text-zinc-600 transition-all duration-200 hover:bg-zinc-950/[0.045] hover:text-zinc-950 dark:text-white/76 dark:hover:bg-white/[0.09] dark:hover:text-white",
-                            selected && "bg-zinc-950/[0.075] text-zinc-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_10px_20px_-18px_rgba(15,23,42,0.45)] dark:bg-white/16 dark:text-white dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_0_0_1px_rgba(255,255,255,0.05)]"
+                            "h-6 rounded-md px-2.5 text-[11px] font-medium leading-none text-zinc-600 transition-all duration-200 hover:bg-zinc-950/[0.045] hover:text-zinc-950 dark:text-white/84 dark:hover:bg-white/[0.10] dark:hover:text-white",
+                            selected && "bg-zinc-950/[0.075] text-zinc-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_9px_18px_-16px_rgba(15,23,42,0.45)] dark:bg-white/18 dark:text-white dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_0_0_1px_rgba(255,255,255,0.06)]"
                           )}
                         >
                           {option}
@@ -2164,9 +2164,9 @@ const ActiveToolsDisplay = ({
                   </div>
                 </section>
 
-                <section className="border-t border-zinc-950/8 px-3 py-3 dark:border-white/12">
-                  <h3 className="text-[14px] font-semibold leading-none tracking-normal text-zinc-950 dark:text-white">Aspect Ratio</h3>
-                  <div className="mt-2.5 grid grid-cols-5 gap-1" role="radiogroup" aria-label="Video aspect ratio">
+                <section className="border-t border-zinc-950/8 px-2.5 py-2.5 dark:border-white/12">
+                  <h3 className="text-[12.5px] font-semibold leading-none tracking-normal text-zinc-950 dark:text-white">Aspect Ratio</h3>
+                  <div className="mt-2 grid grid-cols-5 gap-0.5" role="radiogroup" aria-label="Video aspect ratio">
                     {VIDEO_ASPECT_RATIO_OPTIONS.filter(option => showAllVideoRatios || option.visibleByDefault).map(option => {
                       const selected = option.value === selectedVideoAspectRatio;
                       return (
@@ -2177,15 +2177,15 @@ const ActiveToolsDisplay = ({
                           aria-checked={selected}
                           onClick={() => setSelectedVideoAspectRatio(option.value)}
                           className={cn(
-                            "group/video-ratio-option relative flex h-11 min-w-0 flex-col items-center justify-center gap-1.5 overflow-hidden rounded-lg text-center transition-all duration-200",
+                            "group/video-ratio-option relative flex h-9 min-w-0 flex-col items-center justify-center gap-1 overflow-hidden rounded-md text-center transition-all duration-200",
                             selected
-                              ? "bg-zinc-950/[0.075] text-zinc-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_10px_22px_-18px_rgba(15,23,42,0.55)] dark:bg-white/16 dark:text-white dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_0_0_1px_rgba(255,255,255,0.05)]"
-                              : "text-zinc-600 hover:bg-zinc-950/[0.045] hover:text-zinc-950 dark:text-white/76 dark:hover:bg-white/[0.09] dark:hover:text-white"
+                              ? "bg-zinc-950/[0.075] text-zinc-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_9px_20px_-16px_rgba(15,23,42,0.55)] dark:bg-white/18 dark:text-white dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_0_0_1px_rgba(255,255,255,0.06)]"
+                              : "text-zinc-600 hover:bg-zinc-950/[0.045] hover:text-zinc-950 dark:text-white/84 dark:hover:bg-white/[0.10] dark:hover:text-white"
                           )}
                           title={`${option.label} ${option.ratio}`}
                         >
-                          <span className="relative z-10 text-[11px] font-medium leading-none tabular-nums">{option.ratio}</span>
-                          <span className="relative z-10 flex h-5 items-center justify-center scale-90">
+                          <span className="relative z-10 text-[10px] font-medium leading-none tabular-nums">{option.ratio}</span>
+                          <span className="relative z-10 flex h-4 items-center justify-center scale-[0.78]">
                             {option.value === "auto" ? (
                               <span className={cn("grid h-5 w-5 place-items-center rounded-[5px] border transition-all duration-200", selected ? "border-zinc-950 bg-white/45 dark:border-white dark:bg-white/10" : "border-zinc-500/65 dark:border-white/68")}>
                                 <Plus className="h-3.5 w-3.5" />
@@ -2201,16 +2201,16 @@ const ActiveToolsDisplay = ({
                   <button
                     type="button"
                     onClick={() => setShowAllVideoRatios(value => !value)}
-                    className="mt-2.5 inline-flex items-center gap-1 rounded-full text-[12px] font-medium leading-none text-zinc-600 transition-colors hover:text-zinc-950 dark:text-white/72 dark:hover:text-white"
+                    className="mt-2 inline-flex items-center gap-1 rounded-full text-[11px] font-medium leading-none text-zinc-600 transition-colors hover:text-zinc-950 dark:text-white/82 dark:hover:text-white"
                     aria-expanded={showAllVideoRatios}
                   >
                     {showAllVideoRatios ? "View Less" : "View All"} <ChevronDown className={cn("h-3 w-3 transition-transform", showAllVideoRatios && "rotate-180")} />
                   </button>
                 </section>
 
-                <section className="border-t border-zinc-950/8 px-3 py-3 dark:border-white/12">
-                  <h3 className="text-[14px] font-semibold leading-none tracking-normal text-zinc-950 dark:text-white">Duration</h3>
-                  <div className="mt-2.5 flex flex-wrap items-center gap-1.5" role="radiogroup" aria-label="Video duration">
+                <section className="border-t border-zinc-950/8 px-2.5 py-2.5 dark:border-white/12">
+                  <h3 className="text-[12.5px] font-semibold leading-none tracking-normal text-zinc-950 dark:text-white">Duration</h3>
+                  <div className="mt-2 flex flex-wrap items-center gap-1" role="radiogroup" aria-label="Video duration">
                     {VIDEO_DURATION_OPTIONS.filter(option => showAllVideoDurations || option <= 7).map(option => {
                       const selected = option === selectedVideoDuration;
                       return (
@@ -2221,8 +2221,8 @@ const ActiveToolsDisplay = ({
                           aria-checked={selected}
                           onClick={() => setSelectedVideoDuration(option)}
                           className={cn(
-                            "h-7 rounded-lg px-2.5 text-[12px] font-medium leading-none text-zinc-600 transition-all duration-200 hover:bg-zinc-950/[0.045] hover:text-zinc-950 dark:text-white/76 dark:hover:bg-white/[0.09] dark:hover:text-white",
-                            selected && "bg-zinc-950/[0.075] text-zinc-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_10px_20px_-18px_rgba(15,23,42,0.45)] dark:bg-white/16 dark:text-white dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_0_0_1px_rgba(255,255,255,0.05)]"
+                            "h-6 rounded-md px-2 text-[11px] font-medium leading-none text-zinc-600 transition-all duration-200 hover:bg-zinc-950/[0.045] hover:text-zinc-950 dark:text-white/84 dark:hover:bg-white/[0.10] dark:hover:text-white",
+                            selected && "bg-zinc-950/[0.075] text-zinc-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_9px_18px_-16px_rgba(15,23,42,0.45)] dark:bg-white/18 dark:text-white dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_0_0_1px_rgba(255,255,255,0.06)]"
                           )}
                         >
                           {option}s
@@ -2233,24 +2233,24 @@ const ActiveToolsDisplay = ({
                   <button
                     type="button"
                     onClick={() => setShowAllVideoDurations(value => !value)}
-                    className="mt-2.5 inline-flex items-center gap-1 rounded-full text-[12px] font-medium leading-none text-zinc-600 transition-colors hover:text-zinc-950 dark:text-white/72 dark:hover:text-white"
+                    className="mt-2 inline-flex items-center gap-1 rounded-full text-[11px] font-medium leading-none text-zinc-600 transition-colors hover:text-zinc-950 dark:text-white/82 dark:hover:text-white"
                     aria-expanded={showAllVideoDurations}
                   >
                     {showAllVideoDurations ? "View Less" : "View All"} <ChevronDown className={cn("h-3 w-3 transition-transform", showAllVideoDurations && "rotate-180")} />
                   </button>
                 </section>
 
-                <section className="border-t border-zinc-950/8 px-3 py-3 dark:border-white/12">
+                <section className="border-t border-zinc-950/8 px-2.5 py-2.5 dark:border-white/12">
                   <div className="flex items-center justify-between gap-4">
                     <div className="flex items-center gap-2">
-                      <h3 className="text-[14px] font-semibold leading-none tracking-normal text-zinc-950 dark:text-white">Audio</h3>
-                      <Info className="h-3.5 w-3.5 text-zinc-500 dark:text-white/60" />
+                      <h3 className="text-[12.5px] font-semibold leading-none tracking-normal text-zinc-950 dark:text-white">Audio</h3>
+                      <Info className="h-3 w-3 text-zinc-500 dark:text-white/72" />
                     </div>
                     <Switch checked={selectedVideoAudio} onCheckedChange={setSelectedVideoAudio} aria-label="Audio" />
                   </div>
                 </section>
 
-                <div className="border-t border-zinc-950/8 px-3 py-2 text-[12px] font-medium text-zinc-600 dark:border-white/12 dark:text-white/72">
+                <div className="border-t border-zinc-950/8 px-2.5 py-1.5 text-[10.5px] font-medium text-zinc-600 dark:border-white/12 dark:text-white/80">
                   {selectedVideoAspectRatio === "auto" ? "Auto" : selectedVideoAspectRatio} / {selectedVideoResolution} / {selectedVideoDuration}s / Audio {selectedVideoAudio ? "On" : "Off"}
                 </div>
               </div>
