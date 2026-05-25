@@ -334,6 +334,7 @@ const intentRoutes = require('./src/routes/intent');
 const circuitAttributionRoutes = require('./src/routes/circuit-attribution');
 const attributionExplainerRoutes = require('./src/routes/attribution-explainer');
 const attributionToolkitRoutes = require('./src/routes/attribution-toolkit');
+const attributionStackRoutes = require('./src/routes/attribution-stack');
 const ragRoutes = require('./src/routes/rag');
 const agentRoutes = require('./src/routes/agent');
 const agentTaskRoutes = require('./src/routes/agent-task');
@@ -1005,6 +1006,7 @@ app.use('/api/intent', intentRoutes);
 app.use('/api/circuit-attribution', circuitAttributionRoutes);
 app.use('/api/attribution-explainer', attributionExplainerRoutes);
 app.use('/api/attribution-toolkit', attributionToolkitRoutes);
+app.use('/api/attribution-stack', attributionStackRoutes);
 app.use('/api/rag', ragRoutes);
 // Idempotency is scoped to the surfaces that mutate durable state
 // at real cost (LLM tokens, sandbox compute, queued workers): agent
