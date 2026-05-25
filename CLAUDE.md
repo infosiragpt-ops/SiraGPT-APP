@@ -310,6 +310,32 @@ Mounted at `/api/context-intelligence/*` in `backend/index.js` (CSRF-protected, 
 ### Env config
 - `SIRAGPT_CONTEXT_INTELLIGENCE_BLOCK_MAX` — system-prompt block size cap (default 3500 chars)
 
+## Context Intelligence — Round 2 (completed ✅)
+
+Four additional attribution-graph-inspired subsystems extending the pipeline to multi-turn conversation analysis, hidden objectives, prompt provenance, and counterfactual robustness probing.
+
+### `src/services/cross-turn-attribution-chain.js`
+Sliding-window analysis over up to 20 prior turns. Computes per-turn fingerprints (entities, topic tokens, domain, references) and scores how much each prior turn influences the current request — combining Jaccard entity overlap, topic-token overlap, reference cues, domain continuity, and recency decay. Detects unresolved coreferences, topic-drift, and domain shifts across 7 domain dictionaries (code, finance, legal, product, data, research, writing). Exports: `buildChain(history, currentQuery, opts)`, `buildTurnFingerprint`, `buildCrossTurnPrompt`.
+
+### `src/services/hidden-goal-extractor.js`
+12 hidden-goal patterns (decide_whether_to_read, spot_risks, compare_against_peers, make_a_decision, understand_a_concept, troubleshoot_a_problem, persuade_or_pitch, extract_actionables, validate_a_belief, produce_deliverable, plan_a_workflow, learn_to_do_it_myself). Each has a surface regex, supporting signals, weight, and a bilingual clarifying question. 16 context-signal detectors (decision_pressure, audience_mention, deadline_pressure, beginner_phrasing, emotion_urgent, etc.). Flags `needsClarification` when top two candidates are within 0.15. Exports: `extractHiddenGoals(query, context)`, `buildHiddenGoalPrompt`.
+
+### `src/services/prompt-provenance-tracker.js`
+Per-turn tracker recording the origin of every block in the final system prompt (14 source kinds incl. system_base, cowork, memory, rag, deep_analysis, context_intelligence, cross_turn, hidden_goal, user_query). Builds concatenated prompt + a sidecar `map` of {offset, length, source, weight, summary}. `attributeText(needle)` returns which block introduced a substring; `summarize()` returns share-of-prompt per source; auto-trims lowest-weight blocks when over maxChars. Exports: `createTracker(opts)`, `ProvenanceTracker` class, `SOURCE_KINDS`, `DEFAULT_WEIGHTS`, `buildProvenancePrompt`.
+
+### `src/services/counterfactual-query-rewriter.js`
+Generates 3-12 small perturbations of a query (synonym swaps, formality shifts, scope tighteners/looseners, hedges; bilingual EN/ES). Runs each through a pluggable intent function and produces a `robustnessScore` in [0,1] plus verdict (highly_robust / mostly_robust / brittle / unstable). Used by the engine to flag brittle interpretations before the agent commits to an answer. Exports: `generateRewrites(query, opts)`, `probeRobustness(query, intentFn, opts)`, `buildCounterfactualPrompt`.
+
+### Engine + API integration (Round 2)
+- `context-intelligence-engine.analyzeContext` now runs all 10 subsystems and adds `crossTurn`, `hiddenGoal`, `counterfactual` to the report.
+- Overall confidence factors in cross-turn continuity (coref-aware penalty) and counterfactual robustness.
+- 4 new recommendation categories: `coreference`, `domain_shift`, `hidden_goal`, `robustness`.
+- `buildSystemPromptBlock` appends the 4 new prompt sections.
+- New routes: `POST /api/context-intelligence/cross-turn`, `POST /api/context-intelligence/hidden-goal`, `POST /api/context-intelligence/counterfactual`, `POST /api/context-intelligence/provenance`.
+
+### Tests
+- `backend/tests/context-intelligence-r2.test.js` — 37 tests covering the 4 new modules + engine integration. Combined with round-1, the context-intelligence subsystem has 102 tests, all green.
+
 ## Intent Attribution Graph (completed ✅ — 2026-05-25)
 Inspirado en el paper de Anthropic [On the Biology of a Large Language Model](https://transformer-circuits.pub/2025/attribution-graphs/biology.html). Aplica los conceptos de attribution-graphs (decomposición en features atómicas, supernodes, circuits multi-hop, planning hacia adelante, intent oculto, calibración de confianza) al **entendimiento de la intención del usuario**.
 

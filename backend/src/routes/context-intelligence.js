@@ -10,6 +10,10 @@ const lookahead = require('../services/lookahead-planner');
 const knowledgeBoundary = require('../services/knowledge-boundary-detector');
 const reasoningFaithfulness = require('../services/reasoning-faithfulness-check');
 const entityGrounding = require('../services/entity-grounding-tracker');
+const crossTurn = require('../services/cross-turn-attribution-chain');
+const hiddenGoal = require('../services/hidden-goal-extractor');
+const counterfactual = require('../services/counterfactual-query-rewriter');
+const promptProvenance = require('../services/prompt-provenance-tracker');
 const { rateLimitMiddleware } = require('../services/rate-limiter');
 
 const router = express.Router();
@@ -151,6 +155,70 @@ router.post('/entity-grounding', optionalAuth, standardRateLimit, (req, res) => 
   }
 });
 
+router.post('/cross-turn', optionalAuth, standardRateLimit, (req, res) => {
+  try {
+    const { query, history } = req.body || {};
+    if (typeof query !== 'string' || !query.trim()) {
+      return res.status(400).json({ error: 'query is required' });
+    }
+    const safeHistory = Array.isArray(history) ? history.slice(-20) : [];
+    const result = crossTurn.buildChain(safeHistory, query, { maxTurns: 10, topK: req.body?.topK || 3 });
+    res.json({ ...result, prompt: crossTurn.buildCrossTurnPrompt(result) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/hidden-goal', optionalAuth, standardRateLimit, (req, res) => {
+  try {
+    const { query } = req.body || {};
+    if (typeof query !== 'string' || !query.trim()) {
+      return res.status(400).json({ error: 'query is required' });
+    }
+    const context = safeContextFromBody(req.body);
+    const result = hiddenGoal.extractHiddenGoals(query, context);
+    res.json({ ...result, prompt: hiddenGoal.buildHiddenGoalPrompt(result) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/counterfactual', optionalAuth, heavyRateLimit, (req, res) => {
+  try {
+    const { query } = req.body || {};
+    if (typeof query !== 'string' || !query.trim()) {
+      return res.status(400).json({ error: 'query is required' });
+    }
+    const context = safeContextFromBody(req.body);
+    const result = counterfactual.probeRobustness(
+      query,
+      (q) => {
+        const g = attributionGraph.buildGraph(q, context);
+        return g.primaryIntent ? { intent: g.primaryIntent.kind, confidence: g.primaryIntent.weight } : { intent: null, confidence: 0 };
+      },
+      { context, limit: req.body?.limit || 6 },
+    );
+    res.json({ ...result, prompt: counterfactual.buildCounterfactualPrompt(result) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/provenance', optionalAuth, standardRateLimit, (req, res) => {
+  try {
+    const { blocks, maxChars } = req.body || {};
+    if (!Array.isArray(blocks)) {
+      return res.status(400).json({ error: 'blocks array is required' });
+    }
+    const tracker = promptProvenance.createTracker({ maxChars: maxChars || undefined });
+    tracker.addMany(blocks);
+    const built = tracker.buildPrompt();
+    res.json({ prompt: built.prompt, trimmed: built.trimmed, map: built.map, summary: tracker.summarize() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/health', (_req, res) => {
   res.json({
     ok: true,
@@ -161,6 +229,10 @@ router.get('/health', (_req, res) => {
       'knowledge-boundary-detector',
       'reasoning-faithfulness-check',
       'entity-grounding-tracker',
+      'cross-turn-attribution-chain',
+      'hidden-goal-extractor',
+      'counterfactual-query-rewriter',
+      'prompt-provenance-tracker',
       'context-intelligence-engine',
     ],
     promptBlockMaxChars: contextIntelligence.MAX_PROMPT_BLOCK_CHARS,
