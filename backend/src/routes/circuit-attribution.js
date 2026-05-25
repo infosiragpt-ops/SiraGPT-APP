@@ -47,6 +47,7 @@ const ragReranker = require('../services/attribution-rag-reranker');
 const conceptSimilarity = require('../services/concept-similarity');
 const crossChatSimilarity = require('../services/cross-chat-intent-similarity');
 const traceRecorder = require('../services/attribution-trace-recorder');
+const feedbackRecorder = require('../services/attribution-feedback-recorder');
 
 const router = express.Router();
 
@@ -619,6 +620,43 @@ router.get('/admin/traces/:id', optionalAuth, async (req, res) => {
   } catch (err) {
     console.error('[circuit-attribution/admin/traces/:id] failed:', err?.message || err);
     return res.status(500).json({ error: 'trace lookup failed' });
+  }
+});
+
+router.post('/feedback', optionalAuth, async (req, res) => {
+  try {
+    const userId = req.user?.id || req.body?.userId || null;
+    const chatId = req.body?.chatId || null;
+    const turnIndex = Number.isFinite(req.body?.turnIndex) ? req.body.turnIndex : 0;
+    const traceId = req.body?.traceId || null;
+    const reaction = req.body?.reaction;
+    const comment = req.body?.comment || null;
+    const result = feedbackRecorder.record({ userId, chatId, turnIndex, traceId, reaction, comment });
+    if (!result.ok) return res.status(400).json(result);
+    return res.json(result);
+  } catch (err) {
+    console.error('[circuit-attribution/feedback] failed:', err?.message || err);
+    return res.status(500).json({ error: 'feedback failed' });
+  }
+});
+
+router.get('/feedback/stats', optionalAuth, async (_req, res) => {
+  try {
+    return res.json({ ok: true, stats: feedbackRecorder.stats() });
+  } catch (err) {
+    console.error('[circuit-attribution/feedback/stats] failed:', err?.message || err);
+    return res.status(500).json({ error: 'feedback stats failed' });
+  }
+});
+
+router.get('/admin/feedback/aggregate', optionalAuth, async (req, res) => {
+  try {
+    const windowMs = Number.isFinite(Number(req.query?.windowMs)) ? Number(req.query.windowMs) : null;
+    const groupBy = String(req.query?.groupBy || 'reaction');
+    return res.json({ ok: true, ...feedbackRecorder.aggregate({ windowMs, groupBy }) });
+  } catch (err) {
+    console.error('[circuit-attribution/admin/feedback/aggregate] failed:', err?.message || err);
+    return res.status(500).json({ error: 'feedback aggregate failed' });
   }
 });
 
