@@ -1059,7 +1059,6 @@ router.post('/messages/:messageId/feedback', [
 router.delete('/messages/:messageId/deleteMessage', authenticateToken, async (req, res) => {
   try {
     const { messageId } = req.params;
-    console.log(messageId);
 
     const userId = req.user.id;
     const message = await prisma.message.findUnique({
@@ -1075,7 +1074,14 @@ router.delete('/messages/:messageId/deleteMessage', authenticateToken, async (re
       },
     });
 
-    if (!message || message.chat.userId !== userId) {
+    if (!message) {
+      return res.json({
+        message: 'Message already deleted or was never persisted.',
+        alreadyDeleted: true,
+      });
+    }
+
+    if (message.chat.userId !== userId) {
       return res.status(404).json({ error: 'Message not found or access denied.' });
     }
 

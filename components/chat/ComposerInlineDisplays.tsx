@@ -24,7 +24,7 @@ import { X, Globe, Link2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
-export type ImageAspectRatio = "1:1" | "3:4" | "9:16" | "4:3" | "16:9"
+export type ImageAspectRatio = "1:1" | "2:3" | "3:2" | "3:4" | "9:16" | "4:3" | "16:9"
 
 export type DetectedLink = {
   url: string

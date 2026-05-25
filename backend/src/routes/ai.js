@@ -4455,10 +4455,18 @@ router.post('/stop-stream', authenticateToken, (req, res) => {
     console.log(`>>> Aborting stream with ID: ${streamId}`);
     controller.abort(); // <-- YEH LINE STREAM KO FORAN ROK DEGI
     streamControllers.delete(streamId); // Usko foran map se hata dein
-    res.status(200).json({ message: 'Stop signal sent.' });
+    return res.status(200).json({ message: 'Stop signal sent.', stopped: true });
   } else {
-    console.warn(`Stop request for an unknown or finished stream ID: ${streamId}`);
-    res.status(404).json({ message: 'Stream not found or already finished.' });
+    // The client aborts its local fetch immediately before notifying the
+    // backend, so this endpoint can legitimately arrive after the stream
+    // already cleaned itself up. Treat stop as idempotent to avoid turning a
+    // normal user action into noisy 404 error telemetry.
+    console.info(`Stop request for an unknown or finished stream ID: ${streamId}`);
+    return res.status(200).json({
+      message: 'Stream not found or already finished.',
+      stopped: false,
+      alreadyFinished: true,
+    });
   }
 });
 
@@ -4677,6 +4685,8 @@ router.post(
 
 const IMAGE_ASPECT_RATIOS = {
   '1:1': { width: 1, height: 1, prompt: 'square 1:1 composition' },
+  '2:3': { width: 2, height: 3, prompt: 'vertical 2:3 portrait composition' },
+  '3:2': { width: 3, height: 2, prompt: 'horizontal 3:2 landscape composition' },
   '3:4': { width: 3, height: 4, prompt: 'vertical 3:4 portrait composition' },
   '9:16': { width: 9, height: 16, prompt: 'story 9:16 vertical composition' },
   '4:3': { width: 4, height: 3, prompt: 'horizontal 4:3 composition' },
@@ -4690,8 +4700,8 @@ function normalizeImageAspectRatio(value) {
 function imageGenerationSizeFor(provider, aspectRatio) {
   if (provider === "Gemini") return "1024x1024";
   if (provider === "OpenRouter") return "1024x1024";
-  if (aspectRatio === '3:4' || aspectRatio === '9:16') return "1024x1792";
-  if (aspectRatio === '4:3' || aspectRatio === '16:9') return "1792x1024";
+  if (aspectRatio === '2:3' || aspectRatio === '3:4' || aspectRatio === '9:16') return "1024x1792";
+  if (aspectRatio === '3:2' || aspectRatio === '4:3' || aspectRatio === '16:9') return "1792x1024";
   return "1024x1024";
 }
 

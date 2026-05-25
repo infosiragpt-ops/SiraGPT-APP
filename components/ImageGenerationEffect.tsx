@@ -27,7 +27,7 @@ import React from "react";
 import { motion } from "framer-motion";
 import { Sparkles } from "lucide-react";
 
-type ImageAspectRatio = "1:1" | "3:4" | "9:16" | "4:3" | "16:9";
+type ImageAspectRatio = "1:1" | "2:3" | "3:2" | "3:4" | "9:16" | "4:3" | "16:9";
 
 const floatingDots = [
     { top: "18%", left: "22%", delay: 0 },
@@ -39,6 +39,8 @@ const floatingDots = [
 
 const aspectLabels: Record<ImageAspectRatio, string> = {
     "1:1": "cuadrado",
+    "2:3": "vertical",
+    "3:2": "horizontal",
     "3:4": "vertical",
     "9:16": "historia",
     "4:3": "horizontal",
@@ -62,7 +64,7 @@ const ImageGenerationEffect = ({
                     className="relative w-full max-w-[520px] overflow-hidden rounded-2xl border border-white/60 bg-[radial-gradient(circle_at_30%_20%,rgba(255,255,255,0.95),transparent_34%),linear-gradient(135deg,#f7f8fb_0%,#dde2eb_100%)] p-6 shadow-[0_18px_50px_-30px_rgba(15,23,42,0.55)] dark:border-white/10 dark:bg-[radial-gradient(circle_at_30%_20%,rgba(255,255,255,0.12),transparent_34%),linear-gradient(135deg,#171b24_0%,#2a3140_100%)]"
                     style={{
                         aspectRatio: aspectRatio.replace(":", " / "),
-                        maxWidth: aspectRatio === "9:16" ? 300 : aspectRatio === "3:4" ? 360 : 520,
+                        maxWidth: aspectRatio === "9:16" ? 300 : aspectRatio === "2:3" || aspectRatio === "3:4" ? 360 : 520,
                     }}
                 >
                     <div className="absolute inset-0 opacity-[0.28] [background-image:radial-gradient(circle,rgba(15,23,42,0.22)_1px,transparent_1px)] [background-size:22px_22px] dark:opacity-[0.18] dark:[background-image:radial-gradient(circle,rgba(255,255,255,0.42)_1px,transparent_1px)]" />

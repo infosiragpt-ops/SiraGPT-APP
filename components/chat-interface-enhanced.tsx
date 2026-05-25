@@ -298,15 +298,17 @@ type SearchActivityState = {
   entries: SearchActivityEntry[]
 }
 
-type ImageAspectRatio = "1:1" | "3:4" | "9:16" | "4:3" | "16:9"
+type ImageAspectRatio = "1:1" | "2:3" | "3:2" | "3:4" | "9:16" | "4:3" | "16:9"
 type ImageGenerationCount = 1 | 2
 
-const IMAGE_ASPECT_RATIO_OPTIONS: Array<{ value: ImageAspectRatio; label: string; ratio: string }> = [
-  { value: "1:1", label: "Cuadrado", ratio: "1:1" },
-  { value: "3:4", label: "Vertical", ratio: "3:4" },
-  { value: "9:16", label: "Historia", ratio: "9:16" },
-  { value: "4:3", label: "Horizontal", ratio: "4:3" },
-  { value: "16:9", label: "Panorámico", ratio: "16:9" },
+const IMAGE_ASPECT_RATIO_OPTIONS: Array<{ value: ImageAspectRatio; label: string; ratio: string; className: string }> = [
+  { value: "1:1", label: "Square", ratio: "1:1", className: "h-7 w-7" },
+  { value: "2:3", label: "Portrait", ratio: "2:3", className: "h-8 w-[22px]" },
+  { value: "3:2", label: "Landscape", ratio: "3:2", className: "h-[22px] w-8" },
+  { value: "3:4", label: "Portrait", ratio: "3:4", className: "h-8 w-6" },
+  { value: "4:3", label: "Classic", ratio: "4:3", className: "h-6 w-8" },
+  { value: "9:16", label: "Story", ratio: "9:16", className: "h-8 w-[18px]" },
+  { value: "16:9", label: "Wide", ratio: "16:9", className: "h-[18px] w-9" },
 ]
 
 // `ImageAspectRatioMark` was extracted to
@@ -1892,34 +1894,71 @@ const ActiveToolsDisplay = ({
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-7 gap-1.5 rounded-lg border border-border/50 bg-muted/45 px-2 py-0 text-xs font-semibold text-foreground/80 hover:bg-muted"
+                className="group/ratio-trigger relative isolate h-7 gap-1.5 overflow-hidden rounded-lg border border-border/50 bg-background/55 px-2 py-0 text-xs font-semibold text-foreground/80 shadow-[inset_0_1px_0_rgba(255,255,255,0.72),0_8px_22px_-18px_rgba(15,23,42,0.35)] backdrop-blur-xl transition-all duration-200 hover:border-foreground/15 hover:bg-background/80 dark:bg-white/[0.055] dark:hover:bg-white/[0.08]"
                 title={`Proporción de imagen: ${selectedImageAspectRatio}`}
                 aria-label={`Cambiar proporción de imagen. Actual ${selectedImageAspectRatio}`}
               >
+                <span className="pointer-events-none absolute inset-y-[-55%] left-[-65%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/70 to-transparent opacity-0 blur-sm transition-all duration-700 group-hover/ratio-trigger:left-[92%] group-hover/ratio-trigger:opacity-100 dark:via-white/20" />
                 <ImageAspectRatioMark ratio={selectedImageAspectRatio} selected />
                 <span>{selectedImageAspectRatio}</span>
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" sideOffset={8} className="liquid-menu-surface w-56 p-1.5">
-              {IMAGE_ASPECT_RATIO_OPTIONS.map(option => {
-                const selected = option.value === selectedImageAspectRatio;
-                return (
-                  <DropdownMenuItem
-                    key={option.value}
-                    className="liquid-menu-item min-h-8 cursor-pointer"
-                    onSelect={() => {
-                      setSelectedImageAspectRatio(option.value);
-                    }}
-                  >
-                    <div className="flex w-full items-center gap-2">
-                      <ImageAspectRatioMark ratio={option.value} selected={selected} />
-                      <span className="flex-1 text-sm font-medium">{option.label}</span>
-                      <span className="text-xs text-muted-foreground">{option.ratio}</span>
-                      {selected && <Check className="h-3.5 w-3.5 text-pink-600 dark:text-pink-300" />}
-                    </div>
-                  </DropdownMenuItem>
-                )
-              })}
+            <DropdownMenuContent
+              align="start"
+              sideOffset={9}
+              collisionPadding={12}
+              className="liquid-menu-surface w-[min(calc(100vw-1.25rem),20rem)] p-0"
+            >
+              <div className="relative z-10 p-3">
+                <div className="mb-3 flex items-center justify-between">
+                  <div>
+                    <p className="text-[13px] font-semibold leading-none text-foreground">Aspect Ratio</p>
+                    <p className="mt-1 text-[11px] leading-none text-muted-foreground">Formato de salida</p>
+                  </div>
+                  <span className="rounded-full border border-border/45 bg-background/45 px-2 py-1 text-[11px] font-medium text-muted-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.65)]">
+                    {selectedImageAspectRatio}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-7 gap-1" role="radiogroup" aria-label="Aspect ratio">
+                  {IMAGE_ASPECT_RATIO_OPTIONS.map(option => {
+                    const selected = option.value === selectedImageAspectRatio;
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        className={cn(
+                          "group/ratio-option relative flex h-[72px] min-w-0 flex-col items-center justify-between overflow-hidden rounded-2xl border px-1 py-2 text-center transition-all duration-200",
+                          selected
+                            ? "border-foreground/12 bg-foreground/[0.075] text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.72),0_14px_30px_-24px_rgba(15,23,42,0.55)] dark:border-white/15 dark:bg-white/[0.105]"
+                            : "border-transparent bg-transparent text-muted-foreground hover:border-border/50 hover:bg-background/42 hover:text-foreground dark:hover:bg-white/[0.055]"
+                        )}
+                        onClick={() => setSelectedImageAspectRatio(option.value)}
+                        title={`${option.label} ${option.ratio}`}
+                      >
+                        <span className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_30%_0%,rgba(255,255,255,0.55),transparent_52%)] opacity-0 transition-opacity duration-200 group-hover/ratio-option:opacity-100 dark:bg-[radial-gradient(circle_at_30%_0%,rgba(255,255,255,0.11),transparent_52%)]" />
+                        <span className="relative z-10 text-[12px] font-semibold leading-none tabular-nums">{option.ratio}</span>
+                        <span className="relative z-10 flex h-8 items-center justify-center">
+                          <span
+                            className={cn(
+                              "rounded-[5px] border-2 transition-all duration-200",
+                              option.className,
+                              selected
+                                ? "border-foreground bg-background/35 shadow-[0_0_0_3px_rgba(255,255,255,0.24)] dark:bg-white/[0.08]"
+                                : "border-current/65 bg-background/20 group-hover/ratio-option:border-current"
+                            )}
+                          />
+                        </span>
+                        <span className="relative z-10 h-3.5 text-[10px] font-medium leading-none text-muted-foreground/80">
+                          {selected && <Check className="mx-auto h-3.5 w-3.5 text-pink-600 dark:text-pink-300" />}
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
             </DropdownMenuContent>
           </DropdownMenu>
 
