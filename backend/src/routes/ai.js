@@ -1914,6 +1914,29 @@ router.post(
                 language: bundle.engine?.language || 'unknown',
               });
             } catch (_metricsErr) { /* swallow */ }
+            // Confidence aggregator + anti-pattern detector — fold them
+            // into the system-prompt block so the model gets an explicit
+            // 'how confident are we?' signal + a recommended action.
+            try {
+              const conf = require('../services/attribution-confidence-aggregator');
+              const ap = require('../services/attribution-anti-pattern-detector');
+              const apResult = ap.detect({ history: __conversationHistoryForUnderstanding });
+              const confResult = conf.aggregate({
+                engineBundle: bundle.engine,
+                safetyResult: bundle.safety,
+                driftObservation: bundle.drift,
+                beliefResult: bundle.beliefs,
+                faithfulness: bundle.engine?.faithfulness || null,
+                antipatternResult: apResult,
+              });
+              const confBlock = conf.buildConfidenceBlock(confResult);
+              const apBlock = ap.buildAntipatternBlock(apResult);
+              const extras = [confBlock, apBlock].filter(Boolean).join('\n\n');
+              if (extras) circuitAttributionBlock += `\n\n${extras}`;
+              try {
+                console.log(`[confidence] score=${confResult.score} grade=${confResult.grade} antipatterns=${apResult.patterns?.length || 0}`);
+              } catch (_l2) { /* swallow */ }
+            } catch (_confErr) { /* swallow */ }
           }
         }
       } catch (circuitErr) {
