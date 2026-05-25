@@ -35,7 +35,7 @@ describe('attribution-skill-recommender', () => {
   });
 
   test('Email request → recommends gmail.compose', () => {
-    const r = sr.recommend({ prompt: 'redacta un correo para el cliente Acme con el reporte' });
+    const r = sr.recommend({ prompt: 'redacta un correo y envíalo por gmail al cliente Acme con el resumen' });
     assert.equal(r.primary?.id, 'gmail.compose');
   });
 
