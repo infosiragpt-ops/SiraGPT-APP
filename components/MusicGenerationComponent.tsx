@@ -29,12 +29,26 @@ interface GeneratedMusic {
   text_prompt: string;
 }
 
-export default function MusicGenerationComponent() {
+type MusicGenerationComponentProps = {
+  initialDuration?: number
+  initialPromptInfluence?: number
+  initialStyle?: string
+  initialMood?: string
+  initialEffect?: string
+}
+
+export default function MusicGenerationComponent({
+  initialDuration = 10,
+  initialPromptInfluence = 0.3,
+  initialStyle = "",
+  initialMood = "",
+  initialEffect = "",
+}: MusicGenerationComponentProps = {}) {
   const { user } = useAuth()
   const [prompt, setPrompt] = React.useState("")
-  const [duration, setDuration] = React.useState([10])
-  const [promptInfluence, setPromptInfluence] = React.useState([0.3])
-  const [selectedStyle, setSelectedStyle] = React.useState<string>("")
+  const [duration, setDuration] = React.useState([initialDuration])
+  const [promptInfluence, setPromptInfluence] = React.useState([initialPromptInfluence])
+  const [selectedStyle, setSelectedStyle] = React.useState<string>(initialStyle === "Auto" ? "" : initialStyle)
   const [isGenerating, setIsGenerating] = React.useState(false)
   const [generatedMusic, setGeneratedMusic] = React.useState<GeneratedMusic | null>(null)
   const [musicStyles, setMusicStyles] = React.useState<MusicStyle[]>([])
@@ -102,12 +116,13 @@ export default function MusicGenerationComponent() {
     setIsGenerating(true)
     try {
       const fullPrompt = selectedStyle
-        ? `${selectedStyle} style: ${cleanPrompt}`
-        : cleanPrompt
+        ? `${selectedStyle} style${initialMood ? `, ${initialMood} mood` : ""}${initialEffect ? `, ${initialEffect} effect` : ""}: ${cleanPrompt}`
+        : `${initialMood || initialEffect ? `${[initialMood, initialEffect].filter(Boolean).join(", ")}: ` : ""}${cleanPrompt}`
 
       const response = await apiClient.generateMusic({
         text: fullPrompt,
         duration: duration[0],
+        prompt_influence: promptInfluence[0],
       })
 
       if (response.success) {

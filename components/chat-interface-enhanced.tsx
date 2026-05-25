@@ -309,6 +309,10 @@ type VoiceModel = "ElevenLabs" | "Mimo Max 02HD"
 type VoiceLanguage = "English" | "Spanish" | "German" | "French" | "Portuguese" | "Afrikaans" | "Arabic" | "Armenian" | "Assamese" | "Azerbaijani" | "Belarusian" | "Bengali"
 type VoiceAccent = "Neutral" | "Latino" | "US" | "British" | "Spanish" | "Mexican"
 type VoiceEffect = "None" | "Studio Clean" | "Warm" | "Cinematic" | "Narration" | "Podcast"
+type MusicModel = "ElevenLabs" | "Lyria 3 Pro" | "Mimo Max 02HD"
+type MusicStyle = "Auto" | "Cinematic" | "Pop" | "Electronic" | "Ambient" | "Orchestral" | "Latin" | "Hip-Hop" | "Jazz"
+type MusicMood = "Balanced" | "Energetic" | "Emotional" | "Dark" | "Happy" | "Epic" | "Relaxed"
+type MusicEffect = "None" | "Studio Master" | "Spatial" | "Warm Tape" | "Radio Ready" | "Lo-Fi"
 
 const IMAGE_ASPECT_RATIO_OPTIONS: Array<{ value: ImageAspectRatio; label: string; ratio: string; className: string }> = [
   { value: "1:1", label: "Square", ratio: "1:1", className: "h-7 w-7" },
@@ -337,6 +341,10 @@ const VOICE_MODEL_OPTIONS: VoiceModel[] = ["ElevenLabs", "Mimo Max 02HD"]
 const VOICE_LANGUAGE_OPTIONS: VoiceLanguage[] = ["English", "Spanish", "German", "French", "Portuguese", "Afrikaans", "Arabic", "Armenian", "Assamese", "Azerbaijani", "Belarusian", "Bengali"]
 const VOICE_ACCENT_OPTIONS: VoiceAccent[] = ["Neutral", "Latino", "US", "British", "Spanish", "Mexican"]
 const VOICE_EFFECT_OPTIONS: VoiceEffect[] = ["None", "Studio Clean", "Warm", "Cinematic", "Narration", "Podcast"]
+const MUSIC_MODEL_OPTIONS: MusicModel[] = ["ElevenLabs", "Lyria 3 Pro", "Mimo Max 02HD"]
+const MUSIC_STYLE_OPTIONS: MusicStyle[] = ["Auto", "Cinematic", "Pop", "Electronic", "Ambient", "Orchestral", "Latin", "Hip-Hop", "Jazz"]
+const MUSIC_MOOD_OPTIONS: MusicMood[] = ["Balanced", "Energetic", "Emotional", "Dark", "Happy", "Epic", "Relaxed"]
+const MUSIC_EFFECT_OPTIONS: MusicEffect[] = ["None", "Studio Master", "Spatial", "Warm Tape", "Radio Ready", "Lo-Fi"]
 
 // `ImageAspectRatioMark` was extracted to
 // `components/chat/ComposerInlineDisplays.tsx` to keep this file
@@ -761,6 +769,8 @@ const ActionsDropdown = ({
   setIsImageGenerationActive,
   isVoiceGenerationActive,
   setIsVoiceGenerationActive,
+  isMusicGenerationActive,
+  setIsMusicGenerationActive,
   isVideoGenerationActive,
   setIsVideoGenerationActive,
   isComputerUseActive,
@@ -882,6 +892,22 @@ const ActionsDropdown = ({
     }
 
     setIsVoiceGenerationActive(newState);
+  };
+
+  const handleMusicGenerationToggle = () => {
+    const newState = !isMusicGenerationActive;
+
+    if (newState) {
+      closeAllToolsAndConnectors();
+      setChatType('text');
+      setShowAudioPanel(true);
+      setAudioTab('music');
+    } else {
+      setShowAudioPanel(false);
+      setChatType('text');
+    }
+
+    setIsMusicGenerationActive(newState);
   };
 
 
@@ -1274,10 +1300,10 @@ const ActionsDropdown = ({
             </div>
           </DropdownMenuItem>
 
-          {/* Música quick action — opens Voice Studio on Music tab */}
+          {/* Música quick action */}
           <DropdownMenuItem
             className="liquid-menu-item"
-            onClick={() => { setShowAudioPanel(true); setAudioTab('music'); setIsOpen(false); }}
+            onClick={() => { handleMusicGenerationToggle(); setIsOpen(false); }}
             disabled={currentPlan === "FREE" || isToolSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
@@ -1285,11 +1311,16 @@ const ActionsDropdown = ({
                 <Music className="h-4 w-4 text-rose-600 dark:text-rose-400" />
               </div>
               <div className="flex-1">
-                <div className="liquid-label font-medium text-sm">Música</div>
+                <div className="liquid-label font-medium text-sm">
+                  {isMusicGenerationActive ? 'Música activa' : 'Música'}
+                </div>
                 <div className="text-xs text-muted-foreground">
                   Lyria 3 Pro · genera canciones con IA
                 </div>
               </div>
+              {isMusicGenerationActive && (
+                <div className="w-2 h-2 bg-rose-500 rounded-full" />
+              )}
               {currentPlan === "FREE" && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
               )}
@@ -1724,6 +1755,22 @@ const ActiveToolsDisplay = ({
   setSelectedVoiceStability,
   selectedVoiceEffect,
   setSelectedVoiceEffect,
+  isMusicGenerationActive,
+  setIsMusicGenerationActive,
+  selectedMusicModel,
+  setSelectedMusicModel,
+  selectedMusicStyle,
+  setSelectedMusicStyle,
+  selectedMusicMood,
+  setSelectedMusicMood,
+  selectedMusicDuration,
+  setSelectedMusicDuration,
+  selectedMusicInfluence,
+  setSelectedMusicInfluence,
+  selectedMusicEffect,
+  setSelectedMusicEffect,
+  setShowAudioPanel,
+  setAudioTab,
   isVideoGenerationActive,
   setIsVideoGenerationActive,
   selectedVideoResolution,
@@ -1783,6 +1830,22 @@ const ActiveToolsDisplay = ({
   setSelectedVoiceStability: (stability: number) => void;
   selectedVoiceEffect: VoiceEffect;
   setSelectedVoiceEffect: (effect: VoiceEffect) => void;
+  isMusicGenerationActive: boolean;
+  setIsMusicGenerationActive: (value: boolean) => void;
+  selectedMusicModel: MusicModel;
+  setSelectedMusicModel: (model: MusicModel) => void;
+  selectedMusicStyle: MusicStyle;
+  setSelectedMusicStyle: (style: MusicStyle) => void;
+  selectedMusicMood: MusicMood;
+  setSelectedMusicMood: (mood: MusicMood) => void;
+  selectedMusicDuration: number;
+  setSelectedMusicDuration: (duration: number) => void;
+  selectedMusicInfluence: number;
+  setSelectedMusicInfluence: (influence: number) => void;
+  selectedMusicEffect: MusicEffect;
+  setSelectedMusicEffect: (effect: MusicEffect) => void;
+  setShowAudioPanel: (value: boolean) => void;
+  setAudioTab: (tab: 'tts' | 'stt' | 'music' | 'video') => void;
   isVideoGenerationActive: boolean;
   setIsVideoGenerationActive: (value: boolean) => void;
   selectedVideoResolution: VideoResolution;
@@ -1831,7 +1894,7 @@ const ActiveToolsDisplay = ({
   ].filter(Boolean) as { id: string; icon: JSX.Element }[];
 
   const hasConnectors = activeConnectors.length > 0;
-  const hasOtherTools = isImageGenerationActive || isVoiceGenerationActive || isVideoGenerationActive || isWebSearchActive || isComputerUseActive;
+  const hasOtherTools = isImageGenerationActive || isVoiceGenerationActive || isMusicGenerationActive || isVideoGenerationActive || isWebSearchActive || isComputerUseActive;
   const hasThesis = chatType === 'thesis';
 
   if (!hasConnectors && !hasOtherTools && !hasThesis) return null;
@@ -1854,6 +1917,12 @@ const ActiveToolsDisplay = ({
 
   const handleVoiceGenerationClose = () => {
     setIsVoiceGenerationActive(false);
+    setChatType('text');
+  };
+
+  const handleMusicGenerationClose = () => {
+    setIsMusicGenerationActive(false);
+    setShowAudioPanel(false);
     setChatType('text');
   };
 
@@ -2282,6 +2351,167 @@ const ActiveToolsDisplay = ({
                 <div className="border-t border-zinc-950/8 px-2.5 py-1.5 text-[10.5px] font-medium text-zinc-600 dark:border-white/12 dark:text-white/80">
                   {selectedVoiceModel} / {selectedVoiceLanguage} / {selectedVoiceAccent} / {selectedVoiceEffect}
                 </div>
+              </div>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </>
+      )}
+
+      {isMusicGenerationActive && (
+        <>
+          <div className="group/music-liquid relative isolate flex min-h-7 items-center gap-1.5 overflow-hidden rounded-full border border-rose-300/70 bg-rose-100/85 px-2.5 py-1 text-xs text-rose-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.75),0_10px_28px_-22px_rgba(225,29,72,0.75)] backdrop-blur-xl transition-all duration-300 hover:scale-[1.015] hover:border-rose-400/80 dark:border-rose-500/40 dark:bg-rose-900/25 dark:text-rose-200">
+            <span className="pointer-events-none absolute -inset-8 -z-10 rounded-full bg-[conic-gradient(from_90deg,transparent_0deg,rgba(244,63,94,0.0)_70deg,rgba(244,63,94,0.48)_135deg,rgba(225,29,72,0.22)_198deg,transparent_280deg)] opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
+            <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/75 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/music-liquid:translate-x-[155%] dark:via-white/25" />
+            <Music className="relative z-10 h-3 w-3 drop-shadow-[0_0_8px_rgba(225,29,72,0.35)]" />
+            <span className="relative z-10 font-medium">Música</span>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="relative z-10 ml-1 h-4 w-4 rounded-full p-0 hover:bg-white/50 dark:hover:bg-rose-800/30"
+              onClick={handleMusicGenerationClose}
+              title="Cerrar música"
+            >
+              <X className="h-3 w-3" />
+            </Button>
+          </div>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="group/music-trigger relative isolate h-[22px] gap-1 overflow-hidden rounded-md border border-zinc-200/80 bg-white/82 px-1.5 py-0 text-[10.5px] font-semibold text-zinc-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_8px_22px_-18px_rgba(15,23,42,0.35)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/88 dark:text-white/90 dark:hover:bg-zinc-800/92"
+                title={`Música: ${selectedMusicModel}, ${selectedMusicStyle}, ${selectedMusicMood}, ${selectedMusicDuration}s`}
+                aria-label={`Configurar música. Actual ${selectedMusicModel}, ${selectedMusicStyle}, ${selectedMusicDuration} segundos`}
+              >
+                <span className="pointer-events-none absolute inset-y-[-55%] left-[-65%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/70 to-transparent opacity-0 blur-sm transition-all duration-700 group-hover/music-trigger:left-[92%] group-hover/music-trigger:opacity-100 dark:via-white/20" />
+                <span>{selectedMusicModel === "ElevenLabs" ? "Eleven" : selectedMusicModel === "Mimo Max 02HD" ? "Mimo 02HD" : "Lyria"}</span>
+                <span className="h-1 w-1 rounded-full bg-current/35" />
+                <span>{selectedMusicStyle}</span>
+                <span className="h-1 w-1 rounded-full bg-current/35" />
+                <span>{selectedMusicDuration}s</span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="start"
+              sideOffset={9}
+              collisionPadding={12}
+              className="w-[min(calc(100vw-1rem),15.5rem)] overflow-hidden rounded-[14px] border border-zinc-200/70 bg-white/92 p-0 text-zinc-950 shadow-[0_16px_48px_-32px_rgba(15,23,42,0.55),inset_0_1px_0_rgba(255,255,255,0.9)] backdrop-blur-2xl dark:border-white/18 dark:bg-[#08090c]/96 dark:text-white dark:shadow-[0_22px_70px_-38px_rgba(0,0,0,1),inset_0_1px_0_rgba(255,255,255,0.14)]"
+            >
+              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_22%_10%,rgba(255,255,255,0.92),transparent_28%),radial-gradient(circle_at_82%_36%,rgba(244,63,94,0.12),transparent_30%),linear-gradient(135deg,rgba(255,255,255,0.78),rgba(255,255,255,0.32)_45%,rgba(255,255,255,0.62))] dark:bg-[radial-gradient(circle_at_18%_8%,rgba(255,255,255,0.13),transparent_26%),radial-gradient(circle_at_82%_36%,rgba(244,63,94,0.16),transparent_32%),linear-gradient(135deg,rgba(255,255,255,0.08),rgba(255,255,255,0.025)_45%,rgba(255,255,255,0.055))]" />
+              <div className="relative z-10 py-1">
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-9 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
+                    <span>Modelo de música</span>
+                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62">{selectedMusicModel}</span>
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuPortal>
+                    <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="liquid-menu-surface max-h-[min(18rem,calc(100vh-2rem))] w-44 overflow-y-auto p-1">
+                      {MUSIC_MODEL_OPTIONS.map(option => (
+                        <DropdownMenuItem key={option} className="chat-active-apps-menu-item text-[12px]" onClick={() => setSelectedMusicModel(option)}>
+                          <span className="min-w-0 flex-1 truncate">{option}</span>
+                          {selectedMusicModel === option && <Check className="h-3.5 w-3.5" />}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuSubContent>
+                  </DropdownMenuPortal>
+                </DropdownMenuSub>
+
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-9 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
+                    <span>Style</span>
+                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62">{selectedMusicStyle}</span>
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuPortal>
+                    <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="liquid-menu-surface max-h-[min(22rem,calc(100vh-2rem))] w-44 overflow-y-auto p-1">
+                      {MUSIC_STYLE_OPTIONS.map(option => (
+                        <DropdownMenuItem key={option} className="chat-active-apps-menu-item text-[12px]" onClick={() => setSelectedMusicStyle(option)}>
+                          <span className="min-w-0 flex-1 truncate">{option}</span>
+                          {selectedMusicStyle === option && <Check className="h-3.5 w-3.5" />}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuSubContent>
+                  </DropdownMenuPortal>
+                </DropdownMenuSub>
+
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-9 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
+                    <span>Mood</span>
+                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62">{selectedMusicMood}</span>
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuPortal>
+                    <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="liquid-menu-surface max-h-[min(18rem,calc(100vh-2rem))] w-44 overflow-y-auto p-1">
+                      {MUSIC_MOOD_OPTIONS.map(option => (
+                        <DropdownMenuItem key={option} className="chat-active-apps-menu-item text-[12px]" onClick={() => setSelectedMusicMood(option)}>
+                          <span className="min-w-0 flex-1 truncate">{option}</span>
+                          {selectedMusicMood === option && <Check className="h-3.5 w-3.5" />}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuSubContent>
+                  </DropdownMenuPortal>
+                </DropdownMenuSub>
+
+                <div className="border-t border-zinc-950/8 px-2.5 py-2.5 dark:border-white/12">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[12px] font-medium leading-none text-zinc-800 dark:text-white/90">Duration</span>
+                      <Info className="h-3 w-3 text-zinc-500 dark:text-white/62" />
+                    </div>
+                    <span className="text-[10.5px] font-medium text-zinc-500 dark:text-white/72">{selectedMusicDuration}s</span>
+                  </div>
+                  <Slider
+                    value={[selectedMusicDuration]}
+                    onValueChange={([value]) => setSelectedMusicDuration(value)}
+                    min={5}
+                    max={30}
+                    step={1}
+                    className="mt-2"
+                  />
+                </div>
+
+                <div className="border-t border-zinc-950/8 px-2.5 py-2.5 dark:border-white/12">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-[12px] font-medium leading-none text-zinc-800 dark:text-white/90">Prompt</span>
+                    <span className="text-[10.5px] font-medium text-zinc-500 dark:text-white/72">{Math.round(selectedMusicInfluence * 100)}%</span>
+                  </div>
+                  <Slider
+                    value={[selectedMusicInfluence]}
+                    onValueChange={([value]) => setSelectedMusicInfluence(value)}
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    className="mt-2"
+                  />
+                </div>
+
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-9 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
+                    <span>Effect</span>
+                    <span className="ml-auto mr-1 max-w-[92px] truncate text-[11px] text-zinc-500 dark:text-white/62">{selectedMusicEffect}</span>
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuPortal>
+                    <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="liquid-menu-surface max-h-[min(18rem,calc(100vh-2rem))] w-44 overflow-y-auto p-1">
+                      {MUSIC_EFFECT_OPTIONS.map(option => (
+                        <DropdownMenuItem key={option} className="chat-active-apps-menu-item text-[12px]" onClick={() => setSelectedMusicEffect(option)}>
+                          <span className="min-w-0 flex-1 truncate">{option}</span>
+                          {selectedMusicEffect === option && <Check className="h-3.5 w-3.5" />}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuSubContent>
+                  </DropdownMenuPortal>
+                </DropdownMenuSub>
+
+                <button
+                  type="button"
+                  className="flex h-8 w-full items-center justify-between border-t border-zinc-950/8 px-2.5 text-left text-[11px] font-semibold text-rose-700 transition-colors hover:bg-rose-500/10 dark:border-white/12 dark:text-rose-200 dark:hover:bg-rose-400/10"
+                  onClick={() => {
+                    setShowAudioPanel(true)
+                    setAudioTab('music')
+                  }}
+                >
+                  <span>Abrir estudio musical</span>
+                  <ChevronDown className="h-3.5 w-3.5 -rotate-90" />
+                </button>
               </div>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -3540,6 +3770,13 @@ function ChatInterfaceContent() {
   const [selectedVoiceAccent, setSelectedVoiceAccent] = React.useState<VoiceAccent>("Latino")
   const [selectedVoiceStability, setSelectedVoiceStability] = React.useState(100)
   const [selectedVoiceEffect, setSelectedVoiceEffect] = React.useState<VoiceEffect>("Studio Clean")
+  const [isMusicGenerationActive, setIsMusicGenerationActive] = React.useState(false)
+  const [selectedMusicModel, setSelectedMusicModel] = React.useState<MusicModel>("ElevenLabs")
+  const [selectedMusicStyle, setSelectedMusicStyle] = React.useState<MusicStyle>("Auto")
+  const [selectedMusicMood, setSelectedMusicMood] = React.useState<MusicMood>("Balanced")
+  const [selectedMusicDuration, setSelectedMusicDuration] = React.useState(10)
+  const [selectedMusicInfluence, setSelectedMusicInfluence] = React.useState(0.3)
+  const [selectedMusicEffect, setSelectedMusicEffect] = React.useState<MusicEffect>("Studio Master")
   const [selectedVideoResolution, setSelectedVideoResolution] = React.useState<VideoResolution>("720p")
   const [selectedVideoAspectRatio, setSelectedVideoAspectRatio] = React.useState<VideoAspectRatio>("auto")
   const [selectedVideoDuration, setSelectedVideoDuration] = React.useState<VideoDuration>(5)
@@ -3850,6 +4087,7 @@ function ChatInterfaceContent() {
     setIsWebSearchActive(false);
     setIsImageGenerationActive(false);
     setIsVoiceGenerationActive(false);
+    setIsMusicGenerationActive(false);
     setIsVideoGenerationActive(false);
     setIsGmailActive(false);
     setIsGoogleCalendarActive(false);
@@ -7498,7 +7736,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   // the "tool pills" row below the input — if nothing is active, we
   // hide the entire bar so the composer stays a clean pill.
   const hasActiveTools = (
-    isWebSearchActive || isImageGenerationActive || isVoiceGenerationActive || isVideoGenerationActive || isComputerUseActive
+    isWebSearchActive || isImageGenerationActive || isVoiceGenerationActive || isMusicGenerationActive || isVideoGenerationActive || isComputerUseActive
     || isGmailActive || isGoogleCalendarActive || isGoogleDriveActive
     || isSpotifyActive || isWordConnectorActive || isExcelConnectorActive
     || chatType === 'thesis'
@@ -7523,6 +7761,14 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     selectedVoiceAccent, setSelectedVoiceAccent,
     selectedVoiceStability, setSelectedVoiceStability,
     selectedVoiceEffect, setSelectedVoiceEffect,
+    isMusicGenerationActive, setIsMusicGenerationActive,
+    selectedMusicModel, setSelectedMusicModel,
+    selectedMusicStyle, setSelectedMusicStyle,
+    selectedMusicMood, setSelectedMusicMood,
+    selectedMusicDuration, setSelectedMusicDuration,
+    selectedMusicInfluence, setSelectedMusicInfluence,
+    selectedMusicEffect, setSelectedMusicEffect,
+    setShowAudioPanel, setAudioTab,
     isVideoGenerationActive, setIsVideoGenerationActive,
     selectedVideoResolution, setSelectedVideoResolution,
     selectedVideoAspectRatio, setSelectedVideoAspectRatio,
@@ -8491,6 +8737,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           setIsImageGenerationActive={setIsImageGenerationActive}
                           isVoiceGenerationActive={isVoiceGenerationActive}
                           setIsVoiceGenerationActive={setIsVoiceGenerationActive}
+                          isMusicGenerationActive={isMusicGenerationActive}
+                          setIsMusicGenerationActive={setIsMusicGenerationActive}
                           isVideoGenerationActive={isVideoGenerationActive}
                           setIsVideoGenerationActive={setIsVideoGenerationActive}
                           isComputerUseActive={isComputerUseActive}
@@ -8759,7 +9007,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       <SpeechToTextComponent />
                     )}
                     {audioTab === 'music' && (
-                      <MusicGenerationComponent />
+                      <MusicGenerationComponent
+                        initialDuration={selectedMusicDuration}
+                        initialPromptInfluence={selectedMusicInfluence}
+                        initialStyle={selectedMusicStyle}
+                        initialMood={selectedMusicMood}
+                        initialEffect={selectedMusicEffect}
+                      />
                     )}
                     {audioTab === 'video' && (
                       <VideoGenerationComponent />
@@ -8960,6 +9214,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               setIsImageGenerationActive={setIsImageGenerationActive}
                               isVoiceGenerationActive={isVoiceGenerationActive}
                               setIsVoiceGenerationActive={setIsVoiceGenerationActive}
+                              isMusicGenerationActive={isMusicGenerationActive}
+                              setIsMusicGenerationActive={setIsMusicGenerationActive}
                               isVideoGenerationActive={isVideoGenerationActive}
                               setIsVideoGenerationActive={setIsVideoGenerationActive}
                               isComputerUseActive={isComputerUseActive}
@@ -9255,7 +9511,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       <TextToSpeechComponent />
                     )}
                     {audioTab === 'music' && (
-                      <MusicGenerationComponent />
+                      <MusicGenerationComponent
+                        initialDuration={selectedMusicDuration}
+                        initialPromptInfluence={selectedMusicInfluence}
+                        initialStyle={selectedMusicStyle}
+                        initialMood={selectedMusicMood}
+                        initialEffect={selectedMusicEffect}
+                      />
                     )}
                     {audioTab === 'video' && (
                       <VideoGenerationComponent />
