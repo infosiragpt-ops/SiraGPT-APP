@@ -28,6 +28,11 @@ const state = {
   upstreamErrors: 0,
   lastUpstreamErrorAt: null,
   lastUpstreamErrorCode: null,
+  // Bookkeeping: when the process started + the last time someone hit
+  // the admin reset endpoint. Helps ops distinguish "counter is 0
+  // because no events" from "counter is 0 because we just reset".
+  startedAt: new Date().toISOString(),
+  lastResetAt: null,
 };
 
 function toAmount(value) {
@@ -106,6 +111,8 @@ function snapshot() {
       lastErrorAt: state.lastUpstreamErrorAt,
       lastErrorCode: state.lastUpstreamErrorCode,
     },
+    startedAt: state.startedAt,
+    lastResetAt: state.lastResetAt,
   };
 }
 
@@ -147,6 +154,7 @@ function reset() {
   state.upstreamErrors = 0;
   state.lastUpstreamErrorAt = null;
   state.lastUpstreamErrorCode = null;
+  state.lastResetAt = new Date().toISOString();
 }
 
 module.exports = {

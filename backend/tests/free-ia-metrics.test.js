@@ -5,6 +5,23 @@ const assert = require('node:assert/strict');
 
 const metrics = require('../src/services/free-ia-metrics');
 
+test('snapshot includes startedAt + lastResetAt for ops bookkeeping', () => {
+  metrics.reset();
+  const s = metrics.snapshot();
+  assert.ok(s.startedAt, 'startedAt should be an ISO timestamp');
+  assert.ok(Number.isFinite(Date.parse(s.startedAt)), `startedAt parses as date: ${s.startedAt}`);
+  assert.ok(s.lastResetAt, 'reset() should populate lastResetAt');
+});
+
+test('reset() stamps lastResetAt to a fresh ISO 8601 timestamp', () => {
+  const before = Date.now();
+  metrics.reset();
+  const after = Date.now();
+  const s = metrics.snapshot();
+  const ts = Date.parse(s.lastResetAt);
+  assert.ok(ts >= before && ts <= after, `lastResetAt between before/after: ${s.lastResetAt}`);
+});
+
 test('reset() leaves a clean snapshot', () => {
   metrics.recordFallback({ feature: 'x', amount: 1 });
   metrics.reset();
