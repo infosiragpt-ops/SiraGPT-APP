@@ -171,8 +171,9 @@ function summary({ now = Date.now() } = {}) {
   const requestRatePerMin = (totalUpstream > 0 && elapsedMin >= 1)
     ? Math.round((totalUpstream / elapsedMin) * 100) / 100
     : null;
+  const rateSuffix = requestRatePerMin === null ? '' : `, ${requestRatePerMin}/min`;
   return {
-    line: `Free IA: ${state.totalFallbacks} fallbacks, ${state.upstreamSuccess}/${totalUpstream} upstream OK (${ratePct})${degraded ? ' [DEGRADED]' : ''}`,
+    line: `Free IA: ${state.totalFallbacks} fallbacks, ${state.upstreamSuccess}/${totalUpstream} upstream OK (${ratePct})${rateSuffix}${degraded ? ' [DEGRADED]' : ''}`,
     fallbacks: state.totalFallbacks,
     upstreamSuccess: state.upstreamSuccess,
     upstreamTotal: totalUpstream,
