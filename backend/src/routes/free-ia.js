@@ -44,6 +44,9 @@ const {
   isFreeIaConfigured,
   buildFreeIaModelDescriptor,
   getFreeIaPricing,
+  DEFAULT_DISPLAY_NAME,
+  DEFAULT_MODEL,
+  PROVIDER_NAME,
 } = require('../services/ai/cerebras-client');
 const freeIaMetrics = require('../services/free-ia-metrics');
 
@@ -61,6 +64,16 @@ router.get('/status', (_req, res) => {
 
 router.get('/configured', (_req, res) => {
   res.json({ configured: isFreeIaConfigured() });
+});
+
+// Brand constants for frontend localisation / hardcoded labels (e.g. a
+// /loading screen that needs the brand name before /status responds).
+router.get('/brand', (_req, res) => {
+  res.json({
+    displayName: DEFAULT_DISPLAY_NAME,
+    defaultModel: DEFAULT_MODEL,
+    provider: PROVIDER_NAME,
+  });
 });
 
 // Consolidated view for the model picker's first paint — one round-trip

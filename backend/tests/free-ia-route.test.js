@@ -116,6 +116,21 @@ test('GET /api/free-ia/info returns a consolidated single-call view', async () =
   }
 });
 
+test('GET /api/free-ia/brand returns the constants for frontend localisation', async () => {
+  const { server, baseURL } = await startServer();
+  try {
+    const { status, body } = await fetchJSON(`${baseURL}/api/free-ia/brand`);
+    assert.equal(status, 200);
+    assert.equal(body.displayName, 'Free IA');
+    assert.equal(body.defaultModel, 'llama-3.1-8b');
+    assert.equal(body.provider, 'Cerebras');
+    // Brand endpoint should NOT depend on the API key being set.
+    assert.equal(body.apiKey, undefined);
+  } finally {
+    server.close();
+  }
+});
+
 test('GET /api/free-ia/configured returns boolean only', async () => {
   const prevKey = process.env.CEREBRAS_API_KEY;
   process.env.CEREBRAS_API_KEY = 'csk-test-configured';
