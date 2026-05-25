@@ -1743,31 +1743,18 @@ router.post(
         }
       }
 
-      // Attribution graph — feature-flagged via ENABLE_ATTRIBUTION_GRAPH.
-      // Builds a causal graph over (current message + retrieved context +
-      // user-stable features + decomposed sub-intents) and appends a short
-      // interpretive block to the system prompt so the model knows which
-      // context to weight most. Inspired by Anthropic's attribution-graphs
-      // research (transformer-circuits.pub/2025/attribution-graphs/biology.html).
-      // Pure-local, no network calls; runs in < 10 ms per turn.
+      // Attribution graph slot — kept for backwards compatibility with the
+      // systemBlocks layout below. The actual circuit-tracing-inspired
+      // analysis runs through `context-attribution-engine` and the
+      // `intent-attribution-graph/` submodule, both of which are appended
+      // a few blocks later as `circuitAttributionBlock` and
+      // `intentAttributionGraphBlock`. The variables `recalledMemoryFacts`
+      // and `crossChatTurnsForAttribution` collected above remain available
+      // for any future attribution surface that needs them without having
+      // to re-query the data layer.
       let attributionBlock = '';
-      try {
-        const attributionBridge = require('../services/context-attribution-bridge');
-        if (attributionBridge.isEnabled()) {
-          attributionBlock = attributionBridge.buildAttributionBlockSafe({
-            userId,
-            prompt,
-            memoryFacts: recalledMemoryFacts,
-            crossChatTurns: crossChatTurnsForAttribution,
-            inferredProfile,
-          });
-          if (attributionBlock) {
-            console.log(`[attribution] block built chars=${attributionBlock.length} user=${userId || 'anon'}`);
-          }
-        }
-      } catch (attrErr) {
-        console.warn('[attribution] failed (continuing without):', attrErr?.message || attrErr);
-      }
+      void recalledMemoryFacts;
+      void crossChatTurnsForAttribution;
 
       // RLHF-lite: reuse examples the same user explicitly marked
       // helpful, so future similar answers match their preferred shape.
