@@ -9,6 +9,7 @@ const assert = require('node:assert/strict');
 
 const {
   humanizeText,
+  humanizeChunked,
   estimateAIScore,
   listAITellPatterns,
   topAITellsFound,
@@ -176,6 +177,30 @@ test('clampScore: clamps to [0,1] with 3-decimal rounding', () => {
   assert.equal(clampScore('not a number'), 0);
   assert.equal(clampScore(null), 0);
   assert.equal(clampScore(undefined), 0);
+});
+
+test('humanizeChunked: bypasses chunking when text fits maxChunkChars', () => {
+  const input = 'Furthermore, the data is fine. Moreover, the gains compound.';
+  const r = humanizeChunked({ text: input, maxChunkChars: 1000 });
+  assert.equal(r.chunked, undefined, 'small inputs should not be chunked');
+});
+
+test('humanizeChunked: splits paragraph-boundary inputs > maxChunkChars', () => {
+  // Make each paragraph contain a tell + push past the chunk threshold.
+  const para = 'Furthermore, ' + ('lorem ipsum '.repeat(50));
+  const input = `${para}\n\n${para}\n\n${para}`;
+  const r = humanizeChunked({ text: input, maxChunkChars: 50 });
+  assert.equal(r.chunked, true);
+  assert.equal(r.chunkCount, 3);
+  assert.ok(!r.text.match(/furthermore/i), `tells should be replaced across chunks: ${r.text.slice(0, 200)}`);
+});
+
+test('humanizeChunked: aggregated aiScores stay in [0,1]', () => {
+  const para = 'Furthermore, all systems are clearly very robust. '.repeat(20);
+  const input = `${para}\n\n${para}\n\n${para}`;
+  const r = humanizeChunked({ text: input, maxChunkChars: 100 });
+  assert.ok(r.aiScoreBefore >= 0 && r.aiScoreBefore <= 1);
+  assert.ok(r.aiScoreAfter >= 0 && r.aiScoreAfter <= 1);
 });
 
 test('topAITellsFound: returns nothing for clean text', () => {

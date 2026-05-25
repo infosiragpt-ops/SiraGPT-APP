@@ -343,8 +343,55 @@ function clampScore(value) {
   return Math.round(value * 1000) / 1000;
 }
 
+/**
+ * Process very long text in chunks (split on paragraph boundaries) so
+ * a single 100k-char paste doesn't pay the full regex cost in one
+ * pass. Mostly a guard for the paraphrase route when
+ * PARAPHRASE_MAX_TEXT_LENGTH is bumped up.
+ *
+ * Returns the same shape as humanizeText, with aggregated scores.
+ */
+function humanizeChunked({ text, language = 'es', intensity = 'medium', excludeTells = [], maxChunkChars = 8000 } = {}) {
+  const input = String(text || '');
+  if (input.length <= maxChunkChars) {
+    return humanizeText({ text: input, language, intensity, excludeTells });
+  }
+  // Split on paragraph boundaries (double newlines). When the input
+  // has none, fall back to single-newline boundaries to avoid running
+  // the whole blob in one pass.
+  const splitter = input.includes('\n\n') ? /\n{2,}/ : /\n+/;
+  const paragraphs = input.split(splitter).filter((p) => p.trim());
+
+  let aiScoreBeforeSum = 0;
+  let aiScoreAfterSum = 0;
+  const outParts = [];
+  const allApplied = [];
+  for (const para of paragraphs) {
+    const r = humanizeText({ text: para, language, intensity, excludeTells });
+    outParts.push(r.text);
+    allApplied.push(...r.applied);
+    aiScoreBeforeSum += r.aiScoreBefore;
+    aiScoreAfterSum += r.aiScoreAfter;
+  }
+  const n = Math.max(1, paragraphs.length);
+  const before = Math.round((aiScoreBeforeSum / n) * 1000) / 1000;
+  const after = Math.round((aiScoreAfterSum / n) * 1000) / 1000;
+  return {
+    text: outParts.join('\n\n'),
+    applied: allApplied,
+    aiScoreBefore: before,
+    aiScoreAfter: after,
+    deltaScore: Math.round((before - after) * 1000) / 1000,
+    intensity,
+    language,
+    chunked: true,
+    chunkCount: paragraphs.length,
+  };
+}
+
 module.exports = {
   humanizeText,
+  humanizeChunked,
   estimateAIScore,
   listAITellPatterns,
   topAITellsFound,
