@@ -75,10 +75,15 @@ function record({
 
 function list({ chatId = null, userId = null, limit = 50 } = {}) {
   const cap = Math.max(1, Math.min(500, Number(limit) || 50));
-  let out = TRACES;
+  let out = TRACES.map((t, idx) => ({ ...t, _seq: idx }));
   if (chatId) out = out.filter((t) => t.chatId === chatId);
   if (userId) out = out.filter((t) => t.userId === userId);
-  return [...out].sort((a, b) => b.timestamp - a.timestamp).slice(0, cap);
+  // Recency by timestamp; same-millisecond ties break on insertion order
+  // (newer last) so callers get deterministic ordering on hot turns.
+  return out
+    .sort((a, b) => (b.timestamp - a.timestamp) || (b._seq - a._seq))
+    .slice(0, cap)
+    .map(({ _seq, ...rest }) => rest);
 }
 
 function get({ id } = {}) {
