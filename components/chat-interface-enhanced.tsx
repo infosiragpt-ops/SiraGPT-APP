@@ -1010,7 +1010,7 @@ const ActionsDropdown = ({
                 className="h-9 w-9 p-0 hover:bg-muted/50 rounded-full flex items-center justify-center"
                 disabled={isMenuDisabled}
               >
-                <Plus className="h-8 w-8" />
+                <Plus className="h-5 w-5" />
               </Button>
             </DropdownMenuTrigger>
           </TooltipTrigger>
@@ -1021,7 +1021,7 @@ const ActionsDropdown = ({
         <DropdownMenuContent
           align="start"
           side="top"
-          sideOffset={10}
+          sideOffset={6}
           collisionPadding={12}
           className="chat-tools-menu liquid-menu-surface"
         >
