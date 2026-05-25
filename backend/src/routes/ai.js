@@ -3450,6 +3450,34 @@ router.post(
         { kind: 'web-search', text: webSearchBlock, cacheable: false },
         { kind: 'pr5-grounding', text: __pr5GroundingBlock, cacheable: false },
       ].filter((b) => typeof b.text === 'string' && b.text.trim().length > 0);
+
+      // Prompt-budget allocator — trims overflowing systemBlocks so the
+      // stacking attribution / circuit / saliency / RAG / cowork surfaces
+      // can't unboundedly grow the prompt. Tier-0 blocks (master prompt,
+      // conversation understanding, contract) are always preserved; the
+      // rest are scaled down to fit SIRAGPT_PROMPT_BUDGET_TOKENS (default
+      // 12 K). Disabled wholesale with SIRAGPT_PROMPT_BUDGET_DISABLED=1.
+      try {
+        if (String(process.env.SIRAGPT_PROMPT_BUDGET_DISABLED || '').toLowerCase() !== '1') {
+          const budgetAllocator = require('../services/prompt-budget-allocator');
+          const allocation = budgetAllocator.allocate(systemBlocks, {});
+          if (allocation.overBudgetBefore && allocation.trimmedBlocks.length > 0) {
+            const trimmed = budgetAllocator.applyAllocation(systemBlocks, allocation);
+            for (let __bi = 0; __bi < trimmed.length; __bi += 1) {
+              systemBlocks[__bi] = trimmed[__bi];
+            }
+            // rebuild the flat systemInstruction.content so the gateway
+            // sends the trimmed version (and not the original concat)
+            systemInstruction.content = systemBlocks.map((b) => b.text || '').join('');
+            try {
+              console.log(budgetAllocator.buildBudgetSummaryLine(allocation));
+            } catch (_logErr) { /* swallow */ }
+          }
+        }
+      } catch (__budgetErr) {
+        console.warn('[prompt-budget] allocation failed (continuing without):', __budgetErr?.message || __budgetErr);
+      }
+
       const __cacheableBlockCount = systemBlocks.filter((b) => b.cacheable).length;
       console.log(`📝 system prompt built: intent=${promptBundle.intent} lang=${promptBundle.language} chars=${systemInstruction.content.length} blocks=${systemBlocks.length} cacheable=${__cacheableBlockCount} profile=${userProfile ? 'yes' : 'no'} threadContext=${conversationUnderstandingBlock ? 'yes' : 'no'} threadTurns=${__conversationHistoryForUnderstanding.length} memory=${memoryBlock ? 'yes' : 'no'} orchMemory=${orchMemoryBlock ? 'yes' : 'no'} feedback=${feedbackBlock ? 'yes' : 'no'} rag=${operationalRagContext?.active ? 'yes' : 'no'} contract=${universalTaskContract?.pipeline || 'none'} graph=${enterpriseExecutionGraph?.graph_id || 'none'} cira=${ciraRuntimeBundle?.envelope?.request_id || 'none'} docEnrichment=${documentEnrichment ? `${documentEnrichment.primaryDocType}/${documentEnrichment.perFileProfile.length}` : 'none'} webSearch=${webSearchBlock ? 'yes' : 'no'}`);
 
