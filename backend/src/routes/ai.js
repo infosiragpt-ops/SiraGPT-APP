@@ -624,13 +624,47 @@ router.post(
         console.warn('[paraphrase] usage tracking failed:', usageErr?.message);
       }
 
+      // Anti-AI-detection humanization (mirrors /api/paraphrase). For
+      // mode 'humanize' (or any mode with `?humanize=1`) the rule-based
+      // humanizer runs as a post-LLM pass and reports a stealth score.
+      let finalText = output;
+      let stealth = null;
+      const wantHumanize = mode === 'humanize'
+        || String(req.query?.humanize || '').trim() === '1';
+      if (wantHumanize && typeof output === 'string' && output.trim()) {
+        try {
+          // eslint-disable-next-line global-require
+          const { humanizeText } = require('../services/paraphrase-humanizer');
+          const intensity = String(req.query?.intensity || 'medium').toLowerCase();
+          const safeIntensity = ['low', 'medium', 'high'].includes(intensity)
+            ? intensity
+            : 'medium';
+          const humanized = humanizeText({
+            text: output,
+            language: targetLanguage.id,
+            intensity: safeIntensity,
+          });
+          finalText = humanized.text;
+          stealth = {
+            aiScoreBefore: humanized.aiScoreBefore,
+            aiScoreAfter: humanized.aiScoreAfter,
+            deltaScore: humanized.deltaScore,
+            transformations: humanized.applied.length,
+            intensity: humanized.intensity,
+          };
+        } catch (humErr) {
+          console.warn('[paraphrase] humanizer failed:', humErr?.message);
+        }
+      }
+
       return res.json({
         success: true,
-        text: output,
+        text: finalText,
         model,
         mode,
         language: targetLanguage.id,
         pipeline: { passes: pipeline.passes, similarity: pipeline.similarity },
+        stealth,
         usage: { total_tokens: totalTokens },
       });
     } catch (error) {
