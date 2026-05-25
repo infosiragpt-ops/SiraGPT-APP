@@ -162,6 +162,20 @@ function boostBurstiness(text) {
     if (!sent) continue;
     const words = sent.split(/\s+/).filter(Boolean);
     const commas = (sent.match(/,/g) || []).length;
+    const semicolons = (sent.match(/;/g) || []).length;
+    // Semicolons in long sentences are a strong AI signal — promote
+    // the segment AFTER the first semicolon into its own sentence.
+    if (semicolons >= 1 && words.length >= 18) {
+      const idx = sent.indexOf(';');
+      const head = sent.slice(0, idx).trim();
+      const tail = sent.slice(idx + 1).trim();
+      if (head && tail) {
+        const tailFirst = tail[0] ? tail[0].toUpperCase() + tail.slice(1) : tail;
+        out.push(`${head}. ${tailFirst}`);
+        applied.push({ from: 'semicolon-split', to: 'sentence', kind: 'burstiness' });
+        continue;
+      }
+    }
     if (commas >= 3 && words.length >= 25) {
       // Split on the LAST comma into a separate short sentence.
       const lastCommaIdx = sent.lastIndexOf(',');

@@ -88,6 +88,22 @@ test('boostBurstiness splits a long 3+comma sentence into two', () => {
   assert.equal(r.applied[0].kind, 'burstiness');
 });
 
+test('boostBurstiness splits on semicolons in long sentences (AI signal)', () => {
+  // 20+ words, semicolon → over the threshold (words>=18 AND ;>=1).
+  const long = 'The model performs well across the entire benchmark suite of evaluations; it handles structured data inputs from many sources and produces faithful outputs reliably every single time.';
+  const r = boostBurstiness(long);
+  assert.ok(!r.text.includes(';'), `semicolon should be promoted to period: ${r.text}`);
+  assert.equal(r.applied.length, 1);
+  assert.equal(r.applied[0].kind, 'burstiness');
+  assert.equal(r.applied[0].from, 'semicolon-split');
+});
+
+test('boostBurstiness leaves semicolons in short sentences alone', () => {
+  const short = 'A; B.';
+  const r = boostBurstiness(short);
+  assert.ok(r.text.includes(';'), 'short sentences should keep their semicolons');
+});
+
 test('boostBurstiness leaves short sentences untouched', () => {
   const original = 'The result was clear. We moved on.';
   const r = boostBurstiness(original);
