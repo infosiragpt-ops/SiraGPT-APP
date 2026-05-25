@@ -19,6 +19,7 @@
 const express = require('express');
 const router = express.Router();
 
+const { authenticateToken, requireAdmin } = require('../middleware/auth');
 const {
   getCerebrasConfig,
   isFreeIaConfigured,
@@ -50,6 +51,20 @@ router.get('/metrics', (_req, res) => {
 router.get('/metrics.prom', (_req, res) => {
   res.type('text/plain; version=0.0.4');
   res.send(freeIaMetrics.toPrometheusText());
+});
+
+// Admin-only — reset the counter. Useful for ops drills and after an
+// incident postmortem so the dashboard starts fresh. Returns the
+// snapshot from BEFORE the reset so the caller can archive it.
+router.post('/metrics/reset', authenticateToken, requireAdmin, (req, res) => {
+  const before = freeIaMetrics.snapshot();
+  freeIaMetrics.reset();
+  res.json({
+    reset: true,
+    before,
+    by: req.user?.email || req.user?.id || 'unknown',
+    at: new Date().toISOString(),
+  });
 });
 
 module.exports = router;

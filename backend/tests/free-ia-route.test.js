@@ -114,6 +114,32 @@ test('GET /api/free-ia/metrics returns a JSON snapshot of the fallback counter',
   }
 });
 
+test('POST /api/free-ia/metrics/reset requires admin auth (401 anonymous)', async () => {
+  const metrics = require('../src/services/free-ia-metrics');
+  metrics.reset();
+  metrics.recordFallback({ feature: 'paraphrase', amount: 9 });
+  const { server, baseURL } = await startServer();
+  try {
+    const resp = await new Promise((resolve, reject) => {
+      const req = http.request(new URL(`${baseURL}/api/free-ia/metrics/reset`), { method: 'POST' }, (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString('utf8') }));
+        res.on('error', reject);
+      });
+      req.on('error', reject);
+      req.end();
+    });
+    // 401 from authenticateToken — counter must not be reset.
+    assert.ok([401, 403].includes(resp.status), `expected 401/403, got ${resp.status}`);
+    const after = metrics.snapshot();
+    assert.equal(after.totalFallbacks, 1, 'counter should be untouched without auth');
+  } finally {
+    server.close();
+    metrics.reset();
+  }
+});
+
 test('GET /api/free-ia/metrics.prom returns Prometheus text format', async () => {
   const metrics = require('../src/services/free-ia-metrics');
   metrics.reset();
