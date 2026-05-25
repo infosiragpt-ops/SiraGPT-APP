@@ -1180,6 +1180,28 @@ const ActionsDropdown = ({
             </div>
           </DropdownMenuItem>
 
+          {/* Voz / Audio quick action — opens Voice Studio on TTS tab */}
+          <DropdownMenuItem
+            className="liquid-menu-item"
+            onClick={() => { setShowAudioPanel(true); setAudioTab('tts'); setIsOpen(false); }}
+            disabled={currentPlan === "FREE" || isToolSwitchDisabled}
+          >
+            <div className="flex items-center gap-3 w-full">
+              <div className="liquid-icon w-8 h-8 rounded-lg bg-cyan-100 dark:bg-cyan-900/20 flex items-center justify-center">
+                <AudioLines className="h-4 w-4 text-cyan-600 dark:text-cyan-400" />
+              </div>
+              <div className="flex-1">
+                <div className="liquid-label font-medium text-sm">Voz</div>
+                <div className="text-xs text-muted-foreground">
+                  ElevenLabs / Mimo HD · TTS
+                </div>
+              </div>
+              {currentPlan === "FREE" && (
+                <Badge variant="secondary" className="text-xs">Pro</Badge>
+              )}
+            </div>
+          </DropdownMenuItem>
+
           {/* Video Generation */}
           <DropdownMenuItem
             className="liquid-menu-item"
@@ -1207,6 +1229,28 @@ const ActionsDropdown = ({
               {isVideoGenerationActive && (
                 <div className="w-2 h-2 bg-orange-500 rounded-full" />
               )}
+              {currentPlan === "FREE" && (
+                <Badge variant="secondary" className="text-xs">Pro</Badge>
+              )}
+            </div>
+          </DropdownMenuItem>
+
+          {/* Música quick action — opens Voice Studio on Music tab */}
+          <DropdownMenuItem
+            className="liquid-menu-item"
+            onClick={() => { setShowAudioPanel(true); setAudioTab('music'); setIsOpen(false); }}
+            disabled={currentPlan === "FREE" || isToolSwitchDisabled}
+          >
+            <div className="flex items-center gap-3 w-full">
+              <div className="liquid-icon w-8 h-8 rounded-lg bg-rose-100 dark:bg-rose-900/20 flex items-center justify-center">
+                <Music className="h-4 w-4 text-rose-600 dark:text-rose-400" />
+              </div>
+              <div className="flex-1">
+                <div className="liquid-label font-medium text-sm">Música</div>
+                <div className="text-xs text-muted-foreground">
+                  Lyria 3 Pro · genera canciones con IA
+                </div>
+              </div>
               {currentPlan === "FREE" && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
               )}
