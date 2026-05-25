@@ -35,6 +35,10 @@ const suppressionDetector = require('../services/context-suppression-detector');
 const driftMonitor = require('../services/concept-drift-monitor');
 const entityTracker = require('../services/cross-turn-entity-tracker');
 const metrics = require('../services/attribution-metrics');
+const attributionSuite = require('../services/attribution-suite');
+const beliefTracker = require('../services/belief-state-tracker');
+const safetyRouter = require('../services/refusal-safety-router');
+const entityUnifier = require('../services/cross-language-entity-unifier');
 const explainer = require('../services/attribution-explainer');
 
 const router = express.Router();
@@ -323,6 +327,88 @@ router.post('/explain/concept', optionalAuth, async (req, res) => {
   } catch (err) {
     console.error('[circuit-attribution/explain/concept] failed:', err?.message || err);
     return res.status(500).json({ error: 'explain/concept failed' });
+  }
+});
+
+router.post('/suite', optionalAuth, async (req, res) => {
+  try {
+    const prompt = String(req.body?.prompt || '').slice(0, MAX_PROMPT_CHARS);
+    if (!prompt) return res.status(400).json({ error: 'prompt is required' });
+    const bundle = attributionSuite.run({
+      userId: req.user?.id || req.body?.userId || null,
+      chatId: req.body?.chatId || null,
+      turnIndex: Number.isFinite(req.body?.turnIndex) ? req.body.turnIndex : 0,
+      prompt,
+      history: sanitizeHistory(req.body?.history),
+      files: sanitizeFiles(req.body?.files),
+      memories: sanitizeMemories(req.body?.memories),
+      ragSnippets: sanitizeRagSnippets(req.body?.ragSnippets),
+      userProfile: req.body?.userProfile && typeof req.body.userProfile === 'object' ? req.body.userProfile : null,
+      draftResponse: typeof req.body?.draftResponse === 'string' ? req.body.draftResponse.slice(0, MAX_RESPONSE_CHARS) : null,
+      options: req.body?.options || {},
+    });
+    return res.json({
+      ok: true,
+      verdict: bundle.verdict,
+      systemPromptBlock: bundle.systemPromptBlock,
+      telemetry: bundle.telemetry,
+      safety: bundle.safety,
+      drift: bundle.drift,
+      beliefs: bundle.beliefs,
+      entities: bundle.entities,
+      engine: {
+        summary: bundle.engine?.attribution?.summary,
+        multiHop: bundle.engine?.multiHop,
+        plan: bundle.engine?.plan,
+        suppression: bundle.engine?.suppression,
+      },
+      postprocessed: bundle.postprocessed,
+    });
+  } catch (err) {
+    console.error('[circuit-attribution/suite] failed:', err?.message || err);
+    return res.status(500).json({ error: 'suite failed' });
+  }
+});
+
+router.post('/belief', optionalAuth, async (req, res) => {
+  try {
+    const userId = req.user?.id || req.body?.userId || 'anon';
+    const chatId = req.body?.chatId || 'default';
+    const turnIndex = Number.isFinite(req.body?.turnIndex) ? req.body.turnIndex : 0;
+    const prompt = String(req.body?.prompt || '').slice(0, MAX_PROMPT_CHARS);
+    if (!prompt) return res.status(400).json({ error: 'prompt is required' });
+    const result = beliefTracker.observe({ userId, chatId, turnIndex, prompt });
+    return res.json({ ...result, block: beliefTracker.buildBeliefBlock({ userId, chatId }) });
+  } catch (err) {
+    console.error('[circuit-attribution/belief] failed:', err?.message || err);
+    return res.status(500).json({ error: 'belief failed' });
+  }
+});
+
+router.post('/safety', optionalAuth, async (req, res) => {
+  try {
+    const prompt = String(req.body?.prompt || '').slice(0, MAX_PROMPT_CHARS);
+    if (!prompt) return res.status(400).json({ error: 'prompt is required' });
+    const r = safetyRouter.classify({ prompt });
+    return res.json({ ...r, block: safetyRouter.buildSafetyBlock(r) });
+  } catch (err) {
+    console.error('[circuit-attribution/safety] failed:', err?.message || err);
+    return res.status(500).json({ error: 'safety failed' });
+  }
+});
+
+router.post('/unifier', optionalAuth, async (req, res) => {
+  try {
+    const userId = req.user?.id || req.body?.userId || 'anon';
+    const chatId = req.body?.chatId || 'default';
+    const surface = String(req.body?.surface || '').slice(0, 240);
+    if (surface) {
+      return res.json({ ok: true, resolved: entityUnifier.resolve({ userId, chatId, surface }) });
+    }
+    return res.json({ ok: true, clusters: entityUnifier.unify({ userId, chatId }) });
+  } catch (err) {
+    console.error('[circuit-attribution/unifier] failed:', err?.message || err);
+    return res.status(500).json({ error: 'unifier failed' });
   }
 });
 

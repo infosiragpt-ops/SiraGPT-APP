@@ -1831,14 +1831,24 @@ router.post(
       let circuitAttributionBlock = '';
       try {
         if (String(process.env.SIRAGPT_CIRCUIT_ATTRIBUTION_DISABLED || '').toLowerCase() !== '1') {
-          const contextAttributionEngine = require('../services/context-attribution-engine');
+          // attribution-suite is a meta-orchestrator over the full pipeline:
+          //   safety router → context-attribution-engine → entity tracker
+          //   → cross-language unifier → drift monitor → belief tracker →
+          //   optional faithfulness postprocessor. One block, one telemetry.
+          const attributionSuite = require('../services/attribution-suite');
           const memoriesForAttribution = userId
             ? activeMemory.recall(userId, prompt, { limit: 12 })
             : [];
           const ragSnippetsForAttribution = Array.isArray(operationalRagContext?.snippets)
             ? operationalRagContext.snippets
             : (Array.isArray(operationalRagContext?.chunks) ? operationalRagContext.chunks : []);
-          const injection = contextAttributionEngine.buildPromptInjection({
+          const turnIndex = Array.isArray(__conversationHistoryForUnderstanding)
+            ? __conversationHistoryForUnderstanding.length
+            : 0;
+          const bundle = attributionSuite.run({
+            userId,
+            chatId: canPersist ? chatId : null,
+            turnIndex,
             prompt,
             history: __conversationHistoryForUnderstanding,
             files: processedFiles,
@@ -1846,15 +1856,31 @@ router.post(
             ragSnippets: ragSnippetsForAttribution,
             userProfile: userProfile || null,
           });
-          if (injection?.block) {
-            circuitAttributionBlock = `\n\n${injection.block}`;
+          if (bundle?.systemPromptBlock) {
+            circuitAttributionBlock = `\n\n${bundle.systemPromptBlock}`;
             try {
-              console.log(`[circuit-attribution] intent="${injection.telemetry.primaryIntent || 'n/a'}" hops=${injection.telemetry.hops} planNodes=${injection.telemetry.planNodes} conflicts=${injection.telemetry.conflicts} latencyMs=${injection.telemetry.latencyMs}`);
+              const t = bundle.telemetry;
+              console.log(`[attribution-suite] verdict=${t.verdict} intent="${t.primaryIntent || 'n/a'}" hops=${t.multiHopDepth} plan=${t.planNodes} conflicts=${t.conflicts} drift=${t.driftClass} beliefs=${t.beliefsObserved}(+${t.beliefsContradicted}c) faith=${t.faithfulnessGrade || '-'} latency=${t.latencyMs}ms`);
             } catch (_logErr) { /* swallow */ }
+            // Record per-turn telemetry into the metrics aggregator.
+            try {
+              const attributionMetrics = require('../services/attribution-metrics');
+              attributionMetrics.record({
+                userId,
+                chatId: canPersist ? chatId : null,
+                latencyMs: bundle.telemetry.latencyMs,
+                primaryIntent: bundle.telemetry.primaryIntent,
+                multiHopDepth: bundle.telemetry.multiHopDepth,
+                planNodes: bundle.telemetry.planNodes,
+                suppressionConflicts: bundle.telemetry.conflicts,
+                faithfulnessGrade: bundle.telemetry.faithfulnessGrade,
+                language: bundle.engine?.language || 'unknown',
+              });
+            } catch (_metricsErr) { /* swallow */ }
           }
         }
       } catch (circuitErr) {
-        console.warn('[circuit-attribution] failed (continuing without):', circuitErr?.message || circuitErr);
+        console.warn('[attribution-suite] failed (continuing without):', circuitErr?.message || circuitErr);
       }
 
       // Intent Attribution Graph — full feature-level decomposition.
