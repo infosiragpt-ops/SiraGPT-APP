@@ -127,7 +127,17 @@ function score({ userId, profile } = {}) {
   const mean = meanCentroid(buf.profiles);
   const sd = stdDevCentroidDistance(buf.profiles, mean);
   const dist = l1Distance(norm.centroid, mean);
-  const zScore = sd === 0 ? 0 : dist / sd;
+  // When the baseline has zero variance (all observed profiles are
+  // identical), any non-trivial new distance is by definition
+  // out-of-distribution. Treat sd-of-zero as "infinitely confident
+  // baseline" — collapse to a large z-score scaled by distance so the
+  // existing threshold still triggers.
+  let zScore;
+  if (sd === 0) {
+    zScore = dist > 0.05 ? Math.min(10, dist * 10) : 0;
+  } else {
+    zScore = dist / sd;
+  }
 
   const meanFeatures = meanFeatureCount(buf.profiles);
   const featureSpike = meanFeatures > 0 && norm.featureCount > meanFeatures * 2;
