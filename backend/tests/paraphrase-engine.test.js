@@ -105,6 +105,17 @@ test('runParaphrasePipeline: humanize mode reports the stricter ceiling on the r
   assert.equal(result.maxSimilarity, 0.55, 'humanize ceiling should leak to the caller');
 });
 
+test('integration: pipeline with mode="human" uses humanize ceiling (alias path)', async () => {
+  const result = await runParaphrasePipeline({
+    source: 'Alpha beta gamma delta epsilon zeta.',
+    mode: 'human',
+    rewriteFn: async ({ text }) => `Different: ${text.split(' ').reverse().join(' ')}`,
+  });
+  // Even though mode came in as "human", the alias resolution should
+  // have anchored the ceiling at the humanize value (0.55).
+  assert.equal(result.maxSimilarity, 0.55, 'human alias should resolve to humanize ceiling');
+});
+
 test('runParaphrasePipeline: caller-supplied maxSimilarity wins over the mode default', async () => {
   const result = await runParaphrasePipeline({
     source: 'Alpha beta gamma delta epsilon zeta.',
