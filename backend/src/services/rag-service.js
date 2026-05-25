@@ -536,6 +536,24 @@ async function retrieve(userId, collection, query, k = 5, opts = {}) {
     pool = mmrRerank(pool, { lambda: mmrLambda, k: Math.max(1, k) });
   }
 
+  // Attribution rerank — opt-in final pass that boosts hits whose text
+  // overlaps with the query's detected concepts + named entities. Cheap
+  // (< 5 ms on a typical pool); gated by useAttributionRerank in opts.
+  if (opts.useAttributionRerank) {
+    try {
+      const attrReranker = require('./attribution-rag-reranker');
+      const reranked = attrReranker.rerank({
+        prompt: query,
+        snippets: pool,
+        weight: Number.isFinite(opts.attributionRerankWeight) ? Number(opts.attributionRerankWeight) : undefined,
+        max: pool.length,
+      });
+      // Preserve original pool item references — rerank() wraps each
+      // candidate, so unwrap and keep the order.
+      pool = reranked.map((r) => r.original);
+    } catch (_attrErr) { /* swallow — degrades to existing order */ }
+  }
+
   const hits = pool
     .slice(0, Math.max(1, k))
     .map(hit => formatRetrievalHit(hit, { includeDiagnostics }));
