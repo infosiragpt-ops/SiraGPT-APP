@@ -53,6 +53,7 @@ const replayRunner = require('../services/attribution-replay-runner');
 const skillRecommender = require('../services/attribution-skill-recommender');
 const bulkAnalyzer = require('../services/attribution-bulk-analyzer');
 const executiveSummary = require('../services/attribution-executive-summary');
+const docClassifier = require('../services/document-attribution-classifier');
 
 const router = express.Router();
 
@@ -817,6 +818,30 @@ router.get('/admin/stack-health', optionalAuth, async (_req, res) => {
   } catch (err) {
     console.error('[circuit-attribution/admin/stack-health] failed:', err?.message || err);
     return res.status(500).json({ error: 'stack-health failed' });
+  }
+});
+
+router.post('/doc-classify', optionalAuth, async (req, res) => {
+  try {
+    const doc = req.body?.doc && typeof req.body.doc === 'object' ? req.body.doc : null;
+    if (!doc || !doc.name) return res.status(400).json({ error: 'doc.name is required' });
+    const userPrompt = typeof req.body?.userPrompt === 'string' ? req.body.userPrompt.slice(0, MAX_PROMPT_CHARS) : '';
+    const history = sanitizeHistory(req.body?.history);
+    const result = docClassifier.classify({
+      doc: {
+        name: String(doc.name).slice(0, 200),
+        mimeType: doc.mimeType ? String(doc.mimeType).slice(0, 80) : undefined,
+        summary: doc.summary ? String(doc.summary).slice(0, 1600) : undefined,
+      },
+      userPrompt,
+      history,
+      userId: req.user?.id || req.body?.userId || null,
+      chatId: req.body?.chatId || null,
+    });
+    return res.json({ ...result, block: docClassifier.buildClassifierBlock(result) });
+  } catch (err) {
+    console.error('[circuit-attribution/doc-classify] failed:', err?.message || err);
+    return res.status(500).json({ error: 'doc-classify failed' });
   }
 });
 
