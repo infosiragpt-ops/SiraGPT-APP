@@ -146,6 +146,23 @@ test('humanizeText: surfaces language and intensity in the result envelope', () 
   assert.equal(r.intensity, 'high');
 });
 
+test('Round-2 AI-tells: "tapestry of", "testament to", "navigate the complexities" caught', () => {
+  const en = 'The model is a testament to engineering. It must navigate the complexities of tapestry of options.';
+  const r = humanizeText({ text: en, language: 'en' });
+  assert.ok(!/tapestry of/i.test(r.text), r.text);
+  assert.ok(!/testament to/i.test(r.text), r.text);
+  assert.ok(!/navigate the complexities of/i.test(r.text), r.text);
+});
+
+test('Round-2 AI-tells (Spanish): "es decir,", "por otro lado,", "en definitiva", "desempeña un papel"', () => {
+  const es = 'Es decir, el modelo desempeña un papel central. Por otro lado, en definitiva, hay mejoras pendientes.';
+  const r = humanizeText({ text: es, language: 'es' });
+  assert.ok(!/es decir,/i.test(r.text), r.text);
+  assert.ok(!/por otro lado,/i.test(r.text), r.text);
+  assert.ok(!/en definitiva/i.test(r.text), r.text);
+  assert.ok(!/desempeña un papel/i.test(r.text), r.text);
+});
+
 test('humanizeText: Spanish text loses "cabe destacar que" / "sin embargo"', () => {
   const input = 'Cabe destacar que el sistema funcionó. Sin embargo, hubo demoras. Asimismo, se identificaron fallos. En conclusión, hay margen de mejora.';
   const r = humanizeText({ text: input, language: 'es' });

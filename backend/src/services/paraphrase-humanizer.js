@@ -75,6 +75,15 @@ const AI_TELLS = Object.freeze({
   aprovechar: ['usar', 'sacar partido a', 'poner a trabajar'],
   'una multitud de': ['muchos', 'gran cantidad de', 'varios'],
   'una plétora de': ['muchos', 'una variedad de', 'varios'],
+  // Round 2 — additional patterns frequently flagged by detectors
+  'tapestry of': ['mix of', 'range of', 'blend of'],
+  'a testament to': ['proof of', 'a sign of', 'shows'],
+  'navigate the complexities of': ['handle', 'work through', 'deal with'],
+  'unleash the power of': ['use', 'tap into', 'put to work'],
+  'es decir,': ['o sea,', 'esto es,', 'dicho de otro modo,'],
+  'por otro lado,': ['ahora bien,', 'también,', 'al contrario,'],
+  'en definitiva': ['en pocas palabras', 'al final', 'en el fondo'],
+  'desempeña un papel': ['cumple un rol', 'tiene un rol', 'juega un rol'],
 });
 
 const AI_TELL_PATTERNS = Object.freeze(
