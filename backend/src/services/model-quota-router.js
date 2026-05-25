@@ -1,10 +1,19 @@
 'use strict';
 
 const { getPlanCatalog, GEMA4_MODEL_ID } = require('./plan-credits-catalog');
+const {
+  DEFAULT_MODEL: CEREBRAS_DEFAULT_MODEL,
+  DEFAULT_DISPLAY_NAME: CEREBRAS_DEFAULT_DISPLAY_NAME,
+  PROVIDER_NAME: CEREBRAS_PROVIDER_NAME,
+} = require('./ai/cerebras-client');
 
-const DEFAULT_GEMA4_DISPLAY_NAME = 'Gema4 31B';
-const DEFAULT_GEMA4_PROVIDER = 'OpenAI';
-const DEFAULT_GEMA4_ICON = 'ChatGPTLogo';
+// Defaults moved from OpenAI/Gema4-31B → Cerebras/Llama-3.1-8b/"Free IA" to
+// match the product spec in docs/SIraGPT.docx (Free IA = Llama 3.1 8B via
+// Cerebras). Legacy GEMA4_* env vars still override per deployment.
+const DEFAULT_GEMA4_DISPLAY_NAME = CEREBRAS_DEFAULT_DISPLAY_NAME;
+const DEFAULT_GEMA4_PROVIDER = CEREBRAS_PROVIDER_NAME;
+const DEFAULT_GEMA4_ICON = 'CerebrasLogo';
+const DEFAULT_GEMA4_MODEL_ID = CEREBRAS_DEFAULT_MODEL;
 
 function cleanString(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
@@ -59,9 +68,16 @@ function unlimitedTokenPool({ used }) {
 }
 
 function getGema4RuntimeConfig(env = process.env) {
-  const model = cleanString(env.GEMA4_MODEL_ID) || GEMA4_MODEL_ID;
+  // Resolution order: explicit GEMA4_* env (legacy) → FREE_IA_* env (new
+  // brand) → static defaults pointing at Cerebras Llama 3.1 8B.
+  const model = cleanString(env.GEMA4_MODEL_ID)
+    || cleanString(env.FREE_IA_MODEL_ID)
+    || DEFAULT_GEMA4_MODEL_ID
+    || GEMA4_MODEL_ID;
   const provider = cleanString(env.GEMA4_PROVIDER) || DEFAULT_GEMA4_PROVIDER;
-  const displayName = cleanString(env.GEMA4_DISPLAY_NAME) || DEFAULT_GEMA4_DISPLAY_NAME;
+  const displayName = cleanString(env.GEMA4_DISPLAY_NAME)
+    || cleanString(env.FREE_IA_DISPLAY_NAME)
+    || DEFAULT_GEMA4_DISPLAY_NAME;
   const icon = cleanString(env.GEMA4_ICON) || DEFAULT_GEMA4_ICON;
   return { model, provider, displayName, icon };
 }

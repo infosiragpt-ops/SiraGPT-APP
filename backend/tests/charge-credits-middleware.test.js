@@ -147,14 +147,71 @@ test('chargeCredits: spends and attaches req._chargedCredits on success', async 
   assert.ok(ctx.req._chargedCredits.txn);
 });
 
-test('chargeCredits: 402 INSUFFICIENT when balance < cost', async () => {
+test('chargeCredits: 402 INSUFFICIENT when balance < cost AND Free IA not configured', async () => {
   balance = 3n;
-  const ctx = makeReqRes();
-  chargeCredits({ feature: 'paraphrase', cost: 5 })(ctx.req, ctx.res, ctx.nextHook());
-  await ctx.done;
-  assert.equal(ctx.res.statusCode, 402);
-  assert.equal(ctx.res.jsonBody.error, 'insufficient credits');
-  assert.equal(ctx.res.jsonBody.feature, 'paraphrase');
+  const prevKey = process.env.CEREBRAS_API_KEY;
+  delete process.env.CEREBRAS_API_KEY;
+  try {
+    const ctx = makeReqRes();
+    chargeCredits({ feature: 'paraphrase', cost: 5 })(ctx.req, ctx.res, ctx.nextHook());
+    await ctx.done;
+    assert.equal(ctx.res.statusCode, 402);
+    assert.equal(ctx.res.jsonBody.error, 'insufficient credits');
+    assert.equal(ctx.res.jsonBody.feature, 'paraphrase');
+  } finally {
+    if (prevKey !== undefined) process.env.CEREBRAS_API_KEY = prevKey;
+  }
+});
+
+test('chargeCredits: falls back to Free IA when out of credits AND Cerebras key is set', async () => {
+  balance = 3n;
+  const prevKey = process.env.CEREBRAS_API_KEY;
+  process.env.CEREBRAS_API_KEY = 'csk-test-key-for-fallback';
+  try {
+    let nextCalled = false;
+    const ctx = makeReqRes();
+    chargeCredits({ feature: 'paraphrase', cost: 5 })(
+      ctx.req,
+      ctx.res,
+      ctx.nextHook(() => { nextCalled = true; }),
+    );
+    await ctx.done;
+    assert.equal(nextCalled, true, 'should fall through to next() instead of 402');
+    assert.equal(ctx.req._creditsExhausted, true);
+    assert.equal(ctx.req._fallbackToFreeIA, true);
+    assert.equal(ctx.req._chargedCredits.fallback, 'free_ia');
+    assert.equal(ctx.req._chargedCredits.txn, null);
+    assert.equal(balance, 3n, 'balance must be unchanged on Free IA fallback');
+  } finally {
+    if (prevKey === undefined) delete process.env.CEREBRAS_API_KEY;
+    else process.env.CEREBRAS_API_KEY = prevKey;
+  }
+});
+
+test('chargeCredits: routes that opt out (allowFreeIaFallback:false) still 402 even with Cerebras configured', async () => {
+  balance = 3n;
+  const prevKey = process.env.CEREBRAS_API_KEY;
+  process.env.CEREBRAS_API_KEY = 'csk-test-key-for-fallback';
+  try {
+    const ctx = makeReqRes();
+    chargeCredits({ feature: 'image_generation', cost: 5, allowFreeIaFallback: false })(
+      ctx.req,
+      ctx.res,
+      ctx.nextHook(),
+    );
+    await ctx.done;
+    assert.equal(ctx.res.statusCode, 402);
+    assert.equal(ctx.res.jsonBody.error, 'insufficient credits');
+  } finally {
+    if (prevKey === undefined) delete process.env.CEREBRAS_API_KEY;
+    else process.env.CEREBRAS_API_KEY = prevKey;
+  }
+});
+
+test('refundLastCharge: returns null on Free IA fallback (no txn to refund)', async () => {
+  const req = { _chargedCredits: { fallback: 'free_ia', txn: null, replay: false } };
+  const result = await refundLastCharge(req, 'engine_error');
+  assert.equal(result, null);
 });
 
 test('refundLastCharge: returns null when no charge recorded', async () => {

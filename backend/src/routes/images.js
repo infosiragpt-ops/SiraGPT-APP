@@ -132,7 +132,7 @@ async function runGenerationAndPersist(req, dbRow, spec) {
 router.post(
   '/jobs',
   authenticateToken,
-  chargeCredits({ feature: 'image_generation', cost: imageCost() }),
+  chargeCredits({ feature: 'image_generation', cost: imageCost(), allowFreeIaFallback: false }),
   async (req, res) => {
     const parse = GenerateSchema.safeParse(req.body);
     if (!parse.success) {
@@ -202,7 +202,7 @@ router.get('/history', authenticateToken, async (req, res, next) => {
 router.post(
   '/:id/variations',
   authenticateToken,
-  chargeCredits({ feature: 'image_variation', cost: imageCost() }),
+  chargeCredits({ feature: 'image_variation', cost: imageCost(), allowFreeIaFallback: false }),
   async (req, res) => {
     const parse = VariationsSchema.safeParse(req.body);
     if (!parse.success) {
@@ -245,7 +245,7 @@ router.post(
 router.post(
   '/:id/upscale',
   authenticateToken,
-  chargeCredits({ feature: 'image_upscale', cost: imageCost() }),
+  chargeCredits({ feature: 'image_upscale', cost: imageCost(), allowFreeIaFallback: false }),
   async (req, res) => {
     const parse = UpscaleSchema.safeParse(req.body);
     if (!parse.success) {

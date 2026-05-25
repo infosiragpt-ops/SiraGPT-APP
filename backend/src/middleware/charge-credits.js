@@ -126,7 +126,13 @@ async function refundCharge({ originalTxn, reason, metadata }) {
  * Middleware factory.
  */
 function chargeCredits(spec = {}) {
-  const { feature, cost, reason, metadata } = spec;
+  const {
+    feature,
+    cost,
+    reason,
+    metadata,
+    allowFreeIaFallback = true,
+  } = spec;
   if (!feature || typeof feature !== 'string') {
     throw new Error('chargeCredits: { feature } is required');
   }
@@ -152,6 +158,33 @@ function chargeCredits(spec = {}) {
       });
       if (!result.ok) {
         if (result.code === 'INSUFFICIENT') {
+          // Free IA fallback: when the user is out of credits AND the
+          // Free IA (Cerebras) provider is configured, let the request
+          // proceed so the route handler can re-route to the free model
+          // instead of erroring out. Routes opt out by passing
+          // `allowFreeIaFallback: false` (e.g. premium-only features).
+          if (allowFreeIaFallback) {
+            let freeIaEnabled = false;
+            try {
+              // eslint-disable-next-line global-require
+              const { isFreeIaConfigured } = require('../services/ai/cerebras-client');
+              freeIaEnabled = isFreeIaConfigured();
+            } catch (_err) {
+              freeIaEnabled = false;
+            }
+            if (freeIaEnabled) {
+              req._creditsExhausted = true;
+              req._fallbackToFreeIA = true;
+              req._chargedCredits = {
+                feature,
+                amount,
+                txn: null,
+                replay: false,
+                fallback: 'free_ia',
+              };
+              return next();
+            }
+          }
           return res.status(402).json({
             error: 'insufficient credits',
             feature,
@@ -179,7 +212,9 @@ function chargeCredits(spec = {}) {
  */
 async function refundLastCharge(req, reason) {
   const charge = req._chargedCredits;
-  if (!charge || charge.replay) return null; // never refund a replay
+  // never refund a replay, and never refund a Free IA fallback (no txn was
+  // recorded — the request bypassed the ledger entirely)
+  if (!charge || charge.replay || !charge.txn || charge.fallback) return null;
   try {
     const result = await refundCharge({
       originalTxn: charge.txn,

@@ -19,7 +19,7 @@ test('plan catalog PRO grants 100k premium and 500k gema', () => {
   assert.equal(String(gemaTokenGrant('PRO')), '500000');
 });
 
-test('model router falls back to Gema4 when premium exhausted', () => {
+test('model router falls back to Free IA (Cerebras Llama 3.1 8B) when premium exhausted', () => {
   const routed = resolveModelForUser({
     plan: 'PRO',
     apiUsage: 200_000n,
@@ -27,8 +27,10 @@ test('model router falls back to Gema4 when premium exhausted', () => {
     gemaTokenUsage: 0n,
     gemaTokenLimit: 500_000n,
   }, 'gpt-4o');
-  assert.equal(routed.model, 'Gema4-31B');
-  assert.equal(routed.provider, 'OpenAI');
+  // Defaults updated to match the product spec (Free IA = Llama 3.1 8B
+  // via Cerebras). Legacy `GEMA4_*` env vars still override.
+  assert.equal(routed.model, 'llama-3.1-8b');
+  assert.equal(routed.provider, 'Cerebras');
   assert.equal(routed.blocked, false);
 });
 
@@ -43,8 +45,8 @@ test('model quota policy exposes free default and daily call state', () => {
   });
 
   assert.equal(policy.currentPlan, 'FREE');
-  assert.equal(policy.defaultModel.name, 'Gema4-31B');
-  assert.equal(policy.defaultModel.provider, 'OpenAI');
+  assert.equal(policy.defaultModel.name, 'llama-3.1-8b');
+  assert.equal(policy.defaultModel.provider, 'Cerebras');
   assert.equal(policy.calls.dailyLimit, 3);
   assert.equal(policy.calls.remaining, 2);
   assert.equal(policy.calls.exhausted, false);
@@ -68,6 +70,32 @@ test('model quota policy reports exhausted premium fallback separately from Gema
   assert.equal(policy.gemaTokens.exhausted, false);
   assert.equal(policy.gemaTokens.remaining, '490000');
   assert.equal(policy.notices.some((n) => n.code === 'premium_pool_exhausted_fallback_available'), true);
+});
+
+test('Free IA defaults can be overridden via FREE_IA_* env vars (new brand naming)', () => {
+  const env = {
+    FREE_IA_MODEL_ID: 'llama-3.1-70b',
+    FREE_IA_DISPLAY_NAME: 'Free IA Pro',
+  };
+  const config = getGema4RuntimeConfig(env);
+  const virtual = buildGema4VirtualModel(env);
+  assert.equal(config.model, 'llama-3.1-70b');
+  assert.equal(config.displayName, 'Free IA Pro');
+  assert.equal(config.provider, 'Cerebras');
+  assert.equal(virtual.name, 'llama-3.1-70b');
+  assert.equal(virtual.displayName, 'Free IA Pro');
+});
+
+test('GEMA4_* env vars still override FREE_IA_* (backwards compatibility)', () => {
+  const env = {
+    GEMA4_MODEL_ID: 'legacy-gema4',
+    FREE_IA_MODEL_ID: 'llama-3.1-70b',
+    GEMA4_DISPLAY_NAME: 'Legacy Gema4',
+    FREE_IA_DISPLAY_NAME: 'Free IA Pro',
+  };
+  const config = getGema4RuntimeConfig(env);
+  assert.equal(config.model, 'legacy-gema4', 'GEMA4_MODEL_ID must win over FREE_IA_MODEL_ID');
+  assert.equal(config.displayName, 'Legacy Gema4');
 });
 
 test('Gema4 fallback can be configured by environment without exposing secrets', () => {
