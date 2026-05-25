@@ -41,6 +41,10 @@ const safetyRouter = require('../services/refusal-safety-router');
 const entityUnifier = require('../services/cross-language-entity-unifier');
 const explainer = require('../services/attribution-explainer');
 const conversationSummary = require('../services/attribution-conversation-summary');
+const confidenceAggregator = require('../services/attribution-confidence-aggregator');
+const antipatternDetector = require('../services/attribution-anti-pattern-detector');
+const ragReranker = require('../services/attribution-rag-reranker');
+const conceptSimilarity = require('../services/concept-similarity');
 
 const router = express.Router();
 
@@ -454,6 +458,85 @@ router.get('/chat-summary', optionalAuth, async (req, res) => {
   } catch (err) {
     console.error('[circuit-attribution/chat-summary] failed:', err?.message || err);
     return res.status(500).json({ error: 'chat-summary failed' });
+  }
+});
+
+router.post('/confidence', optionalAuth, async (req, res) => {
+  try {
+    const prompt = String(req.body?.prompt || '').slice(0, MAX_PROMPT_CHARS);
+    if (!prompt) return res.status(400).json({ error: 'prompt is required' });
+    const bundle = attributionSuite.run({
+      userId: req.user?.id || req.body?.userId || null,
+      chatId: req.body?.chatId || null,
+      turnIndex: Number.isFinite(req.body?.turnIndex) ? req.body.turnIndex : 0,
+      prompt,
+      history: sanitizeHistory(req.body?.history),
+      files: sanitizeFiles(req.body?.files),
+      memories: sanitizeMemories(req.body?.memories),
+      ragSnippets: sanitizeRagSnippets(req.body?.ragSnippets),
+      userProfile: req.body?.userProfile && typeof req.body.userProfile === 'object' ? req.body.userProfile : null,
+      draftResponse: typeof req.body?.draftResponse === 'string' ? req.body.draftResponse.slice(0, MAX_RESPONSE_CHARS) : null,
+    });
+    const apResult = antipatternDetector.detect({ history: sanitizeHistory(req.body?.history) });
+    const result = confidenceAggregator.aggregate({
+      engineBundle: bundle.engine,
+      safetyResult: bundle.safety,
+      driftObservation: bundle.drift,
+      beliefResult: bundle.beliefs,
+      faithfulness: bundle.engine?.faithfulness || null,
+      antipatternResult: apResult,
+    });
+    return res.json({ ...result, block: confidenceAggregator.buildConfidenceBlock(result) });
+  } catch (err) {
+    console.error('[circuit-attribution/confidence] failed:', err?.message || err);
+    return res.status(500).json({ error: 'confidence failed' });
+  }
+});
+
+router.post('/antipattern', optionalAuth, async (req, res) => {
+  try {
+    const history = sanitizeHistory(req.body?.history);
+    if (!history.length) return res.status(400).json({ error: 'history is required' });
+    const result = antipatternDetector.detect({ history });
+    return res.json({ ...result, block: antipatternDetector.buildAntipatternBlock(result) });
+  } catch (err) {
+    console.error('[circuit-attribution/antipattern] failed:', err?.message || err);
+    return res.status(500).json({ error: 'antipattern failed' });
+  }
+});
+
+router.post('/rerank', optionalAuth, async (req, res) => {
+  try {
+    const prompt = String(req.body?.prompt || '').slice(0, MAX_PROMPT_CHARS);
+    if (!prompt) return res.status(400).json({ error: 'prompt is required' });
+    const snippets = Array.isArray(req.body?.snippets) ? req.body.snippets.slice(0, 60) : [];
+    if (!snippets.length) return res.status(400).json({ error: 'snippets is required' });
+    const beliefs = Array.isArray(req.body?.beliefs) ? req.body.beliefs.slice(0, 20) : [];
+    const entities = Array.isArray(req.body?.entities) ? req.body.entities.slice(0, 30) : [];
+    const weight = Number.isFinite(req.body?.weight) ? Number(req.body.weight) : undefined;
+    const max = Number.isFinite(req.body?.max) ? Number(req.body.max) : undefined;
+    const ranked = ragReranker.rerank({ prompt, snippets, beliefs, entities, weight, max });
+    return res.json({ ok: true, ranked, block: ragReranker.buildRerankBlock(ranked) });
+  } catch (err) {
+    console.error('[circuit-attribution/rerank] failed:', err?.message || err);
+    return res.status(500).json({ error: 'rerank failed' });
+  }
+});
+
+router.post('/similarity', optionalAuth, async (req, res) => {
+  try {
+    const text = String(req.body?.text || req.body?.prompt || '').slice(0, MAX_PROMPT_CHARS);
+    const a = req.body?.a;
+    const b = req.body?.b;
+    if (a && b) {
+      return res.json({ ok: true, a, b, similarity: conceptSimilarity.similarityScore(a, b) });
+    }
+    if (!text) return res.status(400).json({ error: 'text or (a,b) is required' });
+    const result = conceptSimilarity.extractAndCluster(text);
+    return res.json({ ok: true, ...result, block: conceptSimilarity.buildSimilarityBlock(result.clusters) });
+  } catch (err) {
+    console.error('[circuit-attribution/similarity] failed:', err?.message || err);
+    return res.status(500).json({ error: 'similarity failed' });
   }
 });
 
