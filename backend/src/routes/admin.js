@@ -2634,6 +2634,29 @@ router.get('/system-cron/jobs', requireSuperAdmin, (_req, res) => {
   }
 });
 
+// ── IAG (Intent Attribution Graph) admin metrics ──────────────────────
+// Returns rolling-window stats from the intent-attribution-graph system:
+// confidence band distribution, top themes, top hidden intents, language
+// histogram, p95 duration, clarification rate. Useful for monitoring
+// the impact of attribution-graph-based prompt enrichment on production
+// chat traffic.
+router.get('/iag-metrics', requireSuperAdmin, (req, res) => {
+  try {
+    const adminMetrics = require('../services/intent-attribution-graph/admin-metrics');
+    const adaptive = require('../services/intent-attribution-graph/adaptive-weights');
+    const windowMs = req.query.windowMs ? Number.parseInt(req.query.windowMs, 10) : undefined;
+    const metrics = adminMetrics.getMetrics(windowMs ? { windowMs } : undefined);
+    const adaptiveStats = adaptive.getStats();
+    res.json({
+      ok: true,
+      iagMetrics: metrics,
+      adaptiveLearning: adaptiveStats,
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to compute IAG metrics', detail: err?.message });
+  }
+});
+
 module.exports = router;
 module.exports.metricsHandler = metricsHandler;
 module.exports.INTERNAL_CSV = { auditLogsToCsv, csvEscape, AUDIT_CSV_COLUMNS };

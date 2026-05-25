@@ -257,28 +257,10 @@ function hasEnv(name) {
  * Kept for backward compatibility — new code should use
  * resolveProviderWithFailover() instead.
  */
-/**
- * Map a model id to its expected provider name. Used when the request
- * pins a model without an explicit provider (custom GPT, org default,
- * etc.) so we don't try to talk to OpenAI for a Cerebras / Gemini model.
- */
-function inferProviderFromModelId(modelId) {
-  const m = String(modelId || '').toLowerCase();
-  if (!m) return 'OpenAI';
-  if (isDirectDeepSeekModel(m)) return 'DeepSeek';
-  if (
-    m.includes('x-ai/') || m.includes('openrouter/') || m.includes('anthropic/')
-    || m.includes('meta-llama/') || m.includes('deepseek/')
-    || m.includes('/gpt-oss') || m.includes('moonshotai/')
-  ) return 'OpenRouter';
-  if (m.includes('gemini') || m.includes('imagen')) return 'Gemini';
-  // Free IA (Cerebras Llama 3.1 8B and any other llama-3.1-*) — needs the
-  // Cerebras endpoint, not OpenAI.
-  if (m.startsWith('llama-3.1') || m.startsWith('cerebras:') || m.startsWith('llama3.1')) {
-    return 'Cerebras';
-  }
-  return 'OpenAI';
-}
+// Map a model id to its expected provider name. Delegates to the
+// dedicated, testable helper in services/ai/provider-inference.js — keeps
+// this file lean and gives a single place to maintain the heuristic.
+const { inferProviderFromModelId } = require('../services/ai/provider-inference');
 
 function createProviderClient(provider) {
   if (provider === "Gemini") {
@@ -1890,15 +1872,27 @@ router.post(
           const attachmentsForIag = (processedFiles || []).map((f) => ({
             fileName: f?.name || f?.fileName || f?.originalname || 'file',
           }));
-          const iagReport = intentAttributionGraph.analyzeIntent(prompt, {
+          let iagReport = intentAttributionGraph.analyzeIntent(prompt, {
             attachments: attachmentsForIag,
           });
+          // Apply per-user adaptive weight bias if we have learned signal
+          try {
+            const adaptive = require('../services/intent-attribution-graph/adaptive-weights');
+            if (userId && iagReport?.ok && !iagReport.empty) {
+              iagReport = adaptive.applyWeights(userId, iagReport);
+            }
+          } catch (_adaptErr) { /* optional */ }
+          // Record into rolling admin-metrics buffer (consumed by /admin/iag-metrics)
+          try {
+            const adminMetrics = require('../services/intent-attribution-graph/admin-metrics');
+            adminMetrics.record(iagReport);
+          } catch (_metricsErr) { /* optional */ }
           if (iagReport?.ok && !iagReport.empty) {
             const iagBlock = intentAttributionGraph.formatForPrompt(iagReport);
             if (iagBlock) {
               intentAttributionGraphBlock = `\n\n${iagBlock}`;
               try {
-                console.log(`[intent-attr-graph] feats=${iagReport.stats.featureCount} themes=${iagReport.stats.supernodeCount} circuits=${iagReport.stats.circuitCount} conf=${iagReport.confidence.score} lang=${iagReport.language} dur=${iagReport.durationMs}ms`);
+                console.log(`[intent-attr-graph] feats=${iagReport.stats.featureCount} themes=${iagReport.stats.supernodeCount} circuits=${iagReport.stats.circuitCount} conf=${iagReport.confidence.score} lang=${iagReport.language} dur=${iagReport.durationMs}ms${iagReport._adaptiveApplied ? ' (adaptive)' : ''}`);
               } catch (_logErr) { /* swallow */ }
             }
             // Feed the per-turn feature activations into the saliency
