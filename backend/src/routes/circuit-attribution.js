@@ -556,6 +556,43 @@ router.post('/cross-chat', optionalAuth, async (req, res) => {
   }
 });
 
+router.get('/admin/overview', optionalAuth, async (req, res) => {
+  try {
+    // One-stop snapshot for ops: aggregate in-memory state across every
+    // attribution module. Use ?windowMs=N to restrict the metrics view.
+    const windowMs = Number.isFinite(Number(req.query?.windowMs)) ? Number(req.query.windowMs) : null;
+    const metricsSnap = metrics.snapshot({ windowMs });
+    const entityStats = entityTracker.stats();
+    const ccsProfiles = crossChatSimilarity.listProfiles({ limit: 8 });
+    return res.json({
+      ok: true,
+      windowMs,
+      metrics: metricsSnap,
+      entities: entityStats,
+      crossChatProfiles: {
+        total: ccsProfiles.length,
+        sample: ccsProfiles.map((p) => ({
+          chatId: p.chatId,
+          intents: p.intents,
+          supernodes: p.supernodes,
+          turnCount: p.turnCount,
+        })),
+      },
+      config: {
+        maxPromptChars: MAX_PROMPT_CHARS,
+        maxResponseChars: MAX_RESPONSE_CHARS,
+        hardShiftThreshold: driftMonitor.HARD_SHIFT_THRESHOLD,
+        softShiftThreshold: driftMonitor.SOFT_SHIFT_THRESHOLD,
+        faithfulnessThreshold: faithfulnessPostprocessor.DEFAULT_THRESHOLD,
+        ragRerankWeight: ragReranker.DEFAULT_ATTRIBUTION_WEIGHT,
+      },
+    });
+  } catch (err) {
+    console.error('[circuit-attribution/admin/overview] failed:', err?.message || err);
+    return res.status(500).json({ error: 'overview failed' });
+  }
+});
+
 router.get('/health', async (_req, res) => {
   return res.json({
     ok: true,
