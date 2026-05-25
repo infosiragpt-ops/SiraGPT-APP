@@ -33,7 +33,6 @@ import {
   AudioLines,
   RefreshCw,
   Check,
-  PanelLeftOpen,
   GripVertical,
   Info,
   Lock,
@@ -56,6 +55,7 @@ import { useAuth } from "@/lib/auth-context-integrated"
 import { ThemeToggle } from "@/components/theme-toggle"
 import WhatsAppButton from "@/components/WhatsAppButton"
 import { PremiumCardIcon } from "@/components/icons/premium-card-icon"
+import { SidebarOvalIcon } from "@/components/icons/sidebar-oval-icon"
 // Visor de documentos: pesado (PDF.js, mammoth, xlsx, etc.). Solo se
 // monta cuando el usuario abre un adjunto, así que lo cargamos por
 // demanda. SSR desactivado porque el visor depende de APIs del
@@ -8420,7 +8420,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           aria-label="Mostrar sidebar"
           className="fixed left-0 top-1/2 -translate-y-1/2 z-50 flex h-10 w-6 items-center justify-center rounded-r-md border border-l-0 border-border/60 bg-background/90 text-muted-foreground shadow-sm backdrop-blur-sm transition-all duration-200 hover:w-8 hover:bg-background hover:text-foreground"
         >
-          <PanelLeftOpen className="h-4 w-4" />
+          <SidebarOvalIcon className="h-4 w-4" />
         </button>
       )}
 
@@ -8451,7 +8451,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                     aria-label="Abrir el menú lateral"
                     title="Abrir el menú lateral"
                   >
-                    <PanelLeftOpen className="h-4 w-4" />
+                    <SidebarOvalIcon className="h-4 w-4" />
                   </SidebarTrigger>
                 </div>
                 <NavbarModelSelector
@@ -8894,7 +8894,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 <div className="flex flex-1 flex-col lg:flex-row">
                   {/* Navigation - Mobile: horizontal tabs, Desktop: vertical sidebar */}
                   <div className="lg:w-56 lg:border-r border-border/40 p-3 sm:p-4">
-                    <div className="text-sm font-medium mb-2 hidden lg:block">Voice Studio</div>
+                    <div className="text-sm font-medium mb-2 hidden lg:block">Audio</div>
 
                     {/* Mobile: Horizontal scrollable tabs */}
                     <div className="flex lg:hidden overflow-x-auto gap-2 pb-2">
@@ -9417,14 +9417,14 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 <div className="flex h-full min-h-0 flex-col border-l border-border/40 bg-background">
                   <div className="flex items-center justify-between border-b border-border/40 px-4 py-3">
                     <div className="min-w-0">
-                      <div className="text-sm font-semibold">Voice Studio</div>
+                      <div className="text-sm font-semibold">Audio</div>
                       <div className="truncate text-xs text-muted-foreground">Herramientas de audio</div>
                     </div>
                     <Button
                       type="button"
                       variant="ghost"
                       size="icon"
-                      aria-label="Cerrar Voice Studio"
+                      aria-label="Cerrar panel de audio"
                       title="Cerrar"
                       className="h-8 w-8 rounded-full"
                       onClick={() => setShowAudioPanel(false)}

@@ -19,7 +19,6 @@ import {
   Trash2,
   MoreHorizontal,
   ChevronDown,
-  PanelLeft,
   Search,
   Library,
   Images,
@@ -56,6 +55,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar"
 import { Button } from "@/components/ui/button"
+import { SidebarOvalIcon } from "@/components/icons/sidebar-oval-icon"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -984,7 +984,7 @@ export function AppSidebar() {
             title="Ocultar barra lateral"
             className="h-7 w-7 shrink-0 text-muted-foreground hover:bg-muted/60 hover:text-foreground"
           >
-            <PanelLeft className="h-4 w-4" />
+            <SidebarOvalIcon className="h-4 w-4" />
           </SidebarTrigger>
         </div>
         {/* Collapsed state keeps a single, predictable affordance. */}
@@ -997,7 +997,7 @@ export function AppSidebar() {
             title="Mostrar barra lateral"
           >
             <Bot className="h-4 w-4 transition-opacity group-hover:opacity-0" />
-            <PanelLeft className="absolute h-4 w-4 opacity-0 transition-opacity group-hover:opacity-100" />
+            <SidebarOvalIcon className="absolute h-4 w-4 opacity-0 transition-opacity group-hover:opacity-100" />
           </button>
         </div>
       </SidebarHeader>
