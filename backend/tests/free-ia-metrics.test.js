@@ -28,7 +28,36 @@ test('summary() reports successRate=null + "—" when no upstream events recorde
   const s = metrics.summary();
   assert.equal(s.successRate, null);
   assert.equal(s.upstreamTotal, 0);
+  assert.equal(s.degraded, false);
   assert.match(s.line, /—/);
+});
+
+test('summary.degraded = true when >=10 samples AND successRate < 0.5', () => {
+  metrics.reset();
+  for (let i = 0; i < 8; i += 1) metrics.recordUpstreamError({ code: '503' });
+  for (let i = 0; i < 2; i += 1) metrics.recordUpstreamSuccess();
+  const s = metrics.summary();
+  assert.equal(s.degraded, true);
+  assert.equal(s.successRate, 0.2);
+  assert.match(s.line, /\[DEGRADED\]/);
+});
+
+test('summary.degraded stays false when <10 samples even if rate is poor', () => {
+  metrics.reset();
+  metrics.recordUpstreamError({ code: '503' });
+  metrics.recordUpstreamError({ code: '503' });
+  metrics.recordUpstreamSuccess();
+  const s = metrics.summary();
+  assert.equal(s.degraded, false, 'too few samples to declare degraded');
+});
+
+test('summary.degraded stays false when >=10 samples AND rate >= 0.5', () => {
+  metrics.reset();
+  for (let i = 0; i < 6; i += 1) metrics.recordUpstreamSuccess();
+  for (let i = 0; i < 4; i += 1) metrics.recordUpstreamError({ code: '503' });
+  const s = metrics.summary();
+  assert.equal(s.degraded, false);
+  assert.equal(s.successRate, 0.6);
 });
 
 test('snapshot includes startedAt + lastResetAt for ops bookkeeping', () => {

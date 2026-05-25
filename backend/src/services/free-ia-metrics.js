@@ -149,16 +149,25 @@ function toPrometheusText() {
  * One-line ops summary for status badges and dashboards. Returns a
  * short human-readable string plus the numeric fields backing it.
  */
+// Threshold mirrored from the health endpoint so the badge ("degraded")
+// and the LB probe (503) agree about when the upstream is unhealthy.
+const DEGRADED_MIN_SAMPLES = 10;
+const DEGRADED_SUCCESS_RATE = 0.5;
+
 function summary() {
   const totalUpstream = state.upstreamSuccess + state.upstreamErrors;
   const rate = totalUpstream === 0 ? null : state.upstreamSuccess / totalUpstream;
   const ratePct = rate === null ? '—' : `${(rate * 100).toFixed(2)}%`;
+  const degraded = totalUpstream >= DEGRADED_MIN_SAMPLES
+    && rate !== null
+    && rate < DEGRADED_SUCCESS_RATE;
   return {
-    line: `Free IA: ${state.totalFallbacks} fallbacks, ${state.upstreamSuccess}/${totalUpstream} upstream OK (${ratePct})`,
+    line: `Free IA: ${state.totalFallbacks} fallbacks, ${state.upstreamSuccess}/${totalUpstream} upstream OK (${ratePct})${degraded ? ' [DEGRADED]' : ''}`,
     fallbacks: state.totalFallbacks,
     upstreamSuccess: state.upstreamSuccess,
     upstreamTotal: totalUpstream,
     successRate: rate === null ? null : Math.round(rate * 10000) / 10000,
+    degraded,
     lastEventAt: state.lastEventAt,
   };
 }

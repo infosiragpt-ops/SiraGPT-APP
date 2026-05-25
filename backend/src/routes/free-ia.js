@@ -57,17 +57,16 @@ router.get('/health', (_req, res) => {
     });
   }
   const sum = freeIaMetrics.summary();
-  // When we have enough samples, treat sub-50% upstream success as
-  // degraded so the LB takes the instance out of rotation.
-  const degraded = sum.upstreamTotal >= 10 && sum.successRate !== null && sum.successRate < 0.5;
-  return res.status(degraded ? 503 : 200).json({
-    ok: !degraded,
+  // `summary.degraded` is the single source of truth for both the LB
+  // probe (503) and any UI badge — keeps health and dashboards aligned.
+  return res.status(sum.degraded ? 503 : 200).json({
+    ok: !sum.degraded,
     enabled: true,
     fallbacks: sum.fallbacks,
     upstreamSuccess: sum.upstreamSuccess,
     upstreamTotal: sum.upstreamTotal,
     successRate: sum.successRate,
-    degraded,
+    degraded: sum.degraded,
   });
 });
 

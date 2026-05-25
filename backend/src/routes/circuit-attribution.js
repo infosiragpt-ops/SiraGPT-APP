@@ -40,6 +40,7 @@ const beliefTracker = require('../services/belief-state-tracker');
 const safetyRouter = require('../services/refusal-safety-router');
 const entityUnifier = require('../services/cross-language-entity-unifier');
 const explainer = require('../services/attribution-explainer');
+const conversationSummary = require('../services/attribution-conversation-summary');
 
 const router = express.Router();
 
@@ -409,6 +410,24 @@ router.post('/unifier', optionalAuth, async (req, res) => {
   } catch (err) {
     console.error('[circuit-attribution/unifier] failed:', err?.message || err);
     return res.status(500).json({ error: 'unifier failed' });
+  }
+});
+
+router.post('/conversation-summary', optionalAuth, async (req, res) => {
+  try {
+    const userId = req.user?.id || req.body?.userId || 'anon';
+    const chatId = req.body?.chatId || 'default';
+    const history = sanitizeHistory(req.body?.history);
+    const summary = conversationSummary.buildSummary({ userId, chatId, history });
+    const wantsMarkdown = req.body?.markdown === true;
+    return res.json({
+      ok: true,
+      summary,
+      markdown: wantsMarkdown ? conversationSummary.renderMarkdown(summary) : undefined,
+    });
+  } catch (err) {
+    console.error('[circuit-attribution/conversation-summary] failed:', err?.message || err);
+    return res.status(500).json({ error: 'conversation-summary failed' });
   }
 });
 
