@@ -311,6 +311,27 @@ test('pruneErrorCodes returns 0 when nothing exceeds the retain limit', () => {
   assert.equal(Object.keys(s.upstream.errorsByCode).length, 2);
 });
 
+test('pruneErrorCodes on an empty state returns 0 and leaves state intact', () => {
+  metrics.reset();
+  const dropped = metrics.pruneErrorCodes(5);
+  assert.equal(dropped, 0);
+  const s = metrics.snapshot();
+  assert.deepEqual(s.upstream.errorsByCode, {});
+  assert.equal(s.upstream.errors, 0);
+});
+
+test('pruneErrorCodes is idempotent — calling twice keeps the same state', () => {
+  metrics.reset();
+  for (let i = 0; i < 5; i += 1) metrics.recordUpstreamError({ code: '503' });
+  metrics.recordUpstreamError({ code: '429' });
+  metrics.recordUpstreamError({ code: '500' });
+  metrics.pruneErrorCodes(2);
+  const first = JSON.stringify(metrics.snapshot().upstream.errorsByCode);
+  metrics.pruneErrorCodes(2);
+  const second = JSON.stringify(metrics.snapshot().upstream.errorsByCode);
+  assert.equal(first, second, 'second prune should be a no-op');
+});
+
 test('pruneErrorCodes(0) drops everything (drains the map)', () => {
   metrics.reset();
   metrics.recordUpstreamError({ code: '503' });
