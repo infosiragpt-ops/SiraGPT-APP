@@ -247,13 +247,27 @@ function analyze({
     faithfulnessBlock = faithfulnessScorer.renderFaithfulnessBlock(faithfulness, { maxChars: 900 });
   }
 
+  // Concept supernodes — group synonymous concepts into canonical
+  // clusters (frontend≡UI≡interfaz → 'ui'). Optional; if the module
+  // isn't loaded, the engine still works.
+  let conceptClusters = [];
+  let supernodesBlock = '';
+  try {
+    const conceptSim = require('./concept-similarity');
+    conceptClusters = conceptSim.cluster(conceptResult.concepts);
+    if (conceptClusters.length) {
+      supernodesBlock = conceptSim.buildSimilarityBlock(conceptClusters, { max: 6 });
+    }
+  } catch (_simErr) { /* optional */ }
+
   const systemPromptBlock = buildSystemPromptBlock(
-    [graphBlock, hopsBlock, planBlock, suppressionBlock, faithfulnessBlock],
+    [graphBlock, hopsBlock, planBlock, suppressionBlock, faithfulnessBlock, supernodesBlock],
     { maxChars: options.maxBlockChars || DEFAULT_BLOCK_BUDGET },
   );
 
   return {
     concepts: conceptResult.concepts,
+    conceptClusters,
     language: conceptResult.language,
     attribution: {
       summary: graphSummary,
@@ -266,6 +280,7 @@ function analyze({
     plan: { ...plan, block: planBlock },
     suppression: { ...suppression, block: suppressionBlock },
     faithfulness: faithfulness ? { ...faithfulness, block: faithfulnessBlock } : null,
+    supernodesBlock,
     systemPromptBlock,
     latencyMs: Date.now() - start,
   };
