@@ -817,8 +817,7 @@ export function AppSidebar() {
 
   const handleSearchClick = React.useCallback(() => {
     setSearchOpen(true)
-    if (isMobile) setOpenMobile(false)
-  }, [isMobile, setOpenMobile])
+  }, [])
 
 
 
@@ -1854,7 +1853,10 @@ export function AppSidebar() {
       {/* Chat Search Dialog */}
       <ChatSearchDialog
         open={searchOpen}
-        onOpenChange={setSearchOpen}
+        onOpenChange={(open) => {
+          setSearchOpen(open)
+          if (!open && isMobile) setOpenMobile(false)
+        }}
       />
 
       {/* #44 — Confirmación accesible de borrado de chat. Sustituye al

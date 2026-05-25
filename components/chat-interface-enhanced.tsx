@@ -14,7 +14,6 @@ import {
   ChevronDown,
   X,
   Upload,
-  Menu,
   Palette,
   Plus,
   Music,
@@ -146,11 +145,8 @@ import VideoGenerationComponent from "./VideoGenerationComponent"
 import UpgradeModal from "./UpgradeModal"
 import KeyboardShortcutsModal from "./KeyboardShortcutsModal"
 import { IconProvider } from "./icon-provider"
-import { AppSidebar } from "./app-sidebar"
 import GoogleServicesConnectionCard from "./GoogleServicesConnectionCard"
 import {
-  SidebarProvider,
-  Sidebar,
   SidebarTrigger,
   useSidebar,
 } from "@/components/ui/sidebar"
@@ -1185,29 +1181,6 @@ const ActionsDropdown = ({
           </DropdownMenuSub>
 
           <DropdownMenuSeparator />
-
-          {/* Voice Studio - Opens panel directly */}
-          <DropdownMenuItem
-            className="liquid-menu-item"
-            onClick={() => { setShowAudioPanel(true); setAudioTab('stt'); setIsOpen(false); }}
-            disabled={currentPlan === "FREE" || isToolSwitchDisabled}
-          >
-            <div className="flex items-center gap-3 w-full">
-              <div className="liquid-icon w-8 h-8 rounded-lg bg-purple-100 dark:bg-purple-900/20 flex items-center justify-center">
-                <Mic className="h-4 w-4 text-purple-600 dark:text-purple-400" />
-              </div>
-              <div className="flex-1">
-                <div className="liquid-label font-medium text-sm">Voice Studio</div>
-                <div className="text-xs text-muted-foreground">
-                  Text-to-Speech, Speech-to-Text, Music
-                </div>
-              </div>
-              {currentPlan === "FREE" && (
-                <Badge variant="secondary" className="text-xs">Pro</Badge>
-              )}
-            </div>
-          </DropdownMenuItem>
-
 
           {/* Image Generation */}
           <DropdownMenuItem
@@ -3657,11 +3630,7 @@ const NavbarModelSelector = ({
 };
 
 export default function ChatInterface() {
-  return (
-    <SidebarProvider>
-      <ChatInterfaceContent />
-    </SidebarProvider>
-  )
+  return <ChatInterfaceContent />
 }
 
 function ChatInterfaceContent() {
@@ -5896,13 +5865,10 @@ But first, you need to connect your Spotify account securely using the button be
   // ────────────────────────────────────────────────────────────
   // Tool activation → auto-collapse the OUTER (visible) sidebar.
   //
-  // Why a CustomEvent bridge instead of calling setSidebarOpen(false)
-  // directly: the useSidebar() above resolves to THIS component's
-  // INNER SidebarProvider. The sidebar the user actually sees is
-  // driven by a DIFFERENT provider mounted in app-wrapper.tsx. We
-  // dispatch a window event on the false→true edge and a tiny
-  // listener inside AppShell (which lives under the outer provider)
-  // forwards it to setOpen(false).
+  // useSidebar() resolves to the single AppShell provider, so the
+  // header trigger, nav sheet and auto-collapse all point at the same
+  // visible sidebar. This is especially important on iOS: duplicate
+  // sidebar sheets can leave overlays that swallow taps.
   //
   // Hardening notes:
   //   · Edge-triggered via a ref so deactivating a tool does NOT
@@ -5933,16 +5899,10 @@ But first, you need to connect your Spotify account securely using the button be
       return;
     }
     if (anyToolActive && !prevAnyToolActiveRef.current) {
-      try {
-        if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
-          window.dispatchEvent(new CustomEvent('siragpt:collapse-sidebar'));
-        }
-      } catch {
-        /* non-browser env — safe to ignore */
-      }
+      setSidebarOpen(false);
     }
     prevAnyToolActiveRef.current = anyToolActive;
-  }, [anyToolActive, isSidebarMobile]);
+  }, [anyToolActive, isSidebarMobile, setSidebarOpen]);
 
   // ────────────────────────────────────────────────────────────
   // Resizable split — chat ↔ right panel (Word/Excel/preview).
@@ -8483,15 +8443,15 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             <div className="chat-header-row flex items-center justify-between">
               <div className="chat-header-left flex min-w-0 items-center gap-2">
                 <div className="shrink-0 md:hidden">
-                  <Sidebar>
-                    <AppSidebar />
-                  </Sidebar>
                   <SidebarTrigger
-                    className="chat-header-icon-btn rounded-full"
+                    className={cn(
+                      "h-8 w-12 rounded-full border border-border/55 bg-background/86 text-foreground shadow-sm backdrop-blur-xl",
+                      "hover:bg-muted/70 active:scale-[0.97]"
+                    )}
                     aria-label="Abrir el menú lateral"
                     title="Abrir el menú lateral"
                   >
-                    <Menu className="h-6 w-6" />
+                    <PanelLeftOpen className="h-4 w-4" />
                   </SidebarTrigger>
                 </div>
                 <NavbarModelSelector
