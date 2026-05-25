@@ -36,16 +36,61 @@ const CHAT_TTL_MS = Number.parseInt(process.env.SIRAGPT_ENTITY_TRACKER_TTL_MS ||
 const MAX_TEXT_PER_TURN = 6000;
 
 const REGISTRY = new Map(); // key -> { entities: Map<id, entry>, lastTouched: number }
+const HYDRATED = new Set(); // keys we've already attempted to hydrate from disk
 
 const REFERENCE_SURFACE_RE = /\b(?:el|la|los|las|aquel|aquella|aquellos|aquellas|ese|esa|esos|esas|este|esta|estos|estas|the|that|those|this|these)\s+([a-z][a-z0-9_-]{2,32})\b/gi;
+
+// Lazy load — persistence is optional; require failure degrades to pure
+// in-memory operation, which is the prior behaviour.
+let persistence = null;
+const PERSIST_ENABLED = String(process.env.SIRAGPT_ATTRIBUTION_PERSIST || '').toLowerCase() === '1';
+try { if (PERSIST_ENABLED) persistence = require('./attribution-persistence'); } catch (_e) { persistence = null; }
 
 function key(userId, chatId) {
   return `${String(userId || 'anon')}:${String(chatId || 'default')}`;
 }
 
+function hydrateFromDisk(userId, chatId) {
+  if (!persistence) return null;
+  const k = key(userId, chatId);
+  if (HYDRATED.has(k)) return REGISTRY.get(k);
+  HYDRATED.add(k);
+  const payload = persistence.load('entities', k);
+  if (!payload || !Array.isArray(payload.entries)) return null;
+  const slot = { entities: new Map(), lastTouched: Date.now() };
+  for (const entry of payload.entries) {
+    if (!entry || !entry.id) continue;
+    const restored = { ...entry, aliases: new Set(Array.isArray(entry.aliases) ? entry.aliases : []) };
+    slot.entities.set(entry.id, restored);
+  }
+  REGISTRY.set(k, slot);
+  return slot;
+}
+
+function snapshotForDisk(slot) {
+  return {
+    entries: [...slot.entities.values()].map((e) => ({
+      ...e,
+      aliases: [...e.aliases],
+    })),
+    savedAt: Date.now(),
+  };
+}
+
+function persistSoon(userId, chatId) {
+  if (!persistence) return;
+  const slot = REGISTRY.get(key(userId, chatId));
+  if (!slot) return;
+  persistence.scheduleSave('entities', key(userId, chatId), snapshotForDisk(slot));
+}
+
 function getChatRegistry(userId, chatId, { createIfMissing = false } = {}) {
   const k = key(userId, chatId);
   let slot = REGISTRY.get(k);
+  if (!slot) {
+    const restored = hydrateFromDisk(userId, chatId);
+    if (restored) slot = restored;
+  }
   if (!slot && createIfMissing) {
     slot = { entities: new Map(), lastTouched: Date.now() };
     REGISTRY.set(k, slot);
@@ -122,6 +167,7 @@ function register({ userId, chatId, turnIndex = 0, role = 'user', text = '' } = 
     }
   }
   evictIfTooMany(slot);
+  if (newOrUpdated.length) persistSoon(userId, chatId);
   return newOrUpdated;
 }
 
