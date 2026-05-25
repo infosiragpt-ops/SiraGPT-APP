@@ -1914,6 +1914,14 @@ router.post(
                 language: bundle.engine?.language || 'unknown',
               });
             } catch (_metricsErr) { /* swallow */ }
+            // Observe this chat's intent profile into the cross-chat
+            // similarity index so future turns can find related chats.
+            try {
+              if (canPersist && chatId) {
+                const ccs = require('../services/cross-chat-intent-similarity');
+                ccs.observe({ chatId, history: __conversationHistoryForUnderstanding });
+              }
+            } catch (_ccsErr) { /* swallow */ }
             // Confidence aggregator + anti-pattern detector — fold them
             // into the system-prompt block so the model gets an explicit
             // 'how confident are we?' signal + a recommended action.
