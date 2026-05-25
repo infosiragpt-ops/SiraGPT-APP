@@ -310,10 +310,36 @@ Mounted at `/api/context-intelligence/*` in `backend/index.js` (CSRF-protected, 
 ### Env config
 - `SIRAGPT_CONTEXT_INTELLIGENCE_BLOCK_MAX` — system-prompt block size cap (default 3500 chars)
 
+## Intent Attribution Graph (completed ✅ — 2026-05-25)
+Inspirado en el paper de Anthropic [On the Biology of a Large Language Model](https://transformer-circuits.pub/2025/attribution-graphs/biology.html). Aplica los conceptos de attribution-graphs (decomposición en features atómicas, supernodes, circuits multi-hop, planning hacia adelante, intent oculto, calibración de confianza) al **entendimiento de la intención del usuario**.
+
+### Módulos (`backend/src/services/intent-attribution-graph/`)
+- `feature-extractor.js` — ~30 categorías de features atómicas (action/object/modifier/constraint/temporal/condition/persona/tone/language/reference/negation/emotion/implicit). Bilingüe ES/EN. Detecta features implícitas (`expect-tests`, `fetch-and-summarize-url`, `resume-prior-task`).
+- `attribution-graph.js` — grafo dirigido con 9 tipos de arista (action-on / modifies / constrains / negates / gates / refers-to / implies / styles / targets). Nodo sintético `root` para anclar el grafo.
+- `supernode-builder.js` — 15 themes (`build-software`, `fix-defect`, `analyze-document`, `generate-visual`, `deploy-or-run`, etc.) — análogo a los supernodes del paper.
+- `circuit-tracer.js` — enumera reasoning circuits multi-hop `root → action → object → implicit/supernode` (análogo al Dallas→Texas→Austin del paper).
+- `intent-planner.js` — forward planning con 8 reglas de pre-requisitos y 10 reglas de next-steps anticipados (análogo al "rabbit poetry planning").
+- `hidden-intent-detector.js` — 11 patrones de surface-vs-true-goal divergence: frustración, dissatisfaction, time-pressure, open-ended-delegation, decision-help, implementation-not-discussion, etc.
+- `confidence-calibrator.js` — score 0–1 + band (`high`/`medium-high`/`medium`/`medium-low`/`low`) + ambigüedades específicas con clarifying questions. Análogo al "known answer vs unknown name" del paper.
+- `prompt-formatter.js` — renderiza el reporte en un bloque markdown listo para inyectar al system prompt (cap por defecto 3500 chars, env `SIRAGPT_INTENT_ATTR_BLOCK_MAX_CHARS`).
+- `index.js` — orquestador `analyzeIntent(prompt, opts)` → `IntentReport`.
+
+### Integración
+- **Chat path**: inyectado automáticamente en `backend/src/routes/ai.js` después del `circuitAttributionBlock`. Disable via `SIRAGPT_INTENT_ATTRIBUTION_GRAPH_DISABLED=1`. Telemetría en log: `[intent-attr-graph] feats=N themes=N circuits=N conf=0.X lang=es dur=Nms`.
+- **HTTP**: `POST /api/cowork/intent-attribution-graph` (body: `{ prompt, attachments?, includeBlock?, includeFeatures?, maxBlockChars? }`) → reporte completo + bloque inyectable.
+
+### Tests
+- `backend/tests/intent-attribution-graph.test.js` — 70 tests (10 suites) cubriendo cada módulo y 4 escenarios de integración. Registrado en `backend/package.json`.
+
+### Trade-offs
+- Pura local, sin llamadas LLM — ~5 ms por turno.
+- Complementa (no reemplaza) los módulos previos `context-attribution-engine` y `intent-attribution.js` (que es más conservador). El reporte de IAG agrega supernodes + hidden intents + forward planning + confidence band que esos no proveen.
+
 ## Next Improvement Areas
 1. **Document pipeline** — add more generator formats (EPUB, RTF, ODT)
 2. **Service health probes** — endpoint health monitoring
 3. **Rate limiting** — Redis-backed rate limiter for API endpoints
+4. **Intent attribution learning** — feed back actual response-success signals into the lexicon/rule weights to self-improve over time.
 
 ## Conexiones externas
 - Repo: https://github.com/SiraGPT-ORg/siraGPT

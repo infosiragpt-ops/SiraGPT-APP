@@ -557,4 +557,51 @@ router.post('/analyze-pro/stream', authenticateToken, analyzeDeepRateLimit, asyn
   }
 });
 
+// ── Intent Attribution Graph — decompose a prompt into atomic intent
+// features, supernodes, reasoning circuits, anticipated next steps,
+// hidden intents, and a calibrated confidence score. Inspired by
+// Anthropic's attribution-graphs paper. Pure-local, no LLM call.
+router.post('/intent-attribution-graph', optionalAuth, coworkRateLimit, async (req, res) => {
+  try {
+    const { prompt, attachments, includeBlock, includeFeatures, maxBlockChars } = req.body || {};
+    if (typeof prompt !== 'string') {
+      return res.status(400).json({ error: 'prompt (string) is required' });
+    }
+    if (prompt.length > 200_000) {
+      return res.status(413).json({ error: 'prompt too large (max 200k chars)' });
+    }
+    const intentAttributionGraph = require('../services/intent-attribution-graph');
+    const report = intentAttributionGraph.analyzeIntent(prompt, {
+      attachments: Array.isArray(attachments) ? attachments : [],
+    });
+    const payload = {
+      ok: true,
+      empty: report.empty === true,
+      language: report.language,
+      stats: report.stats,
+      supernodes: report.supernodes,
+      circuits: report.circuits,
+      plan: report.plan,
+      hiddenIntents: report.hiddenIntents,
+      confidence: report.confidence,
+      topFeatures: report.topFeatures,
+      durationMs: report.durationMs,
+    };
+    if (includeFeatures) {
+      payload.features = report.features;
+      payload.graph = report.graph;
+    }
+    if (includeBlock !== false) {
+      payload.promptBlock = intentAttributionGraph.formatForPrompt(report, {
+        maxChars: Number.isInteger(maxBlockChars) ? maxBlockChars : undefined,
+      });
+      payload.summary = intentAttributionGraph.compactSummary(report);
+      payload.shouldClarify = intentAttributionGraph.shouldClarify(report);
+    }
+    res.json(payload);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
