@@ -5,6 +5,22 @@ const assert = require('node:assert/strict');
 
 const metrics = require('../src/services/free-ia-metrics');
 
+test('summary.line includes "X/min" suffix when requestRatePerMin is non-null', () => {
+  metrics.reset();
+  for (let i = 0; i < 12; i += 1) metrics.recordUpstreamSuccess();
+  const s = metrics.summary({ now: Date.now() + 2 * 60 * 1000 });
+  assert.ok(s.requestRatePerMin !== null);
+  assert.match(s.line, /\d+(\.\d+)?\/min/, `expected /min in line: ${s.line}`);
+});
+
+test('summary.line omits "/min" suffix when sub-1-minute window', () => {
+  metrics.reset();
+  metrics.recordUpstreamSuccess();
+  const s = metrics.summary();
+  assert.equal(s.requestRatePerMin, null);
+  assert.ok(!/\/min/.test(s.line), `should not include /min: ${s.line}`);
+});
+
 test('summary() returns a one-line digest with all the numbers backing it', () => {
   metrics.reset();
   metrics.recordFallback({ feature: 'paraphrase', amount: 5 });
@@ -66,6 +82,21 @@ test('summary.requestRatePerMin computes throughput from elapsed time', () => {
   // Over very long elapsed → near-zero rate. Just verify it's
   // a number and not crashing.
   assert.ok(typeof s.requestRatePerMin === 'number' || s.requestRatePerMin === null);
+});
+
+test('summary.requestRatePerMin: returns a finite positive number for a 5-minute window', () => {
+  metrics.reset();
+  for (let i = 0; i < 30; i += 1) metrics.recordUpstreamSuccess();
+  // Force startedAt by mocking the snapshot's now value to be 5 min ahead.
+  // The metric module reads state.startedAt at construction time; we
+  // simulate elapsed time by passing a `now` 5 min after that.
+  // Since startedAt was just set by reset(), now+5min ≈ startedAt+5min.
+  const fiveMinLater = Date.now() + 5 * 60 * 1000;
+  const s = metrics.summary({ now: fiveMinLater });
+  // 30 calls over 5 min = 6 req/min (give or take a small epsilon).
+  assert.ok(typeof s.requestRatePerMin === 'number', `expected number, got ${s.requestRatePerMin}`);
+  assert.ok(s.requestRatePerMin > 0, `expected >0, got ${s.requestRatePerMin}`);
+  assert.ok(s.requestRatePerMin <= 30, `expected <=30 (sanity), got ${s.requestRatePerMin}`);
 });
 
 test('summary.requestRatePerMin is null with <1 minute elapsed (avoids div-by-tiny)', () => {
