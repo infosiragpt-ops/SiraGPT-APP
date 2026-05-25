@@ -76,6 +76,21 @@ router.get('/brand', (_req, res) => {
   });
 });
 
+// Endpoint inventory for /info autodiscovery. Kept here (not derived
+// from Express's router stack) so the metadata stays explicit and the
+// payload doesn't drift if Express changes its internals.
+const ENDPOINT_INVENTORY = Object.freeze([
+  { method: 'GET',  path: '/api/free-ia/status',           auth: 'public', returns: 'config + brand' },
+  { method: 'GET',  path: '/api/free-ia/configured',       auth: 'public', returns: 'boolean' },
+  { method: 'GET',  path: '/api/free-ia/brand',            auth: 'public', returns: 'brand constants' },
+  { method: 'GET',  path: '/api/free-ia/health',           auth: 'public', returns: '200 OK / 503 degraded' },
+  { method: 'GET',  path: '/api/free-ia/info',             auth: 'public', returns: 'consolidated view' },
+  { method: 'GET',  path: '/api/free-ia/metrics',          auth: 'public', returns: 'JSON snapshot' },
+  { method: 'GET',  path: '/api/free-ia/metrics/summary',  auth: 'public', returns: 'one-line digest (?format=text for plain)' },
+  { method: 'GET',  path: '/api/free-ia/metrics.prom',     auth: 'public', returns: 'Prometheus text exposition' },
+  { method: 'POST', path: '/api/free-ia/metrics/reset',    auth: 'admin',  returns: 'pre-reset snapshot' },
+]);
+
 // Consolidated view for the model picker's first paint — one round-trip
 // instead of /status + /metrics/summary + /health + pricing.
 router.get('/info', (_req, res) => {
@@ -94,6 +109,7 @@ router.get('/info', (_req, res) => {
       degraded: sum.degraded,
     },
     summary: sum,
+    endpoints: ENDPOINT_INVENTORY,
   });
 });
 

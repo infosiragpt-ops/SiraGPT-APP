@@ -78,6 +78,33 @@ test('GET /api/free-ia/status reports enabled when CEREBRAS_API_KEY is set', asy
   }
 });
 
+test('GET /api/free-ia/info: endpoints inventory is well-formed + lists all known routes', async () => {
+  const prevKey = process.env.CEREBRAS_API_KEY;
+  process.env.CEREBRAS_API_KEY = 'csk-inventory';
+  const { server, baseURL } = await startServer();
+  try {
+    const { body } = await fetchJSON(`${baseURL}/api/free-ia/info`);
+    assert.ok(Array.isArray(body.endpoints));
+    assert.ok(body.endpoints.length >= 9, `expected >=9 endpoints, got ${body.endpoints.length}`);
+    // Every entry has {method, path, auth, returns}
+    for (const e of body.endpoints) {
+      assert.ok(['GET', 'POST', 'PUT', 'DELETE'].includes(e.method));
+      assert.ok(e.path.startsWith('/api/free-ia/'));
+      assert.ok(['public', 'admin', 'user'].includes(e.auth));
+      assert.ok(typeof e.returns === 'string' && e.returns.length > 0);
+    }
+    // Smoke-check that the inventory includes the admin reset
+    const reset = body.endpoints.find((e) => e.path === '/api/free-ia/metrics/reset');
+    assert.ok(reset, 'inventory must include the admin reset endpoint');
+    assert.equal(reset.method, 'POST');
+    assert.equal(reset.auth, 'admin');
+  } finally {
+    server.close();
+    if (prevKey === undefined) delete process.env.CEREBRAS_API_KEY;
+    else process.env.CEREBRAS_API_KEY = prevKey;
+  }
+});
+
 test('GET /api/free-ia/info returns a consolidated single-call view', async () => {
   const metrics = require('../src/services/free-ia-metrics');
   metrics.reset();
