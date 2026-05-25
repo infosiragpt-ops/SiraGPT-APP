@@ -16,6 +16,7 @@ const {
   createInstrumentedCerebrasClient,
   buildFreeIaModelDescriptor,
   getFreeIaPricing,
+  inferModelFamily,
   runWithMetrics,
   DEFAULT_BASE_URL,
   DEFAULT_MODEL,
@@ -240,12 +241,32 @@ test('getFreeIaPricing: stable shape { priceUsd:0, isFree:true, badge:"Gratis" }
   assert.equal(p.badge, 'Gratis');
 });
 
-test('buildFreeIaModelDescriptor: includes pricing block', () => {
+test('inferModelFamily: extracts the major.minor llama family', () => {
+  assert.equal(inferModelFamily('llama-3.1-8b'), 'llama-3.1');
+  assert.equal(inferModelFamily('llama-3.1-70b'), 'llama-3.1');
+  assert.equal(inferModelFamily('llama-3.3-70b'), 'llama-3.3');
+  assert.equal(inferModelFamily('llama3.1-8b'), 'llama-3.1');
+});
+
+test('inferModelFamily: cerebras-prefixed models map to "cerebras" bucket', () => {
+  assert.equal(inferModelFamily('cerebras:custom-thing'), 'cerebras');
+  assert.equal(inferModelFamily('cerebras-experimental'), 'cerebras');
+});
+
+test('inferModelFamily: returns "unknown" for empty / unrecognised ids', () => {
+  assert.equal(inferModelFamily(''), 'unknown');
+  assert.equal(inferModelFamily(null), 'unknown');
+  assert.equal(inferModelFamily('gpt-5'), 'unknown');
+  assert.equal(inferModelFamily('mystery-model'), 'unknown');
+});
+
+test('buildFreeIaModelDescriptor: includes pricing block + family', () => {
   const desc = buildFreeIaModelDescriptor({ env: { CEREBRAS_API_KEY: 'csk-pricing' } });
   assert.ok(desc.pricing);
   assert.equal(desc.pricing.priceUsd, 0);
   assert.equal(desc.pricing.isFree, true);
   assert.equal(desc.pricing.badge, 'Gratis');
+  assert.equal(desc.family, 'llama-3.1', 'descriptor should expose the model family for picker grouping');
 });
 
 test('integration: instrumented client → real metrics module captures error+message', async () => {

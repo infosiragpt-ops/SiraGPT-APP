@@ -166,11 +166,15 @@ async function runWithMetrics(fn, { metrics } = {}) {
  */
 function buildFreeIaModelDescriptor({ env = process.env } = {}) {
   const cfg = getCerebrasConfig({ env });
+  // Derive the family from the model id so the picker can group SKUs
+  // (llama-3.1-8b + llama-3.1-70b both live under "llama-3.1").
+  const family = inferModelFamily(cfg.model);
   return {
     id: `__virtual_${cfg.model.replace(/[^a-z0-9]+/gi, '_').toLowerCase()}__`,
     name: cfg.model,
     displayName: cfg.displayName,
     provider: cfg.provider,
+    family,
     description: 'Modelo gratuito SiraGPT (Cerebras Llama 3.1 8B) — usado como fallback cuando el plan se agota.',
     type: 'TEXT',
     icon: 'CerebrasLogo',
@@ -178,6 +182,20 @@ function buildFreeIaModelDescriptor({ env = process.env } = {}) {
     enabled: cfg.enabled,
     pricing: getFreeIaPricing(),
   };
+}
+
+/**
+ * Best-effort family extraction from a model id. Returns "llama-3.1"
+ * for "llama-3.1-8b", "llama-3.3" for "llama-3.3-70b", "cerebras" for
+ * "cerebras:custom", "unknown" otherwise.
+ */
+function inferModelFamily(modelId) {
+  const m = String(modelId || '').toLowerCase();
+  if (!m) return 'unknown';
+  const llamaMatch = m.match(/llama[-_]?(\d+\.\d+)/);
+  if (llamaMatch) return `llama-${llamaMatch[1]}`;
+  if (m.startsWith('cerebras:') || m.startsWith('cerebras-')) return 'cerebras';
+  return 'unknown';
 }
 
 /**
@@ -212,5 +230,6 @@ module.exports = {
   createInstrumentedCerebrasClient,
   buildFreeIaModelDescriptor,
   getFreeIaPricing,
+  inferModelFamily,
   runWithMetrics,
 };
