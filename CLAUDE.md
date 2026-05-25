@@ -367,6 +367,58 @@ Inspirado en el paper de Anthropic [On the Biology of a Large Language Model](ht
 3. **Rate limiting** — Redis-backed rate limiter for API endpoints
 4. **Intent attribution learning** — feed back actual response-success signals into the lexicon/rule weights to self-improve over time.
 
+## Free IA (Cerebras Llama 3.1 8B) — added 2026-05-25
+
+Per the product brief (`/Users/luis/Downloads/SIraGPT.docx`), the free
+tier and the cross-plan fallback model is "Free IA" = Llama 3.1 8B via
+Cerebras. Wiring:
+
+- **Adapter**: `backend/src/services/ai/cerebras-client.js` — OpenAI-
+  compatible wrapper for `api.cerebras.ai/v1`. Exports
+  `getCerebrasConfig`, `isFreeIaConfigured`, `createCerebrasClient`,
+  `buildFreeIaModelDescriptor`.
+- **Env vars**: `CEREBRAS_API_KEY` (required in `.env.local`),
+  `CEREBRAS_BASE_URL`, `FREE_IA_MODEL_ID`, `FREE_IA_DISPLAY_NAME`. Legacy
+  `GEMA4_*` aliases still override (back-compat).
+- **Catalog defaults** moved from `OpenAI/Gema4-31B` →
+  `Cerebras/llama-3.1-8b/"Free IA"` in `model-quota-router.js`.
+- **Auto-fallback** in `chargeCredits` middleware: on INSUFFICIENT
+  balance, when Cerebras is configured, marks `req._fallbackToFreeIA`
+  + sets response header `x-sira-fallback: free-ia` (with
+  `x-sira-fallback-feature` + `x-sira-fallback-cost`) instead of
+  returning 402. Routes opt out via `allowFreeIaFallback: false` (e.g.
+  `images.js` — Free IA is text-only).
+- **Status endpoint**: `GET /api/free-ia/status` + `/configured`. Public,
+  no auth. API key never leaked.
+- **Provider routing** in `ai.js` `createProviderClient('Cerebras')` and
+  helper `inferProviderFromModelId` so a `llama-3.1-*` model id always
+  routes to Cerebras.
+- **Tests**: `cerebras-client.test.js` (10), `charge-credits-middleware.test.js`
+  (+4 new), `plan-credits-catalog.test.js` (+2 new), `free-ia-route.test.js` (3).
+
+## Paraphrase Humanizer (anti-AI-detection) — added 2026-05-25
+
+Per the spec ("que no jale ia en turnitin"), the paraphrase route now
+ships with a rule-based humanizer that runs after the LLM pass to
+reduce AI-detector flagging.
+
+- **Module**: `backend/src/services/paraphrase-humanizer.js` — zero-dep,
+  deterministic. Replaces 30+ LLM-favourite tells in EN + ES
+  ("furthermore", "moreover", "delve", "cabe destacar que",
+  "sin embargo", "en conclusión", ...), collapses em-dash overuse,
+  boosts burstiness by splitting long sentences. Exports `humanizeText`,
+  `estimateAIScore`, `listAITellPatterns`.
+- **Wiring**: `/api/paraphrase` applies it automatically for
+  `mode === 'humanize'`; other modes opt in with `?humanize=1`. The
+  response carries `stealth: { aiScoreBefore, aiScoreAfter, deltaScore,
+  transformations, intensity }`.
+- **Per-mode similarity ceilings** (`paraphrase-engine.js`
+  `MODE_SIMILARITY_CEILINGS`): humanize/creative 0.55, academic 0.60,
+  formal 0.70, shorten 0.78, others 0.72. Caller-supplied
+  `maxSimilarity` still wins.
+- **Tests**: `paraphrase-humanizer.test.js` (18), `paraphrase-engine.test.js`
+  (+6 new for per-mode ceilings).
+
 ## Conexiones externas
 - Repo: https://github.com/SiraGPT-ORg/siraGPT
 - Remoto: `sira-org`
