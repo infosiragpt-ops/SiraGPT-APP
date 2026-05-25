@@ -8445,13 +8445,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 <div className="shrink-0 md:hidden">
                   <SidebarTrigger
                     className={cn(
-                      "h-8 w-12 rounded-full border border-border/55 bg-background/86 text-foreground shadow-sm backdrop-blur-xl",
-                      "hover:bg-muted/70 active:scale-[0.97]"
+                      "h-8 w-8 rounded-none border-0 bg-transparent p-0 text-foreground shadow-none",
+                      "hover:bg-transparent focus-visible:bg-transparent active:scale-[0.97]"
                     )}
                     aria-label="Abrir el menú lateral"
                     title="Abrir el menú lateral"
                   >
-                    <SidebarOvalIcon className="h-4 w-4" />
+                    <SidebarOvalIcon className="h-5 w-5" />
                   </SidebarTrigger>
                 </div>
                 <NavbarModelSelector
