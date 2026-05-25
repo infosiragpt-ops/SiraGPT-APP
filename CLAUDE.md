@@ -361,11 +361,94 @@ Inspirado en el paper de Anthropic [On the Biology of a Large Language Model](ht
 - Pura local, sin llamadas LLM — ~5 ms por turno.
 - Complementa (no reemplaza) los módulos previos `context-attribution-engine` y `intent-attribution.js` (que es más conservador). El reporte de IAG agrega supernodes + hidden intents + forward planning + confidence band que esos no proveen.
 
+## Attribution Stack — added 2026-05-25 (round 3)
+
+Comprehensive context-attribution + interpretability layer inspired by
+Anthropic's "On the Biology of a Large Language Model"
+(https://transformer-circuits.pub/2025/attribution-graphs/biology.html).
+
+### Services
+| Module | Purpose |
+|---|---|
+| `attribution-graph.js` | Causal graph (input → context → feature → intent → action) with weighted edges, ablation, path-finding |
+| `intent-attribution-graph/` | Submodule: feature-extractor, supernode-builder, circuit-tracer, hidden-intent-detector, intent-planner, response-validator, multilingual-lexicon, counterfactual-analyzer, confidence-calibrator, prompt-formatter |
+| `context-attribution-engine.js` | Meta-orchestrator over concept/graph/multi-hop/plan/suppression/faithfulness |
+| `attribution-suite.js` | Higher-level runner that adds belief-state + refusal-safety + entity unifier |
+| `concept-extractor.js` | Domain concepts + entity / property / goal extraction (multi-lang) |
+| `attribution-supernode-merger.js` | Cluster similar features into themes (Jaccard + cosine) |
+| `feature-decay-policy.js` | Per-kind half-lives (constraint=7d, urgency=5min, …) |
+| `saliency-decay-tracker.js` | Live/fading/dead bucketing per chat |
+| `attribution-anomaly-detector.js` | Per-user baseline + z-score outlier flagging |
+| `attribution-rollup-aggregator.js` | Sliding-window telemetry rollup for dashboards |
+| `conversational-momentum-tracker.js` | High/medium/low momentum classification |
+| `attribution-cache.js` | Content-addressable LRU + memoize |
+| `prompt-budget-allocator.js` | Tier-aware systemBlocks trimming |
+| `ambiguity-flagger.js` | Borderline-intent detection + clarifying questions |
+| `adversarial-prompt-detector.js` | 6 categories: instruction_override / role_swap / system_prompt_exfil / etc |
+| `self-reflection-loop.js` | Post-gen faithfulness verdict + retry instructions |
+| `attribution-graph-visualizer.js` | Mermaid / Cytoscape / JSON renderers |
+| `attribution-graph-comparator.js` | A/B diff with topology + intent shift + centroid drift |
+| `token-attribution-tracer.js` | Output-token → input-token mapping |
+| `cross-modal-attribution.js` | Per-sentence file-region citations (pdf:p4 / xlsx:Sheet!Range / code:L42-50) |
+| `domain-calibration.js` | Legal/medical/financial/code/creative/marketing per-domain thresholds |
+| `attribution-natural-language-explainer.js` | Human-readable explanation strings (es/en) |
+| `attribution-snapshot-store.js` | JSONL persistence + in-memory mirror |
+| `attribution-debug-report.js` | Single-call markdown bundle for support tickets |
+| `attribution-replay-engine.js` | Re-run snapshot, diff against today's pipeline |
+| `attribution-config-validator.js` | 20+ env coherence checks |
+| `attribution-performance-profiler.js` | Per-stage rolling p50/p95 latency aggregates |
+| `attribution-prompt-fuzzer.js` | Variant generation + graph-stability probe |
+| `attribution-metrics.js` | Per-turn telemetry counters |
+| `concept-drift-monitor.js` | Topic-shift detection per chat |
+| `cross-turn-entity-tracker.js` | Stable entity registry across turns |
+| `cross-turn-attribution-chain.js` | Anaphora / reference resolution |
+| `cross-language-entity-unifier.js` | Cluster en/es entity variants |
+| `hidden-goal-extractor.js` | Implied-goal detection from soft phrasing |
+| `counterfactual-query-rewriter.js` | Generate query variants to expose ambiguity |
+| `faithfulness-postprocessor.js` | Score + auto-repair instruction |
+| `refusal-safety-router.js` | allow / caution / route_to_human / refuse |
+| `belief-state-tracker.js` | What the user thinks is fixed vs pending |
+
+### Routes
+- `/api/circuit-attribution/{analyze,concepts,multi-hop,plan,suppression,faithfulness,postprocess,drift,entities,metrics,health}`
+- `/api/attribution-explainer/{explain,supernodes,budget,cache-stats,saliency/:chatId,health}`
+- `/api/attribution-toolkit/{anomaly/*, rollup/*, fuzzer/*, cross-modal/*, domain/*, reflection, visualize/*, compare/*, perf/*, health}`
+
+### Integration in `ai.js`
+The chat route stacks these blocks into the system prompt (env-flag gated):
+`circuitAttributionBlock`, `intentAttributionGraphBlock`, `saliencyBlock`,
+`ambiguityBlock`, `adversarialBlock`. `prompt-budget-allocator` runs after
+assembly to trim overflow without dropping tier-0 (master prompt, safety
+alerts, contract).
+
+### Tests
+~40 dedicated test files in `backend/tests/attribution-*.test.js` + companions.
+End-to-end smoke test at `backend/tests/attribution-end-to-end.test.js`
+exercises 20+ modules in 4 scenarios.
+
+### Eval harness
+`node backend/scripts/run-attribution-quality-eval.js [--dataset=path.json] [--baseline=snapshot.json --strict]`
+runs a 20-case labeled corpus and reports intent precision/recall, topic
+coverage, language accuracy, multi-hop accuracy, latency p50/p95. Designed
+to gate CI on > 5 % regression vs a baseline snapshot.
+
+### Key env flags
+- Block gates: `SIRAGPT_CIRCUIT_ATTRIBUTION_DISABLED`, `SIRAGPT_INTENT_ATTRIBUTION_GRAPH_DISABLED`, `SIRAGPT_SALIENCY_DISABLED`, `SIRAGPT_AMBIGUITY_DISABLED`, `SIRAGPT_ADVERSARIAL_DISABLED`, `SIRAGPT_PROMPT_BUDGET_DISABLED`
+- Budget: `SIRAGPT_PROMPT_BUDGET_TOKENS` (default 12000)
+- Persistence: `SIRAGPT_ATTRIBUTION_PERSIST=1`
+- Cache: `SIRAGPT_ATTR_CACHE_DISABLED`, `SIRAGPT_ATTR_CACHE_TTL_MS`, `SIRAGPT_ATTR_CACHE_MAX`
+- Saliency: `SIRAGPT_SALIENCY_HALFLIFE_MS`, `_LIVE_THRESHOLD`, `_FADING_THRESHOLD`
+- Anomaly: `SIRAGPT_ANOMALY_BUFFER_SIZE`, `_Z_THRESHOLD`, `_MIN_SAMPLES`
+- Momentum: `SIRAGPT_MOMENTUM_BUFFER_SIZE`, `_HIGH_THRESHOLD`, `_LOW_THRESHOLD`
+- Reflection: `SIRAGPT_REFLECTION_ACCEPT_THRESHOLD`, `_SOFT_THRESHOLD`, `_MAX_RETRIES`
+- Run `attribution-config-validator.validate()` on boot to catch incoherent combinations.
+
 ## Next Improvement Areas
 1. **Document pipeline** — add more generator formats (EPUB, RTF, ODT)
 2. **Service health probes** — endpoint health monitoring
 3. **Rate limiting** — Redis-backed rate limiter for API endpoints
 4. **Intent attribution learning** — feed back actual response-success signals into the lexicon/rule weights to self-improve over time.
+5. **Front-end attribution panel** — UI that consumes /api/attribution-toolkit/visualize + /attribution-explainer/explain to render an explainability sidebar (UI work is out of scope for this branch per CLAUDE.md rules).
 
 ## Free IA (Cerebras Llama 3.1 8B) — added 2026-05-25
 
