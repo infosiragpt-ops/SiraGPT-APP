@@ -52,6 +52,7 @@ const promptQualityScorer = require('../services/attribution-prompt-quality-scor
 const replayRunner = require('../services/attribution-replay-runner');
 const skillRecommender = require('../services/attribution-skill-recommender');
 const bulkAnalyzer = require('../services/attribution-bulk-analyzer');
+const executiveSummary = require('../services/attribution-executive-summary');
 
 const router = express.Router();
 
@@ -727,6 +728,26 @@ router.post('/bulk', optionalAuth, async (req, res) => {
   } catch (err) {
     console.error('[circuit-attribution/bulk] failed:', err?.message || err);
     return res.status(500).json({ error: 'bulk failed' });
+  }
+});
+
+router.post('/executive-summary', optionalAuth, async (req, res) => {
+  try {
+    const prompt = String(req.body?.prompt || '').slice(0, MAX_PROMPT_CHARS);
+    if (!prompt) return res.status(400).json({ error: 'prompt is required' });
+    const summary = executiveSummary.buildSummary({
+      prompt,
+      history: sanitizeHistory(req.body?.history),
+      files: sanitizeFiles(req.body?.files),
+      memories: sanitizeMemories(req.body?.memories),
+      ragSnippets: sanitizeRagSnippets(req.body?.ragSnippets),
+      userProfile: req.body?.userProfile && typeof req.body.userProfile === 'object' ? req.body.userProfile : null,
+      draftResponse: typeof req.body?.draftResponse === 'string' ? req.body.draftResponse.slice(0, MAX_RESPONSE_CHARS) : null,
+    });
+    return res.json({ ...summary, block: executiveSummary.buildExecutiveBlock(summary) });
+  } catch (err) {
+    console.error('[circuit-attribution/executive-summary] failed:', err?.message || err);
+    return res.status(500).json({ error: 'executive-summary failed' });
   }
 });
 
