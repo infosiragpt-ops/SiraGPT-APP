@@ -114,6 +114,28 @@ test('GET /api/free-ia/metrics returns a JSON snapshot of the fallback counter',
   }
 });
 
+test('GET /api/free-ia/metrics/summary returns the one-line digest', async () => {
+  const metrics = require('../src/services/free-ia-metrics');
+  metrics.reset();
+  metrics.recordFallback({ feature: 'paraphrase', amount: 5 });
+  metrics.recordUpstreamSuccess();
+  metrics.recordUpstreamSuccess();
+  metrics.recordUpstreamError({ code: '503' });
+  const { server, baseURL } = await startServer();
+  try {
+    const { status, body } = await fetchJSON(`${baseURL}/api/free-ia/metrics/summary`);
+    assert.equal(status, 200);
+    assert.equal(body.fallbacks, 1);
+    assert.equal(body.upstreamSuccess, 2);
+    assert.equal(body.upstreamTotal, 3);
+    assert.match(body.line, /Free IA: 1 fallbacks/);
+    assert.match(body.line, /2\/3 upstream OK/);
+  } finally {
+    server.close();
+    metrics.reset();
+  }
+});
+
 test('POST /api/free-ia/metrics/reset requires admin auth (401 anonymous)', async () => {
   const metrics = require('../src/services/free-ia-metrics');
   metrics.reset();
