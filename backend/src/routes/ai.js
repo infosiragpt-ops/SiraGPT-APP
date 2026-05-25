@@ -257,6 +257,29 @@ function hasEnv(name) {
  * Kept for backward compatibility — new code should use
  * resolveProviderWithFailover() instead.
  */
+/**
+ * Map a model id to its expected provider name. Used when the request
+ * pins a model without an explicit provider (custom GPT, org default,
+ * etc.) so we don't try to talk to OpenAI for a Cerebras / Gemini model.
+ */
+function inferProviderFromModelId(modelId) {
+  const m = String(modelId || '').toLowerCase();
+  if (!m) return 'OpenAI';
+  if (isDirectDeepSeekModel(m)) return 'DeepSeek';
+  if (
+    m.includes('x-ai/') || m.includes('openrouter/') || m.includes('anthropic/')
+    || m.includes('meta-llama/') || m.includes('deepseek/')
+    || m.includes('/gpt-oss') || m.includes('moonshotai/')
+  ) return 'OpenRouter';
+  if (m.includes('gemini') || m.includes('imagen')) return 'Gemini';
+  // Free IA (Cerebras Llama 3.1 8B and any other llama-3.1-*) — needs the
+  // Cerebras endpoint, not OpenAI.
+  if (m.startsWith('llama-3.1') || m.startsWith('cerebras:') || m.startsWith('llama3.1')) {
+    return 'Cerebras';
+  }
+  return 'OpenAI';
+}
+
 function createProviderClient(provider) {
   if (provider === "Gemini") {
     return new OpenAI({
@@ -276,6 +299,17 @@ function createProviderClient(provider) {
     return new OpenAI({
       apiKey: process.env.DEEPSEEK_API_KEY,
       baseURL: "https://api.deepseek.com",
+    });
+  }
+
+  if (provider === "Cerebras") {
+    // Free IA — Cerebras Llama 3.1 8B used as the SiraGPT free tier and as
+    // the fallback when the user's premium credits run out.
+    const cerebras = require('../services/ai/cerebras-client');
+    const cfg = cerebras.getCerebrasConfig();
+    return new OpenAI({
+      apiKey: cfg.apiKey || process.env.CEREBRAS_API_KEY || '',
+      baseURL: cfg.baseURL || cerebras.DEFAULT_BASE_URL,
     });
   }
 
@@ -1180,24 +1214,7 @@ router.post(
             if (!agenticStream.modelSupportsFunctionCalling(quotaRoutedProvider, quotaRoutedModel)) {
               const requestedCatalogEntry = modelRouter.getModel(requestedModelBeforeQuota);
               if (requestedCatalogEntry && Array.isArray(requestedCatalogEntry.plans) && requestedCatalogEntry.plans.includes('FREE')) {
-                let requestedProvider;
-                if (isDirectDeepSeekModel(requestedModelBeforeQuota)) {
-                  requestedProvider = 'DeepSeek';
-                } else if (String(requestedModelBeforeQuota).includes('gemini')) {
-                  requestedProvider = 'Gemini';
-                } else if (
-                  requestedModelBeforeQuota.includes('x-ai/') ||
-                  requestedModelBeforeQuota.includes('openrouter/') ||
-                  requestedModelBeforeQuota.includes('anthropic/') ||
-                  requestedModelBeforeQuota.includes('meta-llama/') ||
-                  requestedModelBeforeQuota.includes('deepseek/') ||
-                  requestedModelBeforeQuota.includes('/gpt-oss') ||
-                  requestedModelBeforeQuota.includes('moonshotai/')
-                ) {
-                  requestedProvider = 'OpenRouter';
-                } else {
-                  requestedProvider = 'OpenAI';
-                }
+                const requestedProvider = inferProviderFromModelId(requestedModelBeforeQuota);
                 if (agenticStream.modelSupportsFunctionCalling(requestedProvider, requestedModelBeforeQuota)) {
                   console.log(
                     '[agentic-override] restoring original tool-capable model',
@@ -1480,18 +1497,7 @@ router.post(
           actualModel = chat.model || customGpt.modelName || model;
           actualTemperature = customGpt.temperature ?? actualTemperature;
 
-          // ✅ Provider detection logic merged here
-          if (isDirectDeepSeekModel(actualModel)) {
-            actualProvider = 'DeepSeek';
-          } else if (actualModel.includes('x-ai/') || actualModel.includes('openrouter/') || actualModel.includes('anthropic/') || actualModel.includes('meta-llama/') || actualModel.includes("deepseek/") ||
-            actualModel.includes("meta-llama/") || actualModel.includes("/gpt-oss") || actualModel.includes("moonshotai/")
-          ) {
-            actualProvider = 'OpenRouter';
-          } else if (actualModel.includes('gemini') || actualModel.includes('imagen')) {
-            actualProvider = 'Gemini';
-          } else {
-            actualProvider = 'OpenAI';
-          }
+          actualProvider = inferProviderFromModelId(actualModel);
 
           console.log(`🤖 Using Custom GPT: ${customGpt.name} with model: ${actualModel} via ${actualProvider}`);
         }
@@ -1530,18 +1536,7 @@ router.post(
               if (typeof ai.preferredProvider === 'string' && ai.preferredProvider.trim()) {
                 actualProvider = ai.preferredProvider.trim();
               } else if (typeof ai.preferredModel === 'string' && ai.preferredModel.trim()) {
-                // Re-derive provider from the org-preferred model string
-                // using the same heuristic as the customGpt branch above.
-                const m = actualModel;
-                if (isDirectDeepSeekModel(m)) {
-                  actualProvider = 'DeepSeek';
-                } else if (m.includes('x-ai/') || m.includes('openrouter/') || m.includes('anthropic/') || m.includes('meta-llama/') || m.includes('deepseek/') || m.includes('/gpt-oss') || m.includes('moonshotai/')) {
-                  actualProvider = 'OpenRouter';
-                } else if (m.includes('gemini') || m.includes('imagen')) {
-                  actualProvider = 'Gemini';
-                } else {
-                  actualProvider = 'OpenAI';
-                }
+                actualProvider = inferProviderFromModelId(actualModel);
               }
             }
             if (Number.isFinite(Number(ai.maxCostPerRequestUSD)) && Number(ai.maxCostPerRequestUSD) > 0) {
@@ -1696,9 +1691,11 @@ router.post(
       // system prompt. Silent no-op for anonymous users (no userId to
       // key on) and for fresh users whose memory is still empty.
       let memoryBlock = '';
+      let recalledMemoryFacts = [];
       if (userId) {
         try {
           const recalled = await longTermMemory.recallFacts(userId, prompt, 5);
+          recalledMemoryFacts = Array.isArray(recalled) ? recalled : [];
           memoryBlock = longTermMemory.buildMemoryBlock(recalled);
         } catch (memErr) {
           console.warn('[ai] memory recall failed (continuing without):', memErr.message);
@@ -1710,6 +1707,7 @@ router.post(
       // similar past Q&A pairs across the user's other chats and
       // injects them as inert reference material.
       let crossChatBlock = '';
+      let crossChatTurnsForAttribution = [];
       if (userId) {
         try {
           const crossChat = require('../services/cross-chat-retrieval');
@@ -1721,6 +1719,7 @@ router.post(
               embedder: texts => rag.embed(texts),
               prismaClient: prisma,
             });
+            crossChatTurnsForAttribution = Array.isArray(turns) ? turns : [];
             crossChatBlock = crossChat.buildCrossChatBlock(turns) || '';
             if (turns.length > 0) {
               console.log(`[cross-chat] recalled ${turns.length} similar past turn(s) for user=${userId}`);
@@ -1729,6 +1728,32 @@ router.post(
         } catch (crossErr) {
           console.warn('[cross-chat] recall failed (continuing without):', crossErr?.message || crossErr);
         }
+      }
+
+      // Attribution graph — feature-flagged via ENABLE_ATTRIBUTION_GRAPH.
+      // Builds a causal graph over (current message + retrieved context +
+      // user-stable features + decomposed sub-intents) and appends a short
+      // interpretive block to the system prompt so the model knows which
+      // context to weight most. Inspired by Anthropic's attribution-graphs
+      // research (transformer-circuits.pub/2025/attribution-graphs/biology.html).
+      // Pure-local, no network calls; runs in < 10 ms per turn.
+      let attributionBlock = '';
+      try {
+        const attributionBridge = require('../services/context-attribution-bridge');
+        if (attributionBridge.isEnabled()) {
+          attributionBlock = attributionBridge.buildAttributionBlockSafe({
+            userId,
+            prompt,
+            memoryFacts: recalledMemoryFacts,
+            crossChatTurns: crossChatTurnsForAttribution,
+            inferredProfile,
+          });
+          if (attributionBlock) {
+            console.log(`[attribution] block built chars=${attributionBlock.length} user=${userId || 'anon'}`);
+          }
+        }
+      } catch (attrErr) {
+        console.warn('[attribution] failed (continuing without):', attrErr?.message || attrErr);
       }
 
       // RLHF-lite: reuse examples the same user explicitly marked
@@ -1776,6 +1801,77 @@ router.post(
       const evidenceBlock = operationalRagContext?.contextBlock
         ? `\n\n${operationalRagContext.contextBlock}`
         : '';
+
+      // Circuit-style context attribution — orchestrator that wraps:
+      //   concept-extractor + attribution-graph + multi-hop-reasoner +
+      //   intent-planner + context-suppression-detector. Inspired by
+      //   transformer-circuits.pub/2025/attribution-graphs/biology.html
+      //   ("On the Biology of a Large Language Model") and applied here at
+      //   the context-orchestration layer. Pure local, no LLM call. Adds
+      //   a single inert system-prompt block that names the primary intent,
+      //   surfaces active constraints, declares multi-hop resolution steps,
+      //   and pre-decomposes complex requests into a plan. Toggle off with
+      //   SIRAGPT_CIRCUIT_ATTRIBUTION_DISABLED=1.
+      let circuitAttributionBlock = '';
+      try {
+        if (String(process.env.SIRAGPT_CIRCUIT_ATTRIBUTION_DISABLED || '').toLowerCase() !== '1') {
+          const contextAttributionEngine = require('../services/context-attribution-engine');
+          const memoriesForAttribution = userId
+            ? activeMemory.recall(userId, prompt, { limit: 12 })
+            : [];
+          const ragSnippetsForAttribution = Array.isArray(operationalRagContext?.snippets)
+            ? operationalRagContext.snippets
+            : (Array.isArray(operationalRagContext?.chunks) ? operationalRagContext.chunks : []);
+          const injection = contextAttributionEngine.buildPromptInjection({
+            prompt,
+            history: __conversationHistoryForUnderstanding,
+            files: processedFiles,
+            memories: memoriesForAttribution,
+            ragSnippets: ragSnippetsForAttribution,
+            userProfile: userProfile || null,
+          });
+          if (injection?.block) {
+            circuitAttributionBlock = `\n\n${injection.block}`;
+            try {
+              console.log(`[circuit-attribution] intent="${injection.telemetry.primaryIntent || 'n/a'}" hops=${injection.telemetry.hops} planNodes=${injection.telemetry.planNodes} conflicts=${injection.telemetry.conflicts} latencyMs=${injection.telemetry.latencyMs}`);
+            } catch (_logErr) { /* swallow */ }
+          }
+        }
+      } catch (circuitErr) {
+        console.warn('[circuit-attribution] failed (continuing without):', circuitErr?.message || circuitErr);
+      }
+
+      // Intent Attribution Graph — full feature-level decomposition.
+      // Companion to circuit-attribution above, going deeper: atomic
+      // feature extraction (~30 categories), supernode aggregation,
+      // multi-step reasoning circuits, forward planning (prerequisites +
+      // anticipated next steps), hidden-intent detection, and calibrated
+      // confidence + ambiguity flagging. Inspired by Anthropic's
+      // attribution-graphs paper. Disable with
+      // SIRAGPT_INTENT_ATTRIBUTION_GRAPH_DISABLED=1.
+      let intentAttributionGraphBlock = '';
+      try {
+        if (String(process.env.SIRAGPT_INTENT_ATTRIBUTION_GRAPH_DISABLED || '').toLowerCase() !== '1') {
+          const intentAttributionGraph = require('../services/intent-attribution-graph');
+          const attachmentsForIag = (processedFiles || []).map((f) => ({
+            fileName: f?.name || f?.fileName || f?.originalname || 'file',
+          }));
+          const iagReport = intentAttributionGraph.analyzeIntent(prompt, {
+            attachments: attachmentsForIag,
+          });
+          if (iagReport?.ok && !iagReport.empty) {
+            const iagBlock = intentAttributionGraph.formatForPrompt(iagReport);
+            if (iagBlock) {
+              intentAttributionGraphBlock = `\n\n${iagBlock}`;
+              try {
+                console.log(`[intent-attr-graph] feats=${iagReport.stats.featureCount} themes=${iagReport.stats.supernodeCount} circuits=${iagReport.stats.circuitCount} conf=${iagReport.confidence.score} lang=${iagReport.language} dur=${iagReport.durationMs}ms`);
+              } catch (_logErr) { /* swallow */ }
+            }
+          }
+        }
+      } catch (iagErr) {
+        console.warn('[intent-attr-graph] failed (continuing without):', iagErr?.message || iagErr);
+      }
 
       // Professional document analysis enrichment ─────────────────────────
       // Builds two markdown blocks the system prompt will absorb:
@@ -3255,7 +3351,7 @@ router.post(
         }
       } catch (_pr5Err) { /* swallow */ }
 
-      const systemInstruction = { role: 'system', content: promptBundle.system + conversationUnderstandingBlock + universalContractBlock + enterpriseExecutionBlock + memoryBlock + orchMemoryBlock + crossChatBlock + feedbackBlock + evidenceBlock + documentEnrichmentBlock + coworkBlock + webSearchBlock + __pr5GroundingBlock };
+      const systemInstruction = { role: 'system', content: promptBundle.system + conversationUnderstandingBlock + universalContractBlock + enterpriseExecutionBlock + memoryBlock + orchMemoryBlock + crossChatBlock + attributionBlock + circuitAttributionBlock + intentAttributionGraphBlock + feedbackBlock + evidenceBlock + documentEnrichmentBlock + coworkBlock + webSearchBlock + __pr5GroundingBlock };
       // Structured view of the system prompt — same content as
       // `systemInstruction.content`, but split into typed blocks with a
       // `cacheable` hint. When the downstream provider is Anthropic (or
@@ -3273,6 +3369,9 @@ router.post(
         { kind: 'memory', text: memoryBlock, cacheable: true },
         { kind: 'orchestration-memory', text: orchMemoryBlock, cacheable: true },
         { kind: 'cross-chat', text: crossChatBlock, cacheable: false },
+        { kind: 'attribution', text: attributionBlock, cacheable: false },
+        { kind: 'circuit-attribution', text: circuitAttributionBlock, cacheable: false },
+        { kind: 'intent-attribution-graph', text: intentAttributionGraphBlock, cacheable: false },
         { kind: 'feedback', text: feedbackBlock, cacheable: false },
         { kind: 'evidence', text: evidenceBlock, cacheable: false },
         { kind: 'document-enrichment', text: documentEnrichmentBlock, cacheable: false },
