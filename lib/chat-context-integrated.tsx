@@ -202,8 +202,8 @@ interface Message {
 
 type VideoGenerationOptions = {
   resolution?: '480p' | '720p'
-  aspectRatio?: 'auto' | '16:9' | '9:16' | '1:1' | '4:3' | '3:4' | '4:5' | '21:9'
-  duration?: 4 | 5 | 6 | 7 | 8 | 10
+  aspectRatio?: 'auto' | '16:9' | '9:16' | '1:1' | '4:3' | '3:4' | '21:9'
+  duration?: 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15
   audio?: boolean
 }
 

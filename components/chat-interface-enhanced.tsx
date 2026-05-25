@@ -302,8 +302,8 @@ type ImageAspectRatio = "1:1" | "2:3" | "3:2" | "3:4" | "9:16" | "4:3" | "16:9"
 type ImageGenerationCount = 1 | 2 | 3 | 4 | 5
 type ImageQuality = "512px" | "1K" | "2K" | "4K"
 type VideoResolution = "480p" | "720p"
-type VideoAspectRatio = "auto" | "16:9" | "9:16" | "1:1" | "4:3" | "3:4" | "4:5" | "21:9"
-type VideoDuration = 4 | 5 | 6 | 7 | 8 | 10
+type VideoAspectRatio = "auto" | "16:9" | "9:16" | "1:1" | "4:3" | "3:4" | "21:9"
+type VideoDuration = 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15
 
 const IMAGE_ASPECT_RATIO_OPTIONS: Array<{ value: ImageAspectRatio; label: string; ratio: string; className: string }> = [
   { value: "1:1", label: "Square", ratio: "1:1", className: "h-7 w-7" },
@@ -325,10 +325,9 @@ const VIDEO_ASPECT_RATIO_OPTIONS: Array<{ value: VideoAspectRatio; label: string
   { value: "1:1", label: "Square", ratio: "1:1", className: "h-7 w-7", visibleByDefault: true },
   { value: "4:3", label: "Classic", ratio: "4:3", className: "h-[22px] w-8", visibleByDefault: true },
   { value: "3:4", label: "Portrait", ratio: "3:4", className: "h-8 w-6" },
-  { value: "4:5", label: "Social", ratio: "4:5", className: "h-8 w-[25px]" },
   { value: "21:9", label: "Cinema", ratio: "21:9", className: "h-[14px] w-9" },
 ]
-const VIDEO_DURATION_OPTIONS: VideoDuration[] = [4, 5, 6, 7, 8, 10]
+const VIDEO_DURATION_OPTIONS: VideoDuration[] = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 
 // `ImageAspectRatioMark` was extracted to
 // `components/chat/ComposerInlineDisplays.tsx` to keep this file

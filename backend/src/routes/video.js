@@ -693,9 +693,9 @@ function generateOperationId() {
 // Enhanced video generation with Fal.ai
 router.post('/generate', [
   body('prompt').trim().notEmpty().withMessage('Video prompt is required'),
-  body('aspect_ratio').optional().isIn(['auto', '16:9', '9:16', '1:1', '4:3', '3:4', '4:5', '21:9']).withMessage('Invalid aspect ratio'),
+  body('aspect_ratio').optional().isIn(['auto', '16:9', '9:16', '1:1', '4:3', '3:4', '21:9']).withMessage('Invalid aspect ratio'),
   body('resolution').optional().isIn(['480p', '720p']).withMessage('Invalid resolution'),
-  body('duration').optional().isInt({ min: 4, max: 10 }).withMessage('Invalid duration'),
+  body('duration').optional().isInt({ min: 4, max: 15 }).withMessage('Invalid duration'),
   body('audio').optional().isBoolean().withMessage('Audio must be a boolean'),
   body('negative_prompt').optional().isString().withMessage('Negative prompt must be a string'),
   body('image_url').optional().isString().withMessage('Image URL must be a string'),
@@ -722,7 +722,7 @@ router.post('/generate', [
       model = 'veo-fast' // Default model
     } = req.body;
 
-    const numericDuration = Math.min(Math.max(Number(requestedDuration) || 5, 4), 10);
+    const numericDuration = Math.min(Math.max(Number(requestedDuration) || 5, 4), 15);
     const duration = `${numericDuration}s`;
 
     console.log('Video generation request received:', {

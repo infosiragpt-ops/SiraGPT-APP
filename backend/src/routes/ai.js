@@ -5236,9 +5236,9 @@ router.post(
   [
     body('prompt').trim().notEmpty().withMessage('Prompt is required'),
     body('chatId').optional().isString(),
-    body('aspect_ratio').optional().isIn(['auto', '16:9', '9:16', '1:1', '4:3', '3:4', '4:5', '21:9']).withMessage('Invalid aspect ratio'),
+    body('aspect_ratio').optional().isIn(['auto', '16:9', '9:16', '1:1', '4:3', '3:4', '21:9']).withMessage('Invalid aspect ratio'),
     body('resolution').optional().isIn(['480p', '720p']).withMessage('Invalid resolution'),
-    body('duration').optional().isInt({ min: 4, max: 10 }).withMessage('Invalid duration'),
+    body('duration').optional().isInt({ min: 4, max: 15 }).withMessage('Invalid duration'),
     body('audio').optional().isBoolean().withMessage('Invalid audio option'),
     body('negative_prompt').optional().isString(),
     body('files').optional().isArray(),
