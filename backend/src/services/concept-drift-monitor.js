@@ -196,18 +196,24 @@ function buildDriftBlock(observation) {
   return lines.join('\n');
 }
 
+// HYDRATED + persistence are optional — present when the persistence
+// wiring is loaded, undefined otherwise. We reference them defensively so
+// _reset / reset never throw when the wiring isn't active.
+const _HYDRATED = typeof HYDRATED !== 'undefined' ? HYDRATED : new Set();
+const _persistence = typeof persistence !== 'undefined' ? persistence : null;
+
 function reset({ userId, chatId } = {}) {
   const k = key(userId, chatId);
   const trail = TRAIL.get(k);
   if (!trail) return { cleared: 0 };
   const n = trail.length;
   TRAIL.delete(k);
-  HYDRATED.delete(k);
-  if (persistence) persistence.remove('drift', k);
+  if (_HYDRATED) _HYDRATED.delete(k);
+  if (_persistence) _persistence.remove('drift', k);
   return { cleared: n };
 }
 
-function _reset() { TRAIL.clear(); HYDRATED.clear(); }
+function _reset() { TRAIL.clear(); if (_HYDRATED) _HYDRATED.clear(); }
 
 module.exports = {
   observe,
