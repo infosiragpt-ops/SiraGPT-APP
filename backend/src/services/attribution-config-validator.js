@@ -23,14 +23,22 @@ const RULES = Object.freeze([
       return l > 0 && l <= 1 && f > 0 && f <= 1;
     } },
   { id: 'saliency_halflife_positive', severity: 'error', description: 'saliency half-life must be > 0 ms',
-    check: (e) => (Number(e.SIRAGPT_SALIENCY_HALFLIFE_MS) || 1_800_000) > 0 },
+    check: (e) => {
+      if (e.SIRAGPT_SALIENCY_HALFLIFE_MS === undefined) return true;
+      const v = Number(e.SIRAGPT_SALIENCY_HALFLIFE_MS);
+      return Number.isFinite(v) && v > 0;
+    } },
   { id: 'saliency_dead_age_gt_halflife', severity: 'warning', description: 'dead-age should be ≥ 2 × half-life',
     check: (e) => (Number(e.SIRAGPT_SALIENCY_DEAD_AGE_MS) || 6 * 60 * 60 * 1000) >= 2 * (Number(e.SIRAGPT_SALIENCY_HALFLIFE_MS) || 1_800_000) },
 
   { id: 'anomaly_buffer_gt_min_samples', severity: 'error', description: 'buffer size must allow min samples + 2',
     check: (e) => (Number(e.SIRAGPT_ANOMALY_BUFFER_SIZE) || 12) >= (Number(e.SIRAGPT_ANOMALY_MIN_SAMPLES) || 3) + 2 },
   { id: 'anomaly_z_threshold_positive', severity: 'error', description: 'z-score threshold must be > 0',
-    check: (e) => (Number(e.SIRAGPT_ANOMALY_Z_THRESHOLD) || 2) > 0 },
+    check: (e) => {
+      if (e.SIRAGPT_ANOMALY_Z_THRESHOLD === undefined) return true;
+      const v = Number(e.SIRAGPT_ANOMALY_Z_THRESHOLD);
+      return Number.isFinite(v) && v > 0;
+    } },
 
   { id: 'reflection_threshold_order', severity: 'error', description: 'accept threshold must be > soft threshold',
     check: (e) => (Number(e.SIRAGPT_REFLECTION_ACCEPT_THRESHOLD) || 0.65) > (Number(e.SIRAGPT_REFLECTION_SOFT_THRESHOLD) || 0.45) },
@@ -41,7 +49,11 @@ const RULES = Object.freeze([
       return a > 0 && a <= 1 && s > 0 && s <= 1;
     } },
   { id: 'reflection_max_retries_positive', severity: 'warning', description: 'max retries should be ≥ 1',
-    check: (e) => (Number(e.SIRAGPT_REFLECTION_MAX_RETRIES) || 2) >= 1 },
+    check: (e) => {
+      if (e.SIRAGPT_REFLECTION_MAX_RETRIES === undefined) return true;
+      const v = Number(e.SIRAGPT_REFLECTION_MAX_RETRIES);
+      return Number.isFinite(v) && v >= 1;
+    } },
 
   { id: 'prompt_budget_min', severity: 'error', description: 'prompt budget tokens must be ≥ 512',
     check: (e) => (Number(e.SIRAGPT_PROMPT_BUDGET_TOKENS) || 12_000) >= 512 },
