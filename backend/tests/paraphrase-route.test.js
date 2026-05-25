@@ -86,6 +86,17 @@ test('ParaphraseSchema: rejects an unknown mode', () => {
   assert.equal(r.success, false);
 });
 
+test('paraphrase-humanizer.topAITellsFound: imported + callable from the route file context', () => {
+  // The route uses lazy-require to load topAITellsFound on `?showTells=1`.
+  // This locks down that the symbol is importable from the same path
+  // the route uses, so a future rename of the export catches here.
+  const { topAITellsFound } = require('../src/services/paraphrase-humanizer');
+  assert.equal(typeof topAITellsFound, 'function');
+  const result = topAITellsFound('Furthermore, moreover, the data is fine.');
+  assert.ok(Array.isArray(result));
+  assert.ok(result.length >= 2);
+});
+
 test('ParaphraseSchema: a body without mode defaults cleanly (alias middleware safe)', () => {
   // Mirrors what the route's pre-parse middleware would leave behind
   // when no mode was sent — the schema must still resolve mode to
