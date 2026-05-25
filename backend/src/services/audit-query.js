@@ -305,6 +305,20 @@ function escapeLikePattern(raw) {
   return String(raw).replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
 }
 
+function normalizeTags(tags) {
+  if (!Array.isArray(tags)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const raw of tags) {
+    if (typeof raw !== 'string') continue;
+    const tag = raw.trim().toLowerCase();
+    if (!tag || seen.has(tag)) continue;
+    seen.add(tag);
+    out.push(tag);
+  }
+  return out;
+}
+
 /**
  * Free-text search over AuditLog. Returns the same shape as
  * `AuditQuery.run()` — `{ items, total, page, pages, limit }`. Degrades
@@ -321,7 +335,7 @@ function escapeLikePattern(raw) {
  *
  * @param {*} prisma  Prisma client (or stub)
  * @param {string} q  Search text (already validated non-empty by caller)
- * @param {{limit?: number, page?: number, orgId?: string}} [opts]
+ * @param {{limit?: number, page?: number, orgId?: string, from?: string|Date, to?: string|Date, tags?: string[], order?: 'asc'|'desc'}} [opts]
  */
 async function search(prisma, q, opts = {}) {
   const limit = clampSearchLimit(opts.limit);
@@ -333,6 +347,10 @@ async function search(prisma, q, opts = {}) {
   if (typeof prisma.$queryRawUnsafe !== 'function') return empty;
 
   const orgId = typeof opts.orgId === 'string' && opts.orgId.length > 0 ? opts.orgId : null;
+  const from = toDate(opts.from);
+  const to = toDate(opts.to);
+  const tags = normalizeTags(opts.tags);
+  const order = opts.order === 'asc' ? 'ASC' : 'DESC';
   const pattern = `%${escapeLikePattern(q.trim())}%`;
   try {
     // We use `$queryRawUnsafe` with explicit positional parameters so the
@@ -340,24 +358,48 @@ async function search(prisma, q, opts = {}) {
     // table name `AuditLog` is the Prisma default; if a deployment renames
     // it, this query needs to be updated in lockstep.
     //
-    // Org scoping reuses the `metadata->>'orgId'` JSON path that audit
-    // writers populate (see utils/audit-log.js). When `orgId` is set we
-    // append a third positional placeholder ($4 for itemsSql, $2 for
-    // countSql) so the value can't ever be interpolated into the SQL.
-    const orgPredicate = orgId ? ' AND "metadata"->>\'orgId\' = ' : '';
+    const itemsWhereSql = ['("action" ILIKE $1 OR ("metadata")::text ILIKE $1)'];
+    const countWhereSql = ['("action" ILIKE $1 OR ("metadata")::text ILIKE $1)'];
+    const itemsParams = [pattern, limit, offset];
+    const countParams = [pattern];
+    function addPredicate(sql, value) {
+      itemsParams.push(value);
+      countParams.push(value);
+      itemsWhereSql.push(sql(itemsParams.length));
+      countWhereSql.push(sql(countParams.length));
+    }
+    if (orgId) {
+      addPredicate((i) => `"metadata"->>'orgId' = $${i}`, orgId);
+    }
+    if (from) {
+      addPredicate((i) => `"createdAt" >= $${i}`, from);
+    }
+    if (to) {
+      addPredicate((i) => `"createdAt" <= $${i}`, to);
+    }
+    if (tags.length > 0) {
+      const itemParts = [];
+      const countParts = [];
+      for (const tag of tags) {
+        itemsParams.push(tag);
+        countParams.push(tag);
+        itemParts.push(`("metadata"->'tags' ? $${itemsParams.length})`);
+        countParts.push(`("metadata"->'tags' ? $${countParams.length})`);
+      }
+      itemsWhereSql.push(itemParts.length === 1 ? itemParts[0] : `(${itemParts.join(' OR ')})`);
+      countWhereSql.push(countParts.length === 1 ? countParts[0] : `(${countParts.join(' OR ')})`);
+    }
+    const itemsWhere = itemsWhereSql.join(' AND ');
+    const countWhere = countWhereSql.join(' AND ');
     const itemsSql =
       'SELECT * FROM "AuditLog" '
-      + 'WHERE ("action" ILIKE $1 OR ("metadata")::text ILIKE $1)'
-      + (orgId ? `${orgPredicate}$4` : '')
-      + ' ORDER BY "createdAt" DESC '
+      + `WHERE ${itemsWhere}`
+      + ` ORDER BY "createdAt" ${order} `
       + 'LIMIT $2 OFFSET $3';
     const countSql =
       'SELECT COUNT(*)::int AS count FROM "AuditLog" '
-      + 'WHERE ("action" ILIKE $1 OR ("metadata")::text ILIKE $1)'
-      + (orgId ? `${orgPredicate}$2` : '');
+      + `WHERE ${countWhere}`;
 
-    const itemsParams = orgId ? [pattern, limit, offset, orgId] : [pattern, limit, offset];
-    const countParams = orgId ? [pattern, orgId] : [pattern];
     const [items, countRows] = await Promise.all([
       prisma.$queryRawUnsafe(itemsSql, ...itemsParams),
       prisma.$queryRawUnsafe(countSql, ...countParams),

@@ -1750,12 +1750,21 @@ class ApiClient {
     tags?: string
     from?: string
     to?: string
+    order?: "asc" | "desc"
   }) {
     const query = new URLSearchParams(params as any).toString();
     return this.request(`/admin/audit-logs${query ? `?${query}` : ''}`);
   }
 
-  async searchAdminAuditLogs(params: { q: string; page?: number; limit?: number }) {
+  async searchAdminAuditLogs(params: {
+    q: string
+    page?: number
+    limit?: number
+    tags?: string
+    from?: string
+    to?: string
+    order?: "asc" | "desc"
+  }) {
     const query = new URLSearchParams(params as any).toString();
     return this.request(`/admin/audit-logs/search?${query}`);
   }
@@ -1768,6 +1777,7 @@ class ApiClient {
     tags?: string
     from?: string
     to?: string
+    order?: "asc" | "desc"
     limit?: number
   }) {
     const query = new URLSearchParams(params as any).toString();

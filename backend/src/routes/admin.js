@@ -2397,6 +2397,10 @@ router.get('/audit-logs/search', requireSuperAdmin, async (req, res) => {
     const result = await auditSearch(prisma, raw, {
       limit: req.query.limit,
       page: req.query.page,
+      tags: parseAuditLogTags(req.query.tags),
+      from: req.query.from || null,
+      to: req.query.to || null,
+      order: req.query.order === 'asc' ? 'asc' : 'desc',
     });
     res.json(result);
   } catch (err) {
@@ -2449,17 +2453,23 @@ async function runAuditLogQuery(req) {
   // those into an array). Whitespace + empty fragments are dropped by
   // the builder, so a stray trailing comma is safe.
   if (req.query.tags) {
-    const raw = Array.isArray(req.query.tags) ? req.query.tags : [req.query.tags];
-    const tags = raw
-      .flatMap((entry) => String(entry).split(','))
-      .map((t) => t.trim())
-      .filter((t) => t.length > 0);
+    const tags = parseAuditLogTags(req.query.tags);
     if (tags.length > 0) q = q.byTags(tags);
   }
   if (req.query.from || req.query.to) q = q.byDate(req.query.from || null, req.query.to || null);
+  if (req.query.order) q = q.order(req.query.order);
   if (req.query.page) q = q.page(req.query.page);
   if (req.query.limit) q = q.limit(req.query.limit);
   return q.run();
+}
+
+function parseAuditLogTags(rawTags) {
+  if (!rawTags) return [];
+  const raw = Array.isArray(rawTags) ? rawTags : [rawTags];
+  return raw
+    .flatMap((entry) => String(entry).split(','))
+    .map((t) => t.trim())
+    .filter((t) => t.length > 0);
 }
 
 const AUDIT_CSV_COLUMNS = [
