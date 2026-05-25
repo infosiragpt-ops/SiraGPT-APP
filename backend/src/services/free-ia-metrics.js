@@ -207,6 +207,22 @@ function toPrometheusText() {
 const DEGRADED_MIN_SAMPLES = 10;
 const DEGRADED_SUCCESS_RATE = 0.5;
 
+/**
+ * Even smaller digest — just enough to populate a UI badge. Use when
+ * `summary()` would be overkill (avatar tooltip, sidebar counter,
+ * embed widget). Returns null when nothing useful to show.
+ */
+function compactSummary() {
+  const total = state.upstreamSuccess + state.upstreamErrors;
+  if (state.totalFallbacks === 0 && total === 0) return null;
+  return {
+    fallbacks: state.totalFallbacks,
+    healthy: !(total >= DEGRADED_MIN_SAMPLES
+      && total > 0
+      && state.upstreamSuccess / total < DEGRADED_SUCCESS_RATE),
+  };
+}
+
 function summary({ now = Date.now() } = {}) {
   const totalUpstream = state.upstreamSuccess + state.upstreamErrors;
   const rate = totalUpstream === 0 ? null : state.upstreamSuccess / totalUpstream;
@@ -259,6 +275,7 @@ module.exports = {
   pruneErrorCodes,
   snapshot,
   summary,
+  compactSummary,
   toPrometheusText,
   reset,
 };

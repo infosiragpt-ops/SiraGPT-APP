@@ -21,6 +21,29 @@ test('summary.line omits "/min" suffix when sub-1-minute window', () => {
   assert.ok(!/\/min/.test(s.line), `should not include /min: ${s.line}`);
 });
 
+test('compactSummary returns null when there is nothing to show', () => {
+  metrics.reset();
+  assert.equal(metrics.compactSummary(), null);
+});
+
+test('compactSummary surfaces fallbacks + healthy flag once events exist', () => {
+  metrics.reset();
+  metrics.recordFallback({ feature: 'paraphrase', amount: 1 });
+  metrics.recordUpstreamSuccess();
+  const c = metrics.compactSummary();
+  assert.deepEqual(Object.keys(c).sort(), ['fallbacks', 'healthy']);
+  assert.equal(c.fallbacks, 1);
+  assert.equal(c.healthy, true);
+});
+
+test('compactSummary flips healthy=false when degraded threshold trips', () => {
+  metrics.reset();
+  for (let i = 0; i < 9; i += 1) metrics.recordUpstreamError({ code: '503' });
+  metrics.recordUpstreamSuccess();
+  const c = metrics.compactSummary();
+  assert.equal(c.healthy, false);
+});
+
 test('summary() snapshot: stable shape (all expected keys present)', () => {
   metrics.reset();
   const s = metrics.summary();
