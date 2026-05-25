@@ -42,6 +42,35 @@ router.get('/configured', (_req, res) => {
   res.json({ configured: isFreeIaConfigured() });
 });
 
+// Lightweight liveness/readiness probe — friendly to k8s/load-balancer
+// healthchecks. 200 OK when Free IA is wired and the upstream success
+// rate (if any data) is above 0.5; 503 otherwise. No external network
+// call — purely a config + counter check so the probe is fast and
+// can't itself fail due to a network blip.
+router.get('/health', (_req, res) => {
+  const enabled = isFreeIaConfigured();
+  if (!enabled) {
+    return res.status(503).json({
+      ok: false,
+      enabled: false,
+      reason: 'not_configured',
+    });
+  }
+  const sum = freeIaMetrics.summary();
+  // When we have enough samples, treat sub-50% upstream success as
+  // degraded so the LB takes the instance out of rotation.
+  const degraded = sum.upstreamTotal >= 10 && sum.successRate !== null && sum.successRate < 0.5;
+  return res.status(degraded ? 503 : 200).json({
+    ok: !degraded,
+    enabled: true,
+    fallbacks: sum.fallbacks,
+    upstreamSuccess: sum.upstreamSuccess,
+    upstreamTotal: sum.upstreamTotal,
+    successRate: sum.successRate,
+    degraded,
+  });
+});
+
 // Ops visibility — how often the silent fallback fires per feature.
 // JSON shape for dashboards, Prometheus text for scraping.
 router.get('/metrics', (_req, res) => {

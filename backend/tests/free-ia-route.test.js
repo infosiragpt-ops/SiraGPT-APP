@@ -114,6 +114,88 @@ test('GET /api/free-ia/metrics returns a JSON snapshot of the fallback counter',
   }
 });
 
+test('GET /api/free-ia/health returns 503 when Cerebras key is missing', async () => {
+  const prevKey = process.env.CEREBRAS_API_KEY;
+  delete process.env.CEREBRAS_API_KEY;
+  const { server, baseURL } = await startServer();
+  try {
+    const { status, body } = await fetchJSON(`${baseURL}/api/free-ia/health`);
+    assert.equal(status, 503);
+    assert.equal(body.ok, false);
+    assert.equal(body.enabled, false);
+    assert.equal(body.reason, 'not_configured');
+  } finally {
+    server.close();
+    if (prevKey !== undefined) process.env.CEREBRAS_API_KEY = prevKey;
+  }
+});
+
+test('GET /api/free-ia/health returns 200 when configured + clean counters', async () => {
+  const metrics = require('../src/services/free-ia-metrics');
+  metrics.reset();
+  const prevKey = process.env.CEREBRAS_API_KEY;
+  process.env.CEREBRAS_API_KEY = 'csk-health-ok';
+  const { server, baseURL } = await startServer();
+  try {
+    const { status, body } = await fetchJSON(`${baseURL}/api/free-ia/health`);
+    assert.equal(status, 200);
+    assert.equal(body.ok, true);
+    assert.equal(body.enabled, true);
+    assert.equal(body.degraded, false);
+    assert.equal(body.fallbacks, 0);
+  } finally {
+    server.close();
+    metrics.reset();
+    if (prevKey === undefined) delete process.env.CEREBRAS_API_KEY;
+    else process.env.CEREBRAS_API_KEY = prevKey;
+  }
+});
+
+test('GET /api/free-ia/health returns 503 when success rate < 0.5 with >=10 samples', async () => {
+  const metrics = require('../src/services/free-ia-metrics');
+  metrics.reset();
+  // Burn through 10 upstream calls with 80% failure → degraded.
+  for (let i = 0; i < 8; i += 1) metrics.recordUpstreamError({ code: '503' });
+  for (let i = 0; i < 2; i += 1) metrics.recordUpstreamSuccess();
+  const prevKey = process.env.CEREBRAS_API_KEY;
+  process.env.CEREBRAS_API_KEY = 'csk-health-degraded';
+  const { server, baseURL } = await startServer();
+  try {
+    const { status, body } = await fetchJSON(`${baseURL}/api/free-ia/health`);
+    assert.equal(status, 503);
+    assert.equal(body.ok, false);
+    assert.equal(body.enabled, true);
+    assert.equal(body.degraded, true);
+    assert.equal(body.successRate, 0.2);
+  } finally {
+    server.close();
+    metrics.reset();
+    if (prevKey === undefined) delete process.env.CEREBRAS_API_KEY;
+    else process.env.CEREBRAS_API_KEY = prevKey;
+  }
+});
+
+test('GET /api/free-ia/health stays 200 with <10 samples even if rate is poor', async () => {
+  const metrics = require('../src/services/free-ia-metrics');
+  metrics.reset();
+  metrics.recordUpstreamError({ code: '503' });
+  metrics.recordUpstreamError({ code: '503' });
+  metrics.recordUpstreamSuccess();
+  const prevKey = process.env.CEREBRAS_API_KEY;
+  process.env.CEREBRAS_API_KEY = 'csk-health-low-samples';
+  const { server, baseURL } = await startServer();
+  try {
+    const { status, body } = await fetchJSON(`${baseURL}/api/free-ia/health`);
+    assert.equal(status, 200, `expected 200 (low samples), got ${status}`);
+    assert.equal(body.degraded, false);
+  } finally {
+    server.close();
+    metrics.reset();
+    if (prevKey === undefined) delete process.env.CEREBRAS_API_KEY;
+    else process.env.CEREBRAS_API_KEY = prevKey;
+  }
+});
+
 test('GET /api/free-ia/metrics/summary returns the one-line digest', async () => {
   const metrics = require('../src/services/free-ia-metrics');
   metrics.reset();
