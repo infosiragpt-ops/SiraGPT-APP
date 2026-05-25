@@ -25,6 +25,9 @@ const lookahead = require('./lookahead-planner');
 const knowledgeBoundary = require('./knowledge-boundary-detector');
 const reasoningFaithfulness = require('./reasoning-faithfulness-check');
 const entityGrounding = require('./entity-grounding-tracker');
+const crossTurn = require('./cross-turn-attribution-chain');
+const hiddenGoal = require('./hidden-goal-extractor');
+const counterfactual = require('./counterfactual-query-rewriter');
 
 const MAX_PROMPT_BLOCK_CHARS = Number.parseInt(
   process.env.SIRAGPT_CONTEXT_INTELLIGENCE_BLOCK_MAX || '3500',
@@ -105,6 +108,31 @@ function analyzeContext(userId, query, context = {}) {
     entityGrounding.trackEntities(draftAnswer || query, normalized),
   );
 
+  const crossTurnRes = safeRun('cross_turn', () =>
+    crossTurn.buildChain(normalized.history, query, {
+      maxTurns: context.crossTurnMaxTurns || 10,
+      topK: context.crossTurnTopK || 3,
+    }),
+  );
+
+  const hiddenGoalRes = safeRun('hidden_goal', () => hiddenGoal.extractHiddenGoals(query, normalized));
+
+  let counterfactualRes = { ok: true, value: null };
+  if (context.runCounterfactual !== false && (graphRes.value?.primaryIntent || query)) {
+    counterfactualRes = safeRun('counterfactual', () =>
+      counterfactual.probeRobustness(
+        query,
+        (q) => {
+          const g = attributionGraph.buildGraph(q, normalized);
+          return g.primaryIntent
+            ? { intent: g.primaryIntent.kind, confidence: g.primaryIntent.weight }
+            : { intent: null, confidence: 0 };
+        },
+        { context: normalized, limit: context.counterfactualLimit || 6 },
+      ),
+    );
+  }
+
   const elapsedMs = Date.now() - startedAt;
 
   const report = {
@@ -116,7 +144,13 @@ function analyzeContext(userId, query, context = {}) {
     knowledgeBoundary: knowledgeRes.value || null,
     reasoningFaithfulness: faithfulnessRes.value || null,
     entityGrounding: entityRes.value || null,
-    errors: [graphRes, multiHopRes, lookaheadRes, knowledgeRes, faithfulnessRes, entityRes]
+    crossTurn: crossTurnRes.value || null,
+    hiddenGoal: hiddenGoalRes.value || null,
+    counterfactual: counterfactualRes.value || null,
+    errors: [
+      graphRes, multiHopRes, lookaheadRes, knowledgeRes, faithfulnessRes,
+      entityRes, crossTurnRes, hiddenGoalRes, counterfactualRes,
+    ]
       .filter((r) => !r.ok)
       .map((r) => ({ label: r.label, error: r.error })),
     confidence: computeOverallConfidence({
@@ -125,6 +159,8 @@ function analyzeContext(userId, query, context = {}) {
       knowledge: knowledgeRes.value,
       faithfulness: faithfulnessRes.value,
       entity: entityRes.value,
+      crossTurn: crossTurnRes.value,
+      counterfactual: counterfactualRes.value,
     }),
     recommendations: buildRecommendations({
       graph: graphRes.value,
@@ -133,6 +169,9 @@ function analyzeContext(userId, query, context = {}) {
       knowledge: knowledgeRes.value,
       faithfulness: faithfulnessRes.value,
       entity: entityRes.value,
+      crossTurn: crossTurnRes.value,
+      hiddenGoal: hiddenGoalRes.value,
+      counterfactual: counterfactualRes.value,
     }),
   };
 
@@ -163,6 +202,16 @@ function computeOverallConfidence(parts) {
     n += 1;
   } else if (parts.multiHop?.needsClarification) {
     total += 0.45;
+    n += 1;
+  }
+  if (parts.crossTurn) {
+    if (parts.crossTurn.needsCorefResolution) total += 0.4;
+    else if (parts.crossTurn.hasContinuity) total += 0.85;
+    else total += 0.7;
+    n += 1;
+  }
+  if (parts.counterfactual?.robustnessScore != null) {
+    total += parts.counterfactual.robustnessScore;
     n += 1;
   }
   if (n === 0) return 0;
@@ -215,6 +264,39 @@ function buildRecommendations(parts) {
       severity: 'low',
       category: 'lookahead',
       message: `Likely next user action: ${parts.lookahead.nextSteps[0].label}. Consider offering it proactively.`,
+    });
+  }
+
+  if (parts.crossTurn?.needsCorefResolution) {
+    out.push({
+      severity: 'medium',
+      category: 'coreference',
+      message: `${parts.crossTurn.unresolvedCoreferences.length} unresolved reference(s) in the current turn — ask a disambiguation question before answering.`,
+    });
+  }
+
+  if (parts.crossTurn?.domainShift) {
+    out.push({
+      severity: 'low',
+      category: 'domain_shift',
+      message: parts.crossTurn.domainShift.message,
+    });
+  }
+
+  if (parts.hiddenGoal?.topCandidate) {
+    const top = parts.hiddenGoal.topCandidate;
+    out.push({
+      severity: parts.hiddenGoal.needsClarification ? 'medium' : 'info',
+      category: 'hidden_goal',
+      message: `Underlying goal likely "${top.name.replace(/_/g, ' ')}" (confidence ${Math.round(top.score * 100)}%). ${parts.hiddenGoal.needsClarification ? `Consider asking: ${parts.hiddenGoal.clarifyingQuestion}` : ''}`.trim(),
+    });
+  }
+
+  if (parts.counterfactual && (parts.counterfactual.verdict === 'brittle' || parts.counterfactual.verdict === 'unstable')) {
+    out.push({
+      severity: 'high',
+      category: 'robustness',
+      message: `Intent is ${parts.counterfactual.verdict} (${Math.round(parts.counterfactual.robustnessScore * 100)}% of rewrites preserved it). Ask a disambiguation question.`,
     });
   }
 
@@ -275,6 +357,27 @@ function buildSystemPromptBlock(report, opts = {}) {
     if (block) blocks.push(block);
   }
 
+  if (report.crossTurn) {
+    const block = crossTurn.buildCrossTurnPrompt(report.crossTurn, {
+      includeChain: opts.includeCrossTurnChain !== false,
+    });
+    if (block) blocks.push(block);
+  }
+
+  if (report.hiddenGoal) {
+    const block = hiddenGoal.buildHiddenGoalPrompt(report.hiddenGoal, {
+      allowClarification: opts.allowClarification !== false,
+    });
+    if (block) blocks.push(block);
+  }
+
+  if (report.counterfactual) {
+    const block = counterfactual.buildCounterfactualPrompt(report.counterfactual, {
+      limit: opts.counterfactualLimit || 3,
+    });
+    if (block) blocks.push(block);
+  }
+
   if (report.recommendations?.length) {
     const recLines = ['### Context Intelligence Recommendations'];
     for (const rec of report.recommendations.slice(0, opts.recommendationsLimit || 6)) {
@@ -330,6 +433,30 @@ function summariseForLog(report) {
           label: report.lookahead.nextSteps[0].label,
           tool: report.lookahead.nextSteps[0].tool,
           confidence: report.lookahead.nextSteps[0].confidence,
+        }
+      : null,
+    crossTurn: report.crossTurn
+      ? {
+          hasContinuity: report.crossTurn.hasContinuity,
+          needsCorefResolution: report.crossTurn.needsCorefResolution,
+          topicDrift: report.crossTurn.topicDrift,
+          domainShift: report.crossTurn.domainShift?.message || null,
+          unresolvedReferences: (report.crossTurn.unresolvedCoreferences || []).length,
+          topInfluence: report.crossTurn.topInfluences?.[0]?.influence ?? null,
+        }
+      : null,
+    hiddenGoal: report.hiddenGoal?.topCandidate
+      ? {
+          name: report.hiddenGoal.topCandidate.name,
+          score: report.hiddenGoal.topCandidate.score,
+          needsClarification: report.hiddenGoal.needsClarification,
+        }
+      : null,
+    counterfactual: report.counterfactual
+      ? {
+          verdict: report.counterfactual.verdict,
+          robustnessScore: report.counterfactual.robustnessScore,
+          flippedCount: (report.counterfactual.flippedRewrites || []).length,
         }
       : null,
     errors: report.errors,
