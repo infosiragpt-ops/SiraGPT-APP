@@ -484,7 +484,7 @@ CUSTOM_GPT_INSTRUCTIONS>>>
  * @param {string[]} [opts.fileIds] — current-turn attachments, used only for intent alignment
  * @returns {{ system: string, intent: string }}
  */
-function buildSystemPrompt({ language, userMessage, customGpt, project, userProfile, fileIds = [], extraBlocks = [] }) {
+function buildSystemPrompt({ language, userMessage, customGpt, project, userProfile, inferredProfile, fileIds = [], extraBlocks = [] }) {
   const lang = language || 'es';
   const { intent, context: intentContext } = classifyIntent(userMessage || '');
   const alignmentProfile = buildUserIntentAlignmentProfile({
@@ -504,6 +504,17 @@ function buildSystemPrompt({ language, userMessage, customGpt, project, userProf
   // request time. Lives above custom GPT persona so user preferences
   // can't be stomped on by a generic GPT author's instructions.
   const userProfileText = buildUserProfileBlock(userProfile);
+
+  // Inferred user profile — opt-in low-confidence pass over the user's
+  // recent turns. Lives BELOW the explicit profile and is rendered as
+  // pistas (hints), so explicit preferences always win.
+  let inferredProfileText = '';
+  if (inferredProfile && typeof inferredProfile === 'object') {
+    try {
+      const { buildInferredProfileBlock } = require('./user-profile-inference');
+      inferredProfileText = buildInferredProfileBlock(inferredProfile) || '';
+    } catch (_err) { /* keep empty */ }
+  }
 
   // Custom GPT — the author's instructions become a persona layer UNDER
   // the absolute rules + user profile. They can steer tone and scope
@@ -554,7 +565,7 @@ function buildSystemPrompt({ language, userMessage, customGpt, project, userProf
 - Downloadable documents: wrap the ENTIRE content in [CREATE_DOCUMENT:filename.ext]...[/CREATE_DOCUMENT] and add a one-line acknowledgement outside the tag.
 - Inline content requests (tables, lists, summaries, comparisons) render directly in chat — no file tag.`;
 
-  const body = `${rulesBlock}${userProfileText}${customGptText}${projectText}${intentContextText}${intentAlignmentText}${extraBlockTexts.join('')}${formattingContractText}`;
+  const body = `${rulesBlock}${userProfileText}${inferredProfileText}${customGptText}${projectText}${intentContextText}${intentAlignmentText}${extraBlockTexts.join('')}${formattingContractText}`;
 
   // Structured blocks list. The `cacheable` flag marks groups that are
   // stable across turns within a chat so the gateway can place
@@ -568,6 +579,7 @@ function buildSystemPrompt({ language, userMessage, customGpt, project, userProf
     { kind: 'header', text: headerBlock, cacheable: true },
     { kind: 'rules', text: rulesBlock, cacheable: true },
     { kind: 'user-profile', text: userProfileText, cacheable: true },
+    { kind: 'inferred-profile', text: inferredProfileText, cacheable: true },
     { kind: 'custom-gpt', text: customGptText, cacheable: true },
     { kind: 'project', text: projectText, cacheable: true },
     { kind: 'intent-context', text: intentContextText, cacheable: false },

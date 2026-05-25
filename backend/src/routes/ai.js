@@ -1576,13 +1576,20 @@ router.post(
       // set in /settings. Anonymous users get an empty profile and fall
       // through to the default master prompt.
       let userProfile = null;
+      let inferredProfile = null;
       if (isAuth && userId) {
         try {
           const u = await prisma.user.findUnique({
             where: { id: userId },
-            select: { name: true, locale: true, preferredTone: true, customInstructions: true },
+            select: { name: true, locale: true, preferredTone: true, customInstructions: true, settings: true },
           });
-          if (u) userProfile = u;
+          if (u) {
+            userProfile = { name: u.name, locale: u.locale, preferredTone: u.preferredTone, customInstructions: u.customInstructions };
+            try {
+              const { loadInferredProfile } = require('../services/user-profile-inference');
+              inferredProfile = loadInferredProfile(u);
+            } catch (_inferErr) { /* keep null */ }
+          }
         } catch (profileErr) {
           console.warn('[user-profile] failed to load, continuing without:', profileErr.message);
         }
@@ -1678,6 +1685,7 @@ router.post(
         customGpt,
         project,
         userProfile,
+        inferredProfile,
         fileIds: processedFiles.map(f => f.id || f.fileId || f.openaiFileId || f.name || 'attachment'),
         extraBlocks: __pr3ExtraBlocks,
       });
@@ -3974,6 +3982,47 @@ router.post(
               userMessage: prompt,
               assistantMessage: fullResponseContent,
             });
+            // Phase 3: learned user-profile inference. Runs every 5 user
+            // turns to keep cost bounded and to need at least a handful of
+            // signals before drawing conclusions. Best-effort; failures
+            // never affect the chat response.
+            try {
+              const __pi = require('../services/user-profile-inference');
+              const __piEnabled = String(process.env.ENABLE_PROFILE_INFERENCE || 'true').toLowerCase() !== 'false';
+              const __userTurnsForInference = (__conversationHistoryForUnderstanding || [])
+                .filter((m) => m && m.role === 'user');
+              const __turnCount = __userTurnsForInference.length + 1; // +1 for the current turn
+              const __cadence = Number(process.env.SIRA_PROFILE_INFERENCE_CADENCE || 5);
+              if (__piEnabled && __turnCount > 0 && __turnCount % Math.max(1, __cadence) === 0) {
+                setImmediate(async () => {
+                  try {
+                    let anthropicClient = null;
+                    const apiKey = process.env.ANTHROPIC_API_KEY || process.env.SIRA_ANTHROPIC_API_KEY;
+                    if (apiKey) {
+                      try {
+                        const Anthropic = require('@anthropic-ai/sdk');
+                        anthropicClient = new Anthropic({ apiKey });
+                      } catch (_initErr) { /* skip */ }
+                    }
+                    if (!anthropicClient) return;
+                    const messagesForInference = [
+                      ...__userTurnsForInference.map((m) => ({ role: 'user', content: m.content })),
+                      { role: 'user', content: prompt },
+                    ];
+                    const result = await __pi.inferAndPersistProfile({
+                      userId,
+                      messages: messagesForInference,
+                      anthropicClient,
+                      prismaClient: prisma,
+                      previousInferred: inferredProfile,
+                    });
+                    if (result && result.ok) {
+                      console.log(`[profile-inference] applied for user=${userId} domain=${result.inferred?.domain || ''} skill=${result.inferred?.skill_level || ''} conf=${result.inferred?.confidence || 0}`);
+                    }
+                  } catch (_piErr) { /* swallow */ }
+                });
+              }
+            } catch (_piOuterErr) { /* swallow */ }
           } catch (memErr) {
             console.warn('[ai] memory extract schedule failed:', memErr.message);
           }

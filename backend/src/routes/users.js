@@ -823,6 +823,29 @@ router.patch('/me/settings', authenticateToken, async (req, res) => {
 // ────────────────────────────────────────────────────────────
 const userNotifications = require('../services/user-notifications');
 
+// GET /api/users/me/inferred-profile — returns the learned profile
+// derived from the user's recent chat behavior (skill level, domain,
+// formats, language, recurring topics). Always reflects what is stored
+// under User.settings.inferred. Useful for debug + UX surfaces that
+// want to show the user what the assistant has inferred about them.
+router.get('/me/inferred-profile', authenticateToken, async (req, res) => {
+  try {
+    const u = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { settings: true },
+    });
+    const { loadInferredProfile } = require('../services/user-profile-inference');
+    const inferred = loadInferredProfile(u);
+    res.json({
+      hasInferredProfile: Boolean(inferred),
+      inferred: inferred || null,
+    });
+  } catch (error) {
+    console.error('Inferred profile load error:', error);
+    res.status(500).json({ error: 'Failed to load inferred profile' });
+  }
+});
+
 router.get('/me/notifications', authenticateToken, async (req, res) => {
   try {
     const result = await userNotifications.listNotifications(prisma, req.user.id, {
