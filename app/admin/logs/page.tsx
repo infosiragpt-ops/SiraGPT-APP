@@ -156,11 +156,14 @@ function bucketLabel(value: string, granularity: Granularity): string {
   if (granularity === "day") {
     return new Intl.DateTimeFormat("es-BO", { dateStyle: "full" }).format(date)
   }
+  const hourBucket = new Date(date.getFullYear(), date.getMonth(), date.getDate(), date.getHours())
   return new Intl.DateTimeFormat("es-BO", {
-    dateStyle: "medium",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
     hour: "2-digit",
     minute: "2-digit",
-  }).format(new Date(date.getFullYear(), date.getMonth(), date.getDate(), date.getHours()))
+  }).format(hourBucket)
 }
 
 function triageLine(row: AuditRow): string {

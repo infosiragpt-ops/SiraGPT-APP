@@ -105,13 +105,13 @@ export default function Error({
         </div>
 
         <h1 className="mb-2 text-xl font-semibold">
-          Algo sali&oacute; mal
+          Algo salió mal
         </h1>
 
         <p className="mb-4 text-sm text-muted-foreground">
           {canRetry
-            ? "Ocurri&oacute; un error inesperado al cargar esta p&aacute;gina. Puedes intentar de nuevo."
-            : "El error persisti&oacute; despu&eacute;s de varios intentos. Recarga la p&aacute;gina o vuelve al inicio."}
+            ? "Ocurrió un error inesperado al cargar esta página. Puedes intentar de nuevo."
+            : "El error persistió después de varios intentos. Recarga la página o vuelve al inicio."}
         </p>
 
         {error.digest && (
@@ -129,7 +129,7 @@ export default function Error({
             disabled={!canRetry}
           >
             <RefreshCw className="mr-1.5 h-4 w-4" />
-            {canRetry ? "Intentar de nuevo" : "Recargar p&aacute;gina"}
+            {canRetry ? "Intentar de nuevo" : "Recargar página"}
           </Button>
 
           <Button

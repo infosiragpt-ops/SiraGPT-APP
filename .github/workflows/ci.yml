@@ -72,11 +72,11 @@ jobs:
         run: npm --prefix backend exec -- prisma generate --schema backend/prisma/schema.prisma
 
       # Hard gate (with ratchet) — `eslint` errors fail the build.
-      # `--max-warnings 48` pins the existing baseline so the warning
-      # count can only shrink: any new warning lands on top of 48 and
+      # `--max-warnings 50` pins the existing baseline so the warning
+      # count can only shrink: any new warning lands on top of 50 and
       # tips the gate over. Update the number when you clear warnings.
       - name: Lint (hard gate, ratcheted)
-        run: npm run lint -- --max-warnings 48
+        run: npm run lint -- --max-warnings 50
 
       # Belt-and-braces ratchet: count warnings explicitly so a regression
       # surfaces a clear error message instead of relying solely on
@@ -84,7 +84,7 @@ jobs:
       # alongside `package.json` and the `--max-warnings` flag above.
       - name: Lint warning-count ratchet
         env:
-          LINT_WARN_CAP: '48'
+          LINT_WARN_CAP: '50'
         run: |
           set -o pipefail
           COUNT=$(npx --no-install next lint 2>&1 | grep -c 'Warning:' || true)

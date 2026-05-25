@@ -107,7 +107,7 @@ export default function GlobalError({
             </div>
 
             <h1 style={{ fontSize: "1.25rem", fontWeight: 600, marginBottom: "0.5rem", color: headingColor }}>
-              Error cr&iacute;tico
+              Error crítico
             </h1>
 
             <p
@@ -119,8 +119,8 @@ export default function GlobalError({
               }}
             >
               {attempts < maxAttempts
-                ? "La aplicaci&oacute;n encontr&oacute; un error cr&iacute;tico al iniciar."
-                : "El error persisti&oacute;. Prueba recargar la p&aacute;gina."}
+                ? "La aplicación encontró un error crítico al iniciar."
+                : "El error persistió. Prueba recargar la página."}
             </p>
 
             {error.digest && (
@@ -168,7 +168,7 @@ export default function GlobalError({
                   fontWeight: 500,
                 }}
               >
-                Recargar p&aacute;gina
+                Recargar página
               </button>
             </div>
           </div>
