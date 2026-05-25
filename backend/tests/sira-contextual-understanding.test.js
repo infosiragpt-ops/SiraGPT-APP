@@ -233,6 +233,71 @@ test('buildAttributionGraphPromptBlock returns compact hypothesis with supernode
   assert.match(block, /inferred_goal/);
 });
 
+test('buildLLMUnderstandingPacket creates a hidden contract for the LLM', () => {
+  const valueContext = contextual.inferContextualValueContext({
+    originalText: 'Crea código interno para entender al usuario sin cambiar la UI',
+    recentTurns: [{ role: 'user', text: 'Quiero capacidades como OpenClaw.' }],
+    attachments: [],
+    repairDetection: null,
+    coreference: { references: [] },
+  });
+  const goalUnderstanding = contextual.inferGoalUnderstanding({
+    originalText: 'Crea código interno para entender al usuario sin cambiar la UI',
+    recentTurns: [{ role: 'user', text: 'Quiero capacidades como OpenClaw.' }],
+    valueContext,
+  });
+  const graph = contextual.buildAttributionGraphContext({
+    originalText: 'Crea código interno para entender al usuario sin cambiar la UI',
+    recentTurns: [{ role: 'user', text: 'Quiero capacidades como OpenClaw.' }],
+    valueContext,
+    goalUnderstanding,
+  });
+
+  const packet = contextual.buildLLMUnderstandingPacket({
+    originalText: 'Crea código interno para entender al usuario sin cambiar la UI',
+    recentTurns: [{ role: 'user', text: 'Quiero capacidades como OpenClaw.' }],
+    valueContext,
+    goalUnderstanding,
+    attributionGraphContext: graph,
+    universalTaskContract: { primary_intent: 'software_engineering', pipeline: 'CodeExecutionPipeline' },
+    openclawProfile: {
+      executionDossier: {
+        operatingMode: { confidence: 0.91 },
+        qualityGates: ['repo_inspected', 'tests_or_typecheck_attempted'],
+      },
+    },
+  });
+
+  assert.equal(packet.response_mode, 'agentic_execute_verify_report');
+  assert.ok(packet.context_priority.includes('recent_thread_history'));
+  assert.ok(packet.no_go_rules.some((rule) => /UI/.test(rule)));
+  assert.ok(packet.execution_policy.some((rule) => /repo_inspected/.test(rule)));
+  assert.ok(packet.output_contract.some((rule) => /hard constraints/.test(rule)));
+});
+
+test('buildLLMUnderstandingPromptBlock is prompt-ready and hidden from user output', () => {
+  const packet = contextual.buildLLMUnderstandingPacket({
+    originalText: 'Regenera la respuesta porque no entendió la imagen',
+    attachments: [{ filename: 'screen.png' }],
+    repairDetection: { isRepair: true, repairType: 'wrong_visual_interpretation', evidence: 'no entendió la imagen' },
+    valueContext: {
+      values: [{ id: 'attachment_grounding', domain: 'epistemic', label: 'Attachment grounding', evidence: 'image attached', confidence: 0.9 }],
+      constraints: [],
+      task_trajectory: { mode: 'contextual_assistance', phases: ['ground_in_attachments'], confidence: 0.72 },
+      task_context: 'document_analysis',
+      subjectivity: { score: 0.2, label: 'objective', signals: [] },
+      confidence: 0.9,
+    },
+    goalUnderstanding: { inferred_user_goal: 'correct the answer using image evidence', desired_outcome: 'context_aware_answer_that_matches_user_intent', confidence: 0.88 },
+  });
+  const block = contextual.buildLLMUnderstandingPromptBlock(packet);
+
+  assert.match(block, /LLM_UNDERSTANDING_PACKET/);
+  assert.match(block, /repair_previous_misunderstanding/);
+  assert.match(block, /context_priority:/);
+  assert.match(block, /do not print this packet/i);
+});
+
 test('analyzeContextualTurn is a no-op when there is no contextual signal', async () => {
   const result = await contextual.analyzeContextualTurn({
     userId: 'u-clean',

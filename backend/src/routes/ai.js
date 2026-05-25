@@ -154,6 +154,13 @@ const __intentTriageJudge = __ensembleJudges.length > 0
   ? buildEnsembleJudge({ judges: __ensembleJudges, budgetMs: 350 })
   : null;
 const ciraEngine = require('../services/sira/engine');
+const {
+  buildAttributionGraphContext: buildSiraAttributionGraphContext,
+  buildLLMUnderstandingPacket,
+  buildLLMUnderstandingPromptBlock,
+  inferContextualValueContext: inferSiraContextualValueContext,
+  inferGoalUnderstanding: inferSiraGoalUnderstanding,
+} = require('../services/sira/contextual-understanding');
 const postResponseBrainHook = require('../services/sira/post-response-brain-hook');
 const coworkEngine = require('../services/cowork-engine');
 const activeMemory = require('../services/active-memory');
@@ -1664,6 +1671,7 @@ router.post(
       // Si el mensaje actual es una corrección explícita ("no, en
       // español", "eso no es lo que quería"), construir un addendum
       // que instruya al LLM a NO repetir la interpretación previa.
+      let __pr6RepairDetection = null;
       try {
         if (String(process.env.SIRAGPT_REPAIR_LOOP_ENABLED || 'true').toLowerCase() !== 'false') {
           const __cr = require('../services/agents/conversation-repair');
@@ -1674,6 +1682,7 @@ router.post(
             prevTurn: __prevAssistant || null,
             prevUserPrompt: __prevUser ? __prevUser.text : null,
           });
+          __pr6RepairDetection = __repairDet || null;
           if (__repairDet && __repairDet.isRepair) {
             const __repairCtx = __cr.buildRepairContext(__repairDet);
             if (__repairCtx.systemAddendum) {
@@ -1683,9 +1692,11 @@ router.post(
         }
       } catch (_pr6Err) { /* swallow */ }
 
+      let __pr3LexTerms = [];
       try {
         if (userId && String(process.env.SIRAGPT_LEXICON_DISABLED || '').toLowerCase() !== '1') {
           const __lexTerms = await personalLexicon.lookupTerms({ userId, prompt, k: 5 });
+          __pr3LexTerms = Array.isArray(__lexTerms) ? __lexTerms : [];
           const __lexBlock = personalLexicon.buildLexiconBlock(__lexTerms || []);
           if (__lexBlock) __pr3ExtraBlocks.push(__lexBlock);
         }
@@ -3563,7 +3574,56 @@ router.post(
         console.warn('[ai] openclaw capability kernel unavailable (continuing without):', openclawErr && openclawErr.message);
       }
 
-      const systemInstruction = { role: 'system', content: promptBundle.system + openclawRuntimeBlock + conversationUnderstandingBlock + universalContractBlock + enterpriseExecutionBlock + memoryBlock + orchMemoryBlock + crossChatBlock + attributionBlock + circuitAttributionBlock + intentAttributionGraphBlock + saliencyBlock + feedbackBlock + evidenceBlock + documentEnrichmentBlock + coworkBlock + webSearchBlock + __pr5GroundingBlock };
+      let llmUnderstandingBlock = '';
+      try {
+        const siraValueContext = inferSiraContextualValueContext({
+          originalText: prompt,
+          recentTurns: __pr3RecentTurns || [],
+          attachments: processedFiles,
+          lexiconTerms: __pr3LexTerms || [],
+          repairDetection: __pr6RepairDetection,
+          coreference: __pr3CorefResult,
+        });
+        const siraGoalUnderstanding = inferSiraGoalUnderstanding({
+          originalText: prompt,
+          recentTurns: __pr3RecentTurns || [],
+          attachments: processedFiles,
+          valueContext: siraValueContext,
+          coreference: __pr3CorefResult,
+          repairDetection: __pr6RepairDetection,
+        });
+        const siraAttributionGraphContext = buildSiraAttributionGraphContext({
+          originalText: prompt,
+          recentTurns: __pr3RecentTurns || [],
+          attachments: processedFiles,
+          lexiconTerms: __pr3LexTerms || [],
+          coreference: __pr3CorefResult,
+          repairDetection: __pr6RepairDetection,
+          valueContext: siraValueContext,
+          goalUnderstanding: siraGoalUnderstanding,
+        });
+        const llmUnderstandingPacket = buildLLMUnderstandingPacket({
+          originalText: prompt,
+          recentTurns: __pr3RecentTurns || [],
+          attachments: processedFiles,
+          lexiconTerms: __pr3LexTerms || [],
+          coreference: __pr3CorefResult,
+          repairDetection: __pr6RepairDetection,
+          recordedSignals: [],
+          valueContext: siraValueContext,
+          goalUnderstanding: siraGoalUnderstanding,
+          attributionGraphContext: siraAttributionGraphContext,
+          semanticIntentAnalysis,
+          universalTaskContract,
+          openclawProfile: openclawRuntimeProfile,
+        });
+        const __llmBlock = buildLLMUnderstandingPromptBlock(llmUnderstandingPacket);
+        if (__llmBlock) llmUnderstandingBlock = `\n\n${__llmBlock}`;
+      } catch (llmUnderstandingErr) {
+        console.warn('[ai] llm understanding packet unavailable (continuing without):', llmUnderstandingErr && llmUnderstandingErr.message);
+      }
+
+      const systemInstruction = { role: 'system', content: promptBundle.system + openclawRuntimeBlock + llmUnderstandingBlock + conversationUnderstandingBlock + universalContractBlock + enterpriseExecutionBlock + memoryBlock + orchMemoryBlock + crossChatBlock + attributionBlock + circuitAttributionBlock + intentAttributionGraphBlock + saliencyBlock + feedbackBlock + evidenceBlock + documentEnrichmentBlock + coworkBlock + webSearchBlock + __pr5GroundingBlock };
       // Structured view of the system prompt — same content as
       // `systemInstruction.content`, but split into typed blocks with a
       // `cacheable` hint. When the downstream provider is Anthropic (or
@@ -3576,6 +3636,7 @@ router.post(
           { kind: 'master-prompt', text: promptBundle.system, cacheable: true },
         ]),
         { kind: 'openclaw-runtime', text: openclawRuntimeBlock, cacheable: false },
+        { kind: 'llm-understanding-packet', text: llmUnderstandingBlock, cacheable: false },
         { kind: 'conversation-understanding', text: conversationUnderstandingBlock, cacheable: false },
         { kind: 'universal-contract', text: universalContractBlock, cacheable: false },
         { kind: 'enterprise-execution', text: enterpriseExecutionBlock, cacheable: false },

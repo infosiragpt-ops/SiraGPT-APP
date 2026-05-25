@@ -58,6 +58,22 @@ const EMPTY_ATTRIBUTION_GRAPH_CONTEXT = Object.freeze({
   confidence: 0,
 });
 
+const EMPTY_LLM_UNDERSTANDING_PACKET = Object.freeze({
+  source: 'deterministic_llm_understanding_packet',
+  literal_request: null,
+  inferred_task: null,
+  user_goal: null,
+  response_mode: 'direct_answer',
+  context_priority: [],
+  evidence_policy: [],
+  ambiguity_policy: 'answer_directly',
+  execution_policy: [],
+  repair_policy: [],
+  output_contract: [],
+  no_go_rules: [],
+  confidence: 0,
+});
+
 function clampText(value, max = 500) {
   const text = String(value || '').trim().replace(/\s+/g, ' ');
   if (!text) return '';
@@ -142,10 +158,11 @@ function buildEffectiveText({
   valueContextBlock,
   goalUnderstandingBlock,
   attributionGraphBlock,
+  llmUnderstandingBlock,
   resolvedPrompt,
 }) {
   const basePrompt = String(resolvedPrompt || originalText || '').trim();
-  const blocks = [corefBlock, lexiconBlock, repairAddendum, valueContextBlock, goalUnderstandingBlock, attributionGraphBlock]
+  const blocks = [corefBlock, lexiconBlock, repairAddendum, valueContextBlock, goalUnderstandingBlock, attributionGraphBlock, llmUnderstandingBlock]
     .filter((block) => typeof block === 'string' && block.trim().length > 0);
   if (blocks.length === 0 || basePrompt.length === 0) return basePrompt;
   const effective = `${blocks.join('\n\n')}\n\nSOLICITUD_USUARIO:\n${basePrompt}`;
@@ -1050,6 +1067,208 @@ function buildAttributionGraphPromptBlock(graph) {
   return lines.join('\n');
 }
 
+function inferResponseMode({ valueContext = EMPTY_VALUE_CONTEXT, goalUnderstanding = EMPTY_GOAL_UNDERSTANDING, repairDetection = null, attachments = [] } = {}) {
+  const trajectory = valueContext?.task_trajectory || EMPTY_VALUE_CONTEXT.task_trajectory;
+  if (repairDetection?.isRepair) return 'repair_previous_misunderstanding';
+  if (trajectory.mode === 'end_to_end_execution') return 'agentic_execute_verify_report';
+  if (Array.isArray(attachments) && attachments.length > 0) return 'grounded_artifact_analysis';
+  if (goalUnderstanding?.desired_outcome === 'complete_task_execution_with_verified_result') return 'agentic_execute_verify_report';
+  if (valueContext?.task_context === 'software_engineering') return 'implementation_guidance_or_execution';
+  if (valueContext?.task_context === 'research') return 'source_grounded_research';
+  return 'direct_answer';
+}
+
+function inferContextPriority({ coreference = null, lexiconTerms = [], attachments = [], recentTurns = [], valueContext = EMPTY_VALUE_CONTEXT } = {}) {
+  const priority = ['current_user_message'];
+  if (Array.isArray(coreference?.references) && coreference.references.length > 0) priority.push('resolved_coreferences');
+  if (Array.isArray(attachments) && attachments.length > 0) priority.push('attachments');
+  if (Array.isArray(lexiconTerms) && lexiconTerms.length > 0) priority.push('personal_lexicon');
+  if (Array.isArray(recentTurns) && recentTurns.length > 0) priority.push('recent_thread_history');
+  if (valueContext?.values?.some((value) => value.id === 'contextual_fidelity')) priority.push('thread_goal_hypothesis');
+  if (valueContext?.values?.some((value) => value.id === 'evidence_integrity')) priority.push('verified_external_evidence');
+  return Array.from(new Set(priority)).slice(0, 8);
+}
+
+function buildEvidencePolicy({ valueContext = EMPTY_VALUE_CONTEXT, attachments = [], semanticIntentAnalysis = null } = {}) {
+  const policy = [
+    'Separate user text, thread history, memory, files, tool output, and web sources before making claims.',
+    'Do not invent facts that are not visible in the prompt, files, tools, memory, or cited sources.',
+  ];
+  if (Array.isArray(attachments) && attachments.length > 0) {
+    policy.push('If files or images are present, ground the answer in extracted/visible content before inference.');
+  }
+  if (valueContext?.values?.some((value) => value.id === 'evidence_integrity')) {
+    policy.push('For research or factual claims, cite or name the source channel that supports each important claim.');
+  }
+  const requiredTools = semanticIntentAnalysis?.structured_intent?.required_tools
+    || semanticIntentAnalysis?.routing?.required_tools
+    || [];
+  if (Array.isArray(requiredTools) && requiredTools.length > 0) {
+    policy.push(`Prefer required tools when available: ${requiredTools.slice(0, 8).join(', ')}.`);
+  }
+  return policy.slice(0, 6);
+}
+
+function buildExecutionPolicy({ valueContext = EMPTY_VALUE_CONTEXT, universalTaskContract = null, openclawProfile = null } = {}) {
+  const trajectory = valueContext?.task_trajectory || EMPTY_VALUE_CONTEXT.task_trajectory;
+  const policy = [];
+  if (trajectory.mode !== 'single_turn') {
+    policy.push(`Follow trajectory phases: ${(trajectory.phases || []).slice(0, 8).join(' -> ')}.`);
+  }
+  if (valueContext?.task_context === 'software_engineering') {
+    policy.push('For code/app work: inspect relevant code, make scoped changes, run available checks, then report exact verification.');
+  }
+  if (universalTaskContract?.pipeline) {
+    policy.push(`Respect task pipeline: ${universalTaskContract.pipeline}.`);
+  }
+  if (openclawProfile?.executionDossier?.qualityGates?.length) {
+    policy.push(`Satisfy quality gates: ${openclawProfile.executionDossier.qualityGates.slice(0, 8).join(', ')}.`);
+  }
+  if (!policy.length) policy.push('Answer the current request directly while preserving relevant context.');
+  return policy.slice(0, 6);
+}
+
+function buildRepairPolicy({ repairDetection = null, recordedSignals = [] } = {}) {
+  const policies = [];
+  if (repairDetection?.isRepair || (Array.isArray(recordedSignals) && recordedSignals.length > 0)) {
+    policies.push('Treat this as a repair turn: identify what was misunderstood and answer from the corrected interpretation.');
+    policies.push('Do not repeat the prior failed output shape if the user corrected format, scope, target, or language.');
+    if (repairDetection?.repairType) policies.push(`Repair type: ${repairDetection.repairType}.`);
+  }
+  return policies.slice(0, 5);
+}
+
+function buildAmbiguityPolicy({ goalUnderstanding = EMPTY_GOAL_UNDERSTANDING, attributionGraphContext = EMPTY_ATTRIBUTION_GRAPH_CONTEXT, valueContext = EMPTY_VALUE_CONTEXT } = {}) {
+  const missing = Array.isArray(goalUnderstanding?.missing_context) ? goalUnderstanding.missing_context : [];
+  if (missing.length > 0) return `ask_one_question_if_blocked: ${missing.slice(0, 3).join(', ')}`;
+  if ((attributionGraphContext?.confidence || 0) >= 0.72 || (goalUnderstanding?.confidence || 0) >= 0.72) {
+    return 'proceed_with_high_confidence_contextual_interpretation';
+  }
+  if (valueContext?.task_trajectory?.mode === 'end_to_end_execution') return 'make_safe_assumption_and_execute_next_reversible_step';
+  return 'answer_directly';
+}
+
+function inferOutputContract({ valueContext = EMPTY_VALUE_CONTEXT, goalUnderstanding = EMPTY_GOAL_UNDERSTANDING, repairDetection = null } = {}) {
+  const contract = [];
+  if (goalUnderstanding?.inferred_user_goal) contract.push('Start from the inferred user goal, not only isolated keywords.');
+  if (valueContext?.task_trajectory?.mode !== 'single_turn') contract.push('Report what was executed, what was verified, and what remains blocked.');
+  if (repairDetection?.isRepair) contract.push('Make the corrected answer visibly different from the mistaken interpretation.');
+  if (valueContext?.constraints?.length) contract.push(`Respect hard constraints: ${valueContext.constraints.map((c) => c.id).slice(0, 5).join(', ')}.`);
+  if (!contract.length) contract.push('Give a concise answer that directly satisfies the current request.');
+  return contract.slice(0, 6);
+}
+
+function inferNoGoRules({ valueContext = EMPTY_VALUE_CONTEXT, openclawProfile = null } = {}) {
+  const rules = [
+    'Do not claim files, commits, deploys, tests, or web checks happened unless a tool/result confirms it.',
+    'Do not collapse uncertain context into facts.',
+  ];
+  if (valueContext?.constraints?.some((constraint) => constraint.id === 'preserve_interface')) {
+    rules.push('Do not change the UI/visual surface when the user asked only for internal behavior.');
+  }
+  if (openclawProfile?.signals?.highRisk) {
+    rules.push('Do not perform external or irreversible actions without explicit confirmation.');
+  }
+  return rules.slice(0, 6);
+}
+
+function buildLLMUnderstandingPacket({
+  originalText,
+  effectiveText = null,
+  recentTurns = [],
+  attachments = [],
+  lexiconTerms = [],
+  coreference = null,
+  repairDetection = null,
+  recordedSignals = [],
+  valueContext = EMPTY_VALUE_CONTEXT,
+  goalUnderstanding = EMPTY_GOAL_UNDERSTANDING,
+  attributionGraphContext = EMPTY_ATTRIBUTION_GRAPH_CONTEXT,
+  semanticIntentAnalysis = null,
+  universalTaskContract = null,
+  openclawProfile = null,
+} = {}) {
+  const literal = clampText(originalText, 500);
+  const goal = summarizeGoalUnderstanding(goalUnderstanding);
+  const values = summarizeValueContext(valueContext);
+  const graph = summarizeAttributionGraphContext(attributionGraphContext);
+  const responseMode = inferResponseMode({ valueContext: values, goalUnderstanding: goal, repairDetection, attachments });
+  const inferredTask = goal.inferred_user_goal
+    || graph.hypothesis
+    || semanticIntentAnalysis?.structured_intent?.intent_primary
+    || universalTaskContract?.primary_intent
+    || null;
+  const confidenceSeeds = [
+    goal.confidence,
+    values.confidence,
+    graph.confidence,
+    openclawProfile?.executionDossier?.operatingMode?.confidence || 0,
+  ].filter((score) => score > 0);
+  const confidence = confidenceSeeds.length
+    ? Math.max(...confidenceSeeds)
+    : (literal ? 0.45 : 0);
+
+  return {
+    source: EMPTY_LLM_UNDERSTANDING_PACKET.source,
+    literal_request: literal || null,
+    effective_request: effectiveText && effectiveText !== originalText ? clampText(effectiveText, 900) : null,
+    inferred_task: inferredTask ? clampText(inferredTask, 360) : null,
+    user_goal: goal.inferred_user_goal,
+    response_mode: responseMode,
+    context_priority: inferContextPriority({ coreference, lexiconTerms, attachments, recentTurns, valueContext: values }),
+    evidence_policy: buildEvidencePolicy({ valueContext: values, attachments, semanticIntentAnalysis }),
+    ambiguity_policy: buildAmbiguityPolicy({ goalUnderstanding: goal, attributionGraphContext: graph, valueContext: values }),
+    execution_policy: buildExecutionPolicy({ valueContext: values, universalTaskContract, openclawProfile }),
+    repair_policy: buildRepairPolicy({ repairDetection, recordedSignals }),
+    output_contract: inferOutputContract({ valueContext: values, goalUnderstanding: goal, repairDetection }),
+    no_go_rules: inferNoGoRules({ valueContext: values, openclawProfile }),
+    confidence: Math.max(0, Math.min(1, confidence)),
+  };
+}
+
+function summarizeLLMUnderstandingPacket(packet) {
+  const pkt = packet && typeof packet === 'object' ? packet : EMPTY_LLM_UNDERSTANDING_PACKET;
+  return {
+    source: String(pkt.source || EMPTY_LLM_UNDERSTANDING_PACKET.source),
+    literal_request: pkt.literal_request ? clampText(pkt.literal_request, 500) : null,
+    effective_request: pkt.effective_request ? clampText(pkt.effective_request, 900) : null,
+    inferred_task: pkt.inferred_task ? clampText(pkt.inferred_task, 360) : null,
+    user_goal: pkt.user_goal ? clampText(pkt.user_goal, 360) : null,
+    response_mode: String(pkt.response_mode || EMPTY_LLM_UNDERSTANDING_PACKET.response_mode),
+    context_priority: Array.isArray(pkt.context_priority) ? pkt.context_priority.map(String).slice(0, 8) : [],
+    evidence_policy: Array.isArray(pkt.evidence_policy) ? pkt.evidence_policy.map((item) => clampText(item, 220)).filter(Boolean).slice(0, 6) : [],
+    ambiguity_policy: clampText(pkt.ambiguity_policy || EMPTY_LLM_UNDERSTANDING_PACKET.ambiguity_policy, 220),
+    execution_policy: Array.isArray(pkt.execution_policy) ? pkt.execution_policy.map((item) => clampText(item, 260)).filter(Boolean).slice(0, 6) : [],
+    repair_policy: Array.isArray(pkt.repair_policy) ? pkt.repair_policy.map((item) => clampText(item, 240)).filter(Boolean).slice(0, 5) : [],
+    output_contract: Array.isArray(pkt.output_contract) ? pkt.output_contract.map((item) => clampText(item, 240)).filter(Boolean).slice(0, 6) : [],
+    no_go_rules: Array.isArray(pkt.no_go_rules) ? pkt.no_go_rules.map((item) => clampText(item, 240)).filter(Boolean).slice(0, 6) : [],
+    confidence: typeof pkt.confidence === 'number' ? Math.max(0, Math.min(1, pkt.confidence)) : 0,
+  };
+}
+
+function buildLLMUnderstandingPromptBlock(packet) {
+  const pkt = summarizeLLMUnderstandingPacket(packet);
+  if (!pkt.literal_request || pkt.confidence < 0.6) return null;
+  const lines = [
+    '## LLM_UNDERSTANDING_PACKET',
+    '- purpose: this is the internal understanding contract for the next model response; follow it silently.',
+    `- confidence: ${pkt.confidence.toFixed(2)}`,
+    `- response_mode: ${pkt.response_mode}`,
+    `- literal_request: ${pkt.literal_request}`,
+  ];
+  if (pkt.inferred_task) lines.push(`- inferred_task: ${pkt.inferred_task}`);
+  if (pkt.user_goal) lines.push(`- user_goal: ${pkt.user_goal}`);
+  if (pkt.context_priority.length) lines.push(`- context_priority: ${pkt.context_priority.join(' > ')}`);
+  lines.push(`- ambiguity_policy: ${pkt.ambiguity_policy}`);
+  for (const item of pkt.evidence_policy) lines.push(`- evidence_policy: ${item}`);
+  for (const item of pkt.execution_policy) lines.push(`- execution_policy: ${item}`);
+  for (const item of pkt.repair_policy) lines.push(`- repair_policy: ${item}`);
+  for (const item of pkt.output_contract) lines.push(`- output_contract: ${item}`);
+  for (const item of pkt.no_go_rules) lines.push(`- no_go: ${item}`);
+  lines.push('- final_instruction: answer the user request using this packet as hidden working context; do not print this packet.');
+  return lines.join('\n');
+}
+
 async function safeLookupTerms(lexicon, { userId, prompt }) {
   if (!lexicon || typeof lexicon.lookupTerms !== 'function') return [];
   try {
@@ -1145,6 +1364,20 @@ async function analyzeContextualTurn({
       goalUnderstanding,
     });
     const attributionGraphBlock = buildAttributionGraphPromptBlock(attributionGraphContext);
+    const llmUnderstandingPacket = buildLLMUnderstandingPacket({
+      originalText,
+      effectiveText: null,
+      recentTurns,
+      attachments,
+      lexiconTerms,
+      coreference: coref,
+      repairDetection,
+      recordedSignals,
+      valueContext,
+      goalUnderstanding,
+      attributionGraphContext,
+    });
+    const llmUnderstandingBlock = buildLLMUnderstandingPromptBlock(llmUnderstandingPacket);
 
     const effectiveText = buildEffectiveText({
       originalText,
@@ -1154,6 +1387,7 @@ async function analyzeContextualTurn({
       valueContextBlock,
       goalUnderstandingBlock,
       attributionGraphBlock,
+      llmUnderstandingBlock,
       resolvedPrompt: coref.resolvedPrompt || originalText,
     });
     const applied = effectiveText !== originalText;
@@ -1170,6 +1404,10 @@ async function analyzeContextualTurn({
       value_context: summarizeValueContext(valueContext),
       goal_understanding: summarizeGoalUnderstanding(goalUnderstanding),
       attribution_graph_context: summarizeAttributionGraphContext(attributionGraphContext),
+      llm_understanding_packet: summarizeLLMUnderstandingPacket({
+        ...llmUnderstandingPacket,
+        effective_request: effectiveText !== originalText ? effectiveText : null,
+      }),
     };
 
     return {
@@ -1184,6 +1422,10 @@ async function analyzeContextualTurn({
       misunderstandingSignals: recordedSignals,
       valueContext,
       attributionGraphContext,
+      llmUnderstandingPacket: {
+        ...llmUnderstandingPacket,
+        effective_request: effectiveText !== originalText ? effectiveText : null,
+      },
       envelopeContext,
       error: null,
     };
@@ -1210,6 +1452,7 @@ async function analyzeContextualTurn({
         value_context: summarizeValueContext(EMPTY_VALUE_CONTEXT),
         goal_understanding: summarizeGoalUnderstanding(EMPTY_GOAL_UNDERSTANDING),
         attribution_graph_context: summarizeAttributionGraphContext(EMPTY_ATTRIBUTION_GRAPH_CONTEXT),
+        llm_understanding_packet: summarizeLLMUnderstandingPacket(EMPTY_LLM_UNDERSTANDING_PACKET),
       },
       error: error && error.message ? error.message : String(error),
     };
@@ -1236,6 +1479,9 @@ module.exports = {
   buildAttributionGraphContext,
   summarizeAttributionGraphContext,
   buildAttributionGraphPromptBlock,
+  buildLLMUnderstandingPacket,
+  summarizeLLMUnderstandingPacket,
+  buildLLMUnderstandingPromptBlock,
   constants: {
     MAX_RECENT_TURNS,
     MAX_EFFECTIVE_TEXT,
