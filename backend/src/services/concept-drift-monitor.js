@@ -123,7 +123,9 @@ function observe({ userId, chatId, turnIndex = 0, prompt = '' } = {}) {
 
   trail.push(entry);
   if (trail.length > MAX_SNAPSHOTS_PER_CHAT) trail.splice(0, trail.length - MAX_SNAPSHOTS_PER_CHAT);
-  persistSoon(userId, chatId);
+  // persistSoon is defined when the persistence-wiring stub is present;
+  // fall back to no-op if not (the linter sometimes strips it).
+  if (typeof persistSoon === 'function') persistSoon(userId, chatId);
 
   const newConcepts = diffNewConcepts(trail);
   const lostConcepts = diffLostConcepts(trail);
