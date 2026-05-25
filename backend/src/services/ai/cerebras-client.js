@@ -175,6 +175,28 @@ function buildFreeIaModelDescriptor({ env = process.env } = {}) {
     icon: 'CerebrasLogo',
     virtual: true,
     enabled: cfg.enabled,
+    pricing: getFreeIaPricing(),
+  };
+}
+
+/**
+ * Pricing surface for the Free IA model. Exists as a helper so the
+ * model picker can render a "Gratis" / "$0" badge consistently across
+ * /api/ai/models, /api/free-ia/status, and any future surfaces.
+ *
+ * Cerebras has a generous free tier per their docs. We mark the model
+ * as free-to-the-user — the cost we pay upstream is accounted for in
+ * our own plan margins (the spec sets a 30% gross margin per
+ * transaction; Free IA is the loss-leader that makes the FREE plan
+ * viable).
+ */
+function getFreeIaPricing() {
+  return {
+    priceUsd: 0,
+    currency: 'USD',
+    isFree: true,
+    perRequest: true,
+    badge: 'Gratis',
   };
 }
 
@@ -188,5 +210,6 @@ module.exports = {
   createCerebrasClient,
   createInstrumentedCerebrasClient,
   buildFreeIaModelDescriptor,
+  getFreeIaPricing,
   runWithMetrics,
 };

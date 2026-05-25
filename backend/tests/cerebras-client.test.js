@@ -15,6 +15,7 @@ const {
   createCerebrasClient,
   createInstrumentedCerebrasClient,
   buildFreeIaModelDescriptor,
+  getFreeIaPricing,
   runWithMetrics,
   DEFAULT_BASE_URL,
   DEFAULT_MODEL,
@@ -211,6 +212,23 @@ test('createInstrumentedCerebrasClient: wraps chat.completions.create to record 
   assert.equal(innerCalls.length, 1);
   assert.equal(recorded.success, 1);
   assert.equal(recorded.errors, 0);
+});
+
+test('getFreeIaPricing: stable shape { priceUsd:0, isFree:true, badge:"Gratis" }', () => {
+  const p = getFreeIaPricing();
+  assert.equal(p.priceUsd, 0);
+  assert.equal(p.isFree, true);
+  assert.equal(p.perRequest, true);
+  assert.equal(p.currency, 'USD');
+  assert.equal(p.badge, 'Gratis');
+});
+
+test('buildFreeIaModelDescriptor: includes pricing block', () => {
+  const desc = buildFreeIaModelDescriptor({ env: { CEREBRAS_API_KEY: 'csk-pricing' } });
+  assert.ok(desc.pricing);
+  assert.equal(desc.pricing.priceUsd, 0);
+  assert.equal(desc.pricing.isFree, true);
+  assert.equal(desc.pricing.badge, 'Gratis');
 });
 
 test('createInstrumentedCerebrasClient: records error AND re-throws when upstream fails', async () => {
