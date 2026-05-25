@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { AudioLines, Mic, Plus } from "lucide-react"
+import { AudioLines, FileText, Mic, Plus } from "lucide-react"
 import { BottomGlowBar } from "@/components/BottomGlowBar"
 import { ThemeToggle } from "@/components/theme-toggle"
 
@@ -38,10 +38,17 @@ function AuthActions() {
 }
 
 function HeroChatBar() {
+  const loadAntiBriberyContext = () => {
+    const input = document.getElementById("landing-anti-bribery-prompt") as HTMLInputElement | null
+    if (!input) return
+    input.value = "Sistema de Gestion Antisoborno ISO 37001 como herramienta anticorrupcion en Corporacion de Seguridad Integral Profesional SAC: desarrolla un titulo y enfoque juridico para Derecho, compliance penal, Ley N. 30424 y legislacion anticorrupcion peruana."
+    input.focus()
+  }
+
   return (
     <form
       action="/auth/login"
-      className="mx-auto flex h-[74px] w-full max-w-[1180px] items-center gap-3 rounded-full border border-slate-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-5 shadow-[0_18px_52px_-30px_rgba(15,23,42,0.78)] ring-1 ring-black/5 dark:ring-white/5 sm:h-[86px] sm:px-7"
+      className="composer-liquid-surface relative mx-auto flex h-[74px] w-full max-w-[1180px] items-center gap-3 overflow-hidden rounded-full border border-slate-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-5 shadow-[0_18px_52px_-30px_rgba(15,23,42,0.78)] ring-1 ring-black/5 dark:ring-white/5 sm:h-[86px] sm:px-7"
     >
       <button
         type="button"
@@ -51,12 +58,25 @@ function HeroChatBar() {
         <Plus className="h-6 w-6 stroke-[2.2]" />
       </button>
 
-      <input
-        name="prompt"
-        autoComplete="off"
-        className="h-full min-w-0 flex-1 bg-transparent text-[22px] font-normal text-slate-900 dark:text-zinc-100 outline-none placeholder:text-slate-400 dark:placeholder:text-zinc-500 sm:text-[28px]"
-        placeholder="Escribe un mensaje"
-      />
+      <div className="composer-context-field relative flex h-full min-w-0 flex-1 items-center" data-context-chip="true">
+        <button
+          type="button"
+          className="anti-bribery-context-chip"
+          onClick={loadAntiBriberyContext}
+          aria-label="Cargar contexto ISO 37001 antisoborno"
+          title="Cargar contexto ISO 37001 antisoborno"
+        >
+          <FileText className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} />
+          <span className="anti-bribery-context-chip__label">ISO 37001 antisoborno</span>
+        </button>
+        <input
+          id="landing-anti-bribery-prompt"
+          name="prompt"
+          autoComplete="off"
+          className="h-full min-w-0 flex-1 bg-transparent text-[22px] font-normal text-slate-900 dark:text-zinc-100 outline-none placeholder:text-slate-400 dark:placeholder:text-zinc-500 sm:text-[28px]"
+          placeholder="Escribe un mensaje"
+        />
+      </div>
 
       <div className="flex shrink-0 items-center gap-2 sm:gap-4">
         <button

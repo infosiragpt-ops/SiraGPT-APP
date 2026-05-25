@@ -188,6 +188,63 @@ function prefetchExcelConnector() {
 }
 import { resolveModelIconName } from "@/lib/model-icons"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
+
+const ANTI_BRIBERY_DOCUMENT_CONTEXT_PROMPT = `Contexto cargado desde el documento "SISTEMA_DE_GESTION_ANTISOBORN".
+
+Tema base:
+Sistema de Gestion Antisoborno ISO 37001 como herramienta anticorrupcion en la empresa Corporacion de Seguridad Integral Profesional SAC.
+
+Solicitud original:
+Deseo un titulo adecuado para la carrera de Derecho.
+
+Contenido del documento:
+1. Opcion recomendada:
+"Implementacion del Sistema de Gestion Antisoborno ISO 37001 como mecanismo de compliance penal en la empresa Corporacion de Seguridad Integral Profesional SAC".
+Enfoque juridico: conecta ISO 37001 con la responsabilidad penal de la persona juridica, especialmente la Ley N. 30424 en Peru, y su posible efecto eximente o atenuante. Ramas: Derecho Penal Economico, Derecho Corporativo y Compliance.
+
+2. Opcion alternativa normativa:
+"El Sistema de Gestion Antisoborno ISO 37001 frente a la legislacion anticorrupcion peruana: analisis de su adopcion en Corporacion de Seguridad Integral Profesional SAC".
+Enfoque juridico: contrasta el estandar internacional ISO 37001 con el marco legal peruano, incluyendo Codigo Penal, Ley de Contrataciones del Estado y Decreto Legislativo N. 1352. Evalua si la norma tecnica complementa o choca con la legislacion nacional.
+
+3. Opcion probatoria:
+"Valor probatorio y eficacia del modelo de prevencion de delitos basado en la ISO 37001: el caso de Corporacion de Seguridad Integral Profesional SAC".
+Enfoque juridico: analiza si un sistema antisoborno certificado puede ser valorado judicialmente como prueba de debida diligencia y si protege a la empresa frente a imputaciones penales o sanciones administrativas.
+
+4. Opcion critica:
+"La certificacion ISO 37001 como instrumento juridico de prevencion de la corrupcion y su aplicacion en Corporacion de Seguridad Integral Profesional SAC".
+Enfoque juridico: cuestiona si la certificacion funciona como escudo legal real o si puede reducirse a un formalismo corporativo sin consecuencias juridicas suficientes.
+
+5. Opcion de integridad corporativa:
+"ISO 37001 y la cultura de integridad corporativa: analisis juridico de su implementacion en Corporacion de Seguridad Integral Profesional SAC como estrategia anticorrupcion".
+Enfoque juridico: cruza derecho, etica empresarial y politicas publicas para evaluar si ISO 37001 transforma la cultura organizacional.
+
+Recomendacion del documento:
+Las opciones 1 y 2 son las mas alineadas con Derecho Penal Economico, Compliance y contratacion publica en Peru. La opcion 1 es especialmente solida porque permite desarrollar un analisis dogmatico sobre la eficacia del compliance penal basado en ISO 37001, con un caso practico concreto.
+
+Usa este contexto para continuar el trabajo academico o juridico que el usuario pida sobre el tema. Mantente en enfoque de Derecho, compliance penal, anticorrupcion peruana, ISO 37001 y el caso de Corporacion de Seguridad Integral Profesional SAC.`;
+
+function AntiBriberyContextChip({
+  visible,
+  onLoad,
+}: {
+  visible: boolean
+  onLoad: () => void
+}) {
+  if (!visible) return null
+
+  return (
+    <button
+      type="button"
+      className="anti-bribery-context-chip"
+      onClick={onLoad}
+      aria-label="Cargar contexto del documento ISO 37001 antisoborno"
+      title="Cargar contexto del documento ISO 37001 antisoborno"
+    >
+      <FileText className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} />
+      <span className="anti-bribery-context-chip__label">ISO 37001 antisoborno</span>
+    </button>
+  )
+}
 import {
   buildFileOnlyPrompt,
   createLongPasteDocumentFile,
@@ -4068,6 +4125,22 @@ But first, you need to connect your Spotify account securely using the button be
     });
   }, [getComposerTextareaMaxHeight, scrollToBottom, syncChatLayoutVars]);
 
+  const loadAntiBriberyDocumentContext = React.useCallback(() => {
+    setInput(ANTI_BRIBERY_DOCUMENT_CONTEXT_PROMPT);
+    inputRef.current = ANTI_BRIBERY_DOCUMENT_CONTEXT_PROMPT;
+    chatDraft.save(ANTI_BRIBERY_DOCUMENT_CONTEXT_PROMPT);
+    setSlashMenuOpen(false);
+    window.setTimeout(() => {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+      textarea.focus();
+      const end = ANTI_BRIBERY_DOCUMENT_CONTEXT_PROMPT.length;
+      try { textarea.setSelectionRange(end, end); } catch { /* old Safari */ }
+      resizeComposerTextarea();
+    }, 0);
+    window.requestAnimationFrame(resizeComposerTextarea);
+  }, [chatDraft, resizeComposerTextarea]);
+
   // Handle textarea input change with smooth scrolling
   const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value;
@@ -7163,6 +7236,11 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   );
   const isSendingForCurrentChat = isSending && sendingChatId === currentChatId;
   const isStopButtonVisible = isCurrentChatLoading || isCurrentChatStreaming || (pendingStop && isCurrentChatStreaming) || isSendingForCurrentChat || isCurrentChatLocalJobBusy;
+  const showAntiBriberyContextChip =
+    input.trim().length === 0 &&
+    uploadedFiles.length === 0 &&
+    !selectedWordText &&
+    detectedLinks.length === 0;
 
   // Shared props bundle for <ActiveToolsDisplay /> — the component is
   // now rendered in a different spot (below the input instead of above)
@@ -8092,7 +8170,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                     <CredentialWarning text={input} />
                     <div
                       className={cn(
-                        "composer-surface group/composer relative rounded-3xl",
+                        "composer-surface composer-liquid-surface group/composer relative rounded-3xl",
                         pasteCapture.overlayVisible ? "overflow-visible" : "overflow-hidden",
                         "bg-background",
                         "ring-1 ring-black/[0.08] dark:ring-1 dark:ring-white/[0.06]",
@@ -8174,55 +8252,64 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         />
 
                         {/* CENTER — single-line textarea, expands vertically up to 200px */}
-                        <Textarea
-                          ref={textareaRef}
-                          value={input}
-                          onChange={handleTextareaChange}
-                          onKeyDown={handleKeyDown}
-                          onKeyPress={handleKeyPress}
-                          onFocus={handleTextareaFocus}
-                          onPaste={handleTextareaPaste}
-                          onCompositionStart={() => { isComposingRef.current = true }}
-                          onCompositionEnd={() => { isComposingRef.current = false }}
-                          placeholder={
-                            isImageGenerationActive
-                              ? tComposer("placeholderImage")
-                              : isVideoGenerationActive
-                                ? tComposer("placeholderVideo")
-                                : isWebSearchActive
-                                  ? tComposer("placeholderWebSearch")
-                                  : isGmailActive
-                                    ? tComposer("placeholderGmail")
-                                    : (isGoogleCalendarActive || isGoogleDriveActive)
-                                      ? tComposer("placeholderGoogle")
-                                      : isSpotifyActive
-                                        ? tComposer("placeholderSpotify")
-                                        : isWordConnectorActive
-                                          ? tComposer("placeholderWord")
-                                          : tComposer("placeholderDefault")
-                          }
-                          className={cn(
-                            "textarea-scrollbar min-h-[24px] min-w-0 flex-1 resize-none border-none bg-transparent",
-                            "py-1.5 px-1",
-                            "text-[15px] leading-[1.45] tracking-[-0.01em] text-foreground",
-                            "placeholder:text-muted-foreground/65 placeholder:font-normal",
-                            "dark:placeholder:text-[hsl(var(--text-tertiary))]",
-                            "outline-none ring-0 focus:outline-none focus:ring-0",
-                            "rounded-none transition-colors duration-200",
-                          )}
-                          style={{
-                            minHeight: "24px",
-                            maxHeight: "var(--chat-textarea-max-height, 200px)",
-                            overflowY: "auto",
-                            overflowX: "hidden",
-                            wordWrap: "break-word",
-                            border: "none",
-                            outline: "none",
-                            boxShadow: "none",
-                          }}
-                          rows={1}
-                          disabled={isCurrentChatLoading || isCurrentChatLocalJobBusy}
-                        />
+                        <div
+                          className="composer-context-field relative flex min-w-0 flex-1 items-center"
+                          data-context-chip={showAntiBriberyContextChip ? "true" : undefined}
+                        >
+                          <AntiBriberyContextChip
+                            visible={showAntiBriberyContextChip}
+                            onLoad={loadAntiBriberyDocumentContext}
+                          />
+                          <Textarea
+                            ref={textareaRef}
+                            value={input}
+                            onChange={handleTextareaChange}
+                            onKeyDown={handleKeyDown}
+                            onKeyPress={handleKeyPress}
+                            onFocus={handleTextareaFocus}
+                            onPaste={handleTextareaPaste}
+                            onCompositionStart={() => { isComposingRef.current = true }}
+                            onCompositionEnd={() => { isComposingRef.current = false }}
+                            placeholder={
+                              isImageGenerationActive
+                                ? tComposer("placeholderImage")
+                                : isVideoGenerationActive
+                                  ? tComposer("placeholderVideo")
+                                  : isWebSearchActive
+                                    ? tComposer("placeholderWebSearch")
+                                    : isGmailActive
+                                      ? tComposer("placeholderGmail")
+                                      : (isGoogleCalendarActive || isGoogleDriveActive)
+                                        ? tComposer("placeholderGoogle")
+                                        : isSpotifyActive
+                                          ? tComposer("placeholderSpotify")
+                                          : isWordConnectorActive
+                                            ? tComposer("placeholderWord")
+                                            : tComposer("placeholderDefault")
+                            }
+                            className={cn(
+                              "textarea-scrollbar min-h-[24px] min-w-0 flex-1 resize-none border-none bg-transparent",
+                              "py-1.5 px-1",
+                              "text-[15px] leading-[1.45] tracking-[-0.01em] text-foreground",
+                              "placeholder:text-muted-foreground/65 placeholder:font-normal",
+                              "dark:placeholder:text-[hsl(var(--text-tertiary))]",
+                              "outline-none ring-0 focus:outline-none focus:ring-0",
+                              "rounded-none transition-colors duration-200",
+                            )}
+                            style={{
+                              minHeight: "24px",
+                              maxHeight: "var(--chat-textarea-max-height, 200px)",
+                              overflowY: "auto",
+                              overflowX: "hidden",
+                              wordWrap: "break-word",
+                              border: "none",
+                              outline: "none",
+                              boxShadow: "none",
+                            }}
+                            rows={1}
+                            disabled={isCurrentChatLoading || isCurrentChatLocalJobBusy}
+                          />
+                        </div>
 
                         {/* RIGHT — VoiceControls (mic, ghost) + primary action.
                             Primary swaps glyph based on state — never a
@@ -8565,7 +8652,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         {pasteCapture.Overlay}
                         <div
                           className={cn(
-                            "composer-surface group/composer relative rounded-3xl",
+                            "composer-surface composer-liquid-surface group/composer relative rounded-3xl",
                             pasteCapture.overlayVisible ? "overflow-visible" : "overflow-hidden",
                             "bg-background",
                             "ring-1 ring-black/[0.08] dark:ring-1 dark:ring-white/[0.06]",
@@ -8639,55 +8726,64 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               isGeneratingPPT={isGeneratingPPT}
                               isProcessingGmail={isCurrentChatLocalJobBusy && isProcessingGmail}
                             />
-                            <Textarea
-                              ref={textareaRef}
-                              value={input}
-                              onChange={handleTextareaChange}
-                              onKeyDown={handleKeyDown}
-                              onKeyPress={handleKeyPress}
-                              onFocus={handleTextareaFocus}
-                              onPaste={handleTextareaPaste}
-                              onCompositionStart={() => { isComposingRef.current = true }}
-                              onCompositionEnd={() => { isComposingRef.current = false }}
-                              placeholder={
-                                isImageGenerationActive
-                                  ? tComposer("placeholderImage")
-                                  : isVideoGenerationActive
-                                    ? tComposer("placeholderVideo")
-                                    : isWebSearchActive
-                                      ? tComposer("placeholderWebSearch")
-                                      : isGmailActive
-                                        ? tComposer("placeholderGmail")
-                                        : (isGoogleCalendarActive || isGoogleDriveActive)
-                                          ? tComposer("placeholderGoogle")
-                                          : isSpotifyActive
-                                            ? tComposer("placeholderSpotify")
-                                            : isWordConnectorActive
-                                              ? tComposer("placeholderWord")
-                                              : tComposer("placeholderDefault")
-                              }
-                              className={cn(
-                                "textarea-scrollbar min-h-[24px] min-w-0 flex-1 resize-none border-none bg-transparent",
-                                "py-1.5 px-1",
-                                "text-[15px] leading-[1.45] tracking-[-0.01em] text-foreground",
-                                "placeholder:text-muted-foreground/65 placeholder:font-normal",
-                                "dark:placeholder:text-[hsl(var(--text-tertiary))]",
-                                "outline-none ring-0 focus:outline-none focus:ring-0",
-                                "rounded-none transition-colors duration-200",
-                              )}
-                              style={{
-                                minHeight: "24px",
-                                maxHeight: "var(--chat-textarea-max-height, 200px)",
-                                overflowY: "auto",
-                                overflowX: "hidden",
-                                wordWrap: "break-word",
-                                border: "none",
-                                outline: "none",
-                                boxShadow: "none",
-                              }}
-                              rows={1}
-                              disabled={isCurrentChatLoading || isCurrentChatLocalJobBusy}
-                            />
+                            <div
+                              className="composer-context-field relative flex min-w-0 flex-1 items-center"
+                              data-context-chip={showAntiBriberyContextChip ? "true" : undefined}
+                            >
+                              <AntiBriberyContextChip
+                                visible={showAntiBriberyContextChip}
+                                onLoad={loadAntiBriberyDocumentContext}
+                              />
+                              <Textarea
+                                ref={textareaRef}
+                                value={input}
+                                onChange={handleTextareaChange}
+                                onKeyDown={handleKeyDown}
+                                onKeyPress={handleKeyPress}
+                                onFocus={handleTextareaFocus}
+                                onPaste={handleTextareaPaste}
+                                onCompositionStart={() => { isComposingRef.current = true }}
+                                onCompositionEnd={() => { isComposingRef.current = false }}
+                                placeholder={
+                                  isImageGenerationActive
+                                    ? tComposer("placeholderImage")
+                                    : isVideoGenerationActive
+                                      ? tComposer("placeholderVideo")
+                                      : isWebSearchActive
+                                        ? tComposer("placeholderWebSearch")
+                                        : isGmailActive
+                                          ? tComposer("placeholderGmail")
+                                          : (isGoogleCalendarActive || isGoogleDriveActive)
+                                            ? tComposer("placeholderGoogle")
+                                            : isSpotifyActive
+                                              ? tComposer("placeholderSpotify")
+                                              : isWordConnectorActive
+                                                ? tComposer("placeholderWord")
+                                                : tComposer("placeholderDefault")
+                                }
+                                className={cn(
+                                  "textarea-scrollbar min-h-[24px] min-w-0 flex-1 resize-none border-none bg-transparent",
+                                  "py-1.5 px-1",
+                                  "text-[15px] leading-[1.45] tracking-[-0.01em] text-foreground",
+                                  "placeholder:text-muted-foreground/65 placeholder:font-normal",
+                                  "dark:placeholder:text-[hsl(var(--text-tertiary))]",
+                                  "outline-none ring-0 focus:outline-none focus:ring-0",
+                                  "rounded-none transition-colors duration-200",
+                                )}
+                                style={{
+                                  minHeight: "24px",
+                                  maxHeight: "var(--chat-textarea-max-height, 200px)",
+                                  overflowY: "auto",
+                                  overflowX: "hidden",
+                                  wordWrap: "break-word",
+                                  border: "none",
+                                  outline: "none",
+                                  boxShadow: "none",
+                                }}
+                                rows={1}
+                                disabled={isCurrentChatLoading || isCurrentChatLocalJobBusy}
+                              />
+                            </div>
                             <div className="flex shrink-0 items-center gap-1.5">
                               {/* Pulido · contador suave de caracteres. */}
                               <ComposerCharCounter input={input} />

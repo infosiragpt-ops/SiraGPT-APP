@@ -3152,6 +3152,151 @@ footer {
 }
 .dark .canvas-ambient > * { position: relative; z-index: 1; }
 
+/* ─── Composer — premium liquid surface ──────────────────────────── */
+.composer-liquid-surface {
+  isolation: isolate;
+  backdrop-filter: blur(22px) saturate(1.14);
+  -webkit-backdrop-filter: blur(22px) saturate(1.14);
+  background:
+    linear-gradient(145deg, hsl(0 0% 100% / 0.9), hsl(210 22% 98% / 0.76) 62%, hsl(0 0% 100% / 0.86)),
+    radial-gradient(ellipse 62% 44% at 14% 0%, hsl(0 0% 100% / 0.7), transparent 70%),
+    radial-gradient(ellipse 44% 38% at 92% 100%, hsl(var(--primary) / 0.055), transparent 72%);
+}
+.composer-liquid-surface::before,
+.composer-liquid-surface::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+  border-radius: inherit;
+  z-index: 0;
+}
+.composer-liquid-surface::before {
+  inset: 0;
+  background:
+    linear-gradient(120deg, transparent 12%, hsl(0 0% 100% / 0.22) 42%, transparent 66%),
+    radial-gradient(ellipse 54% 32% at 18% 0%, hsl(0 0% 100% / 0.42), transparent 68%);
+  opacity: 0.8;
+  mix-blend-mode: screen;
+}
+.composer-liquid-surface::after {
+  inset: auto -12% -42% 42%;
+  width: 58%;
+  height: 82%;
+  background: radial-gradient(circle, hsl(var(--primary) / 0.065), transparent 68%);
+  filter: blur(22px);
+}
+.composer-liquid-surface > * {
+  position: relative;
+  z-index: 1;
+}
+.composer-context-field {
+  min-height: 36px;
+}
+.composer-context-field[data-context-chip="true"] :is(input, textarea) {
+  padding-left: 13.25rem !important;
+}
+.anti-bribery-context-chip {
+  position: absolute;
+  left: 0.125rem;
+  top: 50%;
+  z-index: 3;
+  display: inline-flex;
+  height: 1.75rem;
+  max-width: 12.25rem;
+  transform: translateY(-50%);
+  align-items: center;
+  gap: 0.375rem;
+  overflow: hidden;
+  border-radius: 999px;
+  border: 1px solid hsl(0 0% 100% / 0.72);
+  background:
+    linear-gradient(135deg, hsl(0 0% 100% / 0.82), hsl(210 20% 98% / 0.62)),
+    radial-gradient(circle at 0% 0%, hsl(0 0% 100% / 0.75), transparent 54%);
+  padding: 0 0.625rem;
+  color: hsl(220 18% 18% / 0.82);
+  box-shadow:
+    inset 0 1px 0 hsl(0 0% 100% / 0.68),
+    inset 0 -10px 18px -18px hsl(var(--primary) / 0.42),
+    0 10px 24px -22px hsl(220 35% 18% / 0.46);
+  font-size: 0.72rem;
+  font-weight: 650;
+  line-height: 1;
+  white-space: nowrap;
+  transition:
+    color 160ms ease-out,
+    transform 180ms cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 180ms ease-out,
+    border-color 180ms ease-out;
+}
+button.anti-bribery-context-chip[aria-label] {
+  position: absolute;
+}
+.anti-bribery-context-chip:hover,
+.anti-bribery-context-chip:focus-visible {
+  border-color: hsl(var(--primary) / 0.28);
+  color: hsl(220 20% 12%);
+  transform: translateY(calc(-50% - 1px));
+  box-shadow:
+    inset 0 1px 0 hsl(0 0% 100% / 0.82),
+    inset 0 -10px 18px -18px hsl(var(--primary) / 0.52),
+    0 14px 28px -22px hsl(var(--primary) / 0.38);
+}
+.anti-bribery-context-chip:focus-visible {
+  outline: 2px solid hsl(var(--primary) / 0.32);
+  outline-offset: 2px;
+}
+button.anti-bribery-context-chip:not(:disabled):active {
+  transform: translateY(calc(-50% + 0.5px));
+}
+.anti-bribery-context-chip__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dark .composer-liquid-surface {
+  background:
+    linear-gradient(145deg, hsl(212 37% 8% / 0.94), hsl(218 34% 7% / 0.86) 58%, hsl(216 30% 10% / 0.9)),
+    radial-gradient(ellipse 58% 34% at 14% 0%, hsl(0 0% 100% / 0.09), transparent 68%),
+    radial-gradient(ellipse 48% 40% at 92% 100%, hsl(var(--accent-violet) / 0.16), transparent 72%);
+}
+.dark .composer-liquid-surface::before {
+  background:
+    linear-gradient(120deg, transparent 16%, hsl(0 0% 100% / 0.055) 44%, transparent 68%),
+    radial-gradient(ellipse 58% 36% at 18% 0%, hsl(0 0% 100% / 0.09), transparent 70%);
+  opacity: 0.95;
+}
+.dark .composer-liquid-surface::after {
+  background: radial-gradient(circle, hsl(var(--accent-violet) / 0.12), transparent 70%);
+}
+.dark .anti-bribery-context-chip {
+  border-color: hsl(0 0% 100% / 0.11);
+  background:
+    linear-gradient(135deg, hsl(216 22% 18% / 0.88), hsl(220 26% 11% / 0.72)),
+    radial-gradient(circle at 0% 0%, hsl(0 0% 100% / 0.095), transparent 58%);
+  color: hsl(210 18% 88% / 0.84);
+  box-shadow:
+    inset 0 1px 0 hsl(0 0% 100% / 0.12),
+    inset 0 -10px 18px -18px hsl(var(--accent-violet) / 0.54),
+    0 12px 28px -24px hsl(0 0% 0% / 0.84);
+}
+.dark .anti-bribery-context-chip:hover,
+.dark .anti-bribery-context-chip:focus-visible {
+  border-color: hsl(var(--accent-violet) / 0.38);
+  color: hsl(210 20% 96%);
+  box-shadow:
+    inset 0 1px 0 hsl(0 0% 100% / 0.16),
+    inset 0 -10px 18px -18px hsl(var(--accent-violet) / 0.62),
+    0 16px 32px -24px hsl(var(--accent-violet) / 0.48);
+}
+@media (max-width: 640px) {
+  .composer-context-field[data-context-chip="true"] :is(input, textarea) {
+    padding-left: 6.85rem !important;
+  }
+  .anti-bribery-context-chip {
+    max-width: 6.25rem;
+    padding-inline: 0.5rem;
+  }
+}
+
 /* ─── Composer — premium dark surface ────────────────────────────── */
 .dark .composer-surface {
   background-color: hsl(var(--composer-bg));
