@@ -43,6 +43,19 @@ const SUPPORTED_MODES = [
 
 const SUPPORTED_LANGUAGES = ['es', 'en', 'pt', 'fr', 'de', 'it'];
 
+// Tolerant pre-parse: callers occasionally send "human", "scholarly",
+// "shorter", "paraphrase", etc. Apply the engine's alias map BEFORE
+// Zod validation so a known alias doesn't 400 with "invalid enum".
+function normaliseModeOnBody(body) {
+  if (!body || typeof body !== 'object' || typeof body.mode !== 'string') return body;
+  try {
+    // eslint-disable-next-line global-require
+    const { normaliseMode } = require('../services/paraphrase-engine');
+    body.mode = normaliseMode(body.mode);
+  } catch { /* engine not loaded — leave untouched */ }
+  return body;
+}
+
 // Per-request text-length cap. Hard upper bound stays at 100K chars to
 // protect the worker pool from accidental novel-sized payloads; the
 // effective limit can be tuned down per deployment via env. Defaults to
@@ -83,6 +96,7 @@ router.get('/modes', optionalAuth, (req, res) => {
 
 router.post(
   '/',
+  (req, _res, next) => { normaliseModeOnBody(req.body); next(); },
   authenticateToken,
   chargeCredits({ feature: 'paraphrase', cost: paraphraseCost }),
   async (req, res) => {
