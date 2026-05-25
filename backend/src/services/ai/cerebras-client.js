@@ -152,7 +152,8 @@ async function runWithMetrics(fn, { metrics } = {}) {
   } catch (err) {
     if (m && typeof m.recordUpstreamError === 'function') {
       const code = err && (err.code || err.status || err.statusCode || (err.name && err.name !== 'Error' ? err.name : null));
-      m.recordUpstreamError({ code });
+      const message = err && typeof err.message === 'string' ? err.message : null;
+      m.recordUpstreamError({ code, message });
     }
     throw err;
   }

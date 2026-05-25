@@ -158,6 +158,23 @@ test('runWithMetrics: records error AND re-throws the original error', async () 
   assert.equal(calls.lastCode, 503);
 });
 
+test('runWithMetrics: forwards err.message to recordUpstreamError', async () => {
+  const captured = [];
+  const stub = {
+    recordUpstreamSuccess: () => {},
+    recordUpstreamError: (opts) => { captured.push(opts); },
+  };
+  const err = new Error('upstream is having a bad day');
+  err.status = 503;
+  await assert.rejects(
+    () => runWithMetrics(async () => { throw err; }, { metrics: stub }),
+    /bad day/,
+  );
+  assert.equal(captured.length, 1);
+  assert.equal(captured[0].code, 503);
+  assert.equal(captured[0].message, 'upstream is having a bad day');
+});
+
 test('runWithMetrics: extracts error code from .code / .status / .statusCode / .name', async () => {
   const codes = [];
   const stub = {
