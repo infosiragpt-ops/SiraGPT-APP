@@ -14,6 +14,10 @@ const crossTurn = require('../services/cross-turn-attribution-chain');
 const hiddenGoal = require('../services/hidden-goal-extractor');
 const counterfactual = require('../services/counterfactual-query-rewriter');
 const promptProvenance = require('../services/prompt-provenance-tracker');
+const userProfile = require('../services/user-attribution-profile');
+const arcSummarizer = require('../services/conversation-arc-summarizer');
+const selfConsistency = require('../services/self-consistency-checker');
+const intentCard = require('../services/intent-card-generator');
 const { rateLimitMiddleware } = require('../services/rate-limiter');
 
 const router = express.Router();
@@ -219,6 +223,78 @@ router.post('/provenance', optionalAuth, standardRateLimit, (req, res) => {
   }
 });
 
+router.post('/intent-card', optionalAuth, heavyRateLimit, (req, res) => {
+  try {
+    const { query, arcReports } = req.body || {};
+    if (typeof query !== 'string' || !query.trim()) {
+      return res.status(400).json({ error: 'query is required' });
+    }
+    const context = safeContextFromBody(req.body);
+    const report = contextIntelligence.analyzeContext(userIdFrom(req), query, context);
+    let arc = null;
+    if (Array.isArray(arcReports) && arcReports.length > 0) {
+      arc = arcSummarizer.summarize(arcReports);
+    }
+    const card = intentCard.generate(report, { arc });
+    res.json({ card, report: contextIntelligence.summariseForLog(report), arc, prompt: intentCard.buildIntentCardPrompt(card) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/arc', optionalAuth, standardRateLimit, (req, res) => {
+  try {
+    const { reports } = req.body || {};
+    if (!Array.isArray(reports)) {
+      return res.status(400).json({ error: 'reports array is required' });
+    }
+    const result = arcSummarizer.summarize(reports);
+    res.json({ ...result, prompt: arcSummarizer.buildArcPrompt(result) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/self-consistency', optionalAuth, standardRateLimit, (req, res) => {
+  try {
+    const { text } = req.body || {};
+    if (typeof text !== 'string' || !text.trim()) {
+      return res.status(400).json({ error: 'text is required' });
+    }
+    const result = selfConsistency.check(text, req.body || {});
+    res.json({ ...result, prompt: selfConsistency.buildSelfConsistencyPrompt(result) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/user-profile/:userId', optionalAuth, standardRateLimit, (req, res) => {
+  try {
+    const { userId } = req.params;
+    if (!userId) return res.status(400).json({ error: 'userId is required' });
+    const summary = userProfile.getProfileSummary(userId);
+    if (!summary) return res.status(404).json({ error: 'no profile for that user' });
+    res.json({ profile: summary, prompt: userProfile.buildProfilePrompt(userId) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/user-profile/:userId/record', authenticateToken, standardRateLimit, (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { snapshot, outcome } = req.body || {};
+    if (!snapshot) return res.status(400).json({ error: 'snapshot is required' });
+    if (req.user?.id && req.user.id !== userId) {
+      return res.status(403).json({ error: 'can only record for your own userId' });
+    }
+    const turn = userProfile.recordTurn(userId, snapshot, outcome || 'neutral');
+    res.json({ turn });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/health', (_req, res) => {
   res.json({
     ok: true,
@@ -233,6 +309,10 @@ router.get('/health', (_req, res) => {
       'hidden-goal-extractor',
       'counterfactual-query-rewriter',
       'prompt-provenance-tracker',
+      'user-attribution-profile',
+      'conversation-arc-summarizer',
+      'self-consistency-checker',
+      'intent-card-generator',
       'context-intelligence-engine',
     ],
     promptBlockMaxChars: contextIntelligence.MAX_PROMPT_BLOCK_CHARS,
