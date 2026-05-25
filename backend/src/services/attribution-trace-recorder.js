@@ -28,6 +28,31 @@ const MAX_TRACES = Number.parseInt(process.env.SIRAGPT_TRACE_RECORDER_MAX || '50
 const PROMPT_PREVIEW_CHARS = 240;
 
 const TRACES = []; // newest at the end
+let HYDRATED = false;
+
+// Optional disk persistence. Lazy-loaded; absent or failing require
+// degrades to pure in-memory (the prior behaviour).
+let persistence = null;
+const PERSIST_ENABLED = String(process.env.SIRAGPT_ATTRIBUTION_PERSIST || '').toLowerCase() === '1';
+try { if (PERSIST_ENABLED) persistence = require('./attribution-persistence'); } catch (_e) { persistence = null; }
+
+function hydrate() {
+  if (HYDRATED || !persistence) { HYDRATED = true; return; }
+  HYDRATED = true;
+  try {
+    const payload = persistence.load('traces', 'global');
+    if (payload && Array.isArray(payload.entries)) {
+      for (const e of payload.entries) TRACES.push(e);
+    }
+  } catch (_e) { /* swallow */ }
+}
+
+function persistSoon() {
+  if (!persistence) return;
+  try {
+    persistence.scheduleSave('traces', 'global', { entries: TRACES.slice(-MAX_TRACES), savedAt: Date.now() });
+  } catch (_e) { /* swallow */ }
+}
 
 function safeText(v, max = PROMPT_PREVIEW_CHARS) {
   return String(v == null ? '' : v).slice(0, max);
@@ -68,8 +93,10 @@ function record({
       confidenceGrade: confidence?.grade ?? null,
     },
   };
+  hydrate();
   TRACES.push(entry);
   if (TRACES.length > MAX_TRACES) TRACES.splice(0, TRACES.length - MAX_TRACES);
+  persistSoon();
   return entry;
 }
 
@@ -109,7 +136,11 @@ function stats() {
   };
 }
 
-function reset() { TRACES.length = 0; }
+function reset() {
+  TRACES.length = 0;
+  HYDRATED = false;
+  if (persistence) try { persistence.remove('traces', 'global'); } catch (_e) { /* swallow */ }
+}
 
 module.exports = {
   record,
