@@ -41,6 +41,7 @@ const { cloneProjectTool } = require('./agents/clone-project-tool');
 const { hostBashTool } = require('./agents/host-bash-tool');
 const { hostFileTool } = require('./agents/host-file-tool');
 const { checkCiStatusTool, monitorCiTool } = require('./agents/github-actions-tool');
+const openclawCapabilityKernel = require('./openclaw-capability-kernel');
 
 const SENTINEL_FENCE_OPEN = '```agent-task-state\n';
 const SENTINEL_FENCE_CLOSE = '\n```';
@@ -254,10 +255,26 @@ async function runAgenticChat(opts) {
   if (!res) throw new Error('runAgenticChat: res is required');
 
   const tools = toolsOverride || buildDefaultTools();
+  const openclawProfile = openclawCapabilityKernel.buildCapabilityProfile({
+    prompt: userQuery,
+    userId: toolContext.userId || null,
+    chatId: toolContext.chatId || null,
+    attachmentCount: Array.isArray(toolContext.fileIds) ? toolContext.fileIds.length : 0,
+    toolNames: tools.map((tool) => tool.name),
+    recentTurnCount: Array.isArray(history) ? history.length : 0,
+    model,
+  });
+  const openclawRuntimeBlock = openclawCapabilityKernel.buildOpenClawPromptBlock(openclawProfile);
 
   const state = freshState(tools.map((tool) => tool.name));
   state.meta.goal = truncate(userQuery, 160);
   state.meta.model = model;
+  state.meta.runtime = {
+    name: 'openclaw-level',
+    version: openclawProfile.version,
+    reason: openclawProfile.routing.reason,
+    capabilities: openclawProfile.capabilities,
+  };
 
   // Initial sentinel — gives the UI an immediate step indicator even
   // before the first model call returns.
@@ -293,6 +310,7 @@ async function runAgenticChat(opts) {
 
   const extraSystem = [
     'Responde SIEMPRE en español, con tono profesional y cercano. No uses emojis.',
+    openclawRuntimeBlock,
     buildThreadWorkContext(history, userQuery),
     'Este hilo es una sesion agentica autónoma: decide, usa herramientas, observa resultados, corrige y finaliza solo cuando tengas una respuesta verificable o la tarea esté completa.',
     'Si el usuario dice "todavía no funciona", "sigue", "arregla", "no sirve", o similar, revisa TODO el historial del hilo para entender qué se pidió antes, qué se hizo, qué falló, y continúa desde donde se quedó. No empieces de cero.',

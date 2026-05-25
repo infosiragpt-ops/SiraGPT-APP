@@ -180,6 +180,8 @@ test('runAgenticChat sends expanded thread context to the model', async () => {
   });
 
   const system = firstCreateArgs.messages.find(m => m.role === 'system')?.content || '';
+  assert.match(system, /OpenClaw-Level Runtime Policy/);
+  assert.match(system, /Capability Contract/);
   assert.match(system, /ongoing autonomous work session/);
   assert.match(system, /cada hilo recuerde la meta completa/);
 });
