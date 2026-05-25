@@ -286,8 +286,16 @@ function createProviderClient(provider) {
 
   if (provider === "Cerebras") {
     // Free IA — Cerebras Llama 3.1 8B used as the SiraGPT free tier and as
-    // the fallback when the user's premium credits run out.
+    // the fallback when the user's premium credits run out. Use the
+    // instrumented variant so every chat.completions.create() call
+    // increments the upstream success/error counters automatically.
     const cerebras = require('../services/ai/cerebras-client');
+    const instrumented = cerebras.createInstrumentedCerebrasClient();
+    if (instrumented) return instrumented;
+    // Fallback path: if Cerebras isn't configured, build a bare OpenAI
+    // client pointing at the Cerebras endpoint so any test using a stub
+    // API key still gets a working object (call will 401 upstream and
+    // surface the error normally).
     const cfg = cerebras.getCerebrasConfig();
     return new OpenAI({
       apiKey: cfg.apiKey || process.env.CEREBRAS_API_KEY || '',
