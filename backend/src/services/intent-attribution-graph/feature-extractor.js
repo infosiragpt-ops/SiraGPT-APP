@@ -342,9 +342,23 @@ function extractFeatures(prompt, opts = {}) {
     return { features: [], language: 'unknown', text };
   }
 
+  // Language-aware lexicon enrichment (PT/FR/DE/IT)
+  let actionLexicon = ACTION_LEXICON;
+  let objectLexicon = OBJECT_LEXICON;
+  try {
+    const ml = require('./multilingual-lexicon');
+    const extLang = ml.detectExtendedLanguage(text);
+    if (extLang) {
+      const extActions = ml.EXTRA_ACTION_LEXICON.filter((e) => e.lang === extLang);
+      const extObjects = ml.EXTRA_OBJECT_LEXICON.filter((e) => e.lang === extLang);
+      if (extActions.length) actionLexicon = [...ACTION_LEXICON, ...extActions];
+      if (extObjects.length) objectLexicon = [...OBJECT_LEXICON, ...extObjects];
+    }
+  } catch (_e) { /* multilingual lexicon optional */ }
+
   const features = [
-    ...applyLexicon(text, ACTION_LEXICON, FEATURE_CATEGORIES.ACTION, 0.88),
-    ...applyLexicon(text, OBJECT_LEXICON, FEATURE_CATEGORIES.OBJECT, 0.82),
+    ...applyLexicon(text, actionLexicon, FEATURE_CATEGORIES.ACTION, 0.88),
+    ...applyLexicon(text, objectLexicon, FEATURE_CATEGORIES.OBJECT, 0.82),
     ...applyLexicon(text, MODIFIER_LEXICON, FEATURE_CATEGORIES.MODIFIER, 0.78),
     ...applyLexicon(text, CONSTRAINT_LEXICON, FEATURE_CATEGORIES.CONSTRAINT, 0.8),
     ...applyLexicon(text, TEMPORAL_LEXICON, FEATURE_CATEGORIES.TEMPORAL, 0.75),
@@ -365,7 +379,14 @@ function extractFeatures(prompt, opts = {}) {
 
   features.push(...inferImplicitFeatures(actions, objects, modifiers, text));
 
-  const language = detectLanguage(text);
+  let language = detectLanguage(text);
+  if (language === 'unknown') {
+    try {
+      const ml = require('./multilingual-lexicon');
+      const ext = ml.detectExtendedLanguage(text);
+      if (ext) language = ext;
+    } catch (_e) { /* optional */ }
+  }
   const tokenCount = text.split(TOKEN_BOUND).filter(Boolean).length;
 
   return {

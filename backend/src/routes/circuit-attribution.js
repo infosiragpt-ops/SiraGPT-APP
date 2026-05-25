@@ -35,6 +35,7 @@ const suppressionDetector = require('../services/context-suppression-detector');
 const driftMonitor = require('../services/concept-drift-monitor');
 const entityTracker = require('../services/cross-turn-entity-tracker');
 const metrics = require('../services/attribution-metrics');
+const explainer = require('../services/attribution-explainer');
 
 const router = express.Router();
 
@@ -284,6 +285,44 @@ router.get('/metrics', optionalAuth, async (req, res) => {
   } catch (err) {
     console.error('[circuit-attribution/metrics] failed:', err?.message || err);
     return res.status(500).json({ error: 'metrics failed' });
+  }
+});
+
+router.post('/explain', optionalAuth, async (req, res) => {
+  try {
+    const prompt = String(req.body?.prompt || '').slice(0, MAX_PROMPT_CHARS);
+    if (!prompt) return res.status(400).json({ error: 'prompt is required' });
+    const out = explainer.explain({
+      prompt,
+      history: sanitizeHistory(req.body?.history),
+      files: sanitizeFiles(req.body?.files),
+      memories: sanitizeMemories(req.body?.memories),
+      ragSnippets: sanitizeRagSnippets(req.body?.ragSnippets),
+      userProfile: req.body?.userProfile && typeof req.body.userProfile === 'object' ? req.body.userProfile : null,
+      draftResponse: typeof req.body?.draftResponse === 'string' ? req.body.draftResponse.slice(0, MAX_RESPONSE_CHARS) : null,
+    });
+    return res.json({
+      ok: true,
+      summary: out.summary,
+      steps: out.steps,
+      narrative: out.narrative,
+      systemPromptBlock: out.bundle.systemPromptBlock,
+    });
+  } catch (err) {
+    console.error('[circuit-attribution/explain] failed:', err?.message || err);
+    return res.status(500).json({ error: 'explain failed' });
+  }
+});
+
+router.post('/explain/concept', optionalAuth, async (req, res) => {
+  try {
+    const prompt = String(req.body?.prompt || '').slice(0, MAX_PROMPT_CHARS);
+    const conceptSurface = String(req.body?.conceptSurface || '').slice(0, 120);
+    if (!prompt || !conceptSurface) return res.status(400).json({ error: 'prompt and conceptSurface are required' });
+    return res.json(explainer.explainConcept({ prompt, conceptSurface }));
+  } catch (err) {
+    console.error('[circuit-attribution/explain/concept] failed:', err?.message || err);
+    return res.status(500).json({ error: 'explain/concept failed' });
   }
 });
 

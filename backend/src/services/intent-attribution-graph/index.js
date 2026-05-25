@@ -24,6 +24,9 @@ const { planAhead } = require('./intent-planner');
 const { detectHiddenIntents } = require('./hidden-intent-detector');
 const { calibrate } = require('./confidence-calibrator');
 const { formatBlock, formatCompactSummary } = require('./prompt-formatter');
+const { analyzeCounterfactuals, formatCounterfactualBlock } = require('./counterfactual-analyzer');
+const { validate: validateResponse, formatValidationBlock } = require('./response-validator');
+const { trackConversation, formatTrackerBlock } = require('./cross-turn-tracker');
 
 function analyzeIntent(prompt, opts = {}) {
   const startedAt = Date.now();
@@ -98,7 +101,17 @@ function analyzeIntent(prompt, opts = {}) {
 }
 
 function formatForPrompt(report, opts = {}) {
-  return formatBlock(report, opts);
+  let block = formatBlock(report, opts);
+  // Append optional sub-blocks if upstream caller asked for them
+  if (opts.includeCounterfactuals && report?.counterfactuals) {
+    const cf = formatCounterfactualBlock(report.counterfactuals);
+    if (cf) block = `${block}\n\n${cf}`;
+  }
+  if (opts.includeTrajectory && report?.trajectory) {
+    const tb = formatTrackerBlock(report.trajectory);
+    if (tb) block = `${block}\n\n${tb}`;
+  }
+  return block;
 }
 
 function compactSummary(report) {
@@ -107,14 +120,43 @@ function compactSummary(report) {
 
 function shouldClarify(report) {
   if (!report?.confidence) return false;
-  return report.confidence.shouldAskClarification === true;
+  if (report.confidence.shouldAskClarification === true) return true;
+  if (report?.counterfactuals?.recommendation === 'high-divergence-ask-clarification') return true;
+  return false;
+}
+
+/**
+ * Full-pipeline analyzer with counterfactuals and (optional) prior-turn
+ * trajectory tracking. Use this when you have conversational history
+ * and want the richest possible intent report.
+ *
+ * opts.history — array of prior IntentReports (most recent last)
+ * opts.attachments — list of files attached to the current prompt
+ */
+function analyzeIntentFull(prompt, opts = {}) {
+  const baseReport = analyzeIntent(prompt, opts);
+  if (baseReport.empty) return baseReport;
+  baseReport.counterfactuals = analyzeCounterfactuals(baseReport);
+  if (Array.isArray(opts.history) && opts.history.length) {
+    baseReport.trajectory = trackConversation(opts.history, baseReport, prompt);
+  }
+  return baseReport;
 }
 
 module.exports = {
   analyzeIntent,
+  analyzeIntentFull,
   formatForPrompt,
   compactSummary,
   shouldClarify,
+  // Phase 2 utilities exported for direct use
+  analyzeCounterfactuals,
+  formatCounterfactualBlock,
+  validateResponse,
+  formatValidationBlock,
+  trackConversation,
+  formatTrackerBlock,
+  // Constants
   FEATURE_CATEGORIES,
   EDGE_TYPES,
 };
