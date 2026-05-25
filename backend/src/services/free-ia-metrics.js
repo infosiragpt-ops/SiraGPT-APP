@@ -154,13 +154,23 @@ function toPrometheusText() {
 const DEGRADED_MIN_SAMPLES = 10;
 const DEGRADED_SUCCESS_RATE = 0.5;
 
-function summary() {
+function summary({ now = Date.now() } = {}) {
   const totalUpstream = state.upstreamSuccess + state.upstreamErrors;
   const rate = totalUpstream === 0 ? null : state.upstreamSuccess / totalUpstream;
   const ratePct = rate === null ? '—' : `${(rate * 100).toFixed(2)}%`;
   const degraded = totalUpstream >= DEGRADED_MIN_SAMPLES
     && rate !== null
     && rate < DEGRADED_SUCCESS_RATE;
+  // Compute throughput in requests/minute over the lifetime of the
+  // counter (since last reset or process boot). Null when too few
+  // samples / too short a window to be meaningful.
+  const sinceStart = state.lastResetAt
+    ? Date.parse(state.lastResetAt)
+    : Date.parse(state.startedAt);
+  const elapsedMin = (now - sinceStart) / 60_000;
+  const requestRatePerMin = (totalUpstream > 0 && elapsedMin >= 1)
+    ? Math.round((totalUpstream / elapsedMin) * 100) / 100
+    : null;
   return {
     line: `Free IA: ${state.totalFallbacks} fallbacks, ${state.upstreamSuccess}/${totalUpstream} upstream OK (${ratePct})${degraded ? ' [DEGRADED]' : ''}`,
     fallbacks: state.totalFallbacks,
@@ -168,6 +178,7 @@ function summary() {
     upstreamTotal: totalUpstream,
     successRate: rate === null ? null : Math.round(rate * 10000) / 10000,
     degraded,
+    requestRatePerMin,
     lastEventAt: state.lastEventAt,
   };
 }
