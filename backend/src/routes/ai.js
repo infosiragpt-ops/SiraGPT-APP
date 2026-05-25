@@ -4708,7 +4708,15 @@ function imageGenerationSizeFor(provider, aspectRatio) {
 function normalizeImageCount(value) {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed)) return 1;
-  return Math.min(2, Math.max(1, parsed));
+  return Math.min(5, Math.max(1, parsed));
+}
+
+function normalizeImageQuality(value) {
+  return ['512px', '1K', '2K', '4K'].includes(value) ? value : '2K';
+}
+
+function openAiImageQualityFor(quality) {
+  return quality === '2K' || quality === '4K' ? 'hd' : 'standard';
 }
 
 function openRouterImageModalitiesFor(model) {
@@ -4770,7 +4778,7 @@ function createOpenRouterClient() {
   });
 }
 
-async function generateOpenRouterImage(openrouter, { model, prompt, aspectRatio, signal }) {
+async function generateOpenRouterImage(openrouter, { model, prompt, aspectRatio, quality, signal }) {
   if (!process.env.OPENROUTER_API_KEY) {
     throw new Error('OPENROUTER_API_KEY is required for OpenRouter image generation.');
   }
@@ -4782,7 +4790,7 @@ async function generateOpenRouterImage(openrouter, { model, prompt, aspectRatio,
       modalities: openRouterImageModalitiesFor(model),
       image_config: {
         aspect_ratio: aspectRatio,
-        image_size: '1K',
+        image_size: quality,
       },
       stream: false,
     },
@@ -4796,9 +4804,9 @@ async function generateOpenRouterImage(openrouter, { model, prompt, aspectRatio,
   return images[0];
 }
 
-function promptWithImageAspectRatio(prompt, aspectRatio) {
+function promptWithImageAspectRatio(prompt, aspectRatio, quality = '2K') {
   const descriptor = IMAGE_ASPECT_RATIOS[aspectRatio]?.prompt || IMAGE_ASPECT_RATIOS['1:1'].prompt;
-  return `${prompt}\n\nImage framing requirement: ${descriptor}. Keep the main subject safely inside the frame.`;
+  return `${prompt}\n\nImage framing requirement: ${descriptor}. Quality target: ${quality}, crisp professional detail. Keep the main subject safely inside the frame.`;
 }
 
 async function cropImageToAspectRatio(imageBuffer, aspectRatio) {
@@ -4887,7 +4895,8 @@ router.post(
     body('provider').trim().notEmpty().withMessage('Provider is required'),
     body('model').trim().notEmpty().withMessage('Model is required'),
     body('aspectRatio').optional().isIn(Object.keys(IMAGE_ASPECT_RATIOS)).withMessage('Invalid image aspect ratio'),
-    body('imageCount').optional().isInt({ min: 1, max: 2 }).withMessage('Image count must be 1 or 2'),
+    body('quality').optional().isIn(['512px', '1K', '2K', '4K']).withMessage('Invalid image quality'),
+    body('imageCount').optional().isInt({ min: 1, max: 5 }).withMessage('Image count must be between 1 and 5'),
   ],
   authenticateToken,
   async (req, res) => {
@@ -4911,10 +4920,11 @@ router.post(
       if (!errors.isEmpty()) {
         return res.status(400).json({ errors: errors.array() });
       }
-      let { prompt, chatId, provider, model, fileId, aspectRatio, imageCount } = req.body;
+      let { prompt, chatId, provider, model, fileId, aspectRatio, quality, imageCount } = req.body;
       aspectRatio = normalizeImageAspectRatio(aspectRatio);
+      quality = normalizeImageQuality(quality);
       imageCount = normalizeImageCount(imageCount);
-      const imagePrompt = promptWithImageAspectRatio(prompt, aspectRatio);
+      const imagePrompt = promptWithImageAspectRatio(prompt, aspectRatio, quality);
       const requestedImageSize = imageGenerationSizeFor(provider, aspectRatio);
       const userId = req.user.id;
       console.log('userId', userId);
@@ -5078,6 +5088,7 @@ router.post(
             model,
             prompt: imagePrompt,
             aspectRatio,
+            quality,
             signal: requestAbortController.signal,
           });
         }
@@ -5098,7 +5109,7 @@ router.post(
           prompt: imagePrompt,
           n: 1,
           size: requestedImageSize,
-          quality: 'standard',
+          quality: openAiImageQualityFor(quality),
           response_format: 'b64_json',
         }, { signal: requestAbortController.signal });
         const { b64_json, ...rest } = response.data[0];
@@ -5135,6 +5146,7 @@ router.post(
           count: imageBase64s.length,
           model,
           provider,
+          quality,
         });
       }
 
@@ -5189,6 +5201,7 @@ router.post(
         imageUrl: primaryImageUrl,
         imageUrls: generatedFiles.map((file) => file.url),
         aspectRatio,
+        quality,
         imageCount: generatedFiles.length,
         tokens: 1000 * generatedFiles.length,
         usage: { current: updatedUser.apiUsage, limit: updatedUser.monthlyLimit }

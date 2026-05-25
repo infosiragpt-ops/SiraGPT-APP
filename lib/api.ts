@@ -1193,7 +1193,7 @@ class ApiClient {
     }
   }
   async generateImage(
-    data: { prompt: string; chatId?: string; provider: string; model: string; fileId?: string; aspectRatio?: string; imageCount?: number },
+    data: { prompt: string; chatId?: string; provider: string; model: string; fileId?: string; aspectRatio?: string; quality?: string; imageCount?: number },
     options: { signal?: AbortSignal } = {},
   ) {
     const response = await this.request('/ai/generate-image', {

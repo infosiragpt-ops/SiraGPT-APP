@@ -299,7 +299,8 @@ type SearchActivityState = {
 }
 
 type ImageAspectRatio = "1:1" | "2:3" | "3:2" | "3:4" | "9:16" | "4:3" | "16:9"
-type ImageGenerationCount = 1 | 2
+type ImageGenerationCount = 1 | 2 | 3 | 4 | 5
+type ImageQuality = "512px" | "1K" | "2K" | "4K"
 
 const IMAGE_ASPECT_RATIO_OPTIONS: Array<{ value: ImageAspectRatio; label: string; ratio: string; className: string }> = [
   { value: "1:1", label: "Square", ratio: "1:1", className: "h-7 w-7" },
@@ -311,13 +312,12 @@ const IMAGE_ASPECT_RATIO_OPTIONS: Array<{ value: ImageAspectRatio; label: string
   { value: "16:9", label: "Wide", ratio: "16:9", className: "h-[18px] w-9" },
 ]
 
+const IMAGE_QUALITY_OPTIONS: ImageQuality[] = ["512px", "1K", "2K", "4K"]
+const IMAGE_COUNT_OPTIONS: ImageGenerationCount[] = [1, 2, 3, 4, 5]
+
 // `ImageAspectRatioMark` was extracted to
 // `components/chat/ComposerInlineDisplays.tsx` to keep this file
 // scannable. It is imported at the top and used unchanged below.
-
-function clampImageGenerationCount(value: number): ImageGenerationCount {
-  return Math.min(2, Math.max(1, value)) as ImageGenerationCount
-}
 
 const SEARCH_ACTIVITY_MAX_ENTRIES = 140
 const ACADEMIC_DEFAULT_TOP_K = 10
@@ -1625,6 +1625,8 @@ const ActiveToolsDisplay = ({
   isGeneratingImage = false,
   selectedImageAspectRatio,
   setSelectedImageAspectRatio,
+  selectedImageQuality,
+  setSelectedImageQuality,
   selectedImageCount,
   setSelectedImageCount,
   isVideoGenerationActive,
@@ -1662,6 +1664,8 @@ const ActiveToolsDisplay = ({
   isGeneratingImage?: boolean;
   selectedImageAspectRatio: ImageAspectRatio;
   setSelectedImageAspectRatio: (ratio: ImageAspectRatio) => void;
+  selectedImageQuality: ImageQuality;
+  setSelectedImageQuality: (quality: ImageQuality) => void;
   selectedImageCount: ImageGenerationCount;
   setSelectedImageCount: (count: ImageGenerationCount) => void;
   isVideoGenerationActive: boolean;
@@ -1895,33 +1899,30 @@ const ActiveToolsDisplay = ({
                 variant="ghost"
                 size="sm"
                 className="group/ratio-trigger relative isolate h-7 gap-1.5 overflow-hidden rounded-lg border border-border/50 bg-background/55 px-2 py-0 text-xs font-semibold text-foreground/80 shadow-[inset_0_1px_0_rgba(255,255,255,0.72),0_8px_22px_-18px_rgba(15,23,42,0.35)] backdrop-blur-xl transition-all duration-200 hover:border-foreground/15 hover:bg-background/80 dark:bg-white/[0.055] dark:hover:bg-white/[0.08]"
-                title={`Proporción de imagen: ${selectedImageAspectRatio}`}
-                aria-label={`Cambiar proporción de imagen. Actual ${selectedImageAspectRatio}`}
+                title={`Imagen: ${selectedImageAspectRatio}, ${selectedImageQuality}, ${selectedImageCount}`}
+                aria-label={`Configurar imagen. Actual ${selectedImageAspectRatio}, ${selectedImageQuality}, ${selectedImageCount}`}
               >
                 <span className="pointer-events-none absolute inset-y-[-55%] left-[-65%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/70 to-transparent opacity-0 blur-sm transition-all duration-700 group-hover/ratio-trigger:left-[92%] group-hover/ratio-trigger:opacity-100 dark:via-white/20" />
                 <ImageAspectRatioMark ratio={selectedImageAspectRatio} selected />
                 <span>{selectedImageAspectRatio}</span>
+                <span className="h-1 w-1 rounded-full bg-current/35" />
+                <span>{selectedImageQuality}</span>
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent
               align="start"
               sideOffset={9}
               collisionPadding={12}
-              className="liquid-menu-surface w-[min(calc(100vw-1.25rem),20rem)] p-0"
+              className="liquid-menu-surface w-[min(calc(100vw-1.25rem),34rem)] overflow-hidden rounded-[28px] border-white/20 bg-black/70 p-0 text-white shadow-[0_24px_80px_-36px_rgba(0,0,0,0.9),inset_0_1px_0_rgba(255,255,255,0.18)] backdrop-blur-2xl dark:bg-black/72"
             >
-              <div className="relative z-10 p-3">
-                <div className="mb-3 flex items-center justify-between">
-                  <div>
-                    <p className="text-[13px] font-semibold leading-none text-foreground">Aspect Ratio</p>
-                    <p className="mt-1 text-[11px] leading-none text-muted-foreground">Formato de salida</p>
-                  </div>
-                  <span className="rounded-full border border-border/45 bg-background/45 px-2 py-1 text-[11px] font-medium text-muted-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.65)]">
-                    {selectedImageAspectRatio}
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-7 gap-1" role="radiogroup" aria-label="Aspect ratio">
+              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_24%_18%,rgba(255,255,255,0.18),transparent_28%),radial-gradient(circle_at_70%_42%,rgba(255,255,255,0.10),transparent_32%),linear-gradient(135deg,rgba(255,255,255,0.12),rgba(255,255,255,0.02)_42%,rgba(255,255,255,0.07))]" />
+              <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-white/24" />
+              <div className="relative z-10">
+                <section className="px-5 pb-6 pt-6 sm:px-7 sm:pb-7 sm:pt-7">
+                  <h3 className="text-[24px] font-medium leading-none tracking-normal text-white sm:text-[28px]">Aspect Ratio</h3>
+                  <div className="mt-6 grid grid-cols-5 gap-2 sm:mt-7 sm:gap-5" role="radiogroup" aria-label="Aspect ratio">
                   {IMAGE_ASPECT_RATIO_OPTIONS.map(option => {
+                    if (option.value === "4:3" || option.value === "9:16") return null;
                     const selected = option.value === selectedImageAspectRatio;
                     return (
                       <button
@@ -1930,65 +1931,90 @@ const ActiveToolsDisplay = ({
                         role="radio"
                         aria-checked={selected}
                         className={cn(
-                          "group/ratio-option relative flex h-[72px] min-w-0 flex-col items-center justify-between overflow-hidden rounded-2xl border px-1 py-2 text-center transition-all duration-200",
+                          "group/ratio-option relative flex h-20 min-w-0 flex-col items-center justify-center gap-3 overflow-hidden rounded-2xl text-center transition-all duration-200 sm:h-24 sm:gap-4",
                           selected
-                            ? "border-foreground/12 bg-foreground/[0.075] text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.72),0_14px_30px_-24px_rgba(15,23,42,0.55)] dark:border-white/15 dark:bg-white/[0.105]"
-                            : "border-transparent bg-transparent text-muted-foreground hover:border-border/50 hover:bg-background/42 hover:text-foreground dark:hover:bg-white/[0.055]"
+                            ? "bg-white/12 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_16px_34px_-22px_rgba(255,255,255,0.35)]"
+                            : "text-white/72 hover:bg-white/[0.07] hover:text-white"
                         )}
                         onClick={() => setSelectedImageAspectRatio(option.value)}
                         title={`${option.label} ${option.ratio}`}
                       >
-                        <span className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_30%_0%,rgba(255,255,255,0.55),transparent_52%)] opacity-0 transition-opacity duration-200 group-hover/ratio-option:opacity-100 dark:bg-[radial-gradient(circle_at_30%_0%,rgba(255,255,255,0.11),transparent_52%)]" />
-                        <span className="relative z-10 text-[12px] font-semibold leading-none tabular-nums">{option.ratio}</span>
-                        <span className="relative z-10 flex h-8 items-center justify-center">
+                        <span className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_28%_5%,rgba(255,255,255,0.24),transparent_45%)] opacity-0 transition-opacity duration-200 group-hover/ratio-option:opacity-100" />
+                        <span className="relative z-10 text-[18px] font-normal leading-none tabular-nums sm:text-[22px]">{option.ratio}</span>
+                        <span className="relative z-10 flex h-8 items-center justify-center text-white">
                           <span
                             className={cn(
-                              "rounded-[5px] border-2 transition-all duration-200",
+                              "rounded-[4px] border-2 transition-all duration-200",
                               option.className,
                               selected
-                                ? "border-foreground bg-background/35 shadow-[0_0_0_3px_rgba(255,255,255,0.24)] dark:bg-white/[0.08]"
-                                : "border-current/65 bg-background/20 group-hover/ratio-option:border-current"
+                                ? "border-white bg-white/8 shadow-[0_0_0_3px_rgba(255,255,255,0.10)]"
+                                : "border-white/82 bg-transparent group-hover/ratio-option:border-white"
                             )}
                           />
-                        </span>
-                        <span className="relative z-10 h-3.5 text-[10px] font-medium leading-none text-muted-foreground/80">
-                          {selected && <Check className="mx-auto h-3.5 w-3.5 text-pink-600 dark:text-pink-300" />}
                         </span>
                       </button>
                     )
                   })}
-                </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="mt-5 inline-flex items-center gap-2 rounded-full text-[19px] font-normal leading-none text-white/78 transition-colors hover:text-white sm:mt-6 sm:text-[21px]"
+                    aria-label="Ver todos los aspect ratios"
+                  >
+                    View All <ChevronDown className="h-5 w-5" />
+                  </button>
+                </section>
+
+                <section className="border-t border-white/10 px-5 py-6 sm:px-7 sm:py-7">
+                  <h3 className="text-[24px] font-medium leading-none tracking-normal text-white sm:text-[28px]">Quality</h3>
+                  <div className="mt-6 flex flex-wrap items-center gap-2 sm:mt-7 sm:gap-4" role="radiogroup" aria-label="Image quality">
+                    {IMAGE_QUALITY_OPTIONS.map(option => {
+                      const selected = option === selectedImageQuality;
+                      return (
+                        <button
+                          key={option}
+                          type="button"
+                          role="radio"
+                          aria-checked={selected}
+                          onClick={() => setSelectedImageQuality(option)}
+                          className={cn(
+                            "relative h-12 rounded-2xl px-3 text-[18px] font-normal leading-none text-white/74 transition-all duration-200 hover:bg-white/[0.07] hover:text-white sm:h-[60px] sm:px-4 sm:text-[22px]",
+                            selected && "bg-white/13 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.16),0_12px_30px_-24px_rgba(255,255,255,0.55)]"
+                          )}
+                        >
+                          {option}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </section>
+
+                <section className="border-t border-white/10 px-5 py-6 sm:px-7 sm:py-7">
+                  <h3 className="text-[24px] font-medium leading-none tracking-normal text-white sm:text-[28px]">Number of Images</h3>
+                  <div className="mt-6 flex flex-wrap items-center gap-2 sm:mt-7 sm:gap-4" role="radiogroup" aria-label="Number of images">
+                    {IMAGE_COUNT_OPTIONS.map(option => {
+                      const selected = option === selectedImageCount;
+                      return (
+                        <button
+                          key={option}
+                          type="button"
+                          role="radio"
+                          aria-checked={selected}
+                          onClick={() => setSelectedImageCount(option)}
+                          className={cn(
+                            "h-12 min-w-10 rounded-2xl px-3 text-[18px] font-normal leading-none text-white/74 transition-all duration-200 hover:bg-white/[0.07] hover:text-white sm:h-[60px] sm:px-4 sm:text-[22px]",
+                            selected && "bg-white/13 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.16),0_12px_30px_-24px_rgba(255,255,255,0.55)]"
+                          )}
+                        >
+                          {option}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </section>
               </div>
             </DropdownMenuContent>
           </DropdownMenu>
-
-          <div
-            className="inline-flex h-7 items-center rounded-lg border border-border/50 bg-muted/45 px-1 text-xs font-semibold text-foreground/80"
-            aria-label="Cantidad de imágenes"
-            title="Cantidad de imágenes, máximo 2"
-          >
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-5 w-5 rounded-md p-0 text-xs hover:bg-background/80 disabled:opacity-35"
-              onClick={() => setSelectedImageCount(clampImageGenerationCount(selectedImageCount - 1))}
-              disabled={selectedImageCount <= 1}
-              aria-label="Generar una imagen menos"
-            >
-              -
-            </Button>
-            <span className="min-w-5 text-center tabular-nums">{selectedImageCount}</span>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-5 w-5 rounded-md p-0 text-xs hover:bg-background/80 disabled:opacity-35"
-              onClick={() => setSelectedImageCount(clampImageGenerationCount(selectedImageCount + 1))}
-              disabled={selectedImageCount >= 2}
-              aria-label="Generar una imagen más"
-            >
-              +
-            </Button>
-          </div>
         </>
       )}
 
@@ -3088,6 +3114,7 @@ function ChatInterfaceContent() {
   const [showInstructions, setShowInstructions] = React.useState(false)
   const [isGeneratingImage, setIsGeneratingImage] = React.useState(false)
   const [selectedImageAspectRatio, setSelectedImageAspectRatio] = React.useState<ImageAspectRatio>("1:1")
+  const [selectedImageQuality, setSelectedImageQuality] = React.useState<ImageQuality>("2K")
   const [selectedImageCount, setSelectedImageCount] = React.useState<ImageGenerationCount>(1)
   const imageAbortControllerRef = React.useRef<AbortController | null>(null)
   const isGeneratingImageRef = React.useRef(false)
@@ -3140,6 +3167,7 @@ function ChatInterfaceContent() {
       if (IMAGE_ASPECT_RATIO_OPTIONS.some(option => option.value === detail.aspectRatio)) {
         setSelectedImageAspectRatio(detail.aspectRatio);
       }
+      setSelectedImageQuality("2K");
       setSelectedImageCount(1);
       setUploadedFiles([{
         id: detail.fileId,
@@ -6546,6 +6574,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         timestamp: new Date().toISOString(),
         metadata: JSON.stringify({
           aspectRatio: selectedImageAspectRatio,
+          quality: selectedImageQuality,
           imageCount: selectedImageCount,
         }),
       };
@@ -6575,12 +6604,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         return { ...baseChat, messages: updatedMessages };
       });
 
-      const payload: { prompt: string; chatId?: string; provider: string; model: string; fileId?: string; aspectRatio?: ImageAspectRatio; imageCount?: ImageGenerationCount } = {
+      const payload: { prompt: string; chatId?: string; provider: string; model: string; fileId?: string; aspectRatio?: ImageAspectRatio; quality?: ImageQuality; imageCount?: ImageGenerationCount } = {
         prompt,
         chatId: activeChatId,
         provider: selectProvider,
         model: selectedModel,
         aspectRatio: selectedImageAspectRatio,
+        quality: selectedImageQuality,
         imageCount: selectedImageCount,
       };
 
@@ -7047,6 +7077,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     isImageGenerationActive, setIsImageGenerationActive,
     isGeneratingImage,
     selectedImageAspectRatio, setSelectedImageAspectRatio,
+    selectedImageQuality, setSelectedImageQuality,
     selectedImageCount, setSelectedImageCount,
     isVideoGenerationActive, setIsVideoGenerationActive,
     isComputerUseActive, setIsComputerUseActive,
