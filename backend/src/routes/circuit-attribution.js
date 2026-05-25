@@ -50,6 +50,7 @@ const traceRecorder = require('../services/attribution-trace-recorder');
 const feedbackRecorder = require('../services/attribution-feedback-recorder');
 const promptQualityScorer = require('../services/attribution-prompt-quality-scorer');
 const replayRunner = require('../services/attribution-replay-runner');
+const skillRecommender = require('../services/attribution-skill-recommender');
 
 const router = express.Router();
 
@@ -697,6 +698,20 @@ router.get('/admin/replay-all', optionalAuth, async (req, res) => {
   } catch (err) {
     console.error('[circuit-attribution/admin/replay-all] failed:', err?.message || err);
     return res.status(500).json({ error: 'replay-all failed' });
+  }
+});
+
+router.post('/recommend-skill', optionalAuth, async (req, res) => {
+  try {
+    const prompt = String(req.body?.prompt || '').slice(0, MAX_PROMPT_CHARS);
+    if (!prompt) return res.status(400).json({ error: 'prompt is required' });
+    const additionalSkills = Array.isArray(req.body?.additionalSkills) ? req.body.additionalSkills : [];
+    const limit = Number.isFinite(req.body?.limit) ? Number(req.body.limit) : 3;
+    const result = skillRecommender.recommend({ prompt, additionalSkills, limit });
+    return res.json({ ...result, block: skillRecommender.buildRecommendationBlock(result) });
+  } catch (err) {
+    console.error('[circuit-attribution/recommend-skill] failed:', err?.message || err);
+    return res.status(500).json({ error: 'recommend-skill failed' });
   }
 });
 
