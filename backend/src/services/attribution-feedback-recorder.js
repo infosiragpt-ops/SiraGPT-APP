@@ -29,6 +29,29 @@ const MAX_ENTRIES = Number.parseInt(process.env.SIRAGPT_FEEDBACK_RECORDER_MAX ||
 const VALID_REACTIONS = new Set(['helpful', 'not_helpful', 'regenerate', 'clarify', 'stop']);
 
 const ENTRIES = [];
+let HYDRATED = false;
+
+let persistence = null;
+const PERSIST_ENABLED = String(process.env.SIRAGPT_ATTRIBUTION_PERSIST || '').toLowerCase() === '1';
+try { if (PERSIST_ENABLED) persistence = require('./attribution-persistence'); } catch (_e) { persistence = null; }
+
+function hydrate() {
+  if (HYDRATED || !persistence) { HYDRATED = true; return; }
+  HYDRATED = true;
+  try {
+    const payload = persistence.load('feedback', 'global');
+    if (payload && Array.isArray(payload.entries)) {
+      for (const e of payload.entries) ENTRIES.push(e);
+    }
+  } catch (_e) { /* swallow */ }
+}
+
+function persistSoon() {
+  if (!persistence) return;
+  try {
+    persistence.scheduleSave('feedback', 'global', { entries: ENTRIES.slice(-MAX_ENTRIES), savedAt: Date.now() });
+  } catch (_e) { /* swallow */ }
+}
 
 function newId() { return `fb_${crypto.randomBytes(6).toString('hex')}`; }
 
@@ -58,8 +81,10 @@ function record({
     timestamp: Date.now(),
     traceSnapshot: snapshot,
   };
+  hydrate();
   ENTRIES.push(entry);
   if (ENTRIES.length > MAX_ENTRIES) ENTRIES.splice(0, ENTRIES.length - MAX_ENTRIES);
+  persistSoon();
   return { ok: true, entry };
 }
 
@@ -117,7 +142,11 @@ function aggregate({ windowMs = null, groupBy = 'reaction' } = {}) {
   return { count: filtered.length, windowMs, groupBy, groups };
 }
 
-function reset() { ENTRIES.length = 0; }
+function reset() {
+  ENTRIES.length = 0;
+  HYDRATED = false;
+  if (persistence) try { persistence.remove('feedback', 'global'); } catch (_e) { /* swallow */ }
+}
 
 function stats() {
   const byReaction = {};
