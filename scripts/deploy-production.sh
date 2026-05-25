@@ -68,6 +68,13 @@ cleanup_frontend_container_conflicts() {
   if [[ -n "$ids" ]]; then
     docker rm -f $ids >/dev/null 2>&1 || true
   fi
+
+  # Some interrupted deploys leave the frontend container attached to a
+  # different Compose project label, so the label/name filter above can miss
+  # the exact name Docker later refuses to recreate.
+  if docker ps -aq --filter "name=^/siragpt-frontend-1$" | grep -q .; then
+    docker rm -f siragpt-frontend-1 >/dev/null 2>&1 || true
+  fi
 }
 
 handle_local_tracked_changes() {
