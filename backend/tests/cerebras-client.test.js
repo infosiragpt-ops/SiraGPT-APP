@@ -248,6 +248,39 @@ test('buildFreeIaModelDescriptor: includes pricing block', () => {
   assert.equal(desc.pricing.badge, 'Gratis');
 });
 
+test('integration: instrumented client → real metrics module captures error+message', async () => {
+  const realMetrics = require('../src/services/free-ia-metrics');
+  realMetrics.reset();
+  class FakeOpenAI {
+    constructor() {
+      this.chat = {
+        completions: {
+          create: async () => {
+            const e = new Error('Cerebras 503 — service unavailable');
+            e.status = 503;
+            throw e;
+          },
+        },
+      };
+    }
+  }
+  const client = createInstrumentedCerebrasClient({
+    env: { CEREBRAS_API_KEY: 'csk-integ' },
+    OpenAICtor: FakeOpenAI,
+    // no metrics arg → uses the real module via lazy require
+  });
+  await assert.rejects(
+    () => client.chat.completions.create({ model: 'llama-3.1-8b', messages: [] }),
+    /service unavailable/,
+  );
+  const s = realMetrics.snapshot();
+  assert.equal(s.upstream.errors, 1);
+  assert.equal(s.upstream.lastErrorCode, '503');
+  assert.equal(s.upstream.lastErrorMessage, 'Cerebras 503 — service unavailable');
+  assert.equal(s.upstream.errorsByCode['503'], 1);
+  realMetrics.reset();
+});
+
 test('createInstrumentedCerebrasClient: records error AND re-throws when upstream fails', async () => {
   const recorded = { success: 0, errors: 0 };
   class FakeOpenAI {
