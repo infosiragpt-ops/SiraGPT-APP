@@ -1,19 +1,38 @@
 'use strict';
 
 /**
- * /api/free-ia — small public-friendly endpoint exposing the Free IA
- * (Cerebras Llama 3.1 8B) availability state.
+ * /api/free-ia — public endpoints exposing the Free IA (Cerebras
+ * Llama 3.1 8B) availability state, metrics, and health.
  *
- *   GET /api/free-ia/status — returns whether Free IA is configured,
- *   the model id, the display name, and the provider. Frontend uses
- *   this to:
- *     1. Render a "Free IA disponible" badge on the model picker.
- *     2. Decide whether to keep the user's selected model sticky on
- *        credit exhaustion (per the spec — never auto-switch the UI).
- *     3. Surface the brand name when the LLM gateway falls back.
+ * Endpoint inventory:
  *
- * Public — no auth required. Returns only non-secret fields (no API
- * key, no base URL is leaked).
+ *   GET  /api/free-ia/status          — config + display name + brand
+ *                                       (public, no auth)
+ *   GET  /api/free-ia/configured      — bare boolean, for cheap checks
+ *                                       (public)
+ *   GET  /api/free-ia/health          — k8s liveness/readiness probe.
+ *                                       200 when configured + healthy;
+ *                                       503 when not configured OR when
+ *                                       >=10 upstream samples show
+ *                                       <50% success.
+ *   GET  /api/free-ia/metrics         — full JSON snapshot for dashboards
+ *                                       (fallbacks, upstream, timestamps).
+ *   GET  /api/free-ia/metrics/summary — one-line digest + degraded flag,
+ *                                       for status badges.
+ *   GET  /api/free-ia/metrics.prom    — Prometheus text exposition.
+ *   POST /api/free-ia/metrics/reset   — admin-only counter reset, returns
+ *                                       the pre-reset snapshot as audit
+ *                                       trail.
+ *
+ * What the frontend uses these for:
+ *   1. Render a "Free IA disponible" badge on the model picker.
+ *   2. Keep the user's selected model sticky on credit exhaustion (per
+ *      the spec — never auto-switch the UI); show a fallback banner
+ *      when the x-sira-fallback header arrives instead.
+ *   3. Surface the brand name when the LLM gateway falls back.
+ *   4. Show a degraded-mode badge when /health flips to 503.
+ *
+ * Security: API key and base URL never appear in any response.
  */
 
 const express = require('express');
