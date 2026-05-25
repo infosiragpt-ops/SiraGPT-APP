@@ -78,6 +78,35 @@ test('normaliseMode: case-insensitive + trims whitespace', () => {
   assert.equal(normaliseMode('Academic-Style'), 'academic');
 });
 
+test('normaliseMode: Spanish aliases resolve to canonical English keys', () => {
+  assert.equal(normaliseMode('humano'), 'humanize');
+  assert.equal(normaliseMode('humanizar'), 'humanize');
+  assert.equal(normaliseMode('estándar'), 'standard');
+  assert.equal(normaliseMode('estandar'), 'standard');
+  assert.equal(normaliseMode('formalizar'), 'formal');
+  assert.equal(normaliseMode('académico'), 'academic');
+  assert.equal(normaliseMode('tesis'), 'academic');
+  assert.equal(normaliseMode('acortar'), 'shorten');
+  assert.equal(normaliseMode('expandir'), 'expand');
+  assert.equal(normaliseMode('simplificar'), 'simple');
+  assert.equal(normaliseMode('fácil'), 'simple');
+  assert.equal(normaliseMode('creativo'), 'creative');
+  assert.equal(normaliseMode('personalizado'), 'custom');
+});
+
+test('normaliseMode: extra English aliases (rephrase, concise, elaborate, ...)', () => {
+  assert.equal(normaliseMode('rephrase'), 'standard');
+  assert.equal(normaliseMode('reword'), 'standard');
+  assert.equal(normaliseMode('natural'), 'humanize');
+  assert.equal(normaliseMode('professional'), 'formal');
+  assert.equal(normaliseMode('concise'), 'shorten');
+  assert.equal(normaliseMode('compress'), 'shorten');
+  assert.equal(normaliseMode('elaborate'), 'expand');
+  assert.equal(normaliseMode('detailed'), 'expand');
+  assert.equal(normaliseMode('easy'), 'simple');
+  assert.equal(normaliseMode('basic'), 'simple');
+});
+
 test('normaliseMode: unknown mode passes through unchanged (lowercase)', () => {
   assert.equal(normaliseMode('weird'), 'weird');
   assert.equal(normaliseMode(''), '');
