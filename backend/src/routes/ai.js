@@ -1822,6 +1822,35 @@ router.post(
         }
       }
 
+      // Attribution-driven RAG re-rank — boost snippets that overlap with
+      // the prompt's detected concepts + named entities. Mutates the
+      // snippet ordering in operationalRagContext before evidenceBlock is
+      // rendered. Toggle off with SIRAGPT_RAG_RERANK_DISABLED=1.
+      try {
+        if (
+          String(process.env.SIRAGPT_RAG_RERANK_DISABLED || '').toLowerCase() !== '1'
+          && operationalRagContext
+          && (Array.isArray(operationalRagContext.snippets) || Array.isArray(operationalRagContext.chunks))
+        ) {
+          const ragReranker = require('../services/attribution-rag-reranker');
+          const rawSnippets = Array.isArray(operationalRagContext.snippets)
+            ? operationalRagContext.snippets
+            : operationalRagContext.chunks;
+          if (rawSnippets.length > 1) {
+            const ranked = ragReranker.rerank({ prompt, snippets: rawSnippets, max: rawSnippets.length });
+            const reordered = ranked.map((r) => r.original);
+            if (Array.isArray(operationalRagContext.snippets)) operationalRagContext.snippets = reordered;
+            if (Array.isArray(operationalRagContext.chunks)) operationalRagContext.chunks = reordered;
+            try {
+              const top = ranked[0];
+              console.log(`[rag-reranker] reordered ${ranked.length} snippets; top combined=${top.combinedScore} (base=${top.baseScore} attr=${top.attributionScore})`);
+            } catch (_logErr) { /* swallow */ }
+          }
+        }
+      } catch (rerankErr) {
+        console.warn('[rag-reranker] failed (continuing without):', rerankErr?.message || rerankErr);
+      }
+
       const evidenceBlock = operationalRagContext?.contextBlock
         ? `\n\n${operationalRagContext.contextBlock}`
         : '';
