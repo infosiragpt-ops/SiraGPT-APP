@@ -49,6 +49,7 @@ const crossChatSimilarity = require('../services/cross-chat-intent-similarity');
 const traceRecorder = require('../services/attribution-trace-recorder');
 const feedbackRecorder = require('../services/attribution-feedback-recorder');
 const promptQualityScorer = require('../services/attribution-prompt-quality-scorer');
+const replayRunner = require('../services/attribution-replay-runner');
 
 const router = express.Router();
 
@@ -670,6 +671,32 @@ router.post('/quality', optionalAuth, async (req, res) => {
   } catch (err) {
     console.error('[circuit-attribution/quality] failed:', err?.message || err);
     return res.status(500).json({ error: 'quality failed' });
+  }
+});
+
+router.post('/replay/:traceId', optionalAuth, async (req, res) => {
+  try {
+    const traceId = String(req.params?.traceId || '').slice(0, 64);
+    if (!traceId) return res.status(400).json({ error: 'traceId is required' });
+    const history = sanitizeHistory(req.body?.history);
+    const driftBudget = Number.isFinite(req.body?.driftBudget) ? Number(req.body.driftBudget) : undefined;
+    const result = replayRunner.replay({ traceId, history, driftBudget });
+    if (!result.ok) return res.status(404).json(result);
+    return res.json({ ...result, block: replayRunner.buildReplayBlock(result) });
+  } catch (err) {
+    console.error('[circuit-attribution/replay] failed:', err?.message || err);
+    return res.status(500).json({ error: 'replay failed' });
+  }
+});
+
+router.get('/admin/replay-all', optionalAuth, async (req, res) => {
+  try {
+    const driftBudget = Number.isFinite(Number(req.query?.driftBudget)) ? Number(req.query.driftBudget) : undefined;
+    const limit = Number.isFinite(Number(req.query?.limit)) ? Number(req.query.limit) : 20;
+    return res.json({ ok: true, ...replayRunner.replayAll({ driftBudget, limit }) });
+  } catch (err) {
+    console.error('[circuit-attribution/admin/replay-all] failed:', err?.message || err);
+    return res.status(500).json({ error: 'replay-all failed' });
   }
 });
 
