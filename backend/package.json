@@ -28,7 +28,8 @@
     "generate:api-types": "node scripts/generate-api-types.js",
     "generate:api-types:check": "node scripts/generate-api-types.js --check",
     "eval:attribution": "node scripts/run-attribution-eval.js",
-    "eval:attribution:json": "node scripts/run-attribution-eval.js --json"
+    "eval:attribution:json": "node scripts/run-attribution-eval.js --json",
+    "inspect:attribution": "node scripts/inspect-attribution.js"
   },
   "dependencies": {
     "@ai-sdk/langchain": "2.0.174",
