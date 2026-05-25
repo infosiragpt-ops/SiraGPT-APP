@@ -604,4 +604,39 @@ router.post('/intent-attribution-graph', optionalAuth, coworkRateLimit, async (r
   }
 });
 
+// ── Validate a candidate response against an intent report.
+// Useful for frontend / agents to self-evaluate a draft response before
+// sending it to the user. Returns coverage score, missing high-importance
+// features, hidden-intent gaps, and remediation feedback.
+router.post('/intent-attribution-graph/validate', optionalAuth, coworkRateLimit, async (req, res) => {
+  try {
+    const { prompt, response, attachments } = req.body || {};
+    if (typeof prompt !== 'string' || typeof response !== 'string') {
+      return res.status(400).json({ error: 'prompt and response (both strings) are required' });
+    }
+    if (prompt.length > 200_000 || response.length > 200_000) {
+      return res.status(413).json({ error: 'input too large (max 200k chars each)' });
+    }
+    const intentAttributionGraph = require('../services/intent-attribution-graph');
+    const report = intentAttributionGraph.analyzeIntent(prompt, {
+      attachments: Array.isArray(attachments) ? attachments : [],
+    });
+    const validation = intentAttributionGraph.validateResponse(report, response);
+    res.json({
+      ok: true,
+      report: {
+        language: report.language,
+        stats: report.stats,
+        confidence: report.confidence,
+        supernodes: report.supernodes,
+        hiddenIntents: report.hiddenIntents,
+      },
+      validation,
+      validationBlock: intentAttributionGraph.formatValidationBlock(validation),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
