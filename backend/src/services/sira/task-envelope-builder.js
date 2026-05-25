@@ -515,6 +515,13 @@ function deriveGoalModel(text, taxonomyIntent, attachments, contextualUnderstand
   if (goalUnderstanding.proactive_next_steps.length > 0) {
     successCriteria.push(`Aplicar pasos proactivos: ${goalUnderstanding.proactive_next_steps.slice(0, 4).join(", ")}.`);
   }
+  const attributionGraph = normalizeAttributionGraphContext(contextualUnderstanding?.attribution_graph_context);
+  if (attributionGraph.hypothesis && attributionGraph.confidence >= 0.6) {
+    successCriteria.push(`Usar la hipotesis de atribucion contextual para seleccionar contexto y herramientas: ${attributionGraph.hypothesis}.`);
+  }
+  if (attributionGraph.critical_paths.length > 0) {
+    successCriteria.push(`Respetar rutas criticas de contexto: ${attributionGraph.critical_paths.slice(0, 3).join("; ")}.`);
+  }
   const nonGoals = ["No inventar fuentes.", "No modificar archivos originales sin confirmacion.", "No realizar acciones destructivas."];
   if (valueContext.constraints.some(constraint => constraint.id === "preserve_interface")) {
     nonGoals.push("No alterar la interfaz ni los contratos visuales existentes.");
@@ -1428,6 +1435,7 @@ function normalizeContextualUnderstanding(contextualUnderstanding) {
       : [],
     value_context: normalizeContextualValueContext(contextualUnderstanding.value_context),
     goal_understanding: normalizeGoalUnderstanding(contextualUnderstanding.goal_understanding),
+    attribution_graph_context: normalizeAttributionGraphContext(contextualUnderstanding.attribution_graph_context),
   };
 }
 
@@ -1451,6 +1459,41 @@ function compactContextualUnderstanding(contextualUnderstanding) {
     goal_understanding_confidence: normalized.goal_understanding.confidence,
     desired_outcome: normalized.goal_understanding.desired_outcome,
     proactive_next_steps: normalized.goal_understanding.proactive_next_steps,
+    attribution_graph_confidence: normalized.attribution_graph_context.confidence,
+    attribution_hypothesis: normalized.attribution_graph_context.hypothesis,
+    attribution_critical_paths: normalized.attribution_graph_context.critical_paths,
+  };
+}
+
+function normalizeAttributionGraphContext(graph) {
+  const ctx = graph && typeof graph === "object" ? graph : {};
+  return {
+    source: String(ctx.source || "deterministic_attribution_graph_context"),
+    hypothesis: ctx.hypothesis ? String(ctx.hypothesis).slice(0, 300) : null,
+    supernodes: Array.isArray(ctx.supernodes)
+      ? ctx.supernodes.slice(0, 10).map((node) => ({
+        id: String(node?.id || ""),
+        label: String(node?.label || "").slice(0, 90),
+        evidence: String(node?.evidence || "").slice(0, 160),
+        confidence: clamp01(Number(node?.confidence || 0)),
+        kind: String(node?.kind || "feature"),
+      })).filter((node) => node.id && node.label)
+      : [],
+    edges: Array.isArray(ctx.edges)
+      ? ctx.edges.slice(0, 12).map((edge) => ({
+        from: String(edge?.from || ""),
+        to: String(edge?.to || ""),
+        relation: String(edge?.relation || "").slice(0, 120),
+        weight: clamp01(Number(edge?.weight || 0)),
+      })).filter((edge) => edge.from && edge.to)
+      : [],
+    critical_paths: Array.isArray(ctx.critical_paths)
+      ? ctx.critical_paths.map(String).filter(Boolean).slice(0, 5)
+      : [],
+    uncertainty: Array.isArray(ctx.uncertainty)
+      ? ctx.uncertainty.map(String).filter(Boolean).slice(0, 5)
+      : [],
+    confidence: clamp01(Number(ctx.confidence || 0)),
   };
 }
 
@@ -1485,6 +1528,7 @@ module.exports = {
   normalizeContextualUnderstanding,
   normalizeContextualValueContext,
   normalizeGoalUnderstanding,
+  normalizeAttributionGraphContext,
   compactContextualUnderstanding,
   compactContextualValueContext,
 };

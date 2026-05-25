@@ -200,6 +200,25 @@ interface Message {
   metadata?: string
 }
 
+function parseMessageMetadata(metadata: unknown): Record<string, any> {
+  if (!metadata) return {}
+  if (typeof metadata === 'object') return metadata as Record<string, any>
+  if (typeof metadata !== 'string') return {}
+  try {
+    const parsed = JSON.parse(metadata)
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function getRegenerationAttempt(message?: Message | null): number {
+  const meta = parseMessageMetadata(message?.metadata)
+  const raw = meta?.regeneration?.attempt ?? meta?.regenerationAttempt ?? meta?.regenerateAttempt
+  const value = Number(raw)
+  return Number.isFinite(value) && value > 0 ? Math.min(999, Math.floor(value)) : 0
+}
+
 type VideoGenerationOptions = {
   resolution?: '480p' | '720p'
   aspectRatio?: 'auto' | '16:9' | '9:16' | '1:1' | '4:3' | '3:4' | '21:9'
@@ -1750,6 +1769,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     }
 
     const originalUserMessage = currentChat.messages[targetUserMessageIndex];
+    const nextRegenerationAttempt = getRegenerationAttempt(currentChat.messages[targetAiMessageIndex]) + 1;
 
     // Keep only messages up to (and including) the user message we want to regenerate from
     const messagesBeforeRegeneration = currentChat.messages.slice(0, targetAiMessageIndex);
@@ -1790,6 +1810,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       tokens: 0,
       timestamp: new Date().toISOString(),
       files: undefined,
+      metadata: JSON.stringify({ regeneration: { attempt: nextRegenerationAttempt } }),
     };
 
     // Update chat to include messages before regeneration + new placeholder
@@ -1841,6 +1862,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           files: (originalUserMessage.files?.map((f: any) => f.id) as string[]) || [],
           streamId: streamId,
           regenerate: true,
+          regenerationAttempt: nextRegenerationAttempt,
         },
         (chunk) => {
           // Check if we should stop processing chunks

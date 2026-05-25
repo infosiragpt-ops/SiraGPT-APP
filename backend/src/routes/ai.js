@@ -831,6 +831,14 @@ router.post('/intent/semantic', optionalAuth, async (req, res) => {
         skill_ids: analysis.structured_intent.skill_ids,
       },
       semanticProfile: analysis.semantic_profile,
+      intentAttributionGraph: {
+        version: analysis.intent_attribution_graph.version,
+        node_count: analysis.intent_attribution_graph.node_count,
+        edge_count: analysis.intent_attribution_graph.edge_count,
+        intent_summary: analysis.intent_attribution_graph.intent_summary,
+        resolution: analysis.intent_attribution_graph.resolution,
+        top_paths: analysis.intent_attribution_graph.top_paths,
+      },
       skillPlan: {
         version: analysis.skill_plan.version,
         primary_skill_id: analysis.skill_plan.primary_skill_id,
@@ -1187,10 +1195,14 @@ router.post(
         return res.status(400).json({ errors: errors.array() });
       }
 
-      let { model, prompt, chatId, files, provider, regenerate, webSearchMode } = req.body;
+      let { model, prompt, chatId, files, provider, regenerate, webSearchMode, regenerationAttempt } = req.body;
       const isAuth = !!req.user;
       const userId = isAuth ? req.user.id : null;
       const canPersist = isAuth && !!chatId;
+      const regenerationAttemptNumber = Math.floor(Number(regenerationAttempt));
+      const normalizedRegenerationAttempt = regenerate
+        ? Math.max(1, Math.min(999, Number.isFinite(regenerationAttemptNumber) ? regenerationAttemptNumber : 1))
+        : null;
 
       if (isAuth && req.user) {
         const requestedModelBeforeQuota = model;
@@ -1620,6 +1632,7 @@ router.post(
       const conversationUnderstandingBlock = conversationUnderstanding.buildConversationUnderstandingBlock({
         history: __conversationHistoryForUnderstanding,
         currentPrompt: prompt,
+        files: processedFiles,
       });
 
       // PR-6: conversation-repair detection.
@@ -4449,6 +4462,10 @@ router.post(
         const codexMeta = req._codexRunId
           ? { codexRunId: req._codexRunId, taskId: req._codexRunId, type: 'codex_delegated' }
           : null;
+        const assistantMeta = {
+          ...(codexMeta || {}),
+          ...(normalizedRegenerationAttempt ? { regeneration: { attempt: normalizedRegenerationAttempt } } : {}),
+        };
         const savedChat = await saveChatAndTrackUsage(
           userId,
           canPersist ? chatId : null,
@@ -4459,7 +4476,7 @@ router.post(
           processedFiles,
           newFiles,
           regenerate,
-          codexMeta,
+          Object.keys(assistantMeta).length > 0 ? assistantMeta : null,
         );
         if (savedChat?.assistantMessage?.id && operationalRagContext?.active) {
           operationalRag.scheduleQualityAudit({

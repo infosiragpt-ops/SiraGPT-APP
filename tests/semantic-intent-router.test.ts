@@ -251,4 +251,19 @@ describe("semantic intent router · structured profile", () => {
     assert.equal(analysis.request_intelligence.context.has_contextual_followup, true)
     assert.ok(analysis.contract.user_constraints.includes("conversation_context:previous_turn"))
   })
+
+  it("exposes an observable attribution graph for intent context", () => {
+    const analysis = semanticRouter.buildSemanticIntentAnalysis({
+      rawUserRequest: "implementa esto con lo anterior y ejecuta tests",
+      conversationHistory: [
+        { role: "user", text: "Mejora el backend del software sin tocar UI" },
+        { role: "assistant", text: "Listo, revisaré backend y pruebas." },
+      ],
+    })
+
+    assert.equal(analysis.intent_attribution_graph.resolution.depends_on_thread, true)
+    assert.equal(analysis.intent_attribution_graph.resolution.target, "software implementation")
+    assert.ok(analysis.intent_attribution_graph.node_count >= 3)
+    assert.ok(analysis.routing.intent_attribution_node_count >= 3)
+  })
 })

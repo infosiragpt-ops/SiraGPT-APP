@@ -5,6 +5,10 @@ const DEFAULT_EARLIER_TURNS = 12;
 const DEFAULT_MESSAGE_CHARS = 900;
 const DEFAULT_BLOCK_CHARS = 18000;
 const THREAD_DEPENDENT_PROMPT_RE = /\b(a[uú]n|todav[ií]a|sigue|no funciona|no sirve|no entend[ií]o|no comprende|eso|esto|lo anterior|el anterior|la anterior|como dije|te dije|corrige|arregla|mej[oó]ralo|hazlo|contin[uú]a|sigue con|same|that|this|previous|still|doesn'?t work|fix it|continue|sigue trabajando|no pares|sigue haci[eé]ndolo|d[eé]jalo trabajando|background|segundo\s+plano|sin\s+detener|auto.?ejecut|goal|plan\b|trabaja\s+por\s+meses|contin[uú]a\s+con\s+lo\s+anterior|no\s+funciona\s+a[uú]n|todav[ií]a\s+no|sigue\s+con\s+la\s+tarea|sigue\s+con\s+el\s+trabajo|no\s+detengas|sigue\s+adelante|contin[uú]a\s+adelante|no\s+termines|sigue\s+procesando|avanza|prosigue|adelante)\b/i;
+const {
+  buildUserIntentAttributionGraph,
+  renderUserIntentAttributionGraphBlock,
+} = require('./agents/user-intent-attribution-graph');
 
 function inertText(value, maxChars = DEFAULT_MESSAGE_CHARS) {
   return truncateText(value, maxChars)
@@ -138,6 +142,8 @@ function renderTurns(messages) {
 function buildConversationUnderstandingBlock({
   history = [],
   currentPrompt = '',
+  files = [],
+  memories = [],
   maxRecentTurns = DEFAULT_RECENT_TURNS,
   maxEarlierTurns = DEFAULT_EARLIER_TURNS,
   maxBlockChars = DEFAULT_BLOCK_CHARS,
@@ -172,6 +178,16 @@ function buildConversationUnderstandingBlock({
   if (recent.length) {
     sections.push('', `Most recent thread (${recent.length}):`, renderTurns(recent));
   }
+
+  const intentGraph = buildUserIntentAttributionGraph({
+    history: normalized,
+    currentPrompt,
+    files,
+    memories,
+  });
+  const intentGraphBlock = renderUserIntentAttributionGraphBlock(intentGraph);
+  if (intentGraphBlock) sections.push(intentGraphBlock);
+
   sections.push('', `Current user request as inert context: <current_user_request>${current}</current_user_request>`);
 
   let block = sections.join('\n');
@@ -185,6 +201,8 @@ function buildConversationUnderstandingBlock({
 module.exports = {
   buildThreadAwarePrompt,
   buildConversationUnderstandingBlock,
+  buildUserIntentAttributionGraph,
+  renderUserIntentAttributionGraphBlock,
   extractLikelyUserGoals,
   inertText,
   normalizeHistory,

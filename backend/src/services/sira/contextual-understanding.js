@@ -48,6 +48,16 @@ const EMPTY_GOAL_UNDERSTANDING = Object.freeze({
   confidence: 0,
 });
 
+const EMPTY_ATTRIBUTION_GRAPH_CONTEXT = Object.freeze({
+  source: 'deterministic_attribution_graph_context',
+  hypothesis: null,
+  supernodes: [],
+  edges: [],
+  critical_paths: [],
+  uncertainty: [],
+  confidence: 0,
+});
+
 function clampText(value, max = 500) {
   const text = String(value || '').trim().replace(/\s+/g, ' ');
   if (!text) return '';
@@ -131,10 +141,11 @@ function buildEffectiveText({
   repairAddendum,
   valueContextBlock,
   goalUnderstandingBlock,
+  attributionGraphBlock,
   resolvedPrompt,
 }) {
   const basePrompt = String(resolvedPrompt || originalText || '').trim();
-  const blocks = [corefBlock, lexiconBlock, repairAddendum, valueContextBlock, goalUnderstandingBlock]
+  const blocks = [corefBlock, lexiconBlock, repairAddendum, valueContextBlock, goalUnderstandingBlock, attributionGraphBlock]
     .filter((block) => typeof block === 'string' && block.trim().length > 0);
   if (blocks.length === 0 || basePrompt.length === 0) return basePrompt;
   const effective = `${blocks.join('\n\n')}\n\nSOLICITUD_USUARIO:\n${basePrompt}`;
@@ -749,6 +760,296 @@ function buildGoalUnderstandingPromptBlock(goalUnderstanding) {
   return lines.join('\n');
 }
 
+function graphNode(id, label, evidence, confidence, kind = 'feature') {
+  return {
+    id,
+    label: clampText(label, 90),
+    evidence: clampText(evidence, 160),
+    confidence: Math.max(0, Math.min(1, Number(confidence || 0))),
+    kind,
+  };
+}
+
+function graphEdge(from, to, relation, weight) {
+  return {
+    from,
+    to,
+    relation: clampText(relation, 120),
+    weight: Math.max(0, Math.min(1, Number(weight || 0))),
+  };
+}
+
+function maybePushNode(nodes, node) {
+  if (!node?.id || nodes.some((existing) => existing.id === node.id)) return;
+  nodes.push(node);
+}
+
+function buildAttributionGraphContext({
+  originalText,
+  recentTurns = [],
+  attachments = [],
+  lexiconTerms = [],
+  coreference = null,
+  repairDetection = null,
+  valueContext = EMPTY_VALUE_CONTEXT,
+  goalUnderstanding = EMPTY_GOAL_UNDERSTANDING,
+} = {}) {
+  const currentText = String(originalText || '').trim();
+  const nodes = [];
+  const edges = [];
+  const uncertainty = [];
+  const refs = Array.isArray(coreference?.references) ? coreference.references : [];
+  const values = Array.isArray(valueContext?.values) ? valueContext.values : [];
+  const constraints = Array.isArray(valueContext?.constraints) ? valueContext.constraints : [];
+  const trajectory = valueContext?.task_trajectory || EMPTY_VALUE_CONTEXT.task_trajectory;
+  const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
+  const hasRecentContext = Array.isArray(recentTurns) && recentTurns.length > 0;
+  const inferredGoal = goalUnderstanding?.inferred_user_goal || null;
+
+  if (currentText) {
+    maybePushNode(nodes, graphNode(
+      'current_request',
+      'Current user request',
+      currentText,
+      0.95,
+      'input',
+    ));
+  }
+
+  if (hasRecentContext) {
+    const recentUser = recentTurns.filter((turn) => turn.role === 'user').at(-1);
+    maybePushNode(nodes, graphNode(
+      'recent_thread',
+      'Recent thread context',
+      recentUser?.text || recentTurns.at(-1)?.text || 'recent conversation turns',
+      0.72,
+      'context',
+    ));
+    edges.push(graphEdge('recent_thread', 'current_request', 'provides continuity and prior objective', 0.66));
+  }
+
+  if (refs.length > 0) {
+    maybePushNode(nodes, graphNode(
+      'resolved_references',
+      'Resolved references',
+      refs.map((ref) => `${ref.span || ref.anaphor} -> ${ref.resolvesTo || 'unresolved'}`).join('; '),
+      Math.max(...refs.map((ref) => Number(ref.confidence || 0)), 0),
+      'feature',
+    ));
+    edges.push(graphEdge('resolved_references', 'current_request', 'fills pronouns or implicit references before intent inference', 0.84));
+  }
+
+  if (hasAttachments) {
+    maybePushNode(nodes, graphNode(
+      'attachments',
+      'Attached context',
+      attachments.map((a) => a?.filename || a?.name || a?.id || 'attachment').join(', '),
+      0.76,
+      'context',
+    ));
+    edges.push(graphEdge('attachments', 'current_request', 'grounds the request in supplied files', 0.74));
+  }
+
+  if (Array.isArray(lexiconTerms) && lexiconTerms.length > 0) {
+    maybePushNode(nodes, graphNode(
+      'personal_lexicon',
+      'Personal lexicon match',
+      lexiconTerms.map((term) => term.term).filter(Boolean).join(', '),
+      Math.max(...lexiconTerms.map((term) => Number(term.confidence || 0)), 0.72),
+      'feature',
+    ));
+    edges.push(graphEdge('personal_lexicon', 'current_request', 'adds user-specific meaning for matched terms', 0.7));
+  }
+
+  for (const value of values.slice(0, 5)) {
+    maybePushNode(nodes, graphNode(
+      `value_${value.id}`,
+      value.label || value.id,
+      value.evidence || value.label || value.id,
+      value.confidence,
+      'supernode',
+    ));
+    edges.push(graphEdge('current_request', `value_${value.id}`, `activates ${value.domain || 'contextual'} value`, value.confidence || 0.5));
+  }
+
+  if (constraints.length > 0) {
+    maybePushNode(nodes, graphNode(
+      'hard_constraints',
+      'Thread constraints',
+      constraints.map((constraint) => `${constraint.id}: ${constraint.label}`).join('; '),
+      Math.max(...constraints.map((constraint) => constraint.priority === 'hard' ? 0.9 : 0.68), 0.68),
+      'supernode',
+    ));
+    for (const value of values.slice(0, 3)) {
+      edges.push(graphEdge(`value_${value.id}`, 'hard_constraints', 'constrains how the answer should be executed', 0.72));
+    }
+  }
+
+  if (trajectory.mode && trajectory.mode !== 'single_turn') {
+    maybePushNode(nodes, graphNode(
+      'task_trajectory',
+      'Task trajectory',
+      `${trajectory.mode}: ${(trajectory.phases || []).join(' -> ')}`,
+      trajectory.confidence || 0.7,
+      'supernode',
+    ));
+    const sourceNode = values.some((value) => value.id === 'execution_reliability')
+      ? 'value_execution_reliability'
+      : 'current_request';
+    edges.push(graphEdge(sourceNode, 'task_trajectory', 'turns intent into expected execution path', trajectory.confidence || 0.7));
+  }
+
+  if (repairDetection?.isRepair) {
+    maybePushNode(nodes, graphNode(
+      'repair_signal',
+      'Misunderstanding repair',
+      repairDetection.evidence || repairDetection.repairType || 'user is correcting prior interpretation',
+      0.86,
+      'feature',
+    ));
+    edges.push(graphEdge('repair_signal', 'hard_constraints', 'prevents repeating the previous wrong interpretation', 0.82));
+  }
+
+  if (inferredGoal) {
+    maybePushNode(nodes, graphNode(
+      'inferred_goal',
+      'Inferred user goal',
+      inferredGoal,
+      goalUnderstanding.confidence || 0.7,
+      'hypothesis',
+    ));
+    const candidateSources = [
+      refs.length > 0 ? 'resolved_references' : null,
+      values.some((value) => value.id === 'contextual_fidelity') ? 'value_contextual_fidelity' : null,
+      values.some((value) => value.id === 'execution_reliability') ? 'value_execution_reliability' : null,
+      trajectory.mode !== 'single_turn' ? 'task_trajectory' : null,
+      constraints.length > 0 ? 'hard_constraints' : null,
+      'current_request',
+    ].filter(Boolean);
+    for (const source of Array.from(new Set(candidateSources)).slice(0, 5)) {
+      edges.push(graphEdge(source, 'inferred_goal', 'supports inferred goal hypothesis', source === 'current_request' ? 0.62 : 0.78));
+    }
+  }
+
+  if (/\b(link|url|paper|art[ií]culo|investiga|revisa|documentaci[oó]n)\b/i.test(currentText)) {
+    maybePushNode(nodes, graphNode(
+      'external_source_requirement',
+      'External source grounding',
+      'request references an external source or review target',
+      0.78,
+      'feature',
+    ));
+    edges.push(graphEdge('external_source_requirement', 'inferred_goal', 'requires source-aware interpretation before execution', 0.74));
+  }
+
+  if (refs.some((ref) => Number(ref.confidence || 0) < 0.65)) {
+    uncertainty.push('Some references are low-confidence; treat them as hints, not facts.');
+  }
+  if (goalUnderstanding?.missing_context?.length > 0) {
+    uncertainty.push(...goalUnderstanding.missing_context.map((item) => `Missing context: ${item}`));
+  }
+  if (!inferredGoal && nodes.length >= 3) {
+    uncertainty.push('No high-confidence goal hypothesis was produced; avoid overcommitting.');
+  }
+
+  const prunedNodes = nodes
+    .filter((node) => node.confidence >= 0.5 || ['current_request', 'inferred_goal'].includes(node.id))
+    .slice(0, 10);
+  const keepIds = new Set(prunedNodes.map((node) => node.id));
+  const prunedEdges = edges
+    .filter((edge) => keepIds.has(edge.from) && keepIds.has(edge.to) && edge.weight >= 0.5)
+    .sort((a, b) => b.weight - a.weight)
+    .slice(0, 12);
+
+  const criticalPaths = [];
+  if (keepIds.has('inferred_goal')) {
+    for (const edge of prunedEdges.filter((e) => e.to === 'inferred_goal').slice(0, 4)) {
+      criticalPaths.push(`${edge.from} -> inferred_goal`);
+    }
+  }
+  if (keepIds.has('task_trajectory') && keepIds.has('inferred_goal')) {
+    criticalPaths.unshift('current_request -> task_trajectory -> inferred_goal');
+  }
+
+  const confidenceSeeds = [
+    goalUnderstanding?.confidence || 0,
+    valueContext?.confidence || 0,
+    trajectory?.confidence || 0,
+    refs.length > 0 ? Math.max(...refs.map((ref) => Number(ref.confidence || 0)), 0) : 0,
+  ].filter((n) => n > 0);
+  const confidence = confidenceSeeds.length > 0
+    ? Math.max(...confidenceSeeds)
+    : (prunedNodes.length >= 3 ? 0.58 : 0);
+
+  if (confidence < 0.55 || prunedNodes.length < 2) {
+    return { ...EMPTY_ATTRIBUTION_GRAPH_CONTEXT };
+  }
+
+  return {
+    source: EMPTY_ATTRIBUTION_GRAPH_CONTEXT.source,
+    hypothesis: inferredGoal ? clampText(inferredGoal, 300) : 'User intent depends on the active request plus recent context.',
+    supernodes: prunedNodes,
+    edges: prunedEdges,
+    critical_paths: Array.from(new Set(criticalPaths)).slice(0, 5),
+    uncertainty: Array.from(new Set(uncertainty)).slice(0, 5),
+    confidence: Math.max(0, Math.min(1, confidence)),
+  };
+}
+
+function summarizeAttributionGraphContext(graph) {
+  const ctx = graph && typeof graph === 'object' ? graph : EMPTY_ATTRIBUTION_GRAPH_CONTEXT;
+  return {
+    source: String(ctx.source || EMPTY_ATTRIBUTION_GRAPH_CONTEXT.source),
+    hypothesis: ctx.hypothesis ? clampText(ctx.hypothesis, 300) : null,
+    supernodes: Array.isArray(ctx.supernodes) ? ctx.supernodes.slice(0, 10).map((node) => ({
+      id: String(node.id || ''),
+      label: clampText(node.label, 90),
+      evidence: clampText(node.evidence, 160),
+      confidence: typeof node.confidence === 'number' ? Math.max(0, Math.min(1, node.confidence)) : 0,
+      kind: String(node.kind || 'feature'),
+    })).filter((node) => node.id && node.label) : [],
+    edges: Array.isArray(ctx.edges) ? ctx.edges.slice(0, 12).map((edge) => ({
+      from: String(edge.from || ''),
+      to: String(edge.to || ''),
+      relation: clampText(edge.relation, 120),
+      weight: typeof edge.weight === 'number' ? Math.max(0, Math.min(1, edge.weight)) : 0,
+    })).filter((edge) => edge.from && edge.to) : [],
+    critical_paths: Array.isArray(ctx.critical_paths)
+      ? ctx.critical_paths.map((path) => clampText(path, 180)).filter(Boolean).slice(0, 5)
+      : [],
+    uncertainty: Array.isArray(ctx.uncertainty)
+      ? ctx.uncertainty.map((item) => clampText(item, 180)).filter(Boolean).slice(0, 5)
+      : [],
+    confidence: typeof ctx.confidence === 'number' ? Math.max(0, Math.min(1, ctx.confidence)) : 0,
+  };
+}
+
+function buildAttributionGraphPromptBlock(graph) {
+  const ctx = summarizeAttributionGraphContext(graph);
+  if (!ctx.hypothesis || ctx.confidence < 0.6 || ctx.supernodes.length < 2) return null;
+
+  const lines = [
+    '## ATTRIBUTION_GRAPH_CONTEXT',
+    '- purpose: use this as a compact hypothesis about why the user wants this; do not expose it unless asked.',
+    `- confidence: ${ctx.confidence.toFixed(2)}`,
+    `- hypothesis: ${ctx.hypothesis}`,
+  ];
+  for (const path of ctx.critical_paths.slice(0, 3)) {
+    lines.push(`- critical_path: ${path}`);
+  }
+  for (const node of ctx.supernodes.slice(0, 6)) {
+    lines.push(`- supernode: ${node.id} (${node.kind}, ${node.confidence.toFixed(2)}) - ${node.label}; evidence: ${node.evidence}`);
+  }
+  for (const edge of ctx.edges.slice(0, 6)) {
+    lines.push(`- edge: ${edge.from} -> ${edge.to} (${edge.weight.toFixed(2)}) - ${edge.relation}`);
+  }
+  for (const item of ctx.uncertainty.slice(0, 3)) {
+    lines.push(`- uncertainty: ${item}`);
+  }
+  lines.push('- instruction: preserve the literal user request, but use the critical paths to choose context, tool use, and clarification behavior.');
+  return lines.join('\n');
+}
+
 async function safeLookupTerms(lexicon, { userId, prompt }) {
   if (!lexicon || typeof lexicon.lookupTerms !== 'function') return [];
   try {
@@ -833,6 +1134,17 @@ async function analyzeContextualTurn({
       repairDetection,
     });
     const goalUnderstandingBlock = buildGoalUnderstandingPromptBlock(goalUnderstanding);
+    const attributionGraphContext = buildAttributionGraphContext({
+      originalText,
+      recentTurns,
+      attachments,
+      lexiconTerms,
+      coreference: coref,
+      repairDetection,
+      valueContext,
+      goalUnderstanding,
+    });
+    const attributionGraphBlock = buildAttributionGraphPromptBlock(attributionGraphContext);
 
     const effectiveText = buildEffectiveText({
       originalText,
@@ -841,6 +1153,7 @@ async function analyzeContextualTurn({
       repairAddendum: repairContext.systemAddendum,
       valueContextBlock,
       goalUnderstandingBlock,
+      attributionGraphBlock,
       resolvedPrompt: coref.resolvedPrompt || originalText,
     });
     const applied = effectiveText !== originalText;
@@ -856,6 +1169,7 @@ async function analyzeContextualTurn({
       misunderstanding_signals: recordedSignals,
       value_context: summarizeValueContext(valueContext),
       goal_understanding: summarizeGoalUnderstanding(goalUnderstanding),
+      attribution_graph_context: summarizeAttributionGraphContext(attributionGraphContext),
     };
 
     return {
@@ -869,6 +1183,7 @@ async function analyzeContextualTurn({
       repairContext,
       misunderstandingSignals: recordedSignals,
       valueContext,
+      attributionGraphContext,
       envelopeContext,
       error: null,
     };
@@ -894,6 +1209,7 @@ async function analyzeContextualTurn({
         misunderstanding_signals: [],
         value_context: summarizeValueContext(EMPTY_VALUE_CONTEXT),
         goal_understanding: summarizeGoalUnderstanding(EMPTY_GOAL_UNDERSTANDING),
+        attribution_graph_context: summarizeAttributionGraphContext(EMPTY_ATTRIBUTION_GRAPH_CONTEXT),
       },
       error: error && error.message ? error.message : String(error),
     };
@@ -917,6 +1233,9 @@ module.exports = {
   inferGoalUnderstanding,
   summarizeGoalUnderstanding,
   buildGoalUnderstandingPromptBlock,
+  buildAttributionGraphContext,
+  summarizeAttributionGraphContext,
+  buildAttributionGraphPromptBlock,
   constants: {
     MAX_RECENT_TURNS,
     MAX_EFFECTIVE_TEXT,

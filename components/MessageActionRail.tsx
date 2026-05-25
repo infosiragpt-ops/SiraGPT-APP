@@ -40,6 +40,10 @@ export interface MessageActionRailProps {
    *  Regenerate is offered (everything else hides). */
   hasError?: boolean
 
+  /** 1-based count for regenerated assistant variants. Original
+   *  responses keep this at 0 and render no badge. */
+  regenerationAttempt?: number
+
   /** Streaming or any in-flight LLM call disables every action so the
    *  user can't double-click into a race. */
   isStreaming?: boolean
@@ -155,6 +159,7 @@ export function MessageActionRail({
   model,
   content,
   hasError = false,
+  regenerationAttempt = 0,
   isStreaming = false,
   canCopy = true,
   canVoice = true,
@@ -198,6 +203,9 @@ export function MessageActionRail({
   const showFeedback = canFeedback && hasText && !hasError && !isLive
   const showRegenerate = canRegenerate && !isLive && (hasText || hasError)
   const showShare = canShare && hasText && !hasError && !isLive
+  const regenerationBadge = Number.isFinite(regenerationAttempt) && regenerationAttempt > 0
+    ? (regenerationAttempt > 99 ? "99+" : String(Math.floor(regenerationAttempt)))
+    : null
 
   // #99 — prettify model id for the trailing pill (kept inline so we
   // don't ship another import for ~10 lines of mapping).
@@ -366,10 +374,26 @@ export function MessageActionRail({
         )}
         {showRegenerate && (
           <RailButton
-            label="Regenerar respuesta"
+            label={regenerationBadge ? `Regenerar respuesta · versión ${regenerationBadge}` : "Regenerar respuesta"}
             disabled={allDisabled}
             onClick={handleRegenerateClick}
-            icon={<RefreshCw className="h-4 w-4" />}
+            icon={
+              <span className="relative inline-flex h-4 w-4 items-center justify-center">
+                <RefreshCw className="h-4 w-4" />
+                {regenerationBadge && (
+                  <span
+                    aria-hidden="true"
+                    className={cn(
+                      "absolute -right-2 -top-2 inline-flex min-w-[13px] h-[13px] items-center justify-center rounded-full px-[3px]",
+                      "bg-foreground text-background text-[8px] font-semibold leading-none tabular-nums",
+                      "shadow-[0_1px_2px_rgba(0,0,0,0.14)]",
+                    )}
+                  >
+                    {regenerationBadge}
+                  </span>
+                )}
+              </span>
+            }
           />
         )}
         {showShare && (

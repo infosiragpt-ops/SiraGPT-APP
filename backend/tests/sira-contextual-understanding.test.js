@@ -178,6 +178,61 @@ test('analyzeContextualTurn infers the user goal and proactive steps from full-t
   assert.ok(result.envelopeContext.goal_understanding.proactive_next_steps.includes('plan_execute_validate'));
 });
 
+test('analyzeContextualTurn builds attribution graph context for implementation intent', async () => {
+  const result = await contextual.analyzeContextualTurn({
+    userId: 'u-attribution',
+    conversationId: 'c-attribution',
+    userMessage: 'revisa este link e implementa mejoras para entender mejor lo que quiere el usuario',
+    history: [
+      { role: 'user', content: 'El chat pierde contexto cuando pido tareas largas.' },
+      { role: 'assistant', content: 'La mejora debe vivir en la capa de comprensión contextual.' },
+    ],
+    attachments: [],
+    requestId: 'req-attribution',
+  });
+
+  assert.equal(result.applied, true);
+  assert.match(result.effectiveText, /ATTRIBUTION_GRAPH_CONTEXT/);
+  assert.ok(result.attributionGraphContext.confidence >= 0.6);
+  assert.ok(result.envelopeContext.attribution_graph_context.supernodes.some(n => n.id === 'current_request'));
+  assert.ok(result.envelopeContext.attribution_graph_context.supernodes.some(n => n.id === 'inferred_goal'));
+  assert.ok(result.envelopeContext.attribution_graph_context.edges.some(e => e.to === 'inferred_goal'));
+  assert.ok(result.envelopeContext.attribution_graph_context.critical_paths.length > 0);
+});
+
+test('buildAttributionGraphPromptBlock returns compact hypothesis with supernodes and edges', () => {
+  const graph = contextual.buildAttributionGraphContext({
+    originalText: 'implementa mejoras sin tocar la UI hasta validar tests',
+    recentTurns: [{ role: 'user', text: 'quiero mejor contexto' }],
+    valueContext: {
+      values: [
+        { id: 'execution_reliability', domain: 'practical', label: 'Execution reliability', evidence: 'implementation request', confidence: 0.9 },
+        { id: 'risk_bounded_execution', domain: 'protective', label: 'Risk-bounded execution', evidence: 'hard constraint', confidence: 0.86 },
+      ],
+      constraints: [{ id: 'preserve_interface', label: 'Preserve UI', evidence: 'sin tocar la UI', priority: 'hard' }],
+      task_trajectory: {
+        mode: 'end_to_end_execution',
+        objective: 'implementa mejoras sin tocar la UI hasta validar tests',
+        phases: ['understand_full_context', 'implement_changes', 'validate_with_tests'],
+        success_criteria: [],
+        stop_conditions: [],
+        confidence: 0.88,
+      },
+      confidence: 0.9,
+    },
+    goalUnderstanding: {
+      inferred_user_goal: 'improve contextual understanding while preserving UI constraints',
+      confidence: 0.88,
+    },
+  });
+  const block = contextual.buildAttributionGraphPromptBlock(graph);
+
+  assert.match(block, /ATTRIBUTION_GRAPH_CONTEXT/);
+  assert.match(block, /supernode:/);
+  assert.match(block, /edge:/);
+  assert.match(block, /inferred_goal/);
+});
+
 test('analyzeContextualTurn is a no-op when there is no contextual signal', async () => {
   const result = await contextual.analyzeContextualTurn({
     userId: 'u-clean',

@@ -3,7 +3,9 @@ import { describe, it } from "node:test"
 
 import {
   aiService,
+  buildIntentAttributionGraph,
   buildProfessionalCapabilityPrompt,
+  classifyIntentFastPath,
   shouldRouteThroughAgenticRuntime,
   shouldRouteTextPromptThroughAgenticRuntime,
   shouldAnswerFromExistingDocument,
@@ -115,6 +117,59 @@ describe("ai-service · deterministic intent routing", () => {
     assert.equal(excelIntent, "agent_task")
   })
 
+  it("uses recent context to route follow-up deliverable requests", async () => {
+    const history = [
+      {
+        role: "USER",
+        content: "investiga artículos científicos recientes sobre estrategias multisensoriales",
+      },
+    ]
+
+    const graph = buildIntentAttributionGraph("ahora pásalo a Word con citas APA", history)
+    assert.equal(graph.inferredIntent, "agent_task")
+    assert.equal(graph.usedHistory, true)
+    assert.ok(graph.nodes.some((node) => node.id === "history:web_search"))
+    assert.ok(graph.edges.some((edge) => edge.to === "route:agent_task"))
+    assert.equal(await aiService.classifyIntent("ahora pásalo a Word con citas APA", history), "agent_task")
+  })
+
+  it("routes URL-backed software improvement requests to the task agent", async () => {
+    const prompt = "revisa https://transformer-circuits.pub/2025/attribution-graphs/biology.html e implementa mejoras en el software"
+    const graph = buildIntentAttributionGraph(prompt)
+
+    assert.equal(classifyIntentFastPath(prompt), "agent_task")
+    assert.equal(await aiService.classifyIntent(prompt), "agent_task")
+    assert.equal(graph.inferredIntent, "agent_task")
+    assert.ok(graph.nodes.some((node) => node.id === "current:external-reference"))
+    assert.ok(graph.nodes.some((node) => node.id === "current:implementation-action"))
+    assert.ok(graph.nodes.some((node) => node.id === "current:software-target"))
+  })
+
+  it("inherits the prior concrete goal for short contextual follow-ups", async () => {
+    const history = [
+      {
+        role: "USER",
+        content: "crea un diagrama ER en Mermaid para un e-commerce con usuarios, pedidos y pagos",
+      },
+    ]
+
+    const graph = buildIntentAttributionGraph("hazlo también en español", history)
+    assert.equal(graph.inferredIntent, "viz")
+    assert.equal(graph.usedHistory, true)
+    assert.equal(await aiService.classifyIntent("hazlo también en español", history), "viz")
+  })
+
+  it("does not treat greetings as contextual follow-ups", async () => {
+    const history = [
+      {
+        role: "USER",
+        content: "investiga artículos científicos recientes sobre estrategias multisensoriales",
+      },
+    ]
+
+    assert.equal(await aiService.classifyIntent("hola", history), "text")
+  })
+
   it("routes statistics and science computation to the math solver", async () => {
     const intent = await aiService.classifyIntent(
       "Calcula el Cronbach's alpha de estas respuestas Likert: [[4,5,3],[5,5,4],[4,4,3]]",
@@ -167,6 +222,19 @@ describe("ai-service · deterministic intent routing", () => {
     assert.equal(
       await aiService.classifyIntent("arregla el backend, haz commit, sube a main y vigila CI verde"),
       "agent_task",
+    )
+  })
+
+  it("routes external reference plus software implementation to the task agent", async () => {
+    const intent = await aiService.classifyIntent(
+      "implementa mejoras de este link https://transformer-circuits.pub/2025/attribution-graphs/biology.html para mejorar el software",
+    )
+    assert.equal(intent, "agent_task")
+    assert.equal(
+      shouldRouteTextPromptThroughAgenticRuntime(
+        "implementa mejoras de este link https://transformer-circuits.pub/2025/attribution-graphs/biology.html para mejorar el software",
+      ),
+      true,
     )
   })
 

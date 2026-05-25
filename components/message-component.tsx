@@ -1499,6 +1499,19 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         return Array.isArray(parsedFiles) && parsedFiles.some((f: any) => f.type === 'figma');
     }, [parsedFiles]);
 
+    const regenerationAttempt = useMemo(() => {
+        try {
+            const metadata = message.metadata
+                ? (typeof message.metadata === 'string' ? JSON.parse(message.metadata) : message.metadata)
+                : {};
+            const raw = metadata?.regeneration?.attempt ?? metadata?.regenerationAttempt ?? metadata?.regenerateAttempt;
+            const value = Number(raw);
+            return Number.isFinite(value) && value > 0 ? Math.min(999, Math.floor(value)) : 0;
+        } catch {
+            return 0;
+        }
+    }, [message.metadata]);
+
     // Check for Gmail connection requirement
     const isGmailConnectionRequired = useMemo(() => {
         try {
@@ -2803,6 +2816,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                 model={(message as any).model}
                                 content={stripNonCopyableArtifactBlocks(message.content || "")}
                                 hasError={!!message.error}
+                                regenerationAttempt={regenerationAttempt}
                                 isStreaming={isStreaming}
                                 feedback={feedbackSent}
                                 isSpeaking={isSpeaking}

@@ -102,6 +102,32 @@ interface SemanticIntentResponse {
   }
 }
 
+export interface IntentAttributionNode {
+  id: string
+  label: string
+  group: 'current_prompt' | 'conversation_context' | 'attachments' | 'routing'
+  weight: number
+  evidence: string
+}
+
+export interface IntentAttributionEdge {
+  from: string
+  to: string
+  weight: number
+  reason: string
+}
+
+export interface IntentAttributionGraph {
+  nodes: IntentAttributionNode[]
+  edges: IntentAttributionEdge[]
+  supernodes: Record<string, string[]>
+  inferredIntent: ChatIntent | null
+  confidence: number
+  needsClarification: boolean
+  usedHistory: boolean
+  rationale: string[]
+}
+
 /**
  * Universal 5-step execution skeleton applied to every capability before
  * the per-intent contract. Forces the model to do real analysis instead
@@ -292,11 +318,13 @@ export function shouldAnswerFromExistingDocument(
 const ROUTING_PATTERNS = {
   gmail: /\b(gmail|e-?mail|correo(s)?|mail|inbox|bandeja de entrada|redacta(r)? (un )?correo|envia(r)? (un )?correo|responde(r)? (un )?correo|lee(r)? (mis )?correos)\b/i,
   googleServices: /\b(google (calendar|calendario|drive)|calendar|calendario|evento|event|meeting|reunion|agenda|drive|carpeta|folder)\b/i,
+  urlReference: /\bhttps?:\/\/\S+|\bwww\.\S+/i,
   realtimeLookup: /\b(clima|tiempo actual|pron[oó]stico|temperatura|weather|forecast)\b|\b(resultados?|marcador|score|partidos?|fixture|estad[ií]sticas?)\b.*\b(nba|nfl|mlb|nhl|f[uú]tbol|soccer|epl|champions|liga|deporte|sports?)\b|\b(restaurantes?|hoteles?|lugares?|atracciones?|direcci[oó]n|mapa|ruta|itinerario|cerca de mi|google places)\b/i,
   externalResearch: /\b(investiga(r|cion)?|investigate|research|busca(r)?|find|recopila(r)?|fuentes|citas|referencias|articulos?|papers?|literatura|academicos?|cientificos?|mercado|benchmark|competidores|estado del arte|revision sistematica|metaanalisis|meta analisis|scielo|redalyc|dialnet|openalex|crossref|pubmed|doi|semantic scholar|doaj|scopus|web of science|wos)\b/i,
   deliverableFile: /\b(docx|xlsx|pptx|word|excel|power\s*point|powerpoint|pdf\b|svg|informe|reporte|presentacion|diapositivas|slides|hoja de calculo|spreadsheet|archivo|documento|matriz narrativa|matriz de consistencia|base de datos)\b/i,
   dataWork: /\b(calcula(r)?|analiza(r)?|procesa(r)?|limpia(r)?|extrae(r)?|clasifica(r)?|regresion|estadistica|csv|datos|dataset|cronbach|spearman|anova|correlacion|likert)\b/i,
-  codeWork: /\b(codigo|code|programa|script|web|website|landing|sitio|frontend|backend|debug|bug|corrige(r)?|prueba(s)?|test(s)?|autocorrige(r)?|auto corrige(r)?|revisando y corrigiendo)\b/i,
+  codeWork: /\b(codigo|code|programa|script|web|website|landing|sitio|frontend|backend|software|app|aplicacion|aplicaci[oó]n|runtime|debug|bug|corrige(r)?|arregla(r)?|fix|prueba(s)?|test(s)?|autocorrige(r)?|auto corrige(r)?|revisando y corrigiendo)\b/i,
+  implementationWork: /\b(implementa(r|me)?|mejora(r|s)?|optimiza(r)?|integra(r)?|aplica(r)?|añade|agrega(r)?|refactoriza(r)?|revisa(r)?|audita(r)?|haz(?:lo)?|build|ship|patch)\b/i,
   repoOperation: /\b(?:github\.com\/[\w.-]+\/[\w.-]+|git\s+clone|clona(?:r|me)?|clone(?:ar)?|fork|pull\s+request|pr\b|commit|push|sube(?:r)?\s+(?:a\s+)?(?:github|main)|repositorio|repo|checkout|branch|rama|main|ci\s+(?:verde|green)|actions?)\b/i,
   longRunningAgent: /\b(2 horas|dos horas|30 minutos|60 minutos|una hora|sin detenerse|sin parar|persistente|background|mientras salgo|aunque cierre|auto.?corrige|autonom(o|a)|verifica(r)?|self.?check|self.?supervision)\b/i,
   architecturePlan: /\b(plano|planos|blueprint|floor[- ]?plan|planta (arquitect|baj|alt)|plano arquitectonico|dxf)\b|\b(casa|vivienda|departamento|oficina)\b.*\b(plano|planta|arquitectonico|distribucion|habitaciones|dormitorios|banos)\b/i,
@@ -318,6 +346,228 @@ const ROUTING_PATTERNS = {
   figma: /\b(figma|wireframe|user flow|design system|diagrama de producto|prototipo navegable)\b/i,
 }
 
+const CONTEXT_FOLLOWUP_RE =
+  /\b(?:eso|esto|aquello|lo anterior|anterior|mismo|misma|tambien|también|ahora|despues|después|luego|ademas|además|hazlo|hacelo|con eso|usa eso|usalo|úsalo|en base a eso|basado en eso|convierte(?:lo)?|pasalo|pásalo|exportalo|expórtalo)\b/i
+
+const getMessageText = (message: any): string => {
+  const content = message?.content
+  if (typeof content === 'string') return content
+  if (Array.isArray(content)) {
+    return content
+      .map((part: any) => typeof part?.text === 'string' ? part.text : '')
+      .filter(Boolean)
+      .join(' ')
+  }
+  return ''
+}
+
+const addIntentNode = (
+  nodes: IntentAttributionNode[],
+  id: string,
+  label: string,
+  group: IntentAttributionNode['group'],
+  weight: number,
+  evidence: string
+) => {
+  if (!nodes.some((node) => node.id === id)) {
+    nodes.push({ id, label, group, weight, evidence })
+  }
+}
+
+const signalIntentFromText = (text: string): ChatIntent | null => {
+  const normalized = normalizePrompt(text)
+  if (!normalized) return null
+
+  const asksForUrlReference = ROUTING_PATTERNS.urlReference.test(normalized)
+  const asksForExternalResearch = ROUTING_PATTERNS.externalResearch.test(normalized)
+  const asksForRealtimeLookup = ROUTING_PATTERNS.realtimeLookup.test(normalized)
+  const asksForDeliverableFile = ROUTING_PATTERNS.deliverableFile.test(normalized)
+  const asksForDataWork = ROUTING_PATTERNS.dataWork.test(normalized)
+  const asksForCodeWork = ROUTING_PATTERNS.codeWork.test(normalized)
+  const asksForImplementationWork = ROUTING_PATTERNS.implementationWork.test(normalized)
+  const asksForRepoOperation = ROUTING_PATTERNS.repoOperation.test(normalized)
+  const asksForLongRunningAgent = ROUTING_PATTERNS.longRunningAgent.test(normalized)
+
+  if (ROUTING_PATTERNS.gmail.test(normalized)) return 'gmail'
+  if (ROUTING_PATTERNS.googleServices.test(normalized)) return 'google_services'
+
+  if (
+    asksForRepoOperation
+    || (asksForUrlReference && asksForImplementationWork && asksForCodeWork)
+    || (asksForDeliverableFile && (asksForExternalResearch || asksForDataWork || asksForCodeWork))
+    || (asksForLongRunningAgent && (asksForExternalResearch || asksForDeliverableFile || asksForDataWork || asksForCodeWork))
+  ) {
+    return 'agent_task'
+  }
+
+  if (asksForExternalResearch || asksForRealtimeLookup || asksForUrlReference) return 'web_search'
+  if (ROUTING_PATTERNS.architecturePlan.test(normalized)) return 'plan'
+  if (ROUTING_PATTERNS.artifact.test(normalized)) return 'artifact'
+  if (ROUTING_PATTERNS.math.test(normalized)) return 'math'
+  if (ROUTING_PATTERNS.doc.test(normalized)) return 'doc'
+  if (ROUTING_PATTERNS.viz.test(normalized)) return 'viz'
+  if (ROUTING_PATTERNS.video.test(normalized)) return 'video'
+  if (ROUTING_PATTERNS.image.test(normalized)) return 'image'
+  if (ROUTING_PATTERNS.figma.test(normalized)) return 'figma'
+  if (ROUTING_PATTERNS.webdev.test(normalized) && ROUTING_PATTERNS.webdevBuildAction.test(normalized)) return 'webdev'
+  return null
+}
+
+const latestUserContextIntent = (conversationHistory: any[] = []): ChatIntent | null => {
+  const recent = (Array.isArray(conversationHistory) ? conversationHistory : [])
+    .slice(-8)
+    .reverse()
+
+  for (const message of recent) {
+    const role = String(message?.role || '').toLowerCase()
+    if (role && role !== 'user') continue
+    const intent = signalIntentFromText(getMessageText(message))
+    if (intent && intent !== 'ambiguous') return normalizeRoutingIntent(intent)
+  }
+
+  return null
+}
+
+/**
+ * A small, deterministic analogue of the attribution-graph idea from
+ * interpretability work: expose which prompt/history/attachment features
+ * caused a routing decision. This is not model-internal tracing; it is an
+ * inspectable graph over our own routing signals so follow-up prompts can
+ * inherit the user's actual goal instead of being classified from keywords
+ * alone.
+ */
+export function buildIntentAttributionGraph(
+  prompt: string,
+  conversationHistory: any[] = [],
+  files: any[] = []
+): IntentAttributionGraph {
+  const normalized = normalizePrompt(prompt)
+  const nodes: IntentAttributionNode[] = []
+  const edges: IntentAttributionEdge[] = []
+  const supernodes: Record<string, string[]> = {
+    user_goal: [],
+    requested_output: [],
+    context_source: [],
+    execution_route: [],
+  }
+  const rationale: string[] = []
+  const words = normalized.split(/\s+/).filter(Boolean)
+
+  const currentIntent = signalIntentFromText(normalized)
+  const historyIntent = latestUserContextIntent(conversationHistory)
+  const allFiles = [
+    ...(Array.isArray(files) ? files : []),
+    ...(Array.isArray(conversationHistory) ? conversationHistory.flatMap(parseFilesFromMessage) : []),
+  ]
+  const hasDocumentContext = allFiles.some(isDocumentLikeAttachment)
+  const hasSpreadsheetContext = allFiles.some(isSpreadsheetLikeAttachment)
+  const isShortContextualFragment =
+    words.length <= 6
+    && !!historyIntent
+    && !isLightweightConversationalPrompt(normalized)
+    && !/[?¿]/.test(normalized)
+    && /^(?:en|con|para|sin|mas|más|otra|otro|hazlo|hacelo|pasalo|pásalo|tambien|también|ahora)\b/.test(normalized)
+  const isFollowup = CONTEXT_FOLLOWUP_RE.test(normalized) || isShortContextualFragment
+
+  if (currentIntent) {
+    addIntentNode(nodes, `current:${currentIntent}`, `current prompt suggests ${currentIntent}`, 'current_prompt', 0.9, prompt)
+    supernodes.user_goal.push(`current:${currentIntent}`)
+  }
+  if (ROUTING_PATTERNS.urlReference.test(normalized)) {
+    addIntentNode(nodes, 'current:external-reference', 'external reference URL', 'current_prompt', 0.78, prompt)
+    supernodes.context_source.push('current:external-reference')
+  }
+  if (ROUTING_PATTERNS.implementationWork.test(normalized)) {
+    addIntentNode(nodes, 'current:implementation-action', 'implementation or improvement action', 'current_prompt', 0.8, prompt)
+    supernodes.user_goal.push('current:implementation-action')
+  }
+  if (ROUTING_PATTERNS.codeWork.test(normalized)) {
+    addIntentNode(nodes, 'current:software-target', 'software/code target', 'current_prompt', 0.78, prompt)
+    supernodes.user_goal.push('current:software-target')
+  }
+  if (historyIntent) {
+    addIntentNode(nodes, `history:${historyIntent}`, `recent context suggests ${historyIntent}`, 'conversation_context', 0.72, historyIntent)
+    supernodes.context_source.push(`history:${historyIntent}`)
+  }
+  if (isFollowup) {
+    addIntentNode(nodes, 'current:followup', 'context-dependent follow-up', 'current_prompt', 0.82, prompt)
+    supernodes.context_source.push('current:followup')
+  }
+  if (hasDocumentContext) {
+    addIntentNode(nodes, 'attachment:document', 'document attachment context', 'attachments', 0.68, 'document-like file')
+    supernodes.context_source.push('attachment:document')
+  }
+  if (hasSpreadsheetContext) {
+    addIntentNode(nodes, 'attachment:spreadsheet', 'spreadsheet attachment context', 'attachments', 0.74, 'spreadsheet-like file')
+    supernodes.context_source.push('attachment:spreadsheet')
+  }
+  if (ROUTING_PATTERNS.deliverableFile.test(normalized) || OUTPUT_FORMAT_REQUEST_RE.test(normalized)) {
+    addIntentNode(nodes, 'current:deliverable', 'explicit output format', 'current_prompt', 0.85, prompt)
+    supernodes.requested_output.push('current:deliverable')
+  }
+
+  let inferredIntent: ChatIntent | null = null
+  let confidence = 0
+
+  if (isFollowup && currentIntent && historyIntent) {
+    if (currentIntent === 'doc' && ['web_search', 'math', 'viz', 'agent_task'].includes(historyIntent)) {
+      inferredIntent = 'agent_task'
+      confidence = 0.88
+      rationale.push('Follow-up asks for a file while prior context contains research, computation, or visualization work.')
+    } else if (currentIntent === 'viz' && ['math', 'web_search', 'agent_task'].includes(historyIntent)) {
+      inferredIntent = 'viz'
+      confidence = 0.84
+      rationale.push('Follow-up asks to visualize the result from prior analytical context.')
+    } else {
+      inferredIntent = normalizeRoutingIntent(currentIntent)
+      confidence = 0.76
+      rationale.push('Current prompt has an explicit route and recent context only supplies the object.')
+    }
+  } else if (isFollowup && historyIntent && !currentIntent) {
+    inferredIntent = normalizeRoutingIntent(historyIntent)
+    confidence = words.length <= 4 ? 0.65 : 0.72
+    rationale.push('Short follow-up inherits the latest concrete user goal from conversation history.')
+  } else if (!currentIntent && hasSpreadsheetContext && ROUTING_PATTERNS.dataWork.test(normalized)) {
+    inferredIntent = 'math'
+    confidence = 0.7
+    rationale.push('Spreadsheet attachment plus data-work wording implies computation/analysis.')
+  } else if (!currentIntent && hasDocumentContext && DOCUMENT_UNDERSTANDING_RE.test(normalized) && !OUTPUT_FORMAT_REQUEST_RE.test(normalized)) {
+    inferredIntent = 'text'
+    confidence = 0.82
+    rationale.push('Document attachment plus understanding wording implies document chat, not new file generation.')
+  } else if (currentIntent) {
+    inferredIntent = normalizeRoutingIntent(currentIntent)
+    confidence = currentIntent === 'agent_task' ? 0.86 : 0.8
+    rationale.push('Current prompt has enough direct attribution support to choose a route before semantic fallback.')
+  }
+
+  if (inferredIntent) {
+    addIntentNode(nodes, `route:${inferredIntent}`, `route to ${inferredIntent}`, 'routing', confidence, rationale.join(' '))
+    supernodes.execution_route.push(`route:${inferredIntent}`)
+    for (const node of nodes) {
+      if (node.group !== 'routing') {
+        edges.push({
+          from: node.id,
+          to: `route:${inferredIntent}`,
+          weight: Math.min(node.weight, confidence),
+          reason: 'signal contributes to contextual route',
+        })
+      }
+    }
+  }
+
+  return {
+    nodes,
+    edges,
+    supernodes,
+    inferredIntent,
+    confidence,
+    needsClarification: !inferredIntent && isAmbiguousPrompt(prompt) && !historyIntent,
+    usedHistory: !!inferredIntent && (isFollowup || !!historyIntent),
+    rationale,
+  }
+}
+
 const LIGHTWEIGHT_CHAT_RE =
   /^(hola|hello|hi|hey|buenas|buenos dias|buenos días|buenas tardes|buenas noches|que tal|qué tal|como estas|cómo estás|gracias|ok|okay|vale|si|sí|no)[\s.!?¿¡]*$/i
 
@@ -330,10 +580,12 @@ export function isLightweightConversationalPrompt(prompt: string): boolean {
   if (words.length <= 4 && !/[?¿]/.test(normalized)) {
     const hasWorkIntent = [
       ROUTING_PATTERNS.externalResearch,
+      ROUTING_PATTERNS.urlReference,
       ROUTING_PATTERNS.realtimeLookup,
       ROUTING_PATTERNS.deliverableFile,
       ROUTING_PATTERNS.dataWork,
       ROUTING_PATTERNS.codeWork,
+      ROUTING_PATTERNS.implementationWork,
       ROUTING_PATTERNS.repoOperation,
       ROUTING_PATTERNS.doc,
       ROUTING_PATTERNS.viz,
@@ -369,9 +621,12 @@ export function shouldRouteTextPromptThroughAgenticRuntime(prompt: string, files
   if (words.length >= 80) return true
 
   return [
+    ROUTING_PATTERNS.urlReference,
     ROUTING_PATTERNS.externalResearch,
     ROUTING_PATTERNS.deliverableFile,
     ROUTING_PATTERNS.dataWork,
+    ROUTING_PATTERNS.codeWork,
+    ROUTING_PATTERNS.implementationWork,
     ROUTING_PATTERNS.repoOperation,
     ROUTING_PATTERNS.longRunningAgent,
   ].some((pattern) => pattern.test(normalized))
@@ -385,11 +640,13 @@ export function shouldUseFastTextRoute(prompt: string): boolean {
   const hasExplicitWorkIntent = [
     ROUTING_PATTERNS.gmail,
     ROUTING_PATTERNS.googleServices,
+    ROUTING_PATTERNS.urlReference,
     ROUTING_PATTERNS.realtimeLookup,
     ROUTING_PATTERNS.externalResearch,
     ROUTING_PATTERNS.deliverableFile,
     ROUTING_PATTERNS.dataWork,
     ROUTING_PATTERNS.codeWork,
+    ROUTING_PATTERNS.implementationWork,
     ROUTING_PATTERNS.repoOperation,
     ROUTING_PATTERNS.longRunningAgent,
     ROUTING_PATTERNS.architecturePlan,
@@ -481,22 +738,25 @@ export function classifyIntentFastPath(prompt: string): ChatIntent | null {
   if (ROUTING_PATTERNS.googleServices.test(lc)) return 'google_services'
 
   const asksForExternalResearch = ROUTING_PATTERNS.externalResearch.test(lc)
+  const asksForUrlReference = ROUTING_PATTERNS.urlReference.test(lc)
   const asksForRealtimeLookup = ROUTING_PATTERNS.realtimeLookup.test(lc)
   const asksForDeliverableFile = ROUTING_PATTERNS.deliverableFile.test(lc)
   const asksForDataWork = ROUTING_PATTERNS.dataWork.test(lc)
   const asksForCodeWork = ROUTING_PATTERNS.codeWork.test(lc)
+  const asksForImplementationWork = ROUTING_PATTERNS.implementationWork.test(lc)
   const asksForRepoOperation = ROUTING_PATTERNS.repoOperation.test(lc)
   const asksForLongRunningAgent = ROUTING_PATTERNS.longRunningAgent.test(lc)
 
   if (
     asksForRepoOperation
+    || (asksForUrlReference && asksForImplementationWork && asksForCodeWork)
     || (asksForDeliverableFile && (asksForExternalResearch || asksForDataWork || asksForCodeWork))
     || (asksForLongRunningAgent && (asksForExternalResearch || asksForDeliverableFile || asksForDataWork || asksForCodeWork))
   ) {
     return 'agent_task'
   }
 
-  if (asksForExternalResearch || asksForRealtimeLookup) return 'web_search'
+  if (asksForExternalResearch || asksForRealtimeLookup || asksForUrlReference) return 'web_search'
   if (ROUTING_PATTERNS.architecturePlan.test(lc)) return 'plan'
   if (ROUTING_PATTERNS.artifact.test(lc)) return 'artifact'
   if (ROUTING_PATTERNS.math.test(lc)) return 'math'
@@ -580,6 +840,11 @@ export class AIService {
 
     if (shouldAnswerFromExistingDocument(prompt, conversationHistory)) {
       return 'text';
+    }
+
+    const attributionGraph = buildIntentAttributionGraph(prompt, conversationHistory)
+    if (attributionGraph.inferredIntent && attributionGraph.confidence >= 0.65) {
+      return normalizeRoutingIntent(attributionGraph.inferredIntent);
     }
 
     const deterministicIntent = classifyIntentFastPath(prompt);

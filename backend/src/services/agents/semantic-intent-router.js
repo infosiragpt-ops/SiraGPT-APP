@@ -31,6 +31,7 @@ const productSkillSystem = require('../ai-product-os/skill-system');
 const productPlanner = require('../ai-product-os/planner-agent');
 const productIntentRouter = require('../ai-product-os/semantic-intent-router');
 const { analyzeRequestTokens } = require('./request-token-intelligence');
+const { buildUserIntentAttributionGraph } = require('./user-intent-attribution-graph');
 
 const VALID_CHAT_INTENTS = new Set([
   'gmail',
@@ -639,6 +640,11 @@ function buildSemanticIntentAnalysis({
     fileIds,
     conversationHistory,
   });
+  const intentAttributionGraph = buildUserIntentAttributionGraph({
+    history: conversationHistory,
+    currentPrompt: prompt,
+    files,
+  });
   const contract = buildUniversalTaskContract({
     rawUserRequest: prompt,
     fileIds,
@@ -720,6 +726,7 @@ function buildSemanticIntentAnalysis({
     operating_core: operatingCore,
     runtime_profile: runtimeProfile,
     semantic_profile: semanticProfile,
+    intent_attribution_graph: intentAttributionGraph,
     request_intelligence: {
       version: tokenIntelligence.version,
       token_count: tokenIntelligence.token_count,
@@ -765,6 +772,8 @@ function buildSemanticIntentAnalysis({
       validation_gate_count: contract.validation_plan.length,
       graph_node_count: graph.nodes.length,
       graph_edge_count: graph.edges.length,
+      intent_attribution_node_count: intentAttributionGraph.node_count,
+      intent_attribution_edge_count: intentAttributionGraph.edge_count,
       product_os_intent: enrichedProductOsDecision.intent_primary,
       selected_model: modelRouting.selection?.model?.id || null,
       selected_skills: skillPlan.selected_skills.map((skill) => skill.id),

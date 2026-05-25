@@ -301,6 +301,45 @@ describe("task-envelope-builder", () => {
     expect(r.envelope.contextual_understanding.goal_understanding.desired_outcome).toBe("complete_task_execution_with_verified_result");
   });
 
+  test("attribution graph context is preserved and influences success criteria", async () => {
+    const r = await buildEnvelope({
+      text: "## ATTRIBUTION_GRAPH_CONTEXT\n- confidence: 0.88\n- hypothesis: improve contextual understanding while preserving execution constraints\n- critical_path: current_request -> task_trajectory -> inferred_goal\n\nSOLICITUD_USUARIO:\nimplementa mejoras de contexto",
+      originalText: "implementa mejoras de contexto",
+      contextualUnderstanding: {
+        applied: true,
+        original_text: "implementa mejoras de contexto",
+        effective_text: "implementa mejoras de contexto",
+        recent_turn_count: 2,
+        coreference: { source: "not_run", latency_ms: 0, references: [] },
+        lexicon_terms: [],
+        repair: { is_repair: false, repair_type: null, contract_override: null },
+        misunderstanding_signals: [],
+        attribution_graph_context: {
+          source: "deterministic_attribution_graph_context",
+          hypothesis: "improve contextual understanding while preserving execution constraints",
+          supernodes: [
+            { id: "current_request", label: "Current request", evidence: "implementa mejoras", confidence: 0.95, kind: "input" },
+            { id: "task_trajectory", label: "Task trajectory", evidence: "implement changes and validate", confidence: 0.88, kind: "supernode" },
+            { id: "inferred_goal", label: "Inferred goal", evidence: "better context", confidence: 0.88, kind: "hypothesis" },
+          ],
+          edges: [
+            { from: "current_request", to: "task_trajectory", relation: "turns request into execution path", weight: 0.8 },
+            { from: "task_trajectory", to: "inferred_goal", relation: "supports inferred goal", weight: 0.84 },
+          ],
+          critical_paths: ["current_request -> task_trajectory -> inferred_goal"],
+          uncertainty: [],
+          confidence: 0.88,
+        },
+      },
+    });
+
+    expect(r.validation.ok).toBe(true);
+    expect(r.envelope.contextual_understanding.attribution_graph_context.confidence).toBe(0.88);
+    expect(r.envelope.contextual_understanding.attribution_graph_context.critical_paths).toContain("current_request -> task_trajectory -> inferred_goal");
+    expect(r.envelope.goal_model.success_criteria.some(c => c.includes("hipotesis de atribucion contextual"))).toBe(true);
+    expect(r.envelope.goal_model.success_criteria.some(c => c.includes("rutas criticas de contexto"))).toBe(true);
+  });
+
   test("end-to-end contextual trajectory expands workflow and validation gates", async () => {
     const r = await buildEnvelope({
       text: "## CONTEXTUAL_VALUE_FRAME\n- collaboration_mode: autonomous_execution\n- task_trajectory: end_to_end_execution (0.90)\n- trajectory_phases: understand_full_context -> research_current_best_practices -> build_execution_plan -> implement_changes -> validate_with_tests -> publish_and_monitor -> deliver_concise_status\n\nSOLICITUD_USUARIO:\ninvestiga Claude y ChatGPT, implementa y deja CI verde",

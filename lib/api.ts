@@ -941,7 +941,7 @@ class ApiClient {
   // surface to the caller so the UI can show the per-message error +
   // retry affordance without losing the user's message.
   async generateAIStream(
-    data: { provider: string; model: string; prompt: string; chatId?: string; files?: string[], streamId: string, regenerate?: boolean },
+    data: { provider: string; model: string; prompt: string; chatId?: string; files?: string[], streamId: string, regenerate?: boolean, regenerationAttempt?: number },
     onData: (chunk: string) => void,
     onClose: () => void,
     onError: (error: Error) => void,
