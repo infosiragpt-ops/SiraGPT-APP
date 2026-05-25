@@ -13,6 +13,7 @@ const {
   getCerebrasConfig,
   isFreeIaConfigured,
   createCerebrasClient,
+  createInstrumentedCerebrasClient,
   buildFreeIaModelDescriptor,
   runWithMetrics,
   DEFAULT_BASE_URL,
@@ -172,4 +173,71 @@ test('runWithMetrics: extracts error code from .code / .status / .statusCode / .
 test('runWithMetrics: missing metrics module is non-fatal (call still succeeds)', async () => {
   const out = await runWithMetrics(async () => 42, { metrics: null });
   assert.equal(out, 42);
+});
+
+test('createInstrumentedCerebrasClient: returns null when Cerebras is not configured', () => {
+  const client = createInstrumentedCerebrasClient({ env: {} });
+  assert.equal(client, null);
+});
+
+test('createInstrumentedCerebrasClient: wraps chat.completions.create to record metrics', async () => {
+  const innerCalls = [];
+  const recorded = { success: 0, errors: 0 };
+  class FakeOpenAI {
+    constructor(args) {
+      this.args = args;
+      this.chat = {
+        completions: {
+          create: async (...passed) => {
+            innerCalls.push(passed);
+            return { id: 'chatcmpl_test', choices: [{ message: { content: 'ok' } }] };
+          },
+        },
+      };
+    }
+  }
+  const metricsStub = {
+    recordUpstreamSuccess: () => { recorded.success += 1; },
+    recordUpstreamError: () => { recorded.errors += 1; },
+  };
+  const client = createInstrumentedCerebrasClient({
+    env: { CEREBRAS_API_KEY: 'csk-instr' },
+    OpenAICtor: FakeOpenAI,
+    metrics: metricsStub,
+  });
+  assert.ok(client);
+  const result = await client.chat.completions.create({ model: 'llama-3.1-8b', messages: [{ role: 'user', content: 'hi' }] });
+  assert.equal(result.id, 'chatcmpl_test');
+  assert.equal(innerCalls.length, 1);
+  assert.equal(recorded.success, 1);
+  assert.equal(recorded.errors, 0);
+});
+
+test('createInstrumentedCerebrasClient: records error AND re-throws when upstream fails', async () => {
+  const recorded = { success: 0, errors: 0 };
+  class FakeOpenAI {
+    constructor() {
+      this.chat = {
+        completions: {
+          create: async () => { const e = new Error('upstream 503'); e.status = 503; throw e; },
+        },
+      };
+    }
+  }
+  const metricsStub = {
+    recordUpstreamSuccess: () => { recorded.success += 1; },
+    recordUpstreamError: ({ code }) => { recorded.errors += 1; recorded.lastCode = code; },
+  };
+  const client = createInstrumentedCerebrasClient({
+    env: { CEREBRAS_API_KEY: 'csk-err' },
+    OpenAICtor: FakeOpenAI,
+    metrics: metricsStub,
+  });
+  await assert.rejects(
+    () => client.chat.completions.create({ model: 'llama-3.1-8b', messages: [] }),
+    /upstream 503/,
+  );
+  assert.equal(recorded.success, 0);
+  assert.equal(recorded.errors, 1);
+  assert.equal(recorded.lastCode, 503);
 });

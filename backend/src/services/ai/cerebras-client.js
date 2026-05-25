@@ -106,6 +106,28 @@ function createCerebrasClient({ env = process.env, OpenAICtor } = {}) {
 }
 
 /**
+ * Return the same client as `createCerebrasClient` but with
+ * `chat.completions.create` automatically wrapped in `runWithMetrics`,
+ * so every Cerebras chat call increments the upstream success/error
+ * counters without the call site needing to know.
+ *
+ * Returns null when Cerebras isn't configured (same as the unwrapped
+ * factory). Streaming calls return the underlying stream unchanged;
+ * only success/error of the initial `create()` is recorded.
+ */
+function createInstrumentedCerebrasClient(opts = {}) {
+  const client = createCerebrasClient(opts);
+  if (!client) return null;
+  const chat = client.chat;
+  if (!chat || !chat.completions || typeof chat.completions.create !== 'function') {
+    return client; // SDK shape unexpected — return raw client untouched
+  }
+  const original = chat.completions.create.bind(chat.completions);
+  chat.completions.create = (...args) => runWithMetrics(() => original(...args), opts);
+  return client;
+}
+
+/**
  * Wrap any Cerebras-bound async call so its success / failure is
  * reflected in the Free IA metrics counters. Re-throws the original
  * error after recording so callers see the same exception they would
@@ -164,6 +186,7 @@ module.exports = {
   getCerebrasConfig,
   isFreeIaConfigured,
   createCerebrasClient,
+  createInstrumentedCerebrasClient,
   buildFreeIaModelDescriptor,
   runWithMetrics,
 };
