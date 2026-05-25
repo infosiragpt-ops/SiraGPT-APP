@@ -1705,6 +1705,32 @@ router.post(
         }
       }
 
+      // Cross-chat semantic recall — Phase 4. Feature-flagged via
+      // ENABLE_CROSS_CHAT_RECALL (default off). Recovers the most
+      // similar past Q&A pairs across the user's other chats and
+      // injects them as inert reference material.
+      let crossChatBlock = '';
+      if (userId) {
+        try {
+          const crossChat = require('../services/cross-chat-retrieval');
+          if (crossChat.isEnabled()) {
+            const turns = await crossChat.recallSimilarTurns({
+              userId,
+              currentPrompt: prompt,
+              excludeChatId: canPersist ? chatId : null,
+              embedder: texts => rag.embed(texts),
+              prismaClient: prisma,
+            });
+            crossChatBlock = crossChat.buildCrossChatBlock(turns) || '';
+            if (turns.length > 0) {
+              console.log(`[cross-chat] recalled ${turns.length} similar past turn(s) for user=${userId}`);
+            }
+          }
+        } catch (crossErr) {
+          console.warn('[cross-chat] recall failed (continuing without):', crossErr?.message || crossErr);
+        }
+      }
+
       // RLHF-lite: reuse examples the same user explicitly marked
       // helpful, so future similar answers match their preferred shape.
       let feedbackBlock = '';
@@ -3229,7 +3255,7 @@ router.post(
         }
       } catch (_pr5Err) { /* swallow */ }
 
-      const systemInstruction = { role: 'system', content: promptBundle.system + conversationUnderstandingBlock + universalContractBlock + enterpriseExecutionBlock + memoryBlock + orchMemoryBlock + feedbackBlock + evidenceBlock + documentEnrichmentBlock + coworkBlock + webSearchBlock + __pr5GroundingBlock };
+      const systemInstruction = { role: 'system', content: promptBundle.system + conversationUnderstandingBlock + universalContractBlock + enterpriseExecutionBlock + memoryBlock + orchMemoryBlock + crossChatBlock + feedbackBlock + evidenceBlock + documentEnrichmentBlock + coworkBlock + webSearchBlock + __pr5GroundingBlock };
       // Structured view of the system prompt — same content as
       // `systemInstruction.content`, but split into typed blocks with a
       // `cacheable` hint. When the downstream provider is Anthropic (or
@@ -3246,6 +3272,7 @@ router.post(
         { kind: 'enterprise-execution', text: enterpriseExecutionBlock, cacheable: false },
         { kind: 'memory', text: memoryBlock, cacheable: true },
         { kind: 'orchestration-memory', text: orchMemoryBlock, cacheable: true },
+        { kind: 'cross-chat', text: crossChatBlock, cacheable: false },
         { kind: 'feedback', text: feedbackBlock, cacheable: false },
         { kind: 'evidence', text: evidenceBlock, cacheable: false },
         { kind: 'document-enrichment', text: documentEnrichmentBlock, cacheable: false },
@@ -4023,6 +4050,36 @@ router.post(
                 });
               }
             } catch (_piOuterErr) { /* swallow */ }
+            // Phase 4: fire-and-forget cross-chat indexing. Embeds both
+            // the user prompt and the assistant reply with category
+            // tags so they can be recalled in future chats.
+            try {
+              const crossChat = require('../services/cross-chat-retrieval');
+              if (crossChat.isEnabled() && canPersist && chatId) {
+                setImmediate(async () => {
+                  try {
+                    await crossChat.indexTurn({
+                      userId,
+                      chatId,
+                      role: 'user',
+                      content: prompt,
+                      embedder: texts => rag.embed(texts),
+                      prismaClient: prisma,
+                    });
+                    if (fullResponseContent) {
+                      await crossChat.indexTurn({
+                        userId,
+                        chatId,
+                        role: 'assistant',
+                        content: fullResponseContent,
+                        embedder: texts => rag.embed(texts),
+                        prismaClient: prisma,
+                      });
+                    }
+                  } catch (_ccErr) { /* swallow */ }
+                });
+              }
+            } catch (_ccOuterErr) { /* swallow */ }
           } catch (memErr) {
             console.warn('[ai] memory extract schedule failed:', memErr.message);
           }
