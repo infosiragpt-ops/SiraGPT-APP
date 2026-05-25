@@ -11,6 +11,7 @@ const {
   humanizeText,
   estimateAIScore,
   listAITellPatterns,
+  clampScore,
   replaceAITells,
   cleanEmDashOveruse,
   boostBurstiness,
@@ -144,6 +145,20 @@ test('humanizeText: surfaces language and intensity in the result envelope', () 
   const r = humanizeText({ text: 'Furthermore, all is well.', language: 'en', intensity: 'high' });
   assert.equal(r.language, 'en');
   assert.equal(r.intensity, 'high');
+});
+
+test('clampScore: clamps to [0,1] with 3-decimal rounding', () => {
+  assert.equal(clampScore(0.5), 0.5);
+  assert.equal(clampScore(0), 0);
+  assert.equal(clampScore(1), 1);
+  assert.equal(clampScore(-0.5), 0);
+  assert.equal(clampScore(2), 1);
+  assert.equal(clampScore(0.123456), 0.123);
+  assert.equal(clampScore(NaN), 0, 'NaN should clamp to safe default 0');
+  assert.equal(clampScore(Infinity), 0, 'Infinity is not finite — clamp to 0');
+  assert.equal(clampScore('not a number'), 0);
+  assert.equal(clampScore(null), 0);
+  assert.equal(clampScore(undefined), 0);
 });
 
 test('Round-2 AI-tells: "tapestry of", "testament to", "navigate the complexities" caught', () => {

@@ -283,10 +283,23 @@ function humanizeText({ text, language = 'es', intensity = 'medium' } = {}) {
   };
 }
 
+/**
+ * Defensive clamp for scores. Any aiScore reported by this module
+ * MUST live in [0, 1]; if a caller passes garbage, return a safe
+ * default of 0 (treat as "not AI-like") rather than propagating NaN.
+ */
+function clampScore(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
+  if (value < 0) return 0;
+  if (value > 1) return 1;
+  return Math.round(value * 1000) / 1000;
+}
+
 module.exports = {
   humanizeText,
   estimateAIScore,
   listAITellPatterns,
+  clampScore,
   // Exposed for unit tests
   replaceAITells,
   cleanEmDashOveruse,
