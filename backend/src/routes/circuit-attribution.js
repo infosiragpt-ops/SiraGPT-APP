@@ -412,6 +412,32 @@ router.post('/unifier', optionalAuth, async (req, res) => {
   }
 });
 
+router.get('/chat-summary', optionalAuth, async (req, res) => {
+  try {
+    const userId = req.user?.id || req.query?.userId || 'anon';
+    const chatId = req.query?.chatId || 'default';
+    const entities = entityTracker.listEntities({ userId, chatId, limit: 20 });
+    const clusters = entityUnifier.unify({ userId, chatId, limit: 8 });
+    const driftSummary = driftMonitor.summarize({ userId, chatId });
+    const beliefs = beliefTracker.list({ userId, chatId, limit: 12 });
+    return res.json({
+      ok: true,
+      userId,
+      chatId,
+      entities: entities.length,
+      entitySample: entities.slice(0, 6).map((e) => ({ canonical: e.canonicalSurface, kind: e.kind, mentions: e.mentions })),
+      clusters: clusters.length,
+      clusterSample: clusters.slice(0, 6).map((c) => ({ canonical: c.canonical, kind: c.kind, mentions: c.mentions, surfaces: c.surfaces })),
+      drift: driftSummary,
+      beliefs: beliefs.length,
+      beliefSample: beliefs.slice(0, 8).map((b) => ({ subject: b.subject, status: b.status, strength: b.currentStrength, contradicted: !!b.contradictedAt })),
+    });
+  } catch (err) {
+    console.error('[circuit-attribution/chat-summary] failed:', err?.message || err);
+    return res.status(500).json({ error: 'chat-summary failed' });
+  }
+});
+
 router.get('/health', async (_req, res) => {
   return res.json({
     ok: true,
