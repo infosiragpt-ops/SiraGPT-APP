@@ -776,7 +776,8 @@ const ActionsDropdown = ({
 }: any) => {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const [isOpen, setIsOpen] = React.useState(false);
-  const [connectorsOpen, setConnectorsOpen] = React.useState(false);
+  const [appsOpen, setAppsOpen] = React.useState(false);
+  const [mobileAppsOpen, setMobileAppsOpen] = React.useState(false);
   const [justClosed, setJustClosed] = React.useState(false);
   const closeTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
 
@@ -852,7 +853,8 @@ const ActionsDropdown = ({
   const handleDropdownOpenChange = (open: boolean) => {
     setIsOpen(open);
     if (!open) {
-      setConnectorsOpen(false);
+      setAppsOpen(false);
+      setMobileAppsOpen(false);
       // Prevent tooltip from showing immediately after dropdown closes
       setJustClosed(true);
       if (closeTimeoutRef.current) {
@@ -881,7 +883,7 @@ const ActionsDropdown = ({
     {
       key: "gmail",
       brand: "gmail",
-      label: isGmailActive ? "Gmail Active" : "Gmail",
+      label: "Gmail",
       active: isGmailActive,
       disabled: isProcessingGmail,
       dotClassName: "bg-red-500",
@@ -892,7 +894,7 @@ const ActionsDropdown = ({
     {
       key: "calendar",
       brand: "calendar",
-      label: isGoogleCalendarActive ? "Calendar Active" : "Google Calendar",
+      label: "Google Calendar",
       active: isGoogleCalendarActive,
       disabled: isProcessingGoogleServices,
       dotClassName: "bg-blue-500",
@@ -903,7 +905,7 @@ const ActionsDropdown = ({
     {
       key: "drive",
       brand: "drive",
-      label: isGoogleDriveActive ? "Drive Active" : "Google Drive",
+      label: "Google Drive",
       active: isGoogleDriveActive,
       disabled: isProcessingGoogleServices,
       dotClassName: "bg-green-500",
@@ -914,7 +916,7 @@ const ActionsDropdown = ({
     {
       key: "spotify",
       brand: "spotify",
-      label: isSpotifyActive ? "Spotify Active" : "Spotify",
+      label: "Spotify",
       active: isSpotifyActive,
       disabled: isProcessingSpotify,
       dotClassName: "bg-green-500",
@@ -925,7 +927,7 @@ const ActionsDropdown = ({
     {
       key: "word",
       brand: "word",
-      label: isWordConnectorActive ? "Word Connector Active" : "Word Connector",
+      label: "Word",
       active: isWordConnectorActive,
       disabled: isToolSwitchDisabled,
       dotClassName: "bg-blue-500",
@@ -939,7 +941,7 @@ const ActionsDropdown = ({
     {
       key: "excel",
       brand: "excel",
-      label: isExcelConnectorActive ? "Excel Connector Active" : "Excel Connector",
+      label: "Excel",
       active: isExcelConnectorActive,
       disabled: isToolSwitchDisabled,
       dotClassName: "bg-blue-500",
@@ -952,11 +954,14 @@ const ActionsDropdown = ({
     },
   ];
 
+  const activeAppsCount = connectorItems.filter((item) => item.active).length;
+
   const renderConnectorItems = () => connectorItems.map((item) => (
     <DropdownMenuItem
       key={item.key}
-      className="liquid-menu-item"
+      className="liquid-menu-item chat-app-menu-item"
       data-brand={item.brand}
+      data-active={item.active ? "true" : undefined}
       onClick={item.onClick}
       disabled={item.disabled}
     >
@@ -970,7 +975,7 @@ const ActionsDropdown = ({
           </div>
         </div>
         {item.active && (
-          <div className={`h-2 w-2 shrink-0 rounded-full ${item.dotClassName}`} />
+          <div className={`h-2 w-2 shrink-0 rounded-full ${item.dotClassName}`} aria-label="Activa" />
         )}
       </div>
     </DropdownMenuItem>
@@ -1057,18 +1062,39 @@ const ActionsDropdown = ({
               )}
             </div>
           </DropdownMenuItem>
-          <div className="chat-mobile-connectors-list md:hidden">
-            <div className="chat-mobile-connectors-heading">Connectors</div>
-            {renderConnectorItems()}
-          </div>
-          <DropdownMenuSub open={connectorsOpen} onOpenChange={setConnectorsOpen}>
+          <DropdownMenuItem
+            className="liquid-menu-item chat-apps-menu-trigger md:hidden"
+            onSelect={(event) => {
+              event.preventDefault();
+              setMobileAppsOpen((open) => !open);
+            }}
+          >
+            <div className="flex items-center gap-3 w-full">
+              <div className="liquid-icon w-8 h-8 rounded-lg bg-gray-100 dark:bg-gray-900/20 flex items-center justify-center">
+                <Network width="13" height="13" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="liquid-label font-semibold text-sm">APPs</div>
+                <div className="truncate text-xs text-muted-foreground">
+                  {activeAppsCount > 0 ? `${activeAppsCount} activa${activeAppsCount > 1 ? "s" : ""}` : "Gmail, Calendar, Drive, Spotify"}
+                </div>
+              </div>
+              <ChevronDown className={cn("h-4 w-4 shrink-0 opacity-60 transition-transform", mobileAppsOpen && "rotate-180")} />
+            </div>
+          </DropdownMenuItem>
+          {mobileAppsOpen && (
+            <div className="chat-mobile-apps-panel md:hidden">
+              {renderConnectorItems()}
+            </div>
+          )}
+          <DropdownMenuSub open={appsOpen} onOpenChange={setAppsOpen}>
             <DropdownMenuSubTrigger
               className="liquid-menu-item hidden md:flex"
-              onFocus={() => setConnectorsOpen(true)}
-              onPointerEnter={() => setConnectorsOpen(true)}
+              onFocus={() => setAppsOpen(true)}
+              onPointerEnter={() => setAppsOpen(true)}
               onClick={(e) => {
                 e.preventDefault();
-                setConnectorsOpen(true);
+                setAppsOpen(true);
               }}
             >
               <div className="flex items-center gap-3 w-full">
@@ -1077,7 +1103,7 @@ const ActionsDropdown = ({
                 </div>
                 <div className="flex-1">
                   <div className="liquid-label font-medium text-sm flex items-center">
-                    Connectors
+                    APPs
                   </div>
                 </div>
               </div>
@@ -1089,171 +1115,7 @@ const ActionsDropdown = ({
                 collisionPadding={12}
                 className="liquid-menu-surface w-64"
               >
-                {/* Gmail */}
-                <DropdownMenuItem
-                  className="liquid-menu-item"
-                  data-brand="gmail"
-                  onClick={handleGmailToggle}
-                  disabled={isProcessingGmail}
-                >
-                  <div className="flex items-center gap-3 w-full">
-                    <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isGmailActive
-                      ? 'bg-red-100 dark:bg-red-900/20'
-                      : 'bg-red-100 dark:bg-red-900/20'
-                      }`}>
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src="/icons/google.png" alt="" aria-hidden="true" className="h-4 w-4" />
-                    </div>
-                    <div className="flex-1">
-                      <div className="liquid-label font-medium text-sm">
-                        {isGmailActive ? 'Gmail Active' : 'Gmail'}
-                      </div>
-                    </div>
-                    {isGmailActive && (
-                      <div className="w-2 h-2 bg-red-500 rounded-full" />
-                    )}
-                  </div>
-                </DropdownMenuItem>
-
-                {/* Google Calendar */}
-                <DropdownMenuItem
-                  className="liquid-menu-item"
-                  data-brand="calendar"
-                  onClick={handleGoogleCalendarToggle}
-                  disabled={isProcessingGoogleServices}
-                >
-                  <div className="flex items-center gap-3 w-full">
-                    <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isGoogleCalendarActive
-                      ? 'bg-blue-100 dark:bg-blue-900/20'
-                      : 'bg-blue-100 dark:bg-blue-900/20'
-                      }`}>
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src="/icons/google-calendar.png" alt="" aria-hidden="true" className="h-4 w-4" />
-                    </div>
-                    <div className="flex-1">
-                      <div className="liquid-label font-medium text-sm">
-                        {isGoogleCalendarActive ? 'Calendar Active' : 'Google Calendar'}
-                      </div>
-                    </div>
-                    {isGoogleCalendarActive && (
-                      <div className="w-2 h-2 bg-blue-500 rounded-full" />
-                    )}
-                  </div>
-                </DropdownMenuItem>
-
-                {/* Google Drive */}
-                <DropdownMenuItem
-                  className="liquid-menu-item"
-                  data-brand="drive"
-                  onClick={handleGoogleDriveToggle}
-                  disabled={isProcessingGoogleServices}
-                >
-                  <div className="flex items-center gap-3 w-full">
-                    <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isGoogleDriveActive
-                      ? 'bg-green-100 dark:bg-green-900/20'
-                      : 'bg-green-100 dark:bg-green-900/20'
-                      }`}>
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src="/icons/google-drive.png" alt="" aria-hidden="true" className="h-4 w-4" />
-                    </div>
-                    <div className="flex-1">
-                      <div className="liquid-label font-medium text-sm">
-                        {isGoogleDriveActive ? 'Drive Active' : 'Google Drive'}
-                      </div>
-                    </div>
-                    {isGoogleDriveActive && (
-                      <div className="w-2 h-2 bg-green-500 rounded-full" />
-                    )}
-                  </div>
-                </DropdownMenuItem>
-
-                {/* Spotify */}
-                <DropdownMenuItem
-                  className="liquid-menu-item"
-                  data-brand="spotify"
-                  onClick={handleSpotifyToggle}
-                  disabled={isProcessingSpotify}
-                >
-                  <div className="flex items-center gap-3 w-full">
-                    <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isSpotifyActive
-                      ? 'bg-green-100 dark:bg-green-900/20'
-                      : 'bg-green-100 dark:bg-green-900/20'
-                      }`}>
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src="/icons/spotify.png" alt="" aria-hidden="true" className="h-4 w-4" />
-                    </div>
-                    <div className="flex-1">
-                      <div className="liquid-label font-medium text-sm">
-                        {isSpotifyActive ? 'Spotify Active' : 'Spotify'}
-                      </div>
-                    </div>
-                    {isSpotifyActive && (
-                      <div className="w-2 h-2 bg-green-500 rounded-full" />
-                    )}
-                  </div>
-                </DropdownMenuItem>
-
-                {/* Word Connector */}
-                <DropdownMenuItem
-                  className="liquid-menu-item"
-                  data-brand="word"
-                  onClick={() => {
-                    if (handleWordConnectorToggle) {
-                      handleWordConnectorToggle();
-                    }
-                    setIsOpen(false);
-                  }}
-                  disabled={isToolSwitchDisabled}
-                >
-                  <div className="flex items-center gap-3 w-full">
-                    <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isWordConnectorActive
-                      ? 'bg-blue-100 dark:bg-blue-900/20'
-                      : 'bg-blue-100 dark:bg-blue-900/20'
-                      }`}>
-                      <img src="/icons/Word.png" alt="" aria-hidden="true" className="h-4 w-4" />
-                    </div>
-                    <div className="flex-1">
-                      <div className="liquid-label font-medium text-sm">
-                        {isWordConnectorActive ? 'Word Connector Active' : 'Word Connector'}
-                      </div>
-                    </div>
-                    {isWordConnectorActive && (
-                      <div className="w-2 h-2 bg-blue-500 rounded-full" />
-                    )}
-                  </div>
-                </DropdownMenuItem>
-
-                {/* Excel Connector */}
-                <DropdownMenuItem
-                  className="liquid-menu-item"
-                  data-brand="excel"
-                  onMouseEnter={prefetchExcelConnector}
-                  onFocus={prefetchExcelConnector}
-                  onClick={() => {
-                    if (handleExcelConnectorToggle) {
-                      handleExcelConnectorToggle();
-                    }
-                    setIsOpen(false);
-                  }}
-                  disabled={isToolSwitchDisabled}
-                >
-                  <div className="flex items-center gap-3 w-full">
-                    <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isExcelConnectorActive
-                      ? 'bg-blue-100 dark:bg-blue-900/20'
-                      : 'bg-blue-100 dark:bg-blue-900/20'
-                      }`}>
-                      <img src="/icons/Excel.png" alt="" aria-hidden="true" className="h-4 w-4" />
-                    </div>
-                    <div className="flex-1">
-                      <div className="liquid-label font-medium text-sm">
-                        {isExcelConnectorActive ? 'Excel Connector Active' : 'Excel Connector'}
-                      </div>
-                    </div>
-                    {isExcelConnectorActive && (
-                      <div className="w-2 h-2 bg-blue-500 rounded-full" />
-                    )}
-                  </div>
-                </DropdownMenuItem>
+                {renderConnectorItems()}
               </DropdownMenuSubContent>
             </DropdownMenuPortal>
           </DropdownMenuSub>
@@ -1833,8 +1695,8 @@ const ActiveToolsDisplay = ({
     isGoogleCalendarActive && { id: 'calendar', icon: <img src="/icons/google-calendar.png" alt="Google Calendar" className="h-4 w-4" /> },
     isGoogleDriveActive && { id: 'drive', icon: <img src="/icons/google-drive.png" alt="Google Drive" className="h-4 w-4" /> },
     isSpotifyActive && { id: 'spotify', icon: <img src="/icons/spotify.png" alt="Spotify" className="h-4 w-4" /> },
-    isWordConnectorActive && { id: 'word', icon: <img src="/icons/Word.png" alt="Word Connector" className="h-4 w-4" /> },
-    isExcelConnectorActive && { id: 'excel', icon: <img src="/icons/Excel.png" alt="Excel Connector" className="h-4 w-4" /> },
+    isWordConnectorActive && { id: 'word', icon: <img src="/icons/Word.png" alt="Word" className="h-4 w-4" /> },
+    isExcelConnectorActive && { id: 'excel', icon: <img src="/icons/Excel.png" alt="Excel" className="h-4 w-4" /> },
   ].filter(Boolean) as { id: string; icon: JSX.Element }[];
 
   const hasConnectors = activeConnectors.length > 0;
@@ -1878,131 +1740,104 @@ const ActiveToolsDisplay = ({
     setChatType('text');
   };
 
+  const renderAppSwitchItems = () => (
+    <>
+      <DropdownMenuItem className="chat-active-apps-menu-item" onSelect={(e) => e.preventDefault()}>
+        <div className="flex items-center justify-between w-full gap-4">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <img src="/icons/google.png" alt="Gmail" className="h-4 w-4 shrink-0" />
+            <span className="truncate">Gmail</span>
+          </div>
+          <Switch checked={isGmailActive} onCheckedChange={handleGmailToggle} />
+        </div>
+      </DropdownMenuItem>
+      <DropdownMenuItem className="chat-active-apps-menu-item" onSelect={(e) => e.preventDefault()}>
+        <div className="flex items-center justify-between w-full gap-4">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <img src="/icons/google-calendar.png" alt="Google Calendar" className="h-4 w-4 shrink-0" />
+            <span className="truncate">Google Calendar</span>
+          </div>
+          <Switch checked={isGoogleCalendarActive} onCheckedChange={handleGoogleCalendarToggle} />
+        </div>
+      </DropdownMenuItem>
+      <DropdownMenuItem className="chat-active-apps-menu-item" onSelect={(e) => e.preventDefault()}>
+        <div className="flex items-center justify-between w-full gap-4">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <img src="/icons/google-drive.png" alt="Google Drive" className="h-4 w-4 shrink-0" />
+            <span className="truncate">Google Drive</span>
+          </div>
+          <Switch checked={isGoogleDriveActive} onCheckedChange={handleGoogleDriveToggle} />
+        </div>
+      </DropdownMenuItem>
+      <DropdownMenuItem className="chat-active-apps-menu-item" onSelect={(e) => e.preventDefault()}>
+        <div className="flex items-center justify-between w-full gap-4">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <img src="/icons/spotify.png" alt="Spotify" className="h-4 w-4 shrink-0" />
+            <span className="truncate">Spotify</span>
+          </div>
+          <Switch checked={isSpotifyActive} onCheckedChange={handleSpotifyToggle} />
+        </div>
+      </DropdownMenuItem>
+      <DropdownMenuItem className="chat-active-apps-menu-item" onSelect={(e) => e.preventDefault()}>
+        <div className="flex items-center justify-between w-full gap-4">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <img src="/icons/Word.png" alt="Word" className="h-4 w-4 shrink-0" />
+            <span className="truncate">Word</span>
+          </div>
+          <Switch checked={isWordConnectorActive} onCheckedChange={handleWordConnectorToggle} />
+        </div>
+      </DropdownMenuItem>
+      <DropdownMenuItem
+        className="chat-active-apps-menu-item"
+        onSelect={(e) => e.preventDefault()}
+        onMouseEnter={prefetchExcelConnector}
+        onFocus={prefetchExcelConnector}
+      >
+        <div className="flex items-center justify-between w-full gap-4">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <img src="/icons/Excel.png" alt="Excel" className="h-4 w-4 shrink-0" />
+            <span className="truncate">Excel</span>
+          </div>
+          <Switch checked={isExcelConnectorActive} onCheckedChange={handleExcelConnectorToggle} />
+        </div>
+      </DropdownMenuItem>
+    </>
+  );
+
   return (
     <div className="flex flex-wrap items-center gap-2">
       {hasConnectors && (
-        <>
-          <div className="flex items-center gap-1.5 bg-blue-100 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 px-2 py-1 rounded-full text-xs border border-blue-200 dark:border-blue-800">
-            {/* <svg width="15" height="15" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M12.5 7.5C12.5 9.98528 10.4853 12 8 12C5.51472 12 3.5 9.98528 3.5 7.5C3.5 5.01472 5.51472 3 8 3C10.4853 3 12.5 5.01472 12.5 7.5Z" stroke="currentColor" stroke-width="1.5" />
-              <path d="M16.5 12.5C16.5 14.9853 14.4853 17 12 17C9.51472 17 7.5 14.9853 7.5 12.5C7.5 10.0147 9.51472 8 12 8C14.4853 8 16.5 10.0147 16.5 12.5Z" stroke="currentColor" stroke-width="1.5" />
-
-            </svg> */}
-            <Network width="13" height="13" />
-            <span className="font-medium">Connectors</span>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-4 w-4 p-0 hover:bg-blue-200 dark:hover:bg-blue-800/30 rounded-full ml-1"
-              onClick={handleCloseAllConnectors}
-            >
-              <X className="h-3 w-3" />
-            </Button>
-          </div>
+        <div className="chat-active-apps-chip flex max-w-full items-center overflow-hidden rounded-full border border-blue-200 bg-blue-50 text-blue-700 shadow-sm dark:border-blue-800/70 dark:bg-blue-950/30 dark:text-blue-200">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <div className="flex items-center gap-1.5 bg-gray-100 dark:bg-gray-800 px-2 py-1 rounded-full text-xs cursor-pointer">
-                <div className="flex items-center gap-1">
+              <button
+                type="button"
+                className="flex h-8 min-w-0 items-center gap-1.5 px-2.5 text-xs font-semibold"
+                aria-label="Abrir APPs activas"
+              >
+                <Network width="13" height="13" className="shrink-0" />
+                <span>APPs</span>
+                <div className="ml-0.5 flex min-w-0 items-center gap-0.5">
                   {activeConnectors.map(c => <React.Fragment key={c.id}>{c.icon}</React.Fragment>)}
                 </div>
-                {/* <Badge variant="secondary" className="rounded-full h-5 w-5 flex items-center justify-center p-0">{activeConnectors.length}</Badge> */}
-                <ChevronDown className="h-4 w-4" />
-              </div>
+                <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-70" />
+              </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="start">
-
-              <DropdownMenuItem onSelect={(e) => e.preventDefault()}>
-                <div className="flex items-center justify-between w-full">
-                  <div className="flex items-center gap-2">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src="/icons/google.png" alt="Gmail" className="h-4 w-4" />
-                    <span>Gmail</span>
-                  </div>
-                  <Switch
-                    checked={isGmailActive}
-                    onCheckedChange={handleGmailToggle}
-                  />
-                </div>
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={(e) => e.preventDefault()}>
-                <div className="flex items-center justify-between w-full">
-                  <div className="flex items-center gap-2">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src="/icons/google-calendar.png" alt="Google Calendar" className="h-4 w-4" />
-                    <span>Google Calendar</span>
-                  </div>
-                  <Switch
-                    checked={isGoogleCalendarActive}
-                    onCheckedChange={handleGoogleCalendarToggle}
-                  />
-                </div>
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={(e) => e.preventDefault()}>
-                <div className="flex items-center justify-between w-full">
-                  <div className="flex items-center gap-2">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src="/icons/google-drive.png" alt="Google Drive" className="h-4 w-4" />
-                    <span>Google Drive</span>
-                  </div>
-                  <Switch
-                    checked={isGoogleDriveActive}
-                    onCheckedChange={handleGoogleDriveToggle}
-                  />
-                </div>
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={(e) => e.preventDefault()}>
-                <div className="flex items-center justify-between w-full">
-                  <div className="flex items-center gap-2">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src="/icons/spotify.png" alt="Spotify" className="h-4 w-4" />
-                    <span>Spotify</span>
-                  </div>
-                  <Switch
-                    checked={isSpotifyActive}
-                    onCheckedChange={handleSpotifyToggle}
-                  />
-                </div>
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={(e) => e.preventDefault()}>
-                <div className="flex items-center justify-between w-full">
-                  <div className="flex items-center gap-2">
-                    <img src="/icons/Word.png" alt="Word Connector" className="h-4 w-4" />
-                    <span>Word Connector</span>
-                  </div>
-                  <Switch
-                    checked={isWordConnectorActive}
-                    onCheckedChange={() => {
-                      if (handleWordConnectorToggle) {
-                        handleWordConnectorToggle();
-                      }
-                    }}
-                  />
-                </div>
-              </DropdownMenuItem>
-
-              <DropdownMenuItem
-                onSelect={(e) => e.preventDefault()}
-                onMouseEnter={prefetchExcelConnector}
-                onFocus={prefetchExcelConnector}
-              >
-                <div className="flex items-center justify-between w-full">
-                  <div className="flex items-center gap-2">
-                    <img src="/icons/Excel.png" alt="Excel Connector" className="h-4 w-4" />
-                    <span>Excel Connector</span>
-                  </div>
-                  <Switch
-                    checked={isExcelConnectorActive}
-                    onCheckedChange={() => {
-                      if (handleExcelConnectorToggle) {
-                        handleExcelConnectorToggle();
-                      }
-                    }}
-                  />
-                </div>
-              </DropdownMenuItem>
+            <DropdownMenuContent align="start" side="top" sideOffset={8} collisionPadding={12} className="chat-active-apps-menu liquid-menu-surface w-[min(calc(100vw-1.25rem),18rem)] p-1.5">
+              {renderAppSwitchItems()}
             </DropdownMenuContent>
           </DropdownMenu>
-        </>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="mr-1 h-6 w-6 shrink-0 rounded-full p-0 hover:bg-blue-100 dark:hover:bg-blue-900/30"
+            onClick={handleCloseAllConnectors}
+            aria-label="Cerrar APPs"
+            title="Cerrar APPs"
+          >
+            <X className="h-3.5 w-3.5" />
+          </Button>
+        </div>
       )}
       {isWebSearchActive && (
         <div
