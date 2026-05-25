@@ -206,9 +206,9 @@ function trace({ inputs = [], output = '', opts = {} } = {}) {
 }
 
 function buildTraceBlock(report, opts = {}) {
-  if (!report || !Array.isArray(report.outputTokens)) return '';
+  if (!report || !Array.isArray(report.outputTokens) || report.outputTokens.length === 0) return '';
   const supported = report.supported || 0;
-  const total = report.outputTokens.length || 1;
+  const total = report.outputTokens.length;
   const coveragePct = Math.round((supported / total) * 100);
   const maxSamples = Number(opts.maxSamples) || 5;
   const lines = ['\n\n<token_attribution>'];
