@@ -59,11 +59,12 @@ function inferProviderFromModelId(modelId) {
   if (m.endsWith('-versatile')) return 'Groq';
 
   // 5) Free IA — Cerebras Llama 3.1 family (any 3.1 size) and any model
-  //    explicitly prefixed with `cerebras:`. Needs the Cerebras endpoint,
-  //    not OpenAI.
+  //    explicitly prefixed with `cerebras:` or `cerebras-`. Needs the
+  //    Cerebras endpoint, not OpenAI.
   if (
     m.startsWith('llama-3.1') || m.startsWith('llama3.1')
-    || m.startsWith('cerebras:') || m === 'llama-3.3-70b'
+    || m.startsWith('cerebras:') || m.startsWith('cerebras-')
+    || m === 'llama-3.3-70b'
   ) return 'Cerebras';
 
   // 6) Anthropic direct (when no aggregator prefix). The OpenAI-shaped

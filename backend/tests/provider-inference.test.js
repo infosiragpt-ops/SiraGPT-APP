@@ -67,6 +67,7 @@ test('inferProviderFromModelId: Free IA (Cerebras Llama 3.1 family)', () => {
   assert.equal(inferProviderFromModelId('llama-3.1-70b'), 'Cerebras');
   assert.equal(inferProviderFromModelId('llama3.1-8b'), 'Cerebras');
   assert.equal(inferProviderFromModelId('cerebras:llama-3.1-8b'), 'Cerebras');
+  assert.equal(inferProviderFromModelId('cerebras-llama-3.1-8b'), 'Cerebras', 'hyphen prefix also routes to Cerebras');
   // The 3.3-70b SKU also routes to Cerebras when bare (Groq picks it
   // up only with the -versatile suffix).
   assert.equal(inferProviderFromModelId('llama-3.3-70b'), 'Cerebras');
