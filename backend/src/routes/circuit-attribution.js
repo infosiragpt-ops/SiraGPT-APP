@@ -751,6 +751,75 @@ router.post('/executive-summary', optionalAuth, async (req, res) => {
   }
 });
 
+router.get('/admin/stack-health', optionalAuth, async (_req, res) => {
+  // Runs a tiny smoke probe against every attribution module to
+  // confirm the stack is wired correctly end-to-end. Returns one
+  // result per module + overall green/yellow/red status.
+  const TEST_PROMPT = 'Crea un PDF con los KPIs del trimestre para el cliente Acme';
+  const TEST_HISTORY = [{ role: 'user', content: TEST_PROMPT }];
+  const results = [];
+  const probe = (name, fn) => {
+    try {
+      const t0 = Date.now();
+      const out = fn();
+      const elapsed = Date.now() - t0;
+      results.push({ module: name, ok: true, elapsedMs: elapsed, hint: typeof out === 'object' ? Object.keys(out).slice(0, 3).join(',') : String(out).slice(0, 60) });
+    } catch (err) {
+      results.push({ module: name, ok: false, error: err?.message || String(err) });
+    }
+  };
+
+  try {
+    probe('concept-extractor', () => conceptExtractor.extractConcepts(TEST_PROMPT));
+    probe('context-attribution-engine', () => contextAttributionEngine.analyze({ prompt: TEST_PROMPT }));
+    probe('multi-hop-reasoner', () => multiHopReasoner.detectHops({ prompt: TEST_PROMPT }));
+    probe('intent-planner', () => intentPlanner.buildPlan({ prompt: TEST_PROMPT }));
+    probe('faithfulness-scorer', () => faithfulnessScorer.scoreFaithfulness({ response: 'ok', context: [{ text: 'context' }] }));
+    probe('faithfulness-postprocessor', () => faithfulnessPostprocessor.postprocess({ response: 'ok', context: [{ text: 'context' }] }));
+    probe('suppression-detector', () => suppressionDetector.analyze({ prompt: TEST_PROMPT }));
+    probe('drift-monitor', () => driftMonitor.observe({ userId: 'health', chatId: 'probe', turnIndex: 0, prompt: TEST_PROMPT }));
+    probe('entity-tracker', () => entityTracker.register({ userId: 'health', chatId: 'probe', turnIndex: 0, text: TEST_PROMPT }));
+    probe('entity-unifier', () => entityUnifier.unify({ userId: 'health', chatId: 'probe' }));
+    probe('belief-tracker', () => beliefTracker.observe({ userId: 'health', chatId: 'probe', turnIndex: 0, prompt: 'el bug ya está arreglado' }));
+    probe('safety-router', () => safetyRouter.classify({ prompt: TEST_PROMPT }));
+    probe('explainer', () => explainer.explain({ prompt: TEST_PROMPT }));
+    probe('conversation-summary', () => conversationSummary.buildSummary({ userId: 'health', chatId: 'probe', history: TEST_HISTORY }));
+    probe('confidence-aggregator', () => confidenceAggregator.aggregate({}));
+    probe('antipattern-detector', () => antipatternDetector.detect({ history: TEST_HISTORY }));
+    probe('rag-reranker', () => ragReranker.rerank({ prompt: TEST_PROMPT, snippets: [{ text: 'KPIs Acme' }] }));
+    probe('concept-similarity', () => conceptSimilarity.extractAndCluster(TEST_PROMPT));
+    probe('cross-chat-similarity', () => crossChatSimilarity.observe({ chatId: 'health-probe', history: TEST_HISTORY }));
+    probe('attribution-suite', () => attributionSuite.run({ userId: 'health', chatId: 'probe', turnIndex: 0, prompt: TEST_PROMPT }));
+    probe('trace-recorder', () => traceRecorder.list({ limit: 1 }));
+    probe('feedback-recorder', () => feedbackRecorder.stats());
+    probe('prompt-quality-scorer', () => promptQualityScorer.score({ prompt: TEST_PROMPT }));
+    probe('skill-recommender', () => skillRecommender.recommend({ prompt: TEST_PROMPT }));
+    probe('replay-runner', () => replayRunner.replayAll({ limit: 1 }));
+    probe('bulk-analyzer', () => bulkAnalyzer.analyzeBatch([TEST_PROMPT]));
+    probe('executive-summary', () => executiveSummary.buildSummary({ prompt: TEST_PROMPT }));
+    probe('metrics-aggregator', () => metrics.snapshot());
+
+    const totalModules = results.length;
+    const okCount = results.filter((r) => r.ok).length;
+    const failCount = totalModules - okCount;
+    const status = failCount === 0 ? 'green' : (failCount <= 2 ? 'yellow' : 'red');
+    const totalElapsedMs = results.reduce((sum, r) => sum + (r.elapsedMs || 0), 0);
+
+    return res.json({
+      ok: failCount === 0,
+      status,
+      totalModules,
+      okCount,
+      failCount,
+      totalElapsedMs,
+      results,
+    });
+  } catch (err) {
+    console.error('[circuit-attribution/admin/stack-health] failed:', err?.message || err);
+    return res.status(500).json({ error: 'stack-health failed' });
+  }
+});
+
 router.get('/health', async (_req, res) => {
   return res.json({
     ok: true,
