@@ -208,6 +208,30 @@ test('chargeCredits: routes that opt out (allowFreeIaFallback:false) still 402 e
   }
 });
 
+test('chargeCredits: Free IA fallback sets x-sira-fallback response headers', async () => {
+  balance = 3n;
+  const prevKey = process.env.CEREBRAS_API_KEY;
+  process.env.CEREBRAS_API_KEY = 'csk-test-key-for-fallback';
+  try {
+    const headers = {};
+    const ctx = makeReqRes();
+    ctx.res.setHeader = (name, value) => { headers[name.toLowerCase()] = String(value); };
+    ctx.res.headersSent = false;
+    chargeCredits({ feature: 'paraphrase', cost: 5 })(
+      ctx.req,
+      ctx.res,
+      ctx.nextHook(),
+    );
+    await ctx.done;
+    assert.equal(headers['x-sira-fallback'], 'free-ia');
+    assert.equal(headers['x-sira-fallback-feature'], 'paraphrase');
+    assert.equal(headers['x-sira-fallback-cost'], '5');
+  } finally {
+    if (prevKey === undefined) delete process.env.CEREBRAS_API_KEY;
+    else process.env.CEREBRAS_API_KEY = prevKey;
+  }
+});
+
 test('refundLastCharge: returns null on Free IA fallback (no txn to refund)', async () => {
   const req = { _chargedCredits: { fallback: 'free_ia', txn: null, replay: false } };
   const result = await refundLastCharge(req, 'engine_error');

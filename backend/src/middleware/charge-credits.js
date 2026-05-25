@@ -182,6 +182,17 @@ function chargeCredits(spec = {}) {
                 replay: false,
                 fallback: 'free_ia',
               };
+              // Emit a response header so the frontend can render a
+              // "Free IA fallback" badge without re-querying status. The
+              // user's selected model stays selected in the UI; only the
+              // backend silently swaps to the free tier for this turn.
+              try {
+                if (typeof res.setHeader === 'function' && !res.headersSent) {
+                  res.setHeader('x-sira-fallback', 'free-ia');
+                  res.setHeader('x-sira-fallback-feature', feature);
+                  res.setHeader('x-sira-fallback-cost', String(amount));
+                }
+              } catch (_hdrErr) { /* best-effort header */ }
               return next();
             }
           }
