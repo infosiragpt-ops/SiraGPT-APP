@@ -358,6 +358,7 @@ const githubCodexRoutes = require('./src/routes/github-codex');
 const codexRunsRoutes = require('./src/routes/codex-runs');
 const pushRoutes = require('./src/routes/push');
 const coworkRoutes = require('./src/routes/cowork');
+const contextIntelligenceRoutes = require('./src/routes/context-intelligence');
 const orchestrationRoutes = require('./src/routes/orchestration');
 const webhooksRoutes = require('./src/routes/webhooks');
 const slackIntegrationRoutes = require('./src/routes/integrations/slack');
@@ -680,6 +681,7 @@ app.use('/api/bookmarks', requireCsrf);
 app.use('/api/orgs', requireCsrf);
 app.use('/api/library', requireCsrf);
 app.use('/api/cowork', requireCsrf);
+app.use('/api/context-intelligence', requireCsrf);
 app.use('/api/thesis', requireCsrf);
 
 // ── XSS / prompt-injection sanitization ──────────────────────────
@@ -1028,6 +1030,7 @@ app.use('/api/codex/github', githubCodexRoutes);
 app.use('/api/codex', codexRunsRoutes);
 app.use('/api/push', pushRoutes);
 app.use('/api/cowork', coworkRoutes);
+app.use('/api/context-intelligence', contextIntelligenceRoutes);
 app.use('/api/orchestration', orchestrationRoutes);
 app.use('/api/webhooks', webhooksRoutes);
 app.use('/api/integrations/slack', slackIntegrationRoutes);

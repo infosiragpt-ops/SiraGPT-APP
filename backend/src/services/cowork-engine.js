@@ -6,6 +6,7 @@ const activeMemory = require('./active-memory');
 const sessionManager = require('./session-manager');
 const skillsRegistry = require('./skills-registry');
 const skillsExecutor = require('./skills-executor');
+const contextIntelligence = require('./context-intelligence-engine');
 
 const MAX_COWORK_BLOCK_CHARS = Number.parseInt(process.env.SIRAGPT_COWORK_BLOCK_MAX_CHARS || '4000', 10);
 
@@ -227,12 +228,45 @@ async function enrichAIRequest(userId, content, opts = {}) {
     ? `### Skill execution\n${skillRuns.map((r) => `- ${r.skillId || 'skill'}: ${r.ok ? 'ok' : r.error}`).join('\n')}`
     : '';
 
+  let contextIntelligencePrompt = '';
+  let contextIntelligenceReport = null;
+  if (content) {
+    try {
+      const memoryContext = userId
+        ? activeMemory.getMemoryContext(userId, { limit: 15 })
+        : { longTermFacts: [], shortTermFacts: [] };
+      const memoryFacts = [
+        ...(memoryContext.longTermFacts || []),
+        ...(memoryContext.shortTermFacts || []),
+      ];
+      contextIntelligenceReport = contextIntelligence.analyzeContext(userId, content, {
+        documents: opts.documents || (autoFileResult?.autoFiled ? [{ name: autoFileResult.fileName, text: content, mime: autoFileResult.mime }] : []),
+        history: Array.isArray(opts.history) ? opts.history : [],
+        memoryFacts,
+        toolResults: Array.isArray(opts.toolResults) ? opts.toolResults : [],
+        webResults: Array.isArray(opts.webResults) ? opts.webResults : [],
+        reasoningTrace: Array.isArray(opts.reasoningTrace) ? opts.reasoningTrace : [],
+        draftAnswer: typeof opts.draftAnswer === 'string' ? opts.draftAnswer : '',
+      });
+      contextIntelligencePrompt = contextIntelligence.buildSystemPromptBlock(
+        contextIntelligenceReport,
+        opts.contextIntelligenceOpts || {},
+      );
+      enriched.contextIntelligence = contextIntelligence.summariseForLog(contextIntelligenceReport);
+    } catch (_ciErr) {
+      enriched.contextIntelligence = null;
+    }
+  }
+
   return {
     enriched,
-    systemPromptAdditions: [coworkPrompt, memoryPrompt, deepAnalysisPrompt, skillPrompt].filter(Boolean).join('\n\n'),
+    systemPromptAdditions: [coworkPrompt, memoryPrompt, deepAnalysisPrompt, skillPrompt, contextIntelligencePrompt]
+      .filter(Boolean)
+      .join('\n\n'),
     autoFileResult: enriched.autoFileResult,
     deepAnalysis: enriched.deepAnalysis,
     skillRuns,
+    contextIntelligence: contextIntelligenceReport,
   };
 }
 

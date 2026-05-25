@@ -263,6 +263,53 @@ Autonomous "Manus-like" loop: given a topic, runs planner → searcher (scientif
 ### Slash command `/goal` in chat
 The chat composer (`components/chat-interface-enhanced.tsx`) detects a leading `/` and shows a `SlashCommandMenu` listing `/goal` (chain research-agent until findings converge), `/research` (one-shot scientific search), `/summarize` (placeholder). Typing the slash + Enter routes the message to the corresponding backend endpoint via SSE, with toast progress; the final report is copied to clipboard so the user can paste it back into the conversation.
 
+## Context Intelligence System (completed ✅) — added 2026-05-25
+
+Attribution-based context understanding inspired by Anthropic's *On the Biology of a Large Language Model* / attribution graphs research (transformer-circuits.pub/2025/attribution-graphs/biology.html). Six heuristic subsystems plus an orchestrator that explain WHICH user-context signals drove the system's interpretation, what is grounded vs invented, and what the user is likely to ask next.
+
+### `src/services/context-attribution-graph.js`
+Builds a 3-layer DAG (surface signals → mid-level abstractions → inferred intents) per turn. Each edge carries a contribution weight in [0,1]. 14 signal types (imperative, named entity, temporal cue, quantity, emotional cue, coreference, document ref, memory fact, history…), 13 intent kinds (analyze, generate, code, search, summarize, translate, compare, extract, explain, plan, visualize, review, converse). Bilingual EN/ES imperative recognition. Exports: `buildGraph(query, context)`, `topContributors(graph, limit)`, `buildAttributionPrompt(graph)`.
+
+### `src/services/multi-hop-intent-reasoner.js`
+Decomposes requests into ordered hops: literal → subject → constraint → prerequisite → output_kind → tool_mapping → user_goal. Surfaces missing prerequisites (e.g. "summarize this document" with no docs attached) and flips `needsClarification`. Maps output kinds (chart/table/code/document/etc.) to tool suggestions. Detects 6 constraint patterns (date_range, count_limit, language, format, audience, tone) and 5 user-goal inferences (troubleshoot, learn, decide, produce_deliverable, explore). Exports: `reason(query, context)`, `buildMultiHopPrompt(result)`.
+
+### `src/services/lookahead-planner.js`
+Predicts the next 1-3 user requests using 10 workflow archetypes (analyze→visualize, code→test, visualize→explain, search→synthesize, summarize→extract, translate→localize, compare→decide, plan→break_down, draft→review, troubleshoot→fix). Each next-step has a confidence score and an optional tool hint. History-aware scoring boosts steps that fit the recent direction. Exports: `planNextSteps(query, context)`, `buildLookaheadPrompt(plan)`.
+
+### `src/services/knowledge-boundary-detector.js`
+Classifies every claim (numbers, dates, named entities, URLs, quotations) in a query or draft answer as grounded / hedged_uncertain / ungrounded_assertion / low_confidence_mention by checking whether the value appears in the available context (docs, memory, history, system prompt). Returns a per-claim verdict, a `riskScore` and a `severity` (low/medium/high). Bilingual EN/ES assertion-verb dictionary. Exports: `extractClaims(text)`, `detectBoundaries(text, context)`, `buildKnowledgeBoundaryPrompt(result)`.
+
+### `src/services/reasoning-faithfulness-check.js`
+Compares a stated reasoning trace (list of steps with optional cited evidence) against the actual evidence pool (documents, memory, history, tool results, web results, user input). Each step gets a verdict (supported / weak_evidence / unsupported_claim / evidence_mismatch / unverifiable_opinion) and a faithfulness score. High severity when stated reasoning does not match available evidence. Exports: `normaliseEvidencePool(context)`, `checkFaithfulness(trace, context)`, `buildFaithfulnessPrompt(result)`.
+
+### `src/services/entity-grounding-tracker.js`
+Extracts 11 entity kinds (URL, email, phone, money, percent, date, year, proper_noun, acronym, hashtag, mention) and tags each as strongly_grounded / memory_grounded / history_grounded / newly_introduced based on where it appears in context. `groundingRate` and `severity` summarise the picture. Confabulation-suspect entities (newly_introduced) get a verify_before_asserting action. Exports: `extractEntities(text)`, `trackEntities(text, context)`, `buildEntityGroundingPrompt(result)`.
+
+### `src/services/context-intelligence-engine.js`
+Orchestrator that runs all six subsystems with isolated try/catch, computes an overall confidence in [0,1], and produces a recommendations list (severity-tagged: high/medium/low/info). Builds a single composite system-prompt block capped at `SIRAGPT_CONTEXT_INTELLIGENCE_BLOCK_MAX` chars (default 3500). Compact telemetry payload via `summariseForLog(report)`. Exports: `analyzeContext(userId, query, context)`, `buildSystemPromptBlock(report, opts)`, `summariseForLog(report)`.
+
+### Integration in cowork-engine + AI generate route
+- `backend/src/services/cowork-engine.js` — `enrichAIRequest` now runs `contextIntelligence.analyzeContext` after auto-file/deep-analysis/skills, then appends a Context Intelligence prompt block to `systemPromptAdditions`. Returns `contextIntelligence` field on the response for caller logging.
+- Auto-injected into every `/api/ai/generate` turn via the existing cowork enrichment pipeline.
+
+### API routes
+Mounted at `/api/context-intelligence/*` in `backend/index.js` (CSRF-protected, optional auth, rate-limited):
+- `POST /analyze` — full multi-module report for a query
+- `POST /prompt-block` — same, returns the formatted system-prompt block + telemetry summary
+- `POST /attribution` — attribution graph only
+- `POST /multi-hop` — multi-hop reasoner only
+- `POST /lookahead` — lookahead planner only
+- `POST /knowledge-boundary` — claim grounding analysis
+- `POST /faithfulness` — reasoning trace audit
+- `POST /entity-grounding` — entity grounding analysis
+- `GET /health` — module list and config
+
+### Tests
+- `backend/tests/context-intelligence.test.js` — 65 tests covering all 7 modules (signals, abstractions, hops, lookahead patterns, claim classification, faithfulness verdicts, entity grounding, orchestrator integration). Registered in `backend/package.json` test script.
+
+### Env config
+- `SIRAGPT_CONTEXT_INTELLIGENCE_BLOCK_MAX` — system-prompt block size cap (default 3500 chars)
+
 ## Next Improvement Areas
 1. **Document pipeline** — add more generator formats (EPUB, RTF, ODT)
 2. **Service health probes** — endpoint health monitoring
