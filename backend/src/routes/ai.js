@@ -1901,10 +1901,52 @@ router.post(
                 console.log(`[intent-attr-graph] feats=${iagReport.stats.featureCount} themes=${iagReport.stats.supernodeCount} circuits=${iagReport.stats.circuitCount} conf=${iagReport.confidence.score} lang=${iagReport.language} dur=${iagReport.durationMs}ms`);
               } catch (_logErr) { /* swallow */ }
             }
+            // Feed the per-turn feature activations into the saliency
+            // tracker so live / fading / dead state is available to
+            // downstream prompt builders (and to the diagnostic
+            // /api/circuit-attribution endpoints).
+            try {
+              if (Array.isArray(iagReport.features) && iagReport.features.length > 0) {
+                const saliencyTracker = require('../services/saliency-decay-tracker');
+                const turnIndex = Array.isArray(__conversationHistoryForUnderstanding)
+                  ? __conversationHistoryForUnderstanding.length
+                  : 0;
+                saliencyTracker.observe({
+                  userId,
+                  chatId: canPersist ? chatId : null,
+                  turnIndex,
+                  features: iagReport.features.map((f) => ({
+                    kind: f.category || f.kind || 'feature',
+                    label: f.label || f.surface || f.value || '',
+                    weight: f.weight ?? f.confidence ?? 0.5,
+                  })),
+                });
+              }
+            } catch (_salErr) { /* swallow — tracker is best-effort */ }
           }
         }
       } catch (iagErr) {
         console.warn('[intent-attr-graph] failed (continuing without):', iagErr?.message || iagErr);
+      }
+
+      // Saliency block — derived from the in-memory feature tracker we
+      // just observed into. Empty string if no live features yet (first
+      // turn of a fresh chat) so nothing wasted in the prompt.
+      let saliencyBlock = '';
+      try {
+        if (String(process.env.SIRAGPT_SALIENCY_DISABLED || '').toLowerCase() !== '1') {
+          const saliencyTracker = require('../services/saliency-decay-tracker');
+          const classification = saliencyTracker.classify({
+            userId,
+            chatId: canPersist ? chatId : null,
+          });
+          if (classification.live.length > 0) {
+            const block = saliencyTracker.buildSaliencyBlock(classification, { maxChars: 1100 });
+            if (block) saliencyBlock = block;
+          }
+        }
+      } catch (salClassErr) {
+        console.warn('[saliency] classify failed (continuing without):', salClassErr?.message || salClassErr);
       }
 
       // Professional document analysis enrichment ─────────────────────────
@@ -3385,7 +3427,7 @@ router.post(
         }
       } catch (_pr5Err) { /* swallow */ }
 
-      const systemInstruction = { role: 'system', content: promptBundle.system + conversationUnderstandingBlock + universalContractBlock + enterpriseExecutionBlock + memoryBlock + orchMemoryBlock + crossChatBlock + attributionBlock + circuitAttributionBlock + intentAttributionGraphBlock + feedbackBlock + evidenceBlock + documentEnrichmentBlock + coworkBlock + webSearchBlock + __pr5GroundingBlock };
+      const systemInstruction = { role: 'system', content: promptBundle.system + conversationUnderstandingBlock + universalContractBlock + enterpriseExecutionBlock + memoryBlock + orchMemoryBlock + crossChatBlock + attributionBlock + circuitAttributionBlock + intentAttributionGraphBlock + saliencyBlock + feedbackBlock + evidenceBlock + documentEnrichmentBlock + coworkBlock + webSearchBlock + __pr5GroundingBlock };
       // Structured view of the system prompt — same content as
       // `systemInstruction.content`, but split into typed blocks with a
       // `cacheable` hint. When the downstream provider is Anthropic (or
@@ -3405,6 +3447,7 @@ router.post(
         { kind: 'cross-chat', text: crossChatBlock, cacheable: false },
         { kind: 'attribution', text: attributionBlock, cacheable: false },
         { kind: 'circuit-attribution', text: circuitAttributionBlock, cacheable: false },
+        { kind: 'saliency-state', text: saliencyBlock, cacheable: false },
         { kind: 'intent-attribution-graph', text: intentAttributionGraphBlock, cacheable: false },
         { kind: 'feedback', text: feedbackBlock, cacheable: false },
         { kind: 'evidence', text: evidenceBlock, cacheable: false },
