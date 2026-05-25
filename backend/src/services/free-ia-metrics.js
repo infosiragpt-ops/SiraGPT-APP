@@ -28,6 +28,9 @@ const state = {
   upstreamErrors: 0,
   lastUpstreamErrorAt: null,
   lastUpstreamErrorCode: null,
+  // Frequency map of upstream error codes — lets ops see "503 is the
+  // top failure" at a glance rather than tailing logs.
+  upstreamErrorsByCode: Object.create(null),
   // Bookkeeping: when the process started + the last time someone hit
   // the admin reset endpoint. Helps ops distinguish "counter is 0
   // because no events" from "counter is 0 because we just reset".
@@ -79,8 +82,24 @@ function recordUpstreamSuccess() {
 function recordUpstreamError({ code } = {}) {
   state.upstreamErrors += 1;
   state.lastUpstreamErrorAt = new Date().toISOString();
-  state.lastUpstreamErrorCode = typeof code === 'string' ? code : (code != null ? String(code) : null);
+  const codeStr = typeof code === 'string' ? code : (code != null ? String(code) : null);
+  state.lastUpstreamErrorCode = codeStr;
+  // Bump per-code frequency map. `unknown` bucket catches errors that
+  // didn't carry an identifiable code/status/name.
+  const bucket = codeStr || 'unknown';
+  state.upstreamErrorsByCode[bucket] = (state.upstreamErrorsByCode[bucket] || 0) + 1;
   return state.upstreamErrors;
+}
+
+/**
+ * Return error codes sorted by frequency (most common first). Useful
+ * for a "top failures" widget on the ops dashboard.
+ */
+function topUpstreamErrorCodes(limit = 5) {
+  return Object.entries(state.upstreamErrorsByCode)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, Math.max(0, limit))
+    .map(([code, count]) => ({ code, count }));
 }
 
 /**
@@ -110,6 +129,8 @@ function snapshot() {
       successRate,
       lastErrorAt: state.lastUpstreamErrorAt,
       lastErrorCode: state.lastUpstreamErrorCode,
+      errorsByCode: { ...state.upstreamErrorsByCode },
+      topErrorCodes: topUpstreamErrorCodes(5),
     },
     startedAt: state.startedAt,
     lastResetAt: state.lastResetAt,
@@ -193,6 +214,7 @@ function reset() {
   state.upstreamErrors = 0;
   state.lastUpstreamErrorAt = null;
   state.lastUpstreamErrorCode = null;
+  state.upstreamErrorsByCode = Object.create(null);
   state.lastResetAt = new Date().toISOString();
 }
 
@@ -200,6 +222,7 @@ module.exports = {
   recordFallback,
   recordUpstreamSuccess,
   recordUpstreamError,
+  topUpstreamErrorCodes,
   snapshot,
   summary,
   toPrometheusText,

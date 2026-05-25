@@ -239,6 +239,40 @@ test('upstream.successRate is null when no upstream events recorded', () => {
   assert.equal(s.upstream.successRate, null);
 });
 
+test('topUpstreamErrorCodes returns codes sorted by frequency (most common first)', () => {
+  metrics.reset();
+  for (let i = 0; i < 5; i += 1) metrics.recordUpstreamError({ code: '503' });
+  for (let i = 0; i < 3; i += 1) metrics.recordUpstreamError({ code: '429' });
+  metrics.recordUpstreamError({ code: 'ETIMEDOUT' });
+  const top = metrics.topUpstreamErrorCodes();
+  assert.equal(top[0].code, '503');
+  assert.equal(top[0].count, 5);
+  assert.equal(top[1].code, '429');
+  assert.equal(top[1].count, 3);
+  assert.equal(top[2].code, 'ETIMEDOUT');
+  assert.equal(top[2].count, 1);
+});
+
+test('topUpstreamErrorCodes(limit) caps the result set', () => {
+  metrics.reset();
+  metrics.recordUpstreamError({ code: '503' });
+  metrics.recordUpstreamError({ code: '429' });
+  metrics.recordUpstreamError({ code: '500' });
+  const top = metrics.topUpstreamErrorCodes(2);
+  assert.equal(top.length, 2);
+});
+
+test('snapshot.upstream.errorsByCode + topErrorCodes reflect the frequency map', () => {
+  metrics.reset();
+  metrics.recordUpstreamError({ code: 'rate_limit' });
+  metrics.recordUpstreamError({ code: 'rate_limit' });
+  metrics.recordUpstreamError({ code: 'auth_failed' });
+  const s = metrics.snapshot();
+  assert.equal(s.upstream.errorsByCode.rate_limit, 2);
+  assert.equal(s.upstream.errorsByCode.auth_failed, 1);
+  assert.equal(s.upstream.topErrorCodes[0].code, 'rate_limit');
+});
+
 test('recordUpstreamError without a code uses null', () => {
   metrics.reset();
   metrics.recordUpstreamError();
