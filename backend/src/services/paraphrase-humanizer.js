@@ -239,6 +239,31 @@ function listAITellPatterns() {
 }
 
 /**
+ * Scan a text and return the top-N most frequent AI-tell patterns it
+ * contains. Useful for showing the user a "your draft used these
+ * LLM-flavour phrases" debug panel without committing the
+ * humanization yet.
+ *
+ * @param {string} text
+ * @param {object} [opts]
+ * @param {number} [opts.limit] — top-N to return (default 5)
+ * @returns {Array<{ pattern: string, count: number }>}
+ */
+function topAITellsFound(text, { limit = 5 } = {}) {
+  const t = String(text || '');
+  if (!t.trim()) return [];
+  const counts = [];
+  for (const { key, regex } of AI_TELL_PATTERNS) {
+    const matches = t.match(regex);
+    const count = matches ? matches.length : 0;
+    if (count > 0) counts.push({ pattern: key, count });
+  }
+  return counts
+    .sort((a, b) => b.count - a.count)
+    .slice(0, Math.max(0, limit));
+}
+
+/**
  * Apply the full humanization pipeline to a paraphrased text.
  *
  * @param {object} opts
@@ -308,6 +333,7 @@ module.exports = {
   humanizeText,
   estimateAIScore,
   listAITellPatterns,
+  topAITellsFound,
   clampScore,
   // Exposed for unit tests
   replaceAITells,

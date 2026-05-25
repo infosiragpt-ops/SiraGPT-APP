@@ -11,6 +11,7 @@ const {
   humanizeText,
   estimateAIScore,
   listAITellPatterns,
+  topAITellsFound,
   clampScore,
   replaceAITells,
   cleanEmDashOveruse,
@@ -207,4 +208,30 @@ test('humanizeText: Spanish text loses "cabe destacar que" / "sin embargo"', () 
   assert.ok(!/sin embargo/i.test(r.text), r.text);
   assert.ok(!/asimismo/i.test(r.text), r.text);
   assert.ok(!/en conclusión/i.test(r.text), r.text);
+});
+
+test('topAITellsFound: returns top patterns sorted by count', () => {
+  const text = 'Furthermore, furthermore, moreover, this is important. Furthermore, it is worth noting that.';
+  const hits = topAITellsFound(text);
+  assert.ok(Array.isArray(hits));
+  assert.ok(hits.length > 0);
+  assert.ok(hits[0].count >= hits[hits.length - 1].count, 'should be sorted descending');
+  assert.ok(hits.every((h) => typeof h.pattern === 'string' && h.count > 0));
+});
+
+test('topAITellsFound: empty text returns empty array', () => {
+  assert.deepEqual(topAITellsFound(''), []);
+  assert.deepEqual(topAITellsFound('   '), []);
+  assert.deepEqual(topAITellsFound(null), []);
+});
+
+test('topAITellsFound: respects limit option', () => {
+  const text = 'Furthermore, moreover, additionally, it is worth noting that, this is important, in conclusion.';
+  const hits = topAITellsFound(text, { limit: 2 });
+  assert.ok(hits.length <= 2);
+});
+
+test('topAITellsFound: clean text with no AI tells returns empty array', () => {
+  const hits = topAITellsFound('The cat sat on the mat. It was a sunny day.');
+  assert.deepEqual(hits, []);
 });
