@@ -276,6 +276,44 @@ test('GET /api/free-ia/health stays 200 with <10 samples even if rate is poor', 
   }
 });
 
+test('GET /api/free-ia/metrics/badge returns 204 when no events recorded', async () => {
+  const metrics = require('../src/services/free-ia-metrics');
+  metrics.reset();
+  const { server, baseURL } = await startServer();
+  try {
+    const resp = await new Promise((resolve, reject) => {
+      http.get(`${baseURL}/api/free-ia/metrics/badge`, (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString('utf8') }));
+        res.on('error', reject);
+      }).on('error', reject);
+    });
+    assert.equal(resp.status, 204);
+    assert.equal(resp.body, '');
+  } finally {
+    server.close();
+    metrics.reset();
+  }
+});
+
+test('GET /api/free-ia/metrics/badge returns the compact { fallbacks, healthy } once events exist', async () => {
+  const metrics = require('../src/services/free-ia-metrics');
+  metrics.reset();
+  metrics.recordFallback({ feature: 'paraphrase', amount: 1 });
+  metrics.recordUpstreamSuccess();
+  const { server, baseURL } = await startServer();
+  try {
+    const { status, body } = await fetchJSON(`${baseURL}/api/free-ia/metrics/badge`);
+    assert.equal(status, 200);
+    assert.equal(body.fallbacks, 1);
+    assert.equal(body.healthy, true);
+  } finally {
+    server.close();
+    metrics.reset();
+  }
+});
+
 test('GET /api/free-ia/metrics/summary?format=text returns just the .line as text/plain', async () => {
   const metrics = require('../src/services/free-ia-metrics');
   metrics.reset();

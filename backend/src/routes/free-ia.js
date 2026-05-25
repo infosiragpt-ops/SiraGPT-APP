@@ -159,6 +159,14 @@ router.get('/metrics/summary', (req, res) => {
   res.json(sum);
 });
 
+// Tiny variant for status badges — { fallbacks, healthy } or 204 when
+// no events have fired yet (so the UI hides the chip entirely).
+router.get('/metrics/badge', (_req, res) => {
+  const c = freeIaMetrics.compactSummary();
+  if (!c) return res.status(204).end();
+  res.json(c);
+});
+
 router.get('/metrics.prom', (_req, res) => {
   res.type('text/plain; version=0.0.4');
   res.send(freeIaMetrics.toPrometheusText());
