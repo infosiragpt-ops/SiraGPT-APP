@@ -112,10 +112,16 @@ function matchCase(source, replacement) {
   return replacement;
 }
 
-function replaceAITells(text) {
+function replaceAITells(text, { excludeTells = [] } = {}) {
   const applied = [];
   let result = String(text || '');
+  const excluded = new Set(
+    Array.isArray(excludeTells)
+      ? excludeTells.map((t) => String(t || '').toLowerCase())
+      : [],
+  );
   for (const { key, regex, options } of AI_TELL_PATTERNS) {
+    if (excluded.has(key)) continue;
     result = result.replace(regex, (match, offset) => {
       const seed = `${key}:${offset}`;
       const repl = matchCase(match, pickReplacement(options, seed));
@@ -238,10 +244,13 @@ function listAITellPatterns() {
  * @param {object} opts
  * @param {string} opts.text — paraphrased input
  * @param {string} [opts.language] — 'es' | 'en' | ... (informational only)
+ * @param {string[]} [opts.excludeTells] — keys from listAITellPatterns()
+ *   the caller wants to keep verbatim (e.g. academic register that
+ *   legitimately uses "moreover"). Case-insensitive.
  * @param {'low'|'medium'|'high'} [opts.intensity] — controls pass count
  * @returns {{ text:string, applied:Array, aiScoreBefore:number, aiScoreAfter:number, deltaScore:number, intensity:string, language:string }}
  */
-function humanizeText({ text, language = 'es', intensity = 'medium' } = {}) {
+function humanizeText({ text, language = 'es', intensity = 'medium', excludeTells = [] } = {}) {
   const input = String(text || '');
   const aiScoreBefore = estimateAIScore(input);
 
@@ -261,7 +270,7 @@ function humanizeText({ text, language = 'es', intensity = 'medium' } = {}) {
   let current = input;
   const allApplied = [];
   for (let i = 0; i < passes; i += 1) {
-    const r1 = replaceAITells(current);
+    const r1 = replaceAITells(current, { excludeTells });
     const r2 = cleanEmDashOveruse(r1.text);
     const r3 = boostBurstiness(r2.text);
     allApplied.push(...r1.applied, ...r2.applied, ...r3.applied);

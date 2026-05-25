@@ -178,6 +178,28 @@ test('Round-2 AI-tells (Spanish): "es decir,", "por otro lado,", "en definitiva"
   assert.ok(!/desempeña un papel/i.test(r.text), r.text);
 });
 
+test('excludeTells keeps the named patterns verbatim (case-insensitive)', () => {
+  const input = 'Moreover, the data is solid. Furthermore, the model converges.';
+  const r = humanizeText({ text: input, language: 'en', excludeTells: ['moreover'] });
+  // "moreover" should survive; "furthermore" should be replaced.
+  assert.ok(/moreover/i.test(r.text), `expected moreover kept: ${r.text}`);
+  assert.ok(!/furthermore/i.test(r.text), `expected furthermore replaced: ${r.text}`);
+});
+
+test('excludeTells with the empty array changes nothing', () => {
+  const input = 'Furthermore, the data converges.';
+  const a = humanizeText({ text: input, language: 'en' });
+  const b = humanizeText({ text: input, language: 'en', excludeTells: [] });
+  assert.equal(a.text, b.text);
+});
+
+test('replaceAITells: excludeTells param skips named keys', () => {
+  const out = replaceAITells('Furthermore, moreover, the data is fine.', { excludeTells: ['furthermore', 'moreover'] });
+  assert.ok(/furthermore/i.test(out.text));
+  assert.ok(/moreover/i.test(out.text));
+  assert.equal(out.applied.length, 0);
+});
+
 test('humanizeText: Spanish text loses "cabe destacar que" / "sin embargo"', () => {
   const input = 'Cabe destacar que el sistema funcionó. Sin embargo, hubo demoras. Asimismo, se identificaron fallos. En conclusión, hay margen de mejora.';
   const r = humanizeText({ text: input, language: 'es' });
