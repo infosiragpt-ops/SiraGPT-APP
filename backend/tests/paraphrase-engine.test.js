@@ -8,6 +8,8 @@ const {
   jaccardSimilarity,
   resolveMaxSimilarity,
   normaliseMode,
+  isKnownMode,
+  listCanonicalModes,
   MODE_SIMILARITY_CEILINGS,
   MODE_ALIASES,
 } = require('../src/services/paraphrase-engine');
@@ -110,6 +112,27 @@ test('normaliseMode: extra English aliases (rephrase, concise, elaborate, ...)',
 test('normaliseMode: unknown mode passes through unchanged (lowercase)', () => {
   assert.equal(normaliseMode('weird'), 'weird');
   assert.equal(normaliseMode(''), '');
+});
+
+test('isKnownMode: returns true for canonical modes, aliases, and false for garbage', () => {
+  assert.equal(isKnownMode('standard'), true);
+  assert.equal(isKnownMode('humanize'), true);
+  assert.equal(isKnownMode('human'), true, 'alias should resolve to true');
+  assert.equal(isKnownMode('tesis'), true, 'Spanish alias should resolve to true');
+  assert.equal(isKnownMode('garbage-mode'), false);
+  assert.equal(isKnownMode(''), false);
+  assert.equal(isKnownMode(null), false);
+});
+
+test('listCanonicalModes: returns the 9-mode set (no aliases)', () => {
+  const modes = listCanonicalModes();
+  assert.equal(modes.length, 9);
+  assert.ok(modes.includes('standard'));
+  assert.ok(modes.includes('humanize'));
+  assert.ok(modes.includes('custom'));
+  // Aliases must NOT appear here
+  assert.ok(!modes.includes('human'));
+  assert.ok(!modes.includes('tesis'));
 });
 
 test('resolveMaxSimilarity: applies aliases — "human" → humanize ceiling', () => {

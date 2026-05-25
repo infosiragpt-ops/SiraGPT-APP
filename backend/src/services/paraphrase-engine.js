@@ -96,6 +96,24 @@ function normaliseMode(mode) {
   return MODE_ALIASES[raw] || raw;
 }
 
+/**
+ * Return true if `mode` (possibly an alias) resolves to one of the
+ * canonical SUPPORTED_MODES recognised by the engine + route schema.
+ * Lets callers validate input without having to know the alias map.
+ */
+function isKnownMode(mode) {
+  const canonical = normaliseMode(mode);
+  return Object.prototype.hasOwnProperty.call(MODE_SIMILARITY_CEILINGS, canonical);
+}
+
+/**
+ * Return the canonical mode set (no aliases) — useful for building
+ * a /modes endpoint without duplicating the list elsewhere.
+ */
+function listCanonicalModes() {
+  return Object.keys(MODE_SIMILARITY_CEILINGS);
+}
+
 function resolveMaxSimilarity(mode, explicit) {
   if (typeof explicit === 'number' && Number.isFinite(explicit) && explicit > 0 && explicit <= 1) {
     return explicit;
@@ -137,6 +155,8 @@ module.exports = {
   runParaphrasePipeline,
   resolveMaxSimilarity,
   normaliseMode,
+  isKnownMode,
+  listCanonicalModes,
   MODE_SIMILARITY_CEILINGS,
   MODE_ALIASES,
 };
