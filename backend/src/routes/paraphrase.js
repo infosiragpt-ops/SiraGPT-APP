@@ -14,6 +14,11 @@
  * Tunable via env `CREDITS_PARAPHRASE_PER_1K_CHARS` (default 1). On
  * downstream LLM failure (502, timeout) the charge is auto-refunded so
  * the user is never drained for an unsuccessful call.
+ *
+ * Env tunables:
+ *   CREDITS_PARAPHRASE_PER_1K_CHARS — credit cost ratio (default 1)
+ *   PARAPHRASE_MAX_TEXT_LENGTH      — per-request text cap (default
+ *                                     20_000 chars, hard upper 100_000).
  */
 
 const express = require('express');
@@ -38,8 +43,24 @@ const SUPPORTED_MODES = [
 
 const SUPPORTED_LANGUAGES = ['es', 'en', 'pt', 'fr', 'de', 'it'];
 
+// Per-request text-length cap. Hard upper bound stays at 100K chars to
+// protect the worker pool from accidental novel-sized payloads; the
+// effective limit can be tuned down per deployment via env. Defaults to
+// 20K which is the cap the schema shipped with originally.
+function resolveMaxTextLength(env = process.env) {
+  const HARD_UPPER = 100_000;
+  const DEFAULT = 20_000;
+  const raw = env.PARAPHRASE_MAX_TEXT_LENGTH;
+  if (raw == null || raw === '') return DEFAULT;
+  const n = Number.parseInt(String(raw), 10);
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT;
+  return Math.min(HARD_UPPER, n);
+}
+
+const MAX_TEXT_LENGTH = resolveMaxTextLength();
+
 const ParaphraseSchema = z.object({
-  text: z.string().min(1).max(20_000),
+  text: z.string().min(1).max(MAX_TEXT_LENGTH),
   mode: z.enum(SUPPORTED_MODES).default('standard'),
   language: z.enum(SUPPORTED_LANGUAGES).default('es'),
   customInstruction: z.string().max(1_000).optional(),
@@ -175,3 +196,5 @@ module.exports.ParaphraseSchema = ParaphraseSchema;
 module.exports.SUPPORTED_MODES = SUPPORTED_MODES;
 module.exports.SUPPORTED_LANGUAGES = SUPPORTED_LANGUAGES;
 module.exports.paraphraseCost = paraphraseCost;
+module.exports.resolveMaxTextLength = resolveMaxTextLength;
+module.exports.MAX_TEXT_LENGTH = MAX_TEXT_LENGTH;
