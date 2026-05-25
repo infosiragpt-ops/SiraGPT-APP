@@ -3546,6 +3546,17 @@ router.post(
             : 0,
           model: actualModel,
           provider: actualProvider,
+          context: {
+            history: Array.isArray(__conversationHistoryForUnderstanding)
+              ? __conversationHistoryForUnderstanding
+              : [],
+            documents: processedFiles.map((file) => ({
+              id: file.id || file.fileId || file.name || null,
+              name: file.name || file.originalname || file.filename || null,
+              mime: file.mimeType || file.mimetype || file.type || null,
+            })),
+            memoryFacts: recalledMemoryFacts,
+          },
         });
         openclawRuntimeBlock = `\n\n${openclawCapabilityKernel.buildOpenClawPromptBlock(openclawRuntimeProfile)}`;
       } catch (openclawErr) {

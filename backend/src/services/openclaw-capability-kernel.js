@@ -1,5 +1,7 @@
 'use strict';
 
+const executionDossier = require('./openclaw-execution-dossier');
+
 const DEFAULT_TOOL_NAMES = Object.freeze([
   'web_search',
   'read_url',
@@ -72,11 +74,12 @@ function buildCapabilityProfile({
   recentTurnCount = 0,
   model = null,
   provider = null,
+  context = {},
 } = {}) {
   const tools = normalizeTools(toolNames);
   const classification = classifyRequest(prompt, { attachmentCount });
 
-  return {
+  const profile = {
     version: 'openclaw-capability-kernel-2026-05',
     userId: userId || null,
     chatId: chatId || null,
@@ -111,6 +114,15 @@ function buildCapabilityProfile({
         : (classification.shouldPreferAgentic ? 'repair_or_long_running_work_benefits_from_tools' : 'standard_chat_with_openclaw_policy'),
     },
   };
+
+  profile.executionDossier = executionDossier.buildExecutionDossier({
+    prompt,
+    profile,
+    context,
+    toolNames: tools,
+  });
+
+  return profile;
 }
 
 function buildOpenClawPromptBlock(profile) {
@@ -143,6 +155,8 @@ function buildOpenClawPromptBlock(profile) {
     '### Runtime Signals',
     `- wantsRepair=${Boolean(signals.wantsRepair)} referencesVisualContext=${Boolean(signals.referencesVisualContext)} highRisk=${Boolean(signals.highRisk)} likelyLongRunning=${Boolean(signals.likelyLongRunning)}`,
     `- recentTurnCount=${signals.recentTurnCount || 0} attachmentCount=${signals.attachmentCount || 0} memoryFactCount=${signals.memoryFactCount || 0}`,
+    '',
+    executionDossier.buildDossierPromptBlock(profile.executionDossier),
   ].join('\n');
 }
 
@@ -150,6 +164,8 @@ module.exports = {
   DEFAULT_TOOL_NAMES,
   buildCapabilityProfile,
   buildOpenClawPromptBlock,
+  buildExecutionDossier: executionDossier.buildExecutionDossier,
+  buildDossierPromptBlock: executionDossier.buildDossierPromptBlock,
   classifyRequest,
   normalizeTools,
 };

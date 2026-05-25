@@ -263,6 +263,14 @@ async function runAgenticChat(opts) {
     toolNames: tools.map((tool) => tool.name),
     recentTurnCount: Array.isArray(history) ? history.length : 0,
     model,
+    context: {
+      history,
+      documents: Array.isArray(toolContext.fileIds)
+        ? toolContext.fileIds.map((id) => ({ id, source: 'chat_attachment' }))
+        : [],
+      memoryFacts: Array.isArray(toolContext.memoryFacts) ? toolContext.memoryFacts : [],
+      toolResults: [],
+    },
   });
   const openclawRuntimeBlock = openclawCapabilityKernel.buildOpenClawPromptBlock(openclawProfile);
 
