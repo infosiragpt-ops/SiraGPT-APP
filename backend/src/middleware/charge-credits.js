@@ -193,6 +193,13 @@ function chargeCredits(spec = {}) {
                   res.setHeader('x-sira-fallback-cost', String(amount));
                 }
               } catch (_hdrErr) { /* best-effort header */ }
+              // Bump the ops counter — fire-and-forget, never breaks
+              // the request path.
+              try {
+                // eslint-disable-next-line global-require
+                const metrics = require('../services/free-ia-metrics');
+                metrics.recordFallback({ feature, amount });
+              } catch (_metricsErr) { /* best-effort metric */ }
               return next();
             }
           }
