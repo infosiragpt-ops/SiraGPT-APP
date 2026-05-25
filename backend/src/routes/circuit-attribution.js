@@ -46,6 +46,7 @@ const antipatternDetector = require('../services/attribution-anti-pattern-detect
 const ragReranker = require('../services/attribution-rag-reranker');
 const conceptSimilarity = require('../services/concept-similarity');
 const crossChatSimilarity = require('../services/cross-chat-intent-similarity');
+const traceRecorder = require('../services/attribution-trace-recorder');
 
 const router = express.Router();
 
@@ -590,6 +591,34 @@ router.get('/admin/overview', optionalAuth, async (req, res) => {
   } catch (err) {
     console.error('[circuit-attribution/admin/overview] failed:', err?.message || err);
     return res.status(500).json({ error: 'overview failed' });
+  }
+});
+
+router.get('/admin/traces', optionalAuth, async (req, res) => {
+  try {
+    const chatId = req.query?.chatId ? String(req.query.chatId).slice(0, 96) : null;
+    const userId = req.query?.userId ? String(req.query.userId).slice(0, 64) : null;
+    const limit = Number.isFinite(Number(req.query?.limit)) ? Number(req.query.limit) : 50;
+    return res.json({
+      ok: true,
+      traces: traceRecorder.list({ chatId, userId, limit }),
+      stats: traceRecorder.stats(),
+    });
+  } catch (err) {
+    console.error('[circuit-attribution/admin/traces] failed:', err?.message || err);
+    return res.status(500).json({ error: 'traces failed' });
+  }
+});
+
+router.get('/admin/traces/:id', optionalAuth, async (req, res) => {
+  try {
+    const id = String(req.params?.id || '').slice(0, 64);
+    const trace = traceRecorder.get({ id });
+    if (!trace) return res.status(404).json({ error: 'trace not found' });
+    return res.json({ ok: true, trace });
+  } catch (err) {
+    console.error('[circuit-attribution/admin/traces/:id] failed:', err?.message || err);
+    return res.status(500).json({ error: 'trace lookup failed' });
   }
 });
 

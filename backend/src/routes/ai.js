@@ -1944,6 +1944,22 @@ router.post(
               try {
                 console.log(`[confidence] score=${confResult.score} grade=${confResult.grade} antipatterns=${apResult.patterns?.length || 0}`);
               } catch (_l2) { /* swallow */ }
+              // Record the full bundle into the trace recorder for
+              // postmortem debugging via /api/circuit-attribution/admin/traces.
+              try {
+                const traceRec = require('../services/attribution-trace-recorder');
+                const turnIdx = Array.isArray(__conversationHistoryForUnderstanding)
+                  ? __conversationHistoryForUnderstanding.length
+                  : 0;
+                traceRec.record({
+                  userId,
+                  chatId: canPersist ? chatId : null,
+                  turnIndex: turnIdx,
+                  prompt,
+                  bundle,
+                  confidence: confResult,
+                });
+              } catch (_trErr) { /* swallow */ }
             } catch (_confErr) { /* swallow */ }
           }
         }
