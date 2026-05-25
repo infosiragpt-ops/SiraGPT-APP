@@ -45,6 +45,7 @@ const confidenceAggregator = require('../services/attribution-confidence-aggrega
 const antipatternDetector = require('../services/attribution-anti-pattern-detector');
 const ragReranker = require('../services/attribution-rag-reranker');
 const conceptSimilarity = require('../services/concept-similarity');
+const crossChatSimilarity = require('../services/cross-chat-intent-similarity');
 
 const router = express.Router();
 
@@ -537,6 +538,21 @@ router.post('/similarity', optionalAuth, async (req, res) => {
   } catch (err) {
     console.error('[circuit-attribution/similarity] failed:', err?.message || err);
     return res.status(500).json({ error: 'similarity failed' });
+  }
+});
+
+router.post('/cross-chat', optionalAuth, async (req, res) => {
+  try {
+    const chatId = String(req.body?.chatId || '').slice(0, 96);
+    if (!chatId) return res.status(400).json({ error: 'chatId is required' });
+    const history = sanitizeHistory(req.body?.history);
+    if (history.length) crossChatSimilarity.observe({ chatId, history });
+    const k = Number.isFinite(req.body?.k) ? Number(req.body.k) : 5;
+    const sim = crossChatSimilarity.similar({ chatId, history, k });
+    return res.json({ ok: true, similar: sim, block: crossChatSimilarity.buildSimilarChatsBlock(sim) });
+  } catch (err) {
+    console.error('[circuit-attribution/cross-chat] failed:', err?.message || err);
+    return res.status(500).json({ error: 'cross-chat failed' });
   }
 });
 
