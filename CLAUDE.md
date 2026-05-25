@@ -394,7 +394,20 @@ Cerebras. Wiring:
   helper `inferProviderFromModelId` so a `llama-3.1-*` model id always
   routes to Cerebras.
 - **Tests**: `cerebras-client.test.js` (10), `charge-credits-middleware.test.js`
-  (+4 new), `plan-credits-catalog.test.js` (+2 new), `free-ia-route.test.js` (3).
+  (+5 incl. header + metrics), `plan-credits-catalog.test.js` (+2),
+  `free-ia-route.test.js` (5 incl. metrics), `free-ia-metrics.test.js` (8),
+  `provider-inference.test.js` (11).
+- **Observability**: `backend/src/services/free-ia-metrics.js` — tiny
+  in-memory counter for fallback events (`recordFallback`, `snapshot`,
+  `toPrometheusText`). Wired into `chargeCredits` so every silent
+  fallback increments `sira_free_ia_fallback_total` + per-feature
+  labels. Exposed via `GET /api/free-ia/metrics` (JSON) and
+  `GET /api/free-ia/metrics.prom` (Prometheus text exposition).
+- **Provider routing helper**: `backend/src/services/ai/provider-inference.js`
+  — extracted out of `routes/ai.js` for proper coverage. Adds bare-id
+  mappings for Anthropic (`claude-*`), Groq (`-versatile`), Mistral
+  (`mistral-*`, `codestral-*`); recognises more OpenRouter slug
+  prefixes (`qwen/`, `mistralai/`, `cohere/`, `nousresearch/`).
 
 ## Paraphrase Humanizer (anti-AI-detection) — added 2026-05-25
 
@@ -412,6 +425,8 @@ reduce AI-detector flagging.
   `mode === 'humanize'`; other modes opt in with `?humanize=1`. The
   response carries `stealth: { aiScoreBefore, aiScoreAfter, deltaScore,
   transformations, intensity }`.
+- **Tunable text cap**: `PARAPHRASE_MAX_TEXT_LENGTH` env var caps
+  per-request input length (default 20_000 chars, hard upper 100_000).
 - **Per-mode similarity ceilings** (`paraphrase-engine.js`
   `MODE_SIMILARITY_CEILINGS`): humanize/creative 0.55, academic 0.60,
   formal 0.70, shorten 0.78, others 0.72. Caller-supplied
