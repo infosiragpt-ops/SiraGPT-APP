@@ -25,6 +25,10 @@ const beliefTracker = require('../src/services/belief-state-tracker');
 const safetyRouter = require('../src/services/refusal-safety-router');
 const entityTracker = require('../src/services/cross-turn-entity-tracker');
 const entityUnifier = require('../src/services/cross-language-entity-unifier');
+const confidenceAggregator = require('../src/services/attribution-confidence-aggregator');
+const ragReranker = require('../src/services/attribution-rag-reranker');
+const crossChatSim = require('../src/services/cross-chat-intent-similarity');
+const antipatternDetector = require('../src/services/attribution-anti-pattern-detector');
 
 const argv = new Set(process.argv.slice(2));
 const wantsJson = argv.has('--json');
@@ -211,6 +215,65 @@ const UNIFIER_CASES = [
   },
 ];
 
+const CONFIDENCE_CASES = [
+  {
+    name: 'high_confidence_clean_intent',
+    input: {
+      engineBundle: { attribution: { summary: { topIntents: [{ text: 'fix', weight: 0.9 }, { text: 'analyze', weight: 0.1 }] }, multiHop: { depth: 0 }, suppression: { conflicts: [] } } },
+    },
+    expect: { gradeIn: ['A', 'B'] },
+  },
+  {
+    name: 'low_confidence_with_refuse',
+    input: { safetyResult: { verdict: 'refuse' } },
+    expect: { gradeIn: ['D', 'F'] },
+  },
+  {
+    name: 'medium_confidence_with_conflicts',
+    input: {
+      engineBundle: { attribution: { summary: { topIntents: [{ text: 'fix', weight: 0.6 }] }, multiHop: { depth: 2 }, suppression: { conflicts: [{}, {}] } } },
+    },
+    // Conflicts + hops should leave confidence below A. Exact grade
+    // depends on the weighting; any non-A is the real signal.
+    expect: { gradeNotIn: ['A'] },
+  },
+];
+
+const RERANKER_CASES = [
+  {
+    name: 'matching_snippet_wins',
+    input: {
+      prompt: 'arregla el bug del frontend del Login Component',
+      snippets: [
+        { id: 'unrelated', text: 'cooking recipes for soup', score: 0.5 },
+        { id: 'match', text: 'frontend Login Component bug fix snippet about UI', score: 0.5 },
+      ],
+    },
+    expect: { topId: 'match' },
+  },
+];
+
+const CROSS_CHAT_CASES = [
+  {
+    name: 'similar_intent_chats',
+    chats: [
+      { id: 'a', turns: ['arregla el bug del frontend Login'] },
+      { id: 'b', turns: ['crea un PDF de ventas'] },
+      { id: 'c', turns: ['arregla otro bug del frontend Dashboard'] },
+    ],
+    target: 'a',
+    expect: { topMatchId: 'c' },
+  },
+];
+
+const ANTIPATTERN_CASES = [
+  {
+    name: 'detects_repetition_loop',
+    history: Array.from({ length: 4 }, (_, i) => ({ role: 'user', content: `Arregla el bug del frontend del Login intento ${i}` })),
+    expect: { hasKind: 'repetition_loop' },
+  },
+];
+
 // ── Runner ──────────────────────────────────────────────────────────────────
 
 function runAnalyze(testCase) {
@@ -349,6 +412,50 @@ function runUnifier(testCase) {
   return { name: testCase.name, ok: failures.length === 0, failures, clusters: clusters.length };
 }
 
+function runConfidence(testCase) {
+  const r = confidenceAggregator.aggregate(testCase.input || {});
+  const failures = [];
+  if (Array.isArray(testCase.expect.gradeIn) && !testCase.expect.gradeIn.includes(r.grade)) {
+    failures.push(`grade=${r.grade} not in ${testCase.expect.gradeIn.join(',')}`);
+  }
+  if (Array.isArray(testCase.expect.gradeNotIn) && testCase.expect.gradeNotIn.includes(r.grade)) {
+    failures.push(`grade=${r.grade} should not be in ${testCase.expect.gradeNotIn.join(',')}`);
+  }
+  return { name: testCase.name, ok: failures.length === 0, failures, grade: r.grade };
+}
+
+function runReranker(testCase) {
+  const ranked = ragReranker.rerank({ prompt: testCase.input.prompt, snippets: testCase.input.snippets });
+  const failures = [];
+  if (testCase.expect.topId && ranked[0]?.original?.id !== testCase.expect.topId) {
+    failures.push(`topId=${ranked[0]?.original?.id}, expected ${testCase.expect.topId}`);
+  }
+  return { name: testCase.name, ok: failures.length === 0, failures, topId: ranked[0]?.original?.id };
+}
+
+function runCrossChat(testCase) {
+  crossChatSim._reset();
+  for (const chat of testCase.chats) {
+    const history = chat.turns.map((t) => ({ role: 'user', content: t }));
+    crossChatSim.observe({ chatId: chat.id, history });
+  }
+  const sim = crossChatSim.similar({ chatId: testCase.target, k: 5 });
+  const failures = [];
+  if (testCase.expect.topMatchId && sim[0]?.chatId !== testCase.expect.topMatchId) {
+    failures.push(`top match=${sim[0]?.chatId}, expected ${testCase.expect.topMatchId}`);
+  }
+  return { name: testCase.name, ok: failures.length === 0, failures };
+}
+
+function runAntipattern(testCase) {
+  const r = antipatternDetector.detect({ history: testCase.history });
+  const failures = [];
+  if (testCase.expect.hasKind && !r.patterns.find((p) => p.kind === testCase.expect.hasKind)) {
+    failures.push(`no pattern of kind "${testCase.expect.hasKind}" (got: ${r.patterns.map((p) => p.kind).join(',')})`);
+  }
+  return { name: testCase.name, ok: failures.length === 0, failures };
+}
+
 function runAll() {
   const start = Date.now();
   const sections = [
@@ -358,6 +465,10 @@ function runAll() {
     { label: 'belief', cases: BELIEF_CASES, run: runBelief },
     { label: 'safety', cases: SAFETY_CASES, run: runSafety },
     { label: 'unifier', cases: UNIFIER_CASES, run: runUnifier },
+    { label: 'confidence', cases: CONFIDENCE_CASES, run: runConfidence },
+    { label: 'reranker', cases: RERANKER_CASES, run: runReranker },
+    { label: 'cross-chat', cases: CROSS_CHAT_CASES, run: runCrossChat },
+    { label: 'antipattern', cases: ANTIPATTERN_CASES, run: runAntipattern },
   ];
 
   const results = {};
