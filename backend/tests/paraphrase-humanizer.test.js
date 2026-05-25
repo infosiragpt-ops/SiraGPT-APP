@@ -162,6 +162,27 @@ test('clampScore: clamps to [0,1] with 3-decimal rounding', () => {
   assert.equal(clampScore(undefined), 0);
 });
 
+test('topAITellsFound: returns nothing for clean text', () => {
+  assert.deepEqual(topAITellsFound('I like clean prose. No noise here.'), []);
+  assert.deepEqual(topAITellsFound(''), []);
+});
+
+test('topAITellsFound: counts AI-tells and sorts by frequency desc', () => {
+  const text = 'Furthermore, this. Furthermore, that. Moreover, the other. Delve into more.';
+  const top = topAITellsFound(text);
+  assert.equal(top[0].pattern, 'furthermore');
+  assert.equal(top[0].count, 2);
+  assert.equal(top[1].pattern, 'moreover');
+  assert.equal(top[1].count, 1);
+  assert.ok(top.find((t) => t.pattern === 'delve'));
+});
+
+test('topAITellsFound: respects limit', () => {
+  const text = 'Furthermore. Moreover. Additionally. Delve into. Navigate.';
+  const top = topAITellsFound(text, { limit: 2 });
+  assert.equal(top.length, 2);
+});
+
 test('Round-2 AI-tells: "tapestry of", "testament to", "navigate the complexities" caught', () => {
   const en = 'The model is a testament to engineering. It must navigate the complexities of tapestry of options.';
   const r = humanizeText({ text: en, language: 'en' });
