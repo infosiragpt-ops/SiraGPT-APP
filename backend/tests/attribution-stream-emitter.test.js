@@ -85,11 +85,11 @@ test('error: emits error event', () => {
   assert.strictEqual(last.data.message, 'boom');
 });
 
-test('history capped at historyCap', () => {
+test('history capped at historyCap (min floor 8)', () => {
   const res = mockRes();
-  const stream = emitter.createStream(res, { historyCap: 5 });
-  for (let i = 0; i < 20; i += 1) stream.emit('tick', { i });
-  assert.ok(stream.history().length <= 5);
+  const stream = emitter.createStream(res, { historyCap: 10 });
+  for (let i = 0; i < 30; i += 1) stream.emit('tick', { i });
+  assert.ok(stream.history().length <= 10);
 });
 
 test('close: writes close event and marks closed', () => {
