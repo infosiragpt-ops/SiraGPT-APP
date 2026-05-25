@@ -93,3 +93,53 @@ test('GET /api/free-ia/configured returns boolean only', async () => {
     else process.env.CEREBRAS_API_KEY = prevKey;
   }
 });
+
+test('GET /api/free-ia/metrics returns a JSON snapshot of the fallback counter', async () => {
+  const metrics = require('../src/services/free-ia-metrics');
+  metrics.reset();
+  metrics.recordFallback({ feature: 'paraphrase', amount: 5 });
+  metrics.recordFallback({ feature: 'generate', amount: 3 });
+  const { server, baseURL } = await startServer();
+  try {
+    const { status, body } = await fetchJSON(`${baseURL}/api/free-ia/metrics`);
+    assert.equal(status, 200);
+    assert.equal(body.totalFallbacks, 2);
+    assert.equal(body.totalCostBlocked, '8');
+    assert.equal(body.perFeature.paraphrase.count, 1);
+    assert.equal(body.perFeature.generate.count, 1);
+    assert.ok(body.lastEventAt);
+  } finally {
+    server.close();
+    metrics.reset();
+  }
+});
+
+test('GET /api/free-ia/metrics.prom returns Prometheus text format', async () => {
+  const metrics = require('../src/services/free-ia-metrics');
+  metrics.reset();
+  metrics.recordFallback({ feature: 'paraphrase', amount: 7 });
+  const { server, baseURL } = await startServer();
+  try {
+    // Use http.get to inspect Content-Type without forcing JSON parse.
+    const url = `${baseURL}/api/free-ia/metrics.prom`;
+    const promResp = await new Promise((resolve, reject) => {
+      http.get(url, (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => resolve({
+          status: res.statusCode,
+          contentType: res.headers['content-type'],
+          body: Buffer.concat(chunks).toString('utf8'),
+        }));
+        res.on('error', reject);
+      }).on('error', reject);
+    });
+    assert.equal(promResp.status, 200);
+    assert.match(promResp.contentType, /^text\/plain/);
+    assert.match(promResp.body, /^sira_free_ia_fallback_total 1$/m);
+    assert.match(promResp.body, /sira_free_ia_fallback_total\{feature="paraphrase"\} 1/);
+  } finally {
+    server.close();
+    metrics.reset();
+  }
+});

@@ -23,6 +23,7 @@ const {
   getCerebrasConfig,
   isFreeIaConfigured,
 } = require('../services/ai/cerebras-client');
+const freeIaMetrics = require('../services/free-ia-metrics');
 
 router.get('/status', (_req, res) => {
   const cfg = getCerebrasConfig();
@@ -38,6 +39,17 @@ router.get('/status', (_req, res) => {
 
 router.get('/configured', (_req, res) => {
   res.json({ configured: isFreeIaConfigured() });
+});
+
+// Ops visibility — how often the silent fallback fires per feature.
+// JSON shape for dashboards, Prometheus text for scraping.
+router.get('/metrics', (_req, res) => {
+  res.json(freeIaMetrics.snapshot());
+});
+
+router.get('/metrics.prom', (_req, res) => {
+  res.type('text/plain; version=0.0.4');
+  res.send(freeIaMetrics.toPrometheusText());
 });
 
 module.exports = router;
