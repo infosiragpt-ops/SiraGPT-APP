@@ -212,15 +212,14 @@ test('block: formats terms with bullet list', () => {
 
 test('decay: removes meta older than threshold', () => {
   L._internal.bumpMeta('u1', 'old');
-  // Backdate
-  const innerMap = L._internal.bumpMeta('u1', 'old');
-  // Direct access via getMeta won't let us mutate; reach through bumpMeta
-  // and then patch via the user's inner map.
-  // Simpler: call bumpMeta then set lastSeenAt to past
-  // We need access — expose via _internal for tests
+  L._internal.bumpMeta('u1', 'old');
   L._internal.bumpMeta('u1', 'fresh');
-  const removed = L.decayUnused({ userId: 'u1', olderThanDays: 0 });
-  // With olderThanDays=0, nothing was old enough (all just created); decay returns 0
+  // olderThanDays=30 → cutoff is 30 days ago, and everything was just
+  // bumped microseconds ago, so nothing should decay. Using 0 here is
+  // race-prone because Date.now() advances between the bumpMeta call
+  // and the cutoff computation, so "just bumped" entries can register
+  // as "before now" on slower CI runners.
+  const removed = L.decayUnused({ userId: 'u1', olderThanDays: 30 });
   assert.equal(removed, 0);
 });
 
