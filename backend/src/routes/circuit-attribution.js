@@ -51,6 +51,7 @@ const feedbackRecorder = require('../services/attribution-feedback-recorder');
 const promptQualityScorer = require('../services/attribution-prompt-quality-scorer');
 const replayRunner = require('../services/attribution-replay-runner');
 const skillRecommender = require('../services/attribution-skill-recommender');
+const bulkAnalyzer = require('../services/attribution-bulk-analyzer');
 
 const router = express.Router();
 
@@ -712,6 +713,20 @@ router.post('/recommend-skill', optionalAuth, async (req, res) => {
   } catch (err) {
     console.error('[circuit-attribution/recommend-skill] failed:', err?.message || err);
     return res.status(500).json({ error: 'recommend-skill failed' });
+  }
+});
+
+router.post('/bulk', optionalAuth, async (req, res) => {
+  try {
+    const prompts = Array.isArray(req.body?.prompts) ? req.body.prompts.slice(0, 250) : [];
+    if (!prompts.length) return res.status(400).json({ error: 'prompts is required (non-empty array)' });
+    const includeSuite = req.body?.includeSuite === true;
+    const limit = Number.isFinite(req.body?.limit) ? Number(req.body.limit) : undefined;
+    const result = bulkAnalyzer.analyzeBatch(prompts, { includeSuite, limit });
+    return res.json({ ok: true, ...result, block: bulkAnalyzer.buildBulkBlock(result) });
+  } catch (err) {
+    console.error('[circuit-attribution/bulk] failed:', err?.message || err);
+    return res.status(500).json({ error: 'bulk failed' });
   }
 });
 
