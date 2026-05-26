@@ -908,7 +908,6 @@ const ActionsDropdown = ({
     if (newState) {
       closeAllToolsAndConnectors();
       setChatType('text');
-      setShowAudioPanel(true);
       setAudioTab('music');
     } else {
       setShowAudioPanel(false);
@@ -2611,17 +2610,6 @@ const ActiveToolsDisplay = ({
                   </DropdownMenuPortal>
                 </DropdownMenuSub>
 
-                <button
-                  type="button"
-                  className="flex h-8 w-full items-center justify-between border-t border-zinc-950/8 px-2.5 text-left text-[11px] font-semibold text-rose-700 transition-colors hover:bg-rose-500/10 dark:border-white/12 dark:text-rose-200 dark:hover:bg-rose-400/10"
-                  onClick={() => {
-                    setShowAudioPanel(true)
-                    setAudioTab('music')
-                  }}
-                >
-                  <span>Abrir estudio musical</span>
-                  <ChevronDown className="h-3.5 w-3.5 -rotate-90" />
-                </button>
               </div>
             </DropdownMenuContent>
           </DropdownMenu>
