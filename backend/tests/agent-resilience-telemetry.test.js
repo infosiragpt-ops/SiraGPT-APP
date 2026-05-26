@@ -1,5 +1,5 @@
 const test = require('node:test');
-const assert = require('node:assert');
+const assert = require('node:assert/strict');
 const path = require('path');
 const AgentResilienceManager = require(path.join(__dirname, '../src/services/agents/agent-resilience-hardening'));
 const AgentTelemetry = require(path.join(__dirname, '../src/services/agents/agent-telemetry'));
@@ -82,6 +82,45 @@ test('AgentResilienceManager: timeout guard', async () => {
   }
 });
 
+test('AgentResilienceManager: resource pool drains queued work with concurrency cap', async () => {
+  const manager = new AgentResilienceManager();
+  const pool = manager.createResourcePool(2);
+  let active = 0;
+  let maxActive = 0;
+
+  const tasks = Array.from({ length: 5 }, (_, index) => pool.acquire(async () => {
+    active++;
+    maxActive = Math.max(maxActive, active);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    active--;
+    return index;
+  }));
+
+  const results = await Promise.all(tasks);
+  assert.deepEqual(results.sort((a, b) => a - b), [0, 1, 2, 3, 4]);
+  assert.equal(maxActive, 2);
+});
+
+test('AgentResilienceManager: half-open failure reopens circuit immediately', async () => {
+  const manager = new AgentResilienceManager({
+    circuitBreakerThreshold: 1,
+    circuitBreakerResetMs: 1,
+  });
+
+  await assert.rejects(
+    () => manager.callWithCircuitBreaker('external-api', async () => { throw new Error('first'); }),
+    /first/,
+  );
+  await new Promise(resolve => setTimeout(resolve, 5));
+  await assert.rejects(
+    () => manager.callWithCircuitBreaker('external-api', async () => { throw new Error('still failing'); }),
+    /still failing/,
+  );
+
+  const metrics = manager.getMetrics();
+  assert.equal(metrics.circuitBreakers['external-api'].state, 'OPEN');
+});
+
 test('AgentResilienceManager: metrics', () => {
   const manager = new AgentResilienceManager();
   manager.metrics.retries = 5;
@@ -97,13 +136,14 @@ test('AgentResilienceManager: metrics', () => {
 test('AgentTelemetry: span lifecycle', () => {
   const telemetry = new AgentTelemetry({ sampleRate: 1.0 });
 
-  const span = telemetry.startSpan('test-operation', { userId: '123' });
+  const span = telemetry.startSpan('test-operation', { userId: '123', apiToken: 'secret-value' });
   assert(span.end);
 
   span.end({ status: 'ok' });
 
   const traces = telemetry.getTraces();
   assert(traces.length > 0);
+  assert.equal(traces[0].attributes.apiToken, '[REDACTED]');
 });
 
 test('AgentTelemetry: span nesting', () => {
@@ -188,6 +228,18 @@ test('AgentTelemetry: sampling', () => {
   const events = telemetry.getEvents();
   assert.strictEqual(traces.length, 0);
   assert.strictEqual(events.length, 0);
+});
+
+test('AgentTelemetry: event payloads redact sensitive keys and handle circular objects', () => {
+  const telemetry = new AgentTelemetry({ sampleRate: 1.0 });
+  const payload = { token: 'secret', nested: { ok: true } };
+  payload.self = payload;
+
+  telemetry.emitEvent('safe.event', payload);
+
+  const event = telemetry.getEvents()[0];
+  assert.equal(event.data.token, '[REDACTED]');
+  assert.equal(event.data.self, '[Circular]');
 });
 
 test('AgentTelemetry: percentile calculations', () => {

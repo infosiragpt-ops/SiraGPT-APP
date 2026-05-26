@@ -1,28 +1,17 @@
-/**
- * agent-resilience-hardening.js
- * 
- * Hardens SiraGPT agent system with resilience patterns from OpenClaw:
- * - Exponential backoff with jitter
- * - Circuit breaker for external calls
- * - Timeout guards with cleanup
- * - Resource pooling
- * - Observability hooks
- */
-
 const EventEmitter = require('events');
 
 class AgentResilienceManager extends EventEmitter {
   constructor(opts = {}) {
     super();
     this.opts = {
-      maxRetries: opts.maxRetries || 3,
-      initialBackoffMs: opts.initialBackoffMs || 100,
-      maxBackoffMs: opts.maxBackoffMs || 30000,
-      jitterFactor: opts.jitterFactor || 0.1,
-      circuitBreakerThreshold: opts.circuitBreakerThreshold || 5,
-      circuitBreakerResetMs: opts.circuitBreakerResetMs || 60000,
-      requestTimeoutMs: opts.requestTimeoutMs || 30000,
       ...opts,
+      maxRetries: positiveInt(opts.maxRetries, 3),
+      initialBackoffMs: positiveInt(opts.initialBackoffMs, 100),
+      maxBackoffMs: positiveInt(opts.maxBackoffMs, 30000),
+      jitterFactor: boundedNumber(opts.jitterFactor, 0.1, 0, 1),
+      circuitBreakerThreshold: positiveInt(opts.circuitBreakerThreshold, 5),
+      circuitBreakerResetMs: positiveInt(opts.circuitBreakerResetMs, 60000),
+      requestTimeoutMs: positiveInt(opts.requestTimeoutMs, 30000),
     };
 
     this.circuitBreakers = new Map();
@@ -34,12 +23,9 @@ class AgentResilienceManager extends EventEmitter {
     };
   }
 
-  /**
-   * Retry with exponential backoff + jitter
-   */
   async retryWithBackoff(fn, name = 'operation') {
     let lastError;
-    
+
     for (let attempt = 0; attempt < this.opts.maxRetries; attempt++) {
       try {
         const result = await fn();
@@ -51,37 +37,31 @@ class AgentResilienceManager extends EventEmitter {
       } catch (err) {
         lastError = err;
         this.metrics.retries++;
-        
+
         if (attempt < this.opts.maxRetries - 1) {
           const backoffMs = this.calculateBackoff(attempt);
-          this.emit('retry:attempt', { name, attempt, backoffMs, error: err.message });
+          this.emit('retry:attempt', { name, attempt, backoffMs, error: err?.message || String(err) });
           await this.sleep(backoffMs);
         }
       }
     }
 
-    this.emit('retry:exhausted', { name, error: lastError.message });
+    this.emit('retry:exhausted', { name, error: lastError?.message || String(lastError) });
     throw lastError;
   }
 
-  /**
-   * Calculate backoff with jitter
-   */
   calculateBackoff(attempt) {
     const exponential = Math.min(
       this.opts.initialBackoffMs * Math.pow(2, attempt),
-      this.opts.maxBackoffMs
+      this.opts.maxBackoffMs,
     );
     const jitter = exponential * this.opts.jitterFactor * Math.random();
-    return exponential + jitter;
+    return Math.round(exponential + jitter);
   }
 
-  /**
-   * Circuit breaker pattern for external calls
-   */
   async callWithCircuitBreaker(name, fn) {
     const breaker = this.getOrCreateCircuitBreaker(name);
-    
+
     if (breaker.state === 'OPEN') {
       this.metrics.circuitBreaks++;
       throw new Error(`Circuit breaker OPEN for ${name}`);
@@ -92,7 +72,7 @@ class AgentResilienceManager extends EventEmitter {
       breaker.recordSuccess();
       return result;
     } catch (err) {
-      breaker.recordFailure();
+      breaker.recordFailure(breaker.state === 'HALF_OPEN');
       if (breaker.state === 'OPEN') {
         this.emit('circuit:open', { name, threshold: this.opts.circuitBreakerThreshold });
       }
@@ -100,9 +80,6 @@ class AgentResilienceManager extends EventEmitter {
     }
   }
 
-  /**
-   * Get or create circuit breaker
-   */
   getOrCreateCircuitBreaker(name) {
     if (!this.circuitBreakers.has(name)) {
       this.circuitBreakers.set(name, {
@@ -110,24 +87,25 @@ class AgentResilienceManager extends EventEmitter {
         failures: 0,
         lastFailureTime: null,
         openedAt: null,
-        
+
         recordSuccess: () => {
           const breaker = this.circuitBreakers.get(name);
           breaker.failures = 0;
           breaker.state = 'CLOSED';
+          breaker.openedAt = null;
         },
-        
-        recordFailure: () => {
+
+        recordFailure: (forceOpen = false) => {
           const breaker = this.circuitBreakers.get(name);
           breaker.failures++;
           breaker.lastFailureTime = Date.now();
-          
-          if (breaker.failures >= this.opts.circuitBreakerThreshold) {
+
+          if (forceOpen || breaker.failures >= this.opts.circuitBreakerThreshold) {
             breaker.state = 'OPEN';
             breaker.openedAt = Date.now();
           }
         },
-        
+
         checkReset: () => {
           const breaker = this.circuitBreakers.get(name);
           if (
@@ -141,69 +119,78 @@ class AgentResilienceManager extends EventEmitter {
         },
       });
     }
-    
+
     const breaker = this.circuitBreakers.get(name);
     breaker.checkReset();
     return breaker;
   }
 
-  /**
-   * Timeout guard with cleanup
-   */
   async withTimeout(promise, timeoutMs, onTimeout) {
-    return Promise.race([
-      promise,
-      new Promise((_, reject) => {
-        const timeoutId = setTimeout(() => {
-          this.metrics.timeouts++;
-          if (onTimeout) onTimeout();
-          reject(new Error(`Operation timed out after ${timeoutMs}ms`));
-        }, timeoutMs);
-        
-        // Cleanup timer on resolution
-        promise.finally(() => clearTimeout(timeoutId));
-      }),
-    ]);
+    let timeoutId;
+    const timeout = positiveInt(timeoutMs, this.opts.requestTimeoutMs);
+
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      timeoutId = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        this.metrics.timeouts++;
+        if (onTimeout) onTimeout();
+        reject(new Error(`Operation timed out after ${timeout}ms`));
+      }, timeout);
+
+      Promise.resolve(promise).then(
+        (value) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeoutId);
+          resolve(value);
+        },
+        (err) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeoutId);
+          reject(err);
+        },
+      );
+    });
   }
 
-  /**
-   * Async resource pool (e.g., for concurrent tool calls)
-   */
   createResourcePool(maxConcurrent) {
+    const limit = positiveInt(maxConcurrent, 1);
     const pool = {
-      active: new Set(),
+      active: 0,
       queue: [],
-      maxConcurrent,
-      
+      maxConcurrent: limit,
+
       async acquire(fn) {
-        if (pool.active.size >= pool.maxConcurrent) {
-          return new Promise(resolve => {
-            pool.queue.push(fn);
-          }).then(async result => result);
+        if (typeof fn !== 'function') {
+          throw new TypeError('resource pool acquire requires a function');
         }
+        return new Promise((resolve, reject) => {
+          pool.queue.push({ fn, resolve, reject });
+          pool.drain();
+        });
+      },
 
-        const id = Symbol('resource');
-        pool.active.add(id);
-
-        try {
-          return await fn();
-        } finally {
-          pool.active.delete(id);
-          const nextFn = pool.queue.shift();
-          if (nextFn) {
-            const result = await pool.acquire(nextFn);
-            // Resolve the pending promise
+      drain() {
+        while (pool.active < pool.maxConcurrent && pool.queue.length > 0) {
+          const task = pool.queue.shift();
+          pool.active++;
+          Promise.resolve()
+            .then(task.fn)
+            .then(task.resolve, task.reject)
+            .finally(() => {
+              pool.active--;
+              pool.drain();
+            });
           }
-        }
       },
     };
 
     return pool;
   }
 
-  /**
-   * Metrics snapshot
-   */
   getMetrics() {
     const breakers = {};
     for (const [name, breaker] of this.circuitBreakers.entries()) {
@@ -220,16 +207,10 @@ class AgentResilienceManager extends EventEmitter {
     };
   }
 
-  /**
-   * Helper: sleep
-   */
   sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
-  /**
-   * Reset metrics
-   */
   resetMetrics() {
     this.metrics = {
       retries: 0,
@@ -239,14 +220,22 @@ class AgentResilienceManager extends EventEmitter {
     };
   }
 
-  /**
-   * Reset specific circuit breaker
-   */
   resetCircuitBreaker(name) {
     if (this.circuitBreakers.has(name)) {
       this.circuitBreakers.delete(name);
     }
   }
+}
+
+function positiveInt(value, fallback) {
+  const n = Number(value);
+  return Number.isInteger(n) && n > 0 ? n : fallback;
+}
+
+function boundedNumber(value, fallback, min, max) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
 }
 
 module.exports = AgentResilienceManager;
