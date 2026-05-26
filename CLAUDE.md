@@ -467,10 +467,15 @@ recommendations, used by `/api/free-ia/info`, `/api/free-ia/digest`,
 - `enrichPlanWithPricing(plan)` — full plan-card data + popular flag
 - `validatePlanName(plan)` — cheap pre-Zod validator (case-insensitive)
 - `pricingTable()` — all enriched plans sorted by price (UI grid + dropdowns)
+- `quickEstimate(features[])` — minCost-only fan-out for marketing tables
 - `monthlyBreakdownAsCsv(projection)` — RFC-4180 CSV export for Excel/Sheets
+- `monthlyBreakdownAsMarkdown(projection)` — GFM table for chat answers
 - `comparePlans(from, to)` — structured plan-vs-plan diff for upsell UI
 - `recommendUpgradeFromUsage(usage, currentPlan)` — one-call upsell helper
 - `findCheapestPlanForBudget(maxUsd)` — best plan within $/month budget
+- `affordsFeature(plan, feature, usage)` — pre-flight budget check
+- `explainBudgetVerdict(plan, feature, usage)` — human-readable banner text
+- `pricingFAQEntries()` — chat-AI knowledge base (7 q/a pairs)
 
 Pricing constants:
 - `USD_PER_CREDIT = 5/100_000` (PRO ratio)
@@ -482,10 +487,12 @@ Public endpoints exposing the helpers:
 - `GET  /api/free-ia/plans`     — pricingTable
 - `GET  /api/free-ia/budget`    — findCheapestPlanForBudget
 - `GET  /api/free-ia/compare`   — comparePlans (?from=&to=)
-- `POST /api/free-ia/estimate`  — estimateCostBatch + recommendUpgradeFromUsage
-- `GET  /api/free-ia/digest`    — userQuotaDigest with inlined planInfo
+- `GET  /api/free-ia/affords`   — affordsFeature + explainBudgetVerdict
+- `GET  /api/free-ia/faq`       — pricingFAQEntries
+- `POST /api/free-ia/estimate`  — estimateCostBatch + recommendUpgradeFromUsage (?format=csv|markdown supported)
+- `GET  /api/free-ia/digest`    — userQuotaDigest with inlined planInfo + nextTier
 
-77+ unit tests in `feature-cost-estimator.test.js`.
+100+ unit tests in `feature-cost-estimator.test.js`.
 
 ## Paraphrase route — public preview endpoints (no auth, no credits)
 
