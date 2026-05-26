@@ -367,8 +367,8 @@ test('GET /api/free-ia/info: includes apiFingerprint (stable + 8 hex chars)', as
   }
 });
 
-test('SCHEMA_VERSION is at v3.7 (latest additive shape)', () => {
-  assert.equal(SCHEMA_VERSION, 'v3.7');
+test('SCHEMA_VERSION is at v3.8 (latest additive shape)', () => {
+  assert.equal(SCHEMA_VERSION, 'v3.8');
 });
 
 test('GET /api/free-ia/info: includes schemaVersion for client cache invalidation', async () => {
@@ -626,6 +626,22 @@ test('GET /api/free-ia/affords: non-numeric ?calls returns 400', async () => {
     const { status, body } = await fetchJSON(`${baseURL}/api/free-ia/affords?plan=PRO&feature=paraphrase&calls=abc`);
     assert.equal(status, 400);
     assert.equal(body.error, 'invalid_calls');
+  } finally {
+    server.close();
+  }
+});
+
+test('GET /api/free-ia/faq: returns pricing FAQ entries', async () => {
+  const { server, baseURL } = await startServer();
+  try {
+    const { status, body } = await fetchJSON(`${baseURL}/api/free-ia/faq`);
+    assert.equal(status, 200);
+    assert.ok(Array.isArray(body.entries));
+    assert.ok(body.entries.length >= 6);
+    for (const entry of body.entries) {
+      assert.equal(typeof entry.q, 'string');
+      assert.equal(typeof entry.a, 'string');
+    }
   } finally {
     server.close();
   }

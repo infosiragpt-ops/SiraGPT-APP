@@ -142,6 +142,19 @@ router.post('/estimate', express2.json({ limit: '32kb' }), (req, res) => {
   }
 });
 
+// Pricing FAQ — returns canonical (question, answer) pairs the chat AI
+// uses as a knowledge base for billing questions. Public so the
+// marketing site can render the FAQ section directly.
+router.get('/faq', (_req, res) => {
+  try {
+    // eslint-disable-next-line global-require
+    const { pricingFAQEntries } = require('../services/feature-cost-estimator');
+    res.json({ entries: pricingFAQEntries() });
+  } catch (err) {
+    res.status(500).json({ error: 'faq_failed', message: err && err.message });
+  }
+});
+
 // Pricing-page data — returns every plan tier enriched with price
 // label, budget label, and the unlimited flag. Public (no auth) so
 // the marketing pricing table can render without a user session.
@@ -254,7 +267,7 @@ router.get('/brand', (_req, res) => {
 // feature), schemaVersion, apiFingerprint, humanizer.tellsByLanguage,
 // BRAND export, /plans endpoint, /digest endpoint, /estimate +
 // forecastUsage/currentPlan support.
-const SCHEMA_VERSION = 'v3.7';
+const SCHEMA_VERSION = 'v3.8';
 
 /**
  * Deterministic short fingerprint of the API surface. Computed from
@@ -291,6 +304,7 @@ const ENDPOINT_INVENTORY = Object.freeze([
   { method: 'GET',  path: '/api/free-ia/budget',           auth: 'public', returns: 'best plan within ?maxUsdPerMonth budget' },
   { method: 'GET',  path: '/api/free-ia/compare',          auth: 'public', returns: 'plan-vs-plan diff for ?from + ?to' },
   { method: 'GET',  path: '/api/free-ia/affords',          auth: 'public', returns: 'budget check + human explainer for ?plan/?feature/?calls' },
+  { method: 'GET',  path: '/api/free-ia/faq',              auth: 'public', returns: 'pricing FAQ (q,a) for chat AI + marketing site' },
   { method: 'POST', path: '/api/free-ia/estimate',         auth: 'public', returns: 'batch cost estimates for {items: [{feature, textLength}]}' },
   { method: 'GET',  path: '/api/free-ia/metrics',          auth: 'public', returns: 'JSON snapshot' },
   { method: 'GET',  path: '/api/free-ia/metrics/summary',  auth: 'public', returns: 'one-line digest (?format=text for plain)' },
