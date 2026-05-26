@@ -275,6 +275,30 @@ function getRecommendedPlan(usage, { env = process.env } = {}) {
 }
 
 /**
+ * One-call combination of `getRecommendedPlan` + `getCostDelta` +
+ * `comparePlans`. The upsell UI gets everything it needs to render a
+ * "you should upgrade because…" panel:
+ *
+ *   {
+ *     recommendation: { plan, monthlyCredits, monthlyUsd, priceUsd, reason },
+ *     comparison:     { from, to, priceDeltaUsd, budgetDeltaCredits, direction },
+ *     shouldUpgrade:  boolean   // true iff recommendation > current plan in $
+ *   }
+ *
+ * Returns `null` when `currentPlan` is unknown.
+ */
+function recommendUpgradeFromUsage(usage, currentPlan, { env = process.env } = {}) {
+  if (!enrichPlanWithPricing(currentPlan)) return null;
+  const recommendation = getRecommendedPlan(usage, { env });
+  const comparison = comparePlans(currentPlan, recommendation.plan);
+  return {
+    recommendation,
+    comparison,
+    shouldUpgrade: comparison ? comparison.direction === 'upgrade' : false,
+  };
+}
+
+/**
  * Project monthly credit spend given a usage forecast. Lets the
  * pricing page show "at your current pace you'd spend N credits per
  * month".
@@ -403,6 +427,7 @@ module.exports = {
   pricingTable,
   comparePlans,
   getRecommendedPlan,
+  recommendUpgradeFromUsage,
   getCostDelta,
   formatCreditsAsUsd,
   creditsToUsdCents,

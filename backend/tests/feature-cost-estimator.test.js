@@ -547,3 +547,52 @@ test('comparePlans: case-insensitive plan names', () => {
   assert.equal(cmp.from.plan, 'FREE');
   assert.equal(cmp.to.plan, 'PRO');
 });
+
+test('recommendUpgradeFromUsage: FREE user with PRO-sized usage → shouldUpgrade=true', () => {
+  const { recommendUpgradeFromUsage } = require('../src/services/feature-cost-estimator');
+  const result = recommendUpgradeFromUsage(
+    { paraphrase: { calls: 100, avgTextLength: 1000 } }, // 200 credits → PRO
+    'FREE',
+  );
+  assert.equal(result.shouldUpgrade, true);
+  assert.equal(result.recommendation.plan, 'PRO');
+  assert.equal(result.comparison.direction, 'upgrade');
+  assert.equal(result.comparison.priceDeltaUsd, 5);
+});
+
+test('recommendUpgradeFromUsage: user already on right plan → shouldUpgrade=false', () => {
+  const { recommendUpgradeFromUsage } = require('../src/services/feature-cost-estimator');
+  const result = recommendUpgradeFromUsage(
+    { paraphrase: { calls: 100, avgTextLength: 1000 } },
+    'PRO',
+  );
+  assert.equal(result.shouldUpgrade, false);
+  assert.equal(result.recommendation.plan, 'PRO');
+  assert.equal(result.comparison.direction, 'same');
+});
+
+test('recommendUpgradeFromUsage: PRO_MAX user with FREE-sized usage → shouldUpgrade=false (downgrade)', () => {
+  const { recommendUpgradeFromUsage } = require('../src/services/feature-cost-estimator');
+  const result = recommendUpgradeFromUsage(
+    {}, // no usage → FREE
+    'PRO_MAX',
+  );
+  assert.equal(result.shouldUpgrade, false);
+  assert.equal(result.recommendation.plan, 'FREE');
+  assert.equal(result.comparison.direction, 'downgrade');
+});
+
+test('recommendUpgradeFromUsage: unknown current plan returns null', () => {
+  const { recommendUpgradeFromUsage } = require('../src/services/feature-cost-estimator');
+  assert.equal(recommendUpgradeFromUsage({}, 'MYSTERY'), null);
+  assert.equal(recommendUpgradeFromUsage({}, null), null);
+});
+
+test('recommendUpgradeFromUsage: case-insensitive currentPlan', () => {
+  const { recommendUpgradeFromUsage } = require('../src/services/feature-cost-estimator');
+  const result = recommendUpgradeFromUsage(
+    { paraphrase: { calls: 100, avgTextLength: 1000 } },
+    'free',
+  );
+  assert.equal(result.shouldUpgrade, true);
+});
