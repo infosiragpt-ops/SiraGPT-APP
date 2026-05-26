@@ -237,3 +237,6 @@ router.post('/metrics/reset', authenticateToken, requireAdmin, (req, res) => {
 });
 
 module.exports = router;
+module.exports.apiSurfaceFingerprint = apiSurfaceFingerprint;
+module.exports.SCHEMA_VERSION = SCHEMA_VERSION;
+module.exports.ENDPOINT_INVENTORY = ENDPOINT_INVENTORY;

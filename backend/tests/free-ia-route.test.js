@@ -9,6 +9,7 @@ const http = require('node:http');
 const express = require('express');
 
 const freeIaRoutes = require('../src/routes/free-ia');
+const { apiSurfaceFingerprint, SCHEMA_VERSION, ENDPOINT_INVENTORY } = freeIaRoutes;
 
 function startServer() {
   const app = express();
@@ -36,6 +37,19 @@ function fetchJSON(url) {
     }).on('error', reject);
   });
 }
+
+test('exports apiSurfaceFingerprint + SCHEMA_VERSION + ENDPOINT_INVENTORY directly', () => {
+  assert.equal(typeof apiSurfaceFingerprint, 'function');
+  assert.equal(typeof SCHEMA_VERSION, 'string');
+  assert.ok(Array.isArray(ENDPOINT_INVENTORY));
+  assert.ok(ENDPOINT_INVENTORY.length >= 10);
+
+  // The fingerprint is deterministic — same inputs yield same hash.
+  const a = apiSurfaceFingerprint();
+  const b = apiSurfaceFingerprint();
+  assert.equal(a, b);
+  assert.match(a, /^[0-9a-f]{8}$/);
+});
 
 test('GET /api/free-ia/status reports disabled when CEREBRAS_API_KEY is unset', async () => {
   const prevKey = process.env.CEREBRAS_API_KEY;
