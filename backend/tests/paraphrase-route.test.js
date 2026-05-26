@@ -223,3 +223,63 @@ test('POST /api/paraphrase/score: text > MAX_TEXT_LENGTH returns 413', async () 
     server.close();
   }
 });
+
+test('POST /api/paraphrase/humanize: drops AI-tell words from input', async () => {
+  const { server, baseURL } = await startScoreServer();
+  try {
+    const input = 'Furthermore, the framework demonstrates significant capacity. Moreover, the results indicate strong performance.';
+    const { status, body } = await postJSON(
+      `${baseURL}/api/paraphrase/humanize`,
+      { text: input, language: 'en', intensity: 'medium' },
+    );
+    assert.equal(status, 200);
+    assert.equal(typeof body.text, 'string');
+    // The humanizer should have lowered the AI score.
+    assert.ok(body.aiScoreAfter <= body.aiScoreBefore, `score should not increase`);
+    // Furthermore/Moreover should be replaced
+    assert.ok(!/furthermore/i.test(body.text), 'furthermore should be removed');
+    assert.ok(!/moreover/i.test(body.text), 'moreover should be removed');
+  } finally {
+    server.close();
+  }
+});
+
+test('POST /api/paraphrase/humanize: empty text returns 400', async () => {
+  const { server, baseURL } = await startScoreServer();
+  try {
+    const { status, body } = await postJSON(`${baseURL}/api/paraphrase/humanize`, { text: '' });
+    assert.equal(status, 400);
+    assert.equal(body.error, 'missing_text');
+  } finally {
+    server.close();
+  }
+});
+
+test('POST /api/paraphrase/humanize: text > MAX_TEXT_LENGTH returns 413', async () => {
+  const { server, baseURL } = await startScoreServer();
+  try {
+    const huge = 'a'.repeat(MAX_TEXT_LENGTH + 100);
+    const { status, body } = await postJSON(`${baseURL}/api/paraphrase/humanize`, { text: huge });
+    assert.equal(status, 413);
+    assert.equal(body.error, 'text_too_long');
+  } finally {
+    server.close();
+  }
+});
+
+test('POST /api/paraphrase/humanize: long input routes through humanizeChunked', async () => {
+  const { server, baseURL } = await startScoreServer();
+  try {
+    // 9000 chars > 8000 threshold → uses humanizeChunked
+    const input = 'Furthermore, this is excellent. '.repeat(300);
+    const { status, body } = await postJSON(
+      `${baseURL}/api/paraphrase/humanize`,
+      { text: input, language: 'en', intensity: 'medium' },
+    );
+    assert.equal(status, 200);
+    assert.equal(typeof body.text, 'string');
+    assert.ok(body.text.length > 0);
+  } finally {
+    server.close();
+  }
+});

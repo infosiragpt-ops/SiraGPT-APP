@@ -126,6 +126,37 @@ router.post('/score', express.json({ limit: '512kb' }), (req, res) => {
   }
 });
 
+// POST /api/paraphrase/humanize — local-only humanizer pass.
+// Same humanizer the paraphrase route uses at the tail of its pipeline,
+// but without the LLM rewrite. Cheaper for users who already have a
+// reasonable draft and just want the AI-tell patterns cleaned up. Public
+// (no auth) for now because it never calls any external API.
+router.post('/humanize', express.json({ limit: '512kb' }), (req, res) => {
+  try {
+    // eslint-disable-next-line global-require
+    const { humanizeText, humanizeChunked } = require('../services/paraphrase-humanizer');
+    const text = typeof req.body?.text === 'string' ? req.body.text : '';
+    if (!text) {
+      return res.status(400).json({ error: 'missing_text', message: 'body.text is required' });
+    }
+    if (text.length > MAX_TEXT_LENGTH) {
+      return res.status(413).json({ error: 'text_too_long', maxLength: MAX_TEXT_LENGTH });
+    }
+    const language = typeof req.body?.language === 'string' && SUPPORTED_LANGUAGES.includes(req.body.language)
+      ? req.body.language : 'es';
+    const intensity = typeof req.body?.intensity === 'string'
+      ? req.body.intensity : 'medium';
+    // Use chunked variant for large inputs so we don't blow the stack
+    // on a single regex sweep.
+    const result = text.length > 8000
+      ? humanizeChunked({ text, language, intensity })
+      : humanizeText({ text, language, intensity });
+    return res.json(result);
+  } catch (err) {
+    return res.status(500).json({ error: 'humanize_failed', message: err && err.message });
+  }
+});
+
 router.post(
   '/',
   (req, _res, next) => { normaliseModeOnBody(req.body); next(); },
