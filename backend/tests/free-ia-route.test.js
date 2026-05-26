@@ -142,7 +142,9 @@ test('GET /api/free-ia/info: endpoints inventory is well-formed + lists all know
   try {
     const { body } = await fetchJSON(`${baseURL}/api/free-ia/info`);
     assert.ok(Array.isArray(body.endpoints));
-    assert.ok(body.endpoints.length >= 10, `expected >=10 endpoints, got ${body.endpoints.length}`);
+    assert.ok(body.endpoints.length >= 11, `expected >=11 endpoints, got ${body.endpoints.length}`);
+    assert.ok(body.endpoints.find((e) => e.path === '/api/free-ia/digest'),
+      'inventory should include the new /digest endpoint');
     // Smoke-check: the new badge endpoint is included.
     assert.ok(body.endpoints.find((e) => e.path === '/api/free-ia/metrics/badge'),
       'inventory should include /metrics/badge');

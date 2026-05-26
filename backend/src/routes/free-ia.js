@@ -66,6 +66,20 @@ router.get('/configured', (_req, res) => {
   res.json({ configured: isFreeIaConfigured() });
 });
 
+// Per-user quota digest. Auth-required because it surfaces the user's
+// own usage. Returns the userQuotaDigest projection (plan, premium pool
+// %, fallback brand, daily-calls, inlined upgradeHint, inlined
+// flashGptStatus) so the account panel renders from a single call.
+router.get('/digest', authenticateToken, (req, res) => {
+  try {
+    // eslint-disable-next-line global-require
+    const { userQuotaDigest } = require('../services/model-quota-router');
+    res.json(userQuotaDigest(req.user));
+  } catch (err) {
+    res.status(500).json({ error: 'digest_failed', message: err && err.message });
+  }
+});
+
 // Brand constants for frontend localisation / hardcoded labels (e.g. a
 // /loading screen that needs the brand name before /status responds).
 router.get('/brand', (_req, res) => {
@@ -119,6 +133,7 @@ const ENDPOINT_INVENTORY = Object.freeze([
   { method: 'GET',  path: '/api/free-ia/brand',            auth: 'public', returns: 'brand constants' },
   { method: 'GET',  path: '/api/free-ia/health',           auth: 'public', returns: '200 OK / 503 degraded' },
   { method: 'GET',  path: '/api/free-ia/info',             auth: 'public', returns: 'consolidated view' },
+  { method: 'GET',  path: '/api/free-ia/digest',           auth: 'user',   returns: 'per-user quota digest (plan + fallback + hints)' },
   { method: 'GET',  path: '/api/free-ia/metrics',          auth: 'public', returns: 'JSON snapshot' },
   { method: 'GET',  path: '/api/free-ia/metrics/summary',  auth: 'public', returns: 'one-line digest (?format=text for plain)' },
   { method: 'GET',  path: '/api/free-ia/metrics/badge',    auth: 'public', returns: '{ fallbacks, healthy } or 204' },
