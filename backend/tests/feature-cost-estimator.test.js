@@ -823,3 +823,32 @@ test('pricingFAQEntries: mentions FlashGPT fallback for out-of-credits path', ()
   assert.ok(fallback, 'should have an out-of-credits entry');
   assert.ok(fallback.a.includes('FlashGPT'));
 });
+
+test('suggestDowngradeFromUsage: PRO_MAX user with no usage → downgrade to FREE', () => {
+  const { suggestDowngradeFromUsage } = require('../src/services/feature-cost-estimator');
+  const result = suggestDowngradeFromUsage({}, 'PRO_MAX');
+  assert.equal(result.shouldDowngrade, true);
+  assert.equal(result.recommendation.plan, 'FREE');
+  assert.equal(result.comparison.direction, 'downgrade');
+});
+
+test('suggestDowngradeFromUsage: FREE user with no usage → already lowest (no downgrade)', () => {
+  const { suggestDowngradeFromUsage } = require('../src/services/feature-cost-estimator');
+  const result = suggestDowngradeFromUsage({}, 'FREE');
+  assert.equal(result.shouldDowngrade, false);
+  assert.equal(result.comparison.direction, 'same');
+});
+
+test('suggestDowngradeFromUsage: PRO with heavy usage → no downgrade (need PRO at least)', () => {
+  const { suggestDowngradeFromUsage } = require('../src/services/feature-cost-estimator');
+  const result = suggestDowngradeFromUsage(
+    { paraphrase: { calls: 100, avgTextLength: 1000 } },
+    'PRO',
+  );
+  assert.equal(result.shouldDowngrade, false);
+});
+
+test('suggestDowngradeFromUsage: unknown plan returns null', () => {
+  const { suggestDowngradeFromUsage } = require('../src/services/feature-cost-estimator');
+  assert.equal(suggestDowngradeFromUsage({}, 'MYSTERY'), null);
+});

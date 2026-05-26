@@ -340,6 +340,28 @@ function recommendUpgradeFromUsage(usage, currentPlan, { env = process.env } = {
  * Tie-breaks pick the plan with the largest budget (treating unlimited
  * as ∞). Returns null only for non-numeric input.
  */
+/**
+ * Suggest the cheapest plan that still covers `usage`. Same shape as
+ * `recommendUpgradeFromUsage` but flips the direction — used by the
+ * "you might be overpaying" widget on the billing settings page.
+ *
+ *   suggestDowngradeFromUsage({}, 'PRO_MAX')
+ *   → { recommendation: { plan: 'FREE', ... }, comparison: { direction: 'downgrade', ... }, shouldDowngrade: true }
+ *
+ *   suggestDowngradeFromUsage({paraphrase:{calls:100k}}, 'FREE')
+ *   → { ..., shouldDowngrade: false }   (you're already at the cheap end)
+ */
+function suggestDowngradeFromUsage(usage, currentPlan, { env = process.env } = {}) {
+  if (!enrichPlanWithPricing(currentPlan)) return null;
+  const recommendation = getRecommendedPlan(usage, { env });
+  const comparison = comparePlans(currentPlan, recommendation.plan);
+  return {
+    recommendation,
+    comparison,
+    shouldDowngrade: comparison ? comparison.direction === 'downgrade' : false,
+  };
+}
+
 function findCheapestPlanForBudget(maxUsdPerMonth) {
   const cap = Number(maxUsdPerMonth);
   if (!Number.isFinite(cap)) return null;
@@ -629,6 +651,7 @@ module.exports = {
   comparePlans,
   getRecommendedPlan,
   recommendUpgradeFromUsage,
+  suggestDowngradeFromUsage,
   findCheapestPlanForBudget,
   getCostDelta,
   formatCreditsAsUsd,
