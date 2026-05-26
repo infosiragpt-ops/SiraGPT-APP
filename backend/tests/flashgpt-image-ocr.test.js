@@ -36,6 +36,7 @@ test('buildFlashGptImageOcrContext injects local OCR text for image attachments'
   try {
     const result = await flashGptImageOcr.buildFlashGptImageOcrContext(prisma, {
       userId: 'user_1',
+      prompt: 'Cuál es el monto?',
       files: [{
         id: 'file_1',
         name: 'factura.png',
@@ -49,6 +50,7 @@ test('buildFlashGptImageOcrContext injects local OCR text for image attachments'
     assert.match(result.block, /FLASHGPT OCR VISUAL BRIDGE/);
     assert.match(result.block, /Factura 123/);
     assert.match(result.block, /Total: 45\.00 USD/);
+    assert.match(result.block, /Monto principal probable: 45\.00 USD/);
     assert.equal(result.files[0].extractedText, 'Factura 123\nTotal: 45.00 USD');
     assert.equal(updates.length, 1);
     assert.deepEqual(updates[0], {
@@ -59,6 +61,21 @@ test('buildFlashGptImageOcrContext injects local OCR text for image attachments'
     ocrEngine.extractFromImage = originalExtract;
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
+});
+
+test('buildVisualAnswerHints prioritizes labelled balance over movement amounts', () => {
+  const hints = flashGptImageOcr.buildVisualAnswerHints([
+    'CUENTAS DE AHORRO',
+    'Disponible',
+    'S/ 186,478.06',
+    'Movimientos',
+    'TRANSF.BCO.BANBIF S/ 500.00',
+    'Yape Mauricio Uga S/ 100.00',
+  ].join('\n'), 'Cuál es el monto?');
+
+  assert.match(hints, /Monto principal probable: S\/ 186,478\.06/);
+  assert.match(hints, /Otros montos detectados/);
+  assert.match(hints, /S\/ 500\.00/);
 });
 
 test('buildFlashGptImageOcrContext reuses stored OCR text without rerunning OCR', async () => {

@@ -1633,6 +1633,7 @@ router.post(
           const flashOcr = await flashGptImageOcr.buildFlashGptImageOcrContext(prisma, {
             userId,
             files: processedFiles,
+            prompt,
           });
           processedFiles = flashOcr.files || processedFiles;
           if (flashOcr.block) {
