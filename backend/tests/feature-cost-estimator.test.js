@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { estimateCost, estimateCostBatch, estimateMonthlyCost, getRecommendedPlan, getCostDelta, listFeatures, FEATURE_COSTS, PLAN_BUDGETS, PLAN_PRICES_USD } = require('../src/services/feature-cost-estimator');
+const { estimateCost, estimateCostBatch, estimateMonthlyCost, getRecommendedPlan, getCostDelta, formatCreditsAsUsd, listFeatures, FEATURE_COSTS, PLAN_BUDGETS, PLAN_PRICES_USD, USD_PER_CREDIT } = require('../src/services/feature-cost-estimator');
 
 test('listFeatures: includes paraphrase + image_* + generate', () => {
   const f = listFeatures();
@@ -185,6 +185,30 @@ test('getCostDelta: unknown plan returns deltaUsd=null', () => {
   const d = getCostDelta('MYSTERY', 'PRO');
   assert.equal(d.deltaUsd, null);
   assert.equal(d.reason, 'unknown_plan');
+});
+
+test('formatCreditsAsUsd: 0 or negative → empty string', () => {
+  assert.equal(formatCreditsAsUsd(0), '');
+  assert.equal(formatCreditsAsUsd(-1), '');
+  assert.equal(formatCreditsAsUsd(NaN), '');
+});
+
+test('formatCreditsAsUsd: small N renders "≈ <$0.01"', () => {
+  // 1 credit = $0.00005 → below 1 cent
+  assert.equal(formatCreditsAsUsd(1), '≈ <$0.01');
+  assert.equal(formatCreditsAsUsd(100), '≈ <$0.01');
+});
+
+test('formatCreditsAsUsd: 1000 credits → "≈ $0.05"', () => {
+  assert.equal(formatCreditsAsUsd(1000), '≈ $0.05');
+});
+
+test('formatCreditsAsUsd: 100k credits → "≈ $5.00" (matches PRO plan price)', () => {
+  assert.equal(formatCreditsAsUsd(100_000), '≈ $5.00');
+});
+
+test('USD_PER_CREDIT: matches PRO plan rate ($5 / 100k tokens)', () => {
+  assert.equal(USD_PER_CREDIT, 5 / 100_000);
 });
 
 test('PLAN_PRICES_USD: matches spec values ($0/$5/$10/$2)', () => {

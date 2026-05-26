@@ -125,6 +125,28 @@ const PLAN_PRICES_USD = Object.freeze({
  *   getCostDelta('PRO', 'PRO')        → { deltaUsd: 0,  upgrade: false }
  *   getCostDelta('PRO_MAX', 'PRO')    → { deltaUsd: -5, upgrade: false }
  */
+/**
+ * USD-per-credit rate the pricing page can use to render
+ * "≈ $0.50" labels next to credit counts. Derived from the spec's
+ * 100k tokens-for-$5 PRO ratio = $0.00005 per credit. The 30% margin
+ * mentioned in the spec is baked into this so the consumer doesn't
+ * need to apply a separate markup.
+ */
+const USD_PER_CREDIT = 5 / 100_000;
+
+/**
+ * Render N credits as an approximate USD label. Returns "≈ $X.XX"
+ * with two decimals when >= $0.01, "≈ <$0.01" for sub-cent values,
+ * and "" for non-positive inputs.
+ */
+function formatCreditsAsUsd(credits) {
+  const n = Number(credits) || 0;
+  if (n <= 0) return '';
+  const usd = n * USD_PER_CREDIT;
+  if (usd < 0.01) return '≈ <$0.01';
+  return `≈ $${usd.toFixed(2)}`;
+}
+
 function getCostDelta(currentPlan, recommendedPlan) {
   const cur = PLAN_PRICES_USD[String(currentPlan || '').toUpperCase()];
   const rec = PLAN_PRICES_USD[String(recommendedPlan || '').toUpperCase()];
@@ -200,8 +222,10 @@ module.exports = {
   estimateMonthlyCost,
   getRecommendedPlan,
   getCostDelta,
+  formatCreditsAsUsd,
   listFeatures,
   FEATURE_COSTS,
   PLAN_BUDGETS,
   PLAN_PRICES_USD,
+  USD_PER_CREDIT,
 };
