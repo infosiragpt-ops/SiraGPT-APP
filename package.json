@@ -82,6 +82,7 @@
     "agent:openclaw:map": "node backend/scripts/openclaw-playbook-map.js",
     "agent:hermes:map": "node backend/scripts/hermes-playbook-map.js",
     "agent:platform:map": "node backend/scripts/platform-folder-map.js",
+    "agent:extensions:map": "node backend/scripts/platform-extension-map.js",
     "dead-code": "node scripts/dead-code.js",
     "dead-code:json": "node scripts/dead-code.js --json",
     "bundle:check": "node scripts/bundle-size-check.js",
