@@ -106,6 +106,15 @@ const ENDPOINT_INVENTORY = Object.freeze([
 router.get('/info', (_req, res) => {
   const cfg = getCerebrasConfig();
   const sum = freeIaMetrics.summary();
+  // Pattern-count breakdown for the marketing/debug surface — done in
+  // a best-effort try/catch so a humanizer load failure can't break
+  // /info.
+  let humanizerCoverage = null;
+  try {
+    // eslint-disable-next-line global-require
+    const { countAITellPatternsByLanguage } = require('../services/paraphrase-humanizer');
+    humanizerCoverage = countAITellPatternsByLanguage();
+  } catch { /* best-effort */ }
   res.json({
     enabled: cfg.enabled,
     reason: cfg.reason,
@@ -119,6 +128,7 @@ router.get('/info', (_req, res) => {
       degraded: sum.degraded,
     },
     summary: sum,
+    humanizer: humanizerCoverage ? { tellsByLanguage: humanizerCoverage } : null,
     endpoints: ENDPOINT_INVENTORY,
   });
 });

@@ -108,6 +108,23 @@ test('GET /api/free-ia/info: endpoints inventory is well-formed + lists all know
   }
 });
 
+test('GET /api/free-ia/info: includes humanizer.tellsByLanguage counts', async () => {
+  const prevKey = process.env.CEREBRAS_API_KEY;
+  process.env.CEREBRAS_API_KEY = 'csk-humanizer-counts';
+  const { server, baseURL } = await startServer();
+  try {
+    const { body } = await fetchJSON(`${baseURL}/api/free-ia/info`);
+    assert.ok(body.humanizer);
+    assert.ok(body.humanizer.tellsByLanguage);
+    assert.ok(body.humanizer.tellsByLanguage.english > 0);
+    assert.ok(body.humanizer.tellsByLanguage.spanish > 0);
+  } finally {
+    server.close();
+    if (prevKey === undefined) delete process.env.CEREBRAS_API_KEY;
+    else process.env.CEREBRAS_API_KEY = prevKey;
+  }
+});
+
 test('GET /api/free-ia/info returns a consolidated single-call view', async () => {
   const metrics = require('../src/services/free-ia-metrics');
   metrics.reset();
