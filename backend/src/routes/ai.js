@@ -182,6 +182,7 @@ const activeMemory = require('../services/active-memory');
 const conversationUnderstanding = require('../services/conversation-understanding');
 const chatAttachmentRecovery = require('../services/chat-attachment-recovery');
 const messageAttachments = require('../services/message-attachments');
+const flashGptImageOcr = require('../services/flashgpt-image-ocr');
 const openclawCapabilityKernel = require('../services/openclaw-capability-kernel');
 const router = express.Router();
 const cookie = require('cookie');
@@ -1476,6 +1477,7 @@ router.post(
       let processedFiles = [];
       let openaiFiles = [];
       let uploadedFileContextForTurn = '';
+      let flashGptImageOcrBlock = '';
       if (isAuth && files && files.length > 0) {
         processedFiles = await Promise.all(
           files.map(async (fileRef) => {
@@ -1624,6 +1626,27 @@ router.post(
           actual_provider: actualProvider,
           model,
         }));
+      }
+
+      if (processedFiles.length > 0 && isFlashGptTurn(actualProvider, actualModel)) {
+        try {
+          const flashOcr = await flashGptImageOcr.buildFlashGptImageOcrContext(prisma, {
+            userId,
+            files: processedFiles,
+          });
+          processedFiles = flashOcr.files || processedFiles;
+          if (flashOcr.block) {
+            flashGptImageOcrBlock = `\n\n${flashOcr.block}`;
+            if (uploadedFileContextForTurn) {
+              uploadedFileContextForTurn = `${flashOcr.block}\n\n${uploadedFileContextForTurn}`;
+            } else {
+              uploadedFileContextForTurn = flashOcr.block;
+            }
+            console.log(`[flashgpt-ocr] images=${flashOcr.imageCount} readable=${flashOcr.readableCount} failed=${flashOcr.failedCount}`);
+          }
+        } catch (flashOcrErr) {
+          console.warn('[flashgpt-ocr] local OCR bridge failed (continuing):', flashOcrErr?.message || flashOcrErr);
+        }
       }
 
       // ✅ Load per-user personalization so every turn carries the
@@ -3639,7 +3662,7 @@ router.post(
         console.warn('[ai] llm understanding packet unavailable (continuing without):', llmUnderstandingErr && llmUnderstandingErr.message);
       }
 
-      const systemInstruction = { role: 'system', content: promptBundle.system + openclawRuntimeBlock + llmUnderstandingBlock + conversationUnderstandingBlock + universalContractBlock + enterpriseExecutionBlock + memoryBlock + orchMemoryBlock + crossChatBlock + attributionBlock + circuitAttributionBlock + intentAttributionGraphBlock + saliencyBlock + feedbackBlock + evidenceBlock + documentEnrichmentBlock + coworkBlock + webSearchBlock + __pr5GroundingBlock };
+      const systemInstruction = { role: 'system', content: promptBundle.system + openclawRuntimeBlock + llmUnderstandingBlock + conversationUnderstandingBlock + universalContractBlock + enterpriseExecutionBlock + memoryBlock + orchMemoryBlock + crossChatBlock + attributionBlock + circuitAttributionBlock + intentAttributionGraphBlock + saliencyBlock + feedbackBlock + evidenceBlock + flashGptImageOcrBlock + documentEnrichmentBlock + coworkBlock + webSearchBlock + __pr5GroundingBlock };
       // Structured view of the system prompt — same content as
       // `systemInstruction.content`, but split into typed blocks with a
       // `cacheable` hint. When the downstream provider is Anthropic (or
@@ -3665,6 +3688,7 @@ router.post(
         { kind: 'intent-attribution-graph', text: intentAttributionGraphBlock, cacheable: false },
         { kind: 'feedback', text: feedbackBlock, cacheable: false },
         { kind: 'evidence', text: evidenceBlock, cacheable: false },
+        { kind: 'flashgpt-image-ocr', text: flashGptImageOcrBlock, cacheable: false },
         { kind: 'document-enrichment', text: documentEnrichmentBlock, cacheable: false },
         { kind: 'cowork', text: coworkBlock, cacheable: false },
         { kind: 'web-search', text: webSearchBlock, cacheable: false },
