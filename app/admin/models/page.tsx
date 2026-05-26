@@ -415,12 +415,9 @@ export default function ModelsPage() {
   // Filter models based on search and filters
   const filteredModels = models.filter(model => {
     const matchesSearch = model.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         model.displayName.toLowerCase().includes(searchQuery.toLowerCase())
-    const matchesProvider = selectedProvider === 'ALL PROVIDERS' || 
-                           (selectedProvider === 'OPENAI' && model.provider === 'OpenAI') ||
-                           (selectedProvider === 'GEMINI' && model.provider === 'Gemini') ||
-                           (selectedProvider === 'DEEPSEEK' && model.provider === 'DeepSeek') ||
-                           (selectedProvider === 'OPENROUTER' && model.provider === 'OpenRouter')
+                         model.displayName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                         model.provider.toLowerCase().includes(searchQuery.toLowerCase())
+    const matchesProvider = selectedProvider === 'ALL PROVIDERS' || model.provider === selectedProvider
     const matchesType = selectedType === 'ALL TYPES' || model.type === selectedType
     
     return matchesSearch && matchesProvider && matchesType
@@ -463,6 +460,35 @@ export default function ModelsPage() {
       hour: '2-digit',
       minute: '2-digit'
     })
+  }
+
+  const formatModelCost = (pricing?: any) => {
+    if (!pricing) {
+      return {
+        main: 'N/D',
+        detail: 'sin precio',
+      }
+    }
+
+    const input = typeof pricing.input === 'number' ? pricing.input : null
+    const output = typeof pricing.output === 'number' ? pricing.output : null
+
+    if (input === null && output === null) {
+      return {
+        main: 'N/D',
+        detail: pricing.source || 'sin precio',
+      }
+    }
+
+    const money = (value: number | null) => value === null ? 'N/D' : `$${value.toLocaleString('en-US', {
+      minimumFractionDigits: value >= 1 ? 2 : 4,
+      maximumFractionDigits: value >= 1 ? 2 : 6,
+    })}`
+
+    return {
+      main: `${money(input)} in / ${money(output)} out`,
+      detail: pricing.unit === 'per_1m_tokens' ? 'por 1M tokens' : (pricing.unit || pricing.source || ''),
+    }
   }
 
   if (isLoading) {
@@ -753,10 +779,11 @@ export default function ModelsPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="ALL PROVIDERS">ALL PROVIDERS</SelectItem>
-                  <SelectItem value="OPENAI">OPENAI</SelectItem>
-                  <SelectItem value="GEMINI">GEMINI</SelectItem>
-                  <SelectItem value="DEEPSEEK">DEEPSEEK</SelectItem>
-                  <SelectItem value="OPENROUTER">OPENROUTER</SelectItem>
+                  {providers.map((provider) => (
+                    <SelectItem key={provider} value={provider}>
+                      {provider.toUpperCase()}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
               <Select value={selectedType} onValueChange={setSelectedType}>
@@ -783,6 +810,7 @@ export default function ModelsPage() {
                 <TableHead>Type</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Last Synced</TableHead>
+                <TableHead>Cost</TableHead>
                 <TableHead>Context</TableHead>
                 <TableHead>Actions</TableHead>
               </TableRow>
@@ -851,6 +879,18 @@ export default function ModelsPage() {
                         <span className="text-muted-foreground">Never</span>
                       )}
                     </div>
+                  </TableCell>
+                  
+                  <TableCell>
+                    {(() => {
+                      const cost = formatModelCost(model.pricing)
+                      return (
+                        <div className="text-sm">
+                          <div className="whitespace-nowrap font-medium">{cost.main}</div>
+                          <div className="text-xs text-muted-foreground">{cost.detail}</div>
+                        </div>
+                      )
+                    })()}
                   </TableCell>
                   
                   <TableCell>

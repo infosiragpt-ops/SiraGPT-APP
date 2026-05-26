@@ -5,6 +5,7 @@ const {
   listManifestModels,
   mergeProviderModels,
 } = require('./model-catalog-manifest');
+const modelPricingService = require('./model-pricing-service');
 
 class ModelSyncService {
   constructor() {
@@ -32,7 +33,7 @@ class ModelSyncService {
       const apiKey = process.env.OPENAI_API_KEY;
       if (!apiKey) {
         console.warn('⚠️ OpenAI API key not found, using static model catalog');
-        const models = listManifestModels({ provider: 'OpenAI' });
+        const models = await this.fallbackManifestModels('OpenAI');
         cache.data = models;
         cache.lastFetch = now;
         return models;
@@ -48,26 +49,20 @@ class ModelSyncService {
       });
 
       const models = response.data.data
-        .filter(model => {
-          // Filter for chat completion models
-          return model.id.includes('gpt') ||
-            model.id.includes('o1') ||
-            model.id.includes('dall-e') ||
-            model.id === 'text-davinci-003' ||
-            model.id === 'text-davinci-002';
-        })
         .map(model => ({
           id: model.id,
           name: model.id,
           displayName: this.formatModelName(model.id),
           provider: 'OpenAI',
-          type: model.id.includes('dall-e') ? 'IMAGE' : 'TEXT',
+          type: this.inferModelType(model.id, model),
           description: this.generateModelDescription(model.id, 'OpenAI'),
-          isActive: true,
+          isActive: false,
           apiData: model
         }));
 
-      const mergedModels = mergeProviderModels(models, 'OpenAI');
+      const mergedModels = await modelPricingService.enrichModels(
+        mergeProviderModels(models, 'OpenAI', { includeManifestOnly: false })
+      );
 
       cache.data = mergedModels;
       cache.lastFetch = now;
@@ -76,7 +71,7 @@ class ModelSyncService {
       return mergedModels;
     } catch (error) {
       console.error('❌ Error fetching OpenAI models:', error.message);
-      return this.cache.openai.data || listManifestModels({ provider: 'OpenAI' });
+      return this.cache.openai.data || this.fallbackManifestModels('OpenAI');
     }
   }
 
@@ -96,56 +91,55 @@ class ModelSyncService {
       const apiKey = process.env.GEMINI_API_KEY;
       if (!apiKey) {
         console.warn('⚠️ Gemini API key not found, using static model catalog');
-        const models = listManifestModels({ provider: 'Gemini' });
+        const models = await this.fallbackManifestModels('Gemini');
         cache.data = models;
         cache.lastFetch = now;
         return models;
       }
 
       console.log('🔄 Fetching Gemini models...');
-      const response = await axios.get('https://generativelanguage.googleapis.com/v1beta/openai/models', {
-        headers: {
-          // 'Content-Type': 'application/json',
-          // 'x-goog-api-key': apiKey
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json'
-        },
-        timeout: 10000
-      });
+      let modelRows = [];
+      try {
+        const response = await axios.get('https://generativelanguage.googleapis.com/v1beta/openai/models', {
+          headers: {
+            'x-goog-api-key': apiKey,
+            'Content-Type': 'application/json'
+          },
+          timeout: 10000
+        });
+        modelRows = response.data.data || [];
+      } catch (openAiCompatError) {
+        console.warn(`⚠️ Gemini OpenAI-compatible model listing failed: ${openAiCompatError.message}`);
+        const response = await axios.get('https://generativelanguage.googleapis.com/v1beta/models', {
+          params: { key: apiKey },
+          timeout: 10000
+        });
+        modelRows = (response.data.models || []).map(model => ({
+          ...model,
+          id: String(model.name || '').replace(/^models\//, ''),
+          name: String(model.name || '').replace(/^models\//, '')
+        }));
+      }
 
-      const models = response.data.data
-
-        .filter(model => {
-          const id = model.id.toLowerCase();
-
-          const blocked = [
-            'imagen',
-            'image',
-            'computer',
-            'robot',
-            'veo',
-            'generate',
-            'vision',
-            'live',
-            'audio'
-          ];
-
-          return !blocked.some(b => id.includes(b));
-        })
+      const models = modelRows
         .map(model => {
+          const modelId = model.id || model.name || '';
           return {
-            id: model.id,
-            name: model.id,
-            displayName: this.formatModelName(model.id),
+            id: modelId,
+            name: modelId.replace(/^models\//, ''),
+            displayName: model.display_name || model.name || this.formatModelName(modelId),
             provider: 'Gemini',
-            type: 'TEXT',
-            description: model.description || this.generateModelDescription(model.id, 'Gemini'),
-            isActive: true,
+            type: this.inferModelType(modelId, model),
+            description: model.description || this.generateModelDescription(modelId, 'Gemini'),
+            contextLength: model.inputTokenLimit || model.context_length || model.contextLength,
+            isActive: false,
             apiData: model
           };
         });
 
-      const mergedModels = mergeProviderModels(models, 'Gemini');
+      const mergedModels = await modelPricingService.enrichModels(
+        mergeProviderModels(models, 'Gemini', { includeManifestOnly: false })
+      );
 
       cache.data = mergedModels;
       cache.lastFetch = now;
@@ -154,7 +148,7 @@ class ModelSyncService {
       return mergedModels;
     } catch (error) {
       console.error('❌ Error fetching Gemini models:', error.message);
-      return this.cache.gemini.data || listManifestModels({ provider: 'Gemini' });
+      return this.cache.gemini.data || this.fallbackManifestModels('Gemini');
     }
   }
 
@@ -178,7 +172,7 @@ class ModelSyncService {
       const apiKey = process.env.DEEPSEEK_API_KEY;
       if (!apiKey) {
         console.warn('⚠️ DeepSeek API key not found, using static model catalog');
-        const models = listManifestModels({ provider: 'DeepSeek' });
+        const models = await this.fallbackManifestModels('DeepSeek');
         cache.data = models;
         cache.lastFetch = now;
         return models;
@@ -193,35 +187,22 @@ class ModelSyncService {
         timeout: 10000
       });
 
-      const displayNames = {
-        'deepseek-v4-flash': 'DeepSeek V4 Flash',
-        'deepseek-v4-pro': 'DeepSeek V4 Pro',
-        'deepseek-chat': 'DeepSeek Chat',
-        'deepseek-reasoner': 'DeepSeek Reasoner'
-      };
-
-      const descriptions = {
-        'deepseek-v4-flash': 'DeepSeek direct API fast V4 model.',
-        'deepseek-v4-pro': 'DeepSeek direct API V4 Pro model for complex tasks.',
-        'deepseek-chat': 'DeepSeek direct API fast non-reasoning chat model.',
-        'deepseek-reasoner': 'DeepSeek direct API reasoning model for complex tasks.'
-      };
-
       const models = (response.data.data || [])
-        .filter(model => ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-chat', 'deepseek-reasoner'].includes(model.id))
         .map(model => ({
           id: model.id,
           name: model.id,
-          displayName: displayNames[model.id] || this.formatModelName(model.id),
+          displayName: model.name || this.formatModelName(model.id),
           provider: 'DeepSeek',
-          type: 'TEXT',
-          description: descriptions[model.id] || this.generateModelDescription(model.id, 'DeepSeek'),
-          contextLength: 128000,
-          isActive: true,
+          type: this.inferModelType(model.id, model),
+          description: this.generateModelDescription(model.id, 'DeepSeek'),
+          contextLength: model.context_length || model.contextLength || 128000,
+          isActive: false,
           apiData: model
         }));
 
-      const mergedModels = mergeProviderModels(models, 'DeepSeek');
+      const mergedModels = await modelPricingService.enrichModels(
+        mergeProviderModels(models, 'DeepSeek', { includeManifestOnly: false })
+      );
 
       cache.data = mergedModels;
       cache.lastFetch = now;
@@ -230,7 +211,7 @@ class ModelSyncService {
       return mergedModels;
     } catch (error) {
       console.error('❌ Error fetching DeepSeek models:', error.message);
-      return this.cache.deepseek.data || listManifestModels({ provider: 'DeepSeek' });
+      return this.cache.deepseek.data || this.fallbackManifestModels('DeepSeek');
     }
   }
 
@@ -251,7 +232,7 @@ class ModelSyncService {
       const apiKey = process.env.OPENROUTER_API_KEY;
       if (!apiKey) {
         console.warn('⚠️ OpenRouter API key not found, using static model catalog');
-        const models = listManifestModels({ provider: 'OpenRouter' });
+        const models = await this.fallbackManifestModels('OpenRouter');
         cache.data = models;
         cache.lastFetch = now;
         return models;
@@ -266,26 +247,22 @@ class ModelSyncService {
       });
 
       const models = response.data.data
-        .filter(model => {
-          // Filter out deprecated or beta models, focus on stable ones
-          return !model.id.includes('beta') &&
-            !model.id.includes('deprecated') &&
-            model.context_length > 1000; // Filter out very limited models
-        })
         .map(model => ({
           id: model.id,
           name: model.id,
           displayName: model.name || this.formatModelName(model.id),
           provider: 'OpenRouter',
-          type: 'TEXT', // OpenRouter primarily serves text models
+          type: this.inferModelType(model.id, model),
           description: model.description || this.generateModelDescription(model.id, 'OpenRouter'),
           pricing: model.pricing,
           contextLength: model.context_length,
-          isActive: true,
+          isActive: false,
           apiData: model
         }));
 
-      const mergedModels = mergeProviderModels(models, 'OpenRouter');
+      const mergedModels = await modelPricingService.enrichModels(
+        mergeProviderModels(models, 'OpenRouter', { includeManifestOnly: false })
+      );
 
       cache.data = mergedModels;
       cache.lastFetch = now;
@@ -294,7 +271,7 @@ class ModelSyncService {
       return mergedModels;
     } catch (error) {
       console.error('❌ Error fetching OpenRouter models:', error.message);
-      return this.cache.openrouter.data || listManifestModels({ provider: 'OpenRouter' });
+      return this.cache.openrouter.data || this.fallbackManifestModels('OpenRouter');
     }
   }
 
@@ -385,7 +362,7 @@ class ModelSyncService {
                 description: model.description,
                 provider: model.provider,
                 type: model.type,
-                isActive: model.isActive,
+                isActive: false,
                 icon: this.getModelIcon(model),
                 lastSynced: new Date(),
                 syncSource: model.syncSource || 'api',
@@ -446,6 +423,14 @@ class ModelSyncService {
       .replace(/\b(Gpt|Api|V)\b/g, match => match.toUpperCase());
   }
 
+  async fallbackManifestModels(provider) {
+    const models = listManifestModels({ provider }).map(model => ({
+      ...model,
+      isActive: false,
+    }));
+    return modelPricingService.enrichModels(models);
+  }
+
   /**
    * Generate description for models
    */
@@ -476,6 +461,30 @@ class ModelSyncService {
     if (modelId.includes('dall-e')) return 'OpenAI image generation model';
 
     return `${provider} model for AI tasks`;
+  }
+
+  inferModelType(modelId, apiData = {}) {
+    const id = String(modelId || '').toLowerCase();
+    const mode = String(apiData.mode || '').toLowerCase();
+    const modalities = [
+      ...(apiData.supported_output_modalities || []),
+      ...(apiData.supported_modalities || []),
+      ...(apiData.output || []),
+      ...(apiData.input || []),
+    ].map(value => String(value).toLowerCase());
+
+    if (
+      id.includes('dall-e') ||
+      id.includes('gpt-image') ||
+      id.includes('imagen') ||
+      id.includes('seedream') ||
+      mode.includes('image') ||
+      modalities.includes('image')
+    ) {
+      return 'IMAGE';
+    }
+
+    return 'TEXT';
   }
 
   /**
