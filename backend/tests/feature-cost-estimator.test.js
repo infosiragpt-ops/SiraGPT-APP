@@ -596,3 +596,43 @@ test('recommendUpgradeFromUsage: case-insensitive currentPlan', () => {
   );
   assert.equal(result.shouldUpgrade, true);
 });
+
+test('findCheapestPlanForBudget: $0 → FREE', () => {
+  const { findCheapestPlanForBudget } = require('../src/services/feature-cost-estimator');
+  assert.equal(findCheapestPlanForBudget(0).plan, 'FREE');
+});
+
+test('findCheapestPlanForBudget: $3 → ENTERPRISE (unlimited, $2 ≤ $3, largest budget)', () => {
+  const { findCheapestPlanForBudget } = require('../src/services/feature-cost-estimator');
+  // ENTERPRISE = $2 unlimited → wins on budget despite $5 PRO being affordable
+  const r = findCheapestPlanForBudget(3);
+  assert.equal(r.plan, 'ENTERPRISE');
+  assert.equal(r.unlimited, true);
+});
+
+test('findCheapestPlanForBudget: $5 → ENTERPRISE (unlimited beats PRO 100k)', () => {
+  const { findCheapestPlanForBudget } = require('../src/services/feature-cost-estimator');
+  assert.equal(findCheapestPlanForBudget(5).plan, 'ENTERPRISE');
+});
+
+test('findCheapestPlanForBudget: $10 → ENTERPRISE (still unlimited beats PRO_MAX 300k)', () => {
+  const { findCheapestPlanForBudget } = require('../src/services/feature-cost-estimator');
+  assert.equal(findCheapestPlanForBudget(10).plan, 'ENTERPRISE');
+});
+
+test('findCheapestPlanForBudget: $1 → FREE (ENTERPRISE costs $2 > $1)', () => {
+  const { findCheapestPlanForBudget } = require('../src/services/feature-cost-estimator');
+  assert.equal(findCheapestPlanForBudget(1).plan, 'FREE');
+});
+
+test('findCheapestPlanForBudget: negative → FREE (clamped to $0)', () => {
+  const { findCheapestPlanForBudget } = require('../src/services/feature-cost-estimator');
+  assert.equal(findCheapestPlanForBudget(-5).plan, 'FREE');
+});
+
+test('findCheapestPlanForBudget: non-numeric → null', () => {
+  const { findCheapestPlanForBudget } = require('../src/services/feature-cost-estimator');
+  assert.equal(findCheapestPlanForBudget('abc'), null);
+  assert.equal(findCheapestPlanForBudget(NaN), null);
+  assert.equal(findCheapestPlanForBudget(undefined), null);
+});

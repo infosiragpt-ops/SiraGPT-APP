@@ -299,6 +299,35 @@ function recommendUpgradeFromUsage(usage, currentPlan, { env = process.env } = {
 }
 
 /**
+ * Given a maximum monthly USD spend, return the most generous plan
+ * the user can afford — i.e. the highest-budget plan whose price is
+ * ≤ maxUsdPerMonth. Useful for "I have $X to spend" sliders.
+ *
+ *   findCheapestPlanForBudget(0)     → FREE   ($0)
+ *   findCheapestPlanForBudget(3)     → ENTERPRISE ($2 base — best fit)
+ *   findCheapestPlanForBudget(5)     → PRO    ($5)
+ *   findCheapestPlanForBudget(10)    → PRO_MAX ($10)
+ *   findCheapestPlanForBudget(-1)    → FREE   (clamped to $0)
+ *
+ * Tie-breaks pick the plan with the largest budget (treating unlimited
+ * as ∞). Returns null only for non-numeric input.
+ */
+function findCheapestPlanForBudget(maxUsdPerMonth) {
+  const cap = Number(maxUsdPerMonth);
+  if (!Number.isFinite(cap)) return null;
+  const ceiling = Math.max(0, cap);
+  // Score each affordable plan by budget size (unlimited wins).
+  const affordable = pricingTable().filter((p) => p.priceUsd <= ceiling);
+  if (affordable.length === 0) return null;
+  affordable.sort((a, b) => {
+    const aBudget = a.budgetCredits == null ? Infinity : a.budgetCredits;
+    const bBudget = b.budgetCredits == null ? Infinity : b.budgetCredits;
+    return bBudget - aBudget;
+  });
+  return affordable[0];
+}
+
+/**
  * Project monthly credit spend given a usage forecast. Lets the
  * pricing page show "at your current pace you'd spend N credits per
  * month".
@@ -428,6 +457,7 @@ module.exports = {
   comparePlans,
   getRecommendedPlan,
   recommendUpgradeFromUsage,
+  findCheapestPlanForBudget,
   getCostDelta,
   formatCreditsAsUsd,
   creditsToUsdCents,
