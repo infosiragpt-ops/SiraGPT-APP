@@ -2,7 +2,8 @@
 
 const { getPlanCatalog, GEMA4_MODEL_ID } = require('./plan-credits-catalog');
 
-// Default fallback model. GEMA4_* env vars still override this per deploy.
+// Default fallback model. The GEMA4_* env vars are preserved for
+// backward compatibility if someone configures an alternative fallback.
 const DEFAULT_GEMA4_DISPLAY_NAME = 'Gema4';
 const DEFAULT_GEMA4_PROVIDER = 'OpenAI';
 const DEFAULT_GEMA4_ICON = 'Sparkles';
@@ -61,7 +62,8 @@ function unlimitedTokenPool({ used }) {
 }
 
 function getGema4RuntimeConfig(env = process.env) {
-  const model = cleanString(env.GEMA4_MODEL_ID) || DEFAULT_GEMA4_MODEL_ID || GEMA4_MODEL_ID;
+  // Resolution order: explicit GEMA4_* env (legacy) → static defaults.
+  const model = cleanString(env.GEMA4_MODEL_ID) || DEFAULT_GEMA4_MODEL_ID;
   const provider = cleanString(env.GEMA4_PROVIDER) || DEFAULT_GEMA4_PROVIDER;
   const displayName = cleanString(env.GEMA4_DISPLAY_NAME) || DEFAULT_GEMA4_DISPLAY_NAME;
   const icon = cleanString(env.GEMA4_ICON) || DEFAULT_GEMA4_ICON;
@@ -242,8 +244,9 @@ function isWithinFreeIaQuota(user, env = process.env) {
 
 function suggestUpgradePlan(digest) {
   if (!digest || !digest.plan) return null;
-  if (digest.plan === 'FREE') {
-    return { from: 'FREE', to: 'PRO', reason: 'free_plan_has_no_premium_tokens' };
+  if (digest.plan === 'FREE' || digest.plan === 'ENTERPRISE') {
+    if (digest.plan === 'FREE') return { from: 'FREE', to: 'PRO', reason: 'free_plan_has_no_premium_tokens' };
+    return null;
   }
   if (digest.premium && digest.premium.unlimited) return null;
   const pct = digest.premium && Number.isFinite(digest.premium.pctUsed)

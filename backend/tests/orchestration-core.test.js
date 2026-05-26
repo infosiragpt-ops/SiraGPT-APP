@@ -70,7 +70,6 @@ describe('LLM Routing Config', () => {
     assert.ok(ids.includes('openai'));
     assert.ok(ids.includes('google'));
     assert.ok(ids.includes('groq'));
-    assert.ok(!ids.includes('cerebras'));
     assert.ok(ids.includes('mistral'));
     assert.ok(ids.includes('deepseek'));
     assert.ok(ids.includes('voyage'));

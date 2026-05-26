@@ -23,7 +23,7 @@ const { createLlmProviderProbe } = require('./provider-llm');
 
 const EXTERNAL_PROVIDERS = [
   { name: 'provider-stripe',     baseUrl: 'https://api.stripe.com/v1',           apiKeyEnv: 'STRIPE_SECRET_KEY' },
-  { name: 'provider-fal',        baseUrl: 'https://fal.run/health',              apiKeyEnv: process.env.FAL_KEY ? 'FAL_KEY' : 'FAL_API_KEY' },
+  { name: 'provider-fal',        baseUrl: 'https://fal.run/health',              apiKeyEnv: 'FAL_KEY', apiKeyEnvAliases: ['FAL_API_KEY', 'TAL_AI_API_KEY'] },
   { name: 'provider-tavily',     baseUrl: 'https://api.tavily.com',              apiKeyEnv: 'TAVILY_API_KEY' },
   { name: 'provider-exa',        baseUrl: 'https://api.exa.ai',                  apiKeyEnv: 'EXA_API_KEY' },
   { name: 'provider-firecrawl',  baseUrl: 'https://api.firecrawl.dev',           apiKeyEnv: 'FIRECRAWL_API_KEY' },
@@ -35,12 +35,14 @@ function createConfiguredExternalProbes(opts = {}) {
   const fetchImpl = opts.fetchImpl;
   const probes = [];
   for (const cfg of EXTERNAL_PROVIDERS) {
-    const keyPresent = !!(env[cfg.apiKeyEnv] && String(env[cfg.apiKeyEnv]).trim());
+    const keyNames = [cfg.apiKeyEnv, ...(cfg.apiKeyEnvAliases || [])];
+    const configuredKey = keyNames.find((name) => env[name] && String(env[name]).trim()) || cfg.apiKeyEnv;
+    const keyPresent = configuredKey !== cfg.apiKeyEnv || !!(env[cfg.apiKeyEnv] && String(env[cfg.apiKeyEnv]).trim());
     if (!keyPresent && !opts.includeUnconfigured) continue;
     probes.push(createLlmProviderProbe({
       name: cfg.name,
       baseUrl: cfg.baseUrl,
-      apiKeyEnv: cfg.apiKeyEnv,
+      apiKeyEnv: configuredKey,
       ...(fetchImpl ? { fetchImpl } : {}),
     }));
   }

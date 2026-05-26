@@ -185,7 +185,7 @@ function chargeCredits(spec = {}) {
  */
 async function refundLastCharge(req, reason) {
   const charge = req._chargedCredits;
-  // never refund a replay, and never refund a Free IA fallback (no txn was
+  // never refund a replay, and never refund a fallback (no txn was
   // recorded — the request bypassed the ledger entirely)
   if (!charge || charge.replay || !charge.txn || charge.fallback) return null;
   try {

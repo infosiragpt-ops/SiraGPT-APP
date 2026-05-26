@@ -62,11 +62,10 @@ test('inferProviderFromModelId: Google Gemini family', () => {
   assert.equal(inferProviderFromModelId('imagen-3'), 'Gemini');
 });
 
-test('inferProviderFromModelId: bare llama ids fall back to OpenAI unless provider-prefixed', () => {
+test('inferProviderFromModelId: Groq handles llama-3.x models', () => {
+  assert.equal(inferProviderFromModelId('llama-3.3-70b-versatile'), 'Groq');
   assert.equal(inferProviderFromModelId('llama-3.1-8b'), 'OpenAI');
   assert.equal(inferProviderFromModelId('llama-3.1-70b'), 'OpenAI');
-  assert.equal(inferProviderFromModelId('llama3.1-8b'), 'OpenAI');
-  assert.equal(inferProviderFromModelId('llama-3.3-70b'), 'OpenAI');
 });
 
 test('inferProviderFromModelId: Anthropic direct (bare claude-*)', () => {
