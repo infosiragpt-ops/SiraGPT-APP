@@ -175,6 +175,20 @@ router.get('/info', (_req, res) => {
     // the surface actually changes.
     schemaVersion: SCHEMA_VERSION,
     apiFingerprint: apiSurfaceFingerprint(),
+    // Cost estimates per feature for the "this will cost N credits"
+    // preview the UI shows before the user confirms. Best-effort.
+    featureCosts: (() => {
+      try {
+        // eslint-disable-next-line global-require
+        const { listFeatures, estimateCost } = require('../services/feature-cost-estimator');
+        const out = {};
+        for (const f of listFeatures()) {
+          const r = estimateCost(f, { textLength: 0 });
+          if (r) out[f] = { minCredits: r.credits, perKChars: r.breakdown.perKChars };
+        }
+        return out;
+      } catch { return null; }
+    })(),
   });
 });
 

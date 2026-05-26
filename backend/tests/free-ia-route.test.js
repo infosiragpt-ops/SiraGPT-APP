@@ -104,6 +104,24 @@ test('GET /api/free-ia/status reports enabled when CEREBRAS_API_KEY is set', asy
   }
 });
 
+test('GET /api/free-ia/info: includes featureCosts breakdown per feature', async () => {
+  const prevKey = process.env.CEREBRAS_API_KEY;
+  process.env.CEREBRAS_API_KEY = 'csk-feature-costs';
+  const { server, baseURL } = await startServer();
+  try {
+    const { body } = await fetchJSON(`${baseURL}/api/free-ia/info`);
+    assert.ok(body.featureCosts, 'featureCosts block should be present');
+    assert.ok(body.featureCosts.paraphrase);
+    assert.ok(body.featureCosts.image_generation);
+    assert.equal(body.featureCosts.paraphrase.minCredits, 1);
+    assert.equal(body.featureCosts.image_generation.minCredits, 5);
+  } finally {
+    server.close();
+    if (prevKey === undefined) delete process.env.CEREBRAS_API_KEY;
+    else process.env.CEREBRAS_API_KEY = prevKey;
+  }
+});
+
 test('GET /api/free-ia/info: includes apiFingerprint (stable + 8 hex chars)', async () => {
   const prevKey = process.env.CEREBRAS_API_KEY;
   process.env.CEREBRAS_API_KEY = 'csk-fingerprint';
