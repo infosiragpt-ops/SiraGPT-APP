@@ -1,0 +1,31 @@
+modules = ["nodejs-20", "python-3.11"]
+
+# Replit editor preview: Next.js dev server must listen on 0.0.0.0:3000.
+run = "ALLOW_REPLIT_PREVIEW=1 npm run dev -- -H 0.0.0.0 -p 3000"
+entrypoint = "package.json"
+hidden = [".next", "node_modules", ".test-dist", ".playwright-cli", "output", "test-results"]
+
+[nix]
+channel = "stable-25_05"
+
+[deployment]
+deploymentTarget = "autoscale"
+build = "HUSKY=0 npm install && HUSKY=0 npm --prefix backend install && REPLIT_DEPLOYMENT=1 npm run build"
+run = "npm start"
+
+[[ports]]
+localPort = 3000
+externalPort = 80
+
+[gitHubImport]
+requiredFiles = [".replit", "replit.nix", "package.json"]
+
+[languages.typescript]
+pattern = "**/{*.ts,*.tsx}"
+syntax = "typescript"
+
+[unitTest]
+language = "nodejs"
+
+[agent]
+expertMode = true

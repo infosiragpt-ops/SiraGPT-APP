@@ -46,7 +46,7 @@ const UPSTREAM_TO_SIRAGPT_SKILLS = Object.freeze({
   'python-debugpy': ['runtime-debugging'],
   spike: ['repo-folder-integration'],
   'macos-computer-use': ['agent-validation'],
-  'jupyter-live-kernel': ['agent-validation', 'code_generation_tests'],
+  'jupyter-live-kernel': ['agent-validation', 'qa-smoke-testing'],
 });
 
 function parseSkillMarkdown(raw) {

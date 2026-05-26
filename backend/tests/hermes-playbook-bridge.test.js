@@ -54,6 +54,7 @@ test('buildHermesIntegrationMap reports copied upstream and rewritten SiraGPT sk
   assert.equal(matrix.source.license, 'MIT');
   assert.ok(matrix.counts.upstreamSkills >= 100, 'Hermes snapshot should include copied skills');
   assert.ok(matrix.counts.siraSkills >= 20, 'SiraGPT should include active rewritten skills');
+  assert.equal(matrix.counts.coverage.partial || 0, 0, 'explicit Hermes mappings should resolve to active SiraGPT skills');
   assert.ok(matrix.skills.some((skill) => skill.upstream === 'systematic-debugging'));
 });
 
