@@ -20,6 +20,7 @@ const { buildHermesIntegrationMap } = require('./hermes-playbook-bridge');
 const toolsetRegistry = require('./toolset-registry');
 const { buildPlatformFolderReport } = require('./platform-folder-parity');
 const { buildExtensionCatalogReport } = require('./platform-extension-catalog');
+const { buildOpsReadinessReport } = require('./platform-ops-readiness');
 
 let _booted = false;
 let _gcTimer = null;
@@ -89,6 +90,7 @@ function getHermesRuntimeStatus() {
     cliCommands: listCommands(),
     platformFolders: buildPlatformFolderReport(),
     extensionCatalog: buildExtensionCatalogReport(),
+    opsReadiness: buildOpsReadinessReport(),
   };
 }
 

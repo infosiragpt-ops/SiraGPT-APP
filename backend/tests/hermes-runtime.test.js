@@ -133,5 +133,7 @@ test('runtime status includes new integrated subsystems', () => {
   assert.ok(Array.isArray(status.environments));
   assert.ok(status.extensionCatalog);
   assert.ok(status.extensionCatalog.counts.providers >= 30);
+  assert.ok(status.opsReadiness);
+  assert.equal(status.opsReadiness.status, 'ready');
   shutdownHermesRuntime();
 });
