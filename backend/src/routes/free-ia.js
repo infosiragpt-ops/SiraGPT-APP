@@ -178,6 +178,37 @@ router.get('/budget', (req, res) => {
   }
 });
 
+// "Will my current plan cover N calls of feature X at avg length M?"
+// Public — used by the new feature-onboarding screens that surface a
+// budget warning before the user opts into an expensive flow. Reuses
+// the same affordsFeature + explainBudgetVerdict pair from the
+// billing helpers.
+router.get('/affords', (req, res) => {
+  try {
+    // eslint-disable-next-line global-require
+    const { affordsFeature, explainBudgetVerdict } = require('../services/feature-cost-estimator');
+    const { plan, feature } = req.query;
+    if (typeof plan !== 'string' || typeof feature !== 'string') {
+      return res.status(400).json({ error: 'missing_params', message: '?plan and ?feature query params are required' });
+    }
+    const calls = Number(req.query.calls);
+    const avgTextLength = Number(req.query.avgTextLength) || 0;
+    if (!Number.isFinite(calls)) {
+      return res.status(400).json({ error: 'invalid_calls', message: '?calls must be a finite number' });
+    }
+    const verdict = affordsFeature(plan, feature, { calls, avgTextLength });
+    if (!verdict) {
+      return res.status(400).json({ error: 'unknown_plan', message: `${plan} is not a known plan name` });
+    }
+    return res.json({
+      verdict,
+      message: explainBudgetVerdict(plan, feature, { calls, avgTextLength }),
+    });
+  } catch (err) {
+    return res.status(500).json({ error: 'affords_failed', message: err && err.message });
+  }
+});
+
 // Side-by-side plan comparison for the upgrade page. Public so the
 // marketing pricing page can render "FREE vs PRO" cards without a
 // session.
@@ -223,7 +254,7 @@ router.get('/brand', (_req, res) => {
 // feature), schemaVersion, apiFingerprint, humanizer.tellsByLanguage,
 // BRAND export, /plans endpoint, /digest endpoint, /estimate +
 // forecastUsage/currentPlan support.
-const SCHEMA_VERSION = 'v3.6';
+const SCHEMA_VERSION = 'v3.7';
 
 /**
  * Deterministic short fingerprint of the API surface. Computed from
@@ -259,6 +290,7 @@ const ENDPOINT_INVENTORY = Object.freeze([
   { method: 'GET',  path: '/api/free-ia/plans',            auth: 'public', returns: 'enriched plan list for pricing table' },
   { method: 'GET',  path: '/api/free-ia/budget',           auth: 'public', returns: 'best plan within ?maxUsdPerMonth budget' },
   { method: 'GET',  path: '/api/free-ia/compare',          auth: 'public', returns: 'plan-vs-plan diff for ?from + ?to' },
+  { method: 'GET',  path: '/api/free-ia/affords',          auth: 'public', returns: 'budget check + human explainer for ?plan/?feature/?calls' },
   { method: 'POST', path: '/api/free-ia/estimate',         auth: 'public', returns: 'batch cost estimates for {items: [{feature, textLength}]}' },
   { method: 'GET',  path: '/api/free-ia/metrics',          auth: 'public', returns: 'JSON snapshot' },
   { method: 'GET',  path: '/api/free-ia/metrics/summary',  auth: 'public', returns: 'one-line digest (?format=text for plain)' },

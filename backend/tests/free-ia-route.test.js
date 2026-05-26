@@ -367,8 +367,8 @@ test('GET /api/free-ia/info: includes apiFingerprint (stable + 8 hex chars)', as
   }
 });
 
-test('SCHEMA_VERSION is at v3.6 (latest additive shape)', () => {
-  assert.equal(SCHEMA_VERSION, 'v3.6');
+test('SCHEMA_VERSION is at v3.7 (latest additive shape)', () => {
+  assert.equal(SCHEMA_VERSION, 'v3.7');
 });
 
 test('GET /api/free-ia/info: includes schemaVersion for client cache invalidation', async () => {
@@ -578,6 +578,54 @@ test('GET /api/free-ia/compare with unknown plan returns 400', async () => {
     const { status, body } = await fetchJSON(`${baseURL}/api/free-ia/compare?from=FREE&to=MYSTERY`);
     assert.equal(status, 400);
     assert.equal(body.error, 'unknown_plan');
+  } finally {
+    server.close();
+  }
+});
+
+test('GET /api/free-ia/affords: PRO + paraphrase fits within budget', async () => {
+  const { server, baseURL } = await startServer();
+  try {
+    const { status, body } = await fetchJSON(`${baseURL}/api/free-ia/affords?plan=PRO&feature=paraphrase&calls=100&avgTextLength=1000`);
+    assert.equal(status, 200);
+    assert.equal(body.verdict.affords, true);
+    assert.equal(body.verdict.plan, 'PRO');
+    assert.equal(typeof body.message, 'string');
+    assert.ok(body.message.includes('within your PRO budget'));
+  } finally {
+    server.close();
+  }
+});
+
+test('GET /api/free-ia/affords: FREE → not affordable + upgrade message', async () => {
+  const { server, baseURL } = await startServer();
+  try {
+    const { status, body } = await fetchJSON(`${baseURL}/api/free-ia/affords?plan=FREE&feature=paraphrase&calls=100`);
+    assert.equal(status, 200);
+    assert.equal(body.verdict.affords, false);
+    assert.ok(body.message.includes('Upgrade to PRO'));
+  } finally {
+    server.close();
+  }
+});
+
+test('GET /api/free-ia/affords: missing ?plan returns 400', async () => {
+  const { server, baseURL } = await startServer();
+  try {
+    const { status, body } = await fetchJSON(`${baseURL}/api/free-ia/affords?feature=paraphrase&calls=10`);
+    assert.equal(status, 400);
+    assert.equal(body.error, 'missing_params');
+  } finally {
+    server.close();
+  }
+});
+
+test('GET /api/free-ia/affords: non-numeric ?calls returns 400', async () => {
+  const { server, baseURL } = await startServer();
+  try {
+    const { status, body } = await fetchJSON(`${baseURL}/api/free-ia/affords?plan=PRO&feature=paraphrase&calls=abc`);
+    assert.equal(status, 400);
+    assert.equal(body.error, 'invalid_calls');
   } finally {
     server.close();
   }
