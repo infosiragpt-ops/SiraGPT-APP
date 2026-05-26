@@ -3120,12 +3120,12 @@ const NavbarModelSelector = ({
 
   // If this is a video chat type, show video model
   if (chatTypes === "video") {
-    const videoModels = [
-      { name: 'veo-fast', displayName: 'Veo Fast (8s)' },
-      { name: 'kling-1.6-pro', displayName: 'Kling 1.6 Pro (10s)' },
-      { name: 'kling-2-master', displayName: 'Kling 2 Master (10s)' }
-    ];
-    selectedVideoModelData = videoModels.find(m => m.name === selectedModel);
+    const videoModels = (Array.isArray(availableModels) ? availableModels : [])
+      .filter((model: any) => {
+        const label = `${model?.name || ""} ${model?.displayName || ""} ${model?.provider || ""}`;
+        return String(model?.type || "").toUpperCase() === "VIDEO" || /video|veo|kling|runway|pika|hailuo|luma/i.test(label);
+      });
+    selectedVideoModelData = videoModels.find((m: any) => m.name === selectedModel) || videoModels[0];
 
     // Filter video models based on search
     const filteredVideoModels = videoModels.filter((model) =>
@@ -3162,7 +3162,7 @@ const NavbarModelSelector = ({
           <ScrollArea className="h-[250px]">
             <div className="p-1">
               {filteredVideoModels.length > 0 ? (
-                filteredVideoModels.map((model) => (
+                filteredVideoModels.map((model: any) => (
                   <DropdownMenuItem
                     key={model.name}
                     onSelect={() => {

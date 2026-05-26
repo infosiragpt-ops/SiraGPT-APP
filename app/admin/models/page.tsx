@@ -42,7 +42,7 @@ interface AIModel {
   provider: string
   description?: string
   isActive: boolean
-  type: 'TEXT' | 'IMAGE'
+  type: 'TEXT' | 'IMAGE' | 'VIDEO'
   icon?: string | null
   lastSynced?: string
   syncSource?: string
@@ -80,7 +80,7 @@ const initialFormData = {
   name: '',
   displayName: '',
   provider: 'OpenAI',
-  type: 'TEXT' as 'TEXT' | 'IMAGE',
+  type: 'TEXT' as 'TEXT' | 'IMAGE' | 'VIDEO',
   icon: 'Bot',
   description: '',
   apiKey: ''
@@ -593,13 +593,14 @@ export default function ModelsPage() {
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="type">Model Type</Label>
-                  <Select value={formData.type} onValueChange={(value) => setFormData({ ...formData, type: value as 'TEXT' | 'IMAGE' })}>
+                  <Select value={formData.type} onValueChange={(value) => setFormData({ ...formData, type: value as 'TEXT' | 'IMAGE' | 'VIDEO' })}>
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="TEXT">TEXT</SelectItem>
                       <SelectItem value="IMAGE">IMAGE</SelectItem>
+                      <SelectItem value="VIDEO">VIDEO</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -794,6 +795,7 @@ export default function ModelsPage() {
                   <SelectItem value="ALL TYPES">ALL TYPES</SelectItem>
                   <SelectItem value="TEXT">TEXT</SelectItem>
                   <SelectItem value="IMAGE">IMAGE</SelectItem>
+                  <SelectItem value="VIDEO">VIDEO</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -849,7 +851,7 @@ export default function ModelsPage() {
                   </TableCell>
                   
                   <TableCell>
-                    <Badge variant={model.type === 'TEXT' ? 'default' : 'secondary'}>
+                    <Badge variant={model.type === 'TEXT' ? 'default' : model.type === 'VIDEO' ? 'outline' : 'secondary'}>
                       {model.type}
                     </Badge>
                   </TableCell>
@@ -1039,13 +1041,14 @@ export default function ModelsPage() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="edit-type">Type</Label>
-                <Select value={editingModel.type} onValueChange={(value) => setEditingModel({ ...editingModel, type: value as 'TEXT' | 'IMAGE' })}>
+                <Select value={editingModel.type} onValueChange={(value) => setEditingModel({ ...editingModel, type: value as 'TEXT' | 'IMAGE' | 'VIDEO' })}>
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="TEXT">TEXT</SelectItem>
                     <SelectItem value="IMAGE">IMAGE</SelectItem>
+                    <SelectItem value="VIDEO">VIDEO</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

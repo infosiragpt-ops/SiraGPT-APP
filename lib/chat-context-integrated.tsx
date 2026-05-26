@@ -458,7 +458,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     try {
       // Load available models first
       const modelsResponse = await apiClient.getAIModels(
-        chatType.toString().toUpperCase() as 'TEXT' | 'IMAGE'
+        chatType.toString().toUpperCase() as 'TEXT' | 'IMAGE' | 'VIDEO'
       )
       devLog("modelsResponse", modelsResponse);
 
@@ -489,7 +489,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
       try {
         const modelsResponse = await apiClient.getAIModels(
-          chatType.toString().toUpperCase() as 'TEXT' | 'IMAGE'
+          chatType.toString().toUpperCase() as 'TEXT' | 'IMAGE' | 'VIDEO'
         );
 
         if (modelsResponse.models && modelsResponse.models.length > 0) {

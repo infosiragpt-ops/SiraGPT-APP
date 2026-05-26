@@ -10,7 +10,7 @@ const axios = require('axios');
 const { serializeUser, serializeBigIntFields } = require('../utils/bigint-serializer');
 const modelSyncService = require('../services/model-sync-service');
 const modelSyncScheduler = require('../services/model-sync-scheduler');
-const { responseCache } = require('../middleware/response-cache');
+const { responseCache, invalidate: invalidateResponseCache } = require('../middleware/response-cache');
 const adminStats = require('../services/admin-stats-aggregator');
 const webhookDispatcher = require('../services/webhook-dispatcher');
 const { writeAuditLog } = require('../utils/audit-log');
@@ -19,6 +19,10 @@ const {
   contentDispositionHeader,
   safeDownloadFilename,
 } = require('../middleware/file-response-safety');
+
+function invalidateAiModelsCache() {
+  return invalidateResponseCache({ namespace: 'ai-models' });
+}
 
 function invoicePdfFilename(invoice) {
   return safeDownloadFilename(`invoice-${invoice?.number || invoice?.id || Date.now()}.pdf`, {
@@ -77,6 +81,7 @@ router.post('/models', [
       }
     });
 
+    invalidateAiModelsCache();
     res.status(201).json({ model });
   } catch (error) {
     console.error('Create model error:', error);
@@ -115,6 +120,7 @@ router.put('/models/:id', [
       data: updateData
     });
 
+    invalidateAiModelsCache();
     res.json({ model });
   } catch (error) {
     console.error('Update model error:', error);
@@ -127,6 +133,7 @@ router.delete('/models/:id', async (req, res) => {
     await prisma.aiModel.delete({
       where: { id: req.params.id }
     });
+    invalidateAiModelsCache();
     res.json({ message: 'Model deleted successfully' });
   } catch (error) {
     console.error('Delete model error:', error);
@@ -150,7 +157,8 @@ router.get('/models/fetch', async (req, res) => {
         openai: models.filter(m => m.provider === 'OpenAI').length,
         gemini: models.filter(m => m.provider === 'Gemini').length,
         openrouter: models.filter(m => m.provider === 'OpenRouter').length,
-        deepseek: models.filter(m => m.provider === 'DeepSeek').length
+        deepseek: models.filter(m => m.provider === 'DeepSeek').length,
+        video: models.filter(m => m.type === 'VIDEO').length
       }
     });
   } catch (error) {
@@ -187,6 +195,7 @@ router.post('/models/sync', async (req, res) => {
     console.log('🔄 Admin requested model sync to database');
     const result = await modelSyncService.syncModelsToDatabase();
     const defaultInactive = await modelSyncService.ensureDefaultInactiveOnce();
+    invalidateAiModelsCache();
     res.json({ 
       success: true, 
       message: 'Models synchronized successfully',
@@ -271,6 +280,7 @@ router.put('/models/bulk', async (req, res) => {
       where: whereClause,
       data: { isActive }
     });
+    invalidateAiModelsCache();
 
     res.json({ 
       success: true, 
@@ -342,6 +352,7 @@ router.post('/models/sync/scheduler', async (req, res) => {
 router.post('/models/sync/run', async (req, res) => {
   try {
     const result = await modelSyncScheduler.runImmediately();
+    invalidateAiModelsCache();
     res.json({ 
       success: true, 
       message: 'Model sync completed successfully',

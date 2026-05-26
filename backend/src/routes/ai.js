@@ -79,6 +79,7 @@ const { enqueueCodexRun, detectCodeTaskIntent } = require('../services/codex/cod
 const autonomousGoalEscalation = require('../services/autonomous-goal-escalation');
 const { runParaphrasePipeline } = require('../services/paraphrase-engine');
 const {
+  buildGema4VirtualModel,
   buildModelQuotaPolicy,
   resolveModelForUser,
   persistModelPreference,
@@ -664,7 +665,7 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
       isActive: true,
     };
 
-    if (type && (type === 'TEXT' || type === 'IMAGE')) {
+    if (type && (type === 'TEXT' || type === 'IMAGE' || type === 'VIDEO')) {
       whereClause.type = type; // Agar type di gai hai to us par filter karein
     }
 
@@ -688,6 +689,7 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
     // exists (active or inactive) so admin disable/delete is respected.
     const wantText = !type || type === 'TEXT';
     const wantImage = !type || type === 'IMAGE';
+    const wantVideo = !type || type === 'VIDEO';
     if (wantText && hasEnv('DEEPSEEK_API_KEY')) {
       const listed = new Set(models.map((m) => m.name));
       const deepseekNames = DEEPSEEK_TEXT_MODELS.map((m) => m.name);
@@ -732,6 +734,42 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
 
       if (virtualImageModels.length > 0) {
         models = [...virtualImageModels, ...models];
+      }
+    }
+
+    if (wantVideo && (hasEnv('FAL_KEY') || hasEnv('FAL_API_KEY') || hasEnv('TAL_AI_API_KEY'))) {
+      const listed = new Set(models.map((m) => m.name));
+      const virtualVideoModels = [
+        {
+          name: 'veo-fast',
+          displayName: 'Veo Fast (fal.ai)',
+          provider: 'Custom',
+          type: 'VIDEO',
+          description: 'Generación de video con Veo Fast vía fal.ai.',
+          icon: 'GeminiLogo',
+        },
+      ]
+        .filter((m) => !listed.has(m.name))
+        .map((m) => ({ id: `__virtual_${m.name.replace(/[^a-z0-9]+/gi, '_').toLowerCase()}__`, ...m }));
+
+      if (virtualVideoModels.length > 0) {
+        models = [...virtualVideoModels, ...models];
+      }
+    }
+
+    if (wantText) {
+      const fallbackModel = buildGema4VirtualModel();
+      const alreadyListed = models.some((m) => m.name === fallbackModel.name);
+      if (!alreadyListed) {
+        const fallbackRow = await prisma.aiModel.findFirst({
+          where: { name: fallbackModel.name },
+          select: { id: true },
+        });
+        if (!fallbackRow) {
+          models = modelPolicy.currentPlan === 'FREE'
+            ? [fallbackModel, ...models]
+            : [...models, fallbackModel];
+        }
       }
     }
 
@@ -1574,6 +1612,8 @@ router.post(
           model,
         }));
       }
+
+
 
       // ✅ Load per-user personalization so every turn carries the
       // user's name, preferred tone, and any custom instructions they
@@ -4070,7 +4110,7 @@ router.post(
         };
       }
 
-      // NOTE: declared at function scope (see top of handler) so the
+            // NOTE: declared at function scope (see top of handler) so the
       // outer `finally` block can read the final value. This is just an
       // assignment — promoting it to `let` here would shadow the outer
       // binding and re-introduce the responseChars:0 metric bug.
@@ -4251,18 +4291,13 @@ router.post(
             try {
               const agenticStream = require('../services/agentic-chat-stream');
               const hasImages = (filesForVision || []).some(f => f && f.mimeType && f.mimeType.startsWith('image/'));
-              const priorHistory = Array.isArray(messages) ? messages.slice(0, -1) : [];
               if (
                 agenticStream.isEnabled()
                 && agenticStream.modelSupportsFunctionCalling(actualProvider, actualModel)
-                && agenticStream.shouldUseAgenticChat({
-                  prompt,
-                  history: priorHistory,
-                  files: filesForVision,
-                })
                 && !hasImages
               ) {
                 const agenticClient = createProviderClient(actualProvider);
+                const priorHistory = Array.isArray(messages) ? messages.slice(0, -1) : [];
                 const agenticFileIds = (processedFiles || [])
                   .map((file) => file && (file.id || file.fileId || file.uploadId || file.databaseId))
                   .filter(Boolean)

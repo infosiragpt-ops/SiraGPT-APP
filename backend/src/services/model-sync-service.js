@@ -18,6 +18,56 @@ class ModelSyncService {
     };
   }
 
+  getStaticVideoModels() {
+    const configured = Boolean(process.env.FAL_KEY || process.env.FAL_API_KEY || process.env.TAL_AI_API_KEY);
+    return [
+      {
+        id: 'veo-fast',
+        name: 'veo-fast',
+        displayName: 'Veo Fast (fal.ai)',
+        provider: 'Custom',
+        type: 'VIDEO',
+        description: configured
+          ? 'Generación de video con Veo Fast vía fal.ai.'
+          : 'Generación de video con Veo Fast vía fal.ai. Requiere FAL_API_KEY o FAL_KEY.',
+        icon: 'GeminiLogo',
+        contextLength: null,
+        pricing: { provider: 'fal.ai', billing: 'per_generation' },
+        tags: ['video', 'fal.ai', 'veo', 'text-to-video', 'image-to-video'],
+        syncSource: 'static',
+        isActive: false,
+      },
+      {
+        id: 'fal-ai/veo3/fast',
+        name: 'fal-ai/veo3/fast',
+        displayName: 'Veo 3 Fast',
+        provider: 'Custom',
+        type: 'VIDEO',
+        description: 'Modelo text-to-video de Veo 3 Fast servido por fal.ai.',
+        icon: 'GeminiLogo',
+        contextLength: null,
+        pricing: { provider: 'fal.ai', billing: 'per_generation' },
+        tags: ['video', 'fal.ai', 'veo3', 'text-to-video'],
+        syncSource: 'static',
+        isActive: false,
+      },
+      {
+        id: 'fal-ai/veo3/fast/image-to-video',
+        name: 'fal-ai/veo3/fast/image-to-video',
+        displayName: 'Veo 3 Fast Image to Video',
+        provider: 'Custom',
+        type: 'VIDEO',
+        description: 'Modelo image-to-video de Veo 3 Fast servido por fal.ai.',
+        icon: 'GeminiLogo',
+        contextLength: null,
+        pricing: { provider: 'fal.ai', billing: 'per_generation' },
+        tags: ['video', 'fal.ai', 'veo3', 'image-to-video'],
+        syncSource: 'static',
+        isActive: false,
+      },
+    ];
+  }
+
   /**
    * Fetch all available models from OpenAI
    */
@@ -282,11 +332,12 @@ class ModelSyncService {
   async fetchAllModels() {
     console.log('🚀 Starting to fetch models from all providers...');
 
-    const [openaiModels, geminiModels, openrouterModels, deepseekModels] = await Promise.allSettled([
+    const [openaiModels, geminiModels, openrouterModels, deepseekModels, videoModels] = await Promise.allSettled([
       this.fetchOpenAIModels(),
       this.fetchGeminiModels(),
       this.fetchOpenRouterModels(),
-      this.fetchDeepSeekModels()
+      this.fetchDeepSeekModels(),
+      Promise.resolve(this.getStaticVideoModels())
     ]);
 
     const allModels = [];
@@ -305,6 +356,10 @@ class ModelSyncService {
 
     if (deepseekModels.status === 'fulfilled') {
       allModels.push(...deepseekModels.value);
+    }
+
+    if (videoModels.status === 'fulfilled') {
+      allModels.push(...videoModels.value);
     }
 
     console.log(`🎯 Total models fetched: ${allModels.length}`);
@@ -335,7 +390,8 @@ class ModelSyncService {
           });
 
           if (existingModel) {
-            // Update existing model and reset admin availability to disabled.
+            // Update metadata only. Admin availability must survive refreshes
+            // so an activated model immediately remains visible to users.
             await prisma.aiModel.update({
               where: { name: model.name },
               data: this.buildModelSyncUpdateData(model)
@@ -387,9 +443,6 @@ class ModelSyncService {
       contextLength: model.contextLength,
       pricing: model.pricing,
       tags: model.tags && model.tags.length ? model.tags : this.generateTags(model),
-      // Admin sync is intentionally conservative: every refreshed provider
-      // model stays disabled until an admin activates it after the sync.
-      isActive: false,
       updatedAt: new Date()
     };
   }
@@ -527,6 +580,19 @@ class ModelSyncService {
       modalities.includes('image')
     ) {
       return 'IMAGE';
+    }
+
+    if (
+      id.includes('video') ||
+      id.includes('veo') ||
+      id.includes('kling') ||
+      id.includes('runway') ||
+      id.includes('pika') ||
+      id.includes('luma') ||
+      mode.includes('video') ||
+      modalities.includes('video')
+    ) {
+      return 'VIDEO';
     }
 
     return 'TEXT';

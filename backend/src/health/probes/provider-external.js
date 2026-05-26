@@ -23,7 +23,7 @@ const { createLlmProviderProbe } = require('./provider-llm');
 
 const EXTERNAL_PROVIDERS = [
   { name: 'provider-stripe',     baseUrl: 'https://api.stripe.com/v1',           apiKeyEnv: 'STRIPE_SECRET_KEY' },
-  { name: 'provider-fal',        baseUrl: 'https://fal.run/health',              apiKeyEnv: 'FAL_KEY' },
+  { name: 'provider-fal',        baseUrl: 'https://fal.run/health',              apiKeyEnv: process.env.FAL_KEY ? 'FAL_KEY' : 'FAL_API_KEY' },
   { name: 'provider-tavily',     baseUrl: 'https://api.tavily.com',              apiKeyEnv: 'TAVILY_API_KEY' },
   { name: 'provider-exa',        baseUrl: 'https://api.exa.ai',                  apiKeyEnv: 'EXA_API_KEY' },
   { name: 'provider-firecrawl',  baseUrl: 'https://api.firecrawl.dev',           apiKeyEnv: 'FIRECRAWL_API_KEY' },
