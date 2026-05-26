@@ -85,6 +85,10 @@ router.get('/brand', (_req, res) => {
   });
 });
 
+// Bump whenever the /info response shape changes — clients use it
+// to invalidate cached responses.
+const SCHEMA_VERSION = 'v3.2';
+
 // Endpoint inventory for /info autodiscovery. Kept here (not derived
 // from Express's router stack) so the metadata stays explicit and the
 // payload doesn't drift if Express changes its internals.
@@ -130,6 +134,11 @@ router.get('/info', (_req, res) => {
     summary: sum,
     humanizer: humanizerCoverage ? { tellsByLanguage: humanizerCoverage } : null,
     endpoints: ENDPOINT_INVENTORY,
+    // Static fingerprint derived from the inventory + model id; lets
+    // the UI cache /info aggressively and invalidate only when the
+    // surface actually changes (deploys with no new endpoints don't
+    // bust the cache).
+    schemaVersion: SCHEMA_VERSION,
   });
 });
 

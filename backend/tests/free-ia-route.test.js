@@ -78,6 +78,21 @@ test('GET /api/free-ia/status reports enabled when CEREBRAS_API_KEY is set', asy
   }
 });
 
+test('GET /api/free-ia/info: includes schemaVersion for client cache invalidation', async () => {
+  const prevKey = process.env.CEREBRAS_API_KEY;
+  process.env.CEREBRAS_API_KEY = 'csk-schema-version';
+  const { server, baseURL } = await startServer();
+  try {
+    const { body } = await fetchJSON(`${baseURL}/api/free-ia/info`);
+    assert.ok(typeof body.schemaVersion === 'string', 'schemaVersion should be a string');
+    assert.match(body.schemaVersion, /^v\d+\.\d+$/, 'should follow vMAJOR.MINOR format');
+  } finally {
+    server.close();
+    if (prevKey === undefined) delete process.env.CEREBRAS_API_KEY;
+    else process.env.CEREBRAS_API_KEY = prevKey;
+  }
+});
+
 test('GET /api/free-ia/info: endpoints inventory is well-formed + lists all known routes', async () => {
   const prevKey = process.env.CEREBRAS_API_KEY;
   process.env.CEREBRAS_API_KEY = 'csk-inventory';
