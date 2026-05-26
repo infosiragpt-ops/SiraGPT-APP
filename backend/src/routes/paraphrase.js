@@ -192,11 +192,17 @@ router.post('/humanize', express.json({ limit: '512kb' }), (req, res) => {
       ? req.body.language : 'es';
     const intensity = typeof req.body?.intensity === 'string'
       ? req.body.intensity : 'medium';
+    // Optional opt-out: callers can pin specific patterns the
+    // humanizer must NOT replace ("don't touch 'In conclusion' —
+    // I'm writing an academic abstract"). Silently ignore non-array.
+    const excludeTells = Array.isArray(req.body?.excludeTells)
+      ? req.body.excludeTells.filter((t) => typeof t === 'string')
+      : [];
     // Use chunked variant for large inputs so we don't blow the stack
     // on a single regex sweep.
     const result = text.length > 8000
-      ? humanizeChunked({ text, language, intensity })
-      : humanizeText({ text, language, intensity });
+      ? humanizeChunked({ text, language, intensity, excludeTells })
+      : humanizeText({ text, language, intensity, excludeTells });
     return res.json(result);
   } catch (err) {
     return res.status(500).json({ error: 'humanize_failed', message: err && err.message });
