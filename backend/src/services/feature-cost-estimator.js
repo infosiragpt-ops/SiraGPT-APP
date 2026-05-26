@@ -218,6 +218,22 @@ function creditsToUsdCents(credits) {
   return Math.round(n * USD_PER_CREDIT * 100);
 }
 
+/**
+ * Inverse of creditsToUsdCents — convert a USD amount to whole credits.
+ * Returns 0 for non-positive / invalid input. Result is always an
+ * integer (rounded down — caller never gets more credits than they
+ * paid for).
+ *
+ *   creditsForUsd(5)    → 100_000  (PRO plan equivalent)
+ *   creditsForUsd(0.05) → 1000
+ *   creditsForUsd(0)    → 0
+ */
+function creditsForUsd(usd) {
+  const n = Number(usd) || 0;
+  if (n <= 0) return 0;
+  return Math.floor(n / USD_PER_CREDIT);
+}
+
 function formatCreditsAsUsd(credits) {
   const n = Number(credits) || 0;
   if (n <= 0) return '';
@@ -342,6 +358,7 @@ module.exports = {
   getCostDelta,
   formatCreditsAsUsd,
   creditsToUsdCents,
+  creditsForUsd,
   enrichPlanWithPricing,
   validatePlanName,
   listFeatures,

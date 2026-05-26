@@ -459,3 +459,34 @@ test('pricingTable: ENTERPRISE row is unlimited', () => {
   assert.equal(ent.budgetCredits, null);
   assert.equal(ent.budgetLabel, 'Unlimited');
 });
+
+test('creditsForUsd: 0 / negative / invalid → 0 credits', () => {
+  const { creditsForUsd } = require('../src/services/feature-cost-estimator');
+  assert.equal(creditsForUsd(0), 0);
+  assert.equal(creditsForUsd(-1), 0);
+  assert.equal(creditsForUsd(NaN), 0);
+  assert.equal(creditsForUsd('abc'), 0);
+  assert.equal(creditsForUsd(null), 0);
+});
+
+test('creditsForUsd: $5 → 100,000 credits (matches PRO plan)', () => {
+  const { creditsForUsd } = require('../src/services/feature-cost-estimator');
+  assert.equal(creditsForUsd(5), 100_000);
+});
+
+test('creditsForUsd: small USD amounts round down — never gives more than paid for', () => {
+  const { creditsForUsd } = require('../src/services/feature-cost-estimator');
+  // 0.001 USD → 20 credits (clean)
+  assert.equal(creditsForUsd(0.001), 20);
+  // Always integer
+  const n = creditsForUsd(2.345);
+  assert.equal(n, Math.floor(n));
+});
+
+test('creditsForUsd ↔ creditsToUsdCents: round-trips for whole-cent amounts', () => {
+  const { creditsForUsd, creditsToUsdCents } = require('../src/services/feature-cost-estimator');
+  // $0.05 → 1000 credits → 5 cents → $0.05 ✓
+  assert.equal(creditsToUsdCents(creditsForUsd(0.05)), 5);
+  // $5.00 → 100k credits → 500 cents → $5.00 ✓
+  assert.equal(creditsToUsdCents(creditsForUsd(5)), 500);
+});
