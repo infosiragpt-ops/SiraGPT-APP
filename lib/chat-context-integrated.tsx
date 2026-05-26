@@ -224,6 +224,7 @@ type VideoGenerationOptions = {
   aspectRatio?: 'auto' | '16:9' | '9:16' | '1:1' | '4:3' | '3:4' | '21:9'
   duration?: 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15
   audio?: boolean
+  model?: string
 }
 
 // Update the Chat interface around line 24
@@ -2286,6 +2287,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     const duration = options?.duration || 5;
     const resolution = options?.resolution || '720p';
     const audio = options?.audio ?? true;
+    const model = options?.model || selectedModel;
 
     setIsLoading(true);
     try {
@@ -2357,7 +2359,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         chatId: activeChat.id,
         files: fileIds,
         ...(imageUrl && { image_url: imageUrl }),
-        model: selectedModel
+        model
       });
 
       devLog(' Video generation response:', videoResponse);

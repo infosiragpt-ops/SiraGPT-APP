@@ -341,6 +341,18 @@ const MUSIC_MODEL_OPTIONS: MusicModel[] = ["ElevenLabs", "Lyria 3 Pro", "Mimo Ma
 const MUSIC_STYLE_OPTIONS: MusicStyle[] = ["Auto", "Cinematic", "Pop", "Electronic", "Ambient", "Orchestral", "Latin", "Hip-Hop", "Jazz"]
 const MUSIC_MOOD_OPTIONS: MusicMood[] = ["Balanced", "Energetic", "Emotional", "Dark", "Happy", "Epic", "Relaxed"]
 const MUSIC_EFFECT_OPTIONS: MusicEffect[] = ["None", "Studio Master", "Spatial", "Warm Tape", "Radio Ready", "Lo-Fi"]
+const DEFAULT_IMAGE_MODEL = "openai/dall-e-3"
+const DEFAULT_IMAGE_PROVIDER = "OpenAI"
+const DEFAULT_VIDEO_MODEL = "veo-fast"
+
+const providerForMediaModel = (modelName: string, fallback = DEFAULT_IMAGE_PROVIDER): string => {
+  const value = String(modelName || "").toLowerCase()
+  if (value.includes("openrouter") || value.includes("seedream")) return "OpenRouter"
+  if (value.includes("google") || value.includes("imagen") || value.includes("gemini") || value.includes("veo")) return "Google"
+  if (value.includes("kling")) return "Kling"
+  if (value.includes("openai") || value.includes("dall") || value.includes("gpt-image")) return "OpenAI"
+  return fallback
+}
 
 // `ImageAspectRatioMark` was extracted to
 // `components/chat/ComposerInlineDisplays.tsx` to keep this file
@@ -1716,6 +1728,8 @@ const ActiveToolsDisplay = ({
   setSelectedImageQuality,
   selectedImageCount,
   setSelectedImageCount,
+  selectedImageModel,
+  setSelectedImageModel,
   isVoiceGenerationActive,
   setIsVoiceGenerationActive,
   selectedVoiceModel,
@@ -1754,6 +1768,8 @@ const ActiveToolsDisplay = ({
   setSelectedVideoDuration,
   selectedVideoAudio,
   setSelectedVideoAudio,
+  selectedVideoModel,
+  setSelectedVideoModel,
   isComputerUseActive,
   setIsComputerUseActive,
   computerUseStatus,
@@ -1795,6 +1811,8 @@ const ActiveToolsDisplay = ({
   setSelectedImageQuality: (quality: ImageQuality) => void;
   selectedImageCount: ImageGenerationCount;
   setSelectedImageCount: (count: ImageGenerationCount) => void;
+  selectedImageModel: string;
+  setSelectedImageModel: (model: string) => void;
   isVoiceGenerationActive: boolean;
   setIsVoiceGenerationActive: (value: boolean) => void;
   selectedVoiceModel: VoiceModel;
@@ -1833,6 +1851,8 @@ const ActiveToolsDisplay = ({
   setSelectedVideoDuration: (duration: VideoDuration) => void;
   selectedVideoAudio: boolean;
   setSelectedVideoAudio: (enabled: boolean) => void;
+  selectedVideoModel: string;
+  setSelectedVideoModel: (model: string) => void;
   isComputerUseActive: boolean;
   setIsComputerUseActive: (value: boolean) => void;
   computerUseStatus: 'idle' | 'running' | 'completed' | 'error';
@@ -2173,9 +2193,8 @@ const ActiveToolsDisplay = ({
             </Button>
           </div>
 
-          {renderMediaModelPicker("image", selectedModel, (name, provider) => {
-            setSelectedModel(name);
-            if (provider) setSelectedProvider(provider);
+          {renderMediaModelPicker("image", selectedImageModel, (name, provider) => {
+            setSelectedImageModel(name);
             track("model.selected", { model: name, provider: provider || null, surface: "image-tool-picker" });
           })}
 
@@ -2620,9 +2639,8 @@ const ActiveToolsDisplay = ({
             </Button>
           </div>
 
-          {renderMediaModelPicker("video", selectedModel, (name, provider) => {
-            setSelectedModel(name);
-            if (provider) setSelectedProvider(provider);
+          {renderMediaModelPicker("video", selectedVideoModel, (name, provider) => {
+            setSelectedVideoModel(name);
             track("model.selected", { model: name, provider: provider || null, surface: "video-tool-picker" });
           })}
 
@@ -3845,6 +3863,7 @@ function ChatInterfaceContent() {
   const [selectedImageAspectRatio, setSelectedImageAspectRatio] = React.useState<ImageAspectRatio>("1:1")
   const [selectedImageQuality, setSelectedImageQuality] = React.useState<ImageQuality>("2K")
   const [selectedImageCount, setSelectedImageCount] = React.useState<ImageGenerationCount>(1)
+  const [selectedImageModel, setSelectedImageModel] = React.useState(DEFAULT_IMAGE_MODEL)
   const [isVoiceGenerationActive, setIsVoiceGenerationActive] = React.useState(false)
   const [selectedVoiceModel, setSelectedVoiceModel] = React.useState<VoiceModel>("ElevenLabs")
   const [selectedVoiceLanguage, setSelectedVoiceLanguage] = React.useState<VoiceLanguage>("Spanish")
@@ -3862,6 +3881,7 @@ function ChatInterfaceContent() {
   const [selectedVideoAspectRatio, setSelectedVideoAspectRatio] = React.useState<VideoAspectRatio>("auto")
   const [selectedVideoDuration, setSelectedVideoDuration] = React.useState<VideoDuration>(5)
   const [selectedVideoAudio, setSelectedVideoAudio] = React.useState(true)
+  const [selectedVideoModel, setSelectedVideoModel] = React.useState(DEFAULT_VIDEO_MODEL)
   const imageAbortControllerRef = React.useRef<AbortController | null>(null)
   const isGeneratingImageRef = React.useRef(false)
   const [isGeneratingVideo, setIsGeneratingVideo] = React.useState(false)
@@ -4200,6 +4220,8 @@ function ChatInterfaceContent() {
     setUploadedFiles([]);
     setUploadProgress({});
     setInput('');
+    setSelectedImageModel(DEFAULT_IMAGE_MODEL);
+    setSelectedVideoModel(DEFAULT_VIDEO_MODEL);
 
     // Clear Computer Use state
     if (clearReasoning) clearReasoning();
@@ -7346,8 +7368,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       const payload: { prompt: string; chatId?: string; provider: string; model: string; fileId?: string; aspectRatio?: ImageAspectRatio; quality?: ImageQuality; imageCount?: ImageGenerationCount } = {
         prompt,
         chatId: activeChatId,
-        provider: selectProvider,
-        model: selectedModel,
+        provider: providerForMediaModel(selectedImageModel, selectProvider),
+        model: selectedImageModel,
         aspectRatio: selectedImageAspectRatio,
         quality: selectedImageQuality,
         imageCount: selectedImageCount,
@@ -7440,6 +7462,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       aspectRatio: selectedVideoAspectRatio,
       duration: selectedVideoDuration,
       audio: selectedVideoAudio,
+      model: selectedVideoModel,
     };
     try {
       if (!currentChat) {
@@ -7828,6 +7851,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     selectedImageAspectRatio, setSelectedImageAspectRatio,
     selectedImageQuality, setSelectedImageQuality,
     selectedImageCount, setSelectedImageCount,
+    selectedImageModel, setSelectedImageModel,
     isVoiceGenerationActive, setIsVoiceGenerationActive,
     selectedVoiceModel, setSelectedVoiceModel,
     selectedVoiceLanguage, setSelectedVoiceLanguage,
@@ -7847,6 +7871,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     selectedVideoAspectRatio, setSelectedVideoAspectRatio,
     selectedVideoDuration, setSelectedVideoDuration,
     selectedVideoAudio, setSelectedVideoAudio,
+    selectedVideoModel, setSelectedVideoModel,
     isComputerUseActive, setIsComputerUseActive,
     computerUseStatus,
     isGmailActive, setIsGmailActive,
