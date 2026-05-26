@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { estimateCost, estimateCostBatch, listFeatures, FEATURE_COSTS } = require('../src/services/feature-cost-estimator');
+const { estimateCost, estimateCostBatch, estimateMonthlyCost, listFeatures, FEATURE_COSTS } = require('../src/services/feature-cost-estimator');
 
 test('listFeatures: includes paraphrase + image_* + generate', () => {
   const f = listFeatures();
@@ -96,6 +96,42 @@ test('estimateCostBatch: env override applies to all batch items', () => {
   // base (1) + length × 4 per 1k chars
   assert.equal(out[0].credits, 5);
   assert.equal(out[1].credits, 9);
+});
+
+test('estimateMonthlyCost: typical user usage projection', () => {
+  const result = estimateMonthlyCost({
+    paraphrase: { calls: 10, avgTextLength: 2000 },     // 10 × (1+2) = 30 credits
+    image_generation: { calls: 5 },                       // 5 × 5 = 25 credits
+    image_upscale: { calls: 3 },                          // 3 × 3 = 9 credits
+  });
+  assert.equal(result.totalMonthly, 64);
+  assert.equal(result.perFeature.paraphrase.monthlyCredits, 30);
+  assert.equal(result.perFeature.image_generation.monthlyCredits, 25);
+  assert.equal(result.perFeature.image_upscale.monthlyCredits, 9);
+});
+
+test('estimateMonthlyCost: zero calls / missing usage returns 0 + skip', () => {
+  const result = estimateMonthlyCost({
+    paraphrase: { calls: 0, avgTextLength: 5000 },
+    image_generation: { calls: 0 },
+  });
+  assert.equal(result.totalMonthly, 0);
+  assert.deepEqual(result.perFeature, {});
+});
+
+test('estimateMonthlyCost: null/garbage input returns empty projection', () => {
+  assert.deepEqual(estimateMonthlyCost(null), { totalMonthly: 0, perFeature: {} });
+  assert.deepEqual(estimateMonthlyCost('garbage'), { totalMonthly: 0, perFeature: {} });
+  assert.deepEqual(estimateMonthlyCost({}), { totalMonthly: 0, perFeature: {} });
+});
+
+test('estimateMonthlyCost: drops unknown features silently', () => {
+  const result = estimateMonthlyCost({
+    paraphrase: { calls: 1, avgTextLength: 0 },
+    mystery_feature: { calls: 100 },
+  });
+  assert.equal(result.totalMonthly, 1);
+  assert.ok(!result.perFeature.mystery_feature);
 });
 
 test('estimateCostBatch: items with missing/null feature dropped', () => {

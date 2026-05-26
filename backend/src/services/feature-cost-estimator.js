@@ -80,6 +80,32 @@ function listFeatures() {
 }
 
 /**
+ * Project monthly credit spend given a usage forecast. Lets the
+ * pricing page show "at your current pace you'd spend N credits per
+ * month".
+ *
+ * @param {object} usage — { paraphrase: { calls: 10, avgTextLength: 2000 }, image_generation: { calls: 5 } }
+ * @returns {{ totalMonthly: number, perFeature: object }}
+ */
+function estimateMonthlyCost(usage, { env = process.env } = {}) {
+  if (!usage || typeof usage !== 'object') return { totalMonthly: 0, perFeature: {} };
+  let total = 0;
+  const perFeature = {};
+  for (const [feature, profile] of Object.entries(usage)) {
+    if (!profile || typeof profile !== 'object') continue;
+    const calls = Math.max(0, Number(profile.calls) || 0);
+    const avgLen = Math.max(0, Number(profile.avgTextLength) || 0);
+    if (calls === 0) continue;
+    const est = estimateCost(feature, { textLength: avgLen, env });
+    if (!est) continue;
+    const monthly = est.credits * calls;
+    perFeature[feature] = { calls, perCallCredits: est.credits, monthlyCredits: monthly };
+    total += monthly;
+  }
+  return { totalMonthly: total, perFeature };
+}
+
+/**
  * Batch variant — estimate costs for many features at once. Useful
  * for a comparison table ("paraphrasing this would cost X, generating
  * an image would cost Y"). Skips unknown features silently.
@@ -101,6 +127,7 @@ function estimateCostBatch(requests, { env = process.env } = {}) {
 module.exports = {
   estimateCost,
   estimateCostBatch,
+  estimateMonthlyCost,
   listFeatures,
   FEATURE_COSTS,
 };
