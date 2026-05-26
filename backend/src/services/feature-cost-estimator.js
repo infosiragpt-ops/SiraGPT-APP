@@ -447,6 +447,52 @@ function quickEstimate(features) {
 }
 
 /**
+ * Can a user on `currentPlan` afford `monthlyCalls` of `feature` at
+ * the given avg text length? Returns a verdict + the projected
+ * monthly cost + plan budget. Useful for "you're about to enable
+ * autoplay — that costs ≈ N/mo, your plan has M left" warnings.
+ *
+ *   affordsFeature('PRO', 'paraphrase', { calls: 1000, avgTextLength: 2000 })
+ *   → { affords: true, projectedCredits: 3000, budgetCredits: 100000, headroomPct: 97 }
+ *
+ *   affordsFeature('FREE', 'paraphrase', { calls: 100 })
+ *   → { affords: false, projectedCredits: 100, budgetCredits: 0, headroomPct: 0,
+ *       reason: 'plan_has_no_premium_budget' }
+ *
+ * ENTERPRISE always affords (unlimited). Unknown plan returns null.
+ */
+function affordsFeature(currentPlan, feature, { calls = 0, avgTextLength = 0, env = process.env } = {}) {
+  const planEnriched = enrichPlanWithPricing(currentPlan);
+  if (!planEnriched) return null;
+  const est = estimateCost(feature, { textLength: avgTextLength, env });
+  if (!est) return { affords: false, reason: 'unknown_feature' };
+  const projectedCredits = est.credits * Math.max(0, Number(calls) || 0);
+  if (planEnriched.unlimited) {
+    return {
+      affords: true,
+      projectedCredits,
+      budgetCredits: null,
+      headroomPct: 100,
+      plan: planEnriched.plan,
+    };
+  }
+  const budget = planEnriched.budgetCredits || 0;
+  const affords = projectedCredits <= budget;
+  const headroomPct = budget === 0 ? 0
+    : Math.max(0, Math.round((1 - projectedCredits / budget) * 1000) / 10);
+  return {
+    affords,
+    projectedCredits,
+    budgetCredits: budget,
+    headroomPct,
+    plan: planEnriched.plan,
+    reason: affords ? 'within_budget'
+      : budget === 0 ? 'plan_has_no_premium_budget'
+      : 'exceeds_plan_budget',
+  };
+}
+
+/**
  * Structured diff between two plans — the shape upsell/downsell UIs
  * want without having to subtract by hand. Both rows are also
  * included so the caller has everything needed to render a side-by-
@@ -501,6 +547,7 @@ module.exports = {
   monthlyBreakdownAsMarkdown,
   pricingTable,
   quickEstimate,
+  affordsFeature,
   comparePlans,
   getRecommendedPlan,
   recommendUpgradeFromUsage,

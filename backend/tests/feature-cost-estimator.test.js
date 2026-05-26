@@ -691,3 +691,64 @@ test('monthlyBreakdownAsMarkdown: null projection returns header-only table', ()
   assert.ok(md.includes('| Feature | Calls'));
   assert.ok(!md.includes('TOTAL'));
 });
+
+test('affordsFeature: PRO with 1k paraphrase calls @ 2k chars → fits in budget', () => {
+  const { affordsFeature } = require('../src/services/feature-cost-estimator');
+  // 1k calls × (1 base + 2 per 2k chars) = 3000 credits, PRO budget 100k
+  const r = affordsFeature('PRO', 'paraphrase', { calls: 1000, avgTextLength: 2000 });
+  assert.equal(r.affords, true);
+  assert.equal(r.projectedCredits, 3000);
+  assert.equal(r.budgetCredits, 100_000);
+  assert.equal(r.reason, 'within_budget');
+  assert.ok(r.headroomPct > 95);
+});
+
+test('affordsFeature: FREE plan never affords (budget = 0)', () => {
+  const { affordsFeature } = require('../src/services/feature-cost-estimator');
+  const r = affordsFeature('FREE', 'paraphrase', { calls: 100 });
+  assert.equal(r.affords, false);
+  assert.equal(r.budgetCredits, 0);
+  assert.equal(r.headroomPct, 0);
+  assert.equal(r.reason, 'plan_has_no_premium_budget');
+});
+
+test('affordsFeature: ENTERPRISE always affords (unlimited)', () => {
+  const { affordsFeature } = require('../src/services/feature-cost-estimator');
+  const r = affordsFeature('ENTERPRISE', 'paraphrase', { calls: 1_000_000, avgTextLength: 10000 });
+  assert.equal(r.affords, true);
+  assert.equal(r.budgetCredits, null);
+  assert.equal(r.headroomPct, 100);
+});
+
+test('affordsFeature: PRO with 100k paraphrase calls → exceeds budget', () => {
+  const { affordsFeature } = require('../src/services/feature-cost-estimator');
+  // 100k × 11 (1+10) = 1.1M credits, PRO budget 100k
+  const r = affordsFeature('PRO', 'paraphrase', { calls: 100_000, avgTextLength: 10000 });
+  assert.equal(r.affords, false);
+  assert.equal(r.reason, 'exceeds_plan_budget');
+});
+
+test('affordsFeature: unknown plan returns null', () => {
+  const { affordsFeature } = require('../src/services/feature-cost-estimator');
+  assert.equal(affordsFeature('MYSTERY', 'paraphrase', { calls: 10 }), null);
+});
+
+test('affordsFeature: unknown feature reports unknown_feature reason', () => {
+  const { affordsFeature } = require('../src/services/feature-cost-estimator');
+  const r = affordsFeature('PRO', 'mystery_feature', { calls: 10 });
+  assert.equal(r.affords, false);
+  assert.equal(r.reason, 'unknown_feature');
+});
+
+test('affordsFeature: case-insensitive plan name', () => {
+  const { affordsFeature } = require('../src/services/feature-cost-estimator');
+  const r = affordsFeature('pro', 'paraphrase', { calls: 10 });
+  assert.equal(r.plan, 'PRO');
+});
+
+test('affordsFeature: 0 calls projects 0 credits (always affords on paid plan)', () => {
+  const { affordsFeature } = require('../src/services/feature-cost-estimator');
+  const r = affordsFeature('PRO', 'paraphrase', { calls: 0 });
+  assert.equal(r.affords, true);
+  assert.equal(r.projectedCredits, 0);
+});
