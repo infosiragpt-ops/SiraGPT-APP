@@ -334,6 +334,45 @@ router.post(
   },
 );
 
+// Explicit endpoint inventory — kept here so the surface stays
+// discoverable without traversing Express's router internals. Same
+// FNV-1a fingerprint pattern as /api/free-ia so cache invalidation
+// rules are uniform across the API.
+const ENDPOINT_INVENTORY = Object.freeze([
+  { method: 'GET',  path: '/api/paraphrase/modes',         auth: 'public', returns: 'supported modes + languages + cost ratio' },
+  { method: 'POST', path: '/api/paraphrase/score',         auth: 'public', returns: 'AI-score breakdown + verdict' },
+  { method: 'POST', path: '/api/paraphrase/score/batch',   auth: 'public', returns: 'per-text scores + aggregate verdict' },
+  { method: 'POST', path: '/api/paraphrase/humanize',      auth: 'public', returns: 'humanized text (no LLM)' },
+  { method: 'POST', path: '/api/paraphrase',               auth: 'user',   returns: 'paraphrased text + humanizer pass' },
+]);
+
+const SURFACE_VERSION = 'v1.1';
+
+function apiSurfaceFingerprint() {
+  const sorted = ENDPOINT_INVENTORY
+    .map((e) => `${e.method}:${e.path}:${e.auth}`)
+    .sort()
+    .join('|');
+  const seed = `${SURFACE_VERSION}|${sorted}`;
+  let h = 0x811c9dc5;
+  for (let i = 0; i < seed.length; i += 1) {
+    h ^= seed.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, '0');
+}
+
+// Augmented /modes — adds endpoint inventory + surface version + fingerprint.
+// Useful for the model picker / settings UI to render "paraphrase
+// supports: score, batch, humanize, …" without hardcoding the list.
+router.get('/surface', (_req, res) => {
+  res.json({
+    surfaceVersion: SURFACE_VERSION,
+    apiFingerprint: apiSurfaceFingerprint(),
+    endpoints: ENDPOINT_INVENTORY,
+  });
+});
+
 module.exports = router;
 module.exports.ParaphraseSchema = ParaphraseSchema;
 module.exports.SUPPORTED_MODES = SUPPORTED_MODES;
@@ -341,3 +380,6 @@ module.exports.SUPPORTED_LANGUAGES = SUPPORTED_LANGUAGES;
 module.exports.paraphraseCost = paraphraseCost;
 module.exports.resolveMaxTextLength = resolveMaxTextLength;
 module.exports.MAX_TEXT_LENGTH = MAX_TEXT_LENGTH;
+module.exports.ENDPOINT_INVENTORY = ENDPOINT_INVENTORY;
+module.exports.SURFACE_VERSION = SURFACE_VERSION;
+module.exports.apiSurfaceFingerprint = apiSurfaceFingerprint;

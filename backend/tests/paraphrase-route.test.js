@@ -311,6 +311,48 @@ test('POST /api/paraphrase/score/batch: > 50 texts returns 413', async () => {
   }
 });
 
+test('apiSurfaceFingerprint: returns an 8-char hex string', () => {
+  const { apiSurfaceFingerprint } = paraphraseRoute;
+  const fp = apiSurfaceFingerprint();
+  assert.equal(typeof fp, 'string');
+  assert.equal(fp.length, 8);
+  assert.match(fp, /^[0-9a-f]+$/);
+});
+
+test('apiSurfaceFingerprint: identical across calls (deterministic)', () => {
+  const { apiSurfaceFingerprint } = paraphraseRoute;
+  assert.equal(apiSurfaceFingerprint(), apiSurfaceFingerprint());
+});
+
+test('ENDPOINT_INVENTORY: frozen and includes the public preview endpoints', () => {
+  const { ENDPOINT_INVENTORY } = paraphraseRoute;
+  assert.ok(Object.isFrozen(ENDPOINT_INVENTORY));
+  const paths = ENDPOINT_INVENTORY.map((e) => e.path);
+  assert.ok(paths.includes('/api/paraphrase/score'));
+  assert.ok(paths.includes('/api/paraphrase/score/batch'));
+  assert.ok(paths.includes('/api/paraphrase/humanize'));
+});
+
+test('GET /api/paraphrase/surface: returns version + fingerprint + inventory', async () => {
+  const { server, baseURL } = await startScoreServer();
+  try {
+    const resp = await new Promise((resolve, reject) => {
+      http.get(`${baseURL}/api/paraphrase/surface`, (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => resolve({ status: res.statusCode, body: JSON.parse(Buffer.concat(chunks).toString('utf8')) }));
+      }).on('error', reject);
+    });
+    assert.equal(resp.status, 200);
+    assert.equal(typeof resp.body.surfaceVersion, 'string');
+    assert.match(resp.body.apiFingerprint, /^[0-9a-f]{8}$/);
+    assert.ok(Array.isArray(resp.body.endpoints));
+    assert.ok(resp.body.endpoints.length >= 5);
+  } finally {
+    server.close();
+  }
+});
+
 test('POST /api/paraphrase/humanize: long input routes through humanizeChunked', async () => {
   const { server, baseURL } = await startScoreServer();
   try {
