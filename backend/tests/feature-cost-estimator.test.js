@@ -658,3 +658,36 @@ test('quickEstimate: non-array input returns []', () => {
   assert.deepEqual(quickEstimate(null), []);
   assert.deepEqual(quickEstimate('paraphrase'), []);
 });
+
+test('monthlyBreakdownAsMarkdown: renders GFM table with header + rows + TOTAL', () => {
+  const { monthlyBreakdownAsMarkdown } = require('../src/services/feature-cost-estimator');
+  const projection = estimateMonthlyCost({
+    paraphrase: { calls: 10, avgTextLength: 2000 },
+    image_generation: { calls: 5 },
+  });
+  const md = monthlyBreakdownAsMarkdown(projection);
+  assert.ok(md.includes('| Feature | Calls'));
+  assert.ok(md.includes('|---------|-------|'));
+  assert.ok(md.includes('| paraphrase | 10 | 3 | 30 |'));
+  assert.ok(md.includes('| image_generation | 5 | 5 | 25 |'));
+  assert.ok(md.includes('| **TOTAL** |  |  | **55**'));
+  // Always ends with newline
+  assert.ok(md.endsWith('\n'));
+});
+
+test('monthlyBreakdownAsMarkdown: empty projection still returns header-only table', () => {
+  const { monthlyBreakdownAsMarkdown } = require('../src/services/feature-cost-estimator');
+  const md = monthlyBreakdownAsMarkdown(estimateMonthlyCost({}));
+  // header + divider + TOTAL row (no feature rows)
+  const lines = md.trimEnd().split('\n');
+  assert.equal(lines.length, 3);
+  assert.ok(lines[2].includes('**TOTAL**'));
+  assert.ok(lines[2].includes('**0**'));
+});
+
+test('monthlyBreakdownAsMarkdown: null projection returns header-only table', () => {
+  const { monthlyBreakdownAsMarkdown } = require('../src/services/feature-cost-estimator');
+  const md = monthlyBreakdownAsMarkdown(null);
+  assert.ok(md.includes('| Feature | Calls'));
+  assert.ok(!md.includes('TOTAL'));
+});

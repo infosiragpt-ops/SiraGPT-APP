@@ -212,6 +212,34 @@ function monthlyBreakdownAsCsv(projection) {
   return rows.join('\n') + '\n';
 }
 
+/**
+ * Render an estimateMonthlyCost result as a GitHub-flavoured Markdown
+ * table. Convenient when the chat AI needs to explain projected
+ * spend in conversation ("Here's what you'd spend each month: …").
+ *
+ * Output:
+ *   | Feature | Calls | Credits/call | Monthly credits | Monthly USD |
+ *   |---------|-------|--------------|-----------------|-------------|
+ *   | paraphrase | 10 | 3 | 30 | ≈ <$0.01 |
+ *   | **TOTAL** |  |  | **30** | **≈ <$0.01** |
+ *
+ * Returns the empty markdown table when projection is null / empty.
+ */
+function monthlyBreakdownAsMarkdown(projection) {
+  const header = '| Feature | Calls | Credits/call | Monthly credits | Monthly USD |';
+  const divider = '|---------|-------|--------------|-----------------|-------------|';
+  if (!projection || typeof projection !== 'object') {
+    return `${header}\n${divider}\n`;
+  }
+  const lines = [header, divider];
+  const perFeature = projection.perFeature || {};
+  for (const [feature, row] of Object.entries(perFeature)) {
+    lines.push(`| ${feature} | ${row.calls} | ${row.perCallCredits} | ${row.monthlyCredits} | ${row.monthlyUsd || ''} |`);
+  }
+  lines.push(`| **TOTAL** |  |  | **${projection.totalMonthly || 0}** | **${projection.totalMonthlyUsd || ''}** |`);
+  return lines.join('\n') + '\n';
+}
+
 function creditsToUsdCents(credits) {
   const n = Number(credits) || 0;
   if (n <= 0) return 0;
@@ -470,6 +498,7 @@ module.exports = {
   estimateCostBatch,
   estimateMonthlyCost,
   monthlyBreakdownAsCsv,
+  monthlyBreakdownAsMarkdown,
   pricingTable,
   quickEstimate,
   comparePlans,
