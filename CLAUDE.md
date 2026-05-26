@@ -468,6 +468,9 @@ recommendations, used by `/api/free-ia/info`, `/api/free-ia/digest`,
 - `validatePlanName(plan)` — cheap pre-Zod validator (case-insensitive)
 - `pricingTable()` — all enriched plans sorted by price (UI grid + dropdowns)
 - `monthlyBreakdownAsCsv(projection)` — RFC-4180 CSV export for Excel/Sheets
+- `comparePlans(from, to)` — structured plan-vs-plan diff for upsell UI
+- `recommendUpgradeFromUsage(usage, currentPlan)` — one-call upsell helper
+- `findCheapestPlanForBudget(maxUsd)` — best plan within $/month budget
 
 Pricing constants:
 - `USD_PER_CREDIT = 5/100_000` (PRO ratio)
@@ -475,7 +478,22 @@ Pricing constants:
 - `PLAN_BUDGETS    = { FREE:0, PRO:100k, PRO_MAX:300k, ENTERPRISE:null }`
 - `POPULAR_PLAN    = 'PRO'`
 
-58+ unit tests in `feature-cost-estimator.test.js`.
+Public endpoints exposing the helpers:
+- `GET  /api/free-ia/plans`     — pricingTable
+- `GET  /api/free-ia/budget`    — findCheapestPlanForBudget
+- `GET  /api/free-ia/compare`   — comparePlans (?from=&to=)
+- `POST /api/free-ia/estimate`  — estimateCostBatch + recommendUpgradeFromUsage
+- `GET  /api/free-ia/digest`    — userQuotaDigest with inlined planInfo
+
+77+ unit tests in `feature-cost-estimator.test.js`.
+
+## Paraphrase route — public preview endpoints (no auth, no credits)
+
+Two free local-compute endpoints the frontend uses to give users a
+"try before you pay" experience:
+
+- `POST /api/paraphrase/score`     — estimateAIScoreDetailed → score + components + verdict (likely_ai/mixed/likely_human) + topTells
+- `POST /api/paraphrase/humanize`  — humanizeText / humanizeChunked (large inputs); no LLM call, just the AI-tell-pattern cleaner
 
 ## ⚡ FlashGPT (Cerebras Llama 3.1 8B) — added 2026-05-25, rebranded to FlashGPT
 
