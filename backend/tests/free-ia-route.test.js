@@ -189,6 +189,13 @@ test('POST /api/free-ia/estimate with currentPlan returns costDelta', async () =
     assert.equal(resp.body.costDelta.toPlan, 'PRO');
     assert.equal(resp.body.costDelta.deltaUsd, 5);
     assert.equal(resp.body.costDelta.upgrade, true);
+    // /estimate now also returns a structured upsell suggestion when
+    // currentPlan is supplied — recommendUpgradeFromUsage output.
+    assert.ok(resp.body.upsell, 'upsell payload should be present');
+    assert.equal(resp.body.upsell.shouldUpgrade, true);
+    assert.equal(resp.body.upsell.recommendation.plan, 'PRO');
+    assert.equal(resp.body.upsell.comparison.direction, 'upgrade');
+    assert.equal(resp.body.upsell.comparison.priceDeltaUsd, 5);
   } finally {
     server.close();
   }
