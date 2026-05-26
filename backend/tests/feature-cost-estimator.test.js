@@ -282,6 +282,9 @@ test('validatePlanName: returns false for unknown/invalid input', () => {
   assert.equal(validatePlanName(null), false);
   assert.equal(validatePlanName(123), false);
   assert.equal(validatePlanName(undefined), false);
+  assert.equal(validatePlanName({}), false);
+  assert.equal(validatePlanName([]), false);
+  assert.equal(validatePlanName(true), false);
 });
 
 test('enrichPlanWithPricing: case-insensitive, unknown plan returns null', () => {
