@@ -154,6 +154,7 @@ test('GET /api/free-ia/brand returns the constants for frontend localisation', a
     assert.equal(body.displayName, 'Free IA');
     assert.equal(body.defaultModel, 'llama-3.1-8b');
     assert.equal(body.provider, 'Cerebras');
+    assert.equal(body.family, 'llama-3.1', 'family should be derived for picker grouping');
     // Brand endpoint should NOT depend on the API key being set.
     assert.equal(body.apiKey, undefined);
   } finally {

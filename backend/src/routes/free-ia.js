@@ -69,10 +69,19 @@ router.get('/configured', (_req, res) => {
 // Brand constants for frontend localisation / hardcoded labels (e.g. a
 // /loading screen that needs the brand name before /status responds).
 router.get('/brand', (_req, res) => {
+  // family derived from DEFAULT_MODEL for picker grouping consistency
+  // with /info → descriptor.family.
+  let family = 'unknown';
+  try {
+    // eslint-disable-next-line global-require
+    const { inferModelFamily } = require('../services/ai/cerebras-client');
+    family = inferModelFamily(DEFAULT_MODEL);
+  } catch { /* best-effort */ }
   res.json({
     displayName: DEFAULT_DISPLAY_NAME,
     defaultModel: DEFAULT_MODEL,
     provider: PROVIDER_NAME,
+    family,
   });
 });
 
