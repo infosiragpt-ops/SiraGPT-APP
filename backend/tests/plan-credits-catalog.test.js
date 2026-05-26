@@ -196,6 +196,20 @@ test('suggestUpgradePlan: ENTERPRISE unlimited returns null', () => {
   );
 });
 
+test('isWithinFreeIaQuota: unlimited plan returns ok=true + dailyLimit=null', () => {
+  const { isWithinFreeIaQuota } = require('../src/services/model-quota-router');
+  const r = isWithinFreeIaQuota({ plan: 'PRO' });
+  assert.equal(r.ok, true);
+  assert.equal(r.dailyLimit, null);
+  assert.equal(r.remaining, null);
+});
+
+test('isWithinFreeIaQuota: handles null user (anonymous) gracefully', () => {
+  const { isWithinFreeIaQuota } = require('../src/services/model-quota-router');
+  const r = isWithinFreeIaQuota(null);
+  assert.equal(typeof r.ok, 'boolean');
+});
+
 test('suggestUpgradePlan: null/empty digest returns null safely', () => {
   const { suggestUpgradePlan } = require('../src/services/model-quota-router');
   assert.equal(suggestUpgradePlan(null), null);

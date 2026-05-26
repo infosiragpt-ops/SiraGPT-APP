@@ -230,6 +230,30 @@ function persistModelPreference(settings, modelId) {
  *   PRO_MAX   (pctUsed >= 80%)              → suggest ENTERPRISE
  *   ENTERPRISE (unlimited)                  → null
  */
+/**
+ * Lightweight per-request check: can this user still use the free
+ * tier today? Doesn't decrement anything — that's the rate limiter's
+ * job. Pure projection of `buildModelQuotaPolicy(user).calls`.
+ *
+ * Returns { ok, remaining, dailyLimit }.
+ *   ok=true   → the call is allowed
+ *   ok=false  → daily limit reached (UI should show upgrade nudge)
+ *   dailyLimit=null → no per-day cap (e.g. unlimited plan)
+ */
+function isWithinFreeIaQuota(user, env = process.env) {
+  const policy = buildModelQuotaPolicy(user, env);
+  const calls = policy.calls || {};
+  if (calls.dailyLimit == null) {
+    return { ok: true, remaining: null, dailyLimit: null };
+  }
+  const remaining = Number(calls.remaining || 0);
+  return {
+    ok: remaining > 0,
+    remaining,
+    dailyLimit: calls.dailyLimit,
+  };
+}
+
 function suggestUpgradePlan(digest) {
   if (!digest || !digest.plan) return null;
   if (digest.plan === 'FREE') {
@@ -292,5 +316,6 @@ module.exports = {
   persistModelPreference,
   userQuotaDigest,
   suggestUpgradePlan,
+  isWithinFreeIaQuota,
   toBigInt,
 };
