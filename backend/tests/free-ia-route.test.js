@@ -299,8 +299,8 @@ test('GET /api/free-ia/info: includes apiFingerprint (stable + 8 hex chars)', as
   }
 });
 
-test('SCHEMA_VERSION is at v3.4 (latest additive shape)', () => {
-  assert.equal(SCHEMA_VERSION, 'v3.4');
+test('SCHEMA_VERSION is at v3.5 (latest additive shape)', () => {
+  assert.equal(SCHEMA_VERSION, 'v3.5');
 });
 
 test('GET /api/free-ia/info: includes schemaVersion for client cache invalidation', async () => {
@@ -468,6 +468,43 @@ test('GET /api/free-ia/budget?maxUsdPerMonth=abc returns 400', async () => {
     const { status, body } = await fetchJSON(`${baseURL}/api/free-ia/budget?maxUsdPerMonth=abc`);
     assert.equal(status, 400);
     assert.equal(body.error, 'invalid_budget');
+  } finally {
+    server.close();
+  }
+});
+
+test('GET /api/free-ia/compare?from=FREE&to=PRO → upgrade diff', async () => {
+  const { server, baseURL } = await startServer();
+  try {
+    const { status, body } = await fetchJSON(`${baseURL}/api/free-ia/compare?from=FREE&to=PRO`);
+    assert.equal(status, 200);
+    assert.equal(body.direction, 'upgrade');
+    assert.equal(body.priceDeltaUsd, 5);
+    assert.equal(body.budgetDeltaCredits, 100_000);
+    assert.equal(body.from.plan, 'FREE');
+    assert.equal(body.to.plan, 'PRO');
+  } finally {
+    server.close();
+  }
+});
+
+test('GET /api/free-ia/compare without ?from/?to returns 400', async () => {
+  const { server, baseURL } = await startServer();
+  try {
+    const { status, body } = await fetchJSON(`${baseURL}/api/free-ia/compare`);
+    assert.equal(status, 400);
+    assert.equal(body.error, 'missing_plans');
+  } finally {
+    server.close();
+  }
+});
+
+test('GET /api/free-ia/compare with unknown plan returns 400', async () => {
+  const { server, baseURL } = await startServer();
+  try {
+    const { status, body } = await fetchJSON(`${baseURL}/api/free-ia/compare?from=FREE&to=MYSTERY`);
+    assert.equal(status, 400);
+    assert.equal(body.error, 'unknown_plan');
   } finally {
     server.close();
   }

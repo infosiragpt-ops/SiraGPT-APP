@@ -150,6 +150,27 @@ router.get('/budget', (req, res) => {
   }
 });
 
+// Side-by-side plan comparison for the upgrade page. Public so the
+// marketing pricing page can render "FREE vs PRO" cards without a
+// session.
+router.get('/compare', (req, res) => {
+  try {
+    // eslint-disable-next-line global-require
+    const { comparePlans } = require('../services/feature-cost-estimator');
+    const { from, to } = req.query;
+    if (typeof from !== 'string' || typeof to !== 'string') {
+      return res.status(400).json({ error: 'missing_plans', message: 'both ?from and ?to plan names are required' });
+    }
+    const result = comparePlans(from, to);
+    if (!result) {
+      return res.status(400).json({ error: 'unknown_plan', message: 'from or to is not a known plan name' });
+    }
+    return res.json(result);
+  } catch (err) {
+    return res.status(500).json({ error: 'compare_failed', message: err && err.message });
+  }
+});
+
 // Brand constants for frontend localisation / hardcoded labels (e.g. a
 // /loading screen that needs the brand name before /status responds).
 router.get('/brand', (_req, res) => {
@@ -174,7 +195,7 @@ router.get('/brand', (_req, res) => {
 // feature), schemaVersion, apiFingerprint, humanizer.tellsByLanguage,
 // BRAND export, /plans endpoint, /digest endpoint, /estimate +
 // forecastUsage/currentPlan support.
-const SCHEMA_VERSION = 'v3.4';
+const SCHEMA_VERSION = 'v3.5';
 
 /**
  * Deterministic short fingerprint of the API surface. Computed from
@@ -209,6 +230,7 @@ const ENDPOINT_INVENTORY = Object.freeze([
   { method: 'GET',  path: '/api/free-ia/digest',           auth: 'user',   returns: 'per-user quota digest (plan + fallback + hints)' },
   { method: 'GET',  path: '/api/free-ia/plans',            auth: 'public', returns: 'enriched plan list for pricing table' },
   { method: 'GET',  path: '/api/free-ia/budget',           auth: 'public', returns: 'best plan within ?maxUsdPerMonth budget' },
+  { method: 'GET',  path: '/api/free-ia/compare',          auth: 'public', returns: 'plan-vs-plan diff for ?from + ?to' },
   { method: 'POST', path: '/api/free-ia/estimate',         auth: 'public', returns: 'batch cost estimates for {items: [{feature, textLength}]}' },
   { method: 'GET',  path: '/api/free-ia/metrics',          auth: 'public', returns: 'JSON snapshot' },
   { method: 'GET',  path: '/api/free-ia/metrics/summary',  auth: 'public', returns: 'one-line digest (?format=text for plain)' },
