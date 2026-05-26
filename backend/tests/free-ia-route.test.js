@@ -51,6 +51,18 @@ test('exports apiSurfaceFingerprint + SCHEMA_VERSION + ENDPOINT_INVENTORY direct
   assert.match(a, /^[0-9a-f]{8}$/);
 });
 
+test('ENDPOINT_INVENTORY is frozen — accidental mutation can\'t silently break the fingerprint', () => {
+  assert.ok(Object.isFrozen(ENDPOINT_INVENTORY));
+  // Verify entries can't be mutated either (each row should be a plain
+  // object — freezing the array doesn't freeze the rows).
+  try {
+    ENDPOINT_INVENTORY.push({ method: 'GET', path: '/api/free-ia/sneaky', auth: 'public', returns: 'nothing' });
+    assert.fail('frozen array should refuse push');
+  } catch (e) {
+    assert.ok(e instanceof TypeError, `expected TypeError, got ${e.constructor.name}`);
+  }
+});
+
 test('GET /api/free-ia/status reports disabled when CEREBRAS_API_KEY is unset', async () => {
   const prevKey = process.env.CEREBRAS_API_KEY;
   delete process.env.CEREBRAS_API_KEY;
