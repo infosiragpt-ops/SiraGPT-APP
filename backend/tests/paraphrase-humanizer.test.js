@@ -338,3 +338,43 @@ test('topAITellsFound: clean text with no AI tells returns empty array', () => {
   const hits = topAITellsFound('The cat sat on the mat. It was a sunny day.');
   assert.deepEqual(hits, []);
 });
+
+test('estimateAIScoreDetailed: returns { score, components, weights } for AI-heavy text', () => {
+  const { estimateAIScoreDetailed } = require('../src/services/paraphrase-humanizer');
+  const aiLike = 'Furthermore, the analysis demonstrates significant impact. Moreover, results indicate strong correlation. Additionally, the methodology supports the conclusion. In conclusion, the findings are robust.';
+  const r = estimateAIScoreDetailed(aiLike);
+  assert.ok(r.score > 0.3, `AI-heavy text should score > 0.3, got ${r.score}`);
+  // Components shape
+  assert.equal(typeof r.components.tellDensity, 'number');
+  assert.equal(typeof r.components.burstinessScore, 'number');
+  assert.equal(typeof r.components.repetitiveOpenings, 'number');
+  assert.equal(typeof r.components.emDashDensity, 'number');
+  // Weights shape — sums to 1
+  const sumWeights = r.weights.tellDensity + r.weights.burstinessScore + r.weights.repetitiveOpenings + r.weights.emDashDensity;
+  assert.ok(Math.abs(sumWeights - 1) < 0.0001, `weights should sum to 1, got ${sumWeights}`);
+});
+
+test('estimateAIScoreDetailed: short input returns { score: 0, components: null }', () => {
+  const { estimateAIScoreDetailed } = require('../src/services/paraphrase-humanizer');
+  const r = estimateAIScoreDetailed('Hi.');
+  assert.equal(r.score, 0);
+  assert.equal(r.components, null);
+});
+
+test('estimateAIScoreDetailed matches estimateAIScore exactly', () => {
+  const { estimateAIScore, estimateAIScoreDetailed } = require('../src/services/paraphrase-humanizer');
+  const text = 'Furthermore, the analysis demonstrates significant impact. Moreover, results indicate strong correlation. Additionally, the methodology supports the conclusion. In conclusion, the findings are robust.';
+  assert.equal(estimateAIScoreDetailed(text).score, estimateAIScore(text));
+});
+
+test('estimateAIScoreDetailed: scores reflect weighted sum of components', () => {
+  const { estimateAIScoreDetailed } = require('../src/services/paraphrase-humanizer');
+  const text = 'Furthermore, the analysis demonstrates significant impact. Moreover, results indicate strong correlation. Additionally, the methodology supports the conclusion. In conclusion, the findings are robust.';
+  const r = estimateAIScoreDetailed(text);
+  const weighted = 0.4 * r.components.tellDensity
+    + 0.3 * r.components.burstinessScore
+    + 0.2 * r.components.repetitiveOpenings
+    + 0.1 * r.components.emDashDensity;
+  // Allow tiny rounding tolerance
+  assert.ok(Math.abs(r.score - weighted) < 0.01, `score ${r.score} ≈ weighted ${weighted}`);
+});
