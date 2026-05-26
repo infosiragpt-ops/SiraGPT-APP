@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { estimateCost, listFeatures, FEATURE_COSTS } = require('../src/services/feature-cost-estimator');
+const { estimateCost, estimateCostBatch, listFeatures, FEATURE_COSTS } = require('../src/services/feature-cost-estimator');
 
 test('listFeatures: includes paraphrase + image_* + generate', () => {
   const f = listFeatures();
@@ -55,4 +55,32 @@ test('estimateCost: returns a breakdown for the UI to render', () => {
 
 test('FEATURE_COSTS is frozen — accidental mutation refused', () => {
   assert.ok(Object.isFrozen(FEATURE_COSTS));
+});
+
+test('estimateCostBatch: returns parallel estimates for valid features', () => {
+  const out = estimateCostBatch([
+    { feature: 'paraphrase', textLength: 1000 },
+    { feature: 'image_generation' },
+    { feature: 'image_upscale' },
+  ]);
+  assert.equal(out.length, 3);
+  assert.equal(out[0].feature, 'paraphrase');
+  assert.equal(out[0].credits, 2);
+  assert.equal(out[1].credits, 5);
+  assert.equal(out[2].credits, 3);
+});
+
+test('estimateCostBatch: silently drops unknown features', () => {
+  const out = estimateCostBatch([
+    { feature: 'paraphrase', textLength: 0 },
+    { feature: 'mystery_feature' },
+    { feature: 'image_generation' },
+  ]);
+  assert.equal(out.length, 2);
+  assert.ok(!out.find((r) => r.feature === 'mystery_feature'));
+});
+
+test('estimateCostBatch: non-array input returns []', () => {
+  assert.deepEqual(estimateCostBatch(null), []);
+  assert.deepEqual(estimateCostBatch('not an array'), []);
 });

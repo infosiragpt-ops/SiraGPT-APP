@@ -79,8 +79,28 @@ function listFeatures() {
   return Object.keys(FEATURE_COSTS);
 }
 
+/**
+ * Batch variant — estimate costs for many features at once. Useful
+ * for a comparison table ("paraphrasing this would cost X, generating
+ * an image would cost Y"). Skips unknown features silently.
+ *
+ * @param {Array<{feature: string, textLength?: number}>} requests
+ * @returns {Array<{feature, credits, breakdown}>}
+ */
+function estimateCostBatch(requests, { env = process.env } = {}) {
+  if (!Array.isArray(requests)) return [];
+  const out = [];
+  for (const r of requests) {
+    if (!r || !r.feature) continue;
+    const est = estimateCost(r.feature, { textLength: r.textLength || 0, env });
+    if (est) out.push({ feature: r.feature, credits: est.credits, breakdown: est.breakdown });
+  }
+  return out;
+}
+
 module.exports = {
   estimateCost,
+  estimateCostBatch,
   listFeatures,
   FEATURE_COSTS,
 };
