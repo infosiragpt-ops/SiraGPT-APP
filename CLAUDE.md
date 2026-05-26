@@ -463,8 +463,11 @@ recommendations, used by `/api/free-ia/info`, `/api/free-ia/digest`,
 - `getCostDelta(currentPlan, recommendedPlan)` — $ delta for upsell
 - `formatCreditsAsUsd(credits)` — "≈ $0.05" label format
 - `creditsToUsdCents(credits)` — integer-cent for financial reports
+- `creditsForUsd(usd)` — inverse of creditsToUsdCents (top-up flows)
 - `enrichPlanWithPricing(plan)` — full plan-card data + popular flag
 - `validatePlanName(plan)` — cheap pre-Zod validator (case-insensitive)
+- `pricingTable()` — all enriched plans sorted by price (UI grid + dropdowns)
+- `monthlyBreakdownAsCsv(projection)` — RFC-4180 CSV export for Excel/Sheets
 
 Pricing constants:
 - `USD_PER_CREDIT = 5/100_000` (PRO ratio)
@@ -472,7 +475,7 @@ Pricing constants:
 - `PLAN_BUDGETS    = { FREE:0, PRO:100k, PRO_MAX:300k, ENTERPRISE:null }`
 - `POPULAR_PLAN    = 'PRO'`
 
-45+ unit tests in `feature-cost-estimator.test.js`.
+58+ unit tests in `feature-cost-estimator.test.js`.
 
 ## ⚡ FlashGPT (Cerebras Llama 3.1 8B) — added 2026-05-25, rebranded to FlashGPT
 
