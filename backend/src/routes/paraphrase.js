@@ -148,13 +148,18 @@ router.post(
       if (wantHumanize && typeof raw === 'string' && raw.trim()) {
         try {
           // eslint-disable-next-line global-require
-          const { humanizeText } = require('../services/paraphrase-humanizer');
+          const { humanizeText, humanizeChunked } = require('../services/paraphrase-humanizer');
           const intensity = String(req.query?.intensity || 'medium')
             .toLowerCase();
           const safeIntensity = ['low', 'medium', 'high'].includes(intensity)
             ? intensity
             : 'medium';
-          const humanized = humanizeText({
+          // Use the chunked variant for long inputs (>8000 chars) so a
+          // single big paste doesn't pay the full regex cost in one
+          // pass and the response stays responsive.
+          const useChunked = typeof raw === 'string' && raw.length > 8000;
+          const runner = useChunked ? humanizeChunked : humanizeText;
+          const humanized = runner({
             text: raw,
             language,
             intensity: safeIntensity,
@@ -166,6 +171,8 @@ router.post(
             deltaScore: humanized.deltaScore,
             transformations: humanized.applied.length,
             intensity: humanized.intensity,
+            chunked: !!humanized.chunked,
+            chunkCount: humanized.chunkCount || 1,
           };
         } catch (humanizeErr) {
           // Humanizer is best-effort: a failure must not break the
