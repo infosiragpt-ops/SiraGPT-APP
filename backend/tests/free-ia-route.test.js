@@ -201,6 +201,74 @@ test('POST /api/free-ia/estimate with currentPlan returns costDelta', async () =
   }
 });
 
+test('POST /api/free-ia/estimate with format=csv inlines the CSV breakdown', async () => {
+  const { server, baseURL } = await startServer();
+  try {
+    const payload = JSON.stringify({
+      items: [],
+      forecastUsage: { paraphrase: { calls: 10, avgTextLength: 1000 } },
+      format: 'csv',
+    });
+    const resp = await new Promise((resolve, reject) => {
+      const url = new URL(`${baseURL}/api/free-ia/estimate`);
+      const req = http.request({
+        method: 'POST',
+        hostname: url.hostname,
+        port: url.port,
+        path: url.pathname,
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
+      }, (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => resolve({ status: res.statusCode, body: JSON.parse(Buffer.concat(chunks).toString('utf8')) }));
+      });
+      req.on('error', reject);
+      req.write(payload);
+      req.end();
+    });
+    assert.equal(resp.status, 200);
+    assert.equal(typeof resp.body.csv, 'string');
+    assert.ok(resp.body.csv.startsWith('feature,calls'));
+    assert.ok(resp.body.csv.includes('"paraphrase"'));
+  } finally {
+    server.close();
+  }
+});
+
+test('POST /api/free-ia/estimate with format=markdown inlines GFM table', async () => {
+  const { server, baseURL } = await startServer();
+  try {
+    const payload = JSON.stringify({
+      items: [],
+      forecastUsage: { paraphrase: { calls: 10, avgTextLength: 1000 } },
+      format: 'markdown',
+    });
+    const resp = await new Promise((resolve, reject) => {
+      const url = new URL(`${baseURL}/api/free-ia/estimate`);
+      const req = http.request({
+        method: 'POST',
+        hostname: url.hostname,
+        port: url.port,
+        path: url.pathname,
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
+      }, (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => resolve({ status: res.statusCode, body: JSON.parse(Buffer.concat(chunks).toString('utf8')) }));
+      });
+      req.on('error', reject);
+      req.write(payload);
+      req.end();
+    });
+    assert.equal(resp.status, 200);
+    assert.equal(typeof resp.body.markdown, 'string');
+    assert.ok(resp.body.markdown.includes('| Feature | Calls'));
+    assert.ok(resp.body.markdown.includes('| paraphrase |'));
+  } finally {
+    server.close();
+  }
+});
+
 test('POST /api/free-ia/estimate with forecastUsage returns monthlyProjection + recommendedPlan', async () => {
   const { server, baseURL } = await startServer();
   try {
