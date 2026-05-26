@@ -489,11 +489,13 @@ Public endpoints exposing the helpers:
 
 ## Paraphrase route — public preview endpoints (no auth, no credits)
 
-Two free local-compute endpoints the frontend uses to give users a
+Local-compute endpoints the frontend uses to give users a
 "try before you pay" experience:
 
-- `POST /api/paraphrase/score`     — estimateAIScoreDetailed → score + components + verdict (likely_ai/mixed/likely_human) + topTells
-- `POST /api/paraphrase/humanize`  — humanizeText / humanizeChunked (large inputs); no LLM call, just the AI-tell-pattern cleaner
+- `POST /api/paraphrase/score`       — estimateAIScoreDetailed → score + components + verdict (likely_ai/mixed/likely_human) + topTells
+- `POST /api/paraphrase/score/batch` — multi-text scorer with aggregate ({total, likely_ai, mixed, likely_human, avgScore})
+- `POST /api/paraphrase/humanize`    — humanizeText / humanizeChunked (large inputs); no LLM call, just the AI-tell-pattern cleaner
+- `GET  /api/paraphrase/surface`     — surfaceVersion + ENDPOINT_INVENTORY + FNV-1a apiFingerprint for cache invalidation
 
 ## ⚡ FlashGPT (Cerebras Llama 3.1 8B) — added 2026-05-25, rebranded to FlashGPT
 
