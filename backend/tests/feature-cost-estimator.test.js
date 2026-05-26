@@ -421,3 +421,41 @@ test('monthlyBreakdownAsCsv: trailing newline so Excel/Sheets stops cleanly', ()
   }));
   assert.ok(csv.endsWith('\n'));
 });
+
+test('pricingTable: returns all 4 known plans sorted by price', () => {
+  const { pricingTable } = require('../src/services/feature-cost-estimator');
+  const table = pricingTable();
+  assert.equal(table.length, 4);
+  // FREE ($0) → ENTERPRISE ($2) → PRO ($5) → PRO_MAX ($10)
+  assert.equal(table[0].plan, 'FREE');
+  assert.equal(table[1].plan, 'ENTERPRISE');
+  assert.equal(table[2].plan, 'PRO');
+  assert.equal(table[3].plan, 'PRO_MAX');
+});
+
+test('pricingTable: each row is a fully-enriched plan record', () => {
+  const { pricingTable } = require('../src/services/feature-cost-estimator');
+  const proRow = pricingTable().find((p) => p.plan === 'PRO');
+  assert.equal(proRow.priceUsd, 5);
+  assert.equal(proRow.priceLabel, '$5/mo');
+  assert.equal(proRow.budgetCredits, 100_000);
+  assert.equal(proRow.budgetLabel, '100,000 credits');
+  assert.equal(proRow.popular, true);
+  assert.equal(proRow.unlimited, false);
+});
+
+test('pricingTable: monotonically non-decreasing prices', () => {
+  const { pricingTable } = require('../src/services/feature-cost-estimator');
+  const prices = pricingTable().map((p) => p.priceUsd);
+  for (let i = 1; i < prices.length; i++) {
+    assert.ok(prices[i] >= prices[i - 1], `prices not sorted ascending at index ${i}`);
+  }
+});
+
+test('pricingTable: ENTERPRISE row is unlimited', () => {
+  const { pricingTable } = require('../src/services/feature-cost-estimator');
+  const ent = pricingTable().find((p) => p.plan === 'ENTERPRISE');
+  assert.equal(ent.unlimited, true);
+  assert.equal(ent.budgetCredits, null);
+  assert.equal(ent.budgetLabel, 'Unlimited');
+});

@@ -315,11 +315,29 @@ function estimateCostBatch(requests, { env = process.env } = {}) {
   return out;
 }
 
+/**
+ * Returns every known plan as an enriched record, sorted by price
+ * (cheapest → most expensive). The pricing page can iterate this
+ * directly without having to discover the plan names.
+ *
+ * Useful when:
+ *   - rendering the pricing table grid
+ *   - generating <select> options for plan switching
+ *   - exporting the full price book for billing reports
+ */
+function pricingTable() {
+  return Object.keys(PLAN_PRICES_USD)
+    .map((plan) => enrichPlanWithPricing(plan))
+    .filter(Boolean)
+    .sort((a, b) => a.priceUsd - b.priceUsd);
+}
+
 module.exports = {
   estimateCost,
   estimateCostBatch,
   estimateMonthlyCost,
   monthlyBreakdownAsCsv,
+  pricingTable,
   getRecommendedPlan,
   getCostDelta,
   formatCreditsAsUsd,
