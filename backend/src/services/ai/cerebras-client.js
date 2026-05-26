@@ -10,9 +10,8 @@
  * adapter exists so route code does not have to remember the base URL or
  * env key, and so a single place owns the "is Free IA available?" check.
  *
- * The user-facing brand is "Free IA" (per the product spec in the
- * /Users/luis/Downloads/SIraGPT.docx product brief). The default model
- * is `llama-3.1-8b` — Cerebras's fastest free-tier Llama 3.1 SKU.
+ * The user-facing brand is "⚡ FlashGPT". The default model is
+ * `llama3.1-8b` — Cerebras's Llama 3.1 8B API id.
  *
  * Env vars (all optional):
  *   CEREBRAS_API_KEY        — required to actually make calls. When
@@ -22,9 +21,9 @@
  *   CEREBRAS_BASE_URL       — override the base URL (default
  *                             https://api.cerebras.ai/v1).
  *   FREE_IA_MODEL_ID        — override the model name reported by the
- *                             helper (default `llama-3.1-8b`).
+ *                             helper (default `llama3.1-8b`).
  *   FREE_IA_DISPLAY_NAME    — UI label shown in the model picker
- *                             (default `Free IA`).
+ *                             (default `⚡ FlashGPT`).
  *
  * Public API:
  *   getCerebrasConfig({ env }) → { enabled, apiKey, baseURL, model, displayName, reason }
@@ -34,8 +33,8 @@
  */
 
 const DEFAULT_BASE_URL = 'https://api.cerebras.ai/v1';
-const DEFAULT_MODEL = 'llama-3.1-8b';
-const DEFAULT_DISPLAY_NAME = 'Free IA';
+const DEFAULT_MODEL = 'llama3.1-8b';
+const DEFAULT_DISPLAY_NAME = '⚡ FlashGPT';
 const PROVIDER_NAME = 'Cerebras';
 
 let _OpenAICtor = null;
@@ -175,7 +174,7 @@ function buildFreeIaModelDescriptor({ env = process.env } = {}) {
     displayName: cfg.displayName,
     provider: cfg.provider,
     family,
-    description: 'Modelo gratuito SiraGPT (Cerebras Llama 3.1 8B) — usado como fallback cuando el plan se agota.',
+    description: 'Modelo gratuito e ilimitado de SiraGPT via Cerebras Llama 3.1 8B.',
     type: 'TEXT',
     icon: 'CerebrasLogo',
     virtual: true,

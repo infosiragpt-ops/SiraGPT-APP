@@ -108,8 +108,8 @@ describe("enforcePlanQuota — anonymous and unlimited paths", () => {
   });
 });
 
-describe("enforcePlanQuota — FREE plan call accounting", () => {
-  test("FREE user with quota left → headers set, next() called", () => {
+describe("enforcePlanQuota — FREE plan unlimited FlashGPT", () => {
+  test("FREE user → headers set as unlimited, next() called", () => {
     const mw = enforcePlanQuota({ surface: "document-ai" });
     const res = fakeRes();
     const next = fakeNext();
@@ -123,36 +123,9 @@ describe("enforcePlanQuota — FREE plan call accounting", () => {
     const { headers } = res._state();
     assert.equal(headers[HEADER_PLAN], "FREE");
     assert.equal(headers[HEADER_KIND], "calls");
-    assert.equal(headers[HEADER_LIMIT], "3");
-    assert.equal(headers[HEADER_USED], "1");
-    assert.equal(headers[HEADER_REMAINING], "2");
-  });
-
-  test("FREE user exhausted (0 remaining) → 429 with structured payload", () => {
-    const mw = enforcePlanQuota({ surface: "document-ai" });
-    const res = fakeRes();
-    const next = fakeNext();
-    mw(
-      {
-        user: { id: "u1", plan: "FREE", monthlyCallLimit: 0 },
-        method: "POST",
-        originalUrl: "/api/document-ai",
-      },
-      res,
-      next,
-    );
-    assert.equal(next.calls(), 0);
-    const { statusCode, payload, headers } = res._state();
-    assert.equal(statusCode, 429);
-    assert.equal(payload.error, "Plan quota exceeded");
-    assert.equal(payload.plan, "FREE");
-    assert.equal(payload.kind, "calls");
-    assert.equal(payload.upgradeRequired, true);
-    assert.equal(payload.surface, "document-ai");
-    // Headers MUST still be set on a denied request so the client
-    // can render quota state without an extra round-trip.
+    assert.equal(headers[HEADER_LIMIT], "0");
+    assert.equal(headers[HEADER_USED], "0");
     assert.equal(headers[HEADER_REMAINING], "0");
-    assert.equal(headers[HEADER_LIMIT], "3");
   });
 });
 
@@ -206,7 +179,7 @@ describe("enforcePlanQuota — feature flag", () => {
     const next = fakeNext();
     mw(
       {
-        user: { id: "u1", plan: "FREE", monthlyCallLimit: 0 },
+        user: { id: "u-pro", plan: "PRO", apiUsage: 600_000, monthlyLimit: 500_000 },
       },
       res,
       next,
@@ -216,6 +189,6 @@ describe("enforcePlanQuota — feature flag", () => {
     assert.equal(res._state().statusCode, 200);
     // Headers still surfaced — read-only telemetry stays on.
     assert.equal(res._state().headers[HEADER_REMAINING], "0");
-    assert.equal(res._state().headers[HEADER_USED], "3");
+    assert.equal(res._state().headers[HEADER_USED], "600000");
   });
 });

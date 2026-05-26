@@ -62,6 +62,10 @@ function enforceOrgBudgetSafe(req, res, next) {
 }
 const prisma = require('../config/database');
 const { tryConsumePlanQuota } = require('../services/plan-quota');
+const {
+  DEFAULT_MODEL: FLASHGPT_MODEL,
+  DEFAULT_DISPLAY_NAME: FLASHGPT_DISPLAY_NAME,
+} = require('../services/ai/cerebras-client');
 const aiService = require('../services/ai-service');
 const agentFilters = require('../services/agents/filters');
 const OpenAI = require('openai');
@@ -103,6 +107,17 @@ const tokenBudget = require('../services/ai/token-budget');
 // OTel span helpers — degrade to direct call when OTel isn't configured.
 let _otelSpans = null;
 try { _otelSpans = require('../utils/otel-spans'); } catch (_e) { _otelSpans = null; }
+
+function isFlashGptTurn(provider, model) {
+  const p = String(provider || '').toLowerCase();
+  const m = String(model || '').toLowerCase().replace(/[-_]/g, '');
+  const flashModel = String(FLASHGPT_MODEL || '').toLowerCase().replace(/[-_]/g, '');
+  return p === 'cerebras' && (m === flashModel || m === 'llama318b');
+}
+
+function buildFlashGptUpgradeNotice(turnNumber) {
+  return `${FLASHGPT_DISPLAY_NAME}: ya tienes ${turnNumber} consultas gratis. Puedes seguir usando este modelo de forma ilimitada; mejora tu plan cuando quieras acceder a modelos premium, mas velocidad avanzada y herramientas con mayor capacidad.`;
+}
 const withAIGenerateSpan = (_otelSpans && _otelSpans.withAIGenerateSpan)
   ? _otelSpans.withAIGenerateSpan
   : (_attrs, fn) => fn();
@@ -1231,6 +1246,7 @@ router.post(
       const isAuth = !!req.user;
       const userId = isAuth ? req.user.id : null;
       const canPersist = isAuth && !!chatId;
+      let flashGptUpgradeNotice = null;
       const regenerationAttemptNumber = Math.floor(Number(regenerationAttempt));
       const normalizedRegenerationAttempt = regenerate
         ? Math.max(1, Math.min(999, Number.isFinite(regenerationAttemptNumber) ? regenerationAttemptNumber : 1))
@@ -3909,6 +3925,26 @@ router.post(
         console.log(`✂️ route context fit: dropped ${fittedContext.droppedCount} message(s), ${fittedContext.totalTokens}/${fittedContext.budget} tokens before preflight`);
       }
 
+      if (
+        isAuth
+        && req.user
+        && req.user.plan === 'FREE'
+        && isFlashGptTurn(actualProvider, actualModel)
+        && !regenerate
+      ) {
+        try {
+          const previousFlashGptTurns = await prisma.apiUsage.count({
+            where: { userId, model: actualModel },
+          });
+          const nextFlashGptTurn = previousFlashGptTurns + 1;
+          if (nextFlashGptTurn > 0 && nextFlashGptTurn % 5 === 0) {
+            flashGptUpgradeNotice = buildFlashGptUpgradeNotice(nextFlashGptTurn);
+          }
+        } catch (noticeErr) {
+          console.warn('[flashgpt] upgrade notice count failed:', noticeErr && noticeErr.message);
+        }
+      }
+
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
@@ -4103,6 +4139,12 @@ router.post(
           }
           return prevWrite(payload, ...rest);
         };
+      }
+
+      if (flashGptUpgradeNotice) {
+        try {
+          res.write(`data: ${JSON.stringify({ content: `${flashGptUpgradeNotice}\n\n` })}\n\n`);
+        } catch { /* socket gone */ }
       }
 
       // NOTE: declared at function scope (see top of handler) so the
@@ -4747,6 +4789,10 @@ router.post(
           finalContent = (fullResponseContent && fullResponseContent.trim().length > 0)
             ? fullResponseContent
             : finalContent;
+        }
+
+        if (flashGptUpgradeNotice && finalContent && !finalContent.includes(flashGptUpgradeNotice)) {
+          finalContent = `${flashGptUpgradeNotice}\n\n${finalContent}`;
         }
 
         const codexMeta = req._codexRunId

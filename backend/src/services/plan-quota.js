@@ -7,10 +7,9 @@
  * checks scattered across `/api/ai`:
  *
  *   FREE plan:
- *     `monthlyCallLimit` is a REMAINING-call counter. New FREE users
- *     start at 3 (passport.js seeds it on signup) and the chat path
- *     atomically decrements it on each generation. The "limit" is
- *     the original allowance — also 3 for FREE.
+ *     Text chat is unlimited on the FlashGPT fallback model. Legacy
+ *     `monthlyCallLimit` remains on the User row for compatibility with
+ *     older UI/accounting surfaces, but it no longer gates text chat.
  *
  *   PRO / PRO_MAX / ENTERPRISE:
  *     `apiUsage` is a token counter incremented after each
@@ -33,7 +32,7 @@
  *   ZERO quota enforcement before this change.
  */
 
-const FREE_CALL_LIMIT = 3;
+const FREE_CALL_LIMIT = 0;
 
 // Threshold below which we emit a "warning" event but still allow
 // the request through. 80% matches usage-monitor.js's existing
@@ -95,26 +94,16 @@ function getPlanQuotaSnapshot(user) {
   }
 
   if (user.plan === 'FREE') {
-    // monthlyCallLimit on the user row is the REMAINING counter,
-    // not the cap. FREE plans always cap at FREE_CALL_LIMIT (currently
-    // 3); changing the cap is a config change here, not a per-user
-    // mutation. `used` is derived: limit - remaining, clamped to
-    // [0, limit] so a transient negative-remaining race (rare but
-    // possible under concurrent atomic decrements) doesn't surface
-    // a "used 4 of 3" UI artifact.
-    const remaining = toNumber(user.monthlyCallLimit);
-    const limit = FREE_CALL_LIMIT;
-    const used = Math.max(0, Math.min(limit, limit - remaining));
-    const percentage = clampPercentage(used, limit);
     return {
       plan: 'FREE',
       kind: 'calls',
-      used,
-      limit,
-      remaining: Math.max(0, remaining),
-      percentage,
-      exceeded: percentage >= 1 || remaining <= 0,
-      warning: percentage >= WARNING_THRESHOLD && percentage < 1,
+      used: 0,
+      limit: 0,
+      remaining: 0,
+      percentage: 0,
+      exceeded: false,
+      warning: false,
+      unlimited: true,
     };
   }
 
@@ -175,11 +164,7 @@ async function fetchUserPlanQuota(userId, prisma) {
  * identical inline blocks that each:
  *
  *   FREE plan:
- *     - prisma.user.updateMany({
- *         where: { id, monthlyCallLimit: { gt: 0 } },
- *         data:  { monthlyCallLimit: { decrement: 1 } },
- *       })
- *     - if no row matched → 429 with the exhausted-queries message.
+ *     - allow unlimited FlashGPT text chat.
  *
  *   PAID plans:
  *     - if user.apiUsage >= user.monthlyLimit → 429 with the
@@ -219,30 +204,7 @@ async function tryConsumePlanQuota({ userId, prisma, user } = {}) {
   if (!user) return { ok: true };
 
   if (user.plan === 'FREE') {
-    // Atomic CAS-style decrement: the WHERE clause both reads the
-    // current counter (>0) and the UPDATE writes the new value in
-    // a single Prisma query. Concurrent requests that race for the
-    // last call will see exactly one winner — the loser gets count:0.
-    const result = await prisma.user.updateMany({
-      where: {
-        id: userId,
-        monthlyCallLimit: { gt: 0 },
-      },
-      data: {
-        monthlyCallLimit: { decrement: 1 },
-      },
-    });
-    if (!result || result.count === 0) {
-      return {
-        ok: false,
-        status: 429,
-        body: {
-          error: 'Free monthly queries exhausted. Please upgrade to continue.',
-          remaining: 0,
-        },
-      };
-    }
-    return { ok: true };
+    return { ok: true, unlimited: true, model: 'FlashGPT' };
   }
 
   // Paid plans: token-based check is non-atomic on purpose. The

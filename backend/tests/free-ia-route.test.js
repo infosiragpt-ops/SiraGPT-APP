@@ -73,8 +73,8 @@ test('GET /api/free-ia/status reports disabled when CEREBRAS_API_KEY is unset', 
     assert.equal(body.enabled, false);
     assert.equal(body.reason, 'no_api_key');
     assert.equal(body.provider, 'Cerebras');
-    assert.equal(body.model, 'llama-3.1-8b');
-    assert.equal(body.displayName, 'Free IA');
+    assert.equal(body.model, 'llama3.1-8b');
+    assert.equal(body.displayName, '⚡ FlashGPT');
     // baseURL is internal-only — must not leak in the response.
     assert.equal(body.baseURL, undefined);
     assert.equal(body.apiKey, undefined);
@@ -94,8 +94,8 @@ test('GET /api/free-ia/status reports enabled when CEREBRAS_API_KEY is set', asy
     assert.equal(body.enabled, true);
     assert.equal(body.reason, 'ok');
     assert.equal(body.provider, 'Cerebras');
-    assert.equal(body.model, 'llama-3.1-8b');
-    assert.equal(body.displayName, 'Free IA');
+    assert.equal(body.model, 'llama3.1-8b');
+    assert.equal(body.displayName, '⚡ FlashGPT');
     assert.equal(body.apiKey, undefined, 'API key must never be returned');
   } finally {
     server.close();
@@ -195,8 +195,8 @@ test('GET /api/free-ia/info returns a consolidated single-call view', async () =
     assert.equal(status, 200);
     assert.equal(body.enabled, true);
     assert.equal(body.reason, 'ok');
-    assert.equal(body.model, 'llama-3.1-8b');
-    assert.equal(body.displayName, 'Free IA');
+    assert.equal(body.model, 'llama3.1-8b');
+    assert.equal(body.displayName, '⚡ FlashGPT');
     assert.equal(body.provider, 'Cerebras');
     assert.ok(body.descriptor);
     assert.equal(body.descriptor.virtual, true);
@@ -225,8 +225,8 @@ test('GET /api/free-ia/brand returns the constants for frontend localisation', a
   try {
     const { status, body } = await fetchJSON(`${baseURL}/api/free-ia/brand`);
     assert.equal(status, 200);
-    assert.equal(body.displayName, 'Free IA');
-    assert.equal(body.defaultModel, 'llama-3.1-8b');
+    assert.equal(body.displayName, '⚡ FlashGPT');
+    assert.equal(body.defaultModel, 'llama3.1-8b');
     assert.equal(body.provider, 'Cerebras');
     assert.equal(body.family, 'llama-3.1', 'family should be derived for picker grouping');
     // Brand endpoint should NOT depend on the API key being set.
@@ -413,7 +413,7 @@ test('GET /api/free-ia/metrics/summary?format=text returns just the .line as tex
     });
     assert.equal(resp.status, 200);
     assert.match(resp.contentType, /^text\/plain/);
-    assert.match(resp.body, /^Free IA: 1 fallbacks/);
+    assert.match(resp.body, /^FlashGPT: 1 fallbacks/);
     assert.ok(resp.body.endsWith('\n'), 'should end with a trailing newline for shell use');
     // Plain text — not JSON. Should not contain JSON braces.
     assert.ok(!resp.body.includes('{'), 'should not include JSON braces');
@@ -437,7 +437,7 @@ test('GET /api/free-ia/metrics/summary returns the one-line digest', async () =>
     assert.equal(body.fallbacks, 1);
     assert.equal(body.upstreamSuccess, 2);
     assert.equal(body.upstreamTotal, 3);
-    assert.match(body.line, /Free IA: 1 fallbacks/);
+    assert.match(body.line, /FlashGPT: 1 fallbacks/);
     assert.match(body.line, /2\/3 upstream OK/);
   } finally {
     server.close();

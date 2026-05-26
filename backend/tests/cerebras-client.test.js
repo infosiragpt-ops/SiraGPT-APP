@@ -1,6 +1,6 @@
 'use strict';
 
-// Unit tests for the Cerebras (Free IA) provider adapter.
+// Unit tests for the Cerebras (FlashGPT) provider adapter.
 //
 // These tests stub the OpenAI constructor so we don't actually hit the
 // network, and exercise the env-driven config resolution + descriptor
@@ -41,8 +41,8 @@ test('getCerebrasConfig: enabled with API key — uses defaults for base/model/n
   assert.equal(cfg.reason, 'ok');
   assert.equal(cfg.apiKey, 'csk-abc');
   assert.equal(cfg.baseURL, DEFAULT_BASE_URL);
-  assert.equal(cfg.model, 'llama-3.1-8b');
-  assert.equal(cfg.displayName, 'Free IA');
+  assert.equal(cfg.model, 'llama3.1-8b');
+  assert.equal(cfg.displayName, '⚡ FlashGPT');
   assert.equal(cfg.provider, 'Cerebras');
 });
 
@@ -113,20 +113,20 @@ test('createCerebrasClient: instantiates OpenAI ctor with Cerebras apiKey + base
 
 test('buildFreeIaModelDescriptor: shape matches what /api/ai/models expects', () => {
   const desc = buildFreeIaModelDescriptor({ env: { CEREBRAS_API_KEY: 'csk-abc' } });
-  assert.equal(desc.name, 'llama-3.1-8b');
-  assert.equal(desc.displayName, 'Free IA');
+  assert.equal(desc.name, 'llama3.1-8b');
+  assert.equal(desc.displayName, '⚡ FlashGPT');
   assert.equal(desc.provider, 'Cerebras');
   assert.equal(desc.type, 'TEXT');
   assert.equal(desc.virtual, true);
   assert.equal(desc.enabled, true);
   assert.match(desc.id, /^__virtual_/);
-  assert.match(desc.id, /llama_3_1_8b/);
+  assert.match(desc.id, /llama3_1_8b/);
 });
 
 test('buildFreeIaModelDescriptor: enabled:false when Cerebras key missing — descriptor still well-formed', () => {
   const desc = buildFreeIaModelDescriptor({ env: {} });
   assert.equal(desc.enabled, false);
-  assert.equal(desc.name, 'llama-3.1-8b');
+  assert.equal(desc.name, 'llama3.1-8b');
   assert.equal(desc.provider, 'Cerebras');
 });
 
@@ -225,7 +225,7 @@ test('createInstrumentedCerebrasClient: wraps chat.completions.create to record 
     metrics: metricsStub,
   });
   assert.ok(client);
-  const result = await client.chat.completions.create({ model: 'llama-3.1-8b', messages: [{ role: 'user', content: 'hi' }] });
+  const result = await client.chat.completions.create({ model: 'llama3.1-8b', messages: [{ role: 'user', content: 'hi' }] });
   assert.equal(result.id, 'chatcmpl_test');
   assert.equal(innerCalls.length, 1);
   assert.equal(recorded.success, 1);
@@ -242,7 +242,7 @@ test('getFreeIaPricing: stable shape { priceUsd:0, isFree:true, badge:"Gratis" }
 });
 
 test('inferModelFamily: extracts the major.minor llama family', () => {
-  assert.equal(inferModelFamily('llama-3.1-8b'), 'llama-3.1');
+  assert.equal(inferModelFamily('llama3.1-8b'), 'llama-3.1');
   assert.equal(inferModelFamily('llama-3.1-70b'), 'llama-3.1');
   assert.equal(inferModelFamily('llama-3.3-70b'), 'llama-3.3');
   assert.equal(inferModelFamily('llama3.1-8b'), 'llama-3.1');
@@ -291,7 +291,7 @@ test('integration: instrumented client → real metrics module captures error+me
     // no metrics arg → uses the real module via lazy require
   });
   await assert.rejects(
-    () => client.chat.completions.create({ model: 'llama-3.1-8b', messages: [] }),
+    () => client.chat.completions.create({ model: 'llama3.1-8b', messages: [] }),
     /service unavailable/,
   );
   const s = realMetrics.snapshot();
@@ -323,7 +323,7 @@ test('createInstrumentedCerebrasClient: records error AND re-throws when upstrea
     metrics: metricsStub,
   });
   await assert.rejects(
-    () => client.chat.completions.create({ model: 'llama-3.1-8b', messages: [] }),
+    () => client.chat.completions.create({ model: 'llama3.1-8b', messages: [] }),
     /upstream 503/,
   );
   assert.equal(recorded.success, 0);

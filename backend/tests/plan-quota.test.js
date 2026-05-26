@@ -3,7 +3,7 @@
  * middleware relies on. The function is pure (no DB), so we can
  * exercise every branch with hand-crafted user shapes:
  *
- *   - FREE plan call accounting (3-call cap, decrementing counter)
+ *   - FREE plan unlimited FlashGPT posture
  *   - Paid plans token accounting (apiUsage vs user.monthlyLimit)
  *   - Edge cases that real production data trips on:
  *       * BigInt fields from Prisma
@@ -41,8 +41,8 @@ describe("getPlanQuotaSnapshot — anonymous / missing input", () => {
   });
 });
 
-describe("getPlanQuotaSnapshot — FREE plan (call-based)", () => {
-  test("fresh FREE user with 3 remaining calls → 0% used", () => {
+describe("getPlanQuotaSnapshot — FREE plan (unlimited FlashGPT)", () => {
+  test("FREE user gets an unlimited calls snapshot", () => {
     const snap = getPlanQuotaSnapshot({
       plan: "FREE",
       monthlyCallLimit: 3,
@@ -51,57 +51,11 @@ describe("getPlanQuotaSnapshot — FREE plan (call-based)", () => {
     assert.equal(snap.kind, "calls");
     assert.equal(snap.limit, FREE_CALL_LIMIT);
     assert.equal(snap.used, 0);
-    assert.equal(snap.remaining, 3);
+    assert.equal(snap.remaining, 0);
     assert.equal(snap.percentage, 0);
     assert.equal(snap.exceeded, false);
     assert.equal(snap.warning, false);
-  });
-
-  test("FREE user with 1 call remaining → 67% used → warning band", () => {
-    const snap = getPlanQuotaSnapshot({
-      plan: "FREE",
-      monthlyCallLimit: 1,
-    });
-    assert.equal(snap.used, 2);
-    assert.equal(snap.remaining, 1);
-    // 2/3 = 0.6667; warning fires at >= 0.8
-    assert.equal(snap.warning, false);
-    assert.equal(snap.exceeded, false);
-  });
-
-  test("FREE user with 0 calls remaining → 100% used → exceeded, no warning", () => {
-    const snap = getPlanQuotaSnapshot({
-      plan: "FREE",
-      monthlyCallLimit: 0,
-    });
-    assert.equal(snap.used, 3);
-    assert.equal(snap.remaining, 0);
-    assert.equal(snap.percentage, 1);
-    assert.equal(snap.exceeded, true);
-    assert.equal(snap.warning, false); // mutually exclusive with exceeded
-  });
-
-  test("FREE user reading BigInt from Prisma is normalized to number", () => {
-    const snap = getPlanQuotaSnapshot({
-      plan: "FREE",
-      monthlyCallLimit: BigInt(2),
-    });
-    assert.equal(typeof snap.remaining, "number");
-    assert.equal(snap.remaining, 2);
-    assert.equal(snap.used, 1);
-  });
-
-  test("FREE user with negative remaining is clamped to 0 (defensive)", () => {
-    // Race conditions in atomic decrement could surface a negative
-    // value briefly. The snapshot must not produce negative numbers
-    // that downstream UI rendering would choke on.
-    const snap = getPlanQuotaSnapshot({
-      plan: "FREE",
-      monthlyCallLimit: -1,
-    });
-    assert.equal(snap.remaining, 0);
-    assert.equal(snap.used, 3);
-    assert.equal(snap.exceeded, true);
+    assert.equal(snap.unlimited, true);
   });
 });
 

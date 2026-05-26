@@ -10,7 +10,7 @@ const PLANS = Object.freeze({
     premiumTokens: 0,
     gemaTokenLimit: 0,
     gemaUnlimited: true,
-    dailyCalls: 3,
+    dailyCalls: null,
     priceUsd: 0,
   },
   PRO: {

@@ -242,7 +242,7 @@ function summary({ now = Date.now() } = {}) {
     : null;
   const rateSuffix = requestRatePerMin === null ? '' : `, ${requestRatePerMin}/min`;
   return {
-    line: `Free IA: ${state.totalFallbacks} fallbacks, ${state.upstreamSuccess}/${totalUpstream} upstream OK (${ratePct})${rateSuffix}${degraded ? ' [DEGRADED]' : ''}`,
+    line: `FlashGPT: ${state.totalFallbacks} fallbacks, ${state.upstreamSuccess}/${totalUpstream} upstream OK (${ratePct})${rateSuffix}${degraded ? ' [DEGRADED]' : ''}`,
     fallbacks: state.totalFallbacks,
     upstreamSuccess: state.upstreamSuccess,
     upstreamTotal: totalUpstream,

@@ -7,8 +7,8 @@ const {
   PROVIDER_NAME: CEREBRAS_PROVIDER_NAME,
 } = require('./ai/cerebras-client');
 
-// Defaults moved from OpenAI/Gema4-31B → Cerebras/Llama-3.1-8b/"Free IA" to
-// match the product spec in docs/SIraGPT.docx (Free IA = Llama 3.1 8B via
+// Defaults moved from OpenAI/Gema4-31B → Cerebras/Llama-3.1-8b/"FlashGPT" to
+// match the product spec in docs/SIraGPT.docx (FlashGPT = Llama 3.1 8B via
 // Cerebras). Legacy GEMA4_* env vars still override per deployment.
 const DEFAULT_GEMA4_DISPLAY_NAME = CEREBRAS_DEFAULT_DISPLAY_NAME;
 const DEFAULT_GEMA4_PROVIDER = CEREBRAS_PROVIDER_NAME;
@@ -105,7 +105,7 @@ function buildModelQuotaPolicy(user, env = process.env) {
   const gemaUsage = toBigInt(user?.gemaTokenUsage);
   const gemaLimit = toBigInt(user?.gemaTokenLimit);
   const freeDailyLimit = toSafeNumber(catalog.dailyCalls, null);
-  const freeRemainingCalls = currentPlan === 'FREE'
+  const freeRemainingCalls = currentPlan === 'FREE' && freeDailyLimit != null
     ? Math.max(0, Math.min(freeDailyLimit || 0, toSafeNumber(user?.monthlyCallLimit, freeDailyLimit || 0)))
     : null;
   const premiumPool = currentPlan === 'ENTERPRISE' && premiumLimit <= 0n

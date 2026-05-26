@@ -99,7 +99,7 @@ test('summary() returns a one-line digest with all the numbers backing it', () =
   assert.equal(s.upstreamSuccess, 3);
   assert.equal(s.upstreamTotal, 4);
   assert.equal(s.successRate, 0.75);
-  assert.match(s.line, /Free IA: 2 fallbacks/);
+  assert.match(s.line, /FlashGPT: 2 fallbacks/);
   assert.match(s.line, /3\/4 upstream OK/);
   assert.match(s.line, /75\.00%/);
 });

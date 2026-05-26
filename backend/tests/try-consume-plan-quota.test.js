@@ -3,17 +3,10 @@
  * extracted function so the seven /api/ai call sites it replaces
  * keep behaving byte-for-byte identically. Two properties matter:
  *
- *   1. The error strings, status codes, and body field order
- *      MATCH the previous inline implementation exactly. A client
- *      that branches off `error === 'Free monthly queries
- *      exhausted. ...'` must keep working.
+ *   1. FREE users are no longer blocked after 3 text calls. They are
+ *      routed to FlashGPT and allowed through.
  *
- *   2. The FREE atomic decrement is performed via Prisma's
- *      `updateMany` with the `monthlyCallLimit: { gt: 0 }` guard.
- *      Concurrent winners get a count:1 result; losers get count:0
- *      and the function MUST return ok:false. We assert the call
- *      shape so a future Prisma upgrade that renames `updateMany`
- *      surfaces here, not in production.
+ *   2. Paid users still use the token cap check unchanged.
  */
 
 const { describe, test } = require("node:test");
@@ -56,51 +49,15 @@ describe("tryConsumePlanQuota — anonymous", () => {
 });
 
 describe("tryConsumePlanQuota — FREE plan", () => {
-  test("atomic decrement succeeds (count:1) → ok:true", async () => {
+  test("FREE user → ok:true unlimited, no DB decrement", async () => {
     const prisma = makePrismaStub({ updateManyResult: { count: 1 } });
     const result = await tryConsumePlanQuota({
       userId: "u-free",
       prisma,
       user: { id: "u-free", plan: "FREE" },
     });
-    assert.deepEqual(result, { ok: true });
-    // Pin the Prisma call shape so a future regression that drops
-    // the `gt: 0` guard or the `decrement: 1` op fails here.
-    const [args] = prisma._calls();
-    assert.deepEqual(args.where, {
-      id: "u-free",
-      monthlyCallLimit: { gt: 0 },
-    });
-    assert.deepEqual(args.data, { monthlyCallLimit: { decrement: 1 } });
-  });
-
-  test("atomic decrement returns count:0 (exhausted) → 429 with legacy message", async () => {
-    const prisma = makePrismaStub({ updateManyResult: { count: 0 } });
-    const result = await tryConsumePlanQuota({
-      userId: "u-free",
-      prisma,
-      user: { id: "u-free", plan: "FREE" },
-    });
-    assert.equal(result.ok, false);
-    assert.equal(result.status, 429);
-    // Exact string. Existing client UI may branch off this — do NOT
-    // change the wording without a deliberate frontend coordination.
-    assert.equal(
-      result.body.error,
-      "Free monthly queries exhausted. Please upgrade to continue.",
-    );
-    assert.equal(result.body.remaining, 0);
-  });
-
-  test("Prisma returns null (no row) → 429 with the same legacy message", async () => {
-    const prisma = makePrismaStub({ updateManyResult: null });
-    const result = await tryConsumePlanQuota({
-      userId: "u-free",
-      prisma,
-      user: { id: "u-free", plan: "FREE" },
-    });
-    assert.equal(result.ok, false);
-    assert.equal(result.status, 429);
+    assert.deepEqual(result, { ok: true, unlimited: true, model: "FlashGPT" });
+    assert.equal(prisma._calls().length, 0);
   });
 });
 
