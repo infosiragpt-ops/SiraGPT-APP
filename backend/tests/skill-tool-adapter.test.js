@@ -74,6 +74,17 @@ test('resolveToolNames maps repository delivery aliases onto executable runtime 
   assert.deepEqual(out.sort(), ['bash_exec', 'python_exec'].sort());
 });
 
+test('resolveToolNames maps OpenClaw playbook import aliases onto local executable tools', () => {
+  const out = resolveToolNames([
+    'license_audit',
+    'skill_snapshot',
+    'skill_manifest_map',
+    'folder_capability_map',
+    'playbook_recommend',
+  ]);
+  assert.deepEqual(out.sort(), ['bash_exec', 'python_exec'].sort());
+});
+
 test('getSkillManifests builds one manifest per skill with the expected shape', async () => {
   await withRegistryStubs({
     list: () => [

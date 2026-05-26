@@ -24,6 +24,11 @@ Inspirado en OpenClaw, cada skill es una guía operacional + herramientas para u
 | **release-maintainer** | Push, deploy, monitoreo y verificación de producción | Releases a main/prod | Sí |
 | **agent-transcript-lite** | Resúmenes seguros de implementación | PRs, handoffs, memoria | No |
 | **dependency-upgrade-guard** | Guardrails para upgrades y lockfiles | Dependencias/build/Docker | Sí |
+| **openclaw-import-audit** | Copia y atribución MIT de OpenClaw | Importar skills/código externo | Sí |
+| **repo-folder-integration** | Mapa carpeta por carpeta OpenClaw ↔ SiraGPT | Integración de repos externos | No |
+| **channel-connector-hardening** | Conectores, canales, archivos y flujos de mensaje | Chat/providers/integraciones | No |
+| **e2e-proof-recorder** | Pruebas, CI, browser proof y health checks | Antes de publicar cambios | Sí |
+| **agent-capability-matrix** | Matriz de cobertura entre OpenClaw y SiraGPT | Priorización de próximos ports | No |
 
 ## Integración en Flujo
 
@@ -38,6 +43,9 @@ npm run check:all                  # Corre: lint, type, test, coverage, security
 
 # Validar todas las skills de agente
 npm run skill:validate:agents
+
+# Ver mapa OpenClaw -> SiraGPT
+npm run agent:openclaw:map
 ```
 
 ### CI Pipeline
@@ -255,6 +263,7 @@ Todos los skills han sido validados con:
 ## Referencias
 
 Inspirado en OpenClaw:
+- `.agents/openclaw-upstream` → snapshot MIT inactivo de OpenClaw `.agents/skills`
 - `.agents/skills/autoreview` → OpenClaw autoreview
 - `.agents/skills/quality-gates` → OpenClaw quality gates
 - `.agents/skills/ci-orchestrator` → OpenClaw crabbox + CI orchestration
@@ -262,3 +271,8 @@ Inspirado en OpenClaw:
 - `.agents/skills/security-hardening` → OpenClaw security auditing
 - `.agents/skills/agent-validation` → SiraGPT-specific agent system validation
 - `.agents/skills/release-orchestrator` → OpenClaw release automation
+- `.agents/skills/openclaw-import-audit` → copia, atribución y adaptación segura
+- `.agents/skills/repo-folder-integration` → comparación carpeta por carpeta
+- `.agents/skills/channel-connector-hardening` → patrones de canales/archives adaptados a SiraGPT
+- `.agents/skills/e2e-proof-recorder` → pruebas y evidencia estilo OpenClaw adaptadas a SiraGPT
+- `.agents/skills/agent-capability-matrix` → cobertura de capacidades y próximos ports

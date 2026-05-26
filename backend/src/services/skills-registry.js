@@ -149,6 +149,7 @@ function computeRelevanceScore(skill, intent, signals) {
   let score = 0;
 
   const intentLower = (intent || '').toLowerCase();
+  const terms = tokenizeIntent(intentLower);
   const categoryLower = skill.category.toLowerCase();
   const descLower = skill.description.toLowerCase();
   const labelLower = skill.label.toLowerCase();
@@ -156,6 +157,11 @@ function computeRelevanceScore(skill, intent, signals) {
   if (categoryLower === intentLower) score += 0.4;
   if (labelLower.includes(intentLower)) score += 0.3;
   if (descLower.includes(intentLower)) score += 0.2;
+  for (const term of terms) {
+    if (labelLower.includes(term)) score += 0.15;
+    if (descLower.includes(term)) score += 0.1;
+    if (skill.tags.some(t => t.toLowerCase().includes(term))) score += 0.12;
+  }
 
   if (signals.hasDocuments && skill.category === 'document') score += 0.3;
   if (signals.hasCode && skill.category === 'code') score += 0.3;
@@ -172,6 +178,15 @@ function computeRelevanceScore(skill, intent, signals) {
   if (skill.clearance === 'paid' && !['paid', 'enterprise'].includes(signals.userClearance)) score *= 0.3;
 
   return score;
+}
+
+function tokenizeIntent(input) {
+  const stop = new Set(['the', 'and', 'for', 'with', 'from', 'para', 'con', 'los', 'las', 'que']);
+  return String(input || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .split(/[^a-z0-9_-]+/)
+    .filter(term => term.length >= 3 && !stop.has(term));
 }
 
 function verifyPrerequisites(skillId, context = {}) {
@@ -315,6 +330,25 @@ function bootBuiltins() {
         {
           when: 'user provides a GitHub repo and asks to push to main only after green checks',
           call: 'inspect repo, implement independently, run tests, push, monitor newest main workflow',
+        },
+      ],
+    },
+    {
+      id: 'openclaw_playbook_import',
+      label: 'OpenClaw Playbook Import + Adaptation',
+      category: 'agentic',
+      description: 'Copy MIT-licensed OpenClaw agent playbooks into an inactive upstream snapshot, map each folder/capability to SiraGPT, and recommend rewritten active SiraGPT skills.',
+      tools: ['license_audit', 'skill_snapshot', 'skill_manifest_map', 'folder_capability_map', 'playbook_recommend', 'static_check'],
+      prerequisites: ['query_text'],
+      sideEffects: ['local_workspace_changes'],
+      idempotent: false,
+      clearance: 'enterprise',
+      outputKind: 'pair',
+      tags: ['openclaw', 'agents', 'skills', 'folder-map', 'mit-license', 'playbook-import'],
+      examples: [
+        {
+          when: 'user asks to copy OpenClaw agent skills and integrate them professionally into SiraGPT',
+          call: 'copy upstream snapshot, preserve MIT attribution, generate folder map, activate rewritten SiraGPT playbooks',
         },
       ],
     },
