@@ -792,3 +792,34 @@ test('explainBudgetVerdict: unknown plan returns null', () => {
   const { explainBudgetVerdict } = require('../src/services/feature-cost-estimator');
   assert.equal(explainBudgetVerdict('MYSTERY', 'paraphrase', { calls: 10 }), null);
 });
+
+test('pricingFAQEntries: returns at least 6 entries with q + a strings', () => {
+  const { pricingFAQEntries } = require('../src/services/feature-cost-estimator');
+  const faq = pricingFAQEntries();
+  assert.ok(faq.length >= 6, `expected ≥6 entries, got ${faq.length}`);
+  for (const entry of faq) {
+    assert.equal(typeof entry.q, 'string');
+    assert.equal(typeof entry.a, 'string');
+    assert.ok(entry.q.length > 0);
+    assert.ok(entry.a.length > 0);
+  }
+});
+
+test('pricingFAQEntries: prices match canonical PLAN_PRICES_USD', () => {
+  const { pricingFAQEntries } = require('../src/services/feature-cost-estimator');
+  const faq = pricingFAQEntries();
+  const proAnswer = faq.find((e) => e.q.includes('PRO cost')).a;
+  assert.ok(proAnswer.includes('$5'));
+  assert.ok(proAnswer.includes('100,000'));
+  const proMaxAnswer = faq.find((e) => e.q.includes('PRO_MAX')).a;
+  assert.ok(proMaxAnswer.includes('$10'));
+  assert.ok(proMaxAnswer.includes('300,000'));
+});
+
+test('pricingFAQEntries: mentions FlashGPT fallback for out-of-credits path', () => {
+  const { pricingFAQEntries } = require('../src/services/feature-cost-estimator');
+  const faq = pricingFAQEntries();
+  const fallback = faq.find((e) => e.q.includes('run out of credits'));
+  assert.ok(fallback, 'should have an out-of-credits entry');
+  assert.ok(fallback.a.includes('FlashGPT'));
+});

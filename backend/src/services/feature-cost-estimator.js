@@ -506,6 +506,47 @@ function affordsFeature(currentPlan, feature, { calls = 0, avgTextLength = 0, en
  *
  * Returns null for unknown plan.
  */
+/**
+ * Returns a small list of (question, answer) pairs describing the
+ * pricing model. The chat AI uses this as a knowledge base when users
+ * ask "how much does X cost?" / "what's the difference between PRO
+ * and PRO_MAX?". Numbers come straight from PLAN_* constants so
+ * the answers stay in sync with the canonical pricing.
+ */
+function pricingFAQEntries() {
+  const fmt = (cents) => cents == null ? 'Unlimited' : `${cents.toLocaleString('en-US')} credits`;
+  return [
+    {
+      q: 'How much does FREE include?',
+      a: `${fmt(PLAN_BUDGETS.FREE)} of premium credits — FREE falls back to FlashGPT (⚡ Cerebras Llama 3.1 8B) for everything else.`,
+    },
+    {
+      q: 'How much does PRO cost?',
+      a: `$${PLAN_PRICES_USD.PRO}/month, includes ${fmt(PLAN_BUDGETS.PRO)} of premium credits (≈ \$${(PLAN_BUDGETS.PRO * USD_PER_CREDIT).toFixed(2)} worth).`,
+    },
+    {
+      q: 'How much does PRO_MAX cost?',
+      a: `$${PLAN_PRICES_USD.PRO_MAX}/month, includes ${fmt(PLAN_BUDGETS.PRO_MAX)} of premium credits.`,
+    },
+    {
+      q: 'How much does ENTERPRISE cost?',
+      a: `$${PLAN_PRICES_USD.ENTERPRISE}/month base + pay-as-you-go. ENTERPRISE has unlimited premium credits.`,
+    },
+    {
+      q: 'How are credits priced in USD?',
+      a: `Roughly $${USD_PER_CREDIT.toFixed(5)} per credit, derived from the PRO ratio (${fmt(PLAN_BUDGETS.PRO)} for $${PLAN_PRICES_USD.PRO}).`,
+    },
+    {
+      q: 'How much does each feature cost?',
+      a: `Paraphrase: 1 credit + 1 per 1k chars. Image generation/variation: 5 credits. Image upscale: 3 credits. Generic generate: 1 credit + 0.5 per 1k chars.`,
+    },
+    {
+      q: 'What happens when I run out of credits?',
+      a: `Requests are automatically routed to FlashGPT (⚡ Cerebras Llama 3.1 8B) — free and unlimited, just slightly less powerful than the premium models.`,
+    },
+  ];
+}
+
 function explainBudgetVerdict(currentPlan, feature, usage = {}) {
   const verdict = affordsFeature(currentPlan, feature, usage);
   if (!verdict) return null;
@@ -584,6 +625,7 @@ module.exports = {
   quickEstimate,
   affordsFeature,
   explainBudgetVerdict,
+  pricingFAQEntries,
   comparePlans,
   getRecommendedPlan,
   recommendUpgradeFromUsage,
