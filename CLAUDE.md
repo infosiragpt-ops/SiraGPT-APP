@@ -450,6 +450,30 @@ to gate CI on > 5 % regression vs a baseline snapshot.
 4. **Intent attribution learning** — feed back actual response-success signals into the lexicon/rule weights to self-improve over time.
 5. **Front-end attribution panel** — UI that consumes /api/attribution-toolkit/visualize + /attribution-explainer/explain to render an explainability sidebar (UI work is out of scope for this branch per CLAUDE.md rules).
 
+## Billing helpers — added 2026-05-26 (feature-cost-estimator.js)
+
+Single source of truth for credit costs + USD labels + plan
+recommendations, used by `/api/free-ia/info`, `/api/free-ia/digest`,
+`/api/free-ia/plans`, `/api/free-ia/estimate`:
+
+- `estimateCost(feature, {textLength})` — per-call credit cost + breakdown
+- `estimateCostBatch(items)` — fan-out preview with usdLabel per item
+- `estimateMonthlyCost(usage)` — monthly projection with totalMonthlyUsd
+- `getRecommendedPlan(usage)` — cheapest plan fitting projected spend
+- `getCostDelta(currentPlan, recommendedPlan)` — $ delta for upsell
+- `formatCreditsAsUsd(credits)` — "≈ $0.05" label format
+- `creditsToUsdCents(credits)` — integer-cent for financial reports
+- `enrichPlanWithPricing(plan)` — full plan-card data + popular flag
+- `validatePlanName(plan)` — cheap pre-Zod validator (case-insensitive)
+
+Pricing constants:
+- `USD_PER_CREDIT = 5/100_000` (PRO ratio)
+- `PLAN_PRICES_USD = { FREE:0, PRO:5, PRO_MAX:10, ENTERPRISE:2 }`
+- `PLAN_BUDGETS    = { FREE:0, PRO:100k, PRO_MAX:300k, ENTERPRISE:null }`
+- `POPULAR_PLAN    = 'PRO'`
+
+45+ unit tests in `feature-cost-estimator.test.js`.
+
 ## ⚡ FlashGPT (Cerebras Llama 3.1 8B) — added 2026-05-25, rebranded to FlashGPT
 
 Per the product brief (`/Users/luis/Downloads/SIraGPT.docx`) the free
