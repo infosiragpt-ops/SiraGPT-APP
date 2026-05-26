@@ -58,6 +58,7 @@ const {
   getCompletionLimit,
   normalizeReservedCompletionTokens,
 } = require("../context-window");
+const { buildCompactionPreamble } = require("../agents/hermes-context-patterns");
 
 const DEFAULT_MAX_CHUNKS = 8;
 const DEFAULT_MAX_GISTS = 12;
@@ -241,7 +242,7 @@ async function compactContext({
     try {
       const result = await summarizer({ droppedMessages, model, maxOutputTokens: summaryMaxOutputTokens });
       if (typeof result === "string" && result.trim()) {
-        summary = result.trim();
+        summary = buildCompactionPreamble({ priorSummary: result.trim() });
         summarized = true;
       }
     } catch (_e) {

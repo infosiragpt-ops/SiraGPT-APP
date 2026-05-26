@@ -334,6 +334,25 @@ function bootBuiltins() {
       ],
     },
     {
+      id: 'hermes_playbook_import',
+      label: 'Hermes Agent Import + Adaptation',
+      category: 'agentic',
+      description: 'Copy MIT-licensed Hermes Agent playbooks into an inactive upstream snapshot, map each folder/capability to SiraGPT, and recommend rewritten active SiraGPT skills and toolsets.',
+      tools: ['license_audit', 'skill_snapshot', 'skill_manifest_map', 'folder_capability_map', 'playbook_recommend', 'static_check'],
+      prerequisites: ['query_text'],
+      sideEffects: ['local_workspace_changes'],
+      idempotent: false,
+      clearance: 'enterprise',
+      outputKind: 'pair',
+      tags: ['hermes', 'nous', 'agents', 'skills', 'toolsets', 'mit-license', 'playbook-import'],
+      examples: [
+        {
+          when: 'user asks to copy Hermes Agent code and integrate it professionally into SiraGPT',
+          call: 'copy upstream snapshot, preserve MIT attribution, generate folder map, activate rewritten SiraGPT playbooks and toolset tiers',
+        },
+      ],
+    },
+    {
       id: 'openclaw_playbook_import',
       label: 'OpenClaw Playbook Import + Adaptation',
       category: 'agentic',

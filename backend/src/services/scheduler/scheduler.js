@@ -249,6 +249,17 @@ function cancelJob({ userId, jobId }) {
   return { ok: true, removed };
 }
 
+function setJobEnabled({ userId, jobId, enabled }) {
+  const jobs = loadAll();
+  const idx = jobs.findIndex(j => j.id === jobId && (userId == null || j.userId === userId));
+  if (idx === -1) return { ok: false, reason: 'not found' };
+  jobs[idx].enabled = Boolean(enabled);
+  saveAll(jobs);
+  if (jobs[idx].enabled) activate(jobs[idx]);
+  else deactivate(jobId);
+  return { ok: true, job: withComputedStatus(jobs[idx]) };
+}
+
 // ─── Execution ─────────────────────────────────────────────────────────────
 
 /**
@@ -384,7 +395,7 @@ function interpolate(template, ctx) {
 module.exports = {
   start, stop,
   createCronJob, createWebhookJob,
-  listJobs, getJob, cancelJob,
+  listJobs, getJob, cancelJob, setJobEnabled,
   fireJob,
   setInvoker,
   setJobClassifier,

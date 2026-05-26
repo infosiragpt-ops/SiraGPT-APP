@@ -25,7 +25,8 @@ Inspirado en OpenClaw, cada skill es una guía operacional + herramientas para u
 | **agent-transcript-lite** | Resúmenes seguros de implementación | PRs, handoffs, memoria | No |
 | **dependency-upgrade-guard** | Guardrails para upgrades y lockfiles | Dependencias/build/Docker | Sí |
 | **openclaw-import-audit** | Copia y atribución MIT de OpenClaw | Importar skills/código externo | Sí |
-| **repo-folder-integration** | Mapa carpeta por carpeta OpenClaw ↔ SiraGPT | Integración de repos externos | No |
+| **hermes-import-audit** | Copia y adaptación MIT de Hermes Agent | Importar toolsets/compaction/skills Hermes | Sí |
+| **repo-folder-integration** | Mapa carpeta por carpeta OpenClaw/Hermes ↔ SiraGPT | Integración de repos externos | No |
 | **channel-connector-hardening** | Conectores, canales, archivos y flujos de mensaje | Chat/providers/integraciones | No |
 | **e2e-proof-recorder** | Pruebas, CI, browser proof y health checks | Antes de publicar cambios | Sí |
 | **agent-capability-matrix** | Matriz de cobertura entre OpenClaw y SiraGPT | Priorización de próximos ports | No |
@@ -46,6 +47,9 @@ npm run skill:validate:agents
 
 # Ver mapa OpenClaw -> SiraGPT
 npm run agent:openclaw:map
+
+# Ver mapa Hermes Agent -> SiraGPT
+npm run agent:hermes:map
 ```
 
 ### CI Pipeline
@@ -262,8 +266,9 @@ Todos los skills han sido validados con:
 
 ## Referencias
 
-Inspirado en OpenClaw:
+Inspirado en OpenClaw y Hermes Agent:
 - `.agents/openclaw-upstream` → snapshot MIT inactivo de OpenClaw `.agents/skills`
+- `.agents/hermes-upstream` → snapshot MIT inactivo de Hermes `skills/` + `optional-skills/`
 - `.agents/skills/autoreview` → OpenClaw autoreview
 - `.agents/skills/quality-gates` → OpenClaw quality gates
 - `.agents/skills/ci-orchestrator` → OpenClaw crabbox + CI orchestration
