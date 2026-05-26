@@ -111,7 +111,7 @@ const express2 = require('express');
 router.post('/estimate', express2.json({ limit: '32kb' }), (req, res) => {
   try {
     // eslint-disable-next-line global-require
-    const { estimateCostBatch, estimateMonthlyCost, getRecommendedPlan, getCostDelta, recommendUpgradeFromUsage, monthlyBreakdownAsCsv, monthlyBreakdownAsMarkdown } = require('../services/feature-cost-estimator');
+    const { estimateCostBatch, estimateMonthlyCost, getRecommendedPlan, getCostDelta, recommendUpgradeFromUsage, suggestDowngradeFromUsage, monthlyBreakdownAsCsv, monthlyBreakdownAsMarkdown } = require('../services/feature-cost-estimator');
     const items = Array.isArray(req.body?.items) ? req.body.items : [];
     const out = { estimates: estimateCostBatch(items) };
     // Optional projection: if the body includes a forecastUsage map,
@@ -134,6 +134,11 @@ router.post('/estimate', express2.json({ limit: '32kb' }), (req, res) => {
         out.costDelta = getCostDelta(req.body.currentPlan, out.recommendedPlan.plan);
         const upsell = recommendUpgradeFromUsage(req.body.forecastUsage, req.body.currentPlan);
         if (upsell) out.upsell = upsell;
+        // Also surface the downgrade hint — same shape, opposite
+        // direction. The billing-settings page uses this to render
+        // "you've been overpaying" prompts.
+        const downsell = suggestDowngradeFromUsage(req.body.forecastUsage, req.body.currentPlan);
+        if (downsell && downsell.shouldDowngrade) out.downsell = downsell;
       }
     }
     res.json(out);

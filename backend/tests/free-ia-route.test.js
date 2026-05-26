@@ -196,6 +196,43 @@ test('POST /api/free-ia/estimate with currentPlan returns costDelta', async () =
     assert.equal(resp.body.upsell.recommendation.plan, 'PRO');
     assert.equal(resp.body.upsell.comparison.direction, 'upgrade');
     assert.equal(resp.body.upsell.comparison.priceDeltaUsd, 5);
+    // FREE → PRO is an upgrade, so no downsell payload expected.
+    assert.equal(resp.body.downsell, undefined);
+  } finally {
+    server.close();
+  }
+});
+
+test('POST /api/free-ia/estimate: PRO_MAX user with FREE-sized usage gets downsell', async () => {
+  const { server, baseURL } = await startServer();
+  try {
+    const payload = JSON.stringify({
+      items: [],
+      forecastUsage: {}, // no usage → FREE plan is enough
+      currentPlan: 'PRO_MAX',
+    });
+    const resp = await new Promise((resolve, reject) => {
+      const url = new URL(`${baseURL}/api/free-ia/estimate`);
+      const req = http.request({
+        method: 'POST',
+        hostname: url.hostname,
+        port: url.port,
+        path: url.pathname,
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
+      }, (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => resolve({ status: res.statusCode, body: JSON.parse(Buffer.concat(chunks).toString('utf8')) }));
+      });
+      req.on('error', reject);
+      req.write(payload);
+      req.end();
+    });
+    assert.equal(resp.status, 200);
+    assert.ok(resp.body.downsell, 'downsell payload should be present');
+    assert.equal(resp.body.downsell.shouldDowngrade, true);
+    assert.equal(resp.body.downsell.recommendation.plan, 'FREE');
+    assert.equal(resp.body.downsell.comparison.direction, 'downgrade');
   } finally {
     server.close();
   }
