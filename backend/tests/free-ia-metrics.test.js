@@ -429,6 +429,45 @@ test('topUpstreamErrorCodes(limit) caps the result set', () => {
   assert.equal(top.length, 2);
 });
 
+test('errorRateByCode returns share alongside count', () => {
+  metrics.reset();
+  for (let i = 0; i < 6; i += 1) metrics.recordUpstreamError({ code: '503' });
+  for (let i = 0; i < 4; i += 1) metrics.recordUpstreamError({ code: '429' });
+  const rates = metrics.errorRateByCode();
+  assert.equal(rates[0].code, '503');
+  assert.equal(rates[0].count, 6);
+  assert.equal(rates[0].share, 0.6, '6 / 10 = 60% share');
+  assert.equal(rates[1].code, '429');
+  assert.equal(rates[1].share, 0.4);
+});
+
+test('errorRateByCode: empty when no errors recorded', () => {
+  metrics.reset();
+  assert.deepEqual(metrics.errorRateByCode(), []);
+});
+
+test('errorRateByCode(limit) caps the result set', () => {
+  metrics.reset();
+  metrics.recordUpstreamError({ code: '500' });
+  metrics.recordUpstreamError({ code: '501' });
+  metrics.recordUpstreamError({ code: '502' });
+  const rates = metrics.errorRateByCode(2);
+  assert.equal(rates.length, 2);
+});
+
+test('errorRateByCode: shares sum to ≤ 1 when capped by limit', () => {
+  metrics.reset();
+  for (let i = 0; i < 5; i += 1) metrics.recordUpstreamError({ code: '503' });
+  for (let i = 0; i < 5; i += 1) metrics.recordUpstreamError({ code: '429' });
+  for (let i = 0; i < 5; i += 1) metrics.recordUpstreamError({ code: 'OTHER' });
+  // 3 codes, limit=2 → shares should still each be 1/3
+  const rates = metrics.errorRateByCode(2);
+  const total = rates.reduce((a, r) => a + r.share, 0);
+  assert.ok(total <= 1.01, `total ${total} should be ≤ 1`);
+  // Each share should be 1/3 ≈ 0.3333
+  assert.ok(Math.abs(rates[0].share - 1/3) < 0.01);
+});
+
 test('snapshot.upstream.errorsByCode + topErrorCodes reflect the frequency map', () => {
   metrics.reset();
   metrics.recordUpstreamError({ code: 'rate_limit' });

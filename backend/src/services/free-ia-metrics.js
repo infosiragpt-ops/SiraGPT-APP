@@ -110,6 +110,29 @@ function topUpstreamErrorCodes(limit = 5) {
 }
 
 /**
+ * Same as topUpstreamErrorCodes but annotates each entry with the
+ * count's share of total errors (0–1). Useful for an ops widget that
+ * wants to render "404: 42% of all errors" without doing the division
+ * client-side.
+ *
+ * Returns [{ code, count, share }] sorted by count desc; empty when
+ * no errors have been recorded.
+ */
+function errorRateByCode(limit = 5) {
+  const entries = Object.entries(state.upstreamErrorsByCode);
+  const total = entries.reduce((a, [, n]) => a + n, 0);
+  if (total === 0) return [];
+  return entries
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, Math.max(0, limit))
+    .map(([code, count]) => ({
+      code,
+      count,
+      share: Math.round((count / total) * 10000) / 10000,
+    }));
+}
+
+/**
  * Trim the per-error-code frequency map to the top-N most common
  * codes. Bounds in-memory growth on long-lived processes that see a
  * cardinal explosion of one-off error strings. Returns the number of
@@ -272,6 +295,7 @@ module.exports = {
   recordUpstreamSuccess,
   recordUpstreamError,
   topUpstreamErrorCodes,
+  errorRateByCode,
   pruneErrorCodes,
   snapshot,
   summary,
