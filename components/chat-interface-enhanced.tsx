@@ -341,7 +341,7 @@ const MUSIC_MODEL_OPTIONS: MusicModel[] = ["ElevenLabs", "Lyria 3 Pro", "Mimo Ma
 const MUSIC_STYLE_OPTIONS: MusicStyle[] = ["Auto", "Cinematic", "Pop", "Electronic", "Ambient", "Orchestral", "Latin", "Hip-Hop", "Jazz"]
 const MUSIC_MOOD_OPTIONS: MusicMood[] = ["Balanced", "Energetic", "Emotional", "Dark", "Happy", "Epic", "Relaxed"]
 const MUSIC_EFFECT_OPTIONS: MusicEffect[] = ["None", "Studio Master", "Spatial", "Warm Tape", "Radio Ready", "Lo-Fi"]
-const DEFAULT_IMAGE_MODEL = "openai/dall-e-3"
+const DEFAULT_IMAGE_MODEL = "bytedance-seed/seedream-4.5"
 const DEFAULT_IMAGE_PROVIDER = "OpenAI"
 const DEFAULT_VIDEO_MODEL = "veo-fast"
 
@@ -1968,9 +1968,9 @@ const ActiveToolsDisplay = ({
 
     return {
       image: imageModels.length ? imageModels : [
-        { name: "openai/dall-e-3", displayName: "DALL-E 3", provider: "OpenAI", iconName: "ChatGPTLogo" },
-        { name: "google/imagen-3-0", displayName: "Imagen 3", provider: "Gemini", iconName: "GeminiLogo" },
         { name: "bytedance-seed/seedream-4.5", displayName: "Seedream 4.5", provider: "OpenRouter", iconName: "SeedreamLogo" },
+        { name: "google/imagen-3-0", displayName: "Imagen 3", provider: "Gemini", iconName: "GeminiLogo" },
+        { name: "openai/dall-e-3", displayName: "DALL-E 3", provider: "OpenAI", iconName: "ChatGPTLogo" },
       ],
       video: videoModels.length ? videoModels : [
         { name: "veo-fast", displayName: "Veo Fast (8s)", provider: "Google", iconName: "GeminiLogo" },
@@ -2007,7 +2007,7 @@ const ActiveToolsDisplay = ({
           <Button
             variant="ghost"
             size="sm"
-            className="group/media-model relative isolate h-7 max-w-[168px] gap-1.5 overflow-hidden rounded-full border border-zinc-200/80 bg-white/82 px-2.5 py-0 text-[11.5px] font-semibold text-zinc-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_10px_24px_-20px_rgba(15,23,42,0.45)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
+            className="group/media-model relative isolate h-7 max-w-[188px] gap-1.5 overflow-hidden rounded-full border border-zinc-200/78 bg-white/86 px-2.5 py-0 text-[11.5px] font-semibold text-zinc-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.86),0_10px_24px_-20px_rgba(15,23,42,0.45)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
             aria-label={`Seleccionar modelo de ${tool}`}
             title={`Modelo: ${label}`}
           >
@@ -8895,17 +8895,21 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               ? tComposer("placeholderImage")
                               : isVideoGenerationActive
                                 ? tComposer("placeholderVideo")
-                                : isWebSearchActive
-                                  ? tComposer("placeholderWebSearch")
-                                  : isGmailActive
-                                    ? tComposer("placeholderGmail")
-                                    : (isGoogleCalendarActive || isGoogleDriveActive)
-                                      ? tComposer("placeholderGoogle")
-                                      : isSpotifyActive
-                                        ? tComposer("placeholderSpotify")
-                                        : isWordConnectorActive
-                                          ? tComposer("placeholderWord")
-                                          : tComposer("placeholderDefault")
+                                : isVoiceGenerationActive
+                                  ? "Describe la voz que quieres crear"
+                                  : isMusicGenerationActive
+                                    ? "Describe la música que quieres crear"
+                                    : isWebSearchActive
+                                      ? tComposer("placeholderWebSearch")
+                                      : isGmailActive
+                                        ? tComposer("placeholderGmail")
+                                        : (isGoogleCalendarActive || isGoogleDriveActive)
+                                          ? tComposer("placeholderGoogle")
+                                          : isSpotifyActive
+                                            ? tComposer("placeholderSpotify")
+                                            : isWordConnectorActive
+                                              ? tComposer("placeholderWord")
+                                              : tComposer("placeholderDefault")
                           }
                           className={cn(
                             "textarea-scrollbar min-h-[24px] min-w-0 flex-1 resize-none border-none bg-transparent",
@@ -9014,7 +9018,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         Only rendered when something is active, so the
                         composer stays a clean pill in the idle state. */}
                     {hasActiveTools && (
-                      <div className="mx-2 mb-2 flex flex-wrap items-center gap-2 rounded-lg bg-muted/30 px-2 py-1">
+                      <div className="composer-media-controls-row mx-2 mb-2 flex items-center gap-2 overflow-x-auto px-0.5 py-1">
                         <ActiveToolsDisplay {...activeToolsProps} />
                       </div>
                     )}
@@ -9370,17 +9374,21 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                   ? tComposer("placeholderImage")
                                   : isVideoGenerationActive
                                     ? tComposer("placeholderVideo")
-                                    : isWebSearchActive
-                                      ? tComposer("placeholderWebSearch")
-                                      : isGmailActive
-                                        ? tComposer("placeholderGmail")
-                                        : (isGoogleCalendarActive || isGoogleDriveActive)
-                                          ? tComposer("placeholderGoogle")
-                                          : isSpotifyActive
-                                            ? tComposer("placeholderSpotify")
-                                            : isWordConnectorActive
-                                              ? tComposer("placeholderWord")
-                                              : tComposer("placeholderDefault")
+                                    : isVoiceGenerationActive
+                                      ? "Describe la voz que quieres crear"
+                                      : isMusicGenerationActive
+                                        ? "Describe la música que quieres crear"
+                                        : isWebSearchActive
+                                          ? tComposer("placeholderWebSearch")
+                                          : isGmailActive
+                                            ? tComposer("placeholderGmail")
+                                            : (isGoogleCalendarActive || isGoogleDriveActive)
+                                              ? tComposer("placeholderGoogle")
+                                              : isSpotifyActive
+                                                ? tComposer("placeholderSpotify")
+                                                : isWordConnectorActive
+                                                  ? tComposer("placeholderWord")
+                                                  : tComposer("placeholderDefault")
                               }
                               className={cn(
                                 "textarea-scrollbar min-h-[24px] min-w-0 flex-1 resize-none border-none bg-transparent",
@@ -9483,7 +9491,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             Mirrors the in-chat composer above so both
                             states feel identical to the user. */}
                         {hasActiveTools && (
-                          <div className="mx-2 mb-2 flex flex-wrap items-center gap-2 rounded-lg bg-muted/30 px-2 py-1">
+                          <div className="composer-media-controls-row mx-2 mb-2 flex items-center gap-2 overflow-x-auto px-0.5 py-1">
                             <ActiveToolsDisplay {...activeToolsProps} />
                           </div>
                         )}

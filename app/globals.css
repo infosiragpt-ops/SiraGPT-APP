@@ -3234,6 +3234,16 @@ footer {
   position: relative;
   z-index: 1;
 }
+.composer-media-controls-row {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.composer-media-controls-row::-webkit-scrollbar {
+  display: none;
+}
+.composer-media-controls-row > * {
+  flex: 0 0 auto;
+}
 .composer-context-field {
   min-height: 36px;
 }
