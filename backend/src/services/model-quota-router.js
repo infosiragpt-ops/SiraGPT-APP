@@ -260,7 +260,7 @@ function userQuotaDigest(user, env = process.env) {
     const used = Number(premiumPool.used || 0);
     return Math.min(100, Math.round((used / limit) * 1000) / 10);
   })();
-  return {
+  const digest = {
     plan: policy.currentPlan,
     premium: {
       unlimited: premiumPool.unlimited,
@@ -277,6 +277,9 @@ function userQuotaDigest(user, env = process.env) {
     },
     dailyCalls: policy.calls,
   };
+  // Inline the upgrade hint so the UI doesn't need a second round-trip.
+  digest.upgradeHint = suggestUpgradePlan(digest);
+  return digest;
 }
 
 module.exports = {

@@ -135,6 +135,32 @@ test('userQuotaDigest: PRO user with 70% premium usage reports pctUsed=70', () =
   assert.equal(digest.premium.exhausted, false);
 });
 
+test('userQuotaDigest.upgradeHint: inlined — FREE user sees PRO suggestion', () => {
+  const { userQuotaDigest } = require('../src/services/model-quota-router');
+  const digest = userQuotaDigest({
+    plan: 'FREE',
+    apiUsage: 0n,
+    monthlyLimit: 0n,
+    gemaTokenUsage: 0n,
+    gemaTokenLimit: 0n,
+  });
+  assert.ok(digest.upgradeHint);
+  assert.equal(digest.upgradeHint.from, 'FREE');
+  assert.equal(digest.upgradeHint.to, 'PRO');
+});
+
+test('userQuotaDigest.upgradeHint: PRO under 80% — no hint inlined', () => {
+  const { userQuotaDigest } = require('../src/services/model-quota-router');
+  const digest = userQuotaDigest({
+    plan: 'PRO',
+    apiUsage: 50_000n,
+    monthlyLimit: 100_000n,
+    gemaTokenUsage: 0n,
+    gemaTokenLimit: 500_000n,
+  });
+  assert.equal(digest.upgradeHint, null);
+});
+
 test('suggestUpgradePlan: FREE always suggests PRO', () => {
   const { suggestUpgradePlan } = require('../src/services/model-quota-router');
   const r = suggestUpgradePlan({ plan: 'FREE', premium: { remaining: '0' } });
