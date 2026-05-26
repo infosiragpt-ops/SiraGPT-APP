@@ -244,13 +244,20 @@ test('enrichPlanWithPricing: FREE → priceLabel="Free", budgetLabel="0 credits"
   assert.equal(r.unlimited, false);
 });
 
-test('enrichPlanWithPricing: PRO → priceLabel="$5/mo", budgetLabel="100,000 credits"', () => {
+test('enrichPlanWithPricing: PRO → priceLabel="$5/mo", budgetLabel="100,000 credits", popular=true', () => {
   const r = enrichPlanWithPricing('PRO');
   assert.equal(r.plan, 'PRO');
   assert.equal(r.priceUsd, 5);
   assert.equal(r.priceLabel, '$5/mo');
   assert.equal(r.budgetCredits, 100_000);
   assert.equal(r.budgetLabel, '100,000 credits');
+  assert.equal(r.popular, true, 'PRO is marked popular per product');
+});
+
+test('enrichPlanWithPricing: non-PRO plans have popular=false', () => {
+  assert.equal(enrichPlanWithPricing('FREE').popular, false);
+  assert.equal(enrichPlanWithPricing('PRO_MAX').popular, false);
+  assert.equal(enrichPlanWithPricing('ENTERPRISE').popular, false);
 });
 
 test('enrichPlanWithPricing: ENTERPRISE → unlimited=true, budgetLabel="Unlimited"', () => {

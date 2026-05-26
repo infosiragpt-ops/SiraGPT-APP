@@ -94,6 +94,13 @@ function listFeatures() {
  *
  * Returns null for unknown plan names.
  */
+/**
+ * The pricing-page "most popular" badge — pre-decided by product
+ * (not derived from usage stats). PRO is the recommended default for
+ * a typical user: $5/mo, 100k tokens premium + 500k Gema4 fallback.
+ */
+const POPULAR_PLAN = 'PRO';
+
 function enrichPlanWithPricing(plan) {
   const key = String(plan || '').toUpperCase();
   if (!Object.prototype.hasOwnProperty.call(PLAN_PRICES_USD, key)) return null;
@@ -107,6 +114,7 @@ function enrichPlanWithPricing(plan) {
     budgetCredits: unlimited ? null : budget,
     budgetLabel: unlimited ? 'Unlimited' : `${budget.toLocaleString('en-US')} credits`,
     unlimited,
+    popular: key === POPULAR_PLAN,
   };
 }
 
@@ -280,4 +288,5 @@ module.exports = {
   PLAN_BUDGETS,
   PLAN_PRICES_USD,
   USD_PER_CREDIT,
+  POPULAR_PLAN,
 };
