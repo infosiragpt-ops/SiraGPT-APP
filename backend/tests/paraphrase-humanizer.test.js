@@ -14,6 +14,7 @@ const {
   listAITellPatterns,
   countAITellPatternsByLanguage,
   topAITellsFound,
+  topAITellsByLanguage,
   clampScore,
   replaceAITells,
   cleanEmDashOveruse,
@@ -211,6 +212,25 @@ test('humanizeChunked: aggregated aiScores stay in [0,1]', () => {
   const r = humanizeChunked({ text: input, maxChunkChars: 100 });
   assert.ok(r.aiScoreBefore >= 0 && r.aiScoreBefore <= 1);
   assert.ok(r.aiScoreAfter >= 0 && r.aiScoreAfter <= 1);
+});
+
+test('topAITellsByLanguage(en): only matches English tells, ignores Spanish', () => {
+  const mixed = 'Furthermore, the results are strong. Cabe destacar que el dato es real.';
+  const en = topAITellsByLanguage(mixed, 'english');
+  assert.ok(en.find((t) => t.pattern === 'furthermore'));
+  assert.ok(!en.find((t) => t.pattern === 'cabe destacar que'));
+});
+
+test('topAITellsByLanguage(es): only matches Spanish tells', () => {
+  const mixed = 'Furthermore, the results are strong. Cabe destacar que el dato es real.';
+  const es = topAITellsByLanguage(mixed, 'spanish');
+  assert.ok(es.find((t) => t.pattern === 'cabe destacar que'));
+  assert.ok(!es.find((t) => t.pattern === 'furthermore'));
+});
+
+test('topAITellsByLanguage: unknown language returns []', () => {
+  assert.deepEqual(topAITellsByLanguage('Furthermore', 'french'), []);
+  assert.deepEqual(topAITellsByLanguage('', 'english'), []);
 });
 
 test('topAITellsFound: returns nothing for clean text', () => {

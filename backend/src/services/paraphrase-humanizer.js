@@ -279,6 +279,35 @@ function countAITellPatternsByLanguage() {
  * @param {number} [opts.limit] — top-N to return (default 5)
  * @returns {Array<{ pattern: string, count: number }>}
  */
+/**
+ * Same as topAITellsFound but only counts patterns from the given
+ * language bucket. Useful when the source language is known and the
+ * caller wants to avoid cross-language noise in the debug panel.
+ *
+ * @param {string} text
+ * @param {string} language — 'english' | 'spanish'
+ * @param {object} [opts]
+ * @param {number} [opts.limit] — top-N (default 5)
+ */
+function topAITellsByLanguage(text, language, { limit = 5 } = {}) {
+  const t = String(text || '');
+  const wanted = String(language || '').toLowerCase();
+  if (!t.trim() || (wanted !== 'english' && wanted !== 'spanish')) return [];
+  const spanishMarker = /[áéíóúñü¿¡]|^en |^cabe |^sin /;
+  const counts = [];
+  for (const { key, regex } of AI_TELL_PATTERNS) {
+    const isSpanish = spanishMarker.test(key);
+    if (wanted === 'spanish' && !isSpanish) continue;
+    if (wanted === 'english' && isSpanish) continue;
+    const matches = t.match(regex);
+    const count = matches ? matches.length : 0;
+    if (count > 0) counts.push({ pattern: key, count });
+  }
+  return counts
+    .sort((a, b) => b.count - a.count)
+    .slice(0, Math.max(0, limit));
+}
+
 function topAITellsFound(text, { limit = 5 } = {}) {
   const t = String(text || '');
   if (!t.trim()) return [];
@@ -412,6 +441,7 @@ module.exports = {
   listAITellPatterns,
   countAITellPatternsByLanguage,
   topAITellsFound,
+  topAITellsByLanguage,
   clampScore,
   // Exposed for unit tests
   replaceAITells,
