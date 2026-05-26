@@ -135,6 +135,47 @@ test('userQuotaDigest: PRO user with 70% premium usage reports pctUsed=70', () =
   assert.equal(digest.premium.exhausted, false);
 });
 
+test('suggestUpgradePlan: FREE always suggests PRO', () => {
+  const { suggestUpgradePlan } = require('../src/services/model-quota-router');
+  const r = suggestUpgradePlan({ plan: 'FREE', premium: { remaining: '0' } });
+  assert.equal(r.from, 'FREE');
+  assert.equal(r.to, 'PRO');
+});
+
+test('suggestUpgradePlan: PRO under 80% returns null (no upgrade needed)', () => {
+  const { suggestUpgradePlan } = require('../src/services/model-quota-router');
+  assert.equal(suggestUpgradePlan({ plan: 'PRO', premium: { pctUsed: 50 } }), null);
+});
+
+test('suggestUpgradePlan: PRO at >=80% suggests PRO_MAX', () => {
+  const { suggestUpgradePlan } = require('../src/services/model-quota-router');
+  const r = suggestUpgradePlan({ plan: 'PRO', premium: { pctUsed: 85 } });
+  assert.equal(r.from, 'PRO');
+  assert.equal(r.to, 'PRO_MAX');
+  assert.match(r.reason, /85/);
+});
+
+test('suggestUpgradePlan: PRO_MAX at >=80% suggests ENTERPRISE', () => {
+  const { suggestUpgradePlan } = require('../src/services/model-quota-router');
+  const r = suggestUpgradePlan({ plan: 'PRO_MAX', premium: { pctUsed: 90 } });
+  assert.equal(r.from, 'PRO_MAX');
+  assert.equal(r.to, 'ENTERPRISE');
+});
+
+test('suggestUpgradePlan: ENTERPRISE unlimited returns null', () => {
+  const { suggestUpgradePlan } = require('../src/services/model-quota-router');
+  assert.equal(
+    suggestUpgradePlan({ plan: 'ENTERPRISE', premium: { unlimited: true } }),
+    null,
+  );
+});
+
+test('suggestUpgradePlan: null/empty digest returns null safely', () => {
+  const { suggestUpgradePlan } = require('../src/services/model-quota-router');
+  assert.equal(suggestUpgradePlan(null), null);
+  assert.equal(suggestUpgradePlan({}), null);
+});
+
 test('userQuotaDigest: ENTERPRISE unlimited premium reports pctUsed=null', () => {
   const { userQuotaDigest } = require('../src/services/model-quota-router');
   const digest = userQuotaDigest({

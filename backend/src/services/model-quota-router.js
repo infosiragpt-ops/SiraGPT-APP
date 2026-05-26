@@ -221,6 +221,34 @@ function persistModelPreference(settings, modelId) {
  * Doesn't replace buildModelQuotaPolicy (which is the full ledger
  * surface) — this is a smaller, friendlier projection.
  */
+/**
+ * Suggest the next plan tier when a user is close to their premium
+ * quota. Pure mapping — returns null when no upgrade is needed.
+ *
+ *   FREE      (pctUsed N/A — premium is 0)  → suggest PRO  always
+ *   PRO       (pctUsed >= 80%)              → suggest PRO_MAX
+ *   PRO_MAX   (pctUsed >= 80%)              → suggest ENTERPRISE
+ *   ENTERPRISE (unlimited)                  → null
+ */
+function suggestUpgradePlan(digest) {
+  if (!digest || !digest.plan) return null;
+  if (digest.plan === 'FREE') {
+    return { from: 'FREE', to: 'PRO', reason: 'free_plan_has_no_premium_tokens' };
+  }
+  if (digest.premium && digest.premium.unlimited) return null;
+  const pct = digest.premium && Number.isFinite(digest.premium.pctUsed)
+    ? digest.premium.pctUsed
+    : 0;
+  if (pct < 80) return null;
+  if (digest.plan === 'PRO') {
+    return { from: 'PRO', to: 'PRO_MAX', reason: `premium_pool_${pct.toFixed(1)}pct_used` };
+  }
+  if (digest.plan === 'PRO_MAX') {
+    return { from: 'PRO_MAX', to: 'ENTERPRISE', reason: `premium_pool_${pct.toFixed(1)}pct_used` };
+  }
+  return null;
+}
+
 function userQuotaDigest(user, env = process.env) {
   const policy = buildModelQuotaPolicy(user, env);
   const fallback = getGema4RuntimeConfig(env);
@@ -260,5 +288,6 @@ module.exports = {
   resolveModelForUser,
   persistModelPreference,
   userQuotaDigest,
+  suggestUpgradePlan,
   toBigInt,
 };
