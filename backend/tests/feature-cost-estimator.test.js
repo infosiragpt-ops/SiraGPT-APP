@@ -636,3 +636,25 @@ test('findCheapestPlanForBudget: non-numeric → null', () => {
   assert.equal(findCheapestPlanForBudget(NaN), null);
   assert.equal(findCheapestPlanForBudget(undefined), null);
 });
+
+test('quickEstimate: minCost for each feature regardless of payload size', () => {
+  const { quickEstimate } = require('../src/services/feature-cost-estimator');
+  const out = quickEstimate(['paraphrase', 'image_generation', 'image_upscale']);
+  assert.equal(out.length, 3);
+  assert.equal(out[0].feature, 'paraphrase');
+  assert.equal(out[0].credits, 1);
+  assert.equal(out[1].credits, 5);
+  assert.equal(out[2].credits, 3);
+});
+
+test('quickEstimate: silently drops unknown features', () => {
+  const { quickEstimate } = require('../src/services/feature-cost-estimator');
+  const out = quickEstimate(['paraphrase', 'mystery_feature', 'image_generation']);
+  assert.equal(out.length, 2);
+});
+
+test('quickEstimate: non-array input returns []', () => {
+  const { quickEstimate } = require('../src/services/feature-cost-estimator');
+  assert.deepEqual(quickEstimate(null), []);
+  assert.deepEqual(quickEstimate('paraphrase'), []);
+});

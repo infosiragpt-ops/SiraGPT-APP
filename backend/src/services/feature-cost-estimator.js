@@ -402,6 +402,23 @@ function pricingTable() {
 }
 
 /**
+ * Cheaper variant of `estimateCostBatch` that just takes feature
+ * names (no payload size) and returns per-feature minCost. Useful
+ * for marketing comparison tables that want to show "what does each
+ * feature cost?" without simulating actual user input.
+ *
+ *   quickEstimate(['paraphrase', 'image_generation'])
+ *   → [{ feature: 'paraphrase', credits: 1, usdLabel: '≈ <$0.01' },
+ *      { feature: 'image_generation', credits: 5, usdLabel: '≈ <$0.01' }]
+ *
+ * Unknown features are silently dropped.
+ */
+function quickEstimate(features) {
+  if (!Array.isArray(features)) return [];
+  return estimateCostBatch(features.map((f) => ({ feature: f, textLength: 0 })));
+}
+
+/**
  * Structured diff between two plans — the shape upsell/downsell UIs
  * want without having to subtract by hand. Both rows are also
  * included so the caller has everything needed to render a side-by-
@@ -454,6 +471,7 @@ module.exports = {
   estimateMonthlyCost,
   monthlyBreakdownAsCsv,
   pricingTable,
+  quickEstimate,
   comparePlans,
   getRecommendedPlan,
   recommendUpgradeFromUsage,
