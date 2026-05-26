@@ -18,6 +18,7 @@ const {
 const toolsetRegistry = require('../src/services/agents/toolset-registry');
 const trajectoryCompactor = require('../src/services/agents/trajectory-compactor');
 const hermesContext = require('../src/services/agents/hermes-context-patterns');
+const optionalSkillsBridge = require('../src/services/agents/hermes-optional-skills-bridge');
 
 test('parseSkillMarkdown reads Hermes-style frontmatter', () => {
   const parsed = parseSkillMarkdown('---\nname: demo\ndescription: Demo skill\n---\n# Body\nText');
@@ -64,6 +65,26 @@ test('recommendAdaptedPlaybooks returns SiraGPT-native skills for Hermes-flavore
   const adapted = new Set(recs.flatMap((rec) => rec.adaptedSkills));
 
   assert.ok(adapted.has('hermes-import-audit') || adapted.has('repo-folder-integration'));
+});
+
+test('optional skills bridge summarizes categories and exposes adaptation guidance', () => {
+  const repoRoot = path.resolve(__dirname, '..', '..');
+  const upstreamRoot = path.join(repoRoot, '.agents', 'hermes-upstream');
+  const status = optionalSkillsBridge.status({ upstreamRoot });
+
+  assert.ok(status.total >= 100, 'Hermes optional snapshot should be indexed');
+  assert.ok(status.categories.research >= 1, 'research category should be counted');
+  assert.ok(status.referenceOnly >= 1, 'unmapped optional skills should remain reference-only');
+
+  const hits = optionalSkillsBridge.searchOptionalSkills('research arxiv papers', { upstreamRoot, limit: 5 });
+  assert.ok(hits.some((hit) => hit.id === 'arxiv'));
+  assert.ok(hits.every((hit) => Array.isArray(hit.matchedTerms)));
+
+  const activated = optionalSkillsBridge.activateOptionalSkill('arxiv', { upstreamRoot });
+  assert.equal(activated.ok, true);
+  assert.equal(activated.skill.category, 'research');
+  assert.equal(activated.activation, 'use_siragpt_skills');
+  assert.match(activated.adaptationPlan.sourcePolicy, /rewrite behavior/);
 });
 
 test('toolset registry resolves core and composed bundles', () => {
