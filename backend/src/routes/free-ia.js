@@ -81,9 +81,18 @@ router.get('/digest', authenticateToken, (req, res) => {
     // digest if the billing helper fails.
     try {
       // eslint-disable-next-line global-require
-      const { enrichPlanWithPricing } = require('../services/feature-cost-estimator');
+      const { enrichPlanWithPricing, pricingTable } = require('../services/feature-cost-estimator');
       const planInfo = enrichPlanWithPricing(digest.plan);
       if (planInfo) digest.planInfo = planInfo;
+      // Surface the next-tier-up so the UI can render "upgrade to
+      // PRO_MAX" without a round-trip to /plans + sorting.
+      try {
+        const table = pricingTable();
+        const i = table.findIndex((p) => p.plan === digest.plan);
+        if (i >= 0 && i < table.length - 1) {
+          digest.nextTier = table[i + 1];
+        }
+      } catch { /* best-effort */ }
     } catch { /* best-effort enrichment */ }
     res.json(digest);
   } catch (err) {
