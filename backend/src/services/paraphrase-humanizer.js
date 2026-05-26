@@ -253,6 +253,22 @@ function listAITellPatterns() {
 }
 
 /**
+ * Return the human-readable counts grouped by language buckets
+ * ("english" / "spanish" / "other") so a debug UI can show "scanned
+ * for 22 English tells + 16 Spanish tells".
+ */
+function countAITellPatternsByLanguage() {
+  const buckets = { english: 0, spanish: 0, other: 0 };
+  const spanishMarker = /[áéíóúñü¿¡]|^en |^cabe |^sin /;
+  for (const p of AI_TELL_PATTERNS) {
+    if (spanishMarker.test(p.key)) buckets.spanish += 1;
+    else if (/^[a-z\s\-’']+$/.test(p.key) || /^[a-z\s\-]+$/.test(p.key)) buckets.english += 1;
+    else buckets.other += 1;
+  }
+  return buckets;
+}
+
+/**
  * Scan a text and return the top-N most frequent AI-tell patterns it
  * contains. Useful for showing the user a "your draft used these
  * LLM-flavour phrases" debug panel without committing the
@@ -394,6 +410,7 @@ module.exports = {
   humanizeChunked,
   estimateAIScore,
   listAITellPatterns,
+  countAITellPatternsByLanguage,
   topAITellsFound,
   clampScore,
   // Exposed for unit tests

@@ -12,6 +12,7 @@ const {
   humanizeChunked,
   estimateAIScore,
   listAITellPatterns,
+  countAITellPatternsByLanguage,
   topAITellsFound,
   clampScore,
   replaceAITells,
@@ -19,6 +20,15 @@ const {
   boostBurstiness,
   matchCase,
 } = require('../src/services/paraphrase-humanizer');
+
+test('countAITellPatternsByLanguage: returns positive counts for english + spanish buckets', () => {
+  const counts = countAITellPatternsByLanguage();
+  assert.ok(counts.english > 0, 'should have English tells');
+  assert.ok(counts.spanish > 0, 'should have Spanish tells');
+  // Total across buckets equals total pattern count.
+  const total = counts.english + counts.spanish + counts.other;
+  assert.equal(total, listAITellPatterns().length);
+});
 
 test('listAITellPatterns includes well-known LLM-favourite tells', () => {
   const patterns = listAITellPatterns();
