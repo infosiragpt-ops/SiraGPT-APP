@@ -4251,13 +4251,18 @@ router.post(
             try {
               const agenticStream = require('../services/agentic-chat-stream');
               const hasImages = (filesForVision || []).some(f => f && f.mimeType && f.mimeType.startsWith('image/'));
+              const priorHistory = Array.isArray(messages) ? messages.slice(0, -1) : [];
               if (
                 agenticStream.isEnabled()
                 && agenticStream.modelSupportsFunctionCalling(actualProvider, actualModel)
+                && agenticStream.shouldUseAgenticChat({
+                  prompt,
+                  history: priorHistory,
+                  files: filesForVision,
+                })
                 && !hasImages
               ) {
                 const agenticClient = createProviderClient(actualProvider);
-                const priorHistory = Array.isArray(messages) ? messages.slice(0, -1) : [];
                 const agenticFileIds = (processedFiles || [])
                   .map((file) => file && (file.id || file.fileId || file.uploadId || file.databaseId))
                   .filter(Boolean)
