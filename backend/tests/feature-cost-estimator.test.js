@@ -85,6 +85,20 @@ test('estimateCostBatch: non-array input returns []', () => {
   assert.deepEqual(estimateCostBatch('not an array'), []);
 });
 
+test('estimateCostBatch: each estimate now includes a usdLabel', () => {
+  const out = estimateCostBatch([
+    { feature: 'image_generation' },
+    { feature: 'paraphrase', textLength: 0 },
+  ]);
+  assert.equal(out[0].feature, 'image_generation');
+  assert.match(out[0].usdLabel, /^≈/);
+  assert.equal(out[1].feature, 'paraphrase');
+  // Both fall well below $0.01 at the default rate, so the label is
+  // "≈ <$0.01" — locked down so we catch unintended rate changes.
+  assert.equal(out[0].usdLabel, '≈ <$0.01');
+  assert.equal(out[1].usdLabel, '≈ <$0.01');
+});
+
 test('estimateCostBatch: env override applies to all batch items', () => {
   const out = estimateCostBatch(
     [

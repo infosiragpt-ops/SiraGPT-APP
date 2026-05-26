@@ -211,7 +211,14 @@ function estimateCostBatch(requests, { env = process.env } = {}) {
   for (const r of requests) {
     if (!r || !r.feature) continue;
     const est = estimateCost(r.feature, { textLength: r.textLength || 0, env });
-    if (est) out.push({ feature: r.feature, credits: est.credits, breakdown: est.breakdown });
+    if (est) {
+      out.push({
+        feature: r.feature,
+        credits: est.credits,
+        usdLabel: formatCreditsAsUsd(est.credits),
+        breakdown: est.breakdown,
+      });
+    }
   }
   return out;
 }
