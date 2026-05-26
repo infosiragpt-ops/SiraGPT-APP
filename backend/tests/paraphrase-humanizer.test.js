@@ -233,6 +233,17 @@ test('topAITellsByLanguage: unknown language returns []', () => {
   assert.deepEqual(topAITellsByLanguage('', 'english'), []);
 });
 
+test('topAITellsByLanguage: clean text returns [] for both languages', () => {
+  assert.deepEqual(topAITellsByLanguage('No tells here at all.', 'english'), []);
+  assert.deepEqual(topAITellsByLanguage('Texto limpio sin frases sospechosas.', 'spanish'), []);
+});
+
+test('topAITellsByLanguage: respects limit per call', () => {
+  const text = 'Furthermore, moreover, additionally, delve into, navigate the data.';
+  assert.equal(topAITellsByLanguage(text, 'english', { limit: 2 }).length, 2);
+  assert.ok(topAITellsByLanguage(text, 'english', { limit: 100 }).length >= 3);
+});
+
 test('topAITellsFound: returns nothing for clean text', () => {
   assert.deepEqual(topAITellsFound('I like clean prose. No noise here.'), []);
   assert.deepEqual(topAITellsFound(''), []);
