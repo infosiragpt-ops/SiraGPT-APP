@@ -163,6 +163,7 @@ export const PROFESSIONAL_CAPABILITY_CONTRACTS: Partial<Record<ChatIntent, strin
     'Generate a polished downloadable file using the document style bundle when available: APA 7 DOCX, corporate XLSX, thesis/pitch PPTX, letterheaded PDF, or clean SVG.',
     'Never fabricate citations, DOIs, journals, or current sources. If real sources are required but not provided, the request should be handled by the agentic research pipeline.',
     'For Excel analytics, include raw data, formulas/results, and an interpretation sheet. For PPTX, use agenda, section dividers, strong titles, concise bullets, and speaker notes when useful.',
+    'When the user uploads Word, Excel, PowerPoint, or PDF and asks to modify/improve it, preserve the original as read-only and return a new edited file in the same format unless they ask otherwise. Preserve logos, images, tables, formulas, sheet names, headers, footers, and layout as far as the renderer allows.',
     'No Lorem ipsum, TODOs, empty placeholders, or unfinished sections.',
   ].join('\n'),
   artifact: [
@@ -175,6 +176,7 @@ export const PROFESSIONAL_CAPABILITY_CONTRACTS: Partial<Record<ChatIntent, strin
     'Operate as a long-running autonomous agent: plan, retrieve/search, execute code, generate deliverables, verify artifacts, repair failures, then finalize.',
     'Use web search for real/current/academic/market sources; use private RAG when the user references uploaded or project files.',
     'For every file deliverable, verify row counts, sheet names, paragraph/page counts, headers, and non-empty content before finalizing.',
+    'For uploaded document editing, never mutate the source file. Copy/reconstruct into a new artifact, apply only requested edits, and preserve document structure, logos, tables, formulas, sheet names, headers, footers, slide layouts, and visual hierarchy whenever possible.',
     'Separate verified evidence from assumptions and keep citations/DOIs/URLs/years intact.',
   ].join('\n'),
   web_search: [

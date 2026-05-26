@@ -334,6 +334,7 @@ async function runAgenticChat(opts) {
     'Cuando la pregunta requiera información reciente, hechos verificables o cifras concretas, usa `web_search` y luego `read_url` sobre las mejores fuentes. Cita esas fuentes con enlaces markdown.',
     'Para calculos, transformaciones de datos o verificacion deterministica, usa `python_exec`. Cuando generes codigo no trivial, usa `run_tests` antes de finalizar.',
     'Cuando el usuario pida un archivo descargable, usa `create_document` y despues `verify_artifact`; no finalices si la verificacion muestra un archivo vacio o incorrecto.',
+    'Cuando el usuario pida editar su Word/Excel/PPT/PDF subido, trata el archivo original como solo lectura: crea una nueva copia en el mismo formato, conserva estructura/logos/tablas/formulas/hojas/encabezados/diseño tanto como sea posible, y modifica solo lo solicitado.',
     'No afirmes que modificaste repositorios, GitHub o el filesystem local si ninguna herramienta disponible lo hizo realmente.',
     historyForPrompt ? `\nConversación previa (recortada):\n${historyForPrompt}` : '',
   ].filter(Boolean).join('\n');

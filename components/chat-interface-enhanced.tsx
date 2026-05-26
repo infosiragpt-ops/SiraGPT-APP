@@ -4585,6 +4585,8 @@ But first, you need to connect your Spotify account securely using the button be
   const [splitViewContent, setSplitViewContent] = React.useState<any>(null)
   const [documentPreviewUrl, setDocumentPreviewUrl] = React.useState<DocumentPreviewTarget | null>(null);
   const [composerPreviewIndex, setComposerPreviewIndex] = React.useState<number | null>(null);
+  const [sidePreviewAttachment, setSidePreviewAttachment] = React.useState<AttachmentLike | null>(null);
+  const [sidePreviewSiblings, setSidePreviewSiblings] = React.useState<AttachmentLike[]>([]);
   const activeSearchActivity = activeSearchActivityId ? searchActivities[activeSearchActivityId] : null;
   const searchActivityPanelOpen = Boolean(activeSearchActivity);
 
@@ -4846,12 +4848,16 @@ But first, you need to connect your Spotify account securely using the button be
   const handleToggleSplitView = (content: any) => {
     setDocumentPreviewUrl(null)
     setComposerPreviewIndex(null)
+    setSidePreviewAttachment(null)
+    setSidePreviewSiblings([])
     setSplitViewContent(content)
   }
 
   const handleDocumentPreview = (url: DocumentPreviewTarget) => {
     setSplitViewContent(null)
     setComposerPreviewIndex(null)
+    setSidePreviewAttachment(null)
+    setSidePreviewSiblings([])
     setSplitRatio((current) => {
       const balanced = current < 40 || current > 62 ? 48 : current
       try { localStorage.setItem(SPLIT_STORAGE_KEY, String(balanced)); } catch { /* ignore */ }
@@ -4859,6 +4865,21 @@ But first, you need to connect your Spotify account securely using the button be
     })
     setDocumentPreviewUrl(url);
   };
+
+  const handleAttachmentPreview = React.useCallback((attachment: AttachmentLike, siblings: AttachmentLike[] = [], index = 0) => {
+    setSplitViewContent(null);
+    setDocumentPreviewUrl(null);
+    setComposerPreviewIndex(null);
+    setActiveSearchActivityId(null);
+    setSplitRatio((current) => {
+      const balanced = current < 40 || current > 62 ? 48 : current;
+      try { localStorage.setItem(SPLIT_STORAGE_KEY, String(balanced)); } catch { /* ignore */ }
+      return balanced;
+    });
+    const normalizedSiblings = siblings.length > 0 ? siblings : [attachment];
+    setSidePreviewSiblings(normalizedSiblings);
+    setSidePreviewAttachment(normalizedSiblings[index] || attachment);
+  }, []);
 
   // Complete chat share functionality
   const handleCompleteShare = async () => {
@@ -6120,6 +6141,8 @@ But first, you need to connect your Spotify account securely using the button be
     if (!uploadedFiles[index]) return;
     setSplitViewContent(null);
     setDocumentPreviewUrl(null);
+    setSidePreviewAttachment(null);
+    setSidePreviewSiblings([]);
     setActiveSearchActivityId(null);
     setSplitRatio((current) => {
       const balanced = current < 40 || current > 62 ? 48 : current;
@@ -7892,6 +7915,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     searchActivityPanelOpen ||
     documentPreviewUrl ||
     composerPreviewAttachment ||
+    sidePreviewAttachment ||
     isWordConnectorActive ||
     isExcelConnectorActive ||
     activeArtifact
@@ -7903,6 +7927,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     setSplitViewContent(null);
     setDocumentPreviewUrl(null);
     setComposerPreviewIndex(null);
+    setSidePreviewAttachment(null);
+    setSidePreviewSiblings([]);
     setActiveSearchActivityId(null);
     setIsWordConnectorActive(false);
     setIsExcelConnectorActive(false);
@@ -9162,6 +9188,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                       isStreaming={false}
                                       onToggleSplitView={handleToggleSplitView}
                                       onDocumentPreview={handleDocumentPreview}
+                                      onAttachmentPreview={handleAttachmentPreview}
                                     />
                                   </ErrorBoundary>
                                 )}
@@ -9180,6 +9207,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                     isStreaming={false}
                                     onToggleSplitView={handleToggleSplitView}
                                     onDocumentPreview={handleDocumentPreview}
+                                    onAttachmentPreview={handleAttachmentPreview}
                                   />
                                 </ErrorBoundary>
                               ))
@@ -9206,6 +9234,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                     isStreaming={true}
                                     onToggleSplitView={handleToggleSplitView}
                                     onDocumentPreview={handleDocumentPreview}
+                                    onAttachmentPreview={handleAttachmentPreview}
                                   />
                                 </ErrorBoundary>
                               </div>
@@ -9660,7 +9689,24 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   }}
                 />
               )}
-              {!showAudioPanel && !activeSearchActivity && !composerPreviewAttachment && isWordConnectorActive && (
+              {!showAudioPanel && !activeSearchActivity && !documentPreviewUrl && !composerPreviewAttachment && sidePreviewAttachment && (
+                <UnifiedDocumentViewer
+                  variant="panel"
+                  className="h-full"
+                  open={true}
+                  onClose={() => {
+                    setSidePreviewAttachment(null);
+                    setSidePreviewSiblings([]);
+                  }}
+                  attachment={sidePreviewAttachment}
+                  siblings={sidePreviewSiblings}
+                  onNavigate={(next) => {
+                    const idx = sidePreviewSiblings.findIndex(s => s === next || (next.id && s.id === next.id));
+                    if (idx >= 0) setSidePreviewAttachment(sidePreviewSiblings[idx]);
+                  }}
+                />
+              )}
+              {!showAudioPanel && !activeSearchActivity && !composerPreviewAttachment && !sidePreviewAttachment && isWordConnectorActive && (
                 <WordConnector
                   ref={wordConnectorRef}
                   onClose={() => setIsWordConnectorActive(false)}
@@ -9673,7 +9719,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   }}
                 />
               )}
-              {!showAudioPanel && !activeSearchActivity && !composerPreviewAttachment && isExcelConnectorActive && (
+              {!showAudioPanel && !activeSearchActivity && !composerPreviewAttachment && !sidePreviewAttachment && isExcelConnectorActive && (
                 <React.Suspense fallback={<div className="h-full w-full animate-pulse bg-muted/30" aria-hidden="true" />}>
                   <ExcelConnector
                     ref={excelConnectorRef}
@@ -9682,7 +9728,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   />
                 </React.Suspense>
               )}
-              {!showAudioPanel && !activeSearchActivity && activeArtifact && !isWordConnectorActive && !isExcelConnectorActive && !documentPreviewUrl && !composerPreviewAttachment && (
+              {!showAudioPanel && !activeSearchActivity && activeArtifact && !isWordConnectorActive && !isExcelConnectorActive && !documentPreviewUrl && !composerPreviewAttachment && !sidePreviewAttachment && (
                 <ArtifactPanel />
               )}
             </div>
