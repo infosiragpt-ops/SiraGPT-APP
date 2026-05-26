@@ -80,6 +80,25 @@ router.get('/digest', authenticateToken, (req, res) => {
   }
 });
 
+// Cost estimator — accept a batch of {feature, textLength} requests and
+// return the per-item credit cost. Lets the UI render a "this will cost
+// N credits" preview before the user confirms.
+//
+//   POST /api/free-ia/estimate
+//   body: { items: [{feature, textLength?}, ...] }
+//   → { estimates: [{feature, credits, breakdown}, ...] }
+const express2 = require('express');
+router.post('/estimate', express2.json({ limit: '32kb' }), (req, res) => {
+  try {
+    // eslint-disable-next-line global-require
+    const { estimateCostBatch } = require('../services/feature-cost-estimator');
+    const items = Array.isArray(req.body?.items) ? req.body.items : [];
+    res.json({ estimates: estimateCostBatch(items) });
+  } catch (err) {
+    res.status(500).json({ error: 'estimate_failed', message: err && err.message });
+  }
+});
+
 // Brand constants for frontend localisation / hardcoded labels (e.g. a
 // /loading screen that needs the brand name before /status responds).
 router.get('/brand', (_req, res) => {
@@ -134,6 +153,7 @@ const ENDPOINT_INVENTORY = Object.freeze([
   { method: 'GET',  path: '/api/free-ia/health',           auth: 'public', returns: '200 OK / 503 degraded' },
   { method: 'GET',  path: '/api/free-ia/info',             auth: 'public', returns: 'consolidated view' },
   { method: 'GET',  path: '/api/free-ia/digest',           auth: 'user',   returns: 'per-user quota digest (plan + fallback + hints)' },
+  { method: 'POST', path: '/api/free-ia/estimate',         auth: 'public', returns: 'batch cost estimates for {items: [{feature, textLength}]}' },
   { method: 'GET',  path: '/api/free-ia/metrics',          auth: 'public', returns: 'JSON snapshot' },
   { method: 'GET',  path: '/api/free-ia/metrics/summary',  auth: 'public', returns: 'one-line digest (?format=text for plain)' },
   { method: 'GET',  path: '/api/free-ia/metrics/badge',    auth: 'public', returns: '{ fallbacks, healthy } or 204' },
