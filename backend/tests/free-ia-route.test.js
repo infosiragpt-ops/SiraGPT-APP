@@ -292,6 +292,10 @@ test('GET /api/free-ia/info: includes apiFingerprint (stable + 8 hex chars)', as
   }
 });
 
+test('SCHEMA_VERSION is at v3.3 (latest additive shape)', () => {
+  assert.equal(SCHEMA_VERSION, 'v3.3');
+});
+
 test('GET /api/free-ia/info: includes schemaVersion for client cache invalidation', async () => {
   const prevKey = process.env.CEREBRAS_API_KEY;
   process.env.CEREBRAS_API_KEY = 'csk-schema-version';
