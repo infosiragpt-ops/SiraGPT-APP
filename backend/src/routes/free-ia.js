@@ -91,7 +91,7 @@ const express2 = require('express');
 router.post('/estimate', express2.json({ limit: '32kb' }), (req, res) => {
   try {
     // eslint-disable-next-line global-require
-    const { estimateCostBatch, estimateMonthlyCost, getRecommendedPlan } = require('../services/feature-cost-estimator');
+    const { estimateCostBatch, estimateMonthlyCost, getRecommendedPlan, getCostDelta } = require('../services/feature-cost-estimator');
     const items = Array.isArray(req.body?.items) ? req.body.items : [];
     const out = { estimates: estimateCostBatch(items) };
     // Optional projection: if the body includes a forecastUsage map,
@@ -99,6 +99,11 @@ router.post('/estimate', express2.json({ limit: '32kb' }), (req, res) => {
     if (req.body && req.body.forecastUsage && typeof req.body.forecastUsage === 'object') {
       out.monthlyProjection = estimateMonthlyCost(req.body.forecastUsage);
       out.recommendedPlan = getRecommendedPlan(req.body.forecastUsage);
+      // If the caller also tells us their current plan, include the
+      // $ delta so the UI can render "upgrade to PRO_MAX (+$5/mo)".
+      if (typeof req.body.currentPlan === 'string') {
+        out.costDelta = getCostDelta(req.body.currentPlan, out.recommendedPlan.plan);
+      }
     }
     res.json(out);
   } catch (err) {

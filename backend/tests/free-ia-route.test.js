@@ -148,6 +148,42 @@ test('POST /api/free-ia/estimate returns per-item credit estimates', async () =>
   }
 });
 
+test('POST /api/free-ia/estimate with currentPlan returns costDelta', async () => {
+  const { server, baseURL } = await startServer();
+  try {
+    const payload = JSON.stringify({
+      items: [],
+      forecastUsage: { paraphrase: { calls: 100, avgTextLength: 1000 } },
+      currentPlan: 'FREE',
+    });
+    const resp = await new Promise((resolve, reject) => {
+      const url = new URL(`${baseURL}/api/free-ia/estimate`);
+      const req = http.request({
+        method: 'POST',
+        hostname: url.hostname,
+        port: url.port,
+        path: url.pathname,
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
+      }, (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => resolve({ status: res.statusCode, body: JSON.parse(Buffer.concat(chunks).toString('utf8')) }));
+      });
+      req.on('error', reject);
+      req.write(payload);
+      req.end();
+    });
+    assert.equal(resp.status, 200);
+    assert.ok(resp.body.costDelta);
+    assert.equal(resp.body.costDelta.fromPlan, 'FREE');
+    assert.equal(resp.body.costDelta.toPlan, 'PRO');
+    assert.equal(resp.body.costDelta.deltaUsd, 5);
+    assert.equal(resp.body.costDelta.upgrade, true);
+  } finally {
+    server.close();
+  }
+});
+
 test('POST /api/free-ia/estimate with forecastUsage returns monthlyProjection + recommendedPlan', async () => {
   const { server, baseURL } = await startServer();
   try {
