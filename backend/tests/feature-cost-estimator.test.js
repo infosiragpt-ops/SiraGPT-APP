@@ -267,6 +267,23 @@ test('enrichPlanWithPricing: ENTERPRISE → unlimited=true, budgetLabel="Unlimit
   assert.equal(r.budgetLabel, 'Unlimited');
 });
 
+test('validatePlanName: returns true for known plans (case-insensitive)', () => {
+  const { validatePlanName } = require('../src/services/feature-cost-estimator');
+  assert.equal(validatePlanName('FREE'), true);
+  assert.equal(validatePlanName('pro'), true);
+  assert.equal(validatePlanName('PRO_MAX'), true);
+  assert.equal(validatePlanName('enterprise'), true);
+});
+
+test('validatePlanName: returns false for unknown/invalid input', () => {
+  const { validatePlanName } = require('../src/services/feature-cost-estimator');
+  assert.equal(validatePlanName(''), false);
+  assert.equal(validatePlanName('mystery'), false);
+  assert.equal(validatePlanName(null), false);
+  assert.equal(validatePlanName(123), false);
+  assert.equal(validatePlanName(undefined), false);
+});
+
 test('enrichPlanWithPricing: case-insensitive, unknown plan returns null', () => {
   assert.equal(enrichPlanWithPricing('pro').plan, 'PRO');
   assert.equal(enrichPlanWithPricing('mystery'), null);

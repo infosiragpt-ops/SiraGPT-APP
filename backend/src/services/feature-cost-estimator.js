@@ -101,6 +101,17 @@ function listFeatures() {
  */
 const POPULAR_PLAN = 'PRO';
 
+/**
+ * Return true if `plan` is one of the known SiraGPT tier names
+ * (FREE/PRO/PRO_MAX/ENTERPRISE). Case-insensitive. Useful for
+ * pre-Zod validation in routes that accept a plan name from the
+ * client.
+ */
+function validatePlanName(plan) {
+  if (typeof plan !== 'string' || !plan) return false;
+  return Object.prototype.hasOwnProperty.call(PLAN_PRICES_USD, plan.toUpperCase());
+}
+
 function enrichPlanWithPricing(plan) {
   const key = String(plan || '').toUpperCase();
   if (!Object.prototype.hasOwnProperty.call(PLAN_PRICES_USD, key)) return null;
@@ -283,6 +294,7 @@ module.exports = {
   getCostDelta,
   formatCreditsAsUsd,
   enrichPlanWithPricing,
+  validatePlanName,
   listFeatures,
   FEATURE_COSTS,
   PLAN_BUDGETS,
