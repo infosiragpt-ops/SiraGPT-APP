@@ -202,7 +202,7 @@ model AiModel {
   apiKey      String?
   type        ModelType @default(TEXT) // <-- NAYA: Model ki type (TEXT/IMAGE)
   icon        String?
-  isActive    Boolean   @default(true)
+  isActive    Boolean   @default(false)
 
   // Auto-sync tracking fields
   lastSynced    DateTime?

@@ -334,23 +334,29 @@ class ModelSyncService {
           });
 
           if (existingModel) {
+            const repairAutoActivated = this.shouldRepairAutoActivatedSyncedModel(existingModel);
+            const data = {
+              displayName: model.displayName,
+              description: model.description,
+              provider: model.provider,
+              type: model.type,
+              icon: this.getModelIcon(model),
+              lastSynced: new Date(),
+              syncSource: model.syncSource || 'api',
+              contextLength: model.contextLength,
+              pricing: model.pricing,
+              tags: model.tags && model.tags.length ? model.tags : this.generateTags(model),
+              // Don't override isActive - let users control this.
+              // Exception: repair rows auto-created by the previous sync logic
+              // that inherited the old database default of active=true.
+              ...(repairAutoActivated ? { isActive: false } : {}),
+              updatedAt: new Date()
+            };
+
             // Update existing model while preserving user settings
             await prisma.aiModel.update({
               where: { name: model.name },
-              data: {
-                displayName: model.displayName,
-                description: model.description,
-                provider: model.provider,
-                type: model.type,
-                icon: this.getModelIcon(model),
-                lastSynced: new Date(),
-                syncSource: model.syncSource || 'api',
-                contextLength: model.contextLength,
-                pricing: model.pricing,
-                tags: model.tags && model.tags.length ? model.tags : this.generateTags(model),
-                // Don't override isActive - let users control this
-                updatedAt: new Date()
-              }
+              data
             });
             updated++;
           } else {
@@ -401,6 +407,21 @@ class ModelSyncService {
       });
       console.log('🧹 Cleared all model caches');
     }
+  }
+
+  shouldRepairAutoActivatedSyncedModel(model = {}) {
+    if (!model.isActive) return false;
+
+    const source = String(model.syncSource || '').toLowerCase();
+    if (!source || source === 'manual') return false;
+
+    const createdAt = model.createdAt ? new Date(model.createdAt).getTime() : NaN;
+    const lastSynced = model.lastSynced ? new Date(model.lastSynced).getTime() : NaN;
+    if (!Number.isFinite(createdAt) || !Number.isFinite(lastSynced)) return false;
+
+    // Rows created by provider sync get createdAt and first lastSynced almost
+    // together. Admin-managed rows can still stay active across later syncs.
+    return Math.abs(lastSynced - createdAt) <= 5 * 60 * 1000;
   }
 
   /**
@@ -585,4 +606,7 @@ class ModelSyncService {
   }
 }
 
-module.exports = new ModelSyncService();
+const modelSyncService = new ModelSyncService();
+
+module.exports = modelSyncService;
+module.exports.ModelSyncService = ModelSyncService;
