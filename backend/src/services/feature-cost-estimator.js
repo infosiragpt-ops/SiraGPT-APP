@@ -493,6 +493,41 @@ function affordsFeature(currentPlan, feature, { calls = 0, avgTextLength = 0, en
 }
 
 /**
+ * Human-readable explainer for the result of `affordsFeature`. Returns
+ * a single string the UI can drop straight into a toast/banner. Built
+ * on top of affordsFeature so the explanations stay in sync with the
+ * underlying reasons.
+ *
+ *   explainBudgetVerdict('FREE', 'paraphrase', { calls: 100 })
+ *   → "FREE has no premium credit budget for paraphrase. Upgrade to PRO ($5/mo, 100,000 credits) to enable this feature."
+ *
+ *   explainBudgetVerdict('PRO', 'paraphrase', { calls: 1000, avgTextLength: 1000 })
+ *   → "2,000 credits — within your PRO budget (98.0% headroom)."
+ *
+ * Returns null for unknown plan.
+ */
+function explainBudgetVerdict(currentPlan, feature, usage = {}) {
+  const verdict = affordsFeature(currentPlan, feature, usage);
+  if (!verdict) return null;
+  const credits = (verdict.projectedCredits || 0).toLocaleString('en-US');
+  if (verdict.reason === 'unknown_feature') {
+    return `"${feature}" is not a known feature.`;
+  }
+  if (verdict.plan === 'ENTERPRISE') {
+    return `${credits} credits — covered by ENTERPRISE unlimited budget.`;
+  }
+  if (verdict.affords) {
+    return `${credits} credits — within your ${verdict.plan} budget (${verdict.headroomPct}% headroom).`;
+  }
+  if (verdict.reason === 'plan_has_no_premium_budget') {
+    const pro = enrichPlanWithPricing('PRO');
+    return `${verdict.plan} has no premium credit budget for ${feature}. Upgrade to PRO (${pro.priceLabel}, ${pro.budgetLabel}) to enable this feature.`;
+  }
+  // exceeds_plan_budget
+  return `${credits} credits exceeds your ${verdict.plan} budget of ${verdict.budgetCredits.toLocaleString('en-US')}. Consider PRO_MAX or ENTERPRISE.`;
+}
+
+/**
  * Structured diff between two plans — the shape upsell/downsell UIs
  * want without having to subtract by hand. Both rows are also
  * included so the caller has everything needed to render a side-by-
@@ -548,6 +583,7 @@ module.exports = {
   pricingTable,
   quickEstimate,
   affordsFeature,
+  explainBudgetVerdict,
   comparePlans,
   getRecommendedPlan,
   recommendUpgradeFromUsage,

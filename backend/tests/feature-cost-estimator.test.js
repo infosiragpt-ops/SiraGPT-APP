@@ -752,3 +752,43 @@ test('affordsFeature: 0 calls projects 0 credits (always affords on paid plan)',
   assert.equal(r.affords, true);
   assert.equal(r.projectedCredits, 0);
 });
+
+test('explainBudgetVerdict: FREE + paraphrase → upgrade-to-PRO hint', () => {
+  const { explainBudgetVerdict } = require('../src/services/feature-cost-estimator');
+  const msg = explainBudgetVerdict('FREE', 'paraphrase', { calls: 100 });
+  assert.ok(msg.includes('FREE has no premium credit budget'));
+  assert.ok(msg.includes('Upgrade to PRO'));
+  assert.ok(msg.includes('100,000 credits'));
+});
+
+test('explainBudgetVerdict: PRO well-within-budget → "within budget" message', () => {
+  const { explainBudgetVerdict } = require('../src/services/feature-cost-estimator');
+  const msg = explainBudgetVerdict('PRO', 'paraphrase', { calls: 100, avgTextLength: 1000 });
+  assert.ok(msg.includes('within your PRO budget'));
+  assert.ok(msg.includes('%'), 'should mention headroom %');
+});
+
+test('explainBudgetVerdict: ENTERPRISE always covered by unlimited', () => {
+  const { explainBudgetVerdict } = require('../src/services/feature-cost-estimator');
+  const msg = explainBudgetVerdict('ENTERPRISE', 'paraphrase', { calls: 100_000 });
+  assert.ok(msg.includes('ENTERPRISE unlimited budget'));
+});
+
+test('explainBudgetVerdict: exceeds budget → upgrade-to-PRO_MAX hint', () => {
+  const { explainBudgetVerdict } = require('../src/services/feature-cost-estimator');
+  // 100k × 11 = 1.1M credits, PRO budget 100k
+  const msg = explainBudgetVerdict('PRO', 'paraphrase', { calls: 100_000, avgTextLength: 10000 });
+  assert.ok(msg.includes('exceeds your PRO budget'));
+  assert.ok(msg.includes('PRO_MAX'));
+});
+
+test('explainBudgetVerdict: unknown feature returns "not a known feature"', () => {
+  const { explainBudgetVerdict } = require('../src/services/feature-cost-estimator');
+  const msg = explainBudgetVerdict('PRO', 'mystery_feature', { calls: 10 });
+  assert.ok(msg.includes('not a known feature'));
+});
+
+test('explainBudgetVerdict: unknown plan returns null', () => {
+  const { explainBudgetVerdict } = require('../src/services/feature-cost-estimator');
+  assert.equal(explainBudgetVerdict('MYSTERY', 'paraphrase', { calls: 10 }), null);
+});
