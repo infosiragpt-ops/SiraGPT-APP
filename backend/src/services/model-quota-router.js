@@ -303,6 +303,9 @@ function userQuotaDigest(user, env = process.env) {
   };
   // Inline the upgrade hint so the UI doesn't need a second round-trip.
   digest.upgradeHint = suggestUpgradePlan(digest);
+  // Also inline the per-day quota check — same UI panel uses it for
+  // the "disabled chat button" state.
+  digest.flashGptStatus = isWithinFreeIaQuota(user, env);
   return digest;
 }
 

@@ -135,6 +135,19 @@ test('userQuotaDigest: PRO user with 70% premium usage reports pctUsed=70', () =
   assert.equal(digest.premium.exhausted, false);
 });
 
+test('userQuotaDigest.flashGptStatus: inlined per-day quota check', () => {
+  const { userQuotaDigest } = require('../src/services/model-quota-router');
+  const digest = userQuotaDigest({
+    plan: 'PRO',
+    apiUsage: 0n,
+    monthlyLimit: 100_000n,
+    gemaTokenUsage: 0n,
+    gemaTokenLimit: 500_000n,
+  });
+  assert.ok(digest.flashGptStatus, 'flashGptStatus should be inlined on the digest');
+  assert.equal(typeof digest.flashGptStatus.ok, 'boolean');
+});
+
 test('userQuotaDigest.upgradeHint: inlined — FREE user sees PRO suggestion', () => {
   const { userQuotaDigest } = require('../src/services/model-quota-router');
   const digest = userQuotaDigest({
