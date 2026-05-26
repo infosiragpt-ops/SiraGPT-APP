@@ -212,6 +212,22 @@ test('getCostDelta: unknown plan returns deltaUsd=null', () => {
   assert.equal(d.reason, 'unknown_plan');
 });
 
+test('creditsToUsdCents: returns integer cents, 0 for non-positive input', () => {
+  const { creditsToUsdCents } = require('../src/services/feature-cost-estimator');
+  assert.equal(creditsToUsdCents(0), 0);
+  assert.equal(creditsToUsdCents(-1), 0);
+  assert.equal(creditsToUsdCents(NaN), 0);
+  // 1000 credits × $0.00005 × 100 = 5 cents
+  assert.equal(creditsToUsdCents(1000), 5);
+  // 100_000 credits = $5.00 = 500 cents
+  assert.equal(creditsToUsdCents(100_000), 500);
+  // Sub-cent rounds to 0
+  assert.equal(creditsToUsdCents(1), 0);
+  // Always integer
+  const n = creditsToUsdCents(12345);
+  assert.equal(n, Math.round(n));
+});
+
 test('formatCreditsAsUsd: 0 or negative → empty string', () => {
   assert.equal(formatCreditsAsUsd(0), '');
   assert.equal(formatCreditsAsUsd(-1), '');

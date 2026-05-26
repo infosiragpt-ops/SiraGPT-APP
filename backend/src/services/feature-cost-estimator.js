@@ -189,6 +189,17 @@ const USD_PER_CREDIT = 5 / 100_000;
  * with two decimals when >= $0.01, "≈ <$0.01" for sub-cent values,
  * and "" for non-positive inputs.
  */
+/**
+ * Convert N credits to USD cents (integer). Useful for financial
+ * reporting where float USD can drift due to rounding. Always returns
+ * a non-negative integer.
+ */
+function creditsToUsdCents(credits) {
+  const n = Number(credits) || 0;
+  if (n <= 0) return 0;
+  return Math.round(n * USD_PER_CREDIT * 100);
+}
+
 function formatCreditsAsUsd(credits) {
   const n = Number(credits) || 0;
   if (n <= 0) return '';
@@ -293,6 +304,7 @@ module.exports = {
   getRecommendedPlan,
   getCostDelta,
   formatCreditsAsUsd,
+  creditsToUsdCents,
   enrichPlanWithPricing,
   validatePlanName,
   listFeatures,
