@@ -108,7 +108,7 @@ describe("enforcePlanQuota — anonymous and unlimited paths", () => {
   });
 });
 
-describe("enforcePlanQuota — FREE plan unlimited FlashGPT", () => {
+describe("enforcePlanQuota — FREE plan unlimited", () => {
   test("FREE user → headers set as unlimited, next() called", () => {
     const mw = enforcePlanQuota({ surface: "document-ai" });
     const res = fakeRes();

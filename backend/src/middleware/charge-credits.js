@@ -158,51 +158,6 @@ function chargeCredits(spec = {}) {
       });
       if (!result.ok) {
         if (result.code === 'INSUFFICIENT') {
-          // Free IA fallback: when the user is out of credits AND the
-          // Free IA (Cerebras) provider is configured, let the request
-          // proceed so the route handler can re-route to the free model
-          // instead of erroring out. Routes opt out by passing
-          // `allowFreeIaFallback: false` (e.g. premium-only features).
-          if (allowFreeIaFallback) {
-            let freeIaEnabled = false;
-            try {
-              // eslint-disable-next-line global-require
-              const { isFreeIaConfigured } = require('../services/ai/cerebras-client');
-              freeIaEnabled = isFreeIaConfigured();
-            } catch (_err) {
-              freeIaEnabled = false;
-            }
-            if (freeIaEnabled) {
-              req._creditsExhausted = true;
-              req._fallbackToFreeIA = true;
-              req._chargedCredits = {
-                feature,
-                amount,
-                txn: null,
-                replay: false,
-                fallback: 'free_ia',
-              };
-              // Emit a response header so the frontend can render a
-              // "Free IA fallback" badge without re-querying status. The
-              // user's selected model stays selected in the UI; only the
-              // backend silently swaps to the free tier for this turn.
-              try {
-                if (typeof res.setHeader === 'function' && !res.headersSent) {
-                  res.setHeader('x-sira-fallback', 'free-ia');
-                  res.setHeader('x-sira-fallback-feature', feature);
-                  res.setHeader('x-sira-fallback-cost', String(amount));
-                }
-              } catch (_hdrErr) { /* best-effort header */ }
-              // Bump the ops counter — fire-and-forget, never breaks
-              // the request path.
-              try {
-                // eslint-disable-next-line global-require
-                const metrics = require('../services/free-ia-metrics');
-                metrics.recordFallback({ feature, amount });
-              } catch (_metricsErr) { /* best-effort metric */ }
-              return next();
-            }
-          }
           return res.status(402).json({
             error: 'insufficient credits',
             feature,

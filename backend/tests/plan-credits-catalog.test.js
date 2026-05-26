@@ -19,7 +19,7 @@ test('plan catalog PRO grants 100k premium and 500k gema', () => {
   assert.equal(String(gemaTokenGrant('PRO')), '500000');
 });
 
-test('model router falls back to FlashGPT (Cerebras Llama 3.1 8B) when premium exhausted', () => {
+test('model router falls back to the configured default model when premium exhausted', () => {
   const routed = resolveModelForUser({
     plan: 'PRO',
     apiUsage: 200_000n,
@@ -27,10 +27,8 @@ test('model router falls back to FlashGPT (Cerebras Llama 3.1 8B) when premium e
     gemaTokenUsage: 0n,
     gemaTokenLimit: 500_000n,
   }, 'gpt-4o');
-  // Defaults updated to match the product spec (FlashGPT = Llama 3.1 8B
-  // via Cerebras). Legacy `GEMA4_*` env vars still override.
-  assert.equal(routed.model, 'llama3.1-8b');
-  assert.equal(routed.provider, 'Cerebras');
+  assert.equal(routed.model, 'Gema4-31B');
+  assert.equal(routed.provider, 'OpenAI');
   assert.equal(routed.blocked, false);
 });
 
@@ -45,8 +43,8 @@ test('model quota policy exposes free default and unlimited call state', () => {
   });
 
   assert.equal(policy.currentPlan, 'FREE');
-  assert.equal(policy.defaultModel.name, 'llama3.1-8b');
-  assert.equal(policy.defaultModel.provider, 'Cerebras');
+  assert.equal(policy.defaultModel.name, 'Gema4-31B');
+  assert.equal(policy.defaultModel.provider, 'OpenAI');
   assert.equal(policy.calls.dailyLimit, null);
   assert.equal(policy.calls.remaining, null);
   assert.equal(policy.calls.exhausted, false);
@@ -72,30 +70,29 @@ test('model quota policy reports exhausted premium fallback separately from Gema
   assert.equal(policy.notices.some((n) => n.code === 'premium_pool_exhausted_fallback_available'), true);
 });
 
-test('FlashGPT defaults can be overridden via FREE_IA_* env vars (new brand naming)', () => {
+test('fallback defaults can be overridden via GEMA4_* env vars', () => {
   const env = {
-    FREE_IA_MODEL_ID: 'llama-3.1-70b',
-    FREE_IA_DISPLAY_NAME: 'FlashGPT Pro',
+    GEMA4_MODEL_ID: 'fallback-model',
+    GEMA4_DISPLAY_NAME: 'Fallback Model',
+    GEMA4_PROVIDER: 'OpenAI',
   };
   const config = getGema4RuntimeConfig(env);
   const virtual = buildGema4VirtualModel(env);
-  assert.equal(config.model, 'llama-3.1-70b');
-  assert.equal(config.displayName, 'FlashGPT Pro');
-  assert.equal(config.provider, 'Cerebras');
-  assert.equal(virtual.name, 'llama-3.1-70b');
-  assert.equal(virtual.displayName, 'FlashGPT Pro');
+  assert.equal(config.model, 'fallback-model');
+  assert.equal(config.displayName, 'Fallback Model');
+  assert.equal(config.provider, 'OpenAI');
+  assert.equal(virtual.name, 'fallback-model');
+  assert.equal(virtual.displayName, 'Fallback Model');
 });
 
-test('GEMA4_* env vars still override FREE_IA_* (backwards compatibility)', () => {
+test('FREE_IA_* env vars no longer override fallback defaults', () => {
   const env = {
-    GEMA4_MODEL_ID: 'legacy-gema4',
     FREE_IA_MODEL_ID: 'llama-3.1-70b',
-    GEMA4_DISPLAY_NAME: 'Legacy Gema4',
     FREE_IA_DISPLAY_NAME: 'FlashGPT Pro',
   };
   const config = getGema4RuntimeConfig(env);
-  assert.equal(config.model, 'legacy-gema4', 'GEMA4_MODEL_ID must win over FREE_IA_MODEL_ID');
-  assert.equal(config.displayName, 'Legacy Gema4');
+  assert.equal(config.model, 'Gema4-31B');
+  assert.equal(config.displayName, 'Gema4');
 });
 
 test('userQuotaDigest: FREE user sees plan + fallback brand + dailyCalls', () => {
@@ -111,8 +108,8 @@ test('userQuotaDigest: FREE user sees plan + fallback brand + dailyCalls', () =>
   assert.equal(digest.plan, 'FREE');
   assert.equal(digest.premium.remaining, '0', 'FREE plan has 0 premium tokens remaining');
   assert.equal(digest.premium.limit, '0');
-  assert.equal(digest.fallback.provider, 'Cerebras');
-  // FREE plan went unlimited after the "make FlashGPT unlimited" commit
+  assert.equal(digest.fallback.provider, 'OpenAI');
+  // FREE plan went unlimited after the "make free plan unlimited" commit
   // — dailyCalls is null and the policy reports it as no limit.
   assert.ok(
     digest.dailyCalls.dailyLimit === null || typeof digest.dailyCalls.dailyLimit === 'number',

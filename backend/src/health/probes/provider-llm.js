@@ -71,7 +71,6 @@ const PROVIDERS = [
   { name: 'provider-anthropic', baseUrl: 'https://api.anthropic.com/v1', apiKeyEnv: 'ANTHROPIC_API_KEY' },
   { name: 'provider-google',    baseUrl: 'https://generativelanguage.googleapis.com', apiKeyEnv: 'GOOGLE_AI_API_KEY' },
   { name: 'provider-mistral',   baseUrl: 'https://api.mistral.ai/v1', apiKeyEnv: 'MISTRAL_API_KEY' },
-  { name: 'provider-cerebras',  baseUrl: 'https://api.cerebras.ai/v1', apiKeyEnv: 'CEREBRAS_API_KEY' },
   { name: 'provider-groq',      baseUrl: 'https://api.groq.com/openai/v1', apiKeyEnv: 'GROQ_API_KEY' },
   { name: 'provider-deepseek',  baseUrl: 'https://api.deepseek.com/v1', apiKeyEnv: 'DEEPSEEK_API_KEY' },
   { name: 'provider-openrouter', baseUrl: 'https://openrouter.ai/api/v1', apiKeyEnv: 'OPENROUTER_API_KEY' },

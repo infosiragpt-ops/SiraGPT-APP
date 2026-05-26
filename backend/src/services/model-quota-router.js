@@ -1,19 +1,12 @@
 'use strict';
 
 const { getPlanCatalog, GEMA4_MODEL_ID } = require('./plan-credits-catalog');
-const {
-  DEFAULT_MODEL: CEREBRAS_DEFAULT_MODEL,
-  DEFAULT_DISPLAY_NAME: CEREBRAS_DEFAULT_DISPLAY_NAME,
-  PROVIDER_NAME: CEREBRAS_PROVIDER_NAME,
-} = require('./ai/cerebras-client');
 
-// Defaults moved from OpenAI/Gema4-31B → Cerebras/Llama-3.1-8b/"FlashGPT" to
-// match the product spec in docs/SIraGPT.docx (FlashGPT = Llama 3.1 8B via
-// Cerebras). Legacy GEMA4_* env vars still override per deployment.
-const DEFAULT_GEMA4_DISPLAY_NAME = CEREBRAS_DEFAULT_DISPLAY_NAME;
-const DEFAULT_GEMA4_PROVIDER = CEREBRAS_PROVIDER_NAME;
-const DEFAULT_GEMA4_ICON = 'CerebrasLogo';
-const DEFAULT_GEMA4_MODEL_ID = CEREBRAS_DEFAULT_MODEL;
+// Default fallback model. GEMA4_* env vars still override this per deploy.
+const DEFAULT_GEMA4_DISPLAY_NAME = 'Gema4';
+const DEFAULT_GEMA4_PROVIDER = 'OpenAI';
+const DEFAULT_GEMA4_ICON = 'Sparkles';
+const DEFAULT_GEMA4_MODEL_ID = GEMA4_MODEL_ID || 'gpt-4o-mini';
 
 function cleanString(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
@@ -68,16 +61,9 @@ function unlimitedTokenPool({ used }) {
 }
 
 function getGema4RuntimeConfig(env = process.env) {
-  // Resolution order: explicit GEMA4_* env (legacy) → FREE_IA_* env (new
-  // brand) → static defaults pointing at Cerebras Llama 3.1 8B.
-  const model = cleanString(env.GEMA4_MODEL_ID)
-    || cleanString(env.FREE_IA_MODEL_ID)
-    || DEFAULT_GEMA4_MODEL_ID
-    || GEMA4_MODEL_ID;
+  const model = cleanString(env.GEMA4_MODEL_ID) || DEFAULT_GEMA4_MODEL_ID || GEMA4_MODEL_ID;
   const provider = cleanString(env.GEMA4_PROVIDER) || DEFAULT_GEMA4_PROVIDER;
-  const displayName = cleanString(env.GEMA4_DISPLAY_NAME)
-    || cleanString(env.FREE_IA_DISPLAY_NAME)
-    || DEFAULT_GEMA4_DISPLAY_NAME;
+  const displayName = cleanString(env.GEMA4_DISPLAY_NAME) || DEFAULT_GEMA4_DISPLAY_NAME;
   const icon = cleanString(env.GEMA4_ICON) || DEFAULT_GEMA4_ICON;
   return { model, provider, displayName, icon };
 }
@@ -216,7 +202,7 @@ function persistModelPreference(settings, modelId) {
 /**
  * Combined plan + Free-IA descriptor for a user. Useful for the
  * frontend's account page where a single panel shows "you're on PRO,
- * 27% of premium pool spent, FlashGPT is your fallback".
+ * 27% of premium pool spent, Gema4 is your fallback".
  *
  * Doesn't replace buildModelQuotaPolicy (which is the full ledger
  * surface) — this is a smaller, friendlier projection.

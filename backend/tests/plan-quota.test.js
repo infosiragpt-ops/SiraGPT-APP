@@ -3,7 +3,7 @@
  * middleware relies on. The function is pure (no DB), so we can
  * exercise every branch with hand-crafted user shapes:
  *
- *   - FREE plan unlimited FlashGPT posture
+ *   - FREE plan unlimited posture
  *   - Paid plans token accounting (apiUsage vs user.monthlyLimit)
  *   - Edge cases that real production data trips on:
  *       * BigInt fields from Prisma
@@ -41,7 +41,7 @@ describe("getPlanQuotaSnapshot — anonymous / missing input", () => {
   });
 });
 
-describe("getPlanQuotaSnapshot — FREE plan (unlimited FlashGPT)", () => {
+describe("getPlanQuotaSnapshot — FREE plan (unlimited)", () => {
   test("FREE user gets an unlimited calls snapshot", () => {
     const snap = getPlanQuotaSnapshot({
       plan: "FREE",

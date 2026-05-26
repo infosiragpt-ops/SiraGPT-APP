@@ -135,7 +135,7 @@ function enrichPlanWithPricing(plan) {
  * and create a dependency cycle.
  */
 const PLAN_BUDGETS = Object.freeze({
-  FREE: 0,           // FREE has no premium budget — falls back to FlashGPT
+  FREE: 0,           // FREE has no premium budget
   PRO: 100_000,
   PRO_MAX: 300_000,
   ENTERPRISE: null,  // unlimited
@@ -540,7 +540,7 @@ function pricingFAQEntries() {
   return [
     {
       q: 'How much does FREE include?',
-      a: `${fmt(PLAN_BUDGETS.FREE)} of premium credits — FREE falls back to FlashGPT (⚡ Cerebras Llama 3.1 8B) for everything else.`,
+      a: `${fmt(PLAN_BUDGETS.FREE)} of premium credits — FREE has no premium credit pool.`,
     },
     {
       q: 'How much does PRO cost?',
@@ -564,7 +564,7 @@ function pricingFAQEntries() {
     },
     {
       q: 'What happens when I run out of credits?',
-      a: `Requests are automatically routed to FlashGPT (⚡ Cerebras Llama 3.1 8B) — free and unlimited, just slightly less powerful than the premium models.`,
+      a: `Requests use the model available for the user's current plan. Premium models require an active premium credit pool.`,
     },
   ];
 }

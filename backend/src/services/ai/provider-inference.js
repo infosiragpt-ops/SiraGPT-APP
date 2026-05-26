@@ -20,7 +20,6 @@
  */
 
 const KNOWN_PROVIDERS = Object.freeze([
-  'Cerebras',
   'DeepSeek',
   'Gemini',
   'OpenRouter',
@@ -54,24 +53,14 @@ function inferProviderFromModelId(modelId) {
   // 3) Google Gemini family.
   if (m.includes('gemini') || m.includes('imagen')) return 'Gemini';
 
-  // 4) Groq direct — checked BEFORE Cerebras because the `-versatile`
-  //    suffix on a llama-3.x id is the Groq SKU, not Cerebras.
+  // 4) Groq direct — the `-versatile` suffix is the Groq SKU.
   if (m.endsWith('-versatile')) return 'Groq';
 
-  // 5) Free IA — Cerebras Llama 3.1 family (any 3.1 size) and any model
-  //    explicitly prefixed with `cerebras:` or `cerebras-`. Needs the
-  //    Cerebras endpoint, not OpenAI.
-  if (
-    m.startsWith('llama-3.1') || m.startsWith('llama3.1')
-    || m.startsWith('cerebras:') || m.startsWith('cerebras-')
-    || m === 'llama-3.3-70b'
-  ) return 'Cerebras';
-
-  // 6) Anthropic direct (when no aggregator prefix). The OpenAI-shaped
+  // 5) Anthropic direct (when no aggregator prefix). The OpenAI-shaped
   //    Anthropic SDK route uses `claude-*` ids without a slash.
   if (/^claude(-|_)/.test(m)) return 'Anthropic';
 
-  // 7) Mistral direct — bare `mistral-*` or `codestral-*` ids.
+  // 6) Mistral direct — bare `mistral-*` or `codestral-*` ids.
   if (m.startsWith('mistral-') || m.startsWith('codestral-')) return 'Mistral';
 
   return 'OpenAI';

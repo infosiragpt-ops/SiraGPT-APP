@@ -62,10 +62,6 @@ function enforceOrgBudgetSafe(req, res, next) {
 }
 const prisma = require('../config/database');
 const { tryConsumePlanQuota } = require('../services/plan-quota');
-const {
-  DEFAULT_MODEL: FLASHGPT_MODEL,
-  DEFAULT_DISPLAY_NAME: FLASHGPT_DISPLAY_NAME,
-} = require('../services/ai/cerebras-client');
 const aiService = require('../services/ai-service');
 const agentFilters = require('../services/agents/filters');
 const OpenAI = require('openai');
@@ -83,7 +79,6 @@ const { enqueueCodexRun, detectCodeTaskIntent } = require('../services/codex/cod
 const autonomousGoalEscalation = require('../services/autonomous-goal-escalation');
 const { runParaphrasePipeline } = require('../services/paraphrase-engine');
 const {
-  buildGema4VirtualModel,
   buildModelQuotaPolicy,
   resolveModelForUser,
   persistModelPreference,
@@ -108,16 +103,6 @@ const tokenBudget = require('../services/ai/token-budget');
 let _otelSpans = null;
 try { _otelSpans = require('../utils/otel-spans'); } catch (_e) { _otelSpans = null; }
 
-function isFlashGptTurn(provider, model) {
-  const p = String(provider || '').toLowerCase();
-  const m = String(model || '').toLowerCase().replace(/[-_]/g, '');
-  const flashModel = String(FLASHGPT_MODEL || '').toLowerCase().replace(/[-_]/g, '');
-  return p === 'cerebras' && (m === flashModel || m === 'llama318b');
-}
-
-function buildFlashGptUpgradeNotice(turnNumber) {
-  return `${FLASHGPT_DISPLAY_NAME}: ya tienes ${turnNumber} consultas gratis. Puedes seguir usando este modelo de forma ilimitada; mejora tu plan cuando quieras acceder a modelos premium, mas velocidad avanzada y herramientas con mayor capacidad.`;
-}
 const withAIGenerateSpan = (_otelSpans && _otelSpans.withAIGenerateSpan)
   ? _otelSpans.withAIGenerateSpan
   : (_attrs, fn) => fn();
@@ -182,7 +167,6 @@ const activeMemory = require('../services/active-memory');
 const conversationUnderstanding = require('../services/conversation-understanding');
 const chatAttachmentRecovery = require('../services/chat-attachment-recovery');
 const messageAttachments = require('../services/message-attachments');
-const flashGptImageOcr = require('../services/flashgpt-image-ocr');
 const openclawCapabilityKernel = require('../services/openclaw-capability-kernel');
 const router = express.Router();
 const cookie = require('cookie');
@@ -305,25 +289,6 @@ function createProviderClient(provider) {
     return new OpenAI({
       apiKey: process.env.DEEPSEEK_API_KEY,
       baseURL: "https://api.deepseek.com",
-    });
-  }
-
-  if (provider === "Cerebras") {
-    // Free IA — Cerebras Llama 3.1 8B used as the SiraGPT free tier and as
-    // the fallback when the user's premium credits run out. Use the
-    // instrumented variant so every chat.completions.create() call
-    // increments the upstream success/error counters automatically.
-    const cerebras = require('../services/ai/cerebras-client');
-    const instrumented = cerebras.createInstrumentedCerebrasClient();
-    if (instrumented) return instrumented;
-    // Fallback path: if Cerebras isn't configured, build a bare OpenAI
-    // client pointing at the Cerebras endpoint so any test using a stub
-    // API key still gets a working object (call will 401 upstream and
-    // surface the error normally).
-    const cfg = cerebras.getCerebrasConfig();
-    return new OpenAI({
-      apiKey: cfg.apiKey || process.env.CEREBRAS_API_KEY || '',
-      baseURL: cfg.baseURL || cerebras.DEFAULT_BASE_URL,
     });
   }
 
@@ -767,22 +732,6 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
 
       if (virtualImageModels.length > 0) {
         models = [...virtualImageModels, ...models];
-      }
-    }
-
-    if (wantText) {
-      const fallbackModel = buildGema4VirtualModel();
-      const alreadyListed = models.some((m) => m.name === fallbackModel.name);
-      if (!alreadyListed) {
-        const fallbackRow = await prisma.aiModel.findFirst({
-          where: { name: fallbackModel.name },
-          select: { id: true },
-        });
-        if (!fallbackRow) {
-          models = modelPolicy.currentPlan === 'FREE'
-            ? [fallbackModel, ...models]
-            : [...models, fallbackModel];
-        }
       }
     }
 
@@ -1247,7 +1196,6 @@ router.post(
       const isAuth = !!req.user;
       const userId = isAuth ? req.user.id : null;
       const canPersist = isAuth && !!chatId;
-      let flashGptUpgradeNotice = null;
       const regenerationAttemptNumber = Math.floor(Number(regenerationAttempt));
       const normalizedRegenerationAttempt = regenerate
         ? Math.max(1, Math.min(999, Number.isFinite(regenerationAttemptNumber) ? regenerationAttemptNumber : 1))
@@ -1477,7 +1425,6 @@ router.post(
       let processedFiles = [];
       let openaiFiles = [];
       let uploadedFileContextForTurn = '';
-      let flashGptImageOcrBlock = '';
       if (isAuth && files && files.length > 0) {
         processedFiles = await Promise.all(
           files.map(async (fileRef) => {
@@ -1626,28 +1573,6 @@ router.post(
           actual_provider: actualProvider,
           model,
         }));
-      }
-
-      if (processedFiles.length > 0 && isFlashGptTurn(actualProvider, actualModel)) {
-        try {
-          const flashOcr = await flashGptImageOcr.buildFlashGptImageOcrContext(prisma, {
-            userId,
-            files: processedFiles,
-            prompt,
-          });
-          processedFiles = flashOcr.files || processedFiles;
-          if (flashOcr.block) {
-            flashGptImageOcrBlock = `\n\n${flashOcr.block}`;
-            if (uploadedFileContextForTurn) {
-              uploadedFileContextForTurn = `${flashOcr.block}\n\n${uploadedFileContextForTurn}`;
-            } else {
-              uploadedFileContextForTurn = flashOcr.block;
-            }
-            console.log(`[flashgpt-ocr] images=${flashOcr.imageCount} readable=${flashOcr.readableCount} failed=${flashOcr.failedCount}`);
-          }
-        } catch (flashOcrErr) {
-          console.warn('[flashgpt-ocr] local OCR bridge failed (continuing):', flashOcrErr?.message || flashOcrErr);
-        }
       }
 
       // ✅ Load per-user personalization so every turn carries the
@@ -3663,7 +3588,7 @@ router.post(
         console.warn('[ai] llm understanding packet unavailable (continuing without):', llmUnderstandingErr && llmUnderstandingErr.message);
       }
 
-      const systemInstruction = { role: 'system', content: promptBundle.system + openclawRuntimeBlock + llmUnderstandingBlock + conversationUnderstandingBlock + universalContractBlock + enterpriseExecutionBlock + memoryBlock + orchMemoryBlock + crossChatBlock + attributionBlock + circuitAttributionBlock + intentAttributionGraphBlock + saliencyBlock + feedbackBlock + evidenceBlock + flashGptImageOcrBlock + documentEnrichmentBlock + coworkBlock + webSearchBlock + __pr5GroundingBlock };
+      const systemInstruction = { role: 'system', content: promptBundle.system + openclawRuntimeBlock + llmUnderstandingBlock + conversationUnderstandingBlock + universalContractBlock + enterpriseExecutionBlock + memoryBlock + orchMemoryBlock + crossChatBlock + attributionBlock + circuitAttributionBlock + intentAttributionGraphBlock + saliencyBlock + feedbackBlock + evidenceBlock + documentEnrichmentBlock + coworkBlock + webSearchBlock + __pr5GroundingBlock };
       // Structured view of the system prompt — same content as
       // `systemInstruction.content`, but split into typed blocks with a
       // `cacheable` hint. When the downstream provider is Anthropic (or
@@ -3689,7 +3614,6 @@ router.post(
         { kind: 'intent-attribution-graph', text: intentAttributionGraphBlock, cacheable: false },
         { kind: 'feedback', text: feedbackBlock, cacheable: false },
         { kind: 'evidence', text: evidenceBlock, cacheable: false },
-        { kind: 'flashgpt-image-ocr', text: flashGptImageOcrBlock, cacheable: false },
         { kind: 'document-enrichment', text: documentEnrichmentBlock, cacheable: false },
         { kind: 'cowork', text: coworkBlock, cacheable: false },
         { kind: 'web-search', text: webSearchBlock, cacheable: false },
@@ -3950,26 +3874,6 @@ router.post(
         console.log(`✂️ route context fit: dropped ${fittedContext.droppedCount} message(s), ${fittedContext.totalTokens}/${fittedContext.budget} tokens before preflight`);
       }
 
-      if (
-        isAuth
-        && req.user
-        && req.user.plan === 'FREE'
-        && isFlashGptTurn(actualProvider, actualModel)
-        && !regenerate
-      ) {
-        try {
-          const previousFlashGptTurns = await prisma.apiUsage.count({
-            where: { userId, model: actualModel },
-          });
-          const nextFlashGptTurn = previousFlashGptTurns + 1;
-          if (nextFlashGptTurn > 0 && nextFlashGptTurn % 5 === 0) {
-            flashGptUpgradeNotice = buildFlashGptUpgradeNotice(nextFlashGptTurn);
-          }
-        } catch (noticeErr) {
-          console.warn('[flashgpt] upgrade notice count failed:', noticeErr && noticeErr.message);
-        }
-      }
-
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
@@ -4164,12 +4068,6 @@ router.post(
           }
           return prevWrite(payload, ...rest);
         };
-      }
-
-      if (flashGptUpgradeNotice) {
-        try {
-          res.write(`data: ${JSON.stringify({ content: `${flashGptUpgradeNotice}\n\n` })}\n\n`);
-        } catch { /* socket gone */ }
       }
 
       // NOTE: declared at function scope (see top of handler) so the
@@ -4814,10 +4712,6 @@ router.post(
           finalContent = (fullResponseContent && fullResponseContent.trim().length > 0)
             ? fullResponseContent
             : finalContent;
-        }
-
-        if (flashGptUpgradeNotice && finalContent && !finalContent.includes(flashGptUpgradeNotice)) {
-          finalContent = `${flashGptUpgradeNotice}\n\n${finalContent}`;
         }
 
         const codexMeta = req._codexRunId

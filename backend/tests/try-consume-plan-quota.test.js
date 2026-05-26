@@ -3,8 +3,7 @@
  * extracted function so the seven /api/ai call sites it replaces
  * keep behaving byte-for-byte identically. Two properties matter:
  *
- *   1. FREE users are no longer blocked after 3 text calls. They are
- *      routed to FlashGPT and allowed through.
+ *   1. FREE users are no longer blocked after 3 text calls.
  *
  *   2. Paid users still use the token cap check unchanged.
  */
@@ -56,7 +55,7 @@ describe("tryConsumePlanQuota — FREE plan", () => {
       prisma,
       user: { id: "u-free", plan: "FREE" },
     });
-    assert.deepEqual(result, { ok: true, unlimited: true, model: "FlashGPT" });
+    assert.deepEqual(result, { ok: true, unlimited: true });
     assert.equal(prisma._calls().length, 0);
   });
 });

@@ -7,7 +7,7 @@
  * checks scattered across `/api/ai`:
  *
  *   FREE plan:
- *     Text chat is unlimited on the FlashGPT fallback model. Legacy
+ *     Text chat is unlimited on the FREE plan. Legacy
  *     `monthlyCallLimit` remains on the User row for compatibility with
  *     older UI/accounting surfaces, but it no longer gates text chat.
  *
@@ -164,7 +164,7 @@ async function fetchUserPlanQuota(userId, prisma) {
  * identical inline blocks that each:
  *
  *   FREE plan:
- *     - allow unlimited FlashGPT text chat.
+ *     - allow unlimited text chat.
  *
  *   PAID plans:
  *     - if user.apiUsage >= user.monthlyLimit → 429 with the
@@ -204,7 +204,7 @@ async function tryConsumePlanQuota({ userId, prisma, user } = {}) {
   if (!user) return { ok: true };
 
   if (user.plan === 'FREE') {
-    return { ok: true, unlimited: true, model: 'FlashGPT' };
+    return { ok: true, unlimited: true };
   }
 
   // Paid plans: token-based check is non-atomic on purpose. The

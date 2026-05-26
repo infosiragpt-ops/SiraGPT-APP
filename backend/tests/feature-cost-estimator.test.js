@@ -816,12 +816,13 @@ test('pricingFAQEntries: prices match canonical PLAN_PRICES_USD', () => {
   assert.ok(proMaxAnswer.includes('300,000'));
 });
 
-test('pricingFAQEntries: mentions FlashGPT fallback for out-of-credits path', () => {
+test('pricingFAQEntries: describes premium credit exhaustion without FlashGPT fallback', () => {
   const { pricingFAQEntries } = require('../src/services/feature-cost-estimator');
   const faq = pricingFAQEntries();
   const fallback = faq.find((e) => e.q.includes('run out of credits'));
   assert.ok(fallback, 'should have an out-of-credits entry');
-  assert.ok(fallback.a.includes('FlashGPT'));
+  assert.ok(fallback.a.includes('Premium models require'));
+  assert.ok(!fallback.a.includes('FlashGPT'));
 });
 
 test('suggestDowngradeFromUsage: PRO_MAX user with no usage → downgrade to FREE', () => {
