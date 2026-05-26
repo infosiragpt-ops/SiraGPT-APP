@@ -91,9 +91,16 @@ const express2 = require('express');
 router.post('/estimate', express2.json({ limit: '32kb' }), (req, res) => {
   try {
     // eslint-disable-next-line global-require
-    const { estimateCostBatch } = require('../services/feature-cost-estimator');
+    const { estimateCostBatch, estimateMonthlyCost, getRecommendedPlan } = require('../services/feature-cost-estimator');
     const items = Array.isArray(req.body?.items) ? req.body.items : [];
-    res.json({ estimates: estimateCostBatch(items) });
+    const out = { estimates: estimateCostBatch(items) };
+    // Optional projection: if the body includes a forecastUsage map,
+    // also return the projected monthly spend + recommended plan.
+    if (req.body && req.body.forecastUsage && typeof req.body.forecastUsage === 'object') {
+      out.monthlyProjection = estimateMonthlyCost(req.body.forecastUsage);
+      out.recommendedPlan = getRecommendedPlan(req.body.forecastUsage);
+    }
+    res.json(out);
   } catch (err) {
     res.status(500).json({ error: 'estimate_failed', message: err && err.message });
   }
