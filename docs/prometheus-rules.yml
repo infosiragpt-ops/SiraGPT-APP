@@ -1,0 +1,383 @@
+# Prometheus recording + alerting rules for SiraGPT SLOs.
+#
+# Companion to docs/slo.md. Drop this file into the Prometheus rule
+# directory (or the rule_files glob in prometheus.yml) and reload.
+#
+# Conventions:
+#   - All recording rules are prefixed with `siragpt:` and tagged with
+#     the SLI they implement (`http_availability`, `http_latency`,
+#     `agent_success`).
+#   - Burn-rate windows follow the Google SRE multi-window scheme
+#     described in docs/slo.md.
+
+groups:
+  # ------------------------------------------------------------------
+  # Recording rules — SLIs
+  # ------------------------------------------------------------------
+  - name: siragpt.slo.recording
+    interval: 30s
+    rules:
+      # ---- HTTP availability (SLO-API-1, target 99.9%) -------------
+      - record: siragpt:http_requests:rate5m
+        expr: sum by (route) (rate(http_requests_total{route!=""}[5m]))
+
+      - record: siragpt:http_requests_errors:rate5m
+        expr: sum by (route) (rate(http_requests_total{code=~"5..",route!=""}[5m]))
+
+      - record: siragpt:http_availability:ratio_rate5m
+        expr: |
+          1 - (
+            sum(rate(http_requests_total{code=~"5..",route!=""}[5m]))
+            /
+            sum(rate(http_requests_total{route!=""}[5m]))
+          )
+
+      - record: siragpt:http_availability:ratio_rate30m
+        expr: |
+          1 - (
+            sum(rate(http_requests_total{code=~"5..",route!=""}[30m]))
+            /
+            sum(rate(http_requests_total{route!=""}[30m]))
+          )
+
+      - record: siragpt:http_availability:ratio_rate1h
+        expr: |
+          1 - (
+            sum(rate(http_requests_total{code=~"5..",route!=""}[1h]))
+            /
+            sum(rate(http_requests_total{route!=""}[1h]))
+          )
+
+      - record: siragpt:http_availability:ratio_rate6h
+        expr: |
+          1 - (
+            sum(rate(http_requests_total{code=~"5..",route!=""}[6h]))
+            /
+            sum(rate(http_requests_total{route!=""}[6h]))
+          )
+
+      - record: siragpt:http_availability:ratio_rate1d
+        expr: |
+          1 - (
+            sum(rate(http_requests_total{code=~"5..",route!=""}[1d]))
+            /
+            sum(rate(http_requests_total{route!=""}[1d]))
+          )
+
+      - record: siragpt:http_availability:ratio_rate3d
+        expr: |
+          1 - (
+            sum(rate(http_requests_total{code=~"5..",route!=""}[3d]))
+            /
+            sum(rate(http_requests_total{route!=""}[3d]))
+          )
+
+      # ---- HTTP latency (SLO-API-2 / SLO-API-3) --------------------
+      - record: siragpt:http_request_duration:p99_5m
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (le, route) (
+              rate(http_request_duration_seconds_bucket{streaming="false"}[5m])
+            )
+          )
+
+      - record: siragpt:http_request_duration:p99_1h
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (le, route) (
+              rate(http_request_duration_seconds_bucket{streaming="false"}[1h])
+            )
+          )
+
+      - record: siragpt:http_request_duration:p95_5m
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, route) (
+              rate(http_request_duration_seconds_bucket{streaming="false"}[5m])
+            )
+          )
+
+      # Latency SLI: fraction of requests that completed under the
+      # latency budget. We treat the SLO_LATENCY_BUDGET histogram
+      # bucket boundary as authoritative — `le="1.5"` for SLO-API-2.
+      - record: siragpt:http_latency_good:ratio_rate5m
+        expr: |
+          sum(rate(http_request_duration_seconds_bucket{streaming="false",le="1.5"}[5m]))
+          /
+          sum(rate(http_request_duration_seconds_count{streaming="false"}[5m]))
+
+      - record: siragpt:http_latency_good:ratio_rate1h
+        expr: |
+          sum(rate(http_request_duration_seconds_bucket{streaming="false",le="1.5"}[1h]))
+          /
+          sum(rate(http_request_duration_seconds_count{streaming="false"}[1h]))
+
+      - record: siragpt:http_latency_good:ratio_rate6h
+        expr: |
+          sum(rate(http_request_duration_seconds_bucket{streaming="false",le="1.5"}[6h]))
+          /
+          sum(rate(http_request_duration_seconds_count{streaming="false"}[6h]))
+
+      - record: siragpt:http_latency_good:ratio_rate1d
+        expr: |
+          sum(rate(http_request_duration_seconds_bucket{streaming="false",le="1.5"}[1d]))
+          /
+          sum(rate(http_request_duration_seconds_count{streaming="false"}[1d]))
+
+      # ---- Agent task success (SLO-AGT-1) --------------------------
+      - record: siragpt:agent_success:ratio_rate5m
+        expr: |
+          sum(rate(agent_tasks_total{status="succeeded"}[5m]))
+          /
+          clamp_min(
+            sum(rate(agent_tasks_total{status!="cancelled"}[5m])),
+            1
+          )
+
+      - record: siragpt:agent_success:ratio_rate1h
+        expr: |
+          sum(rate(agent_tasks_total{status="succeeded"}[1h]))
+          /
+          clamp_min(
+            sum(rate(agent_tasks_total{status!="cancelled"}[1h])),
+            1
+          )
+
+      - record: siragpt:agent_success:ratio_rate6h
+        expr: |
+          sum(rate(agent_tasks_total{status="succeeded"}[6h]))
+          /
+          clamp_min(
+            sum(rate(agent_tasks_total{status!="cancelled"}[6h])),
+            1
+          )
+
+      - record: siragpt:agent_success:ratio_rate1d
+        expr: |
+          sum(rate(agent_tasks_total{status="succeeded"}[1d]))
+          /
+          clamp_min(
+            sum(rate(agent_tasks_total{status!="cancelled"}[1d])),
+            1
+          )
+
+      # ---- LLM cache hit rate (SLO-LLM-1, informational) -----------
+      - record: siragpt:llm_cache_hit:ratio_rate5m
+        expr: |
+          sum(rate(llm_cache_hits_total[5m]))
+          /
+          clamp_min(sum(rate(llm_cache_lookups_total[5m])), 1)
+
+  # ------------------------------------------------------------------
+  # Alerting rules — multi-window burn-rate
+  # ------------------------------------------------------------------
+  # SLO target ε:
+  #   API availability:   1 - 0.999 = 0.001
+  #   API latency budget: 1 - 0.99  = 0.01
+  #   Agent success:      1 - 0.99  = 0.01
+  #
+  # Burn-rate alert thresholds (from the Google SRE workbook):
+  #   page:   14.4× over (1h & 5m)   — exhausts 30d budget in ~50h
+  #   page:   6×    over (6h & 30m)  — exhausts 30d budget in 5d
+  #   ticket: 3×    over (24h & 2h)
+  #   ticket: 1×    over (72h & 6h)
+  #
+  # Note: the 5m / 30m short windows below are computed inline using
+  # the matching `_rate5m` / `_rate30m` records where available, and
+  # otherwise expanded directly so reload-time validation can catch
+  # missing recording rules.
+  - name: siragpt.slo.alerts.http_availability
+    rules:
+      - alert: SiraGPTHTTPAvailabilityFastBurn
+        expr: |
+          (1 - siragpt:http_availability:ratio_rate1h) > (14.4 * 0.001)
+          and
+          (1 - siragpt:http_availability:ratio_rate5m) > (14.4 * 0.001)
+        for: 2m
+        labels:
+          severity: page
+          slo: SLO-API-1
+          service: siragpt-backend
+        annotations:
+          summary: "API availability burning 14.4× budget (1h+5m)"
+          description: |
+            HTTP 5xx error rate is consuming the 30-day availability
+            budget at >14.4× the sustainable rate over the last hour
+            *and* the last 5 minutes. At this pace the budget is
+            exhausted in ~50 hours.
+          runbook: docs/operations/runbook-availability.md
+          dashboard: grafana://d/siragpt-slo
+
+      - alert: SiraGPTHTTPAvailabilitySlowBurn
+        expr: |
+          (1 - siragpt:http_availability:ratio_rate6h) > (6 * 0.001)
+          and
+          (1 - siragpt:http_availability:ratio_rate30m) > (6 * 0.001)
+        for: 15m
+        labels:
+          severity: page
+          slo: SLO-API-1
+          service: siragpt-backend
+        annotations:
+          summary: "API availability burning 6× budget (6h+30m)"
+          description: |
+            Sustained 6× burn over 6h with the last 30m still
+            elevated. Budget exhausted in ~5 days at this pace.
+          runbook: docs/operations/runbook-availability.md
+
+      - alert: SiraGPTHTTPAvailabilityTicket
+        expr: |
+          (1 - siragpt:http_availability:ratio_rate1d) > (3 * 0.001)
+          and
+          (1 - siragpt:http_availability:ratio_rate1h) > (3 * 0.001)
+        for: 1h
+        labels:
+          severity: ticket
+          slo: SLO-API-1
+          service: siragpt-backend
+        annotations:
+          summary: "API availability burning 3× budget (24h+2h)"
+          description: |
+            Slow-burn condition. File a ticket and investigate during
+            business hours.
+
+      - alert: SiraGPTHTTPAvailabilityLongBurn
+        expr: |
+          (1 - siragpt:http_availability:ratio_rate3d) > (1 * 0.001)
+          and
+          (1 - siragpt:http_availability:ratio_rate6h) > (1 * 0.001)
+        for: 3h
+        labels:
+          severity: ticket
+          slo: SLO-API-1
+          service: siragpt-backend
+        annotations:
+          summary: "API availability slow drain (72h+6h, 1× budget)"
+
+  - name: siragpt.slo.alerts.http_latency
+    rules:
+      - alert: SiraGPTHTTPLatencyFastBurn
+        expr: |
+          (1 - siragpt:http_latency_good:ratio_rate1h) > (14.4 * 0.01)
+          and
+          (1 - siragpt:http_latency_good:ratio_rate5m) > (14.4 * 0.01)
+        for: 2m
+        labels:
+          severity: page
+          slo: SLO-API-2
+          service: siragpt-backend
+        annotations:
+          summary: "p99 latency burning 14.4× budget (1h+5m)"
+          description: |
+            >14.4× of requests are exceeding the 1.5s latency budget
+            over the last hour and 5 minutes. Check upstream LLM
+            latency (Langfuse) and the document pipeline queue depth
+            before paging the platform team.
+          runbook: docs/operations/runbook-latency.md
+
+      - alert: SiraGPTHTTPLatencySlowBurn
+        expr: |
+          (1 - siragpt:http_latency_good:ratio_rate6h) > (6 * 0.01)
+          and
+          (1 - siragpt:http_latency_good:ratio_rate1h) > (6 * 0.01)
+        for: 15m
+        labels:
+          severity: page
+          slo: SLO-API-2
+          service: siragpt-backend
+        annotations:
+          summary: "p99 latency burning 6× budget (6h+1h)"
+
+      - alert: SiraGPTHTTPLatencyP99Hot
+        expr: |
+          max by (route) (siragpt:http_request_duration:p99_5m) > 3
+        for: 10m
+        labels:
+          severity: ticket
+          slo: SLO-API-2
+          service: siragpt-backend
+        annotations:
+          summary: "Route p99 latency above 3s for 10m ({{ $labels.route }})"
+          description: |
+            Route-level p99 latency has been above 3s for 10 minutes.
+            This does not necessarily violate the SLO but indicates a
+            specific endpoint is degrading and should be triaged.
+
+  - name: siragpt.slo.alerts.agent_success
+    rules:
+      - alert: SiraGPTAgentSuccessFastBurn
+        expr: |
+          (1 - siragpt:agent_success:ratio_rate1h) > (14.4 * 0.01)
+          and
+          (1 - siragpt:agent_success:ratio_rate5m) > (14.4 * 0.01)
+        for: 5m
+        labels:
+          severity: page
+          slo: SLO-AGT-1
+          service: siragpt-agent
+        annotations:
+          summary: "Agent task success burning 14.4× budget (1h+5m)"
+          description: |
+            Agent task failure rate is >14.4% over the last hour and
+            still elevated in the last 5 minutes. Check the task-store
+            failure classifier and circuit-breaker state.
+          runbook: docs/operations/runbook-agent.md
+
+      - alert: SiraGPTAgentSuccessSlowBurn
+        expr: |
+          (1 - siragpt:agent_success:ratio_rate6h) > (6 * 0.01)
+          and
+          (1 - siragpt:agent_success:ratio_rate1h) > (6 * 0.01)
+        for: 30m
+        labels:
+          severity: page
+          slo: SLO-AGT-1
+          service: siragpt-agent
+        annotations:
+          summary: "Agent task success burning 6× budget (6h+1h)"
+
+      - alert: SiraGPTAgentSuccessTicket
+        expr: |
+          (1 - siragpt:agent_success:ratio_rate1d) > (3 * 0.01)
+        for: 2h
+        labels:
+          severity: ticket
+          slo: SLO-AGT-1
+          service: siragpt-agent
+        annotations:
+          summary: "Agent task success degraded (24h, 3× budget)"
+
+  # ------------------------------------------------------------------
+  # Health alerts — not strictly SLO-driven but co-located so oncall
+  # has a single rule file to grep through.
+  # ------------------------------------------------------------------
+  - name: siragpt.slo.alerts.health
+    rules:
+      - alert: SiraGPTNoTraffic
+        expr: sum(rate(http_requests_total[10m])) == 0
+        for: 10m
+        labels:
+          severity: page
+          service: siragpt-backend
+        annotations:
+          summary: "No HTTP traffic recorded in the last 10 minutes"
+          description: |
+            Either the metrics scrape is broken or the service is
+            down. Check the /metrics endpoint and the load balancer
+            health check before declaring an outage.
+
+      - alert: SiraGPTCircuitBreakerOpen
+        expr: max by (breaker) (circuit_breaker_state) == 2
+        for: 5m
+        labels:
+          severity: ticket
+          service: siragpt-backend
+        annotations:
+          summary: "Circuit breaker {{ $labels.breaker }} OPEN for 5m"
+          description: |
+            A circuit breaker has been OPEN for at least 5 minutes.
+            Inspect the underlying dependency and consider forcing
+            HALF_OPEN once it recovers.

@@ -1,0 +1,4196 @@
+@import 'katex/dist/katex.min.css';
+/* Syncfusion Spreadsheet styles (required for Excel Connector) */
+@import '@syncfusion/ej2-base/styles/tailwind.css';
+@import '@syncfusion/ej2-buttons/styles/tailwind.css';
+@import '@syncfusion/ej2-calendars/styles/tailwind.css';
+@import '@syncfusion/ej2-dropdowns/styles/tailwind.css';
+@import '@syncfusion/ej2-inputs/styles/tailwind.css';
+@import '@syncfusion/ej2-navigations/styles/tailwind.css';
+@import '@syncfusion/ej2-popups/styles/tailwind.css';
+@import '@syncfusion/ej2-splitbuttons/styles/tailwind.css';
+@import '@syncfusion/ej2-grids/styles/tailwind.css';
+@import '@syncfusion/ej2-spreadsheet/styles/tailwind.css';
+@import '@syncfusion/ej2-react-spreadsheet/styles/tailwind.css';
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+
+/* Hide ALL Syncfusion trial license content (banners, modals, dialogs, overlays) */
+div[style*="z-index: 999999999"],
+div[style*="This application was built using a trial version"],
+.e-dlg-container,
+.e-dialog,
+.e-dlg-overlay,
+[role="dialog"][aria-label*="Syncfusion"],
+[role="dialog"][aria-label*="license"],
+[role="alertdialog"],
+div[class*="syncfusion"][class*="license"],
+div[class*="e-license"],
+*[id*="license-dialog"],
+*[id*="syncfusion-banner"] {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  height: 0 !important;
+  width: 0 !important;
+  max-height: 0 !important;
+  max-width: 0 !important;
+  position: absolute !important;
+  pointer-events: none !important;
+  z-index: -9999 !important;
+  overflow: hidden !important;
+}
+
+/* Hide any overlay/backdrop that might appear with modals */
+.e-dlg-overlay,
+.e-popup-overlay,
+div[style*="position: fixed"][style*="background"][style*="rgba"],
+div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+/* Hide Syncfusion's default ribbon */
+.e-ribbon,
+.e-ribbon-container,
+.e-ribbon-wrapper,
+.e-spreadsheet-ribbon,
+.e-spreadsheet .e-ribbon {
+  display: none !important;
+  visibility: hidden !important;
+  height: 0 !important;
+  overflow: hidden !important;
+}
+
+
+@layer base {
+  :root {
+    --app-viewport-width: 100vw;
+    --app-viewport-height: 100dvh;
+    --app-layout-viewport-width: 100vw;
+    --app-layout-viewport-height: 100dvh;
+    --app-viewport-offset-left: 0px;
+    --app-viewport-offset-top: 0px;
+    --app-keyboard-height: 0px;
+    --background: 0 0% 100%;
+    --foreground: 240 10% 3.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 10% 3.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 10% 3.9%;
+    --primary: 240 5.9% 10%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 240 4.8% 95.9%;
+    --secondary-foreground: 240 5.9% 10%;
+    --muted: 240 4.8% 95.9%;
+    --muted-foreground: 240 3.8% 46.1%;
+    --accent: 240 4.8% 95.9%;
+    --accent-foreground: 240 5.9% 10%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 5.9% 90%;
+    --input: 240 5.9% 90%;
+    --ring: 240 5.9% 10%;
+    --radius: 0.5rem;
+    --chart-1: 12 76% 61%;
+    --chart-2: 173 58% 39%;
+    --chart-3: 197 37% 24%;
+    --chart-4: 43 74% 66%;
+    --chart-5: 27 87% 67%;
+
+    /* Sidebar variables */
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: 240 5.3% 26.1%;
+    --sidebar-primary: 240 5.9% 10%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 240 4.8% 95.9%;
+    --sidebar-accent-foreground: 240 5.9% 10%;
+    --sidebar-border: 220 13% 91%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+
+    /*
+     * Premium-extension tokens — mirrored from `.dark` so any component
+     * that references them works identically in both themes. Without
+     * these, light-mode placeholders fell through to the browser default
+     * (washed-out gray that's hard to read against a white composer).
+     */
+    --accent-violet: 253 92% 60%;      /* light: a calmer violet */
+    --text-tertiary: 240 4% 56%;       /* light tertiary text — meets WCAG AA on white */
+    --icon-default: 240 5% 34%;        /* light icon stroke */
+    --surface-elevated: 0 0% 100%;     /* light elevated surface */
+    --composer-bg: 0 0% 100%;          /* light composer surface */
+    --composer-border: 240 6% 90%;     /* light composer outline */
+
+    /*
+     * Motion tokens — Claude-grade snappy easing. The "smooth" curve
+     * is fastest at the start (perceived snappiness) and decays to
+     * stillness. Used by composer focus, button hover, modal slide-in.
+     */
+    --ease-out-smooth: cubic-bezier(0.22, 1, 0.36, 1);
+    --ease-out-soft: cubic-bezier(0.16, 1, 0.3, 1);
+    --duration-fast: 150ms;
+    --duration-base: 220ms;
+    --duration-slow: 320ms;
+  }
+
+  /*
+   * ─── Dark mode tokens ─────────────────────────────────────────────
+   * Premium SaaS/AI palette — deep navy-grey hierarchy with a single
+   * violet accent reserved for active/focus states only. Pure black is
+   * avoided on interactive surfaces (reserved for the outer canvas).
+   *
+   * Visual hierarchy (low → high):
+   *   canvas   #05070A  — outermost app background
+   *   sidebar  #0B0F15  — nav/rail, slightly richer than canvas
+   *   surface  #0E131B  — panels, cards, popovers
+   *   elevated #121824  — composer, dialogs, hover states
+   *   accent   #7C5CFF  — only on active/focus (never idle)
+   *
+   * Text:
+   *   primary    #F5F7FA  — body copy, strong headings
+   *   secondary  #98A2B3  — supporting copy, meta
+   *   tertiary   #667085  — placeholders, hints
+   *   icon       #D0D5DD  — default icon stroke/fill
+   */
+  .dark {
+    --background: 216 33% 3%;          /* #05070A — canvas */
+    --foreground: 216 29% 97%;         /* #F5F7FA — text/primary */
+    --card: 217 32% 8%;                /* #0E131B — surface/primary */
+    --card-foreground: 216 29% 97%;
+    --popover: 220 33% 11%;            /* #121824 — surface/elevated */
+    --popover-foreground: 216 29% 97%;
+    --primary: 216 29% 97%;
+    --primary-foreground: 216 33% 3%;
+    --secondary: 220 33% 11%;          /* #121824 */
+    --secondary-foreground: 216 29% 97%;
+    --muted: 217 32% 8%;               /* #0E131B */
+    --muted-foreground: 219 15% 65%;   /* #98A2B3 — text/secondary */
+    --accent: 220 33% 11%;             /* #121824 */
+    --accent-foreground: 216 29% 97%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 214 28% 15%;             /* #1B2430 — border/subtle */
+    --input: 214 28% 15%;
+    --ring: 253 100% 68%;              /* #7C5CFF — accent violet, focus only */
+    --chart-1: 220 70% 50%;
+    --chart-2: 160 60% 45%;
+    --chart-3: 30 80% 55%;
+    --chart-4: 280 65% 60%;
+    --chart-5: 340 75% 55%;
+
+    /* Premium-extension tokens (consumed via arbitrary values in the
+       few places the shadcn tokens don't cover the spec exactly). */
+    --accent-violet: 253 100% 68%;     /* #7C5CFF */
+    --text-tertiary: 219 13% 56%;      /* dark tertiary text — readable on #0B1118 */
+    --icon-default: 220 16% 84%;       /* #D0D5DD */
+    --surface-elevated: 220 33% 11%;   /* #121824 */
+    --composer-bg: 212 37% 7%;         /* #0B1118 */
+    --composer-border: 216 26% 15%;    /* #1C2430 */
+
+    /* Motion tokens — same curves as light mode so transitions feel
+       identical across themes. */
+    --ease-out-smooth: cubic-bezier(0.22, 1, 0.36, 1);
+    --ease-out-soft: cubic-bezier(0.16, 1, 0.3, 1);
+    --duration-fast: 150ms;
+    --duration-base: 220ms;
+    --duration-slow: 320ms;
+
+    /* Sidebar — 1 step lighter than canvas for subtle depth. */
+    --sidebar-background: 216 31% 6%;  /* #0B0F15 */
+    --sidebar-foreground: 216 29% 97%;
+    --sidebar-primary: 253 100% 68%;
+    --sidebar-primary-foreground: 216 29% 97%;
+    --sidebar-accent: 240 3.7% 15.9%;  /* #27272a — subtle hover highlight */
+    --sidebar-accent-foreground: 240 4.8% 95%;  /* #f1f1f6 — high-contrast text on accent bg */
+    --sidebar-border: 215 21% 11%;     /* #161B22 */
+    --sidebar-ring: 253 100% 68%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  /*
+   * Mobile polish — three rules that every modern PWA needs:
+   *
+   *   1. `-webkit-tap-highlight-color: transparent` removes the gray
+   *      flash iOS Safari paints over every tappable element on
+   *      touch. Replaced by our explicit hover/active states.
+   *   2. `-webkit-touch-callout: none` on icon buttons stops the
+   *      long-press context menu ("Copy / Open in New Tab"). We
+   *      still keep it on text + media so users can copy quotes
+   *      and save images.
+   *   3. `text-size-adjust: 100%` prevents iOS from auto-boosting
+   *      font sizes in landscape, which otherwise breaks our
+   *      tight composer + sidebar layout.
+   */
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  * {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  button,
+  [role="button"] {
+    -webkit-touch-callout: none;
+    touch-action: manipulation; /* kills the 300 ms tap delay on older Android */
+  }
+
+  /*
+   * APP-SHELL LOCK — the same pattern WhatsApp Web / ChatGPT /
+   * Linear / Slack use to keep the window rock-solid while inner
+   * containers do the scrolling.
+   *
+   * Goals:
+   *   - Window NEVER scrolls. Inner chat list + preview panel do.
+   *   - No rubber-band bounce on Safari/iOS.
+   *   - Safari's dynamic address bar can't resize the viewport and
+   *     push content: we freeze to 100dvh (dynamic viewport units,
+   *     supported in Safari 15.4+, Chrome 108+, FF 101+). The 100vh
+   *     fallback stays for older browsers.
+   *   - No pull-to-refresh gesture hijacking the chat.
+   *   - No layout shift when a scrollbar appears/disappears.
+   *
+   * Critical: the chat composer is absolute-positioned inside the
+   * chat pane; this only works if the pane itself has a deterministic
+   * viewport height — hence pinning html/body.
+   */
+  html, body {
+    height: 100%;
+    height: var(--app-layout-viewport-height, 100dvh);
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    overscroll-behavior: none;
+    /* scrollbar-gutter intentionally NOT set here: the body has
+       overflow:hidden so no scrollbar ever renders, and reserving a
+       gutter pushes the inner chat ScrollArea ~15 px in from the
+       right edge of the window, creating a visible dead band. */
+    /* Forces the layout engine to treat the body as the viewport
+       origin; prevents iOS from treating body scroll as "the page"
+       when there are nested scrollers. */
+    position: relative;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    /* Typography — Inter is loaded via next/font in app/layout.tsx and
+       exposed on <html> as --font-sans. We reference it here so that
+       *any* element that inherits from body gets the pro UI typeface
+       with one opaque rule (was previously overridden by a system-font
+       fallback stack that made the chat look generic). The emoji
+       fonts stay last so emoji still render natively. */
+    font-family:
+      var(--font-sans, "Geist"),
+      ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+      "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif,
+      "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+    font-size: 15px;
+    line-height: 1.6;
+    /* Geist is already tightly tracked by design — a small negative
+       adjustment keeps paragraphs looking calm without drifting into
+       "condensed" territory. */
+    letter-spacing: -0.011em;
+    /* Geist pro features: tabular digits for aligned figures in
+       tables / stats / timestamps, case-sensitive punctuation. */
+    font-feature-settings: "tnum", "ss01", "case";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Headings inherit the sans stack with a touch more negative
+     tracking (-0.02em) — matches the typographic rhythm used by
+     Vercel / Linear / v0. */
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-sans, "Geist"), ui-sans-serif, system-ui, sans-serif;
+    letter-spacing: -0.022em;
+    font-feature-settings: "ss01", "case";
+    font-weight: 600;
+  }
+
+  /* Code / pre / kbd / samp → Geist Mono (unambiguous l/1/I, 0 with
+     dot). `calt 0` disables programming ligatures so AI code blocks
+     read like plain source. */
+  code, pre, kbd, samp {
+    font-family: var(--font-mono, "Geist Mono"), ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-feature-settings: "calt" 0;
+  }
+
+  /* Next.js mounts the tree into body > [some wrappers]; make sure
+     every ancestor of the app-shell takes the full locked height so
+     h-screen / h-full children don't collapse. */
+  body > div:first-child {
+    height: 100%;
+  }
+}
+
+.app-shell-viewport {
+  width: 100vw;
+  width: var(--app-viewport-width, 100vw);
+  height: 100vh;
+  height: var(--app-viewport-height, 100dvh);
+  min-height: 0;
+  overflow: hidden;
+  transform: translate3d(
+    var(--app-viewport-offset-left, 0px),
+    var(--app-viewport-offset-top, 0px),
+    0
+  );
+}
+
+.chat-viewport {
+  --chat-viewport-width: var(--app-viewport-width, 100vw);
+  --chat-viewport-height: var(--app-viewport-height, 100dvh);
+  --chat-layout-viewport-width: var(--app-layout-viewport-width, 100vw);
+  --chat-layout-viewport-height: var(--app-layout-viewport-height, 100dvh);
+  --chat-viewport-offset-left: var(--app-viewport-offset-left, 0px);
+  --chat-viewport-offset-top: var(--app-viewport-offset-top, 0px);
+  --chat-keyboard-height: var(--app-keyboard-height, 0px);
+  --chat-header-height: 64px;
+  --chat-composer-height: 112px;
+  --chat-mobile-bottom-clearance: max(env(safe-area-inset-bottom, 0px), 14px);
+  --chat-textarea-max-height: 200px;
+  --chat-mobile-gutter: 1rem;
+  width: 100%;
+  height: 100vh;
+  height: var(--chat-viewport-height);
+  min-height: 0;
+}
+
+.chat-mobile-header {
+  padding: 1rem 1rem 0;
+}
+
+.chat-header-row {
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.chat-header-left {
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.chat-header-actions {
+  min-width: max-content;
+}
+
+.chat-initial-stage {
+  padding: calc(var(--chat-header-height, 64px) + 1rem) var(--chat-mobile-gutter)
+    calc(1rem + env(safe-area-inset-bottom, 0px));
+}
+
+.chat-message-scroll {
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+
+.chat-message-scroll-content {
+  padding: calc(var(--chat-header-height, 64px) + 1rem) var(--chat-mobile-gutter)
+    calc(var(--chat-composer-height, 112px) + 1rem);
+}
+
+.chat-composer-dock {
+  padding: 1rem 1rem calc(1rem + var(--chat-mobile-bottom-clearance, env(safe-area-inset-bottom, 0px)));
+  background: linear-gradient(
+    to top,
+    hsl(var(--background)) 76%,
+    hsl(var(--background) / 0)
+  );
+}
+
+.chat-user-bubble {
+  max-width: min(70%, 32rem);
+}
+
+.chat-assistant-message {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.chat-assistant-message :is(pre, code, table, blockquote, a),
+.chat-user-bubble :is(pre, code, table, blockquote, a) {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.chat-assistant-message :is(pre, table),
+.chat-user-bubble :is(pre, table) {
+  overflow-x: auto;
+}
+
+.chat-assistant-message :is(img, video, canvas, iframe),
+.chat-user-bubble :is(img, video, canvas, iframe) {
+  max-width: 100%;
+  height: auto;
+}
+
+.chat-tools-menu {
+  width: min(calc(100vw - 1rem), 14.5rem);
+  max-height: min(calc(var(--chat-viewport-height, 100dvh) - var(--chat-composer-height, 112px) - 1.25rem), 22rem);
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--foreground) / 0.18) transparent;
+}
+
+.chat-tools-menu::-webkit-scrollbar {
+  width: 0.375rem;
+}
+
+.chat-tools-menu::-webkit-scrollbar-thumb {
+  background: hsl(var(--foreground) / 0.16);
+  border-radius: 999px;
+}
+
+.chat-tools-menu [role="menuitem"] {
+  min-width: 0;
+}
+
+.chat-tools-menu .flex-1 {
+  min-width: 0;
+}
+
+.chat-tools-menu .text-xs {
+  line-height: 0.95rem;
+}
+
+.chat-model-menu-scroll {
+  height: min(calc(var(--chat-viewport-height, 100dvh) - 7.5rem), 440px);
+}
+
+.chat-model-icon {
+  color: hsl(var(--foreground) / 0.72);
+}
+
+.chat-model-icon :is(svg, img) {
+  opacity: 0.82;
+}
+
+.chat-model-icon img {
+  filter: grayscale(1) contrast(1.05) !important;
+}
+
+.dark .chat-model-icon img {
+  filter: grayscale(1) invert(1) contrast(0.92) !important;
+}
+
+.chat-mobile-apps-panel,
+.chat-mobile-connectors-list {
+  border-block: 1px solid hsl(var(--border) / 0.22);
+  margin-block: 0.1875rem;
+  padding-block: 0.1875rem;
+}
+
+.chat-mobile-connectors-heading {
+  padding: 0.375rem 0.75rem 0.25rem;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: hsl(var(--muted-foreground));
+}
+
+.chat-active-apps-chip img {
+  width: 1rem;
+  height: 1rem;
+  flex: 0 0 auto;
+}
+
+.chat-active-apps-menu-item {
+  min-height: 2.5rem;
+  border-radius: 0.75rem;
+  padding: 0.375rem 0.5rem;
+  font-size: 0.875rem;
+}
+
+.chat-app-menu-item[data-active="true"] {
+  background: hsl(var(--primary) / 0.055);
+}
+
+@media (max-width: 767px) {
+  .chat-viewport {
+    --chat-mobile-gutter: clamp(0.625rem, 3vw, 0.875rem);
+  }
+
+  .chat-mobile-header {
+    /* Stack safe-area-inset on TOP of base padding so notched
+       iPhones still get a 10px breathing gap below the notch.
+       Using max() would collapse the gap to 0 on notched models
+       (the inset alone was 47-59 px). */
+    padding: calc(0.625rem + env(safe-area-inset-top, 0px)) var(--chat-mobile-gutter) 0;
+  }
+
+  .chat-header-row,
+  .chat-header-left {
+    gap: 0.375rem;
+  }
+
+  .chat-header-actions {
+    gap: 0.125rem;
+  }
+
+  .chat-header-icon-btn {
+    width: 2.25rem !important;
+    height: 2.25rem !important;
+    min-width: 2.25rem;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+    gap: 0 !important;
+  }
+
+  .chat-header-actions .chat-header-icon-btn span:not(.sr-only) {
+    display: none;
+  }
+
+  .chat-header-actions .chat-header-icon-btn {
+    border-color: transparent !important;
+    background-color: transparent;
+  }
+
+  .chat-model-trigger,
+  .chat-context-trigger {
+    max-width: min(42vw, 9.5rem) !important;
+    height: 2.25rem !important;
+    min-width: 0;
+    border-radius: 0.875rem;
+    padding-left: 0.5rem !important;
+    padding-right: 0.5rem !important;
+    font-size: 0.8125rem !important;
+  }
+
+  .chat-model-label,
+  .chat-context-trigger > span:not(:first-child) {
+    min-width: 0;
+    max-width: min(30vw, 7rem) !important;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .chat-context-trigger > span:first-child,
+  .chat-context-trigger img {
+    width: 1.5rem !important;
+    height: 1.5rem !important;
+  }
+
+  .chat-message-scroll-content {
+    padding-top: calc(var(--chat-header-height, 56px) + 0.875rem);
+    padding-bottom: calc(var(--chat-composer-height, 112px) + 0.875rem);
+  }
+
+  .chat-composer-dock {
+    padding: 0.5rem var(--chat-mobile-gutter)
+      calc(0.625rem + var(--chat-mobile-bottom-clearance, env(safe-area-inset-bottom, 0px)));
+  }
+
+  .chat-user-bubble {
+    max-width: min(88%, 32rem);
+  }
+
+  /*
+   * iOS Safari auto-zoom on focus — when an <input> or <textarea>
+   * has font-size < 16px, iOS aggressively zooms in (and then
+   * doesn't zoom back out). The composer is `text-[15px]` for the
+   * desktop typographic rhythm; we bump it to 16px on touch
+   * viewports without retyping every Tailwind class. Also pre-empts
+   * the same trap on every input/textarea in modal dialogs.
+   */
+  input,
+  textarea,
+  select,
+  [contenteditable="true"] {
+    font-size: max(16px, 1em);
+  }
+
+  /*
+   * Touch-target expansion — the Apple HIG and WCAG 2.5.5 both
+   * recommend ≥ 44 × 44 px for any tappable element on mobile. Many
+   * icon buttons in the chat are sized to fit a 28-32px desktop grid;
+   * on mobile we keep the visual size but inflate the hit area via
+   * a `::after` pseudo so the icon still looks tight but the user
+   * can actually hit it.
+   *
+   * Applied to buttons that didn't already have a 44px container
+   * via padding. Skipped on text buttons (they already have
+   * horizontal padding past the threshold).
+   */
+  button[aria-label],
+  [role="button"][aria-label] {
+    position: relative;
+  }
+  button[aria-label]:not(.no-tap-expand)::after,
+  [role="button"][aria-label]:not(.no-tap-expand)::after {
+    content: "";
+    position: absolute;
+    inset: 50% 50%;
+    width: 44px;
+    height: 44px;
+    transform: translate(-50%, -50%);
+    /* Invisible — only there to enlarge the hit region. */
+    background: transparent;
+    pointer-events: none;
+  }
+  /* Re-enable pointer events only where the parent is small enough
+     to need the expansion. The pseudo above stays pointer-events:none
+     when the button is already ≥ 44px so it doesn't steal clicks
+     from neighbours. */
+  button[aria-label].h-7::after,
+  button[aria-label].h-8::after,
+  button[aria-label].h-9::after,
+  [role="button"][aria-label].h-7::after,
+  [role="button"][aria-label].h-8::after,
+  [role="button"][aria-label].h-9::after {
+    pointer-events: auto;
+  }
+}
+
+@media (min-width: 768px) {
+  .chat-tools-menu {
+    width: 14.25rem;
+    max-height: min(calc(var(--chat-viewport-height, 100dvh) - var(--chat-composer-height, 112px) - 1.5rem), 21.5rem);
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+  }
+}
+
+@media (max-width: 767px) {
+  .chat-tools-menu {
+    width: min(calc(100vw - 1.25rem), 16.25rem);
+    max-height: max(
+      14rem,
+      min(
+        calc(var(--chat-viewport-height, 100dvh) - var(--chat-composer-height, 112px) - var(--chat-mobile-bottom-clearance, 14px) - 1.5rem),
+        22rem
+      )
+    );
+  }
+
+  .chat-tools-menu .liquid-menu-item {
+    min-height: 2.25rem;
+    padding: 0.36rem 0.46rem !important;
+  }
+
+  .chat-tools-menu .liquid-icon {
+    width: 1.65rem !important;
+    height: 1.65rem !important;
+    border-radius: 0.58rem !important;
+  }
+
+  .chat-tools-menu .text-xs {
+    line-height: 1rem;
+  }
+
+  .chat-mobile-apps-panel {
+    max-height: max(10rem, min(15.75rem, calc(var(--chat-viewport-height, 100dvh) - var(--chat-composer-height, 112px) - 11rem)));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+}
+
+@supports (-webkit-touch-callout: none) {
+  @media (max-width: 767px) {
+    .chat-viewport {
+      --chat-mobile-bottom-clearance: max(env(safe-area-inset-bottom, 0px), 5.25rem);
+    }
+  }
+}
+
+@media (max-width: 380px) {
+  .chat-optional-action {
+    display: none !important;
+  }
+
+  .chat-model-trigger,
+  .chat-context-trigger {
+    max-width: min(48vw, 9rem) !important;
+  }
+
+  .chat-model-label,
+  .chat-context-trigger > span:not(:first-child) {
+    max-width: min(34vw, 6.75rem) !important;
+  }
+}
+
+@media (max-width: 340px) {
+  .chat-share-action {
+    display: none !important;
+  }
+}
+
+/*
+ * Scroll containers inside the app — contain the wheel so reaching
+ * the edge doesn't chain up to the body (which is locked anyway, but
+ * this suppresses the bounce attempt entirely on some browsers).
+ */
+[data-radix-scroll-area-viewport],
+.scroll-contain {
+  overscroll-behavior: contain;
+  /* Disable the browser's scroll-anchor feature so the viewport
+     doesn't silently jump when streamed content above the viewport
+     grows. We manage auto-scroll-to-bottom explicitly where needed. */
+  overflow-anchor: none;
+}
+
+/*
+ * A streaming assistant message grows one token at a time. Isolate
+ * its layout so each chunk doesn't trigger a relayout of every
+ * element above — that's what makes long generations feel janky.
+ *
+ * The `::after` pseudo-element renders a soft pulsing bar after the
+ * last visible character (Claude-style "cursor at the front of the
+ * token river"). It's positioned inline so it hugs the cursor
+ * naturally as markdown grows, and disappears the moment the stream
+ * resolves. Respects `prefers-reduced-motion` via the parent rule.
+ */
+.streaming-message {
+  contain: layout style;
+  overflow-anchor: none;
+}
+
+.streaming-message :is(p, li, h1, h2, h3, h4, h5, h6, blockquote, td, th):last-child::after {
+  content: "";
+  display: inline-block;
+  width: 0.55ch;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: -0.18em;
+  background: linear-gradient(
+    180deg,
+    hsl(var(--foreground) / 0.55) 0%,
+    hsl(var(--foreground) / 0.85) 100%
+  );
+  border-radius: 1px;
+  animation: premium-caret 1.05s var(--ease-out-soft, cubic-bezier(0.16, 1, 0.3, 1)) infinite;
+  /* Prevent the cursor from being treated as overflow that would
+     cause horizontal scrollbars on narrow viewports. */
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .streaming-message :is(p, li, h1, h2, h3, h4, h5, h6, blockquote, td, th):last-child::after {
+    animation: none;
+    background: hsl(var(--foreground) / 0.5);
+  }
+}
+
+/* Custom scrollbar for chat */
+.chat-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.chat-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.chat-scrollbar::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted-foreground) / 0.3);
+  border-radius: 3px;
+}
+
+.chat-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.5);
+}
+
+/* Animation classes */
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes pulse {
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.animate-pulse {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Toaster styles */
+.toaster {
+  --normal-bg: hsl(var(--background));
+  --normal-border: hsl(var(--border));
+  --normal-text: hsl(var(--foreground));
+  --success-bg: hsl(142.1 76.2% 36.3%);
+  --success-border: hsl(142.1 76.2% 36.3%);
+  --success-text: hsl(355.7 100% 97.3%);
+  --info-bg: hsl(217.2 91.2% 59.8%);
+  --info-border: hsl(217.2 91.2% 59.8%);
+  --info-text: hsl(210 20% 98%);
+  --warning-bg: hsl(38.4 92.1% 50.2%);
+  --warning-border: hsl(38.4 92.1% 50.2%);
+  --warning-text: hsl(48.2 100% 3.9%);
+  --error-bg: hsl(0 84.2% 60.2%);
+  --error-border: hsl(0 84.2% 60.2%);
+  --error-text: hsl(0 0% 98%);
+}
+
+/* Loading states */
+.loading-skeleton {
+  @apply animate-pulse bg-muted rounded;
+}
+
+/*
+ * Premium shimmer — a slow horizontal sweep used for "thinking" /
+ * pre-stream placeholders. Same idea as Claude.ai's gentle gradient
+ * pulse on assistant bubbles before the first token arrives.
+ */
+@keyframes premium-shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.premium-shimmer {
+  background-image: linear-gradient(
+    90deg,
+    hsl(var(--muted) / 0.4) 0%,
+    hsl(var(--muted) / 0.7) 45%,
+    hsl(var(--muted) / 1) 55%,
+    hsl(var(--muted) / 0.7) 65%,
+    hsl(var(--muted) / 0.4) 100%
+  );
+  background-size: 200% 100%;
+  animation: premium-shimmer 1.6s var(--ease-out-soft, cubic-bezier(0.16, 1, 0.3, 1)) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .premium-shimmer {
+    animation: none;
+    background-image: none;
+    background-color: hsl(var(--muted) / 0.6);
+  }
+}
+
+/*
+ * Smooth caret blink for the streaming cursor (the small bar that
+ * trails the last streamed token). Slower than the OS default so it
+ * reads as "thinking" rather than "broken input field".
+ */
+@keyframes premium-caret {
+  0%, 60% { opacity: 1; }
+  61%, 100% { opacity: 0.2; }
+}
+
+.premium-caret {
+  animation: premium-caret 1.1s var(--ease-out-soft, cubic-bezier(0.16, 1, 0.3, 1)) infinite;
+}
+
+/* Focus styles */
+.focus-visible {
+  @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
+}
+
+/* Responsive utilities */
+@media (max-width: 640px) {
+  .container {
+    @apply px-4;
+  }
+}
+
+/* Custom button animations */
+.button-hover {
+  @apply transition-all duration-200 ease-in-out;
+}
+
+.button-hover:hover {
+  @apply scale-105;
+}
+
+/* Card hover effects */
+.card-hover {
+  @apply transition-all duration-200 ease-in-out;
+}
+
+.card-hover:hover {
+  @apply shadow-lg scale-[1.02];
+}
+
+/* Gradient backgrounds */
+.gradient-bg {
+  background: linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(var(--primary) / 0.8) 100%);
+}
+
+.gradient-text {
+  background: linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(var(--accent)) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Chat message animations */
+@keyframes slideInFromLeft {
+  from {
+    opacity: 0;
+    transform: translateX(-20px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes slideInFromRight {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.message-assistant {
+  animation: slideInFromLeft 0.3s ease-out;
+}
+
+.message-user {
+  animation: slideInFromRight 0.3s ease-out;
+}
+
+/* Typing indicator */
+@keyframes typing {
+
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+  }
+
+  30% {
+    transform: translateY(-10px);
+  }
+}
+
+.typing-dot {
+  animation: typing 1.4s infinite ease-in-out;
+}
+
+.typing-dot:nth-child(1) {
+  animation-delay: -0.32s;
+}
+
+.typing-dot:nth-child(2) {
+  animation-delay: -0.16s;
+}
+
+/* ChatGPT-like composer width helpers */
+.chat-composer-container {
+  max-width: 48rem;
+  /* ~768px similar to ChatGPT */
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* Sidebar animations */
+.sidebar-enter {
+  transform: translateX(-100%);
+}
+
+.sidebar-enter-active {
+  transform: translateX(0);
+  transition: transform 300ms ease-in-out;
+}
+
+.sidebar-exit {
+  transform: translateX(0);
+}
+
+.sidebar-exit-active {
+  transform: translateX(-100%);
+  transition: transform 300ms ease-in-out;
+}
+
+/* Modal animations */
+.modal-overlay {
+  background-color: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+}
+
+/* Chart styles */
+.recharts-wrapper {
+  @apply text-foreground;
+}
+
+.recharts-cartesian-axis-tick-value {
+  @apply fill-muted-foreground text-xs;
+}
+
+.recharts-legend-item-text {
+  @apply text-foreground;
+}
+
+/* Table styles */
+.table-row-hover:hover {
+  @apply bg-muted/50;
+}
+
+/* Form styles */
+.form-field-error {
+  @apply border-destructive focus-visible:ring-destructive;
+}
+
+.form-error-message {
+  @apply text-destructive text-sm mt-1;
+}
+
+/* Badge styles */
+.badge-success {
+  @apply bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300;
+}
+
+.badge-warning {
+  @apply bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-300;
+}
+
+.badge-error {
+  @apply bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300;
+}
+
+/* Progress bar */
+.progress-bar {
+  @apply w-full bg-muted rounded-full h-2;
+}
+
+.progress-fill {
+  @apply bg-primary h-2 rounded-full transition-all duration-300 ease-in-out;
+}
+
+/* Utility classes */
+.text-balance {
+  text-wrap: balance;
+}
+
+.text-pretty {
+  text-wrap: pretty;
+}
+
+/* Print styles */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+
+  .print-only {
+    display: block !important;
+  }
+}
+
+/* High contrast mode */
+@media (prefers-contrast: high) {
+  :root {
+    --border: 240 5.9% 20%;
+  }
+
+  .dark {
+    --border: 240 5.9% 80%;
+  }
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+    /* Frozen transforms too — without this, `transform: scale(1.05)`
+       and the like still play on hover even with reduced motion on. */
+    transform: none !important;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────
+   Accessibility baseline (Lote A · #72 #74 #75 #77 #78 #89)
+   Additive rules only — never override component-specific tokens.
+   Lives at the end of the base layer so component styles can opt out.
+   ───────────────────────────────────────────────────────────────── */
+
+/* #77 — Skip-to-content link. Hidden until focused; visible only when
+   the user tabs into it as the first focusable element on the page.
+   Targets #main-content (set in app/layout.tsx around <main>). */
+.skip-to-content {
+  position: fixed;
+  top: 0.5rem;
+  left: 0.5rem;
+  z-index: 10000;
+  padding: 0.625rem 1rem;
+  border-radius: 0.5rem;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  border: 1px solid hsl(var(--border));
+  box-shadow: 0 8px 24px -8px rgba(0, 0, 0, 0.25);
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-decoration: none;
+  /* Visually hidden until focused — uses transform so screen readers
+     still see it (display:none would remove it from the a11y tree). */
+  transform: translateY(-200%);
+  transition: transform 150ms ease-out;
+}
+.skip-to-content:focus,
+.skip-to-content:focus-visible {
+  transform: translateY(0);
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+
+/* #72 — Universal focus-visible ring fallback. Components that already
+   define their own focus-visible:ring-* utility take precedence; this
+   only kicks in for native elements (a, button, input, [tabindex]) that
+   had no explicit ring style, so users navigating with Tab always see
+   where focus is. */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible,
+[tabindex]:focus-visible,
+[role="button"]:focus-visible,
+[role="link"]:focus-visible,
+[role="menuitem"]:focus-visible,
+[role="tab"]:focus-visible {
+  outline: 2px solid hsl(var(--ring, 217 91% 60%));
+  outline-offset: 2px;
+}
+/* Opt-out hook for components that explicitly handle their own ring
+   (so they don't get a doubled outline). Add `no-default-focus-ring`
+   to the className. */
+.no-default-focus-ring:focus-visible {
+  outline: none !important;
+}
+
+/* #83 — Tighter sidebar padding on small viewports so the chat
+   titles get more horizontal room when the sidebar is shown on
+   mobile/tablet. Scoped to the SidebarMenuButton padding only —
+   we don't shrink the row height (44px touch target is enforced
+   above) or the gap between icon + label. */
+@media (max-width: 480px) {
+  [data-sidebar="menu-button"] {
+    padding-left: 0.5rem !important;
+    padding-right: 0.25rem !important;
+  }
+  [data-sidebar="group-label"] {
+    padding-left: 0.625rem !important;
+    padding-right: 0.625rem !important;
+  }
+}
+
+/* #74 — Placeholder / hint contrast. Tailwind's default
+   placeholder:text-muted-foreground sometimes drops below AA on light
+   surfaces. Nudge to a slightly darker tone without touching the
+   foreground token itself. */
+::placeholder {
+  opacity: 0.7;
+}
+.dark ::placeholder {
+  opacity: 0.65;
+}
+
+/* #78 — Minimum touch target on coarse pointers (mobile + tablet).
+   44×44 CSS px is the WCAG 2.5.5 target. Scoped to coarse pointers
+   so the desktop UI keeps its current density.
+
+   We only enforce min-* (not width/height) so existing flex/grid
+   layouts aren't disrupted, and we exclude elements that explicitly
+   set their own size with `data-no-tap-target` or are inside dense
+   surfaces like tables / code toolbars. */
+@media (pointer: coarse) {
+  button:not([data-no-tap-target]):not(.no-tap-target),
+  a[href]:not([data-no-tap-target]):not(.no-tap-target),
+  [role="button"]:not([data-no-tap-target]):not(.no-tap-target),
+  [role="link"]:not([data-no-tap-target]):not(.no-tap-target) {
+    min-height: 2.75rem;
+    min-width: 2.75rem;
+  }
+  /* Restore density for buttons inside code blocks, tables, and
+     compact menu/popover surfaces where 44px would break layout. */
+  pre button,
+  table button,
+  [role="menu"] button,
+  [role="listbox"] button,
+  [role="dialog"] header button,
+  .composer-toolbar button,
+  .codex-folders-sidebar button {
+    min-height: 0;
+    min-width: 0;
+  }
+}
+
+/* #89 — Differentiated interactive states. Native elements with no
+   custom hover/active style get a baseline so users can tell when a
+   click registered (especially on touch). */
+button:not([class*="bg-"]):not(:disabled):hover,
+[role="button"]:not([class*="bg-"]):not([aria-disabled="true"]):hover {
+  filter: brightness(1.05);
+}
+button:not(:disabled):active,
+[role="button"]:not([aria-disabled="true"]):active {
+  transform: translateY(0.5px);
+}
+@media (prefers-reduced-motion: reduce) {
+  button:not(:disabled):active,
+  [role="button"]:not([aria-disabled="true"]):active {
+    transform: none;
+  }
+}
+
+/* Super thin scrollbar for sidebar */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(120, 120, 120, 0.5) transparent;
+  /* Keep the wheel inside the sidebar chat list so reaching the end
+     doesn't chain-scroll the window. Fixes the Safari "page jumps
+     up/down" bounce when the user wheels past the last chat item. */
+  overscroll-behavior: contain;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+  /* 👈 thinner */
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background-color: rgba(120, 120, 120, 0.6);
+  border-radius: 9999px;
+  /* fully rounded */
+}
+
+/* Example: styles/GlowEffect.css */
+
+.border-wrapper {
+  position: relative;
+  padding: 1px;
+  /* border thickness */
+  border-radius: 1.5rem;
+  /* same as child */
+  background: linear-gradient(270deg,
+      #ff8c3c,
+      #3c82ff,
+      #00c8ff,
+      #ff00b4,
+      #7864fa,
+      #ff8c3c);
+  background-size: 600% 600%;
+  animation: borderRun 6s linear infinite;
+}
+
+
+@keyframes borderRun {
+  0% {
+    background-position: 0% 50%;
+  }
+
+  100% {
+    background-position: 100% 50%;
+  }
+}
+
+
+
+.neon-box {
+  position: relative;
+  animation: neonGlow 4s infinite alternate ease-in-out;
+  box-shadow:
+    0 0 18px 3px rgba(120, 100, 250, 0.15),
+    -6px 6px 22px 0px rgba(255, 140, 60, 0.55),
+    6px 6px 22px 0px rgba(60, 130, 255, 0.55),
+    0 -4px 12px 0px rgba(0, 200, 255, 0.25),
+    0 4px 12px 0px rgba(255, 0, 180, 0.25);
+}
+
+@keyframes neonGlow {
+  0% {
+    box-shadow:
+      0 0 18px 3px rgba(120, 100, 250, 0.2),
+      -6px 6px 25px 0px rgba(255, 140, 60, 0.7),
+      6px 6px 25px 0px rgba(60, 130, 255, 0.7),
+      0 -4px 15px 0px rgba(0, 200, 255, 0.35),
+      0 4px 15px 0px rgba(255, 0, 180, 0.35);
+  }
+
+  50% {
+    box-shadow:
+      0 0 25px 5px rgba(120, 100, 250, 0.25),
+      -8px 8px 28px 0px rgba(255, 140, 60, 0.8),
+      8px 8px 28px 0px rgba(60, 130, 255, 0.8),
+      0 -6px 18px 0px rgba(0, 200, 255, 0.4),
+      0 6px 18px 0px rgba(255, 0, 180, 0.4);
+  }
+
+  100% {
+    box-shadow:
+      0 0 20px 3px rgba(120, 100, 250, 0.15),
+      -6px 6px 22px 0px rgba(255, 140, 60, 0.55),
+      6px 6px 22px 0px rgba(60, 130, 255, 0.55),
+      0 -4px 12px 0px rgba(0, 200, 255, 0.25),
+      0 4px 12px 0px rgba(255, 0, 180, 0.25);
+  }
+}
+
+/* Custom scrollbar for Textarea */
+.textarea-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.textarea-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.textarea-scrollbar::-webkit-scrollbar-thumb {
+  background-color: hsl(var(--muted-foreground) / 0.5);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+.textarea-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: hsl(var(--muted-foreground) / 0.7);
+}
+
+/* Scrollbar hide utility */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  /* IE and Edge */
+  scrollbar-width: none;
+  /* Firefox */
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+  /* Chrome, Safari, Opera */
+}
+
+/* Line clamp utilities for better text truncation */
+.line-clamp-1 {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
+}
+
+.line-clamp-2 {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+@keyframes bounce-smooth {
+
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+
+  50% {
+    transform: translateY(-4px);
+  }
+}
+
+.animate-bounce-smooth {
+  animation: bounce-smooth 1.6s infinite ease-in-out;
+}
+
+@keyframes wave {
+  0% {
+    transform: translateX(-100%);
+    opacity: 0.3;
+  }
+
+  50% {
+    opacity: 0.6;
+  }
+
+  100% {
+    transform: translateX(100%);
+    opacity: 0.3;
+  }
+}
+
+.animate-wave {
+  animation: wave 3s infinite linear;
+}
+
+@keyframes glow {
+
+  0%,
+  100% {
+    box-shadow: 0 0 25px rgba(16, 185, 129, 0.6);
+  }
+
+  50% {
+    box-shadow: 0 0 35px rgba(16, 185, 129, 0.8);
+  }
+}
+
+.animate-glow {
+  animation: glow 2s infinite ease-in-out;
+}
+
+footer {
+  padding: 2rem 0;
+  border-top: 1px solid hsl(var(--border));
+}
+
+/* Excel Ribbon Styling */
+.excel-ribbon-container {
+  display: flex;
+  flex-direction: column;
+  background: #ffffff;
+  border-bottom: 1px solid #d0d0d0;
+  font-family: var(--font-sans, "Inter"), ui-sans-serif, system-ui, "Segoe UI", Tahoma, sans-serif;
+  font-size: 11px;
+  z-index: 1000;
+  overflow: visible !important;
+  position: relative;
+}
+
+.dark .excel-ribbon-container {
+  background: #18181b;
+  border-bottom-color: #3f3f46;
+}
+
+/* Top Bar - Dark Green */
+.excel-ribbon-topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #217346;
+  color: #ffffff;
+  padding: 0 10px;
+  height: 24px;
+  font-size: 10px;
+}
+
+.excel-ribbon-title {
+  font-weight: 400;
+  color: #ffffff;
+}
+
+.excel-ribbon-topbar-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.excel-ribbon-topbar-button {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: none;
+  color: #ffffff;
+  padding: 3px 6px;
+  cursor: pointer;
+  font-size: 10px;
+  border-radius: 2px;
+  transition: background-color 0.2s;
+}
+
+.excel-ribbon-topbar-button:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* Ribbon Tabs - Excel Style */
+.excel-ribbon-tabs {
+  display: flex;
+  align-items: stretch;
+  background: #217346;
+  padding: 0;
+  height: 40px;
+  border-bottom: 1px solid #1a5a38;
+  gap: 0;
+}
+
+.excel-ribbon-tab {
+  background: transparent;
+  border: none;
+  color: #ffffff;
+  padding: 8px 16px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 400;
+  height: 100%;
+  transition: all 0.15s ease;
+  border-bottom: 3px solid transparent;
+  position: relative;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 60px;
+}
+
+.excel-ribbon-tab:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.excel-ribbon-tab.active {
+  background: #ffffff;
+  color: #217346;
+  border-bottom: 3px solid #217346;
+  font-weight: 500;
+  box-shadow: 0 -1px 0 rgba(0, 0, 0, 0.05);
+}
+
+.dark .excel-ribbon-tab.active {
+  background: #18181b;
+  color: #4ade80;
+  border-bottom-color: #4ade80;
+  box-shadow: 0 -1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.excel-ribbon-tab.active:hover {
+  background: #ffffff;
+}
+
+.dark .excel-ribbon-tab.active:hover {
+  background: #18181b;
+}
+
+.excel-ribbon-search {
+  margin-left: auto;
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+}
+
+.excel-ribbon-search-input {
+  background: rgba(255, 255, 255, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  color: #ffffff;
+  padding: 4px 8px;
+  width: 300px;
+  font-size: 11px;
+  border-radius: 2px;
+  height: 24px;
+  transition: all 0.2s;
+}
+
+.excel-ribbon-search-input::placeholder {
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.excel-ribbon-search-input:focus {
+  outline: none;
+  background: rgba(255, 255, 255, 0.3);
+  border-color: rgba(255, 255, 255, 0.5);
+}
+
+/* Ribbon Content */
+.excel-ribbon-content {
+  display: flex;
+  align-items: flex-start;
+  background: #ffffff;
+  padding: 5px 4px;
+  min-height: 110px;
+  gap: 0;
+  overflow: visible;
+  position: relative;
+}
+
+.dark .excel-ribbon-content {
+  background: #18181b;
+}
+
+/* Ribbon Groups */
+.excel-ribbon-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0 5px;
+  border-right: 1px solid #e0e0e0;
+  min-width: 80px;
+  max-width: 180px;
+  position: relative;
+  overflow: visible;
+  flex-shrink: 0;
+}
+
+.dark .excel-ribbon-group {
+  border-right-color: #3f3f46;
+}
+
+.excel-ribbon-group:last-child {
+  border-right: none;
+}
+
+.excel-ribbon-group-content {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  align-items: flex-start;
+  justify-content: center;
+  margin-bottom: 18px;
+  padding-bottom: 4px;
+  width: 100%;
+  max-width: 100%;
+  overflow: visible !important;
+  position: relative;
+}
+
+.excel-ribbon-group-label {
+  font-size: 9px;
+  color: #666666;
+  text-align: center;
+  margin-top: auto;
+  padding-top: 3px;
+  border-top: 1px solid #f0f0f0;
+  width: 100%;
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+}
+
+.dark .excel-ribbon-group-label {
+  color: #a1a1aa;
+  border-top-color: #3f3f46;
+}
+
+/* Ribbon Buttons */
+.excel-ribbon-button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  padding: 2px 4px;
+  cursor: pointer;
+  border-radius: 2px;
+  transition: all 0.15s;
+  min-width: 26px;
+  min-height: 26px;
+  position: relative;
+  gap: 1px;
+}
+
+.excel-ribbon-button-large {
+  min-width: 48px;
+  min-height: 48px;
+  padding: 4px 8px;
+}
+
+.excel-ribbon-button:hover {
+  background: #e8f4f0;
+  border-color: #a0c0b0;
+}
+
+.dark .excel-ribbon-button:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.excel-ribbon-button:active {
+  background: #d0e8e0;
+  border-color: #80a090;
+}
+
+.dark .excel-ribbon-button:active {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.excel-ribbon-button-large:hover {
+  background: #e8f4f0;
+  border-color: #a0c0b0;
+}
+
+.excel-ribbon-icon {
+  width: 15px;
+  height: 15px;
+  color: #333333;
+}
+
+.dark .excel-ribbon-icon {
+  color: #d4d4d8;
+}
+
+.excel-ribbon-label {
+  font-size: 9px;
+  color: #333333;
+  text-align: center;
+  line-height: 1.1;
+}
+
+.dark .excel-ribbon-label {
+  color: #d4d4d8;
+}
+
+.excel-ribbon-dropdown-icon {
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  width: 10px;
+  height: 10px;
+  color: #666666;
+}
+
+.dark .excel-ribbon-dropdown-icon {
+  color: #a1a1aa;
+}
+
+/* Button Groups */
+.excel-ribbon-button-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  border: 1px solid #d0d0d0;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.dark .excel-ribbon-button-group {
+  border-color: #3f3f46;
+}
+
+.excel-ribbon-button-group .excel-ribbon-button {
+  border: none;
+  border-radius: 0;
+  min-height: 20px;
+  padding: 2px 3px;
+}
+
+.excel-ribbon-button-group .excel-ribbon-button:not(:last-child) {
+  border-bottom: 1px solid #d0d0d0;
+}
+
+.dark .excel-ribbon-button-group .excel-ribbon-button:not(:last-child) {
+  border-bottom-color: #3f3f46;
+}
+
+/* Override for horizontal button groups in alignment */
+.excel-ribbon-alignment-vertical,
+.excel-ribbon-alignment-horizontal {
+  flex-direction: row !important;
+}
+
+.excel-ribbon-alignment-vertical .excel-ribbon-button:not(:last-child),
+.excel-ribbon-alignment-horizontal .excel-ribbon-button:not(:last-child) {
+  border-bottom: none !important;
+  border-right: 1px solid #d0d0d0 !important;
+}
+
+.dark .excel-ribbon-alignment-vertical .excel-ribbon-button:not(:last-child),
+.dark .excel-ribbon-alignment-horizontal .excel-ribbon-button:not(:last-child) {
+  border-right-color: #3f3f46 !important;
+}
+
+/* Alignment Section */
+.excel-ribbon-alignment-container {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+  align-items: flex-start;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.excel-ribbon-alignment-left {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+  max-width: 100px;
+}
+
+.excel-ribbon-alignment-vertical {
+  display: flex;
+  flex-direction: row;
+  gap: 1px;
+  border: 1px solid #d0d0d0;
+  border-radius: 2px;
+  overflow: hidden;
+  width: 100%;
+  max-width: 100%;
+}
+
+.dark .excel-ribbon-alignment-vertical {
+  border-color: #3f3f46;
+}
+
+.excel-ribbon-alignment-vertical .excel-ribbon-button {
+  border: none;
+  border-radius: 0;
+  min-height: 20px;
+  padding: 2px 3px;
+  flex: 1;
+  min-width: 0;
+}
+
+.excel-ribbon-alignment-vertical .excel-ribbon-button:not(:last-child) {
+  border-right: 1px solid #d0d0d0;
+}
+
+.excel-ribbon-alignment-horizontal {
+  display: flex;
+  flex-direction: row;
+  gap: 1px;
+  border: 1px solid #d0d0d0;
+  border-radius: 2px;
+  overflow: hidden;
+  width: 100%;
+  max-width: 100%;
+}
+
+.dark .excel-ribbon-alignment-horizontal {
+  border-color: #3f3f46;
+}
+
+.excel-ribbon-alignment-horizontal .excel-ribbon-button {
+  border: none;
+  border-radius: 0;
+  min-height: 20px;
+  padding: 2px 3px;
+  flex: 1;
+  min-width: 0;
+}
+
+.excel-ribbon-alignment-horizontal .excel-ribbon-button:not(:last-child) {
+  border-right: 1px solid #d0d0d0;
+}
+
+.excel-ribbon-indent-buttons {
+  display: flex;
+  gap: 2px;
+  width: 100%;
+  max-width: 100%;
+}
+
+.excel-ribbon-indent-btn {
+  flex: 1;
+  min-height: 22px;
+  padding: 2px 4px;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+}
+
+.excel-ribbon-indent-btn .excel-ribbon-icon {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+}
+
+.excel-ribbon-indent-btn .excel-ribbon-label {
+  font-size: 9px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.excel-ribbon-alignment-right {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 0 0 auto;
+  min-width: 85px;
+  max-width: 85px;
+}
+
+.excel-ribbon-alignment-action-btn {
+  min-width: 0;
+  min-height: 22px;
+  padding: 2px 4px;
+  width: 100%;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 3px;
+}
+
+.excel-ribbon-alignment-action-btn .excel-ribbon-icon {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+}
+
+.excel-ribbon-alignment-action-btn .excel-ribbon-label {
+  font-size: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.excel-ribbon-alignment-action-btn.active {
+  background: #d0e8e0 !important;
+  color: #217346;
+  border-color: #80a090;
+}
+
+.excel-ribbon-alignment-action-btn.active:hover {
+  background: #b8d8c8 !important;
+}
+
+.excel-ribbon-icon-only {
+  min-width: 20px;
+  min-height: 20px;
+  padding: 2px;
+}
+
+.excel-ribbon-icon-only .excel-ribbon-icon {
+  width: 13px;
+  height: 13px;
+}
+
+/* Clipboard Grid - 2 columns */
+.excel-ribbon-clipboard-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+  width: 100%;
+  margin-bottom: 2px;
+}
+
+.excel-ribbon-clipboard-btn {
+  min-width: 38px;
+  min-height: 24px;
+  padding: 2px 4px;
+}
+
+.excel-ribbon-clipboard-btn .excel-ribbon-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.excel-ribbon-clipboard-btn .excel-ribbon-label {
+  font-size: 9px;
+  line-height: 1;
+  margin-top: 1px;
+}
+
+/* Font Section Layout */
+.excel-ribbon-font-row {
+  display: flex;
+  gap: 2px;
+  width: 100%;
+  margin-bottom: 3px;
+}
+
+.excel-ribbon-font-format-row {
+  display: flex;
+  gap: 1px;
+  width: 100%;
+  margin-bottom: 3px;
+  border: 1px solid #d0d0d0;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.dark .excel-ribbon-font-format-row {
+  border-color: #3f3f46;
+}
+
+.excel-ribbon-font-actions-row {
+  display: flex;
+  gap: 2px;
+  width: 100%;
+  align-items: center;
+}
+
+.excel-ribbon-format-btn {
+  flex: 1;
+  min-width: 0;
+  min-height: 22px;
+  padding: 2px;
+  border: none;
+  border-radius: 0;
+}
+
+.excel-ribbon-format-btn:not(:last-child) {
+  border-right: 1px solid #d0d0d0;
+}
+
+.excel-ribbon-format-btn .excel-ribbon-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.excel-ribbon-format-btn.active {
+  background: #d0e8e0 !important;
+  color: #217346;
+}
+
+.excel-ribbon-format-btn.active:hover {
+  background: #b8d8c8 !important;
+}
+
+.excel-ribbon-action-btn {
+  min-width: 50px;
+  min-height: 22px;
+  padding: 2px 4px;
+}
+
+/* Select Dropdowns */
+.excel-ribbon-select {
+  background: #ffffff;
+  border: 1px solid #d0d0d0;
+  padding: 2px 4px;
+  font-size: 10px;
+  border-radius: 2px;
+  cursor: pointer;
+  height: 20px;
+  flex: 1;
+}
+
+.dark .excel-ribbon-select {
+  background: #27272a;
+  border-color: #3f3f46;
+  color: #d4d4d8;
+}
+
+.excel-ribbon-select:first-child {
+  min-width: 90px;
+}
+
+.excel-ribbon-select-small {
+  min-width: 50px;
+  flex: 0 0 auto;
+}
+
+
+.excel-ribbon-select-medium {
+  min-width: 100px;
+  max-width: 120px;
+}
+
+.excel-ribbon-select:hover {
+  border-color: #a0a0a0;
+}
+
+.excel-ribbon-select:focus {
+  outline: none;
+  border-color: #217346;
+  box-shadow: 0 0 0 1px #217346;
+}
+
+/* Color Buttons */
+.excel-ribbon-color-picker-container {
+  position: relative;
+}
+
+.excel-ribbon-color-button {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: #ffffff;
+  border: 1px solid #d0d0d0;
+  padding: 2px 4px;
+  cursor: pointer;
+  border-radius: 2px;
+  position: relative;
+  min-width: 28px;
+  min-height: 22px;
+  transition: all 0.15s;
+}
+
+.dark .excel-ribbon-color-button {
+  background: #27272a;
+  border-color: #3f3f46;
+}
+
+.excel-ribbon-color-button:hover {
+  border-color: #a0a0a0;
+  background: #f8f8f8;
+}
+
+.dark .excel-ribbon-color-button:hover {
+  border-color: #52525b;
+  background: #3f3f46;
+}
+
+
+.excel-ribbon-color-fill {
+  width: 18px;
+  height: 14px;
+  border: 1px solid #d0d0d0;
+  border-radius: 1px;
+}
+
+.excel-ribbon-color-text {
+  font-size: 11px;
+  font-weight: bold;
+  color: #333333;
+  line-height: 1;
+}
+
+.dark .excel-ribbon-color-text {
+  color: #d4d4d8;
+}
+
+.excel-ribbon-color-underline {
+  width: 18px;
+  height: 2px;
+  border-radius: 1px;
+}
+
+.excel-ribbon-color-dropdown {
+  width: 10px;
+  height: 10px;
+  color: #666666;
+}
+
+.dark .excel-ribbon-color-dropdown {
+  color: #a1a1aa;
+}
+
+/* Placeholder */
+.excel-ribbon-placeholder {
+  padding: 20px;
+  text-align: center;
+  color: #999999;
+  font-size: 12px;
+}
+
+.dark .excel-ribbon-placeholder {
+  color: #71717a;
+}
+
+/* Charts Dropdown */
+.excel-charts-container {
+  position: relative;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  overflow: visible !important;
+  z-index: 1;
+}
+
+.excel-charts-main-button {
+  width: 100%;
+  margin-bottom: 4px;
+}
+
+.excel-charts-dropdown {
+  position: fixed !important;
+  background: #ffffff;
+  border: 1px solid #d0d0d0;
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  padding: 12px;
+  z-index: 10000 !important;
+  min-width: 320px;
+  max-width: 400px;
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  pointer-events: auto !important;
+  max-height: none !important;
+  overflow: visible !important;
+  white-space: normal !important;
+}
+
+.excel-charts-grid {
+  display: grid !important;
+  grid-template-columns: repeat(4, 1fr) !important;
+  gap: 8px !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  width: 100% !important;
+  height: auto !important;
+}
+
+.excel-chart-type-button {
+  display: flex !important;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 6px;
+  background: #ffffff;
+  border: 1px solid #e0e0e0;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: all 0.2s;
+  min-height: 70px;
+  gap: 6px;
+  width: 100%;
+  visibility: visible !important;
+  opacity: 1 !important;
+}
+
+.excel-chart-type-button:hover {
+  background: #f0f8ff;
+  border-color: #217346;
+  box-shadow: 0 2px 4px rgba(33, 115, 70, 0.1);
+}
+
+.excel-chart-type-button:active {
+  background: #e0f0f8;
+  border-color: #1a5a38;
+}
+
+.excel-chart-icon-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+}
+
+.excel-chart-icon {
+  width: 28px;
+  height: 28px;
+  color: #333333;
+}
+
+.excel-chart-label {
+  font-size: 10px;
+  color: #333333;
+  text-align: center;
+  font-weight: 400;
+}
+
+/* Scale to Fit Group */
+.excel-ribbon-scale-to-fit {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  align-items: flex-start;
+}
+
+.excel-ribbon-scale-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+}
+
+.excel-ribbon-scale-icon {
+  width: 16px;
+  height: 16px;
+  color: #333333;
+  flex-shrink: 0;
+}
+
+.excel-ribbon-scale-label {
+  font-size: 10px;
+  color: #333333;
+  white-space: nowrap;
+  min-width: 45px;
+}
+
+.excel-ribbon-scale-input-wrapper {
+  display: flex;
+  align-items: center;
+  border: 1px solid #d0d0d0;
+  border-radius: 2px;
+  background: #ffffff;
+  position: relative;
+}
+
+.excel-ribbon-scale-input {
+  border: none;
+  padding: 2px 20px 2px 4px;
+  font-size: 10px;
+  width: 50px;
+  outline: none;
+  background: transparent;
+}
+
+.excel-ribbon-scale-spinner {
+  display: flex;
+  flex-direction: column;
+  position: absolute;
+  right: 2px;
+  top: 0;
+  bottom: 0;
+  justify-content: center;
+  border-left: 1px solid #d0d0d0;
+  padding-left: 2px;
+}
+
+.excel-ribbon-spinner-arrow {
+  width: 8px;
+  height: 8px;
+  color: #666666;
+  cursor: pointer;
+  transition: color 0.2s;
+}
+
+.excel-ribbon-spinner-arrow:hover {
+  color: #217346;
+}
+
+.excel-ribbon-spinner-arrow:first-child {
+  border-bottom: 1px solid #e0e0e0;
+}
+
+/* Dialog Launcher */
+.excel-ribbon-dialog-launcher {
+  position: absolute;
+  bottom: 18px;
+  right: 4px;
+  width: 16px;
+  height: 16px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  z-index: 10;
+}
+
+.excel-ribbon-dialog-launcher:hover {
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 2px;
+}
+
+.excel-ribbon-dialog-launcher-icon {
+  width: 12px;
+  height: 12px;
+  color: #666666;
+}
+
+/* Page Setup Group - 2 Rows Layout */
+.excel-page-setup-group {
+  flex-direction: column !important;
+  gap: 3px !important;
+  position: relative;
+}
+
+.excel-page-setup-row {
+  display: flex;
+  gap: 3px;
+  width: 100%;
+  justify-content: center;
+  align-items: flex-start;
+  flex-wrap: nowrap;
+}
+
+.excel-page-setup-row:first-child {
+  margin-bottom: 3px;
+}
+
+
+/* //// */
+/* Page Layout specific styling */
+.excel-page-setup-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px 4px;
+  padding: 2px 10px;
+  position: relative;
+}
+
+.excel-ribbon-button-horizontal {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px;
+  border-radius: 2px;
+  transition: background 0.2s;
+}
+
+.excel-ribbon-button-horizontal:hover {
+  background: #e8f4f0;
+}
+
+.excel-scale-to-fit-container {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 10px;
+  position: relative;
+  min-width: 160px;
+}
+
+.scale-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.scale-row label {
+  font-size: 11px;
+  color: #333;
+  width: 45px;
+}
+
+.excel-ribbon-select-mini {
+  border: 1px solid #ced4da;
+  font-size: 11px;
+  padding: 1px 4px;
+  border-radius: 2px;
+  width: 90px;
+  height: 22px;
+}
+
+.scale-input-wrapper {
+  display: flex;
+  border: 1px solid #ced4da;
+  border-radius: 2px;
+  width: 70px;
+  height: 22px;
+  background: white;
+}
+
+.scale-input-wrapper input {
+  width: 80%;
+  border: none;
+  font-size: 11px;
+  padding-left: 4px;
+  outline: none;
+}
+
+.spinner-btns {
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid #ced4da;
+  width: 20%;
+  align-items: center;
+  justify-content: center;
+}
+
+.excel-ribbon-dialog-launcher {
+  position: absolute;
+  bottom: 0px;
+  right: 2px;
+  width: 14px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: #666;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  transition: all 0.2s;
+  z-index: 5;
+}
+
+.excel-ribbon-dialog-launcher:hover {
+  background: #e0e0e0;
+  border-radius: 2px;
+}
+
+.excel-ribbon-dialog-launcher svg {
+  width: 10px;
+  height: 10px;
+}
+
+.page-layout-tab-content {
+  align-items: stretch !important;
+  height: 90px !important;
+  padding: 4px 6px !important;
+}
+
+.excel-ribbon-button-horizontal .excel-ribbon-label {
+  font-size: 11px;
+  margin-top: 0;
+}
+
+/* Dropdown Menus */
+.excel-ribbon-dropdown-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  background: white;
+  border: 1px solid #ced4da;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+  z-index: 1000;
+  min-width: 120px;
+  display: flex;
+  flex-direction: column;
+  padding: 4px 0;
+}
+
+.excel-ribbon-dropdown-menu button {
+  width: 100%;
+  text-align: left;
+  padding: 6px 12px;
+  font-size: 11px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  transition: background 0.1s;
+}
+
+.excel-ribbon-dropdown-menu button:hover {
+  background: #e8f4f0;
+}
+
+/* Themes Dropdown */
+.excel-themes-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  background: white;
+  border: 1px solid #ced4da;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 1000;
+  width: 320px;
+  padding: 8px;
+}
+
+.excel-themes-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.excel-theme-option {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 4px;
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  transition: all 0.2s;
+  border-radius: 2px;
+}
+
+.excel-theme-option:hover {
+  background: #e8f4f0;
+  border-color: #217346;
+}
+
+.excel-theme-preview {
+  width: 48px;
+  height: 32px;
+  border: 1px solid #d0d0d0;
+  background: white;
+  position: relative;
+  margin-bottom: 4px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 2px;
+}
+
+.excel-theme-preview-text {
+  font-size: 10px;
+  font-weight: bold;
+  text-align: center;
+  color: #333;
+}
+
+.excel-theme-preview-colors {
+  display: flex;
+  width: 100%;
+  height: 4px;
+}
+
+.excel-theme-color {
+  flex: 1;
+  height: 100%;
+}
+
+.excel-theme-name {
+  font-size: 10px;
+  color: #333;
+  text-align: center;
+}
+
+/* Colors Dropdown */
+.excel-colors-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  background: white;
+  border: 1px solid #ced4da;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 1000;
+  width: 280px;
+  padding: 8px;
+}
+
+.excel-colors-header {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-bottom: 1px solid #e0e0e0;
+  margin-bottom: 8px;
+  color: #333;
+}
+
+.excel-colors-grid {
+  display: grid;
+  grid-template-columns: repeat(1, 1fr);
+  gap: 2px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.excel-color-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  transition: all 0.2s;
+  border-radius: 2px;
+  width: 100%;
+}
+
+.excel-color-option:hover {
+  background: #e8f4f0;
+  border-color: #217346;
+}
+
+.excel-color-swatches {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.excel-color-swatch {
+  width: 12px;
+  height: 12px;
+  border: 1px solid #d0d0d0;
+}
+
+.excel-color-name {
+  font-size: 11px;
+  color: #333;
+}
+
+.excel-customize-color {
+  width: 100%;
+  padding: 8px;
+  margin-top: 8px;
+  border-top: 1px solid #e0e0e0;
+  background: transparent;
+  border-left: none;
+  border-right: none;
+  border-bottom: none;
+  cursor: pointer;
+  font-size: 11px;
+  color: #217346;
+  text-align: left;
+  transition: background 0.2s;
+}
+
+.excel-customize-color:hover {
+  background: #e8f4f0;
+}
+
+/* Formula Bar Styling (Screenshot bottom part) */
+.excel-formula-bar {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid #d0d0d0;
+  background: #fff;
+  height: 28px;
+  padding: 0 4px;
+}
+
+.cell-address {
+  width: 80px;
+  border-right: 1px solid #d0d0d0;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+/* Core Ribbon Fix */
+.excel-ribbon-content {
+  height: 95px !important;
+  display: flex !important;
+  align-items: flex-start !important;
+  padding: 4px 0 !important;
+  background: #f3f3f3;
+  overflow: hidden;
+}
+
+
+
+.excel-ribbon-group-label {
+  font-size: 9px !important;
+  color: #666;
+  text-align: center;
+  margin-top: auto;
+  padding-bottom: 2px;
+}
+
+/* Button & Scale Styling */
+.excel-ribbon-button-large {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 8px;
+  height: 65px;
+  min-width: 50px;
+  border-radius: 3px;
+}
+
+.excel-ribbon-button-large:hover {
+  background: #e2e2e2;
+}
+
+.excel-ribbon-btn-horiz {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 2px;
+}
+
+.excel-ribbon-btn-horiz:hover {
+  background: #e2e2e2;
+}
+
+.scale-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+}
+
+.excel-select-tiny {
+  border: 1px solid #ccc;
+  height: 18px;
+  font-size: 10px;
+  width: 85px;
+  padding: 0 2px;
+}
+
+.scale-input-box {
+  display: flex;
+  border: 1px solid #ccc;
+  background: white;
+  width: 60px;
+  height: 18px;
+}
+
+.scale-input-box input {
+  width: 75%;
+  border: none;
+  font-size: 10px;
+  padding-left: 3px;
+  outline: none;
+}
+
+.scale-spinners {
+  display: flex;
+  flex-direction: column;
+  width: 25%;
+  border-left: 1px solid #ccc;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Typography */
+.excel-ribbon-label {
+  font-size: 10px;
+  line-height: 1.1;
+  color: #333;
+  text-align: center;
+}
+
+/* Formulas Tab Specific Styling */
+.formulas-tab-content {
+  height: 95px !important;
+  display: flex !important;
+  align-items: flex-start !important;
+  padding: 4px 0 !important;
+  background: #ffffff !important;
+  overflow: visible !important;
+}
+
+.formulas-tab-content .excel-ribbon-group {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 0 5px;
+}
+
+/* Functions Group - Insert Function Button */
+.formulas-tab-content .excel-ribbon-group:first-child {
+  min-width: 80px;
+}
+
+.formulas-tab-content .excel-ribbon-group:first-child .excel-ribbon-button-large {
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.15s;
+  min-width: 60px;
+  height: 65px;
+  padding: 4px 8px;
+}
+
+.formulas-tab-content .excel-ribbon-group:first-child .excel-ribbon-button-large:hover {
+  background: #e8f4f0;
+  border-color: #d0d0d0;
+}
+
+.formulas-tab-content .excel-ribbon-group:first-child .excel-ribbon-button-large span:first-child {
+  display: block;
+  margin-bottom: 2px;
+}
+
+/* Functions Library Group - Horizontal Layout */
+.formulas-tab-content .excel-ribbon-group:nth-child(2) {
+  min-width: 200px;
+  max-width: 500px;
+  flex: 1;
+}
+
+.formulas-tab-content .excel-ribbon-group:nth-child(2) .excel-ribbon-group-content {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 2px !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  width: 100% !important;
+  min-height: 65px !important;
+  max-height: 65px !important;
+  margin-bottom: 18px !important;
+  padding: 2px !important;
+  overflow: visible !important;
+}
+
+.formulas-tab-content .excel-ribbon-group:nth-child(2)>div:not(.excel-ribbon-group-label) {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 2px !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  width: 100% !important;
+  min-height: 65px !important;
+  max-height: 65px !important;
+  margin-bottom: 18px !important;
+  padding: 2px !important;
+  overflow: visible !important;
+}
+
+.formulas-tab-content .excel-ribbon-group:nth-child(2) .excel-ribbon-button {
+  min-width: 50px;
+  max-width: 80px;
+  padding: 2px 4px;
+  height: auto;
+  flex-shrink: 0;
+}
+
+.formulas-tab-content .excel-ribbon-group:nth-child(2) .excel-ribbon-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.formulas-tab-content .excel-ribbon-group:nth-child(2) .excel-ribbon-label {
+  font-size: 9px;
+  margin-top: 1px;
+  line-height: 1;
+  white-space: normal;
+  text-align: center;
+}
+
+/* Names Group - Name Manager Button */
+.formulas-tab-content .excel-ribbon-group:nth-child(3) {
+  min-width: 90px;
+}
+
+.formulas-tab-content .excel-ribbon-group:nth-child(3) .excel-ribbon-button-large {
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.15s;
+  min-width: 70px;
+  height: 65px;
+  padding: 4px 8px;
+}
+
+.formulas-tab-content .excel-ribbon-group:nth-child(3) .excel-ribbon-button-large:hover {
+  background: #e8f4f0;
+  border-color: #d0d0d0;
+}
+
+/* Formula Auditing Group */
+.formulas-tab-content .excel-ribbon-group:nth-child(4) {
+  min-width: 140px;
+}
+
+.formulas-tab-content .excel-ribbon-group:nth-child(4) .excel-ribbon-group-content {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: flex-start !important;
+  justify-content: center !important;
+  width: 100% !important;
+  min-height: 65px !important;
+  max-height: 65px !important;
+  margin-bottom: 18px !important;
+  padding: 4px 8px !important;
+  gap: 4px !important;
+}
+
+.formulas-tab-content .excel-ribbon-group:nth-child(4)>div:not(.excel-ribbon-group-label) {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: flex-start !important;
+  justify-content: center !important;
+  width: 100% !important;
+  min-height: 65px !important;
+  max-height: 65px !important;
+  margin-bottom: 18px !important;
+  padding: 4px 8px !important;
+  gap: 4px !important;
+}
+
+.formulas-tab-content .excel-ribbon-group:nth-child(4) button {
+  width: 100%;
+  text-align: left;
+  padding: 4px 6px;
+  font-size: 11px;
+  border-radius: 2px;
+  background: transparent;
+  border: 1px solid transparent;
+  transition: all 0.15s;
+}
+
+.formulas-tab-content .excel-ribbon-group:nth-child(4) button:hover {
+  background: #e8f4f0;
+}
+
+/* Calculation Group */
+.formulas-tab-content .excel-ribbon-group:nth-child(5) {
+  min-width: 90px;
+}
+
+.formulas-tab-content .excel-ribbon-group:nth-child(5) .excel-ribbon-button-large {
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.15s;
+  min-width: 70px;
+  height: 65px;
+  padding: 4px 8px;
+}
+
+.formulas-tab-content .excel-ribbon-group:nth-child(5) .excel-ribbon-button-large:hover {
+  background: #e8f4f0;
+  border-color: #d0d0d0;
+}
+
+/* Dropdown menus positioning */
+.formulas-tab-content [class*="group/menu"],
+.formulas-tab-content [class*="group/calc"] {
+  position: relative;
+}
+
+.formulas-tab-content [class*="group/menu"] .hidden,
+.formulas-tab-content [class*="group/calc"] .hidden {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 1000;
+  margin-top: 2px;
+  background: white;
+  border: 1px solid #ced4da;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+  border-radius: 2px;
+}
+
+
+/* Formulas Tab Specific Styling */
+.formulas-tab-content {
+  height: 95px !important;
+  display: flex !important;
+  align-items: flex-start !important;
+  padding: 4px 0 !important;
+  background: #ffffff !important;
+  overflow: visible !important;
+}
+
+.formulas-tab-content .excel-ribbon-group {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 0 5px;
+}
+
+.formulas-tab-content .excel-ribbon-group-content {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  align-items: flex-start;
+  justify-content: center;
+  width: 100%;
+  min-height: 65px;
+  max-height: 65px;
+  margin-bottom: 18px;
+  padding-bottom: 4px;
+  overflow: visible;
+}
+
+/* Functions Group - Insert Function Button */
+.formulas-tab-content .excel-ribbon-group:first-child .excel-ribbon-button-large {
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.15s;
+  min-width: 60px;
+}
+
+.formulas-tab-content .excel-ribbon-group:first-child .excel-ribbon-button-large:hover {
+  background: #e8f4f0;
+  border-color: #d0d0d0;
+}
+
+/* Functions Library - Horizontal Layout */
+.formulas-tab-content .excel-ribbon-group:nth-child(2) .excel-ribbon-group-content {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 2px;
+  padding: 2px;
+}
+
+.formulas-tab-content .excel-ribbon-group:nth-child(2) .excel-ribbon-button {
+  min-width: 50px;
+  padding: 2px 4px;
+  height: auto;
+}
+
+.formulas-tab-content .excel-ribbon-group:nth-child(2) .excel-ribbon-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.formulas-tab-content .excel-ribbon-group:nth-child(2) .excel-ribbon-label {
+  font-size: 9px;
+  margin-top: 1px;
+  line-height: 1;
+}
+
+/* Names Group - Name Manager Button */
+.formulas-tab-content .excel-ribbon-group:nth-child(3) .excel-ribbon-button-large {
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.15s;
+  min-width: 70px;
+}
+
+.formulas-tab-content .excel-ribbon-group:nth-child(3) .excel-ribbon-button-large:hover {
+  background: #e8f4f0;
+  border-color: #d0d0d0;
+}
+
+/* Formula Auditing Group */
+.formulas-tab-content .excel-ribbon-group:nth-child(4) .excel-ribbon-group-content {
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 4px 8px;
+  min-height: 65px;
+  max-height: 65px;
+  gap: 4px;
+}
+
+.formulas-tab-content .excel-ribbon-group:nth-child(4) button {
+  width: 100%;
+  text-align: left;
+  padding: 4px 6px;
+  font-size: 11px;
+  border-radius: 2px;
+}
+
+/* Calculation Group */
+.formulas-tab-content .excel-ribbon-group:nth-child(5) .excel-ribbon-button-large {
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.15s;
+  min-width: 70px;
+}
+
+.formulas-tab-content .excel-ribbon-group:nth-child(5) .excel-ribbon-button-large:hover {
+  background: #e8f4f0;
+  border-color: #d0d0d0;
+}
+
+/* Dropdown menus for Formulas tab */
+.formulas-tab-content .group\/menu:hover .hidden {
+  display: block !important;
+}
+
+.formulas-tab-content .group\/calc:hover .hidden {
+  display: block !important;
+}
+
+/* ─── Premium dark-mode ambient ─────────────────────────────────────
+ * Subtle radial vignette applied to the canvas when dark mode is
+ * active, so the empty-chat state reads as a "silent surface" rather
+ * than a dead rectangle. Low-contrast, fixed-position, non-interactive.
+ * ─────────────────────────────────────────────────────────────────── */
+.dark .canvas-ambient {
+  position: relative;
+  isolation: isolate;
+}
+.dark .canvas-ambient::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(ellipse 85% 55% at 50% 42%, rgba(124, 92, 255, 0.05) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 40% at 50% 105%, rgba(90, 120, 200, 0.04) 0%, transparent 70%);
+  mask-image: linear-gradient(to bottom, black 0%, black 80%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, black 0%, black 80%, transparent 100%);
+}
+.dark .canvas-ambient > * { position: relative; z-index: 1; }
+
+/* ─── Composer — premium liquid surface ──────────────────────────── */
+.composer-liquid-surface {
+  isolation: isolate;
+  backdrop-filter: blur(22px) saturate(1.14);
+  -webkit-backdrop-filter: blur(22px) saturate(1.14);
+  background:
+    linear-gradient(145deg, hsl(0 0% 100% / 0.9), hsl(210 22% 98% / 0.76) 62%, hsl(0 0% 100% / 0.86)),
+    radial-gradient(ellipse 62% 44% at 14% 0%, hsl(0 0% 100% / 0.7), transparent 70%),
+    radial-gradient(ellipse 44% 38% at 92% 100%, hsl(var(--primary) / 0.055), transparent 72%);
+}
+.composer-liquid-surface::before,
+.composer-liquid-surface::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+  border-radius: inherit;
+  z-index: 0;
+}
+.composer-liquid-surface::before {
+  inset: 0;
+  background:
+    linear-gradient(120deg, transparent 12%, hsl(0 0% 100% / 0.22) 42%, transparent 66%),
+    radial-gradient(ellipse 54% 32% at 18% 0%, hsl(0 0% 100% / 0.42), transparent 68%);
+  opacity: 0.8;
+  mix-blend-mode: screen;
+}
+.composer-liquid-surface::after {
+  inset: auto -12% -42% 42%;
+  width: 58%;
+  height: 82%;
+  background: radial-gradient(circle, hsl(var(--primary) / 0.065), transparent 68%);
+  filter: blur(22px);
+}
+.composer-liquid-surface > * {
+  position: relative;
+  z-index: 1;
+}
+.composer-media-controls-row {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  mask-image: linear-gradient(to right, black calc(100% - 18px), transparent);
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 18px), transparent);
+}
+.composer-media-controls-row::-webkit-scrollbar {
+  display: none;
+}
+.composer-media-controls-row > * {
+  flex: 0 0 auto;
+}
+@media (max-width: 640px) {
+  .composer-media-controls-row {
+    margin-left: 0.625rem;
+    margin-right: 0.625rem;
+  }
+}
+.composer-context-field {
+  min-height: 36px;
+}
+.composer-context-field[data-context-chip="true"] :is(input, textarea) {
+  padding-left: 13.25rem !important;
+}
+.anti-bribery-context-chip {
+  position: absolute;
+  left: 0.125rem;
+  top: 50%;
+  z-index: 3;
+  display: inline-flex;
+  height: 1.75rem;
+  max-width: 12.25rem;
+  transform: translateY(-50%);
+  align-items: center;
+  gap: 0.375rem;
+  overflow: hidden;
+  border-radius: 999px;
+  border: 1px solid hsl(0 0% 100% / 0.72);
+  background:
+    linear-gradient(135deg, hsl(0 0% 100% / 0.82), hsl(210 20% 98% / 0.62)),
+    radial-gradient(circle at 0% 0%, hsl(0 0% 100% / 0.75), transparent 54%);
+  padding: 0 0.625rem;
+  color: hsl(220 18% 18% / 0.82);
+  box-shadow:
+    inset 0 1px 0 hsl(0 0% 100% / 0.68),
+    inset 0 -10px 18px -18px hsl(var(--primary) / 0.42),
+    0 10px 24px -22px hsl(220 35% 18% / 0.46);
+  font-size: 0.72rem;
+  font-weight: 650;
+  line-height: 1;
+  white-space: nowrap;
+  transition:
+    color 160ms ease-out,
+    transform 180ms cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 180ms ease-out,
+    border-color 180ms ease-out;
+}
+button.anti-bribery-context-chip[aria-label] {
+  position: absolute;
+}
+.anti-bribery-context-chip:hover,
+.anti-bribery-context-chip:focus-visible {
+  border-color: hsl(var(--primary) / 0.28);
+  color: hsl(220 20% 12%);
+  transform: translateY(calc(-50% - 1px));
+  box-shadow:
+    inset 0 1px 0 hsl(0 0% 100% / 0.82),
+    inset 0 -10px 18px -18px hsl(var(--primary) / 0.52),
+    0 14px 28px -22px hsl(var(--primary) / 0.38);
+}
+.anti-bribery-context-chip:focus-visible {
+  outline: 2px solid hsl(var(--primary) / 0.32);
+  outline-offset: 2px;
+}
+button.anti-bribery-context-chip:not(:disabled):active {
+  transform: translateY(calc(-50% + 0.5px));
+}
+.anti-bribery-context-chip__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dark .composer-liquid-surface {
+  background:
+    linear-gradient(145deg, hsl(212 37% 8% / 0.94), hsl(218 34% 7% / 0.86) 58%, hsl(216 30% 10% / 0.9)),
+    radial-gradient(ellipse 58% 34% at 14% 0%, hsl(0 0% 100% / 0.09), transparent 68%),
+    radial-gradient(ellipse 48% 40% at 92% 100%, hsl(var(--accent-violet) / 0.16), transparent 72%);
+}
+.dark .composer-liquid-surface::before {
+  background:
+    linear-gradient(120deg, transparent 16%, hsl(0 0% 100% / 0.055) 44%, transparent 68%),
+    radial-gradient(ellipse 58% 36% at 18% 0%, hsl(0 0% 100% / 0.09), transparent 70%);
+  opacity: 0.95;
+}
+.dark .composer-liquid-surface::after {
+  background: radial-gradient(circle, hsl(var(--accent-violet) / 0.12), transparent 70%);
+}
+.dark .anti-bribery-context-chip {
+  border-color: hsl(0 0% 100% / 0.11);
+  background:
+    linear-gradient(135deg, hsl(216 22% 18% / 0.88), hsl(220 26% 11% / 0.72)),
+    radial-gradient(circle at 0% 0%, hsl(0 0% 100% / 0.095), transparent 58%);
+  color: hsl(210 18% 88% / 0.84);
+  box-shadow:
+    inset 0 1px 0 hsl(0 0% 100% / 0.12),
+    inset 0 -10px 18px -18px hsl(var(--accent-violet) / 0.54),
+    0 12px 28px -24px hsl(0 0% 0% / 0.84);
+}
+.dark .anti-bribery-context-chip:hover,
+.dark .anti-bribery-context-chip:focus-visible {
+  border-color: hsl(var(--accent-violet) / 0.38);
+  color: hsl(210 20% 96%);
+  box-shadow:
+    inset 0 1px 0 hsl(0 0% 100% / 0.16),
+    inset 0 -10px 18px -18px hsl(var(--accent-violet) / 0.62),
+    0 16px 32px -24px hsl(var(--accent-violet) / 0.48);
+}
+@media (max-width: 640px) {
+  .composer-context-field[data-context-chip="true"] :is(input, textarea) {
+    padding-left: 6.85rem !important;
+  }
+  .anti-bribery-context-chip {
+    max-width: 6.25rem;
+    padding-inline: 0.5rem;
+  }
+}
+
+/* ─── Composer — premium dark surface ────────────────────────────── */
+.dark .composer-surface {
+  background-color: hsl(var(--composer-bg));
+  border: 1px solid hsl(var(--composer-border));
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28), 0 1px 2px rgba(0, 0, 0, 0.3);
+  transition: border-color 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+              box-shadow   180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+              background-color 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.dark .composer-surface:focus-within {
+  border-color: hsl(var(--accent-violet) / 0.45);
+  box-shadow: 0 0 0 1px hsl(var(--accent-violet) / 0.35),
+              0 14px 38px rgba(0, 0, 0, 0.36);
+}
+
+
+/* ────────────────────────────────────────────────────────────
+ * Accessibility toggles applied on <html> via SettingsProvider.
+ * `.reduce-motion` disables every animation + transition so users
+ * with vestibular sensitivities aren't knocked around by our
+ * micro-interactions. `.high-contrast` lifts the outline and
+ * ring-offset contrast so focus rings are unmissable on any
+ * background.
+ * ──────────────────────────────────────────────────────────── */
+.reduce-motion,
+.reduce-motion *,
+.reduce-motion *::before,
+.reduce-motion *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+  scroll-behavior: auto !important;
+}
+
+.high-contrast {
+  --ring: 0 0% 0%;
+}
+.high-contrast.dark {
+  --ring: 0 0% 100%;
+}
+.high-contrast *:focus-visible {
+  outline: 2px solid hsl(var(--ring)) !important;
+  outline-offset: 2px !important;
+}
+.high-contrast :is(button, a, [role="button"]) {
+  box-shadow: 0 0 0 1px hsl(var(--border) / 0.6);
+}
+
+/* ────────────────────────────────────────────────────────────
+ * RTL support — applied automatically via <html dir="rtl"> when
+ * the resolved locale is ar, he, fa, ur or ps. We rely mostly on
+ * CSS logical properties (margin-inline, padding-inline) from
+ * Tailwind; these rules handle the handful of places where
+ * physical directions still show up.
+ * ──────────────────────────────────────────────────────────── */
+html[dir="rtl"] .composer-surface,
+html[dir="rtl"] .group\/composer {
+  direction: rtl;
+}
+html[dir="rtl"] [data-sidebar="sidebar"] {
+  direction: rtl;
+}
+html[dir="rtl"] .lucide-arrow-left { transform: scaleX(-1); }
+html[dir="rtl"] .lucide-arrow-right { transform: scaleX(-1); }
+html[dir="rtl"] .lucide-chevron-left { transform: scaleX(-1); }
+html[dir="rtl"] .lucide-chevron-right { transform: scaleX(-1); }
+
+/* ────────────────────────────────────────────────────────────
+ * Deeper RTL: flip physical margins on the handful of places
+ * tailwind still emits with `ml-/mr-` literals. Uses pure CSS
+ * attribute selectors so no HTML change is required.
+ * ──────────────────────────────────────────────────────────── */
+html[dir="rtl"] .ml-auto { margin-left: 0 !important; margin-right: auto !important; }
+html[dir="rtl"] .mr-auto { margin-right: 0 !important; margin-left: auto !important; }
+html[dir="rtl"] [class*="pl-"] { padding-left: 0; }
+html[dir="rtl"] .pl-2 { padding-right: 0.5rem; }
+html[dir="rtl"] .pl-3 { padding-right: 0.75rem; }
+html[dir="rtl"] .pl-4 { padding-right: 1rem; }
+html[dir="rtl"] .pl-9 { padding-right: 2.25rem; }
+html[dir="rtl"] [class*="pr-"] { padding-right: 0; }
+html[dir="rtl"] .pr-2 { padding-left: 0.5rem; }
+html[dir="rtl"] .pr-3 { padding-left: 0.75rem; }
+html[dir="rtl"] .pr-4 { padding-left: 1rem; }
+html[dir="rtl"] .pr-10 { padding-left: 2.5rem; }
+
+/* Absolute positioning: swap left/right on common helpers so the
+ * password-eye icon and the search icon sit on the correct side. */
+html[dir="rtl"] .left-0 { right: 0; left: auto; }
+html[dir="rtl"] .left-3 { right: 0.75rem; left: auto; }
+html[dir="rtl"] .right-0 { left: 0; right: auto; }
+html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
+
+/* ────────────────────────────────────────────────────────────
+ * Liquid-glass surface for the composer tool menu panel itself.
+ * Applied to <DropdownMenuContent> + <DropdownMenuSubContent>.
+ * Reads as a frosted water drop: translucent, blurred, with a
+ * soft top highlight pool — like a pane of glass catching light
+ * from the upper-left.
+ *
+ * The !important on bg/border/shadow is deliberate: the Radix
+ * primitive bakes bg-popover, border, shadow-md into every
+ * Content node, and we want to override without forking the
+ * shared primitive (which every other dropdown in the app uses).
+ * ──────────────────────────────────────────────────────────── */
+.liquid-menu-surface {
+  background:
+    linear-gradient(145deg, hsl(0 0% 100% / 0.82), hsl(0 0% 100% / 0.66) 56%, hsl(210 20% 98% / 0.72)),
+    radial-gradient(circle at 14% 0%, hsl(0 0% 100% / 0.58), transparent 34%),
+    radial-gradient(circle at 92% 100%, hsl(var(--primary) / 0.035), transparent 40%) !important;
+  backdrop-filter: blur(30px) saturate(1.2) contrast(1.01);
+  -webkit-backdrop-filter: blur(30px) saturate(1.2) contrast(1.01);
+  border: 1px solid hsl(0 0% 100% / 0.72) !important;
+  border-radius: 18px !important;
+  padding: 5px !important;
+  overflow: hidden !important;
+  position: relative;
+  box-shadow:
+    0 10px 22px -18px hsl(220 35% 18% / 0.22),
+    0 24px 54px -34px hsl(220 38% 16% / 0.26),
+    0 1px 0 0 hsl(0 0% 100% / 0.86) inset,
+    0 -12px 24px -24px hsl(var(--primary) / 0.16) inset,
+    0 0 0 1px hsl(0 0% 100% / 0.3) inset !important;
+  animation: liquid-menu-enter 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+/* Top-left highlight pool — the "light catch" of a glass surface. */
+.liquid-menu-surface::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  z-index: 0;
+  background:
+    radial-gradient(ellipse 58% 36% at 12% 0%, hsl(0 0% 100% / 0.38), transparent 66%),
+    linear-gradient(120deg, transparent 20%, hsl(0 0% 100% / 0.12) 43%, transparent 62%);
+  mix-blend-mode: screen;
+}
+.liquid-menu-surface::after {
+  content: "";
+  position: absolute;
+  inset: -38% -26% auto auto;
+  width: 64%;
+  height: 64%;
+  pointer-events: none;
+  z-index: 0;
+  border-radius: 999px;
+  background: radial-gradient(circle, hsl(var(--primary) / 0.04), transparent 66%);
+  filter: blur(14px);
+  transform: rotate(-12deg);
+}
+.dark .liquid-menu-surface {
+  background:
+    linear-gradient(145deg, hsl(222 16% 12% / 0.86), hsl(222 16% 8% / 0.74) 58%, hsl(222 18% 13% / 0.78)),
+    radial-gradient(circle at 18% 6%, hsl(0 0% 100% / 0.075), transparent 34%),
+    radial-gradient(circle at 88% 92%, hsl(var(--primary) / 0.09), transparent 40%) !important;
+  border: 1px solid hsl(0 0% 100% / 0.12) !important;
+  box-shadow:
+    0 10px 24px -18px hsl(0 0% 0% / 0.54),
+    0 28px 62px -32px hsl(0 0% 0% / 0.72),
+    inset 0 1px 0 0 hsl(0 0% 100% / 0.12),
+    inset 0 -12px 26px -24px hsl(var(--primary) / 0.2),
+    inset 0 0 0 1px hsl(0 0% 100% / 0.05) !important;
+}
+.dark .liquid-menu-surface::before {
+  background:
+    radial-gradient(ellipse 62% 42% at 12% 0%, hsl(0 0% 100% / 0.11), transparent 64%),
+    linear-gradient(120deg, transparent 18%, hsl(0 0% 100% / 0.06) 42%, transparent 62%);
+}
+
+.chat-tools-menu.liquid-menu-surface,
+.chat-active-apps-menu.liquid-menu-surface {
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
+}
+
+/* ────────────────────────────────────────────────────────────
+ * Liquid hover effect for the composer tool menu (DropdownMenu
+ * items). Organic blob behind the row with morphing border-
+ * radius, spring-eased opacity+scale in on hover. Icon adds a
+ * small rotate + scale, label slides slightly to the right to
+ * meet the grown icon.
+ *
+ * Usage: add `group liquid-menu-item` to the row wrapper, add
+ * `liquid-icon` to the icon container, and `liquid-label` to
+ * the text container. For connectors add `data-brand="gmail"`
+ * (etc.) on the wrapper — the brand-specific gradient tint is
+ * wired below.
+ * ──────────────────────────────────────────────────────────── */
+
+/* Subtle “liquid” shimmer — one slow pass on focus, no endless wobble. */
+@keyframes liquid-shimmer {
+  0%   { opacity: 0; transform: scale(0.96); }
+  35%  { opacity: 1; transform: scale(1); }
+  100% { opacity: 0.92; transform: scale(1); }
+}
+
+@keyframes liquid-menu-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.985);
+    filter: blur(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+.liquid-menu-item {
+  position: relative;
+  isolation: isolate;
+  overflow: visible;
+  border-radius: 13px !important;
+  padding: 0.38rem 0.48rem !important;
+  transition: background-color 160ms ease-out, color 160ms ease-out;
+}
+.liquid-menu-item::before {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  z-index: -1;
+  background: linear-gradient(
+    135deg,
+    hsl(0 0% 100% / 0.5) 0%,
+    hsl(var(--primary) / 0.04) 48%,
+    hsl(0 0% 100% / 0.28) 100%
+  );
+  border-radius: 13px;
+  opacity: 0;
+  transform: scale(0.98) translateY(1px);
+  transition:
+    opacity 180ms cubic-bezier(0.25, 0.1, 0.25, 1),
+    transform 180ms cubic-bezier(0.25, 0.1, 0.25, 1),
+    border-radius 220ms cubic-bezier(0.25, 0.1, 0.25, 1);
+  pointer-events: none;
+  box-shadow:
+    0 8px 18px -18px hsl(220 35% 20% / 0.28),
+    inset 0 1px 0 hsl(0 0% 100% / 0.58),
+    inset 0 -10px 18px -18px hsl(var(--primary) / 0.28);
+}
+.dark .liquid-menu-item::before {
+  background: linear-gradient(
+    135deg,
+    hsl(0 0% 100% / 0.07) 0%,
+    hsl(var(--primary) / 0.13) 46%,
+    hsl(0 0% 100% / 0.045) 100%
+  );
+  box-shadow:
+    0 10px 24px -18px hsl(0 0% 0% / 0.75),
+    inset 0 1px 0 hsl(0 0% 100% / 0.12),
+    inset 0 -10px 18px -18px hsl(var(--primary) / 0.5);
+}
+.liquid-menu-item:hover::before,
+.liquid-menu-item[data-highlighted]::before,
+.liquid-menu-item:focus-visible::before {
+  opacity: 1;
+  transform: scale(1) translateY(0);
+  border-radius: 17px;
+  animation: liquid-shimmer 420ms cubic-bezier(0.25, 0.1, 0.25, 1) forwards;
+}
+
+.chat-tools-menu .liquid-menu-item {
+  min-height: 2.2rem;
+}
+
+.chat-tools-menu .liquid-menu-item > div {
+  gap: 0.55rem !important;
+}
+
+.chat-tools-menu .liquid-icon {
+  width: 1.65rem !important;
+  height: 1.65rem !important;
+  border-radius: 0.58rem !important;
+}
+
+.chat-tools-menu .liquid-icon :is(svg, img) {
+  width: 0.82rem !important;
+  height: 0.82rem !important;
+}
+
+.chat-tools-menu .liquid-label {
+  font-size: 0.75rem !important;
+  line-height: 0.95rem;
+}
+
+.chat-tools-menu .text-xs {
+  font-size: 0.66rem !important;
+  line-height: 0.85rem;
+}
+
+.chat-tools-menu [data-radix-menu-separator],
+.chat-tools-menu [role="separator"] {
+  margin-block: 0.2rem !important;
+}
+
+.liquid-icon {
+  box-shadow:
+    inset 0 1px 0 hsl(0 0% 100% / 0.55),
+    0 8px 18px -16px hsl(220 35% 20% / 0.32);
+  transition: transform 180ms cubic-bezier(0.25, 0.1, 0.25, 1), box-shadow 180ms ease-out;
+  transform-origin: center;
+}
+.liquid-menu-item:hover .liquid-icon,
+.liquid-menu-item[data-highlighted] .liquid-icon,
+.liquid-menu-item:focus-visible .liquid-icon {
+  transform: translateY(-1px) scale(1.018);
+  box-shadow:
+    inset 0 1px 0 hsl(0 0% 100% / 0.68),
+    0 10px 22px -16px hsl(220 35% 20% / 0.36);
+}
+
+.liquid-label {
+  display: inline-block;
+  transition: transform 160ms cubic-bezier(0.25, 0.1, 0.25, 1), color 160ms ease-out;
+}
+.liquid-menu-item:hover .liquid-label,
+.liquid-menu-item[data-highlighted] .liquid-label {
+  transform: translateX(1px);
+}
+
+/* Connector submenu — restrained lift on brand marks (no rubber-band jelly). */
+.liquid-menu-item[data-brand] .liquid-icon > img,
+.liquid-menu-item[data-brand] .liquid-icon > svg {
+  transform-origin: center;
+  transition: transform 240ms cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+.liquid-menu-item[data-brand]:hover .liquid-icon > img,
+.liquid-menu-item[data-brand][data-highlighted] .liquid-icon > img,
+.liquid-menu-item[data-brand]:hover .liquid-icon > svg,
+.liquid-menu-item[data-brand][data-highlighted] .liquid-icon > svg {
+  transform: scale(1.06);
+}
+.liquid-menu-item[data-brand]::after {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  z-index: -1;
+  border-radius: 8px;
+  opacity: 0;
+  transition: opacity 300ms ease-out;
+  pointer-events: none;
+}
+.liquid-menu-item[data-brand="gmail"]::after     { background: linear-gradient(135deg, rgba(234, 67, 53, 0.05), rgba(234, 67, 53, 0.00)); }
+.liquid-menu-item[data-brand="calendar"]::after  { background: linear-gradient(135deg, rgba( 66,133,244, 0.05), rgba( 66,133,244, 0.00)); }
+.liquid-menu-item[data-brand="drive"]::after     { background: linear-gradient(135deg, rgba( 52,168, 83, 0.05), rgba( 52,168, 83, 0.00)); }
+.liquid-menu-item[data-brand="spotify"]::after   { background: linear-gradient(135deg, rgba( 29,185, 84, 0.05), rgba( 29,185, 84, 0.00)); }
+.liquid-menu-item[data-brand="word"]::after      { background: linear-gradient(135deg, rgba( 43, 87,154, 0.05), rgba( 43, 87,154, 0.00)); }
+.liquid-menu-item[data-brand="excel"]::after     { background: linear-gradient(135deg, rgba( 33,115, 70, 0.05), rgba( 33,115, 70, 0.00)); }
+.liquid-menu-item[data-brand]:hover::after,
+.liquid-menu-item[data-brand][data-highlighted]::after {
+  opacity: 1;
+}
+
+/* Respect the user's motion preference — both via the OS setting
+ * AND via Settings → Accessibility → Reduce motion (which toggles
+ * .reduce-motion on <html>). All three tracks go calm. */
+@media (prefers-reduced-motion: reduce) {
+  .liquid-menu-item::before,
+  .liquid-menu-item::after,
+  .liquid-icon,
+  .liquid-label { transition: none !important; animation: none !important; }
+  .liquid-menu-item:hover::before,
+  .liquid-menu-item[data-highlighted]::before {
+    animation: none !important;
+    opacity: 1;
+    transform: scale(1);
+  }
+  .liquid-menu-item:hover .liquid-icon,
+  .liquid-menu-item[data-highlighted] .liquid-icon { transform: none !important; }
+  .liquid-menu-item:hover .liquid-label,
+  .liquid-menu-item[data-highlighted] .liquid-label { transform: none !important; }
+}
+.reduce-motion .liquid-menu-item::before,
+.reduce-motion .liquid-menu-item::after,
+.reduce-motion .liquid-icon,
+.reduce-motion .liquid-label { transition: none !important; animation: none !important; }
+.reduce-motion .liquid-menu-item:hover::before,
+.reduce-motion .liquid-menu-item[data-highlighted]::before {
+  animation: none !important;
+  opacity: 1;
+  transform: scale(1);
+}
+.reduce-motion .liquid-menu-item:hover .liquid-icon,
+.reduce-motion .liquid-menu-item[data-highlighted] .liquid-icon { transform: none !important; }
+.reduce-motion .liquid-menu-item:hover .liquid-label,
+.reduce-motion .liquid-menu-item[data-highlighted] .liquid-label { transform: none !important; }
+
+/* Agentic web-search status pill. The shimmer is intentionally wide and
+ * diagonal so it reads like a water wave / light ray passing over the
+ * "Recopilando fuentes" state without adding a noisy second surface. */
+.agentic-search-status {
+  position: relative;
+  isolation: isolate;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.62rem;
+  max-width: min(100%, 560px);
+  border: 1px solid hsl(210 24% 82% / 0.72);
+  border-radius: 999px;
+  padding: 0.58rem 0.86rem 0.58rem 0.72rem;
+  color: hsl(222 47% 11%);
+  background:
+    radial-gradient(circle at 18% 12%, hsl(0 0% 100% / 0.92), transparent 32%),
+    linear-gradient(135deg, hsl(210 70% 98% / 0.96), hsl(196 86% 95% / 0.72) 48%, hsl(0 0% 100% / 0.88));
+  box-shadow:
+    0 14px 30px -24px hsl(205 85% 32% / 0.5),
+    inset 0 1px 0 hsl(0 0% 100% / 0.85),
+    inset 0 -14px 24px -26px hsl(196 92% 42% / 0.42);
+  overflow: hidden;
+  cursor: pointer;
+  text-align: left;
+  vertical-align: middle;
+  transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
+}
+.agentic-search-status::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: -90% -42%;
+  background:
+    linear-gradient(
+      112deg,
+      transparent 28%,
+      hsl(190 100% 88% / 0.16) 38%,
+      hsl(0 0% 100% / 0.82) 47%,
+      hsl(190 100% 70% / 0.24) 54%,
+      transparent 66%
+    );
+  filter: blur(0.2px);
+  transform: translateX(-62%) rotate(4deg);
+  animation: agentic-search-wave 2.35s cubic-bezier(0.45, 0, 0.25, 1) infinite;
+}
+.agentic-search-status::after {
+  content: "";
+  position: absolute;
+  z-index: -2;
+  inset: 1px;
+  border-radius: inherit;
+  background:
+    radial-gradient(ellipse at 74% 115%, hsl(196 100% 58% / 0.16), transparent 48%),
+    radial-gradient(ellipse at 2% 0%, hsl(0 0% 100% / 0.7), transparent 42%);
+  pointer-events: none;
+}
+.agentic-search-status:hover,
+.agentic-search-status:focus-visible {
+  border-color: hsl(196 92% 54% / 0.48);
+  box-shadow:
+    0 18px 38px -26px hsl(205 85% 32% / 0.62),
+    inset 0 1px 0 hsl(0 0% 100% / 0.9),
+    inset 0 -14px 24px -26px hsl(196 92% 42% / 0.52);
+  transform: translateY(-1px);
+  outline: none;
+}
+.agentic-search-status:focus-visible {
+  box-shadow:
+    0 0 0 3px hsl(196 92% 54% / 0.18),
+    0 18px 38px -26px hsl(205 85% 32% / 0.62),
+    inset 0 1px 0 hsl(0 0% 100% / 0.9);
+}
+.agentic-search-status__bars {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 3px;
+  width: 18px;
+  height: 18px;
+  color: hsl(222 18% 34%);
+}
+.agentic-search-status__bars span {
+  display: block;
+  width: 3px;
+  height: 7px;
+  border-radius: 999px;
+  background: currentColor;
+  animation: agentic-search-bars 0.78s ease-in-out infinite;
+}
+.agentic-search-status__bars span:nth-child(2) { animation-delay: 120ms; }
+.agentic-search-status__bars span:nth-child(3) { animation-delay: 240ms; }
+.agentic-search-status__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 1.02rem;
+  font-weight: 720;
+  letter-spacing: -0.015em;
+}
+.agentic-search-status__hint {
+  flex: none;
+  border-radius: 999px;
+  padding: 0.18rem 0.48rem;
+  background: hsl(0 0% 100% / 0.72);
+  color: hsl(222 14% 42%);
+  font-size: 0.68rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}
+.dark .agentic-search-status {
+  color: hsl(210 40% 98%);
+  border-color: hsl(210 24% 30% / 0.74);
+  background:
+    radial-gradient(circle at 18% 12%, hsl(0 0% 100% / 0.12), transparent 32%),
+    linear-gradient(135deg, hsl(219 28% 13% / 0.95), hsl(206 36% 15% / 0.82) 48%, hsl(222 28% 10% / 0.92));
+  box-shadow:
+    0 14px 30px -24px hsl(0 0% 0% / 0.8),
+    inset 0 1px 0 hsl(0 0% 100% / 0.12),
+    inset 0 -14px 24px -26px hsl(196 92% 52% / 0.5);
+}
+.dark .agentic-search-status__bars {
+  color: hsl(197 80% 74%);
+}
+.dark .agentic-search-status__hint {
+  background: hsl(0 0% 100% / 0.08);
+  color: hsl(210 18% 78%);
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+ * Agentic search v2 — head row + determinate progress bar + provider
+ * chips. Wraps to two rows on narrow screens; the head stays compact so
+ * the badge never grows unexpectedly mid-stream.
+ * ──────────────────────────────────────────────────────────────────── */
+.agentic-search-status {
+  /* Override v1's pill so the v2 layout (head + bar + chips) flows. */
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.5rem;
+  padding: 0.62rem 0.86rem;
+  border-radius: 14px;
+}
+.agentic-search-status__head {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+}
+.agentic-search-status__head .agentic-search-status__label {
+  flex: 1 1 auto;
+}
+.agentic-search-status__counter {
+  flex: none;
+  border-radius: 8px;
+  padding: 0.18rem 0.46rem;
+  background: hsl(196 92% 96% / 0.85);
+  color: hsl(205 92% 28%);
+  font-size: 0.74rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.agentic-search-status__elapsed {
+  flex: none;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: hsl(222 18% 42%);
+  font-variant-numeric: tabular-nums;
+}
+.agentic-search-status__progress {
+  appearance: none;
+  -webkit-appearance: none;
+  display: block;
+  width: 100%;
+  height: 4px;
+  border: 0;
+  border-radius: 999px;
+  background: hsl(210 22% 90% / 0.6);
+  overflow: hidden;
+}
+.agentic-search-status__progress::-webkit-progress-bar {
+  background: hsl(210 22% 90% / 0.6);
+  border-radius: inherit;
+}
+.agentic-search-status__progress::-webkit-progress-value {
+  border-radius: inherit;
+  background: linear-gradient(
+    90deg,
+    hsl(196 92% 54%),
+    hsl(214 92% 56%) 60%,
+    hsl(204 92% 48%)
+  );
+  transition: width 360ms cubic-bezier(0.45, 0, 0.25, 1);
+  box-shadow: 0 0 12px hsl(204 92% 60% / 0.55);
+}
+.agentic-search-status__progress::-moz-progress-bar {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(
+    90deg,
+    hsl(196 92% 54%),
+    hsl(214 92% 56%) 60%,
+    hsl(204 92% 48%)
+  );
+  transition: width 360ms cubic-bezier(0.45, 0, 0.25, 1);
+  box-shadow: 0 0 12px hsl(204 92% 60% / 0.55);
+}
+.agentic-search-status__chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+.agentic-search-status__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.32rem;
+  padding: 0.14rem 0.46rem;
+  border-radius: 999px;
+  background: hsl(0 0% 100% / 0.78);
+  border: 1px solid hsl(210 22% 86% / 0.7);
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: hsl(222 22% 28%);
+}
+.agentic-search-status__chip b {
+  font-weight: 700;
+  color: hsl(205 90% 30%);
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+}
+.agentic-search-status__chip i {
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  background: hsl(196 92% 92%);
+  color: hsl(205 92% 24%);
+  border-radius: 6px;
+  padding: 0 0.34rem;
+  font-weight: 700;
+}
+
+.dark .agentic-search-status__counter {
+  background: hsl(196 60% 22% / 0.6);
+  color: hsl(196 80% 78%);
+}
+.dark .agentic-search-status__elapsed {
+  color: hsl(210 18% 70%);
+}
+.dark .agentic-search-status__progress {
+  background: hsl(210 18% 22% / 0.6);
+}
+.dark .agentic-search-status__chip {
+  background: hsl(210 22% 14% / 0.85);
+  border-color: hsl(210 22% 28% / 0.75);
+  color: hsl(210 22% 84%);
+}
+.dark .agentic-search-status__chip b {
+  color: hsl(196 80% 76%);
+}
+.dark .agentic-search-status__chip i {
+  background: hsl(205 60% 22%);
+  color: hsl(196 90% 84%);
+}
+
+@keyframes agentic-search-wave {
+  0% { transform: translateX(-68%) rotate(4deg); opacity: 0; }
+  18% { opacity: 1; }
+  58% { opacity: 0.96; }
+  100% { transform: translateX(68%) rotate(4deg); opacity: 0; }
+}
+
+@keyframes agentic-search-bars {
+  0%, 100% { height: 6px; opacity: 0.58; transform: translateY(0); }
+  42% { height: 15px; opacity: 1; transform: translateY(-1px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agentic-search-status,
+  .agentic-search-status::before,
+  .agentic-search-status__bars span {
+    animation: none !important;
+    transition: none !important;
+  }
+  .agentic-search-status::before { opacity: 0.42; transform: translateX(0) rotate(4deg); }
+  .agentic-search-status:hover,
+  .agentic-search-status:focus-visible { transform: none; }
+}
+.reduce-motion .agentic-search-status,
+.reduce-motion .agentic-search-status::before,
+.reduce-motion .agentic-search-status__bars span {
+  animation: none !important;
+  transition: none !important;
+}
+.reduce-motion .agentic-search-status::before { opacity: 0.42; transform: translateX(0) rotate(4deg); }
+.reduce-motion .agentic-search-status:hover,
+.reduce-motion .agentic-search-status:focus-visible { transform: none; }
+
+/* ─────────────────────────────────────────────────────────────────
+ * DiffBlock — dark-theme overrides for diff2html.
+ * The library ships a light theme; we don't import its stylesheet
+ * directly. Instead we restyle the structural markup it emits inside
+ * a .diff-block-wrapper scope so chat code blocks blend with the rest
+ * of the dark UI.
+ * ───────────────────────────────────────────────────────────────── */
+.diff-block-wrapper { color: rgb(228, 228, 231); }
+.diff-block-wrapper .d2h-wrapper,
+.diff-block-wrapper .d2h-files-diff { background: transparent; }
+.diff-block-wrapper .d2h-file-wrapper {
+  border: 1px solid rgb(63, 63, 70);
+  border-radius: 0;
+  background: transparent;
+  margin: 0;
+}
+.diff-block-wrapper .d2h-file-header {
+  background: rgba(39, 39, 42, 0.7);
+  border-bottom: 1px solid rgb(63, 63, 70);
+  color: rgb(228, 228, 231);
+  padding: 0.5rem 0.75rem;
+}
+.diff-block-wrapper .d2h-file-name { color: rgb(228, 228, 231); font-weight: 500; }
+.diff-block-wrapper .d2h-tag { background: rgb(63, 63, 70); color: rgb(228, 228, 231); }
+.diff-block-wrapper .d2h-diff-table {
+  background: rgb(24, 24, 27);
+  color: rgb(228, 228, 231);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
+  font-size: 12.5px;
+}
+.diff-block-wrapper .d2h-code-side-line,
+.diff-block-wrapper .d2h-code-line { color: rgb(228, 228, 231); }
+.diff-block-wrapper .d2h-code-side-linenumber,
+.diff-block-wrapper .d2h-code-linenumber {
+  background: rgba(39, 39, 42, 0.6);
+  border-color: rgb(63, 63, 70);
+  color: rgb(113, 113, 122);
+}
+.diff-block-wrapper .d2h-ins {
+  background: rgba(34, 197, 94, 0.12);
+  border-color: rgba(34, 197, 94, 0.3);
+}
+.diff-block-wrapper .d2h-ins .d2h-code-side-linenumber,
+.diff-block-wrapper .d2h-ins .d2h-code-linenumber {
+  background: rgba(34, 197, 94, 0.18);
+  border-color: rgba(34, 197, 94, 0.35);
+  color: rgb(187, 247, 208);
+}
+.diff-block-wrapper .d2h-del {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.3);
+}
+.diff-block-wrapper .d2h-del .d2h-code-side-linenumber,
+.diff-block-wrapper .d2h-del .d2h-code-linenumber {
+  background: rgba(239, 68, 68, 0.18);
+  border-color: rgba(239, 68, 68, 0.35);
+  color: rgb(254, 202, 202);
+}
+.diff-block-wrapper .d2h-info {
+  background: rgba(63, 63, 70, 0.6);
+  color: rgb(161, 161, 170);
+  border-color: rgb(63, 63, 70);
+}
+.diff-block-wrapper .d2h-cntx {
+  background: transparent;
+  color: rgb(212, 212, 216);
+}
+.diff-block-wrapper .d2h-emptyplaceholder {
+  background: rgba(39, 39, 42, 0.4);
+  border-color: rgb(63, 63, 70);
+}
+.diff-block-wrapper ins,
+.diff-block-wrapper del {
+  text-decoration: none;
+  background: transparent;
+}
+.diff-block-wrapper ins { color: rgb(134, 239, 172); }
+.diff-block-wrapper del { color: rgb(252, 165, 165); }
+
+/* Callouts — emitted by `remark-callouts` for `:::note|warning|tip|info|caution`
+   container directives. Schema in lib/markdown-sanitize.ts pins the class list
+   so an LLM can't introduce other variants.
+
+   Colors are stops chosen to read on both the light and dark prose themes
+   (see `prose dark:prose-invert` wrappers on the chat surfaces). The
+   left-edge accent uses a 4px rule so callouts catch the eye without
+   feeling like a system error banner. */
+.callout {
+  display: block;
+  margin: 1.25em 0;
+  padding: 0.85em 1em 0.85em 1.1em;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-left-width: 4px;
+  background: rgba(148, 163, 184, 0.08);
+  color: inherit;
+  font-size: 0.95em;
+  line-height: 1.55;
+}
+.callout > :first-child { margin-top: 0; }
+.callout > :last-child { margin-bottom: 0; }
+.callout p { margin: 0.4em 0; }
+.callout code { font-size: 0.9em; }
+
+.callout-note {
+  border-left-color: rgb(96, 165, 250);
+  background: rgba(96, 165, 250, 0.08);
+}
+.callout-info {
+  border-left-color: rgb(56, 189, 248);
+  background: rgba(56, 189, 248, 0.08);
+}
+.callout-tip {
+  border-left-color: rgb(74, 222, 128);
+  background: rgba(74, 222, 128, 0.08);
+}
+.callout-warning {
+  border-left-color: rgb(251, 191, 36);
+  background: rgba(251, 191, 36, 0.1);
+}
+.callout-caution {
+  border-left-color: rgb(248, 113, 113);
+  background: rgba(248, 113, 113, 0.1);
+}
+
+/* Heading anchors — appended by `rehype-autolink-headings`. Hidden until
+   the heading is hovered/focused, which keeps the chat surface clean
+   while still giving readers a deep-link affordance for long answers. */
+.prose h1, .prose h2, .prose h3, .prose h4, .prose h5, .prose h6 {
+  scroll-margin-top: 4rem;
+}
+.prose .anchor-link {
+  margin-left: 0.4em;
+  font-size: 0.8em;
+  color: rgba(148, 163, 184, 0.7);
+  opacity: 0;
+  transition: opacity 120ms ease;
+  text-decoration: none;
+}
+.prose h1:hover .anchor-link,
+.prose h2:hover .anchor-link,
+.prose h3:hover .anchor-link,
+.prose h4:hover .anchor-link,
+.prose h5:hover .anchor-link,
+.prose h6:hover .anchor-link,
+.prose .anchor-link:focus-visible {
+  opacity: 1;
+}
+.prose .anchor-link::after {
+  content: "#";
+}

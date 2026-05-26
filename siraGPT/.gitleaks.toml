@@ -1,0 +1,33 @@
+# Gitleaks configuration for SiraGPT CI
+# Catches secrets accidentally committed to the repo.
+# See: https://github.com/gitleaks/gitleaks
+
+title = "SiraGPT Gitleaks Config"
+
+[allowlist]
+  description = "Safe patterns that don't need blocking"
+  paths = [
+    '''\.github/workflows/ci\.yml''',       # CI dummy test keys
+    '''backend/tests/''',                    # Test fixtures with fake keys
+    '''tests/''',
+    '''docs/ENV_VARIABLES\.md''',           # Env var documentation
+    '''docs/''',                            # General docs
+    '''CLAUDE\.md''',                       # Agent instructions
+    '''\.env\.example''',                   # Example env file
+    '''node_modules/''',                    # Dependency fixtures/examples
+    '''backend/node_modules/''',            # Dependency fixtures/examples
+  ]
+
+[[rules]]
+  id = "generic-api-key"
+  description = "Generic API Key"
+  regex = '''(?i)(?:api[_-]?key|apikey|api_secret|access[_-]?key|secret[_-]?key|private[_-]?key)["'\s]*[:=]\s*["'][A-Za-z0-9+/=_-]{20,}["']'''
+  [rules.allowlist]
+    stopwords = [
+      "ci-dummy", "sk-ci-dummy", "ci_dummy", "not-used",
+      "your-api-key", "your-openai-api-key", "your-google-api-key",
+      "your-elevenlabs-api-key-here",
+      "your-gemini-api-key-here", "your-openrouter-api-key-here",
+      "your-deepseek-api-key-here", "your-anthropic-api-key-here",
+      "your-groq-api-key-here",
+    ]

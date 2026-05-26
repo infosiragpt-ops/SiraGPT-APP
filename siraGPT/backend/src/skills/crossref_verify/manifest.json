@@ -1,0 +1,19 @@
+{
+  "id": "crossref_verify",
+  "name": "CrossRef DOI verifier",
+  "version": "1.0.0",
+  "description": "Verify a DOI resolves on CrossRef and pull the authoritative metadata (title, authors with given/family split, year, container/journal, volume, issue, pages, publisher). Use to validate a citation before quoting it, catch typos in user-supplied DOIs, or enrich an OpenAlex hit with publisher-confirmed bibliographic fields.",
+  "capabilities": ["net:outbound"],
+  "params": {
+    "type": "object",
+    "properties": {
+      "dois": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "List of DOIs to verify. Either bare ('10.1234/...') or 'https://doi.org/10.1234/...' — the prefix is stripped automatically. Up to 30 per call."
+      }
+    },
+    "required": ["dois"],
+    "additionalProperties": false
+  }
+}

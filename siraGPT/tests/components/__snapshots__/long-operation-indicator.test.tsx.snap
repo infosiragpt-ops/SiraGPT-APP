@@ -1,0 +1,58 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`LongOperationIndicator (snapshot) > renders at ~5s elapsed (not slow) 1`] = `
+<div
+  aria-live="polite"
+  class="fixed bottom-24 right-4 z-50 flex max-w-[90vw] items-center gap-3 rounded-lg border border-border bg-background/95 px-3 py-2 text-xs shadow-lg backdrop-blur sm:bottom-6 sm:max-w-sm"
+  role="status"
+>
+  <svg
+    class="h-4 w-4 shrink-0 animate-spin text-primary"
+    data-testid="loader"
+  />
+  <div
+    class="flex min-w-0 flex-1 flex-col gap-0.5"
+  >
+    <span
+      class="truncate font-medium text-foreground"
+    >
+      Generando…
+    </span>
+    <span
+      class="text-muted-foreground"
+    >
+      5
+      s
+    </span>
+  </div>
+</div>
+`;
+
+exports[`LongOperationIndicator (snapshot) > renders at ~35s elapsed (slow state) 1`] = `
+<div
+  aria-live="polite"
+  class="fixed bottom-24 right-4 z-50 flex max-w-[90vw] items-center gap-3 rounded-lg border border-border bg-background/95 px-3 py-2 text-xs shadow-lg backdrop-blur sm:bottom-6 sm:max-w-sm"
+  role="status"
+>
+  <svg
+    class="h-4 w-4 shrink-0 animate-spin text-primary"
+    data-testid="loader"
+  />
+  <div
+    class="flex min-w-0 flex-1 flex-col gap-0.5"
+  >
+    <span
+      class="truncate font-medium text-foreground"
+    >
+      Generando…
+    </span>
+    <span
+      class="text-amber-600"
+    >
+      35
+      s
+       · está tardando más de lo habitual
+    </span>
+  </div>
+</div>
+`;

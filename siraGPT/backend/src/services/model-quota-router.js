@@ -1,0 +1,225 @@
+'use strict';
+
+const { getPlanCatalog, GEMA4_MODEL_ID } = require('./plan-credits-catalog');
+const {
+  DEFAULT_MODEL: CEREBRAS_DEFAULT_MODEL,
+  DEFAULT_DISPLAY_NAME: CEREBRAS_DEFAULT_DISPLAY_NAME,
+  PROVIDER_NAME: CEREBRAS_PROVIDER_NAME,
+} = require('./ai/cerebras-client');
+
+// Defaults moved from OpenAI/Gema4-31B → Cerebras/Llama-3.1-8b/"Free IA" to
+// match the product spec in docs/SIraGPT.docx (Free IA = Llama 3.1 8B via
+// Cerebras). Legacy GEMA4_* env vars still override per deployment.
+const DEFAULT_GEMA4_DISPLAY_NAME = CEREBRAS_DEFAULT_DISPLAY_NAME;
+const DEFAULT_GEMA4_PROVIDER = CEREBRAS_PROVIDER_NAME;
+const DEFAULT_GEMA4_ICON = 'CerebrasLogo';
+const DEFAULT_GEMA4_MODEL_ID = CEREBRAS_DEFAULT_MODEL;
+
+function cleanString(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function normalizePlan(plan) {
+  return String(plan || 'FREE').trim().toUpperCase() || 'FREE';
+}
+
+function toBigInt(value) {
+  if (value == null) return 0n;
+  if (typeof value === 'bigint') return value;
+  try {
+    return BigInt(value);
+  } catch {
+    return 0n;
+  }
+}
+
+function toSafeNumber(value, fallback = 0) {
+  if (value == null) return fallback;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function clampBigInt(value, min = 0n) {
+  return value < min ? min : value;
+}
+
+function finiteTokenPool({ used, limit }) {
+  const safeUsed = clampBigInt(used);
+  const safeLimit = clampBigInt(limit);
+  const remaining = clampBigInt(safeLimit - safeUsed);
+  return {
+    used: safeUsed.toString(),
+    limit: safeLimit.toString(),
+    remaining: remaining.toString(),
+    unlimited: false,
+    exhausted: safeLimit > 0n && safeUsed >= safeLimit,
+  };
+}
+
+function unlimitedTokenPool({ used }) {
+  const safeUsed = clampBigInt(used);
+  return {
+    used: safeUsed.toString(),
+    limit: null,
+    remaining: null,
+    unlimited: true,
+    exhausted: false,
+  };
+}
+
+function getGema4RuntimeConfig(env = process.env) {
+  // Resolution order: explicit GEMA4_* env (legacy) → FREE_IA_* env (new
+  // brand) → static defaults pointing at Cerebras Llama 3.1 8B.
+  const model = cleanString(env.GEMA4_MODEL_ID)
+    || cleanString(env.FREE_IA_MODEL_ID)
+    || DEFAULT_GEMA4_MODEL_ID
+    || GEMA4_MODEL_ID;
+  const provider = cleanString(env.GEMA4_PROVIDER) || DEFAULT_GEMA4_PROVIDER;
+  const displayName = cleanString(env.GEMA4_DISPLAY_NAME)
+    || cleanString(env.FREE_IA_DISPLAY_NAME)
+    || DEFAULT_GEMA4_DISPLAY_NAME;
+  const icon = cleanString(env.GEMA4_ICON) || DEFAULT_GEMA4_ICON;
+  return { model, provider, displayName, icon };
+}
+
+function buildGema4VirtualModel(env = process.env) {
+  const config = getGema4RuntimeConfig(env);
+  return {
+    id: `__virtual_${config.model.replace(/[^a-z0-9]+/gi, '_').toLowerCase()}__`,
+    name: config.model,
+    displayName: config.displayName,
+    provider: config.provider,
+    description: 'Modelo gratuito predeterminado configurado para el fallback de SiraGPT.',
+    type: 'TEXT',
+    icon: config.icon,
+    virtual: true,
+  };
+}
+
+function buildModelQuotaPolicy(user, env = process.env) {
+  const currentPlan = normalizePlan(user?.plan);
+  const catalog = getPlanCatalog(currentPlan);
+  const fallbackConfig = getGema4RuntimeConfig(env);
+  const premiumUsage = toBigInt(user?.apiUsage);
+  const premiumLimit = toBigInt(user?.monthlyLimit);
+  const gemaUsage = toBigInt(user?.gemaTokenUsage);
+  const gemaLimit = toBigInt(user?.gemaTokenLimit);
+  const freeDailyLimit = toSafeNumber(catalog.dailyCalls, null);
+  const freeRemainingCalls = currentPlan === 'FREE'
+    ? Math.max(0, Math.min(freeDailyLimit || 0, toSafeNumber(user?.monthlyCallLimit, freeDailyLimit || 0)))
+    : null;
+  const premiumPool = currentPlan === 'ENTERPRISE' && premiumLimit <= 0n
+    ? unlimitedTokenPool({ used: premiumUsage })
+    : finiteTokenPool({ used: premiumUsage, limit: premiumLimit });
+  const gemaPool = catalog.gemaUnlimited
+    ? unlimitedTokenPool({ used: gemaUsage })
+    : finiteTokenPool({ used: gemaUsage, limit: gemaLimit });
+
+  const notices = [];
+  if (currentPlan === 'FREE') {
+    notices.push({
+      code: 'free_tier_default_model',
+      level: 'info',
+      message: `${fallbackConfig.displayName} es el modelo predeterminado para el plan gratuito.`,
+    });
+  }
+  if (premiumPool.exhausted && !gemaPool.exhausted) {
+    notices.push({
+      code: 'premium_pool_exhausted_fallback_available',
+      level: 'warning',
+      message: `Los tokens premium estan agotados; SiraGPT usara ${fallbackConfig.displayName} como fallback.`,
+    });
+  }
+  if (gemaPool.exhausted) {
+    notices.push({
+      code: 'fallback_pool_exhausted',
+      level: 'error',
+      message: `El pool de ${fallbackConfig.displayName} esta agotado para el plan actual.`,
+    });
+  }
+
+  return {
+    currentPlan,
+    defaultModel: currentPlan === 'FREE'
+      ? { name: fallbackConfig.model, provider: fallbackConfig.provider, displayName: fallbackConfig.displayName }
+      : null,
+    fallbackModel: { name: fallbackConfig.model, provider: fallbackConfig.provider, displayName: fallbackConfig.displayName },
+    calls: {
+      dailyLimit: freeDailyLimit,
+      remaining: freeRemainingCalls,
+      exhausted: currentPlan === 'FREE' && freeDailyLimit != null ? freeRemainingCalls <= 0 : false,
+    },
+    premiumTokens: premiumPool,
+    gemaTokens: gemaPool,
+    routing: {
+      freeTierUsesFallback: currentPlan === 'FREE',
+      premiumExhaustionUsesFallback: true,
+      blockedWhenFallbackExhausted: !catalog.gemaUnlimited,
+    },
+    notices,
+  };
+}
+
+/**
+ * Resolve which model to use based on premium vs Gema pool exhaustion.
+ */
+function resolveModelForUser(user, requestedModel, env = process.env) {
+  const plan = normalizePlan(user?.plan);
+  const catalog = getPlanCatalog(plan);
+  const fallbackConfig = getGema4RuntimeConfig(env);
+  const premiumUsage = toBigInt(user?.apiUsage);
+  const premiumLimit = toBigInt(user?.monthlyLimit);
+  const gemaUsage = toBigInt(user?.gemaTokenUsage);
+  const gemaLimit = toBigInt(user?.gemaTokenLimit);
+
+  const premiumExhausted = premiumLimit > 0n && premiumUsage >= premiumLimit;
+  const gemaExhausted = !catalog.gemaUnlimited && gemaLimit > 0n && gemaUsage >= gemaLimit;
+
+  if (plan === 'FREE' || premiumExhausted) {
+    if (gemaExhausted && !catalog.gemaUnlimited) {
+      return {
+        model: requestedModel,
+        blocked: true,
+        reason: 'quota_exceeded',
+        fallbackModel: fallbackConfig.model,
+        provider: fallbackConfig.provider,
+      };
+    }
+    return {
+      model: fallbackConfig.model,
+      blocked: false,
+      reason: premiumExhausted ? 'premium_exhausted_gema_fallback' : 'free_tier_gema',
+      fallbackModel: fallbackConfig.model,
+      provider: fallbackConfig.provider,
+      originalModel: requestedModel,
+    };
+  }
+
+  return {
+    model: requestedModel,
+    blocked: false,
+    reason: 'premium_available',
+    fallbackModel: fallbackConfig.model,
+    provider: null,
+  };
+}
+
+function persistModelPreference(settings, modelId) {
+  const base = settings && typeof settings === 'object' && !Array.isArray(settings)
+    ? { ...settings }
+    : {};
+  base.lastResolvedModel = modelId;
+  base.modelRouterUpdatedAt = new Date().toISOString();
+  return base;
+}
+
+module.exports = {
+  GEMA4_MODEL_ID,
+  buildGema4VirtualModel,
+  buildModelQuotaPolicy,
+  getGema4RuntimeConfig,
+  normalizePlan,
+  resolveModelForUser,
+  persistModelPreference,
+  toBigInt,
+};

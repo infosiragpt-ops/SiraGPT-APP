@@ -1,0 +1,68 @@
+2026-05-20 21:29:49.17
+ad38fa8d
+User
+[backend] [agent-task] enqueue failed, falling back to local runtime: ERR max requests limit exceeded. Limit: 500000, Usage: 500000. See https://upstash.com/docs/redis/troubleshooting/max_requests_limit for details
+2026-05-20 21:29:49.52
+ad38fa8d
+User
+[backend] {"t":"2026-05-21T01:29:49.522Z","event":"agent_task_local_fallback_started","taskId":"2cceecae-7a32-4e6a-96a9-929f5ff7d2fc","userId":"cmpdbjuqh00001hfgayz771yu","chatId":"cmpetcilw00m704f260py5hml","model":"gpt-4o-mini","traceId":"e9fc2033-982b-45a1-b547-5fee6d378955","fallbackReason":"redis_unavailable","fallbackDetail":"ERR max requests limit exceeded. Limit: 500000, Usage: 500000. See https://upstash.com/docs/redis/troubleshooting/max_requests_limit for details","fileCount":0}
+2026-05-20 21:29:49.80
+ad38fa8d
+User
+[backend] [task-contract-resolver] LLM resolve failed: 400 Invalid schema for response_format 'TaskContract': In context=('properties', 'success_tests', 'items'), 'required' is required to be supplied and to be an array including every key in properties. Missing 'check'.
+2026-05-20 21:29:49.92
+ad38fa8d
+User
+[backend] {"t":"2026-05-21T01:29:49.920Z","event":"agent_task_worker_started","taskId":"2cceecae-7a32-4e6a-96a9-929f5ff7d2fc","userId":"cmpdbjuqh00001hfgayz771yu","chatId":"cmpetcilw00m704f260py5hml","model":"gpt-4o-mini","runtimeModel":"gpt-4o-mini","runtimeProvider":"OpenAI","modelRemapped":false,"queue":"siragpt-agent-tasks","jobId":"local-2cceecae-7a32-4e6a-96a9-929f5ff7d2fc","traceId":"e9fc2033-982b-45a1-b547-5fee6d378955","documentPolicy":{"mode":"chat_only","format":"docx","template":"business","complexity":"simple","reason":"Respuesta conversacional corta; no requiere archivo.","autoGenerate":false,"thresholds":{"wordCount":0,"estimatedWords":220,"tableSignals":false,"fileCount":0,"transcriptionOnly":false,"explicitOutput":false,"documentUnderstanding":false},"palette":{"id":"business","label":"Business","colors":{"primary":"#0F172A","surface":"#F8FAFC","neutral":"#475569","accent":"#059669","warning":"#D97706"}}}}
+2026-05-20 21:29:49.92
+ad38fa8d
+User
+[backend] {"t":"2026-05-21T01:29:49.920Z","event":"agent_task_worker_started","taskId":"2cceecae-7a32-4e6a-96a9-929f5ff7d2fc","userId":"cmpdbjuqh00001hfgayz771yu","chatId":"cmpetcilw00m704f260py5hml","model":"gpt-4o-mini","runtimeModel":"gpt-4o-mini","runtimeProvider":"OpenAI","modelRemapped":false,"queue":"siragpt-agent-tasks","jobId":"local-2cceecae-7a32-4e6a-96a9-929f5ff7d2fc","traceId":"e9fc2033-982b-45a1-b547-5fee6d378955","documentPolicy":{"mode":"chat_only","format":"docx","template":"business","complexity":"simple","reason":"Respuesta conversacional corta; no requiere archivo.","autoGenerate":false,"thresholds":{"wordCount":0,"estimatedWords":220,"tableSignals":false,"fileCount":0,"transcriptionOnly":false,"explicitOutput":false,"documentUnderstanding":false},"palette":{"id":"business","label":"Business","colors":{"primary":"#0F172A","surface":"#F8FAFC","neutral":"#475569","accent":"#059669","warning":"#D97706"}}}}
+2026-05-20 21:29:57.24
+ad38fa8d
+User
+at Object.wrap (/home/runner/workspace/.next/standalone/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:13:16935)
+2026-05-20 21:29:57.24
+ad38fa8d
+User
+Error: Failed to find Server Action "x". This request might be from an older or newer deployment.
+2026-05-20 21:29:57.24
+ad38fa8d
+User
+at ni (/home/runner/workspace/.next/standalone/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:20:543)
+2026-05-20 21:29:57.24
+ad38fa8d
+User
+at Object.wrap (/home/runner/workspace/.next/standalone/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:13:17831)
+2026-05-20 21:29:57.24
+ad38fa8d
+User
+at /home/runner/workspace/.next/standalone/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:20:616
+2026-05-20 21:29:57.24
+ad38fa8d
+User
+at r$ (/home/runner/workspace/.next/standalone/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:17:1667)
+2026-05-20 21:29:57.24
+ad38fa8d
+User
+at rE (/home/runner/workspace/.next/standalone/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:15:6522)
+2026-05-20 21:29:57.24
+ad38fa8d
+User
+at AsyncLocalStorage.run (node:async_hooks:346:14)
+2026-05-20 21:29:57.24
+ad38fa8d
+User
+at /home/runner/workspace/.next/standalone/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:20:726
+2026-05-20 21:29:57.24
+ad38fa8d
+User
+at AsyncLocalStorage.run (node:async_hooks:346:14)
+2026-05-20 21:29:57.24
+ad38fa8d
+User
+at no (/home/runner/workspace/.next/standalone/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:19:1150)
+2026-05-20 21:30:00.21
+ad38fa8d
+User
+[backend] (node:125) MaxListenersExceededWarning: Possible EventTarget memory leak detected. 11 abort listeners added to [AbortSignal]. MaxListeners is 10. Use events.setMaxListeners() to increase limit

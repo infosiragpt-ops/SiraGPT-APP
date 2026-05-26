@@ -1,0 +1,493 @@
+Skip to content
+openclaw
+openclaw
+Repository navigation
+Code
+Issues
+3.7k
+ (3.7k)
+Pull requests
+3.7k
+ (3.7k)
+Agents
+Actions
+Security and quality
+535
+ (535)
+Insights
+Owner avatar
+openclaw
+Public
+openclaw/openclaw
+
+t
+T
+Name		
+giodl73-repoGio Della-Libera
+giodl73-repo
+and
+Gio Della-Libera
+fix(cli): reject invalid node run port (#84307)
+8961eae
+ · 
+7 minutes ago
+.agents
+ci: tune crabbox developer image config
+5 hours ago
+.github
+fix(installer): handle headless onboarding tty
+33 minutes ago
+.vscode
+feat(DX): Add Out-of-the-Box Support for Debugging in VSCode-Based ID…
+2 weeks ago
+apps
+fix: align remaining copyright notice
+11 hours ago
+changelog/fragments
+feat(signal): support container REST API
+2 weeks ago
+config
+test: add codex media path docker e2e
+3 days ago
+deploy
+chore: reduce root cleanup files
+3 weeks ago
+docs
+fix(gateway): allow bearer-auth session history reads (#81815)
+31 minutes ago
+extensions
+fix(codex): demote plugin thread eligibility log
+1 hour ago
+git-hooks
+fix(git-hooks): skip ignored staged paths
+3 weeks ago
+packages
+chore(deadcode): dedupe repeated helpers
+10 hours ago
+patches
+chore: update dependencies
+13 hours ago
+qa
+fix(qa-lab): rename codex lifecycle fixtures to match knip ignore pat…
+2 hours ago
+scripts
+fix(installer): handle headless onboarding tty
+33 minutes ago
+security
+refactor: remove sender owner tool gating
+6 hours ago
+skills
+fix(skill-creator): reject empty name and description in skill valida… (
+3 days ago
+src
+fix(cli): reject invalid node run port (#84307)
+7 minutes ago
+test
+fix(installer): handle headless onboarding tty
+33 minutes ago
+ui
+Fix stale WebChat typing indicator after terminal session patch (#84565)
+6 hours ago
+.crabbox.yaml
+ci: tune crabbox developer image config
+5 hours ago
+.dockerignore
+chore: remove root assets
+3 weeks ago
+.env.example
+docs(docker): document auth profile key mount
+last week
+.gitattributes
+fix: remove trailing newline from CLAUDE.md symlink target (#21160)
+3 months ago
+.gitignore
+docs(skills): add release ci workflow skill
+last week
+.npmrc
+build(pnpm): upgrade workspace to pnpm 11
+2 weeks ago
+.oxfmtrc.jsonc
+build: pin explicit oxfmt defaults
+2 weeks ago
+.oxlintrc.json
+chore(lint): remove underscore-dangle allow list (#83542)
+3 days ago
+.pre-commit-config.yaml
+chore: move swift configs under config
+3 weeks ago
+.semgrepignore
+docs(outbound): add CLAUDE.md sibling symlink for AGENTS.md
+2 weeks ago
+AGENTS.md
+fix: stabilize mac app packaging
+yesterday
+CHANGELOG.md
+fix(cli): reject invalid node run port (#84307)
+7 minutes ago
+CLAUDE.md
+fix: remove trailing newline from CLAUDE.md symlink target (#21160)
+3 months ago
+CONTRIBUTING.md
+docs: clarify contributor changelog ownership
+last week
+Dockerfile
+fix(docker): prune omitted plugin runtime deps
+3 hours ago
+LICENSE
+fix: update mac copyright owner
+11 hours ago
+README.md
+build: update pi dependencies to 0.75.1
+4 days ago
+SECURITY.md
+build: align node version floor
+4 days ago
+VISION.md
+docs: clarify plugin api extension path
+last month
+appcast.xml
+chore(release): update appcast for 2026.5.19
+yesterday
+docker-compose.yml
+fix(docker): pin setup cli container paths
+last week
+fly.toml
+revert: Switch back to tsc for compiling.
+3 months ago
+openclaw.mjs
+perf: speed up secrets and nodes help startup (#84818)
+12 hours ago
+package.json
+chore: update dependencies
+13 hours ago
+pnpm-lock.yaml
+fix(openshell): use NVIDIA CLI contract
+6 hours ago
+pnpm-workspace.yaml
+chore: update dependencies
+13 hours ago
+render.yaml
+docs(render): fix port env var, remove nonexistent setup wizard
+2 months ago
+tsconfig.core.json
+build: enable stricter TypeScript checks
+2 weeks ago
+tsconfig.core.projects.json
+chore: move test tsconfigs
+3 weeks ago
+tsconfig.extensions.json
+build: enable stricter TypeScript checks
+2 weeks ago
+tsconfig.extensions.projects.json
+chore: move test tsconfigs
+3 weeks ago
+tsconfig.json
+build: enable stricter TypeScript checks
+2 weeks ago
+tsconfig.plugin-sdk.dts.json
+Add Codex happy path prompt snapshots (#75807)
+3 weeks ago
+tsconfig.projects.json
+perf: speed up type check gate
+last month
+tsdown.config.ts
+build: suppress rolldown-plugin-dts CommonJS dts warnings from bundle…
+20 hours ago
+vitest.config.ts
+test: move Vitest configs under test
+last month
+Repository files navigation
+README
+Contributing
+MIT license
+Security
+🦞 OpenClaw — Personal AI Assistant
+
+ OpenClaw
+
+EXFOLIATE! EXFOLIATE!
+
+CI status  GitHub release  Discord  MIT License
+
+OpenClaw is a personal AI assistant you run on your own devices. It answers you on the channels you already use. It can speak and listen on macOS/iOS/Android, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
+
+If you want a personal, single-user assistant that feels local, fast, and always-on, this is it.
+
+Supported channels include: WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, IRC, Microsoft Teams, Matrix, Feishu, LINE, Mattermost, Nextcloud Talk, Nostr, Synology Chat, Tlon, Twitch, Zalo, Zalo Personal, WeChat, QQ, WebChat.
+
+Website · Docs · Vision · DeepWiki · Getting Started · Updating · Showcase · FAQ · Onboarding · Nix · Docker · Discord
+
+New install? Start here: Getting started
+
+Preferred setup: run openclaw onboard in your terminal. OpenClaw Onboard guides you step by step through setting up the gateway, workspace, channels, and skills. It is the recommended CLI setup path and works on macOS, Linux, and Windows (via WSL2; strongly recommended). Works with npm, pnpm, or bun.
+
+Sponsors
+
+ OpenAI	 GitHub	 NVIDIA	 Vercel	 Blacksmith	 Convex
+Subscriptions (OAuth):
+
+OpenAI (ChatGPT/Codex)
+Model note: while many providers and models are supported, prefer a current flagship model from the provider you trust and already use. See Onboarding.
+
+Install (recommended)
+
+Runtime: Node 24 (recommended) or Node 22.19+.
+
+npm install -g openclaw@latest
+# or: pnpm add -g openclaw@latest
+
+openclaw onboard --install-daemon
+OpenClaw Onboard installs the Gateway daemon (launchd/systemd user service) so it stays running.
+
+Quick start (TL;DR)
+
+Runtime: Node 24 (recommended) or Node 22.19+.
+
+Full beginner guide (auth, pairing, channels): Getting started
+
+openclaw onboard --install-daemon
+
+openclaw gateway --port 18789 --verbose
+
+# Send a message
+openclaw message send --target +1234567890 --message "Hello from OpenClaw"
+
+# Talk to the assistant (optionally deliver back to any connected channel: WhatsApp/Telegram/Slack/Discord/Google Chat/Signal/iMessage/IRC/Microsoft Teams/Matrix/Feishu/LINE/Mattermost/Nextcloud Talk/Nostr/Synology Chat/Tlon/Twitch/Zalo/Zalo Personal/WeChat/QQ/WebChat)
+openclaw agent --message "Ship checklist" --thinking high
+Upgrading? Updating guide (and run openclaw doctor).
+
+Models config + CLI: Models. Auth profile rotation + fallbacks: Model failover.
+
+Security defaults (DM access)
+
+OpenClaw connects to real messaging surfaces. Treat inbound DMs as untrusted input.
+
+Full security guide: Security
+
+Default behavior on Telegram/WhatsApp/Signal/iMessage/Microsoft Teams/Discord/Google Chat/Slack:
+
+DM pairing (dmPolicy="pairing" / channels.discord.dmPolicy="pairing" / channels.slack.dmPolicy="pairing"; legacy: channels.discord.dm.policy, channels.slack.dm.policy): unknown senders receive a short pairing code and the bot does not process their message.
+Approve with: openclaw pairing approve <channel> <code> (then the sender is added to a local allowlist store).
+Public inbound DMs require an explicit opt-in: set dmPolicy="open" and include "*" in the channel allowlist (allowFrom / channels.discord.allowFrom / channels.slack.allowFrom; legacy: channels.discord.dm.allowFrom, channels.slack.dm.allowFrom).
+Run openclaw doctor to surface risky/misconfigured DM policies.
+
+Highlights
+
+Local-first Gateway — single control plane for sessions, channels, tools, and events.
+Multi-channel inbox — WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, IRC, Microsoft Teams, Matrix, Feishu, LINE, Mattermost, Nextcloud Talk, Nostr, Synology Chat, Tlon, Twitch, Zalo, Zalo Personal, WeChat, QQ, WebChat, macOS, iOS/Android.
+Multi-agent routing — route inbound channels/accounts/peers to isolated agents (workspaces + per-agent sessions).
+Voice Wake + Talk Mode — wake words on macOS/iOS and continuous voice on Android (ElevenLabs + system TTS fallback).
+Live Canvas — agent-driven visual workspace with A2UI.
+First-class tools — browser, canvas, nodes, cron, sessions, and Discord/Slack actions.
+Companion apps — macOS menu bar app + iOS/Android nodes.
+Onboarding + skills — onboarding-driven setup with bundled/managed/workspace skills.
+Security model (important)
+
+Default: tools run on the host for the main session, so the agent has full access when it is just you.
+Group/channel safety: set agents.defaults.sandbox.mode: "non-main" to run non-main sessions inside sandboxes. Docker is the default sandbox backend; SSH and OpenShell backends are also available.
+Typical sandbox default: allow bash, process, read, write, edit, sessions_list, sessions_history, sessions_send, sessions_spawn; deny browser, canvas, nodes, cron, discord, gateway.
+Before exposing anything remotely, read Security, Sandboxing, and Configuration.
+Operator quick refs
+
+Chat commands: /status, /new, /reset, /compact, /think <level>, /verbose on|off, /trace on|off, /usage off|tokens|full, /restart, /activation mention|always
+Session tools: sessions_list, sessions_history, sessions_send
+Skills registry: ClawHub
+Architecture overview: Architecture
+Docs by goal
+
+New here: Getting started, Onboarding, Updating
+Channel setup: Channels index, WhatsApp, Telegram, Discord, Slack
+Apps + nodes: macOS, iOS, Android, Nodes
+Config + security: Configuration, Security, Sandboxing
+Remote + web: Gateway, Remote access, Tailscale, Web surfaces
+Tools + automation: Tools, Skills, Cron jobs, Webhooks, Gmail Pub/Sub
+Internals: Architecture, Agent, Session model, Gateway protocol
+Troubleshooting: Channel troubleshooting, Logging, Docs home
+Apps (optional)
+
+The Gateway alone delivers a great experience. All apps are optional and add extra features.
+
+If you plan to build/run companion apps, follow the platform runbooks below.
+
+macOS (OpenClaw.app) (optional)
+
+Menu bar control for the Gateway and health.
+Voice Wake + push-to-talk overlay.
+WebChat + debug tools.
+Remote gateway control over SSH.
+Note: signed builds required for macOS permissions to stick across rebuilds (see macOS Permissions).
+
+iOS node (optional)
+
+Pairs as a node over the Gateway WebSocket (device pairing).
+Voice trigger forwarding + Canvas surface.
+Controlled via openclaw nodes ….
+Runbook: iOS connect.
+
+Android node (optional)
+
+Pairs as a WS node via device pairing (openclaw devices ...).
+Exposes Connect/Chat/Voice tabs plus Canvas, Camera, Screen capture, and Android device command families.
+Runbook: Android connect.
+From source (development)
+
+Use pnpm for source checkouts. The repository is a pnpm workspace, and bundled plugins load from extensions/* during development so their package-local dependencies and your edits are used directly. Plain npm install at the repo root is not a supported source setup.
+
+For the dev loop:
+
+git clone https://github.com/openclaw/openclaw.git
+cd openclaw
+
+pnpm install
+
+# First run only (or after resetting local OpenClaw config/workspace)
+pnpm openclaw setup
+
+# Optional: prebuild Control UI before first startup
+pnpm ui:build
+
+# Dev loop (auto-reload on source/config changes)
+pnpm gateway:watch
+If you need a built dist/ from the checkout (for Node, packaging, or release validation), run:
+
+pnpm build
+pnpm ui:build
+pnpm openclaw setup writes the local config/workspace needed for pnpm gateway:watch. It is safe to re-run, but you normally only need it on first setup or after resetting local state. pnpm gateway:watch does not rebuild dist/control-ui, so rerun pnpm ui:build after ui/ changes or use pnpm ui:dev when iterating on the Control UI. If you want this checkout to run onboarding directly, use pnpm openclaw onboard --install-daemon.
+
+Note: pnpm openclaw ... runs TypeScript directly (via tsx). pnpm build produces dist/ for running via Node / the packaged openclaw binary, while pnpm gateway:watch rebuilds the runtime on demand during the dev loop.
+
+Development channels
+
+stable: tagged releases (vYYYY.M.D or vYYYY.M.D-<patch>), npm dist-tag latest.
+beta: prerelease tags (vYYYY.M.D-beta.N), npm dist-tag beta (macOS app may be missing).
+dev: moving head of main, npm dist-tag dev (when published).
+Switch channels (git + npm): openclaw update --channel stable|beta|dev. Details: Development channels.
+
+Agent workspace + skills
+
+Workspace root: ~/.openclaw/workspace (configurable via agents.defaults.workspace).
+Injected prompt files: AGENTS.md, SOUL.md, TOOLS.md.
+Skills: ~/.openclaw/workspace/skills/<skill>/SKILL.md.
+Configuration
+
+Minimal ~/.openclaw/openclaw.json (model + defaults):
+
+{
+  agent: {
+    model: "<provider>/<model-id>",
+  },
+}
+Full configuration reference (all keys + examples).
+
+Star History
+
+Star History Chart
+
+Molty
+
+OpenClaw was built for Molty, a space lobster AI assistant. 🦞 by Peter Steinberger and the community.
+
+openclaw.ai
+soul.md
+steipete.me
+@openclaw
+Community
+
+See CONTRIBUTING.md for guidelines, maintainers, and how to submit PRs. AI/vibe-coded PRs welcome! 🤖
+
+Special thanks to Mario Zechner for his support and for pi-mono. Special thanks to Adam Doppelt for the lobster.bot domain.
+
+Thanks to all clawtributors:
+
+steipete vincentkoc Takhoffman obviyus gumadeiras Mariano Belinky vignesh07 joshavant scoootscooob jacobtomlinson shakkernerd sebslight tyler6204 ngutman thewilloftheshadow Sid-Qin mcaxtr eleqtrizit BunsDev cpojer Glucksberg osolmaz bmendonca3 jalehman huntharo neeravmakwana openperf joshp123 pgondhi987 altaywtf quotentiroler liuxiaopai-ai rodrigouroz frankekn drobison00 zerone0x onutc ademczuk ImLukeF hydro13 hxy91819 coygeek dutifulbob sliverp Elonito robbyczgw-cla joelnishanth echoVic sallyom yinghaosang BradGroux christianklotz odysseus0 hclsys byungsker pashpashpash stakeswky github-actions[bot] xinhuagu MonkeyLeeT 100yenadmin mcinteerj samzong chilu18 darkamenosa widingmarcus-cyber cgdusek Lukavyi davidrudduck VACInc MoerAI velvet-shark HenryLoenwind omarshahine bohdanpodvirnyi Verite Igiraneza akramcodez Kaneki-x aether-ai-agent joaohlisboa MaudeBot davidguttman justinhuangcode lml2468 wirjo iHildy mudrii advaitpaliwal czekaj dlauer Solvely-Colin feiskyer brandonwise conroywhitney mneves75 jaydenfyi davemorin joeykrug kevinWangSheng pejmanjohn Lanfei liuy lc0rp teconomix omair445 dorukardahan mmaps Tobias Bischoff adhitShet pandego bradleypriest bjesuiter grp06 shadril238 kesku YuriNachos vrknetha smartprogrammer93 nachx639 jnMetaCode Phineas1500 dingn42 geekhuashan Nanako0129 AytuncYildizli BruceMacD jjjojoj mvanhorn bugkill3r rahthakor GodsBoy SARAMALI15792 Radek Paclt Elarwei001 ingyukoh SnowSky1 lewiswigmore Hiroshi Tanaka aldoeliacim Jakub Rusz Tony Dehnke roshanasingh4 zssggle-rgb adam91holt graysurf xadenryan sfo2001 Jamieson O'Reilly hsrvc tomsun28 BillChirico carrotRakko ranausmanai arkyu2077 hoyyeva luoyanglang sibbl gregmousseau sahilsatralkar akoscz rrenamed YuzuruS Hongwei Ma mitchmcalister juanpablodlc shtse8 thebenignhacker nimbleenigma Linux2010 shichangs efe-arv Hsiao A nabbilkhan ayanesakura lupuletic polooooo xaeon2026 shrey150 taw0002 dinakars777 giulio-leone nyanjou meaningfool kunalk16 ide-rea Jonathan Jing yelog markmusson kiranvk-2011 Sathvik Veerapaneni rogerdigital artwalker azade-c chinar-amrutkar maxsumrall Minidoracat unisone ly85206559 Sam Padilla AnonO6 afurm 황재원 Leszek Szpunar Mrseenz Yida-Dev kesor mazhe-nerd Harald Buerbaumer magimetal Hiren Patel BinHPdev RyanLee-Dev cathrynlavery al3mart JustYannicc abhisekbasu1 dbhurley Kris Wu tmimmanuel JustasM Simantak Dabhade NicholasSpisak natefikru dunamismax Simone Macario ENCHIGO xingsy97 emonty jadilson12 Yi-Cheng Wang Mathias Nagler Sean McLellan gumclaw RichardCao MKV21 petter-b CodeForgeNet Johnson Shi durenzidu dougvk Whoaa512 zimeg Tseka Luk Ryan Haines ufhy Daan van der Plas bittoby XuHao Lucenx9 HeMuling AaronLuo00 YUJIE2002 DhruvBhatia0 Divanoli Mydeen Pitchai Bronko rubyrunsstuff rabsef-bicrym IVY-AI-gif pvtclawn stephenschoettler Dale Babiy LeftX David Gelberg Engr. Arif Ahmed Joy Masataka Shinohara 2233admin ameno- battman21 bcherny bobashopcashier dguido druide67 guirguispierre jzakirov loganprit martinfrancois neo1027144-creator RealKai42 schumilin shuofengzhang solstead hengm3467 chziyue James L. Cowan Jr. scifantastic ryan-crabbe alexfilatov Luckymingxuan HollyChou badlogic Daniel Hnyk dan bachelder heavenlost shad0wca7 Jared kiranjd Mars Kim seheepeak tsavo McRolly NWANGWU dashed Shuai-DaiDai Subash Natarajan emanuelst magendary LI SHANXIN j2h4u bsormagec mjamiv Lalit Singh Jessy LANGE buddyh Aaron Zhu F_ool Ben Stein Lyle Ping popomore Dithilli fal3 mkbehr mteam88 gupsammy Shailesh Garnet Liu Thorfinn Protocol-zero-0 Paul van Oorschot Patrick Yingxi Pan Ptah.ai 정우용 artuskg Anandesh-Sharma zidongdesign innocent-children El-Fitz arthurbr11 jackheuberger Sergiusz Xu Gu hyojin jeann2013 jogelin rmorse scz2011 Andyliu benithors xiwuqi Alvin AARON AGENT Derek YU Marvin Andrew Jeon stain lu OpenCils Stefan Galescu SP Michael Flanagan Gracie Gould cash-echo-bot visionik WalterSumbon huangcj krizpoon rodbland2021 Thomas M sar618 fagemx daymade Tyson Cung Igor Markelov Eng. Juan Combetto connorshea bonald Keenan nachoiacovino zhumengzhu Amine Harch el korane zhoulc777 Alex Navarro Tanwa Arpornthip TIHU Aftabbs Alex-Alaniz jarvis-medmatic Tom Ron day253 Jaaneek Justin Song ziomancer shayan919293 Edward Roger Chien Michael Lee Tomáš Dinh Ian Derrington Lucky peschee Harry Cui Kepler julianengel markfietje Dakshay Mehta TheRipper Dominic danielwanwx Seungwoo hong Youyou972 boris721 damoahdominic dan-dr doodlewind kkarimi brokemac79 ozbillwang Ravish Gupta Jason Hargrove BrianWang1990 Joshua McKiddy Fologan Anonymous Amit v1p0r Ajay Elika Iranb Yonatan codexGW Shaun Tsai TideFinder Chase Dorsey tda 0xJonHoldsCrypto akyourowngames clawdinator[bot] koala73 sircrumpet thesomewhatyou zats Accunza Joly0 Hanna Jeremiah Lowin peetzweg/ Skyler Miao tumf Hiago Silva Nate lidamao633 Cklee CornBrother0x DukeDeSouth Sahan CashWilliams Felix Lu AdeboyeDN Rohan Santhosh Kumar Srinivas Pavan h0tp Neo Tianworld neverland asklee-klawd Yuting Lin constansino ghsmc ibrahimq21 irtiq7 kelvinCB mitsuhiko nohat santiagomed suminhthanh svkozak 张哲芳 Ho Lim Toven R. Desmond 游乐场 Reed Aditya Chaudhary Sam Andy Rajat Joshi cyb1278588254 Zoher Ghadyali Manik Vahsith tarouca MrBrain Daniel Zou Lilo Jason SUMUKH Bakhtier Sizhaev Ganghyun Kim AkashKobal Brian wu-tian807 Vasanth Rao Naik Sabavat Kinfey Artemii VibhorGautam John Rood velamints2 Benji Peng JINNYEONG KIM Rahul kumar Pal Rockcent Limitless 24601 awkoy dawondyifraw google-labs-jules[bot] henrino3 Kansodata kaonash p6l-richard pi0 skainguyen1412 Starhappysh xdanger Penchan scald Serhii a Doğu Abaris ysqander andranik-sahakyan Wangnov Austin lisitan Rishi Vhavle Frank Harris Kenny Lee Alice Losasso edincampara Felix Hellström Varun Chopra wangai-studio sleontenko Yassine Amjad Anton Eicher Drake Thomsen Hinata Kaga (samon) andreabadesso chenxin-yan cordx56 dvrshil MarvinCui Yeom-JinHo Jeremy Mumford Charlie Niño Sharoon Sharif Oren MattQ Parker Todd Brooks Yufeng He Milofax Steve (OpenClaw) zhoulf1006 Jonatan Sebastian B Otaegui Matthew ABFS Tech alexstyl Ethan Palm Qkal cygaar Umut CAN Jakob antons austinm911 mahmoudashraf93 philipp-spiess pkrmf joshrad-dev factnest365-ops yingchunbai AJ (@techfren) Marchel Fahrezi futhgar Zhang Rémi Dan Ballance Eric Su Kimitaka Watanabe Justin Ling Raymond Berger lutr0 claude AngryBird Fabian Williams 0x4C33 8BlT atalovesyou erikpr1994 jonasjancarik longmaba mitschabaude-bot thesash Max easternbloc chrisrodz gabriel-trigo manmal neist wes-davis manuelhettich sktbrd larlyssa pcty-nextgen-service-account Syhids tmchow Marc Gratch xtao JackyWay Josh Phillips T5-AndyML huohua-dev imfing Randy Torres Marco Di Dionisio iamadig humanwritten Rob Axelsen Pratham Dubey 0oAstro aaronn Arturo Asleep123 dantelex fcatuhe gtsifrikas hrdwdmrbl hugobarauna jayhickey jiulingyun Jonathan D. Rhyne (DJ-D) jverdi kitze loukotal minghinmatthewlam MSch odrobnik oswalpalash ratulsarna reeltimeapps snopoke sreekaransrinath timkrase
+About
+
+Your own personal AI assistant. Any OS. Any Platform. The lobster way. 🦞
+
+openclaw.ai
+Topics
+ai  personal  assistant own-your-data  crustacean  molty openclaw
+Resources
+ Readme
+License
+ MIT license
+Contributing
+ Contributing
+Security policy
+ Security policy
+ Activity
+ Custom properties
+Stars
+ 374k stars
+Watchers
+ 1.8k watching
+Forks
+ 77.6k forks
+Report repository
+Releases 172
+
+openclaw 2026.5.20
+Latest
+9 minutes ago
++ 171 releases
+Sponsor this project
+
+@openclaw
+openclaw openclaw
+Learn more about GitHub Sponsors
+Packages
+8
+
+openclaw
+openclaw-docker-e2e-functional
+openclaw-docker-e2e-bare
++ 5 packages
+Contributors
+2,147
+
+ @steipete
+ @vincentkoc
+ @shakkernerd
+ @obviyus
+ @Takhoffman
+ @gumadeiras
+ @claude
+ @vignesh07
+ @thewilloftheshadow
+ @github-actions[bot]
+ @joshavant
+ @jalehman
+ @BunsDev
+ @clawsweeper[bot]
++ 2,133 contributors
+Languages
+
+TypeScript
+91.8%
+ 
+Swift
+3.6%
+JavaScript
+2.1%
+ 
+Kotlin
+1.1%
+Shell
+0.8%
+ 
+CSS
+0.4%
+Other
+0.2%
+Footer
+© 2026 GitHub, Inc.
+Footer navigation
+Terms
+Privacy
+Security
+Status
+Community
+Docs
+Contact
+Manage cookies
+Do not share my personal information

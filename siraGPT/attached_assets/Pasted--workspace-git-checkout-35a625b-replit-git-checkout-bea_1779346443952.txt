@@ -1,0 +1,59 @@
+~/workspace$ git checkout 35a625b^ -- .replit
+git checkout bea17de^ -- replit.nix
+ls -la .replit replit.nix
+-rw-r--r-- 1 runner runner 1847 May 21 06:49 .replit
+-rw-r--r-- 1 runner runner  755 May 21 06:49 replit.nix
+~/workspace$ head -20 .replit
+modules = ["nodejs-20", "python-3.11", "postgresql-16"]
+
+# Default `Run` button: starts the Next.js dev server on Replit's
+# external port (mapped from localhost:3000 below). The backend
+# Express app is expected to run elsewhere (Railway/Fly/Render in
+# production); locally the frontend talks to it via
+# NEXT_PUBLIC_API_URL.
+run = "ALLOW_REPLIT_PREVIEW=1 npm run dev -- -H 0.0.0.0 -p 3000"
+entrypoint = "package.json"
+hidden = [".next", "node_modules", ".test-dist", ".playwright-cli", "output", "test-results"]
+
+[nix]
+channel = "stable-25_05"
+
+[deployment]
+deploymentTarget = "autoscale"
+build = ["npm", "run", "build"]
+run = ["npm", "start"]
+
+[[ports]]
+~/workspace$ HUSKY=0 git add .replit replit.nix
+HUSKY=0 git commit -m "chore: restore .replit and replit.nix deleted by upstream merge"
+git push origin main
+[main ef7b930] chore: restore .replit and replit.nix deleted by upstream merge
+ 2 files changed, 113 insertions(+)
+ create mode 100644 .replit
+ create mode 100644 replit.nix
+To https://github.com/SiraGPT-ORg/siraGPT
+ ! [rejected]        main -> main (fetch first)
+error: failed to push some refs to 'https://github.com/SiraGPT-ORg/siraGPT'
+hint: Updates were rejected because the remote contains work that you do not
+hint: have locally. This is usually caused by another repository pushing to
+hint: the same ref. If you want to integrate the remote changes, use
+hint: 'git pull' before pushing again.
+hint: See the 'Note about fast-forwards' in 'git push --help' for details.
+~/workspace$ git fetch origin
+HUSKY=0 git merge origin/main --no-ff -m "chore: merge origin/main"
+git push origin main
+remote: Enumerating objects: 25, done.
+remote: Counting objects: 100% (25/25), done.
+remote: Compressing objects: 100% (7/7), done.
+remote: Total 7 (delta 6), reused 0 (delta 0), pack-reused 0 (from 0)
+Unpacking objects: 100% (7/7), 1.27 KiB | 13.00 KiB/s, done.
+From https://github.com/SiraGPT-ORg/siraGPT
+   f87e123..5c26cff  main       -> origin/main
+Merge made by the 'ort' strategy.
+ backend/src/middleware/logger.js                 | 17 ++++++++++--
+ backend/src/services/agents/structured-logger.js | 10 ++++---
+ backend/src/utils/log-redaction.js               | 86 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ backend/tests/logger-redaction.test.js           | 26 +++++++++++++++++--
+ backend/tests/structured-logger.test.js          | 33 ++++++++++++++++++++++++
+ 5 files changed, 165 insertions(+), 7 deletions(-)
+ create mode 100644 backend/src/utils/log-redaction.js

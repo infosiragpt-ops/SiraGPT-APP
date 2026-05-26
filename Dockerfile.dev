@@ -1,0 +1,28 @@
+# ──────────────────────────────────────────────────────────────
+# siraGPT — Frontend (Next.js) Development Build
+# ──────────────────────────────────────────────────────────────
+# Lightweight image for local dev with hot-reload. Source is
+# mounted as a volume by docker-compose.override.yml, so changes
+# on the host are immediately reflected.
+# ──────────────────────────────────────────────────────────────
+
+FROM node:22-alpine
+
+WORKDIR /app
+
+RUN apk add --no-cache wget
+
+# Install all deps (including devDependencies) for hot-reload.
+# `npm install --legacy-peer-deps` is used instead of `npm ci` because
+# the lockfile drifts frequently (deps added without re-locking). The
+# install step is tolerant enough to build the image even when the
+# lockfile is mid-update. The real fix is regenerating package-lock
+# whenever package.json changes, but until that's enforced we keep
+# this step resilient so the container can boot.
+COPY package.json package-lock.json ./
+RUN npm install --no-audit --no-fund --legacy-peer-deps
+
+EXPOSE 3000
+
+# Default: dev server with Turbopack
+CMD ["npm", "run", "dev"]

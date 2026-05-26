@@ -1,0 +1,81 @@
+"use client"
+
+import * as React from "react"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
+import { apiClient } from "@/lib/api"
+import { toast } from "sonner"
+import { CheckCircle } from "lucide-react"
+
+export default function SpotifyConnectionCard() {
+  const [isConnecting, setIsConnecting] = React.useState(false)
+  const [isConnected, setIsConnected] = React.useState(false);
+
+  // ✅ NAYA useEffect: Page load hone par status check karega
+  React.useEffect(() => {
+    const checkStatus = async () => {
+      try {
+        const response = await apiClient.getSpotifyStatus(); // Iske liye apiClient mein ek naya function banayenge
+        setIsConnected(response.isConnected);
+      } catch (error) {
+        console.error("Could not check Spotify status:", error);
+        setIsConnected(false);
+      }
+    };
+    checkStatus();
+  }, []);
+
+  const handleConnect = async () => {
+    setIsConnecting(true)
+    try {
+      const response = await apiClient.getSpotifyAuthUrl()
+      if (response.url) {
+        window.location.href = response.url
+      } else {
+        toast.error("No se pudo obtener la URL de conexión con Spotify.")
+      }
+    } catch (error) {
+      toast.error("No se pudo conectar con Spotify.")
+      console.error("Spotify connection error:", error)
+    } finally {
+      setIsConnecting(false)
+    }
+  }
+
+  if (isConnected) {
+    return (
+      <Card className="w-full max-w-md border-green-500">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <CheckCircle className="h-6 w-6 text-green-500" />
+            <span>Conectado con Spotify</span>
+          </CardTitle>
+          <CardDescription>
+            Tu cuenta de Spotify está conectada correctamente. Ya puedes usar las funciones de Spotify en el chat.
+          </CardDescription>
+        </CardHeader>
+      </Card>
+    )
+  }
+
+  return (
+    <Card className="w-full max-w-md">
+      <CardHeader>
+        <CardTitle>Conectar con Spotify</CardTitle>
+        <CardDescription>
+          Conecta tu cuenta de Spotify para que la IA pueda buscar canciones, gestionar playlists y más.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <p className="text-sm text-muted-foreground">
+          Al conectar, aceptas dar permiso a esta aplicación para acceder a tus datos de Spotify.
+        </p>
+      </CardContent>
+      <CardFooter>
+        <Button onClick={handleConnect} disabled={isConnecting}>
+          {isConnecting ? "Conectando…" : "Conectar con Spotify"}
+        </Button>
+      </CardFooter>
+    </Card>
+  )
+}

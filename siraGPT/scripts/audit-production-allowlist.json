@@ -1,0 +1,36 @@
+{
+  "expiresOn": "2026-07-31",
+  "level": "high",
+  "allowed": [
+    {
+      "package": "next",
+      "source": 1112653,
+      "title": "Next.js HTTP request deserialization can lead to DoS when using insecure React Server Components",
+      "reason": "Next 15+ migration is blocked by the UI lock until app/layout dynamic client-only initializers are moved without visual changes."
+    },
+    {
+      "package": "next",
+      "source": 1116376,
+      "title": "Next.js has a Denial of Service with Server Components",
+      "reason": "Tracked as framework migration debt; no new UI-surface changes may be bundled into dependency-only hardening."
+    },
+    {
+      "package": "next",
+      "source": 1117931,
+      "title": "Next.js Vulnerable to Denial of Service with Server Components",
+      "reason": "Tracked as framework migration debt; upgrade requires a dedicated Next 15/16 compatibility PR."
+    },
+    {
+      "package": "next",
+      "source": 1118954,
+      "title": "Next.js vulnerable to server-side request forgery in applications using WebSocket upgrades",
+      "reason": "Tracked as framework migration debt; this exception prevents unrelated new advisories from being masked."
+    },
+    {
+      "package": "next",
+      "source": 1118962,
+      "title": "Next.js has a Middleware / Proxy bypass in Pages Router applications using i18n",
+      "reason": "Tracked as framework migration debt pending a zero-UI-change Next major migration."
+    }
+  ]
+}

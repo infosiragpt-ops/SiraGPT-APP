@@ -1,0 +1,62 @@
+name: Seed AI models on VPS
+
+# Runs `node prisma/seed.js` on the VPS so the aiModel table is
+# populated. After `prisma db push` recreated the schema, the table
+# was empty and only virtual OpenRouter models were exposed by
+# /api/ai/models — the chat dropdown therefore showed a single
+# provider. This workflow restores the catalogue.
+#
+# Idempotent: the seed script upserts.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: seed-models
+  cancel-in-progress: false
+
+jobs:
+  seed:
+    name: SSH · node prisma/seed.js
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+
+    steps:
+      - name: Run seed on VPS
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          timeout: 60s
+          command_timeout: 5m
+          script_stop: true
+          script: |
+            set -e
+            cd /root/siraNew/siraGPT
+            echo "=== git pull (so seed.js is the latest) ==="
+            git fetch origin main
+            git pull --ff-only origin main
+            echo ""
+            echo "=== Pre-seed model count ==="
+            docker exec siragpt-db-1 psql -U myuser -d siraGPTNew \
+              -tAc "SELECT COUNT(*) FROM ai_models" 2>&1
+            echo ""
+            echo "=== Running seed (with .env loaded) ==="
+            # PM2 starts the backend with the root .env loaded; the seed
+            # script must do the same so prisma can resolve
+            # PRISMA_DATABASE_URL.
+            set -a
+            # shellcheck disable=SC1091
+            source /root/siraNew/siraGPT/.env
+            set +a
+            cd backend
+            node prisma/seed.js
+            echo ""
+            echo "=== Post-seed model count ==="
+            docker exec siragpt-db-1 psql -U myuser -d siraGPTNew \
+              -tAc "SELECT COUNT(*) FROM ai_models"
+            echo ""
+            echo "=== Providers by type ==="
+            docker exec siragpt-db-1 psql -U myuser -d siraGPTNew \
+              -c "SELECT provider, type, COUNT(*) FROM ai_models WHERE \"isActive\"=true GROUP BY provider, type ORDER BY provider"

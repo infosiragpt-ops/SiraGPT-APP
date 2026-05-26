@@ -1,0 +1,40 @@
+{
+  "id": "openalex_search",
+  "name": "OpenAlex search",
+  "version": "1.0.0",
+  "description": "Search the open academic literature via OpenAlex (240M+ works, no API key, includes Latin-American journals via Redalyc/Scielo). Returns title, authors, year, DOI, venue, abstract, citation count and OA URL when available. Use for literature reviews, citation hunts, finding the canonical paper for a concept, year-bounded scans.",
+  "capabilities": ["net:outbound"],
+  "params": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string",
+        "description": "Free-text query (topic, concept, author + topic). 2-12 words works best."
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 60,
+        "description": "Max number of works to return. Default 20."
+      },
+      "yearFrom": {
+        "type": "integer",
+        "minimum": 1900,
+        "maximum": 2100,
+        "description": "Inclusive lower bound for publication_year."
+      },
+      "yearTo": {
+        "type": "integer",
+        "minimum": 1900,
+        "maximum": 2100,
+        "description": "Inclusive upper bound for publication_year."
+      },
+      "lang": {
+        "type": "string",
+        "description": "ISO 639-1 (e.g. 'es', 'en', 'pt'). Filters works to that language when set."
+      }
+    },
+    "required": ["query"],
+    "additionalProperties": false
+  }
+}
