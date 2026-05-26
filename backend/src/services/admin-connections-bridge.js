@@ -143,10 +143,9 @@ async function applyAdminConnections() {
       );
     }
 
-    // Fire-and-forget catalog reconciliation: probe each candidate
-    // provider and toggle AiModel.isActive so the chat UI only shows
-    // models whose upstream actually responds. Failures are isolated
-    // per provider — one bad key never blocks the others.
+    // Fire-and-forget provider health reconciliation. This intentionally
+    // does not change AiModel.isActive; admins control availability from
+    // /admin/models after each sync.
     await reconcileCatalog().catch((e) =>
       console.error('[admin-connections-bridge] reconcileCatalog failed:', e.message)
     );
@@ -174,13 +173,12 @@ async function probeKey(providerKey, apiKey) {
 
 /**
  * For each provider whose env var is set (either from .env or from a
- * panel row), probe the upstream /models endpoint. Toggle AiModel
- * rows for that provider so the catalog reflects reality. Providers
- * with no key configured stay in their current state — we never
- * delete user-curated catalog state, just enable/disable.
+ * panel row), probe the upstream /models endpoint.
  *
  * Updates the connection row's lastSyncedAt/lastSyncOk so the panel
  * can show a green/red dot per connection without an extra round-trip.
+ * AiModel.isActive is never changed here; model availability is an
+ * explicit admin choice.
  */
 async function reconcileCatalog() {
   const prisma = require('../config/database');
@@ -192,27 +190,6 @@ async function reconcileCatalog() {
       continue;
     }
     results[providerKey] = { healthy: await probeKey(providerKey, key), reason: 'probed' };
-  }
-
-  // Update AiModel.isActive for each provider. Map to the catalog
-  // form (e.g. 'openai' → 'OpenAI').
-  //
-  // Policy (per user request): never auto-deactivate. Catalog entries
-  // stay visible regardless of probe outcome or missing keys — the
-  // downstream call-site surfaces upstream errors when a model is
-  // actually invoked. Admins can still disable a model explicitly via
-  // /admin/models. Probe health is mirrored to admin_connections only
-  // (below) so the panel shows a green/red dot without hiding picker
-  // entries from end users.
-  const summary = [];
-  for (const [providerKey, { healthy }] of Object.entries(results)) {
-    const catalogProvider = PROVIDER_CATALOG_MAP[providerKey];
-    if (!catalogProvider) continue;
-    const { count } = await prisma.aiModel.updateMany({
-      where: { provider: catalogProvider, isActive: false },
-      data: { isActive: true },
-    });
-    if (count) summary.push(`${providerKey}:activated(${count}, probe=${healthy ? 'ok' : 'failed'})`);
   }
 
   // Mirror to admin_connections rows so the panel sees the health.
@@ -230,9 +207,6 @@ async function reconcileCatalog() {
     }).catch(() => {});
   }
 
-  if (summary.length) {
-    console.log('[admin-connections-bridge] reconcile:', summary.join(' '));
-  }
   return results;
 }
 
