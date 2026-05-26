@@ -84,3 +84,26 @@ test('estimateCostBatch: non-array input returns []', () => {
   assert.deepEqual(estimateCostBatch(null), []);
   assert.deepEqual(estimateCostBatch('not an array'), []);
 });
+
+test('estimateCostBatch: env override applies to all batch items', () => {
+  const out = estimateCostBatch(
+    [
+      { feature: 'paraphrase', textLength: 1000 },
+      { feature: 'paraphrase', textLength: 2000 },
+    ],
+    { env: { CREDITS_PARAPHRASE_PER_1K_CHARS: '4' } },
+  );
+  // base (1) + length × 4 per 1k chars
+  assert.equal(out[0].credits, 5);
+  assert.equal(out[1].credits, 9);
+});
+
+test('estimateCostBatch: items with missing/null feature dropped', () => {
+  const out = estimateCostBatch([
+    { feature: 'paraphrase' },
+    { feature: null },
+    {},
+    null,
+  ]);
+  assert.equal(out.length, 1);
+});
