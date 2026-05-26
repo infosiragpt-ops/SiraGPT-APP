@@ -361,3 +361,63 @@ test('estimateCostBatch: items with missing/null feature dropped', () => {
   ]);
   assert.equal(out.length, 1);
 });
+
+test('monthlyBreakdownAsCsv: header-only when projection is null/garbage', () => {
+  const { monthlyBreakdownAsCsv } = require('../src/services/feature-cost-estimator');
+  const expectedHeader = 'feature,calls,perCallCredits,monthlyCredits,monthlyUsd\n';
+  assert.equal(monthlyBreakdownAsCsv(null), expectedHeader);
+  assert.equal(monthlyBreakdownAsCsv(undefined), expectedHeader);
+  assert.equal(monthlyBreakdownAsCsv('garbage'), expectedHeader);
+  assert.equal(monthlyBreakdownAsCsv(42), expectedHeader);
+});
+
+test('monthlyBreakdownAsCsv: renders header + per-feature rows + TOTAL', () => {
+  const { monthlyBreakdownAsCsv } = require('../src/services/feature-cost-estimator');
+  const projection = estimateMonthlyCost({
+    paraphrase: { calls: 10, avgTextLength: 2000 },
+    image_generation: { calls: 5 },
+  });
+  const csv = monthlyBreakdownAsCsv(projection);
+  const lines = csv.trimEnd().split('\n');
+  // header + 2 features + TOTAL
+  assert.equal(lines.length, 4);
+  assert.equal(lines[0], 'feature,calls,perCallCredits,monthlyCredits,monthlyUsd');
+  // Each feature row begins with quoted feature name
+  assert.ok(lines[1].startsWith('"paraphrase",10,3,30,'));
+  assert.ok(lines[2].startsWith('"image_generation",5,5,25,'));
+  // TOTAL row: empty calls + perCallCredits + total credits + USD label
+  assert.ok(lines[3].startsWith('"TOTAL",,,55,'));
+});
+
+test('monthlyBreakdownAsCsv: empty projection renders header + TOTAL=0 only', () => {
+  const { monthlyBreakdownAsCsv } = require('../src/services/feature-cost-estimator');
+  const csv = monthlyBreakdownAsCsv(estimateMonthlyCost({}));
+  const lines = csv.trimEnd().split('\n');
+  assert.equal(lines.length, 2);
+  assert.equal(lines[0], 'feature,calls,perCallCredits,monthlyCredits,monthlyUsd');
+  assert.equal(lines[1], '"TOTAL",,,0,""');
+});
+
+test('monthlyBreakdownAsCsv: feature names with quotes are doubled-up per RFC 4180', () => {
+  const { monthlyBreakdownAsCsv } = require('../src/services/feature-cost-estimator');
+  // Simulate a hand-crafted projection — the estimator wouldn't normally
+  // produce a feature with quotes, but the CSV writer must still escape
+  // them safely if upstream code ever does.
+  const projection = {
+    totalMonthly: 12,
+    totalMonthlyUsd: '≈ <$0.01',
+    perFeature: {
+      'weird"feature"': { calls: 1, perCallCredits: 12, monthlyCredits: 12, monthlyUsd: '≈ <$0.01' },
+    },
+  };
+  const csv = monthlyBreakdownAsCsv(projection);
+  assert.ok(csv.includes('"weird""feature""",1,12,12,'));
+});
+
+test('monthlyBreakdownAsCsv: trailing newline so Excel/Sheets stops cleanly', () => {
+  const { monthlyBreakdownAsCsv } = require('../src/services/feature-cost-estimator');
+  const csv = monthlyBreakdownAsCsv(estimateMonthlyCost({
+    paraphrase: { calls: 1, avgTextLength: 0 },
+  }));
+  assert.ok(csv.endsWith('\n'));
+});

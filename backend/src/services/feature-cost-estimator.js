@@ -194,6 +194,24 @@ const USD_PER_CREDIT = 5 / 100_000;
  * reporting where float USD can drift due to rounding. Always returns
  * a non-negative integer.
  */
+/**
+ * Render an estimateMonthlyCost result as CSV text for Excel/Sheets
+ * export. Returns header + one row per feature + total. Always
+ * comma-delimited; numeric columns unquoted, string columns quoted to
+ * survive features named with commas (none today, but defensive).
+ */
+function monthlyBreakdownAsCsv(projection) {
+  if (!projection || typeof projection !== 'object') return 'feature,calls,perCallCredits,monthlyCredits,monthlyUsd\n';
+  const rows = ['feature,calls,perCallCredits,monthlyCredits,monthlyUsd'];
+  const perFeature = projection.perFeature || {};
+  for (const [feature, row] of Object.entries(perFeature)) {
+    const escaped = `"${String(feature).replace(/"/g, '""')}"`;
+    rows.push([escaped, row.calls, row.perCallCredits, row.monthlyCredits, `"${row.monthlyUsd || ''}"`].join(','));
+  }
+  rows.push(`"TOTAL",,,${projection.totalMonthly || 0},"${projection.totalMonthlyUsd || ''}"`);
+  return rows.join('\n') + '\n';
+}
+
 function creditsToUsdCents(credits) {
   const n = Number(credits) || 0;
   if (n <= 0) return 0;
@@ -301,6 +319,7 @@ module.exports = {
   estimateCost,
   estimateCostBatch,
   estimateMonthlyCost,
+  monthlyBreakdownAsCsv,
   getRecommendedPlan,
   getCostDelta,
   formatCreditsAsUsd,
