@@ -101,6 +101,45 @@ const PLAN_BUDGETS = Object.freeze({
  *   ≤ 300k     → PRO_MAX
  *   > 300k     → ENTERPRISE (unlimited)
  */
+/**
+ * Plan tier USD prices per the product brief.
+ *   FREE       $0
+ *   PRO        $5
+ *   PRO_MAX    $10
+ *   ENTERPRISE $2 + pay-as-you-go (treated as $2 base for comparison)
+ */
+const PLAN_PRICES_USD = Object.freeze({
+  FREE: 0,
+  PRO: 5,
+  PRO_MAX: 10,
+  ENTERPRISE: 2,
+});
+
+/**
+ * Compute the $ delta between two plans. Positive value = upgrading
+ * costs more; negative value = upgrading is cheaper (rare, but happens
+ * with ENTERPRISE).
+ *
+ *   getCostDelta('FREE', 'PRO')       → { deltaUsd: 5,  upgrade: true }
+ *   getCostDelta('PRO', 'PRO_MAX')    → { deltaUsd: 5,  upgrade: true }
+ *   getCostDelta('PRO', 'PRO')        → { deltaUsd: 0,  upgrade: false }
+ *   getCostDelta('PRO_MAX', 'PRO')    → { deltaUsd: -5, upgrade: false }
+ */
+function getCostDelta(currentPlan, recommendedPlan) {
+  const cur = PLAN_PRICES_USD[String(currentPlan || '').toUpperCase()];
+  const rec = PLAN_PRICES_USD[String(recommendedPlan || '').toUpperCase()];
+  if (cur == null || rec == null) {
+    return { deltaUsd: null, upgrade: false, reason: 'unknown_plan' };
+  }
+  const delta = rec - cur;
+  return {
+    deltaUsd: delta,
+    upgrade: delta > 0,
+    fromPlan: String(currentPlan).toUpperCase(),
+    toPlan: String(recommendedPlan).toUpperCase(),
+  };
+}
+
 function getRecommendedPlan(usage, { env = process.env } = {}) {
   const projection = estimateMonthlyCost(usage, { env });
   const total = projection.totalMonthly;
@@ -160,7 +199,9 @@ module.exports = {
   estimateCostBatch,
   estimateMonthlyCost,
   getRecommendedPlan,
+  getCostDelta,
   listFeatures,
   FEATURE_COSTS,
   PLAN_BUDGETS,
+  PLAN_PRICES_USD,
 };

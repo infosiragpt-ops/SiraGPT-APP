@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { estimateCost, estimateCostBatch, estimateMonthlyCost, getRecommendedPlan, listFeatures, FEATURE_COSTS, PLAN_BUDGETS } = require('../src/services/feature-cost-estimator');
+const { estimateCost, estimateCostBatch, estimateMonthlyCost, getRecommendedPlan, getCostDelta, listFeatures, FEATURE_COSTS, PLAN_BUDGETS, PLAN_PRICES_USD } = require('../src/services/feature-cost-estimator');
 
 test('listFeatures: includes paraphrase + image_* + generate', () => {
   const f = listFeatures();
@@ -153,6 +153,45 @@ test('getRecommendedPlan: huge usage → ENTERPRISE', () => {
     paraphrase: { calls: 100000, avgTextLength: 10000 },
   });
   assert.equal(r.plan, 'ENTERPRISE');
+});
+
+test('getCostDelta: FREE → PRO is +$5 upgrade', () => {
+  const d = getCostDelta('FREE', 'PRO');
+  assert.equal(d.deltaUsd, 5);
+  assert.equal(d.upgrade, true);
+  assert.equal(d.fromPlan, 'FREE');
+  assert.equal(d.toPlan, 'PRO');
+});
+
+test('getCostDelta: same plan returns 0 and upgrade=false', () => {
+  const d = getCostDelta('PRO', 'PRO');
+  assert.equal(d.deltaUsd, 0);
+  assert.equal(d.upgrade, false);
+});
+
+test('getCostDelta: PRO_MAX → PRO is -$5 (downgrade)', () => {
+  const d = getCostDelta('PRO_MAX', 'PRO');
+  assert.equal(d.deltaUsd, -5);
+  assert.equal(d.upgrade, false);
+});
+
+test('getCostDelta: case-insensitive plan names', () => {
+  const d = getCostDelta('free', 'PRO');
+  assert.equal(d.deltaUsd, 5);
+  assert.equal(d.upgrade, true);
+});
+
+test('getCostDelta: unknown plan returns deltaUsd=null', () => {
+  const d = getCostDelta('MYSTERY', 'PRO');
+  assert.equal(d.deltaUsd, null);
+  assert.equal(d.reason, 'unknown_plan');
+});
+
+test('PLAN_PRICES_USD: matches spec values ($0/$5/$10/$2)', () => {
+  assert.equal(PLAN_PRICES_USD.FREE, 0);
+  assert.equal(PLAN_PRICES_USD.PRO, 5);
+  assert.equal(PLAN_PRICES_USD.PRO_MAX, 10);
+  assert.equal(PLAN_PRICES_USD.ENTERPRISE, 2);
 });
 
 test('PLAN_BUDGETS: matches the values plan-credits-catalog grants', () => {
