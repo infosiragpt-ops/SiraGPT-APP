@@ -94,6 +94,38 @@ router.get('/modes', optionalAuth, (req, res) => {
   });
 });
 
+// POST /api/paraphrase/score — free pre-paraphrase AI score check.
+// The frontend can call this to show "your text scores 0.7 — looks
+// AI-generated" before the user commits credits to a paraphrase run.
+// Public (no auth) because it doesn't consume credits and doesn't
+// touch any LLM — it's a deterministic local scorer.
+router.post('/score', express.json({ limit: '512kb' }), (req, res) => {
+  try {
+    // eslint-disable-next-line global-require
+    const { estimateAIScoreDetailed, topAITellsFound } = require('../services/paraphrase-humanizer');
+    const text = typeof req.body?.text === 'string' ? req.body.text : '';
+    if (!text) {
+      return res.status(400).json({ error: 'missing_text', message: 'body.text is required' });
+    }
+    if (text.length > MAX_TEXT_LENGTH) {
+      return res.status(413).json({ error: 'text_too_long', maxLength: MAX_TEXT_LENGTH });
+    }
+    const detailed = estimateAIScoreDetailed(text);
+    const topTells = topAITellsFound(text, { limit: 5 });
+    return res.json({
+      score: detailed.score,
+      components: detailed.components,
+      weights: detailed.weights,
+      topTells,
+      verdict: detailed.score >= 0.5 ? 'likely_ai'
+        : detailed.score >= 0.25 ? 'mixed'
+        : 'likely_human',
+    });
+  } catch (err) {
+    return res.status(500).json({ error: 'score_failed', message: err && err.message });
+  }
+});
+
 router.post(
   '/',
   (req, _res, next) => { normaliseModeOnBody(req.body); next(); },

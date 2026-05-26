@@ -131,3 +131,95 @@ test('paraphraseCost: ~1 credit per 1000 chars by default', () => {
     if (prevRatio !== undefined) process.env.CREDITS_PARAPHRASE_PER_1K_CHARS = prevRatio;
   }
 });
+
+// POST /api/paraphrase/score — integration tests via in-process express.
+const http = require('node:http');
+const express = require('express');
+
+function startScoreServer() {
+  const app = express();
+  app.use('/api/paraphrase', paraphraseRoute.router || paraphraseRoute);
+  return new Promise((resolve) => {
+    const server = app.listen(0, '127.0.0.1', () => {
+      const { port } = server.address();
+      resolve({ server, baseURL: `http://127.0.0.1:${port}` });
+    });
+  });
+}
+
+function postJSON(url, body) {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify(body);
+    const u = new URL(url);
+    const req = http.request({
+      method: 'POST',
+      hostname: u.hostname,
+      port: u.port,
+      path: u.pathname,
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
+    }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+          resolve({ status: res.statusCode, body: parsed });
+        } catch (err) { reject(err); }
+      });
+    });
+    req.on('error', reject);
+    req.write(payload);
+    req.end();
+  });
+}
+
+test('POST /api/paraphrase/score: scores AI-heavy text high + topTells populated', async () => {
+  const { server, baseURL } = await startScoreServer();
+  try {
+    const aiLike = 'Furthermore, the analysis demonstrates significant impact. Moreover, results indicate strong correlation. Additionally, the methodology supports the conclusion. In conclusion, the findings are robust.';
+    const { status, body } = await postJSON(`${baseURL}/api/paraphrase/score`, { text: aiLike });
+    assert.equal(status, 200);
+    assert.ok(body.score >= 0.25, `expected mixed-or-higher score, got ${body.score}`);
+    assert.ok(body.components);
+    assert.ok(body.weights);
+    assert.ok(Array.isArray(body.topTells));
+    assert.ok(['likely_ai', 'mixed', 'likely_human'].includes(body.verdict));
+  } finally {
+    server.close();
+  }
+});
+
+test('POST /api/paraphrase/score: empty text returns 400', async () => {
+  const { server, baseURL } = await startScoreServer();
+  try {
+    const { status, body } = await postJSON(`${baseURL}/api/paraphrase/score`, { text: '' });
+    assert.equal(status, 400);
+    assert.equal(body.error, 'missing_text');
+  } finally {
+    server.close();
+  }
+});
+
+test('POST /api/paraphrase/score: human text scores as likely_human', async () => {
+  const { server, baseURL } = await startScoreServer();
+  try {
+    const human = 'I ran a few tests last week. Some passed. Others failed in weird ways I did not expect, so I went back to the logs. Turns out the cache was stale.';
+    const { status, body } = await postJSON(`${baseURL}/api/paraphrase/score`, { text: human });
+    assert.equal(status, 200);
+    assert.equal(body.verdict, 'likely_human');
+  } finally {
+    server.close();
+  }
+});
+
+test('POST /api/paraphrase/score: text > MAX_TEXT_LENGTH returns 413', async () => {
+  const { server, baseURL } = await startScoreServer();
+  try {
+    const huge = 'a'.repeat(MAX_TEXT_LENGTH + 100);
+    const { status, body } = await postJSON(`${baseURL}/api/paraphrase/score`, { text: huge });
+    assert.equal(status, 413);
+    assert.equal(body.error, 'text_too_long');
+  } finally {
+    server.close();
+  }
+});
