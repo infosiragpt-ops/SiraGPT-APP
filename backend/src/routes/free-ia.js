@@ -128,6 +128,28 @@ router.get('/plans', (_req, res) => {
   }
 });
 
+// "I have $X to spend per month — what plan should I get?" — used by
+// the pricing-page slider widget. Public (no auth) like /plans so the
+// marketing site can call it without a session. Returns the most
+// generous plan within the supplied USD budget.
+router.get('/budget', (req, res) => {
+  try {
+    // eslint-disable-next-line global-require
+    const { findCheapestPlanForBudget } = require('../services/feature-cost-estimator');
+    const maxUsd = Number(req.query.maxUsdPerMonth);
+    if (!Number.isFinite(maxUsd)) {
+      return res.status(400).json({ error: 'invalid_budget', message: 'maxUsdPerMonth query param must be a finite number' });
+    }
+    const plan = findCheapestPlanForBudget(maxUsd);
+    if (!plan) {
+      return res.status(400).json({ error: 'no_plan_fits', message: 'no plan available for the supplied budget' });
+    }
+    return res.json({ maxUsdPerMonth: maxUsd, plan });
+  } catch (err) {
+    return res.status(500).json({ error: 'budget_failed', message: err && err.message });
+  }
+});
+
 // Brand constants for frontend localisation / hardcoded labels (e.g. a
 // /loading screen that needs the brand name before /status responds).
 router.get('/brand', (_req, res) => {
@@ -152,7 +174,7 @@ router.get('/brand', (_req, res) => {
 // feature), schemaVersion, apiFingerprint, humanizer.tellsByLanguage,
 // BRAND export, /plans endpoint, /digest endpoint, /estimate +
 // forecastUsage/currentPlan support.
-const SCHEMA_VERSION = 'v3.3';
+const SCHEMA_VERSION = 'v3.4';
 
 /**
  * Deterministic short fingerprint of the API surface. Computed from
@@ -186,6 +208,7 @@ const ENDPOINT_INVENTORY = Object.freeze([
   { method: 'GET',  path: '/api/free-ia/info',             auth: 'public', returns: 'consolidated view' },
   { method: 'GET',  path: '/api/free-ia/digest',           auth: 'user',   returns: 'per-user quota digest (plan + fallback + hints)' },
   { method: 'GET',  path: '/api/free-ia/plans',            auth: 'public', returns: 'enriched plan list for pricing table' },
+  { method: 'GET',  path: '/api/free-ia/budget',           auth: 'public', returns: 'best plan within ?maxUsdPerMonth budget' },
   { method: 'POST', path: '/api/free-ia/estimate',         auth: 'public', returns: 'batch cost estimates for {items: [{feature, textLength}]}' },
   { method: 'GET',  path: '/api/free-ia/metrics',          auth: 'public', returns: 'JSON snapshot' },
   { method: 'GET',  path: '/api/free-ia/metrics/summary',  auth: 'public', returns: 'one-line digest (?format=text for plain)' },

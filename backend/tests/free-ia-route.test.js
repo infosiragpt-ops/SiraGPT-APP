@@ -299,8 +299,8 @@ test('GET /api/free-ia/info: includes apiFingerprint (stable + 8 hex chars)', as
   }
 });
 
-test('SCHEMA_VERSION is at v3.3 (latest additive shape)', () => {
-  assert.equal(SCHEMA_VERSION, 'v3.3');
+test('SCHEMA_VERSION is at v3.4 (latest additive shape)', () => {
+  assert.equal(SCHEMA_VERSION, 'v3.4');
 });
 
 test('GET /api/free-ia/info: includes schemaVersion for client cache invalidation', async () => {
@@ -422,6 +422,52 @@ test('GET /api/free-ia/plans returns the enriched plan list', async () => {
     const enterprise = body.plans.find((p) => p.plan === 'ENTERPRISE');
     assert.equal(enterprise.unlimited, true);
     assert.equal(enterprise.budgetLabel, 'Unlimited');
+  } finally {
+    server.close();
+  }
+});
+
+test('GET /api/free-ia/budget?maxUsdPerMonth=5 → ENTERPRISE (unlimited @ $2)', async () => {
+  const { server, baseURL } = await startServer();
+  try {
+    const { status, body } = await fetchJSON(`${baseURL}/api/free-ia/budget?maxUsdPerMonth=5`);
+    assert.equal(status, 200);
+    assert.equal(body.maxUsdPerMonth, 5);
+    assert.equal(body.plan.plan, 'ENTERPRISE');
+    assert.equal(body.plan.unlimited, true);
+  } finally {
+    server.close();
+  }
+});
+
+test('GET /api/free-ia/budget?maxUsdPerMonth=0 → FREE', async () => {
+  const { server, baseURL } = await startServer();
+  try {
+    const { status, body } = await fetchJSON(`${baseURL}/api/free-ia/budget?maxUsdPerMonth=0`);
+    assert.equal(status, 200);
+    assert.equal(body.plan.plan, 'FREE');
+  } finally {
+    server.close();
+  }
+});
+
+test('GET /api/free-ia/budget without query returns 400', async () => {
+  const { server, baseURL } = await startServer();
+  try {
+    const { status, body } = await fetchJSON(`${baseURL}/api/free-ia/budget`);
+    assert.equal(status, 400);
+    assert.equal(body.error, 'invalid_budget');
+  } finally {
+    server.close();
+  }
+});
+
+test('GET /api/free-ia/budget?maxUsdPerMonth=abc returns 400', async () => {
+  const { server, baseURL } = await startServer();
+  try {
+    const { status, body } = await fetchJSON(`${baseURL}/api/free-ia/budget?maxUsdPerMonth=abc`);
+    assert.equal(status, 400);
+    assert.equal(body.error, 'invalid_budget');
   } finally {
     server.close();
   }
