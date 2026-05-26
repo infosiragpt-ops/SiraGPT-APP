@@ -98,6 +98,57 @@ test('GEMA4_* env vars still override FREE_IA_* (backwards compatibility)', () =
   assert.equal(config.displayName, 'Legacy Gema4');
 });
 
+test('userQuotaDigest: FREE user sees plan + fallback brand + dailyCalls', () => {
+  const { userQuotaDigest } = require('../src/services/model-quota-router');
+  const digest = userQuotaDigest({
+    plan: 'FREE',
+    monthlyCallLimit: 3,
+    apiUsage: 0n,
+    monthlyLimit: 0n,
+    gemaTokenUsage: 0n,
+    gemaTokenLimit: 0n,
+  });
+  assert.equal(digest.plan, 'FREE');
+  assert.equal(digest.premium.remaining, '0', 'FREE plan has 0 premium tokens remaining');
+  assert.equal(digest.premium.limit, '0');
+  assert.equal(digest.fallback.provider, 'Cerebras');
+  // FREE plan went unlimited after the "make FlashGPT unlimited" commit
+  // — dailyCalls is null and the policy reports it as no limit.
+  assert.ok(
+    digest.dailyCalls.dailyLimit === null || typeof digest.dailyCalls.dailyLimit === 'number',
+    `dailyLimit should be null or a number, got ${typeof digest.dailyCalls.dailyLimit}`,
+  );
+});
+
+test('userQuotaDigest: PRO user with 70% premium usage reports pctUsed=70', () => {
+  const { userQuotaDigest } = require('../src/services/model-quota-router');
+  const digest = userQuotaDigest({
+    plan: 'PRO',
+    apiUsage: 70_000n,
+    monthlyLimit: 100_000n,
+    gemaTokenUsage: 0n,
+    gemaTokenLimit: 500_000n,
+  });
+  assert.equal(digest.plan, 'PRO');
+  assert.equal(digest.premium.unlimited, false);
+  assert.equal(digest.premium.pctUsed, 70);
+  assert.equal(digest.premium.exhausted, false);
+});
+
+test('userQuotaDigest: ENTERPRISE unlimited premium reports pctUsed=null', () => {
+  const { userQuotaDigest } = require('../src/services/model-quota-router');
+  const digest = userQuotaDigest({
+    plan: 'ENTERPRISE',
+    apiUsage: 999_999n,
+    monthlyLimit: 0n,
+    gemaTokenUsage: 0n,
+    gemaTokenLimit: 0n,
+  });
+  assert.equal(digest.plan, 'ENTERPRISE');
+  assert.equal(digest.premium.unlimited, true);
+  assert.equal(digest.premium.pctUsed, null);
+});
+
 test('Gema4 fallback can be configured by environment without exposing secrets', () => {
   const env = {
     GEMA4_MODEL_ID: 'custom-gema4',

@@ -213,6 +213,44 @@ function persistModelPreference(settings, modelId) {
   return base;
 }
 
+/**
+ * Combined plan + Free-IA descriptor for a user. Useful for the
+ * frontend's account page where a single panel shows "you're on PRO,
+ * 27% of premium pool spent, FlashGPT is your fallback".
+ *
+ * Doesn't replace buildModelQuotaPolicy (which is the full ledger
+ * surface) — this is a smaller, friendlier projection.
+ */
+function userQuotaDigest(user, env = process.env) {
+  const policy = buildModelQuotaPolicy(user, env);
+  const fallback = getGema4RuntimeConfig(env);
+  const premiumPool = policy.premiumTokens;
+  const premiumPct = (() => {
+    if (premiumPool.unlimited) return null;
+    const limit = Number(premiumPool.limit || 0);
+    if (limit <= 0) return null;
+    const used = Number(premiumPool.used || 0);
+    return Math.min(100, Math.round((used / limit) * 1000) / 10);
+  })();
+  return {
+    plan: policy.currentPlan,
+    premium: {
+      unlimited: premiumPool.unlimited,
+      remaining: premiumPool.remaining,
+      used: premiumPool.used,
+      limit: premiumPool.limit,
+      pctUsed: premiumPct,
+      exhausted: premiumPool.exhausted,
+    },
+    fallback: {
+      model: fallback.model,
+      displayName: fallback.displayName,
+      provider: fallback.provider,
+    },
+    dailyCalls: policy.calls,
+  };
+}
+
 module.exports = {
   GEMA4_MODEL_ID,
   buildGema4VirtualModel,
@@ -221,5 +259,6 @@ module.exports = {
   normalizePlan,
   resolveModelForUser,
   persistModelPreference,
+  userQuotaDigest,
   toBigInt,
 };
