@@ -1769,6 +1769,10 @@ const ActiveToolsDisplay = ({
   setIsWordConnectorActive,
   isExcelConnectorActive,
   setIsExcelConnectorActive,
+  selectedModel,
+  setSelectedModel,
+  availableModels,
+  setSelectedProvider,
   chatType,
   setChatType,
 
@@ -1844,6 +1848,10 @@ const ActiveToolsDisplay = ({
   setIsWordConnectorActive: (value: boolean) => void;
   isExcelConnectorActive: boolean;
   setIsExcelConnectorActive: (value: boolean) => void;
+  selectedModel: string;
+  setSelectedModel: (model: string) => void;
+  availableModels: any[];
+  setSelectedProvider: (provider: string) => void;
   chatType: string;
   setChatType: (type: any) => void;
 
@@ -1869,8 +1877,6 @@ const ActiveToolsDisplay = ({
   const hasConnectors = activeConnectors.length > 0;
   const hasOtherTools = isImageGenerationActive || isVoiceGenerationActive || isMusicGenerationActive || isVideoGenerationActive || isWebSearchActive || isComputerUseActive;
   const hasThesis = chatType === 'thesis';
-
-  if (!hasConnectors && !hasOtherTools && !hasThesis) return null;
 
   const handleCloseAllConnectors = () => {
     setIsGmailActive(false);
@@ -1917,6 +1923,108 @@ const ActiveToolsDisplay = ({
   const handleThesisClose = () => {
     setChatType('text');
   };
+
+  const mediaModelOptions = React.useMemo(() => {
+    const models = Array.isArray(availableModels) ? availableModels : [];
+    const pickByKind = (kind: "image" | "video") => {
+      const pattern = kind === "image"
+        ? /image|imagen|dall|seedream|flux|stable|midjourney|ideogram|recraft|gpt-image/i
+        : /video|veo|kling|runway|pika|hailuo|luma/i;
+      const type = kind.toUpperCase();
+      return models.filter((model: any) => {
+        const label = `${model?.name || ""} ${model?.displayName || ""} ${model?.provider || ""}`;
+        return String(model?.type || "").toUpperCase() === type || pattern.test(label);
+      });
+    };
+    const normalize = (model: any) => ({
+      name: model.name,
+      displayName: model.displayName || model.name,
+      provider: model.provider || null,
+      iconName: resolveModelIconName(model),
+    });
+
+    const imageModels = pickByKind("image").map(normalize);
+    const videoModels = pickByKind("video").map(normalize);
+
+    return {
+      image: imageModels.length ? imageModels : [
+        { name: "openai/dall-e-3", displayName: "DALL-E 3", provider: "OpenAI", iconName: "ChatGPTLogo" },
+        { name: "google/imagen-3-0", displayName: "Imagen 3", provider: "Gemini", iconName: "GeminiLogo" },
+        { name: "bytedance-seed/seedream-4.5", displayName: "Seedream 4.5", provider: "OpenRouter", iconName: "SeedreamLogo" },
+      ],
+      video: videoModels.length ? videoModels : [
+        { name: "veo-fast", displayName: "Veo Fast (8s)", provider: "Google", iconName: "GeminiLogo" },
+        { name: "kling-1.6-pro", displayName: "Kling 1.6 Pro (10s)", provider: "Kling", iconName: "Bot" },
+        { name: "kling-2-master", displayName: "Kling 2 Master (10s)", provider: "Kling", iconName: "Bot" },
+      ],
+      voice: VOICE_MODEL_OPTIONS.map((name) => ({
+        name,
+        displayName: name,
+        provider: name === "ElevenLabs" ? "ElevenLabs" : "Mimo",
+        iconName: "Bot",
+      })),
+      music: MUSIC_MODEL_OPTIONS.map((name) => ({
+        name,
+        displayName: name,
+        provider: name === "Lyria 3 Pro" ? "Google" : name === "ElevenLabs" ? "ElevenLabs" : "Mimo",
+        iconName: name === "Lyria 3 Pro" ? "GeminiLogo" : "Bot",
+      })),
+    };
+  }, [availableModels]);
+
+  const renderMediaModelPicker = (
+    tool: "image" | "voice" | "music" | "video",
+    value: string,
+    onChange: (name: string, provider?: string | null) => void,
+  ) => {
+    const options = mediaModelOptions[tool];
+    const selected = options.find((option: any) => option.name === value) || options[0];
+    const label = selected?.displayName || value || "Modelo";
+
+    return (
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="group/media-model relative isolate h-7 max-w-[168px] gap-1.5 overflow-hidden rounded-full border border-zinc-200/80 bg-white/82 px-2.5 py-0 text-[11.5px] font-semibold text-zinc-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_10px_24px_-20px_rgba(15,23,42,0.45)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
+            aria-label={`Seleccionar modelo de ${tool}`}
+            title={`Modelo: ${label}`}
+          >
+            <span className="pointer-events-none absolute inset-y-[-55%] left-[-65%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/70 to-transparent opacity-0 blur-sm transition-all duration-700 group-hover/media-model:left-[92%] group-hover/media-model:opacity-100 dark:via-white/20" />
+            <span className="flex h-4 w-4 shrink-0 items-center justify-center">
+              <IconProvider name={selected?.iconName || "Bot"} size={16} />
+            </span>
+            <span className="min-w-0 truncate">{label}</span>
+            <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-60" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="start"
+          side="top"
+          sideOffset={8}
+          collisionPadding={12}
+          className="liquid-menu-surface w-[min(calc(100vw-1rem),18rem)] p-1.5"
+        >
+          {options.length > 0 ? options.map((option: any) => (
+            <DropdownMenuItem
+              key={option.name}
+              className="chat-active-apps-menu-item h-9 gap-2 text-[12px]"
+              onClick={() => onChange(option.name, option.provider)}
+            >
+              <IconProvider name={option.iconName || "Bot"} size={16} className="shrink-0" />
+              <span className="min-w-0 flex-1 truncate">{option.displayName}</span>
+              {option.name === value && <Check className="h-3.5 w-3.5" />}
+            </DropdownMenuItem>
+          )) : (
+            <div className="px-3 py-6 text-center text-xs text-muted-foreground">Sin modelos disponibles</div>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
+  };
+
+  if (!hasConnectors && !hasOtherTools && !hasThesis) return null;
 
   const renderAppSwitchItems = () => (
     <>
@@ -2065,22 +2173,23 @@ const ActiveToolsDisplay = ({
             </Button>
           </div>
 
+          {renderMediaModelPicker("image", selectedModel, (name, provider) => {
+            setSelectedModel(name);
+            if (provider) setSelectedProvider(provider);
+            track("model.selected", { model: name, provider: provider || null, surface: "image-tool-picker" });
+          })}
+
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
                 variant="ghost"
                 size="sm"
-                className="group/ratio-trigger relative isolate h-7 gap-1.5 overflow-hidden rounded-lg border border-zinc-200/80 bg-white/80 px-2 py-0 text-xs font-semibold text-zinc-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_8px_22px_-18px_rgba(15,23,42,0.35)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/10 dark:bg-white/[0.055] dark:text-white/82 dark:hover:bg-white/[0.08]"
+                className="group/ratio-trigger relative isolate h-7 w-8 overflow-hidden rounded-full border border-zinc-200/80 bg-white/80 p-0 text-xs font-semibold text-zinc-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_8px_22px_-18px_rgba(15,23,42,0.35)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/10 dark:bg-white/[0.055] dark:text-white/82 dark:hover:bg-white/[0.08]"
                 title={`Imagen: ${selectedImageAspectRatio}, ${selectedImageQuality}, ${selectedImageCount}`}
                 aria-label={`Configurar imagen. Actual ${selectedImageAspectRatio}, ${selectedImageQuality}, ${selectedImageCount}`}
               >
                 <span className="pointer-events-none absolute inset-y-[-55%] left-[-65%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/70 to-transparent opacity-0 blur-sm transition-all duration-700 group-hover/ratio-trigger:left-[92%] group-hover/ratio-trigger:opacity-100 dark:via-white/20" />
-                <ImageAspectRatioMark ratio={selectedImageAspectRatio} selected />
-                <span>{selectedImageAspectRatio}</span>
-                <span className="h-1 w-1 rounded-full bg-current/35" />
-                <span>{selectedImageQuality}</span>
-                <span className="h-1 w-1 rounded-full bg-current/35" />
-                <span>{selectedImageCount} img</span>
+                <Settings className="h-3.5 w-3.5" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent
@@ -2210,21 +2319,22 @@ const ActiveToolsDisplay = ({
             </Button>
           </div>
 
+          {renderMediaModelPicker("voice", selectedVoiceModel, (name) => {
+            setSelectedVoiceModel(name as VoiceModel);
+            track("model.selected", { model: name, provider: name === "ElevenLabs" ? "ElevenLabs" : "Mimo", surface: "voice-tool-picker" });
+          })}
+
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
                 variant="ghost"
                 size="sm"
-                className="group/voice-trigger relative isolate h-[22px] gap-1 overflow-hidden rounded-md border border-zinc-200/80 bg-white/82 px-1.5 py-0 text-[10.5px] font-semibold text-zinc-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_8px_22px_-18px_rgba(15,23,42,0.35)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/88 dark:text-white/90 dark:hover:bg-zinc-800/92"
+                className="group/voice-trigger relative isolate h-7 w-8 overflow-hidden rounded-full border border-zinc-200/80 bg-white/82 p-0 text-[10.5px] font-semibold text-zinc-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_8px_22px_-18px_rgba(15,23,42,0.35)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/88 dark:text-white/90 dark:hover:bg-zinc-800/92"
                 title={`Voz: ${selectedVoiceModel}, ${selectedVoiceLanguage}, ${selectedVoiceAccent}, ${selectedVoiceStability}%`}
                 aria-label={`Configurar voz. Actual ${selectedVoiceModel}, ${selectedVoiceLanguage}, estabilidad ${selectedVoiceStability} por ciento`}
               >
                 <span className="pointer-events-none absolute inset-y-[-55%] left-[-65%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/70 to-transparent opacity-0 blur-sm transition-all duration-700 group-hover/voice-trigger:left-[92%] group-hover/voice-trigger:opacity-100 dark:via-white/20" />
-                <span>{selectedVoiceModel === "Mimo Max 02HD" ? "Mimo 02HD" : "Eleven"}</span>
-                <span className="h-1 w-1 rounded-full bg-current/35" />
-                <span>{selectedVoiceLanguage}</span>
-                <span className="h-1 w-1 rounded-full bg-current/35" />
-                <span>{selectedVoiceStability}%</span>
+                <Settings className="h-3.5 w-3.5" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent
@@ -2348,21 +2458,22 @@ const ActiveToolsDisplay = ({
             </Button>
           </div>
 
+          {renderMediaModelPicker("music", selectedMusicModel, (name) => {
+            setSelectedMusicModel(name as MusicModel);
+            track("model.selected", { model: name, provider: name === "Lyria 3 Pro" ? "Google" : name === "ElevenLabs" ? "ElevenLabs" : "Mimo", surface: "music-tool-picker" });
+          })}
+
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
                 variant="ghost"
                 size="sm"
-                className="group/music-trigger relative isolate h-[22px] gap-1 overflow-hidden rounded-md border border-zinc-200/80 bg-white/82 px-1.5 py-0 text-[10.5px] font-semibold text-zinc-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_8px_22px_-18px_rgba(15,23,42,0.35)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/88 dark:text-white/90 dark:hover:bg-zinc-800/92"
+                className="group/music-trigger relative isolate h-7 w-8 overflow-hidden rounded-full border border-zinc-200/80 bg-white/82 p-0 text-[10.5px] font-semibold text-zinc-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_8px_22px_-18px_rgba(15,23,42,0.35)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/88 dark:text-white/90 dark:hover:bg-zinc-800/92"
                 title={`Música: ${selectedMusicModel}, ${selectedMusicStyle}, ${selectedMusicMood}, ${selectedMusicDuration}s`}
                 aria-label={`Configurar música. Actual ${selectedMusicModel}, ${selectedMusicStyle}, ${selectedMusicDuration} segundos`}
               >
                 <span className="pointer-events-none absolute inset-y-[-55%] left-[-65%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/70 to-transparent opacity-0 blur-sm transition-all duration-700 group-hover/music-trigger:left-[92%] group-hover/music-trigger:opacity-100 dark:via-white/20" />
-                <span>{selectedMusicModel === "ElevenLabs" ? "Eleven" : selectedMusicModel === "Mimo Max 02HD" ? "Mimo 02HD" : "Lyria"}</span>
-                <span className="h-1 w-1 rounded-full bg-current/35" />
-                <span>{selectedMusicStyle}</span>
-                <span className="h-1 w-1 rounded-full bg-current/35" />
-                <span>{selectedMusicDuration}s</span>
+                <Settings className="h-3.5 w-3.5" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent
@@ -2509,22 +2620,23 @@ const ActiveToolsDisplay = ({
             </Button>
           </div>
 
+          {renderMediaModelPicker("video", selectedModel, (name, provider) => {
+            setSelectedModel(name);
+            if (provider) setSelectedProvider(provider);
+            track("model.selected", { model: name, provider: provider || null, surface: "video-tool-picker" });
+          })}
+
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
                 variant="ghost"
                 size="sm"
-                className="group/video-trigger relative isolate h-[22px] gap-1 overflow-hidden rounded-md border border-zinc-200/80 bg-white/82 px-1.5 py-0 text-[10.5px] font-semibold text-zinc-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_8px_22px_-18px_rgba(15,23,42,0.35)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/88 dark:text-white/90 dark:hover:bg-zinc-800/92"
+                className="group/video-trigger relative isolate h-7 w-8 overflow-hidden rounded-full border border-zinc-200/80 bg-white/82 p-0 text-[10.5px] font-semibold text-zinc-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_8px_22px_-18px_rgba(15,23,42,0.35)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/88 dark:text-white/90 dark:hover:bg-zinc-800/92"
                 title={`Video: ${selectedVideoAspectRatio}, ${selectedVideoResolution}, ${selectedVideoDuration}s, audio ${selectedVideoAudio ? "on" : "off"}`}
                 aria-label={`Configurar video. Actual ${selectedVideoAspectRatio}, ${selectedVideoResolution}, ${selectedVideoDuration} segundos`}
               >
                 <span className="pointer-events-none absolute inset-y-[-55%] left-[-65%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/70 to-transparent opacity-0 blur-sm transition-all duration-700 group-hover/video-trigger:left-[92%] group-hover/video-trigger:opacity-100 dark:via-white/20" />
-                <span>{selectedVideoAspectRatio === "auto" ? "Auto" : selectedVideoAspectRatio}</span>
-                <span className="h-1 w-1 rounded-full bg-current/35" />
-                <span>{selectedVideoResolution}</span>
-                <span className="h-1 w-1 rounded-full bg-current/35" />
-                <span>{selectedVideoDuration}s</span>
-                <span className={cn("h-1.5 w-1.5 rounded-full", selectedVideoAudio ? "bg-sky-400" : "bg-current/25")} />
+                <Settings className="h-3.5 w-3.5" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent
@@ -7701,6 +7813,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     || isSpotifyActive || isWordConnectorActive || isExcelConnectorActive
     || chatType === 'thesis'
   );
+  const isMediaToolActive = isImageGenerationActive || isVoiceGenerationActive || isMusicGenerationActive || isVideoGenerationActive;
   const isSendingForCurrentChat = isSending && sendingChatId === currentChatId;
   const isStopButtonVisible = isCurrentChatLoading || isCurrentChatStreaming || (pendingStop && isCurrentChatStreaming) || isSendingForCurrentChat || isCurrentChatLocalJobBusy;
 
@@ -7742,6 +7855,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     isSpotifyActive, setIsSpotifyActive,
     isWordConnectorActive, setIsWordConnectorActive,
     isExcelConnectorActive, setIsExcelConnectorActive,
+    selectedModel, setSelectedModel,
+    availableModels,
+    setSelectedProvider: setSelectedProivder,
     chatType, setChatType,
     handleComputerUseToggle, handleGmailToggle, handleGoogleCalendarToggle,
     handleGoogleDriveToggle, handleSpotifyToggle, handleWordConnectorToggle,
@@ -8454,15 +8570,17 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                     <SidebarOvalIcon className="h-5 w-5" />
                   </SidebarTrigger>
                 </div>
-                <NavbarModelSelector
-                  selectedModel={selectedModel}
-                  setSelectedModel={setSelectedModel}
-                  availableModels={availableModels}
-                  setSelectedProvider={setSelectedProivder}
-                  chatTypes={chatType}
-                  currentChat={currentChat}
-                  setCurrentChat={setCurrentChat}
-                />
+                {!isMediaToolActive && (
+                  <NavbarModelSelector
+                    selectedModel={selectedModel}
+                    setSelectedModel={setSelectedModel}
+                    availableModels={availableModels}
+                    setSelectedProvider={setSelectedProivder}
+                    chatTypes={chatType}
+                    currentChat={currentChat}
+                    setCurrentChat={setCurrentChat}
+                  />
+                )}
               </div>
               <div className="chat-header-actions flex shrink-0 items-center gap-0.5">
                 {/* Complete Chat Share Button - only show if there's a chat with messages.
