@@ -18,6 +18,7 @@ const dockerBridge = require('./hermes-docker-bridge');
 const { runHermesCommand, listCommands } = require('./hermes-cli-bridge');
 const { buildHermesIntegrationMap } = require('./hermes-playbook-bridge');
 const toolsetRegistry = require('./toolset-registry');
+const { buildPlatformFolderReport } = require('./platform-folder-parity');
 
 let _booted = false;
 let _gcTimer = null;
@@ -85,6 +86,7 @@ function getHermesRuntimeStatus() {
     environments: dockerBridge.listBackends(),
     toolsets: toolsetRegistry.listToolsets().length,
     cliCommands: listCommands(),
+    platformFolders: buildPlatformFolderReport(),
   };
 }
 

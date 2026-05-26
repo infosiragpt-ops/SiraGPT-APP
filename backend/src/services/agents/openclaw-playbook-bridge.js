@@ -10,11 +10,14 @@ const FOLDER_CAPABILITY_MAP = Object.freeze([
   { openclaw: '.github', sira: '.github/workflows', status: 'partial', strategy: 'reuse CI patterns only after matching SiraGPT required checks' },
   { openclaw: '.vscode', sira: '.vscode', status: 'partial', strategy: 'developer ergonomics only; no runtime dependency' },
   { openclaw: 'apps', sira: 'app, android, ios, extension', status: 'protected', strategy: 'product/UI surface; use only when UI scope is explicit' },
+  { openclaw: 'changelog/fragments', sira: 'CHANGELOG.md, docs/release-notes', status: 'planned', strategy: 'summarize only SiraGPT-facing release notes; do not import upstream release noise' },
   { openclaw: 'config', sira: 'config files, package.json, tsconfig', status: 'partial', strategy: 'port deterministic build defaults with type/build proof' },
   { openclaw: 'deploy', sira: 'infra, docker-compose.yml, scripts', status: 'partial', strategy: 'adapt deploy health checks and rollback probes' },
   { openclaw: 'docs', sira: 'docs, .agents/skills/technical-docs', status: 'integrated', strategy: 'rewrite as SiraGPT runbooks and operating contracts' },
   { openclaw: 'extensions', sira: 'backend/src/services, extension, infra', status: 'partial', strategy: 'adapt connector/provider patterns behind backend contracts' },
+  { openclaw: 'git-hooks', sira: '.husky, scripts', status: 'partial', strategy: 'keep only hooks that protect secrets, ignored staged paths, and deterministic checks' },
   { openclaw: 'packages', sira: 'backend/src, lib, scripts', status: 'partial', strategy: 'reuse utility ideas with focused tests' },
+  { openclaw: 'patches', sira: 'patches, package-lock/npm-shrinkwrap policy', status: 'planned', strategy: 'review dependency patches and port only runtime-required fixes' },
   { openclaw: 'qa', sira: 'e2e, backend/tests, scripts', status: 'integrated', strategy: 'convert QA lanes into cheapest safe SiraGPT proof' },
   { openclaw: 'scripts', sira: 'scripts, backend/scripts', status: 'integrated', strategy: 'port idempotent CLIs with JSON output' },
   { openclaw: 'security', sira: 'docs/legal, scripts, .github/workflows', status: 'integrated', strategy: 'preserve secret scanning and advisory guardrails' },
@@ -22,6 +25,7 @@ const FOLDER_CAPABILITY_MAP = Object.freeze([
   { openclaw: 'src', sira: 'backend/src', status: 'partial', strategy: 'integrate runtime ideas through services and tests' },
   { openclaw: 'test', sira: 'backend/tests, tests, e2e', status: 'integrated', strategy: 'map test lanes to local and CI gates' },
   { openclaw: 'ui', sira: 'app, components', status: 'protected', strategy: 'guard with UI lock unless product scope is explicit' },
+  { openclaw: 'root-config', sira: 'Dockerfile, render.yaml, tsconfig*, vitest.config.ts, npm-shrinkwrap.json', status: 'partial', strategy: 'merge build/test improvements only after local proof and CI compatibility' },
 ]);
 
 const UPSTREAM_TO_SIRAGPT_SKILLS = Object.freeze({

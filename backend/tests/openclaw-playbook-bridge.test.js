@@ -37,7 +37,7 @@ test('loadInstructionSkills lists SKILL.md folders', () => {
 
 test('folder capability map covers major OpenClaw source areas', () => {
   const folders = new Set(FOLDER_CAPABILITY_MAP.map((entry) => entry.openclaw));
-  for (const expected of ['.agents', '.github', 'extensions', 'src', 'test', 'ui']) {
+  for (const expected of ['.agents', '.github', 'changelog/fragments', 'extensions', 'git-hooks', 'patches', 'security', 'src', 'test', 'ui', 'root-config']) {
     assert.ok(folders.has(expected), `expected folder map for ${expected}`);
   }
 });
