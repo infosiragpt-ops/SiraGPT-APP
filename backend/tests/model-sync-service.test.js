@@ -21,3 +21,48 @@ test('model sync update payload always disables existing admin models', () => {
   assert.ok(payload.lastSynced instanceof Date);
   assert.ok(payload.updatedAt instanceof Date);
 });
+
+test('default inactive guard disables existing models once and preserves later manual activation', async () => {
+  const calls = [];
+  let marker = null;
+  const service = new ModelSyncService({
+    prismaClient: {
+      aiModel: {
+        updateMany: async (payload) => {
+          calls.push(['updateMany', payload]);
+          return { count: 378 };
+        },
+      },
+      systemSettings: {
+        findUnique: async (payload) => {
+          calls.push(['findUnique', payload]);
+          return marker;
+        },
+        upsert: async (payload) => {
+          calls.push(['upsert', payload]);
+          marker = { id: payload.create.id || 'marker' };
+          return marker;
+        },
+      },
+    },
+  });
+
+  const first = await service.ensureDefaultInactiveOnce();
+  const second = await service.ensureDefaultInactiveOnce();
+
+  assert.deepEqual(first, {
+    applied: true,
+    count: 378,
+    reason: 'default_inactive_enforced',
+  });
+  assert.deepEqual(second, {
+    applied: false,
+    count: 0,
+    reason: 'already_applied',
+  });
+  assert.equal(calls.filter(([name]) => name === 'updateMany').length, 1);
+  assert.deepEqual(calls.find(([name]) => name === 'updateMany')[1], {
+    where: { isActive: true },
+    data: { isActive: false },
+  });
+});

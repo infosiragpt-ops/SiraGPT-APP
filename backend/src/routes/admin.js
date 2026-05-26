@@ -39,6 +39,7 @@ router.get('/providers', (req, res) => {
 // AI Models Management
 router.get('/models', async (req, res) => {
   try {
+    await modelSyncService.ensureDefaultInactiveOnce();
     const models = await prisma.aiModel.findMany({
       orderBy: { createdAt: 'desc' }
     });
@@ -185,10 +186,12 @@ router.post('/models/sync', async (req, res) => {
   try {
     console.log('🔄 Admin requested model sync to database');
     const result = await modelSyncService.syncModelsToDatabase();
+    const defaultInactive = await modelSyncService.ensureDefaultInactiveOnce();
     res.json({ 
       success: true, 
       message: 'Models synchronized successfully',
-      result
+      result,
+      defaultInactive
     });
   } catch (error) {
     console.error('❌ Error syncing models:', error);
@@ -203,6 +206,7 @@ router.post('/models/sync', async (req, res) => {
 // Get provider statistics
 router.get('/models/stats', async (req, res) => {
   try {
+    await modelSyncService.ensureDefaultInactiveOnce();
     const stats = await modelSyncService.getProviderStats();
     const total = await prisma.aiModel.count();
     const active = await prisma.aiModel.count({ where: { isActive: true } });

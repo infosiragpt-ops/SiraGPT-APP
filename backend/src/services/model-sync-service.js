@@ -8,7 +8,8 @@ const {
 const modelPricingService = require('./model-pricing-service');
 
 class ModelSyncService {
-  constructor() {
+  constructor(options = {}) {
+    this.prisma = options.prismaClient || prisma;
     this.cache = {
       openai: { data: null, lastFetch: 0, ttl: 3600000 }, // 1 hour cache
       gemini: { data: null, lastFetch: 0, ttl: 3600000 },
@@ -391,6 +392,44 @@ class ModelSyncService {
       isActive: false,
       updatedAt: new Date()
     };
+  }
+
+  /**
+   * One-time production guard for the admin catalog.
+   *
+   * Earlier builds seeded/provider-synced models as active. The SQL
+   * migration handles normal deploys, but this runtime guard covers hosts
+   * where migrations are skipped or delayed. It runs once, then preserves
+   * future manual admin activations.
+   */
+  async ensureDefaultInactiveOnce() {
+    const markerKey = 'ai_models_default_inactive_v1_applied';
+    const markerValue = JSON.stringify({
+      appliedAt: new Date().toISOString(),
+      reason: 'admin_models_default_inactive',
+    });
+
+    const existingMarker = await this.prisma.systemSettings.findUnique({
+      where: { key: markerKey },
+      select: { id: true },
+    });
+
+    if (existingMarker) {
+      return { applied: false, count: 0, reason: 'already_applied' };
+    }
+
+    const result = await this.prisma.aiModel.updateMany({
+      where: { isActive: true },
+      data: { isActive: false },
+    });
+
+    await this.prisma.systemSettings.upsert({
+      where: { key: markerKey },
+      update: { value: markerValue },
+      create: { key: markerKey, value: markerValue },
+    });
+
+    return { applied: true, count: result.count || 0, reason: 'default_inactive_enforced' };
   }
 
   /**
