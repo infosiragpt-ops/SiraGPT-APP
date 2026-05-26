@@ -267,6 +267,50 @@ test('POST /api/paraphrase/humanize: text > MAX_TEXT_LENGTH returns 413', async 
   }
 });
 
+test('POST /api/paraphrase/score/batch: scores array of texts + returns aggregate', async () => {
+  const { server, baseURL } = await startScoreServer();
+  try {
+    const texts = [
+      'Furthermore, the analysis demonstrates significant impact. Moreover, results indicate strong correlation. Additionally, the methodology supports the conclusion. In conclusion, the findings are robust.',
+      'I ran a few tests last week. Some passed. Others failed in weird ways I did not expect, so I went back to the logs. Turns out the cache was stale.',
+      'Hi.',
+    ];
+    const { status, body } = await postJSON(`${baseURL}/api/paraphrase/score/batch`, { texts });
+    assert.equal(status, 200);
+    assert.equal(body.results.length, 3);
+    assert.equal(body.aggregate.total, 3);
+    assert.ok(body.aggregate.likely_ai + body.aggregate.mixed + body.aggregate.likely_human === 3);
+    // Average must be a finite number
+    assert.equal(typeof body.aggregate.avgScore, 'number');
+  } finally {
+    server.close();
+  }
+});
+
+test('POST /api/paraphrase/score/batch: missing texts returns 400', async () => {
+  const { server, baseURL } = await startScoreServer();
+  try {
+    const { status, body } = await postJSON(`${baseURL}/api/paraphrase/score/batch`, {});
+    assert.equal(status, 400);
+    assert.equal(body.error, 'missing_texts');
+  } finally {
+    server.close();
+  }
+});
+
+test('POST /api/paraphrase/score/batch: > 50 texts returns 413', async () => {
+  const { server, baseURL } = await startScoreServer();
+  try {
+    const texts = Array(51).fill('Some text here.');
+    const { status, body } = await postJSON(`${baseURL}/api/paraphrase/score/batch`, { texts });
+    assert.equal(status, 413);
+    assert.equal(body.error, 'too_many_texts');
+    assert.equal(body.limit, 50);
+  } finally {
+    server.close();
+  }
+});
+
 test('POST /api/paraphrase/humanize: long input routes through humanizeChunked', async () => {
   const { server, baseURL } = await startScoreServer();
   try {

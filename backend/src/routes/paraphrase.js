@@ -126,6 +126,52 @@ router.post('/score', express.json({ limit: '512kb' }), (req, res) => {
   }
 });
 
+// POST /api/paraphrase/score/batch — score multiple texts in one call.
+// Same scorer as /score but accepts an array of texts and returns an
+// array of scored results. Useful for document-level processing where
+// each paragraph needs to be evaluated independently.
+router.post('/score/batch', express.json({ limit: '1mb' }), (req, res) => {
+  try {
+    // eslint-disable-next-line global-require
+    const { estimateAIScoreDetailed, topAITellsFound } = require('../services/paraphrase-humanizer');
+    const texts = Array.isArray(req.body?.texts) ? req.body.texts : null;
+    if (!texts) {
+      return res.status(400).json({ error: 'missing_texts', message: 'body.texts must be an array of strings' });
+    }
+    if (texts.length > 50) {
+      return res.status(413).json({ error: 'too_many_texts', limit: 50 });
+    }
+    const out = texts.map((text, i) => {
+      const s = typeof text === 'string' ? text : '';
+      if (!s) return { index: i, error: 'empty_text', score: 0 };
+      if (s.length > MAX_TEXT_LENGTH) return { index: i, error: 'text_too_long', score: 0 };
+      const detailed = estimateAIScoreDetailed(s);
+      return {
+        index: i,
+        score: detailed.score,
+        components: detailed.components,
+        topTells: topAITellsFound(s, { limit: 3 }),
+        verdict: detailed.score >= 0.5 ? 'likely_ai'
+          : detailed.score >= 0.25 ? 'mixed'
+          : 'likely_human',
+      };
+    });
+    // Quick aggregate so the UI can render "of 12 paragraphs, 3 likely AI".
+    const aggregate = {
+      total: out.length,
+      likely_ai: out.filter((r) => r.verdict === 'likely_ai').length,
+      mixed: out.filter((r) => r.verdict === 'mixed').length,
+      likely_human: out.filter((r) => r.verdict === 'likely_human').length,
+      avgScore: out.length > 0
+        ? Math.round((out.reduce((a, r) => a + (r.score || 0), 0) / out.length) * 1000) / 1000
+        : 0,
+    };
+    return res.json({ results: out, aggregate });
+  } catch (err) {
+    return res.status(500).json({ error: 'score_batch_failed', message: err && err.message });
+  }
+});
+
 // POST /api/paraphrase/humanize — local-only humanizer pass.
 // Same humanizer the paraphrase route uses at the tail of its pipeline,
 // but without the LLM rewrite. Cheaper for users who already have a
