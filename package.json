@@ -78,6 +78,7 @@
     "skill:list": "node --experimental-strip-types --no-warnings backend/src/skills/cli.ts list",
     "skill:recommend": "node --experimental-strip-types --no-warnings backend/src/skills/cli.ts recommend",
     "skill:validate": "node --experimental-strip-types --no-warnings backend/src/skills/cli.ts validate",
+    "skill:validate:agents": "node --experimental-strip-types --no-warnings backend/src/skills/cli.ts list --root .agents/skills --json",
     "dead-code": "node scripts/dead-code.js",
     "dead-code:json": "node scripts/dead-code.js --json",
     "bundle:check": "node scripts/bundle-size-check.js",

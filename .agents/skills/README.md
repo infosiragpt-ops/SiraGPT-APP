@@ -15,6 +15,15 @@ Inspirado en OpenClaw, cada skill es una guía operacional + herramientas para u
 | **security-hardening** | Auditoría de seguridad, CVEs, secrets | Antes de release | Sí (para prod) |
 | **agent-validation** | Validación del sistema de agentes, herramientas, sandbox | Antes de release | Sí (para agentes) |
 | **release-orchestrator** | Automatización de versioning, changelog, GitHub releases | Release | No |
+| **runtime-debugging** | Depuración por límites: rutas, providers, streaming, DB, deploy | Incidentes local/prod | No |
+| **message-flow-lab** | Validación de chat, streaming, adjuntos y canales | Cambios en mensajes/chat | No |
+| **secret-safety** | Revisión de secretos, logs y redacción segura | Env, providers, deploy, auth | Sí |
+| **qa-smoke-testing** | Selección de pruebas smoke enfocadas | Antes de push/deploy | Sí |
+| **bugfix-sweep** | Barrido de bugs pequeños y seguros | Mejoras autónomas | No |
+| **technical-docs** | Runbooks, docs técnicas e instrucciones de agentes | Cambios operativos | No |
+| **release-maintainer** | Push, deploy, monitoreo y verificación de producción | Releases a main/prod | Sí |
+| **agent-transcript-lite** | Resúmenes seguros de implementación | PRs, handoffs, memoria | No |
+| **dependency-upgrade-guard** | Guardrails para upgrades y lockfiles | Dependencias/build/Docker | Sí |
 
 ## Integración en Flujo
 
@@ -26,6 +35,9 @@ npm run check:all                  # Corre: lint, type, test, coverage, security
 
 # Opcional: review antes de merge
 ./.agents/skills/autoreview/scripts/autoreview --mode branch --base origin/main
+
+# Validar todas las skills de agente
+npm run skill:validate:agents
 ```
 
 ### CI Pipeline
