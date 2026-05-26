@@ -145,8 +145,11 @@ router.get('/brand', (_req, res) => {
 });
 
 // Bump whenever the /info response shape changes — clients use it
-// to invalidate cached responses.
-const SCHEMA_VERSION = 'v3.2';
+// to invalidate cached responses. v3.3 adds: featureCosts (per
+// feature), schemaVersion, apiFingerprint, humanizer.tellsByLanguage,
+// BRAND export, /plans endpoint, /digest endpoint, /estimate +
+// forecastUsage/currentPlan support.
+const SCHEMA_VERSION = 'v3.3';
 
 /**
  * Deterministic short fingerprint of the API surface. Computed from
