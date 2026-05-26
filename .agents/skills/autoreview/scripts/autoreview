@@ -1,0 +1,231 @@
+#!/usr/bin/env node
+
+/**
+ * SiraGPT AutoReview Helper
+ * Structured code review automation with quality checks
+ */
+
+const fs = require('fs');
+const path = require('path');
+const { execSync } = require('child_process');
+
+const args = process.argv.slice(2);
+const mode = args.includes('--mode') ? args[args.indexOf('--mode') + 1] : 'auto';
+const comprehensive = args.includes('--comprehensive');
+const output = args.find(a => a.startsWith('--output'))?.split('=')[1];
+
+function log(msg) {
+  console.log(`[autoreview] ${msg}`);
+}
+
+function getGitDiff() {
+  if (mode === 'local') {
+    return execSync('git diff HEAD').toString();
+  } else if (mode === 'branch') {
+    const base = args.find(a => a.startsWith('--base'))?.split('=')[1] || 'origin/main';
+    return execSync(`git diff ${base}...HEAD`).toString();
+  } else if (mode === 'commit') {
+    const commit = args.find(a => a.startsWith('--commit'))?.split('=')[1] || 'HEAD';
+    return execSync(`git show ${commit}`).toString();
+  }
+  return '';
+}
+
+function detectChanges() {
+  const diff = getGitDiff();
+  const files = new Set();
+  const addedLines = [];
+  const removedLines = [];
+
+  diff.split('\n').forEach(line => {
+    if (line.startsWith('diff --git')) {
+      const match = line.match(/b\/(.+)$/);
+      if (match) files.add(match[1]);
+    }
+    if (line.startsWith('+') && !line.startsWith('+++')) addedLines.push(line);
+    if (line.startsWith('-') && !line.startsWith('---')) removedLines.push(line);
+  });
+
+  return { files: Array.from(files), addedLines, removedLines, diff };
+}
+
+function checkSecurity(changes) {
+  const findings = [];
+  const { addedLines } = changes;
+
+  // Check for hardcoded secrets
+  addedLines.forEach((line, i) => {
+    if (/password|secret|api.?key|token|auth/i.test(line) && /=|:/.test(line)) {
+      findings.push({
+        severity: 'high',
+        message: 'Potential hardcoded secret',
+        line: i,
+        code: line
+      });
+    }
+  });
+
+  // Check for weak crypto
+  addedLines.forEach((line, i) => {
+    if (/md5|sha1|des(?![a-z])|crc/i.test(line)) {
+      findings.push({
+        severity: 'medium',
+        message: 'Weak cryptographic algorithm',
+        line: i,
+        code: line
+      });
+    }
+  });
+
+  // Check for unsafe HTML
+  addedLines.forEach((line, i) => {
+    if (/innerHTML|dangerouslySetInnerHTML|eval\(|Function\(/i.test(line)) {
+      findings.push({
+        severity: 'high',
+        message: 'Unsafe HTML/code execution',
+        line: i,
+        code: line
+      });
+    }
+  });
+
+  return findings;
+}
+
+function checkPerformance(changes) {
+  const findings = [];
+  const { addedLines } = changes;
+
+  // Check for N+1 patterns
+  addedLines.forEach((line, i) => {
+    if (/for.*await|\.map.*async|\.map.*fetch/i.test(line)) {
+      findings.push({
+        severity: 'medium',
+        message: 'Potential N+1 query pattern',
+        line: i,
+        code: line
+      });
+    }
+  });
+
+  // Check for unoptimized loops
+  if (addedLines.join('\n').match(/for.*{[\s\S]*?fetch|for.*{[\s\S]*?\.query/)) {
+    findings.push({
+      severity: 'medium',
+      message: 'Database query inside loop detected',
+      line: 0,
+      code: 'Multiple queries in loop'
+    });
+  }
+
+  return findings;
+}
+
+function checkMaintainability(changes) {
+  const findings = [];
+  const { files, addedLines } = changes;
+
+  // Check for long functions
+  files.forEach(file => {
+    try {
+      const content = fs.readFileSync(path.join(process.cwd(), file), 'utf8');
+      const functionLengths = content.match(/^(async\s+)?function|^const\s+\w+\s*=.*=>|^(export\s+)?(default\s+)?class/gm) || [];
+
+      if (functionLengths.length > 10 && addedLines.length > 50) {
+        findings.push({
+          severity: 'low',
+          message: `${file}: Complex file with multiple functions and significant changes`,
+          suggestion: 'Consider breaking into smaller modules'
+        });
+      }
+    } catch (e) {
+      // Skip if file not readable
+    }
+  });
+
+  // Check for TODO/FIXME
+  addedLines.forEach((line, i) => {
+    if (/todo|fixme|hack|bug|xxx/i.test(line)) {
+      findings.push({
+        severity: 'low',
+        message: `Unresolved comment in code`,
+        line: i,
+        code: line
+      });
+    }
+  });
+
+  return findings;
+}
+
+function runReview() {
+  log('Starting code review...');
+
+  const changes = detectChanges();
+
+  if (changes.files.length === 0) {
+    log('autoreview clean: no changes detected');
+    process.exit(0);
+  }
+
+  log(`Found ${changes.files.length} changed files`);
+
+  const allFindings = [
+    ...checkSecurity(changes),
+    ...checkPerformance(changes),
+    ...checkMaintainability(changes)
+  ];
+
+  // Filter by severity
+  const highSeverity = allFindings.filter(f => f.severity === 'high');
+  const mediumSeverity = allFindings.filter(f => f.severity === 'medium');
+  const lowSeverity = allFindings.filter(f => f.severity === 'low');
+
+  // Report
+  console.log('\n' + '='.repeat(60));
+  console.log('REVIEW FINDINGS');
+  console.log('='.repeat(60));
+
+  if (highSeverity.length > 0) {
+    console.log(`\n🔴 HIGH SEVERITY (${highSeverity.length}):`);
+    highSeverity.forEach(f => {
+      console.log(`  - ${f.message}`);
+      if (f.code) console.log(`    ${f.code.substring(0, 80)}`);
+    });
+  }
+
+  if (mediumSeverity.length > 0) {
+    console.log(`\n🟡 MEDIUM SEVERITY (${mediumSeverity.length}):`);
+    mediumSeverity.forEach(f => {
+      console.log(`  - ${f.message}`);
+      if (f.code) console.log(`    ${f.code.substring(0, 80)}`);
+    });
+  }
+
+  if (lowSeverity.length > 0 && comprehensive) {
+    console.log(`\n🟢 LOW SEVERITY (${lowSeverity.length}):`);
+    lowSeverity.forEach(f => {
+      console.log(`  - ${f.message}`);
+      if (f.suggestion) console.log(`    💡 ${f.suggestion}`);
+    });
+  }
+
+  console.log('\n' + '='.repeat(60));
+
+  // Output
+  if (output) {
+    const report = { findings: allFindings, stats: { high: highSeverity.length, medium: mediumSeverity.length, low: lowSeverity.length } };
+    fs.writeFileSync(output, JSON.stringify(report, null, 2));
+    log(`Review report written to ${output}`);
+  }
+
+  // Exit code
+  if (highSeverity.length > 0 || mediumSeverity.length > 0) {
+    process.exit(1);
+  }
+
+  log('autoreview clean: no accepted/actionable findings reported');
+  process.exit(0);
+}
+
+runReview();
