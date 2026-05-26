@@ -111,6 +111,20 @@ router.post('/estimate', express2.json({ limit: '32kb' }), (req, res) => {
   }
 });
 
+// Pricing-page data — returns every plan tier enriched with price
+// label, budget label, and the unlimited flag. Public (no auth) so
+// the marketing pricing table can render without a user session.
+router.get('/plans', (_req, res) => {
+  try {
+    // eslint-disable-next-line global-require
+    const { enrichPlanWithPricing, PLAN_PRICES_USD } = require('../services/feature-cost-estimator');
+    const plans = Object.keys(PLAN_PRICES_USD).map((name) => enrichPlanWithPricing(name));
+    res.json({ plans });
+  } catch (err) {
+    res.status(500).json({ error: 'plans_failed', message: err && err.message });
+  }
+});
+
 // Brand constants for frontend localisation / hardcoded labels (e.g. a
 // /loading screen that needs the brand name before /status responds).
 router.get('/brand', (_req, res) => {
@@ -165,6 +179,7 @@ const ENDPOINT_INVENTORY = Object.freeze([
   { method: 'GET',  path: '/api/free-ia/health',           auth: 'public', returns: '200 OK / 503 degraded' },
   { method: 'GET',  path: '/api/free-ia/info',             auth: 'public', returns: 'consolidated view' },
   { method: 'GET',  path: '/api/free-ia/digest',           auth: 'user',   returns: 'per-user quota digest (plan + fallback + hints)' },
+  { method: 'GET',  path: '/api/free-ia/plans',            auth: 'public', returns: 'enriched plan list for pricing table' },
   { method: 'POST', path: '/api/free-ia/estimate',         auth: 'public', returns: 'batch cost estimates for {items: [{feature, textLength}]}' },
   { method: 'GET',  path: '/api/free-ia/metrics',          auth: 'public', returns: 'JSON snapshot' },
   { method: 'GET',  path: '/api/free-ia/metrics/summary',  auth: 'public', returns: 'one-line digest (?format=text for plain)' },

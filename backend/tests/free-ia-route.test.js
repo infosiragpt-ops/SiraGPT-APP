@@ -386,6 +386,26 @@ test('GET /api/free-ia/info returns a consolidated single-call view', async () =
   }
 });
 
+test('GET /api/free-ia/plans returns the enriched plan list', async () => {
+  const { server, baseURL } = await startServer();
+  try {
+    const { status, body } = await fetchJSON(`${baseURL}/api/free-ia/plans`);
+    assert.equal(status, 200);
+    assert.ok(Array.isArray(body.plans));
+    assert.equal(body.plans.length, 4, 'FREE, PRO, PRO_MAX, ENTERPRISE');
+    const names = body.plans.map((p) => p.plan).sort();
+    assert.deepEqual(names, ['ENTERPRISE', 'FREE', 'PRO', 'PRO_MAX']);
+    const pro = body.plans.find((p) => p.plan === 'PRO');
+    assert.equal(pro.priceUsd, 5);
+    assert.equal(pro.priceLabel, '$5/mo');
+    const enterprise = body.plans.find((p) => p.plan === 'ENTERPRISE');
+    assert.equal(enterprise.unlimited, true);
+    assert.equal(enterprise.budgetLabel, 'Unlimited');
+  } finally {
+    server.close();
+  }
+});
+
 test('GET /api/free-ia/brand returns the constants for frontend localisation', async () => {
   const { server, baseURL } = await startServer();
   try {
