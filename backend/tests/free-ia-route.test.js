@@ -299,8 +299,8 @@ test('GET /api/free-ia/info: includes apiFingerprint (stable + 8 hex chars)', as
   }
 });
 
-test('SCHEMA_VERSION is at v3.5 (latest additive shape)', () => {
-  assert.equal(SCHEMA_VERSION, 'v3.5');
+test('SCHEMA_VERSION is at v3.6 (latest additive shape)', () => {
+  assert.equal(SCHEMA_VERSION, 'v3.6');
 });
 
 test('GET /api/free-ia/info: includes schemaVersion for client cache invalidation', async () => {

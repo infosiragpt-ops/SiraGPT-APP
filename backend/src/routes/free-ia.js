@@ -74,7 +74,18 @@ router.get('/digest', authenticateToken, (req, res) => {
   try {
     // eslint-disable-next-line global-require
     const { userQuotaDigest } = require('../services/model-quota-router');
-    res.json(userQuotaDigest(req.user));
+    const digest = userQuotaDigest(req.user);
+    // Inline the enriched plan pricing so the UI can show
+    // "$5/mo · 100,000 credits" next to the user's plan without a
+    // second round-trip to /plans. Best-effort — never block the
+    // digest if the billing helper fails.
+    try {
+      // eslint-disable-next-line global-require
+      const { enrichPlanWithPricing } = require('../services/feature-cost-estimator');
+      const planInfo = enrichPlanWithPricing(digest.plan);
+      if (planInfo) digest.planInfo = planInfo;
+    } catch { /* best-effort enrichment */ }
+    res.json(digest);
   } catch (err) {
     res.status(500).json({ error: 'digest_failed', message: err && err.message });
   }
@@ -195,7 +206,7 @@ router.get('/brand', (_req, res) => {
 // feature), schemaVersion, apiFingerprint, humanizer.tellsByLanguage,
 // BRAND export, /plans endpoint, /digest endpoint, /estimate +
 // forecastUsage/currentPlan support.
-const SCHEMA_VERSION = 'v3.5';
+const SCHEMA_VERSION = 'v3.6';
 
 /**
  * Deterministic short fingerprint of the API surface. Computed from
