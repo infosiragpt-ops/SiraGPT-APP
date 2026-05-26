@@ -78,6 +78,22 @@ test('GET /api/free-ia/status reports enabled when CEREBRAS_API_KEY is set', asy
   }
 });
 
+test('GET /api/free-ia/info: includes apiFingerprint (stable + 8 hex chars)', async () => {
+  const prevKey = process.env.CEREBRAS_API_KEY;
+  process.env.CEREBRAS_API_KEY = 'csk-fingerprint';
+  const { server, baseURL } = await startServer();
+  try {
+    const a = await fetchJSON(`${baseURL}/api/free-ia/info`);
+    const b = await fetchJSON(`${baseURL}/api/free-ia/info`);
+    assert.match(a.body.apiFingerprint, /^[0-9a-f]{8}$/, 'should be 8 hex chars');
+    assert.equal(a.body.apiFingerprint, b.body.apiFingerprint, 'fingerprint must be stable across calls');
+  } finally {
+    server.close();
+    if (prevKey === undefined) delete process.env.CEREBRAS_API_KEY;
+    else process.env.CEREBRAS_API_KEY = prevKey;
+  }
+});
+
 test('GET /api/free-ia/info: includes schemaVersion for client cache invalidation', async () => {
   const prevKey = process.env.CEREBRAS_API_KEY;
   process.env.CEREBRAS_API_KEY = 'csk-schema-version';

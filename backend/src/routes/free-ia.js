@@ -89,6 +89,27 @@ router.get('/brand', (_req, res) => {
 // to invalidate cached responses.
 const SCHEMA_VERSION = 'v3.2';
 
+/**
+ * Deterministic short fingerprint of the API surface. Computed from
+ * the endpoint inventory + schema version so a deploy that doesn't
+ * actually change the surface produces the same fingerprint, and
+ * client caches stay warm.
+ */
+function apiSurfaceFingerprint() {
+  const sorted = ENDPOINT_INVENTORY
+    .map((e) => `${e.method}:${e.path}:${e.auth}`)
+    .sort()
+    .join('|');
+  const seed = `${SCHEMA_VERSION}|${sorted}`;
+  // FNV-1a 32-bit — small, dep-free, stable across Node versions.
+  let h = 0x811c9dc5;
+  for (let i = 0; i < seed.length; i += 1) {
+    h ^= seed.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, '0');
+}
+
 // Endpoint inventory for /info autodiscovery. Kept here (not derived
 // from Express's router stack) so the metadata stays explicit and the
 // payload doesn't drift if Express changes its internals.
@@ -134,11 +155,11 @@ router.get('/info', (_req, res) => {
     summary: sum,
     humanizer: humanizerCoverage ? { tellsByLanguage: humanizerCoverage } : null,
     endpoints: ENDPOINT_INVENTORY,
-    // Static fingerprint derived from the inventory + model id; lets
-    // the UI cache /info aggressively and invalidate only when the
-    // surface actually changes (deploys with no new endpoints don't
-    // bust the cache).
+    // Static fingerprint derived from the inventory + schema version;
+    // lets the UI cache /info aggressively and invalidate only when
+    // the surface actually changes.
     schemaVersion: SCHEMA_VERSION,
+    apiFingerprint: apiSurfaceFingerprint(),
   });
 });
 
