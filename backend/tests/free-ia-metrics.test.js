@@ -82,6 +82,7 @@ test('snapshot() shape: stable top-level keys + upstream block', () => {
     'lastErrorMessage',
     'errorsByCode',
     'topErrorCodes',
+    'errorRateByCode',
   ].sort();
   assert.deepEqual(Object.keys(s.upstream).sort(), expectedUpstream);
 });
@@ -466,6 +467,18 @@ test('errorRateByCode: shares sum to ≤ 1 when capped by limit', () => {
   assert.ok(total <= 1.01, `total ${total} should be ≤ 1`);
   // Each share should be 1/3 ≈ 0.3333
   assert.ok(Math.abs(rates[0].share - 1/3) < 0.01);
+});
+
+test('snapshot.upstream.errorRateByCode reflects share-annotated top errors', () => {
+  metrics.reset();
+  for (let i = 0; i < 4; i += 1) metrics.recordUpstreamError({ code: '503' });
+  for (let i = 0; i < 1; i += 1) metrics.recordUpstreamError({ code: '404' });
+  const snap = metrics.snapshot();
+  assert.ok(Array.isArray(snap.upstream.errorRateByCode));
+  assert.equal(snap.upstream.errorRateByCode[0].code, '503');
+  assert.equal(snap.upstream.errorRateByCode[0].share, 0.8);
+  assert.equal(snap.upstream.errorRateByCode[1].code, '404');
+  assert.equal(snap.upstream.errorRateByCode[1].share, 0.2);
 });
 
 test('snapshot.upstream.errorsByCode + topErrorCodes reflect the frequency map', () => {

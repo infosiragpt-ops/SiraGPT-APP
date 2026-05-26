@@ -182,6 +182,7 @@ function snapshot() {
       lastErrorMessage: state.lastUpstreamErrorMessage,
       errorsByCode: { ...state.upstreamErrorsByCode },
       topErrorCodes: topUpstreamErrorCodes(5),
+      errorRateByCode: errorRateByCode(5),
     },
     startedAt: state.startedAt,
     lastResetAt: state.lastResetAt,
