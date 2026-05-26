@@ -104,6 +104,78 @@ test('GET /api/free-ia/status reports enabled when CEREBRAS_API_KEY is set', asy
   }
 });
 
+test('POST /api/free-ia/estimate returns per-item credit estimates', async () => {
+  const { server, baseURL } = await startServer();
+  try {
+    const payload = JSON.stringify({
+      items: [
+        { feature: 'paraphrase', textLength: 2500 },
+        { feature: 'image_generation' },
+        { feature: 'mystery_feature' }, // should be silently dropped
+      ],
+    });
+    const resp = await new Promise((resolve, reject) => {
+      const url = new URL(`${baseURL}/api/free-ia/estimate`);
+      const req = http.request({
+        method: 'POST',
+        hostname: url.hostname,
+        port: url.port,
+        path: url.pathname,
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
+      }, (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => {
+          try { resolve({ status: res.statusCode, body: JSON.parse(Buffer.concat(chunks).toString('utf8')) }); }
+          catch (err) { reject(err); }
+        });
+        res.on('error', reject);
+      });
+      req.on('error', reject);
+      req.write(payload);
+      req.end();
+    });
+    assert.equal(resp.status, 200);
+    assert.equal(resp.body.estimates.length, 2, 'mystery_feature should be dropped');
+    const paraphrase = resp.body.estimates.find((e) => e.feature === 'paraphrase');
+    const image = resp.body.estimates.find((e) => e.feature === 'image_generation');
+    assert.ok(paraphrase);
+    assert.equal(paraphrase.credits, 4, 'paraphrase 2500 chars = base 1 + 3 length cost');
+    assert.equal(image.credits, 5);
+    assert.ok(paraphrase.breakdown);
+  } finally {
+    server.close();
+  }
+});
+
+test('POST /api/free-ia/estimate: empty items list returns empty estimates', async () => {
+  const { server, baseURL } = await startServer();
+  try {
+    const payload = JSON.stringify({ items: [] });
+    const resp = await new Promise((resolve, reject) => {
+      const url = new URL(`${baseURL}/api/free-ia/estimate`);
+      const req = http.request({
+        method: 'POST',
+        hostname: url.hostname,
+        port: url.port,
+        path: url.pathname,
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
+      }, (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => resolve({ status: res.statusCode, body: JSON.parse(Buffer.concat(chunks).toString('utf8')) }));
+      });
+      req.on('error', reject);
+      req.write(payload);
+      req.end();
+    });
+    assert.equal(resp.status, 200);
+    assert.deepEqual(resp.body.estimates, []);
+  } finally {
+    server.close();
+  }
+});
+
 test('GET /api/free-ia/info: includes featureCosts breakdown per feature', async () => {
   const prevKey = process.env.CEREBRAS_API_KEY;
   process.env.CEREBRAS_API_KEY = 'csk-feature-costs';
