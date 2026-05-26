@@ -316,3 +316,22 @@ module.exports = router;
 module.exports.apiSurfaceFingerprint = apiSurfaceFingerprint;
 module.exports.SCHEMA_VERSION = SCHEMA_VERSION;
 module.exports.ENDPOINT_INVENTORY = ENDPOINT_INVENTORY;
+
+// Re-export the brand constants from the cerebras-client so callers
+// can do `const { displayName } = require('./routes/free-ia')` without
+// having to know the underlying service path. Lazy-evaluated so a
+// missing client module doesn't break the route load.
+Object.defineProperty(module.exports, 'BRAND', {
+  enumerable: true,
+  get() {
+    try {
+      // eslint-disable-next-line global-require
+      const c = require('../services/ai/cerebras-client');
+      return Object.freeze({
+        displayName: c.DEFAULT_DISPLAY_NAME,
+        provider: c.PROVIDER_NAME,
+        defaultModel: c.DEFAULT_MODEL,
+      });
+    } catch { return null; }
+  },
+});

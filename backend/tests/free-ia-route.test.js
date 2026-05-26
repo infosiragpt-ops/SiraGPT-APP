@@ -38,6 +38,16 @@ function fetchJSON(url) {
   });
 }
 
+test('exports BRAND lazily — { displayName, provider, defaultModel }', () => {
+  const { BRAND } = freeIaRoutes;
+  assert.ok(BRAND);
+  assert.equal(BRAND.provider, 'Cerebras');
+  assert.equal(typeof BRAND.displayName, 'string');
+  assert.equal(typeof BRAND.defaultModel, 'string');
+  // Frozen — caller can't mutate the brand
+  assert.ok(Object.isFrozen(BRAND));
+});
+
 test('exports apiSurfaceFingerprint + SCHEMA_VERSION + ENDPOINT_INVENTORY directly', () => {
   assert.equal(typeof apiSurfaceFingerprint, 'function');
   assert.equal(typeof SCHEMA_VERSION, 'string');
