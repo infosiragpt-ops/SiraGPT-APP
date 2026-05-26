@@ -139,10 +139,21 @@ test('estimateMonthlyCost: null/garbage input returns empty projection', () => {
   assert.deepEqual(estimateMonthlyCost({}), { totalMonthly: 0, totalMonthlyUsd: '', perFeature: {} });
 });
 
-test('getRecommendedPlan: no usage → FREE', () => {
+test('getRecommendedPlan: no usage → FREE + priceUsd=0 + monthlyUsd=""', () => {
   const r = getRecommendedPlan({});
   assert.equal(r.plan, 'FREE');
   assert.equal(r.monthlyCredits, 0);
+  assert.equal(r.priceUsd, 0);
+  assert.equal(r.monthlyUsd, '');
+});
+
+test('getRecommendedPlan: PRO recommendation ships priceUsd=5 + monthlyUsd', () => {
+  const r = getRecommendedPlan({
+    paraphrase: { calls: 100, avgTextLength: 1000 },
+  });
+  assert.equal(r.plan, 'PRO');
+  assert.equal(r.priceUsd, 5);
+  assert.match(r.monthlyUsd, /^≈/);
 });
 
 test('getRecommendedPlan: small usage → PRO', () => {

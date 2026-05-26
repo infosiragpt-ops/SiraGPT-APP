@@ -165,10 +165,18 @@ function getCostDelta(currentPlan, recommendedPlan) {
 function getRecommendedPlan(usage, { env = process.env } = {}) {
   const projection = estimateMonthlyCost(usage, { env });
   const total = projection.totalMonthly;
-  if (total <= 0) return { plan: 'FREE', monthlyCredits: 0, reason: 'no_usage_projected' };
-  if (total <= PLAN_BUDGETS.PRO) return { plan: 'PRO', monthlyCredits: total, reason: 'fits_in_PRO_budget' };
-  if (total <= PLAN_BUDGETS.PRO_MAX) return { plan: 'PRO_MAX', monthlyCredits: total, reason: 'fits_in_PRO_MAX_budget' };
-  return { plan: 'ENTERPRISE', monthlyCredits: total, reason: 'exceeds_PRO_MAX_use_unlimited' };
+  let plan = 'ENTERPRISE';
+  let reason = 'exceeds_PRO_MAX_use_unlimited';
+  if (total <= 0) { plan = 'FREE'; reason = 'no_usage_projected'; }
+  else if (total <= PLAN_BUDGETS.PRO) { plan = 'PRO'; reason = 'fits_in_PRO_budget'; }
+  else if (total <= PLAN_BUDGETS.PRO_MAX) { plan = 'PRO_MAX'; reason = 'fits_in_PRO_MAX_budget'; }
+  return {
+    plan,
+    monthlyCredits: total,
+    monthlyUsd: projection.totalMonthlyUsd,
+    priceUsd: PLAN_PRICES_USD[plan],
+    reason,
+  };
 }
 
 /**
