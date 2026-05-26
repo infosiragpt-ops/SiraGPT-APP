@@ -490,3 +490,60 @@ test('creditsForUsd ↔ creditsToUsdCents: round-trips for whole-cent amounts', 
   // $5.00 → 100k credits → 500 cents → $5.00 ✓
   assert.equal(creditsToUsdCents(creditsForUsd(5)), 500);
 });
+
+test('comparePlans: FREE → PRO is an upgrade with $5 + 100k credit delta', () => {
+  const { comparePlans } = require('../src/services/feature-cost-estimator');
+  const cmp = comparePlans('FREE', 'PRO');
+  assert.equal(cmp.direction, 'upgrade');
+  assert.equal(cmp.priceDeltaUsd, 5);
+  assert.equal(cmp.budgetDeltaCredits, 100_000);
+  assert.equal(cmp.from.plan, 'FREE');
+  assert.equal(cmp.to.plan, 'PRO');
+});
+
+test('comparePlans: PRO_MAX → PRO is a downgrade with negative deltas', () => {
+  const { comparePlans } = require('../src/services/feature-cost-estimator');
+  const cmp = comparePlans('PRO_MAX', 'PRO');
+  assert.equal(cmp.direction, 'downgrade');
+  assert.equal(cmp.priceDeltaUsd, -5);
+  assert.equal(cmp.budgetDeltaCredits, -200_000);
+});
+
+test('comparePlans: same plan is direction "same" with zero deltas', () => {
+  const { comparePlans } = require('../src/services/feature-cost-estimator');
+  const cmp = comparePlans('PRO', 'PRO');
+  assert.equal(cmp.direction, 'same');
+  assert.equal(cmp.priceDeltaUsd, 0);
+  assert.equal(cmp.budgetDeltaCredits, 0);
+});
+
+test('comparePlans: PRO → ENTERPRISE — budget delta = null when gaining unlimited', () => {
+  const { comparePlans } = require('../src/services/feature-cost-estimator');
+  const cmp = comparePlans('PRO', 'ENTERPRISE');
+  // ENTERPRISE is $2 < PRO $5, so this is technically a downgrade in price
+  assert.equal(cmp.direction, 'downgrade');
+  assert.equal(cmp.priceDeltaUsd, -3);
+  // Budget goes 100k → unlimited, so delta is null (special-cased)
+  assert.equal(cmp.budgetDeltaCredits, null);
+});
+
+test('comparePlans: ENTERPRISE → PRO — budget delta = null when losing unlimited', () => {
+  const { comparePlans } = require('../src/services/feature-cost-estimator');
+  const cmp = comparePlans('ENTERPRISE', 'PRO');
+  assert.equal(cmp.budgetDeltaCredits, null);
+});
+
+test('comparePlans: unknown plan returns null', () => {
+  const { comparePlans } = require('../src/services/feature-cost-estimator');
+  assert.equal(comparePlans('FREE', 'MYSTERY'), null);
+  assert.equal(comparePlans('MYSTERY', 'PRO'), null);
+  assert.equal(comparePlans(null, 'PRO'), null);
+});
+
+test('comparePlans: case-insensitive plan names', () => {
+  const { comparePlans } = require('../src/services/feature-cost-estimator');
+  const cmp = comparePlans('free', 'pro');
+  assert.equal(cmp.direction, 'upgrade');
+  assert.equal(cmp.from.plan, 'FREE');
+  assert.equal(cmp.to.plan, 'PRO');
+});

@@ -348,12 +348,60 @@ function pricingTable() {
     .sort((a, b) => a.priceUsd - b.priceUsd);
 }
 
+/**
+ * Structured diff between two plans — the shape upsell/downsell UIs
+ * want without having to subtract by hand. Both rows are also
+ * included so the caller has everything needed to render a side-by-
+ * side comparison.
+ *
+ *   comparePlans('PRO', 'PRO_MAX')
+ *   → { from: {...PRO row...},
+ *       to:   {...PRO_MAX row...},
+ *       priceDeltaUsd: 5,
+ *       budgetDeltaCredits: 200_000,
+ *       direction: 'upgrade' }
+ *
+ * Returns null when either plan name is unknown.
+ */
+function comparePlans(from, to) {
+  const fromRow = enrichPlanWithPricing(from);
+  const toRow = enrichPlanWithPricing(to);
+  if (!fromRow || !toRow) return null;
+  const priceDeltaUsd = toRow.priceUsd - fromRow.priceUsd;
+  // Treat unlimited (null) as Infinity for delta math, but expose
+  // it as null in the returned object so callers can render it
+  // separately ("∞" / "Unlimited" etc.).
+  const fromBudget = fromRow.budgetCredits == null ? Infinity : fromRow.budgetCredits;
+  const toBudget = toRow.budgetCredits == null ? Infinity : toRow.budgetCredits;
+  let budgetDeltaCredits;
+  if (fromBudget === Infinity && toBudget === Infinity) {
+    budgetDeltaCredits = 0;
+  } else if (toBudget === Infinity) {
+    budgetDeltaCredits = null; // gaining unlimited
+  } else if (fromBudget === Infinity) {
+    budgetDeltaCredits = null; // losing unlimited
+  } else {
+    budgetDeltaCredits = toBudget - fromBudget;
+  }
+  let direction = 'same';
+  if (priceDeltaUsd > 0) direction = 'upgrade';
+  else if (priceDeltaUsd < 0) direction = 'downgrade';
+  return {
+    from: fromRow,
+    to: toRow,
+    priceDeltaUsd,
+    budgetDeltaCredits,
+    direction,
+  };
+}
+
 module.exports = {
   estimateCost,
   estimateCostBatch,
   estimateMonthlyCost,
   monthlyBreakdownAsCsv,
   pricingTable,
+  comparePlans,
   getRecommendedPlan,
   getCostDelta,
   formatCreditsAsUsd,
