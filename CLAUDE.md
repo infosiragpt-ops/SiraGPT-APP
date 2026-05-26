@@ -450,11 +450,14 @@ to gate CI on > 5 % regression vs a baseline snapshot.
 4. **Intent attribution learning** — feed back actual response-success signals into the lexicon/rule weights to self-improve over time.
 5. **Front-end attribution panel** — UI that consumes /api/attribution-toolkit/visualize + /attribution-explainer/explain to render an explainability sidebar (UI work is out of scope for this branch per CLAUDE.md rules).
 
-## Free IA (Cerebras Llama 3.1 8B) — added 2026-05-25
+## ⚡ FlashGPT (Cerebras Llama 3.1 8B) — added 2026-05-25, rebranded to FlashGPT
 
-Per the product brief (`/Users/luis/Downloads/SIraGPT.docx`), the free
-tier and the cross-plan fallback model is "Free IA" = Llama 3.1 8B via
-Cerebras. Wiring:
+Per the product brief (`/Users/luis/Downloads/SIraGPT.docx`) the free
+tier and the cross-plan fallback model is Llama 3.1 8B via Cerebras.
+Originally shipped under the brand name "Free IA", later rebranded to
+"⚡ FlashGPT" (commit `89fa7f9b feat(free): make FlashGPT unlimited`).
+The display name can be tuned per deployment via `FREE_IA_DISPLAY_NAME`.
+Wiring:
 
 - **Adapter**: `backend/src/services/ai/cerebras-client.js` — OpenAI-
   compatible wrapper for `api.cerebras.ai/v1`. Exports
