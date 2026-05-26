@@ -17,6 +17,8 @@ title = "SiraGPT Gitleaks Config"
     '''node_modules/''',                    # Dependency fixtures/examples
     '''backend/node_modules/''',            # Dependency fixtures/examples
     '''(^|/)upstream/''',                    # OpenClaw/Hermes MIT reference trees
+    '''\.agents/openclaw-upstream/''',       # Inactive OpenClaw MIT reference snapshot
+    '''\.agents/hermes-upstream/''',         # Inactive Hermes MIT reference snapshot
   ]
 
 [[rules]]
