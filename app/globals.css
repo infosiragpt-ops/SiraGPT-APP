@@ -3237,12 +3237,20 @@ footer {
 .composer-media-controls-row {
   scrollbar-width: none;
   -ms-overflow-style: none;
+  mask-image: linear-gradient(to right, black calc(100% - 18px), transparent);
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 18px), transparent);
 }
 .composer-media-controls-row::-webkit-scrollbar {
   display: none;
 }
 .composer-media-controls-row > * {
   flex: 0 0 auto;
+}
+@media (max-width: 640px) {
+  .composer-media-controls-row {
+    margin-left: 0.625rem;
+    margin-right: 0.625rem;
+  }
 }
 .composer-context-field {
   min-height: 36px;

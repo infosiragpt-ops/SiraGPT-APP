@@ -82,7 +82,7 @@ export const iconMap: { [key: string]: IconConfig } = {
     ClaudeLogo: { type: 'png', imagePath: '/icons/claude.png', preserveColor: true },        // Official Claude/Anthropic Logo
     KimiLogo: { type: 'png', imagePath: '/icons/kimi.png', preserveColor: true },
     ZaiLogo: { type: 'png', imagePath: '/icons/z-ai.svg', preserveColor: true },
-    SeedreamLogo: { type: 'png', imagePath: '/icons/openrouter.png', preserveColor: true },
+    SeedreamLogo: { type: 'svg', component: Palette },
     QwenLogo: { type: 'svg', component: CloudSun },
     MetaLogo: { type: 'svg', component: ToyBrick },
     MistralLogo: { type: 'svg', component: Wind },
