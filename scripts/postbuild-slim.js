@@ -14,7 +14,7 @@
  *      never be in a production image.
  *
  * Backend lives at `backend/` with its own `backend/node_modules` — that
- * tree is left intact because `scripts/start-all.js` spawns it as a
+ * tree is left intact because `scripts/start-all.cjs` spawns it as a
  * separate Node process from that directory.
  */
 import fs from "node:fs";

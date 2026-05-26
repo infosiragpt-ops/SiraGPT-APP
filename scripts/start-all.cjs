@@ -57,27 +57,8 @@ function pipePrefixed(child, prefix) {
   child.stderr?.on("data", writeChunk(process.stderr));
 }
 
-function buildDbUrl() {
-  // Production containers cannot reach the dev-only 'helium' host.
-  // If DATABASE_URL still points to helium, reconstruct it from the
-  // standard Replit Postgres secrets (PGHOST, PGPORT, PGUSER, PGPASSWORD, PGDATABASE).
-  const raw = process.env.DATABASE_URL || "";
-  if (raw && !raw.includes("helium")) return raw;
-  const host = process.env.PGHOST;
-  const port = process.env.PGPORT || "5432";
-  const user = process.env.PGUSER;
-  const pass = process.env.PGPASSWORD;
-  const db = process.env.PGDATABASE || "siragpt";
-  if (!host || !user || !pass) {
-    log("start-all", "WARNING: cannot build production DATABASE_URL — missing PGHOST/PGUSER/PGPASSWORD");
-    return raw;
-  }
-  return `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(pass)}@${host}:${port}/${db}`;
-}
-
 function spawnBackend() {
   log("start-all", "spawning backend", { cwd: BACKEND_DIR, port: BACKEND_PORT });
-  const dbUrl = buildDbUrl();
   const env = {
     ...process.env,
     // Force NODE_ENV=production for the backend child unless the operator
@@ -89,8 +70,7 @@ function spawnBackend() {
     PORT: String(BACKEND_PORT),
     HOST: BACKEND_HOST,
     BIND_ADDRESS: BACKEND_HOST,
-    DATABASE_URL: dbUrl,
-    PRISMA_DATABASE_URL: dbUrl,
+    PRISMA_DATABASE_URL: process.env.PRISMA_DATABASE_URL || process.env.DATABASE_URL,
   };
   const child = spawn(process.execPath, ["scripts/start-with-migrations.js"], {
     cwd: BACKEND_DIR,

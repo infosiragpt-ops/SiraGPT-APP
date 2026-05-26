@@ -7,7 +7,7 @@
     "build": "npm run build:backend && NEXT_OUTPUT=standalone NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 NODE_OPTIONS=\"${NODE_OPTIONS:---max-old-space-size=6144}\" next build --no-lint && npm run postbuild:slim",
     "build:backend": "npm --prefix backend exec -- prisma generate --schema backend/prisma/schema.prisma",
     "postbuild:slim": "node scripts/postbuild-slim.js",
-    "start": "node scripts/start-all.js",
+    "start": "node scripts/start-all.cjs",
     "start:next-only": "next start",
     "lint": "next lint --max-warnings 50",
     "lint:count": "next lint 2>&1 | grep -c 'Warning:' || true",
@@ -260,4 +260,6 @@
     "typescript": "^5",
     "vitest": "^4.1.5"
   }
-}
+
+
+  }
