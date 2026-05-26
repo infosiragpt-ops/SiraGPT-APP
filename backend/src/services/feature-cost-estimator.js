@@ -80,6 +80,37 @@ function listFeatures() {
 }
 
 /**
+ * Returns a fully-enriched record describing a plan tier — pricing,
+ * budget, label-as-USD — useful for rendering a plan card without
+ * the UI having to compose the fields itself.
+ *
+ *   enrichPlanWithPricing('PRO')
+ *   → { plan: 'PRO',
+ *       priceUsd: 5,
+ *       priceLabel: '$5/mo',
+ *       budgetCredits: 100000,
+ *       budgetLabel: '100,000 credits',
+ *       unlimited: false }
+ *
+ * Returns null for unknown plan names.
+ */
+function enrichPlanWithPricing(plan) {
+  const key = String(plan || '').toUpperCase();
+  if (!Object.prototype.hasOwnProperty.call(PLAN_PRICES_USD, key)) return null;
+  const priceUsd = PLAN_PRICES_USD[key];
+  const budget = PLAN_BUDGETS[key];
+  const unlimited = budget === null;
+  return {
+    plan: key,
+    priceUsd,
+    priceLabel: priceUsd === 0 ? 'Free' : `$${priceUsd}/mo`,
+    budgetCredits: unlimited ? null : budget,
+    budgetLabel: unlimited ? 'Unlimited' : `${budget.toLocaleString('en-US')} credits`,
+    unlimited,
+  };
+}
+
+/**
  * Plan tier credit budgets (mirrors plan-credits-catalog values).
  * Kept local so this module doesn't have to import the plan catalog
  * and create a dependency cycle.
@@ -243,6 +274,7 @@ module.exports = {
   getRecommendedPlan,
   getCostDelta,
   formatCreditsAsUsd,
+  enrichPlanWithPricing,
   listFeatures,
   FEATURE_COSTS,
   PLAN_BUDGETS,

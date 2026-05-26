@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { estimateCost, estimateCostBatch, estimateMonthlyCost, getRecommendedPlan, getCostDelta, formatCreditsAsUsd, listFeatures, FEATURE_COSTS, PLAN_BUDGETS, PLAN_PRICES_USD, USD_PER_CREDIT } = require('../src/services/feature-cost-estimator');
+const { estimateCost, estimateCostBatch, estimateMonthlyCost, getRecommendedPlan, getCostDelta, formatCreditsAsUsd, enrichPlanWithPricing, listFeatures, FEATURE_COSTS, PLAN_BUDGETS, PLAN_PRICES_USD, USD_PER_CREDIT } = require('../src/services/feature-cost-estimator');
 
 test('listFeatures: includes paraphrase + image_* + generate', () => {
   const f = listFeatures();
@@ -234,6 +234,36 @@ test('formatCreditsAsUsd: 100k credits → "≈ $5.00" (matches PRO plan price)'
 
 test('USD_PER_CREDIT: matches PRO plan rate ($5 / 100k tokens)', () => {
   assert.equal(USD_PER_CREDIT, 5 / 100_000);
+});
+
+test('enrichPlanWithPricing: FREE → priceLabel="Free", budgetLabel="0 credits"', () => {
+  const r = enrichPlanWithPricing('FREE');
+  assert.equal(r.plan, 'FREE');
+  assert.equal(r.priceUsd, 0);
+  assert.equal(r.priceLabel, 'Free');
+  assert.equal(r.unlimited, false);
+});
+
+test('enrichPlanWithPricing: PRO → priceLabel="$5/mo", budgetLabel="100,000 credits"', () => {
+  const r = enrichPlanWithPricing('PRO');
+  assert.equal(r.plan, 'PRO');
+  assert.equal(r.priceUsd, 5);
+  assert.equal(r.priceLabel, '$5/mo');
+  assert.equal(r.budgetCredits, 100_000);
+  assert.equal(r.budgetLabel, '100,000 credits');
+});
+
+test('enrichPlanWithPricing: ENTERPRISE → unlimited=true, budgetLabel="Unlimited"', () => {
+  const r = enrichPlanWithPricing('ENTERPRISE');
+  assert.equal(r.unlimited, true);
+  assert.equal(r.budgetCredits, null);
+  assert.equal(r.budgetLabel, 'Unlimited');
+});
+
+test('enrichPlanWithPricing: case-insensitive, unknown plan returns null', () => {
+  assert.equal(enrichPlanWithPricing('pro').plan, 'PRO');
+  assert.equal(enrichPlanWithPricing('mystery'), null);
+  assert.equal(enrichPlanWithPricing(null), null);
 });
 
 test('PLAN_PRICES_USD: matches spec values ($0/$5/$10/$2)', () => {
