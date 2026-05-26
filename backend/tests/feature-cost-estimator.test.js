@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { estimateCost, estimateCostBatch, estimateMonthlyCost, listFeatures, FEATURE_COSTS } = require('../src/services/feature-cost-estimator');
+const { estimateCost, estimateCostBatch, estimateMonthlyCost, getRecommendedPlan, listFeatures, FEATURE_COSTS, PLAN_BUDGETS } = require('../src/services/feature-cost-estimator');
 
 test('listFeatures: includes paraphrase + image_* + generate', () => {
   const f = listFeatures();
@@ -123,6 +123,47 @@ test('estimateMonthlyCost: null/garbage input returns empty projection', () => {
   assert.deepEqual(estimateMonthlyCost(null), { totalMonthly: 0, perFeature: {} });
   assert.deepEqual(estimateMonthlyCost('garbage'), { totalMonthly: 0, perFeature: {} });
   assert.deepEqual(estimateMonthlyCost({}), { totalMonthly: 0, perFeature: {} });
+});
+
+test('getRecommendedPlan: no usage → FREE', () => {
+  const r = getRecommendedPlan({});
+  assert.equal(r.plan, 'FREE');
+  assert.equal(r.monthlyCredits, 0);
+});
+
+test('getRecommendedPlan: small usage → PRO', () => {
+  const r = getRecommendedPlan({
+    paraphrase: { calls: 100, avgTextLength: 1000 },
+  });
+  // 100 × (1+1) = 200 → fits in PRO (100k)
+  assert.equal(r.plan, 'PRO');
+});
+
+test('getRecommendedPlan: medium usage → PRO_MAX', () => {
+  // 50_000 calls × 3 = 150_000 credits → exceeds PRO (100k), fits PRO_MAX (300k)
+  const r = getRecommendedPlan({
+    paraphrase: { calls: 50000, avgTextLength: 2000 },
+  });
+  assert.equal(r.plan, 'PRO_MAX');
+});
+
+test('getRecommendedPlan: huge usage → ENTERPRISE', () => {
+  // 100_000 calls × 11 = 1_100_000 credits → exceeds PRO_MAX (300k)
+  const r = getRecommendedPlan({
+    paraphrase: { calls: 100000, avgTextLength: 10000 },
+  });
+  assert.equal(r.plan, 'ENTERPRISE');
+});
+
+test('PLAN_BUDGETS: matches the values plan-credits-catalog grants', () => {
+  // FREE has no premium tokens
+  assert.equal(PLAN_BUDGETS.FREE, 0);
+  // PRO grants 100k premium tokens per the spec
+  assert.equal(PLAN_BUDGETS.PRO, 100_000);
+  // PRO_MAX grants 300k
+  assert.equal(PLAN_BUDGETS.PRO_MAX, 300_000);
+  // ENTERPRISE is unlimited (null)
+  assert.equal(PLAN_BUDGETS.ENTERPRISE, null);
 });
 
 test('estimateMonthlyCost: drops unknown features silently', () => {

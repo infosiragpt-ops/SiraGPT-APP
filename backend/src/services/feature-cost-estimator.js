@@ -80,6 +80,37 @@ function listFeatures() {
 }
 
 /**
+ * Plan tier credit budgets (mirrors plan-credits-catalog values).
+ * Kept local so this module doesn't have to import the plan catalog
+ * and create a dependency cycle.
+ */
+const PLAN_BUDGETS = Object.freeze({
+  FREE: 0,           // FREE has no premium budget — falls back to FlashGPT
+  PRO: 100_000,
+  PRO_MAX: 300_000,
+  ENTERPRISE: null,  // unlimited
+});
+
+/**
+ * Recommend the cheapest plan that covers a monthly usage forecast.
+ * Compared against the premium token grant per tier.
+ *
+ *   usage      → cheapest plan covering totalMonthly credits
+ *   0 calls    → FREE (no premium needed)
+ *   ≤ 100k     → PRO
+ *   ≤ 300k     → PRO_MAX
+ *   > 300k     → ENTERPRISE (unlimited)
+ */
+function getRecommendedPlan(usage, { env = process.env } = {}) {
+  const projection = estimateMonthlyCost(usage, { env });
+  const total = projection.totalMonthly;
+  if (total <= 0) return { plan: 'FREE', monthlyCredits: 0, reason: 'no_usage_projected' };
+  if (total <= PLAN_BUDGETS.PRO) return { plan: 'PRO', monthlyCredits: total, reason: 'fits_in_PRO_budget' };
+  if (total <= PLAN_BUDGETS.PRO_MAX) return { plan: 'PRO_MAX', monthlyCredits: total, reason: 'fits_in_PRO_MAX_budget' };
+  return { plan: 'ENTERPRISE', monthlyCredits: total, reason: 'exceeds_PRO_MAX_use_unlimited' };
+}
+
+/**
  * Project monthly credit spend given a usage forecast. Lets the
  * pricing page show "at your current pace you'd spend N credits per
  * month".
@@ -128,6 +159,8 @@ module.exports = {
   estimateCost,
   estimateCostBatch,
   estimateMonthlyCost,
+  getRecommendedPlan,
   listFeatures,
   FEATURE_COSTS,
+  PLAN_BUDGETS,
 };
