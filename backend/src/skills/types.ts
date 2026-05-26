@@ -30,6 +30,9 @@ export const SkillManifestSchema = z.object({
   tools: z.array(SkillToolSchema).default([]),
   scopes: z.array(SkillScopeSchema).default([]),
   entry: z.string().default('index'),
+  source: z.enum(['module', 'instructions']).default('module'),
+  metadata: z.record(z.unknown()).default({}),
+  instructions: z.string().optional(),
 });
 
 export type SkillManifest = z.infer<typeof SkillManifestSchema>;
@@ -79,4 +82,10 @@ export interface SkillLoadIssue {
   dir: string;
   reason: string;
   detail?: unknown;
+}
+
+export interface SkillRecommendation {
+  skill: LoadedSkill;
+  score: number;
+  matchedTerms: string[];
 }

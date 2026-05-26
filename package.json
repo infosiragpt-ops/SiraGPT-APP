@@ -76,6 +76,7 @@
     "sbom:generate": "node scripts/validate-supply-chain.js --sbom-only",
     "quality:100": "node scripts/quality-100-checks.js",
     "skill:list": "node --experimental-strip-types --no-warnings backend/src/skills/cli.ts list",
+    "skill:recommend": "node --experimental-strip-types --no-warnings backend/src/skills/cli.ts recommend",
     "skill:validate": "node --experimental-strip-types --no-warnings backend/src/skills/cli.ts validate",
     "dead-code": "node scripts/dead-code.js",
     "dead-code:json": "node scripts/dead-code.js --json",

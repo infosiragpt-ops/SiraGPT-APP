@@ -52,6 +52,29 @@ test('semantic router routes web building to webdev without UI heuristics', () =
   assert.ok(analysis.confidence >= 0.55);
 });
 
+test('semantic router maps repository delivery requests to CI-watch skill without app scaffolding', () => {
+  const analysis = buildSemanticIntentAnalysis({
+    rawUserRequest: 'toma github.com/openclaw/openclaw, reescribe la idea sin copiar, no cambies la interfaz, haz commit, sube a main y vigila CI verde',
+  });
+
+  const selected = analysis.skill_plan.selected_skills.map((skill) => skill.id);
+
+  assert.equal(analysis.intent, 'agent_task');
+  assert.equal(analysis.structured_intent.intent_primary, 'code_generation');
+  assert.ok(analysis.structured_intent.intent_secondary.includes('repo_delivery'));
+  assert.ok(analysis.structured_intent.intent_secondary.includes('ci_watch'));
+  assert.ok(analysis.structured_intent.intent_secondary.includes('preserve_ui_scope'));
+  assert.ok(analysis.structured_intent.intent_secondary.includes('source_rewrite_not_copy'));
+  assert.ok(selected.includes('repo_delivery_ci'));
+  assert.equal(selected.includes('app_builder'), false);
+  for (const tool of ['git.clone', 'repo.inspect', 'test.run', 'github.actions.monitor']) {
+    assert.ok(analysis.skill_plan.required_tools.includes(tool), `missing ${tool}`);
+  }
+  assert.ok(analysis.skill_plan.quality_rules.includes('watch_newest_main_ci'));
+  assert.ok(analysis.skill_plan.quality_rules.includes('no_unrelated_diffs'));
+  assert.ok(analysis.product_os_plan_validation.ok);
+});
+
 test('semantic router keeps scholarly source requests in grounded chat when no file is requested', () => {
   const analysis = buildSemanticIntentAnalysis({
     rawUserRequest: 'dame 5 artículos científicos sobre estrategias multisensoriales sin ningún formato',

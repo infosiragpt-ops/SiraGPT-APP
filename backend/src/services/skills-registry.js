@@ -300,6 +300,25 @@ function bootBuiltins() {
       tags: ['code', 'tests', 'generation'],
     },
     {
+      id: 'repo_delivery_ci',
+      label: 'Repository Delivery + CI Watch',
+      category: 'code',
+      description: 'Adapt an existing repository from external references without copying, preserve protected UI surfaces when requested, run validation, prepare a minimal diff, push to the target branch, and watch the newest GitHub Actions run until green.',
+      tools: ['git_clone', 'repo_inspect', 'static_check', 'secret_scan', 'dependency_audit', 'test_runner', 'github_actions_monitor'],
+      prerequisites: ['query_text'],
+      sideEffects: ['local_workspace_changes', 'remote_git_push', 'outbound_http_requests'],
+      idempotent: false,
+      clearance: 'enterprise',
+      outputKind: 'pair',
+      tags: ['repo', 'github', 'ci', 'main', 'actions', 'no-ui', 'rewrite-not-copy'],
+      examples: [
+        {
+          when: 'user provides a GitHub repo and asks to push to main only after green checks',
+          call: 'inspect repo, implement independently, run tests, push, monitor newest main workflow',
+        },
+      ],
+    },
+    {
       id: 'data_analysis_viz',
       label: 'Data Analysis with Visualization',
       category: 'data',

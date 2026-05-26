@@ -127,6 +127,26 @@ const SKILLS = [
     risk_level: "low",
   },
   {
+    id: "repo_delivery_ci",
+    name: "Repository Delivery + CI Watch",
+    description: "Opera sobre repositorios existentes: inspección, adaptación independiente, pruebas, diff mínimo, push profesional y vigilancia del SHA más nuevo hasta CI verde.",
+    intents: ["code_generation", "agent_long_running_task"],
+    required_tools: ["git.clone", "repo.inspect", "code-review.analyze", "secret-scanner.scan", "sbom.generate", "dependency-audit.run", "test.run", "github.actions.monitor"],
+    required_agents: ["intent-compiler", "constraint-extractor", "planner", "code-architect", "backend-engineer", "security-reviewer", "qa-regression", "release-manager", "telemetry"],
+    output_formats: ["patch", "markdown_report"],
+    quality_rules: [
+      "preserve_existing_ui_when_requested",
+      "source_rewrite_not_copy",
+      "no_unrelated_diffs",
+      "tests_before_push",
+      "watch_newest_main_ci",
+      "report_final_sha",
+    ],
+    model_profile: { complexity: "high", requires_code: true, requires_reasoning: true, requires_tools: true, max_cost: "medium" },
+    min_plan: "FREE",
+    risk_level: "medium",
+  },
+  {
     id: "app_builder",
     name: "App Builder (full-stack)",
     description: "Genera repos Next.js + FastAPI/NestJS con auth, RBAC, tests, Docker y CI/CD.",
@@ -396,6 +416,10 @@ function resolveSkillsForDecision(decision, { userPlan = "ENTERPRISE", maxSkills
         reasons.push(`secondary_fit:${secondaryScore}`);
       }
 
+      if (shouldSkipSkillForDecision(skill, decision, secondary, finalOutput)) {
+        return { skill, score: 0, reasons: ["skipped_repo_delivery_mismatch"] };
+      }
+
       const genericOverlap = skill.required_tools
         .filter(t => requestTools.has(t) && GENERIC_ARTIFACT_TOOLS.has(t)).length;
       if (genericOverlap > 0 && (hasPrimaryFit || hasOutputFit || secondaryScore > 0)) {
@@ -529,10 +553,19 @@ function matchesOutputFormat(skill, finalOutput) {
   });
 }
 
+function shouldSkipSkillForDecision(skill, decision, secondary, finalOutput) {
+  if (skill.id !== "app_builder") return false;
+  if (decision?.intent_primary !== "code_generation") return false;
+  if (!secondary.has("repo_delivery")) return false;
+  if (secondary.has("web_app_build")) return false;
+  return !String(finalOutput || "").toLowerCase().includes("web_app");
+}
+
 function scoreSecondaryFit(skill, secondary) {
   if (!secondary || secondary.size === 0) return 0;
   let score = 0;
   const id = skill.id;
+  if (id === "repo_delivery_ci" && hasAny(secondary, ["repo_delivery", "ci_watch", "github_actions", "main_branch_delivery", "source_rewrite_not_copy"])) score += 12;
   if (id === "citation_checker" && hasAny(secondary, ["citation_grounding", "apa7_citation", "doi_validation", "scientific_research"])) score += 8;
   if (id === "web_research" && hasAny(secondary, ["multi_provider_search", "scientific_research", "doi_validation", "web_research"])) score += 7;
   if (id === "academic_report" && hasAny(secondary, ["apa7_citation", "docx_export", "scientific_research"])) score += 6;

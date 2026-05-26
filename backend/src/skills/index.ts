@@ -17,5 +17,6 @@ export type {
   SkillToolHandler,
   LoadedSkill,
   SkillLoadIssue,
+  SkillRecommendation,
 } from './types.ts';
 export type { SkillRegistryOptions, ReloadResult } from './registry.ts';

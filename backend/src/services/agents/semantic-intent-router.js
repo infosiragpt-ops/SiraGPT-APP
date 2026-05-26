@@ -397,6 +397,18 @@ function productSecondaryIntents(contract, rawDecision) {
   if (contract?.required_extension === '.pptx') items.push('slide_layout');
   if (contract?.required_extension === '.html') items.push('web_app_build');
   if (contract?.required_extension === '.svg') items.push('svg_artifact', 'format_sovereignty');
+  if (/\b(?:github\.com\/[\w.-]+\/[\w.-]+|git\s+clone|clona(?:r|me)?|clone(?:ar)?|fork|pull\s+request|pr\b|commit|push|sube(?:r)?\s+(?:a\s+)?(?:github|main)|repositorio|repo|checkout|branch|rama|main|ci\s+(?:verde|green)|actions?)\b/i.test(raw)) {
+    items.push('repo_delivery', 'github_actions', 'ci_watch');
+  }
+  if (/\b(?:main|rama\s+principal|branch\s+main|estatus\s+verde|ci\s+(?:verde|green)|actions?)\b/i.test(raw)) {
+    items.push('main_branch_delivery');
+  }
+  if (/\b(?:sin\s+tocar\s+(?:la\s+)?ui|sin\s+cambiar\s+(?:la\s+)?interfaz|no\s+(?:cambies?|muevas?)\s+(?:la\s+)?interfaz|preserva\s+(?:la\s+)?interfaz)\b/i.test(raw)) {
+    items.push('preserve_ui_scope');
+  }
+  if (/\b(?:no\s+copies?|sin\s+copiar|reescrib(?:e|ir|elo|elo)?|rewrite|adapta(?:r|lo)?\s+sin\s+copiar)\b/i.test(raw)) {
+    items.push('source_rewrite_not_copy');
+  }
   return [...new Set(items)].slice(0, 12);
 }
 
@@ -499,6 +511,9 @@ function semanticSecondaryIntents(contract, structuredIntent) {
   if (contract?.required_extension === '.html') items.push('html_export');
   if (contract?.required_extension === '.svg') items.push('svg_export');
   if (/\bdoi\b/i.test(raw)) items.push('doi_validation');
+  if (/\b(?:github\.com\/[\w.-]+\/[\w.-]+|git\s+clone|clona(?:r|me)?|clone(?:ar)?|fork|pull\s+request|pr\b|commit|push|sube(?:r)?\s+(?:a\s+)?(?:github|main)|repositorio|repo|checkout|branch|rama|main|ci\s+(?:verde|green)|actions?)\b/i.test(raw)) items.push('repo_delivery', 'ci_watch');
+  if (/\b(?:sin\s+tocar\s+(?:la\s+)?ui|sin\s+cambiar\s+(?:la\s+)?interfaz|no\s+(?:cambies?|muevas?)\s+(?:la\s+)?interfaz)\b/i.test(raw)) items.push('preserve_ui_scope');
+  if (/\b(?:no\s+copies?|sin\s+copiar|reescrib(?:e|ir|elo|elo)?|rewrite|adapta(?:r|lo)?\s+sin\s+copiar)\b/i.test(raw)) items.push('source_rewrite_not_copy');
   if (contract?.grounding_required && contract?.pipeline === 'RAGDocumentUnderstandingPipeline') items.push('private_document_grounding');
   return [...new Set(items)].slice(0, 16);
 }

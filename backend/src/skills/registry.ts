@@ -11,10 +11,13 @@ import {
   type SkillManifest,
   type SkillModule,
   type SkillLogger,
+  type SkillRecommendation,
 } from './types.ts';
 import { buildSkillContext } from './sandbox.ts';
 
 const ENTRY_CANDIDATES = ['index.ts', 'index.mjs', 'index.js', 'index.cjs'];
+const INSTRUCTION_ENTRY = '__instructions__';
+const SKILL_MD = 'SKILL.md';
 
 export interface SkillRegistryOptions {
   rootDir: string;
@@ -90,6 +93,37 @@ export class SkillRegistry extends EventEmitter {
   }
 
   /**
+   * Rank loaded skills for a natural-language request.
+   *
+   * Instruction-only skills are useful only if the agent can discover when to
+   * load them. This lightweight scorer keeps that decision local and
+   * deterministic: it compares request terms against the skill name,
+   * description, metadata, tool descriptions, and SKILL.md body.
+   */
+  recommend(input: string, limit = 5): SkillRecommendation[] {
+    const terms = tokenize(input);
+    if (terms.length === 0) return [];
+
+    const ranked: SkillRecommendation[] = [];
+    for (const skill of this.list()) {
+      const haystack = buildSearchText(skill.manifest);
+      let score = 0;
+      const matchedTerms: string[] = [];
+      for (const term of terms) {
+        if (!haystack.includes(term)) continue;
+        matchedTerms.push(term);
+        score += skill.manifest.name.includes(term) ? 5 : 1;
+        if (skill.manifest.description.toLowerCase().includes(term)) score += 2;
+      }
+      if (score > 0) ranked.push({ skill, score, matchedTerms });
+    }
+
+    return ranked
+      .sort((a, b) => b.score - a.score || a.skill.manifest.name.localeCompare(b.skill.manifest.name))
+      .slice(0, Math.max(0, limit));
+  }
+
+  /**
    * Discover every skill folder under rootDir and load it. Existing skills
    * are disposed first so callers can use `load()` as a full reload.
    */
@@ -142,9 +176,12 @@ export class SkillRegistry extends EventEmitter {
    */
   async loadOne(dir: string): Promise<InternalLoaded> {
     const manifest = await readManifest(dir);
-    const entryPath = await resolveEntry(dir, manifest.entry);
-    const mod = await importFresh(entryPath, this.importer);
-    const skillModule = normalizeModule(mod, manifest.name);
+    const skillModule = manifest.source === 'instructions'
+      ? buildInstructionModule(manifest)
+      : normalizeModule(
+          await importFresh(await resolveEntry(dir, manifest.entry), this.importer),
+          manifest.name,
+        );
 
     const existing = this.skills.get(manifest.name);
     if (existing && existing.dir !== dir) {
@@ -270,7 +307,7 @@ export async function readManifest(dir: string): Promise<SkillManifest> {
     raw = await fsp.readFile(manifestPath, 'utf8');
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-      throw new Error(`missing skill.json in ${dir}`);
+      return readMarkdownSkill(dir);
     }
     throw err;
   }
@@ -291,6 +328,64 @@ export async function readManifest(dir: string): Promise<SkillManifest> {
   if (result.data.name !== folder) {
     throw new Error(
       `skill.json name "${result.data.name}" does not match folder "${folder}"`,
+    );
+  }
+  return result.data;
+}
+
+async function readMarkdownSkill(dir: string): Promise<SkillManifest> {
+  const skillPath = path.join(dir, SKILL_MD);
+  let raw: string;
+  try {
+    raw = await fsp.readFile(skillPath, 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new Error(`missing skill.json or ${SKILL_MD} in ${dir}`);
+    }
+    throw err;
+  }
+
+  const folder = path.basename(dir);
+  const parsed = parseSkillMarkdown(raw);
+  const name = readString(parsed.frontmatter.name) ?? folder;
+  const description =
+    readString(parsed.frontmatter.description) ??
+    firstUsefulLine(parsed.body) ??
+    `Instruction skill ${name}`;
+  const version = readString(parsed.frontmatter.version) ?? '0.1.0';
+
+  const manifestInput = {
+    name,
+    version,
+    description,
+    triggers: [{ on: 'message' }],
+    tools: [
+      {
+        name: 'read_instructions',
+        description: `Return the ${name} operating instructions.`,
+        paramsSchema: {
+          type: 'object',
+          properties: {},
+          additionalProperties: false,
+        },
+      },
+    ],
+    scopes: [],
+    entry: INSTRUCTION_ENTRY,
+    source: 'instructions',
+    metadata: parsed.frontmatter,
+    instructions: parsed.body.trim(),
+  };
+  const result = SkillManifestSchema.safeParse(manifestInput);
+  if (!result.success) {
+    const flat = result.error.issues
+      .map((i) => `${i.path.join('.') || '<root>'}: ${i.message}`)
+      .join('; ');
+    throw new Error(`${SKILL_MD} in ${dir} failed validation: ${flat}`);
+  }
+  if (result.data.name !== folder) {
+    throw new Error(
+      `${SKILL_MD} name "${result.data.name}" does not match folder "${folder}"`,
     );
   }
   return result.data;
@@ -354,4 +449,119 @@ function normalizeModule(mod: unknown, name: string): SkillModule {
     out.tools = tools as SkillModule['tools'];
   }
   return out;
+}
+
+function buildInstructionModule(manifest: SkillManifest): SkillModule {
+  return {
+    tools: {
+      read_instructions() {
+        return {
+          name: manifest.name,
+          version: manifest.version,
+          description: manifest.description,
+          metadata: manifest.metadata,
+          instructions: manifest.instructions ?? '',
+        };
+      },
+    },
+  };
+}
+
+function parseSkillMarkdown(raw: string): {
+  frontmatter: Record<string, unknown>;
+  body: string;
+} {
+  const normalized = raw.replace(/^\uFEFF/, '');
+  if (!normalized.startsWith('---\n') && !normalized.startsWith('---\r\n')) {
+    return { frontmatter: {}, body: normalized };
+  }
+
+  const newline = normalized.startsWith('---\r\n') ? '\r\n' : '\n';
+  const endMarker = `${newline}---${newline}`;
+  const end = normalized.indexOf(endMarker, 3);
+  if (end === -1) return { frontmatter: {}, body: normalized };
+
+  const fmRaw = normalized.slice(3 + newline.length, end);
+  const body = normalized.slice(end + endMarker.length);
+  return { frontmatter: parseSimpleFrontmatter(fmRaw), body };
+}
+
+function parseSimpleFrontmatter(raw: string): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  let currentObject: Record<string, unknown> | null = null;
+
+  for (const line of raw.split(/\r?\n/)) {
+    if (!line.trim() || line.trimStart().startsWith('#')) continue;
+    const nested = /^ {2,}([A-Za-z0-9_-]+):\s*(.*)$/.exec(line);
+    if (nested && currentObject) {
+      currentObject[nested[1]] = parseFrontmatterValue(nested[2]);
+      continue;
+    }
+
+    currentObject = null;
+    const top = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(line);
+    if (!top) continue;
+    const [, key, value] = top;
+    if (value === '') {
+      const obj: Record<string, unknown> = {};
+      out[key] = obj;
+      currentObject = obj;
+    } else {
+      out[key] = parseFrontmatterValue(value);
+    }
+  }
+  return out;
+}
+
+function parseFrontmatterValue(value: string): unknown {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1);
+  }
+  if (trimmed === 'true') return true;
+  if (trimmed === 'false') return false;
+  if (/^-?\d+(?:\.\d+)?$/.test(trimmed)) return Number(trimmed);
+  if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+    return trimmed
+      .slice(1, -1)
+      .split(',')
+      .map((part) => parseFrontmatterValue(part))
+      .filter((part) => part !== '');
+  }
+  return trimmed;
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function firstUsefulLine(markdown: string): string | undefined {
+  for (const line of markdown.split(/\r?\n/)) {
+    const trimmed = line.replace(/^#+\s*/, '').trim();
+    if (trimmed) return trimmed.slice(0, 1000);
+  }
+  return undefined;
+}
+
+function tokenize(input: string): string[] {
+  const stop = new Set(['the', 'and', 'for', 'with', 'para', 'por', 'con', 'que', 'una', 'uno', 'los', 'las']);
+  return [...new Set(input.toLowerCase().match(/[a-z0-9_áéíóúñ-]{3,}/gi) ?? [])]
+    .map((term) => term.normalize('NFKD').replace(/[\u0300-\u036f]/g, ''))
+    .filter((term) => !stop.has(term));
+}
+
+function buildSearchText(manifest: SkillManifest): string {
+  const text = [
+    manifest.name,
+    manifest.description,
+    manifest.instructions ?? '',
+    JSON.stringify(manifest.metadata ?? {}),
+    ...manifest.tools.map((tool) => `${tool.name} ${tool.description}`),
+    ...manifest.triggers.map((trigger) => `${trigger.on} ${trigger.pattern ?? ''} ${trigger.event ?? ''}`),
+  ].join('\n');
+  return text.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
 }

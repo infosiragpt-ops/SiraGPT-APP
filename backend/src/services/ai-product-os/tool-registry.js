@@ -216,6 +216,16 @@ const TOOLS = [
 
   // ── Code / build ──────────────────────────────────────────────────
   {
+    id: "scaffolder.preview", name: "Repository change preview",
+    description: "Build a non-mutating repo change plan with likely files, gates and rollback notes before editing.",
+    category: "code",
+    input_schema: { type: "object", required: ["goal"], properties: { goal: { type: "string" }, repo: { type: "string" } } },
+    output_schema: { type: "object" },
+    scopes: [], side_effect_level: "read", requires_confirmation: false,
+    sandbox_required: false, audit_policy: "always", data_classes: ["internal"],
+    recommended_for: ["code_generation", "web_app_build", "agent_long_running_task"],
+  },
+  {
     id: "code-review.analyze", name: "Code reviewer",
     description: "Cyclomatic complexity, nesting, dangerous calls, secret scan.",
     category: "code",
@@ -294,6 +304,46 @@ const TOOLS = [
     scopes: [], side_effect_level: "read", requires_confirmation: false,
     sandbox_required: false, audit_policy: "always", data_classes: ["internal"],
     recommended_for: ["web_app_build"],
+  },
+  {
+    id: "git.clone", name: "Git clone/fetch",
+    description: "Clone or fetch a referenced repository into an isolated workspace for read/patch work.",
+    category: "code",
+    input_schema: { type: "object", required: ["repository"], properties: { repository: { type: "string" }, ref: { type: "string" } } },
+    output_schema: { type: "object" },
+    scopes: ["repo.read", "network.read"], side_effect_level: "write", requires_confirmation: false,
+    sandbox_required: true, audit_policy: "always", data_classes: ["public", "internal"],
+    recommended_for: ["code_generation", "agent_long_running_task"],
+  },
+  {
+    id: "repo.inspect", name: "Repository inspector",
+    description: "Inspect project layout, ownership boundaries, dirty state and test surfaces before proposing a patch.",
+    category: "code",
+    input_schema: { type: "object", required: ["path"], properties: { path: { type: "string" }, focus: { type: "string" } } },
+    output_schema: { type: "object" },
+    scopes: ["repo.read"], side_effect_level: "read", requires_confirmation: false,
+    sandbox_required: true, audit_policy: "always", data_classes: ["internal"],
+    recommended_for: ["code_generation", "agent_long_running_task", "web_app_build"],
+  },
+  {
+    id: "test.run", name: "Test runner",
+    description: "Run targeted test, lint, type-check or build gates and return structured pass/fail evidence.",
+    category: "code",
+    input_schema: { type: "object", required: ["command"], properties: { command: { type: "string" }, timeoutMs: { type: "integer" } } },
+    output_schema: { type: "object" },
+    scopes: ["process.exec"], side_effect_level: "write", requires_confirmation: false,
+    sandbox_required: true, audit_policy: "always", data_classes: ["internal"],
+    recommended_for: ["code_generation", "web_app_build", "agent_long_running_task"],
+  },
+  {
+    id: "github.actions.monitor", name: "GitHub Actions monitor",
+    description: "Watch the newest workflow run for a target branch/SHA and report whether it reached a green terminal state.",
+    category: "code",
+    input_schema: { type: "object", required: ["repository", "branch"], properties: { repository: { type: "string" }, branch: { type: "string" }, sha: { type: "string" } } },
+    output_schema: { type: "object" },
+    scopes: ["github.read"], side_effect_level: "external", requires_confirmation: false,
+    sandbox_required: false, audit_policy: "always", data_classes: ["public", "internal"],
+    recommended_for: ["code_generation", "agent_long_running_task"],
   },
 
   // ── Design ────────────────────────────────────────────────────────
