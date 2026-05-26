@@ -134,9 +134,9 @@ test('estimateMonthlyCost: zero calls / missing usage returns 0 + skip', () => {
 });
 
 test('estimateMonthlyCost: null/garbage input returns empty projection', () => {
-  assert.deepEqual(estimateMonthlyCost(null), { totalMonthly: 0, perFeature: {} });
-  assert.deepEqual(estimateMonthlyCost('garbage'), { totalMonthly: 0, perFeature: {} });
-  assert.deepEqual(estimateMonthlyCost({}), { totalMonthly: 0, perFeature: {} });
+  assert.deepEqual(estimateMonthlyCost(null), { totalMonthly: 0, totalMonthlyUsd: '', perFeature: {} });
+  assert.deepEqual(estimateMonthlyCost('garbage'), { totalMonthly: 0, totalMonthlyUsd: '', perFeature: {} });
+  assert.deepEqual(estimateMonthlyCost({}), { totalMonthly: 0, totalMonthlyUsd: '', perFeature: {} });
 });
 
 test('getRecommendedPlan: no usage → FREE', () => {
@@ -241,6 +241,22 @@ test('PLAN_BUDGETS: matches the values plan-credits-catalog grants', () => {
   assert.equal(PLAN_BUDGETS.PRO_MAX, 300_000);
   // ENTERPRISE is unlimited (null)
   assert.equal(PLAN_BUDGETS.ENTERPRISE, null);
+});
+
+test('estimateMonthlyCost: includes totalMonthlyUsd label + per-feature monthlyUsd', () => {
+  const r = estimateMonthlyCost({
+    paraphrase: { calls: 100, avgTextLength: 1000 },
+  });
+  // 100 × 2 = 200 credits → $0.01
+  assert.equal(r.totalMonthly, 200);
+  assert.equal(r.totalMonthlyUsd, '≈ $0.01');
+  assert.equal(r.perFeature.paraphrase.monthlyUsd, '≈ $0.01');
+});
+
+test('estimateMonthlyCost: zero usage returns totalMonthlyUsd=""', () => {
+  const r = estimateMonthlyCost({});
+  assert.equal(r.totalMonthly, 0);
+  assert.equal(r.totalMonthlyUsd, '');
 });
 
 test('estimateMonthlyCost: drops unknown features silently', () => {

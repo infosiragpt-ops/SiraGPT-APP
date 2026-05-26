@@ -180,7 +180,7 @@ function getRecommendedPlan(usage, { env = process.env } = {}) {
  * @returns {{ totalMonthly: number, perFeature: object }}
  */
 function estimateMonthlyCost(usage, { env = process.env } = {}) {
-  if (!usage || typeof usage !== 'object') return { totalMonthly: 0, perFeature: {} };
+  if (!usage || typeof usage !== 'object') return { totalMonthly: 0, totalMonthlyUsd: '', perFeature: {} };
   let total = 0;
   const perFeature = {};
   for (const [feature, profile] of Object.entries(usage)) {
@@ -191,10 +191,15 @@ function estimateMonthlyCost(usage, { env = process.env } = {}) {
     const est = estimateCost(feature, { textLength: avgLen, env });
     if (!est) continue;
     const monthly = est.credits * calls;
-    perFeature[feature] = { calls, perCallCredits: est.credits, monthlyCredits: monthly };
+    perFeature[feature] = {
+      calls,
+      perCallCredits: est.credits,
+      monthlyCredits: monthly,
+      monthlyUsd: formatCreditsAsUsd(monthly),
+    };
     total += monthly;
   }
-  return { totalMonthly: total, perFeature };
+  return { totalMonthly: total, totalMonthlyUsd: formatCreditsAsUsd(total), perFeature };
 }
 
 /**
