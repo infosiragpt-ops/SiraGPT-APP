@@ -202,7 +202,18 @@ function getGoogleServicesCallbackURL(env = process.env) {
 }
 
 function getFrontendUrl(env = process.env) {
-  return stripTrailingSlash(env.FRONTEND_URL || env.PUBLIC_FRONTEND_URL || env.NEXT_PUBLIC_URL || 'http://localhost:3000');
+  // Prefer an explicit FRONTEND_URL when set. Otherwise, fall back to the
+  // public Replit domain (preferring a custom domain like iliagpt.com over
+  // the throwaway *.replit.app preview) so post-login redirects land on
+  // the host the user actually visited instead of localhost or a stale
+  // hard-coded default.
+  const explicit = stripTrailingSlash(
+    env.FRONTEND_URL || env.PUBLIC_FRONTEND_URL || env.NEXT_PUBLIC_URL || ''
+  );
+  if (explicit) return explicit;
+  const replitDomain = pickReplitPublicDomain(env);
+  if (replitDomain) return stripTrailingSlash(replitDomain);
+  return 'http://localhost:3000';
 }
 
 module.exports = {
