@@ -182,7 +182,12 @@ function prefetchExcelConnector() {
     __excelConnectorModulePromise = import("./ExcelConnector")
   }
 }
-import { resolveModelIconName } from "@/lib/model-icons"
+import {
+  compareModelProviders,
+  resolveModelIconName,
+  resolveModelProviderName,
+  resolveProviderIconName,
+} from "@/lib/model-icons"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 
 import {
@@ -2906,20 +2911,12 @@ const NavbarModelSelector = ({
   }, [availableModels]);
 
   const gptModelsByProvider = React.useMemo(() => {
-    const order = ["OpenAI", "Anthropic", "Google", "Gemini", "DeepSeek", "xAI", "Groq", "OpenRouter"];
     const groups: Record<string, any[]> = {};
     for (const model of gptAvailableModels) {
-      const provider = model?.provider || "Otros";
+      const provider = resolveModelProviderName(model);
       (groups[provider] ||= []).push(model);
     }
-    return Object.entries(groups).sort(([a], [b]) => {
-      const ia = order.indexOf(a);
-      const ib = order.indexOf(b);
-      if (ia === -1 && ib === -1) return a.localeCompare(b);
-      if (ia === -1) return 1;
-      if (ib === -1) return -1;
-      return ia - ib;
-    });
+    return Object.entries(groups).sort(([a], [b]) => compareModelProviders(a, b));
   }, [gptAvailableModels]);
 
   const describeGptTier = React.useCallback((modelName: string) => {
@@ -3219,17 +3216,20 @@ const NavbarModelSelector = ({
                 </div>
               </DropdownMenuSubTrigger>
               <DropdownMenuPortal>
-                <DropdownMenuSubContent sideOffset={10} className="w-[360px] rounded-3xl border-border/70 p-2 shadow-2xl">
-                  <div className="px-3 pb-2 pt-1 text-[13px] font-medium text-muted-foreground">
+                <DropdownMenuSubContent sideOffset={10} className="relative w-[360px] overflow-hidden rounded-2xl border-border/60 bg-background/90 p-2 shadow-2xl backdrop-blur-xl before:pointer-events-none before:absolute before:inset-0 before:bg-[radial-gradient(circle_at_18%_0%,rgba(45,212,191,0.14),transparent_34%),radial-gradient(circle_at_95%_10%,rgba(99,102,241,0.12),transparent_32%)] before:content-['']">
+                  <div className="relative z-10 px-3 pb-2 pt-1 text-[13px] font-medium text-muted-foreground">
                     Modelos disponibles para este proyecto
                   </div>
-                  <ScrollArea className="h-[420px] pr-1">
+                  <ScrollArea className="relative z-10 h-[420px] pr-1">
                     {gptModelsByProvider.length > 0 ? (
                       <div className="space-y-2">
                         {gptModelsByProvider.map(([provider, models]) => (
                           <div key={provider}>
-                            <div className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-                              {provider} · {models.length}
+                            <div className="flex items-center gap-2 px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/70">
+                              <span className="inline-flex h-4 w-4 items-center justify-center rounded-md bg-background/70 shadow-sm ring-1 ring-border/50">
+                                <IconProvider name={resolveProviderIconName(provider)} size={12} />
+                              </span>
+                              <span>{provider} · {models.length}</span>
                             </div>
                             <div className="space-y-0.5">
                               {models.map((model: any) => {
@@ -3242,9 +3242,11 @@ const NavbarModelSelector = ({
                                       event.preventDefault();
                                       applyProjectModel(model);
                                     }}
-                                    className={cn("rounded-2xl px-3 py-2.5", isActive && "bg-muted/70")}
+                                    className={cn("rounded-xl px-2.5 py-2.5", isActive && "bg-muted/70")}
                                   >
-                                    <IconProvider name={resolveModelIconName(model)} className="mr-2 h-5 w-5 shrink-0" />
+                                    <span className="mr-2 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-background/70 shadow-sm ring-1 ring-border/55">
+                                      <IconProvider name={resolveModelIconName(model)} size={20} />
+                                    </span>
                                     <div className="min-w-0 flex-1">
                                       <div className="truncate text-[14px] font-medium">{model.displayName || model.name}</div>
                                       <div className="truncate text-xs text-muted-foreground">{tier} · {model.name}</div>
@@ -3399,17 +3401,20 @@ const NavbarModelSelector = ({
                 </div>
               </DropdownMenuSubTrigger>
               <DropdownMenuPortal>
-                <DropdownMenuSubContent sideOffset={10} className="w-[360px] rounded-3xl border-border/70 p-2 shadow-2xl">
-                  <div className="px-3 pb-2 pt-1 text-[13px] font-medium text-muted-foreground">
+                <DropdownMenuSubContent sideOffset={10} className="relative w-[360px] overflow-hidden rounded-2xl border-border/60 bg-background/90 p-2 shadow-2xl backdrop-blur-xl before:pointer-events-none before:absolute before:inset-0 before:bg-[radial-gradient(circle_at_18%_0%,rgba(45,212,191,0.14),transparent_34%),radial-gradient(circle_at_95%_10%,rgba(99,102,241,0.12),transparent_32%)] before:content-['']">
+                  <div className="relative z-10 px-3 pb-2 pt-1 text-[13px] font-medium text-muted-foreground">
                     Todos los modelos disponibles
                   </div>
-                  <ScrollArea className="h-[420px] pr-1">
+                  <ScrollArea className="relative z-10 h-[420px] pr-1">
                     {gptModelsByProvider.length > 0 ? (
                       <div className="space-y-2">
                         {gptModelsByProvider.map(([provider, models]) => (
                           <div key={provider}>
-                            <div className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-                              {provider} · {models.length}
+                            <div className="flex items-center gap-2 px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/70">
+                              <span className="inline-flex h-4 w-4 items-center justify-center rounded-md bg-background/70 shadow-sm ring-1 ring-border/50">
+                                <IconProvider name={resolveProviderIconName(provider)} size={12} />
+                              </span>
+                              <span>{provider} · {models.length}</span>
                             </div>
                             <div className="space-y-0.5">
                               {models.map((model: any) => {
@@ -3423,11 +3428,13 @@ const NavbarModelSelector = ({
                                       applyGptModel(model);
                                     }}
                                     className={cn(
-                                      "rounded-2xl px-3 py-2.5",
+                                      "rounded-xl px-2.5 py-2.5",
                                       isActive && "bg-muted/70",
                                     )}
                                   >
-                                    <IconProvider name={resolveModelIconName(model)} className="mr-2 h-5 w-5 shrink-0" />
+                                    <span className="mr-2 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-background/70 shadow-sm ring-1 ring-border/55">
+                                      <IconProvider name={resolveModelIconName(model)} size={20} />
+                                    </span>
                                     <div className="min-w-0 flex-1">
                                       <div className="truncate text-[14px] font-medium">{model.displayName || model.name}</div>
                                       <div className="truncate text-xs text-muted-foreground">{tier} · {model.name}</div>
@@ -3590,20 +3597,13 @@ const NavbarModelSelector = ({
   }
 
   // Stable provider order. Unknown providers fall to the end alphabetically.
-  const providerOrder = ["OpenAI", "Anthropic", "Google", "Gemini", "DeepSeek", "xAI", "Groq", "OpenRouter"];
   const groupByProvider = (models: any[]): Array<[string, any[]]> => {
     const groups: Record<string, any[]> = {};
     for (const m of models) {
-      const p = m.provider || "Otros";
+      const p = resolveModelProviderName(m);
       (groups[p] ||= []).push(m);
     }
-    return Object.entries(groups).sort(([a], [b]) => {
-      const ia = providerOrder.indexOf(a); const ib = providerOrder.indexOf(b);
-      if (ia === -1 && ib === -1) return a.localeCompare(b);
-      if (ia === -1) return 1;
-      if (ib === -1) return -1;
-      return ia - ib;
-    });
+    return Object.entries(groups).sort(([a], [b]) => compareModelProviders(a, b));
   };
 
   // Filter models based on search query
@@ -3637,20 +3637,23 @@ const NavbarModelSelector = ({
     const isSelected = model.name === selectedModel;
     const iconName = resolveModelIconName(model);
     const label = model.displayName || model.name;
+    const owner = resolveModelProviderName(model);
     return (
       <DropdownMenuItem
         onSelect={() => onPick(model)}
         className={cn(
-          "group/row flex min-h-10 items-center gap-3 rounded-lg px-2.5 py-2 cursor-pointer",
-          "text-foreground/90 focus:bg-muted/45 data-[highlighted]:bg-muted/45",
-          isSelected && "bg-muted/35 text-foreground",
+          "group/row flex min-h-11 cursor-pointer items-center gap-3 rounded-xl px-2.5 py-2",
+          "text-foreground/90 focus:bg-background/75 data-[highlighted]:bg-background/75",
+          "transition-colors",
+          isSelected && "bg-background/80 text-foreground shadow-sm ring-1 ring-border/50",
         )}
       >
-        <span className="chat-model-icon inline-flex h-5 w-5 shrink-0 items-center justify-center">
+        <span className="chat-model-icon inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-background/70 shadow-sm ring-1 ring-border/55">
           <IconProvider name={iconName} size={20} />
         </span>
-        <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium leading-5 tracking-[-0.005em]">
-          {label}
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[13.5px] font-medium leading-5 tracking-[-0.005em]">{label}</span>
+          <span className="block truncate text-[11px] leading-4 text-muted-foreground/75">{owner} · {model.name}</span>
         </span>
         {isSelected && (
           <Check className="h-4 w-4 shrink-0 text-foreground/80" strokeWidth={2.25} />
@@ -3690,8 +3693,8 @@ const NavbarModelSelector = ({
         <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-55 transition-transform duration-200 group-data-[state=open]/model:rotate-180" strokeWidth={2} />
       </DropdownMenuTrigger>
 
-      <DropdownMenuContent align="start" sideOffset={6} collisionPadding={12} className="w-[calc(100vw-1.5rem)] p-0 overflow-hidden rounded-xl border-border/60 shadow-lg sm:w-[340px]">
-        <div className="border-b border-border/50 p-2">
+      <DropdownMenuContent align="start" sideOffset={8} collisionPadding={12} className="relative w-[calc(100vw-1.5rem)] overflow-hidden rounded-2xl border-border/60 bg-background/90 p-0 shadow-2xl backdrop-blur-xl before:pointer-events-none before:absolute before:inset-0 before:bg-[radial-gradient(circle_at_18%_0%,rgba(45,212,191,0.14),transparent_34%),radial-gradient(circle_at_95%_10%,rgba(99,102,241,0.12),transparent_32%)] before:content-[''] sm:w-[380px]">
+        <div className="relative z-10 border-b border-border/45 p-2">
           <div className="relative">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/70" />
             <Input
@@ -3706,14 +3709,20 @@ const NavbarModelSelector = ({
           </div>
         </div>
 
-        <ScrollArea className="chat-model-menu-scroll h-[min(70dvh,440px)]">
+        <ScrollArea className="chat-model-menu-scroll relative z-10 h-[min(70dvh,460px)]">
           {/* Provider-grouped sections. */}
           {grouped.length > 0 ? (
             <div className="px-1.5 py-2">
               {grouped.map(([provider, models]) => (
                 <div key={provider} className="mt-3 first:mt-0">
-                  <div className="flex items-center px-2 pb-1.5 text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground/55">
+                  <div className="flex items-center gap-2 px-2 pb-1.5 text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/60">
+                    <span className="inline-flex h-4 w-4 items-center justify-center rounded-md bg-background/70 shadow-sm ring-1 ring-border/50">
+                      <IconProvider name={resolveProviderIconName(provider)} size={12} />
+                    </span>
                     <span>{provider}</span>
+                    <span className="ml-auto rounded-full bg-background/70 px-1.5 py-0.5 text-[10px] tracking-normal text-muted-foreground/70 ring-1 ring-border/45">
+                      {models.length}
+                    </span>
                   </div>
                   <div className="flex flex-col gap-0.5">
                     {models.map((m: any) => (
