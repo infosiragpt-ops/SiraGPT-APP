@@ -108,6 +108,23 @@ function isUsablePublicUrl(value, env = process.env, backendBaseUrl = '') {
   return true;
 }
 
+function pickReplitPublicDomain(env = process.env) {
+  // Replit sets REPLIT_DOMAINS (comma-separated) on deployments to the
+  // public hostnames the app is reachable at — including any custom
+  // domain like iliagpt.com. Prefer a non-replit.app/non-replit.dev
+  // entry (custom domain) when one is present so OAuth callbacks land
+  // on the user-facing host instead of the throwaway preview URL.
+  const raw = String(env.REPLIT_DOMAINS || '').trim();
+  if (!raw) return '';
+  const domains = raw.split(',').map((d) => d.trim()).filter(Boolean);
+  if (domains.length === 0) return '';
+  const isReplitOwned = (host) =>
+    /\.replit\.(app|dev)$/i.test(host) || /\.riker\.replit\.dev$/i.test(host);
+  const custom = domains.find((d) => !isReplitOwned(d));
+  const chosen = custom || domains[0];
+  return chosen ? `https://${chosen}` : '';
+}
+
 function resolvePublicBackendUrl(env = process.env) {
   const inferred = inferBackendUrlFromFrontend(env);
   const frontHost = frontendHostname(env);
@@ -121,6 +138,7 @@ function resolvePublicBackendUrl(env = process.env) {
     env.NEXT_PUBLIC_API_URL,
     env.BASE_URL,
     env.APP_URL,
+    pickReplitPublicDomain(env),
   ];
 
   for (const candidate of candidates) {
