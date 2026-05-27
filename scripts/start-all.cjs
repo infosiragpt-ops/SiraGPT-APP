@@ -2,11 +2,13 @@
 /**
  * Single-container start script for the Replit Autoscale deployment.
  *
- * Spawns the Express backend on localhost:5000 (with `prisma migrate deploy`
- * baked into its own wrapper), waits for it to accept connections, then
- * spawns Next.js on the public port. Both processes share the container
- * lifecycle: SIGTERM/SIGINT is forwarded to both children, and if either
- * child exits unexpectedly the whole container is torn down so Replit
+ * Spawns Next.js on the public port immediately, then starts the Express
+ * backend on an internal port with `prisma migrate deploy` baked into its own
+ * wrapper. Replit Autoscale decides deploy health from the public port; if the
+ * backend needs extra time for migrations, keeping Next.js up prevents a false
+ * "port never opened" deployment failure. Both processes still share the
+ * container lifecycle: SIGTERM/SIGINT is forwarded to both children, and if
+ * either child exits unexpectedly the whole container is torn down so Replit
  * replaces it.
  *
  * For Next.js we prefer the standalone build output at
@@ -168,18 +170,17 @@ async function main() {
   process.on("SIGTERM", forwardSignal("SIGTERM"));
   process.on("SIGINT", forwardSignal("SIGINT"));
 
-  backend = spawnBackend();
-  try {
-    await waitForPort(BACKEND_HOST, BACKEND_PORT, BACKEND_READY_TIMEOUT_MS);
-    log("start-all", "backend is accepting connections", { host: BACKEND_HOST, port: BACKEND_PORT });
-  } catch (err) {
-    log("start-all", "backend failed to become ready", { error: err?.message });
-    shuttingDown = true;
-    try { backend?.kill("SIGTERM"); } catch { /* noop */ }
-    process.exit(1);
-  }
-
   frontend = spawnFrontend();
+  backend = spawnBackend();
+  waitForPort(BACKEND_HOST, BACKEND_PORT, BACKEND_READY_TIMEOUT_MS)
+    .then(() => {
+      log("start-all", "backend is accepting connections", { host: BACKEND_HOST, port: BACKEND_PORT });
+    })
+    .catch((err) => {
+      log("start-all", "backend readiness timeout; keeping frontend online for diagnostics", {
+        error: err?.message,
+      });
+    });
 }
 
 main().catch((err) => {
