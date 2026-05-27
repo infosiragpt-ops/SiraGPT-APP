@@ -94,6 +94,12 @@ const STAGE_PROGRESS: Record<FileProcessingStage, number> = {
   failed: 100,
 }
 
+export function isActiveProcessingStage(stage: FileProcessingStage | null | undefined): boolean {
+  if (!stage) return false
+  if (!Object.prototype.hasOwnProperty.call(STAGE_PROGRESS, stage)) return false
+  return !TERMINAL_STAGES.has(stage)
+}
+
 export function stageProgressPercent(stage: FileProcessingStage | null | undefined): number {
   if (!stage) return 8
   return STAGE_PROGRESS[stage] ?? 8

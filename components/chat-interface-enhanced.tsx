@@ -89,6 +89,8 @@ import {
   LinkContextDisplay,
 } from "@/components/chat/ComposerInlineDisplays"
 import { FileProcessingBadge } from "@/components/file-processing-badge"
+import type { FileProcessingStatus } from "@/hooks/use-file-processing-status"
+import { isActiveProcessingStage, type FileProcessingStage } from "@/lib/file-processing-vocab"
 import {
   extractFilesFromDataTransfer,
   extractFromClipboardEvent,
@@ -217,8 +219,27 @@ const previewAttachmentKey = (attachment: AttachmentLike | null | undefined): st
 const isComposerFileUploadPending = (file: any): boolean =>
   Boolean(file && file.status === "uploading" && !resolveUploadFileId(file))
 
+const PROCESSING_CONTEXT_EXT_RE = /\.(?:pdf|docx?|xlsx?|csv|pptx?|txt|md|markdown|rtf|odt|ods|odp)$/i
+const PROCESSING_CONTEXT_MIME_RE =
+  /(?:application\/(?:pdf|msword|vnd\.openxmlformats-officedocument|vnd\.ms-|vnd\.oasis\.opendocument|rtf)|text\/(?:plain|markdown|csv|tab-separated-values|html|xml)|application\/(?:json|xml))/i
+
+const shouldWaitForDocumentProcessing = (file: any): boolean => {
+  if (!file || !resolveUploadFileId(file)) return false
+  const name = String(file.name || file.originalName || file.filename || "")
+  const mime = String(file.mimeType || file.type || file.contentType || "")
+  return PROCESSING_CONTEXT_EXT_RE.test(name) || PROCESSING_CONTEXT_MIME_RE.test(mime)
+}
+
+const getFileProcessingStage = (file: any): FileProcessingStage | null => {
+  const stage = file?.processingStage || file?.stage || null
+  return typeof stage === "string" ? stage as FileProcessingStage : null
+}
+
+const isComposerFileProcessingPending = (file: any): boolean =>
+  shouldWaitForDocumentProcessing(file) && isActiveProcessingStage(getFileProcessingStage(file))
+
 const isComposerFileUploadFailed = (file: any): boolean =>
-  Boolean(file && file.status === "failed")
+  Boolean(file && (file.status === "failed" || getFileProcessingStage(file) === "failed"))
 
 const normalizePlanName = (plan?: string | null): string =>
   String(plan || "FREE").trim().toUpperCase()
@@ -1425,6 +1446,7 @@ const ActiveOptionsDisplay = ({
   retryUpload,
   restoreLongPasteToInput,
   onPreviewAttachment,
+  onFileProcessingStatusChange,
 }: {
   uploadedFiles: any[];
   removeFile: (index: number) => void;
@@ -1432,6 +1454,7 @@ const ActiveOptionsDisplay = ({
   retryUpload?: (file: any) => void;
   restoreLongPasteToInput?: (file: any, index: number) => void;
   onPreviewAttachment?: (attachment: AttachmentLike, siblings: AttachmentLike[], index: number) => void;
+  onFileProcessingStatusChange?: (file: any, status: FileProcessingStatus) => void;
 }) => {
   // Viewer state — same reusable viewer used by sent-message chips, so
   // the user gets identical high-fidelity preview in both contexts.
@@ -1626,6 +1649,7 @@ const ActiveOptionsDisplay = ({
                         <FileProcessingBadge
                           fileId={file.id}
                           onReady={() => toast.success(`Documento listo: ${file.name}`)}
+                          onStatusChange={(status) => onFileProcessingStatusChange?.(file, status)}
                         />
                       </div>
                     )}
@@ -3929,6 +3953,74 @@ function ChatInterfaceContent() {
   const uploadedFilesRef = React.useRef<any[]>([]);
   React.useEffect(() => { uploadedFilesRef.current = uploadedFiles; }, [uploadedFiles]);
 
+  const updateUploadedFileById = React.useCallback((
+    fileId: string,
+    updater: (file: any) => any,
+  ) => {
+    setUploadedFiles((cur: any[]) => {
+      const next = cur.map((file: any) => resolveUploadFileId(file) === fileId ? updater(file) : file);
+      uploadedFilesRef.current = next;
+      return next;
+    });
+  }, [setUploadedFiles]);
+
+  const hydrateUploadedFileFromBackend = React.useCallback(async (fileId: string) => {
+    try {
+      const payload: any = await apiClient.getFile(fileId);
+      const record = payload?.file || payload;
+      if (!record?.id) return;
+
+      updateUploadedFileById(fileId, (current: any) => ({
+        ...current,
+        id: record.id || current.id,
+        fileId: record.id || current.fileId,
+        name: current.name || record.originalName || record.filename || record.id,
+        originalName: record.originalName || current.originalName || current.name,
+        filename: record.filename || current.filename,
+        type: record.mimeType || current.type,
+        mimeType: record.mimeType || current.mimeType || current.type,
+        size: record.size ?? current.size,
+        url: record.url || current.url,
+        extractedText: record.extractedText ?? current.extractedText ?? null,
+        openaiFileId: record.openaiFileId || current.openaiFileId || null,
+        processingStage: record.processingStage || current.processingStage || "ready",
+        processingError: record.processingError ?? current.processingError ?? null,
+        status: record.processingStage === "failed"
+          ? "failed"
+          : record.processingStage === "ready"
+            ? "ready"
+            : current.status,
+      }));
+    } catch (error) {
+      console.warn("[chat] could not hydrate processed upload:", error);
+    }
+  }, [updateUploadedFileById]);
+
+  const handleFileProcessingStatusChange = React.useCallback((file: any, status: FileProcessingStatus) => {
+    const fileId = status.fileId || resolveUploadFileId(file);
+    if (!fileId || !status.stage) return;
+
+    updateUploadedFileById(fileId, (current: any) => ({
+      ...current,
+      processingStage: status.stage,
+      processingError: status.error,
+      status: status.stage === "failed"
+        ? "failed"
+        : status.stage === "ready"
+          ? "ready"
+          : current.status === "uploading"
+            ? "uploading"
+            : "processing",
+      uploadError: status.stage === "failed"
+        ? (status.error || current.uploadError || "No se pudo procesar el documento.")
+        : current.uploadError,
+    }));
+
+    if (status.stage === "ready") {
+      void hydrateUploadedFileFromBackend(fileId);
+    }
+  }, [hydrateUploadedFileFromBackend, updateUploadedFileById]);
+
   const handlePasteCaptureActionRef = React.useRef<(action: PasteCaptureAction, result: PasteCaptureResult) => void>(() => {})
 
   const handlePasteCaptureAction = React.useCallback(
@@ -5633,6 +5725,7 @@ But first, you need to connect your Spotify account securely using the button be
         }
         const merged = response.files.map((f: any, idx: number) => {
           const failed = f?.success === false;
+          const processingStage = f?.processingStage || f?.stage || null;
           return {
             ...f,
             file: tempFiles[idx]?.file ?? f.file,
@@ -5640,7 +5733,12 @@ But first, you need to connect your Spotify account securely using the button be
             sourceChannel,
             longPasteMeta: tempFiles[idx]?.longPasteMeta ?? f.longPasteMeta,
             isLongPasteDocument: tempFiles[idx]?.isLongPasteDocument || Boolean(f.isLongPasteDocument),
-            status: failed ? ('failed' as const) : ('ready' as const),
+            processingStage,
+            status: failed
+              ? ('failed' as const)
+              : isActiveProcessingStage(processingStage)
+                ? ('processing' as const)
+                : ('ready' as const),
             uploadError: failed ? (f?.error || 'No se pudo procesar el archivo.') : f?.uploadError,
           };
         });
@@ -6402,6 +6500,18 @@ But first, you need to connect your Spotify account securely using the button be
 
     if (composerFiles.some(isComposerFileUploadPending)) {
       toast.info("Espera a que el documento llegue al 100% antes de enviarlo.", { duration: 2200 });
+      return;
+    }
+
+    const processingFiles = composerFiles.filter(isComposerFileProcessingPending);
+    if (processingFiles.length > 0) {
+      const firstName = processingFiles[0]?.name || processingFiles[0]?.originalName || "el documento";
+      toast.info(
+        processingFiles.length === 1
+          ? `Espera a que SiraGPT termine de leer "${firstName}" antes de enviarlo.`
+          : `Espera a que SiraGPT termine de leer ${processingFiles.length} documentos antes de enviarlos.`,
+        { duration: 2600 },
+      );
       return;
     }
 
@@ -8917,6 +9027,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       retryUpload={retryUpload}
                       restoreLongPasteToInput={restoreLongPasteToInput}
                       onPreviewAttachment={(_attachment, _siblings, index) => openComposerDocumentPreview(index)}
+                      onFileProcessingStatusChange={handleFileProcessingStatusChange}
                     />
                     <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
                     <LinkContextDisplay
@@ -9403,6 +9514,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           retryUpload={retryUpload}
                           restoreLongPasteToInput={restoreLongPasteToInput}
                           onPreviewAttachment={(_attachment, _siblings, index) => openComposerDocumentPreview(index)}
+                          onFileProcessingStatusChange={handleFileProcessingStatusChange}
                         />
                         <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
                         <LinkContextDisplay

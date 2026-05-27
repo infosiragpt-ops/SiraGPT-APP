@@ -4,7 +4,7 @@ import * as React from "react"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { Check, AlertTriangle } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { useFileProcessingStatus, describeStage } from "@/hooks/use-file-processing-status"
+import { useFileProcessingStatus, describeStage, type FileProcessingStatus } from "@/hooks/use-file-processing-status"
 import { shouldFireReadyTransition, stageProgressPercent, type FileProcessingStage } from "@/lib/file-processing-vocab"
 
 interface Props {
@@ -20,6 +20,11 @@ interface Props {
    * already `ready` (avoids a misleading toast for an old file).
    */
   onReady?: () => void
+  /**
+   * Emits observed backend state transitions so parent surfaces can keep
+   * their local attachment metadata synchronized with the File row.
+   */
+  onStatusChange?: (status: FileProcessingStatus) => void
 }
 
 /**
@@ -30,7 +35,7 @@ interface Props {
  * the failure reason renders inline so the user knows whether the
  * parser, embedding, vector store, or the model itself broke.
  */
-export function FileProcessingBadge({ fileId, compact, className, onReady }: Props) {
+export function FileProcessingBadge({ fileId, compact, className, onReady, onStatusChange }: Props) {
   const status = useFileProcessingStatus(fileId)
 
   // Fire onReady on the non-ready → ready transition. The decision
@@ -44,6 +49,15 @@ export function FileProcessingBadge({ fileId, compact, className, onReady }: Pro
     }
     if (status.stage) prevStageRef.current = status.stage
   }, [status.stage, onReady])
+
+  const lastStatusKeyRef = React.useRef("")
+  React.useEffect(() => {
+    if (!status.fileId || status.pending || !status.stage) return
+    const key = `${status.fileId}:${status.stage}:${status.error || ""}:${status.stageAt || ""}`
+    if (lastStatusKeyRef.current === key) return
+    lastStatusKeyRef.current = key
+    onStatusChange?.(status)
+  }, [status, onStatusChange])
 
   if (!fileId) return null
   // Don't blink during the first poll.
