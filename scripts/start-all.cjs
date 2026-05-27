@@ -2,17 +2,15 @@
 /**
  * Single-container start script for the Replit Autoscale deployment.
  *
- * Spawns the Express backend on localhost:5000 (with `prisma migrate deploy`
- * baked into its own wrapper), waits for it to accept connections, then
- * spawns Next.js on the public port. Both processes share the container
- * lifecycle: SIGTERM/SIGINT is forwarded to both children, and if either
- * child exits unexpectedly the whole container is torn down so Replit
- * replaces it.
+ * Spawns the Express backend on localhost:5050 (with `prisma migrate deploy`
+ * baked into its own wrapper) and the Next.js frontend on port 3000
+ * simultaneously. The frontend starts immediately so Autoscale's port-3000
+ * health check passes within seconds — even while the backend is still
+ * running migrations.
  *
- * For Next.js we prefer the standalone build output at
- * `.next/standalone/server.js` (self-contained, ~250 MB of node_modules)
- * and fall back to `npx next start` for local development where the build
- * may not have been produced with NEXT_OUTPUT=standalone.
+ * Both processes share the container lifecycle: SIGTERM/SIGINT is forwarded
+ * to both children, and if either child exits unexpectedly the whole
+ * container is torn down so Replit replaces it.
  */
 
 const { spawn } = require("node:child_process");
@@ -22,17 +20,8 @@ const path = require("node:path");
 
 const ROOT = path.resolve(__dirname, "..");
 const BACKEND_DIR = path.join(ROOT, "backend");
-// Backend listens on a high internal-only port so it never collides
-// with the public port Replit injects via PORT (autoscale sets PORT=5000,
-// which would clobber the backend if it also defaulted to 5000).
 const BACKEND_PORT = Number(process.env.BACKEND_PORT || 5050);
 const BACKEND_HOST = process.env.BACKEND_HOST || "127.0.0.1";
-// Frontend must bind to the port declared in .replit's deploy config
-// (localPort=3000 → externalPort=80). Replit Autoscale also injects
-// PORT=5000 into the container, which we deliberately ignore — using
-// it here would leave port 3000 closed and Autoscale would mark the
-// deployment as failed ("required port was never opened, expected port 3000").
-// FRONTEND_PORT is overridable for local dev only.
 const FRONTEND_PORT = Number(process.env.FRONTEND_PORT || 3000);
 const BACKEND_READY_TIMEOUT_MS = Number(process.env.BACKEND_READY_TIMEOUT_MS || 120_000);
 
@@ -57,21 +46,44 @@ function pipePrefixed(child, prefix) {
   child.stderr?.on("data", writeChunk(process.stderr));
 }
 
+/**
+ * Reconstruct the production DATABASE_URL from individual PG* secrets when
+ * the DATABASE_URL still points to the dev-only 'helium' host that doesn't
+ * exist in production containers.
+ */
+function buildDbUrl() {
+  const raw = process.env.DATABASE_URL || "";
+  if (raw && !raw.includes("helium") && !raw.includes("localhost")) {
+    return raw;
+  }
+  const host = process.env.PGHOST;
+  const port = process.env.PGPORT || "5432";
+  const user = process.env.PGUSER;
+  const pass = process.env.PGPASSWORD;
+  const db = process.env.PGDATABASE || "neondb";
+  if (!host || !user || !pass) {
+    log("start-all", "WARNING: PGHOST/PGUSER/PGPASSWORD not found — using raw DATABASE_URL as-is");
+    return raw;
+  }
+  const url = `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(pass)}@${host}:${port}/${db}?sslmode=require`;
+  log("start-all", "built production DATABASE_URL from PG* secrets", { host, port, db });
+  return url;
+}
+
 function spawnBackend() {
   log("start-all", "spawning backend", { cwd: BACKEND_DIR, port: BACKEND_PORT });
+  const dbUrl = buildDbUrl();
   const env = {
     ...process.env,
-    // Force NODE_ENV=production for the backend child unless the operator
-    // explicitly overrode it. Without this the backend's global
-    // unhandledRejection handler exits the process on transient Redis
-    // errors (Upstash quota, connection blips), which then tears down
-    // the whole single-container deployment.
     NODE_ENV: process.env.NODE_ENV || "production",
     PORT: String(BACKEND_PORT),
     HOST: BACKEND_HOST,
     BIND_ADDRESS: BACKEND_HOST,
-    PRISMA_DATABASE_URL: process.env.PRISMA_DATABASE_URL || process.env.DATABASE_URL,
-    PRISMA_BASELINE_ON_P3005: process.env.PRISMA_BASELINE_ON_P3005 || "1",
+    // Pass the correct production DB URL so both Prisma and the backend ORM use it.
+    DATABASE_URL: dbUrl,
+    PRISMA_DATABASE_URL: dbUrl,
+    // Always attempt baseline when schema is non-empty (P3005).
+    PRISMA_BASELINE_ON_P3005: "1",
   };
   const child = spawn(process.execPath, ["scripts/start-with-migrations.js"], {
     cwd: BACKEND_DIR,
@@ -168,18 +180,16 @@ async function main() {
   process.on("SIGTERM", forwardSignal("SIGTERM"));
   process.on("SIGINT", forwardSignal("SIGINT"));
 
+  // Start both immediately so port 3000 opens within seconds.
+  // Autoscale's health check only needs port 3000 — the backend coming up
+  // later is fine; API calls will return 502 briefly during migration.
   backend = spawnBackend();
-  try {
-    await waitForPort(BACKEND_HOST, BACKEND_PORT, BACKEND_READY_TIMEOUT_MS);
-    log("start-all", "backend is accepting connections", { host: BACKEND_HOST, port: BACKEND_PORT });
-  } catch (err) {
-    log("start-all", "backend failed to become ready", { error: err?.message });
-    shuttingDown = true;
-    try { backend?.kill("SIGTERM"); } catch { /* noop */ }
-    process.exit(1);
-  }
-
   frontend = spawnFrontend();
+
+  // Log when backend becomes ready (informational only — does not block startup).
+  waitForPort(BACKEND_HOST, BACKEND_PORT, BACKEND_READY_TIMEOUT_MS)
+    .then(() => log("start-all", "backend is accepting connections", { host: BACKEND_HOST, port: BACKEND_PORT }))
+    .catch((err) => log("start-all", "backend did not become ready within timeout", { error: err?.message }));
 }
 
 main().catch((err) => {
