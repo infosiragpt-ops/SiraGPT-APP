@@ -7,6 +7,16 @@ const withNextIntl = createNextIntlPlugin('./lib/i18n/request.ts')
 // Replit Preview renders the dev server inside a cross-origin iframe.
 // Keep frame blocking everywhere else, but allow that explicit dev mode.
 const allowReplitPreview = process.env.ALLOW_REPLIT_PREVIEW === '1'
+const isReplitDeployment = process.env.REPLIT_DEPLOYMENT === '1'
+const replitBackendBase = 'http://127.0.0.1:5050'
+
+function resolveBackendInternalUrl() {
+  const configured = process.env.BACKEND_INTERNAL_URL
+  if (isReplitDeployment && (!configured || /(?:localhost|127\.0\.0\.1):5000\b/.test(configured))) {
+    return replitBackendBase
+  }
+  return configured || replitBackendBase
+}
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
@@ -76,12 +86,11 @@ const nextConfig = {
   // API endpoints (/api/ready, /api/health, …) keep being served by Next.js
   // and only unmatched /api/* paths fall through to Express.
   //
-  // NOTE: Next.js standalone bakes the rewrites() result into the build
-  // artefact, so BACKEND_INTERNAL_URL must be set at BUILD time (not just
-  // runtime) for overrides to take effect. The fallback below must therefore
-  // match scripts/start-all.js's BACKEND_PORT default (5050).
+  // NOTE: Next.js standalone may evaluate rewrites while loading .env.local.
+  // Replit deployments must ignore stale localhost:5000 values from that file
+  // and match scripts/start-all.cjs's BACKEND_PORT default (5050).
   async rewrites() {
-    const backendBase = process.env.BACKEND_INTERNAL_URL || 'http://127.0.0.1:5050'
+    const backendBase = resolveBackendInternalUrl()
     return [
       {
         source: '/api/:path*',
