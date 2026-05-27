@@ -40,6 +40,18 @@ const READINESS_LANES = Object.freeze([
   },
 ]);
 
+function resolveRepoRoot(opts = {}) {
+  if (opts.repoRoot) return opts.repoRoot;
+  const cwd = process.cwd();
+  const hasBackendPkg = fs.existsSync(path.join(cwd, 'package.json'));
+  const hasRootPkg = fs.existsSync(path.join(cwd, '..', 'package.json'));
+  const hasNestedBackend = fs.existsSync(path.join(cwd, 'backend', 'package.json'));
+  if (hasBackendPkg && hasRootPkg && !hasNestedBackend) {
+    return path.resolve(cwd, '..');
+  }
+  return cwd;
+}
+
 function exists(repoRoot, relPath) {
   try {
     fs.accessSync(path.join(repoRoot, relPath));
@@ -67,7 +79,7 @@ function auditLane(repoRoot, lane) {
 }
 
 function buildOpsReadinessReport(opts = {}) {
-  const repoRoot = opts.repoRoot || process.cwd();
+  const repoRoot = resolveRepoRoot(opts);
   const lanes = READINESS_LANES.map((lane) => auditLane(repoRoot, lane));
   const passed = lanes.reduce((sum, lane) => sum + lane.passed, 0);
   const total = lanes.reduce((sum, lane) => sum + lane.total, 0);
@@ -104,4 +116,5 @@ module.exports = {
   READINESS_LANES,
   buildOpsReadinessReport,
   assertOpsReady,
+  resolveRepoRoot,
 };

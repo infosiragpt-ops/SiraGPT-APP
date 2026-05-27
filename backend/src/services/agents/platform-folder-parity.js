@@ -62,7 +62,15 @@ const HERMES_AGENT_FOLDERS = Object.freeze([
 ]);
 
 function resolveRepoRoot(opts = {}) {
-  return opts.repoRoot || process.cwd();
+  if (opts.repoRoot) return opts.repoRoot;
+  const cwd = process.cwd();
+  const hasBackendPkg = fs.existsSync(path.join(cwd, 'package.json'));
+  const hasRootPkg = fs.existsSync(path.join(cwd, '..', 'package.json'));
+  const hasNestedBackend = fs.existsSync(path.join(cwd, 'backend', 'package.json'));
+  if (hasBackendPkg && hasRootPkg && !hasNestedBackend) {
+    return path.resolve(cwd, '..');
+  }
+  return cwd;
 }
 
 function pathExists(repoRoot, rel) {
