@@ -927,6 +927,10 @@ const ActionsDropdown = ({
 
   const isMenuDisabled = isLoading || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices;
   const isToolSwitchDisabled = isMenuDisabled || isGeneratingImage;
+  // Premium tools are also marketing/configuration previews for FREE users.
+  // Keep them selectable while a normal chat response is loading so users can
+  // open the tool chip and inspect model/settings options without generating.
+  const isPremiumPreviewSwitchDisabled = isGeneratingImage || isGeneratingVideo || isUploading;
 
   const handleDropdownOpenChange = (open: boolean) => {
     setIsOpen(open);
@@ -1204,7 +1208,7 @@ const ActionsDropdown = ({
           <DropdownMenuItem
             className="liquid-menu-item"
             onClick={handleImageGenerationToggle}
-            disabled={isToolSwitchDisabled}
+            disabled={isPremiumPreviewSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
               <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isImageGenerationActive
@@ -1237,7 +1241,7 @@ const ActionsDropdown = ({
           <DropdownMenuItem
             className="liquid-menu-item"
             onClick={() => { handleVoiceGenerationToggle(); setIsOpen(false); }}
-            disabled={isToolSwitchDisabled}
+            disabled={isPremiumPreviewSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
               <div className="liquid-icon w-8 h-8 rounded-lg bg-cyan-100 dark:bg-cyan-900/20 flex items-center justify-center">
@@ -1262,7 +1266,7 @@ const ActionsDropdown = ({
           <DropdownMenuItem
             className="liquid-menu-item"
             onClick={handleVideoGenerationToggle}
-            disabled={isToolSwitchDisabled}
+            disabled={isPremiumPreviewSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
               <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isVideoGenerationActive
@@ -1295,7 +1299,7 @@ const ActionsDropdown = ({
           <DropdownMenuItem
             className="liquid-menu-item"
             onClick={() => { handleMusicGenerationToggle(); setIsOpen(false); }}
-            disabled={isToolSwitchDisabled}
+            disabled={isPremiumPreviewSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
               <div className="liquid-icon w-8 h-8 rounded-lg bg-rose-100 dark:bg-rose-900/20 flex items-center justify-center">
@@ -1318,40 +1322,6 @@ const ActionsDropdown = ({
             </div>
           </DropdownMenuItem>
 
-          {/* Computer Use Agent - Temporarily disabled */}
-          {/*
-        <DropdownMenuItem
-          onClick={handleComputerUseToggle}
-          disabled={currentPlan === "FREE" || isDisabled}
-        >
-          <div className="flex items-center gap-3 w-full">
-            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isComputerUseActive
-              ? 'bg-indigo-100 dark:bg-indigo-900/20'
-              : 'bg-indigo-100 dark:bg-indigo-900/20'
-              }`}>
-              <Monitor className={`h-4 w-4 ${isComputerUseActive
-                ? 'text-indigo-600 dark:text-indigo-400'
-                : 'text-indigo-600 dark:text-indigo-400'
-                }`} />
-            </div>
-            <div className="flex-1">
-              <div className="font-medium text-sm">
-                {isComputerUseActive ? 'Computer Use Active' : 'Computer Use Agent'}
-              </div>
-              <div className="text-xs text-muted-foreground">
-                AI that can control browsers and perform tasks
-              </div>
-            </div>
-            {isComputerUseActive && (
-              <div className="w-2 h-2 bg-indigo-500 rounded-full" />
-            )}
-            {currentPlan === "FREE" && (
-              <Badge variant="secondary" className="text-xs">Pro</Badge>
-            )}
-          </div>
-        </DropdownMenuItem>
-        */}
-
           {/* Thesis Generation */}
           <DropdownMenuItem
             className="liquid-menu-item"
@@ -1359,7 +1329,7 @@ const ActionsDropdown = ({
               setChatType('thesis');
               setIsOpen(false);
             }}
-            disabled={isToolSwitchDisabled}
+            disabled={isPremiumPreviewSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
               <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${chatType === 'thesis'
