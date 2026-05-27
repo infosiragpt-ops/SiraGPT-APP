@@ -3731,7 +3731,7 @@ const NavbarModelSelector = ({
           "text-[13.5px] font-semibold tracking-tight",
           "transition-[background-color,border-color,color] duration-base ease-smooth",
           "hover:bg-muted/45 hover:border-border/40",
-          "active:scale-[0.985]",
+          "active:bg-muted/55",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45 focus-visible:ring-offset-1 focus-visible:ring-offset-background",
           "data-[state=open]:bg-muted/55 data-[state=open]:border-border/50",
         )}
@@ -3742,15 +3742,23 @@ const NavbarModelSelector = ({
       </DropdownMenuTrigger>
 
       <DropdownMenuContent align="start" sideOffset={8} collisionPadding={12} className="model-picker-content w-[calc(100vw-1.5rem)] p-0 overflow-hidden sm:w-[392px]">
-        <div className="model-picker-search-shell">
+        <div className="border-b border-border/45 px-3 py-2 sm:hidden">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/70">
+            Modelos de IA
+          </div>
+          <div className="mt-0.5 text-[13px] leading-5 text-muted-foreground">
+            Selecciona un modelo de la lista.
+          </div>
+        </div>
+
+        <div className="model-picker-search-shell hidden sm:block">
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/60" />
             <Input
               placeholder="Buscar modelos"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="model-picker-search-input h-9 rounded-xl border-0 bg-transparent pl-9 pr-3 text-[13px] shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
-              autoFocus
+              className="model-picker-search-input h-9 rounded-xl border-0 bg-transparent pl-9 pr-3 text-base shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 sm:text-[13px]"
               onClick={(e) => e.stopPropagation()}
               onKeyDown={(e) => e.stopPropagation()}
             />
