@@ -57,27 +57,8 @@ function pipePrefixed(child, prefix) {
   child.stderr?.on("data", writeChunk(process.stderr));
 }
 
-function buildDbUrl() {
-  // Production containers cannot reach the dev-only 'helium' host.
-  // If DATABASE_URL still points to helium, reconstruct it from the
-  // standard Replit Postgres secrets (PGHOST, PGPORT, PGUSER, PGPASSWORD, PGDATABASE).
-  const raw = process.env.DATABASE_URL || "";
-  if (raw && !raw.includes("helium")) return raw;
-  const host = process.env.PGHOST;
-  const port = process.env.PGPORT || "5432";
-  const user = process.env.PGUSER;
-  const pass = process.env.PGPASSWORD;
-  const db = process.env.PGDATABASE || "siragpt";
-  if (!host || !user || !pass) {
-    log("start-all", "WARNING: cannot build production DATABASE_URL — missing PGHOST/PGUSER/PGPASSWORD");
-    return raw;
-  }
-  return `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(pass)}@${host}:${port}/${db}`;
-}
-
 function spawnBackend() {
   log("start-all", "spawning backend", { cwd: BACKEND_DIR, port: BACKEND_PORT });
-  const dbUrl = buildDbUrl();
   const env = {
     ...process.env,
     // Force NODE_ENV=production for the backend child unless the operator
@@ -89,8 +70,8 @@ function spawnBackend() {
     PORT: String(BACKEND_PORT),
     HOST: BACKEND_HOST,
     BIND_ADDRESS: BACKEND_HOST,
-    DATABASE_URL: dbUrl,
-    PRISMA_DATABASE_URL: dbUrl,
+    PRISMA_DATABASE_URL: process.env.PRISMA_DATABASE_URL || process.env.DATABASE_URL,
+    PRISMA_BASELINE_ON_P3005: process.env.PRISMA_BASELINE_ON_P3005 || "1",
   };
   const child = spawn(process.execPath, ["scripts/start-with-migrations.js"], {
     cwd: BACKEND_DIR,
@@ -188,17 +169,17 @@ async function main() {
   process.on("SIGINT", forwardSignal("SIGINT"));
 
   backend = spawnBackend();
+  try {
+    await waitForPort(BACKEND_HOST, BACKEND_PORT, BACKEND_READY_TIMEOUT_MS);
+    log("start-all", "backend is accepting connections", { host: BACKEND_HOST, port: BACKEND_PORT });
+  } catch (err) {
+    log("start-all", "backend failed to become ready", { error: err?.message });
+    shuttingDown = true;
+    try { backend?.kill("SIGTERM"); } catch { /* noop */ }
+    process.exit(1);
+  }
 
-  // Start the frontend immediately so port 3000 opens within seconds
-  // and Autoscale's health check succeeds. The backend may still be
-  // running migrations; API calls will return 502 until it's ready,
-  // but the frontend itself serves pages fine in the meantime.
   frontend = spawnFrontend();
-
-  // Monitor backend readiness in the background for logging only.
-  waitForPort(BACKEND_HOST, BACKEND_PORT, BACKEND_READY_TIMEOUT_MS)
-    .then(() => log("start-all", "backend is accepting connections", { host: BACKEND_HOST, port: BACKEND_PORT }))
-    .catch((err) => log("start-all", "backend did not become ready within timeout", { error: err?.message }));
 }
 
 main().catch((err) => {

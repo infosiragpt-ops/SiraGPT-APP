@@ -29,11 +29,6 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
-
-  // Keep Replit builds within the small instance worker/memory budget.
-  experimental: {
-    cpus: 1,
-  },
   // Enable React strict mode in development to catch double-render bugs
   reactStrictMode: true,
 

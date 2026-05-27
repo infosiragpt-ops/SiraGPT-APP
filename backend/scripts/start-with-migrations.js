@@ -12,8 +12,15 @@ const path = require("node:path");
 
 const BACKEND_DIR = path.resolve(__dirname, "..");
 const MIGRATIONS_DIR = path.join(BACKEND_DIR, "prisma", "migrations");
-const DATA_ONLY_AUTO_ROLLBACK_MIGRATIONS = [
-  /^\d{14}_reset_admin_password$/,
+const SAFE_AUTO_ROLLBACK_MIGRATIONS = [
+  {
+    pattern: /^\d{14}_reset_admin_password$/,
+    reason: "data-only admin credential repair",
+  },
+  {
+    pattern: /^20260520160000_add_org_pending_transfer$/,
+    reason: "idempotent org pending-transfer schema migration",
+  },
 ];
 
 function log(msg, extra = {}) {
@@ -56,8 +63,8 @@ function makePgClientOptions(url) {
   };
 }
 
-function isSafeDataOnlyRollbackMigration(migrationName) {
-  return DATA_ONLY_AUTO_ROLLBACK_MIGRATIONS.some((pattern) => pattern.test(migrationName));
+function isSafeAutoRollbackMigration(migrationName) {
+  return SAFE_AUTO_ROLLBACK_MIGRATIONS.some(({ pattern }) => pattern.test(migrationName));
 }
 
 async function getActiveFailedMigrations() {
@@ -84,7 +91,7 @@ async function getActiveFailedMigrations() {
   }
 }
 
-async function markDataOnlyMigrationsRolledBack(migrationNames) {
+async function markSafeMigrationsRolledBack(migrationNames) {
   loadDotenv();
   const url = resolvePrismaDatabaseUrl();
   if (!url) {
@@ -101,7 +108,7 @@ async function markDataOnlyMigrationsRolledBack(migrationNames) {
           logs = CONCAT(
             COALESCE(logs, ''),
             CASE WHEN COALESCE(logs, '') = '' THEN '' ELSE E'\\n' END,
-            '[boot] auto-marked rolled back: data-only migration blocked backend startup with P3009'
+            '[boot] auto-marked rolled back: safe migration blocked backend startup with P3009'
           )
       WHERE migration_name = ANY($1::text[])
         AND finished_at IS NULL
@@ -112,7 +119,7 @@ async function markDataOnlyMigrationsRolledBack(migrationNames) {
   }
 }
 
-async function rollbackSafeFailedDataMigrations() {
+async function rollbackSafeFailedMigrations() {
   let failedMigrations;
   try {
     failedMigrations = await getActiveFailedMigrations();
@@ -126,18 +133,18 @@ async function rollbackSafeFailedDataMigrations() {
     return false;
   }
 
-  const unsafe = failedMigrations.filter((name) => !isSafeDataOnlyRollbackMigration(name));
+  const unsafe = failedMigrations.filter((name) => !isSafeAutoRollbackMigration(name));
   if (unsafe.length > 0) {
-    log("refusing to auto-rollback schema migration failures", { failedMigrations });
+    log("refusing to auto-rollback unknown migration failures", { failedMigrations });
     return false;
   }
 
   try {
-    await markDataOnlyMigrationsRolledBack(failedMigrations);
-    log("auto-rolled back data-only failed migrations", { failedMigrations });
+    await markSafeMigrationsRolledBack(failedMigrations);
+    log("auto-rolled back safe failed migrations", { failedMigrations });
     return true;
   } catch (err) {
-    log("failed to auto-rollback data-only migrations", { error: err?.message, failedMigrations });
+    log("failed to auto-rollback safe migrations", { error: err?.message, failedMigrations });
     return false;
   }
 }
@@ -190,10 +197,10 @@ async function runMigrations() {
       return retry.status ?? 1;
     }
   }
-  if ((result.status ?? 1) !== 0 && process.env.PRISMA_AUTO_ROLLBACK_DATA_MIGRATIONS !== "0") {
+  if ((result.status ?? 1) !== 0 && process.env.PRISMA_AUTO_ROLLBACK_SAFE_MIGRATIONS !== "0") {
     const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
-    if (output.includes("P3009") && await rollbackSafeFailedDataMigrations()) {
-      log("retrying prisma migrate deploy after data-only failed migration rollback");
+    if (output.includes("P3009") && await rollbackSafeFailedMigrations()) {
+      log("retrying prisma migrate deploy after safe failed migration rollback");
       const retry = runPrisma(["migrate", "deploy"]);
       if (retry.error) {
         log("prisma migrate deploy retry spawn error", { error: retry.error.message });
@@ -240,7 +247,7 @@ if (require.main === module) {
 }
 
 module.exports = {
-  isSafeDataOnlyRollbackMigration,
+  isSafeAutoRollbackMigration,
   makePgClientOptions,
   resolvePrismaDatabaseUrl,
 };
