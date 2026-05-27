@@ -1,4 +1,4 @@
-modules = ["nodejs-20", "python-3.11"]
+modules = ["nodejs-20", "python-3.11", "postgresql-16"]
 
 run = "cd . && ALLOW_REPLIT_PREVIEW=1 npm run dev -- -H 0.0.0.0 -p 3000"
 entrypoint = "package.json"
