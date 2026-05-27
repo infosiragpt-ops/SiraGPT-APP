@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { apiClient as api } from '@/lib/api'
+import { reportClientLog } from '@/lib/client-logs'
+
+vi.mock('@/lib/client-logs', () => ({
+  reportClientLog: vi.fn(),
+}))
 
 // Mock fetch globally
 const mockFetch = vi.fn()
@@ -9,6 +14,7 @@ describe('api client core', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     api.setToken(null)
+    ;(api as any)._ensureCsrfToken = vi.fn().mockResolvedValue(null)
   })
 
   it('includes Authorization header when token is set', async () => {
@@ -63,12 +69,79 @@ describe('api client core', () => {
     mockFetch.mockResolvedValueOnce({
       ok: false,
       status: 401,
+      headers: new Headers(),
       json: () => Promise.resolve({ error: 'Unauthorized' }),
     })
 
     await expect(api.getCurrentUser()).rejects.toThrow()
     // Should not retry on 4xx
     expect(mockFetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not report expected auth/me 401 telemetry', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 401,
+      headers: new Headers(),
+      json: () => Promise.resolve({ error: 'Invalid or expired token' }),
+    })
+
+    await expect(api.getCurrentUser()).rejects.toThrow('Invalid or expired token')
+
+    expect(reportClientLog).not.toHaveBeenCalled()
+  })
+
+  it('does not report invalid login credentials as API error telemetry', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 401,
+      headers: new Headers(),
+      json: () => Promise.resolve({ error: 'Invalid credentials' }),
+    })
+
+    await expect(api.login({ email: 'bad@example.com', password: 'wrong' } as any)).rejects.toThrow('Invalid credentials')
+
+    expect(reportClientLog).not.toHaveBeenCalled()
+  })
+
+  it('does not report expired-token failures from protected feature calls', async () => {
+    mockFetch
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        headers: new Headers(),
+        json: () => Promise.resolve({ error: 'Invalid or expired token' }),
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        json: () => Promise.resolve({ error: 'Invalid or expired token' }),
+      })
+
+    api.setToken('expired-token')
+    await expect(api.generateVideo({ prompt: 'test video' })).rejects.toThrow('Invalid or expired token')
+
+    expect(reportClientLog).not.toHaveBeenCalled()
+  })
+
+  it('still reports unexpected API failures', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 400,
+      headers: new Headers([['X-Request-Id', 'req_bad']]),
+      json: () => Promise.resolve({ error: 'Malformed payload', code: 'bad_request' }),
+    })
+
+    await expect((api as any).request('/ai/generate-video', { method: 'POST', body: '{}' })).rejects.toThrow('Malformed payload')
+
+    expect(reportClientLog).toHaveBeenCalledWith(expect.objectContaining({
+      source: 'api',
+      severity: 'warn',
+      action: 'api_request_failed',
+      endpoint: '/ai/generate-video',
+      status: 400,
+      requestId: 'req_bad',
+    }))
   })
 
   it('retries on 5xx (via getCurrentUser)', async () => {

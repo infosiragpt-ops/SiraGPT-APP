@@ -110,6 +110,42 @@ function isCredentialHandshake(endpoint: string, method: string): boolean {
   return pathOnly === "/auth/login" || pathOnly === "/auth/register"
 }
 
+function normalizedEndpointPath(endpoint: string): string {
+  const pathOnly = (endpoint.split("?")[0] || "").replace(/\/$/, "")
+  return pathOnly || "/"
+}
+
+function isExpectedAuthApiFailure(args: {
+  endpoint: string
+  method: string
+  status?: number | null
+  message?: string
+  extra?: Record<string, unknown>
+}): boolean {
+  const status = args.status ?? null
+  const pathOnly = normalizedEndpointPath(args.endpoint)
+  const text = `${args.message || ""} ${(args.extra?.code as string | undefined) || ""}`.toLowerCase()
+
+  if (status === 401 && pathOnly === "/auth/me") return true
+
+  if (
+    status === 401 &&
+    isCredentialHandshake(args.endpoint, args.method) &&
+    /invalid credentials|invalid_credentials/.test(text)
+  ) {
+    return true
+  }
+
+  if (
+    status === 401 &&
+    /invalid or expired token|jwt expired|token expired|invalid token|missing token|unauthorized|not authenticated|authentication required/.test(text)
+  ) {
+    return true
+  }
+
+  return false
+}
+
 type AIStreamOptions = {
   onReplace?: (content: string) => void
 }
@@ -219,6 +255,7 @@ class ApiClient {
     extra?: Record<string, unknown>
   }): void {
     if (args.endpoint.startsWith("/telemetry")) return
+    if (isExpectedAuthApiFailure(args)) return
     reportClientLog({
       source: "api",
       severity: args.status && args.status >= 500 ? "error" : "warn",
