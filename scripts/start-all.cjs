@@ -188,17 +188,17 @@ async function main() {
   process.on("SIGINT", forwardSignal("SIGINT"));
 
   backend = spawnBackend();
-  try {
-    await waitForPort(BACKEND_HOST, BACKEND_PORT, BACKEND_READY_TIMEOUT_MS);
-    log("start-all", "backend is accepting connections", { host: BACKEND_HOST, port: BACKEND_PORT });
-  } catch (err) {
-    log("start-all", "backend failed to become ready", { error: err?.message });
-    shuttingDown = true;
-    try { backend?.kill("SIGTERM"); } catch { /* noop */ }
-    process.exit(1);
-  }
 
+  // Start the frontend immediately so port 3000 opens within seconds
+  // and Autoscale's health check succeeds. The backend may still be
+  // running migrations; API calls will return 502 until it's ready,
+  // but the frontend itself serves pages fine in the meantime.
   frontend = spawnFrontend();
+
+  // Monitor backend readiness in the background for logging only.
+  waitForPort(BACKEND_HOST, BACKEND_PORT, BACKEND_READY_TIMEOUT_MS)
+    .then(() => log("start-all", "backend is accepting connections", { host: BACKEND_HOST, port: BACKEND_PORT }))
+    .catch((err) => log("start-all", "backend did not become ready within timeout", { error: err?.message }));
 }
 
 main().catch((err) => {
