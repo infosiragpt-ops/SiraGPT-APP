@@ -58,6 +58,19 @@ function normalizeSource(raw) {
   return 'client';
 }
 
+function normalizeEndpoint(raw) {
+  const value = String(raw || '').trim();
+  if (!value) return '';
+  let path = value;
+  try {
+    path = new URL(value, 'https://siragpt.local').pathname;
+  } catch (_) {
+    path = value.split('?')[0] || value;
+  }
+  if (path.startsWith('/api/')) path = path.slice(4);
+  return path.replace(/\/$/, '') || '/';
+}
+
 function sanitizeClientEvent(body = {}, req = null) {
   const source = normalizeSource(body.source);
   const severity = normalizeSeverity(body.severity);
@@ -118,8 +131,32 @@ function buildClientEventAuditEntry(event, req = null) {
   };
 }
 
+function isExpectedAuthClientEvent(event = {}) {
+  if (!event || event.source !== 'api') return false;
+  const status = Number(event.status);
+  if (status !== 401 && status !== 403) return false;
+
+  const endpoint = normalizeEndpoint(event.endpoint || '');
+  const details = `${event.message || ''} ${JSON.stringify(event.extra || {})}`.toLowerCase();
+  const expected =
+    /invalid credentials/.test(details) ||
+    /invalid or expired token/.test(details) ||
+    /\binvalid token\b/.test(details) ||
+    /access token required/.test(details) ||
+    /session revoked/.test(details) ||
+    /re-?authentication required/.test(details) ||
+    /\bunauthorized\b/.test(details);
+
+  if (!expected) return false;
+  if (endpoint === '/auth/login') return true;
+  if (endpoint === '/auth/me') return true;
+  if (endpoint === '/ai/generate-video') return true;
+  return true;
+}
+
 module.exports = {
   sanitizeClientEvent,
   buildClientEventAuditEntry,
+  isExpectedAuthClientEvent,
   redactText,
 };

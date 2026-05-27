@@ -103,6 +103,15 @@ function sanitizeStreamError(raw: string): string {
   return raw
 }
 
+function getResponseHeader(response: Response | { headers?: { get?: (name: string) => string | null } }, name: string): string | null {
+  try {
+    const get = response?.headers?.get
+    return typeof get === "function" ? get.call(response.headers, name) : null
+  } catch {
+    return null
+  }
+}
+
 /** Login/register must not send a stale Bearer token or treat 401 as "refresh session". */
 function isCredentialHandshake(endpoint: string, method: string): boolean {
   if (method !== "POST") return false
@@ -111,8 +120,15 @@ function isCredentialHandshake(endpoint: string, method: string): boolean {
 }
 
 function normalizedEndpointPath(endpoint: string): string {
-  const pathOnly = (endpoint.split("?")[0] || "").replace(/\/$/, "")
-  return pathOnly || "/"
+  const raw = String(endpoint || "").trim()
+  let pathOnly = raw
+  try {
+    pathOnly = new URL(raw, "https://siragpt.local").pathname
+  } catch {
+    pathOnly = raw.split("?")[0] || raw
+  }
+  if (pathOnly.startsWith("/api/")) pathOnly = pathOnly.slice(4)
+  return pathOnly.replace(/\/$/, "") || "/"
 }
 
 function isExpectedAuthApiFailure(args: {
@@ -122,9 +138,11 @@ function isExpectedAuthApiFailure(args: {
   message?: string
   extra?: Record<string, unknown>
 }): boolean {
-  const status = args.status ?? null
+  const status = Number(args.status)
+  if (status !== 401 && status !== 403) return false
+
   const pathOnly = normalizedEndpointPath(args.endpoint)
-  const text = `${args.message || ""} ${(args.extra?.code as string | undefined) || ""}`.toLowerCase()
+  const text = `${args.message || ""} ${JSON.stringify(args.extra || {})}`.toLowerCase()
 
   if (status === 401 && pathOnly === "/auth/me") return true
 
@@ -137,8 +155,7 @@ function isExpectedAuthApiFailure(args: {
   }
 
   if (
-    status === 401 &&
-    /invalid or expired token|jwt expired|token expired|invalid token|missing token|unauthorized|not authenticated|authentication required/.test(text)
+    /invalid or expired token|jwt expired|token expired|\binvalid token\b|missing token|access token required|unauthorized|not authenticated|authentication required|session revoked|re-?authentication required/.test(text)
   ) {
     return true
   }
@@ -366,7 +383,7 @@ class ApiClient {
         if (response.status === 429 || response.status === 503) {
           clearTimeout(timeoutId);
           if (attempt < this.MAX_RETRIES) {
-            const retryAfterMs = this._parseRetryAfter(response.headers.get('retry-after'));
+            const retryAfterMs = this._parseRetryAfter(getResponseHeader(response, 'retry-after'));
             const waitMs = retryAfterMs !== null
               ? Math.min(retryAfterMs, this.RETRY_AFTER_MAX_MS)
               // No header → fall back to exponential backoff so the
@@ -387,7 +404,7 @@ class ApiClient {
             endpoint,
             method,
             status: response.status,
-            requestId: response.headers.get("X-Request-Id"),
+            requestId: getResponseHeader(response, "X-Request-Id"),
             message: error.message,
             extra: { code: errorData.code || errorData.error || null },
           })
@@ -445,7 +462,7 @@ class ApiClient {
             endpoint,
             method,
             status: response.status,
-            requestId: response.headers.get("X-Request-Id"),
+            requestId: getResponseHeader(response, "X-Request-Id"),
             message: error.message,
             extra: { code: errorData.code || errorData.error || null },
           })
@@ -1059,7 +1076,7 @@ class ApiClient {
             // §7.1.3). Value can be either an integer seconds or an
             // HTTP-date; we only parse the integer form here, the
             // server-side rate limiter always emits seconds.
-            const retryAfter = parseInt(response.headers.get('retry-after') || '', 10);
+            const retryAfter = parseInt(getResponseHeader(response, 'retry-after') || '', 10);
             const delay = computeBackoff(attempt, Number.isFinite(retryAfter) ? retryAfter : undefined);
             console.warn(`[ai-stream] HTTP ${response.status} on attempt ${attempt}/${MAX_CONNECT_ATTEMPTS} — auto-reconnecting in ${delay}ms`);
             await new Promise(r => setTimeout(r, delay));

@@ -64,6 +64,28 @@ test('forwards the documented fields to alerting.notifyFrontendError', async () 
   assert.equal(received.userId, 'u-1');
 });
 
+test('does not alert on expected auth API failures', async () => {
+  let called = false;
+  alerting.notifyFrontendError = async () => { called = true; };
+  const handler = findRouteHandler(telemetryRoute, '/error');
+  const { res, state } = makeRes();
+  await handler({
+    body: {
+      source: 'api',
+      page: '/chat',
+      action: 'api_request_failed',
+      method: 'POST',
+      endpoint: '/ai/generate-video',
+      status: 401,
+      message: 'Invalid or expired token',
+    },
+    headers: {},
+  }, res);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(state.statusCode, 202);
+  assert.equal(called, false);
+});
+
 test('falls back to body.url when page is missing', async () => {
   let received = null;
   alerting.notifyFrontendError = async (p) => { received = p; };
