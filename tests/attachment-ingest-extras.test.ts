@@ -101,6 +101,18 @@ describe("validateFile · rejection codes", () => {
     assert.match(v.reason!, /Tipo no permitido/)
   })
 
+  it("rejects Office temporary lock files before upload", () => {
+    const v = validateFile(makeFile(
+      "~$2 267 Formato para el proyecto de tesis.docx",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      10,
+    ))
+    assert.equal(v.ok, false)
+    assert.equal(v.code, "office_temp_lock_file")
+    assert.match(v.reason!, /temporal de Microsoft Office/)
+    assert.match(v.reason!, /documento original/)
+  })
+
   it("accepts a known MIME (image/png)", () => {
     const v = validateFile(makeFile("ok.png", "image/png", 10))
     assert.equal(v.ok, true)

@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const {
   isDeclaredUploadAllowed,
+  isOfficeTemporaryLockFile,
   mimeMatchesExtension,
   resolveUploadLimits,
   validateUploadPolicy,
@@ -75,6 +76,24 @@ test('upload policy still rejects path traversal style names', () => {
 
   assert.equal(result.ok, false);
   assert.equal(result.code, 'invalid_filename');
+});
+
+test('upload policy rejects Microsoft Office temporary lock files with a clear message', () => {
+  assert.equal(isOfficeTemporaryLockFile('~$2 267 Formato para el proyecto de tesis.docx'), true);
+  assert.equal(isOfficeTemporaryLockFile('2 267 Formato para el proyecto de tesis.docx'), false);
+
+  const result = validateUploadPolicy({
+    originalName: '~$2 267 Formato para el proyecto de tesis.docx',
+    declaredMime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    detectedMime: 'application/octet-stream',
+    detectionSource: 'fallback',
+    size: 162,
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'office_temp_lock_file');
+  assert.match(result.message, /temporal de Microsoft Office/);
+  assert.match(result.message, /documento original/);
 });
 
 test('upload policy rejects mismatched extension and magic bytes', () => {

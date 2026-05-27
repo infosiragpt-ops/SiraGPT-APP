@@ -5592,15 +5592,30 @@ But first, you need to connect your Spotify account securely using the button be
           tempFiles.forEach(tf => { next[tf.tempId] = 100; });
           return next;
         });
-        const merged = response.files.map((f: any, idx: number) => ({
-          ...f,
-          file: tempFiles[idx]?.file ?? f.file,
-          preview: tempFiles[idx]?.preview ?? f.preview,
-          sourceChannel,
-          longPasteMeta: tempFiles[idx]?.longPasteMeta ?? f.longPasteMeta,
-          isLongPasteDocument: tempFiles[idx]?.isLongPasteDocument || Boolean(f.isLongPasteDocument),
-          status: 'ready' as const,
-        }));
+        const failedServerFiles = response.files.filter((f: any) => f?.success === false);
+        if (failedServerFiles.length > 0) {
+          const grouped: Record<string, number> = {};
+          failedServerFiles.forEach((f: any) => {
+            const reason = f?.error || 'No se pudo procesar el archivo.';
+            grouped[reason] = (grouped[reason] || 0) + 1;
+          });
+          Object.entries(grouped).forEach(([reason, n]) => {
+            toast.error(n > 1 ? `${reason} (${n} archivos)` : reason);
+          });
+        }
+        const merged = response.files.map((f: any, idx: number) => {
+          const failed = f?.success === false;
+          return {
+            ...f,
+            file: tempFiles[idx]?.file ?? f.file,
+            preview: tempFiles[idx]?.preview ?? f.preview,
+            sourceChannel,
+            longPasteMeta: tempFiles[idx]?.longPasteMeta ?? f.longPasteMeta,
+            isLongPasteDocument: tempFiles[idx]?.isLongPasteDocument || Boolean(f.isLongPasteDocument),
+            status: failed ? ('failed' as const) : ('ready' as const),
+            uploadError: failed ? (f?.error || 'No se pudo procesar el archivo.') : f?.uploadError,
+          };
+        });
         const tempIds = new Set(tempFiles.map(tf => tf.tempId));
         setUploadedFiles((cur: any[]) => {
           const next = [

@@ -31,8 +31,6 @@ const ALLOWED_MIMES = new Set([
   'application/msword',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  'application/vnd.ms-excel',
-  'application/msexcel',
   'application/vnd.ms-powerpoint',
   'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   // OpenDocument
@@ -64,7 +62,7 @@ const ALLOWED_EXTENSIONS = new Set([
   'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tif', 'tiff',
   'svg', 'heic', 'heif',
   // Office / OpenDocument
-  'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
+  'pdf', 'doc', 'docx', 'xlsx', 'ppt', 'pptx',
   'odt', 'ods', 'odp',
   // Text
   'txt', 'md', 'markdown', 'csv', 'tsv', 'rtf',
@@ -151,6 +149,10 @@ const ACTIVE_CONTENT_MIMES = new Set([
   'image/svg+xml',
 ]);
 
+const OFFICE_LOCK_EXTENSIONS = new Set([
+  'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
+]);
+
 function positiveInteger(value) {
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
@@ -224,6 +226,12 @@ function sanitizeFilename(name) {
   return base;
 }
 
+function isOfficeTemporaryLockFile(filename) {
+  const base = path.basename(String(filename || '')).trim();
+  const ext = extensionFromName(base);
+  return Boolean(base.startsWith('~$') && ext && OFFICE_LOCK_EXTENSIONS.has(ext));
+}
+
 function validateUploadPolicy({
   originalName,
   declaredMime,
@@ -246,6 +254,18 @@ function validateUploadPolicy({
       detectedMime: null,
     };
   }
+
+  if (isOfficeTemporaryLockFile(safeName)) {
+    return {
+      ok: false,
+      code: 'office_temp_lock_file',
+      message: 'Ese archivo es temporal de Microsoft Office (empieza con "~$"). Cierra Word/Excel/PowerPoint y sube el documento original, no el archivo de bloqueo.',
+      extension: ext,
+      declaredMime: normalizeMime(declaredMime) || null,
+      detectedMime: normalizeMime(detectedMime) || null,
+    };
+  }
+
   const declared = normalizeMime(declaredMime);
   const detected = normalizeMime(detectedMime);
   const limits = resolveUploadLimits(env);
@@ -364,6 +384,7 @@ module.exports = {
   extensionFromName,
   isActiveContentMime,
   isDeclaredUploadAllowed,
+  isOfficeTemporaryLockFile,
   mimeMatchesExtension,
   normalizeMime,
   resolveUploadLimits,
