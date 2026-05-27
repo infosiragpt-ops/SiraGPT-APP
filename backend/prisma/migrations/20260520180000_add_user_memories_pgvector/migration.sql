@@ -11,8 +11,8 @@ CREATE TABLE IF NOT EXISTS user_memories (
     id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id          TEXT        NOT NULL,
     content          TEXT        NOT NULL,
-    content_hash     TEXT        NOT NULL,
-    embedding        vector(1024) NOT NULL,
+    content_hash     TEXT        NOT NULL DEFAULT '',
+    embedding        vector(1024),
     category         TEXT        NOT NULL DEFAULT 'knowledge',
     importance_score REAL        NOT NULL DEFAULT 0.1,
     confidence       REAL        NOT NULL DEFAULT 0.8,
@@ -22,6 +22,29 @@ CREATE TABLE IF NOT EXISTS user_memories (
     created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- If the table already existed without content_hash (from a previous partial
+-- run), add the column so the unique index below can be created.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'user_memories' AND column_name = 'content_hash'
+  ) THEN
+    ALTER TABLE user_memories ADD COLUMN content_hash TEXT NOT NULL DEFAULT '';
+  END IF;
+END $$;
+
+-- If the table already existed without the vector embedding column, add it.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'user_memories' AND column_name = 'embedding'
+  ) THEN
+    ALTER TABLE user_memories ADD COLUMN embedding vector(1024);
+  END IF;
+END $$;
 
 CREATE UNIQUE INDEX IF NOT EXISTS user_memories_user_hash_idx
     ON user_memories (user_id, content_hash);

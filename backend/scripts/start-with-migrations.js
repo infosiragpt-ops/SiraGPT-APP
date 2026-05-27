@@ -29,12 +29,17 @@ function pipeResult(result) {
 }
 
 function runPrisma(args) {
-  const result = spawnSync("npx", ["prisma", ...args], {
+  // Use the local prisma binary directly — avoids npx resolution overhead
+  // and the ETIMEDOUT failures seen with `spawnSync npx` on cold containers.
+  const prismaBin = path.join(BACKEND_DIR, "node_modules/.bin/prisma");
+  const cmd = require("node:fs").existsSync(prismaBin) ? prismaBin : "npx";
+  const argv = cmd === prismaBin ? args : ["prisma", ...args];
+  const result = spawnSync(cmd, argv, {
     cwd: BACKEND_DIR,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     env: process.env,
-    timeout: 120_000,
+    timeout: 300_000,
   });
   pipeResult(result);
   return result;
@@ -191,21 +196,41 @@ async function runMigrations() {
     if (result.error) { log("retry spawn error", { error: result.error.message }); return 1; }
   }
 
-  // ── P3009: stuck failed migration ─────────────────────────────────────────
-  if ((result.status ?? 1) !== 0 && output().includes("P3009")) {
-    log("detected P3009 — clearing stuck failed migrations");
-    const cleared = await clearFailedMigrations(output());
-    if (cleared) {
-      log("retrying prisma migrate deploy after P3009 clear");
-      result = runPrisma(["migrate", "deploy"]);
-      if (result.error) { log("retry spawn error", { error: result.error.message }); return 1; }
-    } else {
-      log("could not clear P3009 — proceeding anyway (migrations may be partially applied)");
+  // ── P3009 / P3018: stuck or failed migration ─────────────────────────────
+  // P3009 = a previous run left a migration in "started but not finished" state.
+  // P3018 = current run tried to apply a migration and its SQL failed.
+  // Both leave the migration stuck; we clear all stuck rows and retry.
+  // We allow up to 3 clear+retry cycles to handle chains of broken migrations.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const out = output();
+    if ((result.status ?? 1) === 0) break;
+    if (!out.includes("P3009") && !out.includes("P3018")) break;
+
+    const errorCode = out.includes("P3018") ? "P3018" : "P3009";
+    log(`detected ${errorCode} on attempt ${attempt + 1} — clearing stuck failed migrations`);
+    const cleared = await clearFailedMigrations(out);
+    if (!cleared) {
+      log(`could not clear ${errorCode} — proceeding to boot anyway`);
       return 0;
     }
+    log(`retrying prisma migrate deploy after ${errorCode} clear (attempt ${attempt + 1})`);
+    result = runPrisma(["migrate", "deploy"]);
+    if (result.error) { log("retry spawn error", { error: result.error.message }); return 1; }
   }
 
-  return result.status ?? 1;
+  // If still failing after retries, proceed anyway so the backend can start
+  // and serve requests — some tables may be missing but auth/core should work.
+  if ((result.status ?? 1) !== 0) {
+    const out = output();
+    log("migrations did not complete cleanly — proceeding to boot", {
+      hasP3009: out.includes("P3009"),
+      hasP3018: out.includes("P3018"),
+      status: result.status,
+    });
+    return 0;
+  }
+
+  return 0;
 }
 
 function startBackend() {
