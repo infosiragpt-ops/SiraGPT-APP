@@ -2,9 +2,11 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 
 const {
+  extractP3009MigrationNames,
   isSafeAutoRollbackMigration,
   makePgClientOptions,
   resolvePrismaDatabaseUrl,
+  shouldContinueAfterSafeP3009,
 } = require("../scripts/start-with-migrations");
 
 test("only explicitly allowlisted migrations are safe to auto-rollback", () => {
@@ -26,4 +28,21 @@ test("neon postgres connections are configured with ssl", () => {
     connectionString: "postgres://user:pass@ep-example.neon.tech/neondb",
     ssl: { rejectUnauthorized: false },
   });
+});
+
+test("safe P3009 migration output can continue boot", () => {
+  const output = [
+    "Error: P3009",
+    "migrate found failed migrations in the target database",
+    "The `20260520160000_add_org_pending_transfer` migration started at 2026-05-27 16:19:33",
+  ].join("\n");
+
+  assert.deepEqual(extractP3009MigrationNames(output), [
+    "20260520160000_add_org_pending_transfer",
+  ]);
+  assert.equal(shouldContinueAfterSafeP3009(output), true);
+  assert.equal(
+    shouldContinueAfterSafeP3009("Error: P3009\nThe `20260526125000_add_video_model_type` migration started at now"),
+    false,
+  );
 });

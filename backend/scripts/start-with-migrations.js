@@ -67,6 +67,23 @@ function isSafeAutoRollbackMigration(migrationName) {
   return SAFE_AUTO_ROLLBACK_MIGRATIONS.some(({ pattern }) => pattern.test(migrationName));
 }
 
+function extractP3009MigrationNames(output) {
+  const names = new Set();
+  for (const match of output.matchAll(/The `([^`]+)` migration started at/g)) {
+    names.add(match[1]);
+  }
+  for (const match of output.matchAll(/\b(\d{14}_[A-Za-z0-9_]+)\b/g)) {
+    names.add(match[1]);
+  }
+  return Array.from(names);
+}
+
+function shouldContinueAfterSafeP3009(output) {
+  if (!output.includes("P3009")) return false;
+  const names = extractP3009MigrationNames(output);
+  return names.length > 0 && names.every(isSafeAutoRollbackMigration);
+}
+
 async function getActiveFailedMigrations() {
   loadDotenv();
   const url = resolvePrismaDatabaseUrl();
@@ -208,6 +225,12 @@ async function runMigrations() {
       }
       return retry.status ?? 1;
     }
+    if (shouldContinueAfterSafeP3009(output)) {
+      log("continuing boot despite safe P3009 migration block", {
+        failedMigrations: extractP3009MigrationNames(output),
+      });
+      return 0;
+    }
   }
   return result.status ?? 1;
 }
@@ -247,7 +270,9 @@ if (require.main === module) {
 }
 
 module.exports = {
+  extractP3009MigrationNames,
   isSafeAutoRollbackMigration,
   makePgClientOptions,
   resolvePrismaDatabaseUrl,
+  shouldContinueAfterSafeP3009,
 };
