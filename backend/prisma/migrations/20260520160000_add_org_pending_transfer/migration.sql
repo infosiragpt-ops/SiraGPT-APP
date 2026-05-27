@@ -22,14 +22,41 @@ CREATE INDEX IF NOT EXISTS "org_pending_transfers_toOwnerId_acceptedAt_idx"
 CREATE INDEX IF NOT EXISTS "org_pending_transfers_expiresAt_idx"
   ON "org_pending_transfers"("expiresAt");
 
-ALTER TABLE "org_pending_transfers"
-  ADD CONSTRAINT "org_pending_transfers_orgId_fkey"
-  FOREIGN KEY ("orgId") REFERENCES "organizations"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'org_pending_transfers_orgId_fkey'
+      AND conrelid = '"org_pending_transfers"'::regclass
+  ) THEN
+    ALTER TABLE "org_pending_transfers"
+      ADD CONSTRAINT "org_pending_transfers_orgId_fkey"
+      FOREIGN KEY ("orgId") REFERENCES "organizations"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;
 
-ALTER TABLE "org_pending_transfers"
-  ADD CONSTRAINT "org_pending_transfers_fromOwnerId_fkey"
-  FOREIGN KEY ("fromOwnerId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'org_pending_transfers_fromOwnerId_fkey'
+      AND conrelid = '"org_pending_transfers"'::regclass
+  ) THEN
+    ALTER TABLE "org_pending_transfers"
+      ADD CONSTRAINT "org_pending_transfers_fromOwnerId_fkey"
+      FOREIGN KEY ("fromOwnerId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;
 
-ALTER TABLE "org_pending_transfers"
-  ADD CONSTRAINT "org_pending_transfers_toOwnerId_fkey"
-  FOREIGN KEY ("toOwnerId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'org_pending_transfers_toOwnerId_fkey'
+      AND conrelid = '"org_pending_transfers"'::regclass
+  ) THEN
+    ALTER TABLE "org_pending_transfers"
+      ADD CONSTRAINT "org_pending_transfers_toOwnerId_fkey"
+      FOREIGN KEY ("toOwnerId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;
