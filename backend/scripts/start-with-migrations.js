@@ -130,11 +130,16 @@ async function clearFailedMigrations(output) {
   try { ({ Client } = require("pg")); }
   catch (e) { log("pg not available for P3009 fix", { error: e.message }); return false; }
 
+  // If the prisma output contains "already exists" / duplicate-object errors
+  // (Postgres code 42710, 42P07, 42701), the schema object is already in
+  // place — mark the failing migration as APPLIED so Prisma moves past it.
+  // Otherwise mark as rolled-back so it gets retried.
+  const isAlreadyExistsError = /already exists|SqlState\(E4271[01]\)|SqlState\(E42P07\)/.test(output);
+
   const client = new Client(makePgClientOptions(url));
   try {
     await client.connect();
 
-    // Find all stuck migrations (started but not finished or rolled back).
     const { rows } = await client.query(`
       SELECT migration_name FROM "_prisma_migrations"
       WHERE finished_at IS NULL AND rolled_back_at IS NULL
@@ -142,26 +147,39 @@ async function clearFailedMigrations(output) {
     `);
 
     if (rows.length === 0) {
-      log("P3009: no stuck migrations found in DB");
+      log("migration-fix: no stuck migrations found in DB");
       return false;
     }
 
     const stuckNames = rows.map((r) => r.migration_name);
-    log("P3009: marking stuck migrations as rolled-back", { stuckNames });
 
-    await client.query(`
-      UPDATE "_prisma_migrations"
-      SET rolled_back_at = NOW(),
-          logs = CONCAT(COALESCE(logs, ''), '[boot] auto-cleared stuck migration')
-      WHERE migration_name = ANY($1::text[])
-        AND finished_at IS NULL
-        AND rolled_back_at IS NULL
-    `, [stuckNames]);
+    if (isAlreadyExistsError) {
+      log("migration-fix: marking stuck migrations as APPLIED (schema already exists)", { stuckNames });
+      await client.query(`
+        UPDATE "_prisma_migrations"
+        SET finished_at = NOW(),
+            applied_steps_count = 1,
+            logs = CONCAT(COALESCE(logs, ''), E'\\n[boot] auto-marked applied: schema object already exists')
+        WHERE migration_name = ANY($1::text[])
+          AND finished_at IS NULL
+          AND rolled_back_at IS NULL
+      `, [stuckNames]);
+    } else {
+      log("migration-fix: marking stuck migrations as ROLLED-BACK for retry", { stuckNames });
+      await client.query(`
+        UPDATE "_prisma_migrations"
+        SET rolled_back_at = NOW(),
+            logs = CONCAT(COALESCE(logs, ''), E'\\n[boot] auto-cleared stuck migration')
+        WHERE migration_name = ANY($1::text[])
+          AND finished_at IS NULL
+          AND rolled_back_at IS NULL
+      `, [stuckNames]);
+    }
 
-    log("P3009: stuck migrations cleared", { count: stuckNames.length });
+    log("migration-fix: cleared", { count: stuckNames.length, action: isAlreadyExistsError ? "applied" : "rolled-back" });
     return true;
   } catch (err) {
-    log("P3009: failed to clear stuck migrations", { error: err.message });
+    log("migration-fix: failed to clear stuck migrations", { error: err.message });
     return false;
   } finally {
     try { await client.end(); } catch { /* noop */ }
@@ -200,8 +218,8 @@ async function runMigrations() {
   // P3009 = a previous run left a migration in "started but not finished" state.
   // P3018 = current run tried to apply a migration and its SQL failed.
   // Both leave the migration stuck; we clear all stuck rows and retry.
-  // We allow up to 3 clear+retry cycles to handle chains of broken migrations.
-  for (let attempt = 0; attempt < 3; attempt++) {
+  // We allow up to 15 clear+retry cycles to handle chains of broken migrations.
+  for (let attempt = 0; attempt < 15; attempt++) {
     const out = output();
     if ((result.status ?? 1) === 0) break;
     if (!out.includes("P3009") && !out.includes("P3018")) break;
