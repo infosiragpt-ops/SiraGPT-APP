@@ -20,7 +20,10 @@ function parseUrl(value) {
 }
 
 function isProduction(env = process.env) {
-  return env.NODE_ENV === 'production';
+  // Treat any Replit Autoscale deployment as production so OAuth callbacks
+  // resolve to the configured public hostname (iliagpt.com / siragpt.com)
+  // instead of the throwaway *.riker.replit.dev container preview URL.
+  return env.NODE_ENV === 'production' || env.REPLIT_DEPLOYMENT === '1';
 }
 
 function isLocalhostUrl(value) {
