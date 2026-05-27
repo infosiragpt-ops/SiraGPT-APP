@@ -1983,16 +1983,16 @@ const ActiveToolsDisplay = ({
           <Button
             variant="ghost"
             size="sm"
-            className="group/media-model relative isolate h-8 max-w-[212px] shrink-0 gap-1.5 overflow-hidden rounded-full border border-zinc-200/72 bg-white/84 px-3 py-0 text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.86),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
+            className="group/media-model relative isolate h-7 sm:h-8 max-w-[180px] sm:max-w-[212px] shrink-0 gap-1 sm:gap-1.5 overflow-hidden rounded-full border border-zinc-200/72 bg-white/84 px-2 sm:px-3 py-0 text-[11px] sm:text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.86),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
             aria-label={`Seleccionar modelo de ${tool}`}
             title={`Modelo: ${label}`}
           >
             <span className="pointer-events-none absolute inset-y-[-55%] left-[-65%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/70 to-transparent opacity-0 blur-sm transition-all duration-700 group-hover/media-model:left-[92%] group-hover/media-model:opacity-100 dark:via-white/20" />
-            <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center">
-              <IconProvider name={selected?.iconName || "Bot"} size={18} />
+            <span className="flex h-[16px] sm:h-[18px] w-[16px] sm:w-[18px] shrink-0 items-center justify-center">
+              <IconProvider name={selected?.iconName || "Bot"} size={16} />
             </span>
-            <span className="min-w-0 truncate">{label}</span>
-            <ChevronDown className="h-4 w-4 shrink-0 opacity-60" />
+            <span className="min-w-0 truncate max-w-[60px] sm:max-w-none">{label}</span>
+            <ChevronDown className="h-3.5 sm:h-4 w-3.5 sm:w-4 shrink-0 opacity-60" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent
@@ -2087,7 +2087,7 @@ const ActiveToolsDisplay = ({
   );
 
   return (
-    <div className="flex min-w-0 flex-nowrap items-center gap-2">
+    <div className="flex min-w-0 flex-wrap items-center gap-1.5 sm:gap-2">
       {hasConnectors && (
         <div className="chat-active-apps-chip flex max-w-full items-center overflow-hidden rounded-full border border-blue-200 bg-blue-50 text-blue-700 shadow-sm dark:border-blue-800/70 dark:bg-blue-950/30 dark:text-blue-200">
           <DropdownMenu>
@@ -2144,19 +2144,19 @@ const ActiveToolsDisplay = ({
       )}
       {isImageGenerationActive && (
         <>
-          <div className="group/image-liquid relative isolate flex h-8 shrink-0 items-center gap-1.5 overflow-hidden rounded-full border border-pink-300/70 bg-pink-100/88 px-3 text-[14px] font-semibold text-pink-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_10px_28px_-22px_rgba(219,39,119,0.75)] backdrop-blur-xl transition-all duration-300 hover:scale-[1.01] hover:border-pink-400/80 hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_16px_36px_-22px_rgba(219,39,119,0.9)] dark:border-pink-500/40 dark:bg-pink-900/25 dark:text-pink-200">
+          <div className="group/image-liquid relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1 sm:gap-1.5 overflow-hidden rounded-full border border-pink-300/70 bg-pink-100/88 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-pink-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_10px_28px_-22px_rgba(219,39,119,0.75)] backdrop-blur-xl transition-all duration-300 hover:scale-[1.01] hover:border-pink-400/80 hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_16px_36px_-22px_rgba(219,39,119,0.9)] dark:border-pink-500/40 dark:bg-pink-900/25 dark:text-pink-200">
             <span className="pointer-events-none absolute -inset-8 -z-10 rounded-full bg-[conic-gradient(from_90deg,transparent_0deg,rgba(244,114,182,0.0)_70deg,rgba(244,114,182,0.55)_130deg,rgba(236,72,153,0.22)_190deg,transparent_280deg)] opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
             <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/75 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/image-liquid:translate-x-[155%] dark:via-white/25" />
             <span className="pointer-events-none absolute left-7 top-1 h-1.5 w-1.5 rounded-full bg-pink-400/75 shadow-[0_0_12px_rgba(236,72,153,0.75)] motion-safe:animate-pulse" />
             <span className="pointer-events-none absolute bottom-1 right-9 h-1 w-1 rounded-full bg-white/90 shadow-[0_0_10px_rgba(255,255,255,0.9)] motion-safe:animate-bounce" />
-            <Palette className="relative z-10 h-4 w-4 drop-shadow-[0_0_8px_rgba(219,39,119,0.35)]" />
-            <span className="relative z-10">Imágenes</span>
+            <Palette className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4 drop-shadow-[0_0_8px_rgba(219,39,119,0.35)]" />
+            <span className="relative z-10 text-[12px] sm:text-[14px]">Imágenes</span>
             {isGeneratingImage && <span className="relative z-10 h-1.5 w-1.5 rounded-full bg-pink-500 animate-pulse" />}
             <Button
               variant="ghost"
               size="sm"
               className={cn(
-                "relative z-10 ml-1 h-5 w-5 rounded-full p-0",
+                "relative z-10 ml-0.5 sm:ml-1 h-4 sm:h-5 w-4 sm:w-5 rounded-full p-0",
                 isGeneratingImage
                   ? "opacity-45 cursor-not-allowed"
                   : "hover:bg-white/50 dark:hover:bg-pink-800/30"
@@ -2179,15 +2179,16 @@ const ActiveToolsDisplay = ({
               <Button
                 variant="ghost"
                 size="sm"
-                className="group/ratio-trigger relative isolate h-8 shrink-0 gap-2 overflow-hidden rounded-full border border-zinc-200/78 bg-white/84 px-3 py-0 text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
+                className="group/ratio-trigger relative isolate h-7 sm:h-8 shrink-0 gap-1 sm:gap-2 overflow-hidden rounded-full border border-zinc-200/78 bg-white/84 px-2 sm:px-3 py-0 text-[11px] sm:text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
                 title={`Imagen: ${selectedImageAspectRatio}, ${selectedImageQuality}, ${selectedImageCount}`}
                 aria-label={`Configurar imagen. Actual ${selectedImageAspectRatio}, ${selectedImageQuality}, ${selectedImageCount}`}
               >
                 <span className="pointer-events-none absolute inset-y-[-55%] left-[-65%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/70 to-transparent opacity-0 blur-sm transition-all duration-700 group-hover/ratio-trigger:left-[92%] group-hover/ratio-trigger:opacity-100 dark:via-white/20" />
-                <ImageAspectRatioMark ratio={selectedImageAspectRatio} selected className="h-5 w-5 text-zinc-700 dark:text-white/88" />
-                <span>{selectedImageAspectRatio}</span>
-                <span>{selectedImageQuality}</span>
-                <span>{selectedImageCount} img</span>
+                <ImageAspectRatioMark ratio={selectedImageAspectRatio} selected className="h-4 sm:h-5 w-4 sm:w-5 text-zinc-700 dark:text-white/88" />
+                <span className="hidden sm:inline">{selectedImageAspectRatio}</span>
+                <span className="sm:hidden">{selectedImageAspectRatio.replace(':','×')}</span>
+                <span className="hidden sm:inline">{selectedImageQuality}</span>
+                <span>{selectedImageCount}</span>
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent
@@ -2301,15 +2302,15 @@ const ActiveToolsDisplay = ({
 
       {isVoiceGenerationActive && (
         <>
-          <div className="group/voice-liquid relative isolate flex h-8 shrink-0 items-center gap-1.5 overflow-hidden rounded-full border border-cyan-300/70 bg-cyan-100/88 px-3 text-[14px] font-semibold text-cyan-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_10px_28px_-22px_rgba(8,145,178,0.75)] backdrop-blur-xl transition-all duration-300 hover:scale-[1.01] hover:border-cyan-400/80 dark:border-cyan-500/40 dark:bg-cyan-900/25 dark:text-cyan-200">
+          <div className="group/voice-liquid relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1 sm:gap-1.5 overflow-hidden rounded-full border border-cyan-300/70 bg-cyan-100/88 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-cyan-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_10px_28px_-22px_rgba(8,145,178,0.75)] backdrop-blur-xl transition-all duration-300 hover:scale-[1.01] hover:border-cyan-400/80 dark:border-cyan-500/40 dark:bg-cyan-900/25 dark:text-cyan-200">
             <span className="pointer-events-none absolute -inset-8 -z-10 rounded-full bg-[conic-gradient(from_90deg,transparent_0deg,rgba(34,211,238,0.0)_70deg,rgba(34,211,238,0.50)_135deg,rgba(6,182,212,0.24)_198deg,transparent_280deg)] opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
             <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/75 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/voice-liquid:translate-x-[155%] dark:via-white/25" />
-            <AudioLines className="relative z-10 h-4 w-4 drop-shadow-[0_0_8px_rgba(8,145,178,0.35)]" />
-            <span className="relative z-10">Voz</span>
+            <AudioLines className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4 drop-shadow-[0_0_8px_rgba(8,145,178,0.35)]" />
+            <span className="relative z-10 text-[12px] sm:text-[14px]">Voz</span>
             <Button
               variant="ghost"
               size="sm"
-              className="relative z-10 ml-1 h-5 w-5 rounded-full p-0 hover:bg-white/50 dark:hover:bg-cyan-800/30"
+              className="relative z-10 ml-0.5 sm:ml-1 h-4 sm:h-5 w-4 sm:w-5 rounded-full p-0 hover:bg-white/50 dark:hover:bg-cyan-800/30"
               onClick={handleVoiceGenerationClose}
               title="Cerrar voz"
             >
@@ -2327,14 +2328,14 @@ const ActiveToolsDisplay = ({
               <Button
                 variant="ghost"
                 size="sm"
-                className="group/voice-trigger relative isolate h-8 shrink-0 gap-2 overflow-hidden rounded-full border border-zinc-200/78 bg-white/84 px-3 py-0 text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
+                className="group/voice-trigger relative isolate h-7 sm:h-8 shrink-0 gap-1 sm:gap-2 overflow-hidden rounded-full border border-zinc-200/78 bg-white/84 px-2 sm:px-3 py-0 text-[11px] sm:text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
                 title={`Voz: ${selectedVoiceModel}, ${selectedVoiceLanguage}, ${selectedVoiceAccent}, ${selectedVoiceStability}%`}
                 aria-label={`Configurar voz. Actual ${selectedVoiceModel}, ${selectedVoiceLanguage}, estabilidad ${selectedVoiceStability} por ciento`}
               >
                 <span className="pointer-events-none absolute inset-y-[-55%] left-[-65%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/70 to-transparent opacity-0 blur-sm transition-all duration-700 group-hover/voice-trigger:left-[92%] group-hover/voice-trigger:opacity-100 dark:via-white/20" />
-                <Settings className="h-4 w-4" />
+                <Settings className="h-3.5 sm:h-4 w-3.5 sm:w-4" />
                 <span>{selectedVoiceLanguage}</span>
-                <span>{selectedVoiceStability}%</span>
+                <span className="hidden sm:inline">{selectedVoiceStability}%</span>
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent
@@ -2442,15 +2443,15 @@ const ActiveToolsDisplay = ({
 
       {isMusicGenerationActive && (
         <>
-          <div className="group/music-liquid relative isolate flex h-8 shrink-0 items-center gap-1.5 overflow-hidden rounded-full border border-rose-300/70 bg-rose-100/88 px-3 text-[14px] font-semibold text-rose-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_10px_28px_-22px_rgba(225,29,72,0.75)] backdrop-blur-xl transition-all duration-300 hover:scale-[1.01] hover:border-rose-400/80 dark:border-rose-500/40 dark:bg-rose-900/25 dark:text-rose-200">
+          <div className="group/music-liquid relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1 sm:gap-1.5 overflow-hidden rounded-full border border-rose-300/70 bg-rose-100/88 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-rose-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_10px_28px_-22px_rgba(225,29,72,0.75)] backdrop-blur-xl transition-all duration-300 hover:scale-[1.01] hover:border-rose-400/80 dark:border-rose-500/40 dark:bg-rose-900/25 dark:text-rose-200">
             <span className="pointer-events-none absolute -inset-8 -z-10 rounded-full bg-[conic-gradient(from_90deg,transparent_0deg,rgba(244,63,94,0.0)_70deg,rgba(244,63,94,0.48)_135deg,rgba(225,29,72,0.22)_198deg,transparent_280deg)] opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
             <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/75 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/music-liquid:translate-x-[155%] dark:via-white/25" />
-            <Music className="relative z-10 h-4 w-4 drop-shadow-[0_0_8px_rgba(225,29,72,0.35)]" />
-            <span className="relative z-10">Música</span>
+            <Music className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4 drop-shadow-[0_0_8px_rgba(225,29,72,0.35)]" />
+            <span className="relative z-10 text-[12px] sm:text-[14px]">Música</span>
             <Button
               variant="ghost"
               size="sm"
-              className="relative z-10 ml-1 h-5 w-5 rounded-full p-0 hover:bg-white/50 dark:hover:bg-rose-800/30"
+              className="relative z-10 ml-0.5 sm:ml-1 h-4 sm:h-5 w-4 sm:w-5 rounded-full p-0 hover:bg-white/50 dark:hover:bg-rose-800/30"
               onClick={handleMusicGenerationClose}
               title="Cerrar música"
             >
@@ -2468,13 +2469,13 @@ const ActiveToolsDisplay = ({
               <Button
                 variant="ghost"
                 size="sm"
-                className="group/music-trigger relative isolate h-8 shrink-0 gap-2 overflow-hidden rounded-full border border-zinc-200/78 bg-white/84 px-3 py-0 text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
+                className="group/music-trigger relative isolate h-7 sm:h-8 shrink-0 gap-1 sm:gap-2 overflow-hidden rounded-full border border-zinc-200/78 bg-white/84 px-2 sm:px-3 py-0 text-[11px] sm:text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
                 title={`Música: ${selectedMusicModel}, ${selectedMusicStyle}, ${selectedMusicMood}, ${selectedMusicDuration}s`}
                 aria-label={`Configurar música. Actual ${selectedMusicModel}, ${selectedMusicStyle}, ${selectedMusicDuration} segundos`}
               >
                 <span className="pointer-events-none absolute inset-y-[-55%] left-[-65%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/70 to-transparent opacity-0 blur-sm transition-all duration-700 group-hover/music-trigger:left-[92%] group-hover/music-trigger:opacity-100 dark:via-white/20" />
-                <Settings className="h-4 w-4" />
-                <span>{selectedMusicStyle}</span>
+                <Settings className="h-3.5 sm:h-4 w-3.5 sm:w-4" />
+                <span className="hidden sm:inline">{selectedMusicStyle}</span>
                 <span>{selectedMusicDuration}s</span>
               </Button>
             </DropdownMenuTrigger>
@@ -2595,15 +2596,15 @@ const ActiveToolsDisplay = ({
 
       {isVideoGenerationActive && (
         <>
-          <div className="group/video-liquid relative isolate flex h-8 shrink-0 items-center gap-1.5 overflow-hidden rounded-full border border-orange-300/70 bg-orange-100/88 px-3 text-[14px] font-semibold text-orange-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_10px_28px_-22px_rgba(234,88,12,0.75)] backdrop-blur-xl transition-all duration-300 hover:scale-[1.01] hover:border-orange-400/80 dark:border-orange-500/40 dark:bg-orange-900/25 dark:text-orange-200">
+          <div className="group/video-liquid relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1 sm:gap-1.5 overflow-hidden rounded-full border border-orange-300/70 bg-orange-100/88 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-orange-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_10px_28px_-22px_rgba(234,88,12,0.75)] backdrop-blur-xl transition-all duration-300 hover:scale-[1.01] hover:border-orange-400/80 dark:border-orange-500/40 dark:bg-orange-900/25 dark:text-orange-200">
             <span className="pointer-events-none absolute -inset-8 -z-10 rounded-full bg-[conic-gradient(from_90deg,transparent_0deg,rgba(251,146,60,0.0)_70deg,rgba(251,146,60,0.52)_135deg,rgba(249,115,22,0.24)_198deg,transparent_280deg)] opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
             <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/75 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/video-liquid:translate-x-[155%] dark:via-white/25" />
-            <Video className="relative z-10 h-4 w-4 drop-shadow-[0_0_8px_rgba(234,88,12,0.35)]" />
-            <span className="relative z-10">Video</span>
+            <Video className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4 drop-shadow-[0_0_8px_rgba(234,88,12,0.35)]" />
+            <span className="relative z-10 text-[12px] sm:text-[14px]">Video</span>
             <Button
               variant="ghost"
               size="sm"
-              className="relative z-10 ml-1 h-5 w-5 rounded-full p-0 hover:bg-white/50 dark:hover:bg-orange-800/30"
+              className="relative z-10 ml-0.5 sm:ml-1 h-4 sm:h-5 w-4 sm:w-5 rounded-full p-0 hover:bg-white/50 dark:hover:bg-orange-800/30"
               onClick={handleVideoGenerationClose}
               title="Cerrar video"
             >
@@ -2621,13 +2622,13 @@ const ActiveToolsDisplay = ({
               <Button
                 variant="ghost"
                 size="sm"
-                className="group/video-trigger relative isolate h-8 shrink-0 gap-2 overflow-hidden rounded-full border border-zinc-200/78 bg-white/84 px-3 py-0 text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
+                className="group/video-trigger relative isolate h-7 sm:h-8 shrink-0 gap-1 sm:gap-2 overflow-hidden rounded-full border border-zinc-200/78 bg-white/84 px-2 sm:px-3 py-0 text-[11px] sm:text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
                 title={`Video: ${selectedVideoAspectRatio}, ${selectedVideoResolution}, ${selectedVideoDuration}s, audio ${selectedVideoAudio ? "on" : "off"}`}
                 aria-label={`Configurar video. Actual ${selectedVideoAspectRatio}, ${selectedVideoResolution}, ${selectedVideoDuration} segundos`}
               >
                 <span className="pointer-events-none absolute inset-y-[-55%] left-[-65%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/70 to-transparent opacity-0 blur-sm transition-all duration-700 group-hover/video-trigger:left-[92%] group-hover/video-trigger:opacity-100 dark:via-white/20" />
-                <Settings className="h-4 w-4" />
-                <span>{selectedVideoAspectRatio}</span>
+                <Settings className="h-3.5 sm:h-4 w-3.5 sm:w-4" />
+                <span className="hidden sm:inline">{selectedVideoAspectRatio}</span>
                 <span>{selectedVideoResolution}</span>
                 <span>{selectedVideoDuration}s</span>
               </Button>
@@ -9119,7 +9120,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         Only rendered when something is active, so the
                         composer stays a clean pill in the idle state. */}
                     {hasActiveTools && (
-                      <div className="composer-media-controls-row mx-2 mb-2 flex items-center gap-2 overflow-x-auto px-0.5 py-1">
+                      <div className="composer-media-controls-row mx-1 sm:mx-2 mb-2 flex flex-wrap items-center gap-1 sm:gap-2 overflow-visible px-0.5 py-1">
                         <ActiveToolsDisplay {...activeToolsProps} />
                       </div>
                     )}
@@ -9595,7 +9596,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             Mirrors the in-chat composer above so both
                             states feel identical to the user. */}
                         {hasActiveTools && (
-                          <div className="composer-media-controls-row mx-2 mb-2 flex items-center gap-2 overflow-x-auto px-0.5 py-1">
+                          <div className="composer-media-controls-row mx-1 sm:mx-2 mb-2 flex flex-wrap items-center gap-1 sm:gap-2 overflow-visible px-0.5 py-1">
                             <ActiveToolsDisplay {...activeToolsProps} />
                           </div>
                         )}
