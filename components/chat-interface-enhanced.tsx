@@ -185,7 +185,6 @@ import {
   compareModelProviders,
   resolveModelIconName,
   resolveModelProviderName,
-  resolveProviderIconName,
 } from "@/lib/model-icons"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 
@@ -2800,6 +2799,49 @@ const ActiveToolsDisplay = ({
 
 // Enhanced Model Selector
 let selectedVideoModelData;
+const MODEL_BRAND_BY_ICON: Record<string, string> = {
+  ChatGPTLogo: "openai",
+  ClaudeLogo: "anthropic",
+  GeminiLogo: "google",
+  DeepseekLogo: "deepseek",
+  GrokLogo: "xai",
+  KimiLogo: "moonshot",
+  ZaiLogo: "zai",
+  QwenLogo: "qwen",
+  MetaLogo: "meta",
+  MistralLogo: "mistral",
+  NvidiaLogo: "nvidia",
+  PoolsideLogo: "poolside",
+  OllamaLogo: "ollama",
+  SeedreamLogo: "bytedance",
+  OpenRouterLogo: "openrouter",
+  MessageSquare: "groq",
+}
+
+const normalizeModelText = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, "")
+const stripModelPrefix = (value: string) => value.replace(/^[\w.-]+[/:]\s*/i, "")
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+const getModelBrandKey = (model: any) => MODEL_BRAND_BY_ICON[resolveModelIconName(model)] || "other"
+
+const getModelDisplayLabel = (model: any) => {
+  const provider = resolveModelProviderName(model)
+  const label = String(model?.displayName || model?.name || "Modelo").trim()
+  if (!label || provider === "Otros") return label || "Modelo"
+  return label
+    .replace(new RegExp(`^${escapeRegExp(provider)}\\s*[:·/-]\\s*`, "i"), "")
+    .replace(/^OpenAI\s+GPT\s+/i, "GPT ")
+    .trim() || label
+}
+
+const getModelSubLabel = (model: any, label: string) => {
+  const raw = String(model?.name || "").trim()
+  if (!raw) return ""
+  const compact = stripModelPrefix(raw).trim()
+  if (!compact) return ""
+  if (normalizeModelText(compact) === normalizeModelText(label)) return ""
+  return compact
+}
+
 const NavbarModelSelector = ({
   selectedModel,
   setSelectedModel,
@@ -3087,6 +3129,26 @@ const NavbarModelSelector = ({
     }
   }, [currentChat?.project?.id, currentChat?.projectId]);
 
+  const ModelLogo = ({ model, compact = false }: { model: any; compact?: boolean }) => (
+    <span
+      className={cn("model-logo-chip chat-model-icon", compact && "model-logo-chip--sm")}
+      data-model-brand={getModelBrandKey(model)}
+    >
+      <IconProvider name={resolveModelIconName(model)} size={compact ? 15 : 20} />
+    </span>
+  );
+
+  const ProviderHeading = ({ provider, models }: { provider: string; models: any[] }) => {
+    const sample = models[0] ? { ...models[0], provider } : { provider };
+    return (
+      <div className="model-provider-heading">
+        <ModelLogo model={sample} compact />
+        <span className="min-w-0 flex-1 truncate">{provider}</span>
+        <span className="model-provider-count">{models.length}</span>
+      </div>
+    );
+  };
+
 
   // If this is a video chat type, show video model
   if (chatTypes === "video") {
@@ -3221,16 +3283,13 @@ const NavbarModelSelector = ({
                       <div className="space-y-2">
                         {gptModelsByProvider.map(([provider, models]) => (
                           <div key={provider}>
-                            <div className="flex items-center gap-2 px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/70">
-                              <span className="inline-flex h-4 w-4 items-center justify-center rounded-md bg-background/70 shadow-sm ring-1 ring-border/50">
-                                <IconProvider name={resolveProviderIconName(provider)} size={12} />
-                              </span>
-                              <span>{provider} · {models.length}</span>
-                            </div>
+                            <ProviderHeading provider={provider} models={models} />
                             <div className="space-y-0.5">
                               {models.map((model: any) => {
                                 const isActive = model.name === activeProjectModelName;
                                 const tier = describeGptTier(model.name || model.displayName);
+                                const label = getModelDisplayLabel(model);
+                                const subLabel = getModelSubLabel(model, label);
                                 return (
                                   <DropdownMenuItem
                                     key={model.name}
@@ -3238,14 +3297,13 @@ const NavbarModelSelector = ({
                                       event.preventDefault();
                                       applyProjectModel(model);
                                     }}
-                                    className={cn("rounded-xl px-2.5 py-2.5", isActive && "bg-muted/70")}
+                                    data-selected={isActive ? "true" : undefined}
+                                    className="model-picker-row min-h-12 rounded-xl px-2.5 py-2"
                                   >
-                                    <span className="mr-2 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-background/70 shadow-sm ring-1 ring-border/55">
-                                      <IconProvider name={resolveModelIconName(model)} size={20} />
-                                    </span>
+                                    <ModelLogo model={model} />
                                     <div className="min-w-0 flex-1">
-                                      <div className="truncate text-[14px] font-medium">{model.displayName || model.name}</div>
-                                      <div className="truncate text-xs text-muted-foreground">{tier} · {model.name}</div>
+                                      <div className="liquid-label truncate text-[13.5px] font-semibold">{label}</div>
+                                      <div className="truncate text-[11.5px] text-muted-foreground/70">{subLabel || tier}</div>
                                     </div>
                                     {isActive && <Check className="ml-2 h-4 w-4 shrink-0" />}
                                   </DropdownMenuItem>
@@ -3406,16 +3464,13 @@ const NavbarModelSelector = ({
                       <div className="space-y-2">
                         {gptModelsByProvider.map(([provider, models]) => (
                           <div key={provider}>
-                            <div className="flex items-center gap-2 px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/70">
-                              <span className="inline-flex h-4 w-4 items-center justify-center rounded-md bg-background/70 shadow-sm ring-1 ring-border/50">
-                                <IconProvider name={resolveProviderIconName(provider)} size={12} />
-                              </span>
-                              <span>{provider} · {models.length}</span>
-                            </div>
+                            <ProviderHeading provider={provider} models={models} />
                             <div className="space-y-0.5">
                               {models.map((model: any) => {
                                 const isActive = model.name === activeModelName;
                                 const tier = describeGptTier(model.name || model.displayName);
+                                const label = getModelDisplayLabel(model);
+                                const subLabel = getModelSubLabel(model, label);
                                 return (
                                   <DropdownMenuItem
                                     key={model.name}
@@ -3423,17 +3478,13 @@ const NavbarModelSelector = ({
                                       event.preventDefault();
                                       applyGptModel(model);
                                     }}
-                                    className={cn(
-                                      "rounded-xl px-2.5 py-2.5",
-                                      isActive && "bg-muted/70",
-                                    )}
+                                    data-selected={isActive ? "true" : undefined}
+                                    className="model-picker-row min-h-12 rounded-xl px-2.5 py-2"
                                   >
-                                    <span className="mr-2 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-background/70 shadow-sm ring-1 ring-border/55">
-                                      <IconProvider name={resolveModelIconName(model)} size={20} />
-                                    </span>
+                                    <ModelLogo model={model} />
                                     <div className="min-w-0 flex-1">
-                                      <div className="truncate text-[14px] font-medium">{model.displayName || model.name}</div>
-                                      <div className="truncate text-xs text-muted-foreground">{tier} · {model.name}</div>
+                                      <div className="liquid-label truncate text-[13.5px] font-semibold">{label}</div>
+                                      <div className="truncate text-[11.5px] text-muted-foreground/70">{subLabel || tier}</div>
                                     </div>
                                     {isActive && <Check className="ml-2 h-4 w-4 shrink-0" />}
                                   </DropdownMenuItem>
@@ -3606,7 +3657,8 @@ const NavbarModelSelector = ({
   const filteredModels = availableModels.filter((model: any) =>
     model.displayName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
     model.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    model.provider?.toLowerCase().includes(searchQuery.toLowerCase())
+    model.provider?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    resolveModelProviderName(model).toLowerCase().includes(searchQuery.toLowerCase())
   );
   const grouped = groupByProvider(filteredModels);
 
@@ -3631,28 +3683,32 @@ const NavbarModelSelector = ({
   // the right; rows stay one-line and restrained for fast scanning.
   const ModelRow = ({ model }: { model: any }) => {
     const isSelected = model.name === selectedModel;
-    const iconName = resolveModelIconName(model);
-    const label = model.displayName || model.name;
-    const owner = resolveModelProviderName(model);
+    const label = getModelDisplayLabel(model);
+    const subLabel = getModelSubLabel(model, label);
     return (
       <DropdownMenuItem
         onSelect={() => onPick(model)}
+        data-selected={isSelected ? "true" : undefined}
         className={cn(
-          "group/row flex min-h-11 cursor-pointer items-center gap-3 rounded-xl px-2.5 py-2",
-          "text-foreground/90 focus:bg-background/75 data-[highlighted]:bg-background/75",
-          "transition-colors",
-          isSelected && "bg-background/80 text-foreground shadow-sm ring-1 ring-border/50",
+          "model-picker-row group/row flex min-h-12 cursor-pointer items-center gap-3 rounded-xl px-2.5 py-2",
+          "text-foreground/90 focus:bg-transparent data-[highlighted]:bg-transparent",
         )}
       >
-        <span className="chat-model-icon inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-background/70 shadow-sm ring-1 ring-border/55">
-          <IconProvider name={iconName} size={20} />
-        </span>
+        <ModelLogo model={model} />
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-[13.5px] font-medium leading-5 tracking-[-0.005em]">{label}</span>
-          <span className="block truncate text-[11px] leading-4 text-muted-foreground/75">{owner} · {model.name}</span>
+          <span className="liquid-label block truncate text-[13.5px] font-semibold leading-5 tracking-[-0.005em]">
+            {label}
+          </span>
+          {subLabel && (
+            <span className="block truncate text-[11.5px] font-medium leading-4 text-muted-foreground/65">
+              {subLabel}
+            </span>
+          )}
         </span>
         {isSelected && (
-          <Check className="h-4 w-4 shrink-0 text-foreground/80" strokeWidth={2.25} />
+          <span className="model-row-check">
+            <Check className="h-3.5 w-3.5" strokeWidth={2.35} />
+          </span>
         )}
       </DropdownMenuItem>
     );
@@ -3680,24 +3736,20 @@ const NavbarModelSelector = ({
           "data-[state=open]:bg-muted/55 data-[state=open]:border-border/50",
         )}
       >
-        {selectedModelData && (
-          <span className="chat-model-icon inline-flex h-4 w-4 shrink-0 items-center justify-center">
-            <IconProvider name={resolveModelIconName(selectedModelData)} size={16} />
-          </span>
-        )}
-        <span className="chat-model-label max-w-[180px] truncate font-medium">{selectedModelData?.displayName || selectedModel}</span>
+        {selectedModelData && <ModelLogo model={selectedModelData} compact />}
+        <span className="chat-model-label max-w-[180px] truncate font-medium">{selectedModelData ? getModelDisplayLabel(selectedModelData) : selectedModel}</span>
         <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-55 transition-transform duration-200 group-data-[state=open]/model:rotate-180" strokeWidth={2} />
       </DropdownMenuTrigger>
 
-      <DropdownMenuContent align="start" sideOffset={8} collisionPadding={12} className="relative w-[calc(100vw-1.5rem)] overflow-hidden rounded-2xl border-border/60 bg-background/90 p-0 shadow-2xl backdrop-blur-xl before:pointer-events-none before:absolute before:inset-0 before:bg-[radial-gradient(circle_at_18%_0%,rgba(45,212,191,0.14),transparent_34%),radial-gradient(circle_at_95%_10%,rgba(99,102,241,0.12),transparent_32%)] before:content-[''] sm:w-[380px]">
-        <div className="relative z-10 border-b border-border/45 p-2">
+      <DropdownMenuContent align="start" sideOffset={8} collisionPadding={12} className="model-picker-content w-[calc(100vw-1.5rem)] p-0 overflow-hidden sm:w-[392px]">
+        <div className="model-picker-search-shell">
           <div className="relative">
-            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/70" />
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/60" />
             <Input
               placeholder="Buscar modelos"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="h-8 rounded-lg border-border/45 bg-background pl-8 text-[13px] shadow-none focus-visible:border-border/70 focus-visible:ring-1 focus-visible:ring-border/60 focus-visible:ring-offset-0"
+              className="model-picker-search-input h-9 rounded-xl border-0 bg-transparent pl-9 pr-3 text-[13px] shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
               autoFocus
               onClick={(e) => e.stopPropagation()}
               onKeyDown={(e) => e.stopPropagation()}
@@ -3705,21 +3757,13 @@ const NavbarModelSelector = ({
           </div>
         </div>
 
-        <ScrollArea className="chat-model-menu-scroll relative z-10 h-[min(70dvh,460px)]">
+        <ScrollArea className="chat-model-menu-scroll h-[min(70dvh,456px)]">
           {/* Provider-grouped sections. */}
           {grouped.length > 0 ? (
-            <div className="px-1.5 py-2">
+            <div className="model-picker-list px-2 pb-2 pt-1.5">
               {grouped.map(([provider, models]) => (
-                <div key={provider} className="mt-3 first:mt-0">
-                  <div className="flex items-center gap-2 px-2 pb-1.5 text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/60">
-                    <span className="inline-flex h-4 w-4 items-center justify-center rounded-md bg-background/70 shadow-sm ring-1 ring-border/50">
-                      <IconProvider name={resolveProviderIconName(provider)} size={12} />
-                    </span>
-                    <span>{provider}</span>
-                    <span className="ml-auto rounded-full bg-background/70 px-1.5 py-0.5 text-[10px] tracking-normal text-muted-foreground/70 ring-1 ring-border/45">
-                      {models.length}
-                    </span>
-                  </div>
+                <div key={provider} className="model-provider-section">
+                  <ProviderHeading provider={provider} models={models} />
                   <div className="flex flex-col gap-0.5">
                     {models.map((m: any) => (
                       <ModelRow key={m.name} model={m} />

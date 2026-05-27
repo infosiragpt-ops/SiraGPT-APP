@@ -50,10 +50,11 @@ export function resolveModelProviderName(model: ModelIconInput | null | undefine
   if (has(searchable, /moonshotai\/|moonshot|kimi/)) return "Moonshot AI"
   if (has(searchable, /qwen\/|qwen|alibaba/)) return "Qwen"
   if (has(searchable, /ollama/)) return "Ollama"
-  if (has(searchable, /meta-llama\/|meta\/|llama/)) return "Meta"
-  if (has(searchable, /mistralai\/|mistral|codestral/)) return "Mistral AI"
+  if (has(searchable, /groq\/|\bgroq\b/)) return "Groq"
   if (has(searchable, /nvidia\/|nvidia|nemotron/)) return "NVIDIA"
   if (has(searchable, /poolside\/|poolside|laguna/)) return "Poolside"
+  if (has(searchable, /meta-llama\/|meta\/|llama/)) return "Meta"
+  if (has(searchable, /mistralai\/|mistral|codestral/)) return "Mistral AI"
   if (has(searchable, /\bz\.?ai\b|z-ai\/|zhipu|chatglm|\bglm[-\s]?\d?/)) return "Z.ai"
   if (has(searchable, /bytedance-seed\/|seedream|bytedance|doubao/)) return "ByteDance Seed"
 
@@ -99,10 +100,11 @@ export function resolveModelIconName(model: ModelIconInput | null | undefined): 
   if (has(searchable, /seedream|bytedance|doubao/)) return "SeedreamLogo"
   if (has(searchable, /qwen|alibaba/)) return "QwenLogo"
   if (has(searchable, /ollama/)) return "OllamaLogo"
-  if (has(searchable, /llama|meta-llama|meta\//)) return "MetaLogo"
-  if (has(searchable, /mistral|codestral/)) return "MistralLogo"
+  if (has(searchable, /groq\/|\bgroq\b/)) return "MessageSquare"
   if (has(searchable, /nvidia|nemotron/)) return "NvidiaLogo"
   if (has(searchable, /poolside|laguna/)) return "PoolsideLogo"
+  if (has(searchable, /llama|meta-llama|meta\//)) return "MetaLogo"
+  if (has(searchable, /mistral|codestral/)) return "MistralLogo"
 
   if (explicitIcon && explicitIcon !== "OpenRouterLogo") return explicitIcon
   if (provider.includes("openai")) return "ChatGPTLogo"
@@ -117,6 +119,7 @@ export function resolveModelIconName(model: ModelIconInput | null | undefined): 
   if (provider.includes("nvidia")) return "NvidiaLogo"
   if (provider.includes("poolside")) return "PoolsideLogo"
   if (provider.includes("ollama")) return "OllamaLogo"
+  if (provider.includes("groq")) return "MessageSquare"
   if (provider.includes("openrouter")) return "OpenRouterLogo"
 
   return explicitIcon || "Bot"

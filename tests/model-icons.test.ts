@@ -67,6 +67,7 @@ describe("resolveModelIconName · brand detection by name", () => {
 
   it("identifies provider brands hidden behind OpenRouter", () => {
     assert.equal(resolveModelIconName({ name: "nvidia/nemotron-3-super-120b-a12b", provider: "OpenRouter", icon: "OpenRouterLogo" }), "NvidiaLogo")
+    assert.equal(resolveModelIconName({ name: "nvidia/llama-3.1-nemotron-ultra-253b-v1", provider: "OpenRouter", icon: "OpenRouterLogo" }), "NvidiaLogo")
     assert.equal(resolveModelIconName({ name: "poolside/laguna-m.1:free", provider: "OpenRouter", icon: "OpenRouterLogo" }), "PoolsideLogo")
     assert.equal(resolveModelIconName({ name: "ollama/llama3.2", provider: "OpenRouter", icon: "OpenRouterLogo" }), "OllamaLogo")
   })
@@ -129,8 +130,10 @@ describe("resolveModelProviderName", () => {
     assert.equal(resolveModelProviderName({ name: "meta-llama/llama-3.1-70b-instruct", provider: "OpenRouter" }), "Meta")
     assert.equal(resolveModelProviderName({ name: "mistralai/mistral-medium-3-5", provider: "OpenRouter" }), "Mistral AI")
     assert.equal(resolveModelProviderName({ name: "nvidia/nemotron-3-super-120b-a12b", provider: "OpenRouter" }), "NVIDIA")
+    assert.equal(resolveModelProviderName({ name: "nvidia/llama-3.1-nemotron-ultra-253b-v1", provider: "OpenRouter" }), "NVIDIA")
     assert.equal(resolveModelProviderName({ name: "poolside/laguna-xs.2:free", provider: "OpenRouter" }), "Poolside")
     assert.equal(resolveModelProviderName({ name: "z-ai/glm-5.1", provider: "OpenRouter" }), "Z.ai")
+    assert.equal(resolveModelProviderName({ name: "groq/llama-3.3-70b-versatile", provider: "OpenRouter" }), "Groq")
   })
 
   it("keeps unknown routed models under their configured provider", () => {
