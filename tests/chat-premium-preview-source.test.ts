@@ -25,9 +25,14 @@ describe("premium tool preview source contract", () => {
     assert.notEqual(premiumMenuEnd, -1, "missing premium tools menu end")
 
     const premiumMenu = source.slice(premiumMenuStart, premiumMenuEnd)
-    for (const label of ["Imágenes", "Voz", "Video Generation", "Música", "Thesis Generator"]) {
+    for (const label of ["Imágenes", "Voz", "Video Generation", "Música", "Generador de tesis"]) {
       assert.match(premiumMenu, new RegExp(label), `missing premium menu label ${label}`)
     }
+    assert.match(
+      premiumMenu,
+      /aria-hidden="true">🎓<\/span>/,
+      "thesis generator premium menu item should show the graduation cap logo"
+    )
 
     const previewDisabledCount = (premiumMenu.match(/disabled=\{isPremiumPreviewSwitchDisabled\}/g) || []).length
     assert.equal(previewDisabledCount, 5, "all five premium preview tools should use the narrow preview disabled guard")

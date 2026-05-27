@@ -28,7 +28,6 @@ import {
   Monitor,
   Share,
   Search,
-  BookOpen,
   Download,
   AudioLines,
   RefreshCw,
@@ -1341,17 +1340,14 @@ const ActionsDropdown = ({
                 ? 'bg-purple-100 dark:bg-purple-900/20'
                 : 'bg-purple-100 dark:bg-purple-900/20'
                 }`}>
-                <BookOpen className={`h-4 w-4 ${chatType === 'thesis'
-                  ? 'text-purple-600 dark:text-purple-400'
-                  : 'text-purple-600 dark:text-purple-400'
-                  }`} />
+                <span className="text-base leading-none" aria-hidden="true">🎓</span>
               </div>
               <div className="flex-1">
                 <div className="liquid-label font-medium text-sm">
-                  {chatType === 'thesis' ? 'Thesis Generator Active' : 'Thesis Generator'}
+                  {chatType === 'thesis' ? 'Generador de tesis activo' : 'Generador de tesis'}
                 </div>
                 <div className="text-xs text-muted-foreground">
-                  {isFreePlan ? 'Vista previa de tesis académica' : 'Generate comprehensive academic theses'}
+                  {isFreePlan ? 'Vista previa de tesis académica' : 'Genera tesis académicas completas'}
                 </div>
               </div>
               {chatType === 'thesis' && (
@@ -2785,7 +2781,7 @@ const ActiveToolsDisplay = ({
 
       {chatType === 'thesis' && (
         <div className="flex items-center gap-1.5 bg-purple-100 dark:bg-purple-900/20 text-purple-700 dark:text-purple-300 px-2 py-1 rounded-full text-xs border border-purple-200 dark:border-purple-800">
-          <BookOpen className="h-3 w-3" />
+          <span className="text-xs leading-none" aria-hidden="true">🎓</span>
           <span className="font-medium">Generador de tesis</span>
           <div className="w-2 h-2 bg-purple-500 rounded-full ml-1" />
           <Button
