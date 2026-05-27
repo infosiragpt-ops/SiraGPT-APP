@@ -31,6 +31,7 @@ import {
 import { apiClient } from "@/lib/api"
 import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
 import { toast } from "sonner"
+import { useAuth } from "@/lib/auth-context-integrated"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 interface VideoOperation {
@@ -70,6 +71,9 @@ interface GeneratedVideo {
 }
 
 export default function VideoGenerationComponent() {
+  const { user } = useAuth()
+  const isPrivilegedUser = user?.isSuperAdmin === true || (user as any)?.role === "SUPER_ADMIN"
+  const isFreePlan = String(user?.plan || "FREE").trim().toUpperCase() === "FREE" && !isPrivilegedUser
   const [prompt, setPrompt] = React.useState("")
   const [aspectRatio, setAspectRatio] = React.useState<'16:9' | '9:16' | '1:1'>('16:9')
   const [negativePrompt, setNegativePrompt] = React.useState("")
@@ -177,6 +181,10 @@ export default function VideoGenerationComponent() {
     const cleanPrompt = normalized.value.trim()
     if (!cleanPrompt) {
       toast.error('Please enter a video description')
+      return
+    }
+    if (isFreePlan) {
+      toast.info('Video está en vista previa para usuarios FREE. Sube de plan para generar videos.')
       return
     }
 
@@ -335,6 +343,7 @@ export default function VideoGenerationComponent() {
         <h3 className="text-lg font-semibold flex items-center justify-center gap-2">
           <Video className="h-5 w-5" />
           AI Video Generation
+          {isFreePlan && <Badge variant="secondary">Vista previa</Badge>}
         </h3>
         <p className="text-sm text-muted-foreground mt-1">
           Create stunning 8-second videos using Fal.ai Veo3 (Powered by Google Veo)
@@ -451,7 +460,7 @@ export default function VideoGenerationComponent() {
           {/* Generate Button */}
           <Button
             onClick={generateVideo}
-            disabled={isGenerating || !prompt.trim()}
+            disabled={isGenerating || !prompt.trim() || isFreePlan}
             className="w-full"
             size="lg"
           >
@@ -463,7 +472,7 @@ export default function VideoGenerationComponent() {
             ) : (
               <>
                 <Video className="h-4 w-4 mr-2" />
-                Generate 8s Video
+                {isFreePlan ? 'Sube de plan para generar' : 'Generate 8s Video'}
               </>
             )}
           </Button>

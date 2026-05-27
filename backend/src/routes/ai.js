@@ -2,6 +2,7 @@ const express = require('express');
 const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
 const { requireScope } = require('../middleware/require-scope');
+const requirePaidPlan = require('../middleware/require-paid-plan');
 
 // Lazy/safe enforce-org-quota middleware. Wrapped in a try/catch so a
 // crash in the middleware module (e.g. prisma model missing in dev) can
@@ -490,6 +491,7 @@ router.post(
     body('customInstruction').optional().isString().trim().isLength({ max: 1000 }),
   ],
   authenticateToken,
+  requirePaidPlan({ feature: 'image_generation' }),
   async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
@@ -5023,6 +5025,7 @@ router.post(
     body('model').trim().notEmpty().withMessage('Model is required'),
   ],
   authenticateToken,
+  requirePaidPlan({ feature: 'image_generation' }),
   async (req, res) => {
     try {
       const errors = validationResult(req);
@@ -5442,6 +5445,7 @@ router.post(
     body('imageCount').optional().isInt({ min: 1, max: 5 }).withMessage('Image count must be between 1 and 5'),
   ],
   authenticateToken,
+  requirePaidPlan({ feature: 'image_generation' }),
   async (req, res) => {
     const requestAbortController = new AbortController();
     let clientDisconnected = false;
@@ -5788,6 +5792,7 @@ router.post(
     body('image_url').optional().isString(),
   ],
   authenticateToken,
+  requirePaidPlan({ feature: 'video_generation' }),
   async (req, res) => {
     try {
       const errors = validationResult(req);

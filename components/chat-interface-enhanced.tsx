@@ -217,6 +217,12 @@ const isComposerFileUploadPending = (file: any): boolean =>
 const isComposerFileUploadFailed = (file: any): boolean =>
   Boolean(file && file.status === "failed")
 
+const normalizePlanName = (plan?: string | null): string =>
+  String(plan || "FREE").trim().toUpperCase()
+
+const isFreePlanName = (plan?: string | null): boolean =>
+  normalizePlanName(plan) === "FREE"
+
 const sanitizeLongPasteMetaForMessage = (meta: any) => {
   if (!meta || meta.kind !== "long_paste_document") return null
   return {
@@ -825,6 +831,7 @@ const ActionsDropdown = ({
   const [mobileAppsOpen, setMobileAppsOpen] = React.useState(false);
   const [justClosed, setJustClosed] = React.useState(false);
   const closeTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
+  const isFreePlan = isFreePlanName(currentPlan);
 
   const handleFileUpload = (event?: Event | React.SyntheticEvent) => {
     event?.preventDefault?.();
@@ -1197,7 +1204,7 @@ const ActionsDropdown = ({
           <DropdownMenuItem
             className="liquid-menu-item"
             onClick={handleImageGenerationToggle}
-            disabled={currentPlan === "FREE"}
+            disabled={isToolSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
               <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isImageGenerationActive
@@ -1214,13 +1221,13 @@ const ActionsDropdown = ({
                   {isImageGenerationActive ? 'Imágenes activas' : 'Imágenes'}
                 </div>
                 <div className="text-xs text-muted-foreground">
-                  {isGeneratingImage ? 'Generando ahora' : 'Genera imágenes con IA'}
+                  {isFreePlan ? 'Vista previa de generación con IA' : isGeneratingImage ? 'Generando ahora' : 'Genera imágenes con IA'}
                 </div>
               </div>
               {(isImageGenerationActive || isGeneratingImage) && (
                 <div className={cn("w-2 h-2 bg-pink-500 rounded-full", isGeneratingImage && "animate-pulse")} />
               )}
-              {currentPlan === "FREE" && (
+              {isFreePlan && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
               )}
             </div>
@@ -1230,7 +1237,7 @@ const ActionsDropdown = ({
           <DropdownMenuItem
             className="liquid-menu-item"
             onClick={() => { handleVoiceGenerationToggle(); setIsOpen(false); }}
-            disabled={currentPlan === "FREE" || isToolSwitchDisabled}
+            disabled={isToolSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
               <div className="liquid-icon w-8 h-8 rounded-lg bg-cyan-100 dark:bg-cyan-900/20 flex items-center justify-center">
@@ -1239,13 +1246,13 @@ const ActionsDropdown = ({
               <div className="flex-1">
                 <div className="liquid-label font-medium text-sm">Voz</div>
                 <div className="text-xs text-muted-foreground">
-                  ElevenLabs / Mimo HD · TTS
+                  {isFreePlan ? 'Vista previa ElevenLabs / Mimo HD' : 'ElevenLabs / Mimo HD · TTS'}
                 </div>
               </div>
               {isVoiceGenerationActive && (
                 <div className="w-2 h-2 bg-cyan-500 rounded-full" />
               )}
-              {currentPlan === "FREE" && (
+              {isFreePlan && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
               )}
             </div>
@@ -1255,7 +1262,7 @@ const ActionsDropdown = ({
           <DropdownMenuItem
             className="liquid-menu-item"
             onClick={handleVideoGenerationToggle}
-            disabled={currentPlan === "FREE" || isToolSwitchDisabled}
+            disabled={isToolSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
               <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isVideoGenerationActive
@@ -1272,13 +1279,13 @@ const ActionsDropdown = ({
                   {isVideoGenerationActive ? 'Video Generation Active' : 'Video Generation'}
                 </div>
                 <div className="text-xs text-muted-foreground">
-                  Create videos with Google Veo 3
+                  {isFreePlan ? 'Vista previa de video con IA' : 'Create videos with Google Veo 3'}
                 </div>
               </div>
               {isVideoGenerationActive && (
                 <div className="w-2 h-2 bg-orange-500 rounded-full" />
               )}
-              {currentPlan === "FREE" && (
+              {isFreePlan && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
               )}
             </div>
@@ -1288,7 +1295,7 @@ const ActionsDropdown = ({
           <DropdownMenuItem
             className="liquid-menu-item"
             onClick={() => { handleMusicGenerationToggle(); setIsOpen(false); }}
-            disabled={currentPlan === "FREE" || isToolSwitchDisabled}
+            disabled={isToolSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
               <div className="liquid-icon w-8 h-8 rounded-lg bg-rose-100 dark:bg-rose-900/20 flex items-center justify-center">
@@ -1299,13 +1306,13 @@ const ActionsDropdown = ({
                   {isMusicGenerationActive ? 'Música activa' : 'Música'}
                 </div>
                 <div className="text-xs text-muted-foreground">
-                  Lyria 3 Pro · genera canciones con IA
+                  {isFreePlan ? 'Vista previa de música con IA' : 'Lyria 3 Pro · genera canciones con IA'}
                 </div>
               </div>
               {isMusicGenerationActive && (
                 <div className="w-2 h-2 bg-rose-500 rounded-full" />
               )}
-              {currentPlan === "FREE" && (
+              {isFreePlan && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
               )}
             </div>
@@ -1352,7 +1359,7 @@ const ActionsDropdown = ({
               setChatType('thesis');
               setIsOpen(false);
             }}
-            disabled={currentPlan === "FREE" || isToolSwitchDisabled}
+            disabled={isToolSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
               <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${chatType === 'thesis'
@@ -1369,13 +1376,13 @@ const ActionsDropdown = ({
                   {chatType === 'thesis' ? 'Thesis Generator Active' : 'Thesis Generator'}
                 </div>
                 <div className="text-xs text-muted-foreground">
-                  Generate comprehensive academic theses
+                  {isFreePlan ? 'Vista previa de tesis académica' : 'Generate comprehensive academic theses'}
                 </div>
               </div>
               {chatType === 'thesis' && (
                 <div className="w-2 h-2 bg-purple-500 rounded-full" />
               )}
-              {currentPlan === "FREE" && (
+              {isFreePlan && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
               )}
             </div>
@@ -4582,6 +4589,8 @@ But first, you need to connect your Spotify account securely using the button be
   const [subscribeOpen, setSubscribeOpen] = React.useState(false);
   const [isSubscribing, setIsSubscribing] = React.useState(false);
   const [currentUserInfo, setCurrentUserInfo] = React.useState<any>(null);
+  const currentPlan = normalizePlanName(user?.plan);
+  const isFreePlan = isFreePlanName(currentPlan);
   const [splitViewContent, setSplitViewContent] = React.useState<any>(null)
   const [documentPreviewUrl, setDocumentPreviewUrl] = React.useState<DocumentPreviewTarget | null>(null);
   const [composerPreviewIndex, setComposerPreviewIndex] = React.useState<number | null>(null);
@@ -4642,6 +4651,9 @@ But first, you need to connect your Spotify account securely using the button be
       lowerMessage.includes('monthly limit exceeded') ||
       lowerMessage.includes('monthly video generation limit exceeded') ||
       lowerMessage.includes('free monthly queries exhausted') ||
+      lowerMessage.includes('upgrade required') ||
+      lowerMessage.includes('upgrade_required') ||
+      lowerMessage.includes('sube de plan') ||
       (lowerMessage.includes('monthly') && lowerMessage.includes('limit'));
   }, []);
 
@@ -6362,6 +6374,31 @@ But first, you need to connect your Spotify account securely using the button be
     }
 
     const msg = rawMsg || buildFileOnlyPrompt(composerFiles);
+    const activeFreePreviewTool = isFreePlan
+      ? (isImageGenerationActive || chatType === 'image')
+        ? 'Imágenes'
+        : (isVideoGenerationActive || chatType === 'video')
+          ? 'Video'
+          : isVoiceGenerationActive
+            ? 'Voz'
+            : isMusicGenerationActive
+              ? 'Música'
+              : chatType === 'thesis'
+                ? 'Tesis'
+                : null
+      : null;
+
+    if (activeFreePreviewTool) {
+      setSubscribeOpen(true);
+      toast.info(`${activeFreePreviewTool} está en vista previa para usuarios FREE. Sube de plan para usarla.`, {
+        duration: 3800,
+      });
+      track("premium_tool_preview.blocked_send", {
+        tool: activeFreePreviewTool.toLowerCase(),
+        plan: currentPlan,
+      });
+      return;
+    }
 
     // Capture the user's intent to send BEFORE the busy-queue branch
     // so queued messages count toward the same funnel as immediately-
@@ -8547,8 +8584,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       </div>
     );
   }
-
-  const currentPlan = user?.plan || user?.plan || 'FREE';
 
   return (
     <div

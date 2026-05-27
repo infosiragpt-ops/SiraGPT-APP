@@ -30,6 +30,7 @@ export type AnalyticsEvent =
   | "theme.toggled"
   | "language.toggled"
   | "plan.upgrade_started"
+  | "premium_tool_preview.blocked_send"
   | "error.client_boundary"
   | "error.route"
   | "error.global"

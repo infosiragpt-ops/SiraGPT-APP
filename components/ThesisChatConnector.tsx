@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { useChat } from '@/lib/chat-context-integrated'
+import { useAuth } from '@/lib/auth-context-integrated'
 import { toast } from 'sonner'
 
 interface ThesisChatConnectorProps {
@@ -17,6 +18,9 @@ interface ThesisChatConnectorProps {
 const ThesisChatConnector: React.FC<ThesisChatConnectorProps> = ({ onComplete }) => {
   const [topics, setTopics] = useState<string[]>(['', ''])
   const { addThesisMessage, currentChat, setChatType } = useChat()
+  const { user } = useAuth()
+  const isPrivilegedUser = user?.isSuperAdmin === true || (user as any)?.role === "SUPER_ADMIN"
+  const isFreePlan = String(user?.plan || "FREE").trim().toUpperCase() === "FREE" && !isPrivilegedUser
 
   const addTopic = () => {
     setTopics([...topics, ''])
@@ -39,6 +43,10 @@ const ThesisChatConnector: React.FC<ThesisChatConnectorProps> = ({ onComplete })
     
     if (validTopics.length === 0) {
       toast.error('Please add at least one topic')
+      return
+    }
+    if (isFreePlan) {
+      toast.info('Tesis está en vista previa para usuarios FREE. Sube de plan para generar documentos.')
       return
     }
 
@@ -64,6 +72,7 @@ const ThesisChatConnector: React.FC<ThesisChatConnectorProps> = ({ onComplete })
         <CardTitle className="flex items-center gap-2 text-lg">
           <BookOpen className="h-5 w-5" />
           Thesis Generator
+          {isFreePlan && <Badge variant="secondary">Vista previa</Badge>}
         </CardTitle>
         <CardDescription className="text-sm">
           Generate comprehensive academic theses from research topics. The AI will search different websites, collect materials, and create a detailed thesis document. You can provide one topic for a focused thesis or multiple topics for comparative analysis.
@@ -110,12 +119,12 @@ const ThesisChatConnector: React.FC<ThesisChatConnectorProps> = ({ onComplete })
         {/* Generate Button */}
         <Button
           onClick={handleGenerate}
-          disabled={topics.filter(t => t.trim().length > 0).length < 1 || !currentChat}
+          disabled={topics.filter(t => t.trim().length > 0).length < 1 || !currentChat || isFreePlan}
           className="w-full"
           size="sm"
         >
           <Search className="h-4 w-4 mr-2" />
-          Generar tesis en el chat
+          {isFreePlan ? 'Sube de plan para generar' : 'Generar tesis en el chat'}
         </Button>
 
         {/* Quick Examples */}

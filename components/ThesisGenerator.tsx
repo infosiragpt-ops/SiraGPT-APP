@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { apiClient } from '@/lib/api'
+import { useAuth } from '@/lib/auth-context-integrated'
 import { toast } from 'sonner'
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import {
@@ -37,6 +38,9 @@ interface ThesisStatus {
 }
 
 const ThesisGenerator: React.FC<ThesisGeneratorProps> = ({ chatId, onComplete }) => {
+  const { user } = useAuth()
+  const isPrivilegedUser = user?.isSuperAdmin === true || (user as any)?.role === "SUPER_ADMIN"
+  const isFreePlan = String(user?.plan || "FREE").trim().toUpperCase() === "FREE" && !isPrivilegedUser
   const [topics, setTopics] = useState<string[]>([''])
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [status, setStatus] = useState<ThesisStatus | null>(null)
@@ -98,6 +102,10 @@ const ThesisGenerator: React.FC<ThesisGeneratorProps> = ({ chatId, onComplete })
 
     if (validTopics.length < 2) {
       toast.error('Please add at least 2 topics for a comprehensive thesis')
+      return
+    }
+    if (isFreePlan) {
+      toast.info('Tesis está en vista previa para usuarios FREE. Sube de plan para generar documentos.')
       return
     }
 
@@ -172,6 +180,7 @@ const ThesisGenerator: React.FC<ThesisGeneratorProps> = ({ chatId, onComplete })
           <CardTitle className="flex items-center gap-2">
             <BookOpen className="h-5 w-5" />
             Thesis Generator
+            {isFreePlan && <Badge variant="secondary">Vista previa</Badge>}
           </CardTitle>
           <CardDescription>
             Enter multiple topics. The system will search different websites, collect research materials, and generate a comprehensive 50+ page thesis document.
@@ -213,7 +222,7 @@ const ThesisGenerator: React.FC<ThesisGeneratorProps> = ({ chatId, onComplete })
           {/* Generate Button */}
           <Button
             onClick={handleGenerate}
-            disabled={isGenerating || topics.filter(t => t.trim().length > 0).length < 2}
+            disabled={isGenerating || topics.filter(t => t.trim().length > 0).length < 2 || isFreePlan}
             className="w-full"
             size="lg"
           >
@@ -225,7 +234,7 @@ const ThesisGenerator: React.FC<ThesisGeneratorProps> = ({ chatId, onComplete })
             ) : (
               <>
                 <Search className="h-4 w-4 mr-2" />
-                Generate Thesis
+                {isFreePlan ? 'Sube de plan para generar' : 'Generate Thesis'}
               </>
             )}
           </Button>
@@ -351,4 +360,3 @@ const ThesisGenerator: React.FC<ThesisGeneratorProps> = ({ chatId, onComplete })
 }
 
 export default ThesisGenerator
-

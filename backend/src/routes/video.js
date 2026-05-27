@@ -598,6 +598,7 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
+const requirePaidPlan = require('../middleware/require-paid-plan');
 const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
@@ -705,7 +706,7 @@ router.post('/generate', [
   body('negative_prompt').optional().isString().withMessage('Negative prompt must be a string'),
   body('image_url').optional().isString().withMessage('Image URL must be a string'),
   body('model').optional().isString().withMessage('Model must be a string')
-], authenticateToken, async (req, res) => {
+], authenticateToken, requirePaidPlan({ feature: 'video_generation' }), async (req, res) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
