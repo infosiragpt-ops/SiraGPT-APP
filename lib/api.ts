@@ -1053,7 +1053,7 @@ class ApiClient {
           const message = details.error || `HTTP ${response.status}`;
 
           try {
-            if (typeof window !== 'undefined' && message && message.toLowerCase().includes('free monthly')) {
+            if (typeof window !== 'undefined' && message && (/free (monthly|daily)/.test(message.toLowerCase()))) {
               window.dispatchEvent(new CustomEvent('open-upgrade-modal', { detail: { message } }));
             }
           } catch (e) {
@@ -1315,7 +1315,7 @@ class ApiClient {
         try { details = await response.json(); } catch { }
         const message = details.error || `HTTP ${response.status}`;
 
-        if (typeof window !== 'undefined' && message && message.toLowerCase().includes('free monthly')) {
+        if (typeof window !== 'undefined' && message && (/free (monthly|daily)/.test(message.toLowerCase()))) {
           window.dispatchEvent(new CustomEvent('open-upgrade-modal', { detail: { message } }));
         }
 
@@ -1419,7 +1419,7 @@ class ApiClient {
         try { details = await response.json(); } catch { }
         const message = details.error || `HTTP ${response.status}`;
 
-        if (typeof window !== 'undefined' && message && message.toLowerCase().includes('free monthly')) {
+        if (typeof window !== 'undefined' && message && (/free (monthly|daily)/.test(message.toLowerCase()))) {
           window.dispatchEvent(new CustomEvent('open-upgrade-modal', { detail: { message } }));
         }
 

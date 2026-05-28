@@ -84,7 +84,7 @@ function buildGema4VirtualModel(env = process.env) {
   };
 }
 
-function buildModelQuotaPolicy(user, env = process.env) {
+function buildModelQuotaPolicy(user, env = process.env, options = {}) {
   const currentPlan = normalizePlan(user?.plan);
   const catalog = getPlanCatalog(currentPlan);
   const fallbackConfig = getGema4RuntimeConfig(env);
@@ -93,8 +93,17 @@ function buildModelQuotaPolicy(user, env = process.env) {
   const gemaUsage = toBigInt(user?.gemaTokenUsage);
   const gemaLimit = toBigInt(user?.gemaTokenLimit);
   const freeDailyLimit = toSafeNumber(catalog.dailyCalls, null);
+  const freeDailyUsed = options?.freeDailyCallsUsed == null
+    ? null
+    : Math.max(0, toSafeNumber(options.freeDailyCallsUsed, 0));
+  const legacyFreeRemaining = toSafeNumber(user?.monthlyCallLimit, freeDailyLimit || 0);
   const freeRemainingCalls = currentPlan === 'FREE' && freeDailyLimit != null
-    ? Math.max(0, Math.min(freeDailyLimit || 0, toSafeNumber(user?.monthlyCallLimit, freeDailyLimit || 0)))
+    ? Math.max(
+        0,
+        freeDailyUsed == null
+          ? Math.min(freeDailyLimit || 0, legacyFreeRemaining)
+          : (freeDailyLimit || 0) - freeDailyUsed
+      )
     : null;
   const premiumPool = currentPlan === 'ENTERPRISE' && premiumLimit <= 0n
     ? unlimitedTokenPool({ used: premiumUsage })
@@ -106,9 +115,9 @@ function buildModelQuotaPolicy(user, env = process.env) {
   const notices = [];
   if (currentPlan === 'FREE') {
     notices.push({
-      code: 'free_tier_default_model',
+      code: 'free_tier_daily_limit',
       level: 'info',
-      message: `${fallbackConfig.displayName} es el modelo predeterminado para el plan gratuito.`,
+      message: `El plan gratuito incluye ${freeDailyLimit} consultas diarias compartidas entre todos los modelos visibles.`,
     });
   }
   if (premiumPool.exhausted && !gemaPool.exhausted) {
@@ -128,19 +137,20 @@ function buildModelQuotaPolicy(user, env = process.env) {
 
   return {
     currentPlan,
-    defaultModel: currentPlan === 'FREE'
-      ? { name: fallbackConfig.model, provider: fallbackConfig.provider, displayName: fallbackConfig.displayName }
-      : null,
+    defaultModel: null,
     fallbackModel: { name: fallbackConfig.model, provider: fallbackConfig.provider, displayName: fallbackConfig.displayName },
     calls: {
       dailyLimit: freeDailyLimit,
       remaining: freeRemainingCalls,
+      used: currentPlan === 'FREE' && freeDailyLimit != null
+        ? Math.max(0, (freeDailyLimit || 0) - (freeRemainingCalls || 0))
+        : null,
       exhausted: currentPlan === 'FREE' && freeDailyLimit != null ? freeRemainingCalls <= 0 : false,
     },
     premiumTokens: premiumPool,
     gemaTokens: gemaPool,
     routing: {
-      freeTierUsesFallback: currentPlan === 'FREE',
+      freeTierUsesFallback: false,
       premiumExhaustionUsesFallback: true,
       blockedWhenFallbackExhausted: !catalog.gemaUnlimited,
     },
@@ -163,7 +173,17 @@ function resolveModelForUser(user, requestedModel, env = process.env) {
   const premiumExhausted = premiumLimit > 0n && premiumUsage >= premiumLimit;
   const gemaExhausted = !catalog.gemaUnlimited && gemaLimit > 0n && gemaUsage >= gemaLimit;
 
-  if (plan === 'FREE' || premiumExhausted) {
+  if (plan === 'FREE') {
+    return {
+      model: requestedModel,
+      blocked: false,
+      reason: 'free_tier_requested_model',
+      fallbackModel: fallbackConfig.model,
+      provider: null,
+    };
+  }
+
+  if (premiumExhausted) {
     if (gemaExhausted && !catalog.gemaUnlimited) {
       return {
         model: requestedModel,

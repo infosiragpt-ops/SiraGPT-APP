@@ -32,7 +32,7 @@ test('model router falls back to default Gema4 model when premium exhausted', ()
   assert.equal(routed.blocked, false);
 });
 
-test('model quota policy exposes free default and unlimited call state', () => {
+test('model quota policy exposes free daily call state', () => {
   const policy = buildModelQuotaPolicy({
     plan: 'FREE',
     monthlyCallLimit: 2,
@@ -43,13 +43,14 @@ test('model quota policy exposes free default and unlimited call state', () => {
   });
 
   assert.equal(policy.currentPlan, 'FREE');
-  assert.equal(typeof policy.defaultModel.name, 'string');
-  assert.equal(typeof policy.defaultModel.provider, 'string');
-  assert.equal(policy.calls.dailyLimit, null);
-  assert.equal(policy.calls.remaining, null);
+  assert.equal(policy.defaultModel, null);
+  assert.equal(policy.calls.dailyLimit, 3);
+  assert.equal(policy.calls.remaining, 2);
+  assert.equal(policy.calls.used, 1);
   assert.equal(policy.calls.exhausted, false);
   assert.equal(policy.gemaTokens.unlimited, true);
-  assert.equal(policy.notices[0].code, 'free_tier_default_model');
+  assert.equal(policy.routing.freeTierUsesFallback, false);
+  assert.equal(policy.notices[0].code, 'free_tier_daily_limit');
 });
 
 test('model quota policy reports exhausted premium fallback separately from Gema pool', () => {
@@ -109,12 +110,8 @@ test('userQuotaDigest: FREE user sees plan + fallback brand + dailyCalls', () =>
   assert.equal(digest.premium.remaining, '0', 'FREE plan has 0 premium tokens remaining');
   assert.equal(digest.premium.limit, '0');
   assert.equal(typeof digest.fallback.provider, 'string');
-  // FREE plan went unlimited after the "make free unlimited" commit
-  // — dailyCalls is null and the policy reports it as no limit.
-  assert.ok(
-    digest.dailyCalls.dailyLimit === null || typeof digest.dailyCalls.dailyLimit === 'number',
-    `dailyLimit should be null or a number, got ${typeof digest.dailyCalls.dailyLimit}`,
-  );
+  assert.equal(digest.dailyCalls.dailyLimit, 3);
+  assert.equal(digest.dailyCalls.remaining, 3);
 });
 
 test('userQuotaDigest: PRO user with 70% premium usage reports pctUsed=70', () => {
@@ -206,7 +203,7 @@ test('suggestUpgradePlan: ENTERPRISE unlimited returns null', () => {
   );
 });
 
-test('isWithinFreeIaQuota: unlimited plan returns ok=true + dailyLimit=null', () => {
+test('isWithinFreeIaQuota: paid plan returns ok=true + dailyLimit=null', () => {
   const { isWithinFreeIaQuota } = require('../src/services/model-quota-router');
   const r = isWithinFreeIaQuota({ plan: 'PRO' });
   assert.equal(r.ok, true);
@@ -263,6 +260,7 @@ test('Gema4 fallback can be configured by environment without exposing secrets',
   });
   assert.equal(virtual.name, 'custom-gema4');
   assert.equal(virtual.provider, 'OpenRouter');
-  assert.equal(routed.model, 'custom-gema4');
-  assert.equal(routed.provider, 'OpenRouter');
+  assert.equal(routed.model, 'gpt-5');
+  assert.equal(routed.provider, null);
+  assert.equal(routed.fallbackModel, 'custom-gema4');
 });

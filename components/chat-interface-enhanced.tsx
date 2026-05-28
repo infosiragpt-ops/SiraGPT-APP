@@ -4771,10 +4771,12 @@ But first, you need to connect your Spotify account securely using the button be
       lowerMessage.includes('monthly limit exceeded') ||
       lowerMessage.includes('monthly video generation limit exceeded') ||
       lowerMessage.includes('free monthly queries exhausted') ||
+      lowerMessage.includes('free daily queries exhausted') ||
       lowerMessage.includes('upgrade required') ||
       lowerMessage.includes('upgrade_required') ||
       lowerMessage.includes('sube de plan') ||
-      (lowerMessage.includes('monthly') && lowerMessage.includes('limit'));
+      (lowerMessage.includes('monthly') && lowerMessage.includes('limit')) ||
+      (lowerMessage.includes('daily') && lowerMessage.includes('limit'));
   }, []);
 
 

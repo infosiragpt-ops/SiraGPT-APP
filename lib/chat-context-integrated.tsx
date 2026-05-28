@@ -25,7 +25,9 @@ const isMonthlyLimitError = (errorMessage: string) => {
     lowerMessage.includes('monthly limit exceeded') ||
     lowerMessage.includes('monthly video generation limit exceeded') ||
     lowerMessage.includes('free monthly queries exhausted') ||
-    (lowerMessage.includes('monthly') && lowerMessage.includes('limit'));
+    lowerMessage.includes('free daily queries exhausted') ||
+    (lowerMessage.includes('monthly') && lowerMessage.includes('limit')) ||
+    (lowerMessage.includes('daily') && lowerMessage.includes('limit'));
 };
 
 const normalizeChatError = (raw: string): string => {

@@ -62,6 +62,20 @@ function fakeNext() {
   return next;
 }
 
+function prismaWithDailyCount(count = 0) {
+  return {
+    apiUsage: {
+      async count() {
+        return count;
+      },
+    },
+  };
+}
+
+function tick() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
 describe("isEnforcementEnabled", () => {
   test("default ON when PLAN_QUOTAS_ENFORCED is unset", () => {
     assert.equal(isEnforcementEnabled({}), true);
@@ -90,7 +104,7 @@ describe("enforcePlanQuota — anonymous and unlimited paths", () => {
     assert.equal(Object.keys(res._state().headers).length, 0);
   });
 
-  test("ENTERPRISE with monthlyLimit=0 (unlimited) → headers off, passes through", () => {
+  test("ENTERPRISE with monthlyLimit=0 (unlimited) → headers set, passes through", async () => {
     const mw = enforcePlanQuota({ surface: "rag" });
     const res = fakeRes();
     const next = fakeNext();
@@ -99,18 +113,20 @@ describe("enforcePlanQuota — anonymous and unlimited paths", () => {
       res,
       next,
     );
+    await tick();
     assert.equal(next.calls(), 1);
-    // No headers — kind: 'none' for the unlimited posture is the
-    // signal that quota state is meaningless here. (limit:0 path
-    // never sets headers in the middleware to avoid lying about a
-    // "0 remaining" cap.)
+    assert.equal(res._state().headers[HEADER_PLAN], "ENTERPRISE");
+    assert.equal(res._state().headers[HEADER_KIND], "tokens");
     assert.equal(res._state().statusCode, 200);
   });
 });
 
-describe("enforcePlanQuota — FREE plan unlimited", () => {
-  test("FREE user → headers set as unlimited, next() called", () => {
-    const mw = enforcePlanQuota({ surface: "document-ai" });
+describe("enforcePlanQuota — FREE plan daily calls", () => {
+  test("FREE user under daily cap → headers set, next() called", async () => {
+    const mw = enforcePlanQuota({
+      surface: "document-ai",
+      prismaClient: prismaWithDailyCount(2),
+    });
     const res = fakeRes();
     const next = fakeNext();
     mw(
@@ -119,18 +135,41 @@ describe("enforcePlanQuota — FREE plan unlimited", () => {
       next,
       { method: "POST", originalUrl: "/api/document-ai" },
     );
+    await tick();
     assert.equal(next.calls(), 1);
     const { headers } = res._state();
     assert.equal(headers[HEADER_PLAN], "FREE");
     assert.equal(headers[HEADER_KIND], "calls");
-    assert.equal(headers[HEADER_LIMIT], "0");
-    assert.equal(headers[HEADER_USED], "0");
-    assert.equal(headers[HEADER_REMAINING], "0");
+    assert.equal(headers[HEADER_LIMIT], "3");
+    assert.equal(headers[HEADER_USED], "2");
+    assert.equal(headers[HEADER_REMAINING], "1");
+  });
+
+  test("FREE user at daily cap → 429", async () => {
+    const mw = enforcePlanQuota({
+      surface: "document-ai",
+      prismaClient: prismaWithDailyCount(3),
+    });
+    const res = fakeRes();
+    const next = fakeNext();
+    mw(
+      { user: { id: "u1", plan: "FREE", monthlyCallLimit: 3 } },
+      res,
+      next,
+    );
+    await tick();
+    assert.equal(next.calls(), 0);
+    const { statusCode, payload } = res._state();
+    assert.equal(statusCode, 429);
+    assert.equal(payload.error, "Free daily queries exhausted. Please upgrade to continue.");
+    assert.equal(payload.plan, "FREE");
+    assert.equal(payload.remaining, 0);
+    assert.equal(payload.upgradeRequired, true);
   });
 });
 
 describe("enforcePlanQuota — Paid plan token accounting", () => {
-  test("PRO under cap → headers set, next() called", () => {
+  test("PRO under cap → headers set, next() called", async () => {
     const mw = enforcePlanQuota({ surface: "agent" });
     const res = fakeRes();
     const next = fakeNext();
@@ -141,6 +180,7 @@ describe("enforcePlanQuota — Paid plan token accounting", () => {
       res,
       next,
     );
+    await tick();
     assert.equal(next.calls(), 1);
     assert.equal(res._state().headers[HEADER_PLAN], "PRO");
     assert.equal(res._state().headers[HEADER_KIND], "tokens");
@@ -149,7 +189,7 @@ describe("enforcePlanQuota — Paid plan token accounting", () => {
     assert.equal(res._state().headers[HEADER_REMAINING], "400000");
   });
 
-  test("PRO over cap → 429 with upgradeRequired:false (paid users get a different CTA)", () => {
+  test("PRO over cap → 429 with upgradeRequired:false (paid users get a different CTA)", async () => {
     const mw = enforcePlanQuota({ surface: "agent" });
     const res = fakeRes();
     const next = fakeNext();
@@ -160,6 +200,7 @@ describe("enforcePlanQuota — Paid plan token accounting", () => {
       res,
       next,
     );
+    await tick();
     assert.equal(next.calls(), 0);
     const { statusCode, payload } = res._state();
     assert.equal(statusCode, 429);
@@ -170,7 +211,7 @@ describe("enforcePlanQuota — Paid plan token accounting", () => {
 });
 
 describe("enforcePlanQuota — feature flag", () => {
-  test("PLAN_QUOTAS_ENFORCED=false → headers still set, never blocks (read-only mode)", () => {
+  test("PLAN_QUOTAS_ENFORCED=false → headers still set, never blocks (read-only mode)", async () => {
     const mw = enforcePlanQuota({
       surface: "test",
       envOverride: { PLAN_QUOTAS_ENFORCED: "false" },
@@ -184,6 +225,7 @@ describe("enforcePlanQuota — feature flag", () => {
       res,
       next,
     );
+    await tick();
     // next() runs even though the user is exhausted — flag is off.
     assert.equal(next.calls(), 1);
     assert.equal(res._state().statusCode, 200);

@@ -7,9 +7,10 @@
  * checks scattered across `/api/ai`:
  *
  *   FREE plan:
- *     Text chat is unlimited on the FREE plan. Legacy
- *     `monthlyCallLimit` remains on the User row for compatibility with
- *     older UI/accounting surfaces, but it no longer gates text chat.
+ *     Text chat is limited to 3 successful generations per local day
+ *     across any visible model. Legacy `monthlyCallLimit` remains on
+ *     the User row for older UI/accounting surfaces, but the live gate
+ *     counts ApiUsage rows for today's window.
  *
  *   PRO / PRO_MAX / ENTERPRISE:
  *     `apiUsage` is a token counter incremented after each
@@ -32,7 +33,7 @@
  *   ZERO quota enforcement before this change.
  */
 
-const FREE_CALL_LIMIT = 0;
+const FREE_CALL_LIMIT = 3;
 
 // Threshold below which we emit a "warning" event but still allow
 // the request through. 80% matches usage-monitor.js's existing
@@ -79,7 +80,35 @@ function clampPercentage(used, limit) {
  *     warning:    boolean,   // percentage >= WARNING_THRESHOLD (and not exceeded)
  *   }
  */
-function getPlanQuotaSnapshot(user) {
+function getFreeDailyWindow(now = new Date(), env = process.env) {
+  const rawOffset = Number.parseInt(env.SIRAGPT_FREE_DAILY_TZ_OFFSET_MINUTES || '-240', 10);
+  const offsetMinutes = Number.isFinite(rawOffset) ? rawOffset : -240;
+  const shifted = new Date(now.getTime() + offsetMinutes * 60_000);
+  const shiftedStartUtc = Date.UTC(
+    shifted.getUTCFullYear(),
+    shifted.getUTCMonth(),
+    shifted.getUTCDate()
+  );
+  const start = new Date(shiftedStartUtc - offsetMinutes * 60_000);
+  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+  return { start, end };
+}
+
+async function countFreeDailyCalls({ userId, prisma, now = new Date(), env = process.env } = {}) {
+  if (!userId || !prisma?.apiUsage?.count) return 0;
+  const { start, end } = getFreeDailyWindow(now, env);
+  return prisma.apiUsage.count({
+    where: {
+      userId,
+      timestamp: {
+        gte: start,
+        lt: end,
+      },
+    },
+  });
+}
+
+function getPlanQuotaSnapshot(user, options = {}) {
   if (!user || !user.plan) {
     return {
       plan: null,
@@ -94,16 +123,22 @@ function getPlanQuotaSnapshot(user) {
   }
 
   if (user.plan === 'FREE') {
+    const usedFromDailyRows = options.freeDailyCallsUsed == null ? null : toNumber(options.freeDailyCallsUsed);
+    const legacyRemaining = Math.max(0, Math.min(FREE_CALL_LIMIT, toNumber(user.monthlyCallLimit ?? FREE_CALL_LIMIT)));
+    const used = usedFromDailyRows == null
+      ? Math.max(0, FREE_CALL_LIMIT - legacyRemaining)
+      : Math.max(0, usedFromDailyRows);
+    const percentage = clampPercentage(used, FREE_CALL_LIMIT);
     return {
       plan: 'FREE',
       kind: 'calls',
-      used: 0,
-      limit: 0,
-      remaining: 0,
-      percentage: 0,
-      exceeded: false,
-      warning: false,
-      unlimited: true,
+      used,
+      limit: FREE_CALL_LIMIT,
+      remaining: Math.max(0, FREE_CALL_LIMIT - used),
+      percentage,
+      exceeded: used >= FREE_CALL_LIMIT,
+      warning: percentage >= WARNING_THRESHOLD && used < FREE_CALL_LIMIT,
+      unlimited: false,
     };
   }
 
@@ -150,7 +185,10 @@ async function fetchUserPlanQuota(userId, prisma) {
       },
     });
     if (!user) return null;
-    return getPlanQuotaSnapshot(user);
+    const freeDailyCallsUsed = user.plan === 'FREE'
+      ? await countFreeDailyCalls({ userId, prisma })
+      : null;
+    return getPlanQuotaSnapshot(user, { freeDailyCallsUsed });
   } catch (err) {
     // eslint-disable-next-line no-console
     console.warn('[plan-quota] fetchUserPlanQuota failed:', err && err.message);
@@ -164,19 +202,18 @@ async function fetchUserPlanQuota(userId, prisma) {
  * identical inline blocks that each:
  *
  *   FREE plan:
- *     - allow unlimited text chat.
+ *     - allow up to 3 successful generations per local day across
+ *       any visible model.
  *
  *   PAID plans:
  *     - if user.apiUsage >= user.monthlyLimit → 429 with the
  *       monthly-API-limit message and the current usage / limit.
  *
- * The shape of the 429 responses is preserved BYTE-FOR-BYTE so a
- * client UI that branches off `error === 'Free monthly queries
- * exhausted. Please upgrade to continue.'` continues to work
- * unchanged. Field order and types in the response body are also
- * preserved (BigInt apiUsage / monthlyLimit are forwarded as-is;
- * the existing `bigintSerializerMiddleware` in index.js handles
- * JSON serialization).
+ * The paid 429 response shape is preserved so client UI that branches
+ * off `error === 'Monthly API limit exceeded'` continues to work
+ * unchanged. BigInt apiUsage / monthlyLimit values are forwarded as-is;
+ * the existing `bigintSerializerMiddleware` in index.js handles JSON
+ * serialization.
  *
  * Why a discriminated `{ ok, status, body }` and not `throw`:
  *   The caller already owns the response object. Throwing forces
@@ -204,7 +241,27 @@ async function tryConsumePlanQuota({ userId, prisma, user } = {}) {
   if (!user) return { ok: true };
 
   if (user.plan === 'FREE') {
-    return { ok: true, unlimited: true };
+    const usedToday = await countFreeDailyCalls({ userId: userId || user.id, prisma });
+    if (usedToday >= FREE_CALL_LIMIT) {
+      const { end } = getFreeDailyWindow();
+      return {
+        ok: false,
+        status: 429,
+        body: {
+          error: 'Free daily queries exhausted. Please upgrade to continue.',
+          remaining: 0,
+          dailyLimit: FREE_CALL_LIMIT,
+          usedToday,
+          resetAt: end.toISOString(),
+          upgradeRequired: true,
+        },
+      };
+    }
+    return {
+      ok: true,
+      remaining: Math.max(0, FREE_CALL_LIMIT - usedToday),
+      dailyLimit: FREE_CALL_LIMIT,
+    };
   }
 
   // Paid plans: token-based check is non-atomic on purpose. The
@@ -232,6 +289,8 @@ async function tryConsumePlanQuota({ userId, prisma, user } = {}) {
 
 module.exports = {
   getPlanQuotaSnapshot,
+  getFreeDailyWindow,
+  countFreeDailyCalls,
   fetchUserPlanQuota,
   tryConsumePlanQuota,
   FREE_CALL_LIMIT,

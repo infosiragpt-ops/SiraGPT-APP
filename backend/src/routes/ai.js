@@ -85,6 +85,7 @@ const {
   resolveModelForUser,
   persistModelPreference,
 } = require('../services/model-quota-router');
+const { curateVisibleTextModels } = require('../services/visible-model-catalog');
 const streamResume = require('../services/ai/stream-resume');
 const promptInjectionDetector = require('../services/ai/prompt-injection-detector');
 const longTermMemory = require('../services/long-term-memory');
@@ -661,7 +662,10 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
   try {
     const { type } = req.query; // Query se 'type' hasil karein (e.g., ?type=TEXT)
     const userPlan = req.user?.plan || 'FREE';
-    const modelPolicy = buildModelQuotaPolicy(req.user);
+    const freeDailyCallsUsed = req.user?.plan === 'FREE'
+      ? await countDailyApiCalls(req.user.id)
+      : null;
+    const modelPolicy = buildModelQuotaPolicy(req.user, process.env, { freeDailyCallsUsed });
 
     const whereClause = {
       isActive: true,
@@ -773,6 +777,10 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
             : [...models, fallbackModel];
         }
       }
+    }
+
+    if (wantText) {
+      models = curateVisibleTextModels(models);
     }
 
     // Plan gating — drop catalogued models the user's plan can't use, but
@@ -925,20 +933,32 @@ router.post('/intent/semantic', optionalAuth, async (req, res) => {
 });
 // ...existing imports...
 
-// Add helper: count ApiUsage records (completed calls) for current calendar month
-// Add this helper close to the top with other helpers/imports:
-//if want to use api usage for free plan
-async function countMonthlyApiCalls(userId) {
+function getBoliviaDayWindow(now = new Date()) {
+  const offsetMinutes = Number.parseInt(process.env.SIRAGPT_FREE_DAILY_TZ_OFFSET_MINUTES || '-240', 10);
+  const safeOffset = Number.isFinite(offsetMinutes) ? offsetMinutes : -240;
+  const shifted = new Date(now.getTime() + safeOffset * 60_000);
+  const startShiftedUtc = Date.UTC(
+    shifted.getUTCFullYear(),
+    shifted.getUTCMonth(),
+    shifted.getUTCDate()
+  );
+  const start = new Date(startShiftedUtc - safeOffset * 60_000);
+  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+  return { start, end };
+}
+
+// Count completed ApiUsage records for the current local day. This powers
+// the Free plan's 3-consultas/dia cap across whichever model the user picks.
+async function countDailyApiCalls(userId) {
   const now = new Date();
-  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-  const startOfNextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  const { start, end } = getBoliviaDayWindow(now);
 
   const count = await prisma.apiUsage.count({
     where: {
       userId,
       timestamp: {
-        gte: startOfMonth,
-        lt: startOfNextMonth
+        gte: start,
+        lt: end
       }
     }
   });

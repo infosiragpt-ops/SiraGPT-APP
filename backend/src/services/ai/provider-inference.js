@@ -43,11 +43,12 @@ function inferProviderFromModelId(modelId) {
   // 2) OpenRouter — slug-prefixed models go through the OpenRouter
   //    aggregator, regardless of who originally trained them.
   if (
-    m.includes('x-ai/') || m.includes('openrouter/') || m.includes('anthropic/')
+    m.includes('openai/') || m.includes('google/')
+    || m.includes('x-ai/') || m.includes('openrouter/') || m.includes('anthropic/')
     || m.includes('meta-llama/') || m.includes('deepseek/')
     || m.includes('/gpt-oss') || m.includes('moonshotai/')
     || m.includes('qwen/') || m.includes('mistralai/')
-    || m.includes('cohere/') || m.includes('nousresearch/')
+    || m.includes('z-ai/') || m.includes('cohere/') || m.includes('nousresearch/')
   ) return 'OpenRouter';
 
   // 3) Google Gemini family.

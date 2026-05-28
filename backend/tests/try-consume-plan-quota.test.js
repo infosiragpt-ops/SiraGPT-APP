@@ -3,7 +3,7 @@
  * extracted function so the seven /api/ai call sites it replaces
  * keep behaving byte-for-byte identically. Two properties matter:
  *
- *   1. FREE users are no longer blocked after 3 text calls.
+ *   1. FREE users get 3 successful calls per local day.
  *
  *   2. Paid users still use the token cap check unchanged.
  */
@@ -17,11 +17,13 @@ const {
 
 function makePrismaStub(opts = {}) {
   const calls = [];
+  const apiUsageCalls = [];
   // Use `in` instead of `??` so `null` is a valid distinct value the
   // test can assert on (Prisma's typed client returns null when no
   // row matches a strict where clause; we want to model that).
   const hasResult = "updateManyResult" in opts;
   const updateManyResult = hasResult ? opts.updateManyResult : { count: 1 };
+  const countResult = "apiUsageCount" in opts ? opts.apiUsageCount : 0;
   return {
     user: {
       async updateMany(args) {
@@ -29,7 +31,14 @@ function makePrismaStub(opts = {}) {
         return updateManyResult;
       },
     },
+    apiUsage: {
+      async count(args) {
+        apiUsageCalls.push(args);
+        return countResult;
+      },
+    },
     _calls: () => calls,
+    _apiUsageCalls: () => apiUsageCalls,
   };
 }
 
@@ -48,15 +57,35 @@ describe("tryConsumePlanQuota — anonymous", () => {
 });
 
 describe("tryConsumePlanQuota — FREE plan", () => {
-  test("FREE user → ok:true unlimited, no DB decrement", async () => {
-    const prisma = makePrismaStub({ updateManyResult: { count: 1 } });
+  test("FREE user under daily cap → ok:true, counts today's usage", async () => {
+    const prisma = makePrismaStub({ apiUsageCount: 2 });
     const result = await tryConsumePlanQuota({
       userId: "u-free",
       prisma,
       user: { id: "u-free", plan: "FREE" },
     });
-    assert.deepEqual(result, { ok: true, unlimited: true });
+    assert.deepEqual(result, { ok: true, remaining: 1, dailyLimit: 3 });
     assert.equal(prisma._calls().length, 0);
+    assert.equal(prisma._apiUsageCalls().length, 1);
+    assert.equal(prisma._apiUsageCalls()[0].where.userId, "u-free");
+    assert.ok(prisma._apiUsageCalls()[0].where.timestamp.gte instanceof Date);
+    assert.ok(prisma._apiUsageCalls()[0].where.timestamp.lt instanceof Date);
+  });
+
+  test("FREE user at daily cap → 429 daily exhaustion", async () => {
+    const prisma = makePrismaStub({ apiUsageCount: 3 });
+    const result = await tryConsumePlanQuota({
+      userId: "u-free",
+      prisma,
+      user: { id: "u-free", plan: "FREE" },
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.status, 429);
+    assert.equal(result.body.error, "Free daily queries exhausted. Please upgrade to continue.");
+    assert.equal(result.body.remaining, 0);
+    assert.equal(result.body.dailyLimit, 3);
+    assert.equal(result.body.usedToday, 3);
+    assert.equal(result.body.upgradeRequired, true);
   });
 });
 

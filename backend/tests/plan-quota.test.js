@@ -3,7 +3,7 @@
  * middleware relies on. The function is pure (no DB), so we can
  * exercise every branch with hand-crafted user shapes:
  *
- *   - FREE plan unlimited posture
+ *   - FREE plan daily call cap
  *   - Paid plans token accounting (apiUsage vs user.monthlyLimit)
  *   - Edge cases that real production data trips on:
  *       * BigInt fields from Prisma
@@ -41,8 +41,8 @@ describe("getPlanQuotaSnapshot — anonymous / missing input", () => {
   });
 });
 
-describe("getPlanQuotaSnapshot — FREE plan (unlimited)", () => {
-  test("FREE user gets an unlimited calls snapshot", () => {
+describe("getPlanQuotaSnapshot — FREE plan (daily calls)", () => {
+  test("FREE user gets a daily calls snapshot", () => {
     const snap = getPlanQuotaSnapshot({
       plan: "FREE",
       monthlyCallLimit: 3,
@@ -51,11 +51,25 @@ describe("getPlanQuotaSnapshot — FREE plan (unlimited)", () => {
     assert.equal(snap.kind, "calls");
     assert.equal(snap.limit, FREE_CALL_LIMIT);
     assert.equal(snap.used, 0);
-    assert.equal(snap.remaining, 0);
+    assert.equal(snap.remaining, 3);
     assert.equal(snap.percentage, 0);
     assert.equal(snap.exceeded, false);
     assert.equal(snap.warning, false);
-    assert.equal(snap.unlimited, true);
+    assert.equal(snap.unlimited, false);
+  });
+
+  test("FREE daily ApiUsage count drives used/remaining/exceeded", () => {
+    const snap = getPlanQuotaSnapshot(
+      {
+        plan: "FREE",
+        monthlyCallLimit: 3,
+      },
+      { freeDailyCallsUsed: 3 },
+    );
+    assert.equal(snap.used, 3);
+    assert.equal(snap.remaining, 0);
+    assert.equal(snap.percentage, 1);
+    assert.equal(snap.exceeded, true);
   });
 });
 
