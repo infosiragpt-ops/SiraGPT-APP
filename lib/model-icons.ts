@@ -83,6 +83,54 @@ export function resolveProviderIconName(provider: string | null | undefined): st
   })
 }
 
+export function resolveModelAttributionName(model: ModelIconInput | null | undefined): string {
+  if (!model) return "Otros"
+
+  const provider = normalize(model.provider)
+  const searchable = normalizedSearchText(model)
+  const icon = resolveModelIconName(model)
+
+  if (has(searchable, /\bgem+?a\b|gema4|gemma/)) return provider || "OpenRouter"
+
+  switch (icon) {
+    case "ChatGPTLogo":
+    case "ChatGPTPinkLogo":
+      return "OpenAI"
+    case "ClaudeLogo":
+      return "Anthropic"
+    case "GeminiLogo":
+      return "Google"
+    case "GrokLogo":
+      return "xAI"
+    case "DeepseekLogo":
+      return "DeepSeek"
+    case "KimiLogo":
+      return "Moonshot AI"
+    case "ZaiLogo":
+      return "Z.ai"
+    case "QwenLogo":
+      return "Qwen"
+    case "MetaLogo":
+      return "Meta"
+    case "MistralLogo":
+      return "Mistral AI"
+    case "NvidiaLogo":
+      return "NVIDIA"
+    case "PoolsideLogo":
+      return "Poolside"
+    case "OllamaLogo":
+      return "Ollama"
+    case "OpenRouterLogo":
+      return "OpenRouter"
+    case "SeedreamLogo":
+      return "ByteDance Seed"
+    case "MessageSquare":
+      return has(searchable, /grok|x-ai|\bxai\b/) ? "xAI" : "Groq"
+    default:
+      return provider || "Otros"
+  }
+}
+
 export function resolveModelIconName(model: ModelIconInput | null | undefined): string {
   if (!model) return "Bot"
 

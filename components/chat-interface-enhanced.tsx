@@ -185,6 +185,7 @@ function prefetchExcelConnector() {
 }
 import {
   compareModelProviders,
+  resolveModelAttributionName,
   resolveModelIconName,
   resolveModelProviderName,
 } from "@/lib/model-icons"
@@ -3294,6 +3295,7 @@ const NavbarModelSelector = ({
                               {models.map((model: any) => {
                                 const isActive = model.name === activeProjectModelName;
                                 const label = getModelDisplayLabel(model);
+                                const attribution = resolveModelAttributionName(model);
                                 return (
                                   <DropdownMenuItem
                                     key={model.name}
@@ -3307,6 +3309,7 @@ const NavbarModelSelector = ({
                                     <ModelLogo model={model} />
                                     <div className="min-w-0 flex-1">
                                       <div className="liquid-label truncate text-[13.5px] font-semibold leading-5">{label}</div>
+                                      <div className="truncate text-[12px] font-medium leading-4 text-muted-foreground/82">{attribution}</div>
                                     </div>
                                     {isActive && <Check className="ml-2 h-4 w-4 shrink-0" />}
                                   </DropdownMenuItem>
@@ -3472,6 +3475,7 @@ const NavbarModelSelector = ({
                               {models.map((model: any) => {
                                 const isActive = model.name === activeModelName;
                                 const label = getModelDisplayLabel(model);
+                                const attribution = resolveModelAttributionName(model);
                                 return (
                                   <DropdownMenuItem
                                     key={model.name}
@@ -3485,6 +3489,7 @@ const NavbarModelSelector = ({
                                     <ModelLogo model={model} />
                                     <div className="min-w-0 flex-1">
                                       <div className="liquid-label truncate text-[13.5px] font-semibold leading-5">{label}</div>
+                                      <div className="truncate text-[12px] font-medium leading-4 text-muted-foreground/82">{attribution}</div>
                                     </div>
                                     {isActive && <Check className="ml-2 h-4 w-4 shrink-0" />}
                                   </DropdownMenuItem>
@@ -3643,16 +3648,6 @@ const NavbarModelSelector = ({
     );
   }
 
-  // Stable provider order. Unknown providers fall to the end alphabetically.
-  const groupByProvider = (models: any[]): Array<[string, any[]]> => {
-    const groups: Record<string, any[]> = {};
-    for (const m of models) {
-      const p = resolveModelProviderName(m);
-      (groups[p] ||= []).push(m);
-    }
-    return Object.entries(groups).sort(([a], [b]) => compareModelProviders(a, b));
-  };
-
   // Filter models based on search query
   const filteredModels = availableModels.filter((model: any) =>
     model.displayName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -3660,7 +3655,6 @@ const NavbarModelSelector = ({
     model.provider?.toLowerCase().includes(searchQuery.toLowerCase()) ||
     resolveModelProviderName(model).toLowerCase().includes(searchQuery.toLowerCase())
   );
-  const grouped = groupByProvider(filteredModels);
 
   const onPick = (model: any) => {
     setSelectedModel(model.name);
@@ -3684,26 +3678,25 @@ const NavbarModelSelector = ({
   const ModelRow = ({ model }: { model: any }) => {
     const isSelected = model.name === selectedModel;
     const label = getModelDisplayLabel(model);
+    const attribution = resolveModelAttributionName(model);
     return (
       <DropdownMenuItem
         onSelect={() => onPick(model)}
         data-selected={isSelected ? "true" : undefined}
         className={cn(
-          "model-picker-row group/row flex min-h-12 cursor-pointer items-center gap-3 rounded-xl px-2.5 py-2",
+          "model-picker-row group/row flex min-h-[62px] cursor-pointer items-center gap-3 rounded-xl px-3 py-2.5",
           "text-foreground/90 focus:bg-transparent data-[highlighted]:bg-transparent",
         )}
       >
         <ModelLogo model={model} />
         <span className="min-w-0 flex-1">
-          <span className="liquid-label block truncate text-[13.5px] font-semibold leading-5 tracking-[-0.005em]">
+          <span className="liquid-label block truncate text-[15px] font-semibold leading-5">
             {label}
           </span>
-        </span>
-        {isSelected && (
-          <span className="model-row-check">
-            <Check className="h-3.5 w-3.5" strokeWidth={2.35} />
+          <span className="block truncate text-[12.5px] font-medium leading-4 text-muted-foreground/82">
+            {attribution}
           </span>
-        )}
+        </span>
       </DropdownMenuItem>
     );
   };
@@ -3722,7 +3715,7 @@ const NavbarModelSelector = ({
           "chat-model-trigger group/model inline-flex h-10 items-center gap-2 rounded-xl px-3",
           "bg-transparent text-foreground",
           "border border-transparent",
-          "text-[13.5px] font-semibold tracking-tight",
+          "text-[13.5px] font-semibold",
           "transition-[background-color,border-color,color] duration-base ease-smooth",
           "hover:bg-muted/45 hover:border-border/40",
           "active:bg-muted/55",
@@ -3736,15 +3729,6 @@ const NavbarModelSelector = ({
       </DropdownMenuTrigger>
 
       <DropdownMenuContent align="start" sideOffset={8} collisionPadding={12} className="model-picker-content w-[calc(100vw-1.5rem)] p-0 overflow-hidden sm:w-[392px]">
-        <div className="border-b border-border/45 px-3 py-2 sm:hidden">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/70">
-            Modelos de IA
-          </div>
-          <div className="mt-0.5 text-[13px] leading-5 text-muted-foreground">
-            Selecciona un modelo de la lista.
-          </div>
-        </div>
-
         <div className="model-picker-search-shell hidden sm:block">
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/60" />
@@ -3760,18 +3744,10 @@ const NavbarModelSelector = ({
         </div>
 
         <ScrollArea className="chat-model-menu-scroll h-[min(70dvh,456px)]">
-          {/* Provider-grouped sections. */}
-          {grouped.length > 0 ? (
-            <div className="model-picker-list px-2 pb-2 pt-1.5">
-              {grouped.map(([provider, models]) => (
-                <div key={provider} className="model-provider-section">
-                  <ProviderHeading provider={provider} models={models} />
-                  <div className="flex flex-col gap-0.5">
-                    {models.map((m: any) => (
-                      <ModelRow key={m.name} model={m} />
-                    ))}
-                  </div>
-                </div>
+          {filteredModels.length > 0 ? (
+            <div className="model-picker-list flex flex-col gap-1 px-2 pb-2 pt-2">
+              {filteredModels.map((model: any) => (
+                <ModelRow key={model.name} model={model} />
               ))}
             </div>
           ) : (
