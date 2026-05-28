@@ -5,7 +5,7 @@
  *
  * Scheduling:
  *   Runs every 30 minutes (configurable via MEMORY_CONSOLIDATION_CRON).
- *   Default: "*/30 * * * *" (every 30 minutes).
+ *   Default: every 30 minutes.
  *
  * Batching:
  *   Processes users in batches of MEMORY_CONSOLIDATION_BATCH (default 50)
