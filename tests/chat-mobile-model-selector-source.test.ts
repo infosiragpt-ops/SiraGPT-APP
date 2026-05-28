@@ -28,8 +28,8 @@ describe("mobile model selector source contract", () => {
     )
     assert.match(
       content,
-      /className="[^"]*sm:hidden[^"]*"[^>]*>[\s\S]*Modelos de IA/,
-      "phone layout should render a static mobile header instead of focusing a search field"
+      /className="[^"]*model-picker-list[^"]*"[\s\S]*filteredModels\.map/,
+      "phone layout should stay a static model list instead of focusing a search field"
     )
     assert.match(
       content,

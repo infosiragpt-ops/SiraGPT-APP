@@ -189,15 +189,17 @@ async function layoutMetrics(page: Page) {
     const chatRoot = document.querySelector<HTMLElement>(".chat-viewport")
     const header = document.querySelector<HTMLElement>(".chat-mobile-header")
     const composer = document.querySelector<HTMLElement>(".chat-composer-dock")
+    const composerSurface = document.querySelector<HTMLElement>(".chat-composer-dock .composer-surface")
     const scrollContent = document.querySelector<HTMLElement>(".chat-message-scroll-content")
 
-    if (!chatRoot || !header || !composer || !scrollContent) {
+    if (!chatRoot || !header || !composer || !composerSurface || !scrollContent) {
       throw new Error("Chat layout nodes are missing")
     }
 
     const chatRect = chatRoot.getBoundingClientRect()
     const headerRect = header.getBoundingClientRect()
     const composerRect = composer.getBoundingClientRect()
+    const composerSurfaceRect = composerSurface.getBoundingClientRect()
     const scrollStyles = getComputedStyle(scrollContent)
     const rootStyles = getComputedStyle(chatRoot)
 
@@ -215,7 +217,10 @@ async function layoutMetrics(page: Page) {
       composerTop: composerRect.top,
       composerBottom: composerRect.bottom,
       composerHeight: composerRect.height,
+      composerSurfaceBottom: composerSurfaceRect.bottom,
+      composerSurfaceBottomGap: chatRect.bottom - composerSurfaceRect.bottom,
       scrollPaddingBottom: Number.parseFloat(scrollStyles.paddingBottom || "0"),
+      keyboardState: chatRoot.dataset.chatKeyboard || "",
       viewportHeightVar: rootStyles.getPropertyValue("--chat-viewport-height").trim(),
       keyboardHeightVar: rootStyles.getPropertyValue("--chat-keyboard-height").trim(),
       viewportHeight: Number.parseFloat(rootStyles.getPropertyValue("--chat-viewport-height") || "0"),
@@ -312,7 +317,9 @@ test("390px mobile chat stays pinned when visualViewport is reduced by a simulat
   const metrics = await layoutMetrics(page)
   expect(metrics.viewportHeight).toBeLessThanOrEqual(521)
   expect(metrics.keyboardHeight).toBeGreaterThanOrEqual(320)
+  expect(metrics.keyboardState).toBe("open")
   expect(metrics.composerBottom).toBeLessThanOrEqual(metrics.chatBottom + 1)
+  expect(metrics.composerSurfaceBottomGap).toBeLessThanOrEqual(30)
   expect(metrics.scrollPaddingBottom).toBeGreaterThanOrEqual(metrics.composerHeight - 1)
   expect(metrics.htmlScrollWidth).toBeLessThanOrEqual(metrics.htmlClientWidth + 1)
 })

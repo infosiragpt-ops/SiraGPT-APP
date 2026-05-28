@@ -949,6 +949,12 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   }
 }
 
+@media (max-width: 767px) {
+  .chat-viewport[data-chat-keyboard="open"] {
+    --chat-mobile-bottom-clearance: max(env(safe-area-inset-bottom, 0px), 0.25rem);
+  }
+}
+
 @media (max-width: 380px) {
   .chat-optional-action {
     display: none !important;
