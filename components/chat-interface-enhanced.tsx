@@ -2843,8 +2843,6 @@ const MODEL_BRAND_BY_ICON: Record<string, string> = {
   MessageSquare: "groq",
 }
 
-const normalizeModelText = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, "")
-const stripModelPrefix = (value: string) => value.replace(/^[\w.-]+[/:]\s*/i, "")
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 const getModelBrandKey = (model: any) => MODEL_BRAND_BY_ICON[resolveModelIconName(model)] || "other"
 
@@ -2856,15 +2854,6 @@ const getModelDisplayLabel = (model: any) => {
     .replace(new RegExp(`^${escapeRegExp(provider)}\\s*[:·/-]\\s*`, "i"), "")
     .replace(/^OpenAI\s+GPT\s+/i, "GPT ")
     .trim() || label
-}
-
-const getModelSubLabel = (model: any, label: string) => {
-  const raw = String(model?.name || "").trim()
-  if (!raw) return ""
-  const compact = stripModelPrefix(raw).trim()
-  if (!compact) return ""
-  if (normalizeModelText(compact) === normalizeModelText(label)) return ""
-  return compact
 }
 
 const NavbarModelSelector = ({
@@ -2981,14 +2970,6 @@ const NavbarModelSelector = ({
     }
     return Object.entries(groups).sort(([a], [b]) => compareModelProviders(a, b));
   }, [gptAvailableModels]);
-
-  const describeGptTier = React.useCallback((modelName: string) => {
-    const label = String(modelName || "").toLowerCase();
-    if (/deepseek-v4-pro|\bgpt-5\b|o[134]\b|thinking|reason|r1|pro|sonnet|opus|ultra|max/.test(label)) {
-      return "Thinking";
-    }
-    return "Instant";
-  }, []);
 
   const applyGptModel = React.useCallback(async (model: any) => {
     if (!currentChat?.id || !model?.name) return;
@@ -3312,9 +3293,7 @@ const NavbarModelSelector = ({
                             <div className="space-y-0.5">
                               {models.map((model: any) => {
                                 const isActive = model.name === activeProjectModelName;
-                                const tier = describeGptTier(model.name || model.displayName);
                                 const label = getModelDisplayLabel(model);
-                                const subLabel = getModelSubLabel(model, label);
                                 return (
                                   <DropdownMenuItem
                                     key={model.name}
@@ -3327,8 +3306,7 @@ const NavbarModelSelector = ({
                                   >
                                     <ModelLogo model={model} />
                                     <div className="min-w-0 flex-1">
-                                      <div className="liquid-label truncate text-[13.5px] font-semibold">{label}</div>
-                                      <div className="truncate text-[11.5px] text-muted-foreground/70">{subLabel || tier}</div>
+                                      <div className="liquid-label truncate text-[13.5px] font-semibold leading-5">{label}</div>
                                     </div>
                                     {isActive && <Check className="ml-2 h-4 w-4 shrink-0" />}
                                   </DropdownMenuItem>
@@ -3493,9 +3471,7 @@ const NavbarModelSelector = ({
                             <div className="space-y-0.5">
                               {models.map((model: any) => {
                                 const isActive = model.name === activeModelName;
-                                const tier = describeGptTier(model.name || model.displayName);
                                 const label = getModelDisplayLabel(model);
-                                const subLabel = getModelSubLabel(model, label);
                                 return (
                                   <DropdownMenuItem
                                     key={model.name}
@@ -3508,8 +3484,7 @@ const NavbarModelSelector = ({
                                   >
                                     <ModelLogo model={model} />
                                     <div className="min-w-0 flex-1">
-                                      <div className="liquid-label truncate text-[13.5px] font-semibold">{label}</div>
-                                      <div className="truncate text-[11.5px] text-muted-foreground/70">{subLabel || tier}</div>
+                                      <div className="liquid-label truncate text-[13.5px] font-semibold leading-5">{label}</div>
                                     </div>
                                     {isActive && <Check className="ml-2 h-4 w-4 shrink-0" />}
                                   </DropdownMenuItem>
@@ -3709,7 +3684,6 @@ const NavbarModelSelector = ({
   const ModelRow = ({ model }: { model: any }) => {
     const isSelected = model.name === selectedModel;
     const label = getModelDisplayLabel(model);
-    const subLabel = getModelSubLabel(model, label);
     return (
       <DropdownMenuItem
         onSelect={() => onPick(model)}
@@ -3724,11 +3698,6 @@ const NavbarModelSelector = ({
           <span className="liquid-label block truncate text-[13.5px] font-semibold leading-5 tracking-[-0.005em]">
             {label}
           </span>
-          {subLabel && (
-            <span className="block truncate text-[11.5px] font-medium leading-4 text-muted-foreground/65">
-              {subLabel}
-            </span>
-          )}
         </span>
         {isSelected && (
           <span className="model-row-check">

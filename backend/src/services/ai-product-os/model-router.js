@@ -87,6 +87,16 @@ const CATALOG = [
     plans: ["FREE", "PRO", "ENTERPRISE"],
   },
   {
+    id: "deepseek/deepseek-v4-pro", provider: "openrouter", family: "deepseek-v4",
+    capabilities: { reasoning: 0.88, code: 0.93, tools: 0.85, vision: 0.6, long_context: 0.94 },
+    cost_tier: "low", latency_tier: "normal",
+    context_window: 1_000_000, max_output: 384_000,
+    supports_structured_outputs: true, supports_streaming: true,
+    supports_caching: false,
+    languages: ["en", "zh", "es"],
+    plans: ["FREE", "PRO", "ENTERPRISE"],
+  },
+  {
     id: "Gema4-31B", provider: "openai", family: "gema",
     capabilities: { reasoning: 0.78, code: 0.76, tools: 0.76, vision: 0.65, long_context: 0.78 },
     cost_tier: "low", latency_tier: "fast",

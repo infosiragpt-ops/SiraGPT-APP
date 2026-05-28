@@ -57,6 +57,15 @@ const VISIBLE_TEXT_MODEL_DEFINITIONS = Object.freeze([
     description: 'Z5.1 via OpenRouter para chat, razonamiento y generacion de contenido.',
     aliases: ['z5.1', 'z-ai/glm-5.1', 'glm-5.1'],
   },
+  {
+    name: 'deepseek/deepseek-v4-pro',
+    displayName: 'Deepseek V4 PRO',
+    provider: 'OpenRouter',
+    type: 'TEXT',
+    icon: 'DeepseekLogo',
+    description: 'Deepseek V4 PRO via OpenRouter para razonamiento profesional, codigo y documentos complejos.',
+    aliases: ['deepseek-v4-pro', 'deepseek/deepseek-v4-pro'],
+  },
 ]);
 
 function virtualIdFor(name) {

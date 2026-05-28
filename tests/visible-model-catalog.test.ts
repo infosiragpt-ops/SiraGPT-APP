@@ -20,7 +20,7 @@ describe("visible text model catalog", () => {
 
     assert.deepEqual(
       models.map((model: any) => model.displayName),
-      ["GPT 5.5", "Opus 4.7", "Gemini 3.5", "Grok 4.2", "Kimi K2.6", "Z5.1", "Gema 4"],
+      ["GPT 5.5", "Opus 4.7", "Gemini 3.5", "Grok 4.2", "Kimi K2.6", "Z5.1", "Deepseek V4 PRO", "Gema 4"],
     )
     assert.deepEqual(
       models.map((model: any) => model.name),
@@ -31,6 +31,7 @@ describe("visible text model catalog", () => {
         "x-ai/grok-4.2",
         "moonshotai/kimi-k2.6",
         "z-ai/glm-5.1",
+        "deepseek/deepseek-v4-pro",
         "Gema4-31B",
       ],
     )

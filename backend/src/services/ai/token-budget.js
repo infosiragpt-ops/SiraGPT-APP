@@ -65,6 +65,7 @@ const CONTEXT_WINDOWS = Object.freeze({
     'google/gemini-3.5': 1_000_000,
     'deepseek-v4-flash': 128_000,
     'deepseek-v4-pro':   128_000,
+    'deepseek/deepseek-v4-pro': 128_000,
     'Gema4-31B':          128_000,
     'gema4-31b':          128_000,
     'x-ai/grok-4.2':      256_000,
