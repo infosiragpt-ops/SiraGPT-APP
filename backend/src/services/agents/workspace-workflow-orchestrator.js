@@ -9,6 +9,9 @@ const { buildAgentTaskPlan } = require('./agent-task-plan');
 const { buildExecutionProfile, buildExecutionProfilePrompt } = require('./agentic-execution-profile');
 const { buildUserIntentAlignmentProfile, buildUserIntentAlignmentPrompt } = require('./user-intent-alignment');
 const { buildDocumentDeliveryPolicy } = require('./document-delivery-policy');
+const {
+  MAX_SIMULTANEOUS_DOCUMENTS,
+} = require('../../config/document-batch-limits');
 
 const WORKFLOW_VERSION = 'workspace-workflow-2026-05';
 const DEFAULT_MAX_RUNTIME_MS = 20 * 60 * 60 * 1000;
@@ -86,7 +89,7 @@ function buildWorkspaceWorkflowJob(params = {}) {
     : DEFAULT_MAX_STEPS;
 
   const fileIds = Array.isArray(params.fileIds)
-    ? params.fileIds.map(String).filter(Boolean).slice(0, 20)
+    ? params.fileIds.map(String).filter(Boolean).slice(0, MAX_SIMULTANEOUS_DOCUMENTS)
     : [];
 
   const executionProfile = buildExecutionProfile({ goal, fileIds });

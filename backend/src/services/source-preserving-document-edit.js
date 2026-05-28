@@ -8,6 +8,9 @@ const {
   EXTENSION_TO_MIME,
   INTERNAL: taskToolInternals,
 } = require('./agents/task-tools');
+const {
+  MAX_SIMULTANEOUS_DOCUMENTS,
+} = require('../config/document-batch-limits');
 
 const BACKEND_ROOT = path.resolve(__dirname, '..', '..');
 
@@ -68,7 +71,7 @@ function resolveStoredFilePath(row = {}, userId = '') {
 }
 
 async function loadEditableSourceFiles(prisma, { userId, fileIds = [] } = {}) {
-  const ids = Array.from(new Set((Array.isArray(fileIds) ? fileIds : []).map(String).filter(Boolean))).slice(0, 10);
+  const ids = Array.from(new Set((Array.isArray(fileIds) ? fileIds : []).map(String).filter(Boolean))).slice(0, MAX_SIMULTANEOUS_DOCUMENTS);
   if (!prisma?.file?.findMany || !userId || ids.length === 0) return [];
   const rows = await prisma.file.findMany({
     where: { id: { in: ids }, userId },

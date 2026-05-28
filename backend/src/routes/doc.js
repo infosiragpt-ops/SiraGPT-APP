@@ -22,6 +22,9 @@ const {
   buildProjectPromptHeader,
   buildProjectRuntimeDocuments,
 } = require('../services/project-context');
+const {
+  MAX_SIMULTANEOUS_DOCUMENTS,
+} = require('../config/document-batch-limits');
 
 const router = express.Router();
 router.use(authenticateToken);
@@ -59,7 +62,7 @@ async function persistFailure(chatId, userId, displayPrompt, reason) {
 
 async function loadReferenceFiles(fileIds, userId) {
   if (!Array.isArray(fileIds) || fileIds.length === 0) return [];
-  const ids = Array.from(new Set(fileIds.filter((id) => typeof id === 'string' && id.trim()).map((id) => id.trim()))).slice(0, 5);
+  const ids = Array.from(new Set(fileIds.filter((id) => typeof id === 'string' && id.trim()).map((id) => id.trim()))).slice(0, MAX_SIMULTANEOUS_DOCUMENTS);
   if (ids.length === 0) return [];
   const files = await prisma.file.findMany({
     where: { id: { in: ids }, userId },
@@ -102,7 +105,7 @@ async function loadProjectContextForChat(chatId, userId) {
               createdAt: true,
             },
             orderBy: { createdAt: 'desc' },
-            take: 40,
+            take: MAX_SIMULTANEOUS_DOCUMENTS,
           },
           documents: {
             select: {
@@ -112,7 +115,7 @@ async function loadProjectContextForChat(chatId, userId) {
               updatedAt: true,
             },
             orderBy: { updatedAt: 'desc' },
-            take: 40,
+            take: MAX_SIMULTANEOUS_DOCUMENTS,
           },
           memories: {
             select: { fact: true, createdAt: true },
@@ -127,7 +130,7 @@ async function loadProjectContextForChat(chatId, userId) {
   if (!chat?.project) return null;
 
   const project = chat.project;
-  const referenceFiles = buildProjectRuntimeDocuments(project, { maxItems: 12 }).map(file => ({
+  const referenceFiles = buildProjectRuntimeDocuments(project, { maxItems: MAX_SIMULTANEOUS_DOCUMENTS }).map(file => ({
     id: file.id,
     originalName: file.originalName,
     mimeType: file.mimeType,
@@ -155,7 +158,7 @@ router.post(
     body('format').optional().isIn(['docx', 'xlsx', 'pptx', 'pdf', 'svg', 'csv', 'html', 'md', 'markdown']),
     body('template').optional().isString().trim().isLength({ max: 60 }),
     body('complexity').optional().isIn(['simple', 'standard', 'high', 'stress']),
-    body('files').optional().isArray({ max: 5 }),
+    body('files').optional().isArray({ max: MAX_SIMULTANEOUS_DOCUMENTS }),
     body('files.*').optional().isString().trim().isLength({ min: 1, max: 120 }),
   ],
   async (req, res) => {
@@ -198,7 +201,7 @@ router.post(
       ].filter((file, index, arr) => {
         const key = file.id || `${file.originalName}:${file.mimeType}`;
         return arr.findIndex(other => (other.id || `${other.originalName}:${other.mimeType}`) === key) === index;
-      }).slice(0, 12);
+      }).slice(0, MAX_SIMULTANEOUS_DOCUMENTS);
 
       const wantsSourcePreservingEdit = isSourcePreservingEditRequest(displayPrompt || prompt, req.body.files);
       const preservedEdit = await tryGenerateSourcePreservingDocumentEdit({

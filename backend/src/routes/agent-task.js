@@ -91,6 +91,9 @@ const {
   resolveTranscriptionFileIds,
   serializeMessageAttachments,
 } = require('../services/message-attachments');
+const {
+  MAX_SIMULTANEOUS_DOCUMENTS,
+} = require('../config/document-batch-limits');
 
 const prisma = (() => {
   try { return require('../config/database'); } catch { return null; }
@@ -465,7 +468,7 @@ router.post(
     body('maxRuntimeMs').optional().isInt({ min: 3_600_000, max: 72_000_000 }),
     body('chatId').optional().isString(),
     body('scopeMode').optional().isIn(['chat', 'global']),
-    body('files').optional().isArray({ max: 20 }),
+    body('files').optional().isArray({ max: MAX_SIMULTANEOUS_DOCUMENTS }),
   ],
   authenticateToken,
   enforcePlanQuota({ surface: 'agent.task.create' }),
@@ -585,7 +588,7 @@ router.post(
     body('goal').isString().trim().isLength({ min: 3, max: 4000 }).withMessage('goal must be 3-4000 chars'),
     body('displayGoal').optional().isString().trim().isLength({ min: 3, max: 4000 }),
     body('systemContract').optional().isString().trim().isLength({ max: 4000 }),
-    body('files').optional().isArray({ max: 20 }),
+    body('files').optional().isArray({ max: MAX_SIMULTANEOUS_DOCUMENTS }),
     body('files.*').optional().isString().trim().isLength({ min: 1, max: 200 }),
     body('chatId').optional().isString(),
     body('scopeMode').optional().isIn(['chat', 'global']),
@@ -611,7 +614,7 @@ router.post(
     req.body.chatId = scope.chatId;
 
     const requestedFileIds = Array.isArray(req.body.files)
-      ? req.body.files.map(String).filter(Boolean).slice(0, 20)
+      ? req.body.files.map(String).filter(Boolean).slice(0, MAX_SIMULTANEOUS_DOCUMENTS)
       : [];
     const canUseLocalDocumentRuntime = requestedFileIds.length > 0 || isTranscriptionRequest(String(req.body.goal || ''));
     if (!process.env.OPENAI_API_KEY && !canUseLocalDocumentRuntime) {
@@ -632,7 +635,7 @@ router.post(
       req.body.systemContract || extractProfessionalContract(rawGoal)
     );
     let fileIds = Array.isArray(req.body.files)
-      ? req.body.files.map(String).filter(Boolean).slice(0, 20)
+      ? req.body.files.map(String).filter(Boolean).slice(0, MAX_SIMULTANEOUS_DOCUMENTS)
       : [];
     if (fileIds.length === 0 && isTranscriptionRequest(agentGoal)) {
       fileIds = await resolveTranscriptionFileIds(prisma, {
@@ -1328,7 +1331,7 @@ async function handleQueuedTaskRequest(req, res) {
     req.body.systemContract || extractProfessionalContract(rawGoal)
   );
   let fileIds = Array.isArray(req.body.files)
-    ? req.body.files.map(String).filter(Boolean).slice(0, 20)
+    ? req.body.files.map(String).filter(Boolean).slice(0, MAX_SIMULTANEOUS_DOCUMENTS)
     : [];
   if (fileIds.length === 0 && isTranscriptionRequest(agentGoal)) {
     fileIds = await resolveTranscriptionFileIds(prisma, {
@@ -1467,7 +1470,7 @@ async function handleLocalTaskRequest(req, res, { fallbackReason = 'local_fallba
     req.body.systemContract || extractProfessionalContract(rawGoal)
   );
   let fileIds = Array.isArray(req.body.files)
-    ? req.body.files.map(String).filter(Boolean).slice(0, 20)
+    ? req.body.files.map(String).filter(Boolean).slice(0, MAX_SIMULTANEOUS_DOCUMENTS)
     : [];
   if (fileIds.length === 0 && isTranscriptionRequest(agentGoal)) {
     fileIds = await resolveTranscriptionFileIds(prisma, {

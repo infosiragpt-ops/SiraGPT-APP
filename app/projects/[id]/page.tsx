@@ -55,6 +55,7 @@ import {
   type ProjectMemoryItem,
 } from "@/lib/projects-service"
 import { DocumentsSection } from "@/components/projects/documents-section"
+import { MAX_SIMULTANEOUS_DOCUMENTS } from "@/lib/document-batch-limits"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 const API_ROOT = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
@@ -194,7 +195,7 @@ export default function ProjectDetailPage() {
     setComposerUploading(true)
     try {
       const fd = new FormData()
-      Array.from(files).slice(0, 10).forEach((file) => fd.append("files", file))
+      Array.from(files).slice(0, MAX_SIMULTANEOUS_DOCUMENTS).forEach((file) => fd.append("files", file))
       const token = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null
       const res = await fetch(`${API_ROOT}/files/upload`, {
         method: "POST",

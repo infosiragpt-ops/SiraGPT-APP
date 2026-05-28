@@ -13,6 +13,9 @@
 const fs = require('fs');
 const path = require('path');
 const taskStorePrismaSync = require('./task-store-prisma-sync');
+const {
+  MAX_SIMULTANEOUS_DOCUMENTS,
+} = require('../../config/document-batch-limits');
 
 const DEFAULT_RETENTION_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_EVENT_LIMIT = 1000;
@@ -64,7 +67,7 @@ function sanitizeTaskRecord(record = {}) {
     documentPolicy: record.documentPolicy || null,
     agentGoal: String(record.agentGoal || '').slice(0, 4000),
     systemContract: String(record.systemContract || '').slice(0, 4000),
-    fileIds: Array.isArray(record.fileIds) ? record.fileIds.map(String).slice(0, 20) : [],
+    fileIds: Array.isArray(record.fileIds) ? record.fileIds.map(String).slice(0, MAX_SIMULTANEOUS_DOCUMENTS) : [],
     displayGoal: String(record.displayGoal || '').slice(0, 4000),
     model: record.model || null,
     status: record.status || 'running',

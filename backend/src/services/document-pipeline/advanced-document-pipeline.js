@@ -22,6 +22,9 @@ const ExcelJS = require('exceljs');
 const { renderPreview } = require('../doc-preview');
 const { generateSectionContent, fallbackBlock } = require('./content');
 const { buildPptxContentPlan, hasGenericPlaceholderText } = require('./pptx-content-planner');
+const {
+  MAX_SIMULTANEOUS_DOCUMENTS,
+} = require('../../config/document-batch-limits');
 
 const execFileAsync = promisify(execFile);
 
@@ -367,7 +370,7 @@ function titleFromPrompt(prompt, fallback = 'Documento profesional') {
 function normalizeReferenceFiles(referenceFiles = []) {
   return (Array.isArray(referenceFiles) ? referenceFiles : [])
     .filter(Boolean)
-    .slice(0, 12)
+    .slice(0, MAX_SIMULTANEOUS_DOCUMENTS)
     .map((file) => {
       const extractedText = String(file.extractedText || '').trim();
       return {

@@ -31,6 +31,9 @@ const crypto = require('crypto');
 const { body, validationResult } = require('express-validator');
 
 const { authenticateToken } = require('../middleware/auth');
+const {
+  MAX_SIMULTANEOUS_DOCUMENTS,
+} = require('../config/document-batch-limits');
 
 const router = express.Router();
 
@@ -182,7 +185,7 @@ const validators = [
   body('tasks.*.chatId').optional().isString(),
   body('tasks.*.maxSteps').optional().isInt({ min: 2, max: 120 }),
   body('tasks.*.maxRuntimeMs').optional().isInt({ min: 1000, max: 7_200_000 }),
-  body('tasks.*.files').optional().isArray({ max: 20 }),
+  body('tasks.*.files').optional().isArray({ max: MAX_SIMULTANEOUS_DOCUMENTS }),
   body('options').optional().isObject(),
   body('options.concurrency').optional().isInt({ min: 1, max: MAX_CONCURRENCY }),
   body('options.failFast').optional().isBoolean(),
