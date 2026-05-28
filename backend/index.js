@@ -301,7 +301,6 @@ const adminUserContextRoutes = require('./src/routes/admin-user-context');
 const plansRoutes = require('./src/routes/plans');
 const creditsRoutes = require('./src/routes/credits');
 const paraphraseRoutes = require('./src/routes/paraphrase');
-const freeIaRoutes = require('./src/routes/free-ia');
 const rbacRoutes = require('./src/routes/rbac');
 const imagesRoutes = require('./src/routes/images');
 const videoProviderStatusRoutes = require('./src/routes/video-provider-status');
@@ -365,6 +364,7 @@ const pushRoutes = require('./src/routes/push');
 const coworkRoutes = require('./src/routes/cowork');
 const contextIntelligenceRoutes = require('./src/routes/context-intelligence');
 const orchestrationRoutes = require('./src/routes/orchestration');
+const hermesRoutes = require('./src/routes/hermes');
 const webhooksRoutes = require('./src/routes/webhooks');
 const slackIntegrationRoutes = require('./src/routes/integrations/slack');
 const { authenticateToken, requireAdmin, requireSuperAdmin } = require('./src/middleware/auth');
@@ -969,7 +969,6 @@ app.use('/api/admin/credits', creditsRoutes.adminRouter);
 app.use('/api/credits', creditsRoutes);
 app.use('/api/admin/goals', goalsRoutes.adminRouter);
 app.use('/api/paraphrase', paraphraseRoutes);
-app.use('/api/free-ia', freeIaRoutes);
 app.use('/api/admin/rbac', rbacRoutes.adminRouter);
 app.use('/api/rbac', rbacRoutes);
 app.use('/api/images', imagesRoutes);
@@ -1042,6 +1041,7 @@ app.use('/api/push', pushRoutes);
 app.use('/api/cowork', coworkRoutes);
 app.use('/api/context-intelligence', contextIntelligenceRoutes);
 app.use('/api/orchestration', orchestrationRoutes);
+app.use('/api/hermes', hermesRoutes);
 app.use('/api/webhooks', webhooksRoutes);
 app.use('/api/integrations/slack', slackIntegrationRoutes);
 app.use('/api/telemetry', telemetryRoutes);
@@ -1198,6 +1198,14 @@ function startServer() {
     scheduler.setJobClassifier(classifyTaskError);
     scheduler.start();
 
+    try {
+      const { bootHermesRuntime } = require('./src/services/agents/hermes-runtime');
+      bootHermesRuntime();
+      logger.info('hermes_runtime_booted');
+    } catch (err) {
+      logger.warn({ err: err && err.message }, 'hermes_runtime_boot_failed');
+    }
+
     // System cron — daily GDPR housekeeping (scrub @ 02:30 UTC,
     // hard-delete @ 03:00 UTC). Disabled in NODE_ENV=test or when
     // SYSTEM_CRON_ENABLED=false. Failures are isolated to the cron.
@@ -1291,6 +1299,10 @@ function startServer() {
     // can't enqueue new work during shutdown.
     shutdownRegistry.register('scheduler_stop', () => {
         try { scheduler.stop?.(); } catch {}
+        try {
+            const { shutdownHermesRuntime } = require('./src/services/agents/hermes-runtime');
+            shutdownHermesRuntime();
+        } catch {}
     }, 5000);
 
     async function shutdown(signal) {

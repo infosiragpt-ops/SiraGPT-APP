@@ -7,10 +7,10 @@
  * checks scattered across `/api/ai`:
  *
  *   FREE plan:
- *     `monthlyCallLimit` is a REMAINING-call counter. New FREE users
- *     start at 3 (passport.js seeds it on signup) and the chat path
- *     atomically decrements it on each generation. The "limit" is
- *     the original allowance — also 3 for FREE.
+ *     Text chat is limited to 3 successful generations per local day
+ *     across any visible model. Legacy `monthlyCallLimit` remains on
+ *     the User row for older UI/accounting surfaces, but the live gate
+ *     counts ApiUsage rows for today's window.
  *
  *   PRO / PRO_MAX / ENTERPRISE:
  *     `apiUsage` is a token counter incremented after each
@@ -80,7 +80,35 @@ function clampPercentage(used, limit) {
  *     warning:    boolean,   // percentage >= WARNING_THRESHOLD (and not exceeded)
  *   }
  */
-function getPlanQuotaSnapshot(user) {
+function getFreeDailyWindow(now = new Date(), env = process.env) {
+  const rawOffset = Number.parseInt(env.SIRAGPT_FREE_DAILY_TZ_OFFSET_MINUTES || '-240', 10);
+  const offsetMinutes = Number.isFinite(rawOffset) ? rawOffset : -240;
+  const shifted = new Date(now.getTime() + offsetMinutes * 60_000);
+  const shiftedStartUtc = Date.UTC(
+    shifted.getUTCFullYear(),
+    shifted.getUTCMonth(),
+    shifted.getUTCDate()
+  );
+  const start = new Date(shiftedStartUtc - offsetMinutes * 60_000);
+  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+  return { start, end };
+}
+
+async function countFreeDailyCalls({ userId, prisma, now = new Date(), env = process.env } = {}) {
+  if (!userId || !prisma?.apiUsage?.count) return 0;
+  const { start, end } = getFreeDailyWindow(now, env);
+  return prisma.apiUsage.count({
+    where: {
+      userId,
+      timestamp: {
+        gte: start,
+        lt: end,
+      },
+    },
+  });
+}
+
+function getPlanQuotaSnapshot(user, options = {}) {
   if (!user || !user.plan) {
     return {
       plan: null,
@@ -95,26 +123,22 @@ function getPlanQuotaSnapshot(user) {
   }
 
   if (user.plan === 'FREE') {
-    // monthlyCallLimit on the user row is the REMAINING counter,
-    // not the cap. FREE plans always cap at FREE_CALL_LIMIT (currently
-    // 3); changing the cap is a config change here, not a per-user
-    // mutation. `used` is derived: limit - remaining, clamped to
-    // [0, limit] so a transient negative-remaining race (rare but
-    // possible under concurrent atomic decrements) doesn't surface
-    // a "used 4 of 3" UI artifact.
-    const remaining = toNumber(user.monthlyCallLimit);
-    const limit = FREE_CALL_LIMIT;
-    const used = Math.max(0, Math.min(limit, limit - remaining));
-    const percentage = clampPercentage(used, limit);
+    const usedFromDailyRows = options.freeDailyCallsUsed == null ? null : toNumber(options.freeDailyCallsUsed);
+    const legacyRemaining = Math.max(0, Math.min(FREE_CALL_LIMIT, toNumber(user.monthlyCallLimit ?? FREE_CALL_LIMIT)));
+    const used = usedFromDailyRows == null
+      ? Math.max(0, FREE_CALL_LIMIT - legacyRemaining)
+      : Math.max(0, usedFromDailyRows);
+    const percentage = clampPercentage(used, FREE_CALL_LIMIT);
     return {
       plan: 'FREE',
       kind: 'calls',
       used,
-      limit,
-      remaining: Math.max(0, remaining),
+      limit: FREE_CALL_LIMIT,
+      remaining: Math.max(0, FREE_CALL_LIMIT - used),
       percentage,
-      exceeded: percentage >= 1 || remaining <= 0,
-      warning: percentage >= WARNING_THRESHOLD && percentage < 1,
+      exceeded: used >= FREE_CALL_LIMIT,
+      warning: percentage >= WARNING_THRESHOLD && used < FREE_CALL_LIMIT,
+      unlimited: false,
     };
   }
 
@@ -161,7 +185,10 @@ async function fetchUserPlanQuota(userId, prisma) {
       },
     });
     if (!user) return null;
-    return getPlanQuotaSnapshot(user);
+    const freeDailyCallsUsed = user.plan === 'FREE'
+      ? await countFreeDailyCalls({ userId, prisma })
+      : null;
+    return getPlanQuotaSnapshot(user, { freeDailyCallsUsed });
   } catch (err) {
     // eslint-disable-next-line no-console
     console.warn('[plan-quota] fetchUserPlanQuota failed:', err && err.message);
@@ -175,23 +202,18 @@ async function fetchUserPlanQuota(userId, prisma) {
  * identical inline blocks that each:
  *
  *   FREE plan:
- *     - prisma.user.updateMany({
- *         where: { id, monthlyCallLimit: { gt: 0 } },
- *         data:  { monthlyCallLimit: { decrement: 1 } },
- *       })
- *     - if no row matched → 429 with the exhausted-queries message.
+ *     - allow up to 3 successful generations per local day across
+ *       any visible model.
  *
  *   PAID plans:
  *     - if user.apiUsage >= user.monthlyLimit → 429 with the
  *       monthly-API-limit message and the current usage / limit.
  *
- * The shape of the 429 responses is preserved BYTE-FOR-BYTE so a
- * client UI that branches off `error === 'Free monthly queries
- * exhausted. Please upgrade to continue.'` continues to work
- * unchanged. Field order and types in the response body are also
- * preserved (BigInt apiUsage / monthlyLimit are forwarded as-is;
- * the existing `bigintSerializerMiddleware` in index.js handles
- * JSON serialization).
+ * The paid 429 response shape is preserved so client UI that branches
+ * off `error === 'Monthly API limit exceeded'` continues to work
+ * unchanged. BigInt apiUsage / monthlyLimit values are forwarded as-is;
+ * the existing `bigintSerializerMiddleware` in index.js handles JSON
+ * serialization.
  *
  * Why a discriminated `{ ok, status, body }` and not `throw`:
  *   The caller already owns the response object. Throwing forces
@@ -219,30 +241,27 @@ async function tryConsumePlanQuota({ userId, prisma, user } = {}) {
   if (!user) return { ok: true };
 
   if (user.plan === 'FREE') {
-    // Atomic CAS-style decrement: the WHERE clause both reads the
-    // current counter (>0) and the UPDATE writes the new value in
-    // a single Prisma query. Concurrent requests that race for the
-    // last call will see exactly one winner — the loser gets count:0.
-    const result = await prisma.user.updateMany({
-      where: {
-        id: userId,
-        monthlyCallLimit: { gt: 0 },
-      },
-      data: {
-        monthlyCallLimit: { decrement: 1 },
-      },
-    });
-    if (!result || result.count === 0) {
+    const usedToday = await countFreeDailyCalls({ userId: userId || user.id, prisma });
+    if (usedToday >= FREE_CALL_LIMIT) {
+      const { end } = getFreeDailyWindow();
       return {
         ok: false,
         status: 429,
         body: {
-          error: 'Free monthly queries exhausted. Please upgrade to continue.',
+          error: 'Free daily queries exhausted. Please upgrade to continue.',
           remaining: 0,
+          dailyLimit: FREE_CALL_LIMIT,
+          usedToday,
+          resetAt: end.toISOString(),
+          upgradeRequired: true,
         },
       };
     }
-    return { ok: true };
+    return {
+      ok: true,
+      remaining: Math.max(0, FREE_CALL_LIMIT - usedToday),
+      dailyLimit: FREE_CALL_LIMIT,
+    };
   }
 
   // Paid plans: token-based check is non-atomic on purpose. The
@@ -270,6 +289,8 @@ async function tryConsumePlanQuota({ userId, prisma, user } = {}) {
 
 module.exports = {
   getPlanQuotaSnapshot,
+  getFreeDailyWindow,
+  countFreeDailyCalls,
   fetchUserPlanQuota,
   tryConsumePlanQuota,
   FREE_CALL_LIMIT,

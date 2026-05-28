@@ -47,6 +47,17 @@ async function mkSkill(
   return dir;
 }
 
+async function mkInstructionSkill(
+  rootDir: string,
+  name: string,
+  markdown: string,
+): Promise<string> {
+  const dir = path.join(rootDir, name);
+  await fsp.mkdir(dir, { recursive: true });
+  await fsp.writeFile(path.join(dir, 'SKILL.md'), markdown);
+  return dir;
+}
+
 describe('SkillManifestSchema', () => {
   it('accepts a minimal manifest and applies defaults', () => {
     const parsed = SkillManifestSchema.parse({
@@ -118,6 +129,28 @@ describe('readManifest', () => {
     await mkSkill(tmp, 'good_one');
     const m = await readManifest(path.join(tmp, 'good_one'));
     expect(m.name).toBe('good_one');
+  });
+
+  it('synthesizes a manifest from SKILL.md frontmatter', async () => {
+    await mkInstructionSkill(
+      tmp,
+      'debug_flow',
+      `---
+name: debug_flow
+description: "Debug runtime failures with logs, probes, and focused proof."
+---
+
+# Debug Flow
+
+Collect logs before changing code.
+`,
+    );
+
+    const m = await readManifest(path.join(tmp, 'debug_flow'));
+    expect(m.name).toBe('debug_flow');
+    expect(m.source).toBe('instructions');
+    expect(m.tools.map((tool) => tool.name)).toEqual(['read_instructions']);
+    expect(m.instructions).toContain('Collect logs');
   });
 });
 
@@ -202,6 +235,54 @@ describe('SkillRegistry', () => {
     const result = await registry.load();
     expect(result.loaded).toEqual([]);
     expect(result.issues).toEqual([]);
+  });
+
+  it('loads SKILL.md instruction skills and exposes their instructions', async () => {
+    await mkInstructionSkill(
+      tmp,
+      'qa_testing',
+      `---
+name: qa_testing
+description: Test planning for backend quality checks.
+---
+
+# QA Testing
+
+Prefer focused tests for the code path you changed.
+`,
+    );
+    registry = new SkillRegistry({ rootDir: tmp, importer: testImporter });
+    const result = await registry.load();
+
+    expect(result.issues).toEqual([]);
+    expect(result.loaded[0].manifest.source).toBe('instructions');
+    await expect(registry.invokeTool('qa_testing', 'read_instructions', {})).resolves.toMatchObject({
+      name: 'qa_testing',
+      instructions: expect.stringContaining('focused tests'),
+    });
+  });
+
+  it('recommends matching skills for a request', async () => {
+    await mkInstructionSkill(
+      tmp,
+      'security_triage',
+      `---
+name: security_triage
+description: Review advisories, secrets, and vulnerability reports.
+---
+
+# Security Triage
+
+Classify severity and verify exploitability.
+`,
+    );
+    await mkSkill(tmp, 'echo');
+    registry = new SkillRegistry({ rootDir: tmp, importer: testImporter });
+    await registry.load();
+
+    const recommendations = registry.recommend('triage a leaked secret advisory', 3);
+    expect(recommendations[0].skill.manifest.name).toBe('security_triage');
+    expect(recommendations[0].matchedTerms).toContain('secret');
   });
 });
 

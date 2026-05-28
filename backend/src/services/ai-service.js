@@ -123,7 +123,7 @@ function providerForModel(model) {
     if (isSiragptCombined(m)) return 'OpenRouter';
     if (/^deepseek-(v\d|chat|reasoner)/i.test(m)) return 'DeepSeek';
     if (/^(claude|anthropic\/)/i.test(m)) return 'OpenRouter';
-    if (/^(x-ai|openrouter|meta-llama|deepseek|mistralai|qwen|nvidia|microsoft|cohere|moonshotai)\//i.test(m)) return 'OpenRouter';
+    if (/^(openai|google|x-ai|openrouter|meta-llama|deepseek|mistralai|qwen|z-ai|nvidia|microsoft|cohere|moonshotai)\//i.test(m)) return 'OpenRouter';
     if (/^\/?(gpt-oss|zephyr)/i.test(m)) return 'OpenRouter';
     if (/^(gemini|imagen)/i.test(m)) return 'Gemini';
     return 'OpenAI';

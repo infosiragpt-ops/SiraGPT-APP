@@ -114,6 +114,25 @@ test('modelSupportsFunctionCalling allowlist', () => {
   assert.equal(agenticStream.modelSupportsFunctionCalling('Anthropic', 'claude-3-opus'), false);
 });
 
+test('shouldUseAgenticChat skips greetings and simple chat', () => {
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'hola' }), false);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'gracias!' }), false);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿Puedes explicarme qué es una API?' }), false);
+});
+
+test('shouldUseAgenticChat keeps tool-heavy and follow-up repair turns agentic', () => {
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'SiraGPT.com no funciona ChatGPT' }), true);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'investiga esto y cita fuentes recientes' }), true);
+  assert.equal(agenticStream.shouldUseAgenticChat({
+    prompt: 'sigue con eso',
+    history: [{ role: 'user', content: 'Arregla el deploy del repositorio en GitHub' }],
+  }), true);
+  assert.equal(agenticStream.shouldUseAgenticChat({
+    prompt: 'resume este archivo',
+    files: [{ id: 'file_1' }],
+  }), true);
+});
+
 test('serializeSentinel produces a fenced agent-task-state block', () => {
   const { serializeSentinel, freshState } = agenticStream._internal;
   const out = serializeSentinel(freshState());

@@ -7,7 +7,7 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
+  url      = env("PRISMA_DATABASE_URL")
 }
 
 model User {
@@ -202,7 +202,7 @@ model AiModel {
   apiKey      String?
   type        ModelType @default(TEXT) // <-- NAYA: Model ki type (TEXT/IMAGE)
   icon        String?
-  isActive    Boolean   @default(true)
+  isActive    Boolean   @default(false)
 
   // Auto-sync tracking fields
   lastSynced    DateTime?
@@ -1112,6 +1112,7 @@ enum ProviderType {
 enum ModelType {
   TEXT
   IMAGE
+  VIDEO
 }
 
 enum Plan {

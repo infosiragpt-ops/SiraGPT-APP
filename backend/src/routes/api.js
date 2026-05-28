@@ -1,5 +1,7 @@
 const express = require('express');
 const { OpenAI } = require('openai');
+const { authenticateToken } = require('../middleware/auth');
+const requirePaidPlan = require('../middleware/require-paid-plan');
 
 const router = express.Router();
 
@@ -47,7 +49,11 @@ router.post('/chat/completions', async (req, res) => {
 });
 
 // Route to handle image generations
-router.post('/images/generations', async (req, res) => {
+router.post(
+  '/images/generations',
+  authenticateToken,
+  requirePaidPlan({ feature: 'image_generation' }),
+  async (req, res) => {
     try {
         const { model, prompt, n, size } = req.body;
 

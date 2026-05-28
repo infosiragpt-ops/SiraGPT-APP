@@ -15,9 +15,16 @@ const { authenticateToken } = require('../middleware/auth');
 const prisma = require('../config/database');
 const { streamAdvancedDocumentPipeline } = require('../services/document-pipeline/advanced-document-pipeline');
 const {
+  isSourcePreservingEditRequest,
+  tryGenerateSourcePreservingDocumentEdit,
+} = require('../services/source-preserving-document-edit');
+const {
   buildProjectPromptHeader,
   buildProjectRuntimeDocuments,
 } = require('../services/project-context');
+const {
+  MAX_SIMULTANEOUS_DOCUMENTS,
+} = require('../config/document-batch-limits');
 
 const router = express.Router();
 router.use(authenticateToken);
@@ -55,7 +62,7 @@ async function persistFailure(chatId, userId, displayPrompt, reason) {
 
 async function loadReferenceFiles(fileIds, userId) {
   if (!Array.isArray(fileIds) || fileIds.length === 0) return [];
-  const ids = Array.from(new Set(fileIds.filter((id) => typeof id === 'string' && id.trim()).map((id) => id.trim()))).slice(0, 5);
+  const ids = Array.from(new Set(fileIds.filter((id) => typeof id === 'string' && id.trim()).map((id) => id.trim()))).slice(0, MAX_SIMULTANEOUS_DOCUMENTS);
   if (ids.length === 0) return [];
   const files = await prisma.file.findMany({
     where: { id: { in: ids }, userId },
@@ -64,6 +71,8 @@ async function loadReferenceFiles(fileIds, userId) {
       originalName: true,
       mimeType: true,
       size: true,
+      filename: true,
+      path: true,
       extractedText: true,
     },
   });
@@ -72,6 +81,8 @@ async function loadReferenceFiles(fileIds, userId) {
     originalName: file.originalName,
     mimeType: file.mimeType,
     size: file.size,
+    filename: file.filename,
+    path: file.path,
     extractedText: String(file.extractedText || '').slice(0, 12_000),
   }));
 }
@@ -94,7 +105,7 @@ async function loadProjectContextForChat(chatId, userId) {
               createdAt: true,
             },
             orderBy: { createdAt: 'desc' },
-            take: 40,
+            take: MAX_SIMULTANEOUS_DOCUMENTS,
           },
           documents: {
             select: {
@@ -104,7 +115,7 @@ async function loadProjectContextForChat(chatId, userId) {
               updatedAt: true,
             },
             orderBy: { updatedAt: 'desc' },
-            take: 40,
+            take: MAX_SIMULTANEOUS_DOCUMENTS,
           },
           memories: {
             select: { fact: true, createdAt: true },
@@ -119,7 +130,7 @@ async function loadProjectContextForChat(chatId, userId) {
   if (!chat?.project) return null;
 
   const project = chat.project;
-  const referenceFiles = buildProjectRuntimeDocuments(project, { maxItems: 12 }).map(file => ({
+  const referenceFiles = buildProjectRuntimeDocuments(project, { maxItems: MAX_SIMULTANEOUS_DOCUMENTS }).map(file => ({
     id: file.id,
     originalName: file.originalName,
     mimeType: file.mimeType,
@@ -147,7 +158,7 @@ router.post(
     body('format').optional().isIn(['docx', 'xlsx', 'pptx', 'pdf', 'svg', 'csv', 'html', 'md', 'markdown']),
     body('template').optional().isString().trim().isLength({ max: 60 }),
     body('complexity').optional().isIn(['simple', 'standard', 'high', 'stress']),
-    body('files').optional().isArray({ max: 5 }),
+    body('files').optional().isArray({ max: MAX_SIMULTANEOUS_DOCUMENTS }),
     body('files.*').optional().isString().trim().isLength({ min: 1, max: 120 }),
   ],
   async (req, res) => {
@@ -190,31 +201,52 @@ router.post(
       ].filter((file, index, arr) => {
         const key = file.id || `${file.originalName}:${file.mimeType}`;
         return arr.findIndex(other => (other.id || `${other.originalName}:${other.mimeType}`) === key) === index;
-      }).slice(0, 12);
-      const projectPrompt = projectContext?.promptPrefix
-        ? `${projectContext.promptPrefix}\n\nUSER DOCUMENT REQUEST:\n${prompt}`
-        : prompt;
-      const pipelineOptions = {
-        prompt: projectPrompt,
-        model: req.body.model,
-        format: req.body.format,
-        template: req.body.template,
-        complexity: req.body.complexity || 'standard',
-        referenceFiles,
-        outputDir: path.join(__dirname, '../../uploads/document-pipeline/files'),
-        telemetryDir: path.join(__dirname, '../../uploads/document-pipeline/telemetry'),
-        signal: controller.signal,
-        // Threaded into ArtifactUrlResolver so the persisted artifact
-        // is owner-scoped — the GET /api/agent/artifact/:id route
-        // refuses any caller that isn't the owner.
-        userId: req.user?.id || null,
+      }).slice(0, MAX_SIMULTANEOUS_DOCUMENTS);
+
+      const wantsSourcePreservingEdit = isSourcePreservingEditRequest(displayPrompt || prompt, req.body.files);
+      const preservedEdit = await tryGenerateSourcePreservingDocumentEdit({
+        prisma,
+        userId: req.user.id,
         chatId,
-      };
-      for await (const ev of streamAdvancedDocumentPipeline(pipelineOptions)) {
-        if (clientGone) break;
-        if (ev.type === 'final') { content = ev.content; file = ev.file; format = ev.format; continue; }
-        if (ev.type === 'error') { errorMsg = ev.error; continue; }
-        send(ev);
+        fileIds: req.body.files,
+        prompt,
+        displayPrompt,
+      });
+
+      if (preservedEdit) {
+        send({ type: 'stage', label: 'Conservando documento original', pct: 40 });
+        content = preservedEdit.content;
+        file = preservedEdit.file;
+        format = preservedEdit.format;
+        send({ type: 'stage', label: 'Anexos agregados sin regenerar el archivo', pct: 92 });
+      } else if (wantsSourcePreservingEdit) {
+        throw new Error('No encontré un archivo editable compatible para modificar sin regenerar el documento. Formatos soportados: DOCX, XLSX, PDF, TXT, Markdown, CSV, HTML, SVG, JSON, XML o YAML.');
+      } else {
+        const projectPrompt = projectContext?.promptPrefix
+          ? `${projectContext.promptPrefix}\n\nUSER DOCUMENT REQUEST:\n${prompt}`
+          : prompt;
+        const pipelineOptions = {
+          prompt: projectPrompt,
+          model: req.body.model,
+          format: req.body.format,
+          template: req.body.template,
+          complexity: req.body.complexity || 'standard',
+          referenceFiles,
+          outputDir: path.join(__dirname, '../../uploads/document-pipeline/files'),
+          telemetryDir: path.join(__dirname, '../../uploads/document-pipeline/telemetry'),
+          signal: controller.signal,
+          // Threaded into ArtifactUrlResolver so the persisted artifact
+          // is owner-scoped — the GET /api/agent/artifact/:id route
+          // refuses any caller that isn't the owner.
+          userId: req.user?.id || null,
+          chatId,
+        };
+        for await (const ev of streamAdvancedDocumentPipeline(pipelineOptions)) {
+          if (clientGone) break;
+          if (ev.type === 'final') { content = ev.content; file = ev.file; format = ev.format; continue; }
+          if (ev.type === 'error') { errorMsg = ev.error; continue; }
+          send(ev);
+        }
       }
     } catch (err) {
       errorMsg = err?.message || 'doc failed';

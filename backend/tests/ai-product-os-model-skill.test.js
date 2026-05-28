@@ -46,6 +46,24 @@ test('skill system composes primary and supporting skills for APA research docum
   assert.equal(plan.release_policy.requires_evidence, true);
 });
 
+test('skill system prefers repo delivery CI workflow for GitHub main requests', () => {
+  const decision = {
+    intent_primary: 'code_generation',
+    intent_secondary: ['repo_delivery', 'github_actions', 'ci_watch', 'main_branch_delivery', 'source_rewrite_not_copy'],
+    required_agents: ['intent-compiler', 'planner'],
+    required_tools: ['git.clone', 'repo.inspect', 'code-review.analyze', 'test.run', 'github.actions.monitor'],
+    final_output: 'code_artifact',
+  };
+  const plan = skillSystem.buildSkillExecutionPlan(decision, { userPlan: 'ENTERPRISE' });
+  const ids = plan.selected_skills.map(skill => skill.id);
+
+  assert.ok(ids.includes('repo_delivery_ci'));
+  assert.equal(ids.includes('app_builder'), false);
+  assert.ok(plan.required_tools.includes('github.actions.monitor'));
+  assert.ok(plan.quality_rules.includes('watch_newest_main_ci'));
+  assert.ok(plan.quality_rules.includes('source_rewrite_not_copy'));
+});
+
 test('skill and tool registries are internally consistent', () => {
   assert.equal(toolRegistry.integrity().ok, true);
   assert.equal(skillSystem.integrity().ok, true);

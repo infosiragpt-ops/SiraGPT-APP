@@ -450,11 +450,68 @@ to gate CI on > 5 % regression vs a baseline snapshot.
 4. **Intent attribution learning** — feed back actual response-success signals into the lexicon/rule weights to self-improve over time.
 5. **Front-end attribution panel** — UI that consumes /api/attribution-toolkit/visualize + /attribution-explainer/explain to render an explainability sidebar (UI work is out of scope for this branch per CLAUDE.md rules).
 
-## Free IA (Cerebras Llama 3.1 8B) — added 2026-05-25
+## Billing helpers — added 2026-05-26 (feature-cost-estimator.js)
 
-Per the product brief (`/Users/luis/Downloads/SIraGPT.docx`), the free
-tier and the cross-plan fallback model is "Free IA" = Llama 3.1 8B via
-Cerebras. Wiring:
+Single source of truth for credit costs + USD labels + plan
+recommendations, used by `/api/free-ia/info`, `/api/free-ia/digest`,
+`/api/free-ia/plans`, `/api/free-ia/estimate`:
+
+- `estimateCost(feature, {textLength})` — per-call credit cost + breakdown
+- `estimateCostBatch(items)` — fan-out preview with usdLabel per item
+- `estimateMonthlyCost(usage)` — monthly projection with totalMonthlyUsd
+- `getRecommendedPlan(usage)` — cheapest plan fitting projected spend
+- `getCostDelta(currentPlan, recommendedPlan)` — $ delta for upsell
+- `formatCreditsAsUsd(credits)` — "≈ $0.05" label format
+- `creditsToUsdCents(credits)` — integer-cent for financial reports
+- `creditsForUsd(usd)` — inverse of creditsToUsdCents (top-up flows)
+- `enrichPlanWithPricing(plan)` — full plan-card data + popular flag
+- `validatePlanName(plan)` — cheap pre-Zod validator (case-insensitive)
+- `pricingTable()` — all enriched plans sorted by price (UI grid + dropdowns)
+- `quickEstimate(features[])` — minCost-only fan-out for marketing tables
+- `monthlyBreakdownAsCsv(projection)` — RFC-4180 CSV export for Excel/Sheets
+- `monthlyBreakdownAsMarkdown(projection)` — GFM table for chat answers
+- `comparePlans(from, to)` — structured plan-vs-plan diff for upsell UI
+- `recommendUpgradeFromUsage(usage, currentPlan)` — one-call upsell helper
+- `findCheapestPlanForBudget(maxUsd)` — best plan within $/month budget
+- `affordsFeature(plan, feature, usage)` — pre-flight budget check
+- `explainBudgetVerdict(plan, feature, usage)` — human-readable banner text
+- `pricingFAQEntries()` — chat-AI knowledge base (7 q/a pairs)
+
+Pricing constants:
+- `USD_PER_CREDIT = 5/100_000` (PRO ratio)
+- `PLAN_PRICES_USD = { FREE:0, PRO:5, PRO_MAX:10, ENTERPRISE:2 }`
+- `PLAN_BUDGETS    = { FREE:0, PRO:100k, PRO_MAX:300k, ENTERPRISE:null }`
+- `POPULAR_PLAN    = 'PRO'`
+
+Public endpoints exposing the helpers:
+- `GET  /api/free-ia/plans`     — pricingTable
+- `GET  /api/free-ia/budget`    — findCheapestPlanForBudget
+- `GET  /api/free-ia/compare`   — comparePlans (?from=&to=)
+- `GET  /api/free-ia/affords`   — affordsFeature + explainBudgetVerdict
+- `GET  /api/free-ia/faq`       — pricingFAQEntries
+- `POST /api/free-ia/estimate`  — estimateCostBatch + recommendUpgradeFromUsage (?format=csv|markdown supported)
+- `GET  /api/free-ia/digest`    — userQuotaDigest with inlined planInfo + nextTier
+
+100+ unit tests in `feature-cost-estimator.test.js`.
+
+## Paraphrase route — public preview endpoints (no auth, no credits)
+
+Local-compute endpoints the frontend uses to give users a
+"try before you pay" experience:
+
+- `POST /api/paraphrase/score`       — estimateAIScoreDetailed → score + components + verdict (likely_ai/mixed/likely_human) + topTells
+- `POST /api/paraphrase/score/batch` — multi-text scorer with aggregate ({total, likely_ai, mixed, likely_human, avgScore})
+- `POST /api/paraphrase/humanize`    — humanizeText / humanizeChunked (large inputs); no LLM call, just the AI-tell-pattern cleaner
+- `GET  /api/paraphrase/surface`     — surfaceVersion + ENDPOINT_INVENTORY + FNV-1a apiFingerprint for cache invalidation
+
+## ⚡ FlashGPT (Cerebras Llama 3.1 8B) — added 2026-05-25, rebranded to FlashGPT
+
+Per the product brief (`/Users/luis/Downloads/SIraGPT.docx`) the free
+tier and the cross-plan fallback model is Llama 3.1 8B via Cerebras.
+Originally shipped under the brand name "Free IA", later rebranded to
+"⚡ FlashGPT" (commit `89fa7f9b feat(free): make FlashGPT unlimited`).
+The display name can be tuned per deployment via `FREE_IA_DISPLAY_NAME`.
+Wiring:
 
 - **Adapter**: `backend/src/services/ai/cerebras-client.js` — OpenAI-
   compatible wrapper for `api.cerebras.ai/v1`. Exports

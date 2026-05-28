@@ -1,0 +1,10 @@
+{
+  "upstream": "openclaw",
+  "repository": "https://github.com/openclaw/openclaw",
+  "commit": "b56ddcc6ffdfc5be78c1c9c93926518367b876eb",
+  "syncedAt": "2026-05-26",
+  "license": "MIT",
+  "paths": [
+    "patches"
+  ]
+}

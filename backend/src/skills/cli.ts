@@ -67,6 +67,52 @@ async function cmdList(opts: ListOptions): Promise<number> {
   return 0;
 }
 
+async function cmdRecommend(opts: ListOptions, input: string): Promise<number> {
+  const registry = new SkillRegistry({ rootDir: opts.rootDir });
+  const { issues } = await registry.load();
+  const recommendations = registry.recommend(input, 8);
+  await registry.dispose();
+
+  if (opts.json) {
+    process.stdout.write(
+      JSON.stringify(
+        {
+          rootDir: opts.rootDir,
+          query: input,
+          recommendations: recommendations.map((r) => ({
+            name: r.skill.manifest.name,
+            version: r.skill.manifest.version,
+            description: r.skill.manifest.description,
+            score: r.score,
+            matchedTerms: r.matchedTerms,
+            source: r.skill.manifest.source,
+            dir: r.skill.dir,
+          })),
+          issues,
+        },
+        null,
+        2,
+      ) + '\n',
+    );
+    return issues.length === 0 ? 0 : 1;
+  }
+
+  if (recommendations.length === 0) {
+    console.log('No matching skills found.');
+  } else {
+    for (const rec of recommendations) {
+      console.log(
+        `${rec.skill.manifest.name}@${rec.skill.manifest.version} (${rec.score}) — ${rec.skill.manifest.description}\n  matched: ${rec.matchedTerms.join(', ')}\n  dir: ${rec.skill.dir}`,
+      );
+    }
+  }
+  if (issues.length > 0) {
+    console.error(`\n${issues.length} skill(s) failed to load while recommending.`);
+    return 1;
+  }
+  return 0;
+}
+
 async function cmdValidate(target: string): Promise<number> {
   const resolved = path.resolve(target);
   const stat = await fsp.stat(resolved).catch(() => null);
@@ -88,26 +134,28 @@ async function cmdValidate(target: string): Promise<number> {
 }
 
 function parseArgs(argv: string[]): {
-  cmd: 'list' | 'validate' | 'help';
+  cmd: 'list' | 'recommend' | 'validate' | 'help';
   target?: string;
   rootDir: string;
   json: boolean;
 } {
   const args = argv.slice(2);
-  let cmd: 'list' | 'validate' | 'help' = 'help';
+  let cmd: 'list' | 'recommend' | 'validate' | 'help' = 'help';
   let target: string | undefined;
   let rootDir = DEFAULT_ROOT;
   let json = false;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (arg === 'list' || arg === 'validate' || arg === 'help') {
+    if (arg === 'list' || arg === 'recommend' || arg === 'validate' || arg === 'help') {
       cmd = arg;
     } else if (arg === '--json') {
       json = true;
     } else if (arg === '--root' && args[i + 1]) {
       rootDir = path.resolve(args[++i]);
-    } else if (cmd === 'validate' && !target) {
+    } else if ((cmd === 'validate' || cmd === 'recommend') && !target) {
       target = arg;
+    } else if (cmd === 'recommend' && target) {
+      target = `${target} ${arg}`;
     }
   }
   return { cmd, target, rootDir, json };
@@ -116,6 +164,7 @@ function parseArgs(argv: string[]): {
 function printHelp(): void {
   console.log(`Usage:
   skills list [--root <dir>] [--json]
+  skills recommend <request text> [--root <dir>] [--json]
   skills validate <path-to-skill-or-manifest>
 `);
 }
@@ -123,6 +172,13 @@ function printHelp(): void {
 export async function main(argv: string[] = process.argv): Promise<number> {
   const parsed = parseArgs(argv);
   if (parsed.cmd === 'list') return cmdList({ rootDir: parsed.rootDir, json: parsed.json });
+  if (parsed.cmd === 'recommend') {
+    if (!parsed.target) {
+      console.error('skills recommend requires request text');
+      return 2;
+    }
+    return cmdRecommend({ rootDir: parsed.rootDir, json: parsed.json }, parsed.target);
+  }
   if (parsed.cmd === 'validate') {
     if (!parsed.target) {
       console.error('skills validate requires a path argument');

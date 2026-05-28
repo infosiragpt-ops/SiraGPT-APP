@@ -45,6 +45,8 @@ export default function MusicGenerationComponent({
   initialEffect = "",
 }: MusicGenerationComponentProps = {}) {
   const { user } = useAuth()
+  const isPrivilegedUser = user?.isSuperAdmin === true || (user as any)?.role === "SUPER_ADMIN"
+  const isFreePlan = String(user?.plan || "FREE").trim().toUpperCase() === "FREE" && !isPrivilegedUser
   const [prompt, setPrompt] = React.useState("")
   const [duration, setDuration] = React.useState([initialDuration])
   const [promptInfluence, setPromptInfluence] = React.useState([initialPromptInfluence])
@@ -110,6 +112,10 @@ export default function MusicGenerationComponent({
     const cleanPrompt = normalized.value.trim()
     if (!cleanPrompt) {
       toast.error('Please enter a music description')
+      return
+    }
+    if (isFreePlan) {
+      toast.info('Música está en vista previa para usuarios FREE. Sube de plan para generar audio.')
       return
     }
 
@@ -220,6 +226,7 @@ const downloadMusic = async () => {
         <h3 className="text-lg font-semibold flex items-center justify-center gap-2">
           <Music className="h-5 w-5" />
           AI Music Generation
+          {isFreePlan && <Badge variant="secondary">Vista previa</Badge>}
         </h3>
         <p className="text-sm text-muted-foreground mt-1">
           Create original music using AI-powered generation
@@ -328,7 +335,7 @@ const downloadMusic = async () => {
       {/* Generate Button */}
       <Button
         onClick={generateMusic}
-        disabled={!prompt.trim() || isGenerating}
+        disabled={!prompt.trim() || isGenerating || isFreePlan}
         className="w-full"
         size="lg"
       >
@@ -340,7 +347,7 @@ const downloadMusic = async () => {
         ) : (
           <>
             <Music className="mr-2 h-4 w-4" />
-            Generate Music
+            {isFreePlan ? 'Sube de plan para generar' : 'Generate Music'}
           </>
         )}
       </Button>

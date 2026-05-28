@@ -30,6 +30,10 @@ const { getQueueName } = require('./agent-task-queue');
 const persistence = require('./agent-task-persistence');
 const { generateAutoDocument } = require('./auto-document-delivery');
 const {
+  isSourcePreservingEditRequest,
+  tryGenerateSourcePreservingDocumentEdit,
+} = require('../source-preserving-document-edit');
+const {
   generateVancouverMatrixDocument,
   isVancouverMatrixWordRequest,
 } = require('./vancouver-table-document');
@@ -1830,6 +1834,68 @@ async function runAgentTaskJob(payload = {}, job = null) {
     emit({ type: 'document_policy', policy: documentPolicy });
 
     if (documentPolicy.autoGenerate && artifacts.length === 0) {
+      const wantsSourcePreservingEdit = isSourcePreservingEditRequest(displayGoal || goal, files);
+      if (wantsSourcePreservingEdit) {
+        try {
+          emit({
+            type: 'checkpoint',
+            label: 'Editando documento original',
+            status: 'running',
+            payload: { mode: 'source_preserving_append', fileCount: Array.isArray(files) ? files.length : 0 },
+          });
+          const preserved = await tryGenerateSourcePreservingDocumentEdit({
+            prisma,
+            userId: user.id,
+            chatId,
+            fileIds: files,
+            prompt: goal,
+            displayPrompt: displayGoal,
+          });
+          if (preserved?.artifact) {
+            const artifactEvent = {
+              id: preserved.artifact.id,
+              filename: preserved.artifact.filename,
+              format: preserved.artifact.format,
+              mime: preserved.artifact.mime,
+              sizeBytes: preserved.artifact.sizeBytes,
+              downloadUrl: preserved.artifact.downloadUrl,
+              previewHtml: preserved.previewHtml,
+              validation: preserved.validation,
+            };
+            artifacts.push(artifactEvent);
+            emit({ type: 'file_artifact', artifact: artifactEvent });
+            emit({
+              type: 'quality_gate',
+              gate: 'source_preserving_document_edit',
+              label: 'Documento original conservado',
+              passed: Boolean(preserved.validation?.passed),
+              summary: 'Se agregó el contenido solicitado al archivo original sin regenerar portada, tablas ni estructura previa.',
+              payload: preserved.validation,
+            });
+            await persistence.persistGeneratedArtifact({
+              artifact: { ...preserved.artifact, validation: preserved.validation },
+              task,
+              previewHtml: preserved.previewHtml,
+              validation: preserved.validation,
+            });
+            finalMarkdown = preserved.content;
+          } else {
+            finalMarkdown = 'No encontré un archivo editable compatible asociado a este turno para modificarlo sin regenerarlo. No generé un documento nuevo para evitar cambiar tu archivo base.';
+          }
+        } catch (err) {
+          emit({
+            type: 'quality_gate',
+            gate: 'source_preserving_document_edit',
+            label: 'Edición preservadora no disponible',
+            passed: false,
+            summary: err?.message || 'No se pudo editar el archivo original.',
+          });
+          finalMarkdown = `No pude editar el archivo original sin cambiarlo: ${err?.message || 'error desconocido'}. No generé un documento nuevo para evitar entregarte contenido ajeno al archivo.`;
+        }
+      }
+    }
+
+    if (documentPolicy.autoGenerate && artifacts.length === 0 && !isSourcePreservingEditRequest(displayGoal || goal, files)) {
       try {
         const generated = await generateAutoDocument({
           task,

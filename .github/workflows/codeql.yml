@@ -25,25 +25,37 @@ jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         language: [javascript-typescript]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
           queries: security-and-quality
+          config: |
+            paths-ignore:
+              - "apps/upstream/**"
+              - "changelog/upstream/**"
+              - "config/upstream/**"
+              - "extensions/upstream/**"
+              - "packages/upstream/**"
+              - "src/upstream/**"
+              - "ui/upstream/**"
+              - "attached_assets/**"
+              - "test-results/**"
+              - ".next/**"
 
-      - name: Autobuild
-        uses: github/codeql-action/autobuild@v3
-
+      # JavaScript/TypeScript CodeQL extracts directly from source. Skipping
+      # autobuild avoids spending minutes on vendored/upstream trees before the
+      # analysis step and keeps the push SAST gate under its timeout budget.
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4
         with:
           category: "/language:${{ matrix.language }}"

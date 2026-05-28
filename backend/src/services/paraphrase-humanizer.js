@@ -201,10 +201,29 @@ function boostBurstiness(text) {
 // that correlates with how detectors typically score text, useful for
 // showing a "stealth" gauge to the user.
 function estimateAIScore(text) {
+  return estimateAIScoreDetailed(text).score;
+}
+
+/**
+ * Same scoring as `estimateAIScore` but returns the per-component
+ * breakdown so callers can render an explainer ("your text scored
+ * 0.61 — 0.40 of that is tell-density, 0.18 is uniform sentence
+ * length, …"). Useful for the paraphrase admin UI.
+ *
+ * Components match the weighted sum in estimateAIScore exactly:
+ *   - tellDensity        × 0.4
+ *   - burstinessScore    × 0.3
+ *   - repetitiveOpenings × 0.2
+ *   - emDashDensity      × 0.1
+ *
+ * Returns `{ score: 0, components: null }` when input is too short
+ * to score meaningfully (mirrors estimateAIScore's 0-return guards).
+ */
+function estimateAIScoreDetailed(text) {
   const t = String(text || '');
-  if (t.length < 20) return 0;
+  if (t.length < 20) return { score: 0, components: null };
   const words = t.toLowerCase().split(/\s+/).filter(Boolean);
-  if (words.length < 10) return 0;
+  if (words.length < 10) return { score: 0, components: null };
 
   let tellHits = 0;
   for (const { regex } of AI_TELL_PATTERNS) {
@@ -245,7 +264,21 @@ function estimateAIScore(text) {
     + 0.3 * burstinessScore
     + 0.2 * repetitiveOpenings
     + 0.1 * emDashDensity;
-  return Math.round(Math.max(0, Math.min(1, score)) * 1000) / 1000;
+  return {
+    score: Math.round(Math.max(0, Math.min(1, score)) * 1000) / 1000,
+    components: {
+      tellDensity: Math.round(tellDensity * 1000) / 1000,
+      burstinessScore: Math.round(burstinessScore * 1000) / 1000,
+      repetitiveOpenings: Math.round(repetitiveOpenings * 1000) / 1000,
+      emDashDensity: Math.round(emDashDensity * 1000) / 1000,
+    },
+    weights: {
+      tellDensity: 0.4,
+      burstinessScore: 0.3,
+      repetitiveOpenings: 0.2,
+      emDashDensity: 0.1,
+    },
+  };
 }
 
 function listAITellPatterns() {
@@ -279,6 +312,35 @@ function countAITellPatternsByLanguage() {
  * @param {number} [opts.limit] — top-N to return (default 5)
  * @returns {Array<{ pattern: string, count: number }>}
  */
+/**
+ * Same as topAITellsFound but only counts patterns from the given
+ * language bucket. Useful when the source language is known and the
+ * caller wants to avoid cross-language noise in the debug panel.
+ *
+ * @param {string} text
+ * @param {string} language — 'english' | 'spanish'
+ * @param {object} [opts]
+ * @param {number} [opts.limit] — top-N (default 5)
+ */
+function topAITellsByLanguage(text, language, { limit = 5 } = {}) {
+  const t = String(text || '');
+  const wanted = String(language || '').toLowerCase();
+  if (!t.trim() || (wanted !== 'english' && wanted !== 'spanish')) return [];
+  const spanishMarker = /[áéíóúñü¿¡]|^en |^cabe |^sin /;
+  const counts = [];
+  for (const { key, regex } of AI_TELL_PATTERNS) {
+    const isSpanish = spanishMarker.test(key);
+    if (wanted === 'spanish' && !isSpanish) continue;
+    if (wanted === 'english' && isSpanish) continue;
+    const matches = t.match(regex);
+    const count = matches ? matches.length : 0;
+    if (count > 0) counts.push({ pattern: key, count });
+  }
+  return counts
+    .sort((a, b) => b.count - a.count)
+    .slice(0, Math.max(0, limit));
+}
+
 function topAITellsFound(text, { limit = 5 } = {}) {
   const t = String(text || '');
   if (!t.trim()) return [];
@@ -409,9 +471,11 @@ module.exports = {
   humanizeText,
   humanizeChunked,
   estimateAIScore,
+  estimateAIScoreDetailed,
   listAITellPatterns,
   countAITellPatternsByLanguage,
   topAITellsFound,
+  topAITellsByLanguage,
   clampScore,
   // Exposed for unit tests
   replaceAITells,

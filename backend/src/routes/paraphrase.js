@@ -94,6 +94,121 @@ router.get('/modes', optionalAuth, (req, res) => {
   });
 });
 
+// POST /api/paraphrase/score — free pre-paraphrase AI score check.
+// The frontend can call this to show "your text scores 0.7 — looks
+// AI-generated" before the user commits credits to a paraphrase run.
+// Public (no auth) because it doesn't consume credits and doesn't
+// touch any LLM — it's a deterministic local scorer.
+router.post('/score', express.json({ limit: '512kb' }), (req, res) => {
+  try {
+    // eslint-disable-next-line global-require
+    const { estimateAIScoreDetailed, topAITellsFound } = require('../services/paraphrase-humanizer');
+    const text = typeof req.body?.text === 'string' ? req.body.text : '';
+    if (!text) {
+      return res.status(400).json({ error: 'missing_text', message: 'body.text is required' });
+    }
+    if (text.length > MAX_TEXT_LENGTH) {
+      return res.status(413).json({ error: 'text_too_long', maxLength: MAX_TEXT_LENGTH });
+    }
+    const detailed = estimateAIScoreDetailed(text);
+    const topTells = topAITellsFound(text, { limit: 5 });
+    return res.json({
+      score: detailed.score,
+      components: detailed.components,
+      weights: detailed.weights,
+      topTells,
+      verdict: detailed.score >= 0.5 ? 'likely_ai'
+        : detailed.score >= 0.25 ? 'mixed'
+        : 'likely_human',
+    });
+  } catch (err) {
+    return res.status(500).json({ error: 'score_failed', message: err && err.message });
+  }
+});
+
+// POST /api/paraphrase/score/batch — score multiple texts in one call.
+// Same scorer as /score but accepts an array of texts and returns an
+// array of scored results. Useful for document-level processing where
+// each paragraph needs to be evaluated independently.
+router.post('/score/batch', express.json({ limit: '1mb' }), (req, res) => {
+  try {
+    // eslint-disable-next-line global-require
+    const { estimateAIScoreDetailed, topAITellsFound } = require('../services/paraphrase-humanizer');
+    const texts = Array.isArray(req.body?.texts) ? req.body.texts : null;
+    if (!texts) {
+      return res.status(400).json({ error: 'missing_texts', message: 'body.texts must be an array of strings' });
+    }
+    if (texts.length > 50) {
+      return res.status(413).json({ error: 'too_many_texts', limit: 50 });
+    }
+    const out = texts.map((text, i) => {
+      const s = typeof text === 'string' ? text : '';
+      if (!s) return { index: i, error: 'empty_text', score: 0 };
+      if (s.length > MAX_TEXT_LENGTH) return { index: i, error: 'text_too_long', score: 0 };
+      const detailed = estimateAIScoreDetailed(s);
+      return {
+        index: i,
+        score: detailed.score,
+        components: detailed.components,
+        topTells: topAITellsFound(s, { limit: 3 }),
+        verdict: detailed.score >= 0.5 ? 'likely_ai'
+          : detailed.score >= 0.25 ? 'mixed'
+          : 'likely_human',
+      };
+    });
+    // Quick aggregate so the UI can render "of 12 paragraphs, 3 likely AI".
+    const aggregate = {
+      total: out.length,
+      likely_ai: out.filter((r) => r.verdict === 'likely_ai').length,
+      mixed: out.filter((r) => r.verdict === 'mixed').length,
+      likely_human: out.filter((r) => r.verdict === 'likely_human').length,
+      avgScore: out.length > 0
+        ? Math.round((out.reduce((a, r) => a + (r.score || 0), 0) / out.length) * 1000) / 1000
+        : 0,
+    };
+    return res.json({ results: out, aggregate });
+  } catch (err) {
+    return res.status(500).json({ error: 'score_batch_failed', message: err && err.message });
+  }
+});
+
+// POST /api/paraphrase/humanize — local-only humanizer pass.
+// Same humanizer the paraphrase route uses at the tail of its pipeline,
+// but without the LLM rewrite. Cheaper for users who already have a
+// reasonable draft and just want the AI-tell patterns cleaned up. Public
+// (no auth) for now because it never calls any external API.
+router.post('/humanize', express.json({ limit: '512kb' }), (req, res) => {
+  try {
+    // eslint-disable-next-line global-require
+    const { humanizeText, humanizeChunked } = require('../services/paraphrase-humanizer');
+    const text = typeof req.body?.text === 'string' ? req.body.text : '';
+    if (!text) {
+      return res.status(400).json({ error: 'missing_text', message: 'body.text is required' });
+    }
+    if (text.length > MAX_TEXT_LENGTH) {
+      return res.status(413).json({ error: 'text_too_long', maxLength: MAX_TEXT_LENGTH });
+    }
+    const language = typeof req.body?.language === 'string' && SUPPORTED_LANGUAGES.includes(req.body.language)
+      ? req.body.language : 'es';
+    const intensity = typeof req.body?.intensity === 'string'
+      ? req.body.intensity : 'medium';
+    // Optional opt-out: callers can pin specific patterns the
+    // humanizer must NOT replace ("don't touch 'In conclusion' —
+    // I'm writing an academic abstract"). Silently ignore non-array.
+    const excludeTells = Array.isArray(req.body?.excludeTells)
+      ? req.body.excludeTells.filter((t) => typeof t === 'string')
+      : [];
+    // Use chunked variant for large inputs so we don't blow the stack
+    // on a single regex sweep.
+    const result = text.length > 8000
+      ? humanizeChunked({ text, language, intensity, excludeTells })
+      : humanizeText({ text, language, intensity, excludeTells });
+    return res.json(result);
+  } catch (err) {
+    return res.status(500).json({ error: 'humanize_failed', message: err && err.message });
+  }
+});
+
 router.post(
   '/',
   (req, _res, next) => { normaliseModeOnBody(req.body); next(); },
@@ -225,6 +340,45 @@ router.post(
   },
 );
 
+// Explicit endpoint inventory — kept here so the surface stays
+// discoverable without traversing Express's router internals. Same
+// FNV-1a fingerprint pattern as /api/free-ia so cache invalidation
+// rules are uniform across the API.
+const ENDPOINT_INVENTORY = Object.freeze([
+  { method: 'GET',  path: '/api/paraphrase/modes',         auth: 'public', returns: 'supported modes + languages + cost ratio' },
+  { method: 'POST', path: '/api/paraphrase/score',         auth: 'public', returns: 'AI-score breakdown + verdict' },
+  { method: 'POST', path: '/api/paraphrase/score/batch',   auth: 'public', returns: 'per-text scores + aggregate verdict' },
+  { method: 'POST', path: '/api/paraphrase/humanize',      auth: 'public', returns: 'humanized text (no LLM)' },
+  { method: 'POST', path: '/api/paraphrase',               auth: 'user',   returns: 'paraphrased text + humanizer pass' },
+]);
+
+const SURFACE_VERSION = 'v1.1';
+
+function apiSurfaceFingerprint() {
+  const sorted = ENDPOINT_INVENTORY
+    .map((e) => `${e.method}:${e.path}:${e.auth}`)
+    .sort()
+    .join('|');
+  const seed = `${SURFACE_VERSION}|${sorted}`;
+  let h = 0x811c9dc5;
+  for (let i = 0; i < seed.length; i += 1) {
+    h ^= seed.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, '0');
+}
+
+// Augmented /modes — adds endpoint inventory + surface version + fingerprint.
+// Useful for the model picker / settings UI to render "paraphrase
+// supports: score, batch, humanize, …" without hardcoding the list.
+router.get('/surface', (_req, res) => {
+  res.json({
+    surfaceVersion: SURFACE_VERSION,
+    apiFingerprint: apiSurfaceFingerprint(),
+    endpoints: ENDPOINT_INVENTORY,
+  });
+});
+
 module.exports = router;
 module.exports.ParaphraseSchema = ParaphraseSchema;
 module.exports.SUPPORTED_MODES = SUPPORTED_MODES;
@@ -232,3 +386,6 @@ module.exports.SUPPORTED_LANGUAGES = SUPPORTED_LANGUAGES;
 module.exports.paraphraseCost = paraphraseCost;
 module.exports.resolveMaxTextLength = resolveMaxTextLength;
 module.exports.MAX_TEXT_LENGTH = MAX_TEXT_LENGTH;
+module.exports.ENDPOINT_INVENTORY = ENDPOINT_INVENTORY;
+module.exports.SURFACE_VERSION = SURFACE_VERSION;
+module.exports.apiSurfaceFingerprint = apiSurfaceFingerprint;

@@ -91,6 +91,9 @@ const {
   resolveTranscriptionFileIds,
   serializeMessageAttachments,
 } = require('../services/message-attachments');
+const {
+  MAX_SIMULTANEOUS_DOCUMENTS,
+} = require('../config/document-batch-limits');
 
 const prisma = (() => {
   try { return require('../config/database'); } catch { return null; }
@@ -182,6 +185,7 @@ Rules:
     · If you only need RAW CHUNKS to combine with other data (build a table, cross-check with web_search, etc.) → call rag_retrieve instead.
 - When the user asks to transcribe ("transcribir", "transcribe", "transcripción") and there is uploaded or pasted content, return the readable content verbatim, preserving line breaks and headings when useful. Do NOT explain what transcription is, do NOT summarize, and do NOT create a Word/PDF/PPT/Excel unless the user explicitly asks for that output format. If no readable text is available, say that clearly and ask for a readable file/audio/image.
 - When the user asks for a file (Excel, Word, PPT, PDF), use create_document. The deliverable must be authored by executable code, not placeholder prose: write a complete Python script that builds the real content, visual hierarchy, tables/slides/sections and writes to os.environ["OUT_PATH"]. Prefer openpyxl / python-docx / python-pptx / reportlab.
+- When the user uploads a Word/Excel/PowerPoint/PDF and asks to modify, improve, correct, fill, translate, summarize into, or continue "in my own file", treat the upload as a read-only source. Never overwrite or mutate the original. Create a new artifact in the same format unless the user explicitly asks for another format. Preserve logos/images, tables, formulas, sheet names, headers, footers, slide layouts, styling, and document order as far as the available libraries allow; change only what the user requested.
 - Use python_exec for data wrangling, verification, numeric work — ANY time you'd otherwise "estimate" a number.
 - For academic/scientific/market research, collect enough evidence first, keep DOI/URL/year/journal/source metadata, and separate verified findings from assumptions.
 - For strict academic deliverables (for example "40 articles", "only DOI", "only open access", "only Latin America", "2022-2026"), do not pad the file with weak or unverified sources. Refine web_search queries until the requested count is met; if verified sources are still fewer than requested, state the exact verified count and label the missing gap instead of inventing rows.
@@ -464,7 +468,7 @@ router.post(
     body('maxRuntimeMs').optional().isInt({ min: 3_600_000, max: 72_000_000 }),
     body('chatId').optional().isString(),
     body('scopeMode').optional().isIn(['chat', 'global']),
-    body('files').optional().isArray({ max: 20 }),
+    body('files').optional().isArray({ max: MAX_SIMULTANEOUS_DOCUMENTS }),
   ],
   authenticateToken,
   enforcePlanQuota({ surface: 'agent.task.create' }),
@@ -584,7 +588,7 @@ router.post(
     body('goal').isString().trim().isLength({ min: 3, max: 4000 }).withMessage('goal must be 3-4000 chars'),
     body('displayGoal').optional().isString().trim().isLength({ min: 3, max: 4000 }),
     body('systemContract').optional().isString().trim().isLength({ max: 4000 }),
-    body('files').optional().isArray({ max: 20 }),
+    body('files').optional().isArray({ max: MAX_SIMULTANEOUS_DOCUMENTS }),
     body('files.*').optional().isString().trim().isLength({ min: 1, max: 200 }),
     body('chatId').optional().isString(),
     body('scopeMode').optional().isIn(['chat', 'global']),
@@ -610,7 +614,7 @@ router.post(
     req.body.chatId = scope.chatId;
 
     const requestedFileIds = Array.isArray(req.body.files)
-      ? req.body.files.map(String).filter(Boolean).slice(0, 20)
+      ? req.body.files.map(String).filter(Boolean).slice(0, MAX_SIMULTANEOUS_DOCUMENTS)
       : [];
     const canUseLocalDocumentRuntime = requestedFileIds.length > 0 || isTranscriptionRequest(String(req.body.goal || ''));
     if (!process.env.OPENAI_API_KEY && !canUseLocalDocumentRuntime) {
@@ -631,7 +635,7 @@ router.post(
       req.body.systemContract || extractProfessionalContract(rawGoal)
     );
     let fileIds = Array.isArray(req.body.files)
-      ? req.body.files.map(String).filter(Boolean).slice(0, 20)
+      ? req.body.files.map(String).filter(Boolean).slice(0, MAX_SIMULTANEOUS_DOCUMENTS)
       : [];
     if (fileIds.length === 0 && isTranscriptionRequest(agentGoal)) {
       fileIds = await resolveTranscriptionFileIds(prisma, {
@@ -1327,7 +1331,7 @@ async function handleQueuedTaskRequest(req, res) {
     req.body.systemContract || extractProfessionalContract(rawGoal)
   );
   let fileIds = Array.isArray(req.body.files)
-    ? req.body.files.map(String).filter(Boolean).slice(0, 20)
+    ? req.body.files.map(String).filter(Boolean).slice(0, MAX_SIMULTANEOUS_DOCUMENTS)
     : [];
   if (fileIds.length === 0 && isTranscriptionRequest(agentGoal)) {
     fileIds = await resolveTranscriptionFileIds(prisma, {
@@ -1466,7 +1470,7 @@ async function handleLocalTaskRequest(req, res, { fallbackReason = 'local_fallba
     req.body.systemContract || extractProfessionalContract(rawGoal)
   );
   let fileIds = Array.isArray(req.body.files)
-    ? req.body.files.map(String).filter(Boolean).slice(0, 20)
+    ? req.body.files.map(String).filter(Boolean).slice(0, MAX_SIMULTANEOUS_DOCUMENTS)
     : [];
   if (fileIds.length === 0 && isTranscriptionRequest(agentGoal)) {
     fileIds = await resolveTranscriptionFileIds(prisma, {

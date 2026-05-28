@@ -1,6 +1,7 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
+const requirePaidPlan = require('../middleware/require-paid-plan');
 const prisma = require('../config/database');
 const OpenAI = require('openai');
 const { createDocument } = require('../services/document-service');
@@ -1603,6 +1604,7 @@ router.post(
     body('chatId').optional().isString(),
   ],
   authenticateToken,
+  requirePaidPlan({ feature: 'thesis_generation' }),
   async (req, res) => {
     try {
       const errors = validationResult(req);

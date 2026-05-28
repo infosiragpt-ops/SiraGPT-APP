@@ -49,8 +49,9 @@ ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_OPTIONS=--max-old-space-size=4096
 RUN npm run build
 
-# Prune dev dependencies
-RUN npm prune --omit=dev --prefer-offline
+# The runner only copies Next's standalone output from this stage. Pruning the
+# build workspace after `next build` is unnecessary here and has proven brittle
+# on the production BuildKit runner.
 
 # ─── Stage 2: Production runner ─────────────────────────────
 FROM node:22-alpine AS runner

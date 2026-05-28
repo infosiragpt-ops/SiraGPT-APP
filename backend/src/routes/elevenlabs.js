@@ -1,6 +1,7 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
+const requirePaidPlan = require('../middleware/require-paid-plan');
 const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
@@ -129,7 +130,7 @@ router.post('/text-to-speech', [
   body('voice_id').optional().isString(),
   body('model_id').optional().isString(),
   body('voice_settings').optional().isObject()
-], authenticateToken, async (req, res) => {
+], authenticateToken, requirePaidPlan({ feature: 'voice_generation' }), async (req, res) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -208,7 +209,7 @@ router.post('/text-to-speech', [
 });
 
 // Speech-to-Text (using ElevenLabs)
-router.post('/speech-to-text', upload.single('audio'), authenticateToken, async (req, res) => {
+router.post('/speech-to-text', authenticateToken, requirePaidPlan({ feature: 'voice_transcription' }), upload.single('audio'), async (req, res) => {
   try {
     if (!ELEVENLABS_API_KEY) {
       return res.status(400).json({ error: 'ElevenLabs API key not configured' });
@@ -486,7 +487,7 @@ router.post('/generate-music', [
   body('text').trim().notEmpty().withMessage('Text prompt is required'),
   body('duration').optional().isNumeric().withMessage('Duration must be a number'),
   // body('prompt_influence').optional().isNumeric().withMessage('Prompt influence must be a number')
-], authenticateToken, async (req, res) => {
+], authenticateToken, requirePaidPlan({ feature: 'music_generation' }), async (req, res) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {

@@ -180,6 +180,35 @@ function modelSupportsFunctionCalling(provider, model) {
   return false;
 }
 
+const SIMPLE_CHAT_PROMPT = /^\s*(hola|hi|hello|hey|buenas|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches|gracias|thanks|ok|vale|listo|perfecto|sí|si|no|test|prueba)[.!?¡¿\s]*$/i;
+const AGENTIC_PROMPT_HINT = /\b(clon|repo|repositorio|github|git|commit|push|pr|pull ?request|deploy|despleg|codex|cursor|claude.?code|program|c[oó]digo|refactor|mejora|arregla|corrige|no.?funciona|no.?sirve|todav[ií]a|sigue|contin[uú]a|investiga|busca|fuentes?|cita|web|internet|actual|reciente|pdf|documento|archivo|excel|word|ppt|tabla|analiza|compara|genera.?archivo|descargable|aut[oó]nom|background|segundo.?plano|meses?|semanas?|\b\/goal\b|\b\/plan\b)\b/i;
+
+/**
+ * Decide whether a normal chat turn should enter the expensive agentic
+ * loop. The loop is useful for repo work, current research, documents
+ * and autonomous follow-ups; it is the wrong path for greetings and
+ * simple Q&A because some providers can finish without a `finalize`
+ * tool call, which previously surfaced the generic "no verificable"
+ * fallback instead of a normal answer.
+ */
+function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
+  const text = String(prompt || '').trim();
+  if (!text) return false;
+  if (SIMPLE_CHAT_PROMPT.test(text)) return false;
+  if (Array.isArray(files) && files.length > 0) return true;
+  if (/^\s*\/(goal|plan)\b/i.test(text)) return true;
+  if (AGENTIC_PROMPT_HINT.test(text)) return true;
+
+  const recent = Array.isArray(history)
+    ? history.slice(-8).map((m) => textFromMessageContent(m && m.content)).join('\n')
+    : '';
+  if (recent && /\b(repo|github|commit|deploy|despleg|archivo|documento|pdf|excel|word|investiga|fuentes?|no.?funciona|todav[ií]a)\b/i.test(recent)) {
+    return /\b(sigue|contin[uú]a|hazlo|dale|arregla|corrige|eso|todav[ií]a|no.?funciona|no.?sirve)\b/i.test(text);
+  }
+
+  return false;
+}
+
 /**
  * Build the initial agent-task-state JSON the frontend's
  * AgenticStepsRenderer knows how to consume. Mirrors the shape used by
@@ -334,6 +363,7 @@ async function runAgenticChat(opts) {
     'Cuando la pregunta requiera información reciente, hechos verificables o cifras concretas, usa `web_search` y luego `read_url` sobre las mejores fuentes. Cita esas fuentes con enlaces markdown.',
     'Para calculos, transformaciones de datos o verificacion deterministica, usa `python_exec`. Cuando generes codigo no trivial, usa `run_tests` antes de finalizar.',
     'Cuando el usuario pida un archivo descargable, usa `create_document` y despues `verify_artifact`; no finalices si la verificacion muestra un archivo vacio o incorrecto.',
+    'Cuando el usuario pida editar su Word/Excel/PPT/PDF subido, trata el archivo original como solo lectura: crea una nueva copia en el mismo formato, conserva estructura/logos/tablas/formulas/hojas/encabezados/diseño tanto como sea posible, y modifica solo lo solicitado.',
     'No afirmes que modificaste repositorios, GitHub o el filesystem local si ninguna herramienta disponible lo hizo realmente.',
     historyForPrompt ? `\nConversación previa (recortada):\n${historyForPrompt}` : '',
   ].filter(Boolean).join('\n');
@@ -532,6 +562,7 @@ function isEnabled() {
 module.exports = {
   runAgenticChat,
   isEnabled,
+  shouldUseAgenticChat,
   modelSupportsFunctionCalling,
   // Exposed for tests:
   _internal: {

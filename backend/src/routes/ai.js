@@ -2,6 +2,7 @@ const express = require('express');
 const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
 const { requireScope } = require('../middleware/require-scope');
+const requirePaidPlan = require('../middleware/require-paid-plan');
 
 // Lazy/safe enforce-org-quota middleware. Wrapped in a try/catch so a
 // crash in the middleware module (e.g. prisma model missing in dev) can
@@ -84,6 +85,7 @@ const {
   resolveModelForUser,
   persistModelPreference,
 } = require('../services/model-quota-router');
+const { curateVisibleTextModels } = require('../services/visible-model-catalog');
 const streamResume = require('../services/ai/stream-resume');
 const promptInjectionDetector = require('../services/ai/prompt-injection-detector');
 const longTermMemory = require('../services/long-term-memory');
@@ -103,6 +105,7 @@ const tokenBudget = require('../services/ai/token-budget');
 // OTel span helpers — degrade to direct call when OTel isn't configured.
 let _otelSpans = null;
 try { _otelSpans = require('../utils/otel-spans'); } catch (_e) { _otelSpans = null; }
+
 const withAIGenerateSpan = (_otelSpans && _otelSpans.withAIGenerateSpan)
   ? _otelSpans.withAIGenerateSpan
   : (_attrs, fn) => fn();
@@ -289,25 +292,6 @@ function createProviderClient(provider) {
     return new OpenAI({
       apiKey: process.env.DEEPSEEK_API_KEY,
       baseURL: "https://api.deepseek.com",
-    });
-  }
-
-  if (provider === "Cerebras") {
-    // Free IA — Cerebras Llama 3.1 8B used as the SiraGPT free tier and as
-    // the fallback when the user's premium credits run out. Use the
-    // instrumented variant so every chat.completions.create() call
-    // increments the upstream success/error counters automatically.
-    const cerebras = require('../services/ai/cerebras-client');
-    const instrumented = cerebras.createInstrumentedCerebrasClient();
-    if (instrumented) return instrumented;
-    // Fallback path: if Cerebras isn't configured, build a bare OpenAI
-    // client pointing at the Cerebras endpoint so any test using a stub
-    // API key still gets a working object (call will 401 upstream and
-    // surface the error normally).
-    const cfg = cerebras.getCerebrasConfig();
-    return new OpenAI({
-      apiKey: cfg.apiKey || process.env.CEREBRAS_API_KEY || '',
-      baseURL: cfg.baseURL || cerebras.DEFAULT_BASE_URL,
     });
   }
 
@@ -508,6 +492,7 @@ router.post(
     body('customInstruction').optional().isString().trim().isLength({ max: 1000 }),
   ],
   authenticateToken,
+  requirePaidPlan({ feature: 'image_generation' }),
   async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
@@ -677,13 +662,16 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
   try {
     const { type } = req.query; // Query se 'type' hasil karein (e.g., ?type=TEXT)
     const userPlan = req.user?.plan || 'FREE';
-    const modelPolicy = buildModelQuotaPolicy(req.user);
+    const freeDailyCallsUsed = req.user?.plan === 'FREE'
+      ? await countDailyApiCalls(req.user.id)
+      : null;
+    const modelPolicy = buildModelQuotaPolicy(req.user, process.env, { freeDailyCallsUsed });
 
     const whereClause = {
       isActive: true,
     };
 
-    if (type && (type === 'TEXT' || type === 'IMAGE')) {
+    if (type && (type === 'TEXT' || type === 'IMAGE' || type === 'VIDEO')) {
       whereClause.type = type; // Agar type di gai hai to us par filter karein
     }
 
@@ -707,6 +695,7 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
     // exists (active or inactive) so admin disable/delete is respected.
     const wantText = !type || type === 'TEXT';
     const wantImage = !type || type === 'IMAGE';
+    const wantVideo = !type || type === 'VIDEO';
     if (wantText && hasEnv('DEEPSEEK_API_KEY')) {
       const listed = new Set(models.map((m) => m.name));
       const deepseekNames = DEEPSEEK_TEXT_MODELS.map((m) => m.name);
@@ -754,6 +743,26 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
       }
     }
 
+    if (wantVideo && (hasEnv('FAL_KEY') || hasEnv('FAL_API_KEY') || hasEnv('TAL_AI_API_KEY'))) {
+      const listed = new Set(models.map((m) => m.name));
+      const virtualVideoModels = [
+        {
+          name: 'veo-fast',
+          displayName: 'Veo Fast (fal.ai)',
+          provider: 'Custom',
+          type: 'VIDEO',
+          description: 'Generación de video con Veo Fast vía fal.ai.',
+          icon: 'GeminiLogo',
+        },
+      ]
+        .filter((m) => !listed.has(m.name))
+        .map((m) => ({ id: `__virtual_${m.name.replace(/[^a-z0-9]+/gi, '_').toLowerCase()}__`, ...m }));
+
+      if (virtualVideoModels.length > 0) {
+        models = [...virtualVideoModels, ...models];
+      }
+    }
+
     if (wantText) {
       const fallbackModel = buildGema4VirtualModel();
       const alreadyListed = models.some((m) => m.name === fallbackModel.name);
@@ -768,6 +777,10 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
             : [...models, fallbackModel];
         }
       }
+    }
+
+    if (wantText) {
+      models = curateVisibleTextModels(models);
     }
 
     // Plan gating — drop catalogued models the user's plan can't use, but
@@ -920,20 +933,32 @@ router.post('/intent/semantic', optionalAuth, async (req, res) => {
 });
 // ...existing imports...
 
-// Add helper: count ApiUsage records (completed calls) for current calendar month
-// Add this helper close to the top with other helpers/imports:
-//if want to use api usage for free plan
-async function countMonthlyApiCalls(userId) {
+function getBoliviaDayWindow(now = new Date()) {
+  const offsetMinutes = Number.parseInt(process.env.SIRAGPT_FREE_DAILY_TZ_OFFSET_MINUTES || '-240', 10);
+  const safeOffset = Number.isFinite(offsetMinutes) ? offsetMinutes : -240;
+  const shifted = new Date(now.getTime() + safeOffset * 60_000);
+  const startShiftedUtc = Date.UTC(
+    shifted.getUTCFullYear(),
+    shifted.getUTCMonth(),
+    shifted.getUTCDate()
+  );
+  const start = new Date(startShiftedUtc - safeOffset * 60_000);
+  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+  return { start, end };
+}
+
+// Count completed ApiUsage records for the current local day. This powers
+// the Free plan's 3-consultas/dia cap across whichever model the user picks.
+async function countDailyApiCalls(userId) {
   const now = new Date();
-  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-  const startOfNextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  const { start, end } = getBoliviaDayWindow(now);
 
   const count = await prisma.apiUsage.count({
     where: {
       userId,
       timestamp: {
-        gte: startOfMonth,
-        lt: startOfNextMonth
+        gte: start,
+        lt: end
       }
     }
   });
@@ -1609,6 +1634,8 @@ router.post(
           model,
         }));
       }
+
+
 
       // ✅ Load per-user personalization so every turn carries the
       // user's name, preferred tone, and any custom instructions they
@@ -4105,7 +4132,7 @@ router.post(
         };
       }
 
-      // NOTE: declared at function scope (see top of handler) so the
+            // NOTE: declared at function scope (see top of handler) so the
       // outer `finally` block can read the final value. This is just an
       // assignment — promoting it to `let` here would shadow the outer
       // binding and re-introduce the responseChars:0 metric bug.
@@ -5018,6 +5045,7 @@ router.post(
     body('model').trim().notEmpty().withMessage('Model is required'),
   ],
   authenticateToken,
+  requirePaidPlan({ feature: 'image_generation' }),
   async (req, res) => {
     try {
       const errors = validationResult(req);
@@ -5437,6 +5465,7 @@ router.post(
     body('imageCount').optional().isInt({ min: 1, max: 5 }).withMessage('Image count must be between 1 and 5'),
   ],
   authenticateToken,
+  requirePaidPlan({ feature: 'image_generation' }),
   async (req, res) => {
     const requestAbortController = new AbortController();
     let clientDisconnected = false;
@@ -5783,6 +5812,7 @@ router.post(
     body('image_url').optional().isString(),
   ],
   authenticateToken,
+  requirePaidPlan({ feature: 'video_generation' }),
   async (req, res) => {
     try {
       const errors = validationResult(req);

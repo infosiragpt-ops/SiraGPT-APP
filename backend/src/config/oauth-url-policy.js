@@ -20,10 +20,7 @@ function parseUrl(value) {
 }
 
 function isProduction(env = process.env) {
-  // Treat any Replit Autoscale deployment as production so OAuth callbacks
-  // resolve to the configured public hostname (iliagpt.com / siragpt.com)
-  // instead of the throwaway *.riker.replit.dev container preview URL.
-  return env.NODE_ENV === 'production' || env.REPLIT_DEPLOYMENT === '1';
+  return env.NODE_ENV === 'production';
 }
 
 function isLocalhostUrl(value) {
@@ -108,55 +105,20 @@ function isUsablePublicUrl(value, env = process.env, backendBaseUrl = '') {
   return true;
 }
 
-function pickReplitPublicDomain(env = process.env) {
-  // Replit sets REPLIT_DOMAINS (comma-separated) on deployments to the
-  // public hostnames the app is reachable at — including any custom
-  // domain like iliagpt.com. Prefer a non-replit.app/non-replit.dev
-  // entry (custom domain) when one is present so OAuth callbacks land
-  // on the user-facing host instead of the throwaway preview URL.
-  const raw = String(env.REPLIT_DOMAINS || '').trim();
-  if (!raw) return '';
-  const domains = raw.split(',').map((d) => d.trim()).filter(Boolean);
-  if (domains.length === 0) return '';
-  const isReplitOwned = (host) =>
-    /\.replit\.(app|dev)$/i.test(host) || /\.riker\.replit\.dev$/i.test(host);
-  const custom = domains.find((d) => !isReplitOwned(d));
-  const chosen = custom || domains[0];
-  return chosen ? `https://${chosen}` : '';
-}
-
 function resolvePublicBackendUrl(env = process.env) {
   const inferred = inferBackendUrlFromFrontend(env);
   const frontHost = frontendHostname(env);
   const inferredHost = parseUrl(inferred)?.hostname || '';
 
-  // In a Replit deployment, the platform-assigned custom domain
-  // (REPLIT_DOMAINS, e.g. iliagpt.com) is the single source of truth for
-  // the public origin. Honor it BEFORE any user-set env vars so stale
-  // FRONTEND_URL / BASE_URL / GOOGLE_AUTH_URI secrets pointing at an old
-  // domain (siragpt.com, iliagpt.io, etc.) can't poison the OAuth callback.
-  const replitDomain = pickReplitPublicDomain(env);
-  const candidates = isProduction(env) && replitDomain
-    ? [
-        replitDomain,
-        env.GOOGLE_AUTH_BASE_URL,
-        env.BACKEND_PUBLIC_URL,
-        env.API_PUBLIC_URL,
-        env.PUBLIC_API_URL,
-        env.NEXT_PUBLIC_API_URL,
-        env.BASE_URL,
-        env.APP_URL,
-      ]
-    : [
-        env.GOOGLE_AUTH_BASE_URL,
-        env.BACKEND_PUBLIC_URL,
-        env.API_PUBLIC_URL,
-        env.PUBLIC_API_URL,
-        env.NEXT_PUBLIC_API_URL,
-        env.BASE_URL,
-        env.APP_URL,
-        replitDomain,
-      ];
+  const candidates = [
+    env.GOOGLE_AUTH_BASE_URL,
+    env.BACKEND_PUBLIC_URL,
+    env.API_PUBLIC_URL,
+    env.PUBLIC_API_URL,
+    env.NEXT_PUBLIC_API_URL,
+    env.BASE_URL,
+    env.APP_URL,
+  ];
 
   for (const candidate of candidates) {
     const normalized = normalizePublicBackendBaseUrl(candidate);
@@ -201,20 +163,6 @@ function buildCallbackUrl(env, explicitEnvKey, callbackPath) {
   const backendBaseUrl = resolvePublicBackendUrl(env);
   const configured = stripTrailingSlash(env[explicitEnvKey]);
   if (configured && isUsablePublicUrl(configured, env, backendBaseUrl)) {
-    // In a Replit deployment, if the platform exposes a custom domain via
-    // REPLIT_DOMAINS, the OAuth callback MUST live on that exact host —
-    // anything else will be rejected by Google as redirect_uri_mismatch.
-    // Reject stale explicit overrides (e.g. GOOGLE_AUTH_URI pointing at an
-    // old siragpt.com / iliagpt.io) so the computed REPLIT_DOMAINS-based
-    // URL wins instead.
-    const replitDomain = pickReplitPublicDomain(env);
-    if (isProduction(env) && replitDomain) {
-      const expected = normalizeHostname(parseUrl(replitDomain)?.hostname || '');
-      const actual = normalizeHostname(parseUrl(configured)?.hostname || '');
-      if (expected && actual && expected !== actual) {
-        return `${backendBaseUrl}${callbackPath}`;
-      }
-    }
     return configured;
   }
   return `${backendBaseUrl}${callbackPath}`;
@@ -233,18 +181,7 @@ function getGoogleServicesCallbackURL(env = process.env) {
 }
 
 function getFrontendUrl(env = process.env) {
-  // In a Replit deployment the platform-assigned custom domain wins so
-  // post-login redirects always land on the host the user actually
-  // visited (e.g. iliagpt.com), even if stale FRONTEND_URL / NEXT_PUBLIC_URL
-  // secrets are still pointing at an old origin.
-  const replitDomain = pickReplitPublicDomain(env);
-  if (isProduction(env) && replitDomain) return stripTrailingSlash(replitDomain);
-  const explicit = stripTrailingSlash(
-    env.FRONTEND_URL || env.PUBLIC_FRONTEND_URL || env.NEXT_PUBLIC_URL || ''
-  );
-  if (explicit) return explicit;
-  if (replitDomain) return stripTrailingSlash(replitDomain);
-  return 'http://localhost:3000';
+  return stripTrailingSlash(env.FRONTEND_URL || env.PUBLIC_FRONTEND_URL || env.NEXT_PUBLIC_URL || 'http://localhost:3000');
 }
 
 module.exports = {

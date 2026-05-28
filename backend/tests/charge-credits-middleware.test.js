@@ -163,7 +163,7 @@ test('chargeCredits: 402 INSUFFICIENT when balance < cost AND Free IA not config
   }
 });
 
-test('chargeCredits: falls back to Free IA when out of credits AND Cerebras key is set', async () => {
+test('chargeCredits: 402 INSUFFICIENT when balance < cost even if legacy Cerebras key is set', async () => {
   balance = 3n;
   const prevKey = process.env.CEREBRAS_API_KEY;
   process.env.CEREBRAS_API_KEY = 'csk-test-key-for-fallback';
@@ -176,12 +176,10 @@ test('chargeCredits: falls back to Free IA when out of credits AND Cerebras key 
       ctx.nextHook(() => { nextCalled = true; }),
     );
     await ctx.done;
-    assert.equal(nextCalled, true, 'should fall through to next() instead of 402');
-    assert.equal(ctx.req._creditsExhausted, true);
-    assert.equal(ctx.req._fallbackToFreeIA, true);
-    assert.equal(ctx.req._chargedCredits.fallback, 'free_ia');
-    assert.equal(ctx.req._chargedCredits.txn, null);
-    assert.equal(balance, 3n, 'balance must be unchanged on Free IA fallback');
+    assert.equal(nextCalled, false);
+    assert.equal(ctx.res.statusCode, 402);
+    assert.equal(ctx.res.jsonBody.error, 'insufficient credits');
+    assert.equal(balance, 3n, 'balance must be unchanged on failed charge');
   } finally {
     if (prevKey === undefined) delete process.env.CEREBRAS_API_KEY;
     else process.env.CEREBRAS_API_KEY = prevKey;
@@ -208,7 +206,7 @@ test('chargeCredits: routes that opt out (allowFreeIaFallback:false) still 402 e
   }
 });
 
-test('chargeCredits: Free IA fallback sets x-sira-fallback response headers', async () => {
+test('chargeCredits: insufficient credits does not set legacy Free IA fallback headers', async () => {
   balance = 3n;
   const prevKey = process.env.CEREBRAS_API_KEY;
   process.env.CEREBRAS_API_KEY = 'csk-test-key-for-fallback';
@@ -223,9 +221,10 @@ test('chargeCredits: Free IA fallback sets x-sira-fallback response headers', as
       ctx.nextHook(),
     );
     await ctx.done;
-    assert.equal(headers['x-sira-fallback'], 'free-ia');
-    assert.equal(headers['x-sira-fallback-feature'], 'paraphrase');
-    assert.equal(headers['x-sira-fallback-cost'], '5');
+    assert.equal(ctx.res.statusCode, 402);
+    assert.equal(headers['x-sira-fallback'], undefined);
+    assert.equal(headers['x-sira-fallback-feature'], undefined);
+    assert.equal(headers['x-sira-fallback-cost'], undefined);
   } finally {
     if (prevKey === undefined) delete process.env.CEREBRAS_API_KEY;
     else process.env.CEREBRAS_API_KEY = prevKey;

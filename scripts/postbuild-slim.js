@@ -17,11 +17,8 @@
  * tree is left intact because `scripts/start-all.cjs` spawns it as a
  * separate Node process from that directory.
  */
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const fs = require("node:fs");
+const path = require("node:path");
 
 const ROOT = path.resolve(__dirname, "..");
 const NEXT_DIR = path.join(ROOT, ".next");

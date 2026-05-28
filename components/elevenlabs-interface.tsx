@@ -12,6 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Progress } from '@/components/ui/progress'
 import { useToast } from '@/hooks/use-toast'
 import apiClient from '@/lib/api'
+import { useAuth } from '@/lib/auth-context-integrated'
 import VoiceSelector from './voice-selector'
 import { devLog } from '@/lib/dev-log'
 import {
@@ -47,6 +48,9 @@ interface VoiceSettings {
 
 export default function ElevenLabsInterface() {
   const { toast } = useToast()
+  const { user } = useAuth()
+  const isPrivilegedUser = user?.isSuperAdmin === true || (user as any)?.role === "SUPER_ADMIN"
+  const isFreePlan = String(user?.plan || "FREE").trim().toUpperCase() === "FREE" && !isPrivilegedUser
 const { voices, loading: voicesLoading } = useVoices()
 
   // State management
@@ -164,6 +168,13 @@ const { voices, loading: voicesLoading } = useVoices()
       })
       return
     }
+    if (isFreePlan) {
+      toast({
+        title: "Vista previa",
+        description: "Voz está disponible como vista previa para usuarios FREE. Sube de plan para generar audio.",
+      })
+      return
+    }
 
     devLog("Selected voice ID:", selectedVoice)
     devLog("Available voices:", voices.length)
@@ -218,6 +229,13 @@ const { voices, loading: voicesLoading } = useVoices()
   }
 
   const startRecording = async () => {
+    if (isFreePlan) {
+      toast({
+        title: "Vista previa",
+        description: "Speech-to-text está en vista previa para usuarios FREE. Sube de plan para transcribir audio.",
+      })
+      return
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       const mediaRecorder = new MediaRecorder(stream)
@@ -261,6 +279,13 @@ const { voices, loading: voicesLoading } = useVoices()
   }
 
   const handleSpeechToText = async (audioBlob: Blob) => {
+    if (isFreePlan) {
+      toast({
+        title: "Vista previa",
+        description: "Speech-to-text está en vista previa para usuarios FREE. Sube de plan para transcribir audio.",
+      })
+      return
+    }
     setIsLoading(true)
     try {
       const audioFile = new File([audioBlob], 'recording.webm', { type: 'audio/webm' })
@@ -304,6 +329,14 @@ const { voices, loading: voicesLoading } = useVoices()
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (!file) return
+    if (isFreePlan) {
+      toast({
+        title: "Vista previa",
+        description: "Speech-to-text está en vista previa para usuarios FREE. Sube de plan para transcribir audio.",
+      })
+      event.target.value = ''
+      return
+    }
 
     if (!file.type.startsWith('audio/')) {
       toast({
@@ -459,7 +492,7 @@ const { voices, loading: voicesLoading } = useVoices()
 
               <Button
                 onClick={handleTextToSpeech}
-                disabled={isLoading || !text.trim()}
+                disabled={isLoading || !text.trim() || isFreePlan}
                 className="w-full"
               >
                 {isLoading ? (
@@ -470,7 +503,7 @@ const { voices, loading: voicesLoading } = useVoices()
                 ) : (
                   <>
                     <Volume2 className="w-4 h-4 mr-2" />
-                    Generate Speech
+                    {isFreePlan ? 'Sube de plan para generar' : 'Generate Speech'}
                   </>
                 )}
               </Button>
@@ -539,6 +572,7 @@ const { voices, loading: voicesLoading } = useVoices()
               <CardTitle className="flex items-center gap-2">
                 <Mic className="w-5 h-5" />
                 Speech to Text
+                {isFreePlan && <Badge variant="secondary">Vista previa</Badge>}
               </CardTitle>
               <CardDescription>
                 Record audio or upload a file to convert speech to text
@@ -586,7 +620,7 @@ const { voices, loading: voicesLoading } = useVoices()
 
                     <Button
                       onClick={isRecording ? stopRecording : startRecording}
-                      disabled={isLoading}
+                      disabled={isLoading || isFreePlan}
                       variant={isRecording ? "destructive" : "default"}
                       className="w-full"
                     >
@@ -598,7 +632,7 @@ const { voices, loading: voicesLoading } = useVoices()
                       ) : (
                         <>
                           <Mic className="w-4 h-4 mr-2" />
-                          Start Recording
+                          {isFreePlan ? 'Sube de plan para transcribir' : 'Start Recording'}
                         </>
                       )}
                     </Button>
@@ -622,12 +656,12 @@ const { voices, loading: voicesLoading } = useVoices()
 
                     <Button
                       onClick={() => fileInputRef.current?.click()}
-                      disabled={isLoading}
+                      disabled={isLoading || isFreePlan}
                       variant="outline"
                       className="w-full"
                     >
                       <Upload className="w-4 h-4 mr-2" />
-                      Choose File
+                      {isFreePlan ? 'Sube de plan para transcribir' : 'Choose File'}
                     </Button>
 
                     <input

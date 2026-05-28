@@ -29,11 +29,11 @@ test('TASK_TYPES is frozen (immutable)', () => {
 
 // ── PROVIDERS registry ────────────────────────────────────────────
 
-test('PROVIDERS contains all 10 providers', () => {
+test('PROVIDERS contains all providers', () => {
   const ids = PROVIDERS.map(p => p.id);
   assert.deepEqual(ids, [
     'openrouter', 'anthropic', 'openai', 'google', 'groq',
-    'cerebras', 'mistral', 'deepseek', 'voyage', 'jina',
+    'mistral', 'deepseek', 'voyage', 'jina',
   ]);
 });
 

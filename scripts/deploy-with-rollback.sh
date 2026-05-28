@@ -94,11 +94,13 @@ restore_frontend_image() {
   if docker image inspect "$rollback_image" >/dev/null 2>&1; then
     log "Restoring preserved frontend image: ${rollback_image} -> ${FRONTEND_IMAGE}"
     docker tag "$rollback_image" "$FRONTEND_IMAGE"
+    docker rm -f siragpt-frontend-1 >/dev/null 2>&1 || true
     docker compose -f "${COMPOSE_FILE}" up -d --no-deps "${FRONTEND_SERVICE}"
     return $?
   fi
 
   err "Preserved frontend image missing (${rollback_image}); falling back to rebuild"
+  docker rm -f siragpt-frontend-1 >/dev/null 2>&1 || true
   docker compose -f "${COMPOSE_FILE}" build "${FRONTEND_SERVICE}" \
     && docker compose -f "${COMPOSE_FILE}" up -d --no-deps "${FRONTEND_SERVICE}"
 }

@@ -80,7 +80,6 @@ test('PROVIDERS list covers expected vendors', () => {
     'provider-anthropic',
     'provider-google',
     'provider-mistral',
-    'provider-cerebras',
     'provider-groq',
     'provider-deepseek',
     'provider-openrouter',

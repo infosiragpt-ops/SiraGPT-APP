@@ -39,6 +39,7 @@ for file in "$@"; do
   case "$file" in
     *package-lock.json|*pnpm-lock.yaml|*yarn.lock) continue ;;
     *node_modules/*|*.next/*|*coverage/*|*dist/*|*build/*) continue ;;
+    */upstream/*) continue ;;  # MIT reference trees (upstream test fixtures)
     *scripts/check-secrets.sh) continue ;;
     # CI workflows carry inert fixtures (sk-ci-dummy-*, sk_test_*) — skip.
     *.github/workflows/*) continue ;;

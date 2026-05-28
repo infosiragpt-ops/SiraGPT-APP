@@ -29,6 +29,7 @@ const express = require('express');
 const { z } = require('zod');
 const { authenticateToken } = require('../middleware/auth');
 const chargeCredits = require('../middleware/charge-credits');
+const requirePaidPlan = require('../middleware/require-paid-plan');
 const { refundLastCharge } = chargeCredits;
 const imageProvider = require('../services/image-provider');
 const prisma = require('../config/database');
@@ -132,6 +133,7 @@ async function runGenerationAndPersist(req, dbRow, spec) {
 router.post(
   '/jobs',
   authenticateToken,
+  requirePaidPlan({ feature: 'image_generation' }),
   chargeCredits({ feature: 'image_generation', cost: imageCost(), allowFreeIaFallback: false }),
   async (req, res) => {
     const parse = GenerateSchema.safeParse(req.body);
@@ -202,6 +204,7 @@ router.get('/history', authenticateToken, async (req, res, next) => {
 router.post(
   '/:id/variations',
   authenticateToken,
+  requirePaidPlan({ feature: 'image_variation' }),
   chargeCredits({ feature: 'image_variation', cost: imageCost(), allowFreeIaFallback: false }),
   async (req, res) => {
     const parse = VariationsSchema.safeParse(req.body);
@@ -245,6 +248,7 @@ router.post(
 router.post(
   '/:id/upscale',
   authenticateToken,
+  requirePaidPlan({ feature: 'image_upscale' }),
   chargeCredits({ feature: 'image_upscale', cost: imageCost(), allowFreeIaFallback: false }),
   async (req, res) => {
     const parse = UpscaleSchema.safeParse(req.body);

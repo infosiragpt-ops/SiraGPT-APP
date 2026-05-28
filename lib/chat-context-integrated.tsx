@@ -25,7 +25,9 @@ const isMonthlyLimitError = (errorMessage: string) => {
     lowerMessage.includes('monthly limit exceeded') ||
     lowerMessage.includes('monthly video generation limit exceeded') ||
     lowerMessage.includes('free monthly queries exhausted') ||
-    (lowerMessage.includes('monthly') && lowerMessage.includes('limit'));
+    lowerMessage.includes('free daily queries exhausted') ||
+    (lowerMessage.includes('monthly') && lowerMessage.includes('limit')) ||
+    (lowerMessage.includes('daily') && lowerMessage.includes('limit'));
 };
 
 const normalizeChatError = (raw: string): string => {
@@ -458,7 +460,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     try {
       // Load available models first
       const modelsResponse = await apiClient.getAIModels(
-        chatType.toString().toUpperCase() as 'TEXT' | 'IMAGE'
+        chatType.toString().toUpperCase() as 'TEXT' | 'IMAGE' | 'VIDEO'
       )
       devLog("modelsResponse", modelsResponse);
 
@@ -489,7 +491,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
       try {
         const modelsResponse = await apiClient.getAIModels(
-          chatType.toString().toUpperCase() as 'TEXT' | 'IMAGE'
+          chatType.toString().toUpperCase() as 'TEXT' | 'IMAGE' | 'VIDEO'
         );
 
         if (modelsResponse.models && modelsResponse.models.length > 0) {

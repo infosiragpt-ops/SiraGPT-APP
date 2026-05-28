@@ -68,7 +68,7 @@ export const iconMap: { [key: string]: IconConfig } = {
     Banana: { type: 'png', imagePath: '/icons/banana.png' }, // Custom example
     Magic: { type: 'png', imagePath: '/icons/openai.svg', lightFilter: "none", darkFilter: "invert(1)" },
 
-    ChatGPTLogo: { type: 'png', imagePath: '/icons/openai.svg', lightFilter: "none", darkFilter: "invert(1)" },
+    ChatGPTLogo: { type: 'png', imagePath: '/icons/openai-color.svg', preserveColor: true },
     ChatGPTPinkLogo: {
         type: 'png',
         imagePath: '/icons/openai.svg',
@@ -80,12 +80,15 @@ export const iconMap: { [key: string]: IconConfig } = {
     OpenRouterLogo: { type: 'png', imagePath: '/icons/openrouter.png', preserveColor: true }, // Official OpenRouter Logo
     GeminiLogo: { type: 'png', imagePath: '/icons/gemini.svg', preserveColor: true },        // Official Gemini/Google AI Logo
     ClaudeLogo: { type: 'png', imagePath: '/icons/claude.png', preserveColor: true },        // Official Claude/Anthropic Logo
-    KimiLogo: { type: 'png', imagePath: '/icons/kimi.png', preserveColor: true },
+    KimiLogo: { type: 'png', imagePath: '/icons/kimi-hd.png', preserveColor: true },
     ZaiLogo: { type: 'png', imagePath: '/icons/z-ai.svg', preserveColor: true },
     SeedreamLogo: { type: 'svg', component: Palette },
-    QwenLogo: { type: 'svg', component: CloudSun },
-    MetaLogo: { type: 'svg', component: ToyBrick },
-    MistralLogo: { type: 'svg', component: Wind },
+    QwenLogo: { type: 'png', imagePath: '/icons/qwen.svg', preserveColor: true },
+    MetaLogo: { type: 'png', imagePath: '/icons/meta.svg', preserveColor: true },
+    MistralLogo: { type: 'png', imagePath: '/icons/mistral.svg', preserveColor: true },
+    NvidiaLogo: { type: 'png', imagePath: '/icons/nvidia.svg', preserveColor: true },
+    PoolsideLogo: { type: 'png', imagePath: '/icons/poolside.svg', preserveColor: true },
+    OllamaLogo: { type: 'png', imagePath: '/icons/ollama.svg', preserveColor: true },
 };
 
 // Hum LucideProps se 'name' ko hata rahe hain takay hum apni 'name' property define kar sakein.
@@ -94,7 +97,7 @@ interface IconProviderProps extends Omit<LucideProps, 'name'> {
     size?: number;
 }
 
-export const IconProvider = ({ name, size = 24, ...props }: IconProviderProps) => {
+export const IconProvider = ({ name, size = 24, className, style, ...props }: IconProviderProps) => {
 
     const { theme } = useTheme();
 
@@ -111,7 +114,10 @@ export const IconProvider = ({ name, size = 24, ...props }: IconProviderProps) =
             "none";
 
         return (
-            <div style={{ width: size, height: size, position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <div
+                className={className}
+                style={{ width: size, height: size, position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', ...style }}
+            >
                 <Image
                     src={iconConfig.imagePath!}
                     alt={name}
@@ -129,5 +135,5 @@ export const IconProvider = ({ name, size = 24, ...props }: IconProviderProps) =
     }
 
     const IconComponent = iconConfig.component!;
-    return <IconComponent size={size} {...props} />;
+    return <IconComponent size={size} className={className} style={style} {...props} />;
 };

@@ -87,7 +87,7 @@ export interface IngestValidation {
   /** Localized, user-facing reason if !ok. */
   reason?: string
   /** Programmatic error code for telemetry. */
-  code?: "type_not_allowed" | "size_exceeded" | "empty_file" | "count_exceeded"
+  code?: "type_not_allowed" | "size_exceeded" | "empty_file" | "count_exceeded" | "office_temp_lock_file"
 }
 
 export interface IngestResult {
@@ -112,6 +112,13 @@ function extOf(file: File): string {
   return file.name.slice(i + 1).toLowerCase()
 }
 
+const OFFICE_LOCK_EXTENSIONS = new Set(["doc", "docx", "xls", "xlsx", "ppt", "pptx"])
+
+function isOfficeTemporaryLockFile(file: File): boolean {
+  const name = (file.name || "").trim()
+  return name.startsWith("~$") && OFFICE_LOCK_EXTENSIONS.has(extOf(file))
+}
+
 /**
  * Per-file allowlist + size validation. Pure function — caller decides
  * what to do with rejections (toast, persistent banner, etc.).
@@ -123,6 +130,13 @@ export function validateFile(
   const max = opts.maxBytes ?? DEFAULT_MAX_BYTES
   if (!file || file.size === 0) {
     return { ok: false, reason: "El archivo está vacío", code: "empty_file" }
+  }
+  if (isOfficeTemporaryLockFile(file)) {
+    return {
+      ok: false,
+      reason: 'Ese archivo es temporal de Microsoft Office (empieza con "~$"). Cierra Word/Excel/PowerPoint y sube el documento original.',
+      code: "office_temp_lock_file",
+    }
   }
   // The default cap is Infinity, so this branch only fires when a
   // caller explicitly opts into a size limit (none do today). Kept

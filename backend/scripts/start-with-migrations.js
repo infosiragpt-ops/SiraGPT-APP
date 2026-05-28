@@ -1,26 +1,30 @@
 #!/usr/bin/env node
 /**
  * Backend boot wrapper: runs `prisma migrate deploy` against the
- * production database, then starts the backend. Handles three cases:
- *
- *  P3005 — schema not empty (existing DB): fast SQL baseline via pg,
- *           then retry migrate deploy.
- *  P3009 — failed migration stuck in _prisma_migrations: mark it as
- *           rolled-back via pg, then retry migrate deploy.
- *  SKIP_MIGRATIONS=1 — skip migrate entirely (useful in local dev).
+ * production database, then execs the backend entrypoint. On migration
+ * failure exits non-zero so the container is replaced. If
+ * SKIP_MIGRATIONS=1 the migration step is skipped (useful during local
+ * iteration when the schema is already up to date).
  */
 const { spawnSync, spawn } = require("node:child_process");
-const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 
 const BACKEND_DIR = path.resolve(__dirname, "..");
 const MIGRATIONS_DIR = path.join(BACKEND_DIR, "prisma", "migrations");
+const SAFE_AUTO_ROLLBACK_MIGRATIONS = [
+  {
+    pattern: /^\d{14}_reset_admin_password$/,
+    reason: "data-only admin credential repair",
+  },
+  {
+    pattern: /^20260520160000_add_org_pending_transfer$/,
+    reason: "idempotent org pending-transfer schema migration",
+  },
+];
 
 function log(msg, extra = {}) {
-  process.stdout.write(
-    JSON.stringify({ ts: new Date().toISOString(), scope: "boot", msg, ...extra }) + "\n"
-  );
+  process.stdout.write(JSON.stringify({ ts: new Date().toISOString(), scope: "boot", msg, ...extra }) + "\n");
 }
 
 function pipeResult(result) {
@@ -29,161 +33,160 @@ function pipeResult(result) {
 }
 
 function runPrisma(args) {
-  // Use the local prisma binary directly — avoids npx resolution overhead
-  // and the ETIMEDOUT failures seen with `spawnSync npx` on cold containers.
-  const prismaBin = path.join(BACKEND_DIR, "node_modules/.bin/prisma");
-  const cmd = require("node:fs").existsSync(prismaBin) ? prismaBin : "npx";
-  const argv = cmd === prismaBin ? args : ["prisma", ...args];
-  const result = spawnSync(cmd, argv, {
+  const result = spawnSync("npx", ["prisma", ...args], {
     cwd: BACKEND_DIR,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     env: process.env,
-    timeout: 300_000,
   });
   pipeResult(result);
   return result;
 }
 
-function migrationNames() {
-  return fs.readdirSync(MIGRATIONS_DIR)
-    .filter((n) => n !== "migration_lock.toml")
-    .filter((n) => fs.statSync(path.join(MIGRATIONS_DIR, n)).isDirectory())
-    .sort();
+function loadDotenv() {
+  try {
+    require("dotenv").config({ path: path.join(BACKEND_DIR, ".env") });
+  } catch (err) {
+    log("dotenv load skipped", { error: err?.message });
+  }
 }
 
-function getDbUrl() {
-  // start-all.cjs sets DATABASE_URL to the production Neon URL.
-  return process.env.DATABASE_URL || process.env.PRISMA_DATABASE_URL || "";
+function resolvePrismaDatabaseUrl(env = process.env) {
+  return env.PRISMA_DATABASE_URL || env.DATABASE_URL || "";
 }
 
 function makePgClientOptions(url) {
-  const needsSsl = /neon|sslmode=require/i.test(url);
+  const needsSsl = /(?:neon|sslmode=require)/i.test(url);
   return {
     connectionString: url,
     ssl: needsSsl ? { rejectUnauthorized: false } : undefined,
   };
 }
 
-/**
- * Fast SQL-based baseline: mark all migrations as applied in a single
- * pg session (~50ms) instead of spawning 73 CLI processes (~4 minutes).
- */
-async function fastBaselineSQL() {
-  const url = getDbUrl();
-  if (!url || url.includes("helium")) {
-    log("fastBaselineSQL: no valid production DATABASE_URL — skipping");
-    return 1;
+function isSafeAutoRollbackMigration(migrationName) {
+  return SAFE_AUTO_ROLLBACK_MIGRATIONS.some(({ pattern }) => pattern.test(migrationName));
+}
+
+function extractP3009MigrationNames(output) {
+  const names = new Set();
+  for (const match of output.matchAll(/The `([^`]+)` migration started at/g)) {
+    names.add(match[1]);
+  }
+  for (const match of output.matchAll(/\b(\d{14}_[A-Za-z0-9_]+)\b/g)) {
+    names.add(match[1]);
+  }
+  return Array.from(names);
+}
+
+function shouldContinueAfterSafeP3009(output) {
+  if (!output.includes("P3009")) return false;
+  const names = extractP3009MigrationNames(output);
+  return names.length > 0 && names.every(isSafeAutoRollbackMigration);
+}
+
+async function getActiveFailedMigrations() {
+  loadDotenv();
+  const url = resolvePrismaDatabaseUrl();
+  if (!url) {
+    throw new Error("PRISMA_DATABASE_URL is not configured");
   }
 
-  log("baselining via direct SQL INSERT into _prisma_migrations");
-  let Client;
-  try { ({ Client } = require("pg")); }
-  catch (e) { log("pg not available for fast baseline", { error: e.message }); return 1; }
-
+  const { Client } = require("pg");
   const client = new Client(makePgClientOptions(url));
+  await client.connect();
   try {
-    await client.connect();
-    const names = migrationNames();
-    let inserted = 0;
-    for (const name of names) {
-      const sqlPath = path.join(MIGRATIONS_DIR, name, "migration.sql");
-      let checksum = "";
-      if (fs.existsSync(sqlPath)) {
-        checksum = crypto.createHash("sha256")
-          .update(fs.readFileSync(sqlPath, "utf8"))
-          .digest("hex");
-      }
-      const res = await client.query(
-        `INSERT INTO "_prisma_migrations"
-           (id, checksum, finished_at, migration_name, logs, rolled_back_at, started_at, applied_steps_count)
-         SELECT gen_random_uuid(), $1, NOW(), $2, NULL, NULL, NOW(), 1
-         WHERE NOT EXISTS (
-           SELECT 1 FROM "_prisma_migrations" WHERE migration_name = $2
-         )`,
-        [checksum, name]
-      );
-      if (res.rowCount > 0) inserted++;
-    }
-    log("SQL baseline complete", { inserted, total: names.length });
-    return 0;
-  } catch (err) {
-    log("SQL baseline error", { error: err.message });
-    return 1;
+    const { rows } = await client.query(`
+      SELECT migration_name
+      FROM "_prisma_migrations"
+      WHERE finished_at IS NULL
+        AND rolled_back_at IS NULL
+      ORDER BY started_at ASC
+    `);
+    return rows.map((row) => row.migration_name);
   } finally {
-    try { await client.end(); } catch { /* noop */ }
+    await client.end();
   }
 }
 
-/**
- * P3009 fix: mark any failed (stuck) migrations as rolled-back so
- * migrate deploy can retry them cleanly.
- */
-async function clearFailedMigrations(output) {
-  const url = getDbUrl();
-  if (!url || url.includes("helium")) {
-    log("clearFailedMigrations: no valid production DATABASE_URL — skipping");
+async function markSafeMigrationsRolledBack(migrationNames) {
+  loadDotenv();
+  const url = resolvePrismaDatabaseUrl();
+  if (!url) {
+    throw new Error("PRISMA_DATABASE_URL is not configured");
+  }
+
+  const { Client } = require("pg");
+  const client = new Client(makePgClientOptions(url));
+  await client.connect();
+  try {
+    await client.query(`
+      UPDATE "_prisma_migrations"
+      SET rolled_back_at = COALESCE(rolled_back_at, NOW()),
+          logs = CONCAT(
+            COALESCE(logs, ''),
+            CASE WHEN COALESCE(logs, '') = '' THEN '' ELSE E'\\n' END,
+            '[boot] auto-marked rolled back: safe migration blocked backend startup with P3009'
+          )
+      WHERE migration_name = ANY($1::text[])
+        AND finished_at IS NULL
+        AND rolled_back_at IS NULL
+    `, [migrationNames]);
+  } finally {
+    await client.end();
+  }
+}
+
+async function rollbackSafeFailedMigrations() {
+  let failedMigrations;
+  try {
+    failedMigrations = await getActiveFailedMigrations();
+  } catch (err) {
+    log("could not inspect failed prisma migrations", { error: err?.message });
     return false;
   }
 
-  let Client;
-  try { ({ Client } = require("pg")); }
-  catch (e) { log("pg not available for P3009 fix", { error: e.message }); return false; }
+  if (failedMigrations.length === 0) {
+    log("P3009 reported but no active failed migrations were found");
+    return false;
+  }
 
-  // If the prisma output contains "already exists" / duplicate-object errors
-  // (Postgres code 42710, 42P07, 42701), the schema object is already in
-  // place — mark the failing migration as APPLIED so Prisma moves past it.
-  // Otherwise mark as rolled-back so it gets retried.
-  const isAlreadyExistsError = /already exists|SqlState\(E4271[01]\)|SqlState\(E42P07\)/.test(output);
+  const unsafe = failedMigrations.filter((name) => !isSafeAutoRollbackMigration(name));
+  if (unsafe.length > 0) {
+    log("refusing to auto-rollback unknown migration failures", { failedMigrations });
+    return false;
+  }
 
-  const client = new Client(makePgClientOptions(url));
   try {
-    await client.connect();
-
-    const { rows } = await client.query(`
-      SELECT migration_name FROM "_prisma_migrations"
-      WHERE finished_at IS NULL AND rolled_back_at IS NULL
-      ORDER BY started_at ASC
-    `);
-
-    if (rows.length === 0) {
-      log("migration-fix: no stuck migrations found in DB");
-      return false;
-    }
-
-    const stuckNames = rows.map((r) => r.migration_name);
-
-    if (isAlreadyExistsError) {
-      log("migration-fix: marking stuck migrations as APPLIED (schema already exists)", { stuckNames });
-      await client.query(`
-        UPDATE "_prisma_migrations"
-        SET finished_at = NOW(),
-            applied_steps_count = 1,
-            logs = CONCAT(COALESCE(logs, ''), E'\\n[boot] auto-marked applied: schema object already exists')
-        WHERE migration_name = ANY($1::text[])
-          AND finished_at IS NULL
-          AND rolled_back_at IS NULL
-      `, [stuckNames]);
-    } else {
-      log("migration-fix: marking stuck migrations as ROLLED-BACK for retry", { stuckNames });
-      await client.query(`
-        UPDATE "_prisma_migrations"
-        SET rolled_back_at = NOW(),
-            logs = CONCAT(COALESCE(logs, ''), E'\\n[boot] auto-cleared stuck migration')
-        WHERE migration_name = ANY($1::text[])
-          AND finished_at IS NULL
-          AND rolled_back_at IS NULL
-      `, [stuckNames]);
-    }
-
-    log("migration-fix: cleared", { count: stuckNames.length, action: isAlreadyExistsError ? "applied" : "rolled-back" });
+    await markSafeMigrationsRolledBack(failedMigrations);
+    log("auto-rolled back safe failed migrations", { failedMigrations });
     return true;
   } catch (err) {
-    log("migration-fix: failed to clear stuck migrations", { error: err.message });
+    log("failed to auto-rollback safe migrations", { error: err?.message, failedMigrations });
     return false;
-  } finally {
-    try { await client.end(); } catch { /* noop */ }
   }
+}
+
+function migrationNames() {
+  return fs.readdirSync(MIGRATIONS_DIR)
+    .filter((name) => name !== "migration_lock.toml")
+    .filter((name) => fs.statSync(path.join(MIGRATIONS_DIR, name)).isDirectory())
+    .sort();
+}
+
+function baselineExistingSchema() {
+  log("baselining existing database schema with prisma migrate resolve");
+  for (const name of migrationNames()) {
+    const result = runPrisma(["migrate", "resolve", "--applied", name]);
+    if (result.error) {
+      log("prisma migrate resolve spawn error", { migration: name, error: result.error.message });
+      return 1;
+    }
+    if ((result.status ?? 1) !== 0) {
+      log("prisma migrate resolve failed", { migration: name, status: result.status ?? 1 });
+      return result.status ?? 1;
+    }
+  }
+  return 0;
 }
 
 async function runMigrations() {
@@ -191,64 +194,45 @@ async function runMigrations() {
     log("skipping prisma migrate deploy (SKIP_MIGRATIONS=1)");
     return 0;
   }
-
   log("running prisma migrate deploy");
-  let result = runPrisma(["migrate", "deploy"]);
+  const result = runPrisma(["migrate", "deploy"]);
   if (result.error) {
     log("prisma migrate deploy spawn error", { error: result.error.message });
     return 1;
   }
-
-  const output = () => `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
-
-  // ── P3005: schema not empty ───────────────────────────────────────────────
-  if ((result.status ?? 1) !== 0 && output().includes("P3005")) {
-    log("detected P3005 — running fast SQL baseline");
-    const baselineStatus = await fastBaselineSQL();
-    if (baselineStatus !== 0) {
-      log("SQL baseline failed — cannot recover from P3005");
-      return 1;
+  if ((result.status ?? 1) !== 0 && process.env.PRISMA_BASELINE_ON_P3005 === "1") {
+    const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+    if (output.includes("P3005")) {
+      const baselineStatus = baselineExistingSchema();
+      if (baselineStatus !== 0) return baselineStatus;
+      log("retrying prisma migrate deploy after baseline");
+      const retry = runPrisma(["migrate", "deploy"]);
+      if (retry.error) {
+        log("prisma migrate deploy retry spawn error", { error: retry.error.message });
+        return 1;
+      }
+      return retry.status ?? 1;
     }
-    log("retrying prisma migrate deploy after baseline");
-    result = runPrisma(["migrate", "deploy"]);
-    if (result.error) { log("retry spawn error", { error: result.error.message }); return 1; }
   }
-
-  // ── P3009 / P3018: stuck or failed migration ─────────────────────────────
-  // P3009 = a previous run left a migration in "started but not finished" state.
-  // P3018 = current run tried to apply a migration and its SQL failed.
-  // Both leave the migration stuck; we clear all stuck rows and retry.
-  // We allow up to 15 clear+retry cycles to handle chains of broken migrations.
-  for (let attempt = 0; attempt < 15; attempt++) {
-    const out = output();
-    if ((result.status ?? 1) === 0) break;
-    if (!out.includes("P3009") && !out.includes("P3018")) break;
-
-    const errorCode = out.includes("P3018") ? "P3018" : "P3009";
-    log(`detected ${errorCode} on attempt ${attempt + 1} — clearing stuck failed migrations`);
-    const cleared = await clearFailedMigrations(out);
-    if (!cleared) {
-      log(`could not clear ${errorCode} — proceeding to boot anyway`);
+  if ((result.status ?? 1) !== 0 && process.env.PRISMA_AUTO_ROLLBACK_SAFE_MIGRATIONS !== "0") {
+    const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+    if (output.includes("P3009") && await rollbackSafeFailedMigrations()) {
+      log("retrying prisma migrate deploy after safe failed migration rollback");
+      const retry = runPrisma(["migrate", "deploy"]);
+      if (retry.error) {
+        log("prisma migrate deploy retry spawn error", { error: retry.error.message });
+        return 1;
+      }
+      return retry.status ?? 1;
+    }
+    if (shouldContinueAfterSafeP3009(output)) {
+      log("continuing boot despite safe P3009 migration block", {
+        failedMigrations: extractP3009MigrationNames(output),
+      });
       return 0;
     }
-    log(`retrying prisma migrate deploy after ${errorCode} clear (attempt ${attempt + 1})`);
-    result = runPrisma(["migrate", "deploy"]);
-    if (result.error) { log("retry spawn error", { error: result.error.message }); return 1; }
   }
-
-  // If still failing after retries, proceed anyway so the backend can start
-  // and serve requests — some tables may be missing but auth/core should work.
-  if ((result.status ?? 1) !== 0) {
-    const out = output();
-    log("migrations did not complete cleanly — proceeding to boot", {
-      hasP3009: out.includes("P3009"),
-      hasP3018: out.includes("P3018"),
-      status: result.status,
-    });
-    return 0;
-  }
-
-  return 0;
+  return result.status ?? 1;
 }
 
 function startBackend() {
@@ -270,7 +254,6 @@ function startBackend() {
 }
 
 async function main() {
-  log("boot wrapper starting", { dbUrlSet: !!getDbUrl(), dbIsNeon: /neon/.test(getDbUrl()) });
   const migrationStatus = await runMigrations();
   if (migrationStatus !== 0) {
     log("migrations failed — aborting boot", { status: migrationStatus });
@@ -279,7 +262,17 @@ async function main() {
   startBackend();
 }
 
-main().catch((err) => {
-  log("fatal error in boot", { error: err?.message, stack: err?.stack });
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((err) => {
+    log("fatal boot wrapper error", { error: err?.message, stack: err?.stack });
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  extractP3009MigrationNames,
+  isSafeAutoRollbackMigration,
+  makePgClientOptions,
+  resolvePrismaDatabaseUrl,
+  shouldContinueAfterSafeP3009,
+};

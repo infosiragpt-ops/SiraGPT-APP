@@ -1,0 +1,7 @@
+{
+  "repository": "https://github.com/NousResearch/hermes-agent",
+  "commit": "8b69ec03af50de892ae0bca1f7e2384a8f6eb5a8",
+  "license": "MIT",
+  "capturedAt": "2026-05-26T20:30:00Z",
+  "policy": "Reference-only upstream snapshot. Active SiraGPT skills are rewritten in .agents/skills."
+}

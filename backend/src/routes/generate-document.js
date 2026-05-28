@@ -151,31 +151,13 @@ router.post(
 
             console.log('📄 Word Document generation request:', { prompt, chatId, provider, model, hasFiles: !!files?.length });
 
-            // Check monthly limit
-            if (req.user.plan === 'FREE') {
-                const result = await prisma.user.updateMany({
-                    where: {
-                        id: userId,
-                        monthlyCallLimit: { gt: 0 }
-                    },
-                    data: {
-                        monthlyCallLimit: { decrement: 1 }
-                    }
+            // Free daily quota is enforced by enforcePlanQuota above. Paid
+            // plans still keep the token cap check here for the legacy route.
+            if (req.user.plan !== 'FREE' && req.user.apiUsage >= req.user.monthlyLimit) {
+                return res.status(429).json({
+                    error: 'Monthly API limit exceeded',
+                    usage: { current: req.user.apiUsage, limit: req.user.monthlyLimit },
                 });
-
-                if (!result || result.count === 0) {
-                    return res.status(429).json({
-                        error: 'Free monthly queries exhausted. Please upgrade to continue.',
-                        remaining: 0
-                    });
-                }
-            } else {
-                if (req.user.apiUsage >= req.user.monthlyLimit) {
-                    return res.status(429).json({
-                        error: 'Monthly API limit exceeded',
-                        usage: { current: req.user.apiUsage, limit: req.user.monthlyLimit },
-                    });
-                }
             }
 
             // Verify chat exists and belongs to user

@@ -24,6 +24,9 @@ const documentIntentAnalyzer = require('../services/document-intent-analyzer');
 const fileIntegrityValidator = require('../services/file-integrity-validator');
 const { progressStream } = require('../services/upload-progress-sse');
 const {
+  MAX_SIMULTANEOUS_DOCUMENTS,
+} = require('../config/document-batch-limits');
+const {
   contentDispositionHeader,
   safeDownloadFilename,
 } = require('../middleware/file-response-safety');
@@ -512,7 +515,7 @@ async function processFilesForAsyncPreview(files, userId, prismaClient) {
 }
 
 function scheduleCrossDocumentAnalysisWhenReady(fileIds, userId) {
-  const ids = Array.from(new Set((fileIds || []).map(String).filter(Boolean))).slice(0, 50);
+  const ids = Array.from(new Set((fileIds || []).map(String).filter(Boolean))).slice(0, MAX_SIMULTANEOUS_DOCUMENTS);
   if (ids.length < 2) return;
 
   setImmediate(async () => {
@@ -547,7 +550,7 @@ function scheduleCrossDocumentAnalysisWhenReady(fileIds, userId) {
 }
 
 // Upload files — parallel batch processing
-router.post('/upload', authenticateToken, requireScope('files:write'), upload.array('files', 50), enforceOrgRateLimitSafe, async (req, res) => {
+router.post('/upload', authenticateToken, requireScope('files:write'), upload.array('files', MAX_SIMULTANEOUS_DOCUMENTS), enforceOrgRateLimitSafe, async (req, res) => {
   try {
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: 'No files uploaded' });

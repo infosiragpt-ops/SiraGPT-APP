@@ -442,6 +442,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Slider } from '@/components/ui/slider'
 import { Label } from '@/components/ui/label'
 import { Switch } from "@/components/ui/switch"
+import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
     Select,
@@ -453,6 +454,7 @@ import {
 import { useToast } from '@/hooks/use-toast'
 import apiClient from '@/lib/api'
 import { normalizeChatInput, shouldWarnUser } from '@/lib/chat-input-normalize'
+import { useAuth } from '@/lib/auth-context-integrated'
 import VoiceSelector from './voice-selector' // Assume this component is working
 import {
     Play,
@@ -490,6 +492,9 @@ interface VoiceSettings {
 
 export default function TextToSpeechComponent() {
     const { toast } = useToast()
+    const { user } = useAuth()
+    const isPrivilegedUser = user?.isSuperAdmin === true || (user as any)?.role === "SUPER_ADMIN"
+    const isFreePlan = String(user?.plan || "FREE").trim().toUpperCase() === "FREE" && !isPrivilegedUser
 // In the component, replace the voices loading logic:
 const { voices, loading: voicesLoading } = useVoices()
     // State management
@@ -585,6 +590,10 @@ const { voices, loading: voicesLoading } = useVoices()
         const cleanText = normalized.value.trim()
         if (!cleanText || !selectedVoice || !selectedModel) {
             toast({ title: "Error", description: "Please enter text, select a voice, and a model.", variant: "destructive" })
+            return
+        }
+        if (isFreePlan) {
+            toast({ title: "Vista previa", description: "Voz está disponible como vista previa para usuarios FREE. Sube de plan para generar audio." })
             return
         }
 
@@ -708,7 +717,10 @@ const downloadAudio = async () => {
     return (
         <div className="max-w-7xl mx-auto p-6 space-y-6 relative pb-32">
             <div className="flex justify-between items-center">
-                <h1 className="text-2xl font-semibold">Texto a voz</h1>
+                <h1 className="flex items-center gap-2 text-2xl font-semibold">
+                    Texto a voz
+                    {isFreePlan && <Badge variant="secondary">Vista previa</Badge>}
+                </h1>
 
             </div>
 
@@ -730,7 +742,7 @@ const downloadAudio = async () => {
                     <div className="flex gap-2">
                         <Button
                             onClick={handleTextToSpeech}
-                            disabled={isLoading || !text.trim()}
+                            disabled={isLoading || !text.trim() || isFreePlan}
                             className="w-full"
                         >
                             {isLoading ? (
@@ -741,7 +753,7 @@ const downloadAudio = async () => {
                             ) : (
                                 <>
                                     <Volume2 className="w-4 h-4 mr-2" />
-                                    Generate Speech
+                                    {isFreePlan ? 'Sube de plan para generar' : 'Generate Speech'}
                                 </>
                             )}
                         </Button>

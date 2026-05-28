@@ -104,7 +104,7 @@ test('validateMimeType BLOCKS unknown declared extensions', async () => {
 });
 
 test('validateMimeType passes plain-text formats with no magic bytes (CSV / MD / TXT)', async () => {
-  for (const ext of ['csv', 'md', 'txt', 'json', 'xml', 'html']) {
+  for (const ext of ['csv', 'md', 'txt', 'json', 'xml', 'html', 'yaml', 'yml']) {
     const declaredMime = EXTENSION_TO_MIME[ext];
     assert.equal(MAGICLESS_DECLARED_MIMES.has(declaredMime), true, `${ext} should be in MAGICLESS set`);
     const result = await validateMimeType({

@@ -50,8 +50,18 @@ function adaptAgentTool(tool, jsonSchema) {
  * Build the complete tool set for non-HTTP agent runs.
  * Mirrors the tool set used in agentic-chat-stream.js's buildDefaultTools().
  */
-function buildAllTools(thinking = 'low') {
+function buildAllTools(thinking = 'low', opts = {}) {
   const tools = [];
+
+  let allowedNames = null;
+  if (opts.toolset) {
+    try {
+      const toolsetRegistry = require('./toolset-registry');
+      allowedNames = new Set(toolsetRegistry.resolveToolset(opts.toolset));
+    } catch (_) {
+      // fall back to full toolset
+    }
+  }
 
   // 1. Base web tools (search + read URL)
   tools.push(
@@ -92,10 +102,19 @@ function buildAllTools(thinking = 'low') {
   // 3. Git, shell, file, and CI tools
   tools.push(cloneProjectTool, hostBashTool, hostFileTool, checkCiStatusTool, monitorCiTool);
 
+  // 4. Hermes-compatible tools (cron, gateway, memory, delegate, toolsets)
+  try {
+    const { buildHermesTools } = require('./hermes-tools');
+    tools.push(...buildHermesTools());
+  } catch (err) {
+    console.warn('[agent-entry] hermes-tools unavailable:', err?.message);
+  }
+
   // Deduplicate by name
   const seen = new Set();
   return tools.filter(t => {
     if (!t || !t.name || seen.has(t.name)) return false;
+    if (allowedNames && !allowedNames.has(t.name)) return false;
     seen.add(t.name);
     return true;
   });

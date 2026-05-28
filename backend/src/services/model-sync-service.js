@@ -5,15 +5,67 @@ const {
   listManifestModels,
   mergeProviderModels,
 } = require('./model-catalog-manifest');
+const modelPricingService = require('./model-pricing-service');
 
 class ModelSyncService {
-  constructor() {
+  constructor(options = {}) {
+    this.prisma = options.prismaClient || prisma;
     this.cache = {
       openai: { data: null, lastFetch: 0, ttl: 3600000 }, // 1 hour cache
       gemini: { data: null, lastFetch: 0, ttl: 3600000 },
       openrouter: { data: null, lastFetch: 0, ttl: 3600000 },
       deepseek: { data: null, lastFetch: 0, ttl: 3600000 }
     };
+  }
+
+  getStaticVideoModels() {
+    const configured = Boolean(process.env.FAL_KEY || process.env.FAL_API_KEY || process.env.TAL_AI_API_KEY);
+    return [
+      {
+        id: 'veo-fast',
+        name: 'veo-fast',
+        displayName: 'Veo Fast (fal.ai)',
+        provider: 'Custom',
+        type: 'VIDEO',
+        description: configured
+          ? 'Generación de video con Veo Fast vía fal.ai.'
+          : 'Generación de video con Veo Fast vía fal.ai. Requiere FAL_API_KEY o FAL_KEY.',
+        icon: 'GeminiLogo',
+        contextLength: null,
+        pricing: { provider: 'fal.ai', billing: 'per_generation' },
+        tags: ['video', 'fal.ai', 'veo', 'text-to-video', 'image-to-video'],
+        syncSource: 'static',
+        isActive: false,
+      },
+      {
+        id: 'fal-ai/veo3/fast',
+        name: 'fal-ai/veo3/fast',
+        displayName: 'Veo 3 Fast',
+        provider: 'Custom',
+        type: 'VIDEO',
+        description: 'Modelo text-to-video de Veo 3 Fast servido por fal.ai.',
+        icon: 'GeminiLogo',
+        contextLength: null,
+        pricing: { provider: 'fal.ai', billing: 'per_generation' },
+        tags: ['video', 'fal.ai', 'veo3', 'text-to-video'],
+        syncSource: 'static',
+        isActive: false,
+      },
+      {
+        id: 'fal-ai/veo3/fast/image-to-video',
+        name: 'fal-ai/veo3/fast/image-to-video',
+        displayName: 'Veo 3 Fast Image to Video',
+        provider: 'Custom',
+        type: 'VIDEO',
+        description: 'Modelo image-to-video de Veo 3 Fast servido por fal.ai.',
+        icon: 'GeminiLogo',
+        contextLength: null,
+        pricing: { provider: 'fal.ai', billing: 'per_generation' },
+        tags: ['video', 'fal.ai', 'veo3', 'image-to-video'],
+        syncSource: 'static',
+        isActive: false,
+      },
+    ];
   }
 
   /**
@@ -32,7 +84,7 @@ class ModelSyncService {
       const apiKey = process.env.OPENAI_API_KEY;
       if (!apiKey) {
         console.warn('⚠️ OpenAI API key not found, using static model catalog');
-        const models = listManifestModels({ provider: 'OpenAI' });
+        const models = await this.fallbackManifestModels('OpenAI');
         cache.data = models;
         cache.lastFetch = now;
         return models;
@@ -48,26 +100,20 @@ class ModelSyncService {
       });
 
       const models = response.data.data
-        .filter(model => {
-          // Filter for chat completion models
-          return model.id.includes('gpt') ||
-            model.id.includes('o1') ||
-            model.id.includes('dall-e') ||
-            model.id === 'text-davinci-003' ||
-            model.id === 'text-davinci-002';
-        })
         .map(model => ({
           id: model.id,
           name: model.id,
           displayName: this.formatModelName(model.id),
           provider: 'OpenAI',
-          type: model.id.includes('dall-e') ? 'IMAGE' : 'TEXT',
+          type: this.inferModelType(model.id, model),
           description: this.generateModelDescription(model.id, 'OpenAI'),
-          isActive: true,
+          isActive: false,
           apiData: model
         }));
 
-      const mergedModels = mergeProviderModels(models, 'OpenAI');
+      const mergedModels = await modelPricingService.enrichModels(
+        mergeProviderModels(models, 'OpenAI', { includeManifestOnly: false })
+      );
 
       cache.data = mergedModels;
       cache.lastFetch = now;
@@ -76,7 +122,7 @@ class ModelSyncService {
       return mergedModels;
     } catch (error) {
       console.error('❌ Error fetching OpenAI models:', error.message);
-      return this.cache.openai.data || listManifestModels({ provider: 'OpenAI' });
+      return this.cache.openai.data || this.fallbackManifestModels('OpenAI');
     }
   }
 
@@ -96,56 +142,55 @@ class ModelSyncService {
       const apiKey = process.env.GEMINI_API_KEY;
       if (!apiKey) {
         console.warn('⚠️ Gemini API key not found, using static model catalog');
-        const models = listManifestModels({ provider: 'Gemini' });
+        const models = await this.fallbackManifestModels('Gemini');
         cache.data = models;
         cache.lastFetch = now;
         return models;
       }
 
       console.log('🔄 Fetching Gemini models...');
-      const response = await axios.get('https://generativelanguage.googleapis.com/v1beta/openai/models', {
-        headers: {
-          // 'Content-Type': 'application/json',
-          // 'x-goog-api-key': apiKey
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json'
-        },
-        timeout: 10000
-      });
+      let modelRows = [];
+      try {
+        const response = await axios.get('https://generativelanguage.googleapis.com/v1beta/openai/models', {
+          headers: {
+            'x-goog-api-key': apiKey,
+            'Content-Type': 'application/json'
+          },
+          timeout: 10000
+        });
+        modelRows = response.data.data || [];
+      } catch (openAiCompatError) {
+        console.warn(`⚠️ Gemini OpenAI-compatible model listing failed: ${openAiCompatError.message}`);
+        const response = await axios.get('https://generativelanguage.googleapis.com/v1beta/models', {
+          params: { key: apiKey },
+          timeout: 10000
+        });
+        modelRows = (response.data.models || []).map(model => ({
+          ...model,
+          id: String(model.name || '').replace(/^models\//, ''),
+          name: String(model.name || '').replace(/^models\//, '')
+        }));
+      }
 
-      const models = response.data.data
-
-        .filter(model => {
-          const id = model.id.toLowerCase();
-
-          const blocked = [
-            'imagen',
-            'image',
-            'computer',
-            'robot',
-            'veo',
-            'generate',
-            'vision',
-            'live',
-            'audio'
-          ];
-
-          return !blocked.some(b => id.includes(b));
-        })
+      const models = modelRows
         .map(model => {
+          const modelId = model.id || model.name || '';
           return {
-            id: model.id,
-            name: model.id,
-            displayName: this.formatModelName(model.id),
+            id: modelId,
+            name: modelId.replace(/^models\//, ''),
+            displayName: model.display_name || model.name || this.formatModelName(modelId),
             provider: 'Gemini',
-            type: 'TEXT',
-            description: model.description || this.generateModelDescription(model.id, 'Gemini'),
-            isActive: true,
+            type: this.inferModelType(modelId, model),
+            description: model.description || this.generateModelDescription(modelId, 'Gemini'),
+            contextLength: model.inputTokenLimit || model.context_length || model.contextLength,
+            isActive: false,
             apiData: model
           };
         });
 
-      const mergedModels = mergeProviderModels(models, 'Gemini');
+      const mergedModels = await modelPricingService.enrichModels(
+        mergeProviderModels(models, 'Gemini', { includeManifestOnly: false })
+      );
 
       cache.data = mergedModels;
       cache.lastFetch = now;
@@ -154,7 +199,7 @@ class ModelSyncService {
       return mergedModels;
     } catch (error) {
       console.error('❌ Error fetching Gemini models:', error.message);
-      return this.cache.gemini.data || listManifestModels({ provider: 'Gemini' });
+      return this.cache.gemini.data || this.fallbackManifestModels('Gemini');
     }
   }
 
@@ -178,7 +223,7 @@ class ModelSyncService {
       const apiKey = process.env.DEEPSEEK_API_KEY;
       if (!apiKey) {
         console.warn('⚠️ DeepSeek API key not found, using static model catalog');
-        const models = listManifestModels({ provider: 'DeepSeek' });
+        const models = await this.fallbackManifestModels('DeepSeek');
         cache.data = models;
         cache.lastFetch = now;
         return models;
@@ -193,35 +238,22 @@ class ModelSyncService {
         timeout: 10000
       });
 
-      const displayNames = {
-        'deepseek-v4-flash': 'DeepSeek V4 Flash',
-        'deepseek-v4-pro': 'DeepSeek V4 Pro',
-        'deepseek-chat': 'DeepSeek Chat',
-        'deepseek-reasoner': 'DeepSeek Reasoner'
-      };
-
-      const descriptions = {
-        'deepseek-v4-flash': 'DeepSeek direct API fast V4 model.',
-        'deepseek-v4-pro': 'DeepSeek direct API V4 Pro model for complex tasks.',
-        'deepseek-chat': 'DeepSeek direct API fast non-reasoning chat model.',
-        'deepseek-reasoner': 'DeepSeek direct API reasoning model for complex tasks.'
-      };
-
       const models = (response.data.data || [])
-        .filter(model => ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-chat', 'deepseek-reasoner'].includes(model.id))
         .map(model => ({
           id: model.id,
           name: model.id,
-          displayName: displayNames[model.id] || this.formatModelName(model.id),
+          displayName: model.name || this.formatModelName(model.id),
           provider: 'DeepSeek',
-          type: 'TEXT',
-          description: descriptions[model.id] || this.generateModelDescription(model.id, 'DeepSeek'),
-          contextLength: 128000,
-          isActive: true,
+          type: this.inferModelType(model.id, model),
+          description: this.generateModelDescription(model.id, 'DeepSeek'),
+          contextLength: model.context_length || model.contextLength || 128000,
+          isActive: false,
           apiData: model
         }));
 
-      const mergedModels = mergeProviderModels(models, 'DeepSeek');
+      const mergedModels = await modelPricingService.enrichModels(
+        mergeProviderModels(models, 'DeepSeek', { includeManifestOnly: false })
+      );
 
       cache.data = mergedModels;
       cache.lastFetch = now;
@@ -230,7 +262,7 @@ class ModelSyncService {
       return mergedModels;
     } catch (error) {
       console.error('❌ Error fetching DeepSeek models:', error.message);
-      return this.cache.deepseek.data || listManifestModels({ provider: 'DeepSeek' });
+      return this.cache.deepseek.data || this.fallbackManifestModels('DeepSeek');
     }
   }
 
@@ -251,7 +283,7 @@ class ModelSyncService {
       const apiKey = process.env.OPENROUTER_API_KEY;
       if (!apiKey) {
         console.warn('⚠️ OpenRouter API key not found, using static model catalog');
-        const models = listManifestModels({ provider: 'OpenRouter' });
+        const models = await this.fallbackManifestModels('OpenRouter');
         cache.data = models;
         cache.lastFetch = now;
         return models;
@@ -266,26 +298,22 @@ class ModelSyncService {
       });
 
       const models = response.data.data
-        .filter(model => {
-          // Filter out deprecated or beta models, focus on stable ones
-          return !model.id.includes('beta') &&
-            !model.id.includes('deprecated') &&
-            model.context_length > 1000; // Filter out very limited models
-        })
         .map(model => ({
           id: model.id,
           name: model.id,
           displayName: model.name || this.formatModelName(model.id),
           provider: 'OpenRouter',
-          type: 'TEXT', // OpenRouter primarily serves text models
+          type: this.inferModelType(model.id, model),
           description: model.description || this.generateModelDescription(model.id, 'OpenRouter'),
           pricing: model.pricing,
           contextLength: model.context_length,
-          isActive: true,
+          isActive: false,
           apiData: model
         }));
 
-      const mergedModels = mergeProviderModels(models, 'OpenRouter');
+      const mergedModels = await modelPricingService.enrichModels(
+        mergeProviderModels(models, 'OpenRouter', { includeManifestOnly: false })
+      );
 
       cache.data = mergedModels;
       cache.lastFetch = now;
@@ -294,7 +322,7 @@ class ModelSyncService {
       return mergedModels;
     } catch (error) {
       console.error('❌ Error fetching OpenRouter models:', error.message);
-      return this.cache.openrouter.data || listManifestModels({ provider: 'OpenRouter' });
+      return this.cache.openrouter.data || this.fallbackManifestModels('OpenRouter');
     }
   }
 
@@ -304,11 +332,12 @@ class ModelSyncService {
   async fetchAllModels() {
     console.log('🚀 Starting to fetch models from all providers...');
 
-    const [openaiModels, geminiModels, openrouterModels, deepseekModels] = await Promise.allSettled([
+    const [openaiModels, geminiModels, openrouterModels, deepseekModels, videoModels] = await Promise.allSettled([
       this.fetchOpenAIModels(),
       this.fetchGeminiModels(),
       this.fetchOpenRouterModels(),
-      this.fetchDeepSeekModels()
+      this.fetchDeepSeekModels(),
+      Promise.resolve(this.getStaticVideoModels())
     ]);
 
     const allModels = [];
@@ -327,6 +356,10 @@ class ModelSyncService {
 
     if (deepseekModels.status === 'fulfilled') {
       allModels.push(...deepseekModels.value);
+    }
+
+    if (videoModels.status === 'fulfilled') {
+      allModels.push(...videoModels.value);
     }
 
     console.log(`🎯 Total models fetched: ${allModels.length}`);
@@ -357,23 +390,11 @@ class ModelSyncService {
           });
 
           if (existingModel) {
-            // Update existing model while preserving user settings
+            // Update metadata only. Admin availability must survive refreshes
+            // so an activated model immediately remains visible to users.
             await prisma.aiModel.update({
               where: { name: model.name },
-              data: {
-                displayName: model.displayName,
-                description: model.description,
-                provider: model.provider,
-                type: model.type,
-                icon: this.getModelIcon(model),
-                lastSynced: new Date(),
-                syncSource: model.syncSource || 'api',
-                contextLength: model.contextLength,
-                pricing: model.pricing,
-                tags: model.tags && model.tags.length ? model.tags : this.generateTags(model),
-                // Don't override isActive - let users control this
-                updatedAt: new Date()
-              }
+              data: this.buildModelSyncUpdateData(model)
             });
             updated++;
           } else {
@@ -385,7 +406,7 @@ class ModelSyncService {
                 description: model.description,
                 provider: model.provider,
                 type: model.type,
-                isActive: model.isActive,
+                isActive: false,
                 icon: this.getModelIcon(model),
                 lastSynced: new Date(),
                 syncSource: model.syncSource || 'api',
@@ -408,6 +429,60 @@ class ModelSyncService {
       console.error('❌ Error during model sync:', error);
       throw error;
     }
+  }
+
+  buildModelSyncUpdateData(model) {
+    return {
+      displayName: model.displayName,
+      description: model.description,
+      provider: model.provider,
+      type: model.type,
+      icon: this.getModelIcon(model),
+      lastSynced: new Date(),
+      syncSource: model.syncSource || 'api',
+      contextLength: model.contextLength,
+      pricing: model.pricing,
+      tags: model.tags && model.tags.length ? model.tags : this.generateTags(model),
+      updatedAt: new Date()
+    };
+  }
+
+  /**
+   * One-time production guard for the admin catalog.
+   *
+   * Earlier builds seeded/provider-synced models as active. The SQL
+   * migration handles normal deploys, but this runtime guard covers hosts
+   * where migrations are skipped or delayed. It runs once, then preserves
+   * future manual admin activations.
+   */
+  async ensureDefaultInactiveOnce() {
+    const markerKey = 'ai_models_default_inactive_v1_applied';
+    const markerValue = JSON.stringify({
+      appliedAt: new Date().toISOString(),
+      reason: 'admin_models_default_inactive',
+    });
+
+    const existingMarker = await this.prisma.systemSettings.findUnique({
+      where: { key: markerKey },
+      select: { id: true },
+    });
+
+    if (existingMarker) {
+      return { applied: false, count: 0, reason: 'already_applied' };
+    }
+
+    const result = await this.prisma.aiModel.updateMany({
+      where: { isActive: true },
+      data: { isActive: false },
+    });
+
+    await this.prisma.systemSettings.upsert({
+      where: { key: markerKey },
+      update: { value: markerValue },
+      create: { key: markerKey, value: markerValue },
+    });
+
+    return { applied: true, count: result.count || 0, reason: 'default_inactive_enforced' };
   }
 
   /**
@@ -446,6 +521,14 @@ class ModelSyncService {
       .replace(/\b(Gpt|Api|V)\b/g, match => match.toUpperCase());
   }
 
+  async fallbackManifestModels(provider) {
+    const models = listManifestModels({ provider }).map(model => ({
+      ...model,
+      isActive: false,
+    }));
+    return modelPricingService.enrichModels(models);
+  }
+
   /**
    * Generate description for models
    */
@@ -476,6 +559,43 @@ class ModelSyncService {
     if (modelId.includes('dall-e')) return 'OpenAI image generation model';
 
     return `${provider} model for AI tasks`;
+  }
+
+  inferModelType(modelId, apiData = {}) {
+    const id = String(modelId || '').toLowerCase();
+    const mode = String(apiData.mode || '').toLowerCase();
+    const modalities = [
+      ...(apiData.supported_output_modalities || []),
+      ...(apiData.supported_modalities || []),
+      ...(apiData.output || []),
+      ...(apiData.input || []),
+    ].map(value => String(value).toLowerCase());
+
+    if (
+      id.includes('dall-e') ||
+      id.includes('gpt-image') ||
+      id.includes('imagen') ||
+      id.includes('seedream') ||
+      mode.includes('image') ||
+      modalities.includes('image')
+    ) {
+      return 'IMAGE';
+    }
+
+    if (
+      id.includes('video') ||
+      id.includes('veo') ||
+      id.includes('kling') ||
+      id.includes('runway') ||
+      id.includes('pika') ||
+      id.includes('luma') ||
+      mode.includes('video') ||
+      modalities.includes('video')
+    ) {
+      return 'VIDEO';
+    }
+
+    return 'TEXT';
   }
 
   /**
@@ -576,4 +696,7 @@ class ModelSyncService {
   }
 }
 
-module.exports = new ModelSyncService();
+const modelSyncService = new ModelSyncService();
+
+module.exports = modelSyncService;
+module.exports.ModelSyncService = ModelSyncService;

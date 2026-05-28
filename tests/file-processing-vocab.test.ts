@@ -4,6 +4,7 @@ import assert from "node:assert/strict"
 import {
   describeStage,
   friendlyFailureLabel,
+  isActiveProcessingStage,
   isTerminalStage,
   stageProgressPercent,
   shouldFireReadyTransition,
@@ -38,6 +39,20 @@ test("isTerminalStage matches the TERMINAL_STAGES set", () => {
   assert.equal(isTerminalStage("indexing"), false)
   assert.equal(isTerminalStage(null), false)
   assert.equal(isTerminalStage(undefined), false)
+})
+
+test("isActiveProcessingStage accepts only known non-terminal stages", () => {
+  assert.equal(isActiveProcessingStage("uploaded"), true)
+  assert.equal(isActiveProcessingStage("validating"), true)
+  assert.equal(isActiveProcessingStage("extracting"), true)
+  assert.equal(isActiveProcessingStage("chunking"), true)
+  assert.equal(isActiveProcessingStage("embedding"), true)
+  assert.equal(isActiveProcessingStage("indexing"), true)
+  assert.equal(isActiveProcessingStage("ready"), false)
+  assert.equal(isActiveProcessingStage("failed"), false)
+  assert.equal(isActiveProcessingStage("future_unknown_stage" as any), false)
+  assert.equal(isActiveProcessingStage(null), false)
+  assert.equal(isActiveProcessingStage(undefined), false)
 })
 
 test("describeStage returns the canonical Spanish label per stage", () => {

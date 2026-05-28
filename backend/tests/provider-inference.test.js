@@ -62,15 +62,10 @@ test('inferProviderFromModelId: Google Gemini family', () => {
   assert.equal(inferProviderFromModelId('imagen-3'), 'Gemini');
 });
 
-test('inferProviderFromModelId: Free IA (Cerebras Llama 3.1 family)', () => {
-  assert.equal(inferProviderFromModelId('llama-3.1-8b'), 'Cerebras');
-  assert.equal(inferProviderFromModelId('llama-3.1-70b'), 'Cerebras');
-  assert.equal(inferProviderFromModelId('llama3.1-8b'), 'Cerebras');
-  assert.equal(inferProviderFromModelId('cerebras:llama-3.1-8b'), 'Cerebras');
-  assert.equal(inferProviderFromModelId('cerebras-llama-3.1-8b'), 'Cerebras', 'hyphen prefix also routes to Cerebras');
-  // The 3.3-70b SKU also routes to Cerebras when bare (Groq picks it
-  // up only with the -versatile suffix).
-  assert.equal(inferProviderFromModelId('llama-3.3-70b'), 'Cerebras');
+test('inferProviderFromModelId: Groq handles llama-3.x models', () => {
+  assert.equal(inferProviderFromModelId('llama-3.3-70b-versatile'), 'Groq');
+  assert.equal(inferProviderFromModelId('llama-3.1-8b'), 'OpenAI');
+  assert.equal(inferProviderFromModelId('llama-3.1-70b'), 'OpenAI');
 });
 
 test('inferProviderFromModelId: Anthropic direct (bare claude-*)', () => {
@@ -100,7 +95,6 @@ test('inferProviderFromModelId: unknown ids fall back to OpenAI (safe)', () => {
 
 test('listKnownProviders / KNOWN_PROVIDERS: stable canonical set', () => {
   const list = listKnownProviders();
-  assert.ok(list.includes('Cerebras'));
   assert.ok(list.includes('Gemini'));
   assert.ok(list.includes('OpenAI'));
   // Snapshot must equal KNOWN_PROVIDERS (defensive copy).

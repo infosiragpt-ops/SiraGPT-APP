@@ -27,6 +27,20 @@ const normalize = (value: string) =>
     .replace(/\s+/g, ' ')
     .trim()
 
+const DOCUMENT_EDITING_POLICY = [
+  'SiraGPT document editing policy:',
+  '- If uploaded files are present and the user says "mi Word", "mi Excel", "en su Excel", "este documento", or asks to modify/improve/rewrite/fix content, treat the uploaded file as the source document to preserve.',
+  '- Never overwrite or mutate the original upload. Always generate a new downloadable file in the same format unless the user explicitly asks for a different format.',
+  '- Preserve the original structure as much as the available renderer allows: logos/images, tables, sheet names, formulas, styles, section order, headers, footers, and slide layout.',
+  '- Make only the requested edits; do not redesign unrelated parts of the file.',
+  '- When exact binary/layout preservation is not technically possible, state the limitation briefly and still return the best reconstructed editable document.',
+].join('\n')
+
+function withDocumentEditingPolicy(prompt: string, fileIds: string[]) {
+  if (fileIds.length === 0) return prompt
+  return `${prompt}\n\n---\n${DOCUMENT_EDITING_POLICY}`
+}
+
 export function detectDocumentChatFormat(prompt: string): DocumentChatFormat {
   const text = normalize(prompt)
   if (/\b(xlsx?|excel|hoja de calculo|spreadsheet|dashboard)\b/.test(text)) return 'xlsx'
@@ -63,8 +77,9 @@ export function detectDocumentChatComplexity(prompt: string, fileIds: string[] =
 export function buildDocumentChatRequest(input: DocumentChatRequestInput): DocumentChatRequest {
   const prompt = String(input.prompt || '').trim()
   const fileIds = Array.from(new Set((input.fileIds || []).filter(Boolean)))
+  const executionPrompt = withDocumentEditingPolicy(prompt, fileIds)
   const request: DocumentChatRequest = {
-    prompt,
+    prompt: executionPrompt,
     displayPrompt: prompt,
     chatId: input.chatId,
     model: input.model,

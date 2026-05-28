@@ -52,14 +52,6 @@ const PROVIDERS = Object.freeze([
     score: { quality: 0.76, latency: 0.96, cost: 0.82 },
   },
   {
-    id: 'cerebras',
-    envKey: 'CEREBRAS_API_KEY',
-    baseURL: 'https://api.cerebras.ai/v1',
-    models: ['llama-3.3-70b'],
-    capabilities: ['chat', 'speed'],
-    score: { quality: 0.74, latency: 0.94, cost: 0.80 },
-  },
-  {
     id: 'mistral',
     envKey: 'MISTRAL_API_KEY',
     baseURL: 'https://api.mistral.ai/v1',
@@ -93,7 +85,7 @@ const PROVIDERS = Object.freeze([
 
 const TASK_MODEL_HINTS = Object.freeze({
   [TASK_TYPES.DEEP_REASONING]: ['anthropic:claude-opus-4-7', 'deepseek:deepseek-reasoner', 'openrouter:anthropic/claude-opus-4.7'],
-  [TASK_TYPES.SPEED]: ['google:gemini-2.5-flash', 'groq:llama-3.3-70b-versatile', 'cerebras:llama-3.3-70b'],
+  [TASK_TYPES.SPEED]: ['google:gemini-2.5-flash', 'groq:llama-3.3-70b-versatile'],
   [TASK_TYPES.MULTIMODAL]: ['google:gemini-2.5-pro', 'openai:gpt-4o', 'openrouter:openai/gpt-4o'],
   [TASK_TYPES.CODE]: ['anthropic:claude-sonnet-4-6', 'openrouter:anthropic/claude-sonnet-4.6', 'mistral:mistral-large-latest'],
   [TASK_TYPES.EMBEDDINGS]: ['voyage:voyage-3-large', 'jina:jina-embeddings-v3'],

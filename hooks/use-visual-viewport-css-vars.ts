@@ -22,6 +22,8 @@ type UseVisualViewportCssVarsOptions = {
 const useIsoLayoutEffect =
   typeof window === "undefined" ? React.useEffect : React.useLayoutEffect
 
+const KEYBOARD_OPEN_HEIGHT_PX = 120
+
 function setCssPx(target: HTMLElement, name: string, value: number) {
   target.style.setProperty(name, `${Math.max(0, Math.round(value))}px`)
 }
@@ -77,6 +79,8 @@ export function useVisualViewportCssVars({
       setCssPx(target, `--${prefix}-viewport-offset-left`, metrics.offsetLeft)
       setCssPx(target, `--${prefix}-viewport-offset-top`, metrics.offsetTop)
       setCssPx(target, `--${prefix}-keyboard-height`, metrics.keyboardHeight)
+      target.dataset[`${prefix}Keyboard`] =
+        metrics.keyboardHeight >= KEYBOARD_OPEN_HEIGHT_PX ? "open" : "closed"
 
       onSyncRef.current?.(metrics)
     }

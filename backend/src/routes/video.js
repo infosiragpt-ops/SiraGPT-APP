@@ -598,6 +598,7 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
+const requirePaidPlan = require('../middleware/require-paid-plan');
 const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
@@ -615,9 +616,14 @@ const {
 const router = express.Router();
 const prisma = new PrismaClient();
 
-// Configure Fal.ai client
+function getFalApiKey() {
+  return process.env.FAL_KEY || process.env.FAL_API_KEY || process.env.TAL_AI_API_KEY || '';
+}
+
+// Configure Fal.ai client. FAL_API_KEY is the key name present in the
+// local SiraGPT env; keep FAL_KEY and TAL_AI_API_KEY as aliases.
 fal.config({
-  credentials: process.env.FAL_KEY, // Your Fal.ai API key
+  credentials: getFalApiKey(),
 });
 
 // Store active operations
@@ -700,16 +706,19 @@ router.post('/generate', [
   body('negative_prompt').optional().isString().withMessage('Negative prompt must be a string'),
   body('image_url').optional().isString().withMessage('Image URL must be a string'),
   body('model').optional().isString().withMessage('Model must be a string')
-], authenticateToken, async (req, res) => {
+], authenticateToken, requirePaidPlan({ feature: 'video_generation' }), async (req, res) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       return res.status(400).json({ errors: errors.array() });
     }
 
-    if (!process.env.FAL_KEY) {
+    const falApiKey = getFalApiKey();
+    if (!falApiKey) {
       return res.status(400).json({ error: 'Fal.ai API key not configured' });
     }
+
+    fal.config({ credentials: falApiKey });
 
     const {
       prompt,
@@ -913,6 +922,9 @@ async function generateVideoAsync(operationId, prompt, aspectRatio, duration, ne
           case 'kling-2-master':
             endpoint = "fal-ai/kling-video/v2.1/master/image-to-video";
             break;
+          case 'fal-ai/veo3/fast':
+          case 'fal-ai/veo3/fast/image-to-video':
+          case 'veo-fast':
           default: // veo-fast
             endpoint = "fal-ai/veo3/fast/image-to-video";
         }
@@ -938,6 +950,9 @@ async function generateVideoAsync(operationId, prompt, aspectRatio, duration, ne
           case 'kling-2-master':
             endpoint = "fal-ai/kling-video/v2.1/master/text-to-video";
             break;
+          case 'fal-ai/veo3/fast':
+          case 'fal-ai/veo3/fast/image-to-video':
+          case 'veo-fast':
           default: // veo-fast
             endpoint = "fal-ai/veo3/fast";
         }

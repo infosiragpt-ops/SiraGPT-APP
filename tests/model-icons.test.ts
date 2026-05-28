@@ -1,7 +1,12 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
-import { resolveModelIconName } from "../lib/model-icons"
+import {
+  compareModelProviders,
+  resolveModelIconName,
+  resolveModelProviderName,
+  resolveProviderIconName,
+} from "../lib/model-icons"
 
 /**
  * resolveModelIconName picks the brand glyph for a model card. It
@@ -60,6 +65,13 @@ describe("resolveModelIconName · brand detection by name", () => {
     assert.equal(resolveModelIconName({ name: "codestral-22b" }), "MistralLogo")
   })
 
+  it("identifies provider brands hidden behind OpenRouter", () => {
+    assert.equal(resolveModelIconName({ name: "nvidia/nemotron-3-super-120b-a12b", provider: "OpenRouter", icon: "OpenRouterLogo" }), "NvidiaLogo")
+    assert.equal(resolveModelIconName({ name: "nvidia/llama-3.1-nemotron-ultra-253b-v1", provider: "OpenRouter", icon: "OpenRouterLogo" }), "NvidiaLogo")
+    assert.equal(resolveModelIconName({ name: "poolside/laguna-m.1:free", provider: "OpenRouter", icon: "OpenRouterLogo" }), "PoolsideLogo")
+    assert.equal(resolveModelIconName({ name: "ollama/llama3.2", provider: "OpenRouter", icon: "OpenRouterLogo" }), "OllamaLogo")
+  })
+
   it("matches on displayName when name is missing", () => {
     assert.equal(resolveModelIconName({ displayName: "GPT-4o (high)" }), "ChatGPTLogo")
     assert.equal(resolveModelIconName({ displayName: "Claude 3 Sonnet" }), "ClaudeLogo")
@@ -91,6 +103,8 @@ describe("resolveModelIconName · fallback chain", () => {
     assert.equal(resolveModelIconName({ provider: "google" }), "GeminiLogo")
     assert.equal(resolveModelIconName({ provider: "deepseek" }), "DeepseekLogo")
     assert.equal(resolveModelIconName({ provider: "xai" }), "GrokLogo")
+    assert.equal(resolveModelIconName({ provider: "nvidia" }), "NvidiaLogo")
+    assert.equal(resolveModelIconName({ provider: "poolside" }), "PoolsideLogo")
     assert.equal(resolveModelIconName({ provider: "openrouter" }), "OpenRouterLogo")
   })
 
@@ -103,5 +117,41 @@ describe("resolveModelIconName · fallback chain", () => {
 
   it("returns Bot when there is no signal at all", () => {
     assert.equal(resolveModelIconName({ name: "internal-model" }), "Bot")
+  })
+})
+
+describe("resolveModelProviderName", () => {
+  it("groups OpenRouter-routed models by their real model brand", () => {
+    assert.equal(resolveModelProviderName({ name: "openai/gpt-5.5", provider: "OpenRouter" }), "OpenAI")
+    assert.equal(resolveModelProviderName({ name: "anthropic/claude-opus-4.7", provider: "OpenRouter" }), "Anthropic")
+    assert.equal(resolveModelProviderName({ name: "google/gemini-3.1-flash-lite", provider: "OpenRouter" }), "Google")
+    assert.equal(resolveModelProviderName({ name: "moonshotai/kimi-k2.6", provider: "OpenRouter" }), "Moonshot AI")
+    assert.equal(resolveModelProviderName({ name: "qwen/qwen3.7-max", provider: "OpenRouter" }), "Qwen")
+    assert.equal(resolveModelProviderName({ name: "meta-llama/llama-3.1-70b-instruct", provider: "OpenRouter" }), "Meta")
+    assert.equal(resolveModelProviderName({ name: "mistralai/mistral-medium-3-5", provider: "OpenRouter" }), "Mistral AI")
+    assert.equal(resolveModelProviderName({ name: "nvidia/nemotron-3-super-120b-a12b", provider: "OpenRouter" }), "NVIDIA")
+    assert.equal(resolveModelProviderName({ name: "nvidia/llama-3.1-nemotron-ultra-253b-v1", provider: "OpenRouter" }), "NVIDIA")
+    assert.equal(resolveModelProviderName({ name: "poolside/laguna-xs.2:free", provider: "OpenRouter" }), "Poolside")
+    assert.equal(resolveModelProviderName({ name: "z-ai/glm-5.1", provider: "OpenRouter" }), "Z.ai")
+    assert.equal(resolveModelProviderName({ name: "groq/llama-3.3-70b-versatile", provider: "OpenRouter" }), "Groq")
+  })
+
+  it("keeps unknown routed models under their configured provider", () => {
+    assert.equal(resolveModelProviderName({ name: "openrouter/free", provider: "OpenRouter" }), "OpenRouter")
+    assert.equal(resolveModelProviderName({ name: "internal-model", provider: "Internal" }), "Internal")
+    assert.equal(resolveModelProviderName({}), "Otros")
+  })
+
+  it("sorts premium providers before unknown providers", () => {
+    assert.deepEqual(
+      ["Poolside", "Internal", "OpenAI", "Qwen"].sort(compareModelProviders),
+      ["OpenAI", "Qwen", "Poolside", "Internal"],
+    )
+  })
+
+  it("resolves provider header icons", () => {
+    assert.equal(resolveProviderIconName("NVIDIA"), "NvidiaLogo")
+    assert.equal(resolveProviderIconName("Poolside"), "PoolsideLogo")
+    assert.equal(resolveProviderIconName("Moonshot AI"), "KimiLogo")
   })
 })

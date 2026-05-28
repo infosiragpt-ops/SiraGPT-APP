@@ -46,6 +46,7 @@
     "tests",
     ".test-dist",
     "vitest.config.ts",
-    "packages"
+    "packages",
+    "**/upstream/**"
   ]
 }

@@ -28,7 +28,6 @@ import {
   Monitor,
   Share,
   Search,
-  BookOpen,
   Download,
   AudioLines,
   RefreshCw,
@@ -90,6 +89,8 @@ import {
   LinkContextDisplay,
 } from "@/components/chat/ComposerInlineDisplays"
 import { FileProcessingBadge } from "@/components/file-processing-badge"
+import type { FileProcessingStatus } from "@/hooks/use-file-processing-status"
+import { isActiveProcessingStage, type FileProcessingStage } from "@/lib/file-processing-vocab"
 import {
   extractFilesFromDataTransfer,
   extractFromClipboardEvent,
@@ -182,7 +183,12 @@ function prefetchExcelConnector() {
     __excelConnectorModulePromise = import("./ExcelConnector")
   }
 }
-import { resolveModelIconName } from "@/lib/model-icons"
+import {
+  compareModelProviders,
+  resolveModelAttributionName,
+  resolveModelIconName,
+  resolveModelProviderName,
+} from "@/lib/model-icons"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 
 import {
@@ -214,8 +220,33 @@ const previewAttachmentKey = (attachment: AttachmentLike | null | undefined): st
 const isComposerFileUploadPending = (file: any): boolean =>
   Boolean(file && file.status === "uploading" && !resolveUploadFileId(file))
 
+const PROCESSING_CONTEXT_EXT_RE = /\.(?:pdf|docx?|xlsx?|csv|pptx?|txt|md|markdown|rtf|odt|ods|odp)$/i
+const PROCESSING_CONTEXT_MIME_RE =
+  /(?:application\/(?:pdf|msword|vnd\.openxmlformats-officedocument|vnd\.ms-|vnd\.oasis\.opendocument|rtf)|text\/(?:plain|markdown|csv|tab-separated-values|html|xml)|application\/(?:json|xml))/i
+
+const shouldWaitForDocumentProcessing = (file: any): boolean => {
+  if (!file || !resolveUploadFileId(file)) return false
+  const name = String(file.name || file.originalName || file.filename || "")
+  const mime = String(file.mimeType || file.type || file.contentType || "")
+  return PROCESSING_CONTEXT_EXT_RE.test(name) || PROCESSING_CONTEXT_MIME_RE.test(mime)
+}
+
+const getFileProcessingStage = (file: any): FileProcessingStage | null => {
+  const stage = file?.processingStage || file?.stage || null
+  return typeof stage === "string" ? stage as FileProcessingStage : null
+}
+
+const isComposerFileProcessingPending = (file: any): boolean =>
+  shouldWaitForDocumentProcessing(file) && isActiveProcessingStage(getFileProcessingStage(file))
+
 const isComposerFileUploadFailed = (file: any): boolean =>
-  Boolean(file && file.status === "failed")
+  Boolean(file && (file.status === "failed" || getFileProcessingStage(file) === "failed"))
+
+const normalizePlanName = (plan?: string | null): string =>
+  String(plan || "FREE").trim().toUpperCase()
+
+const isFreePlanName = (plan?: string | null): boolean =>
+  normalizePlanName(plan) === "FREE"
 
 const sanitizeLongPasteMetaForMessage = (meta: any) => {
   if (!meta || meta.kind !== "long_paste_document") return null
@@ -825,6 +856,7 @@ const ActionsDropdown = ({
   const [mobileAppsOpen, setMobileAppsOpen] = React.useState(false);
   const [justClosed, setJustClosed] = React.useState(false);
   const closeTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
+  const isFreePlan = isFreePlanName(currentPlan);
 
   const handleFileUpload = (event?: Event | React.SyntheticEvent) => {
     event?.preventDefault?.();
@@ -920,6 +952,10 @@ const ActionsDropdown = ({
 
   const isMenuDisabled = isLoading || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices;
   const isToolSwitchDisabled = isMenuDisabled || isGeneratingImage;
+  // Premium tools are also marketing/configuration previews for FREE users.
+  // Keep them selectable while a normal chat response is loading so users can
+  // open the tool chip and inspect model/settings options without generating.
+  const isPremiumPreviewSwitchDisabled = isGeneratingImage || isGeneratingVideo || isUploading;
 
   const handleDropdownOpenChange = (open: boolean) => {
     setIsOpen(open);
@@ -1197,7 +1233,7 @@ const ActionsDropdown = ({
           <DropdownMenuItem
             className="liquid-menu-item"
             onClick={handleImageGenerationToggle}
-            disabled={currentPlan === "FREE"}
+            disabled={isPremiumPreviewSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
               <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isImageGenerationActive
@@ -1214,13 +1250,13 @@ const ActionsDropdown = ({
                   {isImageGenerationActive ? 'Imágenes activas' : 'Imágenes'}
                 </div>
                 <div className="text-xs text-muted-foreground">
-                  {isGeneratingImage ? 'Generando ahora' : 'Genera imágenes con IA'}
+                  {isFreePlan ? 'Vista previa de generación con IA' : isGeneratingImage ? 'Generando ahora' : 'Genera imágenes con IA'}
                 </div>
               </div>
               {(isImageGenerationActive || isGeneratingImage) && (
                 <div className={cn("w-2 h-2 bg-pink-500 rounded-full", isGeneratingImage && "animate-pulse")} />
               )}
-              {currentPlan === "FREE" && (
+              {isFreePlan && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
               )}
             </div>
@@ -1230,7 +1266,7 @@ const ActionsDropdown = ({
           <DropdownMenuItem
             className="liquid-menu-item"
             onClick={() => { handleVoiceGenerationToggle(); setIsOpen(false); }}
-            disabled={currentPlan === "FREE" || isToolSwitchDisabled}
+            disabled={isPremiumPreviewSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
               <div className="liquid-icon w-8 h-8 rounded-lg bg-cyan-100 dark:bg-cyan-900/20 flex items-center justify-center">
@@ -1239,13 +1275,13 @@ const ActionsDropdown = ({
               <div className="flex-1">
                 <div className="liquid-label font-medium text-sm">Voz</div>
                 <div className="text-xs text-muted-foreground">
-                  ElevenLabs / Mimo HD · TTS
+                  {isFreePlan ? 'Vista previa ElevenLabs / Mimo HD' : 'ElevenLabs / Mimo HD · TTS'}
                 </div>
               </div>
               {isVoiceGenerationActive && (
                 <div className="w-2 h-2 bg-cyan-500 rounded-full" />
               )}
-              {currentPlan === "FREE" && (
+              {isFreePlan && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
               )}
             </div>
@@ -1255,7 +1291,7 @@ const ActionsDropdown = ({
           <DropdownMenuItem
             className="liquid-menu-item"
             onClick={handleVideoGenerationToggle}
-            disabled={currentPlan === "FREE" || isToolSwitchDisabled}
+            disabled={isPremiumPreviewSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
               <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isVideoGenerationActive
@@ -1272,13 +1308,13 @@ const ActionsDropdown = ({
                   {isVideoGenerationActive ? 'Video Generation Active' : 'Video Generation'}
                 </div>
                 <div className="text-xs text-muted-foreground">
-                  Create videos with Google Veo 3
+                  {isFreePlan ? 'Vista previa de video con IA' : 'Create videos with Google Veo 3'}
                 </div>
               </div>
               {isVideoGenerationActive && (
                 <div className="w-2 h-2 bg-orange-500 rounded-full" />
               )}
-              {currentPlan === "FREE" && (
+              {isFreePlan && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
               )}
             </div>
@@ -1288,7 +1324,7 @@ const ActionsDropdown = ({
           <DropdownMenuItem
             className="liquid-menu-item"
             onClick={() => { handleMusicGenerationToggle(); setIsOpen(false); }}
-            disabled={currentPlan === "FREE" || isToolSwitchDisabled}
+            disabled={isPremiumPreviewSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
               <div className="liquid-icon w-8 h-8 rounded-lg bg-rose-100 dark:bg-rose-900/20 flex items-center justify-center">
@@ -1299,51 +1335,17 @@ const ActionsDropdown = ({
                   {isMusicGenerationActive ? 'Música activa' : 'Música'}
                 </div>
                 <div className="text-xs text-muted-foreground">
-                  Lyria 3 Pro · genera canciones con IA
+                  {isFreePlan ? 'Vista previa de música con IA' : 'Lyria 3 Pro · genera canciones con IA'}
                 </div>
               </div>
               {isMusicGenerationActive && (
                 <div className="w-2 h-2 bg-rose-500 rounded-full" />
               )}
-              {currentPlan === "FREE" && (
+              {isFreePlan && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
               )}
             </div>
           </DropdownMenuItem>
-
-          {/* Computer Use Agent - Temporarily disabled */}
-          {/*
-        <DropdownMenuItem
-          onClick={handleComputerUseToggle}
-          disabled={currentPlan === "FREE" || isDisabled}
-        >
-          <div className="flex items-center gap-3 w-full">
-            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isComputerUseActive
-              ? 'bg-indigo-100 dark:bg-indigo-900/20'
-              : 'bg-indigo-100 dark:bg-indigo-900/20'
-              }`}>
-              <Monitor className={`h-4 w-4 ${isComputerUseActive
-                ? 'text-indigo-600 dark:text-indigo-400'
-                : 'text-indigo-600 dark:text-indigo-400'
-                }`} />
-            </div>
-            <div className="flex-1">
-              <div className="font-medium text-sm">
-                {isComputerUseActive ? 'Computer Use Active' : 'Computer Use Agent'}
-              </div>
-              <div className="text-xs text-muted-foreground">
-                AI that can control browsers and perform tasks
-              </div>
-            </div>
-            {isComputerUseActive && (
-              <div className="w-2 h-2 bg-indigo-500 rounded-full" />
-            )}
-            {currentPlan === "FREE" && (
-              <Badge variant="secondary" className="text-xs">Pro</Badge>
-            )}
-          </div>
-        </DropdownMenuItem>
-        */}
 
           {/* Thesis Generation */}
           <DropdownMenuItem
@@ -1352,30 +1354,27 @@ const ActionsDropdown = ({
               setChatType('thesis');
               setIsOpen(false);
             }}
-            disabled={currentPlan === "FREE" || isToolSwitchDisabled}
+            disabled={isPremiumPreviewSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
               <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${chatType === 'thesis'
                 ? 'bg-purple-100 dark:bg-purple-900/20'
                 : 'bg-purple-100 dark:bg-purple-900/20'
                 }`}>
-                <BookOpen className={`h-4 w-4 ${chatType === 'thesis'
-                  ? 'text-purple-600 dark:text-purple-400'
-                  : 'text-purple-600 dark:text-purple-400'
-                  }`} />
+                <span className="text-base leading-none" aria-hidden="true">🎓</span>
               </div>
               <div className="flex-1">
                 <div className="liquid-label font-medium text-sm">
-                  {chatType === 'thesis' ? 'Thesis Generator Active' : 'Thesis Generator'}
+                  {chatType === 'thesis' ? 'Generador de tesis activo' : 'Generador de tesis'}
                 </div>
                 <div className="text-xs text-muted-foreground">
-                  Generate comprehensive academic theses
+                  {isFreePlan ? 'Vista previa de tesis académica' : 'Genera tesis académicas completas'}
                 </div>
               </div>
               {chatType === 'thesis' && (
                 <div className="w-2 h-2 bg-purple-500 rounded-full" />
               )}
-              {currentPlan === "FREE" && (
+              {isFreePlan && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
               )}
             </div>
@@ -1448,6 +1447,7 @@ const ActiveOptionsDisplay = ({
   retryUpload,
   restoreLongPasteToInput,
   onPreviewAttachment,
+  onFileProcessingStatusChange,
 }: {
   uploadedFiles: any[];
   removeFile: (index: number) => void;
@@ -1455,6 +1455,7 @@ const ActiveOptionsDisplay = ({
   retryUpload?: (file: any) => void;
   restoreLongPasteToInput?: (file: any, index: number) => void;
   onPreviewAttachment?: (attachment: AttachmentLike, siblings: AttachmentLike[], index: number) => void;
+  onFileProcessingStatusChange?: (file: any, status: FileProcessingStatus) => void;
 }) => {
   // Viewer state — same reusable viewer used by sent-message chips, so
   // the user gets identical high-fidelity preview in both contexts.
@@ -1649,6 +1650,7 @@ const ActiveOptionsDisplay = ({
                         <FileProcessingBadge
                           fileId={file.id}
                           onReady={() => toast.success(`Documento listo: ${file.name}`)}
+                          onStatusChange={(status) => onFileProcessingStatusChange?.(file, status)}
                         />
                       </div>
                     )}
@@ -2006,16 +2008,16 @@ const ActiveToolsDisplay = ({
           <Button
             variant="ghost"
             size="sm"
-            className="group/media-model relative isolate h-8 max-w-[212px] shrink-0 gap-1.5 overflow-hidden rounded-full border border-zinc-200/72 bg-white/84 px-3 py-0 text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.86),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
+            className="group/media-model relative isolate h-7 sm:h-8 max-w-[180px] sm:max-w-[212px] shrink-0 gap-1 sm:gap-1.5 overflow-hidden rounded-full border border-zinc-200/72 bg-white/84 px-2 sm:px-3 py-0 text-[11px] sm:text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.86),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
             aria-label={`Seleccionar modelo de ${tool}`}
             title={`Modelo: ${label}`}
           >
             <span className="pointer-events-none absolute inset-y-[-55%] left-[-65%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/70 to-transparent opacity-0 blur-sm transition-all duration-700 group-hover/media-model:left-[92%] group-hover/media-model:opacity-100 dark:via-white/20" />
-            <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center">
-              <IconProvider name={selected?.iconName || "Bot"} size={18} />
+            <span className="flex h-[16px] sm:h-[18px] w-[16px] sm:w-[18px] shrink-0 items-center justify-center">
+              <IconProvider name={selected?.iconName || "Bot"} size={16} />
             </span>
-            <span className="min-w-0 truncate">{label}</span>
-            <ChevronDown className="h-4 w-4 shrink-0 opacity-60" />
+            <span className="min-w-0 truncate max-w-[60px] sm:max-w-none">{label}</span>
+            <ChevronDown className="h-3.5 sm:h-4 w-3.5 sm:w-4 shrink-0 opacity-60" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent
@@ -2110,7 +2112,7 @@ const ActiveToolsDisplay = ({
   );
 
   return (
-    <div className="flex min-w-0 flex-nowrap items-center gap-2">
+    <div className="flex min-w-0 flex-wrap items-center gap-1.5 sm:gap-2">
       {hasConnectors && (
         <div className="chat-active-apps-chip flex max-w-full items-center overflow-hidden rounded-full border border-blue-200 bg-blue-50 text-blue-700 shadow-sm dark:border-blue-800/70 dark:bg-blue-950/30 dark:text-blue-200">
           <DropdownMenu>
@@ -2167,19 +2169,19 @@ const ActiveToolsDisplay = ({
       )}
       {isImageGenerationActive && (
         <>
-          <div className="group/image-liquid relative isolate flex h-8 shrink-0 items-center gap-1.5 overflow-hidden rounded-full border border-pink-300/70 bg-pink-100/88 px-3 text-[14px] font-semibold text-pink-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_10px_28px_-22px_rgba(219,39,119,0.75)] backdrop-blur-xl transition-all duration-300 hover:scale-[1.01] hover:border-pink-400/80 hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_16px_36px_-22px_rgba(219,39,119,0.9)] dark:border-pink-500/40 dark:bg-pink-900/25 dark:text-pink-200">
+          <div className="group/image-liquid relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1 sm:gap-1.5 overflow-hidden rounded-full border border-pink-300/70 bg-pink-100/88 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-pink-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_10px_28px_-22px_rgba(219,39,119,0.75)] backdrop-blur-xl transition-all duration-300 hover:scale-[1.01] hover:border-pink-400/80 hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_16px_36px_-22px_rgba(219,39,119,0.9)] dark:border-pink-500/40 dark:bg-pink-900/25 dark:text-pink-200">
             <span className="pointer-events-none absolute -inset-8 -z-10 rounded-full bg-[conic-gradient(from_90deg,transparent_0deg,rgba(244,114,182,0.0)_70deg,rgba(244,114,182,0.55)_130deg,rgba(236,72,153,0.22)_190deg,transparent_280deg)] opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
             <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/75 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/image-liquid:translate-x-[155%] dark:via-white/25" />
             <span className="pointer-events-none absolute left-7 top-1 h-1.5 w-1.5 rounded-full bg-pink-400/75 shadow-[0_0_12px_rgba(236,72,153,0.75)] motion-safe:animate-pulse" />
             <span className="pointer-events-none absolute bottom-1 right-9 h-1 w-1 rounded-full bg-white/90 shadow-[0_0_10px_rgba(255,255,255,0.9)] motion-safe:animate-bounce" />
-            <Palette className="relative z-10 h-4 w-4 drop-shadow-[0_0_8px_rgba(219,39,119,0.35)]" />
-            <span className="relative z-10">Imágenes</span>
+            <Palette className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4 drop-shadow-[0_0_8px_rgba(219,39,119,0.35)]" />
+            <span className="relative z-10 text-[12px] sm:text-[14px]">Imágenes</span>
             {isGeneratingImage && <span className="relative z-10 h-1.5 w-1.5 rounded-full bg-pink-500 animate-pulse" />}
             <Button
               variant="ghost"
               size="sm"
               className={cn(
-                "relative z-10 ml-1 h-5 w-5 rounded-full p-0",
+                "relative z-10 ml-0.5 sm:ml-1 h-4 sm:h-5 w-4 sm:w-5 rounded-full p-0",
                 isGeneratingImage
                   ? "opacity-45 cursor-not-allowed"
                   : "hover:bg-white/50 dark:hover:bg-pink-800/30"
@@ -2202,15 +2204,16 @@ const ActiveToolsDisplay = ({
               <Button
                 variant="ghost"
                 size="sm"
-                className="group/ratio-trigger relative isolate h-8 shrink-0 gap-2 overflow-hidden rounded-full border border-zinc-200/78 bg-white/84 px-3 py-0 text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
+                className="group/ratio-trigger relative isolate h-7 sm:h-8 shrink-0 gap-1 sm:gap-2 overflow-hidden rounded-full border border-zinc-200/78 bg-white/84 px-2 sm:px-3 py-0 text-[11px] sm:text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
                 title={`Imagen: ${selectedImageAspectRatio}, ${selectedImageQuality}, ${selectedImageCount}`}
                 aria-label={`Configurar imagen. Actual ${selectedImageAspectRatio}, ${selectedImageQuality}, ${selectedImageCount}`}
               >
                 <span className="pointer-events-none absolute inset-y-[-55%] left-[-65%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/70 to-transparent opacity-0 blur-sm transition-all duration-700 group-hover/ratio-trigger:left-[92%] group-hover/ratio-trigger:opacity-100 dark:via-white/20" />
-                <ImageAspectRatioMark ratio={selectedImageAspectRatio} selected className="h-5 w-5 text-zinc-700 dark:text-white/88" />
-                <span>{selectedImageAspectRatio}</span>
-                <span>{selectedImageQuality}</span>
-                <span>{selectedImageCount} img</span>
+                <ImageAspectRatioMark ratio={selectedImageAspectRatio} selected className="h-4 sm:h-5 w-4 sm:w-5 text-zinc-700 dark:text-white/88" />
+                <span className="hidden sm:inline">{selectedImageAspectRatio}</span>
+                <span className="sm:hidden">{selectedImageAspectRatio.replace(':','×')}</span>
+                <span className="hidden sm:inline">{selectedImageQuality}</span>
+                <span>{selectedImageCount}</span>
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent
@@ -2324,15 +2327,15 @@ const ActiveToolsDisplay = ({
 
       {isVoiceGenerationActive && (
         <>
-          <div className="group/voice-liquid relative isolate flex h-8 shrink-0 items-center gap-1.5 overflow-hidden rounded-full border border-cyan-300/70 bg-cyan-100/88 px-3 text-[14px] font-semibold text-cyan-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_10px_28px_-22px_rgba(8,145,178,0.75)] backdrop-blur-xl transition-all duration-300 hover:scale-[1.01] hover:border-cyan-400/80 dark:border-cyan-500/40 dark:bg-cyan-900/25 dark:text-cyan-200">
+          <div className="group/voice-liquid relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1 sm:gap-1.5 overflow-hidden rounded-full border border-cyan-300/70 bg-cyan-100/88 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-cyan-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_10px_28px_-22px_rgba(8,145,178,0.75)] backdrop-blur-xl transition-all duration-300 hover:scale-[1.01] hover:border-cyan-400/80 dark:border-cyan-500/40 dark:bg-cyan-900/25 dark:text-cyan-200">
             <span className="pointer-events-none absolute -inset-8 -z-10 rounded-full bg-[conic-gradient(from_90deg,transparent_0deg,rgba(34,211,238,0.0)_70deg,rgba(34,211,238,0.50)_135deg,rgba(6,182,212,0.24)_198deg,transparent_280deg)] opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
             <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/75 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/voice-liquid:translate-x-[155%] dark:via-white/25" />
-            <AudioLines className="relative z-10 h-4 w-4 drop-shadow-[0_0_8px_rgba(8,145,178,0.35)]" />
-            <span className="relative z-10">Voz</span>
+            <AudioLines className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4 drop-shadow-[0_0_8px_rgba(8,145,178,0.35)]" />
+            <span className="relative z-10 text-[12px] sm:text-[14px]">Voz</span>
             <Button
               variant="ghost"
               size="sm"
-              className="relative z-10 ml-1 h-5 w-5 rounded-full p-0 hover:bg-white/50 dark:hover:bg-cyan-800/30"
+              className="relative z-10 ml-0.5 sm:ml-1 h-4 sm:h-5 w-4 sm:w-5 rounded-full p-0 hover:bg-white/50 dark:hover:bg-cyan-800/30"
               onClick={handleVoiceGenerationClose}
               title="Cerrar voz"
             >
@@ -2350,14 +2353,14 @@ const ActiveToolsDisplay = ({
               <Button
                 variant="ghost"
                 size="sm"
-                className="group/voice-trigger relative isolate h-8 shrink-0 gap-2 overflow-hidden rounded-full border border-zinc-200/78 bg-white/84 px-3 py-0 text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
+                className="group/voice-trigger relative isolate h-7 sm:h-8 shrink-0 gap-1 sm:gap-2 overflow-hidden rounded-full border border-zinc-200/78 bg-white/84 px-2 sm:px-3 py-0 text-[11px] sm:text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
                 title={`Voz: ${selectedVoiceModel}, ${selectedVoiceLanguage}, ${selectedVoiceAccent}, ${selectedVoiceStability}%`}
                 aria-label={`Configurar voz. Actual ${selectedVoiceModel}, ${selectedVoiceLanguage}, estabilidad ${selectedVoiceStability} por ciento`}
               >
                 <span className="pointer-events-none absolute inset-y-[-55%] left-[-65%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/70 to-transparent opacity-0 blur-sm transition-all duration-700 group-hover/voice-trigger:left-[92%] group-hover/voice-trigger:opacity-100 dark:via-white/20" />
-                <Settings className="h-4 w-4" />
+                <Settings className="h-3.5 sm:h-4 w-3.5 sm:w-4" />
                 <span>{selectedVoiceLanguage}</span>
-                <span>{selectedVoiceStability}%</span>
+                <span className="hidden sm:inline">{selectedVoiceStability}%</span>
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent
@@ -2465,15 +2468,15 @@ const ActiveToolsDisplay = ({
 
       {isMusicGenerationActive && (
         <>
-          <div className="group/music-liquid relative isolate flex h-8 shrink-0 items-center gap-1.5 overflow-hidden rounded-full border border-rose-300/70 bg-rose-100/88 px-3 text-[14px] font-semibold text-rose-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_10px_28px_-22px_rgba(225,29,72,0.75)] backdrop-blur-xl transition-all duration-300 hover:scale-[1.01] hover:border-rose-400/80 dark:border-rose-500/40 dark:bg-rose-900/25 dark:text-rose-200">
+          <div className="group/music-liquid relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1 sm:gap-1.5 overflow-hidden rounded-full border border-rose-300/70 bg-rose-100/88 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-rose-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_10px_28px_-22px_rgba(225,29,72,0.75)] backdrop-blur-xl transition-all duration-300 hover:scale-[1.01] hover:border-rose-400/80 dark:border-rose-500/40 dark:bg-rose-900/25 dark:text-rose-200">
             <span className="pointer-events-none absolute -inset-8 -z-10 rounded-full bg-[conic-gradient(from_90deg,transparent_0deg,rgba(244,63,94,0.0)_70deg,rgba(244,63,94,0.48)_135deg,rgba(225,29,72,0.22)_198deg,transparent_280deg)] opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
             <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/75 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/music-liquid:translate-x-[155%] dark:via-white/25" />
-            <Music className="relative z-10 h-4 w-4 drop-shadow-[0_0_8px_rgba(225,29,72,0.35)]" />
-            <span className="relative z-10">Música</span>
+            <Music className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4 drop-shadow-[0_0_8px_rgba(225,29,72,0.35)]" />
+            <span className="relative z-10 text-[12px] sm:text-[14px]">Música</span>
             <Button
               variant="ghost"
               size="sm"
-              className="relative z-10 ml-1 h-5 w-5 rounded-full p-0 hover:bg-white/50 dark:hover:bg-rose-800/30"
+              className="relative z-10 ml-0.5 sm:ml-1 h-4 sm:h-5 w-4 sm:w-5 rounded-full p-0 hover:bg-white/50 dark:hover:bg-rose-800/30"
               onClick={handleMusicGenerationClose}
               title="Cerrar música"
             >
@@ -2491,13 +2494,13 @@ const ActiveToolsDisplay = ({
               <Button
                 variant="ghost"
                 size="sm"
-                className="group/music-trigger relative isolate h-8 shrink-0 gap-2 overflow-hidden rounded-full border border-zinc-200/78 bg-white/84 px-3 py-0 text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
+                className="group/music-trigger relative isolate h-7 sm:h-8 shrink-0 gap-1 sm:gap-2 overflow-hidden rounded-full border border-zinc-200/78 bg-white/84 px-2 sm:px-3 py-0 text-[11px] sm:text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
                 title={`Música: ${selectedMusicModel}, ${selectedMusicStyle}, ${selectedMusicMood}, ${selectedMusicDuration}s`}
                 aria-label={`Configurar música. Actual ${selectedMusicModel}, ${selectedMusicStyle}, ${selectedMusicDuration} segundos`}
               >
                 <span className="pointer-events-none absolute inset-y-[-55%] left-[-65%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/70 to-transparent opacity-0 blur-sm transition-all duration-700 group-hover/music-trigger:left-[92%] group-hover/music-trigger:opacity-100 dark:via-white/20" />
-                <Settings className="h-4 w-4" />
-                <span>{selectedMusicStyle}</span>
+                <Settings className="h-3.5 sm:h-4 w-3.5 sm:w-4" />
+                <span className="hidden sm:inline">{selectedMusicStyle}</span>
                 <span>{selectedMusicDuration}s</span>
               </Button>
             </DropdownMenuTrigger>
@@ -2618,15 +2621,15 @@ const ActiveToolsDisplay = ({
 
       {isVideoGenerationActive && (
         <>
-          <div className="group/video-liquid relative isolate flex h-8 shrink-0 items-center gap-1.5 overflow-hidden rounded-full border border-orange-300/70 bg-orange-100/88 px-3 text-[14px] font-semibold text-orange-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_10px_28px_-22px_rgba(234,88,12,0.75)] backdrop-blur-xl transition-all duration-300 hover:scale-[1.01] hover:border-orange-400/80 dark:border-orange-500/40 dark:bg-orange-900/25 dark:text-orange-200">
+          <div className="group/video-liquid relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1 sm:gap-1.5 overflow-hidden rounded-full border border-orange-300/70 bg-orange-100/88 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-orange-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_10px_28px_-22px_rgba(234,88,12,0.75)] backdrop-blur-xl transition-all duration-300 hover:scale-[1.01] hover:border-orange-400/80 dark:border-orange-500/40 dark:bg-orange-900/25 dark:text-orange-200">
             <span className="pointer-events-none absolute -inset-8 -z-10 rounded-full bg-[conic-gradient(from_90deg,transparent_0deg,rgba(251,146,60,0.0)_70deg,rgba(251,146,60,0.52)_135deg,rgba(249,115,22,0.24)_198deg,transparent_280deg)] opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
             <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/75 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/video-liquid:translate-x-[155%] dark:via-white/25" />
-            <Video className="relative z-10 h-4 w-4 drop-shadow-[0_0_8px_rgba(234,88,12,0.35)]" />
-            <span className="relative z-10">Video</span>
+            <Video className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4 drop-shadow-[0_0_8px_rgba(234,88,12,0.35)]" />
+            <span className="relative z-10 text-[12px] sm:text-[14px]">Video</span>
             <Button
               variant="ghost"
               size="sm"
-              className="relative z-10 ml-1 h-5 w-5 rounded-full p-0 hover:bg-white/50 dark:hover:bg-orange-800/30"
+              className="relative z-10 ml-0.5 sm:ml-1 h-4 sm:h-5 w-4 sm:w-5 rounded-full p-0 hover:bg-white/50 dark:hover:bg-orange-800/30"
               onClick={handleVideoGenerationClose}
               title="Cerrar video"
             >
@@ -2644,13 +2647,13 @@ const ActiveToolsDisplay = ({
               <Button
                 variant="ghost"
                 size="sm"
-                className="group/video-trigger relative isolate h-8 shrink-0 gap-2 overflow-hidden rounded-full border border-zinc-200/78 bg-white/84 px-3 py-0 text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
+                className="group/video-trigger relative isolate h-7 sm:h-8 shrink-0 gap-1 sm:gap-2 overflow-hidden rounded-full border border-zinc-200/78 bg-white/84 px-2 sm:px-3 py-0 text-[11px] sm:text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
                 title={`Video: ${selectedVideoAspectRatio}, ${selectedVideoResolution}, ${selectedVideoDuration}s, audio ${selectedVideoAudio ? "on" : "off"}`}
                 aria-label={`Configurar video. Actual ${selectedVideoAspectRatio}, ${selectedVideoResolution}, ${selectedVideoDuration} segundos`}
               >
                 <span className="pointer-events-none absolute inset-y-[-55%] left-[-65%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/70 to-transparent opacity-0 blur-sm transition-all duration-700 group-hover/video-trigger:left-[92%] group-hover/video-trigger:opacity-100 dark:via-white/20" />
-                <Settings className="h-4 w-4" />
-                <span>{selectedVideoAspectRatio}</span>
+                <Settings className="h-3.5 sm:h-4 w-3.5 sm:w-4" />
+                <span className="hidden sm:inline">{selectedVideoAspectRatio}</span>
                 <span>{selectedVideoResolution}</span>
                 <span>{selectedVideoDuration}s</span>
               </Button>
@@ -2803,7 +2806,7 @@ const ActiveToolsDisplay = ({
 
       {chatType === 'thesis' && (
         <div className="flex items-center gap-1.5 bg-purple-100 dark:bg-purple-900/20 text-purple-700 dark:text-purple-300 px-2 py-1 rounded-full text-xs border border-purple-200 dark:border-purple-800">
-          <BookOpen className="h-3 w-3" />
+          <span className="text-xs leading-none" aria-hidden="true">🎓</span>
           <span className="font-medium">Generador de tesis</span>
           <div className="w-2 h-2 bg-purple-500 rounded-full ml-1" />
           <Button
@@ -2822,6 +2825,38 @@ const ActiveToolsDisplay = ({
 
 // Enhanced Model Selector
 let selectedVideoModelData;
+const MODEL_BRAND_BY_ICON: Record<string, string> = {
+  ChatGPTLogo: "openai",
+  ClaudeLogo: "anthropic",
+  GeminiLogo: "google",
+  DeepseekLogo: "deepseek",
+  GrokLogo: "xai",
+  KimiLogo: "moonshot",
+  ZaiLogo: "zai",
+  QwenLogo: "qwen",
+  MetaLogo: "meta",
+  MistralLogo: "mistral",
+  NvidiaLogo: "nvidia",
+  PoolsideLogo: "poolside",
+  OllamaLogo: "ollama",
+  SeedreamLogo: "bytedance",
+  OpenRouterLogo: "openrouter",
+  MessageSquare: "groq",
+}
+
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+const getModelBrandKey = (model: any) => MODEL_BRAND_BY_ICON[resolveModelIconName(model)] || "other"
+
+const getModelDisplayLabel = (model: any) => {
+  const provider = resolveModelProviderName(model)
+  const label = String(model?.displayName || model?.name || "Modelo").trim()
+  if (!label || provider === "Otros") return label || "Modelo"
+  return label
+    .replace(new RegExp(`^${escapeRegExp(provider)}\\s*[:·/-]\\s*`, "i"), "")
+    .replace(/^OpenAI\s+GPT\s+/i, "GPT ")
+    .trim() || label
+}
+
 const NavbarModelSelector = ({
   selectedModel,
   setSelectedModel,
@@ -2929,29 +2964,13 @@ const NavbarModelSelector = ({
   }, [availableModels]);
 
   const gptModelsByProvider = React.useMemo(() => {
-    const order = ["OpenAI", "Anthropic", "Google", "Gemini", "DeepSeek", "xAI", "Groq", "OpenRouter"];
     const groups: Record<string, any[]> = {};
     for (const model of gptAvailableModels) {
-      const provider = model?.provider || "Otros";
+      const provider = resolveModelProviderName(model);
       (groups[provider] ||= []).push(model);
     }
-    return Object.entries(groups).sort(([a], [b]) => {
-      const ia = order.indexOf(a);
-      const ib = order.indexOf(b);
-      if (ia === -1 && ib === -1) return a.localeCompare(b);
-      if (ia === -1) return 1;
-      if (ib === -1) return -1;
-      return ia - ib;
-    });
+    return Object.entries(groups).sort(([a], [b]) => compareModelProviders(a, b));
   }, [gptAvailableModels]);
-
-  const describeGptTier = React.useCallback((modelName: string) => {
-    const label = String(modelName || "").toLowerCase();
-    if (/deepseek-v4-pro|\bgpt-5\b|o[134]\b|thinking|reason|r1|pro|sonnet|opus|ultra|max/.test(label)) {
-      return "Thinking";
-    }
-    return "Instant";
-  }, []);
 
   const applyGptModel = React.useCallback(async (model: any) => {
     if (!currentChat?.id || !model?.name) return;
@@ -3117,15 +3136,35 @@ const NavbarModelSelector = ({
     }
   }, [currentChat?.project?.id, currentChat?.projectId]);
 
+  const ModelLogo = ({ model, compact = false }: { model: any; compact?: boolean }) => (
+    <span
+      className={cn("model-logo-chip chat-model-icon", compact && "model-logo-chip--sm")}
+      data-model-brand={getModelBrandKey(model)}
+    >
+      <IconProvider name={resolveModelIconName(model)} size={compact ? 15 : 20} />
+    </span>
+  );
+
+  const ProviderHeading = ({ provider, models }: { provider: string; models: any[] }) => {
+    const sample = models[0] ? { ...models[0], provider } : { provider };
+    return (
+      <div className="model-provider-heading">
+        <ModelLogo model={sample} compact />
+        <span className="min-w-0 flex-1 truncate">{provider}</span>
+        <span className="model-provider-count">{models.length}</span>
+      </div>
+    );
+  };
+
 
   // If this is a video chat type, show video model
   if (chatTypes === "video") {
-    const videoModels = [
-      { name: 'veo-fast', displayName: 'Veo Fast (8s)' },
-      { name: 'kling-1.6-pro', displayName: 'Kling 1.6 Pro (10s)' },
-      { name: 'kling-2-master', displayName: 'Kling 2 Master (10s)' }
-    ];
-    selectedVideoModelData = videoModels.find(m => m.name === selectedModel);
+    const videoModels = (Array.isArray(availableModels) ? availableModels : [])
+      .filter((model: any) => {
+        const label = `${model?.name || ""} ${model?.displayName || ""} ${model?.provider || ""}`;
+        return String(model?.type || "").toUpperCase() === "VIDEO" || /video|veo|kling|runway|pika|hailuo|luma/i.test(label);
+      });
+    selectedVideoModelData = videoModels.find((m: any) => m.name === selectedModel) || videoModels[0];
 
     // Filter video models based on search
     const filteredVideoModels = videoModels.filter((model) =>
@@ -3162,7 +3201,7 @@ const NavbarModelSelector = ({
           <ScrollArea className="h-[250px]">
             <div className="p-1">
               {filteredVideoModels.length > 0 ? (
-                filteredVideoModels.map((model) => (
+                filteredVideoModels.map((model: any) => (
                   <DropdownMenuItem
                     key={model.name}
                     onSelect={() => {
@@ -3242,22 +3281,21 @@ const NavbarModelSelector = ({
                 </div>
               </DropdownMenuSubTrigger>
               <DropdownMenuPortal>
-                <DropdownMenuSubContent sideOffset={10} className="w-[360px] rounded-3xl border-border/70 p-2 shadow-2xl">
-                  <div className="px-3 pb-2 pt-1 text-[13px] font-medium text-muted-foreground">
+                <DropdownMenuSubContent sideOffset={10} className="relative w-[360px] overflow-hidden rounded-2xl border-border/60 bg-background/90 p-2 shadow-2xl backdrop-blur-xl before:pointer-events-none before:absolute before:inset-0 before:bg-[radial-gradient(circle_at_18%_0%,rgba(45,212,191,0.14),transparent_34%),radial-gradient(circle_at_95%_10%,rgba(99,102,241,0.12),transparent_32%)] before:content-['']">
+                  <div className="relative z-10 px-3 pb-2 pt-1 text-[13px] font-medium text-muted-foreground">
                     Modelos disponibles para este proyecto
                   </div>
-                  <ScrollArea className="h-[420px] pr-1">
+                  <ScrollArea className="relative z-10 h-[420px] pr-1">
                     {gptModelsByProvider.length > 0 ? (
                       <div className="space-y-2">
                         {gptModelsByProvider.map(([provider, models]) => (
                           <div key={provider}>
-                            <div className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-                              {provider} · {models.length}
-                            </div>
+                            <ProviderHeading provider={provider} models={models} />
                             <div className="space-y-0.5">
                               {models.map((model: any) => {
                                 const isActive = model.name === activeProjectModelName;
-                                const tier = describeGptTier(model.name || model.displayName);
+                                const label = getModelDisplayLabel(model);
+                                const attribution = resolveModelAttributionName(model);
                                 return (
                                   <DropdownMenuItem
                                     key={model.name}
@@ -3265,12 +3303,13 @@ const NavbarModelSelector = ({
                                       event.preventDefault();
                                       applyProjectModel(model);
                                     }}
-                                    className={cn("rounded-2xl px-3 py-2.5", isActive && "bg-muted/70")}
+                                    data-selected={isActive ? "true" : undefined}
+                                    className="model-picker-row min-h-12 rounded-xl px-2.5 py-2"
                                   >
-                                    <IconProvider name={resolveModelIconName(model)} className="mr-2 h-5 w-5 shrink-0" />
+                                    <ModelLogo model={model} />
                                     <div className="min-w-0 flex-1">
-                                      <div className="truncate text-[14px] font-medium">{model.displayName || model.name}</div>
-                                      <div className="truncate text-xs text-muted-foreground">{tier} · {model.name}</div>
+                                      <div className="liquid-label truncate text-[13.5px] font-semibold leading-5">{label}</div>
+                                      <div className="truncate text-[12px] font-medium leading-4 text-muted-foreground/82">{attribution}</div>
                                     </div>
                                     {isActive && <Check className="ml-2 h-4 w-4 shrink-0" />}
                                   </DropdownMenuItem>
@@ -3422,22 +3461,21 @@ const NavbarModelSelector = ({
                 </div>
               </DropdownMenuSubTrigger>
               <DropdownMenuPortal>
-                <DropdownMenuSubContent sideOffset={10} className="w-[360px] rounded-3xl border-border/70 p-2 shadow-2xl">
-                  <div className="px-3 pb-2 pt-1 text-[13px] font-medium text-muted-foreground">
+                <DropdownMenuSubContent sideOffset={10} className="relative w-[360px] overflow-hidden rounded-2xl border-border/60 bg-background/90 p-2 shadow-2xl backdrop-blur-xl before:pointer-events-none before:absolute before:inset-0 before:bg-[radial-gradient(circle_at_18%_0%,rgba(45,212,191,0.14),transparent_34%),radial-gradient(circle_at_95%_10%,rgba(99,102,241,0.12),transparent_32%)] before:content-['']">
+                  <div className="relative z-10 px-3 pb-2 pt-1 text-[13px] font-medium text-muted-foreground">
                     Todos los modelos disponibles
                   </div>
-                  <ScrollArea className="h-[420px] pr-1">
+                  <ScrollArea className="relative z-10 h-[420px] pr-1">
                     {gptModelsByProvider.length > 0 ? (
                       <div className="space-y-2">
                         {gptModelsByProvider.map(([provider, models]) => (
                           <div key={provider}>
-                            <div className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-                              {provider} · {models.length}
-                            </div>
+                            <ProviderHeading provider={provider} models={models} />
                             <div className="space-y-0.5">
                               {models.map((model: any) => {
                                 const isActive = model.name === activeModelName;
-                                const tier = describeGptTier(model.name || model.displayName);
+                                const label = getModelDisplayLabel(model);
+                                const attribution = resolveModelAttributionName(model);
                                 return (
                                   <DropdownMenuItem
                                     key={model.name}
@@ -3445,15 +3483,13 @@ const NavbarModelSelector = ({
                                       event.preventDefault();
                                       applyGptModel(model);
                                     }}
-                                    className={cn(
-                                      "rounded-2xl px-3 py-2.5",
-                                      isActive && "bg-muted/70",
-                                    )}
+                                    data-selected={isActive ? "true" : undefined}
+                                    className="model-picker-row min-h-12 rounded-xl px-2.5 py-2"
                                   >
-                                    <IconProvider name={resolveModelIconName(model)} className="mr-2 h-5 w-5 shrink-0" />
+                                    <ModelLogo model={model} />
                                     <div className="min-w-0 flex-1">
-                                      <div className="truncate text-[14px] font-medium">{model.displayName || model.name}</div>
-                                      <div className="truncate text-xs text-muted-foreground">{tier} · {model.name}</div>
+                                      <div className="liquid-label truncate text-[13.5px] font-semibold leading-5">{label}</div>
+                                      <div className="truncate text-[12px] font-medium leading-4 text-muted-foreground/82">{attribution}</div>
                                     </div>
                                     {isActive && <Check className="ml-2 h-4 w-4 shrink-0" />}
                                   </DropdownMenuItem>
@@ -3612,30 +3648,13 @@ const NavbarModelSelector = ({
     );
   }
 
-  // Stable provider order. Unknown providers fall to the end alphabetically.
-  const providerOrder = ["OpenAI", "Anthropic", "Google", "Gemini", "DeepSeek", "xAI", "Groq", "OpenRouter"];
-  const groupByProvider = (models: any[]): Array<[string, any[]]> => {
-    const groups: Record<string, any[]> = {};
-    for (const m of models) {
-      const p = m.provider || "Otros";
-      (groups[p] ||= []).push(m);
-    }
-    return Object.entries(groups).sort(([a], [b]) => {
-      const ia = providerOrder.indexOf(a); const ib = providerOrder.indexOf(b);
-      if (ia === -1 && ib === -1) return a.localeCompare(b);
-      if (ia === -1) return 1;
-      if (ib === -1) return -1;
-      return ia - ib;
-    });
-  };
-
   // Filter models based on search query
   const filteredModels = availableModels.filter((model: any) =>
     model.displayName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
     model.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    model.provider?.toLowerCase().includes(searchQuery.toLowerCase())
+    model.provider?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    resolveModelProviderName(model).toLowerCase().includes(searchQuery.toLowerCase())
   );
-  const grouped = groupByProvider(filteredModels);
 
   const onPick = (model: any) => {
     setSelectedModel(model.name);
@@ -3658,26 +3677,26 @@ const NavbarModelSelector = ({
   // the right; rows stay one-line and restrained for fast scanning.
   const ModelRow = ({ model }: { model: any }) => {
     const isSelected = model.name === selectedModel;
-    const iconName = resolveModelIconName(model);
-    const label = model.displayName || model.name;
+    const label = getModelDisplayLabel(model);
+    const attribution = resolveModelAttributionName(model);
     return (
       <DropdownMenuItem
         onSelect={() => onPick(model)}
+        data-selected={isSelected ? "true" : undefined}
         className={cn(
-          "group/row flex min-h-10 items-center gap-3 rounded-lg px-2.5 py-2 cursor-pointer",
-          "text-foreground/90 focus:bg-muted/45 data-[highlighted]:bg-muted/45",
-          isSelected && "bg-muted/35 text-foreground",
+          "model-picker-row group/row flex min-h-[62px] cursor-pointer items-center gap-3 rounded-xl px-3 py-2.5",
+          "text-foreground/90 focus:bg-transparent data-[highlighted]:bg-transparent",
         )}
       >
-        <span className="chat-model-icon inline-flex h-5 w-5 shrink-0 items-center justify-center">
-          <IconProvider name={iconName} size={20} />
+        <ModelLogo model={model} />
+        <span className="min-w-0 flex-1">
+          <span className="liquid-label block truncate text-[15px] font-semibold leading-5">
+            {label}
+          </span>
+          <span className="block truncate text-[12.5px] font-medium leading-4 text-muted-foreground/82">
+            {attribution}
+          </span>
         </span>
-        <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium leading-5 tracking-[-0.005em]">
-          {label}
-        </span>
-        {isSelected && (
-          <Check className="h-4 w-4 shrink-0 text-foreground/80" strokeWidth={2.25} />
-        )}
       </DropdownMenuItem>
     );
   };
@@ -3696,54 +3715,39 @@ const NavbarModelSelector = ({
           "chat-model-trigger group/model inline-flex h-10 items-center gap-2 rounded-xl px-3",
           "bg-transparent text-foreground",
           "border border-transparent",
-          "text-[13.5px] font-semibold tracking-tight",
+          "text-[13.5px] font-semibold",
           "transition-[background-color,border-color,color] duration-base ease-smooth",
           "hover:bg-muted/45 hover:border-border/40",
-          "active:scale-[0.985]",
+          "active:bg-muted/55",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45 focus-visible:ring-offset-1 focus-visible:ring-offset-background",
           "data-[state=open]:bg-muted/55 data-[state=open]:border-border/50",
         )}
       >
-        {selectedModelData && (
-          <span className="chat-model-icon inline-flex h-4 w-4 shrink-0 items-center justify-center">
-            <IconProvider name={resolveModelIconName(selectedModelData)} size={16} />
-          </span>
-        )}
-        <span className="chat-model-label max-w-[180px] truncate font-medium">{selectedModelData?.displayName || selectedModel}</span>
+        {selectedModelData && <ModelLogo model={selectedModelData} compact />}
+        <span className="chat-model-label max-w-[180px] truncate font-medium">{selectedModelData ? getModelDisplayLabel(selectedModelData) : selectedModel}</span>
         <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-55 transition-transform duration-200 group-data-[state=open]/model:rotate-180" strokeWidth={2} />
       </DropdownMenuTrigger>
 
-      <DropdownMenuContent align="start" sideOffset={6} collisionPadding={12} className="w-[calc(100vw-1.5rem)] p-0 overflow-hidden rounded-xl border-border/60 shadow-lg sm:w-[340px]">
-        <div className="border-b border-border/50 p-2">
+      <DropdownMenuContent align="start" sideOffset={8} collisionPadding={12} className="model-picker-content w-[calc(100vw-1.5rem)] p-0 overflow-hidden sm:w-[392px]">
+        <div className="model-picker-search-shell hidden sm:block">
           <div className="relative">
-            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/70" />
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/60" />
             <Input
               placeholder="Buscar modelos"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="h-8 rounded-lg border-border/45 bg-background pl-8 text-[13px] shadow-none focus-visible:border-border/70 focus-visible:ring-1 focus-visible:ring-border/60 focus-visible:ring-offset-0"
-              autoFocus
+              className="model-picker-search-input h-9 rounded-xl border-0 bg-transparent pl-9 pr-3 text-base shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 sm:text-[13px]"
               onClick={(e) => e.stopPropagation()}
               onKeyDown={(e) => e.stopPropagation()}
             />
           </div>
         </div>
 
-        <ScrollArea className="chat-model-menu-scroll h-[min(70dvh,440px)]">
-          {/* Provider-grouped sections. */}
-          {grouped.length > 0 ? (
-            <div className="px-1.5 py-2">
-              {grouped.map(([provider, models]) => (
-                <div key={provider} className="mt-3 first:mt-0">
-                  <div className="flex items-center px-2 pb-1.5 text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground/55">
-                    <span>{provider}</span>
-                  </div>
-                  <div className="flex flex-col gap-0.5">
-                    {models.map((m: any) => (
-                      <ModelRow key={m.name} model={m} />
-                    ))}
-                  </div>
-                </div>
+        <ScrollArea className="chat-model-menu-scroll h-[min(70dvh,456px)]">
+          {filteredModels.length > 0 ? (
+            <div className="model-picker-list flex flex-col gap-1 px-2 pb-2 pt-2">
+              {filteredModels.map((model: any) => (
+                <ModelRow key={model.name} model={model} />
               ))}
             </div>
           ) : (
@@ -3893,6 +3897,74 @@ function ChatInterfaceContent() {
   // reading from state directly would capture stale values.
   const uploadedFilesRef = React.useRef<any[]>([]);
   React.useEffect(() => { uploadedFilesRef.current = uploadedFiles; }, [uploadedFiles]);
+
+  const updateUploadedFileById = React.useCallback((
+    fileId: string,
+    updater: (file: any) => any,
+  ) => {
+    setUploadedFiles((cur: any[]) => {
+      const next = cur.map((file: any) => resolveUploadFileId(file) === fileId ? updater(file) : file);
+      uploadedFilesRef.current = next;
+      return next;
+    });
+  }, [setUploadedFiles]);
+
+  const hydrateUploadedFileFromBackend = React.useCallback(async (fileId: string) => {
+    try {
+      const payload: any = await apiClient.getFile(fileId);
+      const record = payload?.file || payload;
+      if (!record?.id) return;
+
+      updateUploadedFileById(fileId, (current: any) => ({
+        ...current,
+        id: record.id || current.id,
+        fileId: record.id || current.fileId,
+        name: current.name || record.originalName || record.filename || record.id,
+        originalName: record.originalName || current.originalName || current.name,
+        filename: record.filename || current.filename,
+        type: record.mimeType || current.type,
+        mimeType: record.mimeType || current.mimeType || current.type,
+        size: record.size ?? current.size,
+        url: record.url || current.url,
+        extractedText: record.extractedText ?? current.extractedText ?? null,
+        openaiFileId: record.openaiFileId || current.openaiFileId || null,
+        processingStage: record.processingStage || current.processingStage || "ready",
+        processingError: record.processingError ?? current.processingError ?? null,
+        status: record.processingStage === "failed"
+          ? "failed"
+          : record.processingStage === "ready"
+            ? "ready"
+            : current.status,
+      }));
+    } catch (error) {
+      console.warn("[chat] could not hydrate processed upload:", error);
+    }
+  }, [updateUploadedFileById]);
+
+  const handleFileProcessingStatusChange = React.useCallback((file: any, status: FileProcessingStatus) => {
+    const fileId = status.fileId || resolveUploadFileId(file);
+    if (!fileId || !status.stage) return;
+
+    updateUploadedFileById(fileId, (current: any) => ({
+      ...current,
+      processingStage: status.stage,
+      processingError: status.error,
+      status: status.stage === "failed"
+        ? "failed"
+        : status.stage === "ready"
+          ? "ready"
+          : current.status === "uploading"
+            ? "uploading"
+            : "processing",
+      uploadError: status.stage === "failed"
+        ? (status.error || current.uploadError || "No se pudo procesar el documento.")
+        : current.uploadError,
+    }));
+
+    if (status.stage === "ready") {
+      void hydrateUploadedFileFromBackend(fileId);
+    }
+  }, [hydrateUploadedFileFromBackend, updateUploadedFileById]);
 
   const handlePasteCaptureActionRef = React.useRef<(action: PasteCaptureAction, result: PasteCaptureResult) => void>(() => {})
 
@@ -4582,9 +4654,13 @@ But first, you need to connect your Spotify account securely using the button be
   const [subscribeOpen, setSubscribeOpen] = React.useState(false);
   const [isSubscribing, setIsSubscribing] = React.useState(false);
   const [currentUserInfo, setCurrentUserInfo] = React.useState<any>(null);
+  const currentPlan = normalizePlanName(user?.plan);
+  const isFreePlan = isFreePlanName(currentPlan);
   const [splitViewContent, setSplitViewContent] = React.useState<any>(null)
   const [documentPreviewUrl, setDocumentPreviewUrl] = React.useState<DocumentPreviewTarget | null>(null);
   const [composerPreviewIndex, setComposerPreviewIndex] = React.useState<number | null>(null);
+  const [sidePreviewAttachment, setSidePreviewAttachment] = React.useState<AttachmentLike | null>(null);
+  const [sidePreviewSiblings, setSidePreviewSiblings] = React.useState<AttachmentLike[]>([]);
   const activeSearchActivity = activeSearchActivityId ? searchActivities[activeSearchActivityId] : null;
   const searchActivityPanelOpen = Boolean(activeSearchActivity);
 
@@ -4640,7 +4716,12 @@ But first, you need to connect your Spotify account securely using the button be
       lowerMessage.includes('monthly limit exceeded') ||
       lowerMessage.includes('monthly video generation limit exceeded') ||
       lowerMessage.includes('free monthly queries exhausted') ||
-      (lowerMessage.includes('monthly') && lowerMessage.includes('limit'));
+      lowerMessage.includes('free daily queries exhausted') ||
+      lowerMessage.includes('upgrade required') ||
+      lowerMessage.includes('upgrade_required') ||
+      lowerMessage.includes('sube de plan') ||
+      (lowerMessage.includes('monthly') && lowerMessage.includes('limit')) ||
+      (lowerMessage.includes('daily') && lowerMessage.includes('limit'));
   }, []);
 
 
@@ -4846,12 +4927,16 @@ But first, you need to connect your Spotify account securely using the button be
   const handleToggleSplitView = (content: any) => {
     setDocumentPreviewUrl(null)
     setComposerPreviewIndex(null)
+    setSidePreviewAttachment(null)
+    setSidePreviewSiblings([])
     setSplitViewContent(content)
   }
 
   const handleDocumentPreview = (url: DocumentPreviewTarget) => {
     setSplitViewContent(null)
     setComposerPreviewIndex(null)
+    setSidePreviewAttachment(null)
+    setSidePreviewSiblings([])
     setSplitRatio((current) => {
       const balanced = current < 40 || current > 62 ? 48 : current
       try { localStorage.setItem(SPLIT_STORAGE_KEY, String(balanced)); } catch { /* ignore */ }
@@ -4859,6 +4944,21 @@ But first, you need to connect your Spotify account securely using the button be
     })
     setDocumentPreviewUrl(url);
   };
+
+  const handleAttachmentPreview = React.useCallback((attachment: AttachmentLike, siblings: AttachmentLike[] = [], index = 0) => {
+    setSplitViewContent(null);
+    setDocumentPreviewUrl(null);
+    setComposerPreviewIndex(null);
+    setActiveSearchActivityId(null);
+    setSplitRatio((current) => {
+      const balanced = current < 40 || current > 62 ? 48 : current;
+      try { localStorage.setItem(SPLIT_STORAGE_KEY, String(balanced)); } catch { /* ignore */ }
+      return balanced;
+    });
+    const normalizedSiblings = siblings.length > 0 ? siblings : [attachment];
+    setSidePreviewSiblings(normalizedSiblings);
+    setSidePreviewAttachment(normalizedSiblings[index] || attachment);
+  }, []);
 
   // Complete chat share functionality
   const handleCompleteShare = async () => {
@@ -5559,15 +5659,36 @@ But first, you need to connect your Spotify account securely using the button be
           tempFiles.forEach(tf => { next[tf.tempId] = 100; });
           return next;
         });
-        const merged = response.files.map((f: any, idx: number) => ({
-          ...f,
-          file: tempFiles[idx]?.file ?? f.file,
-          preview: tempFiles[idx]?.preview ?? f.preview,
-          sourceChannel,
-          longPasteMeta: tempFiles[idx]?.longPasteMeta ?? f.longPasteMeta,
-          isLongPasteDocument: tempFiles[idx]?.isLongPasteDocument || Boolean(f.isLongPasteDocument),
-          status: 'ready' as const,
-        }));
+        const failedServerFiles = response.files.filter((f: any) => f?.success === false);
+        if (failedServerFiles.length > 0) {
+          const grouped: Record<string, number> = {};
+          failedServerFiles.forEach((f: any) => {
+            const reason = f?.error || 'No se pudo procesar el archivo.';
+            grouped[reason] = (grouped[reason] || 0) + 1;
+          });
+          Object.entries(grouped).forEach(([reason, n]) => {
+            toast.error(n > 1 ? `${reason} (${n} archivos)` : reason);
+          });
+        }
+        const merged = response.files.map((f: any, idx: number) => {
+          const failed = f?.success === false;
+          const processingStage = f?.processingStage || f?.stage || null;
+          return {
+            ...f,
+            file: tempFiles[idx]?.file ?? f.file,
+            preview: tempFiles[idx]?.preview ?? f.preview,
+            sourceChannel,
+            longPasteMeta: tempFiles[idx]?.longPasteMeta ?? f.longPasteMeta,
+            isLongPasteDocument: tempFiles[idx]?.isLongPasteDocument || Boolean(f.isLongPasteDocument),
+            processingStage,
+            status: failed
+              ? ('failed' as const)
+              : isActiveProcessingStage(processingStage)
+                ? ('processing' as const)
+                : ('ready' as const),
+            uploadError: failed ? (f?.error || 'No se pudo procesar el archivo.') : f?.uploadError,
+          };
+        });
         const tempIds = new Set(tempFiles.map(tf => tf.tempId));
         setUploadedFiles((cur: any[]) => {
           const next = [
@@ -6120,6 +6241,8 @@ But first, you need to connect your Spotify account securely using the button be
     if (!uploadedFiles[index]) return;
     setSplitViewContent(null);
     setDocumentPreviewUrl(null);
+    setSidePreviewAttachment(null);
+    setSidePreviewSiblings([]);
     setActiveSearchActivityId(null);
     setSplitRatio((current) => {
       const balanced = current < 40 || current > 62 ? 48 : current;
@@ -6327,6 +6450,18 @@ But first, you need to connect your Spotify account securely using the button be
       return;
     }
 
+    const processingFiles = composerFiles.filter(isComposerFileProcessingPending);
+    if (processingFiles.length > 0) {
+      const firstName = processingFiles[0]?.name || processingFiles[0]?.originalName || "el documento";
+      toast.info(
+        processingFiles.length === 1
+          ? `Espera a que SiraGPT termine de leer "${firstName}" antes de enviarlo.`
+          : `Espera a que SiraGPT termine de leer ${processingFiles.length} documentos antes de enviarlos.`,
+        { duration: 2600 },
+      );
+      return;
+    }
+
     if (composerFiles.some(isComposerFileUploadFailed)) {
       toast.error("No se pudo adjuntar el documento. Reintenta la subida antes de enviar.");
       return;
@@ -6339,6 +6474,31 @@ But first, you need to connect your Spotify account securely using the button be
     }
 
     const msg = rawMsg || buildFileOnlyPrompt(composerFiles);
+    const activeFreePreviewTool = isFreePlan
+      ? (isImageGenerationActive || chatType === 'image')
+        ? 'Imágenes'
+        : (isVideoGenerationActive || chatType === 'video')
+          ? 'Video'
+          : isVoiceGenerationActive
+            ? 'Voz'
+            : isMusicGenerationActive
+              ? 'Música'
+              : chatType === 'thesis'
+                ? 'Tesis'
+                : null
+      : null;
+
+    if (activeFreePreviewTool) {
+      setSubscribeOpen(true);
+      toast.info(`${activeFreePreviewTool} está en vista previa para usuarios FREE. Sube de plan para usarla.`, {
+        duration: 3800,
+      });
+      track("premium_tool_preview.blocked_send", {
+        tool: activeFreePreviewTool.toLowerCase(),
+        plan: currentPlan,
+      });
+      return;
+    }
 
     // Capture the user's intent to send BEFORE the busy-queue branch
     // so queued messages count toward the same funnel as immediately-
@@ -7892,6 +8052,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     searchActivityPanelOpen ||
     documentPreviewUrl ||
     composerPreviewAttachment ||
+    sidePreviewAttachment ||
     isWordConnectorActive ||
     isExcelConnectorActive ||
     activeArtifact
@@ -7903,6 +8064,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     setSplitViewContent(null);
     setDocumentPreviewUrl(null);
     setComposerPreviewIndex(null);
+    setSidePreviewAttachment(null);
+    setSidePreviewSiblings([]);
     setActiveSearchActivityId(null);
     setIsWordConnectorActive(false);
     setIsExcelConnectorActive(false);
@@ -8522,8 +8685,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     );
   }
 
-  const currentPlan = user?.plan || user?.plan || 'FREE';
-
   return (
     <div
       ref={chatViewportRef}
@@ -8813,6 +8974,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       retryUpload={retryUpload}
                       restoreLongPasteToInput={restoreLongPasteToInput}
                       onPreviewAttachment={(_attachment, _siblings, index) => openComposerDocumentPreview(index)}
+                      onFileProcessingStatusChange={handleFileProcessingStatusChange}
                     />
                     <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
                     <LinkContextDisplay
@@ -9016,7 +9178,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         Only rendered when something is active, so the
                         composer stays a clean pill in the idle state. */}
                     {hasActiveTools && (
-                      <div className="composer-media-controls-row mx-2 mb-2 flex items-center gap-2 overflow-x-auto px-0.5 py-1">
+                      <div className="composer-media-controls-row mx-1 sm:mx-2 mb-2 flex flex-wrap items-center gap-1 sm:gap-2 overflow-visible px-0.5 py-1">
                         <ActiveToolsDisplay {...activeToolsProps} />
                       </div>
                     )}
@@ -9162,6 +9324,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                       isStreaming={false}
                                       onToggleSplitView={handleToggleSplitView}
                                       onDocumentPreview={handleDocumentPreview}
+                                      onAttachmentPreview={handleAttachmentPreview}
                                     />
                                   </ErrorBoundary>
                                 )}
@@ -9180,6 +9343,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                     isStreaming={false}
                                     onToggleSplitView={handleToggleSplitView}
                                     onDocumentPreview={handleDocumentPreview}
+                                    onAttachmentPreview={handleAttachmentPreview}
                                   />
                                 </ErrorBoundary>
                               ))
@@ -9206,6 +9370,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                     isStreaming={true}
                                     onToggleSplitView={handleToggleSplitView}
                                     onDocumentPreview={handleDocumentPreview}
+                                    onAttachmentPreview={handleAttachmentPreview}
                                   />
                                 </ErrorBoundary>
                               </div>
@@ -9296,6 +9461,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           retryUpload={retryUpload}
                           restoreLongPasteToInput={restoreLongPasteToInput}
                           onPreviewAttachment={(_attachment, _siblings, index) => openComposerDocumentPreview(index)}
+                          onFileProcessingStatusChange={handleFileProcessingStatusChange}
                         />
                         <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
                         <LinkContextDisplay
@@ -9489,7 +9655,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             Mirrors the in-chat composer above so both
                             states feel identical to the user. */}
                         {hasActiveTools && (
-                          <div className="composer-media-controls-row mx-2 mb-2 flex items-center gap-2 overflow-x-auto px-0.5 py-1">
+                          <div className="composer-media-controls-row mx-1 sm:mx-2 mb-2 flex flex-wrap items-center gap-1 sm:gap-2 overflow-visible px-0.5 py-1">
                             <ActiveToolsDisplay {...activeToolsProps} />
                           </div>
                         )}
@@ -9660,7 +9826,24 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   }}
                 />
               )}
-              {!showAudioPanel && !activeSearchActivity && !composerPreviewAttachment && isWordConnectorActive && (
+              {!showAudioPanel && !activeSearchActivity && !documentPreviewUrl && !composerPreviewAttachment && sidePreviewAttachment && (
+                <UnifiedDocumentViewer
+                  variant="panel"
+                  className="h-full"
+                  open={true}
+                  onClose={() => {
+                    setSidePreviewAttachment(null);
+                    setSidePreviewSiblings([]);
+                  }}
+                  attachment={sidePreviewAttachment}
+                  siblings={sidePreviewSiblings}
+                  onNavigate={(next) => {
+                    const idx = sidePreviewSiblings.findIndex(s => s === next || (next.id && s.id === next.id));
+                    if (idx >= 0) setSidePreviewAttachment(sidePreviewSiblings[idx]);
+                  }}
+                />
+              )}
+              {!showAudioPanel && !activeSearchActivity && !composerPreviewAttachment && !sidePreviewAttachment && isWordConnectorActive && (
                 <WordConnector
                   ref={wordConnectorRef}
                   onClose={() => setIsWordConnectorActive(false)}
@@ -9673,7 +9856,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   }}
                 />
               )}
-              {!showAudioPanel && !activeSearchActivity && !composerPreviewAttachment && isExcelConnectorActive && (
+              {!showAudioPanel && !activeSearchActivity && !composerPreviewAttachment && !sidePreviewAttachment && isExcelConnectorActive && (
                 <React.Suspense fallback={<div className="h-full w-full animate-pulse bg-muted/30" aria-hidden="true" />}>
                   <ExcelConnector
                     ref={excelConnectorRef}
@@ -9682,7 +9865,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   />
                 </React.Suspense>
               )}
-              {!showAudioPanel && !activeSearchActivity && activeArtifact && !isWordConnectorActive && !isExcelConnectorActive && !documentPreviewUrl && !composerPreviewAttachment && (
+              {!showAudioPanel && !activeSearchActivity && activeArtifact && !isWordConnectorActive && !isExcelConnectorActive && !documentPreviewUrl && !composerPreviewAttachment && !sidePreviewAttachment && (
                 <ArtifactPanel />
               )}
             </div>

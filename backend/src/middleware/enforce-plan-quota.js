@@ -36,8 +36,10 @@
 
 const {
   getPlanQuotaSnapshot,
+  countFreeDailyCalls,
   WARNING_THRESHOLD,
 } = require('../services/plan-quota');
+const prisma = require('../config/database');
 const {
   capturePostHogEvent,
 } = require('../services/observability/posthog');
@@ -82,6 +84,7 @@ function setQuotaHeaders(res, snapshot) {
 function enforcePlanQuota(options = {}) {
   const surface = String(options.surface || 'unknown');
   const env = options.envOverride || process.env;
+  const prismaClient = options.prismaClient || prisma;
 
   return function enforcePlanQuotaMiddleware(req, res, next) {
     // Anonymous traffic — no user, no quota. The rate limiter
@@ -89,69 +92,84 @@ function enforcePlanQuota(options = {}) {
     // surface; we don't double-gate here.
     if (!req || !req.user) return next();
 
-    const snapshot = getPlanQuotaSnapshot(req.user);
+    Promise.resolve()
+      .then(async () => {
+        const freeDailyCallsUsed = req.user.plan === 'FREE'
+          ? await countFreeDailyCalls({ userId: req.user.id, prisma: prismaClient })
+          : null;
+        const snapshot = getPlanQuotaSnapshot(req.user, { freeDailyCallsUsed });
 
-    // Always surface the snapshot so clients can render quota state
-    // even on success responses. This stays on even when enforcement
-    // is disabled — the headers are read-only telemetry.
-    setQuotaHeaders(res, snapshot);
+        // Always surface the snapshot so clients can render quota state
+        // even on success responses. This stays on even when enforcement
+        // is disabled — the headers are read-only telemetry.
+        setQuotaHeaders(res, snapshot);
 
-    // No quota to enforce (e.g. ENTERPRISE with monthlyLimit=0 means
-    // unlimited). Pass through silently with headers set.
-    if (snapshot.kind === 'none' || snapshot.limit === 0) return next();
+        // No quota to enforce (e.g. ENTERPRISE with monthlyLimit=0 means
+        // unlimited). Pass through silently with headers set.
+        if (snapshot.kind === 'none' || snapshot.limit === 0) return next();
 
-    // Telemetry hooks — fire BEFORE the allow/deny decision so a
-    // 429 still emits its own event, and a warning is captured even
-    // for an allowed request.
-    if (snapshot.exceeded) {
-      capturePostHogEvent({
-        distinctId: req.user.id,
-        event: 'plan.quota_exceeded',
-        properties: {
-          surface,
-          plan: snapshot.plan,
-          kind: snapshot.kind,
-          used: snapshot.used,
-          limit: snapshot.limit,
-          percentage: snapshot.percentage,
-          method: req.method,
-          path: req.originalUrl || req.url,
-        },
+        // Telemetry hooks — fire BEFORE the allow/deny decision so a
+        // 429 still emits its own event, and a warning is captured even
+        // for an allowed request.
+        if (snapshot.exceeded) {
+          capturePostHogEvent({
+            distinctId: req.user.id,
+            event: 'plan.quota_exceeded',
+            properties: {
+              surface,
+              plan: snapshot.plan,
+              kind: snapshot.kind,
+              used: snapshot.used,
+              limit: snapshot.limit,
+              percentage: snapshot.percentage,
+              method: req.method,
+              path: req.originalUrl || req.url,
+            },
+          });
+        } else if (snapshot.warning) {
+          capturePostHogEvent({
+            distinctId: req.user.id,
+            event: 'plan.quota_warning',
+            properties: {
+              surface,
+              plan: snapshot.plan,
+              kind: snapshot.kind,
+              used: snapshot.used,
+              limit: snapshot.limit,
+              percentage: snapshot.percentage,
+            },
+          });
+        }
+
+        // Enforcement gate. Disabled mode keeps the headers + telemetry
+        // on but never returns 429 — useful for measuring "how many
+        // requests would have been blocked?" before flipping the flag.
+        if (!isEnforcementEnabled(env)) return next();
+
+        if (snapshot.exceeded) {
+          return res.status(429).json({
+            error: snapshot.plan === 'FREE'
+              ? 'Free daily queries exhausted. Please upgrade to continue.'
+              : 'Plan quota exceeded',
+            plan: snapshot.plan,
+            kind: snapshot.kind,
+            used: snapshot.used,
+            limit: snapshot.limit,
+            remaining: snapshot.remaining,
+            upgradeRequired: snapshot.plan === 'FREE',
+            surface,
+          });
+        }
+
+        return next();
+      })
+      .catch((err) => {
+        // Quota accounting should never brick the app because a DB read
+        // hiccuped. Log and allow; provider/token accounting still records
+        // usage after a successful generation.
+        try { console.warn('[enforce-plan-quota] daily quota check failed:', err && err.message); } catch (_) {}
+        return next();
       });
-    } else if (snapshot.warning) {
-      capturePostHogEvent({
-        distinctId: req.user.id,
-        event: 'plan.quota_warning',
-        properties: {
-          surface,
-          plan: snapshot.plan,
-          kind: snapshot.kind,
-          used: snapshot.used,
-          limit: snapshot.limit,
-          percentage: snapshot.percentage,
-        },
-      });
-    }
-
-    // Enforcement gate. Disabled mode keeps the headers + telemetry
-    // on but never returns 429 — useful for measuring "how many
-    // requests would have been blocked?" before flipping the flag.
-    if (!isEnforcementEnabled(env)) return next();
-
-    if (snapshot.exceeded) {
-      return res.status(429).json({
-        error: 'Plan quota exceeded',
-        plan: snapshot.plan,
-        kind: snapshot.kind,
-        used: snapshot.used,
-        limit: snapshot.limit,
-        remaining: snapshot.remaining,
-        upgradeRequired: snapshot.plan === 'FREE',
-        surface,
-      });
-    }
-
-    return next();
   };
 }
 

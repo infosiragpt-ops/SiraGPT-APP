@@ -35,6 +35,7 @@ const MODEL_CONTEXT_LIMITS = {
   'o3-mini': 200000,
   'o3': 200000,
   'gpt-5': 400000,
+  'openai/gpt-5.5': 400000,
   'gpt-5-mini': 400000,
   // Anthropic (via OpenRouter — capped at 200k per OpenRouter's Claude routing)
   'anthropic/claude-3.5-sonnet': 200000,
@@ -57,11 +58,13 @@ const MODEL_CONTEXT_LIMITS = {
   'gemini-2.0-flash': 1000000,
   'gemini-2.5-pro': 2000000,
   'gemini-2.5-flash': 1000000,
+  'google/gemini-3.5': 2000000,
   // Meta / DeepSeek / other OpenRouter
   'meta-llama/llama-3.1-70b-instruct': 131000,
   'meta-llama/llama-3.3-70b-instruct': 131000,
   'deepseek/deepseek-chat': 65000,
   'deepseek/deepseek-r1': 65000,
+  'deepseek/deepseek-v4-pro': 1000000,
   'deepseek-v4-flash': 1000000,
   'deepseek-v4-pro': 1000000,
   'deepseek-chat': 128000,
@@ -71,6 +74,8 @@ const MODEL_CONTEXT_LIMITS = {
   'x-ai/grok-2': 131000,
   'x-ai/grok-beta': 131000,
   'x-ai/grok-4': 256000,
+  'x-ai/grok-4.2': 256000,
+  'z-ai/glm-5.1': 200000,
   // Moonshot / Kimi (OpenRouter slug)
   'moonshotai/kimi-k2.6': 262144,
 };
@@ -87,6 +92,7 @@ const MODEL_COMPLETION_LIMITS = {
   'o3-mini': 100000,
   'o3': 100000,
   'gpt-5': 128000,
+  'openai/gpt-5.5': 128000,
   'gpt-5-mini': 128000,
   'anthropic/claude-3.5-sonnet': 8192,
   'anthropic/claude-3.7-sonnet': 8192,
@@ -104,8 +110,10 @@ const MODEL_COMPLETION_LIMITS = {
   'gemini-2.0-flash': 8192,
   'gemini-2.5-pro': 65536,
   'gemini-2.5-flash': 65536,
+  'google/gemini-3.5': 65536,
   'deepseek/deepseek-chat': 8192,
   'deepseek/deepseek-r1': 65536,
+  'deepseek/deepseek-v4-pro': 384000,
   'deepseek-v4-flash': 384000,
   'deepseek-v4-pro': 384000,
   'deepseek-chat': 8192,
@@ -115,6 +123,8 @@ const MODEL_COMPLETION_LIMITS = {
   'x-ai/grok-2': 8192,
   'x-ai/grok-beta': 8192,
   'x-ai/grok-4': 32768,
+  'x-ai/grok-4.2': 32768,
+  'z-ai/glm-5.1': 32768,
   'moonshotai/kimi-k2.6': 65536,
 };
 

@@ -57,7 +57,6 @@ function classifyLLMProviders(env) {
   if (env.GROQ_API_KEY) providers.push('groq');
   if (env.DEEPSEEK_API_KEY) providers.push('deepseek');
   if (env.GOOGLE_AI_API_KEY || env.GEMINI_API_KEY) providers.push('google');
-  if (env.CEREBRAS_API_KEY) providers.push('cerebras');
   if (env.MISTRAL_API_KEY) providers.push('mistral');
   return providers;
 }

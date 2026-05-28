@@ -15,13 +15,28 @@ backend/skills/
     index.ts     # default-exports a SkillModule
 ```
 
+Instruction-only skills can also be written as:
+
+```
+backend/skills/
+  <skill_name>/
+    SKILL.md     # frontmatter + operating instructions
+```
+
 `<skill_name>` must match `manifest.name` (lowercase, snake/kebab).
+
+`SKILL.md` files are loaded as first-class skills. The registry reads
+`name`, `description`, and optional `version` from frontmatter, exposes a
+standard `read_instructions` tool, and includes the body in recommendation
+search. This lets the backend adopt operational playbooks without shipping
+new executable code for every skill.
 
 ## CLI
 
 ```
 npm run skill:list                    # list every skill the registry sees
-npm run skill:validate -- <path>      # validate one folder or skill.json
+npm run skill:recommend -- "debug a failing test"
+npm run skill:validate -- <path>      # validate one folder or skill.json/SKILL.md
 ```
 
 The CLI is implemented in `backend/src/skills/cli.ts` and runs through

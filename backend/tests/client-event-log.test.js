@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const {
   sanitizeClientEvent,
   buildClientEventAuditEntry,
+  isExpectedAuthClientEvent,
   redactText,
 } = require('../src/services/client-event-log');
 
@@ -62,5 +63,33 @@ describe('client-event-log', () => {
     assert.ok(entry.tags.includes('api-error'));
     assert.ok(entry.tags.includes('server-error'));
     assert.equal(entry.metadata.requestId, 'req_abc');
+  });
+
+  test('classifies expected auth API failures as non-alerting noise', () => {
+    const invalidLogin = sanitizeClientEvent({
+      source: 'api',
+      status: 401,
+      method: 'POST',
+      endpoint: '/auth/login',
+      message: 'Invalid credentials',
+    });
+    const staleVideoToken = sanitizeClientEvent({
+      source: 'api',
+      status: 401,
+      method: 'POST',
+      endpoint: '/api/ai/generate-video',
+      message: 'Invalid or expired token',
+    });
+    const realForbidden = sanitizeClientEvent({
+      source: 'api',
+      status: 403,
+      method: 'GET',
+      endpoint: '/admin/users',
+      message: 'Admin access required',
+    });
+
+    assert.equal(isExpectedAuthClientEvent(invalidLogin), true);
+    assert.equal(isExpectedAuthClientEvent(staleVideoToken), true);
+    assert.equal(isExpectedAuthClientEvent(realForbidden), false);
   });
 });

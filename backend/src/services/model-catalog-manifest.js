@@ -254,17 +254,20 @@ function listManifestModels({ provider = null, type = null } = {}) {
     .map((model) => normalizeModelRecord(model, model.provider, 'static_manifest'));
 }
 
-function mergeProviderModels(liveModels = [], provider) {
+function mergeProviderModels(liveModels = [], provider, options = {}) {
   const providerName = canonicalProvider(provider);
   const byName = new Map();
 
-  for (const model of listManifestModels({ provider: providerName })) {
-    byName.set(model.name, model);
+  if (options.includeManifestOnly !== false) {
+    for (const model of listManifestModels({ provider: providerName })) {
+      byName.set(model.name, model);
+    }
   }
 
   for (const liveModel of liveModels || []) {
     const normalizedLive = normalizeModelRecord(liveModel, providerName, 'api');
-    const manifestModel = byName.get(normalizedLive.name);
+    const manifestModel = byName.get(normalizedLive.name)
+      || listManifestModels({ provider: providerName }).find((model) => model.name === normalizedLive.name);
     if (!manifestModel) {
       byName.set(normalizedLive.name, normalizedLive);
       continue;

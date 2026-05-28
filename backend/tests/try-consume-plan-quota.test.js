@@ -3,17 +3,9 @@
  * extracted function so the seven /api/ai call sites it replaces
  * keep behaving byte-for-byte identically. Two properties matter:
  *
- *   1. The error strings, status codes, and body field order
- *      MATCH the previous inline implementation exactly. A client
- *      that branches off `error === 'Free monthly queries
- *      exhausted. ...'` must keep working.
+ *   1. FREE users get 3 successful calls per local day.
  *
- *   2. The FREE atomic decrement is performed via Prisma's
- *      `updateMany` with the `monthlyCallLimit: { gt: 0 }` guard.
- *      Concurrent winners get a count:1 result; losers get count:0
- *      and the function MUST return ok:false. We assert the call
- *      shape so a future Prisma upgrade that renames `updateMany`
- *      surfaces here, not in production.
+ *   2. Paid users still use the token cap check unchanged.
  */
 
 const { describe, test } = require("node:test");
@@ -25,11 +17,13 @@ const {
 
 function makePrismaStub(opts = {}) {
   const calls = [];
+  const apiUsageCalls = [];
   // Use `in` instead of `??` so `null` is a valid distinct value the
   // test can assert on (Prisma's typed client returns null when no
   // row matches a strict where clause; we want to model that).
   const hasResult = "updateManyResult" in opts;
   const updateManyResult = hasResult ? opts.updateManyResult : { count: 1 };
+  const countResult = "apiUsageCount" in opts ? opts.apiUsageCount : 0;
   return {
     user: {
       async updateMany(args) {
@@ -37,7 +31,14 @@ function makePrismaStub(opts = {}) {
         return updateManyResult;
       },
     },
+    apiUsage: {
+      async count(args) {
+        apiUsageCalls.push(args);
+        return countResult;
+      },
+    },
     _calls: () => calls,
+    _apiUsageCalls: () => apiUsageCalls,
   };
 }
 
@@ -56,26 +57,23 @@ describe("tryConsumePlanQuota — anonymous", () => {
 });
 
 describe("tryConsumePlanQuota — FREE plan", () => {
-  test("atomic decrement succeeds (count:1) → ok:true", async () => {
-    const prisma = makePrismaStub({ updateManyResult: { count: 1 } });
+  test("FREE user under daily cap → ok:true, counts today's usage", async () => {
+    const prisma = makePrismaStub({ apiUsageCount: 2 });
     const result = await tryConsumePlanQuota({
       userId: "u-free",
       prisma,
       user: { id: "u-free", plan: "FREE" },
     });
-    assert.deepEqual(result, { ok: true });
-    // Pin the Prisma call shape so a future regression that drops
-    // the `gt: 0` guard or the `decrement: 1` op fails here.
-    const [args] = prisma._calls();
-    assert.deepEqual(args.where, {
-      id: "u-free",
-      monthlyCallLimit: { gt: 0 },
-    });
-    assert.deepEqual(args.data, { monthlyCallLimit: { decrement: 1 } });
+    assert.deepEqual(result, { ok: true, remaining: 1, dailyLimit: 3 });
+    assert.equal(prisma._calls().length, 0);
+    assert.equal(prisma._apiUsageCalls().length, 1);
+    assert.equal(prisma._apiUsageCalls()[0].where.userId, "u-free");
+    assert.ok(prisma._apiUsageCalls()[0].where.timestamp.gte instanceof Date);
+    assert.ok(prisma._apiUsageCalls()[0].where.timestamp.lt instanceof Date);
   });
 
-  test("atomic decrement returns count:0 (exhausted) → 429 with legacy message", async () => {
-    const prisma = makePrismaStub({ updateManyResult: { count: 0 } });
+  test("FREE user at daily cap → 429 daily exhaustion", async () => {
+    const prisma = makePrismaStub({ apiUsageCount: 3 });
     const result = await tryConsumePlanQuota({
       userId: "u-free",
       prisma,
@@ -83,24 +81,11 @@ describe("tryConsumePlanQuota — FREE plan", () => {
     });
     assert.equal(result.ok, false);
     assert.equal(result.status, 429);
-    // Exact string. Existing client UI may branch off this — do NOT
-    // change the wording without a deliberate frontend coordination.
-    assert.equal(
-      result.body.error,
-      "Free monthly queries exhausted. Please upgrade to continue.",
-    );
+    assert.equal(result.body.error, "Free daily queries exhausted. Please upgrade to continue.");
     assert.equal(result.body.remaining, 0);
-  });
-
-  test("Prisma returns null (no row) → 429 with the same legacy message", async () => {
-    const prisma = makePrismaStub({ updateManyResult: null });
-    const result = await tryConsumePlanQuota({
-      userId: "u-free",
-      prisma,
-      user: { id: "u-free", plan: "FREE" },
-    });
-    assert.equal(result.ok, false);
-    assert.equal(result.status, 429);
+    assert.equal(result.body.dailyLimit, 3);
+    assert.equal(result.body.usedToday, 3);
+    assert.equal(result.body.upgradeRequired, true);
   });
 });
 

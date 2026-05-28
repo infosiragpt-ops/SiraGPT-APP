@@ -103,11 +103,64 @@ function sanitizeStreamError(raw: string): string {
   return raw
 }
 
+function getResponseHeader(response: Response | { headers?: { get?: (name: string) => string | null } }, name: string): string | null {
+  try {
+    const get = response?.headers?.get
+    return typeof get === "function" ? get.call(response.headers, name) : null
+  } catch {
+    return null
+  }
+}
+
 /** Login/register must not send a stale Bearer token or treat 401 as "refresh session". */
 function isCredentialHandshake(endpoint: string, method: string): boolean {
   if (method !== "POST") return false
   const pathOnly = (endpoint.split("?")[0] || "").replace(/\/$/, "")
   return pathOnly === "/auth/login" || pathOnly === "/auth/register"
+}
+
+function normalizedEndpointPath(endpoint: string): string {
+  const raw = String(endpoint || "").trim()
+  let pathOnly = raw
+  try {
+    pathOnly = new URL(raw, "https://siragpt.local").pathname
+  } catch {
+    pathOnly = raw.split("?")[0] || raw
+  }
+  if (pathOnly.startsWith("/api/")) pathOnly = pathOnly.slice(4)
+  return pathOnly.replace(/\/$/, "") || "/"
+}
+
+function isExpectedAuthApiFailure(args: {
+  endpoint: string
+  method: string
+  status?: number | null
+  message?: string
+  extra?: Record<string, unknown>
+}): boolean {
+  const status = Number(args.status)
+  if (status !== 401 && status !== 403) return false
+
+  const pathOnly = normalizedEndpointPath(args.endpoint)
+  const text = `${args.message || ""} ${JSON.stringify(args.extra || {})}`.toLowerCase()
+
+  if (status === 401 && pathOnly === "/auth/me") return true
+
+  if (
+    status === 401 &&
+    isCredentialHandshake(args.endpoint, args.method) &&
+    /invalid credentials|invalid_credentials/.test(text)
+  ) {
+    return true
+  }
+
+  if (
+    /invalid or expired token|jwt expired|token expired|\binvalid token\b|missing token|access token required|unauthorized|not authenticated|authentication required|session revoked|re-?authentication required/.test(text)
+  ) {
+    return true
+  }
+
+  return false
 }
 
 type AIStreamOptions = {
@@ -219,6 +272,7 @@ class ApiClient {
     extra?: Record<string, unknown>
   }): void {
     if (args.endpoint.startsWith("/telemetry")) return
+    if (isExpectedAuthApiFailure(args)) return
     reportClientLog({
       source: "api",
       severity: args.status && args.status >= 500 ? "error" : "warn",
@@ -329,7 +383,7 @@ class ApiClient {
         if (response.status === 429 || response.status === 503) {
           clearTimeout(timeoutId);
           if (attempt < this.MAX_RETRIES) {
-            const retryAfterMs = this._parseRetryAfter(response.headers.get('retry-after'));
+            const retryAfterMs = this._parseRetryAfter(getResponseHeader(response, 'retry-after'));
             const waitMs = retryAfterMs !== null
               ? Math.min(retryAfterMs, this.RETRY_AFTER_MAX_MS)
               // No header → fall back to exponential backoff so the
@@ -350,7 +404,7 @@ class ApiClient {
             endpoint,
             method,
             status: response.status,
-            requestId: response.headers.get("X-Request-Id"),
+            requestId: getResponseHeader(response, "X-Request-Id"),
             message: error.message,
             extra: { code: errorData.code || errorData.error || null },
           })
@@ -408,7 +462,7 @@ class ApiClient {
             endpoint,
             method,
             status: response.status,
-            requestId: response.headers.get("X-Request-Id"),
+            requestId: getResponseHeader(response, "X-Request-Id"),
             message: error.message,
             extra: { code: errorData.code || errorData.error || null },
           })
@@ -999,7 +1053,7 @@ class ApiClient {
           const message = details.error || `HTTP ${response.status}`;
 
           try {
-            if (typeof window !== 'undefined' && message && message.toLowerCase().includes('free monthly')) {
+            if (typeof window !== 'undefined' && message && (/free (monthly|daily)/.test(message.toLowerCase()))) {
               window.dispatchEvent(new CustomEvent('open-upgrade-modal', { detail: { message } }));
             }
           } catch (e) {
@@ -1022,7 +1076,7 @@ class ApiClient {
             // §7.1.3). Value can be either an integer seconds or an
             // HTTP-date; we only parse the integer form here, the
             // server-side rate limiter always emits seconds.
-            const retryAfter = parseInt(response.headers.get('retry-after') || '', 10);
+            const retryAfter = parseInt(getResponseHeader(response, 'retry-after') || '', 10);
             const delay = computeBackoff(attempt, Number.isFinite(retryAfter) ? retryAfter : undefined);
             console.warn(`[ai-stream] HTTP ${response.status} on attempt ${attempt}/${MAX_CONNECT_ATTEMPTS} — auto-reconnecting in ${delay}ms`);
             await new Promise(r => setTimeout(r, delay));
@@ -1261,7 +1315,7 @@ class ApiClient {
         try { details = await response.json(); } catch { }
         const message = details.error || `HTTP ${response.status}`;
 
-        if (typeof window !== 'undefined' && message && message.toLowerCase().includes('free monthly')) {
+        if (typeof window !== 'undefined' && message && (/free (monthly|daily)/.test(message.toLowerCase()))) {
           window.dispatchEvent(new CustomEvent('open-upgrade-modal', { detail: { message } }));
         }
 
@@ -1365,7 +1419,7 @@ class ApiClient {
         try { details = await response.json(); } catch { }
         const message = details.error || `HTTP ${response.status}`;
 
-        if (typeof window !== 'undefined' && message && message.toLowerCase().includes('free monthly')) {
+        if (typeof window !== 'undefined' && message && (/free (monthly|daily)/.test(message.toLowerCase()))) {
           window.dispatchEvent(new CustomEvent('open-upgrade-modal', { detail: { message } }));
         }
 
@@ -1396,7 +1450,7 @@ class ApiClient {
   // async getAIModels() {
   //   return this.request('/ai/models');
   // }
-  async getAIModels(type?: 'TEXT' | 'IMAGE') { // type ko optional parameter banayein
+  async getAIModels(type?: 'TEXT' | 'IMAGE' | 'VIDEO') { // type ko optional parameter banayein
     const endpoint = type ? `/ai/models?type=${type}` : '/ai/models';
     return this.request(endpoint);
   }

@@ -390,7 +390,13 @@ const ChartDisplay = ({ files, fullResponse, onImageClick }: { files: any[], ful
  * — the SAME viewer the composer uses. Skips images (they render inline
  * via FileDisplay) and Gmail-payload entries.
  */
-const MessageDocChipsInner = ({ parsedFiles }: { parsedFiles: any[] }) => {
+const MessageDocChipsInner = ({
+    parsedFiles,
+    onAttachmentPreview,
+}: {
+    parsedFiles: any[];
+    onAttachmentPreview?: (attachment: AttachmentLike, siblings: AttachmentLike[], index: number) => void;
+}) => {
     const [idx, setIdx] = React.useState<number | null>(null);
     const chips = React.useMemo(() => {
         if (!Array.isArray(parsedFiles)) return [];
@@ -435,7 +441,13 @@ const MessageDocChipsInner = ({ parsedFiles }: { parsedFiles: any[] }) => {
                 <button
                     key={att.id || i}
                     type="button"
-                    onClick={() => setIdx(i)}
+                    onClick={() => {
+                        if (onAttachmentPreview) {
+                            onAttachmentPreview(att, attachments, i);
+                        } else {
+                            setIdx(i);
+                        }
+                    }}
                     className="group/chip inline-flex max-w-full items-center gap-2 rounded-xl border border-gray-200 bg-background px-2 py-1 text-left text-sm shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-all hover:border-foreground/40 hover:shadow-sm dark:border-border/60 sm:max-w-[360px]"
                     aria-label={`Abrir ${att.name}`}
                 >
@@ -453,16 +465,18 @@ const MessageDocChipsInner = ({ parsedFiles }: { parsedFiles: any[] }) => {
                     </span>
                 </button>
             ))}
-            <UnifiedDocumentViewer
-                open={idx !== null}
-                onClose={() => setIdx(null)}
-                attachment={idx !== null ? attachments[idx] : null}
-                siblings={attachments}
-                onNavigate={(next) => {
-                    const j = attachments.findIndex(s => s === next);
-                    if (j >= 0) setIdx(j);
-                }}
-            />
+            {!onAttachmentPreview && (
+                <UnifiedDocumentViewer
+                    open={idx !== null}
+                    onClose={() => setIdx(null)}
+                    attachment={idx !== null ? attachments[idx] : null}
+                    siblings={attachments}
+                    onNavigate={(next) => {
+                        const j = attachments.findIndex(s => s === next);
+                        if (j >= 0) setIdx(j);
+                    }}
+                />
+            )}
         </div>
     );
 };
@@ -641,7 +655,7 @@ const GeneratedImageCard = ({
     );
 };
 
-const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, isStreaming, onToggleSplitView, isGeneratingImage, onDocumentPreview, children }: {
+const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, isStreaming, onToggleSplitView, isGeneratingImage, onDocumentPreview, onAttachmentPreview, children }: {
     message: any;
     user: any;
     onRegenerate: (messageId: string) => void;
@@ -650,6 +664,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     onToggleSplitView?: (content: any) => void;
     isGeneratingImage?: boolean;
     onDocumentPreview?: (target: DocumentPreviewTarget) => void;
+    onAttachmentPreview?: (attachment: AttachmentLike, siblings: AttachmentLike[], index: number) => void;
     children?: React.ReactNode;
 }) => {
     // Performance monitoring disabled to prevent overhead
@@ -1321,10 +1336,23 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                     setTableTitle(title);
                     setIsTableExpanded(true);
                 };
+                const tHead = node.children.find((child: any) => child.tagName === 'thead');
+                const tBody = node.children.find((child: any) => child.tagName === 'tbody');
+                const headers = tHead?.children?.[0]?.children?.map(getNodeText).filter((e: string) => e !== "\n") ?? [];
+                const rows = tBody?.children?.map((tr: any) => tr.children?.map(getNodeText).filter((e: string) => e !== "\n") ?? []) ?? [];
+                const selectedTableData = headers.length > 0
+                    ? { headers, rows }
+                    : null;
 
                 return (
                     <div className="group relative mt-3">
-                        <TableControls content={message.content} messageId={message.id} onExpand={handleExpand} title={title} />
+                        <TableControls
+                            content={message.content}
+                            messageId={message.id}
+                            tableData={selectedTableData}
+                            onExpand={handleExpand}
+                            title={title}
+                        />
                         <div className="overflow-x-auto w-full min-w-0 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-transparent hover:scrollbar-thumb-gray-600" style={{ WebkitOverflowScrolling: 'touch', maxWidth: '100vw' }}>
                             <table className="border-collapse border border-muted mb-3 w-full" style={{ minWidth: "520px" }}>{children}</table>
                         </div>
@@ -2647,7 +2675,10 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                         {/* Document chips — clickable, open the same
                             UnifiedDocumentViewer as the composer. Filters
                             out images (FileDisplay renders them inline). */}
-                        <MessageDocChips parsedFiles={parsedFiles} />
+                        <MessageDocChips
+                            parsedFiles={parsedFiles}
+                            onAttachmentPreview={onAttachmentPreview}
+                        />
 
                         {hasContent && (
                             // User-message bubble — tight to content.

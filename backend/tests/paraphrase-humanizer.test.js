@@ -14,6 +14,7 @@ const {
   listAITellPatterns,
   countAITellPatternsByLanguage,
   topAITellsFound,
+  topAITellsByLanguage,
   clampScore,
   replaceAITells,
   cleanEmDashOveruse,
@@ -213,6 +214,36 @@ test('humanizeChunked: aggregated aiScores stay in [0,1]', () => {
   assert.ok(r.aiScoreAfter >= 0 && r.aiScoreAfter <= 1);
 });
 
+test('topAITellsByLanguage(en): only matches English tells, ignores Spanish', () => {
+  const mixed = 'Furthermore, the results are strong. Cabe destacar que el dato es real.';
+  const en = topAITellsByLanguage(mixed, 'english');
+  assert.ok(en.find((t) => t.pattern === 'furthermore'));
+  assert.ok(!en.find((t) => t.pattern === 'cabe destacar que'));
+});
+
+test('topAITellsByLanguage(es): only matches Spanish tells', () => {
+  const mixed = 'Furthermore, the results are strong. Cabe destacar que el dato es real.';
+  const es = topAITellsByLanguage(mixed, 'spanish');
+  assert.ok(es.find((t) => t.pattern === 'cabe destacar que'));
+  assert.ok(!es.find((t) => t.pattern === 'furthermore'));
+});
+
+test('topAITellsByLanguage: unknown language returns []', () => {
+  assert.deepEqual(topAITellsByLanguage('Furthermore', 'french'), []);
+  assert.deepEqual(topAITellsByLanguage('', 'english'), []);
+});
+
+test('topAITellsByLanguage: clean text returns [] for both languages', () => {
+  assert.deepEqual(topAITellsByLanguage('No tells here at all.', 'english'), []);
+  assert.deepEqual(topAITellsByLanguage('Texto limpio sin frases sospechosas.', 'spanish'), []);
+});
+
+test('topAITellsByLanguage: respects limit per call', () => {
+  const text = 'Furthermore, moreover, additionally, delve into, navigate the data.';
+  assert.equal(topAITellsByLanguage(text, 'english', { limit: 2 }).length, 2);
+  assert.ok(topAITellsByLanguage(text, 'english', { limit: 100 }).length >= 3);
+});
+
 test('topAITellsFound: returns nothing for clean text', () => {
   assert.deepEqual(topAITellsFound('I like clean prose. No noise here.'), []);
   assert.deepEqual(topAITellsFound(''), []);
@@ -306,4 +337,44 @@ test('topAITellsFound: respects limit option', () => {
 test('topAITellsFound: clean text with no AI tells returns empty array', () => {
   const hits = topAITellsFound('The cat sat on the mat. It was a sunny day.');
   assert.deepEqual(hits, []);
+});
+
+test('estimateAIScoreDetailed: returns { score, components, weights } for AI-heavy text', () => {
+  const { estimateAIScoreDetailed } = require('../src/services/paraphrase-humanizer');
+  const aiLike = 'Furthermore, the analysis demonstrates significant impact. Moreover, results indicate strong correlation. Additionally, the methodology supports the conclusion. In conclusion, the findings are robust.';
+  const r = estimateAIScoreDetailed(aiLike);
+  assert.ok(r.score > 0.3, `AI-heavy text should score > 0.3, got ${r.score}`);
+  // Components shape
+  assert.equal(typeof r.components.tellDensity, 'number');
+  assert.equal(typeof r.components.burstinessScore, 'number');
+  assert.equal(typeof r.components.repetitiveOpenings, 'number');
+  assert.equal(typeof r.components.emDashDensity, 'number');
+  // Weights shape — sums to 1
+  const sumWeights = r.weights.tellDensity + r.weights.burstinessScore + r.weights.repetitiveOpenings + r.weights.emDashDensity;
+  assert.ok(Math.abs(sumWeights - 1) < 0.0001, `weights should sum to 1, got ${sumWeights}`);
+});
+
+test('estimateAIScoreDetailed: short input returns { score: 0, components: null }', () => {
+  const { estimateAIScoreDetailed } = require('../src/services/paraphrase-humanizer');
+  const r = estimateAIScoreDetailed('Hi.');
+  assert.equal(r.score, 0);
+  assert.equal(r.components, null);
+});
+
+test('estimateAIScoreDetailed matches estimateAIScore exactly', () => {
+  const { estimateAIScore, estimateAIScoreDetailed } = require('../src/services/paraphrase-humanizer');
+  const text = 'Furthermore, the analysis demonstrates significant impact. Moreover, results indicate strong correlation. Additionally, the methodology supports the conclusion. In conclusion, the findings are robust.';
+  assert.equal(estimateAIScoreDetailed(text).score, estimateAIScore(text));
+});
+
+test('estimateAIScoreDetailed: scores reflect weighted sum of components', () => {
+  const { estimateAIScoreDetailed } = require('../src/services/paraphrase-humanizer');
+  const text = 'Furthermore, the analysis demonstrates significant impact. Moreover, results indicate strong correlation. Additionally, the methodology supports the conclusion. In conclusion, the findings are robust.';
+  const r = estimateAIScoreDetailed(text);
+  const weighted = 0.4 * r.components.tellDensity
+    + 0.3 * r.components.burstinessScore
+    + 0.2 * r.components.repetitiveOpenings
+    + 0.1 * r.components.emDashDensity;
+  // Allow tiny rounding tolerance
+  assert.ok(Math.abs(r.score - weighted) < 0.01, `score ${r.score} ≈ weighted ${weighted}`);
 });

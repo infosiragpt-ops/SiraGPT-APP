@@ -1,0 +1,233 @@
+const assert = require('node:assert/strict');
+const { describe, it } = require('node:test');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { Document, Packer, Paragraph } = require('docx');
+const PizZip = require('pizzip');
+
+const {
+  appendToDocxBuffer,
+  buildAppendixBlocks,
+  generateSourcePreservingDocumentEdit,
+  inferDocumentTitle,
+  isSourcePreservingEditRequest,
+  loadEditableSourceFiles,
+} = require('../src/services/source-preserving-document-edit');
+const {
+  buildDocumentDeliveryPolicy,
+} = require('../src/services/agents/document-delivery-policy');
+
+async function makeDocxBuffer() {
+  const doc = new Document({
+    sections: [{
+      children: [
+        new Paragraph('Portada original UPN'),
+        new Paragraph('Capítulo 1. Introducción original'),
+      ],
+    }],
+  });
+  return Buffer.from(await Packer.toBuffer(doc));
+}
+
+describe('source-preserving document edit', () => {
+  it('detects requests to edit the uploaded document instead of creating a new file', () => {
+    const prompt = 'quiero que agregues al final el intuemtno de tesis que vamos a aplicar en esta tesis';
+
+    assert.equal(isSourcePreservingEditRequest(prompt, ['file-docx']), true);
+    assert.equal(isSourcePreservingEditRequest(prompt, []), true);
+    assert.equal(isSourcePreservingEditRequest('agrega una tabla de presupuesto', []), false);
+    assert.equal(isSourcePreservingEditRequest('agrega al final una tabla de presupuesto', []), false);
+    assert.equal(isSourcePreservingEditRequest('dame un resumen en un solo párrafo', ['file-docx']), false);
+  });
+
+  it('falls back to the newest recent editable chat attachment when the follow-up omits file ids', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-doc-'));
+    const original = await makeDocxBuffer();
+    const oldPath = path.join(tmp, 'old.docx');
+    const newPath = path.join(tmp, 'tesis.docx');
+    fs.writeFileSync(oldPath, original);
+    fs.writeFileSync(newPath, original);
+
+    const prisma = {
+      message: {
+        async findMany() {
+          return [
+            {
+              id: 'message-new',
+              files: JSON.stringify([{ id: 'file-new', name: 'tesis.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }]),
+              timestamp: new Date('2026-05-02T10:00:00Z'),
+            },
+            {
+              id: 'message-old',
+              files: [{ id: 'file-old', name: 'old.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }],
+              timestamp: new Date('2026-05-01T10:00:00Z'),
+            },
+          ];
+        },
+      },
+      file: {
+        async findMany(query) {
+          assert.deepEqual(query.where.id.in, ['file-new', 'file-old']);
+          return [{
+            id: 'file-new',
+            filename: 'tesis.docx',
+            originalName: 'tesis.docx',
+            mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            size: original.length,
+            path: newPath,
+            extractedText: '“Impacto de la informalidad de las MYPES en la recaudación fiscal de Lima Metropolitana”',
+          }];
+        },
+      },
+    };
+
+    const files = await loadEditableSourceFiles(prisma, {
+      userId: 'user-1',
+      chatId: 'chat-1',
+      fileIds: [],
+      prompt: 'agrega al final el instrumento de tesis en anexos',
+    });
+
+    assert.equal(files.length, 1);
+    assert.equal(files[0].id, 'file-new');
+    assert.equal(files[0].path, newPath);
+  });
+
+  it('promotes source-preserving edits to doc_required so an artifact is returned', () => {
+    const policy = buildDocumentDeliveryPolicy({
+      goal: 'agrega al final un anexo con el instrumento de tesis',
+      files: ['file-docx'],
+    });
+
+    assert.equal(policy.mode, 'doc_required');
+    assert.equal(policy.autoGenerate, true);
+  });
+
+  it('appends instrument content into word/document.xml without replacing original body text', async () => {
+    const original = await makeDocxBuffer();
+    const sourceText = [
+      '“Impacto de la informalidad de las MYPES en la recaudación fiscal de Lima Metropolitana durante el periodo 2020-2025”',
+      'Capítulo 1. Introducción',
+      'La informalidad de las MYPES afecta la recaudación fiscal.',
+    ].join('\n');
+    const blocks = buildAppendixBlocks({
+      prompt: 'agrega al final el instrumento de tesis',
+      sourceText,
+      originalName: 'tesis.docx',
+    });
+
+    const edited = appendToDocxBuffer(original, blocks);
+    const xml = new PizZip(edited).file('word/document.xml').asText();
+
+    assert.match(xml, /Portada original UPN/);
+    assert.match(xml, /Capítulo 1\. Introducción original/);
+    assert.match(xml, /ANEXOS/);
+    assert.match(xml, /Instrumento de recolección de datos/);
+    assert.match(xml, /informalidad de las MYPES/i);
+    assert.match(xml, /recaudación fiscal/i);
+    assert.doesNotMatch(xml, /Solicitud del usuario:/);
+    assert.doesNotMatch(xml, /siraGPT Document Pipeline/);
+  });
+
+  it('returns a downloadable edited DOCX artifact instead of failing after validation', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-generate-'));
+    const originalPath = path.join(tmp, 'tesis.docx');
+    fs.writeFileSync(originalPath, await makeDocxBuffer());
+
+    const result = await generateSourcePreservingDocumentEdit({
+      sourceFile: {
+        id: 'file-docx',
+        path: originalPath,
+        originalName: 'tesis.docx',
+        filename: 'tesis.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        extractedText: '“Impacto de la informalidad de las MYPES en la recaudación fiscal de Lima Metropolitana”',
+      },
+      prompt: 'agrega al final el instrumento de tesis en anexos',
+      displayPrompt: 'agrega al final el instrumento de tesis en anexos',
+      userId: 'user-1',
+      chatId: 'chat-1',
+    });
+
+    assert.equal(result.format, 'docx');
+    assert.equal(result.file.format, 'docx');
+    assert.match(result.file.filename, /con_anexos\.docx$/);
+    assert.ok(result.file.url);
+    assert.equal(Object.prototype.hasOwnProperty.call(result.file, 'htmlPreview'), true);
+
+    const edited = fs.readFileSync(result.artifact.path);
+    const xml = new PizZip(edited).file('word/document.xml').asText();
+    assert.match(xml, /Portada original UPN/);
+    assert.match(xml, /ANEXOS/);
+    assert.match(xml, /Instrumento de recolección de datos/);
+  });
+
+  it('keeps structured text artifacts valid while appending content', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-json-'));
+    const originalPath = path.join(tmp, 'tesis.json');
+    fs.writeFileSync(originalPath, JSON.stringify({ original: true, title: 'Tesis base' }, null, 2));
+
+    const result = await generateSourcePreservingDocumentEdit({
+      sourceFile: {
+        id: 'file-json',
+        path: originalPath,
+        originalName: 'tesis.json',
+        filename: 'tesis.json',
+        mimeType: 'application/json',
+        extractedText: '“Impacto de la informalidad de las MYPES en la recaudación fiscal de Lima Metropolitana”',
+      },
+      prompt: 'agrega al final el instrumento de tesis en anexos',
+      displayPrompt: 'agrega al final el instrumento de tesis en anexos',
+      userId: 'user-1',
+      chatId: 'chat-1',
+    });
+
+    assert.equal(result.format, 'json');
+    assert.equal(result.validation.passed, true);
+
+    const parsed = JSON.parse(fs.readFileSync(result.artifact.path, 'utf8'));
+    assert.equal(parsed.original, true);
+    assert.match(parsed._siraGPT_appendix.content, /ANEXOS/);
+    assert.match(parsed._siraGPT_appendix.content, /Instrumento de recolección de datos/);
+  });
+
+  it('keeps YAML artifacts valid and passing MIME validation while appending content', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-yaml-'));
+    const originalPath = path.join(tmp, 'tesis.yaml');
+    fs.writeFileSync(originalPath, 'original: true\ntitle: Tesis base\n');
+
+    const result = await generateSourcePreservingDocumentEdit({
+      sourceFile: {
+        id: 'file-yaml',
+        path: originalPath,
+        originalName: 'tesis.yaml',
+        filename: 'tesis.yaml',
+        mimeType: 'application/yaml',
+        extractedText: '“Impacto de la informalidad de las MYPES en la recaudación fiscal de Lima Metropolitana”',
+      },
+      prompt: 'agrega al final el instrumento de tesis en anexos',
+      displayPrompt: 'agrega al final el instrumento de tesis en anexos',
+      userId: 'user-1',
+      chatId: 'chat-1',
+    });
+
+    assert.equal(result.format, 'yaml');
+    assert.equal(result.validation.passed, true);
+    assert.equal(result.validation.checks.mime_type, true);
+
+    const edited = fs.readFileSync(result.artifact.path, 'utf8');
+    assert.match(edited, /original: true/);
+    assert.match(edited, /# SiraGPT appendix/);
+    assert.match(edited, /ANEXOS/);
+  });
+
+  it('infers the thesis title from quoted source text instead of using the prompt as title', () => {
+    const title = inferDocumentTitle(
+      'FACULTAD DE XXXXX\n“Impacto de la informalidad de las MYPES en la recaudación fiscal de Lima Metropolitana durante el periodo 2020-2025”',
+      'tesis.docx',
+    );
+
+    assert.equal(title, 'Impacto de la informalidad de las MYPES en la recaudación fiscal de Lima Metropolitana durante el periodo 2020-2025');
+  });
+});

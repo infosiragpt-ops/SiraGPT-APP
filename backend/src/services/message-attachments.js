@@ -1,10 +1,14 @@
 const fs = require('fs');
 const path = require('path');
 const ocrEngine = require('./ocr-engine');
+const {
+  MAX_SIMULTANEOUS_DOCUMENTS,
+} = require('../config/document-batch-limits');
 
 const BACKEND_ROOT = path.resolve(__dirname, '..', '..');
 
 const OCR_CONCURRENCY = Math.max(1, Number(process.env.MESSAGE_ATTACHMENTS_OCR_CONCURRENCY) || 3);
+const BULK_CONTEXT_THRESHOLD = 50;
 
 let _pLimitMod;
 async function loadPLimit() {
@@ -20,6 +24,19 @@ async function mapWithLimit(items, fn, concurrency = OCR_CONCURRENCY) {
   const pLimit = await loadPLimit();
   const limit = pLimit(Math.max(1, Math.min(concurrency, items.length)));
   return Promise.all(items.map((item, idx) => limit(() => fn(item, idx))));
+}
+
+function uniqueFileIds(fileIds = [], max = MAX_SIMULTANEOUS_DOCUMENTS) {
+  if (!Array.isArray(fileIds)) return [];
+  return Array.from(new Set(fileIds.map(String).filter(Boolean))).slice(0, max);
+}
+
+function perFilePromptBudget(maxChars, totalFiles, { bulkMin = 160, normalMin = 1200, headerReserve = 180 } = {}) {
+  const requested = Number(maxChars) || 36000;
+  const total = Math.max(1, Number(totalFiles) || 1);
+  const proportional = Math.floor(requested / total) - headerReserve;
+  const floor = total >= BULK_CONTEXT_THRESHOLD ? bulkMin : normalMin;
+  return Math.max(floor, proportional);
 }
 
 function compactString(value, max = 120000) {
@@ -112,7 +129,7 @@ function extractFileIdsFromMessageFiles(input) {
   };
 
   visit(value);
-  return Array.from(new Set(ids.map(String).filter(Boolean))).slice(0, 20);
+  return uniqueFileIds(ids);
 }
 
 function resolveStoredFilePath(row = {}, userId = '') {
@@ -204,7 +221,7 @@ function normalizeClientMetadata(input, fileIds = []) {
 
 async function loadFileRows(prisma, userId, fileIds = []) {
   if (!prisma || !userId || !Array.isArray(fileIds) || fileIds.length === 0) return [];
-  const ids = Array.from(new Set(fileIds.map(String).filter(Boolean))).slice(0, 20);
+  const ids = uniqueFileIds(fileIds);
   if (ids.length === 0) return [];
   try {
     return await prisma.file.findMany({
@@ -456,7 +473,7 @@ function buildBalancedExcerpt(text, maxChars, query = '') {
   const source = isProfessionalDocumentSynthesisRequest(query)
     ? safeText(prepareDocumentTextForProfessionalSynthesis(text), '')
     : safeText(text, '');
-  const budget = Math.max(1200, Number(maxChars) || 6000);
+  const budget = Math.max(160, Number(maxChars) || 6000);
   if (source.length <= budget) return source;
 
   const normalized = normalizeForSearch(source);
@@ -521,7 +538,7 @@ async function resolveTranscriptionFileIds(prisma, {
   providedFileIds = [],
   recentWindowMs = 15 * 60 * 1000,
 } = {}) {
-  const provided = Array.from(new Set((Array.isArray(providedFileIds) ? providedFileIds : []).map(String).filter(Boolean))).slice(0, 20);
+  const provided = uniqueFileIds(Array.isArray(providedFileIds) ? providedFileIds : []);
   if (provided.length > 0 || !prisma || !userId) return provided;
 
   if (chatId && prisma.chat?.findFirst && prisma.message?.findMany) {
@@ -543,11 +560,11 @@ async function resolveTranscriptionFileIds(prisma, {
         ids.push(...extractFileIdsFromMessageFiles(message.files));
       }
 
-      const unique = Array.from(new Set(ids.map(String).filter(Boolean))).slice(0, 20);
+      const unique = uniqueFileIds(ids);
       if (unique.length > 0) {
         const rows = await loadFileRows(prisma, userId, unique);
         const allowed = new Set(rows.filter(isReadableFileCandidate).map((row) => row.id));
-        const resolved = unique.filter((id) => allowed.has(id)).slice(0, 8);
+        const resolved = unique.filter((id) => allowed.has(id)).slice(0, MAX_SIMULTANEOUS_DOCUMENTS);
         if (resolved.length > 0) return resolved;
       }
     }
@@ -576,7 +593,7 @@ async function resolveTranscriptionFileIds(prisma, {
 }
 
 async function serializeMessageAttachments(prisma, { userId, fileIds = [], clientMetadata = [] } = {}) {
-  const ids = Array.from(new Set((Array.isArray(fileIds) ? fileIds : []).map(String).filter(Boolean))).slice(0, 20);
+  const ids = uniqueFileIds(Array.isArray(fileIds) ? fileIds : []);
   if (ids.length === 0) return [];
 
   const rows = await loadFileRows(prisma, userId, ids);
@@ -622,7 +639,7 @@ async function buildUploadedFileContext(prisma, {
   maxChars = 36000,
   evidenceLimit = 18,
 } = {}) {
-  const ids = Array.from(new Set((Array.isArray(fileIds) ? fileIds : []).map(String).filter(Boolean))).slice(0, 8);
+  const ids = uniqueFileIds(Array.isArray(fileIds) ? fileIds : []);
   if (ids.length === 0) return '';
   const rows = await loadFileRows(prisma, userId, ids);
   const ocrRows = await mapWithLimit(rows, (row) => ensureImageOcr(prisma, row, userId));
@@ -632,7 +649,12 @@ async function buildUploadedFileContext(prisma, {
     .filter((row) => hasUsefulExtractedText(row.documentText));
   if (withText.length === 0) return '';
 
-  const perFileBudget = Math.max(1500, Math.floor(maxChars / withText.length));
+  const perFileBudget = perFilePromptBudget(maxChars, withText.length, {
+    bulkMin: 180,
+    normalMin: 1200,
+    headerReserve: withText.length >= BULK_CONTEXT_THRESHOLD ? 180 : 120,
+  });
+  const bulkBatch = withText.length >= BULK_CONTEXT_THRESHOLD;
   const bibliographyRequest = isBibliographyRequest(query);
   const deepQuestion = isDeepDocumentQuestion(query) || bibliographyRequest;
   const blocks = await mapWithLimit(withText, async (row, index) => {
@@ -668,14 +690,15 @@ async function buildUploadedFileContext(prisma, {
       ? [
         'Contenido relevante recuperado desde todo el documento:',
         ...effectiveEvidence.map((item, evidenceIndex) => {
-          const text = safeText(item.text, '').slice(0, Math.max(700, Math.floor(perFileBudget / Math.max(1, effectiveEvidence.length))));
+          const evidenceFloor = bulkBatch ? 120 : 700;
+          const text = safeText(item.text, '').slice(0, Math.max(evidenceFloor, Math.floor(perFileBudget / Math.max(1, effectiveEvidence.length))));
           return `Evidencia ${evidenceIndex + 1} [${sourceLabelForEvidence(item)}]: ${text.replace(/\s+/g, ' ')}`;
         }),
       ].join('\n\n')
       : spreadsheetBibliography
         ? compactString(
           [tableMarkdown, effectiveDocumentText].filter(Boolean).join('\n\n'),
-          Math.max(perFileBudget, maxChars),
+          bulkBatch ? perFileBudget : Math.max(perFileBudget, maxChars),
         )
         : buildBalancedExcerpt(effectiveDocumentText, perFileBudget, query);
     const clipped = effectiveEvidence.length
@@ -712,7 +735,7 @@ async function buildUploadedFileContext(prisma, {
       analysis?.id ? `analysisId: ${analysis.id}` : null,
       analysis?.summary ? `resumen tecnico: ${analysis.summary}` : null,
       analysis?.chunkCount ? `fragmentos analizados: ${analysis.chunkCount}` : null,
-      query ? `pregunta del usuario: ${query}` : null,
+      query && !bulkBatch ? `pregunta del usuario: ${query}` : null,
       '',
       selectedText + clipped + firstChunks + tableSummary,
     ].filter(Boolean).join('\n');
@@ -723,6 +746,8 @@ async function buildUploadedFileContext(prisma, {
     'Usa este contenido para responder sobre el documento pegado/subido. Si el usuario pide analisis, resumen o conclusiones, responde desde la evidencia relevante del documento completo y no desde portada, indice, autores o metadatos preliminares.',
     'Para analisis profesionales: sintetiza con criterio academico/ejecutivo, no copies el indice, no enumeres metadatos internos y no empieces con "Indice de contenidos".',
     wantsSingleParagraphSynthesis(query) ? 'El usuario pidio un solo parrafo: la respuesta final debe ser exactamente un parrafo, sin titulo, sin viñetas, sin tabla y sin saltos de seccion.' : '',
+    query ? `Pregunta del usuario: ${query}` : '',
+    bulkBatch ? `Lote grande detectado: ${withText.length} documentos adjuntos. Cada bloque incluye una muestra breve y los documentos completos quedan referenciados por id para recuperación adicional.` : '',
     'Para evidencia estructurada adicional llama docintel_retrieve/docintel_extract_tables; para busqueda semantica general llama rag_retrieve.',
     '',
     blocks.join('\n\n---\n\n'),
@@ -730,7 +755,7 @@ async function buildUploadedFileContext(prisma, {
 }
 
 async function buildTranscriptionTextFromFiles(prisma, { userId, fileIds = [], maxChars = 120000 } = {}) {
-  const ids = Array.from(new Set((Array.isArray(fileIds) ? fileIds : []).map(String).filter(Boolean))).slice(0, 8);
+  const ids = uniqueFileIds(Array.isArray(fileIds) ? fileIds : []);
   if (ids.length === 0) return '';
 
   const rows = await loadFileRows(prisma, userId, ids);
@@ -750,7 +775,11 @@ async function buildTranscriptionTextFromFiles(prisma, { userId, fileIds = [], m
     return withText[0].text.slice(0, maxChars).trim();
   }
 
-  const perFileBudget = Math.max(1500, Math.floor(maxChars / withText.length));
+  const perFileBudget = perFilePromptBudget(maxChars, withText.length, {
+    bulkMin: 180,
+    normalMin: 1500,
+    headerReserve: withText.length >= BULK_CONTEXT_THRESHOLD ? 80 : 0,
+  });
   return withText.map((row, index) => {
     const clipped = row.text.length > perFileBudget;
     return [

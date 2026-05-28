@@ -1457,7 +1457,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `tinyglobby` | 0.2.16 | MIT | [link](https://github.com/SuperchupuDev/tinyglobby) |
 | `tldts` | 6.1.86 | MIT | [link](https://github.com/remusao/tldts) |
 | `tldts-core` | 6.1.86 | MIT | [link](https://github.com/remusao/tldts) |
-| `tmp` | 0.2.5 | MIT | [link](https://github.com/raszi/node-tmp) |
+| `tmp` | 0.2.6 | MIT | [link](https://github.com/raszi/node-tmp) |
 | `to-regex-range` | 5.0.1 | MIT | [link](https://github.com/micromatch/to-regex-range) |
 | `toad-cache` | 3.7.0 | MIT | [link](https://github.com/kibertoad/toad-cache) |
 | `toidentifier` | 1.0.1 | MIT | [link](https://github.com/component/toidentifier) |

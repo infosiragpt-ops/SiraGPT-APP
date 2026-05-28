@@ -59,6 +59,7 @@ cleanup_frontend_container_conflicts() {
   # interrupted deploys. When that happens, `docker compose up` fails with
   # "container name is already in use" even though the new image built fine.
   docker compose -f "$COMPOSE_FILE" rm -sf "$FRONTEND_SERVICE" >/dev/null 2>&1 || true
+  docker rm -f siragpt-frontend-1 >/dev/null 2>&1 || true
 
   ids="$(
     docker ps -aq \
@@ -74,6 +75,10 @@ cleanup_frontend_container_conflicts() {
   # the exact name Docker later refuses to recreate.
   if docker ps -aq --filter "name=^/siragpt-frontend-1$" | grep -q .; then
     docker rm -f siragpt-frontend-1 >/dev/null 2>&1 || true
+  fi
+
+  if docker ps -aq --filter "name=^/siragpt-frontend-1$" | grep -q .; then
+    fail "Unable to remove existing siragpt-frontend-1 container before recreate"
   fi
 }
 

@@ -78,10 +78,10 @@ test('sanitizeTaskRecord: truncates very long agentGoal/displayGoal/systemContra
   assert.equal(out.displayGoal.length, 4000);
 });
 
-test('sanitizeTaskRecord: caps fileIds to 20 entries and stringifies', () => {
-  const ids = Array.from({ length: 50 }, (_, i) => i);
+test('sanitizeTaskRecord: caps fileIds to 300 entries and stringifies', () => {
+  const ids = Array.from({ length: 350 }, (_, i) => i);
   const out = taskStore.sanitizeTaskRecord({ taskId: 't', userId: 'u', fileIds: ids });
-  assert.equal(out.fileIds.length, 20);
+  assert.equal(out.fileIds.length, 300);
   assert.equal(typeof out.fileIds[0], 'string');
 });
 
