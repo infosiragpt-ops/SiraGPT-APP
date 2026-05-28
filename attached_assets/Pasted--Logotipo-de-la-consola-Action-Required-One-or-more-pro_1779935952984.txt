@@ -1,0 +1,59 @@
+
+Logotipo de la consola
+
+
+Action Required: One or more projects enabled with Gemini API (generativelanguage.googleapis.com) have unrestricted API keys. To prevent unauthorized usage and costs, restrict these keys or switch to Authorization keys in APIs & Services > Credentials. This banner may persist for 24 hours after you address the issue. Leer más
+Google Auth Platform
+/
+/
+ID de cliente para Aplicación web
+Nombre
+
+El nombre de tu cliente de OAuth 2.0. Este nombre solo se usa para identificar al cliente en la consola y no se mostrará a los usuarios finales.
+
+Los dominios de los URI que agregues a continuación se incorporarán automáticamente a tu pantalla de consentimiento de OAuth como dominios autorizados .
+
+Orígenes autorizados de JavaScript
+Para usar con solicitudes de un navegador
+URI 1 
+
+URI 2 
+
+
+URIs de redireccionamiento autorizados
+Para usar con solicitudes de un servidor web
+URI 1 
+
+URI 2 
+
+URI 3 
+
+Nota: La configuración puede tardar entre 5 minutos y algunas horas en aplicarse
+
+Additional information
+ID de cliente
+1066725921326-tl7ujfjprnovdii9o0funh0boh6ju2sl.apps.googleusercontent.com
+Fecha de creación
+31 de enero de 2026, 10:08:10 a.m. GMT-4
+Última fecha de uso
+20 de mayo de 2026 (Note: this data could be delayed by a day or more.)
+
+Los clientes de OAuth inactivos están sujetos a eliminación si no se usan durante 6 meses. Recibirás una notificación sobre la eliminación por inactividad y podrás restablecer los clientes hasta 30 días después de la eliminación. Learn more 
+Secretos del cliente
+Si estás en proceso de cambiar los secretos del cliente, puedes rotarlos de forma manual sin tiempo de inactividad. Más información 
+
+Tener más de un secreto aumenta los riesgos de seguridad. Inhabilita y borra el secreto anterior una vez que hayas verificado que tu app usa el secreto nuevo en lugar del anterior.
+
+Ya no se pueden ver ni descargar los secretos del cliente. Si perdiste el secreto que aparece a continuación, agrega uno nuevo. Recuerda almacenar los secretos del cliente de forma segura y tratarlos con mucho cuidado. Los secretos nunca deben registrarse en repositorios de código. Más información 
+Secreto del cliente
+****SMV-
+Fecha de creación
+31 de enero de 2026, 10:08:10 a.m. GMT-4
+Estado
+Habilitada
+Secreto del cliente
+****A-L6
+Fecha de creación
+1 de febrero de 2026, 4:36:49 a.m. GMT-4
+Estado
+Habilitada
