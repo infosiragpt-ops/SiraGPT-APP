@@ -23,12 +23,11 @@ const EXPLICIT_DOCUMENT_OUTPUT_RE = /\b(?:en|como|a)\s+(?:un\s+|una\s+)?(?:word|
 
 let sourcePreservingEditMod = null;
 function isSourcePreservingEdit(requestText, files) {
-  if (!Array.isArray(files) || files.length === 0) return false;
   try {
     if (!sourcePreservingEditMod) {
       sourcePreservingEditMod = require('../source-preserving-document-edit');
     }
-    return sourcePreservingEditMod.isSourcePreservingEditRequest(requestText, files);
+    return sourcePreservingEditMod.isSourcePreservingEditRequest(requestText, Array.isArray(files) ? files : []);
   } catch {
     return false;
   }

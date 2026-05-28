@@ -79,8 +79,12 @@ const MAGICLESS_DECLARED_MIMES = new Set([
   'text/markdown',
   'text/html',
   'text/xml',
+  'text/yaml',
+  'text/x-yaml',
   'application/json',
   'application/xml',
+  'application/yaml',
+  'application/x-yaml',
   'application/rtf',
   'text/rtf',
   'image/svg+xml',
@@ -107,6 +111,8 @@ const EXTENSION_TO_MIME = {
   htm:  'text/html',
   json: 'application/json',
   xml:  'application/xml',
+  yaml: 'application/yaml',
+  yml:  'application/yaml',
 };
 
 function normaliseExtension(ext) {

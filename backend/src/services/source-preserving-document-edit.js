@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const PizZip = require('pizzip');
 const ExcelJS = require('exceljs');
+const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
 const { renderPreview } = require('./doc-preview');
 const {
   saveArtifact,
@@ -27,15 +28,20 @@ function isSourcePreservingEditRequest(prompt, files = []) {
   const text = normalizeText(prompt);
   if (!text) return false;
   const hasFiles = Array.isArray(files) ? files.length > 0 : Boolean(files);
-  if (!hasFiles) return false;
 
   const editVerb = /\b(agreg\w*|anad\w*|insert\w*|incorpor\w*|inclu\w*|pon|poner|coloc\w*|adjunt\w*|modific\w*|edit\w*|corrig\w*|correg\w*|mejor\w*|actualiz\w*|reescrib\w*|reemplaz\w*|quit\w*|elimin\w*|complet\w*)\b/.test(text);
-  const existingDocRef = /\b(mi|mismo|misma|este|esta|ese|esa|documento|archivo|adjunto|subido|cargado|word|docx|excel|xlsx|pptx|powerpoint|pdf)\b/.test(text);
+  const existingDocRef = /\b(mi|mismo|misma|este|esta|ese|esa|documento|archivo|adjunto|subido|cargado|word|docx|excel|xlsx|pptx|powerpoint|pdf|tesis)\b/.test(text);
   const appendLocation = /\b(al final|final|anexo|anexos|apendice|ultima pagina|ultima hoja|nueva hoja|nueva pagina|nueva diapositiva)\b/.test(text);
   const preservation = /\b(sin cambiar|no cambies|no modificar lo demas|mismo word|mismo documento|conservar|preservar|mantener)\b/.test(text);
   const instrument = /\b(instrumento|instrument|intuemtno|instumento|cuestionario|encuesta|escala|anexo)\b/.test(text);
+  const documentRegion = /\b(portada|caratula|t[ií]tulo|encabezado|pie de pagina|indice|tabla|hoja|celda|fila|columna|diapositiva|pagina|seccion|capitulo)\b/.test(text);
+  const strongImplicitFollowUp = appendLocation && (instrument || preservation || /\btesis\b/.test(text));
 
-  return editVerb && (existingDocRef || appendLocation || preservation || instrument);
+  if (!editVerb) return false;
+  if (hasFiles) return existingDocRef || appendLocation || preservation || instrument || documentRegion;
+  return preservation
+    || (existingDocRef && (appendLocation || instrument || documentRegion))
+    || strongImplicitFollowUp;
 }
 
 function isDocxFile(file = {}) {
@@ -48,6 +54,47 @@ function isXlsxFile(file = {}) {
   const mime = normalizeText(file.mimeType || file.type);
   const name = normalizeText(file.originalName || file.filename || file.name);
   return mime.includes('spreadsheet') || mime.includes('excel') || /\.xlsx$/i.test(name);
+}
+
+function extensionForFile(file = {}) {
+  const name = String(file.originalName || file.filename || file.name || '').toLowerCase();
+  const ext = path.extname(name).replace(/^\./, '').toLowerCase();
+  if (ext === 'markdown') return 'md';
+  return ext;
+}
+
+function isPdfFile(file = {}) {
+  const mime = normalizeText(file.mimeType || file.type);
+  const name = normalizeText(file.originalName || file.filename || file.name);
+  return mime.includes('pdf') || /\.pdf$/i.test(name);
+}
+
+const TEXT_LIKE_EXTENSIONS = new Set(['txt', 'md', 'markdown', 'csv', 'html', 'htm', 'svg', 'json', 'xml', 'yaml', 'yml']);
+function textLikeFormatForFile(file = {}) {
+  const ext = extensionForFile(file);
+  if (TEXT_LIKE_EXTENSIONS.has(ext)) return ext === 'markdown' ? 'md' : ext;
+  const mime = normalizeText(file.mimeType || file.type || file.contentType);
+  if (mime.includes('json')) return 'json';
+  if (mime.includes('xml')) return mime.includes('svg') ? 'svg' : 'xml';
+  if (mime.includes('csv')) return 'csv';
+  if (mime.includes('markdown')) return 'md';
+  if (mime.includes('html')) return 'html';
+  if (mime.includes('svg')) return 'svg';
+  if (mime.includes('yaml') || mime.includes('yml')) return 'yaml';
+  if (mime.startsWith('text/')) return 'txt';
+  return '';
+}
+
+function isTextLikeFile(file = {}) {
+  return Boolean(textLikeFormatForFile(file));
+}
+
+function isSupportedSourcePreservingFile(file = {}) {
+  return isDocxFile(file) || isXlsxFile(file) || isPdfFile(file) || isTextLikeFile(file);
+}
+
+function supportedSourceEditLabel() {
+  return 'DOCX, XLSX, PDF, TXT, Markdown, CSV, HTML, SVG, JSON, XML o YAML';
 }
 
 function resolveStoredFilePath(row = {}, userId = '') {
@@ -70,8 +117,79 @@ function resolveStoredFilePath(row = {}, userId = '') {
   }) || null;
 }
 
-async function loadEditableSourceFiles(prisma, { userId, fileIds = [] } = {}) {
-  const ids = Array.from(new Set((Array.isArray(fileIds) ? fileIds : []).map(String).filter(Boolean))).slice(0, MAX_SIMULTANEOUS_DOCUMENTS);
+function normalizeFileIdList(fileIds = []) {
+  return Array.from(new Set((Array.isArray(fileIds) ? fileIds : [])
+    .map((value) => {
+      if (!value) return '';
+      if (typeof value === 'string') return value;
+      if (typeof value === 'object') return value.id || value.fileId || value.attachmentId || '';
+      return String(value || '');
+    })
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)))
+    .slice(0, MAX_SIMULTANEOUS_DOCUMENTS);
+}
+
+function parseMessageFiles(files) {
+  if (!files) return [];
+  if (Array.isArray(files)) return files;
+  if (typeof files === 'string') {
+    try {
+      const parsed = JSON.parse(files);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+function fileRefId(file) {
+  if (!file) return '';
+  if (typeof file === 'string') return file.trim();
+  if (typeof file === 'object') return String(file.id || file.fileId || file.attachmentId || '').trim();
+  return '';
+}
+
+function isPotentialEditableAttachmentRef(file) {
+  if (!file) return false;
+  if (typeof file === 'string') return Boolean(file.trim());
+  if (typeof file !== 'object') return false;
+  const mime = normalizeText(file.mimeType || file.type || file.contentType);
+  const name = normalizeText(file.name || file.originalName || file.filename || file.path || '');
+  if (mime.startsWith('image/') || file.type === 'image') return false;
+  return /\.(docx?|xlsx?|pdf|csv|txt|md|markdown|html?|svg|json|xml|ya?ml)$/i.test(name)
+    || /\b(word|wordprocessingml|spreadsheet|excel|pdf|csv|plain|markdown|html|svg|json|xml|yaml)\b/.test(mime);
+}
+
+async function resolveRecentEditableFileIds(prisma, { chatId, prompt } = {}) {
+  if (!chatId || !prisma?.message?.findMany || !isSourcePreservingEditRequest(prompt, [])) return [];
+  const messages = await prisma.message.findMany({
+    where: { chatId, deletedAt: null },
+    select: { id: true, files: true, timestamp: true },
+    orderBy: { timestamp: 'desc' },
+    take: 25,
+  }).catch(() => []);
+  const seen = new Set();
+  const ids = [];
+  for (const message of messages) {
+    for (const file of parseMessageFiles(message.files)) {
+      if (!isPotentialEditableAttachmentRef(file)) continue;
+      const id = fileRefId(file);
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      ids.push(id);
+      if (ids.length >= MAX_SIMULTANEOUS_DOCUMENTS) return ids;
+    }
+  }
+  return ids;
+}
+
+async function loadEditableSourceFiles(prisma, { userId, fileIds = [], chatId = null, prompt = '' } = {}) {
+  let ids = normalizeFileIdList(fileIds);
+  if (ids.length === 0) {
+    ids = await resolveRecentEditableFileIds(prisma, { chatId, prompt });
+  }
   if (!prisma?.file?.findMany || !userId || ids.length === 0) return [];
   const rows = await prisma.file.findMany({
     where: { id: { in: ids }, userId },
@@ -294,6 +412,189 @@ async function appendToXlsxBuffer(buffer, blocks) {
   return Buffer.from(out);
 }
 
+function nonPageBreakBlocks(blocks) {
+  return blocks.filter((item) => item.kind !== 'pageBreak' && String(item.text || '').trim());
+}
+
+function blocksToPlainText(blocks) {
+  return nonPageBreakBlocks(blocks)
+    .map((item) => {
+      const text = String(item.text || '').trim();
+      if (item.kind === 'heading1') return `# ${text}`;
+      if (item.kind === 'heading2') return `## ${text}`;
+      if (item.kind === 'heading3') return `### ${text}`;
+      return text;
+    })
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+function htmlEscape(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function csvEscape(value) {
+  const text = String(value ?? '');
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function appendToCsvBuffer(buffer, blocks) {
+  const original = buffer.toString('utf8');
+  const prefix = original.endsWith('\n') ? '' : '\n';
+  const rows = [
+    ['SiraGPT appendix'],
+    ...nonPageBreakBlocks(blocks).map((item) => [item.text]),
+  ].map((row) => row.map(csvEscape).join(',')).join('\n');
+  return Buffer.from(`${original}${prefix}${rows}\n`, 'utf8');
+}
+
+function appendToJsonBuffer(buffer, blocks) {
+  const parsed = JSON.parse(buffer.toString('utf8'));
+  const appendix = {
+    kind: 'siraGPT_appendix',
+    content: blocksToPlainText(blocks),
+    blocks: nonPageBreakBlocks(blocks).map((item) => ({ kind: item.kind, text: item.text })),
+  };
+  if (Array.isArray(parsed)) {
+    return Buffer.from(`${JSON.stringify([...parsed, appendix], null, 2)}\n`, 'utf8');
+  }
+  if (parsed && typeof parsed === 'object') {
+    const keyBase = '_siraGPT_appendix';
+    let key = keyBase;
+    let counter = 2;
+    while (Object.prototype.hasOwnProperty.call(parsed, key)) {
+      key = `${keyBase}_${counter}`;
+      counter += 1;
+    }
+    return Buffer.from(`${JSON.stringify({ ...parsed, [key]: appendix }, null, 2)}\n`, 'utf8');
+  }
+  return Buffer.from(`${JSON.stringify({ value: parsed, _siraGPT_appendix: appendix }, null, 2)}\n`, 'utf8');
+}
+
+function appendToHtmlBuffer(buffer, blocks) {
+  const original = buffer.toString('utf8');
+  const section = [
+    '<section data-siragpt-appendix="true">',
+    ...nonPageBreakBlocks(blocks).map((item) => {
+      const text = htmlEscape(item.text);
+      if (item.kind === 'heading1') return `<h1>${text}</h1>`;
+      if (item.kind === 'heading2') return `<h2>${text}</h2>`;
+      if (item.kind === 'heading3') return `<h3>${text}</h3>`;
+      return `<p>${text}</p>`;
+    }),
+    '</section>',
+  ].join('\n');
+  if (/<\/body>/i.test(original)) return Buffer.from(original.replace(/<\/body>/i, `${section}\n</body>`), 'utf8');
+  if (/<\/html>/i.test(original)) return Buffer.from(original.replace(/<\/html>/i, `${section}\n</html>`), 'utf8');
+  return Buffer.from(`${original}${original.endsWith('\n') ? '' : '\n'}${section}\n`, 'utf8');
+}
+
+function appendToSvgBuffer(buffer, blocks) {
+  const original = buffer.toString('utf8');
+  const metadata = `<metadata><siragpt-appendix>${htmlEscape(blocksToPlainText(blocks))}</siragpt-appendix></metadata>`;
+  if (/<\/svg>/i.test(original)) return Buffer.from(original.replace(/<\/svg>/i, `${metadata}\n</svg>`), 'utf8');
+  throw new Error('SVG inválido: no se encontró la etiqueta de cierre </svg>.');
+}
+
+function xmlCommentEscape(value) {
+  return String(value ?? '').replace(/--/g, '—');
+}
+
+function appendToXmlBuffer(buffer, blocks) {
+  const original = buffer.toString('utf8');
+  const comment = `<!-- SiraGPT appendix\n${xmlCommentEscape(blocksToPlainText(blocks))}\n-->`;
+  return Buffer.from(`${original}${original.endsWith('\n') ? '' : '\n'}${comment}\n`, 'utf8');
+}
+
+function appendToYamlBuffer(buffer, blocks) {
+  const original = buffer.toString('utf8');
+  const comments = blocksToPlainText(blocks)
+    .split('\n')
+    .map((line) => `# ${line}`)
+    .join('\n');
+  const separator = original.endsWith('\n') ? '' : '\n';
+  return Buffer.from(`${original}${separator}# SiraGPT appendix\n${comments}\n`, 'utf8');
+}
+
+function appendToPlainTextBuffer(buffer, blocks) {
+  const original = buffer.toString('utf8');
+  const separator = original.endsWith('\n') ? '\n' : '\n\n';
+  return Buffer.from(`${original}${separator}${blocksToPlainText(blocks)}\n`, 'utf8');
+}
+
+function appendToTextLikeBuffer(buffer, blocks, format = 'txt') {
+  if (format === 'csv') return appendToCsvBuffer(buffer, blocks);
+  if (format === 'json') return appendToJsonBuffer(buffer, blocks);
+  if (format === 'html' || format === 'htm') return appendToHtmlBuffer(buffer, blocks);
+  if (format === 'svg') return appendToSvgBuffer(buffer, blocks);
+  if (format === 'xml') return appendToXmlBuffer(buffer, blocks);
+  if (format === 'yaml' || format === 'yml') return appendToYamlBuffer(buffer, blocks);
+  return appendToPlainTextBuffer(buffer, blocks);
+}
+
+function wrapPdfText(text, font, fontSize, maxWidth) {
+  const lines = [];
+  for (const paragraph of String(text || '').split(/\n+/)) {
+    const words = paragraph.trim().split(/\s+/).filter(Boolean);
+    if (words.length === 0) {
+      lines.push('');
+      continue;
+    }
+    let line = '';
+    for (const word of words) {
+      const candidate = line ? `${line} ${word}` : word;
+      if (font.widthOfTextAtSize(candidate, fontSize) <= maxWidth || !line) {
+        line = candidate;
+      } else {
+        lines.push(line);
+        line = word;
+      }
+    }
+    if (line) lines.push(line);
+    lines.push('');
+  }
+  return lines;
+}
+
+async function appendToPdfBuffer(buffer, blocks) {
+  const pdf = await PDFDocument.load(buffer);
+  let page = pdf.addPage();
+  let { width, height } = page.getSize();
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  const boldFont = await pdf.embedFont(StandardFonts.HelveticaBold);
+  const margin = 54;
+  let y = height - margin;
+  let maxWidth = width - (margin * 2);
+
+  const addPageIfNeeded = () => {
+    if (y >= margin) return;
+    page = pdf.addPage();
+    ({ width, height } = page.getSize());
+    maxWidth = width - (margin * 2);
+    y = height - margin;
+  };
+
+  for (const item of blocks.filter((entry) => entry.kind !== 'pageBreak')) {
+    const isHeading = /heading/.test(item.kind);
+    const currentFont = isHeading ? boldFont : font;
+    const fontSize = item.kind === 'heading1' ? 16 : item.kind === 'heading2' ? 14 : isHeading ? 12 : 10.5;
+    const lineHeight = Math.max(14, fontSize + 4);
+    const lines = wrapPdfText(item.text, currentFont, fontSize, maxWidth);
+    for (const line of lines) {
+      addPageIfNeeded();
+      page.drawText(line || ' ', { x: margin, y, size: fontSize, font: currentFont, color: rgb(0.08, 0.1, 0.14) });
+      y -= line ? lineHeight : Math.ceil(lineHeight / 2);
+    }
+    y -= isHeading ? 4 : 2;
+  }
+  return Buffer.from(await pdf.save());
+}
+
 async function persistEditedArtifact({
   buffer,
   format,
@@ -342,6 +643,17 @@ async function validateEditedBuffer(buffer, format, blocks) {
           .map((name) => zip.file(name)?.asText() || '')
           .join('\n');
         return `${sharedStrings}\n${worksheets}`.includes(xmlEscape(appendedNeedle).slice(0, 24));
+      }
+      if (format === 'pdf') {
+        return buffer.slice(0, 5).toString('latin1') === '%PDF-';
+      }
+      if (TEXT_LIKE_EXTENSIONS.has(format)) {
+        const text = buffer.toString('utf8');
+        const needle = appendedNeedle.slice(0, Math.min(20, appendedNeedle.length));
+        if (format === 'json') {
+          return JSON.stringify(JSON.parse(text)).includes(needle);
+        }
+        return text.includes(needle) || text.includes(htmlEscape(needle));
       }
     } catch {
       return false;
@@ -403,9 +715,15 @@ async function generateSourcePreservingDocumentEdit({
   } else if (isXlsxFile(sourceFile)) {
     format = 'xlsx';
     output = await appendToXlsxBuffer(input, blocks);
+  } else if (isPdfFile(sourceFile)) {
+    format = 'pdf';
+    output = await appendToPdfBuffer(input, blocks);
+  } else if (isTextLikeFile(sourceFile)) {
+    format = textLikeFormatForFile(sourceFile) || 'txt';
+    output = appendToTextLikeBuffer(input, blocks, format);
   } else {
     const ext = path.extname(sourceFile.originalName || sourceFile.filename || '').replace(/^\./, '').toLowerCase();
-    throw new Error(`La edición preservadora todavía no soporta archivos .${ext || 'desconocidos'}.`);
+    throw new Error(`La edición preservadora todavía no soporta archivos .${ext || 'desconocidos'}. Formatos soportados: ${supportedSourceEditLabel()}.`);
   }
 
   const filename = safeFilename(sourceFile.originalName || sourceFile.filename, 'con_anexos', format);
@@ -429,7 +747,7 @@ async function generateSourcePreservingDocumentEdit({
     dataUrl: null,
     mime,
     size: artifact.sizeBytes,
-    htmlPreview,
+    htmlPreview: previewHtml,
     metrics: validation,
   };
   return {
@@ -450,12 +768,13 @@ async function tryGenerateSourcePreservingDocumentEdit({
   prompt,
   displayPrompt,
 } = {}) {
-  const sourceFiles = await loadEditableSourceFiles(prisma, { userId, fileIds });
-  if (!isSourcePreservingEditRequest(displayPrompt || prompt, sourceFiles)) return null;
-  const supported = sourceFiles.find((file) => isDocxFile(file) || isXlsxFile(file));
+  const requestText = displayPrompt || prompt || '';
+  const sourceFiles = await loadEditableSourceFiles(prisma, { userId, fileIds, chatId, prompt: requestText });
+  if (!isSourcePreservingEditRequest(requestText, sourceFiles)) return null;
+  const supported = sourceFiles.find((file) => isSupportedSourcePreservingFile(file));
   if (!supported) {
     const names = sourceFiles.map((file) => file.originalName || file.filename || file.id).join(', ');
-    throw new Error(`Para conservar el documento original necesito un DOCX o XLSX editable. Archivo recibido: ${names || 'sin archivo compatible'}.`);
+    throw new Error(`Para conservar el documento original necesito un archivo editable compatible (${supportedSourceEditLabel()}). Archivo recibido: ${names || 'sin archivo compatible'}.`);
   }
   return generateSourcePreservingDocumentEdit({
     sourceFile: supported,

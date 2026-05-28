@@ -220,7 +220,7 @@ router.post(
         format = preservedEdit.format;
         send({ type: 'stage', label: 'Anexos agregados sin regenerar el archivo', pct: 92 });
       } else if (wantsSourcePreservingEdit) {
-        throw new Error('No encontré un DOCX o XLSX editable para modificar sin regenerar el documento.');
+        throw new Error('No encontré un archivo editable compatible para modificar sin regenerar el documento. Formatos soportados: DOCX, XLSX, PDF, TXT, Markdown, CSV, HTML, SVG, JSON, XML o YAML.');
       } else {
         const projectPrompt = projectContext?.promptPrefix
           ? `${projectContext.promptPrefix}\n\nUSER DOCUMENT REQUEST:\n${prompt}`

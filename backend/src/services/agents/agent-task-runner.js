@@ -1880,7 +1880,7 @@ async function runAgentTaskJob(payload = {}, job = null) {
             });
             finalMarkdown = preserved.content;
           } else {
-            finalMarkdown = 'No encontré un DOCX o XLSX editable asociado a este turno para modificarlo sin regenerarlo. No generé un documento nuevo para evitar cambiar tu archivo base.';
+            finalMarkdown = 'No encontré un archivo editable compatible asociado a este turno para modificarlo sin regenerarlo. No generé un documento nuevo para evitar cambiar tu archivo base.';
           }
         } catch (err) {
           emit({
