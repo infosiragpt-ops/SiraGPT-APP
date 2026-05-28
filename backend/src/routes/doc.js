@@ -15,6 +15,10 @@ const { authenticateToken } = require('../middleware/auth');
 const prisma = require('../config/database');
 const { streamAdvancedDocumentPipeline } = require('../services/document-pipeline/advanced-document-pipeline');
 const {
+  isSourcePreservingEditRequest,
+  tryGenerateSourcePreservingDocumentEdit,
+} = require('../services/source-preserving-document-edit');
+const {
   buildProjectPromptHeader,
   buildProjectRuntimeDocuments,
 } = require('../services/project-context');
@@ -64,6 +68,8 @@ async function loadReferenceFiles(fileIds, userId) {
       originalName: true,
       mimeType: true,
       size: true,
+      filename: true,
+      path: true,
       extractedText: true,
     },
   });
@@ -72,6 +78,8 @@ async function loadReferenceFiles(fileIds, userId) {
     originalName: file.originalName,
     mimeType: file.mimeType,
     size: file.size,
+    filename: file.filename,
+    path: file.path,
     extractedText: String(file.extractedText || '').slice(0, 12_000),
   }));
 }
@@ -191,30 +199,51 @@ router.post(
         const key = file.id || `${file.originalName}:${file.mimeType}`;
         return arr.findIndex(other => (other.id || `${other.originalName}:${other.mimeType}`) === key) === index;
       }).slice(0, 12);
-      const projectPrompt = projectContext?.promptPrefix
-        ? `${projectContext.promptPrefix}\n\nUSER DOCUMENT REQUEST:\n${prompt}`
-        : prompt;
-      const pipelineOptions = {
-        prompt: projectPrompt,
-        model: req.body.model,
-        format: req.body.format,
-        template: req.body.template,
-        complexity: req.body.complexity || 'standard',
-        referenceFiles,
-        outputDir: path.join(__dirname, '../../uploads/document-pipeline/files'),
-        telemetryDir: path.join(__dirname, '../../uploads/document-pipeline/telemetry'),
-        signal: controller.signal,
-        // Threaded into ArtifactUrlResolver so the persisted artifact
-        // is owner-scoped — the GET /api/agent/artifact/:id route
-        // refuses any caller that isn't the owner.
-        userId: req.user?.id || null,
+
+      const wantsSourcePreservingEdit = isSourcePreservingEditRequest(displayPrompt || prompt, req.body.files);
+      const preservedEdit = await tryGenerateSourcePreservingDocumentEdit({
+        prisma,
+        userId: req.user.id,
         chatId,
-      };
-      for await (const ev of streamAdvancedDocumentPipeline(pipelineOptions)) {
-        if (clientGone) break;
-        if (ev.type === 'final') { content = ev.content; file = ev.file; format = ev.format; continue; }
-        if (ev.type === 'error') { errorMsg = ev.error; continue; }
-        send(ev);
+        fileIds: req.body.files,
+        prompt,
+        displayPrompt,
+      });
+
+      if (preservedEdit) {
+        send({ type: 'stage', label: 'Conservando documento original', pct: 40 });
+        content = preservedEdit.content;
+        file = preservedEdit.file;
+        format = preservedEdit.format;
+        send({ type: 'stage', label: 'Anexos agregados sin regenerar el archivo', pct: 92 });
+      } else if (wantsSourcePreservingEdit) {
+        throw new Error('No encontré un DOCX o XLSX editable para modificar sin regenerar el documento.');
+      } else {
+        const projectPrompt = projectContext?.promptPrefix
+          ? `${projectContext.promptPrefix}\n\nUSER DOCUMENT REQUEST:\n${prompt}`
+          : prompt;
+        const pipelineOptions = {
+          prompt: projectPrompt,
+          model: req.body.model,
+          format: req.body.format,
+          template: req.body.template,
+          complexity: req.body.complexity || 'standard',
+          referenceFiles,
+          outputDir: path.join(__dirname, '../../uploads/document-pipeline/files'),
+          telemetryDir: path.join(__dirname, '../../uploads/document-pipeline/telemetry'),
+          signal: controller.signal,
+          // Threaded into ArtifactUrlResolver so the persisted artifact
+          // is owner-scoped — the GET /api/agent/artifact/:id route
+          // refuses any caller that isn't the owner.
+          userId: req.user?.id || null,
+          chatId,
+        };
+        for await (const ev of streamAdvancedDocumentPipeline(pipelineOptions)) {
+          if (clientGone) break;
+          if (ev.type === 'final') { content = ev.content; file = ev.file; format = ev.format; continue; }
+          if (ev.type === 'error') { errorMsg = ev.error; continue; }
+          send(ev);
+        }
       }
     } catch (err) {
       errorMsg = err?.message || 'doc failed';

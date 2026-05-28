@@ -21,6 +21,19 @@ const DOCUMENT_UNDERSTANDING_RE = /\b(analiza(?:r|me)?|an[aá]lisis|resume(?:n|m
 const DOCUMENT_INQUIRY_RE = /\b(?:cu[aá]l(?:es)?|qu[eé]|c[oó]mo|de\s+qu[eé]|qui[eé]n(?:es)?|cu[aá]ndo|d[oó]nde|por\s+qu[eé]|cu[aá]nt[oa]s?|resume(?:me|n)?|res[uú]meme|lee(?:me)?|l[eé]eme|abre(?:me)?|[aá]breme|muestra(?:me)?|mu[eé]strame|dime|cu[eé]ntame|expl[ií]came|explica(?:me)?|busca(?:me)?|encuentra(?:me)?|de\s+qu[eé]\s+trata|sobre\s+qu[eé])\b[^.?!]{0,160}\b(?:word|docx|documento|archivo|pdf|excel|xlsx|hoja\s+de\s+c[aá]lculo|pptx|power\s*point|powerpoint|presentaci[oó]n|adjunto|texto)\b/i;
 const EXPLICIT_DOCUMENT_OUTPUT_RE = /\b(?:en|como|a)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|presentaci[oó]n|documento|archivo)\b|\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|exporta(?:r|me)?|descarga(?:r|me)?|prepara(?:r|me)?)\b.*\b(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|documento|archivo|informe|reporte|presentaci[oó]n)\b/i;
 
+let sourcePreservingEditMod = null;
+function isSourcePreservingEdit(requestText, files) {
+  if (!Array.isArray(files) || files.length === 0) return false;
+  try {
+    if (!sourcePreservingEditMod) {
+      sourcePreservingEditMod = require('../source-preserving-document-edit');
+    }
+    return sourcePreservingEditMod.isSourcePreservingEditRequest(requestText, files);
+  } catch {
+    return false;
+  }
+}
+
 const PALETTES = {
   academic: {
     id: 'academic',
@@ -106,6 +119,7 @@ function classifyMode(requestText, estimatedWords, format, files = [], options =
   if (options.transcriptionOnly) return 'chat_only';
   const documentUnderstanding = DOCUMENT_UNDERSTANDING_RE.test(requestText);
   const explicitOutput = EXPLICIT_DOCUMENT_OUTPUT_RE.test(requestText);
+  if (isSourcePreservingEdit(requestText, files)) return 'doc_required';
   // Read/inquiry intent about a doc the user already shared in a
   // prior turn must short-circuit BEFORE the WORDISH/SHEET/DECK/PDF
   // check below — otherwise "cuál es el título del word?" matches
