@@ -10,12 +10,17 @@ channel = "stable-25_05"
 
 [deployment]
 deploymentTarget = "autoscale"
-# Clean any node_modules / .next persisted from a prior build before installing.
-# Replit reuses the workspace across deploys, and a stale @next/swc-* dir makes
-# `npm install` fail with `ENOTEMPTY: rename …/@next/swc-linux-x64-musl` (exit 217).
-# A clean slate makes the platform-specific SWC binaries extract reliably.
-build = "rm -rf node_modules backend/node_modules .next && NEXT_PUBLIC_API_URL=/api BACKEND_INTERNAL_URL=https://api.siragpt.com REPLIT_BACKEND_MODE=external HUSKY=0 npm install && NEXT_PUBLIC_API_URL=/api BACKEND_INTERNAL_URL=https://api.siragpt.com REPLIT_BACKEND_MODE=external HUSKY=0 npm --prefix backend install && NEXT_PUBLIC_API_URL=/api BACKEND_INTERNAL_URL=https://api.siragpt.com REPLIT_BACKEND_MODE=external REPLIT_DEPLOYMENT=1 npm run build"
+# Replit reuses the workspace across deploys. A stale @next/swc-* directory can
+# make npm fail before build with ENOTEMPTY while renaming the platform SWC
+# binary. Always start from a clean workspace and use npm ci so installs match
+# package-lock.json exactly.
+build = "rm -rf node_modules backend/node_modules .next && NEXT_PUBLIC_API_URL=/api BACKEND_INTERNAL_URL=https://api.siragpt.com REPLIT_BACKEND_MODE=external HUSKY=0 npm ci && NEXT_PUBLIC_API_URL=/api BACKEND_INTERNAL_URL=https://api.siragpt.com REPLIT_BACKEND_MODE=external HUSKY=0 npm --prefix backend ci && NEXT_PUBLIC_API_URL=/api BACKEND_INTERNAL_URL=https://api.siragpt.com REPLIT_BACKEND_MODE=external REPLIT_DEPLOYMENT=1 npm run build"
 run = "NEXT_PUBLIC_API_URL=/api BACKEND_INTERNAL_URL=https://api.siragpt.com REPLIT_BACKEND_MODE=external REPLIT_DEPLOYMENT=1 npm start"
+
+[packager.features]
+# The deployment build command above owns installation. Disabling hosting's
+# automatic npm install avoids the pre-build package phase that hit ENOTEMPTY.
+enabledForHosting = false
 
 [[ports]]
 localPort = 3000
