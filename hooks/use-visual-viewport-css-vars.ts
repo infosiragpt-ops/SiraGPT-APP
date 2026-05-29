@@ -33,11 +33,29 @@ export function readVisualViewportMetrics(): VisualViewportMetrics {
   const visualViewport = window.visualViewport
   const layoutWidth = window.innerWidth || root.clientWidth
   const layoutHeight = window.innerHeight || root.clientHeight
-  const width = visualViewport?.width || layoutWidth
-  const height = visualViewport?.height || layoutHeight
-  const offsetLeft = visualViewport?.offsetLeft || 0
-  const offsetTop = visualViewport?.offsetTop || 0
-  const keyboardHeight = Math.max(0, layoutHeight - height - offsetTop)
+  const rawWidth = visualViewport?.width || layoutWidth
+  const rawHeight = visualViewport?.height || layoutHeight
+  const rawOffsetLeft = visualViewport?.offsetLeft || 0
+  const rawOffsetTop = visualViewport?.offsetTop || 0
+
+  // Pinch- / double-tap-zoom shrinks the visual viewport WITHOUT an on-screen
+  // keyboard: visualViewport.scale rises above 1. The on-screen keyboard, by
+  // contrast, keeps scale at 1 and only reduces height. When the user is
+  // zoomed in we must NOT mistake that shrink for a keyboard — doing so
+  // collapses the app shell to the zoomed region, leaving dead space and
+  // pushing the chat composer out of view (it disappears). While zoomed, fall
+  // back to the layout viewport for size + offset and report no keyboard, so
+  // the shell keeps filling the window and the user can pan the zoom freely.
+  // Real mobile keyboards (scale === 1) are unaffected.
+  const scale = visualViewport?.scale ?? 1
+  const zoomed = scale > 1.01
+  const width = zoomed ? layoutWidth : rawWidth
+  const height = zoomed ? layoutHeight : rawHeight
+  const offsetLeft = zoomed ? 0 : rawOffsetLeft
+  const offsetTop = zoomed ? 0 : rawOffsetTop
+  const keyboardHeight = zoomed
+    ? 0
+    : Math.max(0, layoutHeight - rawHeight - rawOffsetTop)
 
   return {
     width,

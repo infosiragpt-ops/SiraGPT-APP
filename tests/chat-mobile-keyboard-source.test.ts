@@ -23,6 +23,28 @@ describe("mobile keyboard composer source contract", () => {
     )
   })
 
+  it("treats pinch-/double-tap-zoom as not-a-keyboard (scale-aware)", () => {
+    // visualViewport.scale > 1 means the user zoomed in, not that an
+    // on-screen keyboard appeared. The metrics reader must fall back to the
+    // layout viewport and report keyboardHeight 0 while zoomed, otherwise the
+    // shell collapses to the zoomed region and the composer disappears.
+    assert.match(
+      viewportHook,
+      /visualViewport\?\.scale/,
+      "viewport metrics must read visualViewport.scale to detect zoom"
+    )
+    assert.match(
+      viewportHook,
+      /const\s+zoomed\s*=\s*scale\s*>\s*1/,
+      "viewport metrics must flag the zoomed state from scale"
+    )
+    assert.match(
+      viewportHook,
+      /keyboardHeight\s*=\s*zoomed[\s\S]*?\?\s*0/,
+      "keyboardHeight must be forced to 0 while zoomed"
+    )
+  })
+
   it("removes the iOS Safari toolbar clearance while the keyboard is open", () => {
     const iosClearanceIndex = globals.indexOf("@supports (-webkit-touch-callout: none)")
     const keyboardOverrideIndex = globals.indexOf('.chat-viewport[data-chat-keyboard="open"]')
