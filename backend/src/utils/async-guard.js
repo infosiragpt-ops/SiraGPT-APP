@@ -397,19 +397,27 @@ class AsyncGuard {
     const token = this.register(opts);
     let timedOut = false;
 
-    // Forward the signal if provided
+    // Forward the signal if provided. Keep a reference to the listener so
+    // it can be detached in `finally`: with `{ once: true }` the listener
+    // auto-removes only if it actually fires. On the happy path (promise
+    // settles before any abort) it would otherwise linger on a
+    // caller-supplied — and possibly long-lived or reused — signal,
+    // accumulating one dead listener per guarded call (a slow leak that
+    // also trips Node's MaxListenersExceededWarning).
+    let externalAbortListener = null;
     if (opts.signal) {
       if (opts.signal.aborted) {
         // Signal already aborted — reject immediately
         timedOut = true;
         token.state = GUARD_TIMED_OUT;
       } else {
-        opts.signal.addEventListener('abort', () => {
+        externalAbortListener = () => {
           if (token.state === GUARD_PENDING) {
             token.state = GUARD_TIMED_OUT;
             try { token.controller.abort(opts.signal.reason || 'external abort'); } catch {}
           }
-        }, { once: true });
+        };
+        opts.signal.addEventListener('abort', externalAbortListener, { once: true });
       }
     }
 
@@ -475,6 +483,12 @@ class AsyncGuard {
       throw err;
     } finally {
       clearTimeout(timer);
+      // Detach the external-signal listener so it cannot outlive this call
+      // on a reused signal. Removing an already-fired `{ once: true }`
+      // listener is a safe no-op.
+      if (externalAbortListener && opts.signal) {
+        try { opts.signal.removeEventListener('abort', externalAbortListener); } catch {}
+      }
       // Only settle if still pending — timedOut/aborted paths
       // already handled state via cancel() above.
       if (token.state === GUARD_PENDING) {

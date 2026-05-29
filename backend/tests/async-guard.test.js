@@ -21,7 +21,7 @@
 
 const { describe, test, mock, before, after } = require('node:test');
 const assert = require('node:assert/strict');
-const { EventEmitter } = require('node:events');
+const { EventEmitter, getEventListeners } = require('node:events');
 
 const {
   AsyncGuard,
@@ -181,6 +181,53 @@ describe('AsyncGuard', () => {
       assert.doesNotMatch(JSON.stringify(err.toJSON()), /abcdefghijklmnopqrstuvwxyz123456|api_key=secret/);
       assert.match(err.label, /\*\*\*bearer-token-redacted\*\*\*/);
       assert.match(err.label, /api_key=\*\*\*/);
+    });
+
+    test('detaches the external-signal listener after a normal settle', async () => {
+      const guard = new AsyncGuard({ defaultTimeoutMs: 5000 });
+      const controller = new AbortController();
+      await guard.run(Promise.resolve('ok'), { signal: controller.signal });
+      assert.equal(
+        getEventListeners(controller.signal, 'abort').length,
+        0,
+        'abort listener should be removed once the guarded promise settles'
+      );
+    });
+
+    test('detaches the external-signal listener after a rejection', async () => {
+      const guard = new AsyncGuard({ defaultTimeoutMs: 5000 });
+      const controller = new AbortController();
+      await assert.rejects(
+        guard.run(Promise.reject(new Error('boom')), { signal: controller.signal })
+      );
+      assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+    });
+
+    test('does not accumulate listeners across many runs on a reused signal', async () => {
+      const guard = new AsyncGuard({ defaultTimeoutMs: 5000 });
+      const controller = new AbortController();
+      for (let i = 0; i < 8; i++) {
+        await guard.run(Promise.resolve(i), { signal: controller.signal });
+      }
+      assert.equal(
+        getEventListeners(controller.signal, 'abort').length,
+        0,
+        'reused signal must not accumulate one dead listener per run'
+      );
+    });
+
+    test('still aborts via the external signal while pending', async () => {
+      const guard = new AsyncGuard({ defaultTimeoutMs: 5000 });
+      const controller = new AbortController();
+      const pending = guard.run(never(), { label: 'ext-abort', signal: controller.signal });
+      controller.abort();
+      const err = await catchRejection(pending);
+      // An external abort is currently surfaced as a GuardError; the listener
+      // sets GUARD_TIMED_OUT, so the code is GUARD_TIMEOUT (pre-existing
+      // behaviour preserved here on purpose).
+      assert.ok(err instanceof GuardError);
+      // Listener fired, so it is removed as well (the leak fix must not break this).
+      assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
     });
   });
 
