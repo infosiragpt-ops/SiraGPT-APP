@@ -319,13 +319,18 @@ class CircuitBreaker extends EventEmitter {
       }));
     }
 
-    // External signal guard
+    // External signal guard. Keep a reference to the listener so it can be
+    // detached in `finally`: with `{ once: true }` it only auto-removes if it
+    // fires, so when the race settles via fn()/timeout instead it would linger
+    // on a reused external signal, leaking one dead listener per call.
+    let onExternalAbort = null;
     if (externalSignal) {
       promises.push(new Promise((_, reject) => {
         if (externalSignal.aborted) {
           return reject(externalSignal.reason);
         }
-        externalSignal.addEventListener('abort', () => reject(externalSignal.reason), { once: true });
+        onExternalAbort = () => reject(externalSignal.reason);
+        externalSignal.addEventListener('abort', onExternalAbort, { once: true });
       }));
     }
 
@@ -333,6 +338,9 @@ class CircuitBreaker extends EventEmitter {
       return await Promise.race(promises);
     } finally {
       if (timerId) clearTimeout(timerId);
+      if (onExternalAbort && externalSignal) {
+        try { externalSignal.removeEventListener('abort', onExternalAbort); } catch { /* ignore */ }
+      }
     }
   }
 }

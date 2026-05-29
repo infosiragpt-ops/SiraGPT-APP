@@ -461,4 +461,26 @@ describe('CircuitBreaker', () => {
       assert.equal(err.breakerName, 'my-svc');
     });
   });
+
+  // ── external signal listener cleanup ──────────────────────────────────
+  describe('external signal listener cleanup', () => {
+    it('detaches the abort listener after a successful call (no leak on reused signal)', async () => {
+      const { getEventListeners } = require('node:events');
+      const cb = new CircuitBreaker({ name: 'leak-test', timeoutMs: 1000 });
+      const ac = new AbortController();
+      const out = await cb.call(async () => 'ok', { signal: ac.signal });
+      assert.equal(out, 'ok');
+      assert.equal(getEventListeners(ac.signal, 'abort').length, 0);
+    });
+
+    it('does not accumulate listeners across repeated calls on a reused signal', async () => {
+      const cb = new CircuitBreaker({ name: 'leak-test-2', timeoutMs: 1000 });
+      const ac = new AbortController();
+      for (let i = 0; i < 6; i++) {
+        await cb.call(async () => i, { signal: ac.signal });
+      }
+      const { getEventListeners } = require('node:events');
+      assert.equal(getEventListeners(ac.signal, 'abort').length, 0);
+    });
+  });
 });

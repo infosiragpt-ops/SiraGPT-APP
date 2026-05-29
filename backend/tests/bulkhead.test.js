@@ -118,3 +118,30 @@ describe('getBulkhead (singleton registry)', () => {
     assert.strictEqual(allBulkheadStats().length, 0);
   });
 });
+
+describe('BulkheadPool — queued abort listener cleanup', () => {
+  const { getEventListeners } = require('node:events');
+
+  it('detaches the abort listener when a queued acquire is granted', async () => {
+    const pool = new BulkheadPool('leak-grant', { maxConcurrent: 1, queueCapacity: 10 });
+    const rel1 = await pool.acquire();
+    const ac = new AbortController();
+    const p2 = pool.acquire({ signal: ac.signal }); // queues behind rel1
+    rel1(); // release → _processQueue resolves p2 and must detach the listener
+    const rel2 = await p2;
+    assert.equal(getEventListeners(ac.signal, 'abort').length, 0);
+    rel2();
+  });
+
+  it('detaches abort listeners for queued waiters rejected by drain()', async () => {
+    const pool = new BulkheadPool('leak-drain', { maxConcurrent: 1, queueCapacity: 10 });
+    const rel1 = await pool.acquire();
+    const ac = new AbortController();
+    const p2 = pool.acquire({ signal: ac.signal }); // queues behind rel1
+    const draining = pool.drain(1000);              // rejects queued p2 immediately
+    await assert.rejects(p2);                        // queued waiter rejected by drain
+    rel1();                                          // let the active op finish
+    await draining;
+    assert.equal(getEventListeners(ac.signal, 'abort').length, 0);
+  });
+});

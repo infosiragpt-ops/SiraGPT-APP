@@ -365,22 +365,37 @@ class SubAgentOrchestrator extends EventEmitter {
     });
 
     const run = this._runSubAgent(goal, ctx, { maxSteps: this.maxStepsPerSub });
-    const raceSignal = signal
-      ? Promise.race([run, timeout, this._signalPromise(signal)])
+    const sig = signal ? this._signalPromise(signal) : null;
+    const raceSignal = sig
+      ? Promise.race([run, timeout, sig.promise])
       : Promise.race([run, timeout]);
 
-    const clear = () => clearTimeout(timer);
+    // Always clear the timer AND detach the signal listener once the race
+    // settles — otherwise, when run/timeout wins, the abort listener lingers
+    // on a reused signal and accumulates one dead listener per sub-agent run.
+    const clear = () => { clearTimeout(timer); if (sig) sig.cleanup(); };
     return raceSignal.finally(clear);
   }
 
   /**
-   * Convert an AbortSignal into a rejection promise.
+   * Convert an AbortSignal into a rejection promise plus a `cleanup` that
+   * detaches the listener (needed because the promise loses the race when the
+   * sub-agent completes or times out without aborting).
    */
   _signalPromise(signal) {
-    return new Promise((_, reject) => {
+    let onAbort = null;
+    const promise = new Promise((_, reject) => {
       if (signal.aborted) return reject(new Error('cancelled'));
-      signal.addEventListener('abort', () => reject(new Error('cancelled')), { once: true });
+      onAbort = () => reject(new Error('cancelled'));
+      signal.addEventListener('abort', onAbort, { once: true });
     });
+    const cleanup = () => {
+      if (onAbort) {
+        try { signal.removeEventListener('abort', onAbort); } catch { /* ignore */ }
+        onAbort = null;
+      }
+    };
+    return { promise, cleanup };
   }
 
   /**

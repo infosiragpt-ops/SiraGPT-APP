@@ -127,7 +127,7 @@ function assertArtifactSizeWithinLimit(ext, buffer) {
   throw err;
 }
 
-function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation }) {
+function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation, category }) {
   try {
     const { requireDurableArtifactStorage } = require('../../orchestration/artifact-storage-policy');
     const policy = requireDurableArtifactStorage();
@@ -155,6 +155,7 @@ function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation 
       mime: mime || EXTENSION_TO_MIME[ext] || 'application/octet-stream',
       sizeBytes: buf.length,
       validation: validation || null,
+      category: category || null,
       createdAt: new Date().toISOString(),
     }, null, 2));
   } catch (err) {
@@ -1831,9 +1832,100 @@ function getVisualMediaInternal() {
   return _vmtInternal;
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Library categorisation — maps a stored artifact's metadata to one of the
+// file-library media tabs (image/video/audio/music/webapp/mobileapp). Used by
+// GET /api/library/media-library to surface generated audio, music and apps
+// (which live in this artifact store, NOT inline on message.files like the
+// chat-generated images/videos).
+// ─────────────────────────────────────────────────────────────────────────
+const LIBRARY_AUDIO_EXTS = new Set(['mp3', 'wav', 'ogg', 'oga', 'm4a', 'aac', 'flac']);
+const LIBRARY_IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico']);
+const LIBRARY_VIDEO_EXTS = new Set(['mp4', 'webm', 'mov', 'm4v']);
+const LIBRARY_WEBAPP_EXTS = new Set(['html', 'htm']);
+const LIBRARY_MOBILE_EXTS = new Set(['apk', 'ipa', 'aab']);
+const LIBRARY_CATEGORIES = ['image', 'video', 'audio', 'music', 'webapp', 'mobileapp'];
+
+// Best-effort: classify an artifact into a library media category, or null
+// when it is not a media artifact (e.g. docx/pdf/csv/json/code).
+function categorizeArtifact(meta) {
+  if (!meta) return null;
+  const explicit = String(meta.category || '').toLowerCase();
+  if (LIBRARY_CATEGORIES.includes(explicit)) return explicit;
+  const ext = String(meta.format || '').toLowerCase();
+  const mime = String(meta.mime || '').toLowerCase();
+  const name = String(meta.filename || '').toLowerCase();
+  if (LIBRARY_MOBILE_EXTS.has(ext)) return 'mobileapp';
+  if (mime.startsWith('audio/') || LIBRARY_AUDIO_EXTS.has(ext)) {
+    // The music tool names files `cancion_*`; the speech tool uses `voz_*`.
+    // Fall back to keyword sniffing for legacy artifacts saved before the
+    // explicit `category` field existed.
+    if (/^cancion[_-]/.test(name) || /(music|song|cancion|melod|jingle|soundtrack|instrumental|track)/.test(name)) {
+      return 'music';
+    }
+    return 'audio';
+  }
+  if (mime.startsWith('video/') || LIBRARY_VIDEO_EXTS.has(ext)) return 'video';
+  if (mime.startsWith('image/') || LIBRARY_IMAGE_EXTS.has(ext)) return 'image';
+  if (mime === 'text/html' || LIBRARY_WEBAPP_EXTS.has(ext)) return 'webapp';
+  return null;
+}
+
+// List a user's media artifacts from the on-disk artifact store, normalised
+// into the same item shape the library frontend already renders. Owner-scoped:
+// only metadata whose ownerUserId matches is returned. `categories` optionally
+// narrows to specific tabs; `max` bounds the directory scan.
+function listArtifactsByOwner(ownerUserId, { categories, max = 5000 } = {}) {
+  if (ownerUserId == null) return [];
+  const wanted = Array.isArray(categories) && categories.length ? new Set(categories) : null;
+  let files;
+  try {
+    if (!fs.existsSync(ARTIFACT_DIR)) return [];
+    // Metadata files are exactly `<16-hex-id>.json`; binary artifacts that
+    // happen to be JSON are stored as `<id>-<name>.json` (with a dash), so
+    // this pattern excludes them.
+    files = fs.readdirSync(ARTIFACT_DIR).filter((f) => /^[a-f0-9]{16}\.json$/.test(f));
+  } catch {
+    return [];
+  }
+  const items = [];
+  for (const f of files) {
+    if (items.length >= max) break;
+    let meta;
+    try {
+      meta = JSON.parse(fs.readFileSync(path.join(ARTIFACT_DIR, f), 'utf8'));
+    } catch {
+      continue;
+    }
+    if (!meta || String(meta.ownerUserId) !== String(ownerUserId)) continue;
+    const category = categorizeArtifact(meta);
+    if (!category) continue;
+    if (wanted && !wanted.has(category)) continue;
+    const downloadUrl = `/api/agent/artifact/${meta.id}?name=${encodeURIComponent(meta.filename || 'artifact')}`;
+    items.push({
+      messageId: meta.id,
+      id: meta.id,
+      chatId: meta.chatId || null,
+      timestamp: meta.createdAt || null,
+      type: category,
+      url: downloadUrl,
+      download_url: downloadUrl,
+      filename: meta.filename || null,
+      mime: meta.mime || null,
+      sizeBytes: meta.sizeBytes || 0,
+      prompt: meta.filename || category,
+      source: 'artifact',
+    });
+  }
+  items.sort((a, b) => String(b.timestamp || '').localeCompare(String(a.timestamp || '')));
+  return items;
+}
+
 module.exports = {
   buildTaskTools,
   saveArtifact,
+  listArtifactsByOwner,
+  categorizeArtifact,
   ARTIFACT_DIR,
   EXTENSION_TO_MIME,
   get VISUAL_MEDIA_TOOLS() { return getVisualMediaTools(); },

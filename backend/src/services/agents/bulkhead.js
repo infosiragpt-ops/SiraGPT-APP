@@ -248,15 +248,32 @@ class BulkheadPool extends EventEmitter {
 
       // Skip cancelled entries
       if (entry.signal?.aborted) {
+        this._detachAbort(entry);
         try { entry.reject(new Error('cancelled')); } catch { /* ignore */ }
         continue;
       }
 
+      // The wait is over — detach the queue-abort listener so it cannot
+      // outlive this acquisition on a reused signal.
+      this._detachAbort(entry);
       this._active++;
       const opId = ++this._opCounter;
       this._activeOps.set(opId, true);
       this.emit('acquired', { name: this.name, active: this._active, opId, fromQueue: true });
       entry.resolve(this._createRelease(opId));
+    }
+  }
+
+  /**
+   * Detach the abort listener registered on a queued entry's external signal.
+   * With `{ once: true }` the listener only auto-removes if it actually fires;
+   * once the entry is resolved or rejected it must be removed explicitly, else
+   * a reused signal accumulates one dead listener per acquire() call.
+   */
+  _detachAbort(entry) {
+    if (entry && entry._onAbort && entry.signal) {
+      try { entry.signal.removeEventListener('abort', entry._onAbort); } catch { /* ignore */ }
+      entry._onAbort = null;
     }
   }
 
@@ -303,6 +320,7 @@ class BulkheadPool extends EventEmitter {
     // Reject all queued waiters
     while (this._queue.length > 0) {
       const entry = this._queue.shift();
+      this._detachAbort(entry);
       try { entry.reject(new BulkheadRejectedError(this.name)); } catch { /* ignore */ }
     }
 

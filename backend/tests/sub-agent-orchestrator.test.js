@@ -181,3 +181,26 @@ describe('SubAgentError', () => {
     assert.ok(err.message.includes('task-123'));
   });
 });
+
+describe('SubAgentOrchestrator — signal listener cleanup', () => {
+  const { getEventListeners } = require('node:events');
+
+  it('detaches the abort listener after _runWithTimeout resolves without abort', async () => {
+    const orch = new SubAgentOrchestrator({ subTaskTimeoutMs: 1000 });
+    orch._runSubAgent = async () => ({ ok: true });
+    const ac = new AbortController();
+    const res = await orch._runWithTimeout('goal', { userId: 1 }, ac.signal);
+    assert.deepStrictEqual(res, { ok: true });
+    assert.strictEqual(getEventListeners(ac.signal, 'abort').length, 0);
+  });
+
+  it('does not accumulate listeners across repeated runs on a reused signal', async () => {
+    const orch = new SubAgentOrchestrator({ subTaskTimeoutMs: 1000 });
+    orch._runSubAgent = async () => ({ ok: true });
+    const ac = new AbortController();
+    for (let i = 0; i < 5; i++) {
+      await orch._runWithTimeout('goal', {}, ac.signal);
+    }
+    assert.strictEqual(getEventListeners(ac.signal, 'abort').length, 0);
+  });
+});

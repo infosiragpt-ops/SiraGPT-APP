@@ -116,13 +116,16 @@ async function streamToBuffer(stream) {
   return Buffer.alloc(0);
 }
 
-function saveAudioArtifact({ filename, buffer, mime, ctx }) {
+function saveAudioArtifact({ filename, buffer, mime, ctx, category }) {
   return saveArtifact({
     filename,
     base64: buffer.toString('base64'),
     mime,
     ownerUserId: ctx && ctx.userId,
     chatId: ctx && ctx.chatId,
+    // Tag the library category so the file-library Audio / Música tabs can
+    // tell spoken audio from generated music (both are audio/mpeg MP3s).
+    category,
   });
 }
 
@@ -183,7 +186,7 @@ const generateSpeech = {
       }
 
       const filename = `voz_${crypto.randomBytes(4).toString('hex')}.mp3`;
-      const artifact = saveAudioArtifact({ filename, buffer, mime: 'audio/mpeg', ctx });
+      const artifact = saveAudioArtifact({ filename, buffer, mime: 'audio/mpeg', ctx, category: 'audio' });
       emitFileArtifact(ctx, artifact, 'mp3', 'audio/mpeg');
       emitEvent(ctx, 'tool_output', {
         tool: 'generate_speech',
@@ -287,7 +290,7 @@ const generateMusic = {
       }
 
       const filename = `cancion_${crypto.randomBytes(4).toString('hex')}.mp3`;
-      const artifact = saveAudioArtifact({ filename, buffer, mime: 'audio/mpeg', ctx });
+      const artifact = saveAudioArtifact({ filename, buffer, mime: 'audio/mpeg', ctx, category: 'music' });
       emitFileArtifact(ctx, artifact, 'mp3', 'audio/mpeg');
       emitEvent(ctx, 'tool_output', {
         tool: 'generate_music',
