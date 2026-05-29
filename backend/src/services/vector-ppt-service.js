@@ -195,7 +195,8 @@ ABSOLUTELY CRITICAL INSTRUCTIONS:
             messages: [structurePrompt, { role: 'user', content: `Create a presentation about: ${prompt}` }]
         });
 
-        const responseText = response.choices[0].message.content;
+        const responseText = response?.choices?.[0]?.message?.content;
+      if (!responseText) throw new Error('vector-ppt generation returned an empty response');
         try {
             const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)\s*```/) || [null, responseText];
             return JSON.parse(jsonMatch[1].trim());

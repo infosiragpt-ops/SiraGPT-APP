@@ -109,11 +109,28 @@ async function convertViaGotenberg(srcPath, originalName) {
   form.append('files', fs.createReadStream(srcPath), { filename: originalName });
 
   const url = GOTENBERG_URL.replace(/\/$/, '') + '/forms/libreoffice/convert';
-  const res = await fetch(url, {
-    method: 'POST',
-    body: form,
-    headers: form.getHeaders(),
-  });
+  // Bound the external converter: without a timeout a hung Gotenberg blocks
+  // the render (and the upstream request) indefinitely. Abort after a
+  // configurable deadline and surface a clear timeout error.
+  const timeoutMs = Number(process.env.GOTENBERG_TIMEOUT_MS) || RENDER_TIMEOUT_MS || 60_000;
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  let res;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      body: form,
+      headers: form.getHeaders(),
+      signal: ac.signal,
+    });
+  } catch (err) {
+    if (err && err.name === 'AbortError') {
+      throw new Error(`Gotenberg conversion timed out after ${timeoutMs}ms`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
   if (!res.ok) {
     const txt = await res.text().catch(() => '');
     throw new Error(`Gotenberg ${res.status}: ${txt.slice(0, 240)}`);

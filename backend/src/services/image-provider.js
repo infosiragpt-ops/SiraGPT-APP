@@ -79,12 +79,16 @@ async function generateOpenAI(spec) {
     const client = new (OpenAI.OpenAI || OpenAI)({ apiKey });
     const size = spec.size || '1024x1024';
     const n = Math.min(spec.n || 1, 4);
+    // Bound the provider call: a hung DALL-E request would otherwise block
+    // the image job until an outer timeout (or never). Per-request timeout
+    // via the OpenAI SDK (default 120s, env-overridable).
+    const imageTimeoutMs = Number(process.env.IMAGE_GEN_TIMEOUT_MS) || 120_000;
     const result = await client.images.generate({
       model: spec.model || 'dall-e-3',
       prompt: String(spec.prompt || '').slice(0, 4000),
       size,
       n,
-    });
+    }, { timeout: imageTimeoutMs });
     const assets = (result?.data || []).map((d) => ({
       url: d.url || (d.b64_json ? `data:image/png;base64,${d.b64_json}` : ''),
       format: d.url ? 'url' : 'png',
