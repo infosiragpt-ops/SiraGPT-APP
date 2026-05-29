@@ -167,6 +167,9 @@
   "overrides": {
     "uuid": "$uuid",
     "qs": "^6.15.2",
-    "@esbuild-kit/esm-loader": "npm:tsx@^4.21.0"
+    "@esbuild-kit/esm-loader": "npm:tsx@^4.21.0",
+    "@langchain/langgraph-sdk": {
+      "uuid": "^13.0.0"
+    }
   }
 }
