@@ -183,7 +183,7 @@
     "mermaid": "^11.14.0",
     "multer": "^2.0.1",
     "negotiator": "^1.0.0",
-    "next": "14.2.35",
+    "next": "15.5.18",
     "next-auth": "^4.24.11",
     "next-intl": "^4.9.1",
     "next-themes": "latest",
@@ -248,7 +248,7 @@
     "@types/react-dom": "^18",
     "@types/react-katex": "^3.0.4",
     "eslint": "^8.57.1",
-    "eslint-config-next": "14.2.35",
+    "eslint-config-next": "15.5.18",
     "husky": "^9.1.7",
     "jsdom": "^29.1.1",
     "license-checker-rseidelsohn": "^4.4.2",
@@ -257,5 +257,16 @@
     "tailwindcss": "^3.4.17",
     "typescript": "^5",
     "vitest": "^4.1.5"
+  },
+  "overrides": {
+    "uuid": "^11.1.1",
+    "qs": "^6.15.2",
+    "postcss": "$postcss",
+    "@next/eslint-plugin-next": {
+      "glob": "^10.5.0"
+    },
+    "read-package-json": {
+      "glob": "^10.5.0"
+    }
   }
 }
