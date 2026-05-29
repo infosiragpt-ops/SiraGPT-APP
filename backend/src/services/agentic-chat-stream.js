@@ -42,6 +42,7 @@ const { hostBashTool } = require('./agents/host-bash-tool');
 const { hostFileTool } = require('./agents/host-file-tool');
 const { checkCiStatusTool, monitorCiTool } = require('./agents/github-actions-tool');
 const openclawCapabilityKernel = require('./openclaw-capability-kernel');
+const { isAgenticActionRequest } = require('./agents/agentic-trigger');
 const {
   buildExecutionProfile,
   buildExecutionProfilePrompt,
@@ -203,6 +204,12 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
   if (Array.isArray(files) && files.length > 0) return true;
   if (/^\s*\/(goal|plan)\b/i.test(text)) return true;
   if (AGENTIC_PROMPT_HINT.test(text)) return true;
+  // Bilingual create/transform detector — routes "genera una imagen",
+  // "hazme un organigrama", "create a chart", "diseña una presentación",
+  // etc. into the agentic runtime so the artifact tools actually fire.
+  // AGENTIC_PROMPT_HINT covered repo/research/doc work but missed many
+  // visual deliverables (images, charts, org charts, diagrams, slides).
+  if (isAgenticActionRequest(text)) return true;
 
   const recent = Array.isArray(history)
     ? history.slice(-8).map((m) => textFromMessageContent(m && m.content)).join('\n')

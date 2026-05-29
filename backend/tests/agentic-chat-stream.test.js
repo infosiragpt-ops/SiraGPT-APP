@@ -133,6 +133,19 @@ test('shouldUseAgenticChat keeps tool-heavy and follow-up repair turns agentic',
   }), true);
 });
 
+test('shouldUseAgenticChat routes visual + document create requests through the agent', () => {
+  // These previously slipped past AGENTIC_PROMPT_HINT and answered as
+  // plain text instead of producing the artifact the user asked for.
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'genera una imagen de un gato astronauta' }), true);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'hazme un organigrama de mi empresa' }), true);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'créame una gráfica de ventas por trimestre' }), true);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'create a bar chart of revenue' }), true);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'diseña una presentación en powerpoint' }), true);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'haz un video corto del producto' }), true);
+  // Casual factual chat still skips the agentic loop.
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿cuál es la capital de Francia?' }), false);
+});
+
 test('serializeSentinel produces a fenced agent-task-state block', () => {
   const { serializeSentinel, freshState } = agenticStream._internal;
   const out = serializeSentinel(freshState());

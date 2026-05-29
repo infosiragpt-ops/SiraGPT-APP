@@ -1446,6 +1446,19 @@ summary:focus-visible,
   outline: none !important;
 }
 
+/* Brand text selection — a calm violet wash (the --ring accent) instead
+   of the browser-default blue, so highlighted text matches the premium
+   palette in both themes. Additive only; keeps the text color readable
+   by inheriting it rather than forcing white. */
+::selection {
+  background: hsl(var(--ring) / 0.22);
+  color: inherit;
+}
+::-moz-selection {
+  background: hsl(var(--ring) / 0.22);
+  color: inherit;
+}
+
 /* #83 — Tighter sidebar padding on small viewports so the chat
    titles get more horizontal room when the sidebar is shown on
    mobile/tablet. Scoped to the SidebarMenuButton padding only —
