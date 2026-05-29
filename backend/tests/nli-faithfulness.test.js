@@ -136,6 +136,27 @@ test('verifyClaim routes to HF backend when HF token is set + returns canonical 
   });
 });
 
+test('verifyClaim HF detaches the external-signal listener after a successful call', async () => {
+  const { getEventListeners } = require('node:events');
+  await withEnv({ HUGGINGFACE_API_TOKEN: 'hf-test' }, async () => {
+    const ac = new AbortController();
+    const out = await nli.verifyClaim({
+      claim: 'c',
+      evidence: 'e',
+      options: {
+        signal: ac.signal,
+        fetchImpl: fakeHfFetch([{ label: 'ENTAILMENT', score: 0.95 }]),
+      },
+    });
+    assert.equal(out.backend, 'huggingface');
+    assert.equal(
+      getEventListeners(ac.signal, 'abort').length,
+      0,
+      'abort listener must be removed once verifyClaim settles (no leak on reused signals)',
+    );
+  });
+});
+
 test('verifyClaim HF maps non-2xx to nli_huggingface_failed with status', async () => {
   await withEnv({ HUGGINGFACE_API_TOKEN: 'hf-test' }, async () => {
     await assert.rejects(

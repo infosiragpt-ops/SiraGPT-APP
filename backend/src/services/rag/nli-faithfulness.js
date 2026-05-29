@@ -157,9 +157,17 @@ async function verifyViaHuggingface({ claim, evidence, options }) {
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error('nli HF timeout')), Number.isFinite(options.timeoutMs) ? options.timeoutMs : DEFAULT_TIMEOUT_MS);
+  // Keep a reference to the external-signal listener so it can be detached
+  // in `finally` — with `{ once: true }` it only auto-removes if it fires; on
+  // the normal path it would otherwise linger on a caller-supplied (possibly
+  // reused) signal, leaking one dead listener per call.
+  let onExternalAbort = null;
   if (options.signal) {
     if (options.signal.aborted) controller.abort();
-    else options.signal.addEventListener('abort', () => controller.abort(), { once: true });
+    else {
+      onExternalAbort = () => controller.abort();
+      options.signal.addEventListener('abort', onExternalAbort, { once: true });
+    }
   }
 
   let response;
@@ -182,6 +190,9 @@ async function verifyViaHuggingface({ claim, evidence, options }) {
     throw wrapped;
   } finally {
     clearTimeout(timer);
+    if (onExternalAbort && options.signal) {
+      options.signal.removeEventListener('abort', onExternalAbort);
+    }
   }
 
   if (!response || !response.ok) {
