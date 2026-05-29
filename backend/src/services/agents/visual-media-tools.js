@@ -1883,6 +1883,75 @@ const generateVideo = {
         };
       }
 
+      // Real text-to-video via Fal.ai (Veo 3 fast) when FAL is configured.
+      // This is the same provider wired into routes/video.js, so a chat
+      // request like "créame un video de 8s del producto" produces an actual
+      // MP4 — not just a storyboard. Any failure falls through to the
+      // storyboard below, so the user always gets a usable deliverable and
+      // there is no regression when Veo is unavailable.
+      const falKey = process.env.FAL_KEY || process.env.FAL_API_KEY || process.env.TAL_AI_API_KEY;
+      if (falKey) {
+        try {
+          // eslint-disable-next-line global-require
+          const { fal } = require('@fal-ai/client');
+          fal.config({ credentials: falKey });
+          const secs = Math.min(Math.max(Number(duration) || 8, 4), 15);
+          // Veo 3 fast supports 16:9 / 9:16 — map anything else to 16:9.
+          const falAspect = (aspectRatio === '16:9' || aspectRatio === '9:16') ? aspectRatio : '16:9';
+          emitEvent(ctx, 'tool_output', { tool: 'generate_video', preview: `Generando video real con Veo (${secs}s)…`, partial: true });
+          const falResult = await fal.subscribe('fal-ai/veo3/fast', {
+            input: {
+              prompt: enhancedPrompt,
+              duration: `${secs}s`,
+              aspect_ratio: falAspect,
+              generate_audio: true,
+              resolution: '720p',
+            },
+            logs: false,
+          });
+          const veoUrl = falResult && falResult.data && falResult.data.video && falResult.data.video.url;
+          if (veoUrl) {
+            const dl = await fetch(veoUrl, { signal: ctx.signal });
+            if (dl && dl.ok) {
+              const videoBuf = Buffer.from(await dl.arrayBuffer());
+              const filename = `video_${crypto.randomBytes(4).toString('hex')}.mp4`;
+              const artifact = finalizeArtifact({ filename, buffer: videoBuf, mime: 'video/mp4', ctx });
+              emitEvent(ctx, 'file_artifact', {
+                artifact: {
+                  id: artifact.id,
+                  filename: artifact.filename,
+                  format: 'mp4',
+                  mime: 'video/mp4',
+                  sizeBytes: artifact.sizeBytes,
+                  downloadUrl: artifact.downloadUrl,
+                },
+              });
+              emitEvent(ctx, 'tool_output', {
+                tool: 'generate_video',
+                ok: true,
+                preview: `Video listo: ${artifact.filename} (${Math.round(artifact.sizeBytes / 1024 / 1024 * 10) / 10} MB)`,
+              });
+              return {
+                ok: true,
+                id: artifact.id,
+                filename: artifact.filename,
+                sizeBytes: artifact.sizeBytes,
+                downloadUrl: artifact.downloadUrl,
+                mime: 'video/mp4',
+                provider: 'fal/veo3-fast',
+                prompt: enhancedPrompt,
+                duration: secs,
+                aspectRatio: falAspect,
+              };
+            }
+          }
+          emitEvent(ctx, 'tool_output', { tool: 'generate_video', preview: 'Veo no devolvió un video; generando storyboard como alternativa…', partial: true });
+        } catch (falErr) {
+          const fm = (falErr && falErr.message) ? String(falErr.message).slice(0, 100) : 'error';
+          emitEvent(ctx, 'tool_output', { tool: 'generate_video', preview: `Veo no disponible (${fm}); generando storyboard…`, partial: true });
+        }
+      }
+
       // Fallback: no video API configured — generate a storyboard document
       // instead of returning an error. The agent can present this as an
       // artifact with scene-by-scene descriptions, visual direction, etc.
