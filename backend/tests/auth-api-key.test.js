@@ -16,6 +16,7 @@
 const { describe, test, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const jwt = require('jsonwebtoken');
 
 const dbPath = path.resolve(__dirname, '../src/config/database.js');
 const authPath = path.resolve(__dirname, '../src/middleware/auth.js');
@@ -226,6 +227,27 @@ describe('authenticateToken · API key path', () => {
     await authenticateToken(req, res, () => { called = true; });
     assert.equal(called, false);
     assert.ok(res.statusCode === 401 || res.statusCode === 403);
+  });
+
+  test('rejects wrong-signature JWT as 401 without logging a server error', async () => {
+    const badToken = jwt.sign({ userId: 'u-1' }, 'wrong-secret', {
+      issuer: 'siragpt-api',
+      audience: 'siragpt-clients',
+    });
+    const { req, res } = buildReqRes(badToken);
+    const originalError = console.error;
+    const errors = [];
+    console.error = (...args) => errors.push(args.join(' '));
+    try {
+      let called = false;
+      await authenticateToken(req, res, () => { called = true; });
+      assert.equal(called, false);
+      assert.equal(res.statusCode, 401);
+      assert.equal(res.body.code, 'invalid_token');
+      assert.equal(errors.length, 0);
+    } finally {
+      console.error = originalError;
+    }
   });
 
   test('rejects malformed Authorization header before cookie fallback', async () => {

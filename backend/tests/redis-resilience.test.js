@@ -24,8 +24,9 @@ test('isTransientRedisError detects connection-reset family', () => {
     'connect ETIMEDOUT 10.0.0.1:6379',
     'connect ECONNREFUSED 127.0.0.1:6379',
     'Stream isn\'t writeable and enableOfflineQueue options is false',
+    'Reached the max retries per request limit (which is 1). Refer to "maxRetriesPerRequest" option for details.',
     'READONLY You can\'t write against a read only replica.',
-  ].slice(0, 7)) {
+  ]) {
     assert.equal(isTransientRedisError(new Error(message)), true, `expected match for: ${message}`);
   }
 });

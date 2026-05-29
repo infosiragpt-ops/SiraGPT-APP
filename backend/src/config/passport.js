@@ -48,7 +48,7 @@ const googleOAuthConfigured = isGoogleOAuthConfigured();
 const configuredGoogleCallback = stripTrailingSlash(process.env.GOOGLE_AUTH_URI);
 
 if (configuredGoogleCallback && configuredGoogleCallback !== googleCallbackURL) {
-  console.warn(`Google OAuth callback override ignored; using ${googleCallbackURL}`);
+  console.info(`Google OAuth callback override ignored; using ${googleCallbackURL}`);
 }
 
 // Google OAuth Strategy — login-only scopes (profile + email). These

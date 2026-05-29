@@ -120,6 +120,22 @@ function sendAuthError(req, res, status, code, error, extra = {}) {
   });
 }
 
+function isJwtVerificationError(error) {
+  return !!(
+    error
+    && ['JsonWebTokenError', 'NotBeforeError', 'TokenExpiredError'].includes(error.name)
+  );
+}
+
+function extractRawTokenForLogging(req) {
+  try {
+    const tokenResult = extractAccessToken(req);
+    return tokenResult && tokenResult.token ? tokenResult.token : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 // Hot-path read coalescing: two requests for the same session token
 // within 50ms share the Prisma lookup. Reduces DB load when a SPA
 // fires several concurrent authenticated calls.
@@ -382,8 +398,7 @@ const authenticateToken = async (req, res, next) => {
       let expiredScope = null;
       let expiredUserId = null;
       try {
-        const authHeader2 = req.headers['authorization'];
-        const token2 = (authHeader2 && authHeader2.split(' ')[1]) || req.cookies?.token;
+        const token2 = extractRawTokenForLogging(req);
         if (token2) {
           const peek = jwt.decode(token2);
           if (peek && typeof peek === 'object') {
@@ -407,8 +422,7 @@ const authenticateToken = async (req, res, next) => {
       // so it is safe to read the payload via jwt.decode for the sole
       // purpose of routing the auto-revoke email to the right user.
       try {
-        const authHeader = req.headers && req.headers['authorization'];
-        const rawToken = (authHeader && authHeader.split(' ')[1]) || req.cookies?.token;
+        const rawToken = extractRawTokenForLogging(req);
         const payload = rawToken ? jwt.decode(rawToken) : null;
         if (isAppshotsScope(payload) && payload?.userId) {
           void prisma.user
@@ -417,6 +431,10 @@ const authenticateToken = async (req, res, next) => {
             .catch(() => {});
         }
       } catch (_) { /* never let telemetry break the auth response */ }
+    }
+    if (isJwtVerificationError(error)) {
+      const code = error.name === 'TokenExpiredError' ? 'token_expired' : 'invalid_token';
+      return sendAuthError(req, res, 401, code, 'Invalid or expired token');
     }
     console.error('Auth middleware error:', error);
     return res.status(403).json({ error: 'Invalid token' });
@@ -504,5 +522,6 @@ module.exports = {
   __parseAuthorizationHeader: parseAuthorizationHeader,
   __validateAccessTokenValue: validateAccessTokenValue,
   __sendAuthError: sendAuthError,
+  __isJwtVerificationError: isJwtVerificationError,
   MAX_ACCESS_TOKEN_LENGTH,
 };

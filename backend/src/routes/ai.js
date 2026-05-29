@@ -405,8 +405,8 @@ function createProviderClientForRequest(provider, req) {
   ];
   const missing = checks.filter((c) => (c.present === undefined ? !process.env[c.envKey] : !c.present));
   if (missing.length > 0) {
-    console.warn(
-      `⚠️  [ai] Missing provider API keys: ${missing.map((m) => `${m.name} (${m.envKey})`).join(', ')}. `
+    console.info(
+      `[ai] Optional provider API keys not configured: ${missing.map((m) => `${m.name} (${m.envKey})`).join(', ')}. `
       + 'Requests to these providers will be hidden from /api/ai/models and return 503 if invoked directly.'
     );
   }
