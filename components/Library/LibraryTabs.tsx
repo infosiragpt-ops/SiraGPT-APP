@@ -12,6 +12,7 @@ import {
     Play,
     ExternalLink,
     Loader2,
+    Sparkles,
 } from 'lucide-react';
 import { SidebarTrigger } from '@/components/ui/sidebar';
 
@@ -208,38 +209,38 @@ const MediaLibrary: React.FC = () => {
     }, [filterType, searchQuery]);
 
     const renderArtifactCardBody = (item: MediaItem) => (
-        <div className="flex flex-col items-center justify-center w-full h-full p-4 text-center bg-gradient-to-br from-gray-50 to-gray-100 dark:from-zinc-800 dark:to-zinc-900 text-gray-500 dark:text-gray-300">
-            <div className="text-gray-400 dark:text-gray-500">{TYPE_ICON[item.type]}</div>
-            <p className="mt-3 text-sm font-medium text-gray-700 dark:text-gray-200 truncate w-full" title={item.filename || item.prompt}>
+        <div className="flex flex-col items-center justify-center w-full h-full p-4 text-center gap-3">
+            <div className="library-card-badge">{TYPE_ICON[item.type]}</div>
+            <p className="text-sm font-semibold text-[hsl(var(--foreground))] truncate w-full" title={item.filename || item.prompt}>
                 {item.filename || item.prompt}
             </p>
-            <span className="mt-1 text-xs text-gray-400">{TAB_LABELS[item.type]}</span>
+            <span className="text-xs text-[hsl(var(--muted-foreground))]">{TAB_LABELS[item.type]}</span>
         </div>
     );
 
     return (
-        <div className="container mx-auto p-4">
+        <div className="library-page container mx-auto p-4 sm:p-6">
             <Head>
                 <title>Biblioteca de archivos</title>
             </Head>
             <div className="flex items-center gap-3 mb-6">
                 <SidebarTrigger className="md:hidden" />
-                <h1 className="text-3xl font-bold text-gray-800 dark:text-white">Tu biblioteca de archivos</h1>
+                <h1 className="library-title text-3xl">Tu biblioteca de archivos</h1>
             </div>
 
-            <div className="flex flex-col gap-3 mb-6 sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex flex-wrap border-b border-gray-200 dark:border-gray-700">
+            <div className="flex flex-col gap-4 mb-8 lg:flex-row lg:items-center lg:justify-between">
+                <div className="library-tabs" role="tablist" aria-label="Filtrar biblioteca">
                     {TAB_ORDER.map((type) => {
                         const active = filterType === type;
                         return (
                             <button
                                 key={type}
+                                type="button"
+                                role="tab"
+                                aria-selected={active}
+                                data-active={active}
                                 onClick={() => handleTabChange(type)}
-                                className={`py-2 px-4 text-lg font-medium transition-colors duration-200 focus:outline-none ${
-                                    active
-                                        ? 'border-b-2 border-blue-600 text-blue-600'
-                                        : 'text-gray-600 hover:text-gray-800 dark:text-gray-300'
-                                }`}
+                                className="library-tab focus:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--accent-violet))]"
                             >
                                 {TAB_LABELS[type]}
                             </button>
@@ -247,14 +248,14 @@ const MediaLibrary: React.FC = () => {
                     })}
                 </div>
 
-                <label className="relative flex items-center w-full sm:w-72">
-                    <Search className="absolute left-3 w-4 h-4 text-gray-400 pointer-events-none" />
+                <label className="library-search w-full lg:w-72">
+                    <Search className="w-4 h-4 shrink-0 text-[hsl(var(--muted-foreground))] pointer-events-none" />
                     <input
                         type="search"
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
                         placeholder="Buscar por prompt…"
-                        className="w-full pl-9 pr-3 py-2 text-sm rounded-md border border-gray-200 bg-white dark:bg-zinc-800 dark:border-gray-700 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        className="w-full text-sm text-[hsl(var(--foreground))] placeholder:text-[hsl(var(--muted-foreground))]"
                         aria-label="Buscar elementos por prompt"
                     />
                 </label>
@@ -268,7 +269,7 @@ const MediaLibrary: React.FC = () => {
                     visibleItems.map((item) => (
                         <div
                             key={`${item.messageId}-${item.type}-${item.timestamp}`}
-                            className="relative border border-gray-200 dark:border-gray-700 rounded-lg shadow-sm bg-white dark:bg-zinc-800 overflow-hidden group cursor-pointer aspect-square"
+                            className="library-card group cursor-pointer aspect-square"
                             onClick={() => handleItemClick(item)}
                             title={item.chatId ? 'Abrir el chat donde se creó' : (item.prompt || item.filename)}
                         >
@@ -327,9 +328,14 @@ const MediaLibrary: React.FC = () => {
                     ))
                 ) : (
                     !loading && (
-                        <p className="col-span-full text-center text-gray-600 dark:text-gray-300 text-lg py-10">
-                            {emptyMessage}
-                        </p>
+                        <div className="col-span-full library-empty py-12 px-6 flex flex-col items-center gap-4 text-center">
+                            <div className="library-empty-badge">
+                                <Sparkles className="w-7 h-7" />
+                            </div>
+                            <p className="text-[hsl(var(--muted-foreground))] text-base max-w-md">
+                                {emptyMessage}
+                            </p>
+                        </div>
                     )
                 )}
             </div>
