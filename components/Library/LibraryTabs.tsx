@@ -1,14 +1,28 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import Head from 'next/head';
+import { useRouter } from 'next/navigation';
 import apiClient from '@/lib/api';
-import { Download, Search } from 'lucide-react';
+import {
+    Download,
+    Search,
+    Music2,
+    Mic,
+    Globe,
+    Smartphone,
+    Play,
+    ExternalLink,
+    Loader2,
+} from 'lucide-react';
 import { SidebarTrigger } from '@/components/ui/sidebar';
+
+type MediaType = 'image' | 'video' | 'audio' | 'music' | 'webapp' | 'mobileapp';
 
 interface MediaItem {
     messageId: string;
+    id?: string;
     chatId: string;
     timestamp: string;
-    type: 'image' | 'video';
+    type: MediaType;
     url?: string;
     video_url?: string;
     download_url?: string;
@@ -16,9 +30,44 @@ interface MediaItem {
     prompt: string;
     filename?: string;
     aspect_ratio?: string;
+    mime?: string;
+    sizeBytes?: number;
+    source?: string;
 }
 
-type FilterType = 'all' | 'image' | 'video';
+type FilterType = 'all' | MediaType;
+
+// Tab order requested by the product: apps first, then video/image, then the
+// audio family. "Todos" stays first as the catch-all view.
+const TAB_ORDER: FilterType[] = ['all', 'webapp', 'mobileapp', 'video', 'image', 'music', 'audio'];
+
+const TAB_LABELS: Record<FilterType, string> = {
+    all: 'Todos',
+    image: 'Imágenes',
+    video: 'Videos',
+    music: 'Música',
+    audio: 'Audio',
+    webapp: 'Apps web',
+    mobileapp: 'Apps Móviles',
+};
+
+// Artifact-backed types load their bytes through an owner-scoped, token-auth'd
+// endpoint, so they can't be rendered with a bare <audio>/<iframe> src — the
+// modal fetches a Blob and renders via an object URL instead.
+const ARTIFACT_TYPES: ReadonlySet<MediaType> = new Set(['audio', 'music', 'webapp', 'mobileapp']);
+
+function isArtifactType(type: MediaType): boolean {
+    return ARTIFACT_TYPES.has(type);
+}
+
+const TYPE_ICON: Record<MediaType, React.ReactNode> = {
+    image: null,
+    video: null,
+    music: <Music2 className="w-10 h-10" />,
+    audio: <Mic className="w-10 h-10" />,
+    webapp: <Globe className="w-10 h-10" />,
+    mobileapp: <Smartphone className="w-10 h-10" />,
+};
 
 const MediaLibrary: React.FC = () => {
     const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
@@ -30,12 +79,17 @@ const MediaLibrary: React.FC = () => {
     const [searchQuery, setSearchQuery] = useState('');
     const [showModal, setShowModal] = useState(false);
     const [selectedMedia, setSelectedMedia] = useState<MediaItem | null>(null);
+    // Object URL for the currently-open artifact (audio/music/webapp/mobileapp).
+    const [artifactUrl, setArtifactUrl] = useState<string | null>(null);
+    const [artifactLoading, setArtifactLoading] = useState(false);
+    const [artifactError, setArtifactError] = useState<string | null>(null);
+    const router = useRouter();
 
     const fetchMediaItems = async (page: number, typeFilter: FilterType) => {
         setLoading(true);
         setError(null);
         try {
-            const params: { page: number; limit: number; type?: 'image' | 'video' } = { page, limit: 20 };
+            const params: { page: number; limit: number; type?: MediaType } = { page, limit: 20 };
             if (typeFilter !== 'all') {
                 params.type = typeFilter;
             }
@@ -53,6 +107,37 @@ const MediaLibrary: React.FC = () => {
     useEffect(() => {
         fetchMediaItems(currentPage, filterType);
     }, [currentPage, filterType]);
+
+    // Load the selected artifact's bytes (with auth) into an object URL so the
+    // modal can play/preview it. Revokes the URL on close/change to avoid leaks.
+    useEffect(() => {
+        if (!selectedMedia || !isArtifactType(selectedMedia.type)) {
+            return;
+        }
+        let cancelled = false;
+        let objectUrl: string | null = null;
+        const source = selectedMedia.download_url || selectedMedia.url || '';
+        setArtifactLoading(true);
+        setArtifactError(null);
+        setArtifactUrl(null);
+        apiClient
+            .getMediaArtifactBlob(source)
+            .then((blob) => {
+                if (cancelled) return;
+                objectUrl = URL.createObjectURL(blob);
+                setArtifactUrl(objectUrl);
+            })
+            .catch((e: any) => {
+                if (!cancelled) setArtifactError(e?.message || 'No se pudo cargar el archivo');
+            })
+            .finally(() => {
+                if (!cancelled) setArtifactLoading(false);
+            });
+        return () => {
+            cancelled = true;
+            if (objectUrl) URL.revokeObjectURL(objectUrl);
+        };
+    }, [selectedMedia]);
 
     const handleNextPage = () => {
         if (currentPage < totalPages) setCurrentPage((prev) => prev + 1);
@@ -72,9 +157,23 @@ const MediaLibrary: React.FC = () => {
         setShowModal(true);
     };
 
+    // Clicking a library item reopens the chat where it was created, so the
+    // user lands back in the conversation they built it in. Items with no
+    // originating chat (rare) fall back to the in-place preview modal.
+    const handleItemClick = (item: MediaItem) => {
+        if (item.chatId) {
+            router.push(`/chat?id=${encodeURIComponent(item.chatId)}`);
+            return;
+        }
+        openMediaModal(item);
+    };
+
     const closeMediaModal = () => {
         setShowModal(false);
         setSelectedMedia(null);
+        setArtifactUrl(null);
+        setArtifactError(null);
+        setArtifactLoading(false);
     };
 
     // Client-side prompt search across the current page's items. Keeps the
@@ -83,8 +182,40 @@ const MediaLibrary: React.FC = () => {
     const visibleItems = useMemo(() => {
         const q = searchQuery.trim().toLowerCase();
         if (!q) return mediaItems;
-        return mediaItems.filter((item) => (item.prompt || '').toLowerCase().includes(q));
+        return mediaItems.filter((item) =>
+            ((item.prompt || '') + ' ' + (item.filename || '')).toLowerCase().includes(q)
+        );
     }, [mediaItems, searchQuery]);
+
+    const emptyMessage = useMemo(() => {
+        if (searchQuery) return 'Ningún elemento coincide con tu búsqueda.';
+        switch (filterType) {
+            case 'image':
+                return 'Aún no hay imágenes. ¡Genera una desde el chat!';
+            case 'video':
+                return 'Aún no hay videos. ¡Genera uno desde el chat!';
+            case 'music':
+                return 'Aún no hay música. Pide una canción en el chat (p. ej. “crea una canción lofi”).';
+            case 'audio':
+                return 'Aún no hay audio. Pide una narración o voz en el chat.';
+            case 'webapp':
+                return 'Aún no hay apps web. Genera una app o dashboard HTML desde el chat.';
+            case 'mobileapp':
+                return 'Aún no hay apps móviles.';
+            default:
+                return 'Aún no hay archivos. ¡Genera imágenes, videos, audio, música o apps!';
+        }
+    }, [filterType, searchQuery]);
+
+    const renderArtifactCardBody = (item: MediaItem) => (
+        <div className="flex flex-col items-center justify-center w-full h-full p-4 text-center bg-gradient-to-br from-gray-50 to-gray-100 dark:from-zinc-800 dark:to-zinc-900 text-gray-500 dark:text-gray-300">
+            <div className="text-gray-400 dark:text-gray-500">{TYPE_ICON[item.type]}</div>
+            <p className="mt-3 text-sm font-medium text-gray-700 dark:text-gray-200 truncate w-full" title={item.filename || item.prompt}>
+                {item.filename || item.prompt}
+            </p>
+            <span className="mt-1 text-xs text-gray-400">{TAB_LABELS[item.type]}</span>
+        </div>
+    );
 
     return (
         <div className="container mx-auto p-4">
@@ -97,13 +228,8 @@ const MediaLibrary: React.FC = () => {
             </div>
 
             <div className="flex flex-col gap-3 mb-6 sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex border-b border-gray-200 dark:border-gray-700">
-                    {(['all', 'image', 'video'] as const).map((type) => {
-                        const labels: Record<FilterType, string> = {
-                            all: 'Todos',
-                            image: 'Imágenes',
-                            video: 'Videos',
-                        };
+                <div className="flex flex-wrap border-b border-gray-200 dark:border-gray-700">
+                    {TAB_ORDER.map((type) => {
                         const active = filterType === type;
                         return (
                             <button
@@ -115,7 +241,7 @@ const MediaLibrary: React.FC = () => {
                                         : 'text-gray-600 hover:text-gray-800 dark:text-gray-300'
                                 }`}
                             >
-                                {labels[type]}
+                                {TAB_LABELS[type]}
                             </button>
                         );
                     })}
@@ -142,10 +268,12 @@ const MediaLibrary: React.FC = () => {
                     visibleItems.map((item) => (
                         <div
                             key={`${item.messageId}-${item.type}-${item.timestamp}`}
-                            className="relative border border-gray-200 dark:border-gray-700 rounded-lg shadow-sm bg-white dark:bg-zinc-800 overflow-hidden group cursor-pointer aspect-w-1 aspect-h-1"
-                            onClick={() => openMediaModal(item)}
+                            className="relative border border-gray-200 dark:border-gray-700 rounded-lg shadow-sm bg-white dark:bg-zinc-800 overflow-hidden group cursor-pointer aspect-square"
+                            onClick={() => handleItemClick(item)}
+                            title={item.chatId ? 'Abrir el chat donde se creó' : (item.prompt || item.filename)}
                         >
                             {item.type === 'image' && (
+                                // eslint-disable-next-line @next/next/no-img-element -- generated images are arbitrary external/CDN URLs; next/image's loader/domain allow-list doesn't fit them.
                                 <img
                                     src={item.url || '/placeholder.png'}
                                     alt={item.prompt || 'Imagen generada'}
@@ -188,28 +316,19 @@ const MediaLibrary: React.FC = () => {
                                 </div>
                             )}
 
-                            {item.download_url && (
-                                <a
-                                    href={item.download_url}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    onClick={(e) => e.stopPropagation()}
-                                    download={item.filename || `generated-${item.type}-${item.messageId}.${item.type === 'image' ? 'png' : 'mp4'}`}
-                                    className="absolute bottom-2 right-2 bg-black bg-opacity-60 text-white p-2 rounded-full opacity-0 group-hover:opacity-100 transition-opacity duration-300 z-10 hover:bg-opacity-80"
-                                    title="Descargar"
-                                    aria-label="Descargar archivo"
-                                >
-                                    <Download className="w-5 h-5 text-white" />
-                                </a>
+                            {isArtifactType(item.type) && renderArtifactCardBody(item)}
+
+                            {(item.type === 'audio' || item.type === 'music') && (
+                                <div className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none">
+                                    <Play className="w-10 h-10 text-blue-600/80 opacity-0 group-hover:opacity-100 transition-opacity" />
+                                </div>
                             )}
                         </div>
                     ))
                 ) : (
                     !loading && (
                         <p className="col-span-full text-center text-gray-600 dark:text-gray-300 text-lg py-10">
-                            {searchQuery
-                                ? 'Ningún elemento coincide con tu búsqueda.'
-                                : 'Aún no hay archivos. ¡Genera imágenes o videos!'}
+                            {emptyMessage}
                         </p>
                     )
                 )}
@@ -248,8 +367,9 @@ const MediaLibrary: React.FC = () => {
                             &times;
                         </button>
 
-                        <div className="p-4 pt-12 text-white">
+                        <div className="p-4 pt-12 text-white overflow-y-auto max-h-[90vh]">
                             {selectedMedia.type === 'image' && selectedMedia.url && (
+                                // eslint-disable-next-line @next/next/no-img-element -- generated images are arbitrary external/CDN URLs; next/image's loader/domain allow-list doesn't fit them.
                                 <img
                                     src={selectedMedia.url}
                                     alt={selectedMedia.prompt || 'Imagen generada'}
@@ -278,21 +398,90 @@ const MediaLibrary: React.FC = () => {
                                 </div>
                             )}
 
+                            {isArtifactType(selectedMedia.type) && (
+                                <div className="min-h-[8rem]">
+                                    {artifactLoading && (
+                                        <div className="flex items-center justify-center gap-2 py-12 text-gray-300">
+                                            <Loader2 className="w-5 h-5 animate-spin" />
+                                            Cargando…
+                                        </div>
+                                    )}
+                                    {artifactError && (
+                                        <p className="text-red-400 text-center py-12">{artifactError}</p>
+                                    )}
+
+                                    {!artifactLoading && !artifactError && artifactUrl && (
+                                        <>
+                                            {(selectedMedia.type === 'audio' || selectedMedia.type === 'music') && (
+                                                <div className="flex flex-col items-center gap-4 py-8">
+                                                    <div className="text-blue-400">{TYPE_ICON[selectedMedia.type]}</div>
+                                                    {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+                                                    <audio controls autoPlay src={artifactUrl} className="w-full max-w-xl" />
+                                                </div>
+                                            )}
+
+                                            {selectedMedia.type === 'webapp' && (
+                                                <div className="flex flex-col gap-3">
+                                                    <iframe
+                                                        title={selectedMedia.filename || 'App web'}
+                                                        src={artifactUrl}
+                                                        className="w-full h-[60vh] bg-white rounded-lg border border-gray-700"
+                                                        sandbox="allow-scripts allow-forms allow-popups allow-same-origin"
+                                                    />
+                                                    <button
+                                                        onClick={() => window.open(artifactUrl, '_blank', 'noopener,noreferrer')}
+                                                        className="inline-flex items-center justify-center gap-2 bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition self-center"
+                                                    >
+                                                        <ExternalLink className="w-4 h-4" />
+                                                        Abrir en nueva pestaña
+                                                    </button>
+                                                </div>
+                                            )}
+
+                                            {selectedMedia.type === 'mobileapp' && (
+                                                <div className="flex flex-col items-center gap-4 py-10">
+                                                    <div className="text-blue-400">{TYPE_ICON.mobileapp}</div>
+                                                    <p className="text-gray-300 text-sm text-center">
+                                                        Vista previa no disponible para apps móviles. Descarga el paquete para instalarlo.
+                                                    </p>
+                                                </div>
+                                            )}
+                                        </>
+                                    )}
+                                </div>
+                            )}
+
                             <div className="mt-6 text-center">
-                                <p className="text-xl font-semibold mb-2">{selectedMedia.prompt}</p>
+                                <p className="text-xl font-semibold mb-2">{selectedMedia.prompt || selectedMedia.filename}</p>
                                 <p className="text-sm text-gray-400">{new Date(selectedMedia.timestamp).toLocaleString()}</p>
 
-                                {selectedMedia.download_url && (
-                                    <a
-                                        href={selectedMedia.download_url}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        download={selectedMedia.filename || `generated-${selectedMedia.type}-${selectedMedia.messageId}.${selectedMedia.type === 'image' ? 'png' : 'mp4'}`}
-                                        className="mt-4 inline-flex items-center gap-2 bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition duration-200"
-                                    >
-                                        <Download className="w-5 h-5" />
-                                        Descargar {selectedMedia.type === 'image' ? 'imagen' : 'video'}
-                                    </a>
+                                {isArtifactType(selectedMedia.type) ? (
+                                    artifactUrl && (
+                                        <a
+                                            href={artifactUrl}
+                                            download={selectedMedia.filename || `artifact-${selectedMedia.id || selectedMedia.messageId}`}
+                                            className="mt-4 inline-flex items-center gap-2 bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition duration-200"
+                                        >
+                                            <Download className="w-5 h-5" />
+                                            Descargar
+                                        </a>
+                                    )
+                                ) : (
+                                    selectedMedia.download_url && (
+                                        <a
+                                            href={selectedMedia.download_url}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            download={
+                                                selectedMedia.filename ||
+                                                `generated-${selectedMedia.type}-${selectedMedia.messageId}.${selectedMedia.type === 'image' ? 'png' : 'mp4'}`
+                                            }
+                                            className="mt-4 inline-flex items-center gap-2 bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition duration-200"
+                                        >
+                                            <Download className="w-5 h-5" />
+                                            Descargar {selectedMedia.type === 'image' ? 'imagen' : 'video'}
+                                        </a>
+                                    )
                                 )}
                             </div>
                         </div>

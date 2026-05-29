@@ -2233,9 +2233,25 @@ class ApiClient {
     return res.json();
   }
 
-  async getMediaLibrary(params?: { page?: number; limit?: number; type?: 'image' | 'video' }) {
+  async getMediaLibrary(params?: { page?: number; limit?: number; type?: 'image' | 'video' | 'audio' | 'music' | 'webapp' | 'mobileapp' }) {
     const query = new URLSearchParams(params as any).toString();
     return this.request(`/library/media-library${query ? `?${query}` : ''}`);
+  }
+
+  // Fetch an agent-artifact (audio/music/web-app) as a Blob with the bearer
+  // token attached. Plain <audio>/<iframe> tags can't send the Authorization
+  // header and the artifact route is owner-scoped, so the library loads these
+  // files here and renders them via object URLs. `downloadUrl` arrives as
+  // "/api/agent/artifact/<id>?name=…"; the client baseURL already carries the
+  // /api prefix, so strip it to avoid requesting /api/api/….
+  async getMediaArtifactBlob(downloadUrl: string): Promise<Blob> {
+    const path = downloadUrl.replace(/^\/api(?=\/)/, '');
+    const res = await fetch(`${this.baseURL}${path}`, {
+      headers: this.token ? { Authorization: `Bearer ${this.token}` } : undefined,
+      credentials: 'include',
+    });
+    if (!res.ok) throw new Error(`No se pudo cargar el archivo (${res.status})`);
+    return res.blob();
   }
 
   async generateChart(data: { prompt: string; displayPrompt?: string; chatId?: string, fileId?: string }) {

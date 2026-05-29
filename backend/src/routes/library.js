@@ -1,6 +1,7 @@
 const express = require('express');
 const { PrismaClient } = require('@prisma/client');
 const { authenticateToken } = require('../middleware/auth');
+const { listArtifactsByOwner } = require('../services/agents/task-tools');
 const router = express.Router();
 const prisma = new PrismaClient();
 
@@ -146,81 +147,84 @@ router.get('/videos', authenticateToken, async (req, res) => {
     }
 });
 
-// Endpoint para obtener imágenes y videos desde la Media Library
+// Categories the library can show. image/video are stored inline on the
+// assistant message's files[] JSON; audio/music/webapp/mobileapp live in the
+// agent artifact store (see task-tools.listArtifactsByOwner).
+const MEDIA_LIBRARY_CATEGORIES = ['image', 'video', 'audio', 'music', 'webapp', 'mobileapp'];
+const ARTIFACT_LIBRARY_CATEGORIES = ['audio', 'music', 'webapp', 'mobileapp'];
+// Bound the message scan so a heavy account can't blow up memory; the library
+// shows the most recent generations first.
+const MESSAGE_MEDIA_SCAN_LIMIT = 1000;
+
+// Endpoint para obtener imágenes, videos, audio, música y apps desde la Media Library
 router.get('/media-library', authenticateToken, async (req, res) => {
     const userId = req.user.id;
     const { page = 1, limit = 20, type } = req.query; // Para paginación y filtrado
-    const skip = (parseInt(page) - 1) * parseInt(limit);
-    const take = parseInt(limit);
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const take = Math.max(1, Math.min(100, parseInt(limit, 10) || 20));
+    // null === "Todos" (no filter). Unknown values fall back to "Todos".
+    const filter = MEDIA_LIBRARY_CATEGORIES.includes(String(type)) ? String(type) : null;
 
     try {
-        const messagesWithFiles = await prisma.message.findMany({
-            where: {
-                chat: {
-                    userId: userId,
-                },
-                role: 'ASSISTANT', // Typically, generated media comes from ASSISTANT
-                files: {
-                    not: null, // Verifica que la columna 'files' de la base de datos no sea NULL
-                },
-            },
-            orderBy: {
-                timestamp: 'desc',
-            },
-            // Pagination only applied here. Filtering for specific types will be done in JS.
-            skip: skip,
-            take: take + 1, // Solicitar un elemento adicional para determinar si existe una página siguiente
-            select: {
-                id: true,
-                content: true,
-                files: true,
-                timestamp: true,
-                chatId: true,
-            },
-        });
+        const items = [];
 
-        // Filter and process media items in JavaScript
-        const allMediaItems = messagesWithFiles.flatMap(message => {
-            try {
-                const files = typeof message.files === 'string' ? JSON.parse(message.files) : (message.files || []);
-                if (Array.isArray(files)) {
-                    return files.map(file => {
-                        // Only consider items with a 'type' property that is 'image' or 'video'
-                        if (file && (file.type === 'image' || file.type === 'video')) {
-                            // Apply type filter if specified
-                            if (!type || file.type === type) {
-                                return {
-                                    messageId: message.id,
-                                    chatId: message.chatId,
-                                    timestamp: message.timestamp,
-                                    ...file, // Includes type, url/filename, prompt, status, video_url, download_url etc.
-                                };
-                            }
-                        }
-                        return null;
-                    }).filter(Boolean); // Remove null entries after filtering
+        // 1) Images + videos are persisted inline on the assistant message files[].
+        if (!filter || filter === 'image' || filter === 'video') {
+            const messagesWithFiles = await prisma.message.findMany({
+                where: {
+                    chat: { userId },
+                    role: 'ASSISTANT',
+                    files: { not: null },
+                },
+                orderBy: { timestamp: 'desc' },
+                take: MESSAGE_MEDIA_SCAN_LIMIT,
+                select: { id: true, files: true, timestamp: true, chatId: true },
+            });
+
+            for (const message of messagesWithFiles) {
+                let files;
+                try {
+                    files = typeof message.files === 'string' ? JSON.parse(message.files) : (message.files || []);
+                } catch (e) {
+                    console.error(`Failed to parse files JSON for message ID ${message.id}:`, e);
+                    continue;
                 }
-            } catch (e) {
-                console.error(`Failed to parse files JSON for message ID ${message.id}:`, e);
+                if (!Array.isArray(files)) continue;
+                for (const file of files) {
+                    if (!file || (file.type !== 'image' && file.type !== 'video')) continue;
+                    if (filter && file.type !== filter) continue;
+                    items.push({
+                        messageId: message.id,
+                        chatId: message.chatId,
+                        timestamp: message.timestamp,
+                        source: 'message',
+                        ...file, // type, url/filename, prompt, status, video_url, download_url, …
+                    });
+                }
             }
-            return [];
-        });
+        }
 
-        // Manual pagination based on filtered results
-        const paginatedItems = allMediaItems.slice(0, take);
-        const hasNextPage = allMediaItems.length > take;
-        const totalItemsOnCurrentFilter = allMediaItems.length; // This is count before slicing
-        const totalPagesEstimate = Math.ceil(totalItemsOnCurrentFilter / parseInt(limit)); // Approximation
+        // 2) Audio / music / web-apps / mobile-apps live in the agent artifact store.
+        if (!filter || ARTIFACT_LIBRARY_CATEGORIES.includes(filter)) {
+            const categories = filter ? [filter] : ARTIFACT_LIBRARY_CATEGORIES;
+            items.push(...listArtifactsByOwner(userId, { categories }));
+        }
+
+        // Merge both sources, newest-first, then paginate in memory.
+        items.sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
+        const totalItems = items.length;
+        const totalPages = Math.max(1, Math.ceil(totalItems / take));
+        const start = (pageNum - 1) * take;
+        const paginatedItems = items.slice(start, start + take);
 
         res.json({
             items: paginatedItems,
-            currentPage: parseInt(page),
-            limit: parseInt(limit),
-            totalItems: totalItemsOnCurrentFilter, // Total items found for the current filter on this fetch window
-            totalPages: totalPagesEstimate,
-            hasNextPage: hasNextPage,
+            currentPage: pageNum,
+            limit: take,
+            totalItems,
+            totalPages,
+            hasNextPage: start + take < totalItems,
         });
-
     } catch (error) {
         console.error('Error fetching media library:', error);
         res.status(500).json({ error: 'Failed to fetch media library items' });
