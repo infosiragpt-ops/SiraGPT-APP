@@ -246,3 +246,23 @@ test('rerank honours an external AbortSignal (caller cancel)', async () => {
     (err) => err.code === 'cohere_rerank_http_failed',
   );
 });
+
+test('rerank detaches the external-signal listener after a successful call', async () => {
+  const { getEventListeners } = require('node:events');
+  const ac = new AbortController();
+  const out = await cr.rerank({
+    query: 'q',
+    documents: ['a', 'b'],
+    options: {
+      apiKey: 'co-test',
+      signal: ac.signal,
+      fetchImpl: fakeOk({ results: [{ index: 0, relevance_score: 0.9 }] }),
+    },
+  });
+  assert.ok(Array.isArray(out));
+  assert.equal(
+    getEventListeners(ac.signal, 'abort').length,
+    0,
+    'abort listener must be removed once rerank settles (no leak on reused signals)',
+  );
+});
