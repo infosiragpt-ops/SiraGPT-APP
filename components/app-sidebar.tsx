@@ -1259,12 +1259,15 @@ export function AppSidebar() {
                   // listado real.
                   <div className="space-y-1 px-2 py-2" aria-busy="true" aria-label="Cargando chats">
                     {[88, 72, 80, 64, 76].map((w, i) => (
-                      <div key={i} className="flex h-9 items-center gap-2 rounded-lg px-2">
-                        <span className="flex h-4 w-4 shrink-0 items-center justify-center">
+                      <div key={i} className="flex h-9 items-center gap-2.5 rounded-lg px-2">
+                        {/* Placeholder circular alineado con el ancla del emoji
+                            (h-5 w-5) para que la transición skeleton → fila real
+                            no desplace el contenido. */}
+                        <span className="flex h-5 w-5 shrink-0 items-center justify-center">
                           {i === 0 ? (
                             <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground/70" />
                           ) : (
-                            <span className="h-1.5 w-1.5 rounded-full bg-sky-500/45" />
+                            <Skeleton className="h-4 w-4 rounded-full" />
                           )}
                         </span>
                         <Skeleton className="h-4 rounded-md" style={{ width: `${w}%` }} />
@@ -1377,9 +1380,18 @@ export function AppSidebar() {
                                           "focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-1",
                                         )}
                                       >
-                                          <div className="flex items-center gap-2 min-w-0 flex-1">
+                                          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                                            {/* Emoji como ancla izquierda (pegado al borde de
+                                                la fila). Antes había una columna de estado
+                                                vacía delante que empujaba el emoji ~24px a la
+                                                derecha en todos los chats inactivos; ahora el
+                                                estado vive como un punto-badge en la esquina
+                                                del emoji, de modo que el glifo queda alineado a
+                                                la izquierda y todas las filas comparten el mismo
+                                                ancho de columna (h-5 w-5). */}
                                             <span
-                                              className="flex h-4 w-4 shrink-0 items-center justify-center"
+                                              className="relative flex h-5 w-5 shrink-0 items-center justify-center text-[15px] leading-none"
+                                              aria-hidden={isStreaming ? undefined : true}
                                               title={
                                                 isStreaming
                                                   ? "Generando..."
@@ -1396,25 +1408,22 @@ export function AppSidebar() {
                                                   className="h-3.5 w-3.5 animate-spin text-muted-foreground/80"
                                                   strokeWidth={2.25}
                                                 />
-                                              ) : isComplete ? (
-                                                <span
-                                                  className="h-2 w-2 rounded-full bg-sky-500 shadow-[0_0_0_3px_rgba(14,165,233,0.16)]"
-                                                  aria-label="Tarea completada"
-                                                />
-                                              ) : isFailed ? (
-                                                <span
-                                                  className="h-2 w-2 rounded-full bg-destructive/85"
-                                                  aria-label="Tarea con error"
-                                                />
                                               ) : (
-                                                <span className="h-1.5 w-1.5 rounded-full bg-transparent" aria-hidden="true" />
+                                                <>
+                                                  <span>{chatEmoji}</span>
+                                                  {(isComplete || isFailed) && (
+                                                    <span
+                                                      className={cn(
+                                                        "absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full ring-2 ring-sidebar",
+                                                        isComplete
+                                                          ? "bg-sky-500 shadow-[0_0_0_3px_rgba(14,165,233,0.16)]"
+                                                          : "bg-destructive/85"
+                                                      )}
+                                                      aria-label={isComplete ? "Tarea completada" : "Tarea con error"}
+                                                    />
+                                                  )}
+                                                </>
                                               )}
-                                            </span>
-                                            <span
-                                              className="w-5 shrink-0 text-[15px] leading-none"
-                                              aria-hidden="true"
-                                            >
-                                              {chatEmoji}
                                             </span>
                                             <span className="text-sm flex-1 truncate">
                                               {displayTitle}
