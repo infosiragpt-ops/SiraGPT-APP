@@ -112,6 +112,29 @@ function getResponseHeader(response: Response | { headers?: { get?: (name: strin
   }
 }
 
+// When the user's paid balance is exhausted, the backend silently serves the
+// turn with the free fallback model (Cerebras Llama 3.1) and signals it via
+// the `x-sira-fallback: free-ia` response header (see chargeCredits middleware
+// + CLAUDE.md "FlashGPT"). The UI used to read NONE of this, so users couldn't
+// tell they'd dropped to free-tier quality. Surface it once per response as a
+// non-blocking toast. Lazy-imports sonner so this stays out of the SSR bundle
+// and never throws if the toast lib is unavailable.
+function notifyFreeIaFallback(response: Response | { headers?: { get?: (name: string) => string | null } }): void {
+  try {
+    if (typeof window === "undefined") return
+    if (getResponseHeader(response, "x-sira-fallback") !== "free-ia") return
+    const feature = getResponseHeader(response, "x-sira-fallback-feature")
+    const detail = feature
+      ? `Sin créditos para ${feature}: respondimos con el modelo gratuito ⚡ FlashGPT.`
+      : "Sin créditos suficientes: respondimos con el modelo gratuito ⚡ FlashGPT."
+    import("sonner")
+      .then(({ toast }) => toast.info(detail, { duration: 6000 }))
+      .catch(() => { /* toast lib unavailable — silent, header already logged server-side */ })
+  } catch {
+    /* never let a UX hint break the stream */
+  }
+}
+
 /** Login/register must not send a stale Bearer token or treat 401 as "refresh session". */
 function isCredentialHandshake(endpoint: string, method: string): boolean {
   if (method !== "POST") return false
@@ -1087,6 +1110,10 @@ class ApiClient {
         }
 
         if (signal?.aborted) throw new Error('Request aborted');
+
+        // Surface a silent paid→free model fallback (header set by the
+        // backend chargeCredits middleware) before we start streaming tokens.
+        notifyFreeIaFallback(response);
 
         const reader = response.body?.getReader();
         if (!reader) throw new Error('Response body is not readable');
