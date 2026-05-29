@@ -112,8 +112,14 @@ async function runWithDeadlineRetry(opts = {}) {
       if (remaining <= 0) break;
       const wait = backoff.next({ attempt: attempts - 1, retryAfter: err && err.retryAfter, now: now() });
       if (wait >= remaining) break; // would overshoot the deadline
-      try { await sleep(wait, signal); } catch {
+      try {
+        await sleep(wait, signal);
+      } catch (sleepErr) {
         if (signal && signal.aborted) throw new AbortedError(signal.reason || 'caller_aborted');
+        // Re-throw unexpected sleep failures instead of silently swallowing
+        // them — otherwise the retry loop would continue (or fall through)
+        // while masking the real cause.
+        throw sleepErr;
       }
     }
   }

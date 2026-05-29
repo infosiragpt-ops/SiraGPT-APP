@@ -41,6 +41,18 @@ const DOMAIN_RULES = {
   },
 };
 
+// Pre-compile the per-keyword word-boundary regexes once at module load.
+// detectDomain() used to rebuild ~180 RegExp objects on every call (6 domains
+// × ~30 keywords), and it runs on every computeQualityMetrics() — an avoidable
+// O(keywords) allocation per call. The regexes are reused via String.match(),
+// which ignores/resets lastIndex, so sharing them across calls is safe.
+const COMPILED_DOMAIN_KEYWORDS = Object.fromEntries(
+  Object.entries(DOMAIN_RULES).map(([domain, rules]) => [
+    domain,
+    rules.keywords.map((kw) => new RegExp(`\\b${kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi')),
+  ]),
+);
+
 const ENTITY_PATTERNS = [
   { type: 'email', pattern: /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, sensitivity: 'high' },
   { type: 'phone', pattern: /(?:\+?\d{1,3}[-.\s]?)?\(?\d{2,4}\)?[-.\s]?\d{3,4}[-.\s]?\d{3,4}/g, sensitivity: 'medium' },
@@ -68,10 +80,9 @@ function detectDomain(text, fileName, mimeType) {
   const combined = `${text || ''} ${fileName || ''}`.toLowerCase();
   const scores = {};
 
-  for (const [domain, rules] of Object.entries(DOMAIN_RULES)) {
+  for (const domain of Object.keys(DOMAIN_RULES)) {
     let score = 0;
-    for (const kw of rules.keywords) {
-      const regex = new RegExp(`\\b${kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi');
+    for (const regex of COMPILED_DOMAIN_KEYWORDS[domain]) {
       const matches = combined.match(regex);
       if (matches) score += matches.length;
     }

@@ -185,6 +185,26 @@ describe('runWithDeadlineRetry — onAttempt sink', () => {
   });
 });
 
+describe('runWithDeadlineRetry — sleep failures', () => {
+  test('an unexpected (non-abort) sleep failure is surfaced, not swallowed', async () => {
+    let attempts = 0;
+    await assert.rejects(
+      runWithDeadlineRetry({
+        run: async () => { attempts += 1; const e = new Error('rl'); e.status = 503; throw e; },
+        deadlineMs: 60_000,
+        maxAttempts: 5,
+        backoff: { next: () => 1 },
+        // Rejects WITHOUT aborting the signal — previously this was swallowed
+        // and the loop kept retrying, masking the real failure.
+        sleep: async () => { throw new Error('clock exploded'); },
+      }),
+      /clock exploded/,
+    );
+    // The loop must stop at the first failed sleep, not retry to exhaustion.
+    assert.equal(attempts, 1);
+  });
+});
+
 describe('runWithDeadlineRetry — guards', () => {
   test('rejects missing run', async () => {
     await assert.rejects(runWithDeadlineRetry({}), TypeError);
