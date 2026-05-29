@@ -62,7 +62,7 @@ function enforceOrgBudgetSafe(req, res, next) {
   }
 }
 const prisma = require('../config/database');
-const { tryConsumePlanQuota } = require('../services/plan-quota');
+const { tryConsumePlanQuota, checkPaidTokenCap, recordApiUsage } = require('../services/plan-quota');
 const aiService = require('../services/ai-service');
 const agentFilters = require('../services/agents/filters');
 const OpenAI = require('openai');
@@ -557,12 +557,9 @@ router.post(
       return res.status(503).json({ error: 'DeepSeek API key is not configured.' });
     }
 
-    if (req.user.apiUsage >= req.user.monthlyLimit) {
-      return res.status(429).json({
-        error: 'Monthly API limit exceeded',
-        usage: { current: req.user.apiUsage, limit: req.user.monthlyLimit },
-      });
-    }
+    // ✅ Paid-plan token cap (single source of truth: plan-quota.js)
+    const quotaCap = checkPaidTokenCap(req.user);
+    if (!quotaCap.ok) return res.status(quotaCap.status).json(quotaCap.body);
 
     const text = String(req.body.text || '').trim();
     const requestedMode = String(req.body.mode || 'standard').trim().toLowerCase();
@@ -5194,13 +5191,9 @@ router.post(
 
       const openai = createProviderClient(provider);
 
-      // ✅ Check monthly limit
-      if (req.user.apiUsage >= req.user.monthlyLimit) {
-        return res.status(429).json({
-          error: 'Monthly API limit exceeded',
-          usage: { current: req.user.apiUsage, limit: req.user.monthlyLimit },
-        });
-      }
+      // ✅ Paid-plan token cap (single source of truth: plan-quota.js)
+      const quotaCap = checkPaidTokenCap(req.user);
+      if (!quotaCap.ok) return res.status(quotaCap.status).json(quotaCap.body);
 
       // Generate image using OpenAI DALL-E with timeout
       let imageUrl, tokens = 10000;
@@ -5358,15 +5351,8 @@ router.post(
         });
       }
 
-      // ✅ Track usage
-      await prisma.apiUsage.create({
-        data: { userId, model: 'dall-e-3', tokens, cost: tokens * 0.001 }
-      });
-
-      const updatedUser = await prisma.user.update({
-        where: { id: userId },
-        data: { apiUsage: { increment: tokens } }
-      });
+      // ✅ Track usage (single source of truth: plan-quota.js)
+      const updatedUser = await recordApiUsage({ prisma, userId, model: 'dall-e-3', tokens });
 
       res.json({
         imageUrl,
@@ -5633,12 +5619,9 @@ router.post(
         ? createOpenRouterClient()
         : createProviderClient(provider);
 
-      if (req.user.apiUsage >= req.user.monthlyLimit) {
-        return res.status(429).json({
-          error: 'Monthly API limit exceeded',
-          usage: { current: req.user.apiUsage, limit: req.user.monthlyLimit },
-        });
-      }
+      // ✅ Paid-plan token cap (single source of truth: plan-quota.js)
+      const quotaCap = checkPaidTokenCap(req.user);
+      if (!quotaCap.ok) return res.status(quotaCap.status).json(quotaCap.body);
 
       let imagePath;
       // If fileId is not provided, check the last message in the chat for an image
@@ -5884,14 +5867,8 @@ router.post(
         });
       }
 
-      await prisma.apiUsage.create({
-        data: { userId, model, tokens: 1000 * generatedFiles.length, cost: (1000 * generatedFiles.length) * 0.001 }
-      });
-
-      const updatedUser = await prisma.user.update({
-        where: { id: userId },
-        data: { apiUsage: { increment: 1000 * generatedFiles.length } }
-      });
+      // ✅ Track usage (single source of truth: plan-quota.js)
+      const updatedUser = await recordApiUsage({ prisma, userId, model, tokens: 1000 * generatedFiles.length });
 
       // Headers ya enviados arriba para sobrevivir al proxy; cerramos
       // con el payload JSON real (los espacios de heartbeat al inicio
@@ -5959,13 +5936,10 @@ router.post(
 
       console.log('🎬 Video generation request:', { prompt, aspect_ratio, userId, chatId, hasFiles: !!files?.length, hasImageUrl: !!image_url });
 
-      // ✅ Check monthly limit
-      if (req.user.apiUsage >= req.user.monthlyLimit) {
-        return res.status(429).json({
-          error: 'Monthly video generation limit exceeded',
-          usage: { current: req.user.apiUsage, limit: req.user.monthlyLimit }
-        });
-      }
+      // ✅ Paid-plan token cap (single source of truth: plan-quota.js).
+      // Keeps the domain-specific video limit message.
+      const quotaCap = checkPaidTokenCap(req.user, { message: 'Monthly video generation limit exceeded' });
+      if (!quotaCap.ok) return res.status(quotaCap.status).json(quotaCap.body);
 
       // ✅ Process attached files (for image-to-video)
       let processedImageUrl = image_url;
@@ -6160,16 +6134,9 @@ router.post(
           console.log('💾 Chat updated with video generation request');
         }
 
-        // ✅ Track usage
+        // ✅ Track usage (single source of truth: plan-quota.js)
         const tokens = 1000; // Fixed token count for video generation
-        await prisma.apiUsage.create({
-          data: { userId, model: processedImageUrl ? 'veo-3.0-img2vid' : 'veo-3.0', tokens, cost: tokens * 0.001 }
-        });
-
-        const updatedUser = await prisma.user.update({
-          where: { id: userId },
-          data: { apiUsage: { increment: tokens } }
-        });
+        const updatedUser = await recordApiUsage({ prisma, userId, model: processedImageUrl ? 'veo-3.0-img2vid' : 'veo-3.0', tokens });
 
         console.log('📊 Usage tracked for video generation');
 

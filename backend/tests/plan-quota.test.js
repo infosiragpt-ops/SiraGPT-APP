@@ -17,6 +17,8 @@ const assert = require("node:assert/strict");
 
 const {
   getPlanQuotaSnapshot,
+  checkPaidTokenCap,
+  recordApiUsage,
   FREE_CALL_LIMIT,
   WARNING_THRESHOLD,
 } = require("../src/services/plan-quota");
@@ -162,5 +164,122 @@ describe("getPlanQuotaSnapshot — Paid plans (token-based)", () => {
     });
     assert.equal(snap.percentage, 0.8);
     assert.equal(snap.warning, true);
+  });
+});
+
+describe("checkPaidTokenCap — paid token cap gate", () => {
+  test("null user → ok:true (defensive, never throws)", () => {
+    assert.deepEqual(checkPaidTokenCap(null), { ok: true });
+    assert.deepEqual(checkPaidTokenCap(undefined), { ok: true });
+  });
+
+  test("under cap → ok:true", () => {
+    const res = checkPaidTokenCap({ apiUsage: 100, monthlyLimit: 500 });
+    assert.deepEqual(res, { ok: true });
+  });
+
+  test("at exactly the cap → 429 (>= comparison)", () => {
+    const res = checkPaidTokenCap({ apiUsage: 500, monthlyLimit: 500 });
+    assert.equal(res.ok, false);
+    assert.equal(res.status, 429);
+    assert.equal(res.body.error, "Monthly API limit exceeded");
+    assert.deepEqual(res.body.usage, { current: 500, limit: 500 });
+  });
+
+  test("over cap → 429 with usage echoing the raw counters", () => {
+    const res = checkPaidTokenCap({ apiUsage: 750, monthlyLimit: 500 });
+    assert.equal(res.ok, false);
+    assert.equal(res.status, 429);
+    assert.deepEqual(res.body.usage, { current: 750, limit: 500 });
+  });
+
+  test("message override is honored (video route keeps its own string)", () => {
+    const res = checkPaidTokenCap(
+      { apiUsage: 500, monthlyLimit: 500 },
+      { message: "Monthly video generation limit exceeded" },
+    );
+    assert.equal(res.body.error, "Monthly video generation limit exceeded");
+  });
+
+  test("BigInt counters are forwarded as-is (bigintSerializer handles JSON)", () => {
+    const res = checkPaidTokenCap({
+      apiUsage: BigInt(1_000),
+      monthlyLimit: BigInt(1_000),
+    });
+    assert.equal(res.ok, false);
+    assert.equal(res.body.usage.current, BigInt(1_000));
+    assert.equal(res.body.usage.limit, BigInt(1_000));
+  });
+
+  test("missing counters do not throw and do not 429 (matches inline behavior)", () => {
+    // The old inline gate did `req.user.apiUsage >= req.user.monthlyLimit`;
+    // with undefined fields that comparison is false → request passes.
+    assert.deepEqual(checkPaidTokenCap({}), { ok: true });
+  });
+
+  test("tryConsumePlanQuota's paid 429 is byte-identical to checkPaidTokenCap", async () => {
+    // The two paths must never drift. tryConsumePlanQuota delegates its
+    // paid branch to checkPaidTokenCap, so an over-cap paid user yields
+    // the same { ok, status, body }.
+    const { tryConsumePlanQuota } = require("../src/services/plan-quota");
+    const user = { plan: "PRO", apiUsage: 600, monthlyLimit: 500 };
+    const viaConsume = await tryConsumePlanQuota({ userId: "u1", prisma: {}, user });
+    const viaCap = checkPaidTokenCap(user);
+    assert.deepEqual(viaConsume, viaCap);
+  });
+});
+
+describe("recordApiUsage — usage write + counter increment", () => {
+  function makePrismaStub(updatedUser) {
+    const calls = [];
+    return {
+      calls,
+      apiUsage: {
+        create: async (args) => {
+          calls.push(["create", args]);
+          return { id: "usage-1", ...args.data };
+        },
+      },
+      user: {
+        update: async (args) => {
+          calls.push(["update", args]);
+          return updatedUser;
+        },
+      },
+    };
+  }
+
+  test("writes an ApiUsage row then increments the user counter, returns updatedUser", async () => {
+    const updatedUser = { id: "u1", apiUsage: 10_500, monthlyLimit: 100_000 };
+    const prisma = makePrismaStub(updatedUser);
+
+    const result = await recordApiUsage({
+      prisma,
+      userId: "u1",
+      model: "dall-e-3",
+      tokens: 10_000,
+    });
+
+    assert.deepEqual(result, updatedUser);
+    // create first, then update — ordering preserved from the inline code.
+    assert.deepEqual(prisma.calls.map((c) => c[0]), ["create", "update"]);
+
+    const [, createArgs] = prisma.calls[0];
+    assert.deepEqual(createArgs, {
+      data: { userId: "u1", model: "dall-e-3", tokens: 10_000, cost: 10 },
+    });
+
+    const [, updateArgs] = prisma.calls[1];
+    assert.deepEqual(updateArgs, {
+      where: { id: "u1" },
+      data: { apiUsage: { increment: 10_000 } },
+    });
+  });
+
+  test("cost is always tokens * 0.001 (the constant every site used)", async () => {
+    const prisma = makePrismaStub({ id: "u1", apiUsage: 1, monthlyLimit: 9 });
+    await recordApiUsage({ prisma, userId: "u1", model: "veo-3.0", tokens: 1_000 });
+    const [, createArgs] = prisma.calls[0];
+    assert.equal(createArgs.data.cost, 1);
   });
 });

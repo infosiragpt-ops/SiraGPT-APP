@@ -197,6 +197,86 @@ async function fetchUserPlanQuota(userId, prisma) {
 }
 
 /**
+ * checkPaidTokenCap — pure, synchronous "is this paid user over their
+ * token cap?" check. This is the single source of truth for the
+ * `apiUsage >= monthlyLimit → 429` gate that was previously inlined
+ * byte-for-byte at four call sites in `backend/src/routes/ai.js`
+ * (/paraphrase, /generate-image ×2, /generate-video).
+ *
+ * Those routes sit behind `requirePaidPlan`, so the caller is always a
+ * paid plan (or a superAdmin) — there is no FREE daily-call branch to
+ * run, which is why they use this pure helper rather than
+ * `tryConsumePlanQuota` (the latter does an async FREE daily-count DB
+ * read that would be pointless, and would change behavior for the
+ * superAdmin-on-FREE edge case). Keeping it pure means it never throws
+ * and never touches the DB.
+ *
+ * Behavior is preserved exactly from the inline blocks:
+ *   - comparison is the raw `>=` on whatever `apiUsage` / `monthlyLimit`
+ *     are (BigInt or number), so the 429 boundary is identical;
+ *   - the 429 body forwards the raw values under `usage: { current,
+ *     limit }` (the existing `bigintSerializerMiddleware` serializes
+ *     BigInt);
+ *   - `message` defaults to the generic 'Monthly API limit exceeded'
+ *     and is overridable so the video route keeps its domain-specific
+ *     'Monthly video generation limit exceeded' string.
+ *
+ * @param {Object|null} user                 The req.user row (null → allow).
+ * @param {Object} [opts]
+ * @param {string} [opts.message]            429 error string override.
+ * @returns {{ok: true} | {ok: false, status: number, body: object}}
+ */
+function checkPaidTokenCap(user, { message = 'Monthly API limit exceeded' } = {}) {
+  if (!user) return { ok: true };
+  if (user.apiUsage >= user.monthlyLimit) {
+    return {
+      ok: false,
+      status: 429,
+      body: {
+        error: message,
+        usage: { current: user.apiUsage, limit: user.monthlyLimit },
+      },
+    };
+  }
+  return { ok: true };
+}
+
+/**
+ * recordApiUsage — single source of truth for the post-generation
+ * "write an ApiUsage row + bump the user's apiUsage counter" pattern
+ * that was inlined identically at three image/video call sites in
+ * `backend/src/routes/ai.js`. Mirrors the original two writes exactly:
+ *
+ *   1. prisma.apiUsage.create({ data: { userId, model, tokens,
+ *        cost: tokens * 0.001 } })
+ *   2. prisma.user.update({ where: { id: userId },
+ *        data: { apiUsage: { increment: tokens } } })
+ *
+ * The cost-per-token factor (0.001) is the constant every site used.
+ * Returns the updated user row (the second write's result) so callers
+ * can keep echoing `usage: { current: updatedUser.apiUsage, limit:
+ * updatedUser.monthlyLimit }` in their responses. Awaiting the create
+ * before the update preserves the original ordering: a failed usage
+ * insert short-circuits before the counter is bumped.
+ *
+ * @param {Object} params
+ * @param {Object} params.prisma  Prisma client.
+ * @param {string} params.userId  User id.
+ * @param {string} params.model   Model id stamped on the ApiUsage row.
+ * @param {number} params.tokens  Token count to record + increment by.
+ * @returns {Promise<Object>} the updated user row.
+ */
+async function recordApiUsage({ prisma, userId, model, tokens } = {}) {
+  await prisma.apiUsage.create({
+    data: { userId, model, tokens, cost: tokens * 0.001 },
+  });
+  return prisma.user.update({
+    where: { id: userId },
+    data: { apiUsage: { increment: tokens } },
+  });
+}
+
+/**
  * tryConsumePlanQuota — atomic check-and-consume primitive used by
  * the chat path (`backend/src/routes/ai.js`). Replaces seven byte-
  * identical inline blocks that each:
@@ -273,18 +353,11 @@ async function tryConsumePlanQuota({ userId, prisma, user } = {}) {
   // before every chat turn. The snapshot in `getPlanQuotaSnapshot`
   // already clamps percentage to 1 so dashboards and headers
   // never lie about a 110% used count.
-  if (user.apiUsage >= user.monthlyLimit) {
-    return {
-      ok: false,
-      status: 429,
-      body: {
-        error: 'Monthly API limit exceeded',
-        usage: { current: user.apiUsage, limit: user.monthlyLimit },
-      },
-    };
-  }
-
-  return { ok: true };
+  //
+  // The cap check itself is delegated to checkPaidTokenCap so the
+  // paid-plan 429 shape lives in exactly one place (this path and the
+  // four /api/ai paid routes now produce byte-identical bodies).
+  return checkPaidTokenCap(user);
 }
 
 module.exports = {
@@ -293,6 +366,8 @@ module.exports = {
   countFreeDailyCalls,
   fetchUserPlanQuota,
   tryConsumePlanQuota,
+  checkPaidTokenCap,
+  recordApiUsage,
   FREE_CALL_LIMIT,
   WARNING_THRESHOLD,
 };
