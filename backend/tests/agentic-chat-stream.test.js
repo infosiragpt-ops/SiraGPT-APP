@@ -172,6 +172,106 @@ test('default toolset includes chat, document and verification tools', () => {
   assert.ok(names.includes('monitor_ci'));
 });
 
+test('default toolset stays lean (no media tools) when the turn is not a create request', () => {
+  const { buildDefaultTools } = agenticStream._internal;
+  const names = buildDefaultTools({ userQuery: '¿cuál es la capital de Francia?' }).map(tool => tool.name);
+  assert.ok(names.includes('web_search'));
+  assert.ok(!names.includes('generate_image'));
+  assert.ok(!names.includes('generate_music'));
+});
+
+test('default toolset adds image/video/audio/music tools for a create request', () => {
+  const { buildDefaultTools } = agenticStream._internal;
+  const names = buildDefaultTools({ userQuery: 'créame una imagen de un gato astronauta' }).map(tool => tool.name);
+  // base tools still present
+  assert.ok(names.includes('web_search'));
+  assert.ok(names.includes('create_document'));
+  // media creation tools now available so the agent can actually produce them
+  assert.ok(names.includes('generate_image'), 'generate_image should be available');
+  assert.ok(names.includes('generate_video'), 'generate_video should be available');
+  assert.ok(names.includes('generate_speech'), 'generate_speech should be available');
+  assert.ok(names.includes('generate_music'), 'generate_music should be available');
+  assert.ok(names.includes('create_chart'), 'create_chart should be available');
+  // no duplicate tool names
+  assert.equal(names.length, new Set(names).size);
+});
+
+test('media tools also load for explicit audio/music requests', () => {
+  const { buildDefaultTools } = agenticStream._internal;
+  const music = buildDefaultTools({ userQuery: 'genérame una canción de 3 minutos' }).map(t => t.name);
+  assert.ok(music.includes('generate_music'));
+  const audio = buildDefaultTools({ userQuery: 'hazme un audio narrando este texto' }).map(t => t.name);
+  assert.ok(audio.includes('generate_speech'));
+});
+
+test('runAgenticChat injects a media-intent directive naming the tool + specs', async () => {
+  let firstArgs = null;
+  const openai = {
+    chat: { completions: { create: async (a) => { firstArgs = a; return finalizeMessage('Listo.'); } } },
+  };
+  const { res } = makeFakeRes();
+  await agenticStream.runAgenticChat({
+    openai,
+    model: 'gpt-4o-mini',
+    userQuery: 'genérame una canción de 3 minutos estilo lofi',
+    history: [],
+    res,
+    toolsOverride: [{
+      name: 'noop',
+      description: 'noop',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+      execute: async () => ({ ok: true }),
+    }],
+  });
+  const system = firstArgs.messages.find(m => m.role === 'system')?.content || '';
+  assert.match(system, /generate_music/);
+  assert.match(system, /180/);
+});
+
+test('runAgenticChat surfaces tool file_artifact events into state.artifacts', async () => {
+  const openai = makeFakeOpenAI([
+    toolCallMessage('fake_media', {}),
+    finalizeMessage('Imagen lista.'),
+  ]);
+  const { res, frames } = makeFakeRes();
+
+  await agenticStream.runAgenticChat({
+    openai,
+    model: 'gpt-4o-mini',
+    userQuery: 'créame una imagen de prueba',
+    history: [],
+    res,
+    toolsOverride: [{
+      name: 'fake_media',
+      description: 'emits an artifact like the media tools do',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+      execute: async (_args, ctx) => {
+        if (ctx && typeof ctx.onEvent === 'function') {
+          ctx.onEvent({
+            type: 'file_artifact',
+            artifact: {
+              id: 'art1', filename: 'gato.png', format: 'png', mime: 'image/png',
+              sizeBytes: 2048, downloadUrl: '/api/agent/artifact/art1?name=gato.png',
+            },
+          });
+        }
+        return { ok: true, downloadUrl: '/api/agent/artifact/art1?name=gato.png' };
+      },
+    }],
+  });
+
+  const last = frames().filter(f => f.replace).pop();
+  assert.ok(last, 'expected a final replace frame');
+  const open = '```agent-task-state\n';
+  const jsonPart = last.content.slice(last.content.indexOf(open) + open.length, last.content.indexOf('\n```'));
+  const state = JSON.parse(jsonPart);
+  assert.ok(Array.isArray(state.artifacts));
+  assert.equal(state.artifacts.length, 1);
+  assert.equal(state.artifacts[0].filename, 'gato.png');
+  assert.equal(state.artifacts[0].downloadUrl, '/api/agent/artifact/art1?name=gato.png');
+  assert.equal(state.artifacts[0].mime, 'image/png');
+});
+
 test('buildThreadWorkContext preserves standing user goals from prior turns', () => {
   const { buildThreadWorkContext } = agenticStream._internal;
   const context = buildThreadWorkContext([

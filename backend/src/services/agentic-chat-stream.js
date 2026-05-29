@@ -43,6 +43,7 @@ const { hostFileTool } = require('./agents/host-file-tool');
 const { checkCiStatusTool, monitorCiTool } = require('./agents/github-actions-tool');
 const openclawCapabilityKernel = require('./openclaw-capability-kernel');
 const { isAgenticActionRequest } = require('./agents/agentic-trigger');
+const { detectMediaIntent, buildMediaIntentHint } = require('./agents/media-intent');
 const {
   buildExecutionProfile,
   buildExecutionProfilePrompt,
@@ -82,6 +83,11 @@ const STAGE_LABELS = {
   python_exec: () => 'Ejecutando Python',
   bash_exec: () => 'Ejecutando JavaScript aislado',
   create_document: (args) => `Creando ${truncate(args?.filename || 'archivo', 48)}`,
+  generate_image: (args) => `Generando imagen${args?.prompt ? `: ${truncate(args.prompt, 40)}` : ''}`,
+  generate_video: (args) => `Generando video${args?.prompt ? `: ${truncate(args.prompt, 40)}` : ''}`,
+  generate_speech: () => 'Generando audio (voz)',
+  generate_music: (args) => `Componiendo música${args?.prompt ? `: ${truncate(args.prompt, 36)}` : ''}`,
+  create_chart: (args) => `Creando gráfica${args?.title ? `: ${truncate(args.title, 40)}` : ''}`,
   verify_artifact: () => 'Verificando archivo generado',
   run_tests: () => 'Ejecutando pruebas',
   npm_install: () => 'Instalando dependencias',
@@ -319,8 +325,13 @@ async function runAgenticChat(opts) {
   if (!userQuery) throw new Error('runAgenticChat: userQuery is required');
   if (!res) throw new Error('runAgenticChat: res is required');
 
-  const tools = toolsOverride || buildDefaultTools();
+  const tools = toolsOverride || buildDefaultTools({ userQuery });
   const availableToolNames = new Set(tools.map((tool) => tool && tool.name).filter(Boolean));
+  // Bilingual media-intent detection: when the user asks to create an
+  // image / video / audio / music in the chat bar, this pre-extracts the
+  // specs (duration, aspect ratio, count, style/genre) and lets us inject a
+  // directive so the agent reliably calls the matching tool with them.
+  const mediaIntent = detectMediaIntent(userQuery);
   const executionProfile = buildChatFinalizeProfile({
     userQuery,
     fileIds: Array.isArray(toolContext.fileIds) ? toolContext.fileIds : [],
@@ -394,6 +405,7 @@ async function runAgenticChat(opts) {
 
   const extraSystem = [
     'Responde SIEMPRE en español, con tono profesional y cercano. No uses emojis.',
+    mediaIntent.kind ? buildMediaIntentHint(mediaIntent) : '',
     openclawRuntimeBlock,
     buildExecutionProfilePrompt(executionProfile),
     buildThreadWorkContext(history, userQuery),
@@ -416,6 +428,35 @@ async function runAgenticChat(opts) {
     historyForPrompt ? `\nConversación previa (recortada):\n${historyForPrompt}` : '',
   ].filter(Boolean).join('\n');
 
+  // Surface artifacts produced by media/visual/document tools into the
+  // agent-task-state sentinel so generated images, videos, audio and music
+  // render as downloadable, playable assets inside the chat bubble — without
+  // any frontend change (the existing AgenticStepsRenderer already reads
+  // state.artifacts). Tools emit `file_artifact` via ctx.onEvent.
+  const seenArtifactIds = new Set();
+  const upstreamOnEvent = typeof toolContext.onEvent === 'function' ? toolContext.onEvent : null;
+  function onEvent(evt) {
+    if (upstreamOnEvent) { try { upstreamOnEvent(evt); } catch (_) { /* best-effort */ } }
+    try {
+      if (!evt || evt.type !== 'file_artifact' || !evt.artifact || !evt.artifact.downloadUrl) return;
+      const a = evt.artifact;
+      const key = String(a.id || a.downloadUrl);
+      if (seenArtifactIds.has(key)) return;
+      seenArtifactIds.add(key);
+      state.artifacts.push({
+        id: String(a.id || key),
+        filename: a.filename || 'archivo',
+        mime: a.mime || 'application/octet-stream',
+        format: a.format || null,
+        sizeBytes: Number(a.sizeBytes) || 0,
+        downloadUrl: a.downloadUrl,
+        previewHtml: a.previewHtml || null,
+        validation: a.validation || null,
+      });
+      writeSse(res, { replace: true, content: serializeSentinel(state) });
+    } catch (_) { /* never let UI plumbing crash a tool */ }
+  }
+
   let stepCounter = 0;
   const result = await reactAgent.run(openai, {
     query: userQuery,
@@ -424,7 +465,7 @@ async function runAgenticChat(opts) {
     maxSteps: maxStepsOverride,
     maxRuntimeMs: maxRuntimeOverride,
     extraSystem,
-    ctx: { ...toolContext, signal },
+    ctx: { ...toolContext, signal, onEvent },
     finalizeGuard: executionProfile.requiredTools.length
       ? ({ steps }) => validateFinalize(executionProfile, steps)
       : null,
@@ -585,8 +626,43 @@ function loadTaskTools() {
   }
 }
 
-function buildDefaultTools() {
-  const tools = [...baseWebTools(), ...loadTaskTools(), cloneProjectTool, hostBashTool, hostFileTool, checkCiStatusTool, monitorCiTool];
+/**
+ * Lazily load the visual (image/video/chart/diagram) + audio (speech/music)
+ * creation tools. These modules are heavy (visual-media-tools is ~8k lines)
+ * so they are only required when a turn actually wants to create media.
+ */
+function loadMediaTools() {
+  const out = [];
+  try {
+    // eslint-disable-next-line global-require
+    const { VISUAL_MEDIA_TOOLS } = require('./agents/visual-media-tools');
+    if (Array.isArray(VISUAL_MEDIA_TOOLS)) out.push(...VISUAL_MEDIA_TOOLS);
+  } catch (err) {
+    try { console.warn('[agentic-chat] visual media tools unavailable:', err && err.message); } catch (_) {}
+  }
+  try {
+    // eslint-disable-next-line global-require
+    const { AUDIO_MEDIA_TOOLS } = require('./agents/audio-media-tools');
+    if (Array.isArray(AUDIO_MEDIA_TOOLS)) out.push(...AUDIO_MEDIA_TOOLS);
+  } catch (err) {
+    try { console.warn('[agentic-chat] audio media tools unavailable:', err && err.message); } catch (_) {}
+  }
+  return out;
+}
+
+/**
+ * @param {object} [opts]
+ * @param {string} [opts.userQuery] when the turn is a create/transform/media
+ *   request, the visual + audio/music creation tools are appended so the
+ *   agent can actually produce the image/video/audio/music/chart the user
+ *   asked for. For non-create turns (repo work, research) the toolset stays
+ *   lean. Calling with no args keeps the legacy base toolset.
+ */
+function buildDefaultTools(opts = {}) {
+  const base = [...baseWebTools(), ...loadTaskTools(), cloneProjectTool, hostBashTool, hostFileTool, checkCiStatusTool, monitorCiTool];
+  const userQuery = opts && typeof opts.userQuery === 'string' ? opts.userQuery : '';
+  const wantsMedia = !!userQuery && (isAgenticActionRequest(userQuery) || !!detectMediaIntent(userQuery).kind);
+  const tools = wantsMedia ? [...base, ...loadMediaTools()] : base;
   const seen = new Set();
   return tools.filter((tool) => {
     if (!tool || !tool.name || seen.has(tool.name)) return false;
