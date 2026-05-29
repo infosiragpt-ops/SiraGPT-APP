@@ -33,3 +33,27 @@ language = "nodejs"
 
 [agent]
 expertMode = true
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Start application"
+
+[[workflows.workflow]]
+name = "Start application"
+author = "agent"
+
+[workflows.workflow.metadata]
+outputType = "webview"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "NEXT_PUBLIC_API_URL=/api BACKEND_INTERNAL_URL=http://localhost:5050 REPLIT_BACKEND_MODE=sidecar BACKEND_PORT=5050 FRONTEND_PORT=3000 NODE_ENV=development node -e \"const { spawn } = require('child_process'); const env = process.env; const backend = spawn('node', ['backend/scripts/start-with-migrations.js'], { cwd: '.', env: { ...env, PORT: '5050', HOST: '127.0.0.1', NODE_ENV: 'production' }, stdio: 'inherit' }); const frontend = spawn('npx', ['next', 'dev', '-p', '3000', '-H', '0.0.0.0'], { env: { ...env, PORT: '3000' }, stdio: 'inherit' });\""
+waitForPort = 3000

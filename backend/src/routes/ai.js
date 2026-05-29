@@ -258,7 +258,7 @@ const OPENROUTER_IMAGE_MODELS = [
     description: 'ByteDance Seedream 4.5 via OpenRouter for professional image generation.',
   },
   {
-    name: 'recraft-v3',
+    name: 'recraftai/recraft-v3',
     displayName: 'Recraft V3',
     provider: 'OpenRouter',
     type: 'IMAGE',
@@ -266,7 +266,7 @@ const OPENROUTER_IMAGE_MODELS = [
     description: 'Recraft V3 via OpenRouter: vector art, illustration and branding.',
   },
   {
-    name: 'ideogram-v2',
+    name: 'ideogram/ideogram-v2',
     displayName: 'Ideogram V2',
     provider: 'OpenRouter',
     type: 'IMAGE',
@@ -274,7 +274,7 @@ const OPENROUTER_IMAGE_MODELS = [
     description: 'Ideogram V2 via OpenRouter: text-in-image generation and typography.',
   },
   {
-    name: 'flux-1.1-pro',
+    name: 'black-forest-labs/flux-1.1-pro',
     displayName: 'Flux 1.1 Pro',
     provider: 'OpenRouter',
     type: 'IMAGE',
@@ -282,7 +282,7 @@ const OPENROUTER_IMAGE_MODELS = [
     description: 'Flux 1.1 Pro via OpenRouter: photorealistic image generation.',
   },
   {
-    name: 'flux-1.1-ultra',
+    name: 'black-forest-labs/flux-1.1-ultra',
     displayName: 'Flux 1.1 Ultra',
     provider: 'OpenRouter',
     type: 'IMAGE',
