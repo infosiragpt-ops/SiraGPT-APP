@@ -1,7 +1,9 @@
 { pkgs }: {
   deps = [
     pkgs.pandoc
-    pkgs.nodejs_20
+    # Node 22: @capacitor/cli@8 requires >=22 (Node 20 triggered EBADENGINE
+    # warnings during deploy). Kept in sync with `modules = ["nodejs-22"]`.
+    pkgs.nodejs_22
     pkgs.nodePackages.npm
     # Some test fixtures need basic utilities.
     pkgs.git
