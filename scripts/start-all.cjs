@@ -2,14 +2,13 @@
 /**
  * Single-container start script for the Replit Autoscale deployment.
  *
- * Spawns Next.js on the public port immediately, then starts the Express
- * backend on an internal port with `prisma migrate deploy` baked into its own
- * wrapper. Replit Autoscale decides deploy health from the public port; if the
- * backend needs extra time for migrations, keeping Next.js up prevents a false
- * "port never opened" deployment failure. Both processes still share the
- * container lifecycle: SIGTERM/SIGINT is forwarded to both children, and if
- * either child exits unexpectedly the whole container is torn down so Replit
- * replaces it.
+ * Spawns Next.js on the public port immediately. By default it also starts the
+ * Express backend on an internal port with `prisma migrate deploy` baked into
+ * its own wrapper. Replit Autoscale decides deploy health from the public port;
+ * if the backend needs extra time for migrations, keeping Next.js up prevents a
+ * false "port never opened" deployment failure. When REPLIT_BACKEND_MODE is
+ * "external", Next.js proxies /api/* to BACKEND_INTERNAL_URL instead and skips
+ * the internal backend sidecar.
  *
  * For Next.js we prefer the standalone build output at
  * `.next/standalone/server.js` (self-contained, ~250 MB of node_modules)
@@ -29,6 +28,16 @@ const BACKEND_DIR = path.join(ROOT, "backend");
 // which would clobber the backend if it also defaulted to 5000).
 const BACKEND_PORT = Number(process.env.BACKEND_PORT || 5050);
 const BACKEND_HOST = process.env.BACKEND_HOST || "127.0.0.1";
+const LOCAL_BACKEND_URL = `http://${BACKEND_HOST}:${BACKEND_PORT}`;
+const EXTERNAL_BACKEND_URL = normalizeBackendUrl(
+  process.env.BACKEND_PROXY_URL || process.env.BACKEND_INTERNAL_URL || "",
+);
+const USE_EXTERNAL_BACKEND =
+  process.env.REPLIT_BACKEND_MODE === "external" ||
+  (isHttpBackendUrl(EXTERNAL_BACKEND_URL) &&
+    !isLoopbackBackendUrl(EXTERNAL_BACKEND_URL) &&
+    process.env.REPLIT_BACKEND_MODE !== "sidecar");
+const BACKEND_PROXY_URL = USE_EXTERNAL_BACKEND ? EXTERNAL_BACKEND_URL : LOCAL_BACKEND_URL;
 // Frontend must bind to the port declared in .replit's deploy config
 // (localPort=3000 → externalPort=80). Replit Autoscale also injects
 // PORT=5000 into the container, which we deliberately ignore — using
@@ -45,6 +54,40 @@ let shuttingDown = false;
 function log(scope, msg, extra = {}) {
   const line = { ts: new Date().toISOString(), scope, msg, ...extra };
   process.stdout.write(JSON.stringify(line) + "\n");
+}
+
+function normalizeBackendUrl(value) {
+  const raw = String(value || "").trim().replace(/\/+$/, "");
+  if (!raw) return "";
+  try {
+    const url = new URL(raw);
+    if (/\/api$/i.test(url.pathname)) {
+      url.pathname = url.pathname.replace(/\/api$/i, "") || "/";
+    }
+    url.search = "";
+    url.hash = "";
+    return url.toString().replace(/\/+$/, "");
+  } catch {
+    return raw;
+  }
+}
+
+function isLoopbackBackendUrl(value) {
+  try {
+    const url = new URL(value);
+    return ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
+  } catch {
+    return /(^|\/\/)(localhost|127\.0\.0\.1|\[?::1\]?)(:|\/|$)/i.test(String(value || ""));
+  }
+}
+
+function isHttpBackendUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 function pipePrefixed(child, prefix) {
@@ -94,7 +137,8 @@ function spawnFrontend() {
     ...process.env,
     PORT: String(FRONTEND_PORT),
     HOSTNAME: "0.0.0.0",
-    BACKEND_INTERNAL_URL: `http://${BACKEND_HOST}:${BACKEND_PORT}`,
+    BACKEND_INTERNAL_URL: BACKEND_PROXY_URL,
+    NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL || "/api",
   };
 
   const child = useStandalone
@@ -171,6 +215,13 @@ async function main() {
   process.on("SIGINT", forwardSignal("SIGINT"));
 
   frontend = spawnFrontend();
+  if (USE_EXTERNAL_BACKEND) {
+    log("start-all", "using external backend proxy; skipping sidecar backend", {
+      backend: BACKEND_PROXY_URL,
+    });
+    return;
+  }
+
   backend = spawnBackend();
   waitForPort(BACKEND_HOST, BACKEND_PORT, BACKEND_READY_TIMEOUT_MS)
     .then(() => {
