@@ -461,7 +461,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@csstools/css-tokenizer` | 3.0.4 | MIT | [link](https://github.com/csstools/postcss-plugins) |
 | `@date-fns/tz` | 1.4.1 | MIT | [link](https://github.com/date-fns/tz) |
 | `@e2b/code-interpreter` | 1.5.1 | MIT | [link](https://github.com/e2b-dev/code-interpreter) |
-| `@elevenlabs/elevenlabs-js` | 2.25.1 | MIT | [link](https://github.com/elevenlabs/elevenlabs-js) |
+| `@elevenlabs/elevenlabs-js` | 2.49.1 | MIT | [link](https://github.com/elevenlabs/elevenlabs-js) |
 | `@fal-ai/client` | 1.7.0 | MIT | [link](https://github.com/fal-ai/fal-js) |
 | `@fast-csv/format` | 4.3.5 | MIT | [link](https://github.com/C2FO/fast-csv) |
 | `@fast-csv/parse` | 4.3.6 | MIT | [link](https://github.com/C2FO/fast-csv) |
