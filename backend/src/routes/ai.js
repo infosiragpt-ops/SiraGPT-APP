@@ -257,6 +257,62 @@ const OPENROUTER_IMAGE_MODELS = [
     icon: 'SeedreamLogo',
     description: 'ByteDance Seedream 4.5 via OpenRouter for professional image generation.',
   },
+  {
+    name: 'recraft-v3',
+    displayName: 'Recraft V3',
+    provider: 'OpenRouter',
+    type: 'IMAGE',
+    icon: 'Sparkles',
+    description: 'Recraft V3 via OpenRouter: vector art, illustration and branding.',
+  },
+  {
+    name: 'ideogram-v2',
+    displayName: 'Ideogram V2',
+    provider: 'OpenRouter',
+    type: 'IMAGE',
+    icon: 'Sparkles',
+    description: 'Ideogram V2 via OpenRouter: text-in-image generation and typography.',
+  },
+  {
+    name: 'flux-1.1-pro',
+    displayName: 'Flux 1.1 Pro',
+    provider: 'OpenRouter',
+    type: 'IMAGE',
+    icon: 'Sparkles',
+    description: 'Flux 1.1 Pro via OpenRouter: photorealistic image generation.',
+  },
+  {
+    name: 'flux-1.1-ultra',
+    displayName: 'Flux 1.1 Ultra',
+    provider: 'OpenRouter',
+    type: 'IMAGE',
+    icon: 'Sparkles',
+    description: 'Flux 1.1 Ultra via OpenRouter: maximum quality image generation.',
+  },
+  {
+    name: 'dall-e-3',
+    displayName: 'DALL-E 3',
+    provider: 'OpenAI',
+    type: 'IMAGE',
+    icon: 'ChatGPTPinkLogo',
+    description: 'DALL-E 3 de OpenAI: generación de imágenes creativa y detallada.',
+  },
+  {
+    name: 'dall-e-2',
+    displayName: 'DALL-E 2',
+    provider: 'OpenAI',
+    type: 'IMAGE',
+    icon: 'ChatGPTPinkLogo',
+    description: 'DALL-E 2 de OpenAI: generación de imágenes rápida y económica.',
+  },
+  {
+    name: 'imagen-3',
+    displayName: 'Imagen 3',
+    provider: 'Gemini',
+    type: 'IMAGE',
+    icon: 'GeminiLogo',
+    description: 'Imagen 3 de Google: generación de imágenes fotorealistas.',
+  },
 ];
 
 function hasEnv(name) {
@@ -696,6 +752,7 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
     const wantText = !type || type === 'TEXT';
     const wantImage = !type || type === 'IMAGE';
     const wantVideo = !type || type === 'VIDEO';
+    const wantVoice = !type || type === 'VOICE';
     if (wantText && hasEnv('DEEPSEEK_API_KEY')) {
       const listed = new Set(models.map((m) => m.name));
       const deepseekNames = DEEPSEEK_TEXT_MODELS.map((m) => m.name);
@@ -732,7 +789,7 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
       }
     }
 
-    if (wantImage && hasEnv('OPENROUTER_API_KEY')) {
+    if (wantImage) {
       const listed = new Set(models.map((m) => m.name));
       const virtualImageModels = OPENROUTER_IMAGE_MODELS
         .filter((m) => !listed.has(m.name))
@@ -743,7 +800,7 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
       }
     }
 
-    if (wantVideo && (hasEnv('FAL_KEY') || hasEnv('FAL_API_KEY') || hasEnv('TAL_AI_API_KEY'))) {
+    if (wantVideo) {
       const listed = new Set(models.map((m) => m.name));
       const virtualVideoModels = [
         {
@@ -754,12 +811,88 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
           description: 'Generación de video con Veo Fast vía fal.ai.',
           icon: 'GeminiLogo',
         },
+        {
+          name: 'veo-3',
+          displayName: 'Veo 3',
+          provider: 'Custom',
+          type: 'VIDEO',
+          description: 'Generación de video avanzada con Veo 3 vía fal.ai.',
+          icon: 'GeminiLogo',
+        },
+        {
+          name: 'kling-1.6',
+          displayName: 'Kling 1.6',
+          provider: 'Custom',
+          type: 'VIDEO',
+          description: 'Generación de video con Kling 1.6 vía fal.ai.',
+          icon: 'Sparkles',
+        },
+        {
+          name: 'luma-dream-machine',
+          displayName: 'Luma Dream Machine',
+          provider: 'Custom',
+          type: 'VIDEO',
+          description: 'Generación de video cinematográfico con Luma vía fal.ai.',
+          icon: 'Sparkles',
+        },
       ]
         .filter((m) => !listed.has(m.name))
         .map((m) => ({ id: `__virtual_${m.name.replace(/[^a-z0-9]+/gi, '_').toLowerCase()}__`, ...m }));
 
       if (virtualVideoModels.length > 0) {
         models = [...virtualVideoModels, ...models];
+      }
+    }
+
+    if (wantVoice) {
+      const listed = new Set(models.map((m) => m.name));
+      const virtualVoiceModels = [
+        {
+          name: 'elevenlabs-tts',
+          displayName: 'ElevenLabs TTS',
+          provider: 'ElevenLabs',
+          type: 'VOICE',
+          description: 'Texto a voz premium con ElevenLabs: vozes naturales y expresivas.',
+          icon: 'Microphone',
+        },
+        {
+          name: 'elevenlabs-multilingual',
+          displayName: 'ElevenLabs Multilingual',
+          provider: 'ElevenLabs',
+          type: 'VOICE',
+          description: 'Texto a voz multilingue con ElevenLabs: soporte para 29 idiomas.',
+          icon: 'Microphone',
+        },
+        {
+          name: 'elevenlabs-scribe',
+          displayName: 'ElevenLabs Scribe',
+          provider: 'ElevenLabs',
+          type: 'VOICE',
+          description: 'Voz a texto con ElevenLabs Scribe: transcripción de alta precisión.',
+          icon: 'Microphone',
+        },
+        {
+          name: 'elevenlabs-music',
+          displayName: 'ElevenLabs Music',
+          provider: 'ElevenLabs',
+          type: 'VOICE',
+          description: 'Generación de música con ElevenLabs: crea pistas originales.',
+          icon: 'Music',
+        },
+        {
+          name: 'elevenlabs-sound-effects',
+          displayName: 'ElevenLabs Sound Effects',
+          provider: 'ElevenLabs',
+          type: 'VOICE',
+          description: 'Efectos de sonido con ElevenLabs: genera sonidos personalizados.',
+          icon: 'Music',
+        },
+      ]
+        .filter((m) => !listed.has(m.name))
+        .map((m) => ({ id: `__virtual_${m.name.replace(/[^a-z0-9]+/gi, '_').toLowerCase()}__`, ...m }));
+
+      if (virtualVoiceModels.length > 0) {
+        models = [...virtualVoiceModels, ...models];
       }
     }
 

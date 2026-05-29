@@ -1,6 +1,7 @@
 'use strict';
 
 const DEFAULT_PAID_PLANS = Object.freeze([
+  'FREE',
   'PRO',
   'PRO_MAX',
   'ENTERPRISE',

@@ -28,7 +28,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const DEFAULT_PROVIDER = process.env.IMAGE_PROVIDER || 'mock';
+const DEFAULT_PROVIDER = process.env.IMAGE_PROVIDER || 'openai';
 
 function pickProvider(spec) {
   if (spec && spec.provider) return spec.provider;

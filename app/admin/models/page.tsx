@@ -42,7 +42,7 @@ interface AIModel {
   provider: string
   description?: string
   isActive: boolean
-  type: 'TEXT' | 'IMAGE' | 'VIDEO'
+  type: 'TEXT' | 'IMAGE' | 'VIDEO' | 'VOICE'
   icon?: string | null
   lastSynced?: string
   syncSource?: string
@@ -80,7 +80,7 @@ const initialFormData = {
   name: '',
   displayName: '',
   provider: 'OpenAI',
-  type: 'TEXT' as 'TEXT' | 'IMAGE' | 'VIDEO',
+  type: 'TEXT' as 'TEXT' | 'IMAGE' | 'VIDEO' | 'VOICE',
   icon: 'Bot',
   description: '',
   apiKey: ''
@@ -593,7 +593,7 @@ export default function ModelsPage() {
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="type">Model Type</Label>
-                  <Select value={formData.type} onValueChange={(value) => setFormData({ ...formData, type: value as 'TEXT' | 'IMAGE' | 'VIDEO' })}>
+                  <Select value={formData.type} onValueChange={(value) => setFormData({ ...formData, type: value as 'TEXT' | 'IMAGE' | 'VIDEO' | 'VOICE' })}>
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
@@ -601,6 +601,7 @@ export default function ModelsPage() {
                       <SelectItem value="TEXT">TEXT</SelectItem>
                       <SelectItem value="IMAGE">IMAGE</SelectItem>
                       <SelectItem value="VIDEO">VIDEO</SelectItem>
+                      <SelectItem value="VOICE">VOICE</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -851,7 +852,7 @@ export default function ModelsPage() {
                   </TableCell>
                   
                   <TableCell>
-                    <Badge variant={model.type === 'TEXT' ? 'default' : model.type === 'VIDEO' ? 'outline' : 'secondary'}>
+                    <Badge variant={model.type === 'TEXT' ? 'default' : model.type === 'VIDEO' ? 'outline' : model.type === 'VOICE' ? 'destructive' : 'secondary'}>
                       {model.type}
                     </Badge>
                   </TableCell>
@@ -1041,7 +1042,7 @@ export default function ModelsPage() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="edit-type">Type</Label>
-                <Select value={editingModel.type} onValueChange={(value) => setEditingModel({ ...editingModel, type: value as 'TEXT' | 'IMAGE' | 'VIDEO' })}>
+                <Select value={editingModel.type} onValueChange={(value) => setEditingModel({ ...editingModel, type: value as 'TEXT' | 'IMAGE' | 'VIDEO' | 'VOICE' })}>
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
@@ -1049,6 +1050,7 @@ export default function ModelsPage() {
                     <SelectItem value="TEXT">TEXT</SelectItem>
                     <SelectItem value="IMAGE">IMAGE</SelectItem>
                     <SelectItem value="VIDEO">VIDEO</SelectItem>
+                    <SelectItem value="VOICE">VOICE</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
