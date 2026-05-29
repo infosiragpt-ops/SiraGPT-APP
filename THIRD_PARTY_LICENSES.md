@@ -176,7 +176,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@smithy/util-utf8` | 2.3.0 | Apache-2.0 | [link](https://github.com/awslabs/smithy-typescript) |
 | `@swc/core` | 1.15.30 | Apache-2.0 | [link](https://github.com/swc-project/swc) |
 | `@swc/counter` | 0.1.3 | Apache-2.0 | [link](https://github.com/swc-project/pkgs) |
-| `@swc/helpers` | 0.5.17, 0.5.5 | Apache-2.0 | [link](https://github.com/swc-project/swc) |
+| `@swc/helpers` | 0.5.15, 0.5.17 | Apache-2.0 | [link](https://github.com/swc-project/swc) |
 | `@swc/types` | 0.1.26 | Apache-2.0 | [link](https://github.com/swc-project/swc) |
 | `@vercel/oidc` | 3.2.0 | Apache-2.0 | [link](https://github.com/vercel/vercel) |
 | `ai` | 6.0.168 | Apache-2.0 | [link](https://github.com/vercel/ai) |
@@ -508,7 +508,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@monaco-editor/react` | 4.7.0 | MIT | [link](https://github.com/suren-atoyan/monaco-react) |
 | `@napi-rs/canvas` | 0.1.100, 0.1.99 | MIT | [link](https://github.com/Brooooooklyn/canvas) |
 | `@neondatabase/serverless` | 1.1.0 | MIT | [link](https://github.com/neondatabase/serverless) |
-| `@next/env` | 14.2.35 | MIT | [link](https://github.com/vercel/next.js) |
+| `@next/env` | 15.5.18 | MIT | [link](https://github.com/vercel/next.js) |
 | `@noble/hashes` | 1.8.0 | MIT | [link](https://github.com/paulmillr/noble-hashes) |
 | `@nodable/entities` | 2.1.0 | MIT | [link](https://github.com/nodable/val-parsers) |
 | `@nodelib/fs.scandir` | 2.1.5 | MIT | [link](https://github.com/nodelib/nodelib.git#master) |
@@ -1177,7 +1177,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `napi-build-utils` | 2.0.0 | MIT | [link](https://github.com/inspiredware/napi-build-utils) |
 | `negotiator` | 0.6.3, 0.6.4, 1.0.0 | MIT | [link](https://github.com/jshttp/negotiator) |
 | `netmask` | 2.0.2 | MIT | [link](https://github.com/rs/node-netmask) |
-| `next` | 14.2.35 | MIT | [link](https://github.com/vercel/next.js) |
+| `next` | 15.5.18 | MIT | [link](https://github.com/vercel/next.js) |
 | `next-intl` | 4.12.0 | MIT | [link](https://github.com/amannn/next-intl) |
 | `next-intl-swc-plugin-extractor` | 4.12.0 | MIT | [link](https://github.com/amannn/next-intl) |
 | `next-themes` | 0.4.6 | MIT | [link](https://github.com/pacocoursey/next-themes) |
@@ -1425,7 +1425,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `strtok3` | 10.3.5 | MIT | [link](https://github.com/Borewit/strtok3) |
 | `style-to-js` | 1.1.21 | MIT | [link](https://github.com/remarkablemark/style-to-js) |
 | `style-to-object` | 1.0.14 | MIT | [link](https://github.com/remarkablemark/style-to-object) |
-| `styled-jsx` | 5.1.1 | MIT | [link](https://github.com/vercel/styled-jsx) |
+| `styled-jsx` | 5.1.6 | MIT | [link](https://github.com/vercel/styled-jsx) |
 | `stylis` | 4.4.0 | MIT | [link](https://github.com/thysultan/stylis.js) |
 | `sucrase` | 3.35.1 | MIT | [link](https://github.com/alangpierce/sucrase) |
 | `superagent` | 10.3.0, 6.1.0 | MIT | [link](https://github.com/ladjs/superagent) |

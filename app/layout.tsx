@@ -8,6 +8,7 @@ import "./globals.css"
 import { NextIntlClientProvider } from "next-intl"
 import { getLocale, getMessages } from "next-intl/server"
 import { isRTL } from "@/lib/i18n/locales"
+import { LayoutClientEffects } from "@/components/layout-client-effects"
 // RootProviders bundles ThemeProvider + AuthProvider + SettingsProvider +
 // AppWrapper (+ ChatProvider, SidebarProvider, AppShell, ArtifactPanel,
 // BackgroundStreams, etc.). Loading it via nextDynamic moves all of that
@@ -16,30 +17,6 @@ import { isRTL } from "@/lib/i18n/locales"
 const RootProviders = nextDynamic(
   () => import("@/components/root-providers").then(m => m.RootProviders),
   { ssr: true }
-)
-
-// Side-effect-only client components: they run inside useEffect on the
-// browser and never render visible markup. Pulling them in synchronously
-// inflates the layout chunk past the Replit preview proxy's ~1 MB cap
-// (Sentry, PostHog, web-vitals, and Syncfusion shims each pull in their
-// own SDKs). Loading them via next/dynamic with ssr:false makes webpack
-// put each one in its own chunk that's fetched after hydration, keeping
-// app/layout.js small enough for the dev iframe to load it intact.
-const SentryClientInit = nextDynamic(
-  () => import("@/components/sentry-client-init").then(m => m.SentryClientInit),
-  { ssr: false }
-)
-const PostHogClientInit = nextDynamic(
-  () => import("@/components/posthog-client-init").then(m => m.PostHogClientInit),
-  { ssr: false }
-)
-const WebVitalsReporter = nextDynamic(
-  () => import("./web-vitals").then(m => m.WebVitalsReporter),
-  { ssr: false }
-)
-const SyncfusionBannerRemover = nextDynamic(
-  () => import("@/components/SyncfusionBannerRemover").then(m => m.SyncfusionBannerRemover),
-  { ssr: false }
 )
 
 // Routes that must NOT advertise themselves as canonical — they're
@@ -272,10 +249,7 @@ export default async function RootLayout({
         <a href="#main-content" className="skip-to-content">
           Saltar al contenido
         </a>
-        <SentryClientInit />
-        <PostHogClientInit />
-        <WebVitalsReporter />
-        <SyncfusionBannerRemover />
+        <LayoutClientEffects />
         <NextIntlClientProvider locale={locale} messages={messages}>
           <RootProviders>
             <div id="main-content" tabIndex={-1} className="outline-none">
