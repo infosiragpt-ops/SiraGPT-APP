@@ -205,7 +205,7 @@ function StoreCardView({
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") onOpen(card)
       }}
-      className="group relative flex min-h-[104px] cursor-pointer items-center gap-4 rounded-2xl bg-[#f8f8f8] p-4 transition duration-200 hover:bg-[#f1f1f1] focus:outline-none focus:ring-2 focus:ring-zinc-950/20"
+      className="group relative flex min-h-[104px] cursor-pointer items-center gap-4 rounded-2xl bg-[#f8f8f8] p-4 transition duration-200 hover:bg-[#f1f1f1] focus:outline-none focus:ring-2 focus:ring-zinc-950/20 dark:bg-zinc-900 dark:hover:bg-zinc-800/80 dark:focus:ring-zinc-100/20"
     >
       {card.source ? (
         <div className="grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-full bg-white dark:bg-zinc-800 ring-1 ring-zinc-200 dark:ring-zinc-700">
@@ -217,7 +217,7 @@ function StoreCardView({
 
       <div className="min-w-0 flex-1">
         <div className="flex items-start justify-between gap-4">
-          <h3 className="line-clamp-1 text-[1rem] font-semibold leading-tight tracking-[-0.025em] text-zinc-950">
+          <h3 className="line-clamp-1 text-[1rem] font-semibold leading-tight tracking-[-0.025em] text-zinc-950 dark:text-zinc-50">
             {card.title}
           </h3>
           {card.source && isOwner && (onEdit || onDelete) && (
@@ -251,11 +251,11 @@ function StoreCardView({
             </div>
           )}
         </div>
-        <p className="mt-1 line-clamp-2 max-w-[20rem] text-[0.82rem] leading-[1.22rem] text-zinc-800">
+        <p className="mt-1 line-clamp-2 max-w-[20rem] text-[0.82rem] leading-[1.22rem] text-zinc-800 dark:text-zinc-300">
           {card.rating ? `${card.rating} - ` : ""}
           {card.description}
         </p>
-        <p className="mt-1.5 text-[0.78rem] text-zinc-400">{card.author}</p>
+        <p className="mt-1.5 text-[0.78rem] text-zinc-400 dark:text-zinc-500">{card.author}</p>
       </div>
     </article>
   )
@@ -266,11 +266,11 @@ function TrendingRow({ index, card, onOpen }: { index: number; card: StoreCard; 
     <button
       type="button"
       onClick={() => onOpen(card)}
-      className="grid w-full grid-cols-[28px_46px_1fr] items-center gap-3 rounded-xl px-1.5 py-2 text-left transition hover:bg-zinc-50"
+      className="grid w-full grid-cols-[28px_46px_1fr] items-center gap-3 rounded-xl px-1.5 py-2 text-left transition hover:bg-zinc-50 dark:hover:bg-zinc-800/70"
     >
-      <span className="text-center text-[1rem] font-semibold text-zinc-950">{index}</span>
+      <span className="text-center text-[1rem] font-semibold text-zinc-950 dark:text-zinc-100">{index}</span>
       {card.source ? (
-        <span className="grid h-11 w-11 place-items-center overflow-hidden rounded-full bg-[#f5f5f5] ring-1 ring-zinc-200">
+        <span className="grid h-11 w-11 place-items-center overflow-hidden rounded-full bg-[#f5f5f5] ring-1 ring-zinc-200 dark:bg-zinc-800 dark:ring-zinc-700">
           {card.icon}
         </span>
       ) : (
@@ -279,9 +279,9 @@ function TrendingRow({ index, card, onOpen }: { index: number; card: StoreCard; 
         </span>
       )}
       <span className="min-w-0">
-        <span className="line-clamp-1 text-[0.88rem] font-semibold leading-tight tracking-[-0.02em] text-zinc-950">{card.title}</span>
-        <span className="mt-0.5 line-clamp-2 text-[0.78rem] leading-4 text-zinc-700">{card.description}</span>
-        <span className="mt-0.5 block text-[0.74rem] text-zinc-400">{card.author}</span>
+        <span className="line-clamp-1 text-[0.88rem] font-semibold leading-tight tracking-[-0.02em] text-zinc-950 dark:text-zinc-100">{card.title}</span>
+        <span className="mt-0.5 line-clamp-2 text-[0.78rem] leading-4 text-zinc-700 dark:text-zinc-400">{card.description}</span>
+        <span className="mt-0.5 block text-[0.74rem] text-zinc-400 dark:text-zinc-500">{card.author}</span>
       </span>
     </button>
   )
@@ -290,8 +290,8 @@ function TrendingRow({ index, card, onOpen }: { index: number; card: StoreCard; 
 function SectionHeader({ title, subtitle }: { title: string; subtitle: string }) {
   return (
     <div>
-      <h2 className="text-[1.35rem] font-semibold tracking-[-0.04em] text-zinc-950 md:text-[1.55rem]">{title}</h2>
-      <p className="mt-0.5 text-[0.88rem] text-zinc-400">{subtitle}</p>
+      <h2 className="text-[1.35rem] font-semibold tracking-[-0.04em] text-zinc-950 dark:text-zinc-50 md:text-[1.55rem]">{title}</h2>
+      <p className="mt-0.5 text-[0.88rem] text-zinc-400 dark:text-zinc-500">{subtitle}</p>
     </div>
   )
 }
@@ -437,7 +437,7 @@ export default function GPTsPage() {
     <main data-testid="gpts-store-page" className="min-h-full bg-white dark:bg-background text-zinc-950 dark:text-foreground">
       <div className="mx-auto flex min-h-full w-full max-w-[1220px] flex-col px-6 py-4 sm:px-8 lg:px-12">
         <header className="flex items-center justify-between gap-4">
-          <h1 className="text-[1.25rem] font-medium tracking-[-0.04em] text-zinc-950">Explorar GPT</h1>
+          <h1 className="text-[1.25rem] font-medium tracking-[-0.04em] text-zinc-950 dark:text-zinc-50">Explorar GPT</h1>
           <div className="flex items-center gap-4">
             <button
               type="button"
@@ -519,13 +519,13 @@ export default function GPTsPage() {
           {loading ? (
             <div className="mt-4 grid gap-2.5 md:grid-cols-2">
               {Array.from({ length: 4 }).map((_, index) => (
-                <div key={index} className="min-h-[104px] animate-pulse rounded-2xl bg-[#f8f8f8] p-4">
+                <div key={index} className="min-h-[104px] animate-pulse rounded-2xl bg-[#f8f8f8] p-4 dark:bg-zinc-900">
                   <div className="flex gap-4">
-                    <div className="h-16 w-16 rounded-full bg-zinc-200" />
+                    <div className="h-16 w-16 rounded-full bg-zinc-200 dark:bg-zinc-800" />
                     <div className="flex-1 pt-2">
-                      <div className="h-6 w-3/5 rounded bg-zinc-200" />
-                      <div className="mt-4 h-4 w-full rounded bg-zinc-200" />
-                      <div className="mt-2 h-4 w-4/5 rounded bg-zinc-200" />
+                      <div className="h-6 w-3/5 rounded bg-zinc-200 dark:bg-zinc-800" />
+                      <div className="mt-4 h-4 w-full rounded bg-zinc-200 dark:bg-zinc-800" />
+                      <div className="mt-2 h-4 w-4/5 rounded bg-zinc-200 dark:bg-zinc-800" />
                     </div>
                   </div>
                 </div>
@@ -545,11 +545,11 @@ export default function GPTsPage() {
               ))}
             </div>
           ) : (
-            <div className="mt-4 rounded-2xl bg-[#f8f8f8] p-7 text-center">
-              <Sparkles className="mx-auto h-10 w-10 text-zinc-400" />
-              <h3 className="mt-4 text-2xl font-semibold tracking-[-0.04em]">Aún no tienes GPTs en esta área</h3>
-              <p className="mx-auto mt-2 max-w-xl text-zinc-500">Crea uno desde esta categoría para que aparezca automáticamente en la tienda.</p>
-              <Button onClick={handleCreateNew} className="mt-6 rounded-full bg-black px-6 text-white hover:bg-zinc-800">Crear GPT</Button>
+            <div className="mt-4 rounded-2xl bg-[#f8f8f8] p-7 text-center dark:bg-zinc-900">
+              <Sparkles className="mx-auto h-10 w-10 text-zinc-400 dark:text-zinc-500" />
+              <h3 className="mt-4 text-2xl font-semibold tracking-[-0.04em] text-zinc-950 dark:text-zinc-50">Aún no tienes GPTs en esta área</h3>
+              <p className="mx-auto mt-2 max-w-xl text-zinc-500 dark:text-zinc-400">Crea uno desde esta categoría para que aparezca automáticamente en la tienda.</p>
+              <Button onClick={handleCreateNew} className="mt-6 rounded-full bg-black px-6 text-white hover:bg-zinc-800 dark:bg-white dark:text-black dark:hover:bg-zinc-200">Crear GPT</Button>
             </div>
           )}
         </section>

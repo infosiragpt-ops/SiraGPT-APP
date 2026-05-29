@@ -522,67 +522,102 @@ export default function CreateGPTPage() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
+      <div className="flex min-h-full items-center justify-center bg-background">
         <div className="text-center">
           <ThinkingIndicator size="lg" className="mx-auto mb-4" />
-          <p className="text-muted-foreground">Loading GPT...</p>
+          <p className="text-sm text-muted-foreground">Loading GPT...</p>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="min-h-full bg-background">
+    <div className="flex min-h-full flex-col bg-background">
       {/* Header */}
-      <div className="border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-50">
-        <div className="w-full px-3 sm:px-4 lg:px-6 py-3 sm:py-4">
-          <div className="flex items-center justify-between gap-2 sm:gap-4">
-            <div className="flex items-center gap-2 sm:gap-4 min-w-0">
-              <SidebarTrigger className="md:hidden" />
-              <Button variant="ghost" size="sm" onClick={() => router.back()} className="flex-shrink-0">
-                <ArrowLeft className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
-                <span className="hidden sm:inline">Back</span>
-              </Button>
-              <div className="flex items-center gap-1 sm:gap-2 min-w-0">
-                <Bot className="h-5 w-5 sm:h-6 sm:w-6 text-primary flex-shrink-0" />
-                <h1 className="text-lg sm:text-xl lg:text-2xl font-bold truncate">
-                  {isEditMode ? 'Edit GPT' : 'Create GPT'}
+      <header className="sticky top-0 z-30 border-b border-border/60 bg-background/80 backdrop-blur-xl supports-[backdrop-filter]:bg-background/60">
+        <div className="mx-auto flex w-full max-w-5xl items-center justify-between gap-3 px-4 py-3 sm:px-6">
+          <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+            <SidebarTrigger className="md:hidden" />
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => router.back()}
+              className="h-9 w-9 flex-shrink-0 rounded-full text-muted-foreground hover:text-foreground"
+              aria-label="Back"
+            >
+              <ArrowLeft className="h-4 w-4" />
+            </Button>
+            <div className="flex min-w-0 items-center gap-2.5">
+              <div className="grid h-9 w-9 flex-shrink-0 place-items-center overflow-hidden rounded-xl bg-gradient-to-br from-violet-500 to-indigo-600 text-base font-semibold text-white shadow-sm ring-1 ring-black/5">
+                {uploadedImage ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={uploadedImage} alt="Avatar" className="h-full w-full object-cover" />
+                ) : (
+                  <span>{formData.iconUrl || getNameInitial()}</span>
+                )}
+              </div>
+              <div className="min-w-0">
+                <h1 className="truncate text-base font-semibold leading-tight tracking-tight sm:text-lg">
+                  {isEditMode ? "Edit GPT" : "Create GPT"}
                 </h1>
+                <p className="hidden truncate text-xs text-muted-foreground sm:block">
+                  {formData.name ? formData.name : "Configure your assistant"}
+                </p>
               </div>
             </div>
-            <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setIsPreviewOpen(true)}
-                disabled={!formData.name}
-                className="h-8 sm:h-9 px-2 sm:px-3"
-              >
-                <Eye className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
-                <span className="hidden sm:inline">Preview</span>
-              </Button>
-              <Button
-                onClick={handleSave}
-                disabled={isSaving || !formData.name}
-                size="sm"
-                className="h-8 sm:h-9 px-2 sm:px-3 text-xs sm:text-sm"
-              >
-                {isSaving ? "Saving..." : isEditMode ? "Update" : "Create"}
-              </Button>
-            </div>
+          </div>
+          <div className="flex flex-shrink-0 items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setIsPreviewOpen(true)}
+              disabled={!formData.name}
+              className="h-9 rounded-full px-3"
+            >
+              <Eye className="h-4 w-4 sm:mr-2" />
+              <span className="hidden sm:inline">Preview</span>
+            </Button>
+            <Button
+              onClick={handleSave}
+              disabled={isSaving || !formData.name}
+              size="sm"
+              className="h-9 rounded-full px-4 font-medium shadow-sm"
+            >
+              {isSaving ? (
+                <span className="flex items-center gap-2">
+                  <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                  Saving...
+                </span>
+              ) : isEditMode ? (
+                "Update"
+              ) : (
+                "Create"
+              )}
+            </Button>
           </div>
         </div>
-      </div>
+      </header>
 
       {/* Main Content */}
-      <div className="w-full px-3 sm:px-4 lg:px-6 py-4 sm:py-6">
-        <div className="max-w-4xl mx-auto space-y-6 sm:space-y-8">
+      <div className="flex-1 px-4 py-6 sm:px-6 sm:py-8">
+        <div className="mx-auto w-full max-w-3xl space-y-6">
+
+          <div className="space-y-1.5">
+            <h2 className="text-xl font-semibold tracking-tight sm:text-2xl">
+              {isEditMode ? "Edit your GPT" : "Create a new GPT"}
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              Customize an assistant with its own name, instructions and personality. Your changes are saved when you press {isEditMode ? "Update" : "Create"}.
+            </p>
+          </div>
 
           {/* Basic Information Section */}
-          <Card>
-            <CardHeader className="pb-4 sm:pb-6">
-              <CardTitle className="flex items-center gap-2 text-lg sm:text-xl">
-                <Bot className="h-4 w-4 sm:h-5 sm:w-5 flex-shrink-0" />
+          <Card className="overflow-hidden border-border/70 shadow-sm">
+            <CardHeader className="gap-1 pb-4">
+              <CardTitle className="flex items-center gap-2.5 text-base sm:text-lg">
+                <span className="grid h-8 w-8 flex-shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
+                  <Bot className="h-4 w-4" />
+                </span>
                 <span>Basic Information</span>
               </CardTitle>
               <CardDescription className="text-xs sm:text-sm">
@@ -591,47 +626,45 @@ export default function CreateGPTPage() {
             </CardHeader>
             <CardContent className="space-y-4 sm:space-y-6 pt-0">
               {/* Avatar Selection */}
-              <div className="space-y-3 sm:space-y-4">
-                <Label className="text-sm sm:text-base">Avatar</Label>
+              <div className="space-y-3">
+                <Label className="text-sm font-medium">Avatar</Label>
 
-                {/* Avatar Preview */}
-                <div className="flex flex-col sm:flex-row items-start gap-4 sm:gap-6">
-                  <div className="relative w-16 h-16 sm:w-20 sm:h-20 rounded-xl flex items-center justify-center text-2xl sm:text-3xl font-bold shadow-lg overflow-hidden flex-shrink-0">
-                    {uploadedImage ? (
-                      <>
-                        <img
-                          src={uploadedImage}
-                          alt="Avatar"
-                          className="w-full h-full object-cover"
-                        />
-                        <button
-                          onClick={removeImage}
-                          className="absolute -top-1 -right-1 w-4 h-4 sm:w-5 sm:h-5 bg-red-500 text-white rounded-full flex items-center justify-center text-xs hover:bg-red-600"
-                        >
-                          <X className="w-2.5 h-2.5 sm:w-3 sm:h-3" />
-                        </button>
-                      </>
-                    ) : formData.iconUrl ? (
-                      <div className="w-full h-full bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center text-white">
-                        {formData.iconUrl}
-                      </div>
-                    ) : (
-                      <div className="w-full h-full bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center text-white">
-                        {getNameInitial()}
-                      </div>
+                <div className="flex flex-col items-start gap-5 sm:flex-row sm:items-center">
+                  {/* Avatar Preview */}
+                  <div className="relative h-20 w-20 flex-shrink-0">
+                    <div className="grid h-full w-full place-items-center overflow-hidden rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 text-3xl font-bold text-white shadow-md ring-1 ring-black/5">
+                      {uploadedImage ? (
+                        <img src={uploadedImage} alt="Avatar" className="h-full w-full object-cover" />
+                      ) : formData.iconUrl ? (
+                        <span>{formData.iconUrl}</span>
+                      ) : (
+                        <span>{getNameInitial()}</span>
+                      )}
+                    </div>
+                    {hasCustomIcon() && (
+                      <button
+                        type="button"
+                        onClick={removeImage}
+                        className="absolute -right-1.5 -top-1.5 grid h-6 w-6 place-items-center rounded-full bg-foreground text-background shadow-md transition hover:scale-105"
+                        aria-label="Remove avatar"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
                     )}
                   </div>
 
-                  <div className="flex-1 space-y-3 w-full">
+                  {/* Controls */}
+                  <div className="w-full flex-1 space-y-3">
                     {/* Emoji Options */}
                     <div>
-                      <Label className="text-xs sm:text-sm">Quick Icons</Label>
-                      <div className="flex flex-wrap gap-1.5 sm:gap-2 mt-2">
+                      <Label className="text-xs text-muted-foreground">Quick Icons</Label>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
                         {emojiOptions.map((emoji) => (
                           <button
                             key={emoji}
+                            type="button"
                             onClick={() => handleEmojiIcon(emoji)}
-                            className={`w-7 h-7 sm:w-8 sm:h-8 rounded-lg border-2 flex items-center justify-center text-base sm:text-lg hover:border-primary transition-colors ${formData.iconUrl === emoji ? 'border-primary bg-primary/10' : 'border-border'
+                            className={`grid h-9 w-9 place-items-center rounded-xl border text-lg transition hover:border-primary hover:bg-primary/5 ${formData.iconUrl === emoji ? 'border-primary bg-primary/10 ring-1 ring-primary' : 'border-border'
                               }`}
                           >
                             {emoji}
@@ -641,10 +674,10 @@ export default function CreateGPTPage() {
                     </div>
 
                     {/* Upload Image Button */}
-                    <div className="flex gap-2">
-                      <Button variant="outline" size="sm" asChild>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button variant="outline" size="sm" className="rounded-full" asChild>
                         <label htmlFor="icon-upload" className="cursor-pointer">
-                          <Upload className="h-4 w-4 mr-2" />
+                          <Upload className="mr-2 h-4 w-4" />
                           Upload Image
                         </label>
                       </Button>
@@ -656,7 +689,7 @@ export default function CreateGPTPage() {
                         className="hidden"
                       />
                       {hasCustomIcon() && (
-                        <Button variant="outline" size="sm" onClick={removeImage}>
+                        <Button variant="ghost" size="sm" onClick={removeImage} className="rounded-full text-muted-foreground">
                           Remove
                         </Button>
                       )}
@@ -765,10 +798,12 @@ export default function CreateGPTPage() {
           </Card>
 
           {/* Behavior Configuration Section */}
-          <Card>
-            <CardHeader className="pb-4 sm:pb-6">
-              <CardTitle className="flex items-center gap-2 text-lg sm:text-xl">
-                <MessageSquare className="h-4 w-4 sm:h-5 sm:w-5 flex-shrink-0" />
+          <Card className="overflow-hidden border-border/70 shadow-sm">
+            <CardHeader className="gap-1 pb-4">
+              <CardTitle className="flex items-center gap-2.5 text-base sm:text-lg">
+                <span className="grid h-8 w-8 flex-shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
+                  <MessageSquare className="h-4 w-4" />
+                </span>
                 <span>Behavior Configuration</span>
               </CardTitle>
               <CardDescription className="text-xs sm:text-sm">
@@ -833,10 +868,12 @@ export default function CreateGPTPage() {
           </Card>
 
           {/* Model Settings Section */}
-          <Card>
-            <CardHeader className="pb-4 sm:pb-6">
-              <CardTitle className="flex items-center gap-2 text-lg sm:text-xl">
-                <Settings className="h-4 w-4 sm:h-5 sm:w-5 flex-shrink-0" />
+          <Card className="overflow-hidden border-border/70 shadow-sm">
+            <CardHeader className="gap-1 pb-4">
+              <CardTitle className="flex items-center gap-2.5 text-base sm:text-lg">
+                <span className="grid h-8 w-8 flex-shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
+                  <Settings className="h-4 w-4" />
+                </span>
                 <span>Model & Visibility Settings</span>
               </CardTitle>
               <CardDescription className="text-xs sm:text-sm">
@@ -930,6 +967,36 @@ export default function CreateGPTPage() {
             </CardContent>
           </Card>
 
+        </div>
+      </div>
+
+      {/* Sticky action bar — keeps the primary save action reachable at all times */}
+      <div className="sticky bottom-0 z-30 border-t border-border/60 bg-background/80 backdrop-blur-xl supports-[backdrop-filter]:bg-background/60">
+        <div className="mx-auto flex w-full max-w-3xl items-center justify-between gap-3 px-4 py-3 sm:px-6">
+          <p className="hidden text-xs text-muted-foreground sm:block">
+            {formData.name ? "Ready when you are." : "A name is required to save your GPT."}
+          </p>
+          <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
+            <Button variant="ghost" onClick={() => router.back()} className="h-10 rounded-full px-4">
+              Cancel
+            </Button>
+            <Button
+              onClick={handleSave}
+              disabled={isSaving || !formData.name}
+              className="h-10 flex-1 rounded-full px-6 font-medium shadow-sm sm:flex-none"
+            >
+              {isSaving ? (
+                <span className="flex items-center gap-2">
+                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                  Saving...
+                </span>
+              ) : isEditMode ? (
+                "Update GPT"
+              ) : (
+                "Create GPT"
+              )}
+            </Button>
+          </div>
         </div>
       </div>
 
