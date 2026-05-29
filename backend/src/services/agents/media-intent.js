@@ -50,6 +50,8 @@ const IMAGE_NOUNS = /\b(imagen(?:es)?|imagenes|fotos?|fotografias?|fotografia|il
 
 // A create / transform verb makes the intent unambiguous. Bilingual stems.
 const CREATE_VERB = /\b(cr[ée]a(?:me|r|las?|los?)?|cre[ée]me|gener(?:a|ame|ar|en?|alas?)|haz(?:me|melo|lo|los|las)?|hag(?:a|ame|amos)|elabor(?:a|ame|ar)|dibuj(?:a|ame|ar)|dise[nñ](?:a|ame|ar|o)|compon(?:e|me|er|gas)|produce|produce?me|prepar(?:a|ame)|construy(?:e|eme)|quiero|necesito|dame|ponme|pon|crea\b|make|create|generate|draw|compose|produce|design|build|render|i want|i need|give me)\b/;
+const QUESTION_START = /^[\s¿?]*(?:que|what|como|how|por que|why|cual|cuanto|cuando)\b/;
+const MEDIA_IDEATION_OR_LEARNING = /\b(?:ideas?|consejos?|tips?|sugerencias?|guiones?|guion|scripts?|storyboards?|tutorial(?:es)?|aprender|aprende|ensename|explicame)\b.{0,50}\b(?:videos?|videoclips?|clips?|reels?)\b|\b(?:videos?|videoclips?|clips?|reels?)\b.{0,50}\b(?:ideas?|consejos?|tips?|sugerencias?|guiones?|guion|scripts?|storyboards?|tutorial(?:es)?|aprender)\b/;
 
 // ── Word-number maps (ES + EN), common values only ───────────────────────
 
@@ -256,8 +258,8 @@ function detectMediaIntent(text) {
   // Confidence: an explicit create verb next to a media noun is a clear
   // "do it" request; a bare media noun is weaker (could be conversational).
   let confidence = 'medium';
-  if (hasCreateVerb) confidence = 'high';
-  else if (/^[\s¿?]*(?:que|what|como|how|por que|why|cual|cuanto|cuando)\b/.test(norm)) confidence = 'low';
+  if (QUESTION_START.test(norm) || MEDIA_IDEATION_OR_LEARNING.test(norm)) confidence = 'low';
+  else if (hasCreateVerb) confidence = 'high';
 
   return {
     kind,

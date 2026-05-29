@@ -43,6 +43,35 @@ test('agentic execution profile: plain transcription does not force document gen
   assert.ok(!profile.requiredTools.includes('verify_artifact'));
 });
 
+test('agentic execution profile: video generation requires generate_video, not document gates', () => {
+  const profile = buildExecutionProfile({ goal: 'crea un video' });
+
+  assert.equal(profile.capabilities.needsMedia, true);
+  assert.equal(profile.capabilities.mediaKind, 'video');
+  assert.equal(profile.capabilities.needsDocument, false);
+  assert.ok(profile.requiredTools.includes('generate_video'));
+  assert.ok(!profile.requiredTools.includes('create_document'));
+  assert.ok(!profile.requiredTools.includes('verify_artifact'));
+
+  const blocked = validateFinalize(profile, [
+    { actions: [{ tool: 'finalize', observation: { answer: 'Listo.' } }] },
+  ]);
+  assert.equal(blocked.ok, false);
+  assert.deepEqual(blocked.missingTools, ['generate_video']);
+
+  const allowed = validateFinalize(profile, [
+    { actions: [{ tool: 'generate_video', observation: { ok: true, downloadUrl: '/video.mp4' } }] },
+  ]);
+  assert.equal(allowed.ok, true);
+});
+
+test('agentic execution profile: video ideation does not require generate_video', () => {
+  const profile = buildExecutionProfile({ goal: 'necesito ideas para un video' });
+
+  assert.equal(profile.capabilities.needsMedia, false);
+  assert.ok(!profile.requiredTools.includes('generate_video'));
+});
+
 test('agentic execution profile: blocks finalize until required tools have succeeded', () => {
   const profile = buildExecutionProfile({
     goal: 'Investiga fuentes y crea un Word validado',

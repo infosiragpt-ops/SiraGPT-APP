@@ -206,8 +206,18 @@ test('media tools also load for explicit audio/music requests', () => {
 
 test('runAgenticChat injects a media-intent directive naming the tool + specs', async () => {
   let firstArgs = null;
+  let calls = 0;
   const openai = {
-    chat: { completions: { create: async (a) => { firstArgs = a; return finalizeMessage('Listo.'); } } },
+    chat: {
+      completions: {
+        create: async (a) => {
+          calls += 1;
+          if (!firstArgs) firstArgs = a;
+          if (calls === 1) return toolCallMessage('generate_music', { prompt: 'canción lofi', durationSeconds: 180 });
+          return finalizeMessage('Listo.');
+        },
+      },
+    },
   };
   const { res } = makeFakeRes();
   await agenticStream.runAgenticChat({
@@ -217,15 +227,117 @@ test('runAgenticChat injects a media-intent directive naming the tool + specs', 
     history: [],
     res,
     toolsOverride: [{
-      name: 'noop',
-      description: 'noop',
-      parameters: { type: 'object', properties: {}, additionalProperties: false },
-      execute: async () => ({ ok: true }),
+      name: 'generate_music',
+      description: 'generate music',
+      parameters: {
+        type: 'object',
+        properties: { prompt: { type: 'string' }, durationSeconds: { type: 'integer' } },
+        required: ['prompt'],
+        additionalProperties: false,
+      },
+      execute: async () => ({ ok: true, status: 'queued' }),
     }],
   });
   const system = firstArgs.messages.find(m => m.role === 'system')?.content || '';
   assert.match(system, /generate_music/);
   assert.match(system, /180/);
+});
+
+test('runAgenticChat auto-selects generate_video first for "crea un video"', async () => {
+  let firstCreateArgs = null;
+  let createCalls = 0;
+  let videoCalls = 0;
+  const openai = {
+    chat: {
+      completions: {
+        create: async (args) => {
+          createCalls += 1;
+          if (!firstCreateArgs) firstCreateArgs = args;
+          if (createCalls === 1) {
+            return toolCallMessage('generate_video', { prompt: 'crea un video' }, 'call_video');
+          }
+          return finalizeMessage('Video iniciado.');
+        },
+      },
+    },
+  };
+  const { res } = makeFakeRes();
+
+  const result = await agenticStream.runAgenticChat({
+    openai,
+    model: 'gpt-4o-mini',
+    userQuery: 'crea un video',
+    history: [],
+    res,
+    maxSteps: 4,
+    toolsOverride: [{
+      name: 'generate_video',
+      description: 'generate a video',
+      parameters: {
+        type: 'object',
+        properties: { prompt: { type: 'string' } },
+        required: ['prompt'],
+        additionalProperties: false,
+      },
+      execute: async (args) => {
+        videoCalls += 1;
+        assert.equal(args.prompt, 'crea un video');
+        return { ok: true, status: 'queued', operationId: 'vid_1' };
+      },
+    }],
+  });
+
+  assert.deepEqual(firstCreateArgs.tool_choice, { type: 'function', function: { name: 'generate_video' } });
+  assert.equal(videoCalls, 1);
+  assert.equal(result.stoppedReason, 'finalized');
+  assert.equal(result.finalAnswer, 'Video iniciado.');
+});
+
+test('runAgenticChat does not force generate_video for video learning questions', async () => {
+  let firstCreateArgs = null;
+  let videoCalls = 0;
+  const openai = {
+    chat: {
+      completions: {
+        create: async (args) => {
+          if (!firstCreateArgs) firstCreateArgs = args;
+          return finalizeMessage('Para crear un video, empieza por un guion breve.');
+        },
+      },
+    },
+  };
+  const { res } = makeFakeRes();
+
+  const result = await agenticStream.runAgenticChat({
+    openai,
+    model: 'gpt-4o-mini',
+    userQuery: '¿cómo crear un video?',
+    history: [],
+    res,
+    maxSteps: 3,
+    toolsOverride: [{
+      name: 'generate_video',
+      description: 'generate a video',
+      parameters: {
+        type: 'object',
+        properties: { prompt: { type: 'string' } },
+        required: ['prompt'],
+        additionalProperties: false,
+      },
+      execute: async () => {
+        videoCalls += 1;
+        return { ok: true };
+      },
+    }],
+  });
+
+  assert.equal(firstCreateArgs.tool_choice, 'auto');
+  const system = firstCreateArgs.messages.find(m => m.role === 'system')?.content || '';
+  assert.doesNotMatch(system, /Activación automática de herramienta multimedia/);
+  assert.doesNotMatch(system, /DEBES usar la herramienta `generate_video`/);
+  assert.equal(videoCalls, 0);
+  assert.equal(result.stoppedReason, 'finalized');
+  assert.match(result.finalAnswer, /guion breve/);
 });
 
 test('runAgenticChat surfaces tool file_artifact events into state.artifacts', async () => {

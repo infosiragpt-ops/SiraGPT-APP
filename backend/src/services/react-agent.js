@@ -171,6 +171,7 @@ async function dispatchTool(registry, name, argsRaw, ctx) {
  * @param {string}   [opts.model="gpt-4o"] model to drive the loop
  * @param {string}   [opts.extraSystem]   appended to the system prompt (query-specific guidance)
  * @param {function} [opts.finalizeGuard] validates finalize calls before allowing termination
+ * @param {string}   [opts.initialToolChoice] optional tool name to force on the first model step
  */
 async function run(openai, opts) {
   const {
@@ -185,6 +186,7 @@ async function run(openai, opts) {
     model = 'gpt-4o',
     extraSystem = '',
     finalizeGuard = null,
+    initialToolChoice = null,
   } = opts;
 
   if (!query) throw new Error('react-agent: query is required');
@@ -230,9 +232,13 @@ async function run(openai, opts) {
     // If we're at the last step, force a finalize by narrowing the
     // tool choice — the model can't keep exploring past the budget.
     const isLast = step === maxSteps - 1;
+    const shouldForceInitialTool =
+      step === 0
+      && initialToolChoice
+      && registry.some((tool) => tool && tool.name === initialToolChoice);
     const toolChoice = isLast
       ? { type: 'function', function: { name: 'finalize' } }
-      : 'auto';
+      : (shouldForceInitialTool ? { type: 'function', function: { name: initialToolChoice } } : 'auto');
 
     let resp;
     try {

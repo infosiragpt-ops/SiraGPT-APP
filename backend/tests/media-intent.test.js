@@ -42,6 +42,20 @@ test('detects a video request with duration, aspect ratio and style', () => {
   assert.match(r.specs.style, /cinematograf/);
 });
 
+test('detects the minimal Spanish video command from the chat bar', () => {
+  const r = detectMediaIntent('crea un video');
+  assert.equal(r.kind, 'video');
+  assert.equal(r.tool, 'generate_video');
+  assert.equal(r.confidence, 'high');
+  assert.equal(r.hasCreateVerb, true);
+});
+
+test('keeps video learning or ideation prompts low-confidence', () => {
+  assert.equal(detectMediaIntent('¿cómo crear un video?').confidence, 'low');
+  assert.equal(detectMediaIntent('necesito ideas para un video').confidence, 'low');
+  assert.equal(detectMediaIntent('crea un guion para un video').confidence, 'low');
+});
+
 test('video duration accepts minutes', () => {
   assert.equal(detectMediaIntent('un video de 2 minutos del producto').specs.durationSeconds, 120);
 });

@@ -10,10 +10,11 @@
  */
 
 const PROFILE_VERSION = 'docsira-agentic-profile-2026-04';
+const { detectMediaIntent } = require('./media-intent');
 
 const PATTERNS = {
   research: /\b(investiga(?:r|cion)?|research|busca(?:r)?|recopila(?:r)?|fuentes|citas|referencias|art[ií]culos?|papers?|literatura|acad[eé]mic[oa]s?|cient[ií]fic[oa]s?|mercado|benchmark|estado del arte|revision sistem[aá]tica|metaan[aá]lisis|scielo|redalyc|dialnet|openalex|crossref|pubmed|doi|semantic scholar|doaj|scopus|web of science|wos)\b/i,
-  document: /\b(docx|xlsx|pptx|word|excel|power\s*point|powerpoint|pdf\b|csv\b|markdown|html\b|informe|reporte|presentaci[oó]n|diapositivas|slides|hoja de c[aá]lculo|spreadsheet|archivo|documento|matriz|descargar|exporta(?:r|me)?|genera(?:r|me)?|crea(?:r|me)?)\b/i,
+  document: /\b(docx|xlsx|pptx|word|excel|power\s*point|powerpoint|pdf\b|csv\b|markdown|html\b|informe|reporte|presentaci[oó]n|diapositivas|slides|hoja de c[aá]lculo|spreadsheet|archivo|documento|matriz|descargar|exporta(?:r|me)?)\b/i,
   privateFiles: /\b(adjunt[oa]s?|archivo(?:s)? cargad[oa]s?|documento(?:s)? cargad[oa]s?|seg[uú]n (mis|el) archivo|seg[uú]n (mis|el) documento|este documento|esta tesis|pdf cargado|word cargado|docx cargado|mis archivos|mi proyecto)\b/i,
   code: /\b(c[oó]digo|code|programa|script|funci[oó]n|clase|debug|bug|corrige(?:r)?|repara(?:r)?|test(?:s)?|prueba(?:s)?|unit test|typescript|javascript|python|react|next\.?js|backend|frontend|web app|autocorrige|auto corrige)\b/i,
   computation: /\b(calcula(?:r)?|analiza(?:r)?|procesa(?:r)?|limpia(?:r)?|estad[ií]stica|cronbach|spearman|anova|regresi[oó]n|correlaci[oó]n|likert|dataset|csv|datos|tabla|f[oó]rmula|matriz|integral|derivada|probabilidad)\b/i,
@@ -39,6 +40,8 @@ function buildExecutionProfile({ goal, fileIds = [] } = {}) {
   const rawGoal = String(goal || '');
   const normalized = normalize(rawGoal);
   const hasFiles = Array.isArray(fileIds) && fileIds.length > 0;
+  const mediaIntent = detectMediaIntent(rawGoal);
+  const needsMedia = !!(mediaIntent && mediaIntent.kind && mediaIntent.tool && mediaIntent.confidence === 'high');
   const plainTranscription =
     (PATTERNS.transcription.test(rawGoal) || PATTERNS.transcription.test(normalized))
     && !(PATTERNS.explicitTranscriptionArtifact.test(rawGoal) || PATTERNS.explicitTranscriptionArtifact.test(normalized));
@@ -50,6 +53,10 @@ function buildExecutionProfile({ goal, fileIds = [] } = {}) {
     needsCodeOrRepair: PATTERNS.code.test(rawGoal) || PATTERNS.code.test(normalized),
     needsComputation: PATTERNS.computation.test(rawGoal) || PATTERNS.computation.test(normalized),
     strictEvidence: PATTERNS.strictEvidence.test(rawGoal) || PATTERNS.strictEvidence.test(normalized),
+    needsMedia,
+    mediaKind: needsMedia ? mediaIntent.kind : null,
+    mediaTool: needsMedia ? mediaIntent.tool : null,
+    mediaConfidence: mediaIntent?.confidence || 'low',
     plainTranscription,
   };
 
@@ -69,6 +76,12 @@ function buildExecutionProfile({ goal, fileIds = [] } = {}) {
   if (capabilities.needsComputation) {
     requiredTools.push('python_exec');
     qualityGates.push('Verify numeric/statistical/data-heavy work with executable computation.');
+  }
+  if (capabilities.needsMedia) {
+    requiredTools.push(mediaIntent.tool);
+    const count = mediaIntent.kind === 'image' ? Number(mediaIntent.specs?.count || 1) : 1;
+    minimumToolCalls[mediaIntent.tool] = Math.max(1, Number.isFinite(count) ? Math.round(count) : 1);
+    qualityGates.push(`Use the media generation tool ${mediaIntent.tool} before claiming the ${mediaIntent.kind} was created.`);
   }
   if (capabilities.needsDocument) {
     requiredTools.push('create_document', 'verify_artifact');

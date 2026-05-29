@@ -332,6 +332,9 @@ async function runAgenticChat(opts) {
   // specs (duration, aspect ratio, count, style/genre) and lets us inject a
   // directive so the agent reliably calls the matching tool with them.
   const mediaIntent = detectMediaIntent(userQuery);
+  const initialToolChoice = mediaIntent?.tool && mediaIntent.confidence === 'high' && availableToolNames.has(mediaIntent.tool)
+    ? mediaIntent.tool
+    : null;
   const executionProfile = buildChatFinalizeProfile({
     userQuery,
     fileIds: Array.isArray(toolContext.fileIds) ? toolContext.fileIds : [],
@@ -405,7 +408,7 @@ async function runAgenticChat(opts) {
 
   const extraSystem = [
     'Responde SIEMPRE en español, con tono profesional y cercano. No uses emojis.',
-    mediaIntent.kind ? buildMediaIntentHint(mediaIntent) : '',
+    initialToolChoice ? buildMediaIntentHint(mediaIntent) : '',
     openclawRuntimeBlock,
     buildExecutionProfilePrompt(executionProfile),
     buildThreadWorkContext(history, userQuery),
@@ -465,6 +468,7 @@ async function runAgenticChat(opts) {
     maxSteps: maxStepsOverride,
     maxRuntimeMs: maxRuntimeOverride,
     extraSystem,
+    initialToolChoice,
     ctx: { ...toolContext, signal, onEvent },
     finalizeGuard: executionProfile.requiredTools.length
       ? ({ steps }) => validateFinalize(executionProfile, steps)
