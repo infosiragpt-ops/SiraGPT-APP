@@ -334,8 +334,15 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 }
 
 .app-shell-viewport {
+  /* Width must track the LAYOUT viewport (window.innerWidth), never the
+     visual viewport. Pinch-/trackpad-zoom shrinks visualViewport.width, which
+     previously shrank the shell to the zoomed region and left dead space on
+     the right edge (the app failed to fill the window in Chrome). Height +
+     offset below intentionally keep using the visual viewport so the mobile
+     on-screen-keyboard avoidance still works — keyboards change height, not
+     width. */
   width: 100vw;
-  width: var(--app-viewport-width, 100vw);
+  width: var(--app-layout-viewport-width, 100vw);
   height: 100vh;
   height: var(--app-viewport-height, 100dvh);
   min-height: 0;
