@@ -20,6 +20,7 @@ const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const { defaultProjectsDir } = require('./workspace-roots');
 
 const ALLOWED_HOSTS = new Set(['github.com', 'gitlab.com', 'bitbucket.org']);
 
@@ -31,7 +32,7 @@ const SAFE_BRANCH_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$/;
 const GITHUB_RE = /^(?:(?:https?:\/\/)?(?:www\.)?(github\.com|gitlab\.com|bitbucket\.org)\/([\w.-]+)\/([\w.-]+?)(?:\.git)?(?:\/.*)?|git@(github\.com):([\w.-]+)\/([\w.-]+?)(?:\.git)?)$/i;
 
 function projectsDir() {
-  return process.env.SIRAGPT_PROJECTS_DIR || path.join(os.homedir(), 'Desktop', 'sira-projects');
+  return defaultProjectsDir();
 }
 
 function ensureDir(dir) {

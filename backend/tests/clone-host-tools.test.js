@@ -6,6 +6,7 @@
 
 const assert = require('node:assert');
 const { describe, it, before } = require('node:test');
+const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
@@ -154,6 +155,20 @@ describe('host-bash-tool', () => {
     assert.strictEqual(internal.isAllowedDirectory(path.join(projectsDir, 'some-repo')), true);
   });
 
+  it('isAllowedDirectory allows the local SiraGPT GitHub checkout', () => {
+    const siraGitHubCheckout = path.join(os.homedir(), 'Documents', 'GitHub', 'siraGPT');
+    assert.strictEqual(internal.isAllowedDirectory(siraGitHubCheckout), true);
+    assert.strictEqual(internal.isAllowedDirectory('~/Documents/GitHub/siraGPT'), true);
+    assert.strictEqual(internal.commandHasUnsafePathReference(
+      'cat package.json',
+      siraGitHubCheckout,
+    ), false);
+    assert.strictEqual(internal.commandHasUnsafePathReference(
+      'cat package.json',
+      '~/Documents/GitHub/siraGPT',
+    ), false);
+  });
+
   it('isAllowedDirectory rejects /etc and /usr', () => {
     assert.strictEqual(internal.isAllowedDirectory('/etc'), false);
     assert.strictEqual(internal.isAllowedDirectory('/usr/bin'), false);
@@ -185,6 +200,20 @@ describe('host-bash-tool', () => {
     assert.strictEqual(result.ok, true);
     assert.ok(result.stdout.includes('hello from siraGPT'));
     assert.strictEqual(result.exitCode, 0);
+  });
+
+  it('hostBash expands tilde working directories before execution', async () => {
+    const projectsDir = path.join(os.homedir(), 'Desktop', 'sira-projects');
+    fs.mkdirSync(projectsDir, { recursive: true });
+
+    const result = await hostModule.hostBash({
+      command: 'pwd',
+      directory: '~/Desktop/sira-projects',
+    });
+
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.stdout.trim(), projectsDir);
+    assert.strictEqual(result.workingDir, projectsDir);
   });
 
   it('hostBash captures non-zero exit codes', async () => {

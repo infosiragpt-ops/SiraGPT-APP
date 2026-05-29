@@ -10,15 +10,18 @@
  */
 
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const {
+  allowedWorkspaceRoots,
+  defaultProjectsDir,
+  describeWorkspaceRoots,
+  expandHome,
+  normalizeRoot,
+} = require('./workspace-roots');
 
-const DEFAULT_WORKING_DIR = path.join(os.homedir(), 'Desktop', 'sira-projects');
-const ALLOWED_DIRS = new Set([
-  path.join(os.homedir(), 'Desktop', 'sira-projects'),
-  path.join(os.homedir(), 'Desktop', 'siraGPT'),
-]);
+const DEFAULT_WORKING_DIR = defaultProjectsDir();
+const ALLOWED_DIRS = new Set(allowedWorkspaceRoots());
 const MAX_TEXT_BYTES = 512 * 1024;
 const DEFAULT_READ_CHARS = 20000;
 const MAX_READ_CHARS = 80000;
@@ -40,8 +43,8 @@ function sha256(value) {
 
 function isAllowedDirectory(dir) {
   if (!dir) return true;
-  const resolved = path.resolve(dir);
-  for (const allowed of ALLOWED_DIRS) {
+  const resolved = normalizeRoot(dir);
+  for (const allowed of allowedWorkspaceRoots()) {
     const root = path.resolve(allowed);
     if (resolved === root || resolved.startsWith(root + path.sep)) return true;
   }
@@ -62,11 +65,11 @@ function resolveSafePath(filePath, directory = DEFAULT_WORKING_DIR) {
 
   let resolved;
   if (raw.startsWith('~/')) {
-    resolved = path.resolve(path.join(os.homedir(), raw.slice(2)));
+    resolved = path.resolve(expandHome(raw));
   } else if (path.isAbsolute(raw)) {
     resolved = path.resolve(raw);
   } else {
-    const base = path.resolve(directory || DEFAULT_WORKING_DIR);
+    const base = normalizeRoot(directory || DEFAULT_WORKING_DIR);
     if (!isAllowedDirectory(base)) return null;
     resolved = path.resolve(base, raw);
   }
@@ -112,7 +115,7 @@ async function hostFile(args = {}, ctx = {}) {
   if (!filePath) {
     return {
       ok: false,
-      error: 'Ruta inválida. Solo se permiten archivos dentro de ~/Desktop/sira-projects o ~/Desktop/siraGPT.',
+      error: `Ruta inválida. Solo se permiten archivos dentro de: ${describeWorkspaceRoots()}.`,
     };
   }
   if (isBlockedSecretPath(filePath)) {
@@ -203,7 +206,7 @@ async function hostFile(args = {}, ctx = {}) {
 
 const hostFileTool = {
   name: 'host_file',
-  description: 'Read and edit text files on the host within ~/Desktop/sira-projects or ~/Desktop/siraGPT. Supports read, write, append, and exact-string replace. Use this for code edits before running tests and git commit/push. Secret files such as .env and private keys are blocked.',
+  description: 'Read and edit text files on the host within the configured SiraGPT workspace roots. Supports read, write, append, and exact-string replace. Use this for code edits before running tests and git commit/push. Secret files such as .env and private keys are blocked.',
   parameters: {
     type: 'object',
     properties: {

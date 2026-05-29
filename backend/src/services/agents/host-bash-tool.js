@@ -10,8 +10,8 @@
  * Security (defense in depth):
  *   1. ALLOWED_COMMANDS — explicit allowlist of command prefixes.
  *      Everything else is rejected at the validator level.
- *   2. ALLOWED_DIRS — execution is chrooted-by-validation to
- *      ~/Desktop/sira-projects/ and ~/Desktop/siraGPT/ by default.
+ *   2. Workspace roots — execution is chrooted-by-validation to the
+ *      shared SiraGPT workspace roots by default.
  *      Any cd/path outside those directories is rejected.
  *   3. Timeout — hard 60 s wall clock kill.
  *   4. Max output — 128 KB stdout/stderr cap.
@@ -26,6 +26,12 @@
 const { spawn } = require('child_process');
 const path = require('path');
 const os = require('os');
+const {
+  allowedWorkspaceRoots,
+  defaultProjectsDir,
+  describeWorkspaceRoots,
+  normalizeRoot,
+} = require('./workspace-roots');
 
 // ============================================================
 // Configuration — tune via env or defaults
@@ -50,15 +56,11 @@ const ALLOWED_COMMANDS = new Set([
 ]);
 
 // Only operations inside these directories are allowed.
-const ALLOWED_DIRS = new Set([
-  path.join(os.homedir(), 'Desktop', 'sira-projects'),
-  path.join(os.homedir(), 'Desktop', 'siraGPT'),
-  os.tmpdir(),
-]);
+const ALLOWED_DIRS = new Set(allowedWorkspaceRoots({ includeTmp: true }));
 
 const HOST_BASH_TIMEOUT_MS = parseInt(process.env.SIRAGPT_HOST_BASH_TIMEOUT_MS || '120000', 10); // 2 min
 const MAX_OUTPUT_BYTES = 128 * 1024;
-const DEFAULT_WORKING_DIR = path.join(os.homedir(), 'Desktop', 'sira-projects');
+const DEFAULT_WORKING_DIR = defaultProjectsDir();
 
 const SIMPLE_COMMANDS = new Set([
   'ls', 'cat', 'head', 'tail', 'wc', 'find', 'grep', 'stat', 'du', 'file', 'tree',
@@ -293,8 +295,8 @@ function buildGitCommandSpec(parts) {
 
 function isAllowedDirectory(dir) {
   if (!dir) return true; // no explicit dir = default allowed
-  const resolved = path.resolve(dir);
-  for (const allowed of ALLOWED_DIRS) {
+  const resolved = normalizeRoot(dir);
+  for (const allowed of allowedWorkspaceRoots({ includeTmp: true })) {
     if (resolved === allowed || resolved.startsWith(allowed + path.sep)) return true;
   }
   return false;
@@ -312,7 +314,8 @@ function isSafePathToken(token, workingDir) {
     return isAllowedDirectory(expanded);
   }
 
-  const resolved = path.resolve(workingDir || DEFAULT_WORKING_DIR, unquoted);
+  const base = normalizeRoot(workingDir || DEFAULT_WORKING_DIR);
+  const resolved = path.resolve(base, unquoted);
   return isAllowedDirectory(resolved);
 }
 
@@ -463,19 +466,19 @@ async function hostBash(args, ctx = {}) {
 
   const commandSpec = buildCommandSpec(command);
 
-  const workingDir = args.directory || DEFAULT_WORKING_DIR;
+  const workingDir = normalizeRoot(args.directory || DEFAULT_WORKING_DIR);
 
   if (args.directory && !isAllowedDirectory(args.directory)) {
     return {
       ok: false,
-      error: `Directorio no permitido: "${args.directory}". Solo se permiten operaciones dentro de ~/Desktop/sira-projects y ~/Desktop/siraGPT.`,
+      error: `Directorio no permitido: "${args.directory}". Solo se permiten operaciones dentro de: ${describeWorkspaceRoots({ includeTmp: true })}.`,
     };
   }
 
   if (commandHasUnsafePathReference(command, workingDir)) {
     return {
       ok: false,
-      error: 'El comando contiene una ruta fuera de los directorios permitidos. Solo se permiten rutas dentro de ~/Desktop/sira-projects, ~/Desktop/siraGPT o /tmp.',
+      error: `El comando contiene una ruta fuera de los directorios permitidos. Solo se permiten rutas dentro de: ${describeWorkspaceRoots({ includeTmp: true })}.`,
     };
   }
 
@@ -516,7 +519,7 @@ async function hostBash(args, ctx = {}) {
 
 const hostBashTool = {
   name: 'host_bash',
-  description: 'Execute a shell command on the host machine. Use this to inspect files, run git workflow commands (status/log/diff/show/add/commit/push/fetch/pull/checkout/merge/rebase/reset/restore), list directory contents, run npm/pip commands on cloned projects, and execute build/test scripts. Destructive git operations such as --force push and --amend commit are blocked. Operations are restricted to ~/Desktop/sira-projects/ and ~/Desktop/siraGPT/.',
+  description: 'Execute a shell command on the host machine. Use this to inspect files, run git workflow commands (status/log/diff/show/add/commit/push/fetch/pull/checkout/merge/rebase/reset/restore), list directory contents, run npm/pip commands on cloned projects, and execute build/test scripts. Destructive git operations such as --force push and --amend commit are blocked. Operations are restricted to the configured SiraGPT workspace roots.',
   parameters: {
     type: 'object',
     properties: {

@@ -27,6 +27,18 @@ describe('host-file-tool', () => {
     assert.strictEqual(internal.resolveSafePath('../escape.txt', os.tmpdir()), null);
   });
 
+  it('resolves files inside the local SiraGPT GitHub checkout', () => {
+    const checkout = path.join(os.homedir(), 'Documents', 'GitHub', 'siraGPT');
+    const file = path.join(checkout, 'package.json');
+    assert.strictEqual(internal.resolveSafePath(file), file);
+    assert.strictEqual(internal.resolveSafePath('package.json', checkout), file);
+    assert.strictEqual(
+      internal.resolveSafePath('~/Documents/GitHub/siraGPT/package.json'),
+      file,
+    );
+    assert.strictEqual(internal.resolveSafePath('package.json', '~/Documents/GitHub/siraGPT'), file);
+  });
+
   it('blocks secret-like files', async () => {
     const result = await hostFileModule.hostFile({
       action: 'read',
