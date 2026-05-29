@@ -181,6 +181,37 @@ describe("react-agent · safety", () => {
     assert.match(firstObs.error || "", /invalid_json_args/)
   })
 
+  it("validates tool args against JSON Schema before execution", async () => {
+    const fake = new FakeOpenAI([
+      { content: "call with invalid args", tool_calls: [{ id: "a", function: { name: "typed_echo", arguments: JSON.stringify({ extra: true }) } }] },
+      { content: "finalize after schema failure", tool_calls: [finalizeCall("b", "schema blocked bad args")] },
+    ])
+    let executeCount = 0
+    const result = await reactAgent.run(fake, {
+      query: "q",
+      tools: [{
+        name: "typed_echo",
+        description: "requires text only",
+        parameters: {
+          type: "object",
+          properties: { text: { type: "string" } },
+          required: ["text"],
+          additionalProperties: false,
+        },
+        execute: async () => {
+          executeCount += 1
+          return { ok: true }
+        },
+      }],
+    })
+
+    const firstObs = result.steps[0].actions[0].observation as { error?: string }
+    assert.equal(executeCount, 0)
+    assert.match(firstObs.error || "", /invalid_tool_args/)
+    assert.match(firstObs.error || "", /required/)
+    assert.equal(result.finalAnswer, "schema blocked bad args")
+  })
+
   it("treats plain-text replies (no tool call) as a degenerate finalize", async () => {
     const fake = new FakeOpenAI([
       { content: "I'll just answer directly: it's blue." },

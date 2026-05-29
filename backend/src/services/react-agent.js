@@ -32,6 +32,18 @@
 
 const DEFAULT_MAX_STEPS = 8;
 const DEFAULT_MAX_RUNTIME_MS = 30 * 60 * 1000;
+const Ajv = require('ajv');
+const ajv = new Ajv({ allErrors: true, strict: false, coerceTypes: false });
+const schemaValidatorCache = new Map();
+const FINALIZE_TOOL_PARAMETERS = {
+  type: 'object',
+  properties: {
+    answer: { type: 'string', description: 'The final answer, in markdown.' },
+    confidence: { type: 'string', enum: ['high', 'medium', 'low'], description: 'Your confidence level.' },
+  },
+  required: ['answer'],
+  additionalProperties: false,
+};
 const SYSTEM_PROMPT = `You are a rigorous research agent. Solve the user's request by deciding which tool to call next, observing the result, then deciding again. Keep going until you can give a confident, well-grounded answer.
 
 Rules:
@@ -53,6 +65,51 @@ function toOpenAITool(tool) {
       parameters: tool.parameters || { type: 'object', properties: {}, additionalProperties: true },
     },
   };
+}
+
+function stableSchemaKey(value) {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableSchemaKey).join(',')}]`;
+  }
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableSchemaKey(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function validatorForTool(tool) {
+  const schema = tool?.parameters;
+  if (!schema || typeof schema !== 'object') return null;
+  const cacheKey = stableSchemaKey(schema);
+  if (schemaValidatorCache.has(cacheKey)) return schemaValidatorCache.get(cacheKey);
+  const validator = ajv.compile(schema);
+  schemaValidatorCache.set(cacheKey, validator);
+  return validator;
+}
+
+function formatValidationErrors(errors = []) {
+  return errors
+    .map((err) => {
+      const at = err.instancePath || '/';
+      const detail = err.params && err.params.missingProperty
+        ? `${err.message}: ${err.params.missingProperty}`
+        : err.message;
+      return `${at} ${detail}`.trim();
+    })
+    .join('; ');
+}
+
+function validateToolArgs(tool, args) {
+  let validator;
+  try {
+    validator = validatorForTool(tool);
+  } catch (err) {
+    return { ok: false, error: `invalid_tool_schema: ${err.message || err}` };
+  }
+  if (!validator) return { ok: true };
+  const ok = validator(args);
+  if (ok) return { ok: true };
+  return { ok: false, error: `invalid_tool_args: ${formatValidationErrors(validator.errors)}` };
 }
 
 /**
@@ -88,6 +145,10 @@ async function dispatchTool(registry, name, argsRaw, ctx) {
     args = typeof argsRaw === 'string' ? JSON.parse(argsRaw || '{}') : (argsRaw || {});
   } catch (e) {
     return { error: `invalid_json_args: ${e.message}` };
+  }
+  const validation = validateToolArgs(tool, args);
+  if (!validation.ok) {
+    return { error: validation.error };
   }
   try {
     const result = await tool.execute(args, ctx);
@@ -135,15 +196,7 @@ async function run(openai, opts) {
   const registry = tools.concat([{
     name: 'finalize',
     description: 'Emit the final answer to the user and stop. Call this when you have enough evidence.',
-    parameters: {
-      type: 'object',
-      properties: {
-        answer: { type: 'string', description: 'The final answer, in markdown.' },
-        confidence: { type: 'string', enum: ['high', 'medium', 'low'], description: 'Your confidence level.' },
-      },
-      required: ['answer'],
-      additionalProperties: false,
-    },
+    parameters: FINALIZE_TOOL_PARAMETERS,
     execute: async (args) => args, // pass-through; the loop reads this and terminates
   }]);
 
