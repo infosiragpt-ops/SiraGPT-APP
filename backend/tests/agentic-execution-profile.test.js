@@ -52,6 +52,7 @@ test('agentic execution profile: blocks finalize until required tools have succe
     { actions: [{ tool: 'web_search', observation: { ok: true } }] },
   ]);
   assert.equal(blocked.ok, false);
+  assert.deepEqual(blocked.requiredTools, ['web_search', 'create_document', 'verify_artifact']);
   assert.deepEqual(blocked.missingTools, ['create_document', 'verify_artifact']);
 
   const allowed = validateFinalize(profile, [

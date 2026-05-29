@@ -236,6 +236,77 @@ test('runAgenticChat emits sentinel + final answer with a stub tool', async () =
   assert.match(last.content, /La respuesta final/);
 });
 
+test('runAgenticChat blocks research finalization until required web_search succeeds', async () => {
+  const openai = makeFakeOpenAI([
+    finalizeMessage('Respuesta sin buscar.'),
+    toolCallMessage('web_search', { query: 'fuentes recientes IA', maxResults: 2 }),
+    finalizeMessage('Respuesta con evidencia web.'),
+  ]);
+  const { res } = makeFakeRes();
+  let searchCount = 0;
+
+  const result = await agenticStream.runAgenticChat({
+    openai,
+    model: 'gpt-4o-mini',
+    userQuery: 'Investiga fuentes recientes sobre IA y cita evidencia',
+    history: [],
+    res,
+    maxSteps: 5,
+    toolsOverride: [{
+      name: 'web_search',
+      description: 'search the web',
+      parameters: {
+        type: 'object',
+        properties: { query: { type: 'string' }, maxResults: { type: 'integer' } },
+        required: ['query'],
+        additionalProperties: false,
+      },
+      execute: async () => {
+        searchCount += 1;
+        return { ok: true, results: [{ title: 'Fuente', url: 'https://example.com' }] };
+      },
+    }],
+  });
+
+  assert.equal(searchCount, 1);
+  assert.equal(result.stoppedReason, 'finalized');
+  assert.equal(result.finalAnswer, 'Respuesta con evidencia web.');
+  assert.equal(result.steps[0].actions[0].tool, 'finalize');
+  assert.equal(result.steps[0].actions[0].observation.error, 'finalize_guard_failed');
+  assert.deepEqual(result.steps[0].actions[0].observation.missingTools, ['web_search']);
+});
+
+test('runAgenticChat does not require run_tests for simple test/prueba prompts', async () => {
+  const openai = makeFakeOpenAI([
+    finalizeMessage('Respuesta simple.'),
+  ]);
+  const { res } = makeFakeRes();
+  let runTestsCount = 0;
+
+  const result = await agenticStream.runAgenticChat({
+    openai,
+    model: 'gpt-4o-mini',
+    userQuery: 'test',
+    history: [],
+    res,
+    maxSteps: 3,
+    toolsOverride: [{
+      name: 'run_tests',
+      description: 'run tests',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+      execute: async () => {
+        runTestsCount += 1;
+        return { ok: true };
+      },
+    }],
+  });
+
+  assert.equal(runTestsCount, 0);
+  assert.equal(result.stoppedReason, 'finalized');
+  assert.equal(result.finalAnswer, 'Respuesta simple.');
+  assert.notEqual(result.steps[0].actions[0].observation.error, 'finalize_guard_failed');
+});
+
 test('runAgenticChat passes request toolContext into tool execution', async () => {
   let seenCtx = null;
   const openai = makeFakeOpenAI([

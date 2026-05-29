@@ -208,12 +208,46 @@ async function run(openai, opts) {
 
     if (toolCalls.length === 0) {
       // Model decided to answer in-place. That's a violation of the
-      // contract (must use finalize) — we treat the plain content as
-      // the final answer but flag the unusual termination.
+      // contract (must use finalize). When a finalizeGuard is active,
+      // do not let plain text bypass deterministic tool-use gates;
+      // feed a repair instruction back into the loop instead.
+      const plainStepRecord = { step, thought, actions: [] };
+      if (typeof finalizeGuard === 'function') {
+        let guard;
+        try {
+          guard = await finalizeGuard({
+            answer: thought || '',
+            confidence: null,
+            steps: steps.concat([plainStepRecord]),
+            currentStep: plainStepRecord,
+            ctx,
+          });
+        } catch (err) {
+          guard = { ok: false, message: `finalize guard failed: ${err.message || err}` };
+        }
+        if (!guard?.ok) {
+          steps.push(plainStepRecord);
+          onStep(plainStepRecord);
+          onStepDone(plainStepRecord);
+          messages.push({
+            role: 'user',
+            content: JSON.stringify({
+              error: 'plain_text_finalize_guard_failed',
+              message: guard?.message || 'Plain-text finalization blocked by execution policy.',
+              missingTools: guard?.missingTools || [],
+              requiredTools: guard?.requiredTools || [],
+              repairInstructions: guard?.repairInstructions || 'Call the missing tools, inspect observations, then call finalize.',
+            }),
+          });
+          continue;
+        }
+      }
+      // With no guard, preserve legacy behavior for simple providers.
       finalAnswer = thought || '(agent returned empty message)';
       stoppedReason = 'plain_text_finalize';
-      steps.push({ step, thought, actions: [] });
-      onStep({ step, thought, actions: [] });
+      steps.push(plainStepRecord);
+      onStep(plainStepRecord);
+      onStepDone(plainStepRecord);
       break;
     }
 

@@ -114,6 +114,7 @@ function validateFinalize(profile, steps = []) {
     return {
       ok: true,
       missingTools: [],
+      requiredTools: profile.requiredTools || [],
       successfulTools: Object.fromEntries(counts.entries()),
     };
   }
@@ -121,6 +122,7 @@ function validateFinalize(profile, steps = []) {
   return {
     ok: false,
     missingTools,
+    requiredTools: profile.requiredTools || [],
     successfulTools: Object.fromEntries(counts.entries()),
     message: `Finalization blocked by siraGPT execution gates. Missing required tools: ${missingTools.join(', ')}.`,
     repairInstructions: [
