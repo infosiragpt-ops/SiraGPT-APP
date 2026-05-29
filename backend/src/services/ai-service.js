@@ -39,6 +39,19 @@ const { sharedFetch } = require('../utils/provider-http-agent');
 
 const HEARTBEAT_INTERVAL_MS = 15000;
 
+// Bounded timeout (ms) for the direct OpenAI REST calls made through axios
+// (container file upload + code-interpreter image download). The OpenAI SDK
+// client has its own timeout, but these two raw axios calls did not — a
+// stalled TCP connection or an unresponsive endpoint would hang the whole
+// request indefinitely, tying up the handler. Configurable via
+// SIRAGPT_OPENAI_HTTP_TIMEOUT_MS, clamped to [1s, 10min]; default 2min to
+// accommodate large file transfers.
+const OPENAI_HTTP_TIMEOUT_MS = (() => {
+    const raw = Number(process.env.SIRAGPT_OPENAI_HTTP_TIMEOUT_MS);
+    if (Number.isFinite(raw) && raw >= 1_000 && raw <= 600_000) return Math.floor(raw);
+    return 120_000;
+})();
+
 /**
  * writeWithBackpressure — write a frame to an Express response and, if
  * the kernel send buffer is full, await the `drain` event before
@@ -952,6 +965,7 @@ class AIService {
                 },
                 maxContentLength: Infinity,
                 maxBodyLength: Infinity,
+                timeout: OPENAI_HTTP_TIMEOUT_MS,
             }
         );
 
@@ -1322,7 +1336,8 @@ You are a professional developer; I will give you a scenario, you understand tha
                                     const downloadUrl = `https://api.openai.com/v1/containers/${container_id}/files/${file_id}/content`;
                                     const imageResponse = await axios.get(downloadUrl, {
                                         headers: { 'Authorization': `Bearer ${process.env.OPENAI_API_KEY}` },
-                                        responseType: 'arraybuffer'
+                                        responseType: 'arraybuffer',
+                                        timeout: OPENAI_HTTP_TIMEOUT_MS,
                                     });
 
                                     const uploadsDir = path.join(__dirname, '../../uploads/images');
@@ -1358,5 +1373,6 @@ service.__test = {
     normalizeModelForProvider,
 };
 service.modelSupportsVision = modelSupportsVision;
+service.OPENAI_HTTP_TIMEOUT_MS = OPENAI_HTTP_TIMEOUT_MS;
 
 module.exports = service;
