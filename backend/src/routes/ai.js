@@ -5463,30 +5463,59 @@ function createOpenRouterClient() {
   });
 }
 
+// Best / most broadly-available OpenRouter image model. Used as the default
+// fallback when the user's chosen model has no endpoint for the requested
+// modalities (the "404 No endpoints found…" error) or returns no image.
+const BEST_OPENROUTER_IMAGE_MODEL = 'openai/gpt-5.4-image-2';
+
 async function generateOpenRouterImage(openrouter, { model, prompt, aspectRatio, quality, signal }) {
   if (!process.env.OPENROUTER_API_KEY) {
     throw new Error('OPENROUTER_API_KEY is required for OpenRouter image generation.');
   }
 
-  const response = await openrouter.chat.completions.create(
-    {
-      model,
-      messages: [{ role: 'user', content: prompt }],
-      modalities: openRouterImageModalitiesFor(model),
-      image_config: {
-        aspect_ratio: aspectRatio,
-        image_size: quality,
+  const callOnce = async (useModel) => {
+    const response = await openrouter.chat.completions.create(
+      {
+        model: useModel,
+        messages: [{ role: 'user', content: prompt }],
+        modalities: openRouterImageModalitiesFor(useModel),
+        image_config: {
+          aspect_ratio: aspectRatio,
+          image_size: quality,
+        },
+        stream: false,
       },
-      stream: false,
-    },
-    { signal }
-  );
+      { signal }
+    );
 
-  const images = extractOpenRouterImageBase64s(response);
-  if (!images.length) {
-    throw new Error('OpenRouter did not return an image.');
+    const images = extractOpenRouterImageBase64s(response);
+    if (!images.length) {
+      throw new Error('OpenRouter did not return an image.');
+    }
+    return images[0];
+  };
+
+  try {
+    return await callOnce(model);
+  } catch (err) {
+    // Some OpenRouter image models intermittently report no endpoint for the
+    // requested output modalities (HTTP 404) or return an empty payload.
+    // Fall back once to the best, broadly-available image model so the user
+    // still gets a result instead of a hard error.
+    const msg = String((err && err.message) || '').toLowerCase();
+    const status = err && (err.status || err.statusCode);
+    const recoverable =
+      status === 404 ||
+      msg.includes('no endpoints') ||
+      msg.includes('output modalities') ||
+      msg.includes('did not return an image') ||
+      msg.includes('not a valid model');
+    if (recoverable && model !== BEST_OPENROUTER_IMAGE_MODEL) {
+      console.warn(`[generate-image] model '${model}' failed (${msg || status}); retrying with ${BEST_OPENROUTER_IMAGE_MODEL}`);
+      return await callOnce(BEST_OPENROUTER_IMAGE_MODEL);
+    }
+    throw err;
   }
-  return images[0];
 }
 
 function promptWithImageAspectRatio(prompt, aspectRatio, quality = '2K') {
@@ -5610,6 +5639,13 @@ router.post(
       aspectRatio = normalizeImageAspectRatio(aspectRatio);
       quality = normalizeImageQuality(quality);
       imageCount = normalizeImageCount(imageCount);
+      // Sync the frame to what the user described in the prompt itself
+      // ("rectangular", "vertical", "para facebook", "9:16"…), overriding the
+      // picker default so the generated image matches the request.
+      try {
+        const promptAspect = require('../services/agents/media-intent').resolveImageAspectRatio(prompt);
+        if (promptAspect) aspectRatio = normalizeImageAspectRatio(promptAspect);
+      } catch (_) { /* best-effort: keep the picker aspect ratio */ }
       const imagePrompt = promptWithImageAspectRatio(prompt, aspectRatio, quality);
       const requestedImageSize = imageGenerationSizeFor(provider, aspectRatio);
       const userId = req.user.id;

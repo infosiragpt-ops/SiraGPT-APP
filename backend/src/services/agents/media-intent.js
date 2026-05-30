@@ -133,9 +133,42 @@ function parseDurationSeconds(normText) {
  */
 function detectOrientation(normText) {
   if (/\b(9:16|9x16|vertical|retrato|portrait|tiktok|reels?|histori(?:a|as)|story|stories|para movil|formato movil)\b/.test(normText)) return 'vertical';
-  if (/\b(16:9|16x9|horizontal|apaisad[oa]|panoramic[oa]|landscape|widescreen|para youtube)\b/.test(normText)) return 'horizontal';
-  if (/\b(1:1|1x1|cuadrad[oa]|square|post de instagram)\b/.test(normText)) return 'square';
+  if (/\b(16:9|16x9|horizontal|apaisad[oa]s?|panoramic[oa]s?|landscape|widescreen|para youtube|youtube|rectangular(?:es)?|facebook|portada|banner|cover|cabecera|miniatura|thumbnail|cartel|flyer|poster|afiche)\b/.test(normText)) return 'horizontal';
+  if (/\b(1:1|1x1|cuadrad[oa]s?|square|post de instagram)\b/.test(normText)) return 'square';
   if (/\b(4:3)\b/.test(normText)) return 'standard';
+  return null;
+}
+
+/**
+ * Resolve a free-text image request to a concrete aspect-ratio key that the
+ * image-generation route understands ('1:1','2:3','3:2','3:4','9:16','4:3',
+ * '16:9'), or null when the user did not describe a shape/orientation.
+ *
+ * This lets a plain message like "una imagen rectangular para facebook" or
+ * "un retrato vertical" drive the generated frame, instead of always falling
+ * back to the picker's default. Explicit ratio tokens win; then platform
+ * presets (stories/tiktok → tall, facebook/youtube/banner → wide); then the
+ * generic shape words. "rectangular" maps to landscape (the common intent,
+ * e.g. a Facebook post).
+ */
+function resolveImageAspectRatio(text) {
+  const norm = normalize(text);
+  if (!norm) return null;
+
+  const colon = norm.match(/\b(1:1|2:3|3:2|3:4|9:16|4:3|16:9)\b/);
+  if (colon) return colon[1];
+  const cross = norm.match(/\b(1x1|2x3|3x2|3x4|9x16|4x3|16x9)\b/);
+  if (cross) return cross[1].replace('x', ':');
+
+  // Vertical-mobile / full-screen stories → tall 9:16.
+  if (/\b(histori(?:a|as)|story|stories|reels?|tiktok|status|para movil|formato movil)\b/.test(norm)) return '9:16';
+  // Generic vertical / portrait → 3:4.
+  if (/\b(vertical|retrato|portrait|mas alto que ancho)\b/.test(norm)) return '3:4';
+  // Square (profile pictures, logos, instagram feed posts).
+  if (/\b(cuadrad[oa]s?|square|post de instagram|foto de perfil|avatar|logo|logotipo|icono)\b/.test(norm)) return '1:1';
+  // Horizontal / landscape / rectangular / social-wide → 16:9.
+  if (/\b(rectangular(?:es)?|horizontal(?:es)?|apaisad[oa]s?|panoramic[oa]s?|landscape|widescreen|para youtube|youtube|miniatura|thumbnail|portada|portadas|facebook|banner|banners|cover|cabecera|encabezado|cartel|carteles|flyer|flyers|poster|posters|afiche|afiches|mas ancho que alto)\b/.test(norm)) return '16:9';
+
   return null;
 }
 
@@ -322,6 +355,7 @@ function buildMediaIntentHint(intent) {
 module.exports = {
   detectMediaIntent,
   buildMediaIntentHint,
+  resolveImageAspectRatio,
   // Exposed for unit testing:
   _internal: {
     normalize,
@@ -330,6 +364,7 @@ module.exports = {
     detectImageCount,
     detectStyle,
     detectHighQuality,
+    resolveImageAspectRatio,
     KIND_TO_TOOL,
   },
 };

@@ -145,3 +145,41 @@ test('image-count hint instructs multiple generate_image calls', () => {
   assert.match(hint, /generate_image/);
   assert.match(hint, /4/);
 });
+
+// ── resolveImageAspectRatio — free-text → concrete image aspect ratio ──────
+const { resolveImageAspectRatio } = _internal;
+
+test('resolveImageAspectRatio: rectangular / facebook → landscape 16:9', () => {
+  assert.equal(resolveImageAspectRatio('creame una imagen de un perro rectangular para postada de facebook'), '16:9');
+  assert.equal(resolveImageAspectRatio('una imagen rectangular'), '16:9');
+  assert.equal(resolveImageAspectRatio('portada para mi página de facebook'), '16:9');
+  assert.equal(resolveImageAspectRatio('a wide landscape banner'), '16:9');
+});
+
+test('resolveImageAspectRatio: vertical / portrait → 3:4', () => {
+  assert.equal(resolveImageAspectRatio('un retrato vertical de una mujer'), '3:4');
+  assert.equal(resolveImageAspectRatio('make it portrait'), '3:4');
+});
+
+test('resolveImageAspectRatio: stories / tiktok → 9:16', () => {
+  assert.equal(resolveImageAspectRatio('imagen para historia de instagram'), '9:16');
+  assert.equal(resolveImageAspectRatio('algo para tiktok'), '9:16');
+});
+
+test('resolveImageAspectRatio: square / logo / avatar → 1:1', () => {
+  assert.equal(resolveImageAspectRatio('un logo cuadrado'), '1:1');
+  assert.equal(resolveImageAspectRatio('avatar para mi perfil'), '1:1');
+  assert.equal(resolveImageAspectRatio('square image'), '1:1');
+});
+
+test('resolveImageAspectRatio: explicit ratio tokens win', () => {
+  assert.equal(resolveImageAspectRatio('una imagen vertical pero en 16:9'), '16:9');
+  assert.equal(resolveImageAspectRatio('genera algo 9x16'), '9:16');
+  assert.equal(resolveImageAspectRatio('relación 3:2 por favor'), '3:2');
+});
+
+test('resolveImageAspectRatio: no shape described → null (keep picker default)', () => {
+  assert.equal(resolveImageAspectRatio('creame una imagen de un perro'), null);
+  assert.equal(resolveImageAspectRatio(''), null);
+  assert.equal(resolveImageAspectRatio(null), null);
+});
