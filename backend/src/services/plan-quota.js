@@ -7,9 +7,12 @@
  * checks scattered across `/api/ai`:
  *
  *   FREE plan:
- *     Text chat is limited to 3 successful generations per local day
- *     across any visible model. Legacy `monthlyCallLimit` remains on
- *     the User row for older UI/accounting surfaces, but the live gate
+ *     TEXT chat is limited to 3 successful generations per local day
+ *     across any visible model. Turns that carry a document/image
+ *     attachment are EXEMPT — file analysis always works on FREE and
+ *     does not consume the text budget (the chat route skips the usage
+ *     write for those turns). Legacy `monthlyCallLimit` remains on the
+ *     User row for older UI/accounting surfaces, but the live gate
  *     counts ApiUsage rows for today's window.
  *
  *   PRO / PRO_MAX / ENTERPRISE:
@@ -354,7 +357,7 @@ async function recordApiUsage({ prisma, userId, model, tokens } = {}) {
  *                                 has no plan to enforce against.
  * @returns {Promise<{ok: true} | {ok: false, status: number, body: object}>}
  */
-async function tryConsumePlanQuota({ userId, prisma, user } = {}) {
+async function tryConsumePlanQuota({ userId, prisma, user, hasAttachments = false } = {}) {
   if (!user) return { ok: true };
 
   // superAdmins bypass the plan gate entirely (see isPlanQuotaExempt).
@@ -364,6 +367,15 @@ async function tryConsumePlanQuota({ userId, prisma, user } = {}) {
   }
 
   if (user.plan === 'FREE') {
+    // Product rule: the FREE daily cap meters TEXT-only generations
+    // (3/day). A turn that carries a document/image attachment is exempt
+    // — file analysis must always work on FREE. We return before the
+    // daily-count read so the attachment turn is never blocked; the chat
+    // route also skips its usage write so it doesn't consume the text
+    // budget (see saveChatAndTrackUsage in routes/ai.js).
+    if (hasAttachments) {
+      return { ok: true, exempt: 'attachment', dailyLimit: FREE_CALL_LIMIT };
+    }
     const usedToday = await countFreeDailyCalls({ userId: userId || user.id, prisma });
     if (usedToday >= FREE_CALL_LIMIT) {
       const { end } = getFreeDailyWindow();

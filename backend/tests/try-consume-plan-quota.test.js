@@ -115,6 +115,59 @@ describe("tryConsumePlanQuota — superAdmin bypass", () => {
   });
 });
 
+describe("tryConsumePlanQuota — FREE attachment exemption", () => {
+  test("FREE turn WITH attachment → ok:true exempt, never blocked, NO daily-count DB read", async () => {
+    // apiUsageCount:99 is far past the 3/day text cap — an attachment turn
+    // must still pass, and the count() query must never run (it's exempt).
+    const prisma = makePrismaStub({ apiUsageCount: 99 });
+    const result = await tryConsumePlanQuota({
+      userId: "u-free",
+      prisma,
+      user: { id: "u-free", plan: "FREE" },
+      hasAttachments: true,
+    });
+    assert.deepEqual(result, { ok: true, exempt: "attachment", dailyLimit: 3 });
+    assert.equal(prisma._apiUsageCalls().length, 0);
+  });
+
+  test("FREE text-only turn (hasAttachments:false) still gated at the cap", async () => {
+    const prisma = makePrismaStub({ apiUsageCount: 3 });
+    const result = await tryConsumePlanQuota({
+      userId: "u-free",
+      prisma,
+      user: { id: "u-free", plan: "FREE" },
+      hasAttachments: false,
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.status, 429);
+    assert.equal(result.body.error, "Free daily queries exhausted. Please upgrade to continue.");
+  });
+
+  test("default (no hasAttachments arg) preserves the text-only gating", async () => {
+    const prisma = makePrismaStub({ apiUsageCount: 3 });
+    const result = await tryConsumePlanQuota({
+      userId: "u-free",
+      prisma,
+      user: { id: "u-free", plan: "FREE" },
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.status, 429);
+  });
+
+  test("attachment flag does NOT exempt a paid plan from its token cap", async () => {
+    const prisma = makePrismaStub();
+    const result = await tryConsumePlanQuota({
+      userId: "u-pro",
+      prisma,
+      user: { id: "u-pro", plan: "PRO", apiUsage: 1000, monthlyLimit: 1000 },
+      hasAttachments: true,
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.status, 429);
+    assert.equal(result.body.error, "Monthly API limit exceeded");
+  });
+});
+
 describe("tryConsumePlanQuota — paid plans", () => {
   test("PRO under cap → ok:true, NO DB call (read-only check)", async () => {
     const prisma = makePrismaStub();

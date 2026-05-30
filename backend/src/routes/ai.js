@@ -1225,7 +1225,7 @@ async function loadUserFile(fileRef, userId) {
   return toProcessedFile(file);
 }
 
-async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles = [], regenerate = false, extraMetadata = null) {
+async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles = [], regenerate = false, extraMetadata = null, userPlan = null) {
   let assistantMessage = null;
   try {
     console.log("Background task: Saving to database...", { assistantFiles });
@@ -1305,7 +1305,22 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
     //   where: { id: userId },
     //   data: { apiUsage: { increment: tokens } }
     // });
-    await usageService.recordUsage(userId, model, totalTokens, totalTokens * 0.001);
+    // FREE plan meters TEXT-only generations (3/day). When this turn
+    // carried a document/image attachment we skip the counted usage
+    // write so it doesn't consume the text budget — countFreeDailyCalls
+    // counts ApiUsage rows, so not writing one keeps the attachment turn
+    // exempt. The Message rows above still persist the turn; FREE billing
+    // uses the daily gate, not the apiUsage token counter, so skipping
+    // the increment here is harmless. Paid plans always record (they meter
+    // by tokens), and so do anonymous-but-tracked turns.
+    const isFreeAttachmentTurn = userPlan === 'FREE'
+      && Array.isArray(processedFiles)
+      && processedFiles.length > 0;
+    if (isFreeAttachmentTurn) {
+      console.log('[ai/quota] FREE attachment turn — exempt from the daily text cap (usage not counted)');
+    } else {
+      await usageService.recordUsage(userId, model, totalTokens, totalTokens * 0.001);
+    }
 
     console.log("Background task: Database save complete.");
   } catch (dbError) {
@@ -1607,7 +1622,12 @@ router.post(
       // delegated to services/plan-quota.js; behavior preserved
       // byte-for-byte from the previous inline implementation).
       if (isAuth) {
-        const quota = await tryConsumePlanQuota({ userId, prisma, user: req.user });
+        // FREE meters TEXT-only turns (3/day). A turn carrying a
+        // document/image attachment is exempt so file analysis always
+        // works — see tryConsumePlanQuota. `files` is the request's
+        // attachment list (validated as an optional array above).
+        const turnHasAttachments = Array.isArray(files) && files.length > 0;
+        const quota = await tryConsumePlanQuota({ userId, prisma, user: req.user, hasAttachments: turnHasAttachments });
         if (!quota.ok) return res.status(quota.status).json(quota.body);
       }
 
@@ -4924,6 +4944,7 @@ router.post(
           newFiles,
           regenerate,
           Object.keys(assistantMeta).length > 0 ? assistantMeta : null,
+          req.user?.plan || null,
         );
         if (savedChat?.assistantMessage?.id && operationalRagContext?.active) {
           operationalRag.scheduleQualityAudit({
