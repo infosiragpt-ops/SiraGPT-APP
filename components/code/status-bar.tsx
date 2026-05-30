@@ -17,7 +17,7 @@ export function StatusBar({ terminalOpen, onToggleTerminal, chatOpen, onToggleCh
   return (
     <footer
       className={cn(
-        "flex h-6 shrink-0 items-center justify-between border-t border-border/60 bg-muted/25 px-2 text-[10px] text-muted-foreground",
+        "flex h-6 shrink-0 items-center justify-between border-t border-border/40 bg-background/55 px-2 text-[10px] text-muted-foreground backdrop-blur-xl supports-[backdrop-filter]:bg-background/40",
       )}
     >
       <div className="flex items-center gap-2">

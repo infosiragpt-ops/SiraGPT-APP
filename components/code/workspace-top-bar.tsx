@@ -52,7 +52,7 @@ export function WorkspaceTopBar({
   const visible = PANELS.filter((p) => openPanels.has(p.id))
 
   return (
-    <header className="flex h-8 shrink-0 items-center gap-1 border-b border-border/50 bg-muted/20 px-1.5">
+    <header className="flex h-8 shrink-0 items-center gap-1 border-b border-border/40 bg-background/55 px-1.5 backdrop-blur-xl supports-[backdrop-filter]:bg-background/40">
       <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
         {visible.map((panel) => {
           const Icon = panel.icon
