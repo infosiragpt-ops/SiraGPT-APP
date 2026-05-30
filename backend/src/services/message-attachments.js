@@ -65,6 +65,39 @@ function looksLikeUnsupportedExtractionPlaceholder(value) {
   return /^File\s+"[^"]+"\s+uploaded successfully\.\s+Content type:\s+application\/(?:octet-stream|zip|x-zip|x-zip-compressed)\.?$/i.test(text);
 }
 
+/**
+ * describeUnextractedAttachment — build an honest, type-aware placeholder
+ * for an attachment whose text could NOT be extracted (empty OCR on a
+ * photo/diagram, scanned/protected PDF, binary/unsupported doc). It
+ * replaces the old dead-end "Binary file - content not available" string,
+ * which left the model with no idea what happened — to users that read as
+ * "it can't analyze my file." This message instead tells the model what
+ * went wrong and what to relay to the user (describe it / re-upload a
+ * text version / switch to a vision model). Pure, never throws; kept in
+ * the product's primary locale (Spanish).
+ */
+function describeUnextractedAttachment(row = {}) {
+  const r = row || {};
+  const name = String(r.name || r.originalName || r.filename || 'archivo').trim() || 'archivo';
+  const type = String(r.mimeType || r.type || '').toLowerCase();
+  if (isImageFile(r)) {
+    return `[Imagen "${name}": no se detectó texto legible mediante OCR. `
+      + 'Si es una foto o un diagrama sin texto, el modelo de texto actual no puede verla directamente. '
+      + 'Pídele al usuario que describa su contenido, o sugiérele cambiar a un modelo con visión.]';
+  }
+  if (type.includes('pdf') || /\.pdf$/i.test(name)) {
+    return `[Documento PDF "${name}": no se pudo extraer texto. `
+      + 'Probablemente es un PDF escaneado (solo imagen) o está protegido. '
+      + 'Sugiere al usuario subir una versión con texto seleccionable.]';
+  }
+  if (type.startsWith('audio/') || type.startsWith('video/')) {
+    return `[Archivo multimedia "${name}": no se obtuvo transcripción. `
+      + 'Indica al usuario que reintente o suba un formato compatible.]';
+  }
+  return `[Archivo "${name}": no se pudo extraer su contenido (puede estar vacío, protegido `
+    + 'o en un formato no soportado). Pide al usuario que reintente o lo suba en otro formato.]';
+}
+
 function isSpreadsheetFile(row = {}) {
   const mime = String(row.mimeType || row.type || '').toLowerCase();
   const name = String(row.originalName || row.filename || '').toLowerCase();
@@ -794,6 +827,7 @@ async function buildTranscriptionTextFromFiles(prisma, { userId, fileIds = [], m
 module.exports = {
   buildTranscriptionTextFromFiles,
   buildUploadedFileContext,
+  describeUnextractedAttachment,
   extractFileIdsFromMessageFiles,
   ensureImageOcr,
   hasUsefulExtractedText,

@@ -3949,7 +3949,7 @@ router.post(
                 const preparedContent = messageAttachments.isProfessionalDocumentSynthesisRequest(prompt)
                   ? messageAttachments.prepareDocumentTextForProfessionalSynthesis(f.extractedText || '')
                   : '';
-                const content = preparedContent || f.extractedText || 'Binary file - content not available';
+                const content = preparedContent || f.extractedText || messageAttachments.describeUnextractedAttachment(f);
                 return `\n\nAttached file: ${f.name}\nContent: ${content}`;
               }).join('');
 
@@ -3975,7 +3975,7 @@ router.post(
                 const preparedContent = messageAttachments.isProfessionalDocumentSynthesisRequest(prompt)
                   ? messageAttachments.prepareDocumentTextForProfessionalSynthesis(f.extractedText || '')
                   : '';
-                const content = preparedContent || f.extractedText || 'Binary file - content not available';
+                const content = preparedContent || f.extractedText || messageAttachments.describeUnextractedAttachment(f);
                 return `\n\nAttached file: ${f.name}\nContent: ${content}`;
               }).join('');
               messageContent += fileContext;
@@ -3996,7 +3996,7 @@ router.post(
             const preparedContent = messageAttachments.isProfessionalDocumentSynthesisRequest(prompt)
               ? messageAttachments.prepareDocumentTextForProfessionalSynthesis(f.extractedText || '')
               : '';
-            const content = preparedContent || f.extractedText || 'Binary file - content not available';
+            const content = preparedContent || f.extractedText || messageAttachments.describeUnextractedAttachment(f);
             return `File: ${f.name}\nContent: ${content}`;
           }).join('\n\n');
 
@@ -6594,7 +6594,7 @@ router.post(
 
         if (processedFiles.length > 0) {
           const fileContext = processedFiles.map(f => {
-            const content = f.extractedText || 'File content could not be extracted.';
+            const content = f.extractedText || messageAttachments.describeUnextractedAttachment(f);
             return `--- Attached File: ${f.name} ---\n${content}\n--- End of File ---`;
           }).join('\n\n');
           finalPrompt = `${prompt}\n\nUse the following content from the attached file(s) as context for the presentation:\n\n${fileContext}`;
@@ -6715,7 +6715,7 @@ router.post(
 
         if (processedFiles.length > 0) {
           const fileContext = processedFiles.map(f => {
-            const content = f.extractedText || 'File content could not be extracted.';
+            const content = f.extractedText || messageAttachments.describeUnextractedAttachment(f);
             return `--- Attached File: ${f.name} ---\n${content}\n--- End of File ---`;
           }).join('\n\n');
           finalPrompt = `${prompt}\n\nUse the following content from the attached file(s) as context for the presentation:\n\n${fileContext}`;
