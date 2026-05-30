@@ -3,7 +3,6 @@ import * as React from "react"
 import { useTranslations } from "next-intl"
 import { useBackgroundStreams } from "@/lib/background-streams-context"
 import {
-  Bot,
   MessageSquare,
   Plus,
   Settings,
@@ -996,7 +995,12 @@ export function AppSidebar() {
             aria-label="Mostrar barra lateral"
             title="Mostrar barra lateral"
           >
-            <Bot className="h-4 w-4 transition-opacity group-hover:opacity-0" />
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/sira-gpt.png"
+              alt="SiraGPT"
+              className="h-5 w-5 shrink-0 rounded-md object-contain transition-opacity group-hover:opacity-0"
+            />
             <SidebarOvalIcon className="absolute h-4 w-4 opacity-0 transition-opacity group-hover:opacity-100" />
           </button>
         </div>
