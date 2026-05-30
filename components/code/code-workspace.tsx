@@ -31,6 +31,7 @@ import { browserSupportsLocalFolderSync } from "@/lib/code-workspace-utils"
 
 import { AICodeChatPanel } from "./ai-code-chat-panel"
 import { EditorPanel } from "./editor-panel"
+import { PreviewPane } from "./preview-pane"
 import { StatusBar } from "./status-bar"
 import { TerminalPanel } from "./terminal-panel"
 import { WorkspaceToolsMenu } from "./workspace-tools-menu"
@@ -61,6 +62,7 @@ export function CodeWorkspace() {
 
   const [chatOpen, setChatOpen] = React.useState(true)
   const [terminalOpen, setTerminalOpen] = React.useState(false)
+  const [previewOpen, setPreviewOpen] = React.useState(true)
   const [paletteOpen, setPaletteOpen] = React.useState(false)
   const [paletteQuery, setPaletteQuery] = React.useState("")
   const [openPanels, setOpenPanels] = React.useState<Set<WorkspacePanelId>>(
@@ -107,8 +109,8 @@ export function CodeWorkspace() {
         setTerminalOpen(true)
         return
       }
-      if (id === "preview" && typeof window !== "undefined") {
-        window.open(window.location.origin, "_blank", "noopener,noreferrer")
+      if (id === "preview") {
+        setPreviewOpen(true)
         return
       }
       if (id === "git" || id === "validation") {
@@ -127,6 +129,7 @@ export function CodeWorkspace() {
     })
     if (activePanel === id) setActivePanel(null)
     if (id === "terminal") setTerminalOpen(false)
+    if (id === "preview") setPreviewOpen(false)
   }, [activePanel])
 
   const openComposer = React.useCallback(() => {
@@ -358,15 +361,27 @@ export function CodeWorkspace() {
               <ResizableHandle withHandle />
 
               <ResizablePanel defaultSize={70} minSize={32}>
-                <ResizablePanelGroup direction="vertical">
-                  <ResizablePanel defaultSize={terminalOpen ? 100 - TERMINAL_DEFAULT_SIZE : 100} minSize={30}>
-                    <EditorPanel />
+                <ResizablePanelGroup direction="horizontal">
+                  <ResizablePanel defaultSize={previewOpen ? 56 : 100} minSize={28} className="min-w-0">
+                    <ResizablePanelGroup direction="vertical">
+                      <ResizablePanel defaultSize={terminalOpen ? 100 - TERMINAL_DEFAULT_SIZE : 100} minSize={30}>
+                        <EditorPanel />
+                      </ResizablePanel>
+                      {terminalOpen ? (
+                        <>
+                          <ResizableHandle withHandle />
+                          <ResizablePanel defaultSize={TERMINAL_DEFAULT_SIZE} minSize={TERMINAL_MIN_SIZE} maxSize={70}>
+                            <TerminalPanel open={terminalOpen} onClose={() => setTerminalOpen(false)} />
+                          </ResizablePanel>
+                        </>
+                      ) : null}
+                    </ResizablePanelGroup>
                   </ResizablePanel>
-                  {terminalOpen ? (
+                  {previewOpen ? (
                     <>
                       <ResizableHandle withHandle />
-                      <ResizablePanel defaultSize={TERMINAL_DEFAULT_SIZE} minSize={TERMINAL_MIN_SIZE} maxSize={70}>
-                        <TerminalPanel open={terminalOpen} onClose={() => setTerminalOpen(false)} />
+                      <ResizablePanel defaultSize={44} minSize={24} className="min-w-0">
+                        <PreviewPane onClose={() => handleClosePanel("preview")} />
                       </ResizablePanel>
                     </>
                   ) : null}

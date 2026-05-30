@@ -1,0 +1,277 @@
+"use client"
+
+/**
+ * PreviewPane — embedded live browser for the /code workspace.
+ *
+ * Renders whatever is being built (HTML site, React/JSX app, Markdown, SVG)
+ * inside a sandboxed iframe and refreshes as files change. A postMessage
+ * bridge surfaces the previewed document's console + runtime errors so the
+ * developer sees output without leaving the workspace.
+ */
+
+import * as React from "react"
+import {
+  Circle,
+  Eraser,
+  ExternalLink,
+  Loader2,
+  Monitor,
+  RefreshCw,
+  Smartphone,
+  TerminalSquare,
+  X,
+  Zap,
+  ZapOff,
+} from "lucide-react"
+
+import { cn } from "@/lib/utils"
+import { useCodeWorkspace } from "@/lib/code-workspace-context"
+import { buildPreviewDocument, type PreviewKind } from "@/lib/code-preview-build"
+
+type LogEntry = { level: string; text: string; id: number }
+type Device = "responsive" | "phone"
+
+const KIND_LABEL: Record<PreviewKind, string> = {
+  html: "web",
+  react: "react",
+  markdown: "markdown",
+  svg: "svg",
+  unsupported: "—",
+  empty: "—",
+}
+
+export function PreviewPane({ onClose }: { onClose?: () => void }) {
+  const { files, activePath } = useCodeWorkspace()
+
+  const [auto, setAuto] = React.useState(true)
+  const [device, setDevice] = React.useState<Device>("responsive")
+  const [tick, setTick] = React.useState(0)
+  const [building, setBuilding] = React.useState(false)
+  const [consoleOpen, setConsoleOpen] = React.useState(false)
+  const [logs, setLogs] = React.useState<LogEntry[]>([])
+  const logSeq = React.useRef(0)
+
+  // Debounce rebuilds so typing stays smooth; manual refresh bypasses it.
+  const [snapshot, setSnapshot] = React.useState({ files, activePath })
+  React.useEffect(() => {
+    if (!auto) return
+    setBuilding(true)
+    const t = setTimeout(() => {
+      setSnapshot({ files, activePath })
+      setBuilding(false)
+    }, 400)
+    return () => clearTimeout(t)
+  }, [files, activePath, auto])
+
+  const result = React.useMemo(
+    () => buildPreviewDocument(snapshot.files, snapshot.activePath),
+    [snapshot],
+  )
+
+  // Fresh document → clear the captured console.
+  React.useEffect(() => {
+    setLogs([])
+  }, [result, tick])
+
+  React.useEffect(() => {
+    const onMsg = (e: MessageEvent) => {
+      const m = e.data
+      if (!m || m.type !== "sgpt-preview-console") return
+      logSeq.current += 1
+      const entry: LogEntry = { level: String(m.level || "log"), text: String(m.text ?? ""), id: logSeq.current }
+      setLogs((prev) => (prev.length > 250 ? [...prev.slice(-250), entry] : [...prev, entry]))
+    }
+    window.addEventListener("message", onMsg)
+    return () => window.removeEventListener("message", onMsg)
+  }, [])
+
+  const refresh = React.useCallback(() => {
+    setSnapshot({ files, activePath })
+    setTick((t) => t + 1)
+  }, [files, activePath])
+
+  const openInNewTab = React.useCallback(() => {
+    if (typeof window === "undefined") return
+    const blob = new Blob([result.html], { type: "text/html" })
+    const url = URL.createObjectURL(blob)
+    window.open(url, "_blank", "noopener,noreferrer")
+    setTimeout(() => URL.revokeObjectURL(url), 30_000)
+  }, [result.html])
+
+  const errorCount = logs.filter((l) => l.level === "error").length
+  const entryLabel = result.entry ? result.entry.split("/").pop() : "preview"
+
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-zinc-50 dark:bg-zinc-950">
+      {/* URL / control bar — liquid glass */}
+      <div className="flex h-10 shrink-0 items-center gap-1.5 border-b border-border/40 bg-background/55 px-2 backdrop-blur-xl supports-[backdrop-filter]:bg-background/40">
+        <div className="flex items-center gap-1 pl-0.5">
+          <span className="h-2.5 w-2.5 rounded-full bg-rose-400/80" />
+          <span className="h-2.5 w-2.5 rounded-full bg-amber-400/80" />
+          <span className="h-2.5 w-2.5 rounded-full bg-emerald-400/80" />
+        </div>
+
+        <button
+          type="button"
+          onClick={refresh}
+          className="ml-1 flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+          aria-label="Recargar preview"
+          title="Recargar"
+        >
+          {building ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+        </button>
+
+        <div className="flex min-w-0 flex-1 items-center gap-2 rounded-full border border-border/40 bg-muted/30 px-3 py-1 text-[11px] text-muted-foreground shadow-inner backdrop-blur">
+          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500/80" />
+          <span className="truncate font-mono">localhost / {entryLabel}</span>
+          <span className="ml-auto shrink-0 rounded bg-background/70 px-1.5 py-px text-[9px] uppercase tracking-wide text-muted-foreground/80">
+            {KIND_LABEL[result.kind]}
+          </span>
+        </div>
+
+        <div className="flex shrink-0 items-center gap-0.5">
+          <GlassToggle
+            active={device === "responsive"}
+            onClick={() => setDevice("responsive")}
+            label="Escritorio"
+          >
+            <Monitor className="h-3.5 w-3.5" />
+          </GlassToggle>
+          <GlassToggle active={device === "phone"} onClick={() => setDevice("phone")} label="Móvil">
+            <Smartphone className="h-3.5 w-3.5" />
+          </GlassToggle>
+
+          <span className="mx-0.5 h-4 w-px bg-border/50" />
+
+          <GlassToggle
+            active={auto}
+            onClick={() => setAuto((v) => !v)}
+            label={auto ? "Auto-refresh activado" : "Auto-refresh desactivado"}
+          >
+            {auto ? <Zap className="h-3.5 w-3.5" /> : <ZapOff className="h-3.5 w-3.5" />}
+          </GlassToggle>
+          <GlassToggle
+            active={consoleOpen}
+            onClick={() => setConsoleOpen((v) => !v)}
+            label="Consola"
+          >
+            <span className="relative flex items-center justify-center">
+              <TerminalSquare className="h-3.5 w-3.5" />
+              {errorCount > 0 ? (
+                <span className="absolute -right-1.5 -top-1.5 flex h-3 min-w-3 items-center justify-center rounded-full bg-rose-500 px-0.5 text-[8px] font-semibold text-white">
+                  {errorCount > 9 ? "9+" : errorCount}
+                </span>
+              ) : null}
+            </span>
+          </GlassToggle>
+          <button
+            type="button"
+            onClick={openInNewTab}
+            className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+            aria-label="Abrir en pestaña nueva"
+            title="Abrir en pestaña nueva"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+          </button>
+          {onClose ? (
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+              aria-label="Cerrar preview"
+              title="Cerrar preview"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          ) : null}
+        </div>
+      </div>
+
+      {/* Viewport */}
+      <div className="min-h-0 flex-1 overflow-auto bg-zinc-100/60 p-0 dark:bg-zinc-900/40">
+        <div
+          className={cn(
+            "mx-auto h-full bg-white transition-all dark:bg-zinc-900",
+            device === "phone" && "my-3 h-[calc(100%-1.5rem)] max-w-[390px] overflow-hidden rounded-[28px] border-[6px] border-zinc-800 shadow-2xl",
+          )}
+        >
+          <iframe
+            key={tick}
+            srcDoc={result.html}
+            title="Preview en vivo"
+            className="h-full w-full border-0 bg-white dark:bg-zinc-900"
+            sandbox="allow-scripts allow-forms allow-popups allow-modals allow-pointer-lock"
+          />
+        </div>
+      </div>
+
+      {/* Live console */}
+      {consoleOpen ? (
+        <div className="flex h-40 shrink-0 flex-col border-t border-border/40 bg-background/70 backdrop-blur-xl">
+          <div className="flex h-7 shrink-0 items-center justify-between px-2 text-[10px] uppercase tracking-wide text-muted-foreground">
+            <span className="flex items-center gap-1.5">
+              <TerminalSquare className="h-3 w-3" /> Consola
+              {errorCount > 0 ? <span className="text-rose-500">· {errorCount} error(es)</span> : null}
+            </span>
+            <button
+              type="button"
+              onClick={() => setLogs([])}
+              className="flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-muted/60 hover:text-foreground"
+              title="Limpiar consola"
+            >
+              <Eraser className="h-3 w-3" /> Limpiar
+            </button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-auto px-2 pb-2 font-mono text-[11px] leading-relaxed">
+            {logs.length === 0 ? (
+              <p className="py-3 text-center text-muted-foreground/60">Sin salida todavía.</p>
+            ) : (
+              logs.map((l) => (
+                <div
+                  key={l.id}
+                  className={cn(
+                    "flex items-start gap-1.5 border-b border-border/20 py-0.5",
+                    l.level === "error" && "text-rose-500",
+                    l.level === "warn" && "text-amber-500",
+                    (l.level === "log" || l.level === "info" || l.level === "debug") && "text-foreground/80",
+                  )}
+                >
+                  <Circle className="mt-[5px] h-1.5 w-1.5 shrink-0 fill-current" />
+                  <span className="whitespace-pre-wrap break-words">{l.text}</span>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function GlassToggle({
+  active,
+  onClick,
+  label,
+  children,
+}: {
+  active?: boolean
+  onClick: () => void
+  label: string
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      title={label}
+      aria-pressed={active}
+      className={cn(
+        "flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground",
+        active && "bg-foreground/[0.07] text-foreground ring-1 ring-border/40",
+      )}
+    >
+      {children}
+    </button>
+  )
+}
