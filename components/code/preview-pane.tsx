@@ -237,7 +237,21 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
                   )}
                 >
                   <Circle className="mt-[5px] h-1.5 w-1.5 shrink-0 fill-current" />
-                  <span className="whitespace-pre-wrap break-words">{l.text}</span>
+                  <span className="min-w-0 flex-1 whitespace-pre-wrap break-words">{l.text}</span>
+                  {l.level === "error" ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        window.dispatchEvent(
+                          new CustomEvent("siragpt:code-fix-error", { detail: { text: l.text } }),
+                        )
+                      }
+                      className="ml-auto shrink-0 rounded bg-rose-500/15 px-1.5 py-px text-[10px] font-medium text-rose-500 transition-colors hover:bg-rose-500/25"
+                      title="Enviar este error al agente para que lo arregle"
+                    >
+                      Arreglar con IA
+                    </button>
+                  ) : null}
                 </div>
               ))
             )}

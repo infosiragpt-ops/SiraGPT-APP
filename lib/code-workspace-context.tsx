@@ -585,6 +585,11 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
       const openTabs = prev.openTabs.includes(cleaned) ? prev.openTabs : [...prev.openTabs, cleaned]
       return { files, openTabs, activePath: cleaned }
     })
+    // Surface the live preview as soon as the agent writes code, so the
+    // "instruct → build → see it" loop closes without a manual toggle.
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("siragpt:code-open-preview"))
+    }
     return cleaned
   }, [])
 

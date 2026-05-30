@@ -202,6 +202,20 @@ export function AICodeChatPanel() {
     return () => window.removeEventListener("siragpt:code-composer-mode", handler)
   }, [])
 
+  // "Arreglar con IA" from the preview console pre-loads the composer with the
+  // captured error so the user can send a fix in one tap.
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const handler = (e: Event) => {
+      const text = (e as CustomEvent<{ text?: string }>).detail?.text?.trim()
+      if (!text) return
+      setInput(`Arregla este error que aparece en el preview en vivo:\n\n${text}`)
+      window.requestAnimationFrame(() => inputRef.current?.focus())
+    }
+    window.addEventListener("siragpt:code-fix-error", handler)
+    return () => window.removeEventListener("siragpt:code-fix-error", handler)
+  }, [])
+
   // Auto-scroll on new content while the user is at the bottom — if
   // they scrolled up to read history, leave them alone.
   React.useEffect(() => {

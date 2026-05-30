@@ -121,10 +121,29 @@ function buildReactDocument(files: CodeFiles, entry: string | null): string {
     .sort((a, b) => a.localeCompare(b))
   if (entry) ordered.push(entry)
 
+  // Inline `import data from './x.json'` as a const so JSON modules work
+  // without a bundler. Runs before stripModuleSyntax removes the import line.
+  const inlineJsonImports = (code: string): string =>
+    code.replace(
+      /import\s+(\w+)\s+from\s+['"]([^'"]+\.json)['"]\s*;?/g,
+      (_m, name, ref) => {
+        const f = findFile(files, ref)
+        return f ? `const ${name} = ${files[f].content};` : ""
+      },
+    )
+
   const bundle = ordered
-    .map((p) => `// ── ${p} ──\n${stripModuleSyntax(files[p].content)}`)
+    .map((p) => `// ── ${p} ──\n${stripModuleSyntax(inlineJsonImports(files[p].content))}`)
     .join("\n\n")
     .replace(/<\/script/gi, "<\\/script")
+
+  // Every workspace stylesheet is injected so `import './index.css'` (and
+  // global stylesheets) take effect without resolving the import graph.
+  const workspaceCss = Object.keys(files)
+    .filter((p) => ext(p) === "css")
+    .map((p) => `/* ${p} */\n${files[p].content}`)
+    .join("\n")
+    .replace(/<\/style/gi, "<\\/style")
 
   const footer = `
 const __sgptTarget = (typeof App !== 'undefined' && App)
@@ -137,8 +156,10 @@ try {
   const root = ReactDOM.createRoot(document.getElementById('root'));
   root.render(React.createElement(__sgptTarget));
 } catch (e) {
-  const el = document.getElementById('root');
-  if (el) el.innerHTML = '<pre style="color:#e11d48;padding:16px;font:12px ui-monospace,monospace;white-space:pre-wrap">' + String((e && e.stack) || e) + '</pre>';
+  const o = document.createElement('div');
+  o.id = 'sgpt-error';
+  o.innerHTML = '<b>⚠ Error de render</b>\\n\\n' + String((e && e.stack) || e).replace(/[<>&]/g, function(c){return {'<':'&lt;','>':'&gt;','&':'&amp;'}[c];});
+  document.body.appendChild(o);
   console.error(e);
 }`.trim()
 
@@ -153,6 +174,11 @@ ${CONSOLE_BRIDGE}
   html,body{margin:0;padding:0;background:#fff;font-family:Inter,system-ui,sans-serif}
   #root{min-height:100vh}
   *:focus-visible{outline:2px solid #6366f1;outline-offset:2px;border-radius:4px}
+  #sgpt-error{position:fixed;inset:0;background:#0b0b0c;color:#fca5a5;font:13px/1.6 ui-monospace,monospace;padding:24px;overflow:auto;white-space:pre-wrap;z-index:99999}
+  #sgpt-error b{color:#f87171}
+</style>
+<style data-workspace>
+${workspaceCss}
 </style>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>

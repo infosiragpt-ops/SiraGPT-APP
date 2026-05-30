@@ -171,6 +171,16 @@ export function CodeWorkspace() {
   }, [registerCommandPaletteHandler])
 
   React.useEffect(() => {
+    const openPreview = () => {
+      setPreviewOpen(true)
+      setOpenPanels((prev) => new Set(prev).add("preview"))
+      setActivePanel("preview")
+    }
+    window.addEventListener("siragpt:code-open-preview", openPreview)
+    return () => window.removeEventListener("siragpt:code-open-preview", openPreview)
+  }, [])
+
+  React.useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const isMod = e.metaKey || e.ctrlKey
       if (!isMod) {
