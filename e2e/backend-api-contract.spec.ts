@@ -34,6 +34,13 @@ test("HEAD /api/health responds with 204 for connection probes", async ({ reques
   expect(res.status(), "HEAD health should be 2xx or 3xx").toBeLessThan(400)
 })
 
+test("GET /api/health/live alias responds with the same health contract", async ({ request }) => {
+  const res = await request.get(`${BACKEND}/api/health/live`)
+  expect(res.status(), `api health alias returned ${res.status()}`).toBe(200)
+  const body = await res.json()
+  expect(body.status, "health alias body should expose a status field").toBeDefined()
+})
+
 test("unauth GET /api/auth/me returns 401, not 500", async ({ request }) => {
   const res = await request.get(`${BACKEND}/api/auth/me`)
   // The rate-limit test in this file fires 30 requests against the

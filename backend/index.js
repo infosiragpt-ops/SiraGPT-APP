@@ -844,21 +844,25 @@ function getHealthRedisClient() {
     }
 }
 
-app.get('/health/live', (_req, res) => {
-    const report = runLivenessCheck();
+function sendHealthReport(res, report) {
     res.status(reportToHttpStatus(report)).json(report);
+}
+
+app.get(['/health/live', '/api/health/live'], (_req, res) => {
+    const report = runLivenessCheck();
+    sendHealthReport(res, report);
 });
 
-app.get('/health/ready', async (_req, res) => {
+app.get(['/health/ready', '/api/health/ready'], async (_req, res) => {
     const report = await getCachedOrFresh('ready', () => runReadinessCheck({
         prisma,
         redis: getHealthRedisClient(),
         queue: null,
     }));
-    res.status(reportToHttpStatus(report)).json(report);
+    sendHealthReport(res, report);
 });
 
-app.get('/health', async (_req, res) => {
+app.get(['/health', '/api/health'], async (_req, res) => {
     const report = await getCachedOrFresh('full', () => runFullHealthCheck({
         prisma,
         redis: getHealthRedisClient(),
@@ -869,7 +873,7 @@ app.get('/health', async (_req, res) => {
         posthog: getPostHogStatus(),
         coworkHealth,
     }));
-    res.status(reportToHttpStatus(report)).json(report);
+    sendHealthReport(res, report);
 });
 
 // ── Prometheus metrics ──────────────────────────────────────────

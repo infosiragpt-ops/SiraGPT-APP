@@ -143,6 +143,10 @@ async function runSmoke(options) {
   checks.push(await dnsProbe('dns:api', apiHost));
   checks.push(await fetchProbe('web:/', joinUrl(frontend, '/'), { timeoutMs: options.timeoutMs }));
   checks.push(await fetchProbe('web:/chat', joinUrl(frontend, '/chat'), { timeoutMs: options.timeoutMs }));
+  checks.push(await fetchProbe('web:/api/health/live', joinUrl(frontend, '/api/health/live'), {
+    timeoutMs: options.timeoutMs,
+    expect: (response, body) => response.status === 200 && body && body.status,
+  }));
   checks.push(await fetchProbe('api:/health/live', joinUrl(api, '/health/live'), {
     timeoutMs: options.timeoutMs,
     expect: (response, body) => response.status === 200 && body && body.status,
