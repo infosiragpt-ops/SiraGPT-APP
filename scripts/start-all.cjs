@@ -223,7 +223,8 @@ async function main() {
   }
 
   backend = spawnBackend();
-  waitForPort(BACKEND_HOST, BACKEND_PORT, BACKEND_READY_TIMEOUT_MS)
+  const timeoutMs = Number(process.env.BACKEND_READY_TIMEOUT_MS || 300_000);
+  waitForPort(BACKEND_HOST, BACKEND_PORT, timeoutMs)
     .then(() => {
       log("start-all", "backend is accepting connections", { host: BACKEND_HOST, port: BACKEND_PORT });
     })
