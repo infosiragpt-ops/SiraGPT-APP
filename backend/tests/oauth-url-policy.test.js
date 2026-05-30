@@ -55,6 +55,17 @@ test('production honors explicit API-host callbacks for all Google flows', () =>
   assert.equal(getGoogleServicesCallbackURL(env), 'https://api.siragpt.com/api/auth/google-services/callback');
 });
 
+test('production frontend URL ignores stale localhost process env', () => {
+  const env = {
+    NODE_ENV: 'production',
+    FRONTEND_URL: 'http://127.0.0.1',
+    PUBLIC_FRONTEND_URL: 'https://siragpt.com',
+    NEXT_PUBLIC_URL: 'https://siragpt.com',
+  };
+
+  assert.equal(getFrontendUrl(env), 'https://siragpt.com');
+});
+
 test('development keeps localhost callbacks for local OAuth testing', () => {
   const env = {
     NODE_ENV: 'development',

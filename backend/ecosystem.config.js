@@ -42,6 +42,14 @@ module.exports = {
       // ─── Environment ────────────────────────────────────
       env: {
         NODE_ENV: 'production',
+        FRONTEND_URL: 'https://siragpt.com',
+        PUBLIC_FRONTEND_URL: 'https://siragpt.com',
+        NEXT_PUBLIC_URL: 'https://siragpt.com',
+        PUBLIC_API_URL: 'https://api.siragpt.com',
+        NEXT_PUBLIC_API_URL: 'https://api.siragpt.com/api',
+        GOOGLE_AUTH_URI: 'https://api.siragpt.com/api/auth/google/callback',
+        GOOGLE_REDIRECT_URI: 'https://api.siragpt.com/api/auth/gmail/callback',
+        GOOGLE_REDIRECT_CALENDAR_DRIVE_URI: 'https://api.siragpt.com/api/auth/google-services/callback',
       },
       env_development: {
         NODE_ENV: 'development',

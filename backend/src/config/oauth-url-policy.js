@@ -54,15 +54,17 @@ function normalizePublicBackendBaseUrl(value) {
 }
 
 function inferBackendUrlFromFrontend(env = process.env) {
-  // Single-container deployment: the Express backend lives on the same
-  // public origin as Next.js and is reached via the /api/* rewrite — there
-  // is no separate api.* subdomain. Always anchor OAuth callbacks to the
-  // frontend origin so Google's redirect_uri matches a URL that actually
-  // resolves to our app.
   const parsed = parseUrl(
     env.FRONTEND_URL || env.PUBLIC_FRONTEND_URL || env.NEXT_PUBLIC_URL || ''
   );
   if (!parsed) return '';
+  if (isProduction(env)) {
+    const host = normalizeHostname(parsed.hostname);
+    if (host && !host.startsWith('api.')) {
+      const port = parsed.port ? `:${parsed.port}` : '';
+      return `${parsed.protocol}//api.${host}${port}`;
+    }
+  }
   return `${parsed.protocol}//${parsed.host}`;
 }
 
@@ -181,7 +183,20 @@ function getGoogleServicesCallbackURL(env = process.env) {
 }
 
 function getFrontendUrl(env = process.env) {
-  return stripTrailingSlash(env.FRONTEND_URL || env.PUBLIC_FRONTEND_URL || env.NEXT_PUBLIC_URL || 'http://localhost:3000');
+  const candidates = [
+    env.FRONTEND_URL,
+    env.PUBLIC_FRONTEND_URL,
+    env.NEXT_PUBLIC_URL,
+  ];
+
+  for (const candidate of candidates) {
+    const normalized = stripTrailingSlash(candidate);
+    if (!normalized) continue;
+    if (isProduction(env) && isLocalhostUrl(normalized)) continue;
+    return normalized;
+  }
+
+  return isProduction(env) ? 'https://siragpt.com' : 'http://localhost:3000';
 }
 
 module.exports = {
