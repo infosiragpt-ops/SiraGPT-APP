@@ -64,7 +64,18 @@ export function CodeWorkspace() {
 
   const [chatOpen, setChatOpen] = React.useState(true)
   const [terminalOpen, setTerminalOpen] = React.useState(false)
-  const [previewOpen, setPreviewOpen] = React.useState(true)
+  const [previewOpen, setPreviewOpen] = React.useState<boolean>(() => {
+    if (typeof window === "undefined") return true
+    return window.localStorage.getItem("code-workspace:preview-open") !== "0"
+  })
+
+  React.useEffect(() => {
+    try {
+      window.localStorage.setItem("code-workspace:preview-open", previewOpen ? "1" : "0")
+    } catch {
+      /* storage disabled — fail soft */
+    }
+  }, [previewOpen])
   const [paletteOpen, setPaletteOpen] = React.useState(false)
   const [paletteQuery, setPaletteQuery] = React.useState("")
   const [openPanels, setOpenPanels] = React.useState<Set<WorkspacePanelId>>(
@@ -231,6 +242,11 @@ export function CodeWorkspace() {
         e.preventDefault()
         setPaletteQuery("edit")
         setPaletteOpen(true)
+        return
+      }
+      if (key === "e") {
+        e.preventDefault()
+        setPreviewOpen((v) => !v)
         return
       }
       if (key === "l") {

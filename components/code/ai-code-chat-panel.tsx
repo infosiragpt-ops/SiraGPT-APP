@@ -564,6 +564,23 @@ function ChatBubble({
             block card below. */}
         {blocks.length > 0 ? stripFences(turn.content) : turn.content}
       </div>
+      {(() => {
+        const applicable = blocks.filter((b) => b.path)
+        return applicable.length >= 2 ? (
+          <div className="mt-2 flex items-center justify-between gap-2 rounded-md border border-border/50 bg-muted/20 px-2.5 py-1.5">
+            <span className="text-[11px] text-muted-foreground">
+              {applicable.length} archivos en esta respuesta
+            </span>
+            <button
+              type="button"
+              onClick={() => applicable.forEach((b) => onApply(b))}
+              className="inline-flex items-center gap-1 rounded-md bg-foreground px-2.5 py-1 text-[11px] font-medium text-background transition-opacity hover:opacity-90"
+            >
+              Aplicar todo y ver
+            </button>
+          </div>
+        ) : null
+      })()}
       {blocks.map((block) => (
         <CodeBlockCard
           key={block.index}

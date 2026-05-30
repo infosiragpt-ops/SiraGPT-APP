@@ -45,7 +45,18 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
   const { files, activePath } = useCodeWorkspace()
 
   const [auto, setAuto] = React.useState(true)
-  const [device, setDevice] = React.useState<Device>("responsive")
+  const [device, setDevice] = React.useState<Device>(() =>
+    typeof window !== "undefined" && window.localStorage.getItem("code-workspace:preview-device") === "phone"
+      ? "phone"
+      : "responsive",
+  )
+  React.useEffect(() => {
+    try {
+      window.localStorage.setItem("code-workspace:preview-device", device)
+    } catch {
+      /* storage disabled — fail soft */
+    }
+  }, [device])
   const [tick, setTick] = React.useState(0)
   const [building, setBuilding] = React.useState(false)
   const [consoleOpen, setConsoleOpen] = React.useState(false)
