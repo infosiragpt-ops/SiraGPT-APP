@@ -42,6 +42,7 @@ describe('ai-service vision routing', () => {
   test('selectVisionRuntime is exposed on the service instance', () => {
     assert.equal(typeof service.selectVisionRuntime, 'function');
     assert.equal(typeof service.modelSupportsVision, 'function');
+    assert.equal(typeof service.__test.shouldAttachVisionContent, 'function');
   });
 
   describe('modelSupportsVision', () => {
@@ -109,6 +110,27 @@ describe('ai-service vision routing', () => {
       assert.equal(rt.switched, false);
       assert.equal(rt.provider, 'DeepSeek');
       assert.equal(rt.model, 'deepseek-chat');
+    });
+  });
+
+  describe('shouldAttachVisionContent', () => {
+    test('keeps image payloads for native vision models even without switching', () => {
+      const rt = service.selectVisionRuntime('OpenAI', 'gpt-4o');
+      assert.equal(rt.switched, false);
+      assert.equal(service.__test.shouldAttachVisionContent('OpenAI', 'gpt-4o', rt), true);
+    });
+
+    test('keeps image payloads when a text model can be routed to a vision runtime', () => {
+      process.env.OPENAI_API_KEY = 'sk-test';
+      const rt = service.selectVisionRuntime('DeepSeek', 'deepseek-chat');
+      assert.equal(rt.switched, true);
+      assert.equal(service.__test.shouldAttachVisionContent('DeepSeek', 'deepseek-chat', rt), true);
+    });
+
+    test('does not attach image payloads when there is no native or fallback vision runtime', () => {
+      const rt = service.selectVisionRuntime('DeepSeek', 'deepseek-chat');
+      assert.equal(rt.switched, false);
+      assert.equal(service.__test.shouldAttachVisionContent('DeepSeek', 'deepseek-chat', rt), false);
     });
   });
 });

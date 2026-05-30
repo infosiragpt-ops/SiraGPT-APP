@@ -201,6 +201,10 @@ function selectVisionRuntime(provider, model) {
     return { provider, model, switched: false };
 }
 
+function shouldAttachVisionContent(provider, model, visionRuntime = selectVisionRuntime(provider, model)) {
+    return Boolean(visionRuntime && visionRuntime.switched) || modelSupportsVision(provider, model);
+}
+
 /**
  * Classify a provider error as transient (safe to retry) vs terminal.
  * Transient: rate limits (429), request timeouts (408), server errors
@@ -558,10 +562,14 @@ class AIService {
 
                     if (contentArray.some(part => part.type === 'image_url')) {
                         const visionRuntime = selectVisionRuntime(provider, model);
-                        if (visionRuntime.switched) {
-                            console.log(`[vision] Routing image turn through vision-capable runtime: ${provider}:${model} -> ${visionRuntime.provider}:${visionRuntime.model}`);
-                            provider = visionRuntime.provider;
-                            model = visionRuntime.model;
+                        if (shouldAttachVisionContent(provider, model, visionRuntime)) {
+                            if (visionRuntime.switched) {
+                                console.log(`[vision] Routing image turn through vision-capable runtime: ${provider}:${model} -> ${visionRuntime.provider}:${visionRuntime.model}`);
+                                provider = visionRuntime.provider;
+                                model = visionRuntime.model;
+                            } else {
+                                console.log(`[vision] Using selected vision-capable runtime: ${provider}:${model}`);
+                            }
                             lastMessage.content = contentArray;
                         } else {
                             const imageCount = contentArray.filter(p => p.type === 'image_url').length;
@@ -1368,6 +1376,7 @@ const service = new AIService();
 service.__test = {
     modelSupportsVision,
     selectVisionRuntime,
+    shouldAttachVisionContent,
     providerForModel,
     normalizeChatProvider,
     normalizeModelForProvider,
