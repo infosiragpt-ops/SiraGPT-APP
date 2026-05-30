@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/resizable"
 import { useCodeWorkspace } from "@/lib/code-workspace-context"
 import { browserSupportsLocalFolderSync } from "@/lib/code-workspace-utils"
+import { CODE_TEMPLATES } from "@/lib/code-templates"
 
 import { AICodeChatPanel } from "./ai-code-chat-panel"
 import { EditorPanel } from "./editor-panel"
@@ -55,6 +56,7 @@ export function CodeWorkspace() {
     files,
     openFile,
     createFile,
+    applyBlock,
     resetWorkspace,
     focusChat,
     registerCommandPaletteHandler,
@@ -147,6 +149,19 @@ export function CodeWorkspace() {
     if (!path) return
     createFile(path, "")
   }, [createFile])
+
+  const loadTemplate = React.useCallback(
+    (templateId: string) => {
+      const tpl = CODE_TEMPLATES.find((t) => t.id === templateId)
+      if (!tpl) return
+      if (typeof window !== "undefined" && Object.keys(files).length > 0) {
+        if (!window.confirm(`Cargar la plantilla "${tpl.name}"? Se crearán o sobrescribirán sus archivos.`)) return
+      }
+      for (const f of tpl.files) applyBlock(f.path, f.content)
+      openFile(tpl.entry)
+    },
+    [applyBlock, files, openFile],
+  )
 
   const toolsHandlers = React.useMemo(
     () => ({
@@ -244,6 +259,13 @@ export function CodeWorkspace() {
     }))
     return [
       ...fileItems,
+      ...CODE_TEMPLATES.map((t) => ({
+        id: `template:${t.id}`,
+        label: `Plantilla: ${t.name}`,
+        keywords: `template plantilla scaffold nueva app ${t.id} ${t.name}`,
+        hint: "Nuevo",
+        run: () => loadTemplate(t.id),
+      })),
       {
         id: "new-file",
         label: "Nuevo archivo…",
@@ -306,6 +328,7 @@ export function CodeWorkspace() {
     createFile,
     files,
     focusChat,
+    loadTemplate,
     openComposer,
     openFile,
     resetWorkspace,
