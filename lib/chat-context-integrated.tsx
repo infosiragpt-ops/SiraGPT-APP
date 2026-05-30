@@ -227,6 +227,9 @@ type VideoGenerationOptions = {
   duration?: 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15
   audio?: boolean
   model?: string
+  // Optional cancel signal so the composer can abort the kickoff request,
+  // mirroring the dedicated AbortController image generation already uses.
+  signal?: AbortSignal
 }
 
 // Update the Chat interface around line 24
@@ -2362,7 +2365,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         files: fileIds,
         ...(imageUrl && { image_url: imageUrl }),
         model
-      });
+      }, { signal: options?.signal });
 
       devLog(' Video generation response:', videoResponse);
 

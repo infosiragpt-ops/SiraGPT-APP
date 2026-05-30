@@ -3886,6 +3886,9 @@ function ChatInterfaceContent() {
   const [selectedVideoAudio, setSelectedVideoAudio] = React.useState(true)
   const [selectedVideoModel, setSelectedVideoModel] = React.useState(DEFAULT_VIDEO_MODEL)
   const imageAbortControllerRef = React.useRef<AbortController | null>(null)
+  // Dedicated cancel handle for video generation, mirroring the image path so
+  // every composer-driven media kind cancels through the same mechanism.
+  const videoAbortControllerRef = React.useRef<AbortController | null>(null)
   const isGeneratingImageRef = React.useRef(false)
   const [isGeneratingVideo, setIsGeneratingVideo] = React.useState(false)
   const [isGeneratingPPT, setIsGeneratingPPT] = React.useState(false)
@@ -4363,11 +4366,15 @@ function ChatInterfaceContent() {
       markImageGenerationStopped();
       toast.info('Generación de imagen detenida');
     }
-    // Also clear the long-running media indicators (video / slides) so the
-    // composer returns to idle on stop — mirroring the image path. These run
-    // as POST→poll server jobs (the earlier local-job + agent-task aborts cut
-    // the in-flight request); resetting the flags frees the composer even when
-    // the remote render itself can't be killed client-side.
+    // Video now cancels through the same dedicated-AbortController mechanism as
+    // image: abort the kickoff request, then clear the long-running media
+    // indicators (video / slides) so the composer returns to idle. (The remote
+    // render is a POST→poll job, so server-side completion may still finish;
+    // this frees the UI and matches the image path.)
+    if (videoAbortControllerRef.current) {
+      videoAbortControllerRef.current.abort();
+      videoAbortControllerRef.current = null;
+    }
     setIsGeneratingVideo(false);
     setIsGeneratingPPT(false);
     if (targetChatId) {
@@ -7625,6 +7632,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   const handleVideoGeneration = async (prompt: string, files?: string[]) => {
     let activeChatId = currentChat?.id || null;
     setIsGeneratingVideo(true)
+    // Dedicated abort handle (same mechanism as image) so stopActiveGeneration
+    // can cancel the kickoff request and return the composer to idle.
+    const videoController = new AbortController();
+    videoAbortControllerRef.current = videoController;
     if (activeChatId) markLocalJobBusy(activeChatId);
     const videoOptions = {
       resolution: selectedVideoResolution,
@@ -7632,6 +7643,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       duration: selectedVideoDuration,
       audio: selectedVideoAudio,
       model: selectedVideoModel,
+      signal: videoController.signal,
     };
     try {
       if (!currentChat) {
@@ -7666,6 +7678,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     } finally {
       markLocalJobIdle(activeChatId);
       setIsGeneratingVideo(false)
+      if (videoAbortControllerRef.current === videoController) {
+        videoAbortControllerRef.current = null;
+      }
       // Don't auto-reset - user must manually remove
     }
   }

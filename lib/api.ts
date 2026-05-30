@@ -2181,10 +2181,11 @@ class ApiClient {
     files?: string[];
     image_url?: string;
     model?: string;
-  }) {
+  }, opts?: { signal?: AbortSignal }) {
     return this.request('/ai/generate-video', {
       method: 'POST',
       body: JSON.stringify(data),
+      signal: opts?.signal,
     });
   }
   // async getVideoStatus(operationId: string) {
