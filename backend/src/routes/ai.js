@@ -1123,6 +1123,24 @@ function routeSupportsVision(provider, model) {
   return false;
 }
 
+// Can an image turn reach a vision-capable model? True when the selected
+// model itself supports vision, OR when ai-service can transparently route
+// the turn to a vision model (gpt-4o-mini / gemini-2.5-flash / openrouter)
+// for which an API key exists. This is what lets a user on a text-only
+// model (e.g. the free model) still get an uploaded image read instead of
+// having it silently dropped before it ever reaches the LLM.
+function routeCanReachVision(provider, model) {
+  if (routeSupportsVision(provider, model)) return true;
+  try {
+    if (typeof aiService.selectVisionRuntime === 'function') {
+      const runtime = aiService.selectVisionRuntime(provider, model);
+      return !!(runtime && runtime.switched);
+    }
+  } catch { /* fall through to env probe */ }
+  // Fallback when the helper isn't available: any vision-provider key works.
+  return !!(process.env.OPENAI_API_KEY || process.env.GEMINI_API_KEY || process.env.OPENROUTER_API_KEY);
+}
+
 function sanitizeErrorForUser(error) {
   const msg = String(error?.message || error || 'AI generation failed');
   if (/does not support image/i.test(msg)) {
@@ -3873,6 +3891,17 @@ router.post(
       }
 
       const currentTurnHasNonImageFiles = processedFiles.some(f => !isImageMime(f.mimeType));
+      // Decide once whether this turn's image(s) should be handed to a
+      // vision model. Native-vision models always keep their images. When
+      // the selected model is text-only we still route an *image-centric*
+      // turn (no document/spreadsheet/PDF attached) through a vision model
+      // if one is reachable — so "transcribe this screenshot" works even on
+      // the free text model. Document-centric turns keep the user's model
+      // and drop loose images, preserving the existing document focus.
+      const nativeVisionForTurn = routeSupportsVision(actualProvider, actualModel);
+      const keepImagesForVision = processedFiles.some(f => isImageMime(f.mimeType))
+        && (nativeVisionForTurn
+          || (!currentTurnHasNonImageFiles && routeCanReachVision(actualProvider, actualModel)));
       let messages = [systemInstruction];
       if (historyMessages.length) {
         for (const m of historyMessages) {
@@ -3991,14 +4020,31 @@ router.post(
 
       let finalPrompt = prompt;
       if (processedFiles.length > 0) {
-        const fileContext = uploadedFileContextForTurn
-          || processedFiles.map(f => {
-            const preparedContent = messageAttachments.isProfessionalDocumentSynthesisRequest(prompt)
-              ? messageAttachments.prepareDocumentTextForProfessionalSynthesis(f.extractedText || '')
-              : '';
-            const content = preparedContent || f.extractedText || messageAttachments.describeUnextractedAttachment(f);
-            return `File: ${f.name}\nContent: ${content}`;
-          }).join('\n\n');
+        const describeFileForText = (f) => {
+          const preparedContent = messageAttachments.isProfessionalDocumentSynthesisRequest(prompt)
+            ? messageAttachments.prepareDocumentTextForProfessionalSynthesis(f.extractedText || '')
+            : '';
+          const content = preparedContent || f.extractedText || messageAttachments.describeUnextractedAttachment(f);
+          return `File: ${f.name}\nContent: ${content}`;
+        };
+
+        // Images that will be handed to a vision model are sent as real
+        // image inputs (see ai-service.generateStream). They must NOT also
+        // be described in text as "unreadable / switch to a vision model" —
+        // that note contradicts the attached image and can leak into the
+        // answer. Keep those images out of the text file context; the rest
+        // (documents, or images on a no-vision turn) are described as usual.
+        const visionImageFiles = keepImagesForVision
+          ? processedFiles.filter(f => isImageMime(f.mimeType))
+          : [];
+        let fileContext;
+        if (visionImageFiles.length > 0) {
+          const textContextFiles = processedFiles.filter(f => !isImageMime(f.mimeType));
+          fileContext = textContextFiles.map(describeFileForText).join('\n\n');
+        } else {
+          fileContext = uploadedFileContextForTurn
+            || processedFiles.map(describeFileForText).join('\n\n');
+        }
 
         // ✅ Check if there are any image files that might contain math
         const hasImageFiles = processedFiles.some(f => f.mimeType && f.mimeType.startsWith('image/'));
@@ -4068,7 +4114,14 @@ router.post(
           ].filter(Boolean).join('\n')
           : '';
 
-        finalPrompt = `${documentTurnGuard ? `${documentTurnGuard}\n\n` : ''}${prompt}${mathInstructions}\n\nAttached files:\n${truncatedFileContext}`;
+        // Only append the "Attached files" block when there is actual text
+        // context. For an image-only turn going to a vision model the text
+        // context is empty (the image itself is the input), so we skip the
+        // header instead of emitting a dangling "Attached files:" label.
+        const attachedFilesBlock = (truncatedFileContext && truncatedFileContext.trim())
+          ? `\n\nAttached files:\n${truncatedFileContext}`
+          : '';
+        finalPrompt = `${documentTurnGuard ? `${documentTurnGuard}\n\n` : ''}${prompt}${mathInstructions}${attachedFilesBlock}`;
       }
 
 
@@ -4427,13 +4480,20 @@ router.post(
       }
       try {
         if (!artifactHandled) {
-        const filesForVision = routeSupportsVision(actualProvider, actualModel)
+        // Keep images in the payload whenever this turn can reach a vision
+        // model (decided above as keepImagesForVision). ai-service then
+        // either uses the natively-vision-capable model or transparently
+        // routes the turn to one. Only strip when no vision path exists, so
+        // a text-only model never receives image content it can't read.
+        const filesForVision = keepImagesForVision
           ? processedFiles
           : processedFiles.filter(f => !isImageMime(f.mimeType));
         if (filesForVision.length < processedFiles.length) {
           const skippedImages = processedFiles.filter(f => isImageMime(f.mimeType));
           const imageNames = skippedImages.map(f => f.name || f.originalName || 'imagen').join(', ');
-          console.log(`[vision] Stripping ${skippedImages.length} image(s) for non-vision model ${actualProvider}:${actualModel}: ${imageNames}`);
+          console.log(`[vision] Stripping ${skippedImages.length} image(s) for non-vision turn ${actualProvider}:${actualModel}: ${imageNames}`);
+        } else if (keepImagesForVision && !nativeVisionForTurn && processedFiles.some(f => isImageMime(f.mimeType))) {
+          console.log(`[vision] Image turn on text model ${actualProvider}:${actualModel} — routing through a vision-capable runtime`);
         }
         const __aiSpanStartedAt = Date.now();
         // Per-user OTel attributes — userId is SHA-256 hashed (16 hex

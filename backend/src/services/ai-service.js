@@ -1373,6 +1373,7 @@ service.__test = {
     normalizeModelForProvider,
 };
 service.modelSupportsVision = modelSupportsVision;
+service.selectVisionRuntime = selectVisionRuntime;
 service.OPENAI_HTTP_TIMEOUT_MS = OPENAI_HTTP_TIMEOUT_MS;
 
 module.exports = service;
