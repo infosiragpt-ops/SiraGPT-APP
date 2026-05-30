@@ -6,22 +6,30 @@
 
 import * as React from "react"
 import { usePathname, useRouter } from "next/navigation"
-import { RefreshCw, X } from "lucide-react"
+import { Cloud, FolderOpen, FolderPlus, RefreshCw, SlidersHorizontal } from "lucide-react"
+import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { CodexFolderPicker } from "@/components/codex/codex-folder-picker"
-import { CodexWorkspaceTree, type WorkspaceTreeNode } from "@/components/codex/codex-workspace-tree"
+import { CodexWorkspaceTree, type ChatRow, type WorkspaceTreeNode } from "@/components/codex/codex-workspace-tree"
 import {
   CODE_CHAT_SESSIONS_UPDATED_EVENT,
   codexWorkspaceSessionKey,
+  deleteCodeChatSession,
   getActiveSessionId,
   listSessionsForWorkspace,
   readCodeChatStore,
+  renameCodeChatSession,
 } from "@/lib/code-chat-sessions"
 import {
   CODE_NEW_CODE_CHAT_EVENT,
@@ -36,10 +44,24 @@ import {
   type CodexProjectEntry,
   upsertCodexProject,
 } from "@/lib/codex-projects"
+import {
+  CODEX_PREFS_UPDATED_EVENT,
+  forgetRow,
+  getArchivedRows,
+  getDisplayOptions,
+  getPinnedRows,
+  getReadRows,
+  markRowRead,
+  markRowUnread,
+  setDisplayOption,
+  toggleArchivedRow,
+  togglePinnedRow,
+  type CodexDisplayOptions,
+} from "@/lib/codex-conversation-prefs"
+import { canOpenLocalDirectory, importLocalFolderAsWorkspace } from "@/lib/local-folder-workspace"
+import { apiClient } from "@/lib/api"
 import { projectsService, type Project, type ProjectChatSummary } from "@/lib/projects-service"
 import { cn } from "@/lib/utils"
-
-import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 
 const STORAGE_EXPANDED = "code-workspace:expanded-workspaces"
 const STORAGE_ACTIVE_FOLDER = "code-workspace:active-folder"
@@ -66,6 +88,24 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
   >({})
   const [activeFolderId, setActiveFolderId] = React.useState<string | null>(null)
   const [codeAgentStore, setCodeAgentStore] = React.useState(readCodeChatStore)
+
+  const [displayOptions, setDisplayOptions] = React.useState<CodexDisplayOptions>(getDisplayOptions)
+  const [pinnedRows, setPinnedRows] = React.useState<Set<string>>(() => new Set())
+  const [archivedRows, setArchivedRows] = React.useState<Set<string>>(() => new Set())
+  const [readRows, setReadRows] = React.useState<Set<string>>(() => new Set())
+
+  const syncPrefs = React.useCallback(() => {
+    setDisplayOptions(getDisplayOptions())
+    setPinnedRows(getPinnedRows())
+    setArchivedRows(getArchivedRows())
+    setReadRows(getReadRows())
+  }, [])
+
+  React.useEffect(() => {
+    syncPrefs()
+    window.addEventListener(CODEX_PREFS_UPDATED_EVENT, syncPrefs)
+    return () => window.removeEventListener(CODEX_PREFS_UPDATED_EVENT, syncPrefs)
+  }, [syncPrefs])
 
   const refreshCodexProjects = React.useCallback(() => {
     setCodexProjects(listCodexProjects())
@@ -359,6 +399,136 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
     [handleOpenWorkspace],
   )
 
+  const chatListIdForWorkspace = React.useCallback(
+    (workspaceId: string) => workspaceNodes.find((n) => n.id === workspaceId)?.chatListId ?? null,
+    [workspaceNodes],
+  )
+
+  const refetchFolderChats = React.useCallback(async (chatListId: string) => {
+    setChatsByFolder((prev) => ({
+      ...prev,
+      [chatListId]: { loading: true, chats: prev[chatListId]?.chats ?? [], error: null },
+    }))
+    try {
+      const chats = await projectsService.listChats(chatListId, { limit: 12 })
+      setChatsByFolder((prev) => ({ ...prev, [chatListId]: { loading: false, chats, error: null } }))
+    } catch (err: any) {
+      setChatsByFolder((prev) => ({
+        ...prev,
+        [chatListId]: { loading: false, chats: prev[chatListId]?.chats ?? [], error: err?.message || "Error" },
+      }))
+    }
+  }, [])
+
+  const handleRenameRow = React.useCallback(
+    async (row: ChatRow, title: string) => {
+      if (row.source === "code") {
+        renameCodeChatSession(row.id, title)
+        setCodeAgentStore(readCodeChatStore())
+        return
+      }
+      try {
+        await apiClient.updateChat(row.id, { title })
+        const chatListId = chatListIdForWorkspace(row.workspaceId)
+        if (chatListId) await refetchFolderChats(chatListId)
+      } catch (err: any) {
+        toast.error(err?.message || "No se pudo renombrar la conversación")
+      }
+    },
+    [chatListIdForWorkspace, refetchFolderChats],
+  )
+
+  const handleDeleteRow = React.useCallback(
+    async (row: ChatRow) => {
+      if (typeof window !== "undefined" && !window.confirm("¿Eliminar esta conversación?")) return
+      if (row.source === "code") {
+        deleteCodeChatSession(row.id)
+        setCodeAgentStore(readCodeChatStore())
+        forgetRow(row.key)
+        return
+      }
+      try {
+        await apiClient.deleteChat(row.id)
+        forgetRow(row.key)
+        const chatListId = chatListIdForWorkspace(row.workspaceId)
+        if (chatListId) await refetchFolderChats(chatListId)
+        toast.success("Conversación eliminada")
+      } catch (err: any) {
+        toast.error(err?.message || "No se pudo eliminar la conversación")
+      }
+    },
+    [chatListIdForWorkspace, refetchFolderChats],
+  )
+
+  const handleMarkRead = React.useCallback((row: ChatRow) => { markRowRead(row.key) }, [])
+  const handleMarkUnread = React.useCallback((row: ChatRow) => { markRowUnread(row.key) }, [])
+  const handleTogglePin = React.useCallback((row: ChatRow) => { togglePinnedRow(row.key) }, [])
+  const handleToggleArchive = React.useCallback((row: ChatRow) => {
+    const set = toggleArchivedRow(row.key)
+    toast(set.has(row.key) ? "Conversación archivada" : "Conversación restaurada")
+  }, [])
+
+  const handleOpenSettings = React.useCallback(
+    (node: WorkspaceTreeNode) => { handleOpenWorkspace(node) },
+    [handleOpenWorkspace],
+  )
+
+  // "Nuevo proyecto" → pick a local code folder. Opens showDirectoryPicker
+  // directly in the click gesture (navigating first would drop user-activation
+  // and the browser would block the picker), then routes into /code.
+  const handleOpenLocalProject = React.useCallback(async () => {
+    if (!canOpenLocalDirectory()) {
+      // Safari/Firefox lack the File System Access API — fall back to the
+      // /code in-app flow.
+      handleOpenDesktopFolder()
+      return
+    }
+    try {
+      const reg = await importLocalFolderAsWorkspace()
+      setActiveFolderId(reg.codexId)
+      refreshCodexProjects()
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("siragpt:collapse-sidebar"))
+      }
+      router.push(`/code?local=${encodeURIComponent(reg.codexId)}`)
+      onMobileNavigate?.()
+      toast.success(`Carpeta "${reg.name}" abierta · ${reg.fileCount} archivos`)
+      if (reg.skippedCount > 0) {
+        toast.info(`${reg.skippedCount} archivo(s) omitidos por tamaño o formato`)
+      }
+    } catch (err: any) {
+      if (err?.name === "AbortError") return
+      toast.error(err?.message || "No se pudo abrir la carpeta local")
+    }
+  }, [handleOpenDesktopFolder, onMobileNavigate, refreshCodexProjects, router])
+
+  // Secondary entry: a cloud-only project (no local files).
+  const handleNewCloudProject = React.useCallback(async () => {
+    const name = typeof window !== "undefined" ? window.prompt("Nombre del proyecto en la nube") : null
+    const clean = name?.trim()
+    if (!clean) return
+    try {
+      const project = await projectsService.create({ name: clean })
+      await refresh()
+      handleOpenWorkspace({
+        id: codexIdForProject(project.id),
+        name: project.name,
+        kind: "project",
+        chatListId: project.id,
+      })
+      toast.success(`Proyecto "${project.name}" creado`)
+    } catch (err: any) {
+      toast.error(err?.message || "No se pudo crear el proyecto")
+    }
+  }, [handleOpenWorkspace, refresh])
+
+  const handleSetDisplay = React.useCallback(
+    <K extends keyof CodexDisplayOptions>(key: K, value: CodexDisplayOptions[K]) => {
+      setDisplayOptions(setDisplayOption(key, value))
+    },
+    [],
+  )
+
   const pickerSelectEntry = React.useCallback(
     (entry: CodexProjectEntry) => {
       if (entry.kind === "project") {
@@ -382,7 +552,7 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
   )
 
   const pickerProps = {
-    onOpenFolder: handleOpenDesktopFolder,
+    onOpenFolder: handleOpenLocalProject,
     onSelectEntry: pickerSelectEntry,
     onOpenHome: () => handleOpenInCode({}),
     align: "start" as const,
@@ -420,6 +590,10 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
         activeChatId={currentChat?.id ?? null}
         chatsByWorkspace={chatsByFolder}
         loading={loading}
+        displayOptions={displayOptions}
+        pinnedRows={pinnedRows}
+        archivedRows={archivedRows}
+        readRows={readRows}
         onToggleExpand={toggleExpanded}
         onOpenWorkspace={handleOpenWorkspace}
         onOpenChat={handleOpenChat}
@@ -427,37 +601,90 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
         onSelectCodeSession={handleSelectCodeSession}
         activeCodeSessionId={activeCodeSessionId}
         listCodeSessions={listCodeSessions}
+        onOpenSettings={handleOpenSettings}
+        onRenameRow={handleRenameRow}
+        onDeleteRow={handleDeleteRow}
+        onMarkRead={handleMarkRead}
+        onMarkUnread={handleMarkUnread}
+        onTogglePin={handleTogglePin}
+        onToggleArchive={handleToggleArchive}
         headerRight={
           <>
-            <CodexFolderPicker {...pickerProps} triggerVariant="folder-plus" triggerClassName="h-6 w-6" />
-            <Tooltip>
-              <TooltipTrigger asChild>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
                 <Button
                   variant="ghost"
                   size="icon"
                   className="h-6 w-6 text-muted-foreground hover:text-foreground"
-                  onClick={() => refresh()}
-                  aria-label="Actualizar"
-                  disabled={loading}
+                  aria-label="Opciones de visualización"
+                  title="Opciones de visualización"
                 >
-                  {loading ? (
-                    <ThinkingIndicator size="sm" className="h-3.5 w-3.5" />
-                  ) : (
-                    <RefreshCw className="h-3.5 w-3.5" />
-                  )}
+                  <SlidersHorizontal className="h-3.5 w-3.5" />
                 </Button>
-              </TooltipTrigger>
-              <TooltipContent side="right">
-                <p>Actualizar</p>
-              </TooltipContent>
-            </Tooltip>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuLabel>Agrupar por</DropdownMenuLabel>
+                <DropdownMenuRadioGroup
+                  value={displayOptions.groupBy}
+                  onValueChange={(v) => handleSetDisplay("groupBy", v as CodexDisplayOptions["groupBy"])}
+                >
+                  <DropdownMenuRadioItem value="project">Proyecto</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="status">Estado</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="none">Ninguno</DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>Ordenar conversaciones</DropdownMenuLabel>
+                <DropdownMenuRadioGroup
+                  value={displayOptions.sort}
+                  onValueChange={(v) => handleSetDisplay("sort", v as CodexDisplayOptions["sort"])}
+                >
+                  <DropdownMenuRadioItem value="updated">Última actualización</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="alphabetical">Alfabético (A-Z)</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="created">Fecha de creación</DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>Subtítulos</DropdownMenuLabel>
+                <DropdownMenuRadioGroup
+                  value={displayOptions.subtitles}
+                  onValueChange={(v) => handleSetDisplay("subtitles", v as CodexDisplayOptions["subtitles"])}
+                >
+                  <DropdownMenuRadioItem value="worktree">Workspace</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="none">Sin subtítulo</DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6 text-muted-foreground hover:text-foreground"
+                  aria-label="Crear nuevo proyecto"
+                  title="Crear nuevo proyecto"
+                >
+                  <FolderPlus className="h-3.5 w-3.5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-60">
+                <DropdownMenuItem onClick={handleOpenLocalProject}>
+                  <FolderOpen className="mr-2 h-4 w-4" />
+                  Nuevo proyecto (carpeta local)
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={handleNewCloudProject}>
+                  <Cloud className="mr-2 h-4 w-4" />
+                  Proyecto en la nube
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => refresh()} disabled={loading}>
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  Actualizar
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </>
         }
       />
-
-      <div className="shrink-0 border-t border-border/40 px-2 py-2">
-        <CodexFolderPicker {...pickerProps} triggerVariant="open-workspace-row" />
-      </div>
     </div>
   )
 }

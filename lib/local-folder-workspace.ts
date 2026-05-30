@@ -1,6 +1,17 @@
 "use client"
 
 import { CodeFiles, languageForPath, normalizePath } from "./code-workspace-utils"
+import {
+  CODEX_UPDATED_EVENT,
+  codexIdForLocalFolder,
+  upsertCodexProject,
+} from "./codex-projects"
+
+// Must stay in sync with CodeWorkspaceProvider (lib/code-workspace-context.tsx):
+// per-folder editor state lives at `${WORKSPACE_STORAGE_KEY}:${codexId}` and the
+// active folder pointer at ACTIVE_FOLDER_KEY.
+const WORKSPACE_STORAGE_KEY = "code-workspace:v1"
+const ACTIVE_FOLDER_KEY = "code-workspace:active-folder"
 
 const MAX_FILES = 160
 const MAX_FILE_BYTES = 768 * 1024
@@ -146,6 +157,86 @@ export async function openLocalDirectoryWorkspace(): Promise<LocalWorkspaceImpor
     files,
     fileCount: Object.keys(files).length,
     skippedCount: stats.skipped,
+  }
+}
+
+export type LocalFolderRegistration = {
+  codexId: string
+  name: string
+  fileCount: number
+  skippedCount: number
+}
+
+function pickInitialTabs(paths: string[]): string[] {
+  const preferred = [
+    "README.md",
+    "readme.md",
+    "package.json",
+    "index.html",
+    "src/app.tsx",
+    "app/page.tsx",
+  ]
+  const sorted = [...paths].sort((a, b) => a.localeCompare(b))
+  const picked: string[] = []
+  for (const candidate of preferred) {
+    const found = sorted.find((p) => p.toLowerCase() === candidate.toLowerCase())
+    if (found && !picked.includes(found)) picked.push(found)
+  }
+  for (const path of sorted) {
+    if (picked.length >= 3) break
+    if (!picked.includes(path)) picked.push(path)
+  }
+  return picked
+}
+
+/**
+ * Open the OS folder picker, import the selected local code folder, and
+ * register it as a Codex workspace — persisted under the same localStorage
+ * keys the /code workspace provider reads, so navigating to /code hydrates it.
+ *
+ * MUST be called directly from a user gesture (e.g. a click handler) so the
+ * browser allows showDirectoryPicker(). Navigating first and then opening the
+ * picker asynchronously drops the user-activation and the picker is blocked.
+ */
+export async function importLocalFolderAsWorkspace(): Promise<LocalFolderRegistration> {
+  const imported = await openLocalDirectoryWorkspace()
+  const codexId = codexIdForLocalFolder(imported.rootName)
+  const paths = Object.keys(imported.files)
+  const openTabs = pickInitialTabs(paths)
+  const activePath = openTabs[0] ?? paths[0] ?? null
+
+  if (typeof window !== "undefined") {
+    try {
+      window.localStorage.setItem(
+        `${WORKSPACE_STORAGE_KEY}:${codexId}`,
+        JSON.stringify({ files: imported.files, openTabs, activePath }),
+      )
+      window.localStorage.setItem(
+        ACTIVE_FOLDER_KEY,
+        JSON.stringify({ id: codexId, name: imported.rootName }),
+      )
+    } catch {
+      /* quota — fail soft; /code can re-link via the + button */
+    }
+  }
+
+  upsertCodexProject({
+    id: codexId,
+    name: imported.rootName,
+    kind: "local-folder",
+    displayPath: `~/Desktop/${imported.rootName}`,
+    fileCount: imported.fileCount,
+  })
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(CODEX_UPDATED_EVENT))
+  }
+
+  return {
+    codexId,
+    name: imported.rootName,
+    fileCount: imported.fileCount,
+    skippedCount: imported.skippedCount,
   }
 }
 

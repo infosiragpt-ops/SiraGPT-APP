@@ -1,11 +1,42 @@
 "use client"
 
 import * as React from "react"
-import { Circle, FolderClosed, ListFilter, Pencil } from "lucide-react"
+import {
+  Archive,
+  Check,
+  Circle,
+  FolderClosed,
+  MailOpen,
+  MoreVertical,
+  Pencil,
+  Pin,
+  PinOff,
+  Plus,
+  Settings,
+  Trash2,
+  X,
+} from "lucide-react"
 
 import { cn } from "@/lib/utils"
 import type { ProjectChatSummary } from "@/lib/projects-service"
+import {
+  DEFAULT_DISPLAY_OPTIONS,
+  rowKey,
+  type CodexDisplayOptions,
+} from "@/lib/codex-conversation-prefs"
 
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 
 export type WorkspaceTreeNode = {
@@ -22,11 +53,16 @@ type ChatState = {
   error: string | null
 }
 
-type ChatRow = {
+export type ChatRow = {
   id: string
   title: string
   source: "code" | "cloud"
   updatedAt: number
+  createdAt: number
+  /** Owning workspace node id. */
+  workspaceId: string
+  /** `${source}:${id}` — stable preference key. */
+  key: string
 }
 
 export type CodexWorkspaceTreeProps = {
@@ -36,32 +72,85 @@ export type CodexWorkspaceTreeProps = {
   activeChatId?: string | null
   chatsByWorkspace: Record<string, ChatState | undefined>
   loading?: boolean
+  displayOptions?: CodexDisplayOptions
+  pinnedRows?: Set<string>
+  archivedRows?: Set<string>
+  readRows?: Set<string>
   onToggleExpand: (workspaceId: string) => void
   onOpenWorkspace: (node: WorkspaceTreeNode) => void
   onOpenChat: (chatId: string) => void
   onNewCodeChat?: (node: WorkspaceTreeNode) => void
   onSelectCodeSession?: (workspaceId: string, sessionId: string) => void
   activeCodeSessionId?: string | null
-  listCodeSessions?: (workspaceId: string) => { id: string; title: string; updatedAt?: number }[]
+  listCodeSessions?: (workspaceId: string) => { id: string; title: string; updatedAt?: number; createdAt?: number }[]
   headerRight?: React.ReactNode
+  onOpenSettings?: (node: WorkspaceTreeNode) => void
+  onRenameRow?: (row: ChatRow, title: string) => void
+  onDeleteRow?: (row: ChatRow) => void
+  onMarkRead?: (row: ChatRow) => void
+  onMarkUnread?: (row: ChatRow) => void
+  onTogglePin?: (row: ChatRow) => void
+  onToggleArchive?: (row: ChatRow) => void
 }
 
-export function CodexWorkspaceTree({
-  workspaces,
-  expandedIds,
-  activeWorkspaceId,
-  activeChatId = null,
-  chatsByWorkspace,
-  loading,
-  onToggleExpand,
-  onOpenWorkspace,
-  onOpenChat,
-  onNewCodeChat,
-  onSelectCodeSession,
-  activeCodeSessionId = null,
-  listCodeSessions,
-  headerRight,
-}: CodexWorkspaceTreeProps) {
+type RowActions = Pick<
+  CodexWorkspaceTreeProps,
+  | "onRenameRow"
+  | "onDeleteRow"
+  | "onMarkRead"
+  | "onMarkUnread"
+  | "onTogglePin"
+  | "onToggleArchive"
+>
+
+export function CodexWorkspaceTree(props: CodexWorkspaceTreeProps) {
+  const {
+    workspaces,
+    expandedIds,
+    activeWorkspaceId,
+    activeChatId = null,
+    chatsByWorkspace,
+    loading,
+    displayOptions = DEFAULT_DISPLAY_OPTIONS,
+    pinnedRows,
+    archivedRows,
+    readRows,
+    onToggleExpand,
+    onOpenWorkspace,
+    onOpenChat,
+    onNewCodeChat,
+    onSelectCodeSession,
+    activeCodeSessionId = null,
+    listCodeSessions,
+    headerRight,
+    onOpenSettings,
+  } = props
+
+  const pinned = pinnedRows ?? EMPTY_SET
+  const archived = archivedRows ?? EMPTY_SET
+  const read = readRows ?? EMPTY_SET
+
+  // Inline rename state lives at tree level so only one row edits at a time.
+  const [editingKey, setEditingKey] = React.useState<string | null>(null)
+  const [editValue, setEditValue] = React.useState("")
+
+  const beginRename = React.useCallback((row: ChatRow) => {
+    setEditingKey(row.key)
+    setEditValue(row.title)
+  }, [])
+  const cancelRename = React.useCallback(() => {
+    setEditingKey(null)
+    setEditValue("")
+  }, [])
+  const commitRename = React.useCallback(
+    (row: ChatRow) => {
+      const next = editValue.trim()
+      if (next && next !== row.title) props.onRenameRow?.(row, next)
+      cancelRename()
+    },
+    [cancelRename, editValue, props],
+  )
+
   const expandedOnceRef = React.useRef<Set<string>>(new Set())
   React.useEffect(() => {
     for (const ws of workspaces) {
@@ -72,105 +161,254 @@ export function CodexWorkspaceTree({
     }
   }, [workspaces, expandedIds, onToggleExpand])
 
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 items-center justify-between gap-1 px-2.5 py-2">
-        <div className="flex items-center gap-0.5">
-          <button
-            type="button"
-            className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted/60 hover:text-foreground"
-            aria-label="Filtrar workspaces"
-            title="Filtrar"
-          >
-            <ListFilter className="h-3.5 w-3.5" />
-          </button>
-          {headerRight}
+  const rowActions: RowActions = {
+    onRenameRow: props.onRenameRow,
+    onDeleteRow: props.onDeleteRow,
+    onMarkRead: props.onMarkRead,
+    onMarkUnread: props.onMarkUnread,
+    onTogglePin: props.onTogglePin,
+    onToggleArchive: props.onToggleArchive,
+  }
+
+  const isRowActive = React.useCallback(
+    (row: ChatRow) => {
+      if (row.source === "code") return activeWorkspaceId === row.workspaceId && activeCodeSessionId === row.id
+      return activeChatId === row.id
+    },
+    [activeWorkspaceId, activeCodeSessionId, activeChatId],
+  )
+
+  const isRowUnread = React.useCallback(
+    (row: ChatRow) => row.source === "cloud" && !read.has(row.key),
+    [read],
+  )
+
+  const openRow = React.useCallback(
+    (row: ChatRow) => {
+      props.onMarkRead?.(row)
+      if (row.source === "code") {
+        const node = workspaces.find((n) => n.id === row.workspaceId)
+        if (node) onOpenWorkspace(node)
+        onSelectCodeSession?.(row.workspaceId, row.id)
+        return
+      }
+      onOpenChat(row.id)
+    },
+    [onOpenChat, onOpenWorkspace, onSelectCodeSession, props, workspaces],
+  )
+
+  const buildRows = React.useCallback(
+    (node: WorkspaceTreeNode): ChatRow[] => {
+      const codeSessions = listCodeSessions?.(node.id) ?? []
+      const cloudChats = chatsByWorkspace[node.chatListId]?.chats ?? []
+      const rows: ChatRow[] = [
+        ...codeSessions.map((s) => ({
+          id: s.id,
+          title: s.title,
+          source: "code" as const,
+          updatedAt: s.updatedAt ?? 0,
+          createdAt: s.createdAt ?? s.updatedAt ?? 0,
+          workspaceId: node.id,
+          key: rowKey("code", s.id),
+        })),
+        ...cloudChats.map((c) => ({
+          id: c.id,
+          title: c.title,
+          source: "cloud" as const,
+          updatedAt: Date.parse(c.updatedAt) || 0,
+          createdAt: Date.parse(c.createdAt) || 0,
+          workspaceId: node.id,
+          key: rowKey("cloud", c.id),
+        })),
+      ]
+      return rows.filter((r) => !archived.has(r.key))
+    },
+    [archived, chatsByWorkspace, listCodeSessions],
+  )
+
+  const sortRows = React.useCallback(
+    (rows: ChatRow[]): ChatRow[] => {
+      const cmp = (a: ChatRow, b: ChatRow) => {
+        // Pinned rows always float to the top of their group.
+        const pinDelta = Number(pinned.has(b.key)) - Number(pinned.has(a.key))
+        if (pinDelta) return pinDelta
+        switch (displayOptions.sort) {
+          case "alphabetical":
+            return a.title.localeCompare(b.title)
+          case "created":
+            return b.createdAt - a.createdAt
+          default:
+            return b.updatedAt - a.updatedAt
+        }
+      }
+      return [...rows].sort(cmp)
+    },
+    [displayOptions.sort, pinned],
+  )
+
+  const sharedRowProps = {
+    actions: rowActions,
+    pinned,
+    read,
+    editingKey,
+    editValue,
+    setEditValue,
+    beginRename,
+    cancelRename,
+    commitRename,
+    isRowActive,
+    isRowUnread,
+    openRow,
+    subtitles: displayOptions.subtitles,
+    workspaces,
+  }
+
+  const header = (
+    <div className="flex shrink-0 items-center justify-end gap-0.5 px-2.5 py-1.5">
+      {headerRight}
+    </div>
+  )
+
+  const renderEmpty = () =>
+    loading && workspaces.length === 0 ? (
+      <div className="flex items-center justify-center gap-2 py-6 text-xs text-muted-foreground">
+        <ThinkingIndicator size="sm" />
+        Cargando…
+      </div>
+    ) : null
+
+  // ── group-by: status / none flatten every workspace into one stream ──
+  if (workspaces.length > 0 && displayOptions.groupBy !== "project") {
+    const allRows = sortRows(workspaces.flatMap((ws) => buildRows(ws)))
+    return (
+      <div className="flex min-h-0 flex-1 flex-col">
+        {header}
+        <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-1">
+          {displayOptions.groupBy === "status" ? (
+            <FlatStatusGroups rows={allRows} sharedRowProps={sharedRowProps} />
+          ) : (
+            <ul className="space-y-0.5">
+              {allRows.map((row) => (
+                <ConversationRow key={row.key} row={row} {...sharedRowProps} />
+              ))}
+              {allRows.length === 0 ? <EmptyHint /> : null}
+            </ul>
+          )}
         </div>
       </div>
+    )
+  }
 
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      {header}
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-1">
-        {loading && workspaces.length === 0 ? (
-          <div className="flex items-center justify-center gap-2 py-6 text-xs text-muted-foreground">
-            <ThinkingIndicator size="sm" />
-            Cargando…
-          </div>
-        ) : workspaces.length === 0 ? (
-          <p className="px-1 py-3 text-[11px] leading-snug text-muted-foreground/75">
-            Abre un workspace abajo para empezar.
-          </p>
-        ) : (
+        {renderEmpty()}
+        {workspaces.length > 0 ? (
           <ul className="space-y-3">
             {workspaces.map((ws) => (
               <WorkspaceFolderBlock
                 key={ws.id}
                 node={ws}
                 isActiveWorkspace={activeWorkspaceId === ws.id}
-                activeChatId={activeChatId}
                 state={chatsByWorkspace[ws.chatListId]}
+                rows={sortRows(buildRows(ws))}
                 onOpenWorkspace={() => onOpenWorkspace(ws)}
-                onOpenChat={onOpenChat}
                 onNewCodeChat={onNewCodeChat}
-                onSelectCodeSession={onSelectCodeSession}
-                activeCodeSessionId={activeCodeSessionId}
-                codeSessions={listCodeSessions?.(ws.id) ?? []}
+                onOpenSettings={onOpenSettings}
+                sharedRowProps={sharedRowProps}
               />
             ))}
           </ul>
-        )}
+        ) : null}
       </div>
     </div>
   )
 }
 
-function buildChatRows(
-  codeSessions: { id: string; title: string; updatedAt?: number }[],
-  cloudChats: ProjectChatSummary[],
-): ChatRow[] {
-  const rows: ChatRow[] = [
-    ...codeSessions.map((s) => ({
-      id: s.id,
-      title: s.title,
-      source: "code" as const,
-      updatedAt: s.updatedAt ?? 0,
-    })),
-    ...cloudChats.map((c) => ({
-      id: c.id,
-      title: c.title,
-      source: "cloud" as const,
-      updatedAt: Date.parse(c.updatedAt) || 0,
-    })),
-  ]
-  return rows.sort((a, b) => b.updatedAt - a.updatedAt)
+const EMPTY_SET: Set<string> = new Set()
+
+type SharedRowProps = {
+  actions: RowActions
+  pinned: Set<string>
+  read: Set<string>
+  editingKey: string | null
+  editValue: string
+  setEditValue: (value: string) => void
+  beginRename: (row: ChatRow) => void
+  cancelRename: () => void
+  commitRename: (row: ChatRow) => void
+  isRowActive: (row: ChatRow) => boolean
+  isRowUnread: (row: ChatRow) => boolean
+  openRow: (row: ChatRow) => void
+  subtitles: CodexDisplayOptions["subtitles"]
+  workspaces: WorkspaceTreeNode[]
+}
+
+function EmptyHint() {
+  return <li className="px-1 py-0.5 text-[11px] text-muted-foreground/45">Sin conversaciones</li>
+}
+
+function FlatStatusGroups({
+  rows,
+  sharedRowProps,
+}: {
+  rows: ChatRow[]
+  sharedRowProps: SharedRowProps
+}) {
+  const unread = rows.filter((r) => sharedRowProps.isRowUnread(r))
+  const rest = rows.filter((r) => !sharedRowProps.isRowUnread(r))
+  return (
+    <div className="space-y-3">
+      {unread.length ? (
+        <div>
+          <p className="px-1 pb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/55">
+            Sin leer
+          </p>
+          <ul className="space-y-0.5">
+            {unread.map((row) => (
+              <ConversationRow key={row.key} row={row} {...sharedRowProps} />
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      <div>
+        <p className="px-1 pb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/55">
+          Leídos
+        </p>
+        <ul className="space-y-0.5">
+          {rest.map((row) => (
+            <ConversationRow key={row.key} row={row} {...sharedRowProps} />
+          ))}
+          {rest.length === 0 && unread.length === 0 ? <EmptyHint /> : null}
+        </ul>
+      </div>
+    </div>
+  )
 }
 
 function WorkspaceFolderBlock({
   node,
   isActiveWorkspace,
-  activeChatId,
   state,
+  rows,
   onOpenWorkspace,
-  onOpenChat,
   onNewCodeChat,
-  onSelectCodeSession,
-  activeCodeSessionId,
-  codeSessions,
+  onOpenSettings,
+  sharedRowProps,
 }: {
   node: WorkspaceTreeNode
   isActiveWorkspace: boolean
-  activeChatId: string | null
   state: ChatState | undefined
+  rows: ChatRow[]
   onOpenWorkspace: () => void
-  onOpenChat: (chatId: string) => void
   onNewCodeChat?: (node: WorkspaceTreeNode) => void
-  onSelectCodeSession?: (workspaceId: string, sessionId: string) => void
-  activeCodeSessionId?: string | null
-  codeSessions: { id: string; title: string; updatedAt?: number }[]
+  onOpenSettings?: (node: WorkspaceTreeNode) => void
+  sharedRowProps: SharedRowProps
 }) {
-  const chatRows = buildChatRows(codeSessions, state?.chats ?? [])
-
   return (
     <li>
-      <div className="group relative flex items-center">
+      <div className="group/folder relative flex items-center">
         <button
           type="button"
           onClick={onOpenWorkspace}
@@ -183,24 +421,25 @@ function WorkspaceFolderBlock({
           <FolderClosed className="h-4 w-4 shrink-0 text-muted-foreground/75" />
           <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{node.name}</span>
         </button>
-        {onNewCodeChat ? (
-          <button
-            type="button"
-            className="mr-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-muted/60 hover:text-foreground group-hover:opacity-100"
-            aria-label={`Nuevo chat en ${node.name}`}
-            title="Nuevo chat"
-            onClick={(e) => {
-              e.stopPropagation()
-              onNewCodeChat(node)
-            }}
-          >
-            <Pencil className="h-3.5 w-3.5" />
-          </button>
-        ) : null}
+        <div className="flex shrink-0 items-center opacity-0 transition-opacity group-hover/folder:opacity-100">
+          {onOpenSettings ? (
+            <FolderIconButton
+              label="Ajustes del proyecto"
+              onClick={() => onOpenSettings(node)}
+            >
+              <Settings className="h-3.5 w-3.5" />
+            </FolderIconButton>
+          ) : null}
+          {onNewCodeChat ? (
+            <FolderIconButton label="Nuevo chat" onClick={() => onNewCodeChat(node)}>
+              <Plus className="h-4 w-4" />
+            </FolderIconButton>
+          ) : null}
+        </div>
       </div>
 
       <ul className="mt-0.5 space-y-0.5 pl-[22px] pr-0.5">
-        {state?.loading && node.kind === "project" && chatRows.length === 0 ? (
+        {state?.loading && node.kind === "project" && rows.length === 0 ? (
           <li className="px-1 py-1 text-[11px] text-muted-foreground/70">
             <ThinkingIndicator size="xs" className="mr-1 inline opacity-70" />
             Cargando…
@@ -209,44 +448,241 @@ function WorkspaceFolderBlock({
         {state?.error ? (
           <li className="px-1 py-1 text-[11px] text-rose-500">{state.error}</li>
         ) : null}
-        {chatRows.map((row) => {
-          const activeCode = row.source === "code" && isActiveWorkspace && activeCodeSessionId === row.id
-          const activeCloud = row.source === "cloud" && activeChatId === row.id
-          const active = activeCode || activeCloud
-          return (
-            <li key={`${row.source}:${row.id}`}>
-              <button
-                type="button"
-                onClick={() => {
-                  if (row.source === "code") {
-                    onOpenWorkspace()
-                    onSelectCodeSession?.(node.id, row.id)
-                    return
-                  }
-                  onOpenChat(row.id)
-                }}
-                className={cn(
-                  "flex w-full min-w-0 items-center gap-2 rounded-md py-1 pr-1 text-left text-[12px] leading-snug transition-colors",
-                  active
-                    ? "bg-muted/80 text-foreground"
-                    : "text-muted-foreground/50 hover:bg-muted/35 hover:text-muted-foreground/80",
-                )}
-                title={row.title}
-              >
-                {active ? (
-                  <span className="h-[7px] w-[7px] shrink-0 rounded-full bg-foreground/85" />
-                ) : (
-                  <Circle className="h-[9px] w-[9px] shrink-0 text-muted-foreground/35" strokeWidth={1.25} />
-                )}
-                <span className="min-w-0 flex-1 truncate">{row.title}</span>
-              </button>
-            </li>
-          )
-        })}
-        {!state?.loading && chatRows.length === 0 ? (
+        {rows.map((row) => (
+          <ConversationRow key={row.key} row={row} {...sharedRowProps} />
+        ))}
+        {!state?.loading && rows.length === 0 ? (
           <li className="px-1 py-0.5 text-[11px] text-muted-foreground/45">Sin chats</li>
         ) : null}
       </ul>
     </li>
+  )
+}
+
+function FolderIconButton({
+  label,
+  onClick,
+  children,
+}: {
+  label: string
+  onClick: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+          aria-label={label}
+          onClick={(e) => {
+            e.stopPropagation()
+            onClick()
+          }}
+        >
+          {children}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="top">{label}</TooltipContent>
+    </Tooltip>
+  )
+}
+
+function ConversationRow({
+  row,
+  actions,
+  pinned,
+  editingKey,
+  editValue,
+  setEditValue,
+  cancelRename,
+  commitRename,
+  beginRename,
+  isRowActive,
+  isRowUnread,
+  openRow,
+  subtitles,
+  workspaces,
+}: { row: ChatRow } & SharedRowProps) {
+  const active = isRowActive(row)
+  const unread = isRowUnread(row)
+  const isPinned = pinned.has(row.key)
+  const editing = editingKey === row.key
+  const subtitle =
+    subtitles === "worktree"
+      ? workspaces.find((w) => w.id === row.workspaceId)?.name ?? null
+      : null
+
+  if (editing) {
+    return (
+      <li>
+        <div className="flex items-center gap-1 rounded-md bg-muted/40 px-1.5 py-1">
+          <input
+            value={editValue}
+            autoFocus
+            onChange={(e) => setEditValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commitRename(row)
+              if (e.key === "Escape") cancelRename()
+            }}
+            onBlur={() => commitRename(row)}
+            className="h-6 min-w-0 flex-1 rounded border-0 bg-transparent px-1 text-[12px] outline-none focus:ring-1 focus:ring-border"
+          />
+          <button
+            type="button"
+            className="flex h-5 w-5 items-center justify-center rounded text-emerald-600 hover:bg-emerald-500/10"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => commitRename(row)}
+            aria-label="Guardar"
+          >
+            <Check className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            className="flex h-5 w-5 items-center justify-center rounded text-rose-500 hover:bg-rose-500/10"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={cancelRename}
+            aria-label="Cancelar"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </li>
+    )
+  }
+
+  return (
+    <li>
+      <div
+        className={cn(
+          "group/row flex w-full min-w-0 items-center gap-2 rounded-md py-1 pl-1 pr-0.5 text-left text-[12px] leading-snug transition-colors",
+          active
+            ? "bg-muted/80 text-foreground"
+            : "text-muted-foreground/60 hover:bg-muted/35 hover:text-muted-foreground/90",
+        )}
+      >
+        <button
+          type="button"
+          onClick={() => openRow(row)}
+          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+          title={row.title}
+        >
+          {active ? (
+            <span className="h-[7px] w-[7px] shrink-0 rounded-full bg-foreground/85" />
+          ) : unread ? (
+            <span className="h-[7px] w-[7px] shrink-0 rounded-full bg-sky-500" aria-label="Sin leer" />
+          ) : (
+            <Circle className="h-[9px] w-[9px] shrink-0 text-muted-foreground/35" strokeWidth={1.25} />
+          )}
+          <span className="min-w-0 flex-1">
+            <span className="block truncate">{row.title}</span>
+            {subtitle ? (
+              <span className="block truncate text-[10px] text-muted-foreground/45">{subtitle}</span>
+            ) : null}
+          </span>
+        </button>
+
+        <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover/row:opacity-100">
+          <RowMenu row={row} actions={actions} unread={unread} beginRename={beginRename} />
+          <RowIconButton
+            label={isPinned ? "Quitar fijado" : "Fijar conversación"}
+            active={isPinned}
+            onClick={() => actions.onTogglePin?.(row)}
+          >
+            {isPinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
+          </RowIconButton>
+          <RowIconButton
+            label="Archivar conversación"
+            onClick={() => actions.onToggleArchive?.(row)}
+          >
+            <Archive className="h-3.5 w-3.5" />
+          </RowIconButton>
+        </div>
+        {isPinned ? (
+          <Pin className="h-3 w-3 shrink-0 text-muted-foreground/45 group-hover/row:hidden" aria-label="Fijado" />
+        ) : null}
+      </div>
+    </li>
+  )
+}
+
+function RowIconButton({
+  label,
+  active,
+  onClick,
+  children,
+}: {
+  label: string
+  active?: boolean
+  onClick: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          className={cn(
+            "flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-muted/70 hover:text-foreground",
+            active && "text-foreground",
+          )}
+          aria-label={label}
+          onClick={(e) => {
+            e.stopPropagation()
+            onClick()
+          }}
+        >
+          {children}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="top">{label}</TooltipContent>
+    </Tooltip>
+  )
+}
+
+function RowMenu({
+  row,
+  actions,
+  unread,
+  beginRename,
+}: {
+  row: ChatRow
+  actions: RowActions
+  unread: boolean
+  beginRename: (row: ChatRow) => void
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-muted/70 hover:text-foreground data-[state=open]:bg-muted/70 data-[state=open]:text-foreground"
+          aria-label="Opciones de conversación"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <MoreVertical className="h-3.5 w-3.5" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-48">
+        <DropdownMenuItem
+          onClick={() => (unread ? actions.onMarkRead?.(row) : actions.onMarkUnread?.(row))}
+        >
+          <MailOpen className="mr-2 h-4 w-4" />
+          {unread ? "Marcar como leída" : "Marcar como no leída"}
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => beginRename(row)}>
+          <Pencil className="mr-2 h-4 w-4" />
+          Renombrar
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          className="text-rose-600 focus:text-rose-600"
+          onClick={() => actions.onDeleteRow?.(row)}
+        >
+          <Trash2 className="mr-2 h-4 w-4" />
+          Eliminar conversación
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }

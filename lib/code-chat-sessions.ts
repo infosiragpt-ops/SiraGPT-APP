@@ -18,6 +18,8 @@ export type CodeChatSession = {
   turns: CodeChatTurn[]
   createdAt: number
   updatedAt: number
+  /** When true the user renamed it manually — don't re-derive the title from turns. */
+  titleLocked?: boolean
 }
 
 type SessionStore = {
@@ -221,10 +223,45 @@ export function updateCodeChatSessionTurns(
     sessions: store.sessions.map((s) => {
       if (s.id !== sessionId) return s
       const turns = updater(s.turns)
-      const title = deriveCodeChatSessionTitle(turns)
+      // A manually renamed session keeps its title; otherwise derive from turns.
+      const title = s.titleLocked ? s.title : deriveCodeChatSessionTitle(turns)
       return { ...s, turns, title, updatedAt: Date.now() }
     }),
   }
+  saveStore(next)
+  return next
+}
+
+/** Manually rename a session. Locks the title against turn-derived updates. */
+export function renameCodeChatSession(
+  sessionId: string,
+  title: string,
+  store = loadStore(),
+): SessionStore {
+  const clean = title.trim().slice(0, 80)
+  if (!clean) return store
+  const next: SessionStore = {
+    ...store,
+    sessions: store.sessions.map((s) =>
+      s.id === sessionId ? { ...s, title: clean, titleLocked: true, updatedAt: Date.now() } : s,
+    ),
+  }
+  saveStore(next)
+  return next
+}
+
+/** Delete a session, reassigning the workspace's active session when needed. */
+export function deleteCodeChatSession(sessionId: string, store = loadStore()): SessionStore {
+  const target = store.sessions.find((s) => s.id === sessionId)
+  if (!target) return store
+  const sessions = store.sessions.filter((s) => s.id !== sessionId)
+  const activeByWorkspace = { ...store.activeByWorkspace }
+  if (activeByWorkspace[target.workspaceId] === sessionId) {
+    const fallback = sessions.find((s) => s.workspaceId === target.workspaceId)
+    if (fallback) activeByWorkspace[target.workspaceId] = fallback.id
+    else delete activeByWorkspace[target.workspaceId]
+  }
+  const next: SessionStore = { sessions, activeByWorkspace }
   saveStore(next)
   return next
 }
