@@ -96,6 +96,52 @@ test('semantic router detects quantitative tasks before generic chat', () => {
   assert.ok(analysis.routing.domain_signals.math);
 });
 
+test('semantic router keeps explanatory technical prompts as text answers', () => {
+  const code = buildSemanticIntentAnalysis({
+    rawUserRequest: "qué hace este SQL: SELECT * FROM users WHERE created_at > '2026-01-01'",
+  });
+  const stats = buildSemanticIntentAnalysis({
+    rawUserRequest: '¿Qué es el coeficiente alpha de Cronbach?',
+  });
+  const finance = buildSemanticIntentAnalysis({
+    rawUserRequest: 'cómo calcular el Cap Rate en una inversión inmobiliaria',
+  });
+
+  assert.equal(code.structured_intent.intent_primary, 'text_answer');
+  assert.equal(stats.structured_intent.intent_primary, 'text_answer');
+  assert.equal(finance.structured_intent.intent_primary, 'text_answer');
+});
+
+test('semantic router detects deliverables without explicit generation verbs', () => {
+  const web = buildSemanticIntentAnalysis({
+    rawUserRequest: 'app web con Next.js, TailwindCSS y autenticación con Clerk',
+  });
+  const sheet = buildSemanticIntentAnalysis({
+    rawUserRequest: 'modelo financiero a 3 años con asunciones de churn 5%/mes',
+  });
+  const thesis = buildSemanticIntentAnalysis({
+    rawUserRequest: 'tesis universitaria sobre IA en educación, 30 páginas, capítulos, intro y marco teórico',
+  });
+
+  assert.equal(web.structured_intent.intent_primary, 'web_app_build');
+  assert.equal(sheet.structured_intent.intent_primary, 'spreadsheet_generation');
+  assert.equal(sheet.contract.required_extension, '.xlsx');
+  assert.equal(thesis.structured_intent.intent_primary, 'complex_academic_document_generation');
+  assert.equal(thesis.contract.required_extension, '.docx');
+});
+
+test('semantic router prioritizes explicit output format over uploaded-context answering', () => {
+  const doc = buildSemanticIntentAnalysis({
+    rawUserRequest: 'analiza este dataset CSV adjunto, dame estadísticas, gráficos clave en PNG y un Word con conclusiones',
+  });
+  const math = buildSemanticIntentAnalysis({
+    rawUserRequest: 'resuelve el sistema 2x+3y=10, 4x-y=5',
+  });
+
+  assert.equal(doc.structured_intent.intent_primary, 'complex_academic_document_generation');
+  assert.equal(math.structured_intent.intent_primary, 'math_solving');
+});
+
 describe('negative-intent guards (improvement #2)', () => {
   test('"no busques en internet" suppresses realtimeLookup', () => {
     const on = buildDomainSignals('busca en internet el precio actual del dolar hoy');

@@ -71,6 +71,43 @@ test('analyzeContextualTurn injects lexicon terms without changing the original 
   assert.equal(result.envelopeContext.lexicon_terms.length, 1);
 });
 
+test('analyzeContextualTurn injects recalled memory as inert context hints', async () => {
+  const result = await contextual.analyzeContextualTurn({
+    userId: 'u-memory',
+    conversationId: 'c-memory',
+    userMessage: 'continua con el documento y respeta las reglas del proyecto',
+    history: [],
+    attachments: [],
+    recalledMemory: {
+      semantic: [
+        { id: 'm1', score: 0.87, item: { text: 'El usuario prefiere entregables en espanol y validacion final.' } },
+      ],
+      project: [
+        { id: 'p1', score: 0.74, item: { summary: 'Mantener el tono profesional y no cambiar la interfaz.' } },
+      ],
+    },
+    projectContext: {
+      project_id: 'proj-ctx',
+      member: { role: 'owner' },
+      capabilities: ['documents', 'agent-runtime'],
+      instructions: 'Preservar restricciones explicitas antes de generar archivos.',
+      docs: [{ id: 'd1', title: 'Reglas del proyecto', summary: 'Checklist de calidad.' }],
+      recent_conversations: [{ id: 'c1', title: 'Trabajo anterior de tesis' }],
+    },
+    requestId: 'req-memory',
+  });
+
+  assert.equal(result.applied, true);
+  assert.match(result.effectiveText, /USER_CONTEXT_MEMORY/);
+  assert.match(result.effectiveText, /semantic_memory/);
+  assert.match(result.effectiveText, /project_doc: Reglas del proyecto/);
+  assert.equal(result.envelopeContext.context_memory.counts.semantic, 1);
+  assert.equal(result.envelopeContext.context_memory.counts.project, 1);
+  assert.equal(result.envelopeContext.context_memory.counts.project_docs, 1);
+  assert.equal(result.envelopeContext.context_memory.project_context.project_id, 'proj-ctx');
+  assert.ok(result.envelopeContext.context_memory.confidence >= 0.87);
+});
+
 test('analyzeContextualTurn adds repair context for correction follow-up', async () => {
   const result = await contextual.analyzeContextualTurn({
     userId: 'u-repair',
@@ -114,6 +151,44 @@ test('analyzeContextualTurn injects value context for autonomous no-ui work', as
   assert.ok(result.envelopeContext.value_context.primary_domains.includes('protective'));
   assert.ok(result.envelopeContext.value_context.constraints.some(c => c.id === 'preserve_interface'));
   assert.ok(result.envelopeContext.value_context.values.some(v => v.id === 'implementation_integrity'));
+});
+
+test('analyzeContextualTurn treats OpenClaw no-copy requests as native integration work', async () => {
+  const result = await contextual.analyzeContextualTurn({
+    userId: 'u-openclaw-native',
+    conversationId: 'c-openclaw-native',
+    userMessage: 'de este repositorio OpenClaw no copies su codigo, reescribe absolutamente todo e integralo al funcionamiento de nuestro software',
+    history: [
+      { role: 'user', content: 'Quiero capacidades como OpenClaw dentro de SiraGPT.' },
+    ],
+    attachments: [],
+    requestId: 'req-openclaw-native',
+  });
+
+  assert.equal(result.applied, true);
+  assert.match(result.effectiveText, /native_integration_integrity/);
+  assert.ok(result.envelopeContext.value_context.constraints.some(c => c.id === 'native_rewrite_only'));
+  assert.ok(result.envelopeContext.value_context.values.some(v => v.id === 'native_integration_integrity'));
+  assert.ok(result.envelopeContext.value_context.task_trajectory.success_criteria.some(c => /do not copy upstream code/i.test(c)));
+  assert.ok(result.envelopeContext.goal_understanding.inferred_user_goal.includes('without copying upstream code'));
+  assert.ok(result.envelopeContext.goal_understanding.proactive_next_steps.includes('map_upstream_to_native_contracts'));
+  assert.ok(result.envelopeContext.llm_understanding_packet.no_go_rules.some(rule => /Do not copy external repository code/.test(rule)));
+});
+
+test('analyzeContextualTurn does not add native-rewrite constraints to ordinary repo refactors', async () => {
+  const result = await contextual.analyzeContextualTurn({
+    userId: 'u-local-refactor',
+    conversationId: 'c-local-refactor',
+    userMessage: 'refactoriza este repo interno y ejecuta pruebas sin cambiar la interfaz',
+    history: [],
+    attachments: [],
+    requestId: 'req-local-refactor',
+  });
+
+  assert.equal(result.applied, true);
+  assert.ok(result.envelopeContext.value_context.constraints.some(c => c.id === 'preserve_interface'));
+  assert.equal(result.envelopeContext.value_context.constraints.some(c => c.id === 'native_rewrite_only'), false);
+  assert.equal(result.envelopeContext.value_context.values.some(v => v.id === 'native_integration_integrity'), false);
 });
 
 test('analyzeContextualTurn maps task-conditioned values from document analysis', async () => {

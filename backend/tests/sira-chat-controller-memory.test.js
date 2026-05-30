@@ -47,6 +47,9 @@ describe("chat-controller / MemoryStore wiring", () => {
       assert.equal(r.recalled_memory.semantic.length, 1);
       assert.equal(r.recalled_memory.project.length, 1);
     }
+    assert.match(r.contextual_understanding.effective_text, /USER_CONTEXT_MEMORY/);
+    assert.equal(r.contextual_understanding.context_memory.counts.semantic, 1);
+    assert.equal(r.contextual_understanding.context_memory.counts.project, 1);
   });
 
   test("persists the user message to the conversation tier after a successful turn", async () => {

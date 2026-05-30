@@ -8,12 +8,19 @@ const {
 
 const args = process.argv.slice(2);
 const json = args.includes('--json');
+const upstreamRootIndex = args.indexOf('--upstream-root');
+const upstreamRepoRoot = upstreamRootIndex >= 0 ? args[upstreamRootIndex + 1] : '';
+const upstreamCommitIndex = args.indexOf('--upstream-commit');
+const upstreamCommit = upstreamCommitIndex >= 0 ? args[upstreamCommitIndex + 1] : '';
 const recommendIndex = args.indexOf('--recommend');
 const query = recommendIndex >= 0
   ? args.slice(recommendIndex + 1).filter((arg) => !arg.startsWith('--')).join(' ')
   : '';
 
-const matrix = buildOpenClawIntegrationMap();
+const matrix = buildOpenClawIntegrationMap({
+  upstreamRepoRoot: upstreamRepoRoot || undefined,
+  upstreamCommit: upstreamCommit || undefined,
+});
 
 if (query) {
   const recommendations = recommendAdaptedPlaybooks(query, { matrix });

@@ -17,6 +17,7 @@
 const goalEvents = require('./goal-events');
 const goalQueue = require('./goal-queue');
 
+const EXPLICIT_GOAL_COMMAND_RE = /^\s*\/goal\b|\b(?:modo\s+goal|goal\s+mode)\b/i;
 const LONG_RUNNING_RE = /\b(?:meses?|semanas?|d[ií]as?|horas?|sin\s+detenerse|sin\s+parar|no\s+pares?|background|segundo\s+plano|aunque\s+(?:cierre|salga)|persistente|durable|auto.?ejecut|contin[uú]a(?:r)?|long.?running)\b/i;
 const RESEARCH_RE = /\b(?:investiga|investigaci[oó]n|tesis|art[ií]culos?\s+cient[ií]ficos?|doi|scopus|scite|apa\s*7|referencias?|bibliograf[ií]a|metodolog[ií]a|resultados?|discusi[oó]n|conclusiones?|marco\s+te[oó]rico|realidad\s+problem[aá]tica)\b/i;
 const VERIFY_RE = /\b(?:verifica|validar|validaci[oó]n|fuentes?\s+reales?|real\s+verificable|no\s+inventes?|citas?\s+reales?|referencias?\s+correctas?|estatus\s+verde|ci\s+verde|green\s+status)\b/i;
@@ -31,6 +32,7 @@ function normalizeText(value) {
 
 function inferDepth(score, text) {
   if (score >= 8 || /\b(?:meses?|semanas?|tesis|scopus|scite|art[ií]culos?\s+cient[ií]ficos?)\b/i.test(text)) return 'deep';
+  if (EXPLICIT_GOAL_COMMAND_RE.test(text)) return 'standard';
   if (score >= 5) return 'standard';
   return 'quick';
 }
@@ -50,9 +52,11 @@ function buildAutonomousGoalEscalation({
     ? history.slice(-8).map((m) => normalizeText(m?.content || m?.text || '')).filter(Boolean).join(' ')
     : '';
   const text = `${historyText} ${current}`.trim();
+  const hasExplicitGoalCommand = EXPLICIT_GOAL_COMMAND_RE.test(current);
   const reasons = [];
   let score = 0;
 
+  if (hasExplicitGoalCommand) { score += 4; reasons.push('explicit_goal_command'); }
   if (LONG_RUNNING_RE.test(text)) { score += 3; reasons.push('long_running_language'); }
   if (RESEARCH_RE.test(text)) { score += 2; reasons.push('research_or_thesis_scope'); }
   if (VERIFY_RE.test(text)) { score += 2; reasons.push('verification_required'); }
@@ -64,7 +68,7 @@ function buildAutonomousGoalEscalation({
     // Code/repo work already has a Codex delegation path. Do not create
     // a research goal for it unless there is also clear long-running
     // research/thesis scope.
-    if (!RESEARCH_RE.test(text) && !LONG_RUNNING_RE.test(text)) {
+    if (!hasExplicitGoalCommand && !RESEARCH_RE.test(text) && !LONG_RUNNING_RE.test(text)) {
       return {
         shouldEscalate: false,
         score,
@@ -159,6 +163,7 @@ module.exports = {
   _internal: {
     CODE_RE,
     LONG_RUNNING_RE,
+    EXPLICIT_GOAL_COMMAND_RE,
     MULTI_AGENT_RE,
     RESEARCH_RE,
     VERIFY_RE,

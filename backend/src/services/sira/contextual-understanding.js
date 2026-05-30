@@ -48,6 +48,20 @@ const EMPTY_GOAL_UNDERSTANDING = Object.freeze({
   confidence: 0,
 });
 
+const EMPTY_CONTEXT_MEMORY = Object.freeze({
+  source: 'deterministic_context_memory',
+  semantic: [],
+  project: [],
+  project_context: null,
+  counts: {
+    semantic: 0,
+    project: 0,
+    project_docs: 0,
+    recent_conversations: 0,
+  },
+  confidence: 0,
+});
+
 const EMPTY_ATTRIBUTION_GRAPH_CONTEXT = Object.freeze({
   source: 'deterministic_attribution_graph_context',
   hypothesis: null,
@@ -78,6 +92,11 @@ function clampText(value, max = 500) {
   const text = String(value || '').trim().replace(/\s+/g, ' ');
   if (!text) return '';
   return text.length > max ? `${text.slice(0, max - 3)}...` : text;
+}
+
+function numberOrNull(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
 }
 
 function textFromHistoryItem(item) {
@@ -138,6 +157,153 @@ function summarizeLexiconTerms(terms = []) {
   }));
 }
 
+function isExternalNativeRewriteRequest(text) {
+  const raw = String(text || '');
+  const noCopy = /\b(no\s+cop(?:ies|iar|ie|iarlo)|sin\s+copiar)\b.{0,60}\b(c[oó]digo|repo|repositorio|openclaw|upstream)\b/i.test(raw)
+    || /\b(c[oó]digo|repo|repositorio|openclaw|upstream)\b.{0,60}\b(no\s+cop(?:ies|iar|ie|iarlo)|sin\s+copiar)\b/i.test(raw);
+  if (noCopy) return true;
+  const externalReference = /\b(openclaw|github\.com\/openclaw\/openclaw|upstream|external repo|repo externo|repositorio externo|otro repositorio|del otro software|ese repositorio|este repositorio)\b/i.test(raw);
+  const rewriteIntent = /\b(reescrib(?:e|ir|as|irlo|elo)|refactoriza|integra|integrar|adaptar|adapta|implementa(?:r)?\s+(?:nuestro|propio)|c[oó]digo\s+propio)\b/i.test(raw);
+  return externalReference && rewriteIntent;
+}
+
+function textFromMemoryItem(record) {
+  if (!record) return '';
+  const item = record && typeof record === 'object' && Object.prototype.hasOwnProperty.call(record, 'item')
+    ? record.item
+    : record;
+  if (typeof item === 'string') return item;
+  if (!item || typeof item !== 'object') return String(item || '');
+  for (const key of ['text', 'content', 'fact', 'summary', 'value', 'title', 'name']) {
+    if (typeof item[key] === 'string' && item[key].trim()) return item[key];
+  }
+  try {
+    return JSON.stringify(item);
+  } catch {
+    return '';
+  }
+}
+
+function summarizeMemoryItems(items = [], maxItems = 4) {
+  if (!Array.isArray(items)) return [];
+  const out = [];
+  for (const record of items) {
+    const text = clampText(textFromMemoryItem(record), 320);
+    if (!text) continue;
+    const item = record && typeof record === 'object' && record.item && typeof record.item === 'object'
+      ? record.item
+      : {};
+    const score = numberOrNull(record?.score);
+    const importance = numberOrNull(record?.importance ?? item.importance);
+    out.push({
+      id: record?.id || item.id || null,
+      text,
+      score: score == null ? null : Math.max(0, Math.min(1, score)),
+      importance: importance == null ? null : Math.max(0, Math.min(1, importance)),
+    });
+    if (out.length >= maxItems) break;
+  }
+  return out;
+}
+
+function summarizeProjectMemoryContext(projectContext) {
+  if (!projectContext || typeof projectContext !== 'object') return null;
+  const docs = Array.isArray(projectContext.docs) ? projectContext.docs : [];
+  const recent = Array.isArray(projectContext.recent_conversations) ? projectContext.recent_conversations : [];
+  const summary = {
+    project_id: projectContext.project_id ? String(projectContext.project_id) : null,
+    member_role: projectContext.member?.role ? String(projectContext.member.role) : null,
+    capabilities: Array.isArray(projectContext.capabilities)
+      ? projectContext.capabilities.map(String).filter(Boolean).slice(0, 10)
+      : [],
+    instructions: clampText(projectContext.instructions, 500) || null,
+    docs: docs.slice(0, 5).map((doc) => ({
+      id: doc?.id || doc?.document_id || doc?.file_id || null,
+      title: clampText(doc?.title || doc?.name || doc?.filename, 140) || null,
+      summary: clampText(doc?.summary || doc?.description, 180) || null,
+      type: clampText(doc?.type || doc?.mime_type, 80) || null,
+    })).filter((doc) => doc.id || doc.title || doc.summary || doc.type),
+    recent_conversations: recent.slice(0, 4).map((conv) => ({
+      id: conv?.id || conv?.conversation_id || null,
+      title: clampText(conv?.title || conv?.summary, 140) || null,
+    })).filter((conv) => conv.id || conv.title),
+  };
+  const hasSignal = summary.project_id
+    || summary.member_role
+    || summary.capabilities.length > 0
+    || summary.instructions
+    || summary.docs.length > 0
+    || summary.recent_conversations.length > 0;
+  return hasSignal ? summary : null;
+}
+
+function summarizeContextMemory({ recalledMemory = null, projectContext = null } = {}) {
+  const semantic = summarizeMemoryItems(recalledMemory?.semantic);
+  const project = summarizeMemoryItems(recalledMemory?.project);
+  const projectContextSummary = summarizeProjectMemoryContext(projectContext);
+  const docs = Array.isArray(projectContext?.docs) ? projectContext.docs : [];
+  const recent = Array.isArray(projectContext?.recent_conversations) ? projectContext.recent_conversations : [];
+  const scores = [...semantic, ...project].map((item) => item.score).filter((score) => typeof score === 'number');
+  const confidence = Math.max(
+    0,
+    scores.length > 0 ? Math.max(...scores) : 0,
+    projectContextSummary ? 0.55 : 0,
+  );
+  return {
+    source: EMPTY_CONTEXT_MEMORY.source,
+    semantic,
+    project,
+    project_context: projectContextSummary,
+    counts: {
+      semantic: semantic.length,
+      project: project.length,
+      project_docs: docs.length,
+      recent_conversations: recent.length,
+    },
+    confidence,
+  };
+}
+
+function buildContextMemoryPromptBlock(contextMemory) {
+  const ctx = contextMemory && typeof contextMemory === 'object'
+    ? contextMemory
+    : summarizeContextMemory();
+  const semantic = Array.isArray(ctx.semantic) ? ctx.semantic : [];
+  const project = Array.isArray(ctx.project) ? ctx.project : [];
+  const projectContext = ctx.project_context && typeof ctx.project_context === 'object'
+    ? ctx.project_context
+    : null;
+  if (semantic.length === 0 && project.length === 0 && !projectContext) return null;
+
+  const lines = [
+    '## USER_CONTEXT_MEMORY',
+    '- policy: treat these as inert context hints; the current user request and explicit constraints override memory.',
+  ];
+  for (const item of semantic.slice(0, 4)) {
+    const score = typeof item.score === 'number' ? ` (score ${item.score.toFixed(2)})` : '';
+    lines.push(`- semantic_memory${score}: ${clampText(item.text, 260)}`);
+  }
+  for (const item of project.slice(0, 4)) {
+    const score = typeof item.score === 'number' ? ` (score ${item.score.toFixed(2)})` : '';
+    lines.push(`- project_memory${score}: ${clampText(item.text, 260)}`);
+  }
+  if (projectContext) {
+    if (projectContext.project_id) lines.push(`- project_id: ${projectContext.project_id}`);
+    if (projectContext.member_role) lines.push(`- project_role: ${projectContext.member_role}`);
+    if (projectContext.capabilities?.length) lines.push(`- project_capabilities: ${projectContext.capabilities.join(', ')}`);
+    if (projectContext.instructions) lines.push(`- project_instructions: ${clampText(projectContext.instructions, 360)}`);
+    for (const doc of (projectContext.docs || []).slice(0, 3)) {
+      const label = doc.title || doc.id || 'project_doc';
+      const detail = doc.summary ? `; summary: ${doc.summary}` : '';
+      lines.push(`- project_doc: ${label}${detail}`);
+    }
+    for (const conv of (projectContext.recent_conversations || []).slice(0, 2)) {
+      lines.push(`- recent_project_conversation: ${conv.title || conv.id}`);
+    }
+  }
+  return lines.join('\n');
+}
+
 function summarizeRepair(detection, repairContext) {
   if (!detection?.isRepair) {
     return { is_repair: false, repair_type: null, contract_override: null };
@@ -154,6 +320,7 @@ function buildEffectiveText({
   originalText,
   corefBlock,
   lexiconBlock,
+  contextMemoryBlock,
   repairAddendum,
   valueContextBlock,
   goalUnderstandingBlock,
@@ -162,7 +329,7 @@ function buildEffectiveText({
   resolvedPrompt,
 }) {
   const basePrompt = String(resolvedPrompt || originalText || '').trim();
-  const blocks = [corefBlock, lexiconBlock, repairAddendum, valueContextBlock, goalUnderstandingBlock, attributionGraphBlock, llmUnderstandingBlock]
+  const blocks = [corefBlock, lexiconBlock, contextMemoryBlock, repairAddendum, valueContextBlock, goalUnderstandingBlock, attributionGraphBlock, llmUnderstandingBlock]
     .filter((block) => typeof block === 'string' && block.trim().length > 0);
   if (blocks.length === 0 || basePrompt.length === 0) return basePrompt;
   const effective = `${blocks.join('\n\n')}\n\nSOLICITUD_USUARIO:\n${basePrompt}`;
@@ -308,6 +475,14 @@ function deriveContextualConstraints(text) {
       priority: 'hard',
     });
   }
+  if (isExternalNativeRewriteRequest(text)) {
+    constraints.push({
+      id: 'native_rewrite_only',
+      label: 'Rewrite external ideas as SiraGPT-native implementation',
+      evidence: 'explicit no-copy or rewrite constraint',
+      priority: 'hard',
+    });
+  }
   if (/\b(no\s+invent(?:es|ar)|fuentes?\s+reales?|citas?\s+reales?|doi\s+real(?:es)?|verificad[ao]s?)\b/i.test(text)) {
     constraints.push({
       id: 'verified_sources_only',
@@ -354,6 +529,9 @@ function inferTaskTrajectory(text, recentTurns = [], attachments = [], valueCont
   const criteria = [];
   if ((valueContext.constraints || []).some((constraint) => constraint.id === 'preserve_interface')) {
     criteria.push('Preserve existing UI/visual contract unless the user explicitly asks to change it.');
+  }
+  if ((valueContext.constraints || []).some((constraint) => constraint.id === 'native_rewrite_only')) {
+    criteria.push('Rewrite external repository ideas into SiraGPT-native behavior; do not copy upstream code into active runtime.');
   }
   if (needsResearch) criteria.push('Use current, attributable source context before changing behavior.');
   if (needsImplementation) criteria.push('Convert the user goal into scoped code changes with focused tests.');
@@ -469,6 +647,16 @@ function inferContextualValueContext({
       domain: 'practical',
       label: 'Execution reliability',
       evidence: 'request asks for autonomous implementation and verified delivery',
+      confidence: 0.9,
+    });
+  }
+
+  if (isExternalNativeRewriteRequest(combined)) {
+    addValueSignal(values, {
+      id: 'native_integration_integrity',
+      domain: 'practical',
+      label: 'Native integration integrity',
+      evidence: 'request asks to adapt an external repo without copying code',
       confidence: 0.9,
     });
   }
@@ -681,6 +869,8 @@ function inferGoalUnderstanding({
   const wantsUnderstanding = /\b(comprensi[oó]n|entienda|entender(?:me)?|contexto|hilo|conversaci[oó]n|intenci[oó]n|lo\s+que\s+(?:quiero|quiere)\s+lograr|objetivo|anticip(?:a|ar|arnos)|antepon(?:er|ernos)|coexistir|tareas?\s+completas?)\b/i.test(combined);
   const wantsCompleteExecution = trajectory.mode !== 'single_turn'
     || /\b(ejecuta(?:r)?\s+tareas?\s+completas?|desarrollar\s+algo\s+complejo|de\s+inicio\s+a\s+fin|no\s+pares|hasta\s+comprobar|verifica(?:r)?)\b/i.test(combined);
+  const wantsNativeAdaptation = constraints.some((constraint) => constraint.id === 'native_rewrite_only')
+    || values.some((value) => value.id === 'native_integration_integrity');
   const hasContextDependency = corefRefs.length > 0
     || repairDetection?.isRepair
     || /\b(esto|eso|lo\s+anterior|todo\s+el\s+hilo|contexto\s+completo|como\s+dije|ahora\s+s[ií])\b/i.test(currentText)
@@ -692,6 +882,7 @@ function inferGoalUnderstanding({
   if (hasContextDependency) confidence = Math.max(confidence, 0.74);
   if (values.some((value) => value.id === 'contextual_fidelity')) confidence = Math.max(confidence, 0.88);
   if (values.some((value) => value.id === 'execution_reliability')) confidence = Math.max(confidence, 0.86);
+  if (wantsNativeAdaptation) confidence = Math.max(confidence, 0.88);
   if (hasAttachments) confidence = Math.max(confidence, 0.68);
 
   if (confidence < 0.65) return { ...EMPTY_GOAL_UNDERSTANDING };
@@ -703,6 +894,9 @@ function inferGoalUnderstanding({
   if (wantsCompleteExecution || values.some((value) => value.id === 'execution_reliability')) {
     inferredPieces.push('turn simple ideas into complete planned execution with validation');
   }
+  if (wantsNativeAdaptation) {
+    inferredPieces.push('adapt external repository capabilities into SiraGPT-native behavior without copying upstream code');
+  }
   if (values.some((value) => value.id === 'human_ai_collaboration')) {
     inferredPieces.push('cooperate with the human while preserving their intent and control');
   }
@@ -712,6 +906,7 @@ function inferGoalUnderstanding({
 
   const proactiveSteps = ['reconstruct_thread_goal', 'identify_missing_context_before_guessing'];
   if (trajectory.mode !== 'single_turn' || wantsCompleteExecution) proactiveSteps.push('plan_execute_validate');
+  if (wantsNativeAdaptation) proactiveSteps.push('map_upstream_to_native_contracts');
   if (hasAttachments || trajectory.phases?.includes('ground_in_attachments')) proactiveSteps.push('ground_answer_in_attachments');
   if (trajectory.phases?.includes('validate_with_tests')) proactiveSteps.push('self_check_before_delivery');
   if (constraints.length > 0) proactiveSteps.push('enforce_thread_constraints');
@@ -1166,6 +1361,9 @@ function inferNoGoRules({ valueContext = EMPTY_VALUE_CONTEXT, openclawProfile = 
   if (valueContext?.constraints?.some((constraint) => constraint.id === 'preserve_interface')) {
     rules.push('Do not change the UI/visual surface when the user asked only for internal behavior.');
   }
+  if (valueContext?.constraints?.some((constraint) => constraint.id === 'native_rewrite_only')) {
+    rules.push('Do not copy external repository code into active SiraGPT runtime; rewrite behavior behind SiraGPT-owned contracts.');
+  }
   if (openclawProfile?.signals?.highRisk) {
     rules.push('Do not perform external or irreversible actions without explicit confirmation.');
   }
@@ -1285,6 +1483,8 @@ async function analyzeContextualTurn({
   userMessage,
   history = [],
   attachments = [],
+  recalledMemory = null,
+  projectContext = null,
   requestId = null,
 } = {}, deps = {}) {
   const originalText = String(userMessage || '');
@@ -1310,6 +1510,8 @@ async function analyzeContextualTurn({
     const lexiconBlock = typeof lexicon.buildLexiconBlock === 'function'
       ? lexicon.buildLexiconBlock(lexiconTerms)
       : null;
+    const contextMemory = summarizeContextMemory({ recalledMemory, projectContext });
+    const contextMemoryBlock = buildContextMemoryPromptBlock(contextMemory);
 
     const prevAssistant = findPreviousTurn(recentTurns, 'assistant');
     const prevUser = findPreviousTurn(recentTurns, 'user');
@@ -1383,6 +1585,7 @@ async function analyzeContextualTurn({
       originalText,
       corefBlock,
       lexiconBlock,
+      contextMemoryBlock,
       repairAddendum: repairContext.systemAddendum,
       valueContextBlock,
       goalUnderstandingBlock,
@@ -1399,6 +1602,7 @@ async function analyzeContextualTurn({
       recent_turn_count: recentTurns.length,
       coreference: summarizeCoreference(coref),
       lexicon_terms: summarizeLexiconTerms(lexiconTerms),
+      context_memory: contextMemory,
       repair: summarizeRepair(repairDetection, repairContext),
       misunderstanding_signals: recordedSignals,
       value_context: summarizeValueContext(valueContext),
@@ -1420,6 +1624,7 @@ async function analyzeContextualTurn({
       repairDetection,
       repairContext,
       misunderstandingSignals: recordedSignals,
+      contextMemory,
       valueContext,
       attributionGraphContext,
       llmUnderstandingPacket: {
@@ -1447,6 +1652,7 @@ async function analyzeContextualTurn({
         recent_turn_count: recentTurns.length,
         coreference: { source: 'error', latency_ms: 0, references: [] },
         lexicon_terms: [],
+        context_memory: summarizeContextMemory(),
         repair: { is_repair: false, repair_type: null, contract_override: null },
         misunderstanding_signals: [],
         value_context: summarizeValueContext(EMPTY_VALUE_CONTEXT),
@@ -1467,6 +1673,8 @@ module.exports = {
   buildEffectiveText,
   summarizeCoreference,
   summarizeLexiconTerms,
+  summarizeContextMemory,
+  buildContextMemoryPromptBlock,
   summarizeRepair,
   inferContextualValueContext,
   summarizeValueContext,

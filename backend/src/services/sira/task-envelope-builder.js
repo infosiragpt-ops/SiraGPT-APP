@@ -526,6 +526,9 @@ function deriveGoalModel(text, taxonomyIntent, attachments, contextualUnderstand
   if (valueContext.constraints.some(constraint => constraint.id === "preserve_interface")) {
     nonGoals.push("No alterar la interfaz ni los contratos visuales existentes.");
   }
+  if (valueContext.constraints.some(constraint => constraint.id === "native_rewrite_only")) {
+    nonGoals.push("No copiar codigo externo dentro del runtime activo; reescribir la conducta con contratos propios de SiraGPT.");
+  }
   const assumptions = deriveAssumptions(taxonomyIntent);
   if (goalUnderstanding.confidence >= 0.75 && goalUnderstanding.missing_context.length === 0) {
     assumptions.push({
@@ -1335,6 +1338,12 @@ function clamp01(n) {
   return n;
 }
 
+function nonNegativeInt(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.floor(n);
+}
+
 function normalizeContextualValueContext(valueContext) {
   const ctx = valueContext && typeof valueContext === "object" ? valueContext : {};
   const values = Array.isArray(ctx.values) ? ctx.values : [];
@@ -1433,6 +1442,7 @@ function normalizeContextualUnderstanding(contextualUnderstanding) {
     misunderstanding_signals: Array.isArray(contextualUnderstanding.misunderstanding_signals)
       ? contextualUnderstanding.misunderstanding_signals.map(String).slice(0, 10)
       : [],
+    context_memory: normalizeContextMemory(contextualUnderstanding.context_memory),
     value_context: normalizeContextualValueContext(contextualUnderstanding.value_context),
     goal_understanding: normalizeGoalUnderstanding(contextualUnderstanding.goal_understanding),
     attribution_graph_context: normalizeAttributionGraphContext(contextualUnderstanding.attribution_graph_context),
@@ -1456,12 +1466,72 @@ function compactContextualUnderstanding(contextualUnderstanding) {
     response_posture: normalized.value_context.response_posture,
     response_type: normalized.value_context.response_type,
     constraint_count: normalized.value_context.constraints.length,
+    semantic_memory_count: normalized.context_memory.counts.semantic,
+    project_memory_count: normalized.context_memory.counts.project,
+    project_context_docs: normalized.context_memory.counts.project_docs,
     goal_understanding_confidence: normalized.goal_understanding.confidence,
     desired_outcome: normalized.goal_understanding.desired_outcome,
     proactive_next_steps: normalized.goal_understanding.proactive_next_steps,
     attribution_graph_confidence: normalized.attribution_graph_context.confidence,
     attribution_hypothesis: normalized.attribution_graph_context.hypothesis,
     attribution_critical_paths: normalized.attribution_graph_context.critical_paths,
+  };
+}
+
+function normalizeContextMemory(contextMemory) {
+  const ctx = contextMemory && typeof contextMemory === "object" ? contextMemory : {};
+  const semantic = normalizeContextMemoryItems(ctx.semantic);
+  const project = normalizeContextMemoryItems(ctx.project);
+  const projectContext = normalizeProjectMemoryContext(ctx.project_context);
+  const counts = ctx.counts && typeof ctx.counts === "object" ? ctx.counts : {};
+  return {
+    source: String(ctx.source || "deterministic_context_memory"),
+    semantic,
+    project,
+    project_context: projectContext,
+    counts: {
+      semantic: nonNegativeInt(counts.semantic ?? semantic.length),
+      project: nonNegativeInt(counts.project ?? project.length),
+      project_docs: nonNegativeInt(counts.project_docs ?? projectContext?.docs?.length ?? 0),
+      recent_conversations: nonNegativeInt(counts.recent_conversations ?? projectContext?.recent_conversations?.length ?? 0),
+    },
+    confidence: clamp01(Number(ctx.confidence || 0)),
+  };
+}
+
+function normalizeContextMemoryItems(items) {
+  if (!Array.isArray(items)) return [];
+  return items.slice(0, 5).map((item) => ({
+    id: item?.id ? String(item.id).slice(0, 120) : null,
+    text: String(item?.text || "").slice(0, 360),
+    score: item?.score == null ? null : clamp01(Number(item.score)),
+    importance: item?.importance == null ? null : clamp01(Number(item.importance)),
+  })).filter((item) => item.text.length > 0);
+}
+
+function normalizeProjectMemoryContext(projectContext) {
+  if (!projectContext || typeof projectContext !== "object") return null;
+  return {
+    project_id: projectContext.project_id ? String(projectContext.project_id).slice(0, 120) : null,
+    member_role: projectContext.member_role ? String(projectContext.member_role).slice(0, 80) : null,
+    capabilities: Array.isArray(projectContext.capabilities)
+      ? projectContext.capabilities.map(String).filter(Boolean).slice(0, 10)
+      : [],
+    instructions: projectContext.instructions ? String(projectContext.instructions).slice(0, 600) : null,
+    docs: Array.isArray(projectContext.docs)
+      ? projectContext.docs.slice(0, 5).map((doc) => ({
+        id: doc?.id ? String(doc.id).slice(0, 120) : null,
+        title: doc?.title ? String(doc.title).slice(0, 180) : null,
+        summary: doc?.summary ? String(doc.summary).slice(0, 220) : null,
+        type: doc?.type ? String(doc.type).slice(0, 80) : null,
+      })).filter((doc) => doc.id || doc.title || doc.summary || doc.type)
+      : [],
+    recent_conversations: Array.isArray(projectContext.recent_conversations)
+      ? projectContext.recent_conversations.slice(0, 4).map((conv) => ({
+        id: conv?.id ? String(conv.id).slice(0, 120) : null,
+        title: conv?.title ? String(conv.title).slice(0, 180) : null,
+      })).filter((conv) => conv.id || conv.title)
+      : [],
   };
 }
 
@@ -1527,6 +1597,7 @@ module.exports = {
   deriveQualityPlan,
   normalizeContextualUnderstanding,
   normalizeContextualValueContext,
+  normalizeContextMemory,
   normalizeGoalUnderstanding,
   normalizeAttributionGraphContext,
   compactContextualUnderstanding,

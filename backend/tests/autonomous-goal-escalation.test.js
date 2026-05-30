@@ -33,6 +33,19 @@ test('does not steal normal coding requests from the Codex path', () => {
   assert.ok(decision.reasons.includes('code_task_prefers_codex'));
 });
 
+test('honors explicit /goal commands as durable work even for code-heavy goals', () => {
+  const decision = buildAutonomousGoalEscalation({
+    prompt: '/goal mejora el backend, ejecuta pruebas, verifica fallos y continúa hasta terminar.',
+    codeIntent: { isCodeTask: true, confidence: 0.9 },
+  });
+
+  assert.equal(decision.shouldEscalate, true);
+  assert.notEqual(decision.depth, 'quick');
+  assert.equal(decision.agentKind, 'research-codex-support');
+  assert.ok(decision.reasons.includes('explicit_goal_command'));
+  assert.ok(decision.reasons.includes('code_task_prefers_codex'));
+});
+
 test('uses chat history to detect follow-up durable research work', () => {
   const decision = buildAutonomousGoalEscalation({
     history: [

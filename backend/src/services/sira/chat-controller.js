@@ -419,6 +419,8 @@ async function handleChatTurnUnlocked({
     userMessage,
     history: historyForEngine,
     attachments,
+    recalledMemory,
+    projectContext,
     requestId,
   }, contextualUnderstandingDeps || {});
   siraMetrics.recordStageDuration("contextual_understanding", Date.now() - _contextualStartedAt);
@@ -434,6 +436,9 @@ async function handleChatTurnUnlocked({
     collaboration_mode: contextualUnderstanding.envelopeContext?.value_context?.collaboration_mode || null,
     response_posture: contextualUnderstanding.envelopeContext?.value_context?.response_posture || null,
     response_type: contextualUnderstanding.envelopeContext?.value_context?.response_type || null,
+    semantic_memory_count: contextualUnderstanding.envelopeContext?.context_memory?.counts?.semantic || 0,
+    project_memory_count: contextualUnderstanding.envelopeContext?.context_memory?.counts?.project || 0,
+    project_context_docs: contextualUnderstanding.envelopeContext?.context_memory?.counts?.project_docs || 0,
   };
   await store.audit("contextual_understanding_applied", contextualPayload, auditMeta);
   events.emit("contextual_understanding_applied", { ...contextualPayload, request_id: requestId });

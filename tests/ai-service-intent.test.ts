@@ -8,6 +8,7 @@ import {
   classifyIntentFastPath,
   shouldRouteThroughAgenticRuntime,
   shouldRouteTextPromptThroughAgenticRuntime,
+  shouldUseFastTextRoute,
   shouldAnswerFromExistingDocument,
   shouldEditExistingDocument,
   shouldUseExistingDocumentFileContext,
@@ -236,6 +237,16 @@ describe("ai-service · deterministic intent routing", () => {
       "trabaja 2 horas revisando y autocorrigiendo mi landing page, ejecuta pruebas y entrega el informe",
     )
     assert.equal(intent, "agent_task")
+  })
+
+  it("routes explicit /goal commands to the durable agentic runtime", async () => {
+    const prompt = "/goal revisa este repositorio, corrige fallos, ejecuta pruebas y verifica el resultado"
+    const intent = await aiService.classifyIntent(prompt)
+
+    assert.equal(intent, "agent_task")
+    assert.equal(classifyIntentFastPath("/goal analiza el documento y continúa hasta validar"), "agent_task")
+    assert.equal(shouldRouteTextPromptThroughAgenticRuntime("/goal analiza el documento y continúa hasta validar"), true)
+    assert.equal(shouldUseFastTextRoute("/goal analiza el documento"), false)
   })
 
   it("routes repository checkout and GitHub delivery requests to the task agent", async () => {

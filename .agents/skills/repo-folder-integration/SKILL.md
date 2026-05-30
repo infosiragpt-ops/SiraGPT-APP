@@ -22,7 +22,7 @@ Use this when the task asks to review "each folder", compare another product rep
 
 | OpenClaw Area | SiraGPT Area | Integration Strategy |
 |---|---|---|
-| `.agents` | `.agents` | Copy upstream snapshots separately, rewrite active SiraGPT skills. |
+| `.agents` | `.agents` | Keep upstream snapshots reference-only, rewrite active SiraGPT skills. |
 | `.github` | `.github/workflows` | Reuse CI ideas only after matching current required checks. |
 | `.vscode` | `.vscode` | Add developer ergonomics only if non-invasive. |
 | `apps` | `app`, `android`, `ios`, `extension` | Treat as product surface; avoid unless UI/product scope is explicit. |

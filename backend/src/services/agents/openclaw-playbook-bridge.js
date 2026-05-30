@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const childProcess = require('child_process');
 
 const DEFAULT_SNAPSHOT_SHA = 'b56ddcc6ffdfc5be78c1c9c93926518367b876eb';
 
@@ -44,6 +45,7 @@ const UPSTREAM_TO_SIRAGPT_SKILLS = Object.freeze({
   'openclaw-debugging': ['runtime-debugging'],
   'openclaw-docker-e2e-authoring': ['dependency-upgrade-guard', 'e2e-proof-recorder'],
   'openclaw-ghsa-maintainer': ['security-hardening', 'secret-safety'],
+  'openclaw-changelog-update': ['release-maintainer', 'technical-docs'],
   'openclaw-landable-bug-sweep': ['bugfix-sweep'],
   'openclaw-parallels-smoke': ['e2e-proof-recorder'],
   'openclaw-pr-maintainer': ['release-maintainer', 'ci-orchestrator'],
@@ -56,6 +58,7 @@ const UPSTREAM_TO_SIRAGPT_SKILLS = Object.freeze({
   'openclaw-testing': ['qa-smoke-testing', 'quality-gates'],
   'parallels-discord-roundtrip': ['e2e-proof-recorder', 'channel-connector-hardening'],
   'release-openclaw-ci': ['ci-orchestrator', 'release-maintainer'],
+  'release-openclaw-announcement': ['release-orchestrator', 'technical-docs'],
   'release-openclaw-mac': ['release-maintainer'],
   'release-openclaw-maintainer': ['release-maintainer'],
   'release-openclaw-nightly': ['release-maintainer', 'ci-orchestrator'],
@@ -65,6 +68,7 @@ const UPSTREAM_TO_SIRAGPT_SKILLS = Object.freeze({
   'tag-duplicate-prs-issues': ['repo-folder-integration'],
   'technical-documentation': ['technical-docs'],
   'telegram-crabbox-e2e-proof': ['e2e-proof-recorder', 'channel-connector-hardening'],
+  'verify-release': ['release-orchestrator', 'quality-gates', 'ci-orchestrator'],
 });
 
 function parseSkillMarkdown(raw) {
@@ -109,11 +113,86 @@ function loadInstructionSkills(rootDir) {
   return skills.sort((a, b) => a.id.localeCompare(b.id));
 }
 
+function detectGitCommit(rootDir) {
+  if (!rootDir) return null;
+  try {
+    return childProcess.execFileSync('git', ['-C', rootDir, 'rev-parse', 'HEAD'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+  } catch {
+    return null;
+  }
+}
+
+function countFiles(rootDir) {
+  let total = 0;
+  const stack = [rootDir];
+  while (stack.length) {
+    const current = stack.pop();
+    let entries = [];
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (entry.name === '.git' || entry.name === 'node_modules') continue;
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) stack.push(full);
+      else if (entry.isFile()) total += 1;
+    }
+  }
+  return total;
+}
+
+function rootFolderPath(rootDir, folderName) {
+  if (folderName === 'root-config') return rootDir;
+  return path.join(rootDir, folderName);
+}
+
+function scanFolderAudit(upstreamRepoRoot) {
+  if (!upstreamRepoRoot) {
+    return FOLDER_CAPABILITY_MAP.map((entry) => ({
+      ...entry,
+      upstream_exists: null,
+      upstream_file_count: null,
+    }));
+  }
+  return FOLDER_CAPABILITY_MAP.map((entry) => {
+    const target = rootFolderPath(upstreamRepoRoot, entry.openclaw);
+    const exists = entry.openclaw === 'root-config'
+      ? fs.existsSync(path.join(upstreamRepoRoot, 'package.json'))
+      : fs.existsSync(target);
+    return {
+      ...entry,
+      upstream_exists: exists,
+      upstream_file_count: exists ? countFiles(target) : 0,
+    };
+  });
+}
+
+function summarizePublicSkillCatalog(skills) {
+  return skills.slice(0, 80).map((skill) => ({
+    upstream: skill.id,
+    description: skill.description,
+    status: 'reference_catalog',
+    sira_surface: 'backend/skills or .agents/skills after native rewrite',
+  }));
+}
+
 function buildOpenClawIntegrationMap(opts = {}) {
   const repoRoot = opts.repoRoot || process.cwd();
-  const upstreamSkillsRoot = opts.upstreamSkillsRoot || path.join(repoRoot, '.agents', 'openclaw-upstream', 'skills');
+  const upstreamRepoRoot = opts.upstreamRepoRoot || null;
+  const upstreamSkillsRoot = opts.upstreamSkillsRoot || (upstreamRepoRoot
+    ? path.join(upstreamRepoRoot, '.agents', 'skills')
+    : path.join(repoRoot, '.agents', 'openclaw-upstream', 'skills'));
+  const upstreamPublicSkillsRoot = opts.upstreamPublicSkillsRoot || (upstreamRepoRoot
+    ? path.join(upstreamRepoRoot, 'skills')
+    : null);
   const siraSkillsRoot = opts.siraSkillsRoot || path.join(repoRoot, '.agents', 'skills');
   const upstreamSkills = loadInstructionSkills(upstreamSkillsRoot);
+  const upstreamPublicSkills = upstreamPublicSkillsRoot ? loadInstructionSkills(upstreamPublicSkillsRoot) : [];
   const siraSkills = loadInstructionSkills(siraSkillsRoot);
   const siraIds = new Set(siraSkills.map((skill) => skill.id));
 
@@ -141,18 +220,21 @@ function buildOpenClawIntegrationMap(opts = {}) {
   return {
     source: {
       repository: 'https://github.com/openclaw/openclaw',
-      commit: opts.upstreamCommit || DEFAULT_SNAPSHOT_SHA,
+      commit: opts.upstreamCommit || detectGitCommit(upstreamRepoRoot) || DEFAULT_SNAPSHOT_SHA,
       license: 'MIT',
-      snapshot: '.agents/openclaw-upstream',
+      snapshot: upstreamRepoRoot ? 'external-reference-only' : '.agents/openclaw-upstream',
+      audit_root: upstreamRepoRoot || null,
     },
     counts: {
       upstreamSkills: upstreamSkills.length,
+      upstreamPublicSkills: upstreamPublicSkills.length,
       siraSkills: siraSkills.length,
       foldersMapped: FOLDER_CAPABILITY_MAP.length,
       coverage: coverageCounts,
     },
-    folders: [...FOLDER_CAPABILITY_MAP],
+    folders: scanFolderAudit(upstreamRepoRoot),
     skills: skillCoverage,
+    public_skills: summarizePublicSkillCatalog(upstreamPublicSkills),
   };
 }
 

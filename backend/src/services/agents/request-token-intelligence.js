@@ -8,7 +8,7 @@
  * + negation + delivery constraints.
  */
 
-const VERSION = "token-intelligence-2026-04";
+const VERSION = "token-intelligence-2026-05";
 
 const PIPELINE_BY_INTENT = Object.freeze({
   visual_artifact: "VisualArtifactPipeline",
@@ -106,10 +106,11 @@ const LEXICON = Object.freeze({
   video: ["video", "clip", "animacion", "veo3", "veo 3", "sora", "mp4"],
   math: ["integral", "derivada", "ecuacion", "cronbach", "anova", "regresion", "probabilidad", "matriz", "varianza", "fisica", "quimica"],
   action: ["gmail", "correo", "email", "calendario", "calendar", "reserva", "reservar", "whatsapp", "telegram", "agenda"],
+  goalCommand: ["goal", "modo goal", "goal mode"],
   fileContext: ["adjunto", "adjuntos", "subido", "cargado", "uploaded", "attached", "archivo", "documento", "este", "esta", "del", "de la", "segun"],
   negation: ["no", "sin", "nunca", "jamas", "excepto"],
   strict: ["100%", "reales", "verifica", "validar", "validado", "no inventes", "sin inventar", "doi", "preciso", "precisa"],
-  longRunning: ["30 minutos", "60 minutos", "2 horas", "dos horas", "una hora", "sin parar", "sin detenerse", "autonomo", "autonoma", "autocorrige", "ejecuta pruebas"],
+  longRunning: ["30 minutos", "60 minutos", "2 horas", "dos horas", "una hora", "sin parar", "sin detenerse", "autonomo", "autonoma", "autocorrige", "ejecuta pruebas", "goal", "modo goal", "goal mode"],
 });
 
 function analyzeRequestTokens({ rawUserRequest = "", fileIds = [], conversationHistory = [] } = {}) {
@@ -312,7 +313,8 @@ function buildContext({ tokens, terms, evidence, fileIds, conversationHistory, r
     has_visual_work: evidence.visual.present,
     has_math_work: evidence.math.present,
     has_external_action: evidence.action.present,
-    has_long_running_signal: evidence.longRunning.present,
+    has_goal_command: evidence.goalCommand.present,
+    has_long_running_signal: evidence.longRunning.present || evidence.goalCommand.present,
     asks_existing_document_question: asksExistingDocumentQuestion,
     token_density: tokens.length > 0 ? Number(((Object.values(evidence).filter(e => e.present).length) / tokens.length).toFixed(3)) : 0,
     primary_format: requestedFormats[0]?.extension || null,
@@ -337,7 +339,7 @@ function scoreIntents({ evidence, context, requestedFormats, excludedFormats }) 
     document_understanding: 0.06 + (context.asks_existing_document_question ? 0.54 : 0) + weight(evidence.understand, 0.1),
     image_generation: 0.06 + weight(evidence.image, 0.23) + (context.has_generation_action ? 0.12 : 0),
     image_editing: 0.04 + (evidence.image.present && termsHaveAny(evidence, ["edita", "modifica", "retoca"]) ? 0.4 : 0),
-    external_action: 0.05 + weight(evidence.action, 0.24),
+    external_action: 0.05 + weight(evidence.action, 0.24) + (context.has_goal_command ? 0.5 : 0),
     direct_answer: 0.25,
   };
 

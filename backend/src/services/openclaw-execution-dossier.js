@@ -164,6 +164,15 @@ function buildWorkPackets(mode, prompt, profile = {}) {
     },
   ];
 
+  if (profile.signals?.externalRepoAdaptation || profile.signals?.nativeRewriteRequired) {
+    packets.splice(2, 0, {
+      id: 'native_adaptation',
+      label: 'Map external capabilities into SiraGPT-native implementation',
+      required: true,
+      doneWhen: 'external repo ideas are rewritten behind SiraGPT contracts, with no active runtime import of upstream code',
+    });
+  }
+
   if (profile.signals?.wantsRepair || mode === 'repair_agent') {
     packets.splice(1, 0, {
       id: 'repair',
@@ -200,6 +209,9 @@ function buildQualityGates(mode, profile = {}) {
     'uncertain_claims_are_marked',
     'no_fake_tool_or_filesystem_claims',
   ];
+  if (profile.signals?.externalRepoAdaptation || profile.signals?.nativeRewriteRequired) {
+    gates.push('external_repo_mapped', 'native_rewrite_no_verbatim_copy', 'active_runtime_import_boundary_checked');
+  }
   if (profile.signals?.referencesVisualContext) gates.push('attachment_or_visual_evidence_checked');
   if (profile.signals?.wantsRepair) gates.push('previous_mismatch_corrected');
   if (mode === 'software_agent') gates.push('repo_inspected', 'tests_or_typecheck_attempted', 'changed_files_summarized');
@@ -236,6 +248,12 @@ function buildRiskControls(profile = {}) {
     controls.push({
       risk: 'repeat_misunderstanding',
       mitigation: 'compare against the prior request and regenerate from the corrected interpretation',
+    });
+  }
+  if (profile.signals?.externalRepoAdaptation || profile.signals?.nativeRewriteRequired) {
+    controls.push({
+      risk: 'upstream_code_contamination',
+      mitigation: 'use upstream as reference-only input and implement equivalent behavior through SiraGPT-owned contracts and tests',
     });
   }
   return controls;

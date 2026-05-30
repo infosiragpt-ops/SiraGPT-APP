@@ -243,6 +243,8 @@ const normalizePrompt = (prompt: string) =>
     .replace(/\s+/g, ' ')
     .trim()
 
+const GOAL_COMMAND_RE = /(?:^|\s)\/goal\b|\b(?:modo\s+goal|goal\s+mode)\b/i
+
 const EXISTING_DOCUMENT_REFERENCE_RE =
   /\b(?:del|de la|de el|en el|sobre el|este|esta|ese|esa|mi|el|la)\s+(?:word|documento|archivo|adjunto|docx?|pdf|excel|xlsx|power\s*point|powerpoint|pptx?)\b|\b(?:word|documento|archivo|adjunto|docx?|pdf|excel|xlsx|pptx?)\s+(?:adjunto|subido|cargado|anterior)\b/i
 
@@ -365,7 +367,7 @@ const ROUTING_PATTERNS = {
   codeWork: /\b(codigo|code|programa|script|web|website|landing|sitio|frontend|backend|software|app|aplicacion|aplicaci[oó]n|runtime|debug|bug|corrige(r)?|arregla(r)?|fix|prueba(s)?|test(s)?|autocorrige(r)?|auto corrige(r)?|revisando y corrigiendo)\b/i,
   implementationWork: /\b(implementa(r|me)?|mejora(r|s)?|optimiza(r)?|integra(r)?|aplica(r)?|añade|agrega(r)?|refactoriza(r)?|revisa(r)?|audita(r)?|haz(?:lo)?|build|ship|patch)\b/i,
   repoOperation: /\b(?:github\.com\/[\w.-]+\/[\w.-]+|git\s+clone|clona(?:r|me)?|clone(?:ar)?|fork|pull\s+request|pr\b|commit|push|sube(?:r)?\s+(?:a\s+)?(?:github|main)|repositorio|repo|checkout|branch|rama|main|ci\s+(?:verde|green)|actions?)\b/i,
-  longRunningAgent: /\b(2 horas|dos horas|30 minutos|60 minutos|una hora|sin detenerse|sin parar|persistente|background|mientras salgo|aunque cierre|auto.?corrige|autonom(o|a)|verifica(r)?|self.?check|self.?supervision)\b/i,
+  longRunningAgent: /\b(2 horas|dos horas|30 minutos|60 minutos|una hora|sin detenerse|sin parar|persistente|background|mientras salgo|aunque cierre|auto.?corrige|autonom(o|a)|verifica(r)?|self.?check|self.?supervision|modo\s+goal|goal\s+mode)\b|(?:^|\s)\/goal\b/i,
   architecturePlan: /\b(plano|planos|blueprint|floor[- ]?plan|planta (arquitect|baj|alt)|plano arquitectonico|dxf)\b|\b(casa|vivienda|departamento|oficina)\b.*\b(plano|planta|arquitectonico|distribucion|habitaciones|dormitorios|banos)\b/i,
   artifact: /\b(calculadora (interactiva|de|para|con)|simulador|quiz|cuestionario|widget|componente interactivo|artifact|artefacto|editor (apa|en tiempo real|de citas?)|dashboard (interactivo|con inputs|que (calcul|actualiz|responda))|herramienta (interactiva|para calcular)|interfaz interactiva|visualizador (interactivo|que recalcul)|mapa interactivo|animacion(?:es)?(?: en)? 3d|three\.?js|threejs|modelo 3d|visor 3d|evaluador de ensayos|grader|rubrica interactiva)\b/i,
   math: /\b(integral|integrar|derivada|derivar|d\/dx|ecuacion|cronbach|alpha de cronbach|autovalor|eigenval|matriz (inversa|transpuesta|determinante)|regresion|chi[- ]?cuadrado|anova|t[- ]?test|p[- ]?valor|probabilidad (de|binomial|normal|poisson)|varianza|desviacion estandar|media aritmetica|desviacion tipica|limite cuando|serie de fourier|transformada de laplace|sistema de ecuaciones|factorizar|simplifica (la )?expresion|despejar|funcion (derivada|continua|inversa)|examen de (matematicas|fisica|quimica|estadistica)|problemas de (matematicas|fisica|quimica|estadistica))\b/i,
@@ -418,6 +420,7 @@ const addIntentNode = (
 const signalIntentFromText = (text: string): ChatIntent | null => {
   const normalized = normalizePrompt(text)
   if (!normalized) return null
+  if (GOAL_COMMAND_RE.test(text)) return 'agent_task'
 
   const asksForUrlReference = ROUTING_PATTERNS.urlReference.test(normalized)
   const asksForExternalResearch = ROUTING_PATTERNS.externalResearch.test(normalized)
@@ -656,6 +659,7 @@ export function isLightweightConversationalPrompt(prompt: string): boolean {
 
 export function shouldRouteTextPromptThroughAgenticRuntime(prompt: string, files: any[] = []): boolean {
   const normalized = normalizePrompt(prompt)
+  if (GOAL_COMMAND_RE.test(prompt)) return true
   if (files.length > 0) {
     const fileList = Array.isArray(files) ? files : []
     const hasDocumentForSynthesis = fileList.some((file) =>
@@ -692,6 +696,7 @@ export function shouldRouteTextPromptThroughAgenticRuntime(prompt: string, files
 export function shouldUseFastTextRoute(prompt: string): boolean {
   const normalized = normalizePrompt(prompt)
   if (!normalized) return true
+  if (GOAL_COMMAND_RE.test(prompt)) return false
   if (isLightweightConversationalPrompt(normalized)) return true
 
   const hasExplicitWorkIntent = [
@@ -784,6 +789,8 @@ export function isAmbiguousPrompt(prompt: string): boolean {
 
 export function classifyIntentFastPath(prompt: string): ChatIntent | null {
   const lc = normalizePrompt(prompt)
+
+  if (GOAL_COMMAND_RE.test(prompt)) return 'agent_task'
 
   // Ambiguous comes first — under-specified prompts route to the
   // clarifying-question contract rather than being guessed at as 'text'.

@@ -1,6 +1,6 @@
 ---
 name: openclaw-import-audit
-description: Audit, copy, attribute, and adapt MIT-licensed OpenClaw agent skills into SiraGPT without leaking OpenClaw-specific infrastructure into active runtime workflows.
+description: Audit, attribute, and adapt MIT-licensed OpenClaw ideas into SiraGPT as reference-only material without leaking OpenClaw-specific infrastructure into active runtime workflows.
 version: 0.1.0
 metadata:
   source: https://github.com/openclaw/openclaw
@@ -10,13 +10,14 @@ metadata:
 
 # OpenClaw Import Audit
 
-Use this when importing OpenClaw ideas, playbooks, or code into SiraGPT.
+Use this when importing OpenClaw ideas, playbooks, or code references into SiraGPT.
 
 ## Contract
 
 - Verify `./.agents/openclaw-upstream/LICENSE` exists before using copied upstream material.
-- Keep verbatim upstream copies under `./.agents/openclaw-upstream`; do not activate them directly.
+- Keep any verbatim upstream material reference-only under `./.agents/openclaw-upstream`; do not activate it directly.
 - Rewrite active SiraGPT instructions under `./.agents/skills` with SiraGPT paths, scripts, endpoints, and CI gates.
+- For user requests that say "no copies" or "reescribe", inspect upstream outside the active runtime and implement equivalent behavior through SiraGPT-owned services/tests instead of copying code.
 - Preserve UI-lock constraints unless the user explicitly requests interface changes.
 - Do not copy OpenClaw credentials, hostnames, private maintainer assumptions, Discord/Slack IDs, or release-only operations into SiraGPT.
 - Record the upstream commit SHA when adding or refreshing a snapshot.
@@ -33,7 +34,7 @@ Use this when importing OpenClaw ideas, playbooks, or code into SiraGPT.
    git -C /tmp/openclaw-reference fetch --depth=1 origin main
    git -C /tmp/openclaw-reference reset --hard origin/main
    ```
-3. Copy only into the inactive snapshot namespace:
+3. When an audit snapshot is required, place it only in the inactive snapshot namespace:
    ```bash
    mkdir -p .agents/openclaw-upstream
    cp -R /tmp/openclaw-reference/.agents/skills .agents/openclaw-upstream/skills

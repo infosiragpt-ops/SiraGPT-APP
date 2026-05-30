@@ -40,6 +40,19 @@ test('buildExecutionDossier selects coding and verification tools for software t
   assert.ok(result.qualityGates.includes('tests_or_typecheck_attempted'));
 });
 
+test('native repo adaptation adds no-copy work packets and gates', () => {
+  const profile = kernel.buildCapabilityProfile({
+    prompt: 'Integra OpenClaw sin copiar su codigo, reescribe todo en SiraGPT',
+    toolNames: ['memory_recall', 'host_bash', 'host_file', 'run_tests'],
+  });
+
+  const packet = profile.executionDossier.workPackets.find((item) => item.id === 'native_adaptation');
+  assert.ok(packet);
+  assert.match(packet.doneWhen, /no active runtime import/);
+  assert.ok(profile.executionDossier.qualityGates.includes('native_rewrite_no_verbatim_copy'));
+  assert.ok(profile.executionDossier.riskControls.some((control) => control.risk === 'upstream_code_contamination'));
+});
+
 test('visual repair turns get attachment and repair gates', () => {
   const profile = kernel.buildCapabilityProfile({
     prompt: 'No entiende, regenera la respuesta de esta imagen',

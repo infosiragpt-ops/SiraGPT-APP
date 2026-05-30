@@ -23,6 +23,7 @@ const TOOL_ALIASES = {
   test_runner: 'python_exec',
   github_actions_monitor: 'bash_exec',
   license_audit: 'bash_exec',
+  upstream_reference_audit: 'bash_exec',
   skill_snapshot: 'bash_exec',
   skill_manifest_map: 'python_exec',
   folder_capability_map: 'python_exec',

@@ -15,13 +15,14 @@ const OPENCLAW_NATIVE_ACCESS_TTL_SECONDS = Number(process.env.OPENCLAW_NATIVE_AC
 const nativeGatewayTokenCache = new Map<string, { token: string; exp: number }>()
 
 type RouteContext = {
-  params: {
+  params: Promise<{
     path?: string[]
-  }
+  }>
 }
 
 async function proxyOpenClawNative(request: NextRequest, context: RouteContext) {
-  let pathParts = context.params.path || []
+  const params = await context.params
+  let pathParts = params.path || []
   const pathAccessToken = pathParts[0] === "__access" && pathParts[1] ? decodeURIComponent(pathParts[1]) : null
   if (pathAccessToken) {
     pathParts = pathParts.slice(2)

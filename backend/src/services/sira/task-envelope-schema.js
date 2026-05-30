@@ -69,6 +69,18 @@ const TASK_ENVELOPE_SCHEMA = Object.freeze({
         recent_turn_count: { type: "integer", minimum: 0 },
         coreference: { type: "object" },
         lexicon_terms: { type: "array", items: { type: "object" } },
+        context_memory: {
+          type: "object",
+          required: ["source", "semantic", "project", "project_context", "counts", "confidence"],
+          properties: {
+            source: { type: "string" },
+            semantic: { type: "array", items: { type: "object" } },
+            project: { type: "array", items: { type: "object" } },
+            project_context: { type: ["object", "null"] },
+            counts: { type: "object" },
+            confidence: { type: "number", minimum: 0, maximum: 1 },
+          },
+        },
         repair: { type: "object" },
         misunderstanding_signals: { type: "array", items: { type: "string" } },
         goal_understanding: { type: "object" },

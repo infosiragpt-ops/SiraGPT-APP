@@ -168,7 +168,9 @@ function applyNegationGuards(signals, normalizedText) {
 
 function buildDomainSignals(rawUserRequest, tokenAnalysis = null) {
   const n = normalizeText(rawUserRequest);
+  const goalCommand = Boolean(tokenAnalysis?.context?.has_goal_command) || /(?:^|\s)\/goal\b|\b(?:modo\s+goal|goal\s+mode)\b/i.test(n);
   const signals = {
+    goalCommand,
     gmail: matchAny(n, [
       /\b(gmail|e-?mail|correo|correos|redacta(?:r)? un correo|envia(?:r)? un correo|lee(?:r)? mis correos)\b/i,
     ]),
@@ -205,8 +207,8 @@ function buildDomainSignals(rawUserRequest, tokenAnalysis = null) {
     video: matchAny(n, [
       /\b(video|clip|animacion|veo3|veo 3|sora)\b/i,
     ]),
-    longRunning: Boolean(tokenAnalysis?.context?.has_long_running_signal) || matchAny(n, [
-      /\b(30 minutos|60 minutos|2 horas|dos horas|una hora|sin detenerse|sin parar|autonomo|autonoma|auto corrige|autocorrige|verifica y corrige|ejecuta pruebas)\b/i,
+    longRunning: goalCommand || Boolean(tokenAnalysis?.context?.has_long_running_signal) || matchAny(n, [
+      /\b(30 minutos|60 minutos|2 horas|dos horas|una hora|sin detenerse|sin parar|autonomo|autonoma|auto corrige|autocorrige|verifica y corrige|ejecuta pruebas|modo\s+goal|goal\s+mode)\b|(?:^|\s)\/goal\b/i,
     ]),
     dataWork: Boolean(tokenAnalysis?.context?.has_data_work) || matchAny(n, [
       /\b(analiza datos|procesa datos|limpia datos|dataset|base de datos|tabla|formula|formulas|csv|registros|filas|dashboard|cronbach|spearman)\b/i,
@@ -331,7 +333,7 @@ function buildProductOsDecisionFromContract(contract, signals, fileIds = []) {
   });
 
   const primary = productIntentForContract(contract, signals, rawDecision.intent_primary);
-  const secondary = productSecondaryIntents(contract, rawDecision);
+  const secondary = productSecondaryIntents(contract, rawDecision, primary);
   const requiredAgents = productIntentRouter.AGENT_BUNDLE_BY_INTENT[primary] || rawDecision.required_agents || ['intent-compiler'];
   const requiredTools = productToolsForContract(contract, primary, rawDecision, signals);
 
@@ -352,7 +354,117 @@ function buildProductOsDecisionFromContract(contract, signals, fileIds = []) {
   };
 }
 
+function hasExplicitResearchKeywords(raw) {
+  const n = normalizeText(raw);
+  return matchAny(n, [
+    /\b(literatura|papers?|articulos?|artículos?|estudios?|evidencia|estado del arte|fuentes?|referencias?|citas?|bibliografia|bibliografía|doi|scopus|pubmed|openalex|crossref|semantic scholar)\b/i,
+    /\b(busca|buscar|investiga|investigar|encuentra)\b/i,
+  ]);
+}
+
+function isExplicitResearchQuestion(raw, contract = null) {
+  return hasExplicitResearchKeywords(raw)
+    || Boolean(contract?.source_requirements?.required && contract?.pipeline === 'ResearchGroundingPipeline');
+}
+
+function isExplanatoryDirectAnswerRequest(raw) {
+  const n = normalizeText(raw);
+  return matchAny(n, [
+    /\b(expl[ií]came|explica|que es|qu[eé] es|como funciona|c[oó]mo funciona|como calcular|c[oó]mo calcular|diferencia entre|pasos para|traduce|traducir|translate|tl;?dr|resumen breve|plan que incluya|propuesta de arquitectura|estrategia de migracion|estrategia de migración)\b/i,
+    /\b(que hace|qu[eé] hace)\s+(este|esta|el|la)\s+(codigo|c[oó]digo|sql|query|script|funcion|funci[oó]n)\b/i,
+    /\b(este|esta|mi)\s+(codigo|c[oó]digo|test|prueba|query|sql)\b.*\b(tira|falla|flaky|error|typeerror|undefined|pasa el)\b/i,
+  ]);
+}
+
+function isExistingUploadedContentAnswer(raw) {
+  const n = normalizeText(raw);
+  const mentionsExisting = /\b(adjunto|subi|subí|subido|cargado|uploaded|attached|paper que subi|paper que subí)\b/i.test(n);
+  const asksAnswer = /\b(tl;?dr|resumen|resume|resumir|dame|explica|analiza|lee|extrae|que dice|qu[eé] dice)\b/i.test(n);
+  const asksOutputFile = /\b(prepara|preparame|prepárame|genera|haz|hazme|crea|exporta)\b.*\b(word|docx|pdf|excel|xlsx|pptx|powerpoint|archivo|documento)\b/i.test(n);
+  return mentionsExisting && asksAnswer && !asksOutputFile;
+}
+
+function isComputationalMathRequest(raw) {
+  const n = normalizeText(raw);
+  return matchAny(n, [
+    /\b(resuelve|resolver|calcula|calcular|halla|hallar|deriva|derivar|integra|integrar|simplifica|simplificar|factoriza|factorizar)\b/i,
+    /\b(sistema\s+(?:de\s+)?ecuaciones|sistema\s+\d|matriz\s+(?:inversa|determinante)|p\s*valor|chi\s*cuadrado|anova|regresi[oó]n|estadistica descriptiva|estadística descriptiva|media|mediana|desviaci[oó]n)\b/i,
+    /\b\d+\s*[xy]\s*[+\-*/=]/i,
+  ]);
+}
+
+function isCodeDeliverableRequest(raw) {
+  const n = normalizeText(raw);
+  if (isExplanatoryDirectAnswerRequest(raw)) return false;
+  return matchAny(n, [
+    /\b(escribe|crea|crear|implementa|genera|haz|construye|programa)\b.*\b(query\s+sql|dockerfile|script|funcion|funci[oó]n|endpoint|api|componente|clase|test|microservicio)\b/i,
+    /\b(query\s+sql|dockerfile|microservicio|endpoint|api|componente|script|funcion|funci[oó]n)\b.*\b(node|go|gin|gorm|jwt|postgres|typescript|javascript|python|react|tests?|testify)\b/i,
+  ]);
+}
+
+function isWebAppDeliverableRequest(raw) {
+  const n = normalizeText(raw);
+  return matchAny(n, [
+    /\b(app web|web app|sitio web|pagina web|p[aá]gina web|landing|e-?commerce|tienda online|saas|dashboard web)\b/i,
+    /\b(next\.?js|tailwindcss?|clerk|carrito|checkout|pasarela de pago|panel admin)\b/i,
+    /\b(dashboard|panel)\b.*\b(react|recharts|filtros|frontend)\b/i,
+    /\b(react|recharts)\b.*\b(dashboard|panel|filtros)\b/i,
+  ]);
+}
+
+function isDocumentDeliverableRequest(raw) {
+  const n = normalizeText(raw);
+  if (isExplanatoryDirectAnswerRequest(raw)) return false;
+  return matchAny(n, [
+    /\b(prepara|redacta|escribe|haz|hazme|genera|crea|elabora)\b.*\b(informe|ensayo|contrato|manual|documentacion|documentación|plan de marketing|tesis|monografia|monografía|reporte)\b/i,
+    /\b(tesis universitaria|plan de marketing|manual de usuario|documentacion tecnica|documentación técnica|contrato de prestacion|contrato de prestación)\b/i,
+  ]);
+}
+
+function isSpreadsheetDeliverableRequest(raw) {
+  const n = normalizeText(raw);
+  return matchAny(n, [
+    /\b(modelo financiero|proyeccion financiera|proyección financiera|flujo de caja|presupuesto|forecast financiero|asunciones de churn|churn\s+\d|ventas y gastos)\b/i,
+  ]);
+}
+
+function isImageDeliverableRequest(raw) {
+  const n = normalizeText(raw);
+  return matchAny(n, [
+    /\b(crea|crear|genera|haz|dise[nñ]a|disena)\b.*\b(imagen|foto|ilustracion|ilustración|logo|render|wallpaper)\b/i,
+    /\blogo\b.*\b(minimalista|marca|branding|cafeteria|cafetería|empresa)\b/i,
+  ]);
+}
+
+function isVisualizationDeliverableRequest(raw) {
+  const n = normalizeText(raw);
+  return matchAny(n, [
+    /\b(organigrama|mapa mental|matriz swot|foda|diagrama|grafico|gráfico|grafica|gráfica|chart|plot|dashboard|mermaid|uml|sankey|gantt|heatmap|mapa de calor)\b/i,
+  ]);
+}
+
+function isVideoLongRunningTask(raw) {
+  const n = normalizeText(raw);
+  return /\b(video|clip|animacion|animación)\b/i.test(n)
+    && /\b(30|60|treinta|sesenta|segundos|minutos?)\b/i.test(n);
+}
+
 function productIntentForContract(contract, signals, fallback) {
+  const raw = contract?.raw_user_request || '';
+  if (contract?.pipeline === 'MultiIntentPipeline') return 'agent_long_running_task';
+  if (contract?.required_extension === '.docx' || contract?.required_extension === '.pdf') return 'complex_academic_document_generation';
+  if (contract?.required_extension === '.xlsx' || contract?.required_extension === '.csv') return 'spreadsheet_generation';
+  if (contract?.required_extension === '.pptx') return 'presentation_generation';
+  if (isExistingUploadedContentAnswer(raw)) return 'text_answer';
+  if (isVideoLongRunningTask(raw)) return 'agent_long_running_task';
+  if (isExplanatoryDirectAnswerRequest(raw) && !hasExplicitResearchKeywords(raw)) return 'text_answer';
+  if (isWebAppDeliverableRequest(raw)) return 'web_app_build';
+  if (isCodeDeliverableRequest(raw)) return 'code_generation';
+  if (isDocumentDeliverableRequest(raw)) return 'complex_academic_document_generation';
+  if (isSpreadsheetDeliverableRequest(raw)) return 'spreadsheet_generation';
+  if (isImageDeliverableRequest(raw)) return 'image_generation';
+  if (isVisualizationDeliverableRequest(raw)) return 'viz_generation';
+
   switch (contract?.pipeline) {
     case 'DocumentPipeline':
       return 'complex_academic_document_generation';
@@ -375,20 +487,54 @@ function productIntentForContract(contract, signals, fallback) {
     case 'MultiIntentPipeline':
       return 'agent_long_running_task';
     case 'DirectAnswerPipeline':
-      if (signals?.math) return 'math_solving';
-      if (signals?.viz) return 'viz_generation';
+      if (fallback === 'small_talk') return 'text_answer';
+      if (
+        ['research_question', 'code_generation', 'database_query', 'math_solving'].includes(fallback)
+        && isExplanatoryDirectAnswerRequest(raw)
+      ) {
+        return 'text_answer';
+      }
+      if (isExplicitResearchQuestion(raw, contract)) return 'research_question';
+      if (isComputationalMathRequest(raw)) return 'math_solving';
+      if (signals?.viz && isVisualizationDeliverableRequest(raw)) return 'viz_generation';
       return fallback || 'text_answer';
     default:
       return fallback || 'text_answer';
   }
 }
 
-function productSecondaryIntents(contract, rawDecision) {
+function productSecondaryIntents(contract, rawDecision, primary = null) {
   const raw = contract?.raw_user_request || '';
+  const normalized = normalizeText(raw);
   const items = [
     ...(rawDecision.intent_secondary || []),
     ...(contract?.secondary_intents || []),
   ];
+  if (primary !== 'research_question' && contract?.source_requirements?.required) items.push('research_question');
+  if (
+    primary !== 'complex_academic_document_generation'
+    && (contract?.required_extension === '.docx' || contract?.required_extension === '.pdf' || /\b(word|docx|pdf)\b/i.test(raw))
+  ) {
+    items.push('complex_academic_document_generation');
+  }
+  if (
+    primary !== 'presentation_generation'
+    && (contract?.required_extension === '.pptx' || /\b(pptx?|powerpoint|presentaci[oó]n|diapositivas|slides)\b/i.test(raw))
+  ) {
+    items.push('presentation_generation');
+  }
+  if (
+    primary !== 'viz_generation'
+    && /\b(grafico|gráfico|grafica|gráfica|visualizaci[oó]n|chart|plot|dashboard|png|recharts|tendencias|market share)\b/i.test(raw)
+  ) {
+    items.push('viz_generation');
+  }
+  if (
+    primary !== 'math_solving'
+    && /\b(estadisticas|estadísticas|estadistica descriptiva|estadística descriptiva|media|mediana|desviaci[oó]n|sistema\s+\d|calcula|resuelve)\b/i.test(normalized)
+  ) {
+    items.push('math_solving');
+  }
   if (contract?.source_requirements?.required) items.push('scientific_research', 'multi_provider_search', 'citation_grounding');
   if (contract?.source_requirements?.doi_required || /\bdoi\b/i.test(raw)) items.push('doi_validation');
   if (contract?.citations_required) items.push('apa7_citation');
@@ -442,6 +588,9 @@ function productToolsForContract(contract, primary, rawDecision, signals = {}) {
   }
   if (signals?.repoOperation) {
     tools.push('git.clone', 'repo.inspect', 'code-review.analyze', 'test.run', 'github.actions.monitor');
+  }
+  if (signals?.goalCommand) {
+    tools.push('task.plan', 'task.checkpoint', 'self.verify');
   }
   return [...new Set(tools)].filter((tool) => !forbidden.has(tool));
 }
@@ -547,6 +696,11 @@ function semanticTools(contract, structuredIntent, fileIds = []) {
     tools.add('code-review.analyze');
     tools.add('test.run');
     tools.add('github.actions.monitor');
+  }
+  if (/(?:^|\s)\/goal\b|\b(?:modo\s+goal|goal\s+mode)\b/i.test(raw)) {
+    tools.add('task.plan');
+    tools.add('task.checkpoint');
+    tools.add('self.verify');
   }
   for (const toolName of forbidden) tools.delete(toolName);
   if ((contract?.user_constraints || []).includes('text_only:user_requested')) {
@@ -686,8 +840,10 @@ function buildSemanticIntentAnalysis({
   });
   const runtimeProfile = buildEnterpriseRuntimeProfile(contract, graph);
   const signals = buildDomainSignals(prompt, tokenIntelligence);
-  const documentUnderstandingOverride = shouldAnswerFromExistingDocument(prompt)
-    || Boolean(tokenIntelligence.context?.asks_existing_document_question);
+  const documentUnderstandingOverride = !signals.goalCommand && (
+    shouldAnswerFromExistingDocument(prompt)
+    || Boolean(tokenIntelligence.context?.asks_existing_document_question)
+  );
   const intent = documentUnderstandingOverride ? 'text' : mapContractToChatIntent(contract, signals);
   const finalOutput = documentUnderstandingOverride ? 'chat_answer' : finalOutputForContract(contract, intent);
   const productOsDecision = buildProductOsDecisionFromContract(contract, signals, fileIds);

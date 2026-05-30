@@ -37,6 +37,21 @@ const REPAIR_PATTERNS = [
   /\b(wrong|misunderstood|regenerate|retry|fix|not what i meant)\b/i,
 ];
 
+const EXTERNAL_REPO_PATTERNS = [
+  /\b(openclaw|github\.com\/openclaw\/openclaw|upstream|external repo|repo externo|repositorio externo|otro repositorio|del otro software|ese repositorio|este repositorio)\b/i,
+  /\b(github\.com\/[\w.-]+\/[\w.-]+)\b.{0,80}\b(integra|integrar|refactoriza|reescribe|reescribir|adapta|adaptar)\b/i,
+  /\b(integra|integrar|refactoriza|reescribe|reescribir|adapta|adaptar)\b.{0,80}\b(github\.com\/[\w.-]+\/[\w.-]+|upstream|external repo|repo externo|repositorio externo|otro repositorio)\b/i,
+];
+
+const NO_COPY_PATTERNS = [
+  /\b(no\s+cop(?:ies|iar|ie|iarlo)|sin\s+copiar)\b.{0,60}\b(c[oó]digo|repo|repositorio|openclaw|upstream)\b/i,
+  /\b(c[oó]digo|repo|repositorio|openclaw|upstream)\b.{0,60}\b(no\s+cop(?:ies|iar|ie|iarlo)|sin\s+copiar)\b/i,
+];
+
+const NATIVE_REWRITE_PATTERNS = [
+  /\b(reescrib(?:e|ir|as|irlo|elo|elo todo)|rewrite(?:\s+not\s+copy)?|refactoriza|implementa(?:r)?\s+(?:nuestro|propio)|c[oó]digo\s+propio)\b/i,
+];
+
 function normalizeTools(tools) {
   if (!Array.isArray(tools)) return DEFAULT_TOOL_NAMES.slice();
   const names = tools
@@ -52,14 +67,21 @@ function classifyRequest(text, opts = {}) {
   const wantsRepair = REPAIR_PATTERNS.some((rx) => rx.test(prompt));
   const referencesVisualContext = hasAttachments || IMAGE_PATTERNS.some((rx) => rx.test(prompt));
   const highRisk = HIGH_RISK_PATTERNS.some((rx) => rx.test(prompt));
-  const likelyLongRunning = /\b(repo|github|deploy|desplieg|commit|push|pr|proyecto|tesis|app|web|investiga|paper|reporte|ppt|excel|word|pdf)\b/i.test(prompt);
+  const externalRepoAdaptation = EXTERNAL_REPO_PATTERNS.some((rx) => rx.test(prompt));
+  const nativeRewriteRequired = NO_COPY_PATTERNS.some((rx) => rx.test(prompt))
+    || (externalRepoAdaptation && NATIVE_REWRITE_PATTERNS.some((rx) => rx.test(prompt)));
+  const likelyLongRunning = externalRepoAdaptation
+    || nativeRewriteRequired
+    || /\b(repo|github|deploy|desplieg|commit|push|pr|proyecto|tesis|app|web|investiga|paper|reporte|ppt|excel|word|pdf)\b/i.test(prompt);
 
   return {
     wantsRepair,
     referencesVisualContext,
+    externalRepoAdaptation,
+    nativeRewriteRequired,
     highRisk,
     likelyLongRunning,
-    shouldPreferAgentic: !referencesVisualContext && (wantsRepair || likelyLongRunning),
+    shouldPreferAgentic: !referencesVisualContext && (wantsRepair || likelyLongRunning || externalRepoAdaptation || nativeRewriteRequired),
     trustBoundary: hasAttachments ? 'mixed_user_and_attachment_context' : 'user_chat_context',
   };
 }
@@ -91,6 +113,8 @@ function buildCapabilityProfile({
       referencesVisualContext: classification.referencesVisualContext,
       highRisk: classification.highRisk,
       likelyLongRunning: classification.likelyLongRunning,
+      externalRepoAdaptation: classification.externalRepoAdaptation,
+      nativeRewriteRequired: classification.nativeRewriteRequired,
       recentTurnCount: Number(recentTurnCount || 0),
       attachmentCount: Number(attachmentCount || 0),
       memoryFactCount: Array.isArray(memoryFacts) ? memoryFacts.length : 0,
@@ -104,6 +128,7 @@ function buildCapabilityProfile({
       selfRepair: true,
       taskPlanning: true,
       safeExternalActions: true,
+      nativeRepoAdaptation: classification.externalRepoAdaptation || classification.nativeRewriteRequired,
     },
     tools,
     routing: {
@@ -129,6 +154,15 @@ function buildOpenClawPromptBlock(profile) {
   if (!profile || typeof profile !== 'object') return '';
   const toolList = normalizeTools(profile.tools).slice(0, 24).join(', ');
   const signals = profile.signals || {};
+  const nativeAdaptationBlock = signals.externalRepoAdaptation || signals.nativeRewriteRequired
+    ? [
+      '',
+      '### Native Adaptation Contract',
+      '- Treat external repositories as reference material only. Extract capability intent, risks, workflows, and verification patterns; do not copy active code or foreign folder structure into SiraGPT runtime.',
+      '- Rewrite behavior inside SiraGPT-native modules, services, skills, scripts, and tests. Keep upstream snapshots inactive and attributed when they are needed for audit.',
+      '- Before finishing, prove the adaptation with an integration map, focused tests, and a no-verbatim-runtime-import boundary check.',
+    ].join('\n')
+    : '';
 
   return [
     '## OpenClaw-Level Runtime Policy',
@@ -151,9 +185,10 @@ function buildOpenClawPromptBlock(profile) {
     '- If the user says the previous answer was wrong, treat it as a repair turn: identify the mismatch, reuse the original request and attachments, produce a corrected answer, and preserve a tiny regeneration count if the UI provides one.',
     '- Ask at most one clarifying question only when the missing information blocks execution; otherwise make the safest professional assumption and continue.',
     '- High-risk external actions such as sending, posting, deleting, paying, deploying, or irreversible changes require explicit confirmation.',
+    nativeAdaptationBlock,
     '',
     '### Runtime Signals',
-    `- wantsRepair=${Boolean(signals.wantsRepair)} referencesVisualContext=${Boolean(signals.referencesVisualContext)} highRisk=${Boolean(signals.highRisk)} likelyLongRunning=${Boolean(signals.likelyLongRunning)}`,
+    `- wantsRepair=${Boolean(signals.wantsRepair)} referencesVisualContext=${Boolean(signals.referencesVisualContext)} externalRepoAdaptation=${Boolean(signals.externalRepoAdaptation)} nativeRewriteRequired=${Boolean(signals.nativeRewriteRequired)} highRisk=${Boolean(signals.highRisk)} likelyLongRunning=${Boolean(signals.likelyLongRunning)}`,
     `- recentTurnCount=${signals.recentTurnCount || 0} attachmentCount=${signals.attachmentCount || 0} memoryFactCount=${signals.memoryFactCount || 0}`,
     '',
     executionDossier.buildDossierPromptBlock(profile.executionDossier),

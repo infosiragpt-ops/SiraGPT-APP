@@ -210,6 +210,20 @@ describe("semantic intent router · structured profile", () => {
     assert.ok(ship.semantic_profile.required_tools.includes("github.actions.monitor"))
   })
 
+  it("treats explicit /goal as durable autonomous work with checkpoints", () => {
+    const analysis = semanticRouter.buildSemanticIntentAnalysis({
+      rawUserRequest: "/goal analiza el documento, planifica, ejecuta, verifica y continúa hasta terminar",
+    })
+
+    assert.equal(analysis.intent, "agent_task")
+    assert.notEqual(analysis.contract.pipeline, "DirectAnswerPipeline")
+    assert.equal(analysis.routing.domain_signals.goalCommand, true)
+    assert.equal(analysis.request_intelligence.context.has_goal_command, true)
+    assert.ok(analysis.semantic_profile.required_tools.includes("task.plan"))
+    assert.ok(analysis.semantic_profile.required_tools.includes("task.checkpoint"))
+    assert.ok(analysis.semantic_profile.required_tools.includes("self.verify"))
+  })
+
   it("exposes deterministic token evidence for the routing layer", () => {
     const analysis = tokenIntelligence.analyzeRequestTokens({
       rawUserRequest: "crea una landing page con React y ejecuta pruebas",

@@ -603,6 +603,19 @@ function detectRequestedOutputFormats(raw) {
   return formats;
 }
 
+function inferImplicitDeliverableExtension(n) {
+  if (/\b(modelo financiero|proyeccion financiera|proyección financiera|flujo de caja|presupuesto|forecast financiero|asunciones de churn|churn\s+\d|ventas y gastos)\b/.test(n)) {
+    return '.xlsx';
+  }
+  if (/\b(documentacion tecnica completa|documentación técnica completa|openapi|api rest)\b/.test(n) && /\b(prepara|preparame|prepárame|genera|haz|crea|documentacion|documentación)\b/.test(n)) {
+    return '.pdf';
+  }
+  if (/\b(tesis universitaria|tesis|monografia|monografía|ensayo academico|ensayo académico|manual de usuario|contrato de prestacion|contrato de prestación|plan de marketing)\b/.test(n)) {
+    return '.docx';
+  }
+  return null;
+}
+
 function inferExplicitExtension(raw, tokenAnalysis = null) {
   if (hasTextOnlyDirective(raw) || tokenAnalysis?.context?.has_text_only_directive) return null;
   if (Array.isArray(tokenAnalysis?.requested_formats) && tokenAnalysis.requested_formats.length > 0) {
@@ -626,6 +639,11 @@ function inferExplicitExtension(raw, tokenAnalysis = null) {
     /\b(analiza|analizar|resume|resumen|resumir|lee|leer|extrae|extraer|segun|según|corrige|corregir|explica|explicar)\b/.test(n);
   if (looksLikeInputFileReference && asksToUnderstandInput && !asksToGenerateArtifact) {
     return null;
+  }
+
+  const implicitDeliverableExtension = inferImplicitDeliverableExtension(n);
+  if (implicitDeliverableExtension && !excludedExtensions.has(implicitDeliverableExtension)) {
+    return implicitDeliverableExtension;
   }
 
   for (const [keyword, [ext]] of Object.entries(CODE_EXTENSIONS)) {

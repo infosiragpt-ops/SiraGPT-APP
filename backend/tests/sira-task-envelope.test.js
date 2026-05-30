@@ -9,7 +9,7 @@ const assert = require("node:assert/strict");
 
 const { TASK_ENVELOPE_SCHEMA, SCHEMA_VERSION, validateEnvelope } = require("../src/services/sira/task-envelope-schema");
 const taxonomy = require("../src/services/sira/intent-taxonomy");
-const { buildEnvelope, SIRA_EXECUTION_LAW } = require("../src/services/sira/task-envelope-builder");
+const { buildEnvelope, SIRA_EXECUTION_LAW, compactContextualUnderstanding } = require("../src/services/sira/task-envelope-builder");
 const frames = require("../src/services/sira/frames");
 const engine = require("../src/services/sira/engine");
 
@@ -208,6 +208,46 @@ describe("task-envelope-builder", () => {
     expect(r.envelope.entities.requested_formats.includes("docx")).toBe(true);
   });
 
+  test("contextual memory is preserved in the envelope and compact router context", async () => {
+    const r = await buildEnvelope({
+      text: "## USER_CONTEXT_MEMORY\n- semantic_memory (score 0.90): El usuario prefiere respuestas ejecutivas.\n- project_instructions: Validar fuentes.\n\nSOLICITUD_USUARIO:\ncontinua con el estilo del proyecto",
+      originalText: "continua con el estilo del proyecto",
+      contextualUnderstanding: {
+        applied: true,
+        original_text: "continua con el estilo del proyecto",
+        effective_text: "continua con el estilo del proyecto",
+        recent_turn_count: 3,
+        coreference: { source: "not_run", latency_ms: 0, references: [] },
+        lexicon_terms: [],
+        context_memory: {
+          source: "deterministic_context_memory",
+          semantic: [{ text: "El usuario prefiere respuestas ejecutivas.", score: 0.9, importance: 0.8 }],
+          project: [{ text: "Proyecto: validar fuentes.", score: 0.85 }],
+          project_context: {
+            project_id: "p-memory",
+            member_role: "editor",
+            capabilities: ["docs:read"],
+            instructions: "Validar fuentes.",
+            docs: [{ id: "doc-1", title: "Guía editorial" }],
+            recent_conversations: [],
+          },
+          counts: { semantic: 1, project: 1, project_docs: 1, recent_conversations: 0 },
+          confidence: 0.9,
+        },
+        repair: { is_repair: false, repair_type: null, contract_override: null },
+        misunderstanding_signals: [],
+      },
+    });
+
+    const compact = compactContextualUnderstanding(r.envelope.contextual_understanding);
+    expect(r.validation.ok).toBe(true);
+    expect(r.envelope.contextual_understanding.context_memory.counts.semantic).toBe(1);
+    expect(r.envelope.contextual_understanding.context_memory.counts.project).toBe(1);
+    expect(r.envelope.contextual_understanding.context_memory.project_context.member_role).toBe("editor");
+    expect(compact.semantic_memory_count).toBe(1);
+    expect(compact.project_context_docs).toBe(1);
+  });
+
   test("contextual value frame adds alignment criteria without changing output contract", async () => {
     const r = await buildEnvelope({
       text: "## CONTEXTUAL_VALUE_FRAME\n- collaboration_mode: autonomous_execution\n- constraint: preserve_interface (hard) - Preserve the existing interface\n\nSOLICITUD_USUARIO:\nimplementa mejoras internas",
@@ -245,6 +285,42 @@ describe("task-envelope-builder", () => {
     expect(r.envelope.goal_model.non_goals.includes("No alterar la interfaz ni los contratos visuales existentes.")).toBe(true);
     expect(validatorNames.includes("contextual_alignment_validator")).toBe(true);
     expect(r.envelope.output_contract.primary_output.required).toBe(true);
+  });
+
+  test("native rewrite constraint becomes a no-copy runtime non-goal", async () => {
+    const r = await buildEnvelope({
+      text: "## CONTEXTUAL_VALUE_FRAME\n- collaboration_mode: autonomous_execution\n- constraint: native_rewrite_only (hard) - Rewrite external ideas as SiraGPT-native implementation\n\nSOLICITUD_USUARIO:\nreescribe OpenClaw sin copiar su codigo e integralo",
+      originalText: "reescribe OpenClaw sin copiar su codigo e integralo",
+      contextualUnderstanding: {
+        applied: true,
+        original_text: "reescribe OpenClaw sin copiar su codigo e integralo",
+        effective_text: "reescribe OpenClaw sin copiar su codigo e integralo",
+        recent_turn_count: 1,
+        coreference: { source: "not_run", latency_ms: 0, references: [] },
+        lexicon_terms: [],
+        repair: { is_repair: false, repair_type: null, contract_override: null },
+        misunderstanding_signals: [],
+        value_context: {
+          source: "deterministic_contextual_value_mapper",
+          values: [
+            { id: "native_integration_integrity", domain: "practical", label: "Native integration integrity", evidence: "external repo adaptation", confidence: 0.9 },
+          ],
+          primary_domains: ["practical"],
+          constraints: [
+            { id: "native_rewrite_only", label: "Rewrite external ideas as SiraGPT-native implementation", evidence: "sin copiar codigo", priority: "hard" },
+          ],
+          collaboration_mode: "autonomous_execution",
+          response_posture: "support_with_guardrails",
+          response_type: "strong_support",
+          confidence: 0.9,
+        },
+      },
+    });
+
+    expect(r.validation.ok).toBe(true);
+    expect(r.envelope.goal_model.success_criteria.some(c => c.includes("Rewrite external ideas"))).toBe(true);
+    expect(r.envelope.goal_model.non_goals.some(c => c.includes("No copiar codigo externo"))).toBe(true);
+    expect(r.envelope.quality_plan.validators.some(v => v.name === "contextual_alignment_validator")).toBe(true);
   });
 
   test("goal understanding becomes the envelope goal and proactive success criteria", async () => {
