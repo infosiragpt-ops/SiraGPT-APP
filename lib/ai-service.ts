@@ -263,6 +263,21 @@ const DOCUMENT_MIME_RE =
 
 const SPREADSHEET_MIME_RE = /(?:spreadsheet|excel|csv|ms-excel|sheet)/i
 
+const MEDIA_CREATE_ACTION_RE_FRAGMENT =
+  '(?:cr(?:ea|eame|ear)|gener(?:a|ame|ar|ate)|haz(?:me|melo|lo|la)?|dame|quiero|necesito|produce(?:me)?|compon(?:e|me|er)|prepara(?:me)?|convierte(?:lo)?|narra(?:me)?|lee(?:me)?|make|create|generate|compose|produce|turn|read)'
+
+const MUSIC_OBJECT_RE_FRAGMENT =
+  '(?:cancion(?:es)?|musica|music|melodi(?:a|as)|instrumental(?:es)?|soundtracks?|banda sonora|jingles?|tema musical|temas musicales|beats?|songs?|tune)'
+
+const VOICE_OBJECT_RE_FRAGMENT =
+  '(?:audios?|voz|voces|narracion(?:es)?|narra|locucion(?:es)?|podcasts?|voiceover|voice over|audiolibros?|dictado|tts|speech|doblaje|voz en off)'
+
+const createMediaGenerationPattern = (objectPattern: string) =>
+  new RegExp(
+    `\\b${MEDIA_CREATE_ACTION_RE_FRAGMENT}\\b[^.?!]{0,120}\\b${objectPattern}\\b|\\b${objectPattern}\\b[^.?!]{0,120}\\b${MEDIA_CREATE_ACTION_RE_FRAGMENT}\\b`,
+    'i'
+  )
+
 const parseFilesFromMessage = (message: any): any[] => {
   const rawFiles = message?.files
   if (!rawFiles) return []
@@ -346,6 +361,8 @@ const ROUTING_PATTERNS = {
   viz: /\b(graficos?|graficas?|plot|plotear|histogram(a|as)?|pareto|ishikawa|fishbone|espina de pescado|box[- ]?plot|diagrama de caja|scatter|dispersion|s[- ]?curve|curva s|earned value|gantt|sankey|treemap|mapa de arbol|heatmap|mapa de calor|flujo de (datos|procesos?)|diagrama (de )?(flujo|er|entidad[- ]relacion|clases?|secuencia|estados?|uml|jerarquia|jornada|journey)|dashboard (de|para|con)|visuali(c|z)a(r|cion)?|torta|pastel|barras apiladas?|mermaid|d3|plotly|recharts|chart\.?js)\b/i,
   image: /\b(imagen|image|photo|foto|picture|drawing|dibujo|logo|ilustracion|render)\b/i,
   video: /\b(video|clip|animacion|movie|veo 3|veo3|sora)\b/i,
+  musicGeneration: createMediaGenerationPattern(MUSIC_OBJECT_RE_FRAGMENT),
+  voiceGeneration: createMediaGenerationPattern(VOICE_OBJECT_RE_FRAGMENT),
   webdev: /\b(website|webpage|pagina web|sitio web|landing page|portfolio|html|css|javascript|react|next\.?js|frontend|web app|tienda online|ecommerce|e-commerce)\b/i,
   webdevBuildAction: /\b(crea(r|me)?|build|make|design|disena(r|me)?|diseña(r|me)?|desarrolla(r)?|programa(r)?|genera(r)?|haz|construye|implementa(r)?|maqueta(r)?)\b/i,
   figma: /\b(figma|wireframe|user flow|design system|diagrama de producto|prototipo navegable)\b/i,
@@ -412,6 +429,7 @@ const signalIntentFromText = (text: string): ChatIntent | null => {
   if (ROUTING_PATTERNS.doc.test(normalized)) return 'doc'
   if (ROUTING_PATTERNS.viz.test(normalized)) return 'viz'
   if (ROUTING_PATTERNS.video.test(normalized)) return 'video'
+  if (ROUTING_PATTERNS.musicGeneration.test(normalized) || ROUTING_PATTERNS.voiceGeneration.test(normalized)) return 'agent_task'
   if (ROUTING_PATTERNS.image.test(normalized)) return 'image'
   if (ROUTING_PATTERNS.figma.test(normalized)) return 'figma'
   if (ROUTING_PATTERNS.webdev.test(normalized) && ROUTING_PATTERNS.webdevBuildAction.test(normalized)) return 'webdev'
@@ -597,6 +615,8 @@ export function isLightweightConversationalPrompt(prompt: string): boolean {
       ROUTING_PATTERNS.math,
       ROUTING_PATTERNS.artifact,
       ROUTING_PATTERNS.webdev,
+      ROUTING_PATTERNS.musicGeneration,
+      ROUTING_PATTERNS.voiceGeneration,
     ].some((pattern) => pattern.test(normalized))
     return !hasWorkIntent
   }
@@ -634,6 +654,8 @@ export function shouldRouteTextPromptThroughAgenticRuntime(prompt: string, files
     ROUTING_PATTERNS.implementationWork,
     ROUTING_PATTERNS.repoOperation,
     ROUTING_PATTERNS.longRunningAgent,
+    ROUTING_PATTERNS.musicGeneration,
+    ROUTING_PATTERNS.voiceGeneration,
   ].some((pattern) => pattern.test(normalized))
 }
 
@@ -661,6 +683,8 @@ export function shouldUseFastTextRoute(prompt: string): boolean {
     ROUTING_PATTERNS.viz,
     ROUTING_PATTERNS.image,
     ROUTING_PATTERNS.video,
+    ROUTING_PATTERNS.musicGeneration,
+    ROUTING_PATTERNS.voiceGeneration,
     ROUTING_PATTERNS.webdev,
     ROUTING_PATTERNS.figma,
   ].some((pattern) => pattern.test(normalized))
@@ -768,6 +792,7 @@ export function classifyIntentFastPath(prompt: string): ChatIntent | null {
   if (ROUTING_PATTERNS.doc.test(lc)) return 'doc'
   if (ROUTING_PATTERNS.viz.test(lc)) return 'viz'
   if (ROUTING_PATTERNS.video.test(lc)) return 'video'
+  if (ROUTING_PATTERNS.musicGeneration.test(lc) || ROUTING_PATTERNS.voiceGeneration.test(lc)) return 'agent_task'
   if (ROUTING_PATTERNS.image.test(lc)) return 'image'
   if (ROUTING_PATTERNS.figma.test(lc)) return 'figma'
   if (ROUTING_PATTERNS.webdev.test(lc) && ROUTING_PATTERNS.webdevBuildAction.test(lc)) return 'webdev'

@@ -724,14 +724,14 @@ router.post('/generate', [
       prompt,
       aspect_ratio = '16:9',
       resolution = '720p',
-      duration: requestedDuration = 5,
+      duration: requestedDuration = 8,
       audio = true,
       negative_prompt,
       image_url,
       model = 'veo-fast' // Default model
     } = req.body;
 
-    const numericDuration = Math.min(Math.max(Number(requestedDuration) || 5, 4), 15);
+    const numericDuration = Math.min(Math.max(Number(requestedDuration) || 8, 4), 15);
     const duration = `${numericDuration}s`;
 
     console.log('Video generation request received:', {

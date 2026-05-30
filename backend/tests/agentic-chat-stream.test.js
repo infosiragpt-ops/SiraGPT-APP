@@ -288,6 +288,9 @@ test('runAgenticChat auto-selects generate_video first for "crea un video"', asy
   });
 
   assert.deepEqual(firstCreateArgs.tool_choice, { type: 'function', function: { name: 'generate_video' } });
+  const system = firstCreateArgs.messages.find(m => m.role === 'system')?.content || '';
+  assert.match(system, /veo-fast/);
+  assert.match(system, /duration: 8/);
   assert.equal(videoCalls, 1);
   assert.equal(result.stoppedReason, 'finalized');
   assert.equal(result.finalAnswer, 'Video iniciado.');

@@ -48,6 +48,9 @@ test('detects the minimal Spanish video command from the chat bar', () => {
   assert.equal(r.tool, 'generate_video');
   assert.equal(r.confidence, 'high');
   assert.equal(r.hasCreateVerb, true);
+  assert.equal(r.specs.durationSeconds, 8);
+  assert.equal(r.specs.aspectRatio, '16:9');
+  assert.equal(r.specs.model, 'veo-fast');
 });
 
 test('keeps video learning or ideation prompts low-confidence', () => {
@@ -133,6 +136,14 @@ test('buildMediaIntentHint produces a directive naming the tool + specs', () => 
   assert.match(hint, /180/);
   assert.match(hint, /lofi/);
   assert.match(hint, /Activación automática/);
+});
+
+test('video hint forces Veo Fast with the 8 second default', () => {
+  const hint = buildMediaIntentHint(detectMediaIntent('quiero un video de un perro'));
+  assert.match(hint, /generate_video/);
+  assert.match(hint, /veo-fast/);
+  assert.match(hint, /duration: 8/);
+  assert.match(hint, /aspectRatio: "16:9"/);
 });
 
 test('buildMediaIntentHint returns empty string when there is no media intent', () => {

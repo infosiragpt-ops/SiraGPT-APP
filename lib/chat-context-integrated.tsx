@@ -2286,7 +2286,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     const activeChat = chat || currentChat; // Use provided chat or fallback to currentChat
     if (!activeChat || !user) return;
     const aspectRatio = options?.aspectRatio || '16:9';
-    const duration = options?.duration || 5;
+    const duration = options?.duration || 8;
     const resolution = options?.resolution || '720p';
     const audio = options?.audio ?? true;
     const model = options?.model || selectedModel;

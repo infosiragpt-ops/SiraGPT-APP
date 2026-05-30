@@ -278,6 +278,25 @@ describe("ai-service · deterministic intent routing", () => {
     assert.equal(intent, "doc")
   })
 
+  it("auto-routes text-chat media creation prompts to the right generation path", async () => {
+    assert.equal(classifyIntentFastPath("quiero una video de un perro"), "video")
+    assert.equal(await aiService.classifyIntent("quiero una video de un perro"), "video")
+
+    const musicPrompt = "genérame una canción de 10 segundos estilo lofi"
+    assert.equal(classifyIntentFastPath(musicPrompt), "agent_task")
+    assert.equal(await aiService.classifyIntent(musicPrompt), "agent_task")
+    assert.equal(shouldRouteTextPromptThroughAgenticRuntime("crea una canción lofi"), true)
+
+    const voicePrompt = "crea un audio narrando este texto con voz femenina"
+    assert.equal(classifyIntentFastPath(voicePrompt), "agent_task")
+    assert.equal(await aiService.classifyIntent(voicePrompt), "agent_task")
+  })
+
+  it("keeps non-creation music questions on the normal text path", async () => {
+    assert.equal(classifyIntentFastPath("qué música me recomiendas?"), null)
+    assert.equal(await aiService.classifyIntent("qué música me recomiendas?"), "text")
+  })
+
   it("keeps plain explanations on the fast conversational route", async () => {
     const intent = await aiService.analyzeIntent("explícame cómo funciona React")
     assert.equal(intent, "text")

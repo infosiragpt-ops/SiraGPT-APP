@@ -5966,7 +5966,7 @@ router.post(
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const { prompt, chatId, aspect_ratio = '16:9', resolution = '720p', duration = 5, audio = true, negative_prompt, files, image_url, model = 'veo-fast' // Default model
+      const { prompt, chatId, aspect_ratio = '16:9', resolution = '720p', duration = 8, audio = true, negative_prompt, files, image_url, model = 'veo-fast' // Default model
       } = req.body;
       const userId = req.user.id;
 

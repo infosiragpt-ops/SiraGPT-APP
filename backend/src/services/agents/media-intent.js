@@ -174,6 +174,9 @@ function resolveImageAspectRatio(text) {
 
 const ORIENTATION_TO_IMAGE = { vertical: 'portrait', horizontal: 'wide', square: 'square', standard: 'square' };
 const ORIENTATION_TO_VIDEO = { vertical: '9:16', horizontal: '16:9', square: '1:1', standard: '4:3' };
+const DEFAULT_VIDEO_DURATION_SECONDS = 8;
+const DEFAULT_VIDEO_ASPECT_RATIO = '16:9';
+const DEFAULT_VIDEO_MODEL = 'veo-fast';
 
 /** Count of images requested ("5 imágenes", "tres fotos"). 1..10 or null. */
 function detectImageCount(normText) {
@@ -273,8 +276,9 @@ function detectMediaIntent(text) {
     if (count && count > 1) specs.count = count;
     if (style) specs.style = style;
   } else if (kind === 'video') {
-    if (durationSeconds) specs.durationSeconds = durationSeconds;
-    if (orientation) specs.aspectRatio = ORIENTATION_TO_VIDEO[orientation] || '16:9';
+    specs.durationSeconds = durationSeconds || DEFAULT_VIDEO_DURATION_SECONDS;
+    specs.aspectRatio = orientation ? (ORIENTATION_TO_VIDEO[orientation] || DEFAULT_VIDEO_ASPECT_RATIO) : DEFAULT_VIDEO_ASPECT_RATIO;
+    specs.model = DEFAULT_VIDEO_MODEL;
     if (style) specs.style = style;
   } else if (kind === 'audio') {
     if (durationSeconds) specs.durationSeconds = durationSeconds;
@@ -332,8 +336,9 @@ function buildMediaIntentHint(intent) {
     if (s.style) params.push(`- style: "${s.style}"`);
     if (s.count) params.push(`- el usuario pidió ${s.count} imágenes: llama \`generate_image\` ${s.count} veces (una por imagen).`);
   } else if (intent.kind === 'video') {
-    if (s.durationSeconds) params.push(`- duration: ${s.durationSeconds} (segundos; ajústalo al rango válido de la herramienta).`);
-    if (s.aspectRatio) params.push(`- aspectRatio: "${s.aspectRatio}"`);
+    params.push(`- model: "${s.model || DEFAULT_VIDEO_MODEL}" (Veo Fast).`);
+    params.push(`- duration: ${s.durationSeconds || DEFAULT_VIDEO_DURATION_SECONDS} (segundos; por defecto Veo Fast 8s, ajústalo al rango válido de la herramienta solo si el usuario pidió otra duración).`);
+    params.push(`- aspectRatio: "${s.aspectRatio || DEFAULT_VIDEO_ASPECT_RATIO}"`);
     if (s.style) params.push(`- style: "${s.style}"`);
   } else if (intent.kind === 'audio') {
     params.push('- text: el texto que el usuario quiere escuchar (extráelo del mensaje; si pidió "narra esto" usa el texto provisto o genéralo a partir del tema).');
@@ -364,6 +369,9 @@ module.exports = {
     detectImageCount,
     detectStyle,
     detectHighQuality,
+    DEFAULT_VIDEO_DURATION_SECONDS,
+    DEFAULT_VIDEO_ASPECT_RATIO,
+    DEFAULT_VIDEO_MODEL,
     resolveImageAspectRatio,
     KIND_TO_TOOL,
   },

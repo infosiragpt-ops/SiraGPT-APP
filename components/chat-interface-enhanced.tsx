@@ -375,6 +375,7 @@ const MUSIC_EFFECT_OPTIONS: MusicEffect[] = ["None", "Studio Master", "Spatial",
 const DEFAULT_IMAGE_MODEL = "bytedance-seed/seedream-4.5"
 const DEFAULT_IMAGE_PROVIDER = "OpenAI"
 const DEFAULT_VIDEO_MODEL = "veo-fast"
+const DEFAULT_VIDEO_DURATION: VideoDuration = 8
 
 const providerForMediaModel = (modelName: string, fallback = DEFAULT_IMAGE_PROVIDER): string => {
   const value = String(modelName || "").toLowerCase()
@@ -2737,7 +2738,7 @@ const ActiveToolsDisplay = ({
                 <section className="border-t border-zinc-950/8 px-2.5 py-2.5 dark:border-white/12">
                   <h3 className="text-[12.5px] font-semibold leading-none tracking-normal text-zinc-950 dark:text-white">Duration</h3>
                   <div className="mt-2 flex flex-wrap items-center gap-1" role="radiogroup" aria-label="Video duration">
-                    {VIDEO_DURATION_OPTIONS.filter(option => showAllVideoDurations || option <= 7).map(option => {
+                    {VIDEO_DURATION_OPTIONS.filter(option => showAllVideoDurations || option <= DEFAULT_VIDEO_DURATION).map(option => {
                       const selected = option === selectedVideoDuration;
                       return (
                         <button
@@ -3881,7 +3882,7 @@ function ChatInterfaceContent() {
   const [selectedMusicEffect, setSelectedMusicEffect] = React.useState<MusicEffect>("Studio Master")
   const [selectedVideoResolution, setSelectedVideoResolution] = React.useState<VideoResolution>("720p")
   const [selectedVideoAspectRatio, setSelectedVideoAspectRatio] = React.useState<VideoAspectRatio>("auto")
-  const [selectedVideoDuration, setSelectedVideoDuration] = React.useState<VideoDuration>(5)
+  const [selectedVideoDuration, setSelectedVideoDuration] = React.useState<VideoDuration>(DEFAULT_VIDEO_DURATION)
   const [selectedVideoAudio, setSelectedVideoAudio] = React.useState(true)
   const [selectedVideoModel, setSelectedVideoModel] = React.useState(DEFAULT_VIDEO_MODEL)
   const imageAbortControllerRef = React.useRef<AbortController | null>(null)
