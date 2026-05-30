@@ -112,6 +112,16 @@ function stripModuleSyntax(code: string): string {
     .replace(/^\s*export\s*\{[^}]*\}\s*;?\s*$/gm, "")
 }
 
+// Last top-level Capitalized declaration — a render fallback when the code
+// defines a component but no `App` / default export (common in snippets).
+function lastComponentName(code: string): string | null {
+  const re = /(?:^|\n)\s*(?:async\s+)?(?:function|const|let|var|class)\s+([A-Z]\w*)/g
+  const names: string[] = []
+  let m: RegExpExecArray | null
+  while ((m = re.exec(code)) !== null) names.push(m[1])
+  return names.length ? names[names.length - 1] : null
+}
+
 function buildReactDocument(files: CodeFiles, entry: string | null): string {
   const jsPaths = Object.keys(files).filter((p) => JS_EXTS.has(ext(p)))
   // Order: dependencies first, entry last, so component consts are defined
@@ -145,11 +155,14 @@ function buildReactDocument(files: CodeFiles, entry: string | null): string {
     .join("\n")
     .replace(/<\/style/gi, "<\\/style")
 
+  const fallbackComp = lastComponentName(bundle)
+
   const footer = `
 const __sgptTarget = (typeof App !== 'undefined' && App)
   || window.__sgpt_default
   || (typeof Page !== 'undefined' && Page)
   || (typeof Main !== 'undefined' && Main)
+  ${fallbackComp ? `|| (typeof ${fallbackComp} !== 'undefined' && ${fallbackComp})` : ""}
   || null;
 try {
   if (!__sgptTarget) throw new Error('No se encontró un componente para renderizar. Define App() o usa export default.');

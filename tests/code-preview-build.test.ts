@@ -77,6 +77,12 @@ describe("buildPreviewDocument", () => {
     assert.match(r.html, /<rect\/>/)
   })
 
+  it("renders the last defined component when there is no App/default", () => {
+    const r = buildPreviewDocument(files({ "Card.tsx": "function Card(){ return <div>card</div> }" }), "Card.tsx")
+    assert.equal(r.kind, "react")
+    assert.match(r.html, /typeof Card !== 'undefined' && Card/)
+  })
+
   it("server-only languages are unsupported", () => {
     const r = buildPreviewDocument(files({ "main.py": "print('hi')" }), "main.py")
     assert.equal(r.kind, "unsupported")
