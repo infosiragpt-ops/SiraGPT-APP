@@ -6,6 +6,8 @@ import {
   buildIntentAttributionGraph,
   buildProfessionalCapabilityPrompt,
   classifyIntentFastPath,
+  extractRequestedVideoDurationSeconds,
+  shouldAutoActivateVideoGeneration,
   shouldRouteThroughAgenticRuntime,
   shouldRouteTextPromptThroughAgenticRuntime,
   shouldUseFastTextRoute,
@@ -316,6 +318,12 @@ describe("ai-service · deterministic intent routing", () => {
   it("auto-routes text-chat media creation prompts to the right generation path", async () => {
     assert.equal(classifyIntentFastPath("quiero una video de un perro"), "video")
     assert.equal(await aiService.classifyIntent("quiero una video de un perro"), "video")
+
+    const normalChatVideoPrompt = "que un perro este volando crea un video de 10 segundos"
+    assert.equal(shouldAutoActivateVideoGeneration(normalChatVideoPrompt), true)
+    assert.equal(extractRequestedVideoDurationSeconds(normalChatVideoPrompt), 10)
+    assert.equal(classifyIntentFastPath("qué video me recomiendas para aprender React?"), null)
+    assert.equal(await aiService.classifyIntent("qué video me recomiendas para aprender React?"), "text")
 
     const musicPrompt = "genérame una canción de 10 segundos estilo lofi"
     assert.equal(classifyIntentFastPath(musicPrompt), "agent_task")

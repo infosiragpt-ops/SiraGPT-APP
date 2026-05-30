@@ -16,6 +16,17 @@ test('backend env loader checks backend and root local env before fallback env f
   assert.doesNotMatch(ENV_CANDIDATES[1], /backend[\\/]\.env\.local$/);
 });
 
+test('env examples document Fal video generation keys for local setup', () => {
+  const rootExample = fs.readFileSync(path.join(__dirname, '..', '..', '.env.example'), 'utf8');
+  const backendExample = fs.readFileSync(path.join(__dirname, '..', '.env.example'), 'utf8');
+
+  for (const source of [rootExample, backendExample]) {
+    assert.match(source, /FAL_API_KEY=/);
+    assert.match(source, /FAL_KEY=/);
+    assert.match(source, /TAL_AI_API_KEY=/);
+  }
+});
+
 test('backend env loader loads keys without overriding existing process env', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'siragpt-env-'));
   const first = path.join(dir, '.env.local');

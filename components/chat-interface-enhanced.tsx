@@ -101,7 +101,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { apiClient } from "@/lib/api"
 import { track } from "@/lib/analytics"
-import { aiService, buildProfessionalCapabilityPrompt, PROFESSIONAL_CAPABILITY_CONTRACTS, shouldRouteTextPromptThroughAgenticRuntime, shouldRouteThroughAgenticRuntime, type ChatIntent } from "@/lib/ai-service"
+import { aiService, buildProfessionalCapabilityPrompt, extractRequestedVideoDurationSeconds, PROFESSIONAL_CAPABILITY_CONTRACTS, shouldAutoActivateVideoGeneration, shouldRouteTextPromptThroughAgenticRuntime, shouldRouteThroughAgenticRuntime, type ChatIntent } from "@/lib/ai-service"
 import { toast } from "sonner"
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
@@ -4681,6 +4681,67 @@ But first, you need to connect your Spotify account securely using the button be
   const [sidePreviewSiblings, setSidePreviewSiblings] = React.useState<AttachmentLike[]>([]);
   const activeSearchActivity = activeSearchActivityId ? searchActivities[activeSearchActivityId] : null;
   const searchActivityPanelOpen = Boolean(activeSearchActivity);
+  const autoVideoActivationRef = React.useRef(false);
+
+  React.useEffect(() => {
+    const wantsVideo = shouldAutoActivateVideoGeneration(input);
+    const hasOtherActiveTool =
+      isWebSearchActive ||
+      isImageGenerationActive ||
+      isVoiceGenerationActive ||
+      isMusicGenerationActive ||
+      isComputerUseActive ||
+      isGmailActive ||
+      isGoogleCalendarActive ||
+      isGoogleDriveActive ||
+      isSpotifyActive ||
+      isWordConnectorActive ||
+      isExcelConnectorActive ||
+      (chatType !== 'text' && chatType !== 'video');
+
+    if (wantsVideo && !hasOtherActiveTool) {
+      if (!isVideoGenerationActive && !autoVideoActivationRef.current) {
+        closeAllToolsAndConnectors();
+        setIsVideoGenerationActive(true);
+        setChatType('video');
+        setSelectedVideoModel(DEFAULT_VIDEO_MODEL);
+        autoVideoActivationRef.current = true;
+      }
+
+      const requestedDuration = extractRequestedVideoDurationSeconds(input);
+      if (requestedDuration && selectedVideoDuration !== requestedDuration) {
+        setSelectedVideoDuration(requestedDuration as VideoDuration);
+      }
+      return;
+    }
+
+    if (!wantsVideo && autoVideoActivationRef.current) {
+      if (isVideoGenerationActive && chatType === 'video') {
+        setIsVideoGenerationActive(false);
+        setChatType('text');
+      }
+      setSelectedVideoDuration(DEFAULT_VIDEO_DURATION);
+      autoVideoActivationRef.current = false;
+    }
+  }, [
+    chatType,
+    closeAllToolsAndConnectors,
+    input,
+    isComputerUseActive,
+    isExcelConnectorActive,
+    isGmailActive,
+    isGoogleCalendarActive,
+    isGoogleDriveActive,
+    isImageGenerationActive,
+    isMusicGenerationActive,
+    isSpotifyActive,
+    isVideoGenerationActive,
+    isVoiceGenerationActive,
+    isWebSearchActive,
+    isWordConnectorActive,
+    selectedVideoDuration,
+    setChatType,
+  ]);
 
   React.useEffect(() => {
     setActiveSearchActivityId(null);
@@ -7100,7 +7161,7 @@ REWRITTEN TEXT:`;
           await handleImageGeneration(buildImageEditPrompt(msg), collectUploadFileIds(filesToSend));
           break;
         case 'video':
-          await handleVideoGeneration(msg);
+          await handleVideoGeneration(msg, collectUploadFileIds(filesToSend));
           break;
         case 'ppt':
           await handleAgentTask(msg, filesToSend);

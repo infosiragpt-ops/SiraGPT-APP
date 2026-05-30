@@ -274,11 +274,29 @@ const MUSIC_OBJECT_RE_FRAGMENT =
 const VOICE_OBJECT_RE_FRAGMENT =
   '(?:audios?|voz|voces|narracion(?:es)?|narra|locucion(?:es)?|podcasts?|voiceover|voice over|audiolibros?|dictado|tts|speech|doblaje|voz en off)'
 
+const VIDEO_OBJECT_RE_FRAGMENT =
+  '(?:videos?|clips?|animaci(?:o|ó)n(?:es)?|movies?|sora|veo\\s*3|veo3|text[- ]?to[- ]?video|image[- ]?to[- ]?video)'
+
 const createMediaGenerationPattern = (objectPattern: string) =>
   new RegExp(
     `\\b${MEDIA_CREATE_ACTION_RE_FRAGMENT}\\b[^.?!]{0,120}\\b${objectPattern}\\b|\\b${objectPattern}\\b[^.?!]{0,120}\\b${MEDIA_CREATE_ACTION_RE_FRAGMENT}\\b`,
     'i'
   )
+
+const DEFAULT_VIDEO_DURATION_SECONDS = Object.freeze([4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15])
+const VIDEO_DURATION_SECONDS_RE =
+  /\b(1[0-5]|[4-9])\s*(?:s|seg(?:undo)?s?|sec(?:ond)?s?)\b/i
+
+export function extractRequestedVideoDurationSeconds(
+  prompt: string,
+  allowedDurations: readonly number[] = DEFAULT_VIDEO_DURATION_SECONDS,
+): number | null {
+  const normalized = normalizePrompt(prompt)
+  const match = normalized.match(VIDEO_DURATION_SECONDS_RE)
+  if (!match) return null
+  const duration = Number(match[1])
+  return allowedDurations.includes(duration) ? duration : null
+}
 
 const parseFilesFromMessage = (message: any): any[] => {
   const rawFiles = message?.files
@@ -381,12 +399,17 @@ const ROUTING_PATTERNS = {
   doc: /\b(?:(?:descargar?|genera(?:r|me)?|crea(?:me|r)?|exporta(?:r|me)?|haz(?:me)?|hazme|envia(?:me)?|elabora(?:me|r)?|redacta(?:me|r)?|prepara(?:me|r)?|arma(?:me)?|construye(?:me)?|necesito|quiero|dame)\s+(?:un[oa]?\s+|el\s+|la\s+|los\s+|las\s+)?(?:nuev[oa]\s+)?(?:documento|archivo|informe|reporte|tesis|monograf[ií]a|ensayo|memoria|presentaci[oó]n|hoja\s+de\s+c[aá]lculo|spreadsheet|ppt|pptx?|docx?|word|excel|powerpoint|power\s*point|pdf|xlsx|svg)|exporta(?:r|me)?\s+(?:a|en|como)\s+(?:pdf|word|excel|docx|xlsx|pptx|powerpoint|svg)|informe\s+(?:apa|word|pdf)|tesis\s+(?:formato|apa|word)|apa\s*7|apa\s+septima|plantilla\s+upn|instrumento\s+(?:bai|phq|gad|whoqol)|whoqol|phq-?9|gad-?7|escala\s+de\s+bai)\b/i,
   viz: /\b(graficos?|graficas?|plot|plotear|histogram(a|as)?|pareto|ishikawa|fishbone|espina de pescado|box[- ]?plot|diagrama de caja|scatter|dispersion|s[- ]?curve|curva s|earned value|gantt|sankey|treemap|mapa de arbol|heatmap|mapa de calor|flujo de (datos|procesos?)|diagrama (de )?(flujo|er|entidad[- ]relacion|clases?|secuencia|estados?|uml|jerarquia|jornada|journey)|dashboard (de|para|con)|visuali(c|z)a(r|cion)?|torta|pastel|barras apiladas?|mermaid|d3|plotly|recharts|chart\.?js)\b/i,
   image: /\b(imagen|image|photo|foto|picture|drawing|dibujo|logo|ilustracion|render)\b/i,
-  video: /\b(video|clip|animacion|movie|veo 3|veo3|sora)\b/i,
+  video: createMediaGenerationPattern(VIDEO_OBJECT_RE_FRAGMENT),
   musicGeneration: createMediaGenerationPattern(MUSIC_OBJECT_RE_FRAGMENT),
   voiceGeneration: createMediaGenerationPattern(VOICE_OBJECT_RE_FRAGMENT),
   webdev: /\b(website|webpage|pagina web|sitio web|landing page|portfolio|html|css|javascript|react|next\.?js|frontend|web app|tienda online|ecommerce|e-commerce)\b/i,
   webdevBuildAction: /\b(crea(r|me)?|build|make|design|disena(r|me)?|diseña(r|me)?|desarrolla(r)?|programa(r)?|genera(r)?|haz|construye|implementa(r)?|maqueta(r)?)\b/i,
   figma: /\b(figma|wireframe|user flow|design system|diagrama de producto|prototipo navegable)\b/i,
+}
+
+export function shouldAutoActivateVideoGeneration(prompt: string): boolean {
+  const normalized = normalizePrompt(prompt)
+  return !!normalized && ROUTING_PATTERNS.video.test(normalized)
 }
 
 const CONTEXT_FOLLOWUP_RE =

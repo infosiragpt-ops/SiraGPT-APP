@@ -9,6 +9,7 @@
 const { spawnSync, spawn } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
+const { loadEnvFiles } = require("../src/config/load-env");
 
 const BACKEND_DIR = path.resolve(__dirname, "..");
 const MIGRATIONS_DIR = path.join(BACKEND_DIR, "prisma", "migrations");
@@ -45,7 +46,7 @@ function runPrisma(args) {
 
 function loadDotenv() {
   try {
-    require("dotenv").config({ path: path.join(BACKEND_DIR, ".env") });
+    loadEnvFiles();
   } catch (err) {
     log("dotenv load skipped", { error: err?.message });
   }
@@ -190,6 +191,7 @@ function baselineExistingSchema() {
 }
 
 async function runMigrations() {
+  loadDotenv();
   if (process.env.SKIP_MIGRATIONS === "1") {
     log("skipping prisma migrate deploy (SKIP_MIGRATIONS=1)");
     return 0;

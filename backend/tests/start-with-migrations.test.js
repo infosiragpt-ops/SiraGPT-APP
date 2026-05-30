@@ -1,4 +1,6 @@
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const test = require("node:test");
 
 const {
@@ -8,6 +10,8 @@ const {
   resolvePrismaDatabaseUrl,
   shouldContinueAfterSafeP3009,
 } = require("../scripts/start-with-migrations");
+
+const wrapperSource = fs.readFileSync(path.join(__dirname, "..", "scripts", "start-with-migrations.js"), "utf8");
 
 test("only explicitly allowlisted migrations are safe to auto-rollback", () => {
   assert.equal(isSafeAutoRollbackMigration("20260527000000_reset_admin_password"), true);
@@ -21,6 +25,11 @@ test("prisma database url takes precedence over generic database url", () => {
     PRISMA_DATABASE_URL: "postgres://prisma.example/db",
     DATABASE_URL: "postgres://generic.example/db",
   }), "postgres://prisma.example/db");
+});
+
+test("boot wrapper loads backend/root .env files before migrations", () => {
+  assert.match(wrapperSource, /require\("\.\.\/src\/config\/load-env"\)/);
+  assert.match(wrapperSource, /function runMigrations\(\) \{[\s\S]{0,160}loadDotenv\(\)/);
 });
 
 test("neon postgres connections are configured with ssl", () => {
