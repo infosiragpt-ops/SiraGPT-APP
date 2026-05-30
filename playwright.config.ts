@@ -38,12 +38,19 @@ export default defineConfig({
     { name: "chromium", use: { ...devices["Desktop Chrome"] } },
   ],
 
-  webServer: {
-    command: `npm run dev -- --port ${port}`,
-    port,
-    reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
-    stdout: "ignore",
-    stderr: "pipe",
-  },
+  // Boot a dev server unless the caller points the suite at an
+  // already-running server via PLAYWRIGHT_BASE_URL. Skipping the managed
+  // server lets CI pre-boot the app (or a developer reuse their existing
+  // :3000 session) and avoids a second `next dev` clobbering the shared
+  // `.next` build cache.
+  webServer: process.env.PLAYWRIGHT_BASE_URL
+    ? undefined
+    : {
+        command: `npm run dev -- --port ${port}`,
+        port,
+        reuseExistingServer: !process.env.CI,
+        timeout: 120_000,
+        stdout: "ignore",
+        stderr: "pipe",
+      },
 })

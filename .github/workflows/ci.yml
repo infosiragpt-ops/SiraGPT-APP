@@ -668,6 +668,82 @@ jobs:
           fi
 
   # ───────────────────────────────────────────────────────────────────
+  # E2E CRITICAL — hard-gated frontend critical-path smoke
+  # ───────────────────────────────────────────────────────────────────
+  # A reliable safety net: a push (including automated ones) cannot silently
+  # ship a chat surface that fails to render or throws on first paint. Scoped
+  # to backend-independent, zero-flake specs and PRE-WARMS the routes so a cold
+  # Next.js compile can't blow the test timeout and flake the gate. Broader /
+  # flakier flows (auth, admin) stay in the informational `e2e` job above until
+  # they're hardened, then graduate here.
+  e2e-critical:
+    name: E2E · critical UI gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      # Cache the downloaded browser so the install is fast and reliable
+      # (the binary CDN is the usual flake source for Playwright in CI).
+      - name: Cache Playwright browsers
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
+      - name: Install Playwright chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Boot, pre-warm, and run critical-path e2e (hard gate)
+        env:
+          PLAYWRIGHT_BASE_URL: http://localhost:3005
+          NEXT_PUBLIC_API_URL: /api
+          CI: '1'
+        run: |
+          npm run dev -- --port 3005 > /tmp/next-e2e.log 2>&1 &
+          SERVER_PID=$!
+          # Wait for the dev server port to bind (next dev binds fast).
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:3005/auth/login >/dev/null 2>&1 && { echo "server up after ~$((i * 2))s"; break; }
+            sleep 2
+          done
+          # Pre-warm heavy routes so the first spec navigation is NOT a cold
+          # compile that would exceed the 30s test timeout and flake the gate.
+          curl -s -o /dev/null --max-time 120 http://localhost:3005/chat || true
+          curl -s -o /dev/null --max-time 30 http://localhost:3005/auth/login || true
+          sleep 3
+          # PLAYWRIGHT_BASE_URL is set, so the config skips its managed server
+          # and runs against this pre-warmed instance.
+          STATUS=0
+          npx playwright test --reporter=list e2e/chat.spec.ts e2e/chat-upload.spec.ts || STATUS=$?
+          kill "$SERVER_PID" 2>/dev/null || true
+          exit $STATUS
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: e2e-critical-report
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # ───────────────────────────────────────────────────────────────────
   # FINAL GATE — one-green-check for branch protection rules
   # ───────────────────────────────────────────────────────────────────
   # Branch protection on `main` can require this single status instead
