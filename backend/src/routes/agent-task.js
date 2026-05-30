@@ -1297,6 +1297,27 @@ router.post(
 
 // ─── helpers ────────────────────────────────────────────────────────────
 
+/**
+ * runAgentJobInProcess — fire-and-forget execution of an agent task in the
+ * current process (no BullMQ worker). Writes events to the same taskId
+ * snapshot that `streamTaskEvents` is polling, so the SSE keeps flowing.
+ * On a throw it writes a terminal `error` event via failTaskTerminal so the
+ * client never hangs. Used by the queue→local handoff watchdog.
+ */
+function runAgentJobInProcess(payload, userId) {
+  Promise.resolve().then(async () => {
+    try {
+      const { runAgentTaskJob } = require('../services/agents/agent-task-runner');
+      await runAgentTaskJob(payload, {
+        id: `local-${payload.taskId}`,
+        updateProgress: async () => {},
+      });
+    } catch (err) {
+      failTaskTerminal(payload.taskId, userId, err?.message || 'agent task failed');
+    }
+  });
+}
+
 async function handleQueuedTaskRequest(req, res) {
   const rawGoal = String(req.body.goal || '');
   try {
@@ -1459,6 +1480,52 @@ async function handleQueuedTaskRequest(req, res) {
   });
   metrics.counter('agent_task_invocations_total', { status: 'queued' });
 
+  // ── Queue → local handoff watchdog ─────────────────────────────────
+  // If the worker hasn't started the job within HANDOFF_MS — Upstash hit
+  // its daily read limit, the worker is down/saturated, or BullMQ is
+  // stalling — the SSE would stream only "queued" until the response
+  // timeout and then close (the client renders that as
+  // `stream_closed_without_done`). Instead we race-safely reclaim the job
+  // and run it in-process so the user still gets a real answer. The happy
+  // path is untouched: a healthy worker flips the status off 'queued'
+  // within ~1s, so the watchdog finds nothing to reclaim. Disable with
+  // AGENT_TASK_QUEUE_HANDOFF=0.
+  if (process.env.AGENT_TASK_QUEUE_HANDOFF !== '0') {
+    const handoffMs = Math.max(3000, Number.parseInt(process.env.AGENT_TASK_QUEUE_HANDOFF_MS || '12000', 10));
+    const handoffTimer = setTimeout(async () => {
+      try {
+        const latest = taskStore.getTaskSnapshotForUser(taskId, req.user?.id);
+        // Only reclaim while the worker still hasn't touched the job.
+        if (!latest || latest.status !== 'queued') return;
+        // Race-safe reclaim: job.remove() throws if the worker already
+        // locked/started it — in which case we leave the queue stream alone.
+        let reclaimed = false;
+        try { await job.remove(); reclaimed = true; } catch { reclaimed = false; }
+        if (!reclaimed) return;
+        console.warn(`[agent-task] queue handoff → local for task ${taskId} (worker idle ${handoffMs}ms)`);
+        try { metrics.counter('agent_task_invocations_total', { status: 'queue_handoff_local' }); } catch (_) {}
+        try {
+          auditLog.audit({
+            event: 'agent_task_queue_handoff_local',
+            taskId,
+            userId: req.user?.id || null,
+            jobId: String(job.id),
+          });
+        } catch (_) {}
+        // Flip status so the SSE poller stops reporting "queued"; the
+        // in-process runner then drives it to completion/error.
+        try {
+          taskStore.markTaskStatus({ ...latest, userId: req.user?.id }, 'running', { streamState: latest.streamState });
+        } catch (_) { /* best-effort */ }
+        runAgentJobInProcess(payload, req.user?.id);
+      } catch (watchErr) {
+        console.warn('[agent-task] queue handoff watchdog error:', watchErr?.message || watchErr);
+      }
+    }, handoffMs);
+    if (typeof handoffTimer.unref === 'function') handoffTimer.unref();
+    req.on('close', () => { try { clearTimeout(handoffTimer); } catch (_) {} });
+  }
+
   return streamTaskEvents(req, res, taskId, req.user?.id);
 }
 
@@ -1594,6 +1661,35 @@ async function handleLocalTaskRequest(req, res, { fallbackReason = 'local_fallba
   return streamTaskEvents(req, res, taskId, req.user?.id);
 }
 
+/**
+ * failTaskTerminal — write a terminal `error` event + mark the snapshot
+ * status 'error' for a task, UNLESS it already reached a terminal state.
+ * The BullMQ worker's `failed` handler calls this so a permanently-failed
+ * job surfaces a real reason to the SSE client immediately, instead of
+ * leaving the stream hanging until the response timeout (which the client
+ * then renders as the opaque `stream_closed_without_done`). Idempotent;
+ * never throws.
+ */
+function failTaskTerminal(taskId, userId, message) {
+  try {
+    if (!taskId) return false;
+    const latest = taskStore.getTaskSnapshotForUser(taskId, userId)
+      || taskStore.getTaskSnapshotForUser(taskId, undefined);
+    if (!latest) return false;
+    if (['completed', 'cancelled', 'error'].includes(latest.status)) return false;
+    const errorEvent = { type: 'error', message: String(message || 'La tarea agéntica falló.') };
+    const state = reduceAgentState(latest.streamState || initialAgentState(), errorEvent);
+    appendTaskEvent({ ...latest, events: latest.events || [] }, errorEvent, state);
+    taskStore.markTaskStatus({ ...latest, userId: latest.userId || userId }, 'error', {
+      streamState: state,
+      stats: { error: errorEvent.message },
+    });
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 function streamTaskEvents(req, res, taskId, userId) {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -1606,12 +1702,20 @@ function streamTaskEvents(req, res, taskId, userId) {
   let lastSeq = 0;
   let pollTimer = null;
   let heartbeatTimer = null;
+  // Whether the client has already received a terminal (`done`/`error`)
+  // frame. The frontend marks the run finished only on such a frame; a
+  // bare socket close with no terminal surfaces as the opaque
+  // `stream_closed_without_done`. We guarantee a terminal on every close
+  // path (timeout, worker stall, abnormal socket error) below.
+  let terminalEmitted = false;
 
   /** Safe SSE write — never throws. */
   const send = (obj) => {
     if (!clientConnected || res.writableEnded || res.destroyed) return false;
     try {
       const serialized = safeJsonStringify(obj);
+      const t = obj && obj.type;
+      if (t === 'done' || t === 'error') terminalEmitted = true;
       return res.write(`data: ${serialized}\n\n`) !== false;
     } catch {
       safeCloseQueuedConnection();
@@ -1619,7 +1723,19 @@ function streamTaskEvents(req, res, taskId, userId) {
     }
   };
 
-  function safeCloseQueuedConnection() {
+  function safeCloseQueuedConnection(reason) {
+    // Guarantee a terminal frame before the socket closes. Without this a
+    // timeout / stalled worker / abnormal close ends the stream with no
+    // done|error event and the UI shows `stream_closed_without_done`.
+    if (!terminalEmitted && clientConnected && !res.writableEnded && !res.destroyed) {
+      terminalEmitted = true;
+      try {
+        res.write(`data: ${safeJsonStringify({
+          type: 'error',
+          message: reason || 'La tarea agéntica se cerró sin completar. Intenta de nuevo.',
+        })}\n\n`);
+      } catch { /* socket already gone */ }
+    }
     clientConnected = false;
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
     if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
@@ -1636,7 +1752,7 @@ function streamTaskEvents(req, res, taskId, userId) {
   // Response timeout (5 min default, configurable via env)
   const TIMEOUT = Math.max(30_000, Number.parseInt(process.env.AGENT_RESPONSE_TIMEOUT_MS || '300000', 10));
   res.setTimeout(TIMEOUT, () => {
-    safeCloseQueuedConnection();
+    safeCloseQueuedConnection('La tarea agéntica no respondió a tiempo (timeout). El runtime puede estar saturado; intenta de nuevo.');
     console.warn('[agent-task] queued SSE response timeout');
   });
 
@@ -2281,6 +2397,7 @@ router.INTERNAL = {
   buildAgentSystemPrompt,
   createTaskRecord,
   extractProfessionalContract,
+  failTaskTerminal,
   formatTaskPayload,
   getTaskForUser,
   inferIconFor,

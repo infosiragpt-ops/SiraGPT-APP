@@ -116,6 +116,24 @@ function startAgentTaskWorker() {
       } else {
         console.warn(`[agent-task-worker] job ${job.id} non-retryable (${classification.reason}), not retrying`);
       }
+      // Permanent failure (non-retryable, or retries exhausted): write a
+      // terminal `error` event to the task store so the streaming client
+      // gets a real reason NOW instead of hanging until the SSE timeout
+      // (which renders as the opaque `stream_closed_without_done`). The
+      // runner persists its own terminal on graceful failures; this is the
+      // safety net for throws that never reached that path. Idempotent —
+      // it no-ops if a terminal was already written.
+      try {
+        const { INTERNAL } = require('../../routes/agent-task');
+        const taskId = job.data && job.data.taskId;
+        const userId = job.data && job.data.user && job.data.user.id;
+        const message = (classification && classification.userMessage)
+          || err.message
+          || 'La tarea agéntica falló de forma permanente.';
+        INTERNAL.failTaskTerminal(taskId, userId, message);
+      } catch (terminalErr) {
+        console.warn('[agent-task-worker] failed to write terminal error event:', terminalErr?.message || terminalErr);
+      }
     }
   });
   // The connection itself already logs transient errors via
