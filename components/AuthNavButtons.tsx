@@ -1,5 +1,6 @@
 "use client"
 
+import { useCallback, useRef, type MouseEvent, type PointerEvent, type TouchEvent } from "react"
 import Link from "next/link"
 
 const GoogleIcon = ({ size = 15 }: { size?: number }) => (
@@ -30,12 +31,91 @@ const GoogleIcon = ({ size = 15 }: { size?: number }) => (
   </svg>
 )
 
-export function LoginButton({ href = "/auth/login" }: { href?: string }) {
+type InstantNavigationEvent =
+  | MouseEvent<HTMLAnchorElement>
+  | PointerEvent<HTMLAnchorElement>
+  | TouchEvent<HTMLAnchorElement>
+
+type InstantNavigationHandler = (href: string) => void
+
+type LoginButtonProps = {
+  href?: string
+  /** @internal Test hook; production uses native browser navigation. */
+  navigate?: InstantNavigationHandler
+}
+
+function navigateWithBrowser(href: string) {
+  if (typeof window === "undefined") return
+  window.location.assign(href)
+}
+
+function hasModifiedActivation(event: InstantNavigationEvent) {
+  return Boolean(event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)
+}
+
+function isNonPrimaryPointer(event: PointerEvent<HTMLAnchorElement>) {
+  if (typeof event.isPrimary === "boolean" && !event.isPrimary) return true
+  if (typeof event.button === "number" && event.button !== 0) return true
+  return false
+}
+
+function isNonPrimaryClick(event: MouseEvent<HTMLAnchorElement>) {
+  if (typeof event.button === "number" && event.button !== 0) return true
+  return false
+}
+
+export function LoginButton({ href = "/auth/login", navigate = navigateWithBrowser }: LoginButtonProps) {
+  const navigationStartedRef = useRef(false)
+
+  const startNavigation = useCallback(
+    (event: InstantNavigationEvent) => {
+      if (hasModifiedActivation(event)) return
+
+      event.preventDefault()
+
+      if (navigationStartedRef.current) return
+      navigationStartedRef.current = true
+      navigate(href)
+    },
+    [href, navigate],
+  )
+
+  const handlePointerDownCapture = useCallback(
+    (event: PointerEvent<HTMLAnchorElement>) => {
+      // Mobile Safari/Chrome can feel unresponsive when route loading waits
+      // for the later synthetic click. Start on the first touch/pen signal.
+      if (event.pointerType === "mouse" || isNonPrimaryPointer(event)) return
+      startNavigation(event)
+    },
+    [startNavigation],
+  )
+
+  const handleTouchStartCapture = useCallback(
+    (event: TouchEvent<HTMLAnchorElement>) => {
+      // Fallback for older iOS WebViews that do not emit PointerEvent.
+      startNavigation(event)
+    },
+    [startNavigation],
+  )
+
+  const handleClick = useCallback(
+    (event: MouseEvent<HTMLAnchorElement>) => {
+      if (isNonPrimaryClick(event)) return
+      startNavigation(event)
+    },
+    [startNavigation],
+  )
+
   return (
     <>
       <Link
         href={href}
-        className="group relative inline-flex items-center justify-center rounded-full p-[1px] overflow-hidden transition-all duration-300 hover:scale-[1.02] active:scale-[0.98]"
+        prefetch={true}
+        onPointerDownCapture={handlePointerDownCapture}
+        onTouchStartCapture={handleTouchStartCapture}
+        onClick={handleClick}
+        data-instant-nav="login"
+        className="group relative inline-flex touch-manipulation select-none items-center justify-center rounded-full p-[1px] overflow-hidden transition-all duration-300 hover:scale-[1.02] active:scale-[0.98]"
       >
         {/* Refined rotating border beam — tri-tone indigo → violet → rose, slow */}
         <span
@@ -73,7 +153,7 @@ export function LoginButton({ href = "/auth/login" }: { href?: string }) {
         </span>
       </Link>
 
-      <style jsx global>{`
+      <style>{`
         @keyframes login-beam {
           to {
             transform: rotate(360deg);
