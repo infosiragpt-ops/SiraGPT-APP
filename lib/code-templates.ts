@@ -113,6 +113,62 @@ export default function App() {
   )
 }`
 
+const REACT_TODO = `import React, { useState } from "react"
+
+export default function App() {
+  const [items, setItems] = useState([{ id: 1, text: "Probar el preview en vivo", done: true }, { id: 2, text: "Pedirle una app al agente", done: false }])
+  const [text, setText] = useState("")
+  const add = () => { const t = text.trim(); if (!t) return; setItems((xs) => [...xs, { id: Date.now(), text: t, done: false }]); setText("") }
+  const toggle = (id) => setItems((xs) => xs.map((x) => x.id === id ? { ...x, done: !x.done } : x))
+  const remaining = items.filter((x) => !x.done).length
+  return (
+    <div className="min-h-screen bg-zinc-50 flex items-start justify-center p-8 font-sans">
+      <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-sm ring-1 ring-zinc-100">
+        <h1 className="text-lg font-semibold">Tareas <span className="text-sm font-normal text-zinc-400">· {remaining} pendientes</span></h1>
+        <div className="mt-4 flex gap-2">
+          <input value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()} placeholder="Nueva tarea…" className="flex-1 rounded-lg border border-zinc-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-200" />
+          <button onClick={add} className="rounded-lg bg-indigo-600 px-4 text-sm font-medium text-white hover:bg-indigo-500">Añadir</button>
+        </div>
+        <ul className="mt-4 space-y-1">
+          {items.map((x) => (
+            <li key={x.id} className="group flex items-center gap-3 rounded-lg px-2 py-2 hover:bg-zinc-50">
+              <input type="checkbox" checked={x.done} onChange={() => toggle(x.id)} className="h-4 w-4 accent-indigo-600" />
+              <span className={x.done ? "flex-1 text-sm text-zinc-400 line-through" : "flex-1 text-sm"}>{x.text}</span>
+              <button onClick={() => setItems((xs) => xs.filter((y) => y.id !== x.id))} className="opacity-0 group-hover:opacity-100 text-zinc-300 hover:text-rose-500">✕</button>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  )
+}`
+
+const REACT_FORM = `import React, { useState } from "react"
+
+export default function App() {
+  const [sent, setSent] = useState(false)
+  const [form, setForm] = useState({ name: "", email: "", message: "" })
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }))
+  return (
+    <div className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center p-8 font-sans">
+      <div className="w-full max-w-md rounded-2xl bg-zinc-900 p-7 ring-1 ring-white/10">
+        <h1 className="text-xl font-semibold">Contacto</h1>
+        <p className="mt-1 text-sm text-zinc-400">Te respondemos en 24h.</p>
+        {sent ? (
+          <div className="mt-6 rounded-lg bg-emerald-500/10 p-4 text-sm text-emerald-300">¡Gracias, {form.name || "crack"}! Mensaje enviado.</div>
+        ) : (
+          <form className="mt-6 space-y-3" onSubmit={(e) => { e.preventDefault(); setSent(true) }}>
+            <input required value={form.name} onChange={set("name")} placeholder="Nombre" className="w-full rounded-lg bg-zinc-800 px-3 py-2.5 text-sm outline-none ring-1 ring-white/10 focus:ring-indigo-400" />
+            <input required type="email" value={form.email} onChange={set("email")} placeholder="Email" className="w-full rounded-lg bg-zinc-800 px-3 py-2.5 text-sm outline-none ring-1 ring-white/10 focus:ring-indigo-400" />
+            <textarea required value={form.message} onChange={set("message")} placeholder="Mensaje" rows={4} className="w-full rounded-lg bg-zinc-800 px-3 py-2.5 text-sm outline-none ring-1 ring-white/10 focus:ring-indigo-400" />
+            <button className="w-full rounded-lg bg-indigo-600 py-2.5 text-sm font-medium hover:bg-indigo-500">Enviar</button>
+          </form>
+        )}
+      </div>
+    </div>
+  )
+}`
+
 export const CODE_TEMPLATES: CodeTemplate[] = [
   {
     id: "landing",
@@ -134,6 +190,20 @@ export const CODE_TEMPLATES: CodeTemplate[] = [
     description: "Panel con KPIs y gráfica (Recharts).",
     entry: "App.tsx",
     files: [{ path: "App.tsx", content: REACT_DASHBOARD }],
+  },
+  {
+    id: "todo",
+    name: "App de tareas (React)",
+    description: "Lista de tareas con estado, añadir y completar.",
+    entry: "App.tsx",
+    files: [{ path: "App.tsx", content: REACT_TODO }],
+  },
+  {
+    id: "form",
+    name: "Formulario de contacto (React)",
+    description: "Form controlado con validación y estado enviado.",
+    entry: "App.tsx",
+    files: [{ path: "App.tsx", content: REACT_FORM }],
   },
 ]
 

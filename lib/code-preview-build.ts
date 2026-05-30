@@ -142,8 +142,17 @@ function buildReactDocument(files: CodeFiles, entry: string | null): string {
       },
     )
 
+  // `import styles from './x.module.css'` → a Proxy returning the key as the
+  // class name, so `styles.title` resolves to "title" (the raw CSS is injected
+  // separately). Keeps CSS-module components from crashing the preview.
+  const inlineCssModuleImports = (code: string): string =>
+    code.replace(
+      /import\s+(\w+)\s+from\s+['"][^'"]+\.css['"]\s*;?/g,
+      (_m, name) => `const ${name} = new Proxy({}, { get: function (_t, k) { return String(k); } });`,
+    )
+
   const bundle = ordered
-    .map((p) => `// ── ${p} ──\n${stripModuleSyntax(inlineJsonImports(files[p].content))}`)
+    .map((p) => `// ── ${p} ──\n${stripModuleSyntax(inlineCssModuleImports(inlineJsonImports(files[p].content)))}`)
     .join("\n\n")
     .replace(/<\/script/gi, "<\\/script")
 

@@ -88,6 +88,19 @@ describe("buildPreviewDocument", () => {
     assert.equal(r.kind, "unsupported")
   })
 
+  it("shims css-module imports so styles.x resolves and injects the css", () => {
+    const r = buildPreviewDocument(
+      files({
+        "App.tsx": "import styles from './App.module.css'\nexport default function App(){ return <div className={styles.title}>hi</div> }",
+        "App.module.css": ".title{color:red}",
+      }),
+      "App.tsx",
+    )
+    assert.equal(r.kind, "react")
+    assert.match(r.html, /const styles = new Proxy/)
+    assert.match(r.html, /\.title\{color:red\}/)
+  })
+
   it("follows the active file: html wins when active even amid react files", () => {
     const r = buildPreviewDocument(
       files({ "App.tsx": "export default function App(){return null}", "page.html": "<body>page</body>" }),
