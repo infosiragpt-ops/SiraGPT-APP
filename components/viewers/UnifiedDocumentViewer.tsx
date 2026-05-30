@@ -1316,6 +1316,13 @@ function PdfRenderer({ a }: { a: AttachmentLike }) {
   const [numPages, setNumPages] = React.useState<number>(0)
   const [scale, setScale] = React.useState<number>(1)
   const [containerWidth, setContainerWidth] = React.useState<number>(800)
+  const [containerHeight, setContainerHeight] = React.useState<number>(600)
+  // First page aspect ratio (height / width, in PDF points) — drives the
+  // smart auto-fit so the whole page is visible by default.
+  const [pageAspect, setPageAspect] = React.useState<number>(0)
+  // Once the user zooms by hand we stop auto-fitting so we never fight them.
+  const manualZoomRef = React.useRef(false)
+  const markManualZoom = React.useCallback(() => { manualZoomRef.current = true }, [])
   const containerRef = React.useRef<HTMLDivElement | null>(null)
   const pageRefs = React.useRef<Record<number, HTMLDivElement | null>>({})
   const [activePage, setActivePage] = React.useState<number>(1)
@@ -1345,11 +1352,30 @@ function PdfRenderer({ a }: { a: AttachmentLike }) {
         // Subtract scrollbar gutter so pages don't overflow.
         const w = Math.max(320, Math.floor(entry.contentRect.width) - 24)
         setContainerWidth(w)
+        setContainerHeight(Math.max(240, Math.floor(entry.contentRect.height)))
       }
     })
     ro.observe(el)
     return () => ro.disconnect()
   }, [])
+
+  // Smart auto-fit: scale so the whole first page fits the viewport
+  // (fit-to-page) the moment the PDF + its dimensions are known, and keep it
+  // fitted on resize — until the user zooms by hand. `fitPageScale` is the
+  // clamped scale at which the rendered page height (containerWidth * scale *
+  // pageAspect) just fits the available viewport height.
+  const fitPageScale = React.useMemo(() => {
+    if (!pageAspect || !containerWidth || !containerHeight) return 1
+    const avail = Math.max(200, containerHeight - 88) // leave room for the controls bar
+    const raw = avail / (containerWidth * pageAspect)
+    return Math.min(1, Math.max(0.5, +raw.toFixed(2)))
+  }, [pageAspect, containerWidth, containerHeight])
+
+  React.useEffect(() => {
+    if (manualZoomRef.current) return
+    if (!numPages || !pageAspect) return
+    setScale(fitPageScale)
+  }, [numPages, pageAspect, fitPageScale])
 
   React.useEffect(() => {
     const el = containerRef.current
@@ -1357,10 +1383,12 @@ function PdfRenderer({ a }: { a: AttachmentLike }) {
     const onWheel = (e: WheelEvent) => {
       if (!(e.ctrlKey || e.metaKey)) return
       e.preventDefault()
+      markManualZoom()
       const factor = Math.exp(-e.deltaY * 0.0016)
       setScale(s => Math.min(3, Math.max(0.5, +(s * factor).toFixed(3))))
     }
     const onDoubleClick = () => {
+      markManualZoom()
       setScale(s => (s === 1 ? 1.35 : 1))
     }
     el.addEventListener("wheel", onWheel, { passive: false })
@@ -1369,7 +1397,7 @@ function PdfRenderer({ a }: { a: AttachmentLike }) {
       el.removeEventListener("wheel", onWheel)
       el.removeEventListener("dblclick", onDoubleClick)
     }
-  }, [])
+  }, [markManualZoom])
 
   // IntersectionObserver — track which page is currently most visible so
   // the "page X of Y" indicator stays accurate while the user scrolls.
@@ -1415,11 +1443,11 @@ function PdfRenderer({ a }: { a: AttachmentLike }) {
       } else if (e.key === "PageUp" || e.key === "ArrowUp" && (e.metaKey || e.ctrlKey)) {
         e.preventDefault(); goToPage(activePage - 1)
       } else if ((e.metaKey || e.ctrlKey) && (e.key === "+" || e.key === "=")) {
-        e.preventDefault(); setScale(s => Math.min(3, +(s + 0.25).toFixed(2)))
+        e.preventDefault(); markManualZoom(); setScale(s => Math.min(3, +(s + 0.25).toFixed(2)))
       } else if ((e.metaKey || e.ctrlKey) && e.key === "-") {
-        e.preventDefault(); setScale(s => Math.max(0.5, +(s - 0.25).toFixed(2)))
+        e.preventDefault(); markManualZoom(); setScale(s => Math.max(0.5, +(s - 0.25).toFixed(2)))
       } else if ((e.metaKey || e.ctrlKey) && e.key === "0") {
-        e.preventDefault(); setScale(1)
+        e.preventDefault(); markManualZoom(); setScale(1)
       }
     }
     window.addEventListener("keydown", onKey)
@@ -1441,7 +1469,17 @@ function PdfRenderer({ a }: { a: AttachmentLike }) {
       <div ref={containerRef} className="min-h-0 flex-1 overflow-auto bg-muted/30 px-3 pb-20 pt-4">
         <PdfDocument
           file={source}
-          onLoadSuccess={({ numPages: n }) => setNumPages(n)}
+          onLoadSuccess={(pdf: any) => {
+            setNumPages(pdf?.numPages || 0)
+            // Read the first page's intrinsic size so auto-fit knows the
+            // page aspect ratio and can fit the whole page on load.
+            try {
+              pdf?.getPage?.(1)?.then((page: any) => {
+                const vp = page?.getViewport?.({ scale: 1 })
+                if (vp?.width) setPageAspect(vp.height / vp.width)
+              }).catch(() => {})
+            } catch { /* non-fatal: falls back to fit-width */ }
+          }}
           onLoadError={(e) => setErr(e?.message || "No se pudo abrir el PDF")}
           loading={<LoadingState label="Renderizando PDF…" />}
           error={<ErrorState error="No se pudo abrir el PDF" />}
@@ -1501,26 +1539,26 @@ function PdfRenderer({ a }: { a: AttachmentLike }) {
           <div className={liquidControlDividerClass} />
 
           <Button size="icon" variant="ghost" className={liquidGhostButtonClass}
-            onClick={() => setScale(s => Math.max(0.5, +(s - 0.25).toFixed(2)))}
+            onClick={() => { markManualZoom(); setScale(s => Math.max(0.5, +(s - 0.25).toFixed(2))) }}
             aria-label="Reducir zoom" title="Reducir (⌘−)">
             <Minus className="h-3.5 w-3.5" />
           </Button>
           <button
-            onClick={() => setScale(1)}
+            onClick={() => { markManualZoom(); setScale(1) }}
             className={cn(liquidMetricPillClass, "min-w-[4.25rem] hover:bg-white/78 dark:hover:bg-white/16")}
-            title="Restablecer zoom (⌘0)"
-            aria-label="Restablecer zoom"
+            title="Zoom 100% (ajustar al ancho)"
+            aria-label="Zoom 100%, ajustar al ancho"
           >
             {Math.round(scale * 100)}%
           </button>
           <Button size="icon" variant="ghost" className={liquidGhostButtonClass}
-            onClick={() => setScale(s => Math.min(3, +(s + 0.25).toFixed(2)))}
+            onClick={() => { markManualZoom(); setScale(s => Math.min(3, +(s + 0.25).toFixed(2))) }}
             aria-label="Aumentar zoom" title="Aumentar (⌘+)">
             <Plus className="h-3.5 w-3.5" />
           </Button>
           <Button size="icon" variant="ghost" className={liquidGhostButtonClass}
-            onClick={() => setScale(1)}
-            aria-label="Ajustar al ancho" title="Ajustar al ancho">
+            onClick={() => { manualZoomRef.current = false; setScale(fitPageScale) }}
+            aria-label="Ajustar a la página" title="Ajustar a la página (vista completa)">
             <Maximize2 className="h-3.5 w-3.5" />
           </Button>
         </div>

@@ -41,6 +41,9 @@ export interface FileProcessingStatus {
   loading: boolean
   /** True while we have a fileId but haven't seen the first response yet. */
   pending: boolean
+  /** True when polling hit its ceiling before a terminal stage — the file
+   *  is treated as usable so the UI never freezes on "Indexando". */
+  timedOut?: boolean
 }
 
 const INITIAL: FileProcessingStatus = {
@@ -133,7 +136,19 @@ export function useFileProcessingStatus(
         if (cancelled) return
       }
       if (polls >= MAX_POLLS) {
-        setState((prev) => ({ ...prev, loading: false, pending: false }))
+        // Never leave the chip frozen on "Indexando" forever. The file is
+        // already uploaded and its text extracted — RAG indexing is a
+        // best-effort background enhancement, not a prerequisite for using
+        // the document. Resolve to a usable terminal state so the UI stops
+        // showing an in-progress spinner once the worker is clearly wedged.
+        setState((prev) => ({
+          ...prev,
+          loading: false,
+          pending: false,
+          isTerminal: true,
+          stage: prev.stage && !TERMINAL.has(prev.stage) ? "ready" : prev.stage,
+          timedOut: true,
+        }))
         return
       }
       timer = setTimeout(tick, POLL_INTERVAL_MS)

@@ -314,10 +314,26 @@ async function processFilesInParallel(files, userId, prismaClient) {
           }
         } catch { /* integrity validation is best-effort */ }
 
-        // ── Extract text ──
+        // ── Extract text (BEST-EFFORT) ──
+        // A parser failure must NEVER fail the upload. The binary is already
+        // stored and usable (preview/download + OpenAI Files API), so a docx/
+        // pdf/etc. that trips the extractor still uploads successfully — it
+        // just lands with no locally-extracted text. This is the core of the
+        // "any document uploads without failure" guarantee.
         await fileProcessingStatus.setStage(prismaClient, fileRecord.id, 'extracting', { userId });
-        const result = await fileProcessor.processFile(file);
-        const thumbnailPath = await fileProcessor.generateThumbnail(file.path, file.mimetype);
+        let result;
+        try {
+          result = await fileProcessor.processFile(file);
+        } catch (extractErr) {
+          console.warn(`[files] text extraction failed for ${file.originalname} — upload still succeeds:`, extractErr?.message || extractErr);
+          result = { success: false, extractedText: '', error: `extraction_degraded: ${extractErr?.message || extractErr}` };
+        }
+        let thumbnailPath = null;
+        try {
+          thumbnailPath = await fileProcessor.generateThumbnail(file.path, file.mimetype);
+        } catch (thumbErr) {
+          console.warn(`[files] thumbnail generation failed for ${file.originalname}:`, thumbErr?.message || thumbErr);
+        }
 
         // ── Upload to OpenAI Files API ──
         let openaiFileId = null;
@@ -343,7 +359,12 @@ async function processFilesInParallel(files, userId, prismaClient) {
           analysis = await documentIntelligence.analyzeFile(prismaClient, { userId, fileRecord, extractionResult: result, force: true });
         } catch (analysisError) { console.warn('[files] document analysis failed:', analysisError.message || analysisError); }
 
-        return { id: fileRecord.id, name: file.originalname, size: file.size, type: file.mimetype, url: `/uploads/${userId}/${file.filename}`, thumbnailUrl: thumbnailPath ? `/uploads/${userId}/${path.basename(thumbnailPath)}` : null, extractedText: result.extractedText, ...ocrMeta, ...serializeAnalysisMeta(analysis), openaiFileId, ragIndexed: ragQueued ? 'queued' : 'skipped', success: result.success, error: result.error };
+        // The upload itself succeeded (binary stored + record updated), so we
+        // always report success. A degraded extraction is surfaced as a soft
+        // `extractionWarning`, not a hard `error`, so the attachment stays
+        // usable instead of being shown as a failed upload.
+        const extractionDegraded = result.success === false;
+        return { id: fileRecord.id, name: file.originalname, size: file.size, type: file.mimetype, url: `/uploads/${userId}/${file.filename}`, thumbnailUrl: thumbnailPath ? `/uploads/${userId}/${path.basename(thumbnailPath)}` : null, extractedText: result.extractedText, ...ocrMeta, ...serializeAnalysisMeta(analysis), openaiFileId, ragIndexed: ragQueued ? 'queued' : 'skipped', success: true, error: null, extractionWarning: extractionDegraded ? (result.error || 'extraction_degraded') : null };
       } catch (error) {
         console.error('File processing error:', error);
         if (fileRecord?.id) { await fileProcessingStatus.setStage(prismaClient, fileRecord.id, 'failed', { userId, error: `processing: ${error?.message || error}` }); }
@@ -397,8 +418,22 @@ async function processFileAfterFastUpload(file, userId, prismaClient, fileRecord
     } catch { /* integrity validation is best-effort */ }
 
     await fileProcessingStatus.setStage(prismaClient, fileRecord.id, 'extracting', { userId });
-    const result = await fileProcessor.processFile(file);
-    const thumbnailPath = await fileProcessor.generateThumbnail(file.path, file.mimetype);
+    // Best-effort extraction: a parser failure must not flip the file to
+    // "failed" — it stays uploaded and usable (preview + OpenAI Files API),
+    // just without locally-extracted text.
+    let result;
+    try {
+      result = await fileProcessor.processFile(file);
+    } catch (extractErr) {
+      console.warn(`[files] async text extraction failed for ${file.originalname} — file stays usable:`, extractErr?.message || extractErr);
+      result = { success: false, extractedText: '', error: `extraction_degraded: ${extractErr?.message || extractErr}` };
+    }
+    let thumbnailPath = null;
+    try {
+      thumbnailPath = await fileProcessor.generateThumbnail(file.path, file.mimetype);
+    } catch (thumbErr) {
+      console.warn(`[files] async thumbnail generation failed for ${file.originalname}:`, thumbErr?.message || thumbErr);
+    }
 
     let openaiFileId = null;
     const oaMimes = ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.ms-powerpoint', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'];
