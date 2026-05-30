@@ -4363,6 +4363,16 @@ function ChatInterfaceContent() {
       markImageGenerationStopped();
       toast.info('Generación de imagen detenida');
     }
+    // Also clear the long-running media indicators (video / slides) so the
+    // composer returns to idle on stop — mirroring the image path. These run
+    // as POST→poll server jobs (the earlier local-job + agent-task aborts cut
+    // the in-flight request); resetting the flags frees the composer even when
+    // the remote render itself can't be killed client-side.
+    setIsGeneratingVideo(false);
+    setIsGeneratingPPT(false);
+    if (targetChatId) {
+      markLocalJobIdle(targetChatId);
+    }
     stopStreaming();
     setIsSending(false);
     setSendingChatId(null);
