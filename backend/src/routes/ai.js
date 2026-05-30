@@ -5969,6 +5969,13 @@ router.post(
       const { prompt, chatId, aspect_ratio = '16:9', resolution = '720p', duration = 8, audio = true, negative_prompt, files, image_url, model = 'veo-fast' // Default model
       } = req.body;
       const userId = req.user.id;
+      const requestedDuration = Number(duration);
+      const modelName = String(model || '').toLowerCase();
+      const effectiveDuration =
+        (modelName === 'veo-fast' || modelName === 'fal-ai/veo3/fast' || modelName === 'fal-ai/veo3/fast/image-to-video')
+        && (!Number.isFinite(requestedDuration) || requestedDuration === 5)
+          ? 8
+          : duration;
 
       console.log('🎬 Video generation request:', { prompt, aspect_ratio, userId, chatId, hasFiles: !!files?.length, hasImageUrl: !!image_url });
 
@@ -6015,7 +6022,7 @@ router.post(
           prompt,
           aspect_ratio,
           resolution,
-          duration,
+          duration: effectiveDuration,
           audio,
           negative_prompt,
           ...(processedImageUrl && { image_url: processedImageUrl }),

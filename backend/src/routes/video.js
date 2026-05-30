@@ -696,6 +696,18 @@ function generateOperationId() {
   return `veo3_${Date.now()}_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
 }
 
+function resolveVeoFastDuration(requestedDuration, model) {
+  const rawDuration = Number(requestedDuration);
+  const modelName = String(model || '').toLowerCase();
+  const isVeoFast = modelName === 'veo-fast'
+    || modelName === 'fal-ai/veo3/fast'
+    || modelName === 'fal-ai/veo3/fast/image-to-video';
+  const duration = isVeoFast && (!Number.isFinite(rawDuration) || rawDuration === 5)
+    ? 8
+    : rawDuration;
+  return Math.min(Math.max(Number(duration) || 8, 4), 15);
+}
+
 // Enhanced video generation with Fal.ai
 router.post('/generate', [
   body('prompt').trim().notEmpty().withMessage('Video prompt is required'),
@@ -731,7 +743,7 @@ router.post('/generate', [
       model = 'veo-fast' // Default model
     } = req.body;
 
-    const numericDuration = Math.min(Math.max(Number(requestedDuration) || 8, 4), 15);
+    const numericDuration = resolveVeoFastDuration(requestedDuration, model);
     const duration = `${numericDuration}s`;
 
     console.log('Video generation request received:', {
