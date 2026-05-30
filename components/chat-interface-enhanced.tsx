@@ -7062,9 +7062,13 @@ REWRITTEN TEXT:`;
       const intentController = new AbortController();
       intentAbortControllerRef.current = intentController;
 
+      const existingRoutingMessages = chatToUpdate?.messages || [];
+      const routingMessages = existingRoutingMessages.some((message: any) => message?.id === userMessage.id)
+        ? existingRoutingMessages
+        : [...existingRoutingMessages, userMessage];
       const intent = await aiService.classifyIntent(
         msg,
-        chatToUpdate?.messages || [],
+        routingMessages,
         intentController.signal
       );
 
@@ -7113,10 +7117,12 @@ REWRITTEN TEXT:`;
         case 'chart':
         case 'math':
         case 'viz':
-        case 'doc':
         case 'web_search':
         case 'agent_task':
           await handleAgentTask(msg, filesToSend);
+          break;
+        case 'doc':
+          await runContextPipeline(intent);
           break;
         case 'text':
           if (shouldRouteTextPromptThroughAgenticRuntime(msg, filesToSend)) {

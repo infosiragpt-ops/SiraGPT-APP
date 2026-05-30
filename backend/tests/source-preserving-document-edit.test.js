@@ -9,10 +9,12 @@ const PizZip = require('pizzip');
 const {
   appendToDocxBuffer,
   buildAppendixBlocks,
+  fillDocxSectionBuffer,
   generateSourcePreservingDocumentEdit,
   inferDocumentTitle,
   isSourcePreservingEditRequest,
   loadEditableSourceFiles,
+  parseTargetSectionRequest,
 } = require('../src/services/source-preserving-document-edit');
 const {
   buildDocumentDeliveryPolicy,
@@ -30,6 +32,23 @@ async function makeDocxBuffer() {
   return Buffer.from(await Packer.toBuffer(doc));
 }
 
+async function makeDocxWithAnexo3Buffer() {
+  const doc = new Document({
+    sections: [{
+      children: [
+        new Paragraph('Portada original UPN'),
+        new Paragraph('ANEXO 1'),
+        new Paragraph('Contenido original del anexo uno.'),
+        new Paragraph('ANEXO 3'),
+        new Paragraph('[Pendiente de completar]'),
+        new Paragraph('ANEXO 4'),
+        new Paragraph('Contenido original del anexo cuatro.'),
+      ],
+    }],
+  });
+  return Buffer.from(await Packer.toBuffer(doc));
+}
+
 describe('source-preserving document edit', () => {
   it('detects requests to edit the uploaded document instead of creating a new file', () => {
     const prompt = 'quiero que agregues al final el intuemtno de tesis que vamos a aplicar en esta tesis';
@@ -39,6 +58,14 @@ describe('source-preserving document edit', () => {
     assert.equal(isSourcePreservingEditRequest('agrega una tabla de presupuesto', []), false);
     assert.equal(isSourcePreservingEditRequest('agrega al final una tabla de presupuesto', []), false);
     assert.equal(isSourcePreservingEditRequest('dame un resumen en un solo párrafo', ['file-docx']), false);
+    assert.equal(isSourcePreservingEditRequest('completa el anexo 3', ['file-docx']), true);
+    assert.deepEqual(parseTargetSectionRequest('completa el anexo 3'), {
+      kind: 'anexo',
+      number: 3,
+      numeric: '3',
+      roman: 'III',
+      label: 'Anexo 3',
+    });
   });
 
   it('falls back to the newest recent editable chat attachment when the follow-up omits file ids', async () => {
@@ -130,6 +157,24 @@ describe('source-preserving document edit', () => {
     assert.doesNotMatch(xml, /siraGPT Document Pipeline/);
   });
 
+  it('fills only the requested DOCX section instead of appending a new appendix', async () => {
+    const original = await makeDocxWithAnexo3Buffer();
+    const edited = fillDocxSectionBuffer(original, parseTargetSectionRequest('completa el anexo 3'), [
+      { kind: 'normal', text: 'Contenido específico del anexo tres con información integrada.' },
+    ]);
+    const xml = new PizZip(edited).file('word/document.xml').asText();
+
+    assert.match(xml, /Portada original UPN/);
+    assert.match(xml, /ANEXO 1/);
+    assert.match(xml, /Contenido original del anexo uno/);
+    assert.match(xml, /ANEXO 3/);
+    assert.match(xml, /Contenido específico del anexo tres/);
+    assert.match(xml, /ANEXO 4/);
+    assert.match(xml, /Contenido original del anexo cuatro/);
+    assert.doesNotMatch(xml, /Pendiente de completar/);
+    assert.equal((xml.match(/ANEXOS/g) || []).length, 0);
+  });
+
   it('returns a downloadable edited DOCX artifact instead of failing after validation', async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-generate-'));
     const originalPath = path.join(tmp, 'tesis.docx');
@@ -161,6 +206,68 @@ describe('source-preserving document edit', () => {
     assert.match(xml, /Portada original UPN/);
     assert.match(xml, /ANEXOS/);
     assert.match(xml, /Instrumento de recolección de datos/);
+  });
+
+  it('completes a targeted DOCX appendix using the combined uploaded document context', async () => {
+    const originalOpenAIKey = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    try {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-anexo-'));
+      const originalPath = path.join(tmp, 'matrices.docx');
+      const referencePath = path.join(tmp, 'contexto.txt');
+      fs.writeFileSync(originalPath, await makeDocxWithAnexo3Buffer());
+      fs.writeFileSync(referencePath, 'La matriz de consistencia integra problema, objetivos, hipótesis, variables y metodología.');
+
+      const result = await generateSourcePreservingDocumentEdit({
+        sourceFile: {
+          id: 'file-docx',
+          path: originalPath,
+          originalName: 'matrices.docx',
+          filename: 'matrices.docx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          extractedText: 'Título: Introducción de matrices. ANEXO 3 pendiente.',
+        },
+        sourceFiles: [
+          {
+            id: 'file-docx',
+            path: originalPath,
+            originalName: 'matrices.docx',
+            filename: 'matrices.docx',
+            mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            extractedText: 'Título: Introducción de matrices. ANEXO 3 pendiente.',
+          },
+          {
+            id: 'file-ref',
+            path: referencePath,
+            originalName: 'contexto.txt',
+            filename: 'contexto.txt',
+            mimeType: 'text/plain',
+            extractedText: 'La matriz de consistencia integra problema, objetivos, hipótesis, variables y metodología.',
+          },
+        ],
+        prompt: 'completa el anexo 3',
+        displayPrompt: 'completa el anexo 3',
+        userId: 'user-1',
+        chatId: 'chat-1',
+      });
+
+      assert.equal(result.format, 'docx');
+      assert.match(result.file.filename, /anexo_3_completado\.docx$/);
+      assert.match(result.content, /Anexo 3/);
+
+      const edited = fs.readFileSync(result.artifact.path);
+      const xml = new PizZip(edited).file('word/document.xml').asText();
+      assert.match(xml, /ANEXO 1/);
+      assert.match(xml, /ANEXO 3/);
+      assert.match(xml, /ANEXO 4/);
+      assert.match(xml, /contexto\.txt/);
+      assert.match(xml, /matriz de consistencia integra problema/);
+      assert.doesNotMatch(xml, /Pendiente de completar/);
+      assert.doesNotMatch(xml, /ANEXOS/);
+    } finally {
+      if (originalOpenAIKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = originalOpenAIKey;
+    }
   });
 
   it('keeps structured text artifacts valid while appending content', async () => {

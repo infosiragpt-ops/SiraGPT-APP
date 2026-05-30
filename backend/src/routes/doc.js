@@ -211,6 +211,7 @@ router.post(
         fileIds: req.body.files,
         prompt,
         displayPrompt,
+        signal: controller.signal,
       });
 
       if (preservedEdit) {
@@ -218,7 +219,7 @@ router.post(
         content = preservedEdit.content;
         file = preservedEdit.file;
         format = preservedEdit.format;
-        send({ type: 'stage', label: 'Anexos agregados sin regenerar el archivo', pct: 92 });
+        send({ type: 'stage', label: 'Documento editado sin regenerar el archivo', pct: 92 });
       } else if (wantsSourcePreservingEdit) {
         throw new Error('No encontré un archivo editable compatible para modificar sin regenerar el documento. Formatos soportados: DOCX, XLSX, PDF, TXT, Markdown, CSV, HTML, SVG, JSON, XML o YAML.');
       } else {

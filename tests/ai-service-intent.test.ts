@@ -9,6 +9,8 @@ import {
   shouldRouteThroughAgenticRuntime,
   shouldRouteTextPromptThroughAgenticRuntime,
   shouldAnswerFromExistingDocument,
+  shouldEditExistingDocument,
+  shouldUseExistingDocumentFileContext,
 } from "../lib/ai-service"
 
 describe("ai-service · deterministic intent routing", () => {
@@ -72,6 +74,28 @@ describe("ai-service · deterministic intent routing", () => {
       shouldRouteTextPromptThroughAgenticRuntime(prompt, history[0].files),
       false,
     )
+  })
+
+  it("routes targeted edits of an uploaded Word document to the document editor", async () => {
+    const history = [
+      {
+        role: "USER",
+        content: "046 016 INTRO MATRICES.docx",
+        files: [
+          {
+            id: "file-docx-anexo",
+            name: "046 016 INTRO MATRICES.docx",
+            mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          },
+        ],
+      },
+    ]
+
+    const prompt = "completa el anexo 3"
+    assert.equal(shouldAnswerFromExistingDocument(prompt, history), false)
+    assert.equal(shouldEditExistingDocument(prompt, history), true)
+    assert.equal(shouldUseExistingDocumentFileContext(prompt, history), true)
+    assert.equal(await aiService.classifyIntent(prompt, history), "doc")
   })
 
   it("keeps spreadsheet data work on the agentic route when a spreadsheet is attached", () => {

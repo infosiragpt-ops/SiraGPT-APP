@@ -12,6 +12,10 @@ const {
 const {
   MAX_SIMULTANEOUS_DOCUMENTS,
 } = require('../config/document-batch-limits');
+const {
+  createContentClient,
+  DEFAULT_MODEL,
+} = require('./document-pipeline/content/llm-client');
 
 const BACKEND_ROOT = path.resolve(__dirname, '..', '..');
 
@@ -349,6 +353,80 @@ function buildAppendixBlocks(options = {}) {
   return buildGenericAppendix(options);
 }
 
+const ROMAN_VALUES = {
+  i: 1,
+  v: 5,
+  x: 10,
+  l: 50,
+  c: 100,
+  d: 500,
+  m: 1000,
+};
+
+function romanToNumber(value = '') {
+  const text = normalizeText(value);
+  if (!/^[ivxlcdm]+$/.test(text)) return null;
+  let total = 0;
+  let previous = 0;
+  for (let i = text.length - 1; i >= 0; i -= 1) {
+    const current = ROMAN_VALUES[text[i]] || 0;
+    if (current < previous) total -= current;
+    else total += current;
+    previous = current;
+  }
+  return total || null;
+}
+
+function numberToRoman(value) {
+  let number = Number(value);
+  if (!Number.isFinite(number) || number <= 0 || number > 3999) return '';
+  const pairs = [
+    [1000, 'M'], [900, 'CM'], [500, 'D'], [400, 'CD'],
+    [100, 'C'], [90, 'XC'], [50, 'L'], [40, 'XL'],
+    [10, 'X'], [9, 'IX'], [5, 'V'], [4, 'IV'], [1, 'I'],
+  ];
+  let roman = '';
+  for (const [amount, numeral] of pairs) {
+    while (number >= amount) {
+      roman += numeral;
+      number -= amount;
+    }
+  }
+  return roman;
+}
+
+function parseTargetSectionRequest(prompt = '') {
+  const text = normalizeText(prompt);
+  const match = text.match(/\b(anexo|anexos|apendice|apendices|seccion|secciones|apartado|apartados|capitulo|capitulos)\s*(?:n(?:ro|umero)?\.?|num\.?|no\.?|#)?\s*([0-9]{1,3}|[ivxlcdm]{1,10})\b/);
+  if (!match) return null;
+  const rawKind = match[1];
+  const rawNumber = match[2];
+  const number = /^\d+$/.test(rawNumber) ? Number(rawNumber) : romanToNumber(rawNumber);
+  if (!number) return null;
+  const kind =
+    rawKind.startsWith('apendice') ? 'apéndice' :
+    rawKind.startsWith('seccion') ? 'sección' :
+    rawKind.startsWith('apartado') ? 'apartado' :
+    rawKind.startsWith('capitulo') ? 'capítulo' :
+    'anexo';
+  const displayKind = kind.charAt(0).toUpperCase() + kind.slice(1);
+  return {
+    kind,
+    number,
+    numeric: String(number),
+    roman: numberToRoman(number),
+    label: `${displayKind} ${number}`,
+  };
+}
+
+function isTargetedSectionFillRequest(prompt = '') {
+  const text = normalizeText(prompt);
+  return Boolean(
+    parseTargetSectionRequest(prompt)
+    && /\b(complet\w*|llen\w*|rellen\w*|desarroll\w*|agreg\w*|anad\w*|insert\w*|incorpor\w*|actualiz\w*|modific\w*|edit\w*)\b/.test(text)
+  );
+}
+
 function paragraphXml(item = {}) {
   if (item.kind === 'pageBreak') {
     return '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
@@ -363,6 +441,130 @@ function paragraphXml(item = {}) {
   };
   const prefix = styles[item.kind] || styles.normal;
   return `<w:p>${prefix}<w:t xml:space="preserve">${text}</w:t></w:r></w:p>`;
+}
+
+function xmlUnescape(value) {
+  return String(value || '')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
+function paragraphText(paragraphXmlValue = '') {
+  const pieces = [];
+  const textRe = /<w:t\b[^>]*>([\s\S]*?)<\/w:t>/g;
+  let match;
+  while ((match = textRe.exec(paragraphXmlValue))) {
+    pieces.push(xmlUnescape(match[1]));
+  }
+  return pieces.join('');
+}
+
+function extractDocxParagraphs(documentXml = '') {
+  const paragraphs = [];
+  const paragraphRe = /<w:p\b[\s\S]*?<\/w:p>/g;
+  let match;
+  while ((match = paragraphRe.exec(documentXml))) {
+    const xml = match[0];
+    const text = paragraphText(xml);
+    paragraphs.push({
+      start: match.index,
+      end: match.index + xml.length,
+      xml,
+      text,
+      normalized: normalizeText(text),
+    });
+  }
+  return paragraphs;
+}
+
+function targetHeadingPattern(target) {
+  const numberPart = target.roman
+    ? `(?:${target.numeric}|${normalizeText(target.roman)})`
+    : target.numeric;
+  if (target.kind === 'anexo') {
+    return new RegExp(`\\b(?:anexo|anexos|apendice|apendices)\\s*(?:n(?:ro|umero)?\\.?|num\\.?|no\\.?|#)?\\s*${numberPart}\\b`);
+  }
+  if (target.kind === 'sección') {
+    return new RegExp(`\\b(?:seccion|secciones)\\s*(?:n(?:ro|umero)?\\.?|num\\.?|no\\.?|#)?\\s*${numberPart}\\b`);
+  }
+  if (target.kind === 'capítulo') {
+    return new RegExp(`\\b(?:capitulo|capitulos)\\s*(?:n(?:ro|umero)?\\.?|num\\.?|no\\.?|#)?\\s*${numberPart}\\b`);
+  }
+  return new RegExp(`\\b${normalizeText(target.kind)}\\s*(?:n(?:ro|umero)?\\.?|num\\.?|no\\.?|#)?\\s*${numberPart}\\b`);
+}
+
+function matchesTargetHeading(normalizedParagraph, target) {
+  if (!normalizedParagraph) return false;
+  return targetHeadingPattern(target).test(normalizedParagraph);
+}
+
+function isSectionBoundary(normalizedParagraph, target) {
+  if (!normalizedParagraph) return false;
+  if (matchesTargetHeading(normalizedParagraph, target)) return false;
+  if (target.kind === 'anexo') {
+    return /\b(?:anexo|anexos|apendice|apendices)\s*(?:n(?:ro|umero)?\.?|num\.?|no\.?|#)?\s*(?:[0-9]{1,3}|[ivxlcdm]{1,10})\b/.test(normalizedParagraph)
+      || /\b(?:capitulo|seccion)\s*(?:[0-9]{1,3}|[ivxlcdm]{1,10})\b/.test(normalizedParagraph);
+  }
+  return /\b(?:capitulo|capitulos|seccion|secciones|apartado|apartados|anexo|anexos|apendice|apendices)\s*(?:n(?:ro|umero)?\.?|num\.?|no\.?|#)?\s*(?:[0-9]{1,3}|[ivxlcdm]{1,10})\b/.test(normalizedParagraph);
+}
+
+function isPlaceholderParagraph(text = '') {
+  const normalized = normalizeText(text);
+  if (!normalized) return true;
+  if (/^[._\-\[\]()\s]{1,40}$/.test(String(text || ''))) return true;
+  return /^(?:pendiente|por completar|completar|rellenar|llenar|desarrollar|agregar informacion|insertar informacion|texto pendiente|a completar|no aplica|n\/a|xxx|xxxxx)(?:\b|$)/.test(normalized)
+    || /\b(?:pendiente de completar|completar aqui|completar aquí|rellenar aqui|rellenar aquí|desarrollar aqui|desarrollar aquí)\b/.test(normalized);
+}
+
+function sectionInsertionRange(documentXml, target) {
+  const paragraphs = extractDocxParagraphs(documentXml);
+  const headingIndex = paragraphs.findIndex((paragraph) => matchesTargetHeading(paragraph.normalized, target));
+  if (headingIndex < 0) {
+    throw new Error(`No encontré "${target.label}" dentro del DOCX original.`);
+  }
+
+  const heading = paragraphs[headingIndex];
+  let replaceStart = heading.end;
+  let replaceEnd = heading.end;
+  let replacingPlaceholder = false;
+
+  for (let index = headingIndex + 1; index < paragraphs.length; index += 1) {
+    const paragraph = paragraphs[index];
+    if (isSectionBoundary(paragraph.normalized, target)) break;
+
+    if (isPlaceholderParagraph(paragraph.text)) {
+      if (!replacingPlaceholder) replaceStart = paragraph.start;
+      replaceEnd = paragraph.end;
+      replacingPlaceholder = true;
+      continue;
+    }
+
+    break;
+  }
+
+  return {
+    replaceStart,
+    replaceEnd,
+    replacingPlaceholder,
+  };
+}
+
+function fillDocxSectionBuffer(buffer, target, blocks) {
+  const zip = new PizZip(buffer);
+  const documentFile = zip.file('word/document.xml');
+  if (!documentFile) throw new Error('DOCX inválido: falta word/document.xml.');
+  const documentXml = documentFile.asText();
+  const insertionXml = blocks
+    .filter((item) => item.kind !== 'pageBreak')
+    .map(paragraphXml)
+    .join('');
+  const range = sectionInsertionRange(documentXml, target);
+  const updatedXml = `${documentXml.slice(0, range.replaceStart)}${insertionXml}${documentXml.slice(range.replaceEnd)}`;
+  zip.file('word/document.xml', updatedXml);
+  return zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
 }
 
 function appendBlocksToDocumentXml(documentXml, blocks) {
@@ -537,6 +739,148 @@ function appendToTextLikeBuffer(buffer, blocks, format = 'txt') {
   return appendToPlainTextBuffer(buffer, blocks);
 }
 
+function extractTextFromDocxBuffer(buffer) {
+  const zip = new PizZip(buffer);
+  const xml = zip.file('word/document.xml')?.asText() || '';
+  return extractDocxParagraphs(xml)
+    .map((paragraph) => paragraph.text.trim())
+    .filter(Boolean)
+    .join('\n');
+}
+
+async function extractTextFromXlsxBuffer(buffer) {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer);
+  const lines = [];
+  workbook.worksheets.forEach((sheet) => {
+    lines.push(`Hoja: ${sheet.name}`);
+    sheet.eachRow({ includeEmpty: false }, (row) => {
+      const values = Array.isArray(row.values) ? row.values.slice(1) : [];
+      const text = values
+        .map((value) => {
+          if (value == null) return '';
+          if (typeof value === 'object') {
+            if (value.text) return value.text;
+            if (value.result != null) return String(value.result);
+            if (value.richText) return value.richText.map((part) => part.text || '').join('');
+          }
+          return String(value);
+        })
+        .map((value) => value.trim())
+        .filter(Boolean)
+        .join(' | ');
+      if (text) lines.push(text);
+    });
+  });
+  return lines.join('\n');
+}
+
+async function extractTextFromFile(file = {}) {
+  if (file.extractedText) return String(file.extractedText);
+  if (!file.path) return '';
+  try {
+    const buffer = await fs.promises.readFile(file.path);
+    if (isDocxFile(file)) return extractTextFromDocxBuffer(buffer);
+    if (isXlsxFile(file)) return extractTextFromXlsxBuffer(buffer);
+    if (isTextLikeFile(file)) return buffer.toString('utf8');
+  } catch {
+    return '';
+  }
+  return '';
+}
+
+async function buildCombinedSourceText(sourceFiles = []) {
+  const chunks = [];
+  for (const file of sourceFiles) {
+    const name = file.originalName || file.filename || file.id || 'documento';
+    const text = compact(await extractTextFromFile(file), 5000);
+    if (!text) continue;
+    chunks.push(`Fuente: ${name}\n${text}`);
+  }
+  return chunks.join('\n\n---\n\n');
+}
+
+function sectionFallbackBlocks({ prompt = '', target, sourceText = '', sourceFiles = [] } = {}) {
+  const names = sourceFiles
+    .map((file) => file.originalName || file.filename || file.id)
+    .filter(Boolean)
+    .slice(0, 8);
+  const excerpts = sourceText
+    .split(/\n{2,}|---/)
+    .map((item) => compact(item, 360))
+    .filter((item) => item.length >= 50)
+    .slice(0, 4);
+
+  const blocks = [
+    block('normal', `${target?.label || 'La sección solicitada'} se completa con base en la información integrada de ${names.length ? names.join(', ') : 'los documentos adjuntos'}.`),
+  ];
+  for (const excerpt of excerpts) {
+    blocks.push(block('normal', excerpt));
+  }
+  blocks.push(block('normal', `Contenido incorporado según la solicitud: ${compact(prompt, 260)}.`));
+  return blocks;
+}
+
+async function generateTargetSectionBlocks({
+  prompt = '',
+  target,
+  sourceFiles = [],
+  sourceText = '',
+  signal,
+} = {}) {
+  const fallback = () => sectionFallbackBlocks({ prompt, target, sourceText, sourceFiles });
+  if (!process.env.OPENAI_API_KEY) return fallback();
+
+  try {
+    const client = createContentClient('OpenAI');
+    const completion = await client.chat.completions.create({
+      model: DEFAULT_MODEL,
+      messages: [
+        {
+          role: 'system',
+          content: [
+            'Eres un editor académico experto en completar secciones de documentos Word sin alterar el resto del archivo.',
+            'Devuelve contenido formal en español para insertar dentro de la sección solicitada.',
+            'Usa únicamente la información de los documentos proporcionados. No inventes citas, autores, datos ni DOI.',
+            'No repitas el título de la sección; el DOCX original ya contiene el encabezado.',
+          ].join(' '),
+        },
+        {
+          role: 'user',
+          content: [
+            `Solicitud: ${prompt}`,
+            `Sección a completar: ${target?.label || 'sección indicada'}`,
+            'Documentos de contexto combinados:',
+            compact(sourceText, 12000),
+            '',
+            'Responde en JSON con esta forma exacta:',
+            '{"paragraphs":["2 a 5 párrafos sustantivos"],"bullets":["0 a 6 puntos si aportan claridad"],"closing":"cierre breve opcional"}',
+          ].join('\n'),
+        },
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0.25,
+    }, { signal, timeout: 30_000 });
+
+    const raw = completion?.choices?.[0]?.message?.content;
+    if (!raw) return fallback();
+    const parsed = JSON.parse(raw);
+    const blocks = [];
+    for (const paragraph of Array.isArray(parsed.paragraphs) ? parsed.paragraphs : []) {
+      const text = String(paragraph || '').trim();
+      if (text) blocks.push(block('normal', text));
+    }
+    for (const bullet of Array.isArray(parsed.bullets) ? parsed.bullets : []) {
+      const text = String(bullet || '').trim();
+      if (text) blocks.push(block('normal', `• ${text}`));
+    }
+    if (parsed.closing) blocks.push(block('normal', String(parsed.closing).trim()));
+    return blocks.length ? blocks.slice(0, 12) : fallback();
+  } catch {
+    return fallback();
+  }
+}
+
 function wrapPdfText(text, font, fontSize, maxWidth) {
   const lines = [];
   for (const paragraph of String(text || '').split(/\n+/)) {
@@ -693,40 +1037,70 @@ async function validateEditedBuffer(buffer, format, blocks) {
 
 async function generateSourcePreservingDocumentEdit({
   sourceFile,
+  sourceFiles = null,
   prompt,
   displayPrompt,
   userId,
   chatId,
+  signal,
 } = {}) {
   if (!sourceFile?.path) throw new Error('No se encontró el archivo original para editar.');
   const requestText = displayPrompt || prompt || '';
-  const sourceText = sourceFile.extractedText || '';
-  const blocks = buildAppendixBlocks({
-    prompt: requestText,
-    sourceText,
-    originalName: sourceFile.originalName || sourceFile.filename,
-  });
+  const allSourceFiles = Array.isArray(sourceFiles) && sourceFiles.length ? sourceFiles : [sourceFile];
+  const sourceText = await buildCombinedSourceText(allSourceFiles);
+  const targetSection = isDocxFile(sourceFile) && isTargetedSectionFillRequest(requestText)
+    ? parseTargetSectionRequest(requestText)
+    : null;
+  const blocks = targetSection
+    ? await generateTargetSectionBlocks({
+      prompt: requestText,
+      target: targetSection,
+      sourceFiles: allSourceFiles,
+      sourceText,
+      signal,
+    })
+    : buildAppendixBlocks({
+      prompt: requestText,
+      sourceText: sourceText || sourceFile.extractedText || '',
+      originalName: sourceFile.originalName || sourceFile.filename,
+    });
   const input = await fs.promises.readFile(sourceFile.path);
   let format;
   let output;
+  let suffix = 'con_anexos';
+  let titleSuffix = 'con anexos';
+  let explanation = 'Se conservó el archivo original y se agregó únicamente el bloque solicitado al final.';
+  let content = 'Listo. Conservé el archivo original y agregué el contenido solicitado al final, en anexos, sin regenerar la portada ni reemplazar el documento.';
   if (isDocxFile(sourceFile)) {
     format = 'docx';
-    output = appendToDocxBuffer(input, blocks);
+    if (targetSection) {
+      output = fillDocxSectionBuffer(input, targetSection, blocks);
+      suffix = `${normalizeText(targetSection.kind).replace(/\s+/g, '_')}_${targetSection.number}_completado`;
+      titleSuffix = `${targetSection.label} completado`;
+      explanation = `Se conservó el DOCX original y se completó únicamente ${targetSection.label}.`;
+      content = `Listo. Conservé el DOCX original y completé únicamente ${targetSection.label} usando el contexto combinado de los documentos adjuntos.`;
+    } else {
+      output = appendToDocxBuffer(input, blocks);
+      content = 'Listo. Conservé el DOCX original y agregué el contenido solicitado al final, en anexos, sin regenerar la portada ni reemplazar el documento.';
+    }
   } else if (isXlsxFile(sourceFile)) {
     format = 'xlsx';
     output = await appendToXlsxBuffer(input, blocks);
+    content = 'Listo. Conservé el XLSX original y agregué el contenido solicitado en una hoja nueva, sin reemplazar las hojas existentes.';
   } else if (isPdfFile(sourceFile)) {
     format = 'pdf';
     output = await appendToPdfBuffer(input, blocks);
+    content = 'Listo. Conservé el PDF original y agregué el contenido solicitado al final, sin reemplazar las páginas existentes.';
   } else if (isTextLikeFile(sourceFile)) {
     format = textLikeFormatForFile(sourceFile) || 'txt';
     output = appendToTextLikeBuffer(input, blocks, format);
+    content = `Listo. Conservé el ${format.toUpperCase()} original y agregué el contenido solicitado sin reemplazar el archivo base.`;
   } else {
     const ext = path.extname(sourceFile.originalName || sourceFile.filename || '').replace(/^\./, '').toLowerCase();
     throw new Error(`La edición preservadora todavía no soporta archivos .${ext || 'desconocidos'}. Formatos soportados: ${supportedSourceEditLabel()}.`);
   }
 
-  const filename = safeFilename(sourceFile.originalName || sourceFile.filename, 'con_anexos', format);
+  const filename = safeFilename(sourceFile.originalName || sourceFile.filename, suffix, format);
   const validation = await validateEditedBuffer(output, format, blocks);
   const { artifact, previewHtml, mime } = await persistEditedArtifact({
     buffer: output,
@@ -736,12 +1110,12 @@ async function generateSourcePreservingDocumentEdit({
     chatId,
     validation,
   });
-  const title = `${path.basename(sourceFile.originalName || sourceFile.filename || 'Documento', path.extname(sourceFile.originalName || sourceFile.filename || ''))} con anexos`;
+  const title = `${path.basename(sourceFile.originalName || sourceFile.filename || 'Documento', path.extname(sourceFile.originalName || sourceFile.filename || ''))} ${titleSuffix}`;
   const file = {
     type: 'doc',
     format,
     title,
-    explanation: 'Se conservó el archivo original y se agregó únicamente el bloque solicitado al final.',
+    explanation,
     filename: artifact.filename,
     url: artifact.downloadUrl,
     dataUrl: null,
@@ -751,7 +1125,7 @@ async function generateSourcePreservingDocumentEdit({
     metrics: validation,
   };
   return {
-    content: `Listo. Conservé el ${format.toUpperCase()} original y agregué el contenido solicitado al final, en anexos, sin regenerar la portada ni reemplazar el documento.`,
+    content,
     artifact: { ...artifact, validation },
     file,
     validation,
@@ -767,21 +1141,28 @@ async function tryGenerateSourcePreservingDocumentEdit({
   fileIds = [],
   prompt,
   displayPrompt,
+  signal,
 } = {}) {
   const requestText = displayPrompt || prompt || '';
   const sourceFiles = await loadEditableSourceFiles(prisma, { userId, fileIds, chatId, prompt: requestText });
   if (!isSourcePreservingEditRequest(requestText, sourceFiles)) return null;
-  const supported = sourceFiles.find((file) => isSupportedSourcePreservingFile(file));
+  const targetedSection = isTargetedSectionFillRequest(requestText);
+  const supported = targetedSection
+    ? sourceFiles.find((file) => isDocxFile(file))
+    : sourceFiles.find((file) => isSupportedSourcePreservingFile(file));
   if (!supported) {
     const names = sourceFiles.map((file) => file.originalName || file.filename || file.id).join(', ');
-    throw new Error(`Para conservar el documento original necesito un archivo editable compatible (${supportedSourceEditLabel()}). Archivo recibido: ${names || 'sin archivo compatible'}.`);
+    const needed = targetedSection ? 'un archivo DOCX con la sección solicitada' : `un archivo editable compatible (${supportedSourceEditLabel()})`;
+    throw new Error(`Para conservar el documento original necesito ${needed}. Archivo recibido: ${names || 'sin archivo compatible'}.`);
   }
   return generateSourcePreservingDocumentEdit({
     sourceFile: supported,
+    sourceFiles,
     prompt,
     displayPrompt,
     userId,
     chatId,
+    signal,
   });
 }
 
@@ -789,14 +1170,18 @@ module.exports = {
   appendBlocksToDocumentXml,
   appendToDocxBuffer,
   buildAppendixBlocks,
+  fillDocxSectionBuffer,
   generateSourcePreservingDocumentEdit,
   inferDocumentTitle,
   isSourcePreservingEditRequest,
   loadEditableSourceFiles,
+  parseTargetSectionRequest,
   tryGenerateSourcePreservingDocumentEdit,
   INTERNAL: {
+    buildCombinedSourceText,
     buildInstrumentAppendix,
     inferResearchVariables,
+    isTargetedSectionFillRequest,
     resolveStoredFilePath,
   },
 };

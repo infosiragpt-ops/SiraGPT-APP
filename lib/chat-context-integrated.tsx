@@ -9,7 +9,7 @@ import React from "react"
 import { createContext, useContext, useState, useCallback, useEffect, useMemo, useRef } from "react"
 import { useAuth } from "./auth-context-integrated"
 import { apiClient } from "./api"
-import { aiService, buildProfessionalCapabilityPrompt, shouldAnswerFromExistingDocument, type ChatIntent } from "./ai-service"
+import { aiService, buildProfessionalCapabilityPrompt, shouldUseExistingDocumentFileContext, type ChatIntent } from "./ai-service"
 import { buildDocumentChatRequest } from "./document-chat-request"
 import { mergeChatPreservingUserMessages } from "./message-preservation"
 import { toast } from "sonner"
@@ -672,7 +672,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         .map(resolveAttachmentId)
         .filter((id): id is string => Boolean(id));
       const conversationForRouting = activeChat?.messages || currentChat?.messages || [];
-      const historicalDocumentFileIds = normalizedFileIds.length === 0 && shouldAnswerFromExistingDocument(content, conversationForRouting)
+      const historicalDocumentFileIds = normalizedFileIds.length === 0 && shouldUseExistingDocumentFileContext(content, conversationForRouting)
         ? collectRecentDocumentContextIds(conversationForRouting)
         : [];
       const requestFileIds = normalizedFileIds.length > 0 ? normalizedFileIds : historicalDocumentFileIds;

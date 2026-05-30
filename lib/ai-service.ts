@@ -250,7 +250,7 @@ const DOCUMENT_UNDERSTANDING_RE =
   /\b(?:cual|cu[aá]l|que|qu[eé]|quien|qui[eé]n|cuando|cu[aá]ndo|donde|d[oó]nde|primera\s+palabra|primer\s+parrafo|primer\s+p[aá]rrafo|resume|resumen|resumir|analiza|analisis|an[aá]lisis|lee|leer|extrae|extraer|identifica|identificar|dime|segun|seg[uú]n|explica|explicar|contenido|menciona|dice)\b/i
 
 const EXISTING_DOCUMENT_EDIT_RE =
-  /\b(?:agrega(?:r|me|s)?|a[ñn]ad(?:e|ir|eme|as)?|inserta(?:r|me|s)?|incorpora(?:r|me|s)?|inclu(?:ye|ir|yeme|yas)?|modifica(?:r|me|s)?|edita(?:r|me|s)?|corrige(?:r|me|s)?|actualiza(?:r|me|s)?|reemplaza(?:r|me|s)?|cambia(?:r|me|s)?|pon(?:er|me)?|coloca(?:r|me|s)?)\b[^.?!]{0,180}\b(?:al\s+final|anexos?|ap[eé]ndice|portada|car[aá]tula|t[ií]tulo|encabezado|pie\s+de\s+p[aá]gina|tabla|hoja|celda|fila|columna|diapositiva|instrumento|cuestionario|encuesta|escala|tesis|mismo\s+word|mismo\s+documento|sin\s+cambiar|conserva(?:r)?|preserva(?:r)?)\b/i
+  /\b(?:agrega(?:r|me|s)?|a[ñn]ad(?:e|ir|eme|as)?|inserta(?:r|me|s)?|incorpora(?:r|me|s)?|inclu(?:ye|ir|yeme|yas)?|completa(?:r|me|s)?|llen(?:a|ar|ame|as)?|rellena(?:r|me|s)?|desarrolla(?:r|me|s)?|modifica(?:r|me|s)?|edita(?:r|me|s)?|corrige(?:r|me|s)?|actualiza(?:r|me|s)?|reemplaza(?:r|me|s)?|cambia(?:r|me|s)?|pon(?:er|me)?|coloca(?:r|me|s)?)\b[^.?!]{0,180}\b(?:al\s+final|anexos?|ap[eé]ndice|secci[oó]n|apartado|cap[ií]tulo|portada|car[aá]tula|t[ií]tulo|encabezado|pie\s+de\s+p[aá]gina|tabla|hoja|celda|fila|columna|diapositiva|instrumento|cuestionario|encuesta|escala|tesis|mismo\s+word|mismo\s+documento|sin\s+cambiar|conserva(?:r)?|preserva(?:r)?)\b/i
 
 const OUTPUT_FORMAT_REQUEST_RE =
   /\b(?:en|como|a)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|svg)\b|\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|exporta(?:r|me)?|descarga(?:r|me)?|prepara(?:r|me)?|elabora(?:r|me)?|redacta(?:r|me)?)\b.*\b(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|svg|documento|archivo|informe|reporte|presentaci[oó]n)\b/i
@@ -316,6 +316,16 @@ export function hasDocumentAttachmentContext(conversationHistory: any[] = []): b
   )
 }
 
+export function shouldEditExistingDocument(
+  prompt: string,
+  conversationHistory: any[] = []
+): boolean {
+  const normalized = normalizePrompt(prompt)
+  if (!normalized) return false
+  if (!EXISTING_DOCUMENT_EDIT_RE.test(normalized)) return false
+  return EXISTING_DOCUMENT_REFERENCE_RE.test(normalized) || hasDocumentAttachmentContext(conversationHistory)
+}
+
 export function shouldAnswerFromExistingDocument(
   prompt: string,
   conversationHistory: any[] = []
@@ -323,16 +333,25 @@ export function shouldAnswerFromExistingDocument(
   const normalized = normalizePrompt(prompt)
   if (!normalized) return false
   if (OUTPUT_FORMAT_REQUEST_RE.test(normalized)) return false
+  if (shouldEditExistingDocument(prompt, conversationHistory)) return false
   const referencesExistingDocument =
     EXISTING_DOCUMENT_REFERENCE_RE.test(normalized)
     || hasDocumentAttachmentContext(conversationHistory)
   if (!referencesExistingDocument) return false
-  if (!DOCUMENT_UNDERSTANDING_RE.test(normalized) && !EXISTING_DOCUMENT_EDIT_RE.test(normalized)) return false
+  if (!DOCUMENT_UNDERSTANDING_RE.test(normalized)) return false
 
-  // Even without loaded history, this is a question/edit about an existing
+  // Even without loaded history, this is a question about an existing
   // document ("del Word"), not a request to create a new Word file.
   // History presence is used separately to reattach the previous file.
   return true
+}
+
+export function shouldUseExistingDocumentFileContext(
+  prompt: string,
+  conversationHistory: any[] = []
+): boolean {
+  return shouldAnswerFromExistingDocument(prompt, conversationHistory)
+    || shouldEditExistingDocument(prompt, conversationHistory)
 }
 
 const ROUTING_PATTERNS = {
@@ -484,6 +503,9 @@ export function buildIntentAttributionGraph(
   ]
   const hasDocumentContext = allFiles.some(isDocumentLikeAttachment)
   const hasSpreadsheetContext = allFiles.some(isSpreadsheetLikeAttachment)
+  const editsExistingDocument = hasDocumentContext
+    && EXISTING_DOCUMENT_EDIT_RE.test(normalized)
+    && !OUTPUT_FORMAT_REQUEST_RE.test(normalized)
   const isShortContextualFragment =
     words.length <= 6
     && !!historyIntent
@@ -520,6 +542,10 @@ export function buildIntentAttributionGraph(
     addIntentNode(nodes, 'attachment:document', 'document attachment context', 'attachments', 0.68, 'document-like file')
     supernodes.context_source.push('attachment:document')
   }
+  if (editsExistingDocument) {
+    addIntentNode(nodes, 'current:document-edit', 'edits a specific part of an existing document', 'current_prompt', 0.88, prompt)
+    supernodes.user_goal.push('current:document-edit')
+  }
   if (hasSpreadsheetContext) {
     addIntentNode(nodes, 'attachment:spreadsheet', 'spreadsheet attachment context', 'attachments', 0.74, 'spreadsheet-like file')
     supernodes.context_source.push('attachment:spreadsheet')
@@ -550,6 +576,10 @@ export function buildIntentAttributionGraph(
     inferredIntent = normalizeRoutingIntent(historyIntent)
     confidence = words.length <= 4 ? 0.65 : 0.72
     rationale.push('Short follow-up inherits the latest concrete user goal from conversation history.')
+  } else if (editsExistingDocument) {
+    inferredIntent = 'doc'
+    confidence = 0.9
+    rationale.push('Existing document attachment plus edit wording implies a source-preserving document edit.')
   } else if (!currentIntent && hasSpreadsheetContext && ROUTING_PATTERNS.dataWork.test(normalized)) {
     inferredIntent = 'math'
     confidence = 0.7
@@ -867,6 +897,10 @@ export class AIService {
     conversationHistory: any[] = [],
     signal?: AbortSignal
   ): Promise<ChatIntent> {
+
+    if (shouldEditExistingDocument(prompt, conversationHistory)) {
+      return 'doc';
+    }
 
     if (shouldAnswerFromExistingDocument(prompt, conversationHistory)) {
       return 'text';
