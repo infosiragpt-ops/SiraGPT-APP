@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { EventEmitter } = require('events');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -267,6 +268,61 @@ test('agent task route: system prompt includes intent alignment without echoing 
   assert.match(prompt, /source_research/);
   assert.match(prompt, /requested_count:5 articulos/);
   assert.doesNotMatch(prompt, /Dame 5 articulos/);
+});
+
+test('agent task stream: normal request close does not cut off later task events', async () => {
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-agent-stream-store-'));
+  const task = INTERNAL.createTaskRecord({
+    taskId: 'task-stream-close',
+    userId: 'user-a',
+    chatId: 'chat-a',
+    displayGoal: 'transcribir imagen',
+    model: 'gpt-4o',
+    controller: new AbortController(),
+    maxSteps: 10,
+    maxRuntimeMs: 60000,
+    streamState: INTERNAL.initialAgentState(),
+  });
+  const firstEvent = { type: 'queue_status', taskId: task.taskId, status: 'running', queue: 'local-agent-task' };
+  let state = INTERNAL.reduceAgentState(task.streamState, firstEvent);
+  INTERNAL.appendTaskEvent(task, firstEvent, state);
+
+  const req = new EventEmitter();
+  const chunks = [];
+  const res = new EventEmitter();
+  res.writableEnded = false;
+  res.destroyed = false;
+  res.setHeader = () => {};
+  res.flushHeaders = () => {};
+  res.setTimeout = () => {};
+  res.write = (chunk) => {
+    chunks.push(String(chunk));
+    return true;
+  };
+  res.end = () => {
+    res.writableEnded = true;
+    res.emit('finish');
+  };
+
+  assert.equal(typeof INTERNAL.streamTaskEvents, 'function');
+  INTERNAL.streamTaskEvents(req, res, task.taskId, 'user-a');
+
+  // In a browser POST+SSE request the request side can emit `close`
+  // once the upload body is consumed while the response stream remains
+  // alive. This must not close the SSE response before worker events land.
+  req.emit('close');
+
+  const doneEvent = { type: 'done', stoppedReason: 'transcription_finalize', stats: { steps: 1, artifacts: 0 } };
+  state = INTERNAL.reduceAgentState(state, doneEvent);
+  INTERNAL.appendTaskEvent(task, doneEvent, state);
+  task.status = 'completed';
+  taskStore.markTaskStatus(task, 'completed', { streamState: state });
+
+  await new Promise((resolve) => setTimeout(resolve, 600));
+
+  assert.match(chunks.join(''), /"type":"done"/);
+  assert.equal(res.writableEnded, true);
+  INTERNAL.ACTIVE_AGENT_TASKS.delete(task.taskId);
 });
 
 test('chat-task-scope: prisma validates chat ownership', async () => {

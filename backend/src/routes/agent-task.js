@@ -1523,7 +1523,12 @@ async function handleQueuedTaskRequest(req, res) {
       }
     }, handoffMs);
     if (typeof handoffTimer.unref === 'function') handoffTimer.unref();
-    req.on('close', () => { try { clearTimeout(handoffTimer); } catch (_) {} });
+    // Keep the watchdog alive after the request body is consumed. In
+    // POST+SSE, req.close can be a normal upload-side close while the
+    // response stream still needs the handoff fallback.
+    const clearHandoffTimer = () => { try { clearTimeout(handoffTimer); } catch (_) {} };
+    res.on('close', clearHandoffTimer);
+    req.on('aborted', clearHandoffTimer);
   }
 
   return streamTaskEvents(req, res, taskId, req.user?.id);
@@ -1744,10 +1749,15 @@ function streamTaskEvents(req, res, taskId, userId) {
     }
   }
 
-  // Error / close handlers
+  // Error / close handlers. Do not treat req.close as client
+  // disconnect for POST+SSE: browsers can close the request upload side
+  // after the JSON body is sent while the response stream must remain
+  // open for worker events. res.close/req.aborted are the disconnect
+  // signals that should tear down polling.
   res.on('error', () => { safeCloseQueuedConnection(); });
+  res.on('close', () => { safeCloseQueuedConnection(); });
   res.on('drain', () => { /* no-op, reserved for backpressure tracking */ });
-  req.on('close', () => { safeCloseQueuedConnection(); });
+  req.on('aborted', () => { safeCloseQueuedConnection(); });
 
   // Response timeout (5 min default, configurable via env)
   const TIMEOUT = Math.max(30_000, Number.parseInt(process.env.AGENT_RESPONSE_TIMEOUT_MS || '300000', 10));
@@ -2406,6 +2416,7 @@ router.INTERNAL = {
   normalizeSystemContract,
   reduceAgentState,
   shortLabel,
+  streamTaskEvents,
   serializeAgentState,
   toSerializableAgentState,
 };
