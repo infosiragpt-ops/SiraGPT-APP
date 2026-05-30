@@ -4164,6 +4164,10 @@ function ChatInterfaceContent() {
   // Local sending / intent state so Stop button appears immediately on Enter
   const [isSending, setIsSending] = React.useState(false);
   const [sendingChatId, setSendingChatId] = React.useState<string | null>(null);
+  // Synchronous gate for duplicate submit events. React state updates land
+  // after the current event turn, so rapid Enter keydown/keypress pairs or
+  // double taps can otherwise run handleSend twice with the same composer text.
+  const sendInFlightRef = React.useRef(false);
   const intentAbortControllerRef = React.useRef<AbortController | null>(null);
   // Separate controller for the agentic search so Stop can cancel the
   // SSE stream without clobbering other in-flight requests (intent
@@ -6939,6 +6943,9 @@ REWRITTEN TEXT:`;
       }
     }
 
+    if (sendInFlightRef.current) return;
+    sendInFlightRef.current = true;
+
     // Optimistically add the user message to the UI immediately.
     const userMessage = {
       id: `msg-user-${Date.now()}`,
@@ -7291,6 +7298,7 @@ REWRITTEN TEXT:`;
       setIsSending(false);
       setSendingChatId(null);
       intentAbortControllerRef.current = null;
+      sendInFlightRef.current = false;
     }
   }
   const handleGmailCommand = async (prompt: string) => {
@@ -8012,13 +8020,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     const t = setTimeout(() => { handleSendRef.current(); }, 0);
     return () => clearTimeout(t);
   }, [currentChat?.id, isCurrentChatStreaming, isCurrentChatLocalJobBusy, isUploading, setUploadedFiles]);
-
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault()
-      handleSend()
-    }
-  }
 
   // Prevent Enter key from adding new line when not holding Shift
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -9138,7 +9139,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           value={input}
                           onChange={handleTextareaChange}
                           onKeyDown={handleKeyDown}
-                          onKeyPress={handleKeyPress}
                           onFocus={handleTextareaFocus}
                           onPaste={handleTextareaPaste}
                           onCompositionStart={() => { isComposingRef.current = true }}
@@ -9621,7 +9621,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               value={input}
                               onChange={handleTextareaChange}
                               onKeyDown={handleKeyDown}
-                              onKeyPress={handleKeyPress}
                               onFocus={handleTextareaFocus}
                               onPaste={handleTextareaPaste}
                               onCompositionStart={() => { isComposingRef.current = true }}
