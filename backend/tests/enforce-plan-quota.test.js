@@ -121,6 +121,37 @@ describe("enforcePlanQuota — anonymous and unlimited paths", () => {
   });
 });
 
+describe("enforcePlanQuota — superAdmin bypass", () => {
+  test("superAdmin on FREE plan → next() with no DB read and no 429", async () => {
+    // The prisma stub throws if count() is reached — proving the bypass
+    // short-circuits before the daily-count query for staff accounts.
+    const prismaThatThrows = {
+      apiUsage: {
+        async count() {
+          throw new Error("count() must not run for a superAdmin");
+        },
+      },
+    };
+    const mw = enforcePlanQuota({
+      surface: "document-ai",
+      prismaClient: prismaThatThrows,
+    });
+    const res = fakeRes();
+    const next = fakeNext();
+    mw(
+      { user: { id: "admin", plan: "FREE", isSuperAdmin: true } },
+      res,
+      next,
+    );
+    await tick();
+    assert.equal(next.calls(), 1);
+    const { statusCode, headers } = res._state();
+    assert.equal(statusCode, 200);
+    // Bypass returns before setQuotaHeaders — no metering headers for staff.
+    assert.equal(Object.keys(headers).length, 0);
+  });
+});
+
 describe("enforcePlanQuota — FREE plan daily calls", () => {
   test("FREE user under daily cap → headers set, next() called", async () => {
     const mw = enforcePlanQuota({

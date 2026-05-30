@@ -89,6 +89,32 @@ describe("tryConsumePlanQuota — FREE plan", () => {
   });
 });
 
+describe("tryConsumePlanQuota — superAdmin bypass", () => {
+  test("superAdmin on FREE plan → ok:true unlimited, NO daily-count DB read", async () => {
+    // apiUsageCount:99 is well past the 3/day cap — a superAdmin must
+    // still sail through, and the count() query must never run.
+    const prisma = makePrismaStub({ apiUsageCount: 99 });
+    const result = await tryConsumePlanQuota({
+      userId: "admin",
+      prisma,
+      user: { id: "admin", plan: "FREE", isSuperAdmin: true },
+    });
+    assert.deepEqual(result, { ok: true, unlimited: true, bypass: "superadmin" });
+    assert.equal(prisma._apiUsageCalls().length, 0);
+    assert.equal(prisma._calls().length, 0);
+  });
+
+  test("superAdmin on a paid plan over the token cap → still ok:true", async () => {
+    const prisma = makePrismaStub();
+    const result = await tryConsumePlanQuota({
+      userId: "admin",
+      prisma,
+      user: { id: "admin", plan: "PRO", isSuperAdmin: true, apiUsage: 5000, monthlyLimit: 1000 },
+    });
+    assert.deepEqual(result, { ok: true, unlimited: true, bypass: "superadmin" });
+  });
+});
+
 describe("tryConsumePlanQuota — paid plans", () => {
   test("PRO under cap → ok:true, NO DB call (read-only check)", async () => {
     const prisma = makePrismaStub();

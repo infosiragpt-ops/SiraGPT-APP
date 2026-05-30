@@ -19,6 +19,7 @@ const {
   getPlanQuotaSnapshot,
   checkPaidTokenCap,
   recordApiUsage,
+  isPlanQuotaExempt,
   FREE_CALL_LIMIT,
   WARNING_THRESHOLD,
 } = require("../src/services/plan-quota");
@@ -72,6 +73,49 @@ describe("getPlanQuotaSnapshot — FREE plan (daily calls)", () => {
     assert.equal(snap.remaining, 0);
     assert.equal(snap.percentage, 1);
     assert.equal(snap.exceeded, true);
+  });
+});
+
+describe("isPlanQuotaExempt — superAdmin gate", () => {
+  test("superAdmin → exempt", () => {
+    assert.equal(isPlanQuotaExempt({ isSuperAdmin: true }), true);
+  });
+  test("plain user / admin-only / null → not exempt", () => {
+    assert.equal(isPlanQuotaExempt({ isSuperAdmin: false }), false);
+    assert.equal(isPlanQuotaExempt({ isAdmin: true }), false);
+    assert.equal(isPlanQuotaExempt({}), false);
+    assert.equal(isPlanQuotaExempt(null), false);
+  });
+});
+
+describe("getPlanQuotaSnapshot — superAdmin bypass", () => {
+  test("superAdmin on FREE plan → unlimited snapshot, never exceeded", () => {
+    // Regression: the seeded owner account is a superAdmin whose plan
+    // field is still FREE. Before the bypass it surfaced a 3/3 'exceeded'
+    // snapshot and the 429 gate locked the operator out of their own app.
+    const snap = getPlanQuotaSnapshot(
+      { plan: "FREE", isSuperAdmin: true },
+      { freeDailyCallsUsed: 999 },
+    );
+    assert.equal(snap.plan, "FREE");
+    assert.equal(snap.kind, "none");
+    assert.equal(snap.limit, 0);
+    assert.equal(snap.used, 0);
+    assert.equal(snap.exceeded, false);
+    assert.equal(snap.warning, false);
+    assert.equal(snap.unlimited, true);
+  });
+
+  test("superAdmin on a paid plan over the token cap → still unlimited", () => {
+    const snap = getPlanQuotaSnapshot({
+      plan: "PRO",
+      isSuperAdmin: true,
+      apiUsage: 9_999_999,
+      monthlyLimit: 1000,
+    });
+    assert.equal(snap.exceeded, false);
+    assert.equal(snap.unlimited, true);
+    assert.equal(snap.kind, "none");
   });
 });
 

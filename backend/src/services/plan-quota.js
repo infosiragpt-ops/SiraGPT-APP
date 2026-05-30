@@ -63,6 +63,26 @@ function clampPercentage(used, limit) {
 }
 
 /**
+ * isPlanQuotaExempt — superAdmins transcend plan quotas entirely.
+ *
+ * This mirrors `require-paid-plan.js`, which already lets
+ * `req.user.isSuperAdmin` bypass the paid-feature gate. Without this,
+ * a superAdmin whose `plan` field is still `FREE` (e.g. the seeded
+ * owner/admin account created by `scripts/create-superadmin.js`, or
+ * any admin account that predates plan assignment) gets blocked by the
+ * FREE 3-calls/day cap — so the very operator of the platform can't
+ * use their own product after three messages. The plan-quota gate is a
+ * monetization control for end users, not a leash on staff accounts.
+ *
+ * Exemption keys off `isSuperAdmin` only (not `isAdmin`) to match the
+ * exact bypass surface of `require-paid-plan.js`; widening it is a
+ * deliberate decision, not an accident of this helper.
+ */
+function isPlanQuotaExempt(user) {
+  return Boolean(user && user.isSuperAdmin === true);
+}
+
+/**
  * getPlanQuotaSnapshot — pure function. Returns a normalized view
  * of the user's quota state with `kind: 'calls' | 'tokens'`. Never
  * throws; null/undefined input returns a "no quota" snapshot so
@@ -119,6 +139,23 @@ function getPlanQuotaSnapshot(user, options = {}) {
       percentage: 0,
       exceeded: false,
       warning: false,
+    };
+  }
+
+  // superAdmins are never metered. Report an unlimited, never-exceeded
+  // snapshot so quota headers and dashboards show "no enforcement"
+  // rather than a misleading "3/3 used" for a staff account.
+  if (isPlanQuotaExempt(user)) {
+    return {
+      plan: user.plan,
+      kind: 'none',
+      used: 0,
+      limit: 0,
+      remaining: 0,
+      percentage: 0,
+      exceeded: false,
+      warning: false,
+      unlimited: true,
     };
   }
 
@@ -320,6 +357,12 @@ async function recordApiUsage({ prisma, userId, model, tokens } = {}) {
 async function tryConsumePlanQuota({ userId, prisma, user } = {}) {
   if (!user) return { ok: true };
 
+  // superAdmins bypass the plan gate entirely (see isPlanQuotaExempt).
+  // Returning before the FREE branch also skips the daily-count DB read.
+  if (isPlanQuotaExempt(user)) {
+    return { ok: true, unlimited: true, bypass: 'superadmin' };
+  }
+
   if (user.plan === 'FREE') {
     const usedToday = await countFreeDailyCalls({ userId: userId || user.id, prisma });
     if (usedToday >= FREE_CALL_LIMIT) {
@@ -363,6 +406,7 @@ async function tryConsumePlanQuota({ userId, prisma, user } = {}) {
 module.exports = {
   getPlanQuotaSnapshot,
   getFreeDailyWindow,
+  isPlanQuotaExempt,
   countFreeDailyCalls,
   fetchUserPlanQuota,
   tryConsumePlanQuota,

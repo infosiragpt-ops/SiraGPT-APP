@@ -37,6 +37,7 @@
 const {
   getPlanQuotaSnapshot,
   countFreeDailyCalls,
+  isPlanQuotaExempt,
   WARNING_THRESHOLD,
 } = require('../services/plan-quota');
 const prisma = require('../config/database');
@@ -91,6 +92,11 @@ function enforcePlanQuota(options = {}) {
     // (rate-limit-policy.js, JWT-aware key generator) handles that
     // surface; we don't double-gate here.
     if (!req || !req.user) return next();
+
+    // superAdmins transcend plan quotas (see plan-quota.isPlanQuotaExempt).
+    // Short-circuit before the async block so a staff account never pays
+    // the daily-count DB read and never trips the 429 gate.
+    if (isPlanQuotaExempt(req.user)) return next();
 
     Promise.resolve()
       .then(async () => {
