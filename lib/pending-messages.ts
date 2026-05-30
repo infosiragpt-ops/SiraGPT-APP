@@ -28,7 +28,15 @@ export interface PendingMessage {
   attempts: number
   /** Max attempts before giving up */
   maxAttempts: number
+  /** ISO timestamp of the last retry attempt */
+  lastAttemptAt?: string
+  /** ISO timestamp before which retryAll should skip this item */
+  nextRetryAt?: string
+  /** Last transport error, useful for diagnostics/support */
+  lastError?: string
 }
+
+let retryInFlight: Promise<{ retried: number; stillPending: number }> | null = null
 
 /* ------------------------------------------------------------------ */
 /*  Storage helpers                                                    */
@@ -75,7 +83,7 @@ export function save(
     intentOverride,
     createdAt: new Date().toISOString(),
     attempts: 0,
-    maxAttempts: 3,
+    maxAttempts: 5,
   }
   const all = getAllRaw()
   // Replace any previous pending message for the same chat (only one
@@ -111,18 +119,38 @@ export function count(): number {
 export async function retryAll(
   sendFn: (msg: PendingMessage) => Promise<boolean>,
 ): Promise<{ retried: number; stillPending: number }> {
+  if (retryInFlight) return retryInFlight
+
+  retryInFlight = retryAllInternal(sendFn).finally(() => {
+    retryInFlight = null
+  })
+  return retryInFlight
+}
+
+async function retryAllInternal(
+  sendFn: (msg: PendingMessage) => Promise<boolean>,
+): Promise<{ retried: number; stillPending: number }> {
   const items = getAllRaw()
   if (items.length === 0) return { retried: 0, stillPending: 0 }
 
   let retried = 0
   let stillPending = 0
+  const now = Date.now()
 
   for (const item of items) {
     if (item.attempts >= item.maxAttempts) {
       stillPending++
       continue
     }
+    if (item.nextRetryAt && Date.parse(item.nextRetryAt) > now) {
+      stillPending++
+      continue
+    }
     item.attempts++
+    item.lastAttemptAt = new Date().toISOString()
+    item.nextRetryAt = undefined
+    item.lastError = undefined
+
     try {
       const ok = await sendFn(item)
       if (ok) {
@@ -132,15 +160,16 @@ export async function retryAll(
         retried++
       } else {
         const all = getAllRaw()
-        const updated = all.map((m) => (m.id === item.id ? item : m))
+        const updated = all.map((m) => (m.id === item.id ? withRetryDelay(item) : m))
         persistAll(updated)
         stillPending++
       }
-    } catch {
+    } catch (error) {
       // Failed this attempt — keep in storage for next retry
       // Update attempt count
       const all = getAllRaw()
-      const updated = all.map((m) => (m.id === item.id ? item : m))
+      item.lastError = error instanceof Error ? error.message : "send_failed"
+      const updated = all.map((m) => (m.id === item.id ? withRetryDelay(item) : m))
       persistAll(updated)
       stillPending++
     }
@@ -156,6 +185,8 @@ export async function retryAll(
 export function subscribeOnlineRetry(
   sendFn: (msg: PendingMessage) => Promise<boolean>,
 ): () => void {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') return () => {}
+
   const handler = () => {
     if (navigator.onLine) {
       retryAll(sendFn)
@@ -168,4 +199,13 @@ export function subscribeOnlineRetry(
     setTimeout(handler, 1000)
   }
   return () => window.removeEventListener('online', handler)
+}
+
+function withRetryDelay(item: PendingMessage): PendingMessage {
+  const nextAttempt = Math.max(1, item.attempts)
+  const delayMs = Math.min(30_000, 1_000 * 2 ** (nextAttempt - 1))
+  return {
+    ...item,
+    nextRetryAt: new Date(Date.now() + delayMs).toISOString(),
+  }
 }

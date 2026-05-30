@@ -44,6 +44,7 @@
     "licenses:check": "node scripts/generate-third-party-licenses.js --check",
     "audit:production": "node scripts/audit-production-allowlist.js",
     "doctor:production": "node scripts/doctor-production.js",
+    "smoke:production": "node scripts/smoke-production.js",
     "smoke:local-chat": "node scripts/local-chat-readiness.js",
     "smoke:local-chat:json": "node scripts/local-chat-readiness.js --summary-json",
     "smoke:local-chat:compact": "node scripts/local-chat-readiness.js --compact-json",

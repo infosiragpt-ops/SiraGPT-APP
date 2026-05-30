@@ -14,7 +14,7 @@ import { expect, test } from "@playwright/test"
  *   - /privacy-policy    public page
  *   - /icon.svg          static asset
  */
-const PUBLIC_ROUTES = ["/", "/chat", "/privacy-policy", "/icon.svg", "/api/health"]
+const PUBLIC_ROUTES = ["/", "/chat", "/privacy-policy", "/icon.svg", "/api/health", "/api/health/live"]
 
 for (const route of PUBLIC_ROUTES) {
   test(`route ${route} does not 5xx`, async ({ page }) => {
@@ -49,4 +49,15 @@ test("api health returns dashboard-compatible JSON", async ({ request }) => {
     }),
   )
   expect(body.checks.some((check: { name?: string }) => check.name === "frontend")).toBe(true)
+})
+
+test("api health live is frontend-only and lightweight", async ({ request }) => {
+  const response = await request.get("/api/health/live")
+  const body = await response.json()
+
+  expect(response.status()).toBe(200)
+  expect(body.status).toBe("healthy")
+  expect(body.checks).toEqual([
+    expect.objectContaining({ name: "frontend", status: "healthy" }),
+  ])
 })

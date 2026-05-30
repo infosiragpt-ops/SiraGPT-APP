@@ -14,7 +14,13 @@ import { buildDocumentChatRequest } from "./document-chat-request"
 import { mergeChatPreservingUserMessages } from "./message-preservation"
 import { toast } from "sonner"
 import { useBackgroundStreams } from "./background-streams-context"
-import { save as savePending, clear as clearPending, retryAll } from "./pending-messages"
+import {
+  save as savePending,
+  clear as clearPending,
+  retryAll,
+  subscribeOnlineRetry,
+  type PendingMessage,
+} from "./pending-messages"
 import { devLog } from "./dev-log"
 import { createStreamBuffer, type StreamBuffer } from "./stream-buffer"
 
@@ -429,23 +435,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       streamBufferRef.current = null;
     };
   }, []);
-
-  // Retry pending messages when the user logs back in
-  useEffect(() => {
-    if (!user || !token || !addMessage) return
-    // Try to send any messages that were saved while offline
-    retryAll(async (msg) => {
-      try {
-        await addMessage(msg.content, msg.fileIds, undefined, false, msg.intentOverride as any)
-        return true
-      } catch {
-        return false
-      }
-    })
-    // addMessage closes over user+token (already in deps); listing the
-    // function would lint-loop since it's recreated per render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, token])
 
   // Load user's chats
   useEffect(() => {
@@ -1473,6 +1462,50 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [currentChat, user, token, selectedModel, uploadedFiles, markChatStreaming, markChatIdle]
   );
+
+  const retryPendingMessage = useCallback(async (msg: PendingMessage) => {
+    try {
+      let targetChat =
+        currentChatRef.current?.id === msg.chatId
+          ? currentChatRef.current
+          : chatsRef.current.find((chat) => chat?.id === msg.chatId)
+
+      if (!targetChat) {
+        const response = await apiClient.getChat(msg.chatId)
+        targetChat = response.chat
+      }
+
+      if (!targetChat) return false
+
+      const createdAt = Date.parse(msg.createdAt)
+      const alreadyEchoed = (targetChat.messages || []).some((message: any) => {
+        if (String(message?.role || "").toUpperCase() !== "USER") return false
+        if (message?.content !== msg.content) return false
+        const messageTime = Date.parse(message?.timestamp || message?.createdAt || "")
+        if (!Number.isFinite(createdAt) || !Number.isFinite(messageTime)) return true
+        return Math.abs(messageTime - createdAt) < 10 * 60 * 1000
+      })
+
+      await addMessage(
+        msg.content,
+        msg.fileIds,
+        targetChat,
+        alreadyEchoed,
+        msg.intentOverride as ChatIntent | undefined,
+      )
+      return true
+    } catch (error) {
+      console.warn("Pending message retry failed:", error)
+      return false
+    }
+  }, [addMessage])
+
+  useEffect(() => {
+    if (!user || !token) return
+    void retryAll(retryPendingMessage)
+    return subscribeOnlineRetry(retryPendingMessage)
+  }, [user, token, retryPendingMessage])
+
   const handleNewChatWithPlaceholder = useCallback(async (newChat: Chat, initialContent: string, placeholderContent: string, uploadedFiles: any[]) => {
     const displayFiles = Array.isArray(uploadedFiles)
       ? uploadedFiles.filter(Boolean).map(normalizeMessageAttachment)

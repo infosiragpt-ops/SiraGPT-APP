@@ -1,26 +1,17 @@
 import { NextResponse, type NextRequest } from "next/server"
 import { applyNextApiCorsHeaders, buildNextApiPreflightResponse } from "@/lib/next-api-cors"
-import {
-  backendHealthCheck,
-  frontendCheck,
-  noStoreJson,
-  summarizeHealth,
-  uptimeSeconds,
-} from "@/lib/next-health"
+import { frontendCheck, noStoreJson, uptimeSeconds } from "@/lib/next-health"
 
-export async function HEAD(request: NextRequest) {
+export function HEAD(request: NextRequest) {
   return applyNextApiCorsHeaders(request, new NextResponse(null, { status: 204 }))
 }
 
-export async function GET(request: NextRequest) {
-  const checks = [frontendCheck(), await backendHealthCheck("/health")]
-  const status = summarizeHealth(checks)
-
+export function GET(request: NextRequest) {
   return noStoreJson(request, {
-    status,
+    status: "healthy",
     timestamp: new Date().toISOString(),
     uptime_s: uptimeSeconds(),
-    checks,
+    checks: [frontendCheck()],
   })
 }
 

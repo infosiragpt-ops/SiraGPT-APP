@@ -62,7 +62,7 @@ describe("pending-messages · save / clear / get round-trip", () => {
     assert.equal(msg.content, "hola")
     assert.equal(msg.chatId, "chat-1")
     assert.equal(msg.attempts, 0)
-    assert.equal(msg.maxAttempts, 3)
+    assert.equal(msg.maxAttempts, 5)
     assert.match(msg.id, /^chat-1-\d+-/)
 
     assert.equal(count(), 1)
@@ -167,6 +167,22 @@ describe("pending-messages · retryAll", () => {
     assert.equal(result.retried, 0)
     assert.equal(result.stillPending, 1)
     assert.equal(count(), 1)
+    assert.match(getForChat("chat-1")?.lastError || "", /network down/)
+    assert.ok(getForChat("chat-1")?.nextRetryAt)
+  })
+
+  it("does not retry before nextRetryAt", async () => {
+    const msg = save("later", "chat-1")
+    store[STORAGE_KEY] = JSON.stringify([
+      { ...msg, nextRetryAt: new Date(Date.now() + 60_000).toISOString() },
+    ])
+    let sent = 0
+    const result = await retryAll(async () => {
+      sent++
+      return true
+    })
+    assert.equal(sent, 0)
+    assert.deepEqual(result, { retried: 0, stillPending: 1 })
   })
 })
 
