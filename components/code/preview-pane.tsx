@@ -27,6 +27,7 @@ import {
 import { cn } from "@/lib/utils"
 import { useCodeWorkspace } from "@/lib/code-workspace-context"
 import { buildPreviewDocument, type PreviewKind } from "@/lib/code-preview-build"
+import { CODE_TEMPLATES } from "@/lib/code-templates"
 
 type LogEntry = { level: string; text: string; id: number }
 type Device = "responsive" | "phone"
@@ -189,20 +190,24 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
 
       {/* Viewport */}
       <div className="min-h-0 flex-1 overflow-auto bg-zinc-100/60 p-0 dark:bg-zinc-900/40">
-        <div
-          className={cn(
-            "mx-auto h-full bg-white transition-all dark:bg-zinc-900",
-            device === "phone" && "my-3 h-[calc(100%-1.5rem)] max-w-[390px] overflow-hidden rounded-[28px] border-[6px] border-zinc-800 shadow-2xl",
-          )}
-        >
-          <iframe
-            key={tick}
-            srcDoc={result.html}
-            title="Preview en vivo"
-            className="h-full w-full border-0 bg-white dark:bg-zinc-900"
-            sandbox="allow-scripts allow-forms allow-popups allow-modals allow-pointer-lock"
-          />
-        </div>
+        {result.kind === "empty" || result.kind === "unsupported" ? (
+          <PreviewLaunchpad kind={result.kind} note={result.note} />
+        ) : (
+          <div
+            className={cn(
+              "mx-auto h-full bg-white transition-all dark:bg-zinc-900",
+              device === "phone" && "my-3 h-[calc(100%-1.5rem)] max-w-[390px] overflow-hidden rounded-[28px] border-[6px] border-zinc-800 shadow-2xl",
+            )}
+          >
+            <iframe
+              key={tick}
+              srcDoc={result.html}
+              title="Preview en vivo"
+              className="h-full w-full border-0 bg-white dark:bg-zinc-900"
+              sandbox="allow-scripts allow-forms allow-popups allow-modals allow-pointer-lock"
+            />
+          </div>
+        )}
       </div>
 
       {/* Live console */}
@@ -258,6 +263,36 @@ export function PreviewPane({ onClose }: { onClose?: () => void }) {
           </div>
         </div>
       ) : null}
+    </div>
+  )
+}
+
+function PreviewLaunchpad({ kind, note }: { kind: PreviewKind; note?: string }) {
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-5 p-8 text-center">
+      <div>
+        <p className="text-sm font-medium text-foreground">
+          {kind === "empty" ? "Tu preview en vivo" : "Este archivo no se previsualiza"}
+        </p>
+        <p className="mx-auto mt-1 max-w-xs text-xs leading-relaxed text-muted-foreground">
+          {note || "Empieza desde una plantilla o pídele algo al agente — lo verás aquí al instante."}
+        </p>
+      </div>
+      <div className="grid w-full max-w-xs gap-2">
+        {CODE_TEMPLATES.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() =>
+              window.dispatchEvent(new CustomEvent("siragpt:code-load-template", { detail: { id: t.id } }))
+            }
+            className="flex flex-col items-start rounded-xl border border-border/50 bg-background/60 px-4 py-3 text-left backdrop-blur transition-colors hover:border-border hover:bg-muted/40"
+          >
+            <span className="text-[13px] font-medium text-foreground">{t.name}</span>
+            <span className="text-[11px] text-muted-foreground">{t.description}</span>
+          </button>
+        ))}
+      </div>
     </div>
   )
 }

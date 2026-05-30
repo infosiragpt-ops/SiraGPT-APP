@@ -196,6 +196,15 @@ export function CodeWorkspace() {
   }, [])
 
   React.useEffect(() => {
+    const onLoadTemplate = (e: Event) => {
+      const id = (e as CustomEvent<{ id?: string }>).detail?.id
+      if (id) loadTemplate(id)
+    }
+    window.addEventListener("siragpt:code-load-template", onLoadTemplate)
+    return () => window.removeEventListener("siragpt:code-load-template", onLoadTemplate)
+  }, [loadTemplate])
+
+  React.useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const isMod = e.metaKey || e.ctrlKey
       if (!isMod) {
