@@ -360,6 +360,7 @@ const enterpriseRoutes = require('./src/routes/enterprise');
 const socialPostsRoutes = require('./src/routes/social-posts');
 const githubCodexRoutes = require('./src/routes/github-codex');
 const codexRunsRoutes = require('./src/routes/codex-runs');
+const telegramRoutes = require('./src/routes/telegram');
 const pushRoutes = require('./src/routes/push');
 const coworkRoutes = require('./src/routes/cowork');
 const contextIntelligenceRoutes = require('./src/routes/context-intelligence');
@@ -1037,6 +1038,21 @@ app.use('/api/enterprise', enterpriseRoutes);
 app.use('/api/social-posts', socialPostsRoutes);
 app.use('/api/codex/github', githubCodexRoutes);
 app.use('/api/codex', codexRunsRoutes);
+// Telegram remote control for dev agents. CSRF-exempt (external POST gated by a
+// secret-token header) and fully inert unless TELEGRAM_BOT_TOKEN is set.
+app.use('/api/telegram', telegramRoutes);
+try {
+  const tgControl = require('./src/services/telegram/telegram-control');
+  const tgCfg = tgControl.getTelegramConfig();
+  if (tgCfg.enabled && tgCfg.webhookUrl) {
+    tgControl
+      .setTelegramWebhook(tgCfg)
+      .then((r) => console.log(r.ok ? '[telegram] webhook registered' : '[telegram] setWebhook failed'))
+      .catch(() => {});
+  }
+} catch {
+  /* telegram is optional */
+}
 app.use('/api/push', pushRoutes);
 app.use('/api/cowork', coworkRoutes);
 app.use('/api/context-intelligence', contextIntelligenceRoutes);
