@@ -751,7 +751,7 @@ jobs:
   # touching the protection rule.
   ci:
     name: CI · required checks passed
-    needs: [frontend, backend, docker, licenses, security-audit, ui-lock-verify, visual-regression-check, secret-scan, dependency-audit, drizzle-migrations-dry-run]
+    needs: [frontend, backend, docker, licenses, security-audit, ui-lock-verify, visual-regression-check, secret-scan, dependency-audit, drizzle-migrations-dry-run, e2e-critical]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -791,6 +791,10 @@ jobs:
           fi
           if [[ "${{ needs.drizzle-migrations-dry-run.result }}" != "success" ]]; then
             echo "✗ drizzle-migrations-dry-run: ${{ needs.drizzle-migrations-dry-run.result }}"
+            exit 1
+          fi
+          if [[ "${{ needs.e2e-critical.result }}" != "success" ]]; then
+            echo "✗ e2e-critical: ${{ needs.e2e-critical.result }}"
             exit 1
           fi
           echo "✓ all required checks passed"
