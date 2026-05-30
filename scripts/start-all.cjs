@@ -106,12 +106,11 @@ function spawnBackend() {
   log("start-all", "spawning backend", { cwd: BACKEND_DIR, port: BACKEND_PORT });
   const env = {
     ...process.env,
-    // Force NODE_ENV=production for the backend child unless the operator
-    // explicitly overrode it. Without this the backend's global
-    // unhandledRejection handler exits the process on transient Redis
-    // errors (Upstash quota, connection blips), which then tears down
-    // the whole single-container deployment.
-    NODE_ENV: process.env.NODE_ENV || "production",
+    // Force NODE_ENV=production for the backend in deployments, or when
+    // the operator hasn't explicitly set it. This ensures OAuth callback
+    // URLs and other production-only paths are used in the deployed
+    // container even if Replit injects NODE_ENV=development by default.
+    NODE_ENV: process.env.REPLIT_DEPLOYMENT === "1" ? "production" : (process.env.NODE_ENV || "production"),
     PORT: String(BACKEND_PORT),
     HOST: BACKEND_HOST,
     BIND_ADDRESS: BACKEND_HOST,
