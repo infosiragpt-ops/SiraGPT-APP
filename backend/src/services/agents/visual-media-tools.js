@@ -223,7 +223,9 @@ const generateImage = {
 
       emitEvent(ctx, 'tool_output', { tool: 'generate_image', preview: 'Generando imagen…', partial: true });
 
-      const imageB64 = await ai.generateImage(enhancedPrompt, 'OpenAI', 'dall-e-3');
+      // dall-e-3 was removed from this account (400 model does not exist);
+      // use gpt-image-2 to match ai-service.generateImage's new default.
+      const imageB64 = await ai.generateImage(enhancedPrompt, 'OpenAI', 'gpt-image-2');
       if (!imageB64) {
         emitEvent(ctx, 'tool_output', { tool: 'generate_image', ok: false, preview: 'El servicio de imágenes no devolvió resultado. Reintenta con un prompt más simple.' });
         return { ok: false, error: 'image generation returned empty result' };

@@ -1298,6 +1298,11 @@ class ApiClient {
       method: 'POST',
       body: JSON.stringify(data),
       signal: options.signal,
+      // Image generation routinely takes 60-180s (gpt-image-2, Seedream,
+      // Imagen). The default 30s client timeout aborted the request while
+      // the backend was still working, surfacing "Request timed out after
+      // 30000ms" even though the image generated fine server-side.
+      timeoutMs: 180000,
     });
     // El backend ahora envía cabeceras 200 al inicio (para no morir
     // en el proxy de 30 s) y, si la generación falla después, devuelve
@@ -1314,6 +1319,7 @@ class ApiClient {
     const response = await this.request('/ai/generate-image', {
       method: 'POST',
       body: JSON.stringify(data),
+      timeoutMs: 180000, // image edit takes 60-180s; see generateImage
     })
     if (response && typeof response === 'object' && (response as any).error) {
       const err: any = new Error((response as any).error);
@@ -2215,6 +2221,7 @@ class ApiClient {
       method: 'POST',
       body: JSON.stringify(data),
       signal: opts?.signal,
+      timeoutMs: 120000, // video submit + first-frame can exceed 30s
     });
   }
   // async getVideoStatus(operationId: string) {

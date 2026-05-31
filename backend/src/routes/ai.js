@@ -6383,8 +6383,13 @@ router.post(
       try {
         console.log('📡 Calling internal video service...');
 
-        const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
-        let url = `${baseUrl}/api/video/generate`;
+        // Internal service-to-service call MUST stay on the loopback. Using
+        // the public BASE_URL (https://api.siragpt.com) routes the request
+        // out through Cloudflare and back, which strips/rejects the forwarded
+        // JWT → "POST /api/video/generate 401 (axios)" while the user's own
+        // token was valid. Hit the local listener directly instead.
+        const internalBase = `http://127.0.0.1:${process.env.PORT || 5000}`;
+        let url = `${internalBase}/api/video/generate`;
 
         const videoPayload = {
           prompt,
@@ -6400,9 +6405,17 @@ router.post(
         const videoResponse = await axios.post(url, videoPayload, {
           headers: {
             'Authorization': req.headers.authorization,
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            // Session fingerprint binding (session-fingerprint.js) ties the
+            // token to `${req.ip}:hash(user-agent)`. Without forwarding the
+            // ORIGINAL UA + IP, this loopback call presents UA "axios/x" and
+            // ip 127.0.0.1 → fingerprint mismatch → auth REVOKES the user's
+            // session (deleteMany) and returns 401, logging the user out.
+            // Forward both so the internal request's fingerprint matches.
+            'User-Agent': req.headers['user-agent'] || 'siragpt-internal',
+            'X-Forwarded-For': req.ip,
           },
-          timeout: 30000 // 30 second timeout
+          timeout: 120000 // image-to-video first frame can exceed 30s
         });
 
         console.log('✅ Video service response:', videoResponse.data);
@@ -6605,13 +6618,20 @@ router.get('/video-status/:operationId', authenticateToken, async (req, res) => 
 
     // ✅ Make internal API call to video service
     const axios = require('axios');
-    const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
-    let url = `${baseUrl}/api/video/status/${operationId}`;
+    // Loopback for the internal call — public BASE_URL would bounce through
+    // Cloudflare and 401 on the forwarded token (same bug as generate-video).
+    const internalBase = `http://127.0.0.1:${process.env.PORT || 5000}`;
+    let url = `${internalBase}/api/video/status/${operationId}`;
 
     try {
       const statusResponse = await axios.get(url, {
         headers: {
-          'Authorization': req.headers.authorization
+          'Authorization': req.headers.authorization,
+          // Forward original UA + IP so the loopback call's session
+          // fingerprint matches (see generate-video above) — otherwise
+          // polling status would revoke the user's session.
+          'User-Agent': req.headers['user-agent'] || 'siragpt-internal',
+          'X-Forwarded-For': req.ip,
         },
         timeout: 10000 // 10 second timeout
       });
