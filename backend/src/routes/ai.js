@@ -1246,6 +1246,25 @@ async function loadUserFile(fileRef, userId) {
 const normalizeDuplicateTurnContent = (value) =>
   String(value || '').trim().replace(/\s+/g, ' ');
 
+function parseMessageFilesValue(files) {
+  if (!files) return [];
+  if (Array.isArray(files)) return files;
+  if (typeof files !== 'string') return [];
+  try {
+    const parsed = JSON.parse(files);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function hasPersistedAssistantPayload(message) {
+  if (!message) return false;
+  if (typeof message.content === 'string' && message.content.trim().length > 0) return true;
+  if (message.content != null && typeof message.content !== 'string' && String(message.content).trim().length > 0) return true;
+  return parseMessageFilesValue(message.files).length > 0;
+}
+
 async function findRecentCompletedDuplicateTurn(chatId, content, windowMs = 5_000) {
   const normalized = normalizeDuplicateTurnContent(content);
   if (!chatId || !normalized) return null;
@@ -1274,6 +1293,7 @@ async function findRecentCompletedDuplicateTurn(chatId, content, windowMs = 5_00
     !assistantMessage ||
     userMessage.role !== 'USER' ||
     assistantMessage.role !== 'ASSISTANT' ||
+    !hasPersistedAssistantPayload(assistantMessage) ||
     normalizeDuplicateTurnContent(userMessage.content) !== normalized ||
     userMessage.files
   ) {
@@ -1392,6 +1412,10 @@ async function persistUserMessageOnce(chatId, content, filesJson = null, windowM
 
 async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles = [], regenerate = false, extraMetadata = null, userPlan = null) {
   let assistantMessage = null;
+  const normalizedResponseContent = typeof fullResponseContent === 'string'
+    ? fullResponseContent
+    : (fullResponseContent == null ? '' : String(fullResponseContent));
+  const hasAssistantFiles = Array.isArray(assistantFiles) && assistantFiles.length > 0;
   try {
     console.log("Background task: Saving to database...", { assistantFiles });
 
@@ -1401,9 +1425,9 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
     // modifies the response and never throws. Logged for observability
     // so the team can spot fidelity drift over time. Wrapped in its own
     // try/catch so a fidelity bug can't break the save path.
-    if (Array.isArray(processedFiles) && processedFiles.length > 0 && typeof fullResponseContent === 'string' && fullResponseContent.trim().length > 0) {
+    if (Array.isArray(processedFiles) && processedFiles.length > 0 && normalizedResponseContent.trim().length > 0) {
       try {
-        const audit = documentResponseFidelity.auditChatResponse(fullResponseContent, processedFiles);
+        const audit = documentResponseFidelity.auditChatResponse(normalizedResponseContent, processedFiles);
         if (audit.total > 0 && (audit.unsupported > 0 || audit.contradicted > 0)) {
           console.log(`[ai/fidelity] ${audit.summary} chatId=${chatId || 'none'} files=${processedFiles.length}`);
         }
@@ -1414,7 +1438,7 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
 
     // ✅ Token calculation with tiktoken
     const promptTokens = usageService.calculateTextTokens(prompt, model);
-    const responseTokens = usageService.calculateTextTokens(fullResponseContent, model);
+    const responseTokens = usageService.calculateTextTokens(normalizedResponseContent, model);
     const totalTokens = promptTokens + responseTokens;
 
     // ✅ Save messages if chatId provided
@@ -1447,11 +1471,19 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
       const metadataPayload = extraMetadata && typeof extraMetadata === 'object' && Object.keys(extraMetadata).length > 0
         ? JSON.stringify(extraMetadata)
         : null;
+      if (!normalizedResponseContent.trim() && !hasAssistantFiles) {
+        console.warn('[ai/generate] skipped empty assistant message save', {
+          chatId,
+          streamId: extraMetadata?.streamId || null,
+          idempotencyKey: extraMetadata?.idempotencyKey || null,
+        });
+        return { assistantMessage: null, skippedEmptyAssistant: true };
+      }
       assistantMessage = await prisma.message.create({
         data: {
           chatId,
           role: 'ASSISTANT',
-          content: fullResponseContent,
+          content: normalizedResponseContent,
           tokens,
           files: assistantFiles.length > 0 ? JSON.stringify(assistantFiles) : null,
           metadata: metadataPayload,

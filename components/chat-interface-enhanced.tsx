@@ -297,6 +297,34 @@ const buildAgentFileMetadata = (files: any[] = []) =>
     })
     .filter(Boolean)
 
+const parseMessageFilesForRender = (files: any): any[] => {
+  if (!files) return []
+  if (Array.isArray(files)) return files
+  if (typeof files !== "string") return []
+  try {
+    const parsed = JSON.parse(files)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+const hasMessageTextForRender = (content: any): boolean => {
+  if (typeof content === "string") return content.trim().length > 0
+  if (content == null) return false
+  return String(content).trim().length > 0
+}
+
+const shouldRenderChatMessage = (message: any, allowEmptyStreamingAssistant = false): boolean => {
+  if (!message) return false
+  const role = String(message.role || "").toUpperCase()
+  if (role === "USER") return true
+  if (message.error || message.progressStage) return true
+  if (hasMessageTextForRender(message.content)) return true
+  if (parseMessageFilesForRender(message.files).length > 0) return true
+  return allowEmptyStreamingAssistant && role === "ASSISTANT"
+}
+
 type SearchActivityStatus = "running" | "complete" | "error" | "aborted"
 type SearchActivityEntryStatus = "running" | "complete" | "warning" | "error"
 
@@ -9419,8 +9447,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         // bubble is ever rendered (server id wins). See
                         // lib/message-preservation.ts.
                         const messages = dedupeMessages(currentChat?.messages || []);
-                        const stableMessages = isCurrentChatStreaming ? messages.slice(0, -1) : messages;
-                        const streamingMessage = isCurrentChatStreaming ? messages[messages.length - 1] : null;
+                        const stableMessages = isCurrentChatStreaming
+                          ? messages.slice(0, -1).filter((message) => shouldRenderChatMessage(message))
+                          : messages.filter((message) => shouldRenderChatMessage(message));
+                        const streamingCandidate = isCurrentChatStreaming ? messages[messages.length - 1] : null;
+                        const streamingMessage = streamingCandidate && shouldRenderChatMessage(streamingCandidate, true)
+                          ? streamingCandidate
+                          : null;
 
                         return (
                           <>

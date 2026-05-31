@@ -894,7 +894,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     // viz dispatchers) as "thinking" so the unified placeholder with
     // the animated SVG bars stays visible for the whole activity.
     const isThinking = isAssistant && !message.error && (
-      !message.content || !!(message as any).progressStage
+      (isStreaming && !message.content) || !!(message as any).progressStage
     );
     // const isThinking = isAssistant && message.content === null;
 
