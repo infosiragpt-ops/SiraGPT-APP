@@ -134,7 +134,7 @@ export function validateFile(
   if (isOfficeTemporaryLockFile(file)) {
     return {
       ok: false,
-      reason: 'Ese archivo es temporal de Microsoft Office (empieza con "~$"). Cierra Word/Excel/PowerPoint y sube el documento original.',
+      reason: 'Ese no es el documento: es un archivo temporal de Microsoft Office de bloqueo (empieza con "~$" y suele pesar pocos bytes). Cierra Word/Excel/PowerPoint y selecciona el documento original con nombre normal, no el archivo de bloqueo.',
       code: "office_temp_lock_file",
     }
   }

@@ -5685,6 +5685,25 @@ But first, you need to connect your Spotify account securely using the button be
       filesToUpload = imageFiles;
     }
 
+    // Picker selections used to bypass the same client-side gate that
+    // drag/drop and paste already use. Validate here as the single final
+    // preflight so known-bad files (for example Office ~$ lock files) are
+    // explained immediately and never become failed retry chips.
+    const { accepted, rejected } = validateBatch(filesToUpload, {
+      existingCount: uploadedFilesRef.current.length,
+    });
+    if (rejected.length > 0) {
+      const grouped = rejected.reduce<Record<string, number>>((acc, r) => {
+        acc[r.reason] = (acc[r.reason] || 0) + 1;
+        return acc;
+      }, {});
+      Object.entries(grouped).forEach(([reason, n]) => {
+        toast.error(n > 1 ? `${reason} (${n} archivos)` : reason);
+      });
+    }
+    if (accepted.length === 0) return;
+    filesToUpload = accepted;
+
     // Idempotency key — backend dedupes retries of the SAME batch attempt.
     const idempotencyKey = `upload-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
