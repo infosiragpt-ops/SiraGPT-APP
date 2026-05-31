@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { useState, useEffect, useMemo, useCallback } from "react"
+import { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { cn, downloadHref, downloadUrlAsFile } from "@/lib/utils"
@@ -1200,6 +1200,38 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         // }
 
 
+        // ── Expand / collapse (Ver más / Ver menos) ──────────────────
+        // Long final messages are clamped to a comfortable reading height
+        // with a soft fade + a toggle, so a single huge answer doesn't
+        // dominate the scroll. Streaming bubbles are NEVER clamped (their
+        // height grows token-by-token). We seed `overflowing` from a cheap
+        // char heuristic so a long message paints already-collapsed (no
+        // expand-then-snap flash), then refine it with the real measured
+        // height after mount.
+        const COLLAPSED_MAX_PX = 360;
+        const contentRef = useRef<HTMLDivElement>(null);
+        const [isExpanded, setIsExpanded] = useState(false);
+        const [overflow, setOverflow] = useState<{ overflowing: boolean; fullHeight: number }>(() => ({
+            overflowing: !isStreaming && typeof content === 'string' && content.length > 1400,
+            fullHeight: 0,
+        }));
+        useEffect(() => {
+            if (isStreaming) {
+                setOverflow({ overflowing: false, fullHeight: 0 });
+                return;
+            }
+            const el = contentRef.current;
+            if (!el) return;
+            // scrollHeight reports the full content height even while the
+            // element is clamped via max-height, so this is accurate in
+            // both collapsed and expanded states.
+            const sh = el.scrollHeight;
+            setOverflow({ overflowing: sh > COLLAPSED_MAX_PX + 48, fullHeight: sh });
+        // isStreaming is a closure prop, not local state, but we DO want to
+        // re-measure when a bubble transitions streaming -> final.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        }, [content, isStreaming]);
+
         // Tag-renderers that don't depend on streaming/final mode. Kept
         // as a single useMemo so both maps reuse the same references and
         // MemoMarkdownBlock can rely on components identity for memoing.
@@ -1386,19 +1418,30 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
             toast.success("Selección copiada con formato para Word");
         };
 
+        const collapsible = !isStreaming && overflow.overflowing;
+        const isClamped = collapsible && !isExpanded;
         return (
             // [&_p:last-child]:!mb-0 trims the trailing 1em margin that
             // `prose-sm` adds to the final paragraph — that margin was
             // pushing the action rail visually too far from the message.
-            // We keep all other prose typography intact.
-            <div className={cn(
-                "prose prose-sm dark:prose-invert max-w-none text-current leading-relaxed",
-                "[&_p:last-child]:!mb-0 [&_p:first-child]:!mt-0",
-                "[&_ul:last-child]:!mb-0 [&_ol:last-child]:!mb-0 [&_pre:last-child]:!mb-0",
-            )}
-                data-sgpt-rich-copy-root=""
-                onCopyCapture={handleRenderedCopy}
-            >
+            // We keep all other prose typography intact. The outer wrapper
+            // hosts the optional expand/collapse affordance for long answers.
+            <div className="sgpt-message-collapsible">
+              <div className="relative">
+                <div
+                    ref={contentRef}
+                    className={cn(
+                        "prose prose-sm dark:prose-invert max-w-none text-current leading-relaxed",
+                        "[&_p:last-child]:!mb-0 [&_p:first-child]:!mt-0",
+                        "[&_ul:last-child]:!mb-0 [&_ol:last-child]:!mb-0 [&_pre:last-child]:!mb-0",
+                        collapsible && "transition-[max-height] duration-300 ease-in-out",
+                        isClamped && "overflow-hidden",
+                    )}
+                    style={collapsible ? { maxHeight: isExpanded ? overflow.fullHeight : COLLAPSED_MAX_PX } : undefined}
+                    data-sgpt-rich-copy-root=""
+                    data-collapsed={isClamped ? "true" : undefined}
+                    onCopyCapture={handleRenderedCopy}
+                >
                 {(() => {
                     // While streaming, split the assistant content into a
                     // stable "head" (closed blocks) and a "live tail" so
@@ -1453,6 +1496,36 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                         className="premium-caret ml-0.5 inline-block w-[0.5ch] h-[1em] -mb-[0.15em] bg-current align-baseline rounded-[1px]"
                     />
                 ) : null}
+                </div>
+                {isClamped && (
+                    <div
+                        aria-hidden="true"
+                        className="pointer-events-none absolute inset-x-0 bottom-0 h-14 bg-gradient-to-t from-background to-transparent"
+                    />
+                )}
+              </div>
+              {collapsible && (
+                <button
+                    type="button"
+                    onClick={() => setIsExpanded((v) => !v)}
+                    aria-expanded={isExpanded}
+                    className="mt-1.5 inline-flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors select-none rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                >
+                    {isExpanded ? "Ver menos" : "Ver más"}
+                    <svg
+                        aria-hidden="true"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        className={cn("h-3.5 w-3.5 transition-transform duration-200", isExpanded && "rotate-180")}
+                    >
+                        <path d="m6 9 6 6 6-6" />
+                    </svg>
+                </button>
+              )}
             </div>
         );
     };
@@ -2657,7 +2730,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
 
 
     return (
-        <div className="flex  ">
+        <div className="flex  " data-message-id={message.id}>
             {/* {message.role === "ASSISTANT" && (
                 <Avatar className="h-8 w-8 flex-shrink-0">
                     <AvatarFallback className="bg-primary text-primary-foreground text-xs">AI</AvatarFallback>

@@ -45,6 +45,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
+import { dedupeMessages } from "@/lib/message-preservation"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { CredentialWarning } from "@/components/credential-warning"
 import { ComposerCharCounter } from "@/components/composer-char-counter"
@@ -9412,7 +9413,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   <ScrollArea className="chat-message-scroll flex-1 w-full" ref={scrollAreaRef} onClickCapture={handleMessageAreaClick}>
                     <div className="chat-message-scroll-content space-y-2 max-w-3xl mx-auto w-full">
                       {(() => {
-                        const messages = currentChat?.messages || [];
+                        // dedupeMessages is the render-layer safety net against
+                        // the optimistic-UI duplication bug: even if an optimistic
+                        // message and its server twin both reach state, only one
+                        // bubble is ever rendered (server id wins). See
+                        // lib/message-preservation.ts.
+                        const messages = dedupeMessages(currentChat?.messages || []);
                         const stableMessages = isCurrentChatStreaming ? messages.slice(0, -1) : messages;
                         const streamingMessage = isCurrentChatStreaming ? messages[messages.length - 1] : null;
 

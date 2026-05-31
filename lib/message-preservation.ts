@@ -262,6 +262,94 @@ export function mergeMessagesPreservingUserContent<TMessage extends ChatMessageL
   return preserveOrphanAssistantMessages(result, localMessages);
 }
 
+const OPTIMISTIC_ID_RE = /^msg-(?:user|ai|temp)-/;
+
+// Minimal structural shape for dedupe — deliberately WITHOUT ChatMessageLike's
+// `[key: string]: unknown` index signature, so concrete app message types
+// (e.g. the frontend `Message`) are assignable without a cast.
+type DedupeMessageLike = { id?: string; role?: string; content?: unknown };
+
+const sameContentNormalized = (a: DedupeMessageLike, b: DedupeMessageLike) => {
+  const ta = asText(a?.content).trim();
+  const tb = asText(b?.content).trim();
+  if (!ta || !tb) return false;
+  // Tolerate trivial whitespace differences (server may collapse newlines).
+  return ta.replace(/\s+/g, ' ') === tb.replace(/\s+/g, ' ');
+};
+
+const richerMessage = <T extends DedupeMessageLike>(a: T, b: T): T => {
+  // Prefer the copy with more content; on a tie prefer the stable
+  // (non-optimistic) id because that's the server's source-of-truth record.
+  const la = asText(a?.content).length;
+  const lb = asText(b?.content).length;
+  if (lb > la) return b;
+  if (la > lb) return a;
+  const aOptimistic = a?.id ? OPTIMISTIC_ID_RE.test(String(a.id)) : true;
+  const bOptimistic = b?.id ? OPTIMISTIC_ID_RE.test(String(b.id)) : true;
+  if (aOptimistic && !bOptimistic) return b;
+  return a;
+};
+
+/**
+ * Final safety net against the optimistic-UI message-duplication bug — the
+ * same turn surviving twice in the rendered list. Two failure modes collapse
+ * here:
+ *
+ *  1. **Exact id collision** — two entries share an id (e.g. an AI placeholder
+ *     that was both replaced in place AND re-stitched as an orphan). We keep
+ *     the richer copy in the slot where the id first appeared.
+ *  2. **Optimistic / server twins** — an optimistic message
+ *     (`msg-user-…` / `msg-ai-…` / `msg-temp-…`) sitting next to its
+ *     server-persisted copy (stable id, same role, same text). The server
+ *     copy is canonical, so the optimistic twin is dropped. This is the
+ *     exact "sigue duplicando los mensajes" case: the content-/ordinal-based
+ *     merge couldn't align the two ids, so both ended up in the list.
+ *
+ * Insertion order is preserved and, when nothing is duplicated, the original
+ * array reference is returned so React bails out of needless re-renders.
+ */
+export function dedupeMessages<TMessage extends DedupeMessageLike>(
+  messages: TMessage[] = [],
+): TMessage[] {
+  if (!Array.isArray(messages) || messages.length < 2) return messages;
+
+  // Pass A — collapse exact-id duplicates, keeping the richer copy in the
+  // earliest slot the id appeared.
+  const slotById = new Map<string, number>();
+  const collapsed: TMessage[] = [];
+  for (const message of messages) {
+    const id = message?.id ? String(message.id) : '';
+    if (id && slotById.has(id)) {
+      const slot = slotById.get(id)!;
+      collapsed[slot] = richerMessage(collapsed[slot], message);
+      continue;
+    }
+    if (id) slotById.set(id, collapsed.length);
+    collapsed.push(message);
+  }
+
+  // Pass B — drop optimistic twins whose stable-id sibling is already present.
+  const hasStableTwin = (candidate: TMessage, selfIndex: number) =>
+    collapsed.some((other, j) => {
+      if (j === selfIndex) return false;
+      if (!other?.id || OPTIMISTIC_ID_RE.test(String(other.id))) return false;
+      if (String(other.role || '') !== String(candidate.role || '')) return false;
+      return sameContentNormalized(other, candidate);
+    });
+
+  const deduped = collapsed.filter((message, index) => {
+    const id = message?.id ? String(message.id) : '';
+    if (id && OPTIMISTIC_ID_RE.test(id) && hasStableTwin(message, index)) {
+      return false;
+    }
+    return true;
+  });
+
+  // Reference-stable when no duplicate was found (lengths can only differ if
+  // Pass A or Pass B actually removed something).
+  return deduped.length === messages.length ? messages : deduped;
+}
+
 export function mergeChatPreservingUserMessages<TChat extends ChatLike>(
   incomingChat: TChat,
   localChat: TChat | null | undefined,
@@ -272,9 +360,11 @@ export function mergeChatPreservingUserMessages<TChat extends ChatLike>(
 
   return {
     ...incomingChat,
-    messages: mergeMessagesPreservingUserContent(
-      incomingChat.messages || [],
-      localChat.messages || [],
+    messages: dedupeMessages(
+      mergeMessagesPreservingUserContent(
+        incomingChat.messages || [],
+        localChat.messages || [],
+      ),
     ),
   };
 }
