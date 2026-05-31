@@ -375,8 +375,19 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
   const downloadUrl = React.useMemo(() => typeof url === "string" ? previewUrl : (url.downloadUrl || url.url), [previewUrl, url])
   const format = React.useMemo(() => {
     const fromUrl = inferFormat(previewUrl)
+    // Prefer the real document type for Word files: the chat sometimes hands
+    // us an HTML preview data URL (mammoth) even though the underlying
+    // artifact is a real .docx/.doc. In that case render the original bytes
+    // natively so the preview matches the document "tal cual" instead of the
+    // degraded HTML version (which also avoids the fragile iframe path).
+    const nameSource = typeof url !== "string" ? (url.filename || url.downloadUrl || "") : ""
+    const fromName = nameSource ? inferFormat(nameSource) : "unknown"
+    if (fromName === "docx" || fromName === "doc") {
+      const realBytesUrl = typeof url !== "string" ? (url.downloadUrl || "") : previewUrl
+      if (realBytesUrl && !realBytesUrl.startsWith("data:")) return fromName
+    }
     if (fromUrl !== "unknown") return fromUrl
-    if (typeof url !== "string" && url.filename) return inferFormat(url.filename)
+    if (fromName !== "unknown") return fromName
     return fromUrl
   }, [previewUrl, url])
   const filename = React.useMemo(() => {
@@ -437,6 +448,15 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
     setPageCount((previous) => (previous === total ? previous : total))
     setActivePage((previous) => (previous === current ? previous : current))
   }, [canUsePreviewControls, getDocxNativePages, state.kind])
+
+  // Keep a stable reference to the latest page-metrics updater so the docx
+  // render effect can call it without listing it as a dependency. Without
+  // this, the callback identity churn re-ran the render effect, whose cleanup
+  // wiped the rendered DOM — the document flashed then went blank.
+  const updatePageMetricsRef = React.useRef(updatePageMetrics)
+  React.useEffect(() => {
+    updatePageMetricsRef.current = updatePageMetrics
+  }, [updatePageMetrics])
 
   const setBoundedZoom = React.useCallback((nextZoom: number) => {
     setZoom(Math.min(MAX_PREVIEW_ZOOM, Math.max(MIN_PREVIEW_ZOOM, Number(nextZoom.toFixed(2)))))
@@ -598,7 +618,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
         `
         styleHost.appendChild(style)
         setDocxNativeReady(true)
-        window.requestAnimationFrame(updatePageMetrics)
+        window.requestAnimationFrame(() => updatePageMetricsRef.current())
       } catch (error) {
         if (cancelled) return
         const message = error instanceof Error ? error.message : "No se pudo abrir el documento."
@@ -611,7 +631,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
       root.replaceChildren()
       styleHost.replaceChildren()
     }
-  }, [state, updatePageMetrics])
+  }, [state])
 
   React.useEffect(() => {
     if (!previewUrl) return
@@ -657,7 +677,14 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
 
     ;(async () => {
       try {
-        const resp = await fetch(previewUrl, buildAssetFetchInit())
+        // For Word files the chat may pass an HTML preview data URL while the
+        // real .docx bytes live at downloadUrl. Always fetch the actual
+        // document bytes so the native renderer gets a valid DOCX.
+        const assetUrl =
+          (format === "docx" || format === "doc") && previewUrl.startsWith("data:")
+            ? downloadUrl
+            : previewUrl
+        const resp = await fetch(assetUrl, buildAssetFetchInit())
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
 
         if (format === "csv") {
@@ -721,7 +748,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
     return () => {
       cancelled = true
     }
-  }, [filename, format, previewUrl])
+  }, [filename, format, previewUrl, downloadUrl])
 
   return (
     <div className="relative flex h-full w-full min-w-0 flex-col overflow-hidden bg-background">
