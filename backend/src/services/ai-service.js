@@ -889,7 +889,9 @@ class AIService {
                 ];
 
                 const response = await ai.models.generateContent({
-                    model: "gemini-2.5-flash-image-preview",
+                    // gemini-2.5-flash-image-preview → 404 on this account;
+                    // gemini-2.5-flash-image is the current edit model.
+                    model: "gemini-2.5-flash-image",
                     contents: requestPrompt,
                 });
 
@@ -935,18 +937,21 @@ class AIService {
      * @param {string} model - AI model
      * @returns {Promise<string|null>} - Base64 encoded image or null
      */
-    async generateImage(prompt, provider = "OpenAI", model = "dall-e-3") {
+    async generateImage(prompt, provider = "OpenAI", model = "gpt-image-2") {
         try {
             const client = this.getClient(provider);
-            console.log(`🎨 Generating image with DALL-E for prompt: "${prompt}"`);
+            console.log(`🎨 Generating image with gpt-image-2 for prompt: "${prompt}"`);
 
             const response = await client.images.generate({
+                // dall-e-3 was removed from this account (400 model does not
+                // exist) → default to gpt-image-2, which REJECTS response_format
+                // (b64_json by default) and only accepts auto/high/medium/low
+                // quality (rejects 'standard'/'hd').
                 model: model,
                 prompt: prompt,
                 n: 1,
                 size: "1024x1024",
-                quality: "standard",
-                response_format: "b64_json",
+                quality: "auto",
             });
 
             const image_b64 = response.data[0].b64_json;

@@ -77,14 +77,23 @@ async function generateOpenAI(spec) {
   }
   try {
     const client = new (OpenAI.OpenAI || OpenAI)({ apiKey });
-    const size = spec.size || '1024x1024';
+    // gpt-image-2 only accepts a fixed set of sizes; reject anything else
+    // (e.g. the old DALL-E 1792x1024 → 400 invalid size) and fall back to
+    // square. Valid: 1024x1024 | 1536x1024 | 1024x1536.
+    const requestedSize = spec.size || '1024x1024';
+    const size = ['1024x1024', '1536x1024', '1024x1536'].includes(requestedSize)
+      ? requestedSize
+      : '1024x1024';
     const n = Math.min(spec.n || 1, 4);
-    // Bound the provider call: a hung DALL-E request would otherwise block
+    // Bound the provider call: a hung image request would otherwise block
     // the image job until an outer timeout (or never). Per-request timeout
     // via the OpenAI SDK (default 120s, env-overridable).
     const imageTimeoutMs = Number(process.env.IMAGE_GEN_TIMEOUT_MS) || 120_000;
     const result = await client.images.generate({
-      model: spec.model || 'dall-e-3',
+      // dall-e-3 was removed from this account (400 model does not exist);
+      // gpt-image-2 is the replacement. This call already omits
+      // response_format, which gpt-image-2 rejects (it returns b64_json).
+      model: spec.model || 'gpt-image-2',
       prompt: String(spec.prompt || '').slice(0, 4000),
       size,
       n,

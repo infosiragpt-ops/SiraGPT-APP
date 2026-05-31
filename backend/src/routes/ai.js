@@ -5729,6 +5729,44 @@ function openAiImageQualityFor(quality) {
   return quality === '2K' || quality === '4K' ? 'hd' : 'standard';
 }
 
+// gpt-image-2 only accepts a fixed set of sizes (1024x1024 | 1536x1024 |
+// 1024x1536 | auto) and REJECTS the old DALL-E sizes (1792x1024 / 1024x1792
+// → 400 invalid size). Map the app's aspect ratio to the nearest valid
+// gpt-image size, deriving orientation from IMAGE_ASPECT_RATIOS (or the
+// raw "w:h" string) so new ratios stay supported. Defaults to square.
+function gptImageSizeFor(aspectRatio) {
+  let width;
+  let height;
+  const entry = IMAGE_ASPECT_RATIOS[aspectRatio];
+  if (entry) {
+    width = entry.width;
+    height = entry.height;
+  } else if (typeof aspectRatio === 'string' && aspectRatio.includes(':')) {
+    const [w, h] = aspectRatio.split(':').map((n) => Number.parseFloat(n));
+    if (Number.isFinite(w) && Number.isFinite(h)) {
+      width = w;
+      height = h;
+    }
+  }
+  if (Number.isFinite(width) && Number.isFinite(height) && width !== height) {
+    return width > height ? '1536x1024' : '1024x1536';
+  }
+  return '1024x1024';
+}
+
+// gpt-image-2 quality must be one of high | medium | low | auto and REJECTS
+// the old DALL-E 'standard'/'hd' tokens (400). Translate the app's quality
+// tokens ('512px'/'1K'/'2K'/'4K', same inputs openAiImageQualityFor handles).
+function gptImageQualityFor(quality) {
+  switch (quality) {
+    case '512px': return 'low';
+    case '1K': return 'medium';
+    case '2K': return 'high';
+    case '4K': return 'high';
+    default: return 'auto';
+  }
+}
+
 function openRouterImageModalitiesFor(model) {
   void model;
   // OpenRouter image-generation chat completions expect both requested output
@@ -6139,7 +6177,10 @@ router.post(
 
         if (provider === "Gemini") {
           const response = await openai.images.generate({
-            model: "imagen-3.0-generate-002",
+            // imagen-3.0-generate-002 → 404 on this account; imagen-4 is the
+            // current text-to-image model. (Gemini's OpenAI-compat endpoint
+            // still accepts response_format, so it's kept here.)
+            model: "imagen-4.0-generate-001",
             prompt: imagePrompt,
             response_format: "b64_json",
             n: 1,
@@ -6149,12 +6190,14 @@ router.post(
         }
 
         const response = await openai.images.generate({
-          model: 'dall-e-3',
+          // dall-e-3 was removed from this account (400 model does not exist);
+          // gpt-image-2 is the replacement. It REJECTS response_format (returns
+          // b64_json by default) and only accepts its own size/quality tokens.
+          model: 'gpt-image-2',
           prompt: imagePrompt,
           n: 1,
-          size: requestedImageSize,
-          quality: openAiImageQualityFor(quality),
-          response_format: 'b64_json',
+          size: gptImageSizeFor(aspectRatio),
+          quality: gptImageQualityFor(quality),
         }, { signal: requestAbortController.signal });
         const { b64_json, ...rest } = response.data[0];
 
