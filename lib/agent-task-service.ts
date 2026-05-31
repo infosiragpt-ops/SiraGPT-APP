@@ -107,9 +107,17 @@ export interface AgentTaskRunArgs {
    * surfaces an error within a reasonable wait.
    */
   idleTimeoutMs?: number
+  /**
+   * How long to poll the durable task event log when the POST+SSE socket
+   * closes before a terminal done/error event. This turns transient proxy or
+   * browser stream closes into an agentic reconnect instead of a failed chat.
+   */
+  closedStreamRecoveryMs?: number
 }
 
 const DEFAULT_IDLE_TIMEOUT_MS = 90_000
+const DEFAULT_CLOSED_STREAM_RECOVERY_MS = 30_000
+const CLOSED_STREAM_RECOVERY_POLL_MS = 750
 
 export class AgentTaskIdleTimeoutError extends Error {
   readonly code = "idle_timeout"
@@ -176,11 +184,114 @@ function authHeader(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
+function eventSeq(evt: AgentTaskEvent): number {
+  const seq = Number((evt as any)?.seq)
+  return Number.isFinite(seq) ? seq : 0
+}
+
+function eventTaskId(evt: AgentTaskEvent): string | null {
+  const taskId = (evt as any)?.taskId
+  return typeof taskId === "string" && taskId.trim() ? taskId.trim() : null
+}
+
+function isTerminalEvent(evt: AgentTaskEvent): boolean {
+  return evt.type === "done" || evt.type === "error"
+}
+
+function waitForRecoveryPoll(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.resolve()
+  return new Promise(resolve => {
+    let settled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const finish = () => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
+      if (signal) signal.removeEventListener("abort", finish)
+      resolve()
+    }
+    timer = setTimeout(finish, ms)
+    if (signal) signal.addEventListener("abort", finish, { once: true })
+  })
+}
+
+async function* recoverClosedStreamEvents(
+  taskId: string | null,
+  afterSeq: number,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): AsyncGenerator<AgentTaskEvent> {
+  if (!taskId || signal?.aborted || timeoutMs <= 0) return
+  const deadline = Date.now() + timeoutMs
+  let cursor = Math.max(0, afterSeq || 0)
+
+  while (!signal?.aborted && Date.now() <= deadline) {
+    let payload: Awaited<ReturnType<typeof getTaskEvents>> | null = null
+    try {
+      payload = await getTaskEvents(taskId, cursor, { signal })
+    } catch {
+      payload = null
+    }
+    if (!payload?.ok) return
+
+    const events = Array.isArray(payload.events) ? payload.events : []
+    for (const evt of events) {
+      cursor = Math.max(cursor, eventSeq(evt))
+      yield evt
+      if (isTerminalEvent(evt)) return
+    }
+
+    const recovered = payload.streamState
+    if (recovered?.done) {
+      if (recovered.finalText?.trim()) {
+        yield { type: "final_text", markdown: recovered.finalText }
+      }
+      if (recovered.error) {
+        yield { type: "error", message: recovered.error }
+      } else {
+        yield {
+          type: "done",
+          stoppedReason: recovered.stoppedReason || payload.status || "recovered",
+          stats: {
+            steps: Array.isArray(recovered.steps) ? recovered.steps.length : 0,
+            artifacts: Array.isArray(recovered.artifacts) ? recovered.artifacts.length : 0,
+          },
+        }
+      }
+      return
+    }
+
+    if (payload.status === "completed") {
+      yield {
+        type: "done",
+        stoppedReason: "recovered_completed",
+        stats: {
+          steps: Array.isArray(recovered?.steps) ? recovered!.steps.length : 0,
+          artifacts: Array.isArray(recovered?.artifacts) ? recovered!.artifacts.length : 0,
+        },
+      }
+      return
+    }
+    if (payload.status === "error" || payload.status === "cancelled") {
+      yield {
+        type: "error",
+        message: payload.status === "cancelled" ? "Tarea detenida." : (payload.error || "La tarea agéntica falló."),
+      }
+      return
+    }
+
+    await waitForRecoveryPoll(Math.min(CLOSED_STREAM_RECOVERY_POLL_MS, Math.max(50, deadline - Date.now())), signal)
+  }
+}
+
 export async function* runIterator(args: AgentTaskRunArgs): AsyncGenerator<AgentTaskEvent> {
-  const { signal, idleTimeoutMs, ...body } = args
+  const { signal, idleTimeoutMs, closedStreamRecoveryMs, ...body } = args
   const idleMs = typeof idleTimeoutMs === "number" && idleTimeoutMs > 0
     ? idleTimeoutMs
     : DEFAULT_IDLE_TIMEOUT_MS
+  const recoveryMs = typeof closedStreamRecoveryMs === "number" && closedStreamRecoveryMs >= 0
+    ? closedStreamRecoveryMs
+    : DEFAULT_CLOSED_STREAM_RECOVERY_MS
 
   // Combine the caller's abort signal with our own idle-timeout
   // controller. Either side can stop the read loop without leaving
@@ -227,6 +338,10 @@ export async function* runIterator(args: AgentTaskRunArgs): AsyncGenerator<Agent
     }, idleMs)
   }
 
+  let taskId: string | null = null
+  let lastSeq = 0
+  let terminalSeen = false
+
   try {
     armIdleTimer()
     try {
@@ -236,7 +351,18 @@ export async function* runIterator(args: AgentTaskRunArgs): AsyncGenerator<Agent
         // empty heartbeat keeps the stream alive.
         onChunk: armIdleTimer,
       })) {
+        taskId = eventTaskId(event) || taskId
+        lastSeq = Math.max(lastSeq, eventSeq(event))
+        terminalSeen = terminalSeen || isTerminalEvent(event)
         yield event
+      }
+      if (!terminalSeen && taskId && !signal?.aborted) {
+        for await (const event of recoverClosedStreamEvents(taskId, lastSeq, recoveryMs, signal)) {
+          lastSeq = Math.max(lastSeq, eventSeq(event))
+          terminalSeen = terminalSeen || isTerminalEvent(event)
+          yield event
+          if (terminalSeen) break
+        }
       }
     } catch (err: any) {
       if (timedOut) throw new AgentTaskIdleTimeoutError(idleMs)
@@ -286,6 +412,7 @@ export function reduceEvent(state: AgentTaskState, evt: AgentTaskEvent): AgentTa
     case "queue_status":
       return {
         ...state,
+        meta: evt.taskId ? { ...(state.meta || {}), taskId: evt.taskId } : state.meta,
         queue: {
           status: evt.status,
           queue: evt.queue,
@@ -576,11 +703,16 @@ export async function resolveApproval(
   return { ok: true, taskId: data?.taskId, approvalId: data?.approvalId, decision: data?.decision }
 }
 
-export async function getTaskEvents(taskId: string, after = 0): Promise<{ ok: boolean; events: AgentTaskEvent[]; status?: string; streamState?: AgentTaskState; error?: string }> {
+export async function getTaskEvents(
+  taskId: string,
+  after = 0,
+  options: { signal?: AbortSignal } = {},
+): Promise<{ ok: boolean; events: AgentTaskEvent[]; status?: string; streamState?: AgentTaskState; error?: string }> {
   const resp = await fetch(`${API_ROOT}/agent/task/${encodeURIComponent(taskId)}/events?after=${encodeURIComponent(String(after))}`, {
     method: "GET",
     credentials: "include",
     headers: { ...authHeader() },
+    signal: options.signal,
   })
   let payload: any = null
   try { payload = await resp.json() } catch { payload = null }
