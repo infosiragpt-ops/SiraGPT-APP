@@ -12,6 +12,7 @@
 |----------|----------|---------|---------------|
 | `ANTHROPIC_API_KEY` | Anthropic | Claude Opus 4.7, Sonnet 4.6, Haiku 4.5 | `claude-sonnet-4-6` |
 | `OPENROUTER_API_KEY` | OpenRouter | Primary gateway; delegates to 300+ models | varies by routing |
+| `XAI_API_KEY` | xAI / Grok | Grok chat plus `/api/voice/grok` STT/TTS | `grok-4.3`, `grok-stt`, voice `eve` |
 | `OPENAI_API_KEY` | OpenAI | GPT-4o, GPT-4o-mini, embeddings legacy | `gpt-4o` |
 | `GOOGLE_AI_API_KEY` | Google AI Studio | Gemini 2.5 Pro, Gemini 2.5 Flash | `gemini-2.5-flash` |
 | `GROQ_API_KEY` | Groq Cloud | Llama 3.3 70B, DeepSeek R1 Distill | `llama-3.3-70b-versatile` |

@@ -7,7 +7,8 @@ name: Sync provider API keys to VPS
 #
 # Secrets read (set via `gh secret set PROD_<NAME>` from .env.local):
 #   PROD_GROQ_API_KEY, PROD_GEMINI_API_KEY, PROD_DEEPSEEK_API_KEY,
-#   PROD_OPENROUTER_API_KEY, PROD_ANTHROPIC_API_KEY, PROD_OPENAI_API_KEY
+#   PROD_OPENROUTER_API_KEY, PROD_XAI_API_KEY, PROD_ANTHROPIC_API_KEY,
+#   PROD_OPENAI_API_KEY
 #
 # The script never prints key values — only the var names being
 # updated and whether they were added or replaced.
@@ -33,6 +34,7 @@ jobs:
       PROD_GEMINI_API_KEY: ${{ secrets.PROD_GEMINI_API_KEY }}
       PROD_DEEPSEEK_API_KEY: ${{ secrets.PROD_DEEPSEEK_API_KEY }}
       PROD_OPENROUTER_API_KEY: ${{ secrets.PROD_OPENROUTER_API_KEY }}
+      PROD_XAI_API_KEY: ${{ secrets.PROD_XAI_API_KEY }}
       PROD_ANTHROPIC_API_KEY: ${{ secrets.PROD_ANTHROPIC_API_KEY }}
       PROD_OPENAI_API_KEY: ${{ secrets.PROD_OPENAI_API_KEY }}
 
@@ -47,7 +49,7 @@ jobs:
           timeout: 60s
           command_timeout: 4m
           script_stop: true
-          envs: PROD_GROQ_API_KEY,PROD_GEMINI_API_KEY,PROD_DEEPSEEK_API_KEY,PROD_OPENROUTER_API_KEY,PROD_ANTHROPIC_API_KEY,PROD_OPENAI_API_KEY
+          envs: PROD_GROQ_API_KEY,PROD_GEMINI_API_KEY,PROD_DEEPSEEK_API_KEY,PROD_OPENROUTER_API_KEY,PROD_XAI_API_KEY,PROD_ANTHROPIC_API_KEY,PROD_OPENAI_API_KEY
           script: |
             set -e
             cd /root/siraNew/siraGPT

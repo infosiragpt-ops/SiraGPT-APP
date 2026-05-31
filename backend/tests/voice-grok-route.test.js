@@ -72,7 +72,7 @@ describe('Voice Grok route persistent session contract', () => {
     assert.equal(res.body.session.status, 'listening');
   });
 
-  test('turn endpoint can attach a Grok assistant reply without taking over chat', async () => {
+  test('turn endpoint can attach a Grok assistant reply with xAI speech audio without taking over chat', async () => {
     const app = buildApp();
     app.locals.grokVoiceResponder = async ({ turn }) => ({
       provider: 'openrouter',
@@ -80,6 +80,14 @@ describe('Voice Grok route persistent session contract', () => {
       configured: true,
       text: `Respuesta Grok para: ${turn.transcript}`,
       spoken: true,
+    });
+    app.locals.grokVoiceSynthesizer = async ({ text }) => ({
+      provider: 'xai',
+      voice: 'eve',
+      language: 'es',
+      format: 'mp3',
+      mimeType: 'audio/mpeg',
+      buffer: Buffer.from(`audio:${text}`),
     });
 
     const create = await request(app)
@@ -98,6 +106,40 @@ describe('Voice Grok route persistent session contract', () => {
     assert.equal(res.body.turn.chatDispatch.canUseComposerConcurrently, true);
     assert.equal(res.body.assistant.model, 'x-ai/grok-4');
     assert.equal(res.body.assistant.text, 'Respuesta Grok para: explicame la arquitectura');
+    assert.equal(res.body.assistant.audio.provider, 'xai');
+    assert.equal(res.body.assistant.audio.voice, 'eve');
+    assert.equal(res.body.assistant.audio.base64, Buffer.from('audio:Respuesta Grok para: explicame la arquitectura').toString('base64'));
+  });
+
+  test('transcribe endpoint accepts browser audio and delegates to xAI STT', async () => {
+    const app = buildApp();
+    app.locals.grokVoiceTranscriber = async ({ file, body }) => {
+      assert.equal(file.originalname, 'voice.webm');
+      assert.equal(file.mimetype, 'audio/webm');
+      assert.equal(body.model, 'grok-stt');
+      assert.equal(body.language, 'es');
+      return {
+        provider: 'xai',
+        model: body.model,
+        text: 'hola desde grok stt',
+      };
+    };
+
+    const res = await request(app)
+      .post('/api/voice/grok/transcribe')
+      .set('Authorization', auth.authHeader)
+      .field('model', 'grok-stt')
+      .field('language', 'es')
+      .attach('audio', Buffer.from('fake-audio'), {
+        filename: 'voice.webm',
+        contentType: 'audio/webm',
+      });
+
+    assert.equal(res.status, 200);
+    assert.equal(res.body.success, true);
+    assert.equal(res.body.provider, 'xai');
+    assert.equal(res.body.model, 'grok-stt');
+    assert.equal(res.body.text, 'hola desde grok stt');
   });
 
   test('turn endpoint can rebind the voice session to the active normal chat', async () => {

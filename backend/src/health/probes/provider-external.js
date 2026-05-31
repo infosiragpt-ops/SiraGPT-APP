@@ -28,6 +28,7 @@ const EXTERNAL_PROVIDERS = [
   { name: 'provider-exa',        baseUrl: 'https://api.exa.ai',                  apiKeyEnv: 'EXA_API_KEY' },
   { name: 'provider-firecrawl',  baseUrl: 'https://api.firecrawl.dev',           apiKeyEnv: 'FIRECRAWL_API_KEY' },
   { name: 'provider-elevenlabs', baseUrl: 'https://api.elevenlabs.io/v1',        apiKeyEnv: 'ELEVENLABS_API_KEY' },
+  { name: 'provider-xai-audio',  baseUrl: 'https://api.x.ai/v1',                apiKeyEnv: 'XAI_API_KEY' },
 ];
 
 function createConfiguredExternalProbes(opts = {}) {

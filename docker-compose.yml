@@ -12,7 +12,7 @@
 #   SESSION_SECRET   — cadena aleatoria de al menos 32 caracteres
 #
 # Variables recomendadas (sin default):
-#   OPENAI_API_KEY, ANTHROPIC_API_KEY, GROQ_API_KEY ...
+#   OPENAI_API_KEY, ANTHROPIC_API_KEY, XAI_API_KEY, GROQ_API_KEY ...
 # ──────────────────────────────────────────────────────────────
 
 services:
@@ -74,6 +74,7 @@ services:
       SESSION_SECRET: "${SESSION_SECRET}"
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      XAI_API_KEY: "${XAI_API_KEY:-}"
       GROQ_API_KEY: "${GROQ_API_KEY:-}"
       GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID:-}"
       GOOGLE_CLIENT_SECRET: "${GOOGLE_CLIENT_SECRET:-}"

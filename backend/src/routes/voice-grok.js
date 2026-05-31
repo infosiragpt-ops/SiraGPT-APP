@@ -1,6 +1,10 @@
 'use strict';
 
 const express = require('express');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const multer = require('multer');
 const { body, param, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
 const {
@@ -11,9 +15,25 @@ const {
   pruneExpiredVoiceSessions,
 } = require('../services/voice-session-runtime');
 const { generateGrokVoiceReply } = require('../services/grok-voice-model');
+const {
+  transcribeXaiAudioFile,
+  synthesizeXaiSpeech,
+  serializeAudioForJson,
+} = require('../services/xai-audio');
 
 const router = express.Router();
 const activeVoiceSessions = new Map();
+const grokVoiceUploadDir = path.join(os.tmpdir(), 'siragpt-grok-voice');
+fs.mkdirSync(grokVoiceUploadDir, { recursive: true });
+const uploadGrokVoiceAudio = multer({
+  dest: grokVoiceUploadDir,
+  limits: { fileSize: 25 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const mimetype = String(file.mimetype || '').toLowerCase();
+    if (mimetype.startsWith('audio/') || mimetype === 'application/octet-stream') return cb(null, true);
+    return cb(new Error(`Invalid audio file type: ${file.mimetype || 'unknown'}`), false);
+  },
+});
 
 function validationErrors(req, res) {
   const errors = validationResult(req);
@@ -43,6 +63,48 @@ function createAndStoreSession(req, mode) {
   return session;
 }
 
+async function transcribeUploadedGrokVoice(req) {
+  const transcriber = req.app.locals.grokVoiceTranscriber;
+  if (typeof transcriber === 'function') {
+    return transcriber({ file: req.file, body: req.body, user: req.user });
+  }
+  return transcribeXaiAudioFile({
+    filePath: req.file.path,
+    originalName: req.file.originalname,
+    mimeType: req.file.mimetype,
+    model: req.body?.model,
+    language: req.body?.language,
+  });
+}
+
+async function attachGrokVoiceSpeech(req, assistant) {
+  if (!assistant?.text || assistant.audio) return assistant;
+  try {
+    const synthesizer = req.app.locals.grokVoiceSynthesizer;
+    const audio = typeof synthesizer === 'function'
+      ? await synthesizer({ text: assistant.text, assistant, user: req.user })
+      : await synthesizeXaiSpeech({ text: assistant.text });
+    const serialized = serializeAudioForJson(audio);
+    if (!serialized) return assistant;
+    return {
+      ...assistant,
+      ttsConfigured: true,
+      audio: serialized,
+    };
+  } catch (error) {
+    return {
+      ...assistant,
+      ttsConfigured: false,
+      ttsErrorCode: error.code || 'xai_tts_failed',
+    };
+  }
+}
+
+function cleanupUploadedFile(file) {
+  if (!file?.path) return;
+  fs.promises.unlink(file.path).catch(() => {});
+}
+
 const sessionValidators = [
   body('chatId').optional({ nullable: true }).isString().isLength({ max: 128 }),
   body('mode').optional().isIn(['advanced_voice', 'dictation', 'hands_free']),
@@ -55,6 +117,35 @@ const turnValidators = [
   body('source').optional().isIn(['stt', 'typed', 'system']),
   body('respond').optional().isBoolean(),
 ];
+
+router.post(
+  '/transcribe',
+  authenticateToken,
+  uploadGrokVoiceAudio.single('audio'),
+  async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ success: false, error: 'Audio file is required' });
+      }
+      const result = await transcribeUploadedGrokVoice(req);
+      cleanupUploadedFile(req.file);
+      return res.json({
+        success: true,
+        provider: result.provider || 'xai',
+        model: result.model || req.body?.model || 'grok-stt',
+        text: result.text || '',
+      });
+    } catch (error) {
+      cleanupUploadedFile(req.file);
+      const status = error.code === 'xai_api_key_missing' ? 503 : 502;
+      return res.status(status).json({
+        success: false,
+        error: error.message,
+        code: error.code || 'xai_stt_failed',
+      });
+    }
+  },
+);
 
 router.post(
   '/sessions',
@@ -117,15 +208,16 @@ router.post(
             turn: result.turn,
             user: req.user,
           });
+          payload.assistant = await attachGrokVoiceSpeech(req, payload.assistant);
         } catch (replyError) {
-          payload.assistant = {
+          payload.assistant = await attachGrokVoiceSpeech(req, {
             provider: 'fallback',
             model: 'grok-voice-fallback',
             configured: false,
             text: 'Recibi tu voz, pero Grok no pudo responder en este momento. El chat normal sigue disponible.',
             spoken: true,
             errorCode: replyError.code || 'grok_voice_reply_failed',
-          };
+          });
         }
       }
 
@@ -224,4 +316,6 @@ module.exports.activeVoiceSessions = activeVoiceSessions;
 module.exports.INTERNAL = {
   getUserSession,
   createAndStoreSession,
+  attachGrokVoiceSpeech,
+  transcribeUploadedGrokVoice,
 };

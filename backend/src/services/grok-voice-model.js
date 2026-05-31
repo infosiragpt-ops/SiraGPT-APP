@@ -1,8 +1,12 @@
 'use strict';
 
-const DEFAULT_XAI_MODEL = 'grok-4';
-const DEFAULT_OPENROUTER_MODEL = 'x-ai/grok-4';
-const DEFAULT_XAI_BASE_URL = 'https://api.x.ai/v1';
+const {
+  DEFAULT_XAI_BASE_URL,
+  DEFAULT_XAI_CHAT_MODEL,
+} = require('./xai-audio');
+
+const DEFAULT_XAI_MODEL = DEFAULT_XAI_CHAT_MODEL;
+const DEFAULT_OPENROUTER_MODEL = 'x-ai/grok-4.3';
 const DEFAULT_OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 
 function resolveGrokVoiceProvider(env = process.env) {

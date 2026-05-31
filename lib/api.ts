@@ -235,6 +235,23 @@ export type GrokVoiceAssistantReply = {
   text: string
   spoken?: boolean
   errorCode?: string
+  ttsConfigured?: boolean
+  ttsErrorCode?: string
+  audio?: {
+    provider: string
+    voice?: string
+    language?: string
+    format: string
+    mimeType: string
+    base64: string
+  }
+}
+
+export type GrokVoiceTranscriptEnvelope = {
+  success: boolean
+  provider: string
+  model: string
+  text: string
 }
 
 export type GrokVoiceSessionEnvelope = {
@@ -2051,6 +2068,18 @@ class ApiClient {
     }
 
     return this.request('/elevenlabs/speech-to-text', {
+      method: 'POST',
+      body: formData,
+    });
+  }
+
+  async transcribeGrokVoice(audioFile: File, data: { model?: string; language?: string } = {}): Promise<GrokVoiceTranscriptEnvelope> {
+    const formData = new FormData();
+    formData.append('audio', audioFile);
+    if (data.model) formData.append('model', data.model);
+    if (data.language) formData.append('language', data.language);
+
+    return this.request('/voice/grok/transcribe', {
       method: 'POST',
       body: formData,
     });

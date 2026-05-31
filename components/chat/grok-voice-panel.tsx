@@ -19,36 +19,6 @@ type VoiceMessage = {
   meta?: string
 }
 
-type BrowserSpeechRecognition = {
-  lang: string
-  continuous: boolean
-  interimResults: boolean
-  start: () => void
-  stop: () => void
-  abort: () => void
-  onstart: (() => void) | null
-  onend: (() => void) | null
-  onerror: ((event: { error?: string }) => void) | null
-  onresult: ((event: {
-    resultIndex: number
-    results: ArrayLike<{
-      isFinal: boolean
-      [index: number]: { transcript: string }
-    }>
-  }) => void) | null
-}
-
-type SpeechRecognitionCtor = new () => BrowserSpeechRecognition
-
-function getSpeechRecognitionCtor(): SpeechRecognitionCtor | null {
-  if (typeof window === "undefined") return null
-  const candidate = window as unknown as {
-    SpeechRecognition?: SpeechRecognitionCtor
-    webkitSpeechRecognition?: SpeechRecognitionCtor
-  }
-  return candidate.SpeechRecognition || candidate.webkitSpeechRecognition || null
-}
-
 function buildMessageId(prefix: string) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
 }
@@ -62,6 +32,36 @@ function statusLabel(status: VoicePanelStatus) {
   return "Listo"
 }
 
+function preferredRecorderMimeType() {
+  if (typeof window === "undefined" || typeof MediaRecorder === "undefined") return ""
+  const candidates = [
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/mp4",
+    "audio/ogg;codecs=opus",
+    "audio/ogg",
+  ]
+  return candidates.find((candidate) => MediaRecorder.isTypeSupported(candidate)) || ""
+}
+
+function extensionForMimeType(mimeType: string) {
+  const normalized = mimeType.toLowerCase()
+  if (normalized.includes("mp4") || normalized.includes("m4a")) return "m4a"
+  if (normalized.includes("ogg")) return "ogg"
+  if (normalized.includes("wav")) return "wav"
+  if (normalized.includes("mpeg") || normalized.includes("mp3")) return "mp3"
+  return "webm"
+}
+
+function audioBlobFromBase64(base64: string, mimeType: string) {
+  const binary = window.atob(base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index)
+  }
+  return new Blob([bytes], { type: mimeType || "audio/mpeg" })
+}
+
 export function GrokVoicePanel({
   chatId,
   onClose,
@@ -69,24 +69,23 @@ export function GrokVoicePanel({
   chatId?: string | null
   onClose: () => void
 }) {
-  const [session, setSession] = React.useState<GrokVoiceSessionSnapshot | null>(null)
+  const [, setSession] = React.useState<GrokVoiceSessionSnapshot | null>(null)
   const [status, setStatus] = React.useState<VoicePanelStatus>("connecting")
   const [liveTranscript, setLiveTranscript] = React.useState("")
   const [messages, setMessages] = React.useState<VoiceMessage[]>([])
   const [muted, setMuted] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
-  const [speechRecognitionSupported, setSpeechRecognitionSupported] = React.useState(false)
 
   const statusRef = React.useRef<VoicePanelStatus>("connecting")
   const sessionIdRef = React.useRef<string | null>(null)
   const chatIdRef = React.useRef<string | null>(chatId || null)
   const sessionRef = React.useRef<GrokVoiceSessionSnapshot | null>(null)
-  const transcriptRef = React.useRef("")
-  const recognitionRef = React.useRef<BrowserSpeechRecognition | null>(null)
   const recorderRef = React.useRef<MediaRecorder | null>(null)
   const streamRef = React.useRef<MediaStream | null>(null)
   const chunksRef = React.useRef<Blob[]>([])
   const submitInFlightRef = React.useRef(false)
+  const activeAudioRef = React.useRef<HTMLAudioElement | null>(null)
+  const activeAudioUrlRef = React.useRef<string | null>(null)
 
   React.useEffect(() => {
     statusRef.current = status
@@ -95,10 +94,6 @@ export function GrokVoicePanel({
   React.useEffect(() => {
     chatIdRef.current = chatId || null
   }, [chatId])
-
-  React.useEffect(() => {
-    setSpeechRecognitionSupported(Boolean(getSpeechRecognitionCtor()))
-  }, [])
 
   const appendMessage = React.useCallback((message: Omit<VoiceMessage, "id">) => {
     setMessages((current) => [...current, { id: buildMessageId(message.role), ...message }])
@@ -130,21 +125,72 @@ export function GrokVoicePanel({
     }
   }, [ensureSession])
 
-  const speakAssistant = React.useCallback((assistant: GrokVoiceAssistantReply) => {
-    if (muted || typeof window === "undefined" || !("speechSynthesis" in window)) {
+  const stopAssistantPlayback = React.useCallback(() => {
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      window.speechSynthesis.cancel()
+    }
+    if (activeAudioRef.current) {
+      activeAudioRef.current.pause()
+      activeAudioRef.current.src = ""
+      activeAudioRef.current = null
+    }
+    if (activeAudioUrlRef.current) {
+      URL.revokeObjectURL(activeAudioUrlRef.current)
+      activeAudioUrlRef.current = null
+    }
+  }, [])
+
+  const speakWithBrowserFallback = React.useCallback((text: string) => {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
       setStatus("idle")
       return
     }
-
     window.speechSynthesis.cancel()
-    const utterance = new SpeechSynthesisUtterance(assistant.text)
+    const utterance = new SpeechSynthesisUtterance(text)
     utterance.lang = "es-ES"
     utterance.rate = 1
     utterance.onend = () => setStatus("idle")
     utterance.onerror = () => setStatus("idle")
     setStatus("speaking")
     window.speechSynthesis.speak(utterance)
-  }, [muted])
+  }, [])
+
+  const speakAssistant = React.useCallback((assistant: GrokVoiceAssistantReply) => {
+    if (muted || typeof window === "undefined") {
+      setStatus("idle")
+      return
+    }
+
+    stopAssistantPlayback()
+
+    if (assistant.audio?.base64) {
+      try {
+        const blob = audioBlobFromBase64(assistant.audio.base64, assistant.audio.mimeType)
+        const url = URL.createObjectURL(blob)
+        const audio = new Audio(url)
+        activeAudioRef.current = audio
+        activeAudioUrlRef.current = url
+        audio.onended = () => {
+          stopAssistantPlayback()
+          setStatus("idle")
+        }
+        audio.onerror = () => {
+          stopAssistantPlayback()
+          speakWithBrowserFallback(assistant.text)
+        }
+        setStatus("speaking")
+        void audio.play().catch(() => {
+          stopAssistantPlayback()
+          speakWithBrowserFallback(assistant.text)
+        })
+        return
+      } catch {
+        stopAssistantPlayback()
+      }
+    }
+
+    speakWithBrowserFallback(assistant.text)
+  }, [muted, speakWithBrowserFallback, stopAssistantPlayback])
 
   const sendTranscript = React.useCallback(async (text: string) => {
     const transcript = text.trim()
@@ -173,7 +219,11 @@ export function GrokVoicePanel({
         appendMessage({
           role: "assistant",
           text: assistant.text,
-          meta: assistant.model || "Grok",
+          meta: assistant.audio
+            ? `${assistant.model} · voz xAI ${assistant.audio.voice || "eve"}`
+            : assistant.ttsErrorCode
+              ? `${assistant.model} · TTS no disponible (${assistant.ttsErrorCode})`
+              : assistant.model || "Grok",
         })
         speakAssistant(assistant)
       } else {
@@ -186,7 +236,6 @@ export function GrokVoicePanel({
       appendMessage({ role: "system", text: message })
     } finally {
       submitInFlightRef.current = false
-      transcriptRef.current = ""
       setLiveTranscript("")
     }
   }, [appendMessage, ensureSession, speakAssistant])
@@ -202,7 +251,8 @@ export function GrokVoicePanel({
     }
 
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-    const recorder = new MediaRecorder(stream)
+    const mimeType = preferredRecorderMimeType()
+    const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream)
     streamRef.current = stream
     recorderRef.current = recorder
     chunksRef.current = []
@@ -212,21 +262,30 @@ export function GrokVoicePanel({
     }
 
     recorder.onstop = async () => {
+      const recordedMimeType = recorder.mimeType || mimeType || "audio/webm"
       releaseMediaStream()
       setStatus("processing")
       try {
-        const audioBlob = new Blob(chunksRef.current, { type: "audio/webm" })
-        const audioFile = new File([audioBlob], "grok-voice.webm", { type: "audio/webm" })
-        const response = await apiClient.speechToText(audioFile, "scribe_v1") as { text?: string }
+        if (chunksRef.current.length === 0) {
+          throw new Error("No se capturo audio para transcribir.")
+        }
+        const audioBlob = new Blob(chunksRef.current, { type: recordedMimeType })
+        const extension = extensionForMimeType(recordedMimeType)
+        const audioFile = new File([audioBlob], `grok-voice.${extension}`, { type: recordedMimeType })
+        const response = await apiClient.transcribeGrokVoice(audioFile, {
+          model: "grok-stt",
+          language: "es",
+        })
         const transcript = response.text || ""
-        transcriptRef.current = transcript
         setLiveTranscript(transcript)
         await sendTranscript(transcript)
       } catch (cause) {
-        const message = cause instanceof Error ? cause.message : "No se pudo transcribir el audio."
+        const message = cause instanceof Error ? cause.message : "No se pudo transcribir el audio con xAI."
         setStatus("error")
         setError(message)
         appendMessage({ role: "system", text: message })
+      } finally {
+        chunksRef.current = []
       }
     }
 
@@ -238,95 +297,39 @@ export function GrokVoicePanel({
     if (status === "listening" || status === "processing" || status === "connecting") return
     setError(null)
     setLiveTranscript("")
-    transcriptRef.current = ""
 
     try {
       await ensureSession()
-      if (typeof window !== "undefined" && "speechSynthesis" in window) {
-        window.speechSynthesis.cancel()
-      }
-
-      const RecognitionCtor = getSpeechRecognitionCtor()
-      if (!RecognitionCtor) {
-        await startMediaRecorder()
-        return
-      }
-
-      const recognition = new RecognitionCtor()
-      recognition.lang = "es-ES"
-      recognition.continuous = true
-      recognition.interimResults = true
-      recognition.onstart = () => setStatus("listening")
-      recognition.onerror = (event) => {
-        setStatus("error")
-        setError(event.error ? `Microfono: ${event.error}` : "No se pudo escuchar el microfono.")
-      }
-      recognition.onend = () => {
-        if (statusRef.current === "listening") setStatus("idle")
-      }
-      recognition.onresult = (event) => {
-        let finalText = ""
-        let interimText = ""
-        for (let index = event.resultIndex; index < event.results.length; index += 1) {
-          const result = event.results[index]
-          const text = result[0]?.transcript || ""
-          if (result.isFinal) finalText += text
-          else interimText += text
-        }
-        const next = `${transcriptRef.current} ${finalText}`.trim()
-        if (finalText) transcriptRef.current = next
-        setLiveTranscript(`${transcriptRef.current} ${interimText}`.trim())
-      }
-      recognitionRef.current = recognition
-      recognition.start()
+      stopAssistantPlayback()
+      await startMediaRecorder()
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : "No se pudo iniciar el modo de voz."
       setStatus("error")
       setError(message)
       toast.error(message)
     }
-  }, [ensureSession, startMediaRecorder, status])
+  }, [ensureSession, startMediaRecorder, status, stopAssistantPlayback])
 
   const stopListening = React.useCallback(() => {
-    if (recognitionRef.current) {
-      const recognition = recognitionRef.current
-      recognitionRef.current = null
-      setStatus("processing")
-      try {
-        recognition.stop()
-      } catch {
-        recognition.abort()
-      }
-      void sendTranscript(transcriptRef.current)
-      return
-    }
-
     const recorder = recorderRef.current
     if (recorder && recorder.state !== "inactive") {
       recorder.stop()
       recorderRef.current = null
       setStatus("processing")
     }
-  }, [sendTranscript])
+  }, [])
 
   React.useEffect(() => {
     return () => {
-      try {
-        recognitionRef.current?.abort()
-      } catch {
-        /* ignore cleanup failures */
-      }
       if (recorderRef.current && recorderRef.current.state !== "inactive") {
         recorderRef.current.stop()
       }
       releaseMediaStream()
-      if (typeof window !== "undefined" && "speechSynthesis" in window) {
-        window.speechSynthesis.cancel()
-      }
+      stopAssistantPlayback()
       const sessionId = sessionIdRef.current
       if (sessionId) void apiClient.stopGrokVoiceSession(sessionId).catch(() => null)
     }
-  }, [releaseMediaStream])
+  }, [releaseMediaStream, stopAssistantPlayback])
 
   const isBusy = status === "connecting" || status === "processing"
   const isListening = status === "listening"
@@ -339,11 +342,11 @@ export function GrokVoicePanel({
           <div className="flex items-center gap-2">
             <h2 className="truncate text-sm font-semibold">Modo de voz</h2>
             <Badge variant="secondary" className="h-5 rounded-full px-2 text-[11px]">
-              Grok 4
+              Grok 4.3 + xAI voz
             </Badge>
           </div>
           <p className="mt-0.5 truncate text-xs text-muted-foreground">
-            {statusLabel(status)} · chat normal libre
+            {statusLabel(status)} · STT/TTS por xAI
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-1">
@@ -356,9 +359,7 @@ export function GrokVoicePanel({
             className="h-8 w-8 rounded-full"
             onClick={() => {
               setMuted((current) => !current)
-              if (!muted && typeof window !== "undefined" && "speechSynthesis" in window) {
-                window.speechSynthesis.cancel()
-              }
+              if (!muted) stopAssistantPlayback()
             }}
           >
             {muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
@@ -380,9 +381,7 @@ export function GrokVoicePanel({
       <ScrollArea className="min-h-0 flex-1">
         <div className="space-y-3 p-4">
           <div className="rounded-md border border-border/50 bg-muted/25 px-3 py-2 text-xs leading-5 text-muted-foreground">
-            {speechRecognitionSupported
-              ? "Habla y suelta para enviar el turno al panel de voz."
-              : "Se usara grabacion local y transcripcion cuando el navegador no soporte voz en vivo."}
+            Mantén presionado para grabar: SiraGPT transcribe con xAI Grok STT, responde con Grok y reproduce audio xAI.
           </div>
 
           {messages.map((message) => (
@@ -432,7 +431,7 @@ export function GrokVoicePanel({
           ) : (
             <AudioLines className="mr-2 h-4 w-4" />
           )}
-          {isListening ? "Detener y responder" : status === "speaking" ? "Responder en voz" : "Hablar con Grok"}
+          {isListening ? "Detener y responder" : status === "speaking" ? "Reproduciendo voz" : "Hablar con Grok"}
         </Button>
       </footer>
     </section>

@@ -18,6 +18,7 @@ test('EXTERNAL_PROVIDERS covers billing, image/video, search, voice', () => {
     'provider-exa',
     'provider-firecrawl',
     'provider-elevenlabs',
+    'provider-xai-audio',
   ]) {
     assert.ok(names.includes(expected), `missing ${expected}`);
   }
