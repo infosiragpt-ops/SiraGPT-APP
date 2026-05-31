@@ -405,12 +405,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const streamControllersRef = useRef<Map<string, { streamId: string; controller: AbortController }>>(new Map());
   const activeStreamingChatIdsRef = useRef<Set<string>>(new Set());
   const streamBufferRef = useRef<StreamBuffer | null>(null);
+  const currentStreamIdRef = useRef<string | null>(null)
   const chatsRef = useRef<Chat[]>([])
   const isStreamingRef = useRef(false)
   const currentChatRef = useRef<Chat | null>(null)
 
   useEffect(() => { chatsRef.current = chats }, [chats])
   useEffect(() => { isStreamingRef.current = isStreaming }, [isStreaming])
+  useEffect(() => { currentStreamIdRef.current = currentStreamId }, [currentStreamId])
   useEffect(() => { currentChatRef.current = currentChat }, [currentChat])
 
   const syncActiveStreamingState = useCallback(() => {
@@ -427,6 +429,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       streamControllersRef.current.set(chatId, { streamId, controller })
     }
     if (currentChatRef.current?.id === chatId && streamId) {
+      currentStreamIdRef.current = streamId
       setCurrentStreamId(streamId)
     }
     syncActiveStreamingState()
@@ -440,10 +443,54 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       activeStreamingChatIdsRef.current.delete(chatId)
     }
     if (currentChatRef.current?.id === chatId) {
+      currentStreamIdRef.current = null
       setCurrentStreamId(null)
     }
     syncActiveStreamingState()
   }, [syncActiveStreamingState])
+
+  const discardActiveStreamForChat = useCallback(
+    (chatId: string, options: { notifyBackend?: boolean } = {}) => {
+      if (!chatId) return
+
+      const tracked = streamControllersRef.current.get(chatId)
+      const isCurrentChat = currentChatRef.current?.id === chatId
+      const streamIdToStop = tracked?.streamId || (isCurrentChat ? currentStreamIdRef.current : null)
+
+      // Abort the browser-side request immediately. Default text streams
+      // are stored per chat in streamControllersRef; non-default streams
+      // (doc/math/viz/plan/artifact) still use the legacy current-chat
+      // abortControllerRef, so cover both paths.
+      try { tracked?.controller.abort() } catch { /* already aborted */ }
+      if (isCurrentChat && abortControllerRef.current) {
+        try { abortControllerRef.current?.abort() } catch { /* already aborted */ }
+        abortControllerRef.current = null
+      }
+
+      streamControllersRef.current.delete(chatId)
+      activeStreamingChatIdsRef.current.delete(chatId)
+      clearPending(chatId)
+      bg.cancel(chatId)
+
+      if (isCurrentChat) {
+        currentStreamIdRef.current = null
+        setCurrentStreamId(null)
+        setPendingStop(false)
+        streamBufferRef.current?.dispose()
+        streamBufferRef.current = null
+      }
+
+      syncActiveStreamingState()
+
+      if (options.notifyBackend && streamIdToStop) {
+        apiClient.stopAIStream(streamIdToStop)
+          .catch((error) => {
+            console.error("Failed to stop deleted chat stream:", error)
+          })
+      }
+    },
+    [bg, syncActiveStreamingState],
+  )
 
   // Stable, identity-preserving snapshot getter for consumers that
   // need the full current chat occasionally (e.g. exporting from the
@@ -1787,18 +1834,28 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     async (chatId: string) => {
       if (!token) return
 
+      const wasCurrentChat = currentChatRef.current?.id === chatId
+      discardActiveStreamForChat(chatId, { notifyBackend: true })
+
       try {
         await apiClient.deleteChat(chatId)
         setChats((prev) => prev.filter((chat) => chat.id !== chatId))
-        if (currentChat?.id === chatId) {
-          setCurrentChat(null)
+        setCurrentChat(prev => (prev?.id === chatId ? null : prev))
+        if (wasCurrentChat) {
+          try { localStorage.removeItem('currentChatId') } catch { /* ignore storage failures */ }
           setUploadedFiles([])
+        } else {
+          try {
+            if (localStorage.getItem('currentChatId') === chatId) {
+              localStorage.removeItem('currentChatId')
+            }
+          } catch { /* ignore storage failures */ }
         }
       } catch (error) {
         console.error("Failed to delete chat:", error)
       }
     },
-    [currentChat, token],
+    [discardActiveStreamForChat, token],
   )
 
 
