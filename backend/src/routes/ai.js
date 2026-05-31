@@ -1306,6 +1306,38 @@ async function findRecentCompletedDuplicateTurnForUser(userId, chatId, content, 
   return findRecentCompletedDuplicateTurn(chatId, content, windowMs);
 }
 
+const activeGenerateTurns = new Map();
+
+function makeActiveGenerateTurnKey(userId, chatId, content, files) {
+  const normalized = normalizeDuplicateTurnContent(content);
+  if (!userId || !chatId || !normalized) return null;
+  if (Array.isArray(files) && files.length > 0) return null;
+  return `${userId}:${chatId}:${normalized}`;
+}
+
+function createActiveGenerateTurn(key) {
+  const turn = {
+    key,
+    settled: false,
+    promise: null,
+    resolve: null,
+    reject: null,
+  };
+  turn.promise = new Promise((resolve, reject) => {
+    turn.resolve = (value) => {
+      turn.settled = true;
+      resolve(value);
+    };
+    turn.reject = (error) => {
+      turn.settled = true;
+      reject(error);
+    };
+  });
+  turn.promise.catch(() => {});
+  activeGenerateTurns.set(key, turn);
+  return turn;
+}
+
 function streamDuplicateTurnReplay(res, duplicateTurn, actualModel = '') {
   const content = duplicateTurn?.assistantMessage?.content || '';
   res.setHeader('Content-Type', 'text/event-stream');
@@ -1395,7 +1427,7 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
 
       if (!regenerate) {
         if (!Array.isArray(processedFiles) || processedFiles.length === 0) {
-          const duplicateTurn = await findRecentCompletedDuplicateTurn(chatId, prompt);
+          const duplicateTurn = await findRecentCompletedDuplicateTurn(chatId, prompt, 15_000);
           if (duplicateTurn) {
             console.warn('[ai/generate] duplicate completed turn skipped during save', {
               chatId,
@@ -1585,6 +1617,28 @@ router.post(
           } catch (_agenticOverrideErr) {
             // If the agentic stream module is unavailable, keep the quota-routed model.
           }
+        }
+      }
+
+      const activeGenerateTurnKey = makeActiveGenerateTurnKey(userId, chatId, prompt, files);
+      if (canPersist && !regenerate && activeGenerateTurnKey) {
+        const activeTurn = activeGenerateTurns.get(activeGenerateTurnKey);
+        if (activeTurn) {
+          try {
+            const duplicateTurn = await Promise.race([
+              activeTurn.promise,
+              new Promise((resolve) => setTimeout(() => resolve(null), 55_000)),
+            ]);
+            if (duplicateTurn && duplicateTurn.assistantMessage) {
+              fullResponseContent = duplicateTurn.assistantMessage.content || '';
+              console.warn('[ai/generate] active duplicate turn replayed', { chatId });
+              return streamDuplicateTurnReplay(res, duplicateTurn, model);
+            }
+          } catch (activeErr) {
+            console.warn('[ai/generate] active duplicate turn wait failed:', activeErr && activeErr.message);
+          }
+        } else {
+          req._activeGenerateTurn = createActiveGenerateTurn(activeGenerateTurnKey);
         }
       }
 
@@ -5152,6 +5206,9 @@ router.post(
           Object.keys(assistantMeta).length > 0 ? assistantMeta : null,
           req.user?.plan || null,
         );
+        if (req._activeGenerateTurn && !req._activeGenerateTurn.settled) {
+          req._activeGenerateTurn.resolve(savedChat);
+        }
         if (savedChat?.assistantMessage?.id && operationalRagContext?.active) {
           operationalRag.scheduleQualityAudit({
             prisma,
@@ -5340,6 +5397,15 @@ router.post(
         } catch (filtErr) {
           try { console.warn('[ai/generate] filter post-hook failed:', filtErr && filtErr.message); } catch (_) {}
         }
+
+      if (req._activeGenerateTurn) {
+        if (!req._activeGenerateTurn.settled) {
+          req._activeGenerateTurn.reject(new Error('generate turn ended before persistence'));
+        }
+        if (activeGenerateTurns.get(req._activeGenerateTurn.key) === req._activeGenerateTurn) {
+          activeGenerateTurns.delete(req._activeGenerateTurn.key);
+        }
+      }
   
       if (streamId) {
         streamControllers.delete(streamId);
