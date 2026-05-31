@@ -261,26 +261,26 @@ function buildOpenClawModelLogoEnhancer() {
   return `<style>
 .chat-controls__model{position:relative}
 .chat-controls__model>.siragpt-native-model-select{position:absolute!important;inset:auto!important;width:1px!important;height:1px!important;min-width:1px!important;opacity:0!important;pointer-events:none!important}
-.siragpt-model-select{position:relative;width:100%;min-width:190px;color:inherit;font:inherit}
-.siragpt-model-select__button{width:100%;height:38px;display:flex;align-items:center;gap:8px;padding:0 34px 0 12px;border:1px solid var(--border,#e5e5ea);border-radius:var(--radius-md,10px);background:var(--bg-elevated,#fff);color:var(--text,#3c3c43);font:inherit;line-height:1;cursor:pointer;text-align:left;box-shadow:none}
-.siragpt-model-select__button:hover{border-color:var(--border-hover,#aeaeb2);background:var(--bg-hover,var(--bg-elevated,#fff))}
+.siragpt-model-select{position:relative;width:100%;min-width:190px;color:inherit;font:inherit;-webkit-font-smoothing:antialiased;text-rendering:geometricPrecision}
+.siragpt-model-select__button{width:100%;height:38px;display:flex;align-items:center;gap:9px;padding:0 34px 0 10px;border:1px solid color-mix(in srgb,var(--border,#e5e5ea) 72%,transparent);border-radius:12px;background:color-mix(in srgb,var(--bg-elevated,#fff) 86%,transparent);color:var(--text,#111827);font:inherit;line-height:1;cursor:pointer;text-align:left;box-shadow:0 1px 2px rgba(15,23,42,.04);backdrop-filter:blur(14px)}
+.siragpt-model-select__button:hover{border-color:var(--border-hover,#c8c8cc);background:var(--bg-elevated,#fff)}
 .siragpt-model-select__button:focus-visible,.siragpt-model-select.is-open .siragpt-model-select__button{outline:none;border-color:var(--accent,#ff3b3b);box-shadow:var(--focus-ring,0 0 0 3px color-mix(in srgb,#ff3b3b 18%,transparent))}
 .siragpt-model-select__button:disabled{cursor:not-allowed;opacity:.55}
-.siragpt-model-select__label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.siragpt-model-select__label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;font-weight:560;letter-spacing:0}
 .siragpt-model-select__chevron{position:absolute;right:12px;top:50%;width:7px;height:7px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:translateY(-65%) rotate(45deg);opacity:.62;pointer-events:none}
-.siragpt-model-logo{width:22px;height:22px;min-width:22px;border-radius:7px;display:inline-flex;align-items:center;justify-content:center;overflow:hidden;background:var(--bg-elevated,#fff);border:1px solid var(--border,rgba(15,23,42,.08));box-shadow:0 1px 1px rgba(15,23,42,.05)}
-.siragpt-model-logo img{width:100%;height:100%;object-fit:contain;display:block;padding:2px}
+.siragpt-model-logo{width:23px;height:23px;min-width:23px;display:inline-flex;align-items:center;justify-content:center;overflow:visible;background:transparent;border:0;box-shadow:none}
+.siragpt-model-logo img{width:100%;height:100%;object-fit:contain;display:block;padding:0}
 .siragpt-model-logo img[src*="openai.svg"]{filter:var(--openai-icon-filter,none)}
-.siragpt-model-logo--fallback{background:linear-gradient(135deg,var(--accent,#ff4d4d),var(--bg-hover,#1f2937));color:var(--accent-foreground,#fff);font-size:10px;font-weight:800;letter-spacing:0}
-.siragpt-model-select__menu{position:absolute;z-index:1000;top:calc(100% + 8px);left:0;right:auto;width:min(360px,calc(100vw - 28px));max-height:min(520px,70dvh);overflow:auto;padding:8px;border:1px solid var(--border,#e5e5ea);border-radius:18px;background:var(--popover,#fff);color:var(--popover-foreground,var(--text,#3c3c43));box-shadow:var(--shadow-lg,0 24px 54px rgba(15,23,42,.2))}
-.siragpt-model-select__option{width:100%;min-height:62px;display:flex;align-items:center;gap:12px;padding:10px 12px;border:0;border-radius:12px;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}
-.siragpt-model-select__option .siragpt-model-logo{width:30px;height:30px;min-width:30px;border-radius:9px}
-.siragpt-model-select__option:hover,.siragpt-model-select__option[aria-selected="true"]{background:var(--bg-hover,rgba(118,118,128,.1))}
+.siragpt-model-logo--fallback{color:var(--text,#111827);font-size:14px;font-weight:680;letter-spacing:0}
+.siragpt-model-select__menu{position:absolute;z-index:1000;top:calc(100% + 10px);left:0;right:auto;width:min(360px,calc(100vw - 28px));max-height:min(520px,70dvh);overflow:auto;padding:8px;border:1px solid color-mix(in srgb,var(--border,#e5e5ea) 84%,transparent);border-radius:20px;background:color-mix(in srgb,var(--popover,#fff) 94%,transparent);color:var(--popover-foreground,var(--text,#111827));box-shadow:0 28px 70px rgba(15,23,42,.16);backdrop-filter:blur(18px)}
+.siragpt-model-select__option{width:100%;min-height:64px;display:flex;align-items:center;gap:14px;padding:10px 12px;border:0;border-radius:14px;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}
+.siragpt-model-select__option .siragpt-model-logo{width:31px;height:31px;min-width:31px}
+.siragpt-model-select__option:hover,.siragpt-model-select__option[aria-selected="true"]{background:color-mix(in srgb,var(--bg-hover,rgba(118,118,128,.1)) 82%,transparent)}
 .siragpt-model-select__option-text{min-width:0;display:flex;flex:1;flex-direction:column;gap:2px}
-.siragpt-model-select__option-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:15px;font-weight:540;line-height:20px;color:inherit}
-.siragpt-model-select__option-meta{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:450;line-height:17px;color:var(--text-muted,#6e6e73)}
+.siragpt-model-select__option-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:15px;font-weight:610;letter-spacing:0;line-height:20px;color:inherit}
+.siragpt-model-select__option-meta{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;font-weight:470;letter-spacing:0;line-height:17px;color:var(--text-muted,#6e6e73)}
 .siragpt-model-select__option[aria-selected="true"] .siragpt-model-select__option-title{font-weight:720}
-@media(prefers-color-scheme:dark){.siragpt-model-logo img[src*="openai.svg"]{filter:invert(1)}.siragpt-model-logo{background:var(--bg-elevated,#1a1a2e)}}
+@media(prefers-color-scheme:dark){.siragpt-model-logo img[src*="openai.svg"]{filter:invert(1)}.siragpt-model-logo--fallback{color:var(--popover-foreground,#f8fafc)}}
 </style><script>(function(){try{
 var MODEL_LOGOS=[
   {match:["deepseek"],src:"/icons/deepseek.png",name:"DeepSeek"},
