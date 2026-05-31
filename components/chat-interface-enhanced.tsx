@@ -3901,6 +3901,7 @@ function ChatInterfaceContent() {
   // reading from state directly would capture stale values.
   const uploadedFilesRef = React.useRef<any[]>([]);
   React.useEffect(() => { uploadedFilesRef.current = uploadedFiles; }, [uploadedFiles]);
+  const inFlightSendKeysRef = React.useRef<Map<string, number>>(new Map());
 
   const updateUploadedFileById = React.useCallback((
     fileId: string,
@@ -6557,6 +6558,21 @@ But first, you need to connect your Spotify account securely using the button be
     }
 
     const msg = rawMsg || buildFileOnlyPrompt(composerFiles);
+    const fileKey = composerFiles
+      .map((file: any) => resolveUploadFileId(file) || file?.id || file?.name || file?.originalName || "")
+      .filter(Boolean)
+      .sort()
+      .join(",");
+    const sendKey = `${currentChat?.id || "new"}:${selectedModel || "model"}:${msg}:${fileKey}`;
+    const nowForSendKey = Date.now();
+    inFlightSendKeysRef.current.forEach((startedAt, key) => {
+      if (nowForSendKey - startedAt > 120_000) inFlightSendKeysRef.current.delete(key);
+    });
+    if (inFlightSendKeysRef.current.has(sendKey)) {
+      return;
+    }
+    inFlightSendKeysRef.current.set(sendKey, nowForSendKey);
+
     const activeFreePreviewTool = isFreePlan
       ? (isImageGenerationActive || chatType === 'image')
         ? 'Imágenes'
@@ -6580,6 +6596,7 @@ But first, you need to connect your Spotify account securely using the button be
         tool: activeFreePreviewTool.toLowerCase(),
         plan: currentPlan,
       });
+      inFlightSendKeysRef.current.delete(sendKey);
       return;
     }
 
@@ -6612,6 +6629,7 @@ But first, you need to connect your Spotify account securely using the button be
       if (queueBurstTimestampsRef.current.length >= 3 && pendingMsgQueueRef.current.length === 1) {
         toast.info("Procesando tus mensajes…", { duration: 2500 });
       }
+      inFlightSendKeysRef.current.delete(sendKey);
       return;
     }
 
@@ -6683,6 +6701,7 @@ REWRITTEN TEXT:`;
           setIsRewriting(false);
         }
       );
+      inFlightSendKeysRef.current.delete(sendKey);
       return; // Stop further execution
     }
     const filesToSend = [...composerFiles];
@@ -6802,6 +6821,8 @@ REWRITTEN TEXT:`;
         setIsGeneratingWord(false);
         console.error('Word Connector error:', error);
         toast.error(error?.message || 'Error al generar documento');
+      } finally {
+        inFlightSendKeysRef.current.delete(sendKey);
       }
       return; // IMPORTANT: Stop execution here - no other API calls should be made
     }
@@ -6912,6 +6933,8 @@ REWRITTEN TEXT:`;
         setIsGeneratingExcel(false);
         console.error('Excel Connector error:', error);
         toast.error(error?.message || 'Failed to generate Excel');
+      } finally {
+        inFlightSendKeysRef.current.delete(sendKey);
       }
 
       return;
@@ -6935,10 +6958,12 @@ REWRITTEN TEXT:`;
         } else {
           toast.error('Please provide at least 1 research topic for thesis generation.\n\nExample: "Artificial Intelligence in Healthcare" or "AI in Healthcare, ML Ethics"');
         }
+        inFlightSendKeysRef.current.delete(sendKey);
         return;
       } catch (error: any) {
         console.error('Thesis generation error:', error);
         toast.error(error?.message || 'Thesis generation failed. Please try again.');
+        inFlightSendKeysRef.current.delete(sendKey);
         return;
       }
     }
@@ -7299,6 +7324,7 @@ REWRITTEN TEXT:`;
       setSendingChatId(null);
       intentAbortControllerRef.current = null;
       sendInFlightRef.current = false;
+      inFlightSendKeysRef.current.delete(sendKey);
     }
   }
   const handleGmailCommand = async (prompt: string) => {

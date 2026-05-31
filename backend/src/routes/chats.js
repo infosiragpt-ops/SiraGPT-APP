@@ -1,4 +1,5 @@
 const express = require('express');
+const crypto = require('crypto');
 const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
 const { requireScope } = require('../middleware/require-scope');
@@ -15,6 +16,27 @@ const chatExport = require('../services/chat-export');
 const triggers = require('../services/trigger-registry');
 
 const router = express.Router();
+
+function stableStringify(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
+}
+
+function buildMessageFingerprint({ chatId, role, content, files }) {
+  return crypto
+    .createHash('sha256')
+    .update(stableStringify({ chatId, role, content, files: files || null }))
+    .digest('hex');
+}
+
+function parseMessageMetadata(metadata) {
+  if (!metadata) return {};
+  if (typeof metadata === 'string') {
+    try { return JSON.parse(metadata); } catch (_) { return {}; }
+  }
+  return typeof metadata === 'object' ? metadata : {};
+}
 
 const projectChatSelect = {
   id: true,
@@ -634,7 +656,9 @@ router.post('/:id/messages', [
     .isLength({ max: MAX_MESSAGE_CONTENT_CHARS })
     .withMessage(`Content exceeds ${MAX_MESSAGE_CONTENT_CHARS} characters`),
   body('tokens').optional().isInt({ min: 0 }),
-  body('files').optional().isArray()
+  body('files').optional().isArray(),
+  body('metadata').optional(),
+  body('idempotencyKey').optional().isString().isLength({ min: 1, max: 200 })
 ], authenticateToken, async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -654,7 +678,36 @@ router.post('/:id/messages', [
       return res.status(404).json({ error: 'Chat not found' });
     }
 
-    const { role, content, tokens, files } = req.body;
+    const { role, content, tokens, files, idempotencyKey } = req.body;
+    const metadata = parseMessageMetadata(req.body.metadata);
+    const messageFingerprint = idempotencyKey || metadata.idempotencyKey || buildMessageFingerprint({
+      chatId: req.params.id,
+      role,
+      content,
+      files,
+    });
+
+    const recentMessages = await prisma.message.findMany({
+      where: {
+        chatId: req.params.id,
+        role,
+        timestamp: { gte: new Date(Date.now() - 2 * 60 * 1000) },
+        deletedAt: null,
+      },
+      orderBy: { timestamp: 'desc' },
+      take: 12,
+    });
+
+    const duplicate = recentMessages.find((existing) => {
+      const existingMetadata = parseMessageMetadata(existing.metadata);
+      if (existingMetadata.idempotencyKey && existingMetadata.idempotencyKey === messageFingerprint) return true;
+      if (existing.content !== content) return false;
+      return stableStringify(existing.files || null) === stableStringify(files || null);
+    });
+
+    if (duplicate) {
+      return res.status(200).json({ message: duplicate, duplicate: true });
+    }
 
     const message = await prisma.message.create({
       data: {
@@ -664,7 +717,11 @@ router.post('/:id/messages', [
         tokens,
         // tools: [{ "type": "image_generation" }],
 
-        files: files || null
+        files: files || null,
+        metadata: {
+          ...metadata,
+          idempotencyKey: messageFingerprint,
+        }
       }
     });
 

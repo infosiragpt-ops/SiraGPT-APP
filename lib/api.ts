@@ -808,7 +808,7 @@ class ApiClient {
 
   // Returns AddMessageEnvelope at runtime — kept as `any` because the
   // local Message interface narrows `id` to `string`.
-  async addMessage(chatId: string, data: { role: string; content: string; files?: string[]; metadata?: string }): Promise<any> {
+  async addMessage(chatId: string, data: { role: string; content: string; files?: string[]; metadata?: string; idempotencyKey?: string }): Promise<any> {
     return this.request(`/chats/${chatId}/messages`, {
       method: 'POST',
       body: JSON.stringify(data),
