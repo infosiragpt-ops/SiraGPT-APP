@@ -1243,6 +1243,38 @@ async function loadUserFile(fileRef, userId) {
   return toProcessedFile(file);
 }
 
+// Idempotent USER-message persistence. The /generate handler is ~3.8k lines
+// with several branches that each persist the turn, and a request can be
+// retried or double-fired. Creating the USER row unconditionally is what let
+// the "sigue duplicando los mensajes" bug survive the earlier front-end
+// guards. We only skip the write when the turn we are about to save is
+// already the LAST persisted message in the chat AND identical AND unanswered
+// (no assistant row after it) within a short window — i.e. a genuine
+// double-write of the same turn. A message the user legitimately repeats is
+// always preceded by the assistant's reply, so it is never collapsed.
+async function persistUserMessageOnce(chatId, content, filesJson = null, windowMs = 30_000) {
+  try {
+    const last = await prisma.message.findFirst({
+      where: { chatId, deletedAt: null },
+      orderBy: { timestamp: 'desc' },
+      select: { id: true, role: true, content: true, timestamp: true },
+    });
+    if (
+      last &&
+      last.role === 'USER' &&
+      String(last.content || '').trim() === String(content || '').trim() &&
+      Date.now() - new Date(last.timestamp).getTime() < windowMs
+    ) {
+      return last; // identical unanswered user turn already persisted — skip the duplicate
+    }
+  } catch (guardErr) {
+    console.warn('[ai/persistUserMessageOnce] guard check failed, creating anyway:', guardErr && guardErr.message);
+  }
+  return prisma.message.create({
+    data: { chatId, role: 'USER', content, files: filesJson },
+  });
+}
+
 async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles = [], regenerate = false, extraMetadata = null, userPlan = null) {
   let assistantMessage = null;
   try {
@@ -1279,14 +1311,11 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
       }
 
       if (!regenerate) {
-        await prisma.message.create({
-          data: {
-            chatId,
-            role: 'USER',
-            content: prompt,
-            files: processedFiles.length > 0 ? JSON.stringify(processedFiles) : null
-          }
-        });
+        await persistUserMessageOnce(
+          chatId,
+          prompt,
+          processedFiles.length > 0 ? JSON.stringify(processedFiles) : null,
+        );
       }
 
       const metadataPayload = extraMetadata && typeof extraMetadata === 'object' && Object.keys(extraMetadata).length > 0
@@ -4376,14 +4405,11 @@ router.post(
             const __chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
             if (__chat) {
               if (!regenerate) {
-                await prisma.message.create({
-                  data: {
-                    chatId,
-                    role: 'USER',
-                    content: prompt,
-                    files: processedFiles.length > 0 ? JSON.stringify(processedFiles) : null,
-                  },
-                });
+                await persistUserMessageOnce(
+                  chatId,
+                  prompt,
+                  processedFiles.length > 0 ? JSON.stringify(processedFiles) : null,
+                );
               }
               await prisma.message.create({
                 data: {

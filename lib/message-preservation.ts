@@ -345,9 +345,42 @@ export function dedupeMessages<TMessage extends DedupeMessageLike>(
     return true;
   });
 
+  // Pass C — collapse ADJACENT same-role twins where BOTH carry a stable
+  // (non-optimistic) server id and identical visible content. This closes the
+  // one "sigue duplicando los mensajes" gap that Pass A/B can't: a turn the
+  // backend persisted TWICE (two distinct cuids) — so there is no id collision
+  // for Pass A and no optimistic twin for Pass B, yet the user sees the line
+  // rendered twice. We require BOTH ids to be stable on purpose: two optimistic
+  // sends are intentionally preserved (see message-dedupe tests — a genuine
+  // rapid double-send is the user's choice, not our duplication artifact), and
+  // the optimistic-vs-stable case is already Pass B's job. Restricting to
+  // *adjacent* turns means a message legitimately repeated later in the
+  // conversation — always separated by an assistant turn — is never swallowed.
+  // Empty content never matches (sameContentNormalized bails on blanks), so
+  // streaming/assistant placeholders are left untouched. Pairs with the backend
+  // `persistUserMessageOnce` guard, which stops NEW double-writes at the source;
+  // Pass C cleans up rows already duplicated in existing conversations.
+  const collapsedAdjacent: TMessage[] = [];
+  for (const message of deduped) {
+    const prev = collapsedAdjacent[collapsedAdjacent.length - 1];
+    const bothStable =
+      !!prev && !!prev.id && !!message.id &&
+      !OPTIMISTIC_ID_RE.test(String(prev.id)) &&
+      !OPTIMISTIC_ID_RE.test(String(message.id));
+    if (
+      bothStable &&
+      String(prev.role || '') === String(message.role || '') &&
+      sameContentNormalized(prev, message)
+    ) {
+      collapsedAdjacent[collapsedAdjacent.length - 1] = richerMessage(prev, message);
+      continue;
+    }
+    collapsedAdjacent.push(message);
+  }
+
   // Reference-stable when no duplicate was found (lengths can only differ if
-  // Pass A or Pass B actually removed something).
-  return deduped.length === messages.length ? messages : deduped;
+  // Pass A, B or C actually removed something).
+  return collapsedAdjacent.length === messages.length ? messages : collapsedAdjacent;
 }
 
 export function mergeChatPreservingUserMessages<TChat extends ChatLike>(

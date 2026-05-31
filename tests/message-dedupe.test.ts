@@ -56,6 +56,34 @@ test('dedupeMessages does NOT collapse two genuine same-text user sends (no stab
   assert.equal(dedupeMessages(msgs).length, 2);
 });
 
+test('dedupeMessages collapses adjacent stable-id twins from a backend double-write', () => {
+  // The gap Pass C closes: the backend persisted the SAME user turn twice, so
+  // both rows carry a distinct stable cuid — no id collision for Pass A, no
+  // optimistic twin for Pass B — yet they render back-to-back and the user
+  // sees their message duplicated. This is the residual "sigue duplicando"
+  // case that survived the earlier front-end guards.
+  const msgs = [
+    { id: 'clx_user_aaa', role: 'USER', content: 'hazme un resumen' },
+    { id: 'clx_user_bbb', role: 'USER', content: 'hazme un resumen' },
+    { id: 'clx_asst_ccc', role: 'ASSISTANT', content: 'Claro, aquí va.' },
+  ];
+  const out = dedupeMessages(msgs);
+  assert.equal(out.length, 2);
+  assert.deepEqual(out.map((m) => m.role), ['USER', 'ASSISTANT']);
+});
+
+test('dedupeMessages preserves a stable-id message legitimately repeated after a reply', () => {
+  // Same text, but separated by the assistant's turn → two real turns, not a
+  // duplication artifact. Pass C only collapses *adjacent* twins, so both stay.
+  const msgs = [
+    { id: 'u1', role: 'USER', content: 'continúa' },
+    { id: 'a1', role: 'ASSISTANT', content: 'primer tramo' },
+    { id: 'u2', role: 'USER', content: 'continúa' },
+    { id: 'a2', role: 'ASSISTANT', content: 'segundo tramo' },
+  ];
+  assert.equal(dedupeMessages(msgs).length, 4);
+});
+
 test('dedupeMessages is reference-stable when nothing is duplicated', () => {
   const msgs = [
     { id: 'u1', role: 'USER', content: 'a' },
