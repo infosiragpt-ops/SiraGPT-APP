@@ -84,6 +84,28 @@ test('dedupeMessages preserves a stable-id message legitimately repeated after a
   assert.equal(dedupeMessages(msgs).length, 4);
 });
 
+test('dedupeMessages collapses a rapid duplicated user/assistant turn pair', () => {
+  const msgs = [
+    { id: 'u1', role: 'USER', content: 'hola', timestamp: '2026-05-31T15:40:59.065Z' },
+    { id: 'a1', role: 'ASSISTANT', content: '¡Hola! ¿Cómo puedo ayudarte hoy?', timestamp: '2026-05-31T15:40:59.076Z' },
+    { id: 'u2', role: 'USER', content: 'hola', timestamp: '2026-05-31T15:40:59.415Z' },
+    { id: 'a2', role: 'ASSISTANT', content: '¡Hola! ¿Cómo puedo ayudarte hoy?', timestamp: '2026-05-31T15:40:59.422Z' },
+  ];
+  const out = dedupeMessages(msgs);
+  assert.equal(out.length, 2);
+  assert.deepEqual(out.map((m) => m.id), ['u1', 'a1']);
+});
+
+test('dedupeMessages preserves repeated turn pairs outside the rapid duplicate window', () => {
+  const msgs = [
+    { id: 'u1', role: 'USER', content: 'hola', timestamp: '2026-05-31T15:40:00.000Z' },
+    { id: 'a1', role: 'ASSISTANT', content: '¡Hola! ¿Cómo puedo ayudarte hoy?', timestamp: '2026-05-31T15:40:01.000Z' },
+    { id: 'u2', role: 'USER', content: 'hola', timestamp: '2026-05-31T15:40:05.000Z' },
+    { id: 'a2', role: 'ASSISTANT', content: '¡Hola! ¿Cómo puedo ayudarte hoy?', timestamp: '2026-05-31T15:40:06.000Z' },
+  ];
+  assert.equal(dedupeMessages(msgs).length, 4);
+});
+
 test('dedupeMessages is reference-stable when nothing is duplicated', () => {
   const msgs = [
     { id: 'u1', role: 'USER', content: 'a' },

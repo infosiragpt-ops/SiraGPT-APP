@@ -267,7 +267,13 @@ const OPTIMISTIC_ID_RE = /^msg-(?:user|ai|temp)-/;
 // Minimal structural shape for dedupe — deliberately WITHOUT ChatMessageLike's
 // `[key: string]: unknown` index signature, so concrete app message types
 // (e.g. the frontend `Message`) are assignable without a cast.
-type DedupeMessageLike = { id?: string; role?: string; content?: unknown };
+type DedupeMessageLike = {
+  id?: string;
+  role?: string;
+  content?: unknown;
+  timestamp?: unknown;
+  createdAt?: unknown;
+};
 
 const sameContentNormalized = (a: DedupeMessageLike, b: DedupeMessageLike) => {
   const ta = asText(a?.content).trim();
@@ -289,6 +295,23 @@ const richerMessage = <T extends DedupeMessageLike>(a: T, b: T): T => {
   if (aOptimistic && !bOptimistic) return b;
   return a;
 };
+
+const isStableMessage = (message?: DedupeMessageLike) => {
+  const id = message?.id ? String(message.id) : '';
+  return Boolean(id) && !OPTIMISTIC_ID_RE.test(id);
+};
+
+const messageTimeMs = (message?: DedupeMessageLike) => {
+  const raw = message?.timestamp ?? message?.createdAt;
+  if (typeof raw !== 'string' && typeof raw !== 'number' && !(raw instanceof Date)) {
+    return NaN;
+  }
+  const parsed = raw instanceof Date ? raw.getTime() : Date.parse(String(raw));
+  return Number.isFinite(parsed) ? parsed : NaN;
+};
+
+const isRole = (message: DedupeMessageLike | undefined, role: string) =>
+  String(message?.role || '').toUpperCase() === role;
 
 /**
  * Final safety net against the optimistic-UI message-duplication bug — the
@@ -378,9 +401,46 @@ export function dedupeMessages<TMessage extends DedupeMessageLike>(
     collapsedAdjacent.push(message);
   }
 
+  // Pass D — collapse duplicated *turn pairs* persisted as
+  // USER/ASSISTANT/USER/ASSISTANT within a tiny window. The previous backend
+  // guard only caught "same user row while unanswered"; production showed a
+  // second request arriving milliseconds after the first fast assistant reply,
+  // so the duplicate was no longer adjacent by role. Timestamps are required
+  // to avoid swallowing intentional later repeats.
+  const DUPLICATE_PAIR_WINDOW_MS = 1_500;
+  const collapsedPairs: TMessage[] = [];
+  for (let i = 0; i < collapsedAdjacent.length; i += 1) {
+    const userA = collapsedAdjacent[i];
+    const assistantA = collapsedAdjacent[i + 1];
+    const userB = collapsedAdjacent[i + 2];
+    const assistantB = collapsedAdjacent[i + 3];
+    const userGapMs = messageTimeMs(userB) - messageTimeMs(userA);
+    if (
+      isStableMessage(userA) &&
+      isStableMessage(assistantA) &&
+      isStableMessage(userB) &&
+      isStableMessage(assistantB) &&
+      isRole(userA, 'USER') &&
+      isRole(userB, 'USER') &&
+      isRole(assistantA, 'ASSISTANT') &&
+      isRole(assistantB, 'ASSISTANT') &&
+      sameContentNormalized(userA, userB) &&
+      Number.isFinite(userGapMs) &&
+      userGapMs >= 0 &&
+      userGapMs <= DUPLICATE_PAIR_WINDOW_MS
+    ) {
+      collapsedPairs.push(userA, sameContentNormalized(assistantA, assistantB)
+        ? richerMessage(assistantA, assistantB)
+        : assistantA);
+      i += 3;
+      continue;
+    }
+    collapsedPairs.push(userA);
+  }
+
   // Reference-stable when no duplicate was found (lengths can only differ if
-  // Pass A, B or C actually removed something).
-  return collapsedAdjacent.length === messages.length ? messages : collapsedAdjacent;
+  // Pass A, B, C or D actually removed something).
+  return collapsedPairs.length === messages.length ? messages : collapsedPairs;
 }
 
 export function mergeChatPreservingUserMessages<TChat extends ChatLike>(

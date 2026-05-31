@@ -1243,6 +1243,89 @@ async function loadUserFile(fileRef, userId) {
   return toProcessedFile(file);
 }
 
+const normalizeDuplicateTurnContent = (value) =>
+  String(value || '').trim().replace(/\s+/g, ' ');
+
+async function findRecentCompletedDuplicateTurn(chatId, content, windowMs = 5_000) {
+  const normalized = normalizeDuplicateTurnContent(content);
+  if (!chatId || !normalized) return null;
+
+  const recent = await prisma.message.findMany({
+    where: { chatId, deletedAt: null },
+    orderBy: { timestamp: 'desc' },
+    take: 4,
+    select: {
+      id: true,
+      role: true,
+      content: true,
+      timestamp: true,
+      files: true,
+      tokens: true,
+      metadata: true,
+    },
+  });
+  if (recent.length < 2) return null;
+
+  const ordered = recent.reverse();
+  const assistantMessage = ordered[ordered.length - 1];
+  const userMessage = ordered[ordered.length - 2];
+  if (
+    !userMessage ||
+    !assistantMessage ||
+    userMessage.role !== 'USER' ||
+    assistantMessage.role !== 'ASSISTANT' ||
+    normalizeDuplicateTurnContent(userMessage.content) !== normalized ||
+    userMessage.files
+  ) {
+    return null;
+  }
+
+  const userAgeMs = Date.now() - new Date(userMessage.timestamp).getTime();
+  const assistantDelayMs = new Date(assistantMessage.timestamp).getTime() - new Date(userMessage.timestamp).getTime();
+  if (
+    !Number.isFinite(userAgeMs) ||
+    !Number.isFinite(assistantDelayMs) ||
+    userAgeMs < 0 ||
+    userAgeMs > windowMs ||
+    assistantDelayMs < 0 ||
+    assistantDelayMs > windowMs
+  ) {
+    return null;
+  }
+
+  return { userMessage, assistantMessage };
+}
+
+async function findRecentCompletedDuplicateTurnForUser(userId, chatId, content, windowMs = 5_000) {
+  if (!userId || !chatId) return null;
+  const chat = await prisma.chat.findFirst({
+    where: { id: chatId, userId },
+    select: { id: true },
+  });
+  if (!chat) return null;
+  return findRecentCompletedDuplicateTurn(chatId, content, windowMs);
+}
+
+function streamDuplicateTurnReplay(res, duplicateTurn, actualModel = '') {
+  const content = duplicateTurn?.assistantMessage?.content || '';
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  try { res.setHeader('X-Model-Actual', String(actualModel || '')); } catch { /* noop */ }
+  if (typeof res.flushHeaders === 'function') res.flushHeaders();
+  res.write(`data: ${JSON.stringify({
+    replace: true,
+    content,
+    type: 'duplicate_turn_replay',
+    duplicate: true,
+    userMessageId: duplicateTurn?.userMessage?.id || null,
+    assistantMessageId: duplicateTurn?.assistantMessage?.id || null,
+  })}\n\n`);
+  res.write('data: [DONE]\n\n');
+  res.end();
+}
+
 // Idempotent USER-message persistence. The /generate handler is ~3.8k lines
 // with several branches that each persist the turn, and a request can be
 // retried or double-fired. Creating the USER row unconditionally is what let
@@ -1311,6 +1394,17 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
       }
 
       if (!regenerate) {
+        if (!Array.isArray(processedFiles) || processedFiles.length === 0) {
+          const duplicateTurn = await findRecentCompletedDuplicateTurn(chatId, prompt);
+          if (duplicateTurn) {
+            console.warn('[ai/generate] duplicate completed turn skipped during save', {
+              chatId,
+              userMessageId: duplicateTurn.userMessage.id,
+              assistantMessageId: duplicateTurn.assistantMessage.id,
+            });
+            return { assistantMessage: duplicateTurn.assistantMessage, duplicate: true };
+          }
+        }
         await persistUserMessageOnce(
           chatId,
           prompt,
@@ -1491,6 +1585,32 @@ router.post(
           } catch (_agenticOverrideErr) {
             // If the agentic stream module is unavailable, keep the quota-routed model.
           }
+        }
+      }
+
+      // Idempotency for the real production failure mode: the same
+      // /ai/generate turn can be fired again milliseconds after a very fast
+      // assistant reply was already persisted. In that state the previous
+      // USER is no longer "unanswered", so persistUserMessageOnce alone cannot
+      // catch it. Replay the existing assistant turn and skip all model work.
+      if (
+        canPersist &&
+        !regenerate &&
+        (!Array.isArray(files) || files.length === 0)
+      ) {
+        try {
+          const duplicateTurn = await findRecentCompletedDuplicateTurnForUser(userId, chatId, prompt);
+          if (duplicateTurn) {
+            fullResponseContent = duplicateTurn.assistantMessage.content || '';
+            console.warn('[ai/generate] duplicate completed turn replayed', {
+              chatId,
+              userMessageId: duplicateTurn.userMessage.id,
+              assistantMessageId: duplicateTurn.assistantMessage.id,
+            });
+            return streamDuplicateTurnReplay(res, duplicateTurn, model);
+          }
+        } catch (duplicateErr) {
+          console.warn('[ai/generate] duplicate completed turn check failed:', duplicateErr && duplicateErr.message);
         }
       }
 
