@@ -523,7 +523,9 @@ function sectionInsertionRange(documentXml, target) {
   const paragraphs = extractDocxParagraphs(documentXml);
   const headingIndex = paragraphs.findIndex((paragraph) => matchesTargetHeading(paragraph.normalized, target));
   if (headingIndex < 0) {
-    throw new Error(`No encontré "${target.label}" dentro del DOCX original.`);
+    const notFound = new Error(`No encontré "${target.label}" dentro del DOCX original.`);
+    notFound.code = 'SECTION_NOT_FOUND';
+    throw notFound;
   }
 
   const heading = paragraphs[headingIndex];
@@ -1051,7 +1053,7 @@ async function generateSourcePreservingDocumentEdit({
   const targetSection = isDocxFile(sourceFile) && isTargetedSectionFillRequest(requestText)
     ? parseTargetSectionRequest(requestText)
     : null;
-  const blocks = targetSection
+  let blocks = targetSection
     ? await generateTargetSectionBlocks({
       prompt: requestText,
       target: targetSection,
@@ -1074,11 +1076,28 @@ async function generateSourcePreservingDocumentEdit({
   if (isDocxFile(sourceFile)) {
     format = 'docx';
     if (targetSection) {
-      output = fillDocxSectionBuffer(input, targetSection, blocks);
-      suffix = `${normalizeText(targetSection.kind).replace(/\s+/g, '_')}_${targetSection.number}_completado`;
-      titleSuffix = `${targetSection.label} completado`;
-      explanation = `Se conservó el DOCX original y se completó únicamente ${targetSection.label}.`;
-      content = `Listo. Conservé el DOCX original y completé únicamente ${targetSection.label} usando el contexto combinado de los documentos adjuntos.`;
+      try {
+        output = fillDocxSectionBuffer(input, targetSection, blocks);
+        suffix = `${normalizeText(targetSection.kind).replace(/\s+/g, '_')}_${targetSection.number}_completado`;
+        titleSuffix = `${targetSection.label} completado`;
+        explanation = `Se conservó el DOCX original y se completó únicamente ${targetSection.label}.`;
+        content = `Listo. Conservé el DOCX original y completé únicamente ${targetSection.label} usando el contexto combinado de los documentos adjuntos.`;
+      } catch (err) {
+        if (err?.code !== 'SECTION_NOT_FOUND') throw err;
+        // Respaldo: la sección solicitada no existe dentro del documento.
+        // En lugar de fallar, la agregamos al final con su propio encabezado,
+        // conservando intacto el resto del archivo (portada, cuerpo, etc.).
+        blocks = [
+          block('pageBreak', ''),
+          block('heading2', targetSection.label),
+          ...blocks.filter((item) => item.kind !== 'pageBreak'),
+        ];
+        output = appendToDocxBuffer(input, blocks);
+        suffix = `${normalizeText(targetSection.kind).replace(/\s+/g, '_')}_${targetSection.number}`;
+        titleSuffix = `con ${targetSection.label}`;
+        explanation = `No se encontró ${targetSection.label} dentro del documento; se agregó al final conservando el resto del archivo.`;
+        content = `No encontré "${targetSection.label}" dentro del documento, así que agregué el contenido al final como ${targetSection.label}, conservando intacto el resto del archivo.`;
+      }
     } else {
       output = appendToDocxBuffer(input, blocks);
       content = 'Listo. Conservé el DOCX original y agregué el contenido solicitado al final, en anexos, sin regenerar la portada ni reemplazar el documento.';
