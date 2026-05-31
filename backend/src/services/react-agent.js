@@ -33,6 +33,7 @@
 const DEFAULT_MAX_STEPS = 8;
 const DEFAULT_MAX_RUNTIME_MS = 30 * 60 * 1000;
 const Ajv = require('ajv');
+const { sanitizeToolParameters } = require('./ai-product-os/tool-schema-sanitizer');
 const ajv = new Ajv({ allErrors: true, strict: false, coerceTypes: false });
 const schemaValidatorCache = new Map();
 const FINALIZE_TOOL_PARAMETERS = {
@@ -62,7 +63,10 @@ function toOpenAITool(tool) {
     function: {
       name: tool.name,
       description: tool.description,
-      parameters: tool.parameters || { type: 'object', properties: {}, additionalProperties: true },
+      // Normalize to a cross-provider-safe JSON Schema so a tool that works
+      // on GPT-4o also works on weaker / stricter backends (Llama free tier,
+      // Anthropic, Gemini). See tool-schema-sanitizer.js.
+      parameters: sanitizeToolParameters(tool.parameters),
     },
   };
 }
