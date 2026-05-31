@@ -6694,7 +6694,7 @@ INSTRUCTIONS:
 REWRITTEN TEXT:`;
 
       let accumulatedContent = '';
-      const streamId = crypto.randomUUID();
+      const streamId = crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
       await apiClient.generateWordStream(
         {
@@ -6793,7 +6793,7 @@ REWRITTEN TEXT:`;
           return prevChat;
         });
 
-        const streamId = crypto.randomUUID();
+        const streamId = crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
         let accumulatedContent = '';
 
         // Stream AI response for Word document using dedicated endpoint
@@ -7877,7 +7877,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       }
 
       // Call dedicated webdev streaming endpoint
-      const streamId = crypto.randomUUID();
+      const streamId = crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const payload = {
         prompt: professionalPrompt,
         displayPrompt: prompt,
