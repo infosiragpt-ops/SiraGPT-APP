@@ -118,6 +118,8 @@ const documentResponseFidelity = require('../services/document-response-fidelity
 const documentBlockBudget = require('../services/document-block-budget');
 const feedbackLedger = require('../services/agents/feedback-ledger');
 const modelRouter = require('../services/ai-product-os/model-router');
+const modelSyncService = require('../services/model-sync-service');
+const { listManifestModels } = require('../services/model-catalog-manifest');
 const {
   buildUniversalTaskContract,
   buildUniversalContractPrompt,
@@ -224,96 +226,16 @@ const DEEPSEEK_TEXT_MODELS = [
   },
 ];
 
-const OPENROUTER_IMAGE_MODELS = [
-  {
-    name: 'openai/gpt-5.4-image-2',
-    displayName: 'GPT-5.4 Image 2',
-    provider: 'OpenRouter',
-    type: 'IMAGE',
-    icon: 'ChatGPTPinkLogo',
-    description: 'OpenAI GPT-5.4 Image 2 via OpenRouter for high quality image generation.',
-  },
-  {
-    name: 'google/gemini-3.1-flash-image-preview',
-    displayName: 'Gemini 3.1 Flash Image',
-    provider: 'OpenRouter',
-    type: 'IMAGE',
-    icon: 'GeminiLogo',
-    description: 'Google Gemini 3.1 Flash Image Preview via OpenRouter with fast image generation.',
-  },
-  {
-    name: 'google/gemini-3-pro-image-preview',
-    displayName: 'Gemini 3 Pro Image',
-    provider: 'OpenRouter',
-    type: 'IMAGE',
-    icon: 'GeminiLogo',
-    description: 'Google Gemini 3 Pro Image Preview via OpenRouter for professional image generation.',
-  },
-  {
-    name: 'bytedance-seed/seedream-4.5',
-    displayName: 'Seedream 4.5',
-    provider: 'OpenRouter',
-    type: 'IMAGE',
-    icon: 'SeedreamLogo',
-    description: 'ByteDance Seedream 4.5 via OpenRouter for professional image generation.',
-  },
-  {
-    name: 'recraftai/recraft-v3',
-    displayName: 'Recraft V3',
-    provider: 'OpenRouter',
-    type: 'IMAGE',
-    icon: 'Sparkles',
-    description: 'Recraft V3 via OpenRouter: vector art, illustration and branding.',
-  },
-  {
-    name: 'ideogram/ideogram-v2',
-    displayName: 'Ideogram V2',
-    provider: 'OpenRouter',
-    type: 'IMAGE',
-    icon: 'Sparkles',
-    description: 'Ideogram V2 via OpenRouter: text-in-image generation and typography.',
-  },
-  {
-    name: 'black-forest-labs/flux-1.1-pro',
-    displayName: 'Flux 1.1 Pro',
-    provider: 'OpenRouter',
-    type: 'IMAGE',
-    icon: 'Sparkles',
-    description: 'Flux 1.1 Pro via OpenRouter: photorealistic image generation.',
-  },
-  {
-    name: 'black-forest-labs/flux-1.1-ultra',
-    displayName: 'Flux 1.1 Ultra',
-    provider: 'OpenRouter',
-    type: 'IMAGE',
-    icon: 'Sparkles',
-    description: 'Flux 1.1 Ultra via OpenRouter: maximum quality image generation.',
-  },
-  {
-    name: 'dall-e-3',
-    displayName: 'DALL-E 3',
-    provider: 'OpenAI',
-    type: 'IMAGE',
-    icon: 'ChatGPTPinkLogo',
-    description: 'DALL-E 3 de OpenAI: generación de imágenes creativa y detallada.',
-  },
-  {
-    name: 'dall-e-2',
-    displayName: 'DALL-E 2',
-    provider: 'OpenAI',
-    type: 'IMAGE',
-    icon: 'ChatGPTPinkLogo',
-    description: 'DALL-E 2 de OpenAI: generación de imágenes rápida y económica.',
-  },
-  {
-    name: 'imagen-3',
-    displayName: 'Imagen 3',
-    provider: 'Gemini',
-    type: 'IMAGE',
-    icon: 'GeminiLogo',
-    description: 'Imagen 3 de Google: generación de imágenes fotorealistas.',
-  },
-];
+const ADMIN_MANAGED_IMAGE_MODELS = listManifestModels({ type: 'IMAGE' });
+const ADMIN_MANAGED_IMAGE_MODEL_NAMES = new Set(ADMIN_MANAGED_IMAGE_MODELS.map(model => model.name));
+const VERIFIED_CHAT_IMAGE_MODEL_NAMES = new Set([
+  'gpt-image-2',
+  'openai/gpt-5.4-image-2',
+]);
+
+function isVerifiedChatImageModelName(name) {
+  return VERIFIED_CHAT_IMAGE_MODEL_NAMES.has(String(name || '').trim());
+}
 
 function hasEnv(name) {
   return String(process.env[name] || '').trim().length > 0;
@@ -719,6 +641,14 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
       ? await countDailyApiCalls(req.user.id)
       : null;
     const modelPolicy = buildModelQuotaPolicy(req.user, process.env, { freeDailyCallsUsed });
+    const wantText = !type || type === 'TEXT';
+    const wantImage = !type || type === 'IMAGE';
+    const wantVideo = !type || type === 'VIDEO';
+    const wantVoice = !type || type === 'VOICE';
+
+    if (wantImage) {
+      await modelSyncService.ensureStaticCatalogModels({ types: ['IMAGE'] });
+    }
 
     const whereClause = {
       isActive: true,
@@ -746,10 +676,6 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
     // If OpenRouter is configured but Kimi was never seeded (or DB is empty),
     // expose Kimi K2.6 anyway so the picker always shows it. Skip when a DB row
     // exists (active or inactive) so admin disable/delete is respected.
-    const wantText = !type || type === 'TEXT';
-    const wantImage = !type || type === 'IMAGE';
-    const wantVideo = !type || type === 'VIDEO';
-    const wantVoice = !type || type === 'VOICE';
     if (wantText && hasEnv('DEEPSEEK_API_KEY')) {
       const listed = new Set(models.map((m) => m.name));
       const deepseekNames = DEEPSEEK_TEXT_MODELS.map((m) => m.name);
@@ -787,9 +713,19 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
     }
 
     if (wantImage) {
+      models = models.filter((model) => (
+        String(model?.type || '').toUpperCase() !== 'IMAGE' ||
+        isVerifiedChatImageModelName(model?.name)
+      ));
+
       const listed = new Set(models.map((m) => m.name));
-      const virtualImageModels = OPENROUTER_IMAGE_MODELS
-        .filter((m) => !listed.has(m.name))
+      const managedImageRows = await prisma.aiModel.findMany({
+        where: { name: { in: ADMIN_MANAGED_IMAGE_MODELS.map((m) => m.name) } },
+        select: { name: true },
+      });
+      const managedImageNames = new Set(managedImageRows.map((m) => m.name));
+      const virtualImageModels = ADMIN_MANAGED_IMAGE_MODELS
+        .filter((m) => isVerifiedChatImageModelName(m.name) && !listed.has(m.name) && !managedImageNames.has(m.name))
         .map((m) => ({ id: `__virtual_${m.name.replace(/[^a-z0-9]+/gi, '_').toLowerCase()}__`, ...m }));
 
       if (virtualImageModels.length > 0) {
@@ -5682,7 +5618,7 @@ router.post(
       res.json({
         imageUrl,
         tokens,
-        usage: { current: updatedUser.apiUsage, limit: updatedUser.monthlyLimit }
+        usage: usagePayloadFor(updatedUser)
       });
 
     } catch (error) {
@@ -5729,6 +5665,24 @@ function openAiImageQualityFor(quality) {
   return quality === '2K' || quality === '4K' ? 'hd' : 'standard';
 }
 
+function usageNumber(value) {
+  if (value === null || value === undefined) return 0;
+  if (typeof value === 'bigint') return Number(value);
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function usagePayloadFor(user) {
+  return {
+    current: usageNumber(user?.apiUsage),
+    limit: usageNumber(user?.monthlyLimit),
+  };
+}
+
+function openRouterImageSizeFor(quality) {
+  return quality === '2K' || quality === '4K' ? '2K' : '1K';
+}
+
 // gpt-image-2 only accepts a fixed set of sizes (1024x1024 | 1536x1024 |
 // 1024x1536 | auto) and REJECTS the old DALL-E sizes (1792x1024 / 1024x1792
 // → 400 invalid size). Map the app's aspect ratio to the nearest valid
@@ -5765,6 +5719,11 @@ function gptImageQualityFor(quality) {
     case '4K': return 'high';
     default: return 'auto';
   }
+}
+
+function isOpenAiResponsesImageModel(model) {
+  const normalized = String(model || '').trim().toLowerCase();
+  return normalized.startsWith('gpt-image-') || normalized === 'chatgpt-image-latest';
 }
 
 function openRouterImageModalitiesFor(model) {
@@ -5844,7 +5803,7 @@ async function generateOpenRouterImage(openrouter, { model, prompt, aspectRatio,
         modalities: openRouterImageModalitiesFor(useModel),
         image_config: {
           aspect_ratio: aspectRatio,
-          image_size: quality,
+          image_size: openRouterImageSizeFor(quality),
         },
         stream: false,
       },
@@ -6106,6 +6065,31 @@ router.post(
         });
       }
 
+      if (!isVerifiedChatImageModelName(model)) {
+        return res.status(400).json({
+          error: `El modelo "${model || 'desconocido'}" no esta verificado para generar imagenes en esta instalacion. Usa GPT Image 2 o GPT-5.4 Image 2.`,
+          code: 'image_model_unverified',
+          model,
+          supported: Array.from(VERIFIED_CHAT_IMAGE_MODEL_NAMES),
+        });
+      }
+
+      if (ADMIN_MANAGED_IMAGE_MODEL_NAMES.has(model)) {
+        await modelSyncService.ensureStaticCatalogModels({ types: ['IMAGE'] });
+      }
+
+      const adminModel = await prisma.aiModel.findUnique({
+        where: { name: model },
+        select: { displayName: true, isActive: true, type: true },
+      });
+      if (adminModel && adminModel.type === 'IMAGE' && !adminModel.isActive) {
+        return res.status(403).json({
+          error: `El modelo "${adminModel.displayName || model}" no esta activo. Activalo en Admin > AI Models antes de usarlo.`,
+          code: 'image_model_inactive',
+          model,
+        });
+      }
+
       // Pre-validar la existencia del chat ANTES de empezar a generar.
       // Esto evita gastar 30-120 s en una imagen para luego descubrir que
       // el chatId es inválido y tener que responder 404 — algo imposible
@@ -6176,11 +6160,9 @@ router.post(
         }
 
         if (provider === "Gemini") {
+          const geminiImageModel = String(model || '').trim() || 'imagen-4.0-generate-001';
           const response = await openai.images.generate({
-            // imagen-3.0-generate-002 → 404 on this account; imagen-4 is the
-            // current text-to-image model. (Gemini's OpenAI-compat endpoint
-            // still accepts response_format, so it's kept here.)
-            model: "imagen-4.0-generate-001",
+            model: geminiImageModel,
             prompt: imagePrompt,
             response_format: "b64_json",
             n: 1,
@@ -6189,16 +6171,25 @@ router.post(
           return response.data?.[0]?.b64_json;
         }
 
-        const response = await openai.images.generate({
-          // dall-e-3 was removed from this account (400 model does not exist);
-          // gpt-image-2 is the replacement. It REJECTS response_format (returns
-          // b64_json by default) and only accepts its own size/quality tokens.
-          model: 'gpt-image-2',
-          prompt: imagePrompt,
-          n: 1,
-          size: gptImageSizeFor(aspectRatio),
-          quality: gptImageQualityFor(quality),
-        }, { signal: requestAbortController.signal });
+        const openAiImageModel = String(model || '').trim() || 'gpt-image-2';
+        const openAiImagePayload = isOpenAiResponsesImageModel(openAiImageModel)
+          ? {
+              model: openAiImageModel,
+              prompt: imagePrompt,
+              n: 1,
+              size: gptImageSizeFor(aspectRatio),
+              quality: gptImageQualityFor(quality),
+            }
+          : {
+              model: openAiImageModel,
+              prompt: imagePrompt,
+              response_format: 'b64_json',
+              n: 1,
+              size: requestedImageSize,
+              quality: openAiImageQualityFor(quality),
+            };
+
+        const response = await openai.images.generate(openAiImagePayload, { signal: requestAbortController.signal });
         const { b64_json, ...rest } = response.data[0];
 
         console.log("📦 Remaining fields in imageData (excluding b64_json):", rest);
@@ -6285,7 +6276,7 @@ router.post(
         quality,
         imageCount: generatedFiles.length,
         tokens: 1000 * generatedFiles.length,
-        usage: { current: updatedUser.apiUsage, limit: updatedUser.monthlyLimit }
+        usage: usagePayloadFor(updatedUser)
       }));
 
     } catch (error) {
@@ -6570,7 +6561,7 @@ router.post(
           status: 'processing',
           message: processedImageUrl ? 'Image-to-video generation started successfully' : 'Video generation started successfully',
           tokens,
-          usage: { current: updatedUser.apiUsage, limit: updatedUser.monthlyLimit },
+          usage: usagePayloadFor(updatedUser),
           aspect_ratio,
           resolution,
           duration,

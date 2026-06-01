@@ -68,6 +68,14 @@ class ModelSyncService {
     ];
   }
 
+  getStaticImageModels() {
+    return listManifestModels({ type: 'IMAGE' }).map(model => ({
+      ...model,
+      isActive: false,
+      syncSource: model.syncSource || 'static_manifest',
+    }));
+  }
+
   /**
    * Fetch all available models from OpenAI
    */
@@ -332,11 +340,12 @@ class ModelSyncService {
   async fetchAllModels() {
     console.log('🚀 Starting to fetch models from all providers...');
 
-    const [openaiModels, geminiModels, openrouterModels, deepseekModels, videoModels] = await Promise.allSettled([
+    const [openaiModels, geminiModels, openrouterModels, deepseekModels, imageModels, videoModels] = await Promise.allSettled([
       this.fetchOpenAIModels(),
       this.fetchGeminiModels(),
       this.fetchOpenRouterModels(),
       this.fetchDeepSeekModels(),
+      Promise.resolve(this.getStaticImageModels()),
       Promise.resolve(this.getStaticVideoModels())
     ]);
 
@@ -358,12 +367,24 @@ class ModelSyncService {
       allModels.push(...deepseekModels.value);
     }
 
+    if (imageModels.status === 'fulfilled') {
+      allModels.push(...imageModels.value);
+    }
+
     if (videoModels.status === 'fulfilled') {
       allModels.push(...videoModels.value);
     }
 
-    console.log(`🎯 Total models fetched: ${allModels.length}`);
-    return allModels;
+    const deduped = [];
+    const seen = new Set();
+    for (const model of allModels) {
+      if (!model?.name || seen.has(model.name)) continue;
+      seen.add(model.name);
+      deduped.push(model);
+    }
+
+    console.log(`🎯 Total models fetched: ${deduped.length}`);
+    return deduped;
   }
 
   /**
@@ -483,6 +504,57 @@ class ModelSyncService {
     });
 
     return { applied: true, count: result.count || 0, reason: 'default_inactive_enforced' };
+  }
+
+  async ensureStaticCatalogModels(options = {}) {
+    const types = Array.isArray(options.types) && options.types.length
+      ? new Set(options.types.map(type => String(type).toUpperCase()))
+      : null;
+    const catalogModels = listManifestModels()
+      .filter(model => !types || types.has(String(model.type || '').toUpperCase()));
+
+    let created = 0;
+    let updated = 0;
+    const existingRows = await this.prisma.aiModel.findMany({
+      where: { name: { in: catalogModels.map(model => model.name) } },
+      select: { name: true },
+    });
+    const existingNames = new Set(existingRows.map(row => row.name));
+
+    for (const model of catalogModels) {
+      const data = {
+        displayName: model.displayName,
+        description: model.description,
+        provider: model.provider,
+        type: model.type,
+        icon: this.getModelIcon(model),
+        syncSource: model.syncSource || 'static_manifest',
+        contextLength: model.contextLength,
+        pricing: model.pricing,
+        tags: model.tags && model.tags.length ? model.tags : this.generateTags(model),
+        lastSynced: new Date(),
+      };
+
+      if (existingNames.has(model.name)) {
+        await this.prisma.aiModel.update({
+          where: { name: model.name },
+          data,
+        });
+        updated++;
+        continue;
+      }
+
+      await this.prisma.aiModel.create({
+        data: {
+          name: model.name,
+          ...data,
+          isActive: false,
+        },
+      });
+      created++;
+    }
+
+    return { created, updated, existing: existingRows.length, count: catalogModels.length };
   }
 
   /**

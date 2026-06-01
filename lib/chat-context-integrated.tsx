@@ -339,7 +339,7 @@ interface ChatContextType {
     type?: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'thesis',
     initialContent?: string,
     initialFiles?: any[],
-    options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; projectId?: string; initialIntent?: ChatIntent }
+    options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; projectId?: string; initialIntent?: ChatIntent; model?: string }
   ) => Promise<any>
   selectChat: (chatId: string) => void
   addMessage: (content: string, files?: any[], chat?: any, skipUserMessage?: boolean, intentOverride?: ChatIntent) => Promise<void>
@@ -1609,14 +1609,15 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     type: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'thesis' = 'text',
     initialContent?: string,
     initialFiles?: any[],
-    options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; projectId?: string; initialIntent?: ChatIntent }
+    options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; projectId?: string; initialIntent?: ChatIntent; model?: string }
   ) => {
-    if (!user || !token || !selectedModel) return;
+    const chatModel = options?.model || selectedModel;
+    if (!user || !token || !chatModel) return;
     setChatType(type);
     try {
       const response = await apiClient.createChat({
         title: initialContent ? initialContent.substring(0, 30) : "Nuevo chat",
-        model: selectedModel,
+        model: chatModel,
         isWordConnectorChat: options?.isWordConnectorChat || false,
         isExcelConnectorChat: options?.isExcelConnectorChat || false,
         projectId: options?.projectId,
@@ -1639,7 +1640,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 prompt: initialContent,
                 chatId: newChat.id,
                 provider: selectProvider,
-                model: selectedModel,
+                model: chatModel,
               };
               if (initialFiles && initialFiles.length > 0) {
                 (imageGenerationPayload as any).fileId = resolveAttachmentId(initialFiles[0]);

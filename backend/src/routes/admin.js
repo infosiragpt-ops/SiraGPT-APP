@@ -44,6 +44,7 @@ router.get('/providers', (req, res) => {
 router.get('/models', async (req, res) => {
   try {
     await modelSyncService.ensureDefaultInactiveOnce();
+    await modelSyncService.ensureStaticCatalogModels({ types: ['IMAGE'] });
     const models = await prisma.aiModel.findMany({
       orderBy: { createdAt: 'desc' }
     });
@@ -195,12 +196,14 @@ router.post('/models/sync', async (req, res) => {
     console.log('🔄 Admin requested model sync to database');
     const result = await modelSyncService.syncModelsToDatabase();
     const defaultInactive = await modelSyncService.ensureDefaultInactiveOnce();
+    const staticCatalog = await modelSyncService.ensureStaticCatalogModels({ types: ['IMAGE'] });
     invalidateAiModelsCache();
     res.json({ 
       success: true, 
       message: 'Models synchronized successfully',
       result,
-      defaultInactive
+      defaultInactive,
+      staticCatalog
     });
   } catch (error) {
     console.error('❌ Error syncing models:', error);
@@ -216,6 +219,7 @@ router.post('/models/sync', async (req, res) => {
 router.get('/models/stats', async (req, res) => {
   try {
     await modelSyncService.ensureDefaultInactiveOnce();
+    await modelSyncService.ensureStaticCatalogModels({ types: ['IMAGE'] });
     const stats = await modelSyncService.getProviderStats();
     const total = await prisma.aiModel.count();
     const active = await prisma.aiModel.count({ where: { isActive: true } });

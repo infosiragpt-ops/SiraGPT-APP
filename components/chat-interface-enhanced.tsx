@@ -408,11 +408,18 @@ const DEFAULT_VIDEO_DURATION: VideoDuration = 8
 
 const providerForMediaModel = (modelName: string, fallback = DEFAULT_IMAGE_PROVIDER): string => {
   const value = String(modelName || "").toLowerCase()
+  if (value.includes("/")) return "OpenRouter"
   if (value.includes("openrouter") || value.includes("seedream")) return "OpenRouter"
   if (value.includes("google") || value.includes("imagen") || value.includes("gemini") || value.includes("veo")) return "Google"
   if (value.includes("kling")) return "Kling"
   if (value.includes("openai") || value.includes("dall") || value.includes("gpt-image")) return "OpenAI"
   return fallback
+}
+
+const isImageModelEntry = (model: any) => {
+  const type = String(model?.type || model?.kind || '').toLowerCase();
+  const label = `${model?.name || ''} ${model?.displayName || ''} ${model?.provider || ''}`;
+  return type === 'image' || type === 'images' || type.includes('image') || /image|imagen|dall|seedream|flux|stable|midjourney|ideogram|recraft|gpt-image/i.test(label);
 }
 
 // `ImageAspectRatioMark` was extracted to
@@ -1998,11 +2005,7 @@ const ActiveToolsDisplay = ({
     const videoModels = pickByKind("video").map(normalize);
 
     return {
-      image: imageModels.length ? imageModels : [
-        { name: "bytedance-seed/seedream-4.5", displayName: "Seedream 4.5", provider: "OpenRouter", iconName: "SeedreamLogo" },
-        { name: "google/imagen-3-0", displayName: "Imagen 3", provider: "Gemini", iconName: "GeminiLogo" },
-        { name: "openai/dall-e-3", displayName: "DALL-E 3", provider: "OpenAI", iconName: "ChatGPTLogo" },
-      ],
+      image: imageModels,
       video: videoModels.length ? videoModels : [
         { name: "veo-fast", displayName: "Veo Fast (8s)", provider: "Google", iconName: "GeminiLogo" },
         { name: "kling-1.6-pro", displayName: "Kling 1.6 Pro (10s)", provider: "Kling", iconName: "Bot" },
@@ -2023,6 +2026,18 @@ const ActiveToolsDisplay = ({
     };
   }, [availableModels]);
 
+  React.useEffect(() => {
+    if (!isImageGenerationActive) return;
+    const imageOptions = mediaModelOptions.image;
+    if (!imageOptions.length) {
+      if (selectedImageModel) setSelectedImageModel("");
+      return;
+    }
+    if (!imageOptions.some((option: any) => option.name === selectedImageModel)) {
+      setSelectedImageModel(imageOptions[0].name);
+    }
+  }, [isImageGenerationActive, mediaModelOptions.image, selectedImageModel, setSelectedImageModel]);
+
   const renderMediaModelPicker = (
     tool: "image" | "voice" | "music" | "video",
     value: string,
@@ -2030,7 +2045,8 @@ const ActiveToolsDisplay = ({
   ) => {
     const options = mediaModelOptions[tool];
     const selected = options.find((option: any) => option.name === value) || options[0];
-    const label = selected?.displayName || value || "Modelo";
+    const label = selected?.displayName || (tool === "image" ? "Sin modelos" : value || "Modelo");
+    const disabled = options.length === 0;
 
     return (
       <DropdownMenu>
@@ -2041,13 +2057,14 @@ const ActiveToolsDisplay = ({
             className="group/media-model relative isolate h-7 sm:h-8 max-w-[180px] sm:max-w-[212px] shrink-0 gap-1 sm:gap-1.5 overflow-hidden rounded-full border border-zinc-200/72 bg-white/84 px-2 sm:px-3 py-0 text-[11px] sm:text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.86),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
             aria-label={`Seleccionar modelo de ${tool}`}
             title={`Modelo: ${label}`}
+            disabled={disabled}
           >
             <span className="pointer-events-none absolute inset-y-[-55%] left-[-65%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/70 to-transparent opacity-0 blur-sm transition-all duration-700 group-hover/media-model:left-[92%] group-hover/media-model:opacity-100 dark:via-white/20" />
             <span className="flex h-[16px] sm:h-[18px] w-[16px] sm:w-[18px] shrink-0 items-center justify-center">
               <IconProvider name={selected?.iconName || "Bot"} size={16} />
             </span>
             <span className="min-w-0 truncate max-w-[60px] sm:max-w-none">{label}</span>
-            <ChevronDown className="h-3.5 sm:h-4 w-3.5 sm:w-4 shrink-0 opacity-60" />
+            {!disabled && <ChevronDown className="h-3.5 sm:h-4 w-3.5 sm:w-4 shrink-0 opacity-60" />}
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent
@@ -2068,7 +2085,7 @@ const ActiveToolsDisplay = ({
               {option.name === value && <Check className="h-3.5 w-3.5" />}
             </DropdownMenuItem>
           )) : (
-            <div className="px-3 py-6 text-center text-xs text-muted-foreground">Sin modelos disponibles</div>
+            <div className="px-3 py-6 text-center text-xs text-muted-foreground">Activa modelos en Admin Models</div>
           )}
         </DropdownMenuContent>
       </DropdownMenu>
@@ -3922,6 +3939,42 @@ function ChatInterfaceContent() {
   const [isGeneratingVideo, setIsGeneratingVideo] = React.useState(false)
   const [isGeneratingPPT, setIsGeneratingPPT] = React.useState(false)
   const [isGeneratingWebDev, setIsGeneratingWebDev] = React.useState(false)
+  const [imageCatalogModels, setImageCatalogModels] = React.useState<any[]>([])
+  const refreshImageModels = React.useCallback(async () => {
+    const modelsResponse = await apiClient.getAIModels('IMAGE');
+    const models = Array.isArray(modelsResponse?.models)
+      ? modelsResponse.models.filter(isImageModelEntry)
+      : [];
+    setImageCatalogModels(models);
+    return models;
+  }, []);
+  const imageModelsForComposer = React.useMemo(() => {
+    const source = imageCatalogModels.length ? imageCatalogModels : availableModels;
+    return (Array.isArray(source) ? source : []).filter(isImageModelEntry);
+  }, [availableModels, imageCatalogModels]);
+  const composerAvailableModels = React.useMemo(() => {
+    if (!imageCatalogModels.length) return availableModels;
+    const byName = new Map<string, any>();
+    for (const model of Array.isArray(availableModels) ? availableModels : []) {
+      const name = String(model?.name || '').trim();
+      if (name && !isImageModelEntry(model)) byName.set(name, model);
+    }
+    for (const model of imageCatalogModels) {
+      const name = String(model?.name || '').trim();
+      if (name) byName.set(name, model);
+    }
+    return Array.from(byName.values());
+  }, [availableModels, imageCatalogModels]);
+  const resolveFreshActiveImageModel = React.useCallback(async (candidate?: string) => {
+    const models = await refreshImageModels();
+    const requestedName = String(candidate || '').trim();
+    const requested = models.find((model: any) => model?.name === requestedName);
+    return requested || models[0] || null;
+  }, [refreshImageModels]);
+  const providerForSelectedImageModel = React.useCallback((modelName: string) => {
+    const selected = imageModelsForComposer.find((model: any) => model?.name === modelName);
+    return selected?.provider || providerForMediaModel(modelName, selectProvider);
+  }, [imageModelsForComposer, selectProvider]);
   const scrollAreaRef = React.useRef<HTMLDivElement>(null)
   const chatCreationInitiated = React.useRef(false);
   const prevChatIdRef = React.useRef<string | undefined>();
@@ -4251,6 +4304,27 @@ function ChatInterfaceContent() {
   const [isSpotifyActive, setIsSpotifyActive] = React.useState(false);
   const [isProcessingSpotify, setIsProcessingSpotify] = React.useState(false);
   const [isImageGenerationActive, setIsImageGenerationActive] = React.useState(false);
+  React.useEffect(() => {
+    if (!isImageGenerationActive && chatType !== 'image') return;
+    let cancelled = false;
+    refreshImageModels()
+      .then((models) => {
+        if (cancelled) return;
+        if (!models.length) {
+          setSelectedImageModel('');
+          return;
+        }
+        setSelectedImageModel((current) => (
+          current && models.some((model: any) => model?.name === current)
+            ? current
+            : models[0].name
+        ));
+      })
+      .catch((error) => {
+        console.warn('No se pudo refrescar el catalogo de modelos de imagen:', error?.message || error);
+      });
+    return () => { cancelled = true; };
+  }, [chatType, isImageGenerationActive, refreshImageModels]);
   const [isComputerUseActive, setIsComputerUseActive] = React.useState(false);
   const [computerUseStatus, setComputerUseStatus] = React.useState<'idle' | 'running' | 'completed' | 'error'>('idle');
   const [computerUseScreenshot, setComputerUseScreenshot] = React.useState<string | null>(null);
@@ -6648,6 +6722,31 @@ But first, you need to connect your Spotify account securely using the button be
       return;
     }
 
+    let imageModelForSendOverride: string | undefined;
+    if (isImageGenerationActive || chatType === 'image') {
+      const selectedImageModelForSend = selectedImageModel?.trim();
+      let activeImageModel: any = null;
+      try {
+        activeImageModel = await resolveFreshActiveImageModel(selectedImageModelForSend);
+      } catch (error: any) {
+        console.warn('No se pudo refrescar el catalogo de modelos de imagen:', error?.message || error);
+      }
+
+      if (!activeImageModel?.name) {
+        setIsImageGenerationActive(true);
+        setChatType('image');
+        toast.error('Activa un modelo de imagen en Admin Models antes de generar.');
+        inFlightSendKeysRef.current.delete(sendKey);
+        return;
+      }
+
+      imageModelForSendOverride = String(activeImageModel.name).trim();
+      if (imageModelForSendOverride !== selectedImageModelForSend) {
+        setSelectedImageModel(imageModelForSendOverride);
+        toast.info(`El modelo seleccionado ya no esta activo. Usare ${activeImageModel.displayName || activeImageModel.name}.`);
+      }
+    }
+
     // Capture the user's intent to send BEFORE the busy-queue branch
     // so queued messages count toward the same funnel as immediately-
     // sent ones. Properties stay non-PII: only the shape of the
@@ -7077,7 +7176,7 @@ REWRITTEN TEXT:`;
         return;
       }
       if (isImageGenerationActive || chatType === 'image') {
-        await handleImageGeneration(buildImageEditPrompt(msg), collectUploadFileIds(filesToSend));
+        await handleImageGeneration(buildImageEditPrompt(msg), collectUploadFileIds(filesToSend), imageModelForSendOverride);
         return;
       }
       if (isVideoGenerationActive || chatType === 'video') {
@@ -7627,7 +7726,27 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     }
   }
 
-  const handleImageGeneration = async (prompt: string, files?: string[]) => {
+  const handleImageGeneration = async (prompt: string, files?: string[], requestedModel?: string) => {
+    let imageModelForRequest = (requestedModel || selectedImageModel || '').trim();
+    let activeImageModel: any = null;
+    try {
+      activeImageModel = await resolveFreshActiveImageModel(imageModelForRequest);
+    } catch (error: any) {
+      console.warn('No se pudo refrescar el catalogo de modelos de imagen:', error?.message || error);
+    }
+
+    if (!activeImageModel?.name) {
+      setIsImageGenerationActive(true);
+      setChatType('image');
+      toast.error('Activa un modelo de imagen en Admin Models antes de generar.');
+      return;
+    }
+    imageModelForRequest = activeImageModel.name;
+    if (imageModelForRequest !== selectedImageModel) {
+      setSelectedImageModel(imageModelForRequest);
+    }
+    const imageProviderForRequest = activeImageModel.provider || providerForSelectedImageModel(imageModelForRequest);
+
     imageAbortControllerRef.current?.abort();
     const controller = new AbortController();
     imageAbortControllerRef.current = controller;
@@ -7640,8 +7759,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     let activeChatId = activeChat?.id as string | undefined;
     try {
       if (!activeChatId) {
-        const newChat = await createNewChat('image', undefined, undefined, {
+        const newChat = await createNewChat('image', prompt, undefined, {
           skipInitialProcessing: true,
+          model: imageModelForRequest,
         } as any);
         activeChat = newChat as any;
         activeChatId = activeChat?.id;
@@ -7675,7 +7795,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       } : null;
 
       setCurrentChat(prevChat => {
-        if (prevChat && prevChat.id !== activeChatId) return prevChat;
+        const isTemporaryChat = typeof prevChat?.id === 'string' && prevChat.id.startsWith('temp-chat-');
+        if (prevChat && prevChat.id !== activeChatId && !isTemporaryChat) return prevChat;
         const baseChat = prevChat?.id === activeChatId
           ? prevChat
           : activeChat
@@ -7693,8 +7814,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       const payload: { prompt: string; chatId?: string; provider: string; model: string; fileId?: string; aspectRatio?: ImageAspectRatio; quality?: ImageQuality; imageCount?: ImageGenerationCount } = {
         prompt,
         chatId: activeChatId,
-        provider: providerForMediaModel(selectedImageModel, selectProvider),
-        model: selectedImageModel,
+        provider: imageProviderForRequest,
+        model: imageModelForRequest,
         aspectRatio: selectedImageAspectRatio,
         quality: selectedImageQuality,
         imageCount: selectedImageCount,
@@ -7719,10 +7840,43 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         return;
       }
 
-      console.error('Image generation failed:', error)
       const errorMessage = error.message || 'Image generation failed. Please try again.';
       const status = error?.status || error?.statusCode;
       const errorData = error?.errorData;
+      const errorCode = error?.code || errorData?.code;
+
+      if (status === 403 && errorCode === 'image_model_inactive') {
+        let fallbackModel: any = null;
+        try {
+          fallbackModel = await resolveFreshActiveImageModel();
+        } catch (refreshError: any) {
+          console.warn('No se pudo refrescar el catalogo de modelos de imagen:', refreshError?.message || refreshError);
+        }
+        const inactiveMessage = fallbackModel?.name
+          ? `El modelo seleccionado ya no esta activo. Cambie a ${fallbackModel.displayName || fallbackModel.name}; vuelve a enviar la imagen.`
+          : 'El modelo seleccionado ya no esta activo. Activa un modelo de imagen en Admin Models antes de generar.';
+        if (fallbackModel?.name) {
+          setSelectedImageModel(fallbackModel.name);
+        }
+        toast.error(inactiveMessage);
+
+        const updateChatWithInactiveModelError = (prevChat: any) => {
+          if (!prevChat) return prevChat;
+          if (prevChat.id !== activeChatId) return prevChat;
+          const newMessages = prevChat.messages.map((msg: any) => {
+            if (msg.content === '[GENERATING_IMAGE]') {
+              return { ...msg, content: "", error: inactiveMessage };
+            }
+            return msg;
+          });
+          return { ...prevChat, messages: newMessages };
+        };
+
+        setCurrentChat(updateChatWithInactiveModelError);
+        return;
+      }
+
+      console.error('Image generation failed:', error)
 
       // Check for monthly API limit exceeded error
       if (status === 429 ||
@@ -7796,8 +7950,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     };
     try {
       if (!currentChat) {
-        const newChat = await createNewChat('video', undefined, undefined, {
+        const newChat = await createNewChat('video', prompt, undefined, {
           skipInitialProcessing: true,
+          model: selectedVideoModel || selectedModel,
         } as any)
         activeChatId = newChat?.id || activeChatId;
         if (activeChatId) markLocalJobBusy(activeChatId);
@@ -8213,7 +8368,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     isWordConnectorActive, setIsWordConnectorActive,
     isExcelConnectorActive, setIsExcelConnectorActive,
     selectedModel, setSelectedModel,
-    availableModels,
+    availableModels: composerAvailableModels,
     setSelectedProvider: setSelectedProivder,
     chatType, setChatType,
     handleComputerUseToggle, handleGmailToggle, handleGoogleCalendarToggle,
