@@ -265,11 +265,36 @@ function buildGemaVisibleModel(env = process.env) {
   };
 }
 
+/**
+ * Optional deploy-scoped allowlist. When `VISIBLE_MODELS_ALLOWLIST` is set
+ * (comma-separated model names or aliases), the visible picker is restricted
+ * to ONLY those models. Unset/empty → no filtering (every deploy behaves as
+ * before). This lets a single deploy (e.g. one without certain provider keys)
+ * surface just the models it can actually serve, without editing this shared
+ * catalog or affecting other deploys.
+ */
+function parseVisibleModelsAllowlist(env = process.env) {
+  const raw = String(env.VISIBLE_MODELS_ALLOWLIST || '').trim();
+  if (!raw) return null;
+  const set = new Set(
+    raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
+  );
+  return set.size ? set : null;
+}
+
 function listVisibleTextModelDefinitions(env = process.env) {
-  return [
+  const all = [
     ...VISIBLE_TEXT_MODEL_DEFINITIONS.map((model) => ({ ...model, aliases: [...model.aliases] })),
     buildGemaVisibleModel(env),
   ];
+  const allow = parseVisibleModelsAllowlist(env);
+  if (!allow) return all;
+  return all.filter((model) => {
+    const candidates = [model.name, ...(model.aliases || [])]
+      .filter(Boolean)
+      .map((name) => String(name).trim().toLowerCase());
+    return candidates.some((name) => allow.has(name));
+  });
 }
 
 function curateVisibleTextModels(models = [], env = process.env) {
