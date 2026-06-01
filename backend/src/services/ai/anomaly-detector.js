@@ -123,8 +123,7 @@ function check(userId, tokens, opts = {}) {
 
   // High-priority warning — surfaces in logs even when LOG_LEVEL filters info.
   // eslint-disable-next-line no-console
-  console.warn('[anomaly-detector] FLAGGED user=%s tokens=%d threshold=%d mean=%d stddev=%d',
-    uid, reqTokens, Math.round(threshold), Math.round(mean), Math.round(stddev));
+  console.warn(`[anomaly-detector] FLAGGED user=${uid} tokens=${reqTokens} threshold=${Math.round(threshold)} mean=${Math.round(mean)} stddev=${Math.round(stddev)}`);
 
   return {
     flagged: true,

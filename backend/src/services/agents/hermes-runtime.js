@@ -55,11 +55,7 @@ function bootHermesRuntime(opts = {}) {
   }
 
   _booted = true;
-  console.log('[hermes-runtime] booted — gateway=%s cron=%s delegate=%s plugins=%s',
-    gateway.config.enabled ? 'on' : 'degraded',
-    cronBridge.status().enabled ? 'on' : 'off',
-    delegateBridge.status().total,
-    pluginBridge.HERMES_PLUGIN_CATALOG.length);
+  console.log(`[hermes-runtime] booted — gateway=${gateway.config.enabled ? 'on' : 'degraded'} cron=${cronBridge.status().enabled ? 'on' : 'off'} delegate=${delegateBridge.status().total} plugins=${pluginBridge.HERMES_PLUGIN_CATALOG.length}`);
 
   return getHermesRuntimeStatus();
 }

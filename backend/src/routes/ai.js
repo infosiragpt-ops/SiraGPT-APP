@@ -6876,14 +6876,20 @@ router.post("/createVisualizeChart", async (req, res) => {
     });
     console.log('run', run);
 
-    // 5. Poll until the run is complete
+    // 5. Poll until the run is complete (max 120s / 120 iterations)
+    const TERMINAL_STATES = new Set(['completed', 'failed', 'cancelled', 'expired', 'incomplete']);
+    const MAX_POLL_ITERATIONS = 120;
     let status;
+    let pollCount = 0;
     do {
       const runData = await client.beta.threads.runs.retrieve(thread.id, run.id);
       status = runData.status;
-      console.log("Run status:", status);
-      if (status !== "completed") await new Promise(r => setTimeout(r, 1000));
-    } while (status !== "completed");
+      pollCount++;
+      if (!TERMINAL_STATES.has(status)) await new Promise(r => setTimeout(r, 1000));
+    } while (!TERMINAL_STATES.has(status) && pollCount < MAX_POLL_ITERATIONS);
+    if (status !== 'completed') {
+      return res.status(500).json({ error: `Assistant run ended with status: ${status}` });
+    }
     console.log('status', status);
 
     // 6. Retrieve messages (chart image)

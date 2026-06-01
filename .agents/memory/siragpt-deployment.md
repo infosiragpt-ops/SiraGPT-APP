@@ -36,3 +36,22 @@ accelerate.prisma-data.net). To modify real app data, use the backend's Prisma
 client: `node -e` with `./backend/node_modules/@prisma/client`. bcryptjs rounds=12.
 Login flow needs CSRF: GET /api/auth/csrf-token then POST /api/auth/login with
 X-CSRF-Token header + cookie jar; email normalized (lowercased).
+
+## OAuth callback URL fix
+Production env var `GOOGLE_AUTH_BASE_URL=https://siragpt.com` prevents
+`inferBackendUrlFromFrontend` from prepending `api.` to FRONTEND_URL and
+producing `https://api.siragpt.com/api/auth/google/callback`. Also set
+`GOOGLE_ALLOW_FRONTEND_CALLBACK=true` as belt-and-suspenders. Both set as
+production-only env vars. In dev, OAuth still shows the warning (expected).
+
+## Key secrets needing user action
+- `SESSION_SECRET`: Replit secret is 23 chars; minimum is 32. Changing it
+  invalidates all existing user sessions. User must update via Replit Secrets UI.
+- `CORS_ORIGINS`: Replit secret is `*`; should be `https://siragpt.com,...`.
+  User must update via Replit Secrets UI.
+
+## Dev workflow packages
+Root `node_modules` is empty by default in this repo. Run `pnpm install` first
+(finishes in ~5s when global pnpm store is warm). Then restart the workflow.
+The workflow uses `npx next dev` which requires packages to be installed.
+If `npx next dev` still fails: update workflow command to use `node_modules/.bin/next`.

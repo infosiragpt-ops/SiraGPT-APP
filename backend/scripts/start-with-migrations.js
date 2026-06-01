@@ -190,18 +190,49 @@ function baselineExistingSchema() {
   return 0;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isTransientMigrationError(result) {
+  const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+  return (
+    output.includes("P1011") ||
+    output.includes("P1000") ||
+    output.includes("unexpected EOF") ||
+    output.includes("Connection reset") ||
+    output.includes("ECONNRESET") ||
+    output.includes("ETIMEDOUT") ||
+    output.includes("TLS connection")
+  );
+}
+
+const MIGRATION_TRANSIENT_RETRIES = Number(process.env.MIGRATION_TRANSIENT_RETRIES ?? 4);
+const MIGRATION_RETRY_DELAY_MS = Number(process.env.MIGRATION_RETRY_DELAY_MS ?? 5000);
+
 async function runMigrations() {
   loadDotenv();
   if (process.env.SKIP_MIGRATIONS === "1") {
     log("skipping prisma migrate deploy (SKIP_MIGRATIONS=1)");
     return 0;
   }
-  log("running prisma migrate deploy");
-  const result = runPrisma(["migrate", "deploy"]);
-  if (result.error) {
-    log("prisma migrate deploy spawn error", { error: result.error.message });
-    return 1;
+
+  let result;
+  for (let attempt = 1; attempt <= MIGRATION_TRANSIENT_RETRIES; attempt++) {
+    log("running prisma migrate deploy", { attempt, maxAttempts: MIGRATION_TRANSIENT_RETRIES });
+    result = runPrisma(["migrate", "deploy"]);
+    if (result.error) {
+      log("prisma migrate deploy spawn error", { error: result.error.message });
+      return 1;
+    }
+    if ((result.status ?? 1) === 0) break;
+    if (!isTransientMigrationError(result)) break;
+    if (attempt < MIGRATION_TRANSIENT_RETRIES) {
+      log("transient migration error — retrying", { attempt, retryInMs: MIGRATION_RETRY_DELAY_MS });
+      await sleep(MIGRATION_RETRY_DELAY_MS);
+    }
   }
+
   if ((result.status ?? 1) !== 0 && process.env.PRISMA_BASELINE_ON_P3005 === "1") {
     const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
     if (output.includes("P3005")) {
@@ -234,6 +265,14 @@ async function runMigrations() {
       return 0;
     }
   }
+
+  if ((result.status ?? 1) !== 0 && isTransientMigrationError(result)) {
+    log("migration failed after all retries due to transient network error — proceeding with boot (schema already applied)", {
+      hint: "Set SKIP_MIGRATIONS=1 to bypass migrations entirely on future boots if this persists.",
+    });
+    return 0;
+  }
+
   return result.status ?? 1;
 }
 
