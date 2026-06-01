@@ -115,12 +115,20 @@ describe('api client core', () => {
       .mockResolvedValueOnce({
         ok: false,
         status: 401,
+        headers: new Headers(),
+        json: () => Promise.resolve({ error: 'Invalid or expired token' }),
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        headers: new Headers(),
         json: () => Promise.resolve({ error: 'Invalid or expired token' }),
       })
 
     api.setToken('expired-token')
     await expect(api.generateVideo({ prompt: 'test video' })).rejects.toThrow('Invalid or expired token')
 
+    expect(mockFetch).toHaveBeenCalledTimes(3)
     expect(reportClientLog).not.toHaveBeenCalled()
   })
 

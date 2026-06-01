@@ -11,6 +11,7 @@ describe('refresh token', () => {
     vi.clearAllMocks()
     api.setToken(null)
     ;(api as any)._refreshing = null
+    ;(api as any)._ensureCsrfToken = vi.fn().mockResolvedValue(null)
   })
 
   it('calls /auth/refresh on 401 then retries with new token', async () => {
@@ -72,5 +73,54 @@ describe('refresh token', () => {
     expect(refreshCount).toBe(1)
     expect(meCount).toBe(2)
     expect(chatCount).toBe(2)
+  })
+
+  it('falls back to cookie-only refresh when stale localStorage bearer poisons image generation', async () => {
+    api.setToken(testToken)
+
+    mockFetch
+      // 1st /ai/generate-image → stale Bearer is rejected
+      .mockResolvedValueOnce({
+        ok: false, status: 401, headers: new Headers(), json: () => Promise.resolve({ error: 'Invalid or expired token' }),
+      })
+      // /auth/refresh with stale Bearer also fails because Authorization takes precedence over cookie
+      .mockResolvedValueOnce({
+        ok: false, status: 401, headers: new Headers(), json: () => Promise.resolve({ error: 'Invalid or expired token' }),
+      })
+      // cookie-only /auth/refresh succeeds and issues a clean token
+      .mockResolvedValueOnce({
+        ok: true, status: 200, headers: new Headers(), json: () => Promise.resolve({ token: refreshedToken }),
+      })
+      // retried /ai/generate-image uses the refreshed token
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        json: () => Promise.resolve({ imageUrl: 'https://api.siragpt.com/uploads/images/generated.png' }),
+      })
+
+    const result = await api.generateImage({
+      prompt: 'Crea una imagen de un pollo',
+      provider: 'OpenRouter',
+      model: 'bytedance-seed/seedream-4.5',
+      aspectRatio: '1:1',
+    })
+
+    expect(result).toEqual({ imageUrl: 'https://api.siragpt.com/uploads/images/generated.png' })
+    expect(mockFetch).toHaveBeenCalledTimes(4)
+
+    const [, firstImageOptions] = mockFetch.mock.calls[0]
+    expect(firstImageOptions.headers.get('Authorization')).toBe(`Bearer ${testToken}`)
+
+    const [, bearerRefreshOptions] = mockFetch.mock.calls[1]
+    expect(String(mockFetch.mock.calls[1][0])).toContain('/auth/refresh')
+    expect(bearerRefreshOptions.headers.get('Authorization')).toBe(`Bearer ${testToken}`)
+
+    const [, cookieRefreshOptions] = mockFetch.mock.calls[2]
+    expect(String(mockFetch.mock.calls[2][0])).toContain('/auth/refresh')
+    expect(cookieRefreshOptions.headers.has('Authorization')).toBe(false)
+
+    const [, retriedImageOptions] = mockFetch.mock.calls[3]
+    expect(retriedImageOptions.headers.get('Authorization')).toBe(`Bearer ${refreshedToken}`)
   })
 })

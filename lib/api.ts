@@ -401,7 +401,10 @@ class ApiClient {
       try {
         const config: RequestInit = {
           ...options,
-          headers,
+          // Snapshot headers per attempt. The canonical `headers` object is
+          // intentionally mutated after refresh (new Authorization), but each
+          // fetch call should see the headers as they were at dispatch time.
+          headers: new Headers(headers),
           credentials: 'include',
           signal: controller.signal as AbortSignal,
         };
@@ -655,30 +658,48 @@ class ApiClient {
       return this._refreshing;
     }
 
-    this._refreshing = (async () => {
+    const tryRefreshRequest = async (includeBearer: boolean): Promise<boolean> => {
+      const headers = new Headers({ 'Content-Type': 'application/json' });
+      if (includeBearer && this.token) {
+        headers.set('Authorization', `Bearer ${this.token}`);
+      }
+
       try {
         const res = await fetch(`${this.baseURL}/auth/refresh`, {
           method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${this.token}`,
-            'Content-Type': 'application/json',
-          },
+          headers,
           credentials: 'include',
         });
 
-        if (!res.ok) {
-          // Refresh failed — clear token to force re-login
-          this.setToken(null);
-          return false;
-        }
+        if (!res.ok) return false;
 
         const data = await res.json();
+        if (!data?.token) return false;
         this.setToken(data.token);
         return true;
       } catch {
-        this.setToken(null);
         return false;
       }
+    };
+
+    this._refreshing = (async () => {
+      // Legacy/browser clients can have a stale localStorage `auth-token`
+      // while the httpOnly/session cookie is still valid (common after
+      // deploys, mobile Safari restores, or older token refresh bugs). The
+      // backend intentionally gives Authorization precedence over cookies, so
+      // a stale Bearer poisons /auth/refresh and protected feature calls with
+      // "Invalid or expired token". Preserve the old Bearer-first behavior for
+      // token-only clients, then fall back once to cookie-only refresh.
+      const refreshedWithBearer = this.token ? await tryRefreshRequest(true) : false;
+      if (refreshedWithBearer) return true;
+
+      const refreshedWithCookie = await tryRefreshRequest(false);
+      if (refreshedWithCookie) return true;
+
+      // Refresh failed — clear stale localStorage token so the next request
+      // does not keep sending a poisoned Authorization header.
+      this.setToken(null);
+      return false;
     })();
 
     const result = await this._refreshing;
