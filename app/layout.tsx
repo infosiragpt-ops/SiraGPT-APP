@@ -1,7 +1,6 @@
 import type React from "react"
 import type { Metadata, Viewport } from "next"
 import { headers } from "next/headers"
-import nextDynamic from "next/dynamic"
 import { GeistSans } from "geist/font/sans"
 import { GeistMono } from "geist/font/mono"
 import "./globals.css"
@@ -9,15 +8,12 @@ import { NextIntlClientProvider } from "next-intl"
 import { getLocale, getMessages } from "next-intl/server"
 import { isRTL } from "@/lib/i18n/locales"
 import { LayoutClientEffects } from "@/components/layout-client-effects"
-// RootProviders bundles ThemeProvider + AuthProvider + SettingsProvider +
-// AppWrapper (+ ChatProvider, SidebarProvider, AppShell, ArtifactPanel,
-// BackgroundStreams, etc.). Loading it via nextDynamic moves all of that
-// into its own webpack chunk so app/layout.js stays small enough for the
-// Replit dev proxy to deliver intact (it truncates large responses).
-const RootProviders = nextDynamic(
-  () => import("@/components/root-providers").then(m => m.RootProviders),
-  { ssr: true }
-)
+// RootProviders is loaded from a Client Component wrapper that uses
+// next/dynamic with ssr:false. Moving the dynamic() call into a "use client"
+// file is required — Next.js 15 forbids ssr:false in Server Components.
+// The chunk split keeps app/layout.js small so the Replit dev proxy delivers
+// it intact (it truncates responses larger than ~1 MB).
+import { RootProviders } from "@/components/root-providers-dynamic"
 
 // Routes that must NOT advertise themselves as canonical — they're
 // authenticated surfaces (chat, settings, billing) or transient (auth

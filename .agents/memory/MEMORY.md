@@ -4,3 +4,4 @@
 - [Dev workflow package setup](dev-workflow-packages.md) — root node_modules is empty by default; run `pnpm install` (5s with cache) before restarting workflow
 - [OAuth callback URL policy](oauth-callback-fix.md) — GOOGLE_AUTH_BASE_URL is authoritative; it short-circuits all heuristics including frontend-host rejection and stale per-flow URI secrets
 - [Console.log printf override](console-log-override.md) — backend/index.js overrides console.log joining args with space; always use template literals not %s format strings
+- [Next.js dynamic ssr:false in Server Components](nextjs-dynamic-ssr-crash.md) — ssr:false is forbidden inside Server Components; move the dynamic() call into a "use client" wrapper file.
