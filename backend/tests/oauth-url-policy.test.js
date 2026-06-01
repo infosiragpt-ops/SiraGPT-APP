@@ -80,3 +80,36 @@ test('development keeps localhost callbacks for local OAuth testing', () => {
   assert.equal(getGoogleServicesCallbackURL(env), 'http://localhost:5000/api/auth/google-services/callback');
   assert.equal(getFrontendUrl(env), 'http://localhost:3000');
 });
+
+test('GOOGLE_AUTH_BASE_URL overrides stale per-flow URI secrets pointing to a different host', () => {
+  // This is the real-world fix scenario: GOOGLE_AUTH_BASE_URL was set to
+  // siragpt.com (single domain) but the GOOGLE_AUTH_URI secret was never
+  // updated and still points to api.siragpt.com. GOOGLE_AUTH_BASE_URL must
+  // win so republishing picks up the correct callback without requiring the
+  // caller to also clear every per-flow URI secret manually.
+  const env = {
+    NODE_ENV: 'production',
+    FRONTEND_URL: 'https://siragpt.com',
+    GOOGLE_AUTH_BASE_URL: 'https://siragpt.com',
+    GOOGLE_AUTH_URI: 'https://api.siragpt.com/api/auth/google/callback',
+    GOOGLE_REDIRECT_URI: 'https://api.siragpt.com/api/auth/gmail/callback',
+    GOOGLE_REDIRECT_CALENDAR_DRIVE_URI: 'https://api.siragpt.com/api/auth/google-services/callback',
+  };
+
+  assert.equal(getGoogleCallbackURL(env), 'https://siragpt.com/api/auth/google/callback');
+  assert.equal(getGoogleGmailCallbackURL(env), 'https://siragpt.com/api/auth/gmail/callback');
+  assert.equal(getGoogleServicesCallbackURL(env), 'https://siragpt.com/api/auth/google-services/callback');
+});
+
+test('GOOGLE_AUTH_BASE_URL still allows consistent per-flow URI overrides on the same host', () => {
+  // When GOOGLE_AUTH_BASE_URL and the explicit URI agree on the same host,
+  // the explicit URI is accepted as-is (e.g. a custom path on the same domain).
+  const env = {
+    NODE_ENV: 'production',
+    FRONTEND_URL: 'https://siragpt.com',
+    GOOGLE_AUTH_BASE_URL: 'https://siragpt.com',
+    GOOGLE_AUTH_URI: 'https://siragpt.com/api/auth/google/callback',
+  };
+
+  assert.equal(getGoogleCallbackURL(env), 'https://siragpt.com/api/auth/google/callback');
+});

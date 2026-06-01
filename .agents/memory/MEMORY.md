@@ -1,2 +1,6 @@
 - [Duplicate message dedup](duplicate-message-dedup.md) — role comparisons must be case-insensitive; run dedupeMessages on filtered list too.
 - [iOS keyboard sticky fix](ios-keyboard-fix.md) — position:fixed on composer when keyboard open; sticky breaks inside overflow:hidden on iOS.
+- [SiraGPT deployment architecture](siragpt-deployment.md) — executeSql hits local DB not backend DB; use node -e with backend Prisma client for real data
+- [Dev workflow package setup](dev-workflow-packages.md) — root node_modules is empty by default; run `pnpm install` (5s with cache) before restarting workflow
+- [OAuth callback URL policy](oauth-callback-fix.md) — GOOGLE_AUTH_BASE_URL is authoritative; it short-circuits all heuristics including frontend-host rejection and stale per-flow URI secrets
+- [Console.log printf override](console-log-override.md) — backend/index.js overrides console.log joining args with space; always use template literals not %s format strings

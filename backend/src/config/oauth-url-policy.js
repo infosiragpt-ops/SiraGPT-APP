@@ -108,12 +108,24 @@ function isUsablePublicUrl(value, env = process.env, backendBaseUrl = '') {
 }
 
 function resolvePublicBackendUrl(env = process.env) {
+  // GOOGLE_AUTH_BASE_URL is the single authoritative override. When set it
+  // short-circuits all candidate heuristics — including the frontend-host
+  // rejection below — so a single-domain config (API and frontend on the
+  // same host, e.g. siragpt.com) is honoured without being silently
+  // discarded in favour of an inferred api.* subdomain.
+  if (env.GOOGLE_AUTH_BASE_URL) {
+    const normalized = normalizePublicBackendBaseUrl(env.GOOGLE_AUTH_BASE_URL);
+    const isLocalhost = isLocalhostUrl(normalized);
+    if (normalized && !(isProduction(env) && isLocalhost) && !(env.REPLIT_DEV_DOMAIN && isLocalhost)) {
+      return normalized;
+    }
+  }
+
   const inferred = inferBackendUrlFromFrontend(env);
   const frontHost = frontendHostname(env);
   const inferredHost = parseUrl(inferred)?.hostname || '';
 
   const candidates = [
-    env.GOOGLE_AUTH_BASE_URL,
     env.BACKEND_PUBLIC_URL,
     env.API_PUBLIC_URL,
     env.PUBLIC_API_URL,
@@ -165,6 +177,19 @@ function buildCallbackUrl(env, explicitEnvKey, callbackPath) {
   const backendBaseUrl = resolvePublicBackendUrl(env);
   const configured = stripTrailingSlash(env[explicitEnvKey]);
   if (configured && isUsablePublicUrl(configured, env, backendBaseUrl)) {
+    // When GOOGLE_AUTH_BASE_URL is explicitly set it is the authoritative
+    // backend origin. A stale explicit callback URI pointing to a different
+    // host (e.g. GOOGLE_AUTH_URI still set to api.siragpt.com while
+    // GOOGLE_AUTH_BASE_URL is siragpt.com) must be ignored so the env var
+    // fix actually takes effect without requiring the caller to also clear
+    // every per-flow URI secret.
+    if (env.GOOGLE_AUTH_BASE_URL) {
+      const configuredHost = normalizeHostname(parseUrl(configured)?.hostname || '');
+      const backendHost = normalizeHostname(parseUrl(backendBaseUrl)?.hostname || '');
+      if (configuredHost && backendHost && configuredHost !== backendHost) {
+        return `${backendBaseUrl}${callbackPath}`;
+      }
+    }
     return configured;
   }
   return `${backendBaseUrl}${callbackPath}`;
