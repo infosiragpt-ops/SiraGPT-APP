@@ -401,9 +401,9 @@ const MUSIC_MODEL_OPTIONS: MusicModel[] = ["ElevenLabs", "Lyria 3 Pro", "Mimo Ma
 const MUSIC_STYLE_OPTIONS: MusicStyle[] = ["Auto", "Cinematic", "Pop", "Electronic", "Ambient", "Orchestral", "Latin", "Hip-Hop", "Jazz"]
 const MUSIC_MOOD_OPTIONS: MusicMood[] = ["Balanced", "Energetic", "Emotional", "Dark", "Happy", "Epic", "Relaxed"]
 const MUSIC_EFFECT_OPTIONS: MusicEffect[] = ["None", "Studio Master", "Spatial", "Warm Tape", "Radio Ready", "Lo-Fi"]
-const DEFAULT_IMAGE_MODEL = "bytedance-seed/seedream-4.5"
+const DEFAULT_IMAGE_MODEL = ""
 const DEFAULT_IMAGE_PROVIDER = "OpenAI"
-const DEFAULT_VIDEO_MODEL = "veo-fast"
+const DEFAULT_VIDEO_MODEL = ""
 const DEFAULT_VIDEO_DURATION: VideoDuration = 8
 
 const providerForMediaModel = (modelName: string, fallback = DEFAULT_IMAGE_PROVIDER): string => {
@@ -2006,11 +2006,7 @@ const ActiveToolsDisplay = ({
 
     return {
       image: imageModels,
-      video: videoModels.length ? videoModels : [
-        { name: "veo-fast", displayName: "Veo Fast (8s)", provider: "Google", iconName: "GeminiLogo" },
-        { name: "kling-1.6-pro", displayName: "Kling 1.6 Pro (10s)", provider: "Kling", iconName: "Bot" },
-        { name: "kling-2-master", displayName: "Kling 2 Master (10s)", provider: "Kling", iconName: "Bot" },
-      ],
+      video: videoModels,
       voice: VOICE_MODEL_OPTIONS.map((name) => ({
         name,
         displayName: name,
@@ -2038,6 +2034,18 @@ const ActiveToolsDisplay = ({
     }
   }, [isImageGenerationActive, mediaModelOptions.image, selectedImageModel, setSelectedImageModel]);
 
+  React.useEffect(() => {
+    if (!isVideoGenerationActive) return;
+    const videoOptions = mediaModelOptions.video;
+    if (!videoOptions.length) {
+      if (selectedVideoModel) setSelectedVideoModel("");
+      return;
+    }
+    if (!videoOptions.some((option: any) => option.name === selectedVideoModel)) {
+      setSelectedVideoModel(videoOptions[0].name);
+    }
+  }, [isVideoGenerationActive, mediaModelOptions.video, selectedVideoModel, setSelectedVideoModel]);
+
   const renderMediaModelPicker = (
     tool: "image" | "voice" | "music" | "video",
     value: string,
@@ -2045,7 +2053,7 @@ const ActiveToolsDisplay = ({
   ) => {
     const options = mediaModelOptions[tool];
     const selected = options.find((option: any) => option.name === value) || options[0];
-    const label = selected?.displayName || (tool === "image" ? "Sin modelos" : value || "Modelo");
+    const label = selected?.displayName || (["image", "video"].includes(tool) ? "Sin modelos" : value || "Modelo");
     const disabled = options.length === 0;
 
     return (
@@ -4812,7 +4820,6 @@ But first, you need to connect your Spotify account securely using the button be
         closeAllToolsAndConnectors();
         setIsVideoGenerationActive(true);
         setChatType('video');
-        setSelectedVideoModel(DEFAULT_VIDEO_MODEL);
         autoVideoActivationRef.current = true;
       }
 
@@ -7933,6 +7940,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   }
 
   const handleVideoGeneration = async (prompt: string, files?: string[]) => {
+    const activeVideoModel = selectedVideoModel.trim();
+    if (!activeVideoModel) {
+      toast.error('Activa un modelo VIDEO en Admin > AI Models antes de generar video.');
+      return;
+    }
+
     let activeChatId = currentChat?.id || null;
     setIsGeneratingVideo(true)
     // Dedicated abort handle (same mechanism as image) so stopActiveGeneration
@@ -7945,14 +7958,14 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       aspectRatio: selectedVideoAspectRatio,
       duration: selectedVideoDuration,
       audio: selectedVideoAudio,
-      model: selectedVideoModel,
+      model: activeVideoModel,
       signal: videoController.signal,
     };
     try {
       if (!currentChat) {
         const newChat = await createNewChat('video', prompt, undefined, {
           skipInitialProcessing: true,
-          model: selectedVideoModel || selectedModel,
+          model: activeVideoModel || selectedModel,
         } as any)
         activeChatId = newChat?.id || activeChatId;
         if (activeChatId) markLocalJobBusy(activeChatId);

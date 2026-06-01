@@ -510,8 +510,10 @@ class ModelSyncService {
     const types = Array.isArray(options.types) && options.types.length
       ? new Set(options.types.map(type => String(type).toUpperCase()))
       : null;
-    const catalogModels = listManifestModels()
-      .filter(model => !types || types.has(String(model.type || '').toUpperCase()));
+    const catalogModels = [
+      ...listManifestModels(),
+      ...this.getStaticVideoModels(),
+    ].filter(model => !types || types.has(String(model.type || '').toUpperCase()));
 
     let created = 0;
     let updated = 0;

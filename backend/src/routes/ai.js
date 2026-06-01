@@ -85,7 +85,10 @@ const {
   resolveModelForUser,
   persistModelPreference,
 } = require('../services/model-quota-router');
-const { curateVisibleTextModels } = require('../services/visible-model-catalog');
+const {
+  curateVisibleAdminMediaModels,
+  curateVisibleTextModels,
+} = require('../services/visible-model-catalog');
 const streamResume = require('../services/ai/stream-resume');
 const promptInjectionDetector = require('../services/ai/prompt-injection-detector');
 const longTermMemory = require('../services/long-term-memory');
@@ -635,7 +638,8 @@ router.post(
 // ✅ Get available AI models
 router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace: 'ai-models' }), async (req, res) => {
   try {
-    const { type } = req.query; // Query se 'type' hasil karein (e.g., ?type=TEXT)
+    const rawType = Array.isArray(req.query.type) ? req.query.type[0] : req.query.type;
+    const type = String(rawType || '').trim().toUpperCase();
     const userPlan = req.user?.plan || 'FREE';
     const freeDailyCallsUsed = req.user?.plan === 'FREE'
       ? await countDailyApiCalls(req.user.id)
@@ -646,8 +650,11 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
     const wantVideo = !type || type === 'VIDEO';
     const wantVoice = !type || type === 'VOICE';
 
-    if (wantImage) {
-      await modelSyncService.ensureStaticCatalogModels({ types: ['IMAGE'] });
+    const staticTypesToEnsure = [];
+    if (wantImage) staticTypesToEnsure.push('IMAGE');
+    if (wantVideo) staticTypesToEnsure.push('VIDEO');
+    if (staticTypesToEnsure.length > 0) {
+      await modelSyncService.ensureStaticCatalogModels({ types: staticTypesToEnsure });
     }
 
     const whereClause = {
@@ -668,7 +675,8 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
         provider: true,
         description: true,
         type: true, // Type bhi select karein
-        icon: true  // Icon bhi select karein
+        icon: true, // Icon bhi select karein
+        isActive: true,
       },
       orderBy: { createdAt: 'asc' }
     });
@@ -712,69 +720,14 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
       }
     }
 
-    if (wantImage) {
-      models = models.filter((model) => (
-        String(model?.type || '').toUpperCase() !== 'IMAGE' ||
-        isVerifiedChatImageModelName(model?.name)
-      ));
-
-      const listed = new Set(models.map((m) => m.name));
-      const managedImageRows = await prisma.aiModel.findMany({
-        where: { name: { in: ADMIN_MANAGED_IMAGE_MODELS.map((m) => m.name) } },
-        select: { name: true },
+    if (type === 'IMAGE') {
+      models = curateVisibleAdminMediaModels(models, 'IMAGE', {
+        allowedNames: VERIFIED_CHAT_IMAGE_MODEL_NAMES,
       });
-      const managedImageNames = new Set(managedImageRows.map((m) => m.name));
-      const virtualImageModels = ADMIN_MANAGED_IMAGE_MODELS
-        .filter((m) => isVerifiedChatImageModelName(m.name) && !listed.has(m.name) && !managedImageNames.has(m.name))
-        .map((m) => ({ id: `__virtual_${m.name.replace(/[^a-z0-9]+/gi, '_').toLowerCase()}__`, ...m }));
-
-      if (virtualImageModels.length > 0) {
-        models = [...virtualImageModels, ...models];
-      }
     }
 
-    if (wantVideo) {
-      const listed = new Set(models.map((m) => m.name));
-      const virtualVideoModels = [
-        {
-          name: 'veo-fast',
-          displayName: 'Veo Fast (fal.ai)',
-          provider: 'Custom',
-          type: 'VIDEO',
-          description: 'Generación de video con Veo Fast vía fal.ai.',
-          icon: 'GeminiLogo',
-        },
-        {
-          name: 'veo-3',
-          displayName: 'Veo 3',
-          provider: 'Custom',
-          type: 'VIDEO',
-          description: 'Generación de video avanzada con Veo 3 vía fal.ai.',
-          icon: 'GeminiLogo',
-        },
-        {
-          name: 'kling-1.6',
-          displayName: 'Kling 1.6',
-          provider: 'Custom',
-          type: 'VIDEO',
-          description: 'Generación de video con Kling 1.6 vía fal.ai.',
-          icon: 'Sparkles',
-        },
-        {
-          name: 'luma-dream-machine',
-          displayName: 'Luma Dream Machine',
-          provider: 'Custom',
-          type: 'VIDEO',
-          description: 'Generación de video cinematográfico con Luma vía fal.ai.',
-          icon: 'Sparkles',
-        },
-      ]
-        .filter((m) => !listed.has(m.name))
-        .map((m) => ({ id: `__virtual_${m.name.replace(/[^a-z0-9]+/gi, '_').toLowerCase()}__`, ...m }));
-
-      if (virtualVideoModels.length > 0) {
-        models = [...virtualVideoModels, ...models];
-      }
+    if (type === 'VIDEO') {
+      models = curateVisibleAdminMediaModels(models, 'VIDEO');
     }
 
     if (wantVoice) {
@@ -6325,11 +6278,32 @@ router.post(
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const { prompt, chatId, aspect_ratio = '16:9', resolution = '720p', duration = 8, audio = true, negative_prompt, files, image_url, model = 'veo-fast' // Default model
+      const { prompt, chatId, aspect_ratio = '16:9', resolution = '720p', duration = 8, audio = true, negative_prompt, files, image_url, model
       } = req.body;
       const userId = req.user.id;
+      const requestedVideoModel = String(model || '').trim();
+      if (!requestedVideoModel) {
+        return res.status(400).json({
+          error: 'Selecciona un modelo de video activo en Admin > AI Models antes de generar video.',
+          code: 'video_model_required',
+        });
+      }
+
+      await modelSyncService.ensureStaticCatalogModels({ types: ['VIDEO'] });
+      const adminModel = await prisma.aiModel.findUnique({
+        where: { name: requestedVideoModel },
+        select: { displayName: true, isActive: true, type: true },
+      });
+      if (!adminModel || adminModel.type !== 'VIDEO' || !adminModel.isActive) {
+        return res.status(403).json({
+          error: `El modelo de video "${adminModel?.displayName || requestedVideoModel}" no esta activo. Activalo en Admin > AI Models antes de usarlo.`,
+          code: 'video_model_inactive',
+          model: requestedVideoModel,
+        });
+      }
+
       const requestedDuration = Number(duration);
-      const modelName = String(model || '').toLowerCase();
+      const modelName = requestedVideoModel.toLowerCase();
       const effectiveDuration =
         (modelName === 'veo-fast' || modelName === 'fal-ai/veo3/fast' || modelName === 'fal-ai/veo3/fast/image-to-video')
         && (!Number.isFinite(requestedDuration) || requestedDuration === 5)
@@ -6390,7 +6364,7 @@ router.post(
           audio,
           negative_prompt,
           ...(processedImageUrl && { image_url: processedImageUrl }),
-          model
+          model: requestedVideoModel
         };
 
         const videoResponse = await axios.post(url, videoPayload, {

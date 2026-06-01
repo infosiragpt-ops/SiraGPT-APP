@@ -42,4 +42,22 @@ describe("mobile model selector source contract", () => {
       "when search is visible on larger screens, its font must stay at least 16px before sm to avoid iOS input zoom"
     )
   })
+
+  it("does not inject fallback video models when Admin returns no active VIDEO rows", () => {
+    assert.doesNotMatch(
+      source,
+      /videoModels\.length \? videoModels : \[/,
+      "the video picker must use only /api/ai/models?type=VIDEO results"
+    )
+    assert.match(
+      source,
+      /video: videoModels,/,
+      "video picker options should come directly from the active Admin-backed VIDEO list"
+    )
+    assert.match(
+      source,
+      /const videoOptions = mediaModelOptions\.video[\s\S]{0,220}setSelectedVideoModel\(""\)/,
+      "when Admin disables all VIDEO models the selected video model should be cleared"
+    )
+  })
 })

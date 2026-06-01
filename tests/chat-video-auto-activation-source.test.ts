@@ -33,6 +33,24 @@ describe("chat video auto-activation source contract", () => {
     )
   })
 
+  it("does not force a hardcoded Veo model when video auto-activates", () => {
+    assert.doesNotMatch(
+      source,
+      /const DEFAULT_VIDEO_MODEL = "veo-fast"/,
+      "video generation must not default to veo-fast when Admin has no active VIDEO row"
+    )
+    assert.doesNotMatch(
+      source,
+      /setSelectedVideoModel\(DEFAULT_VIDEO_MODEL\)[\s\S]{0,160}autoVideoActivationRef\.current = true/,
+      "auto-activation should not override the selected video model with a hardcoded default"
+    )
+    assert.match(
+      source,
+      /const activeVideoModel = selectedVideoModel\.trim\(\)[\s\S]{0,220}Activa un modelo VIDEO en Admin > AI Models/,
+      "video generation should block locally when no Admin-active VIDEO model is selected"
+    )
+  })
+
   it("does not turn the primary action into Voice Studio while Video mode is waiting for a prompt", () => {
     assert.match(
       source,

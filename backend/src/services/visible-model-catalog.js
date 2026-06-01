@@ -325,9 +325,45 @@ function curateVisibleTextModels(models = [], env = process.env) {
   });
 }
 
+function normalizeModelType(type) {
+  return String(type || '').trim().toUpperCase();
+}
+
+function isVirtualModel(model = {}) {
+  if (model?.virtual === true) return true;
+  const id = String(model?.id || '').trim();
+  return id.startsWith('__virtual_');
+}
+
+/**
+ * Media pickers (IMAGE/VIDEO) are admin-controlled: they should only surface
+ * real aiModel rows that are explicitly active. Static/default catalogs may
+ * seed inactive rows for convenience, but must never invent public picker
+ * entries when Admin has everything disabled.
+ */
+function curateVisibleAdminMediaModels(models = [], type, options = {}) {
+  const normalizedType = normalizeModelType(type);
+  if (!['IMAGE', 'VIDEO'].includes(normalizedType)) return [];
+
+  const allowedNames = options.allowedNames instanceof Set
+    ? options.allowedNames
+    : null;
+
+  return (Array.isArray(models) ? models : []).filter((model) => {
+    const name = String(model?.name || '').trim();
+    if (!name) return false;
+    if (normalizeModelType(model?.type) !== normalizedType) return false;
+    if (model?.isActive !== true) return false;
+    if (isVirtualModel(model)) return false;
+    if (allowedNames && !allowedNames.has(name)) return false;
+    return true;
+  });
+}
+
 module.exports = {
   VISIBLE_TEXT_MODEL_DEFINITIONS,
   buildGemaVisibleModel,
+  curateVisibleAdminMediaModels,
   curateVisibleTextModels,
   listVisibleTextModelDefinitions,
 };

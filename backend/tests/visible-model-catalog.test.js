@@ -5,6 +5,7 @@ const assert = require('node:assert');
 
 const {
   listVisibleTextModelDefinitions,
+  curateVisibleAdminMediaModels,
   curateVisibleTextModels,
 } = require('../src/services/visible-model-catalog');
 
@@ -63,4 +64,28 @@ test('curateVisibleTextModels honours the allowlist and requires an admin-active
   assert.strictEqual(curated[0].name, 'gpt-4o-mini');
   assert.ok(curated[0].id, 'curated model must carry an admin id');
   assert.strictEqual(curated[0].type, 'TEXT');
+});
+
+test('curateVisibleAdminMediaModels hides image rows that are inactive, virtual, or not allowed', () => {
+  const allowed = new Set(['gpt-image-1', 'gpt-image-2']);
+  const curated = curateVisibleAdminMediaModels([
+    { id: 'img-1', name: 'gpt-image-1', type: 'IMAGE', isActive: true },
+    { id: 'img-2', name: 'gpt-image-2', type: 'IMAGE', isActive: false },
+    { id: '__virtual_img__', name: 'gpt-image-2', type: 'IMAGE', isActive: true },
+    { id: 'img-3', name: 'bytedance-seed/seedream-4.5', type: 'IMAGE', isActive: true },
+    { id: 'vid-1', name: 'veo-fast', type: 'VIDEO', isActive: true },
+  ], 'IMAGE', { allowedNames: allowed });
+
+  assert.deepStrictEqual(curated.map((m) => m.name), ['gpt-image-1']);
+});
+
+test('curateVisibleAdminMediaModels hides video rows unless Admin marks a real row active', () => {
+  const curated = curateVisibleAdminMediaModels([
+    { id: 'vid-1', name: 'veo-fast', type: 'VIDEO', isActive: false },
+    { id: '__virtual_veo_fast__', name: 'veo-fast', type: 'VIDEO', isActive: true },
+    { id: 'img-1', name: 'gpt-image-1', type: 'IMAGE', isActive: true },
+    { id: 'vid-2', name: 'kling-1.6', type: 'VIDEO', isActive: true },
+  ], 'VIDEO');
+
+  assert.deepStrictEqual(curated.map((m) => m.name), ['kling-1.6']);
 });
