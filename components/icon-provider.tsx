@@ -79,6 +79,7 @@ export const iconMap: { [key: string]: IconConfig } = {
     GrokLogo: { type: 'png', imagePath: '/icons/grok.png', preserveColor: true },            // Official Grok/xAI Logo
     OpenRouterLogo: { type: 'png', imagePath: '/icons/openrouter.png', preserveColor: true }, // Official OpenRouter Logo
     GeminiLogo: { type: 'png', imagePath: '/icons/gemini.svg', preserveColor: true },        // Official Gemini/Google AI Logo
+    GoogleLogo: { type: 'png', imagePath: '/icons/google-g.png', preserveColor: true },      // Official multicolor Google "G" logo
     ClaudeLogo: { type: 'png', imagePath: '/icons/claude.png', preserveColor: true },        // Official Claude/Anthropic Logo
     KimiLogo: { type: 'png', imagePath: '/icons/kimi-hd.png', preserveColor: true },
     ZaiLogo: { type: 'png', imagePath: '/icons/z-ai.svg', preserveColor: true },

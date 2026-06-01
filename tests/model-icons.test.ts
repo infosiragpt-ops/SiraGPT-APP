@@ -41,6 +41,20 @@ describe("resolveModelIconName · brand detection by name", () => {
     assert.equal(resolveModelIconName({ name: "google/gemini-2-flash" }), "GeminiLogo")
   })
 
+  it("gives the SiraGPT 'Gema' brand the Google G logo, even on an OpenAI base model", () => {
+    // "Gema 4" is backed by an OpenAI id (e.g. gpt-4o-mini) but is branded as
+    // Google; it must show the Google logo, not the OpenAI one.
+    assert.equal(
+      resolveModelIconName({ name: "gpt-4o-mini", displayName: "Gema 4", provider: "OpenAI", icon: "Sparkles" }),
+      "GoogleLogo",
+    )
+    assert.equal(resolveModelIconName({ displayName: "Gema 4" }), "GoogleLogo")
+    // The double-m "Gemma" (real Google open model) keeps the Gemini logo.
+    assert.equal(resolveModelIconName({ name: "google/gemma-3-27b-it", displayName: "Gemma 3 27B" }), "GeminiLogo")
+    // "Gemini" is unaffected by the gema rule.
+    assert.equal(resolveModelIconName({ name: "gemini-2.5-pro" }), "GeminiLogo")
+  })
+
   it("identifies Anthropic Claude models", () => {
     assert.equal(resolveModelIconName({ name: "claude-3-opus" }), "ClaudeLogo")
     assert.equal(resolveModelIconName({ name: "anthropic/claude-3-5-sonnet" }), "ClaudeLogo")

@@ -100,6 +100,8 @@ export function resolveModelAttributionName(model: ModelIconInput | null | undef
       return "Anthropic"
     case "GeminiLogo":
       return "Google"
+    case "GoogleLogo":
+      return "Google"
     case "GrokLogo":
       return "xAI"
     case "DeepseekLogo":
@@ -138,6 +140,12 @@ export function resolveModelIconName(model: ModelIconInput | null | undefined): 
   const explicitIcon = model.icon || undefined
   const searchable = normalizedSearchText(model)
 
+  // SiraGPT "Gema" brand uses the Google "G" logo. Checked before the
+  // gpt/openai pattern because the underlying model id may be an OpenAI one
+  // (e.g. gpt-4o-mini) which would otherwise win. `\bgema\b` matches "gema"
+  // / "gema 4" without matching "gemma" (Google's open model, double m) or
+  // "gemini", so those keep their own logos.
+  if (has(searchable, /\bgema\b/)) return "GoogleLogo"
   if (has(searchable, /(^|[/\s-])(gpt|chatgpt|dall[-\s]?e)\b|openai\//)) return "ChatGPTLogo"
   if (has(searchable, /gemini|google\/|imagen|veo/)) return "GeminiLogo"
   if (has(searchable, /claude|anthropic\//)) return "ClaudeLogo"
