@@ -356,7 +356,7 @@ export function dedupeMessages<TMessage extends DedupeMessageLike>(
     collapsed.some((other, j) => {
       if (j === selfIndex) return false;
       if (!other?.id || OPTIMISTIC_ID_RE.test(String(other.id))) return false;
-      if (String(other.role || '') !== String(candidate.role || '')) return false;
+      if (String(other.role || '').toUpperCase() !== String(candidate.role || '').toUpperCase()) return false;
       return sameContentNormalized(other, candidate);
     });
 
@@ -392,7 +392,7 @@ export function dedupeMessages<TMessage extends DedupeMessageLike>(
       !OPTIMISTIC_ID_RE.test(String(message.id));
     if (
       bothStable &&
-      String(prev.role || '') === String(message.role || '') &&
+      String(prev.role || '').toUpperCase() === String(message.role || '').toUpperCase() &&
       sameContentNormalized(prev, message)
     ) {
       collapsedAdjacent[collapsedAdjacent.length - 1] = richerMessage(prev, message);

@@ -936,6 +936,40 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
     .chat-viewport {
       --chat-mobile-bottom-clearance: max(env(safe-area-inset-bottom, 0px), 5.25rem);
     }
+
+    /*
+     * iOS Safari keyboard fix — "input bar jumps to top" bug.
+     *
+     * Problem: When the keyboard opens on iOS, Safari scrolls the main
+     * document to bring the focused element into view.  Because our
+     * chat-viewport has overflow:hidden, `position:sticky` loses its
+     * anchor and the composer bar flies to the top of the visible area.
+     *
+     * Fix: Flip the composer to `position:fixed` the moment the keyboard
+     * opens.  On iOS Safari, fixed elements are always positioned relative
+     * to the *visual* viewport (the area above the keyboard), so
+     * `bottom:0` keeps the bar pinned right above the keyboard regardless
+     * of any document-level scroll.  The existing `padding-bottom` on
+     * `.chat-message-scroll-content` already reserves the right amount of
+     * space so messages never slide under the bar.
+     *
+     * We gate on `@supports (-webkit-touch-callout: none)` so this rule
+     * only fires on iOS/iPadOS Safari; Android Chrome and desktop are
+     * unaffected and keep using the normal sticky layout.
+     */
+    .chat-viewport[data-chat-keyboard="open"] .chat-composer-dock {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      z-index: 40;
+    }
+
+    /* Reduce bottom clearance once keyboard is open (keyboard
+       already takes care of safe-area padding). */
+    .chat-viewport[data-chat-keyboard="open"] {
+      --chat-mobile-bottom-clearance: max(env(safe-area-inset-bottom, 0px), 0.25rem);
+    }
   }
 }
 

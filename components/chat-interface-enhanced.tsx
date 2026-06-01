@@ -9634,10 +9634,17 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         // message and its server twin both reach state, only one
                         // bubble is ever rendered (server id wins). See
                         // lib/message-preservation.ts.
+                        // dedupeMessages runs TWICE: once on the raw list to
+                        // collapse id-level and optimistic/server twin duplicates,
+                        // then again on the *filtered* list so messages that are
+                        // hidden by shouldRenderChatMessage (tool-use, metadata,
+                        // etc.) cannot mask adjacent duplicates from Pass C.
                         const messages = dedupeMessages(currentChat?.messages || []);
-                        const stableMessages = isCurrentChatStreaming
-                          ? messages.slice(0, -1).filter((message) => shouldRenderChatMessage(message))
-                          : messages.filter((message) => shouldRenderChatMessage(message));
+                        const stableMessages = dedupeMessages(
+                          isCurrentChatStreaming
+                            ? messages.slice(0, -1).filter((message) => shouldRenderChatMessage(message))
+                            : messages.filter((message) => shouldRenderChatMessage(message))
+                        );
                         const streamingCandidate = isCurrentChatStreaming ? messages[messages.length - 1] : null;
                         const streamingMessage = streamingCandidate && shouldRenderChatMessage(streamingCandidate, true)
                           ? streamingCandidate
