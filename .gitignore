@@ -59,7 +59,8 @@ yarn-error.log*
 next-env.d.ts
 
 # IDE
-.vscode/
+.vscode/*
+!.vscode/.gitkeep
 .idea/
 *.swp
 *.swo
@@ -136,6 +137,7 @@ temp/
 
 # Editor directories and files
 .vscode/*
+!.vscode/.gitkeep
 !.vscode/extensions.json
 .idea
 *.suo

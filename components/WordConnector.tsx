@@ -122,9 +122,7 @@ const FontSize = Extension.create({
     // @ts-ignore tiptap dual-version resolution conflict
     addCommands() {
         return {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             setFontSize: (fontSize: string) => ({ chain }: { chain: any }) => chain().setMark('textStyle', { fontSize }).run(),
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             unsetFontSize: () => ({ chain }: { chain: any }) => chain().setMark('textStyle', { fontSize: null }).removeEmptyTextStyle().run(),
         };
     },
