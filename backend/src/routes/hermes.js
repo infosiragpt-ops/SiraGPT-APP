@@ -18,6 +18,47 @@ const { executeSlashCommand, listSlashCommands } = require('../services/agents/h
 const { buildHermesIntegrationMap, recommendAdaptedPlaybooks } = require('../services/agents/hermes-playbook-bridge');
 const toolsetRegistry = require('../services/agents/toolset-registry');
 
+// ── Session rewind store ───────────────────────────────────────────────────
+// Adapted from Hermes Agent (MIT):
+//   feat(state): add messages.active flag + rewind primitives (#21910)
+//   feat(undo): /undo [N] backs up N user turns with prefill + soft-delete
+//
+// Hermes uses a per-message `active` boolean in its SQLite state store.
+// SiraGPT's message store is Prisma-backed and schema changes require
+// migrations, so we implement a lightweight in-memory rewind registry that
+// records how many turns have been soft-deleted per session.
+//
+// The registry is consulted by GET /messages/rewind-state so the frontend
+// or agent layer can skip the rewound turns when building context.  The
+// active-memory etag mechanism in backend/src/memory/active.ts will
+// naturally see a shorter history on the next request and rebuild its
+// snapshot — no extra cache-busting needed.
+//
+// The store is intentionally ephemeral (process-lifetime).  If the server
+// restarts, the rewind count resets — which is safe: the messages are still
+// in the DB; they're just logically re-included.  Persistent rewind can be
+// wired to Prisma later without API changes.
+
+const _rewindStore = new Map(); // sessionId → { rewindCount, rewoundAt }
+
+const MAX_REWIND = 20; // maximum turns undoable in a single session
+
+function getRewindState(sessionId) {
+  return _rewindStore.get(sessionId) || { rewindCount: 0, rewoundAt: null };
+}
+
+function applyRewind(sessionId, n) {
+  const current = getRewindState(sessionId);
+  const next = Math.min(current.rewindCount + n, MAX_REWIND);
+  _rewindStore.set(sessionId, { rewindCount: next, rewoundAt: new Date().toISOString() });
+  return getRewindState(sessionId);
+}
+
+function clearRewind(sessionId) {
+  _rewindStore.delete(sessionId);
+  return { rewindCount: 0, rewoundAt: null };
+}
+
 const router = express.Router();
 
 router.get('/health', optionalAuth, (_req, res) => {
@@ -179,6 +220,77 @@ router.get('/environments', optionalAuth, (_req, res) => {
 
 router.get('/environments/health', optionalAuth, async (_req, res) => {
   res.json(await dockerBridge.healthCheck());
+});
+
+// ── Message rewind / undo ──────────────────────────────────────────────────
+// Adapted from Hermes Agent (MIT):
+//   feat(state): add messages.active flag + rewind primitives (#21910)
+//   feat(undo): /undo [N] backs up N user turns with prefill + soft-delete
+
+/**
+ * GET /api/hermes/messages/rewind-state?sessionId=<id>
+ * Returns the current rewind state for a session.
+ * Consumers (agent context builders, chat routes) can use `rewindCount` to
+ * trim the last N user+assistant turn pairs from the history they send to
+ * the LLM.
+ */
+router.get('/messages/rewind-state', optionalAuth, (req, res) => {
+  const sessionId = req.query.sessionId;
+  if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
+  return res.json({ sessionId, ...getRewindState(sessionId) });
+});
+
+/**
+ * POST /api/hermes/messages/undo
+ * Body: { sessionId: string, n?: number }
+ *
+ * Soft-deletes the last `n` user+assistant turn pairs (default: 1) for the
+ * given session by incrementing the session's rewindCount.  The LLM context
+ * builder should subtract `rewindCount` turn pairs from the tail of the
+ * history before sending to the model.
+ *
+ * Mirrors Hermes `/undo [N]` — backs up N user turns with soft-delete.
+ * Max rewind per session is capped at MAX_REWIND (20) to prevent
+ * accidentally emptying the context.
+ */
+router.post('/messages/undo', optionalAuth, (req, res) => {
+  const sessionId = req.body?.sessionId;
+  if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
+  const n = Math.max(1, Math.min(Number.parseInt(req.body?.n || '1', 10) || 1, MAX_REWIND));
+  const state = applyRewind(sessionId, n);
+  return res.json({ ok: true, sessionId, ...state, appliedN: n });
+});
+
+/**
+ * POST /api/hermes/messages/undo/clear
+ * Body: { sessionId: string }
+ *
+ * Clears the rewind state for a session (equivalent to Hermes /new which
+ * resets the active-message cursor back to head).
+ */
+router.post('/messages/undo/clear', optionalAuth, (req, res) => {
+  const sessionId = req.body?.sessionId;
+  if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
+  const state = clearRewind(sessionId);
+  return res.json({ ok: true, sessionId, ...state });
+});
+
+/**
+ * POST /api/hermes/cron/scan
+ * Body: { text: string }
+ *
+ * Two-tier scheduling-intent classifier endpoint.
+ * Exposes the hermes-cron-scanner for external callers (chat middleware,
+ * agent skill handlers) that need to decide whether to attempt LLM-based
+ * schedule extraction before spending tokens.
+ *
+ * Returns: { isSchedulingIntent, tier1, tier2, hints? }
+ */
+router.post('/cron/scan', optionalAuth, (req, res) => {
+  const text = String(req.body?.text || '');
+  if (!text) return res.status(400).json({ error: 'text required' });
+  const result = cronBridge.parseNaturalLanguageJob(text);
+  return res.json(result);
 });
 
 module.exports = router;

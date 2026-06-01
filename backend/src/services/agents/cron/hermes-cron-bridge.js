@@ -3,9 +3,17 @@
 /**
  * Hermes cron bridge — JavaScript port of hermes-agent/cron/*.
  * Wraps SiraGPT's existing scheduler with Hermes-compatible job API.
+ *
+ * Improvement: Two-tier intent scanner (hermes-cron-scanner) is used by
+ * `parseNaturalLanguageJob` to prevent false-positive cron creation from
+ * prose text that merely mentions time (e.g. "I exercise every Tuesday").
+ * Adapted from Hermes Agent (MIT):
+ *   fix(cron): split scanner into two tiers so skill prose stops
+ *   false-positive triggering.
  */
 
 const scheduler = require('../../scheduler/scheduler');
+const { classifySchedulingIntent, extractCronHints } = require('./hermes-cron-scanner');
 
 const INTERVAL_TO_CRON = Object.freeze({
   '1m': '* * * * *',
@@ -109,6 +117,36 @@ function status() {
   };
 }
 
+/**
+ * parseNaturalLanguageJob
+ *
+ * Gate for natural-language cron creation requests.  Uses the two-tier
+ * scanner to reject prose that merely mentions time before attempting any
+ * LLM-assisted schedule extraction.
+ *
+ * Returns:
+ *   { ok: true,  hints }  — both tiers matched; safe to pass to LLM
+ *   { ok: false, reason } — rejected at tier 1 or tier 2
+ *
+ * Callers (agent skill handlers, chat routes) should check `ok` before
+ * invoking the LLM to parse the schedule.  This avoids spending tokens on
+ * messages that will never resolve to a valid cron expression.
+ *
+ * @param {string} text  — raw user message
+ * @returns {{ ok: boolean, hints?: object, reason?: string, tier1?: boolean, tier2?: boolean }}
+ */
+function parseNaturalLanguageJob(text = '') {
+  const scan = classifySchedulingIntent(text);
+  if (!scan.isSchedulingIntent) {
+    const reason = !scan.tier1
+      ? 'no_scheduling_keywords'
+      : 'no_structural_time_marker';
+    return { ok: false, reason, tier1: scan.tier1, tier2: scan.tier2 };
+  }
+  const hints = extractCronHints(text);
+  return { ok: true, hints, tier1: true, tier2: true };
+}
+
 module.exports = {
   INTERVAL_TO_CRON,
   normalizeSchedule,
@@ -122,4 +160,7 @@ module.exports = {
   tick,
   status,
   toHermesJob,
+  parseNaturalLanguageJob,
+  classifySchedulingIntent,
+  extractCronHints,
 };

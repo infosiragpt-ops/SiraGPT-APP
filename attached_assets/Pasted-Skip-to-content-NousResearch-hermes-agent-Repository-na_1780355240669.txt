@@ -1,0 +1,544 @@
+Skip to content
+NousResearch
+hermes-agent
+Repository navigation
+Code
+Issues
+5k+
+ (5k+)
+Pull requests
+5k+
+ (5k+)
+Agents
+Actions
+Projects
+Security and quality
+Insights
+Owner avatar
+hermes-agent
+Public
+NousResearch/hermes-agent
+
+t
+T
+Name		
+teknium1
+teknium1
+fix(minimax): drop stale ≤204,800 cache entries for MiniMax-M3 (#36726)
+1ffa22e
+ · 
+1 hour ago
+.github
+add a github action to build& sign a windows installer
+yesterday
+.plans
+Merge PR #724: feat: --yolo flag to bypass all approval prompts
+3 months ago
+acp_adapter
+style: restore PEP8 blank-line separation after dead-code removal
+3 days ago
+acp_registry
+chore: release v0.15.1 (2026.5.29) (#34222)
+4 days ago
+agent
+fix(minimax): drop stale ≤204,800 cache entries for MiniMax-M3 (#36726)
+1 hour ago
+apps
+feat(desktop): drop files anywhere in the chat area (#36262)
+17 hours ago
+assets
+Update banner image to new version
+4 months ago
+cron
+fix(cron): split scanner into two tiers so skill prose stops false-po…
+last week
+datagen-config-examples
+feat: add WebResearchEnv RL environment for multi-step web research
+3 months ago
+docker
+fix(docker): discover Playwright headless_shell browser (#35717)
+17 hours ago
+docs
+Add Hermes desktop app (#20059)
+yesterday
+gateway
+feat(gateway): bring /undo [N] to messaging platforms (parity with CL…
+14 hours ago
+hermes_cli
+feat(dashboard): full administration panel — MCP, pairing, webhooks, …
+13 hours ago
+infographic/kanban-db-corruption-defense
+infographic: kanban.db corruption defense (#30858 + #30862) (#30952)
+last week
+locales
+feat(gateway): bring /undo [N] to messaging platforms (parity with CL…
+14 hours ago
+nix
+Add Hermes desktop app (#20059)
+yesterday
+optional-mcps
+feat(mcp): Nous-approved MCP catalog with interactive picker (#30870)
+last week
+optional-skills
+fix(honcho): harden self-hosted setup paths
+3 days ago
+packaging/homebrew
+chore: prepare Hermes for Homebrew packaging (#4099)
+3 months ago
+plans
+fix(gemini): tighten native routing and streaming replay
+2 months ago
+plugins
+Add Hermes desktop app (#20059)
+yesterday
+providers
+fix(opencode-go): cap mimo-v2.5-pro max_tokens at 131072
+4 days ago
+scripts
+chore: add benfrank241 to AUTHOR_MAP (#36898)
+6 hours ago
+skills
+feat(kanban): goal_mode cards run workers in a /goal loop (#35710)
+2 days ago
+tests
+fix(minimax): drop stale ≤204,800 cache entries for MiniMax-M3 (#36726)
+1 hour ago
+tools
+fix(approval): pair terminal-side gate for ~/.hermes/config.yaml writes
+12 hours ago
+tui_gateway
+feat(undo): /undo [N] backs up N user turns with prefill + soft-delete
+14 hours ago
+ui-tui
+feat(undo): /undo [N] backs up N user turns with prefill + soft-delete
+14 hours ago
+web
+feat(dashboard): full administration panel — MCP, pairing, webhooks, …
+13 hours ago
+website
+feat(dashboard): full administration panel — MCP, pairing, webhooks, …
+13 hours ago
+.dockerignore
+chore: ignore local Hermes runtime files
+2 weeks ago
+.env.example
+Add Hermes desktop app (#20059)
+yesterday
+.envrc
+nix: add tui lockfile update script
+2 months ago
+.gitattributes
+feat: web UI dashboard for managing Hermes Agent (#8756)
+2 months ago
+.gitignore
+Add Hermes desktop app (#20059)
+yesterday
+.hadolint.yaml
+feat(docker): remove gosu from bundled image; s6-setuidgid handles pr…
+last week
+.mailmap
+chore: add MestreY0d4-Uninter to AUTHOR_MAP and .mailmap
+2 months ago
+AGENTS.md
+Add Hermes desktop app (#20059)
+yesterday
+CONTRIBUTING.md
+docs: fix separate typo; hyphenate built-in trust wording
+3 days ago
+Dockerfile
+fix(docker): add /usr/bin/tini compatibility shim for legacy wrappers (…
+19 hours ago
+LICENSE
+fix: restore missing MIT license file
+3 months ago
+MANIFEST.in
+fix(packaging): ship bundled plugin.yaml manifests in wheel and sdist
+4 days ago
+README.md
+Add Hermes desktop app (#20059)
+yesterday
+README.zh-CN.md
+docs(readme): add Nous Portal section between Getting Started and CLI…
+last week
+RELEASE_v0.10.0.md
+chore: release v0.10.0 (2026.4.16) (#11209)
+2 months ago
+RELEASE_v0.11.0.md
+chore: release v0.11.0 (2026.4.23) (#14791)
+2 months ago
+RELEASE_v0.12.0.md
+chore: release v0.12.0 (2026.4.30) (#18057)
+2 months ago
+RELEASE_v0.13.0.md
+chore: release v0.13.0 (2026.5.7) (#21406)
+last month
+RELEASE_v0.14.0.md
+Add Hermes desktop app (#20059)
+yesterday
+RELEASE_v0.15.0.md
+docs: tweak v0.15.0 release notes (#34037)
+4 days ago
+RELEASE_v0.15.1.md
+chore: release v0.15.1 (2026.5.29) (#34222)
+4 days ago
+RELEASE_v0.2.0.md
+chore: rebuild changelog with correct time window (Feb 25 12PM PST on…
+3 months ago
+RELEASE_v0.3.0.md
+chore: release v0.3.0 (v2026.3.17)
+3 months ago
+RELEASE_v0.4.0.md
+docs: revise v0.4.0 changelog — fix feature attribution, reorder sect…
+3 months ago
+RELEASE_v0.5.0.md
+chore: release v0.5.0 (v2026.3.28) (#3568)
+3 months ago
+RELEASE_v0.6.0.md
+chore: release v0.6.0 (2026.3.30) (#3985)
+3 months ago
+RELEASE_v0.7.0.md
+chore: release v0.7.0 (2026.4.3) (#4812)
+2 months ago
+RELEASE_v0.8.0.md
+docs: update v0.8.0 highlights — notify_on_complete, MiMo v2 Pro, reo…
+2 months ago
+RELEASE_v0.9.0.md
+fix: add contributor audit script + fix missed contributors (#9264)
+2 months ago
+SECURITY.md
+changes from feedback
+last month
+batch_runner.py
+feat(azure-foundry): add Microsoft Entra ID auth
+2 weeks ago
+cli-config.yaml.example
+docs(config): deprecate MESSAGING_CWD guidance
+3 days ago
+cli.py
+feat(undo): /undo [N] backs up N user turns with prefill + soft-delete
+14 hours ago
+constraints-termux.txt
+feat: add tested Termux install path and EOF-aware gh auth
+2 months ago
+docker-compose.windows.yml
+feat(docker): add Windows Docker Desktop compatible compose file
+last week
+docker-compose.yml
+docs(compose): update entrypoint comment for s6-overlay
+last week
+flake.lock
+fix nix build
+2 months ago
+flake.nix
+feat(nix): declarative plugin installation for NixOS module (#15953)
+2 months ago
+hermes
+fix: use argparse entrypoint in top-level launcher (#3874)
+3 months ago
+hermes-already-has-routines.md
+docs: automation templates gallery + comparison post (#9821)
+2 months ago
+hermes_bootstrap.py
+hermes_bootstrap: Windows-only UTF-8 stdio shim for all entry points
+3 weeks ago
+hermes_constants.py
+remove Vercel AI Gateway and Vercel Sandbox (#33067)
+last week
+hermes_logging.py
+Add Hermes desktop app (#20059)
+yesterday
+hermes_state.py
+feat(state): add messages.active flag + rewind primitives (#21910)
+14 hours ago
+hermes_time.py
+codebase: add encoding='utf-8' to all bare open() calls (PLW1514)
+3 weeks ago
+mcp_serve.py
+chore: ruff auto-fix PLR6201 — tuple → set in membership tests (#23937)
+3 weeks ago
+mini_swe_runner.py
+chore: prune unused imports and duplicate import redefinitions
+4 days ago
+model_tools.py
+fix(tool-search): scope bridge catalog + dispatch to the session's to…
+4 days ago
+package-lock.json
+Add Hermes desktop app (#20059)
+yesterday
+package.json
+Add Hermes desktop app (#20059)
+yesterday
+pyproject.toml
+Add Hermes desktop app (#20059)
+yesterday
+run_agent.py
+fix(agent): stop reporting broken streams as output-length truncation (…
+13 hours ago
+setup-hermes.sh
+remove Vercel AI Gateway and Vercel Sandbox (#33067)
+last week
+setup.py
+fix(packaging): ship bundled skills in wheel
+2 weeks ago
+toolset_distributions.py
+chore: fix 154 f-strings, simplify getattr/URL patterns, remove dead …
+3 months ago
+toolsets.py
+fix: expose context engine tools with saved toolsets
+5 days ago
+trajectory_compressor.py
+fix: guard yaml.safe_load, flock unlock, TOCTOU races, and atomic writes
+2 weeks ago
+utils.py
+fix(utils): guard os.fchmod for Windows in atomic_json_write
+6 hours ago
+uv.lock
+security: pin patched Starlette (>=1.0.1) for CVE-2026-48710 BadHost (#…
+3 days ago
+Repository files navigation
+README
+Contributing
+MIT license
+Security
+Hermes Agent
+
+Hermes Agent ☤
+
+Documentation  Discord  License: MIT  Built by Nous Research 中文
+
+The self-improving AI agent built by Nous Research. It's the only agent with a built-in learning loop — it creates skills from experience, improves them during use, nudges itself to persist knowledge, searches its own past conversations, and builds a deepening model of who you are across sessions. Run it on a $5 VPS, a GPU cluster, or serverless infrastructure that costs nearly nothing when idle. It's not tied to your laptop — talk to it from Telegram while it works on a cloud VM.
+
+Use any model you want — Nous Portal, OpenRouter (200+ models), NovitaAI (AI-native cloud for Model API, Agent Sandbox, and GPU Cloud), NVIDIA NIM (Nemotron), Xiaomi MiMo, z.ai/GLM, Kimi/Moonshot, MiniMax, Hugging Face, OpenAI, or your own endpoint. Switch with hermes model — no code changes, no lock-in.
+
+A real terminal interface	Full TUI with multiline editing, slash-command autocomplete, conversation history, interrupt-and-redirect, and streaming tool output.
+Lives where you do	Telegram, Discord, Slack, WhatsApp, Signal, and CLI — all from a single gateway process. Voice memo transcription, cross-platform conversation continuity.
+A closed learning loop	Agent-curated memory with periodic nudges. Autonomous skill creation after complex tasks. Skills self-improve during use. FTS5 session search with LLM summarization for cross-session recall. Honcho dialectic user modeling. Compatible with the agentskills.io open standard.
+Scheduled automations	Built-in cron scheduler with delivery to any platform. Daily reports, nightly backups, weekly audits — all in natural language, running unattended.
+Delegates and parallelizes	Spawn isolated subagents for parallel workstreams. Write Python scripts that call tools via RPC, collapsing multi-step pipelines into zero-context-cost turns.
+Runs anywhere, not just your laptop	Six terminal backends — local, Docker, SSH, Singularity, Modal, and Daytona. Daytona and Modal offer serverless persistence — your agent's environment hibernates when idle and wakes on demand, costing nearly nothing between sessions. Run it on a $5 VPS or a GPU cluster.
+Research-ready	Batch trajectory generation, trajectory compression for training the next generation of tool-calling models.
+Quick Install
+
+Linux, macOS, WSL2, Termux
+
+curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash
+Windows (native, PowerShell)
+
+Heads up: Native Windows runs Hermes without WSL — CLI, gateway, TUI, and tools all work natively. If you'd rather use WSL2, the Linux/macOS one-liner above works there too. Found a bug? Please file issues.
+Run this in PowerShell:
+
+iex (irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1)
+The installer handles everything: uv, Python 3.11, Node.js, ripgrep, ffmpeg, and a portable Git Bash (MinGit, unpacked to %LOCALAPPDATA%\hermes\git — no admin required, completely isolated from any system Git install). Hermes uses this bundled Git Bash to run shell commands.
+
+If you already have Git installed, the installer detects it and uses that instead. Otherwise a ~45MB MinGit download is all you need — it won't touch or interfere with any system Git.
+
+Android / Termux: The tested manual path is documented in the Termux guide. On Termux, Hermes installs a curated .[termux] extra because the full .[all] extra currently pulls Android-incompatible voice dependencies.
+
+Windows: Native Windows is fully supported — the PowerShell one-liner above installs everything. If you'd rather use WSL2, the Linux command works there too. Native Windows install lives under %LOCALAPPDATA%\hermes; WSL2 installs under ~/.hermes as on Linux. The only Hermes feature that currently needs WSL2 specifically is the browser-based dashboard chat pane (it uses a POSIX PTY — classic CLI and gateway both run natively).
+After installation:
+
+source ~/.bashrc    # reload shell (or: source ~/.zshrc)
+hermes              # start chatting!
+Getting Started
+
+hermes              # Interactive CLI — start a conversation
+hermes model        # Choose your LLM provider and model
+hermes tools        # Configure which tools are enabled
+hermes config set   # Set individual config values
+hermes gateway      # Start the messaging gateway (Telegram, Discord, etc.)
+hermes setup        # Run the full setup wizard (configures everything at once)
+hermes claw migrate # Migrate from OpenClaw (if coming from OpenClaw)
+hermes update       # Update to the latest version
+hermes doctor       # Diagnose any issues
+📖 Full documentation →
+
+Skip the API-key collection — Nous Portal
+
+Hermes works with whatever provider you want — that's not changing. But if you'd rather not collect five separate API keys for the model, web search, image generation, TTS, and a cloud browser, Nous Portal covers all of them under one subscription:
+
+300+ models — pick any of them with /model <name>
+Tool Gateway — web search (Firecrawl), image generation (FAL), text-to-speech (OpenAI), cloud browser (Browser Use), all routed through your sub. No extra accounts.
+One command from a fresh install:
+
+hermes setup --portal
+That logs you in via OAuth, sets Nous as your provider, and turns on the Tool Gateway. Check what's wired up any time with hermes portal status. Full details on the Tool Gateway docs page.
+
+You can still bring your own keys per-tool whenever you want — the gateway is per-backend, not all-or-nothing.
+
+CLI vs Messaging Quick Reference
+
+Hermes has two entry points: start the terminal UI with hermes, or run the gateway and talk to it from Telegram, Discord, Slack, WhatsApp, Signal, or Email. Once you're in a conversation, many slash commands are shared across both interfaces.
+
+Action	CLI	Messaging platforms
+Start chatting	hermes	Run hermes gateway setup + hermes gateway start, then send the bot a message
+Start fresh conversation	/new or /reset	/new or /reset
+Change model	/model [provider:model]	/model [provider:model]
+Set a personality	/personality [name]	/personality [name]
+Retry or undo the last turn	/retry, /undo	/retry, /undo
+Compress context / check usage	/compress, /usage, /insights [--days N]	/compress, /usage, /insights [days]
+Browse skills	/skills or /<skill-name>	/<skill-name>
+Interrupt current work	Ctrl+C or send a new message	/stop or send a new message
+Platform-specific status	/platforms	/status, /sethome
+For the full command lists, see the CLI guide and the Messaging Gateway guide.
+
+Documentation
+
+All documentation lives at hermes-agent.nousresearch.com/docs:
+
+Section	What's Covered
+Quickstart	Install → setup → first conversation in 2 minutes
+CLI Usage	Commands, keybindings, personalities, sessions
+Configuration	Config file, providers, models, all options
+Messaging Gateway	Telegram, Discord, Slack, WhatsApp, Signal, Home Assistant
+Security	Command approval, DM pairing, container isolation
+Tools & Toolsets	40+ tools, toolset system, terminal backends
+Skills System	Procedural memory, Skills Hub, creating skills
+Memory	Persistent memory, user profiles, best practices
+MCP Integration	Connect any MCP server for extended capabilities
+Cron Scheduling	Scheduled tasks with platform delivery
+Context Files	Project context that shapes every conversation
+Architecture	Project structure, agent loop, key classes
+Contributing	Development setup, PR process, code style
+CLI Reference	All commands and flags
+Environment Variables	Complete env var reference
+Migrating from OpenClaw
+
+If you're coming from OpenClaw, Hermes can automatically import your settings, memories, skills, and API keys.
+
+During first-time setup: The setup wizard (hermes setup) automatically detects ~/.openclaw and offers to migrate before configuration begins.
+
+Anytime after install:
+
+hermes claw migrate              # Interactive migration (full preset)
+hermes claw migrate --dry-run    # Preview what would be migrated
+hermes claw migrate --preset user-data   # Migrate without secrets
+hermes claw migrate --overwrite  # Overwrite existing conflicts
+What gets imported:
+
+SOUL.md — persona file
+Memories — MEMORY.md and USER.md entries
+Skills — user-created skills → ~/.hermes/skills/openclaw-imports/
+Command allowlist — approval patterns
+Messaging settings — platform configs, allowed users, working directory
+API keys — allowlisted secrets (Telegram, OpenRouter, OpenAI, Anthropic, ElevenLabs)
+TTS assets — workspace audio files
+Workspace instructions — AGENTS.md (with --workspace-target)
+See hermes claw migrate --help for all options, or use the openclaw-migration skill for an interactive agent-guided migration with dry-run previews.
+
+Contributing
+
+We welcome contributions! See the Contributing Guide for development setup, code style, and PR process.
+
+Quick start for contributors — clone and go with setup-hermes.sh:
+
+git clone https://github.com/NousResearch/hermes-agent.git
+cd hermes-agent
+./setup-hermes.sh     # installs uv, creates venv, installs .[all], symlinks ~/.local/bin/hermes
+./hermes              # auto-detects the venv, no need to `source` first
+Manual path (equivalent to the above):
+
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv venv .venv --python 3.11
+source .venv/bin/activate
+uv pip install -e ".[all,dev]"
+scripts/run_tests.sh
+Community
+
+💬 Discord
+📚 Skills Hub
+🐛 Issues
+🔌 computer-use-linux — Linux desktop-control MCP server for Hermes and other MCP hosts, with AT-SPI accessibility trees, Wayland/X11 input, screenshots, and compositor window targeting.
+🔌 HermesClaw — Community WeChat bridge: Run Hermes Agent and OpenClaw on the same WeChat account.
+License
+
+MIT — see LICENSE.
+
+Built by Nous Research.
+About
+
+The agent that grows with you
+
+hermes-agent.nousresearch.com
+Topics
+ai  openai  hermes  codex ai-agents  claude  ai-agent  llm chatgpt  anthropic  claude-code clawdbot  moltbot  openclaw hermes-agent  nous-research
+Resources
+ Readme
+License
+ MIT license
+Contributing
+ Contributing
+Security policy
+ Security policy
+ Activity
+ Custom properties
+Stars
+ 176k stars
+Watchers
+ 686 watching
+Forks
+ 30k forks
+Report repository
+Releases 16
+
+Hermes Agent v0.15.2 (2026.5.29.2)
+Latest
+3 days ago
++ 15 releases
+Deployments
+500+
+
+ github-pages
+ pypi 3 days ago
++ more deployments
+Packages
+
+No packages published
+Contributors
+1,291
+
+ @teknium1
+ @OutThisLife
+ @kshitijk4poor
+ @claude
+ @0xbyt4
+ @alt-glitch
+ @benbarclay
+ @helix4u
+ @austinpickett
+ @ethernet8023
+ @erosika
+ @briandevans
+ @LeonSGP43
+ @ygd58
++ 1,277 contributors
+Languages
+
+Python
+85.1%
+ 
+TypeScript
+11.3%
+TeX
+0.9%
+ 
+JavaScript
+0.8%
+Shell
+0.5%
+ 
+BibTeX Style
+0.3%
+Other
+1.1%
+Footer
+© 2026 GitHub, Inc.
+Footer navigation
+Terms
+Privacy
+Security
+Status
+Community
+Docs
+Contact
+Manage cookies
+Do not share my personal information

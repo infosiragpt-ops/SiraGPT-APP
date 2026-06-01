@@ -1,11 +1,67 @@
 'use strict';
 
-// Lazy-require optional / heavy SDK deps so this module loads even when they
-// aren't installed (fresh checkouts, partial installs, environments that only
-// use embeddings/anthropic). Mirrors the document-* analyzer "lazy require"
-// pattern (CLAUDE.md) and the r2-storage.js loadSdk() helper. The constructors
-// are only resolved on first actual call to the gateway, keeping
-// `require('./orchestration')` resilient when these deps are absent.
+// ── Per-model output-token caps ────────────────────────────────────────────
+// Adapted from Hermes Agent (MIT) providers/ max_tokens patterns:
+//   - fix(opencode-go): cap mimo-v2.5-pro max_tokens at 131 072
+//   - fix(minimax): drop stale ≤204 800 cache entries for MiniMax-M3
+//
+// These per-model limits replace the single global SIRAGPT_LLM_MAX_TOKENS
+// env-var which defaulted to 4 096 for all models — badly wrong for 128K+
+// context models.  The env-var is still honoured as the final fallback.
+//
+// Values are *output* token caps, not context window sizes.
+// Sources: official model cards + Hermes providers/ directory.
+const MODEL_TOKEN_CAPS = Object.freeze({
+  // Anthropic
+  'claude-opus-4-7':      16000,
+  'claude-sonnet-4-6':    16000,
+  'claude-haiku-4-5':     8192,
+  // Also covers OpenRouter-routed variants (anthropic/*)
+  'claude-opus-4.7':      16000,
+  'claude-sonnet-4.6':    16000,
+  'claude-haiku-4.5':     8192,
+  // OpenAI
+  'gpt-4o':               16384,
+  'gpt-4o-mini':          16384,
+  'gpt-4.1':              32768,
+  'gpt-4.1-mini':         32768,
+  'o3-mini':              65536,
+  'o3':                   100000,
+  // Google
+  'gemini-2.5-pro':       8192,
+  'gemini-2.5-flash':     8192,
+  'gemini-2.0-flash':     8192,
+  // Meta / Groq-served Llama
+  'llama-3.3-70b-versatile':            8192,
+  'llama-3.1-405b-reasoning':           16384,
+  // Mistral
+  'mistral-large-latest': 4096,
+  'mistral-small-latest': 4096,
+  // DeepSeek
+  'deepseek-reasoner':    8192,
+  'deepseek-chat':        8192,
+  // Xiaomi MiMo — hard cap enforced upstream (Hermes providers/opencode-go)
+  'mimo-v2.5-pro':        131072,
+  // MiniMax (Hermes fix: stale ≤204 800 context entries invalidated via version bump)
+  'minimax-m3':           40960,
+});
+
+/**
+ * Resolve the output max_tokens for a given model.
+ * 1. MODEL_TOKEN_CAPS exact match (case-insensitive, stripped of provider prefix).
+ * 2. SIRAGPT_LLM_MAX_TOKENS env var.
+ * 3. Hardcoded safe default of 4 096.
+ */
+function resolveMaxTokens(model = '', env = process.env) {
+  const normalised = String(model).toLowerCase().replace(/^[^/]+\//, '');
+  const cap = MODEL_TOKEN_CAPS[normalised];
+  if (cap) return cap;
+  const envCap = Number.parseInt(env.SIRAGPT_LLM_MAX_TOKENS || '0', 10);
+  return envCap > 0 ? envCap : 4096;
+}
+
+// ── Lazy-require optional / heavy SDK deps ─────────────────────────────────
+// (keeps `require('./orchestration')` resilient when deps are absent)
 let _OpenAICtor = null;
 function loadOpenAI() {
   if (_OpenAICtor) return _OpenAICtor;
@@ -148,7 +204,7 @@ class LLMGateway {
         .map(message => ({ role: message.role === 'assistant' ? 'assistant' : 'user', content: String(message.content || '') }));
       return client.messages.create({
         model,
-        max_tokens: Number.parseInt(this.env.SIRAGPT_LLM_MAX_TOKENS || '4096', 10),
+        max_tokens: resolveMaxTokens(model, this.env),
         temperature,
         system,
         messages: anthropicMessages,

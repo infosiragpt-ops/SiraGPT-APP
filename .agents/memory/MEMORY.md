@@ -5,3 +5,7 @@
 - [OAuth callback URL policy](oauth-callback-fix.md) — GOOGLE_AUTH_BASE_URL is authoritative; it short-circuits all heuristics including frontend-host rejection and stale per-flow URI secrets
 - [Console.log printf override](console-log-override.md) — backend/index.js overrides console.log joining args with space; always use template literals not %s format strings
 - [Next.js dynamic ssr:false in Server Components](nextjs-dynamic-ssr-crash.md) — ssr:false is forbidden inside Server Components; move the dynamic() call into a "use client" wrapper file.
+- [Per-model token caps](per-model-token-caps.md) — resolveMaxTokens() replaces blanket 4096 default; MODEL_TOKEN_CAPS registry in llm-gateway.js; SIRAGPT_LLM_MAX_TOKENS env var still works as override.
+- [Semantic cache model versioning](semantic-cache-versioning.md) — bump MODEL_CACHE_VERSIONS[model] to invalidate stale cache entries without Redis SCAN; version baked into sha256 hash as _v key.
+- [Two-tier cron scanner](two-tier-cron-scanner.md) — hermes-cron-scanner.js: tier1=keyword bloom, tier2=structural marker; BOTH must match to avoid false-positives from prose mentioning time.
+- [Session rewind store](session-rewind-store.md) — in-memory Map (sessionId→rewindCount); safe on restart (messages stay in DB, cursor resets to head); max 20 turns per session.
