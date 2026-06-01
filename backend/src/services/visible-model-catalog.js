@@ -22,22 +22,22 @@ const VISIBLE_TEXT_MODEL_DEFINITIONS = Object.freeze([
     aliases: ['claude-opus-4-7', 'claude-opus-4.7', 'anthropic/claude-opus-4-7'],
   },
   {
-    name: 'google/gemini-3.5-flash',
+    name: 'google/gemini-3.5',
     displayName: 'Gemini 3.5',
     provider: 'OpenRouter',
     type: 'TEXT',
     icon: 'GeminiLogo',
     description: 'Gemini 3.5 via OpenRouter para contexto largo, vision y analisis multimodal.',
-    aliases: ['gemini-3.5', 'gemini-3.5-pro', 'google/gemini-3.5-pro', 'google/gemini-3.5'],
+    aliases: ['gemini-3.5', 'gemini-3.5-pro', 'google/gemini-3.5-pro', 'google/gemini-3.5-flash'],
   },
   {
-    name: 'x-ai/grok-4.20',
+    name: 'x-ai/grok-4.2',
     displayName: 'Grok 4.2',
     provider: 'OpenRouter',
     type: 'TEXT',
     icon: 'GrokLogo',
     description: 'Grok 4.2 via OpenRouter para razonamiento, busqueda conversacional y tareas generales.',
-    aliases: ['grok-4.2', 'x-ai/grok-4.2', 'x-ai/grok-4'],
+    aliases: ['grok-4.2', 'x-ai/grok-4.20', 'x-ai/grok-4'],
   },
   {
     name: 'moonshotai/kimi-k2.6',
@@ -302,21 +302,26 @@ function curateVisibleTextModels(models = [], env = process.env) {
   for (const model of Array.isArray(models) ? models : []) {
     const name = String(model?.name || '').trim();
     if (!name) continue;
+    if (model?.isActive === false) continue;
+    if (model?.virtual === true) continue;
+    const id = String(model?.id || '').trim();
+    if (id.startsWith('__virtual_')) continue;
     byName.set(name.toLowerCase(), model);
   }
 
-  return listVisibleTextModelDefinitions(env).map((definition) => {
+  return listVisibleTextModelDefinitions(env).flatMap((definition) => {
     const candidates = [definition.name, ...(definition.aliases || [])]
       .filter(Boolean)
       .map((name) => String(name).trim().toLowerCase());
     const existing = candidates.map((name) => byName.get(name)).find(Boolean) || null;
+    if (!existing) return [];
     const { aliases, ...publicDefinition } = definition;
 
-    return {
+    return [{
       ...(existing || {}),
       id: existing?.id || virtualIdFor(definition.name),
       ...publicDefinition,
-    };
+    }];
   });
 }
 
