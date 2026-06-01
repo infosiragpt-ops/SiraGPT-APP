@@ -38,11 +38,29 @@ test('empty/whitespace allowlist is treated as no filter', () => {
   );
 });
 
-test('curateVisibleTextModels honours the allowlist and yields stable ids', () => {
+test('curateVisibleTextModels honours the allowlist and requires an admin-active row', () => {
   const env = { VISIBLE_MODELS_ALLOWLIST: 'gpt-4o-mini' };
-  const curated = curateVisibleTextModels([], env);
+
+  assert.deepStrictEqual(curateVisibleTextModels([], env), []);
+  assert.deepStrictEqual(
+    curateVisibleTextModels([
+      { id: 'disabled-mini', name: 'gpt-4o-mini', displayName: 'Disabled', provider: 'OpenAI', type: 'TEXT', isActive: false },
+    ], env),
+    [],
+  );
+  assert.deepStrictEqual(
+    curateVisibleTextModels([
+      { id: '__virtual_gpt_4o_mini__', name: 'gpt-4o-mini', displayName: 'Virtual', provider: 'OpenAI', type: 'TEXT' },
+    ], env),
+    [],
+  );
+
+  const curated = curateVisibleTextModels([
+    { id: 'admin-mini', name: 'gpt-4o-mini', displayName: 'GPT-4o Mini DB', provider: 'OpenAI', type: 'TEXT', isActive: true },
+  ], env);
   assert.strictEqual(curated.length, 1);
+  assert.strictEqual(curated[0].id, 'admin-mini');
   assert.strictEqual(curated[0].name, 'gpt-4o-mini');
-  assert.ok(curated[0].id, 'curated model must carry an id');
+  assert.ok(curated[0].id, 'curated model must carry an admin id');
   assert.strictEqual(curated[0].type, 'TEXT');
 });
