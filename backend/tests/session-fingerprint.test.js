@@ -76,6 +76,28 @@ describe('input normalization', () => {
     }), '10.0.0.9');
   });
 
+  test('extractIp prefers CF-Connecting-IP over the rotating Cloudflare edge', () => {
+    // Behind Cloudflare, x-forwarded-for/req.ip can be the CF edge IP (which
+    // rotates). CF-Connecting-IP carries the real client IP — prefer it.
+    assert.equal(extractIp({
+      headers: {
+        'cf-connecting-ip': '203.0.113.5',
+        'x-forwarded-for': '172.69.39.48',
+      },
+      ip: '172.69.39.48',
+    }), '203.0.113.5');
+    // true-client-ip is the secondary stable source.
+    assert.equal(extractIp({
+      headers: { 'true-client-ip': '203.0.113.5', 'x-forwarded-for': '172.69.39.49' },
+    }), '203.0.113.5');
+  });
+
+  test('fingerprint stays stable when only the Cloudflare edge IP changes', () => {
+    const reqA = { headers: { 'cf-connecting-ip': '203.0.113.5', 'x-forwarded-for': '172.69.39.48', 'user-agent': 'Mobile Safari' } };
+    const reqB = { headers: { 'cf-connecting-ip': '203.0.113.5', 'x-forwarded-for': '172.70.81.200', 'user-agent': 'Mobile Safari' } };
+    assert.equal(computeFingerprint(reqA), computeFingerprint(reqB));
+  });
+
   test('extractUa normalizes request header arrays', () => {
     assert.equal(extractUa({ headers: { 'user-agent': ['  Mozilla/5.0  '] } }), 'Mozilla/5.0');
   });

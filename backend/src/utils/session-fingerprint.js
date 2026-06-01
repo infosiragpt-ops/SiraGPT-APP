@@ -108,8 +108,16 @@ function reduceIp(ip) {
 
 function extractIp(req) {
   if (!req) return '';
-  const xff = req.headers && req.headers['x-forwarded-for'];
-  return normalizeIpInput(xff)
+  const headers = req.headers || {};
+  // Behind Cloudflare the leftmost X-Forwarded-For entry (and req.ip) can be
+  // a Cloudflare *edge* IP, which rotates across different /24 blocks between
+  // requests from the same user. That made the IP-class fingerprint flap and
+  // revoked otherwise-valid sessions ("Session revoked — re-authentication
+  // required" / fingerprint_mismatch). CF-Connecting-IP / True-Client-IP carry
+  // the stable, real client IP, so prefer them before falling back to XFF.
+  return normalizeIpInput(headers['cf-connecting-ip'])
+    || normalizeIpInput(headers['true-client-ip'])
+    || normalizeIpInput(headers['x-forwarded-for'])
     || normalizeIpInput(req.ip)
     || normalizeIpInput(req.socket && req.socket.remoteAddress)
     || '';
