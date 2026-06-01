@@ -32,4 +32,29 @@ describe("chat video auto-activation source contract", () => {
       "intent-routed video generation must preserve attached image file ids for image-to-video"
     )
   })
+
+  it("does not turn the primary action into Voice Studio while Video mode is waiting for a prompt", () => {
+    assert.match(
+      source,
+      /requiresPromptBeforePrimarySend[\s\S]{0,220}isVideoGenerationActive[\s\S]{0,220}chatType === 'video'/,
+      "video mode must be recognized as a prompt-required primary-send state"
+    )
+
+    const needsPromptBlocks = source.match(/const needsPrompt = requiresPromptBeforePrimarySend && !hasText/g) || []
+    assert.equal(
+      needsPromptBlocks.length,
+      2,
+      "both initial and in-chat composers should derive a needsPrompt state"
+    )
+
+    const arrowAffordanceBlocks = source.match(/const Icon = canSend \|\| needsPrompt \? ArrowUp : AudioLines/g) || []
+    assert.equal(
+      arrowAffordanceBlocks.length,
+      2,
+      "both initial and in-chat composers should keep the arrow send affordance for empty Video mode instead of showing Voice Studio"
+    )
+
+    const disabledBlocks = source.match(/disabled=\{\(canSend && \(isCurrentChatLoading \|\| busy\)\) \|\| needsPrompt\}/g) || []
+    assert.equal(disabledBlocks.length, 2, "empty prompt-driven video sends should be disabled in both composer variants")
+  })
 })

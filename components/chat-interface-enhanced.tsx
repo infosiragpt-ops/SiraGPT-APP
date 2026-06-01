@@ -8163,6 +8163,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     || chatType === 'thesis'
   );
   const isMediaToolActive = isImageGenerationActive || isVoiceGenerationActive || isMusicGenerationActive || isVideoGenerationActive;
+  const requiresPromptBeforePrimarySend =
+    isImageGenerationActive ||
+    isVideoGenerationActive ||
+    isMusicGenerationActive ||
+    chatType === 'image' ||
+    chatType === 'video';
   const isSendingForCurrentChat = isSending && sendingChatId === currentChatId;
   const isStopButtonVisible = isCurrentChatLoading || isCurrentChatStreaming || (pendingStop && isCurrentChatStreaming) || isSendingForCurrentChat || isCurrentChatLocalJobBusy || isGeneratingImage || isGeneratingVideo || isGeneratingPPT;
 
@@ -9275,20 +9281,28 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           {!isStopButtonVisible && (() => {
                             const hasText = input.trim().length > 0
                             const hasAttachment = uploadedFiles.length > 0
-                            const canSend = hasText || hasAttachment
+                            const needsPrompt = requiresPromptBeforePrimarySend && !hasText
+                            const canSend = requiresPromptBeforePrimarySend ? hasText : (hasText || hasAttachment)
                             const busy = isCurrentChatLocalJobBusy || isUploading
-                            // When the user has typed → Send. When idle → open Voice Studio.
+                            // In prompt-driven media modes (Video/Image/Music), an empty
+                            // composer should not open Voice Studio. Keep the primary CTA
+                            // as the send/create affordance and disable it until the user
+                            // writes the generation prompt.
                             const action = canSend
                               ? handleSend
                               : openGrokVoicePanel
-                            const label = canSend ? 'Enviar (⏎)' : 'Modo de voz'
-                            const Icon = canSend ? ArrowUp : AudioLines
+                            const label = canSend
+                              ? 'Enviar (⏎)'
+                              : needsPrompt
+                                ? 'Describe lo que quieres crear'
+                                : 'Modo de voz'
+                            const Icon = canSend || needsPrompt ? ArrowUp : AudioLines
                             return (
                               <Tooltip>
                                 <TooltipTrigger asChild>
                                   <Button
                                     onClick={action}
-                                    disabled={canSend && (isCurrentChatLoading || busy)}
+                                    disabled={(canSend && (isCurrentChatLoading || busy)) || needsPrompt}
                                     size="icon"
                                     aria-label={label}
                                     title={label}
@@ -9762,19 +9776,24 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               {!isStopButtonVisible && (() => {
                                 const hasText = input.trim().length > 0
                                 const hasAttachment = uploadedFiles.length > 0
-                                const canSend = hasText || hasAttachment
+                                const needsPrompt = requiresPromptBeforePrimarySend && !hasText
+                                const canSend = requiresPromptBeforePrimarySend ? hasText : (hasText || hasAttachment)
                                 const busy = isCurrentChatLocalJobBusy || isUploading
                                 const action = canSend
                                   ? handleSend
                                   : openGrokVoicePanel
-                                const label = canSend ? 'Enviar (⏎)' : 'Modo de voz'
-                                const Icon = canSend ? ArrowUp : AudioLines
+                                const label = canSend
+                                  ? 'Enviar (⏎)'
+                                  : needsPrompt
+                                    ? 'Describe lo que quieres crear'
+                                    : 'Modo de voz'
+                                const Icon = canSend || needsPrompt ? ArrowUp : AudioLines
                                 return (
                                   <Tooltip>
                                     <TooltipTrigger asChild>
                                       <Button
                                         onClick={action}
-                                        disabled={canSend && (isCurrentChatLoading || busy)}
+                                        disabled={(canSend && (isCurrentChatLoading || busy)) || needsPrompt}
                                         size="icon"
                                         aria-label={label}
                                         title={label}
