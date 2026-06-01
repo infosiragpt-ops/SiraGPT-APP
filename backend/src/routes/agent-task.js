@@ -645,7 +645,7 @@ router.post(
       });
     }
     const clientFileMetadata = normalizeClientMetadata(req.body.fileMetadata, fileIds);
-    const executionProfile = buildExecutionProfile({ goal: agentGoal, fileIds });
+    const executionProfile = buildExecutionProfile({ goal: agentGoal, fileIds, fileMetadata: clientFileMetadata });
     const intentAlignmentProfile = buildUserIntentAlignmentProfile({ request: agentGoal, fileIds });
     const universalTaskContract = buildUniversalTaskContract({
       rawUserRequest: agentGoal,
@@ -1138,7 +1138,7 @@ router.post(
           uploadedFileContext
         ),
         ctx: toolCtx,
-        finalizeGuard: ({ steps }) => validateFinalize(finalizeProfile, steps),
+        finalizeGuard: ({ steps, unavailableTools }) => validateFinalize(finalizeProfile, steps, { unavailableTools }),
         onStepStart: (step) => {
           // react-agent gives us THE assistant turn (thought + tool
           // invocations). We turn the `thought` line into a

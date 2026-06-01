@@ -37,10 +37,40 @@ function unique(items) {
   return Array.from(new Set(items.filter(Boolean)));
 }
 
-function buildExecutionProfile({ goal, fileIds = [] } = {}) {
+const IMAGE_FILE_EXT_RE = /\.(?:png|jpe?g|gif|webp|bmp|tiff?|heic|heif|avif)$/i;
+
+/**
+ * Classify attachments into image vs document buckets from client/file
+ * metadata. Used to decide whether the document-intelligence required-tool
+ * gate applies: a chat image (photo/screenshot) is consumed by the
+ * multimodal model directly and must NOT force docintel_analyze/rag_retrieve,
+ * which fail on images and trap the agent in a retry loop.
+ */
+function classifyAttachmentKinds(fileMetadata = []) {
+  let imageCount = 0;
+  let documentCount = 0;
+  for (const file of Array.isArray(fileMetadata) ? fileMetadata : []) {
+    if (!file || typeof file !== 'object') continue;
+    const mime = String(file.mimeType || file.type || file.contentType || '').toLowerCase();
+    const name = String(file.name || file.originalName || file.filename || file.path || '');
+    const isImage = mime.startsWith('image/') || (!mime.startsWith('application/') && IMAGE_FILE_EXT_RE.test(name));
+    if (isImage) imageCount += 1;
+    else documentCount += 1;
+  }
+  return { imageCount, documentCount, total: imageCount + documentCount };
+}
+
+function buildExecutionProfile({ goal, fileIds = [], fileMetadata = [] } = {}) {
   const rawGoal = String(goal || '');
   const normalized = normalize(rawGoal);
   const hasFiles = Array.isArray(fileIds) && fileIds.length > 0;
+  const attachmentKinds = classifyAttachmentKinds(fileMetadata);
+  // We only relax the document gate when we POSITIVELY know every attachment
+  // is an image. When metadata is missing (older callers), behaviour is
+  // unchanged — hasFiles still drives needsPrivateContext.
+  const onlyImageAttachments =
+    attachmentKinds.total > 0 && attachmentKinds.documentCount === 0 && attachmentKinds.imageCount > 0;
+  const mentionsPrivateFiles = PATTERNS.privateFiles.test(rawGoal) || PATTERNS.privateFiles.test(normalized);
   const mediaIntent = detectMediaIntent(rawGoal);
   const needsMedia = !!(mediaIntent && mediaIntent.kind && mediaIntent.tool && mediaIntent.confidence === 'high');
   const plainTranscription =
@@ -58,7 +88,12 @@ function buildExecutionProfile({ goal, fileIds = [] } = {}) {
   const capabilities = {
     needsResearch: PATTERNS.research.test(rawGoal) || PATTERNS.research.test(normalized),
     needsDocument: documentRequested && !plainTranscription,
-    needsPrivateContext: hasFiles || PATTERNS.privateFiles.test(rawGoal) || PATTERNS.privateFiles.test(normalized),
+    // Image-only attachments are answered by the multimodal model directly
+    // (vision); they must NOT trigger the document-intelligence gate, which
+    // fails on images and dead-ends the agent. Explicit private-file wording
+    // ("según el documento adjunto") still forces the gate even with an image,
+    // because the user may have photographed a document for OCR.
+    needsPrivateContext: (hasFiles && !onlyImageAttachments) || mentionsPrivateFiles,
     needsCodeOrRepair: PATTERNS.code.test(rawGoal) || PATTERNS.code.test(normalized),
     needsComputation: PATTERNS.computation.test(rawGoal) || PATTERNS.computation.test(normalized),
     strictEvidence: PATTERNS.strictEvidence.test(rawGoal) || PATTERNS.strictEvidence.test(normalized),
@@ -124,18 +159,31 @@ function successfulToolCalls(steps = []) {
   return counts;
 }
 
-function validateFinalize(profile, steps = []) {
+function validateFinalize(profile, steps = [], options = {}) {
   const counts = successfulToolCalls(steps);
+  // Tools the agent loop has declared unavailable (they exhausted their
+  // consecutive-error budget). A required-but-unavailable tool must not block
+  // finalize forever — otherwise the whole task dead-ends. We waive it and let
+  // the agent answer with whatever it could gather. Backward-compatible: with
+  // no options the set is empty and behaviour is identical to before.
+  const unavailableTools = new Set(
+    (Array.isArray(options?.unavailableTools) ? options.unavailableTools : []).map((tool) => String(tool))
+  );
   const missingTools = [];
+  const waivedTools = [];
   for (const tool of profile.requiredTools || []) {
     const min = profile.minimumToolCalls?.[tool] || 1;
-    if ((counts.get(tool) || 0) < min) missingTools.push(tool);
+    if ((counts.get(tool) || 0) < min) {
+      if (unavailableTools.has(tool)) waivedTools.push(tool);
+      else missingTools.push(tool);
+    }
   }
 
   if (missingTools.length === 0) {
     return {
       ok: true,
       missingTools: [],
+      waivedTools,
       requiredTools: profile.requiredTools || [],
       successfulTools: Object.fromEntries(counts.entries()),
     };
@@ -144,6 +192,7 @@ function validateFinalize(profile, steps = []) {
   return {
     ok: false,
     missingTools,
+    waivedTools,
     requiredTools: profile.requiredTools || [],
     successfulTools: Object.fromEntries(counts.entries()),
     message: `Finalization blocked by siraGPT execution gates. Missing required tools: ${missingTools.join(', ')}.`,
@@ -175,6 +224,7 @@ module.exports = {
   PROFILE_VERSION,
   buildExecutionProfile,
   buildExecutionProfilePrompt,
+  classifyAttachmentKinds,
   successfulToolCalls,
   validateFinalize,
 };

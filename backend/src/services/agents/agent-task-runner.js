@@ -806,7 +806,7 @@ async function runAgentTaskJob(payload = {}, job = null) {
   });
   const runtimeModelProfile = normalizeAgentRuntimeModel(model);
 
-  const executionProfile = buildExecutionProfile({ goal, fileIds: files });
+  const executionProfile = buildExecutionProfile({ goal, fileIds: files, fileMetadata });
   const intentAlignmentProfile = buildUserIntentAlignmentProfile({ request: goal, fileIds: files });
   // Attribution telemetry — runs the executive summary on the goal so we
   // can record what the system thought the user wanted before any step
@@ -1734,7 +1734,7 @@ async function runAgentTaskJob(payload = {}, job = null) {
         uploadedFileContext
       ),
       ctx: toolCtx,
-      finalizeGuard: ({ steps }) => validateFinalize(finalizeProfile, steps),
+      finalizeGuard: ({ steps, unavailableTools }) => validateFinalize(finalizeProfile, steps, { unavailableTools }),
       onStepStart: (step) => {
         stepIdCounter += 1;
         currentStepId = `s${stepIdCounter}`;

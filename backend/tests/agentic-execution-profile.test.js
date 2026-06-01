@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const {
   buildExecutionProfile,
   buildExecutionProfilePrompt,
+  classifyAttachmentKinds,
   validateFinalize,
 } = require('../src/services/agents/agentic-execution-profile');
 
@@ -98,6 +99,95 @@ test('agentic execution profile: blocks finalize until required tools have succe
     { actions: [{ tool: 'verify_artifact', observation: { ok: true, validation: { passed: true } } }] },
   ]);
   assert.equal(allowed.ok, true);
+});
+
+test('classifyAttachmentKinds: separates images from documents by mime and extension', () => {
+  const kinds = classifyAttachmentKinds([
+    { id: 'a', mimeType: 'image/png' },
+    { id: 'b', name: 'photo.jpg' },
+    { id: 'c', mimeType: 'application/pdf' },
+    { id: 'd', type: 'image/webp' },
+  ]);
+  assert.equal(kinds.imageCount, 3);
+  assert.equal(kinds.documentCount, 1);
+  assert.equal(kinds.total, 4);
+});
+
+test('agentic execution profile: image-only attachment does NOT force the document-intelligence gate', () => {
+  // The reported bug: a photo of a math problem + "resolver" in a thread that
+  // earlier had a document was force-routed through docintel_retrieve, which
+  // failed 5 times and dead-ended. Image attachments are vision content and
+  // must not require docintel_analyze/rag_retrieve.
+  const profile = buildExecutionProfile({
+    goal: 'resolver',
+    fileIds: ['file_img'],
+    fileMetadata: [{ id: 'file_img', mimeType: 'image/png', name: 'math.png' }],
+  });
+
+  assert.equal(profile.capabilities.needsPrivateContext, false);
+  assert.ok(!profile.requiredTools.includes('docintel_analyze'));
+  assert.ok(!profile.requiredTools.includes('rag_retrieve'));
+
+  // With no document gate, a plain finalize is allowed (vision answers it).
+  const allowed = validateFinalize(profile, [
+    { actions: [{ tool: 'finalize', observation: { answer: '10.375' } }] },
+  ]);
+  assert.equal(allowed.ok, true);
+});
+
+test('agentic execution profile: document attachment still forces docintel + rag (no regression)', () => {
+  const profile = buildExecutionProfile({
+    goal: 'resume esto',
+    fileIds: ['file_doc'],
+    fileMetadata: [{ id: 'file_doc', mimeType: 'application/pdf', name: 'tesis.pdf' }],
+  });
+  assert.equal(profile.capabilities.needsPrivateContext, true);
+  assert.ok(profile.requiredTools.includes('docintel_analyze'));
+  assert.ok(profile.requiredTools.includes('rag_retrieve'));
+});
+
+test('agentic execution profile: image + explicit private-file wording keeps the gate (photo of a doc)', () => {
+  const profile = buildExecutionProfile({
+    goal: 'segun el documento adjunto, que dice el primer parrafo',
+    fileIds: ['file_img'],
+    fileMetadata: [{ id: 'file_img', mimeType: 'image/jpeg', name: 'scan.jpg' }],
+  });
+  assert.equal(profile.capabilities.needsPrivateContext, true);
+  assert.ok(profile.requiredTools.includes('docintel_analyze'));
+});
+
+test('agentic execution profile: missing metadata preserves legacy hasFiles behaviour', () => {
+  const profile = buildExecutionProfile({ goal: 'resolver', fileIds: ['file_x'] });
+  assert.equal(profile.capabilities.needsPrivateContext, true);
+  assert.ok(profile.requiredTools.includes('docintel_analyze'));
+});
+
+test('validateFinalize: waives a required tool that the agent declared unavailable', () => {
+  const profile = buildExecutionProfile({
+    goal: 'resume este documento cargado',
+    fileIds: ['file_1'],
+  });
+  assert.ok(profile.requiredTools.includes('docintel_analyze'));
+
+  // No tools succeeded, but docintel_analyze is unavailable (exhausted its
+  // error budget in the agent loop) → it must be waived so finalize is allowed
+  // instead of dead-ending the task.
+  const result = validateFinalize(profile, [], {
+    unavailableTools: ['docintel_analyze', 'rag_retrieve'],
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.waivedTools.sort(), ['docintel_analyze', 'rag_retrieve']);
+});
+
+test('validateFinalize: still blocks when a non-waived required tool is missing', () => {
+  const profile = buildExecutionProfile({
+    goal: 'resume este documento cargado',
+    fileIds: ['file_1'],
+  });
+  const result = validateFinalize(profile, [], { unavailableTools: ['docintel_analyze'] });
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.missingTools, ['rag_retrieve']);
+  assert.deepEqual(result.waivedTools, ['docintel_analyze']);
 });
 
 test('agentic execution profile: prompt exposes deterministic gates without user-specific content leakage', () => {

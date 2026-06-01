@@ -221,7 +221,15 @@ async function run(openai, opts) {
   // Prevent infinite loops when tools fail silently and the model
   // keeps making the same call. Track tool error frequency per step.
   const toolErrorBudget = new Map();
-  const MAX_TOOL_ERRORS = 5; // consecutive errors → abort
+  const MAX_TOOL_ERRORS = 5; // consecutive errors → declare the tool unavailable
+  // Tools that burned through their error budget. Instead of hard-aborting
+  // the whole task (which dead-ends the user with "tool X failed N times in a
+  // row"), we mark the tool unavailable, tell the model to answer without it,
+  // and let it finalize from whatever it has. The finalize guard is told too
+  // (via unavailableTools) so a required-but-broken tool stops blocking
+  // termination forever. This keeps a single chat thread usable when one tool
+  // (e.g. docintel_retrieve on an image or a text-less document) keeps failing.
+  const exhaustedTools = new Set();
 
   for (let step = 0; step < maxSteps; step++) {
     if (ctx?.signal?.aborted) {
@@ -283,6 +291,7 @@ async function run(openai, opts) {
             confidence: null,
             steps: steps.concat([plainStepRecord]),
             currentStep: plainStepRecord,
+            unavailableTools: Array.from(exhaustedTools),
             ctx,
           });
         } catch (err) {
@@ -338,21 +347,50 @@ async function run(openai, opts) {
       }
 
       const toolName = call.function?.name;
+
+      // A tool that already exhausted its error budget is unavailable: do not
+      // re-invoke it (it would just fail again, wasting latency/credits).
+      // Feed back a clear instruction so the model pivots to another tool or
+      // finalizes with what it has.
+      if (toolName !== 'finalize' && exhaustedTools.has(toolName)) {
+        const observation = {
+          error: 'tool_unavailable',
+          tool: toolName,
+          message: `The tool "${toolName}" is unavailable for this task after repeated failures. Do not call it again. Answer the user directly with the information you already have (use other tools or your own reasoning), then call finalize.`,
+        };
+        stepRecord.actions.push({ tool: toolName, args: call.function?.arguments || '', observation });
+        messages.push({
+          role: 'tool',
+          tool_call_id: call.id,
+          content: JSON.stringify(observation).slice(0, 8000),
+        });
+        continue;
+      }
+
       const dispatch = await dispatchTool(registry, toolName, call.function?.arguments, ctx);
 
       let observation = dispatch.error
         ? { error: dispatch.error }
         : dispatch.result;
 
-      // Track consecutive tool errors per tool to prevent infinite loops
+      // Track consecutive tool errors per tool to prevent infinite loops.
       if (dispatch.error) {
         const errCount = (toolErrorBudget.get(toolName) || 0) + 1;
         toolErrorBudget.set(toolName, errCount);
-        if (errCount >= MAX_TOOL_ERRORS) {
-          stoppedReason = `tool_error_limit:${toolName}`;
-          finalAnswer = `No se pudo completar la tarea: la herramienta ${toolName} falló ${errCount} veces consecutivas.`;
-          finalized = true;
-          break;
+        if (errCount >= MAX_TOOL_ERRORS && toolName !== 'finalize') {
+          // Degrade gracefully instead of dead-ending the task: declare the
+          // tool unavailable and let the model finalize from what it has. The
+          // finalize guard waives this tool (see unavailableTools below) so a
+          // required-but-broken tool no longer blocks termination.
+          exhaustedTools.add(toolName);
+          stoppedReason = `tool_unavailable:${toolName}`;
+          observation = {
+            error: 'tool_unavailable',
+            tool: toolName,
+            failures: errCount,
+            lastError: dispatch.error,
+            message: `The tool "${toolName}" failed ${errCount} times in a row and is now unavailable. Stop calling it. Provide the best possible answer to the user directly (use other tools or your own reasoning), then call finalize.`,
+          };
         }
       } else {
         toolErrorBudget.delete(toolName);
@@ -368,6 +406,7 @@ async function run(openai, opts) {
             confidence: dispatch.result?.confidence || null,
             steps: proposedSteps,
             currentStep: stepRecord,
+            unavailableTools: Array.from(exhaustedTools),
             ctx,
           });
         } catch (err) {
@@ -416,7 +455,19 @@ async function run(openai, opts) {
     if (finalized) break;
   }
 
-  return { finalAnswer, steps, stoppedReason };
+  // Safety net: if the loop ended without a real finalize but we had to
+  // disable one or more tools, never return an empty/null answer. Hand back a
+  // short, honest degraded answer so the caller can still surface something
+  // useful instead of the old hard "tool X failed N times" dead-end.
+  if ((finalAnswer == null || String(finalAnswer).trim() === '') && exhaustedTools.size > 0) {
+    const toolList = Array.from(exhaustedTools).join(', ');
+    finalAnswer = `No pude usar ${toolList} en esta tarea (falló de forma repetida). Te respondo con la información disponible; si necesitas más precisión, vuelve a intentarlo o reformula la solicitud.`;
+    if (!stoppedReason || stoppedReason === 'max_steps') {
+      stoppedReason = `degraded_no_finalize:${toolList}`;
+    }
+  }
+
+  return { finalAnswer, steps, stoppedReason, exhaustedTools: Array.from(exhaustedTools) };
 }
 
 module.exports = { run, DEFAULT_MAX_STEPS, DEFAULT_MAX_RUNTIME_MS, SYSTEM_PROMPT };

@@ -471,7 +471,7 @@ async function runAgenticChat(opts) {
     initialToolChoice,
     ctx: { ...toolContext, signal, onEvent },
     finalizeGuard: executionProfile.requiredTools.length
-      ? ({ steps }) => validateFinalize(executionProfile, steps)
+      ? ({ steps, unavailableTools }) => validateFinalize(executionProfile, steps, { unavailableTools })
       : null,
     onStepStart: async (stepRec) => {
       stepCounter += 1;
