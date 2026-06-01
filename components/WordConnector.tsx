@@ -96,6 +96,7 @@ import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 // });
 
 
+// @ts-ignore tiptap dual-version resolution conflict
 const FontSize = Extension.create({
     name: 'fontSize',
     addOptions() {
@@ -118,10 +119,13 @@ const FontSize = Extension.create({
             },
         }];
     },
+    // @ts-ignore tiptap dual-version resolution conflict
     addCommands() {
         return {
-            setFontSize: fontSize => ({ chain }) => chain().setMark('textStyle', { fontSize }).run(),
-            unsetFontSize: () => ({ chain }) => chain().setMark('textStyle', { fontSize: null }).removeEmptyTextStyle().run(),
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            setFontSize: (fontSize: string) => ({ chain }: { chain: any }) => chain().setMark('textStyle', { fontSize }).run(),
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            unsetFontSize: () => ({ chain }: { chain: any }) => chain().setMark('textStyle', { fontSize: null }).removeEmptyTextStyle().run(),
         };
     },
 });
@@ -417,6 +421,7 @@ export const WordConnector = React.forwardRef<{ updateContent: (content: string)
         const isBusy = isGenerating || isGeneratingExternal;
 
         // Initialize Tiptap editor with all extensions
+        // @ts-ignore tiptap dual-version resolution conflict
         const editor = useEditor({
             immediatelyRender: false,
             extensions: [
