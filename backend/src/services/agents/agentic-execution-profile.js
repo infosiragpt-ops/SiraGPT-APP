@@ -14,13 +14,14 @@ const { detectMediaIntent } = require('./media-intent');
 
 const PATTERNS = {
   research: /\b(investiga(?:r|cion)?|research|busca(?:r)?|recopila(?:r)?|fuentes|citas|referencias|art[ií]culos?|papers?|literatura|acad[eé]mic[oa]s?|cient[ií]fic[oa]s?|mercado|benchmark|estado del arte|revision sistem[aá]tica|metaan[aá]lisis|scielo|redalyc|dialnet|openalex|crossref|pubmed|doi|semantic scholar|doaj|scopus|web of science|wos)\b/i,
-  document: /\b(docx|xlsx|pptx|word|excel|power\s*point|powerpoint|pdf\b|csv\b|markdown|html\b|informe|reporte|presentaci[oó]n|diapositivas|slides|hoja de c[aá]lculo|spreadsheet|archivo|documento|matriz|descargar|exporta(?:r|me)?)\b/i,
+  document: /\b(docx|xlsx|pptx?|word|excel|power\s*point|powerpoint|pdf\b|csv\b|markdown|html\b|informe|reporte|presentaci[oó]n|diapositivas|slides|hoja de c[aá]lculo|spreadsheet|archivo|documento|matriz|descargar|exporta(?:r|me)?)\b/i,
   privateFiles: /\b(adjunt[oa]s?|archivo(?:s)? cargad[oa]s?|documento(?:s)? cargad[oa]s?|seg[uú]n (mis|el) archivo|seg[uú]n (mis|el) documento|este documento|esta tesis|pdf cargado|word cargado|docx cargado|mis archivos|mi proyecto)\b/i,
   code: /\b(c[oó]digo|code|programa|script|funci[oó]n|clase|debug|bug|corrige(?:r)?|repara(?:r)?|test(?:s)?|prueba(?:s)?|unit test|typescript|javascript|python|react|next\.?js|backend|frontend|web app|autocorrige|auto corrige)\b/i,
   computation: /\b(calcula(?:r)?|analiza(?:r)?|procesa(?:r)?|limpia(?:r)?|estad[ií]stica|cronbach|spearman|anova|regresi[oó]n|correlaci[oó]n|likert|dataset|csv|datos|tabla|f[oó]rmula|matriz|integral|derivada|probabilidad)\b/i,
   strictEvidence: /\b(100%|extremadamente preciso|precisi[oó]n|verifica(?:r)?|validar|reales|doi|open access|acceso abierto|20|30|40|50|100|miles|202[0-9]|art[ií]culos cient[ií]ficos)\b/i,
   transcription: /\b(transcrib(?:e|ir|eme|irme|elo|elo|alo|al[oó]|irlo)?|transcripci[oó]n|transcript|transcribe)\b/i,
-  explicitTranscriptionArtifact: /\b(?:en|como|a|formato)\s+(?:un|una|el|la)?\s*(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|csv|markdown|html|archivo|documento)\b|\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|exporta(?:r|me)?|descarga(?:r|me)?|prepara(?:r|me)?)\b.*\b(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|csv|markdown|html)\b/i,
+  explicitTranscriptionArtifact: /\b(?:en|como|a|formato)\s+(?:un|una|el|la)?\s*(?:word|docx|pdf|excel|xlsx|pptx?|power\s*point|powerpoint|csv|markdown|html|archivo|documento)\b|\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|exporta(?:r|me)?|descarga(?:r|me)?|prepara(?:r|me)?)\b.*\b(?:word|docx|pdf|excel|xlsx|pptx?|power\s*point|powerpoint|csv|markdown|html)\b/i,
+  explicitDeliverable: /\b(?:en|como|a|formato)\s+(?:un|una|el|la)?\s*(?:word|docx|pdf|excel|xlsx|pptx?|power\s*point|powerpoint|csv|markdown|html)\b|\bdame\s+(?:un|una|el|la)?\s*(?:word|docx|pdf|excel|xlsx|pptx?|power\s*point|powerpoint|csv|markdown|html)\b|\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|exporta(?:r|me)?|descarga(?:r|me)?|prepara(?:r|me)?|elabora(?:r|me)?|redacta(?:r|me)?|arma(?:r|me)?|construye(?:r|me)?)\b[^.?!]{0,140}\b(?:word|docx|pdf|excel|xlsx|pptx?|power\s*point|powerpoint|csv|markdown|html|archivo|documento|informe|reporte|presentaci[oó]n)\b/i,
 };
 
 function normalize(text) {
@@ -45,7 +46,15 @@ function buildExecutionProfile({ goal, fileIds = [] } = {}) {
   const plainTranscription =
     (PATTERNS.transcription.test(rawGoal) || PATTERNS.transcription.test(normalized))
     && !(PATTERNS.explicitTranscriptionArtifact.test(rawGoal) || PATTERNS.explicitTranscriptionArtifact.test(normalized));
-  const documentRequested = PATTERNS.document.test(rawGoal) || PATTERNS.document.test(normalized);
+  const documentMentioned = PATTERNS.document.test(rawGoal) || PATTERNS.document.test(normalized);
+  const explicitDeliverableRequested = PATTERNS.explicitDeliverable.test(rawGoal) || PATTERNS.explicitDeliverable.test(normalized);
+  const mentionsAttachedPrivateFile = hasFiles && (
+    PATTERNS.privateFiles.test(rawGoal)
+    || PATTERNS.privateFiles.test(normalized)
+    || /\b(?:este|esta|ese|esa|el|la|mi|mis|del|de\s+la)\s+(?:word|documento|archivo|adjunto|docx?|pdf|excel|xlsx|power\s*point|powerpoint|pptx?)\b/i.test(rawGoal)
+    || /\b(?:word|documento|archivo|adjunto|docx?|pdf|excel|xlsx|pptx?)\s+(?:adjunto|subido|cargado|anterior)\b/i.test(rawGoal)
+  );
+  const documentRequested = documentMentioned && !(mentionsAttachedPrivateFile && !explicitDeliverableRequested);
   const capabilities = {
     needsResearch: PATTERNS.research.test(rawGoal) || PATTERNS.research.test(normalized),
     needsDocument: documentRequested && !plainTranscription,
@@ -65,8 +74,8 @@ function buildExecutionProfile({ goal, fileIds = [] } = {}) {
   const qualityGates = [];
 
   if (capabilities.needsPrivateContext) {
-    requiredTools.push('rag_retrieve');
-    qualityGates.push('Retrieve uploaded/project context before answering about private files.');
+    requiredTools.push('docintel_analyze', 'rag_retrieve');
+    qualityGates.push('Analyze uploaded files and retrieve private context before answering about private files.');
   }
   if (capabilities.needsResearch) {
     requiredTools.push('web_search');

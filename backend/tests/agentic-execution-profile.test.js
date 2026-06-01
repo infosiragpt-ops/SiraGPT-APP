@@ -19,14 +19,21 @@ test('agentic execution profile: requires search and document verification for a
   assert.equal(profile.minimumToolCalls.web_search, 2);
 });
 
-test('agentic execution profile: requires RAG for uploaded private context', () => {
+test('agentic execution profile: requires document intelligence and RAG for uploaded private context', () => {
   const profile = buildExecutionProfile({
     goal: 'Dame un resumen de este documento cargado',
     fileIds: ['file_1'],
   });
 
   assert.equal(profile.capabilities.needsPrivateContext, true);
+  assert.ok(profile.requiredTools.includes('docintel_analyze'));
   assert.ok(profile.requiredTools.includes('rag_retrieve'));
+
+  const blocked = validateFinalize(profile, [
+    { actions: [{ tool: 'docintel_analyze', observation: { ok: true } }] },
+  ]);
+  assert.equal(blocked.ok, false);
+  assert.deepEqual(blocked.missingTools, ['rag_retrieve']);
 });
 
 test('agentic execution profile: plain transcription does not force document generation', () => {
@@ -38,6 +45,7 @@ test('agentic execution profile: plain transcription does not force document gen
   assert.equal(profile.capabilities.plainTranscription, true);
   assert.equal(profile.capabilities.needsPrivateContext, true);
   assert.equal(profile.capabilities.needsDocument, false);
+  assert.ok(profile.requiredTools.includes('docintel_analyze'));
   assert.ok(profile.requiredTools.includes('rag_retrieve'));
   assert.ok(!profile.requiredTools.includes('create_document'));
   assert.ok(!profile.requiredTools.includes('verify_artifact'));

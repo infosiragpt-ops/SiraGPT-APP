@@ -415,6 +415,9 @@ export function shouldAutoActivateVideoGeneration(prompt: string): boolean {
 const CONTEXT_FOLLOWUP_RE =
   /\b(?:eso|esto|aquello|lo anterior|anterior|mismo|misma|tambien|también|ahora|despues|después|luego|ademas|además|hazlo|hacelo|con eso|usa eso|usalo|úsalo|en base a eso|basado en eso|convierte(?:lo)?|pasalo|pásalo|exportalo|expórtalo)\b/i
 
+const NON_CREATION_MEDIA_ADVICE_RE =
+  /\b(?:qu[eé]|cu[aá]l(?:es)?|recomienda(?:s|me)?|sugiere(?:s|me)?|aconseja(?:s|me)?|mejor(?:es)?)\b[^.?!]{0,120}\b(?:videos?|m[uú]sica|canci[oó]n(?:es)?|audios?)\b|\b(?:videos?|m[uú]sica|canci[oó]n(?:es)?|audios?)\b[^.?!]{0,120}\b(?:recomienda(?:s|me)?|sugiere(?:s|me)?|aconseja(?:s|me)?|mejor(?:es)?)\b/i
+
 const getMessageText = (message: any): string => {
   const content = message?.content
   if (typeof content === 'string') return content
@@ -584,8 +587,16 @@ export function buildIntentAttributionGraph(
   let inferredIntent: ChatIntent | null = null
   let confidence = 0
 
-  if (isFollowup && currentIntent && historyIntent) {
-    if (currentIntent === 'doc' && ['web_search', 'math', 'viz', 'agent_task'].includes(historyIntent)) {
+  if (hasDocumentContext && shouldAnswerFromExistingDocument(prompt, conversationHistory)) {
+    inferredIntent = 'agent_task'
+    confidence = 0.9
+    rationale.push('Uploaded-document question requires durable agent execution with private-context retrieval before answering.')
+  } else if (isFollowup && currentIntent && historyIntent) {
+    if (hasDocumentContext && shouldAnswerFromExistingDocument(prompt, conversationHistory)) {
+      inferredIntent = 'agent_task'
+      confidence = 0.9
+      rationale.push('Follow-up asks about an uploaded document; durable agent must retrieve private context before answering.')
+    } else if (currentIntent === 'doc' && ['web_search', 'math', 'viz', 'agent_task'].includes(historyIntent)) {
       inferredIntent = 'agent_task'
       confidence = 0.88
       rationale.push('Follow-up asks for a file while prior context contains research, computation, or visualization work.')
@@ -611,9 +622,9 @@ export function buildIntentAttributionGraph(
     confidence = 0.7
     rationale.push('Spreadsheet attachment plus data-work wording implies computation/analysis.')
   } else if (!currentIntent && hasDocumentContext && DOCUMENT_UNDERSTANDING_RE.test(normalized) && !OUTPUT_FORMAT_REQUEST_RE.test(normalized)) {
-    inferredIntent = 'text'
-    confidence = 0.82
-    rationale.push('Document attachment plus understanding wording implies document chat, not new file generation.')
+    inferredIntent = 'agent_task'
+    confidence = 0.84
+    rationale.push('Document attachment plus understanding wording implies agentic document chat with private-context retrieval.')
   } else if (currentIntent) {
     inferredIntent = normalizeRoutingIntent(currentIntent)
     confidence = currentIntent === 'agent_task' ? 0.86 : 0.8
@@ -693,7 +704,11 @@ export function shouldRouteTextPromptThroughAgenticRuntime(prompt: string, files
       && DOCUMENT_UNDERSTANDING_RE.test(normalized)
       && !OUTPUT_FORMAT_REQUEST_RE.test(normalized)
     ) {
-      return false
+      // Uploaded-document Q&A must run through the durable agent, not
+      // simple chat. The agent is what can retrieve private context,
+      // preserve the task id, recover from stream cuts, and finalize with
+      // evidence instead of guessing from the model's memory.
+      return true
     }
     return true
   }
@@ -721,6 +736,14 @@ export function shouldUseFastTextRoute(prompt: string): boolean {
   if (!normalized) return true
   if (GOAL_COMMAND_RE.test(prompt)) return false
   if (isLightweightConversationalPrompt(normalized)) return true
+  if (
+    NON_CREATION_MEDIA_ADVICE_RE.test(normalized)
+    && !ROUTING_PATTERNS.video.test(normalized)
+    && !ROUTING_PATTERNS.musicGeneration.test(normalized)
+    && !ROUTING_PATTERNS.voiceGeneration.test(normalized)
+  ) {
+    return true
+  }
 
   const hasExplicitWorkIntent = [
     ROUTING_PATTERNS.gmail,
@@ -933,7 +956,7 @@ export class AIService {
     }
 
     if (shouldAnswerFromExistingDocument(prompt, conversationHistory)) {
-      return 'text';
+      return 'agent_task';
     }
 
     const attributionGraph = buildIntentAttributionGraph(prompt, conversationHistory)
@@ -951,7 +974,7 @@ export class AIService {
     const semanticIntent = await this.classifyIntentViaSemanticRouter(prompt, conversationHistory, signal);
     if (semanticIntent) {
       if (semanticIntent === 'doc' && shouldAnswerFromExistingDocument(prompt, conversationHistory)) {
-        return 'text';
+        return 'agent_task';
       }
       return normalizeRoutingIntent(semanticIntent);
     }

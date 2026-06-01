@@ -42,12 +42,12 @@ function buildAgentTaskPlan({
     });
   }
 
-  if (capabilities.needsPrivateContext || requiredTools.includes('rag_retrieve') || fileIds.length) {
+  if (capabilities.needsPrivateContext || requiredTools.includes('rag_retrieve') || requiredTools.includes('docintel_analyze') || fileIds.length) {
     phases.push({
       id: 'private_context',
       role: 'research',
-      objective: 'Retrieve uploaded/project context before answering or generating artifacts from private material.',
-      requiredTools: ['rag_retrieve'],
+      objective: 'Analyze uploaded/project files and retrieve private context before answering or generating artifacts from private material.',
+      requiredTools: ['docintel_analyze', 'rag_retrieve'].filter((tool) => requiredTools.includes(tool)),
       checkpoint: 'Relevant private chunks are retrieved and separated from assumptions.',
     });
   }

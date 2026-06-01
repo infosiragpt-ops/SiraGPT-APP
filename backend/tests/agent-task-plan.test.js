@@ -32,7 +32,9 @@ test('agent task plan: includes private context phase when files are attached', 
   const intentAlignmentProfile = buildUserIntentAlignmentProfile({ request: goal, fileIds: ['file_1'] });
   const plan = buildAgentTaskPlan({ goal, executionProfile, intentAlignmentProfile, fileIds: ['file_1'] });
 
-  assert.ok(plan.phases.some((phase) => phase.id === 'private_context'));
+  const privatePhase = plan.phases.find((phase) => phase.id === 'private_context');
+  assert.ok(privatePhase);
+  assert.deepEqual(privatePhase.requiredTools, ['docintel_analyze', 'rag_retrieve']);
   assert.equal(plan.groundingMode, 'private_context_required');
 });
 

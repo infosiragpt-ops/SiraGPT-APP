@@ -36,7 +36,7 @@ describe("ai-service · deterministic intent routing", () => {
     assert.equal(intent, "doc")
   })
 
-  it("does not generate a Word file when the user asks about an existing Word attachment", async () => {
+  it("routes existing Word attachment questions to the durable agent, not simple chat", async () => {
     const history = [
       {
         role: "USER",
@@ -50,12 +50,35 @@ describe("ai-service · deterministic intent routing", () => {
         ],
       },
     ]
-    const intent = await aiService.classifyIntent("cual es la primera palabra del word ?", history)
-    assert.equal(intent, "text")
-    assert.equal(shouldAnswerFromExistingDocument("cual es la primera palabra del word ?", history), true)
+    const prompt = "cual es la primera palabra del word ?"
+    const intent = await aiService.classifyIntent(prompt, history)
+    assert.equal(intent, "agent_task")
+    assert.equal(shouldAnswerFromExistingDocument(prompt, history), true)
+    assert.equal(shouldRouteTextPromptThroughAgenticRuntime(prompt, history[0].files), true)
   })
 
-  it("treats an attached document plus an implicit analysis prompt as document chat", async () => {
+  it("routes document follow-up questions like title lookup through the agent runtime", async () => {
+    const history = [
+      {
+        role: "USER",
+        content: "Analiza este Word",
+        files: [
+          {
+            id: "file-docx-title",
+            name: "investigacion.docx",
+            mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          },
+        ],
+      },
+    ]
+    const prompt = "Cuál es el título de la investigación?"
+    const graph = buildIntentAttributionGraph(prompt, history)
+    assert.equal(graph.inferredIntent, "agent_task")
+    assert.equal(await aiService.classifyIntent(prompt, history), "agent_task")
+    assert.equal(shouldRouteTextPromptThroughAgenticRuntime(prompt, history[0].files), true)
+  })
+
+  it("treats an attached document plus an implicit analysis prompt as agentic document chat", async () => {
     const history = [
       {
         role: "USER",
@@ -72,10 +95,10 @@ describe("ai-service · deterministic intent routing", () => {
 
     const prompt = "dame un analisis en un solo parrafo"
     assert.equal(shouldAnswerFromExistingDocument(prompt, history), true)
-    assert.equal(await aiService.classifyIntent(prompt, history), "text")
+    assert.equal(await aiService.classifyIntent(prompt, history), "agent_task")
     assert.equal(
       shouldRouteTextPromptThroughAgenticRuntime(prompt, history[0].files),
-      false,
+      true,
     )
   })
 
