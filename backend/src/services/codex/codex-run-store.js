@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { writeJsonAtomicSync, readJsonSafe } = require('../../utils/atomic-json-write');
 
 const STORE_VERSION = 'codex-run-store-v1';
 
@@ -44,18 +45,12 @@ function writeRun(record) {
     createdAt: record.createdAt || now,
     updatedAt: now,
   };
-  fs.writeFileSync(fileFor(runId), JSON.stringify(payload, null, 2));
+  writeJsonAtomicSync(fileFor(runId), payload, { pretty: true });
   return payload;
 }
 
 function readRun(runId) {
-  const file = fileFor(runId);
-  if (!fs.existsSync(file)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(file, 'utf8'));
-  } catch {
-    return null;
-  }
+  return readJsonSafe(fileFor(runId), null);
 }
 
 function appendEvent(runId, event) {
@@ -65,7 +60,7 @@ function appendEvent(runId, event) {
   row.events.push({ ...event, at: new Date().toISOString() });
   if (row.events.length > 500) row.events = row.events.slice(-500);
   row.updatedAt = new Date().toISOString();
-  fs.writeFileSync(fileFor(runId), JSON.stringify(row, null, 2));
+  writeJsonAtomicSync(fileFor(runId), row, { pretty: true });
   return row;
 }
 
@@ -73,7 +68,7 @@ function updateRun(runId, patch = {}) {
   const row = readRun(runId);
   if (!row) return null;
   Object.assign(row, patch, { updatedAt: new Date().toISOString() });
-  fs.writeFileSync(fileFor(runId), JSON.stringify(row, null, 2));
+  writeJsonAtomicSync(fileFor(runId), row, { pretty: true });
   return row;
 }
 

@@ -30,6 +30,8 @@
  *   maskKey(key)                            → non-secret display string
  */
 
+const crypto = require('crypto');
+
 const MAX_NUMBERED = 20;
 
 // Provider alias → ordered list of env "bases". The first base that yields a
@@ -117,6 +119,9 @@ function listProfiles(provider, env = process.env) {
                 key: entry.key,
                 masked: maskKey(entry.key),
                 source: entry.source,
+                // Stable, non-reversible id for cross-request health tracking
+                // (see provider-key-health.js). Independent of pool position.
+                fingerprint: crypto.createHash('sha256').update(entry.key).digest('hex').slice(0, 12),
             });
         }
     }
@@ -173,19 +178,26 @@ function shouldRotate(err) {
  * @param {object[]} [opts.profiles]      - pre-resolved pool (skips env scan)
  * @param {number}  [opts.maxProfiles]
  * @param {(event:object)=>void} [opts.onRotate]
+ * @param {boolean} [opts.keyHealth]      - prefer healthy keys / cooldown dead ones (default false)
+ * @param {number}  [opts.now]            - injectable clock (ms) for keyHealth
  * @returns {Promise<{result:*, profileUsed:(string|null), attempts:number, rotations:object[]}>}
  */
 async function rotateProfiles(provider, attempt, opts = {}) {
     if (typeof attempt !== 'function') {
         throw new TypeError('rotateProfiles: attempt must be a function');
     }
-    const profiles = opts.profiles || listProfiles(provider, opts.env || process.env);
+    const pool = opts.profiles || listProfiles(provider, opts.env || process.env);
 
-    if (profiles.length === 0) {
+    if (pool.length === 0) {
         // No configured keys → single ambient attempt (back-compat).
         const result = await attempt(null, { index: 0, attempt: 1, profileCount: 0, provider });
         return { result, profileUsed: null, attempts: 1, rotations: [] };
     }
+
+    // Opt-in: try healthy keys first and skip recently-dead ones to the back.
+    const health = opts.keyHealth ? require('./provider-key-health') : null;
+    const now = Number.isFinite(opts.now) ? opts.now : Date.now();
+    const profiles = health ? health.orderProfiles(pool, now) : pool;
 
     const max = Number.isFinite(opts.maxProfiles) ? Math.max(1, opts.maxProfiles) : profiles.length;
     const limit = Math.min(profiles.length, max);
@@ -197,11 +209,13 @@ async function rotateProfiles(provider, attempt, opts = {}) {
         const meta = { index: i, attempt: i + 1, profileCount: profiles.length, profileId: profile.id, provider };
         try {
             const result = await attempt(profile, meta);
+            if (health) health.recordSuccess(profile);
             return { result, profileUsed: profile.id, attempts: i + 1, rotations };
         } catch (err) {
             lastError = err;
             const reason = classifyAuthError(err);
             if (!reason) throw err; // not auth-related → let model failover handle it
+            if (health) health.recordFailure(profile, reason, now);
             const next = profiles[i + 1] || null;
             const event = {
                 from: profile.id,

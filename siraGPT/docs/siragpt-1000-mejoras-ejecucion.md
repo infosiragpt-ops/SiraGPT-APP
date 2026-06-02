@@ -909,6 +909,24 @@ Este tracker registra lotes realmente implementados y validados en el estado act
 - Pruebas: se agregaron pruebas unitarias del modulo, pruebas de envelope y pruebas de integracion del controlador.
 - Verificacion: `node --test` focalizado, `npm test`, `bash scripts/verify-ui-lock.sh` y `git diff --check`.
 
+## Lote 125: metadata atomica de artefactos de agente
+
+- Estado: implementado y validado.
+- Mejora cubierta: evitar sidecars JSON truncados o corruptos al guardar artefactos generados por agentes.
+- Cambio: `saveArtifact` usa `writeJsonAtomicSync` con formato pretty para persistir metadata junto al archivo.
+- Control: si falla el commit atomico de metadata, se limpia el artefacto ya escrito y no quedan temporales `.tmp` del sidecar.
+- Pruebas: se agrego una regresion que simula fallo de `renameSync` en metadata y valida limpieza total.
+- Verificacion: `node -c`, `node --test` focalizado de artefactos, prueba de `atomic-json-write`, revision independiente, `git diff --check` y `npm test`.
+
+## Lote 126: aislamiento de pruebas de goal autonomo
+
+- Estado: implementado y validado.
+- Mejora cubierta: evitar que una prueba unitaria de escalacion autonoma abra persistencia real o cola Redis por accidente.
+- Cambio: `maybeCreateAutonomousGoalRun` acepta inyectar `appendEvent` y `enqueueGoalRun` manteniendo los adaptadores reales como default.
+- Control: la prueba usa stubs deterministas para evento inicial y encolado, sin depender de base de datos ni `REDIS_URL`.
+- Pruebas: se valido que persiste el goal, registra el evento `auto_queued_from_chat` y encola exactamente el `goalRunId` esperado.
+- Verificacion: `node -c`, `node --test` focalizado de goal autonomo, suite focal combinada, `git diff --check` y `npm test`.
+
 ## Siguientes lotes
 
-- Lote 125: agregar retencion configurable del historial diagnostico local.
+- Lote 127: agregar retencion configurable del historial diagnostico local.

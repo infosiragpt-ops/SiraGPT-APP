@@ -62,6 +62,8 @@ test('uses chat history to detect follow-up durable research work', () => {
 
 test('maybeCreateAutonomousGoalRun persists, appends initial event and enqueues best-effort', async () => {
   const createdRows = [];
+  const appendedEvents = [];
+  const enqueuedRuns = [];
   const prisma = {
     goalRun: {
       create: async ({ data }) => {
@@ -81,6 +83,14 @@ test('maybeCreateAutonomousGoalRun persists, appends initial event and enqueues 
     userId: 'user-1',
     chatId: 'chat-1',
     prompt: 'Investiga por semanas artículos científicos reales con DOI y verifica referencias APA 7.',
+    appendEvent: async (event) => {
+      appendedEvents.push(event);
+      return { ok: true, seq: appendedEvents.length, eventId: `event-${appendedEvents.length}` };
+    },
+    enqueueGoalRun: async (payload) => {
+      enqueuedRuns.push(payload);
+      return { id: payload.goalRunId };
+    },
   });
 
   assert.equal(result.created, true);
@@ -88,9 +98,11 @@ test('maybeCreateAutonomousGoalRun persists, appends initial event and enqueues 
   assert.equal(createdRows[0].status, 'queued');
   assert.equal(createdRows[0].depth, 'deep');
   assert.equal(createdRows[0].agentKind, 'research');
-  // Test env has no REDIS_URL, so enqueue is allowed to warn without
-  // failing the persisted goal run.
-  assert.ok(result.enqueueWarning || result.ok);
+  assert.equal(result.enqueueWarning, null);
+  assert.equal(appendedEvents.length, 1);
+  assert.equal(appendedEvents[0].goalRunId, 'goal_auto_1');
+  assert.equal(appendedEvents[0].payload.message, 'auto_queued_from_chat');
+  assert.deepEqual(enqueuedRuns, [{ goalRunId: 'goal_auto_1' }]);
 });
 
 test('maybeCreateAutonomousGoalRun is a no-op for ordinary chat', async () => {

@@ -32,6 +32,7 @@ const path = require('path');
 const crypto = require('crypto');
 const cron = require('node-cron');
 const { withRetry } = require('../../utils/retry-with-backoff');
+const { writeJsonAtomicSync } = require('../../utils/atomic-json-write');
 
 const DATA_DIR = path.join(__dirname, '..', '..', '..', 'data');
 const JOBS_FILE = path.join(DATA_DIR, 'scheduled-jobs.json');
@@ -80,12 +81,9 @@ function loadAll() {
 }
 
 function saveAll(jobs) {
-  ensureDataDir();
-  // Write via temp-file + rename for atomicity; a crash mid-write
-  // won't leave a partial file that loadAll would then scrap.
-  const tmp = `${JOBS_FILE}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(jobs, null, 2));
-  fs.renameSync(tmp, JOBS_FILE);
+  // Uses shared atomic-json-write for crash-safe persistence (centralized
+  // implementation of the temp+rename+fsync pattern previously duplicated here).
+  writeJsonAtomicSync(JOBS_FILE, jobs, { pretty: 2, ensureDir: true });
 }
 
 function appendRunLog(entry) {

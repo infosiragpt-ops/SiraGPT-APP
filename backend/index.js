@@ -305,6 +305,7 @@ const chatRoutes = require('./src/routes/chats');
 const fileRoutes = require('./src/routes/files');
 const appshotsRoutes = require('./src/routes/appshots');
 const aiRoutes = require('./src/routes/ai');
+const aiFailoverHealthRoutes = require('./src/routes/ai-failover-health');
 const documentGenerateAiRoutes = require('./src/routes/generate-document');
 
 const paymentRoutes = require('./src/routes/payments');
@@ -989,6 +990,9 @@ app.use('/api/files', fileRoutes);
 // is protected by the global requireCsrf list (see ~/api/auth section above),
 // /capture uses bearer-only auth and is intentionally CSRF-exempt.
 app.use('/api/appshots', appshotsRoutes);
+// Read-only failover/key-pool/key-health diagnostics. Mounted BEFORE the
+// generic /api/ai router so /api/ai/failover/* takes precedence. GET-only.
+app.use('/api/ai/failover', aiFailoverHealthRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/admin/queues', adminQueuesRoutes);

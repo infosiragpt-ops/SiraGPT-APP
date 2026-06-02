@@ -21,11 +21,51 @@ test('agent task artifacts: writes owner metadata next to each file', () => {
   const metadataPath = INTERNAL.metadataPathFor(artifact.id);
   assert.equal(fs.existsSync(metadataPath), true);
 
-  const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+  const metadataText = fs.readFileSync(metadataPath, 'utf8');
+  assert.match(metadataText, /\n  "ownerUserId": "user-a"/);
+
+  const metadata = JSON.parse(metadataText);
   assert.equal(metadata.ownerUserId, 'user-a');
   assert.equal(metadata.chatId, 'chat-a');
   assert.equal(metadata.filename, 'report.txt');
   assert.equal(metadata.validation.passed, true);
+});
+
+test('agent task artifacts: metadata sidecar write is atomic on commit failure', () => {
+  const filename = 'atomic-report.txt';
+  const ownerUserId = 'user-atomic';
+  const chatId = 'chat-atomic';
+  const payload = Buffer.from('metadata commit failure payload');
+  const scope = `${ownerUserId}:${chatId}:`;
+  const id = INTERNAL.artifactIdFor(Buffer.concat([Buffer.from(filename), payload]), scope);
+  const artifactPath = path.join(process.env.AGENT_ARTIFACT_DIR, `${id}-${filename}`);
+  const metadataPath = INTERNAL.metadataPathFor(id);
+  const originalRenameSync = fs.renameSync;
+
+  try {
+    fs.renameSync = (tmpPath, targetPath) => {
+      if (targetPath === metadataPath && tmpPath.endsWith('.tmp')) {
+        throw new Error('simulated metadata atomic rename failure');
+      }
+      return originalRenameSync(tmpPath, targetPath);
+    };
+
+    assert.throws(() => saveArtifact({
+      filename,
+      base64: payload.toString('base64'),
+      ownerUserId,
+      chatId,
+    }), /simulated metadata atomic rename failure/);
+  } finally {
+    fs.renameSync = originalRenameSync;
+  }
+
+  assert.equal(fs.existsSync(artifactPath), false);
+  assert.equal(fs.existsSync(metadataPath), false);
+
+  const tmpMetadataFiles = fs.readdirSync(process.env.AGENT_ARTIFACT_DIR)
+    .filter((entry) => entry.startsWith(`${id}.`) && entry.endsWith('.tmp'));
+  assert.deepEqual(tmpMetadataFiles, []);
 });
 
 test('agent task artifacts: ids are scoped per owner and chat', () => {

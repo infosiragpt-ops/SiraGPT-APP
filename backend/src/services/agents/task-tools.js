@@ -18,6 +18,7 @@
 
 const path = require('path');
 const fs = require('fs');
+const { writeJsonAtomicSync } = require('../../utils/atomic-json-write');
 const crypto = require('crypto');
 const sandbox = require('./code-sandbox');
 const {
@@ -146,7 +147,7 @@ function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation,
   const full = path.join(ARTIFACT_DIR, stored);
   fs.writeFileSync(full, buf);
   try {
-    fs.writeFileSync(metadataPathFor(id), JSON.stringify({
+    writeJsonAtomicSync(metadataPathFor(id), {
       id,
       filename: clean,
       format: ext,
@@ -157,7 +158,7 @@ function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation,
       validation: validation || null,
       category: category || null,
       createdAt: new Date().toISOString(),
-    }, null, 2));
+    }, { pretty: 2 });
   } catch (err) {
     // Remove the orphan artifact so subsequent listings don't show a
     // file the system has no record of. Re-throw so the caller knows
