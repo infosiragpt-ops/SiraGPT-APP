@@ -134,7 +134,28 @@
 | `PRISMA_DATABASE_URL` | PostgreSQL connection string used by Prisma |
 | `DATABASE_URL` | Optional legacy/adapter PostgreSQL connection string |
 | `REDIS_URL` | Redis connection string (sessions, queues, rate limits, cache) |
-| `SESSION_SECRET` | Express session signing secret |
+| `SESSION_SECRET` | Express session signing secret — **minimum 32 characters, high entropy required** |
+
+### SESSION_SECRET requirements
+
+The startup validator (`backend/src/utils/startup-validator.js`) enforces these rules at boot:
+
+- Must be set (not empty / missing)
+- Must not be a placeholder value (e.g. `changeme`, `secret`)
+- Must be **at least 32 characters** long
+- Must have sufficient entropy (not a repeated or low-complexity string)
+
+If any check fails the validator logs a `WARN` (or `BLOCKING`) message and, in production, the app will refuse to start.
+
+**Generating a strong value:**
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+This produces a 64-character hex string that satisfies all validator checks.
+
+**Production (Replit):** Set `SESSION_SECRET` in the Replit **Secrets** tab (shared or production scope). The secret is already configured — verify it is the strong 64-char value, not the legacy 23-char placeholder, by re-generating and updating it if needed. Sessions are invalidated on rotation; users will be asked to log in again.
 
 ---
 

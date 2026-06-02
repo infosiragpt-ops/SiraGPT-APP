@@ -5,7 +5,9 @@ Official topology: the backend runs on the host with PM2 and the frontend runs i
 ## Pre-Flight Checks
 
 - [ ] **JWT_SECRET** — generated with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` (64 hex chars)
-- [ ] **SESSION_SECRET** — same as above (different value)
+- [ ] **SESSION_SECRET** — same generation command above, **different value from JWT_SECRET**, minimum 32 characters
+  - On Replit: set in the **Secrets** tab (shared or production scope) — the startup validator will block boot and log `"Session Secret is too short"` if the value is weak or missing
+  - Sessions are stateless signatures; rotating this secret invalidates all active user sessions (users must log in again)
 - [ ] **CORS_ORIGINS** — set to your frontend domain(s), comma-separated
 - [ ] **NODE_ENV=production**
 - [ ] **Database** — PostgreSQL 16 reachable and migrated (`npx prisma migrate deploy`)
@@ -111,5 +113,6 @@ pm2 restart sira-api-backend --update-env
 | Health check fails | DB/Redis not reachable | Verify service containers are healthy: `docker compose ps` |
 | CORS errors | Wrong or missing CORS_ORIGINS | Set `CORS_ORIGINS=https://siragpt.com,https://www.siragpt.com` |
 | Auth fails | Placeholder JWT_SECRET | Generate a real secret (see one-time setup above) |
+| `"Session Secret is too short"` in logs | SESSION_SECRET is missing or < 32 chars in Replit Secrets | Generate a 64-char hex value (`node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`) and set it in the Replit Secrets tab |
 | Uploads broken | Backend upload path missing | Verify the host upload directory used by PM2 exists and is writable |
 | Rate limiting too strict | Window too small | Adjust `RATE_LIMIT_*` env vars or check Redis connection |
