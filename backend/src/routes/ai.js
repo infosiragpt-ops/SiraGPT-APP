@@ -1626,16 +1626,20 @@ router.post(
         // conversation-memory can see real turns; pre hooks may
         // mutate ctx.prompt and ctx.extraContext, which we then fold
         // back into the prompt used downstream.
+        // Load 80 messages (superset of the 20 needed by filters).
+        // Stored on req so the PR-3 history block below can reuse it
+        // without a second identical DB query.
         let _filterHistory = [];
         if (canPersist && chatId) {
           try {
-            const recent = await prisma.message.findMany({
+            const recent80 = await prisma.message.findMany({
               where: { chatId },
               orderBy: { timestamp: 'desc' },
-              take: 20,
+              take: 80,
               select: { role: true, content: true },
             });
-            _filterHistory = recent.reverse().map(m => ({
+            req._earlyHistory80 = recent80; // newest-first; reused by PR-3
+            _filterHistory = recent80.slice(0, 20).reverse().map(m => ({
               role: (m.role || '').toLowerCase(),
               content: m.content || '',
             }));
