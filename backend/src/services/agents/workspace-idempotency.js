@@ -3,14 +3,11 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const { writeJsonAtomicSync, readJsonSafe } = require('../../utils/atomic-json-write');
 
 const WINDOW_MS = Number.parseInt(process.env.WORKFLOW_IDEMPOTENCY_WINDOW_MS || `${6 * 60 * 60 * 1000}`, 10);
 const STORE_DIR = process.env.WORKFLOW_IDEMPOTENCY_DIR
   || path.join(process.cwd(), 'uploads', 'workflow-idempotency');
-
-function ensureDir() {
-  if (!fs.existsSync(STORE_DIR)) fs.mkdirSync(STORE_DIR, { recursive: true });
-}
 
 function hashGoal(userId, goal, chatId) {
   const payload = `${userId}|${String(chatId || '')}|${String(goal || '').trim().toLowerCase()}`;
@@ -28,33 +25,25 @@ function recordPath(userId, key) {
  */
 function findExistingWorkflow(userId, goal, chatId) {
   if (!userId || !goal) return null;
-  ensureDir();
   const key = hashGoal(userId, goal, chatId);
   const file = recordPath(userId, key);
-  if (!fs.existsSync(file)) return null;
-  try {
-    const row = JSON.parse(fs.readFileSync(file, 'utf8'));
-    if (!row?.taskId) return null;
-    const age = Date.now() - Number(row.createdAt || 0);
-    if (age > WINDOW_MS) {
-      fs.unlinkSync(file);
-      return null;
-    }
-    if (['completed', 'failed', 'cancelled', 'error'].includes(String(row.status || ''))) {
-      return null;
-    }
-    return row;
-  } catch {
+  const row = readJsonSafe(file, null);
+  if (!row) return null;
+  if (!row?.taskId) return null;
+  const age = Date.now() - Number(row.createdAt || 0);
+  if (age > WINDOW_MS) {
+    try { fs.unlinkSync(file); } catch {}
     return null;
   }
+  if (['completed', 'failed', 'cancelled', 'error'].includes(String(row.status || ''))) {
+    return null;
+  }
+  return row;
 }
 
 function registerWorkflow(userId, goal, chatId, meta = {}) {
   if (!userId || !goal) return null;
-  ensureDir();
   const key = hashGoal(userId, goal, chatId);
-  const dir = path.dirname(recordPath(userId, key));
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   const row = {
     idempotencyKey: key,
     userId: String(userId),
@@ -64,9 +53,7 @@ function registerWorkflow(userId, goal, chatId, meta = {}) {
     status: meta.status || 'queued',
     createdAt: Date.now(),
   };
-  const tmp = `${recordPath(userId, key)}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(row));
-  fs.renameSync(tmp, recordPath(userId, key));
+  writeJsonAtomicSync(recordPath(userId, key), row, { pretty: true, ensureDir: true });
   return row;
 }
 
