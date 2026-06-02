@@ -1,5 +1,22 @@
 uploads = []
-generated = []
+
+[[generated]]
+id = "osdnAhTdXQRZXiwXvc23P"
+uri = "file://artifacts/sira-promo/public/images/mesh-bg.png"
+type = "image"
+title = "Violet pink mesh gradient"
+
+[[generated]]
+id = "tywX9cxhQjjU9A8_yJRup"
+uri = "file://artifacts/sira-promo/public/images/glass-shapes.png"
+type = "image"
+title = "Abstract glass shapes"
+
+[[generated]]
+id = "p3PdK8zNW1k7Tuf3X1CNH"
+uri = "file://artifacts/sira-promo/public/images/network.png"
+type = "image"
+title = "AI Models Network"
 
 [[outputs]]
 id = "qWGzGe1HE6YCGzrOEdXFN"

@@ -42,6 +42,11 @@ const nextConfig = {
   // Enable React strict mode in development to catch double-render bugs
   reactStrictMode: true,
 
+  // Prevent Next.js from issuing a 308 redirect when the URL has a trailing
+  // slash. Without this, /sira-promo/ → 308 → /sira-promo happens BEFORE
+  // beforeFiles rewrites run, which causes the Replit cloud proxy to 502.
+  skipTrailingSlashRedirect: true,
+
   // Production source maps for Sentry (uploaded separately, not served to users)
   productionBrowserSourceMaps: false,
 
@@ -91,21 +96,34 @@ const nextConfig = {
   // and match scripts/start-all.cjs's BACKEND_PORT default (5050).
   async rewrites() {
     const backendBase = resolveBackendInternalUrl()
-    return [
-      {
-        source: '/api/:path*',
-        destination: `${backendBase}/api/:path*`,
-      },
-      // `/uploads/*` is served by Express via `express.static(uploadDir)`.
-      // Without this rewrite the browser fetches `/uploads/<user>/<file>`
-      // from Next.js, which 404s, and image previews in chat render as
-      // broken icons. Proxy through Next.js so the public domain is the
-      // only ingress (same pattern as `/api`).
-      {
-        source: '/uploads/:path*',
-        destination: `${backendBase}/uploads/:path*`,
-      },
-    ]
+    return {
+      // beforeFiles rewrites run before Next.js trailing-slash normalization
+      // and page routing, so /sira-promo and /sira-promo/ both reach the
+      // Vite dev server before Next.js can redirect or 404 them.
+      beforeFiles: [
+        // Proxy the SiraGPT promo video artifact (Vite dev server on port 5000).
+        {
+          source: '/sira-promo',
+          destination: 'http://localhost:5000/sira-promo/',
+        },
+        {
+          source: '/sira-promo/:path*',
+          destination: 'http://localhost:5000/sira-promo/:path*',
+        },
+      ],
+      afterFiles: [
+        {
+          source: '/api/:path*',
+          destination: `${backendBase}/api/:path*`,
+        },
+        // `/uploads/*` is served by Express via `express.static(uploadDir)`.
+        {
+          source: '/uploads/:path*',
+          destination: `${backendBase}/uploads/:path*`,
+        },
+      ],
+      fallback: [],
+    }
   },
 
   webpack: (config, { dev }) => {
