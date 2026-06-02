@@ -1065,7 +1065,7 @@ export default function ModelsPage() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="edit-type">Type</Label>
-                <Select value={editingModel.type} onValueChange={(value) => setEditingModel({ ...editingModel, type: value as 'TEXT' | 'IMAGE' | 'VIDEO' | 'VOICE' })}>
+                <Select value={editingModel.type} onValueChange={(value) => setEditingModel({ ...editingModel, type: value as 'TEXT' | 'IMAGE' | 'VIDEO' | 'AUDIO' | 'MUSIC' })}>
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
@@ -1073,7 +1073,8 @@ export default function ModelsPage() {
                     <SelectItem value="TEXT">TEXT</SelectItem>
                     <SelectItem value="IMAGE">IMAGE</SelectItem>
                     <SelectItem value="VIDEO">VIDEO</SelectItem>
-                    <SelectItem value="VOICE">VOICE</SelectItem>
+                    <SelectItem value="AUDIO">AUDIO</SelectItem>
+                    <SelectItem value="MUSIC">MUSIC</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
