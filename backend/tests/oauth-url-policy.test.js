@@ -113,3 +113,22 @@ test('GOOGLE_AUTH_BASE_URL still allows consistent per-flow URI overrides on the
 
   assert.equal(getGoogleCallbackURL(env), 'https://siragpt.com/api/auth/google/callback');
 });
+
+test('production env snapshot: GOOGLE_AUTH_BASE_URL wins over stale GOOGLE_AUTH_URI on different host', () => {
+  // Regression smoke test: mirrors the real production misconfiguration that
+  // was caught only after users hit redirect errors. GOOGLE_AUTH_BASE_URL was
+  // set to siragpt.com (single-domain deploy) but GOOGLE_AUTH_URI was never
+  // updated and still pointed to api.siragpt.com. GOOGLE_AUTH_BASE_URL must
+  // be the authoritative origin so the callback is always correct without
+  // requiring every per-flow URI secret to also be cleared.
+  const env = {
+    NODE_ENV: 'production',
+    GOOGLE_AUTH_BASE_URL: 'https://siragpt.com',
+    GOOGLE_AUTH_URI: 'https://api.siragpt.com/api/auth/google/callback',
+  };
+
+  assert.equal(
+    getGoogleCallbackURL(env),
+    'https://siragpt.com/api/auth/google/callback'
+  );
+});
