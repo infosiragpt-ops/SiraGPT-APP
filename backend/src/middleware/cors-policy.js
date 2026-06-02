@@ -95,12 +95,35 @@ function validateAllowedOrigins(list) {
   return [...new Set(normalized)];
 }
 
+/**
+ * Parse REPLIT_DOMAINS (comma-separated bare hostnames Replit sets at
+ * runtime, e.g. "siragpt.replit.app,custom.com") into https:// origins
+ * so the published *.replit.app URL is always allowed without manual config.
+ */
+function resolveReplitOrigins(env = process.env) {
+  const raw = String(env.REPLIT_DOMAINS || '').trim();
+  if (!raw) return [];
+  return raw
+    .split(',')
+    .map((h) => h.trim())
+    .filter(Boolean)
+    .map((host) => `https://${host}`);
+}
+
 function resolveAllowedOrigins(env = process.env) {
   const list = String(env.CORS_ORIGINS || '')
     .split(',')
     .map((origin) => origin.trim())
     .filter(Boolean);
-  if (list.length > 0) return validateAllowedOrigins(list);
+
+  // Always merge in Replit-provided domains (*.replit.app and custom domains
+  // set by the platform) so the published app never hits a CORS wall.
+  const replitOrigins = resolveReplitOrigins(env);
+
+  if (list.length > 0) {
+    const merged = [...new Set([...list, ...replitOrigins])];
+    return validateAllowedOrigins(merged);
+  }
   if (env.NODE_ENV === 'production') {
     // eslint-disable-next-line no-console
     console.warn(
@@ -108,7 +131,8 @@ function resolveAllowedOrigins(env = process.env) {
       + `Falling back to safe defaults: ${PROD_FALLBACK.join(', ')}. `
       + 'Set CORS_ORIGINS=https://yourdomain.com to override.'
     );
-    return [...PROD_FALLBACK];
+    const merged = [...new Set([...PROD_FALLBACK, ...replitOrigins])];
+    return merged;
   }
   return [...DEV_FALLBACK];
 }
