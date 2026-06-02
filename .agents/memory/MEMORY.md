@@ -9,3 +9,4 @@
 - [Semantic cache model versioning](semantic-cache-versioning.md) — bump MODEL_CACHE_VERSIONS[model] to invalidate stale cache entries without Redis SCAN; version baked into sha256 hash as _v key.
 - [Two-tier cron scanner](two-tier-cron-scanner.md) — hermes-cron-scanner.js: tier1=keyword bloom, tier2=structural marker; BOTH must match to avoid false-positives from prose mentioning time.
 - [Session rewind store](session-rewind-store.md) — in-memory Map (sessionId→rewindCount); safe on restart (messages stay in DB, cursor resets to head); max 20 turns per session.
+- [ai.js generate latency](ai-generate-latency.md) — flushHeaders moved to after quota check (line ~1828); chat+user+org queries parallelized; memory trio parallelized; duplicate history query merged into one take:80 load stored on req._earlyHistory80.

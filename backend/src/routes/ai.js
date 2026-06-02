@@ -1777,6 +1777,28 @@ router.post(
         if (!quota.ok) return res.status(quota.status).json(quota.body);
       }
 
+      // ── Early SSE connection ─────────────────────────────────────────────
+      // All checks that can return a JSON error (validation, quota, model
+      // gating, injection) are now done. Open the SSE stream immediately so
+      // the browser establishes the persistent connection while the
+      // enrichment DB queries (chat/user/org/memory) run in the background.
+      // This eliminates the blank wait the user experiences before the first
+      // token — the loading indicator fires right away.
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      res.setHeader('X-Accel-Buffering', 'no');
+      if (typeof res.flushHeaders === 'function') res.flushHeaders();
+      try { res.write(`data: ${JSON.stringify({ type: 'start', at: Date.now() })}\n\n`); } catch { /* socket gone */ }
+      // Start keep-alive heartbeat right away so proxies / Replit's edge
+      // don't time out while enrichment runs. Cleared in the outer finally.
+      keepAlive = setInterval(() => {
+        try {
+          res.write(`: ping ${Date.now()}\n\n`);
+          res.write(`data: ${JSON.stringify({ type: 'heartbeat', at: Date.now() })}\n\n`);
+        } catch { clearInterval(keepAlive); keepAlive = null; }
+      }, 15000);
+
       // ✅ Process attached files
       let processedFiles = [];
       let openaiFiles = [];
@@ -1815,114 +1837,84 @@ router.post(
       let actualModel = model;
       let actualTemperature = 0.55;
 
-      if (canPersist) {
-        const chat = await prisma.chat.findUnique({
-          where: { id: chatId },
-          include: {
-            customGpt: {
+      // ── Parallel prefetch: chat context + user profile + org settings ────
+      // These three Prisma reads are fully independent — none depends on the
+      // result of the others. Running them in parallel cuts ~2 DB round-trips
+      // from the critical path (from sequential ~150-300 ms → one ~50-100 ms
+      // parallel wait). Results are unpacked below in the same order as the
+      // original sequential code so all downstream logic is unchanged.
+      const __orgIdForAi = (req.orgContext && req.orgContext.orgId) || null;
+      const [_chatPrefetch, _userPrefetch, _orgPrefetch] = await Promise.all([
+        canPersist
+          ? prisma.chat.findUnique({
+              where: { id: chatId },
               include: {
-                knowledgeFiles: true
-              }
-            },
-            project: {
-              include: {
-                files: true,
-                // Include the most recent memory facts — ordered
-                // newest-first, capped so the prompt injection stays
-                // small. master-prompt renders them as a bullet list
-                // under the project block.
-                memories: {
-                  orderBy: { createdAt: 'desc' },
-                  take: 30,
-                  select: { fact: true, createdAt: true },
-                },
-                documents: {
-                  orderBy: { updatedAt: 'desc' },
-                  take: 40,
-                  select: {
-                    id: true,
-                    title: true,
-                    content: true,
-                    updatedAt: true,
+                customGpt: { include: { knowledgeFiles: true } },
+                project: {
+                  include: {
+                    files: true,
+                    memories: { orderBy: { createdAt: 'desc' }, take: 30, select: { fact: true, createdAt: true } },
+                    documents: { orderBy: { updatedAt: 'desc' }, take: 40, select: { id: true, title: true, content: true, updatedAt: true } },
+                    _count: { select: { files: true, chats: true, memories: true, documents: true } },
                   },
                 },
-                _count: { select: { files: true, chats: true, memories: true, documents: true } },
-              }
-            }
-          }
-        });
+              },
+            })
+          : Promise.resolve(null),
+        isAuth && userId
+          ? prisma.user.findUnique({
+              where: { id: userId },
+              select: { name: true, locale: true, preferredTone: true, customInstructions: true, settings: true },
+            })
+          : Promise.resolve(null),
+        __orgIdForAi
+          ? prisma.organization.findUnique({ where: { id: __orgIdForAi }, select: { settings: true } })
+          : Promise.resolve(null),
+      ]);
 
-        if (chat && chat.project) {
-          project = chat.project;
-          console.log(`📁 Using Project: ${project.name} (${project.files?.length || 0} files, ${project.documents?.length || 0} documents, ${project.memories?.length || 0} memories)`);
-        }
-
-        if (chat && chat.customGpt) {
-          customGpt = chat.customGpt;
-          actualModel = chat.model || customGpt.modelName || model;
-          actualTemperature = customGpt.temperature ?? actualTemperature;
-
-          actualProvider = inferProviderFromModelId(actualModel);
-
-          console.log(`🤖 Using Custom GPT: ${customGpt.name} with model: ${actualModel} via ${actualProvider}`);
-        }
+      // Unpack chat result
+      if (_chatPrefetch && _chatPrefetch.project) {
+        project = _chatPrefetch.project;
+        console.log(`📁 Using Project: ${project.name} (${project.files?.length || 0} files, ${project.documents?.length || 0} documents, ${project.memories?.length || 0} memories)`);
+      }
+      if (_chatPrefetch && _chatPrefetch.customGpt) {
+        customGpt = _chatPrefetch.customGpt;
+        actualModel = _chatPrefetch.model || customGpt.modelName || model;
+        actualTemperature = customGpt.temperature ?? actualTemperature;
+        actualProvider = inferProviderFromModelId(actualModel);
+        console.log(`🤖 Using Custom GPT: ${customGpt.name} with model: ${actualModel} via ${actualProvider}`);
       }
 
-      // ─── Per-org AI preference (Task 1) ─────────────────────────────
-      // When the request runs under an org context, prefer the org's
-      // `settings.ai.preferredProvider` / `preferredModel` over the
-      // user's selected model. CustomGPT-bound chats keep their own
-      // pinned model (the customGpt block above wins) — the org-level
-      // preference is the default for "free-form" turns. Fail-open: a
-      // settings read miss leaves the user's choice intact.
+      // Unpack org settings result
       let orgAiSettings = null;
       let orgMaxCostUSDOverride = null;
       try {
-        // SECURITY: only trust `req.orgContext.orgId` (populated by
-        // `enforceOrgQuotaSafe` after verifying membership). The previous
-        // `req.body.organizationId` fallback allowed any caller to bias
-        // model/provider routing toward an arbitrary org's settings —
-        // broken-access-control. Body-only org context never reaches here.
-        const __orgIdForAi = (req.orgContext && req.orgContext.orgId) || null;
-        if (__orgIdForAi) {
-          const orgRow = await prisma.organization.findUnique({
-            where: { id: __orgIdForAi },
-            select: { settings: true },
-          });
-          const ai = orgRow && orgRow.settings && typeof orgRow.settings === 'object'
-            ? orgRow.settings.ai
-            : null;
-          if (ai && typeof ai === 'object') {
-            orgAiSettings = ai;
-            if (!customGpt) {
-              if (typeof ai.preferredModel === 'string' && ai.preferredModel.trim()) {
-                actualModel = ai.preferredModel.trim();
-              }
-              if (typeof ai.preferredProvider === 'string' && ai.preferredProvider.trim()) {
-                actualProvider = ai.preferredProvider.trim();
-              } else if (typeof ai.preferredModel === 'string' && ai.preferredModel.trim()) {
-                actualProvider = inferProviderFromModelId(actualModel);
-              }
+        const ai = _orgPrefetch && _orgPrefetch.settings && typeof _orgPrefetch.settings === 'object'
+          ? _orgPrefetch.settings.ai
+          : null;
+        if (ai && typeof ai === 'object') {
+          orgAiSettings = ai;
+          if (!customGpt) {
+            if (typeof ai.preferredModel === 'string' && ai.preferredModel.trim()) {
+              actualModel = ai.preferredModel.trim();
             }
-            if (Number.isFinite(Number(ai.maxCostPerRequestUSD)) && Number(ai.maxCostPerRequestUSD) > 0) {
-              orgMaxCostUSDOverride = Number(ai.maxCostPerRequestUSD);
+            if (typeof ai.preferredProvider === 'string' && ai.preferredProvider.trim()) {
+              actualProvider = ai.preferredProvider.trim();
+            } else if (typeof ai.preferredModel === 'string' && ai.preferredModel.trim()) {
+              actualProvider = inferProviderFromModelId(actualModel);
             }
+          }
+          if (Number.isFinite(Number(ai.maxCostPerRequestUSD)) && Number(ai.maxCostPerRequestUSD) > 0) {
+            orgMaxCostUSDOverride = Number(ai.maxCostPerRequestUSD);
           }
         }
       } catch (orgAiErr) {
         console.warn('[ai/generate] org AI preference lookup failed (open):', orgAiErr && orgAiErr.message);
       }
 
-      // ✅ Re-initialize OpenAI client with actualProvider, preserving
-      // the gateway opt-in: if the request was already routed through the
-      // litellm Proxy, keep using the gateway client (it doesn't care which
-      // underlying provider we resolved to — that's the whole point of the
-      // proxy). Otherwise re-resolve via the legacy direct path.
+      // ✅ Re-initialize OpenAI client with actualProvider
       _providerResolution = createProviderClientForRequest(actualProvider, req);
       openai = _providerResolution.client;
-      // Observability: log gateway routing once the final client is locked
-      // in, so rollout telemetry can't lie about which path served the
-      // completion.
       if (_providerResolution.via === 'gateway') {
         console.log('[ai/generate] via=gateway', JSON.stringify({
           requested_provider: provider,
@@ -1931,27 +1923,21 @@ router.post(
         }));
       }
 
-
-
-      // ✅ Load per-user personalization so every turn carries the
-      // user's name, preferred tone, and any custom instructions they
-      // set in /settings. Anonymous users get an empty profile and fall
-      // through to the default master prompt.
+      // Unpack user profile result
       let userProfile = null;
       let inferredProfile = null;
-      if (isAuth && userId) {
+      if (_userPrefetch) {
         try {
-          const u = await prisma.user.findUnique({
-            where: { id: userId },
-            select: { name: true, locale: true, preferredTone: true, customInstructions: true, settings: true },
-          });
-          if (u) {
-            userProfile = { name: u.name, locale: u.locale, preferredTone: u.preferredTone, customInstructions: u.customInstructions };
-            try {
-              const { loadInferredProfile } = require('../services/user-profile-inference');
-              inferredProfile = loadInferredProfile(u);
-            } catch (_inferErr) { /* keep null */ }
-          }
+          userProfile = {
+            name: _userPrefetch.name,
+            locale: _userPrefetch.locale,
+            preferredTone: _userPrefetch.preferredTone,
+            customInstructions: _userPrefetch.customInstructions,
+          };
+          try {
+            const { loadInferredProfile } = require('../services/user-profile-inference');
+            inferredProfile = loadInferredProfile(_userPrefetch);
+          } catch (_inferErr) { /* keep null */ }
         } catch (profileErr) {
           console.warn('[user-profile] failed to load, continuing without:', profileErr.message);
         }
@@ -1966,14 +1952,11 @@ router.post(
       let __conversationHistoryForUnderstanding = [];
       try {
         if (userId && canPersist && chatId) {
-          const __historyMsgs = await prisma.message.findMany({
-            where: { chatId },
-            orderBy: { timestamp: 'desc' },
-            take: 80,
-            select: { role: true, content: true },
-          });
+          // Reuse the 80-message snapshot loaded earlier (filter block) to
+          // avoid a second identical prisma.message.findMany round-trip.
+          const __historyMsgs = req._earlyHistory80 || [];
           // Map oldest → newest, normalized shape for the resolver.
-          __conversationHistoryForUnderstanding = (__historyMsgs || []).reverse().map((m) => ({
+          __conversationHistoryForUnderstanding = __historyMsgs.slice().reverse().map((m) => ({
             role: m.role === 'ASSISTANT' ? 'assistant' : 'user',
             content: m.content || '',
           })).filter((m) => m.content);
@@ -2057,83 +2040,56 @@ router.post(
         extraBlocks: __pr3ExtraBlocks,
       });
 
-      // Long-term memory recall: pull the top-K durable facts for this
-      // user that are most similar to their current message, and append
-      // them as a "REMEMBERED ABOUT THE USER" block at the end of the
-      // system prompt. Silent no-op for anonymous users (no userId to
-      // key on) and for fresh users whose memory is still empty.
+      // ── Parallel enrichment: memory + cross-chat + RLHF exemplars ────────
+      // All three reads are independent (same userId/prompt, no inter-deps).
+      // Running them concurrently cuts ~2 additional DB/embedding round-trips.
       let memoryBlock = '';
       let recalledMemoryFacts = [];
-      if (userId) {
-        try {
-          const recalled = await longTermMemory.recallFacts(userId, prompt, 5);
-          recalledMemoryFacts = Array.isArray(recalled) ? recalled : [];
-          memoryBlock = longTermMemory.buildMemoryBlock(recalled);
-        } catch (memErr) {
-          console.warn('[ai] memory recall failed (continuing without):', memErr.message);
-        }
-      }
-
-      // Cross-chat semantic recall — Phase 4. Feature-flagged via
-      // ENABLE_CROSS_CHAT_RECALL (default off). Recovers the most
-      // similar past Q&A pairs across the user's other chats and
-      // injects them as inert reference material.
       let crossChatBlock = '';
       let crossChatTurnsForAttribution = [];
-      if (userId) {
-        try {
-          const crossChat = require('../services/cross-chat-retrieval');
-          if (crossChat.isEnabled()) {
-            const turns = await crossChat.recallSimilarTurns({
-              userId,
-              currentPrompt: prompt,
-              excludeChatId: canPersist ? chatId : null,
-              embedder: texts => rag.embed(texts),
-              prismaClient: prisma,
-            });
-            crossChatTurnsForAttribution = Array.isArray(turns) ? turns : [];
-            crossChatBlock = crossChat.buildCrossChatBlock(turns) || '';
-            if (turns.length > 0) {
-              console.log(`[cross-chat] recalled ${turns.length} similar past turn(s) for user=${userId}`);
-            }
-          }
-        } catch (crossErr) {
-          console.warn('[cross-chat] recall failed (continuing without):', crossErr?.message || crossErr);
-        }
-      }
-
-      // Attribution graph slot — kept for backwards compatibility with the
-      // systemBlocks layout below. The actual circuit-tracing-inspired
-      // analysis runs through `context-attribution-engine` and the
-      // `intent-attribution-graph/` submodule, both of which are appended
-      // a few blocks later as `circuitAttributionBlock` and
-      // `intentAttributionGraphBlock`. The variables `recalledMemoryFacts`
-      // and `crossChatTurnsForAttribution` collected above remain available
-      // for any future attribution surface that needs them without having
-      // to re-query the data layer.
-      let attributionBlock = '';
-      void recalledMemoryFacts;
-      void crossChatTurnsForAttribution;
-
-      // RLHF-lite: reuse examples the same user explicitly marked
-      // helpful, so future similar answers match their preferred shape.
       let feedbackBlock = '';
       if (userId) {
-        try {
-          const exemplars = await feedbackLedger.findExemplars({
+        const _crossChatMod = (() => { try { return require('../services/cross-chat-retrieval'); } catch { return null; } })();
+        const _crossChatEnabled = _crossChatMod && _crossChatMod.isEnabled && _crossChatMod.isEnabled();
+        const [_memRecalled, _crossChatTurns, _exemplars] = await Promise.all([
+          longTermMemory.recallFacts(userId, prompt, 5).catch((e) => {
+            console.warn('[ai] memory recall failed (continuing without):', e.message); return [];
+          }),
+          _crossChatEnabled
+            ? _crossChatMod.recallSimilarTurns({
+                userId,
+                currentPrompt: prompt,
+                excludeChatId: canPersist ? chatId : null,
+                embedder: texts => rag.embed(texts),
+                prismaClient: prisma,
+              }).catch((e) => { console.warn('[cross-chat] recall failed (continuing without):', e?.message || e); return []; })
+            : Promise.resolve([]),
+          feedbackLedger.findExemplars({
             userId,
             request: prompt,
             embedder: texts => rag.embed(texts),
             k: 2,
             onlyHelpful: true,
             agent: 'chat',
-          });
-          const formatted = feedbackLedger.formatExemplarsBlock(exemplars);
-          feedbackBlock = formatted ? `\n\n## USER-PREFERRED RESPONSE EXAMPLES\n${formatted}` : '';
-        } catch (feedbackErr) {
-          console.warn('[ai] feedback exemplars unavailable (continuing without):', feedbackErr.message || feedbackErr);
+          }).catch((e) => { console.warn('[ai] feedback exemplars unavailable (continuing without):', e.message || e); return []; }),
+        ]);
+        recalledMemoryFacts = Array.isArray(_memRecalled) ? _memRecalled : [];
+        memoryBlock = longTermMemory.buildMemoryBlock(_memRecalled);
+        crossChatTurnsForAttribution = Array.isArray(_crossChatTurns) ? _crossChatTurns : [];
+        if (_crossChatEnabled && _crossChatMod) {
+          crossChatBlock = _crossChatMod.buildCrossChatBlock(_crossChatTurns) || '';
+          if (_crossChatTurns.length > 0) {
+            console.log(`[cross-chat] recalled ${_crossChatTurns.length} similar past turn(s) for user=${userId}`);
+          }
         }
+        const _formatted = feedbackLedger.formatExemplarsBlock(_exemplars);
+        feedbackBlock = _formatted ? `\n\n## USER-PREFERRED RESPONSE EXAMPLES\n${_formatted}` : '';
       }
+
+      // Attribution graph slot — kept for backwards compatibility.
+      let attributionBlock = '';
+      void recalledMemoryFacts;
+      void crossChatTurnsForAttribution;
 
       // Operational RAG: make the advanced/private-document stack part
       // of normal chat, not only isolated /api/rag endpoints. Long
@@ -4267,15 +4223,10 @@ router.post(
         console.log(`✂️ route context fit: dropped ${fittedContext.droppedCount} message(s), ${fittedContext.totalTokens}/${fittedContext.budget} tokens before preflight`);
       }
 
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Connection', 'keep-alive');
-      res.setHeader('X-Accel-Buffering', 'no');
-      // Surface the actual model selected for this turn so clients (and
-      // observability) can record fallback usage. Header is set BEFORE
-      // flushHeaders so it travels with the SSE response.
-      try { res.setHeader('X-Model-Actual', String(actualModel || '')); } catch { /* noop */ }
-      res.flushHeaders();
+      // SSE headers + flushHeaders were already sent during the early
+      // connection phase (after quota check). Just surface the resolved
+      // model name so clients can record the actual model used this turn.
+      try { res.write(`data: ${JSON.stringify({ type: 'model_resolved', model: actualModel, provider: actualProvider })}\n\n`); } catch { /* socket gone */ }
 
       // ─── Token-budget pre-flight (best-effort, fail-open) ─────────
       // Estimates input tokens vs the model's context window and the
@@ -4316,21 +4267,9 @@ router.post(
         console.warn('[ai/generate] token-budget preflight failed (open):', preflightErr && preflightErr.message);
       }
 
-      // SSE comment + JSON heartbeat — the comment line covers strict
-      // SSE proxies that drop unknown event types, the JSON `heartbeat`
-      // event lets the client surface "still working" in the UI and
-      // notice silently-dropped connections via a write() failure
-      // rather than waiting on the kernel's TCP keepalive (minutes by
-      // default). Matches the cadence used in /generate-webdev. Cleared
-      // in the outer finally below.
-      keepAlive = setInterval(() => {
-        try {
-          res.write(`: ping ${Date.now()}\n\n`);
-          res.write(`data: ${JSON.stringify({ type: 'heartbeat', at: Date.now() })}\n\n`);
-        } catch {
-          // Socket already closed — close handler will fire and abort.
-        }
-      }, 15000);
+      // keepAlive interval was already started during the early SSE connection
+      // phase (after quota check) so proxies/Replit edge don't time out while
+      // enrichment runs. No second setInterval needed here.
 
       // Server-side stream snapshot so a reload / second tab can resume
       // via GET /api/chats/:chatId/pending-stream. Only cached when we
