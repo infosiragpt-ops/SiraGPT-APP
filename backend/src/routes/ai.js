@@ -1363,7 +1363,7 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
 
       if (!regenerate) {
         if (!Array.isArray(processedFiles) || processedFiles.length === 0) {
-          const duplicateTurn = await findRecentCompletedDuplicateTurn(chatId, prompt, 15_000);
+          const duplicateTurn = await findRecentCompletedDuplicateTurn(chatId, prompt, 120_000);
           if (duplicateTurn) {
             console.warn('[ai/generate] duplicate completed turn skipped during save', {
               chatId,
@@ -1597,7 +1597,7 @@ router.post(
         (!Array.isArray(files) || files.length === 0)
       ) {
         try {
-          const duplicateTurn = await findRecentCompletedDuplicateTurnForUser(userId, chatId, prompt);
+          const duplicateTurn = await findRecentCompletedDuplicateTurnForUser(userId, chatId, prompt, 120_000);
           if (duplicateTurn) {
             fullResponseContent = duplicateTurn.assistantMessage.content || '';
             console.warn('[ai/generate] duplicate completed turn replayed', {
@@ -5294,9 +5294,21 @@ router.post(
       if (req._activeGenerateTurn) {
         if (!req._activeGenerateTurn.settled) {
           req._activeGenerateTurn.reject(new Error('generate turn ended before persistence'));
-        }
-        if (activeGenerateTurns.get(req._activeGenerateTurn.key) === req._activeGenerateTurn) {
-          activeGenerateTurns.delete(req._activeGenerateTurn.key);
+          // Failed turns are removed immediately — no valid result to replay.
+          if (activeGenerateTurns.get(req._activeGenerateTurn.key) === req._activeGenerateTurn) {
+            activeGenerateTurns.delete(req._activeGenerateTurn.key);
+          }
+        } else {
+          // Successful turns: keep the entry alive for 120 s so client
+          // retries that arrive after the TCP/SSE drop (but before the
+          // client gives up) can find the already-completed result and
+          // replay it instead of triggering a second generation + save.
+          const turnRef = req._activeGenerateTurn;
+          setTimeout(() => {
+            if (activeGenerateTurns.get(turnRef.key) === turnRef) {
+              activeGenerateTurns.delete(turnRef.key);
+            }
+          }, 120_000);
         }
       }
   

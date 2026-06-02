@@ -10,6 +10,7 @@
 - [Two-tier cron scanner](two-tier-cron-scanner.md) — hermes-cron-scanner.js: tier1=keyword bloom, tier2=structural marker; BOTH must match to avoid false-positives from prose mentioning time.
 - [Session rewind store](session-rewind-store.md) — in-memory Map (sessionId→rewindCount); safe on restart (messages stay in DB, cursor resets to head); max 20 turns per session.
 - [ai.js generate latency](ai-generate-latency.md) — flushHeaders moved to after quota check (line ~1828); chat+user+org queries parallelized; memory trio parallelized; duplicate history query merged into one take:80 load stored on req._earlyHistory80.
+- [Double AI response bug](double-ai-response.md) — two root causes: (1) activeGenerateTurns deleted immediately on success, so client retries after TCP drop found nothing; (2) retryPendingMessage called addMessage even when assistant already replied.
 - [SiraGPT promo video routing](sira-promo-artifact-routing.md) — createArtifact always fails (ARTIFACT_NOT_FOUND env-var step); video served via workflow port 5000 + Next.js beforeFiles rewrite with skipTrailingSlashRedirect:true.
 - [Head hydration devtools fix](head-hydration-devtools.md) — suppressHydrationWarning must go on both <head> AND the <script> child; parent prop doesn't propagate to children.
 - [CSRF SameSite iframe](csrf-samesite-iframe.md) — SameSite=Strict/Lax blocks cookies in Replit cross-site iframe; use SameSite=None;Secure when REPLIT_BACKEND_MODE=sidecar.

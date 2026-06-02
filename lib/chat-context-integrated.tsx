@@ -1549,13 +1549,31 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       if (!targetChat) return false
 
       const createdAt = Date.parse(msg.createdAt)
-      const alreadyEchoed = (targetChat.messages || []).some((message: any) => {
+      const messages: any[] = targetChat.messages || []
+
+      // Find the index of the matching USER message in the chat.
+      const echoedIndex = messages.findIndex((message: any) => {
         if (String(message?.role || "").toUpperCase() !== "USER") return false
         if (message?.content !== msg.content) return false
         const messageTime = Date.parse(message?.timestamp || message?.createdAt || "")
         if (!Number.isFinite(createdAt) || !Number.isFinite(messageTime)) return true
         return Math.abs(messageTime - createdAt) < 10 * 60 * 1000
       })
+
+      const alreadyEchoed = echoedIndex !== -1
+
+      if (alreadyEchoed) {
+        // Check whether an ASSISTANT turn already follows the matched user message.
+        // If yes, the AI already replied — re-sending would create a duplicate response.
+        // Clear the stale pending entry and return success without calling addMessage.
+        const hasAssistantReply = messages.slice(echoedIndex + 1).some(
+          (m: any) => String(m?.role || "").toUpperCase() === "ASSISTANT" &&
+                      m?.content && String(m.content).trim().length > 0
+        )
+        if (hasAssistantReply) {
+          return true
+        }
+      }
 
       await addMessage(
         msg.content,
