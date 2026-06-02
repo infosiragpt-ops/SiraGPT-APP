@@ -132,3 +132,40 @@ test('production env snapshot: GOOGLE_AUTH_BASE_URL wins over stale GOOGLE_AUTH_
     'https://siragpt.com/api/auth/google/callback'
   );
 });
+
+test('production env snapshot: GOOGLE_AUTH_BASE_URL wins over stale GOOGLE_redirect_URI for Gmail on different host', () => {
+  // Minimal-env variant for the Gmail flow: only GOOGLE_AUTH_BASE_URL is set
+  // (no FRONTEND_URL). GOOGLE_REDIRECT_URI still points to the old api.*
+  // subdomain. GOOGLE_AUTH_BASE_URL must be authoritative so the Gmail OAuth
+  // callback is built from the correct origin without requiring the stale
+  // per-flow secret to be cleared first.
+  const env = {
+    NODE_ENV: 'production',
+    GOOGLE_AUTH_BASE_URL: 'https://siragpt.com',
+    GOOGLE_REDIRECT_URI: 'https://api.siragpt.com/api/auth/gmail/callback',
+  };
+
+  assert.equal(
+    getGoogleGmailCallbackURL(env),
+    'https://siragpt.com/api/auth/gmail/callback'
+  );
+});
+
+test('production env snapshot: GOOGLE_AUTH_BASE_URL wins over stale GOOGLE_REDIRECT_CALENDAR_DRIVE_URI for Google Services on different host', () => {
+  // Minimal-env variant for the Google Services (Calendar/Drive) flow: only
+  // GOOGLE_AUTH_BASE_URL is set (no FRONTEND_URL). The stale
+  // GOOGLE_REDIRECT_CALENDAR_DRIVE_URI still points to the old api.*
+  // subdomain. GOOGLE_AUTH_BASE_URL must be authoritative so the callback is
+  // built from the correct origin without requiring the stale per-flow secret
+  // to be cleared first.
+  const env = {
+    NODE_ENV: 'production',
+    GOOGLE_AUTH_BASE_URL: 'https://siragpt.com',
+    GOOGLE_REDIRECT_CALENDAR_DRIVE_URI: 'https://api.siragpt.com/api/auth/google-services/callback',
+  };
+
+  assert.equal(
+    getGoogleServicesCallbackURL(env),
+    'https://siragpt.com/api/auth/google-services/callback'
+  );
+});
