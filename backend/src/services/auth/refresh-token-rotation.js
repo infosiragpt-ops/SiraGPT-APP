@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const { writeJsonAtomicSync, readJsonSafe } = require('../../utils/atomic-json-write');
 
 const STORE_DIR = process.env.REFRESH_TOKEN_STORE_DIR
   || path.join(process.cwd(), 'uploads', 'auth-refresh-tokens');
@@ -10,10 +11,6 @@ const FAMILY_TTL_MS = Number.parseInt(process.env.REFRESH_TOKEN_FAMILY_TTL_MS ||
 
 function enabled() {
   return process.env.SIRAGPT_REFRESH_TOKEN_ROTATION === '1';
-}
-
-function ensureDir() {
-  if (!fs.existsSync(STORE_DIR)) fs.mkdirSync(STORE_DIR, { recursive: true });
 }
 
 function familyPath(familyId) {
@@ -31,24 +28,19 @@ function createFamily(userId) {
     updatedAt: Date.now(),
     revoked: false,
   };
-  ensureDir();
-  fs.writeFileSync(familyPath(familyId), JSON.stringify(row));
+  writeJsonAtomicSync(familyPath(familyId), row, { pretty: true, ensureDir: true });
   return row;
 }
 
 function loadFamily(familyId) {
   const file = familyPath(familyId);
-  if (!fs.existsSync(file)) return null;
-  try {
-    const row = JSON.parse(fs.readFileSync(file, 'utf8'));
-    if (Date.now() - Number(row.updatedAt || row.createdAt || 0) > FAMILY_TTL_MS) {
-      fs.unlinkSync(file);
-      return null;
-    }
-    return row;
-  } catch {
+  const row = readJsonSafe(file, null);
+  if (!row) return null;
+  if (Date.now() - Number(row.updatedAt || row.createdAt || 0) > FAMILY_TTL_MS) {
+    try { fs.unlinkSync(file); } catch {}
     return null;
   }
+  return row;
 }
 
 function rotateFamily(familyId) {
@@ -56,7 +48,7 @@ function rotateFamily(familyId) {
   if (!row || row.revoked) return { ok: false, reason: 'invalid_family' };
   row.version = Number(row.version || 0) + 1;
   row.updatedAt = Date.now();
-  fs.writeFileSync(familyPath(familyId), JSON.stringify(row));
+  writeJsonAtomicSync(familyPath(familyId), row, { pretty: true });
   return { ok: true, family: row };
 }
 
@@ -65,7 +57,7 @@ function revokeFamily(familyId) {
   if (!row) return false;
   row.revoked = true;
   row.updatedAt = Date.now();
-  fs.writeFileSync(familyPath(familyId), JSON.stringify(row));
+  writeJsonAtomicSync(familyPath(familyId), row, { pretty: true });
   return true;
 }
 
