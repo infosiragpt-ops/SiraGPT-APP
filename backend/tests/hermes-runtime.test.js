@@ -137,3 +137,75 @@ test('runtime status includes new integrated subsystems', () => {
   assert.equal(status.opsReadiness.status, 'ready');
   shutdownHermesRuntime();
 });
+
+test('session search returns Hermes-style match windows and bookends', () => {
+  const sessionManager = require('../src/services/session-manager');
+  const userId = `hermes-search-${Date.now()}`;
+  const session = sessionManager.createSession(userId, { label: 'Video generation debugging' });
+  sessionManager.addMessage(session.id, { role: 'user', content: 'Quiero crear un video con Veo desde el chat' });
+  sessionManager.addMessage(session.id, { role: 'assistant', content: 'Primero reviso el modelo activo de video.' });
+  sessionManager.addMessage(session.id, { role: 'tool', content: 'GET /api/ai/models?type=VIDEO -> veo-fast active' });
+  sessionManager.addMessage(session.id, { role: 'assistant', content: 'El proveedor de video respondió correctamente.' });
+  sessionManager.addMessage(session.id, { role: 'user', content: 'Perfecto, deja eso documentado para la próxima vez.' });
+
+  const [hit] = memoryBridge.searchSessions(userId, 'modelo video', { limit: 1, window: 1 });
+  assert.ok(hit, 'expected a search hit');
+  assert.equal(hit.sessionId, session.id);
+  assert.ok(hit.matchMessageId, 'hit should expose the anchor message id');
+  assert.ok(Array.isArray(hit.messages), 'hit should include a surrounding message window');
+  assert.equal(hit.messages.length, 3, 'window=1 should return previous + anchor + next');
+  assert.equal(hit.messages[1].id, hit.matchMessageId);
+  assert.equal(hit.messages[1].anchor, true);
+  assert.ok(Array.isArray(hit.bookendStart));
+  assert.ok(Array.isArray(hit.bookendEnd));
+  assert.match(hit.snippet, /modelo activo de video|models\?type=VIDEO/i);
+  assert.equal(typeof hit.messagesBefore, 'number');
+  assert.equal(typeof hit.messagesAfter, 'number');
+});
+
+test('agent bridge adds a learning nudge after complex tool-using runs without UI changes', async () => {
+  const agentEntryPath = require.resolve('../src/services/agents/agent-entry');
+  const originalExports = require(agentEntryPath);
+  const calls = [];
+  require.cache[agentEntryPath].exports = {
+    ...originalExports,
+    MAX_SPAWN_DEPTH: originalExports.MAX_SPAWN_DEPTH,
+    runAgent: async (opts) => {
+      calls.push(opts);
+      return {
+        answer: 'Hecho y verificado.',
+        stoppedReason: 'completed',
+        source: opts.source,
+        steps: [
+          { toolCall: { name: 'web_search' }, result: { ok: true } },
+          { toolCall: { name: 'read_url' }, result: { ok: true } },
+          { toolCall: { name: 'host_bash' }, result: { ok: true } },
+          { toolCall: { name: 'host_file' }, result: { ok: true } },
+          { toolCall: { name: 'monitor_ci' }, result: { ok: true } },
+        ],
+      };
+    },
+  };
+
+  try {
+    const agentBridge = require('../src/services/agents/hermes-agent-bridge');
+    const result = await agentBridge.runTurn({
+      userId: `hermes-learn-${Date.now()}`,
+      prompt: 'Investiga, modifica código, corre pruebas y deja el flujo reutilizable.',
+      model: 'test-model',
+      learning: true,
+    });
+
+    assert.equal(calls.length, 1);
+    assert.equal(result.stoppedReason, 'completed');
+    assert.ok(result.learning, 'run result should include learning metadata');
+    assert.equal(result.learning.triggered, true);
+    assert.ok(result.learning.memoryPromotion, 'learning nudge should run memory promotion');
+    assert.ok(result.learning.skillCandidate, 'complex runs should produce a reusable skill candidate');
+    assert.match(result.learning.skillCandidate.title, /reutilizable|workflow|skill/i);
+    assert.ok(result.learning.skillCandidate.tools.includes('web_search'));
+    assert.ok(result.learning.skillCandidate.tools.includes('monitor_ci'));
+  } finally {
+    require.cache[agentEntryPath].exports = originalExports;
+  }
+});

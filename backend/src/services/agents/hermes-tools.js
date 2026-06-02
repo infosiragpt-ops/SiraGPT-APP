@@ -79,6 +79,8 @@ const hermesSessionSearchTool = {
     properties: {
       query: { type: 'string' },
       limit: { type: 'integer', minimum: 1, maximum: 25 },
+      window: { type: 'integer', minimum: 0, maximum: 20, description: 'Messages to include before and after the anchor match.' },
+      roleFilter: { type: 'string', description: 'Optional comma-separated roles, e.g. user,assistant.' },
     },
   },
   async execute(args, ctx = {}) {
@@ -86,7 +88,11 @@ const hermesSessionSearchTool = {
     if (!userId) return { ok: false, error: 'userId required' };
     return {
       ok: true,
-      hits: memoryBridge.searchSessions(userId, args.query, { limit: args.limit || 10 }),
+      hits: memoryBridge.searchSessions(userId, args.query, {
+        limit: args.limit || 10,
+        window: args.window,
+        roleFilter: args.roleFilter,
+      }),
     };
   },
 };
