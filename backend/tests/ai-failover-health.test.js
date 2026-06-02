@@ -73,8 +73,17 @@ test('module exports an express router (GET handlers registered)', () => {
     assert.equal(typeof route.buildRouter, 'function');
     const fresh = route.buildRouter();
     assert.equal(typeof fresh, 'function');
-    // router exposes a layer stack with our two GET routes
+    // router exposes a layer stack with our GET routes
     const paths = (fresh.stack || []).filter(l => l.route).map(l => l.route.path);
     assert.ok(paths.includes('/health'));
+    assert.ok(paths.includes('/doctor'));
     assert.ok(paths.includes('/'));
+});
+
+test('report embeds the failover config doctor result', () => {
+    const r = route.buildFailoverHealthReport(SECRET_ENV);
+    assert.ok(r.doctor && typeof r.doctor === 'object');
+    assert.equal(typeof r.doctor.ok, 'boolean');
+    assert.ok(Array.isArray(r.doctor.findings));
+    assert.ok(Array.isArray(r.doctor.providersConfigured));
 });

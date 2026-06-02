@@ -58,6 +58,7 @@ function buildFailoverHealthReport(env = process.env) {
     const authRotation = require('../services/ai/auth-profile-rotation');
     const failover = require('../services/ai/failover-policy');
     const keyHealth = require('../services/ai/provider-key-health');
+    const { runFailoverDoctor } = require('../services/ai/failover-config-doctor');
 
     const providers = _safe(() => PROVIDERS.map((provider) => {
         const profiles = authRotation.listProfiles(provider, env);
@@ -76,6 +77,8 @@ function buildFailoverHealthReport(env = process.env) {
 
     const health = _safe(() => keyHealth.snapshot(), { tracked: 0, cooling: 0, keys: [] });
 
+    const doctor = _safe(() => runFailoverDoctor(env), { ok: false, errors: 0, warnings: 0, infos: 0, findings: [] });
+
     const config = {
         cooldownAuthMs: Number.parseInt(env.SIRAGPT_KEY_COOLDOWN_AUTH_MS || '', 10) || 300000,
         cooldownQuotaMs: Number.parseInt(env.SIRAGPT_KEY_COOLDOWN_QUOTA_MS || '', 10) || 1800000,
@@ -90,6 +93,7 @@ function buildFailoverHealthReport(env = process.env) {
         providers,
         failoverChains,
         keyHealth: health,
+        doctor,
         config,
     };
 }
@@ -109,7 +113,21 @@ function buildRouter() {
         }
     };
 
+    const doctorHandler = (req, res) => {
+        const auth = checkAuth(req);
+        if (!auth.ok) {
+            return res.status(auth.status || 401).json({ ok: false, error: 'unauthorized' });
+        }
+        try {
+            const { runFailoverDoctor } = require('../services/ai/failover-config-doctor');
+            return res.json(runFailoverDoctor());
+        } catch (err) {
+            return res.status(200).json({ ok: false, error: err && err.message ? err.message : 'doctor_failed' });
+        }
+    };
+
     router.get('/health', handler);
+    router.get('/doctor', doctorHandler);
     router.get('/', handler);
     return router;
 }
