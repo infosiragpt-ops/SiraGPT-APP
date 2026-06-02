@@ -175,7 +175,7 @@ export default async function RootLayout({
         "--font-mono": "var(--font-geist-mono)",
       } as React.CSSProperties}
     >
-      <head>
+      <head suppressHydrationWarning>
         {/*
           KaTeX CSS is already bundled via `import 'katex/dist/katex.min.css'`
           at the top of this file, which Next.js inlines/serves from
@@ -190,6 +190,7 @@ export default async function RootLayout({
           first byte without waiting for hydration.
         */}
         <script
+          suppressHydrationWarning
           type="application/ld+json"
           dangerouslySetInnerHTML={{
             __html: JSON.stringify({
