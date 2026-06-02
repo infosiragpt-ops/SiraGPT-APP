@@ -1127,8 +1127,15 @@ app.use('*', (req, res) => {
 const { globalErrorHandler: buildGlobalErrorHandler } = require('./src/middleware/error-handler');
 app.use(buildGlobalErrorHandler({ logger, captureException: captureSentryException }));
 
-function startServer() {
-    prisma.connectDatabase();
+async function startServer() {
+    // Await the database connection (with its built-in retry/backoff) BEFORE
+    // binding the port. Previously connectDatabase() was fire-and-forget, so
+    // app.listen() accepted traffic while Prisma was still mid-handshake — the
+    // first requests then raced an unconnected client and surfaced as
+    // `P1011: Error opening a TLS connection: unexpected EOF`. Awaiting closes
+    // that window; healthy boots are unaffected (connect resolves on attempt 1,
+    // and connectDatabase still process.exit(1)s if all retries are exhausted).
+    await prisma.connectDatabase();
     const server = app.listen(PORT, () => {
         // --- HTTP timeouts ---------------------------------------------------
         // The Next.js front-end proxies every /api/* call to this Express
@@ -1450,7 +1457,10 @@ function startServer() {
 }
 
 if (require.main === module) {
-    startServer();
+    startServer().catch((err) => {
+        console.error('Fatal startup error:', err);
+        process.exit(1);
+    });
 }
 
 module.exports = app;
