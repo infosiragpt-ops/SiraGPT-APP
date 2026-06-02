@@ -31,13 +31,16 @@ const VISIBLE_TEXT_MODEL_DEFINITIONS = Object.freeze([
     aliases: ['gemini-3.5', 'gemini-3.5-pro', 'google/gemini-3.5-pro', 'google/gemini-3.5-flash'],
   },
   {
-    name: 'x-ai/grok-4.2',
+    name: 'x-ai/grok-4.20',
     displayName: 'Grok 4.2',
     provider: 'OpenRouter',
     type: 'TEXT',
     icon: 'GrokLogo',
     description: 'Grok 4.2 via OpenRouter para razonamiento, busqueda conversacional y tareas generales.',
-    aliases: ['grok-4.2', 'x-ai/grok-4.20', 'x-ai/grok-4'],
+    // OpenRouter's canonical id is `x-ai/grok-4.20` ("x-ai/grok-4.2" is NOT a
+    // valid model id and returns a 400). Keep the legacy ids as aliases so any
+    // historical selection still resolves to the corrected model.
+    aliases: ['grok-4.2', 'x-ai/grok-4.2', 'grok-4.20', 'x-ai/grok-4'],
   },
   {
     name: 'moonshotai/kimi-k2.6',

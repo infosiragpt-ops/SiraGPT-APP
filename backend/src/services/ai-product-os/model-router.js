@@ -67,7 +67,7 @@ const CATALOG = [
     plans: ["FREE", "PRO", "ENTERPRISE"],
   },
   {
-    id: "x-ai/grok-4.2", provider: "openrouter", family: "grok",
+    id: "x-ai/grok-4.20", provider: "openrouter", family: "grok",
     capabilities: { reasoning: 0.91, code: 0.86, tools: 0.85, vision: 0.84, long_context: 0.9 },
     cost_tier: "high", latency_tier: "normal",
     context_window: 256_000, max_output: 32_000,

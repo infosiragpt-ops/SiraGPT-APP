@@ -69,6 +69,7 @@ const CONTEXT_WINDOWS = Object.freeze({
     'Gema4-31B':          128_000,
     'gema4-31b':          128_000,
     'x-ai/grok-4.2':      256_000,
+    'x-ai/grok-4.20':     256_000,
     'z-ai/glm-5.1':       200_000,
     'moonshotai/kimi-k2.6': 200_000,
     'openai/gpt-oss-120b': 128_000,

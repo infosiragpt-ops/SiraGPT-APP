@@ -75,6 +75,7 @@ const MODEL_CONTEXT_LIMITS = {
   'x-ai/grok-beta': 131000,
   'x-ai/grok-4': 256000,
   'x-ai/grok-4.2': 256000,
+  'x-ai/grok-4.20': 256000,
   'z-ai/glm-5.1': 200000,
   // Moonshot / Kimi (OpenRouter slug)
   'moonshotai/kimi-k2.6': 262144,
@@ -124,6 +125,7 @@ const MODEL_COMPLETION_LIMITS = {
   'x-ai/grok-beta': 8192,
   'x-ai/grok-4': 32768,
   'x-ai/grok-4.2': 32768,
+  'x-ai/grok-4.20': 32768,
   'z-ai/glm-5.1': 32768,
   'moonshotai/kimi-k2.6': 65536,
 };

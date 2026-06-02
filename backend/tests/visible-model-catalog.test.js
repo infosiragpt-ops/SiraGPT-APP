@@ -8,6 +8,9 @@ const {
   curateVisibleAdminMediaModels,
   curateVisibleTextModels,
 } = require('../src/services/visible-model-catalog');
+const { getContextLimit } = require('../src/services/context-window');
+const tokenBudget = require('../src/services/ai/token-budget');
+const pricing = require('../src/services/ai/pricing.json');
 
 test('no allowlist → returns the full curated catalog', () => {
   const all = listVisibleTextModelDefinitions({});
@@ -88,4 +91,28 @@ test('curateVisibleAdminMediaModels hides video rows unless Admin marks a real r
   ], 'VIDEO');
 
   assert.deepStrictEqual(curated.map((m) => m.name), ['kling-1.6']);
+});
+
+// ── Regression: the Grok entry used to ship the id "x-ai/grok-4.2",
+// which OpenRouter rejects with `400 ... is not a valid model id`. The
+// canonical slug is "x-ai/grok-4.20". The legacy ids stay as aliases so
+// any historical selection keeps resolving to the corrected model.
+test('grok catalog entry uses the valid OpenRouter id (not the 400-ing x-ai/grok-4.2)', () => {
+  const names = listVisibleTextModelDefinitions({}).map((m) => m.name);
+  assert.ok(names.includes('x-ai/grok-4.20'), 'expected the corrected grok id in the catalog');
+  assert.ok(!names.includes('x-ai/grok-4.2'), 'x-ai/grok-4.2 is NOT a valid OpenRouter model id');
+});
+
+test('legacy grok ids still resolve via the allowlist alias path', () => {
+  for (const legacy of ['x-ai/grok-4.2', 'grok-4.2']) {
+    const names = listVisibleTextModelDefinitions({ VISIBLE_MODELS_ALLOWLIST: legacy }).map((m) => m.name);
+    assert.deepStrictEqual(names, ['x-ai/grok-4.20'], `allowlist "${legacy}" must resolve to the corrected model`);
+  }
+});
+
+test('grok canonical id is keyed in the context-window, token-budget and pricing tables', () => {
+  assert.strictEqual(getContextLimit('x-ai/grok-4.20'), 256000);
+  assert.strictEqual(tokenBudget._CONTEXT_WINDOWS['x-ai/grok-4.20'], 256_000);
+  assert.ok(pricing.models['x-ai/grok-4.20'], 'pricing.json must carry an x-ai/grok-4.20 entry');
+  assert.strictEqual(pricing.models['x-ai/grok-4.20'].provider, 'OpenRouter');
 });
