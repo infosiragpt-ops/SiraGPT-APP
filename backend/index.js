@@ -1209,6 +1209,18 @@ function startServer() {
         }
     })();
 
+    // OAuth callback URL sanity check — when GOOGLE_AUTH_BASE_URL is
+    // set, assert the resolved callback host matches. A mismatch means
+    // a secret was changed mid-deploy or env vars loaded out of order;
+    // the warning surfaces immediately in logs and existing monitoring
+    // (Sentry / PostHog) picks it up automatically. Fire-and-forget.
+    try {
+        const { validateOAuthCallbackUrl } = require('./src/utils/oauth-callback-boot-validator');
+        validateOAuthCallbackUrl({ logger });
+    } catch (err) {
+        logger.warn({ err: err && err.message }, 'oauth_callback_boot_validator_failed');
+    }
+
     // Initialize WebSocket server for Computer Use
     initializeWebSocketServer(server);
 
