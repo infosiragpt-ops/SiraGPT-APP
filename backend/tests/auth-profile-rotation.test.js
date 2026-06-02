@@ -11,6 +11,7 @@ const {
     maskKey,
     _basesFor,
 } = require('../src/services/ai/auth-profile-rotation');
+const health = require('../src/services/ai/provider-key-health');
 
 test('maskKey never leaks more than first 3 + last 4 chars', () => {
     assert.equal(maskKey('sk-proj-abcdef1234567890WXYZ'), 'sk-…WXYZ');
@@ -153,4 +154,59 @@ test('rotateProfiles honors maxProfiles cap', async () => {
 
 test('rotateProfiles rejects when attempt is not a function', async () => {
     await assert.rejects(() => rotateProfiles('openai', null, { env: {} }), /attempt must be a function/);
+});
+
+// --- keyHealth integration (opt-in; default-off path covered above) ---
+
+test('keyHealth: a cooling key is tried last', async () => {
+    health._reset();
+    const env = { OPENAI_API_KEY: 'k1', OPENAI_API_KEY_2: 'k2', OPENAI_API_KEY_3: 'k3' };
+    // Pre-cool k2 so it should drift to the back of the rotation order.
+    health.recordFailure(health.fingerprint('k2'), 'auth', 0);
+    const tried = [];
+    await assert.rejects(
+        rotateProfiles('openai', async (p) => {
+            tried.push(p.key);
+            const e = new Error('429'); e.status = 429; throw e;
+        }, { env, keyHealth: true, now: 1_000 }),
+        /429/,
+    );
+    assert.deepEqual(tried, ['k1', 'k3', 'k2'], 'cooled k2 is attempted only after the healthy keys');
+});
+
+test('keyHealth: success clears a previously-cooling key', async () => {
+    health._reset();
+    health.recordFailure(health.fingerprint('k1'), 'auth', 0);
+    assert.equal(health.isInCooldown(health.fingerprint('k1'), 1_000), true);
+    const r = await rotateProfiles('openai', async () => 'ok', {
+        env: { OPENAI_API_KEY: 'k1' }, keyHealth: true, now: 1_000,
+    });
+    assert.equal(r.result, 'ok');
+    assert.equal(health.isInCooldown(health.fingerprint('k1'), 1_000), false, 'success cleared the cooldown');
+});
+
+test('keyHealth: failures are recorded with cooldown', async () => {
+    health._reset();
+    await assert.rejects(
+        rotateProfiles('openai', async () => { const e = new Error('quota'); e.status = 402; throw e; },
+            { env: { OPENAI_API_KEY: 'soloKey' }, keyHealth: true, now: 0 }),
+        /quota/,
+    );
+    const st = health.statusOf(health.fingerprint('soloKey'), 0);
+    assert.equal(st.healthy, false);
+    assert.equal(st.lastReason, 'quota');
+    assert.ok(st.cooldownMsLeft > 0);
+});
+
+test('default path (no keyHealth) does NOT touch the health store', async () => {
+    health._reset();
+    await rotateProfiles('openai', async () => 'ok', { env: { OPENAI_API_KEY: 'untrackedKey' } });
+    assert.equal(health.snapshot(0).tracked, 0, 'health store untouched without opts.keyHealth');
+});
+
+test('listProfiles attaches a stable fingerprint per key', () => {
+    const profiles = listProfiles('openai', { OPENAI_API_KEY: 'abc', OPENAI_API_KEY_2: 'def' });
+    assert.match(profiles[0].fingerprint, /^[0-9a-f]{12}$/);
+    assert.notEqual(profiles[0].fingerprint, profiles[1].fingerprint);
+    assert.equal(profiles[0].fingerprint, health.fingerprint('abc'));
 });
