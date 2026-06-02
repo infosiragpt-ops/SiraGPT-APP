@@ -76,6 +76,22 @@ class ModelSyncService {
     }));
   }
 
+  getStaticAudioModels() {
+    return listManifestModels({ type: 'AUDIO' }).map(model => ({
+      ...model,
+      isActive: false,
+      syncSource: model.syncSource || 'static_manifest',
+    }));
+  }
+
+  getStaticMusicModels() {
+    return listManifestModels({ type: 'MUSIC' }).map(model => ({
+      ...model,
+      isActive: false,
+      syncSource: model.syncSource || 'static_manifest',
+    }));
+  }
+
   /**
    * Fetch all available models from OpenAI
    */
@@ -513,6 +529,8 @@ class ModelSyncService {
     const catalogModels = [
       ...listManifestModels(),
       ...this.getStaticVideoModels(),
+      ...this.getStaticAudioModels(),
+      ...this.getStaticMusicModels(),
     ].filter(model => !types || types.has(String(model.type || '').toUpperCase()));
 
     let created = 0;
@@ -650,6 +668,9 @@ class ModelSyncService {
       id.includes('gpt-image') ||
       id.includes('imagen') ||
       id.includes('seedream') ||
+      id.includes('flux') ||
+      id.includes('recraft') ||
+      id.includes('ideogram') ||
       mode.includes('image') ||
       modalities.includes('image')
     ) {
@@ -663,10 +684,35 @@ class ModelSyncService {
       id.includes('runway') ||
       id.includes('pika') ||
       id.includes('luma') ||
+      id.includes('sora') ||
       mode.includes('video') ||
       modalities.includes('video')
     ) {
       return 'VIDEO';
+    }
+
+    if (
+      id.includes('suno') ||
+      id.includes('udio') ||
+      id.includes('music') ||
+      mode.includes('music') ||
+      modalities.includes('music')
+    ) {
+      return 'MUSIC';
+    }
+
+    if (
+      id.includes('whisper') ||
+      id.includes('tts-') ||
+      id.includes('-tts') ||
+      id.includes('speech') ||
+      id.includes('eleven') ||
+      id.includes('elevenlabs') ||
+      id.includes('audio') ||
+      mode.includes('audio') ||
+      modalities.includes('audio')
+    ) {
+      return 'AUDIO';
     }
 
     return 'TEXT';

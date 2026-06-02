@@ -42,7 +42,7 @@ interface AIModel {
   provider: string
   description?: string
   isActive: boolean
-  type: 'TEXT' | 'IMAGE' | 'VIDEO' | 'VOICE'
+  type: 'TEXT' | 'IMAGE' | 'VIDEO' | 'AUDIO' | 'MUSIC'
   icon?: string | null
   lastSynced?: string
   syncSource?: string
@@ -80,7 +80,7 @@ const initialFormData = {
   name: '',
   displayName: '',
   provider: 'OpenAI',
-  type: 'TEXT' as 'TEXT' | 'IMAGE' | 'VIDEO' | 'VOICE',
+  type: 'TEXT' as 'TEXT' | 'IMAGE' | 'VIDEO' | 'AUDIO' | 'MUSIC',
   icon: 'Bot',
   description: '',
   apiKey: ''
@@ -593,15 +593,16 @@ export default function ModelsPage() {
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="type">Model Type</Label>
-                  <Select value={formData.type} onValueChange={(value) => setFormData({ ...formData, type: value as 'TEXT' | 'IMAGE' | 'VIDEO' | 'VOICE' })}>
+                  <Select value={formData.type} onValueChange={(value) => setFormData({ ...formData, type: value as 'TEXT' | 'IMAGE' | 'VIDEO' | 'AUDIO' | 'MUSIC' })}>
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="TEXT">TEXT</SelectItem>
-                      <SelectItem value="IMAGE">IMAGE</SelectItem>
-                      <SelectItem value="VIDEO">VIDEO</SelectItem>
-                      <SelectItem value="VOICE">VOICE</SelectItem>
+                      <SelectItem value="TEXT">Texto</SelectItem>
+                      <SelectItem value="IMAGE">Imagen</SelectItem>
+                      <SelectItem value="VIDEO">Video</SelectItem>
+                      <SelectItem value="AUDIO">Audio / Voz</SelectItem>
+                      <SelectItem value="MUSIC">Música</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -793,10 +794,12 @@ export default function ModelsPage() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="ALL TYPES">ALL TYPES</SelectItem>
-                  <SelectItem value="TEXT">TEXT</SelectItem>
-                  <SelectItem value="IMAGE">IMAGE</SelectItem>
-                  <SelectItem value="VIDEO">VIDEO</SelectItem>
+                  <SelectItem value="ALL TYPES">TODOS</SelectItem>
+                  <SelectItem value="TEXT">Texto</SelectItem>
+                  <SelectItem value="IMAGE">Imagen</SelectItem>
+                  <SelectItem value="VIDEO">Video</SelectItem>
+                  <SelectItem value="AUDIO">Audio / Voz</SelectItem>
+                  <SelectItem value="MUSIC">Música</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -852,8 +855,28 @@ export default function ModelsPage() {
                   </TableCell>
                   
                   <TableCell>
-                    <Badge variant={model.type === 'TEXT' ? 'default' : model.type === 'VIDEO' ? 'outline' : model.type === 'VOICE' ? 'destructive' : 'secondary'}>
-                      {model.type}
+                    <Badge
+                      variant={
+                        model.type === 'TEXT' ? 'default' :
+                        model.type === 'VIDEO' ? 'outline' :
+                        model.type === 'AUDIO' ? 'secondary' :
+                        model.type === 'MUSIC' ? 'destructive' :
+                        'secondary'
+                      }
+                      className={
+                        model.type === 'AUDIO' ? 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200 border-purple-200' :
+                        model.type === 'MUSIC' ? 'bg-pink-100 text-pink-800 dark:bg-pink-900 dark:text-pink-200 border-pink-200' :
+                        model.type === 'VIDEO' ? 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200 border-blue-200' :
+                        model.type === 'IMAGE' ? 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200 border-amber-200' :
+                        ''
+                      }
+                    >
+                      {model.type === 'TEXT' ? 'Texto' :
+                       model.type === 'IMAGE' ? 'Imagen' :
+                       model.type === 'VIDEO' ? 'Video' :
+                       model.type === 'AUDIO' ? 'Audio' :
+                       model.type === 'MUSIC' ? 'Música' :
+                       model.type}
                     </Badge>
                   </TableCell>
                   

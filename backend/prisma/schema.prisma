@@ -1113,6 +1113,8 @@ enum ModelType {
   TEXT
   IMAGE
   VIDEO
+  AUDIO
+  MUSIC
 }
 
 enum Plan {
