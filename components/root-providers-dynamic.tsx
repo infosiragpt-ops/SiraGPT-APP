@@ -20,7 +20,14 @@ import dynamic from "next/dynamic"
 
 const RootProvidersDynamic = dynamic(
   () => import("@/components/root-providers").then(m => m.RootProviders),
-  { ssr: false }
+  {
+    ssr: false,
+    loading: () => (
+      <span aria-live="polite" className="sr-only">
+        Cargando Sira GPT
+      </span>
+    ),
+  },
 )
 
 export { RootProvidersDynamic as RootProviders }
