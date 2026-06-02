@@ -4,11 +4,14 @@ const assert = require('node:assert/strict');
 const {
   attachRedisListeners,
   createThrottledLogger,
+  installProcessGuards,
   isTransientRedisError,
   reconnectDelay,
 } = require('../src/services/agents/redis-resilience');
 
 const { EventEmitter } = require('node:events');
+const fs = require('node:fs');
+const path = require('node:path');
 
 test('isTransientRedisError detects ioredis "Connection is closed"', () => {
   const err = new Error('Connection is closed.');
@@ -82,4 +85,47 @@ test('attachRedisListeners handles missing connection gracefully', () => {
   // No throw, returns falsy.
   attachRedisListeners(null);
   attachRedisListeners(undefined);
+});
+
+test('installProcessGuards is idempotent — repeated calls add no extra unhandledRejection listeners', () => {
+  installProcessGuards();
+  const after1 = process.listenerCount('unhandledRejection');
+  installProcessGuards();
+  installProcessGuards();
+  assert.equal(process.listenerCount('unhandledRejection'), after1, 'must not register duplicate handlers');
+});
+
+test('a swallow listener stops an EventEmitter "error" from throwing (the missing-worker-listener leak)', () => {
+  const bare = new EventEmitter();
+  // Without a listener, emitting 'error' throws synchronously — exactly how a
+  // missing worker.on('error') re-raised the full MaxRetriesPerRequestError
+  // stack trace as an unhandledRejection in production.
+  assert.throws(() => bare.emit('error', new Error('boom')), /boom/);
+
+  const guarded = new EventEmitter();
+  guarded.on('error', (err) => { if (isTransientRedisError(err)) return; });
+  const transient = new Error('Reached the max retries per request limit (which is 1)');
+  assert.doesNotThrow(() => guarded.emit('error', transient));
+});
+
+// Static guardrail: every BullMQ Worker/Queue MUST register .on('error').
+// A missing listener is the root cause of unhandled 'error' events leaking a
+// full stack trace when Redis flaps; this test fails loudly if one regresses.
+test('every BullMQ Worker and Queue registers an .on("error") listener', () => {
+  const SRC = path.join(__dirname, '..', 'src', 'services');
+  const cases = [
+    { file: 'agents/agent-task-worker.js', emitter: 'worker' },
+    { file: 'goal-worker.js', emitter: 'worker' },
+    { file: 'chat-run-worker.js', emitter: 'worker' },
+    { file: 'agents/agent-task-queue.js', emitter: 'queue' },
+    { file: 'goal-queue.js', emitter: 'queue' },
+    { file: 'chat-run-queue.js', emitter: 'queue' },
+  ];
+  for (const { file, emitter } of cases) {
+    const src = fs.readFileSync(path.join(SRC, file), 'utf8');
+    assert.ok(
+      new RegExp(`${emitter}\\.on\\(\\s*['"]error['"]`).test(src),
+      `${file} must attach ${emitter}.on('error', ...) to avoid an unhandled 'error' event`,
+    );
+  }
 });

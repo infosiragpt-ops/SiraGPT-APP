@@ -21,7 +21,7 @@
 
 const { Worker } = require('bullmq');
 const IORedis = require('ioredis');
-const { attachRedisListeners, reconnectDelay } = require('./agents/redis-resilience');
+const { attachRedisListeners, isTransientRedisError, reconnectDelay } = require('./agents/redis-resilience');
 
 let worker;
 let workerConnection;
@@ -90,6 +90,16 @@ function startChatRunWorker({ processor = runChatJob, label = 'chat-run-worker' 
   worker.on('failed', (job, err) => {
     const runId = job?.id || job?.data?.runId || 'unknown';
     console.error(`[chat-run-worker] job failed runId=${runId} err=${err?.message || err}`);
+  });
+  // Consume Worker-level 'error' events. Without this listener BullMQ's
+  // EventEmitter re-raises them as an unhandledRejection carrying a full
+  // MaxRetriesPerRequestError stack trace when Redis flaps. Transient Redis
+  // errors are already logged once-per-minute by attachRedisListeners on the
+  // connection, so swallow them here; surface only genuine worker errors.
+  // Mirrors agent-task-worker.js and goal-worker.js.
+  worker.on('error', (err) => {
+    if (isTransientRedisError(err)) return;
+    console.error('[chat-run-worker] worker error:', err?.message || err);
   });
   return worker;
 }

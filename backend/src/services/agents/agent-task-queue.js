@@ -1,6 +1,6 @@
 const { Queue } = require('bullmq');
 const IORedis = require('ioredis');
-const { attachRedisListeners, reconnectDelay } = require('./redis-resilience');
+const { attachRedisListeners, isTransientRedisError, reconnectDelay } = require('./redis-resilience');
 
 let queue;
 let queueConnection;
@@ -68,6 +68,14 @@ function getAgentTaskQueue() {
       removeOnComplete: { age: 60 * 60 * 24, count: 500 },
       removeOnFail: { age: 60 * 60 * 24 * 7, count: 1000 },
     },
+  });
+  // Consume Queue-level 'error' events so a Redis blip cannot surface as an
+  // unhandled EventEmitter 'error' (Node turns those into a full-stack-trace
+  // unhandledRejection). The connection already logs transient errors via
+  // attachRedisListeners; this only forwards genuine queue errors.
+  queue.on('error', (err) => {
+    if (isTransientRedisError(err)) return;
+    console.error('[agent-task-queue] queue error:', err?.message || err);
   });
   return queue;
 }
