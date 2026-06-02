@@ -1721,26 +1721,16 @@ router.post(
         }
       } catch { /* malformed cookie — fall through */ }
 
-      const langResolution = await langPolicy.resolveResponseLanguage({
+      // ── Language policy: start EARLY as a non-blocking Promise ───────────
+      // resolveResponseLanguage() does a DB read (thread pref) — starting it
+      // here lets it run concurrently with quota check + provider setup.
+      // The result is awaited just before the system prompt is built (~line 2080).
+      const _langResolutionPromise = langPolicy.resolveResponseLanguage({
         userMessage: prompt,
         chatId: canPersist ? chatId : null,
-        // Priority: explicit user column > UI locale cookie > Spanish.
         userLocale: (req.user && req.user.locale) || uiLocale || 'es',
         prisma,
-      });
-      console.log('[language_policy_resolved]', JSON.stringify({
-        chat_id: chatId || null,
-        user_id: userId || null,
-        input_language: langResolution.detected,
-        resolved_language: langResolution.language,
-        source: langResolution.source,
-        provider,
-        model,
-      }));
-      if (langResolution.shouldPersist && canPersist) {
-        langPolicy.persistThreadLanguage(prisma, chatId, langResolution.language)
-          .catch(() => { /* non-fatal — rule still in this turn's prompt */ });
-      }
+      }).catch(() => ({ language: (req.user && req.user.locale) || uiLocale || 'es', detected: null, source: 'fallback', shouldPersist: false }));
 
       let actualProvider = provider; // ✅ NEW: track actual provider
       let _providerResolution = createProviderClientForRequest(provider, req);
@@ -2024,6 +2014,25 @@ router.post(
           }
         }
       } catch (_pr3CorefErr) { /* swallow */ }
+
+      // Resolve the language policy promise started before quota check.
+      // By the time we reach here, it has been running concurrently with
+      // quota check + file loading + chat/user/org prefetch — so it's
+      // usually already settled, and this await costs ~0ms.
+      const langResolution = await _langResolutionPromise;
+      console.log('[language_policy_resolved]', JSON.stringify({
+        chat_id: chatId || null,
+        user_id: userId || null,
+        input_language: langResolution.detected,
+        resolved_language: langResolution.language,
+        source: langResolution.source,
+        provider,
+        model,
+      }));
+      if (langResolution.shouldPersist && canPersist) {
+        langPolicy.persistThreadLanguage(prisma, chatId, langResolution.language)
+          .catch(() => { /* non-fatal */ });
+      }
 
       // ✅ Master prompt — the single source of truth for siraGPT's voice.
       // Injects the 10 absolute rules, language policy, intent-specialized
@@ -3786,22 +3795,19 @@ router.post(
       let webSearchBlock = '';
       let orchMemoryBlock = '';
       if (typeof prompt === 'string' && prompt.length > 0) {
-        try {
-          const webContext = await enrichWithWebSearch(prompt, {
+        // Run web search + orchestration memory in parallel — both are
+        // independent reads on the same prompt/userId.
+        const _memoryAdapter = userId ? getMemoryAdapter() : null;
+        const [_webCtx, _orchMem] = await Promise.all([
+          enrichWithWebSearch(prompt, {
             mode: webSearchMode === 'dedicated' ? 'dedicated' : 'auto',
-          });
-          if (webContext?.block) {
-            webSearchBlock = webContext.block;
-          }
-        } catch (_wsErr) { /* non-fatal */ }
-
-        if (userId) {
-          try {
-            const memoryAdapter = getMemoryAdapter();
-            const memBlock = await memoryAdapter.buildMemoryPrompt(userId, prompt);
-            if (memBlock) orchMemoryBlock = memBlock;
-          } catch (_memErr) { /* non-fatal */ }
-        }
+          }).catch(() => null),
+          _memoryAdapter
+            ? _memoryAdapter.buildMemoryPrompt(userId, prompt).catch(() => null)
+            : Promise.resolve(null),
+        ]);
+        if (_webCtx?.block) webSearchBlock = _webCtx.block;
+        if (_orchMem) orchMemoryBlock = _orchMem;
       }
 
       // PR-5: Grounding preface para tareas de alto coste. Detecta si
@@ -5681,10 +5687,10 @@ function createOpenRouterClient() {
   });
 }
 
-// Best / most broadly-available OpenRouter image model. Used as the default
-// fallback when the user's chosen model has no endpoint for the requested
-// modalities (the "404 No endpoints found…" error) or returns no image.
-const BEST_OPENROUTER_IMAGE_MODEL = 'openai/gpt-5.4-image-2';
+// Reliable OpenRouter image fallback — FLUX 1.1 Pro has broad endpoint
+// availability and does not require special output-modality negotiation.
+// Replaces gpt-5.4-image-2 which was returning ECONNRESET on OpenRouter.
+const BEST_OPENROUTER_IMAGE_MODEL = 'black-forest-labs/flux-1.1-pro';
 
 async function generateOpenRouterImage(openrouter, { model, prompt, aspectRatio, quality, signal }) {
   if (!process.env.OPENROUTER_API_KEY) {
