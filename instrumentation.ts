@@ -39,6 +39,24 @@
 export async function register() {
   if (process.env.NEXT_RUNTIME !== 'nodejs') return;
 
+  // ── Sentry status log ────────────────────────────────────────
+  // Backend error capture uses SENTRY_DSN (set in Replit Secrets) and is
+  // initialised in backend/index.js via startSentry().
+  // Browser error capture uses NEXT_PUBLIC_SENTRY_DSN (also set in Replit
+  // Secrets) and is initialised lazily on the client via
+  // components/sentry-client-init.tsx (lazy-loaded in layout). It calls
+  // Sentry.init() once per page session using @sentry/browser.
+  // Use bracket notation so Next.js doesn't statically inline undefined
+  // at compile time — we want the runtime value from process.env.
+  const _sentryDsn: string | undefined =
+    (process.env as Record<string, string | undefined>)['NEXT_PUBLIC_SENTRY_DSN'] ||
+    (process.env as Record<string, string | undefined>)['SENTRY_DSN'];
+  if (_sentryDsn) {
+    console.log('[instrumentation] Sentry DSN configured — backend active via startSentry(); browser active via SentryClientInit');
+  } else {
+    console.warn('[instrumentation] Sentry DSN not set — set SENTRY_DSN + NEXT_PUBLIC_SENTRY_DSN in Replit Secrets to enable error monitoring');
+  }
+
   const STALE_ACTION_RE =
     /Failed to find Server Action ".+?"\. This request might be from an older or newer deployment/;
 

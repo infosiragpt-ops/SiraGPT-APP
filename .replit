@@ -73,6 +73,8 @@ waitForPort = 3000
 GOOGLE_AUTH_BASE_URL = "https://siragpt.com"
 GOOGLE_ALLOW_FRONTEND_CALLBACK = "true"
 
+[userenv.shared]
+
 [postMerge]
 path = "scripts/post-merge.sh"
 timeoutMs = 120000

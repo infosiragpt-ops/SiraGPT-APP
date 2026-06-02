@@ -179,7 +179,21 @@ const {
     getSentryStatus,
     startSentry,
 } = require('./src/services/observability/sentry');
-startSentry();
+const _sentryBootStatus = startSentry();
+// Log Sentry init result so it is visible in startup logs and health checks.
+// sentryConfigured=true means SENTRY_DSN is set and @sentry/node is active;
+// any uncaught exception or explicit captureException() call will be forwarded
+// to the configured Sentry project from this point onwards.
+{
+    const _s = _sentryBootStatus;
+    if (_s.enabled && _s.started) {
+        console.log(`[sentry] active — env=${_s.environment} traces=${_s.traces_sample_rate} profiling=${_s.profiling_loaded}`);
+    } else if (_s.configured && !_s.enabled) {
+        console.log('[sentry] configured but disabled (set SENTRY_ENABLED=true to activate)');
+    } else {
+        console.log('[sentry] not active — set SENTRY_DSN in Replit Secrets to enable error monitoring');
+    }
+}
 const {
     getLangfuseStatus,
     shutdownLangfuse,

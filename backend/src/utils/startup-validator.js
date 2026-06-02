@@ -224,6 +224,17 @@ function validateStartupEnvironment(env = process.env, options = {}) {
   checkNumeric('PORT', env.PORT, 1024, 65535, 'Port');
   checkNumeric('MAX_FILE_SIZE', env.MAX_FILE_SIZE, 1, 500, 'Max File Size (MB)');
 
+  // ─── Observability checks (warning only) ───────────────
+  if (!env.SENTRY_DSN) {
+    issues.push({
+      key: 'SENTRY_DSN',
+      label: 'Sentry DSN',
+      severity: Severity.WARNING,
+      message: 'SENTRY_DSN is not set. Runtime errors in production will be invisible. Add a Sentry DSN to enable automatic error alerts.',
+      hint: 'Sign up at https://sentry.io, create a Node.js project, and copy the DSN into your Replit Secrets as SENTRY_DSN.',
+    });
+  }
+
   // ─── Production-specific checks ────────────────────────
   if (env.NODE_ENV === 'production') {
     if (!env.CORS_ORIGINS || env.CORS_ORIGINS === '*') {
