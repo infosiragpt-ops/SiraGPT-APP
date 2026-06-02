@@ -97,6 +97,8 @@ async function maybeCreateAutonomousGoalRun({
   history = [],
   codeIntent = null,
   minScore,
+  appendEvent = goalEvents.appendEvent,
+  enqueueGoalRun = goalQueue.enqueueGoalRun,
 } = {}) {
   const decision = buildAutonomousGoalEscalation({ prompt, history, codeIntent, minScore });
   if (!decision.shouldEscalate) return { ok: false, created: false, decision };
@@ -115,7 +117,7 @@ async function maybeCreateAutonomousGoalRun({
       },
     });
 
-    await goalEvents.appendEvent({
+    await appendEvent({
       goalRunId: created.id,
       type: 'info',
       payload: {
@@ -131,7 +133,7 @@ async function maybeCreateAutonomousGoalRun({
 
     let enqueueWarning = null;
     try {
-      await goalQueue.enqueueGoalRun({ goalRunId: created.id });
+      await enqueueGoalRun({ goalRunId: created.id });
     } catch (err) {
       enqueueWarning = err?.message || 'enqueue_failed';
     }
