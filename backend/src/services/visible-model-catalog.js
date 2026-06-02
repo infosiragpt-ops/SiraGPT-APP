@@ -343,7 +343,7 @@ function isVirtualModel(model = {}) {
  */
 function curateVisibleAdminMediaModels(models = [], type, options = {}) {
   const normalizedType = normalizeModelType(type);
-  if (!['IMAGE', 'VIDEO'].includes(normalizedType)) return [];
+  if (!['IMAGE', 'VIDEO', 'AUDIO', 'MUSIC'].includes(normalizedType)) return [];
 
   const allowedNames = options.allowedNames instanceof Set
     ? options.allowedNames

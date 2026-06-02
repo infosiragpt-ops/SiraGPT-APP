@@ -649,10 +649,14 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
     const wantImage = !type || type === 'IMAGE';
     const wantVideo = !type || type === 'VIDEO';
     const wantVoice = !type || type === 'VOICE';
+    const wantAudio = !type || type === 'AUDIO';
+    const wantMusic = !type || type === 'MUSIC';
 
     const staticTypesToEnsure = [];
     if (wantImage) staticTypesToEnsure.push('IMAGE');
     if (wantVideo) staticTypesToEnsure.push('VIDEO');
+    if (wantAudio) staticTypesToEnsure.push('AUDIO');
+    if (wantMusic) staticTypesToEnsure.push('MUSIC');
     if (staticTypesToEnsure.length > 0) {
       await modelSyncService.ensureStaticCatalogModels({ types: staticTypesToEnsure });
     }
@@ -661,8 +665,9 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
       isActive: true,
     };
 
-    if (type && (type === 'TEXT' || type === 'IMAGE' || type === 'VIDEO')) {
-      whereClause.type = type; // Agar type di gai hai to us par filter karein
+    const VALID_TYPES = ['TEXT', 'IMAGE', 'VIDEO', 'AUDIO', 'MUSIC', 'VOICE'];
+    if (type && VALID_TYPES.includes(type)) {
+      whereClause.type = type;
     }
 
 
@@ -732,7 +737,7 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
 
     if (wantVoice) {
       const listed = new Set(models.map((m) => m.name));
-      const virtualVoiceModels = [
+      const VIRTUAL_VOICE_DEFINITIONS = [
         {
           name: 'elevenlabs-tts',
           displayName: 'ElevenLabs TTS',
@@ -773,8 +778,26 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
           description: 'Efectos de sonido con ElevenLabs: genera sonidos personalizados.',
           icon: 'Music',
         },
-      ]
+      ];
+
+      // Only inject a virtual voice model when the name is NOT already in the
+      // active results AND no DB row exists at all (active or inactive).
+      // If admin has a row (even disabled), their setting must be respected.
+      const voiceNamesNotListed = VIRTUAL_VOICE_DEFINITIONS
         .filter((m) => !listed.has(m.name))
+        .map((m) => m.name);
+
+      let voiceNamesInDb = new Set();
+      if (voiceNamesNotListed.length > 0) {
+        const dbRows = await prisma.aiModel.findMany({
+          where: { name: { in: voiceNamesNotListed } },
+          select: { name: true },
+        });
+        voiceNamesInDb = new Set(dbRows.map((r) => r.name));
+      }
+
+      const virtualVoiceModels = VIRTUAL_VOICE_DEFINITIONS
+        .filter((m) => !listed.has(m.name) && !voiceNamesInDb.has(m.name))
         .map((m) => ({ id: `__virtual_${m.name.replace(/[^a-z0-9]+/gi, '_').toLowerCase()}__`, ...m }));
 
       if (virtualVoiceModels.length > 0) {
