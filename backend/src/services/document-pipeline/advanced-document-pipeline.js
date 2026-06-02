@@ -25,6 +25,7 @@ const { buildPptxContentPlan, hasGenericPlaceholderText } = require('./pptx-cont
 const {
   MAX_SIMULTANEOUS_DOCUMENTS,
 } = require('../../config/document-batch-limits');
+const { writeJsonAtomic } = require('../../utils/atomic-json-write');
 
 const execFileAsync = promisify(execFile);
 
@@ -1676,7 +1677,9 @@ async function writeTelemetry(record, telemetryDir) {
     prompt: undefined,
     promptLength: String(record.prompt || '').length,
   };
-  await fsp.writeFile(file, JSON.stringify(scrubbed, null, 2), 'utf8');
+  // Atomic temp+rename write so a concurrent run reusing a taskId, or a crash
+  // mid-write, can't leave a partial telemetry file that replay tooling fails to parse.
+  await writeJsonAtomic(file, scrubbed, { pretty: 2, ensureDir: true });
   return file;
 }
 
@@ -2048,5 +2051,6 @@ module.exports = {
     inspectXlsxCorporateStyle,
     repairPlan,
     zipEntries,
+    writeTelemetry,
   },
 };
