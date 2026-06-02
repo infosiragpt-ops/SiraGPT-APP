@@ -22,8 +22,11 @@ is much faster on dedicated CPU.
 
 **How to apply:** Deploy via `.replit` `[deployment] deploymentTarget` (this app is
 NOT an artifact-based deploy — the artifact.toml files for mockup-sandbox/api-server
-are skill scaffolding, not what ships). `.replit` is read-only to the agent, so the
-user must switch type to Reserved VM in the Publish UI and republish.
+are skill scaffolding, not what ships). `.replit` may be filesystem-writable, but the
+deployment *type* (Autoscale vs Reserved VM) is selected in the Publish UI — there is
+no clean `.replit` deploymentTarget value for Reserved VM (docs: it's a UI/machine-config
+choice). So the user must switch type to Reserved VM in the Publish UI and republish.
+This is also a billing change (Reserved VM = always-on fixed cost) — get user consent.
 
 Boot architecture: `backend/index.js` calls `startServer()` at the very bottom, so
 `app.listen()` only fires after ALL module requires + ~700 lines of middleware
