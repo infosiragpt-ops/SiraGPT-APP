@@ -129,3 +129,46 @@ test('resolveWithFallback honors circuit-open: skip without counting retries', a
 test('resolveWithFallback rejects when no attempt function passed', async () => {
     await assert.rejects(() => resolveWithFallback('gpt-4o', {}), /attempt/);
 });
+
+test('resolveWithFallback default path is unchanged (no profileUsed rotation)', async () => {
+    const r = await resolveWithFallback('gpt-4o', { attempt: async (m) => 'r-' + m });
+    assert.equal(r.result, 'r-gpt-4o');
+    assert.equal(r.profileUsed, null, 'no rotation requested → profileUsed stays null');
+});
+
+test('resolveWithFallback rotateAuth retries sibling key before switching model', async () => {
+    const authEnv = { OPENAI_API_KEY: 'bad-key', OPENAI_API_KEY_2: 'good-key' };
+    const tried = [];
+    const r = await resolveWithFallback('gpt-4o', {
+        rotateAuth: true,
+        providerOf: () => 'openai',
+        authEnv,
+        attempt: async (model, meta) => {
+            tried.push({ model, key: meta.profile && meta.profile.key });
+            if (meta.profile && meta.profile.key === 'bad-key') {
+                const e = new Error('Invalid API key'); e.status = 401; throw e;
+            }
+            return 'served';
+        },
+    });
+    assert.equal(r.result, 'served');
+    assert.equal(r.modelUsed, 'gpt-4o', 'recovered on same model via key rotation — no model failover');
+    assert.equal(r.profileUsed, 'openai:2');
+    assert.equal(r.failovers.length, 0, 'auth rotation must not register a model failover');
+    assert.deepEqual(tried.map(t => t.key), ['bad-key', 'good-key']);
+});
+
+test('resolveWithFallback rotateAuth falls over to next model when whole key pool is auth-dead', async () => {
+    const authEnv = { OPENAI_API_KEY: 'k1', OPENAI_API_KEY_2: 'k2' };
+    const r = await resolveWithFallback('gpt-4o', {
+        rotateAuth: true,
+        providerOf: (model) => (model.startsWith('gpt') ? 'openai' : 'google'),
+        authEnv,
+        attempt: async (model) => {
+            if (model === 'gpt-4o') { const e = new Error('401 unauthorized'); e.status = 401; throw e; }
+            return 'fallback-' + model;
+        },
+    });
+    assert.notEqual(r.modelUsed, 'gpt-4o');
+    assert.ok(r.failovers.length >= 1, 'exhausted key pool then failed over to a different model');
+});

@@ -108,13 +108,23 @@ function _isRetryable(err) {
  * returns the successful result + the model id that actually served
  * it. Failures of the entire chain rethrow the last error.
  *
+ * When `opts.rotateAuth` is enabled and `opts.providerOf` is supplied, each
+ * model attempt first rotates through that provider's configured API-key pool
+ * (see auth-profile-rotation.js) before the chain advances to the next model
+ * — so an expired/rate-limited key retries on a sibling key rather than
+ * needlessly switching provider. Disabled by default (no behaviour change).
+ *
  * @param {string} modelId
  * @param {object} opts
  * @param {(model:string, meta:object)=>Promise<*>} opts.attempt
  * @param {(name:string)=>{execute:(fn:()=>Promise<*>)=>Promise<*>}} [opts.getBreaker]
  * @param {(event:object)=>void} [opts.onFailover]
  * @param {number} [opts.maxAttempts]
- * @returns {Promise<{ result:*, modelUsed:string, attempts:number, failovers:object[] }>}
+ * @param {boolean} [opts.rotateAuth]      - enable per-model auth-key rotation
+ * @param {(model:string)=>string} [opts.providerOf] - model → provider (required for rotateAuth)
+ * @param {object} [opts.authEnv]          - env override forwarded to rotation
+ * @param {(event:object)=>void} [opts.onAuthRotate]
+ * @returns {Promise<{ result:*, modelUsed:string, attempts:number, failovers:object[], profileUsed?:(string|null) }>}
  */
 async function resolveWithFallback(modelId, opts = {}) {
     if (typeof opts.attempt !== 'function') {
@@ -122,14 +132,23 @@ async function resolveWithFallback(modelId, opts = {}) {
     }
     const chain = failoverChain(modelId);
     const max = Number.isFinite(opts.maxAttempts) ? Math.max(1, opts.maxAttempts) : chain.length;
+    const useRotation = !!opts.rotateAuth && typeof opts.providerOf === 'function';
+    const authRotation = useRotation ? require('./auth-profile-rotation') : null;
     const failovers = [];
     let lastError = null;
+    let profileUsed = null;
 
     for (let i = 0; i < Math.min(chain.length, max); i++) {
         const model = chain[i];
         const meta = { index: i, requestedModel: modelId, attempt: i + 1 };
         try {
-            const callFn = () => opts.attempt(model, meta);
+            const callFn = useRotation
+                ? () => authRotation.rotateProfiles(
+                    opts.providerOf(model),
+                    (profile, pmeta) => opts.attempt(model, { ...meta, profile, profileMeta: pmeta }),
+                    { env: opts.authEnv, onRotate: opts.onAuthRotate },
+                ).then((r) => { profileUsed = r.profileUsed; return r.result; })
+                : () => opts.attempt(model, meta);
             const result = typeof opts.getBreaker === 'function'
                 ? await opts.getBreaker(model).execute(callFn)
                 : await callFn();
@@ -138,16 +157,25 @@ async function resolveWithFallback(modelId, opts = {}) {
                 modelUsed: model,
                 attempts: i + 1,
                 failovers,
+                profileUsed,
             };
         } catch (err) {
             lastError = err;
             // CircuitBreakerError / open-circuit → skip immediately to next
             const isCircuit = err && (err.name === 'CircuitBreakerError' || err.code === 'CIRCUIT_OPEN');
-            const retryable = isCircuit || _isRetryable(err);
+            // With auth rotation on, an auth/quota error here means the whole
+            // key pool for this provider was already exhausted — so advancing
+            // to a different provider's model IS the correct recovery (that is
+            // the point of cross-provider failover). Without rotation, auth
+            // errors stay terminal (unchanged behaviour).
+            const authExhausted = useRotation && authRotation.classifyAuthError(err) !== null;
+            const retryable = isCircuit || _isRetryable(err) || authExhausted;
             const event = {
                 from: model,
                 to: chain[i + 1] || null,
-                reason: isCircuit ? 'circuit_open' : (err && (err.status || err.code || err.name)) || 'unknown',
+                reason: isCircuit ? 'circuit_open'
+                    : authExhausted ? `auth_pool_exhausted:${authRotation.classifyAuthError(err)}`
+                    : (err && (err.status || err.code || err.name)) || 'unknown',
                 message: err && err.message,
                 requestedModel: modelId,
                 attempt: i + 1,
