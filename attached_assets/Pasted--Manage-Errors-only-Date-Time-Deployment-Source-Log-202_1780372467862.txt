@@ -1,0 +1,202 @@
+
+
+Manage
+
+
+
+Errors only
+
+Date
+Time
+Deployment
+Source
+Log
+2026-06-01 22:38:19.71
+b1b7ce83
+User
+errno: -111,
+2026-06-01 22:46:49.08
+b1b7ce83
+User
+[backend] at TLSSocket.<anonymous> (/home/runner/workspace/backend/node_modules/ioredis/built/redis/event_handler.js:207:37)
+2026-06-01 22:46:49.08
+b1b7ce83
+User
+[backend] MaxRetriesPerRequestError: Reached the max retries per request limit (which is 1). Refer to "maxRetriesPerRequest" option for details.
+2026-06-01 22:46:49.08
+b1b7ce83
+User
+[backend] at TLSSocket.emit (node:events:530:35)
+2026-06-01 22:46:49.08
+b1b7ce83
+User
+[backend] at node:net:351:12
+2026-06-01 22:46:52.98
+b1b7ce83
+User
+[backend] at TLSSocket.<anonymous> (/home/runner/workspace/backend/node_modules/ioredis/built/redis/event_handler.js:207:37)
+2026-06-01 22:46:52.98
+b1b7ce83
+User
+[backend] at TCP.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-06-01 22:46:52.98
+b1b7ce83
+User
+[backend] at Object.onceWrapper (node:events:633:26)
+2026-06-01 22:46:52.98
+b1b7ce83
+User
+[backend] at node:net:351:12
+2026-06-01 22:46:52.98
+b1b7ce83
+User
+[backend] at TLSSocket.emit (node:events:530:35)
+2026-06-01 22:46:52.98
+b1b7ce83
+User
+[backend] This error originated either by throwing inside of an async function without a catch block, or by rejecting a promise which was not handled with .catch(). The promise rejected with the reason:
+2026-06-01 22:46:52.98
+b1b7ce83
+User
+[backend] MaxRetriesPerRequestError: Reached the max retries per request limit (which is 1). Refer to "maxRetriesPerRequest" option for details.
+2026-06-01 22:46:52.98
+b1b7ce83
+User
+[backend] at TCP.done (node:_tls_wrap:650:7)
+2026-06-01 22:46:59.78
+b1b7ce83
+User
+[backend] at node:net:351:12
+2026-06-01 22:46:59.78
+b1b7ce83
+User
+[backend] at TLSSocket.emit (node:events:530:35)
+
+2026-06-01 22:46:59.78
+b1b7ce83
+User
+[backend] This error originated either by throwing inside of an async function without a catch block, or by rejecting a promise which was not handled with .catch(). The promise rejected with the reason:
+2026-06-01 22:46:59.78
+b1b7ce83
+User
+[backend] This error originated either by throwing inside of an async function without a catch block, or by rejecting a promise which was not handled with .catch(). The promise rejected with the reason:
+2026-06-01 22:46:59.78
+b1b7ce83
+User
+[backend] at TLSSocket.<anonymous> (/home/runner/workspace/backend/node_modules/ioredis/built/redis/event_handler.js:207:37)
+2026-06-01 22:46:59.78
+b1b7ce83
+User
+[backend] at node:net:351:12
+2026-06-01 22:46:59.78
+b1b7ce83
+User
+[backend] at TCP.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-06-01 22:46:59.78
+b1b7ce83
+User
+[backend] at Object.onceWrapper (node:events:633:26)
+2026-06-01 22:46:59.78
+b1b7ce83
+User
+[backend] at Object.onceWrapper (node:events:633:26)
+2026-06-01 22:46:59.78
+b1b7ce83
+User
+[backend] at TCP.callbackTrampoline (node:internal/async_hooks:130:17)
+2026-06-01 22:46:59.78
+b1b7ce83
+User
+[backend] MaxRetriesPerRequestError: Reached the max retries per request limit (which is 1). Refer to "maxRetriesPerRequest" option for details.
+2026-06-01 22:46:59.78
+b1b7ce83
+User
+[backend] at TLSSocket.emit (node:events:530:35)
+2026-06-01 22:46:59.78
+b1b7ce83
+User
+[backend] at TLSSocket.<anonymous> (/home/runner/workspace/backend/node_modules/ioredis/built/redis/event_handler.js:207:37)
+2026-06-01 22:46:59.78
+b1b7ce83
+User
+[backend] This error originated either by throwing inside of an async function without a catch block, or by rejecting a promise which was not handled with .catch(). The promise rejected with the reason:
+2026-06-01 22:46:59.78
+b1b7ce83
+User
+[backend] at TLSSocket.<anonymous> (/home/runner/workspace/backend/node_modules/ioredis/built/redis/event_handler.js:207:37)
+2026-06-01 22:46:59.78
+b1b7ce83
+User
+[backend] at TCP.done (node:_tls_wrap:650:7)
+2026-06-01 22:46:59.78
+b1b7ce83
+User
+[backend] at Object.onceWrapper (node:events:633:26)
+2026-06-01 23:06:43.63
+b1b7ce83
+User
+[backend] [goal-worker] connection ended; serving requests via local runtime until Redis recovers; queued tasks will use local fallback until Redis reconnects
+2026-06-01 23:06:43.64
+b1b7ce83
+User
+[backend] [agent-task-worker] connection ended; serving requests via local runtime until Redis recovers; queued tasks will use local fallback until Redis reconnects
+2026-06-01 23:07:00.64
+06ef6e2b
+User
+[backend] warn The configuration property `package.json#prisma` is deprecated and will be removed in Prisma 7. Please migrate to a Prisma config file (e.g., `prisma.config.ts`).
+2026-06-01 23:07:00.64
+06ef6e2b
+User
+[backend] Error: P1011: Error opening a TLS connection: unexpected EOF
+2026-06-01 23:07:00.64
+06ef6e2b
+User
+[backend] For more information, see: https://pris.ly/prisma-config
+2026-06-01 23:07:00.64
+06ef6e2b
+User
+[backend] Environment variables loaded from .env
+2026-06-01 23:10:52.84
+06ef6e2b
+User
+[backend] warn The configuration property `package.json#prisma` is deprecated and will be removed in Prisma 7. Please migrate to a Prisma config file (e.g., `prisma.config.ts`).
+2026-06-01 23:10:52.84
+06ef6e2b
+User
+[backend] For more information, see: https://pris.ly/prisma-config
+2026-06-01 23:10:52.84
+06ef6e2b
+User
+[backend] Error: P1011: Error opening a TLS connection: native-tls error: unexpected EOF
+2026-06-01 23:10:52.84
+06ef6e2b
+User
+[backend] Environment variables loaded from .env
+2026-06-01 23:14:33.74
+06ef6e2b
+User
+[backend] warn The configuration property `package.json#prisma` is deprecated and will be removed in Prisma 7. Please migrate to a Prisma config file (e.g., `prisma.config.ts`).
+2026-06-01 23:14:33.74
+06ef6e2b
+User
+[backend] Environment variables loaded from .env
+2026-06-01 23:14:33.74
+06ef6e2b
+User
+[backend] For more information, see: https://pris.ly/prisma-config
+2026-06-01 23:14:33.74
+06ef6e2b
+User
+[backend] Error: P1011: Error opening a TLS connection: unexpected EOF
+2026-06-01 23:18:54.56
+06ef6e2b
+User
+[backend] Environment variables loaded from .env
+2026-06-01 23:18:54.56
+06ef6e2b
+User
+[backend] Error: P1011: Error opening a TLS connection: unexpected EOF
+2026-06-01 23:18:54.56
+06ef6e2b
+User
+[backend] warn The configuration property `package.json#prisma` is deprecated and will be removed in Prisma 7. Please migrate to a Prisma config file (e.g., `prisma.config.ts`).

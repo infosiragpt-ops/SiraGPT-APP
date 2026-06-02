@@ -664,12 +664,24 @@ const sessionConfig = {
 if (process.env.REDIS_URL) {
     const RedisStore = require('connect-redis').default;
     const Redis = require('ioredis');
+    const { reconnectDelay, isTransientRedisError, createThrottledLogger } = require('./src/services/agents/redis-resilience');
+    const _sessionRedisThrottle = createThrottledLogger(60_000);
     const redisClient = new Redis(process.env.REDIS_URL, {
-        maxRetriesPerRequest: 3,
-        enableReadyCheck: true,
+        // Never timeout individual commands — let them queue until the
+        // connection is re-established so an outage doesn't log out all users.
+        maxRetriesPerRequest: null,
+        enableReadyCheck: false,
+        connectTimeout: 5000,
+        // Keep retrying with capped exponential backoff so a transient
+        // Redis outage (Upstash quota reset, failover, etc.) self-heals.
+        retryStrategy: reconnectDelay,
     });
     redisClient.on('error', (err) => {
-        console.error('[session-store] Redis error:', err.message);
+        if (isTransientRedisError(err)) {
+            _sessionRedisThrottle(() => console.warn('[session-store] transient Redis error (sessions using cookie fallback):', err.message));
+        } else {
+            console.error('[session-store] Redis error:', err.message);
+        }
     });
     sessionConfig.store = new RedisStore({ client: redisClient, prefix: 'siragpt:sess:' });
 }
