@@ -125,15 +125,20 @@ function hasBearerAuth(req) {
 function issueCsrfToken(res) {
   const token = generateToken();
   const secret = hashToken(token);
+  // In the Replit dev environment the app is previewed inside a cross-site
+  // iframe (top-level origin: replit.com, iframe origin: *.riker.replit.dev).
+  // SameSite=Strict prevents cookies from being sent on cross-site subrequests,
+  // so the _csrf_secret cookie never reaches the backend and every POST gets
+  // a 403 missing_token. SameSite=None;Secure allows the cookie in cross-site
+  // iframe contexts while still protecting against real CSRF (requires Secure).
+  // In real production the app is accessed directly so Strict is fine.
+  const isReplitSidecar = process.env.REPLIT_BACKEND_MODE === 'sidecar';
+  const sameSite = isReplitSidecar ? 'none' : 'strict';
+  const secure = process.env.NODE_ENV === 'production' || isReplitSidecar;
   const cookieOpts = {
     httpOnly: false, // client JS must be able to read it
-    secure: process.env.NODE_ENV === 'production',
-    // CSRF tokens are issued by the SPA on demand and validated via
-    // double-submit on same-origin XHR/fetch. They never need to survive
-    // a top-level cross-site navigation (the SPA simply re-fetches a
-    // fresh token on load), so 'strict' is safe and tightens CSRF
-    // defense-in-depth against same-site stripping attacks.
-    sameSite: 'strict',
+    secure,
+    sameSite,
     path: '/',
     maxAge: 24 * 60 * 60 * 1000,
   };
