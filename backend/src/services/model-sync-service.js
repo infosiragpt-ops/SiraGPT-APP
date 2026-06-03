@@ -552,9 +552,6 @@ class ModelSyncService {
       tags: model.tags && model.tags.length ? model.tags : this.generateTags(model),
       updatedAt: new Date()
     };
-    if (model.isActive === true) {
-      data.isActive = true;
-    }
     return data;
   }
 
@@ -637,7 +634,8 @@ class ModelSyncService {
         tags: model.tags && model.tags.length ? model.tags : this.generateTags(model),
         lastSynced: new Date(),
       };
-      if (model.isActive === true) {
+      const modelType = String(model.type || '').toUpperCase();
+      if (modelType === 'VIDEO' && model.isActive === true) {
         data.isActive = true;
       }
 
@@ -654,10 +652,12 @@ class ModelSyncService {
         data: {
           name: model.name,
           ...data,
-          // Curated, verified IMAGE models seed ACTIVE so they are immediately
-          // selectable in the picker. VIDEO manifest rows can also request
+          // Curated IMAGE models seed ACTIVE; other IMAGE models stay inactive
+          // until an admin enables them. VIDEO manifest rows can still request
           // active seeding because the video picker must work immediately.
-          isActive: model.isActive === true || DEFAULT_ACTIVE_IMAGE_MODEL_NAMES.has(model.name),
+          isActive: modelType === 'IMAGE'
+            ? DEFAULT_ACTIVE_IMAGE_MODEL_NAMES.has(model.name)
+            : model.isActive === true,
         },
       });
       created++;
