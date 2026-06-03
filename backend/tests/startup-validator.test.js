@@ -173,6 +173,81 @@ describe('validateStartupEnvironment · placeholder detection', () => {
   });
 });
 
+// ── Google OAuth credential placeholders ─────────────────────────
+
+describe('validateStartupEnvironment · Google credential placeholders', () => {
+  const googlePlaceholders = [
+    'your-google-client-id',
+    'your_google_client_secret',
+    'google-client-id-here',
+    'google-client-secret',
+    '<google_client_id>',
+    'REPLACE_ME',
+    'replace-me',
+    'example-value',
+    'changeme',
+  ];
+
+  for (const ph of googlePlaceholders) {
+    it(`flags placeholder "${ph}" on GOOGLE_CLIENT_ID as BLOCKING`, () => {
+      const issues = runValidator(happyEnv({ GOOGLE_CLIENT_ID: ph }));
+      const flagged = issues.find(
+        i => i.key === 'GOOGLE_CLIENT_ID' && i.severity === 'BLOCKING' && i.message.includes('placeholder'),
+      );
+      assert.ok(flagged, `expected placeholder flag for "${ph}"`);
+    });
+
+    it(`flags placeholder "${ph}" on GOOGLE_CLIENT_SECRET as BLOCKING`, () => {
+      const issues = runValidator(happyEnv({ GOOGLE_CLIENT_SECRET: ph }));
+      const flagged = issues.find(
+        i => i.key === 'GOOGLE_CLIENT_SECRET' && i.severity === 'BLOCKING' && i.message.includes('placeholder'),
+      );
+      assert.ok(flagged, `expected placeholder flag for "${ph}"`);
+    });
+  }
+
+  it('does not flag a real-looking Google Client ID as a placeholder', () => {
+    const issues = runValidator(happyEnv({
+      GOOGLE_CLIENT_ID: '1234567890-abcdefghijklmnop.apps.googleusercontent.com',
+      GOOGLE_CLIENT_SECRET: 'GOCSPX-AbCdEf0123456789GhIjKl',
+    }));
+    const flagged = issues.find(
+      i => (i.key === 'GOOGLE_CLIENT_ID' || i.key === 'GOOGLE_CLIENT_SECRET'),
+    );
+    assert.equal(flagged, undefined);
+  });
+
+  it('warns when GOOGLE_CLIENT_ID lacks the .apps.googleusercontent.com suffix', () => {
+    const issues = runValidator(happyEnv({
+      GOOGLE_CLIENT_ID: '1234567890-abcdefghijklmnop',
+      GOOGLE_CLIENT_SECRET: 'GOCSPX-AbCdEf0123456789GhIjKl',
+    }));
+    const flagged = issues.find(
+      i => i.key === 'GOOGLE_CLIENT_ID' && i.message.includes('googleusercontent.com'),
+    );
+    assert.ok(flagged, 'expected a format warning');
+    assert.equal(flagged.severity, 'WARNING');
+  });
+
+  it('does not warn on the suffix for a valid Google Client ID', () => {
+    const issues = runValidator(happyEnv({
+      GOOGLE_CLIENT_ID: '1234567890-abcdefghijklmnop.apps.googleusercontent.com',
+      GOOGLE_CLIENT_SECRET: 'GOCSPX-AbCdEf0123456789GhIjKl',
+    }));
+    const flagged = issues.find(
+      i => i.key === 'GOOGLE_CLIENT_ID' && i.message.includes('googleusercontent.com'),
+    );
+    assert.equal(flagged, undefined);
+  });
+
+  it('does not double-flag: placeholder Client ID gets one issue, not also a format warning', () => {
+    const issues = runValidator(happyEnv({ GOOGLE_CLIENT_ID: 'your-google-client-id' }));
+    const idIssues = issues.filter(i => i.key === 'GOOGLE_CLIENT_ID');
+    assert.equal(idIssues.length, 1);
+    assert.equal(idIssues[0].severity, 'BLOCKING');
+  });
+});
+
 // ── Length checks ─────────────────────────────────────────────────
 
 describe('validateStartupEnvironment · length checks', () => {
