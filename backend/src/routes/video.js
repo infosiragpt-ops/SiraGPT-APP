@@ -1270,19 +1270,35 @@ router.get('/history', authenticateToken, async (req, res) => {
   }
 });
 
-// Cleanup old operations (run periodically)
-const cleanupInterval = setInterval(() => {
-  const now = new Date();
-  const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000); // 2 hours
+// Cleanup old operations (run periodically).
+// Terminal ops (completed/failed) are evicted after VIDEO_OP_TERMINAL_TTL_MS.
+// A hard age ceiling (VIDEO_OP_HARD_MAX_AGE_MS) also evicts ANY operation —
+// including ones orphaned in pending/processing (provider never called back,
+// worker died) — which the status-only rule previously leaked forever.
+const VIDEO_OP_TERMINAL_TTL_MS = Number.parseInt(process.env.SIRAGPT_VIDEO_OP_TTL_MS || String(2 * 60 * 60 * 1000), 10);
+const VIDEO_OP_HARD_MAX_AGE_MS = Number.parseInt(process.env.SIRAGPT_VIDEO_OP_MAX_AGE_MS || String(6 * 60 * 60 * 1000), 10);
 
+function cleanupActiveOperations(now = Date.now()) {
+  const terminalCutoff = now - VIDEO_OP_TERMINAL_TTL_MS;
+  const hardCutoff = now - VIDEO_OP_HARD_MAX_AGE_MS;
+  let removed = 0;
   for (const [operationId, operationData] of activeOperations.entries()) {
-    const createdAt = new Date(operationData.createdAt);
-    if (createdAt < twoHoursAgo && (operationData.status === 'completed' || operationData.status === 'failed')) {
+    const createdAt = new Date(operationData.createdAt).getTime();
+    if (Number.isNaN(createdAt)) continue;
+    const terminal = operationData.status === 'completed' || operationData.status === 'failed';
+    if ((terminal && createdAt < terminalCutoff) || createdAt < hardCutoff) {
       activeOperations.delete(operationId);
-      console.log(`🧹 Cleaned up old operation: ${operationId}`);
+      removed += 1;
     }
   }
+  return removed;
+}
+
+const cleanupInterval = setInterval(() => {
+  const removed = cleanupActiveOperations(Date.now());
+  if (removed > 0) console.log(`🧹 Cleaned up ${removed} old video operation(s)`);
 }, 30 * 60 * 1000); // Run every 30 minutes
 cleanupInterval.unref?.();
 
 module.exports = router;
+module.exports.INTERNAL = { activeOperations, cleanupActiveOperations };
