@@ -30,7 +30,12 @@ const http = require('node:http');
 const request = require('supertest');
 
 const { ProviderOAuthService } = require('../src/services/ProviderOAuthService');
-const { popupResponseHtml } = require('../src/services/oauth-state');
+const {
+  signOAuthState,
+  verifyOAuthState,
+  popupResponseHtml,
+  _testOnly_clearUsedJtis,
+} = require('../src/services/oauth-state');
 
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'gmail-cb-smoke-test-secret-32chars!!';
 
@@ -381,5 +386,106 @@ describe('Google Services OAuth callback route — integration smoke', () => {
       assert.match(res.headers['content-type'], /text\/html/);
       assert.ok(res.text.length > 0);
     }
+  });
+});
+
+/**
+ * Security tests for OAuth state token expiry, replay protection, and
+ * cross-user flow isolation. These use the real signOAuthState /
+ * verifyOAuthState from oauth-state.js (including jti tracking) so
+ * they exercise the production one-time-use enforcement path.
+ */
+describe('OAuth state token security — expiry, replay, and cross-user isolation', () => {
+  let app;
+  const localPersistCalls = [];
+
+  before(() => {
+    localPersistCalls.length = 0;
+    _testOnly_clearUsedJtis();
+
+    const securityGmailSvc = new ProviderOAuthService({
+      provider: {
+        service: 'gmail',
+        oauth2Client: makeOAuth2Client(),
+        scopes: ['gmail.readonly', 'gmail.send', 'gmail.modify'],
+        scopeFallback: 'gmail',
+        requiredScopes: ['gmail.readonly', 'gmail.send', 'gmail.modify'],
+        scopeMatch: 'every',
+        persistTokens: async (uid, sealed) => localPersistCalls.push({ uid, sealed }),
+        clearTokens: async () => {},
+        readSealedTokens: async () => null,
+      },
+      tokenVault: makeVault(),
+      signState: ({ userId, service }) => signOAuthState({ userId, service }),
+      verifyState: (rawState, { service }) => verifyOAuthState(rawState, { service }),
+      logger: { warn: () => {}, error: () => {}, log: () => {} },
+    });
+
+    app = buildApp(securityGmailSvc, makeGoogleServicesService());
+  });
+
+  it('expired state JWT is rejected with invalid_state', async () => {
+    const jwt = require('jsonwebtoken');
+    const crypto = require('crypto');
+    const expiredState = jwt.sign(
+      { typ: 'oauth_state', userId: 'user-expiry-test', service: 'gmail', jti: crypto.randomUUID() },
+      process.env.JWT_SECRET,
+      { expiresIn: '-1s' },
+    );
+
+    const res = await request(app)
+      .get(`/api/auth/gmail/callback?code=SOMECODE&state=${encodeURIComponent(expiredState)}`)
+      .expect(200);
+
+    assert.match(res.headers['content-type'], /text\/html/);
+    assert.match(res.text, /invalid_state/,
+      'An expired state JWT must be rejected with invalid_state, not silently accepted');
+    assert.doesNotMatch(res.text, /success/);
+  });
+
+  it('replaying a state token after first use is rejected with invalid_state', async () => {
+    const state = signOAuthState({ userId: 'user-replay', service: 'gmail' });
+
+    const firstUse = await request(app)
+      .get(`/api/auth/gmail/callback?code=GOODCODE&state=${encodeURIComponent(state)}`)
+      .expect(200);
+
+    assert.match(firstUse.text, /success/,
+      'First use of a valid state must succeed');
+
+    const secondUse = await request(app)
+      .get(`/api/auth/gmail/callback?code=GOODCODE2&state=${encodeURIComponent(state)}`)
+      .expect(200);
+
+    assert.match(secondUse.text, /invalid_state/,
+      'Replaying an already-consumed state JWT must be rejected with invalid_state');
+    assert.doesNotMatch(secondUse.text, /success/);
+  });
+
+  it('state consumed by user-A cannot be replayed in a user-B code exchange', async () => {
+    const userAState = signOAuthState({ userId: 'user-xflow-a', service: 'gmail' });
+
+    const userAFlow = await request(app)
+      .get(`/api/auth/gmail/callback?code=CODE_FOR_A&state=${encodeURIComponent(userAState)}`)
+      .expect(200);
+
+    assert.match(userAFlow.text, /success/,
+      "user-A's flow should complete successfully on first use");
+    assert.ok(
+      localPersistCalls.find((c) => c.uid === 'user-xflow-a'),
+      'tokens must be persisted for user-A after their flow completes',
+    );
+
+    const userBTriesUserAState = await request(app)
+      .get(`/api/auth/gmail/callback?code=CODE_FOR_B&state=${encodeURIComponent(userAState)}`)
+      .expect(200);
+
+    assert.match(userBTriesUserAState.text, /invalid_state/,
+      "user-A's already-consumed state must be rejected when presented in a user-B code exchange");
+    assert.doesNotMatch(userBTriesUserAState.text, /success/);
+    assert.ok(
+      !localPersistCalls.find((c) => c.uid === 'user-xflow-b'),
+      'no tokens should be persisted for user-B via a replayed user-A state',
+    );
   });
 });
