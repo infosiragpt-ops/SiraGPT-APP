@@ -49,4 +49,23 @@ describe('legal routes — internals', () => {
   test('DOC_MAP contains both supported documents', () => {
     assert.deepEqual(Object.keys(DOC_MAP).sort(), ['privacy-policy', 'terms-of-service']);
   });
+
+  test('caches parsed documents — a repeated load performs no extra file read', () => {
+    const orig = fs.readFileSync;
+    let reads = 0;
+    fs.readFileSync = (p, ...rest) => {
+      if (String(p).includes('privacy-policy')) reads += 1;
+      return orig(p, ...rest);
+    };
+    try {
+      // Warm the cache (may already be warm from earlier tests — that's fine).
+      _loadDocument('privacy-policy', 'latest');
+      const before = reads;
+      const doc = _loadDocument('privacy-policy', 'latest');
+      assert.ok(doc && doc.markdown.length > 0);
+      assert.equal(reads - before, 0, 'second load must be served from cache (no file read)');
+    } finally {
+      fs.readFileSync = orig;
+    }
+  });
 });

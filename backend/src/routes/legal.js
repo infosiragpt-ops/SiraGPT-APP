@@ -55,25 +55,42 @@ function _parseFrontMatter(markdown) {
   };
 }
 
+// These endpoints are unauthenticated and polled (consent banner / status
+// page), but the documents are static source-tree content. Cache the parsed
+// result per (slug, version) for a short TTL so a hot poll loop doesn't hit
+// the disk + run the front-matter regex on every request. The TTL matches the
+// HTTP Cache-Control max-age (300s) and bounds how long a freshly-deployed doc
+// can be stale.
+const LEGAL_CACHE_TTL_MS = Number.parseInt(process.env.SIRAGPT_LEGAL_CACHE_TTL_MS || '300000', 10);
+const _docCache = new Map(); // `${slug}::${version}` -> { doc, cachedAt }
+
 function _loadDocument(slug, version) {
   const base = DOC_MAP[slug];
   if (!base) return null;
+  const resolvedVersion = version || 'latest';
+  const cacheKey = `${slug}::${resolvedVersion}`;
+  const now = Date.now();
+  const cached = _docCache.get(cacheKey);
+  if (cached && (now - cached.cachedAt) < LEGAL_CACHE_TTL_MS) return cached.doc;
+
   // Versioned filename pattern: <slug>.v<version>.md — falls back to
   // the canonical <slug>.md when missing or when version === 'latest'.
   let file = path.join(LEGAL_DIR, base);
-  if (version && version !== 'latest') {
-    const versioned = path.join(LEGAL_DIR, `${slug}.v${version}.md`);
+  if (resolvedVersion !== 'latest') {
+    const versioned = path.join(LEGAL_DIR, `${slug}.v${resolvedVersion}.md`);
     if (fs.existsSync(versioned)) file = versioned;
   }
-  if (!fs.existsSync(file)) return null;
+  if (!fs.existsSync(file)) return null; // don't cache misses — a newly added doc should appear
   const markdown = fs.readFileSync(file, 'utf8');
   const meta = _parseFrontMatter(markdown);
-  return {
+  const doc = {
     document: slug,
     version: meta.version,
     lastUpdated: meta.lastUpdated,
     markdown,
   };
+  _docCache.set(cacheKey, { doc, cachedAt: now });
+  return doc;
 }
 
 function _serveDoc(req, res, slug) {
