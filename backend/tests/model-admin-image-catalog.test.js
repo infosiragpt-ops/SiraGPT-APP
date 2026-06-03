@@ -3,7 +3,10 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { listManifestModels } = require('../src/services/model-catalog-manifest');
+const {
+  listManifestModels,
+  DEFAULT_ACTIVE_IMAGE_MODEL_NAMES,
+} = require('../src/services/model-catalog-manifest');
 const { ModelSyncService } = require('../src/services/model-sync-service');
 
 const EXPECTED_IMAGE_MODELS = [
@@ -18,6 +21,9 @@ const EXPECTED_IMAGE_MODELS = [
   'dall-e-3',
   'dall-e-2',
   'imagen-4.0-generate-001',
+  'fal-ai/flux/schnell',
+  'fal-ai/flux/dev',
+  'fal-ai/flux-pro/v1.1',
 ];
 
 test('static manifest includes every image model surfaced by the chat picker', () => {
@@ -28,8 +34,10 @@ test('static manifest includes every image model surfaced by the chat picker', (
   assert.ok(imageModels.every(model => model.type === 'IMAGE'));
 });
 
-test('static image catalog updates metadata but preserves existing activation state', async () => {
+test('static image catalog updates metadata but preserves activation state for non-default models', async () => {
   const operations = [];
+  // seedream-4.5 is NOT in the default-active set, so updating its metadata must
+  // never touch its isActive flag (admin choice preserved).
   const existing = new Set(['bytedance-seed/seedream-4.5']);
   const service = new ModelSyncService({
     prismaClient: {
@@ -44,9 +52,14 @@ test('static image catalog updates metadata but preserves existing activation st
         },
         async create(args) {
           operations.push({ op: 'create', args });
-          assert.strictEqual(args.data.isActive, false);
+          // Curated default-active models seed ACTIVE; everything else inactive.
+          assert.strictEqual(args.data.isActive, DEFAULT_ACTIVE_IMAGE_MODEL_NAMES.has(args.data.name));
           existing.add(args.data.name);
           return args;
+        },
+        async updateMany(args) {
+          operations.push({ op: 'updateMany', args });
+          return { count: 0 };
         },
       },
     },
@@ -59,4 +72,16 @@ test('static image catalog updates metadata but preserves existing activation st
   assert.strictEqual(result.created, EXPECTED_IMAGE_MODELS.length - 1);
   assert.strictEqual(operations.filter(item => item.op === 'create').length, EXPECTED_IMAGE_MODELS.length - 1);
   assert.strictEqual(operations.filter(item => item.op === 'update').length, 1);
+
+  // The curated default-active IMAGE models are force-activated via updateMany,
+  // even pre-existing inactive rows, so they surface in the picker.
+  const updateManyOps = operations.filter(item => item.op === 'updateMany');
+  assert.strictEqual(updateManyOps.length, 1);
+  const targeted = updateManyOps[0].args.where.name.in;
+  for (const name of DEFAULT_ACTIVE_IMAGE_MODEL_NAMES) {
+    if (EXPECTED_IMAGE_MODELS.includes(name)) {
+      assert.ok(targeted.includes(name), `expected updateMany to target ${name}`);
+    }
+  }
+  assert.strictEqual(updateManyOps[0].args.data.isActive, true);
 });

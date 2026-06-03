@@ -83,12 +83,33 @@ async function searxngSearch(query, { env = process.env, fetchImpl = globalThis.
   };
 }
 
+// Free, key-less fallback (DuckDuckGo / Wikipedia / scientific tier). This is
+// what makes "fresh web context" work for everyone even when no paid search
+// keys are configured — without it, a deployment with no TAVILY/EXA/FIRECRAWL
+// keys would silently never inject web results and the model would answer
+// time-sensitive questions ("¿qué día es hoy?", "precio actual…") from stale
+// training data.
+async function freeTierSearch(query, { maxResults = 5, locale, freeSearch } = {}) {
+  // `freeSearch` is injectable so unit tests stay hermetic (no real network);
+  // production lazy-requires the agent web-search adapter so this module stays
+  // loadable in contexts where that adapter isn't present.
+  // eslint-disable-next-line global-require
+  const freeAdapter = freeSearch || require('../services/agents/web-search');
+  const out = await freeAdapter.search(query, { maxResults, locale });
+  const results = (out?.results || []).map((r) => ({
+    title: r.title || '',
+    url: r.url || '',
+    content: r.snippet || r.content || '',
+  }));
+  return { provider: out?.provider ? `free:${out.provider}` : 'free', configured: true, results };
+}
+
 async function searchFreshContext(query, opts = {}) {
   const errors = [];
 
   try {
     const primary = await tavilySearch(query, opts);
-    if (primary.results?.length || primary.configured) return primary;
+    if (primary.results?.length) return primary;
   } catch (err) { errors.push({ provider: 'tavily', message: err.message }); }
 
   try {
@@ -105,6 +126,20 @@ async function searchFreshContext(query, opts = {}) {
     const searxng = await searxngSearch(query, opts);
     if (searxng.results?.length) return { ...searxng, errors };
   } catch (err) { errors.push({ provider: 'searxng', message: err.message }); }
+
+  // No paid provider returned anything (or none configured) — always try the
+  // free, key-less tier before giving up so web search works out of the box.
+  // `disableFreeTier` lets hermetic tests opt out entirely.
+  if (opts.disableFreeTier !== true) {
+    try {
+      const free = await freeTierSearch(query, {
+        maxResults: opts.limit || 5,
+        locale: opts.locale,
+        freeSearch: opts.freeSearch,
+      });
+      if (free.results?.length) return { ...free, errors };
+    } catch (err) { errors.push({ provider: 'free', message: err.message }); }
+  }
 
   return { provider: 'none', configured: false, results: [], errors };
 }

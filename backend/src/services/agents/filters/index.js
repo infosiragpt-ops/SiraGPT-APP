@@ -38,7 +38,12 @@ const FILTERS_CONFIG = {
   'rate-limit':          { enabled: true,  options: {} },
   'redact-logs':         { enabled: true,  options: {} },
   'metrics':             { enabled: true,  options: {} },
-  'conversation-memory': { enabled: true,  options: {} },
+  // Disabled to match the module default (services/agents/filters/conversation-memory.js):
+  // re-injecting "[Recent user turns]" into extraContext is redundant (the model
+  // already gets full structured history) and used to leak into the visible
+  // prompt. Override to `true` only if the mechanism is revived against the
+  // system prompt.
+  'conversation-memory': { enabled: false, options: {} },
   'translate-prompt':    { enabled: false, options: {} },
 };
 

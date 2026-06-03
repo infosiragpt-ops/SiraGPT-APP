@@ -83,13 +83,38 @@ test('searchFreshContext falls back to exa when tavily fails', async () => {
   assert.equal(result.results[0].title, 'Exa Result');
 });
 
-test('searchFreshContext returns empty when both providers fail', async () => {
+test('searchFreshContext returns empty when paid and free tiers all fail', async () => {
   const fetchImpl = async () => { throw new Error('all down'); };
+  // Stub the free tier so this stays hermetic (no real DuckDuckGo/Wikipedia call).
+  const freeSearch = { search: async () => ({ results: [], provider: null }) };
   const result = await searchFreshContext('test', {
     env: { TAVILY_API_KEY: 'test-key', EXA_API_KEY: 'test-key' },
     fetchImpl,
+    freeSearch,
   });
   assert.equal(result.provider, 'none');
   assert.equal(result.results.length, 0);
   assert.ok(result.errors.length >= 2);
+});
+
+test('searchFreshContext falls back to free key-less tier when no paid keys configured', async () => {
+  const freeSearch = {
+    search: async () => ({
+      results: [{ title: 'Hoy', url: 'https://example.org/hoy', snippet: 'fecha actual' }],
+      provider: 'duckduckgo',
+    }),
+  };
+  const result = await searchFreshContext('qué día es hoy', { env: {}, freeSearch });
+  assert.equal(result.provider, 'free:duckduckgo');
+  assert.equal(result.results.length, 1);
+  assert.equal(result.results[0].title, 'Hoy');
+  assert.equal(result.results[0].content, 'fecha actual');
+});
+
+test('searchFreshContext skips free tier when disableFreeTier is set', async () => {
+  let called = false;
+  const freeSearch = { search: async () => { called = true; return { results: [], provider: null }; } };
+  const result = await searchFreshContext('qué día es hoy', { env: {}, freeSearch, disableFreeTier: true });
+  assert.equal(result.provider, 'none');
+  assert.equal(called, false);
 });

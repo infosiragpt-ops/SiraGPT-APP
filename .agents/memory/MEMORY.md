@@ -19,3 +19,5 @@
 - [Reserved VM GCLB 30s timeout](reserved-vm-gclb-timeout.md) — GCLB hard ~30s total-response cut; heartbeats don't reset it (unlike Autoscale). For >30s work: persist-then-poll, don't keep request alive.
 - [Image gen vs edit providers](image-edit-provider-matrix.md) — editing (imagePath) only works on OpenAI/Gemini; OpenRouter is generation-only and must be rerouted, never hard-fail.
 - [Backend test CI wiring](backend-test-ci-wiring.md) — new backend tests only run in CI if added to package.json `test` string; /health routes live in injectable createHealthRoutes for supertest.
+- [Curated IMAGE activation](curated-image-activation.md) — ensureStaticCatalogModels is hot-path; gate any "reactivate curated rows" write behind a per-instance once-per-process flag, never unconditional.
+- [Filter config override](filter-config-override.md) — FILTERS_CONFIG.enabled overrides each filter module's own enabled flag; change both or they silently disagree.

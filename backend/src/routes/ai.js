@@ -122,7 +122,7 @@ const documentBlockBudget = require('../services/document-block-budget');
 const feedbackLedger = require('../services/agents/feedback-ledger');
 const modelRouter = require('../services/ai-product-os/model-router');
 const modelSyncService = require('../services/model-sync-service');
-const { listManifestModels } = require('../services/model-catalog-manifest');
+const { listManifestModels, DEFAULT_ACTIVE_IMAGE_MODEL_NAMES } = require('../services/model-catalog-manifest');
 const {
   buildUniversalTaskContract,
   buildUniversalContractPrompt,
@@ -231,10 +231,10 @@ const DEEPSEEK_TEXT_MODELS = [
 
 const ADMIN_MANAGED_IMAGE_MODELS = listManifestModels({ type: 'IMAGE' });
 const ADMIN_MANAGED_IMAGE_MODEL_NAMES = new Set(ADMIN_MANAGED_IMAGE_MODELS.map(model => model.name));
-const VERIFIED_CHAT_IMAGE_MODEL_NAMES = new Set([
-  'gpt-image-2',
-  'openai/gpt-5.4-image-2',
-]);
+// Allow-list of IMAGE models accepted by /generate-image. Single source of
+// truth shared with the seeding layer (manifest) so any model that is seeded
+// ACTIVE is also accepted here — covering OpenAI, Gemini, OpenRouter and fal.ai.
+const VERIFIED_CHAT_IMAGE_MODEL_NAMES = DEFAULT_ACTIVE_IMAGE_MODEL_NAMES;
 
 function isVerifiedChatImageModelName(name) {
   return VERIFIED_CHAT_IMAGE_MODEL_NAMES.has(String(name || '').trim());
@@ -1693,9 +1693,16 @@ router.post(
         if (typeof req._filterCtx.prompt === 'string' && req._filterCtx.prompt) {
           prompt = req._filterCtx.prompt;
         }
-        if (req._filterCtx.extraContext) {
-          prompt = String(req._filterCtx.extraContext).trim() + '\n\n' + (prompt || '');
-        }
+        // NOTE: we deliberately do NOT fold `extraContext` into `prompt`.
+        // `prompt` is what gets persisted as the USER message and shown in the
+        // UI, so prepending anything here leaks internal text (e.g. the old
+        // "[Recent user turns]" block) into the visible message — and because
+        // that polluted text is then re-read as history on the next turn, it
+        // compounds/nests on every request. The model already receives the
+        // full conversation history as structured messages, so re-injecting
+        // recent turns into the user prompt is redundant. If a future filter
+        // needs to enrich what the model sees, it must target the system
+        // prompt, never the persisted user prompt.
   
       // ─── SSE resumption preflight ──────────────────────────────────
       // If the client sends `Last-Event-ID: <streamId>:<position>` we
@@ -5585,6 +5592,7 @@ function normalizeImageAspectRatio(value) {
 function imageGenerationSizeFor(provider, aspectRatio) {
   if (provider === "Gemini") return "1024x1024";
   if (provider === "OpenRouter") return "1024x1024";
+  if (provider === "Fal") return "1024x1024"; // fal.ai uses image_size enum; px size unused
   if (aspectRatio === '2:3' || aspectRatio === '3:4' || aspectRatio === '9:16') return "1024x1792";
   if (aspectRatio === '3:2' || aspectRatio === '4:3' || aspectRatio === '16:9') return "1792x1024";
   return "1024x1024";
@@ -5779,6 +5787,58 @@ async function generateOpenRouterImage(openrouter, { model, prompt, aspectRatio,
   }
 }
 
+// Map the app's "w:h" aspect ratio to fal.ai's `image_size` enum. fal.ai flux
+// endpoints accept a fixed set of named sizes (or an explicit {width,height});
+// we use the named enum so requests stay valid across flux/schnell|dev|pro.
+function falImageSizeFor(aspectRatio) {
+  switch (aspectRatio) {
+    case '9:16':
+    case '2:3': return 'portrait_16_9';
+    case '3:4': return 'portrait_4_3';
+    case '16:9':
+    case '3:2': return 'landscape_16_9';
+    case '4:3': return 'landscape_4_3';
+    case '1:1':
+    default: return 'square_hd';
+  }
+}
+
+// Generate an image via fal.ai (FLUX family). fal.ai is fast (~1-3s for schnell)
+// which sidesteps the GCLB ~30s response cut that made the slower OpenAI/Gemini
+// paths drop the connection. Returns the image as a base64 string (no data:
+// prefix) to match the other provider branches. Accepts FAL_KEY or FAL_API_KEY.
+async function generateFalImage({ model, prompt, aspectRatio, signal }) {
+  const credentials = process.env.FAL_KEY || process.env.FAL_API_KEY || '';
+  if (!credentials) {
+    throw new Error('La generación con fal.ai requiere FAL_KEY o FAL_API_KEY. Configúrala o elige otro modelo de imagen.');
+  }
+  // eslint-disable-next-line global-require
+  const { fal } = require('@fal-ai/client');
+  fal.config({ credentials });
+
+  const endpoint = String(model || 'fal-ai/flux/schnell').trim() || 'fal-ai/flux/schnell';
+  const result = await fal.subscribe(endpoint, {
+    input: {
+      prompt,
+      image_size: falImageSizeFor(aspectRatio),
+      num_images: 1,
+    },
+    logs: false,
+  });
+
+  const url = result?.data?.images?.[0]?.url || result?.images?.[0]?.url;
+  if (!url) {
+    throw new Error('fal.ai no devolvió ninguna imagen.');
+  }
+
+  const resp = await fetch(url, signal ? { signal } : undefined);
+  if (!resp || !resp.ok) {
+    throw new Error(`fal.ai: no se pudo descargar la imagen generada (HTTP ${resp ? resp.status : 'sin respuesta'}).`);
+  }
+  const buffer = Buffer.from(await resp.arrayBuffer());
+  return buffer.toString('base64');
+}
+
 function promptWithImageAspectRatio(prompt, aspectRatio, quality = '2K') {
   const descriptor = IMAGE_ASPECT_RATIOS[aspectRatio]?.prompt || IMAGE_ASPECT_RATIOS['1:1'].prompt;
   return `${prompt}\n\nImage framing requirement: ${descriptor}. Quality target: ${quality}, crisp professional detail. Keep the main subject safely inside the frame.`;
@@ -5933,7 +5993,9 @@ router.post(
 
       const openai = provider === "OpenRouter"
         ? createOpenRouterClient()
-        : createProviderClient(provider);
+        : provider === "Fal"
+          ? null // fal.ai uses its own SDK (see generateFalImage); no OpenAI-style client
+          : createProviderClient(provider);
 
       // ✅ Paid-plan token cap (single source of truth: plan-quota.js)
       const quotaCap = checkPaidTokenCap(req.user);
@@ -6013,10 +6075,10 @@ router.post(
       // devolvería un 404 "no body" (visto en prod con server: 'elb',
       // x-ds-trace-id). Lo cortamos aquí con un mensaje claro en español
       // antes de gastar tiempo en una llamada que va a fallar igual.
-      const IMAGE_CAPABLE_PROVIDERS = new Set(['OpenAI', 'Gemini', 'OpenRouter']);
+      const IMAGE_CAPABLE_PROVIDERS = new Set(['OpenAI', 'Gemini', 'OpenRouter', 'Fal']);
       if (!IMAGE_CAPABLE_PROVIDERS.has(provider)) {
         return res.status(400).json({
-          error: `El proveedor "${provider || 'desconocido'}" no soporta generación de imágenes. Usa OpenAI, Gemini u OpenRouter.`,
+          error: `El proveedor "${provider || 'desconocido'}" no soporta generación de imágenes. Usa OpenAI, Gemini, OpenRouter o fal.ai.`,
           code: 'image_provider_unsupported',
           provider: provider || null,
           supported: Array.from(IMAGE_CAPABLE_PROVIDERS),
@@ -6025,7 +6087,7 @@ router.post(
 
       if (!isVerifiedChatImageModelName(model)) {
         return res.status(400).json({
-          error: `El modelo "${model || 'desconocido'}" no esta verificado para generar imagenes en esta instalacion. Usa GPT Image 2 o GPT-5.4 Image 2.`,
+          error: `El modelo "${model || 'desconocido'}" no esta verificado para generar imagenes en esta instalacion. Elige uno de los modelos de imagen disponibles en el selector.`,
           code: 'image_model_unverified',
           model,
           supported: Array.from(VERIFIED_CHAT_IMAGE_MODEL_NAMES),
@@ -6115,7 +6177,7 @@ router.post(
           // edición seleccionada con un modelo OpenRouter "simplemente
           // funciona" en lugar de devolver un error.
           let editProvider = provider;
-          if (provider === "OpenRouter") {
+          if (provider === "OpenRouter" || provider === "Fal") {
             if (process.env.GEMINI_API_KEY) {
               editProvider = "Gemini";
             } else if (process.env.OPENAI_API_KEY) {
@@ -6123,7 +6185,7 @@ router.post(
             } else {
               throw new Error('La edición de imágenes requiere OpenAI o Gemini, pero ninguno está configurado. Configura OPENAI_API_KEY o GEMINI_API_KEY, o genera una imagen nueva sin partir de otra.');
             }
-            console.log(`[generate-image] OpenRouter no soporta edición; redirigiendo edición a ${editProvider}.`);
+            console.log(`[generate-image] ${provider} no soporta edición imagen-a-imagen; redirigiendo edición a ${editProvider}.`);
           }
           return aiService.generateImageFromImage(imagePath, imagePrompt, editProvider);
         }
@@ -6134,6 +6196,15 @@ router.post(
             prompt: imagePrompt,
             aspectRatio,
             quality,
+            signal: requestAbortController.signal,
+          });
+        }
+
+        if (provider === "Fal") {
+          return generateFalImage({
+            model,
+            prompt: imagePrompt,
+            aspectRatio,
             signal: requestAbortController.signal,
           });
         }

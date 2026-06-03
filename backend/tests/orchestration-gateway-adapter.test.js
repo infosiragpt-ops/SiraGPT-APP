@@ -35,17 +35,34 @@ test('enrichWithWebSearch returns null for non-fresh queries', async function() 
   assert.equal(result, null);
 });
 
-test('enrichWithWebSearch returns null when no API keys configured', async function() {
+test('enrichWithWebSearch returns null when no paid keys and free tier is empty', async function() {
   assert.ok(needsFreshWebContext('cual es la noticia mas actual sobre AI hoy 2026'));
-  var result = await enrichWithWebSearch('cual es la noticia mas actual sobre AI hoy 2026', { env: {} });
+  // Stub the free tier empty so this stays hermetic and asserts the no-results path.
+  var freeSearch = { search: async function() { return { results: [], provider: null }; } };
+  var result = await enrichWithWebSearch('cual es la noticia mas actual sobre AI hoy 2026', { env: {}, freeSearch });
   assert.equal(result, null);
+});
+
+test('enrichWithWebSearch injects fresh context via free key-less tier when no paid keys', async function() {
+  var freeSearch = {
+    search: async function() {
+      return { results: [{ title: 'AI hoy', url: 'https://example.org/ai', snippet: 'novedad' }], provider: 'duckduckgo' };
+    },
+  };
+  var result = await enrichWithWebSearch('cual es la noticia mas actual sobre AI hoy 2026', { env: {}, freeSearch });
+  assert.ok(result);
+  assert.equal(result.source, 'free:duckduckgo');
+  assert.ok(result.block.includes('Fresh Web Context'));
+  assert.ok(result.block.includes('AI hoy'));
 });
 
 test('enrichWithWebSearch returns null on network failure', async function() {
   var failingFetch = function() { throw new Error('network unreachable'); };
+  // Free tier also disabled so nothing falls back to real network.
   var result = await enrichWithWebSearch('noticias de ultima hora sobre el clima hoy', {
     env: {},
     fetchImpl: failingFetch,
+    disableFreeTier: true,
   });
   assert.equal(result, null);
 });

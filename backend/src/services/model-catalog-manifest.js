@@ -265,6 +265,36 @@ const STATIC_MODEL_MANIFEST = Object.freeze([
     description: 'Imagen 4 de Google: generacion de imagenes fotorealistas.',
     tags: ['gemini', 'google', 'imagen', 'image', 'photorealistic'],
   },
+  {
+    id: 'fal-ai/flux/schnell',
+    name: 'fal-ai/flux/schnell',
+    displayName: 'FLUX Schnell (fal.ai)',
+    provider: 'Fal',
+    type: 'IMAGE',
+    description: 'FLUX.1 [schnell] vía fal.ai: generación de imágenes ultrarrápida (1-3 s), ideal para evitar timeouts.',
+    pricing: { provider: 'fal.ai', billing: 'per_generation' },
+    tags: ['fal.ai', 'flux', 'image', 'fast'],
+  },
+  {
+    id: 'fal-ai/flux/dev',
+    name: 'fal-ai/flux/dev',
+    displayName: 'FLUX Dev (fal.ai)',
+    provider: 'Fal',
+    type: 'IMAGE',
+    description: 'FLUX.1 [dev] vía fal.ai: alta calidad fotorealista con buen balance velocidad/detalle.',
+    pricing: { provider: 'fal.ai', billing: 'per_generation' },
+    tags: ['fal.ai', 'flux', 'image', 'photorealistic'],
+  },
+  {
+    id: 'fal-ai/flux-pro/v1.1',
+    name: 'fal-ai/flux-pro/v1.1',
+    displayName: 'FLUX 1.1 Pro (fal.ai)',
+    provider: 'Fal',
+    type: 'IMAGE',
+    description: 'FLUX 1.1 Pro vía fal.ai: máxima calidad profesional de imagen.',
+    pricing: { provider: 'fal.ai', billing: 'per_generation' },
+    tags: ['fal.ai', 'flux', 'image', 'professional', 'ultra'],
+  },
   // ── AUDIO models ───────────────────────────────────────────────────────
   {
     id: 'whisper-1',
@@ -509,9 +539,28 @@ function getProviderCatalogDiagnostics({ includeModels = false } = {}) {
   });
 }
 
+// Curated set of IMAGE models that should be ACTIVE and selectable out of the
+// box (across every working provider: OpenAI, Gemini, OpenRouter, fal.ai). This
+// is the single source of truth for both the seeding layer
+// (model-sync-service: which rows to create/flip active) and the generation
+// route (ai.js: VERIFIED_CHAT_IMAGE_MODEL_NAMES allow-list). Keep them in lock
+// step so a model that is active is also accepted by /generate-image.
+const DEFAULT_ACTIVE_IMAGE_MODEL_NAMES = new Set([
+  'gpt-image-2',
+  'openai/gpt-5.4-image-2',
+  'dall-e-3',
+  'imagen-4.0-generate-001',
+  'google/gemini-3-pro-image-preview',
+  'black-forest-labs/flux-1.1-pro',
+  'fal-ai/flux/schnell',
+  'fal-ai/flux/dev',
+  'fal-ai/flux-pro/v1.1',
+]);
+
 module.exports = {
   PROVIDER_CATALOGS,
   STATIC_MODEL_MANIFEST,
+  DEFAULT_ACTIVE_IMAGE_MODEL_NAMES,
   getProviderCatalogDiagnostics,
   listManifestModels,
   mergeProviderModels,

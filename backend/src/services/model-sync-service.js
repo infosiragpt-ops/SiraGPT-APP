@@ -4,6 +4,7 @@ const {
   getProviderCatalogDiagnostics,
   listManifestModels,
   mergeProviderModels,
+  DEFAULT_ACTIVE_IMAGE_MODEL_NAMES,
 } = require('./model-catalog-manifest');
 const modelPricingService = require('./model-pricing-service');
 
@@ -16,6 +17,11 @@ class ModelSyncService {
       openrouter: { data: null, lastFetch: 0, ttl: 3600000 },
       deepseek: { data: null, lastFetch: 0, ttl: 3600000 }
     };
+    // Guards the one-time reactivation of the curated default IMAGE set so it
+    // does NOT override admin deactivations on every read. See
+    // ensureStaticCatalogModels below. Per-instance so prod (singleton) runs it
+    // once per process, while tests (fresh instances) each exercise it.
+    this._curatedImageActivationDone = false;
   }
 
   getStaticVideoModels() {
@@ -568,10 +574,34 @@ class ModelSyncService {
         data: {
           name: model.name,
           ...data,
-          isActive: false,
+          // Curated, verified IMAGE models seed ACTIVE so they are immediately
+          // selectable in the picker (across OpenAI/Gemini/OpenRouter/fal.ai).
+          // Everything else seeds inactive and stays admin-controlled.
+          isActive: DEFAULT_ACTIVE_IMAGE_MODEL_NAMES.has(model.name),
         },
       });
       created++;
+    }
+
+    // One-time-per-process reactivation of the curated default IMAGE set, even
+    // for rows that already existed inactive (e.g. seeded by a previous deploy
+    // or disabled long ago). These are shipped defaults the user (sole admin)
+    // explicitly wants enabled; without this, pre-existing inactive rows would
+    // never surface in the picker. Guarded by `_curatedImageActivationDone` so
+    // it runs once and does NOT silently override a deliberate admin
+    // deactivation on every subsequent /models read or /generate-image call.
+    if ((!types || types.has('IMAGE')) && !this._curatedImageActivationDone) {
+      const defaultActiveImageNames = catalogModels
+        .filter(model => String(model.type || '').toUpperCase() === 'IMAGE'
+          && DEFAULT_ACTIVE_IMAGE_MODEL_NAMES.has(model.name))
+        .map(model => model.name);
+      if (defaultActiveImageNames.length) {
+        await this.prisma.aiModel.updateMany({
+          where: { name: { in: defaultActiveImageNames }, type: 'IMAGE', isActive: false },
+          data: { isActive: true },
+        });
+      }
+      this._curatedImageActivationDone = true;
     }
 
     return { created, updated, existing: existingRows.length, count: catalogModels.length };

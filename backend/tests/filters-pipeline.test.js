@@ -167,17 +167,25 @@ describe('filters pipeline', () => {
 
     test('conversation-memory attaches recent user turns only above threshold', async () => {
     const filters = freshFilters();
-    const shortHistory = [{ role: 'user', content: 'a' }];
-    const longHistory = Array.from({ length: 10 }, (_, i) => ({
-      role: i % 2 === 0 ? 'user' : 'assistant',
-      content: `m${i}`,
-    }));
-    const ctx1 = { userId: 'u4', prompt: 'p', history: shortHistory };
-    await filters.runPre(ctx1);
-    assert.equal(ctx1.memoryAttached, undefined);
-    const ctx2 = { userId: 'u4', prompt: 'p', history: longHistory };
-    await filters.runPre(ctx2);
-    assert.ok(ctx2.memoryAttached >= 1);
-    assert.ok(ctx2.extraContext.includes('Recent user turns'));
+    // conversation-memory is disabled by default in production (its internal
+    // "Recent user turns" block was leaking into chat replies). Enable it
+    // explicitly here so the filter's own threshold logic stays covered.
+    filters.setFilterEnabled('conversation-memory', true);
+    try {
+      const shortHistory = [{ role: 'user', content: 'a' }];
+      const longHistory = Array.from({ length: 10 }, (_, i) => ({
+        role: i % 2 === 0 ? 'user' : 'assistant',
+        content: `m${i}`,
+      }));
+      const ctx1 = { userId: 'u4', prompt: 'p', history: shortHistory };
+      await filters.runPre(ctx1);
+      assert.equal(ctx1.memoryAttached, undefined);
+      const ctx2 = { userId: 'u4', prompt: 'p', history: longHistory };
+      await filters.runPre(ctx2);
+      assert.ok(ctx2.memoryAttached >= 1);
+      assert.ok(ctx2.extraContext.includes('Recent user turns'));
+    } finally {
+      filters.setFilterEnabled('conversation-memory', false);
+    }
   });
 });

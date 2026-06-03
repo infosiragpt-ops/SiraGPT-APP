@@ -70,6 +70,8 @@ async function enrichWithWebSearch(prompt, opts = {}) {
       env: opts.env || process.env,
       fetchImpl: opts.fetchImpl || globalThis.fetch,
       limit: dedicated ? 12 : 5,
+      freeSearch: opts.freeSearch,
+      disableFreeTier: opts.disableFreeTier,
     });
 
     if (!results?.results?.length) return null;
