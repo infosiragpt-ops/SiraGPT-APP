@@ -42,11 +42,14 @@ const { buildTaskTools, ARTIFACT_DIR } = require('../services/agents/task-tools'
 const taskStore = require('../services/agents/task-store');
 const auditLog = require('../services/agents/audit-log');
 const metrics = require('../services/agents/metrics');
+const openclawCapabilityKernel = require('../services/openclaw-capability-kernel');
 const {
   buildExecutionProfile,
   buildExecutionProfilePrompt,
-  validateFinalize,
 } = require('../services/agents/agentic-execution-profile');
+const {
+  validateAgentTaskFinalize,
+} = require('../services/agents/openclaw-autonomy-finalize-guard');
 const {
   buildUserIntentAlignmentProfile,
   buildUserIntentAlignmentPrompt,
@@ -392,6 +395,7 @@ router.post('/task/:taskId/retry', authenticateToken, async (req, res) => {
       maxRuntimeMs: snapshot.maxRuntimeMs || 2 * 60 * 60 * 1000,
       retryOf: snapshot.taskId,
       documentPolicy: snapshot.documentPolicy || null,
+      openclawRuntimeProfile: snapshot.openclawRuntimeProfile || null,
     }, { priority: 1, jobId: `${snapshot.taskId}-retry-${Date.now()}` });
 
     let streamState = snapshot.streamState || initialAgentState();
@@ -563,6 +567,7 @@ router.post(
       executionProfile: payload.executionProfile,
       intentAlignmentProfile: payload.intentAlignmentProfile,
       taskPlan: plan,
+      openclawRuntimeProfile: payload.openclawRuntimeProfile || null,
       events: [],
       artifacts: [],
     });
@@ -647,6 +652,13 @@ router.post(
     const clientFileMetadata = normalizeClientMetadata(req.body.fileMetadata, fileIds);
     const executionProfile = buildExecutionProfile({ goal: agentGoal, fileIds, fileMetadata: clientFileMetadata });
     const intentAlignmentProfile = buildUserIntentAlignmentProfile({ request: agentGoal, fileIds });
+    const openclawRuntimeProfile = buildOpenClawRuntimeProfile({
+      goal: agentGoal,
+      userId: req.user?.id || null,
+      chatId: typeof req.body.chatId === 'string' ? req.body.chatId : null,
+      fileIds,
+      model: typeof req.body.model === 'string' ? req.body.model : null,
+    });
     const universalTaskContract = buildUniversalTaskContract({
       rawUserRequest: agentGoal,
       fileIds,
@@ -675,6 +687,7 @@ router.post(
       goal: agentGoal,
       executionProfile,
       intentAlignmentProfile,
+      openclawProfile: openclawRuntimeProfile,
       universalTaskContract,
       fileIds,
       maxRuntimeMs: Number.isFinite(Number.parseInt(req.body.maxRuntimeMs, 10))
@@ -803,6 +816,7 @@ router.post(
       executionProfile,
       intentAlignmentProfile,
       taskPlan,
+      openclawRuntimeProfile,
       universalTaskContract,
       enterpriseExecutionGraph,
       enterpriseRuntimeProfile,
@@ -930,6 +944,7 @@ router.post(
               executionProfile,
               intentAlignmentProfile,
               taskPlan,
+              openclawRuntimeProfile,
               universalTaskContract,
               enterpriseExecutionGraph,
               enterpriseRuntimeProfile,
@@ -1010,10 +1025,14 @@ router.post(
       enterpriseToolRuntimePlan,
       enterpriseQaBoardReview,
       agenticOperatingCore,
+      openclawRuntimeProfile,
       frameworks: frameworkStatus,
       taskContract,
       taskContractSource,
     });
+    for (const event of openclawCapabilityKernel.buildOpenClawRuntimeEvents(openclawRuntimeProfile)) {
+      emit(event);
+    }
 
     // Per-step id counter shared with the tool event bus so the UI
     // can group tool_call + tool_output events under the step card
@@ -1093,19 +1112,20 @@ router.post(
                 artifacts,
                 executionProfile,
                 intentAlignmentProfile,
-              taskPlan,
-              universalTaskContract,
-              enterpriseExecutionGraph,
-              enterpriseRuntimeProfile,
-              enterpriseToolRuntimePlan,
-              enterpriseQaBoardReview,
-              agenticOperatingCore,
-              documentPolicy,
-              frameworks: frameworkStatus,
-              durableExecution: enterpriseRuntimeProfile.durableExecution,
-              maxSteps,
-              maxRuntimeMs,
-              updatedAt: new Date().toISOString(),
+                taskPlan,
+                openclawRuntimeProfile,
+                universalTaskContract,
+                enterpriseExecutionGraph,
+                enterpriseRuntimeProfile,
+                enterpriseToolRuntimePlan,
+                enterpriseQaBoardReview,
+                agenticOperatingCore,
+                documentPolicy,
+                frameworks: frameworkStatus,
+                durableExecution: enterpriseRuntimeProfile.durableExecution,
+                maxSteps,
+                maxRuntimeMs,
+                updatedAt: new Date().toISOString(),
               },
             },
           });
@@ -1135,10 +1155,16 @@ router.post(
           enterpriseToolRuntimePlan,
           enterpriseQaBoardReview,
           agenticOperatingCore,
-          uploadedFileContext
+          uploadedFileContext,
+          openclawRuntimeProfile
         ),
         ctx: toolCtx,
-        finalizeGuard: ({ steps, unavailableTools }) => validateFinalize(finalizeProfile, steps, { unavailableTools }),
+        finalizeGuard: ({ steps, unavailableTools }) => validateAgentTaskFinalize({
+          finalizeProfile,
+          openclawRuntimeProfile,
+          steps,
+          unavailableTools,
+        }),
         onStepStart: (step) => {
           // react-agent gives us THE assistant turn (thought + tool
           // invocations). We turn the `thought` line into a
@@ -1375,6 +1401,13 @@ async function handleQueuedTaskRequest(req, res) {
     displayGoal,
     files: fileIds,
   });
+  const openclawRuntimeProfile = buildOpenClawRuntimeProfile({
+    goal: agentGoal,
+    userId: req.user?.id || null,
+    chatId,
+    fileIds,
+    model,
+  });
 
   const payload = {
     taskId,
@@ -1390,6 +1423,7 @@ async function handleQueuedTaskRequest(req, res) {
     maxSteps,
     maxRuntimeMs,
     documentPolicy,
+    openclawRuntimeProfile,
   };
 
   let job;
@@ -1433,6 +1467,7 @@ async function handleQueuedTaskRequest(req, res) {
     queueName: getQueueName(),
     traceId,
     documentPolicy,
+    openclawRuntimeProfile,
     streamState,
     events: [],
     artifacts: [],
@@ -1456,6 +1491,12 @@ async function handleQueuedTaskRequest(req, res) {
   streamState = reduceAgentState(streamState, policyEvent);
   written = taskStore.appendTaskEvent({ ...written, streamState }, policyEvent, streamState, { eventLimit: TASK_EVENT_LIMIT }) || written;
   await agentTaskPersistence.appendAgentTaskEvent(written, written.events?.[written.events.length - 1] || policyEvent);
+
+  for (const openclawEvent of openclawCapabilityKernel.buildOpenClawRuntimeEvents(openclawRuntimeProfile)) {
+    streamState = reduceAgentState(streamState, openclawEvent);
+    written = taskStore.appendTaskEvent({ ...written, streamState }, openclawEvent, streamState, { eventLimit: TASK_EVENT_LIMIT }) || written;
+    await agentTaskPersistence.appendAgentTaskEvent(written, written.events?.[written.events.length - 1] || openclawEvent);
+  }
 
   await agentTaskPersistence.upsertAgentTask({
     ...written,
@@ -1565,6 +1606,13 @@ async function handleLocalTaskRequest(req, res, { fallbackReason = 'local_fallba
     displayGoal,
     files: fileIds,
   });
+  const openclawRuntimeProfile = buildOpenClawRuntimeProfile({
+    goal: agentGoal,
+    userId: req.user?.id || null,
+    chatId,
+    fileIds,
+    model,
+  });
   let streamState = initialAgentState();
   const snapshot = {
     taskId,
@@ -1583,6 +1631,7 @@ async function handleLocalTaskRequest(req, res, { fallbackReason = 'local_fallba
     queueName: 'local-agent-task',
     traceId,
     documentPolicy,
+    openclawRuntimeProfile,
     streamState,
     events: [],
     artifacts: [],
@@ -1603,6 +1652,11 @@ async function handleLocalTaskRequest(req, res, { fallbackReason = 'local_fallba
   const policyEvent = { type: 'document_policy', policy: documentPolicy };
   streamState = reduceAgentState(streamState, policyEvent);
   appendTaskEvent(snapshot, policyEvent, streamState);
+
+  for (const openclawEvent of openclawCapabilityKernel.buildOpenClawRuntimeEvents(openclawRuntimeProfile)) {
+    streamState = reduceAgentState(streamState, openclawEvent);
+    appendTaskEvent(snapshot, openclawEvent, streamState);
+  }
 
   await agentTaskPersistence.upsertAgentTask({
     ...snapshot,
@@ -1641,6 +1695,7 @@ async function handleLocalTaskRequest(req, res, { fallbackReason = 'local_fallba
     maxSteps,
     maxRuntimeMs,
     documentPolicy,
+    openclawRuntimeProfile,
   };
 
   Promise.resolve().then(async () => {
@@ -1848,6 +1903,29 @@ function buildFinalizeProfile(executionProfile, universalTaskContract) {
   };
 }
 
+function buildOpenClawRuntimeProfile({ goal, userId = null, chatId = null, fileIds = [], model = null, context = {} } = {}) {
+  try {
+    return openclawCapabilityKernel.buildCapabilityProfile({
+      prompt: goal,
+      userId,
+      chatId,
+      attachmentCount: Array.isArray(fileIds) ? fileIds.length : 0,
+      model,
+      context: {
+        documents: Array.isArray(fileIds) ? fileIds.map((id) => ({ id, source: 'agent_task_file' })) : [],
+        ...context,
+      },
+    });
+  } catch (err) {
+    console.warn('[agent-task] openclaw runtime profile unavailable:', err?.message || err);
+    return null;
+  }
+}
+
+function buildOpenClawRuntimeMeta(profileOrSummary) {
+  return openclawCapabilityKernel.buildOpenClawRuntimeSummary(profileOrSummary) || profileOrSummary || null;
+}
+
 function readArtifactMetadata(id) {
   const metadataPath = path.join(ARTIFACT_DIR, `${id}.json`);
   try {
@@ -1902,7 +1980,8 @@ function buildAgentSystemPrompt(
   enterpriseToolRuntimePlan = null,
   enterpriseQaBoardReview = null,
   agenticOperatingCore = null,
-  uploadedFileContext = ''
+  uploadedFileContext = '',
+  openclawRuntimeProfile = null
 ) {
   const parts = [TASK_SYSTEM_PROMPT];
   if (universalTaskContract) {
@@ -1919,6 +1998,9 @@ function buildAgentSystemPrompt(
   }
   if (agenticOperatingCore) {
     parts.push(buildAgenticOperatingPrompt(agenticOperatingCore));
+  }
+  if (openclawRuntimeProfile) {
+    parts.push(openclawCapabilityKernel.buildOpenClawPromptBlock(openclawRuntimeProfile));
   }
   if (enterpriseToolRuntimePlan) {
     parts.push(
@@ -1986,6 +2068,7 @@ function createTaskRecord({
   executionProfile = null,
   intentAlignmentProfile = null,
   taskPlan = null,
+  openclawRuntimeProfile = null,
   universalTaskContract = null,
   enterpriseExecutionGraph = null,
   enterpriseRuntimeProfile = null,
@@ -2025,6 +2108,7 @@ function createTaskRecord({
     executionProfile,
     intentAlignmentProfile,
     taskPlan,
+    openclawRuntimeProfile,
     universalTaskContract,
     enterpriseExecutionGraph,
     enterpriseRuntimeProfile,
@@ -2125,6 +2209,7 @@ function formatTaskPayload(task) {
     executionProfile: task.executionProfile || null,
     intentAlignmentProfile: task.intentAlignmentProfile || null,
     taskPlan: task.taskPlan || null,
+    openclawRuntimeProfile: task.openclawRuntimeProfile || null,
     universalTaskContract: task.universalTaskContract || null,
     enterpriseExecutionGraph: task.enterpriseExecutionGraph || null,
     enterpriseRuntimeProfile: task.enterpriseRuntimeProfile || null,
@@ -2252,6 +2337,7 @@ function reduceAgentState(state, evt) {
           runtimeModel: evt.runtimeModel,
           runtimeProvider: evt.runtimeProvider,
           tools: evt.tools,
+          openclawRuntime: buildOpenClawRuntimeMeta(evt.openclawRuntimeSummary || evt.openclawRuntimeProfile),
         },
       };
     case 'step_start':
@@ -2395,6 +2481,7 @@ function toSerializableAgentState(state = {}) {
         runtimeModel: state.meta.runtimeModel,
         runtimeProvider: state.meta.runtimeProvider,
         tools: state.meta.tools,
+        openclawRuntime: state.meta.openclawRuntime || undefined,
       }
       : undefined,
   };

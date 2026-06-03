@@ -101,6 +101,41 @@ test('agentic execution profile: blocks finalize until required tools have succe
   assert.equal(allowed.ok, true);
 });
 
+test('agentic execution profile: OpenClaw autonomous software fusion requires code verification gates', () => {
+  const profile = buildExecutionProfile({
+    goal: 'Quiero que mejores el sofware copiando ideas de https://github.com/openclaw/openclaw/tree/v2026.5.28 y fusionarlo como agente autonomo',
+  });
+
+  assert.equal(profile.capabilities.needsCodeOrRepair, true);
+  assert.equal(profile.capabilities.needsExternalRepoAdaptation, true);
+  assert.equal(profile.capabilities.needsAutonomousSoftware, true);
+  assert.ok(profile.requiredTools.includes('run_tests'));
+  assert.ok(profile.qualityGates.some((gate) => /external repository capabilities/i.test(gate)));
+  assert.ok(profile.qualityGates.some((gate) => /plan-execute-verify/i.test(gate)));
+});
+
+test('agentic execution profile: bulk source fusion requires inventory before activation', () => {
+  const profile = buildExecutionProfile({
+    goal: 'Son millones de lineas de codigo que tenemos que copiar y fusionar desde OpenClaw',
+  });
+
+  assert.equal(profile.capabilities.needsBulkSourceFusion, true);
+  assert.equal(profile.capabilities.needsCodeOrRepair, true);
+  assert.ok(profile.requiredTools.includes('run_tests'));
+  assert.ok(profile.qualityGates.some((gate) => /Inventory, attribute and rank bulk source/.test(gate)));
+});
+
+test('agentic execution profile: ordinary code copy does not require bulk source fusion', () => {
+  const profile = buildExecutionProfile({
+    goal: 'Copia este fragmento de codigo en la respuesta y explicalo breve',
+  });
+
+  assert.equal(profile.capabilities.needsCodeOrRepair, true);
+  assert.equal(profile.capabilities.needsBulkSourceFusion, false);
+  assert.ok(profile.requiredTools.includes('run_tests'));
+  assert.equal(profile.qualityGates.some((gate) => /bulk source/i.test(gate)), false);
+});
+
 test('classifyAttachmentKinds: separates images from documents by mime and extension', () => {
   const kinds = classifyAttachmentKinds([
     { id: 'a', mimeType: 'image/png' },

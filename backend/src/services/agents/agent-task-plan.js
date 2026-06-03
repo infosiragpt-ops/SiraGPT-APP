@@ -14,6 +14,7 @@ function buildAgentTaskPlan({
   executionProfile = null,
   intentAlignmentProfile = null,
   universalTaskContract = null,
+  openclawProfile = null,
   fileIds = [],
   maxRuntimeMs = null,
 } = {}) {
@@ -39,6 +40,45 @@ function buildAgentTaskPlan({
       objective: `Execute the validated UniversalTaskContract route ${universalTaskContract.pipeline}.`,
       requiredTools: [],
       checkpoint: `Format sovereignty locked: ${universalTaskContract.required_extension || 'inline'} / ${universalTaskContract.mime_type || 'no mime'}.`,
+    });
+  }
+
+  if (openclawProfile?.signals?.massiveSourceFusion) {
+    phases.push({
+      id: 'bulk_source_inventory',
+      role: 'architecture',
+      objective: 'Inventory the requested bulk source fusion by folder, license, dependency boundary, side effect, test surface, and SiraGPT owner surface before enabling any runtime copy.',
+      requiredTools: requiredTools.filter((tool) => ['run_tests'].includes(tool)),
+      checkpoint: 'Bulk source is categorized into reference-only material, native rewrite candidates, blocked surfaces, and verified activation slices.',
+    });
+  }
+
+  if (openclawProfile?.signals?.externalRepoAdaptation || openclawProfile?.signals?.nativeRewriteRequired) {
+    phases.push({
+      id: 'openclaw_reference_audit',
+      role: 'architecture',
+      objective: 'Audit the OpenClaw reference, license, folder map, and capability intent before changing SiraGPT runtime behavior.',
+      requiredTools: requiredTools.filter((tool) => ['web_search', 'run_tests'].includes(tool)),
+      checkpoint: 'OpenClaw is treated as attributed reference input and mapped to SiraGPT-owned integration surfaces.',
+    });
+    phases.push({
+      id: 'native_runtime_fusion',
+      role: 'software_agent',
+      objective: 'Fuse the requested OpenClaw-style behavior through SiraGPT backend services, skills, task contracts, and tests.',
+      requiredTools: requiredTools.filter((tool) => ['run_tests'].includes(tool)),
+      checkpoint: openclawProfile?.signals?.massiveSourceFusion
+        ? 'Only ranked, verified native slices are activated; broad upstream copy remains inactive/reference-only.'
+        : 'Runtime behavior is implemented through SiraGPT-owned modules with no active upstream runtime dependency.',
+    });
+  }
+
+  if (openclawProfile?.signals?.wantsAutonomousAgent) {
+    phases.push({
+      id: 'autonomous_agent_contract',
+      role: 'orchestrator',
+      objective: 'Preserve a durable autonomous loop with planning, tool execution, checkpoints, verification, and explicit residual-risk reporting.',
+      requiredTools: requiredTools.filter((tool) => ['run_tests'].includes(tool)),
+      checkpoint: 'The task can continue as an agent workflow instead of collapsing into a single chat answer.',
     });
   }
 
@@ -118,9 +158,32 @@ function buildAgentTaskPlan({
     requestedFormat: intentAlignmentProfile?.requestedFormat || null,
     groundingMode: intentAlignmentProfile?.groundingMode || 'unknown',
     hardConstraints,
+    openclawFusion: buildOpenClawFusionSummary(openclawProfile),
     phases,
-    successCriteria: buildSuccessCriteria({ executionProfile, intentAlignmentProfile, phases }),
-    risks: buildRisks({ executionProfile, intentAlignmentProfile }),
+    successCriteria: buildSuccessCriteria({ executionProfile, intentAlignmentProfile, phases, openclawProfile }),
+    risks: buildRisks({ executionProfile, intentAlignmentProfile, openclawProfile }),
+  };
+}
+
+function buildOpenClawFusionSummary(openclawProfile) {
+  if (!openclawProfile || typeof openclawProfile !== 'object') return null;
+  const signals = openclawProfile.signals || {};
+  const active = Boolean(signals.externalRepoAdaptation || signals.nativeRewriteRequired || signals.wantsAutonomousAgent);
+  if (!active) return null;
+  return {
+    active: true,
+    version: openclawProfile.version || null,
+    reason: openclawProfile.routing?.reason || null,
+    signals: {
+      externalRepoAdaptation: Boolean(signals.externalRepoAdaptation),
+      nativeRewriteRequired: Boolean(signals.nativeRewriteRequired),
+      massiveSourceFusion: Boolean(signals.massiveSourceFusion),
+      wantsAutonomousAgent: Boolean(signals.wantsAutonomousAgent),
+      likelyLongRunning: Boolean(signals.likelyLongRunning),
+    },
+    qualityGates: Array.isArray(openclawProfile.executionDossier?.qualityGates)
+      ? openclawProfile.executionDossier.qualityGates.slice(0, 12)
+      : [],
   };
 }
 
@@ -132,7 +195,7 @@ function summarizeObjective(goal, intentAlignmentProfile) {
   return `${taxonomy}:${mode}${format}${clean ? ` · ${clean.slice(0, 180)}` : ''}`;
 }
 
-function buildSuccessCriteria({ executionProfile, intentAlignmentProfile, phases }) {
+function buildSuccessCriteria({ executionProfile, intentAlignmentProfile, phases, openclawProfile = null }) {
   const criteria = [
     'The final answer directly satisfies the latest user instruction.',
     'No fabricated citations, DOI, files, tool results or verification claims.',
@@ -151,10 +214,19 @@ function buildSuccessCriteria({ executionProfile, intentAlignmentProfile, phases
   if (phases.some((phase) => phase.id === 'source_research')) {
     criteria.push('Sources keep DOI/URL/year/provider metadata and verified gaps are stated clearly.');
   }
+  if (openclawProfile?.signals?.externalRepoAdaptation) {
+    criteria.push('OpenClaw capabilities are mapped to SiraGPT-native services/skills/tests before any integration is claimed.');
+  }
+  if (openclawProfile?.signals?.massiveSourceFusion) {
+    criteria.push('Bulk source fusion is handled as inventory, attribution, ranked activation slices, and tests rather than an uncontrolled line-count import.');
+  }
+  if (openclawProfile?.signals?.wantsAutonomousAgent) {
+    criteria.push('Autonomous behavior is evidenced by plan, tool execution, checkpoints and verification, not by a one-turn promise.');
+  }
   return criteria;
 }
 
-function buildRisks({ executionProfile, intentAlignmentProfile }) {
+function buildRisks({ executionProfile, intentAlignmentProfile, openclawProfile = null }) {
   const risks = [];
   if (executionProfile?.capabilities?.strictEvidence) {
     risks.push('Strict evidence requests can fail if providers return fewer verified records than requested; never pad with weak rows.');
@@ -164,6 +236,15 @@ function buildRisks({ executionProfile, intentAlignmentProfile }) {
   }
   if (intentAlignmentProfile?.requestedFormat) {
     risks.push('Generated file must be technically inspectable before download is offered.');
+  }
+  if (openclawProfile?.signals?.externalRepoAdaptation || openclawProfile?.signals?.nativeRewriteRequired) {
+    risks.push('External repository adaptation can contaminate active runtime if upstream code is imported directly instead of rewritten behind SiraGPT contracts.');
+  }
+  if (openclawProfile?.signals?.massiveSourceFusion) {
+    risks.push('Million-line copy requests can create unreviewable bloat; enforce inventory, attribution, activation budgets, and focused tests per slice.');
+  }
+  if (openclawProfile?.signals?.wantsAutonomousAgent) {
+    risks.push('Autonomous-agent requests can be overclaimed; require durable state, checkpoints, tests, and explicit blockers.');
   }
   if (!risks.length) {
     risks.push('Main risk is premature finalization without enough tool evidence.');
@@ -178,6 +259,14 @@ function buildAgentTaskPlanPrompt(plan) {
     .join('\n');
   const criteria = (plan.successCriteria || []).map((item, index) => `${index + 1}. ${item}`).join('\n');
   const risks = (plan.risks || []).map((item, index) => `${index + 1}. ${item}`).join('\n');
+  const fusion = plan.openclawFusion
+    ? [
+      'OpenClaw fusion:',
+      `active=${Boolean(plan.openclawFusion.active)} reason=${plan.openclawFusion.reason || 'none'}`,
+      `signals=${JSON.stringify(plan.openclawFusion.signals || {})}`,
+      `quality_gates=${(plan.openclawFusion.qualityGates || []).join(', ')}`,
+    ].join('\n')
+    : '';
 
   return [
     `Task plan: ${plan.version}`,
@@ -191,6 +280,7 @@ function buildAgentTaskPlanPrompt(plan) {
     criteria || 'No criteria generated.',
     'Risks to control:',
     risks || 'No risks generated.',
+    fusion,
   ].join('\n');
 }
 
@@ -198,4 +288,5 @@ module.exports = {
   PLAN_VERSION,
   buildAgentTaskPlan,
   buildAgentTaskPlanPrompt,
+  buildOpenClawFusionSummary,
 };
