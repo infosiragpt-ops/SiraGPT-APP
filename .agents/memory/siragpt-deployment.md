@@ -32,6 +32,23 @@ Boot architecture: `backend/index.js` calls `startServer()` at the very bottom, 
 `app.listen()` only fires after ALL module requires + ~700 lines of middleware
 setup complete. The port cannot open until the whole module graph loads.
 
+## Replit injects PORT=5000 and routes external 80 to it — app MUST listen on PORT
+In Reserved VM (and Autoscale) deployments, Replit injects `PORT=5000` into the
+container and routes external port 80 to **that injected PORT**, regardless of what
+`[[ports]]` declares as `localPort`. If the app listens on any other port (e.g.,
+hard-coded 3000 via `FRONTEND_PORT=3000`), the health-check fails:
+"a port configuration was specified but the required port was never opened, expected port 5000".
+
+**Fix in `scripts/start-all.cjs`:** When `REPLIT_DEPLOYMENT=1`, resolve `FRONTEND_PORT`
+as `process.env.PORT || process.env.FRONTEND_PORT || 3000` so the injected PORT wins
+over the run-command's `FRONTEND_PORT=3000` override. In dev, FRONTEND_PORT takes
+priority (keeps Next.js on 3000 as the dev workflow expects).
+
+**Why:** The `.replit` run command hard-codes `FRONTEND_PORT=3000` for dev compatibility,
+but in production Replit's container infrastructure injects PORT=5000 and routes to it.
+The `[[ports]]` `localPort` declaration is only metadata; routing is driven by the
+injected PORT env var.
+
 ## Reserved VM (& Autoscale) allow only ONE external port
 A Reserved VM / Autoscale deployment exposes exactly ONE external port. `.replit`
 must declare a single `[[ports]]` entry with `externalPort = 80`; the exposed
