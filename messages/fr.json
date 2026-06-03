@@ -214,7 +214,7 @@
     "placeholderDefault": "Écrivez un message", "placeholderImage": "Décrivez l'image à créer",
     "placeholderVideo": "Décrivez la vidéo à créer", "placeholderWebSearch": "Rechercher sur le web",
     "placeholderGmail": "Commande Gmail", "placeholderGoogle": "Commande Google", "placeholderSpotify": "Commande Spotify",
-    "placeholderWord": "Décrivez le document à créer", "sendHint": "Envoyer", "stopHint": "Arrêter",
+    "placeholderWord": "Décrivez le document à créer", "placeholderComputer": "Dites ce que vous voulez contrôler", "sendHint": "Envoyer", "stopHint": "Arrêter",
     "dropFiles": "Déposez les fichiers pour les téléverser"
   },
   "common": {

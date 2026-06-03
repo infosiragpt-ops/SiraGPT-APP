@@ -346,7 +346,7 @@ interface ChatContextType {
   addVideoMessage: (prompt: string, fileIds?: string[], chat?: any, options?: VideoGenerationOptions) => Promise<void>
   addThesisMessage: (topics: string[]) => Promise<void>
   clearCurrentChat: () => void
-  deleteChat: (chatId: string) => void
+  deleteChat: (chatId: string) => Promise<boolean> | boolean
   selectedModel: string
   setSelectedModel: (model: string) => void
   selectProvider: string
@@ -1536,6 +1536,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
   const retryPendingMessage = useCallback(async (msg: PendingMessage) => {
     try {
+      // If the original send is still streaming, the pending draft is not
+      // actually stale yet. Retrying now would call addMessage() again,
+      // creating a second ASSISTANT placeholder/stream for the same USER turn.
+      if (activeStreamingChatIdsRef.current.has(msg.chatId)) return false
+
       let targetChat =
         currentChatRef.current?.id === msg.chatId
           ? currentChatRef.current
@@ -1850,8 +1855,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   }, [currentChat, token])
 
   const deleteChat = useCallback(
-    async (chatId: string) => {
-      if (!token) return
+    async (chatId: string): Promise<boolean> => {
+      if (!token) return false
 
       const wasCurrentChat = currentChatRef.current?.id === chatId
       discardActiveStreamForChat(chatId, { notifyBackend: true })
@@ -1870,8 +1875,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             }
           } catch { /* ignore storage failures */ }
         }
+        return true
       } catch (error) {
         console.error("Failed to delete chat:", error)
+        return false
       }
     },
     [discardActiveStreamForChat, token],
@@ -2928,7 +2935,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const stableCreateNewChat = useCallback(((...args: Parameters<typeof createNewChat>) =>
     createNewChatRef.current(...args)) as typeof createNewChat, [])
   const stableSelectChat = useCallback((chatId: string) => selectChatRef.current(chatId), [])
-  const stableDeleteChat = useCallback((chatId: string) => { void deleteChatRef.current(chatId) }, [])
+  const stableDeleteChat = useCallback((chatId: string) => deleteChatRef.current(chatId), [])
   const stableLoadMoreChats = useCallback(() => loadMoreChatsRef.current(), [])
   const stableResetChats = useCallback(() => resetChatsRef.current(), [])
 
@@ -3025,7 +3032,7 @@ interface ChatListContextType {
   currentChatTitle: string | null
   setCurrentChat: React.Dispatch<React.SetStateAction<Chat | null>>
   selectChat: (chatId: string) => void
-  deleteChat: (chatId: string) => void
+  deleteChat: (chatId: string) => Promise<boolean> | boolean
   createNewChat: ChatContextType["createNewChat"]
   loadMoreChats: () => Promise<void>
   resetChats: () => void

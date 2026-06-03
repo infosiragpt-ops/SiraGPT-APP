@@ -449,7 +449,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
     // payload. If If-None-Match matches, return 304 immediately.
     try {
       const fingerprintRow = await prisma.chat.findFirst({
-        where: { id: req.params.id, userId: req.user.id },
+        where: { id: req.params.id, userId: req.user.id, deletedAt: null },
         select: {
           id: true,
           updatedAt: true,
@@ -480,10 +480,12 @@ router.get('/:id', authenticateToken, async (req, res) => {
     const chat = await prisma.chat.findFirst({
       where: {
         id: req.params.id,
-        userId: req.user.id
+        userId: req.user.id,
+        deletedAt: null,
       },
       include: {
         messages: {
+          where: { deletedAt: null },
           orderBy: { timestamp: 'asc' }
         },
         customGpt: {
@@ -589,7 +591,8 @@ router.put('/:id', [
     const chat = await prisma.chat.updateMany({
       where: {
         id: req.params.id,
-        userId: req.user.id
+        userId: req.user.id,
+        deletedAt: null,
       },
       data: updateData
     });
@@ -618,18 +621,39 @@ router.put('/:id', [
 // Delete chat
 router.delete('/:id', authenticateToken, async (req, res) => {
   try {
-    const deletedChat = await prisma.chat.deleteMany({
-      where: {
-        id: req.params.id,
-        userId: req.user.id
-      }
+    const chat = await prisma.chat.findFirst({
+      where: { id: req.params.id, userId: req.user.id, deletedAt: null },
+      select: { id: true },
     });
 
-    if (deletedChat.count === 0) {
+    if (!chat) {
       return res.status(404).json({ error: 'Chat not found' });
     }
 
-    res.json({ message: 'Chat deleted successfully' });
+    const deletedAt = new Date();
+    const updatedChat = await prisma.$transaction(async (tx) => {
+      await tx.message.updateMany({
+        where: { chatId: chat.id, deletedAt: null },
+        data: { deletedAt },
+      });
+
+      return tx.chat.update({
+        where: { id: chat.id },
+        data: {
+          deletedAt,
+          isArchived: true,
+          updatedAt: deletedAt,
+        },
+        select: { id: true, deletedAt: true, isArchived: true },
+      });
+    });
+
+    res.json({
+      ok: true,
+      success: true,
+      message: 'Chat deleted successfully',
+      chat: updatedChat,
+    });
   } catch (error) {
     console.error('Delete chat error:', error);
     res.status(500).json({ error: 'Failed to delete chat' });
@@ -670,7 +694,8 @@ router.post('/:id/messages', [
     const chat = await prisma.chat.findFirst({
       where: {
         id: req.params.id,
-        userId: req.user.id
+        userId: req.user.id,
+        deletedAt: null,
       }
     });
 

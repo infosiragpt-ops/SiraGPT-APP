@@ -2668,7 +2668,7 @@ class ApiClient {
     return this.request('/spotify/status');
   }
 
-  async startComputerUseChatIntegration(data: { message: string; chatId: string; sessionId?: string }) {
+  async startComputerUseChatIntegration(data: { message: string; chatId: string; sessionId?: string; mode?: 'browser' | 'chrome' | 'computer' }) {
     return this.request('/computer-use/chat-integration', {
       method: 'POST',
       body: JSON.stringify(data),

@@ -214,7 +214,7 @@
     "placeholderDefault": "メッセージを入力", "placeholderImage": "生成したい画像を記述",
     "placeholderVideo": "生成したい動画を記述", "placeholderWebSearch": "ウェブを検索",
     "placeholderGmail": "Gmail コマンド", "placeholderGoogle": "Google コマンド", "placeholderSpotify": "Spotify コマンド",
-    "placeholderWord": "作成したい文書を記述", "sendHint": "送信", "stopHint": "停止",
+    "placeholderWord": "作成したい文書を記述", "placeholderComputer": "操作したい内容を入力", "sendHint": "送信", "stopHint": "停止",
     "dropFiles": "ファイルをここにドロップ"
   },
   "common": {

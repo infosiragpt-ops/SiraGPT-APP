@@ -7,20 +7,15 @@ import { useSearchParams } from "next/navigation"
 import {
   ArrowLeft,
   Bot,
-  Save,
   Eye,
   Upload,
   X,
-  Plus,
-  Trash2,
   Wand2,
   Settings,
   MessageSquare,
   Globe,
-  Database,
   ImageIcon,
   Code,
-  Sparkles,
   BookOpen,
   Briefcase,
   Palette,
@@ -36,13 +31,12 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { Slider } from "@/components/ui/slider"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { useChat } from "@/lib/chat-context-integrated"
+import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 import { gptsService, type CustomGPT } from "@/lib/gpts-service"
 import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
@@ -66,6 +60,15 @@ const categories = [
   { name: "Travel", icon: <Globe className="w-4 h-4" /> },
   { name: "Other", icon: <Star className="w-4 h-4" /> },
 ]
+
+const liquidPanel =
+  "relative overflow-hidden rounded-[24px] border border-white/60 bg-white/75 shadow-[0_18px_50px_-28px_rgba(15,23,42,0.35),inset_0_1px_0_rgba(255,255,255,0.78)] backdrop-blur-2xl dark:border-white/10 dark:bg-zinc-950/55 dark:shadow-[0_18px_60px_-30px_rgba(0,0,0,0.85),inset_0_1px_0_rgba(255,255,255,0.08)]"
+
+const liquidField =
+  "rounded-2xl border-white/65 bg-white/78 shadow-[inset_0_1px_0_rgba(255,255,255,0.75)] backdrop-blur-xl placeholder:text-zinc-400 focus-visible:ring-2 focus-visible:ring-zinc-950/10 dark:border-white/10 dark:bg-white/[0.055] dark:placeholder:text-zinc-500 dark:focus-visible:ring-white/15"
+
+const liquidGhost =
+  "rounded-full border-white/70 bg-white/70 text-zinc-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.75)] backdrop-blur-xl hover:bg-white/90 hover:text-zinc-950 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-300 dark:hover:bg-white/[0.1] dark:hover:text-white"
 
 interface GPTFormData {
   name: string
@@ -298,15 +301,15 @@ export default function CreateGPTPage() {
 
       if (isEditMode && editId) {
         result = await gptsService.updateGPT(editId, gptData)
-        toast.success("GPT updated successfully!")
+        toast.success("GPT actualizado")
       } else {
         result = await gptsService.createGPT(gptData)
-        toast.success("GPT created successfully!")
+        toast.success("GPT creado")
       }
 
       router.push("/gpts")
     } catch (error: any) {
-      toast.error(error.message || "Failed to save GPT")
+      toast.error(error.message || "No se pudo guardar el GPT")
     } finally {
       setIsSaving(false)
     }
@@ -370,7 +373,7 @@ export default function CreateGPTPage() {
 
   const generateInstructions = (): void => {
     if (!formData.name || !formData.description) {
-      toast.error("Please fill in name and description first");
+      toast.error("Completa nombre y descripción primero");
       return;
     }
 
@@ -426,7 +429,7 @@ export default function CreateGPTPage() {
 
   const generateGreeting = (): void => {
     if (!formData.name || !formData.description) {
-      toast.error("Please fill in name and description first");
+      toast.error("Completa nombre y descripción primero");
       return;
     }
 
@@ -484,7 +487,7 @@ export default function CreateGPTPage() {
     const file = event.target.files?.[0]
     if (file) {
       if (file.size > 5 * 1024 * 1024) { // 5MB limit
-        toast.error("Image size should be less than 5MB")
+        toast.error("La imagen debe pesar menos de 5MB")
         return
       }
 
@@ -525,16 +528,16 @@ export default function CreateGPTPage() {
       <div className="flex min-h-full items-center justify-center bg-background">
         <div className="text-center">
           <ThinkingIndicator size="lg" className="mx-auto mb-4" />
-          <p className="text-sm text-muted-foreground">Loading GPT...</p>
+          <p className="text-sm text-muted-foreground">Cargando GPT...</p>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="flex min-h-full flex-col bg-background">
+    <div className="flex min-h-full flex-col bg-[linear-gradient(180deg,#fbfbfb_0%,#f6f7f8_100%)] text-zinc-950 dark:bg-[linear-gradient(180deg,#09090b_0%,#111113_100%)] dark:text-zinc-50">
       {/* Header */}
-      <header className="sticky top-0 z-30 border-b border-border/60 bg-background/80 backdrop-blur-xl supports-[backdrop-filter]:bg-background/60">
+      <header className="sticky top-0 z-30 border-b border-white/60 bg-white/70 shadow-[0_8px_28px_-24px_rgba(15,23,42,0.42)] backdrop-blur-2xl dark:border-white/10 dark:bg-zinc-950/70">
         <div className="mx-auto flex w-full max-w-5xl items-center justify-between gap-3 px-4 py-3 sm:px-6">
           <div className="flex min-w-0 items-center gap-2 sm:gap-3">
             <SidebarTrigger className="md:hidden" />
@@ -542,13 +545,13 @@ export default function CreateGPTPage() {
               variant="ghost"
               size="icon"
               onClick={() => router.back()}
-              className="h-9 w-9 flex-shrink-0 rounded-full text-muted-foreground hover:text-foreground"
-              aria-label="Back"
+              className="h-9 w-9 flex-shrink-0 rounded-full text-zinc-500 hover:bg-white/70 hover:text-zinc-950 dark:text-zinc-400 dark:hover:bg-white/10 dark:hover:text-white"
+              aria-label="Volver"
             >
               <ArrowLeft className="h-4 w-4" />
             </Button>
             <div className="flex min-w-0 items-center gap-2.5">
-              <div className="grid h-9 w-9 flex-shrink-0 place-items-center overflow-hidden rounded-xl bg-gradient-to-br from-violet-500 to-indigo-600 text-base font-semibold text-white shadow-sm ring-1 ring-black/5">
+              <div className="grid h-9 w-9 flex-shrink-0 place-items-center overflow-hidden rounded-2xl border border-white/70 bg-zinc-950 text-base font-semibold text-white shadow-[0_10px_28px_-18px_rgba(15,23,42,0.85),inset_0_1px_0_rgba(255,255,255,0.26)] dark:border-white/10 dark:bg-white dark:text-zinc-950">
                 {uploadedImage ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img src={uploadedImage} alt="Avatar" className="h-full w-full object-cover" />
@@ -557,11 +560,11 @@ export default function CreateGPTPage() {
                 )}
               </div>
               <div className="min-w-0">
-                <h1 className="truncate text-base font-semibold leading-tight tracking-tight sm:text-lg">
-                  {isEditMode ? "Edit GPT" : "Create GPT"}
+                <h1 className="truncate text-base font-semibold leading-tight sm:text-lg">
+                  {isEditMode ? "Editar GPT" : "Crear GPT"}
                 </h1>
                 <p className="hidden truncate text-xs text-muted-foreground sm:block">
-                  {formData.name ? formData.name : "Configure your assistant"}
+                  {formData.name ? formData.name : "Configuración esencial"}
                 </p>
               </div>
             </div>
@@ -572,26 +575,26 @@ export default function CreateGPTPage() {
               size="sm"
               onClick={() => setIsPreviewOpen(true)}
               disabled={!formData.name}
-              className="h-9 rounded-full px-3"
+              className={cn("h-9 px-3", liquidGhost)}
             >
               <Eye className="h-4 w-4 sm:mr-2" />
-              <span className="hidden sm:inline">Preview</span>
+              <span className="hidden sm:inline">Vista previa</span>
             </Button>
             <Button
               onClick={handleSave}
               disabled={isSaving || !formData.name}
               size="sm"
-              className="h-9 rounded-full px-4 font-medium shadow-sm"
+              className="h-9 rounded-full bg-zinc-950 px-4 font-medium text-white shadow-[0_14px_30px_-18px_rgba(15,23,42,0.9)] hover:bg-zinc-800 dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200"
             >
               {isSaving ? (
                 <span className="flex items-center gap-2">
                   <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                  Saving...
+                  Guardando...
                 </span>
               ) : isEditMode ? (
-                "Update"
+                "Actualizar"
               ) : (
-                "Create"
+                "Crear"
               )}
             </Button>
           </div>
@@ -600,28 +603,28 @@ export default function CreateGPTPage() {
 
       {/* Main Content */}
       <div className="flex-1 px-4 py-6 sm:px-6 sm:py-8">
-        <div className="mx-auto w-full max-w-3xl space-y-6">
+        <div className="mx-auto w-full max-w-3xl space-y-5">
 
-          <div className="space-y-1.5">
-            <h2 className="text-xl font-semibold tracking-tight sm:text-2xl">
-              {isEditMode ? "Edit your GPT" : "Create a new GPT"}
+          <div className="space-y-1">
+            <h2 className="text-xl font-semibold sm:text-2xl">
+              {isEditMode ? "Ajusta tu asistente" : "Configura tu asistente"}
             </h2>
-            <p className="text-sm text-muted-foreground">
-              Customize an assistant with its own name, instructions and personality. Your changes are saved when you press {isEditMode ? "Update" : "Create"}.
+            <p className="max-w-2xl text-sm text-zinc-500 dark:text-zinc-400">
+              Completa lo esencial: identidad, instrucciones, modelo y acceso.
             </p>
           </div>
 
           {/* Basic Information Section */}
-          <Card className="overflow-hidden border-border/70 shadow-sm">
+          <Card className={liquidPanel}>
             <CardHeader className="gap-1 pb-4">
               <CardTitle className="flex items-center gap-2.5 text-base sm:text-lg">
-                <span className="grid h-8 w-8 flex-shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
+                <span className="grid h-8 w-8 flex-shrink-0 place-items-center rounded-2xl border border-white/70 bg-white/70 text-zinc-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.75)] dark:border-white/10 dark:bg-white/[0.07] dark:text-zinc-300">
                   <Bot className="h-4 w-4" />
                 </span>
-                <span>Basic Information</span>
+                <span>Identidad</span>
               </CardTitle>
               <CardDescription className="text-xs sm:text-sm">
-                Define the basic properties of your GPT
+                Nombre, descripción, categoría y avatar.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4 sm:space-y-6 pt-0">
@@ -632,7 +635,7 @@ export default function CreateGPTPage() {
                 <div className="flex flex-col items-start gap-5 sm:flex-row sm:items-center">
                   {/* Avatar Preview */}
                   <div className="relative h-20 w-20 flex-shrink-0">
-                    <div className="grid h-full w-full place-items-center overflow-hidden rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 text-3xl font-bold text-white shadow-md ring-1 ring-black/5">
+                    <div className="grid h-full w-full place-items-center overflow-hidden rounded-[22px] border border-white/70 bg-zinc-950 text-3xl font-bold text-white shadow-[0_18px_38px_-24px_rgba(15,23,42,0.9),inset_0_1px_0_rgba(255,255,255,0.24)] dark:border-white/10 dark:bg-white dark:text-zinc-950">
                       {uploadedImage ? (
                         <img src={uploadedImage} alt="Avatar" className="h-full w-full object-cover" />
                       ) : formData.iconUrl ? (
@@ -657,14 +660,14 @@ export default function CreateGPTPage() {
                   <div className="w-full flex-1 space-y-3">
                     {/* Emoji Options */}
                     <div>
-                      <Label className="text-xs text-muted-foreground">Quick Icons</Label>
+                      <Label className="text-xs text-muted-foreground">Iconos rápidos</Label>
                       <div className="mt-2 flex flex-wrap gap-1.5">
                         {emojiOptions.map((emoji) => (
                           <button
                             key={emoji}
                             type="button"
                             onClick={() => handleEmojiIcon(emoji)}
-                            className={`grid h-9 w-9 place-items-center rounded-xl border text-lg transition hover:border-primary hover:bg-primary/5 ${formData.iconUrl === emoji ? 'border-primary bg-primary/10 ring-1 ring-primary' : 'border-border'
+                          className={`grid h-9 w-9 place-items-center rounded-2xl border bg-white/65 text-lg shadow-[inset_0_1px_0_rgba(255,255,255,0.75)] backdrop-blur-xl transition hover:bg-white/90 dark:bg-white/[0.05] dark:hover:bg-white/[0.1] ${formData.iconUrl === emoji ? 'border-zinc-950 bg-white ring-1 ring-zinc-950/10 dark:border-white dark:bg-white/[0.14]' : 'border-white/65 dark:border-white/10'
                               }`}
                           >
                             {emoji}
@@ -675,10 +678,10 @@ export default function CreateGPTPage() {
 
                     {/* Upload Image Button */}
                     <div className="flex flex-wrap items-center gap-2">
-                      <Button variant="outline" size="sm" className="rounded-full" asChild>
+                      <Button variant="outline" size="sm" className={liquidGhost} asChild>
                         <label htmlFor="icon-upload" className="cursor-pointer">
                           <Upload className="mr-2 h-4 w-4" />
-                          Upload Image
+                          Subir imagen
                         </label>
                       </Button>
                       <input
@@ -690,12 +693,12 @@ export default function CreateGPTPage() {
                       />
                       {hasCustomIcon() && (
                         <Button variant="ghost" size="sm" onClick={removeImage} className="rounded-full text-muted-foreground">
-                          Remove
+                          Quitar
                         </Button>
                       )}
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      Choose an emoji, upload an image, or use the first letter of your GPT's name
+                      Emoji, imagen o inicial del nombre.
                     </p>
                   </div>
                 </div>
@@ -703,43 +706,43 @@ export default function CreateGPTPage() {
 
               {/* Name */}
               <div className="space-y-2">
-                <Label htmlFor="name" className="text-sm sm:text-base">Name *</Label>
+                <Label htmlFor="name" className="text-sm sm:text-base">Nombre *</Label>
                 <Input
                   id="name"
-                  placeholder="e.g., Code Reviewer, Creative Writer"
+                  placeholder="Ej. Revisor de código"
                   value={formData.name}
                   onChange={(e) => handleInputChange("name", e.target.value)}
                   maxLength={100}
-                  className="text-sm sm:text-base"
+                  className={cn("text-sm sm:text-base", liquidField)}
                 />
                 <div className="text-xs text-muted-foreground">
-                  {formData.name.length}/100 characters
+                  {formData.name.length}/100
                 </div>
               </div>
 
               {/* Description */}
               <div className="space-y-2">
-                <Label htmlFor="description" className="text-sm sm:text-base">Description *</Label>
+                <Label htmlFor="description" className="text-sm sm:text-base">Descripción *</Label>
                 <Textarea
                   id="description"
-                  placeholder="Describe what your GPT does and how it helps users. Be specific about its capabilities and use cases."
+                  placeholder="Qué hace, para quién sirve y qué resultado entrega."
                   value={formData.description}
                   onChange={(e) => handleInputChange("description", e.target.value)}
                   maxLength={500}
                   rows={3}
-                  className="text-sm sm:text-base resize-none"
+                  className={cn("resize-none text-sm sm:text-base", liquidField)}
                 />
                 <div className="text-xs text-muted-foreground">
-                  {formData.description.length}/500 characters
+                  {formData.description.length}/500
                 </div>
               </div>
 
               {/* Category */}
               <div className="space-y-2">
-                <Label htmlFor="category" className="text-sm sm:text-base">Category</Label>
+                <Label htmlFor="category" className="text-sm sm:text-base">Categoría</Label>
                 <Select value={formData.category} onValueChange={(value) => handleInputChange("category", value)}>
-                  <SelectTrigger className="text-sm sm:text-base">
-                    <SelectValue placeholder="Select a category" />
+                  <SelectTrigger className={cn("text-sm sm:text-base", liquidField)}>
+                    <SelectValue placeholder="Selecciona una categoría" />
                   </SelectTrigger>
                   <SelectContent>
                     {categories.map((category) => (
@@ -798,95 +801,99 @@ export default function CreateGPTPage() {
           </Card>
 
           {/* Behavior Configuration Section */}
-          <Card className="overflow-hidden border-border/70 shadow-sm">
+          <Card className={liquidPanel}>
             <CardHeader className="gap-1 pb-4">
               <CardTitle className="flex items-center gap-2.5 text-base sm:text-lg">
-                <span className="grid h-8 w-8 flex-shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
+                <span className="grid h-8 w-8 flex-shrink-0 place-items-center rounded-2xl border border-white/70 bg-white/70 text-zinc-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.75)] dark:border-white/10 dark:bg-white/[0.07] dark:text-zinc-300">
                   <MessageSquare className="h-4 w-4" />
                 </span>
-                <span>Behavior Configuration</span>
+                <span>Comportamiento</span>
               </CardTitle>
               <CardDescription className="text-xs sm:text-sm">
-                Define how your GPT should behave and respond to users
+                Instrucciones claras para respuestas consistentes.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4 sm:space-y-6 pt-0">
               {/* Instructions */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <Label htmlFor="instructions">Instructions *</Label>
+                  <Label htmlFor="instructions">Instrucciones *</Label>
                   <Button
                     variant="outline"
                     size="sm"
                     onClick={generateInstructions}
                     disabled={!formData.name || !formData.description}
+                    className={liquidGhost}
                   >
                     <Wand2 className="h-4 w-4 mr-2" />
-                    Generate
+                    Generar
                   </Button>
                 </div>
                 <Textarea
                   id="instructions"
-                  placeholder="Provide detailed instructions for how your GPT should behave, respond, and interact with users. Include its personality, expertise level, response style, and any specific guidelines."
+                  placeholder="Rol, tono, límites, pasos de trabajo y formato de respuesta."
                   value={formData.instructions}
                   onChange={(e) => handleInputChange("instructions", e.target.value)}
                   rows={8}
                   maxLength={50000}
+                  className={liquidField}
                 />
                 <div className="text-xs text-muted-foreground">
-                  {formData.instructions.length}/50000 characters
+                  {formData.instructions.length}/50000
                 </div>
               </div>
 
               {/* Greeting Message */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <Label htmlFor="greeting">Greeting Message</Label>
+                  <Label htmlFor="greeting">Mensaje inicial</Label>
                   <Button
                     variant="outline"
                     size="sm"
                     onClick={generateGreeting}
                     disabled={!formData.name || !formData.description}
+                    className={liquidGhost}
                   >
                     <Wand2 className="h-4 w-4 mr-2" />
-                    Generate
+                    Generar
                   </Button>
                 </div>
                 <Textarea
                   id="greeting"
-                  placeholder="The first message your GPT will send to users when they start a conversation"
+                  placeholder="Primer mensaje que verá el usuario al iniciar."
                   value={formData.greetingMessage}
                   onChange={(e) => handleInputChange("greetingMessage", e.target.value)}
                   rows={4}
                   maxLength={1000}
+                  className={liquidField}
                 />
                 <div className="text-xs text-muted-foreground">
-                  {formData.greetingMessage.length}/1000 characters
+                  {formData.greetingMessage.length}/1000
                 </div>
               </div>
             </CardContent>
           </Card>
 
           {/* Model Settings Section */}
-          <Card className="overflow-hidden border-border/70 shadow-sm">
+          <Card className={liquidPanel}>
             <CardHeader className="gap-1 pb-4">
               <CardTitle className="flex items-center gap-2.5 text-base sm:text-lg">
-                <span className="grid h-8 w-8 flex-shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
+                <span className="grid h-8 w-8 flex-shrink-0 place-items-center rounded-2xl border border-white/70 bg-white/70 text-zinc-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.75)] dark:border-white/10 dark:bg-white/[0.07] dark:text-zinc-300">
                   <Settings className="h-4 w-4" />
                 </span>
-                <span>Model & Visibility Settings</span>
+                <span>Modelo y acceso</span>
               </CardTitle>
               <CardDescription className="text-xs sm:text-sm">
-                Configure the AI model and who can access your GPT
+                Elige el modelo activo y quién puede usarlo.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4 sm:space-y-6 pt-0">
               {/* Model Selection */}
               <div className="space-y-2">
-                <Label className="text-sm sm:text-base">AI Model *</Label>
+                <Label className="text-sm sm:text-base">Modelo *</Label>
                 <Select value={formData.modelName} onValueChange={(value) => handleInputChange("modelName", value)}>
-                  <SelectTrigger className="text-sm sm:text-base">
-                    <SelectValue placeholder="Select a model" />
+                  <SelectTrigger className={cn("text-sm sm:text-base", liquidField)}>
+                    <SelectValue placeholder="Selecciona un modelo" />
                   </SelectTrigger>
                   <SelectContent>
                     {availableModels.map((model) => (
@@ -902,7 +909,7 @@ export default function CreateGPTPage() {
                   </SelectContent>
                 </Select>
                 {availableModels.length === 0 && (
-                  <p className="text-xs text-muted-foreground">Loading available models...</p>
+                  <p className="text-xs text-muted-foreground">Cargando modelos disponibles...</p>
                 )}
               </div>
 
@@ -928,9 +935,9 @@ export default function CreateGPTPage() {
 
               {/* Visibility */}
               <div className="space-y-2">
-                <Label className="text-sm sm:text-base">Visibility</Label>
+                <Label className="text-sm sm:text-base">Visibilidad</Label>
                 <Select value={formData.visibility} onValueChange={(value) => handleInputChange("visibility", value as "PRIVATE" | "UNLISTED" | "PUBLIC")}>
-                  <SelectTrigger className="text-sm sm:text-base">
+                  <SelectTrigger className={cn("text-sm sm:text-base", liquidField)}>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -938,8 +945,8 @@ export default function CreateGPTPage() {
                       <div className="flex items-center gap-2">
                         <div className="w-2 h-2 bg-red-500 rounded-full flex-shrink-0"></div>
                         <div>
-                          <div className="font-medium text-sm sm:text-base">Private</div>
-                          <div className="text-xs text-muted-foreground">Only you can access</div>
+                          <div className="font-medium text-sm sm:text-base">Privado</div>
+                          <div className="text-xs text-muted-foreground">Solo tú puedes acceder</div>
                         </div>
                       </div>
                     </SelectItem>
@@ -947,8 +954,8 @@ export default function CreateGPTPage() {
                       <div className="flex items-center gap-2">
                         <div className="w-2 h-2 bg-yellow-500 rounded-full flex-shrink-0"></div>
                         <div>
-                          <div className="font-medium text-sm sm:text-base">Unlisted</div>
-                          <div className="text-xs text-muted-foreground">Accessible via link only</div>
+                          <div className="font-medium text-sm sm:text-base">Por enlace</div>
+                          <div className="text-xs text-muted-foreground">Accesible solo con link</div>
                         </div>
                       </div>
                     </SelectItem>
@@ -956,8 +963,8 @@ export default function CreateGPTPage() {
                       <div className="flex items-center gap-2">
                         <div className="w-2 h-2 bg-green-500 rounded-full flex-shrink-0"></div>
                         <div>
-                          <div className="font-medium text-sm sm:text-base">Public</div>
-                          <div className="text-xs text-muted-foreground">Anyone can discover and use</div>
+                          <div className="font-medium text-sm sm:text-base">Público</div>
+                          <div className="text-xs text-muted-foreground">Visible para todos</div>
                         </div>
                       </div>
                     </SelectItem>
@@ -971,29 +978,29 @@ export default function CreateGPTPage() {
       </div>
 
       {/* Sticky action bar — keeps the primary save action reachable at all times */}
-      <div className="sticky bottom-0 z-30 border-t border-border/60 bg-background/80 backdrop-blur-xl supports-[backdrop-filter]:bg-background/60">
+      <div className="sticky bottom-0 z-30 border-t border-white/60 bg-white/72 backdrop-blur-2xl dark:border-white/10 dark:bg-zinc-950/72">
         <div className="mx-auto flex w-full max-w-3xl items-center justify-between gap-3 px-4 py-3 sm:px-6">
           <p className="hidden text-xs text-muted-foreground sm:block">
-            {formData.name ? "Ready when you are." : "A name is required to save your GPT."}
+            {formData.name ? "Listo para guardar." : "El nombre es obligatorio."}
           </p>
           <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
-            <Button variant="ghost" onClick={() => router.back()} className="h-10 rounded-full px-4">
-              Cancel
+            <Button variant="ghost" onClick={() => router.back()} className="h-10 rounded-full px-4 text-zinc-500 hover:text-zinc-950 dark:hover:text-white">
+              Cancelar
             </Button>
             <Button
               onClick={handleSave}
               disabled={isSaving || !formData.name}
-              className="h-10 flex-1 rounded-full px-6 font-medium shadow-sm sm:flex-none"
+              className="h-10 flex-1 rounded-full bg-zinc-950 px-6 font-medium text-white shadow-[0_16px_32px_-18px_rgba(15,23,42,0.9)] hover:bg-zinc-800 sm:flex-none dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200"
             >
               {isSaving ? (
                 <span className="flex items-center gap-2">
                   <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                  Saving...
+                  Guardando...
                 </span>
               ) : isEditMode ? (
-                "Update GPT"
+                "Actualizar GPT"
               ) : (
-                "Create GPT"
+                "Crear GPT"
               )}
             </Button>
           </div>
@@ -1002,18 +1009,18 @@ export default function CreateGPTPage() {
 
       {/* Preview Dialog */}
       <Dialog open={isPreviewOpen} onOpenChange={setIsPreviewOpen}>
-        <DialogContent className="max-w-2xl mx-auto p-4 sm:p-6">
+        <DialogContent className="mx-auto max-w-2xl rounded-[28px] border-white/60 bg-white/82 p-4 shadow-[0_24px_70px_-36px_rgba(15,23,42,0.55)] backdrop-blur-2xl sm:p-6 dark:border-white/10 dark:bg-zinc-950/82">
           <DialogHeader className="pb-4">
-            <DialogTitle className="text-lg sm:text-xl">GPT Preview</DialogTitle>
+            <DialogTitle className="text-lg sm:text-xl">Vista previa</DialogTitle>
             <DialogDescription className="text-sm">
-              Preview how your GPT will appear to users in the store
+              Así se verá tu GPT en la biblioteca.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             {/* GPT Card Preview */}
-            <div className="bg-white dark:bg-card rounded-lg p-3 sm:p-4 md:p-6 border border-border">
+            <div className="rounded-[22px] border border-white/65 bg-white/75 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.75)] backdrop-blur-xl sm:p-4 md:p-6 dark:border-white/10 dark:bg-white/[0.055]">
               <div className="flex items-start space-x-3 sm:space-x-4">
-                <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full flex items-center justify-center text-lg sm:text-xl font-bold overflow-hidden flex-shrink-0">
+                <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center overflow-hidden rounded-2xl text-lg font-bold sm:h-12 sm:w-12 sm:text-xl">
                   {uploadedImage ? (
                     <img
                       src={uploadedImage}
@@ -1021,11 +1028,11 @@ export default function CreateGPTPage() {
                       className="w-full h-full object-cover rounded-full"
                     />
                   ) : formData.iconUrl ? (
-                    <div className="w-full h-full bg-gradient-to-br from-purple-500 to-indigo-600 rounded-full flex items-center justify-center text-white">
+                    <div className="flex h-full w-full items-center justify-center rounded-2xl bg-zinc-950 text-white dark:bg-white dark:text-zinc-950">
                       {formData.iconUrl}
                     </div>
                   ) : (
-                    <div className="w-full h-full bg-gradient-to-br from-purple-500 to-indigo-600 rounded-full flex items-center justify-center text-white">
+                    <div className="flex h-full w-full items-center justify-center rounded-2xl bg-zinc-950 text-white dark:bg-white dark:text-zinc-950">
                       {getNameInitial()}
                     </div>
                   )}
@@ -1039,13 +1046,13 @@ export default function CreateGPTPage() {
                   </p>
                   <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                     <div className="flex items-center flex-wrap gap-2 sm:gap-4 text-xs text-muted-foreground">
-                      <span className="truncate">By {user?.name || 'You'}</span>
+                      <span className="truncate">Por {user?.name || 'ti'}</span>
                       <div className="flex items-center space-x-1 flex-shrink-0">
                         <Star className="w-3 h-3 fill-yellow-400 text-yellow-400" />
-                        <span>New</span>
+                        <span>Nuevo</span>
                       </div>
                     </div>
-                    <Button size="sm" className="px-2 sm:px-3 py-1 text-xs self-start sm:self-auto">
+                    <Button size="sm" className="self-start rounded-full bg-zinc-950 px-3 py-1 text-xs text-white hover:bg-zinc-800 sm:self-auto dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200">
                       Chat
                     </Button>
                   </div>
@@ -1061,10 +1068,10 @@ export default function CreateGPTPage() {
 
             {/* Greeting Preview */}
             {formData.greetingMessage && (
-              <Card>
+              <Card className={liquidPanel}>
                 <CardContent className="pt-4">
                   <div className="flex items-start gap-3">
-                    <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center text-white text-sm">
+                    <div className="flex h-8 w-8 items-center justify-center rounded-2xl bg-zinc-950 text-sm text-white dark:bg-white dark:text-zinc-950">
                       {formData.iconUrl || getNameInitial()}
                     </div>
                     <div className="flex-1">

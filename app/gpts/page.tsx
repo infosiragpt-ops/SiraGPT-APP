@@ -7,15 +7,12 @@ import {
   ArrowLeft,
   ArrowRight,
   Bot,
-  Code,
   Copy,
   Edit,
-  GraduationCap,
   Plus,
   Search,
   Sparkles,
   Trash2,
-  Video,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -65,55 +62,8 @@ const storeCategories: StoreCategory[] = [
 ]
 
 const curatedStoreCards: StoreCard[] = [
-  {
-    id: "curated-video-ai",
-    title: "Video AI by invideo",
-    description: "AI video maker GPT (Supercharged with Sora 2) - generate engaging videos with scripts, scenes and assets.",
-    author: "Por invideo.io",
-    category: "DALL·E",
-    rating: "4.0 ★",
-    icon: <Video className="h-9 w-9 text-black dark:text-white" />,
-  },
-  {
-    id: "curated-expedia",
-    title: "Expedia",
-    description: "Bring your trip plans to life — get there, stay there, find things to see and do.",
-    author: "Por expedia.com",
-    category: "Lifestyle",
-    icon: <ArrowRight className="h-12 w-12 text-[#171a3f]" />,
-  },
-  {
-    id: "curated-canva",
-    title: "Canva",
-    description: "Effortlessly design anything: presentations, logos, social media posts and more.",
-    author: "Por community builder",
-    category: "Design",
-    icon: <span className="font-serif text-6xl italic leading-none text-white">C</span>,
-  },
-  {
-    id: "curated-scholar",
-    title: "Scholar GPT",
-    description: "Enhance research with 200M+ resources and built-in critical reading skills. Access Google Scholar, PubMed, bioRxiv, arXiv...",
-    author: "Por awesomegpts.ai",
-    category: "Research & Analysis",
-    icon: <GraduationCap className="h-9 w-9 text-white" />,
-  },
-  {
-    id: "curated-fitness",
-    title: "Fitness, Workout & Diet - PhD Coach",
-    description: "IMPROVE QUICKLY. Receive turn-key fitness and workout support plus advanced diet advice.",
-    author: "Por Newgen PhD",
-    category: "Health & Fitness",
-    icon: <span className="text-4xl font-bold text-white">P</span>,
-  },
-  {
-    id: "curated-code",
-    title: "Code Copilot Studio",
-    description: "Plan, generate, test and refactor production code with structured prompts and QA gates.",
-    author: "Por siraGPT Labs",
-    category: "Programming",
-    icon: <Code className="h-9 w-9 text-white" />,
-  },
+  // Keep this catalog local-only and functional. External demo GPTs
+  // were removed because they cannot start real SiraGPT chats.
 ]
 
 function useDebounce<T>(value: T, delay: number): T {
@@ -514,7 +464,7 @@ export default function GPTsPage() {
         </section>
 
         <section className="mx-auto mt-7 w-full max-w-[640px]">
-          <SectionHeader title={visibilityFilter === "mine" ? "Mis GPT" : "Featured"} subtitle={visibilityFilter === "mine" ? "Tus asistentes creados por área" : "Curated top picks from this week"} />
+          <SectionHeader title={visibilityFilter === "mine" ? "Mis GPT" : "GPTs disponibles"} subtitle={visibilityFilter === "mine" ? "Tus asistentes creados por área" : "Solo asistentes creados y ejecutables en SiraGPT"} />
 
           {loading ? (
             <div className="mt-4 grid gap-2.5 md:grid-cols-2">
@@ -554,14 +504,16 @@ export default function GPTsPage() {
           )}
         </section>
 
-        <section className="mx-auto mt-8 w-full max-w-[640px] pb-10">
-          <SectionHeader title="Trending" subtitle="Most popular GPTs by our community" />
-          <div className="mt-4 grid gap-x-6 gap-y-1 md:grid-cols-2">
-            {trendingCards.map((card, index) => (
-              <TrendingRow key={`trending-${card.id}`} index={index + 1} card={card} onOpen={handleOpenCard} />
-            ))}
-          </div>
-        </section>
+        {trendingCards.length > 0 && (
+          <section className="mx-auto mt-8 w-full max-w-[640px] pb-10">
+            <SectionHeader title="Más usados" subtitle="Asistentes activos de tu espacio" />
+            <div className="mt-4 grid gap-x-6 gap-y-1 md:grid-cols-2">
+              {trendingCards.map((card, index) => (
+                <TrendingRow key={`trending-${card.id}`} index={index + 1} card={card} onOpen={handleOpenCard} />
+              ))}
+            </div>
+          </section>
+        )}
 
         <Dialog open={shareDialogOpen} onOpenChange={setShareDialogOpen}>
           <DialogContent className="rounded-3xl border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 sm:max-w-lg">

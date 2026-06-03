@@ -213,7 +213,7 @@
     "placeholderDefault": "Напишите сообщение", "placeholderImage": "Опишите нужное изображение",
     "placeholderVideo": "Опишите нужное видео", "placeholderWebSearch": "Поиск в интернете",
     "placeholderGmail": "Команда Gmail", "placeholderGoogle": "Команда Google", "placeholderSpotify": "Команда Spotify",
-    "placeholderWord": "Опишите нужный документ", "sendHint": "Отправить", "stopHint": "Остановить",
+    "placeholderWord": "Опишите нужный документ", "placeholderComputer": "Опишите, чем нужно управлять", "sendHint": "Отправить", "stopHint": "Остановить",
     "dropFiles": "Перетащите файлы для загрузки"
   },
   "common": {

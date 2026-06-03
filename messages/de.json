@@ -214,7 +214,7 @@
     "placeholderDefault": "Nachricht schreiben", "placeholderImage": "Beschreiben Sie das gewünschte Bild",
     "placeholderVideo": "Beschreiben Sie das gewünschte Video", "placeholderWebSearch": "Web durchsuchen",
     "placeholderGmail": "Gmail-Befehl", "placeholderGoogle": "Google-Befehl", "placeholderSpotify": "Spotify-Befehl",
-    "placeholderWord": "Beschreiben Sie das gewünschte Dokument", "sendHint": "Senden", "stopHint": "Stopp",
+    "placeholderWord": "Beschreiben Sie das gewünschte Dokument", "placeholderComputer": "Beschreiben Sie, was gesteuert werden soll", "sendHint": "Senden", "stopHint": "Stopp",
     "dropFiles": "Dateien hier ablegen"
   },
   "common": {

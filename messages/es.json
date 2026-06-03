@@ -305,6 +305,7 @@
     "placeholderGoogle": "Comando de Google",
     "placeholderSpotify": "Comando de Spotify",
     "placeholderWord": "Describe el documento que quieres crear",
+    "placeholderComputer": "Dile qué quieres que controle",
     "sendHint": "Enviar",
     "stopHint": "Detener",
     "dropFiles": "Suelta los archivos para subirlos"

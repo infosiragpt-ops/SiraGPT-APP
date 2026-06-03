@@ -585,7 +585,7 @@ router.post('/login', loginRateLimit, validateBody(LoginRequestSchema, { codePre
   // Account-level lockout is distinct from the per-IP rate limit.
   const lockState = defaultLockout.isLocked(email);
   if ((!result.ok && result.kind === 'locked') || lockState.locked) {
-    const retryAfterMs = Number(result.retryAfterMs || lockState.retryAfterMs || 1000);
+    const retryAfterMs = Number(result.retryAfterMs ?? lockState.retryAfterMs ?? 1000);
     const retryAfterSec = Math.max(1, Math.ceil(retryAfterMs / 1000));
     const requestId = getRequestId(req);
     setValidationResponseHeaders(res);

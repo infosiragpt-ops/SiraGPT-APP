@@ -6,10 +6,24 @@ const jwt = require('jsonwebtoken');
 const prisma = require('../config/database');
 const { authenticateToken } = require('../middleware/auth');
 const {
-  computerUseSafetyCheck,
   computerUseRateLimiter
 } = require('../middleware/computer-use-safety');
 const { resolveComputerUseCapabilities } = require('../services/computer-use-capabilities');
+const {
+  capturePageScreenshot,
+  resumeOpenAIComputerUseLoop,
+  runOpenAIComputerUseLoop,
+} = require('../services/openai-computer-use-engine');
+const {
+  executePlaywrightComputerActions,
+  getActionLabel,
+} = require('../services/computer-use-action-mapper');
+const {
+  captureDesktopScreenshot,
+  executeDesktopBridgeAction,
+  getBridgeStatus,
+  planLocalComputerTask,
+} = require('../services/local-computer-bridge');
 const router = express.Router();
 
 // Initialize OpenAI client
@@ -234,11 +248,361 @@ Task: ${task}`;
 // Store active sessions
 const activeSessions = new Map();
 
+function normalizeComputerUseMode(raw) {
+  return ['browser', 'chrome', 'computer'].includes(raw) ? raw : 'browser';
+}
+
+function isOpenAIComputerUseEnabled() {
+  if (process.env.COMPUTER_USE_ENGINE === 'fallback') return false;
+  if (process.env.OPENAI_COMPUTER_USE_DISABLED === '1') return false;
+  return Boolean(process.env.OPENAI_API_KEY && openai?.responses && typeof openai.responses.create === 'function');
+}
+
+function deriveStartingUrl(task, fallback = 'https://www.google.com') {
+  const match = String(task || '').match(/\bhttps?:\/\/[^\s<>"']+/i);
+  return match ? match[0] : fallback;
+}
+
+function classifyInitialTaskSafety(task) {
+  const text = String(task || '').toLowerCase();
+  const hardBlockPatterns = [
+    /\brm\s+-rf\b/i,
+    /\b(?:delete|remove|destroy|wipe|format)\b/i,
+    /\b(?:borra|borrar|elimina|eliminar|destruye|destruir|formatea|formatear)\b/i,
+    /\b(?:hack|crack)\b/i,
+    /\b(?:paywall|captcha|recaptcha|hcaptcha)\b/i,
+  ];
+  const confirmationPatterns = [
+    /\b(?:checkout|place order|purchase|buy now|transfer money|wire transfer)\b/i,
+    /\b(?:comprar|pagar|transferir dinero)\b/i,
+    /\b(?:send email|send message|post tweet|publish post|enviar correo|enviar mensaje|publicar)\b/i,
+  ];
+  const takeoverPatterns = [
+    /\b(?:password|contrase(?:ñ|n)a|otp|one-time code|api key|token|secret)\b/i,
+    /\b(?:login|log in|sign in|iniciar sesion|iniciar sesión)\b/i,
+    /\b(?:credit card|bank account|social security|tarjeta de cr[eé]dito|cuenta bancaria)\b/i,
+  ];
+
+  if (hardBlockPatterns.some((re) => re.test(text))) {
+    return { status: 'blocked', reason: 'blocked_initial_task', requiresConfirmation: true, requiresTakeover: false };
+  }
+  if (confirmationPatterns.some((re) => re.test(text))) {
+    return { status: 'confirmation_required', reason: 'high_impact_initial_task', requiresConfirmation: true, requiresTakeover: false };
+  }
+  if (takeoverPatterns.some((re) => re.test(text))) {
+    return { status: 'takeover_required', reason: 'sensitive_or_login_initial_task', requiresConfirmation: false, requiresTakeover: true };
+  }
+  return { status: 'clear', reason: null, requiresConfirmation: false, requiresTakeover: false };
+}
+
+function computerUseStartSafetyCheck(req, res, next) {
+  const { task } = req.body || {};
+  if (!task) {
+    return res.status(400).json({
+      success: false,
+      error: 'Task description is required'
+    });
+  }
+
+  if (String(task).length > 500) {
+    return res.status(400).json({
+      success: false,
+      error: 'Task description is too long. Please keep it under 500 characters.'
+    });
+  }
+
+  const safety = classifyInitialTaskSafety(task);
+  if (safety.status === 'blocked') {
+    return res.status(403).json({
+      success: false,
+      error: 'Task contains a blocked destructive or bypass request and cannot be executed',
+      safetyViolation: true,
+      safety
+    });
+  }
+
+  req.computerUseInitialSafety = safety;
+  next();
+}
+
+function appendSessionEvent(sessionId, data) {
+  const session = activeSessions.get(sessionId);
+  if (!session) return;
+  if (!Array.isArray(session.events)) session.events = [];
+  session.events.push({ ...data, replayedAt: null });
+  if (session.events.length > 80) {
+    session.events.splice(0, session.events.length - 80);
+  }
+}
+
+function emitComputerUseEvent(sessionId, type, data = {}) {
+  broadcastToSession(sessionId, { type, data });
+}
+
 function getSessionForUser(sessionId, userId) {
   if (!sessionId || !userId) return null;
   const session = activeSessions.get(sessionId);
   if (!session || session.userId !== userId) return null;
   return session;
+}
+
+function createSessionEmitter(sessionId) {
+  return (type, data = {}) => emitComputerUseEvent(sessionId, type, data);
+}
+
+async function launchVisualComputerBrowser(mode = 'browser') {
+  const launchOptions = {
+    headless: true,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-blink-features=AutomationControlled',
+      '--disable-web-security',
+      '--disable-features=VizDisplayCompositor',
+      '--disable-extensions',
+      '--disable-plugins',
+      '--disable-javascript-harmony-shipping',
+      '--disable-background-timer-throttling',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-renderer-backgrounding',
+      '--disable-dev-shm-usage',
+      '--memory-pressure-off',
+      '--max_old_space_size=4096',
+      '--disable-ipc-flooding-protection'
+    ]
+  };
+
+  if (mode === 'chrome') {
+    launchOptions.channel = 'chrome';
+  }
+
+  let browser;
+  try {
+    browser = await chromium.launch(launchOptions);
+  } catch (error) {
+    if (mode !== 'chrome') throw error;
+    browser = await chromium.launch({ ...launchOptions, channel: undefined });
+  }
+
+  const context = await browser.newContext({
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    viewport: { width: 1024, height: 768 },
+    locale: 'en-US',
+    ignoreHTTPSErrors: true,
+    bypassCSP: true
+  });
+
+  const page = await context.newPage();
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'webdriver', { get: () => false });
+    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+    Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+    window.chrome = { runtime: {} };
+  });
+
+  await page.route('**/*', (route) => {
+    const resourceType = route.request().resourceType();
+    if (['media', 'font'].includes(resourceType)) {
+      route.abort();
+    } else {
+      route.continue();
+    }
+  });
+  await page.setViewportSize({ width: 1024, height: 768 });
+  page.setDefaultTimeout(15000);
+  page.setDefaultNavigationTimeout(15000);
+
+  return { browser, page };
+}
+
+async function finalizeComputerUseResult(sessionId, session, result = {}) {
+  if (!session || result.status !== 'completed') return;
+
+  let finalScreenshot = session.lastScreenshot || null;
+  if (!finalScreenshot && session.page) {
+    finalScreenshot = await capturePageScreenshot(session.page).catch(() => null);
+    session.lastScreenshot = finalScreenshot;
+  }
+
+  const finalUrl = typeof session.page?.url === 'function' ? session.page.url() : session.finalUrl || null;
+  let extractedData = null;
+
+  if (session.chatId && session.page) {
+    extractedData = await extractWebpageContent(session.page, session.originalTask || session.task, finalUrl);
+    if (extractedData?.success) {
+      await saveExtractedDataToChat(session.chatId, session.originalTask || session.task, extractedData, session.userId).catch((error) => {
+        console.error('Error saving computer use extraction:', error);
+      });
+    } else if (result.finalText) {
+      await saveComputerUseSummaryToChat(session.chatId, session.originalTask || session.task, {
+        finalText: result.finalText,
+        finalUrl,
+        mode: session.mode,
+        engine: session.engine
+      }, session.userId).catch((error) => {
+        console.error('Error saving computer use summary:', error);
+      });
+    }
+  }
+
+  emitComputerUseEvent(sessionId, 'task-completed', {
+    sessionId,
+    message: result.finalText || 'Tarea completada.',
+    finalText: result.finalText || null,
+    finalScreenshot,
+    finalUrl,
+    extractedData,
+    hasExtraction: Boolean(extractedData?.success),
+    engine: session.engine,
+    mode: session.mode
+  });
+
+  if (wss && extractedData?.success) {
+    wss.clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(JSON.stringify({
+          type: 'extraction-completed',
+          data: {
+            chatId: session.chatId,
+            sessionId,
+            message: 'Computer Use task completed - chat updated'
+          }
+        }));
+      }
+    });
+  }
+}
+
+function startFallbackComputerUseSession(sessionId, session) {
+  session.engine = 'dom_fallback';
+  session.agent = session.agent || new CustomComputerUseAgent();
+  setTimeout(() => {
+    customComputerUseLoop(sessionId, session.browser, session.page, session.agent, session.task).catch((error) => {
+      console.error('Fallback computer use loop error:', error);
+      emitComputerUseEvent(sessionId, 'error', { error: error.message, engine: 'dom_fallback' });
+    });
+  }, 500);
+}
+
+function startOpenAIComputerUseSession(sessionId, session) {
+  session.engine = 'openai_computer';
+  runOpenAIComputerUseLoop({
+    openai,
+    page: session.page,
+    session,
+    task: session.task,
+    mode: session.mode,
+    onEvent: createSessionEmitter(sessionId)
+  }).then((result) => finalizeComputerUseResult(sessionId, session, result)).catch((error) => {
+    console.error('OpenAI computer use loop error:', error);
+    session.openAiError = error.message;
+    if (session.page && session.agent) {
+      emitComputerUseEvent(sessionId, 'reasoning', {
+        reasoning: 'El tool oficial de OpenAI no respondió; usando planner visual DOM como fallback.',
+        action: 'fallback',
+        engine: 'dom_fallback'
+      });
+      session.status = 'running';
+      startFallbackComputerUseSession(sessionId, session);
+      return;
+    }
+    session.status = 'error';
+    emitComputerUseEvent(sessionId, 'error', { error: error.message, engine: 'openai_computer' });
+  });
+}
+
+function resumeOpenAIComputerUseSession(sessionId, session, acknowledgedSafetyChecks = []) {
+  resumeOpenAIComputerUseLoop({
+    openai,
+    page: session.page,
+    session,
+    mode: session.mode,
+    acknowledgedSafetyChecks,
+    onEvent: createSessionEmitter(sessionId)
+  }).then((result) => finalizeComputerUseResult(sessionId, session, result)).catch((error) => {
+    console.error('OpenAI computer use resume error:', error);
+    session.status = 'error';
+    emitComputerUseEvent(sessionId, 'error', { error: error.message, engine: 'openai_computer' });
+  });
+}
+
+async function completeDesktopBridgeSession(sessionId, session, options = {}) {
+  const bridgeStatus = getBridgeStatus();
+  if (!bridgeStatus.ready) {
+    session.status = 'paused';
+    session.takeoverState = 'required';
+    session.bridgeStatus = bridgeStatus;
+    emitComputerUseEvent(sessionId, 'takeover-required', {
+      sessionId,
+      mode: 'computer',
+      takeoverState: 'required',
+      message: 'Computadora requiere activar y emparejar el bridge local.',
+      bridgeStatus
+    });
+    return { status: 'paused', bridgeStatus };
+  }
+
+  if (session.desktopPlan?.requiresConfirmation && !options.acknowledged) {
+    session.status = 'paused';
+    session.callId = session.callId || `desktop-${sessionId}`;
+    session.pendingSafetyChecks = [{
+      code: 'desktop_confirmation_required',
+      message: session.desktopPlan.reason,
+      action: session.desktopPlan.action
+    }];
+    emitComputerUseEvent(sessionId, 'safety-confirmation-required', {
+      sessionId,
+      callId: session.callId,
+      pendingSafetyChecks: session.pendingSafetyChecks,
+      mode: 'computer'
+    });
+    return { status: 'paused' };
+  }
+
+  session.status = 'running';
+  const result = await executeDesktopBridgeAction(session.desktopPlan.action, {
+    acknowledged: Boolean(options.acknowledged),
+  });
+  emitComputerUseEvent(sessionId, 'action', {
+    sessionId,
+    mode: 'computer',
+    actions: [session.desktopPlan.action],
+    labels: [session.desktopPlan.action.type],
+    engine: 'local_desktop_bridge'
+  });
+
+  const screenshot = await captureDesktopScreenshot().catch(() => null);
+  session.lastScreenshot = screenshot;
+  if (screenshot) {
+    emitComputerUseEvent(sessionId, 'screenshot', {
+      image: screenshot,
+      mode: 'computer',
+      engine: 'local_desktop_bridge'
+    });
+  }
+
+  session.status = 'completed';
+  const message = `Acción de Computadora completada: ${session.desktopPlan.action.type}`;
+  if (session.chatId) {
+    await saveComputerUseSummaryToChat(session.chatId, session.originalTask || session.task, {
+      finalText: message,
+      finalUrl: null,
+      mode: 'computer',
+      engine: 'local_desktop_bridge'
+    }, session.userId).catch((error) => {
+      console.error('Error saving desktop bridge summary:', error);
+    });
+  }
+  emitComputerUseEvent(sessionId, 'task-completed', {
+    sessionId,
+    message,
+    finalText: message,
+    finalScreenshot: screenshot,
+    mode: 'computer',
+    result,
+    engine: 'local_desktop_bridge'
+  });
+  return { status: 'completed', result };
 }
 
 // WebSocket server for real-time updates
@@ -268,7 +632,31 @@ const initializeWebSocketServer = (server) => {
           ws.sessionId = data.sessionId;
           ws.userId = decoded.userId || decoded.id;
           console.log(`Client joined session: ${data.sessionId}`);
+          const session = getSessionForUser(data.sessionId, ws.userId);
+          if (session && Array.isArray(session.events)) {
+            for (const event of session.events) {
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ ...event, replayed: true }));
+              }
+            }
+          }
+          return;
         }
+
+        if (!ws.sessionId || !ws.userId) {
+          ws.close(1008, 'Join a session before sending commands');
+          return;
+        }
+
+        handleComputerUseSocketCommand(ws, data).catch((error) => {
+          console.error('Computer Use socket command error:', error);
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+              type: 'error',
+              data: { error: error.message }
+            }));
+          }
+        });
       } catch (error) {
         console.error('WebSocket message error:', error);
       }
@@ -280,11 +668,85 @@ const initializeWebSocketServer = (server) => {
   });
 };
 
+async function handleComputerUseSocketCommand(ws, data) {
+  const session = getSessionForUser(ws.sessionId, ws.userId);
+  if (!session) {
+    throw new Error('Session not found');
+  }
+
+  switch (data.type) {
+    case 'pause-session':
+      session.status = 'paused';
+      session.takeoverState = session.takeoverState || 'agent';
+      emitComputerUseEvent(ws.sessionId, 'takeover-state', {
+        status: session.status,
+        takeoverState: session.takeoverState,
+        message: 'Sesión pausada'
+      });
+      break;
+
+    case 'takeover-start':
+      session.status = 'paused';
+      session.takeoverState = 'user';
+      emitComputerUseEvent(ws.sessionId, 'takeover-required', {
+        sessionId: ws.sessionId,
+        takeoverState: 'user',
+        message: 'Tomaste control. Las capturas automáticas quedan pausadas mientras escribes datos sensibles.'
+      });
+      break;
+
+    case 'takeover-end':
+      session.takeoverState = 'agent';
+      session.status = 'running';
+      emitComputerUseEvent(ws.sessionId, 'takeover-state', {
+        sessionId: ws.sessionId,
+        takeoverState: 'agent',
+        status: 'running',
+        message: 'Control devuelto al agente'
+      });
+      if (session.engine === 'openai_computer' && session.page) {
+        resumeOpenAIComputerUseSession(ws.sessionId, session, []);
+      } else if (session.page && session.agent) {
+        customComputerUseLoop(ws.sessionId, session.browser, session.page, session.agent, session.task).catch((error) => {
+          emitComputerUseEvent(ws.sessionId, 'error', { error: error.message });
+        });
+      }
+      break;
+
+    case 'user-action':
+      if (session.takeoverState !== 'user') {
+        throw new Error('Takeover mode is not active');
+      }
+      if (!session.page) {
+        throw new Error('This session does not expose a browser page for manual actions');
+      }
+      await executePlaywrightComputerActions(session.page, data.action, {
+        onAction: (action) => emitComputerUseEvent(ws.sessionId, 'action', {
+          manual: true,
+          actions: [action],
+          labels: [getActionLabel(action)]
+        })
+      });
+      session.lastScreenshot = await capturePageScreenshot(session.page);
+      emitComputerUseEvent(ws.sessionId, 'screenshot', {
+        image: session.lastScreenshot,
+        manual: true,
+        mode: session.mode
+      });
+      break;
+
+    default:
+      break;
+  }
+}
+
 
 // Broadcast to specific session
 const broadcastToSession = (sessionId, data) => {
-  if (!wss) return;
   const session = activeSessions.get(sessionId);
+  appendSessionEvent(sessionId, data);
+
+  if (!wss) return;
 
   wss.clients.forEach((client) => {
     if (client.sessionId === sessionId && client.readyState === WebSocket.OPEN) {
@@ -1861,9 +2323,10 @@ async function executeActionWithSelector(page, action) {
 
 
 // Start Computer Use session
-router.post('/start', computerUseRateLimiter, computerUseSafetyCheck, async (req, res) => {
+router.post('/start', computerUseRateLimiter, computerUseStartSafetyCheck, async (req, res) => {
   try {
     const { task, sessionId } = req.body;
+    const mode = normalizeComputerUseMode(req.body.mode);
 
     if (!task || !sessionId) {
       return res.status(400).json({
@@ -1880,82 +2343,23 @@ router.post('/start', computerUseRateLimiter, computerUseSafetyCheck, async (req
       });
     }
 
-    // Initialize custom agent
-    const agent = new CustomComputerUseAgent();
-
-    // Generate initial plan
-    const plan = await agent.generateInitialPlan(task);
-    // Launch browser with optimized settings for speed and CAPTCHA avoidance
-    const browser = await chromium.launch({
-      headless: true, // Keep headless for better performance and CAPTCHA avoidance
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-blink-features=AutomationControlled',
-        '--disable-web-security',
-        '--disable-features=VizDisplayCompositor',
-        '--disable-extensions',
-        '--disable-plugins',
-        '--disable-javascript-harmony-shipping',
-        '--disable-background-timer-throttling',
-        '--disable-backgrounding-occluded-windows',
-        '--disable-renderer-backgrounding',
-        '--disable-dev-shm-usage',
-        '--memory-pressure-off',
-        '--max_old_space_size=4096',
-        '--disable-ipc-flooding-protection'
-      ]
-    });
-
-    const context = await browser.newContext({
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      viewport: { width: 1024, height: 768 },
-      locale: 'en-US',
-      // Speed optimizations
-      ignoreHTTPSErrors: true,
-      bypassCSP: true
-    });
-
-    const page = await context.newPage();
-    page.sessionId = sessionId; // Attach sessionId for error reporting
-
-    // Anti-detection measures
-    await page.addInitScript(() => {
-      Object.defineProperty(navigator, 'webdriver', { get: () => false });
-      Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-      Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-      window.chrome = { runtime: {} };
-    });
-
-    // Speed optimizations - allow more resources for better functionality
-    await page.route('**/*', (route) => {
-      const resourceType = route.request().resourceType();
-      // Only block heavy media files, allow images and styles for better UX
-      if (['media', 'font'].includes(resourceType)) {
-        route.abort();
-      } else {
-        route.continue();
-      }
-    });
-    await page.setViewportSize({ width: 1024, height: 768 });
-
-    // Set faster timeouts for better performance
-    page.setDefaultTimeout(15000);
-    page.setDefaultNavigationTimeout(15000);
-
     // Store session - preserve existing chat context if available
     const preservedSession = existingSession || {};
-    activeSessions.set(sessionId, {
+    const session = {
       ...preservedSession, // Preserve chat context
-      browser,
-      page,
+      id: sessionId,
       task,
-      agent,
+      originalTask: preservedSession.originalTask || task,
+      mode,
       userId: req.user.id,
       status: 'running',
+      takeoverState: 'agent',
+      pendingSafetyChecks: [],
+      events: preservedSession.events || [],
       createdAt: preservedSession.createdAt || Date.now(),
       lastActivity: Date.now()
-    });
+    };
+    activeSessions.set(sessionId, session);
 
     console.log('Session stored with context:', {
       sessionId,
@@ -1966,77 +2370,129 @@ router.post('/start', computerUseRateLimiter, computerUseSafetyCheck, async (req
       task
     });
 
-    // Dynamic and intelligent URL routing based on task content
-    // let startingUrl = 'https://www.google.com'; // Default to Google
-    const taskLower = task.toLowerCase();
-
-    // // Launch browser
-    // const browser = await chromium.launch({ 
-    //   headless: true,
-    //   args: ['--no-sandbox', '--disable-setuid-sandbox']
-    // });
-
-    // const page = await browser.newPage();
-    // await page.setViewportSize({ width: 1024, height: 768 });
-
-    // // Store session
-    // activeSessions.set(sessionId, {
-    //   browser,
-    //   page,
-    //   task,
-    //   agent,
-    //   plan,
-    //   status: 'running',
-    //   createdAt: Date.now(),
-    //   lastActivity: Date.now()
-    // });
-
-    // // Navigate to starting URL from plan
-    const startingUrl = plan.startingUrl || 'https://www.google.com';
-    await page.goto(startingUrl);
-    await page.waitForLoadState('networkidle');
-
-    // Take initial screenshot
-    const initialScreenshot = await getScreenshot(page);
-    const initialScreenshotBase64 = initialScreenshot.toString('base64');
-
-    // Send initial state to frontend
-    broadcastToSession(sessionId, {
-      type: 'session-started',
-      data: {
-        sessionId,
-        task,
-        plan: plan,
-        initialScreenshot: `data:image/png;base64,${initialScreenshotBase64}`
-      }
-    });
-
-    // Send initial reasoning
-    broadcastToSession(sessionId, {
-      type: 'reasoning',
-      data: {
-        reasoning: plan.reasoning,
-        step: 0,
-        action: 'planning'
-      }
-    });
-
-    // Start the custom computer use loop
-    setTimeout(() => {
-      customComputerUseLoop(sessionId, browser, page, agent, task).catch(error => {
-        console.error('Computer use loop error:', error);
-        broadcastToSession(sessionId, {
-          type: 'error',
-          data: { error: error.message }
-        });
+    if (mode === 'computer') {
+      const desktopPlan = planLocalComputerTask(task, {
+        defaultWorkingDirectory: process.cwd()
       });
-    }, 1000); // Small delay to ensure frontend is ready
+      session.desktopPlan = desktopPlan;
+      session.bridgeStatus = getBridgeStatus();
+
+      if (desktopPlan.actionRequired) {
+        if (!desktopPlan.allowed) {
+          activeSessions.delete(sessionId);
+          return res.status(403).json({
+            success: false,
+            error: 'La acción de Computadora fue bloqueada por la política local.',
+            safetyViolation: true,
+            desktopPlan
+          });
+        }
+
+        emitComputerUseEvent(sessionId, 'session-started', {
+          sessionId,
+          task,
+          mode,
+          plan: desktopPlan,
+          bridgeStatus: session.bridgeStatus
+        });
+        emitComputerUseEvent(sessionId, 'reasoning', {
+          reasoning: desktopPlan.reason,
+          action: 'desktop_policy',
+          engine: 'local_desktop_bridge'
+        });
+
+        setTimeout(() => {
+          completeDesktopBridgeSession(sessionId, session).catch((error) => {
+            console.error('Desktop bridge session error:', error);
+            session.status = 'error';
+            emitComputerUseEvent(sessionId, 'error', { error: error.message, mode: 'computer' });
+          });
+        }, 250);
+
+        return res.json({
+          success: true,
+          sessionId,
+          message: 'Computer local bridge session started',
+          mode,
+          bridgeRequired: !session.bridgeStatus.ready,
+          bridgeStatus: session.bridgeStatus,
+          plan: desktopPlan
+        });
+      }
+    }
+
+    const { browser, page } = await launchVisualComputerBrowser(mode);
+    page.sessionId = sessionId;
+    session.browser = browser;
+    session.page = page;
+    session.agent = new CustomComputerUseAgent();
+
+    const startingUrl = deriveStartingUrl(task);
+    await page.goto(startingUrl);
+    await page.waitForLoadState('networkidle').catch(() => {});
+
+    const initialScreenshot = await capturePageScreenshot(page);
+    session.lastScreenshot = initialScreenshot;
+
+    emitComputerUseEvent(sessionId, 'session-started', {
+      sessionId,
+      task,
+      mode,
+      plan: {
+        startingUrl,
+        engine: isOpenAIComputerUseEnabled() ? 'openai_computer' : 'dom_fallback',
+        fallbackAvailable: true
+      },
+      initialScreenshot
+    });
+
+    emitComputerUseEvent(sessionId, 'reasoning', {
+      reasoning: isOpenAIComputerUseEnabled()
+        ? 'Iniciando Navegador visual con OpenAI Computer Use.'
+        : 'OpenAI Computer Use no está disponible; usando planner DOM fallback.',
+      step: 0,
+      action: 'planning',
+      engine: isOpenAIComputerUseEnabled() ? 'openai_computer' : 'dom_fallback'
+    });
+
+    const initialSafety = req.computerUseInitialSafety;
+    if (initialSafety?.status === 'confirmation_required') {
+      session.status = 'paused';
+      session.callId = `initial-safety-${sessionId}`;
+      session.pendingSafetyChecks = [{
+        code: initialSafety.reason,
+        message: initialSafety.message
+      }];
+      emitComputerUseEvent(sessionId, 'safety-confirmation-required', {
+        sessionId,
+        callId: session.callId,
+        pendingSafetyChecks: session.pendingSafetyChecks,
+        mode
+      });
+    } else if (initialSafety?.status === 'takeover_required') {
+      session.status = 'paused';
+      session.takeoverState = 'required';
+      emitComputerUseEvent(sessionId, 'takeover-required', {
+        sessionId,
+        takeoverState: 'required',
+        mode,
+        message: initialSafety.message
+      });
+    } else if (isOpenAIComputerUseEnabled()) {
+      setTimeout(() => startOpenAIComputerUseSession(sessionId, session), 500);
+    } else {
+      startFallbackComputerUseSession(sessionId, session);
+    }
 
     res.json({
       success: true,
       sessionId,
-      message: 'Custom Computer Use session started',
-      plan: plan
+      message: 'Computer Use session started',
+      mode,
+      engine: session.engine || (isOpenAIComputerUseEnabled() ? 'openai_computer' : 'dom_fallback'),
+      startingUrl,
+      pendingSafetyChecks: session.pendingSafetyChecks,
+      takeoverState: session.takeoverState
     });
 
   } catch (error) {
@@ -2164,6 +2620,7 @@ router.get('/status/:sessionId', async (req, res) => {
 router.post('/chat-integration', async (req, res) => {
   try {
     const { message, chatId, sessionId } = req.body;
+    const mode = normalizeComputerUseMode(req.body.mode);
     const userId = req.user.id;
 
     if (!message || !chatId) {
@@ -2212,6 +2669,7 @@ router.post('/chat-integration', async (req, res) => {
       chatId: chatId,
       userId: userId,
       originalTask: message,
+      mode,
       status: 'initializing',
       lastActivity: Date.now()
     };
@@ -2232,7 +2690,8 @@ router.post('/chat-integration', async (req, res) => {
       },
       body: JSON.stringify({
         task: message,
-        sessionId: computeSessionId
+        sessionId: computeSessionId,
+        mode
       })
     });
 
@@ -2249,7 +2708,8 @@ router.post('/chat-integration', async (req, res) => {
       sessionId: computeSessionId,
       message: 'Computer Use task started',
       chatId: chatId,
-      task: message
+      task: message,
+      mode
     });
 
   } catch (error) {

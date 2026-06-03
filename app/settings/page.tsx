@@ -894,8 +894,11 @@ function PersonalizationSection() {
 // APPS
 // ────────────────────────────────────────────────────────────
 
-type AppCat = "Diseño" | "Comunicación" | "Desarrollo" | "Productividad"
+type AppCat = "Diseño" | "Comunicación" | "Desarrollo" | "Productividad" | "Control"
 const APPS: { id: string; name: string; desc: string; cat: AppCat }[] = [
+  { id: "browser_control", name: "Navegador", desc: "Navegación, búsqueda y extracción con IA", cat: "Control" },
+  { id: "chrome_control", name: "Chrome", desc: "Automatización segura de Chrome", cat: "Control" },
+  { id: "computer_control", name: "Computadora", desc: "Control local mediante Computer Use", cat: "Control" },
   { id: "canva", name: "Canva", desc: "Diseño gráfico y contenido visual", cat: "Diseño" },
   { id: "figma", name: "Figma", desc: "Diseño colaborativo y prototipado", cat: "Diseño" },
   { id: "messenger", name: "Facebook Messenger", desc: "Mensajería de Meta", cat: "Comunicación" },
@@ -934,7 +937,7 @@ function AppsSection() {
     toast.success("Desconectado")
   }
 
-  const cats: AppCat[] = ["Diseño", "Comunicación", "Desarrollo", "Productividad"]
+  const cats: AppCat[] = ["Control", "Diseño", "Comunicación", "Desarrollo", "Productividad"]
   return (
     <>
       <div className="text-sm text-muted-foreground">Conecta y administra las aplicaciones que siraGPT puede usar.</div>

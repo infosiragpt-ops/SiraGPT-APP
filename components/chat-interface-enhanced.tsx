@@ -23,6 +23,8 @@ import {
   Mail,
   Calendar,
   FolderOpen,
+  Chrome,
+  AppWindow,
   NetworkIcon,
   Network,
   Monitor,
@@ -202,6 +204,8 @@ import { usePasteCapture } from "@/components/paste-preview-overlay"
 import { analyzePastedContent, type PasteCaptureResult, type PasteCaptureAction } from "@/lib/paste-capture"
 import { useChatDraft } from "@/hooks/use-chat-draft"
 import { useVisualViewportCssVars } from "@/hooks/use-visual-viewport-css-vars"
+
+type ComputerUseAppMode = "browser" | "chrome" | "computer"
 
 const resolveUploadFileId = (file: any): string | null => {
   if (!file) return null
@@ -851,6 +855,8 @@ const ActionsDropdown = ({
   setIsVideoGenerationActive,
   isComputerUseActive,
   setIsComputerUseActive,
+  computerUseAppMode,
+  setComputerUseAppMode,
   computerUseStatus,
   isGmailActive,
   setIsGmailActive,
@@ -986,6 +992,23 @@ const ActionsDropdown = ({
     setIsMusicGenerationActive(newState);
   };
 
+  const handleComputerUseAppToggle = (mode: ComputerUseAppMode) => {
+    const isSameModeActive = isComputerUseActive && computerUseAppMode === mode;
+
+    if (isSameModeActive) {
+      setIsComputerUseActive(false);
+      setComputerUseAppMode(null);
+      setChatType('text');
+      return;
+    }
+
+    closeAllToolsAndConnectors();
+    setComputerUseAppMode(mode);
+    setIsComputerUseActive(true);
+    setChatType('computer-use');
+    setIsOpen(false);
+  };
+
 
   const isMenuDisabled = isLoading || isGeneratingVideo || isUploading || isWebSearching || isProcessingGmail || isProcessingGoogleServices;
   const isToolSwitchDisabled = isMenuDisabled || isGeneratingImage;
@@ -1098,9 +1121,59 @@ const ActionsDropdown = ({
     },
   ];
 
-  const activeAppsCount = connectorItems.filter((item) => item.active).length;
+  const controlAppItems = [
+    {
+      key: "browser-control",
+      brand: "browser-control",
+      label: "Navegador",
+      description: "Navega, busca y extrae datos",
+      active: isComputerUseActive && computerUseAppMode === "browser",
+      disabled: isToolSwitchDisabled,
+      dotClassName: "bg-sky-500",
+      iconClassName: "bg-sky-100 dark:bg-sky-900/20",
+      icon: <AppWindow className="h-4 w-4 text-sky-600 dark:text-sky-400" />,
+      onClick: () => handleComputerUseAppToggle("browser"),
+    },
+    {
+      key: "chrome-control",
+      brand: "chrome-control",
+      label: "Chrome",
+      description: "Automatiza Chrome",
+      active: isComputerUseActive && computerUseAppMode === "chrome",
+      disabled: isToolSwitchDisabled,
+      dotClassName: "bg-blue-500",
+      iconClassName: "bg-blue-100 dark:bg-blue-900/20",
+      icon: <Chrome className="h-4 w-4 text-blue-600 dark:text-blue-400" />,
+      onClick: () => handleComputerUseAppToggle("chrome"),
+    },
+    {
+      key: "computer-control",
+      brand: "computer-control",
+      label: "Computadora",
+      description: "Control local seguro",
+      active: isComputerUseActive && computerUseAppMode === "computer",
+      disabled: isToolSwitchDisabled,
+      dotClassName: "bg-indigo-500",
+      iconClassName: "bg-indigo-100 dark:bg-indigo-900/20",
+      icon: <Monitor className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />,
+      onClick: () => handleComputerUseAppToggle("computer"),
+    },
+  ];
 
-  const renderConnectorItems = () => connectorItems.map((item) => (
+  const activeAppsCount = [...connectorItems, ...controlAppItems].filter((item) => item.active).length;
+
+  const renderAppMenuItem = (item: {
+    key: string;
+    brand: string;
+    label: string;
+    description?: string;
+    active: boolean;
+    disabled?: boolean;
+    dotClassName: string;
+    iconClassName: string;
+    icon: JSX.Element;
+    onClick: () => void;
+  }) => (
     <DropdownMenuItem
       key={item.key}
       className="liquid-menu-item chat-app-menu-item"
@@ -1117,13 +1190,33 @@ const ActionsDropdown = ({
           <div className="liquid-label truncate font-medium text-sm">
             {item.label}
           </div>
+          {item.description && (
+            <div className="truncate text-xs text-muted-foreground">
+              {item.description}
+            </div>
+          )}
         </div>
         {item.active && (
           <div className={`h-2 w-2 shrink-0 rounded-full ${item.dotClassName}`} aria-label="Activa" />
         )}
       </div>
     </DropdownMenuItem>
-  ));
+  );
+
+  const renderConnectorItems = () => connectorItems.map((item) => renderAppMenuItem(item));
+
+  const renderControlAppItems = () => controlAppItems.map((item) => renderAppMenuItem(item));
+
+  const renderAppsMenuContent = () => (
+    <>
+      {renderConnectorItems()}
+      <div className="my-1 h-px bg-border/45" />
+      <div className="px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+        Control
+      </div>
+      {renderControlAppItems()}
+    </>
+  );
 
   return (
     <TooltipProvider>
@@ -1220,7 +1313,7 @@ const ActionsDropdown = ({
               <div className="min-w-0 flex-1">
                 <div className="liquid-label font-semibold text-sm">APPs</div>
                 <div className="truncate text-xs text-muted-foreground">
-                  {activeAppsCount > 0 ? `${activeAppsCount} activa${activeAppsCount > 1 ? "s" : ""}` : "Gmail, Calendar, Drive, Spotify"}
+                  {activeAppsCount > 0 ? `${activeAppsCount} activa${activeAppsCount > 1 ? "s" : ""}` : "Gmail, Drive, Navegador, Chrome"}
                 </div>
               </div>
               <ChevronDown className={cn("h-4 w-4 shrink-0 opacity-60 transition-transform", mobileAppsOpen && "rotate-180")} />
@@ -1228,7 +1321,7 @@ const ActionsDropdown = ({
           </DropdownMenuItem>
           {mobileAppsOpen && (
             <div className="chat-mobile-apps-panel md:hidden">
-              {renderConnectorItems()}
+              {renderAppsMenuContent()}
             </div>
           )}
           <DropdownMenuSub open={appsOpen} onOpenChange={setAppsOpen}>
@@ -1259,7 +1352,7 @@ const ActionsDropdown = ({
                 collisionPadding={12}
                 className="liquid-menu-surface w-64"
               >
-                {renderConnectorItems()}
+                {renderAppsMenuContent()}
               </DropdownMenuSubContent>
             </DropdownMenuPortal>
           </DropdownMenuSub>
@@ -1810,6 +1903,8 @@ const ActiveToolsDisplay = ({
   setSelectedVideoModel,
   isComputerUseActive,
   setIsComputerUseActive,
+  computerUseAppMode,
+  setComputerUseAppMode,
   computerUseStatus,
   isGmailActive,
   setIsGmailActive,
@@ -1893,6 +1988,8 @@ const ActiveToolsDisplay = ({
   setSelectedVideoModel: (model: string) => void;
   isComputerUseActive: boolean;
   setIsComputerUseActive: (value: boolean) => void;
+  computerUseAppMode: ComputerUseAppMode | null;
+  setComputerUseAppMode: (mode: ComputerUseAppMode | null) => void;
   computerUseStatus: 'idle' | 'running' | 'completed' | 'error';
   isGmailActive: boolean;
   setIsGmailActive: (value: boolean) => void;
@@ -1923,6 +2020,22 @@ const ActiveToolsDisplay = ({
 }) => {
   const [showAllVideoRatios, setShowAllVideoRatios] = React.useState(false);
   const [showAllVideoDurations, setShowAllVideoDurations] = React.useState(false);
+  const activeComputerUseMode = computerUseAppMode || "computer";
+  const computerUseAppMeta: Record<ComputerUseAppMode, { label: string; icon: JSX.Element }> = {
+    browser: { label: "Navegador", icon: <AppWindow className="h-4 w-4" /> },
+    chrome: { label: "Chrome", icon: <Chrome className="h-4 w-4" /> },
+    computer: { label: "Computadora", icon: <Monitor className="h-4 w-4" /> },
+  };
+  const computerUseStatusClass =
+    computerUseStatus === "running" ? "bg-green-500 animate-pulse" :
+      computerUseStatus === "completed" ? "bg-blue-500" :
+        computerUseStatus === "error" ? "bg-red-500" : "bg-gray-400";
+  const activeComputerUseIcon = (
+    <span className="relative inline-flex h-4 w-4 items-center justify-center">
+      {computerUseAppMeta[activeComputerUseMode].icon}
+      <span className={cn("absolute -right-1 -top-1 h-1.5 w-1.5 rounded-full ring-1 ring-background", computerUseStatusClass)} />
+    </span>
+  );
   const activeConnectors = [
     isGmailActive && { id: 'gmail', icon: <img src="/icons/google.png" alt="Gmail" className="h-4 w-4" /> },
     isGoogleCalendarActive && { id: 'calendar', icon: <img src="/icons/google-calendar.png" alt="Google Calendar" className="h-4 w-4" /> },
@@ -1930,10 +2043,11 @@ const ActiveToolsDisplay = ({
     isSpotifyActive && { id: 'spotify', icon: <img src="/icons/spotify.png" alt="Spotify" className="h-4 w-4" /> },
     isWordConnectorActive && { id: 'word', icon: <img src="/icons/Word.png" alt="Word" className="h-4 w-4" /> },
     isExcelConnectorActive && { id: 'excel', icon: <img src="/icons/Excel.png" alt="Excel" className="h-4 w-4" /> },
+    isComputerUseActive && { id: `computer-use-${activeComputerUseMode}`, icon: activeComputerUseIcon },
   ].filter(Boolean) as { id: string; icon: JSX.Element }[];
 
   const hasConnectors = activeConnectors.length > 0;
-  const hasOtherTools = isImageGenerationActive || isVoiceGenerationActive || isMusicGenerationActive || isVideoGenerationActive || isWebSearchActive || isComputerUseActive;
+  const hasOtherTools = isImageGenerationActive || isVoiceGenerationActive || isMusicGenerationActive || isVideoGenerationActive || isWebSearchActive;
   const hasThesis = chatType === 'thesis';
 
   const handleCloseAllConnectors = () => {
@@ -1943,7 +2057,39 @@ const ActiveToolsDisplay = ({
     setIsSpotifyActive(false);
     setIsWordConnectorActive(false);
     setIsExcelConnectorActive(false);
+    setIsComputerUseActive(false);
+    setComputerUseAppMode(null);
     setChatType('text');
+  };
+
+  const activateComputerUseMode = (mode: ComputerUseAppMode) => {
+    setIsWebSearchActive(false);
+    setIsImageGenerationActive(false);
+    setIsVoiceGenerationActive(false);
+    setIsMusicGenerationActive(false);
+    setIsVideoGenerationActive(false);
+    setIsGmailActive(false);
+    setIsGoogleCalendarActive(false);
+    setIsGoogleDriveActive(false);
+    setIsSpotifyActive(false);
+    setIsWordConnectorActive(false);
+    setIsExcelConnectorActive(false);
+    setComputerUseAppMode(mode);
+    setIsComputerUseActive(true);
+    setChatType('computer-use');
+  };
+
+  const handleComputerUseModeSwitch = (mode: ComputerUseAppMode, checked: boolean) => {
+    if (checked) {
+      activateComputerUseMode(mode);
+      return;
+    }
+
+    if (isComputerUseActive && activeComputerUseMode === mode) {
+      setIsComputerUseActive(false);
+      setComputerUseAppMode(null);
+      setChatType('text');
+    }
   };
 
   const handleImageGenerationClose = () => {
@@ -2163,6 +2309,24 @@ const ActiveToolsDisplay = ({
           <Switch checked={isExcelConnectorActive} onCheckedChange={handleExcelConnectorToggle} />
         </div>
       </DropdownMenuItem>
+      <div className="my-1 h-px bg-border/45" />
+      <div className="px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+        Control
+      </div>
+      {(["browser", "chrome", "computer"] as ComputerUseAppMode[]).map((mode) => (
+        <DropdownMenuItem key={mode} className="chat-active-apps-menu-item" onSelect={(e) => e.preventDefault()}>
+          <div className="flex items-center justify-between w-full gap-4">
+            <div className="flex min-w-0 items-center gap-2.5">
+              {computerUseAppMeta[mode].icon}
+              <span className="truncate">{computerUseAppMeta[mode].label}</span>
+            </div>
+            <Switch
+              checked={isComputerUseActive && activeComputerUseMode === mode}
+              onCheckedChange={(checked) => handleComputerUseModeSwitch(mode, checked)}
+            />
+          </div>
+        </DropdownMenuItem>
+      ))}
     </>
   );
 
@@ -2838,25 +3002,6 @@ const ActiveToolsDisplay = ({
             </DropdownMenuContent>
           </DropdownMenu>
         </>
-      )}
-
-      {isComputerUseActive && (
-        <div className="flex items-center gap-1.5 bg-indigo-100 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300 px-2 py-1 rounded-full text-xs border border-indigo-200 dark:border-indigo-800">
-          <Monitor className="h-3 w-3" />
-          <span className="font-medium">Computer Use</span>
-          <div className={`h-2 w-2 rounded-full ml-1 ${computerUseStatus === 'running' ? 'bg-green-500 animate-pulse' :
-            computerUseStatus === 'completed' ? 'bg-blue-500' :
-              computerUseStatus === 'error' ? 'bg-red-500' : 'bg-gray-400'
-            }`} />
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-4 w-4 p-0 hover:bg-indigo-200 dark:hover:bg-indigo-800/30 rounded-full ml-1"
-            onClick={handleComputerUseClose}
-          >
-            <X className="h-3 w-3" />
-          </Button>
-        </div>
       )}
 
       {chatType === 'thesis' && (
@@ -4334,6 +4479,7 @@ function ChatInterfaceContent() {
     return () => { cancelled = true; };
   }, [chatType, isImageGenerationActive, refreshImageModels]);
   const [isComputerUseActive, setIsComputerUseActive] = React.useState(false);
+  const [computerUseAppMode, setComputerUseAppMode] = React.useState<ComputerUseAppMode | null>(null);
   const [computerUseStatus, setComputerUseStatus] = React.useState<'idle' | 'running' | 'completed' | 'error'>('idle');
   const [computerUseScreenshot, setComputerUseScreenshot] = React.useState<string | null>(null);
   const [isWordConnectorActive, setIsWordConnectorActive] = React.useState(false);
@@ -4385,6 +4531,7 @@ function ChatInterfaceContent() {
     setIsGoogleDriveActive(false);
     setIsSpotifyActive(false);
     setIsComputerUseActive(false);
+    setComputerUseAppMode(null);
     setIsWordConnectorActive(false);
     setIsExcelConnectorActive(false);
   }, []);
@@ -4416,6 +4563,7 @@ function ChatInterfaceContent() {
     // Clear Computer Use state
     if (clearReasoning) clearReasoning();
     setComputerUseStatus('idle');
+    setComputerUseAppMode(null);
     setComputerUseScreenshot(null);
   }, [closeAllToolsAndConnectors, setChatType, clearReasoning, setUploadedFiles]);
 
@@ -4586,10 +4734,12 @@ function ChatInterfaceContent() {
 
     if (newState) {
       closeAllToolsAndConnectors();
+      setComputerUseAppMode('computer');
       setIsComputerUseActive(true);
       setChatType('computer-use');
     } else {
       setIsComputerUseActive(false);
+      setComputerUseAppMode(null);
       setChatType('text');
     }
   };
@@ -7270,7 +7420,7 @@ REWRITTEN TEXT:`;
 
         window.addEventListener('computer-use-extraction-complete', handleExtractionComplete);
 
-        await startComputerUse(msg, chatId, user?.id);
+        await startComputerUse(msg, chatId, user?.id, computerUseAppMode || 'browser');
 
         // Clean up listener
         setTimeout(() => {
@@ -8373,6 +8523,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     selectedVideoAudio, setSelectedVideoAudio,
     selectedVideoModel, setSelectedVideoModel,
     isComputerUseActive, setIsComputerUseActive,
+    computerUseAppMode, setComputerUseAppMode,
     computerUseStatus,
     isGmailActive, setIsGmailActive,
     isGoogleCalendarActive, setIsGoogleCalendarActive,
@@ -9348,6 +9499,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           setIsVideoGenerationActive={setIsVideoGenerationActive}
                           isComputerUseActive={isComputerUseActive}
                           setIsComputerUseActive={setIsComputerUseActive}
+                          computerUseAppMode={computerUseAppMode}
+                          setComputerUseAppMode={setComputerUseAppMode}
                           computerUseStatus={computerUseStatus}
                           isGmailActive={isGmailActive}
                           setIsGmailActive={setIsGmailActive}
@@ -9400,10 +9553,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                   ? "Describe la voz que quieres crear"
                                   : isMusicGenerationActive
                                     ? "Describe la música que quieres crear"
-                                    : isWebSearchActive
-                                      ? tComposer("placeholderWebSearch")
-                                      : isGmailActive
-                                        ? tComposer("placeholderGmail")
+                                      : isWebSearchActive
+                                        ? tComposer("placeholderWebSearch")
+                                        : isComputerUseActive
+                                          ? tComposer("placeholderComputer")
+                                        : isGmailActive
+                                          ? tComposer("placeholderGmail")
                                         : (isGoogleCalendarActive || isGoogleDriveActive)
                                           ? tComposer("placeholderGoogle")
                                           : isSpotifyActive
@@ -9857,6 +10012,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                               setIsVideoGenerationActive={setIsVideoGenerationActive}
                               isComputerUseActive={isComputerUseActive}
                               setIsComputerUseActive={setIsComputerUseActive}
+                              computerUseAppMode={computerUseAppMode}
+                              setComputerUseAppMode={setComputerUseAppMode}
                               computerUseStatus={computerUseStatus}
                               isGmailActive={isGmailActive}
                               setIsGmailActive={setIsGmailActive}
@@ -9907,8 +10064,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                                       ? "Describe la voz que quieres crear"
                                       : isMusicGenerationActive
                                         ? "Describe la música que quieres crear"
-                                        : isWebSearchActive
-                                          ? tComposer("placeholderWebSearch")
+                                          : isWebSearchActive
+                                            ? tComposer("placeholderWebSearch")
+                                            : isComputerUseActive
+                                              ? tComposer("placeholderComputer")
                                           : isGmailActive
                                             ? tComposer("placeholderGmail")
                                             : (isGoogleCalendarActive || isGoogleDriveActive)
@@ -10052,7 +10211,11 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             <ComputerUseInterface
               screenshot={computerUseScreenshot}
               status={computerUseStatus}
-              onClose={() => setIsComputerUseActive(false)}
+              onClose={() => {
+                setIsComputerUseActive(false);
+                setComputerUseAppMode(null);
+                setChatType('text');
+              }}
             />
           </div>
         )}

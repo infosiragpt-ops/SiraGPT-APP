@@ -213,7 +213,7 @@
     "placeholderDefault": "输入消息", "placeholderImage": "描述你想创建的图像",
     "placeholderVideo": "描述你想创建的视频", "placeholderWebSearch": "搜索网络",
     "placeholderGmail": "Gmail 指令", "placeholderGoogle": "Google 指令", "placeholderSpotify": "Spotify 指令",
-    "placeholderWord": "描述你想创建的文档", "sendHint": "发送", "stopHint": "停止",
+    "placeholderWord": "描述你想创建的文档", "placeholderComputer": "说明要控制的内容", "sendHint": "发送", "stopHint": "停止",
     "dropFiles": "将文件拖到此处上传"
   },
   "common": {

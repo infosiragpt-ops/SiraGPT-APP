@@ -57,7 +57,7 @@ describe("chat scope rules", () => {
   it("excludes project chats from the global chat list by default", () => {
     assert.deepEqual(
       chatScope.buildChatListWhere({ userId: "user_1" }),
-      { userId: "user_1", projectId: null }
+      { userId: "user_1", deletedAt: null, isArchived: false, projectId: null }
     )
   })
 
@@ -69,7 +69,9 @@ describe("chat scope rules", () => {
     })
 
     assert.equal(where.userId, "user_1")
+    assert.equal(where.deletedAt, null)
     assert.equal(where.projectId, "project_1")
+    assert.equal(where.isArchived, false)
     assert.equal(where.OR.length, 2)
     assert.equal(where.OR[0].title.contains, "APA 7")
   })
