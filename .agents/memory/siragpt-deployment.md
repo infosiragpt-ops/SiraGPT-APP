@@ -110,6 +110,15 @@ the only detectable port is the frontend, so it deterministically becomes `3000 
 assume publish will work — have the user confirm exactly one `3000 → 80` entry in
 the Ports pane (Replit usually auto-adds it on workspace open) before republishing.
 
+**Also wiped by task-merge commits:** merging background project tasks regenerates
+`.replit` and drops `[[ports]]` too (observed: a "Git commit prior to merge" commit
+removed the whole block, turning later builds' promote step into "required port was
+never opened, expected port 3000" while the build phase still succeeded). When many
+tasks are merging concurrently, the safest sequence is: let the merges settle, then
+set `3000 → 80` in the Ports pane, then publish IMMEDIATELY — any merge between the
+set and the publish re-wipes it. Confirm via build history: successful builds carried
+`localPort=3000/externalPort=80`; failed ones had zero `[[ports]]`.
+
 ## Prod database != executeSql database
 `executeSql` (code_execution) connects to a DIFFERENT database than the backend.
 The backend uses DATABASE_URL/PRISMA_DATABASE_URL (Prisma Accelerate,
