@@ -613,6 +613,11 @@ const {
   normaliseUploadPath,
   resolveConfinedPath,
 } = require('../middleware/upload-static-access');
+const {
+  buildFalVideoInputPayload,
+  extractFalVideoUrl,
+  resolveFalVideoModelRequest,
+} = require('../services/fal-video-model-catalog');
 const router = express.Router();
 const prisma = new PrismaClient();
 
@@ -712,11 +717,13 @@ function resolveVeoFastDuration(requestedDuration, model) {
 router.post('/generate', [
   body('prompt').trim().notEmpty().withMessage('Video prompt is required'),
   body('aspect_ratio').optional().isIn(['auto', '16:9', '9:16', '1:1', '4:3', '3:4', '21:9']).withMessage('Invalid aspect ratio'),
-  body('resolution').optional().isIn(['480p', '720p']).withMessage('Invalid resolution'),
+  body('resolution').optional().isIn(['480p', '720p', '1080p']).withMessage('Invalid resolution'),
   body('duration').optional().isInt({ min: 4, max: 15 }).withMessage('Invalid duration'),
   body('audio').optional().isBoolean().withMessage('Audio must be a boolean'),
   body('negative_prompt').optional().isString().withMessage('Negative prompt must be a string'),
   body('image_url').optional().isString().withMessage('Image URL must be a string'),
+  body('image_urls').optional().isArray({ max: 12 }).withMessage('Image URLs must be an array'),
+  body('image_urls.*').optional().isString().withMessage('Image URL must be a string'),
   body('model').optional().isString().withMessage('Model must be a string')
 ], authenticateToken, requirePaidPlan({ feature: 'video_generation' }), async (req, res) => {
   try {
@@ -740,10 +747,33 @@ router.post('/generate', [
       audio = true,
       negative_prompt,
       image_url,
+      image_urls,
       model = 'veo-fast' // Default model
     } = req.body;
 
-    const numericDuration = resolveVeoFastDuration(requestedDuration, model);
+    const inputImageUrls = [
+      ...(Array.isArray(image_urls) ? image_urls : []),
+      image_url,
+    ]
+      .map(value => String(value || '').trim())
+      .filter(Boolean)
+      .filter((value, index, values) => values.indexOf(value) === index);
+
+    const modelRouting = resolveFalVideoModelRequest(model, {
+      hasImage: inputImageUrls.length > 0,
+      imageCount: inputImageUrls.length,
+    });
+    if (!modelRouting.ok) {
+      return res.status(422).json({
+        error: 'Invalid video model',
+        message: modelRouting.message,
+        code: modelRouting.code,
+        requestedModel: model,
+      });
+    }
+
+    const resolvedModel = modelRouting.endpoint;
+    const numericDuration = resolveVeoFastDuration(requestedDuration, resolvedModel);
     const duration = `${numericDuration}s`;
 
     console.log('Video generation request received:', {
@@ -752,8 +782,11 @@ router.post('/generate', [
       resolution,
       audio,
       aspect_ratio,
-      hasImageUrl: !!image_url,
-      model
+      hasImageUrl: inputImageUrls.length > 0,
+      imageCount: inputImageUrls.length,
+      requestedModel: model,
+      resolvedModel,
+      usingPairedEndpoint: modelRouting.usingPairedEndpoint,
     });
 
     // Check user's monthly limit
@@ -795,18 +828,25 @@ router.post('/generate', [
         status: 'processing',
         createdAt: new Date().toISOString(),
         lastChecked: new Date().toISOString(),
-        sourceImageUrl: image_url || null
+        sourceImageUrl: inputImageUrls[0] || null,
+        sourceImageUrls: inputImageUrls,
+        imageCount: inputImageUrls.length,
+        generationType: inputImageUrls.length > 1 ? 'reference-to-video' : (inputImageUrls.length === 1 ? 'image-to-video' : 'text-to-video'),
+        requestedModel: model,
+        resolvedModel,
+        modelDisplayName: modelRouting.model?.displayName || resolvedModel,
+        usingPairedEndpoint: modelRouting.usingPairedEndpoint
       };
       activeOperations.set(operationId, operationData);
 
       // Start video generation with Fal.ai (async)
-      generateVideoAsync(operationId, prompt, aspect_ratio, duration, negative_prompt, filename, req.user.id, image_url, model, resolution, audio);
+      generateVideoAsync(operationId, prompt, aspect_ratio, duration, negative_prompt, filename, req.user.id, inputImageUrls, resolvedModel, resolution, audio);
 
       // Track initial usage
       await prisma.apiUsage.create({
         data: {
           userId: req.user.id,
-          model: 'veo-3.0',
+          model: resolvedModel,
           tokens: prompt.length,
           cost: 1.00 // Fixed cost for 8s video
         }
@@ -822,7 +862,15 @@ router.post('/generate', [
         checkUrl: `/video/status/${operationId}`,
         prompt: prompt,
         duration: duration,
-        aspect_ratio: aspect_ratio
+        aspect_ratio: aspect_ratio,
+        requestedModel: model,
+        model: resolvedModel,
+        modelDisplayName: modelRouting.model?.displayName || resolvedModel,
+        usingPairedEndpoint: modelRouting.usingPairedEndpoint,
+        sourceImageUrl: inputImageUrls[0] || null,
+        sourceImageUrls: inputImageUrls,
+        imageCount: inputImageUrls.length,
+        generationType: inputImageUrls.length > 1 ? 'reference-to-video' : (inputImageUrls.length === 1 ? 'image-to-video' : 'text-to-video')
       });
 
     } catch (apiError) {
@@ -866,15 +914,52 @@ router.post('/generate', [
   }
 });
 
+function normalizeVideoImageUrls(value) {
+  const urls = Array.isArray(value) ? value : [value];
+  return urls
+    .map(item => String(item || '').trim())
+    .filter(Boolean)
+    .filter((item, index, items) => items.indexOf(item) === index);
+}
+
+async function prepareFalImageUrl(imageUrl) {
+  if (!imageUrl) return null;
+  if (!imageUrl.includes('localhost') && !imageUrl.includes('127.0.0.1') && (imageUrl.startsWith('http://') || imageUrl.startsWith('https://'))) {
+    return imageUrl;
+  }
+
+  console.log('📤 Uploading local image to Fal.ai for processing...');
+
+  const localImagePath = resolveLocalUploadFile(imageUrl);
+  if (!localImagePath) {
+    throw new Error('Invalid local image path');
+  }
+
+  console.log('📁 Local image path:', localImagePath);
+  if (!fs.existsSync(localImagePath)) {
+    throw new Error(`Local image file not found: ${localImagePath}`);
+  }
+
+  const imageBuffer = fs.readFileSync(localImagePath);
+  const fileName = path.basename(localImagePath);
+  const fileBlob = new Blob([imageBuffer], { type: getImageMimeType(fileName) });
+  const uploadedUrl = await fal.storage.upload(fileBlob);
+
+  console.log('✅ Image uploaded to Fal.ai successfully:', uploadedUrl);
+  return uploadedUrl;
+}
+
 // generateVideoAsync function with proper variable scoping and syntax fix
-async function generateVideoAsync(operationId, prompt, aspectRatio, duration, negativePrompt, filename, userId, imageUrl = null, model = 'veo-fast', resolution = '720p', audio = true) {
+async function generateVideoAsync(operationId, prompt, aspectRatio, duration, negativePrompt, filename, userId, imageUrls = [], model = 'veo-fast', resolution = '720p', audio = true) {
   const maxRetries = 3;
   let retryCount = 0;
+  const sourceImageUrls = normalizeVideoImageUrls(imageUrls);
 
   while (retryCount < maxRetries) {
+    let activeEndpoint = null;
     try {
       console.log(`🎬 Starting video generation attempt ${retryCount + 1}/${maxRetries} for operation: ${operationId}`);
-      console.log(`🖼️ Generation Mode: ${imageUrl ? 'Image-to-Video' : 'Text-to-Video'}`);
+      console.log(`🖼️ Generation Mode: ${sourceImageUrls.length > 1 ? 'Reference-to-Video' : (sourceImageUrls.length === 1 ? 'Image-to-Video' : 'Text-to-Video')}`);
 
       // Update status
       let operationData = activeOperations.get(operationId) || {};
@@ -882,109 +967,52 @@ async function generateVideoAsync(operationId, prompt, aspectRatio, duration, ne
       operationData.updatedAt = new Date().toISOString();
       activeOperations.set(operationId, operationData);
 
-      // Declare variables at function scope to avoid scope issues
-      let endpoint, requestPayload, processedImageUrl = null;
+      let processedImageUrls = [];
+      try {
+        processedImageUrls = (await Promise.all(sourceImageUrls.map(prepareFalImageUrl))).filter(Boolean);
+      } catch (uploadError) {
+        console.error(' Failed to upload image to Fal.ai:', uploadError);
+        throw new Error(`Failed to process image for video generation: ${uploadError.message}`);
+      }
+      const processedImageUrl = processedImageUrls[0] || null;
 
-      if (imageUrl) {
-        //  Handle image URL - upload to Fal.ai if it's a local file
-        processedImageUrl = imageUrl;
-
-        // If it's a local file URL, upload it to Fal.ai
-        if (imageUrl.includes('localhost') || imageUrl.includes('127.0.0.1') || (!imageUrl.startsWith('http://') && !imageUrl.startsWith('https://'))) {
-          try {
-            console.log('📤 Uploading local image to Fal.ai for processing...');
-
-            const localImagePath = resolveLocalUploadFile(imageUrl);
-            if (!localImagePath) {
-              throw new Error('Invalid local image path');
-            }
-
-            console.log('📁 Local image path:', localImagePath);
-
-            // Check if file exists
-            if (fs.existsSync(localImagePath)) {
-              // Read the file and upload to Fal.ai
-              const imageBuffer = fs.readFileSync(localImagePath);
-              const fileName = path.basename(localImagePath);
-
-              // Create a Blob from the buffer
-              const fileBlob = new Blob([imageBuffer], {
-                type: getImageMimeType(fileName)
-              });
-
-              // Upload to Fal.ai storage
-              const uploadedUrl = await fal.storage.upload(fileBlob);
-              processedImageUrl = uploadedUrl;
-
-              console.log('✅ Image uploaded to Fal.ai successfully:', uploadedUrl);
-            } else {
-              throw new Error(`Local image file not found: ${localImagePath}`); // 
-            }
-          } catch (uploadError) {
-            console.error(' Failed to upload image to Fal.ai:', uploadError);
-            throw new Error(`Failed to process image for video generation: ${uploadError.message}`);
-          }
-        }
-
-        //  Use Image-to-Video endpoint
-        switch (model) {
-          case 'kling-1.6-pro':
-            endpoint = "fal-ai/kling-video/v1.6/pro/image-to-video";
-            break;
-          case 'kling-2-master':
-            endpoint = "fal-ai/kling-video/v2.1/master/image-to-video";
-            break;
-          case 'fal-ai/veo3/fast':
-          case 'fal-ai/veo3/fast/image-to-video':
-          case 'veo-fast':
-          default: // veo-fast
-            endpoint = "fal-ai/veo3/fast/image-to-video";
-        }
-        requestPayload = {
-          prompt: prompt,
-          image_url: processedImageUrl,
-          aspect_ratio: aspectRatio === '16:9' ? '16:9' :
-            aspectRatio === '9:16' ? '9:16' : 'auto',
-          duration: duration,
-          generate_audio: Boolean(audio),
-          resolution
-        };
-        console.log(`🖼️➡️🎬 Using Image-to-Video model (${endpoint})`);
-        console.log('🔗 Using processed image URL:', processedImageUrl.substring(0, 50) + '...');
-      } else {
-        //  Use Text-to-Video endpoint
-        console.log("MODEL", model);
-
-        switch (model) {
-          case 'kling-1.6-pro':
-            endpoint = "fal-ai/kling-video/v1.6/pro/text-to-video";
-            break;
-          case 'kling-2-master':
-            endpoint = "fal-ai/kling-video/v2.1/master/text-to-video";
-            break;
-          case 'fal-ai/veo3/fast':
-          case 'fal-ai/veo3/fast/image-to-video':
-          case 'veo-fast':
-          default: // veo-fast
-            endpoint = "fal-ai/veo3/fast";
-        }
-        requestPayload = {
-          prompt: prompt,
-          duration: duration,
-          aspect_ratio: aspectRatio === 'auto' ? '16:9' : aspectRatio,
-          generate_audio: Boolean(audio),
-          resolution,
-          negative_prompt: negativePrompt || undefined
-        };
-        console.log(`📝➡️🎬 Using Text-to-Video model (${endpoint})`);
+      const modelRouting = resolveFalVideoModelRequest(model, {
+        hasImage: processedImageUrls.length > 0,
+        imageCount: processedImageUrls.length,
+      });
+      if (!modelRouting.ok) {
+        const validationError = new Error(modelRouting.message);
+        validationError.status = 422;
+        validationError.body = { code: modelRouting.code, requestedModel: model };
+        throw validationError;
       }
 
+      const endpoint = modelRouting.endpoint;
+      activeEndpoint = endpoint;
+      const requestPayload = buildFalVideoInputPayload({
+        endpoint,
+        prompt,
+        aspectRatio,
+        duration,
+        negativePrompt,
+        imageUrl: processedImageUrl,
+        imageUrls: processedImageUrls,
+        resolution,
+        audio,
+      });
+
+      console.log(`${processedImageUrls.length ? '🖼️➡️🎬' : '📝➡️🎬'} Using fal.ai video model (${endpoint})`);
+      if (processedImageUrls.length) {
+        console.log('🔗 Using processed image URLs:', processedImageUrls.length);
+      }
+
+      const sanitizedPayload = { ...requestPayload };
+      for (const key of ['image_url', 'image_urls', 'start_image_url', 'first_image_url', 'end_image_url', 'tail_image_url', 'last_image_url', 'reference_image_urls']) {
+        if (sanitizedPayload[key]) sanitizedPayload[key] = Array.isArray(sanitizedPayload[key]) ? ['[PROCESSED_IMAGE_URL]'] : '[PROCESSED_IMAGE_URL]';
+      }
       console.log('📡 Fal.ai request details:', {
         endpoint: endpoint,
-        payload: {
-          ...requestPayload,
-          image_url: processedImageUrl ? '[PROCESSED_IMAGE_URL]' : undefined
-        }
+        payload: sanitizedPayload,
       });
 
       //  Make API call with better error handling
@@ -1009,18 +1037,17 @@ async function generateVideoAsync(operationId, prompt, aspectRatio, duration, ne
 
       console.log(`✅ Fal.ai API response for ${operationId}:`, JSON.stringify(result, null, 2));
 
-      // Validate the response structure
-      if (!result || !result.data) {
-        throw new Error('Invalid API response: Missing data object');
-      }
-
-      if (!result.data.video || !result.data.video.url) {
+      const videoUrl = extractFalVideoUrl(result);
+      if (!videoUrl) {
         throw new Error('Invalid API response: Missing video URL');
       }
 
+      const resultData = result?.data || result || {};
+      const resultVideo = resultData.video || {};
+
       // Download and save the video
-      console.log(`📥 Downloading video from: ${result.data.video.url}`);
-      const resp = await fetch(result.data.video.url);
+      console.log(`📥 Downloading video from: ${videoUrl}`);
+      const resp = await fetch(videoUrl);
       if (!resp.ok) {
         throw new Error(`Failed to download video: ${resp.status} ${resp.statusText}`);
       }
@@ -1042,15 +1069,19 @@ async function generateVideoAsync(operationId, prompt, aspectRatio, duration, ne
         filename,
         duration,
         file_size: videoBuffer.byteLength,
-        resolution: result.data.video.width && result.data.video.height ?
-          `${result.data.video.width}x${result.data.video.height}` : resolution,
+        resolution: resultVideo.width && resultVideo.height ?
+          `${resultVideo.width}x${resultVideo.height}` : resolution,
         aspect_ratio: aspectRatio,
         audio: Boolean(audio),
-        fal_video_url: result.data.video.url,
-        fal_request_id: result.requestId || null,
-        sourceImageUrl: imageUrl,
-        processedImageUrl: processedImageUrl, //  Now properly scoped
-        generationType: imageUrl ? 'image-to-video' : 'text-to-video',
+        fal_video_url: videoUrl,
+        request_id: result.requestId || resultData.request_id || null,
+        sourceImageUrl: sourceImageUrls[0] || null,
+        sourceImageUrls,
+        processedImageUrl,
+        processedImageUrls,
+        imageCount: sourceImageUrls.length,
+        generationType: sourceImageUrls.length > 1 ? 'reference-to-video' : (sourceImageUrls.length === 1 ? 'image-to-video' : 'text-to-video'),
+        requestedModel: model,
         model: endpoint,
         prompt: prompt,
         completedAt: new Date().toISOString()
@@ -1081,8 +1112,8 @@ async function generateVideoAsync(operationId, prompt, aspectRatio, duration, ne
           original_error: error.message,
           status_code: error.status,
           response_body: error.body,
-          generationType: imageUrl ? 'image-to-video' : 'text-to-video',
-          endpoint: imageUrl ? 'fal-ai/veo3/fast/image-to-video' : 'fal-ai/veo3/fast'
+          generationType: sourceImageUrls.length > 1 ? 'reference-to-video' : (sourceImageUrls.length === 1 ? 'image-to-video' : 'text-to-video'),
+          endpoint: activeEndpoint || model
         };
         failedData.updatedAt = new Date().toISOString();
         activeOperations.set(operationId, failedData);

@@ -6,6 +6,11 @@ const {
   mergeProviderModels,
   DEFAULT_ACTIVE_IMAGE_MODEL_NAMES,
 } = require('./model-catalog-manifest');
+const {
+  listFalVideoModels,
+  normalizeFalExploreModel,
+  sortFalVideoModels,
+} = require('./fal-video-model-catalog');
 const modelPricingService = require('./model-pricing-service');
 
 class ModelSyncService {
@@ -15,7 +20,8 @@ class ModelSyncService {
       openai: { data: null, lastFetch: 0, ttl: 3600000 }, // 1 hour cache
       gemini: { data: null, lastFetch: 0, ttl: 3600000 },
       openrouter: { data: null, lastFetch: 0, ttl: 3600000 },
-      deepseek: { data: null, lastFetch: 0, ttl: 3600000 }
+      deepseek: { data: null, lastFetch: 0, ttl: 3600000 },
+      falVideo: { data: null, lastFetch: 0, ttl: 3600000 }
     };
     // Guards the one-time reactivation of the curated default IMAGE set so it
     // does NOT override admin deactivations on every read. See
@@ -25,53 +31,111 @@ class ModelSyncService {
   }
 
   getStaticVideoModels() {
-    const configured = Boolean(process.env.FAL_KEY || process.env.FAL_API_KEY || process.env.TAL_AI_API_KEY);
-    return [
-      {
-        id: 'veo-fast',
-        name: 'veo-fast',
-        displayName: 'Veo Fast (fal.ai)',
-        provider: 'Custom',
-        type: 'VIDEO',
-        description: configured
-          ? 'Generación de video con Veo Fast vía fal.ai.'
-          : 'Generación de video con Veo Fast vía fal.ai. Requiere FAL_API_KEY o FAL_KEY.',
-        icon: 'GeminiLogo',
-        contextLength: null,
-        pricing: { provider: 'fal.ai', billing: 'per_generation' },
-        tags: ['video', 'fal.ai', 'veo', 'text-to-video', 'image-to-video'],
-        syncSource: 'static',
-        isActive: false,
-      },
-      {
-        id: 'fal-ai/veo3/fast',
-        name: 'fal-ai/veo3/fast',
-        displayName: 'Veo 3 Fast',
-        provider: 'Custom',
-        type: 'VIDEO',
-        description: 'Modelo text-to-video de Veo 3 Fast servido por fal.ai.',
-        icon: 'GeminiLogo',
-        contextLength: null,
-        pricing: { provider: 'fal.ai', billing: 'per_generation' },
-        tags: ['video', 'fal.ai', 'veo3', 'text-to-video'],
-        syncSource: 'static',
-        isActive: false,
-      },
-      {
-        id: 'fal-ai/veo3/fast/image-to-video',
-        name: 'fal-ai/veo3/fast/image-to-video',
-        displayName: 'Veo 3 Fast Image to Video',
-        provider: 'Custom',
-        type: 'VIDEO',
-        description: 'Modelo image-to-video de Veo 3 Fast servido por fal.ai.',
-        icon: 'GeminiLogo',
-        contextLength: null,
-        pricing: { provider: 'fal.ai', billing: 'per_generation' },
-        tags: ['video', 'fal.ai', 'veo3', 'image-to-video'],
-        syncSource: 'static',
-        isActive: false,
-      },
-    ];
+    return listFalVideoModels().map(model => ({
+      ...model,
+      isActive: true,
+      syncSource: model.syncSource || 'static_manifest',
+    }));
+  }
+
+  getFalApiKey() {
+    return process.env.FAL_KEY || process.env.FAL_API_KEY || process.env.TAL_AI_API_KEY || '';
+  }
+
+  getFalAuthorizationHeader() {
+    const key = this.getFalApiKey();
+    if (!key) return null;
+    return /^key\s+/i.test(key) ? key : `Key ${key}`;
+  }
+
+  async fetchFalVideoModels() {
+    const now = Date.now();
+    const cache = this.cache.falVideo;
+    if (cache.data && (now - cache.lastFetch) < cache.ttl) {
+      console.log('📦 Using cached fal.ai video models');
+      return cache.data;
+    }
+
+    const staticModels = this.getStaticVideoModels();
+    const liveModels = [];
+    const categories = ['text-to-video', 'image-to-video'];
+
+    try {
+      for (const category of categories) {
+        let cursor = null;
+        let page = 0;
+        const authorization = this.getFalAuthorizationHeader();
+        do {
+          const response = await axios.get('https://api.fal.ai/v1/models', {
+            params: {
+              category,
+              status: 'active',
+              limit: 100,
+              ...(cursor ? { cursor } : {}),
+            },
+            headers: {
+              ...(authorization ? { Authorization: authorization } : {}),
+            },
+            timeout: 10000,
+          });
+          const payload = response.data || {};
+          const items = Array.isArray(payload.models)
+            ? payload.models
+            : Array.isArray(payload.items)
+              ? payload.items
+              : Array.isArray(payload.data)
+                ? payload.data
+                : [];
+          for (const item of items) {
+            const normalized = normalizeFalExploreModel(item, liveModels.length);
+            if (normalized) liveModels.push(normalized);
+          }
+          cursor = payload.has_more ? payload.next_cursor : null;
+          page += 1;
+        } while (cursor && page < 20);
+      }
+    } catch (officialApiError) {
+      console.warn('⚠️ fal.ai official model API fetch failed, trying legacy public catalog:', officialApiError.message);
+      try {
+        for (const category of categories) {
+          let page = 1;
+          let pages = 1;
+          do {
+            const response = await axios.get('https://fal.ai/api/explore/models', {
+              params: { categories: category, page },
+              headers: { 'Content-Type': 'application/json' },
+              timeout: 10000,
+            });
+            const payload = response.data || {};
+            const items = Array.isArray(payload.items)
+              ? payload.items
+              : Array.isArray(payload.models)
+                ? payload.models
+                : Array.isArray(payload.data)
+                  ? payload.data
+                  : [];
+            for (const item of items) {
+              const normalized = normalizeFalExploreModel(item, liveModels.length);
+              if (normalized) liveModels.push(normalized);
+            }
+            pages = Number(payload.pages || payload.totalPages || payload.pagination?.pages || page) || page;
+            page += 1;
+          } while (page <= pages && page <= 10);
+        }
+      } catch (legacyApiError) {
+        console.warn('⚠️ fal.ai public video catalog fetch failed, using static manifest:', legacyApiError.message);
+      }
+    }
+
+    const byName = new Map();
+    for (const model of staticModels) byName.set(model.name, model);
+    for (const model of liveModels) byName.set(model.name, { ...byName.get(model.name), ...model, isActive: true });
+    const merged = sortFalVideoModels([...byName.values()]);
+
+    cache.data = merged;
+    cache.lastFetch = now;
+    console.log(`✅ fal.ai video catalog ready: ${merged.length} models (${liveModels.length} live discoveries)`);
+    return merged;
   }
 
   getStaticImageModels() {
@@ -368,7 +432,7 @@ class ModelSyncService {
       this.fetchOpenRouterModels(),
       this.fetchDeepSeekModels(),
       Promise.resolve(this.getStaticImageModels()),
-      Promise.resolve(this.getStaticVideoModels())
+      this.fetchFalVideoModels()
     ]);
 
     const allModels = [];
@@ -449,7 +513,7 @@ class ModelSyncService {
                 description: model.description,
                 provider: model.provider,
                 type: model.type,
-                isActive: false,
+                isActive: model.isActive === true,
                 icon: this.getModelIcon(model),
                 lastSynced: new Date(),
                 syncSource: model.syncSource || 'api',
@@ -475,7 +539,7 @@ class ModelSyncService {
   }
 
   buildModelSyncUpdateData(model) {
-    return {
+    const data = {
       displayName: model.displayName,
       description: model.description,
       provider: model.provider,
@@ -488,6 +552,10 @@ class ModelSyncService {
       tags: model.tags && model.tags.length ? model.tags : this.generateTags(model),
       updatedAt: new Date()
     };
+    if (model.isActive === true) {
+      data.isActive = true;
+    }
+    return data;
   }
 
   /**
@@ -532,22 +600,31 @@ class ModelSyncService {
     const types = Array.isArray(options.types) && options.types.length
       ? new Set(options.types.map(type => String(type).toUpperCase()))
       : null;
+    const wantsVideo = !types || types.has('VIDEO');
+    const videoModels = wantsVideo ? await this.fetchFalVideoModels() : [];
     const catalogModels = [
-      ...listManifestModels(),
-      ...this.getStaticVideoModels(),
+      ...listManifestModels().filter(model => String(model.type || '').toUpperCase() !== 'VIDEO'),
+      ...videoModels,
       ...this.getStaticAudioModels(),
       ...this.getStaticMusicModels(),
     ].filter(model => !types || types.has(String(model.type || '').toUpperCase()));
+    const dedupedCatalogModels = [];
+    const catalogNames = new Set();
+    for (const model of catalogModels) {
+      if (!model?.name || catalogNames.has(model.name)) continue;
+      catalogNames.add(model.name);
+      dedupedCatalogModels.push(model);
+    }
 
     let created = 0;
     let updated = 0;
     const existingRows = await this.prisma.aiModel.findMany({
-      where: { name: { in: catalogModels.map(model => model.name) } },
+      where: { name: { in: dedupedCatalogModels.map(model => model.name) } },
       select: { name: true },
     });
     const existingNames = new Set(existingRows.map(row => row.name));
 
-    for (const model of catalogModels) {
+    for (const model of dedupedCatalogModels) {
       const data = {
         displayName: model.displayName,
         description: model.description,
@@ -560,6 +637,9 @@ class ModelSyncService {
         tags: model.tags && model.tags.length ? model.tags : this.generateTags(model),
         lastSynced: new Date(),
       };
+      if (model.isActive === true) {
+        data.isActive = true;
+      }
 
       if (existingNames.has(model.name)) {
         await this.prisma.aiModel.update({
@@ -575,12 +655,13 @@ class ModelSyncService {
           name: model.name,
           ...data,
           // Curated, verified IMAGE models seed ACTIVE so they are immediately
-          // selectable in the picker (across OpenAI/Gemini/OpenRouter/fal.ai).
-          // Everything else seeds inactive and stays admin-controlled.
-          isActive: DEFAULT_ACTIVE_IMAGE_MODEL_NAMES.has(model.name),
+          // selectable in the picker. VIDEO manifest rows can also request
+          // active seeding because the video picker must work immediately.
+          isActive: model.isActive === true || DEFAULT_ACTIVE_IMAGE_MODEL_NAMES.has(model.name),
         },
       });
       created++;
+      existingNames.add(model.name);
     }
 
     // One-time-per-process reactivation of the curated default IMAGE set, even
@@ -604,7 +685,7 @@ class ModelSyncService {
       this._curatedImageActivationDone = true;
     }
 
-    return { created, updated, existing: existingRows.length, count: catalogModels.length };
+    return { created, updated, existing: existingRows.length, count: dedupedCatalogModels.length };
   }
 
   /**
@@ -753,10 +834,18 @@ class ModelSyncService {
    * slugs such as anthropic/claude-* or moonshotai/kimi-* keep their brand.
    */
   getModelIcon(model = {}) {
+    if (model.icon) return model.icon;
     const modelName = `${model.name || ''} ${model.displayName || ''}`.toLowerCase();
     const provider = `${model.provider || ''}`.toLowerCase();
 
-    if (/(^|[/\s-])(gpt|chatgpt|dall[-\s]?e)\b|openai\//.test(modelName)) return 'ChatGPTLogo';
+    if (/sora/.test(modelName)) return 'SoraLogo';
+    if (/kling/.test(modelName)) return 'KlingLogo';
+    if (/pixverse/.test(modelName)) return 'PixverseLogo';
+    if (/minimax|hailuo/.test(modelName)) return 'MinimaxLogo';
+    if (/\bwan\b/.test(modelName)) return 'WanLogo';
+    if (/ltx/.test(modelName)) return 'LtxLogo';
+    if (/nvidia|cosmos/.test(modelName)) return 'NvidiaLogo';
+    if (/fal\.ai/.test(provider)) return 'FalLogo';
     if (/gemini|google\/|imagen|veo/.test(modelName)) return 'GeminiLogo';
     if (/claude|anthropic\//.test(modelName)) return 'ClaudeLogo';
     if (/grok|x-ai\//.test(modelName)) return 'GrokLogo';

@@ -826,8 +826,9 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
         }
     };
 
-    const downloadVideo = async () => {
-        if (message.videoData?.filename) {
+    const downloadVideo = async (filenameOverride?: string) => {
+        const targetFilename = filenameOverride || message.videoData?.filename;
+        if (targetFilename) {
             try {
                 setVideoLoading(true);
                 // apiClient.downloadVideo returns a URL string, not a blob. We need to fetch the file as a blob.
@@ -835,11 +836,11 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                 // const response = await fetch(downloadUrl);
                 // if (!response.ok) throw new Error('Network response was not ok');
                 // const blob = await response.blob();
-                const blob = await apiClient.downloadVideo(message.videoData.filename);
+                const blob = await apiClient.downloadVideo(targetFilename);
                 const url = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = message.videoData.filename;
+                a.download = targetFilename;
                 document.body.appendChild(a);
                 a.click();
                 window.URL.revokeObjectURL(url);
@@ -2010,24 +2011,99 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
 
         const status = String(videoEntry.status || '').toLowerCase()
         const filename = videoEntry.filename
+        const sourceImageUrls = [
+            ...(Array.isArray(videoEntry.sourceImageUrls) ? videoEntry.sourceImageUrls : []),
+            videoEntry.sourceImageUrl,
+        ]
+            .map((url: unknown) => String(url || '').trim())
+            .filter(Boolean)
+            .filter((url: string, index: number, urls: string[]) => urls.indexOf(url) === index)
+        const imageCount = Number(videoEntry.imageCount || sourceImageUrls.length || 0)
+        const durationValue = String(videoEntry.requestedDuration || videoEntry.duration || '').replace(/s$/i, '')
+        const durationLabel = durationValue ? `${durationValue}s` : null
+        const metaLine = [
+            videoEntry.generationType === 'reference-to-video'
+                ? 'Referencias'
+                : videoEntry.generationType === 'image-to-video'
+                    ? 'Imagen a video'
+                    : 'Texto a video',
+            videoEntry.resolution,
+            durationLabel,
+            videoEntry.aspect_ratio || videoEntry.aspectRatio,
+        ].filter(Boolean).join(' / ')
+        const modelLabel = videoEntry.modelDisplayName || videoEntry.model || 'SiraGPT Video'
+        const isProcessing = status === 'processing' || status === 'in_progress' || status === 'queued'
 
         return (
-            <div className="mt-3 p-3 rounded-lg border border-border/20 bg-muted/20">
-                <div className="flex items-center gap-2 text-sm">
-                    <VideoIcon className="h-4 w-4" />
-                    <span className="font-medium">AI Video</span>
+            <div className="video-liquid-card mt-3" data-status={status || 'processing'}>
+                <div className="flex items-center justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                        <span className="video-liquid-icon">
+                            <VideoIcon className="h-4 w-4" />
+                        </span>
+                        <div className="min-w-0">
+                            <div className="truncate text-[13px] font-semibold text-emerald-950 dark:text-emerald-50">
+                                {isProcessing ? 'Creando video' : status === 'completed' ? 'Video listo' : 'Video'}
+                            </div>
+                            <div className="truncate text-[11px] font-medium text-emerald-800/70 dark:text-emerald-100/62">
+                                {modelLabel}
+                            </div>
+                        </div>
+                    </div>
+                    {imageCount > 0 ? (
+                        <span className="rounded-full border border-emerald-500/18 bg-emerald-500/8 px-2 py-1 text-[10.5px] font-semibold text-emerald-800 dark:text-emerald-100/78">
+                            {imageCount} img
+                        </span>
+                    ) : null}
                 </div>
 
-                {status === 'processing' || status === 'in_progress' ? (
-                    <div className="mt-2 flex items-center gap-2 text-muted-foreground">
-                        <ThinkingIndicator size="sm" />
-                        <span>Generating video… This may take 2–5 minutes.</span>
+                <div className="mt-2 text-[11px] font-medium text-emerald-900/58 dark:text-emerald-100/50">
+                    {metaLine}
+                </div>
+
+                {isProcessing ? (
+                    <div className="video-liquid-stage mt-3">
+                        <div className="video-liquid-preview" aria-hidden="true">
+                            <span className="video-liquid-scan" />
+                            <span className="video-liquid-contour video-liquid-contour-a" />
+                            <span className="video-liquid-contour video-liquid-contour-b" />
+                            <span className="video-liquid-frame-line video-liquid-frame-line-a" />
+                            <span className="video-liquid-frame-line video-liquid-frame-line-b" />
+                        </div>
+                        <div className="mt-3 flex items-center justify-between gap-3">
+                            <div className="min-w-0">
+                                <div className="text-[12px] font-semibold text-emerald-950 dark:text-emerald-50">Render en progreso</div>
+                                <div className="mt-0.5 truncate text-[11px] font-medium text-emerald-900/58 dark:text-emerald-100/52">
+                                    {sourceImageUrls.length > 1 ? 'Componiendo referencias e indicaciones' : sourceImageUrls.length === 1 ? 'Animando la imagen y el prompt' : 'Interpretando el prompt'}
+                                </div>
+                            </div>
+                            <span className="video-liquid-pulse" aria-hidden="true" />
+                        </div>
+                        <div className="video-liquid-progress mt-3" aria-hidden="true">
+                            <span />
+                        </div>
+                        {sourceImageUrls.length > 0 ? (
+                            <div className="mt-3 flex items-center gap-1.5">
+                                {sourceImageUrls.slice(0, 4).map((url: string, index: number) => (
+                                    <img
+                                        key={`${url}-${index}`}
+                                        src={backendUrl(url)}
+                                        alt=""
+                                        className="video-liquid-thumb"
+                                        loading="lazy"
+                                    />
+                                ))}
+                                {sourceImageUrls.length > 4 ? (
+                                    <span className="video-liquid-thumb-more">+{sourceImageUrls.length - 4}</span>
+                                ) : null}
+                            </div>
+                        ) : null}
                     </div>
                 ) : null}
 
                 {status === 'failed' ? (
-                    <div className="mt-2 text-red-500 text-sm">
-                        Generation failed. Please try again with a shorter prompt.
+                    <div className="mt-3 rounded-md border border-red-300/45 bg-red-500/8 px-3 py-2 text-[12px] font-medium text-red-600 dark:border-red-400/25 dark:text-red-200">
+                        No se pudo crear el video. Prueba con un prompt más corto o cambia de modelo.
                     </div>
                 ) : null}
 
@@ -2036,7 +2112,7 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                         <video
                             key={filename}             // don’t remount unless the file changes
                             ref={videoRef}
-                            className="w-full rounded-md"
+                            className="video-liquid-player"
                             controls
                             preload="auto"
                             playsInline
@@ -2047,14 +2123,14 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                                 toast.error('Failed to play video inline. Try “Open in new tab”.')
                             }}
                         />
-                        <div className="flex gap-2">
-                            <Button size="sm" variant="outline" onClick={downloadVideo}>
+                        <div className="flex flex-wrap gap-2">
+                            <Button size="sm" variant="outline" onClick={() => downloadVideo(filename)} className="video-liquid-action">
                                 <Download className="h-4 w-4 mr-1" />
-                                Download
+                                Descargar
                             </Button>
-                            <Button size="sm" variant="outline" asChild>
+                            <Button size="sm" variant="outline" asChild className="video-liquid-action">
                                 <a href={getWatchUrl(filename)} target="_blank" rel="noopener noreferrer">
-                                    Open in new tab
+                                    Abrir
                                 </a>
                             </Button>
                         </div>
