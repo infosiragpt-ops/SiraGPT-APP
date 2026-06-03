@@ -215,7 +215,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `long` | 5.3.2 | Apache-2.0 | [link](https://github.com/dcodeIO/long.js) |
 | `openai` | 5.23.2, 6.34.0 | Apache-2.0 | [link](https://github.com/openai/openai-node) |
 | `opossum` | 9.0.0 | Apache-2.0 | [link](https://github.com/nodeshift/opossum) |
-| `pdfjs-dist` | 4.10.38, 4.8.69, 5.4.296, 5.6.205 | Apache-2.0 | [link](https://github.com/mozilla/pdf.js) |
+| `pdfjs-dist` | 4.8.69, 5.4.296, 5.6.205 | Apache-2.0 | [link](https://github.com/mozilla/pdf.js) |
 | `playwright` | 1.56.1, 1.60.0 | Apache-2.0 | [link](https://github.com/microsoft/playwright) |
 | `playwright-core` | 1.56.1, 1.60.0 | Apache-2.0 | [link](https://github.com/microsoft/playwright) |
 | `prisma` | 6.19.3 | Apache-2.0 | [link](https://github.com/prisma/prisma) |
@@ -506,7 +506,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@modelcontextprotocol/sdk` | 1.29.0 | MIT | [link](https://github.com/modelcontextprotocol/typescript-sdk) |
 | `@monaco-editor/loader` | 1.7.0 | MIT | [link](https://github.com/suren-atoyan/monaco-loader) |
 | `@monaco-editor/react` | 4.7.0 | MIT | [link](https://github.com/suren-atoyan/monaco-react) |
-| `@napi-rs/canvas` | 0.1.100, 0.1.99 | MIT | [link](https://github.com/Brooooooklyn/canvas) |
+| `@napi-rs/canvas` | 0.1.100 | MIT | [link](https://github.com/Brooooooklyn/canvas) |
 | `@neondatabase/serverless` | 1.1.0 | MIT | [link](https://github.com/neondatabase/serverless) |
 | `@next/env` | 15.5.18 | MIT | [link](https://github.com/vercel/next.js) |
 | `@noble/hashes` | 1.8.0 | MIT | [link](https://github.com/paulmillr/noble-hashes) |
