@@ -4,6 +4,8 @@ const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
 const prisma = require('../config/database');
 const stripeService = require('../services/stripe');
+const { logger } = require('../middleware/logger');
+const { redactErrorMessage } = require('../utils/secret-redactor');
 const { getPriceIdForPlan } = require('../utils/stripe-setup');
 const usageMonitor = require('../services/usage-monitor');
 const emailService = require('../services/email');
@@ -62,6 +64,32 @@ function toDateFromUnix(seconds) {
   const ms = Number(seconds) * 1000;
   if (!Number.isFinite(ms)) return null;
   return new Date(ms);
+}
+
+function requestIdFor(req) {
+  return req.requestId || req.id || req.headers?.['x-request-id'] || null;
+}
+
+function logRouteError(req, message, error, context = {}) {
+  const log = req.log || logger;
+  const payload = {
+    error: {
+      name: error?.name || 'Error',
+      message: redactErrorMessage(error),
+      code: error?.code || undefined,
+    },
+    requestId: requestIdFor(req),
+    ...context,
+  };
+  if (typeof log.error === 'function') log.error(payload, message);
+}
+
+function sendStripeError(res, req, error, operation) {
+  const response = stripeService.toHttpError(error, {
+    requestId: requestIdFor(req),
+    operation,
+  });
+  return res.status(response.statusCode).json(response.body);
 }
 
 // Rate limiting for payment endpoints
@@ -316,20 +344,14 @@ router.post('/stripe', paymentLimiter, [
     });
 
   } catch (error) {
-    console.error('Stripe payment error:', error);
-    
-    // Check if it's a configuration issue
-    if (error.message.includes('Stripe is not configured')) {
-      return res.status(503).json({ 
-        error: 'Stripe not configured', 
-        message: 'Payment processing is not available. Please contact support or use demo mode.',
-        fallbackAvailable: true
-      });
+    if (error?.isStripeOperationalError || stripeService.isStripeLikeError?.(error)) {
+      return sendStripeError(res, req, error, 'createStripeCheckout');
     }
-    
+
+    logRouteError(req, 'payments.stripe.create_failed', error, { plan: req.body?.plan });
     res.status(500).json({ 
-      error: 'Payment creation failed', 
-      details: error.message 
+      error: 'Payment creation failed',
+      requestId: requestIdFor(req),
     });
   }
 });
@@ -441,7 +463,7 @@ router.get('/verify-session', authenticateToken, async (req, res) => {
     
     try {
       // Get session details from Stripe
-      session = await stripeService.stripe.checkout.sessions.retrieve(session_id);
+      session = await stripeService.retrieveCheckoutSession(session_id);
       console.log(`Stripe session status: ${session.payment_status}`);
       
       // If Stripe session is paid and our payment is still pending, update it
@@ -488,9 +510,11 @@ router.get('/verify-session', authenticateToken, async (req, res) => {
         paymentStatus = 'COMPLETED';
       }
     } catch (stripeError) {
-      console.log('Stripe not configured or session not found in Stripe, checking demo mode...');
-      
-      // In demo mode (without Stripe keys), simulate successful payment after a delay
+      if (!stripeService.demoAllowed || stripeService.isConfigured) {
+        return sendStripeError(res, req, stripeError, 'verifyStripeCheckoutSession');
+      }
+
+      // In explicit local demo mode (without Stripe keys), simulate successful payment.
       if (payment.status === 'PENDING') {
         console.log('Demo mode: Updating payment and user plan...');
         
@@ -540,8 +564,11 @@ router.get('/verify-session', authenticateToken, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error verifying payment session:', error);
-    res.status(500).json({ error: 'Failed to verify payment session' });
+    if (error?.isStripeOperationalError || stripeService.isStripeLikeError?.(error)) {
+      return sendStripeError(res, req, error, 'verifyStripeCheckoutSession');
+    }
+    logRouteError(req, 'payments.verify_session_failed', error);
+    res.status(500).json({ error: 'Failed to verify payment session', requestId: requestIdFor(req) });
   }
 });
 
@@ -591,7 +618,7 @@ router.get('/stripe/invoices', authenticateToken, async (req, res) => {
       return res.json({ invoices: [] });
     }
 
-    const invoices = await stripeService.stripe.invoices.list({
+    const invoices = await stripeService.listInvoices({
       customer: user.stripeCustomerId,
       limit: 50
     });
@@ -611,8 +638,11 @@ router.get('/stripe/invoices', authenticateToken, async (req, res) => {
       }))
     });
   } catch (error) {
-    console.error('Error listing invoices:', error);
-    res.status(500).json({ error: 'Failed to list invoices' });
+    if (error?.isStripeOperationalError || stripeService.isStripeLikeError?.(error)) {
+      return sendStripeError(res, req, error, 'listStripeInvoices');
+    }
+    logRouteError(req, 'payments.invoices.list_failed', error);
+    res.status(500).json({ error: 'Failed to list invoices', requestId: requestIdFor(req) });
   }
 });
 
@@ -624,7 +654,7 @@ router.get('/stripe/invoice/:invoiceId', authenticateToken, async (req, res) => 
     }
 
     const { invoiceId } = req.params;
-    const invoice = await stripeService.stripe.invoices.retrieve(invoiceId);
+    const invoice = await stripeService.retrieveInvoice(invoiceId);
 
     // Optional: ensure invoice belongs to the current user
     const user = await prisma.user.findUnique({ where: { id: req.user.id } });
@@ -647,8 +677,11 @@ router.get('/stripe/invoice/:invoiceId', authenticateToken, async (req, res) => 
 
     return res.status(404).json({ error: 'Invoice PDF not available' });
   } catch (error) {
-    console.error('Error downloading invoice:', error);
-    res.status(500).json({ error: 'Failed to download invoice' });
+    if (error?.isStripeOperationalError || stripeService.isStripeLikeError?.(error)) {
+      return sendStripeError(res, req, error, 'downloadStripeInvoice');
+    }
+    logRouteError(req, 'payments.invoice.download_failed', error, { invoiceId: req.params.invoiceId });
+    res.status(500).json({ error: 'Failed to download invoice', requestId: requestIdFor(req) });
   }
 });
 
@@ -675,7 +708,7 @@ router.get('/invoice/:paymentId', authenticateToken, async (req, res) => {
     let invoice = null;
 
     if (payment.stripeSubscriptionId) {
-      const list = await stripeService.stripe.invoices.list({
+      const list = await stripeService.listInvoices({
         subscription: payment.stripeSubscriptionId,
         limit: 20
       });
@@ -683,7 +716,7 @@ router.get('/invoice/:paymentId', authenticateToken, async (req, res) => {
     }
 
     if (!invoice) {
-      const list = await stripeService.stripe.invoices.list({
+      const list = await stripeService.listInvoices({
         customer: payment.stripeCustomerId,
         limit: 50
       });
@@ -711,8 +744,11 @@ router.get('/invoice/:paymentId', authenticateToken, async (req, res) => {
 
     return res.status(404).json({ error: 'Invoice PDF not available' });
   } catch (error) {
-    console.error('Download invoice by payment error:', error);
-    res.status(500).json({ error: 'Failed to download invoice' });
+    if (error?.isStripeOperationalError || stripeService.isStripeLikeError?.(error)) {
+      return sendStripeError(res, req, error, 'downloadStripeInvoiceByPayment');
+    }
+    logRouteError(req, 'payments.invoice_by_payment.download_failed', error, { paymentId: req.params.paymentId });
+    res.status(500).json({ error: 'Failed to download invoice', requestId: requestIdFor(req) });
   }
 });
 
@@ -839,8 +875,11 @@ router.post('/stripe/webhook', express.raw({ type: 'application/json' }), async 
     try {
       event = stripeService.constructWebhookEvent(req.body, sig);
     } catch (err) {
-      console.error('Webhook signature verification failed:', err.message);
-      return res.status(400).send(`Webhook Error: ${err.message}`);
+      const response = stripeService.toHttpError(err, {
+        requestId: requestIdFor(req),
+        operation: 'constructWebhookEvent',
+      });
+      return res.status(response.statusCode).send(`Webhook Error: ${response.body.message}`);
     }
 
     console.log('Received Stripe webhook:', event.type);
@@ -878,8 +917,8 @@ router.post('/stripe/webhook', express.raw({ type: 'application/json' }), async 
     res.json({ received: true });
 
   } catch (error) {
-    console.error('Webhook processing error:', error);
-    res.status(500).json({ error: 'Webhook processing failed' });
+    logRouteError(req, 'payments.webhook.processing_failed', error);
+    res.status(500).json({ error: 'Webhook processing failed', requestId: requestIdFor(req) });
   }
 });
 
@@ -1294,15 +1333,17 @@ router.get('/subscription', authenticateToken, async (req, res) => {
           }
         };
       } catch (error) {
-        console.error('Error fetching Stripe subscription:', error);
+        if (!error?.isStripeOperationalError && !stripeService.isStripeLikeError?.(error)) {
+          logRouteError(req, 'payments.subscription.stripe_fetch_failed', error);
+        }
       }
     }
 
     res.json(subscriptionInfo);
 
   } catch (error) {
-    console.error('Error fetching subscription info:', error);
-    res.status(500).json({ error: 'Failed to fetch subscription info' });
+    logRouteError(req, 'payments.subscription.fetch_failed', error);
+    res.status(500).json({ error: 'Failed to fetch subscription info', requestId: requestIdFor(req) });
   }
 });
 

@@ -1,5 +1,32 @@
 const stripeService = require('./stripe');
 const prisma = require('../config/database');
+const { logger } = require('../middleware/logger');
+const { redactErrorMessage } = require('../utils/secret-redactor');
+
+function logProrationError(operation, error, context = {}) {
+  if (error?.isStripeOperationalError || stripeService.isStripeLikeError?.(error)) return;
+  logger.error({
+    operation,
+    error: {
+      name: error?.name || 'Error',
+      message: redactErrorMessage(error),
+      code: error?.code || undefined,
+    },
+    ...context,
+  }, `proration.${operation}.failed`);
+}
+
+function logProrationWarning(operation, error, context = {}) {
+  logger.warn({
+    operation,
+    error: {
+      name: error?.name || 'Error',
+      message: redactErrorMessage(error),
+      code: error?.code || undefined,
+    },
+    ...context,
+  }, `proration.${operation}.warning`);
+}
 
 class ProrationService {
   constructor() {
@@ -63,7 +90,7 @@ class ProrationService {
       };
 
     } catch (error) {
-      console.error('Error calculating proration:', error);
+      logProrationError('calculate', error, { userId, newPlan });
       throw error;
     }
   }
@@ -165,7 +192,7 @@ class ProrationService {
       };
 
     } catch (error) {
-      console.error('Error changing plan:', error);
+      logProrationError('changePlan', error, { userId, newPlan, immediate });
       throw error;
     }
   }
@@ -178,7 +205,7 @@ class ProrationService {
       const subscription = await stripeService.retrieveSubscription(user.stripeSubscriptionId);
 
       // Update the subscription with new price
-      const updatedSubscription = await stripeService.stripe.subscriptions.update(
+      const updatedSubscription = await stripeService.updateSubscription(
         user.stripeSubscriptionId,
         {
           items: [{
@@ -187,13 +214,14 @@ class ProrationService {
           }],
           proration_behavior: 'create_prorations', // This creates prorations automatically
           billing_cycle_anchor: 'unchanged' // Keep same billing cycle
-        }
+        },
+        'executeImmediatePlanChange'
       );
 
       return updatedSubscription;
 
     } catch (error) {
-      console.error('Error executing immediate plan change:', error);
+      logProrationError('executeImmediatePlanChange', error, { userId: user.id, newPlan });
       throw error;
     }
   }
@@ -206,7 +234,7 @@ class ProrationService {
       const subscription = await stripeService.retrieveSubscription(user.stripeSubscriptionId);
 
       // Schedule the change for the next billing cycle
-      const scheduledChange = await stripeService.stripe.subscriptions.update(
+      const scheduledChange = await stripeService.updateSubscription(
         user.stripeSubscriptionId,
         {
           items: [{
@@ -214,13 +242,14 @@ class ProrationService {
             price: newPriceId,
           }],
           proration_behavior: 'none', // No prorations for next-cycle changes
-        }
+        },
+        'scheduleNextCyclePlanChange'
       );
 
       return scheduledChange;
 
     } catch (error) {
-      console.error('Error scheduling plan change:', error);
+      logProrationError('scheduleNextCyclePlanChange', error, { userId: user.id, newPlan });
       throw error;
     }
   }
@@ -236,7 +265,7 @@ class ProrationService {
 
       return setting?.value;
     } catch (error) {
-      console.error('Error getting price ID:', error);
+      logProrationError('getPriceIdForPlan', error, { plan });
       return null;
     }
   }
@@ -259,7 +288,7 @@ class ProrationService {
           const newPriceId = await this.getPriceIdForPlan(newPlan);
           const subscription = await stripeService.retrieveSubscription(user.stripeSubscriptionId);
 
-          upcomingInvoice = await stripeService.stripe.invoices.retrieveUpcoming({
+          upcomingInvoice = await stripeService.retrieveUpcomingInvoice({
             customer: user.stripeCustomerId,
             subscription: user.stripeSubscriptionId,
             subscription_items: [{
@@ -269,7 +298,7 @@ class ProrationService {
             subscription_proration_behavior: 'create_prorations'
           });
         } catch (error) {
-          console.warn('Could not retrieve upcoming invoice preview:', error.message);
+          logProrationWarning('previewUpcomingInvoice', error, { userId, newPlan });
         }
       }
 
@@ -292,7 +321,7 @@ class ProrationService {
       };
 
     } catch (error) {
-      console.error('Error previewing plan change:', error);
+      logProrationError('previewPlanChange', error, { userId, newPlan });
       throw error;
     }
   }
@@ -354,9 +383,11 @@ class ProrationService {
       }
 
       // Cancel the pending update (this removes the scheduled change)
-      await stripeService.stripe.subscriptions.update(user.stripeSubscriptionId, {
-        pending_update: null
-      });
+      await stripeService.updateSubscription(
+        user.stripeSubscriptionId,
+        { pending_update: null },
+        'cancelScheduledPlanChange'
+      );
 
       // Record the cancellation
       await prisma.subscriptionEvent.create({
@@ -375,7 +406,7 @@ class ProrationService {
       };
 
     } catch (error) {
-      console.error('Error cancelling scheduled plan change:', error);
+      logProrationError('cancelScheduledPlanChange', error, { userId });
       throw error;
     }
   }

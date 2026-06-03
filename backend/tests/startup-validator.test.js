@@ -53,6 +53,7 @@ function happyEnv(overrides = {}) {
     REDIS_URL: 'redis://localhost:6379',
     NODE_ENV: 'development',
     CORS_ORIGINS: 'http://localhost:3000',
+    SENTRY_DSN: 'https://public@example.ingest.sentry.io/1',
     ...overrides,
   };
 }
@@ -383,7 +384,7 @@ describe('validateStartupEnvironment · API key format', () => {
 
   it('does not warn on sk-proj-... OpenAI key', () => {
     const issues = runValidator(happyEnv({
-      OPENAI_API_KEY: 'sk-proj-XXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+      OPENAI_API_KEY: 'sk-proj-example-key',
     }));
     const k = issues.find(i => i.key === 'OPENAI_API_KEY');
     assert.equal(k, undefined);
@@ -420,6 +421,16 @@ describe('validateStartupEnvironment · API key format', () => {
     }));
     const k = issues.find(i => i.key === 'STRIPE_SECRET_KEY');
     assert.equal(k, undefined);
+  });
+
+  it('warns when STRIPE_SECRET_KEY looks like a masked dashboard value', () => {
+    const issues = runValidator(happyEnv({
+      STRIPE_SECRET_KEY: 'sk_live_****************tlKU',
+    }));
+    const k = issues.find(i => i.key === 'STRIPE_SECRET_KEY');
+    assert.ok(k);
+    assert.equal(k.severity, 'WARNING');
+    assert.match(k.message, /masked|malformed/i);
   });
 });
 

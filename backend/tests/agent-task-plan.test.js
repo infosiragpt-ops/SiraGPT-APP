@@ -121,10 +121,38 @@ test('agent task plan: bulk OpenClaw source fusion adds inventory and activation
 
   assert.equal(plan.openclawFusion.signals.massiveSourceFusion, true);
   assert.ok(plan.phases.some((phase) => phase.id === 'bulk_source_inventory'));
+  assert.ok(plan.phases.some((phase) => phase.id === 'source_activation_ledger'));
+  assert.equal(plan.sourceActivationLedger.active, true);
+  assert.equal(plan.sourceActivationLedger.requestedLineTarget, 1_000_000);
   assert.ok(plan.successCriteria.some((criterion) => /Bulk source fusion/.test(criterion)));
+  assert.ok(plan.successCriteria.some((criterion) => /raw line volume alone/.test(criterion)));
   assert.ok(plan.risks.some((risk) => /Million-line copy requests/.test(risk)));
 
   const prompt = buildAgentTaskPlanPrompt(plan);
   assert.match(prompt, /bulk_source_inventory/);
+  assert.match(prompt, /Source activation ledger:/);
   assert.match(prompt, /massiveSourceFusion/);
+});
+
+test('agent task plan: explicit million-line commit request uses activation accounting', () => {
+  const goal = 'Continua con mas mejoras, al menos tenemos que comitear 1 milllom de lineas de codigo';
+  const executionProfile = buildExecutionProfile({ goal });
+  const intentAlignmentProfile = buildUserIntentAlignmentProfile({ request: goal });
+  const plan = buildAgentTaskPlan({
+    goal,
+    executionProfile,
+    intentAlignmentProfile,
+    sourceInventory: {
+      source: { repository: 'https://github.com/openclaw/openclaw', commit: 'sha', license: 'MIT', snapshot: 'external-reference-only' },
+      totals: { lines: 1_400_000 },
+      activationBudget: { maxActiveSlicesPerPass: 1, nextSlices: [{ folder: 'src', siraSurface: 'backend/src/services/agents', activationRank: 10, requiredProof: ['focused_tests_added'] }] },
+      folders: [{ folder: 'src', lineCount: 80_000 }],
+    },
+  });
+
+  assert.equal(plan.sourceActivationLedger.active, true);
+  assert.equal(plan.sourceActivationLedger.requestedLineTarget, 1_000_000);
+  assert.equal(plan.sourceActivationLedger.commitLineTargetAccepted, false);
+  assert.ok(plan.sourceActivationLedger.stages.some((stage) => stage.id === 'line_accounting'));
+  assert.ok(plan.phases.some((phase) => phase.id === 'source_activation_ledger'));
 });

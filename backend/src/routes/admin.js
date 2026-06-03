@@ -6,6 +6,8 @@ const { ProviderType, ModelType } = require('@prisma/client'); // Enums ko impor
 const bcrypt = require('bcryptjs');
 const router = express.Router();
 const stripeService = require('../services/stripe');
+const { logger } = require('../middleware/logger');
+const { redactErrorMessage } = require('../utils/secret-redactor');
 const axios = require('axios');
 const { serializeUser, serializeBigIntFields } = require('../utils/bigint-serializer');
 const modelSyncService = require('../services/model-sync-service');
@@ -29,6 +31,32 @@ function invoicePdfFilename(invoice) {
     fallback: 'invoice.pdf',
     extension: '.pdf',
   });
+}
+
+function requestIdFor(req) {
+  return req.requestId || req.id || req.headers?.['x-request-id'] || null;
+}
+
+function logAdminRouteError(req, message, error, context = {}) {
+  const log = req.log || logger;
+  if (typeof log.error !== 'function') return;
+  log.error({
+    error: {
+      name: error?.name || 'Error',
+      message: redactErrorMessage(error),
+      code: error?.code || undefined,
+    },
+    requestId: requestIdFor(req),
+    ...context,
+  }, message);
+}
+
+function sendStripeError(res, req, error, operation) {
+  const response = stripeService.toHttpError(error, {
+    requestId: requestIdFor(req),
+    operation,
+  });
+  return res.status(response.statusCode).json(response.body);
 }
 
 // Apply admin middleware to all routes
@@ -2707,7 +2735,7 @@ router.get('/stripe/invoices', async (req, res) => {
 
     const { limit = 50, starting_after } = req.query;
 
-    const invoices = await stripeService.stripe.invoices.list({
+    const invoices = await stripeService.listInvoices({
       limit: Math.min(parseInt(limit, 10) || 50, 100),
       ...(starting_after ? { starting_after } : {})
     });
@@ -2735,8 +2763,11 @@ router.get('/stripe/invoices', async (req, res) => {
       has_more: invoices.has_more
     });
   } catch (error) {
-    console.error('Admin list invoices error:', error);
-    res.status(500).json({ error: 'Failed to list invoices' });
+    if (error?.isStripeOperationalError || stripeService.isStripeLikeError?.(error)) {
+      return sendStripeError(res, req, error, 'adminListStripeInvoices');
+    }
+    logAdminRouteError(req, 'admin.stripe.invoices.list_failed', error);
+    res.status(500).json({ error: 'Failed to list invoices', requestId: requestIdFor(req) });
   }
 });
 
@@ -2746,7 +2777,7 @@ router.get('/stripe/invoice/:invoiceId', async (req, res) => {
       return res.status(503).json({ error: 'Stripe not configured' });
     }
 
-    const invoice = await stripeService.stripe.invoices.retrieve(req.params.invoiceId);
+    const invoice = await stripeService.retrieveInvoice(req.params.invoiceId);
 
     // Stream PDF if available
     if (invoice.invoice_pdf) {
@@ -2762,8 +2793,11 @@ router.get('/stripe/invoice/:invoiceId', async (req, res) => {
 
     return res.status(404).json({ error: 'Invoice PDF not available' });
   } catch (error) {
-    console.error('Admin download invoice error:', error);
-    res.status(500).json({ error: 'Failed to download invoice' });
+    if (error?.isStripeOperationalError || stripeService.isStripeLikeError?.(error)) {
+      return sendStripeError(res, req, error, 'adminDownloadStripeInvoice');
+    }
+    logAdminRouteError(req, 'admin.stripe.invoice.download_failed', error, { invoiceId: req.params.invoiceId });
+    res.status(500).json({ error: 'Failed to download invoice', requestId: requestIdFor(req) });
   }
 });
 

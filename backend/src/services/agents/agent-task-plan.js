@@ -12,6 +12,10 @@ const {
   buildAgentRuntimeHardeningMatrix,
   buildAgentRuntimeHardeningPromptBlock,
 } = require('./agent-runtime-hardening-matrix');
+const {
+  buildSourceActivationLedger,
+  buildSourceActivationLedgerPromptBlock,
+} = require('./agent-source-activation-ledger');
 
 function buildAgentTaskPlan({
   goal = '',
@@ -22,6 +26,7 @@ function buildAgentTaskPlan({
   fileIds = [],
   maxRuntimeMs = null,
   toolManifests = [],
+  sourceInventory = null,
 } = {}) {
   const capabilities = executionProfile?.capabilities || {};
   const requiredTools = Array.isArray(executionProfile?.requiredTools) ? executionProfile.requiredTools : [];
@@ -33,6 +38,11 @@ function buildAgentTaskPlan({
     executionProfile,
     openclawProfile,
     toolManifests,
+  });
+  const sourceActivationLedger = buildSourceActivationLedger({
+    goal,
+    sourceInventory,
+    openclawProfile,
   });
   const phases = [];
 
@@ -61,6 +71,16 @@ function buildAgentTaskPlan({
       objective: 'Inventory the requested bulk source fusion by folder, license, dependency boundary, side effect, test surface, and SiraGPT owner surface before enabling any runtime copy.',
       requiredTools: requiredTools.filter((tool) => ['run_tests'].includes(tool)),
       checkpoint: 'Bulk source is categorized into reference-only material, native rewrite candidates, blocked surfaces, and verified activation slices.',
+    });
+  }
+
+  if (sourceActivationLedger.active) {
+    phases.push({
+      id: 'source_activation_ledger',
+      role: 'architecture',
+      objective: 'Separate inventoried reference lines from committed, active, tested SiraGPT runtime lines before accepting any large line-count claim.',
+      requiredTools: requiredTools.filter((tool) => ['run_tests'].includes(tool)),
+      checkpoint: 'Line-count target is converted into inventory, attribution, activation budget, focused tests, and explicit claim limits.',
     });
   }
 
@@ -181,9 +201,10 @@ function buildAgentTaskPlan({
     hardConstraints,
     openclawFusion: buildOpenClawFusionSummary(openclawProfile),
     agentRuntimeHardening,
+    sourceActivationLedger,
     phases,
-    successCriteria: buildSuccessCriteria({ executionProfile, intentAlignmentProfile, phases, openclawProfile, agentRuntimeHardening }),
-    risks: buildRisks({ executionProfile, intentAlignmentProfile, openclawProfile, agentRuntimeHardening }),
+    successCriteria: buildSuccessCriteria({ executionProfile, intentAlignmentProfile, phases, openclawProfile, agentRuntimeHardening, sourceActivationLedger }),
+    risks: buildRisks({ executionProfile, intentAlignmentProfile, openclawProfile, agentRuntimeHardening, sourceActivationLedger }),
   };
 }
 
@@ -217,7 +238,7 @@ function summarizeObjective(goal, intentAlignmentProfile) {
   return `${taxonomy}:${mode}${format}${clean ? ` · ${clean.slice(0, 180)}` : ''}`;
 }
 
-function buildSuccessCriteria({ executionProfile, intentAlignmentProfile, phases, openclawProfile = null, agentRuntimeHardening = null }) {
+function buildSuccessCriteria({ executionProfile, intentAlignmentProfile, phases, openclawProfile = null, agentRuntimeHardening = null, sourceActivationLedger = null }) {
   const criteria = [
     'The final answer directly satisfies the latest user instruction.',
     'No fabricated citations, DOI, files, tool results or verification claims.',
@@ -248,10 +269,13 @@ function buildSuccessCriteria({ executionProfile, intentAlignmentProfile, phases
   if (agentRuntimeHardening?.active) {
     criteria.push('Agent improvements include runtime hardening lanes, focused tests, and explicit durable-state/tool-gate verification.');
   }
+  if (sourceActivationLedger?.active) {
+    criteria.push('Large line-count requests are accounted for by source inventory, activation budget, SiraGPT-owned slices, and tests; raw line volume alone is never claimed as success.');
+  }
   return criteria;
 }
 
-function buildRisks({ executionProfile, intentAlignmentProfile, openclawProfile = null, agentRuntimeHardening = null }) {
+function buildRisks({ executionProfile, intentAlignmentProfile, openclawProfile = null, agentRuntimeHardening = null, sourceActivationLedger = null }) {
   const risks = [];
   if (executionProfile?.capabilities?.strictEvidence) {
     risks.push('Strict evidence requests can fail if providers return fewer verified records than requested; never pad with weak rows.');
@@ -273,6 +297,9 @@ function buildRisks({ executionProfile, intentAlignmentProfile, openclawProfile 
   }
   if (agentRuntimeHardening?.active) {
     risks.push('Agent-runtime hardening can regress silently if planner, tool gates, durable state, and verification tests are not changed together.');
+  }
+  if (sourceActivationLedger?.active) {
+    risks.push('Line-count targets can incentivize unreviewed bloat; separate reference inventory from active runtime lines and block claims that lack focused test proof.');
   }
   if (!risks.length) {
     risks.push('Main risk is premature finalization without enough tool evidence.');
@@ -296,6 +323,7 @@ function buildAgentTaskPlanPrompt(plan) {
     ].join('\n')
     : '';
   const hardening = buildAgentRuntimeHardeningPromptBlock(plan.agentRuntimeHardening);
+  const activationLedger = buildSourceActivationLedgerPromptBlock(plan.sourceActivationLedger);
 
   return [
     `Task plan: ${plan.version}`,
@@ -311,6 +339,7 @@ function buildAgentTaskPlanPrompt(plan) {
     risks || 'No risks generated.',
     fusion,
     hardening,
+    activationLedger,
   ].join('\n');
 }
 
