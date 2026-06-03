@@ -9,6 +9,7 @@ const { buildAgentTaskPlan } = require('./agent-task-plan');
 const { buildExecutionProfile, buildExecutionProfilePrompt } = require('./agentic-execution-profile');
 const { buildUserIntentAlignmentProfile, buildUserIntentAlignmentPrompt } = require('./user-intent-alignment');
 const { buildDocumentDeliveryPolicy } = require('./document-delivery-policy');
+const { listManifests } = require('./tool-manifest');
 const openclawCapabilityKernel = require('../openclaw-capability-kernel');
 const {
   MAX_SIMULTANEOUS_DOCUMENTS,
@@ -114,6 +115,7 @@ function buildWorkspaceWorkflowJob(params = {}) {
     openclawProfile: openclawRuntimeProfile,
     fileIds,
     maxRuntimeMs,
+    toolManifests: listManifests(),
   });
 
   const subTasks = planToSubTasks(plan, goal);

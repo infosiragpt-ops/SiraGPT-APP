@@ -114,6 +114,17 @@ test('agentic execution profile: OpenClaw autonomous software fusion requires co
   assert.ok(profile.qualityGates.some((gate) => /plan-execute-verify/i.test(gate)));
 });
 
+test('agentic execution profile: agent-runtime improvement requests trigger hardening gates', () => {
+  const profile = buildExecutionProfile({
+    goal: 'Sigamos mejorando los agentes del sofware para que trabajen de manera autonoma',
+  });
+
+  assert.equal(profile.capabilities.needsAgentRuntimeHardening, true);
+  assert.equal(profile.capabilities.needsCodeOrRepair, true);
+  assert.ok(profile.requiredTools.includes('run_tests'));
+  assert.ok(profile.qualityGates.some((gate) => /agent runtime contracts/i.test(gate)));
+});
+
 test('agentic execution profile: bulk source fusion requires inventory before activation', () => {
   const profile = buildExecutionProfile({
     goal: 'Son millones de lineas de codigo que tenemos que copiar y fusionar desde OpenClaw',

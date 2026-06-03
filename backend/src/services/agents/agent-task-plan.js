@@ -8,6 +8,10 @@
  */
 
 const PLAN_VERSION = 'agent-task-plan-2026-04';
+const {
+  buildAgentRuntimeHardeningMatrix,
+  buildAgentRuntimeHardeningPromptBlock,
+} = require('./agent-runtime-hardening-matrix');
 
 function buildAgentTaskPlan({
   goal = '',
@@ -17,12 +21,19 @@ function buildAgentTaskPlan({
   openclawProfile = null,
   fileIds = [],
   maxRuntimeMs = null,
+  toolManifests = [],
 } = {}) {
   const capabilities = executionProfile?.capabilities || {};
   const requiredTools = Array.isArray(executionProfile?.requiredTools) ? executionProfile.requiredTools : [];
   const hardConstraints = Array.isArray(intentAlignmentProfile?.hardConstraints)
     ? intentAlignmentProfile.hardConstraints
     : [];
+  const agentRuntimeHardening = buildAgentRuntimeHardeningMatrix({
+    goal,
+    executionProfile,
+    openclawProfile,
+    toolManifests,
+  });
   const phases = [];
 
   phases.push({
@@ -79,6 +90,16 @@ function buildAgentTaskPlan({
       objective: 'Preserve a durable autonomous loop with planning, tool execution, checkpoints, verification, and explicit residual-risk reporting.',
       requiredTools: requiredTools.filter((tool) => ['run_tests'].includes(tool)),
       checkpoint: 'The task can continue as an agent workflow instead of collapsing into a single chat answer.',
+    });
+  }
+
+  if (agentRuntimeHardening.active) {
+    phases.push({
+      id: 'agent_runtime_diagnostics',
+      role: 'runtime_architect',
+      objective: 'Audit agent planner, tool gates, durable state, verification loop, and external-reference boundaries before claiming agent improvements.',
+      requiredTools: requiredTools.filter((tool) => ['run_tests'].includes(tool)),
+      checkpoint: 'Agent hardening lanes are mapped to concrete evidence, recommended tests, and residual risks.',
     });
   }
 
@@ -159,9 +180,10 @@ function buildAgentTaskPlan({
     groundingMode: intentAlignmentProfile?.groundingMode || 'unknown',
     hardConstraints,
     openclawFusion: buildOpenClawFusionSummary(openclawProfile),
+    agentRuntimeHardening,
     phases,
-    successCriteria: buildSuccessCriteria({ executionProfile, intentAlignmentProfile, phases, openclawProfile }),
-    risks: buildRisks({ executionProfile, intentAlignmentProfile, openclawProfile }),
+    successCriteria: buildSuccessCriteria({ executionProfile, intentAlignmentProfile, phases, openclawProfile, agentRuntimeHardening }),
+    risks: buildRisks({ executionProfile, intentAlignmentProfile, openclawProfile, agentRuntimeHardening }),
   };
 }
 
@@ -195,7 +217,7 @@ function summarizeObjective(goal, intentAlignmentProfile) {
   return `${taxonomy}:${mode}${format}${clean ? ` · ${clean.slice(0, 180)}` : ''}`;
 }
 
-function buildSuccessCriteria({ executionProfile, intentAlignmentProfile, phases, openclawProfile = null }) {
+function buildSuccessCriteria({ executionProfile, intentAlignmentProfile, phases, openclawProfile = null, agentRuntimeHardening = null }) {
   const criteria = [
     'The final answer directly satisfies the latest user instruction.',
     'No fabricated citations, DOI, files, tool results or verification claims.',
@@ -223,10 +245,13 @@ function buildSuccessCriteria({ executionProfile, intentAlignmentProfile, phases
   if (openclawProfile?.signals?.wantsAutonomousAgent) {
     criteria.push('Autonomous behavior is evidenced by plan, tool execution, checkpoints and verification, not by a one-turn promise.');
   }
+  if (agentRuntimeHardening?.active) {
+    criteria.push('Agent improvements include runtime hardening lanes, focused tests, and explicit durable-state/tool-gate verification.');
+  }
   return criteria;
 }
 
-function buildRisks({ executionProfile, intentAlignmentProfile, openclawProfile = null }) {
+function buildRisks({ executionProfile, intentAlignmentProfile, openclawProfile = null, agentRuntimeHardening = null }) {
   const risks = [];
   if (executionProfile?.capabilities?.strictEvidence) {
     risks.push('Strict evidence requests can fail if providers return fewer verified records than requested; never pad with weak rows.');
@@ -245,6 +270,9 @@ function buildRisks({ executionProfile, intentAlignmentProfile, openclawProfile 
   }
   if (openclawProfile?.signals?.wantsAutonomousAgent) {
     risks.push('Autonomous-agent requests can be overclaimed; require durable state, checkpoints, tests, and explicit blockers.');
+  }
+  if (agentRuntimeHardening?.active) {
+    risks.push('Agent-runtime hardening can regress silently if planner, tool gates, durable state, and verification tests are not changed together.');
   }
   if (!risks.length) {
     risks.push('Main risk is premature finalization without enough tool evidence.');
@@ -267,6 +295,7 @@ function buildAgentTaskPlanPrompt(plan) {
       `quality_gates=${(plan.openclawFusion.qualityGates || []).join(', ')}`,
     ].join('\n')
     : '';
+  const hardening = buildAgentRuntimeHardeningPromptBlock(plan.agentRuntimeHardening);
 
   return [
     `Task plan: ${plan.version}`,
@@ -281,6 +310,7 @@ function buildAgentTaskPlanPrompt(plan) {
     'Risks to control:',
     risks || 'No risks generated.',
     fusion,
+    hardening,
   ].join('\n');
 }
 

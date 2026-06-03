@@ -72,12 +72,36 @@ test('agent task plan: OpenClaw autonomous fusion adds reference, runtime and au
   assert.ok(plan.phases.some((phase) => phase.id === 'openclaw_reference_audit'));
   assert.ok(plan.phases.some((phase) => phase.id === 'native_runtime_fusion'));
   assert.ok(plan.phases.some((phase) => phase.id === 'autonomous_agent_contract'));
+  assert.ok(plan.phases.some((phase) => phase.id === 'agent_runtime_diagnostics'));
+  assert.equal(plan.agentRuntimeHardening.active, true);
+  assert.ok(plan.agentRuntimeHardening.lanes.some((lane) => lane.id === 'tool_gate_integrity'));
   assert.ok(plan.successCriteria.some((criterion) => /OpenClaw capabilities/.test(criterion)));
+  assert.ok(plan.successCriteria.some((criterion) => /Agent improvements/.test(criterion)));
   assert.ok(plan.risks.some((risk) => /overclaimed/.test(risk)));
 
   const prompt = buildAgentTaskPlanPrompt(plan);
   assert.match(prompt, /OpenClaw fusion:/);
+  assert.match(prompt, /Agent runtime hardening matrix:/);
   assert.match(prompt, /wantsAutonomousAgent/);
+});
+
+test('agent task plan: software-agent hardening request adds runtime diagnostics without OpenClaw', () => {
+  const goal = 'Sigamos mejorando los agentes del sofware';
+  const executionProfile = buildExecutionProfile({ goal });
+  const intentAlignmentProfile = buildUserIntentAlignmentProfile({ request: goal });
+  const plan = buildAgentTaskPlan({
+    goal,
+    executionProfile,
+    intentAlignmentProfile,
+    toolManifests: [{ name: 'run_tests' }, { name: 'rag_retrieve' }],
+  });
+
+  assert.equal(plan.openclawFusion, null);
+  assert.equal(plan.agentRuntimeHardening.active, true);
+  assert.ok(plan.agentRuntimeHardening.verificationGates.some((gate) => /Tool manifest coverage/.test(gate)));
+  assert.ok(plan.phases.some((phase) => phase.id === 'agent_runtime_diagnostics'));
+  assert.ok(plan.phases.some((phase) => phase.id === 'qa_tests'));
+  assert.ok(plan.successCriteria.some((criterion) => /tool-gate verification/.test(criterion)));
 });
 
 test('agent task plan: bulk OpenClaw source fusion adds inventory and activation budget controls', () => {

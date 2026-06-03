@@ -903,6 +903,7 @@ async function runAgentTaskJob(payload = {}, job = null) {
     universalTaskContract,
     fileIds: files,
     maxRuntimeMs,
+    toolManifests: listManifests(),
   });
   const enterpriseExecutionGraph = buildEnterpriseExecutionGraph({
     contract: universalTaskContract,

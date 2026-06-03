@@ -17,6 +17,7 @@ const PATTERNS = {
   document: /\b(docx|xlsx|pptx?|word|excel|power\s*point|powerpoint|pdf\b|csv\b|markdown|html\b|informe|reporte|presentaci[oó]n|diapositivas|slides|hoja de c[aá]lculo|spreadsheet|archivo|documento|matriz|descargar|exporta(?:r|me)?)\b/i,
   privateFiles: /\b(adjunt[oa]s?|archivo(?:s)? cargad[oa]s?|documento(?:s)? cargad[oa]s?|seg[uú]n (mis|el) archivo|seg[uú]n (mis|el) documento|este documento|esta tesis|pdf cargado|word cargado|docx cargado|mis archivos|mi proyecto)\b/i,
   code: /\b(c[oó]digo|code|programa|software|sofware|script|funci[oó]n|clase|debug|bug|corrige(?:r)?|repara(?:r)?|test(?:s)?|prueba(?:s)?|unit test|typescript|javascript|python|react|next\.?js|backend|frontend|web app|github|repo(?:sitorio)?|openclaw|autocorrige|auto corrige)\b/i,
+  agentRuntime: /\b(agente(?:s)?|agent(?:s)?|agentic|aut[oó]nom[oa]s?|orquestador|orchestrator|planner|runner|workflow|agent-task|task\s+runner|tool\s+registry|capability\s+matrix|skill(?:s)?|checkpoint(?:s)?)\b/i,
   externalRepo: /\b(openclaw|github\.com\/openclaw\/openclaw|upstream|external repo|repo externo|repositorio externo|otro repositorio|del otro software)\b/i,
   autonomousSoftware: /\b(agente(?:s)?\s+aut[oó]nom[oa]s?|autonomous\s+agent|software\s+(?:muy\s+)?potente|sofware\s+(?:muy\s+)?potente|fusiona(?:r)?|fusi[oó]n|fusi[oó]nalo|integr[aá]lo|auto.?ejecut(?:a|able|or))\b/i,
   bulkSourceFusion: /\b(millones|millions|miles|thousands|much[ií]simas?)\b.{0,80}\b(l[ií]neas?|lines?|c[oó]digo|code|archivos?|files?)\b|\b(copiar|copia(?:r)?|copy)\b.{0,100}\b(millones|millions|miles|thousands|repositorio|repo|openclaw)\b|\b(fusiona(?:r)?|fusi[oó]n|fusi[oó]nalo|merge)\b.{0,100}\b(millones|millions|miles|thousands|repositorio|repo|openclaw|c[oó]digo|code)\b|\b(c[oó]digo|code)\b.{0,80}\b(copiar\s+y\s+fusionar|copy\s+and\s+merge|fusionar(?:lo)?)\b/i,
@@ -83,6 +84,7 @@ function buildExecutionProfile({ goal, fileIds = [], fileMetadata = [] } = {}) {
   const externalRepoAdaptation = PATTERNS.externalRepo.test(rawGoal) || PATTERNS.externalRepo.test(normalized);
   const autonomousSoftwareWork = PATTERNS.autonomousSoftware.test(rawGoal) || PATTERNS.autonomousSoftware.test(normalized);
   const bulkSourceFusion = PATTERNS.bulkSourceFusion.test(rawGoal) || PATTERNS.bulkSourceFusion.test(normalized);
+  const agentRuntimeHardening = PATTERNS.agentRuntime.test(rawGoal) || PATTERNS.agentRuntime.test(normalized);
   const explicitDeliverableRequested = PATTERNS.explicitDeliverable.test(rawGoal) || PATTERNS.explicitDeliverable.test(normalized);
   const mentionsAttachedPrivateFile = hasFiles && (
     PATTERNS.privateFiles.test(rawGoal)
@@ -101,6 +103,7 @@ function buildExecutionProfile({ goal, fileIds = [], fileMetadata = [] } = {}) {
     // because the user may have photographed a document for OCR.
     needsPrivateContext: (hasFiles && !onlyImageAttachments) || mentionsPrivateFiles,
     needsCodeOrRepair: PATTERNS.code.test(rawGoal) || PATTERNS.code.test(normalized) || externalRepoAdaptation || autonomousSoftwareWork || bulkSourceFusion,
+    needsAgentRuntimeHardening: agentRuntimeHardening,
     needsExternalRepoAdaptation: externalRepoAdaptation,
     needsAutonomousSoftware: autonomousSoftwareWork,
     needsBulkSourceFusion: bulkSourceFusion,
@@ -140,9 +143,12 @@ function buildExecutionProfile({ goal, fileIds = [], fileMetadata = [] } = {}) {
     requiredTools.push('create_document', 'verify_artifact');
     qualityGates.push('Generate a real artifact and verify it technically before delivery.');
   }
-  if (capabilities.needsCodeOrRepair) {
+  if (capabilities.needsCodeOrRepair || capabilities.needsAgentRuntimeHardening) {
     requiredTools.push('run_tests');
     qualityGates.push('Run tests or invariant checks for generated or repaired code.');
+  }
+  if (capabilities.needsAgentRuntimeHardening) {
+    qualityGates.push('Inspect agent runtime contracts, tool gates, durable state, and verification checkpoints before claiming agent improvements.');
   }
   if (capabilities.needsExternalRepoAdaptation) {
     qualityGates.push('Audit external repository capabilities as reference-only input before integrating behavior.');
