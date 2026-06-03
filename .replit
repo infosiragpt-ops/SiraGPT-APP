@@ -85,7 +85,3 @@ GOOGLE_AUTH_BASE_URL = "https://siragpt.com"
 [postMerge]
 path = "scripts/post-merge.sh"
 timeoutMs = 120000
-
-[[ports]]
-localPort = 3000
-externalPort = 80

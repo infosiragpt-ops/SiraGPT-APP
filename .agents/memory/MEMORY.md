@@ -17,3 +17,4 @@
 - [Head hydration devtools fix](head-hydration-devtools.md) — suppressHydrationWarning must go on both <head> AND the <script> child; parent prop doesn't propagate to children.
 - [CSRF SameSite iframe](csrf-samesite-iframe.md) — SameSite=Strict/Lax blocks cookies in Replit cross-site iframe; use SameSite=None;Secure when REPLIT_BACKEND_MODE=sidecar.
 - [Reserved VM GCLB 30s timeout](reserved-vm-gclb-timeout.md) — GCLB hard ~30s total-response cut; heartbeats don't reset it (unlike Autoscale). For >30s work: persist-then-poll, don't keep request alive.
+- [Image gen vs edit providers](image-edit-provider-matrix.md) — editing (imagePath) only works on OpenAI/Gemini; OpenRouter is generation-only and must be rerouted, never hard-fail.

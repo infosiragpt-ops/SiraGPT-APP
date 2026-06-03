@@ -6108,10 +6108,24 @@ router.post(
 
       const generateSingleImage = async () => {
         if (imagePath) {
+          // La edición imagen-a-imagen solo la soportan OpenAI y Gemini.
+          // OpenRouter no edita: en vez de fallar, redirigimos automáticamente
+          // al proveedor de edición que tenga clave configurada (Gemini
+          // preferido por velocidad/coste, OpenAI como alternativa). Así una
+          // edición seleccionada con un modelo OpenRouter "simplemente
+          // funciona" en lugar de devolver un error.
+          let editProvider = provider;
           if (provider === "OpenRouter") {
-            throw new Error('OpenRouter image editing is not enabled yet. Use prompt-only image generation or choose OpenAI/Gemini for editing.');
+            if (process.env.GEMINI_API_KEY) {
+              editProvider = "Gemini";
+            } else if (process.env.OPENAI_API_KEY) {
+              editProvider = "OpenAI";
+            } else {
+              throw new Error('La edición de imágenes requiere OpenAI o Gemini, pero ninguno está configurado. Configura OPENAI_API_KEY o GEMINI_API_KEY, o genera una imagen nueva sin partir de otra.');
+            }
+            console.log(`[generate-image] OpenRouter no soporta edición; redirigiendo edición a ${editProvider}.`);
           }
-          return aiService.generateImageFromImage(imagePath, imagePrompt, provider);
+          return aiService.generateImageFromImage(imagePath, imagePrompt, editProvider);
         }
 
         if (provider === "OpenRouter") {
