@@ -819,31 +819,7 @@ app.use('/uploads', express.static(uploadsDir, {
 //
 // A dedicated, lazy IORedis client is used only for the health probe
 // so a flaky Redis can't poison the live BullMQ queue connection.
-const {
-    runLivenessCheck,
-    runReadinessCheck,
-    runFullHealthCheck,
-    reportToHttpStatus,
-} = require('./src/services/observability/health-check');
-
 const coworkHealth = require('./src/services/cowork-health');
-
-// ── Health-check result cache ──────────────────────────────
-// Prevents /health and /health/ready from hammering the DB on
-// every request when monitoring systems poll aggressively.
-// Cache is TTL-based: stale entries trigger a fresh probe.
-// Liveness (/health/live) is NEVER cached — it must always
-// reflect the current process state.
-const healthCache = new Map();
-const HEALTH_CACHE_TTL_MS = parseInt(process.env.HEALTH_CACHE_TTL_MS || '5000', 10); // 5s default
-
-// ── OAuth boot-config snapshot ─────────────────────────────
-// Populated once at startup by validateOAuthCallbackUrl (see startServer).
-// Surfaced in the full /health report so monitoring probes and the ops
-// dashboard can re-detect OAuth misconfigurations without reading startup
-// logs or restarting the process. Defaults to "not yet checked" so a probe
-// that hits /health before startServer runs gets a sane shape.
-let oauthBootResult = { checked: false, mismatch: false, issues: [] };
 
 // ── Startup-environment snapshot ───────────────────────────
 // Captured once at module load by validateStartupEnvironment (see top of
@@ -855,82 +831,22 @@ const startupEnvResult = {
     issues: Array.isArray(startupEnvIssues) ? startupEnvIssues : [],
 };
 
-async function getCachedOrFresh(cacheKey, fetcher) {
-    const cached = healthCache.get(cacheKey);
-    if (cached && (Date.now() - cached.at) < HEALTH_CACHE_TTL_MS) {
-        return cached.report;
-    }
-    const report = await fetcher();
-    healthCache.set(cacheKey, { at: Date.now(), report });
-    // Prevent unbounded growth (should never exceed 2-3 entries in practice)
-    if (healthCache.size > 10) {
-        const now = Date.now();
-        for (const [key, entry] of healthCache) {
-            if ((now - entry.at) > HEALTH_CACHE_TTL_MS * 2) healthCache.delete(key);
-        }
-    }
-    return report;
-}
-
-// Health cache is only used for probes that touch I/O (readiness,
-// full health). Liveness is always fresh.
-
-let _healthRedisClient = null;
-function getHealthRedisClient() {
-    if (!process.env.REDIS_URL) return null;
-    if (_healthRedisClient) return _healthRedisClient;
-    try {
-        const IORedis = require('ioredis');
-        _healthRedisClient = new IORedis(process.env.REDIS_URL, {
-            lazyConnect: true,
-            // Health check ping should not retry — a stuck Redis IS the
-            // signal we want to surface. One attempt, fail fast.
-            maxRetriesPerRequest: 1,
-            enableReadyCheck: false,
-            connectTimeout: 2000,
-        });
-        // Swallow background errors. The health probe will still observe
-        // the connection state on the next ping().
-        _healthRedisClient.on('error', () => {});
-        return _healthRedisClient;
-    } catch (_e) {
-        return null;
-    }
-}
-
-function sendHealthReport(res, report) {
-    res.status(reportToHttpStatus(report)).json(report);
-}
-
-app.get(['/health/live', '/api/health/live'], (_req, res) => {
-    const report = runLivenessCheck();
-    sendHealthReport(res, report);
+// Build and mount the health endpoints. The route handlers (and the boot-time
+// OAuth/startup-env snapshot threading they perform) live in a dedicated,
+// dependency-injected module so they can be exercised end-to-end by a test
+// without booting the whole server. `startServer` later calls
+// `healthRoutes.setOAuthBootResult(...)` to feed in the boot-time OAuth result.
+const { createHealthRoutes } = require('./src/routes/health-routes');
+const healthRoutes = createHealthRoutes({
+    prisma,
+    coworkHealth,
+    getOpenTelemetryStatus,
+    getSentryStatus,
+    getLangfuseStatus,
+    getPostHogStatus,
+    startupEnv: startupEnvResult,
 });
-
-app.get(['/health/ready', '/api/health/ready'], async (_req, res) => {
-    const report = await getCachedOrFresh('ready', () => runReadinessCheck({
-        prisma,
-        redis: getHealthRedisClient(),
-        queue: null,
-    }));
-    sendHealthReport(res, report);
-});
-
-app.get(['/health', '/api/health'], async (_req, res) => {
-    const report = await getCachedOrFresh('full', () => runFullHealthCheck({
-        prisma,
-        redis: getHealthRedisClient(),
-        queue: null,
-        telemetry: getOpenTelemetryStatus(),
-        sentry: getSentryStatus(),
-        langfuse: getLangfuseStatus(),
-        posthog: getPostHogStatus(),
-        coworkHealth,
-        googleOAuth: oauthBootResult,
-        startupEnv: startupEnvResult,
-    }));
-    sendHealthReport(res, report);
-});
+healthRoutes.register(app);
 
 // ── Prometheus metrics ──────────────────────────────────────────
 // Single scrape endpoint for the entire process. Both SE-agent
@@ -1168,13 +1084,10 @@ async function startServer() {
         const { validateOAuthCallbackUrl } = require('./src/utils/oauth-callback-boot-validator');
         const oauthResult = validateOAuthCallbackUrl({ logger });
         // Snapshot the result so /health can re-surface it at runtime.
-        // Store only the monitoring-relevant fields (shouldBlock is a
-        // boot-time-only directive and never reaches a running server).
-        oauthBootResult = {
-            checked: Boolean(oauthResult.checked),
-            mismatch: Boolean(oauthResult.mismatch),
-            issues: Array.isArray(oauthResult.issues) ? oauthResult.issues : [],
-        };
+        // setOAuthBootResult stores only the monitoring-relevant fields
+        // (shouldBlock is a boot-time-only directive and never reaches a
+        // running server) and the live /health route reads this snapshot.
+        healthRoutes.setOAuthBootResult(oauthResult);
         if (oauthResult.shouldBlock) {
             logger.error(
                 {
@@ -1403,7 +1316,7 @@ async function startServer() {
 
     // 1. Disconnect Redis (lazy health client + any others we own).
     shutdownRegistry.register('redis_disconnect', async () => {
-        const c = (typeof getHealthRedisClient === 'function') ? getHealthRedisClient() : null;
+        const c = (typeof healthRoutes.getHealthRedisClient === 'function') ? healthRoutes.getHealthRedisClient() : null;
         if (c && typeof c.quit === 'function') {
             try { await c.quit(); } catch {}
         }
