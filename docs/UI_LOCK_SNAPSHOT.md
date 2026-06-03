@@ -1,6 +1,7 @@
-# UI Lock Snapshot — 2026-05-20T18:05:27Z
-# Finalized — 2026-05-20T23:00:00Z
-# Base commit: f5bd634d5166b633bf6d634c275ea76790124974 (main)
+# UI Lock Snapshot — originally 2026-05-20T18:05:27Z
+# Re-baselined — 2026-06-03 (intentional UI changes: single recent-chats collapse + chat menu reliability fixes)
+# Original base commit: f5bd634d5166b633bf6d634c275ea76790124974 (main)
+# Note: docs/UI_LOCK_HASHES.txt is the authoritative baseline (regenerated). File set unchanged; only hashes updated.
 
 ## File Tree
 ```
