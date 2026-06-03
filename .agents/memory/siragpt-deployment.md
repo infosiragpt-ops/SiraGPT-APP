@@ -84,6 +84,32 @@ in the **Ports** pane, keeping only `3000 → 80`, then republish. The homepage
 SSR backend fetch (generateMetadata only reads request headers), so `/` returns
 200 fast while the backend finishes booting in the background.
 
+## Backend `app.listen` must honor HOST or it grabs the second external port
+`backend/index.js` originally called `app.listen(PORT, cb)` with NO host arg, so
+Express bound `0.0.0.0:5050`. Even though the dev workflow passes `HOST=127.0.0.1`,
+that env was ignored — so Replit's port auto-detector saw 5050 listening on all
+interfaces and ADDED a `5050 → externalPort` mapping to `.replit`, recreating the
+forbidden "more than one external port" state (see ONE-external-port section) and
+breaking the VM promote. Fix: `const HOST = process.env.HOST || '0.0.0.0'` and
+`app.listen(PORT, HOST, cb)`. In dev the workflow's `HOST=127.0.0.1` now makes the
+backend loopback-only (unexposable → never auto-mapped); prod `npm start` leaves
+HOST unset → 0.0.0.0 (unchanged). Mirrors `scripts/start-all.cjs` BACKEND_HOST.
+**Why:** loopback binding is the deterministic, recurrence-proof guard — the backend
+can no longer be auto-detected as a second external port regardless of workflow runs.
+
+## Workflow lifecycle WIPES `.replit` [[ports]]; only the UI restores them
+Calling `removeWorkflow` (and, observed, plain workflow restarts) regenerates the
+`.replit` `[[ports]]` block from live port detection — and in a headless agent
+session it frequently leaves it EMPTY (zero `[[ports]]`), which 404s both the dev
+preview (riker domain → externalPort 80 → no mapping) and breaks the next publish.
+The agent CANNOT re-add the mapping (edit guard + no callback). It is restored only
+when the USER opens the workspace / Ports (Networking) pane, where Replit
+auto-detects the open port and writes the mapping — with the backend now loopback,
+the only detectable port is the frontend, so it deterministically becomes `3000 → 80`.
+**How to apply:** after any workflow add/remove/restart that clears ports, do NOT
+assume publish will work — have the user confirm exactly one `3000 → 80` entry in
+the Ports pane (Replit usually auto-adds it on workspace open) before republishing.
+
 ## Prod database != executeSql database
 `executeSql` (code_execution) connects to a DIFFERENT database than the backend.
 The backend uses DATABASE_URL/PRISMA_DATABASE_URL (Prisma Accelerate,

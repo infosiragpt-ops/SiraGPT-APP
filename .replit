@@ -51,10 +51,6 @@ args = "Start application"
 task = "workflow.run"
 args = "oauth-url-smoke"
 
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "SiraGPT Video"
-
 [[workflows.workflow]]
 name = "Start application"
 author = "agent"
@@ -78,18 +74,6 @@ args = "cd backend && node --test tests/oauth-url-policy.test.js"
 [workflows.workflow.metadata]
 isValidation = true
 
-[[workflows.workflow]]
-name = "SiraGPT Video"
-author = "agent"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "PORT=5000 BASE_PATH=/sira-promo/ pnpm --filter @workspace/sira-promo run dev"
-waitForPort = 5000
-
-[workflows.workflow.metadata]
-outputType = "webview"
-
 [userenv]
 
 [userenv.production]
@@ -101,13 +85,3 @@ GOOGLE_ALLOW_FRONTEND_CALLBACK = "true"
 [postMerge]
 path = "scripts/post-merge.sh"
 timeoutMs = 120000
-
-[[ports]]
-localPort = 3000
-externalPort = 80
-
-[[ports]]
-localPort = 5000
-
-[[ports]]
-localPort = 5050

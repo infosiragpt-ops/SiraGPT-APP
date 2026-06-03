@@ -400,6 +400,13 @@ const telemetryRoutes = require('./src/routes/telemetry');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+// Bind host. In development the workflow passes HOST=127.0.0.1 so the backend
+// listens on loopback only — it is reached exclusively via the Next.js /api
+// proxy (BACKEND_INTERNAL_URL=http://localhost:5050). Loopback binding keeps
+// Replit's automatic port detection from exposing 5050 as a second external
+// port, which would break the single-external-port Reserved VM deploy. When
+// HOST is unset (production `npm start`) it falls back to 0.0.0.0 as before.
+const HOST = process.env.HOST || '0.0.0.0';
 app.set('trust proxy', 1)
 
 // Security middleware. CSP defaults to report-only mode so a fresh
@@ -1136,7 +1143,7 @@ async function startServer() {
     // that window; healthy boots are unaffected (connect resolves on attempt 1,
     // and connectDatabase still process.exit(1)s if all retries are exhausted).
     await prisma.connectDatabase();
-    const server = app.listen(PORT, () => {
+    const server = app.listen(PORT, HOST, () => {
         // --- HTTP timeouts ---------------------------------------------------
         // The Next.js front-end proxies every /api/* call to this Express
         // process over a keep-alive HTTP connection. Node's default
