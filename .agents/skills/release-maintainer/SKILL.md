@@ -38,6 +38,21 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://api.siragpt.com/health/ready
 curl -sS -o /dev/null -w '%{http_code}\n' https://siragpt.com
 ```
 
+For a single structured health snapshot (liveness + composite readiness with a
+status-based exit code), use the health CLI instead of hand-rolled curls. It
+distinguishes a real outage from the post-deploy warm-up window (process live but
+a critical dependency still booting), which is the usual cause of the transient
+`Internal Server Error` right after publishing:
+
+```bash
+npm run ops:health -- --url https://api.siragpt.com --json   # 0 healthy/degraded, 1 unhealthy, 2 unreachable
+npm run ops:health -- --strict                               # default http://127.0.0.1:5050; degraded → exit 1
+```
+
+Adapted from OpenClaw's `openclaw health` CLI (MIT; upstream reference-only under
+`.agents/openclaw-upstream`). Validate with
+`node --test backend/tests/health-snapshot.test.js`.
+
 For model work:
 
 ```bash
