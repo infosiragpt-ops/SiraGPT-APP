@@ -4066,7 +4066,9 @@ router.post(
               try {
                 const imagePath = imgFile.path;
                 if (imagePath && fsSync.existsSync(imagePath)) {
-                  const imageData = fsSync.readFileSync(imagePath);
+                  // Async read: a multi-MB image read with readFileSync blocks
+                  // the event loop and stalls every concurrent SSE stream.
+                  const imageData = await fs.readFile(imagePath);
                   const base64Image = imageData.toString('base64');
                   const mimeType = imgFile.mimeType || imgFile.type || 'image/png';
 
@@ -4536,7 +4538,7 @@ router.post(
             if (!f || !f.mimeType || !f.mimeType.startsWith('image/')) continue;
             try {
               if (f.path && fsSync.existsSync(f.path)) {
-                const b64 = fsSync.readFileSync(f.path).toString('base64');
+                const b64 = (await fs.readFile(f.path)).toString('base64');
                 imageDataUrls.push(`data:${f.mimeType};base64,${b64}`);
               }
             } catch (readErr) {
