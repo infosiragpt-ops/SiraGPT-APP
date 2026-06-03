@@ -97,6 +97,33 @@ production-only env vars. In dev, OAuth still shows the warning (expected).
 - `CORS_ORIGINS`: Replit secret is `*`; should be `https://siragpt.com,...`.
   User must update via Replit Secrets UI.
 
+## Health-check resilience: backend crash must not tear down frontend
+`scripts/start-all.cjs` `onChildExit` originally killed the WHOLE container if
+either child exited. Since the deploy health-check probes only the frontend
+(port 3000→80), a backend boot/migration crash would tear down the live frontend
+and fail the promote with ZERO production logs (nothing goes live → no streamed
+runtime logs → blind). Now, when `REPLIT_DEPLOYMENT === "1"`, a backend exit is
+logged and the frontend stays online (sets `backend=null`); only a FRONTEND exit
+tears the container down. Local `npm start` keeps strict teardown.
+**Why:** breaks the debug deadlock — a degraded-but-live deploy (UI up, /api 502)
+still passes the health-check, goes live, and finally exposes prod runtime logs.
+
+## Cannot reproduce the prod standalone build locally
+Foreground bash is capped ~120s (< the ~10-min Next build); detached builds
+(`nohup`, `setsid`, `&`) get KILLED by the sandbox shortly after the spawning
+tool call returns — they freeze at "Creating an optimized production build ..."
+with no error. So prod-only build/runtime failures are NOT locally reproducible;
+rely on a live (even degraded) deploy + `fetch_deployment_logs` instead.
+
+## Frontend `/` is crash-proof against missing traced files / network
+The root path is robust by design, so a standalone boot/runtime crash on `/` is
+unlikely: `app/page.tsx` is force-dynamic rendering a client component (no SSR
+backend fetch); `lib/i18n/request.ts` `loadMessages` wraps the dynamic
+`import(../../messages/${code}.json)` in try/catch returning `{}` (missing trace
+→ empty messages, NOT a 500); middleware geoloc (`ipapi.co`) is try/catch with a
+1.2s abort (worst case +1.2s latency per probe, never a crash). `next.config`
+`rewrites()` returns a plain object and cannot throw at standalone boot.
+
 ## Dev workflow packages
 Root `node_modules` is empty by default in this repo. Run `pnpm install` first
 (finishes in ~5s when global pnpm store is warm). Then restart the workflow.

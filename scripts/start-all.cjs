@@ -163,6 +163,21 @@ function onChildExit(name, code, signal) {
     log("start-all", `${name} exited during shutdown`, { code, signal });
     return;
   }
+  // In a Replit deployment the health-check probes the FRONTEND (local port
+  // 3000 → external 80). Only the frontend dying means there is nothing left
+  // to serve, so that is the one case that should tear the whole container
+  // down. If the BACKEND exits (e.g. a transient boot/migration hiccup), keep
+  // the frontend online: the health-check still passes, the deployment can go
+  // live, and the backend failure becomes visible in production runtime logs
+  // instead of failing the entire promote with zero diagnostics. This mirrors
+  // the intent of the waitForPort() timeout path below. Outside deployments
+  // (a plain local `npm start`) we keep the strict teardown so a developer
+  // notices immediately when the backend dies.
+  if (name === "backend" && process.env.REPLIT_DEPLOYMENT === "1") {
+    log("start-all", "backend exited — keeping frontend online so the deploy health-check can still pass", { code, signal });
+    backend = null;
+    return;
+  }
   log("start-all", `${name} exited unexpectedly — tearing down container`, { code, signal });
   shuttingDown = true;
   for (const c of [backend, frontend]) {
