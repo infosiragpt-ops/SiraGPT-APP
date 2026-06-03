@@ -835,6 +835,14 @@ const coworkHealth = require('./src/services/cowork-health');
 const healthCache = new Map();
 const HEALTH_CACHE_TTL_MS = parseInt(process.env.HEALTH_CACHE_TTL_MS || '5000', 10); // 5s default
 
+// ── OAuth boot-config snapshot ─────────────────────────────
+// Populated once at startup by validateOAuthCallbackUrl (see startServer).
+// Surfaced in the full /health report so monitoring probes and the ops
+// dashboard can re-detect OAuth misconfigurations without reading startup
+// logs or restarting the process. Defaults to "not yet checked" so a probe
+// that hits /health before startServer runs gets a sane shape.
+let oauthBootResult = { checked: false, mismatch: false, issues: [] };
+
 async function getCachedOrFresh(cacheKey, fetcher) {
     const cached = healthCache.get(cacheKey);
     if (cached && (Date.now() - cached.at) < HEALTH_CACHE_TTL_MS) {
@@ -906,6 +914,7 @@ app.get(['/health', '/api/health'], async (_req, res) => {
         langfuse: getLangfuseStatus(),
         posthog: getPostHogStatus(),
         coworkHealth,
+        googleOAuth: oauthBootResult,
     }));
     sendHealthReport(res, report);
 });
@@ -1145,6 +1154,14 @@ async function startServer() {
     try {
         const { validateOAuthCallbackUrl } = require('./src/utils/oauth-callback-boot-validator');
         const oauthResult = validateOAuthCallbackUrl({ logger });
+        // Snapshot the result so /health can re-surface it at runtime.
+        // Store only the monitoring-relevant fields (shouldBlock is a
+        // boot-time-only directive and never reaches a running server).
+        oauthBootResult = {
+            checked: Boolean(oauthResult.checked),
+            mismatch: Boolean(oauthResult.mismatch),
+            issues: Array.isArray(oauthResult.issues) ? oauthResult.issues : [],
+        };
         if (oauthResult.shouldBlock) {
             logger.error(
                 {

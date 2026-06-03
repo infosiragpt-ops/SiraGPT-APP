@@ -336,6 +336,49 @@ function checkPlaywright() {
   }
 }
 
+/**
+ * Surface the result of the boot-time Google OAuth configuration check
+ * (`validateOAuthCallbackUrl`) so monitoring probes and the ops dashboard
+ * can re-detect OAuth misconfigurations without reading startup logs or
+ * restarting the process.
+ *
+ * The boot validator already logs and (in production) can block startup on
+ * critical issues. Anything that survives boot but still has issues — host
+ * mismatches, missing paired credentials, malformed URLs in non-prod — is
+ * reported here as `degraded` so the app stays reachable but the problem is
+ * visible. Non-critical: a stale OAuth config should never 503 the API.
+ *
+ * @param {{checked: boolean, mismatch: boolean, issues: string[]}} [oauthResult]
+ */
+function checkGoogleOAuth(oauthResult) {
+  if (!oauthResult || typeof oauthResult !== "object") {
+    return {
+      name: "google_oauth",
+      status: "skipped",
+      critical: false,
+      latency_ms: 0,
+      details: { reason: "no_oauth_boot_result" },
+    };
+  }
+
+  const checked = Boolean(oauthResult.checked);
+  const mismatch = Boolean(oauthResult.mismatch);
+  const issues = Array.isArray(oauthResult.issues) ? oauthResult.issues : [];
+
+  let status;
+  if (!checked) status = "skipped";
+  else if (issues.length > 0) status = "degraded";
+  else status = "healthy";
+
+  return {
+    name: "google_oauth",
+    status,
+    critical: false,
+    latency_ms: 0,
+    details: { checked, mismatch, issues },
+  };
+}
+
 function checkCoworkSubsystem(coworkHealth) {
   if (!coworkHealth || typeof coworkHealth.runLivenessCheck !== "function") {
     return { name: "cowork", status: "skipped", critical: false, latency_ms: 0, details: { reason: "no_cowork_health_module" } };
@@ -379,7 +422,7 @@ async function runReadinessCheck({ prisma, redis, queue } = {}) {
   return composeStatus(checks);
 }
 
-async function runFullHealthCheck({ prisma, redis, queue, telemetry, sentry, langfuse, posthog, circuitBreakers, coworkHealth } = {}) {
+async function runFullHealthCheck({ prisma, redis, queue, telemetry, sentry, langfuse, posthog, circuitBreakers, coworkHealth, googleOAuth } = {}) {
   const checks = await Promise.all([
     checkDatabase(prisma),
     checkRedis(redis),
@@ -397,7 +440,17 @@ async function runFullHealthCheck({ prisma, redis, queue, telemetry, sentry, lan
   }
   checks.push(checkR2Storage());
   checks.push(checkPlaywright());
-  return composeStatus(checks);
+
+  // OAuth boot-config health: pushed into the checks array so a stale
+  // misconfiguration drives the composite status to `degraded`, and also
+  // mirrored under a top-level `googleOAuth` key so monitoring probes can
+  // read `{ checked, mismatch, issues }` directly without scanning checks.
+  const googleOAuthCheck = checkGoogleOAuth(googleOAuth);
+  checks.push(googleOAuthCheck);
+
+  const report = composeStatus(checks);
+  report.googleOAuth = googleOAuthCheck.details;
+  return report;
 }
 
 function composeStatus(checks) {
@@ -439,6 +492,7 @@ module.exports = {
   checkLangfuse,
   checkPostHog,
   checkCircuitBreakers,
+  checkGoogleOAuth,
   checkCoworkSubsystem,
   checkR2Storage,
   checkPlaywright,
