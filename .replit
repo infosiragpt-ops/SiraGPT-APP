@@ -22,16 +22,6 @@ run = "NEXT_PUBLIC_API_URL=/api BACKEND_INTERNAL_URL=http://localhost:5050 REPLI
 # automatic npm install avoids the pre-build package phase that hit ENOTEMPTY.
 enabledForHosting = false
 
-[[ports]]
-localPort = 3000
-externalPort = 80
-
-[[ports]]
-localPort = 5000
-
-[[ports]]
-localPort = 5050
-
 [gitHubImport]
 requiredFiles = [".replit", "replit.nix", "package.json"]
 
@@ -111,3 +101,14 @@ GOOGLE_ALLOW_FRONTEND_CALLBACK = "true"
 [postMerge]
 path = "scripts/post-merge.sh"
 timeoutMs = 120000
+
+[[ports]]
+localPort = 3000
+externalPort = 80
+
+[[ports]]
+localPort = 5000
+
+[[ports]]
+localPort = 5050
+externalPort = 3000
