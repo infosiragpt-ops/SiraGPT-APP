@@ -214,6 +214,32 @@ function validateStartupEnvironment(env = process.env, options = {}) {
     });
   }
 
+  // ─── Google OAuth credentials ──────────────────────────
+  // Warn when only one of the paired credentials is present — OAuth
+  // will fail at either the authorization or token-exchange step.
+  const hasGoogleClientId = !!(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_ID.trim());
+  const hasGoogleClientSecret = !!(env.GOOGLE_CLIENT_SECRET && env.GOOGLE_CLIENT_SECRET.trim());
+
+  if (hasGoogleClientId && !hasGoogleClientSecret) {
+    issues.push({
+      key: 'GOOGLE_CLIENT_SECRET',
+      label: 'Google Client Secret',
+      severity: Severity.WARNING,
+      message: 'GOOGLE_CLIENT_ID is set but GOOGLE_CLIENT_SECRET is missing. Google OAuth logins will fail at the token exchange step.',
+    });
+  }
+  if (!hasGoogleClientId && hasGoogleClientSecret) {
+    issues.push({
+      key: 'GOOGLE_CLIENT_ID',
+      label: 'Google Client ID',
+      severity: Severity.WARNING,
+      message: 'GOOGLE_CLIENT_SECRET is set but GOOGLE_CLIENT_ID is missing. Google OAuth logins will fail at the authorization step.',
+    });
+  }
+
+  checkPlaceholder('GOOGLE_CLIENT_ID', env.GOOGLE_CLIENT_ID, 'Google Client ID');
+  checkPlaceholder('GOOGLE_CLIENT_SECRET', env.GOOGLE_CLIENT_SECRET, 'Google Client Secret');
+
   // ─── API key format checks ─────────────────────────────
   checkApiKeyFormat('OPENAI_API_KEY', env.OPENAI_API_KEY, 'OpenAI API Key');
   if (env.STRIPE_SECRET_KEY) {

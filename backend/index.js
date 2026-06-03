@@ -1135,6 +1135,41 @@ const { globalErrorHandler: buildGlobalErrorHandler } = require('./src/middlewar
 app.use(buildGlobalErrorHandler({ logger, captureException: captureSentryException }));
 
 async function startServer() {
+    // ── Google OAuth configuration check ───────────────────────
+    // Run before app.listen so a broken OAuth config is caught
+    // before the server accepts any traffic. In production, critical
+    // issues (localhost callback, malformed base URL, host mismatch)
+    // are treated as blocking failures and halt startup with a clear
+    // error message. In non-production environments, the same checks
+    // run but only emit warnings — the server still starts.
+    try {
+        const { validateOAuthCallbackUrl } = require('./src/utils/oauth-callback-boot-validator');
+        const oauthResult = validateOAuthCallbackUrl({ logger });
+        if (oauthResult.shouldBlock) {
+            logger.error(
+                {
+                    issues: oauthResult.issues,
+                    hint:
+                        'Google OAuth is misconfigured. The server will not start in production ' +
+                        'with a broken OAuth configuration. Fix the issues listed above and restart.',
+                },
+                'oauth_config_boot_check_failed',
+            );
+            console.error('[FATAL] Google OAuth configuration is invalid — aborting startup.');
+            console.error(`[FATAL] Issues: ${oauthResult.issues.join(', ')}`);
+            console.error('[FATAL] Check GOOGLE_AUTH_BASE_URL, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and related redirect URI secrets.');
+            // Exit synchronously so app.listen is never reached.
+            // process.exit flushes stdio in Node ≥ 18; the exitCode is set
+            // first as a belt-and-braces fallback in case exit is deferred
+            // by a signal trap elsewhere in the process.
+            process.exitCode = 1;
+            process.exit(1);
+            return; // unreachable — guards static analysis / linters
+        }
+    } catch (err) {
+        logger.warn({ err: err && err.message }, 'oauth_callback_boot_validator_failed');
+    }
+
     // Await the database connection (with its built-in retry/backoff) BEFORE
     // binding the port. Previously connectDatabase() was fire-and-forget, so
     // app.listen() accepted traffic while Prisma was still mid-handshake — the
@@ -1238,18 +1273,6 @@ async function startServer() {
             logger.warn({ err: err && err.message }, 'sso_boot_validator_failed');
         }
     })();
-
-    // OAuth callback URL sanity check — when GOOGLE_AUTH_BASE_URL is
-    // set, assert the resolved callback host matches. A mismatch means
-    // a secret was changed mid-deploy or env vars loaded out of order;
-    // the warning surfaces immediately in logs and existing monitoring
-    // (Sentry / PostHog) picks it up automatically. Fire-and-forget.
-    try {
-        const { validateOAuthCallbackUrl } = require('./src/utils/oauth-callback-boot-validator');
-        validateOAuthCallbackUrl({ logger });
-    } catch (err) {
-        logger.warn({ err: err && err.message }, 'oauth_callback_boot_validator_failed');
-    }
 
     // Initialize WebSocket server for Computer Use
     initializeWebSocketServer(server);
