@@ -584,7 +584,7 @@ export default function CreateGPTPage() {
               onClick={handleSave}
               disabled={isSaving || !formData.name}
               size="sm"
-              className="h-9 rounded-full bg-zinc-950 px-4 font-medium text-white shadow-[0_14px_30px_-18px_rgba(15,23,42,0.9)] hover:bg-zinc-800 dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200"
+              className="hidden h-9 rounded-full bg-zinc-950 px-4 font-medium text-white shadow-[0_14px_30px_-18px_rgba(15,23,42,0.9)] hover:bg-zinc-800 dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200 sm:inline-flex"
             >
               {isSaving ? (
                 <span className="flex items-center gap-2">
@@ -978,7 +978,7 @@ export default function CreateGPTPage() {
       </div>
 
       {/* Sticky action bar — keeps the primary save action reachable at all times */}
-      <div className="sticky bottom-0 z-30 border-t border-white/60 bg-white/72 backdrop-blur-2xl dark:border-white/10 dark:bg-zinc-950/72">
+      <div className="z-30 border-t border-white/60 bg-white/72 backdrop-blur-2xl sm:sticky sm:bottom-0 dark:border-white/10 dark:bg-zinc-950/72">
         <div className="mx-auto flex w-full max-w-3xl items-center justify-between gap-3 px-4 py-3 sm:px-6">
           <p className="hidden text-xs text-muted-foreground sm:block">
             {formData.name ? "Listo para guardar." : "El nombre es obligatorio."}
