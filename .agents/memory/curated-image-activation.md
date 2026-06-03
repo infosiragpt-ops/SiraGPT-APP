@@ -34,7 +34,18 @@ one-time `updateMany`; the picker/generate gate stays curated-allow-list based
 the loser throws Prisma `P2002` (unique constraint on `name`) and the whole
 "Get models" request 500s.
 
-**Rule:** wrap the create in try/catch; on `err.code === 'P2002'` fall back to an
-`update` WITHOUT `isActive` (treat as "already created", preserve admin state);
-rethrow any non-P2002 error. Do not assume findMany results are still accurate by
-the time you write.
+**Rule (two layers):**
+1. *Root cause — single-flight:* `ensureStaticCatalogModels` is a thin wrapper
+   that keys concurrent runs by sorted+de-duplicated type signature in an
+   instance `Map`, returns the shared in-flight promise for identical calls, and
+   clears the entry in `.finally` (so failures are never memoized and later calls
+   re-run). The real work lives in `_ensureStaticCatalogModelsImpl`.
+2. *Backstop — P2002 fallback:* wrap the per-row create in try/catch; on
+   `err.code === 'P2002'` fall back to an `update` WITHOUT `isActive` (treat as
+   "already created", preserve admin state); rethrow non-P2002. This covers
+   residual cross-scope races (e.g. all-types admin sync vs IMAGE-only read)
+   that the single-flight key does not coalesce.
+
+**Why:** single-flight alone fixes same-key concurrency (the common hot-path
+case) but different type scopes touch overlapping rows, so the DB-level P2002
+catch must stay. Do not assume findMany results are still accurate by write time.

@@ -22,6 +22,10 @@ class ModelSyncService {
     // ensureStaticCatalogModels below. Per-instance so prod (singleton) runs it
     // once per process, while tests (fresh instances) each exercise it.
     this._curatedImageActivationDone = false;
+    // Tracks in-flight ensureStaticCatalogModels runs keyed by their type
+    // signature, so concurrent identical invocations share a single promise
+    // (single-flight) instead of racing on the aiModel unique `name` constraint.
+    this._ensureCatalogInFlight = new Map();
   }
 
   getStaticVideoModels() {
@@ -528,7 +532,37 @@ class ModelSyncService {
     return { applied: true, count: result.count || 0, reason: 'default_inactive_enforced' };
   }
 
+  /**
+   * Single-flight wrapper around the catalog sync. This method is invoked on
+   * hot paths (/ai/models read, /admin/models/sync) and is frequently called
+   * concurrently with identical arguments. Without de-duplication, each
+   * concurrent call issues its own findMany→create sequence and they race on the
+   * aiModel unique `name` constraint, surfacing as Prisma P2002 "Get models"
+   * 500s. Collapsing identical in-flight calls onto one shared promise removes
+   * that race at the source and avoids redundant writes. The per-row P2002
+   * fallback below remains as a backstop for overlaps across different type
+   * scopes (e.g. an "all types" admin sync racing an IMAGE-only read).
+   */
   async ensureStaticCatalogModels(options = {}) {
+    const key = this._ensureCatalogKey(options);
+    const inFlight = this._ensureCatalogInFlight.get(key);
+    if (inFlight) return inFlight;
+
+    const run = this._ensureStaticCatalogModelsImpl(options).finally(() => {
+      this._ensureCatalogInFlight.delete(key);
+    });
+    this._ensureCatalogInFlight.set(key, run);
+    return run;
+  }
+
+  _ensureCatalogKey(options = {}) {
+    const types = Array.isArray(options.types) && options.types.length
+      ? [...new Set(options.types.map(type => String(type).toUpperCase()))].sort()
+      : ['__ALL__'];
+    return types.join(',');
+  }
+
+  async _ensureStaticCatalogModelsImpl(options = {}) {
     const types = Array.isArray(options.types) && options.types.length
       ? new Set(options.types.map(type => String(type).toUpperCase()))
       : null;
