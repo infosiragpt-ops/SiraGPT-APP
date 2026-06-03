@@ -381,6 +381,92 @@ describe("runFullHealthCheck", () => {
   });
 });
 
+// ── Google OAuth boot-config exposure in /health ───────────────────
+//
+// Guards the contract monitors depend on: the boot-time Google OAuth
+// config result must surface in runFullHealthCheck both as a
+// `google_oauth` entry in the checks array AND mirrored under a
+// top-level `googleOAuth` key, and an OAuth issue must drive the
+// composite status to "degraded" (never 503 — it's non-critical).
+//
+// A provider key is set so model_providers is healthy, isolating the
+// overall status to the OAuth signal under test.
+
+describe("runFullHealthCheck google_oauth exposure", () => {
+  function withProviderKey(fn) {
+    const original = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "sk-test";
+    return Promise.resolve()
+      .then(fn)
+      .finally(() => {
+        if (original === undefined) delete process.env.OPENAI_API_KEY;
+        else process.env.OPENAI_API_KEY = original;
+      });
+  }
+
+  test("oauth mismatch drives overall degraded + exposes googleOAuth key and google_oauth check", () =>
+    withProviderKey(async () => {
+      const r = await runFullHealthCheck({
+        prisma: { $queryRawUnsafe: async () => 1 },
+        redis: { ping: async () => "PONG" },
+        googleOAuth: {
+          checked: true,
+          mismatch: true,
+          issues: ["redirect host mismatch: expected siragpt.com"],
+        },
+      });
+
+      assert.equal(r.status, "degraded");
+      // Never page on a stale OAuth config — degraded maps to 200.
+      assert.equal(reportToHttpStatus(r), 200);
+
+      // Top-level mirror for monitoring probes.
+      assert.ok(r.googleOAuth, "expected top-level googleOAuth key");
+      assert.equal(r.googleOAuth.checked, true);
+      assert.equal(r.googleOAuth.mismatch, true);
+      assert.deepEqual(r.googleOAuth.issues, [
+        "redirect host mismatch: expected siragpt.com",
+      ]);
+
+      // Entry inside the checks array.
+      const check = r.checks.find((c) => c.name === "google_oauth");
+      assert.ok(check, "expected a google_oauth check entry");
+      assert.equal(check.status, "degraded");
+      assert.equal(check.critical, false);
+    }));
+
+  test("no googleOAuth dep → google_oauth check is skipped and does not force degraded", () =>
+    withProviderKey(async () => {
+      const r = await runFullHealthCheck({
+        prisma: { $queryRawUnsafe: async () => 1 },
+        redis: { ping: async () => "PONG" },
+      });
+
+      const check = r.checks.find((c) => c.name === "google_oauth");
+      assert.ok(check, "expected a google_oauth check entry");
+      assert.equal(check.status, "skipped");
+      assert.equal(check.critical, false);
+      assert.equal(check.details.reason, "no_oauth_boot_result");
+      // A skipped OAuth check must not by itself degrade the report.
+      assert.equal(r.status, "healthy");
+    }));
+
+  test("clean oauth result ({checked:true, issues:[]}) reports healthy", () =>
+    withProviderKey(async () => {
+      const r = await runFullHealthCheck({
+        prisma: { $queryRawUnsafe: async () => 1 },
+        redis: { ping: async () => "PONG" },
+        googleOAuth: { checked: true, mismatch: false, issues: [] },
+      });
+
+      assert.equal(r.status, "healthy");
+      const check = r.checks.find((c) => c.name === "google_oauth");
+      assert.ok(check, "expected a google_oauth check entry");
+      assert.equal(check.status, "healthy");
+      assert.deepEqual(r.googleOAuth.issues, []);
+    }));
+});
+
 // ── Sira metrics inventory ─────────────────────────────────────────
 
 describe("sira metrics registry", () => {
