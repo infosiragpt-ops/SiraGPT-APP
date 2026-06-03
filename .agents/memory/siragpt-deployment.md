@@ -108,6 +108,19 @@ tears the container down. Local `npm start` keeps strict teardown.
 **Why:** breaks the debug deadlock — a degraded-but-live deploy (UI up, /api 502)
 still passes the health-check, goes live, and finally exposes prod runtime logs.
 
+## Transient "Internal Server Error" on /api right after a fresh publish
+The backend takes ~45s to boot on the Reserved VM (heavy monolith). The deploy
+health-check only waits for the FRONTEND (3000→80), so the site goes live BEFORE
+the backend accepts connections. During that window every `/api/*` call (Next.js
+rewrite → `127.0.0.1:5050`) hits ECONNREFUSED and Next returns a raw 500
+"Internal Server Error" (logged as `Failed to proxy http://localhost:5050/... ECONNREFUSED`).
+This is exactly what a user sees if they log in (incl. Google OAuth) in the first
+~45s after publishing. It self-resolves once `backend is accepting connections`
+appears in logs. **Verify recovery:** `curl -sI https://siragpt.com/api/auth/google`
+→ 302 to accounts.google.com with `redirect_uri=https://siragpt.com/api/auth/google/callback`;
+`/api/auth/me` → 401 (NOT 500); `/` → 200. If those pass, OAuth is healthy and the
+500 was just the boot window — tell the user to retry.
+
 ## Cannot reproduce the prod standalone build locally
 Foreground bash is capped ~120s (< the ~10-min Next build); detached builds
 (`nohup`, `setsid`, `&`) get KILLED by the sandbox shortly after the spawning
