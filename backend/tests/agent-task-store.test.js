@@ -40,6 +40,32 @@ test('agent task store: scopes snapshots by user', () => {
   assert.equal(taskStore.getTaskSnapshotForUser('task-owned', 'user-a').taskId, 'task-owned');
 });
 
+test('agent task store: preserves OpenClaw runtime profile in durable snapshots', () => {
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-agent-task-store-'));
+
+  taskStore.writeTaskSnapshot({
+    taskId: 'task-openclaw-runtime',
+    userId: 'user-a',
+    displayGoal: 'Fusiona OpenClaw como agente autonomo',
+    openclawRuntimeProfile: {
+      version: 'openclaw-capability-kernel-2026-05',
+      signals: {
+        externalRepoAdaptation: true,
+        wantsAutonomousAgent: true,
+      },
+      capabilities: {
+        nativeRepoAdaptation: true,
+        autonomousExecution: true,
+      },
+    },
+  });
+
+  const loaded = taskStore.getTaskSnapshotForUser('task-openclaw-runtime', 'user-a');
+  assert.equal(loaded.openclawRuntimeProfile.version, 'openclaw-capability-kernel-2026-05');
+  assert.equal(loaded.openclawRuntimeProfile.signals.externalRepoAdaptation, true);
+  assert.equal(loaded.openclawRuntimeProfile.capabilities.autonomousExecution, true);
+});
+
 test('agent task store: appends events and creates checkpoints for important transitions', () => {
   process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-agent-task-store-'));
 

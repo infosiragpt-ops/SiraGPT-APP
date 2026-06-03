@@ -2281,6 +2281,7 @@ class ApiClient {
     chatId?: string;
     files?: string[];
     image_url?: string;
+    image_urls?: string[];
     model?: string;
   }, opts?: { signal?: AbortSignal }) {
     return this.request('/ai/generate-video', {

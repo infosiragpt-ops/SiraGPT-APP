@@ -116,14 +116,11 @@ import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import "react-pdf/dist/Page/TextLayer.css"
 import "react-pdf/dist/Page/AnnotationLayer.css"
 
-// pdfjs worker — pinned to the exact pdfjs-dist version react-pdf bundles,
-// so we never get a "API version X / Worker version Y" mismatch when the
-// dependency is bumped. Hosted on unpkg by default; for fully offline /
-// air-gapped deployments, copy `pdf.worker.min.mjs` into /public and point
-// `workerSrc` at `/pdf.worker.min.mjs`.
+// pdfjs worker — bundled with the app from the exact pdfjs-dist version
+// installed alongside react-pdf. Keeping the worker local avoids CDN/CSP/
+// offline failures that otherwise leave previews stuck on a blank PDF panel.
 if (typeof window !== "undefined") {
-  pdfjs.GlobalWorkerOptions.workerSrc =
-    `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`
+  pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url).toString()
 }
 
 // ─── Format detection ────────────────────────────────────────────────
@@ -575,7 +572,6 @@ function RendererDispatch({
     case "docx":     return (
       <ServerConvertedPdfRenderer
         a={attachment}
-        preferServer
         fallback={<DocxRenderer a={attachment} isDark={isDark} />}
       />
     )
@@ -681,8 +677,8 @@ async function fetchServerConvertedPdfAttachment(a: AttachmentLike): Promise<Att
 }
 
 function ServerConvertedPdfRenderer({
-  a, fallback, preferServer = false,
-}: { a: AttachmentLike; fallback: React.ReactNode; preferServer?: boolean }) {
+  a, fallback,
+}: { a: AttachmentLike; fallback: React.ReactNode }) {
   const [state, setState] = React.useState<"probing" | "ok" | "unavailable">("probing")
   const [pdfAttachment, setPdfAttachment] = React.useState<AttachmentLike | null>(null)
   const [unavailableReason, setUnavailableReason] = React.useState<string>("")
@@ -714,7 +710,7 @@ function ServerConvertedPdfRenderer({
     return () => { cancelled = true }
   }, [a])
 
-  if (state === "probing" && hasClientPreviewSource(a) && !preferServer) return <>{fallback}</>
+  if (state === "probing" && hasClientPreviewSource(a)) return <>{fallback}</>
   if (state === "probing") return <LoadingState label="Generando vista de alta fidelidad…" />
   if (state === "unavailable" || !pdfAttachment) {
     if (process.env.NODE_ENV !== "production" && unavailableReason) {

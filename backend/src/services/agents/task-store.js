@@ -82,6 +82,7 @@ function sanitizeTaskRecord(record = {}) {
     executionProfile: record.executionProfile || null,
     intentAlignmentProfile: record.intentAlignmentProfile || null,
     taskPlan: record.taskPlan || null,
+    openclawRuntimeProfile: record.openclawRuntimeProfile || null,
     universalTaskContract: record.universalTaskContract || null,
     enterpriseExecutionGraph: record.enterpriseExecutionGraph || null,
     enterpriseRuntimeProfile: record.enterpriseRuntimeProfile || null,

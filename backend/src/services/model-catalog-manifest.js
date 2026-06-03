@@ -1,3 +1,5 @@
+const { listFalVideoModels } = require('./fal-video-model-catalog');
+
 const PROVIDER_CATALOGS = Object.freeze([
   {
     key: 'openai',
@@ -25,6 +27,13 @@ const PROVIDER_CATALOGS = Object.freeze([
     provider: 'DeepSeek',
     displayName: 'DeepSeek',
     apiKeyEnv: 'DEEPSEEK_API_KEY',
+    supportsModelCatalog: true,
+  },
+  {
+    key: 'falai',
+    provider: 'fal.ai',
+    displayName: 'fal.ai Video',
+    apiKeyEnv: 'FAL_API_KEY',
     supportsModelCatalog: true,
   },
 ]);
@@ -295,6 +304,8 @@ const STATIC_MODEL_MANIFEST = Object.freeze([
     pricing: { provider: 'fal.ai', billing: 'per_generation' },
     tags: ['fal.ai', 'flux', 'image', 'professional', 'ultra'],
   },
+  // ── VIDEO models via fal.ai, ordered from highest to lower quality ──────
+  ...listFalVideoModels(),
   // ── AUDIO models ───────────────────────────────────────────────────────
   {
     id: 'whisper-1',
@@ -430,6 +441,7 @@ function normalizeModelRecord(model, providerOverride = null, source = 'api') {
     displayName: model.displayName || model.name || model.id,
     provider,
     type: model.type || 'TEXT',
+    icon: model.icon || null,
     description: model.description || '',
     contextLength: model.contextLength || model.context_length || null,
     maxTokens: model.maxTokens || model.max_tokens || null,

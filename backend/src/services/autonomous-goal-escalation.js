@@ -23,6 +23,7 @@ const RESEARCH_RE = /\b(?:investiga|investigaci[oó]n|tesis|art[ií]culos?\s+cie
 const VERIFY_RE = /\b(?:verifica|validar|validaci[oó]n|fuentes?\s+reales?|real\s+verificable|no\s+inventes?|citas?\s+reales?|referencias?\s+correctas?|estatus\s+verde|ci\s+verde|green\s+status)\b/i;
 const MULTI_AGENT_RE = /\b(?:agentes?|miles\s+de\s+tareas|muchos\s+hilos|aut[oó]nom[oa]s?|controlar\s+cualquier\s+cosa|planificar|organizar|dirigir|ejecutar|controlar)\b/i;
 const CODE_RE = /\b(?:github|repo(?:sitorio)?|commit|push|pull\s+request|merge|deploy|claude\s+code|codex|cursor|npm\s+test|eslint|refactor|programa|c[oó]digo|frontend|backend)\b/i;
+const OPENCLAW_AUTONOMY_RE = /\b(?:openclaw|github\.com\/openclaw\/openclaw)\b|\b(?:software|sofware)\s+(?:muy\s+)?potente\b|\bagente(?:s)?\s+aut[oó]nom[oa]s?\b|\bfusi[oó]n(?:alo|ar)?\b/i;
 
 const DEFAULT_MIN_SCORE = 4;
 
@@ -61,14 +62,15 @@ function buildAutonomousGoalEscalation({
   if (RESEARCH_RE.test(text)) { score += 2; reasons.push('research_or_thesis_scope'); }
   if (VERIFY_RE.test(text)) { score += 2; reasons.push('verification_required'); }
   if (MULTI_AGENT_RE.test(text)) { score += 1; reasons.push('autonomous_multi_agent_scope'); }
+  if (OPENCLAW_AUTONOMY_RE.test(text)) { score += 3; reasons.push('openclaw_autonomous_software_scope'); }
 
-  const isCodeTask = Boolean(codeIntent?.isCodeTask) || CODE_RE.test(current);
+  const isCodeTask = Boolean(codeIntent?.isCodeTask) || CODE_RE.test(current) || OPENCLAW_AUTONOMY_RE.test(current);
   if (isCodeTask) {
     reasons.push('code_task_prefers_codex');
     // Code/repo work already has a Codex delegation path. Do not create
     // a research goal for it unless there is also clear long-running
     // research/thesis scope.
-    if (!hasExplicitGoalCommand && !RESEARCH_RE.test(text) && !LONG_RUNNING_RE.test(text)) {
+    if (!hasExplicitGoalCommand && !RESEARCH_RE.test(text) && !LONG_RUNNING_RE.test(text) && !OPENCLAW_AUTONOMY_RE.test(text)) {
       return {
         shouldEscalate: false,
         score,
@@ -164,6 +166,7 @@ module.exports = {
   maybeCreateAutonomousGoalRun,
   _internal: {
     CODE_RE,
+    OPENCLAW_AUTONOMY_RE,
     LONG_RUNNING_RE,
     EXPLICIT_GOAL_COMMAND_RE,
     MULTI_AGENT_RE,

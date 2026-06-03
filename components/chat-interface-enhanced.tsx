@@ -426,6 +426,12 @@ const isImageModelEntry = (model: any) => {
   return type === 'image' || type === 'images' || type.includes('image') || /image|imagen|dall|seedream|flux|stable|midjourney|ideogram|recraft|gpt-image/i.test(label);
 }
 
+const isVideoModelEntry = (model: any) => {
+  const type = String(model?.type || model?.kind || '').toLowerCase();
+  const label = `${model?.name || ''} ${model?.displayName || ''} ${model?.provider || ''}`;
+  return type === 'video' || type === 'videos' || type.includes('video') || /video|text-to-video|image-to-video|veo|kling|sora|seedance|pixverse|hailuo|ltx|wan|cosmos|fal\.ai/i.test(label);
+}
+
 // `ImageAspectRatioMark` was extracted to
 // `components/chat/ComposerInlineDisplays.tsx` to keep this file
 // scannable. It is imported at the top and used unchanged below.
@@ -1425,12 +1431,12 @@ const ActionsDropdown = ({
           >
             <div className="flex items-center gap-3 w-full">
               <div className={`liquid-icon w-8 h-8 rounded-lg flex items-center justify-center ${isVideoGenerationActive
-                ? 'bg-orange-100 dark:bg-orange-900/20'
-                : 'bg-orange-100 dark:bg-orange-900/20'
+                ? 'bg-emerald-100 dark:bg-emerald-900/24'
+                : 'bg-emerald-100 dark:bg-emerald-900/20'
                 }`}>
                 <Video className={`h-4 w-4 ${isVideoGenerationActive
-                  ? 'text-orange-600 dark:text-orange-400'
-                  : 'text-orange-600 dark:text-orange-400'
+                  ? 'text-emerald-700 dark:text-emerald-300'
+                  : 'text-emerald-700 dark:text-emerald-300'
                   }`} />
               </div>
               <div className="flex-1">
@@ -1438,11 +1444,11 @@ const ActionsDropdown = ({
                   {isVideoGenerationActive ? 'Video Generation Active' : 'Video Generation'}
                 </div>
                 <div className="text-xs text-muted-foreground">
-                  {isFreePlan ? 'Vista previa de video con IA' : 'Create videos with Google Veo 3'}
+                  {isFreePlan ? 'Vista previa de video con IA' : 'Crea videos con fal.ai'}
                 </div>
               </div>
               {isVideoGenerationActive && (
-                <div className="w-2 h-2 bg-orange-500 rounded-full" />
+                <div className="w-2 h-2 bg-emerald-500 rounded-full" />
               )}
               {isFreePlan && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
@@ -2131,20 +2137,16 @@ const ActiveToolsDisplay = ({
   const mediaModelOptions = React.useMemo(() => {
     const models = Array.isArray(availableModels) ? availableModels : [];
     const pickByKind = (kind: "image" | "video") => {
-      const pattern = kind === "image"
-        ? /image|imagen|dall|seedream|flux|stable|midjourney|ideogram|recraft|gpt-image/i
-        : /video|veo|kling|runway|pika|hailuo|luma/i;
-      const type = kind.toUpperCase();
-      return models.filter((model: any) => {
-        const label = `${model?.name || ""} ${model?.displayName || ""} ${model?.provider || ""}`;
-        return String(model?.type || "").toUpperCase() === type || pattern.test(label);
-      });
+      const predicate = kind === "image" ? isImageModelEntry : isVideoModelEntry;
+      return models.filter(predicate);
     };
     const normalize = (model: any) => ({
       name: model.name,
       displayName: model.displayName || model.name,
       provider: model.provider || null,
       iconName: resolveModelIconName(model),
+      mode: model?.apiData?.fal?.mode || model?.pricing?.mode || null,
+      qualityTier: model?.apiData?.fal?.qualityTier || model?.pricing?.qualityTier || null,
     });
 
     const imageModels = pickByKind("image").map(normalize);
@@ -2208,10 +2210,11 @@ const ActiveToolsDisplay = ({
           <Button
             variant="ghost"
             size="sm"
-            className="group/media-model relative isolate h-7 sm:h-8 max-w-[180px] sm:max-w-[212px] shrink-0 gap-1 sm:gap-1.5 overflow-hidden rounded-full border border-zinc-200/72 bg-white/84 px-2 sm:px-3 py-0 text-[11px] sm:text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.86),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
+            className="media-model-trigger group/media-model relative isolate h-7 sm:h-8 max-w-[180px] sm:max-w-[212px] shrink-0 gap-1 sm:gap-1.5 overflow-hidden rounded-full px-2 sm:px-2.5 py-0"
             aria-label={`Seleccionar modelo de ${tool}`}
             title={`Modelo: ${label}`}
             disabled={disabled}
+            data-media-tool={tool}
           >
             <span className="pointer-events-none absolute inset-y-[-55%] left-[-65%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/70 to-transparent opacity-0 blur-sm transition-all duration-700 group-hover/media-model:left-[92%] group-hover/media-model:opacity-100 dark:via-white/20" />
             <span className="flex h-[16px] sm:h-[18px] w-[16px] sm:w-[18px] shrink-0 items-center justify-center">
@@ -2226,19 +2229,36 @@ const ActiveToolsDisplay = ({
           side="top"
           sideOffset={8}
           collisionPadding={12}
-          className="liquid-menu-surface w-[min(calc(100vw-1rem),18rem)] p-1.5"
+          className="liquid-menu-surface media-model-menu w-[min(calc(100vw-1rem),18rem)] overflow-hidden"
+          data-media-tool={tool}
+          style={{ maxHeight: "min(60dvh, 360px)" }}
         >
-          {options.length > 0 ? options.map((option: any) => (
-            <DropdownMenuItem
-              key={option.name}
-              className="chat-active-apps-menu-item h-9 gap-2 text-[12px]"
-              onClick={() => onChange(option.name, option.provider)}
-            >
-              <IconProvider name={option.iconName || "Bot"} size={16} className="shrink-0" />
-              <span className="min-w-0 flex-1 truncate">{option.displayName}</span>
-              {option.name === value && <Check className="h-3.5 w-3.5" />}
-            </DropdownMenuItem>
-          )) : (
+          {options.length > 0 ? (
+            <div className="media-model-scroll overflow-y-auto" style={{ maxHeight: "calc(min(60dvh, 360px) - 0.75rem)" }}>
+              <div className="flex flex-col gap-0.5">
+                {options.map((option: any) => (
+                  <DropdownMenuItem
+                    key={option.name}
+                    className="media-model-item gap-2"
+                    onClick={() => onChange(option.name, option.provider)}
+                    data-selected={option.name === value ? "true" : undefined}
+                    data-media-tool={tool}
+                  >
+                    <span className="media-model-logo-chip">
+                      <IconProvider name={option.iconName || "Bot"} size={17} className="shrink-0" />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-semibold leading-4 text-zinc-900 dark:text-white/92">{option.displayName}</span>
+                      <span className="block truncate text-[10.5px] font-medium leading-3 text-zinc-500 dark:text-white/62">
+                        {[option.provider, option.qualityTier, option.mode].filter(Boolean).join(" / ") || "Modelo"}
+                      </span>
+                    </span>
+                    {option.name === value && <Check className="h-3.5 w-3.5 shrink-0 opacity-80" />}
+                  </DropdownMenuItem>
+                ))}
+              </div>
+            </div>
+          ) : (
             <div className="px-3 py-6 text-center text-xs text-muted-foreground">Activa modelos en Admin Models</div>
           )}
         </DropdownMenuContent>
@@ -2840,15 +2860,15 @@ const ActiveToolsDisplay = ({
 
       {isVideoGenerationActive && (
         <>
-          <div className="group/video-liquid relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1 sm:gap-1.5 overflow-hidden rounded-full border border-orange-300/70 bg-orange-100/88 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-orange-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_10px_28px_-22px_rgba(234,88,12,0.75)] backdrop-blur-xl transition-all duration-300 hover:scale-[1.01] hover:border-orange-400/80 dark:border-orange-500/40 dark:bg-orange-900/25 dark:text-orange-200">
-            <span className="pointer-events-none absolute -inset-8 -z-10 rounded-full bg-[conic-gradient(from_90deg,transparent_0deg,rgba(251,146,60,0.0)_70deg,rgba(251,146,60,0.52)_135deg,rgba(249,115,22,0.24)_198deg,transparent_280deg)] opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
+          <div className="video-mode-chip group/video-liquid relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1 sm:gap-1.5 overflow-hidden rounded-full px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold backdrop-blur-xl transition-all duration-300 hover:scale-[1.01]">
+            <span className="video-mode-chip-flow pointer-events-none absolute -inset-8 -z-10 rounded-full opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
             <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/75 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/video-liquid:translate-x-[155%] dark:via-white/25" />
-            <Video className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4 drop-shadow-[0_0_8px_rgba(234,88,12,0.35)]" />
+            <Video className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4" />
             <span className="relative z-10 text-[12px] sm:text-[14px]">Video</span>
             <Button
               variant="ghost"
               size="sm"
-              className="relative z-10 ml-0.5 sm:ml-1 h-4 sm:h-5 w-4 sm:w-5 rounded-full p-0 hover:bg-white/50 dark:hover:bg-orange-800/30"
+              className="relative z-10 ml-0.5 sm:ml-1 h-4 sm:h-5 w-4 sm:w-5 rounded-full p-0 hover:bg-white/50 dark:hover:bg-emerald-800/30"
               onClick={handleVideoGenerationClose}
               title="Cerrar video"
             >
@@ -2866,7 +2886,7 @@ const ActiveToolsDisplay = ({
               <Button
                 variant="ghost"
                 size="sm"
-                className="group/video-trigger relative isolate h-7 sm:h-8 shrink-0 gap-1 sm:gap-2 overflow-hidden rounded-full border border-zinc-200/78 bg-white/84 px-2 sm:px-3 py-0 text-[11px] sm:text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
+                className="video-settings-trigger group/video-trigger relative isolate h-7 sm:h-8 shrink-0 gap-1 sm:gap-2 overflow-hidden rounded-full px-2 sm:px-3 py-0 text-[11px] sm:text-[14px] font-semibold backdrop-blur-xl transition-all duration-200"
                 title={`Video: ${selectedVideoAspectRatio}, ${selectedVideoResolution}, ${selectedVideoDuration}s, audio ${selectedVideoAudio ? "on" : "off"}`}
                 aria-label={`Configurar video. Actual ${selectedVideoAspectRatio}, ${selectedVideoResolution}, ${selectedVideoDuration} segundos`}
               >
@@ -2881,13 +2901,12 @@ const ActiveToolsDisplay = ({
               align="start"
               sideOffset={9}
               collisionPadding={12}
-              className="w-[min(calc(100vw-1rem),15.5rem)] overflow-hidden rounded-[14px] border border-zinc-200/70 bg-white/92 p-0 text-zinc-950 shadow-[0_16px_48px_-32px_rgba(15,23,42,0.55),inset_0_1px_0_rgba(255,255,255,0.9)] backdrop-blur-2xl dark:border-white/18 dark:bg-[#08090c]/96 dark:text-white dark:shadow-[0_22px_70px_-38px_rgba(0,0,0,1),inset_0_1px_0_rgba(255,255,255,0.14)]"
+              className="video-settings-menu w-[min(calc(100vw-1rem),15.5rem)]"
             >
-              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_22%_10%,rgba(255,255,255,0.92),transparent_28%),radial-gradient(circle_at_82%_36%,rgba(251,146,60,0.12),transparent_30%),linear-gradient(135deg,rgba(255,255,255,0.78),rgba(255,255,255,0.32)_45%,rgba(255,255,255,0.62))] dark:bg-[radial-gradient(circle_at_18%_8%,rgba(255,255,255,0.13),transparent_26%),radial-gradient(circle_at_82%_36%,rgba(251,146,60,0.16),transparent_32%),linear-gradient(135deg,rgba(255,255,255,0.08),rgba(255,255,255,0.025)_45%,rgba(255,255,255,0.055))]" />
               <div className="relative z-10">
-                <section className="px-2.5 pb-2.5 pt-2.5">
-                  <h3 className="text-[12.5px] font-semibold leading-none tracking-normal text-zinc-950 dark:text-white">Resolution</h3>
-                  <div className="mt-2 flex flex-wrap items-center gap-1" role="radiogroup" aria-label="Video resolution">
+                <section className="video-settings-section">
+                  <h3 className="video-settings-label">Resolución</h3>
+                  <div className="mt-2 flex flex-wrap items-center gap-1" role="radiogroup" aria-label="Resolución de video">
                     {VIDEO_RESOLUTION_OPTIONS.map(option => {
                       const selected = option === selectedVideoResolution;
                       return (
@@ -2898,8 +2917,8 @@ const ActiveToolsDisplay = ({
                           aria-checked={selected}
                           onClick={() => setSelectedVideoResolution(option)}
                           className={cn(
-                            "h-6 rounded-md px-2.5 text-[11px] font-medium leading-none text-zinc-600 transition-all duration-200 hover:bg-zinc-950/[0.045] hover:text-zinc-950 dark:text-white/84 dark:hover:bg-white/[0.10] dark:hover:text-white",
-                            selected && "bg-zinc-950/[0.075] text-zinc-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_9px_18px_-16px_rgba(15,23,42,0.45)] dark:bg-white/18 dark:text-white dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_0_0_1px_rgba(255,255,255,0.06)]"
+                            "video-setting-pill",
+                            selected && "is-selected"
                           )}
                         >
                           {option}
@@ -2909,9 +2928,9 @@ const ActiveToolsDisplay = ({
                   </div>
                 </section>
 
-                <section className="border-t border-zinc-950/8 px-2.5 py-2.5 dark:border-white/12">
-                  <h3 className="text-[12.5px] font-semibold leading-none tracking-normal text-zinc-950 dark:text-white">Aspect Ratio</h3>
-                  <div className="mt-2 grid grid-cols-5 gap-0.5" role="radiogroup" aria-label="Video aspect ratio">
+                <section className="video-settings-section">
+                  <h3 className="video-settings-label">Formato</h3>
+                  <div className="mt-2 grid grid-cols-5 gap-0.5" role="radiogroup" aria-label="Formato de video">
                     {VIDEO_ASPECT_RATIO_OPTIONS.filter(option => showAllVideoRatios || option.visibleByDefault).map(option => {
                       const selected = option.value === selectedVideoAspectRatio;
                       return (
@@ -2922,21 +2941,19 @@ const ActiveToolsDisplay = ({
                           aria-checked={selected}
                           onClick={() => setSelectedVideoAspectRatio(option.value)}
                           className={cn(
-                            "group/video-ratio-option relative flex h-9 min-w-0 flex-col items-center justify-center gap-1 overflow-hidden rounded-md text-center transition-all duration-200",
-                            selected
-                              ? "bg-zinc-950/[0.075] text-zinc-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_9px_20px_-16px_rgba(15,23,42,0.55)] dark:bg-white/18 dark:text-white dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_0_0_1px_rgba(255,255,255,0.06)]"
-                              : "text-zinc-600 hover:bg-zinc-950/[0.045] hover:text-zinc-950 dark:text-white/84 dark:hover:bg-white/[0.10] dark:hover:text-white"
+                            "video-ratio-option group/video-ratio-option",
+                            selected && "is-selected"
                           )}
                           title={`${option.label} ${option.ratio}`}
                         >
                           <span className="relative z-10 text-[10px] font-medium leading-none tabular-nums">{option.ratio}</span>
                           <span className="relative z-10 flex h-4 items-center justify-center scale-[0.78]">
                             {option.value === "auto" ? (
-                              <span className={cn("grid h-5 w-5 place-items-center rounded-[5px] border transition-all duration-200", selected ? "border-zinc-950 bg-white/45 dark:border-white dark:bg-white/10" : "border-zinc-500/65 dark:border-white/68")}>
+                              <span className={cn("grid h-5 w-5 place-items-center rounded-[5px] border transition-all duration-200", selected ? "border-emerald-700 bg-emerald-50/70 dark:border-emerald-300 dark:bg-emerald-400/10" : "border-zinc-500/65 dark:border-white/68")}>
                                 <Plus className="h-3.5 w-3.5" />
                               </span>
                             ) : (
-                              <span className={cn("rounded-[4px] border transition-all duration-200", option.className, selected ? "border-zinc-950 bg-white/45 dark:border-white dark:bg-white/10" : "border-zinc-500/65 bg-white/20 dark:border-white/68 dark:bg-transparent")} />
+                              <span className={cn("rounded-[4px] border transition-all duration-200", option.className, selected ? "border-emerald-700 bg-emerald-50/70 dark:border-emerald-300 dark:bg-emerald-400/10" : "border-zinc-500/65 bg-white/20 dark:border-white/68 dark:bg-transparent")} />
                             )}
                           </span>
                         </button>
@@ -2946,16 +2963,16 @@ const ActiveToolsDisplay = ({
                   <button
                     type="button"
                     onClick={() => setShowAllVideoRatios(value => !value)}
-                    className="mt-2 inline-flex items-center gap-1 rounded-full text-[11px] font-medium leading-none text-zinc-600 transition-colors hover:text-zinc-950 dark:text-white/82 dark:hover:text-white"
+                    className="video-settings-more"
                     aria-expanded={showAllVideoRatios}
                   >
-                    {showAllVideoRatios ? "View Less" : "View All"} <ChevronDown className={cn("h-3 w-3 transition-transform", showAllVideoRatios && "rotate-180")} />
+                    {showAllVideoRatios ? "Menos" : "Más"} <ChevronDown className={cn("h-3 w-3 transition-transform", showAllVideoRatios && "rotate-180")} />
                   </button>
                 </section>
 
-                <section className="border-t border-zinc-950/8 px-2.5 py-2.5 dark:border-white/12">
-                  <h3 className="text-[12.5px] font-semibold leading-none tracking-normal text-zinc-950 dark:text-white">Duration</h3>
-                  <div className="mt-2 flex flex-wrap items-center gap-1" role="radiogroup" aria-label="Video duration">
+                <section className="video-settings-section">
+                  <h3 className="video-settings-label">Duración</h3>
+                  <div className="mt-2 flex flex-wrap items-center gap-1" role="radiogroup" aria-label="Duración de video">
                     {VIDEO_DURATION_OPTIONS.filter(option => showAllVideoDurations || option <= DEFAULT_VIDEO_DURATION).map(option => {
                       const selected = option === selectedVideoDuration;
                       return (
@@ -2966,8 +2983,8 @@ const ActiveToolsDisplay = ({
                           aria-checked={selected}
                           onClick={() => setSelectedVideoDuration(option)}
                           className={cn(
-                            "h-6 rounded-md px-2 text-[11px] font-medium leading-none text-zinc-600 transition-all duration-200 hover:bg-zinc-950/[0.045] hover:text-zinc-950 dark:text-white/84 dark:hover:bg-white/[0.10] dark:hover:text-white",
-                            selected && "bg-zinc-950/[0.075] text-zinc-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_9px_18px_-16px_rgba(15,23,42,0.45)] dark:bg-white/18 dark:text-white dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_0_0_1px_rgba(255,255,255,0.06)]"
+                            "video-setting-pill min-w-8",
+                            selected && "is-selected"
                           )}
                         >
                           {option}s
@@ -2978,24 +2995,24 @@ const ActiveToolsDisplay = ({
                   <button
                     type="button"
                     onClick={() => setShowAllVideoDurations(value => !value)}
-                    className="mt-2 inline-flex items-center gap-1 rounded-full text-[11px] font-medium leading-none text-zinc-600 transition-colors hover:text-zinc-950 dark:text-white/82 dark:hover:text-white"
+                    className="video-settings-more"
                     aria-expanded={showAllVideoDurations}
                   >
-                    {showAllVideoDurations ? "View Less" : "View All"} <ChevronDown className={cn("h-3 w-3 transition-transform", showAllVideoDurations && "rotate-180")} />
+                    {showAllVideoDurations ? "Menos" : "Más"} <ChevronDown className={cn("h-3 w-3 transition-transform", showAllVideoDurations && "rotate-180")} />
                   </button>
                 </section>
 
-                <section className="border-t border-zinc-950/8 px-2.5 py-2.5 dark:border-white/12">
+                <section className="video-settings-section">
                   <div className="flex items-center justify-between gap-4">
                     <div className="flex items-center gap-2">
-                      <h3 className="text-[12.5px] font-semibold leading-none tracking-normal text-zinc-950 dark:text-white">Audio</h3>
+                      <h3 className="video-settings-label">Audio</h3>
                       <Info className="h-3 w-3 text-zinc-500 dark:text-white/72" />
                     </div>
                     <Switch checked={selectedVideoAudio} onCheckedChange={setSelectedVideoAudio} aria-label="Audio" />
                   </div>
                 </section>
 
-                <div className="border-t border-zinc-950/8 px-2.5 py-1.5 text-[10.5px] font-medium text-zinc-600 dark:border-white/12 dark:text-white/80">
+                <div className="video-settings-summary">
                   {selectedVideoAspectRatio === "auto" ? "Auto" : selectedVideoAspectRatio} / {selectedVideoResolution} / {selectedVideoDuration}s / Audio {selectedVideoAudio ? "On" : "Off"}
                 </div>
               </div>
@@ -3040,6 +3057,14 @@ const MODEL_BRAND_BY_ICON: Record<string, string> = {
   PoolsideLogo: "poolside",
   OllamaLogo: "ollama",
   SeedreamLogo: "bytedance",
+  FalLogo: "fal",
+  SoraLogo: "openai",
+  KlingLogo: "kling",
+  ByteDanceLogo: "bytedance",
+  PixverseLogo: "pixverse",
+  MinimaxLogo: "minimax",
+  WanLogo: "wan",
+  LtxLogo: "ltx",
   OpenRouterLogo: "openrouter",
   MessageSquare: "groq",
 }
@@ -4093,6 +4118,7 @@ function ChatInterfaceContent() {
   const [isGeneratingPPT, setIsGeneratingPPT] = React.useState(false)
   const [isGeneratingWebDev, setIsGeneratingWebDev] = React.useState(false)
   const [imageCatalogModels, setImageCatalogModels] = React.useState<any[]>([])
+  const [videoCatalogModels, setVideoCatalogModels] = React.useState<any[]>([])
   const refreshImageModels = React.useCallback(async () => {
     const modelsResponse = await apiClient.getAIModels('IMAGE');
     const models = Array.isArray(modelsResponse?.models)
@@ -4101,23 +4127,41 @@ function ChatInterfaceContent() {
     setImageCatalogModels(models);
     return models;
   }, []);
+  const refreshVideoModels = React.useCallback(async () => {
+    const modelsResponse = await apiClient.getAIModels('VIDEO');
+    const models = Array.isArray(modelsResponse?.models)
+      ? modelsResponse.models.filter(isVideoModelEntry)
+      : [];
+    setVideoCatalogModels(models);
+    return models;
+  }, []);
   const imageModelsForComposer = React.useMemo(() => {
     const source = imageCatalogModels.length ? imageCatalogModels : availableModels;
     return (Array.isArray(source) ? source : []).filter(isImageModelEntry);
   }, [availableModels, imageCatalogModels]);
+  const videoModelsForComposer = React.useMemo(() => {
+    const source = videoCatalogModels.length ? videoCatalogModels : availableModels;
+    return (Array.isArray(source) ? source : []).filter(isVideoModelEntry);
+  }, [availableModels, videoCatalogModels]);
   const composerAvailableModels = React.useMemo(() => {
-    if (!imageCatalogModels.length) return availableModels;
     const byName = new Map<string, any>();
     for (const model of Array.isArray(availableModels) ? availableModels : []) {
       const name = String(model?.name || '').trim();
-      if (name && !isImageModelEntry(model)) byName.set(name, model);
+      if (name && !isImageModelEntry(model) && !isVideoModelEntry(model)) byName.set(name, model);
     }
     for (const model of imageCatalogModels) {
       const name = String(model?.name || '').trim();
       if (name) byName.set(name, model);
     }
+    for (const model of videoCatalogModels) {
+      const name = String(model?.name || '').trim();
+      if (name) byName.set(name, model);
+    }
+    if (!imageCatalogModels.length && !videoCatalogModels.length) {
+      return availableModels;
+    }
     return Array.from(byName.values());
-  }, [availableModels, imageCatalogModels]);
+  }, [availableModels, imageCatalogModels, videoCatalogModels]);
   const resolveFreshActiveImageModel = React.useCallback(async (candidate?: string) => {
     const models = await refreshImageModels();
     const requestedName = String(candidate || '').trim();
@@ -4935,6 +4979,27 @@ But first, you need to connect your Spotify account securely using the button be
     }
   }
   const [isVideoGenerationActive, setIsVideoGenerationActive] = React.useState(false);
+  React.useEffect(() => {
+    if (!isVideoGenerationActive && chatType !== 'video') return;
+    let cancelled = false;
+    refreshVideoModels()
+      .then((models) => {
+        if (cancelled) return;
+        if (!models.length) {
+          setSelectedVideoModel('');
+          return;
+        }
+        setSelectedVideoModel((current) => (
+          current && models.some((model: any) => model?.name === current)
+            ? current
+            : models[0].name
+        ));
+      })
+      .catch((error) => {
+        console.warn('No se pudo refrescar el catalogo de modelos de video:', error?.message || error);
+      });
+    return () => { cancelled = true; };
+  }, [chatType, isVideoGenerationActive, refreshVideoModels]);
   const [subscribeOpen, setSubscribeOpen] = React.useState(false);
   const [isSubscribing, setIsSubscribing] = React.useState(false);
   const [currentUserInfo, setCurrentUserInfo] = React.useState<any>(null);
@@ -8122,7 +8187,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   }
 
   const handleVideoGeneration = async (prompt: string, files?: string[]) => {
-    const activeVideoModel = selectedVideoModel.trim();
+    const activeVideoModel = selectedVideoModel.trim() || videoModelsForComposer[0]?.name || "";
     if (!activeVideoModel) {
       toast.error('Activa un modelo VIDEO en Admin > AI Models antes de generar video.');
       return;

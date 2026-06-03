@@ -27,7 +27,32 @@ export function SyncfusionBannerRemover() {
       };
     }
 
-    // Aggressively remove ALL Syncfusion trial content (banners, modals, dialogs, overlays)
+    // Only an UNAMBIGUOUS Syncfusion trial/license nag should ever be
+    // removed. The previous gate matched generic words ("trial",
+    // "license", "account"+"sign in"), which also matched the app's own
+    // modals and the document-viewer dialog (any `[role="dialog"]`),
+    // ripping them out of the DOM. Require a Syncfusion-specific signal.
+    const isSyncfusionNag = (text: string) =>
+      text.includes("syncfusion") ||
+      text.includes("claim your free") ||
+      (text.includes("trial version") && text.includes("license"));
+
+    // Never touch dialogs/modals the app itself owns. The document
+    // viewer marks its shell with this testid; Radix-based modals are
+    // protected by the strict text gate above, but this is defense in
+    // depth for anything that nests the viewer.
+    const APP_OWNED = '[data-testid="unified-document-viewer-dialog"]';
+    const isAppOwned = (el: Element) => {
+      try {
+        return !!(el.closest?.(APP_OWNED) || el.matches?.(APP_OWNED) || el.querySelector?.(APP_OWNED));
+      } catch {
+        return false;
+      }
+    };
+
+    // Aggressively remove Syncfusion trial content (banners, modals,
+    // dialogs, overlays) — scoped to Syncfusion's own element shapes so
+    // we never collide with the app's dialogs.
     const removeBanner = () => {
       const selectors = [
         'div[style*="z-index: 999999999"]',
@@ -35,32 +60,26 @@ export function SyncfusionBannerRemover() {
         '.e-dialog',
         '.e-dlg-overlay',
         '.e-popup-overlay',
-        '[role="dialog"]',
-        '[role="alertdialog"]',
         'div[class*="license"]',
         'div[id*="license"]',
         'div[class*="e-dlg"]',
-        'div[style*="position: fixed"][style*="z-index"]',
       ];
 
       selectors.forEach(selector => {
         const elements = document.querySelectorAll(selector);
         elements.forEach((element) => {
+          if (isAppOwned(element)) return;
           const text = element.textContent?.toLowerCase() || '';
-          if (
-            text.includes("syncfusion") ||
-            text.includes("trial") ||
-            text.includes("license") ||
-            text.includes("claim your free") ||
-            text.includes("account") && text.includes("sign in")
-          ) {
+          if (isSyncfusionNag(text)) {
             element.remove();
           }
         });
       });
 
-      // Also remove any backdrop/overlay elements
-      document.querySelectorAll('.e-dlg-overlay, .e-popup-overlay').forEach(el => el.remove());
+      // Also remove any Syncfusion backdrop/overlay elements.
+      document.querySelectorAll('.e-dlg-overlay, .e-popup-overlay').forEach(el => {
+        if (!isAppOwned(el)) el.remove();
+      });
     };
 
     // Remove on mount
@@ -72,27 +91,21 @@ export function SyncfusionBannerRemover() {
         mutation.addedNodes.forEach((node) => {
           if (node.nodeType === 1) {
             const element = node as HTMLElement;
+            if (isAppOwned(element)) return;
             const style = element.getAttribute("style");
             const className = element.getAttribute("class") || '';
             const text = element.textContent?.toLowerCase() || '';
-            
-            // Remove if it's a Syncfusion trial dialog/modal/banner
-            if (
+
+            // Remove only if it's a Syncfusion-shaped element AND its text
+            // is an unambiguous Syncfusion nag. Generic role="dialog" is no
+            // longer a trigger — it collided with the app's own dialogs.
+            const looksSyncfusion =
               (style?.includes("z-index: 999999999")) ||
               className.includes('e-dlg') ||
               className.includes('e-dialog') ||
-              className.includes('e-popup') ||
-              element.getAttribute('role') === 'dialog' ||
-              element.getAttribute('role') === 'alertdialog'
-            ) {
-              if (
-                text.includes("syncfusion") ||
-                text.includes("trial") ||
-                text.includes("license") ||
-                text.includes("claim your free")
-              ) {
-                element.remove();
-              }
+              className.includes('e-popup');
+            if (looksSyncfusion && isSyncfusionNag(text)) {
+              element.remove();
             }
           }
         });

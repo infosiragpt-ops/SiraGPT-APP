@@ -2459,45 +2459,44 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
     setIsLoading(true);
     try {
-      //  Alternative approach: Use uploadedFiles from context if available
-      let imageUrl = null;
+      const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
+      const backendBaseUrl = baseUrl.replace('/api', '');
+      const imageUrls: string[] = [];
+      const addImageUrl = (rawUrl?: string | null) => {
+        const raw = String(rawUrl || '').trim();
+        if (!raw) return;
+        const url = raw.startsWith('http') ? raw : `${backendBaseUrl}${raw.startsWith('/') ? '' : '/'}${raw}`;
+        if (!imageUrls.includes(url)) imageUrls.push(url);
+      };
 
       // First try to get image URL from uploadedFiles context
       if (uploadedFiles && uploadedFiles.length > 0) {
-        const imageFile = uploadedFiles.find(f => f.type?.startsWith('image/'));
-        if (imageFile && imageFile.url) {
-          const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
-          const backendBaseUrl = baseUrl.replace('/api', '');
-          imageUrl = imageFile.url.startsWith('http') ? imageFile.url : `${backendBaseUrl}${imageFile.url}`;
-          devLog(' Using image from uploadedFiles context:', imageUrl);
-        }
+        uploadedFiles
+          .filter(f => f.type?.startsWith('image/') || f.mimeType?.startsWith('image/'))
+          .forEach((imageFile) => addImageUrl(imageFile.url));
       }
 
-      // Fallback to API call if no image found in context
-      if (!imageUrl && fileIds && fileIds.length > 0) {
+      // Fallback/enrichment from the API so every selected image id is included.
+      if (fileIds && fileIds.length > 0) {
         try {
           for (const fileId of fileIds) {
             const fileResponse = await apiClient.getFile(fileId);
             const file = fileResponse.file;
 
             if (file && file.mimeType?.startsWith('image/')) {
-              const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
-              const backendBaseUrl = baseUrl.replace('/api', '');
-
               if (file.url) {
-                imageUrl = file.url.startsWith('http') ? file.url : `${backendBaseUrl}${file.url}`;
+                addImageUrl(file.url);
               } else if (file.filename && file.userId) {
-                imageUrl = `${backendBaseUrl}/uploads/${file.userId}/${file.filename}`;
+                addImageUrl(`/uploads/${file.userId}/${file.filename}`);
               }
-
-              devLog('🖼️ Got image URL from API call:', imageUrl);
-              break;
             }
           }
         } catch (err) {
           console.error('Error getting file details for video generation:', err);
         }
       }
+
+      const imageUrl = imageUrls[0] || null;
 
       // REMOVE THIS BLOCK - Backend handles user message creation
       // await apiClient.addMessage(activeChat.id, {
@@ -2514,7 +2513,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         audio,
         chatId: activeChat.id,
         files: fileIds,
-        image_url: imageUrl
+        image_url: imageUrl,
+        image_urls: imageUrls
       });
 
       // 2) Kick off video generation with files and image URL
@@ -2527,6 +2527,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         chatId: activeChat.id,
         files: fileIds,
         ...(imageUrl && { image_url: imageUrl }),
+        ...(imageUrls.length > 0 && { image_urls: imageUrls }),
         model
       }, { signal: options?.signal });
 

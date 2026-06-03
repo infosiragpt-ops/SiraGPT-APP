@@ -9,6 +9,8 @@ const { buildAgentTaskPlan } = require('./agent-task-plan');
 const { buildExecutionProfile, buildExecutionProfilePrompt } = require('./agentic-execution-profile');
 const { buildUserIntentAlignmentProfile, buildUserIntentAlignmentPrompt } = require('./user-intent-alignment');
 const { buildDocumentDeliveryPolicy } = require('./document-delivery-policy');
+const { listManifests } = require('./tool-manifest');
+const openclawCapabilityKernel = require('../openclaw-capability-kernel');
 const {
   MAX_SIMULTANEOUS_DOCUMENTS,
 } = require('../../config/document-batch-limits');
@@ -91,30 +93,43 @@ function buildWorkspaceWorkflowJob(params = {}) {
   const fileIds = Array.isArray(params.fileIds)
     ? params.fileIds.map(String).filter(Boolean).slice(0, MAX_SIMULTANEOUS_DOCUMENTS)
     : [];
+  const chatId = typeof params.chatId === 'string' ? params.chatId : null;
 
   const executionProfile = buildExecutionProfile({ goal, fileIds });
   const intentAlignmentProfile = buildUserIntentAlignmentProfile({ goal, executionProfile });
+  const openclawRuntimeProfile = openclawCapabilityKernel.buildCapabilityProfile({
+    prompt: goal,
+    userId,
+    chatId,
+    attachmentCount: fileIds.length,
+    model,
+    context: {
+      documents: fileIds.map((id) => ({ id, source: 'workspace_workflow_file' })),
+    },
+  });
 
   const plan = buildAgentTaskPlan({
     goal,
     executionProfile,
     intentAlignmentProfile,
+    openclawProfile: openclawRuntimeProfile,
     fileIds,
     maxRuntimeMs,
+    toolManifests: listManifests(),
   });
 
   const subTasks = planToSubTasks(plan, goal);
-  const workflowPattern = subTasks.length >= 3 ? 'fork_join' : 'chain';
+  const workflowPattern = subTasks.length > 3 ? 'fork_join' : 'chain';
   const systemContract = [
     buildExecutionProfilePrompt(executionProfile),
     buildUserIntentAlignmentPrompt(intentAlignmentProfile),
+    openclawCapabilityKernel.buildOpenClawPromptBlock(openclawRuntimeProfile),
     buildOrchestratorContract({ goal, plan, subTasks, maxRuntimeMs, model }),
   ].join('\n\n');
 
   const displayGoal = `Workflow: ${goal.slice(0, 240)}`;
   const taskId = crypto.randomUUID();
   const traceId = crypto.randomUUID();
-  const chatId = typeof params.chatId === 'string' ? params.chatId : null;
 
   const documentPolicy = buildDocumentDeliveryPolicy({
     goal,
@@ -138,6 +153,7 @@ function buildWorkspaceWorkflowJob(params = {}) {
     documentPolicy,
     executionProfile,
     intentAlignmentProfile,
+    openclawRuntimeProfile,
     taskPlan: plan,
     workflow: {
       version: WORKFLOW_VERSION,

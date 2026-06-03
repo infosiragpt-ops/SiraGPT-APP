@@ -37,6 +37,46 @@ test('agent task route: stores taskId in meta state for reload/resume', () => {
   assert.equal(state.meta.goal, 'Investiga fuentes');
 });
 
+test('agent task route: meta state exposes compact OpenClaw runtime summary', () => {
+  const state = INTERNAL.reduceAgentState(INTERNAL.initialAgentState(), {
+    type: 'meta',
+    taskId: 'task-openclaw',
+    goal: 'Fusiona OpenClaw como agente autonomo',
+    model: 'gpt-4o',
+    tools: ['host_bash', 'run_tests'],
+    openclawRuntimeProfile: {
+      version: 'openclaw-capability-kernel-2026-05',
+      trustBoundary: 'user_chat_context',
+      signals: {
+        externalRepoAdaptation: true,
+        wantsAutonomousAgent: true,
+        nativeRewriteRequired: false,
+        likelyLongRunning: true,
+      },
+      capabilities: {
+        nativeRepoAdaptation: true,
+        autonomousExecution: true,
+        taskPlanning: true,
+        safeExternalActions: true,
+        evidenceLedger: true,
+      },
+      routing: { reason: 'test' },
+      executionDossier: {
+        operatingMode: { primary: 'software_agent' },
+        qualityGates: ['autonomous_plan_execute_verify_loop'],
+        workPackets: [{ id: 'autonomous_runtime', label: 'Autonomous runtime', required: true }],
+        riskControls: [{ risk: 'premature_autonomy_claim' }],
+      },
+    },
+  });
+  const serializable = INTERNAL.toSerializableAgentState(state);
+
+  assert.equal(serializable.meta.openclawRuntime.signals.externalRepoAdaptation, true);
+  assert.equal(serializable.meta.openclawRuntime.signals.wantsAutonomousAgent, true);
+  assert.equal(serializable.meta.openclawRuntime.operatingMode, 'software_agent');
+  assert.ok(serializable.meta.openclawRuntime.qualityGates.includes('autonomous_plan_execute_verify_loop'));
+});
+
 test('agent task route: keeps internal planning profiles out of visible meta state', () => {
   const state = INTERNAL.reduceAgentState(INTERNAL.initialAgentState(), {
     type: 'meta',
@@ -160,6 +200,50 @@ test('agent task route: system prompt includes enterprise ExecutionGraph rules',
   assert.match(prompt, /ReleaseController/);
 });
 
+test('agent task route: system prompt includes OpenClaw autonomous runtime block when provided', () => {
+  const openclawProfile = {
+    version: 'openclaw-capability-kernel-2026-05',
+    trustBoundary: 'user_chat_context',
+    signals: {
+      externalRepoAdaptation: true,
+      wantsAutonomousAgent: true,
+      nativeRewriteRequired: false,
+      likelyLongRunning: true,
+    },
+    tools: ['memory_recall', 'host_bash', 'host_file', 'run_tests'],
+    routing: { reason: 'test' },
+    executionDossier: {
+      operatingMode: { primary: 'software_agent', confidence: 0.9 },
+      evidenceChannels: [{ name: 'current_user_message', present: true, trust: 'medium' }],
+      workPackets: [{ label: 'Preserve autonomous loop', doneWhen: 'verified' }],
+      toolPlan: { selected: ['host_bash', 'run_tests'], missingFamilies: [] },
+      qualityGates: ['autonomous_plan_execute_verify_loop'],
+      riskControls: [{ risk: 'premature_autonomy_claim', mitigation: 'verify first' }],
+    },
+  };
+  const prompt = INTERNAL.buildAgentSystemPrompt(
+    '',
+    [],
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    '',
+    openclawProfile
+  );
+
+  assert.match(prompt, /OpenClaw-Level Runtime Policy/);
+  assert.match(prompt, /autonomous-agent software requests/);
+  assert.match(prompt, /autonomous_plan_execute_verify_loop/);
+});
+
+
 test('agent task route: does not drop tool events emitted without a current step', () => {
   let state = INTERNAL.initialAgentState();
   state = INTERNAL.reduceAgentState(state, {
@@ -230,6 +314,32 @@ test('agent task route: appendTaskEvent persists reloadable checkpoints', () => 
   assert.equal(payload.taskId, 'task-reloadable');
   assert.equal(payload.streamState.steps.length, 1);
   assert.equal(payload.checkpoints.length, 1);
+  INTERNAL.ACTIVE_AGENT_TASKS.delete(task.taskId);
+});
+
+test('agent task route: createTaskRecord persists OpenClaw runtime profile for retry', () => {
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-agent-route-store-'));
+  const openclawRuntimeProfile = {
+    version: 'openclaw-capability-kernel-2026-05',
+    signals: { externalRepoAdaptation: true, wantsAutonomousAgent: true },
+    capabilities: { autonomousExecution: true, nativeRepoAdaptation: true },
+  };
+  const task = INTERNAL.createTaskRecord({
+    taskId: 'task-openclaw-retry',
+    userId: 'user-a',
+    chatId: 'chat-a',
+    displayGoal: 'Fusiona OpenClaw como agente autonomo',
+    model: 'gpt-4o',
+    controller: new AbortController(),
+    maxSteps: 20,
+    maxRuntimeMs: 7200000,
+    streamState: INTERNAL.initialAgentState(),
+    openclawRuntimeProfile,
+  });
+
+  const payload = INTERNAL.formatTaskPayload(taskStore.getTaskSnapshotForUser('task-openclaw-retry', 'user-a'));
+  assert.equal(payload.openclawRuntimeProfile.version, 'openclaw-capability-kernel-2026-05');
+  assert.equal(payload.openclawRuntimeProfile.signals.wantsAutonomousAgent, true);
   INTERNAL.ACTIVE_AGENT_TASKS.delete(task.taskId);
 });
 

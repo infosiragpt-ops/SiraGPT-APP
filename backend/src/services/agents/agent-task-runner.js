@@ -4,10 +4,13 @@ const { buildTaskTools } = require('./task-tools');
 const taskStore = require('./task-store');
 const auditLog = require('./audit-log');
 const metrics = require('./metrics');
+const openclawCapabilityKernel = require('../openclaw-capability-kernel');
 const {
   buildExecutionProfile,
-  validateFinalize,
 } = require('./agentic-execution-profile');
+const {
+  validateAgentTaskFinalize,
+} = require('./openclaw-autonomy-finalize-guard');
 const { buildUserIntentAlignmentProfile } = require('./user-intent-alignment');
 const { buildAgentTaskPlan } = require('./agent-task-plan');
 const { resolveTaskContract } = require('./task-contract-resolver');
@@ -87,6 +90,25 @@ function buildFinalizeProfile(executionProfile, universalTaskContract) {
         : {}),
     },
   };
+}
+
+function buildOpenClawRuntimeProfile({ goal, userId = null, chatId = null, fileIds = [], model = null, context = {} } = {}) {
+  try {
+    return openclawCapabilityKernel.buildCapabilityProfile({
+      prompt: goal,
+      userId,
+      chatId,
+      attachmentCount: Array.isArray(fileIds) ? fileIds.length : 0,
+      model,
+      context: {
+        documents: Array.isArray(fileIds) ? fileIds.map((id) => ({ id, source: 'agent_task_worker_file' })) : [],
+        ...context,
+      },
+    });
+  } catch (err) {
+    console.warn('[agent-task-runner] openclaw runtime profile unavailable:', err?.message || err);
+    return null;
+  }
 }
 
 function summarizeForChat(text, policy) {
@@ -808,6 +830,13 @@ async function runAgentTaskJob(payload = {}, job = null) {
 
   const executionProfile = buildExecutionProfile({ goal, fileIds: files, fileMetadata });
   const intentAlignmentProfile = buildUserIntentAlignmentProfile({ request: goal, fileIds: files });
+  const openclawRuntimeProfile = payload.openclawRuntimeProfile || existing?.openclawRuntimeProfile || buildOpenClawRuntimeProfile({
+    goal,
+    userId: user.id,
+    chatId,
+    fileIds: files,
+    model,
+  });
   // Attribution telemetry — runs the executive summary on the goal so we
   // can record what the system thought the user wanted before any step
   // executes. Pure local, no LLM. Posted as a task event so reviewers see
@@ -870,9 +899,11 @@ async function runAgentTaskJob(payload = {}, job = null) {
     goal,
     executionProfile,
     intentAlignmentProfile,
+    openclawProfile: openclawRuntimeProfile,
     universalTaskContract,
     fileIds: files,
     maxRuntimeMs,
+    toolManifests: listManifests(),
   });
   const enterpriseExecutionGraph = buildEnterpriseExecutionGraph({
     contract: universalTaskContract,
@@ -938,6 +969,7 @@ async function runAgentTaskJob(payload = {}, job = null) {
     executionProfile,
     intentAlignmentProfile,
     taskPlan,
+    openclawRuntimeProfile,
     universalTaskContract,
     enterpriseExecutionGraph,
     enterpriseRuntimeProfile,
@@ -1049,10 +1081,14 @@ async function runAgentTaskJob(payload = {}, job = null) {
     enterpriseToolRuntimePlan,
     enterpriseQaBoardReview,
     agenticOperatingCore,
+    openclawRuntimeProfile,
     frameworks: frameworkStatus,
     taskContract,
     taskContractSource,
   });
+  for (const event of openclawCapabilityKernel.buildOpenClawRuntimeEvents(openclawRuntimeProfile)) {
+    emit(event);
+  }
 
   auditLog.audit({
     event: 'agent_task_worker_started',
@@ -1201,6 +1237,7 @@ async function runAgentTaskJob(payload = {}, job = null) {
         executionProfile,
         intentAlignmentProfile,
         taskPlan,
+        openclawRuntimeProfile,
         universalTaskContract,
         enterpriseExecutionGraph,
         enterpriseRuntimeProfile,
@@ -1731,10 +1768,16 @@ async function runAgentTaskJob(payload = {}, job = null) {
         enterpriseToolRuntimePlan,
         enterpriseQaBoardReview,
         agenticOperatingCore,
-        uploadedFileContext
+        uploadedFileContext,
+        openclawRuntimeProfile
       ),
       ctx: toolCtx,
-      finalizeGuard: ({ steps, unavailableTools }) => validateFinalize(finalizeProfile, steps, { unavailableTools }),
+      finalizeGuard: ({ steps, unavailableTools }) => validateAgentTaskFinalize({
+        finalizeProfile,
+        openclawRuntimeProfile,
+        steps,
+        unavailableTools,
+      }),
       onStepStart: (step) => {
         stepIdCounter += 1;
         currentStepId = `s${stepIdCounter}`;

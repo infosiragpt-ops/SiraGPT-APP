@@ -16,7 +16,11 @@ const PATTERNS = {
   research: /\b(investiga(?:r|cion)?|research|busca(?:r)?|recopila(?:r)?|fuentes|citas|referencias|art[ií]culos?|papers?|literatura|acad[eé]mic[oa]s?|cient[ií]fic[oa]s?|mercado|benchmark|estado del arte|revision sistem[aá]tica|metaan[aá]lisis|scielo|redalyc|dialnet|openalex|crossref|pubmed|doi|semantic scholar|doaj|scopus|web of science|wos)\b/i,
   document: /\b(docx|xlsx|pptx?|word|excel|power\s*point|powerpoint|pdf\b|csv\b|markdown|html\b|informe|reporte|presentaci[oó]n|diapositivas|slides|hoja de c[aá]lculo|spreadsheet|archivo|documento|matriz|descargar|exporta(?:r|me)?)\b/i,
   privateFiles: /\b(adjunt[oa]s?|archivo(?:s)? cargad[oa]s?|documento(?:s)? cargad[oa]s?|seg[uú]n (mis|el) archivo|seg[uú]n (mis|el) documento|este documento|esta tesis|pdf cargado|word cargado|docx cargado|mis archivos|mi proyecto)\b/i,
-  code: /\b(c[oó]digo|code|programa|script|funci[oó]n|clase|debug|bug|corrige(?:r)?|repara(?:r)?|test(?:s)?|prueba(?:s)?|unit test|typescript|javascript|python|react|next\.?js|backend|frontend|web app|autocorrige|auto corrige)\b/i,
+  code: /\b(c[oó]digo|code|programa|software|sofware|script|funci[oó]n|clase|debug|bug|corrige(?:r)?|repara(?:r)?|test(?:s)?|prueba(?:s)?|unit test|typescript|javascript|python|react|next\.?js|backend|frontend|web app|github|repo(?:sitorio)?|openclaw|autocorrige|auto corrige)\b/i,
+  agentRuntime: /\b(agente(?:s)?|agent(?:s)?|agentic|aut[oó]nom[oa]s?|orquestador|orchestrator|planner|runner|workflow|agent-task|task\s+runner|tool\s+registry|capability\s+matrix|skill(?:s)?|checkpoint(?:s)?)\b/i,
+  externalRepo: /\b(openclaw|github\.com\/openclaw\/openclaw|upstream|external repo|repo externo|repositorio externo|otro repositorio|del otro software)\b/i,
+  autonomousSoftware: /\b(agente(?:s)?\s+aut[oó]nom[oa]s?|autonomous\s+agent|software\s+(?:muy\s+)?potente|sofware\s+(?:muy\s+)?potente|fusiona(?:r)?|fusi[oó]n|fusi[oó]nalo|integr[aá]lo|auto.?ejecut(?:a|able|or))\b/i,
+  bulkSourceFusion: /\b(millones|millions|miles|thousands|much[ií]simas?)\b.{0,80}\b(l[ií]neas?|lines?|c[oó]digo|code|archivos?|files?)\b|\b(copiar|copia(?:r)?|copy)\b.{0,100}\b(millones|millions|miles|thousands|repositorio|repo|openclaw)\b|\b(fusiona(?:r)?|fusi[oó]n|fusi[oó]nalo|merge)\b.{0,100}\b(millones|millions|miles|thousands|repositorio|repo|openclaw|c[oó]digo|code)\b|\b(c[oó]digo|code)\b.{0,80}\b(copiar\s+y\s+fusionar|copy\s+and\s+merge|fusionar(?:lo)?)\b/i,
   computation: /\b(calcula(?:r)?|analiza(?:r)?|procesa(?:r)?|limpia(?:r)?|estad[ií]stica|cronbach|spearman|anova|regresi[oó]n|correlaci[oó]n|likert|dataset|csv|datos|tabla|f[oó]rmula|matriz|integral|derivada|probabilidad)\b/i,
   strictEvidence: /\b(100%|extremadamente preciso|precisi[oó]n|verifica(?:r)?|validar|reales|doi|open access|acceso abierto|20|30|40|50|100|miles|202[0-9]|art[ií]culos cient[ií]ficos)\b/i,
   transcription: /\b(transcrib(?:e|ir|eme|irme|elo|elo|alo|al[oó]|irlo)?|transcripci[oó]n|transcript|transcribe)\b/i,
@@ -77,6 +81,10 @@ function buildExecutionProfile({ goal, fileIds = [], fileMetadata = [] } = {}) {
     (PATTERNS.transcription.test(rawGoal) || PATTERNS.transcription.test(normalized))
     && !(PATTERNS.explicitTranscriptionArtifact.test(rawGoal) || PATTERNS.explicitTranscriptionArtifact.test(normalized));
   const documentMentioned = PATTERNS.document.test(rawGoal) || PATTERNS.document.test(normalized);
+  const externalRepoAdaptation = PATTERNS.externalRepo.test(rawGoal) || PATTERNS.externalRepo.test(normalized);
+  const autonomousSoftwareWork = PATTERNS.autonomousSoftware.test(rawGoal) || PATTERNS.autonomousSoftware.test(normalized);
+  const bulkSourceFusion = PATTERNS.bulkSourceFusion.test(rawGoal) || PATTERNS.bulkSourceFusion.test(normalized);
+  const agentRuntimeHardening = PATTERNS.agentRuntime.test(rawGoal) || PATTERNS.agentRuntime.test(normalized);
   const explicitDeliverableRequested = PATTERNS.explicitDeliverable.test(rawGoal) || PATTERNS.explicitDeliverable.test(normalized);
   const mentionsAttachedPrivateFile = hasFiles && (
     PATTERNS.privateFiles.test(rawGoal)
@@ -94,7 +102,11 @@ function buildExecutionProfile({ goal, fileIds = [], fileMetadata = [] } = {}) {
     // ("según el documento adjunto") still forces the gate even with an image,
     // because the user may have photographed a document for OCR.
     needsPrivateContext: (hasFiles && !onlyImageAttachments) || mentionsPrivateFiles,
-    needsCodeOrRepair: PATTERNS.code.test(rawGoal) || PATTERNS.code.test(normalized),
+    needsCodeOrRepair: PATTERNS.code.test(rawGoal) || PATTERNS.code.test(normalized) || externalRepoAdaptation || autonomousSoftwareWork || bulkSourceFusion,
+    needsAgentRuntimeHardening: agentRuntimeHardening,
+    needsExternalRepoAdaptation: externalRepoAdaptation,
+    needsAutonomousSoftware: autonomousSoftwareWork,
+    needsBulkSourceFusion: bulkSourceFusion,
     needsComputation: PATTERNS.computation.test(rawGoal) || PATTERNS.computation.test(normalized),
     strictEvidence: PATTERNS.strictEvidence.test(rawGoal) || PATTERNS.strictEvidence.test(normalized),
     needsMedia,
@@ -131,9 +143,21 @@ function buildExecutionProfile({ goal, fileIds = [], fileMetadata = [] } = {}) {
     requiredTools.push('create_document', 'verify_artifact');
     qualityGates.push('Generate a real artifact and verify it technically before delivery.');
   }
-  if (capabilities.needsCodeOrRepair) {
+  if (capabilities.needsCodeOrRepair || capabilities.needsAgentRuntimeHardening) {
     requiredTools.push('run_tests');
     qualityGates.push('Run tests or invariant checks for generated or repaired code.');
+  }
+  if (capabilities.needsAgentRuntimeHardening) {
+    qualityGates.push('Inspect agent runtime contracts, tool gates, durable state, and verification checkpoints before claiming agent improvements.');
+  }
+  if (capabilities.needsExternalRepoAdaptation) {
+    qualityGates.push('Audit external repository capabilities as reference-only input before integrating behavior.');
+  }
+  if (capabilities.needsAutonomousSoftware) {
+    qualityGates.push('Preserve a plan-execute-verify loop for autonomous software work before finalizing.');
+  }
+  if (capabilities.needsBulkSourceFusion) {
+    qualityGates.push('Inventory, attribute and rank bulk source before activating any copied or rewritten runtime slice.');
   }
 
   return {

@@ -89,6 +89,7 @@ const {
   curateVisibleAdminMediaModels,
   curateVisibleTextModels,
 } = require('../services/visible-model-catalog');
+const { sortFalVideoModels } = require('../services/fal-video-model-catalog');
 const streamResume = require('../services/ai/stream-resume');
 const promptInjectionDetector = require('../services/ai/prompt-injection-detector');
 const longTermMemory = require('../services/long-term-memory');
@@ -733,6 +734,7 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
 
     if (type === 'VIDEO') {
       models = curateVisibleAdminMediaModels(models, 'VIDEO');
+      models = sortFalVideoModels(models);
     }
 
     if (wantVoice) {
@@ -6401,6 +6403,9 @@ router.post(
     body('negative_prompt').optional().isString(),
     body('files').optional().isArray(),
     body('image_url').optional().isString(),
+    body('image_urls').optional().isArray({ max: 12 }),
+    body('image_urls.*').optional().isString(),
+    body('model').optional().isString().withMessage('Invalid video model'),
   ],
   authenticateToken,
   requirePaidPlan({ feature: 'video_generation' }),
@@ -6411,7 +6416,7 @@ router.post(
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const { prompt, chatId, aspect_ratio = '16:9', resolution = '720p', duration = 8, audio = true, negative_prompt, files, image_url, model
+      const { prompt, chatId, aspect_ratio = '16:9', resolution = '720p', duration = 8, audio = true, negative_prompt, files, image_url, image_urls, model
       } = req.body;
       const userId = req.user.id;
       const requestedVideoModel = String(model || '').trim();
@@ -6443,20 +6448,38 @@ router.post(
           ? 8
           : duration;
 
-      console.log('🎬 Video generation request:', { prompt, aspect_ratio, userId, chatId, hasFiles: !!files?.length, hasImageUrl: !!image_url });
+      console.log('🎬 Video generation request:', {
+        prompt,
+        aspect_ratio,
+        userId,
+        chatId,
+        hasFiles: !!files?.length,
+        hasImageUrl: !!image_url,
+        imageUrlCount: Array.isArray(image_urls) ? image_urls.length : 0,
+      });
 
       // ✅ Paid-plan token cap (single source of truth: plan-quota.js).
       // Keeps the domain-specific video limit message.
       const quotaCap = checkPaidTokenCap(req.user, { message: 'Monthly video generation limit exceeded' });
       if (!quotaCap.ok) return res.status(quotaCap.status).json(quotaCap.body);
 
-      // ✅ Process attached files (for image-to-video)
-      let processedImageUrl = image_url;
-      console.log('Initial image URL:', processedImageUrl);
-      if (files && files.length > 0 && !processedImageUrl) {
+      // ✅ Process attached files (for image-to-video/reference-to-video)
+      const processedImageUrls = [];
+      const addProcessedImageUrl = (rawUrl) => {
+        const value = String(rawUrl || '').trim();
+        if (!value) return;
+        if (!processedImageUrls.includes(value)) processedImageUrls.push(value);
+      };
+
+      if (Array.isArray(image_urls)) {
+        image_urls.forEach(addProcessedImageUrl);
+      }
+      addProcessedImageUrl(image_url);
+
+      console.log('Initial image URLs:', processedImageUrls.length);
+      if (files && files.length > 0) {
         try {
-          // Find the first image file
-          const imageFile = await prisma.file.findFirst({
+          const imageFiles = await prisma.file.findMany({
             where: {
               id: { in: files },
               userId,
@@ -6464,16 +6487,19 @@ router.post(
             }
           });
 
-          if (imageFile) {
-            // Construct the full image URL
+          if (imageFiles.length > 0) {
             const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
-            processedImageUrl = `${baseUrl}/uploads/${userId}/${imageFile.filename}`;
-            console.log('🖼️ Using image for video generation:', processedImageUrl);
+            const fileOrder = new Map(files.map((id, index) => [id, index]));
+            imageFiles
+              .sort((a, b) => (fileOrder.get(a.id) ?? 9999) - (fileOrder.get(b.id) ?? 9999))
+              .forEach((imageFile) => addProcessedImageUrl(`${baseUrl}/uploads/${userId}/${imageFile.filename}`));
+            console.log('🖼️ Using images for video generation:', processedImageUrls.length);
           }
         } catch (fileError) {
           console.error('Error processing files for video:', fileError);
         }
       }
+      const processedImageUrl = processedImageUrls[0] || null;
 
       // ✅ Make internal API call to video service using axios
       const axios = require('axios');
@@ -6497,6 +6523,7 @@ router.post(
           audio,
           negative_prompt,
           ...(processedImageUrl && { image_url: processedImageUrl }),
+          ...(processedImageUrls.length > 0 && { image_urls: processedImageUrls }),
           model: requestedVideoModel
         };
 
@@ -6635,9 +6662,17 @@ router.post(
                 prompt: prompt,
                 aspect_ratio: aspect_ratio,
                 resolution,
-                duration,
+                duration: effectiveDuration,
+                requestedDuration: duration,
                 audio,
-                sourceImageUrl: processedImageUrl
+                requestedModel: requestedVideoModel,
+                model: videoResponse.data.model || requestedVideoModel,
+                modelDisplayName: videoResponse.data.modelDisplayName || adminModel.displayName || requestedVideoModel,
+                usingPairedEndpoint: Boolean(videoResponse.data.usingPairedEndpoint),
+                sourceImageUrl: processedImageUrl,
+                sourceImageUrls: processedImageUrls,
+                imageCount: processedImageUrls.length,
+                generationType: processedImageUrls.length > 1 ? 'reference-to-video' : (processedImageUrl ? 'image-to-video' : 'text-to-video')
               }])
             }
           });
@@ -6658,7 +6693,7 @@ router.post(
 
         // ✅ Track usage (single source of truth: plan-quota.js)
         const tokens = 1000; // Fixed token count for video generation
-        const updatedUser = await recordApiUsage({ prisma, userId, model: processedImageUrl ? 'veo-3.0-img2vid' : 'veo-3.0', tokens });
+        const updatedUser = await recordApiUsage({ prisma, userId, model: videoResponse.data.model || requestedVideoModel, tokens });
 
         console.log('📊 Usage tracked for video generation');
 
@@ -6671,9 +6706,17 @@ router.post(
           usage: usagePayloadFor(updatedUser),
           aspect_ratio,
           resolution,
-          duration,
+          duration: effectiveDuration,
+          requestedDuration: duration,
           audio,
-          sourceImageUrl: processedImageUrl
+          requestedModel: requestedVideoModel,
+          model: videoResponse.data.model || requestedVideoModel,
+          modelDisplayName: videoResponse.data.modelDisplayName || adminModel.displayName || requestedVideoModel,
+          usingPairedEndpoint: Boolean(videoResponse.data.usingPairedEndpoint),
+          sourceImageUrl: processedImageUrl,
+          sourceImageUrls: processedImageUrls,
+          imageCount: processedImageUrls.length,
+          generationType: processedImageUrls.length > 1 ? 'reference-to-video' : (processedImageUrl ? 'image-to-video' : 'text-to-video')
         });
 
       } catch (videoServiceError) {
@@ -6851,7 +6894,11 @@ router.get('/video-status/:operationId', authenticateToken, async (req, res) => 
                     resolution: result.resolution,
                     aspect_ratio: result.aspect_ratio || statusResponse.data.aspect_ratio,
                     fal_video_url: result.fal_video_url,
-                    fal_request_id: result.fal_request_id
+                    fal_request_id: result.fal_request_id,
+                    sourceImageUrl: result.sourceImageUrl || statusResponse.data.sourceImageUrl || f.sourceImageUrl,
+                    sourceImageUrls: result.sourceImageUrls || statusResponse.data.sourceImageUrls || f.sourceImageUrls,
+                    imageCount: result.imageCount || statusResponse.data.imageCount || f.imageCount,
+                    generationType: result.generationType || statusResponse.data.generationType || f.generationType
                   }
                   : f
               )

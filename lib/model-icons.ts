@@ -30,6 +30,12 @@ export const MODEL_PROVIDER_ORDER = [
   "Poolside",
   "Z.ai",
   "ByteDance Seed",
+  "fal.ai",
+  "Kling AI",
+  "PixVerse",
+  "MiniMax",
+  "Wan",
+  "LTX",
   "Groq",
   "Ollama",
   "OpenRouter",
@@ -57,6 +63,12 @@ export function resolveModelProviderName(model: ModelIconInput | null | undefine
   if (has(searchable, /mistralai\/|mistral|codestral/)) return "Mistral AI"
   if (has(searchable, /\bz\.?ai\b|z-ai\/|zhipu|chatglm|\bglm[-\s]?\d?/)) return "Z.ai"
   if (has(searchable, /bytedance-seed\/|seedream|bytedance|doubao/)) return "ByteDance Seed"
+  if (has(searchable, /fal\.ai|fal-ai\//)) return "fal.ai"
+  if (has(searchable, /kling/)) return "Kling AI"
+  if (has(searchable, /pixverse/)) return "PixVerse"
+  if (has(searchable, /minimax|hailuo/)) return "MiniMax"
+  if (has(searchable, /\bwan\b|wan\//)) return "Wan"
+  if (has(searchable, /\bltx\b|ltx-/)) return "LTX"
 
   if (provider) return provider
   return "Otros"
@@ -126,6 +138,22 @@ export function resolveModelAttributionName(model: ModelIconInput | null | undef
       return "OpenRouter"
     case "SeedreamLogo":
       return "ByteDance Seed"
+    case "FalLogo":
+      return "fal.ai"
+    case "SoraLogo":
+      return "OpenAI"
+    case "KlingLogo":
+      return "Kling AI"
+    case "ByteDanceLogo":
+      return "ByteDance Seed"
+    case "PixverseLogo":
+      return "PixVerse"
+    case "MinimaxLogo":
+      return "MiniMax"
+    case "WanLogo":
+      return "Wan"
+    case "LtxLogo":
+      return "LTX"
     case "MessageSquare":
       return has(searchable, /grok|x-ai|\bxai\b/) ? "xAI" : "Groq"
     default:
@@ -146,6 +174,28 @@ export function resolveModelIconName(model: ModelIconInput | null | undefined): 
   // / "gema 4" without matching "gemma" (Google's open model, double m) or
   // "gemini", so those keep their own logos.
   if (has(searchable, /\bgema\b/)) return "GoogleLogo"
+  if (explicitIcon && [
+    "ChatGPTLogo",
+    "GeminiLogo",
+    "GrokLogo",
+    "QwenLogo",
+    "NvidiaLogo",
+    "FalLogo",
+    "SoraLogo",
+    "KlingLogo",
+    "ByteDanceLogo",
+    "PixverseLogo",
+    "MinimaxLogo",
+    "WanLogo",
+    "LtxLogo",
+  ].includes(explicitIcon)) return explicitIcon
+  if (has(searchable, /sora/)) return "SoraLogo"
+  if (has(searchable, /kling/)) return "KlingLogo"
+  if (has(searchable, /pixverse/)) return "PixverseLogo"
+  if (has(searchable, /minimax|hailuo/)) return "MinimaxLogo"
+  if (has(searchable, /\bwan\b|wan\//)) return "WanLogo"
+  if (has(searchable, /\bltx\b|ltx-/)) return "LtxLogo"
+  if (has(searchable, /bytedance|seedance|doubao/)) return "ByteDanceLogo"
   if (has(searchable, /(^|[/\s-])(gpt|chatgpt|dall[-\s]?e)\b|openai\//)) return "ChatGPTLogo"
   if (has(searchable, /gemini|google\/|imagen|veo/)) return "GeminiLogo"
   if (has(searchable, /claude|anthropic\//)) return "ClaudeLogo"
@@ -153,7 +203,7 @@ export function resolveModelIconName(model: ModelIconInput | null | undefined): 
   if (has(searchable, /deepseek/)) return "DeepseekLogo"
   if (has(searchable, /kimi|moonshot/)) return "KimiLogo"
   if (has(searchable, /\bz\.?ai\b|z-ai\/|zhipu|chatglm|\bglm[-\s]?\d?/)) return "ZaiLogo"
-  if (has(searchable, /seedream|bytedance|doubao/)) return "SeedreamLogo"
+  if (has(searchable, /seedream/)) return "SeedreamLogo"
   if (has(searchable, /qwen|alibaba/)) return "QwenLogo"
   if (has(searchable, /ollama/)) return "OllamaLogo"
   if (has(searchable, /groq\/|\bgroq\b/)) return "MessageSquare"
@@ -161,6 +211,7 @@ export function resolveModelIconName(model: ModelIconInput | null | undefined): 
   if (has(searchable, /poolside|laguna/)) return "PoolsideLogo"
   if (has(searchable, /llama|meta-llama|meta\//)) return "MetaLogo"
   if (has(searchable, /mistral|codestral/)) return "MistralLogo"
+  if (has(searchable, /fal\.ai|fal-ai\//)) return "FalLogo"
 
   if (explicitIcon && explicitIcon !== "OpenRouterLogo") return explicitIcon
   if (provider.includes("openai")) return "ChatGPTLogo"
@@ -177,6 +228,7 @@ export function resolveModelIconName(model: ModelIconInput | null | undefined): 
   if (provider.includes("ollama")) return "OllamaLogo"
   if (provider.includes("groq")) return "MessageSquare"
   if (provider.includes("openrouter")) return "OpenRouterLogo"
+  if (provider.includes("fal.ai") || provider.includes("fal")) return "FalLogo"
 
   return explicitIcon || "Bot"
 }

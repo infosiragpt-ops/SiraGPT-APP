@@ -81,6 +81,7 @@
     "skill:validate": "node --experimental-strip-types --no-warnings backend/src/skills/cli.ts validate",
     "skill:validate:agents": "node --experimental-strip-types --no-warnings backend/src/skills/cli.ts list --root .agents/skills --json",
     "agent:openclaw:map": "node backend/scripts/openclaw-playbook-map.js",
+    "agent:openclaw:inventory": "node backend/scripts/openclaw-source-inventory.js",
     "agent:hermes:map": "node backend/scripts/hermes-playbook-map.js",
     "agent:platform:map": "node backend/scripts/platform-folder-map.js",
     "agent:platform:sync": "node backend/scripts/sync-platform-upstream.js",
@@ -200,7 +201,7 @@
     "node-fetch": "^3.3.2",
     "nodemailer": "^8.0.7",
     "pdf-lib": "^1.17.1",
-    "pdfjs-dist": "^4.10.38",
+    "pdfjs-dist": "4.8.69",
     "plotly.js-basic-dist-min": "^3.5.0",
     "posthog-js": "^1.372.6",
     "react": "^18",
@@ -269,6 +270,7 @@
     "vitest": "^4.1.5"
   },
   "overrides": {
+    "pdfjs-dist": "4.8.69",
     "uuid": "^11.1.1",
     "qs": "^6.15.2",
     "postcss": "$postcss",

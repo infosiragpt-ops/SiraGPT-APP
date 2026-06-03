@@ -64,6 +64,40 @@ test("document viewer attachments recover upload URLs from stored filesystem pat
   assert.equal(attachment.url, "/uploads/user/contract.pdf")
 })
 
+test("document viewer attachments normalize snake_case chat metadata", () => {
+  const attachment = toDocumentViewerAttachment({
+    file_id: "file_snake_docx",
+    original_name: "Plan de mejora.docx",
+    mime_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    size_bytes: 2048,
+    download_url: "/uploads/user/plan.docx",
+    extracted_text: "Resumen extraído para fallback",
+  })
+
+  assert.equal(attachment.id, "file_snake_docx")
+  assert.equal(attachment.name, "Plan de mejora.docx")
+  assert.equal(attachment.mimeType, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+  assert.equal(attachment.size, 2048)
+  assert.equal(attachment.url, "/uploads/user/plan.docx")
+  assert.equal(attachment.extractedText, "Resumen extraído para fallback")
+})
+
+test("document viewer attachments accept generated artifact preview aliases", () => {
+  const attachment = toDocumentViewerAttachment({
+    attachment_id: "artifact_pdf",
+    file_name: "Informe final.pdf",
+    content_type: "application/pdf",
+    file_size: 4096,
+    preview_url: "/api/artifacts/artifact_pdf/preview",
+  })
+
+  assert.equal(attachment.id, "artifact_pdf")
+  assert.equal(attachment.name, "Informe final.pdf")
+  assert.equal(attachment.mimeType, "application/pdf")
+  assert.equal(attachment.size, 4096)
+  assert.equal(attachment.url, "/api/artifacts/artifact_pdf/preview")
+})
+
 test("file-like detection works without relying on browser File globals", () => {
   const file = fakeFile("notes.txt", "text/plain")
 
