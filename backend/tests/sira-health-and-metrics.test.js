@@ -20,6 +20,7 @@ const {
   checkSentry,
   checkLangfuse,
   checkPostHog,
+  checkStartupEnvironment,
   runLivenessCheck,
   runReadinessCheck,
   runFullHealthCheck,
@@ -323,6 +324,36 @@ describe("runReadinessCheck", () => {
   });
 });
 
+describe("checkStartupEnvironment", () => {
+  test("skipped when no result is provided", () => {
+    const r = checkStartupEnvironment();
+    assert.equal(r.name, "startup_env");
+    assert.equal(r.status, "skipped");
+    assert.equal(r.critical, false);
+  });
+
+  test("healthy when checked with no issues", () => {
+    const r = checkStartupEnvironment({ checked: true, issues: [] });
+    assert.equal(r.status, "healthy");
+    assert.equal(r.details.issue_count, 0);
+  });
+
+  test("degraded (never unhealthy) when issues are present", () => {
+    const r = checkStartupEnvironment({
+      checked: true,
+      issues: [
+        { key: "JWT_SECRET", severity: "BLOCKING", message: "missing" },
+        { key: "REDIS_URL", severity: "WARNING", message: "not set" },
+      ],
+    });
+    assert.equal(r.status, "degraded");
+    assert.equal(r.critical, false);
+    assert.equal(r.details.issue_count, 2);
+    assert.equal(r.details.blocking, 1);
+    assert.equal(r.details.warnings, 1);
+  });
+});
+
 describe("runFullHealthCheck", () => {
   test("includes model_providers and opentelemetry informational checks", async () => {
     const r = await runFullHealthCheck({
@@ -332,6 +363,21 @@ describe("runFullHealthCheck", () => {
     });
     assert.ok(r.checks.find((c) => c.name === "model_providers"));
     assert.ok(r.checks.find((c) => c.name === "opentelemetry"));
+  });
+
+  test("surfaces startup_env check and mirrors it under top-level startupEnv", async () => {
+    const r = await runFullHealthCheck({
+      prisma: { $queryRawUnsafe: async () => 1 },
+      redis: { ping: async () => "PONG" },
+      startupEnv: { checked: true, issues: [{ key: "REDIS_URL", severity: "WARNING", message: "not set" }] },
+    });
+    const check = r.checks.find((c) => c.name === "startup_env");
+    assert.ok(check);
+    assert.equal(check.status, "degraded");
+    assert.deepEqual(r.startupEnv, check.details);
+    // A startup-env warning drives the composite to degraded but never 503s.
+    assert.equal(r.status, "degraded");
+    assert.equal(reportToHttpStatus(r), 200);
   });
 });
 

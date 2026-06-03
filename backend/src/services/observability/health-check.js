@@ -379,6 +379,52 @@ function checkGoogleOAuth(oauthResult) {
   };
 }
 
+/**
+ * Surface the result of the boot-time startup environment validator
+ * (`validateStartupEnvironment`) so monitoring probes and the ops dashboard
+ * can re-detect config problems (missing/placeholder secrets, malformed URLs,
+ * out-of-range numeric settings) without reading startup logs or restarting
+ * the process.
+ *
+ * The boot validator already logs and (in production) blocks startup on
+ * blocking issues. Anything that survives boot but still has issues —
+ * warnings everywhere, or blocking issues in non-production where the server
+ * is allowed to keep running — is reported here as `degraded` so the app
+ * stays reachable but the problem is visible. Non-critical: a stale config
+ * issue should never 503 the API.
+ *
+ * @param {{checked: boolean, issues: Array<{key, label, severity, message, hint?}>}} [startupEnvResult]
+ */
+function checkStartupEnvironment(startupEnvResult) {
+  if (!startupEnvResult || typeof startupEnvResult !== "object") {
+    return {
+      name: "startup_env",
+      status: "skipped",
+      critical: false,
+      latency_ms: 0,
+      details: { reason: "no_startup_env_result" },
+    };
+  }
+
+  const checked = Boolean(startupEnvResult.checked);
+  const issues = Array.isArray(startupEnvResult.issues) ? startupEnvResult.issues : [];
+  const blocking = issues.filter((i) => i && i.severity === "BLOCKING").length;
+  const warnings = issues.filter((i) => i && i.severity === "WARNING").length;
+
+  let status;
+  if (!checked) status = "skipped";
+  else if (issues.length > 0) status = "degraded";
+  else status = "healthy";
+
+  return {
+    name: "startup_env",
+    status,
+    critical: false,
+    latency_ms: 0,
+    details: { checked, issue_count: issues.length, blocking, warnings, issues },
+  };
+}
+
 function checkCoworkSubsystem(coworkHealth) {
   if (!coworkHealth || typeof coworkHealth.runLivenessCheck !== "function") {
     return { name: "cowork", status: "skipped", critical: false, latency_ms: 0, details: { reason: "no_cowork_health_module" } };
@@ -422,7 +468,7 @@ async function runReadinessCheck({ prisma, redis, queue } = {}) {
   return composeStatus(checks);
 }
 
-async function runFullHealthCheck({ prisma, redis, queue, telemetry, sentry, langfuse, posthog, circuitBreakers, coworkHealth, googleOAuth } = {}) {
+async function runFullHealthCheck({ prisma, redis, queue, telemetry, sentry, langfuse, posthog, circuitBreakers, coworkHealth, googleOAuth, startupEnv } = {}) {
   const checks = await Promise.all([
     checkDatabase(prisma),
     checkRedis(redis),
@@ -448,8 +494,16 @@ async function runFullHealthCheck({ prisma, redis, queue, telemetry, sentry, lan
   const googleOAuthCheck = checkGoogleOAuth(googleOAuth);
   checks.push(googleOAuthCheck);
 
+  // Startup environment health: pushed into the checks array so lingering
+  // config issues drive the composite status to `degraded`, and also mirrored
+  // under a top-level `startupEnv` key so monitoring probes can read the issue
+  // list directly without scanning checks. Same pattern as googleOAuth above.
+  const startupEnvCheck = checkStartupEnvironment(startupEnv);
+  checks.push(startupEnvCheck);
+
   const report = composeStatus(checks);
   report.googleOAuth = googleOAuthCheck.details;
+  report.startupEnv = startupEnvCheck.details;
   return report;
 }
 
@@ -493,6 +547,7 @@ module.exports = {
   checkPostHog,
   checkCircuitBreakers,
   checkGoogleOAuth,
+  checkStartupEnvironment,
   checkCoworkSubsystem,
   checkR2Storage,
   checkPlaywright,

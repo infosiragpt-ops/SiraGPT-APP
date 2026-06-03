@@ -38,7 +38,9 @@ validateConfigOrExit(process.env);
 // dangerous configurations before the server accepts traffic.
 // Blocking issues call process.exit(1); warnings are logged.
 const { validateStartupEnvironment } = require('./src/utils/startup-validator');
-validateStartupEnvironment(process.env, { failOnBlocking: true });
+// Capture the issue list so /health can re-surface lingering config problems
+// at runtime (see startupEnvResult snapshot near the health route below).
+const startupEnvIssues = validateStartupEnvironment(process.env, { failOnBlocking: true });
 
 // ── Process-level error handlers ───────────────────────────
 // Prevent the process from silently crashing on unhandled
@@ -843,6 +845,16 @@ const HEALTH_CACHE_TTL_MS = parseInt(process.env.HEALTH_CACHE_TTL_MS || '5000', 
 // that hits /health before startServer runs gets a sane shape.
 let oauthBootResult = { checked: false, mismatch: false, issues: [] };
 
+// ── Startup-environment snapshot ───────────────────────────
+// Captured once at module load by validateStartupEnvironment (see top of
+// file). Surfaced in the full /health report so the broader config validator
+// findings (missing/placeholder secrets, malformed URLs, out-of-range numeric
+// settings) stay visible at runtime instead of vanishing into boot logs.
+const startupEnvResult = {
+    checked: true,
+    issues: Array.isArray(startupEnvIssues) ? startupEnvIssues : [],
+};
+
 async function getCachedOrFresh(cacheKey, fetcher) {
     const cached = healthCache.get(cacheKey);
     if (cached && (Date.now() - cached.at) < HEALTH_CACHE_TTL_MS) {
@@ -915,6 +927,7 @@ app.get(['/health', '/api/health'], async (_req, res) => {
         posthog: getPostHogStatus(),
         coworkHealth,
         googleOAuth: oauthBootResult,
+        startupEnv: startupEnvResult,
     }));
     sendHealthReport(res, report);
 });
