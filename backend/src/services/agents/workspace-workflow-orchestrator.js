@@ -119,7 +119,7 @@ function buildWorkspaceWorkflowJob(params = {}) {
   });
 
   const subTasks = planToSubTasks(plan, goal);
-  const workflowPattern = subTasks.length >= 3 ? 'fork_join' : 'chain';
+  const workflowPattern = subTasks.length > 3 ? 'fork_join' : 'chain';
   const systemContract = [
     buildExecutionProfilePrompt(executionProfile),
     buildUserIntentAlignmentPrompt(intentAlignmentProfile),

@@ -22,6 +22,19 @@ test('agent runtime hardening matrix stays inactive for ordinary chat', () => {
   assert.deepEqual(matrix.lanes, []);
 });
 
+test('agent runtime hardening matrix does not activate for ordinary long-running software work', () => {
+  const goal = 'Implement auth module with tests and deploy to staging';
+  const openclawProfile = openclawCapabilityKernel.buildCapabilityProfile({ prompt: goal });
+  const matrix = buildAgentRuntimeHardeningMatrix({
+    goal,
+    executionProfile: buildExecutionProfile({ goal }),
+    openclawProfile,
+  });
+
+  assert.equal(openclawProfile.signals.likelyLongRunning, true);
+  assert.equal(matrix.active, false);
+});
+
 test('agent runtime hardening matrix builds lanes for agent improvement work', () => {
   const goal = 'Sigamos mejorando los agentes del sofware';
   const matrix = buildAgentRuntimeHardeningMatrix({
