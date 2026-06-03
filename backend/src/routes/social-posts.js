@@ -116,7 +116,6 @@ router.post(
       const batchId = crypto.randomUUID();
       const referenceImages = Array.isArray(req.body.referenceImages) ? req.body.referenceImages.slice(0, 8) : [];
 
-      const posts = [];
       const rows = buildSeriesPostData({
         userId: req.user.id,
         prompt: req.body.prompt,
@@ -127,12 +126,11 @@ router.post(
         batchId,
         referenceImages,
       });
-      for (const data of rows) {
-        const post = await prisma.scheduledPost.create({
-          data,
-        });
-        posts.push(post);
-      }
+      // Single round trip instead of up to 60 sequential INSERTs. The rows are
+      // independent flat records, so createManyAndReturn (Postgres) yields the
+      // same created posts (with ids) in input order that the per-row create
+      // loop produced.
+      const posts = await prisma.scheduledPost.createManyAndReturn({ data: rows });
 
       res.status(201).json({ batchId, posts });
     } catch (err) {
