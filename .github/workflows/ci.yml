@@ -204,11 +204,11 @@ jobs:
       MAX_FILE_SIZE: 50
       UPLOAD_DIR: uploads
       # passport-google-oauth20 requires non-empty clientID/clientSecret at
-      # module-load (throws from src/config/passport.js). Dummies keep the
+      # module-load (throws from src/config/passport.js). Smoke-only values keep the
       # Google strategy wireable so the Express app can boot; OAuth flows
       # are not exercised by the smoke test.
-      GOOGLE_CLIENT_ID: ci-dummy-google-client-id.apps.googleusercontent.com
-      GOOGLE_CLIENT_SECRET: ci-dummy-google-client-secret
+      GOOGLE_CLIENT_ID: 123456789012-ci-smoke-oauth.apps.googleusercontent.com
+      GOOGLE_CLIENT_SECRET: ciSmokeOauthSecret0123456789abcdef
       GOOGLE_AUTH_URI: http://localhost:5000/api/auth/google/callback
       GOOGLE_REDIRECT_URI: http://localhost:5000/api/auth/gmail/callback
       GOOGLE_REDIRECT_CALENDAR_DRIVE_URI: http://localhost:5000/api/auth/google-services/callback
