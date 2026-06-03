@@ -32,22 +32,25 @@ Boot architecture: `backend/index.js` calls `startServer()` at the very bottom, 
 `app.listen()` only fires after ALL module requires + ~700 lines of middleware
 setup complete. The port cannot open until the whole module graph loads.
 
-## Replit injects PORT=5000 and routes external 80 to it — app MUST listen on PORT
-In Reserved VM (and Autoscale) deployments, Replit injects `PORT=5000` into the
-container and routes external port 80 to **that injected PORT**, regardless of what
-`[[ports]]` declares as `localPort`. If the app listens on any other port (e.g.,
-hard-coded 3000 via `FRONTEND_PORT=3000`), the health-check fails:
-"a port configuration was specified but the required port was never opened, expected port 5000".
+## Deploy health-check probes the [[ports]] localPort mapped to externalPort=80 — NOT the injected PORT
+The deploy health-check expects the app to open the `localPort` from the `.replit`
+`[[ports]]` entry whose `externalPort = 80`. Replit ALSO injects `PORT=5000` as a
+container default, but that value does NOT drive the health-check — it is a red herring.
+The frontend must listen on the `[[ports]]` localPort (currently 3000), which the run
+command pins via `FRONTEND_PORT=3000`.
 
-**Fix in `scripts/start-all.cjs`:** When `REPLIT_DEPLOYMENT=1`, resolve `FRONTEND_PORT`
-as `process.env.PORT || process.env.FRONTEND_PORT || 3000` so the injected PORT wins
-over the run-command's `FRONTEND_PORT=3000` override. In dev, FRONTEND_PORT takes
-priority (keeps Next.js on 3000 as the dev workflow expects).
+**Symptom history (this repo):** Originally a second artifact (sira-promo video) declared
+a port-5000 → externalPort=80 mapping, so the health-check expected 5000 while Next.js
+ran on 3000 → "required port was never opened, expected port 5000". After the user removed
+the port-5000 mapping in Networking, `[[ports]]` had only `3000 → 80`, so the health-check
+expects **3000**. Briefly making `start-all.cjs` use the injected `PORT` (5000) flipped the
+failure to "expected port 3000". The correct fix is the simple `FRONTEND_PORT || 3000`.
 
-**Why:** The `.replit` run command hard-codes `FRONTEND_PORT=3000` for dev compatibility,
-but in production Replit's container infrastructure injects PORT=5000 and routes to it.
-The `[[ports]]` `localPort` declaration is only metadata; routing is driven by the
-injected PORT env var.
+**Fix in `scripts/start-all.cjs`:** `const FRONTEND_PORT = Number(process.env.FRONTEND_PORT || 3000);`
+Do NOT prefer `process.env.PORT` — it is 5000 and does not match the `[[ports]]` mapping.
+
+**Why:** routing/health-check is driven by `[[ports]]` localPort↔externalPort=80, and the
+run command sets FRONTEND_PORT to match. Keep them in lockstep; the injected PORT is noise.
 
 ## Reserved VM (& Autoscale) allow only ONE external port
 A Reserved VM / Autoscale deployment exposes exactly ONE external port. `.replit`

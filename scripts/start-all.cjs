@@ -38,17 +38,15 @@ const USE_EXTERNAL_BACKEND =
     !isLoopbackBackendUrl(EXTERNAL_BACKEND_URL) &&
     process.env.REPLIT_BACKEND_MODE !== "sidecar");
 const BACKEND_PROXY_URL = USE_EXTERNAL_BACKEND ? EXTERNAL_BACKEND_URL : LOCAL_BACKEND_URL;
-// In production deployments Replit injects PORT (typically 5000) into the
-// container and routes external port 80 to that injected PORT value.  The
-// frontend MUST listen on it, otherwise the health-check times out with
-// "required port was never opened, expected port 5000".
-// The run command in .replit sets FRONTEND_PORT=3000 for dev compatibility,
-// but in deployment we give precedence to the Replit-injected PORT.
-// In dev (REPLIT_DEPLOYMENT unset), FRONTEND_PORT takes priority so the
-// dev workflow keeps running on 3000 as configured.
-const FRONTEND_PORT = process.env.REPLIT_DEPLOYMENT === "1"
-  ? Number(process.env.PORT || process.env.FRONTEND_PORT || 3000)
-  : Number(process.env.FRONTEND_PORT || process.env.PORT || 3000);
+// Replit's deploy health-check probes the localPort declared in .replit's
+// [[ports]] entry that maps to externalPort=80 (currently 3000), and the run
+// command sets FRONTEND_PORT=3000 to match. We honor FRONTEND_PORT so the
+// frontend opens exactly the port Replit probes.
+// NOTE: Replit also injects PORT=5000 as a container default, but that value
+// does NOT match the [[ports]] mapping (3000 → 80), so we must NOT use it for
+// the frontend — doing so makes the health-check fail with
+// "required port was never opened, expected port 3000".
+const FRONTEND_PORT = Number(process.env.FRONTEND_PORT || 3000);
 const BACKEND_READY_TIMEOUT_MS = Number(process.env.BACKEND_READY_TIMEOUT_MS || 120_000);
 
 let backend = null;
