@@ -25,3 +25,16 @@ would leak state across test files in the single CI `node --test` run).
 `isActive: DEFAULT_ACTIVE_IMAGE_MODEL_NAMES.has(name)` seeding and the guarded
 one-time `updateMany`; the picker/generate gate stays curated-allow-list based
 (`curateVisibleAdminMediaModels` must never surface broken entries).
+
+## Concurrency: findMany→create race (P2002)
+
+`ensureStaticCatalogModels` does a `findMany` to compute existing names, then
+`create`s the missing rows. Because it runs on the hot path (`/ai/models` read,
+`/admin/models/sync`), two requests can both miss a row and race to create it —
+the loser throws Prisma `P2002` (unique constraint on `name`) and the whole
+"Get models" request 500s.
+
+**Rule:** wrap the create in try/catch; on `err.code === 'P2002'` fall back to an
+`update` WITHOUT `isActive` (treat as "already created", preserve admin state);
+rethrow any non-P2002 error. Do not assume findMany results are still accurate by
+the time you write.

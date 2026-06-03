@@ -85,3 +85,69 @@ test('static image catalog updates metadata but preserves activation state for n
   }
   assert.strictEqual(updateManyOps[0].args.data.isActive, true);
 });
+
+test('concurrent create race (P2002) falls back to a metadata update', async () => {
+  const operations = [];
+  const service = new ModelSyncService({
+    prismaClient: {
+      aiModel: {
+        async findMany() {
+          // Simulate a fresh DB: nothing exists yet, so every model takes the
+          // create path.
+          return [];
+        },
+        async update(args) {
+          operations.push({ op: 'update', args });
+          return args;
+        },
+        async create(args) {
+          operations.push({ op: 'create', args });
+          // A competing request already created this row between findMany and
+          // create — Prisma raises a unique-constraint violation.
+          const err = new Error('Unique constraint failed on the fields: (`name`)');
+          err.code = 'P2002';
+          throw err;
+        },
+        async updateMany(args) {
+          operations.push({ op: 'updateMany', args });
+          return { count: 0 };
+        },
+      },
+    },
+  });
+
+  const result = await service.ensureStaticCatalogModels({ types: ['IMAGE'] });
+
+  // Every create lost the race and was recovered via update — no throw escapes.
+  assert.strictEqual(result.count, EXPECTED_IMAGE_MODELS.length);
+  assert.strictEqual(result.created, 0);
+  assert.strictEqual(result.updated, EXPECTED_IMAGE_MODELS.length);
+  assert.strictEqual(operations.filter(item => item.op === 'create').length, EXPECTED_IMAGE_MODELS.length);
+  assert.strictEqual(operations.filter(item => item.op === 'update').length, EXPECTED_IMAGE_MODELS.length);
+  // The P2002 fallback update must never touch isActive (preserve admin state).
+  for (const op of operations.filter(item => item.op === 'update')) {
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(op.args.data, 'isActive'), false);
+  }
+});
+
+test('non-P2002 create errors still propagate', async () => {
+  const service = new ModelSyncService({
+    prismaClient: {
+      aiModel: {
+        async findMany() { return []; },
+        async update() { throw new Error('update should not be called'); },
+        async create() {
+          const err = new Error('database is on fire');
+          err.code = 'P1001';
+          throw err;
+        },
+        async updateMany() { return { count: 0 }; },
+      },
+    },
+  });
+
+  await assert.rejects(
+    () => service.ensureStaticCatalogModels({ types: ['IMAGE'] }),
+    /database is on fire/,
+  );
+});

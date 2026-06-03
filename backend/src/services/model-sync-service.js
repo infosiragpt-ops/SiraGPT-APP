@@ -570,17 +570,34 @@ class ModelSyncService {
         continue;
       }
 
-      await this.prisma.aiModel.create({
-        data: {
-          name: model.name,
-          ...data,
-          // Curated, verified IMAGE models seed ACTIVE so they are immediately
-          // selectable in the picker (across OpenAI/Gemini/OpenRouter/fal.ai).
-          // Everything else seeds inactive and stays admin-controlled.
-          isActive: DEFAULT_ACTIVE_IMAGE_MODEL_NAMES.has(model.name),
-        },
-      });
-      created++;
+      try {
+        await this.prisma.aiModel.create({
+          data: {
+            name: model.name,
+            ...data,
+            // Curated, verified IMAGE models seed ACTIVE so they are immediately
+            // selectable in the picker (across OpenAI/Gemini/OpenRouter/fal.ai).
+            // Everything else seeds inactive and stays admin-controlled.
+            isActive: DEFAULT_ACTIVE_IMAGE_MODEL_NAMES.has(model.name),
+          },
+        });
+        created++;
+      } catch (err) {
+        // Concurrency guard: this method runs on the hot path (/ai/models read,
+        // /admin/models/sync) so two requests can both miss the row in findMany
+        // and race to create it. The loser hits a P2002 unique-constraint
+        // violation on `name`. Treat that as "already created" and fall back to
+        // a metadata update WITHOUT isActive, preserving admin activation state.
+        if (err && err.code === 'P2002') {
+          await this.prisma.aiModel.update({
+            where: { name: model.name },
+            data,
+          });
+          updated++;
+        } else {
+          throw err;
+        }
+      }
     }
 
     // One-time-per-process reactivation of the curated default IMAGE set, even
