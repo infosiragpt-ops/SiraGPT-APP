@@ -1668,7 +1668,30 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               if (initialFiles && initialFiles.length > 0) {
                 (imageGenerationPayload as any).fileId = resolveAttachmentId(initialFiles[0]);
               }
-              await apiClient.generateImage(imageGenerationPayload);
+              {
+                const imageRequestStartedAt = Date.now();
+                try {
+                  await apiClient.generateImage(imageGenerationPayload);
+                } catch (genError: any) {
+                  const status = genError?.status ?? genError?.statusCode;
+                  const elapsed = Date.now() - imageRequestStartedAt;
+                  // El edge proxy de la Reserved VM corta la conexión a los
+                  // ~30s mientras el backend sigue generando y persiste la
+                  // imagen en el chat; en ese caso sondeamos hasta que aparezca
+                  // y recargamos el chat. Cualquier otro error se propaga.
+                  const connectionCut = !status && !genError?.code && elapsed >= 25000;
+                  if (!connectionCut) {
+                    throw genError;
+                  }
+                  const outcome = await apiClient.waitForGeneratedImage(newChat.id, imageRequestStartedAt);
+                  if (outcome === 'timeout') {
+                    throw genError;
+                  }
+                  // 'image' o 'error' ya quedaron persistidos en el chat;
+                  // recargamos para que el usuario vea la imagen o el aviso.
+                  await selectChat(newChat.id);
+                }
+              }
               break;
             case 'video':
               await addVideoMessage(initialContent, [], newChat);

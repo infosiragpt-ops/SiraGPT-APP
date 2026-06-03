@@ -5876,6 +5876,7 @@ router.post(
   authenticateToken,
   requirePaidPlan({ feature: 'image_generation' }),
   async (req, res) => {
+    const requestStartedAt = Date.now();
     const requestAbortController = new AbortController();
     let clientDisconnected = false;
     // Declarado FUERA del try para que el bloque catch pueda invocarlo
@@ -5883,10 +5884,28 @@ router.post(
     // scope dentro del catch). Se reasigna cuando arrancamos el
     // heartbeat; mientras tanto es un no-op seguro.
     let stopKeepAlive = () => {};
+    // Cuando hay un chatId válido la imagen se persiste como mensaje del
+    // chat, así que la generación debe SOBREVIVIR a un corte de conexión.
+    // El Load Balancer de la Reserved VM (GCE/GCLB) corta cualquier request
+    // a los ~30s y la imagen suele tardar más; ese timeout es un límite duro
+    // del tiempo total de respuesta que los heartbeats NO resetean. En ese
+    // caso NO abortamos al proveedor: dejamos que termine y guarde el
+    // resultado en el chat, y el frontend lo recupera por polling.
+    let detachOnDisconnect = false;
+    let persistChatId = null;
     res.on('close', () => {
       if (!res.writableEnded) {
         clientDisconnected = true;
-        requestAbortController.abort();
+        // Una desconexión ANTES del corte del proxy (~30s) es una cancelación
+        // real del usuario → abortamos al proveedor para no malgastar la cuota
+        // ni persistir una imagen que el usuario ya no quiere. Una caída a los
+        // ~30s con un chat válido es el corte del Load Balancer → dejamos que
+        // la generación termine y persista (detachOnDisconnect).
+        const elapsed = Date.now() - requestStartedAt;
+        const proxyCutWindow = detachOnDisconnect && elapsed >= 28000;
+        if (!proxyCutWindow) {
+          requestAbortController.abort();
+        }
       }
       stopKeepAlive();
     });
@@ -6042,6 +6061,13 @@ router.post(
         }
       }
 
+      // Con un chat válido podemos persistir el resultado, así que a partir
+      // de aquí la generación continúa aunque el cliente (o el edge proxy a
+      // los ~30s) cierre la conexión. persistChatId se usa en el catch
+      // (donde `chatId` del try no está en scope) para registrar un error.
+      detachOnDisconnect = Boolean(chatId && preValidatedChat);
+      if (detachOnDisconnect) persistChatId = chatId;
+
       // --- Keep-alive del proxy de ingreso ---------------------------------
       // El edge de Replit Autoscale corta cualquier petición que no haya
       // empezado a enviar headers de respuesta en ~30 s. La generación de
@@ -6145,7 +6171,14 @@ router.post(
         throw new Error('Image provider did not return any image data.');
       }
 
-      if (clientDisconnected || requestAbortController.signal.aborted) {
+      // Si el usuario canceló de verdad (abort explícito) no persistimos.
+      // Pero un simple cierre de conexión con chat válido (detachOnDisconnect)
+      // NO debe descartar la imagen: seguimos para guardarla en el chat.
+      if (requestAbortController.signal.aborted) {
+        console.log('Image generation cancelled by client before persistence.');
+        return;
+      }
+      if (clientDisconnected && !detachOnDisconnect) {
         console.log('Image generation cancelled by client before persistence.');
         return;
       }
@@ -6208,24 +6241,53 @@ router.post(
       // con el payload JSON real (los espacios de heartbeat al inicio
       // son whitespace válido para JSON.parse).
       stopKeepAlive();
-      res.end(JSON.stringify({
-        imageUrl: primaryImageUrl,
-        imageUrls: generatedFiles.map((file) => file.url),
-        aspectRatio,
-        quality,
-        imageCount: generatedFiles.length,
-        tokens: 1000 * generatedFiles.length,
-        usage: usagePayloadFor(updatedUser)
-      }));
+      // Si el cliente ya se desconectó (corte del edge proxy a los ~30s) la
+      // imagen ya quedó persistida en el chat y el frontend la recupera por
+      // polling; escribir en un socket cerrado lanzaría un error, así que
+      // solo cerramos la respuesta cuando la conexión sigue viva.
+      if (!clientDisconnected && !res.writableEnded) {
+        res.end(JSON.stringify({
+          imageUrl: primaryImageUrl,
+          imageUrls: generatedFiles.map((file) => file.url),
+          aspectRatio,
+          quality,
+          imageCount: generatedFiles.length,
+          tokens: 1000 * generatedFiles.length,
+          usage: usagePayloadFor(updatedUser)
+        }));
+      }
 
     } catch (error) {
       stopKeepAlive();
-      if (clientDisconnected || requestAbortController.signal.aborted || error?.name === 'AbortError') {
+      // Cancelación REAL del usuario (abort explícito): no persistimos nada.
+      const wasRealAbort = requestAbortController.signal.aborted || error?.name === 'AbortError';
+      if (wasRealAbort) {
         console.log('Image generation request aborted by client.');
         if (!res.writableEnded) res.end();
         return;
       }
       console.error('Image generation error:', error);
+      // El cliente se fue (corte del edge proxy) pero teníamos un chat para
+      // persistir: dejamos constancia del fallo como mensaje del asistente
+      // para que el polling del frontend lo muestre en vez de colgarse.
+      if (clientDisconnected && detachOnDisconnect && persistChatId) {
+        try {
+          await prisma.message.create({
+            data: {
+              chatId: persistChatId,
+              role: 'ASSISTANT',
+              content: `⚠️ No se pudo generar la imagen: ${error.message || 'error desconocido'}`,
+            },
+          });
+        } catch (persistErr) {
+          console.error('Failed to persist image-generation error message:', persistErr);
+        }
+        return;
+      }
+      if (clientDisconnected) {
+        if (!res.writableEnded) res.end();
+        return;
+      }
       if (!res.headersSent) {
         res.status(500).json({ error: error.message || 'Image generation failed' });
       } else if (!res.writableEnded) {

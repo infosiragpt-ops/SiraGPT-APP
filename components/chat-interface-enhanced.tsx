@@ -7982,7 +7982,39 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         payload.fileId = files[0];
       }
       setUploadedFiles([]);
-      await apiClient.generateImage(payload, { signal: controller.signal });
+      const imageRequestStartedAt = Date.now();
+      try {
+        await apiClient.generateImage(payload, { signal: controller.signal });
+      } catch (genError: any) {
+        const status = genError?.status ?? genError?.statusCode;
+        const userAborted = controller.signal.aborted || genError?.name === 'AbortError';
+        const elapsed = Date.now() - imageRequestStartedAt;
+        // El edge proxy de la Reserved VM corta la conexión a los ~30s
+        // (status 0 / sin status) mientras el backend sigue generando y
+        // persiste la imagen en el chat. Solo en ese caso hacemos polling;
+        // los errores HTTP reales (4xx/5xx) y la cancelación del usuario se
+        // delegan al catch externo.
+        const connectionCut = !status && !userAborted && !genError?.code && elapsed >= 25000;
+        if (!connectionCut) {
+          throw genError;
+        }
+        const outcome = await apiClient.waitForGeneratedImage(activeChatId, imageRequestStartedAt, {
+          signal: controller.signal,
+        });
+        if (outcome === 'error') {
+          // El backend persistió el fallo como mensaje del chat: recargamos
+          // para mostrarlo y avisamos, sin pasar por el catch externo (el
+          // mensaje de error ya está en el hilo).
+          if (currentChatIdRef.current === activeChatId) {
+            await selectChat(activeChatId);
+          }
+          toast.error('No se pudo generar la imagen. Inténtalo de nuevo.');
+          return;
+        }
+        if (outcome !== 'image') {
+          throw genError;
+        }
+      }
 
       if (!controller.signal.aborted) {
         if (currentChatIdRef.current === activeChatId) {

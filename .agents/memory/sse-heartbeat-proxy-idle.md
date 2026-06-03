@@ -15,6 +15,12 @@ before the first model token.
 that silent pre-first-token window. It was 15s; a 6.3s first-token turn sent zero
 heartbeats in that gap, so an idle proxy reset the socket. Set to 5s.
 
+**Scope caveat:** this whole note assumes an **idle/time-to-first-byte** proxy
+timeout (Autoscale edge). On a **Reserved VM**, the fronting GCLB enforces a
+*hard total-response* ~30s limit that heartbeats do NOT reset — see
+`reserved-vm-gclb-timeout.md`. Don't rely on heartbeats to survive >30s
+operations on Reserved VM; persist-then-poll instead.
+
 **Why:** when the socket resets mid-handshake, the symptom chain in prod logs is:
 1. `[Error: aborted] { code: 'ECONNRESET' }` — logged by the **Next.js** process
    (no `[backend]` prefix); it's the rewrites proxy's upstream connection.

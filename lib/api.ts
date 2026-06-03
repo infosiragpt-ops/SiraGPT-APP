@@ -1350,6 +1350,51 @@ class ApiClient {
     return response
   }
 
+  // El Load Balancer de la Reserved VM corta la petición a los ~30s, pero el
+  // backend sigue generando y persiste la imagen (o un mensaje de error) en el
+  // chat. Cuando el POST se corta, sondeamos el chat hasta que aparezca un
+  // mensaje del asistente con una imagen posterior a `sinceMs` (o se agote el
+  // tiempo). Devuelve 'image' si la imagen está lista, 'error' si el backend
+  // persistió un fallo, o 'timeout' si se agotó el tiempo / se canceló.
+  async waitForGeneratedImage(
+    chatId: string,
+    sinceMs: number,
+    options: { signal?: AbortSignal; timeoutMs?: number; intervalMs?: number } = {},
+  ): Promise<'image' | 'error' | 'timeout'> {
+    const timeoutMs = options.timeoutMs ?? 210000;
+    const intervalMs = options.intervalMs ?? 3000;
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (options.signal?.aborted) return 'timeout';
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+      if (options.signal?.aborted) return 'timeout';
+      try {
+        const resp: any = await this.getChat(chatId);
+        const messages: any[] = resp?.chat?.messages || [];
+        for (const m of messages) {
+          if (String(m?.role || '').toUpperCase() !== 'ASSISTANT') continue;
+          const ts = m?.timestamp ? new Date(m.timestamp).getTime() : 0;
+          if (ts && ts < sinceMs - 5000) continue;
+          let files: any = m?.files;
+          if (typeof files === 'string') {
+            try { files = JSON.parse(files); } catch { files = []; }
+          }
+          const hasImage = Array.isArray(files)
+            && files.some((f: any) => f && f.type === 'image' && (f.url || f.fileId));
+          if (hasImage) return 'image';
+          // El backend persiste los fallos post-desconexión como un mensaje
+          // del asistente con este texto; lo detectamos para salir rápido en
+          // vez de esperar al timeout completo.
+          const content = typeof m?.content === 'string' ? m.content : '';
+          if (content.includes('No se pudo generar la imagen')) return 'error';
+        }
+      } catch {
+        /* transient network/auth hiccup — keep polling */
+      }
+    }
+    return 'timeout';
+  }
+
   async generateGmailResponse(data: { prompt: string; chatId?: string; model: string; type: string }) {
     const response = await this.request('/ai/generate-gmail', {
       method: 'POST',
