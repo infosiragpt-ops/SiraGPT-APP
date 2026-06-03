@@ -238,7 +238,7 @@ describe('Gmail OAuth callback route — integration smoke', () => {
     assert.match(res.text, /invalid_state/);
   });
 
-  it('GET /api/auth/gmail/callback — token exchange throws redirect_uri_mismatch → meaningful HTML error', async () => {
+  it('GET /api/auth/gmail/callback — token exchange throws redirect_uri_mismatch → HTML error with redirect_uri_mismatch token', async () => {
     const redirectErr = Object.assign(new Error('redirect_uri_mismatch'), {
       code: 400,
       response: { data: { error: 'redirect_uri_mismatch' } },
@@ -254,8 +254,68 @@ describe('Gmail OAuth callback route — integration smoke', () => {
       .expect(200);
 
     assert.match(res.headers['content-type'], /text\/html/);
+    assert.match(res.text, /redirect_uri_mismatch/,
+      'redirect_uri_mismatch must surface as its own error token, not a silent empty page');
+    assert.doesNotMatch(res.text, /success/);
+  });
+
+  it('GET /api/auth/gmail/callback — token exchange throws invalid_grant → HTML error with invalid_grant token', async () => {
+    const grantErr = Object.assign(new Error('invalid_grant'), {
+      code: 400,
+      response: { data: { error: 'invalid_grant' } },
+    });
+    const appGrantErr = buildApp(
+      makeGmailService({ oauth2Client: makeOAuth2Client({ throwOnGetToken: grantErr }) }),
+      makeGoogleServicesService(),
+    );
+
+    const state = validGmailState('user-grant');
+    const res = await request(appGrantErr)
+      .get(`/api/auth/gmail/callback?code=EXPIREDCODE&state=${encodeURIComponent(state)}`)
+      .expect(200);
+
+    assert.match(res.headers['content-type'], /text\/html/);
+    assert.match(res.text, /invalid_grant/,
+      'invalid_grant must surface as its own error token');
+    assert.doesNotMatch(res.text, /success/);
+  });
+
+  it('GET /api/auth/gmail/callback — token exchange throws access_denied → HTML error with access_denied token', async () => {
+    const deniedErr = Object.assign(new Error('access_denied'), {
+      code: 400,
+      response: { data: { error: 'access_denied' } },
+    });
+    const appDenied = buildApp(
+      makeGmailService({ oauth2Client: makeOAuth2Client({ throwOnGetToken: deniedErr }) }),
+      makeGoogleServicesService(),
+    );
+
+    const state = validGmailState('user-denied');
+    const res = await request(appDenied)
+      .get(`/api/auth/gmail/callback?code=ANYCODE&state=${encodeURIComponent(state)}`)
+      .expect(200);
+
+    assert.match(res.headers['content-type'], /text\/html/);
+    assert.match(res.text, /access_denied/,
+      'access_denied must surface as its own error token');
+    assert.doesNotMatch(res.text, /success/);
+  });
+
+  it('GET /api/auth/gmail/callback — unknown token exchange error → generic HTML error (auth_failed)', async () => {
+    const unknownErr = new Error('Something unexpected from network');
+    const appUnknown = buildApp(
+      makeGmailService({ oauth2Client: makeOAuth2Client({ throwOnGetToken: unknownErr }) }),
+      makeGoogleServicesService(),
+    );
+
+    const state = validGmailState('user-unknown');
+    const res = await request(appUnknown)
+      .get(`/api/auth/gmail/callback?code=ANYCODE&state=${encodeURIComponent(state)}`)
+      .expect(200);
+
+    assert.match(res.headers['content-type'], /text\/html/);
     assert.match(res.text, /auth_failed/,
-      'A redirect_uri_mismatch must surface as a meaningful error, not a silent empty page');
+      'Unknown errors must collapse to the generic auth_failed token');
     assert.doesNotMatch(res.text, /success/);
   });
 
@@ -337,9 +397,10 @@ describe('Google Services OAuth callback route — integration smoke', () => {
     assert.match(res.text, /invalid_state/);
   });
 
-  it('GET /api/auth/google-services/callback — token exchange throws redirect_uri_mismatch → meaningful HTML error', async () => {
+  it('GET /api/auth/google-services/callback — token exchange throws redirect_uri_mismatch → HTML error with redirect_uri_mismatch token', async () => {
     const redirectErr = Object.assign(new Error('redirect_uri_mismatch'), {
       code: 400,
+      response: { data: { error: 'redirect_uri_mismatch' } },
     });
     const appMisconfigured = buildApp(
       makeGmailService(),
@@ -354,8 +415,74 @@ describe('Google Services OAuth callback route — integration smoke', () => {
       .expect(200);
 
     assert.match(res.headers['content-type'], /text\/html/);
+    assert.match(res.text, /redirect_uri_mismatch/,
+      'redirect_uri_mismatch must surface as its own error token, not a silent empty page');
+    assert.doesNotMatch(res.text, /success/);
+  });
+
+  it('GET /api/auth/google-services/callback — token exchange throws invalid_grant → HTML error with invalid_grant token', async () => {
+    const grantErr = Object.assign(new Error('invalid_grant'), {
+      code: 400,
+      response: { data: { error: 'invalid_grant' } },
+    });
+    const appGrantErr = buildApp(
+      makeGmailService(),
+      makeGoogleServicesService({
+        oauth2Client: makeOAuth2Client({ throwOnGetToken: grantErr }),
+      }),
+    );
+
+    const state = validGoogleServicesState('user-gs-grant');
+    const res = await request(appGrantErr)
+      .get(`/api/auth/google-services/callback?code=EXPIREDCODE&state=${encodeURIComponent(state)}`)
+      .expect(200);
+
+    assert.match(res.headers['content-type'], /text\/html/);
+    assert.match(res.text, /invalid_grant/,
+      'invalid_grant must surface as its own error token');
+    assert.doesNotMatch(res.text, /success/);
+  });
+
+  it('GET /api/auth/google-services/callback — token exchange throws access_denied → HTML error with access_denied token', async () => {
+    const deniedErr = Object.assign(new Error('access_denied'), {
+      code: 400,
+      response: { data: { error: 'access_denied' } },
+    });
+    const appDenied = buildApp(
+      makeGmailService(),
+      makeGoogleServicesService({
+        oauth2Client: makeOAuth2Client({ throwOnGetToken: deniedErr }),
+      }),
+    );
+
+    const state = validGoogleServicesState('user-gs-denied');
+    const res = await request(appDenied)
+      .get(`/api/auth/google-services/callback?code=ANYCODE&state=${encodeURIComponent(state)}`)
+      .expect(200);
+
+    assert.match(res.headers['content-type'], /text\/html/);
+    assert.match(res.text, /access_denied/,
+      'access_denied must surface as its own error token');
+    assert.doesNotMatch(res.text, /success/);
+  });
+
+  it('GET /api/auth/google-services/callback — unknown token exchange error → generic HTML error (auth_failed)', async () => {
+    const unknownErr = new Error('Something unexpected from network');
+    const appUnknown = buildApp(
+      makeGmailService(),
+      makeGoogleServicesService({
+        oauth2Client: makeOAuth2Client({ throwOnGetToken: unknownErr }),
+      }),
+    );
+
+    const state = validGoogleServicesState('user-gs-unknown');
+    const res = await request(appUnknown)
+      .get(`/api/auth/google-services/callback?code=ANYCODE&state=${encodeURIComponent(state)}`)
+      .expect(200);
+
+    assert.match(res.headers['content-type'], /text\/html/);
     assert.match(res.text, /auth_failed/,
-      'A redirect_uri_mismatch must surface as a meaningful error, not a silent empty page');
+      'Unknown errors must collapse to the generic auth_failed token');
     assert.doesNotMatch(res.text, /success/);
   });
 
