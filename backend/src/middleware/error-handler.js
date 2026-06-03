@@ -6,6 +6,7 @@ const { validationResult } = require('express-validator');
 const { logger: defaultLogger } = require('./logger');
 const { getRequestId } = require('./request-id');
 const { redactPayloadDeep } = require('../utils/log-redaction');
+const { redactErrorMessage } = require('../utils/secret-redactor');
 
 function statusMessage(statusCode) {
   return http.STATUS_CODES[statusCode] || 'Request failed';
@@ -164,6 +165,14 @@ function classifyKnownError(err) {
   if (!err || typeof err !== 'object') return null;
   const name = err.name || '';
   const code = err.code || '';
+  if (err.isStripeOperationalError) {
+    return {
+      statusCode: err.statusCode || 503,
+      code: err.code || 'stripe_provider_error',
+      error: err.publicError || 'Payment provider unavailable',
+      message: err.publicMessage || 'Payment processing is temporarily unavailable. Please contact support.',
+    };
+  }
   // ZodError — schema validation. ZodError instances always have an
   // `issues` array. Surface the first issue's path + message.
   if (name === 'ZodError' && Array.isArray(err.issues)) {
@@ -194,13 +203,13 @@ function classifyKnownError(err) {
   // Stripe — every Stripe error subclasses StripeError and exposes `type`.
   // Status codes follow Stripe's HTTP semantics.
   if (name === 'StripeCardError' || err.type === 'StripeCardError') {
-    return { statusCode: 402, code: 'card_declined', error: 'Payment required', message: err.message || 'Card declined' };
+    return { statusCode: 402, code: 'card_declined', error: 'Payment required', message: redactErrorMessage(err) || 'Card declined' };
   }
   if (name === 'StripeInvalidRequestError' || err.type === 'StripeInvalidRequestError') {
-    return { statusCode: 400, code: 'stripe_invalid_request', error: 'Bad request', message: err.message || 'Invalid payment request' };
+    return { statusCode: 400, code: 'stripe_invalid_request', error: 'Bad request', message: redactErrorMessage(err) || 'Invalid payment request' };
   }
   if (name === 'StripeAuthenticationError' || err.type === 'StripeAuthenticationError') {
-    return { statusCode: 401, code: 'stripe_authentication_error', error: 'Unauthorized', message: 'Payment provider authentication failed' };
+    return { statusCode: 503, code: 'stripe_authentication_error', error: 'Service unavailable', message: 'Payment provider authentication failed' };
   }
   if (name === 'StripeRateLimitError' || err.type === 'StripeRateLimitError') {
     return { statusCode: 429, code: 'stripe_rate_limit', error: 'Too many requests', message: 'Payment provider rate limit exceeded' };

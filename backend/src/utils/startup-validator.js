@@ -123,6 +123,13 @@ function checkApiKeyFormat(key, value, label) {
         severity: Severity.WARNING,
         message: `${label || key} format looks unusual. Expected 'sk_test_...', 'sk_live_...', 'rk_test_...', or 'rk_live_...'.`,
       });
+    } else if (!/^(sk|rk)_(test|live)_[A-Za-z0-9]+$/.test(value)) {
+      issues.push({
+        key,
+        label: label || key,
+        severity: Severity.WARNING,
+        message: `${label || key} looks masked or malformed. Paste the full Stripe secret/restricted key, not a redacted dashboard value.`,
+      });
     }
   }
 }

@@ -1,5 +1,6 @@
 const stripeService = require('../services/stripe');
 const prisma = require('../config/database');
+const { redactErrorMessage } = require('./secret-redactor');
 
 async function initializeStripeProducts() {
   try {
@@ -39,7 +40,7 @@ async function initializeStripeProducts() {
     return results;
     
   } catch (error) {
-    console.error('❌ Error initializing Stripe products:', error);
+    console.error(`[stripe-setup] Error initializing Stripe products: ${redactErrorMessage(error)}`);
     throw error;
   }
 }
