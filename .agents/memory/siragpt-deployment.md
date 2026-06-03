@@ -68,6 +68,14 @@ rewrites) and sira-promo via the `/sira-promo` proxy through the frontend —
 neither needs an external port. The dev-only 5000 never opens in prod, and 5050
 exceeds the readiness window, so both block the VM promote.
 
+**Recurrence trigger:** the `SiraGPT Video` / `sira-promo` workflow runs on port
+5000; whenever it runs, Replit auto-detects the open port and RE-ADDS the
+`5000 → 5000` external mapping to `.replit`, silently re-breaking the next VM
+promote. Symptom seen: a publish succeeds, then a later publish fails at "Waiting
+for deployment to be ready" with no code change — check `.replit` `[[ports]]` for a
+re-added 5000 external entry first. The user must remove it again before each
+publish (or avoid running the video workflow right before publishing).
+
 **How to apply:** The agent CANNOT edit `.replit` `[[ports]]` — the edit guard
 blocks it and there is NO agent callback for port mappings (verified: not in
 code_execution, workflows, or any skill). The USER must remove the extra mappings
