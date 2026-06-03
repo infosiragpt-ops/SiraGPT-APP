@@ -1810,7 +1810,7 @@ router.post(
           res.write(`: ping ${Date.now()}\n\n`);
           res.write(`data: ${JSON.stringify({ type: 'heartbeat', at: Date.now() })}\n\n`);
         } catch { clearInterval(keepAlive); keepAlive = null; }
-      }, 15000);
+      }, 5000);
 
       // ✅ Process attached files
       let processedFiles = [];
@@ -6066,7 +6066,7 @@ router.post(
       let keepAliveTimer = setInterval(() => {
         if (res.writableEnded || clientDisconnected) return;
         try { res.write(' '); } catch (_e) { /* socket already closed */ }
-      }, 15_000);
+      }, 5_000);
       keepAliveTimer.unref?.();
       stopKeepAlive = () => {
         if (keepAliveTimer) {
@@ -7816,7 +7816,7 @@ Every element should feel intentionally designed, polished, and premium. The use
         } catch {
           // Socket may already be closed by the browser.
         }
-      }, 15000);
+      }, 5000);
 
       try {
         const bufferedRes = {
