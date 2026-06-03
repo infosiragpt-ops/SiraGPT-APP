@@ -112,11 +112,22 @@ function chunk(text, { size = DEFAULT_CHUNK_SIZE * 4, overlap = DEFAULT_CHUNK_OV
 }
 
 let openaiClient = null;
+// embed() is on both the document-ingest and query-retrieval hot paths. The
+// OpenAI SDK defaults to a 10-MINUTE request timeout, so a single hung call
+// could stall RAG for that long. Bound it (SIRA_EMBED_TIMEOUT_MS, default 30s)
+// and keep the SDK's built-in idempotent retry (embeddings are idempotent).
+function _embedClientOptions() {
+  return {
+    apiKey: process.env.OPENAI_API_KEY,
+    timeout: Number.parseInt(process.env.SIRA_EMBED_TIMEOUT_MS || '30000', 10),
+    maxRetries: Number.parseInt(process.env.SIRA_EMBED_MAX_RETRIES || '2', 10),
+  };
+}
 function getOpenAI() {
   if (openaiClient) return openaiClient;
   if (!process.env.OPENAI_API_KEY) return null;
   const OpenAIClient = loadOpenAI();
-  openaiClient = new OpenAIClient({ apiKey: process.env.OPENAI_API_KEY });
+  openaiClient = new OpenAIClient(_embedClientOptions());
   return openaiClient;
 }
 
@@ -1081,6 +1092,7 @@ module.exports = {
   stats,
   cosine,        // exported for tests
   getOpenAI,     // exported so callers can pass the shared client to rerank
+  _embedClientOptions, // exported for tests
   // exported for tests / advanced callers
   fuseByRRF,
   expandWithGraph,
