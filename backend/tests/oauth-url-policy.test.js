@@ -101,6 +101,23 @@ test('GOOGLE_AUTH_BASE_URL overrides stale per-flow URI secrets pointing to a di
   assert.equal(getGoogleServicesCallbackURL(env), 'https://siragpt.com/api/auth/google-services/callback');
 });
 
+test('stale per-flow URI secrets are ignored without GOOGLE_AUTH_BASE_URL when host differs', () => {
+  // GOOGLE_AUTH_BASE_URL is not set. The stale secrets still point to the
+  // old api.siragpt.com subdomain. The cross-host detection must fire even
+  // without GOOGLE_AUTH_BASE_URL so the production fallback (siragpt.com)
+  // is used correctly.
+  const env = {
+    NODE_ENV: 'production',
+    GOOGLE_AUTH_URI: 'https://api.siragpt.com/api/auth/google/callback',
+    GOOGLE_REDIRECT_URI: 'https://api.siragpt.com/api/auth/gmail/callback',
+    GOOGLE_REDIRECT_CALENDAR_DRIVE_URI: 'https://api.siragpt.com/api/auth/google-services/callback',
+  };
+
+  assert.equal(getGoogleCallbackURL(env), 'https://siragpt.com/api/auth/google/callback');
+  assert.equal(getGoogleGmailCallbackURL(env), 'https://siragpt.com/api/auth/gmail/callback');
+  assert.equal(getGoogleServicesCallbackURL(env), 'https://siragpt.com/api/auth/google-services/callback');
+});
+
 test('GOOGLE_AUTH_BASE_URL still allows consistent per-flow URI overrides on the same host', () => {
   // When GOOGLE_AUTH_BASE_URL and the explicit URI agree on the same host,
   // the explicit URI is accepted as-is (e.g. a custom path on the same domain).
