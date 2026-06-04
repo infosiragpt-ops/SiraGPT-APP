@@ -39,10 +39,22 @@ function normalizeHostPlatform(platform = os.platform()) {
   return 'unsupported';
 }
 
+function inferProjectRootFromCwd(cwd = process.cwd()) {
+  const resolved = path.resolve(String(cwd || ''));
+  const parts = resolved.split(path.sep);
+  for (let i = parts.length - 1; i >= 0; i -= 1) {
+    if (parts[i].toLowerCase() === 'siragpt') {
+      return parts.slice(0, i + 1).join(path.sep) || path.sep;
+    }
+  }
+  return null;
+}
+
 function resolveProjectPath(env = process.env, cwd = process.cwd()) {
   return env.SIRAGPT_PROJECT_ROOT
     || env.SIRAGPT_WORKSPACE_ROOT
-    || (cwd && cwd.includes(`${path.sep}siraGPT`) ? cwd : '/Users/luis/Desktop/siraGPT');
+    || inferProjectRootFromCwd(cwd)
+    || path.join(os.homedir(), 'Desktop', 'siraGPT');
 }
 
 function buildSafeAppAliases(platform = os.platform()) {
@@ -97,4 +109,5 @@ module.exports = {
   buildSafeProjectAliases,
   findSafeApp,
   resolveProjectPath,
+  inferProjectRootFromCwd,
 };

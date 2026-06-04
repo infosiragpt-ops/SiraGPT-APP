@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const {
   buildSafeAppAliases,
   buildSafeProjectAliases,
+  inferProjectRootFromCwd,
   normalizeHostPlatform,
   resolveHostPlatformCapabilities,
 } = require('../src/services/host-platform-profile');
@@ -46,4 +47,15 @@ test('project aliases allow Linux root override', () => {
   assert.equal(project.id, 'siragpt');
   assert.equal(project.path, '/workspace/siraGPT');
   assert.ok(project.aliases.includes('siragpt'));
+});
+
+test('project root inference strips backend/test subdirectories in CI', () => {
+  assert.equal(
+    inferProjectRootFromCwd('/home/runner/work/siraGPT/siraGPT/backend'),
+    '/home/runner/work/siraGPT/siraGPT',
+  );
+  assert.equal(
+    inferProjectRootFromCwd('/Users/luis/Desktop/siraGPT/backend/tests'),
+    '/Users/luis/Desktop/siraGPT',
+  );
 });
