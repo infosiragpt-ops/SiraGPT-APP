@@ -598,6 +598,37 @@ function baseWebTools() {
       required: ['url'],
       additionalProperties: false,
     }),
+    // SUNAT / RENIEC Perú lookup. The logic lives in the filesystem skill
+    // (backend/src/skills/sunat_peru) so the same handler is reachable both
+    // here (main agentic chat) and via the skills registry; we only declare
+    // the OpenAI-style JSON Schema inline because react-agent needs a full
+    // schema, not the manifest's hint strings.
+    (() => {
+      // eslint-disable-next-line global-require
+      const sunat = require('../skills/sunat_peru/handler');
+      return {
+        name: 'sunat_peru',
+        description:
+          'Consulta datos OFICIALES del Perú en tiempo real: RUC de empresas en SUNAT (razón social, estado, condición, dirección), DNI de personas en RENIEC (nombres y apellidos) y el tipo de cambio del dólar SUNAT/SBS. Úsalo ante un RUC (11 dígitos), un DNI (8 dígitos) o una pregunta por el tipo de cambio del dólar en Perú. Devuelve datos reales verificados — nunca los inventes.',
+        parameters: {
+          type: 'object',
+          properties: {
+            tipo: {
+              type: 'string',
+              enum: ['ruc', 'dni', 'tipo_cambio'],
+              description: "Tipo de consulta: 'ruc' (empresa, 11 dígitos), 'dni' (persona, 8 dígitos) o 'tipo_cambio' (dólar SUNAT/SBS).",
+            },
+            numero: {
+              type: 'string',
+              description: 'RUC de 11 dígitos o DNI de 8 dígitos. Omitir cuando tipo = tipo_cambio.',
+            },
+          },
+          required: ['tipo'],
+          additionalProperties: false,
+        },
+        execute: async (args) => sunat.execute(args),
+      };
+    })(),
   ];
 }
 
