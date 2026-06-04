@@ -357,6 +357,80 @@ const financeProviders = [
       });
     },
   },
+  optionalKeyJsonProvider(
+    { id: "fred", name: "FRED (St. Louis Fed)", region: "usa", category: "finance", license: "requires-key", rateLimit: "Free registered key" },
+    "fred",
+    (q, opts, key) => `https://api.stlouisfed.org/fred/series/search?search_text=${encodeURIComponent(q)}&api_key=${encodeURIComponent(key)}&file_type=json&limit=${Math.min(opts.maxResults || 20, 50)}&order_by=popularity&sort_order=desc`,
+    (json) => json?.seriess,
+    (it) => result(`fred:${it.id}`, "finance", "fred", it.title, {
+      url: `https://fred.stlouisfed.org/series/${it.id}`,
+      snippet: `${it.units || ""} · ${it.frequency || ""} · ${it.observation_start || "?"}→${it.observation_end || "?"}`.trim(),
+      datePublished: it.last_updated,
+      metadata: {
+        seriesId: it.id,
+        units: it.units,
+        frequency: it.frequency,
+        seasonalAdjustment: it.seasonal_adjustment_short,
+        popularity: it.popularity,
+        notes: cleanText(it.notes || "", 400),
+      },
+    }),
+  ),
+  {
+    id: "worldbank-indicators",
+    name: "World Bank Indicators",
+    region: "global",
+    category: "finance",
+    license: "open",
+    rateLimit: "Public API",
+    requiresKey: false,
+    async search(query, opts = {}) {
+      return guardedSearch("worldbank-indicators", async () => {
+        const q = String(query || "").toLowerCase();
+        const WB_INDICATORS = [
+          { code: "NY.GDP.MKTP.CD", label: "GDP (current US$)", keywords: ["gdp", "pib", "producto interno bruto", "gross domestic"] },
+          { code: "NY.GDP.MKTP.KD.ZG", label: "GDP growth (annual %)", keywords: ["gdp growth", "crecimiento economico", "economic growth", "crecimiento del pib"] },
+          { code: "NY.GDP.PCAP.CD", label: "GDP per capita (current US$)", keywords: ["gdp per capita", "pib per capita", "income per capita", "ingreso per capita"] },
+          { code: "FP.CPI.TOTL.ZG", label: "Inflation, consumer prices (annual %)", keywords: ["inflation", "inflacion", "cpi", "consumer price", "precios al consumidor"] },
+          { code: "SL.UEM.TOTL.ZS", label: "Unemployment, total (% of labor force)", keywords: ["unemployment", "desempleo", "paro", "tasa de desempleo"] },
+          { code: "SP.POP.TOTL", label: "Population, total", keywords: ["population", "poblacion", "habitantes"] },
+          { code: "NE.EXP.GNFS.CD", label: "Exports of goods and services (current US$)", keywords: ["exports", "exportaciones"] },
+          { code: "NE.IMP.GNFS.CD", label: "Imports of goods and services (current US$)", keywords: ["imports", "importaciones"] },
+          { code: "BX.KLT.DINV.CD.WD", label: "Foreign direct investment, net inflows (current US$)", keywords: ["foreign direct investment", "fdi", "inversion extranjera"] },
+        ];
+        let matches = WB_INDICATORS.filter((ind) => ind.keywords.some((k) => q.includes(k)));
+        if (matches.length === 0) matches = [WB_INDICATORS[0]];
+        const country = String(opts.raw?.countryCode || opts.raw?.country || "WLD").toUpperCase();
+        const out = [];
+        for (const ind of matches.slice(0, 3)) {
+          let json;
+          try {
+            json = await fetchJson(`https://api.worldbank.org/v2/country/${encodeURIComponent(country)}/indicator/${ind.code}?format=json&per_page=5&mrv=5`, { timeoutMs: opts.timeoutMs });
+          } catch {
+            continue;
+          }
+          const rows = asArray(json?.[1]).filter((r) => r && r.value !== null && r.value !== undefined);
+          if (rows.length === 0) continue;
+          const latest = rows[0];
+          const countryName = latest.country?.value || country;
+          out.push(result(`worldbank-indicators:${ind.code}:${country}`, "finance", "worldbank-indicators", `${ind.label} — ${countryName}`, {
+            url: `https://data.worldbank.org/indicator/${ind.code}?locations=${country}`,
+            snippet: `${countryName} ${latest.date}: ${latest.value} (${ind.label})`,
+            datePublished: latest.date,
+            location: countryName,
+            metadata: {
+              indicatorCode: ind.code,
+              country: countryName,
+              countryCode: latest.countryiso3code || country,
+              latest: { date: latest.date, value: latest.value },
+              series: rows.map((r) => ({ date: r.date, value: r.value })),
+            },
+          }));
+        }
+        return out;
+      });
+    },
+  },
 ];
 
 const geoWeatherHealthMediaFoodProviders = [
@@ -459,7 +533,6 @@ const extraCatalog = [
   ["usaspending", "USAspending", "government", "usa", false],
   ["census", "US Census API", "government", "usa", false],
   ["bls", "BLS", "government", "usa", true],
-  ["fred", "FRED", "finance", "usa", true],
   ["nasa", "NASA APIs", "government", "usa", true],
   ["usgs", "USGS", "government", "usa", false],
   ["cdc", "CDC", "health", "usa", false],
