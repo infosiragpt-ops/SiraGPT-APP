@@ -202,6 +202,81 @@ function phaseProgressFromTools(phase, counts, unavailable) {
   };
 }
 
+function phaseToolsForRepair(phase) {
+  return unique(phase?.requiredTools?.length ? phase.requiredTools : phase?.candidateTools)
+    .filter((tool) => tool !== 'finalize');
+}
+
+function buildNextActions({ active, phaseProgress, nonFinalizeTools, unavailable, openclawActive }) {
+  if (!active) return [];
+
+  const missingCritical = phaseProgress.filter((phase) => phase.status === 'missing' && phase.critical);
+  const fallbackTools = openclawActive
+    ? ['run_tests', 'host_file']
+    : ['run_tests', 'verify_artifact', 'host_file'];
+
+  if (nonFinalizeTools.length === 0 && unavailable.size === 0) {
+    const phase = missingCritical[0] || null;
+    return [{
+      type: 'record_runtime_evidence',
+      priority: 'critical',
+      phaseId: phase?.id || null,
+      tools: phase ? phaseToolsForRepair(phase) : fallbackTools,
+      reason: 'runtime_evidence_required',
+      checkpoint: phase?.checkpoint || null,
+    }];
+  }
+
+  return missingCritical.map((phase) => ({
+    type: 'complete_phase_evidence',
+    priority: 'critical',
+    phaseId: phase.id,
+    tools: phaseToolsForRepair(phase),
+    reason: 'critical_phase_missing',
+    checkpoint: phase.checkpoint || null,
+  }));
+}
+
+function buildReadinessSummary({ active, status, degraded, phaseProgress, nonFinalizeTools, unavailable }) {
+  if (!active) {
+    return {
+      label: 'inactive',
+      score: 100,
+      evidenceRecorded: false,
+      criticalPhases: { total: 0, satisfied: 0, waived: 0, missing: 0 },
+      blockers: [],
+    };
+  }
+
+  const critical = phaseProgress.filter((phase) => phase.critical);
+  const satisfied = critical.filter((phase) => phase.status === 'satisfied').length;
+  const waived = critical.filter((phase) => phase.status === 'waived').length;
+  const missing = critical.filter((phase) => phase.status === 'missing');
+  const total = critical.length;
+  const evidenceRecorded = nonFinalizeTools.length > 0 || unavailable.size > 0;
+  const coverageScore = total > 0
+    ? Math.round(((satisfied + waived * 0.5) / total) * 100)
+    : (evidenceRecorded ? 100 : 0);
+  const score = evidenceRecorded ? coverageScore : Math.min(coverageScore, 20);
+
+  return {
+    label: status === 'blocked' ? 'blocked' : (degraded ? 'degraded_ready' : 'ready'),
+    score,
+    evidenceRecorded,
+    criticalPhases: {
+      total,
+      satisfied,
+      waived,
+      missing: missing.length,
+    },
+    blockers: missing.map((phase) => ({
+      phaseId: phase.id,
+      tools: phaseToolsForRepair(phase),
+      checkpoint: phase.checkpoint || null,
+    })),
+  };
+}
+
 function buildAutonomyProgressLedger({
   taskPlan = null,
   steps = [],
@@ -209,6 +284,7 @@ function buildAutonomyProgressLedger({
   openclawRuntimeSummary = null,
 } = {}) {
   const active = isTaskPlanActive(taskPlan, openclawRuntimeSummary);
+  const openclawActive = isOpenClawSummaryActive(openclawRuntimeSummary);
   const counts = successfulToolCalls(steps);
   const unavailable = new Set(unique(unavailableTools));
   const phaseProgress = (Array.isArray(taskPlan?.phases) ? taskPlan.phases : [])
@@ -221,12 +297,29 @@ function buildAutonomyProgressLedger({
   const status = !active
     ? 'inactive'
     : (missingPhases.length || (nonFinalizeTools.length === 0 && unavailable.size === 0) ? 'blocked' : 'ready');
+  const degraded = waivedPhases.length > 0 || unavailable.size > 0;
+  const nextActions = buildNextActions({
+    active,
+    phaseProgress,
+    nonFinalizeTools,
+    unavailable,
+    openclawActive,
+  });
+  const readiness = buildReadinessSummary({
+    active,
+    status,
+    degraded,
+    phaseProgress,
+    nonFinalizeTools,
+    unavailable,
+  });
 
   return {
     version: PROGRESS_LEDGER_VERSION,
     active,
     status,
-    degraded: waivedPhases.length > 0 || unavailable.size > 0,
+    degraded,
+    readiness,
     successfulTools,
     nonFinalizeTools,
     unavailableTools: Array.from(unavailable).sort(),
@@ -234,7 +327,8 @@ function buildAutonomyProgressLedger({
     missingPhases: missingPhases.map((phase) => phase.id),
     waivedPhases: waivedPhases.map((phase) => phase.id),
     nextRequiredPhase: missingPhases[0]?.id || null,
-    openclawActive: isOpenClawSummaryActive(openclawRuntimeSummary),
+    nextActions,
+    openclawActive,
   };
 }
 
@@ -270,6 +364,7 @@ function validateAutonomyProgress({
         'Execute the next required plan phase with a real tool call.',
         'Record deterministic evidence such as tests, file inspection, source audit, or artifact verification before finalizing again.',
       ].join(' '),
+      repairActions: ledger.nextActions,
       ledger,
     };
   }
@@ -288,6 +383,7 @@ function validateAutonomyProgress({
         `Complete or explicitly waive phase ${first.id} before finalizing.`,
         'Run the required verification tool, inspect the result, repair failures, then call finalize again.',
       ].join(' '),
+      repairActions: ledger.nextActions,
       ledger,
     };
   }
@@ -303,6 +399,7 @@ function validateAutonomyProgress({
 module.exports = {
   PROGRESS_LEDGER_VERSION,
   buildAutonomyProgressLedger,
+  buildNextActions,
   phaseProgressFromTools,
   validateAutonomyProgress,
 };

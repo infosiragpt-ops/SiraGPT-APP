@@ -59,6 +59,14 @@ function validateOpenClawAutonomyFinalize(openclawRuntimeProfile, {
         'Do not claim autonomous execution from a plain answer.',
         'Inspect the repo or runtime state, execute the required verification tool, then call finalize again.',
       ].join(' '),
+      repairActions: [{
+        type: 'record_runtime_evidence',
+        priority: 'critical',
+        phaseId: null,
+        tools: requiresTests ? ['run_tests'] : ['host_file'],
+        reason: 'openclaw_runtime_evidence_required',
+        checkpoint: null,
+      }],
       summary,
     };
   }
@@ -75,6 +83,14 @@ function validateOpenClawAutonomyFinalize(openclawRuntimeProfile, {
         'Run deterministic tests or invariants for the native implementation.',
         'If the tests fail, repair and rerun before calling finalize.',
       ].join(' '),
+      repairActions: [{
+        type: 'complete_phase_evidence',
+        priority: 'critical',
+        phaseId: 'qa_tests',
+        tools: ['run_tests'],
+        reason: 'autonomous_fusion_tests_required',
+        checkpoint: 'Deterministic runtime validation must pass before finalization.',
+      }],
       summary,
     };
   }

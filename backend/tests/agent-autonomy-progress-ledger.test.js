@@ -61,6 +61,11 @@ test('autonomy progress ledger blocks active plans without runtime evidence', ()
   assert.ok(result.missingTools.includes('runtime_evidence'));
   assert.equal(result.ledger.status, 'blocked');
   assert.equal(result.ledger.nextRequiredPhase, 'agent_runtime_diagnostics');
+  assert.equal(result.ledger.readiness.label, 'blocked');
+  assert.equal(result.ledger.readiness.evidenceRecorded, false);
+  assert.equal(result.ledger.nextActions[0].type, 'record_runtime_evidence');
+  assert.deepEqual(result.ledger.nextActions[0].tools, ['run_tests']);
+  assert.deepEqual(result.repairActions, result.ledger.nextActions);
 });
 
 test('autonomy progress ledger blocks active plans when critical tests are missing', () => {
@@ -75,6 +80,17 @@ test('autonomy progress ledger blocks active plans when critical tests are missi
   assert.equal(result.ok, false);
   assert.deepEqual(result.missingTools, ['run_tests']);
   assert.match(result.message, /agent_runtime_diagnostics/);
+  assert.deepEqual(result.ledger.readiness.blockers, [{
+    phaseId: 'agent_runtime_diagnostics',
+    tools: ['run_tests'],
+    checkpoint: 'Agent gates are verified.',
+  }, {
+    phaseId: 'qa_tests',
+    tools: ['run_tests'],
+    checkpoint: 'Tests pass.',
+  }]);
+  assert.equal(result.ledger.nextActions[0].type, 'complete_phase_evidence');
+  assert.equal(result.ledger.nextActions[0].phaseId, 'agent_runtime_diagnostics');
 });
 
 test('autonomy progress ledger passes after successful critical verification', () => {
@@ -88,6 +104,9 @@ test('autonomy progress ledger passes after successful critical verification', (
 
   assert.equal(result.ok, true);
   assert.equal(result.ledger.status, 'ready');
+  assert.equal(result.ledger.readiness.label, 'ready');
+  assert.equal(result.ledger.readiness.score, 100);
+  assert.equal(result.ledger.nextActions.length, 0);
   assert.equal(result.ledger.nonFinalizeTools.includes('run_tests'), true);
   assert.equal(
     result.ledger.phases.find((phase) => phase.id === 'agent_runtime_diagnostics').status,
@@ -105,6 +124,8 @@ test('autonomy progress ledger waives critical verification only when tool is un
   assert.equal(result.ok, true);
   assert.equal(result.degraded, true);
   assert.equal(result.ledger.status, 'ready');
+  assert.equal(result.ledger.readiness.label, 'degraded_ready');
+  assert.equal(result.ledger.readiness.criticalPhases.waived, 2);
   assert.deepEqual(result.ledger.waivedPhases, ['agent_runtime_diagnostics', 'qa_tests']);
 });
 

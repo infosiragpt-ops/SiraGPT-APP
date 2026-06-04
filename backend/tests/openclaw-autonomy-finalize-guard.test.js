@@ -45,6 +45,14 @@ test('OpenClaw autonomy finalize guard blocks plain finalize without runtime evi
   assert.equal(result.active, true);
   assert.ok(result.missingTools.includes('runtime_evidence'));
   assert.match(result.message, /No successful tool evidence/);
+  assert.deepEqual(result.repairActions, [{
+    type: 'record_runtime_evidence',
+    priority: 'critical',
+    phaseId: null,
+    tools: ['run_tests'],
+    reason: 'openclaw_runtime_evidence_required',
+    checkpoint: null,
+  }]);
 });
 
 test('OpenClaw autonomy finalize guard requires run_tests for autonomous software fusion', () => {
@@ -58,6 +66,14 @@ test('OpenClaw autonomy finalize guard requires run_tests for autonomous softwar
   assert.equal(result.ok, false);
   assert.ok(result.missingTools.includes('run_tests'));
   assert.match(result.repairInstructions, /Run deterministic tests/);
+  assert.deepEqual(result.repairActions, [{
+    type: 'complete_phase_evidence',
+    priority: 'critical',
+    phaseId: 'qa_tests',
+    tools: ['run_tests'],
+    reason: 'autonomous_fusion_tests_required',
+    checkpoint: 'Deterministic runtime validation must pass before finalization.',
+  }]);
 });
 
 test('OpenClaw autonomy finalize guard requires run_tests for bulk source fusion', () => {
