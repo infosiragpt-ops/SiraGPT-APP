@@ -101,7 +101,12 @@ function maintenanceMiddleware(opts = {}) {
       try {
         // eslint-disable-next-line global-require
         const metrics = require('../utils/metrics');
-        metrics.counter('siragpt_maintenance_blocked_total', { route: reqPath || 'unknown' }, 1);
+        // Bucket to the first path segments so the metric label has bounded
+        // cardinality — req.path here is the raw, pre-route concrete URL
+        // (e.g. /api/chats/<uuid>), which would otherwise mint a new
+        // time-series per request during an outage under retry storms.
+        const routeLabel = reqPath.split('/').slice(0, 3).join('/') || 'unknown';
+        metrics.counter('siragpt_maintenance_blocked_total', { route: routeLabel }, 1);
       } catch {
         /* never throw from instrumentation */
       }
