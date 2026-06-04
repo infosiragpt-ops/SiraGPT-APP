@@ -1175,12 +1175,13 @@ const github_search = {
 
 // ─── Scientific paper search (arXiv / OpenAlex / CrossRef / PubMed / …) ──────
 //
-// Unified key-less search over the major open scientific-paper APIs. Use for
-// peer-reviewed sources, citations and literature reviews.
+// Unified key-less search over the major open scientific-paper APIs plus
+// worldwide regional indices (DOAJ open-access journals, DBLP computer science,
+// DataCite datasets). Use for peer-reviewed sources, citations and lit reviews.
 
 const scientific_search = {
   name: 'scientific_search',
-  description: 'Search peer-reviewed scientific papers across open APIs worldwide (arXiv, OpenAlex, CrossRef, PubMed, Europe PMC, Semantic Scholar, CORE). Use when the user needs academic sources, citations, DOIs or a literature review. Returns ranked papers with title, authors, year, venue, citations, abstract and PDF/HTML links.',
+  description: 'Search peer-reviewed scientific papers across open APIs worldwide (arXiv, OpenAlex, CrossRef, PubMed, Europe PMC, Semantic Scholar, CORE, DOAJ, DBLP, DataCite). Use when the user needs academic sources, citations, DOIs or a literature review. Returns ranked papers with title, authors, year, venue, citations, abstract and PDF/HTML links.',
   schema: {
     query: 'string (required — research topic or keywords)',
     limit: 'number (optional per-provider cap, default 8, max 25)',
