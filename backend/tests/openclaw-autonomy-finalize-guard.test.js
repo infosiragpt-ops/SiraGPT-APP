@@ -20,6 +20,22 @@ function stepsWith(actions) {
   return [{ step: 0, thought: 'Verificando', actions }];
 }
 
+function activeTaskPlan() {
+  return {
+    agentRuntimeHardening: { active: true },
+    phases: [
+      { id: 'orchestrate', role: 'orchestrator', requiredTools: [] },
+      {
+        id: 'agent_runtime_diagnostics',
+        role: 'runtime_architect',
+        requiredTools: ['run_tests'],
+        checkpoint: 'Agent runtime checks pass.',
+      },
+      { id: 'supervision', role: 'supervision', requiredTools: ['finalize'] },
+    ],
+  };
+}
+
 test('OpenClaw autonomy finalize guard blocks plain finalize without runtime evidence', () => {
   const result = validateOpenClawAutonomyFinalize(openclawProfile(), {
     steps: stepsWith([{ tool: 'finalize', observation: { answer: 'Listo' } }]),
@@ -83,6 +99,36 @@ test('validateAgentTaskFinalize composes base gates with OpenClaw autonomy gates
 
   assert.equal(result.ok, false);
   assert.ok(result.missingTools.includes('run_tests'));
+});
+
+test('validateAgentTaskFinalize blocks active task plans without progress evidence', () => {
+  const result = validateAgentTaskFinalize({
+    finalizeProfile: { requiredTools: [] },
+    taskPlan: activeTaskPlan(),
+    steps: stepsWith([{ tool: 'finalize', observation: { answer: 'Listo' } }]),
+  });
+
+  assert.equal(result.ok, false);
+  assert.ok(result.missingTools.includes('runtime_evidence'));
+  assert.equal(result.autonomyProgress.status, 'blocked');
+});
+
+test('validateAgentTaskFinalize returns autonomy progress after verified active task plans', () => {
+  const result = validateAgentTaskFinalize({
+    finalizeProfile: { requiredTools: [] },
+    taskPlan: activeTaskPlan(),
+    steps: stepsWith([
+      { tool: 'run_tests', observation: { ok: true, passed: 4, failed: 0 } },
+      { tool: 'finalize', observation: { answer: 'Listo' } },
+    ]),
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.autonomyProgress.status, 'ready');
+  assert.equal(
+    result.autonomyProgress.phases.find((phase) => phase.id === 'agent_runtime_diagnostics').status,
+    'satisfied'
+  );
 });
 
 test('OpenClaw autonomy finalize guard skips ordinary non-OpenClaw long tasks', () => {

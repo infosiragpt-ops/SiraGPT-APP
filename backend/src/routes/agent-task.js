@@ -1162,6 +1162,7 @@ router.post(
         finalizeGuard: ({ steps, unavailableTools }) => validateAgentTaskFinalize({
           finalizeProfile,
           openclawRuntimeProfile,
+          taskPlan,
           steps,
           unavailableTools,
         }),

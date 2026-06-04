@@ -4,6 +4,9 @@ const {
   successfulToolCalls,
   validateFinalize,
 } = require('./agentic-execution-profile');
+const {
+  validateAutonomyProgress,
+} = require('./agent-autonomy-progress-ledger');
 const openclawCapabilityKernel = require('../openclaw-capability-kernel');
 
 function unique(values) {
@@ -89,6 +92,7 @@ function validateOpenClawAutonomyFinalize(openclawRuntimeProfile, {
 function validateAgentTaskFinalize({
   finalizeProfile,
   openclawRuntimeProfile = null,
+  taskPlan = null,
   steps = [],
   unavailableTools = [],
 } = {}) {
@@ -106,6 +110,25 @@ function validateAgentTaskFinalize({
     };
   }
 
+  const progressGuard = validateAutonomyProgress({
+    taskPlan,
+    steps,
+    unavailableTools,
+    openclawRuntimeSummary: openclawGuard.summary
+      || openclawCapabilityKernel.buildOpenClawRuntimeSummary(openclawRuntimeProfile),
+  });
+  if (!progressGuard.ok) {
+    return {
+      ...progressGuard,
+      requiredTools: unique([
+        ...(base.requiredTools || []),
+        ...(openclawGuard.requiredTools || []),
+        ...(progressGuard.requiredTools || []),
+      ]),
+      autonomyProgress: progressGuard.ledger,
+    };
+  }
+
   return {
     ...base,
     openclawAutonomy: openclawGuard.active
@@ -116,6 +139,7 @@ function validateAgentTaskFinalize({
         unavailableTools: openclawGuard.unavailableTools || [],
       }
       : { active: false },
+    autonomyProgress: progressGuard.ledger,
   };
 }
 

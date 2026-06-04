@@ -1775,6 +1775,7 @@ async function runAgentTaskJob(payload = {}, job = null) {
       finalizeGuard: ({ steps, unavailableTools }) => validateAgentTaskFinalize({
         finalizeProfile,
         openclawRuntimeProfile,
+        taskPlan,
         steps,
         unavailableTools,
       }),
