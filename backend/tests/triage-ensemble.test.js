@@ -244,3 +244,25 @@ test('ensemble: respects DEFAULT_BUDGET_MS when omitted', async () => {
   assert.equal(v.action, 'execute');
   assert.ok(elapsed < DEFAULT_BUDGET_MS + 50);
 });
+
+// ─── raceAll: AbortController threading ───────────────────────────────
+test('raceAll aborts an over-budget judge\'s signal on timeout', async () => {
+  let captured = null;
+  // Never resolves — records the signal it was handed, then hangs.
+  const stuck = (args) => new Promise(() => { captured = args.signal; });
+  const { results } = await raceAll([stuck], { prompt: 'x' }, 20);
+  assert.equal(results.length, 1);
+  assert.equal(results[0].status, 'rejected');
+  assert.equal(results[0].reason, 'timeout');
+  assert.ok(captured, 'judge must receive an AbortSignal');
+  assert.equal(captured.aborted, true, 'the signal must be aborted once the budget elapses');
+});
+
+test('raceAll does not abort a judge that completes within budget', async () => {
+  let captured = null;
+  const fast = async (args) => { captured = args.signal; return { action: 'execute' }; };
+  const { results } = await raceAll([fast], { prompt: 'x' }, 1000);
+  assert.equal(results[0].status, 'fulfilled');
+  assert.deepEqual(results[0].value, { action: 'execute' });
+  assert.equal(captured && captured.aborted, false, 'a winning judge\'s signal stays un-aborted');
+});
