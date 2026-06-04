@@ -238,6 +238,26 @@ async function main() {
     return;
   }
 
+  // On a constrained single-vCPU deploy VM, the backend's heavy boot (DB
+  // migrations, ~20 cron jobs, BullMQ workers, model/catalog loading) competes
+  // with the frontend for CPU during the exact window when Replit's startup
+  // probe is hitting GET / on FRONTEND_PORT. If the probe is starved it times
+  // out and the whole promote fails even though the build was fine. Let the
+  // frontend open its port (the probe target) before starting the CPU-heavy
+  // backend so the health-check is not contended. Non-fatal: if the port never
+  // opens in time, start the backend anyway so we never deadlock the boot.
+  // Guard against a non-numeric override (e.g. "90s") producing NaN, which
+  // would make waitForPort's deadline NaN and loop forever — deadlocking boot
+  // since this wait is awaited before the backend spawns.
+  const parsedFrontendTimeout = Number(process.env.FRONTEND_READY_TIMEOUT_MS);
+  const frontendReadyTimeoutMs =
+    Number.isFinite(parsedFrontendTimeout) && parsedFrontendTimeout > 0
+      ? parsedFrontendTimeout
+      : 90_000;
+  await waitForPort("127.0.0.1", FRONTEND_PORT, frontendReadyTimeoutMs)
+    .then(() => log("start-all", "frontend port open; starting backend", { port: FRONTEND_PORT }))
+    .catch((err) => log("start-all", "frontend readiness wait timed out; starting backend anyway", { error: err?.message }));
+
   backend = spawnBackend();
   const timeoutMs = Number(process.env.BACKEND_READY_TIMEOUT_MS || 300_000);
   waitForPort(BACKEND_HOST, BACKEND_PORT, timeoutMs)
