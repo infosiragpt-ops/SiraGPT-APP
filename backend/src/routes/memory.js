@@ -101,22 +101,41 @@ router.delete('/:id', (req, res) => {
 });
 
 // Clear the entire document AND the user's learned vector facts so the
-// "forget me" action is honoured across both stores.
+// "forget me" action is honoured across both stores. This is a privacy
+// action: if EITHER store fails to clear we must NOT report full success,
+// otherwise the user is told they were forgotten while learned facts
+// remain recallable. On partial failure we surface a non-2xx + a body
+// describing exactly which store was cleared.
 router.delete('/', async (req, res) => {
   const userId = getUserId(req);
   if (!userId) return res.status(401).json({ error: 'unauthorized' });
+
+  let documentCleared = false;
   try {
     memoryDocument.clear(userId);
-    try {
-      await longTermMemory.clearUserMemory(userId);
-    } catch (vecErr) {
-      req.log?.warn?.({ err: vecErr }, 'memory: vector clear failed (document cleared)');
-    }
-    return res.json({ ok: true });
+    documentCleared = true;
   } catch (err) {
-    req.log?.error?.({ err }, 'memory: clear failed');
-    return res.status(500).json({ error: 'memory_clear_failed' });
+    req.log?.error?.({ err }, 'memory: document clear failed');
+    return res.status(500).json({
+      error: 'memory_clear_failed',
+      documentCleared: false,
+      vectorCleared: false,
+    });
   }
+
+  try {
+    await longTermMemory.clearUserMemory(userId);
+  } catch (vecErr) {
+    req.log?.error?.({ err: vecErr }, 'memory: vector clear failed (document cleared)');
+    return res.status(500).json({
+      error: 'memory_vector_clear_failed',
+      partial: true,
+      documentCleared,
+      vectorCleared: false,
+    });
+  }
+
+  return res.json({ ok: true, documentCleared, vectorCleared: true });
 });
 
 module.exports = router;
