@@ -47,6 +47,18 @@ function saveMemoryEntries(userId, entries) {
   });
 }
 
+function loadMemoryDocument(userId) {
+  return loadJson(userPath('memory-doc', userId), null);
+}
+
+function saveMemoryDocument(userId, doc) {
+  saveJson(userPath('memory-doc', userId), {
+    userId: String(userId),
+    updatedAt: Date.now(),
+    ...(doc && typeof doc === 'object' ? doc : {}),
+  });
+}
+
 function loadSessions(userId) {
   const row = loadJson(userPath('sessions', userId), { sessions: [] });
   return Array.isArray(row.sessions) ? row.sessions : [];
@@ -64,6 +76,8 @@ module.exports = {
   STORE_ROOT,
   loadMemoryEntries,
   saveMemoryEntries,
+  loadMemoryDocument,
+  saveMemoryDocument,
   loadSessions,
   saveSessions,
 };

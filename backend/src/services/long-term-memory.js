@@ -319,6 +319,15 @@ function extractFactsAsync({ openai, userId, userMessage, assistantMessage }) {
     try {
       const facts = await extractFacts(openai, userMessage, assistantMessage);
       if (facts.length === 0) return;
+      // Mirror the same facts into the per-user memory DOCUMENT (the
+      // enumerable/editable/queryable surface). Best-effort, lazy
+      // require to avoid a circular dependency; failures here must not
+      // affect vector-store ingestion below.
+      try {
+        require('./memory-document').recordFacts(userId, facts);
+      } catch (docErr) {
+        console.warn(`[long-term-memory] memory-document sink failed: ${docErr.message}`);
+      }
       const pgStore = userMemoryStore.getStore();
       if (pgStore) {
         await pgStore.upsertFacts(userId, facts.map(f => ({

@@ -174,6 +174,7 @@ const {
 const postResponseBrainHook = require('../services/sira/post-response-brain-hook');
 const coworkEngine = require('../services/cowork-engine');
 const activeMemory = require('../services/active-memory');
+const memoryDocument = require('../services/memory-document');
 const conversationUnderstanding = require('../services/conversation-understanding');
 const chatAttachmentRecovery = require('../services/chat-attachment-recovery');
 const messageAttachments = require('../services/message-attachments');
@@ -2136,6 +2137,14 @@ router.post(
         ]);
         recalledMemoryFacts = Array.isArray(_memRecalled) ? _memRecalled : [];
         memoryBlock = longTermMemory.buildMemoryBlock(_memRecalled);
+        // Always-on memory DOCUMENT block: surfaces manually-curated and
+        // high-priority identity facts even when no semantic match fired.
+        try {
+          const _docBlock = memoryDocument.buildDocumentBlock(userId, { maxEntries: 12 });
+          if (_docBlock) memoryBlock = `${memoryBlock}\n\n${_docBlock}`;
+        } catch (e) {
+          console.warn(`[ai] memory-document block failed (continuing without): ${e.message}`);
+        }
         crossChatTurnsForAttribution = Array.isArray(_crossChatTurns) ? _crossChatTurns : [];
         if (_crossChatEnabled && _crossChatMod) {
           crossChatBlock = _crossChatMod.buildCrossChatBlock(_crossChatTurns) || '';

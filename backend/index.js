@@ -380,6 +380,7 @@ const codexRunsRoutes = require('./src/routes/codex-runs');
 const telegramRoutes = require('./src/routes/telegram');
 const pushRoutes = require('./src/routes/push');
 const coworkRoutes = require('./src/routes/cowork');
+const memoryRoutes = require('./src/routes/memory');
 const contextIntelligenceRoutes = require('./src/routes/context-intelligence');
 const orchestrationRoutes = require('./src/routes/orchestration');
 const hermesRoutes = require('./src/routes/hermes');
@@ -723,6 +724,7 @@ app.use('/api/bookmarks', requireCsrf);
 app.use('/api/orgs', requireCsrf);
 app.use('/api/library', requireCsrf);
 app.use('/api/cowork', requireCsrf);
+app.use('/api/memory', requireCsrf);
 app.use('/api/context-intelligence', requireCsrf);
 app.use('/api/thesis', requireCsrf);
 
@@ -1034,6 +1036,7 @@ try {
 }
 app.use('/api/push', pushRoutes);
 app.use('/api/cowork', coworkRoutes);
+app.use('/api/memory', memoryRoutes);
 app.use('/api/context-intelligence', contextIntelligenceRoutes);
 app.use('/api/orchestration', orchestrationRoutes);
 app.use('/api/hermes', hermesRoutes);

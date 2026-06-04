@@ -29,6 +29,7 @@ import { useRouter as useNextRouter } from "next/navigation"
 import { LOCALES } from "@/lib/i18n/locales"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
+import { MemorySettingsCard } from "@/components/settings/MemorySettingsCard"
 // ────────────────────────────────────────────────────────────
 // Section registry
 // ────────────────────────────────────────────────────────────
@@ -875,6 +876,8 @@ function PersonalizationSection() {
           </div>
         </div>
       </SectionCard>
+
+      <MemorySettingsCard />
 
       <SectionCard title="Capacidades" desc="Qué puede hacer siraGPT por ti">
         <SwitchRow title="Memorias" desc="Permite que siraGPT guarde y use memorias al responder" checked={C.memories} onChange={(v) => update({ capabilities: { ...C, memories: v } })} />

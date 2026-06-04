@@ -1728,6 +1728,26 @@ class ApiClient {
     return this.request('/users/chats/clear-history', { method: 'POST' });
   }
 
+  // ── Memory document (per-user, auto-learned + editable) ──────────
+  async getMemory(): Promise<{ entries: any[]; markdown: string; stats: { total: number; byCategory: Record<string, number> } }> {
+    return this.request('/memory');
+  }
+  async searchMemory(q: string): Promise<{ query: string; results: any[] }> {
+    return this.request(`/memory/search?q=${encodeURIComponent(q)}`);
+  }
+  async addMemoryEntry(text: string, category?: string): Promise<{ entry: any }> {
+    return this.request('/memory', { method: 'POST', body: JSON.stringify({ text, category }) });
+  }
+  async updateMemoryEntry(id: string, patch: { text?: string; category?: string }): Promise<{ entry: any }> {
+    return this.request(`/memory/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) });
+  }
+  async deleteMemoryEntry(id: string): Promise<{ ok: boolean }> {
+    return this.request(`/memory/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+  async clearMemory(): Promise<{ ok: boolean }> {
+    return this.request('/memory', { method: 'DELETE' });
+  }
+
   async changePassword(data: { currentPassword: string; newPassword: string }) {
     return this.request('/users/password', {
       method: 'PUT',
