@@ -113,6 +113,21 @@ export interface AgentTaskRunArgs {
    * browser stream closes into an agentic reconnect instead of a failed chat.
    */
   closedStreamRecoveryMs?: number
+  /**
+   * Override the POST endpoint (relative to API_ROOT). Defaults to
+   * "/agent/task". The professional document cycle uses
+   * "/agent/document-cycle", which builds the staged contract server-side
+   * and then streams through the same SSE pipeline.
+   */
+  endpoint?: string
+  /** Approved topic — only consumed by the document-cycle endpoint. */
+  topic?: string
+  /** User-provided folder code — only consumed by the document-cycle endpoint. */
+  code?: string
+  /** Optional classification overrides for the document cycle. */
+  documentType?: string
+  field?: string
+  citationStyle?: string
 }
 
 const DEFAULT_IDLE_TIMEOUT_MS = 90_000
@@ -285,7 +300,8 @@ async function* recoverClosedStreamEvents(
 }
 
 export async function* runIterator(args: AgentTaskRunArgs): AsyncGenerator<AgentTaskEvent> {
-  const { signal, idleTimeoutMs, closedStreamRecoveryMs, ...body } = args
+  const { signal, idleTimeoutMs, closedStreamRecoveryMs, endpoint, ...body } = args
+  const postPath = endpoint && endpoint.trim() ? endpoint.trim() : "/agent/task"
   const idleMs = typeof idleTimeoutMs === "number" && idleTimeoutMs > 0
     ? idleTimeoutMs
     : DEFAULT_IDLE_TIMEOUT_MS
@@ -303,7 +319,7 @@ export async function* runIterator(args: AgentTaskRunArgs): AsyncGenerator<Agent
     else signal.addEventListener("abort", onUpstreamAbort, { once: true })
   }
 
-  const resp = await fetch(`${API_ROOT}/agent/task`, {
+  const resp = await fetch(`${API_ROOT}${postPath}`, {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json", ...authHeader() },

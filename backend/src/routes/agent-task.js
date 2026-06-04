@@ -211,13 +211,31 @@ router.get('/artifact/:id', authenticateToken, (req, res) => {
   const id = String(req.params.id || '').replace(/[^a-f0-9]/gi, '');
   if (!id || id.length > 40) return res.status(400).json({ error: 'bad id' });
 
-  // Find the file by stored-name prefix. We only stored one file per
-  // id (content-addressed), so a single readdir is enough.
   if (!fs.existsSync(ARTIFACT_DIR)) return res.status(404).json({ error: 'no artifacts yet' });
-  const entry = fs.readdirSync(ARTIFACT_DIR).find(f => f.startsWith(`${id}-`));
-  if (!entry) return res.status(404).json({ error: 'artifact not found' });
 
   const metadata = readArtifactMetadata(id);
+
+  // Resolve the on-disk path. Cycle artifacts are grouped under
+  // ARTIFACT_DIR/<folderCode>/ and record `storedRelPath` in their flat
+  // metadata; legacy artifacts live at the top level under `<id>-<name>`.
+  let full = null;
+  let entry = null;
+  if (metadata?.storedRelPath) {
+    const root = path.resolve(ARTIFACT_DIR);
+    const candidate = path.resolve(ARTIFACT_DIR, metadata.storedRelPath);
+    // Traversal guard: the resolved path must stay inside ARTIFACT_DIR.
+    if ((candidate === root || candidate.startsWith(root + path.sep)) && fs.existsSync(candidate)) {
+      full = candidate;
+      entry = path.basename(candidate);
+    }
+  }
+  if (!full) {
+    // Legacy / fallback: find the file by stored-name prefix at top level.
+    entry = fs.readdirSync(ARTIFACT_DIR).find(f => f.startsWith(`${id}-`));
+    if (entry) full = path.join(ARTIFACT_DIR, entry);
+  }
+  if (!full || !entry) return res.status(404).json({ error: 'artifact not found' });
+
   if (!metadata?.ownerUserId) {
     return res.status(403).json({ error: 'artifact ownership metadata missing' });
   }
@@ -225,14 +243,81 @@ router.get('/artifact/:id', authenticateToken, (req, res) => {
     return res.status(403).json({ error: 'artifact not found' });
   }
 
-  const full = path.join(ARTIFACT_DIR, entry);
   const userSuppliedName = typeof req.query.name === 'string' ? req.query.name : entry.slice(id.length + 1);
   const safeName = userSuppliedName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'artifact';
   res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
   res.sendFile(full);
 });
 
-// ─── GET /api/agent/task/:taskId ───────────────────────────────────────
+// ─── POST /api/agent/document-cycle/classify ───────────────────────────
+// Preview classification (document/study type + field/career), the resolved
+// guide outline, and the override option lists. Used by the UI before the
+// user approves and starts the cycle. Read-only — does not enqueue anything.
+router.post('/document-cycle/classify', authenticateToken, (req, res) => {
+  const cycleService = require('../services/agents/professional-document-cycle');
+  const topic = String(req.body?.topic || '').trim();
+  if (!topic) return res.status(400).json({ error: 'topic is required' });
+  try {
+    const classification = cycleService.classifyDocument({
+      topic,
+      documentTypeOverride: req.body?.documentType,
+      fieldOverride: req.body?.field,
+    });
+    const guide = cycleService.getGuide(classification.documentType.id, classification.field.id);
+    return res.json({
+      ok: true,
+      classification,
+      guide,
+      stages: cycleService.CYCLE_STAGES,
+      options: cycleService.listOptions(),
+    });
+  } catch (err) {
+    return res.status(400).json({ error: err?.message || 'classification failed' });
+  }
+});
+
+// ─── POST /api/agent/document-cycle ────────────────────────────────────
+// Start the professional document cycle: classify the approved topic, build
+// the staged agent contract, and run it through the existing queued task
+// pipeline (SSE stream). Requires `topic` and a folder `code`.
+router.post('/document-cycle', authenticateToken, async (req, res) => {
+  const cycleService = require('../services/agents/professional-document-cycle');
+  const topic = String(req.body?.topic || '').trim();
+  if (!topic) return res.status(400).json({ error: 'topic is required' });
+  if (!String(req.body?.code || '').trim()) return res.status(400).json({ error: 'code is required' });
+
+  let built;
+  try {
+    built = cycleService.buildProfessionalCycleRequest({
+      topic,
+      documentTypeOverride: req.body?.documentType,
+      fieldOverride: req.body?.field,
+      citationStyleOverride: req.body?.citationStyle,
+      code: req.body.code,
+    });
+  } catch (err) {
+    return res.status(400).json({ error: err?.message || 'could not build document cycle' });
+  }
+
+  // Rewrite the request body into the shape handleQueuedTaskRequest expects
+  // and delegate so the cycle reuses queue, fallback, persistence and SSE.
+  req.body = {
+    ...req.body,
+    goal: built.goal,
+    displayGoal: built.displayGoal,
+    systemContract: built.systemContract,
+    folderCode: built.folderCode,
+    cycle: {
+      stages: built.stages,
+      documentType: built.documentType,
+      field: built.field,
+      citationStyle: built.citationStyle,
+      code: built.folderCode,
+    },
+    maxSteps: Number.isFinite(Number.parseInt(req.body?.maxSteps, 10)) ? req.body.maxSteps : 80,
+  };
+  return handleQueuedTaskRequest(req, res);
+});
 
 router.get('/task/:taskId', authenticateToken, (req, res) => {
   const task = getTaskForUser(req.params.taskId, req.user?.id)
@@ -1410,6 +1495,8 @@ async function handleQueuedTaskRequest(req, res) {
     model,
   });
 
+  const { folderCode: cycleFolderCode, cycle: cycleMeta } = extractCycleFields(req.body);
+
   const payload = {
     taskId,
     traceId,
@@ -1425,6 +1512,8 @@ async function handleQueuedTaskRequest(req, res) {
     maxRuntimeMs,
     documentPolicy,
     openclawRuntimeProfile,
+    folderCode: cycleFolderCode,
+    cycle: cycleMeta,
   };
 
   let job;
@@ -1682,6 +1771,8 @@ async function handleLocalTaskRequest(req, res, { fallbackReason = 'local_fallba
   });
   metrics.counter('agent_task_invocations_total', { status: 'local_fallback' });
 
+  const { folderCode: cycleFolderCode, cycle: cycleMeta } = extractCycleFields(req.body);
+
   const payload = {
     taskId,
     traceId,
@@ -1697,6 +1788,8 @@ async function handleLocalTaskRequest(req, res, { fallbackReason = 'local_fallba
     maxRuntimeMs,
     documentPolicy,
     openclawRuntimeProfile,
+    folderCode: cycleFolderCode,
+    cycle: cycleMeta,
   };
 
   Promise.resolve().then(async () => {
@@ -1968,6 +2061,36 @@ function normalizeSystemContract(text) {
     .slice(0, 4000);
 }
 
+// Pull the professional-document-cycle fields off a request body and
+// normalise them for the task payload. Returns nulls for ordinary tasks so
+// the generic /api/agent/task path is unaffected. folderCode is re-sanitised
+// here (defence in depth) before it ever reaches the artifact storage layer.
+function extractCycleFields(body) {
+  const out = { folderCode: null, cycle: null };
+  if (!body || typeof body !== 'object') return out;
+  if (typeof body.folderCode === 'string' && body.folderCode.trim()) {
+    try {
+      const { sanitizeFolderCode } = require('../services/agents/professional-document-cycle');
+      out.folderCode = sanitizeFolderCode(body.folderCode);
+    } catch {
+      out.folderCode = null;
+    }
+  }
+  if (body.cycle && typeof body.cycle === 'object' && Array.isArray(body.cycle.stages)) {
+    out.cycle = {
+      stages: body.cycle.stages
+        .filter((s) => s && typeof s.id === 'string')
+        .map((s) => ({ id: s.id, label: String(s.label || s.id) }))
+        .slice(0, 12),
+      documentType: body.cycle.documentType || null,
+      field: body.cycle.field || null,
+      citationStyle: body.cycle.citationStyle || null,
+      code: out.folderCode || (typeof body.cycle.code === 'string' ? body.cycle.code : null),
+    };
+  }
+  return out;
+}
+
 function buildAgentSystemPrompt(
   systemContract,
   fileIds,
@@ -2237,6 +2360,7 @@ function initialAgentState() {
     approvals: [],
     documentAnalysisIds: [],
     evidenceRefs: [],
+    cycle: null,
   };
 }
 
@@ -2244,6 +2368,31 @@ function reduceAgentState(state, evt) {
   switch (evt.type) {
     case 'queue_status':
       return { ...state, queue: { status: evt.status, queue: evt.queue, jobId: evt.jobId, position: evt.position ?? null, estimatedWaitMs: evt.estimatedWaitMs ?? null, updatedAt: evt.ts || new Date().toISOString() } };
+    case 'cycle_init':
+      return {
+        ...state,
+        cycle: {
+          stages: Array.isArray(evt.stages) ? evt.stages : [],
+          documentType: evt.documentType || null,
+          field: evt.field || null,
+          citationStyle: evt.citationStyle || null,
+          code: evt.code || null,
+          current: null,
+          history: [],
+        },
+      };
+    case 'cycle_stage': {
+      const base = state.cycle || { stages: [], documentType: null, field: null, citationStyle: null, code: null, current: null, history: [] };
+      const status = evt.status === 'done' ? 'done' : 'start';
+      const history = [
+        ...(base.history || []),
+        { stage: evt.stage, status, label: evt.label || evt.stage, note: evt.note || '', ts: evt.ts || new Date().toISOString() },
+      ].slice(-20);
+      return {
+        ...state,
+        cycle: { ...base, current: status === 'done' ? base.current : evt.stage, history },
+      };
+    }
     case 'document_policy':
       return { ...state, documentPolicy: evt.policy || evt.documentPolicy || null };
     case 'document_analysis':

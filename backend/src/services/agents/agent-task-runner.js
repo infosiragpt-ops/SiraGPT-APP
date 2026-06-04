@@ -810,6 +810,8 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     model = 'gpt-4o',
     maxSteps = 60,
     maxRuntimeMs = 2 * 60 * 60 * 1000,
+    folderCode = null,
+    cycle = null,
   } = payload;
   if (!taskId) throw new Error('agent task payload missing taskId');
   if (!user?.id) throw new Error('agent task payload missing user.id');
@@ -1736,6 +1738,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       signal: controller.signal,
       chatId,
       taskId,
+      folderCode,
       fileIds: files,
       displayGoal,
       taskContract,
@@ -1786,6 +1789,20 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     const effectiveMaxSteps = isChatOnlyWithAttachment
       ? Math.min(maxSteps, 20)
       : maxSteps;
+
+    // Professional document cycle: announce the ordered stages up-front so
+    // the UI can render the full progress track before the agent reports
+    // each transition via report_stage (cycle_stage events).
+    if (cycle && Array.isArray(cycle.stages) && cycle.stages.length > 0) {
+      emit({
+        type: 'cycle_init',
+        stages: cycle.stages,
+        documentType: cycle.documentType || null,
+        field: cycle.field || null,
+        citationStyle: cycle.citationStyle || null,
+        code: cycle.code || folderCode || null,
+      });
+    }
 
     const result = await reactAgent.run(openai, {
       query: goal,

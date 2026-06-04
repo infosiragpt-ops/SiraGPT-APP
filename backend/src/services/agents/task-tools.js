@@ -128,7 +128,30 @@ function assertArtifactSizeWithinLimit(ext, buffer) {
   throw err;
 }
 
-function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation, category }) {
+// Defensive re-sanitisation of a folder code at the storage boundary. The
+// professional-document-cycle service already sanitises it before enqueue,
+// but we never trust a value that becomes a filesystem path. Returns null on
+// any problem so callers fall back to the flat artifact dir.
+function safeFolderCode(folderCode) {
+  if (!folderCode) return null;
+  try {
+    const { sanitizeFolderCode } = require('./professional-document-cycle');
+    return sanitizeFolderCode(folderCode);
+  } catch {
+    // Fallback sanitiser if the service is unavailable (or input invalid).
+    const cleaned = String(folderCode)
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-zA-Z0-9 _-]+/g, '_')
+      .replace(/\s+/g, '-')
+      .replace(/^[-_.]+/, '')
+      .replace(/[-_.]+$/, '')
+      .slice(0, 80);
+    return cleaned || null;
+  }
+}
+
+function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation, category, folderCode }) {
   try {
     const { requireDurableArtifactStorage } = require('../../orchestration/artifact-storage-policy');
     const policy = requireDurableArtifactStorage();
@@ -144,7 +167,17 @@ function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation,
   const scope = `${ownerUserId || 'anonymous'}:${chatId || 'no-chat'}:`;
   const id = artifactIdFor(Buffer.concat([Buffer.from(clean), buf]), scope);
   const stored = `${id}-${clean}`;
-  const full = path.join(ARTIFACT_DIR, stored);
+  // When a folder code is supplied (professional document cycle) the binary
+  // is grouped under ARTIFACT_DIR/<safeCode>/. The metadata JSON stays FLAT
+  // at ARTIFACT_DIR/<id>.json so readArtifactMetadata + listArtifactsByOwner
+  // keep working unchanged; `storedRelPath` records the real location.
+  const safeFolder = safeFolderCode(folderCode);
+  const targetDir = safeFolder ? path.join(ARTIFACT_DIR, safeFolder) : ARTIFACT_DIR;
+  if (safeFolder && !fs.existsSync(targetDir)) {
+    fs.mkdirSync(targetDir, { recursive: true });
+  }
+  const full = path.join(targetDir, stored);
+  const storedRelPath = safeFolder ? path.posix.join(safeFolder, stored) : stored;
   fs.writeFileSync(full, buf);
   try {
     writeJsonAtomicSync(metadataPathFor(id), {
@@ -157,6 +190,8 @@ function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation,
       sizeBytes: buf.length,
       validation: validation || null,
       category: category || null,
+      folderCode: safeFolder || null,
+      storedRelPath,
       createdAt: new Date().toISOString(),
     }, { pretty: 2 });
   } catch (err) {
@@ -173,6 +208,8 @@ function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation,
     mime: mime || EXTENSION_TO_MIME[ext] || 'application/octet-stream',
     sizeBytes: buf.length,
     path: full,
+    folderCode: safeFolder || null,
+    storedRelPath,
     downloadUrl: `/api/agent/artifact/${id}?name=${encodeURIComponent(clean)}`,
   };
 }
@@ -706,6 +743,7 @@ const createDocument = {
       ownerUserId: ctx.userId,
       chatId: ctx.chatId,
       validation: contractReview ? { ...validation, contractReview } : validation,
+      folderCode: ctx.folderCode || null,
     });
     try { fs.unlinkSync(tmpOut); } catch { /* may have been moved */ }
 
@@ -1773,6 +1811,56 @@ const runTests = {
   },
 };
 
+// ─── Professional document cycle: per-stage progress ───────────────────
+// Lets the agent announce which of the 5 cycle stages it is entering so the
+// UI can render visible progress (cycle_stage events). Harmless for non-cycle
+// tasks: the agent only calls it when the cycle contract instructs it to.
+const CYCLE_STAGE_LABELS = {
+  guide_review: 'Revisión de la guía',
+  analysis: 'Análisis de tipo y campo',
+  research: 'Investigación de fuentes',
+  drafting: 'Redacción del documento',
+  finalize: 'Exportación y organización',
+};
+
+const reportStage = {
+  name: 'report_stage',
+  description: 'Marca el avance del ciclo profesional de documentos. Llama esta herramienta al INICIO de cada etapa (guide_review, analysis, research, drafting, finalize) y, opcionalmente, al terminarla con status="done". Sirve para que el usuario vea el progreso por etapas.',
+  parameters: {
+    type: 'object',
+    properties: {
+      stage: {
+        type: 'string',
+        enum: ['guide_review', 'analysis', 'research', 'drafting', 'finalize'],
+        description: 'Identificador de la etapa actual del ciclo.',
+      },
+      note: { type: 'string', description: 'Breve descripción en español de lo que harás (o hiciste) en esta etapa.' },
+      status: { type: 'string', enum: ['start', 'done'], description: 'start al comenzar la etapa (por defecto), done al completarla.' },
+    },
+    required: ['stage'],
+    additionalProperties: false,
+  },
+  async execute({ stage, note, status }, ctx = {}) {
+    const safeStage = CYCLE_STAGE_LABELS[stage] ? stage : null;
+    if (!safeStage) {
+      ctx.onEvent?.({ type: 'tool_output', tool: 'report_stage', ok: false, preview: `etapa desconocida: ${stage}` });
+      return { ok: false, error: `unknown stage: ${stage}` };
+    }
+    const safeStatus = status === 'done' ? 'done' : 'start';
+    const label = CYCLE_STAGE_LABELS[safeStage];
+    const cleanNote = typeof note === 'string' ? note.slice(0, 280) : '';
+    ctx.onEvent?.({ type: 'tool_call', tool: 'report_stage', preview: label });
+    ctx.onEvent?.({ type: 'cycle_stage', stage: safeStage, status: safeStatus, label, note: cleanNote });
+    ctx.onEvent?.({
+      type: 'tool_output',
+      tool: 'report_stage',
+      ok: true,
+      preview: `${safeStatus === 'done' ? '✓ ' : '▶ '}${label}${cleanNote ? ` — ${cleanNote}` : ''}`,
+    });
+    return { ok: true, stage: safeStage, status: safeStatus, label };
+  },
+};
+
 // ─── Assembly ──────────────────────────────────────────────────────────
 
 /**
@@ -1797,6 +1885,7 @@ function buildTaskTools() {
     compareDocuments,
     verifyArtifact,
     runTests,
+    reportStage,
     // Visual & media generation tools
     ...visualMediaTools,
   ];
@@ -1947,6 +2036,7 @@ module.exports = {
     compareDocuments,
     verifyArtifact,
     runTests,
+    reportStage,
     previewText,
     artifactIdFor,
     metadataPathFor,

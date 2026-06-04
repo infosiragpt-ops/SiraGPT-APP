@@ -2741,6 +2741,18 @@ class ApiClient {
     });
   }
 
+  // Professional document cycle (Ciclo profesional de agentes para documentos)
+  async classifyDocumentCycle(data: {
+    topic: string;
+    documentType?: string;
+    field?: string;
+  }) {
+    return this.request('/agent/document-cycle/classify', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
   // Thesis Generation endpoints
   async generateThesis(data: { topics: string[]; chatId?: string }) {
     return this.request('/thesis/generate', {
