@@ -722,11 +722,26 @@ async function analyzeFile(prisma, {
   ]);
 
   if (chunks.length) {
+    // Persist ONLY columns that exist on the DocumentChunk model. Chunk
+    // objects carry extra structural fields (e.g. sectionLevel, sectionPath)
+    // that live inside `metadata`, not as table columns — spreading the raw
+    // chunk made createMany throw `Unknown argument` and broke analysis for
+    // any sectioned document (DOCX/markdown). Whitelisting keeps this robust
+    // against future chunk-shape additions without a migration.
     await prisma.documentChunk.createMany({
       data: chunks.map((chunk) => ({
         analysisId: analysis.id,
         fileId: file.id,
-        ...chunk,
+        ordinal: chunk.ordinal,
+        sourceType: chunk.sourceType,
+        sourceLabel: chunk.sourceLabel ?? null,
+        pageNumber: chunk.pageNumber ?? null,
+        sheetName: chunk.sheetName ?? null,
+        slideNumber: chunk.slideNumber ?? null,
+        sectionTitle: chunk.sectionTitle ?? null,
+        text: chunk.text,
+        charCount: chunk.charCount ?? (typeof chunk.text === 'string' ? chunk.text.length : 0),
+        metadata: chunk.metadata ?? null,
       })),
     });
   }
@@ -853,8 +868,11 @@ async function retrieveEvidence(prisma, { userId, fileId, query, limit = MAX_EVI
       }
     }
 
-    // Section path match (parent section relevance)
-    const sectionPath = String(chunk.sectionPath || '').toLowerCase();
+    // Section path match (parent section relevance). Stored chunks keep the
+    // section path inside metadata (not a DB column), so fall back to it.
+    const sectionPath = String(
+      chunk.sectionPath || chunk.metadata?.sectionPath || ''
+    ).toLowerCase();
     for (const term of terms) {
       if (sectionPath.includes(term) && !matchedTerms.includes(term)) {
         score += 5;
