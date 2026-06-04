@@ -123,16 +123,16 @@ function checkProcess() {
   };
 }
 
-function checkModelProvidersConfigured() {
+function checkModelProvidersConfigured(env = process.env) {
   // Informational only — environment configuration is an ops concern,
   // not a runtime invariant. Surfaces *which* providers are reachable
   // so dashboards can flag missing keys without 503'ing the API.
   const providers = {
-    openai: Boolean(process.env.OPENAI_API_KEY),
-    anthropic: Boolean(process.env.ANTHROPIC_API_KEY),
-    groq: Boolean(process.env.GROQ_API_KEY),
-    gemini: Boolean(process.env.GEMINI_API_KEY),
-    openrouter: Boolean(process.env.OPENROUTER_API_KEY),
+    openai: Boolean(env.OPENAI_API_KEY),
+    anthropic: Boolean(env.ANTHROPIC_API_KEY),
+    groq: Boolean(env.GROQ_API_KEY),
+    gemini: Boolean(env.GEMINI_API_KEY),
+    openrouter: Boolean(env.OPENROUTER_API_KEY),
   };
   const configured = Object.values(providers).filter(Boolean).length;
   return {
@@ -468,14 +468,14 @@ async function runReadinessCheck({ prisma, redis, queue } = {}) {
   return composeStatus(checks);
 }
 
-async function runFullHealthCheck({ prisma, redis, queue, telemetry, sentry, langfuse, posthog, circuitBreakers, coworkHealth, googleOAuth, startupEnv } = {}) {
+async function runFullHealthCheck({ prisma, redis, queue, telemetry, sentry, langfuse, posthog, circuitBreakers, coworkHealth, googleOAuth, startupEnv, env = process.env } = {}) {
   const checks = await Promise.all([
     checkDatabase(prisma),
     checkRedis(redis),
     checkQueue(queue),
   ]);
   checks.push(checkProcess());
-  checks.push(checkModelProvidersConfigured());
+  checks.push(checkModelProvidersConfigured(env));
   checks.push(checkOpenTelemetry(telemetry));
   checks.push(checkSentry(sentry));
   checks.push(checkLangfuse(langfuse));
@@ -484,7 +484,7 @@ async function runFullHealthCheck({ prisma, redis, queue, telemetry, sentry, lan
   if (coworkHealth) {
     checks.push(checkCoworkSubsystem(coworkHealth));
   }
-  checks.push(checkR2Storage());
+  checks.push(checkR2Storage(env));
   checks.push(checkPlaywright());
 
   // OAuth boot-config health: pushed into the checks array so a stale

@@ -394,25 +394,21 @@ describe("runFullHealthCheck", () => {
 
 describe("runFullHealthCheck google_oauth exposure", () => {
   function withProviderKey(fn) {
-    const originalOpenAI = process.env.OPENAI_API_KEY;
-    const originalNodeEnv = process.env.NODE_ENV;
-    process.env.OPENAI_API_KEY = "sk-test";
-    process.env.NODE_ENV = "test";
-    return Promise.resolve()
-      .then(fn)
-      .finally(() => {
-        if (originalOpenAI === undefined) delete process.env.OPENAI_API_KEY;
-        else process.env.OPENAI_API_KEY = originalOpenAI;
-        if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
-        else process.env.NODE_ENV = originalNodeEnv;
-      });
+    const env = {
+      ...process.env,
+      OPENAI_API_KEY: "sk-test",
+      NODE_ENV: "test",
+      SIRAGPT_REQUIRE_R2_ARTIFACTS: "0",
+    };
+    return Promise.resolve().then(() => fn(env));
   }
 
   test("oauth mismatch drives overall degraded + exposes googleOAuth key and google_oauth check", () =>
-    withProviderKey(async () => {
+    withProviderKey(async (env) => {
       const r = await runFullHealthCheck({
         prisma: { $queryRawUnsafe: async () => 1 },
         redis: { ping: async () => "PONG" },
+        env,
         googleOAuth: {
           checked: true,
           mismatch: true,
@@ -440,10 +436,11 @@ describe("runFullHealthCheck google_oauth exposure", () => {
     }));
 
   test("no googleOAuth dep → google_oauth check is skipped and does not force degraded", () =>
-    withProviderKey(async () => {
+    withProviderKey(async (env) => {
       const r = await runFullHealthCheck({
         prisma: { $queryRawUnsafe: async () => 1 },
         redis: { ping: async () => "PONG" },
+        env,
       });
 
       const check = r.checks.find((c) => c.name === "google_oauth");
@@ -456,10 +453,11 @@ describe("runFullHealthCheck google_oauth exposure", () => {
     }));
 
   test("clean oauth result ({checked:true, issues:[]}) reports healthy", () =>
-    withProviderKey(async () => {
+    withProviderKey(async (env) => {
       const r = await runFullHealthCheck({
         prisma: { $queryRawUnsafe: async () => 1 },
         redis: { ping: async () => "PONG" },
+        env,
         googleOAuth: { checked: true, mismatch: false, issues: [] },
       });
 
