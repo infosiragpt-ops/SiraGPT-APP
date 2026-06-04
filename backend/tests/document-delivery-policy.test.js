@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const {
   buildDocumentDeliveryPolicy,
+  normalizeDocumentPolicyCoherence,
   detectFormat,
 } = require('../src/services/agents/document-delivery-policy');
 
@@ -95,6 +96,73 @@ test('DocumentDeliveryPolicy creates Word only when attached-document conclusion
 
 test('detectFormat honors explicit requested format', () => {
   assert.equal(detectFormat('Haz un informe', 'pdf'), 'pdf');
+});
+
+test('DocumentDeliveryPolicy reason never contradicts autoGenerate for any built policy', () => {
+  // Regression for the agent_task_queued log: mode:doc_required +
+  // autoGenerate:true paired with reason "documento sugerido, no
+  // automatico". A required deliverable must never carry a suggestion
+  // reason, and a suggestion reason must never carry autoGenerate:true.
+  const goals = [
+    'Genera un informe profesional, extenso y detallado sobre el mercado peruano con análisis y conclusiones.',
+    'Hazme un word completo sobre la guerra fría con metodología y referencias.',
+    'Crea un excel corporativo con varias hojas, fórmulas y validaciones.',
+    'Prepara una presentación pitch para inversionistas con 20 diapositivas.',
+    'dame una idea corta',
+    'analiza esta tesis académica de investigación',
+  ];
+  for (const goal of goals) {
+    const longText = Array.from({ length: 1200 }, (_, idx) => `palabra${idx}`).join(' ');
+    const policy = buildDocumentDeliveryPolicy({ goal, finalText: longText });
+    const suggestsOptional = /no\s+autom[aá]tic|sugerid|opcional/i.test(policy.reason);
+    if (policy.autoGenerate) {
+      assert.equal(policy.mode, 'doc_required', `"${goal}" autoGenerate implies doc_required`);
+      assert.equal(suggestsOptional, false, `"${goal}" forced doc must not have a suggestion reason: ${policy.reason}`);
+    }
+    if (suggestsOptional) {
+      assert.equal(policy.autoGenerate, false, `"${goal}" suggestion reason must not force generation`);
+      assert.notEqual(policy.mode, 'doc_required', `"${goal}" suggestion reason must not be doc_required`);
+    }
+  }
+});
+
+test('normalizeDocumentPolicyCoherence downgrades doc_required when reason says not automatic', () => {
+  const contradictory = {
+    mode: 'doc_required',
+    format: 'docx',
+    template: 'business',
+    complexity: 'high',
+    autoGenerate: true,
+    reason: 'Respuesta prevista extensa; documento sugerido, no automatico.',
+  };
+  const fixed = normalizeDocumentPolicyCoherence(contradictory);
+  assert.equal(fixed.mode, 'doc_suggested');
+  assert.equal(fixed.autoGenerate, false);
+});
+
+test('normalizeDocumentPolicyCoherence derives autoGenerate strictly from mode', () => {
+  assert.equal(
+    normalizeDocumentPolicyCoherence({ mode: 'doc_required', reason: 'Word requerido.', autoGenerate: false }).autoGenerate,
+    true,
+  );
+  assert.equal(
+    normalizeDocumentPolicyCoherence({ mode: 'doc_suggested', reason: 'densidad suficiente', autoGenerate: true }).autoGenerate,
+    false,
+  );
+  assert.equal(
+    normalizeDocumentPolicyCoherence({ mode: 'chat_only', reason: 'corta', autoGenerate: true }).autoGenerate,
+    false,
+  );
+});
+
+test('normalizeDocumentPolicyCoherence leaves coherent required policies untouched', () => {
+  const coherent = {
+    mode: 'doc_required',
+    format: 'docx',
+    autoGenerate: true,
+    reason: 'Entregable documental explícito; Word requerido.',
+  };
+  assert.equal(normalizeDocumentPolicyCoherence(coherent), coherent);
 });
 
 test('DocumentDeliveryPolicy treats "cuál es el título del word?" as chat-only (read intent, not generate)', () => {

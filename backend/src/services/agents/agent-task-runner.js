@@ -28,7 +28,7 @@ const { buildToolRuntimePlan } = require('./enterprise-tool-gateway');
 const { buildAgenticQaBoardReview } = require('./agentic-qa-board');
 const { buildAgenticOperatingCore } = require('./agentic-operating-core');
 const durableExecutionStore = require('./durable-execution-store');
-const { buildDocumentDeliveryPolicy } = require('./document-delivery-policy');
+const { buildDocumentDeliveryPolicy, normalizeDocumentPolicyCoherence } = require('./document-delivery-policy');
 const { getQueueName } = require('./agent-task-queue');
 const persistence = require('./agent-task-persistence');
 const { generateAutoDocument } = require('./auto-document-delivery');
@@ -861,11 +861,13 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
   const startedAt = Date.now();
   const existing = taskStore.getTaskSnapshotForUser(taskId, user.id);
   let streamState = existing?.streamState || internals.initialAgentState();
-  let documentPolicy = payload.documentPolicy || existing?.documentPolicy || buildDocumentDeliveryPolicy({
-    goal,
-    displayGoal,
-    files,
-  });
+  let documentPolicy = normalizeDocumentPolicyCoherence(
+    payload.documentPolicy || existing?.documentPolicy || buildDocumentDeliveryPolicy({
+      goal,
+      displayGoal,
+      files,
+    })
+  );
   const runtimeModelProfile = normalizeAgentRuntimeModel(model);
 
   const executionProfile = buildExecutionProfile({ goal, fileIds: files, fileMetadata });

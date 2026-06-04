@@ -145,6 +145,34 @@ function hasExplicitDocumentOutputRequest(value) {
   return EXPLICIT_DOCUMENT_OUTPUT_RE.test(compactText(value));
 }
 
+// Motivos que declaran explícitamente que el documento es opcional / no
+// automático. Si uno de estos aparece junto a mode:"doc_required" hay una
+// contradicción: la política dice "sugerir" pero los flags fuerzan.
+const SUGGESTION_REASON_RE = /no\s+autom[aá]tic|sugerid|opcional/i;
+const VALID_MODES = new Set(['chat_only', 'doc_suggested', 'doc_required']);
+
+// Punto único de coherencia para cualquier documentPolicy, venga del builder,
+// del payload del cliente o de estado persistido. Garantiza invariantes para
+// que `mode`, `autoGenerate` y `reason` no puedan volver a divergir:
+//   1. doc_required  ⇒ autoGenerate:true  (entregable impuesto)
+//   2. todo lo demás ⇒ autoGenerate:false (sugerencia/chat, requiere usuario)
+//   3. un reason que menciona "no automático"/"sugerido"/"opcional" es
+//      incompatible con doc_required: la intención declarada (sugerir) gana y
+//      degrada el modo a doc_suggested.
+function normalizeDocumentPolicyCoherence(policy) {
+  if (!policy || typeof policy !== 'object') return policy;
+  let mode = VALID_MODES.has(policy.mode) ? policy.mode : 'chat_only';
+  const reason = typeof policy.reason === 'string' ? policy.reason : '';
+  if (mode === 'doc_required' && SUGGESTION_REASON_RE.test(reason)) {
+    mode = 'doc_suggested';
+  }
+  const autoGenerate = mode === 'doc_required';
+  if (mode === policy.mode && autoGenerate === policy.autoGenerate) {
+    return policy;
+  }
+  return { ...policy, mode, autoGenerate };
+}
+
 function buildDocumentDeliveryPolicy({
   goal,
   displayGoal,
@@ -171,15 +199,24 @@ function buildDocumentDeliveryPolicy({
     if (transcriptionOnly) return 'Solicitud de transcripción literal; se responde en chat salvo que el usuario pida un archivo.';
     if (DOCUMENT_UNDERSTANDING_RE.test(requestText) && !EXPLICIT_DOCUMENT_OUTPUT_RE.test(requestText)) return 'Solicitud de analisis documental; se responde primero en chat y se sugiere documento solo si hace falta.';
     if (mode === 'chat_only') return 'Respuesta conversacional corta; no requiere archivo.';
-    if (mode === 'doc_suggested') return 'La respuesta tiene suficiente densidad para sugerir un documento profesional.';
-    if (estimated >= 900) return 'Respuesta prevista extensa; documento sugerido, no automatico.';
+    // Los motivos de "sugerencia" (documento opcional, no automático) deben
+    // quedar confinados a doc_suggested. Si se filtran a doc_required el
+    // reason contradice autoGenerate:true. Por eso se resuelven aquí, antes
+    // de los motivos imperativos de doc_required.
+    if (mode === 'doc_suggested') {
+      return estimated >= 900
+        ? 'Respuesta prevista extensa; documento sugerido, no automatico.'
+        : 'La respuesta tiene suficiente densidad para sugerir un documento profesional.';
+    }
+    // mode === 'doc_required': entregable impuesto. El motivo nunca debe
+    // insinuar opcionalidad para no divergir de autoGenerate:true.
     if (format === 'xlsx') return 'Solicitud tabular/de datos; Excel requerido.';
     if (format === 'pptx') return 'Solicitud de presentación; PowerPoint requerido.';
     if (format === 'pdf') return 'Solicitud imprimible/formal; PDF requerido.';
     return 'Entregable documental explícito; Word requerido.';
   })();
 
-  return {
+  return normalizeDocumentPolicyCoherence({
     mode,
     format,
     template,
@@ -196,12 +233,13 @@ function buildDocumentDeliveryPolicy({
       documentUnderstanding,
     },
     palette: PALETTES[template] || PALETTES.business,
-  };
+  });
 }
 
 module.exports = {
   PALETTES,
   buildDocumentDeliveryPolicy,
+  normalizeDocumentPolicyCoherence,
   detectComplexity,
   detectFormat,
   detectTemplate,
