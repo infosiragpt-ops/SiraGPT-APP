@@ -326,20 +326,27 @@ class BulkheadPool extends EventEmitter {
 
     if (this._active === 0) return;
 
-    // Wait for active operations to complete (or timeout)
-    return new Promise((resolve, reject) => {
+    // Wait for active operations to complete (or timeout).
+    // The 'released' listener is named and detached on BOTH settle paths
+    // so a drained (and possibly re-cached) pool never accumulates stale
+    // listeners — leaving it attached leaked a closure per drain and
+    // tripped MaxListenersExceededWarning after 10 drains on a reused pool.
+    return new Promise((resolve) => {
+      const onReleased = () => {
+        if (this._active === 0) {
+          clearTimeout(timer);
+          this.removeListener('released', onReleased);
+          this.emit('drained', { name: this.name });
+          resolve();
+        }
+      };
       const timer = setTimeout(() => {
+        this.removeListener('released', onReleased);
         this.emit('drain_timeout', { name: this.name, remainingActive: this._active });
         resolve(); // Resolve anyway — don't block shutdown forever
       }, timeoutMs);
 
-      this.on('released', () => {
-        if (this._active === 0) {
-          clearTimeout(timer);
-          this.emit('drained', { name: this.name });
-          resolve();
-        }
-      });
+      this.on('released', onReleased);
     });
   }
 }
