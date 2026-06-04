@@ -227,9 +227,33 @@ function planLocalComputerTask(task, options = {}) {
   return planDesktopAction(task, options);
 }
 
+/**
+ * High-level entry point for the Computer Use engine.
+ * Routes actions correctly depending on the host platform.
+ * On Linux: prefers real desktop control via xdotool + xdg tools.
+ * On macOS: uses existing macOS bridge.
+ */
+async function executeComputerAction(action, options = {}) {
+  const platform = getPlatform();
+
+  if (platform === 'linux') {
+    // Linux: support both advanced desktop actions and basic bridge actions
+    const advancedTypes = ['move_mouse', 'click', 'type_text', 'key_press', 'scroll'];
+    if (advancedTypes.includes(action.type)) {
+      return executeLinuxAdvancedAction(action);
+    }
+    // Fall through to normal bridge for open_app, open_url, run_shell_command, etc.
+    return executeDesktopBridgeAction(action, options);
+  }
+
+  // Non-Linux platforms use the existing bridge
+  return executeDesktopBridgeAction(action, options);
+}
+
 module.exports = {
   captureDesktopScreenshot,
   executeDesktopBridgeAction,
+  executeComputerAction,
   getBridgeStatus,
   planLocalComputerTask,
   _internal: { getPlatform, isLinux, isMac },
