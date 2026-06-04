@@ -21,7 +21,7 @@
 
 import { useEffect, useState } from "react"
 import clsx from "clsx"
-import { ThinkingBarsIcon } from "@/components/icons/thinking-bars-icon"
+import { DotmCircular15 } from "@/components/ui/dotm-circular-15"
 
 const ROTATING_MESSAGES = [
   "Pensando…",
@@ -100,8 +100,11 @@ export const ThinkingPlaceholder = ({ stage, pct, compact = false, className }: 
         className,
       )}
     >
-      <ThinkingBarsIcon
-        className={clsx("shrink-0", compact ? "h-4 w-4" : "h-5 w-5")}
+      <DotmCircular15
+        size={compact ? 16 : 20}
+        dotSize={compact ? 2 : 3}
+        ariaLabel={hasExplicitStage ? stage! : "Generando respuesta"}
+        className="shrink-0"
       />
 
       {hasExplicitStage ? (

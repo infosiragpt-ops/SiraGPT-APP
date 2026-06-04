@@ -233,6 +233,69 @@ async function unlinkQuiet(p) {
   try { await fs.unlink(p); } catch (_) { /* already gone */ }
 }
 
+// Bound a slow/best-effort step so a hung upstream (OpenAI Files API, a
+// parser stuck on a pathological document, etc.) can never consume the
+// whole HTTP response budget. The reverse proxy / GCLB cuts a request at
+// ~30s regardless of heartbeats, so an un-bounded external call here would
+// surface to the user as a *failed upload* even though the binary is
+// already safely on disk. We reject fast and let the caller's existing
+// try/catch degrade gracefully (text/thumbnail/OpenAI are all optional).
+// The underlying promise may keep running in the background; that's fine —
+// we only care that the response path is bounded.
+function withTimeout(promise, ms, label) {
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const err = new Error(`${label || 'operation'} timed out after ${ms}ms`);
+      err.code = 'step_timeout';
+      reject(err);
+    }, ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+// Per-step timeout budgets. Kept well under the ~30s proxy cut so the
+// synchronous upload path always returns a JSON result, even when an
+// upstream is degraded. Overridable via env for ops tuning.
+const EXTRACT_TIMEOUT_MS = Number.parseInt(process.env.SIRAGPT_EXTRACT_TIMEOUT_MS || '20000', 10);
+const THUMBNAIL_TIMEOUT_MS = Number.parseInt(process.env.SIRAGPT_THUMBNAIL_TIMEOUT_MS || '12000', 10);
+const OPENAI_FILE_TIMEOUT_MS = Number.parseInt(process.env.SIRAGPT_OPENAI_FILE_TIMEOUT_MS || '15000', 10);
+const ANALYZE_TIMEOUT_MS = Number.parseInt(process.env.SIRAGPT_ANALYZE_TIMEOUT_MS || '8000', 10);
+
+const OPENAI_FILE_MIMES = new Set([
+  'application/pdf',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-powerpoint',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+]);
+
+// Upload a document to the OpenAI Files API, bounded by a timeout and with
+// SDK retries disabled (retries would multiply the wall-clock cost and risk
+// the proxy cut). Returns the OpenAI file id, or null on any failure —
+// OpenAI Files is an optional enhancement, never a hard upload dependency.
+async function uploadToOpenAiFiles(file) {
+  if (!OPENAI_FILE_MIMES.has(file.mimetype) && !file.mimetype.startsWith('text/')) {
+    return null;
+  }
+  try {
+    const buf = await fs.readFile(file.path);
+    const oaFile = await withTimeout(
+      openai.files.create(
+        { file: new File([buf], file.originalname, { type: file.mimetype }), purpose: 'assistants' },
+        { timeout: OPENAI_FILE_TIMEOUT_MS, maxRetries: 0 },
+      ),
+      OPENAI_FILE_TIMEOUT_MS + 2000,
+      'OpenAI Files upload',
+    );
+    return oaFile.id;
+  } catch (openaiError) {
+    console.error('OpenAI file upload error:', openaiError?.message || openaiError);
+    return null;
+  }
+}
+
 
 // ─── Parallel batch processor ──────────────────────────────────────────────
 // Processes files in chunks of MAX_CONCURRENT to avoid overwhelming the
@@ -321,30 +384,26 @@ async function processFilesInParallel(files, userId, prismaClient) {
         // just lands with no locally-extracted text. This is the core of the
         // "any document uploads without failure" guarantee.
         await fileProcessingStatus.setStage(prismaClient, fileRecord.id, 'extracting', { userId });
-        let result;
-        try {
-          result = await fileProcessor.processFile(file);
-        } catch (extractErr) {
-          console.warn(`[files] text extraction failed for ${file.originalname} — upload still succeeds:`, extractErr?.message || extractErr);
-          result = { success: false, extractedText: '', error: `extraction_degraded: ${extractErr?.message || extractErr}` };
-        }
-        let thumbnailPath = null;
-        try {
-          thumbnailPath = await fileProcessor.generateThumbnail(file.path, file.mimetype);
-        } catch (thumbErr) {
-          console.warn(`[files] thumbnail generation failed for ${file.originalname}:`, thumbErr?.message || thumbErr);
-        }
 
-        // ── Upload to OpenAI Files API ──
-        let openaiFileId = null;
-        const oaMimes = ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.ms-powerpoint', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'];
-        if (oaMimes.includes(file.mimetype) || file.mimetype.startsWith('text/')) {
-          try {
-            const buf = await fs.readFile(file.path);
-            const oaFile = await openai.files.create({ file: new File([buf], file.originalname, { type: file.mimetype }), purpose: 'assistants' });
-            openaiFileId = oaFile.id;
-          } catch (openaiError) { console.error('OpenAI file upload error:', openaiError); }
-        }
+        // Run extraction, thumbnail, and the OpenAI Files upload CONCURRENTLY.
+        // They're independent (all read only the on-disk binary), so racing
+        // them keeps the worst-case wall-clock at max(step), not the sum —
+        // critical because the reverse proxy cuts the response at ~30s. Each
+        // is individually bounded and degrades to a safe default on failure,
+        // so a slow/down upstream never fails the upload.
+        const [result, thumbnailPath, openaiFileId] = await Promise.all([
+          withTimeout(fileProcessor.processFile(file), EXTRACT_TIMEOUT_MS, `text extraction (${file.originalname})`)
+            .catch((extractErr) => {
+              console.warn(`[files] text extraction failed for ${file.originalname} — upload still succeeds:`, extractErr?.message || extractErr);
+              return { success: false, extractedText: '', error: `extraction_degraded: ${extractErr?.message || extractErr}` };
+            }),
+          withTimeout(fileProcessor.generateThumbnail(file.path, file.mimetype), THUMBNAIL_TIMEOUT_MS, `thumbnail (${file.originalname})`)
+            .catch((thumbErr) => {
+              console.warn(`[files] thumbnail generation failed for ${file.originalname}:`, thumbErr?.message || thumbErr);
+              return null;
+            }),
+          uploadToOpenAiFiles(file),
+        ]);
 
         // ── Update DB record ──
         fileRecord = await prismaClient.file.update({
@@ -356,7 +415,11 @@ async function processFilesInParallel(files, userId, prismaClient) {
         const ocrMeta = serializeOcrMeta(result);
         let analysis = null;
         try {
-          analysis = await documentIntelligence.analyzeFile(prismaClient, { userId, fileRecord, extractionResult: result, force: true });
+          analysis = await withTimeout(
+            documentIntelligence.analyzeFile(prismaClient, { userId, fileRecord, extractionResult: result, force: true }),
+            ANALYZE_TIMEOUT_MS,
+            `document analysis (${file.originalname})`,
+          );
         } catch (analysisError) { console.warn('[files] document analysis failed:', analysisError.message || analysisError); }
 
         // The upload itself succeeded (binary stored + record updated), so we
@@ -423,27 +486,19 @@ async function processFileAfterFastUpload(file, userId, prismaClient, fileRecord
     // just without locally-extracted text.
     let result;
     try {
-      result = await fileProcessor.processFile(file);
+      result = await withTimeout(fileProcessor.processFile(file), EXTRACT_TIMEOUT_MS, `text extraction (${file.originalname})`);
     } catch (extractErr) {
       console.warn(`[files] async text extraction failed for ${file.originalname} — file stays usable:`, extractErr?.message || extractErr);
       result = { success: false, extractedText: '', error: `extraction_degraded: ${extractErr?.message || extractErr}` };
     }
     let thumbnailPath = null;
     try {
-      thumbnailPath = await fileProcessor.generateThumbnail(file.path, file.mimetype);
+      thumbnailPath = await withTimeout(fileProcessor.generateThumbnail(file.path, file.mimetype), THUMBNAIL_TIMEOUT_MS, `thumbnail (${file.originalname})`);
     } catch (thumbErr) {
       console.warn(`[files] async thumbnail generation failed for ${file.originalname}:`, thumbErr?.message || thumbErr);
     }
 
-    let openaiFileId = null;
-    const oaMimes = ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.ms-powerpoint', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'];
-    if (oaMimes.includes(file.mimetype) || file.mimetype.startsWith('text/')) {
-      try {
-        const buf = await fs.readFile(file.path);
-        const oaFile = await openai.files.create({ file: new File([buf], file.originalname, { type: file.mimetype }), purpose: 'assistants' });
-        openaiFileId = oaFile.id;
-      } catch (openaiError) { console.error('OpenAI file upload error:', openaiError); }
-    }
+    const openaiFileId = await uploadToOpenAiFiles(file);
 
     fileRecord = await prismaClient.file.update({
       where: { id: fileRecord.id },
