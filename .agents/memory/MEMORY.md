@@ -20,6 +20,8 @@
 - [Image gen vs edit providers](image-edit-provider-matrix.md) — editing (imagePath) only works on OpenAI/Gemini; OpenRouter is generation-only and must be rerouted, never hard-fail.
 - [Backend test CI wiring](backend-test-ci-wiring.md) — new backend tests only run in CI if added to package.json `test` string; /health routes live in injectable createHealthRoutes for supertest.
 - [LaTeX bracket delimiters](latex-bracket-delimiters.md) — LLM `\( \)`/`\[ \]` math needs a pre-parse STRING normalizer (CommonMark strips the backslash before remark plugins see it); convert to `$`/`$$`.
+- [UI lock re-baseline](ui-lock-rebaseline.md) — verify-ui-lock.sh has no update mode; after approved frontend changes regen docs/UI_LOCK_HASHES.txt with its exact find|shasum command.
+- [OpenClaw agentic already integrated](openclaw-agentic-state.md) — OpenClaw tools/skills/agentic loop already live: agentic-chat-stream isEnabled() defaults true, buildDefaultTools wires broad real toolset; map "covered", don't re-port.
 - [Document chunk persistence](docintel-chunk-persistence.md) — createMany must whitelist DocumentChunk columns; raw `...chunk` spread throws Unknown argument sectionLevel and hangs analysis; stored chunks keep sectionPath in metadata.
 - [Deploy promote frontend gating](deploy-promote-frontend-gating.md) — Reserved VM promote health-checks frontend port 3000, not backend; backend-only deltas can't fail promote → a "waiting for ready" fail is transient, just republish.
 - [Curated IMAGE activation](curated-image-activation.md) — ensureStaticCatalogModels is hot-path; gate any "reactivate curated rows" write behind a per-instance once-per-process flag, never unconditional.
