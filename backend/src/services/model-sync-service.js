@@ -28,6 +28,7 @@ class ModelSyncService {
     // ensureStaticCatalogModels below. Per-instance so prod (singleton) runs it
     // once per process, while tests (fresh instances) each exercise it.
     this._curatedImageActivationDone = false;
+    this._staticCatalogSyncFlights = new Map();
   }
 
   getStaticVideoModels() {
@@ -593,7 +594,27 @@ class ModelSyncService {
     return { applied: true, count: result.count || 0, reason: 'default_inactive_enforced' };
   }
 
-  async ensureStaticCatalogModels(options = {}) {
+  _getStaticCatalogSyncFlightKey(options = {}) {
+    const types = Array.isArray(options.types)
+      ? [...new Set(options.types.map(type => String(type).toUpperCase()).filter(Boolean))].sort()
+      : [];
+    return types.length ? `types:${types.join(',')}` : 'types:*';
+  }
+
+  ensureStaticCatalogModels(options = {}) {
+    const flightKey = this._getStaticCatalogSyncFlightKey(options);
+    if (this._staticCatalogSyncFlights.has(flightKey)) {
+      return this._staticCatalogSyncFlights.get(flightKey);
+    }
+
+    const flight = this._ensureStaticCatalogModels(options).finally(() => {
+      this._staticCatalogSyncFlights.delete(flightKey);
+    });
+    this._staticCatalogSyncFlights.set(flightKey, flight);
+    return flight;
+  }
+
+  async _ensureStaticCatalogModels(options = {}) {
     const types = Array.isArray(options.types) && options.types.length
       ? new Set(options.types.map(type => String(type).toUpperCase()))
       : null;
@@ -648,18 +669,31 @@ class ModelSyncService {
         continue;
       }
 
-      await this.prisma.aiModel.create({
-        data: {
-          name: model.name,
-          ...data,
-          // Curated IMAGE models seed ACTIVE; other IMAGE models stay inactive
-          // until an admin enables them. VIDEO manifest rows can still request
-          // active seeding because the video picker must work immediately.
-          isActive: modelType === 'IMAGE'
-            ? DEFAULT_ACTIVE_IMAGE_MODEL_NAMES.has(model.name)
-            : model.isActive === true,
-        },
-      });
+      try {
+        await this.prisma.aiModel.create({
+          data: {
+            name: model.name,
+            ...data,
+            // Curated IMAGE models seed ACTIVE; other IMAGE models stay inactive
+            // until an admin enables them. VIDEO manifest rows can still request
+            // active seeding because the video picker must work immediately.
+            isActive: modelType === 'IMAGE'
+              ? DEFAULT_ACTIVE_IMAGE_MODEL_NAMES.has(model.name)
+              : model.isActive === true,
+          },
+        });
+      } catch (err) {
+        if (err?.code !== 'P2002') throw err;
+        const fallbackData = { ...data };
+        delete fallbackData.isActive;
+        await this.prisma.aiModel.update({
+          where: { name: model.name },
+          data: fallbackData,
+        });
+        updated++;
+        existingNames.add(model.name);
+        continue;
+      }
       created++;
       existingNames.add(model.name);
     }

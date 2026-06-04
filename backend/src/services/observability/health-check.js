@@ -328,7 +328,7 @@ function checkPlaywright() {
   } catch {
     return {
       name: 'playwright',
-      status: 'degraded',
+      status: 'skipped',
       critical: false,
       latency_ms: Date.now() - start,
       details: { installed: false, reason: 'research_agent_text_only_mode' },
