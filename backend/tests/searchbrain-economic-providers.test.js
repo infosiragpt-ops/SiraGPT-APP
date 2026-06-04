@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 
 const { catalogProviders } = require("../src/services/searchBrain/universal/providers/catalog");
+const { guardedSearch } = require("../src/services/searchBrain/universal/providers/providerUtils");
 
 function byId(id) {
   return catalogProviders.filter((p) => p.id === id);
@@ -38,6 +39,14 @@ test("worldbank-indicators provider is registered and key-free", () => {
 test("existing country-level worldbank provider is preserved and distinct", () => {
   assert.strictEqual(byId("worldbank").length, 1);
   assert.notStrictEqual(byId("worldbank")[0], byId("worldbank-indicators")[0]);
+});
+
+test("guardedSearch runs the current query closure (no stale-closure caching across queries)", async () => {
+  const id = "test-breaker-regression";
+  const first = await guardedSearch(id, async () => [{ q: "first" }]);
+  const second = await guardedSearch(id, async () => [{ q: "second" }]);
+  assert.deepStrictEqual(first, [{ q: "first" }]);
+  assert.deepStrictEqual(second, [{ q: "second" }]);
 });
 
 test("no duplicate provider ids exist in the catalog", () => {

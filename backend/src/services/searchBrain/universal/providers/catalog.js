@@ -398,8 +398,8 @@ const financeProviders = [
           { code: "NE.IMP.GNFS.CD", label: "Imports of goods and services (current US$)", keywords: ["imports", "importaciones"] },
           { code: "BX.KLT.DINV.CD.WD", label: "Foreign direct investment, net inflows (current US$)", keywords: ["foreign direct investment", "fdi", "inversion extranjera"] },
         ];
-        let matches = WB_INDICATORS.filter((ind) => ind.keywords.some((k) => q.includes(k)));
-        if (matches.length === 0) matches = [WB_INDICATORS[0]];
+        const matches = WB_INDICATORS.filter((ind) => ind.keywords.some((k) => q.includes(k)));
+        if (matches.length === 0) return [];
         const country = String(opts.raw?.countryCode || opts.raw?.country || "WLD").toUpperCase();
         const out = [];
         for (const ind of matches.slice(0, 3)) {
