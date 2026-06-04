@@ -297,6 +297,16 @@ function startBackend() {
 async function main() {
   const migrationStatus = await runMigrations();
   if (migrationStatus !== 0) {
+    // Opt-in safety valve (default OFF — byte-identical to before when unset):
+    // when MIGRATION_NONFATAL=1, boot the backend anyway so it can still bind
+    // its port and serve traffic in a degraded state instead of leaving the
+    // whole instance down (which surfaces as ECONNREFUSED on every /api call).
+    // The operator must still fix the underlying DB/migration condition.
+    if (process.env.MIGRATION_NONFATAL === "1") {
+      log("migrations failed but MIGRATION_NONFATAL=1 — booting anyway (degraded)", { status: migrationStatus });
+      startBackend();
+      return;
+    }
     log("migrations failed — aborting boot", { status: migrationStatus });
     process.exit(migrationStatus);
   }
