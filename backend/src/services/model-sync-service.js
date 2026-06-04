@@ -248,7 +248,10 @@ class ModelSyncService {
       try {
         const response = await axios.get('https://generativelanguage.googleapis.com/v1beta/openai/models', {
           headers: {
-            'x-goog-api-key': apiKey,
+            // The OpenAI-compatibility surface expects a Bearer token, not the
+            // native x-goog-api-key header (which returned 400 and forced the
+            // fallback every hour). Matches admin-connections-bridge convention.
+            Authorization: `Bearer ${apiKey}`,
             'Content-Type': 'application/json'
           },
           timeout: 10000
