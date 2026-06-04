@@ -63,9 +63,14 @@ async function parseZip(filePath) {
     // Walk extracted files
     const inventory = [];
     const textParts = [];
-    let totalChars = 0;
+    // Running extracted-char count, shared by reference across the
+    // recursive walkDirectory calls (mirrors how inventory/textParts are
+    // threaded). Must live in an object — a bare `let` is not visible to
+    // the top-level walkDirectory function and previously threw
+    // ReferenceError, aborting all text extraction.
+    const counter = { totalChars: 0 };
 
-    await walkDirectory(extractDir, extractDir, inventory, textParts, { depth: 0 });
+    await walkDirectory(extractDir, extractDir, inventory, textParts, { depth: 0, counter });
 
     // Build output
     const fileCount = inventory.length;
@@ -95,6 +100,7 @@ async function parseZip(filePath) {
 }
 
 async function walkDirectory(baseDir, currentDir, inventory, textParts, opts = {}) {
+  const counter = opts.counter || { totalChars: 0 };
   let entries;
   try {
     entries = await fs.promises.readdir(currentDir, { withFileTypes: true });
@@ -114,7 +120,7 @@ async function walkDirectory(baseDir, currentDir, inventory, textParts, opts = {
         inventory.push({ relativePath: relativePath + '/', type: 'directory', extractable: false });
         continue;
       }
-      await walkDirectory(baseDir, fullPath, inventory, textParts, { depth: opts.depth + 1 });
+      await walkDirectory(baseDir, fullPath, inventory, textParts, { depth: opts.depth + 1, counter });
       continue;
     }
 
@@ -137,7 +143,7 @@ async function walkDirectory(baseDir, currentDir, inventory, textParts, opts = {
         size: fileSize,
       });
 
-      if (isText && totalChars < MAX_EXTRACTED_CHARS) {
+      if (isText && counter.totalChars < MAX_EXTRACTED_CHARS) {
         try {
           // Skip files larger than 500KB to avoid memory issues
           if (fileSize > 500 * 1024) {
@@ -146,14 +152,14 @@ async function walkDirectory(baseDir, currentDir, inventory, textParts, opts = {
           }
 
           const content = await fs.promises.readFile(fullPath, 'utf8');
-          const remainingSpace = MAX_EXTRACTED_CHARS - totalChars;
+          const remainingSpace = MAX_EXTRACTED_CHARS - counter.totalChars;
           const snippet = content.length > remainingSpace
             ? content.slice(0, remainingSpace) + `\n[... truncated at ${MAX_EXTRACTED_CHARS} chars total]`
             : content;
 
           if (snippet.trim().length > 0) {
             textParts.push(`\n=== ${relativePath} ===\n${snippet}`);
-            totalChars += Math.min(content.length, remainingSpace);
+            counter.totalChars += Math.min(content.length, remainingSpace);
           }
         } catch {
           // Skip binary or unreadable files
