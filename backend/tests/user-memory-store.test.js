@@ -8,6 +8,7 @@ const {
   createPgUserMemoryStore,
   embedTexts,
   getStore,
+  isConfigured,
   isEnabled,
   vecToLiteral,
 } = require('../src/services/user-memory-store');
@@ -175,5 +176,33 @@ test('getStore returns a singleton when feature flag enabled', () => {
     assert.equal(getStore(), null);
   } finally {
     if (prev !== undefined) process.env.SIRAGPT_USER_MEMORY_STORE = prev;
+  }
+});
+
+test('isConfigured is false when pgvector is enabled but the embed key is missing', () => {
+  assert.equal(isConfigured({ SIRAGPT_USER_MEMORY_STORE: 'memory' }), false);
+  assert.equal(isConfigured({ SIRAGPT_USER_MEMORY_STORE: 'pgvector' }), false);
+  assert.equal(isConfigured({ SIRAGPT_USER_MEMORY_STORE: 'pgvector', VOYAGE_API_KEY: 'vk' }), true);
+  assert.equal(
+    isConfigured({ SIRAGPT_USER_MEMORY_STORE: 'pgvector', SIRAGPT_MEMORY_EMBED_PROVIDER: 'jina' }),
+    false,
+  );
+  assert.equal(
+    isConfigured({ SIRAGPT_USER_MEMORY_STORE: 'pgvector', SIRAGPT_MEMORY_EMBED_PROVIDER: 'jina', JINA_API_KEY: 'jk' }),
+    true,
+  );
+});
+
+test('getStore returns null (no per-turn throw) when enabled but the embed key is missing', () => {
+  const prevStore = process.env.SIRAGPT_USER_MEMORY_STORE;
+  const prevKey = process.env.VOYAGE_API_KEY;
+  process.env.SIRAGPT_USER_MEMORY_STORE = 'pgvector';
+  delete process.env.VOYAGE_API_KEY;
+  try {
+    assert.equal(getStore(), null);
+    assert.equal(getStore(), null); // idempotent; warning is emitted at most once
+  } finally {
+    if (prevStore !== undefined) process.env.SIRAGPT_USER_MEMORY_STORE = prevStore; else delete process.env.SIRAGPT_USER_MEMORY_STORE;
+    if (prevKey !== undefined) process.env.VOYAGE_API_KEY = prevKey; else delete process.env.VOYAGE_API_KEY;
   }
 });

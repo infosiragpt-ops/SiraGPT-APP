@@ -18,6 +18,23 @@ function isEnabled(env = process.env) {
   return env.SIRAGPT_USER_MEMORY_STORE === 'pgvector';
 }
 
+/**
+ * The pgvector store can be flag-enabled but still lack the embedding
+ * provider's API key. In that state we must NOT engage the store: every
+ * recall/upsert would throw `VOYAGE_API_KEY not configured` per chat turn.
+ * Returning `false` here lets long-term-memory fall back cleanly to its
+ * in-memory RAG path (which needs no external key) instead of throwing.
+ */
+function isConfigured(env = process.env) {
+  if (!isEnabled(env)) return false;
+  const provider = (env.SIRAGPT_MEMORY_EMBED_PROVIDER || 'voyage').toLowerCase();
+  if (provider === 'voyage') return Boolean(env.VOYAGE_API_KEY);
+  if (provider === 'jina') return Boolean(env.JINA_API_KEY);
+  // Unknown provider: let getStore() proceed so embedTexts surfaces the
+  // explicit "unsupported provider" error rather than silently disabling.
+  return true;
+}
+
 function contentHash(text) {
   return crypto
     .createHash('sha256')
@@ -210,8 +227,24 @@ function createPgUserMemoryStore({ prisma, embedder = embedTexts } = {}) {
 }
 
 let singleton = null;
+let warnedUnconfigured = false;
 function getStore() {
   if (!isEnabled()) return null;
+  if (!isConfigured()) {
+    // Detect the unconfigured state ONCE: log a single startup-style
+    // warning, then return null so callers degrade to the RAG fallback
+    // silently instead of throwing/logging on every chat turn.
+    if (!warnedUnconfigured) {
+      warnedUnconfigured = true;
+      const provider = (process.env.SIRAGPT_MEMORY_EMBED_PROVIDER || 'voyage').toLowerCase();
+      const keyName = provider === 'jina' ? 'JINA_API_KEY' : 'VOYAGE_API_KEY';
+      console.warn(
+        `[user-memory-store] SIRAGPT_USER_MEMORY_STORE=pgvector but ${keyName} is not set; ` +
+        'falling back to in-memory RAG user memory (set the key to enable pgvector).',
+      );
+    }
+    return null;
+  }
   if (!singleton) singleton = createPgUserMemoryStore();
   return singleton;
 }
@@ -222,6 +255,7 @@ module.exports = {
   createPgUserMemoryStore,
   embedTexts,
   getStore,
+  isConfigured,
   isEnabled,
   vecToLiteral,
 };
