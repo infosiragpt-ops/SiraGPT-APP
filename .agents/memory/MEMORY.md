@@ -19,6 +19,7 @@
 - [Reserved VM GCLB 30s timeout](reserved-vm-gclb-timeout.md) — GCLB hard ~30s total-response cut; heartbeats don't reset it (unlike Autoscale). For >30s work: persist-then-poll, don't keep request alive.
 - [Image gen vs edit providers](image-edit-provider-matrix.md) — editing (imagePath) only works on OpenAI/Gemini; OpenRouter is generation-only and must be rerouted, never hard-fail.
 - [Backend test CI wiring](backend-test-ci-wiring.md) — new backend tests only run in CI if added to package.json `test` string; /health routes live in injectable createHealthRoutes for supertest.
+- [Agent task duplicate execution](agent-task-duplicate-execution.md) — runAgentTaskJob has many callers (worker, watchdog, routes, temporal); in-flight Map guard collapses concurrent same-taskId runs; audit dedup only hid log spam.
 - [Upload sync-path proxy budget](upload-proxy-budget.md) — /files/upload sync steps must be withTimeout-bounded + run concurrently so worst-case stays under the ~30s proxy cut.
 - [searchBrain breaker stale-closure](searchbrain-breaker-stale-closure.md) — per-provider CircuitBreaker must invoke `(fn)=>fn()` via `.fire(fn)`, never bake the query closure into the cached breaker.
 - [LaTeX bracket delimiters](latex-bracket-delimiters.md) — LLM `\( \)`/`\[ \]` math needs a pre-parse STRING normalizer (CommonMark strips the backslash before remark plugins see it); convert to `$`/`$$`.

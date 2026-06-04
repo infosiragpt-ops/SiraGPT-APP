@@ -758,7 +758,45 @@ async function persistAssistantMessage({
   }
 }
 
-async function runAgentTaskJob(payload = {}, job = null) {
+// ── in-flight idempotency guard ──────────────────────────────────────
+//
+// `runAgentTaskJob` is reachable from several independent execution
+// backends for the SAME taskId: the BullMQ worker, the queue→local handoff
+// watchdog (routes/agent-task.js runAgentJobInProcess), the local-fallback
+// route, the Telegram/codex/batch entrypoints, and the Temporal activity.
+// On the 1-vCPU VM, when the queue is slow the watchdog fires a local run
+// WHILE the worker also picks the job up, and a client that reconnects after
+// the ~30s GCLB response cut can trigger yet another. Each entry re-runs the
+// full pipeline → duplicate `agent_task_worker_started` log lines and, worse,
+// duplicate LLM spend. We collapse concurrent invocations for one taskId to a
+// single in-flight run; late callers await the SAME promise instead of
+// starting a parallel one. The entry clears once the run settles, so BullMQ's
+// legitimate failure-retry path (a fresh run after the previous finished) is
+// unaffected.
+const inFlightAgentTasks = new Map(); // taskId → Promise
+
+function runAgentTaskJob(payload = {}, job = null) {
+  const taskId = payload && payload.taskId;
+  if (!taskId) return _runAgentTaskJobImpl(payload, job);
+  const existingRun = inFlightAgentTasks.get(taskId);
+  if (existingRun) {
+    try {
+      auditLog.audit({
+        event: 'agent_task_duplicate_invocation_skipped',
+        taskId,
+        jobId: job?.id ? String(job.id) : (payload.jobId || null),
+      });
+    } catch (_) { /* never throw from the dedup guard */ }
+    return existingRun;
+  }
+  const run = Promise.resolve()
+    .then(() => _runAgentTaskJobImpl(payload, job))
+    .finally(() => { inFlightAgentTasks.delete(taskId); });
+  inFlightAgentTasks.set(taskId, run);
+  return run;
+}
+
+async function _runAgentTaskJobImpl(payload = {}, job = null) {
   const {
     taskId,
     traceId,
