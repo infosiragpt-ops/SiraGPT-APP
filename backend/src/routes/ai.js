@@ -64,6 +64,7 @@ function enforceOrgBudgetSafe(req, res, next) {
 const prisma = require('../config/database');
 const { tryConsumePlanQuota, checkPaidTokenCap, recordApiUsage } = require('../services/plan-quota');
 const aiService = require('../services/ai-service');
+const { classifyImageGenError } = require('../services/image-error-classifier');
 const agentFilters = require('../services/agents/filters');
 const OpenAI = require('openai');
 const usageService = require("../services/usage-service");
@@ -6372,7 +6373,11 @@ router.post(
         if (!res.writableEnded) res.end();
         return;
       }
-      console.error('Image generation error:', error);
+      // Classify into a clean, client-safe shape: maps provider quota/429
+      // (e.g. Gemini RESOURCE_EXHAUSTED) to HTTP 429 and never echoes the raw
+      // multi-KB provider JSON to the client or into a persisted chat message.
+      const classified = classifyImageGenError(error);
+      console.error('Image generation error:', classified.code, error?.status || '', classified.message);
       // El cliente se fue (corte del edge proxy) pero teníamos un chat para
       // persistir: dejamos constancia del fallo como mensaje del asistente
       // para que el polling del frontend lo muestre en vez de colgarse.
@@ -6382,7 +6387,7 @@ router.post(
             data: {
               chatId: persistChatId,
               role: 'ASSISTANT',
-              content: `⚠️ No se pudo generar la imagen: ${error.message || 'error desconocido'}`,
+              content: `⚠️ No se pudo generar la imagen: ${classified.message}`,
             },
           });
         } catch (persistErr) {
@@ -6395,11 +6400,11 @@ router.post(
         return;
       }
       if (!res.headersSent) {
-        res.status(500).json({ error: error.message || 'Image generation failed' });
+        res.status(classified.httpStatus).json({ error: classified.message, code: classified.code });
       } else if (!res.writableEnded) {
         // Headers ya enviados como 200 (estábamos en modo keep-alive).
         // Mandamos el error en el cuerpo JSON para que el cliente lo vea.
-        res.end(JSON.stringify({ error: error.message || 'Image generation failed', code: 'image_generation_failed' }));
+        res.end(JSON.stringify({ error: classified.message, code: classified.code }));
       }
     }
   }
