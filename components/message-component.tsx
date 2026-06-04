@@ -52,6 +52,7 @@ import { useVoiceControls } from './voice-controls';
 import ReactMarkdown from 'react-markdown'
 import { PerformanceOptimizer } from "@/lib/performance-optimizer"
 import { markdownRehypePlugins, markdownRemarkPlugins } from '@/lib/markdown-sanitize'
+import { normalizeMathDelimiters } from '@/lib/markdown/normalize-math'
 import MemoMarkdownBlock from '@/components/markdown/memo-markdown-block'
 import { splitStableHead } from '@/lib/markdown-block-split'
 import { DownloadButtons } from './download-buttons';
@@ -1190,7 +1191,13 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
     };
 
     // Optimized message content rendering with performance safeguards
-    const MessageContent = ({ content }: { content: string }) => {
+    const MessageContent = ({ content: rawContent }: { content: string }) => {
+        // Normalize `\( \)` / `\[ \]` TeX bracket delimiters (commonly emitted
+        // by LLMs) to `$ $` / `$$ $$` once, up front, so every downstream
+        // branch — direct ReactMarkdown, the streaming head/tail split, and the
+        // memoized block — renders math via KaTeX. Code spans/blocks are left
+        // untouched and the helper is a no-op when no brackets are present.
+        const content = React.useMemo(() => normalizeMathDelimiters(rawContent), [rawContent]);
         // ✅ PERFORMANCE FIX: Use simple rendering for streaming messages
         // if (isStreaming) {
         //     return (

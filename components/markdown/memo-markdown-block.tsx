@@ -3,6 +3,7 @@
 import * as React from "react"
 import ReactMarkdown from "react-markdown"
 import { markdownRehypePlugins, markdownRemarkPlugins } from "@/lib/markdown-sanitize"
+import { normalizeMathDelimiters } from "@/lib/markdown/normalize-math"
 
 type Props = {
   content: string
@@ -22,7 +23,7 @@ const MemoMarkdownBlock = React.memo(
         rehypePlugins={markdownRehypePlugins}
         components={components}
       >
-        {content}
+        {normalizeMathDelimiters(content)}
       </ReactMarkdown>
     )
   },
