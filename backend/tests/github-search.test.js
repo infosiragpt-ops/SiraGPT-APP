@@ -57,6 +57,9 @@ test.afterEach(() => {
   else process.env.GITHUB_TOKEN = originalToken;
   if (originalSiraToken === undefined) delete process.env.SIRAGPT_GITHUB_TOKEN;
   else process.env.SIRAGPT_GITHUB_TOKEN = originalSiraToken;
+  delete process.env.GITHUB_SEARCH_MAX_RETRIES;
+  delete process.env.GITHUB_SEARCH_RETRY_BASE_MS;
+  delete process.env.GITHUB_SEARCH_RETRY_DISABLED;
 });
 
 // ── Internal helpers ───────────────────────────────────────────────────
@@ -270,6 +273,53 @@ test('empty query short-circuits without fetching', async () => {
 });
 
 // ── searchAll fan-out ──────────────────────────────────────────────────
+
+// ── Resilience: bounded retry on transient errors ──────────────────────
+
+test('classifyGitHubError retries 5xx/429/network but not 4xx', () => {
+  const { classifyGitHubError } = gh._internal;
+  assert.equal(classifyGitHubError({ status: 503 }).retryable, true);
+  assert.equal(classifyGitHubError({ status: 429 }).retryable, true);
+  assert.equal(classifyGitHubError({ status: 403 }).retryable, false);
+  assert.equal(classifyGitHubError({ status: 404 }).retryable, false);
+  assert.equal(classifyGitHubError({ message: 'request timed out after 8000ms' }).retryable, true);
+  assert.equal(classifyGitHubError({ message: 'fetch failed: ECONNRESET' }).retryable, true);
+});
+
+test('retryConfig honours GITHUB_SEARCH_RETRY_DISABLED', () => {
+  process.env.GITHUB_SEARCH_RETRY_DISABLED = '1';
+  assert.equal(gh._internal.retryConfig().maxRetries, 0);
+});
+
+test('a transient 503 is retried and then succeeds', async () => {
+  clearToken();
+  process.env.GITHUB_SEARCH_RETRY_BASE_MS = '1'; // keep the test fast
+  process.env.GITHUB_SEARCH_MAX_RETRIES = '2';
+  let calls = 0;
+  setFetchHandler(() => {
+    calls += 1;
+    if (calls === 1) return errorResponse(503);
+    return jsonResponse({ items: [{ id: 1, full_name: 'a/b', stargazers_count: 1, html_url: 'u' }] });
+  });
+  const out = await gh.search('flaky', { type: 'repositories' });
+  assert.equal(calls, 2, 'one retry after the 503');
+  assert.equal(out.count, 1);
+  assert.equal(out.errors.length, 0);
+});
+
+test('a 403 quota error is NOT retried', async () => {
+  clearToken();
+  process.env.GITHUB_SEARCH_RETRY_BASE_MS = '1';
+  process.env.GITHUB_SEARCH_MAX_RETRIES = '3';
+  let calls = 0;
+  setFetchHandler(() => {
+    calls += 1;
+    return errorResponse(403, { 'x-ratelimit-remaining': '0' });
+  });
+  const out = await gh.search('quota', { type: 'repositories' });
+  assert.equal(calls, 1, 'client errors are terminal — no retry');
+  assert.equal(out.errors[0].status, 403);
+});
 
 test('searchAll skips code search when unauthenticated', async () => {
   clearToken();

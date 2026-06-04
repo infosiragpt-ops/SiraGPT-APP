@@ -50,6 +50,7 @@
  */
 
 const githubCache = require('./github-search-cache');
+const { withRetry } = require('../utils/retry-with-backoff');
 
 const DEFAULT_TIMEOUT_MS = 8000;
 const DEFAULT_LIMIT = 10;
@@ -114,7 +115,7 @@ class GitHubHttpError extends Error {
   }
 }
 
-async function ghJson(path, opts = {}) {
+async function ghJsonOnce(path, opts = {}) {
   const url = path.startsWith('http') ? path : `${API_BASE}${path}`;
   const res = await fetch(url, {
     method: opts.method || 'GET',
@@ -132,6 +133,52 @@ async function ghJson(path, opts = {}) {
     throw new GitHubHttpError(res.status, `GitHub HTTP ${res.status} ${res.statusText} — ${url}`);
   }
   return res.json();
+}
+
+// Retry policy: GitHub's API has transient failure modes (502/503 during
+// deploys, 429 secondary rate limits, occasional network blips) that resolve on
+// a second try. We retry ONLY those, never client errors (4xx incl. 403 quota
+// exhaustion, which a retry would only make worse). Tunable / disable-able via
+// env so operators can dial it back without a deploy.
+function classifyGitHubError(err) {
+  const status = err && Number(err.status);
+  if (status === 429 || (Number.isFinite(status) && status >= 500)) {
+    return { retryable: true, reason: `http_${status}` };
+  }
+  if (Number.isFinite(status) && status >= 400) {
+    return { retryable: false, reason: `http_${status}` };
+  }
+  const msg = String((err && err.message) || '').toLowerCase();
+  if (/timed out|timeout/.test(msg)) return { retryable: true, reason: 'timeout' };
+  if (/network|enotfound|econnreset|econnrefused|eai_again|fetch failed|getaddrinfo/.test(msg)) {
+    return { retryable: true, reason: 'network' };
+  }
+  return { retryable: false, reason: 'unknown' };
+}
+
+function retryConfig(opts = {}) {
+  const disabled = String(process.env.GITHUB_SEARCH_RETRY_DISABLED || '').toLowerCase();
+  if (disabled === '1' || disabled === 'true' || disabled === 'yes') return { maxRetries: 0 };
+  const o = opts.retry || {};
+  const envRetries = Number.parseInt(process.env.GITHUB_SEARCH_MAX_RETRIES, 10);
+  const envBase = Number.parseInt(process.env.GITHUB_SEARCH_RETRY_BASE_MS, 10);
+  const maxRetries = Number.isFinite(Number(o.maxRetries)) ? Number(o.maxRetries)
+    : (Number.isFinite(envRetries) && envRetries >= 0 ? envRetries : 1);
+  const baseDelayMs = Number.isFinite(Number(o.baseDelayMs)) ? Number(o.baseDelayMs)
+    : (Number.isFinite(envBase) && envBase > 0 ? envBase : 250);
+  return { maxRetries: Math.max(0, Math.min(maxRetries, 4)), baseDelayMs };
+}
+
+function ghJson(path, opts = {}) {
+  const cfg = retryConfig(opts);
+  if (!cfg.maxRetries) return ghJsonOnce(path, opts);
+  return withRetry(() => ghJsonOnce(path, opts), {
+    maxRetries: cfg.maxRetries,
+    baseDelayMs: cfg.baseDelayMs,
+    maxDelayMs: 2000,
+    classifyError: classifyGitHubError,
+    ...(typeof opts.sleep === 'function' ? { sleep: opts.sleep } : {}),
+  });
 }
 
 function clampLimit(n) {
@@ -493,6 +540,8 @@ module.exports = {
     pickOrder,
     userAgent,
     baseHeaders,
+    classifyGitHubError,
+    retryConfig,
     VALID_REPO_SORTS,
     VALID_ISSUE_SORTS,
     VALID_USER_SORTS,

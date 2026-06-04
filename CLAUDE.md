@@ -585,6 +585,40 @@ reduce AI-detector flagging.
 - **Tests**: `paraphrase-humanizer.test.js` (18), `paraphrase-engine.test.js`
   (+6 new for per-mode ceilings).
 
+## GitHub + worldwide research search agents — added 2026-06-04
+
+Discovery layer that lets the chat agent mine open-source projects and
+peer-reviewed literature on demand. No new npm deps — stdlib `fetch` + the
+existing in-repo reliability utilities.
+
+### `src/services/github-search.js`
+Unified search over the GitHub REST API: repositories / code / issues+PRs /
+users+orgs / topics, plus `getRepo` / `getReadme` (base64-decoded) and a
+`rateLimit` snapshot. Canonical normalised shapes, deterministic star-ranking,
+TTL+LRU cache (`github-search-cache.js`), polite User-Agent, optional
+`SIRAGPT_GITHUB_TOKEN || GITHUB_TOKEN` (lifts rate limit 10→30/min and unlocks
+the token-only code corpus). GitHub 403/429 surfaced as captured errors; degrades
+gracefully (e.g. `searchAll` silently drops code search when unauthenticated).
+- **Resilience**: outbound calls wrapped in `withRetry` (retry-with-backoff) —
+  bounded retry on transient failures only (5xx / 429 / network / timeout),
+  never on 4xx incl. 403 quota. Env: `GITHUB_SEARCH_MAX_RETRIES` (default 1),
+  `GITHUB_SEARCH_RETRY_BASE_MS` (default 250), `GITHUB_SEARCH_RETRY_DISABLED`,
+  `GITHUB_SEARCH_CACHE_TTL_MS` / `_MAX`.
+- **Route**: `POST /api/github-search`, `POST /api/github-search/all`,
+  `GET /api/github-search/readme`, `GET /api/github-search/health` (authenticated).
+- **Tests**: `tests/github-search.test.js` — 22 offline tests (mocked fetch).
+
+### Scientific search — worldwide sources
+`scientific-search.js` extended from 7 → 10 providers, adding DOAJ (open-access
+journals from ~130 countries), DBLP (global computer-science bibliography) and
+DataCite (worldwide datasets/software/theses). All key-less + query-based.
+- **Tests**: `tests/scientific-search.test.js` — 30 (was 24).
+
+### Agentic chat tools
+Both searches are now first-class tools the chat agent can invoke:
+`github_search` and `scientific_search` (registered in `agents/agent-tools.js`,
+wired into `agentic-chat-stream.js` `baseWebTools`).
+
 ## Conexiones externas
 - Repo: https://github.com/SiraGPT-ORg/siraGPT
 - Remoto: `sira-org`
