@@ -7,11 +7,12 @@ const path = require('node:path');
 const { promisify } = require('node:util');
 
 const { planDesktopAction, resolveDesktopBridgeCapabilities } = require('./desktop-action-policy');
+const { findSafeApp, normalizeHostPlatform } = require('./host-platform-profile');
 
 const execFileAsync = promisify(execFile);
 
 function getPlatform() {
-  return os.platform();
+  return normalizeHostPlatform(process.env.SIRAGPT_DESKTOP_BRIDGE_PLATFORM || os.platform());
 }
 
 function isLinux() {
@@ -19,7 +20,7 @@ function isLinux() {
 }
 
 function isMac() {
-  return getPlatform() === 'darwin';
+  return getPlatform() === 'macos';
 }
 
 function getBridgeStatus(env = process.env) {
@@ -62,7 +63,7 @@ async function captureDesktopScreenshot() {
   const platform = getPlatform();
 
   try {
-    if (platform === 'darwin') {
+    if (platform === 'macos') {
       await execFileAsync('/usr/sbin/screencapture', ['-x', '-t', 'png', file], { timeout: 8000 });
     } else if (platform === 'linux') {
       // Linux: try common screenshot tools in order of preference
@@ -99,6 +100,50 @@ async function captureDesktopScreenshot() {
   }
 }
 
+async function executeLinuxAdvancedAction(action) {
+  // Linux advanced desktop control using xdotool (install with: sudo apt install xdotool)
+  if (!isLinux()) {
+    throw new Error('Advanced desktop actions are only available on Linux');
+  }
+
+  try {
+    switch (action.type) {
+      case 'move_mouse':
+        await execFileAsync('xdotool', ['mousemove', String(action.x || 0), String(action.y || 0)], { timeout: 5000 });
+        return { ok: true, action };
+
+      case 'click':
+        await execFileAsync('xdotool', ['click', String(action.button || 1)], { timeout: 5000 });
+        return { ok: true, action };
+
+      case 'type_text':
+        if (action.text) {
+          await execFileAsync('xdotool', ['type', action.text], { timeout: 10000 });
+        }
+        return { ok: true, action };
+
+      case 'key_press':
+        if (action.key) {
+          await execFileAsync('xdotool', ['key', action.key], { timeout: 5000 });
+        }
+        return { ok: true, action };
+
+      case 'scroll':
+        const direction = action.direction === 'up' ? '4' : '5';
+        await execFileAsync('xdotool', ['click', direction], { timeout: 5000 });
+        return { ok: true, action };
+
+      default:
+        throw new Error(`Unsupported Linux advanced action: ${action.type}`);
+    }
+  } catch (err) {
+    if (err.message.includes('xdotool')) {
+      throw new Error('xdotool not found. Install it with: sudo apt install xdotool (or equivalent for your distro)');
+    }
+    throw err;
+  }
+}
+
 async function executeDesktopBridgeAction(action, options = {}) {
   const env = options.env || process.env;
   assertBridgeReady(env);
@@ -111,14 +156,23 @@ async function executeDesktopBridgeAction(action, options = {}) {
   const platform = getPlatform();
   const isLinuxPlatform = platform === 'linux';
 
+  // Handle advanced Linux desktop actions
+  if (isLinuxPlatform && ['move_mouse', 'click', 'type_text', 'key_press', 'scroll'].includes(action.type)) {
+    return executeLinuxAdvancedAction(action);
+  }
+
   switch (action.type) {
     case 'open_app':
       if (isLinuxPlatform) {
-        // Linux: try gtk-launch first, then xdg-open as fallback
-        try {
-          await execFileAsync('gtk-launch', [action.app], { timeout: 10000 });
-        } catch {
-          await execFileAsync('xdg-open', [action.app], { timeout: 10000 });
+        const app = findSafeApp(action.app, 'linux');
+        if (!app?.launcher) {
+          throw new Error(`Unsupported Linux app action: ${action.app}`);
+        }
+        if (app.launcher.kind === 'linux_xdg_open') {
+          const target = app.launcher.target === 'home' ? os.homedir() : app.launcher.target;
+          await execFileAsync('xdg-open', [target], { timeout: 10000 });
+        } else {
+          await execFileAsync(app.launcher.command, app.launcher.args || [], { timeout: 10000 });
         }
       } else {
         await execFileAsync('/usr/bin/open', ['-a', action.app], { timeout: 10000 });
@@ -127,6 +181,14 @@ async function executeDesktopBridgeAction(action, options = {}) {
 
     case 'open_project': {
       if (isLinuxPlatform) {
+        if (action.preferredApp === 'Visual Studio Code') {
+          try {
+            await execFileAsync('code', [action.path], { timeout: 10000 });
+            return { ok: true, action };
+          } catch {
+            // Fall back to the desktop file manager when Code is unavailable.
+          }
+        }
         await execFileAsync('xdg-open', [action.path], { timeout: 10000 });
       } else {
         const args = action.preferredApp ? ['-a', action.preferredApp, action.path] : [action.path];
@@ -149,7 +211,7 @@ async function executeDesktopBridgeAction(action, options = {}) {
         err.code = 'CONFIRMATION_REQUIRED';
         throw err;
       }
-      const shell = isLinuxPlatform ? '/bin/bash' : '/bin/zsh';
+      const shell = isLinuxPlatform ? '/bin/sh' : '/bin/zsh';
       await execFileAsync(shell, ['-lc', action.command], {
         cwd: action.workingDirectory || process.cwd(),
         timeout: Number(options.timeoutMs || 30000),
@@ -170,4 +232,5 @@ module.exports = {
   executeDesktopBridgeAction,
   getBridgeStatus,
   planLocalComputerTask,
+  _internal: { getPlatform, isLinux, isMac },
 };

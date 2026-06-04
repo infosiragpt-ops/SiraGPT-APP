@@ -1,24 +1,13 @@
 'use strict';
 
-const DESKTOP_ACTION_POLICY_VERSION = 'desktop-action-policy-2026-05';
+const {
+  buildSafeAppAliases,
+  buildSafeProjectAliases,
+  normalizeHostPlatform,
+  resolveHostPlatformCapabilities,
+} = require('./host-platform-profile');
 
-const SAFE_APP_ALIASES = Object.freeze([
-  { app: 'Terminal', aliases: ['terminal', 'consola', 'shell', 'iterm', 'i term'] },
-  { app: 'Music', aliases: ['music', 'musica', 'música', 'apple music', 'aplicacion de musica', 'aplicación de música'] },
-  { app: 'Finder', aliases: ['finder', 'archivos', 'carpetas'] },
-  { app: 'Safari', aliases: ['safari', 'navegador safari'] },
-  { app: 'Google Chrome', aliases: ['chrome', 'google chrome'] },
-  { app: 'Visual Studio Code', aliases: ['visual studio code', 'vscode', 'vs code', 'code editor'] },
-]);
-
-const SAFE_PROJECT_ALIASES = Object.freeze([
-  {
-    id: 'siragpt',
-    label: 'siraGPT',
-    path: '/Users/luis/Desktop/siraGPT',
-    aliases: ['siragpt', 'sira gpt', 'repo siragpt', 'repositorio siragpt', 'repositorio de github siragpt'],
-  },
-]);
+const DESKTOP_ACTION_POLICY_VERSION = 'desktop-action-policy-2026-06';
 
 const BLOCKED_ACTION_PATTERNS = Object.freeze([
   { re: /\brm\s+-rf\b/i, reason: 'destructive_shell_command' },
@@ -56,19 +45,23 @@ function detectBlockedAction(raw) {
   return { blocked: false, reason: null };
 }
 
-function detectSafeApp(normalizedText) {
+function resolvePolicyPlatform(options = {}) {
+  return normalizeHostPlatform(options.platform || options.hostPlatform || process.platform);
+}
+
+function detectSafeApp(normalizedText, options = {}) {
   if (!OPEN_VERBS_RE.test(normalizedText)) return null;
-  for (const item of SAFE_APP_ALIASES) {
+  for (const item of buildSafeAppAliases(resolvePolicyPlatform(options))) {
     if (item.aliases.some(alias => normalizedText.includes(normalizeText(alias)))) {
-      return item.app;
+      return item;
     }
   }
   return null;
 }
 
-function detectSafeProject(normalizedText) {
+function detectSafeProject(normalizedText, options = {}) {
   if (!OPEN_VERBS_RE.test(normalizedText)) return null;
-  for (const item of SAFE_PROJECT_ALIASES) {
+  for (const item of buildSafeProjectAliases(options.env || process.env, resolvePolicyPlatform(options))) {
     if (item.aliases.some(alias => normalizedText.includes(normalizeText(alias)))) {
       return item;
     }
@@ -94,6 +87,7 @@ function extractCommandCandidate(raw) {
 function buildBasePlan(raw) {
   return {
     version: DESKTOP_ACTION_POLICY_VERSION,
+    hostPlatform: normalizeHostPlatform(process.platform),
     rawText: String(raw || ''),
     normalizedText: normalizeText(raw),
     actionRequired: false,
@@ -110,6 +104,7 @@ function buildBasePlan(raw) {
 
 function planDesktopAction(raw, options = {}) {
   const plan = buildBasePlan(raw);
+  plan.hostPlatform = resolvePolicyPlatform(options);
   const blocked = detectBlockedAction(raw);
   if (blocked.blocked) {
     return {
@@ -145,7 +140,7 @@ function planDesktopAction(raw, options = {}) {
     };
   }
 
-  const project = detectSafeProject(plan.normalizedText);
+  const project = detectSafeProject(plan.normalizedText, options);
   if (project) {
     return {
       ...plan,
@@ -161,13 +156,14 @@ function planDesktopAction(raw, options = {}) {
         projectId: project.id,
         label: project.label,
         path: project.path,
-        preferredApp: 'Visual Studio Code',
+        preferredApp: project.preferredApp || 'Visual Studio Code',
+        platform: plan.hostPlatform,
       },
       auditTags: ['desktop', 'open_project', project.id],
     };
   }
 
-  const app = detectSafeApp(plan.normalizedText);
+  const app = detectSafeApp(plan.normalizedText, options);
   if (app) {
     return {
       ...plan,
@@ -180,9 +176,11 @@ function planDesktopAction(raw, options = {}) {
       requiresConfirmation: false,
       action: {
         type: 'open_app',
-        app,
+        app: app.app,
+        platform: plan.hostPlatform,
+        launcher: app.launcher || null,
       },
-      auditTags: ['desktop', 'open_app', app.toLowerCase().replace(/\s+/g, '_')],
+      auditTags: ['desktop', 'open_app', app.app.toLowerCase().replace(/\s+/g, '_')],
     };
   }
 
@@ -200,6 +198,7 @@ function planDesktopAction(raw, options = {}) {
       action: {
         type: 'open_url',
         url,
+        platform: plan.hostPlatform,
       },
       auditTags: ['desktop', 'open_url'],
     };
@@ -208,18 +207,22 @@ function planDesktopAction(raw, options = {}) {
   return plan;
 }
 
-function resolveDesktopBridgeCapabilities(env = process.env) {
+function resolveDesktopBridgeCapabilities(env = process.env, opts = {}) {
   const enabled = String(env.SIRAGPT_DESKTOP_BRIDGE_ENABLED || '').toLowerCase() === 'true'
     || env.SIRAGPT_DESKTOP_BRIDGE_ENABLED === '1';
+  const host = resolveHostPlatformCapabilities(env, opts);
+  const apps = buildSafeAppAliases(host.platform);
+  const projects = buildSafeProjectAliases(env, host.platform);
   return {
     enabled,
-    mode: enabled ? 'local_macos_bridge' : 'contract_only',
+    mode: enabled ? host.bridgeMode : 'contract_only',
     policyVersion: DESKTOP_ACTION_POLICY_VERSION,
+    hostPlatform: host,
     allowedActions: ['open_app', 'open_project', 'open_url'],
     confirmationRequiredActions: ['run_shell_command'],
     blockedCategories: Array.from(new Set(BLOCKED_ACTION_PATTERNS.map(item => item.reason))),
-    allowlistedApps: SAFE_APP_ALIASES.map(item => item.app),
-    allowlistedProjects: SAFE_PROJECT_ALIASES.map(item => ({
+    allowlistedApps: apps.map(item => item.app),
+    allowlistedProjects: projects.map(item => ({
       id: item.id,
       label: item.label,
       path: item.path,
@@ -235,8 +238,8 @@ function resolveDesktopBridgeCapabilities(env = process.env) {
 
 module.exports = {
   DESKTOP_ACTION_POLICY_VERSION,
-  SAFE_APP_ALIASES,
-  SAFE_PROJECT_ALIASES,
+  SAFE_APP_ALIASES: buildSafeAppAliases(),
+  SAFE_PROJECT_ALIASES: buildSafeProjectAliases(),
   BLOCKED_ACTION_PATTERNS,
   normalizeText,
   planDesktopAction,
