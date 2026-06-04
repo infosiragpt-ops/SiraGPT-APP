@@ -1136,10 +1136,86 @@ const read_url = {
   },
 };
 
+// ─── GitHub search (repos / code / issues / users / topics) ─────────────────
+//
+// Mines open-source projects worldwide for libraries, prior art and reference
+// implementations. Repositories / issues / users / topics work with no API key
+// (GitHub's 10 req/min anonymous search budget); code search needs a token
+// (SIRAGPT_GITHUB_TOKEN || GITHUB_TOKEN). Degrades gracefully without one.
+
+const github_search = {
+  name: 'github_search',
+  description: 'Search GitHub for open-source repositories, code, issues/PRs, users/orgs or topics. Use to find libraries, reference implementations and prior art across projects worldwide. type defaults to "repositories" (ranked by stars). Code search needs a configured token. Returns up to limit normalised hits.',
+  schema: {
+    query: 'string (required — keywords, optionally with GitHub qualifiers)',
+    type: 'string (optional — repositories|code|issues|users|topics; default repositories)',
+    limit: 'number (optional, default 10, max 50)',
+    language: 'string (optional — restrict by programming language, e.g. "typescript")',
+    sort: 'string (optional — stars|forks|updated for repos; comments|reactions|updated for issues)',
+    minStars: 'number (optional — minimum star count for repositories)',
+    repo: 'string (optional — owner/name to scope code/issue search)',
+  },
+  async handler(args) {
+    const query = typeof args?.query === 'string' ? args.query.trim() : '';
+    if (!query) return { error: 'missing "query"' };
+    // eslint-disable-next-line global-require
+    const githubSearch = require('../github-search');
+    const opts = {
+      type: args?.type,
+      limit: Math.max(1, Math.min(Number(args?.limit) || 10, 50)),
+      language: typeof args?.language === 'string' ? args.language : undefined,
+      sort: typeof args?.sort === 'string' ? args.sort : undefined,
+      minStars: Number.isFinite(Number(args?.minStars)) ? Number(args.minStars) : undefined,
+      repo: typeof args?.repo === 'string' ? args.repo : undefined,
+    };
+    const { items, type, count, errors, authenticated } = await githubSearch.search(query, opts);
+    return { type, count, authenticated, items, errors: Array.isArray(errors) ? errors : [] };
+  },
+};
+
+// ─── Scientific paper search (arXiv / OpenAlex / CrossRef / PubMed / …) ──────
+//
+// Unified key-less search over the major open scientific-paper APIs. Use for
+// peer-reviewed sources, citations and literature reviews.
+
+const scientific_search = {
+  name: 'scientific_search',
+  description: 'Search peer-reviewed scientific papers across open APIs worldwide (arXiv, OpenAlex, CrossRef, PubMed, Europe PMC, Semantic Scholar, CORE). Use when the user needs academic sources, citations, DOIs or a literature review. Returns ranked papers with title, authors, year, venue, citations, abstract and PDF/HTML links.',
+  schema: {
+    query: 'string (required — research topic or keywords)',
+    limit: 'number (optional per-provider cap, default 8, max 25)',
+    providers: 'array (optional subset, e.g. ["arxiv","pubmed"]; default all)',
+  },
+  async handler(args) {
+    const query = typeof args?.query === 'string' ? args.query.trim() : '';
+    if (!query) return { error: 'missing "query"' };
+    // eslint-disable-next-line global-require
+    const scientificSearch = require('../scientific-search');
+    const limit = Math.max(1, Math.min(Number(args?.limit) || 8, 25));
+    const providers = Array.isArray(args?.providers) ? args.providers : undefined;
+    const { papers, errors, providers: used } = await scientificSearch.search(query, { limit, providers });
+    // Slim the payload: the model rarely needs every field and abstracts are long.
+    const slim = (papers || []).slice(0, limit).map((p) => ({
+      source: p.source,
+      title: p.title,
+      authors: (p.authors || []).slice(0, 6).map((a) => a.name).filter(Boolean),
+      year: p.year,
+      venue: p.venue,
+      citations: p.citations,
+      doi: p.doi,
+      openAccess: p.openAccess,
+      url: p.htmlUrl || p.pdfUrl || null,
+      pdfUrl: p.pdfUrl || null,
+      abstract: p.abstract ? String(p.abstract).slice(0, 600) : null,
+    }));
+    return { count: slim.length, providers: used, papers: slim, errors: Array.isArray(errors) ? errors : [] };
+  },
+};
+
 // ─── Registry ───────────────────────────────────────────────────────────────
 
 const ALL_TOOLS = [
-  read_file, list_files, search_docs, search_code, search_graph, get_symbol, static_checks, propose_patch, web_search, read_url,
+  read_file, list_files, search_docs, search_code, search_graph, get_symbol, static_checks, propose_patch, web_search, read_url, github_search, scientific_search,
 ];
 
 const TOOLS_BY_NAME = new Map(ALL_TOOLS.map(t => [t.name, t]));
@@ -1153,7 +1229,7 @@ module.exports = {
   TOOLS_BY_NAME,
   pick,
   // individual exports for tests
-  read_file, list_files, search_docs, search_code, search_graph, get_symbol, static_checks, propose_patch, web_search, read_url,
+  read_file, list_files, search_docs, search_code, search_graph, get_symbol, static_checks, propose_patch, web_search, read_url, github_search, scientific_search,
   STATIC_CHECKS,
   buildCommentCodeMask, // exported for tests
   stripStringLiterals,  // exported for tests

@@ -598,6 +598,30 @@ function baseWebTools() {
       required: ['url'],
       additionalProperties: false,
     }),
+    adaptAgentTool(agentTools.github_search, {
+      type: 'object',
+      properties: {
+        query:    { type: 'string', description: 'Keywords, optionally with GitHub qualifiers.' },
+        type:     { type: 'string', enum: ['repositories', 'code', 'issues', 'users', 'topics'], description: 'Corpus to search. Default repositories.' },
+        limit:    { type: 'integer', minimum: 1, maximum: 50, description: 'How many hits. Default 10.' },
+        language: { type: 'string', description: 'Restrict by language, e.g. "python".' },
+        sort:     { type: 'string', description: 'stars|forks|updated (repos) or comments|reactions|updated (issues).' },
+        minStars: { type: 'integer', minimum: 0, description: 'Minimum star count for repositories.' },
+        repo:     { type: 'string', description: 'owner/name to scope code/issue search.' },
+      },
+      required: ['query'],
+      additionalProperties: false,
+    }),
+    adaptAgentTool(agentTools.scientific_search, {
+      type: 'object',
+      properties: {
+        query:     { type: 'string', description: 'Research topic or keywords.' },
+        limit:     { type: 'integer', minimum: 1, maximum: 25, description: 'Per-provider cap. Default 8.' },
+        providers: { type: 'array', items: { type: 'string' }, description: 'Subset like ["arxiv","pubmed"]. Default all.' },
+      },
+      required: ['query'],
+      additionalProperties: false,
+    }),
   ];
 }
 
