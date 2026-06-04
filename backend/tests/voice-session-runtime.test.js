@@ -53,11 +53,11 @@ test('classifies macOS app commands as desktop action plans', () => {
 
 test('appendVoiceTurn keeps session alive while planning safe desktop actions', () => {
   const session = createVoiceSession({ userId: 'user-1' });
-  const result = appendVoiceTurn(session, { text: 'abre mi aplicación de música' });
+  const result = appendVoiceTurn(session, { text: 'abre mi terminal' });
 
   assert.equal(result.session.status, 'awaiting_local_bridge');
   assert.equal(result.turn.route, 'desktop_action');
-  assert.equal(result.turn.desktopAction.action.app, 'Music');
+  assert.equal(result.turn.desktopAction.action.app, 'Terminal');
   assert.equal(session.turns.length, 1);
   assert.equal(buildVoiceSessionSnapshot(session).turnCount, 1);
 });

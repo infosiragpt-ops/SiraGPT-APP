@@ -32,6 +32,7 @@ const {
   describeWorkspaceRoots,
   normalizeRoot,
 } = require('./workspace-roots');
+const { resolveHostPlatformCapabilities } = require('../host-platform-profile');
 
 // ============================================================
 // Configuration — tune via env or defaults
@@ -51,6 +52,7 @@ const ALLOWED_COMMANDS = new Set([
   'python3', 'pip3',
   // System info
   'pwd', 'echo', 'which', 'uname', 'sw_vers', 'df', 'date',
+  'whoami', 'id', 'hostname', 'uptime', 'free', 'lsb_release', 'ps', 'systemctl',
   // Make / build
   'make', 'cmake',
 ]);
@@ -66,6 +68,7 @@ const SIMPLE_COMMANDS = new Set([
   'ls', 'cat', 'head', 'tail', 'wc', 'find', 'grep', 'stat', 'du', 'file', 'tree',
   'node', 'npm', 'npx', 'python3', 'pip3',
   'pwd', 'echo', 'which', 'uname', 'sw_vers', 'df', 'date',
+  'whoami', 'id', 'hostname', 'uptime', 'free', 'lsb_release', 'ps',
   'make', 'cmake',
 ]);
 
@@ -75,6 +78,8 @@ const SAFE_GIT_FETCH_FLAGS = new Set(['--all', '--prune', '--tags']);
 const SAFE_GIT_PULL_FLAGS = new Set(['--ff-only']);
 const SAFE_GIT_ADD_FLAGS = new Set(['-A', '--all', '-u', '--update']);
 const SAFE_GIT_PUSH_FLAGS = new Set(['-u', '--set-upstream']);
+const SAFE_SYSTEMCTL_SUBCOMMANDS = new Set(['status', 'is-active', 'is-enabled', 'list-units', 'list-timers', 'show']);
+const SAFE_SYSTEMCTL_FLAGS = new Set(['--user', '--system', '--no-pager', '--plain', '--all']);
 
 // ============================================================
 // Validation
@@ -143,6 +148,10 @@ function buildCommandSpec(rawCmd) {
 
   if (command === 'git') {
     return buildGitCommandSpec(parts);
+  }
+
+  if (command === 'systemctl') {
+    return buildSystemctlCommandSpec(parts);
   }
 
   return null;
@@ -293,6 +302,29 @@ function buildGitCommandSpec(parts) {
   return null;
 }
 
+function isSafeSystemdUnitToken(token) {
+  const value = String(token || '');
+  if (!value || value.startsWith('-')) return false;
+  if (value.includes('..') || value.includes('/') || value.includes('\\')) return false;
+  return /^[A-Za-z0-9_.@:-]{1,120}$/.test(value);
+}
+
+function isSafeSystemctlFlag(token) {
+  const value = String(token || '');
+  if (SAFE_SYSTEMCTL_FLAGS.has(value)) return true;
+  return /^(?:--type|--state|--property)=[A-Za-z0-9_,.-]{1,120}$/.test(value);
+}
+
+function buildSystemctlCommandSpec(parts) {
+  const subcommand = parts[1];
+  const args = parts.slice(2);
+  if (!SAFE_SYSTEMCTL_SUBCOMMANDS.has(subcommand)) return null;
+  if (args.every((arg) => isSafeSystemctlFlag(arg) || isSafeSystemdUnitToken(arg))) {
+    return { program: 'systemctl', args: parts.slice(1) };
+  }
+  return null;
+}
+
 function isAllowedDirectory(dir) {
   if (!dir) return true; // no explicit dir = default allowed
   const resolved = normalizeRoot(dir);
@@ -352,6 +384,14 @@ function spawnAllowedProgram(spec, options) {
     case 'sw_vers': return spawn('sw_vers', spec.args, options);
     case 'df': return spawn('df', spec.args, options);
     case 'date': return spawn('date', spec.args, options);
+    case 'whoami': return spawn('whoami', spec.args, options);
+    case 'id': return spawn('id', spec.args, options);
+    case 'hostname': return spawn('hostname', spec.args, options);
+    case 'uptime': return spawn('uptime', spec.args, options);
+    case 'free': return spawn('free', spec.args, options);
+    case 'lsb_release': return spawn('lsb_release', spec.args, options);
+    case 'ps': return spawn('ps', spec.args, options);
+    case 'systemctl': return spawn('systemctl', spec.args, options);
     case 'make': return spawn('make', spec.args, options);
     case 'cmake': return spawn('cmake', spec.args, options);
     default:
@@ -538,11 +578,49 @@ const hostBashTool = {
   execute: hostBash,
 };
 
+function resolveHostBashCapabilities(env = process.env) {
+  const host = resolveHostPlatformCapabilities(env);
+  return {
+    host,
+    timeoutMs: HOST_BASH_TIMEOUT_MS,
+    maxOutputBytes: MAX_OUTPUT_BYTES,
+    allowedCommands: [...ALLOWED_COMMANDS],
+    allowedWorkspaceRoots: [...ALLOWED_DIRS],
+    linuxReadOnlyDiagnostics: [
+      'uname -a',
+      'lsb_release -a',
+      'hostname',
+      'whoami',
+      'id',
+      'uptime',
+      'free -h',
+      'df -h',
+      'systemctl status <unit> --no-pager',
+    ],
+    restrictions: [
+      'no shell chaining',
+      'no pipes or redirects',
+      'workspace roots only',
+      'systemctl is read-only only',
+      'stdin closed',
+    ],
+  };
+}
+
 module.exports = {
   hostBash,
   hostBashTool,
+  resolveHostBashCapabilities,
   ALLOWED_COMMANDS,
   ALLOWED_DIRS,
   // Exported for testing:
-  _internal: { isAllowedCommand, isAllowedDirectory, commandHasUnsafePathReference, runHostCommand, splitCommandLine, buildCommandSpec },
+  _internal: {
+    isAllowedCommand,
+    isAllowedDirectory,
+    commandHasUnsafePathReference,
+    runHostCommand,
+    splitCommandLine,
+    buildCommandSpec,
+    buildSystemctlCommandSpec,
+  },
 };

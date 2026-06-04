@@ -116,6 +116,19 @@ describe('host-bash-tool', () => {
     assert.strictEqual(internal.isAllowedCommand('pip3 list'), true);
   });
 
+  it('isAllowedCommand accepts read-only Linux diagnostics', () => {
+    assert.strictEqual(internal.isAllowedCommand('uname -a'), true);
+    assert.strictEqual(internal.isAllowedCommand('whoami'), true);
+    assert.strictEqual(internal.isAllowedCommand('id'), true);
+    assert.strictEqual(internal.isAllowedCommand('hostname'), true);
+    assert.strictEqual(internal.isAllowedCommand('uptime'), true);
+    assert.strictEqual(internal.isAllowedCommand('free -h'), true);
+    assert.strictEqual(internal.isAllowedCommand('lsb_release -a'), true);
+    assert.strictEqual(internal.isAllowedCommand('ps aux'), true);
+    assert.strictEqual(internal.isAllowedCommand('systemctl status ssh.service --no-pager'), true);
+    assert.strictEqual(internal.isAllowedCommand('systemctl list-units --type=service --state=running --no-pager'), true);
+  });
+
   it('isAllowedCommand rejects dangerous commands', () => {
     assert.strictEqual(internal.isAllowedCommand('rm -rf /'), false);
     assert.strictEqual(internal.isAllowedCommand('sudo rm -rf'), false);
@@ -123,6 +136,9 @@ describe('host-bash-tool', () => {
     assert.strictEqual(internal.isAllowedCommand('wget evil.com'), false);
     assert.strictEqual(internal.isAllowedCommand('chmod 777 /etc'), false);
     assert.strictEqual(internal.isAllowedCommand('dd if=/dev/zero of=/dev/sda'), false);
+    assert.strictEqual(internal.isAllowedCommand('systemctl restart nginx'), false);
+    assert.strictEqual(internal.isAllowedCommand('systemctl enable nginx'), false);
+    assert.strictEqual(internal.isAllowedCommand('journalctl -xe'), false);
   });
 
   it('isAllowedCommand rejects shell chaining', () => {
@@ -231,6 +247,14 @@ describe('host-bash-tool', () => {
     assert.ok(hostModule.hostBashTool.description);
     assert.ok(hostModule.hostBashTool.parameters.properties.command);
     assert.ok(hostModule.hostBashTool.parameters.required.includes('command'));
+  });
+
+  it('host bash capabilities expose Linux integration metadata', () => {
+    const caps = hostModule.resolveHostBashCapabilities({ SIRAGPT_DESKTOP_BRIDGE_PLATFORM: 'linux' });
+    assert.equal(caps.host.platform, 'linux');
+    assert.ok(caps.allowedCommands.includes('systemctl'));
+    assert.ok(caps.linuxReadOnlyDiagnostics.includes('free -h'));
+    assert.ok(caps.restrictions.includes('systemctl is read-only only'));
   });
 
   it('cloneProjectTool definition has correct name and parameters', () => {

@@ -38,6 +38,11 @@ const READINESS_LANES = Object.freeze([
     label: 'Automation',
     required: ['.github/workflows/ci.yml', '.github/workflows/replit-sync.yml', 'scripts/configure-branch-protection.sh'],
   },
+  {
+    id: 'linux',
+    label: 'Linux host bridge',
+    required: ['docs/linux-agent-integration.md', 'scripts/linux-bridge-doctor.sh', 'Dockerfile', '.github/workflows/ci.yml'],
+  },
 ]);
 
 function resolveRepoRoot(opts = {}) {

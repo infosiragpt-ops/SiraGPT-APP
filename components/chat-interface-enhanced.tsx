@@ -2194,6 +2194,20 @@ const ActiveToolsDisplay = ({
     }
   }, [isVideoGenerationActive, mediaModelOptions.video, selectedVideoModel, setSelectedVideoModel]);
 
+  // Activate a model chosen from the floating fal.ai model gallery (mounted at
+  // the page level, decoupled from this composer). Image/video map onto the
+  // string-based pickers; audio/3d selections only surface the launcher toast.
+  React.useEffect(() => {
+    const handler = (e: Event) => {
+      const model = (e as CustomEvent).detail as { id?: string; group?: string } | undefined;
+      if (!model || !model.id) return;
+      if (model.group === "image") setSelectedImageModel(model.id);
+      else if (model.group === "video") setSelectedVideoModel(model.id);
+    };
+    window.addEventListener("siragpt:fal-model-selected", handler as EventListener);
+    return () => window.removeEventListener("siragpt:fal-model-selected", handler as EventListener);
+  }, [setSelectedImageModel, setSelectedVideoModel]);
+
   const renderMediaModelPicker = (
     tool: "image" | "voice" | "music" | "video",
     value: string,

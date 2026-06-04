@@ -42,7 +42,7 @@ router.post(
   [
     body('query').isString().trim().isLength({ min: 2, max: 500 })
       .withMessage('query must be 2-500 chars'),
-    body('providers').optional().isArray({ max: 7 })
+    body('providers').optional().isArray({ max: 10 })
       .withMessage('providers must be an array of provider names'),
     body('limit').optional().isInt({ min: 1, max: 50 }),
     body('timeoutMs').optional().isInt({ min: 500, max: 30_000 }),

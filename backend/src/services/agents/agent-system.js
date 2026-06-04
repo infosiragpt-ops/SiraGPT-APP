@@ -84,11 +84,18 @@ function initAgentSystem() {
       maxConcurrent: DEFAULTS.agentPoolMax,
       timeoutMs: DEFAULTS.agentPoolTimeoutMs,
     });
-    _agentPool.info = () => ({
-      maxConcurrent: DEFAULTS.agentPoolMax,
-      timeoutMs: DEFAULTS.agentPoolTimeoutMs,
-      active: DEFAULTS.agentPoolMax - (_agentPool.stats?.()?.availableSlots ?? 0),
-    });
+    _agentPool.info = () => {
+      // BulkheadPool.stats() exposes `active`/`queued` directly — there is
+      // no `availableSlots` field, so the old derivation always reported
+      // the pool as fully saturated (active === maxConcurrent).
+      const stats = _agentPool.stats?.() || {};
+      return {
+        maxConcurrent: DEFAULTS.agentPoolMax,
+        timeoutMs: DEFAULTS.agentPoolTimeoutMs,
+        active: stats.active ?? 0,
+        queued: stats.queued ?? 0,
+      };
+    };
     log.info('bulkhead initialised', { maxConcurrent: DEFAULTS.agentPoolMax });
 
     // 5. Sub-agent orchestrator — decomposes complex goals and runs

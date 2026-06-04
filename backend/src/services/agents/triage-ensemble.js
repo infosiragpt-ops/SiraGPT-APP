@@ -51,15 +51,20 @@ async function raceAll(judges, args, budgetMs) {
   const t0 = Date.now();
   const wrapped = judges.map((judge, idx) => {
     const start = Date.now();
+    const controller = (typeof AbortController === 'function') ? new AbortController() : null;
     return new Promise((resolve) => {
       let done = false;
       const timer = setTimeout(() => {
         if (done) return;
         done = true;
+        // Abort the underlying provider fetch so a losing/over-budget judge
+        // stops consuming a connection + provider quota on the shared pool
+        // instead of running to completion after we've stopped waiting.
+        if (controller) { try { controller.abort(); } catch { /* noop */ } }
         resolve({ status: 'rejected', reason: 'timeout', ms: Date.now() - start, idx });
       }, budgetMs);
       Promise.resolve()
-        .then(() => judge(args))
+        .then(() => judge({ ...args, signal: controller ? controller.signal : undefined }))
         .then(
           (value) => {
             if (done) return;

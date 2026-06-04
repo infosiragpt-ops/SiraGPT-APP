@@ -3,16 +3,18 @@
 /**
  * scientific-search.js
  * ─────────────────────────────────────────────────────────────────────────────
- * Unified search over the major OPEN scientific-paper APIs. Five of the six
- * sources work with NO API key (arXiv, Semantic Scholar, OpenAlex, CrossRef,
- * PubMed E-utilities, Europe PMC); CORE optionally takes a free key for higher
- * rate limits.
+ * Unified search over the major OPEN scientific-paper APIs, spanning multiple
+ * regions of the world. Most sources work with NO API key (arXiv, Semantic
+ * Scholar, OpenAlex, CrossRef, PubMed E-utilities, Europe PMC, DOAJ, DBLP,
+ * DataCite); CORE optionally takes a free key for higher rate limits. DOAJ adds
+ * worldwide open-access journal coverage (~130 countries), DBLP the global
+ * computer-science bibliography, and DataCite global datasets/software/theses.
  *
  * Each provider exposes a `search(query, opts)` function that returns an
  * array of canonical Paper objects:
  *
  *   {
- *     source: 'arxiv' | 'openalex' | 'semanticscholar' | 'crossref' | 'pubmed' | 'europepmc' | 'core',
+ *     source: 'arxiv' | 'openalex' | 'semanticscholar' | 'crossref' | 'pubmed' | 'europepmc' | 'core' | 'doaj' | 'dblp' | 'datacite',
  *     id: <provider-native id>,
  *     doi: '10.x/...' | null,
  *     title: 'string',
@@ -59,7 +61,7 @@ const DEFAULT_PER_PROVIDER_LIMIT = 10;
 const MAX_PER_PROVIDER_LIMIT = 50;
 const USER_AGENT_PREFIX = 'SiraGPT-Research/1.0';
 
-const PROVIDERS = ['arxiv', 'openalex', 'semanticscholar', 'crossref', 'pubmed', 'europepmc', 'core'];
+const PROVIDERS = ['arxiv', 'openalex', 'semanticscholar', 'crossref', 'pubmed', 'europepmc', 'core', 'doaj', 'dblp', 'datacite'];
 
 function userAgent() {
   const email = process.env.SIRAGPT_RESEARCH_EMAIL || '';
@@ -445,6 +447,99 @@ async function searchCore(query, opts = {}) {
   }));
 }
 
+// ── DOAJ — Directory of Open Access Journals ────────────────────────────
+// https://doaj.org/api/v2 — no key required. Indexes peer-reviewed open-access
+// journals from ~130 countries, so it broadens coverage well beyond the
+// English-language mainstream (strong Latin-American / African / Asian reach).
+async function searchDOAJ(query, opts = {}) {
+  const limit = clampLimit(opts.limit);
+  const url = `https://doaj.org/api/v2/search/articles/${encodeURIComponent(query)}?pageSize=${limit}`;
+  const json = await withTimeout(safeJson(url), opts.timeoutMs || DEFAULT_TIMEOUT_MS, 'doaj');
+  const items = Array.isArray(json?.results) ? json.results : [];
+  return items.map((it) => {
+    const b = it.bibjson || {};
+    const doi = (b.identifier || []).find((i) => String(i.type).toLowerCase() === 'doi')?.id || null;
+    const fulltext = (b.link || []).find((l) => String(l.type).toLowerCase() === 'fulltext')?.url || null;
+    return {
+      source: 'doaj',
+      id: it.id || null,
+      doi,
+      title: b.title || '',
+      abstract: b.abstract || null,
+      authors: (b.author || []).map((a) => ({ name: a.name, affiliation: a.affiliation || null })).filter((a) => a.name),
+      year: b.year ? parseInt(b.year, 10) || null : null,
+      venue: b.journal?.title || null,
+      citations: null,
+      openAccess: true, // DOAJ indexes open-access content exclusively
+      pdfUrl: fulltext,
+      htmlUrl: doi ? `https://doi.org/${doi}` : fulltext,
+    };
+  });
+}
+
+// ── DBLP — computer-science bibliography ────────────────────────────────
+// https://dblp.org/search/publ/api — no key required. The definitive global
+// index for computer-science publications (conferences + journals worldwide).
+async function searchDBLP(query, opts = {}) {
+  const limit = clampLimit(opts.limit);
+  const params = new URLSearchParams({ q: query, format: 'json', h: String(limit) });
+  const url = `https://dblp.org/search/publ/api?${params.toString()}`;
+  const json = await withTimeout(safeJson(url), opts.timeoutMs || DEFAULT_TIMEOUT_MS, 'dblp');
+  const hits = json?.result?.hits?.hit;
+  const items = Array.isArray(hits) ? hits : (hits ? [hits] : []);
+  return items.map((h) => {
+    const info = h.info || {};
+    // DBLP returns a single author as an object, multiple as an array.
+    const rawAuthors = info.authors?.author;
+    const authorList = Array.isArray(rawAuthors) ? rawAuthors : (rawAuthors ? [rawAuthors] : []);
+    return {
+      source: 'dblp',
+      id: info.key || h['@id'] || null,
+      doi: info.doi || null,
+      title: typeof info.title === 'string' ? info.title.replace(/\.$/, '') : '',
+      abstract: null, // DBLP is metadata-only (no abstracts)
+      authors: authorList.map((a) => ({ name: typeof a === 'string' ? a : a.text })).filter((a) => a.name),
+      year: info.year ? parseInt(info.year, 10) || null : null,
+      venue: info.venue || null,
+      citations: null,
+      openAccess: null,
+      pdfUrl: null,
+      htmlUrl: info.ee || info.url || (info.doi ? `https://doi.org/${info.doi}` : null),
+    };
+  });
+}
+
+// ── DataCite — global research outputs + datasets ───────────────────────
+// https://api.datacite.org — no key required. Worldwide DOI registry covering
+// datasets, software, preprints and theses that Crossref often misses.
+async function searchDataCite(query, opts = {}) {
+  const limit = clampLimit(opts.limit);
+  const params = new URLSearchParams({ query, 'page[size]': String(limit) });
+  const url = `https://api.datacite.org/dois?${params.toString()}`;
+  const json = await withTimeout(safeJson(url), opts.timeoutMs || DEFAULT_TIMEOUT_MS, 'datacite');
+  const items = Array.isArray(json?.data) ? json.data : [];
+  return items.map((d) => {
+    const a = d.attributes || {};
+    const doi = a.doi || d.id || null;
+    return {
+      source: 'datacite',
+      id: d.id || null,
+      doi,
+      title: Array.isArray(a.titles) && a.titles.length ? a.titles[0].title : '',
+      abstract: Array.isArray(a.descriptions) && a.descriptions.length ? a.descriptions[0].description : null,
+      authors: (a.creators || []).map((c) => ({
+        name: c.name || [c.givenName, c.familyName].filter(Boolean).join(' ') || null,
+      })).filter((c) => c.name),
+      year: a.publicationYear || null,
+      venue: a.publisher || null,
+      citations: typeof a.citationCount === 'number' ? a.citationCount : null,
+      openAccess: null,
+      pdfUrl: null,
+      htmlUrl: a.url || (doi ? `https://doi.org/${doi}` : null),
+    };
+  });
+}
+
 const PROVIDER_FUNCS = {
   arxiv: searchArxiv,
   semanticscholar: searchSemanticScholar,
@@ -453,6 +548,9 @@ const PROVIDER_FUNCS = {
   pubmed: searchPubMed,
   europepmc: searchEuropePMC,
   core: searchCore,
+  doaj: searchDOAJ,
+  dblp: searchDBLP,
+  datacite: searchDataCite,
 };
 
 /**
@@ -506,6 +604,9 @@ module.exports = {
   searchPubMed,
   searchEuropePMC,
   searchCore,
+  searchDOAJ,
+  searchDBLP,
+  searchDataCite,
   PROVIDERS,
   _internal: { dedupeByDoi, normaliseTitle, normaliseDoi, parseAtomFeed, invertedIndexToText, rankPapers, userAgent },
 };

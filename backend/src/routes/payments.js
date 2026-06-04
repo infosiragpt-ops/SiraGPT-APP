@@ -203,9 +203,13 @@ router.post('/plan-change/preview', subscriptionLimiter, [
   body('newPlan').isIn(['PRO', 'PRO_MAX', 'ENTERPRISE']).withMessage('Invalid plan')
 ], authenticateToken, async (req, res) => {
   try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
     const { newPlan } = req.body;
     const userId = req.user.id;
-    
+
     const preview = await prorationService.previewPlanChange(userId, newPlan);
     res.json(preview);
     
@@ -218,12 +222,19 @@ router.post('/plan-change/preview', subscriptionLimiter, [
 // Execute plan change
 router.post('/plan-change/execute', subscriptionLimiter, [
   body('newPlan').isIn(['PRO', 'PRO_MAX', 'ENTERPRISE']).withMessage('Invalid plan'),
-  body('immediate').isBoolean().withMessage('Immediate must be boolean')
+  // `immediate` is optional — the handler defaults it to true. Without
+  // .optional(), activating validationResult below would reject every
+  // legitimate request that omits it.
+  body('immediate').optional().isBoolean().withMessage('Immediate must be boolean')
 ], authenticateToken, async (req, res) => {
   try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
     const { newPlan, immediate = true } = req.body;
     const userId = req.user.id;
-    
+
     const result = await prorationService.changePlan(userId, newPlan, immediate);
     res.json(result);
     

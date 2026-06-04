@@ -61,7 +61,16 @@ function compileToRegex(pattern) {
     re += escapeRegex(ch);
     i += 1;
   }
-  return new RegExp(`^${re}$`);
+  // A malformed character class (reversed range like [z-a], or a class
+  // ending in a backslash) makes `new RegExp` throw a SyntaxError. The rest
+  // of this compiler is deliberately lenient toward malformed patterns
+  // (an unterminated '[' is treated as a literal), so degrade a bad class to
+  // a never-matching regex instead of throwing and poisoning the whole call.
+  try {
+    return new RegExp(`^${re}$`);
+  } catch {
+    return /(?!x)x/;
+  }
 }
 
 const compileCache = new Map();

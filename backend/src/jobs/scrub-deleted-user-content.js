@@ -82,6 +82,12 @@ async function run(opts = {}) {
   let totalFiles = 0;
 
   for (const u of users) {
+    // Per-user counts for this user's GDPR audit row. The run-wide
+    // totalMessages/totalFiles accumulate across ALL users, so writing
+    // them into each user's audit metadata over-reported the count for
+    // every user after the first.
+    let userMessages = 0;
+    let userFiles = 0;
     // ── Messages ──
     // Pull the user's chats, then their messages. We scrub only those
     // not yet marked as scrubbed.
@@ -108,7 +114,7 @@ async function run(opts = {}) {
         const newMeta = { ...meta, piiScrubbed: true, piiScrubbedAt: now.toISOString() };
 
         if (dryRun) {
-          totalMessages++;
+          totalMessages++; userMessages++;
           continue;
         }
         try {
@@ -116,7 +122,7 @@ async function run(opts = {}) {
             where: { id: m.id },
             data: { content: masked, metadata: newMeta },
           });
-          totalMessages++;
+          totalMessages++; userMessages++;
           _bumpScrubCounter('message', 1);
         } catch (err) {
           logger.warn(`[scrub-pii] message=${m.id} update failed: ${err?.message || err}`);
@@ -144,12 +150,12 @@ async function run(opts = {}) {
       data.processingError = SCRUB_MARKER;
 
       if (dryRun) {
-        totalFiles++;
+        totalFiles++; userFiles++;
         continue;
       }
       try {
         await prisma.file.update({ where: { id: f.id }, data });
-        totalFiles++;
+        totalFiles++; userFiles++;
         _bumpScrubCounter('file', 1);
       } catch (err) {
         logger.warn(`[scrub-pii] file=${f.id} update failed: ${err?.message || err}`);
@@ -165,7 +171,7 @@ async function run(opts = {}) {
           actorType: 'system',
           resource: 'user',
           resourceId: u.id,
-          metadata: { email: u.email, messages: totalMessages, files: totalFiles },
+          metadata: { email: u.email, messages: userMessages, files: userFiles },
         });
       }
     } catch (_) { /* audit failures must never block the scrub */ }

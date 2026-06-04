@@ -338,6 +338,98 @@ test('searchCore: hits API when CORE_API_KEY is set', async () => {
   }
 });
 
+// ── Worldwide providers (DOAJ / DBLP / DataCite) ───────────────────────
+
+test('searchDOAJ: maps bibjson to canonical shape with OA + fulltext link', async () => {
+  setFetchHandler((url) => {
+    assert.ok(url.includes('doaj.org/api/v2/search/articles/'));
+    return Promise.resolve(jsonResponse({
+      results: [{
+        id: 'd1',
+        bibjson: {
+          title: 'Open access study',
+          abstract: 'An abstract.',
+          year: '2022',
+          author: [{ name: 'Ana Pérez' }],
+          journal: { title: 'Revista Latinoamericana', country: 'MX' },
+          identifier: [{ type: 'doi', id: '10.1/doaj' }],
+          link: [{ type: 'fulltext', url: 'https://example.org/pdf' }],
+        },
+      }],
+    }));
+  });
+  const out = await ss.searchDOAJ('open access');
+  assert.equal(out.length, 1);
+  assert.equal(out[0].source, 'doaj');
+  assert.equal(out[0].doi, '10.1/doaj');
+  assert.equal(out[0].openAccess, true);
+  assert.equal(out[0].venue, 'Revista Latinoamericana');
+  assert.equal(out[0].pdfUrl, 'https://example.org/pdf');
+});
+
+test('searchDOAJ: returns [] on an empty payload', async () => {
+  setFetchHandler(() => Promise.resolve(jsonResponse({})));
+  const out = await ss.searchDOAJ('nothing');
+  assert.deepEqual(out, []);
+});
+
+test('searchDBLP: handles single + multiple authors and strips trailing dot', async () => {
+  setFetchHandler((url) => {
+    assert.ok(url.includes('dblp.org/search/publ/api'));
+    return Promise.resolve(jsonResponse({
+      result: { hits: { hit: [
+        { info: { key: 'k1', title: 'A CS paper.', year: '2021', venue: 'NeurIPS', doi: '10.2/dblp', ee: 'https://ee', authors: { author: [{ text: 'Jane Doe' }, { text: 'John Roe' }] } } },
+        { info: { key: 'k2', title: 'Solo work', year: '2019', venue: 'ICML', authors: { author: { text: 'Solo Author' } } } },
+      ] } },
+    }));
+  });
+  const out = await ss.searchDBLP('learning');
+  assert.equal(out.length, 2);
+  assert.equal(out[0].title, 'A CS paper', 'trailing dot stripped');
+  assert.equal(out[0].authors.length, 2);
+  assert.equal(out[0].htmlUrl, 'https://ee');
+  assert.equal(out[1].authors[0].name, 'Solo Author', 'single author normalised');
+});
+
+test('searchDBLP: returns [] when there are no hits', async () => {
+  setFetchHandler(() => Promise.resolve(jsonResponse({ result: { hits: {} } })));
+  const out = await ss.searchDBLP('zzz');
+  assert.deepEqual(out, []);
+});
+
+test('searchDataCite: maps attributes to canonical shape', async () => {
+  setFetchHandler((url) => {
+    assert.ok(url.includes('api.datacite.org/dois'));
+    return Promise.resolve(jsonResponse({
+      data: [{
+        id: '10.3/dc',
+        attributes: {
+          doi: '10.3/dc',
+          titles: [{ title: 'A dataset' }],
+          descriptions: [{ description: 'Dataset description.' }],
+          creators: [{ name: 'Lab X' }, { givenName: 'Joe', familyName: 'Smith' }],
+          publicationYear: 2023,
+          publisher: 'Zenodo',
+          url: 'https://zenodo.org/record/1',
+        },
+      }],
+    }));
+  });
+  const out = await ss.searchDataCite('dataset');
+  assert.equal(out.length, 1);
+  assert.equal(out[0].source, 'datacite');
+  assert.equal(out[0].doi, '10.3/dc');
+  assert.equal(out[0].year, 2023);
+  assert.equal(out[0].venue, 'Zenodo');
+  assert.equal(out[0].authors[1].name, 'Joe Smith', 'given+family joined');
+});
+
+test('PROVIDERS includes the worldwide sources', () => {
+  for (const p of ['doaj', 'dblp', 'datacite']) {
+    assert.ok(ss.PROVIDERS.includes(p), `${p} listed in PROVIDERS`);
+  }
+});
+
 // ── Unified search ─────────────────────────────────────────────────────
 
 test('search: fans out to all configured providers and merges results', async () => {
