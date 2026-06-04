@@ -394,13 +394,17 @@ describe("runFullHealthCheck", () => {
 
 describe("runFullHealthCheck google_oauth exposure", () => {
   function withProviderKey(fn) {
-    const original = process.env.OPENAI_API_KEY;
+    const originalOpenAI = process.env.OPENAI_API_KEY;
+    const originalNodeEnv = process.env.NODE_ENV;
     process.env.OPENAI_API_KEY = "sk-test";
+    process.env.NODE_ENV = "test";
     return Promise.resolve()
       .then(fn)
       .finally(() => {
-        if (original === undefined) delete process.env.OPENAI_API_KEY;
-        else process.env.OPENAI_API_KEY = original;
+        if (originalOpenAI === undefined) delete process.env.OPENAI_API_KEY;
+        else process.env.OPENAI_API_KEY = originalOpenAI;
+        if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
+        else process.env.NODE_ENV = originalNodeEnv;
       });
   }
 
