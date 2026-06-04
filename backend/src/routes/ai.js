@@ -636,6 +636,25 @@ router.post(
   }
 );
 
+// ✅ Full fal.ai creative-model catalog for the chat model gallery (image /
+// video / audio / 3d), ordered highest→lowest quality. Public + cached; the
+// list is a baked manifest (scripts/build-fal-catalog.js), so this is cheap.
+router.get('/fal-models', optionalAuth, responseCache({ ttlMs: 10 * 60_000, namespace: 'fal-models' }), (req, res) => {
+  try {
+    const { listFalModels, getFalCatalog } = require('../services/fal-model-catalog');
+    const group = Array.isArray(req.query.group) ? req.query.group[0] : req.query.group;
+    const search = Array.isArray(req.query.search) ? req.query.search[0] : req.query.search;
+    if (!group && !search) {
+      const catalog = getFalCatalog();
+      return res.json({ success: true, ...catalog });
+    }
+    const models = listFalModels({ group, search });
+    return res.json({ success: true, count: models.length, models });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: 'fal_catalog_unavailable', message: err.message });
+  }
+});
+
 // ✅ Get available AI models
 router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace: 'ai-models' }), async (req, res) => {
   try {
