@@ -5480,9 +5480,11 @@ router.post(
 
 
           const imagePromise = openai.images.generate({
+            // Google's OpenAI-compatible image endpoint returns b64_json by
+            // default and REJECTS `response_format` with
+            // "400 Unknown parameter: 'response_format'". Do not send it.
             model: "imagen-3.0-generate-002",
             prompt: prompt,
-            response_format: "b64_json",
             n: 1,
             size: "1024x1024"
           });
@@ -6275,10 +6277,12 @@ router.post(
 
         if (provider === "Gemini") {
           const geminiImageModel = String(model || '').trim() || 'imagen-4.0-generate-001';
+          // Google's OpenAI-compatible image endpoint returns b64_json by
+          // default and REJECTS `response_format` with
+          // "400 Unknown parameter: 'response_format'". Do not send it.
           const response = await openai.images.generate({
             model: geminiImageModel,
             prompt: imagePrompt,
-            response_format: "b64_json",
             n: 1,
             size: requestedImageSize
           }, { signal: requestAbortController.signal });

@@ -26,3 +26,13 @@ provider.
 last image; without the reroute they hit "OpenRouter image editing is not
 enabled yet" and the request dies (ECONNRESET). The capability gap is not
 discoverable from the model picker, so the backend must paper over it.
+
+## `response_format` is poison for modern image models
+
+`imagen-*` and `gpt-image-*` (OpenAI Images API AND Google's OpenAI-compatible
+endpoint) REJECT `response_format` → `400 Unknown parameter: 'response_format'`.
+They return `b64_json` by default, so never send the param. The ONLY models that
+still accept `response_format: 'b64_json'` are legacy OpenAI dall-e-2/3 (which
+otherwise return a URL). Guard it behind a model check (`isOpenAiResponsesImageModel`
+omits it for gpt-image-*); Gemini/Imagen calls must omit it unconditionally.
+
