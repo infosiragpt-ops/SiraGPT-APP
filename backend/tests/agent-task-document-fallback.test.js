@@ -134,6 +134,7 @@ test('buildAttachmentGroundedFallbackAnswer handles alphanumeric risks, launch c
     'Fecha preliminar de lanzamiento: 2026-08-30 (no oficial).',
     'Total real preliminar: 472000 USD (no oficial).',
     'P1 - Privacy - Severidad Critica - Mitigacion: firmar addendum DPA regional - Fecha limite: 2026-07-12 - Bloquea: Colombia.',
+    'S2 - Support - Severidad Alta - Mitigacion: reforzar cobertura de soporte premium - Fecha limite: 2026-07-20.',
   ].join('\n');
 
   const answer = buildAttachmentGroundedFallbackAnswer({
@@ -149,10 +150,14 @@ test('buildAttachmentGroundedFallbackAnswer handles alphanumeric risks, launch c
   assert.match(answer, /94\.0%|94%/);
   assert.match(answer, /2026-09-05/);
   assert.match(answer, /2026-08-30/);
+  assert.match(answer, /Peru/);
+  assert.match(answer, /Chile/);
   assert.match(answer, /P1 - Privacy - Severidad Critica/);
   assert.match(answer, /firmar addendum DPA regional/);
   assert.match(answer, /2026-07-12/);
   assert.match(answer, /Colombia/);
+  assert.match(answer, /S2 - Support - Severidad Alta/);
+  assert.match(answer, /2026-07-20/);
   assert.match(answer, /35000 USD/);
   assert.match(answer, /Delta \/ Integraciones/);
   assert.match(answer, /16/);
@@ -388,6 +393,14 @@ test('shouldUseDeterministicAttachmentAnswer: routes simple attachment summaries
     shouldUseDeterministicAttachmentAnswer({
       goal: 'Qué cliente debe usarse como caso de éxito y por qué, con SLA, churn, real y contrato. No crees archivos; responde solo en chat.',
       files: ['file-docx-1', 'file-xlsx-1'],
+      documentPolicy: { mode: 'chat_only', autoGenerate: false },
+    }),
+    true,
+  );
+  assert.equal(
+    shouldUseDeterministicAttachmentAnswer({
+      goal: 'Crea un mapa de fuentes: enumera cada archivo adjunto y qué dato principal aporta. No inventes archivos.',
+      files: ['file-docx-1', 'file-pdf-1'],
       documentPolicy: { mode: 'chat_only', autoGenerate: false },
     }),
     true,

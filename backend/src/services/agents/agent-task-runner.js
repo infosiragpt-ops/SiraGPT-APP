@@ -277,20 +277,40 @@ function extractClientMetricRows(text) {
   return rows;
 }
 
-function findAttachmentRisk(text) {
+function extractAttachmentRisks(text) {
   const value = String(text || '');
   const riskId = '[A-Z][0-9]+';
-  const match = value.match(new RegExp(`\\b(${riskId})\\s*[-–]\\s*([^-–\\n.]+?)\\s*[-–]\\s*Severidad\\s+([^-–\\n.]+?)\\s*[-–]\\s*Mitigaci[oó]n:\\s*([^-–\\n.]+)(?:\\s*[-–]\\s*Fecha\\s+l[ií]mite:\\s*([0-9-]+))?(?:\\s*[-–]\\s*Bloquea:\\s*([^\\n.]+))?`, 'i'))
-    || value.match(new RegExp(`\\bRiesgo\\s+(${riskId})\\s*:\\s*([^,\\n.]+),\\s*severidad\\s+([^,\\n.]+),\\s*mitigaci[oó]n:\\s*([^\\n.]+)`, 'i'));
-  if (!match) return null;
-  return {
-    id: match[1].trim(),
-    owner: match[2].trim(),
-    severity: match[3].trim(),
-    mitigation: match[4].trim(),
-    due: match[5] ? match[5].trim() : null,
-    blocks: match[6] ? match[6].trim() : null,
+  const risks = [];
+  const seen = new Set();
+  const pushRisk = (match) => {
+    if (!match) return;
+    const id = String(match[1] || '').trim();
+    if (!id) return;
+    const key = id.toUpperCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    risks.push({
+      id,
+      owner: String(match[2] || '').trim(),
+      severity: String(match[3] || '').trim(),
+      mitigation: String(match[4] || '').trim(),
+      due: match[5] ? String(match[5]).trim() : null,
+      blocks: match[6] ? String(match[6]).trim() : null,
+    });
   };
+
+  const structured = new RegExp(`\\b(${riskId})\\s*[-–]\\s*([^-–\\n.]+?)\\s*[-–]\\s*Severidad\\s+([^-–\\n.]+?)\\s*[-–]\\s*Mitigaci[oó]n:\\s*([^-–\\n.]+)(?:\\s*[-–]\\s*Fecha\\s+l[ií]mite:\\s*([0-9-]+))?(?:\\s*[-–]\\s*Bloquea:\\s*([^\\n.]+))?`, 'gi');
+  let match;
+  while ((match = structured.exec(value))) pushRisk(match);
+
+  const prose = new RegExp(`\\bRiesgo\\s+(${riskId})\\s*:\\s*([^,\\n.]+),\\s*severidad\\s+([^,\\n.]+),\\s*mitigaci[oó]n:\\s*([^\\n.]+)`, 'gi');
+  while ((match = prose.exec(value))) pushRisk(match);
+
+  return risks;
+}
+
+function findAttachmentRisk(text) {
+  return extractAttachmentRisks(text)[0] || null;
 }
 
 function extractAttachmentFileNames(text) {
@@ -382,7 +402,8 @@ function extractStructuredAttachmentFacts(text) {
     /PDF[^.\n]{0,100}(?:preliminar|dice)[^.\n]{0,40}?(\d+(?:[.,]\d+)?)\s*%?/i,
     /no\s+(\d+(?:[.,]\d+)?)\s*%/i,
   ]);
-  const risk = findAttachmentRisk(raw);
+  const risks = extractAttachmentRisks(raw);
+  const risk = risks[0] || null;
   const ticketRows = extractTicketRows(raw);
   const criticalTicket = ticketRows
     .filter((row) => /critica|critico|critical/i.test(row.severity))
@@ -464,6 +485,7 @@ function extractStructuredAttachmentFacts(text) {
     officialChurn,
     preliminaryChurn,
     risk,
+    risks,
     worstGap,
     lowSlaRows,
     criticalTicket,
@@ -488,7 +510,7 @@ function extractStructuredAttachmentFacts(text) {
       || Boolean(preliminaryLaunchDate)
       || Number.isFinite(officialChurn)
       || Number.isFinite(preliminaryChurn)
-      || Boolean(risk),
+      || risks.length > 0,
   };
 }
 
@@ -549,11 +571,24 @@ function buildStructuredAttachmentAnalysisAnswer({ goal, uploadedFileContext }) 
       : '';
     paragraphs.push(`La fecha oficial de lanzamiento es **${facts.officialLaunchDate || facts.preliminaryLaunchDate}** según el **DOCX**, que es la fuente autoritativa para el go/no-go.${prelim}`);
   }
-  if ((wantsRisk || wantsRecommendation) && facts.risk) {
-    const due = facts.risk.due ? ` Fecha límite: **${facts.risk.due}**.` : '';
-    const blocks = facts.risk.blocks ? ` Bloquea: **${facts.risk.blocks}**.` : '';
+  if (wantsLaunch && (facts.goCountries.length || facts.pausedCountry)) {
+    const go = facts.goCountries.length ? `avanzan **${facts.goCountries.join('** y **')}**` : '';
+    const paused = facts.pausedCountry ? `queda pausado **${facts.pausedCountry}**` : '';
+    const condition = facts.risk
+      ? ` hasta cerrar **${facts.risk.id}**${facts.risk.due ? ` antes de **${facts.risk.due}**` : ''}`
+      : '';
+    paragraphs.push(`Go/no-go por país: ${[go, paused ? `${paused}${condition}` : ''].filter(Boolean).join('; ')}.`);
+  }
+  if ((wantsRisk || wantsRecommendation) && facts.risks.length) {
+    const riskText = facts.risks.map((risk) => {
+      const due = risk.due ? ` Fecha límite: **${risk.due}**.` : '';
+      const blocks = risk.blocks ? ` Bloquea: **${risk.blocks}**.` : '';
+      return `**${risk.id} - ${risk.owner} - Severidad ${risk.severity}**; mitigación: **${risk.mitigation}**.${due}${blocks}`;
+    }).join(' ');
     paragraphs.push(
-      `El riesgo que bloquea aumentar presupuesto/expansión es **${facts.risk.id} - ${facts.risk.owner} - Severidad ${facts.risk.severity}**; la mitigación indicada es **${facts.risk.mitigation}**.${due}${blocks}`
+      facts.risks.length > 1
+        ? `Riesgos identificados: ${riskText}`
+        : `El riesgo que bloquea aumentar presupuesto/expansión es ${riskText}`
     );
   }
   if ((wantsSla || wantsRecommendation) && facts.lowSlaRows.length > 0) {
@@ -952,7 +987,9 @@ function shouldUseDeterministicAttachmentAnswer({
   if (/\b(?:entregable|descargable|convierte|exporta|exportar)\b/.test(request)) {
     return false;
   }
+  const inlineSourceMap = /\b(?:mapa\s+de\s+fuentes|fuentes?\s+por\s+(?:archivo|documento)|enumera\s+cada\s+archivo|cita\s+(?:la\s+)?fuente\s+por\s+documento)\b/.test(request);
   if (/\b(?:crea|crear|genera|generar|formatea)\b/.test(request)
+    && !inlineSourceMap
     && !/\b(?:no\s+(?:crees|crear|generes|generar)|sin\s+(?:crear|generar)|responde\s+solo\s+en\s+chat|solo\s+en\s+chat)\b/.test(request)) {
     return false;
   }

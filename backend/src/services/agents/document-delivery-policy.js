@@ -21,6 +21,7 @@ const CHAT_ONLY_DIRECTIVE_RE = /\b(?:no\s+(?:crees?|crear|generes?|generar|hagas
 // contains the literal word "word" / "documento" / "pdf".
 const DOCUMENT_INQUIRY_RE = /\b(?:cu[aá]l(?:es)?|qu[eé]|c[oó]mo|de\s+qu[eé]|qui[eé]n(?:es)?|cu[aá]ndo|d[oó]nde|por\s+qu[eé]|cu[aá]nt[oa]s?|resume(?:me|n)?|res[uú]meme|lee(?:me)?|l[eé]eme|abre(?:me)?|[aá]breme|muestra(?:me)?|mu[eé]strame|dime|cu[eé]ntame|expl[ií]came|explica(?:me)?|busca(?:me)?|encuentra(?:me)?|de\s+qu[eé]\s+trata|sobre\s+qu[eé])\b[^.?!]{0,160}\b(?:word|docx|documento|archivo|pdf|excel|xlsx|hoja\s+de\s+c[aá]lculo|pptx|power\s*point|powerpoint|presentaci[oó]n|adjunto|texto)\b/i;
 const EXPLICIT_DOCUMENT_OUTPUT_RE = /\b(?:en|como|a)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|presentaci[oó]n|documento|archivo)\b|\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|exporta(?:r|me)?|descarga(?:r|me)?|prepara(?:r|me)?)\b.*\b(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|documento|archivo|informe|reporte|presentaci[oó]n)\b/i;
+const SOURCE_MAP_CHAT_RE = /\b(?:mapa\s+de\s+fuentes|fuentes?\s+por\s+(?:archivo|documento)|enumera\s+cada\s+archivo|cita\s+(?:la\s+)?fuente\s+por\s+documento)\b/i;
 
 let sourcePreservingEditMod = null;
 function isSourcePreservingEdit(requestText, files) {
@@ -119,6 +120,13 @@ function classifyMode(requestText, estimatedWords, format, files = [], options =
   if (options.transcriptionOnly || options.chatOnlyDirective) return 'chat_only';
   const documentUnderstanding = DOCUMENT_UNDERSTANDING_RE.test(requestText);
   const explicitOutput = EXPLICIT_DOCUMENT_OUTPUT_RE.test(requestText);
+  const explicitFileFormat = EXPLICIT_WORD_OUTPUT_RE.test(requestText)
+    || EXPLICIT_SHEET_OUTPUT_RE.test(requestText)
+    || EXPLICIT_DECK_OUTPUT_RE.test(requestText)
+    || EXPLICIT_PDF_OUTPUT_RE.test(requestText);
+  if (Array.isArray(files) && files.length > 0 && SOURCE_MAP_CHAT_RE.test(requestText) && !explicitFileFormat) {
+    return 'chat_only';
+  }
   if (isSourcePreservingEdit(requestText, files)) return 'doc_required';
   // Read/inquiry intent about a doc the user already shared in a
   // prior turn must short-circuit BEFORE the WORDISH/SHEET/DECK/PDF
@@ -194,6 +202,13 @@ function buildDocumentDeliveryPolicy({
   const transcriptionOnly = TRANSCRIPTION_RE.test(requestText) && !EXPLICIT_TRANSCRIPTION_OUTPUT_RE.test(requestText);
   const chatOnlyDirective = hasChatOnlyDirective(requestText);
   const explicitOutput = hasExplicitDocumentOutputRequest(requestText);
+  const sourceMapChat = Array.isArray(files) && files.length > 0 && SOURCE_MAP_CHAT_RE.test(requestText)
+    && !(
+      EXPLICIT_WORD_OUTPUT_RE.test(requestText)
+      || EXPLICIT_SHEET_OUTPUT_RE.test(requestText)
+      || EXPLICIT_DECK_OUTPUT_RE.test(requestText)
+      || EXPLICIT_PDF_OUTPUT_RE.test(requestText)
+    );
   const documentUnderstanding = DOCUMENT_UNDERSTANDING_RE.test(requestText);
   const estimated = estimateWords({ goal, displayGoal, finalText });
   const format = detectFormat(requestText, requestedFormat);
@@ -204,6 +219,7 @@ function buildDocumentDeliveryPolicy({
   const reason = (() => {
     if (transcriptionOnly) return 'Solicitud de transcripción literal; se responde en chat salvo que el usuario pida un archivo.';
     if (chatOnlyDirective) return 'El usuario pidio responder en chat y no generar archivos.';
+    if (sourceMapChat) return 'Solicitud de mapa de fuentes sobre adjuntos; se responde en chat y no se genera archivo.';
     if (DOCUMENT_UNDERSTANDING_RE.test(requestText) && !EXPLICIT_DOCUMENT_OUTPUT_RE.test(requestText)) return 'Solicitud de analisis documental; se responde primero en chat y se sugiere documento solo si hace falta.';
     if (mode === 'chat_only') return 'Respuesta conversacional corta; no requiere archivo.';
     // Los motivos de "sugerencia" (documento opcional, no automático) deben

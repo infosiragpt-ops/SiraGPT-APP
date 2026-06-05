@@ -230,6 +230,22 @@ test('DocumentDeliveryPolicy keeps other read-intent phrasings in chat_only', ()
   }
 });
 
+test('DocumentDeliveryPolicy treats source maps over attachments as chat-only unless a file format is requested', () => {
+  const inlinePolicy = buildDocumentDeliveryPolicy({
+    goal: 'Crea un mapa de fuentes: enumera cada archivo adjunto y que dato principal aporta. No inventes archivos.',
+    files: ['file-txt-1', 'file-pdf-1'],
+  });
+  assert.equal(inlinePolicy.mode, 'chat_only');
+  assert.equal(inlinePolicy.autoGenerate, false);
+
+  const wordPolicy = buildDocumentDeliveryPolicy({
+    goal: 'Crea un mapa de fuentes en Word con cada archivo adjunto.',
+    files: ['file-txt-1', 'file-pdf-1'],
+  });
+  assert.equal(wordPolicy.mode, 'doc_required');
+  assert.equal(wordPolicy.autoGenerate, true);
+});
+
 test('DocumentDeliveryPolicy still promotes explicit generate-in-word requests', () => {
   // Sanity: the inquiry guard must not weaken legitimate generation
   // requests. "Hazme un word sobre X" and "exporta esto a pdf" still
