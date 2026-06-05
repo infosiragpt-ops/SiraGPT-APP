@@ -38,6 +38,7 @@ const { QUESTION_BANK, questionForDimension } = require('../services/builder/que
 const intake = require('../services/builder/intake-engine');
 const { planFromBrief } = require('../services/builder/blueprint');
 const { scaffoldFromBrief } = require('../services/builder/scaffold');
+const { generateNextQuestion } = require('../services/builder/question-generator');
 
 const router = express.Router();
 
@@ -61,14 +62,22 @@ function hydrateSession(raw) {
   return session;
 }
 
-function snapshot(session) {
+/**
+ * Build the response snapshot. With `dynamic`, the next question is generated
+ * contextually by the LLM (with automatic fallback to the static bank); the
+ * `dynamic` flag is reported back so the client knows which path was taken.
+ */
+async function snapshot(session, { dynamic = false } = {}) {
   const cov = intake.coverage(session);
-  return {
-    session,
-    coverage: cov,
-    nextQuestion: intake.nextQuestion(session),
-    complete: cov.complete,
-  };
+  let nextQuestion = intake.nextQuestion(session);
+  if (dynamic && nextQuestion && cov.missing.length > 0) {
+    try {
+      nextQuestion = await generateNextQuestion(session, cov.missing[0]);
+    } catch {
+      // keep the static question on any failure
+    }
+  }
+  return { session, coverage: cov, nextQuestion, complete: cov.complete, dynamic };
 }
 
 router.get('/intake/questions', authenticateToken, (req, res) => {
@@ -87,8 +96,9 @@ router.post(
       .withMessage(`dimension must be one of ${COVERAGE_DIMENSIONS.join(', ')}`),
     body('integrations').optional(),
     body('constraints').optional().isString(),
+    body('dynamic').optional().isBoolean().withMessage('dynamic must be a boolean'),
   ],
-  (req, res) => {
+  async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       return res.status(400).json({ error: 'validation_failed', details: errors.array() });
@@ -101,7 +111,7 @@ router.post(
       }
       if (integrations != null) intake.recordIntegrations(session, integrations);
       if (typeof constraints === 'string') intake.recordConstraints(session, constraints);
-      return res.json(snapshot(session));
+      return res.json(await snapshot(session, { dynamic: req.body.dynamic === true }));
     } catch (err) {
       return res.status(400).json({ error: 'intake_step_failed', message: err.message });
     }
