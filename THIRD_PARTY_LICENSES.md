@@ -428,7 +428,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `minimatch` | 10.2.5, 3.1.5, 5.1.9, 9.0.9 | ISC | [link](https://github.com/isaacs/minimatch) |
 | `next-auth` | 4.24.14 | ISC | [link](https://github.com/nextauthjs/next-auth) |
 | `node-cron` | 3.0.3 | ISC | [link](https://github.com/merencia/node-cron) |
-| `npm-normalize-package-bin` | 3.0.1 | ISC | [link](https://github.com/npm/npm-normalize-package-bin) |
+| `npm-normalize-package-bin` | 3.0.0 | ISC | [link](https://github.com/npm/npm-normalize-package-bin) |
 | `once` | 1.4.0 | ISC | [link](https://github.com/isaacs/once) |
 | `pg-int8` | 1.0.1 | ISC | [link](https://github.com/charmander/pg-int8) |
 | `picocolors` | 1.1.1 | ISC | [link](https://github.com/alexeyraspopov/picocolors) |
