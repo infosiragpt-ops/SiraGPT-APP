@@ -54,8 +54,37 @@ const PATTERNS = {
 const SPANISH_NUMBER_WORDS = new Map([
   ['uno', 1], ['una', 1], ['dos', 2], ['tres', 3], ['cuatro', 4], ['cinco', 5],
   ['seis', 6], ['siete', 7], ['ocho', 8], ['nueve', 9], ['diez', 10],
+  ['once', 11], ['doce', 12], ['trece', 13], ['catorce', 14], ['quince', 15],
+  ['dieciseis', 16], ['diecisiete', 17], ['dieciocho', 18], ['diecinueve', 19],
   ['veinte', 20], ['treinta', 30], ['cuarenta', 40], ['cincuenta', 50],
-  ['cien', 100],
+  ['sesenta', 60], ['setenta', 70], ['ochenta', 80], ['noventa', 90],
+  ['cien', 100], ['doscientos', 200], ['trescientos', 300], ['cuatrocientos', 400],
+  ['quinientos', 500], ['mil', 1000], ['docena', 12], ['par', 2],
+]);
+
+// Register/tone the user explicitly asks for. Matched against accent-stripped,
+// lowercased text so patterns stay accent-free. Multiple tones can co-exist.
+const TONE_RULES = [
+  { tone: 'formal', patterns: [/\b(formal|formalmente|lenguaje formal|tono formal|muy formal|de manera formal|de forma formal)\b/] },
+  { tone: 'informal', patterns: [/\b(informal|informalmente|casual|coloquial|relajad[ao]|cercan[ao]|amigable|amistoso|de manera casual|de forma relajada)\b/] },
+  { tone: 'technical', patterns: [/\b(tecnico|tecnicos|lenguaje tecnico|tono tecnico|muy tecnico|especializado|technical)\b/] },
+  { tone: 'simple', patterns: [/\b(sencillo|simple|simples|facil de entender|en palabras simples|en terminos simples|para principiantes|sin tecnicismos|plain language|eli5)\b/] },
+  { tone: 'executive', patterns: [/\b(ejecutivo|resumen ejecutivo|para directivos|para la gerencia|para ejecutivos|c-level|executive summary)\b/] },
+  { tone: 'academic', patterns: [/\b(tono academico|estilo academico|lenguaje academico|registro academico|academic tone)\b/] },
+  { tone: 'persuasive', patterns: [/\b(persuasivo|persuasiva|convincente|tono persuasivo|estilo persuasivo|copy de ventas|persuasive)\b/] },
+  { tone: 'child_friendly', patterns: [/\b(para ninos|para un nino|para ninas|para una nina|como a un nino|como si fuera un nino|for kids|for children)\b/] },
+];
+
+// Canonical output-language labels. Keys are accent-stripped tokens.
+const LANGUAGE_CANON = new Map([
+  ['espanol', 'spanish'], ['castellano', 'spanish'], ['spanish', 'spanish'],
+  ['ingles', 'english'], ['english', 'english'],
+  ['frances', 'french'], ['french', 'french'],
+  ['aleman', 'german'], ['german', 'german'],
+  ['portugues', 'portuguese'], ['portuguese', 'portuguese'],
+  ['italiano', 'italian'], ['italian', 'italian'],
+  ['chino', 'chinese'], ['chinese', 'chinese'],
+  ['japones', 'japanese'], ['japanese', 'japanese'],
 ]);
 
 function normalize(text) {
@@ -96,13 +125,80 @@ function extractRequestedCounts(request) {
   while ((m = digitBefore.exec(normalized))) out.push({ count: Number(m[1]), target: m[2] });
   while ((m = digitAfter.exec(normalized))) out.push({ count: Number(m[2]), target: m[1] });
 
+  // Plain word numbers (uno..mil). Collective nouns (par/docena) are handled
+  // separately below because they require an explicit quantifier phrase to
+  // avoid idioms like "a la par de documentos" inflating the count.
+  const collectiveWords = new Set(['par', 'docena']);
   for (const [word, value] of SPANISH_NUMBER_WORDS.entries()) {
-    const re = new RegExp(`\\b${word}\\s+${noun}\\b`, 'i');
+    if (collectiveWords.has(word)) continue;
+    const re = new RegExp(`\\b${word}\\s+(?:de\\s+)?${noun}\\b`, 'i');
     const hit = normalized.match(re);
     if (hit) out.push({ count: value, target: hit[1] });
   }
 
+  const collectivePhrases = [
+    { re: new RegExp(`\\bun par de\\s+${noun}\\b`, 'gi'), count: 2 },
+    { re: new RegExp(`\\bmedia docena de\\s+${noun}\\b`, 'gi'), count: 6 },
+    { re: new RegExp(`\\b(?:una )?docena de\\s+${noun}\\b`, 'gi'), count: 12 },
+  ];
+  for (const phrase of collectivePhrases) {
+    let pm;
+    while ((pm = phrase.re.exec(normalized))) out.push({ count: phrase.count, target: pm[1] });
+  }
+
   return unique(out.map(item => `${item.count} ${item.target}`));
+}
+
+// ── Tone / register the user explicitly requested ──────────────────────
+function extractTones(request) {
+  const normalized = normalize(request);
+  const out = [];
+  for (const rule of TONE_RULES) {
+    if (rule.patterns.some(pattern => pattern.test(normalized))) {
+      out.push(`tone:${rule.tone}`);
+    }
+  }
+  return unique(out);
+}
+
+// ── Length / depth constraints (brief vs detailed, word/paragraph counts) ─
+function extractLengthConstraints(request) {
+  const normalized = normalize(request);
+  const out = [];
+  if (/\b(breve|brevemente|conciso|concis[ao]s?|corto|cortit[ao]|resumid[ao]|en pocas palabras|en una linea|en una frase|en una oracion|de forma breve|de manera breve|briefly|concise|short|in one line|one sentence)\b/.test(normalized)) {
+    out.push('length:brief');
+  }
+  if (/\b(detallad[ao]s?|extens[ao]s?|en profundidad|en detalle|a fondo|exhaustiv[ao]s?|minucios[ao]s?|profund[ao]s?|completo y detallado|paso a paso|detailed|in depth|in-depth|comprehensive|thorough|step by step)\b/.test(normalized)) {
+    out.push('length:detailed');
+  }
+
+  let m;
+  const wordCount = /\b(\d{1,5})\s+palabras\b/g;
+  while ((m = wordCount.exec(normalized))) out.push(`length:${m[1]} palabras`);
+  const paragraphCount = /\b(\d{1,3})\s+parrafos\b/g;
+  while ((m = paragraphCount.exec(normalized))) out.push(`length:${m[1]} parrafos`);
+  if (/\b(un parrafo|en un parrafo|one paragraph)\b/.test(normalized)) out.push('length:1 parrafo');
+
+  for (const [word, value] of SPANISH_NUMBER_WORDS.entries()) {
+    if (new RegExp(`\\b${word}\\s+parrafos\\b`).test(normalized)) out.push(`length:${value} parrafos`);
+    if (new RegExp(`\\b${word}\\s+palabras\\b`).test(normalized)) out.push(`length:${value} palabras`);
+  }
+
+  return unique(out);
+}
+
+// ── Output language the user asked the assistant to respond in ──────────
+// Anchored to a response-directing verb so "articulos en ingles" (sources in
+// English) does not get mistaken for "respond in English".
+function extractOutputLanguage(request) {
+  const normalized = normalize(request);
+  // The gap between the verb and the language token must not cross a source
+  // noun (articulos/fuentes/...) so "responde con articulos en ingles" is read
+  // as "sources in English", not "respond in English".
+  const re = /\b(responde|respondeme|contesta|contestame|escribe|escribelo|escribeme|redacta|redactalo|traduce|traducelo|traduceme|hablame|explicalo|explicame|dimelo|dime|answer|reply|respond|write|translate)\b(?:(?!\b(?:articulos?|fuentes|referencias|papers?|documentos?|citas|estudios?)\b)[^.?!])*?\b(?:en|in|al|a)\s+(espanol|castellano|spanish|ingles|english|frances|french|aleman|german|portugues|portuguese|italiano|italian|chino|chinese|japones|japanese)\b/;
+  const hit = normalized.match(re);
+  if (hit && LANGUAGE_CANON.has(hit[2])) return LANGUAGE_CANON.get(hit[2]);
+  return null;
 }
 
 function inferTaskType(request, hasFiles) {
@@ -131,6 +227,9 @@ function buildUserIntentAlignmentProfile({ request, fileIds = [] } = {}) {
   const needsStrictEvidence = needsResearch && matchesAny(raw, PATTERNS.strictEvidence);
   const taskType = inferTaskType(raw, hasFiles);
   const requestedCounts = extractRequestedCounts(raw);
+  const tones = extractTones(raw);
+  const lengthConstraints = extractLengthConstraints(raw);
+  const outputLanguage = extractOutputLanguage(raw);
 
   const outputMode = wantsInlineOnly
     ? 'inline'
@@ -142,6 +241,9 @@ function buildUserIntentAlignmentProfile({ request, fileIds = [] } = {}) {
   if (requestedFormat.format) hardConstraints.push(`deliver_as:${requestedFormat.format}`);
   if (wantsInlineOnly) hardConstraints.push('answer_inline_only');
   for (const count of requestedCounts) hardConstraints.push(`requested_count:${count}`);
+  for (const tone of tones) hardConstraints.push(tone);
+  for (const lengthConstraint of lengthConstraints) hardConstraints.push(lengthConstraint);
+  if (outputLanguage) hardConstraints.push(`output_language:${outputLanguage}`);
   if (needsStrictEvidence) hardConstraints.push('verified_sources_only');
   if (matchesAny(raw, PATTERNS.citation)) hardConstraints.push('citations_required');
   if (hasFiles || matchesAny(raw, PATTERNS.privateContext)) hardConstraints.push('use_private_context');
@@ -167,6 +269,18 @@ function buildUserIntentAlignmentProfile({ request, fileIds = [] } = {}) {
   }
   if (taskType === 'chat' || taskType === 'open_qa') {
     responsePolicy.push('keep_answer_proportional_to_question');
+  }
+  if (outputLanguage) {
+    responsePolicy.push('respond_in_requested_language');
+  }
+  if (lengthConstraints.includes('length:brief')) {
+    responsePolicy.push('keep_answer_brief');
+  }
+  if (lengthConstraints.includes('length:detailed')) {
+    responsePolicy.push('provide_thorough_detail');
+  }
+  if (tones.length) {
+    responsePolicy.push('match_requested_tone');
   }
 
   return {
@@ -206,6 +320,9 @@ module.exports = {
   buildUserIntentAlignmentProfile,
   buildUserIntentAlignmentPrompt,
   extractRequestedCounts,
+  extractTones,
+  extractLengthConstraints,
+  extractOutputLanguage,
   inferFormat,
   inferTaskType,
 };

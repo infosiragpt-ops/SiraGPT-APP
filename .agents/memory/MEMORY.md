@@ -19,6 +19,7 @@
 - [Reserved VM GCLB 30s timeout](reserved-vm-gclb-timeout.md) — GCLB hard ~30s total-response cut; heartbeats don't reset it (unlike Autoscale). For >30s work: persist-then-poll, don't keep request alive.
 - [Image gen vs edit providers](image-edit-provider-matrix.md) — editing (imagePath) only works on OpenAI/Gemini; OpenRouter is generation-only and must be rerouted, never hard-fail.
 - [Backend test CI wiring](backend-test-ci-wiring.md) — new backend tests only run in CI if added to package.json `test` string; /health routes live in injectable createHealthRoutes for supertest.
+- [Intent alignment signals](intent-alignment-signals.md) — new tone/length/language/count signals must be additive + guarded against domain false-positives; always add negative tests.
 - [Output-format contract](output-format-contract.md) — single source of truth for answer-format detection (paragraphs/lists/table/limits); consumers delegate, never re-regex; bare "lista" is content not format.
 - [npm mirror flakiness vs optional deps](npm-mirror-optional-deps.md) — deploy npm ci 502 on a build-irrelevant tarball → move its devDep consumer to optionalDependencies.
 - [Attachment scaffolding leak + format reqs](attachment-scaffolding-format.md) — strip-list must stay synced w/ injected directives (case-insensitive, prefer startsWith); honor explicit "N párrafos" in LLM directive AND fallback.
