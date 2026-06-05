@@ -16,6 +16,7 @@ const {
   isSourcePreservingEditRequest,
   loadEditableSourceFiles,
   parseTargetSectionRequest,
+  tryGenerateSourcePreservingDocumentEdit,
   INTERNAL: sourcePreservingInternals,
 } = require('../src/services/source-preserving-document-edit');
 const {
@@ -95,6 +96,8 @@ describe('source-preserving document edit', () => {
     assert.equal(isSourcePreservingEditRequest('Genera un Word profesional: incluye tabla Excel, índice y conclusiones.', []), false);
     assert.equal(isSourcePreservingEditRequest('Genera un Word profesional sobre el documento adjunto: incluye tabla Excel, índice y conclusiones.', ['file-docx']), false);
     assert.equal(isSourcePreservingEditRequest('completa el anexo 3', ['file-docx']), true);
+    assert.equal(isSourcePreservingEditRequest('modifica mi documento general con este nuevo contenido', []), true);
+    assert.equal(isSourcePreservingEditRequest('analiza este documento adjunto y agrégalo a mi documento general', ['file-ref']), true);
     assert.deepEqual(parseTargetSectionRequest('completa el anexo 3'), {
       kind: 'anexo',
       number: 3,
@@ -155,6 +158,141 @@ describe('source-preserving document edit', () => {
     assert.equal(files.length, 1);
     assert.equal(files[0].id, 'file-new');
     assert.equal(files[0].path, newPath);
+  });
+
+  it('uses the latest generated DOCX as the main document and current uploads as reference material', async () => {
+    const savedKey = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    try {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-general-doc-'));
+      const mainPath = path.join(tmp, 'documento-general.docx');
+      const refPath = path.join(tmp, 'soporte.txt');
+      fs.writeFileSync(mainPath, await makeDocxBuffer());
+      fs.writeFileSync(refPath, 'Hallazgo externo de validación: el documento de soporte exige reforzar la matriz de riesgos y las recomendaciones.');
+
+      const prisma = {
+        file: {
+          async findMany(query) {
+            assert.deepEqual(query.where.id.in, ['file-ref']);
+            return [{
+              id: 'file-ref',
+              filename: 'soporte.txt',
+              originalName: 'soporte.txt',
+              mimeType: 'text/plain',
+              size: fs.statSync(refPath).size,
+              path: refPath,
+              extractedText: 'Hallazgo externo de validación: el documento de soporte exige reforzar la matriz de riesgos y las recomendaciones.',
+            }];
+          },
+        },
+        generatedArtifact: {
+          async findMany() {
+            return [{
+              id: 'artifact-main',
+              filename: 'documento-general.docx',
+              mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+              format: 'docx',
+              path: mainPath,
+              sizeBytes: fs.statSync(mainPath).size,
+              createdAt: new Date('2026-06-05T12:00:00Z'),
+              validation: { passed: true },
+            }];
+          },
+        },
+      };
+
+      const result = await tryGenerateSourcePreservingDocumentEdit({
+        prisma,
+        userId: 'user-1',
+        chatId: 'chat-1',
+        fileIds: ['file-ref'],
+        prompt: 'analiza este documento adjunto y agrégalo a mi documento general',
+        displayPrompt: 'analiza este documento adjunto y agrégalo a mi documento general',
+      });
+
+      assert.equal(result.format, 'docx');
+      assert.equal(result.validation.passed, true);
+      assert.equal(result.validation.details.orchestration.sourceSelection, 'latest_generated_docx_artifact');
+      assert.deepEqual(result.validation.details.orchestration.referenceFiles, ['soporte.txt']);
+      assert.match(result.file.filename, /documentos_integrados\.docx$/);
+
+      const xml = new PizZip(fs.readFileSync(result.artifact.path)).file('word/document.xml').asText();
+      assert.match(xml, /Portada original UPN/);
+      assert.match(xml, /Contenido integrado de documentos de soporte/);
+      assert.match(xml, /Hallazgo externo de validación/);
+      assert.doesNotMatch(xml, /Solicitud del usuario:/);
+    } finally {
+      if (savedKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = savedKey;
+    }
+  });
+
+  it('recovers the previous DOCX from assistant message artifacts when generatedArtifact persistence is missing', async () => {
+    const savedKey = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    try {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-message-artifact-'));
+      const mainPath = path.join(tmp, 'documento-general.docx');
+      const refPath = path.join(tmp, 'soporte.txt');
+      fs.writeFileSync(mainPath, await makeDocxBuffer());
+      fs.writeFileSync(refPath, 'Documento de soporte: incorporar controles de calidad documental y responsables de seguimiento.');
+
+      const prisma = {
+        file: {
+          async findMany() {
+            return [{
+              id: 'file-ref',
+              filename: 'soporte.txt',
+              originalName: 'soporte.txt',
+              mimeType: 'text/plain',
+              size: fs.statSync(refPath).size,
+              path: refPath,
+              extractedText: 'Documento de soporte: incorporar controles de calidad documental y responsables de seguimiento.',
+            }];
+          },
+        },
+        generatedArtifact: {
+          async findMany() {
+            return [];
+          },
+        },
+        message: {
+          async findMany() {
+            return [{
+              timestamp: new Date('2026-06-05T12:00:00Z'),
+              files: JSON.stringify([{
+                type: 'doc',
+                format: 'docx',
+                filename: 'documento-general_anexo_3_completado.docx',
+                mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                path: mainPath,
+                url: '/api/agent/artifact/artifact-main?name=documento-general_anexo_3_completado.docx',
+              }]),
+            }];
+          },
+        },
+      };
+
+      const result = await tryGenerateSourcePreservingDocumentEdit({
+        prisma,
+        userId: 'user-1',
+        chatId: 'chat-1',
+        fileIds: ['file-ref'],
+        prompt: 'analiza este documento adjunto y agrégalo a mi documento general',
+        displayPrompt: 'analiza este documento adjunto y agrégalo a mi documento general',
+      });
+
+      assert.equal(result.format, 'docx');
+      assert.equal(result.validation.details.orchestration.sourceSelection, 'latest_generated_docx_artifact');
+      assert.deepEqual(result.validation.details.orchestration.referenceFiles, ['soporte.txt']);
+
+      const xml = new PizZip(fs.readFileSync(result.artifact.path)).file('word/document.xml').asText();
+      assert.match(xml, /Portada original UPN/);
+      assert.match(xml, /controles de calidad documental/);
+    } finally {
+      if (savedKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = savedKey;
+    }
   });
 
   it('promotes source-preserving edits to doc_required so an artifact is returned', () => {

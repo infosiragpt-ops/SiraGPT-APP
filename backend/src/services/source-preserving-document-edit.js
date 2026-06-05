@@ -7,6 +7,7 @@ const { renderPreview } = require('./doc-preview');
 const {
   saveArtifact,
   EXTENSION_TO_MIME,
+  ARTIFACT_DIR,
   INTERNAL: taskToolInternals,
 } = require('./agents/task-tools');
 const {
@@ -45,11 +46,16 @@ function isSourcePreservingEditRequest(prompt, files = []) {
   const instrument = /\b(instrumento|instrument|intuemtno|instumento|cuestionario|encuesta|escala|anexo)\b/.test(text);
   const documentRegion = /\b(portada|caratula|t[ií]tulo|encabezado|pie de pagina|indice|tabla|hoja|celda|fila|columna|diapositiva|pagina|seccion|capitulo)\b/.test(text);
   const strongImplicitFollowUp = appendLocation && (instrument || preservation || /\btesis\b/.test(text));
+  const continuationDocRef = /\b(mi|mismo|misma|documento|archivo|word|docx|tesis|general|principal)\b/.test(text);
+  const followUpDocumentEdit = continuationDocRef
+    && primaryEditVerb
+    && /\b(documento|archivo|word|docx|tesis|general|principal|contenido)\b/.test(text);
 
   if (!editVerb) return false;
   if (explicitFreshDeliverable && !preservation) return false;
   if (hasFiles) return existingDocRef || appendLocation || preservation || instrument || documentRegion;
   return preservation
+    || followUpDocumentEdit
     || (existingDocRef && (appendLocation || instrument || documentRegion))
     || strongImplicitFollowUp;
 }
@@ -219,6 +225,229 @@ async function loadEditableSourceFiles(prisma, { userId, fileIds = [], chatId = 
     .filter(Boolean)
     .map((row) => ({ ...row, path: resolveStoredFilePath(row, userId) }))
     .filter((row) => row.path);
+}
+
+function resolveGeneratedArtifactPath(row = {}) {
+  const direct = String(row.path || '').trim();
+  if (direct) {
+    try {
+      if (fs.existsSync(direct) && fs.statSync(direct).isFile()) return direct;
+    } catch {
+      // Continue with metadata fallback.
+    }
+  }
+  try {
+    const metaPath = taskToolInternals.metadataPathFor
+      ? taskToolInternals.metadataPathFor(String(row.id || ''))
+      : path.join(ARTIFACT_DIR, `${row.id}.json`);
+    if (!metaPath || !fs.existsSync(metaPath)) return null;
+    const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+    const candidates = [];
+    if (meta.storedRelPath) candidates.push(path.join(ARTIFACT_DIR, meta.storedRelPath));
+    if (meta.filename && row.id) candidates.push(path.join(ARTIFACT_DIR, `${row.id}-${meta.filename}`));
+    return candidates.find((candidate) => {
+      try {
+        return candidate && fs.existsSync(candidate) && fs.statSync(candidate).isFile();
+      } catch {
+        return false;
+      }
+    }) || null;
+  } catch {
+    return null;
+  }
+}
+
+async function loadRecentGeneratedArtifactSourceFiles(prisma, { userId, chatId, limit = 8 } = {}) {
+  if (!userId || !chatId) return [];
+  const rows = prisma?.generatedArtifact?.findMany
+    ? await prisma.generatedArtifact.findMany({
+      where: {
+        userId,
+        chatId,
+        format: { in: ['docx', 'xlsx', 'pdf', 'txt', 'md', 'csv', 'html', 'htm', 'json', 'xml', 'yaml', 'yml'] },
+      },
+      select: {
+        id: true,
+        filename: true,
+        mime: true,
+        format: true,
+        path: true,
+        sizeBytes: true,
+        createdAt: true,
+        validation: true,
+      },
+      orderBy: { createdAt: 'desc' },
+      take: Math.max(1, Math.min(limit, 25)),
+    }).catch(() => [])
+    : [];
+
+  const dbArtifacts = rows
+    .map((row) => ({
+      id: `artifact:${row.id}`,
+      artifactId: row.id,
+      filename: row.filename,
+      originalName: row.filename,
+      mimeType: row.mime || EXTENSION_TO_MIME[row.format] || 'application/octet-stream',
+      size: row.sizeBytes || 0,
+      path: resolveGeneratedArtifactPath(row),
+      extractedText: '',
+      source: 'generated_artifact',
+      createdAt: row.createdAt,
+      validation: row.validation || null,
+    }))
+    .filter((row) => row.path && isSupportedSourcePreservingFile(row));
+  const messageArtifacts = await loadRecentAssistantArtifactSourceFiles(prisma, { chatId, limit });
+  return dedupeFiles([...dbArtifacts, ...messageArtifacts]);
+}
+
+function artifactIdFromUrl(url = '') {
+  const match = String(url || '').match(/\/api\/agent\/artifact\/([^/?#]+)/);
+  return match ? decodeURIComponent(match[1]) : '';
+}
+
+function artifactFormatFromFilename(filename = '', mime = '') {
+  const ext = path.extname(String(filename || '')).replace(/^\./, '').toLowerCase();
+  if (ext) return ext === 'markdown' ? 'md' : ext;
+  const normalized = normalizeText(mime);
+  if (normalized.includes('wordprocessingml')) return 'docx';
+  if (normalized.includes('spreadsheet') || normalized.includes('excel')) return 'xlsx';
+  if (normalized.includes('pdf')) return 'pdf';
+  if (normalized.includes('json')) return 'json';
+  if (normalized.includes('yaml')) return 'yaml';
+  if (normalized.includes('markdown')) return 'md';
+  if (normalized.startsWith('text/')) return 'txt';
+  return 'bin';
+}
+
+function normalizeAssistantArtifactFile(file = {}, timestamp = null) {
+  const artifactId = String(file.artifactId || file.id || artifactIdFromUrl(file.url || file.downloadUrl || file.download_url) || '').trim();
+  const filename = file.filename || file.name || file.title || (artifactId ? `${artifactId}.bin` : '');
+  const format = String(file.format || artifactFormatFromFilename(filename, file.mime || file.mimeType || file.type)).toLowerCase();
+  const directPath = String(file.path || '').trim();
+  const existingDirectPath = (() => {
+    try {
+      return directPath && fs.existsSync(directPath) && fs.statSync(directPath).isFile() ? directPath : '';
+    } catch {
+      return '';
+    }
+  })();
+  const resolvedPath = existingDirectPath || (artifactId ? resolveGeneratedArtifactPath({ id: artifactId, filename, format, mime: file.mime || file.mimeType }) : null);
+  if (!resolvedPath) return null;
+  return {
+    id: artifactId ? `artifact:${artifactId}` : `assistant-artifact:${filename}:${timestamp || ''}`,
+    artifactId: artifactId || null,
+    filename,
+    originalName: filename,
+    mimeType: file.mime || file.mimeType || file.type || EXTENSION_TO_MIME[format] || 'application/octet-stream',
+    size: file.size || file.sizeBytes || 0,
+    path: resolvedPath,
+    extractedText: '',
+    source: 'assistant_message_artifact',
+    createdAt: timestamp,
+    validation: file.metrics || file.validation || null,
+  };
+}
+
+async function loadRecentAssistantArtifactSourceFiles(prisma, { chatId, limit = 8 } = {}) {
+  if (!prisma?.message?.findMany || !chatId) return [];
+  const messages = await prisma.message.findMany({
+    where: { chatId, role: 'ASSISTANT', deletedAt: null },
+    select: { files: true, timestamp: true },
+    orderBy: { timestamp: 'desc' },
+    take: Math.max(1, Math.min(30, limit * 4)),
+  }).catch(() => []);
+  const files = [];
+  for (const message of messages) {
+    for (const file of parseMessageFiles(message.files)) {
+      const normalized = normalizeAssistantArtifactFile(file, message.timestamp);
+      if (!normalized || !isSupportedSourcePreservingFile(normalized)) continue;
+      files.push(normalized);
+      if (files.length >= limit) return dedupeFiles(files);
+    }
+  }
+  return dedupeFiles(files);
+}
+
+function fileStableKey(file = {}) {
+  return String(file.id || file.artifactId || file.path || file.filename || file.originalName || '');
+}
+
+function dedupeFiles(files = []) {
+  const seen = new Set();
+  const out = [];
+  for (const file of files) {
+    const key = fileStableKey(file);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(file);
+  }
+  return out;
+}
+
+function requestMentionsGeneralDocument(prompt = '') {
+  const text = normalizeText(prompt);
+  return /\b(mi\s+documento|documento\s+general|documento\s+principal|archivo\s+principal|word\s+principal|tesis\s+general|mi\s+word|mi\s+archivo)\b/.test(text);
+}
+
+function requestWantsReferenceIntegration(prompt = '') {
+  const text = normalizeText(prompt);
+  if (!text) return false;
+  const integrationVerb = /\b(analiz\w*|revis\w*|lee\w*|leeme|extrae\w*|usa\w*|toma\w*|integra\w*|incorpor\w*|agreg\w*|anad\w*|fusion\w*|combina\w*|mezcla\w*)\b/.test(text);
+  const externalSource = /\b(otro\s+documento|otro\s+archivo|nuevo\s+documento|nuevo\s+archivo|documento\s+adjunto|archivo\s+adjunto|documentos?\s+de\s+soporte|insumo|contenido\s+de\s+otro|pdf|docx|word)\b/.test(text);
+  const targetGeneral = requestMentionsGeneralDocument(text) || /\b(en|a|dentro\s+de)\s+(?:mi\s+)?(?:documento|archivo|word|tesis)\b/.test(text);
+  return integrationVerb && (externalSource || targetGeneral) && /\b(agreg\w*|anad\w*|incorpor\w*|integra\w*|fusion\w*|combina\w*)\b/.test(text);
+}
+
+function requestExplicitlyUsesCurrentUploadAsBase(prompt = '') {
+  const text = normalizeText(prompt);
+  if (requestMentionsGeneralDocument(text) || requestWantsReferenceIntegration(text)) return false;
+  return /\b(este|esta|ese|esa)\s+(documento|archivo|word|docx|pdf|excel|xlsx)\b/.test(text)
+    || /\b(documento|archivo)\s+(adjunto|subido|cargado|que\s+adjunto|que\s+subi)\b/.test(text);
+}
+
+function selectSourcePreservingDocumentSet({ requestText = '', sourceFiles = [], priorArtifacts = [] } = {}) {
+  const currentSupported = (sourceFiles || []).filter(isSupportedSourcePreservingFile);
+  const priorSupported = (priorArtifacts || []).filter(isSupportedSourcePreservingFile);
+  const currentDocx = currentSupported.filter(isDocxFile);
+  const priorDocx = priorSupported.filter(isDocxFile);
+  const wantsGeneral = requestMentionsGeneralDocument(requestText);
+  const wantsReferenceIntegration = requestWantsReferenceIntegration(requestText);
+  const explicitCurrentBase = requestExplicitlyUsesCurrentUploadAsBase(requestText);
+  const targetedSection = isTargetedSectionFillRequest(requestText);
+
+  let sourceFile = null;
+  let selectionReason = 'first_supported_file';
+  if (!explicitCurrentBase && priorDocx.length && (wantsGeneral || wantsReferenceIntegration || currentSupported.length === 0)) {
+    sourceFile = priorDocx[0];
+    selectionReason = 'latest_generated_docx_artifact';
+  } else if (!explicitCurrentBase && priorSupported.length && currentSupported.length === 0) {
+    sourceFile = priorSupported[0];
+    selectionReason = 'latest_generated_artifact';
+  } else if (targetedSection && currentDocx.length) {
+    sourceFile = currentDocx[0];
+    selectionReason = 'current_docx_target_section';
+  } else if (currentSupported.length) {
+    sourceFile = currentSupported[0];
+    selectionReason = 'current_supported_file';
+  } else if (priorSupported.length) {
+    sourceFile = priorSupported[0];
+    selectionReason = 'latest_generated_artifact';
+  }
+
+  const sourceKey = fileStableKey(sourceFile);
+  const references = dedupeFiles([
+    ...currentSupported,
+    ...(sourceFile && sourceFile.source !== 'generated_artifact' ? [] : []),
+  ]).filter((file) => fileStableKey(file) !== sourceKey);
+  const allSourceFiles = dedupeFiles([sourceFile, ...references].filter(Boolean));
+  return {
+    sourceFile,
+    sourceFiles: allSourceFiles,
+    referenceFiles: references,
+    selectionReason,
+    wantsReferenceIntegration,
+    wantsGeneralDocument: wantsGeneral,
+  };
 }
 
 function xmlEscape(value) {
@@ -1427,15 +1656,147 @@ async function extractTextFromFile(file = {}) {
   return '';
 }
 
+async function mapWithConcurrency(items = [], limit = 6, mapper = async (value) => value) {
+  const input = Array.isArray(items) ? items : [];
+  const concurrency = Math.max(1, Math.min(Number(limit) || 1, input.length || 1));
+  const results = new Array(input.length);
+  let cursor = 0;
+  await Promise.all(Array.from({ length: concurrency }, async () => {
+    while (cursor < input.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await mapper(input[index], index);
+    }
+  }));
+  return results;
+}
+
+function sourceDocumentParallelism() {
+  const configured = Number.parseInt(process.env.SIRAGPT_DOCUMENT_AGENT_PARALLELISM || '', 10);
+  if (Number.isFinite(configured) && configured > 0) return Math.min(configured, 64);
+  return Math.min(8, Math.max(1, MAX_SIMULTANEOUS_DOCUMENTS));
+}
+
 async function buildCombinedSourceText(sourceFiles = []) {
-  const chunks = [];
-  for (const file of sourceFiles) {
+  const chunks = await mapWithConcurrency(sourceFiles, sourceDocumentParallelism(), async (file) => {
     const name = file.originalName || file.filename || file.id || 'documento';
     const text = compact(await extractTextFromFile(file), 5000);
-    if (!text) continue;
-    chunks.push(`Fuente: ${name}\n${text}`);
+    if (!text) return '';
+    return `Fuente: ${name}\n${text}`;
+  });
+  return chunks.filter(Boolean).join('\n\n---\n\n');
+}
+
+function referenceSourceFiles(sourceFiles = [], sourceFile = null) {
+  const baseKey = fileStableKey(sourceFile);
+  return dedupeFiles(sourceFiles)
+    .filter((file) => fileStableKey(file) !== baseKey);
+}
+
+function buildReferenceIntegrationFallbackBlocks({ prompt = '', referenceText = '', referenceFiles = [], sourceText = '' } = {}) {
+  const names = referenceFiles
+    .map((file) => file.originalName || file.filename || file.id)
+    .filter(Boolean)
+    .slice(0, 8);
+  const excerpts = referenceText
+    .split(/\n{2,}|---/)
+    .map((item) => compact(item, 520))
+    .filter((item) => item.length >= 45)
+    .slice(0, 6);
+  const baseTitle = inferDocumentTitle(sourceText, names[0] || '');
+  const blocks = [
+    block('pageBreak', ''),
+    block('heading2', 'Contenido integrado de documentos de soporte'),
+    block('normal', `Se integra información de ${names.length ? names.join(', ') : 'los documentos adjuntos'} al documento principal, conservando el archivo base y su formato.`),
+    block('heading3', 'Síntesis incorporada'),
+  ];
+  if (excerpts.length) {
+    for (const excerpt of excerpts) blocks.push(block('normal', excerpt));
+  } else {
+    blocks.push(block('normal', `La integración se realizó con base en la solicitud: ${compact(prompt, 360)}.`));
   }
-  return chunks.join('\n\n---\n\n');
+  blocks.push(block('heading3', 'Relación con el documento principal'));
+  blocks.push(block('normal', `El contenido añadido se articula con el tema central del documento: ${baseTitle}. Debe revisarse junto con las secciones metodológicas y anexos para mantener coherencia interna.`));
+  blocks.push(block('normal', 'Recomendación editorial: verificar que nombres, fechas, variables y anexos citados coincidan con el resto del documento antes de la entrega final.'));
+  return blocks;
+}
+
+async function generateReferenceIntegrationBlocks({
+  prompt = '',
+  sourceText = '',
+  referenceFiles = [],
+  signal,
+} = {}) {
+  const referenceText = await buildCombinedSourceText(referenceFiles);
+  const fallback = () => buildReferenceIntegrationFallbackBlocks({
+    prompt,
+    referenceText,
+    referenceFiles,
+    sourceText,
+  });
+  if (!referenceFiles.length) return fallback();
+  if (!process.env.OPENAI_API_KEY) return fallback();
+
+  try {
+    const client = createContentClient('OpenAI');
+    const completion = await client.chat.completions.create({
+      model: DEFAULT_MODEL,
+      messages: [
+        {
+          role: 'system',
+          content: [
+            'Eres un editor académico senior. Debes integrar documentos de soporte dentro de un DOCX principal sin reemplazar ni borrar el contenido existente.',
+            'Redacta contenido formal, coherente y listo para Word. Usa solo información de los documentos dados; no inventes citas, autores, fechas, cifras ni DOI.',
+            'Devuelve bloques que se puedan insertar como una nueva sección profesional, con síntesis, aportes y recomendaciones de integración.',
+          ].join(' '),
+        },
+        {
+          role: 'user',
+          content: [
+            `Solicitud del usuario: ${prompt}`,
+            '',
+            'Documento principal:',
+            compact(sourceText, 6000),
+            '',
+            'Documentos de soporte a integrar:',
+            compact(referenceText, 10000),
+            '',
+            'Responde SOLO en JSON con esta forma exacta:',
+            '{"heading":"título breve","paragraphs":["3 a 6 párrafos sustantivos"],"bullets":["0 a 8 aportes concretos"],"recommendations":["2 a 5 recomendaciones editoriales"]}',
+          ].join('\n'),
+        },
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0.22,
+    }, { signal, timeout: 35_000 });
+
+    const raw = completion?.choices?.[0]?.message?.content;
+    if (!raw) return fallback();
+    const parsed = JSON.parse(raw);
+    const blocks = [
+      block('pageBreak', ''),
+      block('heading2', String(parsed.heading || 'Contenido integrado de documentos de soporte').trim()),
+    ];
+    for (const paragraph of Array.isArray(parsed.paragraphs) ? parsed.paragraphs : []) {
+      const text = String(paragraph || '').trim();
+      if (text) blocks.push(block('normal', text));
+    }
+    const bullets = Array.isArray(parsed.bullets) ? parsed.bullets : [];
+    if (bullets.length) blocks.push(block('heading3', 'Aportes incorporados'));
+    for (const bullet of bullets) {
+      const text = String(bullet || '').trim();
+      if (text) blocks.push(block('normal', `• ${text}`));
+    }
+    const recommendations = Array.isArray(parsed.recommendations) ? parsed.recommendations : [];
+    if (recommendations.length) blocks.push(block('heading3', 'Recomendaciones de integración'));
+    for (const recommendation of recommendations) {
+      const text = String(recommendation || '').trim();
+      if (text) blocks.push(block('normal', `• ${text}`));
+    }
+    return blocks.length > 2 ? blocks.slice(0, 18) : fallback();
+  } catch {
+    return fallback();
+  }
 }
 
 function sectionFallbackBlocks({ prompt = '', target, sourceText = '', sourceFiles = [] } = {}) {
@@ -1747,7 +2108,7 @@ function operationKey(op) {
 
 const BULK_FILL_SCOPE_RE = /\b(tablas?|anexos?|secciones?|cuadros?|matrices?|matriz|vac[ií]as?|vac[ií]os?|faltantes?|pendientes?|todo|todos|todas|que\s+falt\w*)\b/;
 
-function planSourcePreservingOperations({ requestText = '', documentXml = '' } = {}) {
+function planSourcePreservingOperations({ requestText = '', documentXml = '', referenceFiles = [] } = {}) {
   const clauses = splitRequestClauses(requestText);
   const ops = [];
   const seen = new Set();
@@ -1773,6 +2134,13 @@ function planSourcePreservingOperations({ requestText = '', documentXml = '' } =
         add({ kind: 'fill_section', target: section.target, wantsInstrument: false });
       }
     }
+  }
+
+  const wantsReferenceIntegration = requestWantsReferenceIntegration(requestText) && referenceFiles.length > 0;
+  if (wantsReferenceIntegration && !ops.some((op) => op.kind === 'fill_section' || op.target)) {
+    ops.length = 0;
+    seen.clear();
+    add({ kind: 'integrate_references' });
   }
 
   if (ops.length === 0) {
@@ -1927,8 +2295,9 @@ async function planOperationsWithLLM({ requestText = '', documentXml = '', signa
 
 // Heuristic first (fast, deterministic); escalate to the LLM brain only when the
 // heuristic is unsure about the user's intent.
-async function planSourcePreservingOperationsSmart({ requestText = '', documentXml = '', signal } = {}) {
-  const heuristic = planSourcePreservingOperations({ requestText, documentXml });
+async function planSourcePreservingOperationsSmart({ requestText = '', documentXml = '', referenceFiles = [], signal } = {}) {
+  const heuristic = planSourcePreservingOperations({ requestText, documentXml, referenceFiles });
+  if (heuristic.some((op) => op.kind === 'integrate_references')) return heuristic;
   if (heuristicPlanIsConfident(heuristic, requestText)) return heuristic;
   const llm = await planOperationsWithLLM({ requestText, documentXml, signal });
   return llm && llm.length ? llm : heuristic;
@@ -2049,7 +2418,22 @@ function runAppendGenericOperation({ buffer, op, requestText, sourceText, source
   };
 }
 
-async function executeDocxOperations({ input, ops, requestText, sourceText, allSourceFiles, sourceFile, signal }) {
+async function runIntegrateReferencesOperation({ buffer, requestText, sourceText, allSourceFiles, sourceFile, referenceFiles, signal }) {
+  const refs = referenceFiles?.length ? referenceFiles : referenceSourceFiles(allSourceFiles, sourceFile);
+  const blocks = await generateReferenceIntegrationBlocks({
+    prompt: requestText,
+    sourceText,
+    referenceFiles: refs,
+    signal,
+  });
+  return {
+    buffer: appendToDocxBuffer(buffer, blocks),
+    validationBlocks: blocks,
+    step: { kind: 'integrate_references', mode: 'reference_documents', references: refs.length },
+  };
+}
+
+async function executeDocxOperations({ input, ops, requestText, sourceText, allSourceFiles, sourceFile, referenceFiles = [], signal }) {
   let buffer = input;
   const steps = [];
   const validationBlocks = [];
@@ -2059,6 +2443,8 @@ async function executeDocxOperations({ input, ops, requestText, sourceText, allS
       result = await runFillSectionOperation({ buffer, op, requestText, sourceText, allSourceFiles, sourceFile, signal });
     } else if (op.kind === 'append_labeled') {
       result = await runAppendLabeledOperation({ buffer, op, requestText, sourceText, allSourceFiles, sourceFile, signal });
+    } else if (op.kind === 'integrate_references') {
+      result = await runIntegrateReferencesOperation({ buffer, requestText, sourceText, allSourceFiles, sourceFile, referenceFiles, signal });
     } else {
       result = runAppendGenericOperation({ buffer, op, requestText, sourceText, sourceFile });
     }
@@ -2083,12 +2469,56 @@ function describeStep(step) {
   if (step.kind === 'append_labeled' && step.mode === 'fallback_paragraphs') return `agregué ${step.label} al final (no existía en el documento)`;
   if (step.kind === 'append_labeled') return `agregué ${step.label}`;
   if (step.kind === 'append_generic' && step.mode === 'instrument') return 'agregué un anexo con el instrumento de recolección de datos';
+  if (step.kind === 'integrate_references') return `integré ${step.references || 0} documento(s) de soporte al documento principal`;
   return 'agregué el contenido solicitado en anexos';
+}
+
+const DOCUMENT_AGENT_ROLES = [
+  'base_selector',
+  'reference_reader',
+  'structure_mapper',
+  'intent_planner',
+  'academic_writer',
+  'format_guardian',
+  'design_reviewer',
+  'quality_validator',
+];
+
+function requestedAgentCount(prompt = '') {
+  const text = normalizeText(prompt);
+  if (/\bmil\s+agentes?\b/.test(text)) return 1000;
+  const match = text.match(/\b(\d{2,5})\s+agentes?\b/);
+  return match ? Number(match[1]) : null;
+}
+
+function buildDocumentOrchestrationPlan({ requestText = '', sourceFile = {}, referenceFiles = [], operations = [], selectionReason = '' } = {}) {
+  const requested = requestedAgentCount(requestText);
+  const active = Math.max(
+    DOCUMENT_AGENT_ROLES.length,
+    Math.min(requested || DOCUMENT_AGENT_ROLES.length, Math.max(DOCUMENT_AGENT_ROLES.length, sourceDocumentParallelism())),
+  );
+  return {
+    mode: 'source_preserving_document_swarm',
+    requestedAgents: requested,
+    activeAgents: active,
+    parallelism: sourceDocumentParallelism(),
+    roles: DOCUMENT_AGENT_ROLES,
+    sourceSelection: selectionReason || 'direct',
+    baseFile: sourceFile?.originalName || sourceFile?.filename || sourceFile?.id || null,
+    referenceFiles: referenceFiles.map((file) => file.originalName || file.filename || file.id).filter(Boolean),
+    operations: operations.map((op) => ({
+      kind: op.kind,
+      target: op.target?.label || null,
+      wantsInstrument: Boolean(op.wantsInstrument),
+    })),
+  };
 }
 
 async function generateSourcePreservingDocumentEdit({
   sourceFile,
   sourceFiles = null,
+  referenceFiles = [],
+  selectionReason = '',
   prompt,
   displayPrompt,
   userId,
@@ -2108,13 +2538,15 @@ async function generateSourcePreservingDocumentEdit({
   let explanation = 'Se conservó el archivo original y se agregó únicamente el bloque solicitado al final.';
   let content = 'Listo. Conservé el archivo original y agregué el contenido solicitado al final, en anexos, sin regenerar la portada ni reemplazar el documento.';
   let validationBlocks;
+  let orchestration = null;
 
   if (isDocxFile(sourceFile)) {
     format = 'docx';
     // Agentic step 1-3: analyse the request + document and plan one or more
     // operations; step 4: execute every operation in order on the same buffer.
     const documentXml = readDocxDocumentXml(input);
-    const operations = await planSourcePreservingOperationsSmart({ requestText, documentXml, signal });
+    const refs = referenceFiles?.length ? referenceFiles : referenceSourceFiles(allSourceFiles, sourceFile);
+    const operations = await planSourcePreservingOperationsSmart({ requestText, documentXml, referenceFiles: refs, signal });
     const execution = await executeDocxOperations({
       input,
       ops: operations,
@@ -2122,15 +2554,26 @@ async function generateSourcePreservingDocumentEdit({
       sourceText,
       allSourceFiles,
       sourceFile,
+      referenceFiles: refs,
       signal,
     });
     output = execution.buffer;
     validationBlocks = execution.validationBlocks;
+    orchestration = buildDocumentOrchestrationPlan({
+      requestText,
+      sourceFile,
+      referenceFiles: refs,
+      operations,
+      selectionReason,
+    });
 
     const labels = execution.steps.map((step) => step.label).filter(Boolean);
     if (labels.length) {
       suffix = `${labels.map((label) => normalizeText(label).replace(/\s+/g, '_')).join('_')}_completado`;
       titleSuffix = `${labels.join(' y ')} completado`;
+    } else if (execution.steps.some((step) => step.kind === 'integrate_references')) {
+      suffix = 'documentos_integrados';
+      titleSuffix = 'con documentos integrados';
     }
     const stepSummary = joinSpanishList(execution.steps.map(describeStep));
     explanation = stepSummary
@@ -2166,6 +2609,12 @@ async function generateSourcePreservingDocumentEdit({
 
   const filename = safeFilename(sourceFile.originalName || sourceFile.filename, suffix, format);
   const validation = await validateEditedBuffer(output, format, validationBlocks);
+  if (orchestration) {
+    validation.details = {
+      ...(validation.details || {}),
+      orchestration,
+    };
+  }
   const { artifact, previewHtml, mime } = await persistEditedArtifact({
     buffer: output,
     format,
@@ -2195,6 +2644,7 @@ async function generateSourcePreservingDocumentEdit({
     validation,
     previewHtml,
     format,
+    orchestration,
   };
 }
 
@@ -2209,19 +2659,26 @@ async function tryGenerateSourcePreservingDocumentEdit({
 } = {}) {
   const requestText = displayPrompt || prompt || '';
   const sourceFiles = await loadEditableSourceFiles(prisma, { userId, fileIds, chatId, prompt: requestText });
-  if (!isSourcePreservingEditRequest(requestText, sourceFiles)) return null;
+  const priorArtifacts = await loadRecentGeneratedArtifactSourceFiles(prisma, { userId, chatId });
+  const intentFiles = sourceFiles.length ? sourceFiles : priorArtifacts;
+  if (!isSourcePreservingEditRequest(requestText, intentFiles)) return null;
   const targetedSection = isTargetedSectionFillRequest(requestText);
-  const supported = targetedSection
-    ? sourceFiles.find((file) => isDocxFile(file))
-    : sourceFiles.find((file) => isSupportedSourcePreservingFile(file));
+  const selection = selectSourcePreservingDocumentSet({ requestText, sourceFiles, priorArtifacts });
+  const supported = selection.sourceFile;
+  if (targetedSection && supported && !isDocxFile(supported)) {
+    const names = [...sourceFiles, ...priorArtifacts].map((file) => file.originalName || file.filename || file.id).join(', ');
+    throw new Error(`Para conservar el documento original necesito un archivo DOCX con la sección solicitada. Archivo recibido: ${names || 'sin archivo compatible'}.`);
+  }
   if (!supported) {
-    const names = sourceFiles.map((file) => file.originalName || file.filename || file.id).join(', ');
+    const names = [...sourceFiles, ...priorArtifacts].map((file) => file.originalName || file.filename || file.id).join(', ');
     const needed = targetedSection ? 'un archivo DOCX con la sección solicitada' : `un archivo editable compatible (${supportedSourceEditLabel()})`;
     throw new Error(`Para conservar el documento original necesito ${needed}. Archivo recibido: ${names || 'sin archivo compatible'}.`);
   }
   return generateSourcePreservingDocumentEdit({
     sourceFile: supported,
-    sourceFiles,
+    sourceFiles: selection.sourceFiles,
+    referenceFiles: selection.referenceFiles,
+    selectionReason: selection.selectionReason,
     prompt,
     displayPrompt,
     userId,
@@ -2246,12 +2703,17 @@ module.exports = {
     buildCombinedSourceText,
     buildCronogramaAnexo3Plan,
     buildDocumentFormattingTemplate,
+    buildDocumentOrchestrationPlan,
     buildInstrumentAppendix,
     buildInstrumentAppendixBody,
+    buildReferenceIntegrationFallbackBlocks,
     buildSectionFormattingTemplate,
     analyzeDocumentStructure,
     analyzeTableForFill,
     detectCronogramaAnexo3Plan,
+    loadRecentAssistantArtifactSourceFiles,
+    loadRecentGeneratedArtifactSourceFiles,
+    mapWithConcurrency,
     planOperationsWithLLM,
     planSourcePreservingOperationsSmart,
     summarizeStructureForPrompt,
@@ -2268,8 +2730,12 @@ module.exports = {
     locateCronogramaTable,
     locateSectionTable,
     planSourcePreservingOperations,
+    requestMentionsGeneralDocument,
+    requestWantsReferenceIntegration,
     resolveStoredFilePath,
     sanitizeCapturedParagraphProperties,
+    selectSourcePreservingDocumentSet,
+    sourceDocumentParallelism,
     splitRequestClauses,
   },
 };

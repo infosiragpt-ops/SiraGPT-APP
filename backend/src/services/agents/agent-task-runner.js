@@ -1962,7 +1962,11 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           type: 'checkpoint',
           label: 'Editando documento original',
           status: 'running',
-          payload: { mode: 'source_preserving_append', fileCount: Array.isArray(files) ? files.length : 0 },
+          payload: {
+            mode: 'source_preserving_append',
+            fileCount: Array.isArray(files) ? files.length : 0,
+            orchestration: 'source_preserving_document_swarm',
+          },
         });
         const preserved = await tryGenerateSourcePreservingDocumentEdit({
           prisma,
@@ -1993,7 +1997,10 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           label: 'Documento original conservado',
           passed: Boolean(preserved.validation?.passed),
           summary: 'Se completó el archivo original sin regenerar portada, tablas ni estructura previa.',
-          payload: preserved.validation,
+          payload: {
+            ...(preserved.validation || {}),
+            orchestration: preserved.orchestration || preserved.validation?.details?.orchestration || null,
+          },
         });
         await persistence.persistGeneratedArtifact({
           artifact: { ...preserved.artifact, validation: preserved.validation },
@@ -2011,6 +2018,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           metadata: {
             sourcePreservingEdit: true,
             sourceFileIds: files,
+            sourcePreservingOrchestration: preserved.orchestration || null,
           },
         });
       } catch (err) {
