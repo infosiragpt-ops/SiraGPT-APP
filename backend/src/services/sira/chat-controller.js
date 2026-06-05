@@ -44,6 +44,7 @@ const { analyzeContextualTurn } = require("./contextual-understanding");
 const { buildCitationFrame } = require("./citation-frame");
 const { createNoOpEvents } = require("./turn-events");
 const { validateScope: validateMemoryScope } = require("./memory-store");
+const { runBrainPipeline } = require("./cortex-pipeline-orchestrator");
 
 let _activeMemoryCache = null;
 function getActiveMemory() {
@@ -160,6 +161,8 @@ async function handleChatTurnUnlocked({
   memoryRecallLimit = 5,
   // Optional dependency injection for contextual-understanding tests.
   contextualUnderstandingDeps = null,
+  // Optional dependency injection for the deterministic cognitive gate.
+  brainPipelineRunner = runBrainPipeline,
 } = {}) {
   // Stage-aware errors so `siraErrorHandler` can map them straight to
   // an HTTP 4xx with `{ code, stage, request_id, ... }` and the audit
@@ -573,7 +576,7 @@ async function handleChatTurnUnlocked({
 
   // ── 4. Drive the runtime (tool execution + artifacts + validation) ─
   const _runtimeStartedAt = Date.now();
-  const runtimeResult = await ciraRuntime.runWorkflow({
+  let runtimeResult = await ciraRuntime.runWorkflow({
     envelope: bundle.envelope,
     registry: reg,
     permissions,
@@ -582,6 +585,37 @@ async function handleChatTurnUnlocked({
     context: { selectedModel, userId, conversationId },
   });
   siraMetrics.recordStageDuration("runtime", Date.now() - _runtimeStartedAt);
+
+  const brainVerdictSummary = await runBrainGate({
+    brainPipelineRunner,
+    store,
+    events,
+    userId,
+    requestId: bundle.envelope.request_id,
+    envelope: bundle.envelope,
+    planFrame: bundle.plan_frame,
+    runtimeResult,
+    answer: bundle.response?.user_visible_summary || bundle.response?.summary || "",
+  });
+  const gatedValidationFrame = applyBrainGateToValidation({
+    validationFrame: runtimeResult.validation_frame,
+    brainVerdictSummary,
+  });
+  if (gatedValidationFrame !== runtimeResult.validation_frame) {
+    runtimeResult = {
+      ...runtimeResult,
+      validation_frame: gatedValidationFrame,
+      summary: {
+        ...(runtimeResult.summary || {}),
+        ready_to_deliver: gatedValidationFrame.ready_to_deliver,
+        brain_gate: {
+          decision: brainVerdictSummary.decision,
+          blocking_flags: brainVerdictSummary.blocking_flags,
+          warning_flags: brainVerdictSummary.warning_flags,
+        },
+      },
+    };
+  }
 
   // Persist tool calls + artifacts + validation report
   for (const tc of runtimeResult.tool_results || []) {
@@ -652,6 +686,7 @@ async function handleChatTurnUnlocked({
       ready_to_deliver: runtimeResult.validation_frame.ready_to_deliver,
       token_usage: tokenUsage,
       token_budget: tokenBudget,
+      brain_verdict_summary: brainVerdictSummary,
     },
     selectedModel,
   });
@@ -662,6 +697,7 @@ async function handleChatTurnUnlocked({
     tool_count: runtimeResult.tool_results.length,
     token_usage: tokenUsage.usage,
     execution_trace: runtimeResult.execution_trace_frame?.counters || null,
+    brain_verdict: brainVerdictSummary,
   };
   await store.audit("turn_completed", turnCompletedPayload, { userId, requestId: bundle.envelope.request_id });
   events.emit("turn_completed", turnCompletedPayload);
@@ -748,6 +784,7 @@ async function handleChatTurnUnlocked({
     project_context: projectContext,
     recalled_memory: recalledMemory,
     contextual_understanding: contextualUnderstanding.envelopeContext,
+    brain_verdict_summary: brainVerdictSummary,
     summary: {
       stage: finalStage,
       mode: modeResolution.mode,
@@ -760,7 +797,152 @@ async function handleChatTurnUnlocked({
       token_usage: tokenUsage.usage,
       execution_trace: runtimeResult.execution_trace_frame?.counters || null,
       contextual_understanding_applied: Boolean(contextualUnderstanding.applied),
+      brain_verdict: brainVerdictSummary,
     },
+  };
+}
+
+async function runBrainGate({
+  brainPipelineRunner,
+  store,
+  events,
+  userId,
+  requestId,
+  envelope,
+  planFrame,
+  runtimeResult,
+  answer,
+}) {
+  const startedPayload = {
+    request_id: requestId,
+    plan_step_count: Array.isArray(planFrame?.steps) ? planFrame.steps.length : 0,
+    validation_score: runtimeResult?.validation_frame?.aggregate_score ?? null,
+  };
+  events.emit("brain_pipeline_started", startedPayload);
+  await store.audit("brain_pipeline_started", startedPayload, { userId, requestId });
+
+  try {
+    const verdict = await brainPipelineRunner({
+      envelope,
+      plan: planFrame,
+      answer,
+      evidence: collectBrainEvidence(runtimeResult),
+      retrieval: buildBrainRetrievalSignal(runtimeResult),
+      envelopeValidatorFrame: runtimeResult?.validation_frame || null,
+      toolHealth: buildBrainToolHealth(runtimeResult),
+      intentConfidence: envelope?.intent_analysis?.primary_intent?.confidence ?? null,
+    });
+    const summary = summarizeBrainVerdict(verdict);
+    await store.audit("brain_pipeline_completed", summary, { userId, requestId });
+    events.emit("brain_pipeline_completed", { ...summary, request_id: requestId });
+    return summary;
+  } catch (err) {
+    const summary = {
+      decision: "ship",
+      blocking_flags: 0,
+      warning_flags: 1,
+      reasons: ["brain_pipeline_failed_open"],
+      repair_hints: [],
+      latency_ms: 0,
+      confidence: null,
+      error_code: err && err.code ? String(err.code) : "brain_pipeline_error",
+    };
+    await store.audit("brain_pipeline_error", summary, { userId, requestId });
+    events.emit("brain_pipeline_error", { ...summary, request_id: requestId });
+    return summary;
+  }
+}
+
+function summarizeBrainVerdict(verdict) {
+  const confidence = verdict?.stage_results?.confidence_calibrator || null;
+  const decision = ["ship", "hold_for_review", "repair", "abort"].includes(verdict?.decision)
+    ? verdict.decision
+    : "ship";
+  const reasons = Array.isArray(verdict?.reasons) ? verdict.reasons.map(sanitizeBrainCode).slice(0, 8) : [];
+  const repairHints = Array.isArray(verdict?.repair_hints) ? verdict.repair_hints.map(sanitizeBrainHint).slice(0, 8) : [];
+  if (decision === "abort" && !reasons.includes("brain_abort_recommended")) {
+    reasons.push("brain_abort_recommended");
+  }
+  return {
+    decision,
+    blocking_flags: Math.max(0, Number(verdict?.blocking_flags || 0)),
+    warning_flags: Math.max(0, Number(verdict?.warning_flags || 0)),
+    reasons,
+    repair_hints: repairHints,
+    latency_ms: Math.max(0, Number(verdict?.latency_ms || 0)),
+    confidence: typeof confidence?.composite === "number" ? confidence.composite : null,
+    reason_count: reasons.length,
+    repair_hint_count: repairHints.length,
+  };
+}
+
+function sanitizeBrainCode(value) {
+  const text = String(value || "").trim().toLowerCase();
+  if (!text) return "unknown";
+  return text
+    .replace(/[^a-z0-9_.:@-]+/g, "_")
+    .replace(/_{2,}/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 120) || "unknown";
+}
+
+function sanitizeBrainHint(value) {
+  const text = String(value || "").trim().toLowerCase();
+  if (!text) return "review_brain_signal";
+  if (/unsupported number/.test(text)) return "verify_or_remove_unsupported_number";
+  if (/fabricated quote/.test(text)) return "verify_or_remove_fabricated_quote";
+  if (/plan|dependency|cycle|cyclic/.test(text)) return "repair_execution_plan";
+  if (/citation|source|evidence/.test(text)) return "strengthen_evidence_before_delivery";
+  if (/answer|format|language|template|injection/.test(text)) return "repair_answer_contract";
+  return sanitizeBrainCode(text).slice(0, 80) || "review_brain_signal";
+}
+
+function applyBrainGateToValidation({ validationFrame, brainVerdictSummary }) {
+  if (!validationFrame || !brainVerdictSummary) return validationFrame;
+  if (!["repair", "abort"].includes(brainVerdictSummary.decision)) return validationFrame;
+  const checks = Array.isArray(validationFrame.checks) ? validationFrame.checks : [];
+  return Object.freeze({
+    ...validationFrame,
+    checks: [
+      ...checks,
+      {
+        name: "brain_pipeline_gate",
+        status: "failed",
+        score: 0,
+        detail: brainVerdictSummary.reasons.join("; ") || `decision=${brainVerdictSummary.decision}`,
+      },
+    ],
+    ready_to_deliver: false,
+    regenerate_required: true,
+  });
+}
+
+function collectBrainEvidence(runtimeResult) {
+  const chunks = collectCitationChunks(runtimeResult?.tool_results || []);
+  if (chunks.length > 0) {
+    return chunks.slice(0, 12).map(c => [c.title, c.source, c.text].filter(Boolean).join(" ")).join("\n");
+  }
+  const ledger = runtimeResult?.evidence_ledger || [];
+  if (Array.isArray(ledger) && ledger.length > 0) {
+    return ledger.slice(0, 12).map(e => [e.tool, e.source, e.status].filter(Boolean).join(" ")).join("\n");
+  }
+  return null;
+}
+
+function buildBrainRetrievalSignal(runtimeResult) {
+  const chunks = collectCitationChunks(runtimeResult?.tool_results || []);
+  if (chunks.length === 0) return { score: 0, has_evidence: false, k: 0 };
+  const scores = chunks.map(c => c.score).filter(n => typeof n === "number");
+  const avg = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : 0.65;
+  return { score: Math.max(0, Math.min(1, avg)), has_evidence: true, k: chunks.length };
+}
+
+function buildBrainToolHealth(runtimeResult) {
+  const results = Array.isArray(runtimeResult?.tool_results) ? runtimeResult.tool_results : [];
+  const errors = results.filter(r => r.status === "error" || r.error).length;
+  return {
+    errors,
+    last_severity: errors > 0 ? "error" : "ok",
   };
 }
 
