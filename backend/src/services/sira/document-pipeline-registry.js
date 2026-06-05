@@ -33,8 +33,8 @@
 
 const PARSERS = Object.freeze([
   // ── PDF ────────────────────────────────────────────────────────
-  { id: "marker",       formats: ["pdf"],            language: "python", runtime: "binary",   ocr: true,  layout: true,  tables: true,  formulas: true,  reading_order: true,  preference: 100 },
-  { id: "docling",      formats: ["pdf"],            language: "python", runtime: "binary",   ocr: true,  layout: true,  tables: true,  formulas: true,  reading_order: true,  preference: 95 },
+  { id: "docling",      formats: ["pdf"],            language: "python", runtime: "binary",   ocr: true,  layout: true,  tables: true,  formulas: true,  reading_order: true,  preference: 100 },
+  { id: "marker",       formats: ["pdf"],            language: "python", runtime: "binary",   ocr: true,  layout: true,  tables: true,  formulas: true,  reading_order: true,  preference: 95 },
   { id: "llamaparse",   formats: ["pdf"],            language: "python", runtime: "saas",     ocr: true,  layout: true,  tables: true,  formulas: false, reading_order: true,  preference: 90 },
   { id: "mineru",       formats: ["pdf","docx","pptx","xlsx","image"], language: "python", runtime: "binary", ocr: true, layout: true, tables: true, formulas: true, reading_order: true, preference: 88 },
   { id: "pymupdf",      formats: ["pdf"],            language: "python", runtime: "library",  ocr: false, layout: true,  tables: false, formulas: false, reading_order: true,  preference: 85 },

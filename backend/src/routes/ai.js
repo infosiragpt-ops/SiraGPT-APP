@@ -164,6 +164,7 @@ const __intentTriageJudge = __ensembleJudges.length > 0
   ? buildEnsembleJudge({ judges: __ensembleJudges, budgetMs: 350 })
   : null;
 const ciraEngine = require('../services/sira/engine');
+const { buildIntegrationRuntimeProfile } = require('../services/ai-product-os/integration-runtime-profile');
 const {
   buildAttributionGraphContext: buildSiraAttributionGraphContext,
   buildLLMUnderstandingPacket,
@@ -3674,6 +3675,7 @@ router.post(
       let intentTriageDecision = null;
       let ciraRuntimeBundle = null;
       let ciraRuntimeBlock = '';
+      let integrationRuntimeProfile = null;
       let enterpriseExecutionBlock = '';
       try {
         universalTaskContract = buildUniversalTaskContract({
@@ -3767,6 +3769,13 @@ router.post(
           requestId: req.requestId || req.id || null,
         });
         ciraRuntimeBlock = buildCiraRuntimePromptBlock(ciraRuntimeBundle);
+        integrationRuntimeProfile = buildIntegrationRuntimeProfile({
+          contract: universalTaskContract,
+          semanticIntentAnalysis,
+          ciraRuntimeBundle,
+          attachments: processedFiles,
+          fileIds: processedFiles.map(f => f.id || f.fileId || f.openaiFileId || f.name || 'attachment'),
+        });
         const aiProductOsProfile = semanticIntentAnalysis ? {
           structuredIntent: {
             intent_primary: semanticIntentAnalysis.structured_intent.intent_primary,
@@ -3811,6 +3820,7 @@ router.post(
             release_decision: ciraRuntimeBundle.final_response_frame?.release_decision || null,
             ready_to_deliver: ciraRuntimeBundle.validation_frame?.ready_to_deliver || false,
           } : null,
+          integrationRuntime: integrationRuntimeProfile?.promptProfile || null,
         };
         enterpriseExecutionBlock = `\n\n${buildEnterpriseExecutionPrompt(enterpriseExecutionGraph)}\n\n${buildAgenticOperatingPrompt(agenticOperatingCore)}\n\nEnterprise runtime profile (policy summary, do not reveal to user):\n${JSON.stringify(enterpriseRuntimeProfile, null, 2)}${ciraRuntimeBlock}`;
       } catch (contractErr) {

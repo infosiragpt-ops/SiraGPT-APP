@@ -44,6 +44,7 @@ const {
 const { buildLangGraphLayer } = require('./agentic-langgraph');
 const { buildAgenticFrameworkStatus } = require('./agentic-frameworks');
 const { buildForbiddenToolNames } = require('./agent-tool-policy');
+const { buildIntegrationRuntimeProfile } = require('../ai-product-os/integration-runtime-profile');
 const {
   buildTranscriptionTextFromFiles,
   buildUploadedFileContext,
@@ -1563,6 +1564,11 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     toolRuntimePlan: enterpriseToolRuntimePlan,
     qaBoardReview: enterpriseQaBoardReview,
   });
+  const integrationRuntimeProfile = buildIntegrationRuntimeProfile({
+    contract: universalTaskContract,
+    fileIds: files,
+    requiredTools: enterpriseToolRuntimePlan?.summary?.requestedTools || [],
+  });
   let durableExecution = null;
   try {
     durableExecution = durableExecutionStore.createDurableExecutionRecord({
@@ -1582,6 +1588,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     agenticOperatingCore: agenticOperatingCore.summary,
     toolRuntime: enterpriseToolRuntimePlan.summary,
     qaPreflight: enterpriseQaBoardReview.summary,
+    integrationRuntime: integrationRuntimeProfile.promptProfile,
     durableExecution: durableExecution
       ? {
         graphId: durableExecution.graphId,

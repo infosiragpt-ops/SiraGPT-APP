@@ -803,6 +803,19 @@ const LIBRARY_RUNTIME_REQUIREMENTS = Object.freeze({
   "sse": { built_in: true },
 });
 
+const HIGH_IMPACT_PACKAGE_RULES = Object.freeze([
+  { id: "ai_agent_runtime", label: "AI / agent runtime", pattern: /(?:^|\/)(ai|openai|anthropic|langchain|llamaindex|modelcontextprotocol|mastra|agents?|genai|fal|elevenlabs|tiktoken|zod-to-json-schema)$/i },
+  { id: "math_typesetting", label: "Math / LaTeX / scientific publishing", pattern: /(?:^|\/)(katex|react-katex|rehype-katex|remark-math|mathjax|latex|pandoc|citeproc|citation-js|csl|bibtex|shiki|lowlight)$/i },
+  { id: "documents_office", label: "Documents / Office / PDF", pattern: /(?:^|\/)(docx|docx-preview|docxtemplater|mammoth|pdf-lib|pdfjs-dist|react-pdf|pdf-parse|pdfkit|pptxgenjs|exceljs|officeparser|jszip|file-type)$/i },
+  { id: "data_visualization", label: "Data / visualization", pattern: /(?:^|\/)(d3|plotly\.js-basic-dist-min|react-plotly\.js|chart\.js|recharts|mermaid|three|sharp|tesseract\.js)$/i },
+  { id: "web_app_runtime", label: "Web app runtime", pattern: /(?:^|\/)(next|react|react-dom|tailwindcss|postcss|autoprefixer|framer-motion|lucide-react|radix-ui|tiptap|monaco|embla|vaul|cmdk)$/i },
+  { id: "security_auth", label: "Security / auth", pattern: /(?:^|\/)(helmet|bcryptjs|jsonwebtoken|passport|simplewebauthn|stripe|sentry|dompurify|zod|ajv|jose|csrf|rate-limit|express-rate-limit)$/i },
+  { id: "database_storage", label: "Database / storage", pattern: /(?:^|\/)(prisma|@prisma\/client|drizzle|postgres|pg|neondatabase|ioredis|connect-redis|bullmq|aws-sdk|s3)$/i },
+  { id: "browser_automation", label: "Browser automation", pattern: /(?:^|\/)(playwright|@playwright\/test|puppeteer|jsdom|cheerio|readability|user-agents)$/i },
+  { id: "testing_quality", label: "Testing / quality", pattern: /(?:^|\/)(vitest|node:test|eslint|typescript|testing-library|supertest|c8|autocannon|husky|lint-staged)$/i },
+  { id: "observability_ops", label: "Observability / operations", pattern: /(?:^|\/)(opentelemetry|pino|pino-http|morgan|compression|posthog|langfuse|prometheus|sentry)$/i },
+]);
+
 function createIntegrationStack({ providers = {}, vendors = {}, mcpAuditor = null, telemetry = null } = {}) {
   const modelGatewayCore = createLiteLLMGateway({
     providers: providers.modelProviders || providers.models || {},
@@ -992,7 +1005,14 @@ function buildDependencyReadiness(input = {}, options = {}) {
     execution_stack: plan,
     package_inventory: {
       package_files: inventory.package_files,
+      package_lock_files: inventory.package_lock_files,
       package_count: Object.keys(inventory.packages).length,
+      lock_package_count: Object.keys(inventory.lock_packages || {}).length,
+      expanded_library_catalog_count: inventory.catalog.total_package_count,
+      high_impact_family_count: inventory.catalog.high_impact_families.length,
+      high_impact_families: inventory.catalog.high_impact_families,
+      direct_high_impact: inventory.catalog.direct_high_impact,
+      math_typesetting_ready: inventory.catalog.math_typesetting_ready,
     },
     summary,
     layers,
@@ -1069,6 +1089,7 @@ function loadPackageInventory({ cwd = process.cwd(), packageManifests = null } =
   const packages = {};
   const packageFiles = [];
   const manifests = packageManifests ? normalizePackageManifests(packageManifests) : readPackageManifests(cwd);
+  const lockInventory = packageManifests ? { packages: {}, files: [] } : readPackageLockInventory(cwd);
 
   for (const { scope, file, manifest } of manifests) {
     if (!manifest || typeof manifest !== "object") continue;
@@ -1086,7 +1107,10 @@ function loadPackageInventory({ cwd = process.cwd(), packageManifests = null } =
 
   return {
     packages,
+    lock_packages: lockInventory.packages,
     package_files: unique(packageFiles),
+    package_lock_files: lockInventory.files,
+    catalog: buildPackageLibraryCatalog({ packages, lock_packages: lockInventory.packages }),
   };
 }
 
@@ -1127,6 +1151,72 @@ function readPackageManifests(cwd) {
     });
   }
   return manifests;
+}
+
+function readPackageLockInventory(cwd) {
+  const candidates = [
+    path.join(cwd, "package-lock.json"),
+    path.join(cwd, "backend", "package-lock.json"),
+    path.join(cwd, "..", "package-lock.json"),
+    path.join(cwd, "..", "backend", "package-lock.json"),
+  ];
+  const seen = new Set();
+  const packages = {};
+  const files = [];
+  for (const candidate of candidates) {
+    const file = path.resolve(candidate);
+    if (seen.has(file)) continue;
+    seen.add(file);
+    const lockfile = readJsonSafe(file);
+    if (!lockfile || typeof lockfile !== "object") continue;
+    files.push(file);
+    for (const [packagePath, entry] of Object.entries(lockfile.packages || {})) {
+      const name = packageNameFromLockPath(packagePath);
+      if (!name) continue;
+      if (!packages[name]) {
+        packages[name] = { version: entry?.version || null, lock_files: [] };
+      }
+      if (!packages[name].lock_files.includes(file)) packages[name].lock_files.push(file);
+    }
+  }
+  return { packages, files: unique(files) };
+}
+
+function packageNameFromLockPath(packagePath) {
+  const raw = String(packagePath || "");
+  const marker = "node_modules/";
+  const index = raw.lastIndexOf(marker);
+  if (index === -1) return null;
+  const name = raw.slice(index + marker.length);
+  return name && !name.includes("node_modules/") ? name : null;
+}
+
+function buildPackageLibraryCatalog(inventory = {}) {
+  const directPackages = Object.keys(inventory.packages || {});
+  const lockPackages = Object.keys(inventory.lock_packages || {});
+  const allPackages = unique([...directPackages, ...lockPackages]);
+  const directSet = new Set(directPackages);
+  const families = HIGH_IMPACT_PACKAGE_RULES.map((rule) => {
+    const packages = allPackages.filter((name) => rule.pattern.test(name));
+    const direct = packages.filter((name) => directSet.has(name));
+    return {
+      id: rule.id,
+      label: rule.label,
+      package_count: packages.length,
+      direct_count: direct.length,
+      examples: packages.slice(0, 12),
+    };
+  }).filter((family) => family.package_count > 0);
+  const mathTypesettingReady = ["katex", "react-katex", "remark-math", "rehype-katex", "node-pandoc"]
+    .filter((name) => allPackages.includes(name));
+  return {
+    total_package_count: allPackages.length,
+    high_impact_families: families,
+    direct_high_impact: families
+      .filter((family) => family.direct_count > 0)
+      .map((family) => ({ id: family.id, label: family.label, direct_count: family.direct_count })),
+    math_typesetting_ready: mathTypesettingReady,
+  };
 }
 
 function readJsonSafe(file) {

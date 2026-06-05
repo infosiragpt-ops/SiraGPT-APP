@@ -81,6 +81,7 @@ const durableExecutionStore = require('../services/agents/durable-execution-stor
 const { buildDocumentDeliveryPolicy } = require('../services/agents/document-delivery-policy');
 const { buildLangGraphLayer } = require('../services/agents/agentic-langgraph');
 const { buildAgenticFrameworkStatus } = require('../services/agents/agentic-frameworks');
+const { buildIntegrationRuntimeProfile } = require('../services/ai-product-os/integration-runtime-profile');
 const {
   cancelQueuedTask,
   enqueueAgentTask,
@@ -906,6 +907,11 @@ router.post(
       toolRuntimePlan: enterpriseToolRuntimePlan,
       qaBoardReview: enterpriseQaBoardReview,
     });
+    const integrationRuntimeProfile = buildIntegrationRuntimeProfile({
+      contract: universalTaskContract,
+      fileIds,
+      requiredTools: enterpriseToolRuntimePlan?.summary?.requestedTools || [],
+    });
     let durableExecution = null;
     try {
       durableExecution = durableExecutionStore.createDurableExecutionRecord({
@@ -925,6 +931,7 @@ router.post(
       agenticOperatingCore: agenticOperatingCore.summary,
       toolRuntime: enterpriseToolRuntimePlan.summary,
       qaPreflight: enterpriseQaBoardReview.summary,
+      integrationRuntime: integrationRuntimeProfile.promptProfile,
       durableExecution: durableExecution
         ? {
           graphId: durableExecution.graphId,
