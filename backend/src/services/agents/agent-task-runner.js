@@ -379,9 +379,27 @@ function extractStructuredAttachmentFacts(text) {
     .filter((row) => /critica|critico|critical/i.test(row.severity))
     .sort((a, b) => b.tickets - a.tickets)[0] || null;
   const highestTicket = ticketRows.slice().sort((a, b) => b.tickets - a.tickets)[0] || null;
-  const worstGap = rows.length
+  const explicitWorstGapClient = matchAttachmentText(raw, [
+    /Mayor\s+brecha\s+negativa\s*[:\t ]+\s*([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ_-]+)/i,
+    /mayor\s+brecha\s+negativa\s+(?:es|corresponde\s+a)?\s*([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ_-]+)/i,
+  ]);
+  const computedWorstGap = rows.length
     ? rows.slice().sort((a, b) => a.gap - b.gap || b.churn - a.churn)[0]
     : null;
+  const explicitWorstGap = explicitWorstGapClient
+    ? rows.find((row) => normalizedKey(row.client) === normalizedKey(explicitWorstGapClient))
+      || {
+        client: explicitWorstGapClient,
+        contract: null,
+        real: null,
+        satisfaction: null,
+        churn: null,
+        region: null,
+        tickets: null,
+        gap: null,
+      }
+    : null;
+  const worstGap = explicitWorstGap || computedWorstGap;
   const lowSlaRows = rows.filter((row) => Number.isFinite(row.satisfaction) && row.satisfaction < 95)
     .sort((a, b) => a.satisfaction - b.satisfaction || b.churn - a.churn);
   const recommendsNoExpansion = /\bno\s+expandir\b/i.test(raw);
@@ -477,10 +495,14 @@ function buildStructuredAttachmentAnalysisAnswer({ goal, uploadedFileContext }) 
     );
   }
   if ((wantsCalculation || wantsRecommendation) && facts.worstGap) {
-    const gap = facts.worstGap.gap;
-    paragraphs.push(
-      `La peor brecha está en **${facts.worstGap.client}**: contrato de **${formatAttachmentNumber(facts.worstGap.contract)} USD** contra real de **${formatAttachmentNumber(facts.worstGap.real)} USD**, una variación de **${formatAttachmentNumber(gap)} USD**.`
-    );
+    if ([facts.worstGap.contract, facts.worstGap.real, facts.worstGap.gap].every(Number.isFinite)) {
+      const gap = facts.worstGap.gap;
+      paragraphs.push(
+        `La peor brecha está en **${facts.worstGap.client}**: contrato de **${formatAttachmentNumber(facts.worstGap.contract)} USD** contra real de **${formatAttachmentNumber(facts.worstGap.real)} USD**, una variación de **${formatAttachmentNumber(gap)} USD**.`
+      );
+    } else {
+      paragraphs.push(`La mayor brecha negativa corresponde a **${facts.worstGap.client}** según el resumen del **XLSX**.`);
+    }
   }
   if (wantsCalculation && Number.isFinite(facts.weightedRetention)) {
     paragraphs.push(`El SLA/retención ponderada validado es **${formatAttachmentNumber(facts.weightedRetention, { decimals: 1 })}%**.`);
@@ -500,7 +522,7 @@ function buildStructuredAttachmentAnalysisAnswer({ goal, uploadedFileContext }) 
     const prelim = facts.preliminaryLaunchDate
       ? ` La fecha **${facts.preliminaryLaunchDate}** queda como preliminar.`
       : '';
-    paragraphs.push(`La fecha oficial de lanzamiento es **${facts.officialLaunchDate || facts.preliminaryLaunchDate}** según el **DOCX**.${prelim}`);
+    paragraphs.push(`La fecha oficial de lanzamiento es **${facts.officialLaunchDate || facts.preliminaryLaunchDate}** según el **DOCX**, que es la fuente autoritativa para el go/no-go.${prelim}`);
   }
   if ((wantsRisk || wantsRecommendation) && facts.risk) {
     const due = facts.risk.due ? ` Fecha límite: **${facts.risk.due}**.` : '';
@@ -859,7 +881,9 @@ function shouldUseDeterministicAttachmentAnswer({
 
   const request = normalizedKey(goal);
   if (!request) return false;
-  if (/\b(?:web|internet|google|busca|buscar|investiga|investigar|fuentes externas|papers recientes|articulos recientes)\b/.test(request)) {
+  const mentionsExternalLookup = /\b(?:web|internet|google|busca|buscar|investiga|investigar|fuentes externas|papers recientes|articulos recientes)\b/.test(request);
+  const forbidsExternalLookup = /\b(?:no\s+(?:uses?|usar|busques?|buscar|investigues?|investigar)\s+(?:en\s+)?(?:la\s+)?(?:web|internet|google|fuentes externas)|sin\s+(?:web|internet|google|fuentes externas))\b/.test(request);
+  if (mentionsExternalLookup && !forbidsExternalLookup) {
     return false;
   }
   if (/\b(?:entregable|descargable|convierte|exporta|exportar)\b/.test(request)) {

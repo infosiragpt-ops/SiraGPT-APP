@@ -370,6 +370,14 @@ test('shouldUseDeterministicAttachmentAnswer: routes simple attachment summaries
   );
   assert.equal(
     shouldUseDeterministicAttachmentAnswer({
+      goal: 'Qué país queda bloqueado y qué riesgo lo bloquea. No uses internet ni crees archivos; responde solo en chat.',
+      files: ['file-docx-1', 'file-pdf-1'],
+      documentPolicy: { mode: 'chat_only', autoGenerate: false },
+    }),
+    true,
+  );
+  assert.equal(
+    shouldUseDeterministicAttachmentAnswer({
       goal: 'calcula el total real y compara la contradiccion entre PDF y DOCX adjuntos',
       files: ['file-docx-1', 'file-pdf-1'],
       documentPolicy: { mode: 'chat_only', autoGenerate: false },
