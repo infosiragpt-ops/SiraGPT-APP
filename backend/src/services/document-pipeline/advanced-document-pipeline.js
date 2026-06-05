@@ -317,8 +317,11 @@ function safeFilename(value, ext) {
 }
 
 function detectFormat(prompt = '', requestedFormat) {
-  if (requestedFormat) return requestedFormat === 'markdown' ? 'md' : requestedFormat;
   const p = String(prompt).toLowerCase();
+  const wordOutput = /\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|dame|prepara(?:r|me)?|redacta(?:r|me)?|elabora(?:r|me)?|devu[eé]lv(?:e|eme|elo)|entr[eé]ga(?:r|me)?|quiero|necesito)\b[^.?!]{0,160}\b(?:word|docx|documento\s+word)\b|\b(?:en|como|a|formato)\s+(?:un\s+|una\s+|el\s+|la\s+)?(?:word|docx|documento\s+word)\b/i.test(p);
+  const wordToOther = /\b(?:convierte|convertir|exporta(?:r|me)?|pasa(?:r|me)?|transforma(?:r|me)?)\b[^.?!]{0,140}\b(?:(?:mi|este|ese|el|la|su)\s+)?(?:documento\s+)?(?:word|docx|documento\s+word)\b[^.?!]{0,100}\b(?:a|como|en|formato|formato\s+de)\s+(?:pdf|excel|xlsx|pptx?|power\s*point|powerpoint|presentaci[oó]n|diapositivas?|slides?)\b/i.test(p);
+  if (wordOutput && !wordToOther) return 'docx';
+  if (requestedFormat) return requestedFormat === 'markdown' ? 'md' : requestedFormat;
   if (/\b(pptx?|power\s*point|presentaci[oó]n|diapositivas|slides?)\b/.test(p)) return 'pptx';
   if (/\b(xlsx?|excel|hoja de c[aá]lculo|dashboard)\b/.test(p)) return 'xlsx';
   if (/\b(pdf)\b/.test(p)) return 'pdf';
@@ -385,6 +388,38 @@ function normalizeReferenceFiles(referenceFiles = []) {
     });
 }
 
+function addUniqueSection(sections, section) {
+  const needle = normalizeForQuality(section);
+  if (!needle) return sections;
+  if (sections.some((existing) => normalizeForQuality(existing) === needle)) return sections;
+  return [...sections, section];
+}
+
+function inferPromptSections(prompt = '') {
+  const text = normalizeForQuality(prompt);
+  let sections = [];
+  if (/\bmetodolog|\bmetodo\b|\bmethod\b/.test(text)) sections = addUniqueSection(sections, 'Metodología');
+  if (/\bmatriz(?: de riesgos?)?\b|\brisk matrix\b/.test(text)) sections = addUniqueSection(sections, 'Matriz de riesgos');
+  if (/\bconclus/.test(text)) sections = addUniqueSection(sections, 'Conclusiones');
+  if (/\brecomend/.test(text)) sections = addUniqueSection(sections, 'Recomendaciones');
+  if (/\bcronograma\b/.test(text)) sections = addUniqueSection(sections, 'Cronograma');
+  if (/\bpresupuesto\b|\bcostos?\b/.test(text)) sections = addUniqueSection(sections, 'Presupuesto');
+  if (/\bglosario\b/.test(text)) sections = addUniqueSection(sections, 'Glosario');
+  if (/\banex/.test(text)) sections = addUniqueSection(sections, 'Anexos');
+  return sections;
+}
+
+function inferRequiredTerms(prompt = '') {
+  const text = normalizeForQuality(prompt);
+  const terms = [];
+  if (/\bia\b|inteligencia artificial/.test(text)) terms.push('IA');
+  if (/\briesg/.test(text)) terms.push('riesgos');
+  if (/\bkpi/.test(text)) terms.push('KPIs');
+  if (/\bapa\s*7\b/.test(text)) terms.push('APA 7');
+  if (/\bconclus/.test(text)) terms.push('Conclusiones');
+  return terms;
+}
+
 function buildPlan({ prompt, format, template, complexity = 'standard', referenceFiles = [] }) {
   const userRequest = extractUserDocumentRequest(prompt);
   const title = titleFromPrompt(userRequest, template === 'academic' ? 'Informe académico profesional' : 'Documento profesional');
@@ -397,9 +432,13 @@ function buildPlan({ prompt, format, template, complexity = 'standard', referenc
     premium: ['Resumen', 'Contexto', 'Desarrollo', 'Hallazgos', 'Recomendaciones', 'Anexos'],
   };
   const sections = baseSections[template] || baseSections.premium;
-  const plannedSections = normalizedReferenceFiles.length > 0
-    ? Array.from(new Set([...sections, 'Material de referencia incorporado']))
-    : sections;
+  let plannedSections = [...sections];
+  for (const section of inferPromptSections(userRequest)) {
+    plannedSections = addUniqueSection(plannedSections, section);
+  }
+  if (normalizedReferenceFiles.length > 0) {
+    plannedSections = addUniqueSection(plannedSections, 'Material de referencia incorporado');
+  }
   const referenceBriefs = normalizedReferenceFiles
     .filter((file) => file.excerpt)
     .map((file) => ({ name: file.name, excerpt: file.excerpt }));
@@ -426,6 +465,8 @@ function buildPlan({ prompt, format, template, complexity = 'standard', referenc
       minQualityScore: MIN_QUALITY_SCORE,
       typography: template === 'academic' ? 'APA 7 / Times New Roman' : 'Executive sans-serif',
       palette: template === 'business' ? 'navy-cyan' : template === 'academic' ? 'navy-cream' : 'premium-neutral',
+      requiredSections: inferPromptSections(userRequest),
+      requiredTerms: inferRequiredTerms(userRequest),
     },
   };
 }
@@ -462,6 +503,16 @@ function scoreFromChecks(checks) {
   return Math.round((values.filter(Boolean).length / values.length) * 100);
 }
 
+function normalizeForQuality(value) {
+  return String(value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function assertNotAborted(signal) {
   if (signal?.aborted) {
     const err = new Error('document generation aborted');
@@ -494,6 +545,13 @@ function validateDocx(buffer, expected = {}) {
   const documentXml = zipText(buffer, 'word/document.xml');
   const headerFooter = entries.some((e) => /^word\/header\d+\.xml$/.test(e)) && entries.some((e) => /^word\/footer\d+\.xml$/.test(e));
   const xmlText = documentXml.replace(/<[^>]+>/g, ' ');
+  const normalizedText = normalizeForQuality(xmlText);
+  const paragraphCount = (documentXml.match(/<w:p\b/g) || []).length;
+  const tableCount = (documentXml.match(/<w:tbl\b/g) || []).length;
+  const requiredSections = Array.isArray(expected.requiredSections) ? expected.requiredSections : [];
+  const missingSections = requiredSections.filter((section) => !normalizedText.includes(normalizeForQuality(section)));
+  const requiredTerms = Array.isArray(expected.requiredTerms) ? expected.requiredTerms : [];
+  const missingTerms = requiredTerms.filter((term) => !normalizedText.includes(normalizeForQuality(term)));
   const hasFormulaContent = /<m:oMath|<m:oMathPara|\\frac|\\alpha|\\rho|n\s*=|Z\^2|sigma|sum_|sqrt/i.test(documentXml)
     || /\b(Calculo de muestra|Formulas del analisis|Confiabilidad interna|Correlacion de Spearman)\b/i.test(xmlText);
   const checks = {
@@ -501,12 +559,15 @@ function validateDocx(buffer, expected = {}) {
     contentTypes: entries.includes('[Content_Types].xml'),
     documentXml: documentXml.includes('<w:document'),
     headings: (documentXml.match(/Heading[1-6]/g) || []).length >= (expected.minHeadings || 2),
-    table: documentXml.includes('<w:tbl'),
+    table: tableCount >= (expected.minTables || 1),
+    paragraphs: paragraphCount >= (expected.minParagraphs || 6),
     media: !expected.requiresImage || entries.some((e) => e.startsWith('word/media/')),
     headerFooter: !expected.requiresHeaderFooter || headerFooter,
     toc: !expected.requiresToc || documentXml.includes('TOC'),
     references: !expected.requiresReferences || /Referencias|References|APA/i.test(documentXml),
     formulaContent: !expected.requiresFormula || hasFormulaContent,
+    requiredSections: missingSections.length === 0,
+    requiredTerms: missingTerms.length === 0,
     content: documentXml.length > 1000,
   };
   return {
@@ -521,7 +582,7 @@ function validateDocx(buffer, expected = {}) {
       formulaReady: !expected.requiresFormula || hasFormulaContent,
       professional: headerFooter || !expected.requiresHeaderFooter,
     }),
-    details: { entries: entries.length, paragraphs: (documentXml.match(/<w:p\b/g) || []).length },
+    details: { entries: entries.length, paragraphs: paragraphCount, tables: tableCount, missingSections, missingTerms },
   };
 }
 
@@ -759,6 +820,10 @@ function expectedFor(format, template, complexity, plan = {}) {
       requiresReferences: template === 'academic',
       requiresFormula: Array.isArray(plan.formulaBlocks) && plan.formulaBlocks.length > 0,
       minHeadings: high ? 5 : 2,
+      minParagraphs: high ? 14 : 8,
+      minTables: 1,
+      requiredSections: plan.qualityTargets?.requiredSections || [],
+      requiredTerms: plan.qualityTargets?.requiredTerms || [],
     };
   }
   if (format === 'xlsx') {

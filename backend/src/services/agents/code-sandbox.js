@@ -69,10 +69,37 @@ function stripEnv(memoryMb = DEFAULT_MEMORY_MB) {
   // deploys); otherwise we fall back to the host's PYTHONPATH +
   // PYTHONUSERBASE so a local dev machine with `pip install --user
   // sympy numpy scipy pandas` just works.
-  const ppath = process.env.SANDBOX_PYTHONPATH || process.env.PYTHONPATH;
-  if (ppath) env.PYTHONPATH = ppath;
+  const pythonPaths = [];
+  const configuredPythonPath = process.env.SANDBOX_PYTHONPATH || process.env.PYTHONPATH;
+  if (configuredPythonPath) pythonPaths.push(...configuredPythonPath.split(path.delimiter).filter(Boolean));
+  pythonPaths.push(...discoverPythonUserSitePackages());
+  if (pythonPaths.length > 0) env.PYTHONPATH = Array.from(new Set(pythonPaths)).join(path.delimiter);
   if (process.env.PYTHONUSERBASE) env.PYTHONUSERBASE = process.env.PYTHONUSERBASE;
   return env;
+}
+
+let discoveredPythonUserSitePackages = null;
+function discoverPythonUserSitePackages() {
+  if (discoveredPythonUserSitePackages) return discoveredPythonUserSitePackages;
+  const found = [];
+  const home = os.homedir();
+  const candidates = [
+    path.join(home, 'Library', 'Python'),
+    path.join(home, '.local', 'lib'),
+  ];
+  for (const base of candidates) {
+    try {
+      if (!fsSync.existsSync(base)) continue;
+      for (const version of fsSync.readdirSync(base)) {
+        const macUserSite = path.join(base, version, 'lib', 'python', 'site-packages');
+        const linuxUserSite = path.join(base, version, 'site-packages');
+        if (fsSync.existsSync(macUserSite)) found.push(macUserSite);
+        if (fsSync.existsSync(linuxUserSite)) found.push(linuxUserSite);
+      }
+    } catch { /* best effort discovery */ }
+  }
+  discoveredPythonUserSitePackages = found;
+  return discoveredPythonUserSitePackages;
 }
 
 async function mkTempDir() {

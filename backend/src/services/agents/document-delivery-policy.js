@@ -8,7 +8,9 @@ const EXPLICIT_WORD_OUTPUT_RE = /\b(?:en|como|a|formato)\s+(?:un\s+|una\s+|el\s+
 const EXPLICIT_SHEET_OUTPUT_RE = /\b(?:en|como|a|formato)\s+(?:un\s+|una\s+|el\s+|la\s+)?(?:excel|xlsx|spreadsheet|hoja\s+de\s+c[aá]lculo)\b|\b(?:excel|xlsx|spreadsheet)\b/i;
 const EXPLICIT_DECK_OUTPUT_RE = /\b(?:en|como|a|formato)\s+(?:un\s+|una\s+|el\s+|la\s+)?(?:ppt|pptx|power\s*point|powerpoint|presentaci[oó]n|diapositivas?)\b|\b(?:ppt|pptx|power\s*point|powerpoint)\b/i;
 const EXPLICIT_PDF_OUTPUT_RE = /\b(?:en|como|a|formato)\s+(?:un\s+|una\s+|el\s+|la\s+)?pdf\b|\bpdf\b/i;
-const EXPLICIT_TRANSCRIPTION_OUTPUT_RE = /\b(?:en|como|a)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|presentaci[oó]n)\b|\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|exporta(?:r|me)?|descarga(?:r|me)?|dame|prepara(?:r|me)?)\b.*\b(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|documento|archivo|informe|reporte|presentaci[oó]n)\b/i;
+const WORD_OUTPUT_COMMAND_RE = /\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|exporta(?:r|me)?|descarga(?:r|me)?|dame|prepara(?:r|me)?|redacta(?:r|me)?|elabora(?:r|me)?|devu[eé]lv(?:e|eme|elo)|entr[eé]ga(?:r|me)?|quiero|necesito)\b[^.?!]{0,160}\b(?:word|docx|documento\s+word)\b|\b(?:en|como|a|formato|formato\s+de)\s+(?:un\s+|una\s+|el\s+|la\s+)?(?:word|docx|documento\s+word)\b/i;
+const WORD_SOURCE_TO_OTHER_FORMAT_RE = /\b(?:convierte|convertir|exporta(?:r|me)?|pasa(?:r|me)?|transforma(?:r|me)?)\b[^.?!]{0,140}\b(?:(?:mi|este|ese|el|la|su)\s+)?(?:documento\s+)?(?:word|docx|documento\s+word)\b[^.?!]{0,100}\b(?:a|como|en|formato|formato\s+de)\s+(?:pdf|excel|xlsx|pptx?|power\s*point|powerpoint|presentaci[oó]n|diapositivas?|slides?)\b/i;
+const EXPLICIT_TRANSCRIPTION_OUTPUT_RE = /\b(?:en|como|a)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|presentaci[oó]n)\b|\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|exporta(?:r|me)?|descarga(?:r|me)?|dame|prepara(?:r|me)?|redacta(?:r|me)?|elabora(?:r|me)?|devu[eé]lv(?:e|eme|elo)|entr[eé]ga(?:r|me)?)\b.*\b(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|documento|archivo|informe|reporte|presentaci[oó]n)\b|\b(?:quiero|necesito)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|documento|archivo|informe|reporte|presentaci[oó]n)\b/i;
 const DOCUMENT_UNDERSTANDING_RE = /\b(analiza(?:r|me)?|an[aá]lisis|resume(?:n|me)?|resumir|extrae(?:r|me)?|transcrib(?:e|ir|eme|irme)?|qu[eé]\s+dice|seg[uú]n\s+(?:el\s+)?documento|archivo\s+adjunto|documento\s+adjunto|evidencia)\b/i;
 const CHAT_ONLY_DIRECTIVE_RE = /\b(?:no\s+(?:crees?|crear|generes?|generar|hagas?|hacer|exportes?|exportar|prepares?|preparar|descargues?|descargar)\s+(?:un\s+|una\s+|el\s+|la\s+)?(?:archivos?|documentos?|word|docx|pdf|excel|xlsx|pptx?|power\s*point|powerpoint|entregables?)|responde(?:r)?\s+(?:solo|solamente)?\s*(?:en\s+)?(?:el\s+)?chat|solo\s+en\s+chat|sin\s+(?:archivos?|documentos?|descarga|entregables?))\b/i;
 // Read/inquiry intents about a previously-shared document. Matches
@@ -20,7 +22,7 @@ const CHAT_ONLY_DIRECTIVE_RE = /\b(?:no\s+(?:crees?|crear|generes?|generar|hagas
 // and must NOT be promoted to doc_required just because the prompt
 // contains the literal word "word" / "documento" / "pdf".
 const DOCUMENT_INQUIRY_RE = /\b(?:cu[aá]l(?:es)?|qu[eé]|c[oó]mo|de\s+qu[eé]|qui[eé]n(?:es)?|cu[aá]ndo|d[oó]nde|por\s+qu[eé]|cu[aá]nt[oa]s?|resume(?:me|n)?|res[uú]meme|lee(?:me)?|l[eé]eme|abre(?:me)?|[aá]breme|muestra(?:me)?|mu[eé]strame|dime|cu[eé]ntame|expl[ií]came|explica(?:me)?|busca(?:me)?|encuentra(?:me)?|de\s+qu[eé]\s+trata|sobre\s+qu[eé])\b[^.?!]{0,160}\b(?:word|docx|documento|archivo|pdf|excel|xlsx|hoja\s+de\s+c[aá]lculo|pptx|power\s*point|powerpoint|presentaci[oó]n|adjunto|texto)\b/i;
-const EXPLICIT_DOCUMENT_OUTPUT_RE = /\b(?:en|como|a)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|presentaci[oó]n|documento|archivo)\b|\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|exporta(?:r|me)?|descarga(?:r|me)?|prepara(?:r|me)?)\b.*\b(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|documento|archivo|informe|reporte|presentaci[oó]n)\b/i;
+const EXPLICIT_DOCUMENT_OUTPUT_RE = /\b(?:en|como|a)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|presentaci[oó]n|documento|archivo)\b|\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|exporta(?:r|me)?|descarga(?:r|me)?|dame|prepara(?:r|me)?|redacta(?:r|me)?|elabora(?:r|me)?|devu[eé]lv(?:e|eme|elo)|entr[eé]ga(?:r|me)?)\b.*\b(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|documento|archivo|informe|reporte|presentaci[oó]n)\b|\b(?:quiero|necesito)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|documento|archivo|informe|reporte|presentaci[oó]n)\b/i;
 const SOURCE_MAP_CHAT_RE = /\b(?:mapa\s+de\s+fuentes|fuentes?\s+por\s+(?:archivo|documento)|enumera\s+cada\s+archivo|cita\s+(?:la\s+)?fuente\s+por\s+documento)\b/i;
 
 let sourcePreservingEditMod = null;
@@ -81,14 +83,16 @@ function estimateWords({ goal, displayGoal, finalText } = {}) {
 }
 
 function detectFormat(text, requestedFormat) {
+  const explicitWordOutput = WORD_OUTPUT_COMMAND_RE.test(text) && !WORD_SOURCE_TO_OTHER_FORMAT_RE.test(text);
+  if (explicitWordOutput) return 'docx';
   const requested = compactText(requestedFormat).toLowerCase().replace(/^\./, '');
   if (['docx', 'xlsx', 'pptx', 'pdf'].includes(requested)) return requested;
   const explicitDeck = EXPLICIT_DECK_OUTPUT_RE.test(text);
   const explicitPdf = EXPLICIT_PDF_OUTPUT_RE.test(text);
   const explicitSheet = EXPLICIT_SHEET_OUTPUT_RE.test(text);
-  const explicitWord = EXPLICIT_WORD_OUTPUT_RE.test(text);
-  if (explicitDeck) return 'pptx';
-  if (explicitPdf) return 'pdf';
+  const explicitWord = EXPLICIT_WORD_OUTPUT_RE.test(text) && !WORD_SOURCE_TO_OTHER_FORMAT_RE.test(text);
+  if (explicitDeck && !explicitWord) return 'pptx';
+  if (explicitPdf && !explicitWord) return 'pdf';
   if (explicitSheet && !explicitWord) return 'xlsx';
   if (explicitWord) return 'docx';
   if (SHEET_RE.test(text)) return 'xlsx';

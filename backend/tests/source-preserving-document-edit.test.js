@@ -60,6 +60,8 @@ describe('source-preserving document edit', () => {
     assert.equal(isSourcePreservingEditRequest('dame un resumen en un solo párrafo', ['file-docx']), false);
     assert.equal(isSourcePreservingEditRequest('calcula la diferencia usando los documentos adjuntos', ['file-docx']), false);
     assert.equal(isSourcePreservingEditRequest('compara el PDF y el DOCX adjuntos e indica la cifra final', ['file-docx']), false);
+    assert.equal(isSourcePreservingEditRequest('Genera un Word profesional: incluye tabla Excel, índice y conclusiones.', []), false);
+    assert.equal(isSourcePreservingEditRequest('Genera un Word profesional sobre el documento adjunto: incluye tabla Excel, índice y conclusiones.', ['file-docx']), false);
     assert.equal(isSourcePreservingEditRequest('completa el anexo 3', ['file-docx']), true);
     assert.deepEqual(parseTargetSectionRequest('completa el anexo 3'), {
       kind: 'anexo',

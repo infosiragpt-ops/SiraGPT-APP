@@ -145,6 +145,71 @@ test('agent task create_document: validates and returns artifact ids for downstr
   assert.deepEqual(verify.columns, ['Authors', 'Title', 'Year', 'DOI']);
 });
 
+test('agent task create_document: creates and verifies a professional DOCX artifact', async () => {
+  const events = [];
+  const result = await INTERNAL.createDocument.execute({
+    filename: 'informe-profesional-validado.docx',
+    python: [
+      'import os',
+      'from docx import Document',
+      'from docx.shared import Pt',
+      'from docx.enum.text import WD_ALIGN_PARAGRAPH',
+      'doc = Document()',
+      'doc.core_properties.title = "Informe Profesional de Validación"',
+      'normal = doc.styles["Normal"]',
+      'normal.font.name = "Arial"',
+      'normal.font.size = Pt(10.5)',
+      'title = doc.add_heading("Informe Profesional de Validación", 0)',
+      'title.alignment = WD_ALIGN_PARAGRAPH.CENTER',
+      'doc.add_paragraph("Resumen ejecutivo: este documento valida que SiraGPT produce un Word editable, estructurado y verificable antes de entregarlo al usuario.")',
+      'doc.add_heading("1. Alcance", level=1)',
+      'doc.add_paragraph("La prueba cubre creación, registro, descarga y lectura posterior del archivo DOCX generado por el agente.")',
+      'doc.add_heading("2. Criterios de calidad", level=1)',
+      'for item in ["estructura clara", "contenido suficiente", "tabla editable", "conclusiones accionables"]:',
+      '    doc.add_paragraph(item, style="List Bullet")',
+      'table = doc.add_table(rows=1, cols=3)',
+      'table.style = "Table Grid"',
+      'hdr = table.rows[0].cells',
+      'hdr[0].text = "Criterio"',
+      'hdr[1].text = "Evidencia"',
+      'hdr[2].text = "Estado"',
+      'for criterio, evidencia, estado in [',
+      '    ("Formato", "Extensión .docx y MIME Office", "Cumple"),',
+      '    ("Contenido", "Párrafos y secciones verificables", "Cumple"),',
+      '    ("Edición", "Tabla nativa editable", "Cumple"),',
+      ']:',
+      '    row = table.add_row().cells',
+      '    row[0].text = criterio',
+      '    row[1].text = evidencia',
+      '    row[2].text = estado',
+      'doc.add_heading("3. Conclusión", level=1)',
+      'doc.add_paragraph("El artefacto cumple el contrato mínimo para respuestas Word profesionales: no está vacío, contiene estructura y puede ser inspeccionado automáticamente.")',
+      'doc.save(os.environ["OUT_PATH"])',
+    ].join('\n'),
+    description: 'DOCX verificable',
+  }, {
+    userId: 'user-docx',
+    chatId: 'chat-docx',
+    onEvent: (event) => events.push(event),
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.format, 'docx');
+  assert.equal(result.mime, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+  assert.equal(result.validation.passed, true);
+  assert.ok(events.some((event) => event.type === 'file_artifact' && event.artifact.id === result.artifactId));
+
+  const verify = await INTERNAL.verifyArtifact.execute({ artifactId: result.artifactId }, {
+    userId: 'user-docx',
+    onEvent: () => {},
+  });
+  assert.equal(verify.ok, true);
+  assert.equal(verify.ext, 'docx');
+  assert.equal(verify.validation.passed, true);
+  assert.ok(verify.paragraphCount >= 7);
+  assert.match(verify.firstParagraphs.join('\n'), /Informe Profesional de Validaci[oó]n/);
+});
+
 test('agent task create_document: blocks invalid deliverables before artifact registration', async () => {
   const result = await INTERNAL.createDocument.execute({
     filename: 'broken.csv',
