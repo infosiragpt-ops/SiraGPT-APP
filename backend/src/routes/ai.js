@@ -3865,10 +3865,13 @@ router.post(
       // ── Orchestration enrichment: web search + orchestration memory ──
       let webSearchBlock = '';
       let orchMemoryBlock = '';
+      let webSearchSources = null;
+      let webSearchMeta = null;
       if (typeof prompt === 'string' && prompt.length > 0) {
         // Run web search + orchestration memory in parallel — both are
         // independent reads on the same prompt/userId.
         const _memoryAdapter = userId ? getMemoryAdapter() : null;
+        const _wsStart = Date.now();
         const [_webCtx, _orchMem] = await Promise.all([
           enrichWithWebSearch(prompt, {
             mode: webSearchMode === 'dedicated' ? 'dedicated' : 'auto',
@@ -3879,6 +3882,21 @@ router.post(
         ]);
         if (_webCtx?.block) webSearchBlock = _webCtx.block;
         if (_orchMem) orchMemoryBlock = _orchMem;
+        if (Array.isArray(_webCtx?.sources) && _webCtx.sources.length > 0) {
+          const elapsedMs = Date.now() - _wsStart;
+          webSearchSources = _webCtx.sources;
+          webSearchMeta = {
+            provider: _webCtx.source || 'web',
+            query: _webCtx.query || prompt.slice(0, 200),
+            elapsedMs,
+          };
+          // Stream the searched sources to the client so the UI can render
+          // the ChatGPT-style "Fuentes" chip + right-side Activity panel.
+          // Best-effort: never let a socket error break generation.
+          try {
+            res.write(`data: ${JSON.stringify({ type: 'web_sources', provider: webSearchMeta.provider, query: webSearchMeta.query, elapsedMs, sources: webSearchSources })}\n\n`);
+          } catch { /* socket gone */ }
+        }
       }
 
       // PR-5: Grounding preface para tareas de alto coste. Detecta si
@@ -5139,6 +5157,7 @@ router.post(
         const assistantMeta = {
           ...(codexMeta || {}),
           ...(normalizedRegenerationAttempt ? { regeneration: { attempt: normalizedRegenerationAttempt } } : {}),
+          ...(webSearchSources ? { webSources: webSearchSources, webSearchMeta } : {}),
         };
         const savedChat = await saveChatAndTrackUsage(
           userId,

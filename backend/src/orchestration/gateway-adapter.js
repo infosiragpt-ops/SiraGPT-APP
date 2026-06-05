@@ -97,8 +97,23 @@ async function enrichWithWebSearch(prompt, opts = {}) {
       `Resumen de fuentes — verificadas: ${tally.verified || 0}, sin verificar: ${tally.unverified || 0}, ` +
       `inferidas: ${tally.inferred || 0}.`;
 
+    const sources = sliced.map((r) => {
+      const cls = classifySource({ url: r.url });
+      let domain = '';
+      try { domain = new URL(r.url || '').hostname.replace(/^www\./, ''); } catch { domain = ''; }
+      return {
+        title: r.title || 'Source',
+        url: r.url || '',
+        snippet: (r.content || r.snippet || '').slice(0, 280),
+        domain,
+        confidence: cls.confidence,
+      };
+    });
+
     return {
       source: results.provider,
+      query: typeof prompt === 'string' ? prompt.slice(0, 200) : '',
+      sources,
       mode: dedicated ? 'dedicated' : 'auto',
       injectedAt: new Date().toISOString(),
       sourceConfidence: tally,
