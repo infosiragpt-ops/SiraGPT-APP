@@ -545,3 +545,82 @@ describe('source-preserving document edit — format inheritance', () => {
     assert.match(rPr, /w:sz w:val="28"/);
   });
 });
+
+describe('source-preserving document edit — agentic multi-step planning', () => {
+  const { planSourcePreservingOperations, splitRequestClauses } = sourcePreservingInternals;
+  const DOC_WITH_ANEXO3 = '<w:document><w:body>'
+    + '<w:p><w:r><w:t>Anexo 3. Cronograma del Desarrollo y Culminación de la Tesis</w:t></w:r></w:p>'
+    + '</w:body></w:document>';
+
+  it('splits a compound request into one clause per action verb', () => {
+    const clauses = splitRequestClauses('completa el anexo 3 en su mismo formato y agregar los instrumentos profesionales como un anexo 4');
+    assert.equal(clauses.length, 2);
+    assert.match(clauses[0], /anexo 3/);
+    assert.match(clauses[1], /anexo 4/);
+  });
+
+  it('plans a fill for the existing section and a labeled append for the new instrument anexo', () => {
+    const ops = planSourcePreservingOperations({
+      requestText: 'completa el anexo 3 en su mismo formato y agregar los instrumentos profesionales como un anexo 4',
+      documentXml: DOC_WITH_ANEXO3,
+    });
+    assert.equal(ops.length, 2);
+    assert.equal(ops[0].kind, 'fill_section');
+    assert.equal(ops[0].target.label, 'Anexo 3');
+    assert.equal(ops[1].kind, 'append_labeled');
+    assert.equal(ops[1].target.label, 'Anexo 4');
+    assert.equal(ops[1].wantsInstrument, true);
+  });
+
+  it('keeps a single-intent request as one operation (backward compatible)', () => {
+    assert.equal(splitRequestClauses('completa el anexo 3').length, 1);
+    const ops = planSourcePreservingOperations({ requestText: 'completa el anexo 3', documentXml: DOC_WITH_ANEXO3 });
+    assert.equal(ops.length, 1);
+    assert.equal(ops[0].kind, 'fill_section');
+  });
+
+  it('falls back to a generic instrument appendix when no explicit section is named', () => {
+    const ops = planSourcePreservingOperations({
+      requestText: 'agrega al final el instrumento de tesis en anexos',
+      documentXml: '<w:document><w:body></w:body></w:document>',
+    });
+    assert.equal(ops.length, 1);
+    assert.equal(ops[0].kind, 'append_generic');
+    assert.equal(ops[0].wantsInstrument, true);
+  });
+
+  it('executes both intentions: fills the Anexo 3 cronograma table AND appends a new Anexo 4 with the instrument', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-multi-'));
+    const originalPath = path.join(tmp, 'tesis.docx');
+    fs.writeFileSync(originalPath, await makeDocxWithAnexo3CronogramaBuffer());
+
+    const result = await generateSourcePreservingDocumentEdit({
+      sourceFile: {
+        id: 'file-docx',
+        path: originalPath,
+        originalName: 'tesis.docx',
+        filename: 'tesis.docx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        extractedText: 'Tesis con cronograma y matrices.',
+      },
+      prompt: 'deseo que completes el anexo 3 en su mismo formato y agregar los instrumentos profesionales como un anexo 4',
+      displayPrompt: 'deseo que completes el anexo 3 en su mismo formato y agregar los instrumentos profesionales como un anexo 4',
+      userId: 'user-1',
+      chatId: 'chat-1',
+    });
+
+    assert.equal(result.format, 'docx');
+    assert.equal(result.validation.passed, true);
+    assert.match(result.content, /2 pasos/);
+
+    const xml = new PizZip(fs.readFileSync(result.artifact.path)).file('word/document.xml').asText();
+    // Step 1: the cronograma table is filled in place.
+    assert.match(xml, /AVANCE DE LA TESIS/);
+    assert.match(xml, /Planificaci[oó]n/);
+    // Step 2: a brand-new Anexo 4 with the professional instrument is appended.
+    assert.match(xml, /Anexo 4\. Instrumentos de recolección de datos/);
+    assert.match(xml, /Escala de respuesta/);
+    // The originally requested Anexo 3 heading is preserved.
+    assert.match(xml, /Anexo 3\. Cronograma/);
+  });
+});

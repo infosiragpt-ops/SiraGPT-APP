@@ -302,16 +302,16 @@ function block(kind, text) {
   return { kind, text: String(text || '').trim() };
 }
 
-function buildInstrumentAppendix({ prompt = '', sourceText = '', originalName = '' } = {}) {
+// Just the instrument content (no ANEXOS / Anexo-N heading), so it can be
+// reused either as a standalone appendix or as the body of a brand-new labeled
+// anexo (e.g. "Anexo 4. Instrumentos...").
+function buildInstrumentAppendixBody({ prompt = '', sourceText = '', originalName = '' } = {}) {
   const title = inferDocumentTitle(sourceText, originalName);
   const variables = inferResearchVariables(title);
   const population = inferPopulation(sourceText, title);
   const place = inferPlace(sourceText, title);
 
   return [
-    block('pageBreak', ''),
-    block('heading1', 'ANEXOS'),
-    block('heading2', 'Anexo 1. Instrumento de recolección de datos'),
     block('normal', `Título de la investigación: ${title}.`),
     block('normal', `Instrumento propuesto: cuestionario estructurado dirigido a ${population}.`),
     block('normal', `Objetivo del instrumento: recopilar información pertinente para analizar ${variables.independent} y su relación con ${variables.dependent} en ${place}.`),
@@ -337,6 +337,15 @@ function buildInstrumentAppendix({ prompt = '', sourceText = '', originalName = 
     block('heading3', 'Criterio de aplicación'),
     block('normal', 'El instrumento debe validarse mediante juicio de expertos antes de su aplicación definitiva y, si corresponde, evaluar su confiabilidad mediante alfa de Cronbach en una prueba piloto.'),
     block('normal', `Solicitud aplicada: ${compact(prompt, 260)}`),
+  ];
+}
+
+function buildInstrumentAppendix(options = {}) {
+  return [
+    block('pageBreak', ''),
+    block('heading1', 'ANEXOS'),
+    block('heading2', 'Anexo 1. Instrumento de recolección de datos'),
+    ...buildInstrumentAppendixBody(options),
   ];
 }
 
@@ -1476,6 +1485,212 @@ async function validateEditedBuffer(buffer, format, blocks) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Agentic multi-step planner for source-preserving edits.
+//
+// A single user request can carry several intentions (e.g. "completa el anexo 3
+// y agrega los instrumentos como un anexo 4"). Instead of handling only the
+// first one, we (1) split the request into action clauses, (2) classify each
+// clause's intent, (3) inspect the document to decide the right operation, and
+// (4) execute every operation in order on the same evolving buffer.
+// ---------------------------------------------------------------------------
+
+const CLAUSE_ACTION_VERB = 'agreg\\w*|anad\\w*|incorpor\\w*|inclu\\w*|adjunt\\w*|complet\\w*|llen\\w*|rellen\\w*|desarroll\\w*|coloc\\w*|reescrib\\w*|reemplaz\\w*';
+
+function splitRequestClauses(text) {
+  const normalized = normalizeText(text);
+  if (!normalized) return [];
+  const anchorRe = new RegExp(`\\b(?:${CLAUSE_ACTION_VERB})\\b`, 'g');
+  const anchors = [];
+  let match;
+  while ((match = anchorRe.exec(normalized))) anchors.push(match.index);
+  if (anchors.length <= 1) return [normalized];
+  const clauses = [];
+  for (let i = 0; i < anchors.length; i += 1) {
+    const start = anchors[i];
+    const end = i + 1 < anchors.length ? anchors[i + 1] : normalized.length;
+    const clause = normalized.slice(start, end).trim();
+    if (clause) clauses.push(clause);
+  }
+  return clauses;
+}
+
+function clauseWantsInstrument(clauseNorm) {
+  return /\b(instrumento\w*|instrument\w*|intuemtno|intrumneto|intrumento|cuestionario\w*|encuesta\w*|escala\w*)\b/.test(clauseNorm);
+}
+
+function clauseIsFill(clauseNorm) {
+  return /\b(complet\w*|llen\w*|rellen\w*|desarroll\w*|termin\w*|reescrib\w*|reemplaz\w*)\b/.test(clauseNorm);
+}
+
+function clauseIsAppend(clauseNorm) {
+  return /\b(agreg\w*|anad\w*|incorpor\w*|inclu\w*|adjunt\w*|coloc\w*)\b/.test(clauseNorm)
+    || /\bcomo\s+(?:un\s+|una\s+)?(?:nuevo\s+|nueva\s+)?(?:anexo|apendice|seccion)\b/.test(clauseNorm);
+}
+
+function sectionExistsInDoc(documentXml, target) {
+  if (!target) return false;
+  const paragraphs = extractDocxParagraphs(documentXml);
+  return paragraphs.some((paragraph) => matchesTargetHeading(paragraph.normalized, target));
+}
+
+function buildOperationFromClause(clauseNorm, documentXml) {
+  const target = parseTargetSectionRequest(clauseNorm);
+  const wantsInstrument = clauseWantsInstrument(clauseNorm);
+  const fill = clauseIsFill(clauseNorm);
+  const append = clauseIsAppend(clauseNorm);
+
+  if (target) {
+    const exists = sectionExistsInDoc(documentXml, target);
+    // "agrega … como anexo 4" when the anexo does not exist yet → create it.
+    if (append && !exists) return { kind: 'append_labeled', target, wantsInstrument };
+    if (exists) return { kind: 'fill_section', target, wantsInstrument };
+    if (fill) return { kind: 'fill_section', target, wantsInstrument };
+    return { kind: 'append_labeled', target, wantsInstrument };
+  }
+  if (append || wantsInstrument) return { kind: 'append_generic', wantsInstrument };
+  if (fill) return null;
+  return null;
+}
+
+function planSourcePreservingOperations({ requestText = '', documentXml = '' } = {}) {
+  const clauses = splitRequestClauses(requestText);
+  const ops = [];
+  const seen = new Set();
+  for (const clause of clauses) {
+    const op = buildOperationFromClause(clause, documentXml);
+    if (!op) continue;
+    const key = `${op.kind}:${op.target ? op.target.label : ''}:${op.wantsInstrument ? 'instr' : ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    ops.push(op);
+  }
+  if (ops.length === 0) {
+    ops.push({ kind: 'append_generic', wantsInstrument: clauseWantsInstrument(normalizeText(requestText)) });
+  }
+  return ops;
+}
+
+function readDocxDocumentXml(buffer) {
+  try {
+    return new PizZip(buffer).file('word/document.xml')?.asText() || '';
+  } catch {
+    return '';
+  }
+}
+
+async function runFillSectionOperation({ buffer, op, requestText, sourceText, allSourceFiles, sourceFile, signal }) {
+  const plan = detectCronogramaAnexo3Plan(buffer, op.target);
+  if (plan?.type === 'cronograma_anexo_3') {
+    return {
+      buffer: fillDocxCronogramaSectionBuffer(buffer, op.target, plan),
+      validationBlocks: plan.validationBlocks || [],
+      step: { kind: 'fill_section', label: op.target.label, mode: 'cronograma_table' },
+    };
+  }
+  const blocks = await generateTargetSectionBlocks({
+    prompt: requestText,
+    target: op.target,
+    sourceFiles: allSourceFiles,
+    sourceText,
+    signal,
+  });
+  try {
+    return {
+      buffer: fillDocxSectionBuffer(buffer, op.target, blocks),
+      validationBlocks: blocks,
+      step: { kind: 'fill_section', label: op.target.label, mode: 'paragraphs' },
+    };
+  } catch (err) {
+    if (err?.code !== 'SECTION_NOT_FOUND') throw err;
+    const labeled = [
+      block('pageBreak', ''),
+      block('heading2', op.target.label),
+      ...blocks.filter((item) => item.kind !== 'pageBreak'),
+    ];
+    return {
+      buffer: appendToDocxBuffer(buffer, labeled),
+      validationBlocks: labeled,
+      step: { kind: 'append_labeled', label: op.target.label, mode: 'fallback_paragraphs' },
+    };
+  }
+}
+
+async function runAppendLabeledOperation({ buffer, op, requestText, sourceText, allSourceFiles, sourceFile, signal }) {
+  const originalName = sourceFile.originalName || sourceFile.filename;
+  const bodyBlocks = op.wantsInstrument
+    ? buildInstrumentAppendixBody({ prompt: requestText, sourceText, originalName })
+    : await generateTargetSectionBlocks({
+      prompt: requestText,
+      target: op.target,
+      sourceFiles: allSourceFiles,
+      sourceText,
+      signal,
+    });
+  const heading = op.wantsInstrument
+    ? `${op.target.label}. Instrumentos de recolección de datos`
+    : op.target.label;
+  const labeled = [
+    block('pageBreak', ''),
+    block('heading2', heading),
+    ...bodyBlocks.filter((item) => item.kind !== 'pageBreak'),
+  ];
+  return {
+    buffer: appendToDocxBuffer(buffer, labeled),
+    validationBlocks: labeled,
+    step: { kind: 'append_labeled', label: op.target.label, mode: op.wantsInstrument ? 'instrument' : 'generic' },
+  };
+}
+
+function runAppendGenericOperation({ buffer, op, requestText, sourceText, sourceFile }) {
+  const originalName = sourceFile.originalName || sourceFile.filename;
+  const blocks = op.wantsInstrument
+    ? buildInstrumentAppendix({ prompt: requestText, sourceText, originalName })
+    : buildAppendixBlocks({ prompt: requestText, sourceText: sourceText || sourceFile.extractedText || '', originalName });
+  return {
+    buffer: appendToDocxBuffer(buffer, blocks),
+    validationBlocks: blocks,
+    step: { kind: 'append_generic', mode: op.wantsInstrument ? 'instrument' : 'generic' },
+  };
+}
+
+async function executeDocxOperations({ input, ops, requestText, sourceText, allSourceFiles, sourceFile, signal }) {
+  let buffer = input;
+  const steps = [];
+  const validationBlocks = [];
+  for (const op of ops) {
+    let result;
+    if (op.kind === 'fill_section') {
+      result = await runFillSectionOperation({ buffer, op, requestText, sourceText, allSourceFiles, sourceFile, signal });
+    } else if (op.kind === 'append_labeled') {
+      result = await runAppendLabeledOperation({ buffer, op, requestText, sourceText, allSourceFiles, sourceFile, signal });
+    } else {
+      result = runAppendGenericOperation({ buffer, op, requestText, sourceText, sourceFile });
+    }
+    buffer = result.buffer;
+    steps.push(result.step);
+    validationBlocks.push(...(result.validationBlocks || []));
+  }
+  return { buffer, steps, validationBlocks };
+}
+
+function joinSpanishList(items) {
+  const list = items.filter(Boolean);
+  if (list.length === 0) return '';
+  if (list.length === 1) return list[0];
+  return `${list.slice(0, -1).join(', ')} y ${list[list.length - 1]}`;
+}
+
+function describeStep(step) {
+  if (step.kind === 'fill_section' && step.mode === 'cronograma_table') return `completé la tabla del cronograma de ${step.label}`;
+  if (step.kind === 'fill_section') return `completé ${step.label} respetando su formato`;
+  if (step.kind === 'append_labeled' && step.mode === 'instrument') return `agregué ${step.label} con los instrumentos profesionales`;
+  if (step.kind === 'append_labeled' && step.mode === 'fallback_paragraphs') return `agregué ${step.label} al final (no existía en el documento)`;
+  if (step.kind === 'append_labeled') return `agregué ${step.label}`;
+  if (step.kind === 'append_generic' && step.mode === 'instrument') return 'agregué un anexo con el instrumento de recolección de datos';
+  return 'agregué el contenido solicitado en anexos';
+}
+
 async function generateSourcePreservingDocumentEdit({
   sourceFile,
   sourceFiles = null,
@@ -1489,82 +1704,73 @@ async function generateSourcePreservingDocumentEdit({
   const requestText = displayPrompt || prompt || '';
   const allSourceFiles = Array.isArray(sourceFiles) && sourceFiles.length ? sourceFiles : [sourceFile];
   const sourceText = await buildCombinedSourceText(allSourceFiles);
-  const targetSection = isDocxFile(sourceFile) && isTargetedSectionFillRequest(requestText)
-    ? parseTargetSectionRequest(requestText)
-    : null;
   const input = await fs.promises.readFile(sourceFile.path);
-  const structuredSectionPlan = targetSection && isDocxFile(sourceFile)
-    ? detectCronogramaAnexo3Plan(input, targetSection)
-    : null;
-  let blocks = structuredSectionPlan?.validationBlocks || (targetSection
-    ? await generateTargetSectionBlocks({
-      prompt: requestText,
-      target: targetSection,
-      sourceFiles: allSourceFiles,
-      sourceText,
-      signal,
-    })
-    : buildAppendixBlocks({
-      prompt: requestText,
-      sourceText: sourceText || sourceFile.extractedText || '',
-      originalName: sourceFile.originalName || sourceFile.filename,
-    }));
+
   let format;
   let output;
   let suffix = 'con_anexos';
   let titleSuffix = 'con anexos';
   let explanation = 'Se conservó el archivo original y se agregó únicamente el bloque solicitado al final.';
   let content = 'Listo. Conservé el archivo original y agregué el contenido solicitado al final, en anexos, sin regenerar la portada ni reemplazar el documento.';
+  let validationBlocks;
+
   if (isDocxFile(sourceFile)) {
     format = 'docx';
-    if (targetSection) {
-      try {
-        output = structuredSectionPlan?.type === 'cronograma_anexo_3'
-          ? fillDocxCronogramaSectionBuffer(input, targetSection, structuredSectionPlan)
-          : fillDocxSectionBuffer(input, targetSection, blocks);
-        suffix = `${normalizeText(targetSection.kind).replace(/\s+/g, '_')}_${targetSection.number}_completado`;
-        titleSuffix = `${targetSection.label} completado`;
-        explanation = `Se conservó el DOCX original y se completó únicamente ${targetSection.label}.`;
-        content = `Listo. Conservé el DOCX original y completé únicamente ${targetSection.label} usando el contexto combinado de los documentos adjuntos.`;
-      } catch (err) {
-        if (err?.code !== 'SECTION_NOT_FOUND' && err?.code !== 'CRONOGRAMA_TABLE_NOT_FOUND') throw err;
-        // Respaldo: la sección solicitada no existe dentro del documento.
-        // En lugar de fallar, la agregamos al final con su propio encabezado,
-        // conservando intacto el resto del archivo (portada, cuerpo, etc.).
-        blocks = [
-          block('pageBreak', ''),
-          block('heading2', targetSection.label),
-          ...blocks.filter((item) => item.kind !== 'pageBreak'),
-        ];
-        output = appendToDocxBuffer(input, blocks);
-        suffix = `${normalizeText(targetSection.kind).replace(/\s+/g, '_')}_${targetSection.number}`;
-        titleSuffix = `con ${targetSection.label}`;
-        explanation = `No se encontró ${targetSection.label} dentro del documento; se agregó al final conservando el resto del archivo.`;
-        content = `No encontré "${targetSection.label}" dentro del documento, así que agregué el contenido al final como ${targetSection.label}, conservando intacto el resto del archivo.`;
-      }
-    } else {
-      output = appendToDocxBuffer(input, blocks);
-      content = 'Listo. Conservé el DOCX original y agregué el contenido solicitado al final, en anexos, sin regenerar la portada ni reemplazar el documento.';
+    // Agentic step 1-3: analyse the request + document and plan one or more
+    // operations; step 4: execute every operation in order on the same buffer.
+    const documentXml = readDocxDocumentXml(input);
+    const operations = planSourcePreservingOperations({ requestText, documentXml });
+    const execution = await executeDocxOperations({
+      input,
+      ops: operations,
+      requestText,
+      sourceText,
+      allSourceFiles,
+      sourceFile,
+      signal,
+    });
+    output = execution.buffer;
+    validationBlocks = execution.validationBlocks;
+
+    const labels = execution.steps.map((step) => step.label).filter(Boolean);
+    if (labels.length) {
+      suffix = `${labels.map((label) => normalizeText(label).replace(/\s+/g, '_')).join('_')}_completado`;
+      titleSuffix = `${labels.join(' y ')} completado`;
     }
-  } else if (isXlsxFile(sourceFile)) {
-    format = 'xlsx';
-    output = await appendToXlsxBuffer(input, blocks);
-    content = 'Listo. Conservé el XLSX original y agregué el contenido solicitado en una hoja nueva, sin reemplazar las hojas existentes.';
-  } else if (isPdfFile(sourceFile)) {
-    format = 'pdf';
-    output = await appendToPdfBuffer(input, blocks);
-    content = 'Listo. Conservé el PDF original y agregué el contenido solicitado al final, sin reemplazar las páginas existentes.';
-  } else if (isTextLikeFile(sourceFile)) {
-    format = textLikeFormatForFile(sourceFile) || 'txt';
-    output = appendToTextLikeBuffer(input, blocks, format);
-    content = `Listo. Conservé el ${format.toUpperCase()} original y agregué el contenido solicitado sin reemplazar el archivo base.`;
+    const stepSummary = joinSpanishList(execution.steps.map(describeStep));
+    explanation = stepSummary
+      ? `Se conservó el DOCX original; ${stepSummary}.`
+      : 'Se conservó el DOCX original y se aplicó la edición solicitada.';
+    content = stepSummary
+      ? `Listo. Conservé el DOCX original y, en ${execution.steps.length === 1 ? 'un paso' : `${execution.steps.length} pasos`}, ${stepSummary}, sin alterar el resto del archivo.`
+      : 'Listo. Conservé el DOCX original y apliqué la edición solicitada sin alterar el resto del archivo.';
   } else {
-    const ext = path.extname(sourceFile.originalName || sourceFile.filename || '').replace(/^\./, '').toLowerCase();
-    throw new Error(`La edición preservadora todavía no soporta archivos .${ext || 'desconocidos'}. Formatos soportados: ${supportedSourceEditLabel()}.`);
+    const blocks = buildAppendixBlocks({
+      prompt: requestText,
+      sourceText: sourceText || sourceFile.extractedText || '',
+      originalName: sourceFile.originalName || sourceFile.filename,
+    });
+    validationBlocks = blocks;
+    if (isXlsxFile(sourceFile)) {
+      format = 'xlsx';
+      output = await appendToXlsxBuffer(input, blocks);
+      content = 'Listo. Conservé el XLSX original y agregué el contenido solicitado en una hoja nueva, sin reemplazar las hojas existentes.';
+    } else if (isPdfFile(sourceFile)) {
+      format = 'pdf';
+      output = await appendToPdfBuffer(input, blocks);
+      content = 'Listo. Conservé el PDF original y agregué el contenido solicitado al final, sin reemplazar las páginas existentes.';
+    } else if (isTextLikeFile(sourceFile)) {
+      format = textLikeFormatForFile(sourceFile) || 'txt';
+      output = appendToTextLikeBuffer(input, blocks, format);
+      content = `Listo. Conservé el ${format.toUpperCase()} original y agregué el contenido solicitado sin reemplazar el archivo base.`;
+    } else {
+      const ext = path.extname(sourceFile.originalName || sourceFile.filename || '').replace(/^\./, '').toLowerCase();
+      throw new Error(`La edición preservadora todavía no soporta archivos .${ext || 'desconocidos'}. Formatos soportados: ${supportedSourceEditLabel()}.`);
+    }
   }
 
   const filename = safeFilename(sourceFile.originalName || sourceFile.filename, suffix, format);
-  const validation = await validateEditedBuffer(output, format, blocks);
+  const validation = await validateEditedBuffer(output, format, validationBlocks);
   const { artifact, previewHtml, mime } = await persistEditedArtifact({
     buffer: output,
     format,
@@ -1646,6 +1852,7 @@ module.exports = {
     buildCronogramaAnexo3Plan,
     buildDocumentFormattingTemplate,
     buildInstrumentAppendix,
+    buildInstrumentAppendixBody,
     buildSectionFormattingTemplate,
     detectCronogramaAnexo3Plan,
     extractParagraphProperties,
@@ -1654,7 +1861,9 @@ module.exports = {
     inferResearchVariables,
     isTargetedSectionFillRequest,
     locateCronogramaTable,
+    planSourcePreservingOperations,
     resolveStoredFilePath,
     sanitizeCapturedParagraphProperties,
+    splitRequestClauses,
   },
 };
