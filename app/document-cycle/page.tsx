@@ -130,11 +130,11 @@ export default function DocumentCyclePage() {
         maxRuntimeMs: 2 * 60 * 60 * 1000,
         signal: controller.signal,
       })) {
-        const anyEvt = evt as any
-        if (anyEvt.type === "cycle_init" && Array.isArray(anyEvt.stages)) {
-          setCycleStages(anyEvt.stages)
-        } else if (anyEvt.type === "cycle_stage" && anyEvt.stage) {
-          setStageStatus((prev) => ({ ...prev, [anyEvt.stage]: anyEvt.status === "done" ? "done" : "start" }))
+        if (evt.type === "cycle_init" && Array.isArray(evt.stages)) {
+          setCycleStages(evt.stages)
+        } else if (evt.type === "cycle_stage" && evt.stage) {
+          const stageId = evt.stage
+          setStageStatus((prev) => ({ ...prev, [stageId]: evt.status === "done" ? "done" : "start" }))
         }
         live = reduceEvent(live, evt)
         setState({ ...live })
