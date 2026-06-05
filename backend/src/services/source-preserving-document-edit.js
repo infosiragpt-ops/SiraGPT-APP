@@ -1741,22 +1741,197 @@ function buildOperationFromClause(clauseNorm, documentXml) {
   return null;
 }
 
+function operationKey(op) {
+  return `${op.kind}:${op.target ? op.target.label : ''}:${op.wantsInstrument ? 'instr' : ''}`;
+}
+
+const BULK_FILL_SCOPE_RE = /\b(tablas?|anexos?|secciones?|cuadros?|matrices?|matriz|vac[ií]as?|vac[ií]os?|faltantes?|pendientes?|todo|todos|todas|que\s+falt\w*)\b/;
+
 function planSourcePreservingOperations({ requestText = '', documentXml = '' } = {}) {
   const clauses = splitRequestClauses(requestText);
   const ops = [];
   const seen = new Set();
-  for (const clause of clauses) {
-    const op = buildOperationFromClause(clause, documentXml);
-    if (!op) continue;
-    const key = `${op.kind}:${op.target ? op.target.label : ''}:${op.wantsInstrument ? 'instr' : ''}`;
-    if (seen.has(key)) continue;
+  const add = (op) => {
+    if (!op) return;
+    const key = operationKey(op);
+    if (seen.has(key)) return;
     seen.add(key);
     ops.push(op);
+  };
+
+  for (const clause of clauses) add(buildOperationFromClause(clause, documentXml));
+
+  // Broader understanding: "completa / rellena las tablas vacías / los anexos /
+  // todo lo que falte" with no explicit number → fill every empty-table or empty
+  // section the document actually has.
+  const norm = normalizeText(requestText);
+  const wantsBulkFill = clauseIsFill(norm) && BULK_FILL_SCOPE_RE.test(norm);
+  const hasExplicitTarget = ops.some((op) => op.target);
+  if (wantsBulkFill && !hasExplicitTarget) {
+    for (const section of analyzeDocumentStructure(documentXml).sections) {
+      if (section.target && (section.emptyTableRows > 0 || section.isEmpty)) {
+        add({ kind: 'fill_section', target: section.target, wantsInstrument: false });
+      }
+    }
   }
+
   if (ops.length === 0) {
-    ops.push({ kind: 'append_generic', wantsInstrument: clauseWantsInstrument(normalizeText(requestText)) });
+    ops.push({ kind: 'append_generic', wantsInstrument: clauseWantsInstrument(norm) });
   }
   return ops;
+}
+
+const SECTION_MENTION_RE = /\b(?:anexo|anexos|apendice|apendices|seccion|secciones|capitulo|capitulos|apartado|apartados)\s*(?:n(?:ro|umero)?\.?|num\.?|no\.?|#)?\s*(?:[0-9]{1,3}|[ivxlcdm]{1,10})\b/g;
+const TABLE_CONTENT_CUE_RE = /\b(cronograma\w*|matriz|matrices|tabla\w*|cuadro\w*|presupuesto\w*)\b/;
+
+// True when the heuristic is sure enough to skip the (slower) LLM brain. It
+// escalates when a named section produced no operation, or when a table cue
+// (cronograma/matriz/tabla…) has no matching fill and the sections aren't fully
+// covered — i.e. the request likely carries an intent the heuristic missed.
+function heuristicPlanIsConfident(ops, requestText) {
+  if (!ops.length) return false;
+  const norm = normalizeText(requestText);
+  const sectionMentions = (norm.match(SECTION_MENTION_RE) || []).length;
+  const targetedOps = ops.filter((op) => op.target).length;
+  const fullyTargeted = sectionMentions >= 1 && targetedOps >= sectionMentions;
+
+  if (TABLE_CONTENT_CUE_RE.test(norm) && !ops.some((op) => op.kind === 'fill_section') && !fullyTargeted) {
+    return false;
+  }
+  if (sectionMentions >= 1) return targetedOps >= sectionMentions;
+  if (ops.length === 1 && ops[0].kind === 'append_generic') {
+    return clauseIsAppend(norm) || clauseWantsInstrument(norm);
+  }
+  return true;
+}
+
+// Deterministic understanding of the document: enumerate its anexo/capítulo/
+// sección headings and, per section, whether the body holds a (fillable) table
+// or is empty/placeholder. Feeds both the bulk-fill heuristic and the LLM brain.
+function analyzeDocumentStructure(documentXml = '') {
+  if (!documentXml) return { sections: [] };
+  const paragraphs = extractDocxParagraphs(documentXml);
+  const tables = extractDocxTables(documentXml);
+  const headingRe = /\b(?:anexo|anexos|apendice|apendices|capitulo|capitulos|seccion|secciones)\s*(?:n(?:ro|umero)?\.?|num\.?|no\.?|#)?\s*(?:[0-9]{1,3}|[ivxlcdm]{1,10})\b/;
+  const headingIdx = [];
+  paragraphs.forEach((paragraph, idx) => {
+    if (headingRe.test(paragraph.normalized)) headingIdx.push(idx);
+  });
+  const bodyEnd = documentXml.lastIndexOf('</w:body>');
+  const docEnd = bodyEnd >= 0 ? bodyEnd : documentXml.length;
+
+  const sections = headingIdx.map((idx, order) => {
+    const heading = paragraphs[idx];
+    const sectionStart = heading.end;
+    const sectionEnd = order + 1 < headingIdx.length ? paragraphs[headingIdx[order + 1]].start : docEnd;
+    const table = tables.find((t) => t.start >= sectionStart && t.start < sectionEnd) || null;
+    const tableAnalysis = table ? analyzeTableForFill(table.xml) : null;
+    const bodyParagraphs = paragraphs.filter((p) => p.start >= sectionStart && p.start < sectionEnd);
+    const hasNarrative = bodyParagraphs.some((p) => p.text.trim() && !isPlaceholderParagraph(p.text));
+    const tableHasContent = Boolean(table) && !tableAnalysis;
+    const target = parseTargetSectionRequest(heading.text);
+    return {
+      label: target ? target.label : compact(heading.text, 60),
+      title: compact(heading.text, 120),
+      target,
+      hasTable: Boolean(table),
+      tableHeaders: tableAnalysis ? tableAnalysis.labels : null,
+      emptyTableRows: tableAnalysis ? tableAnalysis.dataRows.length : 0,
+      isEmpty: !hasNarrative && !tableHasContent,
+    };
+  });
+  return { sections };
+}
+
+function summarizeStructureForPrompt(structure = { sections: [] }) {
+  if (!structure.sections.length) return '(no se detectaron anexos ni secciones numeradas)';
+  return structure.sections.map((section) => {
+    let state;
+    if (section.hasTable && section.emptyTableRows > 0) {
+      state = `tabla por completar [columnas: ${(section.tableHeaders || []).join(', ') || '?'}; ${section.emptyTableRows} filas vacías]`;
+    } else if (section.hasTable) {
+      state = 'tabla ya completa';
+    } else if (section.isEmpty) {
+      state = 'vacía / por completar';
+    } else {
+      state = 'con contenido';
+    }
+    return `- ${section.label}: ${state}`;
+  }).join('\n');
+}
+
+// LLM "brain" — interprets the user's intent against the document structure and
+// returns a normalized operation plan. Returns null when unavailable/invalid so
+// the caller keeps the deterministic heuristic plan.
+async function planOperationsWithLLM({ requestText = '', documentXml = '', signal } = {}) {
+  if (!process.env.OPENAI_API_KEY) return null;
+  try {
+    const structure = analyzeDocumentStructure(documentXml);
+    const client = createContentClient('OpenAI');
+    const completion = await client.chat.completions.create({
+      model: DEFAULT_MODEL,
+      messages: [
+        {
+          role: 'system',
+          content: [
+            'Eres el cerebro de un editor de documentos Word. Interpretas la intención del usuario y la conviertes en un PLAN de operaciones sobre el documento; no redactas el contenido.',
+            'Operaciones válidas: "fill" (completar una sección o tabla que YA existe) y "append" (agregar una sección/anexo nuevo).',
+            'Incluye solo lo que el usuario realmente pide, en orden. Si pide "todo lo que falte/tablas vacías", incluye una operación fill por cada sección por completar.',
+          ].join(' '),
+        },
+        {
+          role: 'user',
+          content: [
+            `Petición del usuario: ${requestText}`,
+            '',
+            'Estructura actual del documento:',
+            summarizeStructureForPrompt(structure),
+            '',
+            'Responde SOLO en JSON con esta forma exacta:',
+            '{"operations":[{"action":"fill"|"append","section":"Anexo 3"|null,"content":"instrument"|"table"|"text"|"auto"}]}',
+            'Usa "section" tal como aparece arriba (p. ej. "Anexo 3"), o null si no aplica. Para cuestionarios/encuestas/instrumentos usa content="instrument".',
+          ].join('\n'),
+        },
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0.1,
+    }, { signal, timeout: 20_000 });
+
+    const raw = completion?.choices?.[0]?.message?.content;
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    const rawOps = Array.isArray(parsed.operations) ? parsed.operations : [];
+    const ops = [];
+    const seen = new Set();
+    for (const rawOp of rawOps) {
+      const action = String(rawOp?.action || '').toLowerCase();
+      const target = rawOp?.section ? parseTargetSectionRequest(String(rawOp.section)) : null;
+      const wantsInstrument = String(rawOp?.content || '').toLowerCase() === 'instrument';
+      let op = null;
+      if (action === 'fill' && target) {
+        op = { kind: sectionExistsInDoc(documentXml, target) ? 'fill_section' : 'append_labeled', target, wantsInstrument };
+      } else if (action === 'append') {
+        op = target ? { kind: 'append_labeled', target, wantsInstrument } : { kind: 'append_generic', wantsInstrument };
+      }
+      if (!op) continue;
+      const key = operationKey(op);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      ops.push(op);
+    }
+    return ops.length ? ops : null;
+  } catch {
+    return null;
+  }
+}
+
+// Heuristic first (fast, deterministic); escalate to the LLM brain only when the
+// heuristic is unsure about the user's intent.
+async function planSourcePreservingOperationsSmart({ requestText = '', documentXml = '', signal } = {}) {
+  const heuristic = planSourcePreservingOperations({ requestText, documentXml });
+  if (heuristicPlanIsConfident(heuristic, requestText)) return heuristic;
+  const llm = await planOperationsWithLLM({ requestText, documentXml, signal });
+  return llm && llm.length ? llm : heuristic;
 }
 
 function readDocxDocumentXml(buffer) {
@@ -1939,7 +2114,7 @@ async function generateSourcePreservingDocumentEdit({
     // Agentic step 1-3: analyse the request + document and plan one or more
     // operations; step 4: execute every operation in order on the same buffer.
     const documentXml = readDocxDocumentXml(input);
-    const operations = planSourcePreservingOperations({ requestText, documentXml });
+    const operations = await planSourcePreservingOperationsSmart({ requestText, documentXml, signal });
     const execution = await executeDocxOperations({
       input,
       ops: operations,
@@ -2074,8 +2249,12 @@ module.exports = {
     buildInstrumentAppendix,
     buildInstrumentAppendixBody,
     buildSectionFormattingTemplate,
+    analyzeDocumentStructure,
     analyzeTableForFill,
     detectCronogramaAnexo3Plan,
+    planOperationsWithLLM,
+    planSourcePreservingOperationsSmart,
+    summarizeStructureForPrompt,
     detectSectionTablePlan,
     extractParagraphProperties,
     extractRunProperties,
@@ -2083,6 +2262,7 @@ module.exports = {
     fillGenericSectionTableBuffer,
     fillGenericSectionTableXml,
     generateTableRowsContent,
+    heuristicPlanIsConfident,
     inferResearchVariables,
     isTargetedSectionFillRequest,
     locateCronogramaTable,

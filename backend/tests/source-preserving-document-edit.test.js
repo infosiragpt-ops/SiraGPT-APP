@@ -716,3 +716,85 @@ describe('source-preserving document edit — generic table fill (any section)',
     }
   });
 });
+
+describe('source-preserving document edit — document-understanding brain', () => {
+  const {
+    analyzeDocumentStructure,
+    heuristicPlanIsConfident,
+    planOperationsWithLLM,
+    planSourcePreservingOperations,
+    planSourcePreservingOperationsSmart,
+    summarizeStructureForPrompt,
+  } = sourcePreservingInternals;
+
+  async function makeMixedThesisDocxXml() {
+    const headerCell = (text) => new TableCell({ children: [new Paragraph(text)] });
+    const blankCell = () => new TableCell({ children: [new Paragraph('')] });
+    const emptyTable = (headers) => new Table({
+      rows: [
+        new TableRow({ children: headers.map(headerCell) }),
+        ...Array.from({ length: 4 }, () => new TableRow({ children: headers.map(blankCell) })),
+      ],
+    });
+    const doc = new Document({
+      sections: [{
+        children: [
+          new Paragraph('Anexo 1. Matriz de Consistencia'),
+          new Paragraph('Contenido ya redactado del anexo uno con su análisis completo.'),
+          new Paragraph('Anexo 3. Cronograma del Desarrollo y Culminación de la Tesis'),
+          emptyTable(['AVANCE DE LA TESIS', 'ACCIONES', 'ESTADO', 'FECHAS']),
+          new Paragraph('Anexo 5. Matriz de Operacionalización de Variables'),
+          emptyTable(['Variable', 'Dimensión', 'Indicador', 'Ítems']),
+        ],
+      }],
+    });
+    return new PizZip(Buffer.from(await Packer.toBuffer(doc))).file('word/document.xml').asText();
+  }
+
+  it('analyzes the document structure: which sections exist, hold a fillable table, or are empty', async () => {
+    const documentXml = await makeMixedThesisDocxXml();
+    const { sections } = analyzeDocumentStructure(documentXml);
+    const byLabel = Object.fromEntries(sections.map((s) => [s.label, s]));
+    assert.equal(byLabel['Anexo 1'].hasTable, false);
+    assert.equal(byLabel['Anexo 1'].isEmpty, false);
+    assert.equal(byLabel['Anexo 3'].hasTable, true);
+    assert.equal(byLabel['Anexo 3'].emptyTableRows, 4);
+    assert.deepEqual(byLabel['Anexo 5'].tableHeaders, ['Variable', 'Dimensión', 'Indicador', 'Ítems']);
+    assert.match(summarizeStructureForPrompt({ sections }), /Anexo 3: tabla por completar/);
+  });
+
+  it('understands a bulk request and fills every empty-table section deterministically', async () => {
+    const documentXml = await makeMixedThesisDocxXml();
+    const ops = planSourcePreservingOperations({ requestText: 'rellena todas las tablas vacías de los anexos', documentXml });
+    const filled = ops.filter((op) => op.kind === 'fill_section').map((op) => op.target.label).sort();
+    assert.deepEqual(filled, ['Anexo 3', 'Anexo 5']);
+  });
+
+  it('routes clear requests to the heuristic and ambiguous ones to the LLM brain', async () => {
+    const documentXml = await makeMixedThesisDocxXml();
+    const confident = (req) => heuristicPlanIsConfident(planSourcePreservingOperations({ requestText: req, documentXml }), req);
+    // Clear — handled deterministically, no model call.
+    assert.equal(confident('completa el anexo 3'), true);
+    assert.equal(confident('completa el anexo 3 y agregar los instrumentos como un anexo 4'), true);
+    assert.equal(confident('agrega al final el instrumento de tesis en anexos'), true);
+    // Ambiguous — a table cue with no matching fill / no covered section → escalate.
+    assert.equal(confident('pon el cronograma y agrega el cuestionario de mi tesis'), false);
+    assert.equal(confident('necesito que me ayudes con mi tesis'), false);
+  });
+
+  it('keeps the smart planner deterministic (heuristic) when the model is unavailable', async () => {
+    const documentXml = await makeMixedThesisDocxXml();
+    const savedKey = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    try {
+      assert.equal(await planOperationsWithLLM({ requestText: 'pon el cronograma', documentXml }), null);
+      const ops = await planSourcePreservingOperationsSmart({ requestText: 'completa el anexo 3', documentXml });
+      assert.equal(ops.length, 1);
+      assert.equal(ops[0].kind, 'fill_section');
+      assert.equal(ops[0].target.label, 'Anexo 3');
+    } finally {
+      if (savedKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = savedKey;
+    }
+  });
+});
