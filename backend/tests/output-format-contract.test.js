@@ -87,3 +87,39 @@ test('returns no directive lines when no format was requested', () => {
   assert.deepEqual(buildFormatDirectiveLines('¿de qué trata el documento?', { lang: 'es' }), []);
   assert.deepEqual(buildFormatDirectiveLines('', { lang: 'en' }), []);
 });
+
+test('content mention of "lista" is not treated as a bullet-format request', () => {
+  assert.equal(parseOutputFormatRequest('analiza la lista de autores del informe').list, null);
+  assert.equal(wantsBulletList('revisa la lista de referencias'), false);
+});
+
+test('a content "lista" mention does not suppress a paragraph directive', () => {
+  const parsed = parseOutputFormatRequest('analiza la lista de autores en 2 párrafos');
+  assert.equal(parsed.list, null);
+  assert.equal(parsed.paragraphs, 2);
+  const lines = buildFormatDirectiveLines('analiza la lista de autores en 2 párrafos', { lang: 'es' });
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /2 parrafos/);
+});
+
+test('explicit list-format cue is still detected', () => {
+  assert.equal(parseOutputFormatRequest('preséntalo en forma de lista').list, 'bullet');
+  assert.equal(wantsBulletList('dame una lista con los hallazgos'), true);
+});
+
+test('numbered list takes precedence over bullet cues', () => {
+  assert.equal(parseOutputFormatRequest('dame una lista numerada de viñetas').list, 'numbered');
+});
+
+test('list directive takes precedence over paragraph count', () => {
+  const lines = buildFormatDirectiveLines('en forma de lista y en 3 párrafos', { lang: 'es' });
+  assert.equal(lines.length, 1);
+  assert.doesNotMatch(lines.join('\n'), /parrafos/);
+});
+
+test('paragraph count composes with a max-sentences limit', () => {
+  const lines = buildFormatDirectiveLines('en 2 párrafos de 3 oraciones cada uno', { lang: 'es' });
+  const joined = lines.join('\n');
+  assert.match(joined, /2 parrafos/);
+  assert.match(joined, /3 oraciones|3 frases|oraciones/);
+});
