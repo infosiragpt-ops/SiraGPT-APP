@@ -1667,7 +1667,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     userId: user.id,
     fileIds: files,
     query: deterministicAttachmentAnswer ? '' : displayGoal || goal,
-    maxChars: deterministicAttachmentAnswer ? 120000 : undefined,
+    maxChars: deterministicAttachmentAnswer ? 120000 : 36000,
   });
   if (chatId && prisma) {
     try {
