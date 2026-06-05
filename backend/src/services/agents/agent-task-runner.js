@@ -862,14 +862,15 @@ function shouldUseDeterministicAttachmentAnswer({
   if (/\b(?:web|internet|google|busca|buscar|investiga|investigar|fuentes externas|papers recientes|articulos recientes)\b/.test(request)) {
     return false;
   }
-  if (/\b(?:tabla|matriz|entregable|descargable|crea|crear|genera|generar|formatea|convierte|exporta|exportar)\b/.test(request)) {
+  if (/\b(?:entregable|descargable|convierte|exporta|exportar)\b/.test(request)) {
     return false;
   }
-  if (/\b(?:calcula|calcular|comput[ao]|total(?:es)?|diferencia|promedio|ponderad[ao]|porcentaje|margen|variaci[oó]n|contradicci[oó]n|conflicto|discrepa|discrepancia|reconcilia|compar[ao]|contrasta|cruza|exact[ao]s?|cifra\s+final)\b/.test(request)) {
+  if (/\b(?:crea|crear|genera|generar|formatea)\b/.test(request)
+    && !/\b(?:no\s+(?:crees|crear|generes|generar)|sin\s+(?:crear|generar)|responde\s+solo\s+en\s+chat|solo\s+en\s+chat)\b/.test(request)) {
     return false;
   }
 
-  return /\b(?:resumen|resume|sintesis|analiza|analisis|explica|describe|descripcion|que dice|de que trata|conclusion|conclusiones|recomendacion|recomendaciones|extrae|lee|revisa|imagen|foto|documento|archivo|adjunto|parrafo|parrafos)\b/.test(request);
+  return /\b(?:resumen|resume|sintesis|analiza|analisis|explica|describe|descripcion|que dice|de que trata|conclusion|conclusiones|recomendacion|recomendaciones|extrae|lee|revisa|identifica|resuelve|detecta|calcula|calcular|comput[ao]|total(?:es)?|diferencia|promedio|ponderad[ao]|porcentaje|margen|variaci[oó]n|contradicci[oó]n|conflicto|discrepa|discrepancia|reconcilia|compar[ao]|contrasta|cruza|exact[ao]s?|cifra\s+final|fuentes?|riesgos?|tickets?|modulos?|m[oó]dulos?|fecha|go|pais|pa[ií]s|imagen|foto|documento|archivo|adjunto|parrafo|parrafos)\b/.test(request);
 }
 
 function wantsSingleParagraphAnswer(request) {

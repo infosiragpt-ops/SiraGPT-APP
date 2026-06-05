@@ -256,11 +256,12 @@ test('buildAttachmentGroundedFallbackAnswer respects one-paragraph XLSX summarie
 });
 
 test('runAgentTaskJob: recovers weak tool-unavailable attachment final answer', async () => {
-  const restoreEnv = rememberEnv(['OPENAI_API_KEY', 'AGENT_TASK_STORE_DIR', 'NODE_ENV']);
+  const restoreEnv = rememberEnv(['OPENAI_API_KEY', 'AGENT_TASK_STORE_DIR', 'NODE_ENV', 'AGENT_TASK_ATTACHMENT_FASTPATH']);
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'siragpt-doc-tool-unavailable-'));
   process.env.OPENAI_API_KEY = 'test-openai-key';
   process.env.AGENT_TASK_STORE_DIR = storeDir;
   process.env.NODE_ENV = 'test';
+  process.env.AGENT_TASK_ATTACHMENT_FASTPATH = '0';
   clearAgentModules();
 
   const prisma = require('../src/config/database');
@@ -371,6 +372,14 @@ test('shouldUseDeterministicAttachmentAnswer: routes simple attachment summaries
     shouldUseDeterministicAttachmentAnswer({
       goal: 'calcula el total real y compara la contradiccion entre PDF y DOCX adjuntos',
       files: ['file-docx-1', 'file-pdf-1'],
+      documentPolicy: { mode: 'chat_only', autoGenerate: false },
+    }),
+    true,
+  );
+  assert.equal(
+    shouldUseDeterministicAttachmentAnswer({
+      goal: 'exporta una matriz descargable con este documento',
+      files: ['file-docx-1'],
       documentPolicy: { mode: 'chat_only', autoGenerate: false },
     }),
     false,
@@ -561,6 +570,108 @@ test('runAgentTaskJob: simple uploaded document summary bypasses ReAct and compl
     assert.equal(contractInvoked, false);
     assert.match(snapshot.streamState.finalText, /Análisis del documento adjunto/);
     assert.match(snapshot.streamState.finalText, /salud mental universitaria/);
+  } finally {
+    prisma.file.findMany = originalFindMany;
+    persistence.upsertAgentTask = originalUpsert;
+    persistence.appendAgentTaskEvent = originalAppend;
+    persistence.persistGeneratedArtifact = originalArtifact;
+    reactAgent.run = originalRun;
+    taskContractResolver.resolveTaskContract = originalResolveTaskContract;
+    fs.rmSync(storeDir, { recursive: true, force: true });
+    clearAgentModules();
+    restoreEnv();
+  }
+});
+
+test('runAgentTaskJob: complex uploaded document analysis bypasses ReAct and completes terminally', async () => {
+  const restoreEnv = rememberEnv(['OPENAI_API_KEY', 'AGENT_TASK_STORE_DIR', 'NODE_ENV']);
+  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'siragpt-doc-complex-fastpath-'));
+  process.env.OPENAI_API_KEY = 'test-openai-key';
+  process.env.AGENT_TASK_STORE_DIR = storeDir;
+  process.env.NODE_ENV = 'test';
+  clearAgentModules();
+
+  const prisma = require('../src/config/database');
+  const persistence = require('../src/services/agents/agent-task-persistence');
+  const reactAgent = require('../src/services/react-agent');
+  const taskContractResolver = require('../src/services/agents/task-contract-resolver');
+  const originalFindMany = prisma.file.findMany;
+  const originalUpsert = persistence.upsertAgentTask;
+  const originalAppend = persistence.appendAgentTaskEvent;
+  const originalArtifact = persistence.persistGeneratedArtifact;
+  const originalRun = reactAgent.run;
+  const originalResolveTaskContract = taskContractResolver.resolveTaskContract;
+  let reactInvoked = false;
+  let contractInvoked = false;
+
+  const extractedText = [
+    'Total contratado aprobado: 480000 USD.',
+    'Total real validado: 484500 USD.',
+    'Varianza neta: 4500 USD por encima del contrato.',
+    'SLA ponderado validado: 94.0%.',
+    'Contingencia disponible: 35000 USD, pero no debe liberarse hasta cerrar P1 y subir SLA de Andina y Delta por encima de 95%.',
+    'Andina Peru 180000 165000 91.2 12.4 38',
+    'Bosque Chile 140000 151500 97.5 4.8 12',
+    'Cumbre Bolivia 90000 104000 96.1 5.2 9',
+    'Delta Colombia 70000 64000 89.4 15.8 41',
+    'Fecha oficial de lanzamiento: 2026-09-05. Si el PDF indica 2026-08-30, esa fecha es preliminar.',
+    'P1 - Privacy - Severidad Critica - Mitigacion: firmar addendum DPA regional - Fecha limite: 2026-07-12 - Bloquea: Colombia.',
+  ].join('\n');
+
+  prisma.file.findMany = async () => [{
+    id: 'file-doc-complex-1',
+    userId: 'user-doc-complex-1',
+    filename: 'orion-paquete.txt',
+    originalName: 'orion-paquete.txt',
+    mimeType: 'text/plain',
+    size: Buffer.byteLength(extractedText),
+    path: '/tmp/orion-paquete.txt',
+    extractedText,
+    openaiFileId: null,
+    documentAnalysis: null,
+  }];
+
+  persistence.upsertAgentTask = async () => null;
+  persistence.appendAgentTaskEvent = async () => null;
+  persistence.persistGeneratedArtifact = async () => null;
+  taskContractResolver.resolveTaskContract = async ({ fallback }) => {
+    contractInvoked = true;
+    return { contract: fallback(), source: 'test-fallback' };
+  };
+  reactAgent.run = async () => {
+    reactInvoked = true;
+    throw new Error('react agent should not run for complex attachment analysis');
+  };
+
+  try {
+    const { runAgentTaskJob } = require('../src/services/agents/agent-task-runner');
+    const taskStore = require('../src/services/agents/task-store');
+    const result = await runAgentTaskJob({
+      taskId: 'task-doc-complex-fastpath-1',
+      traceId: 'trace-doc-complex-fastpath-1',
+      user: { id: 'user-doc-complex-1', email: 'complex@example.com' },
+      goal: 'Calcula total real, total contratado, varianza neta, resuelve contradiccion de fecha y riesgo bloqueante. No crees archivos; responde solo en chat.',
+      displayGoal: 'Calcula total real, total contratado, varianza neta, resuelve contradiccion de fecha y riesgo bloqueante. No crees archivos; responde solo en chat.',
+      files: ['file-doc-complex-1'],
+      fileMetadata: [{ id: 'file-doc-complex-1', name: 'orion-paquete.txt', mimeType: 'text/plain' }],
+      model: 'gpt-4o',
+      maxSteps: 12,
+      maxRuntimeMs: 60_000,
+    });
+
+    const snapshot = taskStore.getTaskSnapshotForUser('task-doc-complex-fastpath-1', 'user-doc-complex-1');
+    assert.equal(result.status, 'completed');
+    assert.equal(snapshot.status, 'completed');
+    assert.equal(snapshot.streamState.done, true);
+    assert.equal(snapshot.streamState.error, undefined);
+    assert.equal(snapshot.streamState.stoppedReason, 'attachment_chat_fast_path');
+    assert.equal(reactInvoked, false);
+    assert.equal(contractInvoked, false);
+    assert.match(snapshot.streamState.finalText, /484500 USD/);
+    assert.match(snapshot.streamState.finalText, /480000 USD/);
+    assert.match(snapshot.streamState.finalText, /4500 USD/);
+    assert.match(snapshot.streamState.finalText, /2026-09-05/);
+    assert.match(snapshot.streamState.finalText, /P1 - Privacy - Severidad Critica/);
   } finally {
     prisma.file.findMany = originalFindMany;
     persistence.upsertAgentTask = originalUpsert;
