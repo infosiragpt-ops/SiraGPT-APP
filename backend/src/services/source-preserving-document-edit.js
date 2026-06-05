@@ -998,6 +998,194 @@ function fillDocxCronogramaSectionBuffer(buffer, target, plan = buildCronogramaA
   return zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
 }
 
+// ---------------------------------------------------------------------------
+// Generic, AI-driven table fill for ANY section (not just the Anexo 3
+// cronograma). It locates the first table inside the requested section,
+// figures out which leading columns are "content" columns (those with a text
+// header, before any wide grouping / date column), finds the empty data rows,
+// and writes generated values into those cells while preserving each cell's
+// own formatting and the table's structure.
+// ---------------------------------------------------------------------------
+
+function cellPropsXml(cellXml = '') {
+  return String(cellXml || '').match(/<w:tcPr\b(?:[\s\S]*?<\/w:tcPr>|\s*\/>)/)?.[0] || '';
+}
+
+function isVMergeContinuationCell(cellXml = '') {
+  const tcPr = cellPropsXml(cellXml);
+  return /<w:vMerge\s*\/>/.test(tcPr) || /<w:vMerge\s+w:val="continue"\s*\/>/.test(tcPr);
+}
+
+function cellGridSpan(cellXml = '') {
+  const tcPr = cellPropsXml(cellXml);
+  return parseInt((tcPr.match(/<w:gridSpan\s+w:val="(\d+)"\/>/) || [])[1] || '1', 10) || 1;
+}
+
+const TABLE_GROUPING_HEADER_RE = /\b(fecha|fechas|mes|meses|semana|semanas|cronograma|tiempo|periodo|periodos|trimestre|bimestre|d[ií]a|d[ií]as|a[nñ]o|a[nñ]os)\b/;
+
+function locateSectionTable(documentXml, target, precomputedParagraphs = null) {
+  const paragraphs = precomputedParagraphs || extractDocxParagraphs(documentXml);
+  const bounds = targetSectionBounds(documentXml, target, paragraphs);
+  const tables = extractDocxTables(documentXml);
+  return tables.find((table) => table.start >= bounds.sectionStart && table.start < bounds.sectionEnd) || null;
+}
+
+// Inspect a table and report the content columns + empty data rows we can fill.
+function analyzeTableForFill(tableXml = '') {
+  const rows = extractTableRows(tableXml);
+  if (rows.length < 2) return null;
+  const cellCounts = rows.map((row) => extractTableCells(row.xml).length);
+  const maxColumns = Math.max(0, ...cellCounts);
+  if (maxColumns < 2) return null;
+
+  const headerRowIndex = rows.findIndex((row) => extractTableCells(row.xml).some((cell) => cell.text.trim()));
+  if (headerRowIndex < 0) return null;
+
+  const headerCells = extractTableCells(rows[headerRowIndex].xml);
+  const labels = [];
+  let contentColCount = 0;
+  for (const cell of headerCells) {
+    const label = cell.text.trim();
+    if (!label) break;
+    if (cellGridSpan(cell.xml) >= 3) break;
+    if (TABLE_GROUPING_HEADER_RE.test(normalizeText(label))) break;
+    labels.push(label);
+    contentColCount += 1;
+  }
+  if (contentColCount === 0) return null;
+
+  const dataRows = [];
+  for (let i = headerRowIndex + 1; i < rows.length; i += 1) {
+    const cells = extractTableCells(rows[i].xml);
+    if (cells.length < contentColCount) continue;
+    let fillable = true;
+    for (let c = 0; c < contentColCount; c += 1) {
+      if (isVMergeContinuationCell(cells[c].xml) || cells[c].text.trim()) {
+        fillable = false;
+        break;
+      }
+    }
+    if (fillable) dataRows.push(i);
+  }
+  if (!dataRows.length) return null;
+  return { rows, headerRowIndex, contentColCount, labels, dataRows, maxColumns };
+}
+
+function detectSectionTablePlan(buffer, target) {
+  try {
+    const documentXml = readDocxDocumentXml(buffer);
+    if (!documentXml) return null;
+    const paragraphs = extractDocxParagraphs(documentXml);
+    const table = locateSectionTable(documentXml, target, paragraphs);
+    if (!table) return null;
+    const analysis = analyzeTableForFill(table.xml);
+    if (!analysis) return null;
+    return { labels: analysis.labels, dataRowCount: analysis.dataRows.length };
+  } catch {
+    return null;
+  }
+}
+
+// Ask the model to produce rows that fit the table's own column headers and the
+// document's real topic. Degrades to [] (caller falls back) when no key/result.
+async function generateTableRowsContent({ labels = [], maxRows = 0, sectionLabel = '', sourceText = '', prompt = '', signal } = {}) {
+  if (!process.env.OPENAI_API_KEY || !labels.length || maxRows <= 0) return [];
+  try {
+    const client = createContentClient('OpenAI');
+    const completion = await client.chat.completions.create({
+      model: DEFAULT_MODEL,
+      messages: [
+        {
+          role: 'system',
+          content: [
+            'Eres un asistente académico experto en COMPLETAR TABLAS dentro de documentos Word sin alterar su estructura.',
+            'Te dan los encabezados de las columnas de contenido y el contexto real del documento.',
+            'Genera filas coherentes con esos encabezados y con el tema concreto del documento.',
+            'No inventes cifras, citas, autores ni DOI; usa únicamente lo que el contexto permita inferir de forma razonable.',
+          ].join(' '),
+        },
+        {
+          role: 'user',
+          content: [
+            `Solicitud del usuario: ${prompt}`,
+            `Tabla a completar: ${sectionLabel}`,
+            `Columnas de contenido, en orden: ${labels.join(' | ')}`,
+            `Genera entre 1 y ${maxRows} filas (las que el tema amerite).`,
+            'Contexto del documento:',
+            compact(sourceText, 12000),
+            '',
+            'Responde SOLO en JSON con esta forma exacta:',
+            `{"rows":[[${labels.map(() => '"valor"').join(', ')}]]}`,
+            'Cada fila es un arreglo con un valor de texto por columna, en el mismo orden de los encabezados.',
+          ].join('\n'),
+        },
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0.3,
+    }, { signal, timeout: 30_000 });
+
+    const raw = completion?.choices?.[0]?.message?.content;
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    const rows = Array.isArray(parsed.rows) ? parsed.rows : [];
+    return rows
+      .filter((row) => Array.isArray(row))
+      .slice(0, maxRows)
+      .map((row) => row.map((value) => String(value == null ? '' : value).trim()));
+  } catch {
+    return [];
+  }
+}
+
+function fillGenericSectionTableXml(tableXml = '', generatedRows = [], template = null) {
+  const analysis = analyzeTableForFill(tableXml);
+  if (!analysis || !generatedRows.length) return null;
+  const { rows, contentColCount, dataRows } = analysis;
+  const rowReplacements = new Map();
+  const count = Math.min(dataRows.length, generatedRows.length);
+  for (let i = 0; i < count; i += 1) {
+    const rowIndex = dataRows[i];
+    const cells = extractTableCells(rows[rowIndex].xml);
+    const values = generatedRows[i] || [];
+    const cellReplacements = new Map();
+    for (let c = 0; c < contentColCount; c += 1) {
+      const value = values[c] != null ? String(values[c]).trim() : '';
+      if (!value || !cells[c]) continue;
+      cellReplacements.set(c, replaceCellText(cells[c].xml, value, template));
+    }
+    if (cellReplacements.size) {
+      rowReplacements.set(rowIndex, replaceRowCells(rows[rowIndex].xml, cellReplacements));
+    }
+  }
+  if (!rowReplacements.size) return null;
+  return replaceTableRows(tableXml, rowReplacements);
+}
+
+function fillGenericSectionTableBuffer(buffer, target, generatedRows = []) {
+  const zip = new PizZip(buffer);
+  const documentFile = zip.file('word/document.xml');
+  if (!documentFile) throw new Error('DOCX inválido: falta word/document.xml.');
+  const documentXml = documentFile.asText();
+  const paragraphs = extractDocxParagraphs(documentXml);
+  const table = locateSectionTable(documentXml, target, paragraphs);
+  if (!table) {
+    const err = new Error(`No encontré una tabla dentro de ${target.label}.`);
+    err.code = 'SECTION_TABLE_NOT_FOUND';
+    throw err;
+  }
+  const bounds = targetSectionBounds(documentXml, target, paragraphs);
+  const template = buildSectionFormattingTemplate(paragraphs, bounds.headingIndex);
+  const updatedTable = fillGenericSectionTableXml(table.xml, generatedRows, template);
+  if (!updatedTable) {
+    const err = new Error(`La tabla de ${target.label} no tiene celdas de contenido vacías para completar.`);
+    err.code = 'SECTION_TABLE_NOT_FILLABLE';
+    throw err;
+  }
+  const updatedXml = `${documentXml.slice(0, table.start)}${updatedTable}${documentXml.slice(table.end)}`;
+  zip.file('word/document.xml', updatedXml);
+  return zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
+}
+
 function fillDocxSectionBuffer(buffer, target, blocks) {
   const zip = new PizZip(buffer);
   const documentFile = zip.file('word/document.xml');
@@ -1580,6 +1768,7 @@ function readDocxDocumentXml(buffer) {
 }
 
 async function runFillSectionOperation({ buffer, op, requestText, sourceText, allSourceFiles, sourceFile, signal }) {
+  // Step A — tuned, deterministic fast-path for the Anexo 3 thesis cronograma.
   const plan = detectCronogramaAnexo3Plan(buffer, op.target);
   if (plan?.type === 'cronograma_anexo_3') {
     return {
@@ -1588,6 +1777,37 @@ async function runFillSectionOperation({ buffer, op, requestText, sourceText, al
       step: { kind: 'fill_section', label: op.target.label, mode: 'cronograma_table' },
     };
   }
+  // Step B — generic, document-grounded table fill for ANY section whose body
+  // is a table (matrices, operacionalización, presupuesto, otros cronogramas…).
+  const tablePlan = detectSectionTablePlan(buffer, op.target);
+  if (tablePlan) {
+    const generatedRows = await generateTableRowsContent({
+      labels: tablePlan.labels,
+      maxRows: tablePlan.dataRowCount,
+      sectionLabel: op.target.label,
+      sourceText,
+      prompt: requestText,
+      signal,
+    });
+    if (generatedRows.length) {
+      try {
+        const filledBuffer = fillGenericSectionTableBuffer(buffer, op.target, generatedRows);
+        const validationBlocks = generatedRows
+          .flat()
+          .filter((value) => String(value || '').trim())
+          .map((value) => block('normal', String(value)));
+        return {
+          buffer: filledBuffer,
+          validationBlocks,
+          step: { kind: 'fill_section', label: op.target.label, mode: 'table' },
+        };
+      } catch (err) {
+        if (err?.code !== 'SECTION_TABLE_NOT_FOUND' && err?.code !== 'SECTION_TABLE_NOT_FILLABLE') throw err;
+        // fall through to the paragraph fill below
+      }
+    }
+  }
+  // Step C — narrative paragraph fill (AI-generated, grounded in the document).
   const blocks = await generateTargetSectionBlocks({
     prompt: requestText,
     target: op.target,
@@ -1854,13 +2074,19 @@ module.exports = {
     buildInstrumentAppendix,
     buildInstrumentAppendixBody,
     buildSectionFormattingTemplate,
+    analyzeTableForFill,
     detectCronogramaAnexo3Plan,
+    detectSectionTablePlan,
     extractParagraphProperties,
     extractRunProperties,
     fillCronogramaTableXml,
+    fillGenericSectionTableBuffer,
+    fillGenericSectionTableXml,
+    generateTableRowsContent,
     inferResearchVariables,
     isTargetedSectionFillRequest,
     locateCronogramaTable,
+    locateSectionTable,
     planSourcePreservingOperations,
     resolveStoredFilePath,
     sanitizeCapturedParagraphProperties,

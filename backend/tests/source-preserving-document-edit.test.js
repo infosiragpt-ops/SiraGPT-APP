@@ -624,3 +624,95 @@ describe('source-preserving document edit — agentic multi-step planning', () =
     assert.match(xml, /Anexo 3\. Cronograma/);
   });
 });
+
+async function makeDocxWithGenericTableBuffer({ heading = 'Anexo 5. Matriz de Operacionalización de Variables', headers = ['Variable', 'Dimensión', 'Indicador', 'Ítems'], dataRows = 6 } = {}) {
+  const headerCell = (text) => new TableCell({ children: [new Paragraph(text)] });
+  const blankCell = () => new TableCell({ children: [new Paragraph('')] });
+  const doc = new Document({
+    sections: [{
+      children: [
+        new Paragraph('Portada original UPN'),
+        new Paragraph(heading),
+        new Table({
+          rows: [
+            new TableRow({ children: headers.map(headerCell) }),
+            ...Array.from({ length: dataRows }, () => new TableRow({ children: headers.map(blankCell) })),
+          ],
+        }),
+      ],
+    }],
+  });
+  return Buffer.from(await Packer.toBuffer(doc));
+}
+
+describe('source-preserving document edit — generic table fill (any section)', () => {
+  const {
+    analyzeTableForFill,
+    detectSectionTablePlan,
+    fillGenericSectionTableBuffer,
+    generateTableRowsContent,
+  } = sourcePreservingInternals;
+
+  it('identifies the content columns and empty data rows of an arbitrary table', async () => {
+    const buffer = await makeDocxWithGenericTableBuffer();
+    const tableXml = new PizZip(buffer).file('word/document.xml').asText().match(/<w:tbl>[\s\S]*?<\/w:tbl>/)[0];
+    const analysis = analyzeTableForFill(tableXml);
+    assert.deepEqual(analysis.labels, ['Variable', 'Dimensión', 'Indicador', 'Ítems']);
+    assert.equal(analysis.contentColCount, 4);
+    assert.equal(analysis.dataRows.length, 6);
+  });
+
+  it('stops the content columns at a wide grouping/date column (e.g. FECHAS)', async () => {
+    const buffer = await makeDocxWithGenericTableBuffer({ headers: ['Actividad', 'Responsable', 'FECHAS'], dataRows: 3 });
+    const tableXml = new PizZip(buffer).file('word/document.xml').asText().match(/<w:tbl>[\s\S]*?<\/w:tbl>/)[0];
+    const analysis = analyzeTableForFill(tableXml);
+    assert.deepEqual(analysis.labels, ['Actividad', 'Responsable']);
+    assert.equal(analysis.contentColCount, 2);
+  });
+
+  it('detects a fillable table plan inside the requested section', async () => {
+    const buffer = await makeDocxWithGenericTableBuffer();
+    const plan = detectSectionTablePlan(buffer, parseTargetSectionRequest('completa el anexo 5'));
+    assert.ok(plan);
+    assert.deepEqual(plan.labels, ['Variable', 'Dimensión', 'Indicador', 'Ítems']);
+    assert.equal(plan.dataRowCount, 6);
+  });
+
+  it('fills the content cells of an arbitrary table preserving its structure and the rest of the document', async () => {
+    const buffer = await makeDocxWithGenericTableBuffer();
+    const rows = [
+      ['Gestión de inventarios', 'Control de stock', 'Rotación de inventario', '¿Con qué frecuencia se revisa el stock?'],
+      ['Eficiencia operativa', 'Productividad', 'Pedidos atendidos', '¿Cuántos pedidos se atienden por día?'],
+    ];
+    const filled = fillGenericSectionTableBuffer(buffer, parseTargetSectionRequest('completa el anexo 5'), rows);
+    const xml = new PizZip(filled).file('word/document.xml').asText();
+    const cellCounts = (doc) => (doc.match(/<w:tbl>[\s\S]*?<\/w:tbl>/)[0].match(/<w:tr\b[\s\S]*?<\/w:tr>/g) || [])
+      .map((row) => (row.match(/<w:tc>[\s\S]*?<\/w:tc>/g) || []).length).join(',');
+
+    assert.match(xml, /Gestión de inventarios/);
+    assert.match(xml, /Rotación de inventario/);
+    assert.match(xml, /Pedidos atendidos/);
+    // structure intact + rest of the document preserved
+    assert.equal(cellCounts(xml), cellCounts(new PizZip(buffer).file('word/document.xml').asText()));
+    assert.match(xml, /Portada original UPN/);
+    assert.match(xml, /Matriz de Operacionalización/);
+  });
+
+  it('degrades to no rows when the model is unavailable so the caller can fall back', async () => {
+    const savedKey = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    try {
+      const rows = await generateTableRowsContent({
+        labels: ['Variable', 'Indicador'],
+        maxRows: 4,
+        sectionLabel: 'Anexo 5',
+        sourceText: 'contexto',
+        prompt: 'completa el anexo 5',
+      });
+      assert.deepEqual(rows, []);
+    } finally {
+      if (savedKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = savedKey;
+    }
+  });
+});
