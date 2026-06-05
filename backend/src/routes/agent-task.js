@@ -350,44 +350,77 @@ router.post('/document-cycle/classify', authenticateToken, (req, res) => {
 // Start the professional document cycle: classify the approved topic, build
 // the staged agent contract, and run it through the existing queued task
 // pipeline (SSE stream). Requires `topic` and a folder `code`.
-router.post('/document-cycle', authenticateToken, async (req, res) => {
-  const cycleService = require('../services/agents/professional-document-cycle');
-  const topic = String(req.body?.topic || '').trim();
-  if (!topic) return res.status(400).json({ error: 'topic is required' });
-  if (!String(req.body?.code || '').trim()) return res.status(400).json({ error: 'code is required' });
+router.post(
+  '/document-cycle',
+  // Same security/billing invariants as POST /task: the cycle creates a durable
+  // queued agent task that consumes LLM tokens and worker time, so it must pass
+  // the same rate limit, validation, plan-quota and chat-scope guards.
+  agentRateLimiter,
+  [
+    body('topic').isString().trim().isLength({ min: 3, max: 4000 }).withMessage('topic must be 3-4000 chars'),
+    body('code').isString().trim().isLength({ min: 1, max: 200 }).withMessage('code is required'),
+    body('documentType').optional().isString(),
+    body('field').optional().isString(),
+    body('citationStyle').optional().isString(),
+    body('chatId').optional().isString(),
+    body('scopeMode').optional().isIn(['chat', 'global']),
+    body('maxSteps').optional().isInt({ min: 2, max: 120 }),
+  ],
+  authenticateToken,
+  enforcePlanQuota({ surface: 'agent.task.create' }),
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-  let built;
-  try {
-    built = cycleService.buildProfessionalCycleRequest({
-      topic,
-      documentTypeOverride: req.body?.documentType,
-      fieldOverride: req.body?.field,
-      citationStyleOverride: req.body?.citationStyle,
-      code: req.body.code,
+    const cycleService = require('../services/agents/professional-document-cycle');
+    const topic = String(req.body?.topic || '').trim();
+    if (!topic) return res.status(400).json({ error: 'topic is required' });
+    if (!String(req.body?.code || '').trim()) return res.status(400).json({ error: 'code is required' });
+
+    // Reject cross-chat writes before any task is queued (broken-access-control
+    // / IDOR guard): the caller may only target a chat they own.
+    const scope = await chatTaskScope.assertChatScopeForAgentTask({
+      prisma,
+      userId: req.user?.id,
+      body: req.body,
     });
-  } catch (err) {
-    return res.status(400).json({ error: err?.message || 'could not build document cycle' });
-  }
+    if (!scope.ok) return res.status(scope.status).json(scope.body);
+    req.body.chatId = scope.chatId;
 
-  // Rewrite the request body into the shape handleQueuedTaskRequest expects
-  // and delegate so the cycle reuses queue, fallback, persistence and SSE.
-  req.body = {
-    ...req.body,
-    goal: built.goal,
-    displayGoal: built.displayGoal,
-    systemContract: built.systemContract,
-    folderCode: built.folderCode,
-    cycle: {
-      stages: built.stages,
-      documentType: built.documentType,
-      field: built.field,
-      citationStyle: built.citationStyle,
-      code: built.folderCode,
-    },
-    maxSteps: Number.isFinite(Number.parseInt(req.body?.maxSteps, 10)) ? req.body.maxSteps : 80,
-  };
-  return handleQueuedTaskRequest(req, res);
-});
+    let built;
+    try {
+      built = cycleService.buildProfessionalCycleRequest({
+        topic,
+        documentTypeOverride: req.body?.documentType,
+        fieldOverride: req.body?.field,
+        citationStyleOverride: req.body?.citationStyle,
+        code: req.body.code,
+      });
+    } catch (err) {
+      return res.status(400).json({ error: err?.message || 'could not build document cycle' });
+    }
+
+    // Rewrite the request body into the shape handleQueuedTaskRequest expects
+    // and delegate so the cycle reuses queue, fallback, persistence and SSE.
+    // The validated chatId from chatTaskScope is preserved by the spread.
+    req.body = {
+      ...req.body,
+      goal: built.goal,
+      displayGoal: built.displayGoal,
+      systemContract: built.systemContract,
+      folderCode: built.folderCode,
+      cycle: {
+        stages: built.stages,
+        documentType: built.documentType,
+        field: built.field,
+        citationStyle: built.citationStyle,
+        code: built.folderCode,
+      },
+      maxSteps: Number.isFinite(Number.parseInt(req.body?.maxSteps, 10)) ? req.body.maxSteps : 80,
+    };
+    return handleQueuedTaskRequest(req, res);
+  },
+);
 
 router.get('/task/:taskId', authenticateToken, (req, res) => {
   const task = getTaskForUser(req.params.taskId, req.user?.id)
