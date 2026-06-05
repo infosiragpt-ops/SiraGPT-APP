@@ -78,9 +78,14 @@ function detectBulletList(normalized) {
   return (
     /\bvinetas?\b/.test(normalized) ||
     /\bbullets?\b/.test(normalized) ||
-    /\blistas?\b/.test(normalized) ||
     /\bpuntos?\s+(?:clave|principales)\b/.test(normalized) ||
-    /\bchecklist\b/.test(normalized)
+    /\bchecklist\b/.test(normalized) ||
+    /\ben\s+forma\s+de\s+listas?\b/.test(normalized) ||
+    // "lista" only counts as a formatting request when introduced by a
+    // formatting verb/preposition, never as content ("la lista de autores").
+    /\b(?:en|como|dame|damelo|hazme|hazlo|genera\w*|generame|crea\w*|creame|arma\w*|armame|presenta\w*|presentame|muestra\w*|muestrame|quiero|necesito|prefiero|formato\s+de)\s+(?:una?\s+|en\s+)?listas?\b/.test(
+      normalized,
+    )
   );
 }
 
