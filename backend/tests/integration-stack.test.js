@@ -407,6 +407,25 @@ describe("integration-stack", () => {
     expect(readiness.summary.package_files_detected).toBeGreaterThanOrEqual(1);
   });
 
+  test("dependencyReadiness exposes the expanded lockfile library catalog", () => {
+    const s = createIntegrationStack();
+    const readiness = s.dependencyReadiness({
+      primaryIntent: "professional_document_generation",
+      secondaryIntents: ["scientific_research"],
+      outputFormats: ["docx", "pdf"],
+      requiredTools: ["docx_renderer", "pdf_renderer", "latex_math"],
+    });
+    const inventory = readiness.package_inventory;
+    expect(inventory.lock_package_count).toBeGreaterThanOrEqual(1000);
+    expect(inventory.expanded_library_catalog_count).toBeGreaterThanOrEqual(1000);
+    const familyIds = inventory.high_impact_families.map(family => family.id);
+    expect(familyIds.includes("math_typesetting")).toBe(true);
+    expect(familyIds.includes("documents_office")).toBe(true);
+    expect(inventory.math_typesetting_ready.includes("katex")).toBe(true);
+    expect(inventory.math_typesetting_ready.includes("remark-math")).toBe(true);
+    expect(inventory.math_typesetting_ready.includes("rehype-katex")).toBe(true);
+  });
+
   test("dependencyReadiness detects web-builder packages from project manifests", () => {
     const s = createIntegrationStack();
     const readiness = s.dependencyReadiness({

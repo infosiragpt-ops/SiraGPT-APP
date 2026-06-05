@@ -5,6 +5,9 @@ const {
   buildUserIntentAlignmentProfile,
   buildUserIntentAlignmentPrompt,
   extractRequestedCounts,
+  extractTones,
+  extractLengthConstraints,
+  extractOutputLanguage,
   inferTaskType,
 } = require('../src/services/agents/user-intent-alignment');
 
@@ -68,4 +71,59 @@ test('user intent alignment: task taxonomy follows InstructGPT-style buckets', (
   assert.equal(inferTaskType('parafrasea este parrafo', false), 'rewrite');
   assert.equal(inferTaskType('que es el aprendizaje por refuerzo?', false), 'open_qa');
   assert.equal(inferTaskType('extrae las fechas del documento', true), 'extraction');
+});
+
+test('user intent alignment: captures requested tone/register', () => {
+  assert.deepEqual(extractTones('explícalo de forma sencilla para principiantes'), ['tone:simple']);
+  assert.deepEqual(extractTones('redáctalo con un tono formal'), ['tone:formal']);
+  assert.deepEqual(extractTones('hazlo persuasivo, es copy de ventas'), ['tone:persuasive']);
+  assert.deepEqual(extractTones('explícamelo para niños'), ['tone:child_friendly']);
+  assert.deepEqual(extractTones('dame el dato'), []);
+});
+
+test('user intent alignment: tone detection avoids domain false positives', () => {
+  // "datos de ventas" is a business domain, not a request for persuasive tone.
+  assert.deepEqual(extractTones('analiza datos de ventas de 2025'), []);
+  // "user-friendly" is a product adjective, not a request for informal register.
+  assert.deepEqual(extractTones('haz un reporte user-friendly'), []);
+});
+
+test('user intent alignment: captures brief vs detailed and explicit lengths', () => {
+  assert.ok(extractLengthConstraints('resúmelo de forma breve').includes('length:brief'));
+  assert.ok(extractLengthConstraints('explícalo en profundidad y paso a paso').includes('length:detailed'));
+  assert.ok(extractLengthConstraints('escríbelo en 300 palabras').includes('length:300 palabras'));
+  assert.ok(extractLengthConstraints('hazlo en dos parrafos').includes('length:2 parrafos'));
+  assert.ok(extractLengthConstraints('resúmelo en un parrafo').includes('length:1 parrafo'));
+  assert.deepEqual(extractLengthConstraints('dame el dato'), []);
+});
+
+test('user intent alignment: detects response language only when verb-anchored', () => {
+  assert.equal(extractOutputLanguage('respóndeme en inglés por favor'), 'english');
+  assert.equal(extractOutputLanguage('traduce esto al frances'), 'french');
+  assert.equal(extractOutputLanguage('escríbelo en español'), 'spanish');
+  // "sources in English" must NOT be read as "respond in English".
+  assert.equal(extractOutputLanguage('busca articulos cientificos en ingles'), null);
+  // Even with a response verb, a language modifying the SOURCES must not flip
+  // the response language.
+  assert.equal(extractOutputLanguage('responde con articulos en ingles sobre cancer'), null);
+});
+
+test('user intent alignment: expanded Spanish number words and "de" bridge', () => {
+  assert.deepEqual(extractRequestedCounts('necesito quince fuentes'), ['15 fuentes']);
+  assert.deepEqual(extractRequestedCounts('dame un par de articulos'), ['2 articulos']);
+  assert.deepEqual(extractRequestedCounts('reune una docena de referencias'), ['12 referencias']);
+  // Idiom "a la par de" must NOT be read as a count of 2.
+  assert.deepEqual(extractRequestedCounts('a la par de documentos de apoyo'), []);
+});
+
+test('user intent alignment: surfaces tone, length and language as hard constraints', () => {
+  const profile = buildUserIntentAlignmentProfile({
+    request: 'Respóndeme en inglés, de forma breve y con un tono formal',
+  });
+  assert.ok(profile.hardConstraints.includes('output_language:english'));
+  assert.ok(profile.hardConstraints.includes('length:brief'));
+  assert.ok(profile.hardConstraints.includes('tone:formal'));
+  assert.ok(profile.responsePolicy.includes('respond_in_requested_language'));
+  assert.ok(profile.responsePolicy.includes('keep_answer_brief'));
+  assert.ok(profile.responsePolicy.includes('match_requested_tone'));
 });

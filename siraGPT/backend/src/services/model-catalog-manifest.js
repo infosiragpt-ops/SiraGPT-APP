@@ -1,3 +1,5 @@
+const { listFalVideoModels } = require('./fal-video-catalog');
+
 const PROVIDER_CATALOGS = Object.freeze([
   {
     key: 'openai',
@@ -25,6 +27,13 @@ const PROVIDER_CATALOGS = Object.freeze([
     provider: 'DeepSeek',
     displayName: 'DeepSeek',
     apiKeyEnv: 'DEEPSEEK_API_KEY',
+    supportsModelCatalog: true,
+  },
+  {
+    key: 'fal',
+    provider: 'Fal.ai',
+    displayName: 'Fal.ai Video',
+    apiKeyEnv: 'FAL_KEY',
     supportsModelCatalog: true,
   },
 ]);
@@ -223,6 +232,12 @@ function normalizeModelRecord(model, providerOverride = null, source = 'api') {
     maxTokens: model.maxTokens || model.max_tokens || null,
     reasoning: model.reasoning === true,
     input: Array.isArray(model.input) ? [...model.input] : ['text'],
+    icon: model.icon || null,
+    qualityRank: model.qualityRank || null,
+    qualityLabel: model.qualityLabel || null,
+    speedTier: model.speedTier || null,
+    capabilities: model.capabilities || null,
+    fal: model.fal || null,
     pricing: model.pricing || null,
     compat: model.compat || null,
     isActive: model.isActive !== false,
@@ -238,6 +253,10 @@ function normalizeModelRecord(model, providerOverride = null, source = 'api') {
       provider,
       reasoning: normalized.reasoning,
       input: normalized.input,
+      qualityRank: normalized.qualityRank,
+      qualityLabel: normalized.qualityLabel,
+      speedTier: normalized.speedTier,
+      fal: normalized.fal,
       maxTokens: normalized.maxTokens,
       compat: normalized.compat,
     };
@@ -248,7 +267,11 @@ function normalizeModelRecord(model, providerOverride = null, source = 'api') {
 
 function listManifestModels({ provider = null, type = null } = {}) {
   const providerName = provider ? canonicalProvider(provider) : null;
-  return STATIC_MODEL_MANIFEST
+  const falModels = !providerName || providerName === 'Fal.ai'
+    ? listFalVideoModels()
+    : [];
+
+  return [...STATIC_MODEL_MANIFEST, ...falModels]
     .filter((model) => !providerName || model.provider === providerName)
     .filter((model) => !type || model.type === type)
     .map((model) => normalizeModelRecord(model, model.provider, 'static_manifest'));

@@ -16,6 +16,7 @@ const PATTERNS = {
   research: /\b(investiga(?:r|cion)?|research|busca(?:r)?|recopila(?:r)?|fuentes|citas|referencias|art[ií]culos?|papers?|literatura|acad[eé]mic[oa]s?|cient[ií]fic[oa]s?|mercado|benchmark|estado del arte|revision sistem[aá]tica|metaan[aá]lisis|scielo|redalyc|dialnet|openalex|crossref|pubmed|doi|semantic scholar|doaj|scopus|web of science|wos)\b/i,
   document: /\b(docx|xlsx|pptx?|word|excel|power\s*point|powerpoint|pdf\b|csv\b|markdown|html\b|informe|reporte|presentaci[oó]n|diapositivas|slides|hoja de c[aá]lculo|spreadsheet|archivo|documento|matriz|descargar|exporta(?:r|me)?)\b/i,
   privateFiles: /\b(adjunt[oa]s?|archivo(?:s)? cargad[oa]s?|documento(?:s)? cargad[oa]s?|seg[uú]n (mis|el) archivo|seg[uú]n (mis|el) documento|este documento|esta tesis|pdf cargado|word cargado|docx cargado|mis archivos|mi proyecto)\b/i,
+  externalResearch: /\b(web|internet|online|extern[ao]s?|fuentes externas|buscar afuera|busca afuera|noticias?|actual(?:es)?|actualidad|reciente(?:s)?|hoy|ahora|latest|current|doi|scopus|web of science|wos|openalex|crossref|pubmed|doaj|scielo|semantic scholar|papers?|art[ií]culos?|cient[ií]fic[oa]s?|acad[eé]mic[oa]s?)\b/i,
   code: /\b(c[oó]digo|code|programa|software|sofware|script|funci[oó]n|clase|debug|bug|corrige(?:r)?|repara(?:r)?|test(?:s)?|prueba(?:s)?|unit test|typescript|javascript|python|react|next\.?js|backend|frontend|web app|github|repo(?:sitorio)?|openclaw|autocorrige|auto corrige)\b/i,
   agentRuntime: /\b(agente(?:s)?|agent(?:s)?|agentic|aut[oó]nom[oa]s?|orquestador|orchestrator|planner|runner|workflow|agent-task|task\s+runner|tool\s+registry|capability\s+matrix|skill(?:s)?|checkpoint(?:s)?)\b/i,
   externalRepo: /\b(openclaw|github\.com\/openclaw\/openclaw|upstream|external repo|repo externo|repositorio externo|otro repositorio|del otro software)\b/i,
@@ -93,15 +94,18 @@ function buildExecutionProfile({ goal, fileIds = [], fileMetadata = [] } = {}) {
     || /\b(?:word|documento|archivo|adjunto|docx?|pdf|excel|xlsx|pptx?)\s+(?:adjunto|subido|cargado|anterior)\b/i.test(rawGoal)
   );
   const documentRequested = documentMentioned && !(mentionsAttachedPrivateFile && !explicitDeliverableRequested);
+  const rawNeedsResearch = PATTERNS.research.test(rawGoal) || PATTERNS.research.test(normalized);
+  const explicitExternalResearch = PATTERNS.externalResearch.test(rawGoal) || PATTERNS.externalResearch.test(normalized);
+  const needsPrivateContext = (hasFiles && !onlyImageAttachments) || mentionsPrivateFiles;
   const capabilities = {
-    needsResearch: PATTERNS.research.test(rawGoal) || PATTERNS.research.test(normalized),
+    needsResearch: rawNeedsResearch && !(needsPrivateContext && !explicitExternalResearch),
     needsDocument: documentRequested && !plainTranscription,
     // Image-only attachments are answered by the multimodal model directly
     // (vision); they must NOT trigger the document-intelligence gate, which
     // fails on images and dead-ends the agent. Explicit private-file wording
     // ("según el documento adjunto") still forces the gate even with an image,
     // because the user may have photographed a document for OCR.
-    needsPrivateContext: (hasFiles && !onlyImageAttachments) || mentionsPrivateFiles,
+    needsPrivateContext,
     needsCodeOrRepair: PATTERNS.code.test(rawGoal) || PATTERNS.code.test(normalized) || externalRepoAdaptation || autonomousSoftwareWork || bulkSourceFusion,
     needsAgentRuntimeHardening: agentRuntimeHardening,
     needsExternalRepoAdaptation: externalRepoAdaptation,

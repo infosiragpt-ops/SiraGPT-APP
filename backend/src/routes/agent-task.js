@@ -76,10 +76,12 @@ const {
   buildAgenticOperatingCore,
   buildAgenticOperatingPrompt,
 } = require('../services/agents/agentic-operating-core');
+const { buildForbiddenToolNames } = require('../services/agents/agent-tool-policy');
 const durableExecutionStore = require('../services/agents/durable-execution-store');
 const { buildDocumentDeliveryPolicy } = require('../services/agents/document-delivery-policy');
 const { buildLangGraphLayer } = require('../services/agents/agentic-langgraph');
 const { buildAgenticFrameworkStatus } = require('../services/agents/agentic-frameworks');
+const { buildIntegrationRuntimeProfile } = require('../services/ai-product-os/integration-runtime-profile');
 const {
   cancelQueuedTask,
   enqueueAgentTask,
@@ -87,6 +89,7 @@ const {
   requireRedisUrl,
 } = require('../services/agents/agent-task-queue');
 const { cancelRunningTask } = require('../services/agents/agent-task-worker');
+const { resolveAttachmentFallbackMarkdown } = require('../services/agents/agent-task-runner');
 const agentTaskPersistence = require('../services/agents/agent-task-persistence');
 const {
   buildUploadedFileContext,
@@ -104,6 +107,74 @@ const prisma = (() => {
 
 // ── Utility: safe JSON serialization ──────────────────────────────
 // Never throws on circular refs, BigInt, Symbol, or undefined values.
+// Important: never truncate the final JSON string with slice(). SSE
+// consumers JSON.parse every `data:` frame; cutting the serialized text
+// creates invalid JSON and kills long document-analysis streams before
+// `final_text` / `done` can arrive.
+function compactJsonValue(value, {
+  depth = 0,
+  maxDepth = 5,
+  maxString = 8000,
+  maxArray = 40,
+  seen = new WeakSet(),
+} = {}) {
+  if (value === undefined) return null;
+  if (typeof value === 'bigint') return `BigInt(${value.toString()})`;
+  if (typeof value === 'symbol') return value.toString();
+  if (typeof value === 'string') {
+    return value.length > maxString
+      ? `${value.slice(0, Math.max(0, maxString - 24))}...[truncated ${value.length - maxString + 24} chars]`
+      : value;
+  }
+  if (value instanceof Error) {
+    return {
+      message: compactJsonValue(value.message, { depth: depth + 1, maxDepth, maxString, maxArray, seen }),
+      stack: compactJsonValue(value.stack, { depth: depth + 1, maxDepth, maxString, maxArray, seen }),
+    };
+  }
+  if (!value || typeof value !== 'object') return value;
+  if (seen.has(value)) return '[Circular]';
+  if (depth >= maxDepth) return '[Truncated depth]';
+  seen.add(value);
+  if (Array.isArray(value)) {
+    const out = value
+      .slice(0, maxArray)
+      .map((item) => compactJsonValue(item, { depth: depth + 1, maxDepth, maxString, maxArray, seen }));
+    if (value.length > maxArray) out.push(`[Truncated ${value.length - maxArray} items]`);
+    return out;
+  }
+  const out = {};
+  for (const [key, child] of Object.entries(value)) {
+    const childMaxString = key === 'markdown' || key === 'finalText' ? Math.max(maxString, 24000) : maxString;
+    out[key] = compactJsonValue(child, {
+      depth: depth + 1,
+      maxDepth,
+      maxString: childMaxString,
+      maxArray,
+      seen,
+    });
+  }
+  return out;
+}
+
+function compactEventForSse(obj, maxLen) {
+  const compact = compactJsonValue(obj, {
+    maxString: Math.max(1200, Math.floor(maxLen / 4)),
+    maxArray: 24,
+  });
+  const str = JSON.stringify(compact);
+  if (str.length <= maxLen) return str;
+  return JSON.stringify({
+    type: obj && obj.type ? obj.type : 'event',
+    taskId: obj && obj.taskId ? obj.taskId : undefined,
+    seq: obj && obj.seq ? obj.seq : undefined,
+    label: obj && obj.label ? String(obj.label).slice(0, 240) : undefined,
+    status: obj && obj.status ? obj.status : undefined,
+    message: obj && obj.message ? String(obj.message).slice(0, 1200) : undefined,
+    _truncated: true,
+  });
+}
+
 function safeJsonStringify(obj, maxLen = 32_768) {
   const seen = new WeakSet();
   try {
@@ -118,7 +189,7 @@ function safeJsonStringify(obj, maxLen = 32_768) {
       if (value === undefined) return null;
       return value;
     });
-    return str.length > maxLen ? str.slice(0, maxLen) : str;
+    return str.length > maxLen ? compactEventForSse(obj, maxLen) : str;
   } catch {
     return JSON.stringify({ error: 'non-serializable', type: typeof obj });
   }
@@ -280,44 +351,77 @@ router.post('/document-cycle/classify', authenticateToken, (req, res) => {
 // Start the professional document cycle: classify the approved topic, build
 // the staged agent contract, and run it through the existing queued task
 // pipeline (SSE stream). Requires `topic` and a folder `code`.
-router.post('/document-cycle', authenticateToken, async (req, res) => {
-  const cycleService = require('../services/agents/professional-document-cycle');
-  const topic = String(req.body?.topic || '').trim();
-  if (!topic) return res.status(400).json({ error: 'topic is required' });
-  if (!String(req.body?.code || '').trim()) return res.status(400).json({ error: 'code is required' });
+router.post(
+  '/document-cycle',
+  // Same security/billing invariants as POST /task: the cycle creates a durable
+  // queued agent task that consumes LLM tokens and worker time, so it must pass
+  // the same rate limit, validation, plan-quota and chat-scope guards.
+  agentRateLimiter,
+  [
+    body('topic').isString().trim().isLength({ min: 3, max: 4000 }).withMessage('topic must be 3-4000 chars'),
+    body('code').isString().trim().isLength({ min: 1, max: 200 }).withMessage('code is required'),
+    body('documentType').optional().isString(),
+    body('field').optional().isString(),
+    body('citationStyle').optional().isString(),
+    body('chatId').optional().isString(),
+    body('scopeMode').optional().isIn(['chat', 'global']),
+    body('maxSteps').optional().isInt({ min: 2, max: 120 }),
+  ],
+  authenticateToken,
+  enforcePlanQuota({ surface: 'agent.task.create' }),
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-  let built;
-  try {
-    built = cycleService.buildProfessionalCycleRequest({
-      topic,
-      documentTypeOverride: req.body?.documentType,
-      fieldOverride: req.body?.field,
-      citationStyleOverride: req.body?.citationStyle,
-      code: req.body.code,
+    const cycleService = require('../services/agents/professional-document-cycle');
+    const topic = String(req.body?.topic || '').trim();
+    if (!topic) return res.status(400).json({ error: 'topic is required' });
+    if (!String(req.body?.code || '').trim()) return res.status(400).json({ error: 'code is required' });
+
+    // Reject cross-chat writes before any task is queued (broken-access-control
+    // / IDOR guard): the caller may only target a chat they own.
+    const scope = await chatTaskScope.assertChatScopeForAgentTask({
+      prisma,
+      userId: req.user?.id,
+      body: req.body,
     });
-  } catch (err) {
-    return res.status(400).json({ error: err?.message || 'could not build document cycle' });
-  }
+    if (!scope.ok) return res.status(scope.status).json(scope.body);
+    req.body.chatId = scope.chatId;
 
-  // Rewrite the request body into the shape handleQueuedTaskRequest expects
-  // and delegate so the cycle reuses queue, fallback, persistence and SSE.
-  req.body = {
-    ...req.body,
-    goal: built.goal,
-    displayGoal: built.displayGoal,
-    systemContract: built.systemContract,
-    folderCode: built.folderCode,
-    cycle: {
-      stages: built.stages,
-      documentType: built.documentType,
-      field: built.field,
-      citationStyle: built.citationStyle,
-      code: built.folderCode,
-    },
-    maxSteps: Number.isFinite(Number.parseInt(req.body?.maxSteps, 10)) ? req.body.maxSteps : 80,
-  };
-  return handleQueuedTaskRequest(req, res);
-});
+    let built;
+    try {
+      built = cycleService.buildProfessionalCycleRequest({
+        topic,
+        documentTypeOverride: req.body?.documentType,
+        fieldOverride: req.body?.field,
+        citationStyleOverride: req.body?.citationStyle,
+        code: req.body.code,
+      });
+    } catch (err) {
+      return res.status(400).json({ error: err?.message || 'could not build document cycle' });
+    }
+
+    // Rewrite the request body into the shape handleQueuedTaskRequest expects
+    // and delegate so the cycle reuses queue, fallback, persistence and SSE.
+    // The validated chatId from chatTaskScope is preserved by the spread.
+    req.body = {
+      ...req.body,
+      goal: built.goal,
+      displayGoal: built.displayGoal,
+      systemContract: built.systemContract,
+      folderCode: built.folderCode,
+      cycle: {
+        stages: built.stages,
+        documentType: built.documentType,
+        field: built.field,
+        citationStyle: built.citationStyle,
+        code: built.folderCode,
+      },
+      maxSteps: Number.isFinite(Number.parseInt(req.body?.maxSteps, 10)) ? req.body.maxSteps : 80,
+    };
+    return handleQueuedTaskRequest(req, res);
+  },
+);
 
 router.get('/task/:taskId', authenticateToken, (req, res) => {
   const task = getTaskForUser(req.params.taskId, req.user?.id)
@@ -803,6 +907,11 @@ router.post(
       toolRuntimePlan: enterpriseToolRuntimePlan,
       qaBoardReview: enterpriseQaBoardReview,
     });
+    const integrationRuntimeProfile = buildIntegrationRuntimeProfile({
+      contract: universalTaskContract,
+      fileIds,
+      requiredTools: enterpriseToolRuntimePlan?.summary?.requestedTools || [],
+    });
     let durableExecution = null;
     try {
       durableExecution = durableExecutionStore.createDurableExecutionRecord({
@@ -822,6 +931,7 @@ router.post(
       agenticOperatingCore: agenticOperatingCore.summary,
       toolRuntime: enterpriseToolRuntimePlan.summary,
       qaPreflight: enterpriseQaBoardReview.summary,
+      integrationRuntime: integrationRuntimeProfile.promptProfile,
       durableExecution: durableExecution
         ? {
           graphId: durableExecution.graphId,
@@ -997,9 +1107,16 @@ router.post(
     if (typeof responseTimeoutTimer.unref === 'function') responseTimeoutTimer.unref();
 
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    const forbiddenToolNames = new Set(Array.isArray(universalTaskContract.forbidden_tools)
-      ? universalTaskContract.forbidden_tools
-      : []);
+    const forbiddenToolNames = buildForbiddenToolNames({
+      baseForbidden: Array.isArray(universalTaskContract.forbidden_tools)
+        ? universalTaskContract.forbidden_tools
+        : [],
+      goal: agentGoal,
+      fileIds,
+      documentPolicy,
+      executionProfile,
+      universalTaskContract,
+    });
     const tools = buildTaskTools().filter((tool) => !forbiddenToolNames.has(tool.name));
     const langGraphLayer = await buildLangGraphLayer({ taskId, documentPolicy });
     const frameworkStatus = await buildAgenticFrameworkStatus({ tools, langGraphLayer });
@@ -1273,27 +1390,63 @@ router.post(
         },
       });
 
-      if (result.finalAnswer) {
-        emit({ type: 'final_text', markdown: result.finalAnswer });
+      let finalMarkdown = result.finalAnswer || '';
+      let stoppedReason = result.stoppedReason;
+      const attachmentFinalNeedsRecovery = fileIds.length > 0 && looksLikeAttachmentRecoveryNeeded(finalMarkdown);
+      if (attachmentFinalNeedsRecovery) {
+        const recoveredMarkdown = resolveAttachmentFallbackMarkdown({
+          goal: displayGoal || agentGoal,
+          uploadedFileContext,
+          reason: stoppedReason,
+        });
+        if (recoveredMarkdown && !looksLikeAttachmentRecoveryNeeded(recoveredMarkdown)) {
+          finalMarkdown = recoveredMarkdown;
+          stoppedReason = 'attachment_inline_recovery';
+          documentPolicy.reason = 'Respuesta recuperada desde el contenido extraido de los adjuntos.';
+          documentPolicy.thresholds = {
+            ...(documentPolicy.thresholds || {}),
+            attachmentFallback: true,
+            originalStoppedReason: result.stoppedReason,
+            fileCount: fileIds.length,
+          };
+          task.documentPolicy = documentPolicy;
+          emit({
+            type: 'repair_attempt',
+            attempt: 1,
+            status: 'recovered',
+            message: 'Recuperé la respuesta usando el contenido extraído de tus archivos.',
+          });
+          emit({
+            type: 'quality_gate',
+            gate: 'attachment_inline_recovery',
+            label: 'Respuesta recuperada',
+            passed: true,
+            summary: 'Se evitó entregar una disculpa vacía y se respondió desde el contenido de los adjuntos.',
+          });
+        }
+      }
+
+      if (finalMarkdown) {
+        emit({ type: 'final_text', markdown: finalMarkdown });
       }
 
       const doneEvent = applyEvent({
         type: 'done',
-        stoppedReason: result.stoppedReason,
+        stoppedReason,
         stats: { steps: result.steps.length, artifacts: artifacts.length },
       });
 
       // Persist the final assistant message with artifacts metadata.
       let dbMessage = null;
-      if (chatId && prisma && (result.finalAnswer || streamState.steps.length || artifacts.length)) {
+      if (chatId && prisma && (finalMarkdown || streamState.steps.length || artifacts.length)) {
         try {
           const data = {
               content: serializeAgentState(streamState),
-              tokens: Math.ceil((result.finalAnswer || serializeAgentState(streamState)).length / 4),
+              tokens: Math.ceil((finalMarkdown || serializeAgentState(streamState)).length / 4),
               metadata: {
                 source: 'agent-task',
                 taskId,
-                status: result.stoppedReason === 'aborted' ? 'cancelled' : 'completed',
+                status: stoppedReason === 'aborted' ? 'cancelled' : 'completed',
                 displayGoal,
                 artifacts,
                 executionProfile,
@@ -1306,7 +1459,7 @@ router.post(
                 enterpriseQaBoardReview,
                 agenticOperatingCore,
                 durableExecution: enterpriseRuntimeProfile.durableExecution,
-                stoppedReason: result.stoppedReason,
+                stoppedReason,
                 maxSteps,
                 maxRuntimeMs,
                 updatedAt: new Date().toISOString(),
@@ -1326,7 +1479,7 @@ router.post(
         ...doneEvent,
         dbMessageId: dbMessage?.id || null,
       };
-      task.status = result.stoppedReason === 'aborted' ? 'cancelled' : 'completed';
+      task.status = stoppedReason === 'aborted' ? 'cancelled' : 'completed';
       task.updatedAt = new Date().toISOString();
       taskStore.markTaskStatus(task, task.status, {
         streamState,
@@ -1334,7 +1487,7 @@ router.post(
           steps: result.steps.length,
           artifacts: artifacts.length,
           durationMs: Date.now() - taskStartedAt,
-          stoppedReason: result.stoppedReason,
+          stoppedReason,
         },
         artifacts,
       });
@@ -1430,6 +1583,11 @@ function runAgentJobInProcess(payload, userId) {
   });
 }
 
+function shouldRunAttachmentTaskLocally({ fileIds = [], goal = '', env = process.env } = {}) {
+  if (env.AGENT_TASK_QUEUE_ATTACHMENTS === '1') return false;
+  return (Array.isArray(fileIds) && fileIds.length > 0) || isTranscriptionRequest(goal);
+}
+
 async function handleQueuedTaskRequest(req, res) {
   const rawGoal = String(req.body.goal || '');
   try {
@@ -1471,6 +1629,12 @@ async function handleQueuedTaskRequest(req, res) {
       userId: req.user?.id,
       chatId: typeof req.body.chatId === 'string' ? req.body.chatId : null,
       providedFileIds: fileIds,
+    });
+  }
+  if (shouldRunAttachmentTaskLocally({ fileIds, goal: agentGoal })) {
+    return handleLocalTaskRequest(req, res, {
+      fallbackReason: 'attachment_local_runtime',
+      fallbackDetail: 'attached document/image analysis bypassed queued runtime',
     });
   }
   const clientFileMetadata = normalizeClientMetadata(req.body.fileMetadata, fileIds);
@@ -2052,6 +2216,26 @@ function normalizeDisplayGoal(text) {
 function isTranscriptionRequest(text) {
   return /\b(transcrib(?:e|ir|eme|irme|iendo|irlo|irla|elo|ela)?|transcripci[oó]n|transcripcion|transcribe|transcript|transcription)\b/i
     .test(String(text || ''));
+}
+
+function looksLikeAttachmentRecoveryNeeded(text) {
+  const value = String(text || '').trim().toLowerCase();
+  if (!value) return true;
+  return (
+    value === 'null' ||
+    value === 'undefined' ||
+    value === '(agent returned empty message)' ||
+    value === 'respuesta vacía' ||
+    value === 'respuesta vacia' ||
+    value.includes('no pude usar docintel') ||
+    value.includes('no pude usar la herramienta') ||
+    value.includes('falló de forma repetida') ||
+    value.includes('fallo de forma repetida') ||
+    value.includes('vuelve a intentarlo') ||
+    value.includes('reformula la solicitud') ||
+    value.includes('no pude acceder al contenido') ||
+    value.includes('proporciona un archivo legible')
+  );
 }
 
 function normalizeSystemContract(text) {
@@ -2649,9 +2833,12 @@ router.INTERNAL = {
   getTaskForUser,
   inferIconFor,
   initialAgentState,
+  looksLikeAttachmentRecoveryNeeded,
   normalizeDisplayGoal,
   normalizeSystemContract,
   reduceAgentState,
+  safeJsonStringify,
+  shouldRunAttachmentTaskLocally,
   shortLabel,
   streamTaskEvents,
   serializeAgentState,

@@ -99,133 +99,166 @@
     finalize:   () => 'Componiendo respuesta',
   };
 
-  function truncate(s, n) {
-    if (!s) return '';
-    const str = String(s);
-    return str.length <= n ? str : str.slice(0, n - 1) + '…';
+function truncate(s, n) {
+  if (!s) return '';
+  const str = String(s);
+  return str.length <= n ? str : str.slice(0, n - 1) + '…';
+}
+
+function prettyDomain(url) {
+  if (!url) return '';
+  try { return new URL(String(url)).hostname.replace(/^www\./, ''); }
+  catch { return ''; }
+}
+
+function safeArgs(raw) {
+  if (raw == null) return {};
+  if (typeof raw === 'object') return raw;
+  try { return JSON.parse(String(raw || '{}')); }
+  catch { return {}; }
+}
+
+function textFromMessageContent(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .map(p => (p && p.type === 'text') ? p.text : '')
+      .filter(Boolean)
+      .join(' ');
+  }
+  if (content && typeof content === 'object') {
+    if (typeof content.text === 'string') return content.text;
+    try { return JSON.stringify(content); } catch { return ''; }
+  }
+  return '';
+}
+
+const PROFESSIONAL_MINIMAL_COGNITION_RULES = Object.freeze([
+  'Professional minimal cognition profile:',
+  '- Start from the user intent, not from typos. Normalize noisy Spanish/English internally before choosing tools, scope, or output format.',
+  '- Put the direct answer or next action first. Then include only the evidence, files, commands, blockers, or tradeoffs needed to trust it.',
+  '- Avoid filler, performative process narration, generic disclaimers, repeated summaries, and vague hedging.',
+  '- If uncertain, name the exact missing input and continue with the safest useful next step.',
+  '- For repo, runtime, document, image, or local-app work, inspect real artifacts, logs, tools, or tests before making conclusions.',
+  '- Do not claim execution, edits, verification, external research, or local state unless a tool result actually supports it.',
+  '- Keep the final answer calm, compact, and professional: no emojis, no decorative framing, no invented internal steps.',
+]);
+
+const COGNITION_UPGRADE_ACTION = /\b(mejor\w*|optimiz\w*|elev\w*|refin\w*|profesionaliz\w*|hardening|upgrade)\b/i;
+const COGNITION_UPGRADE_TARGET = /\b(cerebro|brain|ia|ai|inteligencia|razonamiento|contexto|memoria|agentes?|sistema|runtime|orquestador)\b/i;
+
+function isCognitionUpgradeRequest(text) {
+  const normalized = String(text || '');
+  return COGNITION_UPGRADE_ACTION.test(normalized) && COGNITION_UPGRADE_TARGET.test(normalized);
+}
+
+function buildProfessionalMinimalCognitionBlock({ userQuery = '', goals = [] } = {}) {
+  const lines = [...PROFESSIONAL_MINIMAL_COGNITION_RULES];
+  const goalText = Array.isArray(goals) ? goals.join('\n') : '';
+  if (isCognitionUpgradeRequest(`${userQuery}\n${goalText}`)) {
+    lines.push(
+      '- This turn asks to improve the AI brain/context. Treat it as runtime behavior hardening: extend the existing architecture, ship a small verifiable change, and avoid broad rewrites unless evidence requires them.'
+    );
+  }
+  return lines.join('\n');
+}
+
+function buildThreadWorkContext(history, userQuery) {
+  const normalized = conversationUnderstanding.normalizeHistory(history || []);
+  const recentTurns = normalized.slice(-18).map(m => {
+    const tag = m.role === 'assistant' ? 'ASSISTANT' : (m.role === 'system' ? 'SYSTEM' : 'USER');
+    return `${tag}: ${truncate(m.content, 900)}`;
+  }).join('\n');
+
+  const goals = conversationUnderstanding.extractLikelyUserGoals(normalized, userQuery, 8);
+  const lines = [
+    'Treat this chat thread as an ongoing autonomous work session, not as an isolated Q&A turn.',
+    'Infer the user intent from the full thread, including spelling mistakes and corrections. Continue the task unless an external irreversible action needs explicit confirmation.',
+    'Before finalizing, check whether the request requires tool use, recent facts, repository context, or step-by-step execution. Use the available tools when they materially improve the answer.',
+    'If a requested action needs a tool that is not available in this runtime, state that limitation briefly and provide the closest executable next step instead of pretending it was done.',
+    '',
+    buildProfessionalMinimalCognitionBlock({ userQuery, goals }),
+  ];
+
+  if (goals.length) {
+    lines.push('', 'Standing user goals inferred from this thread:', ...goals.map(goal => `- ${truncate(goal, 900)}`));
+  }
+  if (recentTurns) {
+    lines.push('', 'Recent thread context:', recentTurns);
+  }
+  return lines.join('\n');
+}
+
+function stageLabelFor(toolName, args) {
+  const fn = STAGE_LABELS[toolName];
+  if (fn) return fn(args) || toolName;
+  return `Ejecutando ${toolName}`;
+}
+
+/**
+ * Whether the named provider+model supports OpenAI-style tool calling.
+ * The agentic loop relies on `tool_calls` in the model response, so
+ * non-function-calling models (older OSS, Anthropic without the tools
+ * shim, etc.) must skip this path and fall through to plain streaming.
+ *
+ * We intentionally keep this allowlist conservative — being wrong here
+ * means turning the feature OFF for that model, not crashing.
+ */
+function modelSupportsFunctionCalling(provider, model) {
+  const p = String(provider || '').toLowerCase();
+  const m = String(model || '').toLowerCase();
+  if (p === 'openai') {
+    return /^(gpt-4|gpt-4o|gpt-4\.1|gpt-5|o3|o4|chatgpt|gpt-3\.5-turbo-1106|gpt-3\.5-turbo-0125)/i.test(m);
+  }
+  if (p === 'gemini') {
+    return /^gemini-(1\.5|2|2\.5|3)/i.test(m);
+  }
+  if (p === 'deepseek') {
+    return /^deepseek-(v\d|chat|reasoner)/i.test(m);
+  }
+  if (p === 'openrouter') {
+    // OpenRouter normalises tools across providers; the safe bets are
+    // the same families as above when surfaced through OpenRouter.
+    return /(openai\/(gpt-4|gpt-4o|gpt-4\.1|gpt-5|o3|o4)|google\/gemini-(1\.5|2|2\.5|3)|deepseek\/|moonshotai\/kimi-k2\.6)/i.test(m);
+  }
+  return false;
+}
+
+const SIMPLE_CHAT_PROMPT = /^\s*(hola|hi|hello|hey|buenas|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches|gracias|thanks|ok|vale|listo|perfecto|sí|si|no|test|prueba)[.!?¡¿\s]*$/i;
+const AGENTIC_PROMPT_HINT = /\b(clon|repo|repositorio|github|git|commit|push|pr|pull ?request|deploy|despleg|codex|cursor|claude.?code|program|c[oó]digo|refactor|mejora|arregla|corrige|no.?funciona|no.?sirve|todav[ií]a|sigue|contin[uú]a|investiga|busca|fuentes?|cita|web|internet|actual|reciente|pdf|documento|archivo|excel|word|ppt|tabla|analiza|compara|genera.?archivo|descargable|aut[oó]nom|background|segundo.?plano|meses?|semanas?|\b\/goal\b|\b\/plan\b)\b/i;
+
+/**
+ * Decide whether a normal chat turn should enter the expensive agentic
+ * loop. The loop is useful for repo work, current research, documents
+ * and autonomous follow-ups; it is the wrong path for greetings and
+ * simple Q&A because some providers can finish without a `finalize`
+ * tool call, which previously surfaced the generic "no verificable"
+ * fallback instead of a normal answer.
+ */
+function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
+  const text = String(prompt || '').trim();
+  if (!text) return false;
+  if (SIMPLE_CHAT_PROMPT.test(text)) return false;
+  if (Array.isArray(files) && files.length > 0) return true;
+  if (/^\s*\/(goal|plan)\b/i.test(text)) return true;
+  if (isCognitionUpgradeRequest(text)) return true;
+  if (AGENTIC_PROMPT_HINT.test(text)) return true;
+  // Bilingual create/transform detector — routes "genera una imagen",
+  // "hazme un organigrama", "create a chart", "diseña una presentación",
+  // etc. into the agentic runtime so the artifact tools actually fire.
+  // AGENTIC_PROMPT_HINT covered repo/research/doc work but missed many
+  // visual deliverables (images, charts, org charts, diagrams, slides).
+  if (isAgenticActionRequest(text)) return true;
+
+  const recent = Array.isArray(history)
+    ? history.slice(-8).map((m) => textFromMessageContent(m && m.content)).join('\n')
+    : '';
+  if (recent && /\b(repo|github|commit|deploy|despleg|archivo|documento|pdf|excel|word|investiga|fuentes?|no.?funciona|todav[ií]a)\b/i.test(recent)) {
+    return /\b(sigue|contin[uú]a|hazlo|dale|arregla|corrige|eso|todav[ií]a|no.?funciona|no.?sirve)\b/i.test(text);
   }
 
-  function prettyDomain(url) {
-    if (!url) return '';
-    try { return new URL(String(url)).hostname.replace(/^www\./, ''); }
-    catch { return ''; }
-  }
-
-  function safeArgs(raw) {
-    if (raw == null) return {};
-    if (typeof raw === 'object') return raw;
-    try { return JSON.parse(String(raw || '{}')); }
-    catch { return {}; }
-  }
-
-  function textFromMessageContent(content) {
-    if (typeof content === 'string') return content;
-    if (Array.isArray(content)) {
-      return content
-        .map(p => (p && p.type === 'text') ? p.text : '')
-        .filter(Boolean)
-        .join(' ');
-    }
-    if (content && typeof content === 'object') {
-      if (typeof content.text === 'string') return content.text;
-      try { return JSON.stringify(content); } catch { return ''; }
-    }
-    return '';
-  }
-
-  function buildThreadWorkContext(history, userQuery) {
-    const normalized = conversationUnderstanding.normalizeHistory(history || []);
-    const recentTurns = normalized.slice(-18).map(m => {
-      const tag = m.role === 'assistant' ? 'ASSISTANT' : (m.role === 'system' ? 'SYSTEM' : 'USER');
-      return `${tag}: ${truncate(m.content, 900)}`;
-    }).join('\n');
-
-    const goals = conversationUnderstanding.extractLikelyUserGoals(normalized, userQuery, 8);
-    const lines = [
-      'Treat this chat thread as an ongoing autonomous work session, not as an isolated Q&A turn.',
-      'Infer the user intent from the full thread, including spelling mistakes and corrections. Continue the task unless an external irreversible action needs explicit confirmation.',
-      'Before finalizing, check whether the request requires tool use, recent facts, repository context, or step-by-step execution. Use the available tools when they materially improve the answer.',
-      'If a requested action needs a tool that is not available in this runtime, state that limitation briefly and provide the closest executable next step instead of pretending it was done.',
-    ];
-
-    if (goals.length) {
-      lines.push('', 'Standing user goals inferred from this thread:', ...goals.map(goal => `- ${truncate(goal, 900)}`));
-    }
-    if (recentTurns) {
-      lines.push('', 'Recent thread context:', recentTurns);
-    }
-    return lines.join('\n');
-  }
-
-  function stageLabelFor(toolName, args) {
-    const fn = STAGE_LABELS[toolName];
-    if (fn) return fn(args) || toolName;
-    return `Ejecutando ${toolName}`;
-  }
-
-  /**
-   * Whether the named provider+model supports OpenAI-style tool calling.
-   * The agentic loop relies on `tool_calls` in the model response, so
-   * non-function-calling models (older OSS, Anthropic without the tools
-   * shim, etc.) must skip this path and fall through to plain streaming.
-   *
-   * We intentionally keep this allowlist conservative — being wrong here
-   * means turning the feature OFF for that model, not crashing.
-   */
-  function modelSupportsFunctionCalling(provider, model) {
-    const p = String(provider || '').toLowerCase();
-    const m = String(model || '').toLowerCase();
-    if (p === 'openai') {
-      return /^(gpt-4|gpt-4o|gpt-4\.1|gpt-5|o3|o4|chatgpt|gpt-3\.5-turbo-1106|gpt-3\.5-turbo-0125)/i.test(m);
-    }
-    if (p === 'gemini') {
-      return /^gemini-(1\.5|2|2\.5|3)/i.test(m);
-    }
-    if (p === 'deepseek') {
-      return /^deepseek-(v\d|chat|reasoner)/i.test(m);
-    }
-    if (p === 'openrouter') {
-      // OpenRouter normalises tools across providers; the safe bets are
-      // the same families as above when surfaced through OpenRouter.
-      return /(openai\/(gpt-4|gpt-4o|gpt-4\.1|gpt-5|o3|o4)|google\/gemini-(1\.5|2|2\.5|3)|deepseek\/|moonshotai\/kimi-k2\.6)/i.test(m);
-    }
-    return false;
-  }
-
-  const SIMPLE_CHAT_PROMPT = /^\s*(hola|hi|hello|hey|buenas|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches|gracias|thanks|ok|vale|listo|perfecto|sí|si|no|test|prueba)[.!?¡¿\s]*$/i;
-  const AGENTIC_PROMPT_HINT = /\b(clon|repo|repositorio|github|git|commit|push|pr|pull ?request|deploy|despleg|codex|cursor|claude.?code|program|c[oó]digo|refactor|mejora|arregla|corrige|no.?funciona|no.?sirve|todav[ií]a|sigue|contin[uú]a|investiga|busca|fuentes?|cita|web|internet|actual|reciente|pdf|documento|archivo|excel|word|ppt|tabla|analiza|compara|genera.?archivo|descargable|aut[oó]nom|background|segundo.?plano|meses?|semanas?|\b\/goal\b|\b\/plan\b)\b/i;
-
-  /**
-   * Decide whether a normal chat turn should enter the expensive agentic
-   * loop. The loop is useful for repo work, current research, documents
-   * and autonomous follow-ups; it is the wrong path for greetings and
-   * simple Q&A because some providers can finish without a `finalize`
-   * tool call, which previously surfaced the generic "no verificable"
-   * fallback instead of a normal answer.
-   */
-  function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
-    const text = String(prompt || '').trim();
-    if (!text) return false;
-    if (SIMPLE_CHAT_PROMPT.test(text)) return false;
-    if (Array.isArray(files) && files.length > 0) return true;
-    if (/^\s*\/(goal|plan)\b/i.test(text)) return true;
-    if (AGENTIC_PROMPT_HINT.test(text)) return true;
-    // Bilingual create/transform detector — routes "genera una imagen",
-    // "hazme un organigrama", "create a chart", "diseña una presentación",
-    // etc. into the agentic runtime so the artifact tools actually fire.
-    // AGENTIC_PROMPT_HINT covered repo/research/doc work but missed many
-    // visual deliverables (images, charts, org charts, diagrams, slides).
-    if (isAgenticActionRequest(text)) return true;
-
-    const recent = Array.isArray(history)
-      ? history.slice(-8).map((m) => textFromMessageContent(m && m.content)).join('\n')
-      : '';
-    if (recent && /\b(repo|github|commit|deploy|despleg|archivo|documento|pdf|excel|word|investiga|fuentes?|no.?funciona|todav[ií]a)\b/i.test(recent)) {
-      return /\b(sigue|contin[uú]a|hazlo|dale|arregla|corrige|eso|todav[ií]a|no.?funciona|no.?sirve)\b/i.test(text);
-    }
-
-    return false;
-  }
+  return false;
+}
 
   function buildChatFinalizeProfile({ userQuery, fileIds = [], availableToolNames = new Set() } = {}) {
     const profile = buildExecutionProfile({ goal: userQuery, fileIds });

@@ -8,8 +8,11 @@ const EXPLICIT_WORD_OUTPUT_RE = /\b(?:en|como|a|formato)\s+(?:un\s+|una\s+|el\s+
 const EXPLICIT_SHEET_OUTPUT_RE = /\b(?:en|como|a|formato)\s+(?:un\s+|una\s+|el\s+|la\s+)?(?:excel|xlsx|spreadsheet|hoja\s+de\s+c[aá]lculo)\b|\b(?:excel|xlsx|spreadsheet)\b/i;
 const EXPLICIT_DECK_OUTPUT_RE = /\b(?:en|como|a|formato)\s+(?:un\s+|una\s+|el\s+|la\s+)?(?:ppt|pptx|power\s*point|powerpoint|presentaci[oó]n|diapositivas?)\b|\b(?:ppt|pptx|power\s*point|powerpoint)\b/i;
 const EXPLICIT_PDF_OUTPUT_RE = /\b(?:en|como|a|formato)\s+(?:un\s+|una\s+|el\s+|la\s+)?pdf\b|\bpdf\b/i;
-const EXPLICIT_TRANSCRIPTION_OUTPUT_RE = /\b(?:en|como|a)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|presentaci[oó]n)\b|\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|exporta(?:r|me)?|descarga(?:r|me)?|dame|prepara(?:r|me)?)\b.*\b(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|documento|archivo|informe|reporte|presentaci[oó]n)\b/i;
+const WORD_OUTPUT_COMMAND_RE = /\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|exporta(?:r|me)?|descarga(?:r|me)?|dame|prepara(?:r|me)?|redacta(?:r|me)?|elabora(?:r|me)?|devu[eé]lv(?:e|eme|elo)|entr[eé]ga(?:r|me)?|quiero|necesito)\b[^.?!]{0,160}\b(?:word|docx|documento\s+word)\b|\b(?:en|como|a|formato|formato\s+de)\s+(?:un\s+|una\s+|el\s+|la\s+)?(?:word|docx|documento\s+word)\b/i;
+const WORD_SOURCE_TO_OTHER_FORMAT_RE = /\b(?:convierte|convertir|exporta(?:r|me)?|pasa(?:r|me)?|transforma(?:r|me)?)\b[^.?!]{0,140}\b(?:(?:mi|este|ese|el|la|su)\s+)?(?:documento\s+)?(?:word|docx|documento\s+word)\b[^.?!]{0,100}\b(?:a|como|en|formato|formato\s+de)\s+(?:pdf|excel|xlsx|pptx?|power\s*point|powerpoint|presentaci[oó]n|diapositivas?|slides?)\b/i;
+const EXPLICIT_TRANSCRIPTION_OUTPUT_RE = /\b(?:en|como|a)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|presentaci[oó]n)\b|\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|exporta(?:r|me)?|descarga(?:r|me)?|dame|prepara(?:r|me)?|redacta(?:r|me)?|elabora(?:r|me)?|devu[eé]lv(?:e|eme|elo)|entr[eé]ga(?:r|me)?)\b.*\b(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|documento|archivo|informe|reporte|presentaci[oó]n)\b|\b(?:quiero|necesito)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|documento|archivo|informe|reporte|presentaci[oó]n)\b/i;
 const DOCUMENT_UNDERSTANDING_RE = /\b(analiza(?:r|me)?|an[aá]lisis|resume(?:n|me)?|resumir|extrae(?:r|me)?|transcrib(?:e|ir|eme|irme)?|qu[eé]\s+dice|seg[uú]n\s+(?:el\s+)?documento|archivo\s+adjunto|documento\s+adjunto|evidencia)\b/i;
+const CHAT_ONLY_DIRECTIVE_RE = /\b(?:no\s+(?:crees?|crear|generes?|generar|hagas?|hacer|exportes?|exportar|prepares?|preparar|descargues?|descargar)\s+(?:un\s+|una\s+|el\s+|la\s+)?(?:archivos?|documentos?|word|docx|pdf|excel|xlsx|pptx?|power\s*point|powerpoint|entregables?)|responde(?:r)?\s+(?:solo|solamente)?\s*(?:en\s+)?(?:el\s+)?chat|solo\s+en\s+chat|sin\s+(?:archivos?|documentos?|descarga|entregables?))\b/i;
 // Read/inquiry intents about a previously-shared document. Matches
 // phrases like "cuál es el título del word", "de qué trata el
 // documento", "qué dice el pdf", "cómo se llama el archivo", "resume
@@ -19,7 +22,8 @@ const DOCUMENT_UNDERSTANDING_RE = /\b(analiza(?:r|me)?|an[aá]lisis|resume(?:n|m
 // and must NOT be promoted to doc_required just because the prompt
 // contains the literal word "word" / "documento" / "pdf".
 const DOCUMENT_INQUIRY_RE = /\b(?:cu[aá]l(?:es)?|qu[eé]|c[oó]mo|de\s+qu[eé]|qui[eé]n(?:es)?|cu[aá]ndo|d[oó]nde|por\s+qu[eé]|cu[aá]nt[oa]s?|resume(?:me|n)?|res[uú]meme|lee(?:me)?|l[eé]eme|abre(?:me)?|[aá]breme|muestra(?:me)?|mu[eé]strame|dime|cu[eé]ntame|expl[ií]came|explica(?:me)?|busca(?:me)?|encuentra(?:me)?|de\s+qu[eé]\s+trata|sobre\s+qu[eé])\b[^.?!]{0,160}\b(?:word|docx|documento|archivo|pdf|excel|xlsx|hoja\s+de\s+c[aá]lculo|pptx|power\s*point|powerpoint|presentaci[oó]n|adjunto|texto)\b/i;
-const EXPLICIT_DOCUMENT_OUTPUT_RE = /\b(?:en|como|a)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|presentaci[oó]n|documento|archivo)\b|\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|exporta(?:r|me)?|descarga(?:r|me)?|prepara(?:r|me)?)\b.*\b(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|documento|archivo|informe|reporte|presentaci[oó]n)\b/i;
+const EXPLICIT_DOCUMENT_OUTPUT_RE = /\b(?:en|como|a)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|presentaci[oó]n|documento|archivo)\b|\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|exporta(?:r|me)?|descarga(?:r|me)?|dame|prepara(?:r|me)?|redacta(?:r|me)?|elabora(?:r|me)?|devu[eé]lv(?:e|eme|elo)|entr[eé]ga(?:r|me)?)\b.*\b(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|documento|archivo|informe|reporte|presentaci[oó]n)\b|\b(?:quiero|necesito)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|documento|archivo|informe|reporte|presentaci[oó]n)\b/i;
+const SOURCE_MAP_CHAT_RE = /\b(?:mapa\s+de\s+fuentes|fuentes?\s+por\s+(?:archivo|documento)|enumera\s+cada\s+archivo|cita\s+(?:la\s+)?fuente\s+por\s+documento)\b/i;
 
 let sourcePreservingEditMod = null;
 function isSourcePreservingEdit(requestText, files) {
@@ -79,14 +83,16 @@ function estimateWords({ goal, displayGoal, finalText } = {}) {
 }
 
 function detectFormat(text, requestedFormat) {
+  const explicitWordOutput = WORD_OUTPUT_COMMAND_RE.test(text) && !WORD_SOURCE_TO_OTHER_FORMAT_RE.test(text);
+  if (explicitWordOutput) return 'docx';
   const requested = compactText(requestedFormat).toLowerCase().replace(/^\./, '');
   if (['docx', 'xlsx', 'pptx', 'pdf'].includes(requested)) return requested;
   const explicitDeck = EXPLICIT_DECK_OUTPUT_RE.test(text);
   const explicitPdf = EXPLICIT_PDF_OUTPUT_RE.test(text);
   const explicitSheet = EXPLICIT_SHEET_OUTPUT_RE.test(text);
-  const explicitWord = EXPLICIT_WORD_OUTPUT_RE.test(text);
-  if (explicitDeck) return 'pptx';
-  if (explicitPdf) return 'pdf';
+  const explicitWord = EXPLICIT_WORD_OUTPUT_RE.test(text) && !WORD_SOURCE_TO_OTHER_FORMAT_RE.test(text);
+  if (explicitDeck && !explicitWord) return 'pptx';
+  if (explicitPdf && !explicitWord) return 'pdf';
   if (explicitSheet && !explicitWord) return 'xlsx';
   if (explicitWord) return 'docx';
   if (SHEET_RE.test(text)) return 'xlsx';
@@ -115,9 +121,16 @@ function detectComplexity(text, estimatedWords) {
 // "tabla" while answering a plain question, and matching on that text
 // would auto-promote conversational turns to doc_required.
 function classifyMode(requestText, estimatedWords, format, files = [], options = {}) {
-  if (options.transcriptionOnly) return 'chat_only';
+  if (options.transcriptionOnly || options.chatOnlyDirective) return 'chat_only';
   const documentUnderstanding = DOCUMENT_UNDERSTANDING_RE.test(requestText);
   const explicitOutput = EXPLICIT_DOCUMENT_OUTPUT_RE.test(requestText);
+  const explicitFileFormat = EXPLICIT_WORD_OUTPUT_RE.test(requestText)
+    || EXPLICIT_SHEET_OUTPUT_RE.test(requestText)
+    || EXPLICIT_DECK_OUTPUT_RE.test(requestText)
+    || EXPLICIT_PDF_OUTPUT_RE.test(requestText);
+  if (Array.isArray(files) && files.length > 0 && SOURCE_MAP_CHAT_RE.test(requestText) && !explicitFileFormat) {
+    return 'chat_only';
+  }
   if (isSourcePreservingEdit(requestText, files)) return 'doc_required';
   // Read/inquiry intent about a doc the user already shared in a
   // prior turn must short-circuit BEFORE the WORDISH/SHEET/DECK/PDF
@@ -173,6 +186,10 @@ function normalizeDocumentPolicyCoherence(policy) {
   return { ...policy, mode, autoGenerate };
 }
 
+function hasChatOnlyDirective(value) {
+  return CHAT_ONLY_DIRECTIVE_RE.test(compactText(value));
+}
+
 function buildDocumentDeliveryPolicy({
   goal,
   displayGoal,
@@ -187,16 +204,26 @@ function buildDocumentDeliveryPolicy({
   // assistant's wording can never promote a chat turn to doc_required.
   const text = compactText(`${requestText} ${finalText || ''}`);
   const transcriptionOnly = TRANSCRIPTION_RE.test(requestText) && !EXPLICIT_TRANSCRIPTION_OUTPUT_RE.test(requestText);
+  const chatOnlyDirective = hasChatOnlyDirective(requestText);
   const explicitOutput = hasExplicitDocumentOutputRequest(requestText);
+  const sourceMapChat = Array.isArray(files) && files.length > 0 && SOURCE_MAP_CHAT_RE.test(requestText)
+    && !(
+      EXPLICIT_WORD_OUTPUT_RE.test(requestText)
+      || EXPLICIT_SHEET_OUTPUT_RE.test(requestText)
+      || EXPLICIT_DECK_OUTPUT_RE.test(requestText)
+      || EXPLICIT_PDF_OUTPUT_RE.test(requestText)
+    );
   const documentUnderstanding = DOCUMENT_UNDERSTANDING_RE.test(requestText);
   const estimated = estimateWords({ goal, displayGoal, finalText });
   const format = detectFormat(requestText, requestedFormat);
   const template = detectTemplate(text, format);
-  const mode = classifyMode(requestText, estimated, format, Array.isArray(files) ? files : [], { transcriptionOnly });
+  const mode = classifyMode(requestText, estimated, format, Array.isArray(files) ? files : [], { transcriptionOnly, chatOnlyDirective });
   const tableSignals = SHEET_RE.test(text);
   const complexity = detectComplexity(text, estimated);
   const reason = (() => {
     if (transcriptionOnly) return 'Solicitud de transcripción literal; se responde en chat salvo que el usuario pida un archivo.';
+    if (chatOnlyDirective) return 'El usuario pidio responder en chat y no generar archivos.';
+    if (sourceMapChat) return 'Solicitud de mapa de fuentes sobre adjuntos; se responde en chat y no se genera archivo.';
     if (DOCUMENT_UNDERSTANDING_RE.test(requestText) && !EXPLICIT_DOCUMENT_OUTPUT_RE.test(requestText)) return 'Solicitud de analisis documental; se responde primero en chat y se sugiere documento solo si hace falta.';
     if (mode === 'chat_only') return 'Respuesta conversacional corta; no requiere archivo.';
     // Los motivos de "sugerencia" (documento opcional, no automático) deben
@@ -230,6 +257,7 @@ function buildDocumentDeliveryPolicy({
       fileCount: Array.isArray(files) ? files.length : 0,
       transcriptionOnly,
       explicitOutput,
+      chatOnlyDirective,
       documentUnderstanding,
     },
     palette: PALETTES[template] || PALETTES.business,
@@ -244,6 +272,7 @@ module.exports = {
   detectFormat,
   detectTemplate,
   estimateWords,
+  hasChatOnlyDirective,
   hasExplicitDocumentOutputRequest,
   wordCount,
 };

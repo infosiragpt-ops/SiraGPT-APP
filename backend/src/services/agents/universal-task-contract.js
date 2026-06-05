@@ -675,7 +675,10 @@ function extractCountConstraints(raw) {
   return Array.from(new Set(constraints));
 }
 
-function extractSourceRequirements(raw, tokenAnalysis = null) {
+const PRIVATE_ATTACHMENT_SOURCE_RE = /\b(adjunt[oa]s?|archivo(?:s)? cargad[oa]s?|documento(?:s)? cargad[oa]s?|segun (?:mis|el|los) archivo|segun (?:mis|el|los) documento|según (?:mis|el|los) archivo|según (?:mis|el|los) documento|este documento|esta tesis|pdf cargado|word cargado|docx cargado|mis archivos|mi proyecto)\b/i;
+const EXPLICIT_EXTERNAL_SOURCE_RE = /\b(web|internet|online|extern[ao]s?|fuentes externas|buscar afuera|busca afuera|noticias?|actual(?:es)?|actualidad|reciente(?:s)?|hoy|ahora|latest|current|doi|scopus|web of science|wos|openalex|crossref|pubmed|doaj|scielo|semantic scholar|papers?|art[ií]culos?|cient[ií]fic[oa]s?|acad[eé]mic[oa]s?)\b/i;
+
+function extractSourceRequirements(raw, tokenAnalysis = null, { hasFiles = false } = {}) {
   const n = normalize(raw);
   const providers = [];
   if (/\b(scopus)\b/.test(n)) providers.push('Scopus');
@@ -693,7 +696,11 @@ function extractSourceRequirements(raw, tokenAnalysis = null) {
     /\b(?:hoy|ahora|actual(?:es)?|actualidad|reciente(?:s)?|[uú]ltim[oa]s?|latest|today|current)\b.*\b(?:noticias?|pas[oó]|ocurri[oó]|precio|estado|resultado|marcador|avance)\b/i,
   ]));
   const tokenResearch = !noSearch && Boolean(tokenAnalysis?.context?.has_research_requirement || tokenAnalysis?.evidence?.research?.present);
-  const sourceRequired = !noSearch && (tokenResearch || freshnessLookup || matchAny(raw, [
+  const privateDocumentOnlySource =
+    hasFiles &&
+    (PRIVATE_ATTACHMENT_SOURCE_RE.test(raw) || PRIVATE_ATTACHMENT_SOURCE_RE.test(n)) &&
+    !(EXPLICIT_EXTERNAL_SOURCE_RE.test(raw) || EXPLICIT_EXTERNAL_SOURCE_RE.test(n));
+  const sourceRequired = !noSearch && !privateDocumentOnlySource && (tokenResearch || freshnessLookup || matchAny(raw, [
     /\b(busca|buscar|investiga|investigar|fuentes|referencias|citas|art[ií]culos?|papers?|doi|scopus|wos|openalex|crossref|pubmed|doaj|scielo|cient[ií]fic[oa]s?|acad[eé]mic[oa]s?)\b/i,
   ]));
   const strict = Boolean(tokenAnalysis?.evidence?.strict?.present) || matchAny(raw, [/\b(100%|reales|verifica|validar|doi|open access|acceso abierto|no invent|precis[ao]|art[ií]culos cient[ií]ficos)\b/i]);
@@ -717,7 +724,7 @@ function inferIntentAndPipeline({ raw, fileIds = [], tokenAnalysis = null }) {
   const hasFiles = Array.isArray(fileIds) && fileIds.length > 0;
   const textOnly = hasTextOnlyDirective(raw) || Boolean(tokenAnalysis?.context?.has_text_only_directive);
   const explicitExt = inferExplicitExtension(raw, tokenAnalysis);
-  const research = extractSourceRequirements(raw, tokenAnalysis).required;
+  const research = extractSourceRequirements(raw, tokenAnalysis, { hasFiles }).required;
   const action = matchAny(raw, [/\b(envia|enviar|correo|email|gmail|calendario|calendar|reserva|reservar|whatsapp|telegram|navegador|browser|agenda|programa una reunion)\b/i]);
   const editImage = matchAny(raw, [/\b(edita|editar|modifica|retoca|inpaint|pincel|mascara|mask)\b/i]) && matchAny(raw, [/\b(imagen|foto|png|jpg|jpeg|webp)\b/i]);
   const image = !editImage && matchAny(raw, [/\b(genera una imagen|crear imagen|imagen de|foto de|png|jpg|jpeg|webp)\b/i]);
@@ -1005,8 +1012,8 @@ function buildUniversalTaskContract({ rawUserRequest, fileIds = [], now = new Da
   const raw = String(rawUserRequest || '');
   const normalized = normalize(raw);
   const requestTokenAnalysis = tokenAnalysis || analyzeRequestTokens({ rawUserRequest: raw, fileIds });
-  const sourceRequirements = extractSourceRequirements(raw, requestTokenAnalysis);
   const hasFiles = Array.isArray(fileIds) && fileIds.length > 0;
+  const sourceRequirements = extractSourceRequirements(raw, requestTokenAnalysis, { hasFiles });
   const textOnly = hasTextOnlyDirective(raw) || Boolean(requestTokenAnalysis?.context?.has_text_only_directive);
   const explicitExt = inferExplicitExtension(raw, requestTokenAnalysis);
   const route = inferIntentAndPipeline({ raw, fileIds, tokenAnalysis: requestTokenAnalysis });

@@ -33,15 +33,21 @@ function isSourcePreservingEditRequest(prompt, files = []) {
   if (!text) return false;
   const hasFiles = Array.isArray(files) ? files.length > 0 : Boolean(files);
 
-  const editVerb = /\b(agreg\w*|anad\w*|insert\w*|incorpor\w*|inclu\w*|pon|poner|coloc\w*|adjunt\w*|modific\w*|edit\w*|corrig\w*|correg\w*|mejor\w*|actualiz\w*|reescrib\w*|reemplaz\w*|quit\w*|elimin\w*|complet\w*)\b/.test(text);
+  const primaryEditVerb = /\b(agreg\w*|anad\w*|insert\w*|incorpor\w*|inclu\w*|pon|poner|coloc\w*|modific\w*|edit\w*|corrig\w*|correg\w*|mejor\w*|actualiz\w*|reescrib\w*|reemplaz\w*|quit\w*|elimin\w*|complet\w*)\b/.test(text);
+  const adjuntarAction = /\badjunt(?:a|ar|ame|arme|alo|ala|alos|alas|arlo|arla|arlos|arlas)\b/.test(text)
+    && !/\b(?:documentos?|archivos?|pdf|word|docx|excel|xlsx|pptx?)\s+adjunt[oa]s?\b/.test(text);
+  const editVerb = primaryEditVerb || adjuntarAction;
   const existingDocRef = /\b(mi|mismo|misma|este|esta|ese|esa|documento|archivo|adjunto|subido|cargado|word|docx|excel|xlsx|pptx|powerpoint|pdf|tesis)\b/.test(text);
   const appendLocation = /\b(al final|final|anexo|anexos|apendice|ultima pagina|ultima hoja|nueva hoja|nueva pagina|nueva diapositiva)\b/.test(text);
   const preservation = /\b(sin cambiar|no cambies|no modificar lo demas|mismo word|mismo documento|conservar|preservar|mantener)\b/.test(text);
+  const explicitFreshDeliverable = /\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|dame|prepara(?:r|me)?|redacta(?:r|me)?|elabora(?:r|me)?|devu[eé]lv(?:e|eme|elo)|entr[eé]ga(?:r|me)?)\b[^.?!]{0,160}\b(?:un\s+|una\s+|el\s+|la\s+)?(?:word|docx|documento|informe|reporte|tesis|monografia|ensayo)\b/.test(text)
+    || /\b(?:quiero|necesito)\s+(?:un\s+|una\s+|el\s+|la\s+)(?:word|docx|documento|informe|reporte|tesis|monografia|ensayo)\b/.test(text);
   const instrument = /\b(instrumento|instrument|intuemtno|instumento|cuestionario|encuesta|escala|anexo)\b/.test(text);
   const documentRegion = /\b(portada|caratula|t[ií]tulo|encabezado|pie de pagina|indice|tabla|hoja|celda|fila|columna|diapositiva|pagina|seccion|capitulo)\b/.test(text);
   const strongImplicitFollowUp = appendLocation && (instrument || preservation || /\btesis\b/.test(text));
 
   if (!editVerb) return false;
+  if (explicitFreshDeliverable && !preservation) return false;
   if (hasFiles) return existingDocRef || appendLocation || preservation || instrument || documentRegion;
   return preservation
     || (existingDocRef && (appendLocation || instrument || documentRegion))
@@ -296,16 +302,16 @@ function block(kind, text) {
   return { kind, text: String(text || '').trim() };
 }
 
-function buildInstrumentAppendix({ prompt = '', sourceText = '', originalName = '' } = {}) {
+// Just the instrument content (no ANEXOS / Anexo-N heading), so it can be
+// reused either as a standalone appendix or as the body of a brand-new labeled
+// anexo (e.g. "Anexo 4. Instrumentos...").
+function buildInstrumentAppendixBody({ prompt = '', sourceText = '', originalName = '' } = {}) {
   const title = inferDocumentTitle(sourceText, originalName);
   const variables = inferResearchVariables(title);
   const population = inferPopulation(sourceText, title);
   const place = inferPlace(sourceText, title);
 
   return [
-    block('pageBreak', ''),
-    block('heading1', 'ANEXOS'),
-    block('heading2', 'Anexo 1. Instrumento de recolección de datos'),
     block('normal', `Título de la investigación: ${title}.`),
     block('normal', `Instrumento propuesto: cuestionario estructurado dirigido a ${population}.`),
     block('normal', `Objetivo del instrumento: recopilar información pertinente para analizar ${variables.independent} y su relación con ${variables.dependent} en ${place}.`),
@@ -331,6 +337,15 @@ function buildInstrumentAppendix({ prompt = '', sourceText = '', originalName = 
     block('heading3', 'Criterio de aplicación'),
     block('normal', 'El instrumento debe validarse mediante juicio de expertos antes de su aplicación definitiva y, si corresponde, evaluar su confiabilidad mediante alfa de Cronbach en una prueba piloto.'),
     block('normal', `Solicitud aplicada: ${compact(prompt, 260)}`),
+  ];
+}
+
+function buildInstrumentAppendix(options = {}) {
+  return [
+    block('pageBreak', ''),
+    block('heading1', 'ANEXOS'),
+    block('heading2', 'Anexo 1. Instrumento de recolección de datos'),
+    ...buildInstrumentAppendixBody(options),
   ];
 }
 
@@ -427,20 +442,139 @@ function isTargetedSectionFillRequest(prompt = '') {
   );
 }
 
-function paragraphXml(item = {}) {
+// Default visual styling used only when the source document offers no formatting
+// to inherit. Keeping pPr (paragraph) and rPr (run) separate lets us swap each
+// half independently for the source document's own properties.
+const PARAGRAPH_STYLE_DEFAULTS = {
+  heading1: {
+    pPr: '<w:pPr><w:spacing w:before="360" w:after="180"/><w:outlineLvl w:val="0"/></w:pPr>',
+    rPr: '<w:rPr><w:b/><w:sz w:val="32"/></w:rPr>',
+  },
+  heading2: {
+    pPr: '<w:pPr><w:spacing w:before="260" w:after="140"/><w:outlineLvl w:val="1"/></w:pPr>',
+    rPr: '<w:rPr><w:b/><w:sz w:val="28"/></w:rPr>',
+  },
+  heading3: {
+    pPr: '<w:pPr><w:spacing w:before="200" w:after="100"/><w:outlineLvl w:val="2"/></w:pPr>',
+    rPr: '<w:rPr><w:b/><w:sz w:val="24"/></w:rPr>',
+  },
+  normal: {
+    pPr: '<w:pPr><w:spacing w:before="80" w:after="120" w:line="360" w:lineRule="auto"/><w:jc w:val="both"/></w:pPr>',
+    rPr: '<w:rPr><w:sz w:val="24"/></w:rPr>',
+  },
+};
+
+// Pull the first <w:pPr>…</w:pPr> block (paragraph-level formatting: alignment,
+// spacing, indentation, the paragraph style reference) out of a single
+// paragraph's XML. Handles both the closing-tag form and the self-closing form.
+function extractParagraphProperties(paragraphXmlValue = '') {
+  const match = String(paragraphXmlValue || '').match(/<w:pPr\b(?:[\s\S]*?<\/w:pPr>|\s*\/>)/);
+  return match ? match[0] : '';
+}
+
+// Pull the first run's <w:rPr>…</w:rPr> block (font, size, colour, bold…) out of
+// a paragraph. The paragraph-mark rPr that lives inside <w:pPr> is stripped first
+// so we capture the formatting that actually applies to the visible text.
+function extractRunProperties(paragraphXmlValue = '') {
+  const withoutParagraphProps = String(paragraphXmlValue || '')
+    .replace(/<w:pPr\b(?:[\s\S]*?<\/w:pPr>|\s*\/>)/, '');
+  const match = withoutParagraphProps.match(/<w:rPr\b(?:[\s\S]*?<\/w:rPr>|\s*\/>)/);
+  return match ? match[0] : '';
+}
+
+// Captured paragraph properties may carry section breaks or list-numbering refs
+// that would corrupt inserted body text (spurious page sections / auto-numbered
+// lists). Drop those while keeping fonts, alignment, spacing and style refs.
+function sanitizeCapturedParagraphProperties(paragraphProps = '') {
+  return String(paragraphProps || '')
+    .replace(/<w:sectPr\b(?:[\s\S]*?<\/w:sectPr>|\s*\/>)/g, '')
+    .replace(/<w:numPr\b(?:[\s\S]*?<\/w:numPr>|\s*\/>)/g, '');
+}
+
+function looksLikeDocxHeadingParagraph(paragraph = {}) {
+  const xml = String(paragraph.xml || '');
+  if (/<w:pStyle\s+w:val="[^"]*(?:Heading|Titulo|T[ií]tulo|Title)[^"]*"/i.test(xml)) return true;
+  if (/<w:outlineLvl\b/.test(xml)) return true;
+  const text = String(paragraph.text || '').trim();
+  if (text && text.length <= 60 && /<w:b\s*\/>|<w:b\s+w:val="(?:true|1|on)"/i.test(xml) && !/[.;:]\s*$/.test(text)) {
+    return true;
+  }
+  return false;
+}
+
+// Pick the longest real body paragraph (not a heading, not a placeholder) as the
+// representative of the document's "normal text" formatting.
+function pickRepresentativeBodyParagraph(paragraphs = [], excludeIndexes = new Set()) {
+  let bestXml = '';
+  let bestLength = 0;
+  for (let i = 0; i < paragraphs.length; i += 1) {
+    if (excludeIndexes.has(i)) continue;
+    const paragraph = paragraphs[i];
+    const text = String(paragraph.text || '').trim();
+    if (text.length < 25) continue;
+    if (isPlaceholderParagraph(paragraph.text)) continue;
+    if (looksLikeDocxHeadingParagraph(paragraph)) continue;
+    if (text.length > bestLength) {
+      bestLength = text.length;
+      bestXml = paragraph.xml;
+    }
+  }
+  return bestXml;
+}
+
+function buildFormattingTemplate({ bodyXml = '', headingXml = '' } = {}) {
+  return {
+    bodyPPr: sanitizeCapturedParagraphProperties(extractParagraphProperties(bodyXml)),
+    bodyRPr: extractRunProperties(bodyXml),
+    headingPPr: sanitizeCapturedParagraphProperties(extractParagraphProperties(headingXml)),
+    headingRPr: extractRunProperties(headingXml),
+  };
+}
+
+// Template for filling a specific section: body text mirrors the document's own
+// normal paragraphs, generated sub-headings (rare) mirror the section heading.
+function buildSectionFormattingTemplate(paragraphs = [], headingIndex = -1) {
+  const heading = headingIndex >= 0 ? paragraphs[headingIndex] : null;
+  return buildFormattingTemplate({
+    bodyXml: pickRepresentativeBodyParagraph(paragraphs, new Set(headingIndex >= 0 ? [headingIndex] : [])),
+    headingXml: heading ? heading.xml : '',
+  });
+}
+
+// Template for appending a fresh appendix: only inherit body text formatting so
+// the new ANEXOS heading hierarchy keeps its readable size ladder.
+function buildDocumentFormattingTemplate(paragraphs = []) {
+  return buildFormattingTemplate({
+    bodyXml: pickRepresentativeBodyParagraph(paragraphs),
+    headingXml: '',
+  });
+}
+
+function paragraphXml(item = {}, template = null) {
   if (item.kind === 'pageBreak') {
     return '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
   }
 
   const text = xmlEscape(item.text || '');
-  const styles = {
-    heading1: '<w:pPr><w:spacing w:before="360" w:after="180"/><w:outlineLvl w:val="0"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="32"/></w:rPr>',
-    heading2: '<w:pPr><w:spacing w:before="260" w:after="140"/><w:outlineLvl w:val="1"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="28"/></w:rPr>',
-    heading3: '<w:pPr><w:spacing w:before="200" w:after="100"/><w:outlineLvl w:val="2"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="24"/></w:rPr>',
-    normal: '<w:pPr><w:spacing w:before="80" w:after="120" w:line="360" w:lineRule="auto"/><w:jc w:val="both"/></w:pPr><w:r><w:rPr><w:sz w:val="24"/></w:rPr>',
-  };
-  const prefix = styles[item.kind] || styles.normal;
-  return `<w:p>${prefix}<w:t xml:space="preserve">${text}</w:t></w:r></w:p>`;
+  const kind = PARAGRAPH_STYLE_DEFAULTS[item.kind] ? item.kind : 'normal';
+  const isHeading = kind.startsWith('heading');
+  let pPr = PARAGRAPH_STYLE_DEFAULTS[kind].pPr;
+  let rPr = PARAGRAPH_STYLE_DEFAULTS[kind].rPr;
+
+  if (template) {
+    const inheritedPPr = isHeading ? template.headingPPr : template.bodyPPr;
+    const inheritedRPr = isHeading ? template.headingRPr : template.bodyRPr;
+    if (inheritedPPr || inheritedRPr) {
+      // Adopt the source document's own formatting. Run properties are deferred
+      // to whatever the document declares (captured rPr, or the paragraph style
+      // referenced inside the captured pPr) so we never re-impose a default font
+      // size over the document's styling.
+      pPr = inheritedPPr || '';
+      rPr = inheritedRPr || '';
+    }
+  }
+
+  return `<w:p>${pPr}<w:r>${rPr}<w:t xml:space="preserve">${text}</w:t></w:r></w:p>`;
 }
 
 function xmlUnescape(value) {
@@ -478,6 +612,42 @@ function extractDocxParagraphs(documentXml = '') {
     });
   }
   return paragraphs;
+}
+
+function extractXmlSegments(xml = '', regex) {
+  const segments = [];
+  regex.lastIndex = 0;
+  let match;
+  while ((match = regex.exec(xml))) {
+    segments.push({
+      start: match.index,
+      end: match.index + match[0].length,
+      xml: match[0],
+    });
+  }
+  return segments;
+}
+
+function extractDocxTables(documentXml = '') {
+  return extractXmlSegments(documentXml, /<w:tbl\b[\s\S]*?<\/w:tbl>/g)
+    .map((table) => ({
+      ...table,
+      text: paragraphText(table.xml),
+      normalized: normalizeText(paragraphText(table.xml)),
+    }));
+}
+
+function extractTableRows(tableXml = '') {
+  return extractXmlSegments(tableXml, /<w:tr\b[\s\S]*?<\/w:tr>/g);
+}
+
+function extractTableCells(rowXml = '') {
+  return extractXmlSegments(rowXml, /<w:tc\b[\s\S]*?<\/w:tc>/g)
+    .map((cell) => ({
+      ...cell,
+      text: paragraphText(cell.xml),
+      normalized: normalizeText(paragraphText(cell.xml)),
+    }));
 }
 
 function targetHeadingPattern(target) {
@@ -519,8 +689,8 @@ function isPlaceholderParagraph(text = '') {
     || /\b(?:pendiente de completar|completar aqui|completar aquí|rellenar aqui|rellenar aquí|desarrollar aqui|desarrollar aquí)\b/.test(normalized);
 }
 
-function sectionInsertionRange(documentXml, target) {
-  const paragraphs = extractDocxParagraphs(documentXml);
+function sectionInsertionRange(documentXml, target, precomputedParagraphs = null) {
+  const paragraphs = precomputedParagraphs || extractDocxParagraphs(documentXml);
   const headingIndex = paragraphs.findIndex((paragraph) => matchesTargetHeading(paragraph.normalized, target));
   if (headingIndex < 0) {
     const notFound = new Error(`No encontré "${target.label}" dentro del DOCX original.`);
@@ -554,23 +724,488 @@ function sectionInsertionRange(documentXml, target) {
   };
 }
 
+function targetSectionBounds(documentXml, target, precomputedParagraphs = null) {
+  const paragraphs = precomputedParagraphs || extractDocxParagraphs(documentXml);
+  const headingIndex = paragraphs.findIndex((paragraph) => matchesTargetHeading(paragraph.normalized, target));
+  if (headingIndex < 0) {
+    const notFound = new Error(`No encontré "${target.label}" dentro del DOCX original.`);
+    notFound.code = 'SECTION_NOT_FOUND';
+    throw notFound;
+  }
+
+  const heading = paragraphs[headingIndex];
+  const bodyEnd = documentXml.lastIndexOf('</w:body>');
+  let sectionEnd = bodyEnd >= 0 ? bodyEnd : documentXml.length;
+  for (let index = headingIndex + 1; index < paragraphs.length; index += 1) {
+    const paragraph = paragraphs[index];
+    if (isSectionBoundary(paragraph.normalized, target)) {
+      sectionEnd = paragraph.start;
+      break;
+    }
+  }
+  return {
+    heading,
+    headingIndex,
+    sectionStart: heading.end,
+    sectionEnd,
+  };
+}
+
+function isAnexo3CronogramaTarget(target = {}) {
+  return target?.kind === 'anexo' && Number(target.number) === 3;
+}
+
+function locateCronogramaTable(documentXml, target, precomputedParagraphs = null) {
+  if (!isAnexo3CronogramaTarget(target)) return null;
+  const paragraphs = precomputedParagraphs || extractDocxParagraphs(documentXml);
+  const bounds = targetSectionBounds(documentXml, target, paragraphs);
+  const sectionIntro = documentXml.slice(bounds.heading.start, Math.min(bounds.sectionEnd, bounds.heading.end + 1200));
+  const introText = normalizeText(paragraphText(sectionIntro));
+  const tables = extractDocxTables(documentXml);
+  return tables.find((table) => {
+    if (table.start < bounds.sectionStart || table.start >= bounds.sectionEnd) return false;
+    const normalized = table.normalized;
+    const tableLooksLikeSchedule = normalized.includes('avance de la tesis')
+      && normalized.includes('acciones')
+      && normalized.includes('estado')
+      && normalized.includes('fechas');
+    return tableLooksLikeSchedule || introText.includes('cronograma');
+  }) || null;
+}
+
+function detectCronogramaAnexo3Plan(buffer, target) {
+  if (!isAnexo3CronogramaTarget(target)) return null;
+  try {
+    const documentXml = new PizZip(buffer).file('word/document.xml')?.asText() || '';
+    if (!documentXml) return null;
+    const table = locateCronogramaTable(documentXml, target);
+    if (!table) return null;
+    return buildCronogramaAnexo3Plan();
+  } catch {
+    return null;
+  }
+}
+
+function buildCronogramaAnexo3Plan() {
+  const rows = [
+    {
+      avance: 'Planificación',
+      acciones: 'Lineamientos y cronograma de tesis.',
+      estado: 'Completado',
+      weeks: [0],
+    },
+    {
+      avance: 'Capítulo I',
+      acciones: 'Problema, objetivos y justificación.',
+      estado: 'Completado',
+      weeks: [0, 1],
+    },
+    {
+      avance: 'Capítulo II',
+      acciones: 'Antecedentes y marco teórico.',
+      estado: 'En proceso',
+      weeks: [1, 2, 3],
+    },
+    {
+      avance: 'Matriz de consistencia',
+      acciones: 'Problema, objetivos, hipótesis y método.',
+      estado: 'En proceso',
+      weeks: [2, 3],
+    },
+    {
+      avance: 'Operacionalización',
+      acciones: 'Variables, indicadores, ítems y escala.',
+      estado: 'En proceso',
+      weeks: [3, 4],
+    },
+    {
+      avance: 'Metodología',
+      acciones: 'Tipo, diseño, población y muestra.',
+      estado: 'Pendiente',
+      weeks: [4, 5],
+    },
+    {
+      avance: 'Instrumentos',
+      acciones: 'Elaboración y validación del cuestionario.',
+      estado: 'Pendiente',
+      weeks: [5, 6],
+    },
+    {
+      avance: 'Trabajo de campo',
+      acciones: 'Aplicación de encuesta y base de datos.',
+      estado: 'Pendiente',
+      weeks: [7, 8, 9],
+    },
+    {
+      avance: 'Resultados',
+      acciones: 'Procesamiento estadístico e interpretación.',
+      estado: 'Pendiente',
+      weeks: [9, 10, 11],
+    },
+    {
+      avance: 'Discusión',
+      acciones: 'Contraste de hipótesis y antecedentes.',
+      estado: 'Pendiente',
+      weeks: [11, 12],
+    },
+    {
+      avance: 'Conclusiones',
+      acciones: 'Conclusiones, recomendaciones y anexos.',
+      estado: 'Pendiente',
+      weeks: [12, 13],
+    },
+    {
+      avance: 'Revisión final',
+      acciones: 'Corrección de estilo y normas APA.',
+      estado: 'Pendiente',
+      weeks: [14],
+    },
+    {
+      avance: 'Entrega',
+      acciones: 'Informe final y sustentación.',
+      estado: 'Pendiente',
+      weeks: [15, 16],
+    },
+  ];
+  return {
+    type: 'cronograma_anexo_3',
+    weekLabels: Array.from({ length: 17 }, (_, index) => `S${index + 1}`),
+    rows,
+    validationBlocks: rows.slice(0, 4).map((row) => block('normal', row.acciones)),
+  };
+}
+
+function firstParagraphXml(xml = '') {
+  return String(xml || '').match(/<w:p\b[\s\S]*?<\/w:p>/)?.[0] || '';
+}
+
+function cellParagraphXml(text = '', cellXml = '', template = null, options = {}) {
+  const sourceParagraph = firstParagraphXml(cellXml);
+  const inheritedPPr = sanitizeCapturedParagraphProperties(extractParagraphProperties(sourceParagraph));
+  const inheritedRPr = extractRunProperties(sourceParagraph);
+  let pPr = inheritedPPr || template?.bodyPPr || '';
+  const rPr = inheritedRPr || template?.bodyRPr || '';
+  if (options.center && !/<w:jc\b/.test(pPr)) {
+    pPr = pPr
+      ? pPr.replace(/<\/w:pPr>$/, '<w:jc w:val="center"/></w:pPr>')
+      : '<w:pPr><w:jc w:val="center"/></w:pPr>';
+  }
+  const value = String(text || '');
+  return `<w:p>${pPr}<w:r>${rPr}<w:t xml:space="preserve">${xmlEscape(value)}</w:t></w:r></w:p>`;
+}
+
+function replaceCellText(cellXml = '', text = '', template = null, options = {}) {
+  const tcPr = cellXml.match(/<w:tcPr\b(?:[\s\S]*?<\/w:tcPr>|\s*\/>)/)?.[0] || '';
+  return `<w:tc>${tcPr}${cellParagraphXml(text, cellXml, template, options)}</w:tc>`;
+}
+
+function replaceRowCells(rowXml = '', replacements = new Map()) {
+  const cells = extractTableCells(rowXml);
+  if (!cells.length || !replacements.size) return rowXml;
+  let updated = '';
+  let cursor = 0;
+  cells.forEach((cell, index) => {
+    updated += rowXml.slice(cursor, cell.start);
+    updated += replacements.has(index) ? replacements.get(index) : cell.xml;
+    cursor = cell.end;
+  });
+  updated += rowXml.slice(cursor);
+  return updated;
+}
+
+function replaceTableRows(tableXml = '', replacements = new Map()) {
+  const rows = extractTableRows(tableXml);
+  if (!rows.length || !replacements.size) return tableXml;
+  let updated = '';
+  let cursor = 0;
+  rows.forEach((row, index) => {
+    updated += tableXml.slice(cursor, row.start);
+    updated += replacements.has(index) ? replacements.get(index) : row.xml;
+    cursor = row.end;
+  });
+  updated += tableXml.slice(cursor);
+  return updated;
+}
+
+function fillCronogramaTableXml(tableXml = '', plan = buildCronogramaAnexo3Plan(), template = null) {
+  const rows = extractTableRows(tableXml);
+  const cellCounts = rows.map((row) => extractTableCells(row.xml).length);
+  const maxColumns = Math.max(0, ...cellCounts);
+  if (maxColumns < 4) {
+    const err = new Error('La tabla de cronograma no tiene suficientes columnas para completarse.');
+    err.code = 'CRONOGRAMA_TABLE_INVALID';
+    throw err;
+  }
+
+  const dateStartColumn = 3;
+  const availableDateColumns = maxColumns - dateStartColumn;
+  const dateLabels = plan.weekLabels.slice(0, availableDateColumns);
+  const headerRowIndex = rows.findIndex((row, index) => index > 0 && extractTableCells(row.xml).length === maxColumns);
+  const dataStartRow = headerRowIndex >= 0 ? headerRowIndex + 1 : 1;
+  const rowReplacements = new Map();
+
+  if (headerRowIndex >= 0) {
+    const headerCells = extractTableCells(rows[headerRowIndex].xml);
+    const replacements = new Map();
+    dateLabels.forEach((label, index) => {
+      const cellIndex = dateStartColumn + index;
+      if (headerCells[cellIndex]) {
+        replacements.set(cellIndex, replaceCellText(headerCells[cellIndex].xml, label, template, { center: true }));
+      }
+    });
+    rowReplacements.set(headerRowIndex, replaceRowCells(rows[headerRowIndex].xml, replacements));
+  }
+
+  plan.rows.forEach((scheduleRow, offset) => {
+    const rowIndex = dataStartRow + offset;
+    const row = rows[rowIndex];
+    if (!row) return;
+    const cells = extractTableCells(row.xml);
+    if (cells.length < maxColumns) return;
+    const replacements = new Map();
+    replacements.set(0, replaceCellText(cells[0].xml, scheduleRow.avance, template));
+    replacements.set(1, replaceCellText(cells[1].xml, scheduleRow.acciones, template));
+    replacements.set(2, replaceCellText(cells[2].xml, scheduleRow.estado, template, { center: true }));
+    for (let index = 0; index < availableDateColumns; index += 1) {
+      const cellIndex = dateStartColumn + index;
+      if (!cells[cellIndex]) continue;
+      const marker = scheduleRow.weeks.includes(index) ? 'X' : '';
+      replacements.set(cellIndex, replaceCellText(cells[cellIndex].xml, marker, template, { center: true }));
+    }
+    rowReplacements.set(rowIndex, replaceRowCells(row.xml, replacements));
+  });
+
+  return replaceTableRows(tableXml, rowReplacements);
+}
+
+function fillDocxCronogramaSectionBuffer(buffer, target, plan = buildCronogramaAnexo3Plan()) {
+  const zip = new PizZip(buffer);
+  const documentFile = zip.file('word/document.xml');
+  if (!documentFile) throw new Error('DOCX inválido: falta word/document.xml.');
+  const documentXml = documentFile.asText();
+  const paragraphs = extractDocxParagraphs(documentXml);
+  const table = locateCronogramaTable(documentXml, target, paragraphs);
+  if (!table) {
+    const err = new Error(`No encontré una tabla de cronograma dentro de ${target.label}.`);
+    err.code = 'CRONOGRAMA_TABLE_NOT_FOUND';
+    throw err;
+  }
+  const bounds = targetSectionBounds(documentXml, target, paragraphs);
+  const template = buildSectionFormattingTemplate(paragraphs, bounds.headingIndex);
+  const updatedTable = fillCronogramaTableXml(table.xml, plan, template);
+  const updatedXml = `${documentXml.slice(0, table.start)}${updatedTable}${documentXml.slice(table.end)}`;
+  zip.file('word/document.xml', updatedXml);
+  return zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
+}
+
+// ---------------------------------------------------------------------------
+// Generic, AI-driven table fill for ANY section (not just the Anexo 3
+// cronograma). It locates the first table inside the requested section,
+// figures out which leading columns are "content" columns (those with a text
+// header, before any wide grouping / date column), finds the empty data rows,
+// and writes generated values into those cells while preserving each cell's
+// own formatting and the table's structure.
+// ---------------------------------------------------------------------------
+
+function cellPropsXml(cellXml = '') {
+  return String(cellXml || '').match(/<w:tcPr\b(?:[\s\S]*?<\/w:tcPr>|\s*\/>)/)?.[0] || '';
+}
+
+function isVMergeContinuationCell(cellXml = '') {
+  const tcPr = cellPropsXml(cellXml);
+  return /<w:vMerge\s*\/>/.test(tcPr) || /<w:vMerge\s+w:val="continue"\s*\/>/.test(tcPr);
+}
+
+function cellGridSpan(cellXml = '') {
+  const tcPr = cellPropsXml(cellXml);
+  return parseInt((tcPr.match(/<w:gridSpan\s+w:val="(\d+)"\/>/) || [])[1] || '1', 10) || 1;
+}
+
+const TABLE_GROUPING_HEADER_RE = /\b(fecha|fechas|mes|meses|semana|semanas|cronograma|tiempo|periodo|periodos|trimestre|bimestre|d[ií]a|d[ií]as|a[nñ]o|a[nñ]os)\b/;
+
+function locateSectionTable(documentXml, target, precomputedParagraphs = null) {
+  const paragraphs = precomputedParagraphs || extractDocxParagraphs(documentXml);
+  const bounds = targetSectionBounds(documentXml, target, paragraphs);
+  const tables = extractDocxTables(documentXml);
+  return tables.find((table) => table.start >= bounds.sectionStart && table.start < bounds.sectionEnd) || null;
+}
+
+// Inspect a table and report the content columns + empty data rows we can fill.
+function analyzeTableForFill(tableXml = '') {
+  const rows = extractTableRows(tableXml);
+  if (rows.length < 2) return null;
+  const cellCounts = rows.map((row) => extractTableCells(row.xml).length);
+  const maxColumns = Math.max(0, ...cellCounts);
+  if (maxColumns < 2) return null;
+
+  const headerRowIndex = rows.findIndex((row) => extractTableCells(row.xml).some((cell) => cell.text.trim()));
+  if (headerRowIndex < 0) return null;
+
+  const headerCells = extractTableCells(rows[headerRowIndex].xml);
+  const labels = [];
+  let contentColCount = 0;
+  for (const cell of headerCells) {
+    const label = cell.text.trim();
+    if (!label) break;
+    if (cellGridSpan(cell.xml) >= 3) break;
+    if (TABLE_GROUPING_HEADER_RE.test(normalizeText(label))) break;
+    labels.push(label);
+    contentColCount += 1;
+  }
+  if (contentColCount === 0) return null;
+
+  const dataRows = [];
+  for (let i = headerRowIndex + 1; i < rows.length; i += 1) {
+    const cells = extractTableCells(rows[i].xml);
+    if (cells.length < contentColCount) continue;
+    let fillable = true;
+    for (let c = 0; c < contentColCount; c += 1) {
+      if (isVMergeContinuationCell(cells[c].xml) || cells[c].text.trim()) {
+        fillable = false;
+        break;
+      }
+    }
+    if (fillable) dataRows.push(i);
+  }
+  if (!dataRows.length) return null;
+  return { rows, headerRowIndex, contentColCount, labels, dataRows, maxColumns };
+}
+
+function detectSectionTablePlan(buffer, target) {
+  try {
+    const documentXml = readDocxDocumentXml(buffer);
+    if (!documentXml) return null;
+    const paragraphs = extractDocxParagraphs(documentXml);
+    const table = locateSectionTable(documentXml, target, paragraphs);
+    if (!table) return null;
+    const analysis = analyzeTableForFill(table.xml);
+    if (!analysis) return null;
+    return { labels: analysis.labels, dataRowCount: analysis.dataRows.length };
+  } catch {
+    return null;
+  }
+}
+
+// Ask the model to produce rows that fit the table's own column headers and the
+// document's real topic. Degrades to [] (caller falls back) when no key/result.
+async function generateTableRowsContent({ labels = [], maxRows = 0, sectionLabel = '', sourceText = '', prompt = '', signal } = {}) {
+  if (!process.env.OPENAI_API_KEY || !labels.length || maxRows <= 0) return [];
+  try {
+    const client = createContentClient('OpenAI');
+    const completion = await client.chat.completions.create({
+      model: DEFAULT_MODEL,
+      messages: [
+        {
+          role: 'system',
+          content: [
+            'Eres un asistente académico experto en COMPLETAR TABLAS dentro de documentos Word sin alterar su estructura.',
+            'Te dan los encabezados de las columnas de contenido y el contexto real del documento.',
+            'Genera filas coherentes con esos encabezados y con el tema concreto del documento.',
+            'No inventes cifras, citas, autores ni DOI; usa únicamente lo que el contexto permita inferir de forma razonable.',
+          ].join(' '),
+        },
+        {
+          role: 'user',
+          content: [
+            `Solicitud del usuario: ${prompt}`,
+            `Tabla a completar: ${sectionLabel}`,
+            `Columnas de contenido, en orden: ${labels.join(' | ')}`,
+            `Genera entre 1 y ${maxRows} filas (las que el tema amerite).`,
+            'Contexto del documento:',
+            compact(sourceText, 12000),
+            '',
+            'Responde SOLO en JSON con esta forma exacta:',
+            `{"rows":[[${labels.map(() => '"valor"').join(', ')}]]}`,
+            'Cada fila es un arreglo con un valor de texto por columna, en el mismo orden de los encabezados.',
+          ].join('\n'),
+        },
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0.3,
+    }, { signal, timeout: 30_000 });
+
+    const raw = completion?.choices?.[0]?.message?.content;
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    const rows = Array.isArray(parsed.rows) ? parsed.rows : [];
+    return rows
+      .filter((row) => Array.isArray(row))
+      .slice(0, maxRows)
+      .map((row) => row.map((value) => String(value == null ? '' : value).trim()));
+  } catch {
+    return [];
+  }
+}
+
+function fillGenericSectionTableXml(tableXml = '', generatedRows = [], template = null) {
+  const analysis = analyzeTableForFill(tableXml);
+  if (!analysis || !generatedRows.length) return null;
+  const { rows, contentColCount, dataRows } = analysis;
+  const rowReplacements = new Map();
+  const count = Math.min(dataRows.length, generatedRows.length);
+  for (let i = 0; i < count; i += 1) {
+    const rowIndex = dataRows[i];
+    const cells = extractTableCells(rows[rowIndex].xml);
+    const values = generatedRows[i] || [];
+    const cellReplacements = new Map();
+    for (let c = 0; c < contentColCount; c += 1) {
+      const value = values[c] != null ? String(values[c]).trim() : '';
+      if (!value || !cells[c]) continue;
+      cellReplacements.set(c, replaceCellText(cells[c].xml, value, template));
+    }
+    if (cellReplacements.size) {
+      rowReplacements.set(rowIndex, replaceRowCells(rows[rowIndex].xml, cellReplacements));
+    }
+  }
+  if (!rowReplacements.size) return null;
+  return replaceTableRows(tableXml, rowReplacements);
+}
+
+function fillGenericSectionTableBuffer(buffer, target, generatedRows = []) {
+  const zip = new PizZip(buffer);
+  const documentFile = zip.file('word/document.xml');
+  if (!documentFile) throw new Error('DOCX inválido: falta word/document.xml.');
+  const documentXml = documentFile.asText();
+  const paragraphs = extractDocxParagraphs(documentXml);
+  const table = locateSectionTable(documentXml, target, paragraphs);
+  if (!table) {
+    const err = new Error(`No encontré una tabla dentro de ${target.label}.`);
+    err.code = 'SECTION_TABLE_NOT_FOUND';
+    throw err;
+  }
+  const bounds = targetSectionBounds(documentXml, target, paragraphs);
+  const template = buildSectionFormattingTemplate(paragraphs, bounds.headingIndex);
+  const updatedTable = fillGenericSectionTableXml(table.xml, generatedRows, template);
+  if (!updatedTable) {
+    const err = new Error(`La tabla de ${target.label} no tiene celdas de contenido vacías para completar.`);
+    err.code = 'SECTION_TABLE_NOT_FILLABLE';
+    throw err;
+  }
+  const updatedXml = `${documentXml.slice(0, table.start)}${updatedTable}${documentXml.slice(table.end)}`;
+  zip.file('word/document.xml', updatedXml);
+  return zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
+}
+
 function fillDocxSectionBuffer(buffer, target, blocks) {
   const zip = new PizZip(buffer);
   const documentFile = zip.file('word/document.xml');
   if (!documentFile) throw new Error('DOCX inválido: falta word/document.xml.');
   const documentXml = documentFile.asText();
+  const paragraphs = extractDocxParagraphs(documentXml);
+  const range = sectionInsertionRange(documentXml, target, paragraphs);
+  const headingIndex = paragraphs.findIndex((paragraph) => matchesTargetHeading(paragraph.normalized, target));
+  const template = buildSectionFormattingTemplate(paragraphs, headingIndex);
   const insertionXml = blocks
     .filter((item) => item.kind !== 'pageBreak')
-    .map(paragraphXml)
+    .map((item) => paragraphXml(item, template))
     .join('');
-  const range = sectionInsertionRange(documentXml, target);
   const updatedXml = `${documentXml.slice(0, range.replaceStart)}${insertionXml}${documentXml.slice(range.replaceEnd)}`;
   zip.file('word/document.xml', updatedXml);
   return zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
 }
 
-function appendBlocksToDocumentXml(documentXml, blocks) {
-  const insertionXml = blocks.map(paragraphXml).join('');
+function appendBlocksToDocumentXml(documentXml, blocks, template = null) {
+  const insertionXml = blocks.map((item) => paragraphXml(item, template)).join('');
   const bodyEnd = documentXml.lastIndexOf('</w:body>');
   if (bodyEnd < 0) throw new Error('DOCX inválido: no se encontró el cuerpo del documento.');
   const beforeBodyEnd = documentXml.slice(0, bodyEnd);
@@ -588,7 +1223,8 @@ function appendToDocxBuffer(buffer, blocks) {
   const documentFile = zip.file('word/document.xml');
   if (!documentFile) throw new Error('DOCX inválido: falta word/document.xml.');
   const documentXml = documentFile.asText();
-  zip.file('word/document.xml', appendBlocksToDocumentXml(documentXml, blocks));
+  const template = buildDocumentFormattingTemplate(extractDocxParagraphs(documentXml));
+  zip.file('word/document.xml', appendBlocksToDocumentXml(documentXml, blocks, template));
   return zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
 }
 
@@ -1037,6 +1673,419 @@ async function validateEditedBuffer(buffer, format, blocks) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Agentic multi-step planner for source-preserving edits.
+//
+// A single user request can carry several intentions (e.g. "completa el anexo 3
+// y agrega los instrumentos como un anexo 4"). Instead of handling only the
+// first one, we (1) split the request into action clauses, (2) classify each
+// clause's intent, (3) inspect the document to decide the right operation, and
+// (4) execute every operation in order on the same evolving buffer.
+// ---------------------------------------------------------------------------
+
+const CLAUSE_ACTION_VERB = 'agreg\\w*|anad\\w*|incorpor\\w*|inclu\\w*|adjunt\\w*|complet\\w*|llen\\w*|rellen\\w*|desarroll\\w*|coloc\\w*|reescrib\\w*|reemplaz\\w*';
+
+function splitRequestClauses(text) {
+  const normalized = normalizeText(text);
+  if (!normalized) return [];
+  const anchorRe = new RegExp(`\\b(?:${CLAUSE_ACTION_VERB})\\b`, 'g');
+  const anchors = [];
+  let match;
+  while ((match = anchorRe.exec(normalized))) anchors.push(match.index);
+  if (anchors.length <= 1) return [normalized];
+  const clauses = [];
+  for (let i = 0; i < anchors.length; i += 1) {
+    const start = anchors[i];
+    const end = i + 1 < anchors.length ? anchors[i + 1] : normalized.length;
+    const clause = normalized.slice(start, end).trim();
+    if (clause) clauses.push(clause);
+  }
+  return clauses;
+}
+
+function clauseWantsInstrument(clauseNorm) {
+  return /\b(instrumento\w*|instrument\w*|intuemtno|intrumneto|intrumento|cuestionario\w*|encuesta\w*|escala\w*)\b/.test(clauseNorm);
+}
+
+function clauseIsFill(clauseNorm) {
+  return /\b(complet\w*|llen\w*|rellen\w*|desarroll\w*|termin\w*|reescrib\w*|reemplaz\w*)\b/.test(clauseNorm);
+}
+
+function clauseIsAppend(clauseNorm) {
+  return /\b(agreg\w*|anad\w*|incorpor\w*|inclu\w*|adjunt\w*|coloc\w*)\b/.test(clauseNorm)
+    || /\bcomo\s+(?:un\s+|una\s+)?(?:nuevo\s+|nueva\s+)?(?:anexo|apendice|seccion)\b/.test(clauseNorm);
+}
+
+function sectionExistsInDoc(documentXml, target) {
+  if (!target) return false;
+  const paragraphs = extractDocxParagraphs(documentXml);
+  return paragraphs.some((paragraph) => matchesTargetHeading(paragraph.normalized, target));
+}
+
+function buildOperationFromClause(clauseNorm, documentXml) {
+  const target = parseTargetSectionRequest(clauseNorm);
+  const wantsInstrument = clauseWantsInstrument(clauseNorm);
+  const fill = clauseIsFill(clauseNorm);
+  const append = clauseIsAppend(clauseNorm);
+
+  if (target) {
+    const exists = sectionExistsInDoc(documentXml, target);
+    // "agrega … como anexo 4" when the anexo does not exist yet → create it.
+    if (append && !exists) return { kind: 'append_labeled', target, wantsInstrument };
+    if (exists) return { kind: 'fill_section', target, wantsInstrument };
+    if (fill) return { kind: 'fill_section', target, wantsInstrument };
+    return { kind: 'append_labeled', target, wantsInstrument };
+  }
+  if (append || wantsInstrument) return { kind: 'append_generic', wantsInstrument };
+  if (fill) return null;
+  return null;
+}
+
+function operationKey(op) {
+  return `${op.kind}:${op.target ? op.target.label : ''}:${op.wantsInstrument ? 'instr' : ''}`;
+}
+
+const BULK_FILL_SCOPE_RE = /\b(tablas?|anexos?|secciones?|cuadros?|matrices?|matriz|vac[ií]as?|vac[ií]os?|faltantes?|pendientes?|todo|todos|todas|que\s+falt\w*)\b/;
+
+function planSourcePreservingOperations({ requestText = '', documentXml = '' } = {}) {
+  const clauses = splitRequestClauses(requestText);
+  const ops = [];
+  const seen = new Set();
+  const add = (op) => {
+    if (!op) return;
+    const key = operationKey(op);
+    if (seen.has(key)) return;
+    seen.add(key);
+    ops.push(op);
+  };
+
+  for (const clause of clauses) add(buildOperationFromClause(clause, documentXml));
+
+  // Broader understanding: "completa / rellena las tablas vacías / los anexos /
+  // todo lo que falte" with no explicit number → fill every empty-table or empty
+  // section the document actually has.
+  const norm = normalizeText(requestText);
+  const wantsBulkFill = clauseIsFill(norm) && BULK_FILL_SCOPE_RE.test(norm);
+  const hasExplicitTarget = ops.some((op) => op.target);
+  if (wantsBulkFill && !hasExplicitTarget) {
+    for (const section of analyzeDocumentStructure(documentXml).sections) {
+      if (section.target && (section.emptyTableRows > 0 || section.isEmpty)) {
+        add({ kind: 'fill_section', target: section.target, wantsInstrument: false });
+      }
+    }
+  }
+
+  if (ops.length === 0) {
+    ops.push({ kind: 'append_generic', wantsInstrument: clauseWantsInstrument(norm) });
+  }
+  return ops;
+}
+
+const SECTION_MENTION_RE = /\b(?:anexo|anexos|apendice|apendices|seccion|secciones|capitulo|capitulos|apartado|apartados)\s*(?:n(?:ro|umero)?\.?|num\.?|no\.?|#)?\s*(?:[0-9]{1,3}|[ivxlcdm]{1,10})\b/g;
+const TABLE_CONTENT_CUE_RE = /\b(cronograma\w*|matriz|matrices|tabla\w*|cuadro\w*|presupuesto\w*)\b/;
+
+// True when the heuristic is sure enough to skip the (slower) LLM brain. It
+// escalates when a named section produced no operation, or when a table cue
+// (cronograma/matriz/tabla…) has no matching fill and the sections aren't fully
+// covered — i.e. the request likely carries an intent the heuristic missed.
+function heuristicPlanIsConfident(ops, requestText) {
+  if (!ops.length) return false;
+  const norm = normalizeText(requestText);
+  const sectionMentions = (norm.match(SECTION_MENTION_RE) || []).length;
+  const targetedOps = ops.filter((op) => op.target).length;
+  const fullyTargeted = sectionMentions >= 1 && targetedOps >= sectionMentions;
+
+  if (TABLE_CONTENT_CUE_RE.test(norm) && !ops.some((op) => op.kind === 'fill_section') && !fullyTargeted) {
+    return false;
+  }
+  if (sectionMentions >= 1) return targetedOps >= sectionMentions;
+  if (ops.length === 1 && ops[0].kind === 'append_generic') {
+    return clauseIsAppend(norm) || clauseWantsInstrument(norm);
+  }
+  return true;
+}
+
+// Deterministic understanding of the document: enumerate its anexo/capítulo/
+// sección headings and, per section, whether the body holds a (fillable) table
+// or is empty/placeholder. Feeds both the bulk-fill heuristic and the LLM brain.
+function analyzeDocumentStructure(documentXml = '') {
+  if (!documentXml) return { sections: [] };
+  const paragraphs = extractDocxParagraphs(documentXml);
+  const tables = extractDocxTables(documentXml);
+  const headingRe = /\b(?:anexo|anexos|apendice|apendices|capitulo|capitulos|seccion|secciones)\s*(?:n(?:ro|umero)?\.?|num\.?|no\.?|#)?\s*(?:[0-9]{1,3}|[ivxlcdm]{1,10})\b/;
+  const headingIdx = [];
+  paragraphs.forEach((paragraph, idx) => {
+    if (headingRe.test(paragraph.normalized)) headingIdx.push(idx);
+  });
+  const bodyEnd = documentXml.lastIndexOf('</w:body>');
+  const docEnd = bodyEnd >= 0 ? bodyEnd : documentXml.length;
+
+  const sections = headingIdx.map((idx, order) => {
+    const heading = paragraphs[idx];
+    const sectionStart = heading.end;
+    const sectionEnd = order + 1 < headingIdx.length ? paragraphs[headingIdx[order + 1]].start : docEnd;
+    const table = tables.find((t) => t.start >= sectionStart && t.start < sectionEnd) || null;
+    const tableAnalysis = table ? analyzeTableForFill(table.xml) : null;
+    const bodyParagraphs = paragraphs.filter((p) => p.start >= sectionStart && p.start < sectionEnd);
+    const hasNarrative = bodyParagraphs.some((p) => p.text.trim() && !isPlaceholderParagraph(p.text));
+    const tableHasContent = Boolean(table) && !tableAnalysis;
+    const target = parseTargetSectionRequest(heading.text);
+    return {
+      label: target ? target.label : compact(heading.text, 60),
+      title: compact(heading.text, 120),
+      target,
+      hasTable: Boolean(table),
+      tableHeaders: tableAnalysis ? tableAnalysis.labels : null,
+      emptyTableRows: tableAnalysis ? tableAnalysis.dataRows.length : 0,
+      isEmpty: !hasNarrative && !tableHasContent,
+    };
+  });
+  return { sections };
+}
+
+function summarizeStructureForPrompt(structure = { sections: [] }) {
+  if (!structure.sections.length) return '(no se detectaron anexos ni secciones numeradas)';
+  return structure.sections.map((section) => {
+    let state;
+    if (section.hasTable && section.emptyTableRows > 0) {
+      state = `tabla por completar [columnas: ${(section.tableHeaders || []).join(', ') || '?'}; ${section.emptyTableRows} filas vacías]`;
+    } else if (section.hasTable) {
+      state = 'tabla ya completa';
+    } else if (section.isEmpty) {
+      state = 'vacía / por completar';
+    } else {
+      state = 'con contenido';
+    }
+    return `- ${section.label}: ${state}`;
+  }).join('\n');
+}
+
+// LLM "brain" — interprets the user's intent against the document structure and
+// returns a normalized operation plan. Returns null when unavailable/invalid so
+// the caller keeps the deterministic heuristic plan.
+async function planOperationsWithLLM({ requestText = '', documentXml = '', signal } = {}) {
+  if (!process.env.OPENAI_API_KEY) return null;
+  try {
+    const structure = analyzeDocumentStructure(documentXml);
+    const client = createContentClient('OpenAI');
+    const completion = await client.chat.completions.create({
+      model: DEFAULT_MODEL,
+      messages: [
+        {
+          role: 'system',
+          content: [
+            'Eres el cerebro de un editor de documentos Word. Interpretas la intención del usuario y la conviertes en un PLAN de operaciones sobre el documento; no redactas el contenido.',
+            'Operaciones válidas: "fill" (completar una sección o tabla que YA existe) y "append" (agregar una sección/anexo nuevo).',
+            'Incluye solo lo que el usuario realmente pide, en orden. Si pide "todo lo que falte/tablas vacías", incluye una operación fill por cada sección por completar.',
+          ].join(' '),
+        },
+        {
+          role: 'user',
+          content: [
+            `Petición del usuario: ${requestText}`,
+            '',
+            'Estructura actual del documento:',
+            summarizeStructureForPrompt(structure),
+            '',
+            'Responde SOLO en JSON con esta forma exacta:',
+            '{"operations":[{"action":"fill"|"append","section":"Anexo 3"|null,"content":"instrument"|"table"|"text"|"auto"}]}',
+            'Usa "section" tal como aparece arriba (p. ej. "Anexo 3"), o null si no aplica. Para cuestionarios/encuestas/instrumentos usa content="instrument".',
+          ].join('\n'),
+        },
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0.1,
+    }, { signal, timeout: 20_000 });
+
+    const raw = completion?.choices?.[0]?.message?.content;
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    const rawOps = Array.isArray(parsed.operations) ? parsed.operations : [];
+    const ops = [];
+    const seen = new Set();
+    for (const rawOp of rawOps) {
+      const action = String(rawOp?.action || '').toLowerCase();
+      const target = rawOp?.section ? parseTargetSectionRequest(String(rawOp.section)) : null;
+      const wantsInstrument = String(rawOp?.content || '').toLowerCase() === 'instrument';
+      let op = null;
+      if (action === 'fill' && target) {
+        op = { kind: sectionExistsInDoc(documentXml, target) ? 'fill_section' : 'append_labeled', target, wantsInstrument };
+      } else if (action === 'append') {
+        op = target ? { kind: 'append_labeled', target, wantsInstrument } : { kind: 'append_generic', wantsInstrument };
+      }
+      if (!op) continue;
+      const key = operationKey(op);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      ops.push(op);
+    }
+    return ops.length ? ops : null;
+  } catch {
+    return null;
+  }
+}
+
+// Heuristic first (fast, deterministic); escalate to the LLM brain only when the
+// heuristic is unsure about the user's intent.
+async function planSourcePreservingOperationsSmart({ requestText = '', documentXml = '', signal } = {}) {
+  const heuristic = planSourcePreservingOperations({ requestText, documentXml });
+  if (heuristicPlanIsConfident(heuristic, requestText)) return heuristic;
+  const llm = await planOperationsWithLLM({ requestText, documentXml, signal });
+  return llm && llm.length ? llm : heuristic;
+}
+
+function readDocxDocumentXml(buffer) {
+  try {
+    return new PizZip(buffer).file('word/document.xml')?.asText() || '';
+  } catch {
+    return '';
+  }
+}
+
+async function runFillSectionOperation({ buffer, op, requestText, sourceText, allSourceFiles, sourceFile, signal }) {
+  // Step A — tuned, deterministic fast-path for the Anexo 3 thesis cronograma.
+  const plan = detectCronogramaAnexo3Plan(buffer, op.target);
+  if (plan?.type === 'cronograma_anexo_3') {
+    return {
+      buffer: fillDocxCronogramaSectionBuffer(buffer, op.target, plan),
+      validationBlocks: plan.validationBlocks || [],
+      step: { kind: 'fill_section', label: op.target.label, mode: 'cronograma_table' },
+    };
+  }
+  // Step B — generic, document-grounded table fill for ANY section whose body
+  // is a table (matrices, operacionalización, presupuesto, otros cronogramas…).
+  const tablePlan = detectSectionTablePlan(buffer, op.target);
+  if (tablePlan) {
+    const generatedRows = await generateTableRowsContent({
+      labels: tablePlan.labels,
+      maxRows: tablePlan.dataRowCount,
+      sectionLabel: op.target.label,
+      sourceText,
+      prompt: requestText,
+      signal,
+    });
+    if (generatedRows.length) {
+      try {
+        const filledBuffer = fillGenericSectionTableBuffer(buffer, op.target, generatedRows);
+        const validationBlocks = generatedRows
+          .flat()
+          .filter((value) => String(value || '').trim())
+          .map((value) => block('normal', String(value)));
+        return {
+          buffer: filledBuffer,
+          validationBlocks,
+          step: { kind: 'fill_section', label: op.target.label, mode: 'table' },
+        };
+      } catch (err) {
+        if (err?.code !== 'SECTION_TABLE_NOT_FOUND' && err?.code !== 'SECTION_TABLE_NOT_FILLABLE') throw err;
+        // fall through to the paragraph fill below
+      }
+    }
+  }
+  // Step C — narrative paragraph fill (AI-generated, grounded in the document).
+  const blocks = await generateTargetSectionBlocks({
+    prompt: requestText,
+    target: op.target,
+    sourceFiles: allSourceFiles,
+    sourceText,
+    signal,
+  });
+  try {
+    return {
+      buffer: fillDocxSectionBuffer(buffer, op.target, blocks),
+      validationBlocks: blocks,
+      step: { kind: 'fill_section', label: op.target.label, mode: 'paragraphs' },
+    };
+  } catch (err) {
+    if (err?.code !== 'SECTION_NOT_FOUND') throw err;
+    const labeled = [
+      block('pageBreak', ''),
+      block('heading2', op.target.label),
+      ...blocks.filter((item) => item.kind !== 'pageBreak'),
+    ];
+    return {
+      buffer: appendToDocxBuffer(buffer, labeled),
+      validationBlocks: labeled,
+      step: { kind: 'append_labeled', label: op.target.label, mode: 'fallback_paragraphs' },
+    };
+  }
+}
+
+async function runAppendLabeledOperation({ buffer, op, requestText, sourceText, allSourceFiles, sourceFile, signal }) {
+  const originalName = sourceFile.originalName || sourceFile.filename;
+  const bodyBlocks = op.wantsInstrument
+    ? buildInstrumentAppendixBody({ prompt: requestText, sourceText, originalName })
+    : await generateTargetSectionBlocks({
+      prompt: requestText,
+      target: op.target,
+      sourceFiles: allSourceFiles,
+      sourceText,
+      signal,
+    });
+  const heading = op.wantsInstrument
+    ? `${op.target.label}. Instrumentos de recolección de datos`
+    : op.target.label;
+  const labeled = [
+    block('pageBreak', ''),
+    block('heading2', heading),
+    ...bodyBlocks.filter((item) => item.kind !== 'pageBreak'),
+  ];
+  return {
+    buffer: appendToDocxBuffer(buffer, labeled),
+    validationBlocks: labeled,
+    step: { kind: 'append_labeled', label: op.target.label, mode: op.wantsInstrument ? 'instrument' : 'generic' },
+  };
+}
+
+function runAppendGenericOperation({ buffer, op, requestText, sourceText, sourceFile }) {
+  const originalName = sourceFile.originalName || sourceFile.filename;
+  const blocks = op.wantsInstrument
+    ? buildInstrumentAppendix({ prompt: requestText, sourceText, originalName })
+    : buildAppendixBlocks({ prompt: requestText, sourceText: sourceText || sourceFile.extractedText || '', originalName });
+  return {
+    buffer: appendToDocxBuffer(buffer, blocks),
+    validationBlocks: blocks,
+    step: { kind: 'append_generic', mode: op.wantsInstrument ? 'instrument' : 'generic' },
+  };
+}
+
+async function executeDocxOperations({ input, ops, requestText, sourceText, allSourceFiles, sourceFile, signal }) {
+  let buffer = input;
+  const steps = [];
+  const validationBlocks = [];
+  for (const op of ops) {
+    let result;
+    if (op.kind === 'fill_section') {
+      result = await runFillSectionOperation({ buffer, op, requestText, sourceText, allSourceFiles, sourceFile, signal });
+    } else if (op.kind === 'append_labeled') {
+      result = await runAppendLabeledOperation({ buffer, op, requestText, sourceText, allSourceFiles, sourceFile, signal });
+    } else {
+      result = runAppendGenericOperation({ buffer, op, requestText, sourceText, sourceFile });
+    }
+    buffer = result.buffer;
+    steps.push(result.step);
+    validationBlocks.push(...(result.validationBlocks || []));
+  }
+  return { buffer, steps, validationBlocks };
+}
+
+function joinSpanishList(items) {
+  const list = items.filter(Boolean);
+  if (list.length === 0) return '';
+  if (list.length === 1) return list[0];
+  return `${list.slice(0, -1).join(', ')} y ${list[list.length - 1]}`;
+}
+
+function describeStep(step) {
+  if (step.kind === 'fill_section' && step.mode === 'cronograma_table') return `completé la tabla del cronograma de ${step.label}`;
+  if (step.kind === 'fill_section') return `completé ${step.label} respetando su formato`;
+  if (step.kind === 'append_labeled' && step.mode === 'instrument') return `agregué ${step.label} con los instrumentos profesionales`;
+  if (step.kind === 'append_labeled' && step.mode === 'fallback_paragraphs') return `agregué ${step.label} al final (no existía en el documento)`;
+  if (step.kind === 'append_labeled') return `agregué ${step.label}`;
+  if (step.kind === 'append_generic' && step.mode === 'instrument') return 'agregué un anexo con el instrumento de recolección de datos';
+  return 'agregué el contenido solicitado en anexos';
+}
+
 async function generateSourcePreservingDocumentEdit({
   sourceFile,
   sourceFiles = null,
@@ -1050,77 +2099,73 @@ async function generateSourcePreservingDocumentEdit({
   const requestText = displayPrompt || prompt || '';
   const allSourceFiles = Array.isArray(sourceFiles) && sourceFiles.length ? sourceFiles : [sourceFile];
   const sourceText = await buildCombinedSourceText(allSourceFiles);
-  const targetSection = isDocxFile(sourceFile) && isTargetedSectionFillRequest(requestText)
-    ? parseTargetSectionRequest(requestText)
-    : null;
-  let blocks = targetSection
-    ? await generateTargetSectionBlocks({
-      prompt: requestText,
-      target: targetSection,
-      sourceFiles: allSourceFiles,
-      sourceText,
-      signal,
-    })
-    : buildAppendixBlocks({
-      prompt: requestText,
-      sourceText: sourceText || sourceFile.extractedText || '',
-      originalName: sourceFile.originalName || sourceFile.filename,
-    });
   const input = await fs.promises.readFile(sourceFile.path);
+
   let format;
   let output;
   let suffix = 'con_anexos';
   let titleSuffix = 'con anexos';
   let explanation = 'Se conservó el archivo original y se agregó únicamente el bloque solicitado al final.';
   let content = 'Listo. Conservé el archivo original y agregué el contenido solicitado al final, en anexos, sin regenerar la portada ni reemplazar el documento.';
+  let validationBlocks;
+
   if (isDocxFile(sourceFile)) {
     format = 'docx';
-    if (targetSection) {
-      try {
-        output = fillDocxSectionBuffer(input, targetSection, blocks);
-        suffix = `${normalizeText(targetSection.kind).replace(/\s+/g, '_')}_${targetSection.number}_completado`;
-        titleSuffix = `${targetSection.label} completado`;
-        explanation = `Se conservó el DOCX original y se completó únicamente ${targetSection.label}.`;
-        content = `Listo. Conservé el DOCX original y completé únicamente ${targetSection.label} usando el contexto combinado de los documentos adjuntos.`;
-      } catch (err) {
-        if (err?.code !== 'SECTION_NOT_FOUND') throw err;
-        // Respaldo: la sección solicitada no existe dentro del documento.
-        // En lugar de fallar, la agregamos al final con su propio encabezado,
-        // conservando intacto el resto del archivo (portada, cuerpo, etc.).
-        blocks = [
-          block('pageBreak', ''),
-          block('heading2', targetSection.label),
-          ...blocks.filter((item) => item.kind !== 'pageBreak'),
-        ];
-        output = appendToDocxBuffer(input, blocks);
-        suffix = `${normalizeText(targetSection.kind).replace(/\s+/g, '_')}_${targetSection.number}`;
-        titleSuffix = `con ${targetSection.label}`;
-        explanation = `No se encontró ${targetSection.label} dentro del documento; se agregó al final conservando el resto del archivo.`;
-        content = `No encontré "${targetSection.label}" dentro del documento, así que agregué el contenido al final como ${targetSection.label}, conservando intacto el resto del archivo.`;
-      }
-    } else {
-      output = appendToDocxBuffer(input, blocks);
-      content = 'Listo. Conservé el DOCX original y agregué el contenido solicitado al final, en anexos, sin regenerar la portada ni reemplazar el documento.';
+    // Agentic step 1-3: analyse the request + document and plan one or more
+    // operations; step 4: execute every operation in order on the same buffer.
+    const documentXml = readDocxDocumentXml(input);
+    const operations = await planSourcePreservingOperationsSmart({ requestText, documentXml, signal });
+    const execution = await executeDocxOperations({
+      input,
+      ops: operations,
+      requestText,
+      sourceText,
+      allSourceFiles,
+      sourceFile,
+      signal,
+    });
+    output = execution.buffer;
+    validationBlocks = execution.validationBlocks;
+
+    const labels = execution.steps.map((step) => step.label).filter(Boolean);
+    if (labels.length) {
+      suffix = `${labels.map((label) => normalizeText(label).replace(/\s+/g, '_')).join('_')}_completado`;
+      titleSuffix = `${labels.join(' y ')} completado`;
     }
-  } else if (isXlsxFile(sourceFile)) {
-    format = 'xlsx';
-    output = await appendToXlsxBuffer(input, blocks);
-    content = 'Listo. Conservé el XLSX original y agregué el contenido solicitado en una hoja nueva, sin reemplazar las hojas existentes.';
-  } else if (isPdfFile(sourceFile)) {
-    format = 'pdf';
-    output = await appendToPdfBuffer(input, blocks);
-    content = 'Listo. Conservé el PDF original y agregué el contenido solicitado al final, sin reemplazar las páginas existentes.';
-  } else if (isTextLikeFile(sourceFile)) {
-    format = textLikeFormatForFile(sourceFile) || 'txt';
-    output = appendToTextLikeBuffer(input, blocks, format);
-    content = `Listo. Conservé el ${format.toUpperCase()} original y agregué el contenido solicitado sin reemplazar el archivo base.`;
+    const stepSummary = joinSpanishList(execution.steps.map(describeStep));
+    explanation = stepSummary
+      ? `Se conservó el DOCX original; ${stepSummary}.`
+      : 'Se conservó el DOCX original y se aplicó la edición solicitada.';
+    content = stepSummary
+      ? `Listo. Conservé el DOCX original y, en ${execution.steps.length === 1 ? 'un paso' : `${execution.steps.length} pasos`}, ${stepSummary}, sin alterar el resto del archivo.`
+      : 'Listo. Conservé el DOCX original y apliqué la edición solicitada sin alterar el resto del archivo.';
   } else {
-    const ext = path.extname(sourceFile.originalName || sourceFile.filename || '').replace(/^\./, '').toLowerCase();
-    throw new Error(`La edición preservadora todavía no soporta archivos .${ext || 'desconocidos'}. Formatos soportados: ${supportedSourceEditLabel()}.`);
+    const blocks = buildAppendixBlocks({
+      prompt: requestText,
+      sourceText: sourceText || sourceFile.extractedText || '',
+      originalName: sourceFile.originalName || sourceFile.filename,
+    });
+    validationBlocks = blocks;
+    if (isXlsxFile(sourceFile)) {
+      format = 'xlsx';
+      output = await appendToXlsxBuffer(input, blocks);
+      content = 'Listo. Conservé el XLSX original y agregué el contenido solicitado en una hoja nueva, sin reemplazar las hojas existentes.';
+    } else if (isPdfFile(sourceFile)) {
+      format = 'pdf';
+      output = await appendToPdfBuffer(input, blocks);
+      content = 'Listo. Conservé el PDF original y agregué el contenido solicitado al final, sin reemplazar las páginas existentes.';
+    } else if (isTextLikeFile(sourceFile)) {
+      format = textLikeFormatForFile(sourceFile) || 'txt';
+      output = appendToTextLikeBuffer(input, blocks, format);
+      content = `Listo. Conservé el ${format.toUpperCase()} original y agregué el contenido solicitado sin reemplazar el archivo base.`;
+    } else {
+      const ext = path.extname(sourceFile.originalName || sourceFile.filename || '').replace(/^\./, '').toLowerCase();
+      throw new Error(`La edición preservadora todavía no soporta archivos .${ext || 'desconocidos'}. Formatos soportados: ${supportedSourceEditLabel()}.`);
+    }
   }
 
   const filename = safeFilename(sourceFile.originalName || sourceFile.filename, suffix, format);
-  const validation = await validateEditedBuffer(output, format, blocks);
+  const validation = await validateEditedBuffer(output, format, validationBlocks);
   const { artifact, previewHtml, mime } = await persistEditedArtifact({
     buffer: output,
     format,
@@ -1189,6 +2234,7 @@ module.exports = {
   appendBlocksToDocumentXml,
   appendToDocxBuffer,
   buildAppendixBlocks,
+  fillDocxCronogramaSectionBuffer,
   fillDocxSectionBuffer,
   generateSourcePreservingDocumentEdit,
   inferDocumentTitle,
@@ -1198,9 +2244,32 @@ module.exports = {
   tryGenerateSourcePreservingDocumentEdit,
   INTERNAL: {
     buildCombinedSourceText,
+    buildCronogramaAnexo3Plan,
+    buildDocumentFormattingTemplate,
     buildInstrumentAppendix,
+    buildInstrumentAppendixBody,
+    buildSectionFormattingTemplate,
+    analyzeDocumentStructure,
+    analyzeTableForFill,
+    detectCronogramaAnexo3Plan,
+    planOperationsWithLLM,
+    planSourcePreservingOperationsSmart,
+    summarizeStructureForPrompt,
+    detectSectionTablePlan,
+    extractParagraphProperties,
+    extractRunProperties,
+    fillCronogramaTableXml,
+    fillGenericSectionTableBuffer,
+    fillGenericSectionTableXml,
+    generateTableRowsContent,
+    heuristicPlanIsConfident,
     inferResearchVariables,
     isTargetedSectionFillRequest,
+    locateCronogramaTable,
+    locateSectionTable,
+    planSourcePreservingOperations,
     resolveStoredFilePath,
+    sanitizeCapturedParagraphProperties,
+    splitRequestClauses,
   },
 };

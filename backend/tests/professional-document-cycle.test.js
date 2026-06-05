@@ -177,3 +177,37 @@ test('saveArtifact groups files under the folder code and round-trips', () => {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test('verify_artifact resolves folder-grouped artifacts via storedRelPath', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'artifact-verify-'));
+  const prev = process.env.AGENT_ARTIFACT_DIR;
+  process.env.AGENT_ARTIFACT_DIR = tmp;
+  const modPath = require.resolve('../src/services/agents/task-tools');
+  delete require.cache[modPath];
+  const taskTools = require(modPath);
+  try {
+    const saved = taskTools.saveArtifact({
+      filename: 'reporte.txt',
+      base64: Buffer.from('línea uno\nlínea dos\n').toString('base64'),
+      mime: 'text/plain',
+      ownerUserId: 'user-verify-1',
+      chatId: 'chat-verify-1',
+      folderCode: 'TESIS-2026-001',
+    });
+    assert.equal(saved.folderCode, 'TESIS-2026-001');
+
+    const result = await taskTools.INTERNAL.verifyArtifact.execute(
+      { artifactId: saved.id },
+      { userId: 'user-verify-1' },
+    );
+    // The whole point of the fix: a folder-grouped artifact must NOT be reported
+    // as missing. The Python verifier may be unavailable in some environments,
+    // so we only assert that path resolution succeeded (no "not found" error).
+    assert.doesNotMatch(String(result.error || ''), /not found/i);
+  } finally {
+    if (prev === undefined) delete process.env.AGENT_ARTIFACT_DIR;
+    else process.env.AGENT_ARTIFACT_DIR = prev;
+    delete require.cache[modPath];
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});

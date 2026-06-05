@@ -1396,7 +1396,7 @@ class ApiClient {
   // async getAIModels() {
   //   return this.request('/ai/models');
   // }
-  async getAIModels(type?: 'TEXT' | 'IMAGE') { // type ko optional parameter banayein
+  async getAIModels(type?: 'TEXT' | 'IMAGE' | 'VIDEO') { // type ko optional parameter banayein
     const endpoint = type ? `/ai/models?type=${type}` : '/ai/models';
     return this.request(endpoint);
   }

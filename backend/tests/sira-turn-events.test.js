@@ -17,13 +17,15 @@ const {
 // ── EVENT_NAMES ───────────────────────────────────────────────────
 
 describe("EVENT_NAMES", () => {
-  test("includes the 13 canonical events the chat-controller emits", () => {
+  test("includes the canonical events the chat-controller emits", () => {
     for (const expected of [
       "turn_started", "token_budget_checked", "turn_blocked_token_budget",
       "project_context_loaded", "project_access_denied",
       "envelope_built", "envelope_invalid",
       "chat_mode_resolved", "context_compacted",
-      "clarification_requested", "runtime_completed",
+      "clarification_requested",
+      "brain_pipeline_started", "brain_pipeline_completed", "brain_pipeline_error",
+      "runtime_completed",
       "citation_frame_built", "turn_completed",
     ]) {
       assert.ok(EVENT_NAMES.includes(expected), `${expected} missing`);
@@ -72,6 +74,29 @@ describe("createBufferedEvents", () => {
     e.emit("turn_started", { i: 3 });
     assert.equal(e.by("turn_started").length, 2);
     assert.equal(e.by("envelope_built").length, 1);
+  });
+
+  test("captures safe brain pipeline events", () => {
+    const e = createBufferedEvents();
+    e.emit("brain_pipeline_started", { request_id: "req-brain", plan_step_count: 2 });
+    e.emit("brain_pipeline_completed", {
+      request_id: "req-brain",
+      decision: "repair",
+      blocking_flags: 1,
+      warning_flags: 0,
+      reason_count: 1,
+      repair_hint_count: 1,
+      latency_ms: 3,
+    });
+    e.emit("brain_pipeline_error", {
+      request_id: "req-brain",
+      decision: "ship",
+      error_code: "brain_pipeline_error",
+    });
+
+    assert.equal(e.by("brain_pipeline_started").length, 1);
+    assert.equal(e.by("brain_pipeline_completed")[0].data.decision, "repair");
+    assert.equal(e.by("brain_pipeline_error")[0].data.error_code, "brain_pipeline_error");
   });
 
   test("survives null/undefined data (no crash)", () => {

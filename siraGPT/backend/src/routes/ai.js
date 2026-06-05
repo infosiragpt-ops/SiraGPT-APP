@@ -64,6 +64,8 @@ const prisma = require('../config/database');
 const { tryConsumePlanQuota } = require('../services/plan-quota');
 const aiService = require('../services/ai-service');
 const agentFilters = require('../services/agents/filters');
+const { listManifests } = require('../services/agents/tool-manifest');
+const { listFalVideoModels } = require('../services/fal-video-catalog');
 const OpenAI = require('openai');
 const usageService = require("../services/usage-service");
 const contextWindow = require("../services/context-window");
@@ -676,15 +678,34 @@ router.post(
 router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace: 'ai-models' }), async (req, res) => {
   try {
     const { type } = req.query; // Query se 'type' hasil karein (e.g., ?type=TEXT)
+    const requestedType = typeof type === 'string' ? type.toUpperCase() : null;
     const userPlan = req.user?.plan || 'FREE';
     const modelPolicy = buildModelQuotaPolicy(req.user);
+
+    // VIDEO is a virtual Fal.ai catalog. The Prisma ModelType enum in older
+    // local databases only contains TEXT/IMAGE, so do not query ai_models for
+    // VIDEO; return the curated live-callable Fal catalog directly.
+    if (requestedType === 'VIDEO') {
+      const videoModels = listFalVideoModels().map((m) => ({
+        id: `__virtual_${m.name.replace(/[^a-z0-9]+/gi, '_').toLowerCase()}__`,
+        ...m,
+        planAccess: {
+          currentPlan: modelPolicy.currentPlan,
+          allowed: true,
+          catalogued: true,
+          requiredPlans: ['FREE', 'PRO', 'PRO_MAX', 'ENTERPRISE'],
+          reason: 'video_virtual_catalog',
+        },
+      }));
+      return res.json({ models: videoModels, policy: modelPolicy });
+    }
 
     const whereClause = {
       isActive: true,
     };
 
-    if (type && (type === 'TEXT' || type === 'IMAGE')) {
-      whereClause.type = type; // Agar type di gai hai to us par filter karein
+    if (requestedType && (requestedType === 'TEXT' || requestedType === 'IMAGE')) {
+      whereClause.type = requestedType; // Agar type di gai hai to us par filter karein
     }
 
 
@@ -705,8 +726,8 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
     // If OpenRouter is configured but Kimi was never seeded (or DB is empty),
     // expose Kimi K2.6 anyway so the picker always shows it. Skip when a DB row
     // exists (active or inactive) so admin disable/delete is respected.
-    const wantText = !type || type === 'TEXT';
-    const wantImage = !type || type === 'IMAGE';
+    const wantText = !requestedType || requestedType === 'TEXT';
+    const wantImage = !requestedType || requestedType === 'IMAGE';
     if (wantText && hasEnv('DEEPSEEK_API_KEY')) {
       const listed = new Set(models.map((m) => m.name));
       const deepseekNames = DEEPSEEK_TEXT_MODELS.map((m) => m.name);
@@ -3555,6 +3576,7 @@ router.post(
           recentTurnCount: Array.isArray(__conversationHistoryForUnderstanding)
             ? __conversationHistoryForUnderstanding.length
             : 0,
+          toolNames: listManifests().map((manifest) => manifest.name),
           model: actualModel,
           provider: actualProvider,
           context: {

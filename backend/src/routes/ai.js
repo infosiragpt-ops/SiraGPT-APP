@@ -164,6 +164,7 @@ const __intentTriageJudge = __ensembleJudges.length > 0
   ? buildEnsembleJudge({ judges: __ensembleJudges, budgetMs: 350 })
   : null;
 const ciraEngine = require('../services/sira/engine');
+const { buildIntegrationRuntimeProfile } = require('../services/ai-product-os/integration-runtime-profile');
 const {
   buildAttributionGraphContext: buildSiraAttributionGraphContext,
   buildLLMUnderstandingPacket,
@@ -3674,6 +3675,7 @@ router.post(
       let intentTriageDecision = null;
       let ciraRuntimeBundle = null;
       let ciraRuntimeBlock = '';
+      let integrationRuntimeProfile = null;
       let enterpriseExecutionBlock = '';
       try {
         universalTaskContract = buildUniversalTaskContract({
@@ -3767,6 +3769,13 @@ router.post(
           requestId: req.requestId || req.id || null,
         });
         ciraRuntimeBlock = buildCiraRuntimePromptBlock(ciraRuntimeBundle);
+        integrationRuntimeProfile = buildIntegrationRuntimeProfile({
+          contract: universalTaskContract,
+          semanticIntentAnalysis,
+          ciraRuntimeBundle,
+          attachments: processedFiles,
+          fileIds: processedFiles.map(f => f.id || f.fileId || f.openaiFileId || f.name || 'attachment'),
+        });
         const aiProductOsProfile = semanticIntentAnalysis ? {
           structuredIntent: {
             intent_primary: semanticIntentAnalysis.structured_intent.intent_primary,
@@ -3811,6 +3820,7 @@ router.post(
             release_decision: ciraRuntimeBundle.final_response_frame?.release_decision || null,
             ready_to_deliver: ciraRuntimeBundle.validation_frame?.ready_to_deliver || false,
           } : null,
+          integrationRuntime: integrationRuntimeProfile?.promptProfile || null,
         };
         enterpriseExecutionBlock = `\n\n${buildEnterpriseExecutionPrompt(enterpriseExecutionGraph)}\n\n${buildAgenticOperatingPrompt(agenticOperatingCore)}\n\nEnterprise runtime profile (policy summary, do not reveal to user):\n${JSON.stringify(enterpriseRuntimeProfile, null, 2)}${ciraRuntimeBlock}`;
       } catch (contractErr) {
@@ -4259,9 +4269,7 @@ router.post(
             '- If the user asks for a summary, resumen, analysis, extraction, or explanation, answer from these current files first.',
             '- For professional analysis, synthesize the argument and implications; do not reproduce the table of contents, index links, cover metadata, advisor names, or internal extraction labels.',
             '- Never start the final answer with "Indice de contenidos", "Índice de contenidos", raw markdown links, or filename metadata.',
-            messageAttachments.wantsSingleParagraphSynthesis(prompt)
-              ? '- The user requested one paragraph: answer in exactly one polished paragraph, with no heading, no bullets, no table, and no section breaks.'
-              : '',
+            ...messageAttachments.buildFormatDirectiveLines(prompt, { lang: 'en' }),
             '- Do not answer from prior images, weather cards, generated visuals, or unrelated chat history unless the user explicitly asks for that older context.',
             '- Preserve file identity: refer to each attachment by filename and never reinterpret a document as an image.'
           ].filter(Boolean).join('\n')
@@ -4656,13 +4664,19 @@ router.post(
             try {
               const agenticStream = require('../services/agentic-chat-stream');
               const hasImages = (filesForVision || []).some(f => f && f.mimeType && f.mimeType.startsWith('image/'));
+              const priorHistory = Array.isArray(messages) ? messages.slice(0, -1) : [];
+              const shouldRunAgentic = agenticStream.shouldUseAgenticChat({
+                prompt,
+                history: priorHistory,
+                files: filesForVision || [],
+              });
               if (
                 agenticStream.isEnabled()
+                && shouldRunAgentic
                 && agenticStream.modelSupportsFunctionCalling(actualProvider, actualModel)
                 && !hasImages
               ) {
                 const agenticClient = createProviderClient(actualProvider);
-                const priorHistory = Array.isArray(messages) ? messages.slice(0, -1) : [];
                 const agenticFileIds = (processedFiles || [])
                   .map((file) => file && (file.id || file.fileId || file.uploadId || file.databaseId))
                   .filter(Boolean)

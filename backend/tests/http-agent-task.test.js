@@ -52,47 +52,14 @@ describe('HTTP agent task route', () => {
     return buildRouteTestApp('/api/agent', reloadModule('../src/routes/agent-task'));
   }
 
-  test('requires auth before creating an agent task', async () => {
-    const res = await request(buildApp())
-      .post('/api/agent/task')
-      .send({ goal: 'Write a short report' });
-
-    assert.equal(res.status, 401);
-    assert.equal(res.body.error, 'Access token required');
-  });
-
-  test('validates task creation body at the HTTP boundary', async () => {
-    const res = await request(buildApp())
-      .post('/api/agent/task')
-      .set('Authorization', auth.authHeader)
-      .send({ goal: 'no', maxRuntimeMs: 10 });
-
-    assert.equal(res.status, 400);
-    assert.ok(Array.isArray(res.body.errors));
-    assertContractResponse('agent.task.create', 400, res.body);
-  });
-
-  test('returns the documented 503 contract when Redis queueing is unavailable', async () => {
-    const res = await request(buildApp())
-      .post('/api/agent/task')
-      .set('Authorization', auth.authHeader)
-      .send({ goal: 'Build a verified task plan', maxSteps: 3, maxRuntimeMs: 60000 });
-
-    assert.equal(res.status, 503);
-    assert.match(res.body.error, /REDIS_URL is required/);
-    assertContractResponse('agent.task.create', 503, res.body);
-  });
-
-  test('streams a document-grounded fallback when Redis and OpenAI are unavailable but a file is attached', async () => {
-    delete process.env.OPENAI_API_KEY;
-    delete process.env.REDIS_URL;
-
+  function installAnalyzedDocumentMock() {
     const prisma = require('../src/config/database');
     const persistence = require('../src/services/agents/agent-task-persistence');
     const originalFileFindMany = prisma.file.findMany;
     const originalUpsert = persistence.upsertAgentTask;
     const originalAppend = persistence.appendAgentTaskEvent;
     const originalArtifact = persistence.persistGeneratedArtifact;
+
     prisma.file.findMany = async () => [{
       id: 'file-http-doc-1',
       filename: 'informe.pdf',
@@ -126,12 +93,75 @@ describe('HTTP agent task route', () => {
     persistence.appendAgentTaskEvent = async () => null;
     persistence.persistGeneratedArtifact = async () => null;
 
+    return () => {
+      prisma.file.findMany = originalFileFindMany;
+      persistence.upsertAgentTask = originalUpsert;
+      persistence.appendAgentTaskEvent = originalAppend;
+      persistence.persistGeneratedArtifact = originalArtifact;
+    };
+  }
+
+  test('requires auth before creating an agent task', async () => {
+    const res = await request(buildApp())
+      .post('/api/agent/task')
+      .send({ goal: 'Write a short report' });
+
+    assert.equal(res.status, 401);
+    assert.equal(res.body.error, 'Access token required');
+  });
+
+  test('validates task creation body at the HTTP boundary', async () => {
+    const res = await request(buildApp())
+      .post('/api/agent/task')
+      .set('Authorization', auth.authHeader)
+      .send({ goal: 'no', maxRuntimeMs: 10 });
+
+    assert.equal(res.status, 400);
+    assert.ok(Array.isArray(res.body.errors));
+    assertContractResponse('agent.task.create', 400, res.body);
+  });
+
+  test('streams the local fallback when Redis queueing is unavailable', async () => {
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.REDIS_URL;
+
+    const restoreDocumentMock = installAnalyzedDocumentMock();
+    try {
+      const res = await request(buildApp())
+        .post('/api/agent/task')
+        .set('Authorization', auth.authHeader)
+        .send({
+          goal: 'Resume este documento',
+          scopeMode: 'global',
+          files: ['file-http-doc-1'],
+          fileMetadata: [{ id: 'file-http-doc-1', name: 'informe.pdf', mimeType: 'application/pdf' }],
+          maxSteps: 3,
+          maxRuntimeMs: 60000,
+        });
+
+      assert.equal(res.status, 200);
+      assert.match(res.headers['content-type'], /text\/event-stream/);
+      assert.match(res.text, /queue_status/);
+      assert.match(res.text, /final_text/);
+      assert.match(res.text, /done/);
+    } finally {
+      restoreDocumentMock();
+    }
+  });
+
+  test('streams a document-grounded fallback when Redis and OpenAI are unavailable but a file is attached', async () => {
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.REDIS_URL;
+
+    const restoreDocumentMock = installAnalyzedDocumentMock();
+
     try {
       const res = await request(buildApp())
         .post('/api/agent/task')
         .set('Authorization', auth.authHeader)
         .send({
           goal: 'Qué dice este documento?',
+          scopeMode: 'global',
           files: ['file-http-doc-1'],
           fileMetadata: [{ id: 'file-http-doc-1', name: 'informe.pdf', mimeType: 'application/pdf' }],
           maxSteps: 3,
@@ -145,10 +175,7 @@ describe('HTTP agent task route', () => {
       assert.match(res.text, /programa de vacunacion comunitaria/);
       assert.match(res.text, /done/);
     } finally {
-      prisma.file.findMany = originalFileFindMany;
-      persistence.upsertAgentTask = originalUpsert;
-      persistence.appendAgentTaskEvent = originalAppend;
-      persistence.persistGeneratedArtifact = originalArtifact;
+      restoreDocumentMock();
     }
   });
 

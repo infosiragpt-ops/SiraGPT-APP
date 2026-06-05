@@ -5,6 +5,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+process.env.AGENT_TASK_PRISMA_SYNC = '0';
+
 const agentTaskRouter = require('../src/routes/agent-task');
 const { INTERNAL } = agentTaskRouter;
 const taskStore = require('../src/services/agents/task-store');
@@ -35,6 +37,38 @@ test('agent task route: stores taskId in meta state for reload/resume', () => {
 
   assert.equal(state.meta.taskId, 'task-123');
   assert.equal(state.meta.goal, 'Investiga fuentes');
+});
+
+test('agent task route: safeJsonStringify keeps oversized SSE events parseable', () => {
+  const serialized = INTERNAL.safeJsonStringify({
+    type: 'framework_status',
+    taskId: 'task-large-json',
+    seq: 7,
+    active: {
+      prompt: 'x'.repeat(80_000),
+      nested: Array.from({ length: 200 }, (_, index) => ({
+        index,
+        body: 'payload '.repeat(1200),
+      })),
+    },
+  });
+
+  assert.ok(serialized.length <= 32_768);
+  const parsed = JSON.parse(serialized);
+  assert.equal(parsed.type, 'framework_status');
+  assert.equal(parsed.taskId, 'task-large-json');
+  assert.equal(parsed.seq, 7);
+});
+
+test('agent task route: detects weak attachment tool-unavailable final answers', () => {
+  assert.equal(
+    INTERNAL.looksLikeAttachmentRecoveryNeeded('No pude usar docintel_retrieve en esta tarea (falló de forma repetida). Vuelve a intentarlo.'),
+    true,
+  );
+  assert.equal(
+    INTERNAL.looksLikeAttachmentRecoveryNeeded('El total real combinado es 283000 USD y la fuente primaria es el DOCX.'),
+    false,
+  );
 });
 
 test('agent task route: meta state exposes compact OpenClaw runtime summary', () => {
@@ -350,6 +384,41 @@ test('agent task route: system prompt keeps hidden contract separate from user g
   assert.match(prompt, /Verify every document/);
   assert.match(prompt, /file_1/);
   assert.doesNotMatch(INTERNAL.normalizeDisplayGoal('Haz un resumen'), /execution contract/i);
+});
+
+test('agent task route: attached document/image tasks bypass queued runtime by default', () => {
+  assert.equal(
+    INTERNAL.shouldRunAttachmentTaskLocally({
+      fileIds: ['file-docx-1'],
+      goal: 'dame un resumen en dos parrafos',
+      env: {},
+    }),
+    true,
+  );
+  assert.equal(
+    INTERNAL.shouldRunAttachmentTaskLocally({
+      fileIds: [],
+      goal: 'transcribe esta imagen',
+      env: {},
+    }),
+    true,
+  );
+  assert.equal(
+    INTERNAL.shouldRunAttachmentTaskLocally({
+      fileIds: ['file-docx-1'],
+      goal: 'dame un resumen en dos parrafos',
+      env: { AGENT_TASK_QUEUE_ATTACHMENTS: '1' },
+    }),
+    false,
+  );
+  assert.equal(
+    INTERNAL.shouldRunAttachmentTaskLocally({
+      fileIds: [],
+      goal: 'investiga el tema sin adjuntos',
+      env: {},
+    }),
+    false,
+  );
 });
 
 test('agent task route: system prompt includes intent alignment without echoing the user prompt', () => {

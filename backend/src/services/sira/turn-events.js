@@ -33,6 +33,9 @@
  *   chat_mode_resolved         — mode decided, tool plan filtered
  *   context_compacted          — compaction summary
  *   clarification_requested    — policy asks user; turn ends early
+ *   brain_pipeline_started     — deterministic cognitive gate started
+ *   brain_pipeline_completed   — cognitive gate verdict summary
+ *   brain_pipeline_error       — cognitive gate failed open
  *   runtime_completed          — execution_trace + counters
  *   citation_frame_built       — coverage_ratio + sources_cited
  *   turn_completed             — terminal stage + token usage
@@ -64,6 +67,9 @@ const EVENT_NAMES = Object.freeze([
   "chat_mode_resolved",
   "context_compacted",
   "clarification_requested",
+  "brain_pipeline_started",
+  "brain_pipeline_completed",
+  "brain_pipeline_error",
   "runtime_completed",
   "citation_frame_built",
   "token_usage_recorded",

@@ -37,6 +37,35 @@ test('agentic execution profile: requires document intelligence and RAG for uplo
   assert.deepEqual(blocked.missingTools, ['rag_retrieve']);
 });
 
+test('agentic execution profile: document source wording does not trigger web research', () => {
+  const profile = buildExecutionProfile({
+    goal: 'Usando los documentos adjuntos, calcula cifras y dame fuentes por documento.',
+    fileIds: ['file_docx', 'file_pdf'],
+    fileMetadata: [
+      { id: 'file_docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', name: 'informe.docx' },
+      { id: 'file_pdf', mimeType: 'application/pdf', name: 'riesgos.pdf' },
+    ],
+  });
+
+  assert.equal(profile.capabilities.needsPrivateContext, true);
+  assert.equal(profile.capabilities.needsResearch, false);
+  assert.ok(profile.requiredTools.includes('docintel_analyze'));
+  assert.ok(profile.requiredTools.includes('rag_retrieve'));
+  assert.ok(!profile.requiredTools.includes('web_search'));
+});
+
+test('agentic execution profile: explicit external research with files keeps web gate', () => {
+  const profile = buildExecutionProfile({
+    goal: 'Resume el documento adjunto y busca fuentes externas recientes en la web.',
+    fileIds: ['file_docx'],
+    fileMetadata: [{ id: 'file_docx', mimeType: 'application/pdf', name: 'informe.pdf' }],
+  });
+
+  assert.equal(profile.capabilities.needsPrivateContext, true);
+  assert.equal(profile.capabilities.needsResearch, true);
+  assert.ok(profile.requiredTools.includes('web_search'));
+});
+
 test('agentic execution profile: plain transcription does not force document generation', () => {
   const profile = buildExecutionProfile({
     goal: 'transcribir este archivo',

@@ -119,6 +119,21 @@ async function upsertAgentTask(task = {}) {
     failedAt: task.failedAt ? new Date(task.failedAt) : null,
   }, task);
   try {
+    // Avoid the classic find-then-create race. Several durable event
+    // writers can persist the same freshly queued task concurrently; a
+    // preflight findFirst() lets all of them observe "missing", then all
+    // but one create() fail with P2002 and Prisma logs a noisy error. A
+    // skip-duplicates insert is idempotent at the database boundary.
+    if (typeof prisma.agentTask.createMany === 'function') {
+      const created = await prisma.agentTask.createMany({
+        data: [data],
+        skipDuplicates: true,
+      });
+      if (created?.count > 0) {
+        return prisma.agentTask.findFirst({ where: { id: data.id } });
+      }
+    }
+
     const existing = await prisma.agentTask.findFirst({
       where: buildExistingTaskLookup(data),
       select: { id: true },

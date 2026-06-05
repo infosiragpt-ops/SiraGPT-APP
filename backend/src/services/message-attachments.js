@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const ocrEngine = require('./ocr-engine');
+const outputFormat = require('./output-format-contract');
 const {
   MAX_SIMULTANEOUS_DOCUMENTS,
 } = require('../config/document-batch-limits');
@@ -380,12 +381,14 @@ function isProfessionalDocumentSynthesisRequest(query) {
 }
 
 function wantsSingleParagraphSynthesis(query) {
-  const normalized = normalizeForSearch(query).replace(/[^a-z0-9]+/g, ' ');
-  return (
-    /\b(?:un|uno|1)\s+(?:solo\s+)?parrafo\b/.test(normalized) ||
-    /\ben\s+(?:un|uno|1)\s+parrafo\b/.test(normalized) ||
-    /\bparrafo\s+unico\b/.test(normalized)
-  );
+  return outputFormat.wantsSingleParagraphSynthesis(query);
+}
+
+// Returns the explicit number of paragraphs the user asked for (e.g. "en 2
+// parrafos" -> 2), or 0 when none was requested. Capped at 6 and only honored
+// for >= 2 so the dedicated single-paragraph path keeps handling "1 parrafo".
+function requestedParagraphCount(query) {
+  return outputFormat.requestedParagraphCount(query);
 }
 
 function stripDocumentExtractorHeader(text) {
@@ -778,7 +781,7 @@ async function buildUploadedFileContext(prisma, {
     'Contexto inicial de archivos adjuntos ya extraido por siraGPT.',
     'Usa este contenido para responder sobre el documento pegado/subido. Si el usuario pide analisis, resumen o conclusiones, responde desde la evidencia relevante del documento completo y no desde portada, indice, autores o metadatos preliminares.',
     'Para analisis profesionales: sintetiza con criterio academico/ejecutivo, no copies el indice, no enumeres metadatos internos y no empieces con "Indice de contenidos".',
-    wantsSingleParagraphSynthesis(query) ? 'El usuario pidio un solo parrafo: la respuesta final debe ser exactamente un parrafo, sin titulo, sin viñetas, sin tabla y sin saltos de seccion.' : '',
+    ...outputFormat.buildFormatDirectiveLines(query, { lang: 'es' }),
     query ? `Pregunta del usuario: ${query}` : '',
     bulkBatch ? `Lote grande detectado: ${withText.length} documentos adjuntos. Cada bloque incluye una muestra breve y los documentos completos quedan referenciados por id para recuperación adicional.` : '',
     'Para evidencia estructurada adicional llama docintel_retrieve/docintel_extract_tables; para busqueda semantica general llama rag_retrieve.',
@@ -825,6 +828,8 @@ async function buildTranscriptionTextFromFiles(prisma, { userId, fileIds = [], m
 }
 
 module.exports = {
+  buildFormatDirectiveLines: outputFormat.buildFormatDirectiveLines,
+  parseOutputFormatRequest: outputFormat.parseOutputFormatRequest,
   buildTranscriptionTextFromFiles,
   buildUploadedFileContext,
   describeUnextractedAttachment,
@@ -836,6 +841,7 @@ module.exports = {
   mapWithLimit,
   normalizeClientMetadata,
   prepareDocumentTextForProfessionalSynthesis,
+  requestedParagraphCount,
   resolveTranscriptionFileIds,
   serializeMessageAttachments,
   wantsSingleParagraphSynthesis,

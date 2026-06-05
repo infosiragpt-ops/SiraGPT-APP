@@ -343,7 +343,7 @@ const MUSIC_MOOD_OPTIONS: MusicMood[] = ["Balanced", "Energetic", "Emotional", "
 const MUSIC_EFFECT_OPTIONS: MusicEffect[] = ["None", "Studio Master", "Spatial", "Warm Tape", "Radio Ready", "Lo-Fi"]
 const DEFAULT_IMAGE_MODEL = "bytedance-seed/seedream-4.5"
 const DEFAULT_IMAGE_PROVIDER = "OpenAI"
-const DEFAULT_VIDEO_MODEL = "veo-fast"
+const DEFAULT_VIDEO_MODEL = "fal-ai/sora-2/text-to-video/pro"
 
 const providerForMediaModel = (modelName: string, fallback = DEFAULT_IMAGE_PROVIDER): string => {
   const value = String(modelName || "").toLowerCase()
@@ -1945,22 +1945,39 @@ const ActiveToolsDisplay = ({
 
   const mediaModelOptions = React.useMemo(() => {
     const models = Array.isArray(availableModels) ? availableModels : [];
+    const rankFor = (model: any) => Number(model?.qualityRank ?? model?.apiData?.catalog?.qualityRank ?? model?.apiData?.qualityRank ?? 0);
+    const sortByQuality = (items: any[]) => [...items].sort((a, b) => {
+      const qualityDelta = rankFor(b) - rankFor(a);
+      if (qualityDelta) return qualityDelta;
+      return String(a?.displayName || a?.name || "").localeCompare(String(b?.displayName || b?.name || ""));
+    });
     const pickByKind = (kind: "image" | "video") => {
       const pattern = kind === "image"
         ? /image|imagen|dall|seedream|flux|stable|midjourney|ideogram|recraft|gpt-image/i
-        : /video|veo|kling|runway|pika|hailuo|luma/i;
+        : /video|veo|kling|sora|seedance|fal-ai|pixverse|wan|hailuo|minimax|ltx/i;
       const type = kind.toUpperCase();
-      return models.filter((model: any) => {
+      return sortByQuality(models.filter((model: any) => {
         const label = `${model?.name || ""} ${model?.displayName || ""} ${model?.provider || ""}`;
         return String(model?.type || "").toUpperCase() === type || pattern.test(label);
-      });
+      }));
     };
-    const normalize = (model: any) => ({
-      name: model.name,
-      displayName: model.displayName || model.name,
-      provider: model.provider || null,
-      iconName: resolveModelIconName(model),
-    });
+    const normalize = (model: any) => {
+      const catalog = model?.apiData?.catalog || model?.apiData || {};
+      const fal = model?.fal || catalog?.fal || model?.apiData?.fal || {};
+      return {
+        name: model.name,
+        displayName: model.displayName || model.name,
+        provider: model.provider || null,
+        iconName: resolveModelIconName(model),
+        qualityRank: rankFor(model),
+        qualityLabel: model?.qualityLabel || catalog?.qualityLabel || model?.apiData?.qualityLabel || null,
+        speedTier: model?.speedTier || catalog?.speedTier || model?.apiData?.speedTier || null,
+        family: fal?.family || null,
+        supportsImage: Boolean(fal?.supportsImage),
+        supportsAudio: Boolean(fal?.supportsAudio),
+        description: model?.description || "",
+      };
+    };
 
     const imageModels = pickByKind("image").map(normalize);
     const videoModels = pickByKind("video").map(normalize);
@@ -1972,9 +1989,10 @@ const ActiveToolsDisplay = ({
         { name: "openai/dall-e-3", displayName: "DALL-E 3", provider: "OpenAI", iconName: "ChatGPTLogo" },
       ],
       video: videoModels.length ? videoModels : [
-        { name: "veo-fast", displayName: "Veo Fast (8s)", provider: "Google", iconName: "GeminiLogo" },
-        { name: "kling-1.6-pro", displayName: "Kling 1.6 Pro (10s)", provider: "Kling", iconName: "Bot" },
-        { name: "kling-2-master", displayName: "Kling 2 Master (10s)", provider: "Kling", iconName: "Bot" },
+        { name: "fal-ai/sora-2/text-to-video/pro", displayName: "Sora 2 Pro", provider: "Fal.ai", iconName: "SoraLogo", qualityRank: 100, qualityLabel: "Ultra", speedTier: "quality" },
+        { name: "fal-ai/veo3.1", displayName: "Veo 3.1 Quality", provider: "Fal.ai", iconName: "GeminiLogo", qualityRank: 98, qualityLabel: "Ultra", speedTier: "quality" },
+        { name: "fal-ai/veo3.1/fast", displayName: "Veo 3.1 Fast", provider: "Fal.ai", iconName: "GeminiLogo", qualityRank: 94, qualityLabel: "High", speedTier: "fast" },
+        { name: "fal-ai/kling-video/v3/pro/text-to-video", displayName: "Kling 3 Pro", provider: "Fal.ai", iconName: "KlingLogo", qualityRank: 88, qualityLabel: "High", speedTier: "quality" },
       ],
       voice: VOICE_MODEL_OPTIONS.map((name) => ({
         name,
@@ -1991,6 +2009,15 @@ const ActiveToolsDisplay = ({
     };
   }, [availableModels]);
 
+  React.useEffect(() => {
+    if (!isVideoGenerationActive) return;
+    const videoOptions = mediaModelOptions.video || [];
+    if (!videoOptions.length) return;
+    if (!videoOptions.some((option: any) => option.name === selectedVideoModel)) {
+      setSelectedVideoModel(videoOptions[0].name);
+    }
+  }, [isVideoGenerationActive, mediaModelOptions, selectedVideoModel, setSelectedVideoModel]);
+
   const renderMediaModelPicker = (
     tool: "image" | "voice" | "music" | "video",
     value: string,
@@ -1999,6 +2026,10 @@ const ActiveToolsDisplay = ({
     const options = mediaModelOptions[tool];
     const selected = options.find((option: any) => option.name === value) || options[0];
     const label = selected?.displayName || value || "Modelo";
+    const isVideoPicker = tool === "video";
+    const pickerTitle = isVideoPicker ? "Fal.ai video" : `Modelo de ${tool}`;
+    const selectedWithQuality = selected as typeof selected & { qualityLabel?: string; qualityRank?: number };
+    const qualityText = selectedWithQuality?.qualityLabel || (selectedWithQuality?.qualityRank ? `Q${selectedWithQuality.qualityRank}` : null);
 
     return (
       <DropdownMenu>
@@ -2006,15 +2037,28 @@ const ActiveToolsDisplay = ({
           <Button
             variant="ghost"
             size="sm"
-            className="group/media-model relative isolate h-8 max-w-[212px] shrink-0 gap-1.5 overflow-hidden rounded-full border border-zinc-200/72 bg-white/84 px-3 py-0 text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.86),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
+            className={cn(
+              "group/media-model relative isolate shrink-0 gap-2 overflow-hidden rounded-full border px-3 py-0 font-semibold shadow-[inset_0_1px_0_rgba(255,255,255,0.86),0_14px_34px_-24px_rgba(15,23,42,0.5)] backdrop-blur-xl transition-all duration-300 hover:scale-[1.01]",
+              isVideoPicker
+                ? "h-9 max-w-[272px] border-orange-300/70 bg-[linear-gradient(135deg,rgba(255,255,255,0.9),rgba(255,237,213,0.78))] text-orange-950 hover:border-orange-400/90 dark:border-orange-400/35 dark:bg-[linear-gradient(135deg,rgba(24,13,8,0.92),rgba(67,20,7,0.78))] dark:text-orange-50"
+                : "h-8 max-w-[212px] border-zinc-200/72 bg-white/84 text-zinc-900 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
+            )}
             aria-label={`Seleccionar modelo de ${tool}`}
             title={`Modelo: ${label}`}
           >
-            <span className="pointer-events-none absolute inset-y-[-55%] left-[-65%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/70 to-transparent opacity-0 blur-sm transition-all duration-700 group-hover/media-model:left-[92%] group-hover/media-model:opacity-100 dark:via-white/20" />
-            <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center">
-              <IconProvider name={selected?.iconName || "Bot"} size={18} />
+            <span className="pointer-events-none absolute -inset-6 -z-10 rounded-full bg-[conic-gradient(from_120deg,transparent_0deg,rgba(251,146,60,0.0)_70deg,rgba(251,146,60,0.34)_130deg,rgba(236,72,153,0.18)_195deg,transparent_285deg)] opacity-70 blur-md motion-safe:animate-[spin_9s_linear_infinite]" />
+            <span className="pointer-events-none absolute inset-y-[-55%] left-[-65%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/75 to-transparent opacity-0 blur-sm transition-all duration-700 group-hover/media-model:left-[92%] group-hover/media-model:opacity-100 dark:via-white/22" />
+            <span className={cn("grid shrink-0 place-items-center rounded-full", isVideoPicker ? "h-6 w-6 bg-white/72 shadow-inner dark:bg-white/12" : "h-[18px] w-[18px]") }>
+              <IconProvider name={selected?.iconName || "Bot"} size={isVideoPicker ? 20 : 18} />
             </span>
-            <span className="min-w-0 truncate">{label}</span>
+            <span className={cn("min-w-0 truncate", isVideoPicker && "flex flex-col items-start leading-none")}>
+              <span className="min-w-0 max-w-[166px] truncate">{label}</span>
+              {isVideoPicker && (
+                <span className="mt-0.5 max-w-[166px] truncate text-[10px] font-medium text-orange-700/82 dark:text-orange-200/76">
+                  {selected?.provider || "Fal.ai"}{qualityText ? ` · ${qualityText}` : ""}
+                </span>
+              )}
+            </span>
             <ChevronDown className="h-4 w-4 shrink-0 opacity-60" />
           </Button>
         </DropdownMenuTrigger>
@@ -2023,21 +2067,59 @@ const ActiveToolsDisplay = ({
           side="top"
           sideOffset={8}
           collisionPadding={12}
-          className="liquid-menu-surface w-[min(calc(100vw-1rem),18rem)] p-1.5"
-        >
-          {options.length > 0 ? options.map((option: any) => (
-            <DropdownMenuItem
-              key={option.name}
-              className="chat-active-apps-menu-item h-9 gap-2 text-[12px]"
-              onClick={() => onChange(option.name, option.provider)}
-            >
-              <IconProvider name={option.iconName || "Bot"} size={16} className="shrink-0" />
-              <span className="min-w-0 flex-1 truncate">{option.displayName}</span>
-              {option.name === value && <Check className="h-3.5 w-3.5" />}
-            </DropdownMenuItem>
-          )) : (
-            <div className="px-3 py-6 text-center text-xs text-muted-foreground">Sin modelos disponibles</div>
+          className={cn(
+            "liquid-menu-surface overflow-hidden p-1.5",
+            isVideoPicker ? "w-[min(calc(100vw-1rem),24rem)]" : "w-[min(calc(100vw-1rem),18rem)]"
           )}
+        >
+          {isVideoPicker && (
+            <div className="relative mb-1 overflow-hidden rounded-xl border border-orange-300/35 bg-orange-50/80 px-3 py-2 shadow-inner dark:border-orange-400/20 dark:bg-orange-950/24">
+              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_10%,rgba(255,255,255,0.88),transparent_28%),radial-gradient(circle_at_92%_18%,rgba(251,146,60,0.24),transparent_38%)] dark:bg-[radial-gradient(circle_at_20%_12%,rgba(255,255,255,0.13),transparent_32%),radial-gradient(circle_at_92%_18%,rgba(251,146,60,0.18),transparent_38%)]" />
+              <div className="relative flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-[12px] font800 uppercase tracking-[0.18em] text-orange-700 dark:text-orange-200">{pickerTitle}</div>
+                  <div className="text-[11px] text-orange-900/70 dark:text-orange-100/68">Ordenado de mayor a menor calidad</div>
+                </div>
+                <Badge variant="secondary" className="rounded-full bg-white/78 text-[10px] text-orange-800 shadow-sm dark:bg-white/10 dark:text-orange-100">
+                  {options.length} modelos
+                </Badge>
+              </div>
+            </div>
+          )}
+          <ScrollArea className={cn(isVideoPicker ? "max-h-[min(26rem,calc(100vh-9rem))]" : "max-h-[min(18rem,calc(100vh-7rem))]") }>
+            <div className="space-y-1">
+              {options.length > 0 ? options.map((option: any, index: number) => (
+                <DropdownMenuItem
+                  key={option.name}
+                  className={cn(
+                    "chat-active-apps-menu-item gap-2 text-[12px]",
+                    isVideoPicker ? "min-h-[3.15rem] rounded-xl px-2.5 py-2" : "h-9"
+                  )}
+                  onClick={() => onChange(option.name, option.provider)}
+                >
+                  <span className={cn("grid shrink-0 place-items-center rounded-full", isVideoPicker ? "h-8 w-8 bg-white/72 shadow-inner dark:bg-white/10" : "h-5 w-5") }>
+                    <IconProvider name={option.iconName || "Bot"} size={isVideoPicker ? 22 : 16} className="shrink-0" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-semibold">{option.displayName}</span>
+                    {isVideoPicker && (
+                      <span className="mt-0.5 block truncate text-[11px] font-medium text-muted-foreground">
+                        {option.provider || "Fal.ai"}{option.qualityLabel ? ` · ${option.qualityLabel}` : ""}{option.speedTier ? ` · ${option.speedTier}` : ""}
+                      </span>
+                    )}
+                  </span>
+                  {isVideoPicker && option.qualityRank ? (
+                    <Badge variant="outline" className="rounded-full border-orange-300/45 bg-white/64 px-1.5 py-0 text-[10px] tabular-nums text-orange-700 dark:border-orange-300/25 dark:bg-white/8 dark:text-orange-100">
+                      #{index + 1}
+                    </Badge>
+                  ) : null}
+                  {option.name === value && <Check className="h-3.5 w-3.5 shrink-0" />}
+                </DropdownMenuItem>
+              )) : (
+                <div className="px-3 py-6 text-center text-xs text-muted-foreground">Sin modelos disponibles</div>
+              )}
+            </div>
+          </ScrollArea>
         </DropdownMenuContent>
       </DropdownMenu>
     );
@@ -3120,68 +3202,121 @@ const NavbarModelSelector = ({
 
   // If this is a video chat type, show video model
   if (chatTypes === "video") {
-    const videoModels = [
-      { name: 'veo-fast', displayName: 'Veo Fast (8s)' },
-      { name: 'kling-1.6-pro', displayName: 'Kling 1.6 Pro (10s)' },
-      { name: 'kling-2-master', displayName: 'Kling 2 Master (10s)' }
+    const rankFor = (model: any) => Number(model?.qualityRank ?? model?.apiData?.catalog?.qualityRank ?? model?.apiData?.qualityRank ?? 0);
+    const videoModels = (Array.isArray(availableModels) ? availableModels : [])
+      .filter((model: any) => {
+        const label = `${model?.name || ""} ${model?.displayName || ""} ${model?.provider || ""}`;
+        return String(model?.type || "").toUpperCase() === "VIDEO" || /video|veo|kling|sora|seedance|fal-ai|pixverse|wan|hailuo|minimax|ltx/i.test(label);
+      })
+      .sort((a: any, b: any) => rankFor(b) - rankFor(a))
+      .map((model: any) => {
+        const catalog = model?.apiData?.catalog || model?.apiData || {};
+        return {
+          name: model.name,
+          displayName: model.displayName || model.name,
+          provider: model.provider || "Fal.ai",
+          iconName: resolveModelIconName(model),
+          qualityRank: rankFor(model),
+          qualityLabel: model?.qualityLabel || catalog?.qualityLabel || model?.apiData?.qualityLabel || null,
+          speedTier: model?.speedTier || catalog?.speedTier || model?.apiData?.speedTier || null,
+        };
+      });
+
+    const fallbackVideoModels = [
+      { name: "fal-ai/sora-2/text-to-video/pro", displayName: "Sora 2 Pro", provider: "Fal.ai", iconName: "SoraLogo", qualityRank: 100, qualityLabel: "Ultra", speedTier: "quality" },
+      { name: "fal-ai/veo3.1", displayName: "Veo 3.1 Quality", provider: "Fal.ai", iconName: "GeminiLogo", qualityRank: 98, qualityLabel: "Ultra", speedTier: "quality" },
+      { name: "fal-ai/veo3.1/fast", displayName: "Veo 3.1 Fast", provider: "Fal.ai", iconName: "GeminiLogo", qualityRank: 94, qualityLabel: "High", speedTier: "fast" },
+      { name: "fal-ai/kling-video/v3/pro/text-to-video", displayName: "Kling 3 Pro", provider: "Fal.ai", iconName: "KlingLogo", qualityRank: 88, qualityLabel: "High", speedTier: "quality" },
     ];
-    selectedVideoModelData = videoModels.find(m => m.name === selectedModel);
+    const displayVideoModels = videoModels.length ? videoModels : fallbackVideoModels;
+    selectedVideoModelData = displayVideoModels.find((m: any) => m.name === selectedModel) || displayVideoModels[0];
 
     // Filter video models based on search
-    const filteredVideoModels = videoModels.filter((model) =>
+    const filteredVideoModels = displayVideoModels.filter((model: any) =>
       model.displayName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      model.name.toLowerCase().includes(searchQuery.toLowerCase())
+      model.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      String(model.provider || "").toLowerCase().includes(searchQuery.toLowerCase())
     );
 
     return (
       <DropdownMenu onOpenChange={(open) => {
         if (!open) setSearchQuery("");
       }}>
-        <DropdownMenuTrigger className="chat-model-trigger flex items-center gap-2 px-3 py-2 rounded-md bg-background hover:bg-muted transition">
-          <Video className="h-4 w-4" />
-          <span className="chat-model-label text-sm font-medium truncate">{selectedVideoModelData?.displayName || 'Select Video Model'}</span>
+        <DropdownMenuTrigger className="chat-model-trigger group/video-nav relative isolate flex h-11 max-w-[360px] items-center gap-2 overflow-hidden rounded-2xl border border-orange-300/45 bg-[linear-gradient(135deg,rgba(255,255,255,0.9),rgba(255,237,213,0.72))] px-3 py-2 text-orange-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.88),0_18px_46px_-34px_rgba(234,88,12,0.75)] backdrop-blur-xl transition-all hover:border-orange-400/70 dark:border-orange-400/24 dark:bg-[linear-gradient(135deg,rgba(24,13,8,0.95),rgba(67,20,7,0.74))] dark:text-orange-50">
+          <span className="pointer-events-none absolute -inset-8 -z-10 rounded-full bg-[conic-gradient(from_90deg,transparent_0deg,rgba(251,146,60,0.0)_68deg,rgba(251,146,60,0.38)_135deg,rgba(236,72,153,0.18)_198deg,transparent_286deg)] opacity-70 blur-md motion-safe:animate-[spin_10s_linear_infinite]" />
+          <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-white/74 shadow-inner dark:bg-white/12">
+            <IconProvider name={selectedVideoModelData?.iconName || "FalLogo"} size={21} />
+          </span>
+          <span className="min-w-0 flex-1 text-left leading-none">
+            <span className="block truncate text-sm font-bold">{selectedVideoModelData?.displayName || 'Select Video Model'}</span>
+            <span className="mt-1 block truncate text-[11px] font-medium text-orange-700/78 dark:text-orange-200/72">
+              {selectedVideoModelData?.provider || "Fal.ai"}{selectedVideoModelData?.qualityLabel ? ` · ${selectedVideoModelData.qualityLabel}` : ""}
+            </span>
+          </span>
           <div className="flex items-center gap-1">
-            <div className="w-2 h-2 bg-green-500 rounded-full" title="API Key configured" />
-            <ChevronDown className="h-4 w-4 opacity-70" />
+            <div className="h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.75)]" title="API Key configured" />
+            <ChevronDown className="h-4 w-4 opacity-70 transition-transform group-data-[state=open]/video-nav:rotate-180" />
           </div>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-[calc(100vw-1.5rem)] p-0 sm:w-56">
-          <div className="p-2 border-b">
+        <DropdownMenuContent align="end" collisionPadding={12} sideOffset={8} className="liquid-menu-surface w-[min(calc(100vw-1rem),25rem)] overflow-hidden p-1.5">
+          <div className="relative mb-1 overflow-hidden rounded-xl border border-orange-300/35 bg-orange-50/80 px-3 py-2 shadow-inner dark:border-orange-400/20 dark:bg-orange-950/24">
+            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_18%_10%,rgba(255,255,255,0.88),transparent_28%),radial-gradient(circle_at_92%_18%,rgba(251,146,60,0.24),transparent_38%)] dark:bg-[radial-gradient(circle_at_20%_12%,rgba(255,255,255,0.13),transparent_32%),radial-gradient(circle_at_92%_18%,rgba(251,146,60,0.18),transparent_38%)]" />
+            <div className="relative flex items-center justify-between gap-3">
+              <div>
+                <div className="text-[12px] font800 uppercase tracking-[0.18em] text-orange-700 dark:text-orange-200">Fal.ai Video</div>
+                <div className="text-[11px] text-orange-900/70 dark:text-orange-100/68">Mayor calidad → menor calidad</div>
+              </div>
+              <Badge variant="secondary" className="rounded-full bg-white/78 text-[10px] text-orange-800 shadow-sm dark:bg-white/10 dark:text-orange-100">
+                {displayVideoModels.length} modelos
+              </Badge>
+            </div>
+          </div>
+          <div className="p-1">
             <div className="relative">
-              <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
-                placeholder="Buscar modelos…"
+                placeholder="Buscar modelos Fal…"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-8 h-8 text-sm"
+                className="h-9 rounded-xl border-orange-200/60 bg-white/70 pl-8 text-sm backdrop-blur-xl dark:border-orange-400/20 dark:bg-white/8"
                 onClick={(e) => e.stopPropagation()}
                 onKeyDown={(e) => e.stopPropagation()}
               />
             </div>
           </div>
-          <ScrollArea className="h-[250px]">
-            <div className="p-1">
+          <ScrollArea className="max-h-[min(28rem,calc(100vh-11rem))]">
+            <div className="space-y-1 p-1">
               {filteredVideoModels.length > 0 ? (
-                filteredVideoModels.map((model) => (
+                filteredVideoModels.map((model: any, index: number) => (
                   <DropdownMenuItem
                     key={model.name}
                     onSelect={() => {
                       setSelectedModel(model.name);
+                      setSelectedProvider(model.provider || "Fal.ai");
                       setSearchQuery("");
                       // Video model swap — separate surface so video-
                       // specific funnels stay distinct from text models.
                       track("model.selected", {
                         model: model.name,
-                        provider: (model as any).provider || null,
+                        provider: model.provider || null,
                         surface: "video-picker",
                       });
                     }}
-                    className="flex items-center gap-2 py-2"
+                    className="chat-active-apps-menu-item min-h-[3.3rem] gap-2 rounded-xl px-2.5 py-2"
                   >
-                    <Video className="h-5 w-5 flex-shrink-0" />
-                    <div className="flex flex-col flex-1">
-                      <span className="text-sm">{model.displayName}</span>
+                    <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-white/72 shadow-inner dark:bg-white/10">
+                      <IconProvider name={model.iconName || "FalLogo"} size={24} />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-semibold">{model.displayName}</span>
+                      <span className="mt-0.5 block truncate text-[11px] font-medium text-muted-foreground">
+                        {model.provider || "Fal.ai"}{model.qualityLabel ? ` · ${model.qualityLabel}` : ""}{model.speedTier ? ` · ${model.speedTier}` : ""}
+                      </span>
                     </div>
+                    <Badge variant="outline" className="rounded-full border-orange-300/45 bg-white/64 px-1.5 py-0 text-[10px] tabular-nums text-orange-700 dark:border-orange-300/25 dark:bg-white/8 dark:text-orange-100">
+                      #{index + 1}
+                    </Badge>
+                    {model.name === selectedModel && <Check className="h-3.5 w-3.5 shrink-0" />}
                   </DropdownMenuItem>
                 ))
               ) : (
@@ -3195,6 +3330,7 @@ const NavbarModelSelector = ({
       </DropdownMenu>
     );
   }
+
 
 
 

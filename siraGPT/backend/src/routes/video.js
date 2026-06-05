@@ -612,6 +612,7 @@ const {
   normaliseUploadPath,
   resolveConfinedPath,
 } = require('../middleware/upload-static-access');
+const { buildFalVideoPayload } = require('../services/fal-video-catalog');
 const router = express.Router();
 const prisma = new PrismaClient();
 
@@ -719,7 +720,7 @@ router.post('/generate', [
       audio = true,
       negative_prompt,
       image_url,
-      model = 'veo-fast' // Default model
+      model = 'fal-ai/veo3.1/fast' // Default model
     } = req.body;
 
     const numericDuration = Math.min(Math.max(Number(requestedDuration) || 5, 4), 15);
@@ -846,7 +847,7 @@ router.post('/generate', [
 });
 
 // generateVideoAsync function with proper variable scoping and syntax fix
-async function generateVideoAsync(operationId, prompt, aspectRatio, duration, negativePrompt, filename, userId, imageUrl = null, model = 'veo-fast', resolution = '720p', audio = true) {
+async function generateVideoAsync(operationId, prompt, aspectRatio, duration, negativePrompt, filename, userId, imageUrl = null, model = 'fal-ai/veo3.1/fast', resolution = '720p', audio = true) {
   const maxRetries = 3;
   let retryCount = 0;
 
@@ -862,7 +863,7 @@ async function generateVideoAsync(operationId, prompt, aspectRatio, duration, ne
       activeOperations.set(operationId, operationData);
 
       // Declare variables at function scope to avoid scope issues
-      let endpoint, requestPayload, processedImageUrl = null;
+      let endpoint, requestPayload, processedImageUrl = null, resolvedVideoModel = null;
 
       if (imageUrl) {
         //  Handle image URL - upload to Fal.ai if it's a local file
@@ -905,50 +906,38 @@ async function generateVideoAsync(operationId, prompt, aspectRatio, duration, ne
           }
         }
 
-        //  Use Image-to-Video endpoint
-        switch (model) {
-          case 'kling-1.6-pro':
-            endpoint = "fal-ai/kling-video/v1.6/pro/image-to-video";
-            break;
-          case 'kling-2-master':
-            endpoint = "fal-ai/kling-video/v2.1/master/image-to-video";
-            break;
-          default: // veo-fast
-            endpoint = "fal-ai/veo3/fast/image-to-video";
-        }
-        requestPayload = {
-          prompt: prompt,
-          image_url: processedImageUrl,
-          aspect_ratio: aspectRatio === '16:9' ? '16:9' :
-            aspectRatio === '9:16' ? '9:16' : 'auto',
-          duration: duration,
-          generate_audio: Boolean(audio),
-          resolution
-        };
+        const resolved = buildFalVideoPayload({
+          modelName: model,
+          prompt,
+          aspectRatio,
+          duration,
+          negativePrompt,
+          imageUrl: processedImageUrl,
+          resolution,
+          audio,
+        });
+        endpoint = resolved.endpoint;
+        requestPayload = resolved.payload;
+        duration = resolved.normalizedDuration;
+        resolvedVideoModel = resolved.model;
         console.log(`🖼️➡️🎬 Using Image-to-Video model (${endpoint})`);
         console.log('🔗 Using processed image URL:', processedImageUrl.substring(0, 50) + '...');
       } else {
         //  Use Text-to-Video endpoint
         console.log("MODEL", model);
-
-        switch (model) {
-          case 'kling-1.6-pro':
-            endpoint = "fal-ai/kling-video/v1.6/pro/text-to-video";
-            break;
-          case 'kling-2-master':
-            endpoint = "fal-ai/kling-video/v2.1/master/text-to-video";
-            break;
-          default: // veo-fast
-            endpoint = "fal-ai/veo3/fast";
-        }
-        requestPayload = {
-          prompt: prompt,
-          duration: duration,
-          aspect_ratio: aspectRatio === 'auto' ? '16:9' : aspectRatio,
-          generate_audio: Boolean(audio),
+        const resolved = buildFalVideoPayload({
+          modelName: model,
+          prompt,
+          aspectRatio,
+          duration,
+          negativePrompt,
           resolution,
-          negative_prompt: negativePrompt || undefined
-        };
+          audio,
+        });
+        endpoint = resolved.endpoint;
+        requestPayload = resolved.payload;
+        duration = resolved.normalizedDuration;
+        resolvedVideoModel = resolved.model;
         console.log(`📝➡️🎬 Using Text-to-Video model (${endpoint})`);
       }
 
@@ -1025,6 +1014,8 @@ async function generateVideoAsync(operationId, prompt, aspectRatio, duration, ne
         processedImageUrl: processedImageUrl, //  Now properly scoped
         generationType: imageUrl ? 'image-to-video' : 'text-to-video',
         model: endpoint,
+        modelDisplayName: resolvedVideoModel?.displayName || model,
+        modelProvider: resolvedVideoModel?.provider || 'Fal.ai',
         prompt: prompt,
         completedAt: new Date().toISOString()
       };

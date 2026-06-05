@@ -6,7 +6,7 @@
 // Unicode property classes (`\p{L}\p{N}`) inside lookahead /
 // lookbehind so accented Spanish keywords ("últimos", "elección",
 // "recientemente") trigger as expected. Requires the `u` flag.
-const FRESH_WEB_CONTEXT_RE = /(?<![\p{L}\p{N}])(?:actual(?:es|mente)?|hoy|últim[ao]s?|latest|current|noticias?|paper\s+reciente|precio|202[5-9]|ahora|news|weather|clima|sismo|terremoto|elecci[oó]n|recien(?:te|tes|temente)|cotizaci[oó]n)(?![\p{L}\p{N}])/iu;
+const FRESH_WEB_CONTEXT_RE = /(?<![\p{L}\p{N}])(?:actual(?:es|mente)?|hoy|ayer|mañana|esta\s+semana|este\s+(?:mes|año)|últim[ao]s?|latest|current|recent(?:ly)?|noticias?|paper\s+reciente|precio|cotizaci[oó]n|tipo\s+de\s+cambio|d[oó]lar|euro|bitcoin|20(?:2[5-9]|[3-9][0-9])|ahora|news|weather|clima|pron[oó]stico|sismo|terremoto|elecci[oó]n|elecciones|resultados?|marcador|en\s+vivo|recien(?:te|tes|temente))(?![\p{L}\p{N}])/iu;
 
 function needsFreshWebContext(prompt = '') {
   return FRESH_WEB_CONTEXT_RE.test(String(prompt || ''));
