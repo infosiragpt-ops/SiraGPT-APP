@@ -1568,19 +1568,35 @@ const verifyArtifact = {
       }
     }
 
+    // Resolve the on-disk path. Cycle artifacts are grouped under
+    // ARTIFACT_DIR/<folderCode>/ and record `storedRelPath` in their flat
+    // metadata; legacy artifacts live at the top level under `<id>-<name>`.
+    let full = null;
     let entry = null;
-    if (metadata?.filename) {
+    if (metadata?.storedRelPath) {
+      const root = path.resolve(ARTIFACT_DIR);
+      const candidate = path.resolve(ARTIFACT_DIR, metadata.storedRelPath);
+      // Traversal guard: the resolved path must stay inside ARTIFACT_DIR.
+      if ((candidate === root || candidate.startsWith(root + path.sep)) && fs.existsSync(candidate)) {
+        full = candidate;
+        entry = path.basename(candidate);
+      }
+    }
+    if (!full && metadata?.filename) {
       const candidate = `${id}-${metadata.filename}`;
-      if (fs.existsSync(path.join(ARTIFACT_DIR, candidate))) entry = candidate;
+      if (fs.existsSync(path.join(ARTIFACT_DIR, candidate))) {
+        entry = candidate;
+        full = path.join(ARTIFACT_DIR, candidate);
+      }
     }
-    if (!entry) {
+    if (!full) {
       entry = fs.readdirSync(ARTIFACT_DIR).find(f => f.startsWith(`${id}-`)) || null;
+      if (entry) full = path.join(ARTIFACT_DIR, entry);
     }
-    if (!entry) {
+    if (!full || !entry) {
       ctx.onEvent?.({ type: 'tool_output', tool: 'verify_artifact', ok: false, preview: 'artifact not found' });
       return { ok: false, error: `artifact ${id} not found` };
     }
-    const full = path.join(ARTIFACT_DIR, entry);
     const ext = path.extname(entry).slice(1).toLowerCase();
     const sizeBytes = fs.statSync(full).size;
 

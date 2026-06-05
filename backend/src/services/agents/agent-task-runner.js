@@ -29,6 +29,7 @@ const { buildAgenticQaBoardReview } = require('./agentic-qa-board');
 const { buildAgenticOperatingCore } = require('./agentic-operating-core');
 const durableExecutionStore = require('./durable-execution-store');
 const { buildDocumentDeliveryPolicy, normalizeDocumentPolicyCoherence } = require('./document-delivery-policy');
+const outputFormat = require('../output-format-contract');
 const { getQueueName } = require('./agent-task-queue');
 const persistence = require('./agent-task-persistence');
 const { generateAutoDocument } = require('./auto-document-delivery');
@@ -208,6 +209,29 @@ function selectAttachmentSentences(sentences, request = '', limit = 8) {
     .sort((a, b) => a.index - b.index)
     .map((item) => item.sentence);
   return strong.length ? strong : sentences.slice(0, limit);
+}
+
+// Splits an ordered list of sentences into `paragraphCount` balanced paragraphs,
+// preserving document order. Used when the user asks for a specific number of
+// paragraphs (e.g. "resumen en 2 párrafos").
+function distributeSentencesIntoParagraphs(sentences, paragraphCount) {
+  const list = (Array.isArray(sentences) ? sentences : []).filter(Boolean);
+  if (list.length === 0) return [];
+  const count = Math.max(1, Math.min(paragraphCount, list.length));
+  // Remainder-based allocation: the first `remainder` paragraphs take one extra
+  // sentence so the output always has exactly `count` non-empty paragraphs.
+  const base = Math.floor(list.length / count);
+  const remainder = list.length % count;
+  const paragraphs = [];
+  let cursor = 0;
+  for (let index = 0; index < count; index += 1) {
+    const size = base + (index < remainder ? 1 : 0);
+    const group = list.slice(cursor, cursor + size);
+    cursor += size;
+    if (group.length === 0) break;
+    paragraphs.push(group.join(' ').replace(/\s+/g, ' ').trim());
+  }
+  return paragraphs;
 }
 
 function parseAttachmentNumber(value) {
@@ -998,12 +1022,7 @@ function shouldUseDeterministicAttachmentAnswer({
 }
 
 function wantsSingleParagraphAnswer(request) {
-  const value = normalizedKey(request);
-  return (
-    /\b(?:un|uno|1)\s+(?:solo\s+)?parrafo\b/.test(value) ||
-    /\ben\s+(?:un|uno|1)\s+parrafo\b/.test(value) ||
-    /\bparrafo\s+unico\b/.test(value)
-  );
+  return outputFormat.wantsSingleParagraphSynthesis(request);
 }
 
 /**
@@ -1013,15 +1032,7 @@ function wantsSingleParagraphAnswer(request) {
  * the user-facing directive "análisis de documentos sin viñetas".
  */
 function wantsBulletList(request) {
-  const value = normalizedKey(request);
-  return (
-    /\bvinetas?\b/.test(value) ||
-    /\bbullets?\b/.test(value) ||
-    /\blistas?\b/.test(value) ||
-    /\bpuntos?\s+(?:clave|principales)\b/.test(value) ||
-    /\bchecklist\b/.test(value) ||
-    /\benumera(?:r|cion)?\b/.test(value)
-  );
+  return outputFormat.wantsBulletList(request);
 }
 
 function buildAttachmentGroundedFallbackAnswer({ goal, uploadedFileContext, reason = '' }) {
@@ -1042,10 +1053,14 @@ function buildAttachmentGroundedFallbackAnswer({ goal, uploadedFileContext, reas
     .trim();
   const minUsefulWords = wantsBibliographyAnswer(request) ? 8 : 30;
   if (!cleaned || countUsefulWords(cleaned) < minUsefulWords) return '';
-  const requestedParagraphs = Math.max(
-    1,
-    Math.min(6, Number((request.match(/\b(\d{1,2})\s+p[aá]rrafos?\b/i) || [])[1]) || 0)
-  );
+  const formatSpec = outputFormat.parseOutputFormatRequest(request);
+  // Honor explicit paragraph counts in digit ("2 párrafos") or word ("dos
+  // párrafos") form. A single-paragraph request is handled by its own branch
+  // below, so we only surface counts >= 2 here.
+  const explicitParagraphs = formatSpec.paragraphs && formatSpec.paragraphs >= 2
+    ? Math.min(6, formatSpec.paragraphs)
+    : 0;
+  const requestedParagraphs = Math.max(1, explicitParagraphs);
   const wantsConclusions = /\b(conclusi[oó]n|conclusiones|concluye|concluir)\b/i.test(request);
   const wantsSummary = /\b(resumen|resume|sintesis|s[ií]ntesis|de qu[eé] trata|qu[eé] dice|explica)\b/i.test(request);
   const wantsRecommendations = /\b(recomendaci[oó]n|recomendaciones|sugerencia|sugerencias|propuesta|propuestas)\b/i.test(request);
@@ -1094,6 +1109,19 @@ function buildAttachmentGroundedFallbackAnswer({ goal, uploadedFileContext, reas
       // list, so the whole answer stays bullet-free unless the user
       // opts in via wantsBulletList.
       const heading = '### Análisis del documento adjunto';
+      // Honor an explicit multi-paragraph request (e.g. "resumen en 2 párrafos")
+      // even for summaries, so the output format matches what the user asked for.
+      if (explicitParagraphs >= 2 && !allowBullets) {
+        const paragraphSource = (bulletSentences.length >= explicitParagraphs ? bulletSentences : sentences)
+          .slice(0, Math.max(explicitParagraphs * 2, Math.min(sentences.length, explicitParagraphs * 3)));
+        const summaryParagraphs = distributeSentencesIntoParagraphs(paragraphSource, explicitParagraphs);
+        if (summaryParagraphs.length >= 2) {
+          const recBlock = wantsRecommendations
+            ? '\n**Siguiente paso recomendado.** Usa estos hallazgos como base y pídeme una matriz, informe Word/PDF o tabla comparativa si necesitas un entregable descargable.'
+            : '';
+          return [heading, '', summaryParagraphs.join('\n\n'), recBlock].filter(Boolean).join('\n');
+        }
+      }
       const summaryBlock = executiveSummary
         ? allowBullets
           ? `**Resumen ejecutivo**\n${executiveSummary}`

@@ -4259,9 +4259,7 @@ router.post(
             '- If the user asks for a summary, resumen, analysis, extraction, or explanation, answer from these current files first.',
             '- For professional analysis, synthesize the argument and implications; do not reproduce the table of contents, index links, cover metadata, advisor names, or internal extraction labels.',
             '- Never start the final answer with "Indice de contenidos", "Índice de contenidos", raw markdown links, or filename metadata.',
-            messageAttachments.wantsSingleParagraphSynthesis(prompt)
-              ? '- The user requested one paragraph: answer in exactly one polished paragraph, with no heading, no bullets, no table, and no section breaks.'
-              : '',
+            ...messageAttachments.buildFormatDirectiveLines(prompt, { lang: 'en' }),
             '- Do not answer from prior images, weather cards, generated visuals, or unrelated chat history unless the user explicitly asks for that older context.',
             '- Preserve file identity: refer to each attachment by filename and never reinterpret a document as an image.'
           ].filter(Boolean).join('\n')
