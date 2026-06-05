@@ -111,6 +111,57 @@ const truncateUrl = (url: unknown, maxLength: number = 30) => {
     return path ? `${domain}/${truncatedPath}` : domain;
 };
 
+const flattenNonEmptyChildren = (children: any) =>
+    React.Children.toArray(children).filter(
+        (c) => !(typeof c === 'string' && c.trim() === '')
+    );
+
+const childIsLink = (child: any): boolean =>
+    React.isValidElement(child) && Boolean((child.props as any)?.href);
+
+// A list item that contains only a single link (the shape the model
+// emits inside the "## Fuentes" / "## Sources" section). These render
+// as ChatGPT-style source chips; normal prose links stay inline.
+const liIsLinkOnly = (children: any): boolean => {
+    const arr = flattenNonEmptyChildren(children);
+    return arr.length === 1 && childIsLink(arr[0]);
+};
+
+const listIsAllLinks = (children: any): boolean => {
+    const items = flattenNonEmptyChildren(children);
+    return (
+        items.length > 0 &&
+        items.every(
+            (li) =>
+                React.isValidElement(li) &&
+                liIsLinkOnly((li.props as any)?.children)
+        )
+    );
+};
+
+const SOURCE_CHIP_CLASS =
+    'inline-flex max-w-full items-center gap-1.5 rounded-full border border-border bg-muted/60 px-3 py-1 text-sm font-medium text-foreground no-underline align-middle transition-colors hover:bg-muted hover:border-sky-400 hover:text-sky-700';
+
+const renderSourceChip = (link: any) => {
+    const href = (link?.props as any)?.href;
+    return (
+        <a
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={SOURCE_CHIP_CLASS}
+            title={href}
+        >
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 opacity-70" aria-hidden="true">
+                <circle cx="12" cy="12" r="10" />
+                <path d="M2 12h20" />
+                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+            </svg>
+            <span className="truncate">{(link?.props as any)?.children}</span>
+        </a>
+    );
+};
+
 const NON_IMAGE_EXTENSIONS = new Set([
     'doc', 'docx', 'pdf', 'xls', 'xlsx', 'csv', 'ppt', 'pptx', 'txt', 'md', 'rtf',
 ]);
@@ -1256,9 +1307,19 @@ const MessageComponent = ({ message, user, onRegenerate, updateMessageInChat, is
                 return <pre>{children}</pre>
             },
             p: ({ children }: any) => <p className="mb-4 text-base leading-7">{children}</p>,
-            ul: ({ children }: any) => <ul className="mb-4 pl-6 text-base leading-7">{children}</ul>,
-            ol: ({ children }: any) => <ol className="mb-4 pl-6 text-base leading-7">{children}</ol>,
-            li: ({ children }: any) => <li className="mb-1.5 text-base leading-7">{children}</li>,
+            ul: ({ children }: any) => listIsAllLinks(children)
+                ? <ul className="mb-4 mt-1 flex flex-wrap gap-2 list-none p-0">{children}</ul>
+                : <ul className="mb-4 pl-6 text-base leading-7">{children}</ul>,
+            ol: ({ children }: any) => listIsAllLinks(children)
+                ? <ol className="mb-4 mt-1 flex flex-wrap gap-2 list-none p-0">{children}</ol>
+                : <ol className="mb-4 pl-6 text-base leading-7">{children}</ol>,
+            li: ({ children }: any) => {
+                const arr = flattenNonEmptyChildren(children);
+                if (arr.length === 1 && childIsLink(arr[0])) {
+                    return <li className="list-none m-0 p-0">{renderSourceChip(arr[0])}</li>;
+                }
+                return <li className="mb-1.5 text-base leading-7">{children}</li>;
+            },
             h1: ({ children }: any) => <h1 className="mb-4 text-2xl font-semibold leading-8">{children}</h1>,
             h2: ({ children }: any) => <h2 className="mb-3 text-xl font-semibold leading-7">{children}</h2>,
             h3: ({ children }: any) => <h3 className="mb-2 text-lg font-semibold leading-7">{children}</h3>,

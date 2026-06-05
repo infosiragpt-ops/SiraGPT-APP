@@ -170,7 +170,14 @@ const SOURCE_INTEGRITY_CONTRACT = `## SOURCE INTEGRITY CONTRACT
 - Never cite a "close" or "canonical" work just because it sounds plausible. Plausible is not verified.
 - When evidence is incomplete, separate the answer into verified, inferred, and not confirmed information instead of blending them.
 - For thesis and academic work, draft structure, methodology, matrices, instruments, and wording from the user's facts, but leave references pending verification unless real source metadata is present.
-- Do not create fake APA entries, fake DOI URLs, fake journal names, fake legal norms, fake payments, fake model availability, or fake administrative metrics.`;
+- Do not create fake APA entries, fake DOI URLs, fake journal names, fake legal norms, fake payments, fake model availability, or fake administrative metrics.
+
+### SOURCE PRESENTATION (CLEAN TEXT, SOURCES AT THE BOTTOM)
+- The answer body must read as clean, professional prose. Do NOT paste raw URLs inside sentences, and do NOT leave engine markers like "[Source: N]" or "[Fresh Web Context]" in the visible text.
+- Whenever you used web search results, documents, or any external source, list every source ONCE at the very END of the message under a heading exactly named "## Fuentes" (or "## Sources" when answering in English).
+- Under that heading, render each source on its own line as a numbered markdown link: \`1. [Título de la fuente](URL)\`. One link per line, no commentary mixed in.
+- If you must point a specific claim to a source, use a compact bracket number like [1] that maps to the numbered list at the bottom — never a bare URL in the prose.
+- If there are no real external sources, do NOT add a "Fuentes" section and do NOT invent one.`;
 
 const SIRAGPT_PRODUCT_OPERATING_CONTRACT = `## SIRAGPT PRODUCT OPERATING CONTRACT
 
@@ -484,6 +491,44 @@ CUSTOM_GPT_INSTRUCTIONS>>>
  * @param {string[]} [opts.fileIds] — current-turn attachments, used only for intent alignment
  * @returns {{ system: string, intent: string }}
  */
+// Authoritative current date/time block. The model has NO reliable notion of
+// "today" on its own (its training data is frozen in the past), so it must be
+// told. Without this, "¿qué día es hoy?" gets answered with a hallucinated date
+// from training data. Generated per request and marked non-cacheable.
+function buildCurrentDateTimeBlock(lang) {
+  const now = new Date();
+  const isoUtc = now.toISOString();
+  const locale = lang === 'en' ? 'en-US' : 'es-ES';
+  let human = isoUtc;
+  try {
+    human = new Intl.DateTimeFormat(locale, {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone: 'UTC',
+      timeZoneName: 'short',
+    }).format(now);
+  } catch (_e) { /* keep ISO fallback */ }
+
+  if (lang === 'en') {
+    return `\n\n## CURRENT DATE & TIME (AUTHORITATIVE)
+- Right now it is: ${human}.
+- ISO-8601 (UTC): ${isoUtc}.
+- This is the REAL current date. NEVER guess or invent today's date from training data.
+- For "today", "now", "current", "this week/month/year", compute from this value. If the user names a country or city, convert from UTC to that timezone before answering.
+- For facts that change over time (news, prices, market quotes, sports scores, who currently holds a role/title, latest releases or versions), do NOT answer from memory — rely on the web search results provided in this prompt. If none are present and the answer depends on fresh data, say clearly that you need to look it up rather than guessing.`;
+  }
+  return `\n\n## FECHA Y HORA ACTUAL (AUTORIDAD)
+- Ahora mismo es: ${human}.
+- ISO-8601 (UTC): ${isoUtc}.
+- Esta es la fecha real de hoy. NUNCA adivines ni inventes la fecha actual a partir de tus datos de entrenamiento.
+- Para "hoy", "ahora", "actual", "esta semana/mes/año", calcula a partir de este valor. Si el usuario menciona un país o ciudad, convierte de UTC a esa zona horaria antes de responder.
+- Para datos que cambian con el tiempo (noticias, precios, cotizaciones, resultados deportivos, quién ocupa un cargo actualmente, últimos lanzamientos o versiones), NO respondas de memoria: usa los resultados de búsqueda web incluidos en este prompt. Si no hay ninguno y la respuesta depende de datos frescos, di claramente que necesitas buscarlo en lugar de adivinar.`;
+}
+
 function buildSystemPrompt({ language, userMessage, customGpt, project, userProfile, inferredProfile, fileIds = [], extraBlocks = [] }) {
   const lang = language || 'es';
   const { intent, context: intentContext } = classifyIntent(userMessage || '');
@@ -565,7 +610,9 @@ function buildSystemPrompt({ language, userMessage, customGpt, project, userProf
 - Downloadable documents: wrap the ENTIRE content in [CREATE_DOCUMENT:filename.ext]...[/CREATE_DOCUMENT] and add a one-line acknowledgement outside the tag.
 - Inline content requests (tables, lists, summaries, comparisons) render directly in chat — no file tag.`;
 
-  const body = `${rulesBlock}${userProfileText}${inferredProfileText}${customGptText}${projectText}${intentContextText}${intentAlignmentText}${extraBlockTexts.join('')}${formattingContractText}`;
+  const currentDateTimeText = buildCurrentDateTimeBlock(lang);
+
+  const body = `${rulesBlock}${currentDateTimeText}${userProfileText}${inferredProfileText}${customGptText}${projectText}${intentContextText}${intentAlignmentText}${extraBlockTexts.join('')}${formattingContractText}`;
 
   // Structured blocks list. The `cacheable` flag marks groups that are
   // stable across turns within a chat so the gateway can place
@@ -578,6 +625,7 @@ function buildSystemPrompt({ language, userMessage, customGpt, project, userProf
   const systemBlocks = [
     { kind: 'header', text: headerBlock, cacheable: true },
     { kind: 'rules', text: rulesBlock, cacheable: true },
+    { kind: 'current-datetime', text: currentDateTimeText, cacheable: false },
     { kind: 'user-profile', text: userProfileText, cacheable: true },
     { kind: 'inferred-profile', text: inferredProfileText, cacheable: true },
     { kind: 'custom-gpt', text: customGptText, cacheable: true },
