@@ -107,6 +107,13 @@ test('normalisePlatform maps synonyms and rejects nonsense', () => {
   assert.strictEqual(normalisePlatform('cohete espacial'), null);
 });
 
+test('normalisePlatform recognises desktop and wins over the "app" mobile cue', () => {
+  assert.strictEqual(normalisePlatform('desktop'), 'desktop');
+  assert.strictEqual(normalisePlatform('aplicación de escritorio'), 'desktop');
+  assert.strictEqual(normalisePlatform('Electron app'), 'desktop');
+  assert.strictEqual(normalisePlatform('app de Tauri para Windows'), 'desktop');
+});
+
 test('buildBrief rejects an un-mappable platform', () => {
   const s = answerAll(createSession());
   s.answers.platform = 'cohete espacial';

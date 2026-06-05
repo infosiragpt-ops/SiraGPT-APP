@@ -17,7 +17,14 @@ test('QuestionCardSchema rejects unknown type', () => {
   assert.strictEqual(QuestionCardSchema.safeParse(bad).success, false);
 });
 
-test('ProjectBriefSchema requires platform enum', () => {
-  const brief = { purpose: 'p', platform: 'desktop', audience: 'a', coreFeatures: [], dataEntities: [], style: { theme: 't', refs: [] }, integrations: [], constraints: '', openQuestions: [] };
+test('ProjectBriefSchema accepts every supported platform incl. desktop', () => {
+  for (const platform of ['web', 'mobile', 'landing', 'desktop']) {
+    const brief = { purpose: 'p', platform, audience: 'a', coreFeatures: [], dataEntities: [], style: { theme: 't', refs: [] }, integrations: [], constraints: '', openQuestions: [] };
+    assert.strictEqual(ProjectBriefSchema.safeParse(brief).success, true, `platform "${platform}" should be valid`);
+  }
+});
+
+test('ProjectBriefSchema rejects an unsupported platform', () => {
+  const brief = { purpose: 'p', platform: 'smartwatch', audience: 'a', coreFeatures: [], dataEntities: [], style: { theme: 't', refs: [] }, integrations: [], constraints: '', openQuestions: [] };
   assert.strictEqual(ProjectBriefSchema.safeParse(brief).success, false);
 });

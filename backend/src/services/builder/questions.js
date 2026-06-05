@@ -26,7 +26,7 @@ const QUESTION_BANK = {
     dimension: 'platform',
     prompt: '¿En qué plataforma quieres construirlo?',
     type: 'chips',
-    options: ['web', 'mobile', 'landing'],
+    options: ['web', 'mobile', 'desktop', 'landing'],
     allowFreeText: false,
   },
   coreFeatures: {

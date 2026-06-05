@@ -16,7 +16,7 @@
 const { COVERAGE_DIMENSIONS, ProjectBriefSchema } = require('./contracts');
 const { questionForDimension } = require('./questions');
 
-const PLATFORMS = ['web', 'mobile', 'landing'];
+const PLATFORMS = ['web', 'mobile', 'landing', 'desktop'];
 
 /** Create a fresh intake session. */
 function createSession() {
@@ -112,6 +112,9 @@ function toText(value) {
 function normalisePlatform(value) {
   const raw = toText(value).toLowerCase();
   if (PLATFORMS.includes(raw)) return raw;
+  // Desktop is checked before mobile so cues like "Electron app" / "app de
+  // escritorio" resolve to desktop instead of being caught by the "app" rule.
+  if (/desktop|escritorio|electron|tauri|\bdesk\b|win32|windows|macos/.test(raw)) return 'desktop';
   if (/m[oó]vil|mobile|app|android|ios/.test(raw)) return 'mobile';
   if (/landing|aterrizaje|one[- ]?page/.test(raw)) return 'landing';
   if (/web|sitio|portal|saas|dashboard/.test(raw)) return 'web';

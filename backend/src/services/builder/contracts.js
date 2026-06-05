@@ -23,7 +23,7 @@ const QuestionCardSchema = z.object({
 
 const ProjectBriefSchema = z.object({
   purpose: z.string(),
-  platform: z.enum(['web', 'mobile', 'landing']),
+  platform: z.enum(['web', 'mobile', 'landing', 'desktop']),
   audience: z.string(),
   coreFeatures: z.array(z.string()),
   dataEntities: z.array(z.object({ name: z.string(), fields: z.array(z.string()) })),

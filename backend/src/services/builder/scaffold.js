@@ -11,6 +11,7 @@
 
 const { ProjectBriefSchema } = require('./contracts');
 const { planFromBrief } = require('./blueprint');
+const { buildPreviewHtml } = require('./preview');
 
 // Blueprint field type → Prisma scalar.
 const PRISMA_TYPES = {
@@ -140,6 +141,7 @@ function scaffoldFromBrief(rawBrief) {
   const blueprint = planFromBrief(brief);
 
   const files = [
+    { path: 'preview.html', language: 'html', content: buildPreviewHtml(brief) },
     { path: 'README.md', language: 'markdown', content: buildReadme(brief, blueprint) },
     { path: '.env.example', language: 'dotenv', content: buildEnvExample(brief, blueprint) },
   ];
