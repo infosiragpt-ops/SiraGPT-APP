@@ -651,6 +651,17 @@ usuario autorizó que Claude construya también la UI.
 - `question-generator.js` — `generateNextQuestion(session, dimension)`: pide al
   LLM una QuestionCard **contextual** (seguimiento), la valida contra el schema
   y **fuerza la dimensión**; cualquier fallo → fallback al banco estático.
+- `codegen.js` (E3+) — **codegen real**: `codegenFromBrief(brief, blueprint?)`
+  genera un proyecto **Next.js 14 ejecutable** (App Router, TS) — no solo docs.
+  Corre con `npm install && npm run dev` **sin DB**: cada entidad obtiene una
+  API route CRUD en memoria (`lib/store.ts`) + página lista/alta. Emite
+  `package.json`/`tsconfig.json`/`next.config.mjs`/`app/layout.tsx`/
+  `app/page.tsx` (hero+features) /`components/site-nav.tsx` y, por entidad,
+  `app/api/<slug>/route.ts` + `app/<slug>/page.tsx`. Slice vertical: solo
+  plataformas Next.js (**web/landing**); mobile/desktop → `generated:false` y
+  el caller conserva los starters. Puro/determinista, **escapado anti-inyección**
+  (jsStr/jsxText) en todo texto del brief. Cableado aditivamente en
+  `scaffold.js` (sin colisión de paths).
 
 ### Rutas (`backend/src/routes/builder.js`, montado `/api/builder`)
 - `GET /intake/questions` — catálogo de cards.
@@ -682,9 +693,11 @@ estático mantiene el camino sin red.
   estático). Modelo/baseURL via `FREE_IA_MODEL_ID` / `CEREBRAS_BASE_URL`.
 
 ### Pendiente
-Intake agéntico desde la UI (pasar `dynamic:true`) · codegen real corriendo (E3+)
-· preview interactiva real / WebContainers (E5) · orquestación multi-agente con
-ProjectContext compartido (E6).
+Codegen real para mobile/desktop (hoy solo web/landing) · ejecutar el proyecto
+generado en vivo / WebContainers (E5) · persistencia de builds (T2 schema + T8
+repo) · brief-synthesizer LLM (T6) · orquestación multi-agente con
+ProjectContext compartido (E6). **Hecho:** intake agéntico (LLM + dynamic) ·
+codegen real Next.js web/landing (E3+, `codegen.js`).
 
 ## Conexiones externas
 - Repo: https://github.com/SiraGPT-ORg/siraGPT

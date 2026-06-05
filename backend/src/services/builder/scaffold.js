@@ -12,6 +12,7 @@
 const { ProjectBriefSchema } = require('./contracts');
 const { planFromBrief } = require('./blueprint');
 const { buildPreviewHtml } = require('./preview');
+const { codegenFromBrief } = require('./codegen');
 
 // Blueprint field type → Prisma scalar.
 const PRISMA_TYPES = {
@@ -149,6 +150,16 @@ function scaffoldFromBrief(rawBrief) {
   // No database on landing pages → no Prisma schema.
   if (blueprint.dataModel.length > 0 && blueprint.stack.database !== '—') {
     files.unshift({ path: 'prisma/schema.prisma', language: 'prisma', content: buildPrismaSchema(blueprint) });
+  }
+
+  // Real codegen (E3+): for Next.js platforms (web/landing) emit a runnable
+  // project alongside the starter docs. Out-of-slice platforms (mobile/
+  // desktop) yield no code here and keep just the starters above. Reuse the
+  // already-computed blueprint so the plan stays consistent.
+  const { files: codeFiles } = codegenFromBrief(brief, blueprint);
+  const existingPaths = new Set(files.map((f) => f.path));
+  for (const file of codeFiles) {
+    if (!existingPaths.has(file.path)) files.push(file);
   }
 
   return { blueprint, files };
