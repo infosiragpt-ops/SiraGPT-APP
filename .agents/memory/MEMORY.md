@@ -19,6 +19,7 @@
 - [Reserved VM GCLB 30s timeout](reserved-vm-gclb-timeout.md) — GCLB hard ~30s total-response cut; heartbeats don't reset it (unlike Autoscale). For >30s work: persist-then-poll, don't keep request alive.
 - [Image gen vs edit providers](image-edit-provider-matrix.md) — editing (imagePath) only works on OpenAI/Gemini; OpenRouter is generation-only and must be rerouted, never hard-fail.
 - [Backend test CI wiring](backend-test-ci-wiring.md) — new backend tests only run in CI if added to package.json `test` string; /health routes live in injectable createHealthRoutes for supertest.
+- [npm mirror flakiness vs optional deps](npm-mirror-optional-deps.md) — deploy npm ci 502 on a build-irrelevant transitive tarball → move its top-level devDep consumer to optionalDependencies (both root+backend) and regen lockfiles.
 - [Forget-me fail closed](forget-me-fail-closed.md) — multi-store "delete my data" endpoints must return non-2xx if ANY store's clear fails; never false-report success.
 - [Agent task duplicate execution](agent-task-duplicate-execution.md) — runAgentTaskJob has many callers (worker, watchdog, routes, temporal); in-flight Map guard collapses concurrent same-taskId runs; audit dedup only hid log spam.
 - [Upload sync-path proxy budget](upload-proxy-budget.md) — /files/upload sync steps must be withTimeout-bounded + run concurrently so worst-case stays under the ~30s proxy cut.
