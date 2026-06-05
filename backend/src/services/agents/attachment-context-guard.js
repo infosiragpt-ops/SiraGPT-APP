@@ -18,6 +18,8 @@ const SCAFFOLDING_PREFIXES = [
   'resumen tecnico:',
   'fragmentos analizados:',
   'pregunta del usuario:',
+  'Para analisis profesionales:',
+  'Para análisis profesionales:',
   // New hierarchical context prefixes
   '[', // chunk labels like "[1] Introduction"
   'Esquema del documento:',

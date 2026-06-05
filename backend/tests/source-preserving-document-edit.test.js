@@ -58,6 +58,8 @@ describe('source-preserving document edit', () => {
     assert.equal(isSourcePreservingEditRequest('agrega una tabla de presupuesto', []), false);
     assert.equal(isSourcePreservingEditRequest('agrega al final una tabla de presupuesto', []), false);
     assert.equal(isSourcePreservingEditRequest('dame un resumen en un solo párrafo', ['file-docx']), false);
+    assert.equal(isSourcePreservingEditRequest('calcula la diferencia usando los documentos adjuntos', ['file-docx']), false);
+    assert.equal(isSourcePreservingEditRequest('compara el PDF y el DOCX adjuntos e indica la cifra final', ['file-docx']), false);
     assert.equal(isSourcePreservingEditRequest('completa el anexo 3', ['file-docx']), true);
     assert.deepEqual(parseTargetSectionRequest('completa el anexo 3'), {
       kind: 'anexo',

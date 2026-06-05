@@ -17,14 +17,21 @@ export function resolveModelIconName(model: ModelIconInput | null | undefined): 
   const explicitIcon = model.icon || undefined
   const searchable = `${modelName} ${displayName}`
 
+  if (has(searchable, /sora/)) return "SoraLogo"
   if (has(searchable, /(^|[/\s-])(gpt|chatgpt|dall[-\s]?e)\b|openai\//)) return "ChatGPTLogo"
   if (has(searchable, /gemini|google\/|imagen|veo/)) return "GeminiLogo"
+  if (has(searchable, /kling/)) return "KlingLogo"
+  if (has(searchable, /seedance|bytedance|doubao/)) return "ByteDanceLogo"
+  if (has(searchable, /minimax|hailuo/)) return "MiniMaxLogo"
+  if (has(searchable, /pixverse/)) return "PixVerseLogo"
+  if (has(searchable, /(^|[/\s-])wan([/\s.-]|$)/)) return "WanLogo"
+  if (has(searchable, /ltx/)) return "LtxLogo"
   if (has(searchable, /claude|anthropic\//)) return "ClaudeLogo"
   if (has(searchable, /grok|x-ai\//)) return "GrokLogo"
   if (has(searchable, /deepseek/)) return "DeepseekLogo"
   if (has(searchable, /kimi|moonshot/)) return "KimiLogo"
   if (has(searchable, /\bz\.?ai\b|z-ai\/|zhipu|chatglm|\bglm[-\s]?\d?/)) return "ZaiLogo"
-  if (has(searchable, /seedream|bytedance|doubao/)) return "SeedreamLogo"
+  if (has(searchable, /seedream/)) return "SeedreamLogo"
   if (has(searchable, /qwen|alibaba/)) return "QwenLogo"
   if (has(searchable, /llama|meta-llama|meta\//)) return "MetaLogo"
   if (has(searchable, /mistral|codestral/)) return "MistralLogo"
@@ -36,6 +43,7 @@ export function resolveModelIconName(model: ModelIconInput | null | undefined): 
   if (provider.includes("deepseek")) return "DeepseekLogo"
   if (provider.includes("xai") || provider.includes("x-ai")) return "GrokLogo"
   if (provider.includes("openrouter")) return "OpenRouterLogo"
+  if (provider.includes("fal")) return "FalLogo"
 
   return explicitIcon || "Bot"
 }

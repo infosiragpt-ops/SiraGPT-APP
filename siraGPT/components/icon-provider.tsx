@@ -86,6 +86,14 @@ export const iconMap: { [key: string]: IconConfig } = {
     QwenLogo: { type: 'svg', component: CloudSun },
     MetaLogo: { type: 'svg', component: ToyBrick },
     MistralLogo: { type: 'svg', component: Wind },
+    FalLogo: { type: 'png', imagePath: '/icons/fal.svg', preserveColor: true },
+    KlingLogo: { type: 'png', imagePath: '/icons/kling.svg', preserveColor: true },
+    SoraLogo: { type: 'png', imagePath: '/icons/sora.svg', preserveColor: true },
+    ByteDanceLogo: { type: 'png', imagePath: '/icons/bytedance.svg', preserveColor: true },
+    MiniMaxLogo: { type: 'png', imagePath: '/icons/minimax.svg', preserveColor: true },
+    PixVerseLogo: { type: 'png', imagePath: '/icons/pixverse.svg', preserveColor: true },
+    WanLogo: { type: 'png', imagePath: '/icons/wan.svg', preserveColor: true },
+    LtxLogo: { type: 'png', imagePath: '/icons/ltx.svg', preserveColor: true },
 };
 
 // Hum LucideProps se 'name' ko hata rahe hain takay hum apni 'name' property define kar sakein.

@@ -132,3 +132,16 @@ test('stripScaffolding removes Office extraction banners from fallback answers',
   assert.equal(stripped.includes('characters extracted'), false);
   assert.equal(stripped.includes('Informe de prueba'), true);
 });
+
+test('stripScaffolding removes internal attachment guidance before fallback summarization', () => {
+  const ctx = [
+    'Contexto inicial de archivos adjuntos ya extraido por siraGPT.',
+    'Para analisis profesionales: sintetiza con criterio academico/ejecutivo, no copies el indice, no enumeres metadatos internos y no empieces con "Indice de contenidos".',
+    'Introducción',
+    'El documento analiza la comunicación comercial en redes sociales y la captación de clientes jóvenes.',
+  ].join('\n');
+  const stripped = stripScaffolding(ctx);
+  assert.equal(stripped.includes('sintetiza con criterio'), false);
+  assert.equal(stripped.includes('no enumeres metadatos internos'), false);
+  assert.match(stripped, /comunicación comercial/);
+});

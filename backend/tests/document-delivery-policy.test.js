@@ -83,6 +83,39 @@ test('DocumentDeliveryPolicy answers attached-document conclusions in chat by de
   assert.equal(policy.thresholds.fileCount, 1);
 });
 
+test('DocumentDeliveryPolicy keeps cross-document analysis with PDF/DOCX references in chat', () => {
+  const policy = buildDocumentDeliveryPolicy({
+    goal: 'Usando todos los documentos adjuntos, calcula el total real, explica la contradiccion entre PDF y DOCX e indica que cifra final debe usarse.',
+    files: ['memo-txt', 'report-docx', 'metrics-xlsx', 'risk-pdf'],
+  });
+
+  assert.equal(policy.mode, 'chat_only');
+  assert.equal(policy.autoGenerate, false);
+  assert.equal(policy.thresholds.fileCount, 4);
+  assert.equal(policy.thresholds.explicitOutput, false);
+});
+
+test('DocumentDeliveryPolicy honors explicit no-file directives even with create/matrix wording', () => {
+  const policy = buildDocumentDeliveryPolicy({
+    goal: 'A partir de los documentos adjuntos, crea una matriz breve de riesgos y decisiones. No crees archivos.',
+    files: ['memo-txt', 'report-docx', 'metrics-xlsx', 'risk-pdf'],
+  });
+
+  assert.equal(policy.mode, 'chat_only');
+  assert.equal(policy.autoGenerate, false);
+  assert.equal(policy.thresholds.chatOnlyDirective, true);
+});
+
+test('DocumentDeliveryPolicy keeps executive recommendations in chat by default', () => {
+  const policy = buildDocumentDeliveryPolicy({
+    goal: 'Cruza la hoja de metricas con el informe ejecutivo y el memo. Dame 3 recomendaciones ejecutivas priorizadas.',
+    files: ['memo-txt', 'report-docx', 'metrics-xlsx'],
+  });
+
+  assert.equal(policy.mode, 'chat_only');
+  assert.equal(policy.autoGenerate, false);
+});
+
 test('DocumentDeliveryPolicy creates Word only when attached-document conclusions ask for Word', () => {
   const policy = buildDocumentDeliveryPolicy({
     goal: 'dame 3 párrafos de conclusiones en Word',

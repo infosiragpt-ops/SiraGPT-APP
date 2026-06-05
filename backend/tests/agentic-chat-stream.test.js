@@ -123,6 +123,8 @@ test('shouldUseAgenticChat skips greetings and simple chat', () => {
 test('shouldUseAgenticChat keeps tool-heavy and follow-up repair turns agentic', () => {
   assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'SiraGPT.com no funciona ChatGPT' }), true);
   assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'investiga esto y cita fuentes recientes' }), true);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'deseo qeu mejoremos todo el cerebro de la IA de forma profesional y minimalista' }), true);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'optimiza el contexto y razonamiento del agente' }), true);
   assert.equal(agenticStream.shouldUseAgenticChat({
     prompt: 'sigue con eso',
     history: [{ role: 'user', content: 'Arregla el deploy del repositorio en GitHub' }],
@@ -396,9 +398,21 @@ test('buildThreadWorkContext preserves standing user goals from prior turns', ()
   ], 'Aun no funciona, no entiende todo el hilo.');
 
   assert.match(context, /ongoing autonomous work session/);
+  assert.match(context, /Professional minimal cognition profile/);
+  assert.match(context, /direct answer or next action first/);
   assert.match(context, /cada chat sea un agente/);
   assert.match(context, /Claude Code/);
   assert.match(context, /Recent thread context/);
+});
+
+test('buildThreadWorkContext hardens broad AI-brain upgrade requests', () => {
+  const { buildThreadWorkContext } = agenticStream._internal;
+  const context = buildThreadWorkContext([], 'deseo qeu mejoremos todo el cerebro de la IA de forma profesional y minimalista');
+
+  assert.match(context, /Normalize noisy Spanish\/English internally/);
+  assert.match(context, /runtime behavior hardening/);
+  assert.match(context, /small verifiable change/);
+  assert.match(context, /avoid broad rewrites/);
 });
 
 test('runAgenticChat sends expanded thread context to the model', async () => {
@@ -430,6 +444,7 @@ test('runAgenticChat sends expanded thread context to the model', async () => {
   assert.match(system, /OpenClaw-Level Runtime Policy/);
   assert.match(system, /Capability Contract/);
   assert.match(system, /ongoing autonomous work session/);
+  assert.match(system, /Professional minimal cognition profile/);
   assert.match(system, /cada hilo recuerde la meta completa/);
 });
 

@@ -10,6 +10,7 @@ const EXPLICIT_DECK_OUTPUT_RE = /\b(?:en|como|a|formato)\s+(?:un\s+|una\s+|el\s+
 const EXPLICIT_PDF_OUTPUT_RE = /\b(?:en|como|a|formato)\s+(?:un\s+|una\s+|el\s+|la\s+)?pdf\b|\bpdf\b/i;
 const EXPLICIT_TRANSCRIPTION_OUTPUT_RE = /\b(?:en|como|a)\s+(?:un\s+|una\s+)?(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|presentaci[oó]n)\b|\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|exporta(?:r|me)?|descarga(?:r|me)?|dame|prepara(?:r|me)?)\b.*\b(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|documento|archivo|informe|reporte|presentaci[oó]n)\b/i;
 const DOCUMENT_UNDERSTANDING_RE = /\b(analiza(?:r|me)?|an[aá]lisis|resume(?:n|me)?|resumir|extrae(?:r|me)?|transcrib(?:e|ir|eme|irme)?|qu[eé]\s+dice|seg[uú]n\s+(?:el\s+)?documento|archivo\s+adjunto|documento\s+adjunto|evidencia)\b/i;
+const CHAT_ONLY_DIRECTIVE_RE = /\b(?:no\s+(?:crees?|crear|generes?|generar|hagas?|hacer|exportes?|exportar|prepares?|preparar|descargues?|descargar)\s+(?:un\s+|una\s+|el\s+|la\s+)?(?:archivos?|documentos?|word|docx|pdf|excel|xlsx|pptx?|power\s*point|powerpoint|entregables?)|responde(?:r)?\s+(?:solo|solamente)?\s*(?:en\s+)?(?:el\s+)?chat|solo\s+en\s+chat|sin\s+(?:archivos?|documentos?|descarga|entregables?))\b/i;
 // Read/inquiry intents about a previously-shared document. Matches
 // phrases like "cuál es el título del word", "de qué trata el
 // documento", "qué dice el pdf", "cómo se llama el archivo", "resume
@@ -115,7 +116,7 @@ function detectComplexity(text, estimatedWords) {
 // "tabla" while answering a plain question, and matching on that text
 // would auto-promote conversational turns to doc_required.
 function classifyMode(requestText, estimatedWords, format, files = [], options = {}) {
-  if (options.transcriptionOnly) return 'chat_only';
+  if (options.transcriptionOnly || options.chatOnlyDirective) return 'chat_only';
   const documentUnderstanding = DOCUMENT_UNDERSTANDING_RE.test(requestText);
   const explicitOutput = EXPLICIT_DOCUMENT_OUTPUT_RE.test(requestText);
   if (isSourcePreservingEdit(requestText, files)) return 'doc_required';
@@ -173,6 +174,10 @@ function normalizeDocumentPolicyCoherence(policy) {
   return { ...policy, mode, autoGenerate };
 }
 
+function hasChatOnlyDirective(value) {
+  return CHAT_ONLY_DIRECTIVE_RE.test(compactText(value));
+}
+
 function buildDocumentDeliveryPolicy({
   goal,
   displayGoal,
@@ -187,16 +192,18 @@ function buildDocumentDeliveryPolicy({
   // assistant's wording can never promote a chat turn to doc_required.
   const text = compactText(`${requestText} ${finalText || ''}`);
   const transcriptionOnly = TRANSCRIPTION_RE.test(requestText) && !EXPLICIT_TRANSCRIPTION_OUTPUT_RE.test(requestText);
+  const chatOnlyDirective = hasChatOnlyDirective(requestText);
   const explicitOutput = hasExplicitDocumentOutputRequest(requestText);
   const documentUnderstanding = DOCUMENT_UNDERSTANDING_RE.test(requestText);
   const estimated = estimateWords({ goal, displayGoal, finalText });
   const format = detectFormat(requestText, requestedFormat);
   const template = detectTemplate(text, format);
-  const mode = classifyMode(requestText, estimated, format, Array.isArray(files) ? files : [], { transcriptionOnly });
+  const mode = classifyMode(requestText, estimated, format, Array.isArray(files) ? files : [], { transcriptionOnly, chatOnlyDirective });
   const tableSignals = SHEET_RE.test(text);
   const complexity = detectComplexity(text, estimated);
   const reason = (() => {
     if (transcriptionOnly) return 'Solicitud de transcripción literal; se responde en chat salvo que el usuario pida un archivo.';
+    if (chatOnlyDirective) return 'El usuario pidio responder en chat y no generar archivos.';
     if (DOCUMENT_UNDERSTANDING_RE.test(requestText) && !EXPLICIT_DOCUMENT_OUTPUT_RE.test(requestText)) return 'Solicitud de analisis documental; se responde primero en chat y se sugiere documento solo si hace falta.';
     if (mode === 'chat_only') return 'Respuesta conversacional corta; no requiere archivo.';
     // Los motivos de "sugerencia" (documento opcional, no automático) deben
@@ -230,6 +237,7 @@ function buildDocumentDeliveryPolicy({
       fileCount: Array.isArray(files) ? files.length : 0,
       transcriptionOnly,
       explicitOutput,
+      chatOnlyDirective,
       documentUnderstanding,
     },
     palette: PALETTES[template] || PALETTES.business,
@@ -244,6 +252,7 @@ module.exports = {
   detectFormat,
   detectTemplate,
   estimateWords,
+  hasChatOnlyDirective,
   hasExplicitDocumentOutputRequest,
   wordCount,
 };

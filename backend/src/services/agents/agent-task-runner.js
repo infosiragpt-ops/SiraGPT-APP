@@ -42,6 +42,7 @@ const {
 } = require('./vancouver-table-document');
 const { buildLangGraphLayer } = require('./agentic-langgraph');
 const { buildAgenticFrameworkStatus } = require('./agentic-frameworks');
+const { buildForbiddenToolNames } = require('./agent-tool-policy');
 const {
   buildTranscriptionTextFromFiles,
   buildUploadedFileContext,
@@ -171,7 +172,7 @@ function splitReadableSentences(text) {
     .replace(/\s+/g, ' ')
     .split(/(?<=[.!?;:])\s+|\n+/)
     .map((sentence) => sentence.trim())
-    .filter((sentence) => sentence.length >= 35)
+    .filter((sentence) => sentence.length >= 35 || /\b\d+(?:[.,]\d+)?\b/.test(sentence))
     .filter((sentence) => {
       const key = normalizedKey(sentence);
       if (!key || seen.has(key)) return false;
@@ -186,6 +187,7 @@ function scoreAttachmentSentence(sentence, request = '') {
   let score = 0;
   if (/\b(se encontro|se evidencio|se identifico|se observo|muestra|indica|concluye|recomienda|sugiere|resultado|resultados|hallazgo|hallazgos|asocia|asociacion|relacion significativa|incrementa|reduce|mejora)\b/.test(normalized)) score += 5;
   if (/\b(ansiedad|depresion|estres|riesgo|impacto|efecto|efectos|salud mental|rendimiento|adiccion|vulnerabilidad|malestar)\b/.test(normalized)) score += 2;
+  if (/\b(pdf|docx|xlsx|churn|retencion|contrato|contratado|real|total|diferencia|riesgo|legal|dpa|fuente|oficial|preliminar|cliente|norte|sur|este)\b/.test(normalized)) score += 2;
   if (sentence.length >= 80 && sentence.length <= 420) score += 1;
   if (/\b(cuantitativo|cualitativo|transversal|probabilistico|conveniencia|cuestionario|escala|inventario|modelo teorico|autores|publicacion)\b/.test(normalized)) score -= 2;
 
@@ -208,6 +210,370 @@ function selectAttachmentSentences(sentences, request = '', limit = 8) {
   return strong.length ? strong : sentences.slice(0, limit);
 }
 
+function parseAttachmentNumber(value) {
+  const normalized = String(value || '')
+    .replace(/\s+/g, '')
+    .replace(/,/g, '.')
+    .replace(/[^0-9.-]/g, '');
+  const parsed = Number.parseFloat(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function formatAttachmentNumber(value, { decimals = null } = {}) {
+  if (!Number.isFinite(value)) return '';
+  if (Number.isInteger(value)) return String(value);
+  const fixed = value.toFixed(decimals == null ? 2 : decimals);
+  return fixed.replace(/\.?0+$/, '');
+}
+
+function matchAttachmentNumber(text, patterns = []) {
+  for (const pattern of patterns) {
+    const match = String(text || '').match(pattern);
+    if (match) {
+      const parsed = parseAttachmentNumber(match[1]);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return null;
+}
+
+function extractClientMetricRows(text) {
+  const rows = [];
+  const seen = new Set();
+  const compact = String(text || '').replace(/\|/g, ' ').replace(/\r/g, '\n');
+  const rowRegexes = [
+    // Cliente Contrato Real Satisfaccion/SLA Churn Region
+    /(?:^|\n|\s)([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ_-]{2,})\s+(\d{4,})\s+(\d{4,})\s+(\d{1,3}(?:[.,]\d+)?)\s+(\d{1,3}(?:[.,]\d+)?)\s+([A-Za-zÁÉÍÓÚÑáéíóúñ_-]{2,})/g,
+    // Cliente Pais Contrato Real SLA Churn Tickets
+    /(?:^|\n|\s)([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ_-]{2,})\s+([A-Za-zÁÉÍÓÚÑáéíóúñ_-]{2,})\s+(\d{4,})\s+(\d{4,})\s+(\d{1,3}(?:[.,]\d+)?)\s+(\d{1,3}(?:[.,]\d+)?)\s+(\d{1,4})/g,
+  ];
+  let match;
+  for (const rowRegex of rowRegexes) {
+    while ((match = rowRegex.exec(compact))) {
+      const client = match[1];
+      const key = normalizedKey(client);
+      if (['sheet', 'total', 'resumen', 'columns', 'cliente', 'contrato'].includes(key) || seen.has(key)) continue;
+      const hasCountryBeforeNumbers = match.length >= 8;
+      const region = hasCountryBeforeNumbers ? match[2] : match[6];
+      const contract = parseAttachmentNumber(hasCountryBeforeNumbers ? match[3] : match[2]);
+      const real = parseAttachmentNumber(hasCountryBeforeNumbers ? match[4] : match[3]);
+      const satisfaction = parseAttachmentNumber(hasCountryBeforeNumbers ? match[5] : match[4]);
+      const churn = parseAttachmentNumber(hasCountryBeforeNumbers ? match[6] : match[5]);
+      const tickets = hasCountryBeforeNumbers ? parseAttachmentNumber(match[7]) : null;
+      if (![contract, real, satisfaction, churn].every(Number.isFinite)) continue;
+      seen.add(key);
+      rows.push({
+        client,
+        contract,
+        real,
+        satisfaction,
+        churn,
+        region,
+        tickets,
+        gap: real - contract,
+      });
+    }
+  }
+  return rows;
+}
+
+function findAttachmentRisk(text) {
+  const value = String(text || '');
+  const riskId = '[A-Z][0-9]+';
+  const match = value.match(new RegExp(`\\b(${riskId})\\s*[-–]\\s*([^-–\\n.]+?)\\s*[-–]\\s*Severidad\\s+([^-–\\n.]+?)\\s*[-–]\\s*Mitigaci[oó]n:\\s*([^-–\\n.]+)(?:\\s*[-–]\\s*Fecha\\s+l[ií]mite:\\s*([0-9-]+))?(?:\\s*[-–]\\s*Bloquea:\\s*([^\\n.]+))?`, 'i'))
+    || value.match(new RegExp(`\\bRiesgo\\s+(${riskId})\\s*:\\s*([^,\\n.]+),\\s*severidad\\s+([^,\\n.]+),\\s*mitigaci[oó]n:\\s*([^\\n.]+)`, 'i'));
+  if (!match) return null;
+  return {
+    id: match[1].trim(),
+    owner: match[2].trim(),
+    severity: match[3].trim(),
+    mitigation: match[4].trim(),
+    due: match[5] ? match[5].trim() : null,
+    blocks: match[6] ? match[6].trim() : null,
+  };
+}
+
+function extractAttachmentFileNames(text) {
+  const names = [];
+  const seen = new Set();
+  const regex = /(?:Archivo adjunto\s+\d+\s*:\s*|^|\s)([A-Za-z0-9._-]+\.(?:txt|csv|md|xlsx|docx|pdf))/gim;
+  let match;
+  while ((match = regex.exec(String(text || '')))) {
+    const name = match[1];
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    names.push(name);
+  }
+  return names;
+}
+
+function matchAttachmentText(text, patterns = []) {
+  for (const pattern of patterns) {
+    const match = String(text || '').match(pattern);
+    if (match && match[1]) return match[1].trim();
+  }
+  return null;
+}
+
+function extractTicketRows(text) {
+  const rows = [];
+  const raw = String(text || '').replace(/\|/g, ',');
+  const regex = /(?:^|\n)([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ_-]{2,})\s*,\s*([A-Za-zÁÉÍÓÚÑáéíóúñ_-]{2,})\s*,\s*(\d{1,4})\s*,\s*([A-Za-zÁÉÍÓÚÑáéíóúñ_-]{2,})\s*,\s*([^\n]+)/g;
+  let match;
+  while ((match = regex.exec(raw))) {
+    if (/cliente/i.test(match[1])) continue;
+    rows.push({
+      client: match[1].trim(),
+      module: match[2].trim(),
+      tickets: parseAttachmentNumber(match[3]),
+      severity: match[4].trim(),
+      note: match[5].trim(),
+    });
+  }
+  return rows.filter((row) => Number.isFinite(row.tickets));
+}
+
+function extractStructuredAttachmentFacts(text) {
+  const raw = String(text || '');
+  const rows = extractClientMetricRows(raw);
+  const totalContract = matchAttachmentNumber(raw, [
+    /Total\s+contrato\s*[:\t ]+\$?\s*(\d+(?:[.,]\d+)?)/i,
+    /total\s+contratad[oa]\s+(?:es|validado\s+es|validada\s+es)?\s*[:\t ]*\$?\s*(\d+(?:[.,]\d+)?)/i,
+    /total[_\s-]*contratad[oa]['"]?\s*[:=]\s*\$?\s*(\d+(?:[.,]\d+)?)/i,
+  ]) ?? (rows.length ? rows.reduce((sum, row) => sum + row.contract, 0) : null);
+  const totalReal = matchAttachmentNumber(raw, [
+    /Total\s+real\s*[:\t ]+\$?\s*(\d+(?:[.,]\d+)?)/i,
+    /total\s+real\s+(?:combinado\s+)?(?:validado\s+)?(?:es|:)?\s*\$?\s*(\d+(?:[.,]\d+)?)/i,
+    /total[_\s-]*real(?:[_\s-]*combinado)?['"]?\s*[:=]\s*\$?\s*(\d+(?:[.,]\d+)?)/i,
+  ]) ?? (rows.length ? rows.reduce((sum, row) => sum + row.real, 0) : null);
+  const preliminaryTotalReal = matchAttachmentNumber(raw, [
+    /Total\s+real\s+preliminar\s*:\s*\$?\s*(\d+(?:[.,]\d+)?)/i,
+    /total[_\s-]*real[_\s-]*preliminar['"]?\s*[:=]\s*\$?\s*(\d+(?:[.,]\d+)?)/i,
+  ]);
+  const difference = matchAttachmentNumber(raw, [
+    /Diferencia\s*[:\t ]+\$?\s*(\d+(?:[.,]\d+)?)/i,
+    /diferencia\s+(?:es|validada\s+es)?\s*[:\t ]*\$?\s*(\d+(?:[.,]\d+)?)/i,
+    /diferencia(?:[_\s-]*exacta)?['"]?\s*[:=]\s*\$?\s*(\d+(?:[.,]\d+)?)/i,
+    /Varianza\s+neta\s*:\s*\$?\s*(\d+(?:[.,]\d+)?)/i,
+  ]) ?? (Number.isFinite(totalReal) && Number.isFinite(totalContract) ? totalReal - totalContract : null);
+  const weightedRetention = matchAttachmentNumber(raw, [
+    /Retenci[oó]n\s+ponderada\s*[:\t ]+\s*(\d+(?:[.,]\d+)?)/i,
+    /retenci[oó]n\s+ponderada\s+(?:validada\s+)?(?:es|:)?\s*(\d+(?:[.,]\d+)?)/i,
+    /retenci[oó]n[_\s-]*ponderada['"]?\s*[:=]\s*(\d+(?:[.,]\d+)?)/i,
+    /SLA\s+ponderado(?:\s+validado)?\s*:\s*(\d+(?:[.,]\d+)?)/i,
+  ]);
+  const officialChurn = matchAttachmentNumber(raw, [
+    /churn\s+total\s+oficial\s+es\s+(\d+(?:[.,]\d+)?)\s*%/i,
+    /DOCX[^.\n]{0,100}churn[^.\n]{0,40}?(\d+(?:[.,]\d+)?)\s*%?/i,
+    /churn\s+final\s+(\d+(?:[.,]\d+)?)\s*%?/i,
+  ]);
+  const preliminaryChurn = matchAttachmentNumber(raw, [
+    /Churn\s+total\s+preliminar:\s*(\d+(?:[.,]\d+)?)\s*%/i,
+    /PDF[^.\n]{0,100}(?:preliminar|dice)[^.\n]{0,40}?(\d+(?:[.,]\d+)?)\s*%?/i,
+    /no\s+(\d+(?:[.,]\d+)?)\s*%/i,
+  ]);
+  const risk = findAttachmentRisk(raw);
+  const ticketRows = extractTicketRows(raw);
+  const criticalTicket = ticketRows
+    .filter((row) => /critica|critico|critical/i.test(row.severity))
+    .sort((a, b) => b.tickets - a.tickets)[0] || null;
+  const highestTicket = ticketRows.slice().sort((a, b) => b.tickets - a.tickets)[0] || null;
+  const worstGap = rows.length
+    ? rows.slice().sort((a, b) => a.gap - b.gap || b.churn - a.churn)[0]
+    : null;
+  const lowSlaRows = rows.filter((row) => Number.isFinite(row.satisfaction) && row.satisfaction < 95)
+    .sort((a, b) => a.satisfaction - b.satisfaction || b.churn - a.churn);
+  const recommendsNoExpansion = /\bno\s+expandir\b/i.test(raw);
+  const successClientMatch = raw.match(/Cliente\s+([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ_-]+)\s+como\s+caso\s+de\s+[eé]xito/i)
+    || raw.match(/Cliente\s+([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ_-]+)\s+supera\s+contrato\s+y\s+sirve\s+como\s+caso\s+de\s+[eé]xito/i)
+    || raw.match(/usar\s+([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ_-]+)\s+como\s+caso\s+de\s+[eé]xito/i)
+    || raw.match(/Cliente\s+de\s+referencia:\s*([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ_-]+)/i)
+    || raw.match(/Cliente\s+de\s+[eé]xito\s+comercial:\s*([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ_-]+)/i);
+  const successCandidate = successClientMatch ? successClientMatch[1].trim() : null;
+  const invalidSuccessCandidate = /^(usar|que|cual|cu[aá]l|cliente|caso)$/i.test(successCandidate || '');
+  const fallbackSuccessClient = rows.length
+    ? rows.slice().sort((a, b) => b.gap - a.gap || b.satisfaction - a.satisfaction)[0]?.client
+    : null;
+  const officialLaunchDate = matchAttachmentText(raw, [
+    /Fecha\s+oficial\s+de\s+lanzamiento:\s*([0-9-]+)/i,
+    /lanzamiento\s+oficial\s+para\s+([0-9-]+)/i,
+  ]);
+  const preliminaryLaunchDate = matchAttachmentText(raw, [
+    /Fecha\s+preliminar\s+de\s+lanzamiento:\s*([0-9-]+)/i,
+    /(?:indican|indica)\s+([0-9-]{10}),\s*esa\s+fecha\s+es\s+preliminar/i,
+  ]);
+  const contingency = matchAttachmentNumber(raw, [
+    /Contingencia\s+(?:disponible:|:)?\s*\$?\s*(\d+(?:[.,]\d+)?)/i,
+    /los\s+(\d+(?:[.,]\d+)?)\s*USD\s+solo\s+se\s+liberan/i,
+  ]);
+  const slaThreshold = matchAttachmentNumber(raw, [
+    /SLA\s+(\d+(?:[.,]\d+)?)%/i,
+    /SLA\s+de\s+[^.\n]+?\s+por\s+encima\s+de\s+(\d+(?:[.,]\d+)?)%/i,
+  ]);
+  const fileNames = extractAttachmentFileNames(raw);
+
+  return {
+    rows,
+    ticketRows,
+    totalContract,
+    totalReal,
+    preliminaryTotalReal,
+    difference,
+    weightedRetention,
+    officialChurn,
+    preliminaryChurn,
+    risk,
+    worstGap,
+    lowSlaRows,
+    criticalTicket,
+    highestTicket,
+    recommendsNoExpansion,
+    officialLaunchDate,
+    preliminaryLaunchDate,
+    contingency,
+    slaThreshold,
+    fileNames,
+    successClient: successCandidate && !invalidSuccessCandidate ? successCandidate : fallbackSuccessClient,
+    hasBusinessFacts: rows.length > 0
+      || ticketRows.length > 0
+      || Number.isFinite(totalContract)
+      || Number.isFinite(totalReal)
+      || Number.isFinite(preliminaryTotalReal)
+      || Number.isFinite(contingency)
+      || Boolean(officialLaunchDate)
+      || Boolean(preliminaryLaunchDate)
+      || Number.isFinite(officialChurn)
+      || Number.isFinite(preliminaryChurn)
+      || Boolean(risk),
+  };
+}
+
+function buildStructuredAttachmentAnalysisAnswer({ goal, uploadedFileContext }) {
+  const request = String(goal || '');
+  const normalizedRequest = normalizedKey(request);
+  const facts = extractStructuredAttachmentFacts(uploadedFileContext);
+  if (!facts.hasBusinessFacts) return '';
+
+  const wantsCalculation = /\b(calcula|calcular|total|diferencia|brecha|retencion|ponderad[ao]|contrato|contratado|real)\b/.test(normalizedRequest);
+  const wantsRisk = /\b(riesgo|bloquea|presupuesto|dpa|legal|severidad|mitigacion|fecha limite)\b/.test(normalizedRequest);
+  const wantsRecommendation = /\b(recomendacion|recomendaciones|direccion|priorizar|expandir|caso de exito)\b/.test(normalizedRequest);
+  const wantsConflict = /\b(conflicto|contrasta|reconcilia|discrepancia|churn|pdf|docx|fuente primaria|oficial|preliminar)\b/.test(normalizedRequest);
+  const wantsLaunch = /\b(lanzamiento|fecha|go|no go|go no go|cronograma)\b/.test(normalizedRequest);
+  const wantsTickets = /\b(ticket|tickets|modulo|modulos|soporte|billing|integraciones)\b/.test(normalizedRequest);
+  const wantsSla = /\b(sla|retencion|churn|prioridad|priorizar|cliente)\b/.test(normalizedRequest);
+  const wantsContingency = /\b(contingencia|liberar|presupuesto)\b/.test(normalizedRequest);
+  const wantsSources = /\b(fuente|fuentes|cita|documento|documentos)\b/.test(normalizedRequest);
+  if (!wantsCalculation && !wantsRisk && !wantsRecommendation && !wantsConflict && !wantsLaunch && !wantsTickets && !wantsSla && !wantsContingency && !/\b(resumen|analiza|analisis|sintesis)\b/.test(normalizedRequest)) {
+    return '';
+  }
+
+  const paragraphs = [];
+  if (wantsCalculation && Number.isFinite(facts.totalReal) && Number.isFinite(facts.totalContract)) {
+    const diff = Number.isFinite(facts.difference) ? facts.difference : facts.totalReal - facts.totalContract;
+    const diffLabel = diff >= 0 ? 'por encima' : 'por debajo';
+    paragraphs.push(
+      `El total real combinado es **${formatAttachmentNumber(facts.totalReal)} USD** frente a **${formatAttachmentNumber(facts.totalContract)} USD** contratados; la diferencia es **${formatAttachmentNumber(Math.abs(diff))} USD** ${diffLabel} del contrato.`
+    );
+  }
+  if ((wantsCalculation || wantsRecommendation) && facts.worstGap) {
+    const gap = facts.worstGap.gap;
+    paragraphs.push(
+      `La peor brecha está en **${facts.worstGap.client}**: contrato de **${formatAttachmentNumber(facts.worstGap.contract)} USD** contra real de **${formatAttachmentNumber(facts.worstGap.real)} USD**, una variación de **${formatAttachmentNumber(gap)} USD**.`
+    );
+  }
+  if (wantsCalculation && Number.isFinite(facts.weightedRetention)) {
+    paragraphs.push(`El SLA/retención ponderada validado es **${formatAttachmentNumber(facts.weightedRetention, { decimals: 1 })}%**.`);
+  }
+  if ((wantsCalculation || wantsConflict) && Number.isFinite(facts.preliminaryTotalReal) && Number.isFinite(facts.totalReal) && facts.preliminaryTotalReal !== facts.totalReal) {
+    paragraphs.push(`La cifra real preliminar del **PDF** es **${formatAttachmentNumber(facts.preliminaryTotalReal)} USD**, pero la cifra oficial a usar es **${formatAttachmentNumber(facts.totalReal)} USD** del **XLSX**.`);
+  }
+  if (wantsConflict && Number.isFinite(facts.officialChurn)) {
+    const prelim = Number.isFinite(facts.preliminaryChurn)
+      ? ` El **PDF** conserva el churn preliminar de **${formatAttachmentNumber(facts.preliminaryChurn, { decimals: 1 })}%**, marcado como no oficial.`
+      : '';
+    paragraphs.push(
+      `Para churn debe usarse **${formatAttachmentNumber(facts.officialChurn, { decimals: 1 })}%** del **DOCX**, porque el informe ejecutivo declara que es la **fuente primaria** cuando existe conflicto.${prelim}`
+    );
+  }
+  if (wantsLaunch && (facts.officialLaunchDate || facts.preliminaryLaunchDate)) {
+    const prelim = facts.preliminaryLaunchDate
+      ? ` La fecha **${facts.preliminaryLaunchDate}** queda como preliminar.`
+      : '';
+    paragraphs.push(`La fecha oficial de lanzamiento es **${facts.officialLaunchDate || facts.preliminaryLaunchDate}** según el **DOCX**.${prelim}`);
+  }
+  if ((wantsRisk || wantsRecommendation) && facts.risk) {
+    const due = facts.risk.due ? ` Fecha límite: **${facts.risk.due}**.` : '';
+    const blocks = facts.risk.blocks ? ` Bloquea: **${facts.risk.blocks}**.` : '';
+    paragraphs.push(
+      `El riesgo que bloquea aumentar presupuesto/expansión es **${facts.risk.id} - ${facts.risk.owner} - Severidad ${facts.risk.severity}**; la mitigación indicada es **${facts.risk.mitigation}**.${due}${blocks}`
+    );
+  }
+  if ((wantsSla || wantsRecommendation) && facts.lowSlaRows.length > 0) {
+    const summary = facts.lowSlaRows
+      .slice(0, 4)
+      .map((row) => `**${row.client}** (SLA ${formatAttachmentNumber(row.satisfaction, { decimals: 1 })}%, churn ${formatAttachmentNumber(row.churn, { decimals: 1 })}%, tickets ${Number.isFinite(row.tickets) ? formatAttachmentNumber(row.tickets) : 'n/d'})`)
+      .join('; ');
+    paragraphs.push(`Clientes prioritarios por SLA/churn: ${summary}.`);
+  }
+  if (wantsTickets && (facts.criticalTicket || facts.highestTicket)) {
+    const critical = facts.criticalTicket
+      ? `El módulo crítico es **${facts.criticalTicket.client} / ${facts.criticalTicket.module}** con **${formatAttachmentNumber(facts.criticalTicket.tickets)}** tickets y severidad **${facts.criticalTicket.severity}**.`
+      : '';
+    const highest = facts.highestTicket
+      ? `La mayor carga total por módulo está en **${facts.highestTicket.client} / ${facts.highestTicket.module}** con **${formatAttachmentNumber(facts.highestTicket.tickets)}** tickets.`
+      : '';
+    paragraphs.push([critical, highest].filter(Boolean).join(' '));
+  }
+  if (wantsContingency && Number.isFinite(facts.contingency)) {
+    const threshold = Number.isFinite(facts.slaThreshold) ? ` y SLA por encima de **${formatAttachmentNumber(facts.slaThreshold)}%**` : '';
+    const riskGate = facts.risk ? ` cerrar **${facts.risk.id}**` : ' cerrar el riesgo bloqueante';
+    paragraphs.push(`La contingencia de **${formatAttachmentNumber(facts.contingency)} USD** no debe liberarse todavía; la condición es${riskGate}${threshold}.`);
+  }
+  if (wantsRecommendation) {
+    const actions = [];
+    if (facts.worstGap) actions.push(`priorizar **${facts.worstGap.client}** por brecha negativa y churn alto`);
+    if (facts.risk) actions.push(`cerrar **${facts.risk.id}** con **${facts.risk.mitigation}** antes de expandir`);
+    if (facts.successClient) actions.push(`usar **${facts.successClient}** como caso de exito`);
+    if (facts.recommendsNoExpansion) actions.push(`**no expandir** presupuesto hasta cerrar ${facts.risk?.id || 'el riesgo bloqueante'}`);
+    if (actions.length) {
+      paragraphs.push(`Recomendación ejecutiva: ${actions.join('; ')}.`);
+    }
+  }
+  if (wantsRisk && facts.recommendsNoExpansion && !paragraphs.some((line) => /\bno\s+expandir\b/i.test(line))) {
+    paragraphs.push(`La recomendación final es **no expandir** presupuesto comercial hasta cerrar ${facts.risk?.id || 'el riesgo bloqueante'}.`);
+  }
+  if (wantsSources) {
+    const sources = [];
+    const byExt = (ext) => facts.fileNames.filter((name) => name.toLowerCase().endsWith(ext)).join(', ');
+    if (Number.isFinite(facts.totalReal) || facts.rows.length) sources.push(`**XLSX**${byExt('.xlsx') ? ` (${byExt('.xlsx')})` : ''}: métricas de clientes, totales, diferencia y SLA/retención ponderada`);
+    if (facts.ticketRows.length) sources.push(`**CSV**${byExt('.csv') ? ` (${byExt('.csv')})` : ''}: tickets por cliente, módulo y severidad`);
+    if (facts.officialLaunchDate || facts.successClient) sources.push(`**DOCX**${byExt('.docx') ? ` (${byExt('.docx')})` : ''}: fecha oficial, go/no-go y decisiones del comité`);
+    if (Number.isFinite(facts.preliminaryTotalReal) || Number.isFinite(facts.preliminaryChurn) || facts.risk) sources.push(`**PDF**${byExt('.pdf') ? ` (${byExt('.pdf')})` : ''}: cifras preliminares y riesgos`);
+    if (facts.recommendsNoExpansion || Number.isFinite(facts.contingency)) sources.push(`**TXT**${byExt('.txt') ? ` (${byExt('.txt')})` : ''}: consolidado operativo y regla de contingencia`);
+    if (byExt('.md')) sources.push(`**MD** (${byExt('.md')}): playbook de expansión y condiciones de liberación`);
+    if (sources.length) paragraphs.push(`Fuentes por documento: ${sources.join('; ')}.`);
+  }
+
+  if (paragraphs.length === 0 && facts.hasBusinessFacts) {
+    if (Number.isFinite(facts.totalReal) && Number.isFinite(facts.totalContract)) {
+      paragraphs.push(`Los adjuntos muestran **${formatAttachmentNumber(facts.totalReal)} USD** reales contra **${formatAttachmentNumber(facts.totalContract)} USD** contratados.`);
+    }
+    if (facts.risk) {
+      paragraphs.push(`El riesgo principal es **${facts.risk.id} - ${facts.risk.owner}**, severidad **${facts.risk.severity}**, con mitigación **${facts.risk.mitigation}**.`);
+    }
+    if (facts.officialLaunchDate) {
+      paragraphs.push(`La fecha oficial de lanzamiento es **${facts.officialLaunchDate}**.`);
+    }
+    if (Number.isFinite(facts.officialChurn)) {
+      paragraphs.push(`El churn oficial es **${formatAttachmentNumber(facts.officialChurn, { decimals: 1 })}%** según el **DOCX**.`);
+    }
+  }
+
+  if (paragraphs.length === 0) return '';
+  return ['### Análisis de documentos adjuntos', '', paragraphs.join('\n\n')].join('\n');
+}
+
 function looksLikeMissingAttachmentAnswer(text) {
   const value = String(text || '').toLowerCase();
   if (!value.trim()) return true;
@@ -216,7 +582,13 @@ function looksLikeMissingAttachmentAnswer(text) {
     value.includes('no se encontró texto disponible') ||
     value.includes('no se encontro texto disponible') ||
     value.includes('proporciona un archivo legible') ||
-    value.includes('no pude acceder al contenido')
+    value.includes('no pude acceder al contenido') ||
+    value.includes('no pude usar docintel') ||
+    value.includes('no pude usar la herramienta') ||
+    value.includes('falló de forma repetida') ||
+    value.includes('fallo de forma repetida') ||
+    value.includes('vuelve a intentarlo') ||
+    value.includes('reformula la solicitud')
   );
 }
 
@@ -446,6 +818,60 @@ function resolveAttachmentFallbackMarkdown({ goal, uploadedFileContext, reason =
   );
 }
 
+function buildToolObservationFallbackContext(steps = []) {
+  if (!Array.isArray(steps) || steps.length === 0) return '';
+  const snippets = [];
+  for (const step of steps) {
+    for (const action of step?.actions || []) {
+      const tool = String(action?.tool || '').trim();
+      if (!tool || tool === 'finalize') continue;
+      const observation = action?.observation;
+      if (!observation || observation.error) continue;
+      let text = '';
+      if (typeof observation === 'string') {
+        text = observation;
+      } else if (typeof observation.stdout === 'string') {
+        text = observation.stdout;
+      } else if (typeof observation.output === 'string') {
+        text = observation.output;
+      } else if (typeof observation.result === 'string') {
+        text = observation.result;
+      } else {
+        try { text = JSON.stringify(observation); } catch { text = ''; }
+      }
+      const cleaned = String(text || '').replace(/\s+/g, ' ').trim();
+      if (!cleaned || cleaned === '{}' || cleaned === '[]') continue;
+      snippets.push(`Herramienta ${tool}: ${cleaned.slice(0, 2000)}`);
+    }
+  }
+  return snippets.join('\n');
+}
+
+function shouldUseDeterministicAttachmentAnswer({
+  goal,
+  documentPolicy,
+  files = [],
+  env = process.env,
+} = {}) {
+  if (String(env.AGENT_TASK_ATTACHMENT_FASTPATH || '').trim() === '0') return false;
+  if (!Array.isArray(files) || files.length === 0) return false;
+  if (documentPolicy?.mode !== 'chat_only' || documentPolicy?.autoGenerate) return false;
+
+  const request = normalizedKey(goal);
+  if (!request) return false;
+  if (/\b(?:web|internet|google|busca|buscar|investiga|investigar|fuentes externas|papers recientes|articulos recientes)\b/.test(request)) {
+    return false;
+  }
+  if (/\b(?:tabla|matriz|entregable|descargable|crea|crear|genera|generar|formatea|convierte|exporta|exportar)\b/.test(request)) {
+    return false;
+  }
+  if (/\b(?:calcula|calcular|comput[ao]|total(?:es)?|diferencia|promedio|ponderad[ao]|porcentaje|margen|variaci[oó]n|contradicci[oó]n|conflicto|discrepa|discrepancia|reconcilia|compar[ao]|contrasta|cruza|exact[ao]s?|cifra\s+final)\b/.test(request)) {
+    return false;
+  }
+
+  return /\b(?:resumen|resume|sintesis|analiza|analisis|explica|describe|descripcion|que dice|de que trata|conclusion|conclusiones|recomendacion|recomendaciones|extrae|lee|revisa|imagen|foto|documento|archivo|adjunto|parrafo|parrafos)\b/.test(request);
+}
+
 function wantsSingleParagraphAnswer(request) {
   const value = normalizedKey(request);
   return (
@@ -480,6 +906,12 @@ function buildAttachmentGroundedFallbackAnswer({ goal, uploadedFileContext, reas
   if (bibliographyAnswer) return bibliographyAnswer;
 
   const cleanedRaw = stripScaffolding(uploadedFileContext);
+  const structuredAnswer = buildStructuredAttachmentAnalysisAnswer({
+    goal: request,
+    uploadedFileContext: cleanedRaw,
+  });
+  if (structuredAnswer) return structuredAnswer;
+
   const cleaned = normalizeAttachmentFallbackContent(cleanedRaw)
     .replace(/\s+/g, ' ')
     .trim();
@@ -524,7 +956,11 @@ function buildAttachmentGroundedFallbackAnswer({ goal, uploadedFileContext, reas
   }
 
   if (!wantsConclusions) {
-    const body = sentences.slice(0, Math.max(4, paragraphCount * 2)).join(' ');
+    const denseEvidenceRequest = /\b(?:calcula|calcular|total|diferencia|contradiccion|contradicci[oó]n|conflicto|compara|comparar|contrasta|cruza|riesgo|riesgos|matriz|recomendacion|recomendaciones|fuente|fuentes)\b/i.test(request);
+    const narrativeSentences = bulletSentences.length ? bulletSentences : sentences;
+    const body = narrativeSentences
+      .slice(0, denseEvidenceRequest ? Math.max(8, paragraphCount * 4) : Math.max(4, paragraphCount * 2))
+      .join(' ');
     const clippedBody = body.length > 1800 ? `${body.slice(0, 1800).trim()}...` : body;
     if (wantsSummary || wantsRecommendations) {
       // When the user didn't ask for bullets we render the executive
@@ -922,7 +1358,12 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     runtimeModelProfile.remapped = runtimeClientResolution.model !== runtimeModelProfile.displayModel
       || runtimeClientResolution.provider !== runtimeModelProfile.detected?.provider;
   }
-  if (!plainTranscriptionRequest && openai) {
+  const deterministicAttachmentAnswer = shouldUseDeterministicAttachmentAnswer({
+    goal: displayGoal || goal,
+    documentPolicy,
+    files,
+  });
+  if (!plainTranscriptionRequest && openai && !deterministicAttachmentAnswer) {
     try {
       const resolved = await resolveTaskContract({
         goal,
@@ -1082,9 +1523,16 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
   emit({ type: 'document_policy', policy: documentPolicy });
 
   const langGraphLayer = await buildLangGraphLayer({ taskId, documentPolicy });
-  const forbiddenToolNames = new Set(Array.isArray(universalTaskContract.forbidden_tools)
-    ? universalTaskContract.forbidden_tools
-    : []);
+  const forbiddenToolNames = buildForbiddenToolNames({
+    baseForbidden: Array.isArray(universalTaskContract.forbidden_tools)
+      ? universalTaskContract.forbidden_tools
+      : [],
+    goal,
+    fileIds: files,
+    documentPolicy,
+    executionProfile,
+    universalTaskContract,
+  });
   const tools = buildTaskTools().filter((tool) => !forbiddenToolNames.has(tool.name));
   const frameworkStatus = await buildAgenticFrameworkStatus({ tools, langGraphLayer });
   emit({
@@ -1617,6 +2065,60 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       return { taskId, status, artifacts: 0 };
     }
 
+    if (deterministicAttachmentAnswer) {
+      const recoveredMarkdown = buildBibliographyFallbackAnswer({
+        goal: displayGoal || goal,
+        uploadedFileContext,
+      }) || buildAttachmentGroundedFallbackAnswer({
+        goal: displayGoal || goal,
+        uploadedFileContext,
+        reason: 'attachment_chat_fast_path',
+      });
+      const finalFallbackMarkdown = recoveredMarkdown || buildAttachmentUnavailableFallbackAnswer({
+        goal: displayGoal || goal,
+        uploadedFileContext,
+      });
+      documentPolicy = {
+        ...(documentPolicy || {}),
+        mode: 'chat_only',
+        autoGenerate: false,
+        reason: recoveredMarkdown
+          ? 'Respuesta directa generada desde el contenido extraído del adjunto.'
+          : 'Adjunto sin texto legible suficiente para una respuesta directa.',
+        thresholds: {
+          ...(documentPolicy?.thresholds || {}),
+          attachmentFastPath: true,
+          usefulWords: countUsefulWords(uploadedFileContext),
+          fileCount: files.length,
+        },
+      };
+      task.documentPolicy = documentPolicy;
+      emit({ type: 'document_policy', policy: documentPolicy });
+      stepIdCounter = 1;
+      emit({ type: 'step_start', id: 's1', label: 'Analizando adjunto', icon: 'file-text' });
+      emit({ type: 'step_done', id: 's1', ok: Boolean(recoveredMarkdown) });
+      emit({
+        type: 'quality_gate',
+        gate: 'attachment_chat_fast_path',
+        label: recoveredMarkdown ? 'Respuesta desde adjunto' : 'Adjunto requiere más contenido',
+        passed: Boolean(recoveredMarkdown),
+        summary: recoveredMarkdown
+          ? 'Se respondió sin depender del bucle de herramientas ni de la cola.'
+          : 'Se explicó cómo aportar contenido legible en lugar de dejar el stream abierto.',
+      });
+      return finishDeterministicTask({
+        finalMarkdown: finalFallbackMarkdown,
+        stoppedReason: recoveredMarkdown ? 'attachment_chat_fast_path' : 'attachment_unreadable_fast_path',
+        steps: 1,
+        artifactsList: [],
+        metadata: {
+          attachmentFastPath: true,
+          sourceFileIds: files,
+          usefulWords: countUsefulWords(uploadedFileContext),
+        },
+      });
+    }
+
     if (!openai && hasAttachedFiles) {
       const recoveredMarkdown = buildBibliographyFallbackAnswer({
         goal: displayGoal || goal,
@@ -1860,6 +2362,10 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
 
     let finalMarkdown = result.finalAnswer || '';
     let stoppedReason = result.stoppedReason;
+    const recoveryUploadedFileContext = [
+      uploadedFileContext,
+      buildToolObservationFallbackContext(result.steps),
+    ].filter(Boolean).join('\n');
     const attachmentFinalNeedsRecovery = Array.isArray(files) && files.length > 0 && (
       looksLikeEmptyOrWeakFinalAnswer(finalMarkdown) ||
       looksLikeMissingAttachmentAnswer(finalMarkdown)
@@ -1867,15 +2373,15 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     if (attachmentFinalNeedsRecovery) {
       const recoveredMarkdown = buildBibliographyFallbackAnswer({
         goal: displayGoal || goal,
-        uploadedFileContext,
+        uploadedFileContext: recoveryUploadedFileContext,
       }) || buildAttachmentGroundedFallbackAnswer({
         goal: displayGoal || goal,
-        uploadedFileContext,
+        uploadedFileContext: recoveryUploadedFileContext,
         reason: result.stoppedReason,
       });
       const finalFallbackMarkdown = recoveredMarkdown || buildAttachmentUnavailableFallbackAnswer({
         goal: displayGoal || goal,
-        uploadedFileContext,
+        uploadedFileContext: recoveryUploadedFileContext,
       });
       finalMarkdown = finalFallbackMarkdown;
       stoppedReason = recoveredMarkdown
@@ -2232,4 +2738,5 @@ module.exports = {
   parseSpreadsheetCitationRows,
   parseCitationAuthors,
   resolveAttachmentFallbackMarkdown,
+  shouldUseDeterministicAttachmentAnswer,
 };
