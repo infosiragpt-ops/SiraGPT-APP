@@ -1591,32 +1591,6 @@ class ApiClient {
     return this.request('/admin/connections/health-check', { method: 'POST' });
   }
 
-  // Product OS integrations — read-only operational console
-  async getProductOsIntegrations() {
-    return this.request('/enterprise/product-os/integrations');
-  }
-  async getProductOsIntegrationsManifest() {
-    return this.request('/enterprise/product-os/integrations/manifest');
-  }
-  async resolveProductOsIntegrations(payload: Record<string, unknown>) {
-    return this.request('/enterprise/product-os/integrations/resolve', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
-  }
-  async getProductOsIntegrationsReadiness(payload: Record<string, unknown>) {
-    return this.request('/enterprise/product-os/integrations/readiness', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
-  }
-  async getSiraParsers() {
-    return this.request('/enterprise/sira/parsers');
-  }
-  async getSiraGenerators() {
-    return this.request('/enterprise/sira/generators');
-  }
-
   // Payment endpoints
   async createStripePayment(data: { plan: string }) {
     return this.request('/payments/stripe', {
