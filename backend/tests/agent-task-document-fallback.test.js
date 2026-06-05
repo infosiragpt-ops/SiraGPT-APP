@@ -386,6 +386,14 @@ test('shouldUseDeterministicAttachmentAnswer: routes simple attachment summaries
   );
   assert.equal(
     shouldUseDeterministicAttachmentAnswer({
+      goal: 'Qué cliente debe usarse como caso de éxito y por qué, con SLA, churn, real y contrato. No crees archivos; responde solo en chat.',
+      files: ['file-docx-1', 'file-xlsx-1'],
+      documentPolicy: { mode: 'chat_only', autoGenerate: false },
+    }),
+    true,
+  );
+  assert.equal(
+    shouldUseDeterministicAttachmentAnswer({
       goal: 'exporta una matriz descargable con este documento',
       files: ['file-docx-1'],
       documentPolicy: { mode: 'chat_only', autoGenerate: false },

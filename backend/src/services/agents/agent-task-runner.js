@@ -386,7 +386,8 @@ function extractStructuredAttachmentFacts(text) {
   const computedWorstGap = rows.length
     ? rows.slice().sort((a, b) => a.gap - b.gap || b.churn - a.churn)[0]
     : null;
-  const explicitWorstGap = explicitWorstGapClient
+  const invalidWorstGapClient = /^(por|cliente|clientes|mayor|brecha|negativa|contrato|real)$/i.test(explicitWorstGapClient || '');
+  const explicitWorstGap = explicitWorstGapClient && !invalidWorstGapClient
     ? rows.find((row) => normalizedKey(row.client) === normalizedKey(explicitWorstGapClient))
       || {
         client: explicitWorstGapClient,
@@ -429,6 +430,18 @@ function extractStructuredAttachmentFacts(text) {
     /SLA\s+(\d+(?:[.,]\d+)?)%/i,
     /SLA\s+de\s+[^.\n]+?\s+por\s+encima\s+de\s+(\d+(?:[.,]\d+)?)%/i,
   ]);
+  const contingencyClientMatch = raw.match(/SLA\s+(?:de\s+)?([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ_-]+)\s+y\s+([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ_-]+)\s+por\s+encima/i);
+  const contingencyClients = contingencyClientMatch
+    ? [contingencyClientMatch[1].trim(), contingencyClientMatch[2].trim()]
+    : [];
+  const goCountriesMatch = raw.match(/(?:lanzar|launch)\s+([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ_-]+)\s+y\s+([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ_-]+)/i);
+  const goCountries = goCountriesMatch
+    ? [goCountriesMatch[1].trim(), goCountriesMatch[2].trim()]
+    : [];
+  const pausedCountry = risk?.blocks || matchAttachmentText(raw, [
+    /pausar\s+([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ_-]+)/i,
+    /pause\s+([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ_-]+)/i,
+  ]);
   const fileNames = extractAttachmentFileNames(raw);
 
   return {
@@ -451,6 +464,9 @@ function extractStructuredAttachmentFacts(text) {
     preliminaryLaunchDate,
     contingency,
     slaThreshold,
+    contingencyClients,
+    goCountries,
+    pausedCountry,
     fileNames,
     successClient: successCandidate && !invalidSuccessCandidate ? successCandidate : fallbackSuccessClient,
     hasBusinessFacts: rows.length > 0
@@ -548,12 +564,22 @@ function buildStructuredAttachmentAnalysisAnswer({ goal, uploadedFileContext }) 
     paragraphs.push([critical, highest].filter(Boolean).join(' '));
   }
   if (wantsContingency && Number.isFinite(facts.contingency)) {
-    const threshold = Number.isFinite(facts.slaThreshold) ? ` y SLA por encima de **${formatAttachmentNumber(facts.slaThreshold)}%**` : '';
+    const thresholdClients = facts.contingencyClients.length
+      ? ` de **${facts.contingencyClients.join('** y **')}**`
+      : facts.lowSlaRows.length
+        ? ` de **${facts.lowSlaRows.slice(0, 2).map((row) => row.client).join('** y **')}**`
+        : '';
+    const threshold = Number.isFinite(facts.slaThreshold) ? ` y SLA${thresholdClients} por encima de **${formatAttachmentNumber(facts.slaThreshold)}%**` : '';
     const riskGate = facts.risk ? ` cerrar **${facts.risk.id}**` : ' cerrar el riesgo bloqueante';
     paragraphs.push(`La contingencia de **${formatAttachmentNumber(facts.contingency)} USD** no debe liberarse todavía; la condición es${riskGate}${threshold}.`);
   }
   if (wantsRecommendation) {
     const actions = [];
+    if (facts.goCountries.length || facts.pausedCountry) {
+      const go = facts.goCountries.length ? `países go: **${facts.goCountries.join('** y **')}**` : '';
+      const paused = facts.pausedCountry ? `país pausado: **${facts.pausedCountry}**` : '';
+      actions.push([go, paused].filter(Boolean).join('; '));
+    }
     if (facts.worstGap) actions.push(`priorizar **${facts.worstGap.client}** por brecha negativa y churn alto`);
     if (facts.risk) actions.push(`cerrar **${facts.risk.id}** con **${facts.risk.mitigation}** antes de expandir`);
     if (facts.successClient) actions.push(`usar **${facts.successClient}** como caso de exito`);
@@ -566,6 +592,22 @@ function buildStructuredAttachmentAnalysisAnswer({ goal, uploadedFileContext }) 
     paragraphs.push(`La recomendación final es **no expandir** presupuesto comercial hasta cerrar ${facts.risk?.id || 'el riesgo bloqueante'}.`);
   }
   if (wantsSources) {
+    if (/\b(mapa|nombre\s+de\s+archivo|filename|archivo)\b/.test(normalizedRequest) && facts.fileNames.length) {
+      const sourceLabels = {
+        '.txt': 'memo operativo, totales y regla de contingencia',
+        '.csv': 'tickets por cliente, módulo y severidad',
+        '.md': 'playbook de expansión y secuencia operativa',
+        '.xlsx': 'métricas, totales, SLA, churn y brechas',
+        '.docx': 'acta autoritativa, fecha oficial y go/no-go',
+        '.pdf': 'riesgos y cifras preliminares',
+      };
+      const mappedFiles = facts.fileNames.map((name) => {
+        const lower = name.toLowerCase();
+        const ext = Object.keys(sourceLabels).find((candidate) => lower.endsWith(candidate));
+        return `**${name}**: ${sourceLabels[ext] || 'evidencia documental adjunta'}`;
+      });
+      paragraphs.push(`Mapa de fuentes por archivo: ${mappedFiles.join('; ')}.`);
+    }
     const sources = [];
     const byExt = (ext) => facts.fileNames.filter((name) => name.toLowerCase().endsWith(ext)).join(', ');
     if (Number.isFinite(facts.totalReal) || facts.rows.length) sources.push(`**XLSX**${byExt('.xlsx') ? ` (${byExt('.xlsx')})` : ''}: métricas de clientes, totales, diferencia y SLA/retención ponderada`);
@@ -894,7 +936,7 @@ function shouldUseDeterministicAttachmentAnswer({
     return false;
   }
 
-  return /\b(?:resumen|resume|sintesis|analiza|analisis|explica|describe|descripcion|que dice|de que trata|conclusion|conclusiones|recomendacion|recomendaciones|extrae|lee|revisa|identifica|resuelve|detecta|calcula|calcular|comput[ao]|total(?:es)?|diferencia|promedio|ponderad[ao]|porcentaje|margen|variaci[oó]n|contradicci[oó]n|conflicto|discrepa|discrepancia|reconcilia|compar[ao]|contrasta|cruza|exact[ao]s?|cifra\s+final|fuentes?|riesgos?|tickets?|modulos?|m[oó]dulos?|fecha|go|pais|pa[ií]s|imagen|foto|documento|archivo|adjunto|parrafo|parrafos)\b/.test(request);
+  return /\b(?:resumen|resume|sintesis|analiza|analisis|explica|describe|descripcion|que dice|de que trata|conclusion|conclusiones|recomendacion|recomendaciones|extrae|lee|revisa|identifica|resuelve|detecta|calcula|calcular|comput[ao]|total(?:es)?|diferencia|promedio|ponderad[ao]|porcentaje|margen|variaci[oó]n|contradicci[oó]n|conflicto|discrepa|discrepancia|reconcilia|compar[ao]|contrasta|cruza|exact[ao]s?|cifra\s+final|fuentes?|riesgos?|tickets?|modulos?|m[oó]dulos?|fecha|go|pais|pa[ií]s|cliente|clientes|caso\s+de\s+exito|exito|bloquea|bloqueado|bloqueante|mitigacion|severidad|limite|fecha\s+limite|dueno|dueño|imagen|foto|documento|archivo|adjunto|parrafo|parrafos)\b/.test(request);
 }
 
 function wantsSingleParagraphAnswer(request) {
@@ -1624,7 +1666,8 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
   const uploadedFileContext = await buildUploadedFileContext(prisma, {
     userId: user.id,
     fileIds: files,
-    query: displayGoal || goal,
+    query: deterministicAttachmentAnswer ? '' : displayGoal || goal,
+    maxChars: deterministicAttachmentAnswer ? 120000 : undefined,
   });
   if (chatId && prisma) {
     try {
