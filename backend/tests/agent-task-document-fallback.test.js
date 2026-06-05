@@ -86,6 +86,39 @@ test('buildAttachmentGroundedFallbackAnswer honors an explicit "2 párrafos" sum
   assert.doesNotMatch(answer, /sintetiza con criterio|El usuario pidio|Pregunta del usuario|Lote grande detectado/);
 });
 
+test('buildAttachmentGroundedFallbackAnswer honors a word-form "dos párrafos" request', () => {
+  clearAgentModules();
+  const { buildAttachmentGroundedFallbackAnswer } = require('../src/services/agents/agent-task-runner');
+  const ctx = [
+    'Contexto inicial de archivos adjuntos ya extraido por siraGPT.',
+    'El usuario pidio 2 parrafos: la respuesta final debe tener exactamente 2 parrafos bien desarrollados, sin viñetas y sin tabla.',
+    'Pregunta del usuario: dame un resumen en dos parrafos',
+    '',
+    '### Archivo adjunto 1: informe.docx',
+    'id: file-informe-1',
+    'tipo: application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    '',
+    'La gestión administrativa integra planificación, organización, dirección y control para alcanzar objetivos institucionales.',
+    'El estudio evidencia que la digitalización mejora la eficiencia operativa y reduce los tiempos de respuesta interna.',
+    'Los autores señalan que la capacitación continua del personal es decisiva para sostener la mejora de procesos.',
+    'Asimismo concluyen que el liderazgo participativo incrementa el compromiso y la productividad de los equipos.',
+  ].join('\n');
+
+  const answer = buildAttachmentGroundedFallbackAnswer({
+    goal: 'dame un resumen en dos parrafos',
+    uploadedFileContext: ctx,
+    reason: 'model_error: 429 insufficient_quota',
+  });
+
+  const paragraphs = answer
+    .replace(/^###[^\n]*\n?/, '')
+    .split(/\n{2,}/)
+    .map((block) => block.trim())
+    .filter(Boolean);
+  assert.equal(paragraphs.length, 2);
+  assert.doesNotMatch(answer, /El usuario pidio|Pregunta del usuario/);
+});
+
 test('buildAttachmentGroundedFallbackAnswer produces exactly N paragraphs for N>2 requests', () => {
   clearAgentModules();
   const { buildAttachmentGroundedFallbackAnswer } = require('../src/services/agents/agent-task-runner');
