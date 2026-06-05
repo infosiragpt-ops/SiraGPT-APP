@@ -1407,6 +1407,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
   if (!user?.id) throw new Error('agent task payload missing user.id');
   const plainTranscriptionRequest = isPlainTranscriptionRequest(goal);
   const hasAttachedFiles = Array.isArray(files) && files.length > 0;
+  const wantsSourcePreservingEdit = isSourcePreservingEditRequest(displayGoal || goal, files);
   const deterministicVancouverRequest = isVancouverMatrixWordRequest(`${goal || ''} ${displayGoal || ''}`) &&
     hasAttachedFiles;
   if (!process.env.OPENAI_API_KEY && !plainTranscriptionRequest && !deterministicVancouverRequest && !hasAttachedFiles) {
@@ -1517,7 +1518,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     documentPolicy,
     files,
   });
-  if (!plainTranscriptionRequest && openai && !deterministicAttachmentAnswer) {
+  if (!plainTranscriptionRequest && openai && !deterministicAttachmentAnswer && !wantsSourcePreservingEdit) {
     try {
       const resolved = await resolveTaskContract({
         goal,
@@ -1756,12 +1757,14 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
   });
 
   let assistantMessageId = existing?.assistantMessageId || null;
-  const uploadedFileContext = await buildUploadedFileContext(prisma, {
-    userId: user.id,
-    fileIds: files,
-    query: deterministicAttachmentAnswer ? '' : displayGoal || goal,
-    maxChars: deterministicAttachmentAnswer ? 120000 : 36000,
-  });
+  const uploadedFileContext = wantsSourcePreservingEdit
+    ? ''
+    : await buildUploadedFileContext(prisma, {
+      userId: user.id,
+      fileIds: files,
+      query: deterministicAttachmentAnswer ? '' : displayGoal || goal,
+      maxChars: deterministicAttachmentAnswer ? 120000 : 36000,
+    });
   if (chatId && prisma) {
     try {
       const chat = await prisma.chat.findFirst({ where: { id: chatId, userId: user.id } });
@@ -1950,6 +1953,90 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
   };
 
   try {
+    if (wantsSourcePreservingEdit && documentPolicy?.autoGenerate) {
+      stepIdCounter = 1;
+      currentStepId = 's1';
+      emit({ type: 'step_start', id: currentStepId, label: 'Editando documento original', icon: 'file-text' });
+      try {
+        emit({
+          type: 'checkpoint',
+          label: 'Editando documento original',
+          status: 'running',
+          payload: { mode: 'source_preserving_append', fileCount: Array.isArray(files) ? files.length : 0 },
+        });
+        const preserved = await tryGenerateSourcePreservingDocumentEdit({
+          prisma,
+          userId: user.id,
+          chatId,
+          fileIds: files,
+          prompt: goal,
+          displayPrompt: displayGoal,
+        });
+        if (!preserved?.artifact) {
+          throw new Error('No encontré un archivo editable compatible asociado a este turno.');
+        }
+        const artifactEvent = {
+          id: preserved.artifact.id,
+          filename: preserved.artifact.filename,
+          format: preserved.artifact.format,
+          mime: preserved.artifact.mime,
+          sizeBytes: preserved.artifact.sizeBytes,
+          downloadUrl: preserved.artifact.downloadUrl,
+          previewHtml: preserved.previewHtml,
+          validation: preserved.validation,
+        };
+        artifacts.push(artifactEvent);
+        emit({ type: 'file_artifact', artifact: artifactEvent });
+        emit({
+          type: 'quality_gate',
+          gate: 'source_preserving_document_edit',
+          label: 'Documento original conservado',
+          passed: Boolean(preserved.validation?.passed),
+          summary: 'Se completó el archivo original sin regenerar portada, tablas ni estructura previa.',
+          payload: preserved.validation,
+        });
+        await persistence.persistGeneratedArtifact({
+          artifact: { ...preserved.artifact, validation: preserved.validation },
+          task,
+          previewHtml: preserved.previewHtml,
+          validation: preserved.validation,
+        });
+        emit({ type: 'step_done', id: currentStepId, ok: Boolean(preserved.validation?.passed) });
+        currentStepId = null;
+        return finishDeterministicTask({
+          finalMarkdown: preserved.content,
+          stoppedReason: 'source_preserving_document_edit',
+          steps: stepIdCounter,
+          artifactsList: artifacts,
+          metadata: {
+            sourcePreservingEdit: true,
+            sourceFileIds: files,
+          },
+        });
+      } catch (err) {
+        emit({ type: 'step_done', id: currentStepId, ok: false });
+        currentStepId = null;
+        emit({
+          type: 'quality_gate',
+          gate: 'source_preserving_document_edit',
+          label: 'Edición preservadora no disponible',
+          passed: false,
+          summary: err?.message || 'No se pudo editar el archivo original.',
+        });
+        return finishDeterministicTask({
+          finalMarkdown: `No pude editar el archivo original sin cambiarlo: ${err?.message || 'error desconocido'}. No generé un documento nuevo para evitar entregarte contenido ajeno al archivo.`,
+          stoppedReason: 'source_preserving_document_edit_failed',
+          steps: stepIdCounter,
+          artifactsList: [],
+          metadata: {
+            sourcePreservingEdit: true,
+            sourcePreservingError: err?.message || 'unknown_error',
+            sourceFileIds: files,
+          },
+        });
+      }
+    }
+
     if (plainTranscriptionRequest) {
       const transcriptionFileIds = Array.isArray(files) && files.length
         ? files.map(String).filter(Boolean)
@@ -2602,7 +2689,6 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     emit({ type: 'document_policy', policy: documentPolicy });
 
     if (documentPolicy.autoGenerate && artifacts.length === 0) {
-      const wantsSourcePreservingEdit = isSourcePreservingEditRequest(displayGoal || goal, files);
       if (wantsSourcePreservingEdit) {
         try {
           emit({
