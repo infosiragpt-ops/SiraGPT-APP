@@ -229,37 +229,42 @@ function buildDocxMarkdown(plan, imagePath = 'siragpt-docx-marker.png') {
     }
   }
 
-  // Wire in the per-section LLM content produced by generateSectionContent
-  // (plan.blocks, keyed by index matching plan.sections). When the block
-  // is missing or marked _error, fall back to the stub. This is THE fix
-  // for the long-standing "every section ships placeholder text" bug —
-  // the LLM was producing real content but the markdown writer ignored it.
-  plan.sections.forEach((section, index) => {
-    lines.push(index === 0 ? `# ${section}` : `## ${section}`, '');
-    const block = Array.isArray(plan.blocks) ? plan.blocks[index] : null;
-    const hasRealContent =
-      block &&
-      !block._error &&
-      typeof block.paragraph === 'string' &&
-      block.paragraph.trim().length > 0 &&
-      !/no estuvo disponible para este intento/i.test(block.paragraph);
-    if (hasRealContent) {
-      lines.push(block.paragraph.trim(), '');
-      if (Array.isArray(block.bullets) && block.bullets.length > 0) {
-        for (const bullet of block.bullets) {
-          const text = String(bullet || '').trim();
-          if (text) lines.push(`- ${text}`);
+  const blueprint = buildProfessionalWordBlueprint(plan);
+  if (blueprint) {
+    appendProfessionalBlueprintMarkdown(lines, blueprint);
+  } else {
+    // Wire in the per-section LLM content produced by generateSectionContent
+    // (plan.blocks, keyed by index matching plan.sections). When the block
+    // is missing or marked _error, fall back to the stub. This is THE fix
+    // for the long-standing "every section ships placeholder text" bug —
+    // the LLM was producing real content but the markdown writer ignored it.
+    plan.sections.forEach((section, index) => {
+      lines.push(index === 0 ? `# ${section}` : `## ${section}`, '');
+      const block = Array.isArray(plan.blocks) ? plan.blocks[index] : null;
+      const hasRealContent =
+        block &&
+        !block._error &&
+        typeof block.paragraph === 'string' &&
+        block.paragraph.trim().length > 0 &&
+        !/no estuvo disponible para este intento/i.test(block.paragraph);
+      if (hasRealContent) {
+        lines.push(block.paragraph.trim(), '');
+        if (Array.isArray(block.bullets) && block.bullets.length > 0) {
+          for (const bullet of block.bullets) {
+            const text = String(bullet || '').trim();
+            if (text) lines.push(`- ${text}`);
+          }
+          lines.push('');
         }
-        lines.push('');
+        const notes = typeof block.notes === 'string' ? block.notes.trim() : '';
+        if (notes && !/no respond.* en este intento/i.test(notes)) {
+          lines.push(`> ${notes}`, '');
+        }
+      } else {
+        lines.push(`Se desarrolla ${section.toLowerCase()} con estructura profesional, evidencia verificable y enfoque ${plan.template}. El contenido mantiene jerarquia visual, legibilidad y consistencia documental.`, '');
       }
-      const notes = typeof block.notes === 'string' ? block.notes.trim() : '';
-      if (notes && !/no respond.* en este intento/i.test(notes)) {
-        lines.push(`> ${notes}`, '');
-      }
-    } else {
-      lines.push(`Se desarrolla ${section.toLowerCase()} con estructura profesional, evidencia verificable y enfoque ${plan.template}. El contenido mantiene jerarquia visual, legibilidad y consistencia documental.`, '');
-    }
-  });
+    });
+  }
 
   lines.push(
     '# Control de calidad',
@@ -414,10 +419,232 @@ function inferRequiredTerms(prompt = '') {
   const terms = [];
   if (/\bia\b|inteligencia artificial/.test(text)) terms.push('IA');
   if (/\briesg/.test(text)) terms.push('riesgos');
+  if (isAiRiskRequest(prompt)) {
+    terms.push('NIST AI RMF', 'ISO 31000', 'ISO/IEC 42001', 'sesgo', 'drift', 'supervisión humana');
+  }
   if (/\bkpi/.test(text)) terms.push('KPIs');
   if (/\bapa\s*7\b/.test(text)) terms.push('APA 7');
   if (/\bconclus/.test(text)) terms.push('Conclusiones');
   return terms;
+}
+
+function isAiRiskRequest(prompt = '') {
+  const text = normalizeForQuality(prompt);
+  return (/\bia\b|inteligencia artificial|machine learning|modelo predictivo|algoritm/.test(text))
+    && /\briesg|risk|gobernanza|control|auditor/.test(text);
+}
+
+function inferProfessionalSections(prompt = '', complexity = 'standard') {
+  if (!isAiRiskRequest(prompt)) return [];
+  const high = complexity === 'high' || complexity === 'stress' || /\balta complejidad\b/.test(normalizeForQuality(prompt));
+  const sections = [
+    'Alcance y supuestos',
+    'Metodología',
+    'Matriz de riesgos',
+    'Gobernanza y controles',
+    'Plan de implementación',
+    'KPIs y seguimiento',
+  ];
+  if (high) sections.push('Criterios de aceptación');
+  return sections;
+}
+
+function buildAiRiskProfessionalBlueprint(plan) {
+  const title = plan.title || 'Gestión de riesgos de IA';
+  return {
+    archetype: 'ai-risk-professional-brief',
+    requiredTerms: ['NIST AI RMF', 'ISO 31000', 'ISO/IEC 42001', 'sesgo', 'drift', 'supervisión humana'],
+    sections: [
+      {
+        heading: 'Resumen ejecutivo',
+        paragraphs: [
+          `Este Word desarrolla un marco operativo para gestionar riesgos de IA alrededor de ${title}. El documento no trata la IA como una capacidad aislada: la evalúa como un sistema sociotécnico donde datos, modelos, procesos, usuarios, proveedores y gobierno corporativo deben controlarse en conjunto. La salida está pensada para comité directivo, áreas de tecnología, cumplimiento y dueños de proceso que necesitan decidir qué riesgos aceptar, mitigar, transferir o escalar.`,
+          'La recomendación central es establecer una función de gobierno de IA con inventario de casos de uso, clasificación por criticidad, controles por ciclo de vida y monitoreo continuo. El enfoque combina ISO 31000 para gestión de riesgos, NIST AI RMF para riesgos específicos de IA e ISO/IEC 42001 como referencia de sistema de gestión. El documento evita porcentajes no trazables y prioriza criterios verificables, evidencias de control y responsables claros.',
+        ],
+        bullets: [
+          'Priorizar casos de uso de alto impacto antes de ampliar automatizaciones críticas.',
+          'Exigir trazabilidad de datos, versiones de modelo, aprobaciones y cambios productivos.',
+          'Separar controles preventivos, detectivos y correctivos para cada riesgo material.',
+          'Mantener supervisión humana proporcional al impacto de cada decisión automatizada.',
+        ],
+      },
+      {
+        heading: 'Alcance y supuestos',
+        paragraphs: [
+          'El alcance cubre sistemas de IA generativa, modelos predictivos, automatizaciones de decisión, asistentes internos y componentes de terceros integrados en procesos de negocio. Cuando el usuario menciona Excel o PDF, se interpreta como insumo o representación tabular dentro del Word, no como conversión de formato. Las conclusiones deben validarse con información interna antes de usarse como política corporativa definitiva.',
+          'Se asume que la organización necesita una base ejecutiva accionable, no una tesis extensa. Por eso el documento concentra definiciones, matriz de riesgos, gobierno, métricas y ruta de implementación. Los controles propuestos deben adaptarse al sector, regulación aplicable, apetito de riesgo, criticidad del proceso y madurez técnica del equipo.',
+        ],
+        tables: [
+          {
+            title: 'Criterios de alcance',
+            headers: ['Elemento', 'Incluido', 'Criterio de decisión', 'Evidencia esperada'],
+            rows: [
+              ['Casos de uso de IA', 'Generativa, predictiva y automatización', 'Impacto en usuario, cliente, operación o cumplimiento', 'Inventario aprobado y dueño asignado'],
+              ['Datos', 'Entrenamiento, pruebas, prompts, logs y salidas', 'Sensibilidad, origen, calidad y permisos', 'Ficha de datos y controles de acceso'],
+              ['Modelos', 'Propios, terceros y componentes embebidos', 'Criticidad, explicabilidad y dependencia operacional', 'Registro de versión, pruebas y aprobación'],
+              ['PDF/Excel como insumo', 'Tablas o fuentes de análisis dentro del Word', 'No cambia el formato final solicitado', 'Trazabilidad del insumo y resumen en anexos'],
+            ],
+          },
+        ],
+      },
+      {
+        heading: 'Metodología',
+        paragraphs: [
+          'La metodología se organiza en seis pasos: inventariar casos de uso, clasificar criticidad, identificar amenazas y fallos, valorar probabilidad e impacto, definir controles y monitorear desempeño. Cada riesgo se evalúa con una escala de 1 a 5 para probabilidad e impacto; la severidad se obtiene por producto simple y se interpreta con umbrales acordados por el comité de IA.',
+          'El método combina revisión documental, entrevistas con dueños de proceso, pruebas técnicas, análisis de datos, revisión de proveedores y simulación de escenarios. Para evitar resultados superficiales, cada riesgo debe asociarse con una causa, un evento disparador, una consecuencia observable, un control verificable y un indicador de seguimiento.',
+        ],
+        tables: [
+          {
+            title: 'Escala de valoración',
+            headers: ['Puntaje', 'Probabilidad', 'Impacto', 'Respuesta mínima'],
+            rows: [
+              ['1', 'Raro o controlado', 'Bajo, reversible y acotado', 'Registrar y revisar trimestralmente'],
+              ['2', 'Poco probable', 'Moderado en un equipo o proceso', 'Control preventivo básico y dueño asignado'],
+              ['3', 'Posible', 'Afecta operación, cliente o cumplimiento', 'Plan de mitigación con fecha comprometida'],
+              ['4', 'Probable', 'Impacto alto o exposición regulatoria', 'Escalamiento a comité y prueba independiente'],
+              ['5', 'Frecuente o inminente', 'Crítico, sistémico o irreversible', 'Pausa, rediseño o aprobación ejecutiva formal'],
+            ],
+          },
+        ],
+      },
+      {
+        heading: 'Matriz de riesgos',
+        paragraphs: [
+          'La matriz siguiente funciona como una tabla comparativa estilo Excel dentro del Word. Está diseñada para lectura ejecutiva: cada fila conecta el riesgo con escenario, severidad, controles y evidencia. La matriz debe actualizarse cuando cambien fuentes de datos, proveedor, versión del modelo, población impactada o regulación aplicable.',
+        ],
+        tables: [
+          {
+            title: 'Matriz priorizada de riesgos de IA',
+            headers: ['Riesgo', 'Escenario crítico', 'Nivel', 'Controles clave', 'KPI / evidencia'],
+            rows: [
+              ['Sesgo algorítmico', 'El modelo perjudica a un grupo por datos históricos incompletos o variables proxy.', 'Alto', 'Pruebas de equidad, revisión de features, umbrales por segmento y supervisión humana.', 'Brecha de desempeño por segmento; acta de revisión ética.'],
+              ['Drift de datos o modelo', 'La distribución cambia y el modelo mantiene decisiones con precisión degradada.', 'Alto', 'Monitoreo de drift, reentrenamiento controlado, rollback y alertas por umbral.', 'PSI/KL divergence; fecha de última validación.'],
+              ['Fuga de información sensible', 'Prompts, logs o respuestas exponen datos personales, secretos o información contractual.', 'Crítico', 'DLP, minimización, enmascaramiento, retención limitada y pruebas de red team.', 'Incidentes de DLP; cobertura de campos sensibles.'],
+              ['Alucinación o salida no verificable', 'La IA genera afirmaciones falsas que se incorporan a documentos, decisiones o comunicaciones.', 'Alto', 'RAG con fuentes, citación obligatoria, revisión humana y bloqueo de afirmaciones sin soporte.', 'Porcentaje de respuestas con fuente; tasa de corrección humana.'],
+              ['Dependencia de proveedor', 'Cambios de API, costos, latencia o políticas afectan continuidad operativa.', 'Medio', 'Plan de salida, SLA, pruebas multi proveedor y control de costos.', 'Tiempo de conmutación; costo por transacción.'],
+              ['Uso no autorizado', 'Usuarios aplican IA fuera del alcance aprobado o con datos prohibidos.', 'Alto', 'Catálogo de usos permitidos, permisos por rol, auditoría y capacitación.', 'Casos fuera de política; usuarios certificados.'],
+              ['Ataques adversariales', 'Entradas manipuladas fuerzan respuestas inseguras, extracción de datos o bypass de reglas.', 'Alto', 'Validación de entrada, pruebas adversariales, aislamiento de herramientas y rate limits.', 'Hallazgos de red team; reglas de bloqueo activas.'],
+              ['Responsabilidad legal', 'La organización no puede explicar una decisión automatizada ante cliente, auditor o regulador.', 'Alto', 'Registro de decisión, explicabilidad proporcional, matriz RACI y archivo de evidencias.', 'Decisiones trazables; tiempo de respuesta a auditoría.'],
+            ],
+          },
+        ],
+      },
+      {
+        heading: 'Gobernanza y controles',
+        paragraphs: [
+          'La gobernanza debe impedir que la IA avance por entusiasmo técnico sin control operativo. Un comité de IA debe aprobar casos de alto impacto, revisar excepciones, priorizar mitigaciones y mantener trazabilidad. La operación diaria requiere un dueño de negocio, un responsable técnico, un responsable de datos, cumplimiento y seguridad trabajando con responsabilidades separadas.',
+          'Los controles se dividen en preventivos, detectivos y correctivos. Los preventivos reducen la probabilidad del incidente; los detectivos revelan degradación o uso indebido; los correctivos permiten retirar, reparar o rediseñar el sistema. Esta separación evita documentos bonitos pero inejecutables.',
+        ],
+        tables: [
+          {
+            title: 'Modelo operativo de gobierno',
+            headers: ['Rol', 'Responsabilidad', 'Decisión que puede tomar', 'Evidencia mínima'],
+            rows: [
+              ['Comité de IA', 'Aprobar casos críticos y apetito de riesgo.', 'Aceptar, rechazar o pausar despliegues.', 'Actas, matriz y criterios de excepción.'],
+              ['Dueño de negocio', 'Definir objetivo, impacto y usuarios afectados.', 'Priorizar controles y aprobar salida operacional.', 'Caso de negocio y mapa de proceso.'],
+              ['Equipo técnico', 'Construir, probar, desplegar y monitorear modelos.', 'Recomendar rollback o reentrenamiento.', 'Resultados de pruebas y bitácora MLOps.'],
+              ['Datos y privacidad', 'Validar origen, permisos, minimización y retención.', 'Bloquear uso de datos no autorizados.', 'Ficha de datos y evaluación de privacidad.'],
+              ['Riesgo y cumplimiento', 'Asegurar alineación con políticas y marcos externos.', 'Escalar brechas y exigir remediación.', 'Checklist normativo y registro de evidencias.'],
+            ],
+          },
+        ],
+      },
+      {
+        heading: 'Plan de implementación',
+        paragraphs: [
+          'El plan de implementación se recomienda en ciclos de 30, 60 y 90 días. La primera fase ordena inventario y criticidad; la segunda instala controles y pruebas; la tercera opera monitoreo, auditoría y mejora continua. La meta no es documentar todo de golpe, sino cerrar primero los riesgos que podrían afectar clientes, cumplimiento, seguridad o continuidad.',
+        ],
+        tables: [
+          {
+            title: 'Roadmap de 90 días',
+            headers: ['Fase', 'Objetivo', 'Entregables', 'Responsable', 'Criterio de salida'],
+            rows: [
+              ['0-30 días', 'Inventariar y clasificar casos de uso.', 'Catálogo, criticidad, dueños y mapa de datos.', 'PMO + dueños de negocio', '100% de casos críticos identificados.'],
+              ['31-60 días', 'Diseñar controles por riesgo material.', 'Matriz, pruebas de sesgo, DLP, revisión humana y RACI.', 'Riesgo + Tecnología', 'Controles aprobados para riesgos altos.'],
+              ['61-90 días', 'Operar monitoreo y auditoría.', 'Dashboard de KPIs, alertas, calendario de revisión y plan de incidentes.', 'Comité de IA', 'Primer ciclo de QA y remediación cerrado.'],
+              ['Continuo', 'Mejorar por evidencia y cambios externos.', 'Lecciones aprendidas, actualización de umbrales y revisión de proveedor.', 'Todos los roles', 'Matriz actualizada y trazable.'],
+            ],
+          },
+        ],
+      },
+      {
+        heading: 'KPIs y seguimiento',
+        paragraphs: [
+          'Los KPIs deben medir control real, no volumen de actividad. Un tablero útil combina indicadores de desempeño del modelo, salud de datos, cumplimiento de controles, experiencia de usuario y respuesta a incidentes. Cada métrica necesita umbral, dueño, frecuencia y acción predefinida cuando se excede el límite.',
+        ],
+        tables: [
+          {
+            title: 'Indicadores mínimos de monitoreo',
+            headers: ['Indicador', 'Propósito', 'Frecuencia', 'Acción al superar umbral'],
+            rows: [
+              ['Precisión por segmento', 'Detectar sesgo o degradación desigual.', 'Mensual o por release', 'Revisar datos, features y aprobación humana.'],
+              ['Drift de datos', 'Detectar cambio de población o comportamiento.', 'Semanal en casos críticos', 'Activar revalidación o rollback.'],
+              ['Tasa de respuestas sin fuente', 'Controlar alucinaciones en IA generativa.', 'Diaria o semanal', 'Bloquear respuesta, exigir RAG o revisión.'],
+              ['Incidentes de privacidad', 'Medir exposición de datos sensibles.', 'Continuo', 'Aislar flujo, notificar y corregir retención.'],
+              ['Tiempo de auditoría', 'Comprobar trazabilidad de decisiones.', 'Trimestral', 'Completar evidencias y ajustar workflow.'],
+            ],
+          },
+        ],
+      },
+      {
+        heading: 'Conclusiones',
+        paragraphs: [
+          'La gestión de riesgos de IA debe tratarse como una capacidad permanente de gobierno, no como una revisión puntual antes del lanzamiento. Los riesgos más relevantes no se limitan al modelo: aparecen en datos, contexto de uso, integración, supervisión humana, proveedores y trazabilidad. Sin responsables y evidencia, la matriz se convierte en una lista decorativa.',
+          'Un programa maduro combina inventario, clasificación de criticidad, controles por ciclo de vida, monitoreo de KPIs y revisión ejecutiva. La organización debe poder explicar qué modelo se usó, con qué datos, bajo qué límites, qué control falló y qué acción correctiva se tomó. Ese nivel de trazabilidad es lo que separa una adopción responsable de una adopción improvisada.',
+        ],
+      },
+      {
+        heading: 'Recomendaciones',
+        paragraphs: [
+          'Se recomienda iniciar con los casos de uso de mayor impacto y construir un registro de riesgos vivo. Cada despliegue debe tener ficha de caso, dueño de negocio, controles mínimos, evidencias de prueba y criterio de retiro. Los casos de IA generativa deben exigir fuente, revisión humana y límites claros cuando el resultado pueda influir en clientes, contratos, diagnósticos, finanzas o decisiones laborales.',
+        ],
+        bullets: [
+          'Aprobar una política de IA con usos permitidos, prohibidos y condiciones de excepción.',
+          'Crear un inventario único de modelos, proveedores, datos, dueños y criticidad.',
+          'Implantar pruebas de sesgo, drift, privacidad y seguridad antes de cada release material.',
+          'Definir un protocolo de incidentes de IA con criterios de pausa, rollback y comunicación.',
+          'Revisar trimestralmente la matriz de riesgos con evidencia, no solo con declaraciones.',
+        ],
+      },
+      {
+        heading: 'Criterios de aceptación',
+        paragraphs: [
+          'El documento se considera operativo cuando permite a un equipo tomar decisiones sin pedir una explicación externa. Debe mostrar riesgos priorizados, controles verificables, responsables, KPIs y ruta de implementación. Si alguna tabla no puede convertirse en una acción, evidencia o decisión, debe simplificarse o retirarse.',
+        ],
+        bullets: [
+          'La matriz cubre riesgos técnicos, operativos, legales, éticos, de privacidad y de proveedor.',
+          'Cada riesgo alto tiene control preventivo, detectivo o correctivo claramente identificable.',
+          'Cada recomendación tiene responsable natural y evidencia de cierre.',
+          'El Word final incluye índice, metodología, matriz, conclusiones y recomendaciones.',
+        ],
+      },
+    ],
+  };
+}
+
+function buildProfessionalWordBlueprint(plan) {
+  if (plan?.format !== 'docx') return null;
+  if (isAiRiskRequest(plan.userRequest || plan.title || '')) return buildAiRiskProfessionalBlueprint(plan);
+  return null;
+}
+
+function appendProfessionalBlueprintMarkdown(lines, blueprint) {
+  for (const section of blueprint.sections || []) {
+    lines.push(`# ${section.heading}`, '');
+    for (const paragraph of section.paragraphs || []) {
+      lines.push(paragraph, '');
+    }
+    if (Array.isArray(section.bullets) && section.bullets.length > 0) {
+      for (const bullet of section.bullets) {
+        lines.push(`- ${bullet}`);
+      }
+      lines.push('');
+    }
+    for (const table of section.tables || []) {
+      if (table.title) lines.push(`### ${table.title}`, '');
+      lines.push(markdownTable(table.headers, table.rows), '');
+    }
+  }
 }
 
 function buildPlan({ prompt, format, template, complexity = 'standard', referenceFiles = [] }) {
@@ -434,6 +661,9 @@ function buildPlan({ prompt, format, template, complexity = 'standard', referenc
   const sections = baseSections[template] || baseSections.premium;
   let plannedSections = [...sections];
   for (const section of inferPromptSections(userRequest)) {
+    plannedSections = addUniqueSection(plannedSections, section);
+  }
+  for (const section of inferProfessionalSections(userRequest, complexity)) {
     plannedSections = addUniqueSection(plannedSections, section);
   }
   if (normalizedReferenceFiles.length > 0) {
@@ -465,8 +695,10 @@ function buildPlan({ prompt, format, template, complexity = 'standard', referenc
       minQualityScore: MIN_QUALITY_SCORE,
       typography: template === 'academic' ? 'APA 7 / Times New Roman' : 'Executive sans-serif',
       palette: template === 'business' ? 'navy-cyan' : template === 'academic' ? 'navy-cream' : 'premium-neutral',
-      requiredSections: inferPromptSections(userRequest),
+      requiredSections: [...inferPromptSections(userRequest), ...inferProfessionalSections(userRequest, complexity)]
+        .reduce((acc, section) => addUniqueSection(acc, section), []),
       requiredTerms: inferRequiredTerms(userRequest),
+      professionalBlueprint: isAiRiskRequest(userRequest) ? 'ai-risk-professional-brief' : null,
     },
   };
 }
@@ -563,7 +795,7 @@ function validateDocx(buffer, expected = {}) {
     paragraphs: paragraphCount >= (expected.minParagraphs || 6),
     media: !expected.requiresImage || entries.some((e) => e.startsWith('word/media/')),
     headerFooter: !expected.requiresHeaderFooter || headerFooter,
-    toc: !expected.requiresToc || documentXml.includes('TOC'),
+    toc: !expected.requiresToc || documentXml.includes('TOC') || (expected.acceptsManualToc && /\bindice\b/.test(normalizedText)),
     references: !expected.requiresReferences || /Referencias|References|APA/i.test(documentXml),
     formulaContent: !expected.requiresFormula || hasFormulaContent,
     requiredSections: missingSections.length === 0,
@@ -817,11 +1049,12 @@ function expectedFor(format, template, complexity, plan = {}) {
       requiresImage: true,
       requiresHeaderFooter: true,
       requiresToc: template === 'academic' || high,
+      acceptsManualToc: Boolean(plan.qualityTargets?.professionalBlueprint),
       requiresReferences: template === 'academic',
       requiresFormula: Array.isArray(plan.formulaBlocks) && plan.formulaBlocks.length > 0,
       minHeadings: high ? 5 : 2,
-      minParagraphs: high ? 14 : 8,
-      minTables: 1,
+      minParagraphs: high ? 18 : 8,
+      minTables: plan.qualityTargets?.professionalBlueprint ? 4 : 1,
       requiredSections: plan.qualityTargets?.requiredSections || [],
       requiredTerms: plan.qualityTargets?.requiredTerms || [],
     };
@@ -1065,7 +1298,8 @@ async function buildDocxWithPandoc(plan, outputPath) {
 }
 
 async function buildDocx(plan, outputPath) {
-  if (await hasPandoc()) {
+  const shouldUseStructuredDocxBuilder = Boolean(buildProfessionalWordBlueprint(plan));
+  if (!shouldUseStructuredDocxBuilder && await hasPandoc()) {
     try {
       return await buildDocxWithPandoc(plan, outputPath);
     } catch (err) {
@@ -1085,6 +1319,8 @@ async function buildDocx(plan, outputPath) {
     width: { size: 9360, type: WidthType.DXA },
     columnWidths,
     rows: [headers, ...bodyRows].map((row, rowIndex) => new TableRow({
+      tableHeader: rowIndex === 0,
+      cantSplit: true,
       children: row.map((cell, cellIndex) => new TableCell({
         borders,
         width: { size: columnWidths[cellIndex] || columnWidths[columnWidths.length - 1], type: WidthType.DXA },
@@ -1096,6 +1332,32 @@ async function buildDocx(plan, outputPath) {
       })),
     })),
   });
+  const blueprint = buildProfessionalWordBlueprint(plan);
+  const widthsFor = (columnCount) => {
+    const safeCount = Math.max(1, columnCount || 1);
+    const base = Math.floor(9360 / safeCount);
+    const widths = Array.from({ length: safeCount }, () => base);
+    widths[widths.length - 1] += 9360 - widths.reduce((sum, width) => sum + width, 0);
+    return widths;
+  };
+  const blueprintChildren = blueprint
+    ? blueprint.sections.flatMap((section, index) => {
+        const out = [
+          new Paragraph({ text: section.heading, heading: index === 0 ? HeadingLevel.HEADING_1 : HeadingLevel.HEADING_2 }),
+          ...(section.paragraphs || []).map((paragraph) => new Paragraph({ children: [new TextRun(String(paragraph))] })),
+        ];
+        for (const bullet of section.bullets || []) {
+          out.push(new Paragraph({ text: String(bullet), bullet: { level: 0 } }));
+        }
+        for (const tableSpec of section.tables || []) {
+          if (tableSpec.title) {
+            out.push(new Paragraph({ text: tableSpec.title, heading: HeadingLevel.HEADING_3 }));
+          }
+          out.push(makeTable(tableSpec.headers, tableSpec.rows, widthsFor(tableSpec.headers.length)));
+        }
+        return out;
+      })
+    : null;
   const table = makeTable(rows[0], rows.slice(1), [3120, 4680, 1560]);
   const formulaChildren = (plan.formulaBlocks || []).flatMap((block) => [
     new Paragraph({ text: block.heading, heading: HeadingLevel.HEADING_1 }),
@@ -1108,7 +1370,26 @@ async function buildDocx(plan, outputPath) {
       ? [makeTable(block.table.headers, block.table.rows, [1800, 2520, 5040])]
       : []),
   ]);
-  const children = [
+  const openingChildren = blueprint ? [
+    new Paragraph({ text: plan.title, heading: HeadingLevel.TITLE, alignment: AlignmentType.CENTER }),
+    new Paragraph({ text: 'Documento generado por el pipeline documental multiagente de siraGPT.', alignment: AlignmentType.CENTER }),
+    new Paragraph({
+      children: [new ImageRun({
+        type: 'png',
+        data: TINY_PNG,
+        transformation: { width: 48, height: 48 },
+        altText: { title: 'siraGPT validation mark', description: 'Document validation marker', name: 'siragpt-docx-marker' },
+      })],
+      alignment: AlignmentType.CENTER,
+    }),
+    new Paragraph({ text: 'Índice', heading: HeadingLevel.HEADING_1 }),
+    ...blueprint.sections.map((section, index) => new Paragraph({
+      children: [
+        new TextRun({ text: `${index + 1}. `, bold: true }),
+        new TextRun(section.heading),
+      ],
+    })),
+  ] : [
     new TableOfContents('Índice automático', { hyperlink: true, headingStyleRange: '1-3' }),
     new Paragraph({ children: [new PageBreak()] }),
     new Paragraph({ text: plan.title, heading: HeadingLevel.TITLE, alignment: AlignmentType.CENTER }),
@@ -1122,6 +1403,9 @@ async function buildDocx(plan, outputPath) {
       })],
       alignment: AlignmentType.CENTER,
     }),
+  ];
+  const children = [
+    ...openingChildren,
     ...(plan.referenceFiles?.length ? [
       new Paragraph({ text: 'Material de referencia incorporado', heading: HeadingLevel.HEADING_1 }),
       new Paragraph(`Se registraron ${plan.referenceFiles.length} archivo(s) de referencia con verificación de propiedad y metadatos técnicos.`),
@@ -1133,47 +1417,47 @@ async function buildDocx(plan, outputPath) {
       })),
     ] : []),
     ...formulaChildren,
-    // Same wiring as buildDocxMarkdown: prefer plan.blocks[index] (real
-    // LLM content) over the hardcoded stub. This is the docx-js path used
-    // when Pandoc isn't on PATH (most production deploys) — without this
-    // fix the LLM-generated paragraph/bullets/notes were thrown away.
-    ...plan.sections.flatMap((section, index) => {
-      const heading = new Paragraph({ text: section, heading: index === 0 ? HeadingLevel.HEADING_1 : HeadingLevel.HEADING_2 });
-      const block = Array.isArray(plan.blocks) ? plan.blocks[index] : null;
-      const hasRealContent =
-        block &&
-        !block._error &&
-        typeof block.paragraph === 'string' &&
-        block.paragraph.trim().length > 0 &&
-        !/no estuvo disponible para este intento/i.test(block.paragraph);
-      if (!hasRealContent) {
-        return [
-          heading,
-          new Paragraph({
-            children: [
-              new TextRun({
-                text: `Se desarrolla ${section.toLowerCase()} con estructura profesional, evidencia verificable y enfoque ${plan.template}. `,
-              }),
-              new TextRun({ text: 'El contenido mantiene jerarquía visual, legibilidad y consistencia documental.', bold: true }),
-            ],
-          }),
-        ];
-      }
-      const out = [heading, new Paragraph({ children: [new TextRun(block.paragraph.trim())] })];
-      if (Array.isArray(block.bullets) && block.bullets.length > 0) {
-        for (const bullet of block.bullets) {
-          const text = String(bullet || '').trim();
-          if (text) {
-            out.push(new Paragraph({ text, bullet: { level: 0 } }));
+    ...(blueprintChildren || plan.sections.flatMap((section, index) => {
+        // Same wiring as buildDocxMarkdown: prefer plan.blocks[index] (real
+        // LLM content) over the hardcoded stub. This is the docx-js path used
+        // when Pandoc isn't on PATH (most production deploys) — without this
+        // fix the LLM-generated paragraph/bullets/notes were thrown away.
+        const heading = new Paragraph({ text: section, heading: index === 0 ? HeadingLevel.HEADING_1 : HeadingLevel.HEADING_2 });
+        const block = Array.isArray(plan.blocks) ? plan.blocks[index] : null;
+        const hasRealContent =
+          block &&
+          !block._error &&
+          typeof block.paragraph === 'string' &&
+          block.paragraph.trim().length > 0 &&
+          !/no estuvo disponible para este intento/i.test(block.paragraph);
+        if (!hasRealContent) {
+          return [
+            heading,
+            new Paragraph({
+              children: [
+                new TextRun({
+                  text: `Se desarrolla ${section.toLowerCase()} con estructura profesional, evidencia verificable y enfoque ${plan.template}. `,
+                }),
+                new TextRun({ text: 'El contenido mantiene jerarquía visual, legibilidad y consistencia documental.', bold: true }),
+              ],
+            }),
+          ];
+        }
+        const out = [heading, new Paragraph({ children: [new TextRun(block.paragraph.trim())] })];
+        if (Array.isArray(block.bullets) && block.bullets.length > 0) {
+          for (const bullet of block.bullets) {
+            const text = String(bullet || '').trim();
+            if (text) {
+              out.push(new Paragraph({ text, bullet: { level: 0 } }));
+            }
           }
         }
-      }
-      const notes = typeof block.notes === 'string' ? block.notes.trim() : '';
-      if (notes && !/no respond.* en este intento/i.test(notes)) {
-        out.push(new Paragraph({ children: [new TextRun({ text: notes, italics: true })] }));
-      }
-      return out;
-    }),
+        const notes = typeof block.notes === 'string' ? block.notes.trim() : '';
+        if (notes && !/no respond.* en este intento/i.test(notes)) {
+          out.push(new Paragraph({ children: [new TextRun({ text: notes, italics: true })] }));
+        }
+        return out;
+      })),
     table,
     new Paragraph({ text: 'Referencias APA 7', heading: HeadingLevel.HEADING_1 }),
     new Paragraph('American Psychological Association. (2020). Publication manual of the American Psychological Association (7th ed.).'),
