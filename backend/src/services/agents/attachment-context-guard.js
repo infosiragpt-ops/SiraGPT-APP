@@ -26,6 +26,11 @@ const SCAFFOLDING_PREFIXES = [
   '---',
   'Tamano:',
   'Documento cargado:',
+  // Synthesis/format directives injected by buildUploadedFileContext. They lead
+  // their line, so a precise startsWith match avoids stripping legitimate prose.
+  'Para analisis profesionales:',
+  'El usuario pidio',
+  'Lote grande detectado',
 ];
 
 const SCAFFOLDING_NEEDLES = [
@@ -45,6 +50,9 @@ const SCAFFOLDING_NEEDLES = [
   'Esquema del documento:',
   'Resumen progresivo:',
   'Estrategia:',
+  // Mid-line synthesis directive guard (the line-leading variants are handled by
+  // SCAFFOLDING_PREFIXES). Distinctive enough to never match real document prose.
+  'sintetiza con criterio academico',
 ];
 
 function stripEvidenceLabel(line) {
@@ -63,8 +71,9 @@ function stripScaffolding(rawText) {
     const trimmed = line.trim();
     if (!trimmed) continue;
     if (trimmed === '---') continue;
-    if (SCAFFOLDING_PREFIXES.some((prefix) => trimmed.startsWith(prefix))) continue;
-    if (SCAFFOLDING_NEEDLES.some((needle) => trimmed.includes(needle))) continue;
+    const lower = trimmed.toLowerCase();
+    if (SCAFFOLDING_PREFIXES.some((prefix) => lower.startsWith(prefix.toLowerCase()))) continue;
+    if (SCAFFOLDING_NEEDLES.some((needle) => lower.includes(needle.toLowerCase()))) continue;
     const content = stripEvidenceLabel(trimmed);
     if (!content) continue;
     kept.push(content);

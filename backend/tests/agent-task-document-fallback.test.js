@@ -52,6 +52,83 @@ test('buildAttachmentGroundedFallbackAnswer prefers document findings over inter
   assert.doesNotMatch(answer, /docintel_retrieve|busqueda semantica general|Título del articulo/);
 });
 
+test('buildAttachmentGroundedFallbackAnswer honors an explicit "2 párrafos" summary request', () => {
+  clearAgentModules();
+  const { buildAttachmentGroundedFallbackAnswer } = require('../src/services/agents/agent-task-runner');
+  const ctx = [
+    'Contexto inicial de archivos adjuntos ya extraido por siraGPT.',
+    'Para analisis profesionales: sintetiza con criterio academico/ejecutivo, no copies el indice, no enumeres metadatos internos y no empieces con "Indice de contenidos".',
+    'El usuario pidio 2 parrafos: la respuesta final debe tener exactamente 2 parrafos bien desarrollados, sin viñetas y sin tabla.',
+    'Pregunta del usuario: dame un resumen en 2 parrafos',
+    '',
+    '### Archivo adjunto 1: informe.docx',
+    'id: file-informe-1',
+    'tipo: application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    '',
+    'La gestión administrativa integra planificación, organización, dirección y control para alcanzar objetivos institucionales.',
+    'El estudio evidencia que la digitalización mejora la eficiencia operativa y reduce los tiempos de respuesta interna.',
+    'Los autores señalan que la capacitación continua del personal es decisiva para sostener la mejora de procesos.',
+    'Asimismo concluyen que el liderazgo participativo incrementa el compromiso y la productividad de los equipos.',
+  ].join('\n');
+
+  const answer = buildAttachmentGroundedFallbackAnswer({
+    goal: 'dame un resumen en 2 parrafos',
+    uploadedFileContext: ctx,
+    reason: 'model_error: 429 insufficient_quota',
+  });
+
+  const paragraphs = answer
+    .replace(/^###[^\n]*\n?/, '')
+    .split(/\n{2,}/)
+    .map((block) => block.trim())
+    .filter(Boolean);
+  assert.equal(paragraphs.length, 2);
+  assert.doesNotMatch(answer, /sintetiza con criterio|El usuario pidio|Pregunta del usuario|Lote grande detectado/);
+});
+
+test('buildAttachmentGroundedFallbackAnswer produces exactly N paragraphs for N>2 requests', () => {
+  clearAgentModules();
+  const { buildAttachmentGroundedFallbackAnswer } = require('../src/services/agents/agent-task-runner');
+  const sentences = [
+    'La gestión administrativa integra planificación, organización, dirección y control para alcanzar objetivos institucionales.',
+    'El estudio evidencia que la digitalización mejora la eficiencia operativa y reduce los tiempos de respuesta interna.',
+    'Los autores señalan que la capacitación continua del personal es decisiva para sostener la mejora de procesos.',
+    'Asimismo concluyen que el liderazgo participativo incrementa el compromiso y la productividad de los equipos.',
+    'El documento describe indicadores de desempeño que permiten monitorear la calidad del servicio prestado.',
+    'Finalmente recomienda institucionalizar la mejora continua mediante revisiones periódicas y retroalimentación.',
+    'También advierte que la resistencia al cambio puede frenar la adopción de nuevas herramientas tecnológicas.',
+    'Por último propone alinear los incentivos del personal con los objetivos estratégicos de la organización.',
+  ];
+
+  for (const n of [3, 4]) {
+    const ctx = [
+      'Contexto inicial de archivos adjuntos ya extraido por siraGPT.',
+      `El usuario pidio ${n} parrafos: la respuesta final debe tener exactamente ${n} parrafos bien desarrollados, sin viñetas y sin tabla.`,
+      'Pregunta del usuario: dame un resumen',
+      '',
+      '### Archivo adjunto 1: informe.docx',
+      'id: file-informe-1',
+      'tipo: application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      '',
+      ...sentences,
+    ].join('\n');
+
+    const answer = buildAttachmentGroundedFallbackAnswer({
+      goal: `dame un resumen en ${n} parrafos`,
+      uploadedFileContext: ctx,
+      reason: 'model_error: 429 insufficient_quota',
+    });
+
+    const paragraphs = answer
+      .replace(/^###[^\n]*\n?/, '')
+      .split(/\n{2,}/)
+      .map((block) => block.trim())
+      .filter(Boolean);
+    assert.equal(paragraphs.length, n, `expected ${n} paragraphs, got ${paragraphs.length}`);
+    assert.doesNotMatch(answer, /El usuario pidio|Pregunta del usuario/);
+  }
+});
+
 test('parseSpreadsheetCitationRows reads fileProcessor Excel tab-separated blocks', () => {
   clearAgentModules();
   const { parseSpreadsheetCitationRows, buildBibliographyFallbackAnswer } = require('../src/services/agents/agent-task-runner');

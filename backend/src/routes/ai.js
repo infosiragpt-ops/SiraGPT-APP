@@ -4262,6 +4262,9 @@ router.post(
             messageAttachments.wantsSingleParagraphSynthesis(prompt)
               ? '- The user requested one paragraph: answer in exactly one polished paragraph, with no heading, no bullets, no table, and no section breaks.'
               : '',
+            messageAttachments.requestedParagraphCount(prompt) >= 2
+              ? `- The user requested ${messageAttachments.requestedParagraphCount(prompt)} paragraphs: structure the final answer as exactly ${messageAttachments.requestedParagraphCount(prompt)} well-developed paragraphs, with no headings, no bullets, and no table.`
+              : '',
             '- Do not answer from prior images, weather cards, generated visuals, or unrelated chat history unless the user explicitly asks for that older context.',
             '- Preserve file identity: refer to each attachment by filename and never reinterpret a document as an image.'
           ].filter(Boolean).join('\n')
