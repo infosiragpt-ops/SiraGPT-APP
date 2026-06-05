@@ -296,10 +296,18 @@ function findAttachmentRisk(text) {
 function extractAttachmentFileNames(text) {
   const names = [];
   const seen = new Set();
-  const regex = /(?:Archivo adjunto\s+\d+\s*:\s*|^|\s)([A-Za-z0-9._-]+\.(?:txt|csv|md|xlsx|docx|pdf))/gim;
+  const regex = /(?:^|\n)\s*#{0,6}\s*Archivo adjunto\s+\d+\s*:\s*([^\n]+\.(?:txt|csv|md|xlsx|docx|pdf))\s*$/gim;
   let match;
   while ((match = regex.exec(String(text || '')))) {
-    const name = match[1];
+    const name = match[1].trim();
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    names.push(name);
+  }
+  const inlineRegex = /(?:^|\s)([A-Za-z0-9._+-]+\.(?:txt|csv|md|xlsx|docx|pdf))/gim;
+  while ((match = inlineRegex.exec(String(text || '')))) {
+    const name = match[1].trim();
     const key = name.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
@@ -362,6 +370,7 @@ function extractStructuredAttachmentFacts(text) {
     /retenci[oó]n\s+ponderada\s+(?:validada\s+)?(?:es|:)?\s*(\d+(?:[.,]\d+)?)/i,
     /retenci[oó]n[_\s-]*ponderada['"]?\s*[:=]\s*(\d+(?:[.,]\d+)?)/i,
     /SLA\s+ponderado(?:\s+validado)?\s*:\s*(\d+(?:[.,]\d+)?)/i,
+    /SLA\s+ponderado(?:\s+validado)?\s*[\t ]+\s*(\d+(?:[.,]\d+)?)/i,
   ]);
   const officialChurn = matchAttachmentNumber(raw, [
     /churn\s+total\s+oficial\s+es\s+(\d+(?:[.,]\d+)?)\s*%/i,
@@ -554,6 +563,14 @@ function buildStructuredAttachmentAnalysisAnswer({ goal, uploadedFileContext }) 
       .join('; ');
     paragraphs.push(`Clientes prioritarios por SLA/churn: ${summary}.`);
   }
+  if (wantsRecommendation && facts.successClient) {
+    const successRow = facts.rows.find((row) => normalizedKey(row.client) === normalizedKey(facts.successClient));
+    if (successRow && [successRow.satisfaction, successRow.churn, successRow.real, successRow.contract].every(Number.isFinite)) {
+      paragraphs.push(`Cliente como caso de exito: **${successRow.client}** por SLA **${formatAttachmentNumber(successRow.satisfaction, { decimals: 1 })}%**, churn **${formatAttachmentNumber(successRow.churn, { decimals: 1 })}%**, real **${formatAttachmentNumber(successRow.real)} USD** y contrato **${formatAttachmentNumber(successRow.contract)} USD**.`);
+    } else {
+      paragraphs.push(`Cliente como caso de exito: **${facts.successClient}**.`);
+    }
+  }
   if (wantsTickets && (facts.criticalTicket || facts.highestTicket)) {
     const critical = facts.criticalTicket
       ? `El módulo crítico es **${facts.criticalTicket.client} / ${facts.criticalTicket.module}** con **${formatAttachmentNumber(facts.criticalTicket.tickets)}** tickets y severidad **${facts.criticalTicket.severity}**.`
@@ -670,7 +687,8 @@ function looksLikeEmptyOrWeakFinalAnswer(text) {
 
 function wantsBibliographyAnswer(request) {
   const value = normalizedKey(request);
-  return /\b(bibliograf|referenc|citas?|apa|vancouver|harvard|chicago|mla|formato bibliograf)/.test(value);
+  if (/\bcita\s+(?:fuente|fuentes|por\s+documento|documentos)\b/.test(value)) return false;
+  return /\b(bibliograf|referencias?\s+bibliograf|citas?\s+(?:bibliograf|apa|vancouver|harvard|chicago|mla)|apa|vancouver|harvard|chicago|mla|formato bibliograf)/.test(value);
 }
 
 function detectApaEditionLabel(request) {
@@ -680,6 +698,9 @@ function detectApaEditionLabel(request) {
 }
 
 function mapSpreadsheetCitationColumns(headerCells) {
+  if (!Array.isArray(headerCells)) {
+    return { title: -1, authors: -1, year: -1, venue: -1, doi: -1 };
+  }
   const columnMap = { title: -1, authors: -1, year: -1, venue: -1, doi: -1 };
   headerCells.forEach((label, columnIndex) => {
     const key = normalizedKey(label);
@@ -975,7 +996,7 @@ function buildAttachmentGroundedFallbackAnswer({ goal, uploadedFileContext, reas
   const cleanedRaw = stripScaffolding(uploadedFileContext);
   const structuredAnswer = buildStructuredAttachmentAnalysisAnswer({
     goal: request,
-    uploadedFileContext: cleanedRaw,
+    uploadedFileContext,
   });
   if (structuredAnswer) return structuredAnswer;
 
