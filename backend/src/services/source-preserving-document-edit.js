@@ -433,20 +433,139 @@ function isTargetedSectionFillRequest(prompt = '') {
   );
 }
 
-function paragraphXml(item = {}) {
+// Default visual styling used only when the source document offers no formatting
+// to inherit. Keeping pPr (paragraph) and rPr (run) separate lets us swap each
+// half independently for the source document's own properties.
+const PARAGRAPH_STYLE_DEFAULTS = {
+  heading1: {
+    pPr: '<w:pPr><w:spacing w:before="360" w:after="180"/><w:outlineLvl w:val="0"/></w:pPr>',
+    rPr: '<w:rPr><w:b/><w:sz w:val="32"/></w:rPr>',
+  },
+  heading2: {
+    pPr: '<w:pPr><w:spacing w:before="260" w:after="140"/><w:outlineLvl w:val="1"/></w:pPr>',
+    rPr: '<w:rPr><w:b/><w:sz w:val="28"/></w:rPr>',
+  },
+  heading3: {
+    pPr: '<w:pPr><w:spacing w:before="200" w:after="100"/><w:outlineLvl w:val="2"/></w:pPr>',
+    rPr: '<w:rPr><w:b/><w:sz w:val="24"/></w:rPr>',
+  },
+  normal: {
+    pPr: '<w:pPr><w:spacing w:before="80" w:after="120" w:line="360" w:lineRule="auto"/><w:jc w:val="both"/></w:pPr>',
+    rPr: '<w:rPr><w:sz w:val="24"/></w:rPr>',
+  },
+};
+
+// Pull the first <w:pPr>…</w:pPr> block (paragraph-level formatting: alignment,
+// spacing, indentation, the paragraph style reference) out of a single
+// paragraph's XML. Handles both the closing-tag form and the self-closing form.
+function extractParagraphProperties(paragraphXmlValue = '') {
+  const match = String(paragraphXmlValue || '').match(/<w:pPr\b(?:[\s\S]*?<\/w:pPr>|\s*\/>)/);
+  return match ? match[0] : '';
+}
+
+// Pull the first run's <w:rPr>…</w:rPr> block (font, size, colour, bold…) out of
+// a paragraph. The paragraph-mark rPr that lives inside <w:pPr> is stripped first
+// so we capture the formatting that actually applies to the visible text.
+function extractRunProperties(paragraphXmlValue = '') {
+  const withoutParagraphProps = String(paragraphXmlValue || '')
+    .replace(/<w:pPr\b(?:[\s\S]*?<\/w:pPr>|\s*\/>)/, '');
+  const match = withoutParagraphProps.match(/<w:rPr\b(?:[\s\S]*?<\/w:rPr>|\s*\/>)/);
+  return match ? match[0] : '';
+}
+
+// Captured paragraph properties may carry section breaks or list-numbering refs
+// that would corrupt inserted body text (spurious page sections / auto-numbered
+// lists). Drop those while keeping fonts, alignment, spacing and style refs.
+function sanitizeCapturedParagraphProperties(paragraphProps = '') {
+  return String(paragraphProps || '')
+    .replace(/<w:sectPr\b(?:[\s\S]*?<\/w:sectPr>|\s*\/>)/g, '')
+    .replace(/<w:numPr\b(?:[\s\S]*?<\/w:numPr>|\s*\/>)/g, '');
+}
+
+function looksLikeDocxHeadingParagraph(paragraph = {}) {
+  const xml = String(paragraph.xml || '');
+  if (/<w:pStyle\s+w:val="[^"]*(?:Heading|Titulo|T[ií]tulo|Title)[^"]*"/i.test(xml)) return true;
+  if (/<w:outlineLvl\b/.test(xml)) return true;
+  const text = String(paragraph.text || '').trim();
+  if (text && text.length <= 60 && /<w:b\s*\/>|<w:b\s+w:val="(?:true|1|on)"/i.test(xml) && !/[.;:]\s*$/.test(text)) {
+    return true;
+  }
+  return false;
+}
+
+// Pick the longest real body paragraph (not a heading, not a placeholder) as the
+// representative of the document's "normal text" formatting.
+function pickRepresentativeBodyParagraph(paragraphs = [], excludeIndexes = new Set()) {
+  let bestXml = '';
+  let bestLength = 0;
+  for (let i = 0; i < paragraphs.length; i += 1) {
+    if (excludeIndexes.has(i)) continue;
+    const paragraph = paragraphs[i];
+    const text = String(paragraph.text || '').trim();
+    if (text.length < 25) continue;
+    if (isPlaceholderParagraph(paragraph.text)) continue;
+    if (looksLikeDocxHeadingParagraph(paragraph)) continue;
+    if (text.length > bestLength) {
+      bestLength = text.length;
+      bestXml = paragraph.xml;
+    }
+  }
+  return bestXml;
+}
+
+function buildFormattingTemplate({ bodyXml = '', headingXml = '' } = {}) {
+  return {
+    bodyPPr: sanitizeCapturedParagraphProperties(extractParagraphProperties(bodyXml)),
+    bodyRPr: extractRunProperties(bodyXml),
+    headingPPr: sanitizeCapturedParagraphProperties(extractParagraphProperties(headingXml)),
+    headingRPr: extractRunProperties(headingXml),
+  };
+}
+
+// Template for filling a specific section: body text mirrors the document's own
+// normal paragraphs, generated sub-headings (rare) mirror the section heading.
+function buildSectionFormattingTemplate(paragraphs = [], headingIndex = -1) {
+  const heading = headingIndex >= 0 ? paragraphs[headingIndex] : null;
+  return buildFormattingTemplate({
+    bodyXml: pickRepresentativeBodyParagraph(paragraphs, new Set(headingIndex >= 0 ? [headingIndex] : [])),
+    headingXml: heading ? heading.xml : '',
+  });
+}
+
+// Template for appending a fresh appendix: only inherit body text formatting so
+// the new ANEXOS heading hierarchy keeps its readable size ladder.
+function buildDocumentFormattingTemplate(paragraphs = []) {
+  return buildFormattingTemplate({
+    bodyXml: pickRepresentativeBodyParagraph(paragraphs),
+    headingXml: '',
+  });
+}
+
+function paragraphXml(item = {}, template = null) {
   if (item.kind === 'pageBreak') {
     return '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
   }
 
   const text = xmlEscape(item.text || '');
-  const styles = {
-    heading1: '<w:pPr><w:spacing w:before="360" w:after="180"/><w:outlineLvl w:val="0"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="32"/></w:rPr>',
-    heading2: '<w:pPr><w:spacing w:before="260" w:after="140"/><w:outlineLvl w:val="1"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="28"/></w:rPr>',
-    heading3: '<w:pPr><w:spacing w:before="200" w:after="100"/><w:outlineLvl w:val="2"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="24"/></w:rPr>',
-    normal: '<w:pPr><w:spacing w:before="80" w:after="120" w:line="360" w:lineRule="auto"/><w:jc w:val="both"/></w:pPr><w:r><w:rPr><w:sz w:val="24"/></w:rPr>',
-  };
-  const prefix = styles[item.kind] || styles.normal;
-  return `<w:p>${prefix}<w:t xml:space="preserve">${text}</w:t></w:r></w:p>`;
+  const kind = PARAGRAPH_STYLE_DEFAULTS[item.kind] ? item.kind : 'normal';
+  const isHeading = kind.startsWith('heading');
+  let pPr = PARAGRAPH_STYLE_DEFAULTS[kind].pPr;
+  let rPr = PARAGRAPH_STYLE_DEFAULTS[kind].rPr;
+
+  if (template) {
+    const inheritedPPr = isHeading ? template.headingPPr : template.bodyPPr;
+    const inheritedRPr = isHeading ? template.headingRPr : template.bodyRPr;
+    if (inheritedPPr || inheritedRPr) {
+      // Adopt the source document's own formatting. Run properties are deferred
+      // to whatever the document declares (captured rPr, or the paragraph style
+      // referenced inside the captured pPr) so we never re-impose a default font
+      // size over the document's styling.
+      pPr = inheritedPPr || '';
+      rPr = inheritedRPr || '';
+    }
+  }
+
+  return `<w:p>${pPr}<w:r>${rPr}<w:t xml:space="preserve">${text}</w:t></w:r></w:p>`;
 }
 
 function xmlUnescape(value) {
@@ -525,8 +644,8 @@ function isPlaceholderParagraph(text = '') {
     || /\b(?:pendiente de completar|completar aqui|completar aquí|rellenar aqui|rellenar aquí|desarrollar aqui|desarrollar aquí)\b/.test(normalized);
 }
 
-function sectionInsertionRange(documentXml, target) {
-  const paragraphs = extractDocxParagraphs(documentXml);
+function sectionInsertionRange(documentXml, target, precomputedParagraphs = null) {
+  const paragraphs = precomputedParagraphs || extractDocxParagraphs(documentXml);
   const headingIndex = paragraphs.findIndex((paragraph) => matchesTargetHeading(paragraph.normalized, target));
   if (headingIndex < 0) {
     const notFound = new Error(`No encontré "${target.label}" dentro del DOCX original.`);
@@ -565,18 +684,21 @@ function fillDocxSectionBuffer(buffer, target, blocks) {
   const documentFile = zip.file('word/document.xml');
   if (!documentFile) throw new Error('DOCX inválido: falta word/document.xml.');
   const documentXml = documentFile.asText();
+  const paragraphs = extractDocxParagraphs(documentXml);
+  const range = sectionInsertionRange(documentXml, target, paragraphs);
+  const headingIndex = paragraphs.findIndex((paragraph) => matchesTargetHeading(paragraph.normalized, target));
+  const template = buildSectionFormattingTemplate(paragraphs, headingIndex);
   const insertionXml = blocks
     .filter((item) => item.kind !== 'pageBreak')
-    .map(paragraphXml)
+    .map((item) => paragraphXml(item, template))
     .join('');
-  const range = sectionInsertionRange(documentXml, target);
   const updatedXml = `${documentXml.slice(0, range.replaceStart)}${insertionXml}${documentXml.slice(range.replaceEnd)}`;
   zip.file('word/document.xml', updatedXml);
   return zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
 }
 
-function appendBlocksToDocumentXml(documentXml, blocks) {
-  const insertionXml = blocks.map(paragraphXml).join('');
+function appendBlocksToDocumentXml(documentXml, blocks, template = null) {
+  const insertionXml = blocks.map((item) => paragraphXml(item, template)).join('');
   const bodyEnd = documentXml.lastIndexOf('</w:body>');
   if (bodyEnd < 0) throw new Error('DOCX inválido: no se encontró el cuerpo del documento.');
   const beforeBodyEnd = documentXml.slice(0, bodyEnd);
@@ -594,7 +716,8 @@ function appendToDocxBuffer(buffer, blocks) {
   const documentFile = zip.file('word/document.xml');
   if (!documentFile) throw new Error('DOCX inválido: falta word/document.xml.');
   const documentXml = documentFile.asText();
-  zip.file('word/document.xml', appendBlocksToDocumentXml(documentXml, blocks));
+  const template = buildDocumentFormattingTemplate(extractDocxParagraphs(documentXml));
+  zip.file('word/document.xml', appendBlocksToDocumentXml(documentXml, blocks, template));
   return zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
 }
 
@@ -1204,9 +1327,14 @@ module.exports = {
   tryGenerateSourcePreservingDocumentEdit,
   INTERNAL: {
     buildCombinedSourceText,
+    buildDocumentFormattingTemplate,
     buildInstrumentAppendix,
+    buildSectionFormattingTemplate,
+    extractParagraphProperties,
+    extractRunProperties,
     inferResearchVariables,
     isTargetedSectionFillRequest,
     resolveStoredFilePath,
+    sanitizeCapturedParagraphProperties,
   },
 };
