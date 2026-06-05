@@ -18,7 +18,7 @@
 services:
   # ── Database ──────────────────────────────────────────────
   db:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
@@ -72,10 +72,21 @@ services:
       CORS_ORIGINS: "${CORS_ORIGINS:-http://localhost:3000}"
       JWT_SECRET: "${JWT_SECRET}"
       SESSION_SECRET: "${SESSION_SECRET}"
+      ENCRYPTION_KEY: "${ENCRYPTION_KEY}"
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       XAI_API_KEY: "${XAI_API_KEY:-}"
       GROQ_API_KEY: "${GROQ_API_KEY:-}"
+      CEREBRAS_API_KEY: "${CEREBRAS_API_KEY:-}"
+      CEREBRAS_BASE_URL: "${CEREBRAS_BASE_URL:-https://api.cerebras.ai/v1}"
+      FREE_IA_MODEL_ID: "${FREE_IA_MODEL_ID:-llama-3.1-8b}"
+      FREE_IA_DISPLAY_NAME: "${FREE_IA_DISPLAY_NAME:-Free IA}"
+      GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
+      GOOGLE_AI_API_KEY: "${GOOGLE_AI_API_KEY:-}"
+      DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY:-}"
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      FAL_API_KEY: "${FAL_API_KEY:-}"
+      FAL_KEY: "${FAL_KEY:-}"
       GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID:-}"
       GOOGLE_CLIENT_SECRET: "${GOOGLE_CLIENT_SECRET:-}"
       SPOTIFY_CLIENT_ID: "${SPOTIFY_CLIENT_ID:-}"

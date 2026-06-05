@@ -31,6 +31,7 @@ import {
   Image as ImageIcon,
   ListChecks,
   Plus,
+  Rocket,
   Server,
   Sparkles,
   StopCircle,
@@ -64,9 +65,10 @@ import { DiffView } from "./diff-view"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 
-type ComposerMode = "build" | "plan" | "debug" | "ask" | "image"
+type ComposerMode = "app" | "build" | "plan" | "debug" | "ask" | "image"
 
 const COMPOSER_MODE_LABEL: Record<ComposerMode, string> = {
+  app: "App",
   build: "Build",
   plan: "Plan",
   debug: "Debug",
@@ -75,6 +77,7 @@ const COMPOSER_MODE_LABEL: Record<ComposerMode, string> = {
 }
 
 const COMPOSER_PLACEHOLDER: Record<ComposerMode, string> = {
+  app: "Describe tu idea — te haré unas preguntas y la construyo…",
   build: "Pide un cambio, pega código o / para comandos",
   plan: "Objetivo o plan antes de editar archivos…",
   debug: "Error, stack trace o comportamiento esperado…",
@@ -83,6 +86,11 @@ const COMPOSER_PLACEHOLDER: Record<ComposerMode, string> = {
 }
 
 const COMPOSER_MODE_INSTRUCTION: Record<ComposerMode, string> = {
+  app:
+    "Modo App (construir desde cero, estilo Replit/Lovable): tu meta es entregar una app completa y funcional que corra en el PREVIEW EN VIVO.\n" +
+    "1) Si todavía NO tienes contexto suficiente, primero HAZ PREGUNTAS breves (máximo 5, en una sola tanda, con opciones cuando ayude) para definir: tipo de app (web / móvil / desktop), propósito, funcionalidades clave, datos o entidades, estilo visual y audiencia. En ese caso NO generes código aún — termina pidiendo las respuestas y espera.\n" +
+    "2) Cuando ya tengas el contexto (o el usuario diga 'genera ya' / 'hazlo'), construye el proyecto COMPLETO como bloques aplicables con ruta, EMPEZANDO SIEMPRE por un index.html autocontenido y ejecutable sin npm ni build, para que el preview muestre algo de inmediato; añade styles.css / app.js o un componente App de React por defecto según convenga.\n" +
+    "3) Cierra con 1-3 siguientes pasos sugeridos para iterar (ej. 'añade login', 'conecta pagos').",
   build:
     "Modo Build: implementa cambios de código concretos. Si creas o modificas archivos, entrega bloques aplicables con ruta.",
   plan:
@@ -187,7 +195,7 @@ export function AICodeChatPanel() {
   const [input, setInput] = React.useState("")
   const [busy, setBusy] = React.useState(false)
   const [includeContext, setIncludeContext] = React.useState(true)
-  const [composerMode, setComposerMode] = React.useState<ComposerMode>("build")
+  const [composerMode, setComposerMode] = React.useState<ComposerMode>("app")
 
   const abortRef = React.useRef<AbortController | null>(null)
   const inputRef = React.useRef<HTMLTextAreaElement | null>(null)
@@ -636,6 +644,13 @@ function ComposerPlusMenu({
           {COMPOSER_MODE_LABEL[mode]}
           {activeFileLabel && includeContext ? ` · ${activeFileLabel}` : ""}
         </DropdownMenuLabel>
+        <DropdownMenuItem
+          className={cn(itemClass, mode === "app" && "bg-muted font-medium")}
+          onClick={() => onModeChange("app")}
+        >
+          <Rocket className={iconClass} />
+          <span>App · construir desde cero</span>
+        </DropdownMenuItem>
         <DropdownMenuItem
           className={cn(itemClass, mode === "build" && "bg-muted font-medium")}
           onClick={() => onModeChange("build")}

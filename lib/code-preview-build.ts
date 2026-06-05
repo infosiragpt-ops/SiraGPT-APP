@@ -320,7 +320,7 @@ export function buildPreviewDocument(files: CodeFiles, activePath: string | null
   if (mdEntry) return { html: buildMarkdownDocument(files, mdEntry), kind: "markdown", entry: mdEntry }
 
   return {
-    html: placeholder("El preview en vivo soporta web (HTML/CSS/JS), React/JSX, Markdown y SVG. Para apps de servidor (Python, Go…), ejecútalas con el agente."),
+    html: placeholder("El preview en vivo ejecuta web (HTML/CSS/JS), React/JSX/TSX, Markdown y SVG. Vue, Angular, Flutter o apps con dependencias npm necesitan un entorno de build (WebContainers) — en camino; por ahora ejecútalas desde la Terminal/agente."),
     kind: "unsupported",
     entry: activePath,
   }

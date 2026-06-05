@@ -32,6 +32,7 @@ import { CODE_TEMPLATES } from "@/lib/code-templates"
 
 import { AICodeChatPanel } from "./ai-code-chat-panel"
 import { EditorPanel } from "./editor-panel"
+import { FileTreePanel } from "./file-tree-panel"
 import { PreviewPane } from "./preview-pane"
 import { StatusBar } from "./status-bar"
 import { TerminalPanel } from "./terminal-panel"
@@ -420,7 +421,12 @@ export function CodeWorkspace() {
 
               <ResizablePanel defaultSize={70} minSize={32}>
                 <ResizablePanelGroup direction="horizontal">
-                  <ResizablePanel defaultSize={previewOpen ? 56 : 100} minSize={28} className="min-w-0">
+                  {/* Explorer — file/folder tree, IDE-style, alongside editor + preview */}
+                  <ResizablePanel defaultSize={16} minSize={10} maxSize={28} className="min-w-0">
+                    <FileTreePanel />
+                  </ResizablePanel>
+                  <ResizableHandle withHandle />
+                  <ResizablePanel defaultSize={previewOpen ? 42 : 84} minSize={24} className="min-w-0">
                     <ResizablePanelGroup direction="vertical">
                       <ResizablePanel defaultSize={terminalOpen ? 100 - TERMINAL_DEFAULT_SIZE : 100} minSize={30}>
                         <EditorPanel />
