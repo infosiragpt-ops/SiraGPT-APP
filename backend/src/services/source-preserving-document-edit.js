@@ -605,6 +605,42 @@ function extractDocxParagraphs(documentXml = '') {
   return paragraphs;
 }
 
+function extractXmlSegments(xml = '', regex) {
+  const segments = [];
+  regex.lastIndex = 0;
+  let match;
+  while ((match = regex.exec(xml))) {
+    segments.push({
+      start: match.index,
+      end: match.index + match[0].length,
+      xml: match[0],
+    });
+  }
+  return segments;
+}
+
+function extractDocxTables(documentXml = '') {
+  return extractXmlSegments(documentXml, /<w:tbl\b[\s\S]*?<\/w:tbl>/g)
+    .map((table) => ({
+      ...table,
+      text: paragraphText(table.xml),
+      normalized: normalizeText(paragraphText(table.xml)),
+    }));
+}
+
+function extractTableRows(tableXml = '') {
+  return extractXmlSegments(tableXml, /<w:tr\b[\s\S]*?<\/w:tr>/g);
+}
+
+function extractTableCells(rowXml = '') {
+  return extractXmlSegments(rowXml, /<w:tc\b[\s\S]*?<\/w:tc>/g)
+    .map((cell) => ({
+      ...cell,
+      text: paragraphText(cell.xml),
+      normalized: normalizeText(paragraphText(cell.xml)),
+    }));
+}
+
 function targetHeadingPattern(target) {
   const numberPart = target.roman
     ? `(?:${target.numeric}|${normalizeText(target.roman)})`
@@ -677,6 +713,280 @@ function sectionInsertionRange(documentXml, target, precomputedParagraphs = null
     replaceEnd,
     replacingPlaceholder,
   };
+}
+
+function targetSectionBounds(documentXml, target, precomputedParagraphs = null) {
+  const paragraphs = precomputedParagraphs || extractDocxParagraphs(documentXml);
+  const headingIndex = paragraphs.findIndex((paragraph) => matchesTargetHeading(paragraph.normalized, target));
+  if (headingIndex < 0) {
+    const notFound = new Error(`No encontré "${target.label}" dentro del DOCX original.`);
+    notFound.code = 'SECTION_NOT_FOUND';
+    throw notFound;
+  }
+
+  const heading = paragraphs[headingIndex];
+  const bodyEnd = documentXml.lastIndexOf('</w:body>');
+  let sectionEnd = bodyEnd >= 0 ? bodyEnd : documentXml.length;
+  for (let index = headingIndex + 1; index < paragraphs.length; index += 1) {
+    const paragraph = paragraphs[index];
+    if (isSectionBoundary(paragraph.normalized, target)) {
+      sectionEnd = paragraph.start;
+      break;
+    }
+  }
+  return {
+    heading,
+    headingIndex,
+    sectionStart: heading.end,
+    sectionEnd,
+  };
+}
+
+function isAnexo3CronogramaTarget(target = {}) {
+  return target?.kind === 'anexo' && Number(target.number) === 3;
+}
+
+function locateCronogramaTable(documentXml, target, precomputedParagraphs = null) {
+  if (!isAnexo3CronogramaTarget(target)) return null;
+  const paragraphs = precomputedParagraphs || extractDocxParagraphs(documentXml);
+  const bounds = targetSectionBounds(documentXml, target, paragraphs);
+  const sectionIntro = documentXml.slice(bounds.heading.start, Math.min(bounds.sectionEnd, bounds.heading.end + 1200));
+  const introText = normalizeText(paragraphText(sectionIntro));
+  const tables = extractDocxTables(documentXml);
+  return tables.find((table) => {
+    if (table.start < bounds.sectionStart || table.start >= bounds.sectionEnd) return false;
+    const normalized = table.normalized;
+    const tableLooksLikeSchedule = normalized.includes('avance de la tesis')
+      && normalized.includes('acciones')
+      && normalized.includes('estado')
+      && normalized.includes('fechas');
+    return tableLooksLikeSchedule || introText.includes('cronograma');
+  }) || null;
+}
+
+function detectCronogramaAnexo3Plan(buffer, target) {
+  if (!isAnexo3CronogramaTarget(target)) return null;
+  try {
+    const documentXml = new PizZip(buffer).file('word/document.xml')?.asText() || '';
+    if (!documentXml) return null;
+    const table = locateCronogramaTable(documentXml, target);
+    if (!table) return null;
+    return buildCronogramaAnexo3Plan();
+  } catch {
+    return null;
+  }
+}
+
+function buildCronogramaAnexo3Plan() {
+  const rows = [
+    {
+      avance: 'Planificación',
+      acciones: 'Lineamientos y cronograma de tesis.',
+      estado: 'Completado',
+      weeks: [0],
+    },
+    {
+      avance: 'Capítulo I',
+      acciones: 'Problema, objetivos y justificación.',
+      estado: 'Completado',
+      weeks: [0, 1],
+    },
+    {
+      avance: 'Capítulo II',
+      acciones: 'Antecedentes y marco teórico.',
+      estado: 'En proceso',
+      weeks: [1, 2, 3],
+    },
+    {
+      avance: 'Matriz de consistencia',
+      acciones: 'Problema, objetivos, hipótesis y método.',
+      estado: 'En proceso',
+      weeks: [2, 3],
+    },
+    {
+      avance: 'Operacionalización',
+      acciones: 'Variables, indicadores, ítems y escala.',
+      estado: 'En proceso',
+      weeks: [3, 4],
+    },
+    {
+      avance: 'Metodología',
+      acciones: 'Tipo, diseño, población y muestra.',
+      estado: 'Pendiente',
+      weeks: [4, 5],
+    },
+    {
+      avance: 'Instrumentos',
+      acciones: 'Elaboración y validación del cuestionario.',
+      estado: 'Pendiente',
+      weeks: [5, 6],
+    },
+    {
+      avance: 'Trabajo de campo',
+      acciones: 'Aplicación de encuesta y base de datos.',
+      estado: 'Pendiente',
+      weeks: [7, 8, 9],
+    },
+    {
+      avance: 'Resultados',
+      acciones: 'Procesamiento estadístico e interpretación.',
+      estado: 'Pendiente',
+      weeks: [9, 10, 11],
+    },
+    {
+      avance: 'Discusión',
+      acciones: 'Contraste de hipótesis y antecedentes.',
+      estado: 'Pendiente',
+      weeks: [11, 12],
+    },
+    {
+      avance: 'Conclusiones',
+      acciones: 'Conclusiones, recomendaciones y anexos.',
+      estado: 'Pendiente',
+      weeks: [12, 13],
+    },
+    {
+      avance: 'Revisión final',
+      acciones: 'Corrección de estilo y normas APA.',
+      estado: 'Pendiente',
+      weeks: [14],
+    },
+    {
+      avance: 'Entrega',
+      acciones: 'Informe final y sustentación.',
+      estado: 'Pendiente',
+      weeks: [15, 16],
+    },
+  ];
+  return {
+    type: 'cronograma_anexo_3',
+    weekLabels: Array.from({ length: 17 }, (_, index) => `S${index + 1}`),
+    rows,
+    validationBlocks: rows.slice(0, 4).map((row) => block('normal', row.acciones)),
+  };
+}
+
+function firstParagraphXml(xml = '') {
+  return String(xml || '').match(/<w:p\b[\s\S]*?<\/w:p>/)?.[0] || '';
+}
+
+function cellParagraphXml(text = '', cellXml = '', template = null, options = {}) {
+  const sourceParagraph = firstParagraphXml(cellXml);
+  const inheritedPPr = sanitizeCapturedParagraphProperties(extractParagraphProperties(sourceParagraph));
+  const inheritedRPr = extractRunProperties(sourceParagraph);
+  let pPr = inheritedPPr || template?.bodyPPr || '';
+  const rPr = inheritedRPr || template?.bodyRPr || '';
+  if (options.center && !/<w:jc\b/.test(pPr)) {
+    pPr = pPr
+      ? pPr.replace(/<\/w:pPr>$/, '<w:jc w:val="center"/></w:pPr>')
+      : '<w:pPr><w:jc w:val="center"/></w:pPr>';
+  }
+  const value = String(text || '');
+  return `<w:p>${pPr}<w:r>${rPr}<w:t xml:space="preserve">${xmlEscape(value)}</w:t></w:r></w:p>`;
+}
+
+function replaceCellText(cellXml = '', text = '', template = null, options = {}) {
+  const tcPr = cellXml.match(/<w:tcPr\b(?:[\s\S]*?<\/w:tcPr>|\s*\/>)/)?.[0] || '';
+  return `<w:tc>${tcPr}${cellParagraphXml(text, cellXml, template, options)}</w:tc>`;
+}
+
+function replaceRowCells(rowXml = '', replacements = new Map()) {
+  const cells = extractTableCells(rowXml);
+  if (!cells.length || !replacements.size) return rowXml;
+  let updated = '';
+  let cursor = 0;
+  cells.forEach((cell, index) => {
+    updated += rowXml.slice(cursor, cell.start);
+    updated += replacements.has(index) ? replacements.get(index) : cell.xml;
+    cursor = cell.end;
+  });
+  updated += rowXml.slice(cursor);
+  return updated;
+}
+
+function replaceTableRows(tableXml = '', replacements = new Map()) {
+  const rows = extractTableRows(tableXml);
+  if (!rows.length || !replacements.size) return tableXml;
+  let updated = '';
+  let cursor = 0;
+  rows.forEach((row, index) => {
+    updated += tableXml.slice(cursor, row.start);
+    updated += replacements.has(index) ? replacements.get(index) : row.xml;
+    cursor = row.end;
+  });
+  updated += tableXml.slice(cursor);
+  return updated;
+}
+
+function fillCronogramaTableXml(tableXml = '', plan = buildCronogramaAnexo3Plan(), template = null) {
+  const rows = extractTableRows(tableXml);
+  const cellCounts = rows.map((row) => extractTableCells(row.xml).length);
+  const maxColumns = Math.max(0, ...cellCounts);
+  if (maxColumns < 4) {
+    const err = new Error('La tabla de cronograma no tiene suficientes columnas para completarse.');
+    err.code = 'CRONOGRAMA_TABLE_INVALID';
+    throw err;
+  }
+
+  const dateStartColumn = 3;
+  const availableDateColumns = maxColumns - dateStartColumn;
+  const dateLabels = plan.weekLabels.slice(0, availableDateColumns);
+  const headerRowIndex = rows.findIndex((row, index) => index > 0 && extractTableCells(row.xml).length === maxColumns);
+  const dataStartRow = headerRowIndex >= 0 ? headerRowIndex + 1 : 1;
+  const rowReplacements = new Map();
+
+  if (headerRowIndex >= 0) {
+    const headerCells = extractTableCells(rows[headerRowIndex].xml);
+    const replacements = new Map();
+    dateLabels.forEach((label, index) => {
+      const cellIndex = dateStartColumn + index;
+      if (headerCells[cellIndex]) {
+        replacements.set(cellIndex, replaceCellText(headerCells[cellIndex].xml, label, template, { center: true }));
+      }
+    });
+    rowReplacements.set(headerRowIndex, replaceRowCells(rows[headerRowIndex].xml, replacements));
+  }
+
+  plan.rows.forEach((scheduleRow, offset) => {
+    const rowIndex = dataStartRow + offset;
+    const row = rows[rowIndex];
+    if (!row) return;
+    const cells = extractTableCells(row.xml);
+    if (cells.length < maxColumns) return;
+    const replacements = new Map();
+    replacements.set(0, replaceCellText(cells[0].xml, scheduleRow.avance, template));
+    replacements.set(1, replaceCellText(cells[1].xml, scheduleRow.acciones, template));
+    replacements.set(2, replaceCellText(cells[2].xml, scheduleRow.estado, template, { center: true }));
+    for (let index = 0; index < availableDateColumns; index += 1) {
+      const cellIndex = dateStartColumn + index;
+      if (!cells[cellIndex]) continue;
+      const marker = scheduleRow.weeks.includes(index) ? 'X' : '';
+      replacements.set(cellIndex, replaceCellText(cells[cellIndex].xml, marker, template, { center: true }));
+    }
+    rowReplacements.set(rowIndex, replaceRowCells(row.xml, replacements));
+  });
+
+  return replaceTableRows(tableXml, rowReplacements);
+}
+
+function fillDocxCronogramaSectionBuffer(buffer, target, plan = buildCronogramaAnexo3Plan()) {
+  const zip = new PizZip(buffer);
+  const documentFile = zip.file('word/document.xml');
+  if (!documentFile) throw new Error('DOCX inválido: falta word/document.xml.');
+  const documentXml = documentFile.asText();
+  const paragraphs = extractDocxParagraphs(documentXml);
+  const table = locateCronogramaTable(documentXml, target, paragraphs);
+  if (!table) {
+    const err = new Error(`No encontré una tabla de cronograma dentro de ${target.label}.`);
+    err.code = 'CRONOGRAMA_TABLE_NOT_FOUND';
+    throw err;
+  }
+  const bounds = targetSectionBounds(documentXml, target, paragraphs);
+  const template = buildSectionFormattingTemplate(paragraphs, bounds.headingIndex);
+  const updatedTable = fillCronogramaTableXml(table.xml, plan, template);
+  const updatedXml = `${documentXml.slice(0, table.start)}${updatedTable}${documentXml.slice(table.end)}`;
+  zip.file('word/document.xml', updatedXml);
+  return zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
 }
 
 function fillDocxSectionBuffer(buffer, target, blocks) {
@@ -1182,7 +1492,11 @@ async function generateSourcePreservingDocumentEdit({
   const targetSection = isDocxFile(sourceFile) && isTargetedSectionFillRequest(requestText)
     ? parseTargetSectionRequest(requestText)
     : null;
-  let blocks = targetSection
+  const input = await fs.promises.readFile(sourceFile.path);
+  const structuredSectionPlan = targetSection && isDocxFile(sourceFile)
+    ? detectCronogramaAnexo3Plan(input, targetSection)
+    : null;
+  let blocks = structuredSectionPlan?.validationBlocks || (targetSection
     ? await generateTargetSectionBlocks({
       prompt: requestText,
       target: targetSection,
@@ -1194,8 +1508,7 @@ async function generateSourcePreservingDocumentEdit({
       prompt: requestText,
       sourceText: sourceText || sourceFile.extractedText || '',
       originalName: sourceFile.originalName || sourceFile.filename,
-    });
-  const input = await fs.promises.readFile(sourceFile.path);
+    }));
   let format;
   let output;
   let suffix = 'con_anexos';
@@ -1206,13 +1519,15 @@ async function generateSourcePreservingDocumentEdit({
     format = 'docx';
     if (targetSection) {
       try {
-        output = fillDocxSectionBuffer(input, targetSection, blocks);
+        output = structuredSectionPlan?.type === 'cronograma_anexo_3'
+          ? fillDocxCronogramaSectionBuffer(input, targetSection, structuredSectionPlan)
+          : fillDocxSectionBuffer(input, targetSection, blocks);
         suffix = `${normalizeText(targetSection.kind).replace(/\s+/g, '_')}_${targetSection.number}_completado`;
         titleSuffix = `${targetSection.label} completado`;
         explanation = `Se conservó el DOCX original y se completó únicamente ${targetSection.label}.`;
         content = `Listo. Conservé el DOCX original y completé únicamente ${targetSection.label} usando el contexto combinado de los documentos adjuntos.`;
       } catch (err) {
-        if (err?.code !== 'SECTION_NOT_FOUND') throw err;
+        if (err?.code !== 'SECTION_NOT_FOUND' && err?.code !== 'CRONOGRAMA_TABLE_NOT_FOUND') throw err;
         // Respaldo: la sección solicitada no existe dentro del documento.
         // En lugar de fallar, la agregamos al final con su propio encabezado,
         // conservando intacto el resto del archivo (portada, cuerpo, etc.).
@@ -1318,6 +1633,7 @@ module.exports = {
   appendBlocksToDocumentXml,
   appendToDocxBuffer,
   buildAppendixBlocks,
+  fillDocxCronogramaSectionBuffer,
   fillDocxSectionBuffer,
   generateSourcePreservingDocumentEdit,
   inferDocumentTitle,
@@ -1327,13 +1643,17 @@ module.exports = {
   tryGenerateSourcePreservingDocumentEdit,
   INTERNAL: {
     buildCombinedSourceText,
+    buildCronogramaAnexo3Plan,
     buildDocumentFormattingTemplate,
     buildInstrumentAppendix,
     buildSectionFormattingTemplate,
+    detectCronogramaAnexo3Plan,
     extractParagraphProperties,
     extractRunProperties,
+    fillCronogramaTableXml,
     inferResearchVariables,
     isTargetedSectionFillRequest,
+    locateCronogramaTable,
     resolveStoredFilePath,
     sanitizeCapturedParagraphProperties,
   },

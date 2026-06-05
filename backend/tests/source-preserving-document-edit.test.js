@@ -3,12 +3,13 @@ const { describe, it } = require('node:test');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { Document, Packer, Paragraph, TextRun, AlignmentType } = require('docx');
+const { Document, Packer, Paragraph, TextRun, AlignmentType, Table, TableRow, TableCell } = require('docx');
 const PizZip = require('pizzip');
 
 const {
   appendToDocxBuffer,
   buildAppendixBlocks,
+  fillDocxCronogramaSectionBuffer,
   fillDocxSectionBuffer,
   generateSourcePreservingDocumentEdit,
   inferDocumentTitle,
@@ -44,6 +45,36 @@ async function makeDocxWithAnexo3Buffer() {
         new Paragraph('[Pendiente de completar]'),
         new Paragraph('ANEXO 4'),
         new Paragraph('Contenido original del anexo cuatro.'),
+      ],
+    }],
+  });
+  return Buffer.from(await Packer.toBuffer(doc));
+}
+
+async function makeDocxWithAnexo3CronogramaBuffer() {
+  const blankCells = (count) => Array.from({ length: count }, () => new TableCell({ children: [new Paragraph('')] }));
+  const doc = new Document({
+    sections: [{
+      children: [
+        new Paragraph('Portada original UPN'),
+        new Paragraph('Anexo 1. Matriz de Consistencia Interna'),
+        new Paragraph('Contenido original del anexo uno.'),
+        new Paragraph('Anexo 2. Matriz de Operacionalización de las Variables'),
+        new Paragraph('Contenido original del anexo dos.'),
+        new Paragraph('Anexo 3. Cronograma del Desarrollo y Culminación de la Tesis'),
+        new Table({
+          rows: [
+            new TableRow({
+              children: [
+                new TableCell({ children: [new Paragraph('AVANCE DE LA TESIS')] }),
+                new TableCell({ children: [new Paragraph('ACCIONES')] }),
+                new TableCell({ children: [new Paragraph('ESTADO')] }),
+                new TableCell({ children: [new Paragraph('FECHAS')] }),
+              ],
+            }),
+            ...Array.from({ length: 23 }, () => new TableRow({ children: blankCells(20) })),
+          ],
+        }),
       ],
     }],
   });
@@ -180,6 +211,27 @@ describe('source-preserving document edit', () => {
     assert.equal((xml.match(/ANEXOS/g) || []).length, 0);
   });
 
+  it('fills the existing Anexo 3 cronograma table without adding generic narrative paragraphs', async () => {
+    const original = await makeDocxWithAnexo3CronogramaBuffer();
+    const target = parseTargetSectionRequest('deseo que completes el anexo 3 en su mismo formato');
+    const edited = fillDocxCronogramaSectionBuffer(original, target);
+    const xml = new PizZip(edited).file('word/document.xml').asText();
+
+    assert.match(xml, /Portada original UPN/);
+    assert.match(xml, /Anexo 1\. Matriz de Consistencia Interna/);
+    assert.match(xml, /Anexo 2\. Matriz de Operacionalización de las Variables/);
+    assert.match(xml, /Anexo 3\. Cronograma del Desarrollo y Culminación de la Tesis/);
+    assert.match(xml, /AVANCE DE LA TESIS/);
+    assert.match(xml, /Lineamientos y cronograma de tesis/);
+    assert.match(xml, /Problema, objetivos, hipótesis y método/);
+    assert.match(xml, /Informe final y sustentación/);
+    assert.match(xml, /S1/);
+    assert.match(xml, /S17/);
+    assert.equal((xml.match(/<w:tbl\b/g) || []).length, 1);
+    assert.equal((xml.match(/ANEXOS/g) || []).length, 0);
+    assert.doesNotMatch(xml, /El Anexo 3 presenta un análisis detallado/i);
+  });
+
   it('returns a downloadable edited DOCX artifact instead of failing after validation', async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-generate-'));
     const originalPath = path.join(tmp, 'tesis.docx');
@@ -268,6 +320,47 @@ describe('source-preserving document edit', () => {
       assert.match(xml, /contexto\.txt/);
       assert.match(xml, /matriz de consistencia integra problema/);
       assert.doesNotMatch(xml, /Pendiente de completar/);
+      assert.doesNotMatch(xml, /ANEXOS/);
+    } finally {
+      if (originalOpenAIKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = originalOpenAIKey;
+    }
+  });
+
+  it('generates the real cronograma artifact by editing the source DOCX table in place', async () => {
+    const originalOpenAIKey = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    try {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-cronograma-'));
+      const originalPath = path.join(tmp, 'tesis-cronograma.docx');
+      fs.writeFileSync(originalPath, await makeDocxWithAnexo3CronogramaBuffer());
+
+      const result = await generateSourcePreservingDocumentEdit({
+        sourceFile: {
+          id: 'file-docx',
+          path: originalPath,
+          originalName: 'tesis-cronograma.docx',
+          filename: 'tesis-cronograma.docx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          extractedText: 'Anexo 3. Cronograma del Desarrollo y Culminación de la Tesis.',
+        },
+        prompt: 'deseo que completes el anexo 3 en su mismo formato',
+        displayPrompt: 'deseo que completes el anexo 3 en su mismo formato',
+        userId: 'user-1',
+        chatId: 'chat-1',
+      });
+
+      assert.equal(result.format, 'docx');
+      assert.equal(result.validation.passed, true);
+      assert.match(result.file.filename, /anexo_3_completado\.docx$/);
+
+      const edited = fs.readFileSync(result.artifact.path);
+      const xml = new PizZip(edited).file('word/document.xml').asText();
+      assert.match(xml, /Anexo 3\. Cronograma del Desarrollo y Culminación de la Tesis/);
+      assert.match(xml, /Lineamientos y cronograma de tesis/);
+      assert.match(xml, /Informe final y sustentación/);
+      assert.equal((xml.match(/<w:tbl\b/g) || []).length, 1);
+      assert.doesNotMatch(xml, /El Anexo 3 presenta un análisis detallado/i);
       assert.doesNotMatch(xml, /ANEXOS/);
     } finally {
       if (originalOpenAIKey === undefined) delete process.env.OPENAI_API_KEY;
