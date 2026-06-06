@@ -88,7 +88,7 @@ const COMPOSER_PLACEHOLDER: Record<ComposerMode, string> = {
 const COMPOSER_MODE_INSTRUCTION: Record<ComposerMode, string> = {
   app:
     "Modo App (construir desde cero, estilo Replit/Lovable): tu meta es entregar una landing/app COMPLETA y VISTOSA que corra en el PREVIEW EN VIVO al instante.\n" +
-    "1) INTAKE — si todavía NO tienes contexto suficiente, primero HAZ PREGUNTAS breves (máximo 4, en una sola tanda, con opciones cuando ayude) para definir: tipo (landing / web app), propósito y NOMBRE de marca o negocio (si no hay, propón uno), estilo visual (ej. minimalista, oscuro, corporativo, streetwear) y secciones/contenido clave. NO generes código aún — termina pidiendo las respuestas y espera. Si el usuario dice 'genera ya' / 'hazlo' / da suficiente contexto, salta a generar.\n" +
+    "1) INTAKE — SOLO en tu PRIMERA respuesta de una conversación nueva, y solo si falta contexto, HAZ PREGUNTAS breves (máximo 4, en UNA sola tanda, con opciones cuando ayude): tipo (landing / web app), propósito y NOMBRE de marca (si no hay, propón uno), estilo visual y secciones clave. En ese único caso NO generes código y espera. REGLA DECISIVA: a partir de la segunda respuesta del usuario —o si ya dio contexto razonable, o dice 'genera'/'hazlo'/'dale'— GENERA SIEMPRE el proyecto completo. NUNCA respondas dos veces seguidas solo con preguntas ni pidas más detalles más de una vez: si falta algo, ASUME un default sensato y construye. Tu salida por defecto es CÓDIGO, no más preguntas.\n" +
     "2) GENERAR — produce UN solo archivo `index.html` AUTOCONTENIDO y ejecutable SIN npm ni build (el preview lo renderiza con scripts permitidos). Requisitos de calidad (apunta a nivel agencia, NO a un mockup pobre):\n" +
     "   • Carga Tailwind por CDN (<script src=\"https://cdn.tailwindcss.com\"></script>) y una tipografía de Google Fonts acorde al estilo.\n" +
     "   • Copy REAL y específico usando el nombre de marca y las respuestas del intake — NADA de lorem ipsum ni placeholders genéricos.\n" +
@@ -316,9 +316,20 @@ export function AICodeChatPanel() {
       abortRef.current = controller
 
       const modeInstruction = COMPOSER_MODE_INSTRUCTION[composerMode]
+      // Include the recent conversation so the agent actually accumulates the
+      // intake context across turns. Without this the chat was stateless per
+      // message — it kept re-asking the same questions and never had enough
+      // context to generate. `turns` here is the state BEFORE this message was
+      // appended, i.e. the genuine prior history.
+      const transcript = turns
+        .filter((t) => !t.streaming && t.content.trim())
+        .slice(-12)
+        .map((t) => `${t.role === "user" ? "Usuario" : "Asistente"}: ${t.content}`)
+        .join("\n\n")
+      const convoBlock = transcript ? `Conversación hasta ahora:\n${transcript}\n\n---\n\n` : ""
       const finalPrompt = includeContext
-        ? `${buildSystemContext(files, activePath, activeFolder)}\n\n${modeInstruction}\n\n---\n\n${text}`
-        : `${modeInstruction}\n\n${text}`
+        ? `${buildSystemContext(files, activePath, activeFolder)}\n\n${modeInstruction}\n\n${convoBlock}Usuario: ${text}`
+        : `${modeInstruction}\n\n${convoBlock}Usuario: ${text}`
 
       // Accumulate the streamed answer locally so onDone can auto-apply the
       // generated files without reading it back out of a setState updater
@@ -417,6 +428,7 @@ export function AICodeChatPanel() {
       sessionId,
       setTurns,
       token,
+      turns,
       user,
     ],
   )
