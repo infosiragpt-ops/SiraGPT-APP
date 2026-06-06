@@ -170,6 +170,7 @@
     "@esbuild-kit/esm-loader": "npm:tsx@^4.21.0",
     "@langchain/langgraph-sdk": {
       "uuid": "^13.0.0"
-    }
+    },
+    "@opentelemetry/resource-detector-aws": "2.17.0"
   }
 }

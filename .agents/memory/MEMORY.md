@@ -19,6 +19,7 @@
 - [Reserved VM GCLB 30s timeout](reserved-vm-gclb-timeout.md) — GCLB hard ~30s total-response cut; heartbeats don't reset it (unlike Autoscale). For >30s work: persist-then-poll, don't keep request alive.
 - [Image gen vs edit providers](image-edit-provider-matrix.md) — editing (imagePath) only works on OpenAI/Gemini; OpenRouter is generation-only and must be rerouted, never hard-fail.
 - [Backend test CI wiring](backend-test-ci-wiring.md) — new backend tests only run in CI if added to package.json `test` string; /health routes live in injectable createHealthRoutes for supertest.
+- [npm firewall transient 404](npm-firewall-transient-404.md) — prod build 404s a transitive tarball (mirror lag, not 403 security block) while dev works; pin via overrides + regen lockfile, don't just retry.
 - [R2 binary offload](r2-binary-offload.md) — user binaries offloaded to R2 as `r2:<key>` refs (text stays in PG); piping R2 readStream to res REQUIRES stream.on('error') or it crashes the request.
 - [Task-tool manifest requirement](task-tool-manifest-required.md) — every LLM-callable tool in buildTaskTools needs a tool-manifest.js entry or both dispatch gates deny it as unknown_tool (only 'finalize' is exempt).
 - [R2 account-id mispaste](r2-account-id-misparse.md) — "ENOTFOUND https" = R2_ACCOUNT_ID holds full endpoint URL → set non-secret R2_ENDPOINT override; also test embed keys for validity (presence ≠ valid).
