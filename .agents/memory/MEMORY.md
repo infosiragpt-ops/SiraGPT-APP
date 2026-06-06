@@ -20,6 +20,7 @@
 - [Image gen vs edit providers](image-edit-provider-matrix.md) — editing (imagePath) only works on OpenAI/Gemini; OpenRouter is generation-only and must be rerouted, never hard-fail.
 - [Backend test CI wiring](backend-test-ci-wiring.md) — new backend tests only run in CI if added to package.json `test` string; /health routes live in injectable createHealthRoutes for supertest.
 - [R2 binary offload](r2-binary-offload.md) — user binaries offloaded to R2 as `r2:<key>` refs (text stays in PG); piping R2 readStream to res REQUIRES stream.on('error') or it crashes the request.
+- [Task-tool manifest requirement](task-tool-manifest-required.md) — every LLM-callable tool in buildTaskTools needs a tool-manifest.js entry or both dispatch gates deny it as unknown_tool (only 'finalize' is exempt).
 - [R2 account-id mispaste](r2-account-id-misparse.md) — "ENOTFOUND https" = R2_ACCOUNT_ID holds full endpoint URL → set non-secret R2_ENDPOINT override; also test embed keys for validity (presence ≠ valid).
 - [Reserved VM 8 GiB image limit](deploy-image-8gib-limit.md) — deploys reuse the workspace; gitignored/stray dirs bake into the image unless postbuild-slim prunes them. libreoffice+playwright are runtime-needed, don't cut them.
 - [Prisma renamed-migration P3009](prisma-renamed-migration-p3009.md) — renaming an applied migration re-runs its DDL → "already exists" → P3009 → backend never boots; fix with idempotent SQL + `migrate resolve --applied`, then republish.

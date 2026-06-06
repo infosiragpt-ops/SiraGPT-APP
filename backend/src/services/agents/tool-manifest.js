@@ -1917,6 +1917,36 @@ function getCoworkManifests() {
       scopes: ["files.read"],
       data_classes: ["internal", "confidential"],
     },
+    report_stage: {
+      name: "report_stage",
+      purpose: "Announce entry into one of the 5 professional-document-cycle stages so the UI can render visible per-stage progress (cycle_stage events).",
+      inputs: {
+        type: "object",
+        required: ["stage"],
+        properties: {
+          stage: { type: "string", enum: ["guide_review", "analysis", "research", "drafting", "finalize"], description: "Current cycle stage id." },
+          note: { type: "string", description: "Short Spanish description of what happens in this stage." },
+          status: { type: "string", enum: ["start", "done"], description: "start when entering, done when completing." },
+        },
+        additionalProperties: false,
+      },
+      outputs: { type: "object", properties: { ok: { type: "boolean" }, stage: { type: "string" }, status: { type: "string" }, label: { type: "string" } } },
+      allowed_formats: [],
+      forbidden_formats: ["docx", "xlsx", "pptx", "pdf"],
+      expected_errors: [
+        { code: "unknown_stage", description: "stage is not one of the 5 known cycle stages.", repair_hint: "Use one of: guide_review, analysis, research, drafting, finalize." },
+      ],
+      acceptance_tests: ["returns ok:true and emits a cycle_stage event for a valid stage"],
+      usage_limits: { timeout_ms_default: 1000, timeout_ms_max: 5000, max_calls_per_task: 30, requires_auth: false, requires_network: false },
+      examples_positive: [{ when: "entering the research stage of the cycle", call: { stage: "research", note: "Buscando fuentes académicas." } }],
+      examples_negative: [{ when: "the task is not a professional document cycle", why: "only call report_stage when the cycle contract instructs it." }],
+      recovery_policy: { on_timeout: "Return ok:false; progress reporting is best-effort.", on_error: "Surface the error; do not block the cycle.", max_retries: 0 },
+      side_effect_level: "none",
+      sandbox_required: false,
+      audit_policy: "off",
+      scopes: [],
+      data_classes: ["internal"],
+    },
   };
 }
 
