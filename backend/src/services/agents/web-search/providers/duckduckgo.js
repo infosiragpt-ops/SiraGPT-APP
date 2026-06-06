@@ -1,12 +1,14 @@
 /**
- * duckduckgo — Instant Answers JSON API. Free, no API key.
+ * duckduckgo — Instant Answers + HTML search. Free, no API key.
  *
  * Endpoint: https://api.duckduckgo.com/?q=…&format=json&no_html=1&no_redirect=1
  *
  * The IA API is intentionally sparse (it powers DDG's zero-click box),
- * so for a generic query you typically get an `AbstractText` + a list
- * of `RelatedTopics`. Each topic is `{ Text, FirstURL, Icon }`. We
- * normalise both shapes into `{ title, url, snippet, source }`.
+ * so for a generic query you often get no `AbstractText`. When that
+ * happens, fall back to DDG's lightweight HTML endpoint and parse the
+ * organic result blocks. This keeps SiraGPT key-less while making DDG
+ * useful for normal web-search prompts, not only encyclopedia-style
+ * instant answers.
  *
  * Some queries return nothing — that's not an error, just an empty
  * result set. The adapter treats `[]` as "try next provider", so we
@@ -15,10 +17,52 @@
 
 const fetch = require('node-fetch');
 
-const ENDPOINT = 'https://api.duckduckgo.com/';
+const INSTANT_ANSWER_ENDPOINT = 'https://api.duckduckgo.com/';
+const HTML_ENDPOINT = 'https://html.duckduckgo.com/html/';
 const USER_AGENT = 'SiraGPT-WebSearch/1.0 (+https://siragpt.com; contact: hello@siragpt.com)';
 
 async function search(query, { maxResults = 5, signal, locale } = {}) {
+  const limit = Math.max(1, Math.min(Number(maxResults) || 5, 15));
+  const out = await searchInstantAnswer(query, { maxResults: limit, signal, locale });
+  if (out.length >= limit) return uniqueResults(out, limit);
+
+  const htmlResults = await searchHtml(query, {
+    maxResults: limit - out.length,
+    signal,
+    locale,
+  });
+  return uniqueResults([...out, ...htmlResults], limit);
+}
+
+async function searchInstantAnswer(query, { maxResults = 5, signal, locale } = {}) {
+  const params = buildParams(query, locale);
+  const url = `${INSTANT_ANSWER_ENDPOINT}?${params.toString()}`;
+  const raw = await fetchText(url, { signal, accept: 'application/json' });
+  let body;
+  try { body = JSON.parse(raw); } catch (err) {
+    throw new Error('duckduckgo invalid json');
+  }
+  return parseInstantAnswer(body, maxResults);
+}
+
+async function searchHtml(query, { maxResults = 5, signal, locale } = {}) {
+  const params = buildParams(query, locale);
+  const url = `${HTML_ENDPOINT}?${params.toString()}`;
+  const html = await fetchText(url, { signal, accept: 'text/html' });
+  return parseHtmlResults(html, maxResults);
+}
+
+async function fetchText(url, { signal, accept }) {
+  const res = await fetch(url, {
+    method: 'GET',
+    headers: { 'User-Agent': USER_AGENT, Accept: accept || '*/*' },
+    signal,
+  });
+  if (!res.ok) throw new Error(`duckduckgo http ${res.status}`);
+  return res.text();
+}
+
+function buildParams(query, locale) {
   const params = new URLSearchParams({
     q: query,
     format: 'json',
@@ -29,23 +73,11 @@ async function search(query, { maxResults = 5, signal, locale } = {}) {
   if (locale && /^[a-z]{2}-[a-z]{2}$/i.test(locale)) {
     params.set('kl', locale.toLowerCase());
   }
-  const url = `${ENDPOINT}?${params.toString()}`;
+  return params;
+}
 
-  const res = await fetch(url, {
-    method: 'GET',
-    headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
-    signal,
-  });
-  if (!res.ok) throw new Error(`duckduckgo http ${res.status}`);
-  // DDG returns text/javascript despite `format=json`; force JSON parse.
-  const raw = await res.text();
-  let body;
-  try { body = JSON.parse(raw); } catch (err) {
-    throw new Error('duckduckgo invalid json');
-  }
-
+function parseInstantAnswer(body, maxResults = 5) {
   const out = [];
-
   if (body.AbstractText && body.AbstractURL) {
     out.push({
       title: body.Heading || body.AbstractSource || body.AbstractURL,
@@ -71,15 +103,7 @@ async function search(query, { maxResults = 5, signal, locale } = {}) {
     if (item) out.push(item);
   }
 
-  // De-duplicate by URL while preserving order.
-  const seen = new Set();
-  const unique = [];
-  for (const r of out) {
-    if (seen.has(r.url)) continue;
-    seen.add(r.url);
-    unique.push(r);
-  }
-  return unique.slice(0, maxResults);
+  return uniqueResults(out, maxResults);
 }
 
 function normaliseTopic(t) {
@@ -101,10 +125,98 @@ function normaliseTopic(t) {
   return { title, url, snippet: snippet.slice(0, 600), source: 'duckduckgo' };
 }
 
+function parseHtmlResults(html, maxResults = 5) {
+  const out = [];
+  const blocks = String(html || '').split(/<div[^>]+class=(?:"|')[^"']*\bresult\b[^"']*(?:"|')[^>]*>/i).slice(1);
+  for (const block of blocks) {
+    if (out.length >= maxResults) break;
+    const linkMatch = block.match(/<a[^>]+class=(?:"|')[^"']*\bresult__a\b[^"']*(?:"|')[^>]*href=(?:"|')([^"']+)(?:"|')[^>]*>([\s\S]*?)<\/a>/i)
+      || block.match(/<a[^>]+href=(?:"|')([^"']+)(?:"|')[^>]*class=(?:"|')[^"']*\bresult__a\b[^"']*(?:"|')[^>]*>([\s\S]*?)<\/a>/i);
+    if (!linkMatch) continue;
+    const url = unwrapDuckDuckGoUrl(decodeHtml(linkMatch[1]));
+    if (!url) continue;
+    const title = cleanHtmlText(linkMatch[2]);
+    if (!title) continue;
+    const snippetMatch = block.match(/<a[^>]+class=(?:"|')[^"']*\bresult__snippet\b[^"']*(?:"|')[^>]*>([\s\S]*?)<\/a>/i)
+      || block.match(/<div[^>]+class=(?:"|')[^"']*\bresult__snippet\b[^"']*(?:"|')[^>]*>([\s\S]*?)<\/div>/i);
+    const snippet = snippetMatch ? cleanHtmlText(snippetMatch[1]) : '';
+    out.push({
+      title: title.slice(0, 240),
+      url,
+      snippet: snippet.slice(0, 600),
+      source: 'duckduckgo',
+    });
+  }
+  return uniqueResults(out, maxResults);
+}
+
+function unwrapDuckDuckGoUrl(value) {
+  if (!value || typeof value !== 'string') return null;
+  let url = value.trim();
+  if (url.startsWith('//')) url = `https:${url}`;
+  if (url.startsWith('/')) url = `https://duckduckgo.com${url}`;
+  try {
+    const parsed = new URL(url);
+    const uddg = parsed.searchParams.get('uddg');
+    if (uddg) return safeHttpUrl(decodeURIComponent(uddg));
+    return safeHttpUrl(parsed.toString());
+  } catch (_) {
+    return null;
+  }
+}
+
+function safeHttpUrl(value) {
+  try {
+    const parsed = new URL(value);
+    if (!['http:', 'https:'].includes(parsed.protocol)) return null;
+    return parsed.toString();
+  } catch (_) {
+    return null;
+  }
+}
+
+function cleanHtmlText(value) {
+  return decodeHtml(String(value || '')
+    .replace(/<script\b[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style\b[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim());
+}
+
+function decodeHtml(value) {
+  return String(value || '')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10)));
+}
+
+function uniqueResults(results, maxResults = 5) {
+  const seen = new Set();
+  const unique = [];
+  for (const r of Array.isArray(results) ? results : []) {
+    if (!r?.url || seen.has(r.url)) continue;
+    seen.add(r.url);
+    unique.push(r);
+    if (unique.length >= maxResults) break;
+  }
+  return unique;
+}
+
 module.exports = {
   id: 'duckduckgo',
-  name: 'DuckDuckGo Instant Answers',
+  name: 'DuckDuckGo Web Search',
   priority: 10,
   enabled: true,
   search,
+  _internal: {
+    cleanHtmlText,
+    parseHtmlResults,
+    parseInstantAnswer,
+    unwrapDuckDuckGoUrl,
+  },
 };

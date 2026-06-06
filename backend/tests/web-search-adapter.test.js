@@ -17,6 +17,7 @@ const assert = require('node:assert/strict');
 const webSearch = require('../src/services/agents/web-search');
 const auditLog = require('../src/services/agents/audit-log');
 const agentTools = require('../src/services/agents/agent-tools');
+const duckduckgo = require('../src/services/agents/web-search/providers/duckduckgo');
 
 let auditCaptured = [];
 const originalAudit = auditLog.audit;
@@ -238,6 +239,43 @@ test('web_search tool returns structured JSON with normalised shape', async () =
 test('web_search tool rejects missing query with a structured error', async () => {
   const obs = await agentTools.web_search.handler({});
   assert.equal(obs.error, 'missing "query"');
+});
+
+test('DuckDuckGo provider parses instant-answer topics', () => {
+  const rows = duckduckgo._internal.parseInstantAnswer({
+    AbstractText: 'Privacy-focused search engine.',
+    AbstractURL: 'https://duckduckgo.com/about',
+    Heading: 'DuckDuckGo',
+    RelatedTopics: [
+      { Text: 'DuckDuckGo - Search engine', FirstURL: 'https://duckduckgo.com/' },
+    ],
+  }, 5);
+
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].title, 'DuckDuckGo');
+  assert.equal(rows[0].source, 'duckduckgo');
+  assert.equal(rows[1].url, 'https://duckduckgo.com/');
+});
+
+test('DuckDuckGo provider parses organic HTML results and unwraps redirect URLs', () => {
+  const html = `
+    <div class="result">
+      <a class="result__a" href="/l/?uddg=https%3A%2F%2Fexample.com%2Farticle%3Fx%3D1&amp;rut=abc">
+        Example <b>Article</b>
+      </a>
+      <a class="result__snippet">A useful &amp; current result.</a>
+    </div>
+    <div class="result">
+      <a class="result__a" href="javascript:alert(1)">Bad</a>
+    </div>
+  `;
+
+  const rows = duckduckgo._internal.parseHtmlResults(html, 5);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].title, 'Example Article');
+  assert.equal(rows[0].url, 'https://example.com/article?x=1');
+  assert.equal(rows[0].snippet, 'A useful & current result.');
+  assert.equal(rows[0].source, 'duckduckgo');
 });
 
 test('LRU evicts oldest beyond capacity', () => {

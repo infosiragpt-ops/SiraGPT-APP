@@ -146,6 +146,7 @@ async function searchFreshContext(query, opts = {}) {
 
 function listWebSearchProviders(env = process.env) {
   return {
+    duckduckgo: true,
     tavily: Boolean(env.TAVILY_API_KEY),
     exa: Boolean(env.EXA_API_KEY),
     firecrawl: Boolean(env.FIRECRAWL_API_KEY),

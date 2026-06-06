@@ -6,6 +6,7 @@ const crypto = require('node:crypto');
 
 const {
   exaSearch,
+  listWebSearchProviders,
   needsFreshWebContext,
   searchFreshContext,
   tavilySearch,
@@ -38,6 +39,15 @@ test('tavilySearch fails gracefully on network errors', async () => {
 test('exaSearch returns empty when not configured', async () => {
   const result = await exaSearch('test query', { env: {} });
   assert.deepEqual(result, { provider: 'exa', configured: false, results: [] });
+});
+
+test('listWebSearchProviders exposes DuckDuckGo as key-less fallback', () => {
+  const providers = listWebSearchProviders({});
+  assert.equal(providers.duckduckgo, true);
+  assert.equal(providers.tavily, false);
+  assert.equal(providers.exa, false);
+  assert.equal(providers.firecrawl, false);
+  assert.equal(providers.searxng, false);
 });
 
 test('exaSearch fails gracefully on network errors', async () => {
