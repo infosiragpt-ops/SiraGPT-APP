@@ -186,7 +186,130 @@ function buildPieChartSvg({ data, title, width, height, theme, donut = false }) 
   return parts.join('');
 }
 
-// Public: build a chart SVG string for the given spec.
+// Label-oriented normalizer for diagrams where array items are labels (not
+// numeric values like in charts).
+function normalizeLabels(data) {
+  if (!data) return [];
+  if (Array.isArray(data)) {
+    return data.map((item, index) => {
+      if (item && typeof item === 'object') return String(item.label ?? item.name ?? item.text ?? `Paso ${index + 1}`);
+      return String(item);
+    }).filter((label) => label.trim());
+  }
+  if (data && typeof data === 'object' && Array.isArray(data.labels)) return data.labels.map(String);
+  return [];
+}
+
+function buildProcessFlowSvg({ data, title, width, height, theme }) {
+  const steps = normalizeLabels(data);
+  const parts = [svgHeader(width, height, theme), svgTitle(title, width, theme)];
+  const top = title ? 70 : 36;
+  const gap = 22;
+  const boxH = Math.min(90, height - top - 40);
+  const boxW = Math.max(60, (width - 48 - gap * Math.max(0, steps.length - 1)) / Math.max(1, steps.length));
+  const y = top + (height - top - 40 - boxH) / 2;
+  steps.forEach((label, index) => {
+    const x = 24 + index * (boxW + gap);
+    const color = theme.palette[index % theme.palette.length];
+    parts.push(`<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${boxW.toFixed(1)}" height="${boxH.toFixed(1)}" rx="10" fill="${color}" opacity="0.92"/>`);
+    parts.push(`<text x="${(x + boxW / 2).toFixed(1)}" y="${(y + boxH / 2 + 4).toFixed(1)}" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">${xmlEscape(label.slice(0, 22))}</text>`);
+    if (index < steps.length - 1) {
+      const ax = x + boxW;
+      const ay = y + boxH / 2;
+      parts.push(`<path d="M ${ax.toFixed(1)} ${ay.toFixed(1)} l ${gap.toFixed(1)} 0" stroke="${theme.axis}" stroke-width="2.5" marker-end="url(#arrow)"/>`);
+    }
+  });
+  parts.push(`<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="${theme.axis}"/></marker></defs>`);
+  parts.push('</svg>');
+  return parts.join('');
+}
+
+function buildTimelineSvg({ data, title, width, height, theme }) {
+  const items = (Array.isArray(data) ? data : normalizeData(data)).map((item, index) => {
+    if (item && typeof item === 'object') return { label: String(item.label ?? item.name ?? `Hito ${index + 1}`), sub: String(item.date ?? item.sub ?? item.value ?? '') };
+    return { label: String(item), sub: '' };
+  });
+  const parts = [svgHeader(width, height, theme), svgTitle(title, width, theme)];
+  const axisY = (title ? 70 : 40) + (height - (title ? 70 : 40)) / 2;
+  const padX = 40;
+  parts.push(`<line x1="${padX}" y1="${axisY}" x2="${width - padX}" y2="${axisY}" stroke="${theme.axis}" stroke-width="2.5"/>`);
+  const step = (width - padX * 2) / Math.max(1, items.length - 1 || 1);
+  items.forEach((item, index) => {
+    const x = items.length === 1 ? width / 2 : padX + step * index;
+    const color = theme.palette[index % theme.palette.length];
+    const above = index % 2 === 0;
+    parts.push(`<circle cx="${x.toFixed(1)}" cy="${axisY}" r="7" fill="${color}" stroke="#ffffff" stroke-width="2"/>`);
+    const labelY = above ? axisY - 22 : axisY + 34;
+    const subY = above ? axisY - 38 : axisY + 50;
+    if (item.sub) parts.push(`<text x="${x.toFixed(1)}" y="${subY.toFixed(1)}" text-anchor="middle" font-size="11" font-weight="700" fill="${color}">${xmlEscape(item.sub.slice(0, 16))}</text>`);
+    parts.push(`<text x="${x.toFixed(1)}" y="${labelY.toFixed(1)}" text-anchor="middle" font-size="11" fill="${theme.text}">${xmlEscape(item.label.slice(0, 18))}</text>`);
+  });
+  parts.push('</svg>');
+  return parts.join('');
+}
+
+function normalizeTree(spec) {
+  if (spec.tree && typeof spec.tree === 'object') return spec.tree;
+  const data = spec.data;
+  if (Array.isArray(data)) {
+    return { label: spec.title || 'Organización', children: data.map((item) => (item && typeof item === 'object' ? item : { label: String(item) })) };
+  }
+  if (data && typeof data === 'object' && (data.label || data.children)) return data;
+  return { label: spec.title || 'Organización', children: [] };
+}
+
+function buildOrganigramSvg({ spec, title, width, height, theme }) {
+  const root = normalizeTree(spec);
+  const boxW = 150;
+  const boxH = 46;
+  const hGap = 20;
+  const vGap = 56;
+  let leaf = 0;
+  let maxDepth = 0;
+  const nodes = [];
+  const edges = [];
+  (function assign(node, depth, parent) {
+    maxDepth = Math.max(maxDepth, depth);
+    const children = Array.isArray(node.children) ? node.children : [];
+    if (!children.length) {
+      node._x = leaf * (boxW + hGap);
+      leaf += 1;
+    } else {
+      children.forEach((child) => assign(child, depth + 1, node));
+      node._x = (children[0]._x + children[children.length - 1]._x) / 2;
+    }
+    node._y = depth * (boxH + vGap);
+    nodes.push({ node, depth });
+    if (parent) edges.push([parent, node]);
+  }(root, 0, null));
+
+  const contentW = Math.max(boxW, leaf * (boxW + hGap) - hGap);
+  const offsetX = (width - contentW) / 2;
+  const top = title ? 60 : 24;
+  const parts = [svgHeader(width, height, theme), svgTitle(title, width, theme)];
+  const cx = (node) => offsetX + node._x + boxW / 2;
+  const cyTop = (node) => top + node._y;
+
+  edges.forEach(([parent, child]) => {
+    const x1 = cx(parent);
+    const y1 = top + parent._y + boxH;
+    const x2 = cx(child);
+    const y2 = top + child._y;
+    const midY = (y1 + y2) / 2;
+    parts.push(`<path d="M ${x1.toFixed(1)} ${y1.toFixed(1)} L ${x1.toFixed(1)} ${midY.toFixed(1)} L ${x2.toFixed(1)} ${midY.toFixed(1)} L ${x2.toFixed(1)} ${y2.toFixed(1)}" fill="none" stroke="${theme.axis}" stroke-width="1.5"/>`);
+  });
+  nodes.forEach(({ node, depth }) => {
+    const x = offsetX + node._x;
+    const y = cyTop(node);
+    const color = theme.palette[depth % theme.palette.length];
+    parts.push(`<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${boxW}" height="${boxH}" rx="8" fill="${color}"/>`);
+    parts.push(`<text x="${(x + boxW / 2).toFixed(1)}" y="${(y + boxH / 2 + 4).toFixed(1)}" text-anchor="middle" font-size="12" font-weight="600" fill="#ffffff">${xmlEscape(String(node.label || '').slice(0, 20))}</text>`);
+  });
+  parts.push('</svg>');
+  return parts.join('');
+}
+
+// Public: build a chart/diagram SVG string for the given spec.
 function buildChartSvg(spec = {}) {
   const width = Math.max(200, Math.min(1200, toNumber(spec.width, 640)));
   const height = Math.max(160, Math.min(900, toNumber(spec.height, 400)));
@@ -198,6 +321,9 @@ function buildChartSvg(spec = {}) {
   if (type === 'donut') return buildPieChartSvg({ ...params, donut: true });
   if (type === 'line') return buildLineChartSvg(params);
   if (type === 'hbar' || type === 'horizontal-bar') return buildBarChartSvg({ ...params, horizontal: true });
+  if (type === 'process' || type === 'flow' || type === 'flujo') return buildProcessFlowSvg(params);
+  if (type === 'timeline' || type === 'linea-de-tiempo' || type === 'cronologia') return buildTimelineSvg(params);
+  if (type === 'organigram' || type === 'organigrama' || type === 'orgchart' || type === 'org') return buildOrganigramSvg({ spec, title, width, height, theme });
   return buildBarChartSvg(params);
 }
 

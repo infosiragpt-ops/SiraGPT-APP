@@ -68,6 +68,40 @@ describe('document-visual-embed — chart SVG generation', () => {
   });
 });
 
+describe('document-visual-embed — diagrams (process / timeline / organigram)', () => {
+  it('builds a process flow with arrows between steps', () => {
+    const svg = buildChartSvg({ type: 'process', title: 'Flujo metodológico', data: ['Diagnóstico', 'Diseño', 'Aplicación', 'Resultados'] });
+    assert.match(svg, /Diagnóstico/);
+    assert.match(svg, /marker-end="url\(#arrow\)"/);
+    assert.match(svg, /<marker /);
+  });
+
+  it('builds a timeline with milestones and dates', () => {
+    const svg = buildChartSvg({ type: 'timeline', title: 'Cronología', data: [{ label: 'Inicio', date: 'Sem 1' }, { label: 'Cierre', date: 'Sem 16' }] });
+    assert.match(svg, /Inicio/);
+    assert.match(svg, /Sem 16/);
+    assert.match(svg, /<circle /);
+  });
+
+  it('builds an organigram from a nested tree and connects parents to children', () => {
+    const svg = buildChartSvg({
+      type: 'organigram',
+      title: 'Estructura',
+      tree: { label: 'Dirección', children: [{ label: 'Operaciones', children: [{ label: 'Logística' }] }, { label: 'Finanzas' }] },
+    });
+    assert.match(svg, /Dirección/);
+    assert.match(svg, /Logística/);
+    assert.match(svg, /Finanzas/);
+    assert.match(svg, /<path /); // connectors
+  });
+
+  it('escapes hostile labels in diagrams', () => {
+    const svg = buildChartSvg({ type: 'process', data: ['<img src=x onerror=1>'] });
+    assert.doesNotMatch(svg, /<img src=x/);
+    assert.match(svg, /&lt;img/);
+  });
+});
+
 describe('document-visual-embed — DOCX image embedding', () => {
   it('embeds a PNG as an inline drawing, preserving the original document', async () => {
     const docx = await makeDocxBuffer();
