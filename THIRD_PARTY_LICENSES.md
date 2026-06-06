@@ -141,7 +141,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@opentelemetry/propagator-jaeger` | 2.7.1 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js) |
 | `@opentelemetry/redis-common` | 0.38.3 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js-contrib) |
 | `@opentelemetry/resource-detector-alibaba-cloud` | 0.33.8 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js-contrib) |
-| `@opentelemetry/resource-detector-aws` | 2.18.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js-contrib) |
+| `@opentelemetry/resource-detector-aws` | 2.17.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js-contrib) |
 | `@opentelemetry/resource-detector-azure` | 0.26.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js-contrib) |
 | `@opentelemetry/resource-detector-container` | 0.8.9 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js-contrib) |
 | `@opentelemetry/resource-detector-gcp` | 0.53.0 | Apache-2.0 | [link](https://github.com/open-telemetry/opentelemetry-js-contrib) |
