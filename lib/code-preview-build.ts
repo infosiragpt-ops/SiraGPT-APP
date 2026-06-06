@@ -206,7 +206,12 @@ ${workspaceCss}
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <script src="https://unpkg.com/lodash/lodash.min.js"></script>
-<script src="https://unpkg.com/recharts/umd/Recharts.min.js"></script>
+<!-- Recharts UMD depends on React + PropTypes globals; load prop-types first.
+     The pinned recharts@2 umd path is required — the bare /recharts/umd/Recharts.min.js
+     path 404s on current unpkg, which left window.Recharts undefined and crashed
+     any chart preview. -->
+<script src="https://unpkg.com/prop-types@15/prop-types.min.js"></script>
+<script src="https://unpkg.com/recharts@2/umd/Recharts.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
 <script src="https://unpkg.com/lucide@latest"></script>
 <script src="https://unpkg.com/framer-motion@11/dist/framer-motion.js"></script>

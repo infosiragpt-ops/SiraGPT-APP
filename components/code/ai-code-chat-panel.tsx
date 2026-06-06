@@ -94,6 +94,7 @@ const COMPOSER_MODE_INSTRUCTION: Record<ComposerMode, string> = {
     "   • Copy REAL y específico usando el nombre de marca y las respuestas del intake — NADA de lorem ipsum ni placeholders genéricos.\n" +
     "   • Estructura completa de landing: nav sticky con logo + enlaces, hero impactante (título grande, subtítulo, CTA), 2-4 secciones (features / colecciones / about / testimonios según el caso), CTA final y footer.\n" +
     "   • Paleta cohesiva derivada del estilo pedido, responsive (móvil + desktop), accesible (contraste, alt, aria) y con detalles de pulido (espaciado generoso, jerarquía tipográfica, hover states). Puedes usar JS vanilla mínimo para interactividad; nada de frameworks vía npm.\n" +
+    "   • Para una LANDING entrega TODO en un único `index.html` con HTML + CSS (Tailwind CDN está OK) + JS vanilla mínimo. NO uses React/JSX, y NO uses librerías de gráficos (Recharts, d3, Chart.js) — una landing no las necesita y rompen el preview. Reserva React solo si el usuario pide explícitamente una app interactiva con estado.\n" +
     "   • Entrega el archivo como UN bloque aplicable con ruta `index.html` (formato ```html index.html con la primera línea `// path: index.html`).\n" +
     "3) Cierra con 1-3 siguientes pasos sugeridos para iterar (ej. 'añade sección de precios', 'conecta un formulario', 'modo claro/oscuro').",
   build:
