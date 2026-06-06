@@ -2885,6 +2885,24 @@ function sectionExistsInDoc(documentXml, target) {
   return paragraphs.some((paragraph) => matchesTargetHeading(paragraph.normalized, target));
 }
 
+let _documentVisualEmbedModule;
+function documentVisualEmbedModule() {
+  if (_documentVisualEmbedModule === undefined) {
+    try {
+      // eslint-disable-next-line global-require
+      _documentVisualEmbedModule = require('./document-visual-embed');
+    } catch {
+      _documentVisualEmbedModule = null;
+    }
+  }
+  return _documentVisualEmbedModule;
+}
+
+function clauseWantsVisual(clauseNorm) {
+  const mod = documentVisualEmbedModule();
+  return Boolean(mod && mod.detectVisualRequest(clauseNorm).wantsVisual);
+}
+
 function buildOperationFromClause(clauseNorm, documentXml) {
   const target = parseTargetSectionRequest(clauseNorm);
   const wantsInstrument = clauseWantsInstrument(clauseNorm);
@@ -2914,6 +2932,9 @@ function buildOperationFromClause(clauseNorm, documentXml) {
     if (fill) return { kind: 'fill_section', target, wantsInstrument };
     return { kind: 'append_labeled', target, wantsInstrument };
   }
+  // A chart/diagram request (no explicit section) → embed a visual instead of a
+  // generic text appendix.
+  if (clauseWantsVisual(clauseNorm)) return { kind: 'insert_visual' };
   if (append || wantsInstrument) return { kind: 'append_generic', wantsInstrument };
   if (fill) return null;
   return null;
@@ -3290,6 +3311,27 @@ function runReplaceTextOperation({ buffer, op }) {
   };
 }
 
+// Design layer: render a chart/diagram from the request + document context and
+// embed it. A visual failure must never break the document edit.
+async function runInsertVisualOperation({ buffer, requestText, sourceText, signal }) {
+  const mod = documentVisualEmbedModule();
+  if (!mod) return { buffer, validationBlocks: [], step: { kind: 'insert_visual', label: 'gráfico', mode: 'unavailable' } };
+  try {
+    const visual = await mod.addVisualFromRequest(buffer, { requestText, sourceText, signal });
+    if (visual.added) {
+      const caption = String(visual.spec?.title || '').trim();
+      return {
+        buffer: visual.buffer,
+        validationBlocks: caption ? [block('normal', caption)] : [],
+        step: { kind: 'insert_visual', label: `gráfico ${visual.spec?.type || ''}`.trim() },
+      };
+    }
+    return { buffer, validationBlocks: [], step: { kind: 'insert_visual', label: 'gráfico', mode: visual.reason || 'skipped' } };
+  } catch {
+    return { buffer, validationBlocks: [], step: { kind: 'insert_visual', label: 'gráfico', mode: 'error' } };
+  }
+}
+
 async function executeDocxOperations({ input, ops, requestText, sourceText, allSourceFiles, sourceFile, referenceFiles = [], signal }) {
   let buffer = input;
   const steps = [];
@@ -3300,6 +3342,8 @@ async function executeDocxOperations({ input, ops, requestText, sourceText, allS
       result = await runFillSectionOperation({ buffer, op, requestText, sourceText, allSourceFiles, sourceFile, signal });
     } else if (op.kind === 'append_labeled') {
       result = await runAppendLabeledOperation({ buffer, op, requestText, sourceText, allSourceFiles, sourceFile, signal });
+    } else if (op.kind === 'insert_visual') {
+      result = await runInsertVisualOperation({ buffer, requestText, sourceText, signal });
     } else if (op.kind === 'integrate_references') {
       result = await runIntegrateReferencesOperation({ buffer, requestText, sourceText, allSourceFiles, sourceFile, referenceFiles, signal });
     } else if (op.kind === 'fill_cover') {
@@ -3431,6 +3475,8 @@ function describeStep(step) {
   if (step.kind === 'append_labeled') return `agregué ${step.label}`;
   if (step.kind === 'append_generic' && step.mode === 'instrument') return 'agregué un anexo con el instrumento de recolección de datos';
   if (step.kind === 'integrate_references') return `integré ${step.references || 0} documento(s) de soporte al documento principal`;
+  if (step.kind === 'insert_visual' && !step.mode) return `inserté un ${step.label || 'gráfico'} en el documento`;
+  if (step.kind === 'insert_visual') return 'intenté insertar un gráfico, pero no había datos suficientes';
   if (step.kind === 'fill_cover') return 'completé la portada con los datos disponibles del documento';
   if (step.kind === 'delete_text') return `eliminé el texto específico solicitado (${step.removedCount || 0} coincidencia(s))`;
   if (step.kind === 'replace_text') return `reemplacé el texto específico solicitado (${step.changedCount || 0} coincidencia(s))`;
