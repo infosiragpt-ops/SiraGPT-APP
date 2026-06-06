@@ -1,5 +1,6 @@
 { pkgs }: {
   deps = [
+    pkgs.libreoffice
     pkgs.pandoc
     # Node 22: @capacitor/cli@8 requires >=22 (Node 20 triggered EBADENGINE
     # warnings during deploy). Kept in sync with `modules = ["nodejs-22"]`.
