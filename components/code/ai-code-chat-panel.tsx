@@ -87,10 +87,15 @@ const COMPOSER_PLACEHOLDER: Record<ComposerMode, string> = {
 
 const COMPOSER_MODE_INSTRUCTION: Record<ComposerMode, string> = {
   app:
-    "Modo App (construir desde cero, estilo Replit/Lovable): tu meta es entregar una app completa y funcional que corra en el PREVIEW EN VIVO.\n" +
-    "1) Si todavía NO tienes contexto suficiente, primero HAZ PREGUNTAS breves (máximo 5, en una sola tanda, con opciones cuando ayude) para definir: tipo de app (web / móvil / desktop), propósito, funcionalidades clave, datos o entidades, estilo visual y audiencia. En ese caso NO generes código aún — termina pidiendo las respuestas y espera.\n" +
-    "2) Cuando ya tengas el contexto (o el usuario diga 'genera ya' / 'hazlo'), construye el proyecto COMPLETO como bloques aplicables con ruta, EMPEZANDO SIEMPRE por un index.html autocontenido y ejecutable sin npm ni build, para que el preview muestre algo de inmediato; añade styles.css / app.js o un componente App de React por defecto según convenga.\n" +
-    "3) Cierra con 1-3 siguientes pasos sugeridos para iterar (ej. 'añade login', 'conecta pagos').",
+    "Modo App (construir desde cero, estilo Replit/Lovable): tu meta es entregar una landing/app COMPLETA y VISTOSA que corra en el PREVIEW EN VIVO al instante.\n" +
+    "1) INTAKE — si todavía NO tienes contexto suficiente, primero HAZ PREGUNTAS breves (máximo 4, en una sola tanda, con opciones cuando ayude) para definir: tipo (landing / web app), propósito y NOMBRE de marca o negocio (si no hay, propón uno), estilo visual (ej. minimalista, oscuro, corporativo, streetwear) y secciones/contenido clave. NO generes código aún — termina pidiendo las respuestas y espera. Si el usuario dice 'genera ya' / 'hazlo' / da suficiente contexto, salta a generar.\n" +
+    "2) GENERAR — produce UN solo archivo `index.html` AUTOCONTENIDO y ejecutable SIN npm ni build (el preview lo renderiza con scripts permitidos). Requisitos de calidad (apunta a nivel agencia, NO a un mockup pobre):\n" +
+    "   • Carga Tailwind por CDN (<script src=\"https://cdn.tailwindcss.com\"></script>) y una tipografía de Google Fonts acorde al estilo.\n" +
+    "   • Copy REAL y específico usando el nombre de marca y las respuestas del intake — NADA de lorem ipsum ni placeholders genéricos.\n" +
+    "   • Estructura completa de landing: nav sticky con logo + enlaces, hero impactante (título grande, subtítulo, CTA), 2-4 secciones (features / colecciones / about / testimonios según el caso), CTA final y footer.\n" +
+    "   • Paleta cohesiva derivada del estilo pedido, responsive (móvil + desktop), accesible (contraste, alt, aria) y con detalles de pulido (espaciado generoso, jerarquía tipográfica, hover states). Puedes usar JS vanilla mínimo para interactividad; nada de frameworks vía npm.\n" +
+    "   • Entrega el archivo como UN bloque aplicable con ruta `index.html` (formato ```html index.html con la primera línea `// path: index.html`).\n" +
+    "3) Cierra con 1-3 siguientes pasos sugeridos para iterar (ej. 'añade sección de precios', 'conecta un formulario', 'modo claro/oscuro').",
   build:
     "Modo Build: implementa cambios de código concretos. Si creas o modificas archivos, entrega bloques aplicables con ruta.",
   plan:
@@ -314,6 +319,11 @@ export function AICodeChatPanel() {
         ? `${buildSystemContext(files, activePath, activeFolder)}\n\n${modeInstruction}\n\n---\n\n${text}`
         : `${modeInstruction}\n\n${text}`
 
+      // Accumulate the streamed answer locally so onDone can auto-apply the
+      // generated files without reading it back out of a setState updater
+      // (updaters must stay pure — applyBlock is a side effect).
+      let assistantText = ""
+
       try {
         await apiClient.generateAIStream(
           {
@@ -323,6 +333,7 @@ export function AICodeChatPanel() {
             streamId: id,
           },
           (chunk) => {
+            assistantText += chunk
             setTurns((prev) =>
               prev.map((t) =>
                 t.id === assistantId ? { ...t, content: t.content + chunk } : t,
@@ -337,6 +348,31 @@ export function AICodeChatPanel() {
             )
             setBusy(false)
             abortRef.current = null
+            // App mode = Replit-style "presented output": auto-apply the
+            // generated files and open the live preview so the user sees the
+            // result immediately, like the screenshot. Other modes keep the
+            // manual "Aplicar" button (review-before-write).
+            if (composerMode === "app") {
+              try {
+                const blocks = parseCodeBlocks(assistantText).filter((b) => b.path)
+                if (blocks.length > 0) {
+                  for (const b of blocks) applyBlock(b.path, b.content)
+                  const hasHtml = blocks.some((b) => /\.html?$/i.test(b.path || ""))
+                  toast.success(
+                    hasHtml
+                      ? "App generada — revisa el preview en vivo →"
+                      : `Generados ${blocks.length} archivo(s) — abriendo preview`,
+                  )
+                  // applyBlock already emits "siragpt:code-open-preview"; make
+                  // sure the preview pane is shown even if it was collapsed.
+                  if (typeof window !== "undefined") {
+                    window.dispatchEvent(new CustomEvent("siragpt:code-open-preview"))
+                  }
+                }
+              } catch {
+                /* parsing/apply failure → user can still apply manually */
+              }
+            }
           },
           (err) => {
             const msg = err?.message || "Error en el chat de código"
@@ -365,6 +401,7 @@ export function AICodeChatPanel() {
     [
       activePath,
       activeFolder,
+      applyBlock,
       busy,
       composerMode,
       files,
