@@ -148,6 +148,18 @@ test('shouldUseAgenticChat routes visual + document create requests through the 
   assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿cuál es la capital de Francia?' }), false);
 });
 
+test('shouldUseAgenticChat auto-routes freshness / live-data questions to web search', () => {
+  // Core fix: questions that need real-time / fresh info must reach the
+  // agentic loop (which owns web_search) even without an explicit search verb.
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿Quién ganó las elecciones en Perú este año?' }), true);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿Cuál es el precio actual del bitcoin?' }), true);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'dame el clima de hoy en Lima' }), true);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿Qué pasó con OpenAI esta semana?' }), true);
+  // Creative writing and pure math must stay on the cheaper plain path.
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'escríbeme un poema sobre el mar' }), false);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿cuánto es 2+2?' }), false);
+});
+
 test('serializeSentinel produces a fenced agent-task-state block', () => {
   const { serializeSentinel, freshState } = agenticStream._internal;
   const out = serializeSentinel(freshState());

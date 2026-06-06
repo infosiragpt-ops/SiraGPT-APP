@@ -243,6 +243,17 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
   if (/^\s*\/(goal|plan)\b/i.test(text)) return true;
   if (isCognitionUpgradeRequest(text)) return true;
   if (AGENTIC_PROMPT_HINT.test(text)) return true;
+  // Auto web-search routing: send freshness / live-data / factual-lookup
+  // questions into the agentic loop (which owns web_search) even when the
+  // user uses no explicit search verb. This is what lets the assistant
+  // decide on its own that it must search the internet to answer.
+  try {
+    const { detectWebSearchIntent } = require('./web-search-intent');
+    // Lean aggressive (threshold 0.30 vs the 0.35 default) so borderline
+    // freshness/factual questions still reach the loop; NEGATIVE_PATTERNS
+    // still suppress creative-writing and pure-math prompts.
+    if (detectWebSearchIntent(text, { threshold: 0.30 }).needsWebSearch) return true;
+  } catch (_) { /* detector is best-effort, never block chat */ }
   // Bilingual create/transform detector — routes "genera una imagen",
   // "hazme un organigrama", "create a chart", "diseña una presentación",
   // etc. into the agentic runtime so the artifact tools actually fire.
@@ -365,9 +376,22 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
     // specs (duration, aspect ratio, count, style/genre) and lets us inject a
     // directive so the agent reliably calls the matching tool with them.
     const mediaIntent = detectMediaIntent(userQuery);
-    const initialToolChoice = mediaIntent?.tool && mediaIntent.confidence === 'high' && availableToolNames.has(mediaIntent.tool)
+    let initialToolChoice = mediaIntent?.tool && mediaIntent.confidence === 'high' && availableToolNames.has(mediaIntent.tool)
       ? mediaIntent.tool
       : null;
+    // Aggressive auto-search: when the question clearly needs fresh/live/factual
+    // web data and no media tool was force-selected, force the FIRST step to be
+    // a web_search so the model cannot answer "no tengo información" from stale
+    // memory. The model still controls every step after the first.
+    if (!initialToolChoice && availableToolNames.has('web_search')) {
+      try {
+        const { detectWebSearchIntent } = require('./web-search-intent');
+        const wsi = detectWebSearchIntent(userQuery);
+        if (wsi.needsWebSearch && wsi.confidence >= 0.5) {
+          initialToolChoice = 'web_search';
+        }
+      } catch (_) { /* best-effort; fall back to model-driven tool choice */ }
+    }
     const executionProfile = buildChatFinalizeProfile({
       userQuery,
       fileIds: Array.isArray(toolContext.fileIds) ? toolContext.fileIds : [],
@@ -456,7 +480,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [] } = {}) {
       '  6. Usa `check_ci_status` o `monitor_ci` para verificar GitHub Actions hasta verde; si CI falla, informa el fallo exacto y no afirmes que quedó en verde.',
       'Usa `memory_recall` cuando el pedido dependa de preferencias o contexto persistente del usuario.',
       'Usa `rag_retrieve`, `self_rag_answer` o `docintel_*` cuando el usuario mencione archivos, documentos, PDFs, tablas o conocimiento privado.',
-      'Cuando la pregunta requiera información reciente, hechos verificables o cifras concretas, usa `web_search` y luego `read_url` sobre las mejores fuentes. Cita esas fuentes con enlaces markdown.',
+      'Si la respuesta depende de hechos que pueden haber cambiado, datos en tiempo real, cifras, fechas, precios, noticias, o de cualquier cosa que no sepas con certeza absoluta, DEBES usar `web_search` (y luego `read_url` sobre las mejores fuentes) ANTES de responder. Nunca respondas "no tengo información", "no tengo acceso a internet" o "mis datos llegan hasta cierta fecha" sin haber ejecutado primero `web_search`. Cita las fuentes con enlaces markdown.',
       'Para calculos, transformaciones de datos o verificacion deterministica, usa `python_exec`. Cuando generes codigo no trivial, usa `run_tests` antes de finalizar.',
       'Cuando el usuario pida un archivo descargable, usa `create_document` y despues `verify_artifact`; no finalices si la verificacion muestra un archivo vacio o incorrecto.',
       'Cuando el usuario pida editar su Word/Excel/PPT/PDF subido, trata el archivo original como solo lectura: crea una nueva copia en el mismo formato, conserva estructura/logos/tablas/formulas/hojas/encabezados/diseño tanto como sea posible, y modifica solo lo solicitado.',
