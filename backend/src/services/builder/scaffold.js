@@ -12,6 +12,7 @@
 const { ProjectBriefSchema } = require('./contracts');
 const { planFromBrief } = require('./blueprint');
 const { buildPreviewHtml } = require('./preview');
+const { buildLiveApp } = require('./live-app');
 const { codegenFromBrief } = require('./codegen');
 
 // Blueprint field type → Prisma scalar.
@@ -142,6 +143,10 @@ function scaffoldFromBrief(rawBrief) {
   const blueprint = planFromBrief(brief);
 
   const files = [
+    // index.html is a *runnable* single-file app (React via CDN + localStorage
+    // CRUD) so the workspace live preview renders a working app immediately —
+    // index.html is the preview engine's preferred entry.
+    { path: 'index.html', language: 'html', content: buildLiveApp(brief, blueprint) },
     { path: 'preview.html', language: 'html', content: buildPreviewHtml(brief) },
     { path: 'README.md', language: 'markdown', content: buildReadme(brief, blueprint) },
     { path: '.env.example', language: 'dotenv', content: buildEnvExample(brief, blueprint) },

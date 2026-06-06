@@ -58,8 +58,18 @@ import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { useChat } from "@/lib/chat-context-integrated"
 import { useCodeWorkspace } from "@/lib/code-workspace-context"
+import { intakeService } from "@/lib/builder/intake-service"
 import type { CodeChatTurn } from "@/lib/code-chat-sessions"
 import { computeLineDiff, parseCodeBlocks, type CodeBlock } from "@/lib/code-workspace-utils"
+import { defaultAgentState } from "@/lib/code-agent/types"
+import {
+  classifyBuildError,
+  mergeOverridesIntoPackageJson,
+  nextAgentAction,
+  renderFiveSections,
+} from "@/lib/code-agent/orchestrator"
+import { landingSystemPrompt, sreSystemPrompt } from "@/lib/code-agent/prompts"
+import { isSlowModel, recommendFastModel } from "@/lib/code-agent/model-policy"
 
 import { DiffView } from "./diff-view"
 
@@ -87,10 +97,16 @@ const COMPOSER_PLACEHOLDER: Record<ComposerMode, string> = {
 
 const COMPOSER_MODE_INSTRUCTION: Record<ComposerMode, string> = {
   app:
-    "Modo App (construir desde cero, estilo Replit/Lovable): tu meta es entregar una app completa y funcional que corra en el PREVIEW EN VIVO.\n" +
-    "1) Si todavía NO tienes contexto suficiente, primero HAZ PREGUNTAS breves (máximo 5, en una sola tanda, con opciones cuando ayude) para definir: tipo de app (web / móvil / desktop), propósito, funcionalidades clave, datos o entidades, estilo visual y audiencia. En ese caso NO generes código aún — termina pidiendo las respuestas y espera.\n" +
-    "2) Cuando ya tengas el contexto (o el usuario diga 'genera ya' / 'hazlo'), construye el proyecto COMPLETO como bloques aplicables con ruta, EMPEZANDO SIEMPRE por un index.html autocontenido y ejecutable sin npm ni build, para que el preview muestre algo de inmediato; añade styles.css / app.js o un componente App de React por defecto según convenga.\n" +
-    "3) Cierra con 1-3 siguientes pasos sugeridos para iterar (ej. 'añade login', 'conecta pagos').",
+    "Modo App (construir desde cero, estilo Replit/Lovable): tu meta es entregar una landing/app COMPLETA y VISTOSA que corra en el PREVIEW EN VIVO al instante.\n" +
+    "1) INTAKE OBLIGATORIO (como un product manager) — Si el usuario pide construir algo desde cero (p.ej. 'créame un landing', 'hazme una app', 'crea una web') y NO incluyó ya todos los detalles, tu PRIMERA respuesta DEBE ser ÚNICAMENTE preguntas para entender el contexto. NUNCA generes código en esa primera respuesta. Haz una tanda breve (3-5 preguntas, con opciones cuando ayude), por ejemplo: '¿Qué tipo de producto o servicio vas a ofrecer?', '¿Tienes nombre de marca/negocio o quieres que proponga uno?', '¿Qué estilo visual prefieres (minimalista, oscuro, streetwear, corporativo, colorido…)?', '¿Qué secciones quieres (hero, colecciones/productos, sobre nosotros, testimonios, contacto…)?', '¿Algún color o referencia que te guste?'. Termina pidiendo las respuestas y espera.\n" +
+    "   REGLA DE GENERACIÓN: SOLO cuando el usuario ya respondió ese contexto (su segunda respuesta en adelante) o dice explícitamente 'genera'/'hazlo'/'dale', construye el proyecto COMPLETO, asumiendo defaults sensatos para lo que falte. A partir de ahí NUNCA vuelvas a quedarte solo en preguntas: tu salida pasa a ser CÓDIGO.\n" +
+    "2) GENERAR — entrega una LANDING PROFESIONAL NIVEL AGENCIA como UN SOLO archivo `index.html` autocontenido (HTML + Tailwind por CDN + JS vanilla). El preview lo renderiza al instante y de forma fiable. El bloque DEBE empezar con la ruta: usa el formato ```html index.html y como PRIMERA línea del contenido `// path: index.html`. Exigencias de calidad (queda PROHIBIDO entregar algo básico o tipo plantilla):\n" +
+    "   • Carga Tailwind (https://cdn.tailwindcss.com) y Google Fonts: una tipografía DISPLAY de impacto para titulares (p.ej. Anton, Syne, Archivo Black o similar según el estilo) + una sans limpia para texto. Títulos GRANDES con jerarquía clara.\n" +
+    "   • HERO a pantalla completa con imagen de alta calidad de fondo y overlay/gradiente para legibilidad. Para imágenes reales usa URLs de `https://images.unsplash.com/...` acordes al tema, o `https://picsum.photos/seed/PALABRA/1920/1080` como respaldo fiable; añade siempre un gradiente de marca por si la imagen no carga.\n" +
+    "   • Copy REAL y específico de la marca (NADA de lorem ipsum). Secciones completas y bien diferenciadas: nav sticky translúcido con logo+enlaces, hero con titular potente + CTA, sección de colecciones/productos (grid con imágenes), bloque editorial/about, testimonios o features, CTA final y footer con redes.\n" +
+    "   • Paleta cohesiva según el estilo (ej. oscuro editorial = negros/grises + 1 acento). Mucho espacio en blanco, alineación impecable, hover/transiciones suaves y micro-animaciones de aparición al hacer scroll (IntersectionObserver agregando clases). Menú responsive (hamburguesa en móvil).\n" +
+    "   • Responsive (móvil + desktop) y accesible (alt, aria, contraste). TODO en ese único `index.html`. No uses React ni librerías de gráficos (no hacen falta y restan fiabilidad).\n" +
+    "3) Cierra con 1-3 siguientes pasos sugeridos para iterar (ej. 'añade sección de precios', 'conecta un formulario', 'modo claro/oscuro').",
   build:
     "Modo Build: implementa cambios de código concretos. Si creas o modificas archivos, entrega bloques aplicables con ruta.",
   plan:
@@ -101,6 +117,25 @@ const COMPOSER_MODE_INSTRUCTION: Record<ComposerMode, string> = {
     "Modo Ask: responde de forma directa y técnica sobre el workspace, priorizando claridad y referencias a archivos.",
   image:
     "Modo Image: ayuda a razonar sobre assets, interfaces, capturas o diseño visual. Si se requiere implementación, tradúcelo a cambios de código.",
+}
+
+// Gather config files from the workspace to give the SRE agent enough context
+// to propose real overrides (package.json, lockfile, next.config, tsconfig…).
+function collectConfigFiles(
+  files: Record<string, { path: string; language: string; content: string }>,
+): string {
+  const wanted = new Set([
+    "package.json",
+    "package-lock.json",
+    "next.config.mjs",
+    "next.config.js",
+    "tsconfig.json",
+    ".npmrc",
+  ])
+  return Object.values(files)
+    .filter((f) => wanted.has(f.path.split("/").pop() || ""))
+    .map((f) => `// ${f.path}\n${f.content}`)
+    .join("\n\n")
 }
 
 function buildSystemContext(
@@ -158,8 +193,6 @@ export function AICodeChatPanel() {
   const {
     selectedModel,
     selectProvider,
-    setSelectedModel,
-    setSelectedProivder,
     availableModels,
   } = useChat()
   const {
@@ -174,6 +207,7 @@ export function AICodeChatPanel() {
     createCodeChatSession,
     setActiveCodeChatSession,
     patchCodeChatSessionTurns,
+    patchAgentState,
   } = useCodeWorkspace()
 
   const sessionId = activeCodeChatSessionId
@@ -194,13 +228,57 @@ export function AICodeChatPanel() {
 
   const [input, setInput] = React.useState("")
   const [busy, setBusy] = React.useState(false)
+  const [buildingApp, setBuildingApp] = React.useState(false)
   const [includeContext, setIncludeContext] = React.useState(true)
   const [composerMode, setComposerMode] = React.useState<ComposerMode>("app")
+
+  // The /code chat picks its OWN model — a fast, streaming one — independent of
+  // the main chat (whose default may be a slow reasoning model that times out
+  // the live stream). Auto-selected from the catalog, persisted, user-overridable.
+  const [codeModel, setCodeModel] = React.useState<{ name: string; provider?: string } | null>(null)
+
+  React.useEffect(() => {
+    if (codeModel || !availableModels || availableModels.length === 0) return
+    let restored: { name: string; provider?: string } | null = null
+    try {
+      const raw = typeof window !== "undefined" ? window.localStorage.getItem("code-workspace:model") : null
+      if (raw) {
+        const parsed = JSON.parse(raw)
+        if (parsed?.name && availableModels.some((m) => m.name === parsed.name)) restored = parsed
+      }
+    } catch {
+      /* ignore corrupt value */
+    }
+    const chosen = restored || recommendFastModel(availableModels) || availableModels[0]
+    if (chosen) setCodeModel({ name: chosen.name, provider: chosen.provider })
+  }, [availableModels, codeModel])
+
+  const chooseCodeModel = React.useCallback((m: { name: string; provider?: string }) => {
+    setCodeModel(m)
+    try {
+      window.localStorage.setItem("code-workspace:model", JSON.stringify(m))
+    } catch {
+      /* quota / private mode */
+    }
+  }, [])
+
+  // Resolved model the code chat actually uses. Priority:
+  //  1. an explicit code-chat choice (codeModel),
+  //  2. a fast model derived inline from the catalog (so the FIRST request is
+  //     already fast even before the auto-pick effect has run),
+  //  3. the main-chat selection as a last resort (may be a slow model).
+  const autoFastModel = React.useMemo(
+    () => recommendFastModel(availableModels || []),
+    [availableModels],
+  )
+  const activeModelName = codeModel?.name || autoFastModel?.name || selectedModel
+  const activeProvider = codeModel?.provider || autoFastModel?.provider || selectProvider
+  // Fast = streaming-friendly (good for the live preview); slow = reasoning/heavy.
+  const modelIsFast = !!activeModelName && !isSlowModel(activeModelName)
 
   const abortRef = React.useRef<AbortController | null>(null)
   const inputRef = React.useRef<HTMLTextAreaElement | null>(null)
   const scrollerRef = React.useRef<HTMLDivElement | null>(null)
-
   // Allow Cmd/Ctrl+L from anywhere in the workspace to focus the
   // composer. The provider exposes a small bus so we don't drill refs.
   React.useEffect(() => {
@@ -272,7 +350,7 @@ export function AICodeChatPanel() {
   }, [setTurns])
 
   const sendPrompt = React.useCallback(
-    async (prompt: string) => {
+    async (prompt: string, override?: { systemPrompt?: string; autoApply?: boolean }) => {
       const normalized = normalizeChatInput(prompt)
       if (shouldWarnUser(normalized)) {
         toast.error(
@@ -286,8 +364,8 @@ export function AICodeChatPanel() {
         toast.error("Inicia sesión para usar el chat de código.")
         return
       }
-      if (!selectedModel) {
-        toast.error("No hay modelo seleccionado todavía. Abre el chat principal una vez para inicializar.")
+      if (!activeModelName) {
+        toast.error("Cargando modelos… intenta de nuevo en un momento.")
         return
       }
 
@@ -296,6 +374,9 @@ export function AICodeChatPanel() {
         return
       }
 
+      // Intake / routing is decided by the agent FSM (nextAgentAction) in
+      // `dispatch`; sendPrompt is now a pure LLM-streaming executor. The system
+      // prompt can be overridden per role (landing generator, SRE, …).
       const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
       const assistantId = `${id}-a`
       setTurns((prev) => [
@@ -310,19 +391,43 @@ export function AICodeChatPanel() {
       abortRef.current = controller
 
       const modeInstruction = COMPOSER_MODE_INSTRUCTION[composerMode]
-      const finalPrompt = includeContext
-        ? `${buildSystemContext(files, activePath, activeFolder)}\n\n${modeInstruction}\n\n---\n\n${text}`
-        : `${modeInstruction}\n\n${text}`
+      // Include the recent conversation so the agent actually accumulates the
+      // intake context across turns. Without this the chat was stateless per
+      // message — it kept re-asking the same questions and never had enough
+      // context to generate. `turns` here is the state BEFORE this message was
+      // appended, i.e. the genuine prior history.
+      const transcript = turns
+        .filter((t) => !t.streaming && t.content.trim())
+        .slice(-12)
+        .map((t) => `${t.role === "user" ? "Usuario" : "Asistente"}: ${t.content}`)
+        .join("\n\n")
+      const convoBlock = transcript ? `Conversación hasta ahora:\n${transcript}\n\n---\n\n` : ""
+      const finalPrompt = override?.systemPrompt
+        ? `${override.systemPrompt}\n\n${convoBlock}Usuario: ${text}`
+        : includeContext
+          ? `${buildSystemContext(files, activePath, activeFolder)}\n\n${modeInstruction}\n\n${convoBlock}Usuario: ${text}`
+          : `${modeInstruction}\n\n${convoBlock}Usuario: ${text}`
+
+      // Accumulate the streamed answer locally so onDone can auto-apply the
+      // generated files without reading it back out of a setState updater
+      // (updaters must stay pure — applyBlock is a side effect).
+      let assistantText = ""
 
       try {
         await apiClient.generateAIStream(
           {
-            provider: selectProvider,
-            model: selectedModel,
+            provider: activeProvider,
+            model: activeModelName,
             prompt: finalPrompt,
             streamId: id,
+            // The code chat generates code blocks (e.g. a full index.html);
+            // it must use a plain LLM stream, never the web_search/artifact
+            // agentic loop (which times out and returns the empty fallback
+            // for build-an-app prompts).
+            disableAgentic: true,
           },
           (chunk) => {
+            assistantText += chunk
             setTurns((prev) =>
               prev.map((t) =>
                 t.id === assistantId ? { ...t, content: t.content + chunk } : t,
@@ -337,6 +442,33 @@ export function AICodeChatPanel() {
             )
             setBusy(false)
             abortRef.current = null
+            // App mode (or an explicit override) = Replit-style "presented
+            // output": auto-apply the generated files and open the live preview
+            // so the user sees the result immediately. Other modes keep the
+            // manual "Aplicar" button (review-before-write).
+            if (override?.autoApply ?? composerMode === "app") {
+              try {
+                const blocks = parseCodeBlocks(assistantText).filter((b) => b.path)
+                if (blocks.length > 0) {
+                  for (const b of blocks) {
+                    if (b.path) applyBlock(b.path, b.content)
+                  }
+                  const hasHtml = blocks.some((b) => /\.html?$/i.test(b.path || ""))
+                  toast.success(
+                    hasHtml
+                      ? "App generada — revisa el preview en vivo →"
+                      : `Generados ${blocks.length} archivo(s) — abriendo preview`,
+                  )
+                  // applyBlock already emits "siragpt:code-open-preview"; make
+                  // sure the preview pane is shown even if it was collapsed.
+                  if (typeof window !== "undefined") {
+                    window.dispatchEvent(new CustomEvent("siragpt:code-open-preview"))
+                  }
+                }
+              } catch {
+                /* parsing/apply failure → user can still apply manually */
+              }
+            }
           },
           (err) => {
             const msg = err?.message || "Error en el chat de código"
@@ -365,12 +497,209 @@ export function AICodeChatPanel() {
     [
       activePath,
       activeFolder,
+      activeModelName,
+      activeProvider,
+      applyBlock,
       busy,
       composerMode,
       files,
       includeContext,
-      selectProvider,
-      selectedModel,
+      sessionId,
+      setTurns,
+      token,
+      turns,
+      user,
+    ],
+  )
+
+  // Deterministic "Construir app" path: bypasses the LLM entirely. Sends the
+  // current prompt to /api/builder/generate (pure heuristics → runnable files),
+  // writes those files into the workspace, and opens the live preview. This is
+  // the reliable build flow that works even when the chat model / API keys are
+  // down — same engine the /builder studio uses.
+  const buildApp = React.useCallback(
+    async (prompt: string) => {
+      const text = prompt.trim()
+      if (!text || busy || buildingApp) return
+      if (!user || !token) {
+        toast.error("Inicia sesión para construir la app.")
+        return
+      }
+      if (!sessionId) {
+        toast.error("Selecciona o crea un agente de código.")
+        return
+      }
+
+      const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      setTurns((prev) => [
+        ...prev,
+        { id, role: "user", content: text },
+        { id: `${id}-a`, role: "assistant", content: "⚙️ Construyendo la app (modo determinista, sin LLM)…", streaming: true },
+      ])
+      setInput("")
+      setBuildingApp(true)
+
+      try {
+        const result = await intakeService.generate(text)
+        const files = result.files || []
+        if (files.length === 0) {
+          throw new Error("La generación no devolvió archivos.")
+        }
+        // Apply index.html LAST so it stays the active tab and the live preview
+        // lands on the runnable app rather than a doc file.
+        const ordered = [...files].sort((a, b) =>
+          (/(^|\/)index\.html?$/i.test(a.path) ? 1 : 0) - (/(^|\/)index\.html?$/i.test(b.path) ? 1 : 0),
+        )
+        for (const file of ordered) {
+          applyBlock(file.path, file.content)
+        }
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent("siragpt:code-open-preview"))
+        }
+
+        const entities = result.brief.dataEntities.map((e) => e.name).join(", ") || "—"
+        const summary = [
+          `✅ App generada (determinista) — ${files.length} archivo(s).`,
+          ``,
+          `- **Plataforma:** ${result.brief.platform}`,
+          `- **Entidades:** ${entities}`,
+          `- **Stack:** ${result.blueprint.stack.frontend}`,
+          ``,
+          `Revisa el **preview en vivo** → y el código en el árbol de archivos. Itera pidiéndome cambios en el chat.`,
+        ].join("\n")
+        setTurns((prev) =>
+          prev.map((t) => (t.id === `${id}-a` ? { ...t, content: summary, streaming: false } : t)),
+        )
+        toast.success("App generada — revisa el preview en vivo →")
+      } catch (err: any) {
+        const msg = err?.message || "No se pudo generar la app"
+        setTurns((prev) =>
+          prev.map((t) =>
+            t.id === `${id}-a` ? { ...t, content: `_${msg}_`, streaming: false } : t,
+          ),
+        )
+        toast.error(msg)
+      } finally {
+        setBuildingApp(false)
+      }
+    },
+    [applyBlock, busy, buildingApp, sessionId, setTurns, token, user],
+  )
+
+  // SRE tier-0: classify the build log locally (no LLM), render the strict
+  // 5-section diagnosis, and auto-apply a package.json `overrides` patch when
+  // the fix is deterministic. Works even with the model down.
+  const runDeterministicSRE = React.useCallback(
+    async (log: string, userText: string, sid: string) => {
+      const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      setTurns((prev) => [
+        ...prev,
+        { id, role: "user", content: userText },
+        { id: `${id}-a`, role: "assistant", content: "🔧 Diagnosticando el build (modo determinista)…", streaming: true },
+      ])
+      setInput("")
+      const verdict = classifyBuildError(log)
+      let body = renderFiveSections(verdict)
+      const pkg = files["package.json"]
+      if (verdict.suggestedOverrides && pkg) {
+        const patched = mergeOverridesIntoPackageJson(pkg.content, verdict.suggestedOverrides)
+        if (patched) {
+          applyBlock("package.json", patched)
+          body += "\n\n_`package.json` actualizado con `overrides` — pulsa **⚡ Construir** para reinstalar._"
+        }
+      }
+      setTurns((prev) => prev.map((t) => (t.id === `${id}-a` ? { ...t, content: body, streaming: false } : t)))
+      patchAgentState(sid, (s) => ({ ...s, phase: "idle" }))
+    },
+    [applyBlock, files, patchAgentState, setTurns],
+  )
+
+  // Agent FSM entry point: the pure orchestrator decides the next action
+  // (ask → generate → patch → debug → passthrough) and we execute it, reusing
+  // the LLM executor (sendPrompt) and the deterministic generator (buildApp).
+  const dispatch = React.useCallback(
+    async (rawInput: string, opts?: { forceDeterministic?: boolean }) => {
+      const text = rawInput.trim()
+      if (!text || busy || buildingApp) return
+      if (!user || !token) {
+        toast.error("Inicia sesión para usar el chat de código.")
+        return
+      }
+      if (!sessionId) {
+        toast.error("Selecciona o crea un agente de código.")
+        return
+      }
+      const sid = sessionId
+      const agent = activeCodeChatSession?.agent ?? defaultAgentState()
+      const action = nextAgentAction(agent, text, {
+        mode: composerMode,
+        forceDeterministic: opts?.forceDeterministic,
+        hasModel: !!activeModelName,
+      })
+
+      switch (action.type) {
+        case "ask": {
+          const qid = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+          setTurns((prev) => [
+            ...prev,
+            { id: qid, role: "user", content: text },
+            { id: `${qid}-a`, role: "assistant", content: action.question },
+          ])
+          setInput("")
+          patchAgentState(sid, (s) => ({
+            ...s,
+            phase: "intake",
+            intakeStep: action.nextStep,
+            context: action.context,
+          }))
+          return
+        }
+        case "generate": {
+          patchAgentState(sid, (s) => ({ ...s, phase: "generating", context: action.context }))
+          if (action.tier === "llm" && activeModelName) {
+            const sys = `${includeContext ? `${buildSystemContext(files, activePath, activeFolder)}\n\n` : ""}${landingSystemPrompt(action.context)}`
+            await sendPrompt(text, { systemPrompt: sys, autoApply: true })
+            patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "llm" }))
+          } else {
+            await buildApp(text)
+            patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "deterministic" }))
+          }
+          return
+        }
+        case "patch": {
+          await sendPrompt(action.instruction, { autoApply: true })
+          return
+        }
+        case "debug": {
+          patchAgentState(sid, (s) => ({ ...s, phase: "debugging", lastError: action.log }))
+          if (composerMode === "debug" && activeModelName) {
+            await sendPrompt(text, {
+              systemPrompt: sreSystemPrompt(action.log, collectConfigFiles(files)),
+              autoApply: true,
+            })
+          } else {
+            await runDeterministicSRE(action.log, text, sid)
+          }
+          return
+        }
+        default:
+          await sendPrompt(text, { autoApply: composerMode === "app" })
+      }
+    },
+    [
+      activeCodeChatSession,
+      activePath,
+      activeFolder,
+      activeModelName,
+      buildApp,
+      busy,
+      buildingApp,
+      composerMode,
+      files,
+      includeContext,
+      patchAgentState,
+      runDeterministicSRE,
+      sendPrompt,
       sessionId,
       setTurns,
       token,
@@ -380,13 +709,13 @@ export function AICodeChatPanel() {
 
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    sendPrompt(input)
+    dispatch(input)
   }
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault()
-      sendPrompt(input)
+      dispatch(input)
     }
   }
 
@@ -486,12 +815,23 @@ export function AICodeChatPanel() {
             />
             <ModelPickerInline
               models={availableModels || []}
-              selectedModel={selectedModel}
-              onSelect={(m) => {
-                setSelectedModel(m.name)
-                if (m.provider) setSelectedProivder(m.provider)
-              }}
+              selectedModel={activeModelName || ""}
+              fast={modelIsFast}
+              onSelect={(m) => chooseCodeModel({ name: m.name, provider: m.provider })}
             />
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 shrink-0 gap-1 rounded-md px-2 text-[11px] font-medium text-violet-600 hover:bg-violet-500/10 hover:text-violet-700 dark:text-violet-400 dark:hover:text-violet-300"
+              onClick={() => dispatch(input, { forceDeterministic: true })}
+              disabled={!input.trim() || busy || buildingApp}
+              aria-label="Construir app (determinista, sin LLM)"
+              title="Construir app al instante — sin LLM ni API keys"
+            >
+              <Rocket className="h-3.5 w-3.5" />
+              <span>{buildingApp ? "Construyendo…" : "Construir"}</span>
+            </Button>
             <span className="min-w-0 flex-1" />
             {busy ? (
               <Button
@@ -736,10 +1076,12 @@ type ModelOption = { name: string; provider?: string; displayName?: string }
 function ModelPickerInline({
   models,
   selectedModel,
+  fast,
   onSelect,
 }: {
   models: ModelOption[]
   selectedModel: string
+  fast?: boolean
   onSelect: (model: ModelOption) => void
 }) {
   const grouped = React.useMemo(() => {
@@ -762,10 +1104,24 @@ function ModelPickerInline({
           type="button"
           variant="ghost"
           size="sm"
-          className="h-7 min-w-0 gap-0.5 rounded-md px-1.5 text-[11px] font-normal text-muted-foreground hover:bg-muted/80 hover:text-foreground data-[state=open]:bg-muted/80"
+          className="h-7 min-w-0 gap-1 rounded-md px-1.5 text-[11px] font-normal text-muted-foreground hover:bg-muted/80 hover:text-foreground data-[state=open]:bg-muted/80"
           aria-label="Seleccionar modelo"
+          title={
+            fast
+              ? "Modelo rápido (auto-seleccionado) — ideal para el preview en vivo"
+              : "Modelo lento (reasoning) — puede cortar el preview en vivo"
+          }
         >
-          <span className="max-w-[120px] truncate">{label}</span>
+          {fast ? (
+            <span className="inline-flex shrink-0 items-center gap-0.5 rounded bg-violet-500/15 px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-violet-600 dark:text-violet-300">
+              ⚡ rápido
+            </span>
+          ) : (
+            <span className="inline-flex shrink-0 items-center gap-0.5 rounded bg-amber-500/15 px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400">
+              ⏳ lento
+            </span>
+          )}
+          <span className="max-w-[110px] truncate">{label}</span>
           <ChevronDown className="h-3 w-3 opacity-50" />
         </Button>
       </DropdownMenuTrigger>

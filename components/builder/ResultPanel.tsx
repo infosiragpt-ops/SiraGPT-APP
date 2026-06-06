@@ -21,9 +21,12 @@ interface ResultPanelProps {
 
 export function ResultPanel({ result, onReset }: ResultPanelProps) {
   const { brief, blueprint, files } = result
-  const previewFile = files.find((f) => f.path === "preview.html")
-  // Code viewer defaults to the first non-preview file (preview has its own tab).
-  const codeFiles = files.filter((f) => f.path !== "preview.html")
+  // Prefer the runnable index.html (live React app) over the static mockup.
+  const previewFile =
+    files.find((f) => f.path === "index.html") ?? files.find((f) => f.path === "preview.html")
+  const previewPath = previewFile?.path
+  // Code viewer lists every file except whichever one is driving the preview.
+  const codeFiles = files.filter((f) => f.path !== previewPath)
   const [activeFile, setActiveFile] = useState(codeFiles[0]?.path ?? files[0]?.path ?? "")
   const [copied, setCopied] = useState(false)
 
