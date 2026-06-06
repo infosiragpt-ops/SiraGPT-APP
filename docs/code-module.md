@@ -1,8 +1,9 @@
-# Módulo `/code` — IDE de SiraGPT + Builder determinista
+# Módulo `/code` — IDE de SiraGPT + Builder determinista + Agente FSM
 
-> Referencia técnica del módulo **`/code`**: qué es, cómo funciona por dentro, y la
-> integración del **builder determinista** (botón **⚡ Construir**) añadida en la rama
-> `feat/builder-e1-intake`.
+> Referencia técnica del módulo **`/code`**: qué es, cómo funciona por dentro, el
+> **builder determinista** (botón **⚡ Construir**) y el **sistema de agentes (FSM)** del
+> chat (intake → generación → debug) con auto-selección de modelo rápido.
+> Trabajo en la rama `farceque` (mergeada a `main`).
 > URL local: **http://localhost:3000/code**
 
 ---
@@ -16,6 +17,7 @@
    - [3.3 El chat de código](#33-el-chat-de-código)
    - [3.4 El preview en vivo](#34-el-preview-en-vivo)
    - [3.5 Bus de eventos](#35-bus-de-eventos)
+   - [3.6 El sistema de agentes (FSM)](#36-el-sistema-de-agentes-fsm)
 4. [Lo nuevo: builder determinista (⚡ Construir)](#4-lo-nuevo-builder-determinista--construir)
 5. [El motor de generación (backend) en detalle](#5-el-motor-de-generación-backend-en-detalle)
 6. [Cómo correrlo en dev local](#6-cómo-correrlo-en-dev-local)
@@ -186,12 +188,65 @@ Eventos `window` que desacoplan shell ↔ paneles
 | `siragpt:switch-codex-workspace` | Carga otro workspace (proyecto cloud / carpeta) |
 | `siragpt:code-new-code-chat` / `siragpt:code-select-chat-session` | Gestión de chats paralelos |
 
+### 3.6 El sistema de agentes (FSM)
+
+El chat de `/code` no es un passthrough al LLM: tiene un **agente con estado** por sesión,
+en [lib/code-agent/](../lib/code-agent/). Decide qué hacer en cada turno (preguntar,
+generar, parchear, depurar) con un **orquestador puro y testeable**, y **cada rol degrada
+a determinista** (funciona aunque el LLM/keys fallen).
+
+**Módulos:**
+| Archivo | Rol |
+|---|---|
+| [types.ts](../lib/code-agent/types.ts) | `AgentState` (phase · intakeStep · context · generator), `AgentAction`, `AgentSignal` |
+| [orchestrator.ts](../lib/code-agent/orchestrator.ts) | `nextAgentAction()` (FSM puro), intake slot-filling, `classifyBuildError()` (SRE tier-0), `mergeOverridesIntoPackageJson()` |
+| [prompts.ts](../lib/code-agent/prompts.ts) | `landingSystemPrompt(ctx)` (generador nivel agencia, salida estricta) · `sreSystemPrompt(log, config)` |
+| [model-policy.ts](../lib/code-agent/model-policy.ts) | `isSlowModel()` / `recommendFastModel()` — elige modelo rápido/streaming |
+
+**Máquina de estados** (persistida en la `CodeChatSession`, sobrevive refresh):
+
+```
+ idle ──build request (app/build)──▶ intake ──(3 respuestas / "genera ya")──▶ generating ──▶ preview
+   │                                   │                                                        │
+   │  prompt >160 chars / ⚡           └─ pregunta: producto → marca → estilo                   │ "añade pricing" → patch
+   ▼                                                                                            ▼
+ generating ◀──────────────────────────────────────────────────────────  preview ──log de error / modo Debug──▶ debugging
+```
+
+| Estado | Qué hace |
+|---|---|
+| `intake` | Pregunta **máx. 3** cosas (producto · marca · estilo/audiencia), consolida en `context`. Determinista, sin LLM |
+| `generating` | Genera la app. **Tier LLM** (`landingSystemPrompt`) ▸ **fallback determinista** `/api/builder/generate` |
+| `preview` | App corriendo; un mensaje no-build itera (`patch`) |
+| `debugging` | Diagnostica un log de build en **formato estricto de 5 secciones** + auto-parche de `package.json` |
+
+**Roles:**
+1. **Intake** — `nextAgentAction` detecta "construir desde cero" y hace el slot-filling. Un
+   prompt vago dispara las preguntas; uno detallado (>160 chars) o `"genera ya"` salta directo a generar.
+2. **Generador (tiered)** — con modelo: `landingSystemPrompt` (tipografía/paleta por estilo,
+   **salida que empieza EXACTAMENTE con el bloque ```html index.html, sin texto previo**); sin
+   modelo o ante fallo: `/api/builder/generate` determinista.
+3. **SRE / Debug** — `classifyBuildError(log)` reconoce 404-tarball / ERESOLVE / EINTEGRITY /
+   module-not-found y responde **Diagnóstico · Qué pasaba · Causa raíz · Arreglo · Siguiente paso**,
+   aplicando `overrides` a `package.json` cuando el arreglo es determinista. Con modelo usa `sreSystemPrompt`.
+
+**Auto-selección de modelo** ([model-policy.ts](../lib/code-agent/model-policy.ts)):
+- El `/code` usa **su propio modelo** (no el del chat principal): auto-elige uno **rápido y con
+  streaming** (FlashGPT/Cerebras `llama-3.1-8b` → `gpt-4o-mini` → `gemini-flash` → `haiku`…),
+  **evitando los lentos** (`gpt-5*`, `o1/o3`, `opus`, reasoning) que bufferizan ~45 s y cortan el
+  stream ("Failed to fetch").
+- Se resuelve **inline desde el primer mensaje** (sin esperar a un efecto), se **persiste** en
+  `localStorage` (`code-workspace:model`) y es **override manual** desde el selector.
+- El selector muestra un chip de estado: **⚡ rápido** (violeta) o **⏳ lento** (ámbar).
+
 ### Flujo normal (con LLM)
 
 ```
-usuario escribe idea → chat (modo App) → LLM (stream)
-   → bloques ```html index.html``` → applyBlock por archivo
-   → preview en vivo
+usuario escribe idea → FSM
+   ├─ vago  → intake (3 preguntas, determinista) → generate
+   ├─ rico  → generate directo
+   └─ ⚡    → generate determinista (sin LLM)
+generate → LLM (modelo rápido) bloque ```html index.html``` → applyBlock → preview en vivo
 ```
 
 ---
@@ -351,27 +406,25 @@ npm run dev
 
 | Check | Resultado |
 |---|---|
-| Tests del builder | **80/80 verde** (incl. 12 nuevos en `builder-brief-from-prompt.test.js`) |
+| Tests del builder (backend) | **80/80 verde** (incl. 12 en `builder-brief-from-prompt.test.js`) |
+| Tests del agente (frontend) | **26/26 verde** (`code-agent-orchestrator` 19 + `code-agent-model-policy` 7) |
 | TypeScript (`npx tsc --noEmit --skipLibCheck`) | **0 errores** |
-| Compilación real de `/code` en Next dev | **OK** (2455 módulos) |
-| Smoke-test HTTP real (csrf → registro → `/generate`) | **HTTP 200** |
+| Compilación real de `/code` en Next dev | **OK** |
+| Smoke E2E determinista (csrf → registro → `/generate`) | **HTTP 200** · `web` · `Cliente, Turno` · 17 archivos |
+| Smoke E2E LLM (stream de landing, `gpt-4o-mini`) | **HTTP 200 · TTFB ~12 ms** · `<!doctype html>` + copy de marca · empieza con el bloque (sin preámbulo) |
 
-Resultado del smoke-test end-to-end con `"Sistema de barbería con clientes y turnos"`:
-- `brief.platform: web`
-- `entities: Cliente, Turno`
-- 17 archivos: `prisma/schema.prisma, index.html, preview.html, README.md, .env.example,
-  package.json, tsconfig.json, next.config.mjs, app/globals.css, components/site-nav.tsx,
-  app/layout.tsx, app/page.tsx, lib/store.ts, app/api/cliente/route.ts, app/cliente/page.tsx,
-  app/api/turno/route.ts, app/turno/page.tsx`
-- `index.html` ejecutable (doctype + React) ✓
-
-Correr los tests del builder:
+Correr los tests:
 ```powershell
+# Backend (builder)
 cd backend
 node --test tests/builder-brief-from-prompt.test.js tests/builder-route.test.js `
   tests/builder-live-app.test.js tests/builder-codegen.test.js tests/builder-contracts.test.js `
   tests/builder-intake.test.js tests/builder-preview.test.js tests/builder-llm.test.js `
   tests/builder-question-generator.test.js
+
+# Frontend (agente FSM) — compila TS de tests y corre con node --test
+cd ..
+npm test   # incluye tests/code-agent-orchestrator.test.ts y tests/code-agent-model-policy.test.ts
 ```
 
 ---
@@ -380,6 +433,9 @@ node --test tests/builder-brief-from-prompt.test.js tests/builder-route.test.js 
 
 | Síntoma | Causa probable | Solución |
 |---|---|---|
+| **"Failed to fetch"** en el chat | Backend caído **o** modelo lento (gpt-5*, reasoning) que buffer ~45 s | Verifica `:5000/health`; el `/code` ya auto-elige modelo rápido (chip ⚡). Si pusiste uno lento a mano, cámbialo |
+| El chat **no pregunta el contexto** | El prompt era detallado (>160 chars) o `"genera ya"` → la FSM salta el intake (por diseño) | Usa un prompt corto/vago para que pregunte, o responde lo que pida |
+| Nada se crea pese a responder | El modelo respondió prosa sin bloque, o se usó passthrough | El generador (`landingSystemPrompt`) fuerza el bloque; usa modo **App** o **⚡ Construir** |
 | Botón Construir da "Inicia sesión…" | No hay JWT | Inicia sesión; el token vive en `localStorage "auth-token"` |
 | "Selecciona o crea un agente de código" | No hay `codeChatSession` activa | Crea un chat con el botón **+** del panel |
 | `/generate` → 401 | Falta Bearer token | El cliente lo adjunta solo si hay sesión; reloguea |
@@ -392,18 +448,35 @@ node --test tests/builder-brief-from-prompt.test.js tests/builder-route.test.js 
 
 ## 9. Archivos tocados / creados
 
+**Agente FSM (frontend):**
+```
+NUEVO  lib/code-agent/types.ts                  ← AgentState / AgentAction / AgentSignal
+NUEVO  lib/code-agent/orchestrator.ts           ← FSM pura + clasificador SRE + merge overrides
+NUEVO  lib/code-agent/prompts.ts                ← system prompts (landing estricto, SRE)
+NUEVO  lib/code-agent/model-policy.ts           ← isSlowModel / recommendFastModel
+NUEVO  tests/code-agent-orchestrator.test.ts    ← 19 tests
+NUEVO  tests/code-agent-model-policy.test.ts    ← 7 tests
+EDIT   lib/code-chat-sessions.ts                ← AgentState en la sesión + updateCodeChatSessionAgent
+EDIT   lib/code-workspace-context.tsx           ← patchAgentState
+EDIT   components/code/ai-code-chat-panel.tsx   ← FSM (dispatch), ⚡ Construir, auto-modelo + chip, SRE
+```
+
+**Builder determinista (backend) + fixes:**
 ```
 NUEVO  backend/src/services/builder/brief-from-prompt.js   ← texto libre → ProjectBrief
 NUEVO  backend/tests/builder-brief-from-prompt.test.js     ← 12 tests (módulo + ruta)
 EDIT   backend/src/routes/builder.js                       ← POST /api/builder/generate
 EDIT   backend/package.json                                ← registra el test nuevo
 EDIT   lib/builder/intake-service.ts                       ← método generate(prompt) + GenerateResult
-EDIT   components/code/ai-code-chat-panel.tsx              ← botón ⚡ Construir + handler buildApp
-LOCAL  backend/.env                                        ← PRISMA_DATABASE_URL local (no se commitea)
+EDIT   backend/src/routes/ai.js                            ← skip web search con disableAgentic
+EDIT   backend/src/services/auto-file-bridge.js            ← `path` requerido en docs pegados (prisma fix)
+NUEVO  docs/code-module.md                                 ← este documento
+LOCAL  backend/.env                                        ← PRISMA_DATABASE_URL local (gitignored)
 ```
 
 ---
 
-_Generado para la rama `feat/builder-e1-intake`. El builder determinista complementa (no
-reemplaza) el chat con LLM: da un camino fiable de construir + previsualizar que funciona
-aunque el modelo o las API keys fallen._
+_Trabajo en la rama `farceque` (mergeada a `main`). El agente FSM + el builder determinista
+complementan (no reemplazan) el chat con LLM: dan un camino fiable de **preguntar → construir →
+previsualizar → depurar** que funciona aunque el modelo o las API keys fallen, y eligen solo un
+modelo rápido para que el preview en vivo no se corte._
