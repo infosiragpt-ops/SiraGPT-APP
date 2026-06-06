@@ -81,6 +81,8 @@ GOOGLE_ALLOW_FRONTEND_CALLBACK = "true"
 
 [userenv.shared]
 GOOGLE_AUTH_BASE_URL = "https://siragpt.com"
+SIRAGPT_USER_MEMORY_STORE = "pgvector"
+SIRAGPT_MEMORY_EMBED_PROVIDER = "jina"
 
 [postMerge]
 path = "scripts/post-merge.sh"
