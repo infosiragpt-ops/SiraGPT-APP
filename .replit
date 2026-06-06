@@ -83,6 +83,7 @@ GOOGLE_ALLOW_FRONTEND_CALLBACK = "true"
 GOOGLE_AUTH_BASE_URL = "https://siragpt.com"
 SIRAGPT_USER_MEMORY_STORE = "pgvector"
 SIRAGPT_MEMORY_EMBED_PROVIDER = "jina"
+R2_ENDPOINT = "https://c6a66a858f460a12b7b0d373637efc00.r2.cloudflarestorage.com"
 
 [postMerge]
 path = "scripts/post-merge.sh"
