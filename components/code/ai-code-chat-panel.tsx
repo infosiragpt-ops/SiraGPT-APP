@@ -331,6 +331,11 @@ export function AICodeChatPanel() {
             model: selectedModel,
             prompt: finalPrompt,
             streamId: id,
+            // The code chat generates code blocks (e.g. a full index.html);
+            // it must use a plain LLM stream, never the web_search/artifact
+            // agentic loop (which times out and returns the empty fallback
+            // for build-an-app prompts).
+            disableAgentic: true,
           },
           (chunk) => {
             assistantText += chunk

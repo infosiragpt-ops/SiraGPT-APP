@@ -4673,6 +4673,10 @@ router.post(
               if (
                 agenticStream.isEnabled()
                 && shouldRunAgentic
+                // Callers that want a plain LLM stream (e.g. the /code chat,
+                // which generates code blocks and must never detour into the
+                // web_search/artifact agentic loop) set disableAgentic:true.
+                && req.body.disableAgentic !== true
                 && agenticStream.modelSupportsFunctionCalling(actualProvider, actualModel)
                 && !hasImages
               ) {
