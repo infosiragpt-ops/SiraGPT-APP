@@ -109,6 +109,29 @@ const COMPOSER_MODE_INSTRUCTION: Record<ComposerMode, string> = {
     "Modo Image: ayuda a razonar sobre assets, interfaces, capturas o diseño visual. Si se requiere implementación, tradúcelo a cambios de código.",
 }
 
+// Deterministic intake (App mode): the app itself asks for context on the
+// first build-from-scratch request, instead of trusting the model to do it.
+// This guarantees the Replit-style "questions first, build second" flow.
+const FIXED_INTAKE_MESSAGE = [
+  "¡Genial! Para construir tu landing **profesional** necesito un poco de contexto:",
+  "",
+  "1. ¿Qué **producto o servicio** vas a ofrecer?",
+  "2. ¿**Nombre** de la marca o negocio? (o te propongo uno)",
+  "3. ¿Qué **estilo visual** prefieres? (minimalista · oscuro/editorial · streetwear · corporativo · colorido…)",
+  "4. ¿Qué **secciones** quieres? (hero · colecciones/productos · sobre nosotros · testimonios · contacto…)",
+  "5. ¿Algún **color o referencia** que te guste?",
+  "",
+  'Responde lo que puedas y lo construyo. (O escribe **"genera ya"** y uso buenos defaults.)',
+].join("\n")
+
+// Heuristic: a "build something from scratch" request in App mode.
+function isAppBuildRequest(text: string): boolean {
+  const t = text.toLowerCase()
+  const noun = /\b(landing|app|aplicaci[oó]n|web|p[aá]gina|pagina|sitio|portfolio|portafolio|tienda|ecommerce|e-commerce|dashboard|blog)\b/.test(t)
+  const verb = /\b(cre[ae]|cr[eé]a|cr[eé]ame|h[aá]z|hazme|haceme|construye|constr[uú]yeme|genera|gen[eé]rame|quiero|necesito|dise[ñn]a|armar?|arma|build|make)\b/.test(t)
+  return noun && verb
+}
+
 function buildSystemContext(
   files: Record<string, { path: string; language: string; content: string }>,
   activePath: string | null,
@@ -299,6 +322,32 @@ export function AICodeChatPanel() {
 
       if (!sessionId) {
         toast.error("Selecciona o crea un agente de código.")
+        return
+      }
+
+      // Deterministic intake gate: on the FIRST build-from-scratch request in
+      // App mode, the app itself replies with the context questions (no LLM
+      // call) and waits — instead of relying on the model, which sometimes
+      // skipped the questions and generated wrong files immediately. Generation
+      // happens on the next message (when a prior assistant turn exists, the
+      // gate is skipped and the LLM gets the full Q&A history).
+      const priorAssistantTurn = turns.some((t) => t.role === "assistant" && t.content.trim())
+      const wantsImmediate = /\b(genera ya|h[aá]zlo ya|sin preguntas|hazlo ya|ya tengo|usa defaults)\b/i.test(text)
+      const richDetail = text.length > 160
+      if (
+        composerMode === "app"
+        && isAppBuildRequest(text)
+        && !priorAssistantTurn
+        && !wantsImmediate
+        && !richDetail
+      ) {
+        const gateId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+        setTurns((prev) => [
+          ...prev,
+          { id: gateId, role: "user", content: text },
+          { id: `${gateId}-a`, role: "assistant", content: FIXED_INTAKE_MESSAGE },
+        ])
+        setInput("")
         return
       }
 
