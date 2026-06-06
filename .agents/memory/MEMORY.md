@@ -20,6 +20,7 @@
 - [Image gen vs edit providers](image-edit-provider-matrix.md) — editing (imagePath) only works on OpenAI/Gemini; OpenRouter is generation-only and must be rerouted, never hard-fail.
 - [Backend test CI wiring](backend-test-ci-wiring.md) — new backend tests only run in CI if added to package.json `test` string; /health routes live in injectable createHealthRoutes for supertest.
 - [R2 account-id mispaste](r2-account-id-misparse.md) — "ENOTFOUND https" = R2_ACCOUNT_ID holds full endpoint URL → set non-secret R2_ENDPOINT override; also test embed keys for validity (presence ≠ valid).
+- [Reserved VM 8 GiB image limit](deploy-image-8gib-limit.md) — deploys reuse the workspace; gitignored/stray dirs bake into the image unless postbuild-slim prunes them. libreoffice+playwright are runtime-needed, don't cut them.
 - [Prisma renamed-migration P3009](prisma-renamed-migration-p3009.md) — renaming an applied migration re-runs its DDL → "already exists" → P3009 → backend never boots; fix with idempotent SQL + `migrate resolve --applied`, then republish.
 - [Web-search sources UX](source-presentation-chips.md) — sources are app-rendered (Fuentes chip + Actividad drawer next to action rail), NOT inline markdown; allowlist source URLs (http/https) before any href.
 - [Authoritative current datetime](authoritative-datetime.md) — inject a current-datetime block as system authority so the model stops hallucinating "today"; never answer volatile facts from memory.
