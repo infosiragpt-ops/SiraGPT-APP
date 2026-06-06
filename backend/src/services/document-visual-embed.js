@@ -447,19 +447,149 @@ function isVisualAvailable() {
   return Boolean(getSharp());
 }
 
+// ---------------------------------------------------------------------------
+// Request → visual: detect when the user wants a chart/diagram, infer the type,
+// extract the data (LLM when available, deterministic inline parser otherwise),
+// and embed it. Lets the document editor add a visual with a one-line hook.
+// ---------------------------------------------------------------------------
+
+function normalizeText(value) {
+  return String(value || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+const VISUAL_INTENT_RE = /\b(grafico\w*|grafica\w*|diagrama\w*|organigrama\w*|linea de tiempo|cronolog\w*|timeline|flujograma|diagrama de flujo|flujo|chart|pastel|dona|donut|barras?|histograma)\b/;
+
+function inferVisualType(norm) {
+  if (/\borganigrama\w*|orgchart|organization\b/.test(norm)) return 'organigram';
+  if (/\btimeline|linea de tiempo|cronolog\w*\b/.test(norm)) return 'timeline';
+  if (/\bflujograma|diagrama de flujo|\bflujo\b|proceso\b/.test(norm)) return 'process';
+  if (/\bdona|donut\b/.test(norm)) return 'donut';
+  if (/\bpastel|circular|\bpie\b|porcentaj\w*\b/.test(norm)) return 'pie';
+  if (/\blinea\b|\blineal\b|tendencia\b|\bline\b/.test(norm)) return 'line';
+  return 'bar';
+}
+
+function detectVisualRequest(text) {
+  const norm = normalizeText(text);
+  const wantsVisual = VISUAL_INTENT_RE.test(norm);
+  return { wantsVisual, type: wantsVisual ? inferVisualType(norm) : null };
+}
+
+// Pull "Label 48", "Label: 48", "Label (48)", "Label 48%" pairs out of free text.
+function parseInlineSeries(text) {
+  const out = [];
+  const seen = new Set();
+  const re = /([A-Za-zÁÉÍÓÚÜáéíóúüÑñ][\wÁÉÍÓÚÜáéíóúüÑñ .'\/-]{1,32}?)\s*[:=(]?\s*(\d+(?:[.,]\d+)?)\s*%?\)?/g;
+  let match;
+  while ((match = re.exec(text)) && out.length < 12) {
+    const label = match[1].trim().replace(/\s+/g, ' ').replace(/[\s,;:-]+$/, '').replace(/^(?:y|e|o|u)\s+/i, '').trim();
+    const value = Number(String(match[2]).replace(',', '.'));
+    const key = label.toLowerCase();
+    if (label.length >= 2 && Number.isFinite(value) && !/^(de|del|la|el|los|las|un|una|y|en|con|por)$/i.test(label) && !seen.has(key)) {
+      seen.add(key);
+      out.push({ label, value });
+    }
+  }
+  return out;
+}
+
+async function extractVisualSpecWithLLM({ requestText, sourceText, fallbackType, signal }) {
+  if (!process.env.OPENAI_API_KEY) return null;
+  let createContentClient;
+  let DEFAULT_MODEL;
+  try {
+    // eslint-disable-next-line global-require
+    ({ createContentClient, DEFAULT_MODEL } = require('./document-pipeline/content/llm-client'));
+  } catch {
+    return null;
+  }
+  try {
+    const client = createContentClient('OpenAI');
+    const completion = await client.chat.completions.create({
+      model: DEFAULT_MODEL,
+      messages: [
+        {
+          role: 'system',
+          content: [
+            'Extraes la especificación de un gráfico/diagrama a partir de la petición del usuario y el contexto del documento.',
+            'No inventes cifras: usa solo datos presentes en la petición o el contexto. Si no hay datos numéricos ni elementos claros, devuelve data vacía.',
+          ].join(' '),
+        },
+        {
+          role: 'user',
+          content: [
+            `Petición: ${requestText}`,
+            'Contexto del documento (puede estar vacío):',
+            String(sourceText || '').slice(0, 6000),
+            '',
+            'Responde SOLO JSON:',
+            '{"type":"bar|pie|donut|line|process|timeline|organigram","title":"...","data":[{"label":"...","value":0}],"steps":["..."],"tree":{"label":"...","children":[]}}',
+            'Usa "data" para bar/pie/donut/line; "steps" para process; "data" con {label,date} para timeline; "tree" para organigram. Incluye solo el campo que corresponda al type.',
+          ].join('\n'),
+        },
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0.1,
+    }, { signal, timeout: 25_000 });
+    const raw = completion?.choices?.[0]?.message?.content;
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    const type = ['bar', 'pie', 'donut', 'line', 'process', 'timeline', 'organigram'].includes(parsed.type) ? parsed.type : fallbackType;
+    const spec = { type, title: parsed.title ? String(parsed.title) : '' };
+    if (type === 'organigram' && parsed.tree) spec.tree = parsed.tree;
+    else if (type === 'process' && Array.isArray(parsed.steps)) spec.data = parsed.steps;
+    else if (Array.isArray(parsed.data) && parsed.data.length) spec.data = parsed.data;
+    else if (Array.isArray(parsed.steps) && parsed.steps.length) spec.data = parsed.steps;
+    return spec;
+  } catch {
+    return null;
+  }
+}
+
+function visualSpecHasContent(spec) {
+  if (!spec) return false;
+  if (spec.type === 'organigram') return Boolean(spec.tree && (spec.tree.label || (Array.isArray(spec.tree.children) && spec.tree.children.length)));
+  return Array.isArray(spec.data) && spec.data.length > 0;
+}
+
+// Detect a visual request, build its spec (LLM or inline), and embed it.
+// Returns { added, buffer, spec, reason }. Never throws on "no visual".
+async function addVisualFromRequest(buffer, { requestText = '', sourceText = '', signal, theme = 'corporate' } = {}) {
+  const detection = detectVisualRequest(requestText);
+  if (!detection.wantsVisual) return { added: false, buffer, reason: 'no_visual_intent' };
+
+  let spec = await extractVisualSpecWithLLM({ requestText, sourceText, fallbackType: detection.type, signal });
+  if (!visualSpecHasContent(spec)) {
+    const inline = parseInlineSeries(requestText);
+    if (inline.length) spec = { type: detection.type === 'organigram' || detection.type === 'process' ? 'bar' : detection.type, data: inline, title: spec?.title || '' };
+  }
+  if (!visualSpecHasContent(spec)) return { added: false, buffer, reason: 'no_data' };
+
+  if (!isVisualAvailable()) return { added: false, buffer, reason: 'renderer_unavailable', spec };
+  spec.theme = spec.theme || theme;
+  const out = await addChartToDocxBuffer(buffer, spec);
+  return { added: true, buffer: out, spec };
+}
+
 module.exports = {
   buildChartSvg,
   svgToPng,
   embedImageIntoDocxBuffer,
   addChartToDocxBuffer,
+  addVisualFromRequest,
+  detectVisualRequest,
+  parseInlineSeries,
   isVisualAvailable,
   INTERNAL: {
     normalizeData,
+    normalizeLabels,
     resolveTheme,
     fitEmu,
     pixelsToEmu,
     buildInlineImageParagraphXml,
     insertParagraphBeforeBodyEnd,
+    inferVisualType,
+    visualSpecHasContent,
     THEMES,
   },
 };

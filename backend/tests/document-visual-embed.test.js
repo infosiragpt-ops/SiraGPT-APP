@@ -10,6 +10,9 @@ const {
   svgToPng,
   embedImageIntoDocxBuffer,
   addChartToDocxBuffer,
+  addVisualFromRequest,
+  detectVisualRequest,
+  parseInlineSeries,
   isVisualAvailable,
   INTERNAL,
 } = require('../src/services/document-visual-embed');
@@ -134,6 +137,60 @@ describe('document-visual-embed — DOCX image embedding', () => {
     const rels = zip.file('word/_rels/document.xml.rels').asText();
     const imageRels = [...rels.matchAll(/Type="[^"]*relationships\/image"/g)];
     assert.equal(imageRels.length, 2);
+  });
+});
+
+describe('document-visual-embed — request → visual intent', () => {
+  it('detects visual intent and infers the chart/diagram type', () => {
+    assert.deepEqual(detectVisualRequest('agrega un gráfico de barras con los resultados'), { wantsVisual: true, type: 'bar' });
+    assert.equal(detectVisualRequest('inserta un gráfico de pastel').type, 'pie');
+    assert.equal(detectVisualRequest('haz un organigrama del área').type, 'organigram');
+    assert.equal(detectVisualRequest('una línea de tiempo del proyecto').type, 'timeline');
+    assert.equal(detectVisualRequest('diagrama de flujo del proceso').type, 'process');
+    assert.equal(detectVisualRequest('completa el anexo 3').wantsVisual, false);
+  });
+
+  it('parses inline "label number" series from free text', () => {
+    const series = parseInlineSeries('distribución: Lima 48, Arequipa 22, Cusco 18 y Trujillo 12');
+    const byLabel = Object.fromEntries(series.map((s) => [s.label, s.value]));
+    assert.equal(byLabel.Lima, 48);
+    assert.equal(byLabel.Arequipa, 22);
+    assert.equal(byLabel.Trujillo, 12);
+  });
+
+  it('embeds a chart parsed from the request when no model is available', async (t) => {
+    if (!isVisualAvailable()) { t.skip('sharp not available'); return; }
+    const savedKey = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    try {
+      const docx = await makeDocxBuffer();
+      const result = await addVisualFromRequest(docx, { requestText: 'agrega un gráfico de barras con Lima 48, Arequipa 22, Cusco 18' });
+      assert.equal(result.added, true);
+      assert.equal(result.spec.type, 'bar');
+      const zip = new PizZip(result.buffer);
+      assert.ok(zip.file('word/media/image1.png'));
+      assert.match(zip.file('word/document.xml').asText(), /<w:drawing>/);
+    } finally {
+      if (savedKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = savedKey;
+    }
+  });
+
+  it('is a no-op for non-visual requests and for visual requests without data', async () => {
+    const docx = await makeDocxBuffer();
+    const savedKey = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    try {
+      const noIntent = await addVisualFromRequest(docx, { requestText: 'corrige la ortografía del documento' });
+      assert.equal(noIntent.added, false);
+      assert.equal(noIntent.reason, 'no_visual_intent');
+      const noData = await addVisualFromRequest(docx, { requestText: 'agrega un gráfico bonito' });
+      assert.equal(noData.added, false);
+      assert.equal(noData.reason, 'no_data');
+    } finally {
+      if (savedKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = savedKey;
+    }
   });
 });
 
