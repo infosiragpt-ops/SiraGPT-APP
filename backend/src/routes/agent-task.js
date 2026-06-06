@@ -34,6 +34,7 @@ const crypto = require('crypto');
 const { body, validationResult } = require('express-validator');
 const OpenAI = require('openai');
 
+const objectStorage = require('../services/object-storage');
 const { authenticateToken } = require('../middleware/auth');
 const { enforcePlanQuota } = require('../middleware/enforce-plan-quota');
 const { resolveRateLimitConfig, makeJwtAwareKeyGenerator, extractBearerToken } = require('../middleware/rate-limit-policy');
@@ -414,10 +415,14 @@ Rules:
 
 // ─── GET /api/agent/artifact/:id ────────────────────────────────────────
 
-router.get('/artifact/:id', authenticateToken, (req, res) => {
+router.get('/artifact/:id', authenticateToken, async (req, res) => {
   const id = String(req.params.id || '').replace(/[^a-f0-9]/gi, '');
   if (!id || id.length > 40) return res.status(400).json({ error: 'bad id' });
 
+  // Metadata is the source of truth; the binary may live locally (dev / not
+  // yet offloaded) or only in R2 (after offload). The metadata JSON stays on
+  // disk in ARTIFACT_DIR, so a missing dir means there are genuinely no
+  // artifacts.
   if (!fs.existsSync(ARTIFACT_DIR)) return res.status(404).json({ error: 'no artifacts yet' });
 
   const metadata = readArtifactMetadata(id);
@@ -438,10 +443,19 @@ router.get('/artifact/:id', authenticateToken, (req, res) => {
   }
   if (!full) {
     // Legacy / fallback: find the file by stored-name prefix at top level.
-    entry = fs.readdirSync(ARTIFACT_DIR).find(f => f.startsWith(`${id}-`));
+    try {
+      entry = fs.readdirSync(ARTIFACT_DIR).find(f => f.startsWith(`${id}-`));
+    } catch { entry = null; }
     if (entry) full = path.join(ARTIFACT_DIR, entry);
   }
-  if (!full || !entry) return res.status(404).json({ error: 'artifact not found' });
+
+  // The binary may have been offloaded to R2 (local copy removed). When there
+  // is no usable local file, fall back to streaming from R2 using the
+  // metadata's storageRef. Ownership is still enforced from metadata.
+  const hasLocal = Boolean(full && entry && fs.existsSync(full));
+  if (!hasLocal && !(metadata && metadata.storageRef)) {
+    return res.status(404).json({ error: 'artifact not found' });
+  }
 
   if (!metadata?.ownerUserId) {
     return res.status(403).json({ error: 'artifact ownership metadata missing' });
@@ -450,10 +464,31 @@ router.get('/artifact/:id', authenticateToken, (req, res) => {
     return res.status(403).json({ error: 'artifact not found' });
   }
 
-  const userSuppliedName = typeof req.query.name === 'string' ? req.query.name : entry.slice(id.length + 1);
+  const fallbackName = entry ? entry.slice(id.length + 1) : (metadata.filename || 'artifact');
+  const userSuppliedName = typeof req.query.name === 'string' ? req.query.name : fallbackName;
   const safeName = userSuppliedName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'artifact';
   res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
-  res.sendFile(full);
+
+  if (hasLocal) {
+    return res.sendFile(full);
+  }
+
+  // Stream from R2.
+  try {
+    if (metadata.mime) res.setHeader('Content-Type', metadata.mime);
+    const meta = await objectStorage.stat(metadata.storageRef);
+    if (meta && meta.size != null) res.setHeader('Content-Length', meta.size);
+    const { stream } = await objectStorage.readStream(metadata.storageRef);
+    stream.on('error', (err) => {
+      console.error(`[agent-task] R2 artifact stream error for ${id}: ${err && err.message}`);
+      if (!res.headersSent) res.status(502).json({ error: 'artifact stream failed' });
+      else res.destroy();
+    });
+    return stream.pipe(res);
+  } catch (err) {
+    console.error(`[agent-task] R2 artifact fetch failed for ${id}: ${err && err.message}`);
+    return res.status(404).json({ error: 'artifact not found' });
+  }
 });
 
 // ─── POST /api/agent/document-cycle/classify ───────────────────────────

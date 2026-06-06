@@ -20,6 +20,7 @@ const path = require('path');
 const fs = require('fs');
 const { writeJsonAtomicSync } = require('../../utils/atomic-json-write');
 const crypto = require('crypto');
+const objectStorage = require('../object-storage');
 const sandbox = require('./code-sandbox');
 const {
   MIN_QUALITY_SCORE,
@@ -94,6 +95,35 @@ const DANGEROUS_ARTIFACT_EXTENSIONS = new Set([
 
 function metadataPathFor(id) {
   return path.join(ARTIFACT_DIR, `${id}.json`);
+}
+
+// R2 object key mirroring an artifact's on-disk relative path. Keeping the
+// path shape ("agent-artifacts/<storedRelPath>") makes the bucket layout
+// self-describing and lets the serving route reconstruct the key from
+// metadata alone.
+function artifactBinaryKey(storedRelPath) {
+  return `agent-artifacts/${String(storedRelPath).split(path.sep).join('/')}`;
+}
+
+// Best-effort offload of a freshly written artifact binary to R2, then drop
+// the local copy so the VM disk stays small. Fire-and-forget: saveArtifact
+// stays synchronous (it has many sync callers) while the upload happens in
+// the background. The local file keeps serving downloads until the upload
+// confirms; only then is it unlinked. The serving route falls back to R2
+// once the local binary is gone. The metadata JSON is intentionally NOT
+// uploaded/removed — it is tiny text and is required on disk by the artifact
+// listing scans.
+function startArtifactMirror({ id, full, storedRelPath, mime }) {
+  const key = artifactBinaryKey(storedRelPath);
+  (async () => {
+    try {
+      const buf = await fs.promises.readFile(full);
+      await objectStorage.putBuffer({ key, buffer: buf, contentType: mime || 'application/octet-stream' });
+      try { await fs.promises.unlink(full); } catch { /* best effort cleanup */ }
+    } catch (err) {
+      console.warn(`[task-tools] R2 artifact mirror failed for ${id}: ${err && err.message}`);
+    }
+  })();
 }
 
 function sanitizeArtifactFilename(filename) {
@@ -179,6 +209,14 @@ function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation,
   const full = path.join(targetDir, stored);
   const storedRelPath = safeFolder ? path.posix.join(safeFolder, stored) : stored;
   fs.writeFileSync(full, buf);
+  const resolvedMime = mime || EXTENSION_TO_MIME[ext] || 'application/octet-stream';
+  // When R2 is enabled the binary is offloaded off the VM disk; record the
+  // deterministic R2 ref in metadata so the serving route can stream it once
+  // the local copy is gone. The key is derived purely from storedRelPath so
+  // we can compute it before the (async) upload starts.
+  const storageRef = objectStorage.enabled()
+    ? objectStorage.refFromKey(artifactBinaryKey(storedRelPath))
+    : null;
   try {
     writeJsonAtomicSync(metadataPathFor(id), {
       id,
@@ -186,12 +224,13 @@ function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation,
       format: ext,
       ownerUserId: ownerUserId || null,
       chatId: chatId || null,
-      mime: mime || EXTENSION_TO_MIME[ext] || 'application/octet-stream',
+      mime: resolvedMime,
       sizeBytes: buf.length,
       validation: validation || null,
       category: category || null,
       folderCode: safeFolder || null,
       storedRelPath,
+      storageRef,
       createdAt: new Date().toISOString(),
     }, { pretty: 2 });
   } catch (err) {
@@ -201,15 +240,21 @@ function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation,
     try { fs.unlinkSync(full); } catch { /* best effort */ }
     throw err;
   }
+  // Kick off the R2 offload only after metadata is durably written, so a
+  // metadata failure can't leave an orphan object in the bucket.
+  if (storageRef) {
+    startArtifactMirror({ id, full, storedRelPath, mime: resolvedMime });
+  }
   return {
     id,
     filename: clean,
     format: ext,
-    mime: mime || EXTENSION_TO_MIME[ext] || 'application/octet-stream',
+    mime: resolvedMime,
     sizeBytes: buf.length,
     path: full,
     folderCode: safeFolder || null,
     storedRelPath,
+    storageRef,
     downloadUrl: `/api/agent/artifact/${id}?name=${encodeURIComponent(clean)}`,
   };
 }

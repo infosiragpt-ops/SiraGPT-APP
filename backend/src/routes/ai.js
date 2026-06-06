@@ -192,6 +192,7 @@ const { exec } = require('child_process');
 // Dependencies ko file ke top par import karen
 const fs = require('fs').promises;
 const fsSync = require('fs'); // ✅ For synchronous file operations
+const objectStorage = require('../services/object-storage');
 const path = require('path');
 const { use } = require('passport');
 
@@ -4601,7 +4602,13 @@ router.post(
           for (const f of processedFiles) {
             if (!f || !f.mimeType || !f.mimeType.startsWith('image/')) continue;
             try {
-              if (f.path && fsSync.existsSync(f.path)) {
+              if (f.path && objectStorage.isRemote(f.path)) {
+                // Image lives in R2 — pull the bytes to base64-encode for vision.
+                const { stream } = await objectStorage.readStream(f.path);
+                const chunks = [];
+                for await (const c of stream) chunks.push(c);
+                imageDataUrls.push(`data:${f.mimeType};base64,${Buffer.concat(chunks).toString('base64')}`);
+              } else if (f.path && fsSync.existsSync(f.path)) {
                 const b64 = (await fs.readFile(f.path)).toString('base64');
                 imageDataUrls.push(`data:${f.mimeType};base64,${b64}`);
               }

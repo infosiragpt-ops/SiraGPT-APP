@@ -1,4 +1,5 @@
 const fs = require('fs');
+const objectStorage = require('./object-storage');
 const path = require('path');
 const PizZip = require('pizzip');
 const ExcelJS = require('exceljs');
@@ -1738,13 +1739,20 @@ async function extractTextFromXlsxBuffer(buffer) {
 async function extractTextFromFile(file = {}) {
   if (file.extractedText) return String(file.extractedText);
   if (!file.path) return '';
+  let materialized = null;
   try {
-    const buffer = await fs.promises.readFile(file.path);
+    // Source binary may live in R2 — materialize to a temp path for parsing.
+    const localPath = objectStorage.isRemote(file.path)
+      ? (materialized = await objectStorage.toLocalTemp(file.path)).path
+      : file.path;
+    const buffer = await fs.promises.readFile(localPath);
     if (isDocxFile(file)) return extractTextFromDocxBuffer(buffer);
     if (isXlsxFile(file)) return extractTextFromXlsxBuffer(buffer);
     if (isTextLikeFile(file)) return buffer.toString('utf8');
   } catch {
     return '';
+  } finally {
+    if (materialized) { try { await materialized.cleanup(); } catch { /* best-effort */ } }
   }
   return '';
 }

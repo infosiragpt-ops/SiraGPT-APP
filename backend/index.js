@@ -360,7 +360,7 @@ const agentBatchRoutes = require('./src/routes/agent-batch');
 const seAgentsRoutes = require('./src/routes/se-agents');
 const searchBrainRoutes = require('./src/routes/search-brain');
 const searchBrainUniversalRoutes = require('./src/routes/search-brain-universal');
-const { createUploadStaticAccessGuard } = require('./src/middleware/upload-static-access');
+const { createUploadStaticAccessGuard, createUploadR2Fallback } = require('./src/middleware/upload-static-access');
 const searchAgenticRoutes = require('./src/routes/search-agentic');
 const artifactsRoutes = require('./src/routes/artifacts');
 const hooksRoutes = require('./src/routes/hooks');
@@ -810,6 +810,10 @@ app.use('/uploads', express.static(uploadsDir, {
         }
     }
 }));
+// When the binary is not on local disk (R2-backed / scaled deploys), redirect
+// to a short-lived signed R2 URL. Runs only for authorized requests (the
+// access guard above already enforced ownership).
+app.use('/uploads', createUploadR2Fallback());
 
 
 // ── Health probes ───────────────────────────────────────────────

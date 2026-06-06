@@ -618,6 +618,7 @@ const {
   extractFalVideoUrl,
   resolveFalVideoModelRequest,
 } = require('../services/fal-video-model-catalog');
+const objectStorage = require('../services/object-storage');
 const router = express.Router();
 const prisma = new PrismaClient();
 
@@ -1053,12 +1054,19 @@ async function generateVideoAsync(operationId, prompt, aspectRatio, duration, ne
       }
 
       const videoBuffer = await resp.arrayBuffer();
-      ensureDir(videosDir);
+      const videoBytes = Buffer.from(videoBuffer);
 
-      const videoPath = path.join(videosDir, filename);
-      fs.writeFileSync(videoPath, Buffer.from(videoBuffer));
-
-      console.log(`📁 Video saved successfully: ${filename} (${Math.round(videoBuffer.byteLength / 1024 / 1024 * 100) / 100} MB)`);
+      // Store the generated video off the VM in R2 (key mirrors the filename so
+      // /video/watch + /video/download serve it directly from R2). Falls back to
+      // local disk only when R2 is disabled (dev without R2 secrets).
+      if (objectStorage.enabled()) {
+        await objectStorage.putBuffer({ key: objectStorage.videoKey(filename), buffer: videoBytes, contentType: 'video/mp4' });
+        console.log(`☁️ Video stored in R2: ${filename} (${Math.round(videoBuffer.byteLength / 1024 / 1024 * 100) / 100} MB)`);
+      } else {
+        ensureDir(videosDir);
+        fs.writeFileSync(path.join(videosDir, filename), videoBytes);
+        console.log(`📁 Video saved successfully: ${filename} (${Math.round(videoBuffer.byteLength / 1024 / 1024 * 100) / 100} MB)`);
+      }
 
       //  Update operation status to completed with enhanced metadata
       let completedData = activeOperations.get(operationId) || {};
@@ -1181,36 +1189,51 @@ router.get('/status/:operationId', authenticateToken, async (req, res) => {
 
 
 // Add a download endpoint for proper file downloads
-router.get('/download/:filename', (req, res) => {
+router.get('/download/:filename', async (req, res) => {
   try {
     const resolved = resolveVideoFile(req.params.filename);
     if (!resolved) {
       return res.status(400).json({ error: 'Invalid video filename' });
     }
 
-    console.log('📥 Download request for:', resolved.filename);
-    console.log('📁 Looking for file at:', resolved.filePath);
-
-    if (!fs.existsSync(resolved.filePath)) {
-      return res.status(404).json({ error: 'Video file not found' });
+    // Prefer a local copy (dev); otherwise stream from R2 (production).
+    if (fs.existsSync(resolved.filePath)) {
+      const stat = fs.statSync(resolved.filePath);
+      if (!stat.isFile()) {
+        return res.status(404).json({ error: 'Video file not found' });
+      }
+      res.set({
+        'Content-Type': 'video/mp4',
+        'Content-Disposition': contentDispositionHeader('attachment', resolved.filename),
+        'Content-Length': stat.size,
+        'Cache-Control': 'no-cache',
+        'Access-Control-Allow-Origin': '*'
+      });
+      return streamFile(res, resolved.filePath, { headers: res.getHeaders() });
     }
 
-    console.log('✅ File found, starting download');
-    const stat = fs.statSync(resolved.filePath);
-    if (!stat.isFile()) {
-      return res.status(404).json({ error: 'Video file not found' });
+    if (objectStorage.enabled()) {
+      const ref = objectStorage.refFromKey(objectStorage.videoKey(resolved.filename));
+      const meta = await objectStorage.stat(ref);
+      if (meta && meta.size != null) {
+        res.set({
+          'Content-Type': 'video/mp4',
+          'Content-Disposition': contentDispositionHeader('attachment', resolved.filename),
+          'Content-Length': meta.size,
+          'Cache-Control': 'no-cache',
+          'Access-Control-Allow-Origin': '*'
+        });
+        const { stream } = await objectStorage.readStream(ref);
+        stream.on('error', (err) => {
+          console.error(`❌ R2 video download stream error: ${err && err.message}`);
+          if (!res.headersSent) res.status(502).json({ error: 'Error downloading video file' });
+          else res.destroy();
+        });
+        return stream.pipe(res);
+      }
     }
 
-    res.set({
-      'Content-Type': 'video/mp4',
-      'Content-Disposition': contentDispositionHeader('attachment', resolved.filename),
-      'Content-Length': stat.size,
-      'Cache-Control': 'no-cache',
-      'Access-Control-Allow-Origin': '*'
-    });
-
-    streamFile(res, resolved.filePath, { headers: res.getHeaders() });
-
+    return res.status(404).json({ error: 'Video file not found' });
   } catch (error) {
     console.error('❌ Error downloading video file:', error);
     res.status(500).json({ error: 'Error downloading video file' });
@@ -1218,22 +1241,36 @@ router.get('/download/:filename', (req, res) => {
 });
 
 // Also update the watch endpoint with better path handling
-router.get('/watch/:filename', (req, res) => {
+router.get('/watch/:filename', async (req, res) => {
   try {
     const resolved = resolveVideoFile(req.params.filename);
     if (!resolved) {
       return res.status(400).json({ error: 'Invalid video filename' });
     }
 
-    if (!fs.existsSync(resolved.filePath)) {
+    // Determine the source: local disk (dev) or R2 (production). Range
+    // requests are honoured in both cases for smooth video seeking.
+    let fileSize;
+    let fromR2 = false;
+    if (fs.existsSync(resolved.filePath)) {
+      const stat = fs.statSync(resolved.filePath);
+      if (!stat.isFile()) {
+        return res.status(404).json({ error: 'Video file not found' });
+      }
+      fileSize = stat.size;
+    } else if (objectStorage.enabled()) {
+      const ref = objectStorage.refFromKey(objectStorage.videoKey(resolved.filename));
+      const meta = await objectStorage.stat(ref);
+      if (!meta || meta.size == null) {
+        return res.status(404).json({ error: 'Video file not found' });
+      }
+      fileSize = meta.size;
+      fromR2 = true;
+    } else {
       return res.status(404).json({ error: 'Video file not found' });
     }
 
-    const stat = fs.statSync(resolved.filePath);
-    if (!stat.isFile()) {
-      return res.status(404).json({ error: 'Video file not found' });
-    }
-    const fileSize = stat.size;
+    const r2ref = () => objectStorage.refFromKey(objectStorage.videoKey(resolved.filename));
     const range = parseHttpByteRange(req.headers.range, fileSize);
 
     if (range) {
@@ -1249,6 +1286,15 @@ router.get('/watch/:filename', (req, res) => {
         'Content-Type': 'video/mp4',
         'Cache-Control': 'public, max-age=31536000',
       };
+      if (fromR2) {
+        res.writeHead(206, head);
+        const { stream } = await objectStorage.readStream(r2ref(), { range: `bytes=${range.start}-${range.end}` });
+        stream.on('error', (err) => {
+          console.error(`Error streaming video range from R2: ${err && err.message}`);
+          res.destroy();
+        });
+        return stream.pipe(res);
+      }
       streamFile(res, resolved.filePath, {
         status: 206,
         headers: head,
@@ -1262,6 +1308,15 @@ router.get('/watch/:filename', (req, res) => {
         'Accept-Ranges': 'bytes',
         'Cache-Control': 'public, max-age=31536000',
       };
+      if (fromR2) {
+        res.writeHead(200, head);
+        const { stream } = await objectStorage.readStream(r2ref());
+        stream.on('error', (err) => {
+          console.error(`Error streaming video from R2: ${err && err.message}`);
+          res.destroy();
+        });
+        return stream.pipe(res);
+      }
       streamFile(res, resolved.filePath, { headers: head });
     }
 

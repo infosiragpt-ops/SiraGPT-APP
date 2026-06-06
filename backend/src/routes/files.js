@@ -22,6 +22,7 @@ const path = require('path');
 const OpenAI = require('openai');
 const documentIntentAnalyzer = require('../services/document-intent-analyzer');
 const fileIntegrityValidator = require('../services/file-integrity-validator');
+const objectStorage = require('../services/object-storage');
 const { progressStream } = require('../services/upload-progress-sse');
 const {
   MAX_SIMULTANEOUS_DOCUMENTS,
@@ -422,6 +423,15 @@ async function processFilesInParallel(files, userId, prismaClient) {
           );
         } catch (analysisError) { console.warn('[files] document analysis failed:', analysisError.message || analysisError); }
 
+        // Offload the binary (+ thumbnail) to R2 AFTER extraction and analysis,
+        // which may re-read the local file. Keeps nothing durable on the VM.
+        try {
+          const { ref: storedRef } = await persistUploadBinary({ file, userId, thumbnailPath });
+          if (storedRef && storedRef !== file.path) {
+            fileRecord = await prismaClient.file.update({ where: { id: fileRecord.id }, data: { path: storedRef } });
+          }
+        } catch (offloadErr) { console.warn('[files] R2 offload step failed:', offloadErr?.message || offloadErr); }
+
         // The upload itself succeeded (binary stored + record updated), so we
         // always report success. A degraded extraction is surfaced as a soft
         // `extractionWarning`, not a hard `error`, so the attachment stays
@@ -438,6 +448,43 @@ async function processFilesInParallel(files, userId, prismaClient) {
     for (let j = 0; j < batchResults.length; j++) results[i + j] = batchResults[j];
   }
   return results;
+}
+
+// Move an uploaded binary (and optional thumbnail) off the VM into R2 so
+// nothing durable lives on local disk. The R2 key MIRRORS the public
+// "/uploads/<userId>/<filename>" path, so the response URL stays the same and
+// is served by the R2 fallback middleware. Returns the storage ref to persist
+// in File.path. When R2 is disabled (dev) this is a no-op and returns the local
+// path, preserving legacy local-disk behaviour. Best-effort: on any R2 error we
+// fall back to the local path so an upload never fails because of offload.
+async function persistUploadBinary({ file, userId, thumbnailPath }) {
+  if (!objectStorage.enabled()) return { ref: file.path, thumbRef: thumbnailPath || null };
+  let ref = file.path;
+  let thumbRef = thumbnailPath || null;
+  try {
+    const up = await objectStorage.persistLocalFile({
+      localPath: file.path,
+      key: objectStorage.uploadKey(userId, file.filename),
+      contentType: file.mimetype,
+    });
+    ref = up.ref;
+  } catch (err) {
+    console.warn(`[files] R2 offload failed for ${file.originalname}, keeping local: ${err?.message || err}`);
+    return { ref: file.path, thumbRef };
+  }
+  if (thumbnailPath) {
+    try {
+      const th = await objectStorage.persistLocalFile({
+        localPath: thumbnailPath,
+        key: objectStorage.uploadKey(userId, path.basename(thumbnailPath)),
+        contentType: 'image/jpeg',
+      });
+      thumbRef = th.ref;
+    } catch (err) {
+      console.warn(`[files] R2 thumbnail offload failed: ${err?.message || err}`);
+    }
+  }
+  return { ref, thumbRef };
 }
 
 function isAsyncUploadRequest(req) {
@@ -509,6 +556,14 @@ async function processFileAfterFastUpload(file, userId, prismaClient, fileRecord
     try {
       await documentIntelligence.analyzeFile(prismaClient, { userId, fileRecord, extractionResult: result, force: true });
     } catch (analysisError) { console.warn('[files] document analysis failed:', analysisError.message || analysisError); }
+
+    // Offload binary (+ thumbnail) to R2 after extraction + analysis.
+    try {
+      const { ref: storedRef } = await persistUploadBinary({ file, userId, thumbnailPath });
+      if (storedRef && storedRef !== file.path) {
+        fileRecord = await prismaClient.file.update({ where: { id: fileRecord.id }, data: { path: storedRef } });
+      }
+    } catch (offloadErr) { console.warn('[files] R2 offload step failed:', offloadErr?.message || offloadErr); }
 
     if (thumbnailPath) {
       // Thumbnail is stored on disk for later consumers; no extra DB field exists
@@ -1025,15 +1080,16 @@ router.get('/:id/render', authenticateToken, async (req, res) => {
 
     const isPdf = file.mimeType === 'application/pdf' || /\.pdf$/i.test(file.originalName || '');
     if (isPdf) {
-      if (!fsSync.existsSync(file.path)) {
-        return res.status(404).json({ error: 'File not found on disk' });
+      if (!(await objectStorage.exists(file.path))) {
+        return res.status(404).json({ error: 'File not found' });
       }
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', contentDispositionHeader('inline', renderPdfFilename(file.originalName)));
       res.setHeader('Cache-Control', 'private, max-age=86400');
       res.setHeader('X-Render-Engine', 'native-pdf');
       res.setHeader('X-Render-From-Cache', 'true');
-      return fsSync.createReadStream(file.path).pipe(res);
+      const { stream } = await objectStorage.readStream(file.path);
+      return stream.pipe(res);
     }
 
     if (!documentRenderer.isConvertible(file.mimeType, file.originalName)) {
@@ -1044,10 +1100,15 @@ router.get('/:id/render', authenticateToken, async (req, res) => {
     }
 
     let pdfPath;
+    // The renderer (LibreOffice/Gotenberg) needs a real filesystem path. When
+    // the source binary lives in R2, materialize it to a temp file first and
+    // clean it up once conversion is done.
+    let materialized = null;
     try {
+      materialized = await objectStorage.toLocalTemp(file.path);
       const out = await documentRenderer.renderToPdf({
         id: file.id,
-        path: file.path,
+        path: materialized.path,
         mimeType: file.mimeType,
         originalName: file.originalName,
       });
@@ -1063,6 +1124,8 @@ router.get('/:id/render', authenticateToken, async (req, res) => {
       }
       console.error('[files] render failed:', err);
       return res.status(500).json({ error: 'Render failed', detail: err.message });
+    } finally {
+      if (materialized) { try { await materialized.cleanup(); } catch { /* best-effort */ } }
     }
 
     res.setHeader('Content-Type', 'application/pdf');
@@ -1089,9 +1152,9 @@ router.delete('/:id', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'File not found' });
     }
 
-    // Delete file from filesystem
+    // Delete the binary from durable storage (R2 ref or local path).
     try {
-      await fs.unlink(file.path);
+      await objectStorage.remove(file.path);
       // Also try to delete thumbnail if it exists
       const thumbnailPath = file.path + '_thumb.jpg';
       try {

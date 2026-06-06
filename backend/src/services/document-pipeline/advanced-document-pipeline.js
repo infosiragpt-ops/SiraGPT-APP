@@ -2197,6 +2197,14 @@ async function runAdvancedDocumentPipeline({
     dataUrl = `data:${artifact.mime};base64,${artifact.buffer.toString('base64')}`;
   }
 
+  // The pipeline writes a working copy to outputDir while building the file;
+  // the durable bytes now live via saveArtifact (offloaded to R2 when
+  // enabled) or the inline dataUrl fallback. Drop the temp copy so it doesn't
+  // accumulate on the VM disk.
+  try {
+    if (artifact.outputPath) await fsp.unlink(artifact.outputPath);
+  } catch { /* best effort cleanup */ }
+
   // PdfRenderValidator (phase 4) — gate "Validado" on PDFs the same
   // way MathRenderValidator gates DOCX. Static integrity check:
   // confirms the magic bytes, parses page count, and (when the
